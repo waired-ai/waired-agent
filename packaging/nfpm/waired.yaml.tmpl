@@ -1,0 +1,53 @@
+name: waired
+arch: ${ARCH}
+version: ${PKG_VERSION}
+version_schema: none
+section: net
+priority: optional
+maintainer: "Waired Maintainers <maintainers@waired.dev>"
+description: |
+  Waired connects your devices to a mesh network with a built-in LLM
+  inference engine. This package ships the CLI (`waired`) and the
+  system daemon (`waired-agent`). Install `waired-tray` alongside it
+  for a graphical login flow on Linux desktops.
+vendor: Waired
+homepage: https://github.com/waired-ai/waired
+license: Apache-2.0
+
+depends:
+  - iproute2
+  - adduser
+  - ca-certificates
+
+recommends:
+  - waired-tray
+
+contents:
+  - src: bin/linux_${ARCH}/waired
+    dst: /usr/bin/waired
+    file_info:
+      mode: 0755
+
+  - src: bin/linux_${ARCH}/waired-agent
+    dst: /usr/bin/waired-agent
+    file_info:
+      mode: 0755
+
+  - src: packaging/systemd/waired-agent.service
+    dst: /lib/systemd/system/waired-agent.service
+    file_info:
+      mode: 0644
+
+  - src: packaging/config/agent.env.example
+    dst: /etc/waired/agent.env.example
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: packaging/debian/waired/postinst
+  preremove:   packaging/debian/waired/prerm
+  postremove:  packaging/debian/waired/postrm
+
+deb:
+  fields:
+    Bugs: https://github.com/waired-ai/waired/issues

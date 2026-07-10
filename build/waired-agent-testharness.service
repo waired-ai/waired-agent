@@ -1,0 +1,42 @@
+[Unit]
+Description=Waired agent (testharness mode — NAT-traversal testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/waired/agent.env
+# Best-effort: wipe any stale WAIRED_TESTHARNESS iptables chain left
+# by a prior crashed instance before starting. The testharness
+# dispatcher re-installs the chain on first scenario Apply. The
+# leading `-` makes both lines non-fatal when the chain doesn't
+# exist yet (fresh boot).
+ExecStartPre=-/usr/sbin/iptables -F WAIRED_TESTHARNESS
+ExecStartPre=-/usr/sbin/iptables -X WAIRED_TESTHARNESS
+ExecStart=/usr/local/bin/agent-bootstrap.sh
+User=root
+Group=root
+Restart=always
+RestartSec=5s
+
+# Same writable data dir as the production unit.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/waired
+ProtectHome=yes
+# NoNewPrivileges deliberately omitted (default = no): iptables is
+# suid-root on most distros, and NoNewPrivileges=yes would block its
+# fork-exec even though the parent already has the caps.
+#
+# CapabilityBoundingSet is deliberately NOT set. Setting it to just
+# CAP_NET_ADMIN/CAP_NET_RAW drops all other caps from root — including
+# CAP_DAC_OVERRIDE, which root needs to read /var/lib/waired (owned by
+# waired:waired by startup-native.sh.tpl). The agent fails to read its
+# own identity, crash-loops via Restart=always, and never emits stats.
+# AmbientCapabilities is also redundant for User=root (root already
+# has NET_ADMIN/NET_RAW by default) but is kept here as a self-
+# documenting marker of what the testharness dispatcher actually uses.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

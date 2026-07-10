@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Waired Tray
+Comment=Tailscale-style system tray for Waired
+Exec=waired-tray
+Icon=network-vpn-symbolic
+Terminal=false
+Categories=Network;
+X-GNOME-Autostart-enabled=true
+X-MATE-Autostart-enabled=true
+NotShowIn=
+OnlyShowIn=
+Keywords=Waired;VPN;Tailscale;Mesh;

@@ -1,0 +1,73 @@
+// Command waired-tray is the Waired desktop tray. It runs as the
+// desktop user (not as the system daemon) and talks only to the
+// loopback Local Management API at 127.0.0.1:9476 — never reads
+// identity.json directly so it stays safely outside the daemon's
+// privilege boundary. The OS-specific menu actions (login/logout,
+// clipboard, browser-open, dialogs, notifications) live in
+// actions_<os>.go and dialog_<os>.go inside internal/gui/tray.
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/waired-ai/waired-agent/internal/buildinfo"
+	"github.com/waired-ai/waired-agent/internal/gui/tray"
+	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/paths"
+)
+
+func main() {
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "waired-tray:", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	fs := flag.NewFlagSet("waired-tray", flag.ContinueOnError)
+	mgmtURL := fs.String("mgmt", "http://"+management.DefaultListen,
+		"Local Management API base URL")
+	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
+		"Control Plane URL used by the Log in… action (defaults to $WAIRED_CONTROL_URL)")
+	stateDir := fs.String("state-dir", defaultStateDir(),
+		"directory holding identity.json (passed to `waired init` / `waired logout` via pkexec)")
+	pollEvery := fs.Duration("poll-every", 5*time.Second,
+		"polling interval for /v1/status and /v1/identity")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	tray.Run(ctx, tray.Options{
+		MgmtURL:    *mgmtURL,
+		ControlURL: *controlURL,
+		StateDir:   *stateDir,
+		Version:    buildinfo.Version,
+		BuildSHA:   buildinfo.BuildSHA,
+		PollEvery:  *pollEvery,
+	})
+	return nil
+}
+
+// defaultStateDir picks the canonical user-side state dir, except that
+// if a system-mode daemon's identity.json is found on disk we prefer
+// that path. The tray normally talks to a system-mode daemon, so this
+// override keeps `waired-tray` working in the default-install case.
+func defaultStateDir() string {
+	if dir := os.Getenv(paths.EnvOverride); dir != "" {
+		return dir
+	}
+	sys := paths.StateDir(paths.System)
+	if _, err := os.Stat(sys + "/identity.json"); err == nil {
+		return sys
+	}
+	return paths.StateDir(paths.Interactive)
+}

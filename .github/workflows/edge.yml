@@ -1,0 +1,186 @@
+# STAGED at the #184 split: trigger reduced to workflow_dispatch until
+# runners / WIF / secrets are wired for this repo (cutover checklist in
+# the monorepo issue #184). Do not re-enable push triggers before that.
+# Edge channel pipeline. The "latest main build": every merge to main is
+# rebuilt (the same matrix release.yml builds for a v* tag) and published
+# to *edge* channels so the stable `latest` release / stable apt suite
+# stay pinned to the newest v* tag:
+#
+#   - Linux .deb  -> AR repo waired-dev-apt-edge (separate suite; opt in
+#                    with `WAIRED_VERSION=edge`, which install.sh maps to
+#                    the waired-dev-apt-edge suite + the waired-edge.list
+#                    source).
+#   - Windows / macOS bins + install scripts -> a moving `edge`
+#                    *prerelease* on waired-ai/waired-install. GitHub's
+#                    /releases/latest/download ignores prereleases, so the
+#                    stable one-liner is unaffected; opt in with
+#                    WAIRED_VERSION=edge.
+#
+# Version string is the Makefile default for a non-tag build:
+# <latest-stable-core>-edge.<UTC-yyyymmddHHMMSS>+<shortsha> (e.g.
+# 0.0.1-edge.20260610143000+abc1234). It is a valid SemVer prerelease, so
+# nfpm rewrites the `-` to `~` for the .deb Version — sorting below the
+# stable it is based on and monotonically by the timestamp, so apt rolls
+# an edge box forward across the day's merges.
+#
+# Trigger is per-push-on-main (was nightly cron). A `concurrency` group
+# with cancel-in-progress collapses a burst of merges to a single build of
+# the newest HEAD, and paths-ignore skips docs-only merges — together they
+# bound the CI cost of the full 4-leg matrix without falling back to a
+# once-a-day cadence. workflow_dispatch still allows a manual rebuild.
+#
+# The build matrix is shared with release.yml via the reusable
+# reusable-build-artifacts.yml workflow (#282); inside it the caller's
+# context (push/dispatch on a branch -> github.ref_type != 'tag') selects
+# the edge version automatically. This file only owns the edge-channel
+# publish below.
+name: edge
+
+on:
+  workflow_dispatch:
+
+# A burst of merges should not run N full matrices. Cancel any in-flight
+# edge build when a newer push lands so only the newest HEAD is published;
+# publish is idempotent (moving `edge` tag, per-version AR upload).
+concurrency:
+  group: edge
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  id-token: write
+
+# Inline-inject safe.directory=* — see ci.yml for rationale.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # Shared cross-platform matrix. On edge's push/dispatch trigger the
+    # reusable workflow sees github.ref_type != 'tag' and versions
+    # artifacts as the Makefile default
+    # <latest-stable-core>-edge.<ts>+<sha>.
+    uses: ./.github/workflows/reusable-build-artifacts.yml
+    secrets: inherit
+
+  publish-edge:
+    name: publish edge (AR apt-edge + mirror prerelease)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: google/cloud-sdk:slim
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist/
+          pattern: deb-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist/
+          pattern: windows-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist/
+          pattern: darwin-*
+          merge-multiple: true
+
+      - name: Install gh CLI
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y --no-install-recommends gh
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Upload .deb files to the edge APT repo
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(dist/*.deb)
+          if (( ${#debs[@]} == 0 )); then
+            echo "::error::no .deb files found under dist/"
+            exit 1
+          fi
+          for deb in "${debs[@]}"; do
+            echo "::notice::uploading ${deb} to waired-dev-apt-edge"
+            # AR APT upload is single-file per invocation. Loop. AR keys
+            # versions by the .deb's own Version field (0.0.0-<sha>), so
+            # re-uploading the same sha is idempotent / a no-op-ish 409.
+            gcloud artifacts apt upload waired-dev-apt-edge \
+              --project="${PROJECT_ID}" \
+              --location="${REGION}" \
+              --source="${deb}" || \
+              echo "::warning::apt upload of ${deb} failed (likely version already present); continuing"
+          done
+
+      - name: Mirror edge artifacts to waired-ai/waired-install (`edge` prerelease)
+        # Same public mirror as release.yml, but a *moving* `edge`
+        # prerelease instead of a per-v* release. GitHub's
+        # /releases/latest/download resolves to the newest NON-prerelease
+        # release, so publishing edge as a prerelease leaves the stable
+        # one-liner pointing at the latest v* tag. Edge users fetch via
+        # /releases/download/edge/... (WAIRED_VERSION=edge).
+        #
+        # .deb files are NOT mirrored: Linux edge fetches them from the
+        # waired-dev-apt-edge AR suite, not from GitHub Releases.
+        env:
+          MIRROR_TOKEN: ${{ secrets.WAIRED_INSTALL_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MIRROR_TOKEN}" ]; then
+            echo "::warning::WAIRED_INSTALL_REPO_TOKEN is not set; skipping edge mirror"
+            exit 0
+          fi
+          export GH_TOKEN="${MIRROR_TOKEN}"
+          mirror_assets=(
+            packaging/install/install.sh
+            packaging/install/install.ps1
+            packaging/install/uninstall.sh
+            packaging/install/uninstall.ps1
+            scripts/install/ollama-windows.ps1
+            dist/waired-windows-amd64.zip
+            dist/waired-windows-amd64.zip.sha256
+            dist/waired-darwin-amd64.tar.gz
+            dist/waired-darwin-amd64.tar.gz.sha256
+            dist/waired-darwin-arm64.tar.gz
+            dist/waired-darwin-arm64.tar.gz.sha256
+          )
+          shopt -s nullglob
+          setups=(dist/WairedSetup-*.exe)
+          mirror_assets+=("${setups[@]}")
+
+          notes=$'Latest **main** build — rebuilt on every merge to main. NOT a stable release.\n\n'
+          notes+=$'- Linux / macOS: `curl -fsSL .../install.sh | WAIRED_VERSION=edge sh` (or pass `--edge`).\n'
+          notes+=$'- Windows: `$env:WAIRED_VERSION=\'edge\'; iwr .../install.ps1 | iex` (or `-Edge`).\n\n'
+          notes+=$'Built from `waired-ai/waired`@'"${GITHUB_SHA}"$'. The stable one-liner (`/releases/latest`) is unaffected — edge is a prerelease.'
+
+          if gh release view edge --repo waired-ai/waired-install >/dev/null 2>&1; then
+            echo "::notice::edge release exists — clobbering assets"
+            gh release upload edge "${mirror_assets[@]}" --repo waired-ai/waired-install --clobber
+            gh release edit edge --repo waired-ai/waired-install --prerelease --notes "${notes}"
+          else
+            gh release create edge "${mirror_assets[@]}" \
+              --repo waired-ai/waired-install \
+              --title "edge (main-tracking)" \
+              --prerelease \
+              --notes "${notes}"
+          fi

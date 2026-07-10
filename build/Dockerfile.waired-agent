@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.7
+# Multi-stage build for cmd/waired-agent + cmd/waired (CLI). Used both
+# by the GCP testnet (NAT traversal verification) Docker-mode VMs and as
+# a binary source for the native-mode VMs (see Makefile dist-agent).
+#
+# Bootstrap flow:
+#   1. agent-bootstrap.sh reads GCE metadata for internal IP + hostname.
+#   2. Runs `waired init --bypass-mode` against $WAIRED_CONTROL_URL,
+#      generating identity.json + secrets/* under $WAIRED_STATE_DIR.
+#   3. exec waired-agent (optionally with --force-relay / --fallback-after).
+#
+# The runtime stage uses Alpine (not distroless) because the bootstrap
+# needs sh + curl to read metadata. Image size is acceptably small
+# (~15MB) for a test image.
+
+FROM golang:1.26-trixie AS build
+# GO_BUILD_TAGS, when set to "testharness", compiles the
+# internal/testharness dispatcher + iptables ops into waired-agent for
+# use by the testnet fallback gate (see scripts/dev/testnet-fallback-
+# runner.sh). Empty default => production behaviour (Noop dispatcher).
+# Only the agent binary takes the tag; the waired CLI has no
+# testharness symbols.
+ARG GO_BUILD_TAGS=""
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" -o /out/waired ./cmd/waired \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -trimpath -ldflags="-s -w" -tags "${GO_BUILD_TAGS}" -o /out/waired-agent ./cmd/waired-agent
+
+FROM alpine:3.20
+# iptables is needed at runtime only by testharness-tagged builds (the
+# dispatcher fork-execs `iptables ... WAIRED_TESTHARNESS ...`). A
+# production image carries the binary unused; ~1 MB cost, no
+# behavioural impact since the dispatcher in prod builds is Noop.
+RUN apk add --no-cache curl ca-certificates iptables \
+ && addgroup -S waired && adduser -S -G waired waired \
+ && mkdir -p /var/lib/waired && chown waired:waired /var/lib/waired
+COPY --from=build /out/waired /usr/local/bin/waired
+COPY --from=build /out/waired-agent /usr/local/bin/waired-agent
+COPY build/agent-bootstrap.sh /usr/local/bin/agent-bootstrap.sh
+RUN chmod +x /usr/local/bin/agent-bootstrap.sh
+
+ENV WAIRED_STATE_DIR=/var/lib/waired
+USER waired
+ENTRYPOINT ["/usr/local/bin/agent-bootstrap.sh"]

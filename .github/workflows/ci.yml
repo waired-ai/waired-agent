@@ -1,0 +1,181 @@
+# PR/push gate for waired-agent. Derived from the monorepo ci.yml at the
+# #184 split; jobs run on the per-repo ARC scale set `sv-mag-agent`
+# (registered by ubuntu-configs github-runner-microk8s-setup.yaml) with
+# the same private CI base image the monorepo uses.
+name: ci
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+# See the monorepo ci.yml for why: git safe.directory for forked git
+# processes under ARC k8s mode, and bash as the default shell.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: lint (gofmt + vet + golangci-lint)
+    runs-on: sv-mag-agent
+    timeout-minutes: 10
+    container:
+      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # Host-local persistent /ci-cache volume replaces GitHub's
+          # network cache on this runner substrate (monorepo #523).
+          cache: false
+
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          out=$(gofmt -l .)
+          if [ -n "${out}" ]; then
+            echo "::error::gofmt issues:"
+            printf '%s\n' "${out}"
+            exit 1
+          fi
+
+      - name: go vet (root + proto)
+        run: |
+          set -euo pipefail
+          go vet ./...
+          (cd proto && go vet ./...)
+
+      # The hardened production build (-tags prod) must compile and vet
+      # cleanly; buildflag gates the agent-side bypass flags off.
+      - name: prod build smoke (-tags prod)
+        run: |
+          set -euo pipefail
+          go build -tags prod ./...
+          go vet -tags prod ./...
+          go test -tags prod ./internal/buildflag/...
+
+      - name: proto dependency allowlist
+        run: |
+          set -euo pipefail
+          # The shared protocol module must stay minimal and auditable:
+          # stdlib plus golang.org/x/crypto (disco sealed frames:
+          # ChaCha20-Poly1305 / X25519 / HKDF) and its x/sys transitive.
+          bad=$(cd proto && go list -m all | tail -n +2 | \
+            grep -vE '^golang\.org/x/(crypto|sys) ' || true)
+          if [ -n "${bad}" ]; then
+            echo "::error::proto module grew dependencies outside the allowlist:"
+            printf '%s\n' "${bad}"
+            exit 1
+          fi
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          skip-cache: true
+
+  unit:
+    name: unit tests
+    runs-on: sv-mag-agent
+    timeout-minutes: 15
+    container:
+      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: go test (root)
+        run: go test ./... -timeout 10m
+
+      - name: go test (proto)
+        run: cd proto && go test ./... -timeout 5m
+
+  unit-testharness:
+    name: unit tests (testharness)
+    runs-on: sv-mag-agent
+    timeout-minutes: 15
+    container:
+      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: go test -tags testharness
+        run: go test -tags testharness ./internal/testharness/... -timeout 10m
+
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: sv-mag-agent
+    timeout-minutes: 10
+    container:
+      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: cross-compile every cmd/*
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          for cmd in cmd/*/; do
+            name=$(basename "${cmd}")
+            echo "==> building ${name} for ${GOOS}/${GOARCH}"
+            go build -trimpath -ldflags="-s -w" -o /dev/null ./${cmd}
+          done
+
+      - name: verify-cross (3-OS go vet)
+        run: make verify-cross
+
+  install-scripts:
+    name: install-scripts (dash matrix + shellcheck)
+    runs-on: sv-mag-agent
+    timeout-minutes: 10
+    container:
+      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: shellcheck installer scripts
+        run: make install-script-lint
+
+      - name: install.sh dash dispatch matrix
+        run: bash scripts/dev/installtest-dash.sh
+
+      - name: autostart Exec path guard
+        run: bash scripts/ci/autostart-exec-guard.sh

@@ -1,0 +1,32 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  configure)
+    if [ -z "$2" ]; then
+      cat <<'EOF'
+
+waired-tray installed. To start using it:
+
+  - Log out and back in to your desktop session, OR
+  - Run `waired-tray &` from a terminal in your desktop session.
+
+Then right-click the tray icon and pick "Log in..." to enroll this
+device against your Control Plane.
+
+EOF
+    fi
+    ;;
+
+  abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+  *)
+    echo "postinst called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,299 @@
+# Reusable build matrix for the release/edge pipelines. Builds the full
+# cross-platform artifact set once and uploads them so the calling
+# workflow's publish job can fan them out to the right channel:
+#
+#   Linux:   amd64 + arm64 .deb (via nfpm)            -> artifact deb-<arch>
+#   Windows: amd64 zip + sha256 + Inno Setup .exe     -> artifact windows-amd64
+#   macOS:   amd64 + arm64 unsigned ad-hoc tar.gz     -> artifact darwin-all
+#
+# Version handling keys off the *caller's* trigger via the `github`
+# context (which, inside a workflow_call workflow, reflects the calling
+# event). The "Resolve build version" step below computes two strings
+# from it:
+#   - tag push (release.yml): both = the tag with leading `v` stripped
+#     (e.g. 0.0.1-rc11) — unchanged stable behaviour.
+#   - non-tag (edge.yml, push to main / dispatch): a SemVer prerelease off
+#     the latest stable tag's numeric core,
+#     <core>-edge.<UTC yyyymmddHHMMSS>+<shortsha> (e.g.
+#     0.0.1-edge.20260610143000+abc1234). The .deb form swaps the
+#     prerelease `-` for Debian's `~` so it sorts below stable and
+#     monotonically by the timestamp.
+# So this single matrix serves both release.yml (tagged) and edge.yml
+# (main-tracking) with no inputs. DRY-up of the previously-duplicated
+# build jobs — see #282.
+name: reusable-build-artifacts
+
+on:
+  workflow_call:
+
+# Inline-inject safe.directory=* — see ci.yml for rationale. A called
+# workflow does NOT inherit the caller's workflow-level env/defaults, so
+# these are re-declared here (mirrors reusable-go-test.yml).
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # The linux leg runs on a GHA hosted runner (ephemeral hosted runner +
+    # GitHub OIDC gives a stronger SLSA-style builder provenance chain while
+    # Authenticode signing is still deferred). Cost is negligible — release
+    # fires on `v*` tags (~monthly) and edge runs nightly. See
+    # docs/decisions.md "Release builds run on GHA hosted runners".
+    #
+    # The windows and darwin legs run on self-hosted ephemeral-VM pools to
+    # cut the GH-hosted bill (macOS = 64% of it; Windows is billed at the 2×
+    # multiplier, and edge.yml rebuilds this matrix on every main merge):
+    #   - darwin  -> Apple-Silicon Mac mini, `tart` macOS VM, labels
+    #                [self-hosted, macos, arm64, build] (#516).
+    #   - windows -> Hyper-V ephemeral Win11 guest, labels
+    #                [self-hosted, windows, x64, build] (#547); the golden
+    #                bakes Inno Setup 6 + signtool + the Go toolchain/cache.
+    #                Host root is protected by the VM boundary (the
+    #                orchestrator runs as Hyper-V Administrators, NOT local
+    #                admin). Built/operated from the separate `windows-configs`
+    #                repo.
+    # Both clone a fresh guest per job and destroy it after. The publish jobs
+    # in edge.yml / release.yml stay GH-hosted. The per-leg runner is
+    # matrix.runs-on (a string for the hosted linux leg, a label array for the
+    # self-hosted windows/darwin legs).
+    #
+    # Linux legs use the golang:1.24-trixie container for build
+    # reproducibility; Windows/macOS run container-less because
+    # iscc.exe / make / tar / shasum live on the runner image directly.
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ${{ matrix.runs-on }}
+    container: ${{ fromJSON(matrix.container) }}
+    # Build only checks out, compiles, and uploads artifacts. id-token /
+    # contents:write are needed only by the caller's publish job.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runs-on: ubuntu-24.04
+            container: '{"image":"golang:1.24-trixie"}'
+          - goos: linux
+            goarch: arm64
+            # Native arm64 hosted runner. Pinned to 24.04 to match the
+            # amd64 entry; `ubuntu-26.04-arm` is not yet provided
+            # (actions/runner-images#13855).
+            runs-on: ubuntu-24.04-arm
+            container: '{"image":"golang:1.24-trixie"}'
+          - goos: windows
+            goarch: amd64
+            # Self-hosted Hyper-V ephemeral Win11 guest (NOT GH-hosted
+            # windows-latest): Windows minutes are billed 2× and edge.yml
+            # rebuilds this matrix on every main merge. Each job clones a
+            # differencing child off a read-only golden VHDX and destroys it
+            # after; the golden bakes make + Inno Setup 6 (iscc) + signtool +
+            # the Go toolchain/cache, so dist-windows-installer + the GUI
+            # installer step run with no per-job installs. The labels
+            # AND-match the runner the windows-configs orchestrator registers
+            # (JIT). Availability: if the host is offline this leg queues
+            # (edge/release Windows artifacts are delayed) — same caveat as
+            # darwin; revert this one entry to `windows-latest` to fall back.
+            # See #547 and docs/decisions.md "Windows CI leg を自前 Hyper-V ...".
+            runs-on:
+              - self-hosted
+              - windows
+              - x64
+              - build
+            container: 'null'
+          - goos: darwin
+            goarch: all
+            # Self-hosted Apple-Silicon Mac mini, NOT GH-hosted macos-14:
+            # macOS is 64% of the GH-hosted Actions bill (edge.yml rebuilds
+            # this matrix on every main merge), so the darwin leg is
+            # offloaded to a self-hosted Mac mini that runs each build in an
+            # ephemeral `tart` macOS VM (clone-per-job, destroyed after).
+            # The labels [self-hosted, macos, arm64, build] AND-match the
+            # runner the mac-configs orchestrator registers (JIT). The guest
+            # is still Apple Silicon (arm64) with Xcode CLT, so the build is
+            # identical: build-agent-darwin cross-compiles the amd64 slice
+            # (CGO_ENABLED=0); the bundled tray (build-tray-darwin) needs
+            # CGO_ENABLED=1 + clang, and clang cross-targets the amd64 slice
+            # with no extra flags. A single job emits both
+            # waired-darwin-{amd64,arm64}.tar.gz, each containing waired +
+            # waired-agent + waired-tray. Binaries are unsigned ad-hoc;
+            # notarization is #262. Availability: if the Mac mini is offline
+            # the darwin leg queues (fork PRs never run here). See #516 and
+            # docs/decisions.md "macOS ビルド leg を自前 Mac mini ...".
+            runs-on:
+              - self-hosted
+              - macos
+              - arm64
+              - build
+            container: 'null'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history + tags so the edge version's "Resolve build
+          # version" step can `git describe` the latest stable v* tag.
+          fetch-depth: 0
+
+      - name: Resolve build version
+        # Single source of truth for the version stamped into every
+        # artifact this matrix builds. See the file header for the scheme.
+        #   WAIRED_SEMVER      -> Go buildinfo (ldflags), Windows Inno
+        #                         AppVersion, macOS VERSION file.
+        #   WAIRED_DEB_VERSION -> the .deb Version field. nfpm's
+        #                         version_schema is 'none', so we do the
+        #                         SemVer-`-` -> Debian-`~` rewrite here.
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+            semver="${v}"
+            debver="${v}"
+          else
+            core="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+            core="${core#v}"
+            core="${core%%[-+]*}"
+            [[ -n "${core}" ]] || core="0.0.0"
+            ts="$(date -u +%Y%m%d%H%M%S)"
+            sha="$(git rev-parse --short HEAD)"
+            semver="${core}-edge.${ts}+${sha}"
+            debver="${core}~edge.${ts}+${sha}"
+          fi
+          echo "WAIRED_SEMVER=${semver}" >> "$GITHUB_ENV"
+          echo "WAIRED_DEB_VERSION=${debver}" >> "$GITHUB_ENV"
+          echo "::notice::build version: semver=${semver} deb=${debver}"
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # Only the linux leg uses GitHub's remote setup-go cache. The
+          # self-hosted windows/darwin golden VMs already bake the Go
+          # toolchain, module cache, AND build cache locally, so a remote
+          # restore is redundant and the "Post" cache *save* is pure waste
+          # (~88s uploading to GitHub on every job). See #516 / #547 and the
+          # mac-configs / windows-configs golden provisioning (prewarm).
+          cache: ${{ matrix.goos == 'linux' }}
+
+      - name: Install build deps (make, envsubst)
+        if: matrix.goos == 'linux'
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y --no-install-recommends make gettext-base
+
+      - name: Install nfpm
+        if: matrix.goos == 'linux'
+        run: |
+          set -euo pipefail
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
+          # GOPATH/bin is not on PATH inside this container; surface it
+          # so subsequent run-steps and the Makefile's command -v check
+          # find nfpm.
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build .deb packages
+        if: matrix.goos == 'linux'
+        run: |
+          set -euo pipefail
+          export PKG_VERSION="${WAIRED_DEB_VERSION}"
+          make deb-${{ matrix.goarch }}
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.goos == 'linux'
+        with:
+          name: deb-${{ matrix.goarch }}
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 1
+
+      # Windows-specific build. The self-hosted golden bakes `make` (via Git
+      # for Windows), `powershell.exe`, and `iscc.exe` (Inno Setup 6) -- exactly
+      # what `make dist-windows-installer` and the GUI installer step need.
+      - name: Build Windows release zip
+        if: matrix.goos == 'windows'
+        run: |
+          set -euo pipefail
+          export VERSION="${WAIRED_SEMVER}"
+          make dist-windows-installer
+          ls -lh dist/
+
+      - name: Build Windows GUI installer (Inno Setup)
+        if: matrix.goos == 'windows'
+        run: |
+          set -euo pipefail
+          version="${WAIRED_SEMVER}"
+          # iscc is on PATH in the golden (choco's ISCC.exe shim). Fall back to
+          # the canonical Inno Setup 6 install dir if the PATH entry is missing.
+          if ! command -v iscc >/dev/null 2>&1; then
+            iscc='/c/Program Files (x86)/Inno Setup 6/ISCC.exe'
+          else
+            iscc=iscc
+          fi
+          "$iscc" "//DAppVersion=${version}" packaging/windows/waired-setup.iss
+          ls -lh dist/WairedSetup-*.exe
+
+      # Authenticode signing placeholder. Inert until a code-signing
+      # identity is provisioned (see docs/decisions.md). When the secret
+      # is set, base64-decode the PFX and signtool the Setup.exe. The
+      # bare EXEs inside the zip are verified by SHA-256 + run via SCM,
+      # so SmartScreen mostly only matters for the GUI Setup.exe.
+      - name: Sign Windows GUI installer (optional)
+        if: matrix.goos == 'windows' && env.WAIRED_SIGN_CERT != ''
+        env:
+          WAIRED_SIGN_CERT: ${{ secrets.WAIRED_SIGN_CERT }}
+          WAIRED_SIGN_CERT_PASSWORD: ${{ secrets.WAIRED_SIGN_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          $pfx = [System.IO.Path]::Combine($env:RUNNER_TEMP, "waired-sign-$([Guid]::NewGuid().ToString('N')).pfx")
+          [System.IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WAIRED_SIGN_CERT))
+          try {
+            $setup = (Get-Item dist/WairedSetup-*.exe).FullName
+            & signtool sign /f $pfx /p $env:WAIRED_SIGN_CERT_PASSWORD `
+                /tr http://timestamp.digicert.com /fd sha256 /td sha256 $setup
+            if ($LASTEXITCODE -ne 0) { throw "signtool exited $LASTEXITCODE" }
+          } finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.goos == 'windows'
+        with:
+          name: windows-${{ matrix.goarch }}
+          path: |
+            dist/waired-windows-amd64.zip
+            dist/waired-windows-amd64.zip.sha256
+            dist/WairedSetup-*.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      # macOS-specific build. macos-14 ships make / tar / shasum + the
+      # Xcode CLT on the runner image. build-agent-darwin cross-compiles
+      # the amd64 slice toolchain-free (CGO_ENABLED=0); the bundled tray
+      # (build-tray-darwin) is CGO_ENABLED=1 and builds both arches
+      # natively here. Produces dist/waired-darwin-{amd64,arm64}.tar.gz +
+      # .sha256 (each = waired + waired-agent + waired-tray) for install.sh.
+      - name: Build macOS release tarballs
+        if: matrix.goos == 'darwin'
+        run: |
+          set -euo pipefail
+          export VERSION="${WAIRED_SEMVER}"
+          make dist-darwin-installer
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.goos == 'darwin'
+        with:
+          name: darwin-all
+          path: |
+            dist/waired-darwin-amd64.tar.gz
+            dist/waired-darwin-amd64.tar.gz.sha256
+            dist/waired-darwin-arm64.tar.gz
+            dist/waired-darwin-arm64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1

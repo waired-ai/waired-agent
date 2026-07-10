@@ -1,0 +1,59 @@
+{
+  "model_id": "qwen3.5-2b",
+  "display_name": "Qwen3.5 2B (Hybrid Linear+Full Attention)",
+  "model_aliases": [
+    "qwen3.5-2b",
+    "Qwen/Qwen3.5-2B"
+  ],
+  "license": "apache-2.0",
+  "context_length": 262144,
+  "capabilities": [
+    "chat",
+    "tool_use",
+    "json_mode"
+  ],
+  "runtime": {
+    "preferred": "ollama",
+    "fallback": []
+  },
+  "variants": [
+    {
+      "variant_id": "q4-gguf",
+      "format": "ollama-tag",
+      "quantization": "Q4_K_M",
+      "runtime_support": [
+        "ollama"
+      ],
+      "estimated_weight_gb": 1.9,
+      "min_ram_gb": 4,
+      "quality_tier": 27,
+      "param_count": 2000000000,
+      "active_params": 0,
+      "quantization_tier": 4,
+      "attention_arch": "hybrid_mamba",
+      "kv_bytes_per_token_fp16": 12288,
+      "vendor_support": {
+        "nvidia": {
+          "ollama": "stable",
+          "vllm": "stable"
+        },
+        "amd": {
+          "ollama": "stable",
+          "vllm": "experimental"
+        },
+        "mac": {
+          "ollama": "stable",
+          "mlx": "stable"
+        }
+      },
+      "source": {
+        "type": "ollama",
+        "tag": "qwen3.5:2b-q4_K_M"
+      }
+    }
+  ],
+  "security": {
+    "trust_remote_code_required": false,
+    "allow_persistent_kv_cache": true
+  }
+}

@@ -1,0 +1,32 @@
+[Unit]
+Description=Waired agent (NAT-traversal test mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/waired/agent.env
+ExecStart=/usr/local/bin/agent-bootstrap.sh
+User=waired
+Group=waired
+Restart=on-failure
+RestartSec=5s
+# Exit code 17 is the agent's "restart me" signal (preferred-model
+# switch via the management API, issue #347): counted as success so
+# the unit never enters the failed state, but force-restarted so the
+# new selection takes effect. agent-bootstrap.sh execs waired-agent,
+# so the code propagates. Crashes restart via on-failure; plain exit 0
+# and `systemctl stop` stay down. (Same contract as the packaged unit
+# in packaging/systemd/.)
+SuccessExitStatus=17
+RestartForceExitStatus=17
+
+# Read-only system, writable identity dir
+ProtectSystem=strict
+ReadWritePaths=/var/lib/waired
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

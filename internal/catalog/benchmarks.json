@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "notes": "Benchmark provenance for quality_tier auto-derivation (#133). swe_bench_verified (0-100) is the primary signal; secondary benchmarks are recorded for cross-check. Every score MUST carry >=1 source URL and a retrieved date. confidence is high|medium|low; low-confidence scores are reported but never auto-escalated to a draft PR. The catalog-radar pipeline (#413) appends entries here when it researches a new model. Seeded 2026-06-18 from docs/reports/20260516-coding-model-family-survey.md (which transcribed the May-2026 public leaderboards it cites).",
+  "models": {
+    "glm-5.2": {
+      "swe_bench_verified": 0,
+      "secondary": {
+        "swe_bench_pro": 62.1,
+        "terminal_bench": 81.0,
+        "livebench_coding": 79.65,
+        "livebench_agentic_coding": 73.33
+      },
+      "sources": [
+        {"url": "https://huggingface.co/zai-org/GLM-5.2", "retrieved": "2026-07-05", "value": 62.1},
+        {"url": "https://openrouter.ai/blog/insights/the-open-weight-models-that-matter-june-2026/", "retrieved": "2026-07-05", "value": 62.1},
+        {"url": "https://livebench.ai/", "retrieved": "2026-07-05", "value": 79.65}
+      ],
+      "cross_checked": true,
+      "confidence": "medium",
+      "variants": {
+        "fp8-safetensors": {"tier_override": 97},
+        "nvfp4-safetensors": {"tier_override": 96}
+      }
+    },
+    "deepseek-v4-flash": {
+      "swe_bench_verified": 79.0,
+      "secondary": {},
+      "sources": [
+        {"url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash", "retrieved": "2026-07-05", "value": 79.0},
+        {"url": "https://openrouter.ai/blog/insights/the-open-weight-models-that-matter-june-2026/", "retrieved": "2026-07-05", "value": 79.0}
+      ],
+      "cross_checked": false,
+      "confidence": "medium",
+      "variants": {
+        "fp8-safetensors": {"tier_override": 93}
+      }
+    },
+    "qwen3.6-27b": {
+      "swe_bench_verified": 77.2,
+      "secondary": {
+        "swe_bench_pro": 53.5,
+        "terminal_bench": 59.3,
+        "skills_bench": 48.2
+      },
+      "sources": [
+        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 77.2},
+        {"url": "https://www.swebench.com/", "retrieved": "2026-05-16", "value": 77.2}
+      ],
+      "cross_checked": true,
+      "confidence": "high"
+    },
+    "qwen3-coder-next-80b-a3b-instruct": {
+      "swe_bench_verified": 70.6,
+      "secondary": {
+        "swe_bench_pro": 44.3
+      },
+      "sources": [
+        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 70.6},
+        {"url": "https://www.swebench.com/", "retrieved": "2026-05-16", "value": 70.6}
+      ],
+      "cross_checked": true,
+      "confidence": "high"
+    },
+    "gpt-oss-120b": {
+      "swe_bench_verified": 62.4,
+      "sources": [
+        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 62.4},
+        {"url": "https://www.swebench.com/", "retrieved": "2026-05-16", "value": 62.4}
+      ],
+      "cross_checked": true,
+      "confidence": "high"
+    },
+    "qwen2.5-coder-7b-instruct": {
+      "swe_bench_verified": 0,
+      "secondary": {
+        "humaneval_plus": 88.0
+      },
+      "sources": [
+        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 88.0}
+      ],
+      "cross_checked": false,
+      "confidence": "medium"
+    },
+    "qwen2.5-coder-14b-instruct": {
+      "swe_bench_verified": 0,
+      "secondary": {
+        "humaneval_plus": 89.0
+      },
+      "sources": [
+        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 89.0}
+      ],
+      "cross_checked": false,
+      "confidence": "medium"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  purge)
+    rm -f /etc/waired/agent.env
+    rmdir --ignore-fail-on-non-empty /etc/waired 2>/dev/null || true
+    rm -rf /var/lib/waired
+
+    if getent passwd waired >/dev/null; then
+      deluser --quiet --system waired >/dev/null || true
+    fi
+    if getent group waired >/dev/null; then
+      delgroup --quiet --system --only-if-empty waired >/dev/null || true
+    fi
+    ;;
+
+  remove)
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload || true
+    fi
+    ;;
+
+  upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    ;;
+
+  *)
+    echo "postrm called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

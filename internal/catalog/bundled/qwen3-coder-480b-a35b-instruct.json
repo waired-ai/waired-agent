@@ -1,0 +1,56 @@
+{
+  "model_id": "qwen3-coder-480b-a35b-instruct",
+  "display_name": "Qwen3 Coder 480B-A35B Instruct (MoE)",
+  "model_aliases": [
+    "waired/moe-large",
+    "qwen3-coder-480b-a35b",
+    "Qwen/Qwen3-Coder-480B-A35B-Instruct"
+  ],
+  "license": "apache-2.0",
+  "context_length": 262144,
+  "capabilities": ["chat", "tool_use", "json_mode"],
+  "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
+  "variants": [
+    {
+      "variant_id": "q4-gguf",
+      "format": "ollama-tag",
+      "quantization": "Q4_K_M",
+      "runtime_support": ["ollama"],
+      "estimated_weight_gb": 290.0,
+      "min_ram_gb": 320,
+      "quality_tier": 92,
+      "param_count": 480000000000,
+      "active_params": 35000000000,
+      "quantization_tier": 4,
+      "attention_arch": "gqa",
+      "kv_bytes_per_token_fp16": 122880,
+      "vendor_support": {
+        "nvidia": {"ollama": "stable", "vllm": "stable"},
+        "amd":    {"ollama": "stable", "vllm": "experimental"},
+        "mac":    {"ollama": "stable", "mlx": "stable"}
+      },
+      "source": {"type": "ollama", "tag": "qwen3-coder:480b-a35b-q4_K_M"}
+    },
+    {
+      "variant_id": "fp8-safetensors",
+      "format": "safetensors",
+      "quantization": "FP8",
+      "runtime_support": ["vllm"],
+      "estimated_weight_gb": 480.0,
+      "min_vram_mb": 560000,
+      "quality_tier": 95,
+      "param_count": 480000000000,
+      "active_params": 35000000000,
+      "quantization_tier": 4,
+      "attention_arch": "gqa",
+      "kv_bytes_per_token_fp16": 122880,
+      "vendor_support": {
+        "nvidia": {"vllm": "stable"},
+        "amd":    {"vllm": "experimental"},
+        "mac":    {"mlx": "unsupported"}
+      },
+      "source": {"type": "huggingface", "repo_id": "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8"}
+    }
+  ],
+  "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true}
+}

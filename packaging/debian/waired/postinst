@@ -1,0 +1,94 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  configure)
+    if ! getent group waired >/dev/null; then
+      addgroup --system waired
+    fi
+    if ! getent passwd waired >/dev/null; then
+      adduser --system \
+        --home /var/lib/waired \
+        --no-create-home \
+        --shell /usr/sbin/nologin \
+        --ingroup waired \
+        --gecos "Waired agent" \
+        waired
+    fi
+
+    install -d -m 0750 -o waired -g waired /var/lib/waired
+    # Recursive, not just the top dir: a root `sudo waired init` driven
+    # by a pre-#340 CLI left identity/secrets root-owned (the #335
+    # failure mode), and the User=waired daemon then crash-loops on its
+    # boot-time chmod. Reclaiming the whole tree on every configure
+    # makes an upgrade self-heal such installs.
+    chown -R waired:waired /var/lib/waired
+    install -d -m 0755 /etc/waired
+
+    if [ ! -e /etc/waired/agent.env ] && [ -f /etc/waired/agent.env.example ]; then
+      cp -p /etc/waired/agent.env.example /etc/waired/agent.env
+      chmod 0640 /etc/waired/agent.env
+      chown root:waired /etc/waired/agent.env
+    fi
+
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload || true
+      # Capture the enabled-state BEFORE the (re-)enable just below: on an
+      # upgrade it reflects the operator's intent (prerm does not disable on
+      # upgrade), and the restart decision keys off it — so a deliberately
+      # disabled agent is not started by an upgrade. (The `enable` line is
+      # unconditional and pre-existing, so checking is-enabled *after* it would
+      # always be true and defeat the gate.)
+      _waired_was_enabled=no
+      if systemctl --quiet is-enabled waired-agent.service 2>/dev/null; then
+        _waired_was_enabled=yes
+      fi
+      # Enable at boot. On a FRESH install ($2 empty) we deliberately do NOT
+      # start here: when the install.sh one-liner drives this, it runs
+      # `waired init` next and wants the standalone (not daemon-driven) enroll
+      # path, then starts the unit itself. A plain `apt install waired`
+      # enables-only; the banner below tells the operator how to finish.
+      systemctl enable waired-agent >/dev/null 2>&1 || true
+      # On UPGRADE ($2 = previously-installed version) restart onto the new
+      # binary so the agent is never left running old code — or, historically,
+      # left stopped (prerm used to stop it on upgrade and nothing restarted
+      # it; see #737). prerm no longer stops on upgrade, so a running agent is
+      # simply restarted with no downtime window. `restart` (not `try-restart`)
+      # so this also revives the agent on the transition upgrade FROM an older
+      # package whose prerm DID stop it. Gated on the captured enabled-state so
+      # an operator who disabled the unit is left stopped — parity with macOS
+      # `kickstart -k` / the Windows stop+start-on-update flow.
+      if [ -n "$2" ] && [ "$_waired_was_enabled" = yes ]; then
+        systemctl restart waired-agent.service || true
+      fi
+    fi
+
+    if [ -z "$2" ]; then
+      cat <<'EOF'
+
+🎉 Waired agent installed (enabled at boot).
+
+  Sign in:  sudo waired init      (signs in, sets up inference + coding-agent
+                                   integration, starts the agent)
+  Verify:   waired status
+
+The agent boots without an identity and idles until you sign in, so a
+non-root desktop user can also finish via the tray ("Log in…"). See
+`waired init --help` for options.
+
+EOF
+    fi
+    ;;
+
+  abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+  *)
+    echo "postinst called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

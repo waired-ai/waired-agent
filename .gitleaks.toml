@@ -1,0 +1,8 @@
+# gitleaks config for waired-agent. The repo is slated to become public
+# (#184 in the private waired repo): every commit must be free of secrets
+# from the very first one, so the default ruleset runs unmodified — this
+# file exists to pin the config location. Add [[allowlists]] entries here
+# (with a justification) only for reviewed false positives.
+
+[extend]
+useDefault = true

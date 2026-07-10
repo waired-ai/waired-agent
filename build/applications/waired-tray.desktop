@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Waired Tray
+Comment=Tailscale-style system tray for Waired
+Exec=waired-tray
+Icon=network-vpn-symbolic
+Terminal=false
+Categories=Network;
+Keywords=Waired;VPN;Tailscale;Mesh;

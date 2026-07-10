@@ -1,0 +1,129 @@
+package controlclient
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/waired-ai/waired-agent/proto/signer"
+)
+
+// TestPushInferenceStatusSignsBodyAndDecodesContentChanged verifies the
+// agent's wire-format obligations end to end against an httptest mock CP:
+//   - body is JSON with the documented fields
+//   - X-Waired-Body-Signature is a base64 Ed25519 signature over the
+//     EXACT raw body bytes (the CP also verifies the raw bytes — no
+//     canonical JSON re-marshalling is allowed)
+//   - Authorization: Bearer <access_token>
+//   - the response.content_changed boolean is propagated to the caller
+func TestPushInferenceStatusSignsBodyAndDecodesContentChanged(t *testing.T) {
+	machinePub, machinePriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		gotPath   string
+		gotAuth   string
+		gotSigOK  bool
+		gotState  signer.InferenceState
+		gotDevice string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		sig, _ := base64.StdEncoding.DecodeString(r.Header.Get("X-Waired-Body-Signature"))
+		gotSigOK = ed25519.Verify(ed25519.PublicKey(machinePub), body, sig)
+		var req upsertInferenceStatusRequest
+		_ = json.Unmarshal(body, &req)
+		gotState = req.State
+		gotDevice = req.DeviceID
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","content_changed":true}`))
+	}))
+	defer srv.Close()
+
+	cli := New(srv.URL, "tok-deadbeef")
+	state := signer.InferenceState{
+		Reachable: true,
+		Type:      signer.InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		Models:    []string{"llama3.1:8b"},
+		LastCheck: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	changed, err := cli.PushInferenceStatus(context.Background(), "device-abc", state, machinePriv)
+	if err != nil {
+		t.Fatalf("PushInferenceStatus: %v", err)
+	}
+	if !changed {
+		t.Errorf("expected ContentChanged=true (mock says yes)")
+	}
+	if gotPath != "/v1/devices/self/inference-status" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotAuth != "Bearer tok-deadbeef" {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+	if !gotSigOK {
+		t.Errorf("signature did not verify against the supplied raw body")
+	}
+	if gotDevice != "device-abc" {
+		t.Errorf("device_id = %q", gotDevice)
+	}
+	if gotState.Type != signer.InferenceTypeOllama || !gotState.Reachable {
+		t.Errorf("state round-trip mismatch: %+v", gotState)
+	}
+}
+
+func TestPushInferenceStatusPropagatesNonOK(t *testing.T) {
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"type":"replay_detected"}}`))
+	}))
+	defer srv.Close()
+
+	cli := New(srv.URL, "tok")
+	_, err := cli.PushInferenceStatus(context.Background(), "d", signer.InferenceState{
+		Reachable: false,
+		Type:      signer.InferenceTypeNone,
+		LastCheck: time.Now().UTC().Format(time.RFC3339Nano),
+	}, machinePriv)
+	if err == nil {
+		t.Fatalf("expected error from 401 response")
+	}
+}
+
+func TestPushInferenceStatusUsesCustomAuthHeader(t *testing.T) {
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+
+	var seen string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("X-Waired-Agent-Bearer")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","content_changed":false}`))
+	}))
+	defer srv.Close()
+
+	cli := New(srv.URL, "tok-iam")
+	cli.UseCustomAuthHeader = true
+	if _, err := cli.PushInferenceStatus(context.Background(), "d", signer.InferenceState{
+		Reachable: true,
+		Type:      signer.InferenceTypeOllama,
+		LastCheck: time.Now().UTC().Format(time.RFC3339Nano),
+	}, machinePriv); err != nil {
+		t.Fatalf("PushInferenceStatus: %v", err)
+	}
+	if seen != "tok-iam" {
+		t.Errorf("X-Waired-Agent-Bearer = %q, want tok-iam", seen)
+	}
+}

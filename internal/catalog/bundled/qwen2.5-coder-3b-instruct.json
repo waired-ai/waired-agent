@@ -1,0 +1,56 @@
+{
+  "model_id": "qwen2.5-coder-3b-instruct",
+  "display_name": "Qwen2.5 Coder 3B Instruct",
+  "model_aliases": [
+    "waired/small",
+    "qwen2.5-coder-3b",
+    "Qwen/Qwen2.5-Coder-3B-Instruct"
+  ],
+  "license": "qwen-research",
+  "context_length": 32768,
+  "capabilities": ["chat", "tool_use", "json_mode"],
+  "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
+  "variants": [
+    {
+      "variant_id": "q4-gguf",
+      "format": "ollama-tag",
+      "quantization": "Q4_K_M",
+      "runtime_support": ["ollama"],
+      "estimated_weight_gb": 2.0,
+      "min_ram_gb": 4,
+      "quality_tier": 30,
+      "param_count": 3090000000,
+      "active_params": 3090000000,
+      "quantization_tier": 4,
+      "attention_arch": "gqa",
+      "kv_bytes_per_token_fp16": 36864,
+      "vendor_support": {
+        "nvidia": {"ollama": "stable", "vllm": "stable"},
+        "amd":    {"ollama": "stable", "vllm": "experimental"},
+        "mac":    {"ollama": "stable", "mlx": "stable"}
+      },
+      "source": {"type": "ollama", "tag": "qwen2.5-coder:3b-instruct-q4_K_M"}
+    },
+    {
+      "variant_id": "awq-int4",
+      "format": "safetensors",
+      "quantization": "AWQ-int4",
+      "runtime_support": ["vllm"],
+      "estimated_weight_gb": 2.2,
+      "min_vram_mb": 4096,
+      "quality_tier": 31,
+      "param_count": 3090000000,
+      "active_params": 3090000000,
+      "quantization_tier": 4,
+      "attention_arch": "gqa",
+      "kv_bytes_per_token_fp16": 36864,
+      "vendor_support": {
+        "nvidia": {"vllm": "stable"},
+        "amd":    {"vllm": "experimental"},
+        "mac":    {"mlx": "unsupported"}
+      },
+      "source": {"type": "huggingface", "repo_id": "Qwen/Qwen2.5-Coder-3B-Instruct-AWQ"}
+    }
+  ],
+  "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true}
+}

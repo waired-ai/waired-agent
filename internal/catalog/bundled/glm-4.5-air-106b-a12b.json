@@ -1,0 +1,36 @@
+{
+  "model_id": "glm-4.5-air-106b-a12b",
+  "display_name": "GLM-4.5-Air 106B-A12B (MoE, MIT)",
+  "model_aliases": [
+    "waired/moe-mit",
+    "glm-4.5-air",
+    "zai-org/GLM-4.5-Air"
+  ],
+  "license": "mit",
+  "context_length": 131072,
+  "capabilities": ["chat", "tool_use", "json_mode"],
+  "runtime": {"preferred": "vllm"},
+  "variants": [
+    {
+      "variant_id": "fp8-safetensors",
+      "format": "safetensors",
+      "quantization": "FP8",
+      "runtime_support": ["vllm"],
+      "estimated_weight_gb": 108.0,
+      "min_vram_mb": 120000,
+      "quality_tier": 75,
+      "param_count": 106000000000,
+      "active_params": 12000000000,
+      "quantization_tier": 4,
+      "attention_arch": "standard",
+      "kv_bytes_per_token_fp16": 188416,
+      "vendor_support": {
+        "nvidia": {"vllm": "stable"},
+        "amd":    {"vllm": "experimental"},
+        "mac":    {"mlx": "unsupported", "ollama": "unsupported"}
+      },
+      "source": {"type": "huggingface", "repo_id": "zai-org/GLM-4.5-Air"}
+    }
+  ],
+  "security": {"trust_remote_code_required": true, "allow_persistent_kv_cache": true}
+}

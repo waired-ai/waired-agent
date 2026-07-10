@@ -1,0 +1,253 @@
+# STAGED at the #184 split: trigger reduced to workflow_dispatch until
+# runners / WIF / secrets are wired for this repo (cutover checklist in
+# the monorepo issue #184). Do not re-enable push triggers before that.
+# Release pipeline. Cuts `.deb` packages for waired (CLI + agent daemon)
+# and waired-tray, uploads them to the public APT repo in Artifact
+# Registry, builds the Windows release zip (waired.exe + waired-agent.exe
+# + waired-tray.exe) and an Inno Setup GUI installer, and attaches the
+# entrypoint installers (`install.sh`, `install.ps1`) to a GitHub Release
+# so end users can run:
+#
+#   curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh
+#   iwr  -useb https://github.com/waired-ai/waired-install/releases/latest/download/install.ps1 | iex
+#
+# The cross-platform build matrix (Linux amd64/arm64 .deb, Windows zip +
+# Inno Setup .exe, macOS amd64/arm64 tarballs) lives in the shared
+# reusable-build-artifacts.yml workflow, which edge.yml also calls; see
+# #282. This file owns the stable-channel publish: APT upload to
+# waired-dev-apt + a `v*` GitHub Release + the public waired-install
+# mirror.
+#
+# RELEASE-STREAM SPLIT (docs/decisions.md "client repo public 分離", #184):
+# this `v*` pipeline is the AGENT / client stable-channel publisher and is what
+# moves to the public waired-ai/waired-agent repo at the split. The SERVER
+# (Control Plane + relay) release to prod-waired is a SEPARATE, independent
+# stream on `server/v*` tags — deploy-staging.yml (server/v*-rc.*) and
+# release-prod.yml (server/v*) — which stays in this private repo. The two
+# never share a tag: the glob `v*` does not match `server/v0.1.0` (`*` does not
+# cross `/`), so server and agent releases are decoupled today and at the split.
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+# Inline-inject safe.directory=* — see ci.yml for rationale.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+# Force bash for run-steps — see ci.yml.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # Shared cross-platform matrix. On a `v*` tag the reusable workflow
+    # sees github.ref_type == 'tag' (via the caller's context) and
+    # versions artifacts from the tag; secrets: inherit forwards the
+    # optional Authenticode signing cert.
+    uses: ./.github/workflows/reusable-build-artifacts.yml
+    secrets: inherit
+
+  testnet-gate:
+    # Hard release gate (#738): a stable-channel client release must ship a
+    # commit whose mesh behaviour a real-NAT testnet run has validated. The
+    # per-PR testnet is path-gated (judgement-based allowlist), so this is
+    # the guarantee that no mis-skipped regression reaches a release: if the
+    # tag's commit has no green testnet run yet, dispatch one at the tag and
+    # wait for it (quota wait + ~25 min run; rare + acceptable at release
+    # cadence). Runs in parallel with build; publish needs both.
+    name: require green testnet for the release commit
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: write   # gh workflow run testnet.yml
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: testnet-require-green (dispatch at the tag if needed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/testnet-require-green.sh "${{ github.sha }}" "${{ github.ref_name }}"
+
+  publish:
+    name: publish to AR + GH Release
+    needs: [build, testnet-gate]
+    # Only publish on real tag pushes — workflow_dispatch runs build the
+    # .deb for inspection but stop short of touching AR / cutting a GH
+    # Release. Re-run with a tag when ready.
+    if: github.ref_type == 'tag'
+    # Hosted runner here too — see the build job's comment for why.
+    # The google/cloud-sdk container handles AR upload + gh CLI, so the
+    # runner OS just needs Docker (preinstalled on GHA Linux).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container:
+      image: google/cloud-sdk:slim
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist/
+          pattern: deb-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist/
+          pattern: windows-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist/
+          pattern: darwin-*
+          merge-multiple: true
+
+      - name: Install gh CLI
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y --no-install-recommends gh
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Upload .deb files to Artifact Registry APT repo
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=(dist/*.deb)
+          if (( ${#debs[@]} == 0 )); then
+            echo "::error::no .deb files found under dist/"
+            exit 1
+          fi
+          for deb in "${debs[@]}"; do
+            echo "::notice::uploading ${deb}"
+            # AR APT upload is single-file per invocation. Loop.
+            gcloud artifacts apt upload waired-dev-apt \
+              --project="${PROJECT_ID}" \
+              --location="${REGION}" \
+              --source="${deb}"
+          done
+
+      - name: Create GitHub Release with install entrypoints + Linux + Windows assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          # Linux .deb files + Windows zip/sha256 are downloaded into
+          # dist/ by the preceding download-artifact steps. install.sh
+          # and install.ps1 live in-tree.
+          assets=(
+            packaging/install/install.sh
+            packaging/install/install.ps1
+            scripts/install/ollama-windows.ps1
+            dist/waired-windows-amd64.zip
+            dist/waired-windows-amd64.zip.sha256
+            dist/waired-darwin-amd64.tar.gz
+            dist/waired-darwin-amd64.tar.gz.sha256
+            dist/waired-darwin-arm64.tar.gz
+            dist/waired-darwin-arm64.tar.gz.sha256
+          )
+          shopt -s nullglob
+          # Glob-driven: the Windows Setup.exe filename embeds the
+          # version, and .deb files come from a separate matrix arch,
+          # so neither can be hard-coded above.
+          setups=(dist/WairedSetup-*.exe)
+          assets+=("${setups[@]}")
+          debs=(dist/*.deb)
+          assets+=("${debs[@]}")
+          # `gh release create` errors if the release already exists.
+          # Workflow re-runs on the same tag (manual repair, etc.) should
+          # update the existing release rather than fail the job.
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "::notice::release ${tag} exists — uploading assets via gh release upload --clobber"
+            gh release upload "${tag}" "${assets[@]}" --clobber
+          else
+            gh release create "${tag}" "${assets[@]}" \
+              --title "${tag}" \
+              --generate-notes
+          fi
+
+      - name: Mirror installer entrypoints + Windows assets to waired-ai/waired-install (public)
+        # This repo is private; the public-facing one-liners at
+        # `https://github.com/waired-ai/waired-install/releases/latest/download/install.{sh,ps1}`
+        # plus the Windows zip + sha256 that install.ps1 fetches are
+        # hosted in a separate public repo. Each `v*` tag here gets a
+        # matching tag + release in waired-install so the URLs above
+        # always resolve to artifacts built from the same commit.
+        #
+        # .deb files are NOT mirrored: apt fetches them from the public
+        # Google Artifact Registry repo, not from GitHub Releases.
+        #
+        # Token: WAIRED_INSTALL_REPO_TOKEN is a fine-grained PAT with
+        # Contents:Read+Write scoped to waired-ai/waired-install only.
+        # Step is no-op (with a warning) if the secret is unset, so a
+        # missing PAT does not fail the release as a whole.
+        env:
+          MIRROR_TOKEN: ${{ secrets.WAIRED_INSTALL_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MIRROR_TOKEN}" ]; then
+            echo "::warning::WAIRED_INSTALL_REPO_TOKEN is not set; skipping waired-install mirror"
+            exit 0
+          fi
+          tag="${GITHUB_REF_NAME}"
+          export GH_TOKEN="${MIRROR_TOKEN}"
+          mirror_assets=(
+            packaging/install/install.sh
+            packaging/install/install.ps1
+            packaging/install/uninstall.sh
+            packaging/install/uninstall.ps1
+            scripts/install/ollama-windows.ps1
+            dist/waired-windows-amd64.zip
+            dist/waired-windows-amd64.zip.sha256
+            dist/waired-darwin-amd64.tar.gz
+            dist/waired-darwin-amd64.tar.gz.sha256
+            dist/waired-darwin-arm64.tar.gz
+            dist/waired-darwin-arm64.tar.gz.sha256
+          )
+          shopt -s nullglob
+          setups=(dist/WairedSetup-*.exe)
+          mirror_assets+=("${setups[@]}")
+          # Match the source-repo logic: idempotent on re-runs.
+          if gh release view "${tag}" --repo waired-ai/waired-install >/dev/null 2>&1; then
+            echo "::notice::waired-install release ${tag} exists — uploading mirror assets with --clobber"
+            gh release upload "${tag}" \
+              --repo waired-ai/waired-install \
+              "${mirror_assets[@]}" \
+              --clobber
+          else
+            notes=$'Installer entrypoints for Waired '"${tag}"$'.\n'
+            notes+=$'Linux:   `curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh`\n'
+            notes+=$'macOS:   `curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh`\n'
+            notes+=$'Windows: `iwr -useb https://github.com/waired-ai/waired-install/releases/latest/download/install.ps1 | iex`\n\n'
+            notes+=$'Linux .deb packages live in Google Artifact Registry; install.sh adds the apt repo.\n'
+            notes+=$'macOS binaries (waired-darwin-{amd64,arm64}.tar.gz + .sha256, unsigned ad-hoc) are\n'
+            notes+=$'attached here; the same install.sh detects Darwin, installs Ollama, and registers\n'
+            notes+=$'a per-user launchd LaunchAgent.\n'
+            notes+=$'Windows binaries (waired-windows-amd64.zip + .sha256) and the GUI installer\n'
+            notes+=$'(WairedSetup-<version>-x64.exe, unsigned -- see SmartScreen note in docs) are\n'
+            notes+=$'attached here.'
+            gh release create "${tag}" \
+              --repo waired-ai/waired-install \
+              --title "${tag}" \
+              --notes "${notes}" \
+              "${mirror_assets[@]}"
+          fi

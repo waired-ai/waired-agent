@@ -1,0 +1,58 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+  remove|upgrade|deconfigure)
+    if [ -d /run/systemd/system ]; then
+      # `upgrade` deliberately does NOT stop the agent: dpkg overwrites the
+      # live binary in place (safe on Linux — the running process keeps the
+      # old inode) and postinst issues a single `restart` at the end of
+      # `configure`, so the agent stays up through unpack + the `chown -R`
+      # over /var/lib/waired and flips onto the new binary with no downtime
+      # window (parity with macOS `launchctl kickstart -k`). Only remove /
+      # deconfigure — where the unit is actually going away — stop it.
+      if [ "$1" != upgrade ] \
+         && systemctl --quiet is-active waired-agent.service 2>/dev/null; then
+        systemctl stop waired-agent.service || true
+      fi
+      if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
+        if systemctl --quiet is-enabled waired-agent.service 2>/dev/null; then
+          systemctl disable waired-agent.service || true
+        fi
+      fi
+    fi
+
+    # On `remove` (both `apt remove` and the remove phase of `apt purge`),
+    # best-effort deregister this device from the Control Plane so it stops
+    # lingering in the admin device list (and in peers' network maps). prerm
+    # is the only maintainer-script step where the CLI binary AND the on-disk
+    # credentials both still exist: postrm purge — which wipes
+    # /var/lib/waired — runs after dpkg has already deleted /usr/bin/waired.
+    #
+    # --revoke moves the device to the terminal revoked state; --server-only
+    # makes the CP call but leaves local files untouched so dpkg stays the
+    # single owner of state deletion (purge wipes /var/lib/waired, plain
+    # remove preserves it for reinstall). The call is best-effort (10s
+    # timeout, exits 0 even if the CP is unreachable) and `|| true` keeps a
+    # failure from ever aborting the removal.
+    #
+    # Deliberately NOT run on `upgrade`/`deconfigure`: replacing the binary
+    # must not revoke the device.
+    if [ "$1" = remove ] && [ -x /usr/bin/waired ]; then
+      /usr/bin/waired logout --yes --server-only --revoke \
+        --state-dir /var/lib/waired || true
+    fi
+    ;;
+
+  failed-upgrade)
+    ;;
+
+  *)
+    echo "prerm called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

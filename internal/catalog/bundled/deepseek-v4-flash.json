@@ -1,0 +1,36 @@
+{
+  "model_id": "deepseek-v4-flash",
+  "display_name": "DeepSeek-V4-Flash 284B-A13B (MoE, MIT, 1M context)",
+  "model_aliases": [
+    "waired/moe-dual-gpu",
+    "deepseek-v4-flash",
+    "deepseek-ai/DeepSeek-V4-Flash"
+  ],
+  "license": "mit",
+  "context_length": 1048576,
+  "capabilities": ["chat", "tool_use", "json_mode"],
+  "runtime": {"preferred": "vllm"},
+  "variants": [
+    {
+      "variant_id": "fp8-safetensors",
+      "format": "safetensors",
+      "quantization": "FP8",
+      "runtime_support": ["vllm"],
+      "estimated_weight_gb": 160.0,
+      "min_vram_mb": 196608,
+      "quality_tier": 93,
+      "param_count": 284000000000,
+      "active_params": 13000000000,
+      "quantization_tier": 8,
+      "attention_arch": "mla",
+      "kv_bytes_per_token_fp16": 124928,
+      "vendor_support": {
+        "nvidia": {"vllm": "stable"},
+        "amd":    {"vllm": "experimental"},
+        "mac":    {"mlx": "unsupported", "ollama": "unsupported"}
+      },
+      "source": {"type": "huggingface", "repo_id": "deepseek-ai/DeepSeek-V4-Flash"}
+    }
+  ],
+  "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true}
+}

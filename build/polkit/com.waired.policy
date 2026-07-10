@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Waired</vendor>
+  <vendor_url>https://github.com/gen16k/waired</vendor_url>
+
+  <!--
+    These actions are invoked by waired-tray when the desktop user
+    triggers Login / Logout. The tray itself runs as the desktop user
+    and talks to the loopback Local Management API directly for
+    Connect / Disconnect (pause / resume), so those non-destructive
+    actions do NOT need polkit and must NOT be added here.
+
+    Defaults:
+      - active console session: prompt for the user's password (auth_self_keep)
+        so the same authenticated burst can run init then enable the daemon.
+      - inactive / remote: require admin to keep this off SSH-only flows.
+  -->
+
+  <action id="com.waired.init">
+    <description>Enroll this device into a Waired network</description>
+    <message>Authentication is required to enroll this device with Waired.</message>
+    <icon_name>network-vpn-symbolic</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_self_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/waired</annotate>
+  </action>
+
+  <action id="com.waired.logout">
+    <description>Sign this device out of Waired</description>
+    <message>Authentication is required to remove this device's Waired identity.</message>
+    <icon_name>network-vpn-symbolic</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_self_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/local/bin/waired</annotate>
+  </action>
+</policyconfig>

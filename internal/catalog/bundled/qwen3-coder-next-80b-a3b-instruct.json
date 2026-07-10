@@ -1,0 +1,76 @@
+{
+  "model_id": "qwen3-coder-next-80b-a3b-instruct",
+  "display_name": "Qwen3 Coder Next 80B-A3B Instruct (Hybrid Mamba)",
+  "model_aliases": [
+    "waired/moe-mid",
+    "qwen3-coder-next-80b-a3b",
+    "Qwen/Qwen3-Next-80B-A3B-Instruct"
+  ],
+  "license": "apache-2.0",
+  "context_length": 262144,
+  "capabilities": ["chat", "tool_use", "json_mode"],
+  "runtime": {"preferred": "vllm", "fallback": ["ollama"]},
+  "variants": [
+    {
+      "variant_id": "q4-gguf",
+      "format": "ollama-tag",
+      "quantization": "Q4_K_M",
+      "runtime_support": ["ollama"],
+      "estimated_weight_gb": 48.5,
+      "min_ram_gb": 56,
+      "quality_tier": 86,
+      "param_count": 80100000000,
+      "active_params": 3300000000,
+      "quantization_tier": 4,
+      "attention_arch": "hybrid_mamba",
+      "kv_bytes_per_token_fp16": 24576,
+      "vendor_support": {
+        "nvidia": {"ollama": "stable"},
+        "amd":    {"ollama": "stable"},
+        "mac":    {"ollama": "community"}
+      },
+      "source": {"type": "ollama", "tag": "hf.co/unsloth/Qwen3-Coder-Next-GGUF:Q4_K_M"}
+    },
+    {
+      "variant_id": "fp16-safetensors",
+      "format": "safetensors",
+      "dtype": "bfloat16",
+      "runtime_support": ["vllm"],
+      "estimated_weight_gb": 160.0,
+      "min_vram_mb": 180000,
+      "quality_tier": 80,
+      "param_count": 80100000000,
+      "active_params": 3300000000,
+      "quantization_tier": 8,
+      "attention_arch": "hybrid_mamba",
+      "kv_bytes_per_token_fp16": 24576,
+      "vendor_support": {
+        "nvidia": {"vllm": "stable"},
+        "amd":    {"vllm": "experimental"},
+        "mac":    {"mlx": "community"}
+      },
+      "source": {"type": "huggingface", "repo_id": "Qwen/Qwen3-Next-80B-A3B-Instruct"}
+    },
+    {
+      "variant_id": "awq-int4",
+      "format": "safetensors",
+      "quantization": "AWQ-int4",
+      "runtime_support": ["vllm"],
+      "estimated_weight_gb": 48.0,
+      "min_vram_mb": 56000,
+      "quality_tier": 82,
+      "param_count": 80100000000,
+      "active_params": 3300000000,
+      "quantization_tier": 4,
+      "attention_arch": "hybrid_mamba",
+      "kv_bytes_per_token_fp16": 24576,
+      "vendor_support": {
+        "nvidia": {"vllm": "stable"},
+        "amd":    {"vllm": "experimental"},
+        "mac":    {"mlx": "unsupported"}
+      },
+      "source": {"type": "huggingface", "repo_id": "Qwen/Qwen3-Next-80B-A3B-Instruct-AWQ"}
+    }
+  ],
+  "security": {"trust_remote_code_required": true, "allow_persistent_kv_cache": true}
+}

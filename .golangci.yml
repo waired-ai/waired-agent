@@ -1,0 +1,56 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - misspell
+  settings:
+    errcheck:
+      # Close()/CloseNow() on net.Conn, http.Body, db clients, websockets
+      # are conventionally not error-checked in defers.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (*net.UDPConn).Close
+        - (*net.TCPConn).Close
+        - (io.ReadCloser).Close
+        - (*github.com/coder/websocket.Conn).CloseNow
+        - (*google.golang.org/grpc.ClientConn).Close
+        - (*cloud.google.com/go/spanner/admin/instance/apiv1.InstanceAdminClient).Close
+        - (*cloud.google.com/go/spanner/admin/database/apiv1.DatabaseAdminClient).Close
+        - (*cloud.google.com/go/spanner.Client).Close
+  exclusions:
+    paths:
+      # node_modules ships third-party Go (e.g., flatted/golang/...) for
+      # the frontend toolchain. We do not control it; skip outright.
+      - web/admin/node_modules
+    rules:
+      # Test files often ignore Close()/Cleanup() return errors intentionally.
+      - path: _test\.go
+        linters: [errcheck]
+      # E2E uses dial-loops and retry helpers where staticcheck is noisy
+      # (e.g. SA1019 on intentionally-old API surfaces). Re-tighten later.
+      - path: internal/e2e/
+        linters: [staticcheck]
+      # Close()/CloseNow() in defers is idiomatic across the codebase
+      # regardless of receiver type. exclude-functions only catches
+      # known type names; this regex catches the rest.
+      - linters: [errcheck]
+        text: "Error return value of `[^`]+\\.(Close|CloseNow|CloseSend)` is not checked"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/waired-ai/waired-agent

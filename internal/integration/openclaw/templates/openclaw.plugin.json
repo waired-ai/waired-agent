@@ -1,0 +1,18 @@
+{
+  "id": "waired",
+  "name": "Waired",
+  "description": "Waired local inference provider",
+  "version": "0.1.0",
+  "activation": { "onStartup": false },
+  "enabledByDefault": true,
+  "providers": ["waired"],
+  "providerRequest": {
+    "providers": {
+      "waired": { "family": "waired", "openAICompletions": { "supportsStreamingUsage": true } }
+    }
+  },
+  "modelPricing": { "providers": { "waired": { "external": false } } },
+  "nonSecretAuthMarkers": ["waired-local"],
+  "syntheticAuthRefs": ["waired"],
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

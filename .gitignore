@@ -1,0 +1,15 @@
+# Build outputs
+/bin/
+/dist/
+
+# Local Go workspace (developers may point proto at a monorepo checkout;
+# never commit it)
+go.work
+go.work.sum
+
+# Editor / OS noise
+.DS_Store
+*.swp
+
+# Local worktrees
+/.worktrees/

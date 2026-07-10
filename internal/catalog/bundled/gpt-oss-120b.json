@@ -1,0 +1,58 @@
+{
+  "model_id": "gpt-oss-120b",
+  "display_name": "OpenAI gpt-oss 120B (MXFP4)",
+  "model_aliases": [
+    "waired/flagship",
+    "gpt-oss-120b",
+    "openai/gpt-oss-120b"
+  ],
+  "license": "apache-2.0",
+  "context_length": 131072,
+  "capabilities": ["chat", "tool_use", "json_mode"],
+  "runtime": {"preferred": "vllm", "fallback": ["ollama"]},
+  "variants": [
+    {
+      "variant_id": "mxfp4-gguf",
+      "format": "ollama-tag",
+      "quantization": "MXFP4",
+      "runtime_support": ["ollama"],
+      "estimated_weight_gb": 62.0,
+      "min_ram_gb": 96,
+      "quality_tier": 85,
+      "param_count": 116830000000,
+      "active_params": 5130000000,
+      "quantization_tier": 4,
+      "attention_arch": "sliding_window",
+      "kv_bytes_per_token_fp16": 98304,
+      "mxfp4_native": true,
+      "vendor_support": {
+        "nvidia": {"ollama": "stable", "vllm": "stable"},
+        "amd":    {"ollama": "stable", "vllm": "experimental"},
+        "mac":    {"ollama": "stable", "mlx": "experimental"}
+      },
+      "source": {"type": "ollama", "tag": "gpt-oss:120b"}
+    },
+    {
+      "variant_id": "mxfp4-safetensors",
+      "format": "safetensors",
+      "quantization": "MXFP4",
+      "runtime_support": ["vllm"],
+      "estimated_weight_gb": 62.0,
+      "min_vram_mb": 80000,
+      "quality_tier": 88,
+      "param_count": 116830000000,
+      "active_params": 5130000000,
+      "quantization_tier": 4,
+      "attention_arch": "sliding_window",
+      "kv_bytes_per_token_fp16": 98304,
+      "mxfp4_native": true,
+      "vendor_support": {
+        "nvidia": {"vllm": "stable"},
+        "amd":    {"vllm": "experimental"},
+        "mac":    {"mlx": "experimental"}
+      },
+      "source": {"type": "huggingface", "repo_id": "openai/gpt-oss-120b"}
+    }
+  ],
+  "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true}
+}
