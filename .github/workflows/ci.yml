@@ -76,10 +76,15 @@ jobs:
           # The shared protocol module must stay minimal and auditable:
           # stdlib plus golang.org/x/crypto (disco sealed frames:
           # ChaCha20-Poly1305 / X25519 / HKDF) and its x/sys transitive.
-          bad=$(cd proto && go list -m all | tail -n +2 | \
-            grep -vE '^golang\.org/x/(crypto|sys) ' || true)
+          # Checked at the package-import level: `go list -m all` would
+          # overcount (x/crypto's own go.mod pulls x/net etc. into the
+          # module graph without them ever being imported).
+          bad=$(cd proto && go list -f '{{if not .Standard}}{{.ImportPath}}{{end}}' -deps ./... | \
+            grep -vE '^$' | \
+            grep -vE '^github\.com/waired-ai/waired-agent/proto(/|$)' | \
+            grep -vE '^golang\.org/x/(crypto|sys)(/|$)' || true)
           if [ -n "${bad}" ]; then
-            echo "::error::proto module grew dependencies outside the allowlist:"
+            echo "::error::proto packages import dependencies outside the allowlist:"
             printf '%s\n' "${bad}"
             exit 1
           fi
