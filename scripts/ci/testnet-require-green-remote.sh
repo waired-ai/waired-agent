@@ -49,9 +49,10 @@ fi
 # header). event=workflow_dispatch excludes PR/nightly runs, whose titles
 # carry agent 'main' rather than a pinned SHA.
 runs_for_sha() { # prints "id status conclusion" per matching run
+  # NB: `gh api --jq` takes a bare expression only (no jq --arg support);
+  # the SHA is hex so direct interpolation is injection-safe.
   gh api "repos/${repo}/actions/workflows/testnet.yml/runs?event=workflow_dispatch&per_page=100" \
-    --jq --arg sha "${sha}" \
-    '.workflow_runs[] | select(.display_title | contains($sha)) | "\(.id) \(.status) \(.conclusion)"'
+    --jq ".workflow_runs[] | select(.display_title | contains(\"${sha}\")) | \"\(.id) \(.status) \(.conclusion)\""
 }
 
 green_exists() {
