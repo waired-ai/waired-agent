@@ -2,9 +2,9 @@
 # uninstall.sh — remove Waired (Linux apt / macOS tarball install).
 #
 # Usage:
-#   curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/uninstall.sh | sh
-#   curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/uninstall.sh | sh -s -- --clean --yes
-#   curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/uninstall.sh | sh -s -- --dry-run
+#   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
+#   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean --yes
+#   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --dry-run
 #
 # Counterpart to install.sh. Two tiers, matching apt's remove / purge split:
 #
@@ -128,7 +128,7 @@ show_help() {
 uninstall.sh — remove Waired (Linux apt / macOS tarball install).
 
 Usage:
-  curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/uninstall.sh | sh
+  curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
   curl -fsSL .../uninstall.sh | sh -s -- --clean --yes
   curl -fsSL .../uninstall.sh | sh -s -- --dry-run
 

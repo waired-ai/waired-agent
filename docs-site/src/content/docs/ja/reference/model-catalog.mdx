@@ -1,0 +1,105 @@
+---
+title: モデルカタログと仕様
+description: Waired がバンドルするモデルを、ランタイム（Ollama / vLLM）とアーキテクチャ（Dense / MoE）で分けて掲載。各モデルに必要な RAM/VRAM、デフォルトモデル、そして Waired がハードウェアに合わせてモデルを自動選択する仕組み。
+---
+
+import ModelCatalogTable from '../../../../components/ModelCatalogTable.astro';
+
+Waired は、ノートパソコンからマルチ GPU サーバーまでをカバーするモデルカタログを
+バンドルしています。初回起動時には、お使いのハードウェアに合うモデルを自動選択します。
+いつでも切り替え可能です。詳しくは
+[バンドルモデルを切り替える](/ja/guides/switch-model/) を参照してください。
+
+## 自分に合う表の見つけ方
+
+カタログは 2 つの軸で分割してあり、**お使いのマシン**に該当する行へすぐ辿り着けます:
+
+1. **ランタイム別 — Ollama か vLLM か。** OS と GPU によってどちらのエンジンがモデルを
+   配信するかが決まるため、ランタイムごとに節を分けています。自分の節だけを読んでください:
+   - **Ollama** — macOS (Metal)、Windows、Linux、CPU、低 VRAM / 統合 GPU。GGUF（量子化）
+     ビルドを配信し、見るべき数値は **システム RAM** です。
+   - **vLLM** — Linux 上の NVIDIA (CUDA) / AMD (ROCm) の単体 GPU サーバー。safetensors
+     （awq/fp8/mxfp4）ビルドを配信し、見るべき数値は **GPU VRAM** です。
+
+   両エンジン向けにビルドを持つファミリーは、両方の節に掲載されます。
+
+2. **アーキテクチャ別 — Dense か MoE か。** 各ランタイムの中では Dense を先に、続いて
+   Mixture-of-Experts（MoE）を並べています:
+   - **Dense** — すべてのパラメータが毎トークン計算されます。**計算力 / VRAM に余裕**が
+     ある環境（単体 GPU）向きで、同じ品質ならディスク占有は小さめです。
+   - **MoE** — 総サイズは巨大ですが、トークンあたりに*アクティブ*なのは数十億パラメータ
+     だけなのでデコードは高速です。大きなモデルをメモリに載せられる**メモリリッチな
+     Unified メモリ機**（Apple Silicon、AMD Strix Halo）に最適です。
+
+**品質ティア** は 1〜100 のランキング（高いほど高品質）で、Auto-Selector はお使いの
+マシンに収まり、**かつ大きなコーディングコンテキスト（~20万トークン）を保持できる**中で
+最も高いティアを配信します — コーディングエージェントは日常的に 10 万トークン超の
+コンテキストを使うため、それを切り詰めてしまうモデルより、フル窓を持てる少し小さな
+モデルが優先されます。その窓をどのモデルも配れないハードウェアでは、最良の適合を
+選んだうえで `waired status` にその旨を表示します。選ばれたモデルはクライアントから
+安定したハンドル `waired/default` で指定できます
+（[チャットクライアント](/ja/guides/chat-clients/) を参照）。
+
+下の各表は、各モデルのバンドルマニフェスト（`min_ram_gb` / `min_vram_mb` /
+`quality_tier` / `param_count` / `active_params`）からビルド時に生成されるため、
+クライアントが同梱するカタログと常に一致します。
+
+## Ollama 向けモデル
+
+Mac、Windows、CPU、低 VRAM / 統合 GPU 向け。メモリ列は GGUF（q4）ビルドに必要な最小
+**システム RAM** で、メモリが小さいマシン向けのものから順に並びます。
+
+### Ollama · Dense
+
+すべてのパラメータが毎トークン計算されます。RAM、次いで品質で選びます。
+
+<ModelCatalogTable engine="ollama" arch="dense" lang="ja" />
+
+### Ollama · MoE
+
+ディスク上は大きくてもデコードは高速。大容量の Unified メモリ機（Apple Silicon、
+Strix Halo）に最適です。
+
+<ModelCatalogTable engine="ollama" arch="moe" lang="ja" />
+
+## vLLM 向けモデル
+
+Linux 上の NVIDIA (CUDA) / AMD (ROCm) の単体 GPU サーバー向け。メモリ列は量子化
+（awq/fp8/mxfp4）ビルドに必要な最小 **GPU VRAM** で、VRAM が小さい GPU 向けのものから
+順に並びます。同一 NVIDIA GPU を複数積んだホストでは vLLM がモデルを分割して
+載せる（テンソル並列）ため、合算 VRAM が要件にカウントされます。比較的新しい
+NVIDIA GPU（Ada / Hopper 以降 — 例: L4、RTX 40 系）では KV キャッシュを fp8 で
+配信し、ほぼ同等の品質のまま同じ VRAM で収まるコンテキスト窓が約 2 倍になります。
+それでもモデルのフルコンテキストウィンドウが GPU メモリに収まらない場合は、起動
+失敗ではなく縮小したウィンドウで配信され、`waired status` / `waired doctor` に
+その旨が表示されます。
+
+### vLLM · Dense
+
+計算律速。VRAM に余裕のある単体 GPU を持っている場合の自然な選択です。
+
+<ModelCatalogTable engine="vllm" arch="dense" lang="ja" />
+
+### vLLM · MoE
+
+総サイズは巨大でもアクティブな割合は小さく、マルチ GPU サーバーと好相性です。
+
+<ModelCatalogTable engine="vllm" arch="moe" lang="ja" />
+
+## Waired によるモデル選択の仕組み
+
+Auto-Selector は、お使いのマシンのメモリに収まる中で最も高品質なモデルを選びます。
+共有メモリシステム（Apple Silicon、AMD Strix Halo）では、デコード速度が総サイズでは
+なく*アクティブ*パラメータに連動するため、アクティブパラメータ数の少ない MoE モデルが
+優先されます。何も変更せずにルーティングの判断をプレビューするには:
+
+```sh
+waired infer --explain "say hi"
+```
+
+`waired models ls --detail` を実行すると **お使いの** ハードウェアに対する同じ適合状況と
+推奨スペックを、`waired models ls` でディスク使用量を、`waired runtimes status` で
+ロード済みモデルが実際に使用している VRAM を確認できます。
+
+統合 GPU（Strix Halo、Intel）を使用していてモデルが Ollama でロードできない場合は、
+[トラブルシューティング → 統合 GPU](/ja/troubleshooting/#a-model-wont-load-on-an-integrated-gpu) を参照してください。

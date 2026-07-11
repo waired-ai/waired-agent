@@ -1,13 +1,13 @@
 # Waired one-liner installers
 
-End-user-facing entry points. Designed to be hosted on a public mirror
-(`waired-ai/waired-install` GitHub Releases, or `https://pkgs.waired.dev/…`
-once that DNS lands) and run via a single copy-pasteable command.
+End-user-facing entry points. Hosted on the `waired-ai/waired-agent`
+GitHub Releases (or `https://pkgs.waired.dev/…` once that DNS lands)
+and run via a single copy-pasteable command.
 
 ## Linux — `install.sh`
 
 ```sh
-curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 ```
 
 Internally it adds the Waired apt repository and `apt install`s the
@@ -16,7 +16,7 @@ Internally it adds the Waired apt repository and `apt install`s the
 ## macOS — `install.sh`
 
 ```sh
-curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 ```
 
 The same `install.sh` detects Darwin and runs the macOS path: it
@@ -48,7 +48,7 @@ register the LaunchAgent for `root` instead of you.
 ## Windows — `install.ps1`
 
 ```powershell
-iwr -useb https://github.com/waired-ai/waired-install/releases/latest/download/install.ps1 | iex
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 ```
 
 Internally it self-elevates (UAC), downloads
@@ -81,7 +81,7 @@ signed in, it finishes sign-in too.
 
 ```text
 # one command, start to finish:
-curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 ```
 
 Notes / escape hatches:
@@ -137,7 +137,7 @@ Shared between `install.sh` and `install.ps1`:
 | `WAIRED_VERSION`          | Pin to a specific version (Linux: `waired=1.2.3`; Windows: release tag `v1.2.3`). `edge` = the latest main build (rebuilt every merge; same as `--edge` / `-Edge`); on every OS it auto-selects the edge apt repo / edge prerelease assets. Also selects the target for `--update`. |
 | `WAIRED_NO_TRAY`          | If non-empty, skip `waired-tray` (Linux + macOS; Windows uses `-NoTray`). Use on headless servers. |
 | `WAIRED_INSTALL_BASE_URL` | Override the URL hosting `install.sh` / `install.ps1` + the OS binaries (tests / mirrors). |
-| `WAIRED_INSTALL_REPO`     | Override the GitHub repo whose Releases API resolves `latest` during `--check` / `--update` on macOS + Windows (Linux uses the apt candidate). Default `waired-ai/waired-install`. |
+| `WAIRED_INSTALL_REPO`     | Override the GitHub repo whose Releases API resolves `latest` during `--check` / `--update` on macOS + Windows (Linux uses the apt candidate). Default `waired-ai/waired-agent`. |
 
 macOS-only:
 
@@ -261,12 +261,12 @@ mirrored to the same public release — `uninstall.sh` (Linux + macOS) and
 
 ```sh
 # Linux / macOS
-curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/uninstall.sh | sh
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
 ```
 
 ```powershell
 # Windows
-iwr -useb https://github.com/waired-ai/waired-install/releases/latest/download/uninstall.ps1 | iex
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
 ```
 
 Two tiers, matching apt's `remove` / `purge` split:
@@ -329,31 +329,29 @@ convention** rather than by file layout:
 A separate `install.ps1` ships alongside, with the same env-var contract
 (`WAIRED_VERSION`, `WAIRED_NO_TRAY`, `WAIRED_INSTALL_BASE_URL`) but
 PowerShell-shaped helpers (`Common-Log`, `Common-Run`, `Detect-Platform`,
-…). The two scripts share a docs surface and a release-pipeline mirror
-step but no source code — multiplexing sh and PowerShell into one
+…). The two scripts share a docs surface and a release-publishing
+pipeline but no source code — multiplexing sh and PowerShell into one
 stream was rejected as a maintenance trap.
 
 ## Hosting
 
 The Linux one-liner URL is
-`https://github.com/waired-ai/waired-install/releases/latest/download/install.sh`,
-mirrored from each tagged release of the private `waired-ai/waired` repo
-into the public `waired-ai/waired-install` repo. The apt repo lives in
+`https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh`;
+each `v*` tag of `waired-ai/waired-agent` publishes the entry-point
+scripts as release assets via release.yml. The apt repo lives in
 Artifact Registry on the `dev-waired` GCP project. The matching
-`uninstall.sh` / `uninstall.ps1` (see [Uninstalling](#uninstalling)) ride
-the same mirror step, so every release ships its own removers.
+`uninstall.sh` / `uninstall.ps1` (see [Uninstalling](#uninstalling)) are
+published alongside, so every release ships its own removers.
 
-The Windows one-liner URL is the same mirror, with `install.ps1`,
+The Windows one-liner URL is the same release, with `install.ps1`,
 `waired-windows-amd64.zip`, `waired-windows-amd64.zip.sha256`, and
 `WairedSetup-<version>-x64.exe` all uploaded as release assets. The
 PowerShell script downloads the zip + sha from the same `/releases/…`
-path, so a Windows machine never needs read access to the private
-upstream repo.
+path.
 
 The macOS tarballs (`waired-darwin-{amd64,arm64}.tar.gz` + `.sha256`)
-are uploaded to the same mirror release, so a Mac fetches them from the
-public `/releases/…` path without read access to the private upstream
-repo.
+are uploaded to the same release, so a Mac fetches them from the same
+public `/releases/…` path.
 
 See the GitHub issue tracker for open follow-ups (Terraform-managed DNS
 for `pkgs.waired.dev`, winget manifest, Authenticode signing `#124`,
@@ -403,7 +401,7 @@ hash, then prints what it *would* install):
 
 ```powershell
 $f = "$env:TEMP\waired-install.ps1"
-iwr -useb https://github.com/waired-ai/waired-install/releases/latest/download/install.ps1 -OutFile $f
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $f
 & $f -DryRun
 ```
 

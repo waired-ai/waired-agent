@@ -12,17 +12,19 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 )
 
-// docs regenerates the machine-generated model table embedded in the developer
-// docs page reference/models.md. The page answers "which models ship?" — a
-// question the prose pages (inference.md) deliberately leave to the catalog —
-// and it must never drift from internal/catalog/bundled/*.json. So instead of a
+// docs regenerates the machine-generated model table embedded in the
+// repo docs page docs/reference/models.md (until the #184 split this
+// lived in the monorepo's dev-docs-site, which now carries a pointer
+// instead). The page answers "which models ship?" — a question the
+// prose pages deliberately leave to the catalog — and it must never
+// drift from internal/catalog/bundled/*.json. So instead of a
 // hand-maintained table (which the weekly catalog-radar bot, #413, would rot),
 // the table is rendered from catalog.BundledManifests() and the rendered region
 // lives between two HTML-comment markers in the page. `--check` re-renders and
 // diffs without writing, mirroring `catalog-tool validate --all`, so CI (and the
 // catalog-radar draft PRs that touch bundled/*.json) keep the page fresh.
 const (
-	docsDefaultFile = "dev-docs-site/src/content/docs/reference/models.md"
+	docsDefaultFile = "docs/reference/models.md"
 	docsBeginMarker = "<!-- BEGIN GENERATED: catalog-tool docs -->"
 	docsEndMarker   = "<!-- END GENERATED: catalog-tool docs -->"
 )
@@ -48,7 +50,7 @@ func init() {
 
 func runDocs(args []string) error {
 	fs := flag.NewFlagSet("docs", flag.ContinueOnError)
-	file := fs.String("file", docsDefaultFile, "path to the dev-docs model-catalog page to update")
+	file := fs.String("file", docsDefaultFile, "path to the model-catalog page to update")
 	check := fs.Bool("check", false, "verify the page is up to date; exit non-zero (no write) if it drifted")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -180,7 +182,7 @@ func renderCatalogBlock(manifests []catalog.Manifest) string {
 	b.WriteString("### 全バリアント（数値）\n\n")
 	b.WriteString("vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / `×`=unsupported。")
 	b.WriteString("weight GB は概算（`estimated_weight_gb`）、min VRAM は vLLM 経路、min RAM は ollama 経路の下限。")
-	b.WriteString("数値の導出根拠は [推論層](/inference/) と `internal/catalog/scoring/` を参照。\n\n")
+	b.WriteString("数値の導出根拠は dev-docs の「推論層」と `internal/catalog/scoring/` を参照。\n\n")
 	for _, es := range engineSections {
 		fmt.Fprintf(&b, "#### %s\n\n", es.head)
 		b.WriteString("**Dense**\n\n")

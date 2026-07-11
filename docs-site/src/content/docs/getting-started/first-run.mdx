@@ -1,0 +1,97 @@
+---
+title: First run
+description: Enroll a device with waired init, sign in with Google, choose whether it runs and shares a model, and start the background service.
+---
+
+import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+After [installing](/getting-started/install/), enroll the device into your
+Waired network with `waired init`. Run it once per machine.
+
+<Aside type="tip" title="Same account = same network">
+	Sign in to **every** device with the **same Google account**. Devices
+	enrolled under the same account join the same private network and can reach
+	each other; that shared identity is what lets one machine use another's model.
+</Aside>
+
+## Enroll the device
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		sudo waired init
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		& "C:\Program Files\Waired\waired.exe" init
+		```
+	</TabItem>
+</Tabs>
+
+`waired init` walks you through three prompts:
+
+<Steps>
+1. **Google sign-in.** A browser opens to complete the sign-in. (Add
+   `--no-browser` to print the URL and code instead of opening a browser —
+   useful on a headless server.)
+
+2. **Enable the inference engine? (Y/n)** — Choose **Y** on a machine that
+   should *run* a model (your GPU box). The default is Y when the machine has
+   enough memory (roughly 8 GB of VRAM) and N otherwise. On a client laptop that
+   only *uses* a remote model, choose **N**.
+
+3. **Share with mesh peers? (Y/n)** — Choose **Y** on a server so your other
+   devices can send it inference requests. Choose **N** to keep the engine
+   private to this machine (you can still use it yourself). This is independent
+   of the engine toggle — see [sharing vs. pausing](/reference/cli/#sharing-vs-pausing).
+</Steps>
+
+If you enabled the engine, `init` looks at this machine's CPU, memory, and GPU
+and **automatically picks the best bundled coding model that fits** — a larger,
+higher-quality model on a capable box, a smaller one on a modest laptop. It
+checks free disk first (and steps down to a smaller model, or skips the
+download, rather than filling the disk), then pulls the chosen model and waits
+for it in the foreground, showing download progress. The pull can take a few
+minutes; once it finishes, `init` runs a quick benchmark and — if this machine
+can't keep up — offers to switch to an even lighter model. If the download
+fails, `init` still succeeds and prints how to retry. Pass `--no-wait-model` to
+return to the shell right away and let the agent finish the download in the
+background instead. To pin a specific model, pass
+`--inference-bundled-model-id <id>` or see
+[Switch the bundled model](/guides/switch-model/).
+
+<Aside type="caution" title="Under-spec machines">
+	If the machine is too small to run **any** usable coding model, `init` skips
+	the local engine and tells you what it would need. The device still enrolls
+	and works as part of your network — so it can **use** models running on your
+	other devices, just not host one. To install the engine anyway, re-run with
+	`--inference-enabled=true`.
+</Aside>
+
+<Aside type="note">
+	On CI or other non-interactive hosts, pass `--non-interactive` to accept the
+	hardware-derived defaults without prompting. To target a non-default control
+	plane, add `--control https://your-control-plane.example.com`.
+</Aside>
+
+## Start the background service
+
+Enrollment configures the device; the `waired-agent` service keeps it connected.
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		sudo systemctl enable --now waired-agent
+		```
+		(macOS uses a system launchd daemon that the installer already loaded; it
+		starts at boot, no login required.)
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		Start-Service waired-agent
+		```
+	</TabItem>
+</Tabs>
+
+Next: [verify it works](/getting-started/verify/).

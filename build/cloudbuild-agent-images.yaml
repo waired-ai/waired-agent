@@ -1,0 +1,66 @@
+# Cloud Build config for the two agent runtime images
+# (waired-agent / waired-agent-testharness), extracted from the
+# monorepo's build/cloudbuild-waired-images.yaml at the #184 cutover:
+# the NAT-traversal testnet harness stays in the private monorepo but
+# the agent sources live here, so the monorepo's testnet.yml (and
+# scripts/dev/testnet-up.sh) check this repo out and submit THIS config
+# with the checkout as the build context.
+#
+# Used by (all in the waired-ai/waired monorepo):
+#   * `.github/workflows/testnet.yml` `images` job — kicks Cloud Build
+#     at the resolved agent SHA and skips when AR already has the tag.
+#   * `scripts/dev/testnet-up.sh` BUILD_TOOL=cloudbuild branch — for
+#     out-of-CI manual builds (WAIRED_AGENT_DIR checkout).
+#
+# Substitutions are required (no defaults). Callers must pass _TAG
+# (short SHA of THIS repo's commit) and _AR_REPO_URL via
+# `--substitutions`.
+
+steps:
+  # The Dockerfile uses BuildKit-only directives
+  # (`RUN --mount=type=cache,target=/go/pkg/mod`, etc.); DOCKER_BUILDKIT=1
+  # makes the same `docker build` use BuildKit so the cache mounts work.
+  - id: build-agent
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -f
+      - build/Dockerfile.waired-agent
+      - -t
+      - ${_AR_REPO_URL}/waired-agent:${_TAG}
+      - .
+
+  # build-agent-testharness uses the same Dockerfile with
+  # --build-arg GO_BUILD_TAGS=testharness to compile the iptables-
+  # driven scenario dispatcher. The image is consumed only by testnet
+  # VMs (monorepo infra/terraform/envs/dev-workload/testnet.tf);
+  # production deployments continue to pull waired-agent.
+  - id: build-agent-testharness
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    env:
+      - DOCKER_BUILDKIT=1
+    args:
+      - build
+      - -f
+      - build/Dockerfile.waired-agent
+      - --build-arg
+      - GO_BUILD_TAGS=testharness
+      - -t
+      - ${_AR_REPO_URL}/waired-agent-testharness:${_TAG}
+      - .
+
+images:
+  - ${_AR_REPO_URL}/waired-agent:${_TAG}
+  - ${_AR_REPO_URL}/waired-agent-testharness:${_TAG}
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _TAG: ''
+  _AR_REPO_URL: ''

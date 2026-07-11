@@ -1,0 +1,96 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits"],
+  "timezone": "Asia/Tokyo",
+  "schedule": ["before 9am on monday"],
+  "prConcurrentLimit": 4,
+  "prHourlyLimit": 2,
+  "labels": ["dependencies"],
+  "rebaseWhen": "conflicted",
+  "ignoreUnstable": true,
+  "separateMinorPatch": true,
+  "postUpdateOptions": ["gomodTidy"],
+  "ignoreDeps": ["github.com/waired-ai/waired-agent/proto"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 9am on the first day of the month"]
+  },
+  "packageRules": [
+    {
+      "description": "Go modules — single grouped PR",
+      "matchManagers": ["gomod"],
+      "groupName": "go modules",
+      "labels": ["dependencies"]
+    },
+    {
+      "description": "GitHub Actions — single grouped PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "labels": ["dependencies", "ci"]
+    },
+    {
+      "description": "docs-site npm — single grouped PR",
+      "matchManagers": ["npm"],
+      "matchFileNames": ["docs-site/package.json"],
+      "groupName": "docs-site npm",
+      "labels": ["dependencies", "doc"]
+    },
+    {
+      "description": "Inference engine pins (ollama/uv/vllm/hf_transfer) — own PR each (each needs its own validation), labelled inference, stable-only",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["ollama/ollama", "astral-sh/uv", "vllm", "hf_transfer"],
+      "labels": ["dependencies", "inference"],
+      "ignoreUnstable": true
+    },
+    {
+      "description": "Bundled OpenCode coding-agent (monorepo #429) — own PR, inference-labelled, stable-only. The per-OS/arch sha256 set MUST be recomputed on every bump (no upstream checksum file); scripts/dev/update-opencode-sha.sh does it via postUpgradeTasks.",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["sst/opencode"],
+      "labels": ["dependencies", "inference", "actionable"],
+      "ignoreUnstable": true,
+      "postUpgradeTasks": {
+        "commands": ["bash scripts/dev/update-opencode-sha.sh {{{newVersion}}}"],
+        "fileFilters": ["internal/runtime/codeui/install.go"],
+        "executionMode": "update"
+      },
+      "prBodyNotes": [
+        ":warning: **opencode version bump**: the self-pinned `sha256` set (6 platforms) in `internal/runtime/codeui/install.go` (`artifacts` map) must match the new tag. `scripts/dev/update-opencode-sha.sh` recomputes all 6 via postUpgradeTasks when self-hosted Renovate has `allowedPostUpgradeCommands` enabled; otherwise run it by hand on this branch before merge."
+      ]
+    },
+    {
+      "description": "uv bump also needs UVPinnedSHA256Linux64 recomputed; postUpgradeTasks does it when self-hosted Renovate is allowed to run commands, else this note + label tell the reviewer",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["astral-sh/uv"],
+      "labels": ["dependencies", "inference", "actionable"],
+      "postUpgradeTasks": {
+        "commands": ["bash scripts/dev/update-uv-sha.sh {{{newVersion}}}"],
+        "fileFilters": ["internal/runtime/uv.go"],
+        "executionMode": "update"
+      },
+      "prBodyNotes": [
+        ":warning: **uv version bump**: `UVPinnedSHA256Linux64` in `internal/runtime/uv.go` must match the new tarball. `scripts/dev/update-uv-sha.sh` recomputes it via postUpgradeTasks when self-hosted Renovate has `allowedPostUpgradeCommands` enabled; otherwise run it by hand on this branch before merge."
+      ]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Go const pins annotated with `// renovate: datasource=... depName=...`",
+      "managerFilePatterns": [
+        "/^internal/runtime/ollama_version\\.go$/",
+        "/^internal/runtime/uv\\.go$/",
+        "/^internal/runtime/vllm_install\\.go$/",
+        "/^internal/runtime/vllm_stub_windows\\.go$/",
+        "/^internal/runtime/vllm_stub_darwin\\.go$/",
+        "/^internal/runtime/codeui/install\\.go$/"
+      ],
+      "matchStrings": [
+        "//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*const\\s+\\w+\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "{{{datasource}}}",
+      "depNameTemplate": "{{{depName}}}",
+      "extractVersionTemplate": "^v?(?<version>.+)$",
+      "versioningTemplate": "semver-coerced"
+    }
+  ]
+}

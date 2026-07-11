@@ -1,0 +1,141 @@
+# catalog-radar — weekly model-catalog refresh bot (issue #413).
+#
+# Discovers newly-released open coding models on HuggingFace, has a headless
+# Claude research their SWE-bench Verified scores (with cited sources), and:
+#   - upserts a single rolling "Model radar" tracking Issue (label: model-radar);
+#   - opens a DRAFT PR per strong candidate with a fully-drafted, validated
+#     manifest (footprint numbers from catalog-tool, quality_tier from #133).
+# It NEVER auto-merges: every catalog change still needs the mandatory
+# `make e2e-vllm` GPU lane (CLAUDE.md) and human review of the cited scores.
+#
+# OPERATOR SETUP (one-time, outside CI):
+#   - ANTHROPIC_API_KEY  Actions secret — the headless research model's key.
+#   - CATALOG_BOT_TOKEN  Actions secret — a repo-scoped PAT (or GitHub App
+#     installation token) with contents + issues + pull-requests WRITE. Used
+#     for all writes so the default GITHUB_TOKEN stays read-only (renovate
+#     pattern). Scheduled runs fail fast with a clear message until it is set.
+# First run: trigger manually with dryRun=true (default) to preview the Issue /
+# PR bodies as artifacts + step summary without any writes, then enable.
+name: catalog-radar
+
+on:
+  schedule:
+    # Wednesday 00:00 UTC — offset from renovate's Monday so the two bots
+    # never contend for sv-mag at the same time. Weekly cadence.
+    - cron: "0 0 * * 3"
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: Dry-run (research + render, but NO issue/PR writes)
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+# All writes use CATALOG_BOT_TOKEN; the default token stays read-only.
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-radar
+  cancel-in-progress: false
+
+# Inline-inject safe.directory=* (Kata "dubious ownership") — see ci.yml.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+  DRY_RUN: ${{ github.event.inputs.dryRun || 'false' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  radar:
+    name: model-catalog radar
+    runs-on: sv-mag-agent
+    timeout-minutes: 30
+    container:
+      image: golang:1.26-trixie
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history so per-model branches push cleanly
+
+      - name: Guard required secrets
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CATALOG_BOT_TOKEN: ${{ secrets.CATALOG_BOT_TOKEN }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set (needed for the research step). See workflow header."
+            exit 1
+          fi
+          if [ "${DRY_RUN}" != "true" ] && [ -z "${CATALOG_BOT_TOKEN:-}" ]; then
+            echo "::error::CATALOG_BOT_TOKEN secret is not set (needed to write the Issue / PRs). See workflow header."
+            exit 1
+          fi
+
+      - name: Install toolchain (jq, gh, node, claude CLI)
+        env:
+          GH_VERSION: "2.65.0"
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends jq curl ca-certificates nodejs npm
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar -xz -C /tmp
+          install -m 755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Build catalog-tool
+        run: go build -o /usr/local/bin/catalog-tool ./cmd/catalog-tool
+
+      - name: Harness self-test (hermetic, no API)
+        run: bash scripts/catalog-radar/selftest.sh
+
+      - name: Run catalog-radar
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CATALOG_TOOL: /usr/local/bin/catalog-tool
+          CLAUDE_MODEL: claude-opus-4-8
+          MAX_CANDIDATES: "8"
+        run: |
+          set -euo pipefail
+          OUT_DIR="${RUNNER_TEMP}/radar-out"
+          echo "OUT_DIR=${OUT_DIR}" >> "${GITHUB_ENV}"
+          OUT_DIR="${OUT_DIR}" bash scripts/catalog-radar/run.sh
+
+      - name: Step summary
+        run: |
+          {
+            echo "## catalog-radar (dryRun=${DRY_RUN})"
+            echo
+            cat "${OUT_DIR}/issue-body.md"
+            echo
+            echo '<details><summary>summary.json</summary>'
+            echo
+            echo '```json'
+            cat "${OUT_DIR}/summary.json"
+            echo '```'
+            echo '</details>'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upsert radar Issue
+        if: ${{ env.DRY_RUN != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.CATALOG_BOT_TOKEN }}
+        run: bash scripts/catalog-radar/upsert-issue.sh
+
+      - name: Open draft PRs
+        if: ${{ env.DRY_RUN != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.CATALOG_BOT_TOKEN }}
+        run: bash scripts/catalog-radar/open-draft-pr.sh
+
+      - name: Upload artifacts (dry-run preview)
+        if: ${{ env.DRY_RUN == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: catalog-radar-${{ github.run_id }}
+          path: ${{ env.OUT_DIR }}
+          if-no-files-found: warn

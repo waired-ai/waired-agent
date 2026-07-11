@@ -89,10 +89,54 @@ jobs:
             exit 1
           fi
 
+      - name: license check (no copyleft dependencies)
+        # Apache-2.0 repo (#666): fail fast when a new dependency brings
+        # forbidden/restricted (GPL/LGPL-class) licensing. Own modules
+        # are excluded — the repo LICENSE covers them and the replace'd
+        # proto module carries no license file of its own.
+        run: |
+          set -euo pipefail
+          go run github.com/google/go-licenses@v1.6.0 check ./... \
+            --disallowed_types=forbidden,restricted \
+            --ignore github.com/waired-ai/waired-agent \
+            --ignore github.com/waired-ai/waired-agent/proto
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
           skip-cache: true
+
+  dco:
+    # DCO enforcement (#666): every PR commit needs a Signed-off-by
+    # trailer (CONTRIBUTING.md). Deliberately on a GitHub-hosted runner
+    # with no checkout: fork PRs get this feedback immediately without
+    # touching the self-hosted ARC runners (which require maintainer
+    # approval for outside contributors).
+    name: dco (Signed-off-by on every commit)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: check Signed-off-by trailers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Merge commits (>1 parent) are exempt, matching the DCO app's
+          # behaviour; everything else must carry the trailer.
+          bad=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.number }}/commits" \
+            --paginate \
+            --jq '.[] | select((.parents | length) < 2)
+                      | select((.commit.message | test("(?m)^Signed-off-by: .+ <.+@.+>$")) | not)
+                      | .sha')
+          if [ -n "${bad}" ]; then
+            echo "::error::commits missing a Signed-off-by trailer (see CONTRIBUTING.md; use 'git commit -s'):"
+            printf '%s\n' "${bad}"
+            exit 1
+          fi
 
   unit:
     name: unit tests

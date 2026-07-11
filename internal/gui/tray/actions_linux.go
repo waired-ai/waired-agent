@@ -157,7 +157,7 @@ func InstallOllamaViaElevation(ctx context.Context, stateDir string) error {
 // upgrade by hand. (#293)
 func UpdateViaElevation(ctx context.Context) error {
 	if _, err := exec.LookPath("pkexec"); err != nil {
-		if oerr := OpenBrowser("https://github.com/waired-ai/waired-install"); oerr != nil {
+		if oerr := OpenBrowser("https://github.com/waired-ai/waired-agent"); oerr != nil {
 			return fmt.Errorf("update: pkexec unavailable and could not open browser: %w", oerr)
 		}
 		return nil

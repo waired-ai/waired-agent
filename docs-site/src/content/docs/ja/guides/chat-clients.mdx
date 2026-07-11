@@ -1,0 +1,77 @@
+---
+title: チャット & OpenAI 互換クライアント
+description: OpenAI 互換または Anthropic 互換の任意のクライアントを、127.0.0.1:9473 の Local Gateway 経由で Waired モデルに接続します。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Waired は `http://127.0.0.1:9473` で **Local Gateway** を公開しており、OpenAI と
+Anthropic の両方のワイヤーフォーマットを話します。これらの API と通信できるツール
+であれば — ブラウザのチャット UI、エディター拡張機能、スクリプトなど — このアドレスに
+向けることで自分のモデルを使えます。[Claude Code と OpenCode](/ja/guides/coding-agents/)
+は自動的に接続されます。それ以外はすべて以下のエンドポイントを使用します。
+
+<Aside type="note" title="ループバックのみ">
+	ゲートウェイは `127.0.0.1` でリッスンしており、ネットワークに公開されることは
+	ありません。他のマシンからのリクエストは、このポートではなく暗号化されたメッシュ
+	経由でモデルに到達します。クライアントはエージェントと同じマシン上で実行してください
+	(または自分でループバックをトンネルしてください)。
+</Aside>
+
+## エンドポイント
+
+| API | エンドポイント | クライアント用ベース URL |
+|---|---|---|
+| OpenAI chat | `POST /v1/chat/completions` | `http://127.0.0.1:9473/v1` |
+| OpenAI models | `GET /v1/models` | `http://127.0.0.1:9473/v1` |
+| OpenAI responses | `POST /v1/responses` | `http://127.0.0.1:9473/v1` |
+| Anthropic messages | `POST /anthropic/v1/messages` | `http://127.0.0.1:9473/anthropic` |
+
+## モデル名
+
+モデルとして Waired のエイリアスの 1 つを使用します。これらはロード済みのものに解決
+されるため、モデルを切り替えてもクライアント設定を変更する必要はありません:
+
+- `waired/default` — デフォルトモデル。
+- `waired/coding` — コーディングモデル。
+
+その他のエイリアス (`waired/small`、`waired/medium`、…) と具体的なモデル ID は
+[モデルカタログ](/ja/reference/model-catalog/) に掲載されています。
+`GET /v1/models` を呼び出すと、ゲートウェイが現在アドバタイズしているものを確認できます。
+
+## 認証
+
+ゲートウェイは **ベアラートークン** でリクエストを認証します:
+
+```
+Authorization: Bearer <gateway-token>
+```
+
+[`waired link`](/ja/guides/coding-agents/) を実行すると、このトークンが生成され、
+対応するコーディングエージェントがそれで設定されます。サードパーティのクライアントには、
+同じトークンを **API キー** として渡す必要があります。トークンはユーザーごとのシークレット
+ストア (macOS ではシステムキーチェーン、Linux と Windows ではエージェントの状態ディレクトリ
+配下の保護されたファイル) に保存されます。
+
+<Aside type="caution" title="ターンキー対応はまだ展開中です">
+	今日自動設定されるクライアントは Claude Code と OpenCode です。他の OpenAI 互換
+	チャット UI (Open WebUI、LibreChat、Jan、…) をゲートウェイに向けることは上記の
+	設定で動作しますが、それらにトークンを渡す作業は依然として手動のステップであり、
+	現在改善を進めています。摩擦に遭遇した場合、それは想定内です — ここに記載した
+	エンドポイントとモデル名は安定しています。
+</Aside>
+
+## リクエスト例
+
+```sh
+curl http://127.0.0.1:9473/v1/chat/completions \
+  -H "Authorization: Bearer $WAIRED_GATEWAY_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "waired/default",
+    "messages": [{"role": "user", "content": "Say hi"}]
+  }'
+```
+
+同じマシンからトークン不要で素早く確認するには、代わりに CLI を使用してください:
+`waired infer "say hi"` ([動作確認](/ja/getting-started/verify/) を参照)。

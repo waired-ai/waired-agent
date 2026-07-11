@@ -11,7 +11,7 @@ description: |
   system daemon (`waired-agent`). Install `waired-tray` alongside it
   for a graphical login flow on Linux desktops.
 vendor: Waired
-homepage: https://github.com/waired-ai/waired
+homepage: https://github.com/waired-ai/waired-agent
 license: Apache-2.0
 
 depends:
@@ -43,6 +43,20 @@ contents:
     file_info:
       mode: 0644
 
+  # License notices (#666): apt users never see the GitHub Release page,
+  # so the .deb carries its own copies. Both are staged into dist/ by
+  # scripts/ci/gen-third-party-licenses.sh (run `make third-party-licenses`
+  # before a local deb build).
+  - src: dist/LICENSE
+    dst: /usr/share/doc/waired/LICENSE
+    file_info:
+      mode: 0644
+
+  - src: dist/THIRD_PARTY_LICENSES
+    dst: /usr/share/doc/waired/THIRD_PARTY_LICENSES
+    file_info:
+      mode: 0644
+
 scripts:
   postinstall: packaging/debian/waired/postinst
   preremove:   packaging/debian/waired/prerm
@@ -50,4 +64,4 @@ scripts:
 
 deb:
   fields:
-    Bugs: https://github.com/waired-ai/waired/issues
+    Bugs: https://github.com/waired-ai/waired-agent/issues

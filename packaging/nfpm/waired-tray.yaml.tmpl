@@ -10,7 +10,7 @@ description: |
   Management API on 127.0.0.1:9476 and brokers the privileged
   enrollment / logout commands through pkexec / polkit.
 vendor: Waired
-homepage: https://github.com/waired-ai/waired
+homepage: https://github.com/waired-ai/waired-agent
 license: Apache-2.0
 
 depends:
@@ -60,10 +60,22 @@ contents:
     file_info:
       mode: 0644
 
+  # License notices (#666): see waired.yaml.tmpl — staged into dist/ by
+  # scripts/ci/gen-third-party-licenses.sh.
+  - src: dist/LICENSE
+    dst: /usr/share/doc/waired-tray/LICENSE
+    file_info:
+      mode: 0644
+
+  - src: dist/THIRD_PARTY_LICENSES
+    dst: /usr/share/doc/waired-tray/THIRD_PARTY_LICENSES
+    file_info:
+      mode: 0644
+
 scripts:
   postinstall: packaging/debian/waired-tray/postinst
   postremove:  packaging/debian/waired-tray/postrm
 
 deb:
   fields:
-    Bugs: https://github.com/waired-ai/waired/issues
+    Bugs: https://github.com/waired-ai/waired-agent/issues

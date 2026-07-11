@@ -1,0 +1,100 @@
+---
+title: Switch the bundled model
+description: Change which model your Waired engine serves via agent.json, an environment variable, or a CLI flag — with the precedence order explained.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+`waired init` auto-selects a bundled model from your hardware profile — the
+largest model that fits this machine above a coding-quality floor (a capable box
+gets a large MoE coder; a modest laptop gets a smaller model).
+To override that pick — say a larger model on a 24 GB GPU, or a smaller one to
+save memory — set the bundled model ID explicitly. Browse the options and their
+requirements in the [model catalog](/reference/model-catalog/).
+
+<Aside type="tip">
+	To pin the model at enrollment time, pass
+	`waired init --inference-bundled-model-id=<id>` — that skips the hardware
+	auto-selection. The methods below change it on an already-enrolled machine.
+</Aside>
+
+There are three ways to set it. When more than one is present, the higher-priority
+source wins:
+
+```
+defaults  <  agent.json  <  environment variable  <  CLI flag
+```
+
+## 1. agent.json (persistent — recommended)
+
+Set `inference.bundled_model_id` in `agent.json`, then restart the service.
+
+<Tabs syncKey="os">
+	<TabItem label="Linux">
+		Config file: `~/.config/waired/agent.json` (respects `XDG_CONFIG_HOME`);
+		for the system daemon, `/etc/waired/agent.json`.
+
+		```sh
+		sudo jq '.inference.bundled_model_id = "qwen3-coder-30b-a3b-instruct"' \
+		  /etc/waired/agent.json | sudo tee /etc/waired/agent.json.new
+		sudo mv /etc/waired/agent.json.new /etc/waired/agent.json
+		sudo systemctl restart waired-agent
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		Config file: `%LOCALAPPDATA%\waired\agent.json`; for the system service,
+		`%PROGRAMDATA%\waired\agent.json`. Edit the `inference.bundled_model_id`
+		field, then:
+
+		```powershell
+		Restart-Service waired-agent
+		```
+	</TabItem>
+</Tabs>
+
+## 2. Environment variable (system-wide / temporary)
+
+Set `WAIRED_INFERENCE_BUNDLED_MODEL_ID` and restart the service.
+
+<Tabs syncKey="os">
+	<TabItem label="Linux (systemd)">
+		Add it to `/etc/waired/agent.env`:
+
+		```sh
+		sudo install -m 600 -D /dev/stdin /etc/waired/agent.env <<'EOF'
+		WAIRED_INFERENCE_BUNDLED_MODEL_ID=qwen3-coder-30b-a3b-instruct
+		EOF
+		sudo systemctl restart waired-agent
+		```
+		(Keep your existing `WAIRED_CONTROL_URL` line if the file already has one.)
+	</TabItem>
+	<TabItem label="Windows (service)">
+		```powershell
+		setx /M WAIRED_INFERENCE_BUNDLED_MODEL_ID qwen3-coder-30b-a3b-instruct
+		Restart-Service waired-agent
+		```
+	</TabItem>
+</Tabs>
+
+## 3. CLI flag (mostly for development)
+
+Pass the flag when starting the agent directly:
+
+```sh
+waired-agent --inference-bundled-model-id=qwen3-coder-30b-a3b-instruct
+```
+
+## Confirm the switch
+
+After restarting, the new model is pulled on demand (this can take a few minutes):
+
+```sh
+waired models ls                # watch the download / disk usage
+waired status --observability   # the Engine line should show the new model=
+```
+
+<Aside type="tip">
+	Switching to a model your hardware can't fit will leave the engine
+	`not ready`. Check the RAM/VRAM column for your model and runtime in the
+	[model catalog](/reference/model-catalog/) before switching.
+</Aside>

@@ -196,6 +196,10 @@ jobs:
           # find nfpm.
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Generate LICENSE + THIRD_PARTY_LICENSES (bundled into the .deb)
+        if: matrix.goos == 'linux'
+        run: make third-party-licenses
+
       - name: Build .deb packages
         if: matrix.goos == 'linux'
         run: |
@@ -209,6 +213,17 @@ jobs:
         with:
           name: deb-${{ matrix.goarch }}
           path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 1
+
+      # One copy of the license notices rides to the caller's publish job
+      # as a standalone release asset (amd64 leg only — the file is
+      # arch-independent).
+      - uses: actions/upload-artifact@v7
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        with:
+          name: third-party-licenses
+          path: dist/THIRD_PARTY_LICENSES
           if-no-files-found: error
           retention-days: 1
 

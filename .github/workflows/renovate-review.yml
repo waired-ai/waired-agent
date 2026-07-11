@@ -1,0 +1,123 @@
+# renovate-review — Claude breakage-risk verdict on every Renovate PR (issue #532).
+#
+# Renovate opens dependency PRs but we never automerge — a human decides. This gate
+# has a headless Claude READ the upstream release notes / changelogs for the bumped
+# deps and post a PASS / CONCERN / FAIL verdict comment, so the merge decision is
+# informed without per-dependency changelog spelunking. CI still owns actual behaviour
+# verification (lint / unit / build / install-test / smoke); Claude does not run code.
+#
+# Advisory, Renovate-only: no branch-protection change, no automerge. The verdict
+# always posts — that is what "mandatory" means here.
+#
+# Trigger: after `ci` completes on a Renovate PR (workflow_run). It runs on CI success
+# AND failure — a red CI is exactly when a FAIL verdict matters. The default
+# GITHUB_TOKEN (pull-requests:write) posts the comment; only ANTHROPIC_API_KEY is
+# needed for the model. The workflow definition is read from the default branch, so
+# this takes effect once merged to main.
+#
+# OPERATOR SETUP: ANTHROPIC_API_KEY Actions secret (already set for catalog-radar).
+name: renovate-review
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to review (manual run, any PR)
+        required: true
+        type: string
+
+# The default token posts the verdict comment; no separate bot PAT (workflow_run runs
+# in trusted base-repo context, so this token has write access we declare here).
+permissions:
+  contents: read
+  pull-requests: write
+
+# One review per PR; a newer ci-completion supersedes an in-flight review.
+concurrency:
+  group: renovate-review-${{ github.event.workflow_run.head_branch || github.event.inputs.pr }}
+  cancel-in-progress: true
+
+# Inline-inject safe.directory=* (Kata "dubious ownership") — see ci.yml.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  review:
+    name: renovate breakage review
+    # Renovate PRs only: a same-repo head on a renovate/* branch. Manual
+    # workflow_dispatch (review an arbitrary PR by number) is always allowed.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       startsWith(github.event.workflow_run.head_branch, 'renovate/'))
+    runs-on: sv-mag-agent
+    timeout-minutes: 30
+    # Root-default Debian image (node present for the claude CLI); see renovate.yml
+    # for why a non-root image breaks checkout on ARC k8s mode.
+    container:
+      image: node:22-trixie
+    steps:
+      # Checkout the default branch (workflow_run default): we run the trusted
+      # scripts/prompt from main, never code modified by the PR under review.
+      - uses: actions/checkout@v5
+
+      - name: Guard required secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set (needed for the review step). See workflow header."
+            exit 1
+          fi
+
+      - name: Install toolchain (jq, gh, claude CLI)
+        env:
+          GH_VERSION: "2.65.0"
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends jq curl ca-certificates
+          curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar -xz -C /tmp
+          install -m 755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Harness self-test (hermetic, no API)
+        run: bash scripts/renovate-review/selftest.sh
+
+      - name: Review Renovate PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WR_PR: ${{ github.event.workflow_run.pull_requests[0].number || github.event.inputs.pr }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          # Manual dispatch reviews any PR by number; the automated path stays gated.
+          ALLOW_NON_RENOVATE: ${{ github.event_name == 'workflow_dispatch' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_MODEL: claude-opus-4-8
+          # sv-mag pods have no IPv6 egress; keep Node (the claude CLI / WebFetch) on
+          # IPv4 to dodge the AAAA-first + Happy-Eyeballs ETIMEDOUT trap. See
+          # renovate.yml's NODE_OPTIONS note (#466).
+          NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection
+        run: |
+          set -euo pipefail
+          OUT_DIR="${RUNNER_TEMP}/renovate-review-out"
+          echo "OUT_DIR=${OUT_DIR}" >> "${GITHUB_ENV}"
+          OUT_DIR="${OUT_DIR}" bash scripts/renovate-review/run.sh
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: renovate-review-${{ github.run_id }}
+          path: ${{ env.OUT_DIR }}
+          if-no-files-found: warn

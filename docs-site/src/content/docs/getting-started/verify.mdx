@@ -1,0 +1,68 @@
+---
+title: Verify it works
+description: Confirm your Waired setup with waired status --observability and a one-shot waired infer request.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Two commands confirm a healthy setup: one shows the live state of the daemon and
+your mesh, the other runs a real inference request.
+
+## Check the live state
+
+```sh
+waired status --observability
+```
+
+A healthy inference server looks like this:
+
+```
+Observability:
+  Device:   dev-ubuntu  uptime: 1m23s
+  Engine:   ready (model=qwen2.5-coder-7b-instruct, 0/4 slots used, inflight=0)
+  Share:    enabled    Paused: no
+  Mesh:     2 enrolled / 1 reachable / 1 ready
+  Last:     -  (no inference requests yet)
+```
+
+What to look for:
+
+- **Engine: ready** — the model is loaded and can serve requests. If it says
+  `not ready`, the model may still be pulling (wait a few minutes) or the
+  runtime may be down (`waired runtimes status`).
+- **Share** / **Paused** — `Share: enabled` means peers can reach this engine;
+  `Paused: no` means routing is active.
+- **Mesh** — `enrolled / reachable / ready` peer counts. On a client, this is
+  how you confirm your server shows up as reachable.
+
+Add `-o json` for machine-readable output.
+
+## Run your first request
+
+```sh
+waired infer "say hi"
+```
+
+This calls your local engine directly, so it works regardless of mesh
+reachability — it's the earliest way to confirm inference works. A greeting
+should come back within a few hundred milliseconds to a few seconds.
+
+To see the routing decision (local vs. peer, model resolution, estimated
+latency) alongside the answer:
+
+```sh
+waired infer --explain "say hi"
+```
+
+<Aside type="tip">
+	If a request returns a 503, it usually means the engine is paused
+	(`waired resume`) or not shared (`waired inference share on`). The
+	[Troubleshooting](/troubleshooting/) page maps each symptom to the
+	command that fixes it.
+</Aside>
+
+## What's next
+
+- Route your coding agent through your model: [Coding agents](/guides/coding-agents/).
+- Connect a chat or OpenAI-compatible client: [Chat clients](/guides/chat-clients/).
+- Pick a bigger or smaller model: [Switch the bundled model](/guides/switch-model/).

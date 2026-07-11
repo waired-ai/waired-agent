@@ -69,7 +69,7 @@ help:
 	@echo "  e2e-vllm-spec        ngram speculative decode boots+serves (GPU REQUIRED, #677)"
 	@echo "  integration-runtime  Real-Ollama lifecycle test (no model pull)"
 	@echo "  integration-codeui   Real-opencode serve lifecycle smoke (no model; #501)"
-	@echo "  catalog-docs         Regenerate the dev-docs model table from internal/catalog/bundled"
+	@echo "  catalog-docs         Regenerate the model table (docs/reference/models.md) from internal/catalog/bundled"
 	@echo "  verify-catalog-docs  Fail if that model table drifted from the bundled catalog"
 	@echo ""
 	@echo "End-user packaging (.deb via nfpm; requires nfpm in PATH):"
@@ -156,6 +156,21 @@ verify-cross:
 	GOOS=windows GOARCH=amd64 go vet ./...
 	GOOS=darwin  GOARCH=amd64 go vet $(DARWIN_VET_PKGS)
 	GOOS=darwin  GOARCH=arm64 go vet $(DARWIN_VET_PKGS)
+
+# catalog-docs regenerates the machine-generated model table
+# (docs/reference/models.md) from internal/catalog/bundled/*.json.
+# Run after adding or editing a bundled manifest; catalog-radar runs the same
+# step inside its draft PRs.
+.PHONY: catalog-docs
+catalog-docs:
+	go run ./cmd/catalog-tool docs
+
+# verify-catalog-docs fails if the committed model table drifted from the bundled
+# catalog (mirrors `catalog-tool validate --all`). The unit test
+# TestModelCatalogPageFresh enforces the same invariant in the `unit` CI job.
+.PHONY: verify-catalog-docs
+verify-catalog-docs:
+	go run ./cmd/catalog-tool docs --check
 
 # build-tray builds the desktop tray binary. CGO is left at default —
 # fyne.io/systray's Linux backend talks DBus via pure-Go godbus and
@@ -457,6 +472,14 @@ build-linux-%:
 	    -ldflags="-s -w $(LDFLAGS_VERSION)" \
 	    -o bin/linux_$*/waired-tray ./cmd/waired-tray
 
+# License notices staged into dist/ for the .deb contents (#666): the
+# nfpm templates bundle dist/LICENSE + dist/THIRD_PARTY_LICENSES into
+# /usr/share/doc/<pkg>/. CI runs this before `make deb-*`; locally it
+# needs network access on first run (go run fetches go-licenses).
+.PHONY: third-party-licenses
+third-party-licenses:
+	bash scripts/ci/gen-third-party-licenses.sh
+
 .PHONY: deb-all
 deb-all: $(addprefix deb-,$(GOARCHES_DEB))
 
@@ -464,6 +487,9 @@ deb-%: build-linux-%
 	@command -v nfpm >/dev/null 2>&1 || { \
 	  echo "error: nfpm not found in PATH (https://nfpm.goreleaser.com/)" >&2; \
 	  exit 1; }
+	@test -f $(OUT_DIR)/THIRD_PARTY_LICENSES -a -f $(OUT_DIR)/LICENSE || { \
+	  echo "==> $(OUT_DIR)/{LICENSE,THIRD_PARTY_LICENSES} missing — generating (go-licenses; needs network on first run)"; \
+	  $(MAKE) third-party-licenses; }
 	@command -v envsubst >/dev/null 2>&1 || { \
 	  echo "error: envsubst not found (apt install gettext-base)" >&2; exit 1; }
 	@mkdir -p $(OUT_DIR) $(OUT_DIR)/nfpm

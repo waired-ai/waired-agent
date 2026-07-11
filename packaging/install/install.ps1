@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     End-user-facing entry point. Designed to be hosted on the public
-    waired-install mirror and run via:
+    waired-agent GitHub Releases and run via:
 
         iwr -useb $BaseUrl/latest/download/install.ps1 | iex
 
@@ -172,12 +172,11 @@ $ProgressPreference    = 'SilentlyContinue'
 # Configuration (overridable via environment, mirrors install.sh)
 # -------------------------------------------------------------------
 
-# Public mirror that hosts install.ps1 itself plus the per-tag Windows
-# release assets (zip + sha256 + Setup.exe). The main `waired-ai/waired`
-# repository is private; releases there are not publicly downloadable.
-# Each `v*` tag mirrors its Windows assets here via release.yml.
+# Public GitHub Releases of `waired-ai/waired-agent` host install.ps1
+# itself plus the per-tag Windows release assets (zip + sha256 +
+# Setup.exe). Each `v*` tag publishes its assets there via release.yml.
 $BaseUrl    = if ($env:WAIRED_INSTALL_BASE_URL) { $env:WAIRED_INSTALL_BASE_URL } `
-              else { 'https://github.com/waired-ai/waired-install/releases' }
+              else { 'https://github.com/waired-ai/waired-agent/releases' }
 $Version    = if ($env:WAIRED_VERSION) { $env:WAIRED_VERSION } else { 'latest' }
 # -Edge / -Latest: the latest main build. Mirror install.sh's --edge by
 # setting the channel both on $Version (this process) and $env:WAIRED_VERSION
@@ -198,20 +197,20 @@ if ($Stable) {
 # 'latest' version during -Check / -Update. Mirror of install.sh's
 # WAIRED_INSTALL_REPO. Override alongside WAIRED_INSTALL_BASE_URL for a
 # private/staging mirror.
-$InstallRepo = if ($env:WAIRED_INSTALL_REPO) { $env:WAIRED_INSTALL_REPO } else { 'waired-ai/waired-install' }
+$InstallRepo = if ($env:WAIRED_INSTALL_REPO) { $env:WAIRED_INSTALL_REPO } else { 'waired-ai/waired-agent' }
 $NoTray     = [bool]$env:WAIRED_NO_TRAY
 $StateDir   = $env:WAIRED_STATE_DIR
 
 # Ollama installer helper URL. Independent of WAIRED_INSTALL_BASE_URL -- the
 # Ollama engine is an external dependency fetched from the official public
-# channel (the helper lives in the public waired-ai/waired-install release,
+# channel (the helper lives in the public waired-ai/waired-agent release,
 # the same URL the docs' manual `iwr ... | iex` one-liner uses), mirroring
 # install.sh's WAIRED_OLLAMA_LINUX_URL / WAIRED_OLLAMA_DARWIN_URL. Resolved
 # here (not at the use site) so the elevated Phase-2 child inherits a concrete
 # value, and so installer tests that point WAIRED_INSTALL_BASE_URL at a
 # loopback mirror no longer drag this fetch onto the mirror (#561).
 if (-not $OllamaWindowsUrl) {
-    $OllamaWindowsUrl = 'https://github.com/waired-ai/waired-install/releases/latest/download/ollama-windows.ps1'
+    $OllamaWindowsUrl = 'https://github.com/waired-ai/waired-agent/releases/latest/download/ollama-windows.ps1'
 }
 
 # WAIRED_NO_OLLAMA is the env-var form of -SkipOllama (mirrors install.sh,
@@ -412,7 +411,7 @@ Parameters:
                              (default: auto)
   -OllamaModelsDir <path>    Forward to ollama-windows.ps1 -ModelsDir.
   -OllamaWindowsUrl <url>    URL of the ollama-windows.ps1 helper to install
-                             (default: the public waired-ai/waired-install latest
+                             (default: the public waired-ai/waired-agent latest
                              release). Independent of WAIRED_INSTALL_BASE_URL --
                              the Ollama engine comes from its official channel.
   -InferenceEnabled <bool>   true | false to force `waired init
@@ -437,7 +436,7 @@ Environment variables:
                            helper URL. Independent of WAIRED_INSTALL_BASE_URL
                            (parallel to install.sh's WAIRED_OLLAMA_LINUX_URL /
                            WAIRED_OLLAMA_DARWIN_URL). Default: the public
-                           waired-ai/waired-install latest release.
+                           waired-ai/waired-agent latest release.
   WAIRED_INSTALL_BASE_URL  Override the mirror base URL (tests / staging).
                            Hosts the waired binaries only -- NOT the Ollama
                            helper (see WAIRED_OLLAMA_WINDOWS_URL).

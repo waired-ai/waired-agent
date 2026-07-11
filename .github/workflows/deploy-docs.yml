@@ -1,0 +1,203 @@
+# Build the Astro/Starlight docs site under docs-site/ and publish it to
+# Firebase Hosting:
+#   * push to main          -> live channel   (https://docs.waired.ai/)  [prod-waired]
+#   * pull_request (in-repo) -> preview channel (auto-expiring *.web.app URL,
+#                               linked back as a PR comment)             [dev-waired]
+#
+# Split hosting (#453): the LIVE channel is served from the prod GCP project
+# `prod-waired` (Firebase site `waired-docs-prod`, custom domain
+# `docs.waired.ai`); PR PREVIEW channels stay in the `dev-waired` sandbox
+# (Firebase site `waired-docs`, *.web.app) so preview traffic never touches
+# prod. The routing is driven entirely by a conditional `environment:` on the
+# deploy job: `push` runs in the GitHub `production` Environment (whose vars —
+# GCP_WORKLOAD_IDENTITY_PROVIDER / GCP_SERVICE_ACCOUNT_EMAIL / FIREBASE_PROJECT_ID —
+# shadow the repo-level dev vars), while `pull_request` runs with no environment
+# and thus the repo-level dev vars. firebase.json uses `target: docs`, resolved
+# per project by docs-site/.firebaserc (dev-waired -> waired-docs,
+# prod-waired -> waired-docs-prod).
+#
+# Auth is WIF/OIDC (google-github-actions/auth@v3) + firebase-tools via ADC —
+# NO long-lived service-account JSON secret. We deliberately do NOT use
+# FirebaseExtended/action-hosting-deploy: it requires a `firebaseServiceAccount`
+# key secret and has no WIF support, which conflicts with the recorded WIF
+# decision (docs/decisions.md). docs-site moves to the public `waired-agent`
+# repo later (#184), so keeping zero long-lived secrets matters.
+#
+# The build job ALWAYS runs (it is the docs validation gate, incl. fork PRs).
+# The deploy steps are gated on `vars.FIREBASE_PROJECT_ID` being set, so this
+# workflow is merge-safe before the operator provisions Firebase + WIF: until
+# then it just builds and skips deploy. Fork PRs get no OIDC token (GitHub
+# spec), so their deploy is skipped too — build still validates them.
+name: deploy-docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/deploy-docs.yml"
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/deploy-docs.yml"
+
+concurrency:
+  # Per-PR (or per-branch) group. Cancel superseded PR preview builds; never
+  # cancel an in-flight live (main) deploy.
+  group: deploy-docs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+# Inline-inject `safe.directory=*` into every git invocation — see the matching
+# comment in ci.yml (checkout-owned workspace trips git's "dubious ownership"
+# check inside ARC k8s containers).
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+# Force bash; ARC k8s mode defaults run steps to `sh -e`.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    name: build + deploy (docs-site)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # LIVE (push:main) runs in the `production` Environment so its vars
+    # (prod WIF provider / SA / FIREBASE_PROJECT_ID=prod-waired) shadow the
+    # repo-level dev vars; PR previews run with no environment -> dev vars.
+    # `production` currently carries no protection rules, so this stays
+    # unattended (#453). An empty string means "no environment".
+    environment: ${{ github.event_name == 'push' && 'production' || '' }}
+    # Astro 7 requires Node >= 22.12.
+    container:
+      image: node:22-trixie
+    env:
+      HUSKY: "0"
+      # Deploy only once Firebase is provisioned (var set) AND, for PRs, only
+      # for same-repo branches (fork PRs receive no OIDC token). The build
+      # below always runs regardless.
+      DEPLOY_ENABLED: ${{ vars.FIREBASE_PROJECT_ID != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pin an older Node than the runner default. firebase-tools authenticates
+      # the WIF (external_account) credential via a node-fetch STS POST to
+      # sts.googleapis.com that fails with a false "Premature close" on recent
+      # Node (22.23.x); the regression is absent on this LTS pin
+      # (nodejs/node#63989). 22.12 is also the floor Astro 7 needs.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+
+      - name: install
+        working-directory: docs-site
+        run: npm ci
+
+      - name: build
+        working-directory: docs-site
+        run: npm run build
+
+      # ---- deploy (gated) ----------------------------------------------------
+      - name: Authenticate to Google Cloud (WIF)
+        if: env.DEPLOY_ENABLED == 'true'
+        uses: google-github-actions/auth@v3
+        # IPv4-first egress: sv-mag pods have no IPv6 route; Node's AAAA-first
+        # + Happy-Eyeballs can abandon a slow IPv4 STS connect (~250ms) and race
+        # the routeless IPv6 → transient "failed to generate federated token".
+        # Same fix as renovate.yml. #542 / #466.
+        env:
+          NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Install firebase-tools
+        if: env.DEPLOY_ENABLED == 'true'
+        run: npm i -g firebase-tools@13
+
+      - name: Deploy live channel (push to main)
+        if: env.DEPLOY_ENABLED == 'true' && github.event_name == 'push'
+        working-directory: docs-site
+        env:
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          # WIF (external_account) ADC carries no quota project; without this
+          # the Firebase Management API call (project resolution) 403s. See
+          # docs/records — firebase-tools honors GOOGLE_CLOUD_QUOTA_PROJECT.
+          GOOGLE_CLOUD_QUOTA_PROJECT: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          # Belt-and-suspenders with the node pin: disable global-agent
+          # keep-alive on the node-fetch STS call. Set NODE_OPTIONS here (not as
+          # step env: nor $GITHUB_ENV — the former resolves github.workspace to
+          # the host path, wrong inside the ARC container; the latter is
+          # blocklisted). $GITHUB_WORKSPACE is the correct in-container path.
+          export NODE_OPTIONS="--require=${GITHUB_WORKSPACE}/.github/scripts/disable-keepalive.cjs"
+          # `hosting:docs` resolves the `docs` target via docs-site/.firebaserc
+          # for the active project (prod-waired -> waired-docs-prod).
+          firebase deploy --only hosting:docs \
+            --project "${FIREBASE_PROJECT_ID}" --non-interactive
+
+      - name: Deploy preview channel (pull request)
+        id: preview
+        if: env.DEPLOY_ENABLED == 'true' && github.event_name == 'pull_request'
+        working-directory: docs-site
+        env:
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          PR_NUMBER: ${{ github.event.number }}
+          # See live step: external_account ADC needs an explicit quota project.
+          GOOGLE_CLOUD_QUOTA_PROJECT: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: |
+          # The runner invokes `bash -e`; `set -uo pipefail` does NOT clear that
+          # errexit, so an explicit `set +e` is required — otherwise the command
+          # substitution aborts before we echo firebase's error (with `--json`
+          # firebase emits the error as JSON on stdout). Capture, echo, check rc.
+          set +e
+          # Keep-alive workaround (see live step for why it's set here, using
+          # the in-container $GITHUB_WORKSPACE path).
+          export NODE_OPTIONS="--require=${GITHUB_WORKSPACE}/.github/scripts/disable-keepalive.cjs"
+          out="$(firebase hosting:channel:deploy "pr-${PR_NUMBER}" \
+            --project "${FIREBASE_PROJECT_ID}" --expires 7d --json)"; rc=$?
+          echo "${out}"
+          if [ "${rc}" -ne 0 ]; then
+            # firebase-tools always writes firebase-debug.log; surface it so a
+            # future auth/deploy failure shows the real cause, not just the
+            # masked "Failed to authenticate".
+            echo "=== firebase-debug.log (tail) ==="
+            tail -100 firebase-debug.log 2>/dev/null || echo "(no firebase-debug.log)"
+            echo "::error::firebase hosting:channel:deploy failed (rc=${rc})"
+            exit "${rc}"
+          fi
+          # Site key in result is config-defined ("waired-docs"); read the
+          # first key so this stays correct if the site id changes.
+          url="$(node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));const r=d.result||{};const k=Object.keys(r)[0];process.stdout.write((k&&r[k]&&r[k].url)||"")' <<<"${out}")"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment preview URL on PR
+        if: env.DEPLOY_ENABLED == 'true' && github.event_name == 'pull_request' && steps.preview.outputs.url != ''
+        uses: actions/github-script@v8
+        env:
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+        with:
+          script: |
+            const url = process.env.PREVIEW_URL;
+            const marker = '<!-- docs-preview -->';
+            const body = `${marker}\n📘 **Docs preview** for this PR: ${url}\n\n_Rebuilt on each push; the preview channel auto-expires in 7 days._`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

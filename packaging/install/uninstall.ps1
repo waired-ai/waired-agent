@@ -29,7 +29,7 @@
     exe is already gone.
 
     Run it via:
-        iwr -useb https://github.com/waired-ai/waired-install/releases/latest/download/uninstall.ps1 | iex
+        iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
     The default uninstall works piped. For -Clean, download then run (iex
     strips named parameters):
         iwr -useb .../uninstall.ps1 -OutFile uninstall.ps1; .\uninstall.ps1 -Clean
@@ -79,7 +79,7 @@ $StateDir    = if ($env:WAIRED_STATE_DIR) { $env:WAIRED_STATE_DIR } `
 # Public mirror base for the elevated self-re-fetch (iex case). Mirrors
 # install.ps1's WAIRED_INSTALL_BASE_URL default shape.
 $BaseUrl     = if ($env:WAIRED_INSTALL_BASE_URL) { $env:WAIRED_INSTALL_BASE_URL } `
-               else { 'https://github.com/waired-ai/waired-install/releases' }
+               else { 'https://github.com/waired-ai/waired-agent/releases' }
 
 # -------------------------------------------------------------------
 # common_* helpers (mirror install.ps1 naming)
@@ -111,7 +111,7 @@ function Show-Help {
 uninstall.ps1 - remove Waired on Windows.
 
 Usage:
-  iwr -useb https://github.com/waired-ai/waired-install/releases/latest/download/uninstall.ps1 | iex
+  iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
   # For -Clean, download then run (iex strips named parameters):
   iwr -useb .../uninstall.ps1 -OutFile uninstall.ps1; .\uninstall.ps1 -Clean
 

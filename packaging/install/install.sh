@@ -2,8 +2,8 @@
 # install.sh — install Waired via the system package manager.
 #
 # Usage:
-#   curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh
-#   curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh -s -- --dry-run
+#   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dry-run
 #
 # This script is intentionally OS-agnostic in shape. Linux + apt
 # (Debian / Ubuntu) and macOS are wired up. New operating systems plug
@@ -34,11 +34,11 @@ _WAIRED_INSTALL_BASE_URL_SET="${WAIRED_INSTALL_BASE_URL+x}"
 
 # GitHub Releases asset URL (hosts install.sh itself). `latest` resolves
 # to the most recent tagged release.
-WAIRED_INSTALL_BASE_URL="${WAIRED_INSTALL_BASE_URL:-https://github.com/waired-ai/waired-install/releases/latest/download}"
+WAIRED_INSTALL_BASE_URL="${WAIRED_INSTALL_BASE_URL:-https://github.com/waired-ai/waired-agent/releases/latest/download}"
 # GitHub repo (owner/name) whose Releases API resolves the latest version
 # during --check / --update on macOS (Linux reads apt's candidate
 # instead). Override alongside WAIRED_INSTALL_BASE_URL for a mirror.
-WAIRED_INSTALL_REPO="${WAIRED_INSTALL_REPO:-waired-ai/waired-install}"
+WAIRED_INSTALL_REPO="${WAIRED_INSTALL_REPO:-waired-ai/waired-agent}"
 # Artifact Registry APT endpoint that hosts the actual .deb packages.
 # Repo is publicly readable via roles/artifactregistry.reader on allUsers
 # (see infra/terraform/modules/artifact-registry/main.tf).
@@ -245,9 +245,9 @@ show_help() {
 install.sh — install Waired via the system package manager.
 
 Usage:
-  curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh
-  curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh -s -- --dev
-  curl -fsSL https://github.com/waired-ai/waired-install/releases/latest/download/install.sh | sh -s -- --dry-run
+  curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+  curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dev
+  curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dry-run
 
 Options:
   --dry-run        show every privileged command without running it
@@ -285,7 +285,7 @@ Environment variables:
   WAIRED_DEV_CONTROL_URL   override the URL --dev resolves to
                            (default: https://app.dev.waired.net)
   WAIRED_INSTALL_BASE_URL  override URL for install.sh itself
-                           (default: github.com/waired-ai/waired-install releases)
+                           (default: github.com/waired-ai/waired-agent releases)
   WAIRED_OLLAMA_DARWIN_URL macOS only: override the Ollama.app download URL
                            (default: ollama/ollama latest Ollama-darwin.zip)
   WAIRED_APT_BASE_URL      override the apt repository base URL
@@ -1267,7 +1267,7 @@ main() {
             WAIRED_APT_SUITE=waired-dev-apt-edge
         fi
         if [ -z "$_WAIRED_INSTALL_BASE_URL_SET" ]; then
-            WAIRED_INSTALL_BASE_URL=https://github.com/waired-ai/waired-install/releases/download/edge
+            WAIRED_INSTALL_BASE_URL=https://github.com/waired-ai/waired-agent/releases/download/edge
         fi
     fi
 

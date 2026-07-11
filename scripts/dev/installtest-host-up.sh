@@ -77,6 +77,10 @@ build_deb() {
     mkdir -p bin/linux_amd64 dist/nfpm
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$ldf" -o bin/linux_amd64/waired ./cmd/waired
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$ldf" -o bin/linux_amd64/waired-agent ./cmd/waired-agent
+    # The nfpm templates bundle dist/{LICENSE,THIRD_PARTY_LICENSES} into
+    # the .deb (#666); stage them before packaging (cached once present).
+    [ -f dist/THIRD_PARTY_LICENSES ] && [ -f dist/LICENSE ] || \
+      bash scripts/ci/gen-third-party-licenses.sh
     ARCH=amd64 PKG_VERSION="$pkgver" envsubst '$ARCH $PKG_VERSION' \
       < packaging/nfpm/waired.yaml.tmpl > dist/nfpm/waired-amd64.yaml
     nfpm pkg --config dist/nfpm/waired-amd64.yaml --packager deb \

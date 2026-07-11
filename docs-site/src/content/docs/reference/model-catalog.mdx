@@ -1,0 +1,108 @@
+---
+title: Model catalog & specs
+description: The models Waired bundles, split by runtime (Ollama / vLLM) and architecture (Dense / MoE), the RAM/VRAM each needs, the default model, and how Waired auto-selects one for your hardware.
+---
+
+import ModelCatalogTable from '../../../components/ModelCatalogTable.astro';
+
+Waired bundles a catalog of models spanning laptops to multi-GPU servers. On
+first run it auto-selects one that fits your hardware. You can switch at any
+time — see [Switch the bundled model](/guides/switch-model/).
+
+## Finding the right table
+
+The catalog is split two ways so you can jump straight to the rows that apply
+to **your** machine:
+
+1. **By runtime — Ollama vs vLLM.** Your OS and GPU decide which engine serves
+   the model, so each runtime has its own section. Read only yours:
+   - **Ollama** — macOS (Metal), Windows, Linux, CPU, and low-VRAM / integrated
+     GPUs. Ships GGUF (quantized) builds; the number to watch is **system RAM**.
+   - **vLLM** — NVIDIA (CUDA) and AMD (ROCm) discrete-GPU servers on Linux.
+     Ships safetensors (awq/fp8/mxfp4) builds; the number to watch is **GPU VRAM**.
+
+   A family that ships builds for both engines appears in both sections.
+
+2. **By architecture — Dense vs MoE.** Within each runtime, Dense models come
+   first, then Mixture-of-Experts (MoE):
+   - **Dense** — every parameter runs on every token. Best where you have
+     **compute / VRAM headroom** (a discrete GPU), and smaller on disk for a
+     given quality.
+   - **MoE** — huge total size but only a few billion parameters are *active*
+     per token, so decode stays fast. Best on **memory-rich unified-memory**
+     machines (Apple Silicon, AMD Strix Halo) that can hold a large model in RAM.
+
+**Quality tier** is a 1–100 ranking (higher is better); the Auto-Selector serves
+the highest tier that fits your machine **and can hold a large coding context
+(~200k tokens)** — coding agents routinely fill 100k+ tokens of context, so a
+model that would truncate it loses to a slightly smaller one with the full
+window. On hardware where no model can serve that window, Waired picks the
+best fit anyway and says so in `waired status`. Whatever wins, clients can
+address it by the stable handle `waired/default` (see
+[Chat clients](/guides/chat-clients/)).
+
+The tables below are generated at build time from each model's bundled manifest
+(`min_ram_gb` / `min_vram_mb` / `quality_tier` / `param_count` / `active_params`),
+so they always match the catalog the client ships.
+
+## Ollama models
+
+For Mac, Windows, CPU, and low-VRAM / integrated GPUs. The memory column is the
+minimum **system RAM** for the GGUF (q4) build; smaller machines are listed first.
+
+### Ollama · Dense
+
+Every parameter runs each token — pick by RAM, then quality.
+
+<ModelCatalogTable engine="ollama" arch="dense" lang="en" />
+
+### Ollama · MoE
+
+Large on disk but fast to decode — ideal for big unified-memory machines (Apple
+Silicon, Strix Halo).
+
+<ModelCatalogTable engine="ollama" arch="moe" lang="en" />
+
+## vLLM models
+
+For NVIDIA (CUDA) and AMD (ROCm) discrete-GPU servers on Linux. The memory column
+is the minimum **GPU VRAM** for the quantized (awq/fp8/mxfp4) build; smaller GPUs
+are listed first. On hosts with several identical NVIDIA GPUs, vLLM shards the
+model across them (tensor parallelism), so their combined VRAM counts toward
+the requirement. On recent NVIDIA GPUs (Ada/Hopper and newer — e.g. L4, RTX
+40-series), Waired serves the KV cache in fp8, which roughly doubles the context
+window that fits in the same VRAM at near-identical quality. If a model's full
+context window still doesn't fit your GPU memory, Waired serves it with a reduced
+window and notes that in `waired status` / `waired doctor` instead of failing to
+start.
+
+### vLLM · Dense
+
+Compute-bound; the natural fit when you have a discrete GPU with VRAM headroom.
+
+<ModelCatalogTable engine="vllm" arch="dense" lang="en" />
+
+### vLLM · MoE
+
+Big total size with a small active footprint — pairs well with multi-GPU servers.
+
+<ModelCatalogTable engine="vllm" arch="moe" lang="en" />
+
+## How Waired picks for you
+
+The Auto-Selector chooses the highest-quality model that fits your machine's
+memory. On shared-memory systems (Apple Silicon, AMD Strix Halo), MoE models
+with a small *active* parameter count are favored because decode speed tracks
+active params, not total size. To preview a routing decision without changing
+anything:
+
+```sh
+waired infer --explain "say hi"
+```
+
+Run `waired models ls --detail` to see this same fit + recommended-spec view for
+**your** hardware, `waired models ls` for disk usage, and `waired runtimes status`
+for the VRAM a loaded model is actually using.
+
+If you run an integrated GPU (Strix Halo, Intel) and a model won't load on
+Ollama, see [Troubleshooting → integrated GPUs](/troubleshooting/#a-model-wont-load-on-an-integrated-gpu).

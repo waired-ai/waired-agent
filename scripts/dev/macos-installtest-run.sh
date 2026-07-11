@@ -47,8 +47,8 @@ IMAGE="${IMAGE:-ghcr.io/cirruslabs/macos-sequoia-base:latest}"
 KEEP="${KEEP:-}"
 
 case "$CHANNEL" in
-  edge)   INSTALL_SH_URL="https://github.com/waired-ai/waired-install/releases/download/edge/install.sh"; INSTALL_ARGS="--edge --no-init" ;;
-  stable) INSTALL_SH_URL="https://github.com/waired-ai/waired-install/releases/latest/download/install.sh"; INSTALL_ARGS="--no-init" ;;
+  edge)   INSTALL_SH_URL="https://github.com/waired-ai/waired-agent/releases/download/edge/install.sh"; INSTALL_ARGS="--edge --no-init" ;;
+  stable) INSTALL_SH_URL="https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh"; INSTALL_ARGS="--no-init" ;;
   *) echo "unknown CHANNEL=$CHANNEL (want edge|stable)" >&2; exit 2 ;;
 esac
 

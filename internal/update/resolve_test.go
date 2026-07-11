@@ -71,7 +71,7 @@ func TestLatestFromGitHub(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := &Resolver{apiBase: srv.URL, Repo: "waired-ai/waired-install", HTTPClient: srv.Client()}
+	r := &Resolver{apiBase: srv.URL, Repo: "waired-ai/waired-agent", HTTPClient: srv.Client()}
 	got, err := r.latestFromGitHub(context.Background())
 	if err != nil {
 		t.Fatalf("latestFromGitHub: %v", err)
@@ -79,7 +79,7 @@ func TestLatestFromGitHub(t *testing.T) {
 	if got != "v1.4.2" {
 		t.Errorf("tag = %q, want v1.4.2", got)
 	}
-	if want := "/repos/waired-ai/waired-install/releases/latest"; gotPath != want {
+	if want := "/repos/waired-ai/waired-agent/releases/latest"; gotPath != want {
 		t.Errorf("path = %q, want %q", gotPath, want)
 	}
 }

@@ -1,6 +1,3 @@
-# STAGED at the #184 split: trigger reduced to workflow_dispatch until
-# runners / WIF / secrets are wired for this repo (cutover checklist in
-# the monorepo issue #184). Do not re-enable push triggers before that.
 # Edge channel pipeline. The "latest main build": every merge to main is
 # rebuilt (the same matrix release.yml builds for a v* tag) and published
 # to *edge* channels so the stable `latest` release / stable apt suite
@@ -11,10 +8,10 @@
 #                    the waired-dev-apt-edge suite + the waired-edge.list
 #                    source).
 #   - Windows / macOS bins + install scripts -> a moving `edge`
-#                    *prerelease* on waired-ai/waired-install. GitHub's
-#                    /releases/latest/download ignores prereleases, so the
-#                    stable one-liner is unaffected; opt in with
-#                    WAIRED_VERSION=edge.
+#                    *prerelease* on this repo (waired-ai/waired-agent).
+#                    GitHub's /releases/latest/download ignores
+#                    prereleases, so the stable one-liner is unaffected;
+#                    opt in with WAIRED_VERSION=edge.
 #
 # Version string is the Makefile default for a non-tag build:
 # <latest-stable-core>-edge.<UTC-yyyymmddHHMMSS>+<shortsha> (e.g.
@@ -37,6 +34,14 @@
 name: edge
 
 on:
+  push:
+    branches: [main]
+    # docs-only merges don't change any shipped binary; skip the 4-leg
+    # build for them (docs-site/** deploys via deploy-docs.yml instead).
+    # NB: packaging/install/** is deliberately NOT ignored — install.sh /
+    # install.ps1 are published as edge prerelease assets, so a change
+    # there must re-publish.
+    paths-ignore: ['docs/**', 'docs-site/**']
   workflow_dispatch:
 
 # A burst of merges should not run N full matrices. Cancel any in-flight
@@ -66,12 +71,17 @@ jobs:
     # reusable workflow sees github.ref_type != 'tag' and versions
     # artifacts as the Makefile default
     # <latest-stable-core>-edge.<ts>+<sha>.
+    # Guarded on github.repository: this workflow is authoritative in the
+    # public waired-ai/waired-agent repo; the monorepo copy (kept until
+    # the #184 cutover PR deletes it) must stay inert.
+    if: github.repository == 'waired-ai/waired-agent'
     uses: ./.github/workflows/reusable-build-artifacts.yml
     secrets: inherit
 
   publish-edge:
-    name: publish edge (AR apt-edge + mirror prerelease)
+    name: publish edge (AR apt-edge + `edge` prerelease)
     needs: build
+    if: github.repository == 'waired-ai/waired-agent'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     container:
@@ -95,6 +105,12 @@ jobs:
         with:
           path: dist/
           pattern: darwin-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist/
+          pattern: third-party-licenses
           merge-multiple: true
 
       - name: Install gh CLI
@@ -132,31 +148,28 @@ jobs:
               echo "::warning::apt upload of ${deb} failed (likely version already present); continuing"
           done
 
-      - name: Mirror edge artifacts to waired-ai/waired-install (`edge` prerelease)
-        # Same public mirror as release.yml, but a *moving* `edge`
-        # prerelease instead of a per-v* release. GitHub's
-        # /releases/latest/download resolves to the newest NON-prerelease
-        # release, so publishing edge as a prerelease leaves the stable
-        # one-liner pointing at the latest v* tag. Edge users fetch via
+      - name: Publish edge artifacts as this repo's moving `edge` prerelease
+        # Same asset set as release.yml, but a *moving* `edge` prerelease
+        # instead of a per-v* release. GitHub's /releases/latest/download
+        # resolves to the newest NON-prerelease release, so publishing
+        # edge as a prerelease leaves the stable one-liner pointing at
+        # the latest v* tag. Edge users fetch via
         # /releases/download/edge/... (WAIRED_VERSION=edge).
         #
-        # .deb files are NOT mirrored: Linux edge fetches them from the
+        # .deb files are NOT attached: Linux edge fetches them from the
         # waired-dev-apt-edge AR suite, not from GitHub Releases.
         env:
-          MIRROR_TOKEN: ${{ secrets.WAIRED_INSTALL_REPO_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ -z "${MIRROR_TOKEN}" ]; then
-            echo "::warning::WAIRED_INSTALL_REPO_TOKEN is not set; skipping edge mirror"
-            exit 0
-          fi
-          export GH_TOKEN="${MIRROR_TOKEN}"
-          mirror_assets=(
+          edge_assets=(
             packaging/install/install.sh
             packaging/install/install.ps1
             packaging/install/uninstall.sh
             packaging/install/uninstall.ps1
             scripts/install/ollama-windows.ps1
+            LICENSE
+            dist/THIRD_PARTY_LICENSES
             dist/waired-windows-amd64.zip
             dist/waired-windows-amd64.zip.sha256
             dist/waired-darwin-amd64.tar.gz
@@ -166,20 +179,19 @@ jobs:
           )
           shopt -s nullglob
           setups=(dist/WairedSetup-*.exe)
-          mirror_assets+=("${setups[@]}")
+          edge_assets+=("${setups[@]}")
 
           notes=$'Latest **main** build — rebuilt on every merge to main. NOT a stable release.\n\n'
           notes+=$'- Linux / macOS: `curl -fsSL .../install.sh | WAIRED_VERSION=edge sh` (or pass `--edge`).\n'
           notes+=$'- Windows: `$env:WAIRED_VERSION=\'edge\'; iwr .../install.ps1 | iex` (or `-Edge`).\n\n'
-          notes+=$'Built from `waired-ai/waired`@'"${GITHUB_SHA}"$'. The stable one-liner (`/releases/latest`) is unaffected — edge is a prerelease.'
+          notes+=$'Built from '"${GITHUB_REPOSITORY}"$'@'"${GITHUB_SHA}"$'. The stable one-liner (`/releases/latest`) is unaffected — edge is a prerelease.'
 
-          if gh release view edge --repo waired-ai/waired-install >/dev/null 2>&1; then
+          if gh release view edge >/dev/null 2>&1; then
             echo "::notice::edge release exists — clobbering assets"
-            gh release upload edge "${mirror_assets[@]}" --repo waired-ai/waired-install --clobber
-            gh release edit edge --repo waired-ai/waired-install --prerelease --notes "${notes}"
+            gh release upload edge "${edge_assets[@]}" --clobber
+            gh release edit edge --prerelease --notes "${notes}"
           else
-            gh release create edge "${mirror_assets[@]}" \
-              --repo waired-ai/waired-install \
+            gh release create edge "${edge_assets[@]}" \
               --title "edge (main-tracking)" \
               --prerelease \
               --notes "${notes}"

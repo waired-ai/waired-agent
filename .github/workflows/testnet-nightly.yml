@@ -1,0 +1,64 @@
+# Nightly cross-repo testnet for agent main (#184/#738).
+#
+# The real-NAT testnet harness lives in the private waired-ai/waired
+# monorepo. Its own nightly dedupes on the MONOREPO head SHA, so agent
+# main advancing without a monorepo change would go unvalidated until
+# the next release tag — this workflow closes that blind spot: every
+# night it requires (check-or-dispatch) a green monorepo testnet run for
+# THIS repo's current main HEAD. Agent PRs have no per-PR testnet, so
+# this is the integration backstop between releases.
+#
+# Reuses the release gate script (scripts/ci/testnet-require-green-remote.sh):
+# if a green dispatch run for the SHA already exists (e.g. yesterday's
+# run and no merges since, or a release gate ran today) it exits 0
+# without dispatching — so quiet days cost zero testnet slots.
+name: testnet-nightly
+
+on:
+  schedule:
+    # 04:43 JST — offset from the monorepo's own nightly (02:43 JST) so
+    # the two runs don't contend for testnet quota.
+    - cron: "43 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testnet-nightly
+  cancel-in-progress: false
+
+jobs:
+  require-green:
+    name: require green testnet for main HEAD
+    if: github.repository == 'waired-ai/waired-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: testnet-require-green-remote (check-or-dispatch)
+        env:
+          # Fine-grained PAT: waired-ai/waired only, Actions Read+Write.
+          GH_TOKEN: ${{ secrets.WAIRED_TESTNET_TOKEN }}
+          TESTNET_GATE: ${{ vars.TESTNET_GATE }}
+        run: bash scripts/ci/testnet-require-green-remote.sh "${{ github.sha }}"
+
+      - name: file an issue on failure
+        # Mirror the monorepo nightly's failure surfacing at a low-tech
+        # level: a red run on a schedule is easy to miss.
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="[nightly-testnet] agent main ${GITHUB_SHA:0:7} failed cross-repo testnet"
+          if gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "in:title [nightly-testnet]" --json number --jq length | grep -qv '^0$'; then
+            echo "::notice::an open [nightly-testnet] issue already exists; not filing another"
+            exit 0
+          fi
+          gh issue create --repo "${GITHUB_REPOSITORY}" \
+            --title "${title}" \
+            --body "Nightly cross-repo testnet for agent main HEAD failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+Investigate the dispatched run in waired-ai/waired (testnet.yml, agent_ref=${GITHUB_SHA})."

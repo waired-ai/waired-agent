@@ -1,7 +1,7 @@
 # `packaging/windows/hyperv/` — Windows edge-release VM test harness
 
 Real-machine-equivalent test of the **published Windows edge release**
-(`waired-ai/waired-install` :: `edge` prerelease) inside a Hyper-V Windows 11
+(`waired-ai/waired-agent` :: `edge` prerelease) inside a Hyper-V Windows 11
 VM, driven entirely from a **non-interactive Session-0 shell** (Claude Code /
 CI). This is the Windows analogue of the Linux LXD installer-test harness and
 the macOS tart flow.

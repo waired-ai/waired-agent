@@ -1,0 +1,75 @@
+---
+// Renders one slice of the bundled model catalog as a table, generated at
+// build time from internal/catalog/bundled/*.json (see ../data/model-catalog.ts).
+// The catalog is split by inference engine (`ollama` | `vllm`) and architecture
+// (`dense` | `moe`): each <ModelCatalogTable engine arch /> call renders a single
+// quadrant. A family that ships both a GGUF (Ollama) and a safetensors (vLLM)
+// build appears under both engines — intentional, so a reader only scans the
+// section that matches their hardware. Used by reference/model-catalog.mdx (en)
+// and ja/reference/model-catalog.mdx.
+import { loadCatalog } from '../data/model-catalog';
+
+interface Props {
+	engine: 'ollama' | 'vllm';
+	arch: 'dense' | 'moe';
+	lang?: 'en' | 'ja';
+}
+const { engine, arch, lang = 'en' } = Astro.props;
+
+const mem = (r: { ollamaRamGB: number | null; vllmVramGB: number | null }) =>
+	engine === 'ollama' ? r.ollamaRamGB : r.vllmVramGB;
+
+const rows = loadCatalog()
+	// Keep rows that ship a build for this engine, in this architecture class.
+	.filter((r) => mem(r) != null)
+	.filter((r) => (arch === 'moe' ? r.isMoE : !r.isMoE))
+	// Smallest-fitting machine first, so a reader scans top-down by capacity.
+	.sort((a, b) => (mem(a) ?? 0) - (mem(b) ?? 0) || a.modelId.localeCompare(b.modelId));
+
+const dash = '—';
+const memHeader = engine === 'ollama' ? 'Ollama RAM' : 'vLLM VRAM';
+const paramsHeader =
+	arch === 'moe' ? (lang === 'ja' ? 'パラメータ（アクティブ）' : 'Params (active)') : lang === 'ja' ? 'パラメータ' : 'Params';
+const modelHeader = lang === 'ja' ? 'モデル' : 'Model';
+const qualityHeader = lang === 'ja' ? '品質ティア' : 'Quality tier';
+const headers = [modelHeader, paramsHeader, qualityHeader, memHeader];
+
+const defaultTag = lang === 'ja' ? '(デフォルト)' : '(default)';
+const emptyNote =
+	lang === 'ja'
+		? 'この区分に該当する bundled モデルは現在ありません。'
+		: 'No bundled models currently fall in this category.';
+const fmtGB = (n: number | null) => (n == null ? dash : `${n} GB`);
+---
+
+{
+	rows.length === 0 ? (
+		<p>
+			<em>{emptyNote}</em>
+		</p>
+	) : (
+		<table>
+			<thead>
+				<tr>{headers.map((h) => <th>{h}</th>)}</tr>
+			</thead>
+			<tbody>
+				{rows.map((r) => (
+					<tr>
+						<td>
+							<code>{r.modelId}</code>
+							{r.isDefault && (
+								<>
+									{' '}
+									<em>{defaultTag}</em>
+								</>
+							)}
+						</td>
+						<td>{r.paramsLabel}</td>
+						<td>{r.qualityTier ?? dash}</td>
+						<td>{fmtGB(mem(r))}</td>
+					</tr>
+				))}
+			</tbody>
+		</table>
+	)
+}

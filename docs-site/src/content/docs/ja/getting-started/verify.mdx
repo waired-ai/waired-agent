@@ -1,0 +1,68 @@
+---
+title: 動作を確認する
+description: waired status --observability と単発の waired infer リクエストで Waired のセットアップを確認します。
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+2 つのコマンドで健全なセットアップを確認できます。一方はデーモンとメッシュのライブな
+状態を表示し、もう一方は実際の推論リクエストを実行します。
+
+## ライブな状態を確認する
+
+```sh
+waired status --observability
+```
+
+健全な推論サーバーは次のように表示されます。
+
+```
+Observability:
+  Device:   dev-ubuntu  uptime: 1m23s
+  Engine:   ready (model=qwen2.5-coder-7b-instruct, 0/4 slots used, inflight=0)
+  Share:    enabled    Paused: no
+  Mesh:     2 enrolled / 1 reachable / 1 ready
+  Last:     -  (no inference requests yet)
+```
+
+確認すべきポイント:
+
+- **Engine: ready** — モデルがロードされ、リクエストに応えられる状態です。
+  `not ready` と表示される場合は、モデルがまだプル中（数分待つ）か、ランタイムが
+  停止している（`waired runtimes status`）可能性があります。
+- **Share** / **Paused** — `Share: enabled` はピアがこのエンジンに到達できることを
+  意味し、`Paused: no` はルーティングが有効であることを意味します。
+- **Mesh** — `enrolled / reachable / ready` のピア数です。クライアントでは、これが
+  自分のサーバーが reachable として現れることを確認する方法です。
+
+機械可読な出力を得るには `-o json` を追加します。
+
+## 最初のリクエストを実行する
+
+```sh
+waired infer "say hi"
+```
+
+これはローカルエンジンを直接呼び出すため、メッシュの到達性に関わらず動作します —
+推論が動くことを確認する最も早い方法です。あいさつが数百ミリ秒から数秒以内に
+返ってくるはずです。
+
+ルーティングの判断（ローカルかピアか、モデルの解決、推定レイテンシ）を答えと一緒に
+確認するには、次のようにします。
+
+```sh
+waired infer --explain "say hi"
+```
+
+<Aside type="tip">
+	リクエストが 503 を返す場合、たいていはエンジンが一時停止しているか
+	（`waired resume`）、共有されていない（`waired inference share on`）ことを意味します。
+	[トラブルシューティング](/ja/troubleshooting/)のページでは、各症状を、それを
+	修正するコマンドに対応付けています。
+</Aside>
+
+## 次のステップ
+
+- コーディングエージェントを自分のモデル経由でルーティングする: [コーディングエージェント](/ja/guides/coding-agents/)。
+- チャットや OpenAI 互換クライアントを接続する: [チャットクライアント](/ja/guides/chat-clients/)。
+- より大きい、または小さいモデルを選ぶ: [同梱モデルを切り替える](/ja/guides/switch-model/)。

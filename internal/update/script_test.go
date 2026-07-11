@@ -18,7 +18,7 @@ func TestScriptName(t *testing.T) {
 
 func TestScriptBaseURL(t *testing.T) {
 	t.Setenv("WAIRED_INSTALL_BASE_URL", "")
-	if got := ScriptBaseURL(); got != "https://github.com/waired-ai/waired-install/releases/latest/download" {
+	if got := ScriptBaseURL(); got != "https://github.com/waired-ai/waired-agent/releases/latest/download" {
 		t.Errorf("default base = %q", got)
 	}
 	t.Setenv("WAIRED_INSTALL_BASE_URL", "https://example.test/dl")
@@ -29,8 +29,8 @@ func TestScriptBaseURL(t *testing.T) {
 
 func TestScriptBaseURLForChannel(t *testing.T) {
 	const (
-		stable = "https://github.com/waired-ai/waired-install/releases/latest/download"
-		edge   = "https://github.com/waired-ai/waired-install/releases/download/edge"
+		stable = "https://github.com/waired-ai/waired-agent/releases/latest/download"
+		edge   = "https://github.com/waired-ai/waired-agent/releases/download/edge"
 	)
 	t.Setenv("WAIRED_INSTALL_BASE_URL", "")
 	if got := ScriptBaseURLForChannel("stable"); got != stable {
@@ -53,10 +53,10 @@ func TestScriptBaseURLForChannel(t *testing.T) {
 
 func TestScriptURLForChannel(t *testing.T) {
 	t.Setenv("WAIRED_INSTALL_BASE_URL", "")
-	if got := ScriptURLForChannel("linux", "edge"); got != "https://github.com/waired-ai/waired-install/releases/download/edge/install.sh" {
+	if got := ScriptURLForChannel("linux", "edge"); got != "https://github.com/waired-ai/waired-agent/releases/download/edge/install.sh" {
 		t.Errorf("linux edge = %q", got)
 	}
-	if got := ScriptURLForChannel("windows", "stable"); got != "https://github.com/waired-ai/waired-install/releases/latest/download/install.ps1" {
+	if got := ScriptURLForChannel("windows", "stable"); got != "https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1" {
 		t.Errorf("windows stable = %q", got)
 	}
 }

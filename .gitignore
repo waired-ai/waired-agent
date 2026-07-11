@@ -2,6 +2,13 @@
 /bin/
 /dist/
 
+# docs-site build outputs (docs-site/.gitignore covers these too; kept
+# here so a root-level `git status` stays clean even if that file moves)
+/docs-site/node_modules/
+/docs-site/dist/
+/docs-site/.astro/
+/docs-site/.firebase/
+
 # Local Go workspace (developers may point proto at a monorepo checkout;
 # never commit it)
 go.work

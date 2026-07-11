@@ -28,8 +28,8 @@ import (
 )
 
 // defaultInstallRepo mirrors install.sh's WAIRED_INSTALL_REPO — the public
-// mirror whose GitHub Releases feed the version check.
-const defaultInstallRepo = "waired-ai/waired-install"
+// repository whose GitHub Releases feed the version check.
+const defaultInstallRepo = "waired-ai/waired-agent"
 
 // Result is the outcome of a version check.
 type Result struct {

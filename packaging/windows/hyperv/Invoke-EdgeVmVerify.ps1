@@ -7,7 +7,7 @@
 
 .DESCRIPTION
     Mirrors the Linux LXD installtest tiers for Windows, against the real
-    published edge artifact (waired-ai/waired-install :: edge prerelease):
+    published edge artifact (waired-ai/waired-agent :: edge prerelease):
 
       Phase A  installer : $env:WAIRED_VERSION='edge' one-liner ->
                            DL + SHA verify, extract, waired-agent install
@@ -113,7 +113,7 @@ $phaseA = Invoke-Command -Session $s -ArgumentList $InstallVersion,$localInstall
     function GLog { param($m) [void]$log.Add(((Get-Date -Format 'HH:mm:ss') + ' ' + [string]$m)) }
 
     $env:WAIRED_VERSION = $InstallVersion
-    $installUrl = 'https://github.com/waired-ai/waired-install/releases/latest/download/install.ps1'
+    $installUrl = 'https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1'
     # Fetch + decode install.ps1. GitHub serves the asset as
     # application/octet-stream, so Windows PowerShell 5.1 returns .Content as a
     # byte[] (recorded below for the Finding-1 content-type defect). We run
@@ -222,7 +222,7 @@ $ollamaEnsure = Invoke-Command -Session $s -ScriptBlock {
     $r = [ordered]@{ preInstalled = [bool]$found }
     if (-not $found) {
         try {
-            $resp = Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/waired-ai/waired-install/releases/latest/download/ollama-windows.ps1'
+            $resp = Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/waired-ai/waired-agent/releases/latest/download/ollama-windows.ps1'
             $txt = if ($resp.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($resp.Content) } else { [string]$resp.Content }
             $f = Join-Path $env:TEMP 'ollama-windows.ps1'; Set-Content -LiteralPath $f -Value $txt -Encoding UTF8
             $out = & $f -GpuMode cpu-only *>&1 | ForEach-Object { $_.ToString() }

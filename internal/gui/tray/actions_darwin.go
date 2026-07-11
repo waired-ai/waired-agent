@@ -97,7 +97,7 @@ func InstallOllamaViaElevation(ctx context.Context, stateDir string) error {
 func UpdateViaElevation(ctx context.Context) error {
 	bin, err := locateWairedBinary()
 	if err != nil {
-		if oerr := OpenBrowser("https://github.com/waired-ai/waired-install"); oerr != nil {
+		if oerr := OpenBrowser("https://github.com/waired-ai/waired-agent"); oerr != nil {
 			return fmt.Errorf("update: waired binary not found and could not open browser: %w", oerr)
 		}
 		return nil

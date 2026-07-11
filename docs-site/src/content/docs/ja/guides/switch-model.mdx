@@ -1,0 +1,99 @@
+---
+title: バンドルモデルの切り替え
+description: agent.json、環境変数、または CLI フラグを使って Waired エンジンが配信するモデルを変更します — 優先順位も解説します。
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+`waired init` は、ハードウェアプロファイルからバンドルモデルを自動選択します — 
+コーディング品質フロアを満たす範囲で、このマシンに収まる最大のモデルです（高性能機なら
+大型の MoE コーダー、控えめなマシンならより小さなモデル）。この選択を
+上書きするには — たとえば 24 GB GPU でより大きなモデルを、メモリ節約のためより小さな
+モデルを — バンドルモデル ID を明示的に設定します。選択肢とその要件は
+[モデルカタログ](/ja/reference/model-catalog/)で確認できます。
+
+<Aside type="tip">
+	エンロール時にモデルを固定するには `waired init --inference-bundled-model-id=<id>`
+	を渡してください — ハードウェア自動選択をスキップします。以下の方法は、すでにエンロール
+	済みのマシンで変更する場合のものです。
+</Aside>
+
+設定方法は 3 つあります。複数が存在する場合、優先度の高いソースが勝ちます:
+
+```
+defaults  <  agent.json  <  environment variable  <  CLI flag
+```
+
+## 1. agent.json (永続的 — 推奨)
+
+`agent.json` で `inference.bundled_model_id` を設定し、サービスを再起動します。
+
+<Tabs syncKey="os">
+	<TabItem label="Linux">
+		設定ファイル: `~/.config/waired/agent.json` (`XDG_CONFIG_HOME` を尊重します)。
+		システムデーモンの場合は `/etc/waired/agent.json`。
+
+		```sh
+		sudo jq '.inference.bundled_model_id = "qwen3-coder-30b-a3b-instruct"' \
+		  /etc/waired/agent.json | sudo tee /etc/waired/agent.json.new
+		sudo mv /etc/waired/agent.json.new /etc/waired/agent.json
+		sudo systemctl restart waired-agent
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		設定ファイル: `%LOCALAPPDATA%\waired\agent.json`。システムサービスの場合は
+		`%PROGRAMDATA%\waired\agent.json`。`inference.bundled_model_id` フィールドを
+		編集してから:
+
+		```powershell
+		Restart-Service waired-agent
+		```
+	</TabItem>
+</Tabs>
+
+## 2. 環境変数 (システム全体 / 一時的)
+
+`WAIRED_INFERENCE_BUNDLED_MODEL_ID` を設定し、サービスを再起動します。
+
+<Tabs syncKey="os">
+	<TabItem label="Linux (systemd)">
+		`/etc/waired/agent.env` に追加します:
+
+		```sh
+		sudo install -m 600 -D /dev/stdin /etc/waired/agent.env <<'EOF'
+		WAIRED_INFERENCE_BUNDLED_MODEL_ID=qwen3-coder-30b-a3b-instruct
+		EOF
+		sudo systemctl restart waired-agent
+		```
+		(ファイルにすでに `WAIRED_CONTROL_URL` の行がある場合は、それを残してください。)
+	</TabItem>
+	<TabItem label="Windows (service)">
+		```powershell
+		setx /M WAIRED_INFERENCE_BUNDLED_MODEL_ID qwen3-coder-30b-a3b-instruct
+		Restart-Service waired-agent
+		```
+	</TabItem>
+</Tabs>
+
+## 3. CLI フラグ (主に開発用)
+
+エージェントを直接起動するときにフラグを渡します:
+
+```sh
+waired-agent --inference-bundled-model-id=qwen3-coder-30b-a3b-instruct
+```
+
+## 切り替えの確認
+
+再起動後、新しいモデルはオンデマンドでプルされます (数分かかることがあります):
+
+```sh
+waired models ls                # ダウンロード / ディスク使用量を監視
+waired status --observability   # Engine 行に新しい model= が表示されるはずです
+```
+
+<Aside type="tip">
+	ハードウェアに収まらないモデルに切り替えると、エンジンは `not ready` のままに
+	なります。切り替える前に、[モデルカタログ](/ja/reference/model-catalog/) で
+	お使いのモデルとランタイムの RAM/VRAM 列を確認してください。
+</Aside>

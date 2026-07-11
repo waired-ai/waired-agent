@@ -1,0 +1,94 @@
+# Self-hosted Renovate (dependency bot). Runs weekly + on demand and
+# opens dependency-update PRs. Self-hosted (not the Mend App) because
+# only self-hosted Renovate can run postUpgradeTasks — needed to
+# recompute the uv / opencode SHA pins in lockstep (see renovate.json;
+# monorepo #290/#429) — and it matches the monorepo's setup.
+#
+# OPERATOR SETUP (one-time, outside CI): add a repo-scoped Personal
+# Access Token (or GitHub App installation token) with contents+PR write
+# as the `RENOVATE_TOKEN` Actions secret. Until then scheduled runs fail
+# fast with a clear message (the config-validator step still runs).
+name: renovate
+
+on:
+  schedule:
+    # Monday 09:00 Asia/Tokyo == Monday 00:00 UTC. Weekly so the bot
+    # never floods sv-mag-agent CI; renovate.json's own `schedule` gates
+    # which updates it acts on within the run.
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: Renovate log level
+        default: info
+        type: choice
+        options: [info, debug]
+      dryRun:
+        description: Dry-run (no commits/PRs) — use to preview detected updates
+        default: "false"
+        type: choice
+        options: ["false", "full"]
+
+# Real git/PR writes are authenticated by RENOVATE_TOKEN, not the
+# workflow GITHUB_TOKEN, so the default token stays read-only.
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+  # sv-mag-agent pods have no IPv6 egress; same Node dual-stack
+  # workarounds as the monorepo renovate.yml (see its header + #466).
+  NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  renovate:
+    runs-on: sv-mag-agent
+    timeout-minutes: 30
+    container:
+      # ARC kubernetes containerMode + root-default node image instead of
+      # the official renovate image (non-root USER can't write the ARC
+      # runner's pre-created command files — monorepo #459).
+      image: node:22-trixie
+    steps:
+      - uses: actions/checkout@v5
+
+      # npx pulls the latest Renovate at run time, keeping the bot self-
+      # updating. Debian node:22-trixie ships git/curl/bash/coreutils,
+      # which Renovate and the postUpgradeTasks
+      # (scripts/dev/update-*-sha.sh) need.
+      - name: Validate renovate.json
+        run: npx --yes --package renovate -- renovate-config-validator --strict
+
+      - name: Run Renovate
+        env:
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_PLATFORM: github
+          # Allowlist of post-upgrade commands (renovate.json
+          # postUpgradeTasks). Only these SHA-recompute helpers may run;
+          # any other command is silently skipped. Keep in lockstep with
+          # the postUpgradeTasks wired per-package in renovate.json.
+          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^bash scripts/dev/update-uv-sha\\.sh ", "^bash scripts/dev/update-opencode-sha\\.sh "]'
+          LOG_LEVEL: ${{ github.event.inputs.logLevel || 'info' }}
+          RENOVATE_DRY_RUN: ${{ github.event.inputs.dryRun == 'full' && 'full' || '' }}
+        run: |
+          if [ -z "${RENOVATE_TOKEN:-}" ]; then
+            echo "::error::RENOVATE_TOKEN secret is not set. Add a repo-scoped PAT or GitHub App token with contents+pull-requests write (Settings -> Secrets and variables -> Actions). See .github/workflows/renovate.yml header."
+            exit 1
+          fi
+          # Strip the workflow-level GIT_CONFIG_* trio before invoking
+          # Renovate — its env sanitiser passes GIT_CONFIG_COUNT through
+          # while dropping KEY_0/VALUE_0, which kills every git it spawns
+          # (see the monorepo renovate.yml header).
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+          npx --yes renovate
