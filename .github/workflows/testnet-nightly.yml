@@ -57,8 +57,9 @@ jobs:
             echo "::notice::an open [nightly-testnet] issue already exists; not filing another"
             exit 0
           fi
+          body="$(printf '%s\n\n%s' \
+            "Nightly cross-repo testnet for agent main HEAD failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "Investigate the dispatched run in waired-ai/waired (testnet.yml, agent_ref=${GITHUB_SHA}).")"
           gh issue create --repo "${GITHUB_REPOSITORY}" \
             --title "${title}" \
-            --body "Nightly cross-repo testnet for agent main HEAD failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-Investigate the dispatched run in waired-ai/waired (testnet.yml, agent_ref=${GITHUB_SHA})."
+            --body "${body}"
