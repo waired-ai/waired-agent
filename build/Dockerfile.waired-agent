@@ -23,6 +23,9 @@ FROM golang:1.26-trixie AS build
 ARG GO_BUILD_TAGS=""
 WORKDIR /src
 COPY go.mod go.sum ./
+# The root module `replace`s the nested proto module (permanent by
+# design, #184) — its go.mod must be present before `go mod download`.
+COPY proto/go.mod proto/go.mod
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 COPY . .
