@@ -83,3 +83,8 @@ PRs — the cross-repo dispatch credential is not available to forks. A
 maintainer runs it after review (by pushing your branch to this repo or
 dispatching the private harness manually); you don't need to do
 anything.
+
+The same applies to the 3-OS install test (`installtest.yml`): it runs
+on every same-repo PR but is skipped for fork PRs (it needs the cloud
+enroll identity and the self-hosted Windows/macOS runners). A
+maintainer arms it the same way after review.

@@ -429,9 +429,10 @@ positive control so a box with the AMSI provider off can't report a false-green:
 pwsh -File scripts/dev/amsi-scan.ps1 -Strict
 ```
 
-This is the same tool the CI gates run: Gate A (`.github/workflows/amsi-scan.yml`,
-a windows runner) and Gate B (the Defender-live canary step in `installtest.yml`
-on the #547 golden) — see `#553`.
+This is the same tool CI runs: the Defender-live canary step in
+`.github/workflows/installtest.yml` (soft-fail, on the self-hosted
+Windows guest) — see waired#553. The old standalone Gate A workflow
+(`amsi-scan.yml`) has not been re-homed since the monorepo split (#1).
 
 For pinpointing *which* line trips a detection, the community tools
 **AMSITrigger** / **ThreatCheck** / **DefenderCheck** bisect the file

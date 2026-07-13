@@ -146,6 +146,12 @@ message**, not in repo files.
   must be classified into that list or
   `testnet-nonrelevant-packages.txt` (with reason) —
   `testnet-gate-guard.sh` fails lint until you do.
+* The 3-OS install test (`installtest.yml`) runs on EVERY same-repo PR
+  (no paths filter; fork PRs get a skip). Windows contract asserts tied
+  to open issues soft-fail (WARN) — a fix PR flips the matching
+  `$ContractBlocking` line in `scripts/dev/installtest-windows.ps1` to
+  make its assert blocking. Nightly: `installtest-inference.yml`
+  (inference tail + routing sentinel + banner render check).
 
 ## Documentation
 
