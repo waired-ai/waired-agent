@@ -20,32 +20,25 @@ gitleaks secret scan (config: `.gitleaks.toml`).
 
 ## Cross-OS parity (linux / windows / darwin)
 
-The agent ships on all three OSes. The recurring regression class is
-code that silently behaves differently on one of them
-(waired#746–#758), so:
+Most regressions to date were one OS silently behaving differently
+(waired#746–#758):
 
-* Prefer portable implementations. In shared (untagged) code, never
-  rely on Unix-only behavior: no direct `os.Geteuid()` (returns -1 on
-  Windows, so `== 0` gates are dead code there), no hardcoded
-  `/etc`-style paths, no `path.Join` on filesystem paths (use
-  `path/filepath`). Route OS-varying decisions through a function
-  that takes `runtime.GOOS` explicitly, with a table-driven test
-  covering all three values (pattern: `initStateDirMode` in
-  cmd/waired/main.go + cmd/waired/init_defaults_test.go).
-* When per-OS code is unavoidable (state dirs, systemd / launchd /
-  SCM, registry, autostart), use `_windows.go` / `_linux.go` /
-  `_darwin.go` files, preferably under `internal/platform/`. A new
-  per-OS file set must cover all three OSes — real implementation or
-  a stub whose behavior is deliberate and stated in a comment. For
-  "both Unixes" prefer the `linux || darwin` build tag over
-  `!windows`.
-* A feature or bugfix implemented for one OS is **not done** until
-  you check whether the other two need the same change, and either
-  cover them in the same PR or file an OS-labeled issue stating why
-  it is deferred or not applicable.
-* Installer parity: behavior added to install.sh / uninstall.sh must
-  be mirrored in install.ps1 / uninstall.ps1 (and waired-setup.iss
-  where applicable), and vice versa.
+* Prefer portable code. In shared (untagged) files: no direct
+  `os.Geteuid()` (-1 on Windows — `== 0` gates go dead), no hardcoded
+  `/etc`-style paths, no `path.Join` on filesystem paths. Route
+  OS-varying decisions through a function taking `runtime.GOOS`, with
+  a table test over all three values (see `initStateDirMode` +
+  cmd/waired/init_defaults_test.go).
+* Unavoidable per-OS code (state dirs, systemd/launchd/SCM, registry,
+  autostart) goes in `_windows.go`/`_linux.go`/`_darwin.go` files,
+  preferably under `internal/platform/`; a new set must cover all
+  three OSes (impl, or a stub whose behavior is stated in a comment).
+  For "both Unixes" tag `linux || darwin`, not `!windows`.
+* A one-OS feature or fix is **not done** until the other two are
+  checked and either changed in the same PR or covered by an
+  OS-labeled issue saying why deferred / not applicable.
+* install.sh/uninstall.sh changes mirror to install.ps1/uninstall.ps1
+  (and waired-setup.iss where applicable), and vice versa.
 
 ## Tags / releases
 
