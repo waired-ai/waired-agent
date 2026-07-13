@@ -172,28 +172,27 @@ func TestScrubbedChildEnv(t *testing.T) {
 	}
 }
 
-func TestInvokingSudoUser(t *testing.T) {
+func TestInvokingSudoUserAt(t *testing.T) {
 	cases := []struct {
 		name     string
+		goos     string
 		euid     int
 		sudoUser string
 		want     string
 		wantOK   bool
 	}{
-		{"sudo from alice", 0, "alice", "alice", true},
-		{"real root login", 0, "", "", false},
-		{"sudo from root", 0, "root", "", false},
-		{"not elevated", 1000, "alice", "", false},
+		{"sudo from alice", "linux", 0, "alice", "alice", true},
+		{"sudo from alice on macOS", "darwin", 0, "alice", "alice", true},
+		{"real root login", "linux", 0, "", "", false},
+		{"sudo from root", "linux", 0, "root", "", false},
+		{"not elevated", "linux", 1000, "alice", "", false},
+		{"windows has no sudo", "windows", -1, "alice", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			prev := geteuid
-			geteuid = func() int { return tc.euid }
-			t.Cleanup(func() { geteuid = prev })
-			t.Setenv("SUDO_USER", tc.sudoUser)
-			got, ok := invokingSudoUser()
+			got, ok := invokingSudoUserAt(tc.goos, tc.euid, tc.sudoUser)
 			if got != tc.want || ok != tc.wantOK {
-				t.Errorf("invokingSudoUser() = (%q, %v), want (%q, %v)", got, ok, tc.want, tc.wantOK)
+				t.Errorf("invokingSudoUserAt(%q, %d, %q) = (%q, %v), want (%q, %v)", tc.goos, tc.euid, tc.sudoUser, got, ok, tc.want, tc.wantOK)
 			}
 		})
 	}

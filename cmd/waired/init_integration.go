@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"runtime"
 	"strings"
 	"time"
 
@@ -150,23 +151,28 @@ func promptIntegrationConsent(in io.Reader, out io.Writer, inp integrationConsen
 	return ok
 }
 
-// geteuid is a test seam for invokingSudoUser (the test runner is
-// never root).
-var geteuid = os.Geteuid
-
 // invokingSudoUser reports the non-root user who ran `sudo waired
 // init`. euid must be 0 and SUDO_USER set to a non-root name; anything
 // else (a real root login, or no elevation at all) has no hop target
 // and the integration applies to the current user as usual.
 func invokingSudoUser() (string, bool) {
-	if geteuid() != 0 {
+	return invokingSudoUserAt(runtime.GOOS, os.Geteuid(), os.Getenv("SUDO_USER"))
+}
+
+// invokingSudoUserAt is the testable core of invokingSudoUser. sudo is
+// a Unix concept: on Windows there is no hop target (euid is -1 there
+// anyway, but the goos check makes that explicit).
+func invokingSudoUserAt(goos string, euid int, sudoUser string) (string, bool) {
+	if goos != "linux" && goos != "darwin" {
 		return "", false
 	}
-	u := os.Getenv("SUDO_USER")
-	if u == "" || u == "root" {
+	if euid != 0 {
 		return "", false
 	}
-	return u, true
+	if sudoUser == "" || sudoUser == "root" {
+		return "", false
+	}
+	return sudoUser, true
 }
 
 // sudoUserHome resolves the home directory of the sudo-invoking user.
