@@ -8,7 +8,7 @@ import "fmt"
 // through. A non-positive requiredBytes is treated as "unknown size" and
 // passes (we never reject on an unknown requirement).
 //
-// Lives in its own platform-agnostic file (hf.go is //go:build !windows)
+// Lives in its own platform-agnostic file (hf.go is //go:build linux || darwin)
 // so callers on every OS — e.g. setup.Deploy's pre-pull guard — can use
 // it.
 func CheckDiskSpace(freeBytes, requiredBytes int64) error {
