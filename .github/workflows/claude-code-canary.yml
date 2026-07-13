@@ -1,0 +1,39 @@
+# claude-code-canary — weekly check that the LATEST Claude Code release still
+# carries the behaviors waired's integration composes with (#771):
+# the CLAUDE_CODE_AUTO_COMPACT_WINDOW env override, gateway model discovery,
+# and the "prompt is too long" reactive-compaction trigger that waired's
+# synthetic overflow 400 is worded for. See scripts/ci/claude-code-canary.sh
+# for what each invariant protects.
+#
+# A red run means a Claude Code release changed a load-bearing assumption —
+# re-verify the integration (methodology in waired#771 / waired#623); it does
+# not by itself mean the agent is broken. Runs on a GitHub-hosted runner
+# (public-repo policy: nothing scheduled on the self-hosted runners), weekly
+# on Thursday to stay clear of renovate (Mon) and catalog-radar (Wed).
+name: claude-code-canary
+
+on:
+  schedule:
+    - cron: "0 0 * * 4" # Thursday 00:00 UTC, weekly
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    name: Claude Code invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: install latest Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: check invariants
+        run: bash scripts/ci/claude-code-canary.sh
