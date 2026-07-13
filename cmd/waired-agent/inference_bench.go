@@ -47,21 +47,22 @@ type BenchResult struct {
 // benchmark measures. Easier to bump this up in a follow-up than
 // to silently over-admit and flood a single peer.
 //
-// This is deliberately NOT the interactive/selection floor (#670,
-// router.CodingAgentSelectionFloorTokps = 100): the divisor models
+// This is deliberately NOT the interactive/selection floor (#670/#765,
+// router.CodingAgentSelectionFloorTokps = 60): the divisor models
 // how much throughput one admitted session CONSUMES on average, the
-// floor models the wall-clock decode rate below which a session FEELS
-// too slow. They used to share this constant when the floor was also
-// 30; raising the floor to 100 must not cut every host's advertised
-// mesh Capacity by 3.3×.
+// floor models the decode rate below which a session FEELS too slow.
+// They used to share this constant when the floor was also 30; moving
+// the floor (30→100→60) must not swing every host's advertised mesh
+// Capacity with it.
 const avgCodingAgentTokRate = 30.0
 
 // resolveInteractiveFloor returns the throughput (tokens/sec) below
 // which the agent recommends a lighter model (issue #133). A
 // configured value > 0 wins; 0 (the default) falls back to the
-// coding-agent selection floor (#670): decode below ~100 tok/s at
-// shallow context degrades to well under ~80 tok/s at the ~200k
-// coding window, which real coding-agent use showed is too slow.
+// coding-agent selection floor (#670/#765): true decode below
+// ~60 tok/s at shallow context degrades to under ~48 tok/s at the
+// ~200k coding window, below the band interactive coding-agent use
+// tolerates (see router.CodingAgentSelectionFloorTokps).
 func resolveInteractiveFloor(cfg float64) float64 {
 	if cfg > 0 {
 		return cfg

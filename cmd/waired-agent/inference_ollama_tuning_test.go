@@ -133,12 +133,15 @@ func TestComputeOllamaTuning(t *testing.T) {
 	})
 
 	t.Run("spill-past-speed-cap-serves-capped-window", func(t *testing.T) {
-		// #670: when the floor window would spill past the speed cap
-		// (single-thread CPU spill, #664), the tuner serves the largest
-		// window that holds the cap instead of the full floor. 23 GB
-		// weights on the 24 GiB card: floor spill ≈ 14.7% > cap.
+		// #670/#765: when the floor window would spill past the speed
+		// cap (single-thread CPU spill, #664), the tuner serves the
+		// largest window that holds the cap instead of the full floor.
+		// 23.7 GB weights on the 24 GiB card: floor spill ≈ 22% > the
+		// 0.20 cap. (At the pre-#765 0.075 cap a 23 GB fixture spilling
+		// ≈ 14.7% exercised this branch; gate-passing variants now
+		// serve the full floor, so only heavier overshoots trim.)
 		v := m.Variants[0]
-		v.EstimatedWeightGB = 23.0
+		v.EstimatedWeightGB = 23.7
 		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0")
 		if got.ContextLength >= 200704 || got.ContextLength <= ollamaContextFloor {
 			t.Errorf("ContextLength = %d, want a speed-capped window between %d and the floor",
