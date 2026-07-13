@@ -64,6 +64,13 @@ background instead. To pin a specific model, pass
 `--inference-bundled-model-id <id>` or see
 [Switch the bundled model](/guides/switch-model/).
 
+On an elevated interactive install (Linux/macOS `sudo waired init`), the very
+last question is whether to **route Claude Code inference through Waired
+now** — asked only after the model download and benchmark, when the local
+stack can actually serve. Answering no keeps the integration installed with
+Claude traffic on the Anthropic API; enable later with
+`sudo waired claude enable` (see [Coding agents](/guides/coding-agents/)).
+
 <Aside type="caution" title="Under-spec machines">
 	If the machine is too small to run **any** usable coding model, `init` skips
 	the local engine and tells you what it would need. The device still enrolls

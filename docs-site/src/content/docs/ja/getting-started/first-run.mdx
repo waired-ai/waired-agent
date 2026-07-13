@@ -62,6 +62,13 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 `--inference-bundled-model-id <id>` を渡すか、
 [同梱モデルを切り替える](/ja/guides/switch-model/)を参照してください。
 
+昇格した対話的インストール(Linux/macOS の `sudo waired init`)では、最後の質問として
+**Claude Code の推論を今から Waired 経由にルーティングするか**を確認します — モデルの
+ダウンロードとベンチマークが終わり、ローカルスタックが実際に応答できるようになった時点で
+聞かれます。「いいえ」でも統合自体はインストールされたまま、Claude のトラフィックは
+Anthropic API に残ります。後から有効化するには `sudo waired claude enable` を使って
+ください([コーディングエージェント](/ja/guides/coding-agents/)参照)。
+
 <Aside type="caution" title="性能が足りないマシン">
 	**どのコーディングモデルも実用的に動かせない**ほど小さなマシンでは、`init` はローカル
 	エンジンを見送り、何が必要かを表示します。それでもデバイスはネットワークに参加するので、

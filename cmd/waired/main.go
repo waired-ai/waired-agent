@@ -640,7 +640,14 @@ func runInitBody(o *initFlags) error {
 	// previous install left (a stale api.anthropic.com hosts redirect would
 	// break the new gateway's passthrough). Best-effort — enrollment is already
 	// durable, so a failure warns but never fails init.
-	if integConsent && claudeManagedEligible && !renewing {
+	//
+	// Interactive installs no longer flip the route here (waired#772): the
+	// early integration consent covered installing artifacts, and the actual
+	// routing question is asked after the model download + benchmark below,
+	// when the local stack can actually serve. Non-interactive keeps the
+	// single-consent immediate flip.
+	claudeRouted := false
+	if integConsent && claudeManagedEligible && !renewing && *nonInteractive {
 		fmt.Printf("\n%s %s\n", emo("🔌", "*"), bold("Configuring Claude Code integration (managed settings)…"))
 		legacycleanup.Run(*stateDir, stderrLogger())
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
@@ -648,15 +655,14 @@ func runInitBody(o *initFlags) error {
 			fmt.Fprintf(os.Stderr,
 				"warn: writing Claude Code managed settings failed (%v); run `sudo waired claude enable` later\n", err)
 		} else {
+			claudeRouted = true
 			fmt.Printf("  %s → ANTHROPIC_BASE_URL=%s (no credential; subscription/auto-mode preserved)\n", path, baseURL)
 			// Also add the routing statusline segment, with the same
-			// ask-before-wrapping flow as `waired claude enable`: absent ⇒
-			// injected, a pre-existing statusLine ⇒ interactive consent (init
-			// keeps the TTY; only the write hops to the invoking user). A
-			// --non-interactive init (installer --yes) must never block on the
-			// y/N read even though install.sh reattaches stdin to /dev/tty, so
-			// prompting is gated on the flag too — guidance only.
-			installStatuslineForInvoker(false, !*nonInteractive)
+			// ask-before-wrapping flow as `waired claude enable`. This branch
+			// is --non-interactive only (installer --yes), which must never
+			// block on the y/N read even though install.sh reattaches stdin
+			// to /dev/tty — guidance only.
+			installStatuslineForInvoker(false, false)
 		}
 	}
 
@@ -736,13 +742,29 @@ func runInitBody(o *initFlags) error {
 		bench = offerBenchmark(*mgmtURL, *nonInteractive, os.Stdout, postSC, isTerminal(os.Stdout))
 	}
 
+	// The deferred routing question (waired#772): now that the engine setup,
+	// model download, and benchmark are done, the local stack can actually
+	// serve — ask whether to route Claude Code inference through it. "No"
+	// leaves the integration artifacts installed and Claude traffic on the
+	// real Anthropic API. Interactive only; the non-interactive flip already
+	// happened above.
+	if integConsent && claudeManagedEligible && !renewing && !*nonInteractive {
+		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
+		claudeRouted = promptClaudeRouting(os.Stdout, postSC, baseURL, *stateDir)
+		if claudeRouted {
+			// Same ask-before-wrapping statusline flow as `waired claude
+			// enable`; init keeps the TTY, so prompting is allowed here.
+			installStatuslineForInvoker(false, true)
+		}
+	}
+
 	// The true end: a framed success summary printed only after the (optional)
 	// model download + benchmark have finished, so it — not the mid-flow
 	// "Device enrolled" line — is the "everything completed" marker. Fresh
 	// standalone enroll only; renew keeps its terser tokens-refreshed ending
 	// and bypass/CI runs stay quiet.
 	if !renewing && !*bypassMode && res.Enroll != nil {
-		printInitSuccessBox(res, cfgRoot.Inference, integConsent, claudeManagedEligible, *deviceName, bench)
+		printInitSuccessBox(res, cfgRoot.Inference, claudeRouted, *deviceName, bench)
 	}
 	return nil
 }
@@ -751,7 +773,7 @@ func runInitBody(o *initFlags) error {
 // the post-selection inference config (applyBundledModelSelection may have
 // disabled local inference or chosen the bundled model) and folds in the
 // benchmark throughput when one was measured. Best-effort presentation only.
-func printInitSuccessBox(res *setup.InitResult, inf agentconfig.InferenceConfig, integConsent, claudeManaged bool, deviceName string, bench benchmarkOutcome) {
+func printInitSuccessBox(res *setup.InitResult, inf agentconfig.InferenceConfig, claudeRouted bool, deviceName string, bench benchmarkOutcome) {
 	var lines []string
 	add := func(label, val string) { lines = append(lines, fmt.Sprintf("%-9s %s", label, val)) }
 
@@ -776,7 +798,7 @@ func printInitSuccessBox(res *setup.InitResult, inf agentconfig.InferenceConfig,
 			add("Model", model)
 		}
 		add("Gateway", cyan(fmt.Sprintf("http://127.0.0.1:%d", inf.LocalGatewayPort)))
-		if integConsent && claudeManaged {
+		if claudeRouted {
 			add("Claude", cyan(fmt.Sprintf("http://127.0.0.1:%d", inf.ClaudeGatewayPort))+" (managed settings)")
 		}
 		lines = append(lines, "")
