@@ -1,0 +1,168 @@
+# installtest — the working-tree installer run end-to-end on a real OS,
+# on EVERY PR (waired#760; re-homed from the pre-split monorepo per #1).
+#
+# install.sh / install.ps1 ship to users via `curl | sh` / `iwr | iex`, and
+# package postinst / systemd / SCM / LaunchDaemon behavior only fails on a
+# real `install → service-manager` machine — which the hermetic dash matrix
+# (ci.yml `install-scripts`) and Go unit tests can't exercise. Each leg runs
+# the installer in place on a disposable runner (GitHub-hosted Linux VM;
+# ephemeral self-hosted Windows / macOS VMs destroyed after the job), so the
+# destructive steps are contained by the VM boundary.
+#
+# 3-OS matrix: Linux (deb → systemd), Windows (install.ps1 → SCM, plus the
+# waired#760 additions: behavioral-contract asserts, non-elevated contexts,
+# uninstall -Clean teardown asserts, and the Inno .exe-install variant),
+# macOS (install.sh darwin → system LaunchDaemon). Tier 2 enrolls hands-free
+# against the real dev control plane via the SA-OIDC grant (WIF mints the SA
+# id_token; #339).
+#
+# Always-on (no paths filter, waired#760): the previous paths-gated shape
+# could never be a required status check; this one can — flip branch
+# protection once the signal is proven stable. The Windows contract asserts
+# tied to open issues (#749/#751/#754/#755) SOFT-fail (WARN) until each fix
+# merges, so a green run means "no regression against the current contract".
+# The cp932 banner render check moved to the nightly workflow
+# (installtest-inference.yml) — it only breaks on installer-surface changes
+# and cost ~2 min of the per-PR critical path.
+#
+# Fork PRs: the legs are skipped (not failed) — the job condition requires a
+# same-repo head. Fork code must not reach the self-hosted runners or the WIF
+# identity; GitHub also withholds the id-token from fork PRs. A maintainer
+# arms a reviewed fork PR by pushing its branch to this repo.
+name: installtest
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: installtest-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  id-token: write       # Workload Identity Federation (mint the enroll token)
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  installtest:
+    name: install test (${{ matrix.os }})
+    # Same-repo only: fork PRs get a skipped check (see header).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false        # a red Windows leg must not hide a green Linux leg
+      matrix:
+        include:
+          - os: linux
+            runs-on: ubuntu-24.04
+            timeout: 20
+          - os: windows
+            # Self-hosted ephemeral Windows guest — the job runs ELEVATED
+            # inside a disposable VM, so install.ps1's real SCM service
+            # install works while the host stays protected by the VM
+            # boundary. `build` is the pool label. Revert to `windows-latest`
+            # to fall back to GitHub-hosted.
+            runs-on: [self-hosted, windows, x64, build]
+            timeout: 30
+          - os: macos
+            # Self-hosted ephemeral macOS VM; the runner carries a superset
+            # of these labels so this subset AND-matches.
+            runs-on: [self-hosted, macos, arm64, build]
+            timeout: 25
+    env:
+      # Tier 2: hands-free enroll vs the real dev control plane (#339 grant).
+      IT_ENROLL_MODE: oidc
+      IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # The self-hosted Windows/macOS images bake the Go toolchain +
+          # caches locally — a remote restore is redundant and the "Post"
+          # cache save is pure waste. Only Linux keeps GitHub's remote cache
+          # (mirrors reusable-build-artifacts.yml).
+          cache: ${{ matrix.os == 'linux' }}
+
+      # gcloud needs Python ≥3.10; the macOS image's default python3 is older
+      # and its runner .env is not applied to JIT jobs, so point gcloud at the
+      # baked Homebrew python explicitly. Windows bakes a Machine-scope
+      # CLOUDSDK_PYTHON (inherited by JIT jobs), Linux is already ≥3.10.
+      - name: point gcloud at the image's Python ≥3.10 (self-hosted macOS)
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          py="$(/opt/homebrew/bin/brew --prefix python@3.14)/bin/python3.14"
+          test -x "$py"
+          echo "CLOUDSDK_PYTHON=$py" >> "$GITHUB_ENV"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      # gcloud uses the WIF credential to mint the SA id_token in the harness.
+      # Windows skips the SDK install — the image already bakes gcloud, and
+      # setup-gcloud's extensionless-zip unpack fails outside GH-hosted images.
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          skip_install: ${{ matrix.os == 'windows' }}
+
+      # Linux: build the worktree deb + serve it from a signed local apt repo
+      # on loopback, then run install.sh in place (systemd is PID 1 on the
+      # disposable runner) and assert Tier 1 (package/user/state-dir/unit
+      # enabled+active/idempotency/self-heal) + Tier 2 (hands-free enroll →
+      # enrolled daemon). IT_LOCAL=1 is the run-in-place mode; the destructive
+      # opt-in guards a dev from running it on a workstation.
+      - name: install test (linux, tier 1+2)
+        if: matrix.os == 'linux'
+        env:
+          IT_LOCAL: "1"
+          IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/go/bin:$PATH"
+          bash scripts/dev/installtest-host-up.sh
+          bash scripts/dev/installtest-run.sh --tier 2
+
+      # Windows: build the exes, pack the release zip, serve it from a
+      # loopback mirror, run install.ps1 in place (the job is elevated, so
+      # the inline SCM path runs — no UAC), Tier-1 asserts, hands-free OIDC
+      # enroll (Tier 2), then the waired#760 additions: contract asserts
+      # (#749/#751/#755 — soft while open), non-elevated `waired status`
+      # contexts, teardown via uninstall.ps1 -Clean with leftover asserts
+      # (#754 — soft), and the Inno .exe-install variant (ISCC is baked into
+      # the runner image).
+      - name: install test (windows, tier 1+2 + contract + exe variant)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./scripts/dev/installtest-windows.ps1 -Tier 2 -Contract -ExeVariant
+
+      # High-fidelity AMSI canary (#553 Gate B). The install test above runs
+      # a call-operator on the on-disk file, so the AMSI-of-body path that
+      # `iwr | iex` users hit stays untested even here; this scans the
+      # installer scripts through the live Defender engine on the same
+      # Defender-live guest. SOFT-FAIL: a non-deterministic Defender verdict
+      # (engine/defs/cloud drift) must not red an always-on check.
+      - name: AMSI canary (windows, Defender-live) — soft-fail
+        if: matrix.os == 'windows'
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/dev/amsi-scan.ps1 -Strict -OnNoProvider fail -ClearExclusionsForScan
+
+      # macOS: build the darwin tarball, point install.sh's darwin path at it
+      # (file://), run it, assert binaries + the system LaunchDaemon plist +
+      # root-owned state dir, then a hands-free OIDC enroll (Tier 2). The
+      # agent is a system LaunchDaemon — it bootstraps + enrolls headless.
+      # Needs passwordless sudo (the ephemeral VM admin has it).
+      - name: install test (macos, tier 1+2)
+        if: matrix.os == 'macos'
+        run: bash scripts/dev/installtest-macos.sh --tier 2
