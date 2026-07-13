@@ -128,6 +128,11 @@ option is that tiny model, it offers to turn local inference off. You can revisi
 either choice later with `waired runtimes benchmark`, or by re-running
 `waired init` on better hardware.
 
+Note: the benchmark now measures the model's pure decode rate, excluding
+request overhead, so tok/s figures read higher than in earlier releases
+(which understated fast machines). The first start after upgrading re-measures
+once instead of reusing the old cached number.
+
 ### The system tray icon doesn't appear (Linux / GNOME)
 
 GNOME has no built-in system tray, so the `waired-tray` icon only renders when an

@@ -23,7 +23,12 @@ import (
 // latency is no longer inside the measured window. v1 entries on
 // cold-booted hosts under-reported tok/s by up to ~20× and must be
 // re-measured.
-const benchCacheSchemaVersion = 2
+//
+// v3 (#764): TokensPerSec is a decode rate — ollama eval counters or
+// the two-length slope, median of benchSampleCount runs. v2 single-run
+// wall-clock numbers understate fast hosts ~35% (fixed ~1.4 s request
+// overhead attributed to decode) and must be re-measured.
+const benchCacheSchemaVersion = 3
 
 // benchCacheFile is the on-disk form of the boot benchmark cache.
 // Lives at $XDG_CACHE_HOME/waired/bench.json (or ~/.cache/waired/bench.json).
@@ -47,15 +52,19 @@ type benchCacheFile struct {
 // an operator open bench.json in a text editor and see what was
 // measured without reversing the sha256.
 type benchCacheEntry struct {
-	TokensPerSec  float64   `json:"tokens_per_sec"`
-	Capacity      int       `json:"capacity"`
-	VariantID     string    `json:"variant_id"`
-	GPUModel      string    `json:"gpu_model"`
-	VRAMTotalMB   int       `json:"vram_total_mb,omitempty"`
-	DriverVersion string    `json:"driver_version,omitempty"`
-	EngineKind    string    `json:"engine_kind"`
-	EngineModel   string    `json:"engine_model,omitempty"`
-	MeasuredAt    time.Time `json:"measured_at"`
+	TokensPerSec  float64 `json:"tokens_per_sec"`
+	Capacity      int     `json:"capacity"`
+	VariantID     string  `json:"variant_id"`
+	GPUModel      string  `json:"gpu_model"`
+	VRAMTotalMB   int     `json:"vram_total_mb,omitempty"`
+	DriverVersion string  `json:"driver_version,omitempty"`
+	EngineKind    string  `json:"engine_kind"`
+	EngineModel   string  `json:"engine_model,omitempty"`
+	// Method / SpreadPct mirror BenchResult (#764) so an operator can
+	// see how a cached number was measured and how noisy it was.
+	Method     string    `json:"method,omitempty"`
+	SpreadPct  float64   `json:"spread_pct,omitempty"`
+	MeasuredAt time.Time `json:"measured_at"`
 }
 
 // benchCacheHumanMeta carries the identifying inputs that get embedded
@@ -142,6 +151,8 @@ func (c *benchCache) Load(key string) (BenchResult, time.Time, bool, error) {
 		TokensPerSec: entry.TokensPerSec,
 		Capacity:     entry.Capacity,
 		VariantID:    entry.VariantID,
+		Method:       entry.Method,
+		SpreadPct:    entry.SpreadPct,
 	}, entry.MeasuredAt, true, nil
 }
 
@@ -188,6 +199,8 @@ func (c *benchCache) Store(key string, r BenchResult, meta benchCacheHumanMeta, 
 		DriverVersion: meta.DriverVersion,
 		EngineKind:    meta.EngineKind,
 		EngineModel:   meta.EngineModel,
+		Method:        r.Method,
+		SpreadPct:     r.SpreadPct,
 		MeasuredAt:    now,
 	}
 	buf, err := json.MarshalIndent(file, "", "  ")

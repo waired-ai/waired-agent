@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/router"
@@ -19,11 +20,20 @@ import (
 // Capacity is the Phase 7 admission cap the agent will advertise to
 // the mesh.
 type BenchResult struct {
+	// TokensPerSec is the measured decode rate (#764): tokens the
+	// engine generates per second of decode time, excluding prompt
+	// prefill and fixed request overhead. Method records how it was
+	// obtained; only the wall_clock fallback still contains overhead.
 	TokensPerSec float64
 	Capacity     int
 	VariantID    string
-	Failed       bool
-	Err          string
+	// Method is the benchMethod* constant that produced TokensPerSec.
+	Method string
+	// SpreadPct is (max-min)/median over the samples behind
+	// TokensPerSec, in percent. 0 for single-sample results.
+	SpreadPct float64
+	Failed    bool
+	Err       string
 }
 
 // avgCodingAgentTokRate is the rough steady-state token throughput
@@ -64,6 +74,47 @@ func resolveInteractiveFloor(cfg float64) float64 {
 // few decoder iterations (where most overhead lives), short enough
 // to keep the boot path under ~10 s on a midrange GPU.
 const benchPromptCompletionTokens = 200
+
+// benchSampleCount is how many measurements the benchmark takes after
+// warm-up; the reported rate is their median (#764). Run-to-run spread
+// was measured at ~8%, so the median mostly guards against a single
+// warm-up blip rather than averaging noise.
+const benchSampleCount = 3
+
+// benchSlopeShortTokens / benchSlopeLongTokens are the two completion
+// lengths of the slope method (#764): measuring a short and a long run
+// and dividing the token delta by the elapsed delta cancels the fixed
+// per-request overhead (HTTP, scheduling, prompt prefill, first-token
+// latency) that a single wall-clock run silently attributes to decode
+// — that bias understated fast hosts by ~35%. Used on engines whose
+// OpenAI-compat response carries no decode-timing counters (vLLM).
+const (
+	benchSlopeShortTokens = 64
+	benchSlopeLongTokens  = 256
+)
+
+// benchMeasureBudget bounds the whole multi-sample measurement loop.
+// When it expires with at least one valid sample, the median of what
+// completed is used; a healthy host finishes all samples in seconds.
+const benchMeasureBudget = 120 * time.Second
+
+// benchMethod* record how BenchResult.TokensPerSec was measured, in
+// descending order of fidelity. The fallback chain is
+// ollama_eval → openai_slope → wall_clock (#764).
+const (
+	// benchMethodOllamaEval: pure decode rate from ollama's native
+	// /api/generate eval_count / eval_duration counters — the same
+	// source the depth benchmark uses, so the #133 shallow-vs-depth
+	// floor comparison is apples to apples.
+	benchMethodOllamaEval = "ollama_eval"
+	// benchMethodSlope: two-length wall-clock slope over the
+	// OpenAI-compat endpoint; overhead-corrected but engine-agnostic.
+	benchMethodSlope = "openai_slope"
+	// benchMethodWallClock: the legacy completion_tokens/elapsed of the
+	// best single run. Still overhead-contaminated (understates fast
+	// hosts); only used when both corrected methods are unavailable.
+	benchMethodWallClock = "wall_clock"
+)
 
 // benchTimeout caps the timed measurement request only — the warm-up
 // that precedes it absorbs model-load latency under its own deadline.
@@ -206,6 +257,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 				"key", cacheKey,
 				"capacity", cached.Capacity,
 				"tokens_per_sec", cached.TokensPerSec,
+				"method", cached.Method,
 				"measured_at", measuredAt.UTC().Format(time.RFC3339),
 				"age", deps.Now().Sub(measuredAt).Truncate(time.Second).String())
 			return cached
@@ -223,49 +275,16 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		return failBench(deps, "warmup", err)
 	}
 
-	bctx, cancel := context.WithTimeout(ctx, benchTimeout)
-	defer cancel()
-
-	req, err := benchChatRequest(bctx, deps, benchPromptCompletionTokens)
-	if err != nil {
-		return failBench(deps, "build_request", err)
-	}
-
-	start := deps.Now()
-	resp, err := deps.HTTPClient.Do(req)
-	elapsed := deps.Now().Sub(start)
+	tokps, spread, samples, method, err := measureDecodeRate(ctx, deps)
 	if err != nil {
 		// Distinguish timeout (context deadline) from other errors
 		// in the log line so operators can tell "model loading too
 		// slow" from "engine not listening".
-		if errors.Is(bctx.Err(), context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) {
 			return failBench(deps, "timeout", err)
 		}
-		return failBench(deps, "dial_or_send", err)
+		return failBench(deps, "measure", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return failBench(deps, "http_status", fmt.Errorf("HTTP %d", resp.StatusCode))
-	}
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
-	if err != nil {
-		return failBench(deps, "read_response", err)
-	}
-	tokens, err := extractCompletionTokens(respBody)
-	if err != nil {
-		return failBench(deps, "parse_completion_tokens", err)
-	}
-	if tokens <= 0 {
-		return failBench(deps, "zero_tokens", fmt.Errorf("response reported %d completion tokens", tokens))
-	}
-	if elapsed <= 0 {
-		// Clock that doesn't move — only happens with broken Now
-		// injection. Treat as a benchmark failure so the test
-		// surface doesn't paper over a real wiring bug.
-		return failBench(deps, "zero_elapsed", fmt.Errorf("benchmark elapsed time was %v", elapsed))
-	}
-	tokps := float64(tokens) / elapsed.Seconds()
 	cap := int(tokps / avgCodingAgentTokRate)
 	if cap < 1 {
 		cap = 1
@@ -274,14 +293,17 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		"engine_kind", deps.EngineKind,
 		"variant", deps.VariantID,
 		"engine_model", deps.EngineModel,
-		"tokens", tokens,
-		"elapsed_ms", elapsed.Milliseconds(),
+		"method", method,
+		"samples", samples,
+		"spread_pct", fmt.Sprintf("%.1f", spread),
 		"tokens_per_sec", tokps,
 		"capacity", cap)
 	result := BenchResult{
 		TokensPerSec: tokps,
 		Capacity:     cap,
 		VariantID:    deps.VariantID,
+		Method:       method,
+		SpreadPct:    spread,
 	}
 	// Phase 7 follow-up (C2): persist only successful measurements.
 	// failBench paths return above without reaching this point so
@@ -354,6 +376,262 @@ func warmUpEngine(ctx context.Context, deps BenchDeps) error {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// errNoEvalCounters signals the engine's native endpoint is absent or
+// its response carries no usable eval counters (older ollama, an
+// OpenAI-compat proxy on the engine port). The caller falls back to
+// the slope method instead of failing the benchmark.
+var errNoEvalCounters = errors.New("no decode counters in engine response")
+
+// errSlopeDegenerate signals every slope pair collapsed (long run not
+// measurably longer than the short one — proxy caching, coarse clock).
+// The caller may salvage a wall-clock rate from the best single run.
+var errSlopeDegenerate = errors.New("all slope sample pairs degenerate")
+
+// measureDecodeRate runs the #764 measurement chain and returns the
+// median decode rate with its sample spread and the benchMethod* that
+// produced it: ollama's native eval counters when available, the
+// two-length slope on the OpenAI-compat surface otherwise, and the
+// legacy single-run wall clock when even the slope is degenerate. The
+// whole loop shares one benchMeasureBudget deadline; each request
+// keeps its own benchTimeout.
+func measureDecodeRate(ctx context.Context, deps BenchDeps) (float64, float64, int, string, error) {
+	mctx, cancel := context.WithTimeout(ctx, benchMeasureBudget)
+	defer cancel()
+	if deps.EngineKind == signer.InferenceTypeOllama {
+		tokps, spread, samples, err := measureOllamaNative(mctx, deps)
+		if err == nil {
+			return tokps, spread, samples, benchMethodOllamaEval, nil
+		}
+		if !errors.Is(err, errNoEvalCounters) {
+			return 0, 0, 0, "", err
+		}
+		deps.Logger.Warn("inference boot benchmark: engine returned no decode counters; falling back to two-length slope",
+			"err", err)
+	}
+	tokps, spread, samples, best, err := measureOpenAISlope(mctx, deps)
+	if err == nil {
+		return tokps, spread, samples, benchMethodSlope, nil
+	}
+	if errors.Is(err, errSlopeDegenerate) && best.tokens > 0 && best.elapsed > 0 {
+		deps.Logger.Warn("inference boot benchmark: slope degenerate; falling back to single-run wall clock (overhead-contaminated, understates fast hosts)",
+			"err", err)
+		return float64(best.tokens) / best.elapsed.Seconds(), 0, 1, benchMethodWallClock, nil
+	}
+	return 0, 0, 0, "", err
+}
+
+// ollamaGenerateOnce issues one native /api/generate completion and
+// returns the pure decode rate from eval_count/eval_duration — the
+// same counters (and endpoint) the depth benchmark reads, so the #133
+// shallow-vs-depth floor comparison shares one measurement basis.
+func ollamaGenerateOnce(ctx context.Context, deps BenchDeps, numPredict int) (float64, error) {
+	rctx, cancel := context.WithTimeout(ctx, benchTimeout)
+	defer cancel()
+	body, err := json.Marshal(map[string]any{
+		"model":  deps.EngineModel,
+		"prompt": benchPrompt,
+		"stream": false,
+		"options": map[string]any{
+			"num_predict": numPredict,
+			"temperature": 0,
+		},
+	})
+	if err != nil {
+		return 0, err
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/generate", deps.EnginePort)
+	req, err := http.NewRequestWithContext(rctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := deps.HTTPClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		// Nothing native behind this port (proxy, non-ollama server).
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return 0, fmt.Errorf("%w: /api/generate returned 404", errNoEvalCounters)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var gen struct {
+		EvalCount    int   `json:"eval_count"`
+		EvalDuration int64 `json:"eval_duration"` // ns
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(&gen); err != nil {
+		return 0, err
+	}
+	if gen.EvalCount <= 0 || gen.EvalDuration <= 0 {
+		return 0, fmt.Errorf("%w: eval_count=%d eval_duration=%d",
+			errNoEvalCounters, gen.EvalCount, gen.EvalDuration)
+	}
+	return float64(gen.EvalCount) / (float64(gen.EvalDuration) / 1e9), nil
+}
+
+// measureOllamaNative takes up to benchSampleCount native decode
+// samples and reduces them to (median, spread, count). An error after
+// at least one valid sample truncates the loop instead of discarding
+// it — the shared measurement budget is the usual cause.
+func measureOllamaNative(ctx context.Context, deps BenchDeps) (float64, float64, int, error) {
+	var rates []float64
+	for i := 0; i < benchSampleCount; i++ {
+		r, err := ollamaGenerateOnce(ctx, deps, benchPromptCompletionTokens)
+		if err != nil {
+			if len(rates) > 0 {
+				deps.Logger.Warn("inference boot benchmark: sample failed; using completed samples",
+					"completed", len(rates), "err", err)
+				break
+			}
+			return 0, 0, 0, err
+		}
+		rates = append(rates, r)
+	}
+	return medianFloat(rates), spreadPercent(rates), len(rates), nil
+}
+
+// benchSingleRun is one completed OpenAI-compat run, retained so the
+// wall-clock fallback can salvage a rate when every slope pair is
+// degenerate.
+type benchSingleRun struct {
+	tokens  int
+	elapsed time.Duration
+}
+
+// track keeps the run with the highest wall-clock rate seen so far.
+func (b *benchSingleRun) track(tokens int, elapsed time.Duration) {
+	if tokens <= 0 || elapsed <= 0 {
+		return
+	}
+	if b.elapsed <= 0 ||
+		float64(tokens)/elapsed.Seconds() > float64(b.tokens)/b.elapsed.Seconds() {
+		b.tokens, b.elapsed = tokens, elapsed
+	}
+}
+
+// measureOpenAISlope estimates the decode rate as the slope between a
+// short and a long completion of the same prompt:
+//
+//	tokps = (tok_long − tok_short) / (elapsed_long − elapsed_short)
+//
+// The subtraction cancels the fixed per-request overhead (HTTP,
+// scheduling, prefill, first-token latency) that a single wall-clock
+// run silently attributes to decode. Up to benchSampleCount pairs are
+// measured; the median slope wins. Degenerate pairs are skipped; if
+// none survive, errSlopeDegenerate is returned along with the best
+// single run for the caller's wall-clock fallback.
+func measureOpenAISlope(ctx context.Context, deps BenchDeps) (float64, float64, int, benchSingleRun, error) {
+	var slopes []float64
+	var best benchSingleRun
+	for i := 0; i < benchSampleCount; i++ {
+		shortTok, shortEl, err := timedChatCompletion(ctx, deps, benchSlopeShortTokens)
+		if err != nil {
+			if len(slopes) > 0 {
+				deps.Logger.Warn("inference boot benchmark: sample failed; using completed samples",
+					"completed", len(slopes), "err", err)
+				break
+			}
+			return 0, 0, 0, best, err
+		}
+		best.track(shortTok, shortEl)
+		longTok, longEl, err := timedChatCompletion(ctx, deps, benchSlopeLongTokens)
+		if err != nil {
+			if len(slopes) > 0 {
+				break
+			}
+			return 0, 0, 0, best, err
+		}
+		best.track(longTok, longEl)
+		if longEl <= shortEl || longTok <= shortTok {
+			continue // degenerate pair; nothing to divide
+		}
+		slopes = append(slopes, float64(longTok-shortTok)/(longEl-shortEl).Seconds())
+	}
+	if len(slopes) == 0 {
+		return 0, 0, 0, best, errSlopeDegenerate
+	}
+	return medianFloat(slopes), spreadPercent(slopes), len(slopes), best, nil
+}
+
+// timedChatCompletion issues one non-streaming chat completion and
+// returns (completion tokens, wall-clock elapsed). On its own the
+// elapsed still contains fixed request overhead — callers cancel it
+// via the slope, or accept the bias in the wall-clock fallback.
+func timedChatCompletion(ctx context.Context, deps BenchDeps, maxTokens int) (int, time.Duration, error) {
+	rctx, cancel := context.WithTimeout(ctx, benchTimeout)
+	defer cancel()
+	req, err := benchChatRequest(rctx, deps, maxTokens)
+	if err != nil {
+		return 0, 0, err
+	}
+	start := deps.Now()
+	resp, err := deps.HTTPClient.Do(req)
+	elapsed := deps.Now().Sub(start)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return 0, 0, err
+	}
+	tokens, err := extractCompletionTokens(respBody)
+	if err != nil {
+		return 0, 0, err
+	}
+	if tokens <= 0 {
+		return 0, 0, fmt.Errorf("response reported %d completion tokens", tokens)
+	}
+	if elapsed <= 0 {
+		// Clock that doesn't move — only happens with broken Now
+		// injection. Error out so the test surface doesn't paper
+		// over a real wiring bug.
+		return 0, 0, fmt.Errorf("elapsed time was %v", elapsed)
+	}
+	return tokens, elapsed, nil
+}
+
+// medianFloat returns the median of xs (0 for an empty slice); xs is
+// not mutated.
+func medianFloat(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	s := append([]float64(nil), xs...)
+	sort.Float64s(s)
+	mid := len(s) / 2
+	if len(s)%2 == 1 {
+		return s[mid]
+	}
+	return (s[mid-1] + s[mid]) / 2
+}
+
+// spreadPercent is (max−min)/median in percent — a cheap dispersion
+// signal recorded with the measurement so noisy hosts are visible in
+// logs and the bench cache. 0 for fewer than two samples.
+func spreadPercent(xs []float64) float64 {
+	m := medianFloat(xs)
+	if len(xs) < 2 || m <= 0 {
+		return 0
+	}
+	lo, hi := xs[0], xs[0]
+	for _, x := range xs[1:] {
+		if x < lo {
+			lo = x
+		}
+		if x > hi {
+			hi = x
+		}
+	}
+	return (hi - lo) / m * 100
 }
 
 // failBench logs a warning and returns Capacity=1 so the agent

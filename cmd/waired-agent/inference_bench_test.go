@@ -32,6 +32,60 @@ func fakeNow(start time.Time, step time.Duration) func() time.Time {
 	}
 }
 
+// fakeNowScript returns a clock whose i-th call advances by steps[i]
+// (the last step repeats when exhausted). The slope method needs
+// per-request elapsed control — a fixed-step clock gives every request
+// the same elapsed, which makes every slope denominator zero.
+func fakeNowScript(start time.Time, steps ...time.Duration) func() time.Time {
+	cur, i := start, 0
+	return func() time.Time {
+		out := cur
+		step := steps[len(steps)-1]
+		if i < len(steps) {
+			step = steps[i]
+		}
+		cur = cur.Add(step)
+		i++
+		return out
+	}
+}
+
+// fakeOllamaEngine serves both surfaces a real ollama exposes: the
+// OpenAI-compat /v1/chat/completions (used by the warm-up) and the
+// native /api/generate the #764 measurement reads eval counters from.
+// evalDurationsNS are handed out per generate call in order (the last
+// repeats); generatePaths/chatMaxTokens record what the engine saw.
+type fakeOllamaEngine struct {
+	evalCount       int
+	evalDurationsNS []int64
+	generateCalls   atomic.Int64
+	chatMaxTokens   []int
+}
+
+func (f *fakeOllamaEngine) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/generate":
+			n := int(f.generateCalls.Add(1)) - 1
+			dur := f.evalDurationsNS[len(f.evalDurationsNS)-1]
+			if n < len(f.evalDurationsNS) {
+				dur = f.evalDurationsNS[n]
+			}
+			fmt.Fprintf(w, `{"eval_count":%d,"eval_duration":%d}`, f.evalCount, dur)
+		case "/v1/chat/completions":
+			var req struct {
+				MaxTokens int `json:"max_tokens"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			f.chatMaxTokens = append(f.chatMaxTokens, req.MaxTokens)
+			fmt.Fprint(w, `{"usage":{"completion_tokens":8},"choices":[{"message":{"content":"..."}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
 // TestRunBootBenchmark_NoEngineSkips covers the documented short-
 // circuits: an agent with EngineKind="none" or "" or port 0 must
 // return Capacity=0 without any HTTP call.
@@ -57,23 +111,20 @@ func TestRunBootBenchmark_NoEngineSkips(t *testing.T) {
 	}
 }
 
-// TestRunBootBenchmark_HappyPath drives the benchmark against a
-// fake engine that returns a realistic usage.completion_tokens
-// value, then asserts Capacity = floor(tokps / 30).
+// TestRunBootBenchmark_HappyPath drives the benchmark against a fake
+// ollama serving native eval counters (#764), then asserts the decode
+// rate is the median of the samples and Capacity = floor(tokps / 30).
 func TestRunBootBenchmark_HappyPath(t *testing.T) {
-	// Engine returns 200 tokens; clock advances by 1 s per call
-	// (start time on .Do entry, end time on .Do return).
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
-			"usage": {"completion_tokens": 200},
-			"choices": [{"message": {"content": "..."}}]
-		}`)
-	}))
+	// Three samples at 76.1 / 78.0 / 82.3 tok/s (eval_count 200 each):
+	// median 78.0, spread (82.3−76.1)/78.0 ≈ 7.9%.
+	engine := &fakeOllamaEngine{
+		evalCount:       200,
+		evalDurationsNS: []int64{2_628_120_894, 2_564_102_564, 2_430_133_657},
+	}
+	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 	port := portFromBenchURL(t, srv.URL)
 
-	// 200 tokens / 1 s = 200 tok/s → floor(200/30) = 6.
 	got := RunBootBenchmark(context.Background(), BenchDeps{
 		EngineKind:  signer.InferenceTypeOllama,
 		EnginePort:  port,
@@ -86,33 +137,40 @@ func TestRunBootBenchmark_HappyPath(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("Failed=true, want successful happy-path; err=%q", got.Err)
 	}
-	if got.Capacity != 6 {
-		t.Errorf("Capacity = %d, want 6 (200 tokens / 1s / 30)", got.Capacity)
+	if got.Method != benchMethodOllamaEval {
+		t.Errorf("Method = %q, want %q", got.Method, benchMethodOllamaEval)
+	}
+	if got.TokensPerSec < 77.9 || got.TokensPerSec > 78.1 {
+		t.Errorf("TokensPerSec = %.2f, want median ≈ 78.0", got.TokensPerSec)
+	}
+	if got.SpreadPct < 7 || got.SpreadPct > 9 {
+		t.Errorf("SpreadPct = %.2f, want ≈ 7.9", got.SpreadPct)
+	}
+	// floor(78.0/30) = 2.
+	if got.Capacity != 2 {
+		t.Errorf("Capacity = %d, want 2 (median 78 tok/s / 30)", got.Capacity)
 	}
 	if got.VariantID != "q4-gguf" {
 		t.Errorf("VariantID = %q, want q4-gguf", got.VariantID)
+	}
+	if n := engine.generateCalls.Load(); n != int64(benchSampleCount) {
+		t.Errorf("engine saw %d generate calls, want %d", n, benchSampleCount)
 	}
 }
 
 // TestRunBootBenchmark_WarmupPrecedesMeasurement asserts the cold-load
 // fix: the benchmark issues one tiny untimed completion first (so the
 // engine loads the model outside the measured window) and only then
-// the timed 200-token request. A cold 17 GB load inside the window
+// the native measurement samples. A cold 17 GB load inside the window
 // used to read as single-digit tok/s and trigger bogus lighter-model
 // recommendations.
 func TestRunBootBenchmark_WarmupPrecedesMeasurement(t *testing.T) {
-	var maxTokensSeen []int
+	var order []string
+	engine := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{1_000_000_000}}
+	inner := engine.handler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			MaxTokens int `json:"max_tokens"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		maxTokensSeen = append(maxTokensSeen, req.MaxTokens)
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{
-			"usage": {"completion_tokens": 200},
-			"choices": [{"message": {"content": "..."}}]
-		}`)
+		order = append(order, r.URL.Path)
+		inner(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	port := portFromBenchURL(t, srv.URL)
@@ -126,20 +184,25 @@ func TestRunBootBenchmark_WarmupPrecedesMeasurement(t *testing.T) {
 	if got.Failed {
 		t.Fatalf("Failed=true, want success; err=%q", got.Err)
 	}
-	if len(maxTokensSeen) != 2 {
-		t.Fatalf("engine saw %d requests, want 2 (warm-up + measurement)", len(maxTokensSeen))
+	if len(order) != 1+benchSampleCount {
+		t.Fatalf("engine saw %d requests %v, want %d (warm-up + %d samples)",
+			len(order), order, 1+benchSampleCount, benchSampleCount)
 	}
-	if maxTokensSeen[0] != benchWarmupCompletionTokens {
-		t.Errorf("first request max_tokens = %d, want warm-up %d", maxTokensSeen[0], benchWarmupCompletionTokens)
+	if order[0] != "/v1/chat/completions" {
+		t.Errorf("first request path = %q, want the OpenAI-compat warm-up", order[0])
 	}
-	if maxTokensSeen[1] != benchPromptCompletionTokens {
-		t.Errorf("second request max_tokens = %d, want measurement %d", maxTokensSeen[1], benchPromptCompletionTokens)
+	if len(engine.chatMaxTokens) != 1 || engine.chatMaxTokens[0] != benchWarmupCompletionTokens {
+		t.Errorf("warm-up max_tokens = %v, want [%d]", engine.chatMaxTokens, benchWarmupCompletionTokens)
 	}
-	// The fake clock is only consulted by the timed request (start +
-	// end = 1 s): had the warm-up been measured too, the elapsed time
-	// and therefore Capacity would differ from floor(200/1/30) = 6.
+	for i, p := range order[1:] {
+		if p != "/api/generate" {
+			t.Errorf("request %d path = %q, want /api/generate", i+1, p)
+		}
+	}
+	// Decode rate comes from the engine's eval counters (200 tokens in
+	// 1 s), not the fake wall clock — the warm-up cannot pollute it.
 	if got.Capacity != 6 {
-		t.Errorf("Capacity = %d, want 6 (warm-up must not consume measured time)", got.Capacity)
+		t.Errorf("Capacity = %d, want 6 (200 eval tok/s / 30)", got.Capacity)
 	}
 }
 
@@ -185,16 +248,12 @@ func TestRunBootBenchmark_WarmupFailureShortCircuits(t *testing.T) {
 // 0 would conflate "slow" with "external endpoint, no cap" and
 // over-admit on a feeble peer.
 func TestRunBootBenchmark_LowThroughputClampsToOne(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{
-			"usage": {"completion_tokens": 5},
-			"choices": [{"message": {"content": "..."}}]
-		}`)
-	}))
+	// 200 tokens in 40 s of decode = 5 tok/s → floor(5/30) = 0 → 1.
+	engine := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{40_000_000_000}}
+	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 	port := portFromBenchURL(t, srv.URL)
 
-	// 5 tokens / 1 s = 5 tok/s → floor(5/30) = 0 → clamped to 1.
 	got := RunBootBenchmark(context.Background(), BenchDeps{
 		EngineKind:  signer.InferenceTypeOllama,
 		EnginePort:  port,
@@ -233,21 +292,158 @@ func TestRunBootBenchmark_EngineErrorReturnsCap1(t *testing.T) {
 	}
 }
 
-// TestRunBootBenchmark_FallsBackToContentWordCount exercises the
-// secondary path: an engine that omits usage.completion_tokens
-// (some Ollama versions) still produces a useful estimate via
-// whitespace-split of the content. The estimate is off by ~10% but
-// the admission cap is order-of-magnitude — that's good enough.
-func TestRunBootBenchmark_FallsBackToContentWordCount(t *testing.T) {
+// TestRunBootBenchmark_SlopeCancelsFixedOverhead is the headline #764
+// case: a vLLM-style engine (no native eval counters) whose every
+// request carries 1.4 s of fixed overhead on top of true 78 tok/s
+// decode. The legacy single-run formula reads ~55 tok/s off the long
+// run (256 / 4.68 s); the two-length slope recovers the true rate:
+// (256−64) / (4.68 s − 2.22 s) = 78.05.
+func TestRunBootBenchmark_SlopeCancelsFixedOverhead(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 60 words in content, no usage block.
+		var req struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"usage":{"completion_tokens":%d},"choices":[{"message":{"content":"..."}}]}`, req.MaxTokens)
+	}))
+	t.Cleanup(srv.Close)
+	port := portFromBenchURL(t, srv.URL)
+
+	// Now-call pattern per pair: [start short, end short, start long,
+	// end long] → steps [2.22s, 1ms, 4.68s, 1ms] repeating. The warm-up
+	// does not consult the clock.
+	steps := []time.Duration{
+		2220 * time.Millisecond, time.Millisecond,
+		4680 * time.Millisecond, time.Millisecond,
+	}
+	var script []time.Duration
+	for i := 0; i < benchSampleCount; i++ {
+		script = append(script, steps...)
+	}
+	got := RunBootBenchmark(context.Background(), BenchDeps{
+		EngineKind:  signer.InferenceTypeVLLM,
+		EnginePort:  port,
+		EngineModel: "Qwen/Qwen3-8B",
+		Now:         fakeNowScript(time.Unix(1_700_000_000, 0), script...),
+	})
+	if got.Failed {
+		t.Fatalf("Failed=true, want success; err=%q", got.Err)
+	}
+	if got.Method != benchMethodSlope {
+		t.Errorf("Method = %q, want %q", got.Method, benchMethodSlope)
+	}
+	if got.TokensPerSec < 77.5 || got.TokensPerSec > 78.5 {
+		t.Errorf("TokensPerSec = %.2f, want ≈ 78.05 (slope must cancel the 1.4 s overhead; legacy formula reads ~55)", got.TokensPerSec)
+	}
+	// floor(78.05/30) = 2.
+	if got.Capacity != 2 {
+		t.Errorf("Capacity = %d, want 2", got.Capacity)
+	}
+}
+
+// TestRunBootBenchmark_OllamaMissingCountersFallsBackToSlope covers an
+// ollama-kind engine whose /api/generate response carries no eval
+// counters (older ollama, an OpenAI-compat proxy on the engine port):
+// the benchmark degrades to the two-length slope instead of failing.
+func TestRunBootBenchmark_OllamaMissingCountersFallsBackToSlope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/generate" {
+			fmt.Fprint(w, `{"response":"..."}`) // no eval counters
+			return
+		}
+		var req struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		fmt.Fprintf(w, `{"usage":{"completion_tokens":%d},"choices":[{"message":{"content":"..."}}]}`, req.MaxTokens)
+	}))
+	t.Cleanup(srv.Close)
+	port := portFromBenchURL(t, srv.URL)
+
+	steps := []time.Duration{
+		time.Second, time.Millisecond,
+		2 * time.Second, time.Millisecond,
+	}
+	var script []time.Duration
+	for i := 0; i < benchSampleCount; i++ {
+		script = append(script, steps...)
+	}
+	got := RunBootBenchmark(context.Background(), BenchDeps{
+		EngineKind:  signer.InferenceTypeOllama,
+		EnginePort:  port,
+		EngineModel: "qwen3:8b-q4_K_M",
+		Now:         fakeNowScript(time.Unix(1_700_000_000, 0), script...),
+	})
+	if got.Failed {
+		t.Fatalf("Failed=true, want slope fallback success; err=%q", got.Err)
+	}
+	if got.Method != benchMethodSlope {
+		t.Errorf("Method = %q, want %q", got.Method, benchMethodSlope)
+	}
+	// (256−64) / (2s − 1s) = 192 tok/s → floor(192/30) = 6.
+	if got.Capacity != 6 {
+		t.Errorf("Capacity = %d, want 6", got.Capacity)
+	}
+}
+
+// TestRunBootBenchmark_DegenerateSlopeFallsBackToWallClock covers the
+// last rung of the #764 chain: an engine (or proxy) that returns a
+// fixed-size response in constant time defeats both corrected methods;
+// the benchmark salvages the legacy single-run wall-clock rate via the
+// content word count rather than failing. The estimate is off but the
+// admission cap is order-of-magnitude — good enough, and warn-logged.
+func TestRunBootBenchmark_DegenerateSlopeFallsBackToWallClock(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 60 words in content, no usage block, same for every request.
 		content := strings.Repeat("alpha beta gamma delta epsilon zeta ", 10)
 		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, content)
 	}))
 	t.Cleanup(srv.Close)
 	port := portFromBenchURL(t, srv.URL)
 
-	// 60 tokens / 1s / 30 = 2.
+	// Fixed-step clock: every request takes 1 s → every slope pair is
+	// degenerate (same tokens, same elapsed).
+	got := RunBootBenchmark(context.Background(), BenchDeps{
+		EngineKind:  signer.InferenceTypeVLLM,
+		EnginePort:  port,
+		EngineModel: "Qwen/Qwen3-8B",
+		Now:         fakeNow(time.Unix(1_700_000_000, 0), time.Second),
+	})
+	if got.Failed {
+		t.Errorf("Failed = true; wall-clock fallback should still succeed; err=%q", got.Err)
+	}
+	if got.Method != benchMethodWallClock {
+		t.Errorf("Method = %q, want %q", got.Method, benchMethodWallClock)
+	}
+	// 60 tokens / 1 s / 30 = 2.
+	if got.Capacity != 2 {
+		t.Errorf("Capacity = %d, want 2", got.Capacity)
+	}
+}
+
+// TestRunBootBenchmark_PartialSamplesTruncate asserts an error after
+// at least one valid native sample keeps the completed samples rather
+// than failing the whole benchmark (budget expiry mid-loop is the
+// usual cause).
+func TestRunBootBenchmark_PartialSamplesTruncate(t *testing.T) {
+	var generateCalls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/generate" {
+			if generateCalls.Add(1) > 1 {
+				http.Error(w, "engine wedged", http.StatusInternalServerError)
+				return
+			}
+			fmt.Fprint(w, `{"eval_count":200,"eval_duration":2000000000}`) // 100 tok/s
+			return
+		}
+		fmt.Fprint(w, `{"usage":{"completion_tokens":8},"choices":[{"message":{"content":"..."}}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	port := portFromBenchURL(t, srv.URL)
+
 	got := RunBootBenchmark(context.Background(), BenchDeps{
 		EngineKind:  signer.InferenceTypeOllama,
 		EnginePort:  port,
@@ -255,10 +451,16 @@ func TestRunBootBenchmark_FallsBackToContentWordCount(t *testing.T) {
 		Now:         fakeNow(time.Unix(1_700_000_000, 0), time.Second),
 	})
 	if got.Failed {
-		t.Errorf("Failed = true; word-count fallback should still succeed; err=%q", got.Err)
+		t.Fatalf("Failed=true, want truncated success; err=%q", got.Err)
 	}
-	if got.Capacity < 1 {
-		t.Errorf("Capacity = %d, want >= 1", got.Capacity)
+	if got.Method != benchMethodOllamaEval {
+		t.Errorf("Method = %q, want %q", got.Method, benchMethodOllamaEval)
+	}
+	if got.TokensPerSec != 100 {
+		t.Errorf("TokensPerSec = %.2f, want 100 (single completed sample)", got.TokensPerSec)
+	}
+	if got.SpreadPct != 0 {
+		t.Errorf("SpreadPct = %.2f, want 0 for a single sample", got.SpreadPct)
 	}
 }
 
@@ -336,7 +538,10 @@ func TestRunBootBenchmark_CacheHitShortCircuits(t *testing.T) {
 	dir := t.TempDir()
 	cache := newBenchCache(filepath.Join(dir, "bench.json"), nil)
 
-	cached := BenchResult{TokensPerSec: 99.0, Capacity: 3, VariantID: "qwen3-8b-q4-gguf"}
+	cached := BenchResult{
+		TokensPerSec: 99.0, Capacity: 3, VariantID: "qwen3-8b-q4-gguf",
+		Method: benchMethodOllamaEval, SpreadPct: 4.2,
+	}
 	meta := benchCacheHumanMeta{
 		VariantID: "qwen3-8b-q4-gguf", GPUModel: "RTX 4090", VRAMTotalMB: 24576,
 		DriverVersion: "595.0", EngineKind: "ollama", EngineModel: "qwen3:8b",
@@ -364,6 +569,9 @@ func TestRunBootBenchmark_CacheHitShortCircuits(t *testing.T) {
 	if got.Capacity != 3 || got.TokensPerSec != 99.0 || got.VariantID != "qwen3-8b-q4-gguf" {
 		t.Errorf("Cache hit returned wrong result: %+v", got)
 	}
+	if got.Method != benchMethodOllamaEval || got.SpreadPct != 4.2 {
+		t.Errorf("Method/SpreadPct did not round-trip through the cache: %+v", got)
+	}
 	if hits.Load() != 0 {
 		t.Errorf("engine was hit %d time(s); cache hit should short-circuit", hits.Load())
 	}
@@ -374,9 +582,11 @@ func TestRunBootBenchmark_CacheHitShortCircuits(t *testing.T) {
 // result is persisted, and a subsequent call hits the cache.
 func TestRunBootBenchmark_CacheMissMeasuresAndStores(t *testing.T) {
 	var hits atomic.Int64
+	engine := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{1_000_000_000}}
+	inner := engine.handler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		fmt.Fprint(w, `{"usage":{"completion_tokens":200},"choices":[{"message":{"content":"."}}]}`)
+		inner(w, r)
 	}))
 	t.Cleanup(srv.Close)
 	port := portFromBenchURL(t, srv.URL)
@@ -401,9 +611,10 @@ func TestRunBootBenchmark_CacheMissMeasuresAndStores(t *testing.T) {
 	if first.Failed || first.Capacity == 0 {
 		t.Fatalf("first run: failed=%v cap=%d", first.Failed, first.Capacity)
 	}
-	// A fresh measurement is warm-up + timed request.
-	if hits.Load() != 2 {
-		t.Fatalf("after first run, engine hit %d times; want 2 (warm-up + measure)", hits.Load())
+	// A fresh measurement is warm-up + benchSampleCount native samples.
+	wantHits := int64(1 + benchSampleCount)
+	if hits.Load() != wantHits {
+		t.Fatalf("after first run, engine hit %d times; want %d (warm-up + samples)", hits.Load(), wantHits)
 	}
 	if _, err := os.Stat(cachePath); err != nil {
 		t.Fatalf("cache file not written after measurement: %v", err)
@@ -416,8 +627,8 @@ func TestRunBootBenchmark_CacheMissMeasuresAndStores(t *testing.T) {
 	if second.Capacity != first.Capacity || second.TokensPerSec != first.TokensPerSec {
 		t.Errorf("second run did not return cached result: first=%+v second=%+v", first, second)
 	}
-	if hits.Load() != 2 {
-		t.Errorf("after second run, engine hit %d times; want 2 (cache should serve, no new requests)", hits.Load())
+	if hits.Load() != wantHits {
+		t.Errorf("after second run, engine hit %d times; want %d (cache should serve, no new requests)", hits.Load(), wantHits)
 	}
 }
 
@@ -456,9 +667,8 @@ func TestRunBootBenchmark_FailedMeasurementNotPersisted(t *testing.T) {
 // hosts (empty GPUModel) and variants with no SHA: the benchmark
 // still measures, but no file is written.
 func TestRunBootBenchmark_NoCacheKeyDisablesCaching(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"usage":{"completion_tokens":200},"choices":[{"message":{"content":"."}}]}`)
-	}))
+	engine := &fakeOllamaEngine{evalCount: 200, evalDurationsNS: []int64{1_000_000_000}}
+	srv := httptest.NewServer(engine.handler())
 	t.Cleanup(srv.Close)
 	port := portFromBenchURL(t, srv.URL)
 
