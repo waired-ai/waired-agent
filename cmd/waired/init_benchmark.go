@@ -95,23 +95,26 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		}
 
 		// Below the interactive floor → lighter-model flow (issue #133).
-		writePromptf(out, "\n%s Local inference is slow: measured %.0f tok/s, below the %.0f tok/s interactive floor.\n",
-			emo("🐢", "!"), rec.MeasuredTokps, rec.FloorTokps)
-		writePromptf(out, "A lighter model (%s) should run more smoothly on this hardware.\n", rec.ToModelID)
+		from := modelWithQuality(rec.FromModelID, rec.FromVariantID)
+		to := modelWithQuality(rec.ToModelID, rec.ToVariantID)
+		writePromptf(out, "\n%s Local inference is slow: %s measured %.0f tok/s, below the %.0f tok/s interactive floor.\n",
+			emo("🐢", "!"), from, rec.MeasuredTokps, rec.FloorTokps)
+		writePromptf(out, "Recommend switching %s → %s; the lighter model should run more smoothly on this hardware.\n",
+			from, to)
 
 		if nonInteractive {
 			writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to switch interactively.\n",
-				rec.FromModelID)
+				from)
 			return resp, nil
 		}
 
 		// Default Yes: stepping down is cheap and the host is struggling.
-		if !ynPrompt(out, sc, fmt.Sprintf("Switch to %s?", rec.ToModelID), true) {
+		if !ynPrompt(out, sc, fmt.Sprintf("Switch to %s?", to), true) {
 			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
 				writePromptf(out, "warn: could not record your choice: %v\n", err)
 			} else {
 				writePromptf(out, "Keeping %s. You can switch later from the tray or `waired runtimes benchmark`.\n",
-					rec.FromModelID)
+					from)
 			}
 			return resp, nil
 		}
@@ -119,39 +122,48 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 			writePromptf(out, "warn: could not switch model: %v\n", err)
 			return resp, nil
 		}
-		writePromptf(out, "Switching to %s (the agent will restart to apply it).\n", rec.ToModelID)
+		writePromptf(out, "Switching to %s (the agent will restart to apply it).\n", to)
 		return resp, nil
 	}
 
 	// At or above the floor: a 200 means the daemon ran a real
 	// generation — this doubles as the end-to-end "local inference
-	// works" smoke test.
+	// works" smoke test. The response doesn't carry the benchmarked
+	// model's identity, so name it from /inference/status (waired#773);
+	// fall back to the model-less wording when that can't be resolved.
 	if resp.MeasuredTokps > 0 {
-		writePromptf(out, "%s Local inference works — measured %.0f tok/s on this host.\n",
-			emo("✅", "[ok]"), resp.MeasuredTokps)
+		if modelID, variantID := activeModelForDisplay(mgmtURL); modelID != "" {
+			writePromptf(out, "%s Local inference works — %s measured %.0f tok/s on this host.\n",
+				emo("✅", "[ok]"), modelWithQuality(modelID, variantID), resp.MeasuredTokps)
+		} else {
+			writePromptf(out, "%s Local inference works — measured %.0f tok/s on this host.\n",
+				emo("✅", "[ok]"), resp.MeasuredTokps)
+		}
 	} else {
 		// Older daemon without measured_tokps on the wire.
 		writePrompt(out, emo("✅", "[ok]")+" Local inference works — interactive performance looks good on this host.")
 	}
 
 	if rec := resp.Upgrade; rec != nil && !rec.Dismissed {
-		writePromptf(out, "\n%s This host has headroom: a higher-quality model (%s) is predicted to run at ~%.0f tok/s here.\n",
-			emo("⬆", "^"), rec.ToModelID, rec.PredictedTokps)
+		from := modelWithQuality(rec.FromModelID, rec.FromVariantID)
+		to := modelWithQuality(rec.ToModelID, rec.ToVariantID)
+		writePromptf(out, "\n%s This host has headroom: %s is predicted to run at ~%.0f tok/s here (vs %.0f tok/s measured on %s).\n",
+			emo("⬆", "^"), to, rec.PredictedTokps, rec.MeasuredTokps, from)
 
 		if nonInteractive {
 			writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to switch interactively.\n",
-				rec.FromModelID)
+				from)
 			return resp, nil
 		}
 
 		// Default No: an upgrade pulls a multi-GB download and restarts
 		// the agent — the opposite trade-off of the lighter flow.
-		if !ynPrompt(out, sc, fmt.Sprintf("Switch to %s? (downloads the model, agent restarts)", rec.ToModelID), false) {
+		if !ynPrompt(out, sc, fmt.Sprintf("Switch to %s? (downloads the model, agent restarts)", to), false) {
 			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
 				writePromptf(out, "warn: could not record your choice: %v\n", err)
 			} else {
 				writePromptf(out, "Keeping %s. You can switch later from the tray or `waired runtimes benchmark`.\n",
-					rec.FromModelID)
+					from)
 			}
 			return resp, nil
 		}
@@ -159,7 +171,7 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 			writePromptf(out, "warn: could not switch model: %v\n", err)
 			return resp, nil
 		}
-		writePromptf(out, "Switching to %s (the agent will download it and restart).\n", rec.ToModelID)
+		writePromptf(out, "Switching to %s (the agent will download it and restart).\n", to)
 	}
 	return resp, nil
 }
@@ -174,14 +186,15 @@ func tinyBenchmarkDisableFlow(
 	mgmtURL string, nonInteractive bool, out io.Writer, sc *bufio.Scanner,
 	rec *management.BenchmarkRecommendation, resp *management.BenchmarkRunResponse,
 ) (*management.BenchmarkRunResponse, error) {
-	label := bundledModelLabelDefault(rec.ToModelID)
-	writePromptf(out, "\n%s Local inference is slow here: measured %.0f tok/s, below the %.0f tok/s\n",
-		emo("⚠", "!"), rec.MeasuredTokps, rec.FloorTokps)
+	from := modelWithQuality(rec.FromModelID, rec.FromVariantID)
+	label := modelWithQuality(rec.ToModelID, rec.ToVariantID)
+	writePromptf(out, "\n%s Local inference is slow here: %s measured %.0f tok/s, below the %.0f tok/s\n",
+		emo("⚠", "!"), from, rec.MeasuredTokps, rec.FloorTokps)
 	writePromptf(out, "   interactive floor. The only lighter model left is %s, whose coding\n", label)
 	writePrompt(out, "   quality is very low and generally not worth running locally.")
 
 	if nonInteractive {
-		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", rec.FromModelID)
+		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", from)
 		return resp, nil
 	}
 
@@ -194,7 +207,7 @@ func tinyBenchmarkDisableFlow(
 			writePromptf(out, "warn: could not switch model: %v\n", err)
 			return resp, nil
 		}
-		writePromptf(out, "Switching to %s (the agent will restart to apply it).\n", rec.ToModelID)
+		writePromptf(out, "Switching to %s (the agent will restart to apply it).\n", label)
 		return resp, nil
 	}
 	if err := disableLocalInference(mgmtURL); err != nil {
@@ -360,6 +373,18 @@ func inferenceSubsystemState(mgmtURL string) string {
 		return ""
 	}
 	return st.SubsystemState
+}
+
+// activeModelForDisplay resolves the just-benchmarked (active) model from
+// /inference/status for the no-recommendation "works" line — the benchmark
+// response itself doesn't name the model (waired#773). Empty on any error
+// (old daemon, unreachable); callers fall back to model-less wording.
+func activeModelForDisplay(mgmtURL string) (modelID, variantID string) {
+	st, ok := fetchInferenceStatus(mgmtURL)
+	if !ok || st.Active == nil {
+		return "", ""
+	}
+	return st.Active.ModelID, st.Active.VariantID
 }
 
 func acceptRecommendation(mgmtURL, modelID string) error {

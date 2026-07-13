@@ -137,6 +137,47 @@ func bundledModelLabelDefault(modelID string) string {
 	return bundledModelLabel(manifests, modelID)
 }
 
+// bundledVariantQuality resolves the catalog quality tier (1–100) for
+// modelID's variantID, falling back to the model's best variant when
+// variantID is empty or not found (the recommendation may name a variant the
+// local catalog build doesn't carry). ok is false when the embedded catalog
+// is unreadable or modelID is unknown.
+func bundledVariantQuality(modelID, variantID string) (int, bool) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		return 0, false
+	}
+	m, ok := catalog.LookupByAlias(modelID, manifests)
+	if !ok {
+		return 0, false
+	}
+	best := 0
+	for _, v := range m.Variants {
+		if variantID != "" && v.VariantID == variantID && v.QualityTier > 0 {
+			return v.QualityTier, true
+		}
+		if v.QualityTier > best {
+			best = v.QualityTier
+		}
+	}
+	if best > 0 {
+		return best, true
+	}
+	return 0, false
+}
+
+// modelWithQuality renders "<label> (quality N)" for benchmark and
+// recommendation lines, so the user can weigh the speed/quality trade-off of
+// a switch (waired#773). Degrades to the bare label when the tier is unknown
+// and to the raw id when the catalog can't resolve the model.
+func modelWithQuality(modelID, variantID string) string {
+	label := bundledModelLabelDefault(modelID)
+	if q, ok := bundledVariantQuality(modelID, variantID); ok {
+		return fmt.Sprintf("%s (quality %d)", label, q)
+	}
+	return label
+}
+
 // promptTinyModelOptIn shows the "this machine can only run the smallest
 // model" confirmation and returns true iff the operator opts in. Default No —
 // running a below-floor model locally is not recommended, but the node still

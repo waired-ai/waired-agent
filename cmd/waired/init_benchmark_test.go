@@ -22,6 +22,9 @@ type benchStub struct {
 	// /status returns `state`) for the first readyAfter polls, then flips to
 	// ready (200). 0 means "honour `ready` verbatim" (never auto-flips).
 	readyAfter   int
+	active       *management.ActiveSelection         // /status Active (names the benchmarked model)
+	measured     float64                             // /benchmark measured_tokps
+	upgrade      *management.BenchmarkRecommendation // /benchmark upgrade suggestion
 	acceptedID   string
 	dismissFrom  string
 	dismissTo    string
@@ -44,10 +47,12 @@ func (b *benchStub) server() *httptest.Server {
 			w.WriteHeader(http.StatusTooEarly)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, Recommendation: b.rec})
+		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{
+			Ran: true, MeasuredTokps: b.measured, Recommendation: b.rec, Upgrade: b.upgrade,
+		})
 	})
 	mux.HandleFunc("/waired/v1/inference/status", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(management.InferenceStatus{SubsystemState: b.state})
+		_ = json.NewEncoder(w).Encode(management.InferenceStatus{SubsystemState: b.state, Active: b.active})
 	})
 	mux.HandleFunc("/waired/v1/inference/preferred-model", func(w http.ResponseWriter, r *http.Request) {
 		var req management.PreferredModelRequest
@@ -353,5 +358,96 @@ func TestPromptBenchmark_PersistentNoEngineSkipsAfterGrace(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "No inference engine available") {
 		t.Errorf("expected the no_engine skip after the grace window, got: %q", out.String())
+	}
+}
+
+// realRec is a lighter recommendation between two real bundled-catalog models,
+// so the display resolves labels and quality tiers (waired#773).
+func realRec() *management.BenchmarkRecommendation {
+	return &management.BenchmarkRecommendation{
+		FromModelID: "qwen3-coder-30b-a3b-instruct", FromVariantID: "q4-gguf",
+		ToModelID: "qwen3.6-27b", ToVariantID: "q4-gguf",
+		MeasuredTokps: 43, FloorTokps: 100,
+	}
+}
+
+// Every benchmark line must name the model it talks about: the slow headline
+// names the benchmarked (from) model, the suggestion names the from → to pair,
+// and both carry the catalog quality tier (waired#773).
+func TestPromptBenchmark_NamesFromToAndQuality(t *testing.T) {
+	stub := &benchStub{ready: true, rec: realRec()}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n")); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"Qwen3 Coder 30B-A3B Instruct (quality 65) measured 43 tok/s",
+		"Recommend switching Qwen3 Coder 30B-A3B Instruct (quality 65) → Qwen3.6 27B (quality 70)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+// The no-recommendation "works" line names the benchmarked model, resolved
+// from /inference/status Active (the benchmark response carries no model id).
+func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
+	stub := &benchStub{ready: true, measured: 120,
+		active: &management.ActiveSelection{ModelID: "qwen3-coder-30b-a3b-instruct", VariantID: "q4-gguf"}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("")); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	want := "Local inference works — Qwen3 Coder 30B-A3B Instruct (quality 65) measured 120 tok/s"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("output missing %q; got:\n%s", want, out.String())
+	}
+}
+
+// When /status carries no Active selection (old daemon), the works line keeps
+// the model-less wording rather than printing an empty name.
+func TestPromptBenchmark_WorksLineFallsBackWhenActiveUnknown(t *testing.T) {
+	stub := &benchStub{ready: true, measured: 120}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("")); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	want := "Local inference works — measured 120 tok/s"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("output missing %q; got:\n%s", want, out.String())
+	}
+}
+
+// The upgrade recommendation names the from → to pair with quality tiers and
+// contrasts predicted vs measured throughput.
+func TestPromptBenchmark_UpgradeNamesFromToAndQuality(t *testing.T) {
+	upgrade := &management.BenchmarkRecommendation{
+		Direction:   "upgrade",
+		FromModelID: "qwen3.6-27b", FromVariantID: "q4-gguf",
+		ToModelID: "qwen3.6-35b-a3b", ToVariantID: "q4-gguf",
+		MeasuredTokps: 140, FloorTokps: 100, PredictedTokps: 110,
+	}
+	stub := &benchStub{ready: true, measured: 140, upgrade: upgrade}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n")); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	want := "Qwen3.6 35B-A3B (quality 89) is predicted to run at ~110 tok/s here (vs 140 tok/s measured on Qwen3.6 27B (quality 70))"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("output missing %q; got:\n%s", want, out.String())
 	}
 }
