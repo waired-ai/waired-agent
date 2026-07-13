@@ -1,0 +1,281 @@
+# installtest-inference — the nightly installtest umbrella (#514, waired#760;
+# re-homed from the pre-split monorepo per #1): the install→inference tail of
+# the first-run journey, the 3-OS coding-agent routing sentinel, and the
+# Windows installer banner render check.
+#
+# installtest.yml (the per-PR gate) runs the real `install → service-manager
+# → hands-free enroll` journey but STOPS before inference: every leg passes
+# --skip-ollama / --inference-enabled=false. This workflow runs the SAME
+# harness with inference ON — install.sh / install.ps1 install Ollama, and
+# `waired init --inference-enabled=true` pulls the bundled model in its
+# deploy phase and runs the end-of-init benchmark. That covers the class
+# where the post-install benchmark / auto model-fallback never ran on a
+# fresh bundled install, which an install/enroll-only gate cannot see.
+#
+# Why scheduled, not per-PR: Ollama install + a bundled-model pull (~5 GB) +
+# a benchmark is minutes-scale and depends on EXTERNAL state (the upstream
+# Ollama install script + the model registry), so it suits a nightly canary.
+# Being schedule/dispatch-only it carries no paths filter and is never a
+# required check.
+#
+# The banner job is per waired#760: the cp932 render check only breaks on
+# installer-surface changes, so it left the per-PR critical path (~2 min)
+# and runs here nightly instead.
+#
+# Runners mirror installtest.yml: Linux on a GH-hosted disposable VM (the
+# in-place root + systemd install can't run on the containerized ARC
+# runner), Windows/macOS on the self-hosted ephemeral-VM pools.
+name: installtest-inference
+
+on:
+  schedule:
+    # 08:00 UTC weekdays (17:00 JST). Offset from catalog-radar (Wed 00:00)
+    # and renovate (Mon 00:00) so the heavy jobs never contend for runners.
+    - cron: "0 8 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      os:
+        description: Which OS leg(s) to run (cheap single-OS dry-runs)
+        default: all
+        type: choice
+        options: [all, linux, windows, macos]
+
+concurrency:
+  group: installtest-inference
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write       # Workload Identity Federation (mint the enroll token)
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Resolve which OS legs to run from the dispatch input (default = all three;
+  # a schedule has no input → all three). A dynamic matrix keeps a single-OS
+  # dry-run from spinning up the self-hosted Windows / macOS runners.
+  legs:
+    name: select legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          SEL: ${{ github.event.inputs.os || 'all' }}
+        run: |
+          set -euo pipefail
+          linux='{"os":"linux","runs-on":"ubuntu-24.04","timeout":35}'
+          windows='{"os":"windows","runs-on":["self-hosted","windows","x64","build"],"timeout":45}'
+          macos='{"os":"macos","runs-on":["self-hosted","macos","arm64","build"],"timeout":45}'
+          case "$SEL" in
+            linux)   legs="[$linux]" ;;
+            windows) legs="[$windows]" ;;
+            macos)   legs="[$macos]" ;;
+            *)       legs="[$linux,$windows,$macos]" ;;
+          esac
+          echo "matrix={\"include\":$legs}" >> "$GITHUB_OUTPUT"
+
+  installtest-inference:
+    needs: legs
+    name: install+inference (${{ matrix.os }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false      # a red Windows/macOS leg must not hide a green Linux
+      matrix: ${{ fromJSON(needs.legs.outputs.matrix) }}
+    env:
+      # Tier 2: hands-free enroll vs the real dev control plane (#339 grant).
+      IT_ENROLL_MODE: oidc
+      IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # Self-hosted images bake the Go toolchain + caches locally; only
+          # Linux keeps GitHub's remote cache (mirrors installtest.yml).
+          cache: ${{ matrix.os == 'linux' }}
+
+      # gcloud needs Python ≥3.10 — same shim as installtest.yml.
+      - name: point gcloud at the image's Python ≥3.10 (self-hosted macOS)
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          py="$(/opt/homebrew/bin/brew --prefix python@3.14)/bin/python3.14"
+          test -x "$py"
+          echo "CLOUDSDK_PYTHON=$py" >> "$GITHUB_ENV"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      # Windows skips the SDK install — the image bakes gcloud (mirrors
+      # installtest.yml).
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          skip_install: ${{ matrix.os == 'windows' }}
+
+      # Linux: in-place install (systemd is PID 1 on the disposable runner) +
+      # --inference → install.sh installs Ollama, `waired init
+      # --inference-enabled=true` pulls the bundled model + benchmarks on CPU.
+      - name: install+inference (linux, tier 2)
+        if: matrix.os == 'linux'
+        env:
+          IT_LOCAL: "1"
+          IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/go/bin:$PATH"
+          bash scripts/dev/installtest-host-up.sh
+          bash scripts/dev/installtest-run.sh --tier 2 --inference 2>&1 | tee it-inf.log
+
+      # Windows: install.ps1 (the runner is already elevated) + -WithInference.
+      # No tee here — the exit code must propagate directly; the full
+      # transcript is in this step's log.
+      - name: install+inference (windows, tier 2)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./scripts/dev/installtest-windows.ps1 -Tier 2 -WithInference
+
+      # macOS: install.sh darwin + --inference (system LaunchDaemon, so it
+      # serves headless). Needs passwordless sudo (the ephemeral VM admin
+      # has it).
+      - name: install+inference (macos, tier 2)
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          bash scripts/dev/installtest-macos.sh --tier 2 --inference 2>&1 | tee it-inf.log
+
+      # Surface a one-line result + any captured throughput in the run summary
+      # (Actions-native, no auto-issue). bash exists on all three runners.
+      # The Windows leg has no it-inf.log, so it just records the job status.
+      - name: job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## install+inference (${{ matrix.os }})"
+            echo "- result: **${{ job.status }}**"
+            if [ -f it-inf.log ]; then
+              grep -iE 'summary:|[0-9.]+ *(tok|tokens)/s' it-inf.log \
+                | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -6 || true
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 3-OS coding-agent routing sentinel (#496). Rides the SAME enrolled-daemon
+  # harness with `--integration`, which pins the tiny 0.5B as the bundled
+  # model (deploy pulls ~0.4 GB), then runs the Go routing harness that
+  # drives each leg at the gateway surface and asserts served-locally via the
+  # observability event ring. (The old per-PR Linux routing-sentinel workflow
+  # is not yet re-homed — #1.)
+  routing:
+    needs: legs
+    name: routing sentinel (${{ matrix.os }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.legs.outputs.matrix) }}
+    env:
+      IT_ENROLL_MODE: oidc
+      IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
+      # Fail-open guard: a regression that reaches real Anthropic gets a 401
+      # with this bogus token (the event-ring sentinel is the portable
+      # primary).
+      ANTHROPIC_AUTH_TOKEN: waired-routing-sentinel-dummy-not-a-real-key
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: ${{ matrix.os == 'linux' }}
+
+      - name: point gcloud at the image's Python ≥3.10 (self-hosted macOS)
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          py="$(/opt/homebrew/bin/brew --prefix python@3.14)/bin/python3.14"
+          test -x "$py"
+          echo "CLOUDSDK_PYTHON=$py" >> "$GITHUB_ENV"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          skip_install: ${{ matrix.os == 'windows' }}
+
+      # Linux-only belt-and-braces egress blackhole (disposable runner). The
+      # self-hosted Windows/macOS pools rely on dummy-token + sentinel only —
+      # no egress edits on a reused slot.
+      - name: blackhole api.anthropic.com (fail-open guard, linux)
+        if: matrix.os == 'linux'
+        run: echo "0.0.0.0 api.anthropic.com" | sudo tee -a /etc/hosts >/dev/null
+
+      - name: routing sentinel (linux, tier 2 + integration)
+        if: matrix.os == 'linux'
+        env:
+          IT_LOCAL: "1"
+          IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/go/bin:$PATH"
+          bash scripts/dev/installtest-host-up.sh
+          bash scripts/dev/installtest-run.sh --tier 2 --integration
+
+      - name: routing sentinel (windows, tier 2 + integration)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./scripts/dev/installtest-windows.ps1 -Tier 2 -WithIntegration
+
+      - name: routing sentinel (macos, tier 2 + integration)
+        if: matrix.os == 'macos'
+        run: bash scripts/dev/installtest-macos.sh --tier 2 --integration
+
+      - name: job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## routing sentinel (${{ matrix.os }})"
+            echo "- result: **${{ job.status }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Windows installer banner render regression guard, moved out of the per-PR
+  # path (waired#760). The rich UTF-8 banner is emitted ONLY to a real TTY,
+  # so redirected-stdout install steps never render it — visual banner
+  # mojibake is invisible to normal CI. This spawns install.ps1 in a fresh
+  # console under BOTH PowerShell editions, decodes the served script through
+  # cp932 (byte-identical to the JP/CN `iwr|iex` wire path), reads the
+  # child's own screen buffer, and asserts the banner glyphs survive with no
+  # "?" mojibake. -SelfCheck also proves the detector catches an injected
+  # regression. Windows-only; needs a real console, hence the self-hosted VM.
+  banner:
+    name: banner render check (windows, cp932)
+    if: (github.event.inputs.os || 'all') == 'all' || github.event.inputs.os == 'windows'
+    runs-on: [self-hosted, windows, x64, build]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: banner render check (real console + cp932)
+        shell: pwsh
+        run: ./scripts/dev/installtest-banner-render.ps1 -SelfCheck
+
+      - name: job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## banner render check (windows)"
+            echo "- result: **${{ job.status }}**"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1387,8 +1387,10 @@ func initStateDirMode(goos string, euid int) paths.Mode {
 // claudeManagedEligibleFor is the testable core of init's
 // claudeManagedEligible gate: the managed-settings file lives at a
 // root-owned OS path, so writing it needs an elevated init (euid 0 on
-// Linux/macOS). Windows configures Claude request routing via
-// `waired claude enable` instead, and its managedPath is "" anyway.
+// Linux/macOS). Windows has a real managedPath
+// (%ProgramFiles%\ClaudeCode\managed-settings.json) but euid is -1
+// there, so init never auto-enables — routing is configured via
+// `waired claude enable` instead (waired#749 tracks closing that gap).
 func claudeManagedEligibleFor(goos string, euid int, managedPath string) bool {
 	return (goos == "linux" || goos == "darwin") && euid == 0 && managedPath != ""
 }
