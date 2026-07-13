@@ -297,6 +297,33 @@ function Wait-ItCmdWrapper {
     return @{ Exit = $code; Out = (Get-Content -LiteralPath $Paths.Out -Raw -ErrorAction SilentlyContinue) }
 }
 
+# Plain Users members lack SeBatchLogonRight, so a password-stored scheduled
+# task for them never launches (Status stays Ready, Last Result 267011 =
+# SCHED_S_TASK_HAS_NOT_RUN — observed on the first CI runs). secedit is the
+# standard way to grant it non-interactively on the disposable guest.
+function Grant-ItBatchLogonRight {
+    param([string]$User)
+    $sid = (New-Object System.Security.Principal.NTAccount($User)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    $cur = Join-Path $Work 'rights-cur.inf'
+    $inf = Join-Path $Work 'rights-new.inf'
+    $db  = Join-Path $Work 'rights.sdb'
+    & secedit /export /cfg $cur /areas USER_RIGHTS | Out-Null
+    $line = Get-Content -LiteralPath $cur -ErrorAction SilentlyContinue | Where-Object { $_ -match '^SeBatchLogonRight' } | Select-Object -First 1
+    $val  = if ($line) { (($line -split '=', 2)[1]).Trim() } else { '' }
+    if ($val -match [regex]::Escape($sid)) { return }
+    $val = if ($val) { "$val,*$sid" } else { "*$sid" }
+    @(
+        '[Unicode]'
+        'Unicode=yes'
+        '[Version]'
+        'signature="$CHICAGO$"'
+        'Revision=1'
+        '[Privilege Rights]'
+        "SeBatchLogonRight = $val"
+    ) | Set-Content -LiteralPath $inf -Encoding Unicode
+    & secedit /configure /db $db /cfg $inf /areas USER_RIGHTS | Out-Null
+}
+
 # Fresh standard (non-admin) user, run via a one-shot scheduled task (batch
 # logon). Start-Process -Credential (CreateProcessWithLogonW) fails with
 # 0xC0000142 here: the second user's process cannot initialize against the
@@ -316,6 +343,7 @@ function Invoke-AsStandardUser {
         } else {
             Set-LocalUser -Name $TestUser -Password $sec
         }
+        Grant-ItBatchLogonRight -User $TestUser
     }
     # Grant BEFORE writing the wrapper: (OI)(CI) inheritance only applies to
     # children created afterwards, and the batch logon is not INTERACTIVE so
