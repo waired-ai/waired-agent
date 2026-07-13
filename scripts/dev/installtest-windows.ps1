@@ -317,15 +317,26 @@ function Invoke-AsStandardUser {
             Set-LocalUser -Name $TestUser -Password $sec
         }
     }
-    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag
-    # The batch logon is not INTERACTIVE, so Public-folder inheritance may not
-    # cover it — grant the test user modify on the scratch dir explicitly.
+    # Grant BEFORE writing the wrapper: (OI)(CI) inheritance only applies to
+    # children created afterwards, and the batch logon is not INTERACTIVE so
+    # Public-folder defaults may not cover it.
+    New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
     & icacls $PubWork /grant "${TestUser}:(OI)(CI)M" | Out-Null
+    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag
     $task = "waired-it-$Tag"
-    & schtasks /Create /F /TN $task /TR "cmd /c `"$($paths.Cmd)`"" /SC ONCE /ST 23:59 /RU $TestUser /RP $script:TestUserPw 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { return @{ Exit = -1; Out = "(schtasks /Create failed: $LASTEXITCODE)" } }
-    & schtasks /Run /TN $task 2>&1 | Out-Null
+    # $PubWork deliberately contains no spaces, so /TR needs no inner quotes —
+    # schtasks mangles nested quoting notoriously; keep the action bare.
+    $create = (& schtasks /Create /F /TN $task /TR "cmd /c $($paths.Cmd)" /SC ONCE /ST 23:59 /RU $TestUser /RP $script:TestUserPw 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { return @{ Exit = -1; Out = "(schtasks /Create failed: $create)" } }
+    $run = (& schtasks /Run /TN $task 2>&1 | Out-String).Trim()
     $r = Wait-ItCmdWrapper -Paths $paths -TimeoutSec 60
+    if ($r.Exit -eq -1) {
+        # Surface why the task never produced the marker (logon-right denial,
+        # action mangling, ...) instead of a bare timeout.
+        $query = (& schtasks /Query /TN $task /V /FO LIST 2>&1 | Out-String) -split "`r?`n" |
+                 Where-Object { $_ -match 'Last Result|Status:' } | ForEach-Object { $_.Trim() }
+        $r.Out = "$($r.Out) [run: $run] [$($query -join '; ')]"
+    }
     & schtasks /Delete /TN $task /F 2>&1 | Out-Null
     return $r
 }
