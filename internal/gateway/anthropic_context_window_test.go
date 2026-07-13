@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -67,6 +69,48 @@ func TestAnthropicMessages_ContextOverflow(t *testing.T) {
 	if !strings.HasPrefix(env.Error.Message, "prompt is too long: ") ||
 		!strings.HasSuffix(env.Error.Message, " tokens > 100 maximum") {
 		t.Errorf("message = %q, want 'prompt is too long: N tokens > 100 maximum'", env.Error.Message)
+	}
+}
+
+// TestAnthropicMessages_OverflowMessageMatchesClaudeCodeParser pins the
+// cross-tool contract behind #623/#771: Claude Code's reactive compaction
+// parses the 400 message with /prompt is too long[^0-9]*(\d+)\s*tokens?\s*>
+// \s*(\d+)/i (verified against v2.1.207) and uses the captured excess to trim
+// the summarization input. Our synthetic 400 must match that regex and
+// capture the served window, or an over-window session on the waired/auto
+// routes loses proactive recovery. The weekly claude-code-canary workflow is
+// the other half of this contract (it watches the Claude Code side).
+func TestAnthropicMessages_OverflowMessageMatchesClaudeCodeParser(t *testing.T) {
+	sel := &fakeSelector{sel: router.Selection{
+		Runtime: "ollama", EngineModel: "qwen3:8b-q4_K_M", ModelID: "qwen3-8b-instruct",
+	}}
+	gw := anthropicGatewayWithWindow(t, sel, "", nil, func(string) int { return 100 })
+
+	long := strings.Repeat("word ", 200)
+	body := `{"model":"claude-sonnet-4","max_tokens":64,"messages":[{"role":"user","content":"` + long + `"}]}`
+	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewBufferString(body))
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400", w.Code, w.Body.String())
+	}
+	var env anthropicErrorEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Claude Code's parse regex, verbatim (Go re2 syntax is compatible here).
+	ccParser := regexp.MustCompile(`(?i)prompt is too long[^0-9]*([0-9]+)\s*tokens?\s*>\s*([0-9]+)`)
+	m := ccParser.FindStringSubmatch(env.Error.Message)
+	if m == nil {
+		t.Fatalf("message %q does not match Claude Code's reactive-compact parser", env.Error.Message)
+	}
+	if m[2] != "100" {
+		t.Errorf("captured window = %s, want 100 (the served model's window)", m[2])
+	}
+	if n, err := strconv.Atoi(m[1]); err != nil || n <= 100 {
+		t.Errorf("captured token count = %q, want an integer > the 100-token window", m[1])
 	}
 }
 
