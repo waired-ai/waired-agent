@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# testnet-require-green-remote.sh — cross-repo release gate for the agent
+# testnet-require-green-remote.sh — cross-repo testnet gate for the agent
 # repo (#184/#738): require a green real-NAT testnet run FOR AN AGENT
-# COMMIT before releasing it, where the testnet harness lives in the
-# private monorepo (waired-ai/waired), not in this repo.
+# COMMIT, where the testnet harness lives in the private monorepo
+# (waired-ai/waired), not in this repo. Callers: release.yml (tag SHA),
+# testnet-nightly.yml (main HEAD), testnet-pr.yml (PR head SHA, #2).
 #
 # usage: testnet-require-green-remote.sh <agent-full-40-char-sha>
 #
@@ -13,6 +14,15 @@
 #                       wired from the repo variable of the same name)
 #      WAIT_TIMEOUT_S  (default 5400 — quota wait + ~25 min run + headroom)
 #      POLL_INTERVAL_S (default 30)
+#      DISPATCH_REASON (optional caller tag, e.g. agent-pr-123 — forwarded
+#                       as the monorepo dispatch input `reason` and echoed
+#                       into the run title as "[reason]". When set, queued/
+#                       in-progress dispatches carrying the same [reason]
+#                       but a DIFFERENT sha are cancelled first: they are
+#                       superseded runs of an older push of the same PR,
+#                       and cancelling them frees their testnet slot —
+#                       the monorepo's testnet-cleanup.yml tears down
+#                       cancelled runs.)
 #
 # Cross-repo green semantics: the monorepo's testnet.yml takes a
 # workflow_dispatch input `agent_ref` and embeds it in the run name
@@ -73,8 +83,41 @@ green_exists() {
 
 dispatch() {
   echo "::notice::no green testnet for agent ${sha:0:7}; dispatching ${repo} testnet.yml (agent_ref=${sha}) and waiting"
+  if [[ -n "${DISPATCH_REASON:-}" ]]; then
+    # Fall back to a reason-less dispatch if the monorepo copy of
+    # testnet.yml predates the `reason` input (unknown-input dispatches
+    # are rejected outright).
+    if gh workflow run testnet.yml --repo "${repo}" --ref main \
+        -f "agent_ref=${sha}" -f "reason=${DISPATCH_REASON}"; then
+      return 0
+    fi
+    echo "::warning::dispatch with reason=${DISPATCH_REASON} failed (monorepo testnet.yml too old?); retrying without it"
+  fi
   gh workflow run testnet.yml --repo "${repo}" --ref main -f "agent_ref=${sha}"
 }
+
+# Cancel superseded dispatches of the same caller tag (see DISPATCH_REASON
+# in the header). The bracketed form "[<reason>]" is matched verbatim so
+# agent-pr-12 never matches agent-pr-123's runs. DISPATCH_REASON is
+# caller-controlled CI config (a PR number), not user input — safe to
+# interpolate into the jq expression like the hex sha above.
+cancel_superseded() {
+  [[ -z "${DISPATCH_REASON:-}" ]] && return 0
+  local id
+  while read -r id; do
+    [[ -z "${id}" ]] && continue
+    echo "::notice::cancelling superseded testnet run ${id} ([${DISPATCH_REASON}], not agent ${sha:0:7})"
+    gh api -X POST "repos/${repo}/actions/runs/${id}/cancel" >/dev/null \
+      || echo "::warning::could not cancel run ${id} (already finishing?)"
+  done < <(gh api "repos/${repo}/actions/workflows/testnet.yml/runs?event=workflow_dispatch&per_page=100" \
+    --jq ".workflow_runs[]
+          | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"waiting\" or .status == \"pending\")
+          | select(.display_title | contains(\"[${DISPATCH_REASON}]\"))
+          | select(.display_title | contains(\"${sha}\") | not)
+          | .id")
+}
+
+cancel_superseded
 
 dispatched=0
 dispatch_at=0
