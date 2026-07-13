@@ -18,6 +18,28 @@ gitleaks secret scan (config: `.gitleaks.toml`).
   `proto/vX.Y.Z` → bump in the CP repo. Never break verify/sign
   compatibility within a published version.
 
+## Cross-OS parity (linux / windows / darwin)
+
+Most regressions to date were one OS silently behaving differently
+(waired#746–#758):
+
+* Prefer portable code. In shared (untagged) files: no direct
+  `os.Geteuid()` (-1 on Windows — `== 0` gates go dead), no hardcoded
+  `/etc`-style paths, no `path.Join` on filesystem paths. Route
+  OS-varying decisions through a function taking `runtime.GOOS`, with
+  a table test over all three values (see `initStateDirMode` +
+  cmd/waired/init_defaults_test.go).
+* Unavoidable per-OS code (state dirs, systemd/launchd/SCM, registry,
+  autostart) goes in `_windows.go`/`_linux.go`/`_darwin.go` files,
+  preferably under `internal/platform/`; a new set must cover all
+  three OSes (impl, or a stub whose behavior is stated in a comment).
+  For "both Unixes" tag `linux || darwin`, not `!windows`.
+* A one-OS feature or fix is **not done** until the other two are
+  checked and either changed in the same PR or covered by an
+  OS-labeled issue saying why deferred / not applicable.
+* install.sh/uninstall.sh changes mirror to install.ps1/uninstall.ps1
+  (and waired-setup.iss where applicable), and vice versa.
+
 ## Tags / releases
 
 * `v*` — agent releases (never directory-prefixed). Pushing the tag

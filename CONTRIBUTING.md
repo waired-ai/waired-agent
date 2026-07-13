@@ -45,6 +45,12 @@ go test -tags prod ./internal/buildflag/...
 make verify-cross
 ```
 
+`make verify-cross` matters because CI's test jobs run on Linux only:
+it cross-vets the tree for Windows and macOS so single-OS breakage is
+caught before push. When you change OS-specific behavior (paths,
+services, registry, installers), keep all three OSes in sync — see
+CLAUDE.md §"Cross-OS parity".
+
 CI additionally runs a license check
 (`go-licenses check --disallowed_types=forbidden,restricted`) — a new
 dependency with copyleft licensing fails the lint job — and a gitleaks
