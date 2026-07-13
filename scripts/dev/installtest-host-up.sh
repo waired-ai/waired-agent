@@ -71,7 +71,7 @@ build_deb() {
   local ver pkgver ldf
   ver="$(git -C "$ROOT" rev-parse --short HEAD)"
   pkgver="0.0.0-$ver"
-  ldf="-s -w -X github.com/gen16k/waired/internal/buildinfo.Version=$ver -X github.com/gen16k/waired/internal/buildinfo.BuildSHA=$ver"
+  ldf="-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$ver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
 
   ( cd "$ROOT"
     mkdir -p bin/linux_amd64 dist/nfpm

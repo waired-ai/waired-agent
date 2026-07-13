@@ -201,7 +201,7 @@ function Start-Mirror {
 # ============================================================================
 ItStep "building waired.exe + waired-agent.exe from worktree"
 $ver = (& git -C $Root rev-parse --short HEAD).Trim()
-$ldf = "-s -w -X github.com/gen16k/waired/internal/buildinfo.Version=$ver -X github.com/gen16k/waired/internal/buildinfo.BuildSHA=$ver"
+$ldf = "-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$ver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
 Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $Stage -Force | Out-Null
 Set-Location -LiteralPath $Root

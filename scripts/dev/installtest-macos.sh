@@ -150,7 +150,7 @@ sudo -n true 2>/dev/null || it_die "passwordless sudo required (system LaunchDae
 arch="$(uname -m)"; [ "$arch" = "x86_64" ] && arch=amd64   # arm64 stays arm64
 tarball="waired-darwin-${arch}.tar.gz"
 ver="$(git -C "$ROOT" rev-parse --short HEAD)"
-ldf="-s -w -X github.com/gen16k/waired/internal/buildinfo.Version=$ver -X github.com/gen16k/waired/internal/buildinfo.BuildSHA=$ver"
+ldf="-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$ver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
 
 it_step "building waired + waired-agent (darwin/$arch) and packing $tarball"
 mkdir -p "$WORK/stage" "$DIST"
