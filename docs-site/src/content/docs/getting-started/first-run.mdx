@@ -54,8 +54,11 @@ checks free disk first (and steps down to a smaller model, or skips the
 download, rather than filling the disk), then pulls the chosen model and waits
 for it in the foreground, showing download progress. The pull can take a few
 minutes; once it finishes, `init` runs a quick benchmark and — if this machine
-can't keep up — offers to switch to an even lighter model. If the download
-fails, `init` still succeeds and prints how to retry. Pass `--no-wait-model` to
+can't keep up — offers to switch to an even lighter model, naming the current
+and candidate models with their catalog quality tiers. Accepting a switch
+downloads the new model in the foreground with progress (press Enter to let it
+finish in the background). If the download fails, `init` still succeeds and
+prints how to retry. Pass `--no-wait-model` to
 return to the shell right away and let the agent finish the download in the
 background instead. To pin a specific model, pass
 `--inference-bundled-model-id <id>` or see

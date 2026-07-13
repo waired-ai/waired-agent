@@ -55,17 +55,15 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Kick off a background pull when the chosen family is not yet on
-	// disk. Best-effort: we ignore the returned PullJob because the
-	// catalog endpoint will surface the in-progress state on the next
-	// poll. Errors here should not block the preference write — the
-	// agent can retry the pull on next start.
-	downloading := false
-	if !modelDownloaded(s.inference.ListModels(r.Context()), manifest.ModelID) {
-		if _, err := s.inference.PullModel(r.Context(), manifest.ModelID); err == nil {
-			downloading = true
-		}
-	}
+	// Downloading only reports whether the chosen family still needs a
+	// pull; the pull itself is NOT dispatched here. The imminent restart
+	// (scheduled below) would cancel an in-flight request-scoped pull
+	// within milliseconds anyway, and its failure path would write a
+	// transient failed state a watching client (waired#774) could misread
+	// as terminal. The post-restart bootstrap (bootstrapPreferredModel,
+	// issue #347) performs the real pull and activates the model once it
+	// is ready — the old model keeps serving in the meantime.
+	downloading := !modelDownloaded(s.inference.ListModels(r.Context()), manifest.ModelID)
 
 	scheduler := s.catalog.RestartScheduler
 	if scheduler == nil {

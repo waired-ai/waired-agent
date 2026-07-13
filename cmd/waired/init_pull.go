@@ -114,6 +114,111 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool) bool {
 	}
 }
 
+// switchFailedStreak is how many consecutive Failed observations of the
+// switch target waitForModelSwitch tolerates before treating the download
+// as terminally failed. The agent restart the switch schedules can leave a
+// transient failed record behind (a cancelled pull) that the post-restart
+// bootstrap immediately retries, so a single observation must not abort
+// the wait.
+const switchFailedStreak = 3
+
+// waitForModelSwitch blocks until modelID — just accepted via
+// /inference/preferred-model — is pulled and ready, tolerating the agent
+// restart the accept schedules (status fetches fail for a few seconds;
+// keep polling). Unlike waitForBundledModel it keys strictly off modelID
+// in Models.Ready / Models.Failed / Models.Downloads, NOT st.Active: the
+// switch target only becomes the active model once its pull completes.
+// enter (nil = no backgrounding) lets the user press Enter to leave the
+// download running in the background; callers must Drain it afterwards.
+// Returns true once the model is ready and serving.
+func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter *enterListener) bool {
+	deadline := time.Now().Add(benchPollDeadline)
+	line := downloadLineState{lastPct: -1}
+	var rate rateWindow
+	label := bundledModelLabelDefault(modelID)
+	failedStreak := 0
+	dlHinted := false
+
+	lastStep := ""
+	announce := func(step, msg string) {
+		if step == lastStep {
+			return
+		}
+		lastStep = step
+		endProgressLine(out, tty, &line)
+		writePrompt(out, msg)
+	}
+
+	for {
+		if enter != nil && enter.Backgrounded() {
+			endProgressLine(out, tty, &line)
+			printSwitchBackgroundNote(out, label)
+			return false
+		}
+
+		st, ok := fetchInferenceStatus(mgmtURL)
+		switch {
+		case !ok:
+			// The accept schedules an immediate agent restart, so the
+			// management API is briefly unreachable — expected, keep polling.
+			announce("restart", "Waiting for the agent to restart…")
+		case slices.Contains(st.Models.Ready, modelID):
+			endProgressLine(out, tty, &line)
+			writePromptf(out, "%s  %s ready — the agent is now serving it.\n", emo("✅", "[ok]"), label)
+			return true
+		case slices.Contains(st.Models.Failed, modelID):
+			failedStreak++
+			if failedStreak >= switchFailedStreak {
+				endProgressLine(out, tty, &line)
+				writePromptf(out, "Download failed. Check `waired models ls`; retry with `waired models pull %s` "+
+					"or re-run `waired runtimes benchmark`.\n", modelID)
+				return false
+			}
+		default:
+			failedStreak = 0
+			if dl, found := downloadFor(st, modelID); found && dl.TotalBytes > 0 {
+				speed := rate.observe(time.Now(), dl.CompletedBytes)
+				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
+				if !dlHinted {
+					dlHinted = true
+					announce("download_hint", dim("Downloading the model — a multi-GB transfer that can take a few minutes."))
+				}
+				lastStep = stepDownloading // the bar owns the line; let a later step end it
+				drawDownloadLine(out, tty, &line, label, pct, dl.CompletedBytes, dl.TotalBytes, speed)
+			} else {
+				announce("preparing", "Preparing to download "+label+"…")
+			}
+		}
+
+		if time.Now().After(deadline) {
+			endProgressLine(out, tty, &line)
+			printSwitchBackgroundNote(out, label)
+			return false
+		}
+		time.Sleep(pullPollInterval)
+	}
+}
+
+// printSwitchBackgroundNote tells the user what happens after the
+// foreground wait stops watching a switch download (Enter pressed or the
+// deadline elapsed): the agent owns the pull and will start serving the
+// model on its own.
+func printSwitchBackgroundNote(out io.Writer, label string) {
+	writePromptf(out, "Continuing in the background — the agent will finish the download and start serving %s when it's ready.\n", label)
+	writePrompt(out, "Check progress with `waired models ls` or `waired status`.")
+}
+
+// downloadFor returns the in-flight download entry for modelID; found is
+// false when no sized progress has been reported for it yet.
+func downloadFor(st management.InferenceStatus, modelID string) (management.ModelDownload, bool) {
+	for _, d := range st.Models.Downloads {
+		if d.Model == modelID {
+			return d, true
+		}
+	}
+	return management.ModelDownload{}, false
+}
+
 // pullPollInterval is the gap between /inference/status polls while init
 // watches the model download. Deliberately tighter than benchPollInterval:
 // the bar redraws — and the rate re-samples — once per poll, and at 3 s the

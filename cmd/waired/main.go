@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -708,6 +709,12 @@ func runInitBody(o *initFlags) error {
 		}
 	}
 
+	// postSC is the single stdin scanner for every post-enroll prompt (the
+	// benchmark gate, its model-switch questions, and the routing
+	// confirmation below) — layering a second bufio reader over os.Stdin
+	// would eat buffered input between prompts.
+	postSC := bufio.NewScanner(os.Stdin)
+
 	// #133: on a fresh install with inference enabled, offer an end-of-init
 	// benchmark (which doubles as the "local inference works" smoke test)
 	// and, if the host can't sustain the auto-picked model, offer a lighter
@@ -726,7 +733,7 @@ func runInitBody(o *initFlags) error {
 		if *startAgent && bundled && cfgRoot.Inference.PullOnStartup && !*noWaitModel {
 			waitForBundledModel(*mgmtURL, os.Stdout, isTerminal(os.Stdout))
 		}
-		bench = offerBenchmark(*mgmtURL, *nonInteractive, os.Stdout, os.Stdin)
+		bench = offerBenchmark(*mgmtURL, *nonInteractive, os.Stdout, postSC, isTerminal(os.Stdout))
 	}
 
 	// The true end: a framed success summary printed only after the (optional)

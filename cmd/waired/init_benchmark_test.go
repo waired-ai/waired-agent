@@ -25,6 +25,9 @@ type benchStub struct {
 	active       *management.ActiveSelection         // /status Active (names the benchmarked model)
 	measured     float64                             // /benchmark measured_tokps
 	upgrade      *management.BenchmarkRecommendation // /benchmark upgrade suggestion
+	downloading  bool                                // preferred-model response Downloading
+	statusSeq    []statusStep                        // scripted /status sequence (last repeats)
+	statusCalls  int
 	acceptedID   string
 	dismissFrom  string
 	dismissTo    string
@@ -52,6 +55,22 @@ func (b *benchStub) server() *httptest.Server {
 		})
 	})
 	mux.HandleFunc("/waired/v1/inference/status", func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		i := b.statusCalls
+		b.statusCalls++
+		seq := b.statusSeq
+		b.mu.Unlock()
+		if len(seq) > 0 {
+			if i >= len(seq) {
+				i = len(seq) - 1
+			}
+			if seq[i].code != 0 && seq[i].code != http.StatusOK {
+				w.WriteHeader(seq[i].code)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(seq[i].st)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(management.InferenceStatus{SubsystemState: b.state, Active: b.active})
 	})
 	mux.HandleFunc("/waired/v1/inference/preferred-model", func(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +79,9 @@ func (b *benchStub) server() *httptest.Server {
 		b.acceptedID = req.ModelID
 		b.acceptCount++
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(management.PreferredModelResponse{ModelID: req.ModelID, WillRestart: true})
+		_ = json.NewEncoder(w).Encode(management.PreferredModelResponse{
+			ModelID: req.ModelID, WillRestart: true, Downloading: b.downloading,
+		})
 	})
 	mux.HandleFunc("/waired/v1/inference/recommendation/dismiss", func(w http.ResponseWriter, r *http.Request) {
 		var req management.RecommendationDismissRequest
@@ -101,7 +122,7 @@ func TestPromptBenchmark_AcceptSwitches(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"))
+	err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false)
 	if err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
@@ -119,7 +140,7 @@ func TestPromptBenchmark_DeclineDismisses(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"))
+	err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"), false)
 	if err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
@@ -138,7 +159,7 @@ func TestPromptBenchmark_NonInteractiveNeither(t *testing.T) {
 
 	var out strings.Builder
 	// stdin must NOT be consulted; pass an empty reader.
-	if err := promptBenchmarkRecommendation(srv.URL, true, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, true, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 0 || stub.dismissCount != 0 {
@@ -155,7 +176,7 @@ func TestPromptBenchmark_NoRecommendationQuiet(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 0 || stub.dismissCount != 0 {
@@ -176,7 +197,7 @@ func TestPromptBenchmark_NotFoundExplains(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if strings.TrimSpace(out.String()) == "" {
@@ -193,7 +214,7 @@ func TestPromptBenchmark_UnexpectedStatusExplains(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if !strings.Contains(out.String(), "Benchmark unavailable (HTTP 500)") {
@@ -204,7 +225,7 @@ func TestPromptBenchmark_UnexpectedStatusExplains(t *testing.T) {
 func TestPromptBenchmark_TransportErrorExplains(t *testing.T) {
 	// Point at a closed port so the POST fails at the transport layer.
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation("http://127.0.0.1:1", false, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation("http://127.0.0.1:1", false, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if !strings.Contains(out.String(), "Could not reach the waired-agent service") {
@@ -220,7 +241,7 @@ func TestPromptBenchmark_DismissedQuiet(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 0 || stub.dismissCount != 0 {
@@ -235,7 +256,7 @@ func TestPromptBenchmark_TerminalStateSkips(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if !strings.Contains(out.String(), "download failed") {
@@ -251,7 +272,7 @@ func TestPromptBenchmark_TinyDeclineDisables(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.disableCount != 1 {
@@ -272,7 +293,7 @@ func TestPromptBenchmark_TinyAcceptSwitches(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 1 || stub.acceptedID != "qwen2.5-coder-0.5b-instruct" {
@@ -290,7 +311,7 @@ func TestPromptBenchmark_TinyNonInteractiveNeither(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, true, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, true, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 0 || stub.disableCount != 0 {
@@ -324,7 +345,7 @@ func TestPromptBenchmark_TransientNoEngineThenRuns(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if strings.Contains(out.String(), "No inference engine available") {
@@ -348,7 +369,7 @@ func TestPromptBenchmark_PersistentNoEngineSkipsAfterGrace(t *testing.T) {
 	var out strings.Builder
 	done := make(chan struct{})
 	go func() {
-		_ = promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""))
+		_ = promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false)
 		close(done)
 	}()
 	select {
@@ -380,7 +401,7 @@ func TestPromptBenchmark_NamesFromToAndQuality(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	got := out.String()
@@ -403,7 +424,7 @@ func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	want := "Local inference works — Qwen3 Coder 30B-A3B Instruct (quality 65) measured 120 tok/s"
@@ -420,7 +441,7 @@ func TestPromptBenchmark_WorksLineFallsBackWhenActiveUnknown(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	want := "Local inference works — measured 120 tok/s"
@@ -443,11 +464,171 @@ func TestPromptBenchmark_UpgradeNamesFromToAndQuality(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n")); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	want := "Qwen3.6 35B-A3B (quality 89) is predicted to run at ~110 tok/s here (vs 140 tok/s measured on Qwen3.6 27B (quality 70))"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
+	}
+}
+
+// statusStep is one scripted /inference/status response: code 0/200 encodes
+// st; any other code is returned bare (e.g. 500 during the restart window).
+type statusStep struct {
+	code int
+	st   management.InferenceStatus
+}
+
+func switchDownloading(modelID string, completed, total int64) statusStep {
+	return statusStep{st: management.InferenceStatus{
+		SubsystemState: "downloading",
+		Models: management.ModelsSnapshot{
+			Downloading: []string{modelID},
+			Downloads:   []management.ModelDownload{{Model: modelID, CompletedBytes: completed, TotalBytes: total}},
+		},
+	}}
+}
+
+func switchReady(modelID string) statusStep {
+	return statusStep{st: management.InferenceStatus{
+		SubsystemState: "ready",
+		Models:         management.ModelsSnapshot{Ready: []string{modelID}},
+	}}
+}
+
+func switchFailed(modelID string) statusStep {
+	return statusStep{st: management.InferenceStatus{
+		SubsystemState: "downloading",
+		Models:         management.ModelsSnapshot{Failed: []string{modelID}},
+	}}
+}
+
+// Accepting a switch whose target still needs a download foreground-waits
+// for it, tolerating the restart window (status 500s) the accept schedules,
+// and reports the model ready (waired#774).
+func TestAcceptSwitch_WaitsThroughRestartThenReady(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Second, 30*time.Second)
+	const target = "qwen3.6-27b"
+	stub := &benchStub{ready: true, rec: realRec(), downloading: true,
+		statusSeq: []statusStep{
+			{code: http.StatusInternalServerError},
+			{code: http.StatusInternalServerError},
+			switchDownloading(target, 1<<30, 4<<30),
+			switchReady(target),
+		}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if stub.acceptCount != 1 || stub.acceptedID != target {
+		t.Errorf("accept = %d id=%q, want 1 / %s", stub.acceptCount, stub.acceptedID, target)
+	}
+	for _, want := range []string{
+		"Press Enter anytime",
+		"Waiting for the agent to restart",
+		"Qwen3.6 27B ready — the agent is now serving it",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+// Pressing Enter during the wait backgrounds the download and explains how
+// to keep watching it.
+func TestAcceptSwitch_EnterBackgrounds(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Second, 30*time.Second)
+	const target = "qwen3.6-27b"
+	stub := &benchStub{ready: true, rec: realRec(), downloading: true,
+		statusSeq: []statusStep{switchDownloading(target, 1<<30, 4<<30)}} // never ready
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	done := make(chan struct{})
+	go func() {
+		// "y" accepts the switch; the second line is the backgrounding Enter.
+		_ = promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n\n"), false)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Enter did not background the wait")
+	}
+	if !strings.Contains(out.String(), "Continuing in the background") {
+		t.Errorf("expected the background note, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "waired models ls") {
+		t.Errorf("expected the models-ls hint, got:\n%s", out.String())
+	}
+}
+
+// A target that is already on disk skips the wait entirely.
+func TestAcceptSwitch_AlreadyDownloadedSkipsWait(t *testing.T) {
+	stub := &benchStub{ready: true, rec: realRec(), downloading: false}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if !strings.Contains(out.String(), "already downloaded") {
+		t.Errorf("expected the already-downloaded fast path, got:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "Continuing in the background") {
+		t.Errorf("must not enter the wait when nothing is downloading:\n%s", out.String())
+	}
+}
+
+// A persistently failed download is terminal — with a retry hint — but only
+// after several consecutive observations.
+func TestAcceptSwitch_PersistentFailureExplains(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Second, 30*time.Second)
+	const target = "qwen3.6-27b"
+	stub := &benchStub{ready: true, rec: realRec(), downloading: true,
+		statusSeq: []statusStep{switchFailed(target)}} // fails forever
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if !strings.Contains(out.String(), "Download failed") ||
+		!strings.Contains(out.String(), "waired models pull qwen3.6-27b") {
+		t.Errorf("expected the terminal-failure hint, got:\n%s", out.String())
+	}
+}
+
+// A single transient failed record (the cancelled pre-restart pull) must not
+// abort the wait: the post-restart bootstrap retries and the model readies.
+func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Second, 30*time.Second)
+	const target = "qwen3.6-27b"
+	stub := &benchStub{ready: true, rec: realRec(), downloading: true,
+		statusSeq: []statusStep{
+			switchFailed(target),
+			switchDownloading(target, 2<<30, 4<<30),
+			switchReady(target),
+		}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if strings.Contains(out.String(), "Download failed") {
+		t.Errorf("one transient failed tick must not be terminal:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "ready — the agent is now serving it") {
+		t.Errorf("expected the wait to reach ready, got:\n%s", out.String())
 	}
 }

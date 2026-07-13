@@ -106,7 +106,7 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			}
 			// #133: once the daemon has the model ready, benchmark it and
 			// offer a lighter model if this host can't sustain the pick.
-			resp, _ := benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, bufio.NewScanner(os.Stdin))
+			resp, _ := benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, bufio.NewScanner(os.Stdin), isTerminal(os.Stdout))
 			printDaemonSuccessBox(st.AccountEmail, outcomeFrom(resp))
 			return nil
 		case management.LoginPhaseError:
