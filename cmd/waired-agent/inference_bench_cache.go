@@ -217,15 +217,16 @@ func (c *benchCache) Invalidate() error {
 }
 
 // defaultWairedCachePath returns the on-disk location of the boot
-// benchmark cache, honouring XDG_CACHE_HOME and falling back to
-// $HOME/.cache. Returns "" when neither env var is set (test runners,
-// containers without a HOME); the caller should treat that as
-// "caching disabled" rather than writing to /tmp.
+// benchmark cache, honouring XDG_CACHE_HOME and falling back to the
+// user home (os.UserHomeDir, so %USERPROFILE% works on Windows).
+// Returns "" when no home resolves (test runners, containers without
+// a HOME); the caller should treat that as "caching disabled" rather
+// than writing to /tmp.
 func defaultWairedCachePath() string {
 	if x := os.Getenv("XDG_CACHE_HOME"); x != "" {
 		return filepath.Join(x, "waired", "bench.json")
 	}
-	if h := os.Getenv("HOME"); h != "" {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
 		return filepath.Join(h, ".cache", "waired", "bench.json")
 	}
 	return ""
