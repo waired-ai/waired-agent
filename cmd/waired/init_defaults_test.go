@@ -50,6 +50,27 @@ func TestDefaultStateDirMatchesInit(t *testing.T) {
 	}
 }
 
+func TestClaudeManagedEligibleFor(t *testing.T) {
+	cases := []struct {
+		goos        string
+		euid        int
+		managedPath string
+		want        bool
+	}{
+		{"linux", 0, "/etc/claude-code/managed-settings.json", true},
+		{"linux", 1000, "/etc/claude-code/managed-settings.json", false}, // non-elevated init
+		{"darwin", 0, "/Library/Application Support/ClaudeCode/managed-settings.json", true},
+		{"darwin", 501, "/Library/Application Support/ClaudeCode/managed-settings.json", false},
+		{"windows", -1, "", false}, // Windows uses `waired claude enable` instead
+		{"linux", 0, "", false},    // no managed path resolved
+	}
+	for _, c := range cases {
+		if got := claudeManagedEligibleFor(c.goos, c.euid, c.managedPath); got != c.want {
+			t.Errorf("claudeManagedEligibleFor(%q, %d, %q) = %v, want %v", c.goos, c.euid, c.managedPath, got, c.want)
+		}
+	}
+}
+
 func TestInitStateDirMode(t *testing.T) {
 	cases := []struct {
 		goos string

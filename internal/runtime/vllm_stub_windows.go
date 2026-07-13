@@ -1,8 +1,8 @@
 //go:build windows
 
 // This file provides stubs for the vLLM-related types and entry points
-// that are excluded from the Windows build (vllm.go / vllm_install.go
-// are `//go:build !windows` because vLLM is Linux/Python+CUDA only).
+// that are excluded from the Windows build (vllm.go / vllm_install.go /
+// uv.go are `//go:build linux` because vLLM is Linux/Python+CUDA only).
 // cmd/waired and cmd/waired-agent still reference these symbols at
 // compile time; the stubs let those binaries compile on Windows and
 // surface "vLLM is not supported on Windows" errors at runtime.

@@ -1980,15 +1980,16 @@ func sanitiseModelID(s string) string {
 
 // defaultCachePath returns the model cache root used by the hardware
 // profiler's free-space probe. Mirrors catalog.DefaultStatePath but
-// for the cache-home subtree.
+// for the cache-home subtree. os.UserHomeDir (not $HOME) so the probe
+// also resolves on Windows, where %USERPROFILE% is the home variable.
 func defaultCachePath() string {
 	if x := os.Getenv("XDG_CACHE_HOME"); x != "" {
-		return x + "/waired/inference"
+		return filepath.Join(x, "waired", "inference")
 	}
-	if h := os.Getenv("HOME"); h != "" {
-		return h + "/.cache/waired/inference"
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return filepath.Join(h, ".cache", "waired", "inference")
 	}
-	return "/tmp"
+	return os.TempDir()
 }
 
 // --- Step 2: state-driven engine selection + AllowAutoFallback ---

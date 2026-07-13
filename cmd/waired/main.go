@@ -444,10 +444,8 @@ func runInitBody(o *initFlags) error {
 	ollamaSourceChanged := false
 	// claudeManagedEligible: whether `waired init` will write the system-wide
 	// Claude Code managed settings (ANTHROPIC_BASE_URL -> local gateway, no
-	// credential) and sweep up any retired MITM proxy artifacts (#488). The file
-	// lives at a root-owned OS path, so this needs an elevated init (euid 0 on
-	// Linux/macOS; Windows is -1 here and uses `waired claude enable` instead).
-	claudeManagedEligible := os.Geteuid() == 0 && claudemanaged.Path() != ""
+	// credential) and sweep up any retired MITM proxy artifacts (#488).
+	claudeManagedEligible := claudeManagedEligibleFor(runtime.GOOS, os.Geteuid(), claudemanaged.Path())
 
 	// Load any existing agent.json so the inference prompt's defaults
 	// reflect prior answers. The actual prompt runs in the
@@ -1355,6 +1353,15 @@ func initStateDirMode(goos string, euid int) paths.Mode {
 		return paths.System
 	}
 	return paths.Interactive
+}
+
+// claudeManagedEligibleFor is the testable core of init's
+// claudeManagedEligible gate: the managed-settings file lives at a
+// root-owned OS path, so writing it needs an elevated init (euid 0 on
+// Linux/macOS). Windows configures Claude request routing via
+// `waired claude enable` instead, and its managedPath is "" anyway.
+func claudeManagedEligibleFor(goos string, euid int, managedPath string) bool {
+	return (goos == "linux" || goos == "darwin") && euid == 0 && managedPath != ""
 }
 
 // splitHostPort + newReservedUDPPort live in helpers.go to keep main.go
