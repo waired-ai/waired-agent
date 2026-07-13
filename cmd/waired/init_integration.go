@@ -127,13 +127,25 @@ func promptIntegrationConsent(in io.Reader, out io.Writer, inp integrationConsen
 	item("OpenCode", "plugin", "~/.config/opencode/plugin/waired.js")
 	item("OpenClaw", "plugin", "~/.openclaw/plugins/waired/")
 
-	if inp.ClaudeManaged {
+	if inp.ClaudeManaged && inp.NonInteractive {
 		writePrompt(out)
 		writePromptf(out, "  For %s it also writes system-wide %s so\n", product("Claude Code"), bold("managed settings"))
 		writePromptf(out, "  %s points at your local gateway — %s, so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
 		writePrompt(out, "  claude.ai subscription and auto-mode keep working. Local inference serves")
 		writePrompt(out, "  requests and falls back to the real Anthropic API when unavailable, so claude")
 		writePromptf(out, "  never breaks. Reverse anytime with %s.\n", cyan("sudo waired claude disable"))
+	}
+	if inp.ClaudeManaged && !inp.NonInteractive {
+		// Interactive installs defer the actual routing flip: this consent
+		// only installs artifacts, and the managed-settings question is
+		// asked at the end of install, once the local stack can serve
+		// (waired#772).
+		writePrompt(out)
+		writePromptf(out, "  For %s you'll be asked %s whether to route\n", product("Claude Code"), bold("at the end of install"))
+		writePromptf(out, "  its requests through Waired: system-wide %s point\n", bold("managed settings"))
+		writePromptf(out, "  %s at your local gateway — %s, so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
+		writePrompt(out, "  claude.ai subscription and auto-mode keep working. Reverse anytime with")
+		writePromptf(out, "  %s.\n", cyan("sudo waired claude disable"))
 	}
 
 	if inp.NonInteractive {

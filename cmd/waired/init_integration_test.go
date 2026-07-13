@@ -108,10 +108,34 @@ func TestPromptIntegrationConsent_ClaudeManagedDisclosure(t *testing.T) {
 				t.Errorf("ClaudeManaged consent missing %q; out:\n%s", want, s)
 			}
 		}
+		// Interactive installs defer the routing flip to a second question
+		// at the end of install (waired#772) — the disclosure must say so.
+		if !strings.Contains(s, "at the end of install") {
+			t.Errorf("interactive consent must announce the deferred routing question; out:\n%s", s)
+		}
 		for _, gone := range retiredMarkers {
 			if strings.Contains(s, gone) {
 				t.Errorf("managed-settings consent must not mention retired %q; out:\n%s", gone, s)
 			}
+		}
+	})
+
+	t.Run("on-non-interactive", func(t *testing.T) {
+		var out bytes.Buffer
+		inp := consentInput(nil)
+		inp.ClaudeManaged = true
+		inp.NonInteractive = true
+		_ = promptIntegrationConsent(panicReader{}, &out, inp)
+		s := out.String()
+		for _, want := range managedMarkers {
+			if !strings.Contains(s, want) {
+				t.Errorf("non-interactive ClaudeManaged consent missing %q; out:\n%s", want, s)
+			}
+		}
+		// Non-interactive keeps the single-consent immediate flip, so the
+		// disclosure keeps the present-tense "it also writes" phrasing.
+		if !strings.Contains(s, "it also writes") {
+			t.Errorf("non-interactive consent must disclose the immediate write; out:\n%s", s)
 		}
 	})
 

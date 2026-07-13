@@ -84,6 +84,17 @@ Pass the flag when starting the agent directly:
 waired-agent --inference-bundled-model-id=qwen3-coder-30b-a3b-instruct
 ```
 
+## Accepting a benchmark recommendation
+
+When `waired runtimes benchmark` (or the end-of-install check) recommends a
+different model, the recommendation names the current → candidate pair with
+each model's catalog quality tier so you can weigh the speed/quality
+trade-off. If you accept and the new model still needs a download, the CLI
+waits for it in the foreground with progress, so the machine is ready when
+the command returns. Press **Enter** at any time to continue in the
+background instead — the agent finishes the download and starts serving the
+model on its own; watch it with `waired models ls` or `waired status`.
+
 ## Confirm the switch
 
 After restarting, the new model is pulled on demand (this can take a few minutes):

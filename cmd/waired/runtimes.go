@@ -52,7 +52,7 @@ func newRuntimesBenchmarkCmd() *cobra.Command {
 			if !isTerminal(os.Stdin) {
 				nonInteractive = true
 			}
-			return promptBenchmarkRecommendation(mgmt, nonInteractive, os.Stdout, os.Stdin)
+			return promptBenchmarkRecommendation(mgmt, nonInteractive, os.Stdout, os.Stdin, isTerminal(os.Stdout))
 		},
 	}
 	addMgmtFlag(cmd, &mgmt)

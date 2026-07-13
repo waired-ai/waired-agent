@@ -99,7 +99,7 @@ func TestPreferredModel_UnknownModelReturns404(t *testing.T) {
 	}
 }
 
-func TestPreferredModel_UndownloadedTriggersPull(t *testing.T) {
+func TestPreferredModel_UndownloadedReportsDownloadingWithoutPull(t *testing.T) {
 	prefDir := t.TempDir()
 	var restarts int32
 	inf := &fakeInference{
@@ -117,8 +117,12 @@ func TestPreferredModel_UndownloadedTriggersPull(t *testing.T) {
 	if !got.Downloading {
 		t.Errorf("Downloading should be true when model is missing")
 	}
-	if inf.pulled != "qwen3-8b-instruct" {
-		t.Errorf("PullModel should have been called for 8B, got %q", inf.pulled)
+	// The handler must NOT dispatch a pre-restart pull: the imminent
+	// restart would cancel it, and its failure path writes a transient
+	// failed state a watching client could misread (waired#774). The
+	// post-restart bootstrap owns the real pull.
+	if inf.pulled != "" {
+		t.Errorf("PullModel must not be called pre-restart, got %q", inf.pulled)
 	}
 }
 
