@@ -3,14 +3,26 @@
 // proxy, CA, /etc/hosts edit, or shell-env management (#488).
 //
 // It sets env.ANTHROPIC_BASE_URL — pointing at waired's plain-HTTP loopback
-// Anthropic listener (127.0.0.1:ClaudeGatewayPort) — plus two non-credential
-// context-window flags (#623): env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
-// (so Claude Code reads the effective local window from our /v1/models) and
-// env.CLAUDE_CODE_AUTO_COMPACT_WINDOW (a static compaction-window backstop). It
-// deliberately writes NO credential variable. Per the Claude Code docs, a
-// base-URL-only managed setting (no auth token) does not replace the claude.ai
-// subscription, so subscription auto-mode (opusplan + the Max usage-threshold
-// Opus->Sonnet fallback) is preserved.
+// Anthropic listener (127.0.0.1:ClaudeGatewayPort) — plus one non-credential
+// flag: env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 (#623, populates the
+// /model picker from our /v1/models). It deliberately writes NO credential
+// variable. Per the Claude Code docs, a base-URL-only managed setting (no auth
+// token) does not replace the claude.ai subscription, so subscription
+// auto-mode (opusplan + the Max usage-threshold Opus->Sonnet fallback) is
+// preserved.
+//
+// Context-window posture (#623 → #771): Claude Code resolves its auto-compact
+// window per turn from the selected model id alone ("[1m]" variants → 1M,
+// otherwise its built-in per-model table; verified against v2.1.207). An env
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW override outranks that resolution and is
+// frozen at process start, so the static 200000 backstop #623 wrote here
+// capped genuine 1M Anthropic sessions at 200k while adding nothing below
+// 200k (the value never went under the model default). #771 therefore stops
+// writing it — the gateway's per-request "prompt is too long" 400
+// (internal/gateway/anthropic.go) remains the invariant that protects the
+// smaller effective local window on the waired/auto routes, and Claude Code's
+// own per-model resolution now governs the anthropic route, tracking /model
+// switches mid-session. Write scrubs the legacy value from earlier installs.
 //
 // It also installs a Stop hook (hooks.Stop) that runs `waired claude
 // _fallback-hook` so a post-dispatch fallback to the real Anthropic API is
@@ -25,9 +37,10 @@
 //
 // The writer is merge-safe: it preserves any keys an operator (or MDM) already
 // placed in managed-settings.json and only touches its own env keys
-// (ANTHROPIC_BASE_URL + the two #623 flags) and its hooks.Stop entry. Remove
-// undoes exactly those (the flags only when our loopback base URL is present),
-// leaving a pre-existing file otherwise intact.
+// (ANTHROPIC_BASE_URL, the #623 discovery flag, the legacy #623 auto-compact
+// window when it still carries the value waired wrote) and its hooks.Stop
+// entry. Remove undoes exactly those (the flags only when our loopback base
+// URL is present), leaving a pre-existing file otherwise intact.
 package claudemanaged
 
 import (
@@ -46,24 +59,28 @@ import (
 const baseURLKey = "ANTHROPIC_BASE_URL"
 
 // discoveryKey turns on Claude Code's gateway model discovery (v2.1.129+):
-// at startup it queries {ANTHROPIC_BASE_URL}/v1/models and adopts each
-// model's max_input_tokens as its auto-compaction window. waired's intercept
-// serves that endpoint locally with the effective LOCAL context window (#623),
-// so Claude Code compacts before it overruns the model instead of letting
-// Ollama silently truncate the prompt head.
+// at startup it queries {ANTHROPIC_BASE_URL}/v1/models and lists the returned
+// ids in the /model picker. As of v2.1.207 (verified against the binary) the
+// response's max_input_tokens does NOT feed the auto-compact window — the
+// window comes from Claude Code's own per-model-id resolution — but the flag
+// is kept: the picker entries are useful, and a max_input_tokens-consuming
+// capability cache already exists in the binary behind a compile-time-off
+// gate, so waired's route-aware /v1/models advertisement starts working the
+// release it is enabled.
 const discoveryKey = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 
-// autoCompactWindowKey pins Claude Code's auto-compaction window directly —
-// a reliable static backstop to the dynamic /v1/models advertisement, which
-// depends on the model picker binding (#623). Set to the coding-agent serve
-// floor (~200k); hosts that sustain a smaller window are still caught
-// precisely by the per-request 400 overflow guard.
+// autoCompactWindowKey is Claude Code's highest-precedence auto-compact
+// window override: window = min(model window, env value), frozen at process
+// start. waired no longer writes it (#771) — see the package comment — but
+// still recognizes the key to scrub the legacy value on Write and strip it
+// on Remove.
 const autoCompactWindowKey = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
-// autoCompactWindowValue is the static value written for autoCompactWindowKey.
-// 200000 = the ~200k coding-agent context floor (router.CodingAgentContextFloorTokens,
-// duplicated here to keep this package free of an inference-side import).
-const autoCompactWindowValue = "200000"
+// legacyAutoCompactWindowValue is the static value pre-#771 waired wrote for
+// autoCompactWindowKey (the ~200k coding floor). Write deletes the key only
+// when it still carries exactly this value, so an operator's own deliberate
+// override survives an upgrade.
+const legacyAutoCompactWindowValue = "200000"
 
 // SubagentModelID is the model id that labels Claude Code subagent
 // traffic (#645/#646): managed settings will pin it via
@@ -124,12 +141,17 @@ func Write(baseURL string) (string, error) {
 		env = map[string]any{}
 	}
 	env[baseURLKey] = baseURL
-	// #623: advertise + enforce the effective local context window. The
-	// discovery flag makes Claude Code read our local /v1/models window;
-	// the auto-compact window is a static backstop. Neither is a credential,
-	// so the subscription auto-mode stays intact (same posture as the base URL).
+	// #623: populate the /model picker from our route-aware /v1/models. Not a
+	// credential, so the subscription auto-mode stays intact (same posture as
+	// the base URL).
 	env[discoveryKey] = "1"
-	env[autoCompactWindowKey] = autoCompactWindowValue
+	// #771: the static auto-compact window backstop is gone — it capped 1M
+	// Anthropic sessions at 200k while the per-request 400 overflow guard
+	// already protects sub-200k local windows. Scrub the value a pre-#771
+	// waired wrote; an operator's own different value is left alone.
+	if cur, ok := env[autoCompactWindowKey].(string); ok && cur == legacyAutoCompactWindowValue {
+		delete(env, autoCompactWindowKey)
+	}
 	// Subagent labeling (#646): CLAUDE_CODE_SUBAGENT_MODEL is position 1
 	// in Claude Code's subagent model resolution (above per-invocation
 	// params and agent frontmatter), so every subagent request carries
@@ -177,15 +199,19 @@ func Remove() (bool, error) {
 	}
 	removed := false
 	// Strip our loopback ANTHROPIC_BASE_URL (only when it is ours) together
-	// with the #623 flags we co-write with it, preserving an operator-owned
-	// non-loopback URL and any other env keys. The subagent label (#646)
-	// has its own ownership guard: removed only when it still carries the
-	// exact id waired wrote.
+	// with the #623 discovery flag we co-write with it, preserving an
+	// operator-owned non-loopback URL and any other env keys. The legacy
+	// auto-compact window (no longer written since #771) is stripped only
+	// when it still carries the exact value pre-#771 waired wrote, so an
+	// operator's own override survives a disable. The subagent label (#646)
+	// has the same ownership-guard shape.
 	if env, ok := obj["env"].(map[string]any); ok {
 		if cur, ok := env[baseURLKey].(string); ok && strings.HasPrefix(cur, loopbackPrefix) {
 			delete(env, baseURLKey)
 			delete(env, discoveryKey)
-			delete(env, autoCompactWindowKey)
+			if cur, ok := env[autoCompactWindowKey].(string); ok && cur == legacyAutoCompactWindowValue {
+				delete(env, autoCompactWindowKey)
+			}
 			removed = true
 		}
 		if cur, ok := env[subagentModelKey].(string); ok && cur == SubagentModelID {
