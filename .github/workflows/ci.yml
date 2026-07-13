@@ -101,6 +101,14 @@ jobs:
             --ignore github.com/waired-ai/waired-agent \
             --ignore github.com/waired-ai/waired-agent/proto
 
+      - name: testnet gate guard (every internal/ package classified)
+        # Keeps the per-PR testnet gate's judgement-based allowlist honest:
+        # a new internal/ package fails lint until it is classified in
+        # scripts/ci/testnet-relevant-paths.txt or
+        # scripts/ci/testnet-nonrelevant-packages.txt (same design as the
+        # monorepo's guard, waired#738).
+        run: bash scripts/ci/testnet-gate-guard.sh
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
