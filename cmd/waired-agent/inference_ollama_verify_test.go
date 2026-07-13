@@ -365,10 +365,10 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 
 // anchorSpillFixture mirrors the #625 anchor: mtp-class weights on the
 // 24467 MiB card, where computeOllamaTuning takes the intentional-spill
-// branch. Under the #670 speed cap the served window is the largest one
-// holding OllamaIntentionalSpillCapExpected (~163k, expected ≈ 7.4%),
-// not the full 200704 floor (whose ≈11.5% expected spill would drop
-// decode below the selection floor per the #664 measurement).
+// branch. Under the #765 speed cap (0.20, clamped to the selection
+// bound) the full 200704 floor is served with expected spill ≈ 11.7% —
+// per the #664 model that decodes ~85 tok/s, above the 60 tok/s floor.
+// (At the pre-#765 0.075 cap the tuner instead trimmed to ~163k.)
 func anchorSpillFixture() (catalog.Manifest, catalog.Variant, hardware.Profile, ollamaTuning) {
 	m := catalog.Manifest{
 		ModelID:       "anchor-moe",
@@ -393,11 +393,11 @@ func anchorSpillFixture() (catalog.Manifest, catalog.Variant, hardware.Profile, 
 func TestVerifyOllamaTuning_PlannedSpillWithinBound(t *testing.T) {
 	m, _, hw, tn := anchorSpillFixture()
 	_ = m
-	if tn.ExpectedSpillFraction <= 0 || tn.ContextLength >= 200704 || tn.ContextLength <= ollamaContextFloor {
-		t.Fatalf("fixture should take the speed-capped intentional-spill branch: %+v", tn.ModelTuning)
+	if tn.ExpectedSpillFraction <= 0 || tn.ContextLength != 200704 {
+		t.Fatalf("fixture should serve the full floor as an intentional spill: %+v", tn.ModelTuning)
 	}
 	// Measured 13.5% in system RAM (the #625 shape) — under the
-	// tolerance 2×expected ≈ 14.8% at the capped window.
+	// tolerance 2×expected ≈ 23.4% at the floor window.
 	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: 23_100_000_000,
 		psVRAM: 19_981_500_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
@@ -427,11 +427,11 @@ func TestVerifyOllamaTuning_LargeBatchWidensSpillTolerance(t *testing.T) {
 	if tn.ExpectedSpillFraction <= 0 {
 		t.Fatalf("fixture should be an intentional-spill config: %+v", tn.ModelTuning)
 	}
-	// 18.7% measured spill (the #642 reference-host measurement): over the
-	// base tolerance 2×expected (~14.8%) but within it plus the 2 GiB
-	// generation-buffer allowance (~9.3% of a 23.1 GB model).
+	// 24.2% measured spill: over the base tolerance 2×expected (~23.4%)
+	// but within it plus the 2 GiB generation-buffer allowance (~9.3% of
+	// a 23.1 GB model, clamped at the 25% absolute tolerance max).
 	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: 23_100_000_000,
-		psVRAM: 18_780_000_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
+		psVRAM: 17_509_800_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)
 	defer srv.Close()
 
@@ -453,7 +453,7 @@ func TestVerifyOllamaTuning_LargeBatchWidensSpillTolerance(t *testing.T) {
 // back to the no-spill sizing with exactly one restart.
 func TestApplyOllamaTuningVerification_PlannedSpillOverBound(t *testing.T) {
 	m, v, hw, tn := anchorSpillFixture()
-	// 30% measured spill > tolerance 2×expected ≈ 14.8%.
+	// 30% measured spill > the 25% absolute tolerance clamp.
 	f := &fakeOllamaAPI{psName: "anchor:tag", psSize: 23_100_000_000,
 		psVRAM: 16_170_000_000, psCtx: tn.ContextLength, tagSize: 22_620_000_000}
 	srv := f.server(t)

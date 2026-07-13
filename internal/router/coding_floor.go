@@ -20,7 +20,8 @@
 //     tier-69 dense that fits un-spilled at ~32 tok/s), so selection
 //     keeps a generous bound; the serve tuning separately caps the
 //     spill it CREATES at OllamaIntentionalSpillCapExpected so decode
-//     stays at the coding-agent selection floor (#670).
+//     stays at the coding-agent selection floor (#670/#765 — at the
+//     60 true-decode floor the cap clamps to the selection bound).
 //   - Host gate (vllm path, #675/#678): the floor window's KV (fp8 on
 //     Ada+ per #676, else fp16) plus activation-padded weights must fit
 //     the default gpu-memory-utilization budget at the auto
@@ -37,26 +38,37 @@ import (
 
 const (
 	// CodingAgentSelectionFloorTokps is the decode throughput (tok/s,
-	// shallow-context boot benchmark) below which a model is considered
-	// too slow for coding-agent use on that host (#670). 100 was chosen
-	// so that after the measured long-context degradation (~200k-depth
-	// decode runs at roughly 0.7–0.8× the shallow rate on the anchor
-	// host, docs/reports/20260704-mtp-vs-spill-24gb.md C1: 165→116
-	// tok/s at 115k) the effective rate at depth stays ≥ ~80 tok/s.
+	// shallow-context boot benchmark, TRUE decode per #764: engine
+	// counters or the overhead-corrected slope, median of 3) below
+	// which a model is considered too slow for coding-agent use on
+	// that host (#765, decision 20260711). 60 is anchored on industry
+	// data: hosted Claude Sonnet 5 serves 67–90 tok/s output (the
+	// entire Claude Code user base works in that band daily) and
+	// NVIDIA's agentic-coding benchmark evaluates at 20 and 60 tok/s
+	// SLOs. The previous value (100, #670) was calibrated against the
+	// wall-clock benchmark #764 replaced, which under-measured fast
+	// hosts ~35% — in true-decode terms the felt threshold already sat
+	// in this 60–80 band, so this is a re-expression on the corrected
+	// scale more than a loosening.
 	// This is the default for the #133 lighter/upgrade recommendation
 	// floor (config interactive_floor_tokps overrides it); it is NOT
 	// the Phase-7 admission divisor, which stays at 30 tok/s — that one
 	// models sustained per-session consumption, not acceptable latency
 	// (see cmd/waired-agent/inference_bench.go).
-	CodingAgentSelectionFloorTokps = 100.0
+	CodingAgentSelectionFloorTokps = 60.0
 
 	// CodingAgentDepthFloorFraction scales the selection floor for the
 	// depth-benchmark leg of the #133 comparison: the shallow boot
 	// decode must clear the floor itself, while decode measured at
-	// 64k–200k depth must clear floor × this fraction (= 80 tok/s at
-	// the 100 default). The shallow floor already prices in the
-	// expected depth degradation; demanding the full floor at depth
-	// would double-count it and nag on every host.
+	// 64k–200k depth must clear floor × this fraction (= 48 tok/s at
+	// the 60 default). 0.8 matches the measured long-context
+	// degradation band (~200k-depth decode runs at roughly 0.7–0.8×
+	// the shallow rate on the anchor host,
+	// docs/reports/20260704-mtp-vs-spill-24gb.md C1: 165→116 tok/s at
+	// 115k), so a host at the shallow floor still lands at or above
+	// the scaled floor at depth. The shallow floor already prices in
+	// the expected depth degradation; demanding the full floor at
+	// depth would double-count it and nag on every host.
 	CodingAgentDepthFloorFraction = 0.8
 
 	// CodingAgentContextFloorTokens is the serve-time floor window:
@@ -76,8 +88,7 @@ const (
 
 	// OllamaMaxExpectedSpillFraction bounds the *expected measured*
 	// spill the SELECTION gate accepts for a variant's floor-window
-	// serviceability. It is deliberately more generous than the tuning
-	// cap below: within this bound a spilled high-tier model still
+	// serviceability: within this bound a spilled high-tier model still
 	// dominates the no-spill lower-tier alternative on both quality
 	// and speed (24 GB anchor: qwen3.6-35b-a3b mtp at 11.5% expected
 	// decodes 85–104 tok/s vs the no-spill tier-69 dense at ~32), so
@@ -88,19 +99,23 @@ const (
 
 	// OllamaIntentionalSpillCapExpected bounds the expected spill the
 	// serve tuning deliberately CREATES when widening the window toward
-	// the coding floor (#670). Derived from the #664 A/B on the anchor
-	// host, where the spilled fraction executes on a single CPU thread:
+	// the coding floor. Derived from the #664 A/B on the anchor host,
+	// where the spilled fraction executes on a single CPU thread:
 	// no-spill decode 158.6 tok/s, 13.4% measured spill → ~85 tok/s.
 	// Modeling 1/rate = (1-s)/158.6 + s/21.25 (the second term is the
 	// fitted effective rate of the CPU-executed share), decode stays at
-	// or above CodingAgentSelectionFloorTokps while measured spill
-	// s ≤ ~0.09, i.e. expected ≤ ~0.075 at the anchor's expected↔
-	// measured ratio (11.5% ↔ 13.4%). Above this the tuner serves the
-	// largest window that holds the cap instead of the full floor —
-	// trading window for keeping decode at the selection floor. Re-run
+	// or above the 60 tok/s selection floor (#765) while measured spill
+	// s ≤ ~0.25, i.e. expected ≤ ~0.22 at the anchor's expected↔
+	// measured ratio (11.5% ↔ 13.4%). That exceeds the selection gate's
+	// outer bound, so the cap clamps to OllamaMaxExpectedSpillFraction:
+	// every variant the gate admits now serves its full floor window,
+	// and the tuner's trim only protects preferred-override models that
+	// bypass the gate. (At the previous 100 floor the same model gave
+	// ~0.075 and the 24 GB anchor traded window for decode.) Re-run
 	// this derivation whenever the floor or the #664 numbers change
-	// (an engine fix parallelizing the spilled phase raises the cap).
-	OllamaIntentionalSpillCapExpected = 0.075
+	// (an engine fix parallelizing the spilled phase raises the derived
+	// bound further above the clamp).
+	OllamaIntentionalSpillCapExpected = 0.20
 )
 
 // MeetsNativeContextFloor reports whether the manifest's native window

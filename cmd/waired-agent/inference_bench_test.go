@@ -694,9 +694,9 @@ func TestRunBootBenchmark_NoCacheKeyDisablesCaching(t *testing.T) {
 }
 
 func TestResolveInteractiveFloor(t *testing.T) {
-	// The default is the #670 selection floor, NOT the admission divisor
-	// (avgCodingAgentTokRate) — the two deliberately diverged when the
-	// floor went to 100.
+	// The default is the #670/#765 selection floor, NOT the admission
+	// divisor (avgCodingAgentTokRate) — the two deliberately diverged
+	// when the floor left 30 (#670) and stay separate at 60 (#765).
 	if got := resolveInteractiveFloor(0); got != router.CodingAgentSelectionFloorTokps {
 		t.Errorf("resolveInteractiveFloor(0) = %v, want default %v", got, router.CodingAgentSelectionFloorTokps)
 	}

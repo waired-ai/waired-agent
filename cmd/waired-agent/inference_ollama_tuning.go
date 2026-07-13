@@ -200,12 +200,14 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// spilled fraction executes on a single CPU thread in the bundled
 	// engine (#664: 158.6 tok/s no-spill vs ~85 at 13.4% measured), so
 	// spill past OllamaIntentionalSpillCapExpected costs more decode
-	// than the extra window is worth under the 100 tok/s floor (#670).
-	// When the full floor would exceed the cap, serve the largest
-	// window that holds it instead (anchor host: ~165k at ~100 tok/s
-	// rather than 200704 at ~85). UMA is excluded (one memory pool, no
-	// spill semantics); the tone is informational — every branch is a
-	// working configuration, not an error.
+	// than the extra window is worth under the 60 tok/s true-decode
+	// floor (#670/#765; at that floor the cap clamps to the selection
+	// gate's 0.20, so the anchor host serves the full 200704 floor at
+	// ~85 tok/s instead of trimming to ~165k as it did under the 100
+	// floor). When the full floor would still exceed the cap, serve
+	// the largest window that holds it instead. UMA is excluded (one
+	// memory pool, no spill semantics); the tone is informational —
+	// every branch is a working configuration, not an error.
 	if floorCtx := router.EffectiveContextFloor(m); allowIntentionalSpill && ctx < floorCtx && !hw.UnifiedMemory && len(hw.GPUs) > 0 {
 		target := floorCtx
 		expected := router.OllamaExpectedSpillFraction(

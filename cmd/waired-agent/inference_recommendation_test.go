@@ -74,8 +74,9 @@ func TestRecommendationFromBench_BelowFloorSuggestsLighter(t *testing.T) {
 }
 
 func TestRecommendationFromBench_AboveFloorNil(t *testing.T) {
+	// 61 sits just above the 60 default floor — pins the boundary.
 	rec := recommendationFromBench(
-		BenchResult{TokensPerSec: 120, Capacity: 4}, nil,
+		BenchResult{TokensPerSec: 61, Capacity: 2}, nil,
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec != nil {
 		t.Errorf("above floor → want nil, got %+v", rec)
@@ -180,7 +181,7 @@ func storeWithActiveLight(t *testing.T) *catalog.Store {
 
 func TestUpgradeFromBench_HeadroomSuggestsHigherTier(t *testing.T) {
 	// effBW = 450 × 1.5 = 675 GB/s; heavy (5 GB dense) predicts 135
-	// tok/s ≥ 100 × 1.25 bar → upgrade light→heavy.
+	// tok/s ≥ the 60 × 1.25 = 75 bar → upgrade light→heavy.
 	rec := upgradeFromBench(
 		BenchResult{TokensPerSec: 450, Capacity: 15},
 		storeWithActiveLight(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
@@ -209,8 +210,8 @@ func TestUpgradeFromBench_BelowFloorNil(t *testing.T) {
 }
 
 func TestUpgradeFromBench_InsufficientHeadroomNil(t *testing.T) {
-	// Above the floor (120 ≥ 100) but heavy predicts only 36 tok/s
-	// (120 × 1.5/5) < the 125 bar → no upgrade.
+	// Above the floor (120 ≥ 60) but heavy predicts only 36 tok/s
+	// (120 × 1.5/5) < the 75 bar → no upgrade.
 	rec := upgradeFromBench(
 		BenchResult{TokensPerSec: 120, Capacity: 4},
 		storeWithActiveLight(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
@@ -265,7 +266,7 @@ func TestUpgradeFromBench_DismissedMarker(t *testing.T) {
 // #624/#670: the depth sweep's worst completed decode binds the lighter
 // recommendation when it falls under floor × CodingAgentDepthFloorFraction
 // — a host can decode fine at zero depth and crawl at 131k. The depth leg
-// is held to the scaled floor (80 at the 100 default), not the full one:
+// is held to the scaled floor (48 at the 60 default), not the full one:
 // the shallow floor already prices in the expected depth degradation.
 func TestRecommendationFromBench_DepthDecodeBinds(t *testing.T) {
 	depth := &DepthBenchResult{Stages: []DepthStageResult{
@@ -276,7 +277,7 @@ func TestRecommendationFromBench_DepthDecodeBinds(t *testing.T) {
 		BenchResult{TokensPerSec: 120, Capacity: 4}, depth,
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, "")
 	if rec == nil {
-		t.Fatal("expected a recommendation: worst depth decode 22 < depth floor 80")
+		t.Fatal("expected a recommendation: worst depth decode 22 < depth floor 48")
 	}
 	if rec.MeasuredTokps != 22 {
 		t.Errorf("MeasuredTokps = %v, want the binding depth decode 22", rec.MeasuredTokps)
@@ -285,14 +286,14 @@ func TestRecommendationFromBench_DepthDecodeBinds(t *testing.T) {
 		t.Errorf("Reason should name the binding depth: %q", rec.Reason)
 	}
 
-	// Depth between the scaled floor (80) and the full floor (100) does
+	// Depth between the scaled floor (48) and the full floor (60) does
 	// NOT bind — demanding the full floor at depth would double-count
 	// the degradation the shallow floor already prices in.
-	fast := &DepthBenchResult{Stages: []DepthStageResult{{TargetTokens: 131072, DecodeTokps: 90}}}
+	fast := &DepthBenchResult{Stages: []DepthStageResult{{TargetTokens: 131072, DecodeTokps: 55}}}
 	if rec := recommendationFromBench(
 		BenchResult{TokensPerSec: 120, Capacity: 4}, fast,
 		storeWithActive(t), cpuHost(), recTestManifests(), agentconfig.InferenceConfig{}, ""); rec != nil {
-		t.Errorf("120 tok/s boot + 90 tok/s depth → want nil, got %+v", rec)
+		t.Errorf("120 tok/s boot + 55 tok/s depth → want nil, got %+v", rec)
 	}
 
 	// Failed stages are ignored.
