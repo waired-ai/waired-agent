@@ -200,10 +200,11 @@ type InferenceConfig struct {
 	PreferredModelID string `json:"preferred_model_id"`
 
 	// InteractiveFloorTokps is the minimum boot-benchmark throughput
-	// (tokens/sec) below which the agent recommends a lighter model
-	// (issue #133). 0 means "use the built-in default"
-	// (router.CodingAgentSelectionFloorTokps = 100, #670) — resolved at
-	// the consumer so the constant stays the single source of truth.
+	// (tokens/sec, true decode per #764) below which the agent
+	// recommends a lighter model (issue #133). 0 means "use the
+	// built-in default" (router.CodingAgentSelectionFloorTokps = 60,
+	// #670/#765) — resolved at the consumer so the constant stays the
+	// single source of truth.
 	// Lower it on a host whose coding agent tolerates slower output to
 	// suppress the nag; the recommendation is advisory only and never
 	// auto-switches.
@@ -783,7 +784,7 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 		"force a specific manifest model_id (\"\" lets the auto-picker decide)")
 	fs.Float64Var(&c.Inference.InteractiveFloorTokps, "inference-interactive-floor-tokps",
 		c.Inference.InteractiveFloorTokps,
-		"min boot-benchmark tokens/sec below which a lighter model is recommended (0 = default 100)")
+		"min boot-benchmark tokens/sec below which a lighter model is recommended (0 = default 60)")
 	fs.BoolVar(&c.Inference.AllowAutoFallback, "inference-allow-auto-fallback",
 		c.Inference.AllowAutoFallback,
 		"allow bootstrap to fall back when the chosen runtime is unavailable; false means exit non-zero")

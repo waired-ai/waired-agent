@@ -28,7 +28,10 @@ func TestBenchCache_LoadAbsentReturnsMiss(t *testing.T) {
 func TestBenchCache_RoundTrip(t *testing.T) {
 	c := tempBenchCache(t)
 	now := time.Date(2026, 5, 16, 9, 0, 0, 0, time.UTC)
-	res := BenchResult{TokensPerSec: 123.4, Capacity: 4, VariantID: "qwen3-8b-q4-gguf"}
+	res := BenchResult{
+		TokensPerSec: 123.4, Capacity: 4, VariantID: "qwen3-8b-q4-gguf",
+		Method: benchMethodOllamaEval, SpreadPct: 6.3,
+	}
 	meta := benchCacheHumanMeta{
 		VariantID:     "qwen3-8b-q4-gguf",
 		GPUModel:      "NVIDIA GeForce RTX 4090",
@@ -46,6 +49,9 @@ func TestBenchCache_RoundTrip(t *testing.T) {
 	}
 	if got.TokensPerSec != 123.4 || got.Capacity != 4 || got.VariantID != "qwen3-8b-q4-gguf" {
 		t.Fatalf("Load returned unexpected result: %+v", got)
+	}
+	if got.Method != benchMethodOllamaEval || got.SpreadPct != 6.3 {
+		t.Fatalf("Method/SpreadPct did not round-trip: %+v", got)
 	}
 	if !ts.Equal(now) {
 		t.Fatalf("Load returned measured_at %v, want %v", ts, now)
@@ -144,6 +150,39 @@ func TestBenchCache_StoreDropsStaleSchemaEntries(t *testing.T) {
 	}
 	if _, ok := file.Entries["new-key"]; !ok {
 		t.Error("new-key missing after Store")
+	}
+}
+
+// TestBenchCache_V2WallClockEntriesInvalidated pins the #764 upgrade
+// path: a v2 file (single-run wall-clock semantics, understates fast
+// hosts ~35%) must read as a miss, and the next Store must rewrite the
+// file as the current schema without carrying the v2 entries along.
+func TestBenchCache_V2WallClockEntriesInvalidated(t *testing.T) {
+	c := tempBenchCache(t)
+	if err := os.WriteFile(c.path,
+		[]byte(`{"version":2,"entries":{"v2-key":{"tokens_per_sec":50.0,"capacity":1,"variant_id":"x","gpu_model":"g","engine_kind":"ollama","measured_at":"2026-07-01T00:00:00Z"}}}`),
+		0o644); err != nil {
+		t.Fatalf("seed v2 file: %v", err)
+	}
+	if _, _, hit, err := c.Load("v2-key"); err != nil || hit {
+		t.Fatalf("v2 entry served as hit (err=%v hit=%v); wall-clock numbers must be re-measured", err, hit)
+	}
+	if err := c.Store("v3-key", BenchResult{TokensPerSec: 78, Capacity: 2, Method: benchMethodOllamaEval}, benchCacheHumanMeta{}, time.Now()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	raw, err := os.ReadFile(c.path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	var file benchCacheFile
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatalf("parse back: %v", err)
+	}
+	if file.Version != benchCacheSchemaVersion {
+		t.Errorf("Version = %d, want %d", file.Version, benchCacheSchemaVersion)
+	}
+	if _, ok := file.Entries["v2-key"]; ok {
+		t.Error("v2 wall-clock entry survived the schema bump")
 	}
 }
 
