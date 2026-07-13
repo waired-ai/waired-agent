@@ -1,0 +1,42 @@
+# testnet-nonrelevant-packages.txt — internal/ packages explicitly declared
+# NOT testnet-relevant: a regression here cannot plausibly change what the
+# real-NAT testnet verifies (v4 punch / v6 STUN / enrollment / relay<->direct
+# fallback). Consumed only by scripts/ci/testnet-gate-guard.sh, which requires
+# every internal/ package to be classified either here or in
+# scripts/ci/testnet-relevant-paths.txt.
+#
+# Most of these ARE in the agent binary's compile closure — "linked in" is
+# not the criterion; "implements the mesh / enrollment surface" is (see the
+# membership rule in testnet-relevant-paths.txt). Each entry carries a
+# one-line reason. If a package evolves into the mesh path, MOVE it to the
+# relevant list — do not leave it here with a stale reason.
+#
+# Format: one directory prefix per line (trailing `/`); `#` comments and
+# blank lines ignored; trailing same-line comments allowed.
+
+internal/agentconfig/       # inference-subsystem config resolution (defaults/JSON/env/flags)
+internal/buildinfo/         # build metadata strings
+internal/catalog/           # model catalog data + scoring; drives model selection only
+internal/download/          # model/artifact download helper
+internal/e2e/               # local e2e rigs for inference/integration flows (tag-gated, not in the testnet path)
+internal/gateway/           # Local Gateway (:9473) HTTP adapters; rides the established overlay, does not implement it
+internal/gui/               # tray UI widgets/icons
+internal/hardware/          # hardware probing for model selection
+internal/inference/         # overlay-side inference HTTP service (serves over wgnet, no control/data-plane logic)
+internal/inferencemesh/     # inference request routing across the established overlay
+internal/integration/       # coding-agent integrations (claudecode/opencode/openclaw/vscode/...)
+internal/management/        # localhost management API (:9476) + web-admin backing
+internal/observability/     # agent-side metrics/ring buffers for the management UI
+internal/platform/autostart/    # desktop login-item registration
+internal/platform/browser/      # open-URL helper for login flows
+internal/platform/logsink/      # local log-file sink
+internal/platform/notification/ # desktop notifications
+internal/platform/sdsocket/     # systemd socket activation glue
+internal/platform/service/      # OS service install/uninstall glue; testnet VMs exec the agent via the units in build/, not this
+internal/platform/sockpass/     # local socket handoff helper
+internal/platform/trayhost/     # tray process hosting
+internal/proxy/             # Claude request intercept + hosts/trust + legacy cleanup; node selection over the mesh, not mesh coordination
+internal/router/            # model-name -> node routing table for inference
+internal/runtime/           # inference engine runtimes (ollama/vllm/codeui) + local runtime state
+internal/update/            # self-update channel logic
+internal/version/           # version string

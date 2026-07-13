@@ -76,3 +76,10 @@ Pull requests from forks require maintainer approval before workflows
 run (most CI executes on our self-hosted runners). The DCO and
 gitleaks checks run on GitHub-hosted runners, so you get that feedback
 immediately.
+
+PRs touching mesh / enrollment / `proto/` paths normally also run a
+real-NAT testnet gate (`testnet-pr.yml`), but it is skipped for fork
+PRs — the cross-repo dispatch credential is not available to forks. A
+maintainer runs it after review (by pushing your branch to this repo or
+dispatching the private harness manually); you don't need to do
+anything.

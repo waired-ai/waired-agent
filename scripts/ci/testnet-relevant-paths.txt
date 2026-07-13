@@ -1,0 +1,77 @@
+# testnet-relevant-paths.txt — path prefixes that arm the per-PR real-NAT
+# testnet gate (.github/workflows/testnet-pr.yml). A PR dispatches the
+# private monorepo's testnet.yml (agent_ref = PR head SHA) iff at least one
+# changed file starts with one of the prefixes below (plain string-prefix
+# match, see scripts/ci/testnet-gate.sh). Everything else skips — each run
+# costs real GCP VMs for ~25 minutes.
+#
+# MEMBERSHIP RULE (judgement-based, NOT derived from the build graph —
+# carried over from the monorepo-era list, waired#738): a path belongs here
+# iff a regression in it could plausibly change what testnet VERIFIES —
+# v4 UDP hole punch / NAT detection, v6 STUN observation, enrollment
+# against the bypass CP, WireGuard relay<->direct path switching — or
+# change the testnet harness inputs built from this repo. The compile
+# closure is deliberately NOT the criterion: cmd/waired-agent links most
+# internal/ packages (inference, gateway, integrations, ...) that ride the
+# mesh but do not implement it.
+#
+# scripts/ci/testnet-gate-guard.sh (ci.yml lint job) enforces that every
+# internal/ package is classified either here or in
+# scripts/ci/testnet-nonrelevant-packages.txt — adding a new package fails
+# lint until you make the call. When a change is borderline, do not edit
+# this list ad hoc: add the `run-testnet` label to the PR instead (forces a
+# run without changing policy).
+#
+# Format: one prefix per line; `#` comments and blank lines ignored.
+# Directory prefixes end with `/`; other entries match as plain prefixes.
+
+# --- shared wire-protocol contract (imported by the private CP/relay) ---
+# The whole nested module: disco/frame sealing, signed requests, signer
+# (device certs, network maps, connectivity/scenario types), go.mod/go.sum.
+proto/
+
+# --- mesh / NAT traversal / data plane ---------------------------------
+internal/network/
+internal/relay/
+
+# --- agent<->CP coordination / enrollment / auth ------------------------
+internal/controlclient/
+internal/devicekeys/
+internal/identity/
+internal/deauth/
+internal/setup/
+
+# --- testnet harness hooks in the agent --------------------------------
+internal/testharness/
+
+# --- credential/state storage under enrollment -------------------------
+internal/platform/secrets/
+internal/platform/keychain/
+internal/platform/securestore/
+internal/platform/paths/
+
+# --- shared plumbing linked into the deployed binaries ------------------
+internal/buildflag/
+internal/gcptoken/
+
+# --- main package of the deployed daemon --------------------------------
+# cmd/waired (CLI) is deliberately NOT listed: its mesh-facing logic lives
+# in internal/setup + internal/controlclient (listed above); use the
+# run-testnet label for CLI wiring changes that warrant a run.
+cmd/waired-agent/
+
+# --- module / build inputs that change the shipped binaries -------------
+go.mod
+go.sum
+Makefile
+build/cloudbuild-agent-images.yaml
+build/Dockerfile.waired-agent
+build/agent-bootstrap.sh
+build/waired-agent.service
+build/waired-agent-testharness.service
+
+# --- the gate itself (changing skip policy warrants a full run) ----------
+.github/workflows/testnet-pr.yml
+scripts/ci/testnet-gate.sh
+scripts/ci/testnet-relevant-paths.txt
+scripts/ci/testnet-require-green-remote.sh

@@ -65,13 +65,15 @@ Most regressions to date were one OS silently behaving differently
   execute on the self-hosted `sv-mag-agent` runners). Do not weaken the
   fork-PR approval policy or move the DCO / gitleaks jobs off
   GitHub-hosted runners.
-* The real-NAT testnet harness lives in the private monorepo; agent
-  releases are gated on it via
-  `scripts/ci/testnet-require-green-remote.sh` (secret
-  `WAIRED_TESTNET_TOKEN`). For cross-repo behaviour changes
-  (enrollment, disco/punch, relay fallback, proto), dispatch a
-  monorepo-side testnet run with `agent_ref=<your sha>` before merging
-  when in doubt.
+* The real-NAT testnet harness lives in the private monorepo; this
+  repo gates on it via `scripts/ci/testnet-require-green-remote.sh`
+  (secret `WAIRED_TESTNET_TOKEN`) at three points: per-PR
+  (testnet-pr.yml — armed when the diff touches
+  `scripts/ci/testnet-relevant-paths.txt`; `run-testnet` label forces;
+  fork PRs skip), release tags, and nightly. New `internal/` packages
+  must be classified into that list or
+  `testnet-nonrelevant-packages.txt` (with reason) —
+  `testnet-gate-guard.sh` fails lint until you do.
 
 ## Documentation
 

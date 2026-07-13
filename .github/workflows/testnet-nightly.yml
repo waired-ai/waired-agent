@@ -5,8 +5,9 @@
 # main advancing without a monorepo change would go unvalidated until
 # the next release tag — this workflow closes that blind spot: every
 # night it requires (check-or-dispatch) a green monorepo testnet run for
-# THIS repo's current main HEAD. Agent PRs have no per-PR testnet, so
-# this is the integration backstop between releases.
+# THIS repo's current main HEAD. The per-PR gate (testnet-pr.yml, #2)
+# only arms for allowlisted paths, so this is the backstop for
+# gate-skipped merges between releases.
 #
 # Reuses the release gate script (scripts/ci/testnet-require-green-remote.sh):
 # if a green dispatch run for the SHA already exists (e.g. yesterday's
