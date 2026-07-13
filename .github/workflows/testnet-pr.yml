@@ -1,0 +1,131 @@
+# Per-PR cross-repo testnet gate (#2, waired#184/#738).
+#
+# The real-NAT testnet harness (GCP VMs, terraform, WIF credentials) lives
+# in the private waired-ai/waired monorepo and stays there — this workflow
+# is the thin public half: when a PR touches mesh / enrollment / proto /
+# harness paths (scripts/ci/testnet-relevant-paths.txt), it dispatches the
+# monorepo's testnet.yml with agent_ref=<PR head SHA> and waits for a
+# job-level green, reusing the release-gate script
+# (scripts/ci/testnet-require-green-remote.sh, check-or-dispatch: an
+# existing green run for the SHA passes without dispatching).
+#
+# Cost note: an armed run provisions ~8 GCP VMs for ~25 minutes, so the
+# gate skips by default and the allowlist is deliberately narrow. On a new
+# push, superseded queued/in-progress dispatches of the same PR are
+# cancelled via the run-title tag "[agent-pr-<N>]" (the monorepo's
+# testnet-cleanup.yml tears down cancelled runs' slots).
+#
+# Security (public repo): the dispatch token WAIRED_TESTNET_TOKEN is never
+# exposed to fork PRs (GitHub withholds secrets from fork pull_request
+# events), and require-green additionally skips them via the same-repo
+# condition — skipped beats a guaranteed-red check. Fork-PR CI already
+# requires maintainer approval for every outside contributor (repo
+# setting). To testnet a reviewed fork PR, push its branch to this repo or
+# dispatch the monorepo testnet.yml manually with agent_ref=<sha>.
+name: testnet-pr
+
+on:
+  pull_request:
+    branches: [main]
+    # `labeled` re-triggers the workflow when the `run-testnet` label is
+    # added so the gate can force a run without a new push (same pattern
+    # as the monorepo's testnet.yml).
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    # Deliberately NO paths filter: run/skip is decided by the `gate` job
+    # against scripts/ci/testnet-relevant-paths.txt so every PR gets a
+    # visible verdict and the run-testnet label can always force a run.
+
+concurrency:
+  # A new push cancels this repo's waiting job for the same PR; the
+  # superseded REMOTE dispatch is cancelled by cancel_superseded in
+  # testnet-require-green-remote.sh on the next run.
+  group: testnet-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gate:
+    name: gate (testnet-relevant paths?)
+    if: github.repository == 'waired-ai/waired-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      FORCE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'run-testnet') }}
+      IS_DRAFT: ${{ github.event.pull_request.draft }}
+    steps:
+      # The gate script is taken from the PR head. A fork PR could edit it
+      # to force run=true, but that only flips this job's output — the
+      # secret-bearing require-green job independently refuses fork heads.
+      - uses: actions/checkout@v5
+      - name: decide (changed files vs allowlist)
+        id: decide
+        run: |
+          decide() {
+            echo "run=$1" >> "$GITHUB_OUTPUT"
+            echo "::notice::testnet gate: run=$1 ($2)"
+          }
+          if [[ "${IS_DRAFT}" == "true" && "${FORCE_LABEL}" != "true" ]]; then
+            decide false "draft PR — add the run-testnet label to force"
+            exit 0
+          fi
+          if [[ "${FORCE_LABEL}" == "true" ]]; then
+            decide true "forced by run-testnet label"
+            exit 0
+          fi
+          # Full base..head diff via the pulls files API — no base checkout
+          # needed, same semantics as the monorepo gate.
+          files="$(gh api "repos/${REPO}/pulls/${PR}/files" --paginate --jq '.[].filename')"
+          set +e
+          matched="$(bash scripts/ci/testnet-gate.sh <<<"${files}")"
+          rc=$?
+          set -e
+          case "${rc}" in
+            0)
+              echo "testnet-relevant changes:"
+              echo "${matched}"
+              decide true "testnet-relevant paths changed"
+              ;;
+            1)
+              decide false "no testnet-relevant paths in the diff"
+              ;;
+            *)
+              decide true "gate config error rc=${rc} (fail open toward testing)"
+              ;;
+          esac
+
+  require-green:
+    name: require green testnet for the PR head
+    needs: gate
+    # Same-repo heads only: fork PRs cannot (and must not) reach the
+    # dispatch token — see the header. Skipped, not failed, on forks.
+    if: >-
+      needs.gate.outputs.run == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - name: check-or-dispatch monorepo testnet for the PR head SHA
+        env:
+          # Referenced only from this same-repo-guarded job, never from
+          # fork PRs (GitHub also withholds it from fork events).
+          GH_TOKEN: ${{ secrets.WAIRED_TESTNET_TOKEN }}
+          TESTNET_GATE: ${{ vars.TESTNET_GATE }}
+          DISPATCH_REASON: agent-pr-${{ github.event.pull_request.number }}
+        run: bash scripts/ci/testnet-require-green-remote.sh "${{ github.event.pull_request.head.sha }}"
