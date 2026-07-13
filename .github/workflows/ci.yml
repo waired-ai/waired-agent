@@ -138,6 +138,30 @@ jobs:
             exit 1
           fi
 
+  gitleaks:
+    # Secret scan over the full git history (config: .gitleaks.toml).
+    # Like dco, deliberately on a GitHub-hosted runner so fork PRs get
+    # this feedback without touching the self-hosted ARC runners. Runs
+    # the pinned release binary instead of gitleaks-action (the action
+    # requires a license key for organization repos).
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: run gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tgz
+          tar -C /tmp -xzf /tmp/gitleaks.tgz gitleaks
+          /tmp/gitleaks detect --source . --no-banner --redact
+
   unit:
     name: unit tests
     runs-on: sv-mag-agent
