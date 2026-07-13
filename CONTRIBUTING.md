@@ -32,17 +32,23 @@ the contribution is public.
 
 ## Building and testing
 
-See the checks list in [CLAUDE.md](CLAUDE.md) — the same commands CI
-runs:
+Run these before pushing — the same commands CI runs:
 
 ```sh
 gofmt -l .                        # must print nothing
 go vet ./... && (cd proto && go vet ./...)
+golangci-lint run
 go test ./... -timeout 10m
 (cd proto && go test ./...)
+go build -tags prod ./... && go vet -tags prod ./...
 go test -tags prod ./internal/buildflag/...
 make verify-cross
 ```
+
+CI additionally runs a license check
+(`go-licenses check --disallowed_types=forbidden,restricted`) — a new
+dependency with copyleft licensing fails the lint job — and a gitleaks
+secret scan (config: `.gitleaks.toml`).
 
 ## The proto module
 
@@ -61,5 +67,6 @@ Do **not** open public issues for vulnerabilities — follow
 ## CI notes for external contributors
 
 Pull requests from forks require maintainer approval before workflows
-run (most CI executes on our self-hosted runners). The DCO check runs
-on GitHub-hosted runners, so you get that feedback immediately.
+run (most CI executes on our self-hosted runners). The DCO and
+gitleaks checks run on GitHub-hosted runners, so you get that feedback
+immediately.
