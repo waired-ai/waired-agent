@@ -77,8 +77,9 @@ permission エラーで終了します。
 先頭が無言で切り捨てられることなく機能し続けます。一瞬「prompt is too long」の
 表示が出ても、Claude Code が自動でコンパクトして再送するので操作は不要です。
 より大きな窓が欲しい場合は `/waired-route anthropic` でセッションを本物の
-Anthropic API に切り替えられます。[コーディングエージェント](/ja/guides/coding-agents/)
-を参照。
+Anthropic API に切り替えられます — 選択中モデル本来の窓（`[1m]` モデルなら 1M）が、
+同じセッションでも次のリクエストから適用されます。
+[コーディングエージェント](/ja/guides/coding-agents/)を参照。
 
 ### Claude Code に waired のステータスラインが表示されない
 

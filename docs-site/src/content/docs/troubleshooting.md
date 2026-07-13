@@ -77,8 +77,9 @@ Code auto-compacts (summarizes) the conversation to fit — a long session keeps
 working instead of silently dropping the start of your context. If you briefly
 see a "prompt is too long" notice, Claude Code compacts and retries on its own;
 no action is needed. Want the larger window? `/waired-route anthropic` sends the
-session to the real Anthropic API instead. See
-[Coding agents](/guides/coding-agents/).
+session to the real Anthropic API instead — the selected model's full window
+(1M on a `[1m]` model) applies from your next request, even in the same
+session. See [Coding agents](/guides/coding-agents/).
 
 ### The waired status line doesn't show up in Claude Code
 

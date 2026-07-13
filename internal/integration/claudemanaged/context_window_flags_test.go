@@ -6,8 +6,10 @@ import (
 	"testing"
 )
 
-// TestWriteSetsContextWindowFlags: Write co-writes the two #623
-// context-window env flags alongside the base URL (neither a credential).
+// TestWriteSetsContextWindowFlags: Write co-writes the #623 discovery flag
+// alongside the base URL (not a credential) and, since #771, no longer pins
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW — Claude Code's own per-model resolution
+// must govern the window (a static env override capped 1M sessions at 200k).
 func TestWriteSetsContextWindowFlags(t *testing.T) {
 	p := withTempPath(t)
 	if _, err := Write("http://127.0.0.1:9472"); err != nil {
@@ -17,13 +19,55 @@ func TestWriteSetsContextWindowFlags(t *testing.T) {
 	if env[discoveryKey] != "1" {
 		t.Errorf("%s = %v, want \"1\"", discoveryKey, env[discoveryKey])
 	}
-	if env[autoCompactWindowKey] != autoCompactWindowValue {
-		t.Errorf("%s = %v, want %q", autoCompactWindowKey, env[autoCompactWindowKey], autoCompactWindowValue)
+	if v, bad := env[autoCompactWindowKey]; bad {
+		t.Errorf("%s = %v, want absent (#771)", autoCompactWindowKey, v)
 	}
 }
 
-// TestRemoveStripsContextWindowFlags: Remove strips both flags together with
-// our loopback base URL, preserving operator keys.
+// TestWriteScrubsLegacyAutoCompactWindow: an upgrade re-running Write over a
+// pre-#771 file removes the static window waired itself wrote.
+func TestWriteScrubsLegacyAutoCompactWindow(t *testing.T) {
+	p := withTempPath(t)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:9472",` +
+		`"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY":"1","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"200000"}}`
+	if err := os.WriteFile(p, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Write("http://127.0.0.1:9472"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	env := readJSON(t, p)["env"].(map[string]any)
+	if v, bad := env[autoCompactWindowKey]; bad {
+		t.Errorf("Write left legacy %s = %v behind", autoCompactWindowKey, v)
+	}
+}
+
+// TestWriteKeepsOperatorAutoCompactWindow: a value that is not the one waired
+// wrote is an operator's deliberate override — Write must not touch it.
+func TestWriteKeepsOperatorAutoCompactWindow(t *testing.T) {
+	p := withTempPath(t)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"env":{"CLAUDE_CODE_AUTO_COMPACT_WINDOW":"300000"}}`
+	if err := os.WriteFile(p, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Write("http://127.0.0.1:9472"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	env := readJSON(t, p)["env"].(map[string]any)
+	if env[autoCompactWindowKey] != "300000" {
+		t.Errorf("%s = %v, want operator's \"300000\" preserved", autoCompactWindowKey, env[autoCompactWindowKey])
+	}
+}
+
+// TestRemoveStripsContextWindowFlags: Remove strips the discovery flag and the
+// legacy auto-compact window together with our loopback base URL, preserving
+// operator keys.
 func TestRemoveStripsContextWindowFlags(t *testing.T) {
 	p := withTempPath(t)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -49,6 +93,35 @@ func TestRemoveStripsContextWindowFlags(t *testing.T) {
 	}
 	if env["FOO"] != "bar" {
 		t.Error("Remove clobbered operator's env.FOO")
+	}
+}
+
+// TestRemoveKeepsOperatorAutoCompactWindow: on disable, a non-legacy window
+// value is operator-owned and survives even though the loopback base URL (and
+// the flags waired wrote) are stripped.
+func TestRemoveKeepsOperatorAutoCompactWindow(t *testing.T) {
+	p := withTempPath(t)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:9472",` +
+		`"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY":"1","CLAUDE_CODE_AUTO_COMPACT_WINDOW":"300000"}}`
+	if err := os.WriteFile(p, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := Remove()
+	if err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if !removed {
+		t.Error("Remove reported removed=false, want true")
+	}
+	env := readJSON(t, p)["env"].(map[string]any)
+	if _, bad := env["ANTHROPIC_BASE_URL"]; bad {
+		t.Error("Remove left our loopback base URL behind")
+	}
+	if env[autoCompactWindowKey] != "300000" {
+		t.Errorf("%s = %v, want operator's \"300000\" preserved", autoCompactWindowKey, env[autoCompactWindowKey])
 	}
 }
 
