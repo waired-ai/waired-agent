@@ -253,70 +253,92 @@ function Start-Mirror {
 
 # --- non-elevated execution helpers (waired#760 / #751) ----------------------
 # Both run a command in a LESS-privileged context inside this same guest and
-# capture exit code + output. Artifacts live under C:\Users\Public so the
-# restricted contexts can read/execute/write there (the elevated user's %TEMP%
-# is not readable by other users).
+# capture exit code + output via an on-disk .cmd wrapper writing output + an
+# exit-code marker file (the launchers detach, so a direct exit code is not
+# available). Artifacts live under C:\Users\Public so the restricted contexts
+# can read/execute/write there (the elevated user's %TEMP% is not).
 $PubWork  = 'C:\Users\Public\waired-it'
 $TestUser = 'waired-it'
 
-# Fresh standard (non-admin) user via CreateProcessWithLogonW. First call pays
-# profile creation (~5-15s), hence the generous wait. Requires the Secondary
-# Logon service and a non-SYSTEM caller (both true on the CI guest).
-function Invoke-AsStandardUser {
-    param([string]$Exe, [string[]]$ArgList, [string]$Tag)
+# Write the wrapper + return its paths. The %ERRORLEVEL% echo keeps a space
+# before '>' — `echo 0> file` would parse `0>` as a HANDLE redirect (stdin)
+# and write "ECHO is off." instead of the code; the trailing space is trimmed
+# on read. It also sits on its own line so cmd expands it at run time.
+function Write-ItCmdWrapper {
+    param([string]$Exe, [string]$ArgLine, [string]$Tag)
     New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
-    if (-not $script:TestUserCred) {
+    $paths = @{
+        Cmd = Join-Path $PubWork "$Tag.cmd"
+        Out = Join-Path $PubWork "$Tag.out"
+        Rc  = Join-Path $PubWork "$Tag.rc"
+    }
+    Remove-Item -LiteralPath $paths.Out, $paths.Rc -Force -ErrorAction SilentlyContinue
+    @(
+        '@echo off'
+        "`"$Exe`" $ArgLine > `"$($paths.Out)`" 2>&1"
+        "echo %ERRORLEVEL% > `"$($paths.Rc)`""
+    ) | Set-Content -LiteralPath $paths.Cmd -Encoding ASCII
+    return $paths
+}
+
+# Poll for the wrapper's rc marker and parse it defensively (never throw —
+# these run inside soft-assert flows).
+function Wait-ItCmdWrapper {
+    param([hashtable]$Paths, [int]$TimeoutSec)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $Paths.Rc)) { Start-Sleep -Milliseconds 250 }
+    if (-not (Test-Path -LiteralPath $Paths.Rc)) { return @{ Exit = -1; Out = "(timeout: wrapped command never completed within ${TimeoutSec}s)" } }
+    Start-Sleep -Milliseconds 200   # let cmd flush + close the redirects
+    $raw  = [string](Get-Content -LiteralPath $Paths.Rc -First 1)
+    $code = 0
+    if (-not [int]::TryParse($raw.Trim(), [ref]$code)) {
+        return @{ Exit = -1; Out = "(unparseable exit-code marker: '$raw')" }
+    }
+    return @{ Exit = $code; Out = (Get-Content -LiteralPath $Paths.Out -Raw -ErrorAction SilentlyContinue) }
+}
+
+# Fresh standard (non-admin) user, run via a one-shot scheduled task (batch
+# logon). Start-Process -Credential (CreateProcessWithLogonW) fails with
+# 0xC0000142 here: the second user's process cannot initialize against the
+# runner session's window station/desktop. A Task Scheduler batch logon has
+# no window-station dependency, so the wrapped command runs and reports its
+# REAL exit code. The plaintext /RP on the command line is fine: throwaway
+# password, throwaway user, disposable guest.
+function Invoke-AsStandardUser {
+    param([string]$Exe, [string]$ArgLine, [string]$Tag)
+    if (-not $script:TestUserPw) {
         # Random password satisfying default complexity; the guest is ephemeral.
-        $pw  = "Wt1!$([Guid]::NewGuid().ToString('N').Substring(0,12))"
-        $sec = ConvertTo-SecureString $pw -AsPlainText -Force
+        $script:TestUserPw = "Wt1!$([Guid]::NewGuid().ToString('N').Substring(0,12))"
+        $sec = ConvertTo-SecureString $script:TestUserPw -AsPlainText -Force
         if (-not (Get-LocalUser -Name $TestUser -ErrorAction SilentlyContinue)) {
             New-LocalUser -Name $TestUser -Password $sec -PasswordNeverExpires -AccountNeverExpires | Out-Null
             Add-LocalGroupMember -Group 'Users' -Member $TestUser
         } else {
             Set-LocalUser -Name $TestUser -Password $sec
         }
-        $script:TestUserCred = [pscredential]::new($TestUser, $sec)
     }
-    $out = Join-Path $PubWork "$Tag.out"; $errf = Join-Path $PubWork "$Tag.err"
-    Remove-Item -LiteralPath $out, $errf -Force -ErrorAction SilentlyContinue
-    try {
-        $p = Start-Process -FilePath $Exe -ArgumentList $ArgList -Credential $script:TestUserCred `
-             -LoadUserProfile -WorkingDirectory 'C:\Users\Public' `
-             -RedirectStandardOutput $out -RedirectStandardError $errf `
-             -WindowStyle Hidden -PassThru
-    } catch {
-        return @{ Exit = -1; Out = "(Start-Process -Credential failed: $($_.Exception.Message))" }
-    }
-    if (-not $p.WaitForExit(60000)) { $p.Kill(); return @{ Exit = -1; Out = '(timeout after 60s)' } }
-    $txt = (Get-Content -LiteralPath $out, $errf -Raw -ErrorAction SilentlyContinue) -join "`n"
-    return @{ Exit = $p.ExitCode; Out = $txt }
+    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag
+    # The batch logon is not INTERACTIVE, so Public-folder inheritance may not
+    # cover it — grant the test user modify on the scratch dir explicitly.
+    & icacls $PubWork /grant "${TestUser}:(OI)(CI)M" | Out-Null
+    $task = "waired-it-$Tag"
+    & schtasks /Create /F /TN $task /TR "cmd /c `"$($paths.Cmd)`"" /SC ONCE /ST 23:59 /RU $TestUser /RP $script:TestUserPw 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { return @{ Exit = -1; Out = "(schtasks /Create failed: $LASTEXITCODE)" } }
+    & schtasks /Run /TN $task 2>&1 | Out-Null
+    $r = Wait-ItCmdWrapper -Paths $paths -TimeoutSec 60
+    & schtasks /Delete /TN $task /F 2>&1 | Out-Null
+    return $r
 }
 
 # Filtered/basic token of the CURRENT user via `runas /trustlevel:0x20000` — a
 # SAFER-restricted token, the same class as a UAC-filtered admin (#751's exact
 # context). runas detaches immediately (its exit code only reflects launch),
-# so the child runs an on-disk .cmd wrapper that writes output + an exit-code
-# marker file; we poll for the marker. The %ERRORLEVEL% echo sits on its OWN
-# line so cmd expands it at run time (no %^..% escaping games).
+# hence the wrapper + marker poll.
 function Invoke-AsBasicToken {
     param([string]$Exe, [string]$ArgLine, [string]$Tag)
-    New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
-    $cmd = Join-Path $PubWork "$Tag.cmd"
-    $out = Join-Path $PubWork "$Tag.out"
-    $rc  = Join-Path $PubWork "$Tag.rc"
-    Remove-Item -LiteralPath $out, $rc -Force -ErrorAction SilentlyContinue
-    @(
-        '@echo off'
-        "`"$Exe`" $ArgLine > `"$out`" 2>&1"
-        "echo %ERRORLEVEL%> `"$rc`""
-    ) | Set-Content -LiteralPath $cmd -Encoding ASCII
-    & runas /trustlevel:0x20000 "cmd /c `"$cmd`"" | Out-Null
-    $deadline = (Get-Date).AddSeconds(45)
-    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $rc)) { Start-Sleep -Milliseconds 250 }
-    if (-not (Test-Path -LiteralPath $rc)) { return @{ Exit = -1; Out = '(timeout: runas child never completed)' } }
-    Start-Sleep -Milliseconds 200   # let cmd flush + close the redirects
-    $code = [int]((Get-Content -LiteralPath $rc -First 1).Trim())
-    return @{ Exit = $code; Out = (Get-Content -LiteralPath $out -Raw -ErrorAction SilentlyContinue) }
+    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag
+    & runas /trustlevel:0x20000 "cmd /c `"$($paths.Cmd)`"" | Out-Null
+    return (Wait-ItCmdWrapper -Paths $paths -TimeoutSec 45)
 }
 
 # ============================================================================
@@ -567,7 +589,7 @@ if ($Contract) {
         if ($isSystem) {
             ItLog "running as SYSTEM -- skipping non-elevated context asserts (CreateProcessWithLogonW unavailable)"
         } else {
-            $r = Invoke-AsStandardUser -Exe $waired -ArgList @('status') -Tag 'status-stduser'
+            $r = Invoke-AsStandardUser -Exe $waired -ArgLine 'status' -Tag 'status-stduser'
             $first = (($r.Out -split "`r?`n") | Where-Object { $_ } | Select-Object -First 2) -join ' / '
             ItLog "standard-user status (exit $($r.Exit)): $first"
             ItSoft '751' ($r.Exit -eq 0) "waired status exits 0 as a standard user; got $($r.Exit)"
@@ -711,15 +733,29 @@ if ($ExeVariant) {
         if (Test-Path -LiteralPath $smGroup) { ItOk "Start Menu group created by the .exe installer" } else { ItBad "Start Menu group missing ($smGroup)" }
 
         ItStep "ExeVariant: uninstall (unins000.exe /VERYSILENT)"
+        # Bounded by POLLING, not -Wait: the Inno uninstaller re-spawns itself
+        # as a %TEMP% _iu*.tmp copy (the original exe exits early), and
+        # PS 5.1's Start-Process -Wait waits on the whole descendant tree —
+        # which is exactly what hung the first CI run for 28 min on the
+        # (since fixed) unsuppressed wipe-state MsgBox in waired-setup.iss.
+        # Completion signal = the service is unregistered.
         $unins = Join-Path $InstallDir 'unins000.exe'
         if (Test-Path -LiteralPath $unins) {
-            $p = Start-Process -FilePath $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
-            if ($p.ExitCode -eq 0) { ItOk "Inno uninstall exited 0" } else { ItBad "Inno uninstall exited $($p.ExitCode)" }
+            Start-Process -FilePath $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' | Out-Null
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Get-Date) -lt $deadline -and (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
+                Start-Sleep -Milliseconds 500
+            }
+            if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "Inno uninstall completed (service unregistered)" }
+            else {
+                Get-Process -Name '_iu*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                ItBad "Inno uninstall did not complete within 120s (uninstaller killed)"
+            }
         } else {
             ItBad "unins000.exe missing in $InstallDir"
         }
-        # /SUPPRESSMSGBOXES answers the post-uninstall "wipe state?" prompt
-        # with its default (keep) — sweep the residue; the guest is disposable.
+        # Silent uninstalls keep the state dir by design (waired-setup.iss);
+        # sweep the residue — the guest is disposable.
         Remove-Item -LiteralPath $StateDir, $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
         if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { ItOk "service gone after Inno uninstall" } else { ItBad "service survived the Inno uninstall" }
     }

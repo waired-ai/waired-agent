@@ -213,13 +213,22 @@ begin
     ProgramData := ExpandConstant('{commonappdata}');
     WairedState := ProgramData + '\waired';
     if DirExists(WairedState) then begin
-      WipeState := MsgBox(
-        'Remove Waired state directory?' + #13#10 + #13#10 +
-        WairedState + #13#10 + #13#10 +
-        'This contains the device identity, secrets, and any cached state.' + #13#10 +
-        'Keep it (No) if you plan to reinstall later -- the same device key' + #13#10 +
-        'will be re-used and re-enrollment is unnecessary.',
-        mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+      { Never block a silent uninstall on this prompt: a plain MsgBox is NOT
+        suppressed by /VERYSILENT or /SUPPRESSMSGBOXES, so it used to hang
+        unattended uninstalls forever on an invisible dialog (found by the
+        installtest .exe variant, waired#760). Silent uninstalls keep the
+        state (the safe default -- same device key on reinstall); interactive
+        ones still get the question, with /SUPPRESSMSGBOXES answering No. }
+      if UninstallSilent then
+        WipeState := False
+      else
+        WipeState := SuppressibleMsgBox(
+          'Remove Waired state directory?' + #13#10 + #13#10 +
+          WairedState + #13#10 + #13#10 +
+          'This contains the device identity, secrets, and any cached state.' + #13#10 +
+          'Keep it (No) if you plan to reinstall later -- the same device key' + #13#10 +
+          'will be re-used and re-enrollment is unnecessary.',
+          mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
       if WipeState then begin
         DelTree(WairedState, True, True, True);
       end;
