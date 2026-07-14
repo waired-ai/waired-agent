@@ -212,6 +212,11 @@ func (m darwinManager) Stop() error {
 //     system location, since the daemon runs as root) so a tail-able
 //     file makes triage easier and matches systemd's `journalctl -u`
 //     ergonomic.
+//   - EnvironmentVariables{HOME=StateDir}: launchd exports no $HOME to a
+//     system daemon (systemd derives one from User=), so subprocesses
+//     that resolve ~ die — `ollama serve` aborted with "$HOME is not
+//     defined" (#22). This closes the launch-environment parity gap so
+//     every spawned process inherits a writable HOME.
 func renderLaunchDaemonPlist(cfg Config) ([]byte, error) {
 	if cfg.Binary == "" {
 		return nil, errors.New("renderLaunchDaemonPlist: cfg.Binary is required")
@@ -252,6 +257,16 @@ func renderLaunchDaemonPlist(cfg Config) ([]byte, error) {
 	writeKeyString(&b, "WorkingDirectory", cfg.StateDir)
 	writeKeyString(&b, "StandardOutPath", "/Library/Logs/waired-agent.out.log")
 	writeKeyString(&b, "StandardErrorPath", "/Library/Logs/waired-agent.err.log")
+
+	// #22: launchd (unlike systemd's User=, which derives $HOME from the
+	// service user's passwd entry) exports NO $HOME to a system daemon.
+	// Subprocesses that resolve ~ then die — `ollama serve` aborted at
+	// startup with "$HOME is not defined". Give the daemon, and thus every
+	// process it spawns, a writable HOME = the state dir (already its
+	// WorkingDirectory), the macOS analog of the HOME systemd provides.
+	b.WriteString("  <key>EnvironmentVariables</key>\n  <dict>\n")
+	writeKeyString(&b, "HOME", cfg.StateDir)
+	b.WriteString("  </dict>\n")
 
 	b.WriteString("</dict>\n</plist>\n")
 	return b.Bytes(), nil

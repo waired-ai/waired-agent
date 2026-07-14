@@ -248,6 +248,11 @@ assert_inference() {
     # Diagnostics from the RIGHT store (:9475), using the bundled binary.
     gx "$guest" sh -c "OLLAMA_HOST=127.0.0.1:9475 '$IT_BUNDLED_OLLAMA_BIN' list" 2>&1 | sed 's/^/    :9475 /' || true
     gx "$guest" journalctl -u waired-agent --no-pager -n 30 2>&1 | sed 's/^/    /' || true
+    # #22: the agent captures `ollama serve`'s own stdout+stderr here, so an
+    # engine startup crash leaves its REAL reason in this log — journalctl
+    # only shows the agent's "not ready" wrapper. (gx runs as root in the
+    # guest, same as the journalctl read above.)
+    gx "$guest" sh -c 'tail -n 60 /var/lib/waired/runtimes/ollama/logs/engine.log 2>/dev/null || echo "(no engine.log)"' 2>&1 | sed 's/^/    engine.log| /' || true
   fi
 
   if gx "$guest" sh -c 'grep -hqsE "\"enabled\" *: *true" /var/lib/waired/*.json' 2>/dev/null; then
@@ -256,15 +261,24 @@ assert_inference() {
     bad "inference not enabled in persisted config"
   fi
 
-  # The end-of-init benchmark (offerBenchmark, non-bypass) reports throughput.
-  # Match the throughput OUTPUT only — NOT a bare "benchmark", which also
-  # appears in init's "run `waired runtimes benchmark` later" tip and would
-  # pass even when no benchmark ran (#564 false positive).
-  if [ -f "$initlog" ] && grep -qiE 'tok/s|tokens/s|throughput' "$initlog"; then
-    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1)"
+  # The end-of-init benchmark (offerBenchmark, non-bypass) proves the inference
+  # tail ran. Accept a throughput number (tok/s|tokens/s|throughput) OR the
+  # "Local inference works" smoke line: a host too slow to measure a stable rate
+  # exhausts the boot benchmark's budget and reports MeasuredTokps=0 ("…looks
+  # good"), yet a real generation still ran. Both print ONLY after a benchmark
+  # ran, never the "run `waired runtimes benchmark` later" tip (#564 false
+  # positive).
+  if [ -f "$initlog" ] && grep -qiE 'tok/s|tokens/s|throughput|Local inference works' "$initlog"; then
+    # `|| true`: with the smoke-line match above, the transcript may carry no
+    # numeric rate (host too slow → MeasuredTokps=0); a no-match grep exits 1
+    # and would trip `set -e` in the sourcing driver. head-closing a multi-match
+    # grep (SIGPIPE 141) would too — both are non-fatal here.
+    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1 || true)"
     ok "benchmark ran during init${tps:+ (}${tps}${tps:+)}"
   else
     bad "no benchmark output captured in init transcript ($initlog)"
+    # Genuine miss — surface the daemon's own boot benchmark slog for the reason.
+    gx "$guest" sh -c 'journalctl -u waired-agent --no-pager -n 200 | grep -iE "boot benchmark|benchmark" | tail -15' 2>&1 | sed 's/^/    agent| /' || true
   fi
 }
 

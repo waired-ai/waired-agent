@@ -331,7 +331,7 @@ func (a *VLLMAdapter) waitReady(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-a.proc.Done():
-			return fmt.Errorf("vllm: process exited during startup: %v", a.proc.Err())
+			return startupExitError("vllm", a.engineLogPath(), a.proc.Err())
 		case <-tick.C:
 		}
 	}

@@ -152,6 +152,29 @@ jobs:
           set -euo pipefail
           bash scripts/dev/installtest-macos.sh --tier 2 --inference 2>&1 | tee it-inf.log
 
+      # #22: on a macOS failure the ollama engine's own stdout+stderr — the
+      # real "exit status 1" reason — lives in a root-owned engine.log the
+      # transcript never shows. Stage it (+ the tee'd it-inf.log) so a
+      # nightly failure is diagnosable without a live self-hosted runner.
+      - name: collect ollama diagnostics (macos)
+        if: failure() && matrix.os == 'macos'
+        run: |
+          mkdir -p diag
+          [ -f it-inf.log ] && cp it-inf.log diag/ || true
+          englog="/Library/Application Support/waired/runtimes/ollama/logs/engine.log"
+          if sudo test -f "$englog"; then
+            sudo cp "$englog" diag/engine.log && sudo chown "$(id -un)" diag/engine.log || true
+          fi
+          ls -la diag || true
+      - name: upload ollama diagnostics (macos)
+        if: failure() && matrix.os == 'macos'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ollama-diag-install-inference-macos-${{ github.run_attempt }}
+          path: diag/
+          if-no-files-found: ignore
+          retention-days: 14
+
       # Surface a one-line result + any captured throughput in the run summary
       # (Actions-native, no auto-issue). bash exists on all three runners.
       # The Windows leg has no it-inf.log, so it just records the job status.
@@ -239,7 +262,28 @@ jobs:
 
       - name: routing sentinel (macos, tier 2 + integration)
         if: matrix.os == 'macos'
-        run: bash scripts/dev/installtest-macos.sh --tier 2 --integration
+        run: bash scripts/dev/installtest-macos.sh --tier 2 --integration 2>&1 | tee it-inf.log
+
+      # #22: same as the install+inference leg — surface the ollama engine's
+      # own engine.log (the real startup-crash reason) on a macOS failure.
+      - name: collect ollama diagnostics (macos)
+        if: failure() && matrix.os == 'macos'
+        run: |
+          mkdir -p diag
+          [ -f it-inf.log ] && cp it-inf.log diag/ || true
+          englog="/Library/Application Support/waired/runtimes/ollama/logs/engine.log"
+          if sudo test -f "$englog"; then
+            sudo cp "$englog" diag/engine.log && sudo chown "$(id -un)" diag/engine.log || true
+          fi
+          ls -la diag || true
+      - name: upload ollama diagnostics (macos)
+        if: failure() && matrix.os == 'macos'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ollama-diag-routing-macos-${{ github.run_attempt }}
+          path: diag/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: job summary
         if: always()
