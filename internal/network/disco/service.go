@@ -166,6 +166,13 @@ type Service struct {
 	pendingProbes   map[string]pendingProbe  // probe nonce hex -> sent metadata, for pong correlation + miss detection
 	pendingObserve  map[string]observeWaiter // outstanding STUN nonce -> waiter
 	nonceCache      map[string]time.Time     // peer↔peer pong nonce dedup
+	// sendFailWarned records STUN dst strings whose most recent SendDisco
+	// failed and was already logged at Warn. It collapses the udp6 STUN
+	// send-failure flood on hosts with no usable IPv6 route (waired#758):
+	// observeOne Warns once per dst, demotes repeats to Debug, and clears
+	// the entry on the next successful send so a genuine regression
+	// re-warns. Guarded by s.mu; bounded by relays × ports.
+	sendFailWarned map[string]bool
 
 	// roundIDCounter is bumped once per direct-path probe round (per
 	// peer per probeAllPeers iteration). Atomic so test fixtures can
@@ -355,6 +362,7 @@ func New(cfg Config) (*Service, error) {
 		pendingProbes:  map[string]pendingProbe{},
 		pendingObserve: map[string]observeWaiter{},
 		nonceCache:     map[string]time.Time{},
+		sendFailWarned: map[string]bool{},
 		rttEMA:         map[string]float64{},
 		lastPongAt:     map[string]time.Time{},
 		directRounds:   map[uint64]*directRoundState{},
