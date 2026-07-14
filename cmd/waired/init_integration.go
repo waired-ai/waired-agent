@@ -133,7 +133,7 @@ func promptIntegrationConsent(in io.Reader, out io.Writer, inp integrationConsen
 		writePromptf(out, "  %s points at your local gateway — %s, so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
 		writePrompt(out, "  claude.ai subscription and auto-mode keep working. Local inference serves")
 		writePrompt(out, "  requests and falls back to the real Anthropic API when unavailable, so claude")
-		writePromptf(out, "  never breaks. Reverse anytime with %s.\n", cyan("sudo waired claude disable"))
+		writePromptf(out, "  never breaks. Reverse anytime with %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude disable")))
 	}
 	if inp.ClaudeManaged && !inp.NonInteractive {
 		// Interactive installs defer the actual routing flip: this consent
@@ -145,7 +145,7 @@ func promptIntegrationConsent(in io.Reader, out io.Writer, inp integrationConsen
 		writePromptf(out, "  its requests through Waired: system-wide %s point\n", bold("managed settings"))
 		writePromptf(out, "  %s at your local gateway — %s, so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
 		writePrompt(out, "  claude.ai subscription and auto-mode keep working. Reverse anytime with")
-		writePromptf(out, "  %s.\n", cyan("sudo waired claude disable"))
+		writePromptf(out, "  %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude disable")))
 	}
 
 	if inp.NonInteractive {
@@ -158,7 +158,8 @@ func promptIntegrationConsent(in io.Reader, out io.Writer, inp integrationConsen
 	ok := ynPrompt(out, sc, "Set up coding-agent integration?", true)
 	if !ok {
 		writePromptf(out, "  Skipped. Set up the per-user integration anytime with: %s\n", cyan("waired link"))
-		writePrompt(out, "  "+dim("(Claude request routing is configured separately with `sudo waired claude enable`.)"))
+		writePromptf(out, "  %s\n", dim(fmt.Sprintf("(Claude request routing is configured separately — %s.)",
+			elevationHintFor(runtime.GOOS, "waired claude enable"))))
 	}
 	return ok
 }

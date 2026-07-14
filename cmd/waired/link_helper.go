@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/integration/shellalias"
@@ -53,9 +54,9 @@ func printClaudeSetupHelper(_ helperPrintOptions, out io.Writer, _ io.Reader) {
 	_, _ = fmt.Fprintln(out, "    points at your local inference (no credential, so your subscription and")
 	_, _ = fmt.Fprintln(out, "    auto-mode are preserved), falling back to the real Anthropic API when local")
 	_, _ = fmt.Fprintln(out, "    serving is unavailable.")
-	_, _ = fmt.Fprintln(out, "      set up:  sudo waired claude enable      (done automatically by `waired init`)")
+	_, _ = fmt.Fprintf(out, "      set up:  %s      (done automatically by `waired init`)\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
 	_, _ = fmt.Fprintln(out, "      status:  waired claude status")
-	_, _ = fmt.Fprintln(out, "      remove:  sudo waired claude disable")
+	_, _ = fmt.Fprintf(out, "      remove:  %s\n", elevatedCmdline(runtime.GOOS, "waired claude disable"))
 }
 
 // printOpenCodeSetupHelper is the OpenCode-specific final block. OpenCode loads

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -38,7 +39,7 @@ func TestPromptClaudeRouting_NoSkipsAndHints(t *testing.T) {
 	if ok {
 		t.Error("no must report not-routed")
 	}
-	for _, want := range []string{"Routing left off", "sudo waired claude enable", "waired claude route"} {
+	for _, want := range []string{"Routing left off", elevatedCmdline(runtime.GOOS, "waired claude enable"), "waired claude route"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("decline output missing %q; got:\n%s", want, out)
 		}

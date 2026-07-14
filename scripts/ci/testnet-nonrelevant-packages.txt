@@ -29,6 +29,7 @@ internal/management/        # localhost management API (:9476) + web-admin backi
 internal/observability/     # agent-side metrics/ring buffers for the management UI
 internal/platform/autostart/    # desktop login-item registration
 internal/platform/browser/      # open-URL helper for login flows
+internal/platform/elevation/    # process elevation predicate (root / elevated token); local privilege check, no mesh/enrollment surface
 internal/platform/logsink/      # local log-file sink
 internal/platform/notification/ # desktop notifications
 internal/platform/sdsocket/     # systemd socket activation glue

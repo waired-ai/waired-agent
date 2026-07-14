@@ -56,6 +56,43 @@ func TestWrapDaemonDialError(t *testing.T) {
 	}
 }
 
+// TestElevationHintFor locks the platform-appropriate re-run advice
+// (waired#752): a `sudo`-phrased hint on Unix, an "elevated (Administrator)
+// prompt" phrasing on Windows — with and without a specific command.
+func TestElevationHintFor(t *testing.T) {
+	cases := []struct {
+		goos, cmdline, want string
+	}{
+		{"linux", "waired status", "run `sudo waired status`"},
+		{"darwin", "waired status", "run `sudo waired status`"},
+		{"windows", "waired status", "re-run `waired status` from an elevated (Administrator) prompt"},
+		{"linux", "", "re-run with sudo"},
+		{"windows", "", "re-run from an elevated (Administrator) prompt"},
+	}
+	for _, c := range cases {
+		if got := elevationHintFor(c.goos, c.cmdline); got != c.want {
+			t.Errorf("elevationHintFor(%q, %q) = %q, want %q", c.goos, c.cmdline, got, c.want)
+		}
+	}
+}
+
+// TestElevatedCmdline locks the inline elevated-command rendering
+// (waired#752): `sudo <cmd>` on Unix, bare `<cmd>` on Windows (no sudo).
+func TestElevatedCmdline(t *testing.T) {
+	cases := []struct {
+		goos, cmd, want string
+	}{
+		{"linux", "waired claude enable", "sudo waired claude enable"},
+		{"darwin", "waired claude enable", "sudo waired claude enable"},
+		{"windows", "waired claude enable", "waired claude enable"},
+	}
+	for _, c := range cases {
+		if got := elevatedCmdline(c.goos, c.cmd); got != c.want {
+			t.Errorf("elevatedCmdline(%q, %q) = %q, want %q", c.goos, c.cmd, got, c.want)
+		}
+	}
+}
+
 func TestFriendlyError(t *testing.T) {
 	perm := fmt.Errorf("identity: read /var/lib/waired/identity.json: %w", fs.ErrPermission)
 	got := friendlyError(perm)

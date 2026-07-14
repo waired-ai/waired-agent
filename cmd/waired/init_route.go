@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/proxy/legacycleanup"
@@ -37,14 +38,14 @@ func promptClaudeRoutingWith(out io.Writer, sc *bufio.Scanner, baseURL string, a
 	writePrompt(out, "can't serve fall back to the Anthropic API).")
 	if !ynPrompt(out, sc, "Route Claude Code inference through Waired now?", true) {
 		writePrompt(out, "Routing left off — Claude Code keeps talking to the Anthropic API directly.")
-		writePrompt(out, "Enable anytime with `sudo waired claude enable`; steer per-session with")
+		writePromptf(out, "Enable anytime with `%s`; steer per-session with\n", elevatedCmdline(runtime.GOOS, "waired claude enable"))
 		writePrompt(out, "`waired claude route` (or the `/waired-route` skill).")
 		return false
 	}
 	path, err := apply()
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"warn: writing Claude Code managed settings failed (%v); run `sudo waired claude enable` later\n", err)
+			"warn: writing Claude Code managed settings failed (%v); %s\n", err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 		return false
 	}
 	writePromptf(out, "  %s → ANTHROPIC_BASE_URL=%s (no credential; subscription/auto-mode preserved)\n", path, baseURL)
