@@ -27,6 +27,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/observability"
+	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/openaicompat"
@@ -712,6 +713,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 					VariantID: ollamaTune.VariantID,
 					Verified:  verdict != tuningInconclusive,
 				}
+				// #763: surface the reused engine's real request parallelism
+				// when its runner can be attributed to this model.
+				if verdict != tuningInconclusive {
+					if np, ok := observeRunnerParallel(ollamaTune, proclist.List); ok {
+						mt.ObservedNumParallel = np
+					}
+				}
 				if verdict != tuningInconclusive && (detail != "" || verdict != tuningOK) {
 					mt.Warning = "reused ollama is not tuned by waired (" + detail +
 						"); consider setting OLLAMA_CONTEXT_LENGTH / OLLAMA_KV_CACHE_TYPE on your ollama service"
@@ -750,7 +758,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 				}
 				applyOllamaTuningVerification(ctx, ollama, ollamaTune,
 					ollamaTuneManifest, ollamaTuneVariant, hwProfile,
-					verifyTag, ollama.BaseURL(), &http.Client{}, logger)
+					verifyTag, ollama.BaseURL(), &http.Client{}, proclist.List, logger)
 			}
 		}
 	}()
@@ -1353,7 +1361,13 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 			if tune := p.ollama.AppliedTuning(); tune != (infruntime.ModelTuning{}) {
 				entry.ContextLength = tune.ContextLength
 				entry.KVCacheType = tune.KVCacheType
+				// #763: report the runner's real request parallelism when it
+				// was observed (Ollama caps OLLAMA_NUM_PARALLEL silently);
+				// fall back to the exported intent otherwise.
 				entry.NumParallel = tune.NumParallel
+				if tune.ObservedNumParallel > 0 {
+					entry.NumParallel = tune.ObservedNumParallel
+				}
 				entry.NumBatch = tune.NumBatch
 				entry.TuningWarning = tune.Warning
 			}

@@ -554,6 +554,12 @@ type ModelTuning struct {
 	// above it via an informed override); it is NOT exported as an OLLAMA_* env.
 	// 0 means "not computed" (older/untuned).
 	RecommendedMaxParallel int
+	// ObservedNumParallel is the request parallelism the model runner is
+	// ACTUALLY serving, read from its command line after load (#763). 0 =
+	// not observed; when non-zero it overrides NumParallel (the intent) in
+	// the inference status, because Ollama silently caps OLLAMA_NUM_PARALLEL
+	// when the per-slot KV cache does not fit the configured window.
+	ObservedNumParallel int
 	// NumBatch is the generation ubatch the serve tuning selected (#642);
 	// 0 means "left to Ollama's automatic batch sizing". Unlike the other
 	// fields it is NOT delivered via an OLLAMA_* env (the pinned 0.31.1

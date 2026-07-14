@@ -31,6 +31,7 @@ internal/platform/autostart/    # desktop login-item registration
 internal/platform/browser/      # open-URL helper for login flows
 internal/platform/logsink/      # local log-file sink
 internal/platform/notification/ # desktop notifications
+internal/platform/proclist/     # local process-table read (runner -np/-c for tuning verify); no mesh/enrollment surface
 internal/platform/sdsocket/     # systemd socket activation glue
 internal/platform/service/      # OS service install/uninstall glue; testnet VMs exec the agent via the units in build/, not this
 internal/platform/sockpass/     # local socket handoff helper

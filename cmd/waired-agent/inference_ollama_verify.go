@@ -16,9 +16,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -67,24 +69,31 @@ const spillAbsoluteToleranceMax = 0.25
 const generationBatchBufferBytes = 2 << 30
 
 // verifyOllamaTuning inspects the loaded model and classifies the
-// outcome. tag is the Ollama tag the tuning was sized for; when a
-// different model happens to be loaded, the size heuristics abstain but
-// the server-global context check still applies. The returned detail is
-// human-readable (log / warning material).
+// outcome. tag is the Ollama tag the tuning was sized for. Modern Ollama
+// runs a per-model llama-server with its own -c, so verification is
+// per-model: when the target tag is not the loaded model — e.g. a previous
+// model still resident in /api/ps right after a model swap — the pass
+// abstains (tuningInconclusive) instead of comparing the configured window
+// against a FOREIGN runner, which used to emit a false "OLLAMA_CONTEXT_LENGTH
+// did not apply" warning (waired#763). The returned detail is human-readable
+// (log / warning material).
 func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string, t ollamaTuning, tag string, hw hardware.Profile) (tuningVerdict, string) {
 	var ps psResponse
 	if err := getJSON(ctx, client, baseURL+"/api/ps", probeHTTPTimeout, &ps); err != nil {
 		return tuningInconclusive, fmt.Sprintf("/api/ps error: %v", err)
 	}
+	// target is the model this tuning is verified against: the tag it was
+	// sized for. When nothing is loaded we load it; if the caller gave no
+	// tag we fall back to whatever can be loaded and verify THAT model.
+	target := tag
 	if len(ps.Models) == 0 {
-		loadTag := tag
-		if loadTag == "" {
+		if target == "" {
 			var err error
-			if loadTag, err = firstOllamaTag(ctx, client, baseURL); err != nil || loadTag == "" {
+			if target, err = firstOllamaTag(ctx, client, baseURL); err != nil || target == "" {
 				return tuningInconclusive, "no model available to verify tuning"
 			}
 		}
-		if err := loadOllamaModel(ctx, client, baseURL, loadTag); err != nil {
+		if err := loadOllamaModel(ctx, client, baseURL, target); err != nil {
 			return tuningInconclusive, fmt.Sprintf("verify model load failed: %v", err)
 		}
 		if err := getJSON(ctx, client, baseURL+"/api/ps", probeHTTPTimeout, &ps); err != nil || len(ps.Models) == 0 {
@@ -92,18 +101,25 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 		}
 	}
 
-	psm := ps.Models[0]
+	// Match the target model's own runner. A different model still resident
+	// (the model-swap race) is not a valid witness for this tuning, so we
+	// abstain rather than cross-wire two models (waired#763).
+	psm, found := psModel{}, false
 	for _, m := range ps.Models {
-		if m.Name == tag {
-			psm = m
+		if m.Name == target {
+			psm, found = m, true
 			break
 		}
 	}
+	if !found {
+		return tuningInconclusive, fmt.Sprintf(
+			"target model %q not loaded (loaded: %s); deferring tuning verification",
+			target, loadedModelNames(ps))
+	}
 
-	// Context application check (OLLAMA_CONTEXT_LENGTH is server-global,
-	// so this holds whichever model is loaded). Ollama has reported both
-	// num_ctx and num_ctx × num_parallel here across versions — accept
-	// either before concluding the env was ignored.
+	// Context application check for the target model's own runner. Ollama
+	// has reported both num_ctx and num_ctx × num_parallel in /api/ps across
+	// versions — accept either before concluding the env was ignored.
 	ctxDetail := ""
 	if t.ContextLength > 0 && psm.ContextLength > 0 &&
 		psm.ContextLength != t.ContextLength &&
@@ -212,6 +228,63 @@ func joinTuningWarn(a, b string) string {
 	}
 }
 
+// loadedModelNames lists the /api/ps model names for an abstain detail
+// message, so the log says which foreign model was resident instead.
+func loadedModelNames(ps psResponse) string {
+	if len(ps.Models) == 0 {
+		return "none"
+	}
+	names := make([]string, 0, len(ps.Models))
+	for _, m := range ps.Models {
+		names = append(names, m.Name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// runnerProcLister enumerates the local process table (proclist.List in
+// production; a fake in tests) so verification can read the model runner's
+// real flags.
+type runnerProcLister func() ([]proclist.ProcInfo, error)
+
+// observeRunnerParallel reads the num_parallel (-np) the Ollama runner is
+// ACTUALLY serving for tuning t, by correlating a live llama-server /
+// `ollama runner` process against the tuning's context (waired#763).
+// /api/ps does not expose num_parallel and Ollama silently reduces
+// OLLAMA_NUM_PARALLEL when the per-slot KV won't fit, so status would
+// otherwise report the intent, not the truth.
+//
+// Correlation: llama.cpp's -c is the TOTAL context across parallel slots,
+// so the runner serving t has -c == t.ContextLength (parallelism reduced to
+// 1) or -c == t.ContextLength × its own -np. A UNIQUE runner matching that
+// wins; zero or several matches → not ok, and the caller keeps the intent.
+func observeRunnerParallel(t ollamaTuning, listProcs runnerProcLister) (int, bool) {
+	if listProcs == nil || t.ContextLength <= 0 {
+		return 0, false
+	}
+	procs, err := listProcs()
+	if err != nil {
+		return 0, false
+	}
+	matches, np := 0, 0
+	for _, p := range procs {
+		if !proclist.IsRunnerProc(p.Argv) {
+			continue
+		}
+		f := proclist.ParseRunnerFlags(p.Argv)
+		if f.ContextLen <= 0 || f.NumParallel <= 0 {
+			continue
+		}
+		if f.ContextLen == t.ContextLength || f.ContextLen == t.ContextLength*f.NumParallel {
+			matches++
+			np = f.NumParallel
+		}
+	}
+	if matches != 1 {
+		return 0, false
+	}
+	return np, true
+}
+
 // modelEnvSwitcher is the slice of *infruntime.OllamaAdapter the verify
 // pass needs to relaunch the engine with recomputed tuning.
 type modelEnvSwitcher interface {
@@ -226,13 +299,28 @@ type modelEnvSwitcher interface {
 // spill, recomputes the sizing, swaps the model env, restarts the engine
 // ONCE, and re-verifies. It never restarts twice: if the degraded sizing
 // still misbehaves the outcome is recorded as a user-visible warning and
-// the engine is left alone. Every path ends in SetAppliedTuning.
-func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tag, baseURL string, client *http.Client, logger *slog.Logger) {
+// the engine is left alone. Every path ends in SetAppliedTuning. listProcs
+// reads the local process table so the recorded tuning carries the runner's
+// ACTUAL request parallelism (waired#763); nil disables that read.
+func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, tag, baseURL string, client *http.Client, listProcs runnerProcLister, logger *slog.Logger) {
 	verdict, detail := verifyOllamaTuning(ctx, client, baseURL, t, tag, hw)
 
 	record := func(tn ollamaTuning, verified bool, warning string) {
 		mt := tn.ModelTuning
 		mt.Verified = verified
+		if verified {
+			// #763: record the runner's ACTUAL request parallelism — Ollama
+			// silently caps OLLAMA_NUM_PARALLEL when the per-slot KV won't
+			// fit — and note the reduction rather than surfacing stale intent.
+			if np, ok := observeRunnerParallel(tn, listProcs); ok {
+				mt.ObservedNumParallel = np
+				if np < tn.NumParallel {
+					warning = joinTuningWarn(warning, fmt.Sprintf(
+						"ollama reduced request parallelism from %d to %d (per-slot KV did not fit the %d-token window)",
+						tn.NumParallel, np, tn.ContextLength))
+				}
+			}
+		}
 		if warning != "" {
 			mt.Warning = warning
 		}
