@@ -152,13 +152,13 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 // prompt (waired#756), so surface the commands that let the user revisit it.
 // Only verified subcommands are listed.
 func printInferenceRoleGuidance(out io.Writer) {
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, dim("Inference role was set from this host's hardware. To inspect or change it:"))
-	fmt.Fprintln(out, dim("  waired runtimes benchmark            re-check performance / switch to a lighter model"))
-	fmt.Fprintln(out, dim("  waired models ls                     list installed and available models"))
-	fmt.Fprintln(out, dim("  waired inference share on|off        expose (or stop exposing) this engine to mesh peers"))
-	fmt.Fprintln(out, dim("  waired inference engine stop|start   power the local engine down / up"))
-	fmt.Fprintln(out, dim("  re-run `waired init`                 reconfigure inference from scratch"))
+	writePrompt(out)
+	writePrompt(out, dim("Inference role was set from this host's hardware. To inspect or change it:"))
+	writePrompt(out, dim("  waired runtimes benchmark            re-check performance / switch to a lighter model"))
+	writePrompt(out, dim("  waired models ls                     list installed and available models"))
+	writePrompt(out, dim("  waired inference share on|off        expose (or stop exposing) this engine to mesh peers"))
+	writePrompt(out, dim("  waired inference engine stop|start   power the local engine down / up"))
+	writePrompt(out, dim("  re-run `waired init`                 reconfigure inference from scratch"))
 }
 
 // printDaemonSuccessBox renders the final "Waired is ready" summary for the
