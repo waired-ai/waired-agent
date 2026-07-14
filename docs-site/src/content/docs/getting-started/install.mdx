@@ -49,19 +49,17 @@ machine you type from needs no special hardware.
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		Installs the client and registers the `waired-agent` Windows service
-		(a UAC prompt handles the elevated step).
+		Installs the client, registers the `waired-agent` Windows service, and
+		installs Ollama (a UAC prompt handles the elevated step). The agent runs
+		at boot, independent of login — the same defaults as the Linux and macOS
+		installers, and the ~1.4 GB Ollama download reports periodic progress.
 
 		<Aside type="note" title="Ollama on Windows">
-			The bare one-liner above does **not** bundle Ollama. If this machine
-			will also run the model, install the engine separately:
-
-			```powershell
-			iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/ollama-windows.ps1 | iex
-			```
-
-			(When you pass `-Control <URL>` or `-Dev` to `install.ps1`, it
-			installs Ollama for you — see below.)
+			To install **without** the bundled engine — for example a headless or
+			low-disk host — pass `-SkipOllama` or set `WAIRED_NO_OLLAMA=1`
+			([Skip the bundled Ollama](#skip-the-bundled-ollama), below). You can
+			add the engine later from an elevated prompt with
+			`waired runtimes install ollama`.
 		</Aside>
 	</TabItem>
 </Tabs>

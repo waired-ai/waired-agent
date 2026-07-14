@@ -94,12 +94,13 @@ param(
     [switch]$Help,
     [switch]$Dev,
     [string]$Control = '',
-    # Skip the Ollama install. When -Control / -Dev resolved a Control
-    # Plane URL the installer normally fetches scripts/install/ollama-
-    # windows.ps1 from the public mirror and runs it inside Phase 2.
-    # Pass -SkipOllama on headless / low-disk hosts; the operator can
-    # finish later by hand. No-op when no $ControlUrl was resolved (the
-    # installer doesn't auto-install Ollama in that case either).
+    # Skip the Ollama install. install.ps1 installs the bundled inference
+    # engine BY DEFAULT (parity with install.sh) -- it fetches
+    # scripts/install/ollama-windows.ps1 from the public mirror and runs it
+    # inside Phase 2 whether or not a Control Plane URL was resolved, so a
+    # plain `.\install.ps1` sets this host up for local inference.
+    # Pass -SkipOllama on headless / low-disk hosts; the operator can finish
+    # later from an elevated prompt (`waired runtimes install ollama`).
     # Equivalent env var: WAIRED_NO_OLLAMA=1 (resolved into $SkipOllama
     # below) -- same skip semantics as install.sh's --skip-ollama /
     # WAIRED_NO_OLLAMA, so the two installers stay aligned.
@@ -247,6 +248,8 @@ $DevControlUrl = if ($env:WAIRED_DEV_CONTROL_URL) { $env:WAIRED_DEV_CONTROL_URL 
                  else { 'https://app.dev.waired.net' }
 $ControlUrl    = ''   # resolved by Resolve-ControlUrl after param parsing.
 $InitRan       = $false  # set by Invoke-WairedInit; read by Show-NextSteps.
+$OllamaStatus  = ''      # set by Install-OllamaIfRequested; read by Show-NextSteps
+                         # (Windows analog of install.sh's $ollama_status line).
 # True only inside the spawned elevated Phase-2 console (set in Phase 2). Gates
 # the transcript-path + pause-on-exit behaviour so that window never vanishes
 # before its output can be read (waired#748).
@@ -938,19 +941,20 @@ function Test-InteractiveStdin {
 # Install-OllamaIfRequested fetches the ollama-windows.ps1 helper from
 # $OllamaWindowsUrl (the official public channel by default, independent of
 # WAIRED_INSTALL_BASE_URL -- see its resolution near the top) and runs it
-# inside Phase 2. Only runs when -Control / -Dev resolved a CP
-# URL -- without a CP we don't know whether the operator wants this host
-# to run inference at all, and silently dropping ~1.5 GB onto disk
-# would surprise them. Idempotent (the helper script handles existing
-# installs); we still detect them up front and ask before reinstall to
-# avoid an unwanted ~10-min re-download.
+# inside Phase 2. Ollama installs BY DEFAULT -- parity with install.sh, which
+# installs the bundled inference engine on every host unless --skip-ollama /
+# WAIRED_NO_OLLAMA opts out (install.sh:773-778). A resolved Control Plane URL
+# is deliberately NOT required: a plain `.\install.ps1` sets this host up for
+# local inference just like a plain `curl ... | sh` does on Linux; the only
+# opt-out is -SkipOllama / WAIRED_NO_OLLAMA (folded into $SkipOllama up top).
+# Idempotent (the helper script handles existing installs); we still detect
+# them up front and ask before reinstall to avoid an unwanted ~10-min
+# re-download. The outcome is recorded in $script:OllamaStatus (read by
+# Show-NextSteps), mirroring install.sh's $ollama_status summary line.
 function Install-OllamaIfRequested {
     if ($SkipOllama) {
         Common-Log "-SkipOllama set; not touching Ollama."
-        return
-    }
-    if (-not $ControlUrl) {
-        Common-Log "No Control Plane URL resolved -- skipping Ollama install (re-run with -Dev / -Control <URL> to enable)."
+        $script:OllamaStatus = 'skipped (-SkipOllama / WAIRED_NO_OLLAMA; bundled engine later from an elevated prompt: waired runtimes install ollama -- or bring your own and pick "reuse" at sign-in)'
         return
     }
 
@@ -958,11 +962,13 @@ function Install-OllamaIfRequested {
     if ($existing) {
         if (-not (Test-InteractiveStdin)) {
             Common-Log "Ollama already installed at $existing; -NonInteractive / non-TTY -> not reinstalling."
+            $script:OllamaStatus = "already installed (kept: $existing)"
             return
         }
         $reply = Read-Host "[waired] Ollama already installed at $existing. Reinstall / upgrade now? [y/N]"
         if ($reply -notmatch '^(y|yes)$') {
             Common-Log "Keeping existing Ollama install."
+            $script:OllamaStatus = "already installed (kept: $existing)"
             return
         }
     }
@@ -983,6 +989,7 @@ function Install-OllamaIfRequested {
         }
     } catch {
         Common-Warn "could not fetch ollama-windows.ps1 ($($_.Exception.Message)); skipping Ollama install. Re-run by hand later: download $ollamaScriptUrl and run it from a saved file."
+        $script:OllamaStatus = 'not installed (could not fetch the installer helper; retry later from an elevated prompt: waired runtimes install ollama)'
         return
     }
 
@@ -995,6 +1002,12 @@ function Install-OllamaIfRequested {
     Common-Log ("Installing Ollama (mode={0}{1})..." -f $OllamaGpuMode,
         ($(if ($OllamaModelsDir) { "; models=$OllamaModelsDir" } else { '' })))
 
+    # Record the outcome for the summary. Under -DryRun, Common-Run below
+    # short-circuits WITHOUT running its block, so set the dry-run status here
+    # rather than inside it. Otherwise the inner try/catch settles it to
+    # installed / install-failed once the helper actually runs.
+    $script:OllamaStatus = if ($DryRun) { 'would install (dry-run)' } else { 'install attempted' }
+
     $ollamaDesc = "ollama-windows.ps1 -GpuMode $OllamaGpuMode" + $(if ($OllamaModelsDir) { " -ModelsDir $OllamaModelsDir" } else { '' })
     try {
         Common-Run $ollamaDesc {
@@ -1004,8 +1017,10 @@ function Install-OllamaIfRequested {
                 # helper's param() block by name. Invoke-Expression would
                 # discard the param() bindings.
                 & $ollamaScript @ollamaArgs
+                $script:OllamaStatus = 'installed (local inference engine)'
             } catch {
                 Common-Warn "Ollama install failed: $($_.Exception.Message); the agent will retry pulling the bundled model at boot."
+                $script:OllamaStatus = 'install failed (waired-agent will retry the bundled-model pull at boot; retry the engine by hand from an elevated prompt: waired runtimes install ollama)'
             }
         }
     } finally {
@@ -1097,6 +1112,12 @@ function Show-NextSteps {
         Write-Host 'Tray:  a "Waired" Start Menu shortcut was created; the tray auto-starts at each logon.'
         Write-Host "       Launch it from the Start Menu, or now: & `"$InstallDir\waired-tray.exe`""
         Write-Host ''
+    }
+    # Ollama status line, mirroring install.sh's `Ollama: $ollama_status`
+    # summary (set by Install-OllamaIfRequested). Guarded so callers that never
+    # reach the install step (e.g. -Update) don't print a blank label.
+    if ($script:OllamaStatus) {
+        Write-Host "Ollama:            $script:OllamaStatus"
     }
     Write-Host "State / identity:  $cpHint"
     Write-Host "PATH:              $InstallDir (added to PATH; open a NEW shell to run 'waired' directly)"

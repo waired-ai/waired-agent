@@ -446,12 +446,13 @@ try {
     # ASCII, matching the macOS/Linux legs.
     $env:WAIRED_DEV_CONTROL_URL  = $ControlUrl
 
-    # -WithInference (#514) installs Ollama (the -Dev URL above lets
-    # Install-OllamaIfRequested run) so the Tier-2 model pull + benchmark have an
-    # engine; the default path skips it (installer + enroll only). Pass the
-    # switches inline per branch — array splat (@args) binds elements as
-    # POSITIONAL args, not named switches, so install.ps1 would misread -Dev as
-    # the control URL.
+    # -WithInference (#514) installs Ollama so the Tier-2 model pull + benchmark
+    # have an engine. install.ps1 now installs Ollama BY DEFAULT (waired#747,
+    # matching install.sh), so the default installer+enroll leg opts OUT below via
+    # -SkipOllama / WAIRED_NO_OLLAMA; the -Dev URL here is only for enrolment, no
+    # longer the Ollama gate. Pass the switches inline per branch — array splat
+    # (@args) binds elements as POSITIONAL args, not named switches, so install.ps1
+    # would misread -Dev as the control URL.
     $installPs1 = Join-Path $Root 'packaging\install\install.ps1'
 
     # install.ps1 arg-parsing contract (waired#746). install.ps1's WAIRED_ARGTEST

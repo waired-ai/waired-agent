@@ -289,6 +289,78 @@ function Resolve-GpuMode {
     return 'cuda-only'
 }
 
+# Invoke-DownloadWithProgress streams $Url to $OutFile while printing periodic
+# progress. The Ollama archive is ~1.4 GB, and the old silent
+# `Invoke-WebRequest -OutFile` left the console dead for minutes (waired#747).
+# This gives the byte-level feedback the Linux/macOS path already gets from
+# `waired runtimes install ollama` (cmd/waired/runtimes_install_render.go's
+# drawDownloadLine: percent, transferred/total, rate). PS 5.1-safe: a raw
+# HttpWebRequest + manual read loop -- NOT Invoke-WebRequest, whose 5.1 progress
+# bar re-renders per read and cripples large-file throughput (the reason
+# $ProgressPreference is 'SilentlyContinue' above). Prints a fresh line (not an
+# in-place \r bar) every >=3% or ~2s so the elevated-UAC transcript and non-TTY
+# CI logs capture it cleanly.
+function Invoke-DownloadWithProgress {
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$OutFile
+    )
+    # Windows PowerShell 5.1 on older .NET does not negotiate TLS 1.2 by
+    # default; opt in for the raw request. Best-effort so this never throws.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol =
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch { }
+
+    $req = [System.Net.HttpWebRequest]::Create($Url)
+    $req.UserAgent        = 'waired-installer'
+    $req.AllowAutoRedirect = $true   # GitHub release assets 302 to a CDN host
+    $req.Timeout          = 60000    # connect timeout (ms)
+    $req.ReadWriteTimeout = 120000   # per-read stall timeout (ms)
+
+    $resp = $null; $rs = $null; $fs = $null
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $resp    = $req.GetResponse()
+        $total   = [int64]$resp.ContentLength   # -1 when the server omits it
+        $totalMB = if ($total -gt 0) { $total / 1MB } else { 0 }
+        $rs = $resp.GetResponseStream()
+        $fs = [System.IO.File]::Create($OutFile)
+        $buf      = [byte[]]::new(1MB)
+        $done     = [int64]0
+        $lastPct  = -100
+        $lastTick = [double]0
+        $read     = 0
+        while (($read = $rs.Read($buf, 0, $buf.Length)) -gt 0) {
+            $fs.Write($buf, 0, $read)
+            $done   += $read
+            $elapsed = $sw.Elapsed.TotalSeconds
+            $pct     = if ($total -gt 0) { [int]($done * 100 / $total) } else { -1 }
+            # Throttle: advance printed percent by >=3, or >=2s since last line
+            # (the time gate also covers unknown-length downloads).
+            if ((($pct -ge 0) -and ($pct -ge $lastPct + 3)) -or (($elapsed - $lastTick) -ge 2)) {
+                $rate = if ($elapsed -gt 0) { ($done / 1MB) / $elapsed } else { 0 }
+                if ($total -gt 0) {
+                    Write-Host ("  {0,3}%  ({1,7:N1} / {2:N1} MB)  {3:N1} MB/s" -f `
+                        $pct, ($done / 1MB), $totalMB, $rate)
+                    $lastPct = $pct
+                } else {
+                    Write-Host ("  {0:N1} MB downloaded  {1:N1} MB/s" -f ($done / 1MB), $rate)
+                }
+                $lastTick = $elapsed
+            }
+        }
+        $fs.Flush()
+    } finally {
+        if ($fs)   { $fs.Close() }
+        if ($rs)   { $rs.Close() }
+        if ($resp) { $resp.Close() }
+        $sw.Stop()
+    }
+    Write-Host ("  done: {0:N1} MB in {1:N0}s" -f `
+        ((Get-Item -LiteralPath $OutFile).Length / 1MB), $sw.Elapsed.TotalSeconds)
+}
+
 function Stage-ZipDownload {
     param(
         [string]$Url,
@@ -299,7 +371,7 @@ function Stage-ZipDownload {
     $zip = Join-Path $tmpDir ([IO.Path]::GetFileName(([Uri]$Url).AbsolutePath))
     Write-Host "Downloading $Url"
     Write-Host "          -> $zip"
-    Invoke-WebRequest -Uri $Url -OutFile $zip -UseBasicParsing
+    Invoke-DownloadWithProgress -Url $Url -OutFile $zip
     $size = (Get-Item $zip).Length
     if ($size -lt $MinSizeBytes) {
         Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
