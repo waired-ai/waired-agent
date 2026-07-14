@@ -361,8 +361,12 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 		// Make the deadline case legible: distinguish "still starting after
 		// the budget" from a real crash (already worded by waitReady).
 		if errors.Is(err, context.DeadlineExceeded) {
-			err = fmt.Errorf("ollama: not ready within %s (engine still starting; see %s)",
+			msg := fmt.Sprintf("ollama: not ready within %s (engine still starting; see %s)",
 				a.cfg.StartupReadyTimeout, a.engineLogPath())
+			if tail := tailEngineLog(a.engineLogPath(), engineLogTailMaxBytes); tail != "" {
+				msg = fmt.Sprintf("%s\n--- ollama serve stderr (tail) ---\n%s", msg, tail)
+			}
+			err = errors.New(msg)
 		}
 		// …and identify whatever is still answering on OUR port. Since we
 		// just killed our own child, an answering engine is one we do not
@@ -666,7 +670,7 @@ func (a *OllamaAdapter) waitReady(ctx context.Context, supervised bool) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-procDone:
-			return fmt.Errorf("ollama: process exited during startup: %v", proc.Err())
+			return startupExitError("ollama", a.engineLogPath(), proc.Err())
 		case <-tick.C:
 		}
 	}
@@ -845,6 +849,57 @@ func (a *OllamaAdapter) engineLogPath() string {
 		return ""
 	}
 	return filepath.Join(a.cfg.LogDir, "engine.log")
+}
+
+// engineLogTailMaxBytes bounds how much of engine.log is folded into a
+// startup-failure error (#22). The full capture can be several MB; the
+// last few KB carries the actual crash reason into last_error / slog
+// without bloating the mgmt-API status JSON.
+const engineLogTailMaxBytes = 4 << 10 // 4 KiB
+
+// tailEngineLog returns up to maxBytes from the END of the file at path,
+// or "" when path is empty, the file is missing/empty, or unreadable. It
+// is best-effort diagnostics for a startup failure, so any problem yields
+// no tail rather than an error (the caller still surfaces the exit code).
+// Shared by the ollama and vLLM adapters (identical engine.log capture).
+func tailEngineLog(path string, maxBytes int) string {
+	if path == "" || maxBytes <= 0 {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Size() == 0 {
+		return ""
+	}
+	if fi.Size() > int64(maxBytes) {
+		if _, err := f.Seek(-int64(maxBytes), io.SeekEnd); err != nil {
+			return ""
+		}
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// startupExitError wraps a spawned-engine startup exit (the crash caught
+// by an adapter's process-exit channel) with the tail of engine.log — the
+// child's own stdout/stderr. Without folding the capture in, the surfaced
+// last_error is a bare "exit status 1" and the real reason (e.g. a Metal
+// init failure on a host with no usable GPU) never leaves the box (#22).
+// Shared by the ollama and vLLM adapters.
+func startupExitError(engine, logPath string, procErr error) error {
+	msg := fmt.Sprintf("%s: process exited during startup: %v", engine, procErr)
+	if tail := tailEngineLog(logPath, engineLogTailMaxBytes); tail != "" {
+		return fmt.Errorf("%s\n--- %s stderr (tail, full log: %s) ---\n%s",
+			msg, engine, logPath, tail)
+	}
+	return errors.New(msg)
 }
 
 // engineLogMaxBytes caps the captured engine log. ollama serve's stdout

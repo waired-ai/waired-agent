@@ -248,6 +248,11 @@ assert_inference() {
     # Diagnostics from the RIGHT store (:9475), using the bundled binary.
     gx "$guest" sh -c "OLLAMA_HOST=127.0.0.1:9475 '$IT_BUNDLED_OLLAMA_BIN' list" 2>&1 | sed 's/^/    :9475 /' || true
     gx "$guest" journalctl -u waired-agent --no-pager -n 30 2>&1 | sed 's/^/    /' || true
+    # #22: the agent captures `ollama serve`'s own stdout+stderr here, so an
+    # engine startup crash leaves its REAL reason in this log — journalctl
+    # only shows the agent's "not ready" wrapper. (gx runs as root in the
+    # guest, same as the journalctl read above.)
+    gx "$guest" sh -c 'tail -n 60 /var/lib/waired/runtimes/ollama/logs/engine.log 2>/dev/null || echo "(no engine.log)"' 2>&1 | sed 's/^/    engine.log| /' || true
   fi
 
   if gx "$guest" sh -c 'grep -hqsE "\"enabled\" *: *true" /var/lib/waired/*.json' 2>/dev/null; then

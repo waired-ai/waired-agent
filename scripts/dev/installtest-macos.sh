@@ -122,6 +122,17 @@ assert_inference_macos() {
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     # Diagnostics from the RIGHT store (:9475), using the resolved binary.
     [ -n "$ollama_bin" ] && OLLAMA_HOST=127.0.0.1:9475 "$ollama_bin" list 2>&1 | sed 's/^/    :9475 /' || true
+    # #22: the agent captures `ollama serve`'s own stdout+stderr here, so a
+    # startup crash (state="failed", last_error="...exit status 1") leaves
+    # its REAL reason in this log — but nothing else surfaces it. State dir
+    # is root-owned, hence sudo (as elsewhere in this script).
+    local englog="/Library/Application Support/waired/runtimes/ollama/logs/engine.log"
+    if sudo test -f "$englog"; then
+      echo "    --- ollama engine.log (tail) ---" >&2
+      sudo tail -n 60 "$englog" 2>&1 | sed 's/^/    engine.log| /' >&2 || true
+    else
+      echo "    (no ollama engine.log at $englog)" >&2
+    fi
   fi
 
   if sudo sh -c 'grep -hqsE "\"enabled\" *: *true" "/Library/Application Support/waired"/*.json' 2>/dev/null; then
