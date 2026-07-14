@@ -58,7 +58,7 @@ func main() {
 // $WAIRED_CONTROL_URL, and the installer recorded none in agent.env. It
 // lets a bare `waired init` (or the installer's auto-init) work with no
 // flags. Overridable by any of the three higher-priority sources.
-const defaultControlURL = "https://waired.net"
+const defaultControlURL = "https://app.waired.ai"
 
 // resolveControlURL applies the control-URL precedence: an explicit
 // --control / $WAIRED_CONTROL_URL (explicit) wins, then the
@@ -577,8 +577,8 @@ func runInitBody(o *initFlags) error {
 	})
 	if err != nil {
 		// The most common first-run failure is an unreachable Control Plane
-		// (e.g. the default https://waired.net before the prod CP exists, or a
-		// typo'd --control). Surface an actionable hint before the raw error
+		// (e.g. a control host that is down or unreachable, or a typo'd
+		// --control). Surface an actionable hint before the raw error
 		// so the operator knows it was the sign-in step that failed and how to
 		// proceed. Still return the error so the exit code stays non-zero and
 		// the installer's "finish later" path fires.
