@@ -38,6 +38,14 @@
 #
 # exit 0: a green run exists (or completed while waiting) for the SHA.
 # exit 1: no green run and none could be produced.
+#
+# Completion-instant consistency: the runs-list status/conclusion and the
+# per-run job conclusion returned by the GitHub REST API are eventually
+# consistent — they trail a run actually finishing by a few seconds. So a
+# run that just went green can momentarily still read as not-green here.
+# Before any hard failure the loop re-checks over a short settle window,
+# which cannot mask a real failure (a failed run stays not-green). See the
+# give-up branch below.
 set -euo pipefail
 
 sha="${1:?usage: testnet-require-green-remote.sh <agent-full-sha>}"
@@ -137,8 +145,22 @@ while :; do
     # The dispatched run takes a few seconds to appear in the runs list;
     # fall through to the sleep and pick it up on the next poll.
   elif (( $(date +%s) - dispatch_at > 180 )); then
-    # We dispatched, the appear-in-list grace window has passed, and every
-    # matching run has completed without a job-level green.
+    # We dispatched, the appear-in-list grace window has passed, and no
+    # matching run is in a non-terminal state. Before hard-failing, absorb
+    # the completion-instant race (see the header note): a run that JUST
+    # went green can still read as not-green on this poll because the
+    # runs-list conclusion and the /runs/{id}/jobs job conclusion lag the
+    # run finishing by a few seconds. Empirically a genuinely-green run was
+    # failed here 2s after its testnet job succeeded. Re-check green_exists()
+    # over a short settle window; a genuinely failed run stays not-green
+    # across all of it, so this never masks a real failure.
+    for _ in 1 2 3 4 5 6; do
+      sleep 15
+      if green_exists; then
+        echo "::notice::green testnet run settled after completion for agent ${sha:0:7} — release may proceed"
+        exit 0
+      fi
+    done
     echo "::error::dispatched testnet run for agent ${sha:0:7} did not succeed — refusing to release. Investigate the testnet failure in ${repo} first." >&2
     exit 1
   fi
