@@ -981,16 +981,27 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 		return err
 	}
 	if id == nil {
-		// Distinguish "this user's dir is empty but the SYSTEM state
-		// looks enrolled (or needs elevation to inspect)" from a real
-		// not-enrolled machine: reporting the former as "Not enrolled"
-		// sends the user to a pointless re-init. Exit non-zero — the
-		// status could not be determined.
-		if n := systemStateNotice(gf.StateDir, "waired status"); n != "" {
-			return errors.New(n)
+		// This user's per-user dir is empty. Before declaring the machine
+		// not enrolled, fall back to the platform SYSTEM state dir: an
+		// enrolled service install lives there, and on Windows even an
+		// elevated `waired status` resolves to the admin's empty %AppData%
+		// first, so the fallback is the only way it sees the enrollment.
+		// Every branch exits 0 — a status query is informational, not a
+		// failure (waired#751).
+		// status makes no further state-dir read past this point (it renders
+		// from id, then queries the local daemon), so the fallback dir itself
+		// is not needed here — only the loaded identity.
+		_, fbID, notice := resolveSystemFallback(gf.StateDir, "waired status")
+		switch {
+		case fbID != nil:
+			id = fbID // enrolled system-wide and readable — render it
+		case notice != "":
+			fmt.Println(notice)
+			return nil
+		default:
+			fmt.Println("Not enrolled. Run `waired init` to connect this device.")
+			return nil
 		}
-		fmt.Println("Not enrolled. Run `waired init` to connect this device.")
-		return nil
 	}
 	fmt.Println("Account:    ", id.AccountEmail)
 	fmt.Println("Network:    ", id.NetworkName, "("+id.NetworkID+")")

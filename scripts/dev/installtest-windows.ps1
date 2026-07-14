@@ -117,7 +117,7 @@ function ItDie  { param([string]$m) Write-Host "[installtest] $m" -ForegroundCol
 # and the assert becomes blocking from then on.
 $script:ContractBlocking = @{
     '749' = $true    # waired#749: `waired claude enable` writes managed-settings on Windows (FIXED)
-    '751' = $false   # waired#751: `waired status` exits 0 in non-elevated contexts
+    '751' = $true    # waired#751: `waired status` exits 0 in non-elevated contexts (FIXED)
     '754' = $false   # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts
     '755' = $false   # waired#755: the install path surfaces the tray (autostart / Start Menu)
 }
@@ -666,8 +666,13 @@ if ($Contract) {
         $prevEapContract = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
 
-        # (#751) `waired status` exits 0 — elevated first (baseline; may already
-        # pass), then the two non-elevated contexts the sv-evox2 dogfood hit.
+        # (#751) `waired status` exits 0 in all three contexts the sv-evox2
+        # dogfood hit. As of the #751 fix, when the per-user dir is empty
+        # status falls back to the SYSTEM dir: elevated/admin reads it and
+        # renders; a standard/basic-token user (whom the SYSTEM DACL denies)
+        # gets an informational "enrolled system-wide, needs elevation" notice
+        # -- both exit 0. Elevated first (baseline), then the two non-elevated
+        # contexts.
         & $waired status *> (Join-Path $Work 'status-elevated.log')
         ItSoft '751' ($LASTEXITCODE -eq 0) "waired status exits 0 (elevated); got $LASTEXITCODE"
 

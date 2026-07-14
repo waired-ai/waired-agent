@@ -91,11 +91,21 @@ func runAuthStatusBody(stateDirVal string) error {
 		return fmt.Errorf("auth status: %w", err)
 	}
 	if id == nil {
-		if n := systemStateNotice(dir, "waired auth status"); n != "" {
-			return errors.New(n)
+		// Fall back to the SYSTEM state dir before declaring not-enrolled;
+		// exit 0 in every branch (waired#751). See runStatusBody. The render
+		// case rebinds dir so the token-meta/token reads below come from the
+		// System dir.
+		fbDir, fbID, notice := resolveSystemFallback(dir, "waired auth status")
+		switch {
+		case fbID != nil:
+			dir, id = fbDir, fbID
+		case notice != "":
+			fmt.Println(notice)
+			return nil
+		default:
+			fmt.Println("Waired: not enrolled. Run `waired init` to sign in.")
+			return nil
 		}
-		fmt.Println("Waired: not enrolled. Run `waired init` to sign in.")
-		return nil
 	}
 	meta, err := identity.LoadTokenMeta(dir)
 	if err != nil {

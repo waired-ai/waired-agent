@@ -12,7 +12,7 @@ subcommand, for grouped, command-specific help.
 | Command | What it does |
 |---|---|
 | `waired init` | Enroll this device into your Waired network (Google sign-in). Run once per machine. See [First run](/getting-started/first-run/). |
-| `waired status` | Show daemon + identity status. Add `--observability` for the live engine/mesh snapshot. On a service install the device state is root-owned, so run it with `sudo` (elevated on Windows) — without elevation it exits with a permission message instead of guessing. |
+| `waired status` | Show daemon + identity status. Add `--observability` for the live engine/mesh snapshot. On a service install the device state is root-owned, so run it with `sudo` (elevated on Windows) to see full status — without elevation it reports that the device is enrolled system-wide and exits 0 instead of guessing. |
 | `waired doctor` | Diagnose your setup with ✓/⚠/✗ checks; press `f` to repair anything fixable (`--fix` to repair non-interactively). |
 | `waired auth status` | Show the device token state + expiry and suggest re-init if needed. Needs `sudo` on a service install, like `waired status`. |
 | `waired logout` | Remove this device's identity + secrets so the next `init` re-enrolls cleanly. |

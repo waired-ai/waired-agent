@@ -13,9 +13,12 @@ import (
 //
 //   - System (or AutoDetect under the SCM): %ProgramData%\waired —
 //     LocalSystem can reliably write here and the directory survives
-//     user-profile changes. Default ACL leaves it readable for any
-//     local user; service install applies a stricter DACL via
-//     platform/secrets.SecureDir on the secrets/ subdir.
+//     user-profile changes. On a service install the whole dir
+//     (identity.json included, not just secrets/) is locked to
+//     SYSTEM + Administrators via platform/secrets.SecureDir — see
+//     service/service_windows.go — so a non-elevated user cannot read
+//     it. A status query falls back to an informational notice there
+//     rather than reading the enrollment (waired#751).
 //   - Interactive (or AutoDetect outside the SCM): %AppData%\waired —
 //     per-user roaming profile.
 //

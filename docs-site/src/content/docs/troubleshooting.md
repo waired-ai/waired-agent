@@ -27,19 +27,21 @@ is the front door — run it before digging into logs.
 | `Engine: not ready` | `waired runtimes status` + `waired models ls` | The runtime is down or the model is still pulling. |
 | A mesh peer doesn't appear / `reachable=false` | `waired status --observability -o json` | Check enrollment, control-plane sync, and WireGuard reachability. |
 | The system tray icon doesn't appear (Linux) | `waired doctor` | On GNOME the tray needs an AppIndicator host extension. The `system tray host` line tells you when one is missing (see below). |
-| `waired status` says "permission denied" / asks for sudo | `sudo waired status` | On a service install the device state is root-owned; see below. |
+| `waired status` says the device is "enrolled system-wide" / needs elevation | `sudo waired status` | On a service install the device state is root-owned; re-run elevated to see the full status (see below). |
 | A command says "waired-agent is not running" | `waired doctor` | The local daemon isn't reachable — restart the service (see [Going deeper](#going-deeper-logs)). |
 
 ## Common fixes
 
-### `waired status` says "permission denied" — or used to say "Not enrolled"
+### `waired status` says the device is enrolled system-wide (needs elevation)
 
-On a service install (the normal `sudo waired init` flow on Linux/macOS), the
-device state lives in a system directory — `/var/lib/waired` on Linux — that
-only root can read. Running `waired status` or `waired auth status` as a
-regular user can't read it, so the command exits with a permission message
-that names the directory and the fix: `sudo waired status` (Windows: re-run
-from an elevated prompt).
+On a service install (the normal `sudo waired init` flow on Linux/macOS, or the
+Windows service), the device state lives in a system directory — `/var/lib/waired`
+on Linux, `%ProgramData%\waired` on Windows — that only root (SYSTEM +
+Administrators on Windows) can read. Running `waired status` or `waired auth
+status` as a regular user can't read it, so rather than guess, the command
+reports that the device **is enrolled system-wide** and exits 0 — a status query
+isn't a failure. Re-run it elevated — `sudo waired status` (Windows: from an
+elevated Administrator prompt) — to see the full identity and daemon status.
 
 If you instead see `Not enrolled. Run \`waired init\` to connect this device.`
 with exit code 0, the machine really has no enrollment — run `waired init`.
