@@ -118,7 +118,7 @@ function ItDie  { param([string]$m) Write-Host "[installtest] $m" -ForegroundCol
 $script:ContractBlocking = @{
     '749' = $true    # waired#749: `waired claude enable` writes managed-settings on Windows (FIXED)
     '751' = $true    # waired#751: `waired status` exits 0 in non-elevated contexts (FIXED)
-    '754' = $false   # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts
+    '754' = $true    # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts (FIXED)
     '755' = $true    # waired#755: the install path surfaces the tray (Start Menu group / autostart) (FIXED)
 }
 $script:Warn = 0
@@ -747,10 +747,10 @@ if ($Contract) {
         if (-not (Test-Path -LiteralPath $StateDir))   { ItOk "state dir wiped (-Clean)" } else { ItBad "state dir remains after -Clean" }
         if (([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';') -notcontains $InstallDir) { ItOk "machine PATH entry removed" } else { ItBad "machine PATH entry remains" }
 
-        # (#754) zero per-user / cross-surface artifacts. Expected leftovers
-        # today: ClaudeCode managed-settings.json (Remove-Proxy still calls the
-        # REMOVED `waired proxy uninstall` instead of `waired claude disable`)
-        # and the ~/.claude statusline/skill entries `claude enable` writes.
+        # (#754) zero per-user / cross-surface artifacts. uninstall.ps1 -Clean now
+        # runs `waired claude disable` + `waired unlink` for the invoking user (the
+        # un-elevated parent phase) and deletes %APPDATA%\waired, so this sweep must
+        # come up empty.
         $left = @()
         if (Test-Path -LiteralPath (Join-Path $env:AppData 'waired')) { $left += '%AppData%\waired' }
         if (Test-Path -LiteralPath "C:\Users\$TestUser\AppData\Roaming\waired") { $left += "test-user %AppData%\waired" }
