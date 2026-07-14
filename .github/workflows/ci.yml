@@ -109,6 +109,21 @@ jobs:
         # monorepo's guard, waired#738).
         run: bash scripts/ci/testnet-gate-guard.sh
 
+      # Keep the paths-gated client gates' filters honest (re-homed from the
+      # monorepo at #1). Each guard fails lint if its workflow's paths lose a
+      # required anchor — or, for the go-list-derived ones, if a new test
+      # dependency is neither covered by a paths glob nor allowlisted — so a
+      # paths-gated gate cannot silently drop coverage. installtest is now
+      # always-on (no paths filter), so it deliberately has no guard.
+      - name: codeui-multios paths guard
+        run: bash scripts/ci/codeui-multios-paths-guard.sh
+
+      - name: amsi-scan paths guard
+        run: bash scripts/ci/amsi-scan-paths-guard.sh
+
+      - name: routing-sentinel paths guard
+        run: bash scripts/ci/routing-sentinel-paths-guard.sh
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2

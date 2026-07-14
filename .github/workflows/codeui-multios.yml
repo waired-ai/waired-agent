@@ -1,0 +1,143 @@
+# Multi-OS coverage for the bundled OpenCode "codeui" coding agent (#501).
+#
+# The codeui package (internal/runtime/codeui) is CODED for all 6
+# platform/arch combos but its RUNTIME behaviour was only ever validated on
+# Linux (the #440 LXD run). `make verify-cross` proves it compiles everywhere;
+# nothing proved it RUNS on Windows/macOS. This workflow closes that in two
+# layers:
+#
+#   L1 - codeui/opencode UNIT tests (fakes, no network): catches .exe naming,
+#        zip vs tar.gz extraction, path joins. Cheap, deterministic.
+#   L2 - real `opencode serve` LIFECYCLE smoke (`-tags integration`): downloads
+#        the real pinned opencode binary, verifies its sha256, extracts, runs
+#        `opencode serve`, asserts the embedded web UI returns 2xx and POST
+#        /session succeeds, then stops it (process-group on unix / Job Object on
+#        Windows). NO model/GPU - inference (L3) is out of scope and OS-agnostic.
+#
+# Cost control: the Windows + macOS legs now both run on self-hosted ephemeral
+# -VM pools (macOS = Mac mini tart #516; Windows = Hyper-V Win11 guest #547), so
+# neither carries GH-hosted billing anymore — but those pools are concurrency=1,
+# so this stays PATHS-GATED to the codeui surface + the opencode pin (which
+# lives, with its 6-platform sha256 set, in internal/runtime/codeui/install.go)
+# + the OS-split spawner the L2 smoke drives. It does NOT run on every PR.
+#
+# NOTE: because it is paths-filtered, this workflow produces no check run when
+# the codeui surface is untouched, so it CANNOT be a required status check.
+# scripts/ci/codeui-multios-paths-guard.sh (run in ci.yml's always-on lint job)
+# guards the filter against going stale - the same belt-and-braces pattern as
+# deploy-dev-paths-guard.sh.
+name: codeui-multios
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - internal/runtime/codeui/**
+      - internal/integration/opencode/**
+      - internal/runtime/spawner_unix.go
+      - internal/runtime/spawner_windows.go
+      - go.mod
+      - go.sum
+      - .github/workflows/codeui-multios.yml
+  push:
+    branches: [main]
+    paths:
+      - internal/runtime/codeui/**
+      - internal/integration/opencode/**
+      - internal/runtime/spawner_unix.go
+      - internal/runtime/spawner_windows.go
+      - go.mod
+      - go.sum
+      - .github/workflows/codeui-multios.yml
+
+concurrency:
+  group: codeui-multios-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+# safe.directory=* for the Linux container leg; harmless on hosted Win/macOS.
+# Mirrors reusable-build-artifacts.yml.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  codeui:
+    name: codeui (${{ matrix.goos }})
+    # Same-repo only: fork PRs get a skipped check (not failed). The
+    # self-hosted Windows/macOS golden VMs must not run fork code; a
+    # maintainer arms a reviewed fork PR by pushing its branch to this repo.
+    # Mirrors installtest.yml (public-repo caution, waired-agent CLAUDE.md).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ matrix.runs-on }}
+    container: ${{ fromJSON(matrix.container) }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: containerized to match daily CI's build substrate. setup-go's
+          # go-version-file overrides the container's bundled toolchain.
+          - goos: linux
+            runs-on: ubuntu-24.04
+            container: '{"image":"golang:1.24-trixie"}'
+          # Windows/macOS: container-less. 'null' -> fromJSON -> no container.
+          # The key trick, per reusable-build-artifacts.yml. (Both self-hosted
+          # golden VMs have no Docker; a Linux-container job can't run there.)
+          # Windows: self-hosted Hyper-V ephemeral Win11 guest (#547); `build`
+          # is the windows-configs pool label the orchestrator registers (JIT),
+          # AND-matched by this subset. Revert to `windows-latest` to fall back.
+          - goos: windows
+            runs-on: [self-hosted, windows, x64, build]
+            container: 'null'
+          # macOS: self-hosted Mac mini (tart ephemeral VM, #516). `build` is the
+          # shared mac-mini pool label (not "build-only"); the runner's labels are
+          # a superset so this subset still AND-matches.
+          - goos: darwin
+            runs-on: [self-hosted, macos, arm64, build]
+            container: 'null'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # windows/darwin run on self-hosted golden VMs (Go toolchain + module
+          # + build cache already baked), so the remote restore/save is
+          # redundant; only linux keeps GitHub's remote cache. Mirrors
+          # reusable-build-artifacts.yml (#516 / #547).
+          cache: ${{ matrix.goos == 'linux' }}
+
+      # L1 - unit layer (fakes, no network). Fast; runs first so a logic
+      # regression fails before we spend the download time.
+      - name: L1 unit tests (codeui + opencode integration package)
+        run: |
+          set -euo pipefail
+          go test -count=1 -timeout 5m \
+            ./internal/runtime/codeui/... \
+            ./internal/integration/opencode/...
+
+      # L2 - real `opencode serve` lifecycle smoke. Downloads the real pinned
+      # binary (outbound 443 to github releases), verifies sha256, extracts,
+      # serves, asserts web-UI 200 + POST /session, stops. One retry absorbs a
+      # transient github-release 5xx; a persistent failure still fails the leg.
+      - name: L2 real opencode serve smoke (-tags integration)
+        run: |
+          set -euo pipefail
+          run_smoke() {
+            go test -tags integration -count=1 -v -timeout 10m \
+              -run 'TestServe_RealLifecycle' \
+              ./internal/runtime/codeui/...
+          }
+          if ! run_smoke; then
+            echo "::warning::L2 codeui smoke failed once; retrying in case of a transient release-download error"
+            sleep 10
+            run_smoke
+          fi

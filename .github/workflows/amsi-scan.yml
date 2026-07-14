@@ -1,0 +1,70 @@
+# AMSI static scan — Gate A of #553. Catch a loader-shaped literal in the
+# installer scripts that would get the `iwr | iex` one-liner blocked by Windows
+# Defender's AMSI on stock Windows before it reaches a release.
+#
+# Why this exists: install.ps1 ships via `iwr | iex` and ollama-windows.ps1 is
+# fetched + run; when the body reaches Invoke-Expression, PowerShell hands the
+# WHOLE script text to AMSI, so a contiguous download-decode-execute cradle in
+# the body can get the entire script blocked ("This script contains malicious
+# content"). That happened (#552). installtest.yml does NOT exercise the AMSI
+# path — it runs a call-operator on the on-disk file, elevated, with
+# WAIRED_NO_OLLAMA=1, so `iex` / Invoke-SelfElevate / the Ollama
+# ScriptBlock::Create are never hit. This is the dedicated AMSI gate.
+#
+# Gate A is the CHEAP EARLY SIGNAL: scripts/dev/amsi-scan.ps1 calls AmsiScanString
+# (the same verdict path `iex` consults) on the file content, guarded by
+# Microsoft's AMSI test sample as a POSITIVE CONTROL so a runner with Defender
+# off can't emit a false-green. GH-hosted windows-latest frequently has the AMSI
+# provider off, so `-OnNoProvider skip` makes the job self-skip there; when a
+# provider IS live, a target detection surfaces as a `::warning::` (advisory —
+# NOT -Strict), because AMSI verdicts are non-deterministic (engine + signature
+# version + cloud-delivered protection) and a definitions update alone can flip
+# one. The high-fidelity, blocking canary is Gate B (a Defender-live step on the
+# #547 Hyper-V golden inside installtest.yml).
+#
+# Paths-gated to the installer scripts + the scanner → no check run when that
+# surface is untouched, so it CANNOT be a required status check.
+# scripts/ci/amsi-scan-paths-guard.sh (run in ci.yml's always-on lint job)
+# keeps the filter from going stale — same belt-and-braces pattern as
+# installtest-paths-guard.sh.
+name: amsi-scan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: &amsi_paths
+      - packaging/install/install.ps1
+      - scripts/install/ollama-windows.ps1
+      - scripts/dev/amsi-scan.ps1
+      - .github/workflows/amsi-scan.yml
+  push:
+    branches: [main]
+    paths: *amsi_paths
+
+concurrency:
+  group: amsi-scan-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  amsi-scan:
+    name: AMSI static scan
+    # GH-hosted windows-latest (Defender's AMSI provider is often off here — the
+    # scanner's positive control detects that and self-skips). NOT the #547
+    # Hyper-V golden: that is where the high-fidelity Gate B canary runs.
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # Advisory early signal: no -Strict (a detection is a warning, not a
+      # failure) and -OnNoProvider skip (exit 0 when Defender's AMSI is off).
+      # The scanner still fails hard on an unexpected interop/setup error.
+      - name: AMSI scan installer scripts
+        run: ./scripts/dev/amsi-scan.ps1 -OnNoProvider skip
