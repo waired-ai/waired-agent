@@ -52,21 +52,22 @@ func TestDefaultStateDirMatchesInit(t *testing.T) {
 
 func TestClaudeManagedEligibleFor(t *testing.T) {
 	cases := []struct {
-		goos        string
-		euid        int
+		name        string
+		elevated    bool
 		managedPath string
 		want        bool
 	}{
-		{"linux", 0, "/etc/claude-code/managed-settings.json", true},
-		{"linux", 1000, "/etc/claude-code/managed-settings.json", false}, // non-elevated init
-		{"darwin", 0, "/Library/Application Support/ClaudeCode/managed-settings.json", true},
-		{"darwin", 501, "/Library/Application Support/ClaudeCode/managed-settings.json", false},
-		{"windows", -1, "", false}, // Windows uses `waired claude enable` instead
-		{"linux", 0, "", false},    // no managed path resolved
+		{"elevated, unix managed path", true, "/etc/claude-code/managed-settings.json", true},
+		{"non-elevated, unix managed path", false, "/etc/claude-code/managed-settings.json", false},
+		// waired#749: Windows now qualifies when elevated (euid is -1 there,
+		// so the old euid==0 gate excluded it even as Administrator).
+		{"elevated, windows managed path", true, `C:\Program Files\ClaudeCode\managed-settings.json`, true},
+		{"non-elevated, windows managed path", false, `C:\Program Files\ClaudeCode\managed-settings.json`, false},
+		{"elevated but no managed path (unsupported OS)", true, "", false},
 	}
 	for _, c := range cases {
-		if got := claudeManagedEligibleFor(c.goos, c.euid, c.managedPath); got != c.want {
-			t.Errorf("claudeManagedEligibleFor(%q, %d, %q) = %v, want %v", c.goos, c.euid, c.managedPath, got, c.want)
+		if got := claudeManagedEligibleFor(c.elevated, c.managedPath); got != c.want {
+			t.Errorf("%s: claudeManagedEligibleFor(%v, %q) = %v, want %v", c.name, c.elevated, c.managedPath, got, c.want)
 		}
 	}
 }

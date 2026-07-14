@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -160,8 +161,8 @@ func TestPromptIntegrationConsent_SkipHint(t *testing.T) {
 		t.Fatal("explicit 'n' should decline")
 	}
 	s := out.String()
-	if !strings.Contains(s, "sudo waired claude enable") {
-		t.Errorf("decline hint should mention `sudo waired claude enable`; out:\n%s", s)
+	if want := elevationHintFor(runtime.GOOS, "waired claude enable"); !strings.Contains(s, want) {
+		t.Errorf("decline hint should mention %q; out:\n%s", want, s)
 	}
 }
 

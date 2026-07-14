@@ -63,6 +63,19 @@ func elevationHintFor(goos, cmdline string) string {
 	return fmt.Sprintf("run `sudo %s`", cmdline)
 }
 
+// elevatedCmdline renders a command the way the operator must invoke it to
+// run elevated, for inline use in descriptive copy ("reverse with <x>",
+// help listings). On Unix that is `sudo <cmd>`; on Windows there is no
+// sudo — the command is shown bare and the surrounding copy carries the
+// "run as Administrator" cue (a wrong `sudo` on Windows was waired#752).
+// For a standalone re-run hint (a full sentence), use elevationHintFor.
+func elevatedCmdline(goos, cmd string) string {
+	if goos == "windows" {
+		return cmd
+	}
+	return "sudo " + cmd
+}
+
 // friendlyError renders the final error text for main()'s "waired:"
 // line: permission errors get the elevation hint appended so the user
 // learns the fix, everything else prints unchanged.

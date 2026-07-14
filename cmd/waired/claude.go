@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -27,22 +28,29 @@ import (
 // ANTHROPIC_BASE_URL at waired's loopback gateway (no credential, so the
 // subscription / auto-mode is preserved) and sweeps up any legacy MITM
 // artifacts; disable reverses it; status is a read-only inspector.
-const claudeLong = `Claude Code integration via managed settings (#488): points Claude Code's
+// claudeLongText builds the `waired claude` help blurb with
+// platform-correct elevated-command spellings — a bare `sudo …` was wrong
+// on Windows (waired#752).
+func claudeLongText() string {
+	return fmt.Sprintf(`Claude Code integration via managed settings (#488): points Claude Code's
 ANTHROPIC_BASE_URL at waired's local gateway with NO credential, so the
 claude.ai subscription and auto-mode (opusplan / Max Opus->Sonnet fallback)
 are preserved. Messages are served by local inference and fail open to the
 real Anthropic API when local serving is down/degraded, so claude never
 breaks. No MITM CA, /etc/hosts edit, or shell env needed.
 
-  sudo waired claude enable     (also done by 'waired init')
-  sudo waired claude disable
-  waired claude status`
+  %s     (also done by 'waired init')
+  %s
+  waired claude status`,
+		elevatedCmdline(runtime.GOOS, "waired claude enable"),
+		elevatedCmdline(runtime.GOOS, "waired claude disable"))
+}
 
 func newClaudeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claude",
 		Short: "Claude Code integration via managed settings (enable / disable / status).",
-		Long:  claudeLong,
+		Long:  claudeLongText(),
 		RunE:  namespaceRunE,
 	}
 	cmd.AddCommand(newClaudeEnableCmd(), newClaudeDisableCmd(), newClaudeStatusCmd(),
@@ -120,7 +128,7 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 			return fmt.Errorf("waired claude enable: managed settings are not supported on this OS")
 		}
 		if os.IsPermission(err) {
-			return fmt.Errorf("waired claude enable: %w\n  (writing %s needs elevation — re-run with sudo / as Administrator)", err, claudemanaged.Path())
+			return fmt.Errorf("waired claude enable: %w\n  (writing %s needs elevation — %s)", err, claudemanaged.Path(), elevationHintFor(runtime.GOOS, "waired claude enable"))
 		}
 		return fmt.Errorf("waired claude enable: %w", err)
 	}
@@ -144,7 +152,7 @@ func runClaudeDisable(stateDir string) error {
 	removed, err := claudemanaged.Remove()
 	if err != nil {
 		if os.IsPermission(err) {
-			return fmt.Errorf("waired claude disable: %w\n  (editing %s needs elevation — re-run with sudo / as Administrator)", err, claudemanaged.Path())
+			return fmt.Errorf("waired claude disable: %w\n  (editing %s needs elevation — %s)", err, claudemanaged.Path(), elevationHintFor(runtime.GOOS, "waired claude disable"))
 		}
 		return fmt.Errorf("waired claude disable: %w", err)
 	}

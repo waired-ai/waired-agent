@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -151,7 +152,7 @@ func TestPrintClaudeSetupHelper_ManagedSettingsStory(t *testing.T) {
 	for _, want := range []string{
 		"Claude Code integration:",
 		"managed settings",
-		"sudo waired claude enable",
+		elevatedCmdline(runtime.GOOS, "waired claude enable"),
 		"waired claude status",
 	} {
 		if !strings.Contains(s, want) {

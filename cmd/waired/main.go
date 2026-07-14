@@ -35,6 +35,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
@@ -446,7 +447,7 @@ func runInitBody(o *initFlags) error {
 	// claudeManagedEligible: whether `waired init` will write the system-wide
 	// Claude Code managed settings (ANTHROPIC_BASE_URL -> local gateway, no
 	// credential) and sweep up any retired MITM proxy artifacts (#488).
-	claudeManagedEligible := claudeManagedEligibleFor(runtime.GOOS, os.Geteuid(), claudemanaged.Path())
+	claudeManagedEligible := claudeManagedEligibleFor(elevation.IsElevated(), claudemanaged.Path())
 
 	// Load any existing agent.json so the inference prompt's defaults
 	// reflect prior answers. The actual prompt runs in the
@@ -584,7 +585,7 @@ func runInitBody(o *initFlags) error {
 		if _, ok := errors.AsType[net.Error](err); ok {
 			fmt.Printf("%s Sign-in failed: couldn't reach the Control Plane at %s.\n"+
 				"   It may not be available yet — pass --control <url> for a different one,\n"+
-				"   or finish later with `sudo waired init`.\n", emo("⚠️", "!"), *control)
+				"   or finish later: %s.\n", emo("⚠️", "!"), *control, elevationHintFor(runtime.GOOS, "waired init"))
 		}
 		return err
 	}
@@ -653,7 +654,8 @@ func runInitBody(o *initFlags) error {
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
 		if path, err := claudemanaged.Write(baseURL); err != nil {
 			fmt.Fprintf(os.Stderr,
-				"warn: writing Claude Code managed settings failed (%v); run `sudo waired claude enable` later\n", err)
+				"warn: writing Claude Code managed settings failed (%v); %s\n",
+				err, elevationHintFor(runtime.GOOS, "waired claude enable"))
 		} else {
 			claudeRouted = true
 			fmt.Printf("  %s → ANTHROPIC_BASE_URL=%s (no credential; subscription/auto-mode preserved)\n", path, baseURL)
@@ -756,6 +758,18 @@ func runInitBody(o *initFlags) error {
 			// enable`; init keeps the TTY, so prompting is allowed here.
 			installStatuslineForInvoker(false, true)
 		}
+	}
+
+	// waired#749: when the operator consented to integration but this init
+	// isn't elevated, the machine-wide managed-settings write above was
+	// skipped (claudeManagedEligible=false). Say so honestly with the
+	// platform-correct elevation hint instead of the old silent skip, which
+	// left the consent copy looking like routing had been enabled. Covers
+	// non-elevated Windows and non-sudo Linux/darwin alike; suppressed on an
+	// OS with no managed-settings path (claudemanaged.Path()=="").
+	if integConsent && !claudeManagedEligible && !renewing && claudemanaged.Path() != "" {
+		fmt.Printf("\n%s Claude Code request routing needs elevation — %s to route Claude through Waired.\n",
+			emo("🔌", "*"), elevationHintFor(runtime.GOOS, "waired claude enable"))
 	}
 
 	// The true end: a framed success summary printed only after the (optional)
@@ -1386,13 +1400,15 @@ func initStateDirMode(goos string, euid int) paths.Mode {
 
 // claudeManagedEligibleFor is the testable core of init's
 // claudeManagedEligible gate: the managed-settings file lives at a
-// root-owned OS path, so writing it needs an elevated init (euid 0 on
-// Linux/macOS). Windows has a real managedPath
-// (%ProgramFiles%\ClaudeCode\managed-settings.json) but euid is -1
-// there, so init never auto-enables — routing is configured via
-// `waired claude enable` instead (waired#749 tracks closing that gap).
-func claudeManagedEligibleFor(goos string, euid int, managedPath string) bool {
-	return (goos == "linux" || goos == "darwin") && euid == 0 && managedPath != ""
+// machine-wide OS path (root-owned on Linux/macOS,
+// %ProgramFiles%\ClaudeCode on Windows), so writing it needs an elevated
+// init. elevated comes from elevation.IsElevated() at the call site — NOT
+// a bare euid check, which is -1 on Windows and previously excluded it
+// entirely even when run as Administrator (waired#749). managedPath is
+// empty only on an OS with no managed-settings location, which can't be
+// written regardless.
+func claudeManagedEligibleFor(elevated bool, managedPath string) bool {
+	return elevated && managedPath != ""
 }
 
 // splitHostPort + newReservedUDPPort live in helpers.go to keep main.go

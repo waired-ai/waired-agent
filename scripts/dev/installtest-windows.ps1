@@ -116,7 +116,7 @@ function ItDie  { param([string]$m) Write-Host "[installtest] $m" -ForegroundCol
 # open. When a fix merges, its PR flips the ONE matching line below to $true
 # and the assert becomes blocking from then on.
 $script:ContractBlocking = @{
-    '749' = $false   # waired#749: `waired claude enable` writes managed-settings on Windows
+    '749' = $true    # waired#749: `waired claude enable` writes managed-settings on Windows (FIXED)
     '751' = $false   # waired#751: `waired status` exits 0 in non-elevated contexts
     '754' = $false   # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts
     '755' = $false   # waired#755: the install path surfaces the tray (autostart / Start Menu)
@@ -687,8 +687,10 @@ if ($Contract) {
         }
 
         # (#749) `waired claude enable` must land managed-settings at the real
-        # Windows path. (init cannot auto-enable on Windows: the eligibility
-        # gate keys on euid==0, which is -1 there — cmd/waired/main.go.)
+        # Windows path. As of the #749 fix an *elevated* `waired init` also
+        # auto-enables (the eligibility gate now keys on an OS-aware elevation
+        # predicate, not euid==0 which is -1 on Windows — cmd/waired/main.go +
+        # internal/platform/elevation); this asserts the `enable` command path.
         & $waired claude enable --state-dir $StateDir *> (Join-Path $Work 'claude-enable.log')
         $claudeEnableExit = $LASTEXITCODE
         $ms = Join-Path $env:ProgramFiles 'ClaudeCode\managed-settings.json'
