@@ -48,11 +48,20 @@ func TestRenderLaunchDaemonPlist_HappyPath(t *testing.T) {
 		`<string>/Library/Logs/waired-agent.out.log</string>`,
 		`<key>StandardErrorPath</key>`,
 		`<string>/Library/Logs/waired-agent.err.log</string>`,
+		`<key>EnvironmentVariables</key>`,
+		`<key>HOME</key>`,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(s, want) {
 			t.Errorf("plist missing %q\n--- got ---\n%s", want, s)
 		}
+	}
+
+	// #22: launchd exports no $HOME to a system daemon, so the plist must
+	// set HOME (= the state dir) or a spawned `ollama serve` dies with
+	// "$HOME is not defined". Assert the key/value pairing, not just the key.
+	if !strings.Contains(s, "<key>HOME</key>\n  <string>/Library/Application Support/waired</string>") {
+		t.Errorf("plist must set EnvironmentVariables HOME=<state dir>\n--- got ---\n%s", s)
 	}
 
 	// A system LaunchDaemon runs as root: there must be no UserName /
