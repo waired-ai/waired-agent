@@ -103,6 +103,13 @@ type OllamaConfig struct {
 	// tests). Without it a failed `ollama serve` leaves no trail and
 	// "not ready" is undiagnosable in the field.
 	LogDir string
+	// StateHome is a writable, agent-owned directory used as $HOME for the
+	// spawned `ollama serve` when the agent's own environment has none.
+	// macOS system LaunchDaemons start with $HOME unset, and `ollama serve`
+	// aborts at startup with "Error: $HOME is not defined" — it resolves
+	// ~/.ollama for its key/config even when OLLAMA_MODELS redirects the
+	// model blobs. Empty leaves any inherited HOME untouched (#22).
+	StateHome string
 	// StopTimeout is how long Stop waits after SIGTERM before
 	// SIGKILL (default 5s).
 	StopTimeout time.Duration
@@ -433,10 +440,23 @@ func (a *OllamaAdapter) processEnv() []string {
 	model := a.modelEnv
 	a.mu.Unlock()
 
+	// macOS system LaunchDaemons start with $HOME unset (or empty), and
+	// `ollama serve` aborts at startup with "$HOME is not defined" — it
+	// resolves ~/.ollama for its key/config even when OLLAMA_MODELS is
+	// redirected. Supply a writable agent-owned HOME in that case; never
+	// override a HOME the launcher already gave us (#22). os.Getenv reads
+	// the same process env os.Environ() seeds `base` from below.
+	injectHome := a.cfg.StateHome != "" && os.Getenv("HOME") == ""
+
 	// Keys we inject and that must override any inherited value.
 	drop := map[string]bool{"OLLAMA_HOST": true}
 	if a.cfg.ModelsDir != "" {
 		drop["OLLAMA_MODELS"] = true
+	}
+	if injectHome {
+		// Strip an empty inherited "HOME=" so our value wins regardless of
+		// getenv's first-vs-last duplicate resolution.
+		drop["HOME"] = true
 	}
 	for _, kv := range backend {
 		if k := envKey(kv); k != "" {
@@ -464,6 +484,9 @@ func (a *OllamaAdapter) processEnv() []string {
 	)
 	if a.cfg.ModelsDir != "" {
 		out = append(out, "OLLAMA_MODELS="+a.cfg.ModelsDir)
+	}
+	if injectHome {
+		out = append(out, "HOME="+a.cfg.StateHome)
 	}
 	// Backend and model-tuning overrides come before ExtraEnv so a test
 	// ExtraEnv can still have the last word if it deliberately sets the
