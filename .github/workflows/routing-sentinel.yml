@@ -1,0 +1,122 @@
+# Coding-agent → gateway → local-model ROUTING SENTINEL (#496), per-PR.
+#
+# The integration surface (Claude Code / OpenCode / OpenClaw → the `waired`
+# provider → the local gateway → a local model → response) is fragile and only
+# its *wiring* is unit-tested; recent dogfood breakage lived in the uncovered
+# "tool → provider → gateway → model" path. This gate stands up the SAME real
+# `install → service → enrolled daemon → gateway` chain as installtest.yml, then
+# runs the routing sentinel (scripts/dev/lib/installtest-integration.sh →
+# internal/e2e/integration, -tags integration): for each coding-agent leg it
+# drives one real inference request at the gateway surface that tool's config
+# targets and asserts via the daemon's observability event ring that the
+# completion was SERVED LOCALLY and did NOT fail open to real Anthropic.
+#
+# LINUX-ONLY, per-PR: the fail-open / routing / decision=local logic is
+# OS-agnostic Go, so a Linux leg on the cheap disposable ubuntu-24.04 runner
+# catches the regression class on EVERY gated PR without loading the
+# concurrency=1 self-hosted Windows/macOS pools. Full 3-OS routing coverage runs
+# nightly in installtest-inference.yml. `--integration` pins the tiny 0.5B as the
+# bundled model, so the deploy pulls ~0.4 GB (no 7B, no GPU) — cheap per PR.
+#
+# fail-open safety: a deliberately-bogus ANTHROPIC_AUTH_TOKEN + a hosts
+# blackhole of api.anthropic.com mean a regression that silently reaches real
+# Anthropic FAILS loudly (the sentinel's "a local decision=local event exists"
+# is the portable primary; these are belt-and-braces on the disposable VM). With
+# #488's managed-settings routing the proxy no longer edits /etc/hosts, so the
+# test blackhole does not collide with it.
+#
+# Paths-gated → no check run when the surface is untouched, so it CANNOT be a
+# required status check. scripts/ci/routing-sentinel-paths-guard.sh (run in
+# ci.yml's always-on lint job) guards the filter against going stale — the same
+# belt-and-braces pattern as installtest / codeui-multios.
+name: routing-sentinel
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: &routing_paths
+      - internal/integration/**
+      - internal/proxy/**
+      - internal/gateway/**
+      - internal/agentconfig/**
+      - internal/router/**
+      - internal/catalog/**
+      - internal/runtime/codeui/**
+      - internal/e2e/integration/**
+      - cmd/waired/**
+      - cmd/waired-agent/**
+      - go.mod
+      - go.sum
+      # installer surface — the sentinel drives the real INSTALLED daemon, so an
+      # install/packaging/harness regression can break routing.
+      - packaging/install/install.sh
+      - scripts/dev/installtest-*.sh
+      - scripts/dev/lib/installtest-*.sh
+      - .github/workflows/routing-sentinel.yml
+  push:
+    branches: [main]
+    paths: *routing_paths
+
+concurrency:
+  group: routing-sentinel-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  id-token: write       # Workload Identity Federation (mint the enroll token)
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  routing-sentinel:
+    name: routing sentinel (linux, 0.5B)
+    # Same-repo only: fork PRs get a skipped check (not failed). The WIF
+    # id-token + SA impersonation must not be reachable by fork code; GitHub
+    # also withholds the id-token from fork PRs. A maintainer arms a reviewed
+    # fork PR by pushing its branch to this repo. Mirrors installtest.yml.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      # Tier 2: hands-free enroll vs the real app.dev.waired.net (#339 grant).
+      IT_ENROLL_MODE: oidc
+      IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
+      # Run the installer in place on the disposable runner (systemd is PID 1).
+      IT_LOCAL: "1"
+      IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
+      # A regression that fails open to real Anthropic gets a 401 with this bogus
+      # token (the sentinel + blackhole below are the other two layers).
+      ANTHROPIC_AUTH_TOKEN: waired-routing-sentinel-dummy-not-a-real-key
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+
+      # Belt-and-braces fail-open guard: blackhole api.anthropic.com so a
+      # regression that bypasses the local gateway cannot silently succeed by
+      # reaching real Anthropic. Disposable runner; #488 managed-settings routing
+      # does not touch /etc/hosts, so this does not collide with the proxy.
+      - name: blackhole api.anthropic.com (fail-open guard)
+        run: echo "0.0.0.0 api.anthropic.com" | sudo tee -a /etc/hosts >/dev/null
+
+      # install → service → enroll (Tier 2) → inference engine with the tiny 0.5B
+      # pinned → routing sentinel. Mirrors installtest.yml's Linux leg + the
+      # --integration tail.
+      - name: routing sentinel (linux, tier 2 + integration)
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/go/bin:$PATH"
+          bash scripts/dev/installtest-host-up.sh
+          bash scripts/dev/installtest-run.sh --tier 2 --integration
