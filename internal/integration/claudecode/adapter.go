@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
@@ -60,11 +61,16 @@ func (a *adapter) Detect(_ context.Context, opts integration.ApplyOptions) (inte
 			det.Notes = append(det.Notes, fmt.Sprintf("claude at %s (not on PATH)", path))
 		}
 	}
+	// Key the config-dir signal on content waired did NOT write. Apply
+	// only ever creates ~/.claude/skills/, so a bare DirExists check on
+	// ~/.claude self-poisons once applied (waired#753). A real Claude Code
+	// install always leaves settings.json / .credentials.json / projects/
+	// etc. — any entry other than skills/ marks it.
 	configDir := integration.HomeJoin(opts.HomeDir, ".claude")
-	if integration.DirExists(configDir) {
+	if integration.ConfigDirHasForeignEntry(configDir, filepath.Base(SkillsRoot(opts.HomeDir))) {
 		det.Found = true
 		det.ConfigDir = configDir
-		det.Notes = append(det.Notes, fmt.Sprintf("~/.claude exists: %s", configDir))
+		det.Notes = append(det.Notes, fmt.Sprintf("~/.claude has non-waired content: %s", configDir))
 	}
 	return det, nil
 }

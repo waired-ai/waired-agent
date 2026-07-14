@@ -4,9 +4,46 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/integration"
 )
+
+// configDirLooksInstalled reports whether ~/.openclaw shows a real OpenClaw
+// install rather than the footprint waired's own Apply leaves behind. Apply
+// pre-provisions ~/.openclaw (MkdirAll + a plugins/ tree + owned keys merged
+// into openclaw.json), which would self-poison a bare DirExists check
+// (waired#753). The dir counts as a real install when openclaw.json holds any
+// key waired does not own, or when it has any entry other than the plugins/
+// tree and openclaw.json that waired creates.
+func configDirLooksInstalled(home string) bool {
+	if configHasForeignKeys(home) {
+		return true
+	}
+	return integration.ConfigDirHasForeignEntry(ConfigDir(home),
+		filepath.Base(filepath.Dir(PluginDir(home))), // "plugins"
+		filepath.Base(ConfigFile(home)),              // "openclaw.json"
+	)
+}
+
+// configHasForeignKeys reports whether openclaw.json contains any key beyond
+// the ones this adapter manages. It strips exactly the waired-owned keys from
+// the parsed (throwaway) map — the same removal Uninstall uses, with no
+// persistence — and asks whether anything remains. A missing file is not
+// foreign; a present-but-unparseable file is treated as real user content.
+func configHasForeignKeys(home string) bool {
+	m, existed, err := readConfigObject(ConfigFile(home))
+	if !existed {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	removeManagedKeys(m, PluginDir(home))
+	return !isEffectivelyEmpty(m)
+}
 
 // modelRefs are the three picker references the adapter allowlists in
 // agents.defaults.models so the waired models surface in `models list` and

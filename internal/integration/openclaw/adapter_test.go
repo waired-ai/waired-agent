@@ -37,6 +37,49 @@ func readJSON(t *testing.T, path string) map[string]any {
 	return m
 }
 
+// TestDetect_ConfigDirWairedOnly_NotDetected is the waired#753 regression:
+// after a force-apply on an empty home, ~/.openclaw holds only the plugins/
+// tree and an openclaw.json with just waired-owned keys, so the config-dir
+// signal must NOT fire. Asserting on ConfigDir (not Found) keeps it portable
+// — `openclaw` may be on the dev/CI host PATH.
+func TestDetect_ConfigDirWairedOnly_NotDetected(t *testing.T) {
+	a := New()
+	opts := newOpts(t)
+	if err := a.Apply(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	det, err := a.Detect(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.ConfigDir != "" {
+		t.Fatalf("config dir must not read as installed with only waired keys/plugins, got %q", det.ConfigDir)
+	}
+}
+
+// TestDetect_FoundViaUserConfig: an openclaw.json carrying a user-owned key
+// (a gateway block) is the foreign content that marks a real install, even
+// after waired's managed keys are stripped.
+func TestDetect_FoundViaUserConfig(t *testing.T) {
+	a := New()
+	home := t.TempDir()
+	if err := os.MkdirAll(ConfigDir(home), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := map[string]any{"gateway": map[string]any{"port": float64(18789)}}
+	seedBytes, _ := json.MarshalIndent(seed, "", "  ")
+	if err := os.WriteFile(ConfigFile(home), seedBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	det, err := a.Detect(context.Background(), integration.ApplyOptions{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.ConfigDir != ConfigDir(home) {
+		t.Fatalf("ConfigDir = %q, want %q", det.ConfigDir, ConfigDir(home))
+	}
+}
+
 func TestApply_WritesPluginAndConfig(t *testing.T) {
 	a := New()
 	opts := newOpts(t)
