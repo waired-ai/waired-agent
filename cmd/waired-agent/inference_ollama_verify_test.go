@@ -13,6 +13,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -156,15 +157,21 @@ func TestVerifyOllamaTuning(t *testing.T) {
 		}
 	})
 
-	t.Run("other-model-loaded-abstains-from-sizes", func(t *testing.T) {
-		// A different model is resident: ctx check still applies, but the
-		// f16 heuristic must abstain even with an f16-sized excess.
+	t.Run("foreign-model-loaded-abstains", func(t *testing.T) {
+		// waired#763: a DIFFERENT model is resident (the model-swap race,
+		// where the previous model — here a 32768-window one — is still in
+		// /api/ps). The probe must abstain, not compare the foreign runner's
+		// context against this tuning and cry "OLLAMA_CONTEXT_LENGTH did not
+		// apply". Even an f16-sized excess must not trigger a size verdict.
 		f := &fakeOllamaAPI{psName: "someone-else:latest",
 			psSize: weight + int64(65536)*262144, psVRAM: weight + int64(65536)*262144,
-			psCtx: 262144, tagSize: weight}
+			psCtx: 32768, tagSize: weight}
 		v, detail := run(f, tn, hw)
-		if v != tuningOK || detail != "" {
-			t.Errorf("= (%v, %q), want (tuningOK, \"\")", v, detail)
+		if v != tuningInconclusive {
+			t.Errorf("= (%v, %q), want tuningInconclusive for a foreign resident model", v, detail)
+		}
+		if strings.Contains(detail, "did not apply") {
+			t.Errorf("must not emit the false OLLAMA_CONTEXT_LENGTH warning: %q", detail)
 		}
 	})
 
@@ -234,7 +241,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), testLogger())
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
 		got := sw.lastTuning(t)
 		if !got.Verified || got.Warning != "" || got.ContextLength != 262144 {
 			t.Errorf("recorded %+v, want verified clean 262144", got)
@@ -263,7 +270,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 			api.mu.Unlock()
 		}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), testLogger())
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
 
 		if sw.stops != 1 || sw.ensures != 1 {
 			t.Fatalf("stops=%d ensures=%d, want exactly one restart", sw.stops, sw.ensures)
@@ -298,7 +305,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{} // onEnsure absent: the spill persists
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), testLogger())
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
 		if sw.stops != 1 || sw.ensures != 1 {
 			t.Fatalf("stops=%d ensures=%d, want exactly one restart even when still degraded", sw.stops, sw.ensures)
 		}
@@ -318,7 +325,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, floored, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), testLogger())
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
 		if sw.stops != 0 || sw.ensures != 0 {
 			t.Errorf("no restart should happen at the floor (stops=%d ensures=%d)", sw.stops, sw.ensures)
 		}
@@ -336,7 +343,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{stopErr: errors.New("stop refused")}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), testLogger())
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
 		if sw.ensures != 0 {
 			t.Errorf("EnsureRunning must not run after a failed Stop (ensures=%d)", sw.ensures)
 		}
@@ -352,13 +359,100 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
-			verifyTag, srv.URL, srv.Client(), testLogger())
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
 		got := sw.lastTuning(t)
 		if got.Verified {
 			t.Errorf("inconclusive must record Verified=false: %+v", got)
 		}
 		if sw.stops != 0 {
 			t.Errorf("inconclusive must never restart (stops=%d)", sw.stops)
+		}
+	})
+
+	t.Run("records-runner-observed-parallelism", func(t *testing.T) {
+		// waired#763 symptom 2: the tuning intended num_parallel=2 but Ollama
+		// launched the runner with -np 1 (per-slot KV did not fit). The
+		// recorded tuning must carry the runner's real 1, plus a note — not
+		// the stale intent 2. A foreign runner still resident is ignored.
+		tp := tn
+		tp.NumParallel = 2
+		size, vram := healthy(262144)
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: vram,
+			psCtx: 262144, tagSize: weight}
+		srv := api.server(t)
+		defer srv.Close()
+		procs := func() ([]proclist.ProcInfo, error) {
+			return []proclist.ProcInfo{
+				{PID: 10, Argv: []string{"llama-server", "-c", "32768", "-np", "2"}},
+				{PID: 20, Argv: []string{"llama-server", "-c", "262144", "-np", "1"}},
+			}, nil
+		}
+		sw := &fakeModelEnvSwitcher{}
+		applyOllamaTuningVerification(context.Background(), sw, tp, m, variant, hw,
+			verifyTag, srv.URL, srv.Client(), procs, testLogger())
+		got := sw.lastTuning(t)
+		if got.ObservedNumParallel != 1 {
+			t.Errorf("ObservedNumParallel = %d, want 1 (runner -np)", got.ObservedNumParallel)
+		}
+		if !strings.Contains(got.Warning, "reduced request parallelism from 2 to 1") {
+			t.Errorf("want a reduced-parallelism note, got %q", got.Warning)
+		}
+	})
+}
+
+// TestObserveRunnerParallel exercises the #763 runner correlation directly:
+// a unique llama-server / ollama-runner whose -c matches the tuning's
+// context (or ctx × its own -np) wins; anything else abstains so status
+// keeps the intent.
+func TestObserveRunnerParallel(t *testing.T) {
+	_, _, _, tn := verifyFixture() // tn.ContextLength == 262144
+	mk := func(argvs ...[]string) runnerProcLister {
+		return func() ([]proclist.ProcInfo, error) {
+			out := make([]proclist.ProcInfo, len(argvs))
+			for i, a := range argvs {
+				out[i] = proclist.ProcInfo{PID: i + 1, Argv: a}
+			}
+			return out, nil
+		}
+	}
+	t.Run("reduced-to-1-ignores-foreign", func(t *testing.T) {
+		np, ok := observeRunnerParallel(tn, mk(
+			[]string{"llama-server", "-c", "32768", "-np", "2"},  // foreign 32k runner
+			[]string{"llama-server", "-c", "262144", "-np", "1"}, // target, reduced
+		))
+		if !ok || np != 1 {
+			t.Errorf("= (%d, %v), want (1, true)", np, ok)
+		}
+	})
+	t.Run("honored-ctx-times-parallel", func(t *testing.T) {
+		// -c is the TOTAL context: an honored np=2 shows -c = 262144 × 2.
+		np, ok := observeRunnerParallel(tn, mk(
+			[]string{"ollama", "runner", "--ctx-size", "524288", "--parallel", "2"},
+		))
+		if !ok || np != 2 {
+			t.Errorf("= (%d, %v), want (2, true)", np, ok)
+		}
+	})
+	t.Run("no-runner-matches-abstains", func(t *testing.T) {
+		np, ok := observeRunnerParallel(tn, mk(
+			[]string{"llama-server", "-c", "99999", "-np", "1"},
+			[]string{"/usr/bin/vim"},
+		))
+		if ok || np != 0 {
+			t.Errorf("= (%d, %v), want (0, false)", np, ok)
+		}
+	})
+	t.Run("ambiguous-two-matches-abstains", func(t *testing.T) {
+		if np, ok := observeRunnerParallel(tn, mk(
+			[]string{"llama-server", "-c", "262144", "-np", "1"},
+			[]string{"llama-server", "-c", "262144", "-np", "3"},
+		)); ok {
+			t.Errorf("two matching runners must abstain, got np=%d", np)
+		}
+	})
+	t.Run("nil-lister-abstains", func(t *testing.T) {
+		if _, ok := observeRunnerParallel(tn, nil); ok {
+			t.Error("nil lister must abstain")
 		}
 	})
 }
@@ -468,7 +562,7 @@ func TestApplyOllamaTuningVerification_PlannedSpillOverBound(t *testing.T) {
 		f.psCtx = 0
 		f.mu.Unlock()
 	}
-	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL, srv.Client(), testLogger())
+	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL, srv.Client(), nil, testLogger())
 
 	if sw.stops != 1 || sw.ensures != 1 {
 		t.Fatalf("restarts: stops=%d ensures=%d, want exactly 1 each", sw.stops, sw.ensures)
