@@ -119,7 +119,7 @@ $script:ContractBlocking = @{
     '749' = $true    # waired#749: `waired claude enable` writes managed-settings on Windows (FIXED)
     '751' = $true    # waired#751: `waired status` exits 0 in non-elevated contexts (FIXED)
     '754' = $false   # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts
-    '755' = $false   # waired#755: the install path surfaces the tray (autostart / Start Menu)
+    '755' = $true    # waired#755: the install path surfaces the tray (Start Menu group / autostart) (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
