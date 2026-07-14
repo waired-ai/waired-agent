@@ -327,6 +327,11 @@ darwin_uninstall() {
     common_run $SUDO launchctl bootout system/com.waired.agent 2>/dev/null || true
     # shellcheck disable=SC2086
     common_run $SUDO rm -f /Library/LaunchDaemons/com.waired.agent.plist
+    # newsyslog log-rotation drop-in (install.sh's darwin_install_log_rotation).
+    # It is config the installer added, so remove it on any uninstall — like
+    # the plist above — not just under --clean (which handles the log data).
+    # shellcheck disable=SC2086
+    common_run $SUDO rm -f /etc/newsyslog.d/waired-agent.conf
 
     # 2. Per-user tray LaunchAgent (com.waired.tray.waired-tray). Must be
     #    touched as the invoking user, not root.

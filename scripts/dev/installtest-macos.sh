@@ -180,8 +180,15 @@ mkdir -p "$WORK/stage" "$DIST"
   GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="$ldf" -o "$WORK/stage/waired-agent" ./cmd/waired-agent
 ) || it_die "go build (darwin/$arch) failed"
 printf '0.0.0-%s' "$ver" > "$WORK/stage/VERSION"
-tar czf "$DIST/$tarball" -C "$WORK/stage" waired waired-agent VERSION
-( cd "$DIST" && shasum -a 256 "$tarball" > "$tarball.sha256" )
+# Guard the pack + checksum explicitly: this script runs `set -uo pipefail`
+# (NOT -e — the inference poll below relies on no-match greps in command
+# substitutions that -e would abort). Without a guard a failed pack would let
+# the run barrel into install.sh against a missing tarball and report a
+# confusing "install.sh exited N" instead of dying at the real cause.
+tar czf "$DIST/$tarball" -C "$WORK/stage" waired waired-agent VERSION \
+  || it_die "packing $tarball failed"
+( cd "$DIST" && shasum -a 256 "$tarball" > "$tarball.sha256" ) \
+  || it_die "checksumming $tarball failed"
 
 # --- Tier 1: run install.sh's darwin path + assert --------------------------
 # --inference drops --skip-ollama / WAIRED_NO_OLLAMA so install.sh installs
@@ -202,10 +209,34 @@ it_step "Tier 1 asserts"
 [ "$install_rc" -eq 0 ]       && ok "install.sh exited 0"                        || bad "install.sh exited $install_rc"
 [ -x "$BINDIR/waired" ]       && ok "waired installed ($BINDIR/waired)"          || bad "waired missing in $BINDIR"
 [ -x "$BINDIR/waired-agent" ] && ok "waired-agent installed"                     || bad "waired-agent missing in $BINDIR"
+
+# Gatekeeper: curl-downloaded binaries carry no com.apple.quarantine xattr, so
+# the unsigned ad-hoc binary execs — including as a root LaunchDaemon. Assert
+# both; a quarantined or non-execing binary fails opaquely at launchd spawn
+# (ported from scripts/dev/macos-installtest-run.sh; the CI driver lacked it).
+if xattr -p com.apple.quarantine "$BINDIR/waired" >/dev/null 2>&1; then
+  bad "waired has com.apple.quarantine (would be Gatekeeper-blocked)"
+else
+  ok "waired has no Gatekeeper quarantine xattr"
+fi
+"$BINDIR/waired" version >/dev/null 2>&1 && ok "waired binary execs (version)" \
+  || bad "waired binary does not exec (ad-hoc signature / arch mismatch?)"
+
 sudo test -f "$PLIST"         && ok "system LaunchDaemon plist written ($LABEL)" || bad "LaunchDaemon plist missing ($PLIST)"
 sudo test -d "$STATE_DIR"     && ok "system state dir present"                   || bad "state dir missing ($STATE_DIR)"
 owner="$(sudo stat -f '%Su' "$STATE_DIR" 2>/dev/null || true)"
 [ "$owner" = "root" ] && ok "state dir owned by root ($owner)" || bad "state dir owner = $owner (want root)"
+
+# State-dir must not be world-accessible (parity with Linux's SecureDir 0700 /
+# Windows' restrictive DACL): agent.json + identity.json live here. Validates
+# the darwin Install hardening (secrets.SecureDir); a regression to 0755 would
+# expose them to every local user.
+mode="$(sudo stat -f '%Lp' "$STATE_DIR" 2>/dev/null || true)"
+if [ -n "$mode" ] && [ "$(( 8#$mode & 0007 ))" -eq 0 ]; then
+  ok "state dir not world-accessible (mode $mode)"
+else
+  bad "state dir world-accessible (mode ${mode:-?}; want no world rwx)"
+fi
 
 # The whole point of #520: the system domain loads on a headless runner with no
 # GUI (Aqua) session — no per-user gui/<uid> probe, no subprocess fallback.
@@ -214,6 +245,31 @@ if sudo launchctl print "system/$LABEL" >/dev/null 2>&1; then
 else
   bad "LaunchDaemon not loaded in system/ (headless system daemon must load without a GUI session)"
 fi
+
+# Enabled bit: `launchctl enable system/<label>` (run by `waired-agent
+# install`) is what makes the daemon return after a reboot — distinct from
+# "loaded this boot". A stale disabled override would pass the loaded check
+# above yet leave the host agent-less post-reboot. Absent from print-disabled
+# (or "=> false"/"=> enabled") means enabled; only "=> true"/"=> disabled" is
+# a real miss. Mirrors Linux's `systemctl is-enabled` assert.
+disabled="$(sudo launchctl print-disabled system 2>/dev/null | grep -F "\"$LABEL\"" || true)"
+if printf '%s' "$disabled" | grep -qiE '=>[[:space:]]*(true|disabled)'; then
+  bad "LaunchDaemon disabled in launchd's DB (won't return after reboot): $disabled"
+else
+  ok "LaunchDaemon enabled (survives reboot)"
+fi
+
+# Liveness: RunAtLoad + KeepAlive should have the job actually running, not
+# just loaded — and a crash-loop (e.g. an unreadable state dir) would show
+# here instead of a silent Tier-1 pass. Poll briefly; launchd spawns it
+# asynchronously after bootstrap.
+running=0
+for _ in $(seq 1 15); do
+  if sudo launchctl print "system/$LABEL" 2>/dev/null | grep -qE 'state[[:space:]]*=[[:space:]]*running'; then running=1; break; fi
+  sleep 1
+done
+[ "$running" = 1 ] && ok "LaunchDaemon is running (state = running)" \
+  || bad "LaunchDaemon not running after bootstrap (RunAtLoad/KeepAlive; state dir unreadable?)"
 
 # --- Tier 2: hands-free enroll + assert -------------------------------------
 if [ "$TIER" -ge 2 ]; then

@@ -910,6 +910,7 @@ darwin_install() {
         darwin_install_ollama
     fi
     darwin_register_agent "$state_dir"
+    darwin_install_log_rotation
     darwin_write_control_url "$state_dir"
     darwin_maybe_init "$state_dir"
     darwin_next_steps "$state_dir"
@@ -1039,6 +1040,31 @@ darwin_register_agent() {
         return 0
     fi
     $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir"
+}
+
+# darwin_install_log_rotation drops a newsyslog(8) config so the agent's
+# LaunchDaemon logs (/Library/Logs/waired-agent.{out,err}.log) stay size-capped.
+# macOS has no journald, so without this they grow unbounded — unlike the Linux
+# systemd journal and the Windows Event Log, which are already bounded. /etc/
+# newsyslog.d exists on stock macOS. Idempotent (overwrites the drop-in).
+darwin_install_log_rotation() {
+    conf=/etc/newsyslog.d/waired-agent.conf
+    if [ "$DRY_RUN" = 1 ]; then
+        common_log "  (dry-run) would install newsyslog rotation at $conf"
+        return 0
+    fi
+    common_log "Installing log rotation ($conf)"
+    # shellcheck disable=SC2086  # $SUDO is intentionally word-split (empty when root)
+    $SUDO tee "$conf" >/dev/null <<'NEWSYSLOG'
+# waired-agent system LaunchDaemon stdout/stderr. macOS has no journald, so
+# bound these the way the Linux journal and the Windows Event Log are bounded:
+# rotate at 1 MB, keep 5 gzip'd archives (size-based only). Caveat: launchd
+# holds the log fd, so a rotation fully takes hold at the daemon's next
+# (re)start; the agent restarts on model-switch/update, so growth stays bounded.
+# logfilename                        [owner:group] mode count size when flags
+/Library/Logs/waired-agent.out.log   root:wheel    644  5     1024 *    ZN
+/Library/Logs/waired-agent.err.log   root:wheel    644  5     1024 *    ZN
+NEWSYSLOG
 }
 
 # darwin_write_control_url persists $CONTROL_URL into the macOS state-dir
