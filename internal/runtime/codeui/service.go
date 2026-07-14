@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -222,6 +223,13 @@ func (s *Service) processEnv() []string {
 	for k, v := range overrides {
 		env = append(env, k+"="+v)
 	}
+	// #22-class defense: guarantee a writable HOME (our isolated DataDir) so
+	// opencode never dies resolving ~ if ever launched HOME-less. It runs
+	// user-side today (HOME normally set, so this is a no-op), but routing
+	// through the shared ChildBaseEnv keeps codeui in parity with the
+	// ollama/vLLM spawn paths. No PATH augmentation (opencode is resolved by
+	// absolute path).
+	env = infruntime.ChildBaseEnv(runtime.GOOS, env, s.cfg.DataDir, "", string(os.PathListSeparator))
 	env = append(env, s.cfg.ExtraEnv...)
 	return env
 }

@@ -310,6 +310,51 @@ func TestUninstall_BestEffortToleratesMissingPlist(t *testing.T) {
 	}
 }
 
+// TestInstall_SecuresStateDir asserts the system state dir is created
+// owner-only (0700), matching the Linux service (secrets.SecureDir → 0700)
+// and Windows (restrictive DACL). A world-readable 0755 state dir would
+// expose agent.json / identity.json to every local user — the macOS
+// hardening-parity gap this closes.
+func TestInstall_SecuresStateDir(t *testing.T) {
+	withFakeLaunchctl(t)
+	withRoot(t)
+	withTempDaemonDir(t)
+
+	stateDir := filepath.Join(t.TempDir(), "state")
+	cfg := Config{Binary: "/usr/local/bin/waired-agent", StateDir: stateDir, MgmtAddr: "127.0.0.1:9476"}
+	if err := (darwinManager{}).Install(cfg); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	fi, err := os.Stat(stateDir)
+	if err != nil {
+		t.Fatalf("state dir not created: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o700 {
+		t.Errorf("state dir mode = %o, want 0700 (owner-only, parity with Linux/Windows)", perm)
+	}
+}
+
+// TestUninstall_DisablesSystemLabel asserts Uninstall inverts Install's
+// `launchctl enable` with a best-effort `launchctl disable`, so no stale
+// per-label override lingers in launchd's disabled DB (the macOS analog of
+// Linux's `systemctl disable`).
+func TestUninstall_DisablesSystemLabel(t *testing.T) {
+	f := withFakeLaunchctl(t)
+	withTempDaemonDir(t)
+	if err := (darwinManager{}).Uninstall(); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	var sawDisable bool
+	for _, c := range f.calls {
+		if c[0] == "disable" && len(c) >= 2 && c[1] == "system/"+darwinLabel {
+			sawDisable = true
+		}
+	}
+	if !sawDisable {
+		t.Errorf("Uninstall must `launchctl disable system/%s`; calls=%v", darwinLabel, f.calls)
+	}
+}
+
 // TestBootoutLegacyPerUserAgent_NoSudoUserIsNoop ensures the upgrade
 // cleanup never touches launchd when there is no invoking user to
 // resolve (a fresh install with SUDO_USER unset).

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -440,23 +441,28 @@ func (a *OllamaAdapter) processEnv() []string {
 	model := a.modelEnv
 	a.mu.Unlock()
 
-	// macOS system LaunchDaemons start with $HOME unset (or empty), and
-	// `ollama serve` aborts at startup with "$HOME is not defined" — it
-	// resolves ~/.ollama for its key/config even when OLLAMA_MODELS is
-	// redirected. Supply a writable agent-owned HOME in that case; never
-	// override a HOME the launcher already gave us (#22). os.Getenv reads
-	// the same process env os.Environ() seeds `base` from below.
-	injectHome := a.cfg.StateHome != "" && os.Getenv("HOME") == ""
+	// Launch-environment guards come from the shared ChildBaseEnv so the
+	// ollama/vLLM/codeui spawn paths stay in parity on the axis the #22
+	// crash exposed:
+	//   - HOME: macOS system LaunchDaemons start $HOME unset and `ollama
+	//     serve` aborts with "$HOME is not defined" (it resolves ~/.ollama
+	//     for its key/config even when OLLAMA_MODELS is redirected). Supply
+	//     the runtime's StateHome only when the launcher gave none; never
+	//     override an inherited HOME (#22).
+	//   - PATH: launchd hands a system daemon a stripped PATH
+	//     (/usr/bin:/bin:/usr/sbin:/sbin); prepend the resolved ollama
+	//     binary's own dir so any sidecar it execs is still found (mirrors
+	//     vLLM's venv-bin prepend).
+	binDir := ""
+	if a.cfg.Binary != "" {
+		binDir = filepath.Dir(a.cfg.Binary)
+	}
+	base := ChildBaseEnv(runtime.GOOS, os.Environ(), a.cfg.StateHome, binDir, string(os.PathListSeparator))
 
 	// Keys we inject and that must override any inherited value.
 	drop := map[string]bool{"OLLAMA_HOST": true}
 	if a.cfg.ModelsDir != "" {
 		drop["OLLAMA_MODELS"] = true
-	}
-	if injectHome {
-		// Strip an empty inherited "HOME=" so our value wins regardless of
-		// getenv's first-vs-last duplicate resolution.
-		drop["HOME"] = true
 	}
 	for _, kv := range backend {
 		if k := envKey(kv); k != "" {
@@ -469,8 +475,7 @@ func (a *OllamaAdapter) processEnv() []string {
 		}
 	}
 
-	base := os.Environ()
-	out := make([]string, 0, len(base)+4+len(backend)+len(model)+len(a.cfg.ExtraEnv))
+	out := make([]string, 0, len(base)+3+len(backend)+len(model)+len(a.cfg.ExtraEnv))
 	for _, kv := range base {
 		if drop[envKey(kv)] {
 			continue
@@ -484,9 +489,6 @@ func (a *OllamaAdapter) processEnv() []string {
 	)
 	if a.cfg.ModelsDir != "" {
 		out = append(out, "OLLAMA_MODELS="+a.cfg.ModelsDir)
-	}
-	if injectHome {
-		out = append(out, "HOME="+a.cfg.StateHome)
 	}
 	// Backend and model-tuning overrides come before ExtraEnv so a test
 	// ExtraEnv can still have the last word if it deliberately sets the
