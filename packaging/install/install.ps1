@@ -797,6 +797,67 @@ function Remove-TrayIfRequested {
     }
 }
 
+# ---- Tray surfacing (waired#755) -----------------------------------------
+# install.ps1 historically neither created a Start Menu entry nor launched the
+# tray, so its per-user autostart (HKCU\...\Run\waired-tray, written on the
+# tray's first run) never registered -- unlike the .exe installer, which does
+# both. These two helpers close that gap.
+
+# Create the machine-wide "Waired" Start Menu group, mirroring the .exe
+# installer's [Icons]: a "Waired Tray" launcher + a "Waired (CLI)" help shortcut.
+# Runs elevated (writes under %ProgramData%). This is the surface the installtest
+# #755 contract asserts, and it gives users a discoverable launcher.
+function New-StartMenuShortcuts {
+    if ($NoTray) { return }
+    $group = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Waired'
+    $tray  = Join-Path $InstallDir 'waired-tray.exe'
+    Common-Log "Creating Start Menu group: $group"
+    Common-Run "create Start Menu shortcuts under $group" {
+        # Best-effort: a WScript.Shell COM hiccup must not fail the whole
+        # (elevated) install -- the tray still runs from $InstallDir.
+        try {
+            New-Item -ItemType Directory -Path $group -Force | Out-Null
+            $ws = New-Object -ComObject WScript.Shell
+            if (Test-Path -LiteralPath $tray) {
+                $lnk = $ws.CreateShortcut((Join-Path $group 'Waired Tray.lnk'))
+                $lnk.TargetPath  = $tray
+                $lnk.Description  = 'Waired system-tray app'
+                $lnk.Save()
+            }
+            $cli = $ws.CreateShortcut((Join-Path $group 'Waired (CLI).lnk'))
+            $cli.TargetPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+            $cli.Arguments  = "/k `"$InstallDir\waired.exe`" --help"
+            $cli.Description = 'Waired command-line help'
+            $cli.Save()
+        } catch {
+            Common-Warn "could not create the Start Menu shortcuts ($($_.Exception.Message.Trim()))"
+        }
+    }
+}
+
+# Best-effort launch of the tray as the ORIGINAL (de-elevated) desktop user, so
+# its first run registers HKCU autostart in the *logged-in* user's hive rather
+# than the elevating admin's (waired#755) -- the install.ps1 analog of the .exe
+# installer's `runasoriginaluser` [Run] flag. Interactive-only (mirrors the .iss
+# `skipifsilent`): a silent / -NonInteractive / CI install never spawns the GUI
+# and just leaves the tray to start at next logon (the Start Menu shortcut above
+# is enough to surface it). explorer.exe runs as the interactive shell user, so
+# the child it launches inherits that de-elevated token.
+function Start-TrayAsOriginalUser {
+    if ($NoTray) { return }
+    if (-not (Test-InteractiveStdin)) { return }
+    $tray = Join-Path $InstallDir 'waired-tray.exe'
+    if (-not (Test-Path -LiteralPath $tray)) { return }
+    Common-Run "launch waired-tray as the original user (via explorer.exe)" {
+        try {
+            Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') `
+                -ArgumentList $tray -ErrorAction Stop
+        } catch {
+            Common-Warn "could not auto-launch the tray ($($_.Exception.Message.Trim())); start `"$tray`" yourself or it runs at next logon"
+        }
+    }
+}
+
 function Invoke-AgentInstall {
     $exe = Join-Path $InstallDir 'waired-agent.exe'
     # NOTE: do NOT name this `$args` -- that is a PowerShell automatic
@@ -1033,7 +1094,8 @@ function Show-NextSteps {
     Write-Host 'The agent service is enabled at boot and running now.'
     Write-Host ''
     if (-not $NoTray) {
-        Write-Host "Tray:  launch `"$InstallDir\waired-tray.exe`" once; it auto-starts at each logon."
+        Write-Host 'Tray:  a "Waired" Start Menu shortcut was created; the tray auto-starts at each logon.'
+        Write-Host "       Launch it from the Start Menu, or now: & `"$InstallDir\waired-tray.exe`""
         Write-Host ''
     }
     Write-Host "State / identity:  $cpHint"
@@ -1459,6 +1521,8 @@ if (-not $StagedZipPath) {
                 $initRan = $script:InitRan
                 Ensure-AgentRunning
                 if ($initRan) { Enable-ClaudeProxy }
+                New-StartMenuShortcuts
+                Start-TrayAsOriginalUser
                 Show-NextSteps -InitRan:$initRan
             } finally {
                 Stop-TranscriptQuietly
@@ -1519,6 +1583,8 @@ try {
     $initRan = $script:InitRan
     Ensure-AgentRunning
     if ($initRan) { Enable-ClaudeProxy }
+    New-StartMenuShortcuts
+    Start-TrayAsOriginalUser
     Show-NextSteps -InitRan:$initRan
 } catch {
     # A terminating error that was NOT a Common-Die (those exit + pause on their
