@@ -252,8 +252,9 @@ Usage:
 Options:
   --dry-run        show every privileged command without running it
   --dev            enrol this device against the built-in dogfood Control
-                   Plane (${WAIRED_DEV_CONTROL_URL}) — writes
-                   WAIRED_CONTROL_URL into /etc/waired/agent.env so
+                   Plane (${WAIRED_DEV_CONTROL_URL}) — persists
+                   WAIRED_CONTROL_URL to the agent env file (Linux:
+                   /etc/waired/agent.env, macOS: the state dir) so
                    \`sudo waired init\` (no --control) just works
   --control <URL>  same as --dev but with an explicit URL; takes
                    precedence over --dev when both are given
@@ -909,6 +910,8 @@ darwin_install() {
         darwin_install_ollama
     fi
     darwin_register_agent "$state_dir"
+    darwin_install_log_rotation
+    darwin_write_control_url "$state_dir"
     darwin_maybe_init "$state_dir"
     darwin_next_steps "$state_dir"
 }
@@ -1039,6 +1042,64 @@ darwin_register_agent() {
     $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir"
 }
 
+# darwin_install_log_rotation drops a newsyslog(8) config so the agent's
+# LaunchDaemon logs (/Library/Logs/waired-agent.{out,err}.log) stay size-capped.
+# macOS has no journald, so without this they grow unbounded — unlike the Linux
+# systemd journal and the Windows Event Log, which are already bounded. /etc/
+# newsyslog.d exists on stock macOS. Idempotent (overwrites the drop-in).
+darwin_install_log_rotation() {
+    conf=/etc/newsyslog.d/waired-agent.conf
+    if [ "$DRY_RUN" = 1 ]; then
+        common_log "  (dry-run) would install newsyslog rotation at $conf"
+        return 0
+    fi
+    common_log "Installing log rotation ($conf)"
+    # shellcheck disable=SC2086  # $SUDO is intentionally word-split (empty when root)
+    $SUDO tee "$conf" >/dev/null <<'NEWSYSLOG'
+# waired-agent system LaunchDaemon stdout/stderr. macOS has no journald, so
+# bound these the way the Linux journal and the Windows Event Log are bounded:
+# rotate at 1 MB, keep 5 gzip'd archives (size-based only). Caveat: launchd
+# holds the log fd, so a rotation fully takes hold at the daemon's next
+# (re)start; the agent restarts on model-switch/update, so growth stays bounded.
+# logfilename                        [owner:group] mode count size when flags
+/Library/Logs/waired-agent.out.log   root:wheel    644  5     1024 *    ZN
+/Library/Logs/waired-agent.err.log   root:wheel    644  5     1024 *    ZN
+NEWSYSLOG
+}
+
+# darwin_write_control_url persists $CONTROL_URL into the macOS state-dir
+# agent.env, the darwin analog of Linux's /etc/waired/agent.env. `waired
+# init` reads it as the --control default via platformDefaultControlURL
+# (control_url_darwin.go), so a later bare `sudo waired init` — where sudo
+# has stripped the caller's $WAIRED_CONTROL_URL — still enrolls against the
+# right Control Plane. Unlike Linux (systemd EnvironmentFile) the launchd
+# plist cannot consume an env file, so this feeds `waired init` only; the
+# daemon reads ControlURL from agent.json that init writes. Must run after
+# darwin_register_agent has created the (0700, root-owned) state dir.
+darwin_write_control_url() {
+    state_dir="$1"
+    [ -z "$CONTROL_URL" ] && return 0
+    env_file="$state_dir/agent.env"
+
+    if [ "$DRY_RUN" = 1 ]; then
+        common_log "  (dry-run) would write WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
+        return 0
+    fi
+
+    # An existing *active* setting means the operator already configured
+    # this host — leave it alone (parity with linux_apt_write_control_url).
+    if $SUDO grep -Eq '^[[:space:]]*WAIRED_CONTROL_URL=.+' "$env_file" 2>/dev/null; then
+        common_warn "$env_file already has an active WAIRED_CONTROL_URL — leaving it as-is"
+        CONTROL_URL=""   # don't claim we wrote it in Next steps
+        return 0
+    fi
+
+    common_log "Writing WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
+    printf 'WAIRED_CONTROL_URL=%s\n' "$CONTROL_URL" | $SUDO tee -a "$env_file" >/dev/null
+    # Keep it owner-only, consistent with the 0700 state dir.
+    $SUDO chmod 0600 "$env_file" 2>/dev/null || true
+}
+
 # darwin_maybe_init finishes first-run setup on macOS. Enrollment + state
 # live in the root-owned /Library/Application Support/waired (read by the
 # system LaunchDaemon), so init runs under $SUDO — mirroring the Linux
@@ -1058,12 +1119,19 @@ darwin_maybe_init() {
         common_log "$(emo '💡' 'Note:') No terminal detected — run 'sudo waired init' (or use the tray) to sign in."
         return 0
     fi
+    # Build the init argv (mirrors linux_maybe_init's `set --`). Pass
+    # --control only when a CP URL was resolved (--dev / --control /
+    # WAIRED_CONTROL_URL); darwin_write_control_url has also persisted it to
+    # agent.env, so this is belt-and-suspenders on the first sign-in and the
+    # reader covers later bare re-runs.
+    set -- init --state-dir "$state_dir"
+    [ -n "$CONTROL_URL" ] && set -- "$@" --control "$CONTROL_URL"
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired init --state-dir \"$state_dir\" </dev/tty"
+        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired $* </dev/tty"
         return 0
     fi
     common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
-    $SUDO "$WAIRED_DARWIN_BINDIR/waired" init --state-dir "$state_dir" </dev/tty || \
+    $SUDO "$WAIRED_DARWIN_BINDIR/waired" "$@" </dev/tty || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
 }
 
@@ -1139,7 +1207,9 @@ darwin_update() {
     darwin_install_binaries update
     darwin_restart_agent
     # Finish sign-in if this host was installed but never enrolled (no-op
-    # when already enrolled).
+    # when already enrolled). Persist any resolved CP first so a not-yet-
+    # enrolled host picks it up, matching the fresh-install path.
+    darwin_write_control_url "/Library/Application Support/waired"
     darwin_maybe_init "/Library/Application Support/waired"
     common_log "Ollama: managed separately; not modified by update."
     common_log "$(emo '🎉' '*') waired updated to $latest. Check: waired status"

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/waired-ai/waired-agent/internal/platform/secrets"
 )
 
 // Darwin runs waired-agent as a system LaunchDaemon (not a per-user
@@ -107,11 +109,17 @@ func (m darwinManager) Install(cfg Config) error {
 	// --no-init, before `waired init` has created it — launchd cannot
 	// chdir into it, fails the job with EX_CONFIG (78), and KeepAlive
 	// crash-loops it (mgmt API never comes up). Create it up front so the
-	// agent starts regardless of init ordering. 0o755 matches `waired
-	// init`'s own state-dir creation (cmd/waired/main.go). renderLaunchDaemonPlist
+	// agent starts regardless of init ordering. renderLaunchDaemonPlist
 	// above guarantees cfg.StateDir is non-empty.
-	if err := os.MkdirAll(cfg.StateDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir state dir %s: %w", cfg.StateDir, err)
+	//
+	// SecureDir creates it 0700 (owner-only), the macOS analog of the
+	// Linux service's secrets.SecureDir (service_linux.go) and the Windows
+	// restrictive DACL: the daemon runs as root and is the only reader, so
+	// there is no reason to leave agent.json / identity.json world-readable
+	// under /Library/Application Support/waired. No chown is needed (root
+	// owns it; FixStateOwnership is a no-op on darwin for the same reason).
+	if err := secrets.SecureDir(cfg.StateDir); err != nil {
+		return fmt.Errorf("secure state dir %s: %w", cfg.StateDir, err)
 	}
 
 	// Best-effort: tear down any pre-existing per-user LaunchAgent from an
@@ -152,6 +160,11 @@ func (m darwinManager) Uninstall() error {
 	// Best-effort sequence — every step tolerated so a partial install
 	// (plist written, never bootstrapped, etc.) can still be cleaned.
 	_, _, _ = runLaunchctlFn([]string{"bootout", "system/" + darwinLabel})
+	// Invert Install's `launchctl enable`: clear the persisted enable state
+	// so no stale per-label override lingers in launchd's disabled DB (the
+	// macOS analog of Linux Uninstall's `systemctl disable`). Best-effort —
+	// the plist is removed below regardless.
+	_, _, _ = runLaunchctlFn([]string{"disable", "system/" + darwinLabel})
 	if err := os.Remove(plistPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", plistPath, err)
 	}

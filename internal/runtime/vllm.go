@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -290,10 +291,15 @@ func (a *VLLMAdapter) commandArgs() []string {
 // to `ninja` (shipped in the venv) at engine start-up, and the spawned
 // python never activates the venv — then layer ExtraEnv on top.
 func (a *VLLMAdapter) processEnv() []string {
-	out := append([]string(nil), os.Environ()...)
-	if venvBin := filepath.Dir(a.cfg.Python); venvBin != "." {
-		out = append(out, "PATH="+venvBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	venvBin := filepath.Dir(a.cfg.Python)
+	if venvBin == "." {
+		venvBin = ""
 	}
+	// Route the venv-bin PATH prepend through the shared ChildBaseEnv so
+	// every engine adapter assembles its launch env one way (#22 parity).
+	// No HOME fallback: vLLM is linux-only and runs under systemd's User=
+	// (HOME already set), so "" tells ChildBaseEnv never to fabricate one.
+	out := ChildBaseEnv(runtime.GOOS, os.Environ(), "", venvBin, string(os.PathListSeparator))
 	out = append(out, a.cfg.ExtraEnv...)
 	return out
 }

@@ -11,7 +11,7 @@
 # Flow (mirrors the Linux Tier-1 installer e2e; #488 managed-settings model):
 #   1. clone+run a fresh macos-sequoia-base VM, seed an ssh key
 #   2. curl install.sh | sh --<channel> --no-init   (real download + SHA
-#      verify + /usr/local/bin placement + per-user LaunchAgent)
+#      verify + /usr/local/bin placement + system LaunchDaemon, #520)
 #   3. sudo waired claude enable
 #   4. assert: managed-settings.json written with ANTHROPIC_BASE_URL ->
 #      127.0.0.1:9472 and NO credential (subscription preserved); the loopback
@@ -125,7 +125,7 @@ test -x /usr/local/bin/waired && test -x /usr/local/bin/waired-agent; chk "binar
 xattr -l /usr/local/bin/waired 2>/dev/null | grep -qi quarantine; chkno "no Gatekeeper quarantine xattr" $?
 /usr/local/bin/waired version --json >/dev/null 2>&1; chk "waired version runs (not Gatekeeper-blocked)" $?
 echo "    version: $(/usr/local/bin/waired version --json 2>/dev/null)"
-launchctl print "gui/$(id -u)/com.waired.agent" 2>/dev/null | grep -q "state = running"; chk "agent LaunchAgent running (state dir created)" $?
+sudo launchctl print "system/com.waired.agent" 2>/dev/null | grep -q "state = running"; chk "agent system LaunchDaemon running (state dir created)" $?
 curl -fsS -m 5 http://127.0.0.1:9476/waired/v1/status >/dev/null 2>&1; chk "agent mgmt API responding" $?
 
 echo "--- claude enable (managed settings, #488) ---"

@@ -98,6 +98,26 @@ func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
 // The Strix Halo APU is checked first and by CPU model, so the decision
 // holds even when the iGPU was never detected (the common Linux case).
 func ResolveOllamaBackend(in BackendInputs) BackendPlan {
+	// darwin has exactly two backends in Ollama's macOS build: Metal (Apple
+	// Silicon) or CPU. There is no ROCm / CUDA / Vulkan path on macOS, so
+	// darwin is guarded up front — the vendor switch below emits Linux/
+	// Windows-only GPU env (OLLAMA_VULKAN, OLLAMA_IGPU_ENABLE, the HSA
+	// override), which would be meaningless-to-harmful if a future
+	// detectIntel/detectAmd ever reported a non-apple vendor on a Mac.
+	// Mirrors the Windows special-case inside the StrixHalo block.
+	if in.GOOS == "darwin" {
+		if in.PrimaryGPUVendor == "apple" {
+			return BackendPlan{
+				Steps:  []BackendStep{{Backend: BackendMetal}},
+				Reason: "apple silicon: metal/mlx (ollama default, no override)",
+			}
+		}
+		return BackendPlan{
+			Steps:  []BackendStep{{Backend: BackendCPU}},
+			Reason: "macOS non-apple gpu: cpu (ollama macOS has only metal or cpu)",
+		}
+	}
+
 	if in.StrixHaloAPU {
 		if in.GOOS == "windows" {
 			// ROCm has no Windows APU support; Vulkan is the only GPU path.

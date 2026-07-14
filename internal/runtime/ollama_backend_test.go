@@ -50,6 +50,20 @@ func TestResolveOllamaBackend(t *testing.T) {
 			wantSteps: []BackendStep{{Backend: BackendMetal}},
 		},
 		{
+			// macOS has only Metal (Apple Silicon) or CPU in ollama's build —
+			// no ROCm/CUDA/Vulkan. A non-apple vendor on darwin (an Intel
+			// Mac's iGPU, or a future detectIntel wiring) must fall to CPU,
+			// never the Linux/Windows Vulkan env. Guards the parity trap.
+			name:      "macos non-apple gpu: cpu, never vulkan",
+			in:        BackendInputs{GOOS: "darwin", PrimaryGPUVendor: "intel"},
+			wantSteps: []BackendStep{{Backend: BackendCPU}},
+		},
+		{
+			name:      "macos no gpu: cpu",
+			in:        BackendInputs{GOOS: "darwin", PrimaryGPUVendor: ""},
+			wantSteps: []BackendStep{{Backend: BackendCPU}},
+		},
+		{
 			name:      "nvidia: cuda, no override",
 			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: "nvidia"},
 			wantSteps: []BackendStep{{Backend: BackendCUDA}},
