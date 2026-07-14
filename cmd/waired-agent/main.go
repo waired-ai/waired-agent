@@ -193,6 +193,15 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// waired#756: on a fresh daemon-mediated install the local init path's
+	// hardware-aware bundled-model selection never ran (setup.Enroll has no
+	// ConfigureInference hook), so an under-spec host would boot inference
+	// enabled and pull the full default model. Run it here — gated to a
+	// pristine fresh install with no operator inference preference — and
+	// persist the verdict to agent.json. Must precede the Inference.Enabled
+	// gate below so an under-spec disable feeds it.
+	maybeSelectBundledModelForFreshInstall(&cfgRoot, *disableInference, agentJSONPath, filepath.Dir(agentJSONPath), fs)
+
 	// Phase 6: Inference.Enabled is the install-time choice for whether
 	// this node runs a local engine at all. When false, force the
 	// --disable-inference path so chooseEngine bails, the probe loop

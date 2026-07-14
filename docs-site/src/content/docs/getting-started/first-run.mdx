@@ -64,6 +64,18 @@ background instead. To pin a specific model, pass
 `--inference-bundled-model-id <id>` or see
 [Switch the bundled model](/guides/switch-model/).
 
+<Aside type="note" title="When the service is already running">
+	If the `waired-agent` service is already up when you run `waired init` (a
+	fresh install starts it first), enrollment is handed to the daemon. It picks
+	the inference role automatically from this machine's hardware — the same
+	sizing as above, including skipping the local engine on an under-spec box —
+	rather than prompting, and `init` shows the model-download progress and
+	benchmark. Adjust the role afterward with `waired runtimes benchmark`
+	(re-check performance / switch model), `waired models ls`,
+	`waired inference share on|off`, `waired inference engine stop|start`, or by
+	re-running `waired init`.
+</Aside>
+
 On an elevated interactive install (Linux/macOS `sudo waired init`), the very
 last question is whether to **route Claude Code inference through Waired
 now** — asked only after the model download and benchmark, when the local

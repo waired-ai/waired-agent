@@ -6,13 +6,18 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
 // A scripted daemon: /login/start returns logging_in with a URL, then
-// /login/status walks logging_in -> activating -> active across polls.
+// /login/status walks logging_in -> activating -> active across polls. Once
+// active, runInitViaDaemon foreground-waits the (already-ready) model and
+// benchmarks it (waired#756), so the daemon also answers the reachability
+// probe, /inference/status (ready), and /inference/benchmark.
 func TestRunInitViaDaemonPollsToActive(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	var polls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -41,6 +46,13 @@ func TestRunInitViaDaemonPollsToActive(t *testing.T) {
 				st.AccountEmail = "user@example.com"
 			}
 			_ = json.NewEncoder(w).Encode(st)
+		case "/waired/v1/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case "/waired/v1/inference/status":
+			_ = json.NewEncoder(w).Encode(management.InferenceStatus{SubsystemState: "ready"})
+		case "/waired/v1/inference/benchmark":
+			_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, MeasuredTokps: 40})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -104,9 +105,21 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				fmt.Fprintf(os.Stderr,
 					"warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
 			}
+			// #756: the daemon pulls the bundled model in the background
+			// after enroll, so the daemon-mediated init used to return while a
+			// multi-GB download ran invisibly. Block in the foreground with the
+			// same percentage progress bar the local path shows (main.go), then
+			// benchmark the ready model. waitForBundledModel returns fast when
+			// the daemon reports inference disabled / stopped / no engine, so
+			// this never hangs an under-spec or gateway-only host.
+			waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout))
 			// #133: once the daemon has the model ready, benchmark it and
 			// offer a lighter model if this host can't sustain the pick.
 			resp, _ := benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, bufio.NewScanner(os.Stdin), isTerminal(os.Stdout))
+			// #756: the daemon chose the inference role from this host's
+			// hardware without an interactive prompt, so tell the user how to
+			// inspect and change it afterward.
+			printInferenceRoleGuidance(os.Stdout)
 			printDaemonSuccessBox(st.AccountEmail, outcomeFrom(resp))
 			return nil
 		case management.LoginPhaseError:
@@ -131,6 +144,21 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 		}
 		st = next
 	}
+}
+
+// printInferenceRoleGuidance tells the operator how to inspect and change the
+// local inference role after a daemon-mediated init. Unlike the local init
+// path, the daemon picks the role from the host's hardware with no interactive
+// prompt (waired#756), so surface the commands that let the user revisit it.
+// Only verified subcommands are listed.
+func printInferenceRoleGuidance(out io.Writer) {
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, dim("Inference role was set from this host's hardware. To inspect or change it:"))
+	fmt.Fprintln(out, dim("  waired runtimes benchmark            re-check performance / switch to a lighter model"))
+	fmt.Fprintln(out, dim("  waired models ls                     list installed and available models"))
+	fmt.Fprintln(out, dim("  waired inference share on|off        expose (or stop exposing) this engine to mesh peers"))
+	fmt.Fprintln(out, dim("  waired inference engine stop|start   power the local engine down / up"))
+	fmt.Fprintln(out, dim("  re-run `waired init`                 reconfigure inference from scratch"))
 }
 
 // printDaemonSuccessBox renders the final "Waired is ready" summary for the
