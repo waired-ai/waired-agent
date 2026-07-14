@@ -74,12 +74,13 @@ Name: "{group}\Waired Tray";       Filename: "{app}\waired-tray.exe"
 Name: "{group}\Waired (CLI)";      Filename: "cmd.exe"; Parameters: "/k ""{app}\waired.exe"" --help"
 
 [Tasks]
-; Default-checked, mirroring the Linux installer's default-on Claude proxy
-; (with disclosure). Unchecking it leaves Claude Code routing straight to
-; api.anthropic.com; it can be enabled later with an elevated
-; `waired proxy install --confirm-anthropic`.
+; Default-checked, mirroring the Linux installer's default-on Claude
+; integration (with disclosure). Unchecking it leaves Claude Code routing
+; straight to api.anthropic.com; it can be enabled later with an elevated
+; `waired claude enable`. Task name kept as "claudeproxy" for upgrade
+; continuity even though the mechanism is now managed settings, not a proxy.
 Name: "claudeproxy"; \
-    Description: "Route Claude Code through Waired (installs a ""waired Claude proxy CA"" root certificate and redirects api.anthropic.com to local inference; transparently falls back to the real Anthropic API)"; \
+    Description: "Route Claude Code through Waired via Claude Code managed settings (points ANTHROPIC_BASE_URL at local inference, no credential; transparently falls back to the real Anthropic API). No CA certificate or hosts-file change."; \
     GroupDescription: "Claude Code integration:"
 
 [Run]
@@ -98,15 +99,16 @@ Filename: "{app}\waired-agent.exe"; Parameters: "install"; \
     Check: ShouldRegisterAgent; \
     StatusMsg: "Registering waired-agent Windows Service..."
 
-; Enable the transparent Claude proxy (only when the task is checked). This
-; persists desired-proxy=enabled under %ProgramData%\waired and starts the
-; LocalSystem agent, which converges the Root-store CA, NODE_EXTRA_CA_CERTS,
-; the :443 bind, and the api.anthropic.com hosts redirect. Runs AFTER the
-; service-register entry above so the agent exists to be (re)started.
-Filename: "{app}\waired.exe"; Parameters: "proxy install --confirm-anthropic"; \
+; Enable Claude Code routing via managed settings (only when the task is
+; checked): writes %ProgramFiles%\ClaudeCode\managed-settings.json pointing
+; ANTHROPIC_BASE_URL at waired's local gateway (no credential, no CA, no
+; hosts edit) and sweeps any residual retired-MITM artifacts. Runs AFTER the
+; service-register entry above; elevated, as the managed-settings write needs
+; admin. Replaces the removed `waired proxy install` (waired#750).
+Filename: "{app}\waired.exe"; Parameters: "claude enable"; \
     Tasks: claudeproxy; \
     Flags: runhidden waituntilterminated; \
-    StatusMsg: "Setting up the transparent Claude proxy (trusting the MITM CA)..."
+    StatusMsg: "Enabling Claude Code routing (managed settings)..."
 
 ; Optional: launch the tray immediately after install so its first
 ; run can write its HKCU\...\Run autostart entry via
@@ -116,14 +118,15 @@ Filename: "{app}\waired-tray.exe"; \
     Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
-; Run BEFORE files are removed so the exes still exist. Strip the proxy
-; first (while waired.exe + the agent service are still present): this
-; removes the hosts redirect, untrusts the Root-store CA, and clears
-; NODE_EXTRA_CA_CERTS. Idempotent — a no-op when the proxy was never
-; enabled.
-Filename: "{app}\waired.exe"; Parameters: "proxy uninstall"; \
+; Run BEFORE files are removed so the exes still exist. Disable the Claude
+; Code integration first (while waired.exe + the agent service are still
+; present): removes the managed-settings ANTHROPIC_BASE_URL and sweeps any
+; residual retired-MITM artifacts (hosts redirect, Root-store CA,
+; NODE_EXTRA_CA_CERTS). Idempotent — a no-op when it was never enabled.
+; Replaces the removed `waired proxy uninstall` (waired#750).
+Filename: "{app}\waired.exe"; Parameters: "claude disable"; \
     Flags: runhidden waituntilterminated; \
-    RunOnceId: "WairedProxyUninstall"
+    RunOnceId: "WairedClaudeDisable"
 Filename: "{app}\waired-agent.exe"; Parameters: "uninstall"; \
     Flags: runhidden waituntilterminated; \
     RunOnceId: "WairedAgentUninstall"
