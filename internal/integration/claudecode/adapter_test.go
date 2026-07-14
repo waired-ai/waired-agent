@@ -235,7 +235,16 @@ func TestUninstall_PreservesUserSkillsInRoot(t *testing.T) {
 func TestDetect_FoundViaConfigDir(t *testing.T) {
 	a := New()
 	home := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A real Claude Code install leaves agent-owned files (settings.json,
+	// .credentials.json, projects/, ...). waired only ever writes skills/,
+	// so a non-skills entry is what marks the dir as a real install. An
+	// empty ~/.claude that only waired's Apply created must NOT read as
+	// installed (waired#753) — see TestDetect_ConfigDirWairedOnly_NotDetected.
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	det, err := a.Detect(context.Background(), integration.ApplyOptions{HomeDir: home})
@@ -244,6 +253,29 @@ func TestDetect_FoundViaConfigDir(t *testing.T) {
 	}
 	if !det.Found {
 		t.Fatalf("expected found via config dir, got %+v", det)
+	}
+	if det.ConfigDir != claudeDir {
+		t.Fatalf("ConfigDir = %q, want %q", det.ConfigDir, claudeDir)
+	}
+}
+
+// TestDetect_ConfigDirWairedOnly_NotDetected is the waired#753 regression:
+// after a force-apply, ~/.claude exists but holds only the skills/ tree that
+// waired created, so the config-dir signal must NOT fire. Asserting on
+// ConfigDir (not Found) keeps it portable — a real `claude` binary may be on
+// the dev/CI host's PATH and legitimately set Found via the binary branch.
+func TestDetect_ConfigDirWairedOnly_NotDetected(t *testing.T) {
+	a := New()
+	opts := newOpts(t) // Force:true
+	if err := a.Apply(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	det, err := a.Detect(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.ConfigDir != "" {
+		t.Fatalf("config dir must not read as installed with only waired's skills/ present, got %q", det.ConfigDir)
 	}
 }
 

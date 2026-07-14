@@ -23,6 +23,46 @@ func newOpts(t *testing.T) integration.ApplyOptions {
 	}
 }
 
+// TestDetect_ConfigDirWairedOnly_NotDetected is the waired#753 regression:
+// after a force-apply, ~/.config/opencode holds only plugin/ and commands/
+// that waired created, so the config-dir signal must NOT fire. Asserting on
+// ConfigDir (not Found) keeps it portable — `opencode` may be on the dev/CI
+// host PATH and legitimately set Found via the binary branch.
+func TestDetect_ConfigDirWairedOnly_NotDetected(t *testing.T) {
+	a := New()
+	opts := newOpts(t)
+	if err := a.Apply(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	det, err := a.Detect(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.ConfigDir != "" {
+		t.Fatalf("config dir must not read as installed with only waired's plugin/ + commands/, got %q", det.ConfigDir)
+	}
+}
+
+// TestDetect_FoundViaUserConfig: a user's own opencode.json (waired never
+// writes it) is the foreign entry that marks a real install.
+func TestDetect_FoundViaUserConfig(t *testing.T) {
+	a := New()
+	home := t.TempDir()
+	if err := os.MkdirAll(ConfigDir(home), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ConfigDir(home), "opencode.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	det, err := a.Detect(context.Background(), integration.ApplyOptions{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if det.ConfigDir != ConfigDir(home) {
+		t.Fatalf("ConfigDir = %q, want %q", det.ConfigDir, ConfigDir(home))
+	}
+}
+
 func TestApply_WritesPlugin(t *testing.T) {
 	a := New()
 	opts := newOpts(t)

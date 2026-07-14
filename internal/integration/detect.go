@@ -31,6 +31,35 @@ func DirExists(path string) bool {
 	return info.IsDir()
 }
 
+// ConfigDirHasForeignEntry reports whether dir contains at least one
+// top-level entry whose name is not in owned. It lets an adapter's
+// Detect tell a real agent install (config dir populated with the
+// agent's own files) apart from a bare config dir that waired's own
+// Apply pre-provisioned — a plain DirExists check self-poisons because
+// every Apply MkdirAll's a child of the very dir Detect keys on
+// (waired#753). owned lists the basenames of the children waired itself
+// creates under dir. A missing or unreadable dir yields false (Detect
+// must not surface an error). Non-recursive: only the top level is read.
+func ConfigDirHasForeignEntry(dir string, owned ...string) bool {
+	if dir == "" {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	ownedSet := make(map[string]struct{}, len(owned))
+	for _, name := range owned {
+		ownedSet[name] = struct{}{}
+	}
+	for _, e := range entries {
+		if _, ok := ownedSet[e.Name()]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
 // HomeJoin joins home with rel using filepath.Join. Returns "" when
 // home is empty (caller should treat that as "no signal").
 func HomeJoin(home, rel string) string {

@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -41,11 +42,18 @@ func (a *adapter) Detect(_ context.Context, opts integration.ApplyOptions) (inte
 		det.BinaryPath = path
 		det.Notes = append(det.Notes, fmt.Sprintf("opencode on PATH: %s", path))
 	}
+	// Key the config-dir signal on content waired did NOT write. A plain
+	// DirExists check self-poisons: Apply MkdirAll's plugin/ and commands/
+	// under this dir, so once applied the dir always exists (waired#753).
+	// The user's own opencode.json / auth.json (waired never writes them)
+	// is the foreign entry that marks a real install.
 	configDir := ConfigDir(opts.HomeDir)
-	if integration.DirExists(configDir) {
+	if integration.ConfigDirHasForeignEntry(configDir,
+		filepath.Base(PluginDir(opts.HomeDir)),
+		filepath.Base(CommandsDir(opts.HomeDir))) {
 		det.Found = true
 		det.ConfigDir = configDir
-		det.Notes = append(det.Notes, fmt.Sprintf("~/.config/opencode exists: %s", configDir))
+		det.Notes = append(det.Notes, fmt.Sprintf("~/.config/opencode has non-waired content: %s", configDir))
 	}
 	return det, nil
 }

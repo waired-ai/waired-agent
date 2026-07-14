@@ -45,11 +45,16 @@ func (a *adapter) Detect(_ context.Context, opts integration.ApplyOptions) (inte
 		det.BinaryPath = path
 		det.Notes = append(det.Notes, fmt.Sprintf("openclaw on PATH: %s", path))
 	}
+	// Key the config-dir signal on content waired did NOT write. Apply
+	// MkdirAll's ~/.openclaw itself plus a plugins/ tree and merges its own
+	// keys into openclaw.json, so a bare DirExists check self-poisons once
+	// applied (waired#753). configDirLooksInstalled ignores exactly that
+	// waired footprint (see openclawjson.go).
 	configDir := ConfigDir(opts.HomeDir)
-	if integration.DirExists(configDir) {
+	if configDirLooksInstalled(opts.HomeDir) {
 		det.Found = true
 		det.ConfigDir = configDir
-		det.Notes = append(det.Notes, fmt.Sprintf("~/.openclaw exists: %s", configDir))
+		det.Notes = append(det.Notes, fmt.Sprintf("~/.openclaw has non-waired content: %s", configDir))
 	}
 	return det, nil
 }
