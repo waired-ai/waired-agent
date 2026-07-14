@@ -66,6 +66,8 @@ Source: "dist\windows-amd64\waired.exe";       DestDir: "{app}"; Flags: ignoreve
 Source: "dist\windows-amd64\waired-agent.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\windows-amd64\waired-tray.exe";  DestDir: "{app}"; Flags: ignoreversion
 Source: "dist\windows-amd64\VERSION";          DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\windows-amd64\LICENSE";              DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\windows-amd64\THIRD_PARTY_LICENSES"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Waired Tray";       Filename: "{app}\waired-tray.exe"

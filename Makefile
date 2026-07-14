@@ -326,9 +326,14 @@ WIN_DIST_DIR := $(OUT_DIR)/windows-amd64
 dist-windows-installer: build-agent-windows build-tray-windows
 	@rm -rf $(WIN_DIST_DIR)
 	@mkdir -p $(WIN_DIST_DIR)
+	@test -f $(OUT_DIR)/THIRD_PARTY_LICENSES -a -f $(OUT_DIR)/LICENSE || { \
+	  echo "==> $(OUT_DIR)/{LICENSE,THIRD_PARTY_LICENSES} missing — generating (go-licenses; needs network on first run)"; \
+	  $(MAKE) third-party-licenses; }
 	cp bin/waired.exe                    $(WIN_DIST_DIR)/waired.exe
 	cp bin/waired-agent.exe              $(WIN_DIST_DIR)/waired-agent.exe
 	cp bin/waired-tray-windows-amd64.exe $(WIN_DIST_DIR)/waired-tray.exe
+	cp $(OUT_DIR)/LICENSE                 $(WIN_DIST_DIR)/LICENSE
+	cp $(OUT_DIR)/THIRD_PARTY_LICENSES    $(WIN_DIST_DIR)/THIRD_PARTY_LICENSES
 	echo $(VERSION) > $(WIN_DIST_DIR)/VERSION
 	powershell.exe -NoProfile -ExecutionPolicy Bypass \
 	    -File packaging/windows/make-zip.ps1 \
@@ -353,12 +358,17 @@ DARWIN_DIST_DIR := $(OUT_DIR)/darwin
 DARWIN_ARCHES   := amd64 arm64
 .PHONY: dist-darwin-installer
 dist-darwin-installer: build-agent-darwin build-tray-darwin
+	@test -f $(OUT_DIR)/THIRD_PARTY_LICENSES -a -f $(OUT_DIR)/LICENSE || { \
+	  echo "==> $(OUT_DIR)/{LICENSE,THIRD_PARTY_LICENSES} missing — generating (go-licenses; needs network on first run)"; \
+	  $(MAKE) third-party-licenses; }
 	@for arch in $(DARWIN_ARCHES); do \
 	  d=$(DARWIN_DIST_DIR)/$$arch; \
 	  rm -rf $$d; mkdir -p $$d; \
 	  cp bin/waired-darwin-$$arch       $$d/waired; \
 	  cp bin/waired-agent-darwin-$$arch $$d/waired-agent; \
 	  cp bin/waired-tray-darwin-$$arch  $$d/waired-tray; \
+	  cp $(OUT_DIR)/LICENSE              $$d/LICENSE; \
+	  cp $(OUT_DIR)/THIRD_PARTY_LICENSES $$d/THIRD_PARTY_LICENSES; \
 	  echo $(VERSION) > $$d/VERSION; \
 	  tar czf $(OUT_DIR)/waired-darwin-$$arch.tar.gz -C $$d . ; \
 	  shasum -a 256 $(OUT_DIR)/waired-darwin-$$arch.tar.gz | awk '{print $$1}' \

@@ -401,6 +401,13 @@ if ($LASTEXITCODE -ne 0) { ItDie "go build waired-agent failed" }
 & go build -trimpath -ldflags="$ldf -H=windowsgui" -o (Join-Path $Stage 'waired-tray.exe') ./cmd/waired-tray
 if ($LASTEXITCODE -ne 0) { ItDie "go build waired-tray failed" }
 Set-Content -LiteralPath (Join-Path $Stage 'VERSION') -Value "0.0.0-$ver" -Encoding ASCII -NoNewline
+# LICENSE + THIRD_PARTY_LICENSES are release-zip contents and Inno [Files]
+# inputs (#4). The release build stages them via `make dist-windows-installer`
+# (go-licenses); the harness copies the real repo LICENSE and writes a
+# THIRD_PARTY_LICENSES placeholder, so the zip layout and the .iss compile are
+# exercised end-to-end without a go-licenses run on the Windows leg.
+Copy-Item -LiteralPath (Join-Path $Root 'LICENSE') -Destination (Join-Path $Stage 'LICENSE') -Force
+Set-Content -LiteralPath (Join-Path $Stage 'THIRD_PARTY_LICENSES') -Value "installtest placeholder - real third-party notices are generated at release time (make third-party-licenses)." -Encoding ASCII -NoNewline
 
 ItStep "packing $ZipName (real packer) + laying out the loopback mirror"
 $relDir = Join-Path $Mirror 'latest\download'      # Version=latest -> $BaseUrl/latest/download
