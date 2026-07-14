@@ -269,7 +269,11 @@ assert_inference() {
   # ran, never the "run `waired runtimes benchmark` later" tip (#564 false
   # positive).
   if [ -f "$initlog" ] && grep -qiE 'tok/s|tokens/s|throughput|Local inference works' "$initlog"; then
-    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1)"
+    # `|| true`: with the smoke-line match above, the transcript may carry no
+    # numeric rate (host too slow → MeasuredTokps=0); a no-match grep exits 1
+    # and would trip `set -e` in the sourcing driver. head-closing a multi-match
+    # grep (SIGPIPE 141) would too — both are non-fatal here.
+    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1 || true)"
     ok "benchmark ran during init${tps:+ (}${tps}${tps:+)}"
   else
     bad "no benchmark output captured in init transcript ($initlog)"

@@ -150,7 +150,10 @@ assert_inference_macos() {
   # ONLY after a benchmark ran — never the "run `waired runtimes benchmark`
   # later" tip — so neither is the #564 false positive.
   if [ -f "$INITLOG" ] && grep -qiE 'tok/s|tokens/s|throughput|Local inference works' "$INITLOG"; then
-    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$INITLOG" | head -1)"
+    # `|| true`: the smoke-line match above may carry no numeric rate (host too
+    # slow → MeasuredTokps=0); a no-match / multi-match(SIGPIPE) grep must not
+    # trip a `set -e` driver even though this script itself runs set -uo only.
+    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$INITLOG" | head -1 || true)"
     ok "benchmark ran during init${tps:+ (}${tps}${tps:+)}"
   else
     bad "no benchmark output captured in init transcript ($INITLOG)"
