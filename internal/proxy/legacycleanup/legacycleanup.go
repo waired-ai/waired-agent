@@ -57,6 +57,13 @@ func Run(stateDir string, logger *slog.Logger) bool {
 	return true
 }
 
+// Present reports whether this host shows any sign of a legacy MITM Claude
+// proxy install (the waired-written on-disk CA under stateDir/proxy, or a live
+// api.anthropic.com hosts redirect). Cheap. Exposed so `waired claude status`
+// can warn that retired proxy artifacts are still present and point the user at
+// `waired claude enable`, which sweeps them (waired#750).
+func Present(stateDir string) bool { return present(stateDir) }
+
 // present reports whether this host shows any sign of a legacy MITM install:
 // the waired-written on-disk CA, or a live hosts redirect block. Cheap (a stat
 // plus one /etc/hosts read).

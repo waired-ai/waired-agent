@@ -188,6 +188,14 @@ func runClaudeStatus(stateDir string) error {
 	fmt.Printf("expected base URL:  %s\n", baseURL)
 	fmt.Printf("gateway listener:   127.0.0.1:%d (%s)\n", port, listenerLabel(port))
 	fmt.Printf("fallback hook:      %s\n", installedLabel(claudemanaged.StopHookInstalled()))
+	if legacycleanup.Present(stateDir) {
+		// Retired MITM proxy artifacts still on disk (a stale api.anthropic.com
+		// hosts redirect / orphaned CA) silently break Claude Code — warn and
+		// point at enable, which sweeps them while keeping managed settings
+		// (waired#750).
+		fmt.Printf("legacy proxy:       DETECTED — run `%s` to remove the retired MITM proxy (CA + hosts redirect)\n",
+			elevatedCmdline(runtime.GOOS, "waired claude enable"))
+	}
 	printClaudeStatuslineStatus()
 	printClaudeRouteStatus(defaultMgmtAddr)
 	return nil
