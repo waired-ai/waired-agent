@@ -222,6 +222,19 @@ linux_pkg_status() {
 linux_apt_uninstall() {
     common_require_cmd dpkg-query apt-get
 
+    # Remove the per-user Claude Code / coding-agent integration while the
+    # `waired` binary is still installed: `claude disable` (root, SUDO_USER
+    # preserved) for the managed settings + routing skill/statusline and any
+    # retired-MITM proxy artifacts; `unlink` (as the invoking user) for the
+    # ledger'd adapters (~/.claude skills, ~/.config/opencode, ~/.openclaw).
+    # Best-effort; the apt purge below does not reach per-user homes. waired#754.
+    if command -v waired >/dev/null 2>&1; then
+        common_log "Removing the Claude Code / coding-agent integration"
+        # shellcheck disable=SC2086
+        common_run $SUDO waired claude disable 2>/dev/null || true
+        common_run_user waired unlink 2>/dev/null || true
+    fi
+
     # Build the package set to act on. For a plain remove only
     # currently-installed packages count; for --clean (purge) we also catch
     # packages left in config-files state by an earlier remove.
@@ -337,13 +350,17 @@ darwin_uninstall() {
     home="$(real_user_home)"
     [ -n "$home" ] && common_run rm -f "$home/Library/LaunchAgents/com.waired.tray.waired-tray.plist"
 
-    # 3. Legacy transparent Claude proxy (#488, removal-only). The binary
-    #    knows the keychain cert CN + /etc/zshenv block, so let it undo them
-    #    while it is still present.
+    # 3. Claude Code + coding-agent integration. `claude disable` (as root, with
+    #    SUDO_USER preserved so its ~/.claude edits hop to the human) removes the
+    #    managed settings + routing skill/statusline and sweeps any retired-MITM
+    #    proxy artifacts; `unlink` (as the invoking user) removes the ledger'd
+    #    coding-agent adapters (~/.claude skills, ~/.config/opencode, ~/.openclaw).
+    #    Replaces the removed `waired proxy uninstall` (waired#750/#754).
     if [ -x "$bindir/waired" ]; then
-        common_log "Removing legacy Claude-proxy trust (if any)"
+        common_log "Removing the Claude Code / coding-agent integration"
         # shellcheck disable=SC2086
-        common_run $SUDO "$bindir/waired" proxy uninstall 2>/dev/null || true
+        common_run $SUDO "$bindir/waired" claude disable 2>/dev/null || true
+        common_run_user "$bindir/waired" unlink 2>/dev/null || true
     fi
 
     # 4. Binaries.

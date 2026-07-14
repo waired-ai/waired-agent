@@ -148,26 +148,44 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 	return nil
 }
 
+// managedRemoveIsFatal reports whether an error from claudemanaged.Remove should
+// abort `claude disable` (true) or be tolerated so the per-user cleanup still
+// runs (false). A permission error is tolerated: the managed-settings file is
+// admin-owned (e.g. %ProgramFiles% on a Windows service install), so a
+// non-elevated `claude disable` — the un-elevated, invoking-user phase of
+// uninstall.ps1 — cannot edit it, yet it must still scrub THIS user's ~/.claude
+// (route skill, statusline) and any retired-MITM artifacts; the elevated phase
+// removes the managed file itself (waired#754). A nil error is not fatal.
+func managedRemoveIsFatal(err error) bool {
+	return err != nil && !os.IsPermission(err)
+}
+
 func runClaudeDisable(stateDir string) error {
 	removed, err := claudemanaged.Remove()
-	if err != nil {
-		if os.IsPermission(err) {
-			return fmt.Errorf("waired claude disable: %w\n  (editing %s needs elevation — %s)", err, claudemanaged.Path(), elevationHintFor(runtime.GOOS, "waired claude disable"))
-		}
+	if managedRemoveIsFatal(err) {
 		return fmt.Errorf("waired claude disable: %w", err)
+	}
+	if err != nil {
+		// Tolerated permission error (see managedRemoveIsFatal): warn, but keep
+		// going so the invoking user's per-user integration is still removed.
+		fmt.Fprintf(os.Stderr, "warning: could not remove %s (%v); %s. Continuing with per-user cleanup.\n",
+			claudemanaged.Path(), err, elevationHintFor(runtime.GOOS, "waired claude disable"))
 	}
 	// Also clean up any retired MITM artifacts an upgrader may still carry.
 	legacycleanup.Run(stateDir, stderrLogger())
 
 	// Remove the /waired-route slash command and the routing statusline we
 	// installed on enable (#580). The Stop hook was already dropped by
-	// claudemanaged.Remove above.
+	// claudemanaged.Remove above (when it had permission).
 	removeRouteSkillForInvoker()
 	removeStatuslineForInvoker()
 
-	if removed {
+	switch {
+	case err != nil:
+		// Managed-settings file left for the elevated phase; nothing to report.
+	case removed:
 		fmt.Printf("Removed waired ANTHROPIC_BASE_URL from %s\n", claudemanaged.Path())
-	} else {
+	default:
 		fmt.Printf("No waired-managed ANTHROPIC_BASE_URL present in %s (nothing to do)\n", claudemanaged.Path())
 	}
 	return nil

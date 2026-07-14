@@ -8,12 +8,13 @@
     Two tiers, matching install.sh's apt remove / purge split:
 
       default   removes the Waired binaries + service registration, the
-                machine-PATH entry, the tray autostart and Start Menu
-                shortcuts, but KEEPS local state (%ProgramData%\waired:
-                identity, keys, settings).
-      -Clean    also deletes state and Ollama (binary + downloaded models).
-                Destructive and irreversible -- guarded by a confirmation
-                (see -Yes).
+                machine-PATH entry, the tray autostart, Start Menu shortcuts,
+                and the per-user Claude Code / coding-agent integration (managed
+                settings, ~/.claude skills, opencode/openclaw plugins), but
+                KEEPS local state (%ProgramData%\waired: identity, keys, settings).
+      -Clean    also deletes state (%ProgramData%\waired and %APPDATA%\waired)
+                and Ollama (binary + downloaded models). Destructive and
+                irreversible -- guarded by a confirmation (see -Yes).
 
     Both tiers also best-effort DEREGISTER this device from the Control
     Plane (revoked -- removed from the account's device list and dropped
@@ -61,7 +62,11 @@ param(
     [switch]$Clean,
     [switch]$Yes,
     [switch]$DryRun,
-    [switch]$Help
+    [switch]$Help,
+    # Internal: set on the re-elevated self-invoke so the child skips the
+    # per-user teardown (it runs in the un-elevated parent, as the invoking
+    # user, so HKCU / %APPDATA% / ~/.claude hit the right hive). waired#754.
+    [switch]$FromElevation
 )
 
 $ErrorActionPreference = 'Stop'
@@ -165,7 +170,7 @@ function Confirm-Clean {
 # -Verb RunAs is universal back to Windows 10 1809).
 function Invoke-SelfElevate {
     Common-Log "Privileged step ahead -- requesting UAC..."
-    $passthrough = @()
+    $passthrough = @('-FromElevation')
     if ($Clean)  { $passthrough += @('-Clean', '-Yes') }
     if ($DryRun) { $passthrough += '-DryRun' }
 
@@ -207,14 +212,18 @@ function Remove-FromMachinePath {
 # Removal steps
 # -------------------------------------------------------------------
 
-# Strip the legacy Claude-proxy integration (hosts entry, Root-store CA,
-# NODE_EXTRA_CA_CERTS) while waired.exe is still present to undo it.
-function Remove-Proxy {
+# MACHINE phase (elevated): remove the machine-scoped Claude Code managed
+# settings (%ProgramFiles%\ClaudeCode\managed-settings.json) and sweep any
+# residual retired-MITM proxy artifacts (hosts entry, Root-store CA,
+# NODE_EXTRA_CA_CERTS), while waired.exe is still present. `claude disable` needs
+# admin for the managed file. Replaces the removed `waired proxy uninstall`
+# (waired#750/#754). The per-user half (~/.claude, HKCU) is Remove-UserIntegration.
+function Remove-ClaudeManaged {
     $exe = Join-Path $InstallDir 'waired.exe'
     if (-not (Test-Path -LiteralPath $exe)) { return }
-    Common-Log "Removing Claude-proxy integration (hosts / CA / env)"
-    Common-Run "$exe proxy uninstall" {
-        try { & $exe proxy uninstall 2>$null | Out-Null } catch { }
+    Common-Log "Removing Claude Code managed settings (+ any retired MITM proxy artifacts)"
+    Common-Run "$exe claude disable" {
+        try { & $exe claude disable 2>$null | Out-Null } catch { }
     }
 }
 
@@ -267,7 +276,10 @@ function Stop-Tray {
     }
 }
 
-# Remove the per-user tray autostart Run key (current user only).
+# Remove the per-user tray autostart Run key. MUST run in the un-elevated parent
+# (as the invoking user): HKCU: resolves to whatever identity the process runs
+# as, so doing this post-elevation used to delete the *admin's* key and leave the
+# real user's autostart behind (waired#754). Called only from Remove-UserIntegration.
 function Remove-TrayAutostart {
     $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     Common-Log "Removing the waired-tray autostart entry (current user)"
@@ -276,8 +288,45 @@ function Remove-TrayAutostart {
     }
 }
 
-# Remove the Start Menu group the GUI installer created (best-effort; the
-# .ps1 install does not create one).
+# PER-USER phase (runs in the un-elevated parent, as the invoking user). Removes
+# the Claude Code + coding-agent integration this user carries -- the managed
+# ANTHROPIC_BASE_URL is admin-owned so `claude disable` here tolerates the
+# permission miss and still scrubs ~/.claude (route skill + statusline); the
+# elevated Remove-ClaudeManaged removes the managed file itself. `unlink` removes
+# the ledger'd adapter artifacts (~/.claude skills, opencode/openclaw plugins).
+# Plus the HKCU tray autostart and, under -Clean, this user's own state dir.
+# waired#754.
+function Remove-UserIntegration {
+    $exe = Join-Path $InstallDir 'waired.exe'
+    if (Test-Path -LiteralPath $exe) {
+        Common-Log "Removing per-user Claude / coding-agent integration (as the current user)"
+        Common-Run "$exe claude disable" {
+            try { & $exe claude disable 2>$null | Out-Null } catch { }
+        }
+        Common-Run "$exe unlink" {
+            try { & $exe unlink 2>$null | Out-Null } catch { }
+        }
+    }
+    Remove-TrayAutostart
+    if ($Clean) { Remove-UserStateDir }
+}
+
+# -Clean parity for the per-user state dir. Remove-State (elevated) wipes the
+# service dir %ProgramData%\waired; a user who ran `waired` directly may also
+# have %APPDATA%\waired. Runs as the invoking user so %APPDATA% is the right
+# profile's (waired#754).
+function Remove-UserStateDir {
+    $userState = Join-Path $env:AppData 'waired'
+    if (Test-Path -LiteralPath $userState) {
+        Common-Log "Removing per-user state directory $userState"
+        Common-Run "Remove-Item $userState" {
+            Remove-Item -LiteralPath $userState -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# Remove the machine-wide "Waired" Start Menu group (best-effort). Both the GUI
+# (.iss [Icons]) and the .ps1 installer (waired#755) create one under %ProgramData%.
 function Remove-StartMenu {
     $groups = @(
         (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Waired'),
@@ -379,17 +428,24 @@ if ($Help) { Show-Help; exit 0 }
 # Confirm before elevating so the prompt reaches the real console.
 Confirm-Clean
 
-# Elevate for the privileged steps (skipped for -DryRun: just print).
+# Per-user teardown as the INVOKING user: run in this un-elevated parent (or
+# inline when already admin) so HKCU / %APPDATA% / ~/.claude edits land in the
+# right hive & profile, not the admin's after UAC. The re-elevated child sets
+# -FromElevation and skips this (it would target the admin's profile). waired#754.
+if (-not $FromElevation) {
+    Remove-UserIntegration
+}
+
+# Elevate for the machine-scoped steps (skipped for -DryRun: just print).
 if (-not $DryRun -and -not (Test-IsAdmin)) {
     Invoke-SelfElevate
     exit 0
 }
 
 Common-Log "Uninstalling Waired..."
-Remove-Proxy
+Remove-ClaudeManaged
 Remove-Service
 Stop-Tray
-Remove-TrayAutostart
 Remove-StartMenu
 Remove-InstallDir
 if ($Clean) {
