@@ -4,56 +4,72 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
 
-// systemStateNotice explains why "Not enrolled" would be the wrong
-// verdict: the caller resolved resolvedDir (per-user, no identity.json
-// there), but the platform SYSTEM state dir looks enrolled — or can't
-// even be inspected without elevation. Returns "" when the plain
-// "Not enrolled" message is correct. cmdline is the command to suggest
-// re-running elevated ("waired status").
-func systemStateNotice(resolvedDir, cmdline string) string {
-	return systemStateNoticeAt(resolvedDir, paths.StateDir(paths.System),
-		cmdline, runtime.GOOS, os.Geteuid())
+// resolveSystemFallback answers a status query from the platform SYSTEM
+// state dir when the caller's resolved (per-user) dir held no identity.
+// It is the honest replacement for the old os.Stat guess: instead of
+// inferring readability from a stat of identity.json, it actually loads the
+// System dir and reports what happened. cmdline is the command to suggest
+// re-running elevated (e.g. "waired status").
+func resolveSystemFallback(resolvedDir, cmdline string) (string, *identity.Identity, string) {
+	return resolveSystemFallbackAt(resolvedDir, paths.StateDir(paths.System), cmdline, runtime.GOOS)
 }
 
-// systemStateNoticeAt is the testable core of systemStateNotice.
-func systemStateNoticeAt(resolvedDir, sysDir, cmdline, goos string, euid int) string {
-	// Root already resolves to the System dir by default; elevation
-	// advice would be useless. Windows has no euid (Geteuid() == -1),
-	// so the stat results below decide there.
-	if goos != "windows" && euid == 0 {
-		return ""
-	}
-	// A WAIRED_STATE_DIR override collapses both paths to the same dir
-	// (paths.StateDir returns it verbatim for every mode); the explicit
-	// fs.ErrPermission branch in the caller reports that case instead.
+// resolveSystemFallbackAt is the testable core of resolveSystemFallback. Its
+// three outcomes map to the caller's three exit-0 branches:
+//
+//   - (sysDir, id, "")   the System dir is enrolled AND readable → the caller
+//     renders status from sysDir. This is the elevated / admin case: on a
+//     Windows service install the whole %ProgramData%\waired tree is locked to
+//     SYSTEM+Administrators, and on Windows even an elevated `waired status`
+//     resolves to the admin's empty %AppData% first, so this fallback is the
+//     only way it sees the system-wide enrollment.
+//   - ("", nil, notice)  the System dir looks enrolled but can't be read
+//     without elevation → the caller prints notice. Standard / basic-token
+//     users land here (Windows DACL, or a 0700 root-owned dir on Unix).
+//   - ("", nil, "")      no System-dir fallback applies (genuinely not
+//     enrolled, or resolvedDir already IS the System dir) → the caller prints
+//     its plain "Not enrolled" message.
+func resolveSystemFallbackAt(resolvedDir, sysDir, cmdline, goos string) (string, *identity.Identity, string) {
+	// A WAIRED_STATE_DIR override collapses every mode to the same dir, and
+	// Unix root already defaults to the System dir — either way there is no
+	// distinct System dir to fall back to. (The caller's explicit permission
+	// short-circuit on resolvedDir covers an unreadable override.)
 	if filepath.Clean(sysDir) == filepath.Clean(resolvedDir) {
-		return ""
+		return "", nil, ""
 	}
-	_, err := os.Stat(filepath.Join(sysDir, "identity.json"))
+	id, err := identity.Load(sysDir)
 	switch {
-	case err == nil:
-		return fmt.Sprintf(
-			"This device is enrolled system-wide, but its state (%s) is not readable by this user.\n%s.",
-			sysDir, capitalize(elevationHintFor(goos, cmdline)))
+	case err == nil && id != nil:
+		return sysDir, id, ""
 	case errors.Is(err, fs.ErrPermission):
-		// Typical service install: the 0700 root-owned dir denies
-		// traversal, so we can't tell whether identity.json exists.
-		return fmt.Sprintf(
-			"Cannot read the system state directory %s (permission denied).\nIf this device was enrolled with `sudo waired init`, %s; otherwise run `waired init`.",
-			sysDir, elevationHintFor(goos, cmdline))
+		// Enrolled machine whose System dir is locked down (Windows service
+		// DACL → SYSTEM+Administrators, or a 0700 root-owned dir on Unix). Go
+		// maps Windows ERROR_ACCESS_DENIED to fs.ErrPermission, so this branch
+		// matches on all three OSes. Report it; don't fail.
+		return "", nil, systemEnrolledElevationNotice(sysDir, cmdline, goos)
 	default:
-		// ENOENT: genuinely not enrolled. Anything else: fail open to
-		// the existing message rather than invent a new failure mode.
-		return ""
+		// identity.Load returns (nil, nil) when identity.json is absent —
+		// genuinely not enrolled. Any other error fails open to the plain
+		// "Not enrolled" message rather than inventing a new failure mode.
+		return "", nil, ""
 	}
+}
+
+// systemEnrolledElevationNotice is the OS-aware wording for "the system state
+// exists but you need elevation to read it". Kept pure so it can be
+// table-tested across goos values without a real locked directory.
+func systemEnrolledElevationNotice(sysDir, cmdline, goos string) string {
+	return fmt.Sprintf(
+		"This device is enrolled system-wide, but its state (%s) needs elevation to read.\n%s.",
+		sysDir, capitalize(elevationHintFor(goos, cmdline)))
 }
 
 func capitalize(s string) string {
