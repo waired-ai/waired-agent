@@ -203,15 +203,16 @@ function Assert-Inference {
     if ($cfgEnabled) { ItOk "inference enabled in persisted agent config" }
     else { ItBad "inference not enabled in persisted config" }
 
-    # 4) benchmark figure in the init transcript (offerBenchmark throughput).
-    #    Match the throughput OUTPUT only (tok/s | tokens/s | throughput) — NOT a
-    #    bare "benchmark", which also appears in init's "run `waired runtimes
-    #    benchmark` later" tip and would pass even when no benchmark actually ran
-    #    (the old false positive surfaced once #564's start-agent fix lets a real
-    #    benchmark run).
+    # 4) benchmark ran in the init transcript (offerBenchmark). Accept a
+    #    throughput number (tok/s | tokens/s | throughput) OR the "Local
+    #    inference works" smoke line: a host too slow to measure a stable rate
+    #    exhausts the boot benchmark's budget and reports MeasuredTokps=0
+    #    ("…interactive performance looks good"), yet a real generation still
+    #    ran. Both print ONLY after a benchmark ran — never the "run `waired
+    #    runtimes benchmark` later" tip (the #564 false positive).
     if (Test-Path -LiteralPath $InitLog) {
         $txt = Get-Content -LiteralPath $InitLog -Raw
-        if ($txt -match '(?i)tok/s|tokens/s|throughput') {
+        if ($txt -match '(?i)tok/s|tokens/s|throughput|Local inference works') {
             $m = [regex]::Match($txt, '(?i)[0-9]+(\.[0-9]+)?\s*(tok|tokens)/s')
             $tps = if ($m.Success) { " ($($m.Value))" } else { '' }
             ItOk "benchmark ran during init$tps"

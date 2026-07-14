@@ -261,15 +261,20 @@ assert_inference() {
     bad "inference not enabled in persisted config"
   fi
 
-  # The end-of-init benchmark (offerBenchmark, non-bypass) reports throughput.
-  # Match the throughput OUTPUT only — NOT a bare "benchmark", which also
-  # appears in init's "run `waired runtimes benchmark` later" tip and would
-  # pass even when no benchmark ran (#564 false positive).
-  if [ -f "$initlog" ] && grep -qiE 'tok/s|tokens/s|throughput' "$initlog"; then
+  # The end-of-init benchmark (offerBenchmark, non-bypass) proves the inference
+  # tail ran. Accept a throughput number (tok/s|tokens/s|throughput) OR the
+  # "Local inference works" smoke line: a host too slow to measure a stable rate
+  # exhausts the boot benchmark's budget and reports MeasuredTokps=0 ("…looks
+  # good"), yet a real generation still ran. Both print ONLY after a benchmark
+  # ran, never the "run `waired runtimes benchmark` later" tip (#564 false
+  # positive).
+  if [ -f "$initlog" ] && grep -qiE 'tok/s|tokens/s|throughput|Local inference works' "$initlog"; then
     tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1)"
     ok "benchmark ran during init${tps:+ (}${tps}${tps:+)}"
   else
     bad "no benchmark output captured in init transcript ($initlog)"
+    # Genuine miss — surface the daemon's own boot benchmark slog for the reason.
+    gx "$guest" sh -c 'journalctl -u waired-agent --no-pager -n 200 | grep -iE "boot benchmark|benchmark" | tail -15' 2>&1 | sed 's/^/    agent| /' || true
   fi
 }
 

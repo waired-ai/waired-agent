@@ -141,15 +141,22 @@ assert_inference_macos() {
     bad "inference not enabled in persisted config"
   fi
 
-  # The end-of-init benchmark (offerBenchmark) reports throughput. Match the
-  # throughput OUTPUT only — NOT a bare "benchmark", which also appears in
-  # init's "run `waired runtimes benchmark` later" tip and would pass even when
-  # no benchmark ran (#564 false positive).
-  if [ -f "$INITLOG" ] && grep -qiE 'tok/s|tokens/s|throughput' "$INITLOG"; then
+  # The end-of-init benchmark (offerBenchmark) proves the inference tail ran.
+  # Accept either a throughput number (tok/s|tokens/s|throughput) OR the
+  # "Local inference works" smoke line: on a host too slow/constrained to
+  # measure a stable rate the boot benchmark exhausts its time budget and
+  # reports MeasuredTokps=0 ("…interactive performance looks good"), yet a real
+  # generation still ran (the 200 that emits the smoke line). Both are printed
+  # ONLY after a benchmark ran — never the "run `waired runtimes benchmark`
+  # later" tip — so neither is the #564 false positive.
+  if [ -f "$INITLOG" ] && grep -qiE 'tok/s|tokens/s|throughput|Local inference works' "$INITLOG"; then
     tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$INITLOG" | head -1)"
     ok "benchmark ran during init${tps:+ (}${tps}${tps:+)}"
   else
     bad "no benchmark output captured in init transcript ($INITLOG)"
+    # Genuine miss (the benchmark never ran) — surface the daemon's own boot
+    # benchmark slog for the reason (endpoint 404, engine not ready, …).
+    sudo grep -iE 'boot benchmark|benchmark' /Library/Logs/waired-agent.err.log 2>/dev/null | tail -15 | sed 's/^/    agent.err| /' >&2 || true
   fi
 }
 
