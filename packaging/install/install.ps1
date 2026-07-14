@@ -88,7 +88,7 @@
     $env:WAIRED_NO_TRAY = '1'
     iwr -useb $BaseUrl/latest/download/install.ps1 | iex
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding=$false)]
 param(
     [switch]$DryRun,
     [switch]$Help,
@@ -162,7 +162,21 @@ param(
     # download has already happened. Skips re-download and goes straight
     # to the privileged install steps. Not documented in -Help -- callers
     # never set this directly.
-    [string]$StagedZipPath
+    [string]$StagedZipPath,
+    # Internal: path the elevated Phase-2 child writes its Start-Transcript
+    # log to. The un-elevated parent picks a path under its own %TEMP% (so the
+    # log stays readable without elevation) and forwards it; empty -> the child
+    # defaults it. Not documented in -Help. (waired#748)
+    [string]$LogPath,
+    # Catch-all for stray tokens. PowerShell can't bind install.sh-style
+    # `--dev` / `--control <url>` long options to the -Dev / -Control params
+    # (they arrive as plain string values), so with PositionalBinding=$false
+    # they land here and Normalize-ExtraArgs folds the supported ones into
+    # their -Xxx switches. Anything unrecognised dies loudly instead of
+    # silently mis-binding to -Control and running `init --control --dev`
+    # (waired#746).
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [string[]]$ExtraArgs
 )
 
 $ErrorActionPreference = 'Stop'
@@ -233,6 +247,10 @@ $DevControlUrl = if ($env:WAIRED_DEV_CONTROL_URL) { $env:WAIRED_DEV_CONTROL_URL 
                  else { 'https://app.dev.waired.net' }
 $ControlUrl    = ''   # resolved by Resolve-ControlUrl after param parsing.
 $InitRan       = $false  # set by Invoke-WairedInit; read by Show-NextSteps.
+# True only inside the spawned elevated Phase-2 console (set in Phase 2). Gates
+# the transcript-path + pause-on-exit behaviour so that window never vanishes
+# before its output can be read (waired#748).
+$ElevatedConsole = $false
 
 $InstallDir  = Join-Path $env:ProgramFiles 'Waired'
 $ServiceName = 'waired-agent'
@@ -241,6 +259,13 @@ $ShaName     = "$ZipName.sha256"
 # SCM-mode state dir; agent.json + identity land here so the
 # LocalSystem-spawned waired-agent service finds them on boot.
 $AgentStateDir = Join-Path $env:ProgramData 'waired'
+
+# Where the elevated Phase-2 child (and the already-admin inline path) write a
+# Start-Transcript log so the install output survives the console closing
+# (waired#748). The un-elevated parent resolves it under its own %TEMP% and
+# forwards -LogPath to the elevated child, so the file stays readable by the
+# invoking (non-admin) user afterwards.
+if (-not $LogPath) { $LogPath = Join-Path $env:TEMP 'waired-install.log' }
 
 # -------------------------------------------------------------------
 # common_* helpers (mirror install.sh naming)
@@ -264,10 +289,88 @@ function Emo {
 
 function Common-Log  { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Cyan }
 function Common-Warn { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Yellow }
+
+# Stop-TranscriptQuietly ends an active Start-Transcript without erroring when
+# none is running (Stop-Transcript throws in that case). Used by the Phase-2
+# transcript logging added for waired#748.
+function Stop-TranscriptQuietly {
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
+}
+
 function Common-Die  {
     param([string]$Msg)
     Write-Host "[waired] $Msg" -ForegroundColor Red
+    # In the spawned elevated Phase-2 console the window closes the instant the
+    # script exits, taking every message with it. Surface the transcript path
+    # and pause so the failure is actually readable (waired#748). Guarded on
+    # $ElevatedConsole so Phase-1 / parent dies stay unchanged (their console
+    # persists). Runs here (not just in a try/finally) because install steps
+    # call Common-Die -> exit 1, which can bypass a wrapping finally.
+    if ($script:ElevatedConsole) {
+        if ($script:LogPath) { Write-Host "[waired] Full install log: $($script:LogPath)" -ForegroundColor Red }
+        Stop-TranscriptQuietly
+        if (Test-InteractiveStdin) {
+            Read-Host '[waired] Install FAILED. Press Enter to close this window' | Out-Null
+        }
+    }
     exit 1
+}
+
+# Normalize-ExtraArgs folds install.sh-style long options that PowerShell left
+# unbound in $ExtraArgs (because `--foo` tokens arrive as plain string values,
+# not parameters) into the native -Xxx parameters, so `--dev` / `--control
+# <url>` work for parity instead of silently mis-binding to -Control. Any token
+# it does not recognise dies loudly -- the whole point of
+# PositionalBinding=$false is that a stray arg is never swallowed again
+# (waired#746). Must run before anything consumes the switches.
+function Normalize-ExtraArgs {
+    if (-not $ExtraArgs) { return }
+    $i = 0
+    while ($i -lt $ExtraArgs.Count) {
+        $tok = [string]$ExtraArgs[$i]
+        $val = $null
+        # Support --opt=value as well as --opt value.
+        $eq = $tok.IndexOf('=')
+        if ($tok -match '^--?[A-Za-z]' -and $eq -gt 0) {
+            $val = $tok.Substring($eq + 1)
+            $tok = $tok.Substring(0, $eq)
+        }
+        $key = $tok.TrimStart('-').ToLowerInvariant()
+        switch ($key) {
+            'dev'               { $script:Dev = $true }
+            'control' {
+                if ($null -eq $val) {
+                    if ($i + 1 -ge $ExtraArgs.Count) { Common-Die "--control requires a URL argument (e.g. --control https://<host>)." }
+                    $i++
+                    $val = [string]$ExtraArgs[$i]
+                }
+                $script:Control = $val
+            }
+            'skip-ollama'       { $script:SkipOllama = $true }
+            'skip-init'         { $script:SkipInit = $true }
+            'skip-claude-proxy' { $script:SkipClaudeProxy = $true }
+            'skip-proxy'        { $script:SkipClaudeProxy = $true }
+            'non-interactive'   { $script:NonInteractive = $true }
+            'dry-run'           { $script:DryRun = $true }
+            'yes'               { $script:Yes = $true }
+            'check'             { $script:Check = $true }
+            'update'            { $script:Update = $true }
+            # Channel flags set the derived $Version / WAIRED_VERSION directly
+            # (mirroring the -Edge/-Latest/-Stable resolution above), since this
+            # runs after that block.
+            'edge'              { $script:Version = 'edge';   $env:WAIRED_VERSION = 'edge' }
+            'latest'            { $script:Version = 'edge';   $env:WAIRED_VERSION = 'edge' }
+            'stable'            { $script:Version = 'latest'; $env:WAIRED_VERSION = $null }
+            'help'              { $script:Help = $true }
+            default {
+                if ($ExtraArgs[$i] -match '^https?://') {
+                    Common-Die "unexpected URL argument '$($ExtraArgs[$i])'. Pass the Control Plane URL as -Control https://<host> (or --control https://<host>)."
+                }
+                Common-Die "unknown argument '$($ExtraArgs[$i])'. Windows uses -Dev / -Control <url> / -SkipOllama etc. (run with -Help). The install.sh --dev and --control <url> spellings are also accepted."
+            }
+        }
+        $i++
+    }
 }
 
 # Show-Banner prints the WAIRED "GATE" splash at the start of a run.
@@ -374,7 +477,11 @@ Switches:
                     ($DevControlUrl); the installer enrols this device
                     against that CP automatically (UAC + browser sign-in).
   -Control <URL>    Same as -Dev but with an explicit URL; takes precedence
-                    over -Dev when both are given.
+                    over -Dev when both are given. A scheme-less host
+                    (dev.waired.net) is accepted and normalised by
+                    `waired init`. (The install.sh spellings --dev and
+                    --control <URL> also work; a stray flag / junk value is
+                    rejected.)
   -Edge, -Latest    Install/switch to the latest main build (same as
                     WAIRED_VERSION=edge) -- rebuilt on every merge to main;
                     NOT a stable release. Fetches the edge prerelease
@@ -468,6 +575,17 @@ function Resolve-ControlUrl {
     } elseif ($env:WAIRED_CONTROL_URL) {
         $script:ControlUrl = $env:WAIRED_CONTROL_URL
     }
+    # Reject a Control URL that is really a stray flag or multi-token junk --
+    # e.g. the old failure mode where `--dev` bound to -Control and enrolment
+    # ran against `https://--dev` (waired#746), or `--control --dev` slipping a
+    # flag into the value. A scheme-less host (dev.waired.net) is intentionally
+    # allowed: `waired init` normalises it (https for remote, http for
+    # loopback), matching install.sh, whose resolve_control_url does no URL
+    # validation of its own -- so this stays lenient to avoid a Windows-only
+    # divergence.
+    if ($script:ControlUrl -and ($script:ControlUrl -match '^-' -or $script:ControlUrl -match '\s')) {
+        Common-Die "Control Plane URL '$($script:ControlUrl)' looks like a stray flag, not a host/URL. Use -Dev for the dogfood Control Plane, or -Control https://<host> (a scheme-less host such as dev.waired.net is also accepted)."
+    }
 }
 
 # -------------------------------------------------------------------
@@ -528,7 +646,7 @@ function Invoke-SelfElevate {
     # from $env in the elevated child too -- Start-Process inherits the
     # parent's environment block. Only switches / explicit values bound
     # to non-env params need explicit forwarding.
-    $passthroughArgs = @('-StagedZipPath', $ZipPath)
+    $passthroughArgs = @('-StagedZipPath', $ZipPath, '-LogPath', $LogPath)
     if ($DryRun)         { $passthroughArgs += '-DryRun' }
     if ($Update)         { $passthroughArgs += '-Update' }
     if ($Yes)            { $passthroughArgs += '-Yes' }
@@ -571,7 +689,7 @@ function Invoke-SelfElevate {
         $proc = Start-Process -FilePath 'powershell.exe' `
             -ArgumentList $psArgs -Verb RunAs -PassThru -Wait
         if ($proc.ExitCode -ne 0) {
-            Common-Die "elevated installer exited code $($proc.ExitCode)"
+            Common-Die "elevated installer exited code $($proc.ExitCode). Full install log: $LogPath"
         }
     } finally {
         # -Wait guarantees the elevated child finished reading the staged
@@ -1224,6 +1342,12 @@ function Invoke-WairedUpdateSwap {
 # main
 # -------------------------------------------------------------------
 
+# Fold any install.sh-style long options (--dev / --control <url> / --skip-*
+# ...) that PowerShell left unbound in $ExtraArgs into their -Xxx params, or
+# die loudly on a stray token, before -Help / the banner / Resolve-ControlUrl /
+# Invoke-SelfElevate read any of them (waired#746).
+Normalize-ExtraArgs
+
 if ($Help) {
     Show-Help
     return
@@ -1238,6 +1362,20 @@ if ($Help) {
 if ($env:WAIRED_BANNER_SELFTEST) { Show-Banner; return }
 
 Resolve-ControlUrl
+
+# Arg-parsing self-test seam (waired#746). WAIRED_ARGTEST is never set on a user
+# host; when set, print the resolved arg state after Normalize-ExtraArgs +
+# Resolve-ControlUrl and return before any download / UAC / SCM work, so a unit
+# test can assert --dev / --control parity (and that a bad URL / unknown token
+# dies) without doing privileged work. Kept pure-ASCII (wire-safe under iwr|iex,
+# scripts/install/encoding_test.go).
+if ($env:WAIRED_ARGTEST) {
+    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11}" -f `
+        [bool]$Dev, $Control, $ControlUrl, $Version, [bool]$SkipOllama, [bool]$SkipInit, `
+        [bool]$SkipClaudeProxy, [bool]$NonInteractive, [bool]$DryRun, [bool]$Update, [bool]$Check, [bool]$Yes)
+    return
+}
+
 Detect-Platform
 
 # Welcome banner -- Phase 1 only ($StagedZipPath set => elevated Phase 2
@@ -1303,21 +1441,28 @@ if (-not $StagedZipPath) {
         $stagedZip = Get-AssetWithChecksum -WorkDir $workDir
         if (Test-Admin) {
             # Already elevated -> skip the self-re-exec and just run
-            # Phase 2 inline so we don't pop a no-op UAC dialog.
-            Stop-ExistingService
-            Extract-Zip -ZipPath $stagedZip
-            Remove-TrayIfRequested
-            Invoke-AgentInstall
-            Add-InstallDirToPath
-            Install-OllamaIfRequested
-            # Invoke-WairedInit as a bare statement (not assigned) so waired
-            # init's stdout reaches the console; it records the outcome in
-            # $script:InitRan instead of returning it.
-            Invoke-WairedInit
-            $initRan = $script:InitRan
-            Ensure-AgentRunning
-            if ($initRan) { Enable-ClaudeProxy }
-            Show-NextSteps -InitRan:$initRan
+            # Phase 2 inline so we don't pop a no-op UAC dialog. Log to a
+            # transcript too so a record exists even here (waired#748); no
+            # pause -- this is the user's own console, it does not vanish.
+            try { Start-Transcript -Path $LogPath -Force -ErrorAction SilentlyContinue | Out-Null } catch { }
+            try {
+                Stop-ExistingService
+                Extract-Zip -ZipPath $stagedZip
+                Remove-TrayIfRequested
+                Invoke-AgentInstall
+                Add-InstallDirToPath
+                Install-OllamaIfRequested
+                # Invoke-WairedInit as a bare statement (not assigned) so waired
+                # init's stdout reaches the console; it records the outcome in
+                # $script:InitRan instead of returning it.
+                Invoke-WairedInit
+                $initRan = $script:InitRan
+                Ensure-AgentRunning
+                if ($initRan) { Enable-ClaudeProxy }
+                Show-NextSteps -InitRan:$initRan
+            } finally {
+                Stop-TranscriptQuietly
+            }
         } else {
             Invoke-SelfElevate -ZipPath $stagedZip
         }
@@ -1341,22 +1486,47 @@ if (-not (Test-Admin)) {
 if (-not (Test-Path -LiteralPath $StagedZipPath)) {
     Common-Die "staged zip not found at $StagedZipPath (parent installer may have crashed)"
 }
+
+# This is the spawned elevated console: it closes the instant the script
+# returns, taking every message with it. Record a transcript and pause on exit
+# so its output (Show-NextSteps, or any failure) survives (waired#748).
+# $ElevatedConsole also makes Common-Die pause, covering steps that exit 1
+# directly. Both the pause and the CI legs are safe: Test-InteractiveStdin is
+# false under -NonInteractive / redirected stdin, and elevated CI runners take
+# the already-admin inline path above, never this spawned one.
+$script:ElevatedConsole = $true
+try { Start-Transcript -Path $LogPath -Force -ErrorAction SilentlyContinue | Out-Null } catch { }
+
 if ($Update) {
     # Elevated swap-only path (the parent already gated + downloaded).
     Invoke-WairedUpdateSwap -StagedZip $StagedZipPath
+    Stop-TranscriptQuietly
+    if (Test-InteractiveStdin) { Read-Host '[waired] Update complete. Press Enter to close this window' | Out-Null }
     return
 }
-Common-Log "elevated phase: installing from $StagedZipPath"
-Stop-ExistingService
-Extract-Zip -ZipPath $StagedZipPath
-Remove-TrayIfRequested
-Invoke-AgentInstall
-Add-InstallDirToPath
-Install-OllamaIfRequested
-# Invoke-WairedInit as a bare statement (not assigned) so waired init's stdout
-# reaches the console; it records the outcome in $script:InitRan.
-Invoke-WairedInit
-$initRan = $script:InitRan
-Ensure-AgentRunning
-if ($initRan) { Enable-ClaudeProxy }
-Show-NextSteps -InitRan:$initRan
+
+try {
+    Common-Log "elevated phase: installing from $StagedZipPath"
+    Stop-ExistingService
+    Extract-Zip -ZipPath $StagedZipPath
+    Remove-TrayIfRequested
+    Invoke-AgentInstall
+    Add-InstallDirToPath
+    Install-OllamaIfRequested
+    # Invoke-WairedInit as a bare statement (not assigned) so waired init's stdout
+    # reaches the console; it records the outcome in $script:InitRan.
+    Invoke-WairedInit
+    $initRan = $script:InitRan
+    Ensure-AgentRunning
+    if ($initRan) { Enable-ClaudeProxy }
+    Show-NextSteps -InitRan:$initRan
+} catch {
+    # A terminating error that was NOT a Common-Die (those exit + pause on their
+    # own). Route it through Common-Die for the same log-path + pause + exit 1.
+    Common-Die "install failed: $($_.Exception.Message)"
+}
+
+Stop-TranscriptQuietly
+if (Test-InteractiveStdin) {
+    Read-Host '[waired] Install complete. Press Enter to close this window' | Out-Null
+}

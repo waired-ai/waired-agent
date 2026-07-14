@@ -445,6 +445,46 @@ try {
     # POSITIONAL args, not named switches, so install.ps1 would misread -Dev as
     # the control URL.
     $installPs1 = Join-Path $Root 'packaging\install\install.ps1'
+
+    # install.ps1 arg-parsing contract (waired#746). install.ps1's WAIRED_ARGTEST
+    # seam returns right after arg-normalization + Resolve-ControlUrl, before any
+    # download / UAC, so these run cheaply in a child process and install
+    # NOTHING. Assert the install.sh-style --dev / --control spellings resolve,
+    # and that a stray / mistyped arg fails loudly instead of silently
+    # mis-binding to -Control (the pre-fix bug ran `waired init --control --dev`).
+    ItStep "install.ps1 arg-parsing asserts (waired#746)"
+    function Invoke-Argtest([string[]]$a) {
+        # Invoke install.ps1 the way Phase 1 actually runs -- IN-SESSION
+        # (`& install.ps1 <args>` / iwr|iex), NOT -File. That is the parse mode
+        # where a bare `--dev` is a positional value (the #746 bug); -File would
+        # instead bind `--dev` natively to -Dev and never exercise the fix. Run
+        # in a child process so a Common-Die (exit 1) can't tear down this test.
+        $env:WAIRED_ARGTEST = '1'
+        try {
+            $cmd = "& '$installPs1' " + ($a -join ' ')
+            $o = & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $cmd 2>&1 | Out-String
+        } finally { Remove-Item Env:WAIRED_ARGTEST -ErrorAction SilentlyContinue }
+        [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $o }
+    }
+    $r = Invoke-Argtest @('--dev')
+    if ($r.Exit -eq 0 -and $r.Out -match 'ControlUrl=https?://\S') { ItOk "--dev resolves a Control URL (install.sh parity)" }
+    else { ItBad "--dev parity broken (exit $($r.Exit)): $($r.Out.Trim())" }
+    $r = Invoke-Argtest @('--control','https://cp.example.test')
+    if ($r.Exit -eq 0 -and $r.Out -match 'ControlUrl=https://cp\.example\.test') { ItOk "--control <url> resolves the URL (parity)" }
+    else { ItBad "--control <url> parity broken (exit $($r.Exit)): $($r.Out.Trim())" }
+    $r = Invoke-Argtest @('--control','dev.waired.net')
+    if ($r.Exit -eq 0 -and $r.Out -match 'ControlUrl=dev\.waired\.net') { ItOk "scheme-less --control host is accepted (install.sh parity; waired init normalises it)" }
+    else { ItBad "scheme-less --control host rejected (exit $($r.Exit)): $($r.Out.Trim())" }
+    $r = Invoke-Argtest @('--control','--dev')
+    if ($r.Exit -ne 0 -and $r.Out -match 'stray flag') { ItOk "--control --dev (a flag as the value) dies loudly" }
+    else { ItBad "--control --dev did not fail loudly (exit $($r.Exit)): $($r.Out.Trim())" }
+    $r = Invoke-Argtest @('--frobnicate')
+    if ($r.Exit -ne 0 -and $r.Out -match 'unknown argument') { ItOk "stray --frobnicate rejected loudly" }
+    else { ItBad "stray arg not rejected (exit $($r.Exit)): $($r.Out.Trim())" }
+    $r = Invoke-Argtest @('https://cp.example.test')
+    if ($r.Exit -ne 0) { ItOk "bare positional URL rejected (no silent -Control mis-bind)" }
+    else { ItBad "bare positional URL accepted (exit $($r.Exit)): $($r.Out.Trim())" }
+
     if ($WithInference) {
         ItStep "running install.ps1 (-Dev -SkipInit -NonInteractive; Ollama enabled for inference)"
         & $installPs1 -Dev -SkipInit -NonInteractive
