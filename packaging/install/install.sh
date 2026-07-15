@@ -100,6 +100,12 @@ FLAG_STABLE=0
 # terminal is available). Top-level default so it's readable under set -u
 # even when --no-init isn't passed.
 FLAG_NO_INIT=0
+# FLAG_CLEAN: clean install — run the full-wipe uninstall (delegated to
+# uninstall.sh --clean) before installing fresh. WAIRED_CLEAN is the
+# env-var form, mirroring WAIRED_NO_OLLAMA (and it is how the Windows
+# piped `iwr | iex` one-liner opts in, so both OSes accept it).
+FLAG_CLEAN=0
+if [ -n "${WAIRED_CLEAN:-}" ]; then FLAG_CLEAN=1; fi
 OS_KIND=""
 OS_FAMILY=""
 OS_NAME=""
@@ -247,6 +253,7 @@ install.sh — install Waired via the system package manager.
 Usage:
   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dev
+  curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
   curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dry-run
 
 Options:
@@ -266,6 +273,11 @@ Options:
                    --update/--check this overrides the default, which is
                    to *preserve* the channel the host already tracks
                    (edge stays edge, stable stays stable).
+  --clean          clean install: run the uninstaller with --clean first
+                   (PERMANENTLY deletes config, keys, state, the apt
+                   source, and Ollama + its models), then install fresh.
+                   Destructive — asks to confirm unless --yes. Same as
+                   WAIRED_CLEAN=1. Cannot be combined with --check/--update.
   --skip-ollama    do not install Ollama (same as WAIRED_NO_OLLAMA=1)
   --no-init        do not auto-run \`waired init\` after install (the
                    default runs sign-in + setup when a terminal is present)
@@ -280,6 +292,8 @@ Environment variables:
   WAIRED_NO_TRAY           if set, do not install waired-tray (Linux + macOS)
   WAIRED_NO_OLLAMA         if set, do not install Ollama (same as
                            --skip-ollama; Linux + macOS)
+  WAIRED_CLEAN             if set, same as --clean (full wipe first, then
+                           a fresh install)
   WAIRED_CONTROL_URL       Control Plane URL written to agent.env when
                            --dev / --control are not given (lower-priority
                            fallback for per-org installer wrappers)
@@ -453,6 +467,69 @@ prompt_update() {
         n|N|no|NO|No) return 1 ;;
         *) return 0 ;;
     esac
+}
+
+# Confirm the destructive --clean wipe before anything runs. Mirrors
+# uninstall.sh's confirm_clean (--yes bypass, /dev/tty prompt so the
+# piped `curl | sh` case can still ask, die on a non-interactive shell
+# without --yes) with the clean-INSTALL framing added.
+confirm_clean_install() {
+    [ "$FLAG_CLEAN" = 1 ] || return 0
+    [ "$FLAG_YES" = 1 ] && return 0
+    if tty_available; then
+        common_warn "--clean will PERMANENTLY delete Waired config, keys and state"
+        common_warn "(identity / secrets), the apt source, and Ollama + its models,"
+        common_warn "then reinstall Waired fresh."
+        printf '\033[1;33m[waired]\033[0m %s' "Continue? [y/N] " >/dev/tty
+        read -r ans </dev/tty || ans=""
+        case "$ans" in
+            y|Y|yes|YES) return 0 ;;
+            *) common_die "aborted — nothing was removed" ;;
+        esac
+    fi
+    common_die "--clean is destructive; re-run with --yes to confirm on a non-interactive shell"
+}
+
+# run_clean_wipe — the wipe half of --clean: delegate to uninstall.sh
+# (published as a release asset next to install.sh on both channels)
+# rather than re-implementing the purge here. Prefers a sibling
+# uninstall.sh when install.sh itself runs from a file (a checkout, or
+# the hermetic dash tests) — the piped `curl | sh` case has a shell name
+# in $0 and never picks up a stray ./uninstall.sh from the cwd. Consent
+# was already collected by confirm_clean_install, so the child gets
+# --yes; under --dry-run the child previews its own wipe commands (this
+# is deliberately NOT wrapped in common_run). Any failure aborts before
+# install work starts, so nothing is left half-done.
+run_clean_wipe() {
+    [ "$FLAG_CLEAN" = 1 ] || return 0
+    wipe_script=""
+    wipe_tmp=""
+    case "$0" in
+        */install.sh|install.sh)
+            if [ -f "$(dirname "$0")/uninstall.sh" ]; then
+                wipe_script="$(dirname "$0")/uninstall.sh"
+            fi
+            ;;
+    esac
+    if [ -z "$wipe_script" ]; then
+        common_require_cmd curl mktemp
+        wipe_tmp="$(mktemp -d)"
+        common_log "Fetching the uninstaller from $WAIRED_INSTALL_BASE_URL/uninstall.sh"
+        curl -fsSL "$WAIRED_INSTALL_BASE_URL/uninstall.sh" -o "$wipe_tmp/uninstall.sh" \
+            || common_die "failed to download uninstall.sh — aborting (nothing was changed)"
+        [ -s "$wipe_tmp/uninstall.sh" ] \
+            || common_die "downloaded uninstall.sh is empty — aborting (nothing was changed)"
+        wipe_script="$wipe_tmp/uninstall.sh"
+    fi
+    common_log "Clean install: wiping the existing Waired install first"
+    if [ "$DRY_RUN" = 1 ]; then
+        sh "$wipe_script" --clean --yes --dry-run \
+            || common_die "clean uninstall failed — aborting the install"
+    else
+        sh "$wipe_script" --clean --yes \
+            || common_die "clean uninstall failed — aborting the install"
+    fi
+    if [ -n "$wipe_tmp" ]; then rm -rf "$wipe_tmp"; fi
 }
 
 # ---------------------------------------------------------------------
@@ -1283,6 +1360,7 @@ main() {
             --update) FLAG_UPDATE=1 ;;
             --yes|-y) FLAG_YES=1 ;;
             --no-init) FLAG_NO_INIT=1 ;;
+            --clean) FLAG_CLEAN=1 ;;
             --dev) FLAG_USE_DEV=1 ;;
             # The "latest main build": same as WAIRED_VERSION=edge, but one
             # switch that works on every OS. main() derives the per-OS opt-in
@@ -1306,6 +1384,12 @@ main() {
         esac
         shift
     done
+
+    # --clean always wipes and installs fresh, so the read-only --check
+    # and the in-place --update contradict it.
+    if [ "$FLAG_CLEAN" = 1 ] && { [ "$FLAG_CHECK" = 1 ] || [ "$FLAG_UPDATE" = 1 ]; }; then
+        common_die "--clean cannot be combined with --check/--update (a clean install always installs fresh)"
+    fi
 
     print_banner
 
@@ -1343,11 +1427,23 @@ main() {
 
     resolve_control_url
 
+    # Clean install: collect consent before elevating (mirrors
+    # uninstall.sh's confirm-then-elevate order), then wipe. This runs
+    # after the edge base-URL rewiring above so an --edge clean install
+    # fetches the matching edge uninstall.sh.
+    confirm_clean_install
+
     common_elevate
 
+    run_clean_wipe
+
+    # Under --clean the dispatch below must take the fresh-install arm:
+    # on a real run the wipe already emptied the installed state, but a
+    # --dry-run host still looks installed and would misleadingly
+    # preview the update path.
     case "$OS_KIND:$OS_FAMILY" in
         linux:debian)
-            if [ "$FLAG_CHECK" = 1 ] || [ "$FLAG_UPDATE" = 1 ] || [ -n "$(linux_apt_detect_installed)" ]; then
+            if [ "$FLAG_CLEAN" != 1 ] && { [ "$FLAG_CHECK" = 1 ] || [ "$FLAG_UPDATE" = 1 ] || [ -n "$(linux_apt_detect_installed)" ]; }; then
                 linux_apt_update
             else
                 linux_apt_install
@@ -1363,7 +1459,7 @@ main() {
             common_die "Arch support is not yet available. Track it via the AUR — coming later."
             ;;
         darwin:*)
-            if [ "$FLAG_CHECK" = 1 ] || [ "$FLAG_UPDATE" = 1 ] || [ -n "$(darwin_detect_installed)" ]; then
+            if [ "$FLAG_CLEAN" != 1 ] && { [ "$FLAG_CHECK" = 1 ] || [ "$FLAG_UPDATE" = 1 ] || [ -n "$(darwin_detect_installed)" ]; }; then
                 darwin_update
             else
                 darwin_install

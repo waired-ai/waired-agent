@@ -42,8 +42,7 @@ Once on edge, `waired update` stays on edge; switch channels with
 ### Uninstall
 
 Removes the binaries, unregisters the service, and (best-effort)
-deregisters the device from your account. Local config/state is kept;
-add `--clean` / `-Clean` for a full wipe.
+deregisters the device from your account. Local config/state is kept.
 
 ```sh
 # Linux / macOS
@@ -53,6 +52,38 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/un
 ```powershell
 # Windows
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
+```
+
+For a **clean (full-wipe) uninstall** — also delete config, keys, state,
+and the bundled Ollama with its models — use `--clean` / `-Clean`
+(destructive; asks to confirm, `--yes` / `-Yes` skips the prompt):
+
+```sh
+# Linux / macOS
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
+```
+
+```powershell
+# Windows — two steps: the piped iex form can't pass -Clean, so save the script first
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 -OutFile $env:TEMP\uninstall.ps1
+& $env:TEMP\uninstall.ps1 -Clean
+```
+
+### Clean install (full wipe, then reinstall)
+
+One command runs the clean uninstall above and then a fresh install. It
+asks to confirm before wiping (`--yes` / `-Yes` skips; Windows shows two
+UAC prompts — one for the wipe, one for the install).
+
+```sh
+# Linux / macOS
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
+```
+
+```powershell
+# Windows (the piped form can't bind -Clean, so use the env var)
+$env:WAIRED_CLEAN = '1'
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 ```
 
 Details and all installer flags: [docs.waired.ai](https://docs.waired.ai/)

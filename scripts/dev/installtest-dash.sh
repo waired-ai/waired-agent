@@ -134,6 +134,39 @@ run_case zero "fresh WAIRED_VERSION=edge" "$FRESH WAIRED_VERSION=edge"   -- --dr
 run_case zero "edge switch stable->edge"  "$UPD IT_STUB_CANDIDATE=$EDGE_VER" -- --dry-run --skip-ollama --no-init --yes --edge
 run_case zero "edge already-latest"       "IT_STUB_INSTALLED=$EDGE_VER IT_STUB_CANDIDATE=$EDGE_VER WAIRED_VERSION=edge" -- --dry-run --skip-ollama
 
+# 4c. Clean install (--clean): consent gate, wipe delegation to the
+#     sibling uninstall.sh (hermetic — install.sh runs from a file here,
+#     so the sibling is always found and its host probes hit the same
+#     stubs), and the forced fresh-install dispatch even when a package
+#     looks installed.
+run_case zero    "clean --yes (fresh)"       "$FRESH"                       -- --dry-run --skip-ollama --no-init --clean --yes
+run_case zero    "clean --yes (installed)"   "$UPD IT_STUB_CANDIDATE=9.9.9" -- --dry-run --skip-ollama --no-init --clean --yes
+run_case zero    "clean WAIRED_CLEAN env"    "$FRESH WAIRED_CLEAN=1"        -- --dry-run --skip-ollama --no-init --yes
+run_case nonzero "clean + --check rejected"  "$FRESH"                       -- --dry-run --clean --yes --check
+run_case nonzero "clean + --update rejected" "$FRESH"                       -- --dry-run --clean --yes --update
+
+# The wipe child must actually run, not just exit 0: the uninstall.sh
+# --clean path always logs the apt-source removal on Linux.
+out="$(env IT_STUB_INSTALLED= sh "$INSTALL_SH" --dry-run --skip-ollama --no-init --clean --yes 2>&1)" || true
+if printf '%s' "$out" | grep -q 'Removing the Waired apt source'; then
+  ok "clean --yes delegates to uninstall.sh (wipe log present)"
+else
+  fail "clean --yes — no uninstall.sh wipe log in output"
+fi
+
+# Consent gate: non-interactive without --yes must die, never wipe. setsid
+# detaches the controlling terminal so install.sh's /dev/tty prompt is
+# unavailable even when this harness runs from a dev terminal.
+if command -v setsid >/dev/null 2>&1; then
+  if setsid sh "$INSTALL_SH" --dry-run --clean </dev/null >/dev/null 2>&1; then
+    fail "clean (no tty, no --yes) — expected nonzero, got 0"
+  else
+    ok "clean (no tty, no --yes) dies before wiping"
+  fi
+else
+  log "setsid unavailable — skipping the no-tty consent-gate case"
+fi
+
 # 5. Bad flag — clean failure, not a set -u error.
 run_case nonzero "unknown flag" "$FRESH" -- --bogus
 
