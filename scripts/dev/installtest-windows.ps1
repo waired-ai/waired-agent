@@ -493,6 +493,19 @@ try {
     $r = Invoke-Argtest @('https://cp.example.test')
     if ($r.Exit -ne 0) { ItOk "bare positional URL rejected (no silent -Control mis-bind)" }
     else { ItBad "bare positional URL accepted (exit $($r.Exit)): $($r.Out.Trim())" }
+    # Clean install (-Clean / --clean / WAIRED_CLEAN) wiring. The ARGTEST
+    # seam returns before Confirm-CleanInstall / Invoke-CleanWipe, so these
+    # assert flag resolution only -- no wipe, no UAC.
+    $r = Invoke-Argtest @('--clean')
+    if ($r.Exit -eq 0 -and $r.Out -match 'Clean=True') { ItOk "--clean resolves to -Clean (install.sh parity)" }
+    else { ItBad "--clean parity broken (exit $($r.Exit)): $($r.Out.Trim())" }
+    $r = Invoke-Argtest @('--clean','--check')
+    if ($r.Exit -ne 0 -and $r.Out -match 'cannot be combined') { ItOk "--clean + --check rejected loudly" }
+    else { ItBad "--clean + --check not rejected (exit $($r.Exit)): $($r.Out.Trim())" }
+    $env:WAIRED_CLEAN = '1'
+    try { $r = Invoke-Argtest @() } finally { Remove-Item Env:WAIRED_CLEAN -ErrorAction SilentlyContinue }
+    if ($r.Exit -eq 0 -and $r.Out -match 'Clean=True') { ItOk "WAIRED_CLEAN env resolves to -Clean (piped iwr|iex form)" }
+    else { ItBad "WAIRED_CLEAN env not resolved (exit $($r.Exit)): $($r.Out.Trim())" }
 
     if ($WithInference) {
         ItStep "running install.ps1 (-Dev -SkipInit -NonInteractive; Ollama enabled for inference)"

@@ -62,12 +62,23 @@
     overrides the default, which preserves the channel the host already tracks
     (edge stays edge, stable stays stable).
 
+.PARAMETER Clean
+    Clean install: run the uninstaller with -Clean first (PERMANENTLY deletes
+    config, keys, state, and Ollama + its models), then install fresh.
+    Destructive -- asks to confirm unless -Yes. Env-var form: WAIRED_CLEAN=1
+    (how the piped `iwr | iex` one-liner opts in, since iex strips switches).
+
 .EXAMPLE
     iwr -useb $BaseUrl/latest/download/install.ps1 | iex
 
 .EXAMPLE
     # Latest main build (edge channel)
     $env:WAIRED_VERSION = 'edge'
+    iwr -useb $BaseUrl/latest/download/install.ps1 | iex
+
+.EXAMPLE
+    # Clean install: full wipe (uninstall.ps1 -Clean), then reinstall fresh
+    $env:WAIRED_CLEAN = '1'
     iwr -useb $BaseUrl/latest/download/install.ps1 | iex
 
 .EXAMPLE
@@ -126,6 +137,14 @@ param(
     [switch]$Check,
     [switch]$Update,
     [switch]$Yes,
+    # Clean install: run uninstall.ps1 -Clean first (full wipe: config, keys,
+    # state, Ollama + models), then install fresh. Confirmed in the
+    # un-elevated parent (Confirm-CleanInstall); -Yes bypasses the prompt.
+    # Equivalent env var: WAIRED_CLEAN=1 (resolved into $Clean below) -- the
+    # only way the piped `iwr | iex` one-liner can opt in, and the mirror of
+    # install.sh's --clean / WAIRED_CLEAN. Deliberately NOT forwarded by
+    # Invoke-SelfElevate: the wipe runs once, in Phase 1.
+    [switch]$Clean,
     # Install the latest main build (same as WAIRED_VERSION=edge) -- rebuilt
     # on every merge to main; NOT a stable release. -Latest is an alias.
     # Resolved into $Version + $env:WAIRED_VERSION below so the edge
@@ -235,6 +254,13 @@ if (-not $OllamaWindowsUrl) {
 # value regardless of which form the operator used. The env block is also
 # inherited by the elevated child, so the resolution holds across phases.
 if ($env:WAIRED_NO_OLLAMA) { $SkipOllama = $true }
+
+# WAIRED_CLEAN is the env-var form of -Clean (mirrors install.sh's --clean /
+# WAIRED_CLEAN). It exists because the piped `iwr | iex` one-liner cannot
+# bind switches. The env block is inherited by the elevated Phase-2 child,
+# but the wipe itself is gated on Phase 1 (no -StagedZipPath), so it never
+# runs twice.
+if ($env:WAIRED_CLEAN) { $Clean = $true }
 
 # WAIRED_NO_CLAUDE_PROXY is the env-var form of -SkipClaudeProxy (mirrors the
 # Linux installer's WAIRED_NO_CLAUDE_PROXY / --skip-proxy). Folded into the
@@ -356,6 +382,7 @@ function Normalize-ExtraArgs {
             'non-interactive'   { $script:NonInteractive = $true }
             'dry-run'           { $script:DryRun = $true }
             'yes'               { $script:Yes = $true }
+            'clean'             { $script:Clean = $true }
             'check'             { $script:Check = $true }
             'update'            { $script:Update = $true }
             # Channel flags set the derived $Version / WAIRED_VERSION directly
@@ -513,7 +540,15 @@ Switches:
                     not touched. Re-running install.ps1 on a host that
                     already has waired offers this automatically.
   -Yes              Assume "yes" to the update prompt (required to update
-                    on a non-interactive / no-TTY host).
+                    on a non-interactive / no-TTY host). Also skips the
+                    -Clean confirmation.
+  -Clean            Clean install: run the uninstaller with -Clean first
+                    (PERMANENTLY deletes config, keys, state, and Ollama +
+                    its models), then install fresh. Destructive -- asks to
+                    confirm unless -Yes. Expect two UAC prompts (wipe +
+                    install). Same as WAIRED_CLEAN=1, which is how the piped
+                    `iwr | iex` one-liner opts in. Cannot be combined with
+                    -Check/-Update.
   -Help             Print this help.
 
 Parameters:
@@ -534,6 +569,9 @@ Environment variables:
                            for the latest main build (same as -Edge). Default: latest.
   WAIRED_NO_TRAY           If set, skip waired-tray.exe.
   WAIRED_NO_OLLAMA         If set, skip the Ollama install (same as -SkipOllama).
+  WAIRED_CLEAN             If set, same as -Clean (full wipe first, then a
+                           fresh install). The env form exists because the
+                           piped `iwr | iex` one-liner cannot bind switches.
   WAIRED_NO_CLAUDE_PROXY   If set, skip configuring Claude Code managed settings (same as -SkipClaudeProxy).
   WAIRED_STATE_DIR         Override on-disk state location. Default: %ProgramData%\waired.
   WAIRED_CONTROL_URL       Control Plane URL used when -Dev / -Control are
@@ -700,6 +738,77 @@ function Invoke-SelfElevate {
         # Common-Die above still cleans up.)
         if ($tempScript) {
             Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# -------------------------------------------------------------------
+# Clean install (-Clean / WAIRED_CLEAN): full wipe, then fresh install
+# -------------------------------------------------------------------
+
+# Confirm the destructive -Clean wipe before anything runs. Mirrors
+# uninstall.ps1's Confirm-Clean (-Yes bypass; a non-interactive session
+# without -Yes aborts so a piped invocation can never silently wipe
+# state) with the clean-INSTALL framing added. Runs in the un-elevated
+# Phase-1 parent so the prompt reaches a real console before any UAC.
+function Confirm-CleanInstall {
+    if ($Yes) { return }
+    $interactive = $false
+    try { $interactive = -not [Console]::IsInputRedirected }
+    catch { $interactive = [Environment]::UserInteractive }
+    if ($interactive) {
+        Common-Warn "-Clean will PERMANENTLY delete Waired config, keys and state,"
+        Common-Warn "and Ollama + its downloaded models, then reinstall Waired fresh."
+        $reply = Read-Host "[waired] Continue? [y/N]"
+        if ($reply -notmatch '^(y|yes)$') { Common-Die "aborted - nothing was removed" }
+        return
+    }
+    Common-Die "-Clean is destructive; re-run with -Yes to confirm on a non-interactive session (save the script to a file so -Clean -Yes bind)"
+}
+
+# Invoke-CleanWipe -- the wipe half of -Clean: delegate to uninstall.ps1
+# (published as a release asset next to install.ps1 on both channels)
+# rather than re-implementing the purge here. Prefers a sibling
+# uninstall.ps1 when install.ps1 runs from a file (a checkout); the piped
+# `iwr | iex` case fetches it from the same mirror/channel the install
+# assets come from. uninstall.ps1 self-elevates for its privileged steps
+# and runs its per-user teardown un-elevated as the invoking user
+# (waired#754) -- which is exactly why the wipe is a child process here
+# in un-elevated Phase 1, not a step inside our elevated Phase 2. That
+# costs a second UAC prompt (wipe + install), the same two an operator
+# clicking through uninstall.ps1 then install.ps1 by hand would see.
+# Consent was already collected by Confirm-CleanInstall, so the child
+# gets -Yes; under -DryRun it previews its own wipe commands. Any
+# failure aborts before install work starts.
+function Invoke-CleanWipe {
+    $wipeScript = $null
+    $fetched    = $null
+    if ($PSCommandPath) {
+        $sibling = Join-Path (Split-Path -Parent $PSCommandPath) 'uninstall.ps1'
+        if (Test-Path -LiteralPath $sibling) { $wipeScript = $sibling }
+    }
+    if (-not $wipeScript) {
+        $url = "$(Resolve-ReleaseBase)/uninstall.ps1"
+        $fetched = Join-Path $env:TEMP "waired-clean-uninstall-$([Guid]::NewGuid().ToString('N')).ps1"
+        Common-Log "Fetching the uninstaller from $url"
+        Invoke-WebRequest -Uri $url -OutFile $fetched -UseBasicParsing
+        $wipeScript = $fetched
+    }
+    Common-Log "Clean install: wiping the existing Waired install first"
+    if (-not $DryRun) {
+        Common-Log "(expect two UAC prompts total: one for the wipe, one for the install)"
+    }
+    $wipeArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wipeScript, '-Clean', '-Yes')
+    if ($DryRun) { $wipeArgs += '-DryRun' }
+    try {
+        $proc = Start-Process -FilePath 'powershell.exe' `
+            -ArgumentList $wipeArgs -NoNewWindow -PassThru -Wait
+        if ($proc.ExitCode -ne 0) {
+            Common-Die "clean uninstall exited code $($proc.ExitCode) -- aborting the install (nothing was installed)"
+        }
+    } finally {
+        if ($fetched) {
+            Remove-Item -LiteralPath $fetched -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -1436,6 +1545,12 @@ if ($Help) {
     return
 }
 
+# -Clean always wipes and installs fresh, so the read-only -Check and the
+# in-place -Update contradict it (mirror of install.sh's --clean guard).
+if ($Clean -and ($Check -or $Update)) {
+    Common-Die "-Clean cannot be combined with -Check/-Update (a clean install always installs fresh)"
+}
+
 # Banner-only self-test seam for the CI banner-render guard
 # (scripts/dev/installtest-banner-render.ps1, #571). WAIRED_BANNER_SELFTEST is
 # never set on a user host, so this is inert in production: it renders the same
@@ -1453,9 +1568,9 @@ Resolve-ControlUrl
 # dies) without doing privileged work. Kept pure-ASCII (wire-safe under iwr|iex,
 # scripts/install/encoding_test.go).
 if ($env:WAIRED_ARGTEST) {
-    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11}" -f `
+    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11} Clean={12}" -f `
         [bool]$Dev, $Control, $ControlUrl, $Version, [bool]$SkipOllama, [bool]$SkipInit, `
-        [bool]$SkipClaudeProxy, [bool]$NonInteractive, [bool]$DryRun, [bool]$Update, [bool]$Check, [bool]$Yes)
+        [bool]$SkipClaudeProxy, [bool]$NonInteractive, [bool]$DryRun, [bool]$Update, [bool]$Check, [bool]$Yes, [bool]$Clean)
     return
 }
 
@@ -1465,13 +1580,25 @@ Detect-Platform
 # child, which would otherwise print it a second time).
 if (-not $StagedZipPath) { Show-Banner }
 
+# Clean install: collect consent, then wipe via uninstall.ps1. Phase 1
+# only -- the elevated Phase-2 child inherits WAIRED_CLEAN in its env
+# block, but $StagedZipPath being set keeps it out of this branch, so
+# the wipe can never run twice. Runs before Get-InstalledVersion so the
+# freshly wiped host takes the fresh-install path below.
+if ($Clean -and -not $StagedZipPath) {
+    Confirm-CleanInstall
+    Invoke-CleanWipe
+}
+
 # -Check / -Update, or a bare re-run that detects an existing install,
 # routes through the update flow instead of a fresh install (mirror of
 # install.sh main()'s dispatch). The elevated child carries -Update, so
 # $StagedZipPath being set means "already in Phase 2" -- exclude it from
 # the bare-re-run auto-detect so the child doesn't re-enter Phase 1.
+# -Clean is excluded too: under -DryRun the (not actually wiped) host
+# would still look installed and misleadingly preview the update path.
 $installedVersion = Get-InstalledVersion
-$updateRequested  = $Check -or $Update -or ($installedVersion -and -not $StagedZipPath)
+$updateRequested  = $Check -or $Update -or ($installedVersion -and -not $StagedZipPath -and -not $Clean)
 
 # Channel preservation (Phase 1 only; the elevated Phase 2 just swaps the
 # already-staged zip). When an update names no channel and none is pinned,
