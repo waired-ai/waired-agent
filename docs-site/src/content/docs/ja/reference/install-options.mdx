@@ -1,0 +1,91 @@
+---
+title: 高度なインストールオプション
+description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+通常のインストールに必要なのは[インストール](/ja/getting-started/install/)ページの
+ワンライナーだけです。このページでは、デフォルト以外の構成 — セルフホスト／
+ステージングのコントロールプレーン、バージョン固定、Waired 自体の開発 — 向けの
+追加のインストーラーオプションを説明します。
+
+<Aside type="caution">
+	管理者や開発ワークフローからこのページを案内されたのでなければ、まず通常の
+	[インストール](/ja/getting-started/install/)手順をご覧ください。
+</Aside>
+
+## 特定のコントロールプレーンを指定する
+
+デフォルトでは、クライアントは本番のコントロールプレーンに対して登録します。別の
+コントロールプレーンを指定するには、インストール時にその URL を渡します:
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sudo bash -s -- --control https://your-control-plane.example.com
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		# フラグを渡すにはスクリプトをファイルに保存する必要があります（パイプ形式ではパラメーターを渡せません）:
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
+		& $env:TEMP\install.ps1 -Control 'https://your-control-plane.example.com'
+		```
+	</TabItem>
+</Tabs>
+
+コントロールプレーンは後から `waired init --control <URL>` で設定することもできます。
+組織向けのインストーラーラッパーでは、環境変数 `WAIRED_CONTROL_URL` が
+`--control` / `-Control` フラグ未指定時の低優先度フォールバックとして使われます。
+
+## 特定のバージョンに固定する
+
+`WAIRED_VERSION` を指定すると、最新の stable ではなく特定のリリースに固定して
+インストールできます（`edge` も指定可能 —
+[edge チャンネル](/ja/getting-started/install/#edge)を参照）:
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | WAIRED_VERSION=1.2.3 sh
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_VERSION = 'v1.2.3'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+	</TabItem>
+</Tabs>
+
+## 開発用プリセット（`--dev` / `-Dev`）
+
+Waired 自体の開発・ドッグフーディング専用です。`--dev`（Linux / macOS）または
+`-Dev`（Windows）は、組み込みの開発用コントロールプレーンに向けたインストールを
+事前構成し、インストール後の `waired init` が追加フラグなしでそこへ登録するように
+します。`--control` / `-Control` が併せて指定された場合はそちらが優先されます。
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dev
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
+		& $env:TEMP\install.ps1 -Dev
+		```
+	</TabItem>
+</Tabs>
+
+## その他のオプション
+
+インストーラーにはこのページで扱っていないフラグもあります（dry run、`waired init`
+のスキップ、ミラーの上書きなど）。完全かつ正式な一覧は、スクリプトを `--help` /
+`-Help` 付きで実行するか、リポジトリの
+[`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)
+を参照してください。

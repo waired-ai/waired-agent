@@ -97,27 +97,12 @@ engine with either a flag or an environment variable:
 	</TabItem>
 </Tabs>
 
-### Point at a specific control plane
+### Non-default setups
 
-By default the client enrolls against the production control plane. To target a
-different one, pass its URL at install time (this also bundles Ollama on Windows):
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | sudo bash -s -- --control https://your-control-plane.example.com
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
-		& $env:TEMP\install.ps1 -Control 'https://your-control-plane.example.com'
-		```
-	</TabItem>
-</Tabs>
-
-You can also set the control plane later with `waired init --control <URL>`.
+Pointing the install at a specific (e.g. self-hosted or staging) control plane,
+pinning an exact version, and the other installer flags are covered in
+[Advanced install options](/reference/install-options/) — a normal install
+doesn't need any of them.
 
 ## Update
 

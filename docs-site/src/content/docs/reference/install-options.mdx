@@ -1,0 +1,93 @@
+---
+title: Advanced install options
+description: Installer flags for non-default control planes, version pinning, and development builds. Not needed for a normal install.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+The one-liners on the [Install](/getting-started/install/) page are all a
+normal install needs. This page covers the extra installer knobs for
+non-default setups — self-hosted or staging control planes, pinned versions,
+and Waired development itself.
+
+<Aside type="caution">
+	If you weren't pointed here by your administrator or by a development
+	workflow, you almost certainly want the plain
+	[Install](/getting-started/install/) instructions instead.
+</Aside>
+
+## Point at a specific control plane
+
+By default the client enrolls against the production control plane. To target a
+different one, pass its URL at install time:
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sudo bash -s -- --control https://your-control-plane.example.com
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		# Flags need the script on disk (the piped form can't pass parameters):
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
+		& $env:TEMP\install.ps1 -Control 'https://your-control-plane.example.com'
+		```
+	</TabItem>
+</Tabs>
+
+You can also set the control plane later with `waired init --control <URL>`.
+For per-org installer wrappers, the `WAIRED_CONTROL_URL` environment variable
+is a lower-priority fallback used when no `--control` / `-Control` flag is
+given.
+
+## Pin a specific version
+
+`WAIRED_VERSION` pins the installer to an exact release instead of the latest
+stable (`edge` is also accepted — see
+[Edge channel](/getting-started/install/#edge-channel-latest-unstable)):
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | WAIRED_VERSION=1.2.3 sh
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_VERSION = 'v1.2.3'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+	</TabItem>
+</Tabs>
+
+## Development preset (`--dev` / `-Dev`)
+
+For Waired development and dogfooding only: `--dev` (Linux / macOS) or `-Dev`
+(Windows) pre-configures the install for the built-in development control
+plane, so the post-install `waired init` enrolls there without further flags.
+`--control` / `-Control` takes precedence when both are given.
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --dev
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
+		& $env:TEMP\install.ps1 -Dev
+		```
+	</TabItem>
+</Tabs>
+
+## Everything else
+
+The installers take more flags than this page covers (dry runs, skipping
+`waired init`, mirror overrides, …). For the full, authoritative list, run the
+script with `--help` / `-Help`, or see
+[`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)
+in the repository.

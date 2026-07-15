@@ -51,6 +51,7 @@ export default defineConfig({
 					items: [
 						{ label: 'CLI commands', slug: 'reference/cli' },
 						{ label: 'Model catalog & specs', slug: 'reference/model-catalog' },
+						{ label: 'Advanced install options', slug: 'reference/install-options' },
 					],
 				},
 				{
