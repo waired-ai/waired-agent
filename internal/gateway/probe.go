@@ -49,6 +49,28 @@ const (
 	// this exact value as "surface, don't fall back" (the literal is
 	// duplicated there, stdlib-only package — keep them in sync).
 	LocalErrorContextOverflow = "context_overflow"
+	// LocalErrorPeerTTFBTimeout is the HeaderLocalError value staged when a
+	// peer inference leg produced no response headers within the class's
+	// TTFB budget (#757). Unlike LocalErrorContextOverflow it IS a normal
+	// fallback reason — the abort is pre-commit, so the intercept's auto
+	// mode reroutes the turn. The literal is duplicated in
+	// internal/proxy/intercept (stdlib-only package) — keep them in sync.
+	LocalErrorPeerTTFBTimeout = "peer_ttfb_timeout"
+
+	// HeaderTTFBBudgetMs is a response header staged alongside
+	// LocalErrorPeerTTFBTimeout carrying the budget (milliseconds) that
+	// elapsed, so the intercept can name it in the user-facing reroute
+	// notice (#757). Duplicated in internal/proxy/intercept — keep in sync.
+	HeaderTTFBBudgetMs = "X-Waired-TTFB-Budget-Ms"
+
+	// HeaderFallbackAllowed is a REQUEST header the Claude intercept sets
+	// on its auto-dispatch leg to authorize the gateway's pre-commit TTFB
+	// abort (#757). It is absent on waired/anthropic (pinned) legs, so a
+	// stalled peer under a pinned route is never aborted into a surfaced
+	// 502 — the operator's routing lock stands. Value "1" = armed. The
+	// literal is duplicated in internal/proxy/intercept (stdlib-only
+	// package) — keep them in sync.
+	HeaderFallbackAllowed = "X-Waired-Fallback-Allowed"
 )
 
 // probedSelection bundles a committed Selection with the Phase 8

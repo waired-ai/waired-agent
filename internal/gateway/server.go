@@ -141,6 +141,22 @@ type Deps struct {
 	// Claude-intercept HandlerSet, alongside ResolveUnknownModel; nil on
 	// every other listener disables the behaviour.
 	ContextWindowFor func(modelID string) int
+
+	// TTFBBudget, when non-nil, returns the pre-commit time-to-first-byte
+	// deadline for a PEER inference leg of the given traffic class
+	// ("main" / "sub", "" when unclassified). If the selected peer returns
+	// no response headers within the budget, the leg is aborted BEFORE the
+	// response commits, so the intercept's auto-mode fallback (#645/#757)
+	// reroutes the turn instead of hanging on a stalled-but-reachable peer.
+	// A 0 return disables the deadline for that class. The deadline is a
+	// generous infinite-hang backstop, NOT a snappy reroute threshold:
+	// /healthz readiness does not imply the model is loaded, so a cold
+	// model load legitimately lands inside this window. Armed only for
+	// peer legs (remote:*) AND only when the intercept authorizes it with
+	// the X-Waired-Fallback-Allowed request header (auto mode) — a pinned
+	// local/waired-only leg is never aborted. Wired only on the
+	// Claude-intercept HandlerSet; nil on every other listener.
+	TTFBBudget func(class string) time.Duration
 }
 
 // ServerConfig controls listener behaviour.

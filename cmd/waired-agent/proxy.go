@@ -126,7 +126,9 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 			cr.RecordNodeFallback(class, "", reason)
 		}
 	}
-	srv, err := intercept.NewServer(intercept.Config{Addr: addr}, deps)
+	// #757: annotate an auto-mode reroute in-conversation so the user can tell
+	// a turn/subagent left the mesh (a subagent-side record alone is invisible).
+	srv, err := intercept.NewServer(intercept.Config{Addr: addr, AnnotateReroute: true}, deps)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claude proxy: new server: %w", err)
 	}

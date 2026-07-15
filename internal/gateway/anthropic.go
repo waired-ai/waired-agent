@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/router"
@@ -182,7 +184,8 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	rr.succeed()
 	client := h.clientFor(adapter)
 	if req.Stream {
-		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w)
+		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w,
+			ttfbBudgetFor(h.deps, sel, r, class))
 		return
 	}
 	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w)
@@ -240,13 +243,80 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 	writeJSON(w, http.StatusOK, out)
 }
 
+// ttfbBudgetFor returns the pre-commit time-to-first-byte deadline to arm for
+// this streaming leg, or 0 to disable it (#757). It is armed only for a PEER
+// leg (remote:*) that the intercept authorized for fallback via the
+// X-Waired-Fallback-Allowed request header (auto mode) — so a locally-served
+// turn, or a peer leg under a pinned/waired-only route, is never aborted.
+func ttfbBudgetFor(deps Deps, sel router.Selection, r *http.Request, class string) time.Duration {
+	if deps.TTFBBudget == nil ||
+		!strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) ||
+		r.Header.Get(HeaderFallbackAllowed) != "1" {
+		return 0
+	}
+	return deps.TTFBBudget(class)
+}
+
 // proxyAnthropicStream reads the engine's OpenAI SSE stream and
 // rewrites it into Anthropic's event-typed SSE shape. Tool-call
 // streaming is best-effort: deltas are buffered until finish_reason
 // fires, then emitted as a single tool_use content_block (a known
 // Phase A gap; spec gap recorded in docs/knowledges/20260502.md).
-func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter) {
-	resp, err := h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
+func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, ttfb time.Duration) {
+	// #757: bound only the PRE-first-byte window. reqCtx governs the peer
+	// request; a time.AfterFunc cancels it if the engine returns no headers
+	// within ttfb, so postToEngine errors BEFORE the stream commits and the
+	// intercept's auto fallback reroutes. The timer is disarmed the instant
+	// postToEngine returns (headers received), so a slow-but-progressing
+	// completion is never cut mid-stream (mid-stream cancellation is #651).
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		ttfbMu       sync.Mutex
+		ttfbFired    bool
+		ttfbDisarmed bool
+		ttfbTimer    *time.Timer
+	)
+	if ttfb > 0 {
+		ttfbTimer = time.AfterFunc(ttfb, func() {
+			ttfbMu.Lock()
+			defer ttfbMu.Unlock()
+			if ttfbDisarmed {
+				return
+			}
+			ttfbFired = true
+			cancel()
+		})
+	}
+
+	resp, err := h.postToEngine(reqCtx, client, baseURL, "/v1/chat/completions", body)
+	var firedBeforeHeaders bool
+	if ttfbTimer != nil {
+		ttfbMu.Lock()
+		ttfbDisarmed = true
+		firedBeforeHeaders = ttfbFired
+		ttfbMu.Unlock()
+		ttfbTimer.Stop()
+	}
+	if firedBeforeHeaders {
+		// The deadline fired (postToEngine may even have returned a late
+		// success whose reqCtx we just cancelled). We are still pre-commit,
+		// so stage the reason + budget, log, and 502 so the intercept's
+		// auto mode falls back instead of streaming a dead body.
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		w.Header().Set(HeaderLocalError, LocalErrorPeerTTFBTimeout)
+		w.Header().Set(HeaderTTFBBudgetMs, fmt.Sprintf("%d", ttfb.Milliseconds()))
+		slog.Warn("gateway: peer produced no first byte within TTFB budget; failing pre-commit for fallback",
+			"peer", w.Header().Get(HeaderInferencePeer),
+			"model", originalModel,
+			"budget_ms", ttfb.Milliseconds(),
+		)
+		writeAnthropicError(w, http.StatusBadGateway, "upstream_error",
+			fmt.Sprintf("peer produced no response within %s", ttfb))
+		return
+	}
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
