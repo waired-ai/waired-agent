@@ -21,10 +21,42 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 ```
 
-Edge channel (latest `main` build): pass `--edge` / `-Edge` or set
-`WAIRED_VERSION=edge`. Uninstall: same URLs with `uninstall.sh` /
-`uninstall.ps1`. Details: [docs.waired.ai](https://docs.waired.ai/) and
-`packaging/install/README.md`.
+### Edge channel (latest `main` build, unstable)
+
+Rebuilt on every merge to `main` — not for production use.
+
+```sh
+# Linux / macOS
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --edge
+```
+
+```powershell
+# Windows
+$env:WAIRED_VERSION = 'edge'
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+```
+
+Once on edge, `waired update` stays on edge; switch channels with
+`waired update --edge` / `--stable`.
+
+### Uninstall
+
+Removes the binaries, unregisters the service, and (best-effort)
+deregisters the device from your account. Local config/state is kept;
+add `--clean` / `-Clean` for a full wipe.
+
+```sh
+# Linux / macOS
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
+```
+
+```powershell
+# Windows
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
+```
+
+Details and all installer flags: [docs.waired.ai](https://docs.waired.ai/)
+and `packaging/install/README.md`.
 
 ## Layout
 

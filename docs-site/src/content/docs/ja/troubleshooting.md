@@ -156,14 +156,15 @@ gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
 
 ### Windows: `waired infer` が 502 を返す（Ollama がインストールされていない）
 
-素の Windows ワンライナーは Ollama をバンドルしていません。別途インストールして
+現在のインストーラーはデフォルトで Ollama を同梱しますが、`-SkipOllama` /
+`WAIRED_NO_OLLAMA=1` でインストールしたホスト（または旧インストーラーで
+インストールしたホスト）にはエンジンがありません。昇格プロンプトで
+`waired runtimes install ollama` を実行して追加するか、直接インストールして
 ください:
 
 ```powershell
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/ollama-windows.ps1 | iex
 ```
-
-（`install.ps1` に `-Control`/`-Dev` を渡すと、Ollama も併せてインストールされます。）
 
 ### ピアに到達できない
 

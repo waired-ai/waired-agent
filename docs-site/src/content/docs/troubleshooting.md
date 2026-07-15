@@ -154,13 +154,14 @@ at all — use GNOME (with the extension) or KDE to see it.
 
 ### Windows: `waired infer` returns 502 (Ollama not installed)
 
-The bare Windows one-liner doesn't bundle Ollama. Install it separately:
+The current installer bundles Ollama by default, but a host installed with
+`-SkipOllama` / `WAIRED_NO_OLLAMA=1` (or by an older installer) won't have the
+engine. Add it from an elevated prompt with `waired runtimes install ollama`,
+or install it directly:
 
 ```powershell
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/ollama-windows.ps1 | iex
 ```
-
-(Passing `-Control`/`-Dev` to `install.ps1` installs Ollama for you.)
 
 ### A peer isn't reachable
 
