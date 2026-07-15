@@ -63,6 +63,7 @@ ALLOW=(
   internal/management            # mgmt server (event-ring endpoint); own tests + smoke-control
   internal/management/observabilityclient
   internal/observability         # event-ring types; own tests
+  internal/platform/elevation    # elevation predicate + per-OS elevation-hint wording (dep of internal/runtime since waired#752); no routing surface
   internal/platform/keychain
   internal/platform/paths
   internal/platform/secrets
