@@ -260,9 +260,27 @@ func (s *Service) observeOne(ctx context.Context, host string, port int) (netip.
 		s.stunAttemptsV4.Add(1)
 	}
 	if err := s.cfg.Bind.SendDisco(out, dst); err != nil {
-		s.logger.Warn("disco observer: send stun_request", "dst", dst, "err", err)
+		// Warn once per dst, then suppress. On a host with no usable IPv6
+		// route every udp6 send fails and the loop stays pinned to the 10s
+		// learning cadence, so an un-deduped Warn floods the log ~2×/10s
+		// (two DiscoUDPPorts) forever (waired#758). Keep the first-occurrence
+		// signal, demote repeats to Debug, and reset on recovery below.
+		s.mu.Lock()
+		firstFailure := !s.sendFailWarned[dst]
+		s.sendFailWarned[dst] = true
+		s.mu.Unlock()
+		if firstFailure {
+			s.logger.Warn("disco observer: send stun_request", "dst", dst, "err", err)
+		} else {
+			s.logger.Debug("disco observer: send stun_request (suppressed repeat)", "dst", dst, "err", err)
+		}
 		return netip.AddrPort{}, false
 	}
+	// Send succeeded: clear any prior failure streak for this dst so a
+	// later regression re-warns once (waired#758).
+	s.mu.Lock()
+	delete(s.sendFailWarned, dst)
+	s.mu.Unlock()
 
 	select {
 	case <-ctx.Done():
