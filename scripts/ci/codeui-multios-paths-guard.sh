@@ -54,6 +54,7 @@ ALLOW=(
   internal/runtime               # watched via spawner_{unix,windows}.go only
   internal/download              # HTTP/progress download utils (dep of internal/runtime since #615); OS-split ollama paths but no codeui surface
   internal/integration           # plugin parent; no OS-specific surface here
+  internal/platform/elevation    # elevation predicate + per-OS elevation-hint wording (dep of internal/runtime since waired#752); OS-split but no codeui surface
   internal/platform/keychain
   internal/platform/paths        # per-user state-dir resolution; OS-split but no codeui surface
   internal/platform/secrets
