@@ -368,7 +368,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		systray.AddSeparator()
 		t.miClaudeHeader = systray.AddMenuItem("", "")
 		t.miClaudeHeader.Disable()
-		t.miClaudeProxy = systray.AddMenuItem("", "Claude Code managed-settings status (sudo waired claude enable / disable / status)")
+		t.miClaudeProxy = systray.AddMenuItem("", "Claude Code managed-settings status (waired claude enable / disable / status)")
 		t.miClaudeProxy.Disable()
 		// "Claude Code" per-class routing submenu (#649/#650): a route
 		// selector for the main conversation and (independently) subagents.

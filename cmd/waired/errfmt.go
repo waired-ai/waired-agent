@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io/fs"
 	"runtime"
+
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 )
 
 // errAgentDown is the sentinel callers test with errors.Is to detect
@@ -49,18 +51,12 @@ func elevationHint(cmdline string) string {
 	return elevationHintFor(runtime.GOOS, cmdline)
 }
 
-// elevationHintFor is the testable core of elevationHint.
+// elevationHintFor is the testable core of elevationHint. The wording
+// lives in internal/platform/elevation so the daemon binary and engine
+// runtime (which cannot import this package main) share it verbatim
+// (waired#752).
 func elevationHintFor(goos, cmdline string) string {
-	if goos == "windows" {
-		if cmdline == "" {
-			return "re-run from an elevated (Administrator) prompt"
-		}
-		return fmt.Sprintf("re-run `%s` from an elevated (Administrator) prompt", cmdline)
-	}
-	if cmdline == "" {
-		return "re-run with sudo"
-	}
-	return fmt.Sprintf("run `sudo %s`", cmdline)
+	return elevation.HintFor(goos, cmdline)
 }
 
 // elevatedCmdline renders a command the way the operator must invoke it to

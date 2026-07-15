@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -50,20 +51,25 @@ type linkOpts struct {
 	force          bool
 }
 
-const linkLong = `Set up the per-user coding-agent integration: the Claude Code skills
+// linkLongText builds the `waired link` help blurb with a platform-correct
+// elevated-command spelling — a bare `sudo …` was wrong on Windows
+// (waired#752).
+func linkLongText() string {
+	return fmt.Sprintf(`Set up the per-user coding-agent integration: the Claude Code skills
 (~/.claude/skills/) and the OpenCode plugin (~/.config/opencode/plugin/
 waired.js). Pass an agent name to target one; --force applies even when the
 agent is not installed yet.
 
 Claude REQUEST ROUTING is handled separately by Claude Code managed settings
-('waired init', or 'sudo waired claude enable'), NOT by link.`
+('waired init', or '%s'), NOT by link.`, elevatedCmdline(runtime.GOOS, "waired claude enable"))
+}
 
 func newLinkCmd() *cobra.Command {
 	o := &linkOpts{gatewayBaseURL: defaultGatewayURL}
 	cmd := &cobra.Command{
 		Use:   "link [agent]",
 		Short: "Set up the per-user coding-agent integration (Claude Code skills, OpenCode/OpenClaw plugins).",
-		Long:  linkLong,
+		Long:  linkLongText(),
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLinkWith(o, false, args)

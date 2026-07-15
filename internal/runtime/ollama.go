@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 )
 
 // OllamaConfig wires an OllamaAdapter. All time-related fields fall
@@ -400,8 +402,8 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 				"ollama: port %d is already in use by another ollama (version %s, expected %s); "+
 					"refusing to adopt it. Stop that process or change inference.ollama_port in "+
 					"agent.json; if you meant to use your own ollama, set ollama_source to "+
-					"\"reuse\" (or re-run `sudo waired init`)",
-				a.cfg.Port, ver, a.cfg.ExpectedVersion)
+					"\"reuse\" (or %s)",
+				a.cfg.Port, ver, a.cfg.ExpectedVersion, elevation.Hint("waired init"))
 			a.setState(Health{State: StateFailed, LastErr: msg})
 			return errors.New(msg)
 		}

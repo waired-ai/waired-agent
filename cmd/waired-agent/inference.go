@@ -27,6 +27,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/observability"
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -1432,8 +1433,8 @@ func ollamaVersionWarning(borrowed bool, live string) string {
 		return ""
 	}
 	if live != infruntime.OllamaPinnedVersion {
-		return fmt.Sprintf("engine version %s does not match the bundled pin %s — restart waired-agent or re-run `sudo waired runtimes install ollama`",
-			live, infruntime.OllamaPinnedVersion)
+		return fmt.Sprintf("engine version %s does not match the bundled pin %s — restart waired-agent or %s",
+			live, infruntime.OllamaPinnedVersion, elevation.Hint("waired runtimes install ollama"))
 	}
 	return ""
 }
