@@ -568,6 +568,21 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// unknown-model resolver (#601).
 	claudeDeps.ContextWindowFor = provider.ContextWindowFor
 	claudeDeps.ClassifyModel = classifyClaudeModel
+	// #757: bound the pre-first-byte window on a PEER leg per traffic class so a
+	// stalled-but-reachable serving peer reroutes (auto mode only — see the
+	// intercept's X-Waired-Fallback-Allowed gate) instead of hanging the turn.
+	// Subagents get the tighter budget; 0 disables. The gateway arms this only
+	// for remote:* selections, so a locally-served turn is never affected.
+	claudeDeps.TTFBBudget = func(class string) time.Duration {
+		ms := cfg.ClaudeTTFBBudgetMainMs
+		if class == state.ClaudeClassSub {
+			ms = cfg.ClaudeTTFBBudgetSubMs
+		}
+		if ms <= 0 {
+			return 0
+		}
+		return time.Duration(ms) * time.Millisecond
+	}
 	claudeDeps.ResolveUnknownModel = func(_, _ string) (string, bool) {
 		// When the worker preference pins a mesh peer and it can serve,
 		// resolve an unresolvable Anthropic id to that peer's model so the

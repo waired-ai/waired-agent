@@ -114,6 +114,25 @@ const localErrContextOverflow = "context_overflow"
 // keep both sides in sync.
 const inferencePeerHeader = "X-Waired-Inference-Peer"
 
+// fallbackAllowedHeader mirrors gateway.HeaderFallbackAllowed. The intercept
+// sets it as a REQUEST header on its auto-dispatch leg only, authorizing the
+// gateway's pre-commit TTFB abort (#757). It is absent on waired/anthropic
+// (pinned) legs, so a stalled peer under a pinned route is never aborted into
+// a surfaced 502 — the operator's routing lock stands. The literal is
+// duplicated here to keep this fail-open package stdlib-only — keep in sync.
+const fallbackAllowedHeader = "X-Waired-Fallback-Allowed"
+
+// ttfbBudgetHeader mirrors gateway.HeaderTTFBBudgetMs: the budget (ms) the
+// gateway stages alongside localErrPeerTTFBTimeout so the reroute notice can
+// name it (#757). Duplicated here (stdlib-only) — keep in sync.
+const ttfbBudgetHeader = "X-Waired-TTFB-Budget-Ms"
+
+// localErrPeerTTFBTimeout mirrors gateway.LocalErrorPeerTTFBTimeout: the
+// localErrorHeader value the gateway stages when a peer leg produced no first
+// byte within its TTFB budget (#757). It IS a normal fallback reason (the
+// abort is pre-commit). Duplicated here (stdlib-only) — keep in sync.
+const localErrPeerTTFBTimeout = "peer_ttfb_timeout"
+
 // Config controls the listener and passthrough behaviour.
 type Config struct {
 	// Addr is the listen address. Production uses
@@ -135,6 +154,15 @@ type Config struct {
 	// model / built-in default (#646). No agentconfig plumbing yet — a
 	// knob for tests and future config.
 	PassthroughModelOverride string
+
+	// AnnotateReroute, when true, splices a short human-readable notice into
+	// the fallen-back (Anthropic) response stream on an auto-mode reroute
+	// (#757) so the user can tell in-conversation that waired rerouted the
+	// turn — a subagent-side record alone is invisible to the user. It is
+	// fail-open (see reroute_notice.go) and never fires for a structured
+	// (tool_use) or non-stream response. Zero value off so tests opt in;
+	// production wiring (buildClaudeListener) sets it true.
+	AnnotateReroute bool
 }
 
 // Deps bundles the collaborators. Caller (cmd/waired-agent) wires the real
@@ -350,7 +378,7 @@ func (s *Server) dispatchRoute(w http.ResponseWriter, r *http.Request, route, cl
 			s.passthroughMessages(w, r)
 			return
 		}
-		s.dispatchAuto(s.observeLocalModel(w), r)
+		s.dispatchAuto(s.observeLocalModel(w), r, class)
 	}
 }
 
@@ -481,6 +509,11 @@ func (s *Server) localRequest(r *http.Request) *http.Request {
 	r2 := r.Clone(r.Context())
 	r2.URL.Path = "/anthropic" + r.URL.Path
 	r2.RequestURI = "" // unused when dispatching to a handler directly; keep it clean
+	// #757 anti-spoof: strip any client-supplied fallback-allowed header on
+	// EVERY local leg. Only dispatchAuto re-adds it after this call, so a
+	// pinned (waired) leg can never carry it — Claude Code cannot force the
+	// gateway's TTFB abort on a route the operator locked to local.
+	r2.Header.Del(fallbackAllowedHeader)
 	return r2
 }
 
@@ -549,7 +582,7 @@ func (o *localModelObserver) observe(status int) {
 // real Anthropic API so the turn keeps working. The privacy opt-out that used
 // to gate this is now the "waired" route (dispatchLocal), which never reaches
 // here.
-func (s *Server) dispatchAuto(w http.ResponseWriter, r *http.Request) {
+func (s *Server) dispatchAuto(w http.ResponseWriter, r *http.Request, class string) {
 	body, buffered := readCappedBody(r, maxFallbackBodyBytes)
 	if !buffered {
 		// Unreadable or over the cap: r.Body has been restored to the full
@@ -566,6 +599,10 @@ func (s *Server) dispatchAuto(w http.ResponseWriter, r *http.Request) {
 
 	rec := newFallbackRecorder(w)
 	local := s.localRequest(r)
+	// #757: this is the ONLY leg that authorizes the gateway's pre-commit
+	// TTFB abort — auto mode has a real fallback (below). localRequest just
+	// stripped any spoofed copy, so setting it here is the sole source.
+	local.Header.Set(fallbackAllowedHeader, "1")
 	local.Body = io.NopCloser(bytes.NewReader(body))
 	local.ContentLength = int64(len(body))
 	s.deps.LocalInference.ServeHTTP(rec, local)
@@ -586,14 +623,19 @@ func (s *Server) dispatchAuto(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reason := fmt.Sprintf("local_status_%d", rec.status)
-	if v := rec.Header().Get(localErrorHeader); v != "" {
-		// rec is uncommitted here, so Header() is the staged map — the
-		// marker is read for the reason and then discarded with the rest
+	// #757: rec is uncommitted here, so Header() is the staged map — capture
+	// the serving peer + TTFB budget for the reroute notice before they are
+	// discarded with the rest of the staged error on fallback.
+	localErr := rec.Header().Get(localErrorHeader)
+	peer := rec.Header().Get(inferencePeerHeader)
+	budgetMs := rec.Header().Get(ttfbBudgetHeader)
+	if localErr != "" {
+		// the marker is read for the reason and then discarded with the rest
 		// of the staged error on fallback; it never reaches the client.
-		reason = "local_" + v
+		reason = "local_" + localErr
 	}
 	s.log.Warn("intercept: local inference errored before first byte; falling back to upstream",
-		"path", r.URL.Path, "status", rec.status)
+		"path", r.URL.Path, "status", rec.status, "reason", reason)
 	if s.deps.OnFallback != nil {
 		s.deps.OnFallback(reason)
 	}
@@ -608,6 +650,13 @@ func (s *Server) dispatchAuto(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
 	w.Header().Set(fallbackHeader, "anthropic; reason="+reason)
+	// #757: surface the reroute in-conversation (not just status/tray/log) so
+	// the user can tell a turn/subagent left the mesh. Fail-open + tool_use-safe
+	// (reroute_notice.go); the OnFallback record above still fires regardless.
+	if s.cfg.AnnotateReroute {
+		s.passthroughWithNotice(w, r, buildRerouteNotice(class, localErr, peer, budgetMs))
+		return
+	}
 	s.passthrough(w, r)
 }
 

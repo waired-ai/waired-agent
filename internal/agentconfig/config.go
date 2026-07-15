@@ -124,6 +124,20 @@ type InferenceConfig struct {
 	// disables the listener.
 	ClaudeGatewayPort int `json:"claude_gateway_port"`
 
+	// ClaudeTTFBBudgetMainMs / ClaudeTTFBBudgetSubMs bound the pre-first-byte
+	// window (milliseconds) for a MAIN / SUBAGENT Claude request routed to a
+	// mesh PEER (#757). If the peer returns no response headers within the
+	// budget the leg is aborted BEFORE the response commits, so an auto-routed
+	// turn reroutes to the Anthropic API instead of hanging on a
+	// stalled-but-reachable peer; a pinned (route=waired) leg is never
+	// affected. These are generous infinite-hang BACKSTOPS, not snappy reroute
+	// thresholds: /healthz readiness does not imply the model is loaded, so a
+	// cold model load legitimately sits inside this window. Subagents get the
+	// tighter budget (a stalled subagent is cheap to reroute and reads to the
+	// user as a hang). 0 disables the deadline for that class.
+	ClaudeTTFBBudgetMainMs int `json:"claude_ttfb_budget_main_ms"`
+	ClaudeTTFBBudgetSubMs  int `json:"claude_ttfb_budget_sub_ms"`
+
 	// CodeUIEnabled gates the bundled OpenCode coding-agent web UI (#429):
 	// a waired-vendored `opencode serve` instance wired to the no-token
 	// data-plane gateway, opened from the tray. Default true. It starts
@@ -422,6 +436,8 @@ func Defaults() Config {
 			LocalGatewayPort:         9473,
 			OpenCodeGatewayPort:      9479,
 			ClaudeGatewayPort:        9472,
+			ClaudeTTFBBudgetMainMs:   60000,
+			ClaudeTTFBBudgetSubMs:    20000,
 			CodeUIEnabled:            true,
 			OllamaPort:               OllamaPortAuto,
 			OllamaSource:             OllamaSourceBundled,
@@ -627,6 +643,18 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.ClaudeGatewayPort = n
+	case "CLAUDE_TTFB_BUDGET_MAIN_MS":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.ClaudeTTFBBudgetMainMs = n
+	case "CLAUDE_TTFB_BUDGET_SUB_MS":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		c.ClaudeTTFBBudgetSubMs = n
 	case "OLLAMA_PORT":
 		n, err := strconv.Atoi(val)
 		if err != nil {
@@ -755,6 +783,12 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.IntVar(&c.Inference.LocalGatewayPort, "inference-local-gateway-port",
 		c.Inference.LocalGatewayPort,
 		"loopback port for the Local Gateway HTTP server")
+	fs.IntVar(&c.Inference.ClaudeTTFBBudgetMainMs, "inference-claude-ttfb-budget-main-ms",
+		c.Inference.ClaudeTTFBBudgetMainMs,
+		"pre-first-byte deadline (ms) for a MAIN Claude request on a mesh peer before auto-rerouting to Anthropic (0=off)")
+	fs.IntVar(&c.Inference.ClaudeTTFBBudgetSubMs, "inference-claude-ttfb-budget-sub-ms",
+		c.Inference.ClaudeTTFBBudgetSubMs,
+		"pre-first-byte deadline (ms) for a SUBAGENT Claude request on a mesh peer before auto-rerouting to Anthropic (0=off)")
 	fs.IntVar(&c.Inference.OllamaPort, "inference-ollama-port",
 		c.Inference.OllamaPort,
 		"loopback port for the Ollama engine (0 = auto: bundled 9475, reuse 11434)")
