@@ -125,7 +125,8 @@ The architecture matrix is `amd64` and `arm64` on Linux and macOS,
 | `--update`   | Update an existing install in place. Stays on the host's current channel by default (edge stays edge). PowerShell: `-Update`. |
 | `--edge`/`--latest` | Install/switch to the latest main build (edge channel; same as `WAIRED_VERSION=edge`). PowerShell: `-Edge`/`-Latest`. |
 | `--stable`   | Install/switch to the latest stable release. On `--update`/`--check` this overrides channel-preservation. PowerShell: `-Stable`. |
-| `--yes`/`-y` | Assume "yes" to the update prompt (needed on non-TTY hosts). PowerShell: `-Yes`. |
+| `--clean`    | Clean install: run the uninstaller with `--clean` first (full wipe — config, keys, state, the apt source, and Ollama + its models), then install fresh. Destructive; asks to confirm unless `--yes`. Same as `WAIRED_CLEAN=1`. Cannot be combined with `--check`/`--update`. PowerShell: `-Clean` (expect two UAC prompts: wipe + install). |
+| `--yes`/`-y` | Assume "yes" to the update prompt (needed on non-TTY hosts) and to the `--clean` confirmation. PowerShell: `-Yes`. |
 | `-h`/`--help`| Print usage and exit.                                |
 
 ## Environment variables
@@ -138,6 +139,7 @@ Shared between `install.sh` and `install.ps1`:
 | `WAIRED_NO_TRAY`          | If non-empty, skip `waired-tray` (Linux + macOS; Windows uses `-NoTray`). Use on headless servers. |
 | `WAIRED_INSTALL_BASE_URL` | Override the URL hosting `install.sh` / `install.ps1` + the OS binaries (tests / mirrors). |
 | `WAIRED_INSTALL_REPO`     | Override the GitHub repo whose Releases API resolves `latest` during `--check` / `--update` on macOS + Windows (Linux uses the apt candidate). Default `waired-ai/waired-agent`. |
+| `WAIRED_CLEAN`            | If non-empty, same as `--clean` / `-Clean` (full wipe, then a fresh install). The env form is how the piped Windows `iwr \| iex` one-liner opts in — `iex` strips switches. |
 
 macOS-only:
 
@@ -282,6 +284,10 @@ Two tiers, matching apt's `remove` / `purge` split:
   plus repo cleanup. Destructive and irreversible, so it **asks to
   confirm**; pass `--yes` / `-Yes` to skip the prompt (required on a
   non-interactive / piped shell), or `--dry-run` / `-DryRun` to preview.
+
+To wipe **and reinstall** in one step, run the *installer* with
+`--clean` / `-Clean` / `WAIRED_CLEAN=1` instead — it performs the
+`--clean` uninstall above and then a fresh install (see [Options](#options)).
 
 The scripts don't re-implement removal: they prefer the binaries' own
 `waired-agent uninstall` (SCM / launchd / systemd + Event Log) and

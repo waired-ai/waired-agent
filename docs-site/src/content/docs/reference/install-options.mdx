@@ -84,6 +84,15 @@ plane, so the post-install `waired init` enrolls there without further flags.
 	</TabItem>
 </Tabs>
 
+## Clean install (`--clean` / `-Clean` / `WAIRED_CLEAN=1`)
+
+Full wipe first, then a fresh install — the recipe lives on the Install page
+([Clean install](/getting-started/install/#clean-install-full-wipe-then-reinstall)).
+Two details worth knowing here: `WAIRED_CLEAN=1` is the environment-variable
+form (it's how the piped Windows `iwr | iex` one-liner opts in, and works on
+every OS), and `--yes` / `-Yes` skips the confirmation for unattended hosts —
+without it, a non-interactive run refuses to wipe.
+
 ## Everything else
 
 The installers take more flags than this page covers (dry runs, skipping

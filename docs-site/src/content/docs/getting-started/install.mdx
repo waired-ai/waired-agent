@@ -182,6 +182,34 @@ changing anything.
 	is safe to run either way.
 </Aside>
 
+## Clean install (full wipe, then reinstall)
+
+To rebuild a host from scratch in one command, run the *installer* with the
+clean option: it performs the full-wipe uninstall above (config, keys, state,
+and the bundled Ollama with its models all deleted) and then installs fresh.
+It asks you to confirm before wiping — add `--yes` / `-Yes` to skip the
+prompt on a non-interactive host.
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		# The piped form can't bind -Clean, so opt in with the env var:
+		$env:WAIRED_CLEAN = '1'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+
+		Expect **two UAC prompts** — one for the wipe, one for the install.
+	</TabItem>
+</Tabs>
+
+The wipe deletes this device's old identity, so the sign-in at the end of the
+install ([First run](/getting-started/first-run/)) enrolls it as a new device.
+
 ## Edge channel (latest, unstable)
 
 To track the latest `main` build instead of waiting for a stable release, opt in
