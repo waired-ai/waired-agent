@@ -1625,6 +1625,8 @@ func (t *tray) apply(m MenuModel) {
 		systray.SetIcon(iconErrorIcon)
 	case IconDegraded:
 		systray.SetIcon(iconDegraded)
+	case IconBusy:
+		systray.SetIcon(iconBusy)
 	}
 	systray.SetTooltip(m.HeaderTitle)
 

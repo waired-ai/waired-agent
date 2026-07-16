@@ -195,11 +195,15 @@ const (
 	MenuError                        // ⚠ tunnel error
 )
 
-// IconState picks one of the four tray-icon SVGs. IconDegraded is the
+// IconState picks one of the tray-icon variants. IconDegraded is the
 // "connected with claude-integration warning" badge: same network
 // state as IconConnected but with a small yellow ! glyph overlaid in
 // the upper-right, so the user notices at a glance that something
 // (currently: the wrapper's per-spawn gating) needs attention.
+// IconBusy is the connected mark lit in "active green" while the local
+// inference engine is serving at least one request (waired#811); it is
+// the lowest-priority overlay — only ever promoted from IconConnected,
+// so it never masks an error/degraded/disconnected state.
 type IconState int
 
 const (
@@ -207,6 +211,7 @@ const (
 	IconConnected
 	IconDisconnected
 	IconDegraded
+	IconBusy
 )
 
 // MenuModel is the rendered intent — pure data, no widgets. The builder
@@ -572,7 +577,44 @@ func Update(snap Snapshot) MenuModel {
 	// Manual-update banner (#293). Independent of tunnel phase — an
 	// available update stays worth surfacing whether connected or paused.
 	applyUpdate(&m, snap.Update)
+
+	// Inference-activity icon (waired#811). Applied LAST so it can only
+	// ever promote a plain IconConnected to IconBusy — every error /
+	// degraded / disconnected decision above wins, and the busy hue never
+	// masks a problem the user needs to see.
+	applyInferenceActivity(&m, snap)
 	return m
+}
+
+// applyInferenceActivity lights the tray icon in "active green" (IconBusy)
+// while the local inference engine is serving at least one request
+// (waired#811), so the user can see Waired is working right now — and gets
+// a hint why the fans spun up. It is intentionally the lowest-priority
+// icon override: it only promotes a plain IconConnected, so an
+// error/degraded/disconnected icon chosen earlier in Update always wins
+// and the busy hue never hides a problem.
+//
+// The signal is ObservabilityState.Agent.Inflight (the
+// waired_inference_inflight gauge), already polled every ~5s by the tray.
+// That cadence makes this a coarse "is Waired busy?" indicator, not a
+// per-request animation: the badge can lag the true start/stop of activity
+// by up to one poll interval, and brief gaps between back-to-back requests
+// may momentarily drop it. Daemons predating the observability API leave
+// Snapshot.Observability nil and render no busy state.
+//
+// CapacityUsed/CapacityTotal are carried alongside Inflight and could later
+// drive a "3/8 busy" tooltip or a graded badge; unused for now — a single
+// binary busy/idle hue is the least noisy first step.
+func applyInferenceActivity(m *MenuModel, snap Snapshot) {
+	if m.Icon != IconConnected {
+		return
+	}
+	if snap.Observability == nil {
+		return
+	}
+	if snap.Observability.Agent.Inflight > 0 {
+		m.Icon = IconBusy
+	}
 }
 
 // applyUpdate surfaces the manual-update banner (#293) when the daemon

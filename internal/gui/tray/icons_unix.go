@@ -15,3 +15,6 @@ var iconErrorIcon []byte
 
 //go:embed icons/waired-degraded.png
 var iconDegraded []byte
+
+//go:embed icons/waired-busy.png
+var iconBusy []byte
