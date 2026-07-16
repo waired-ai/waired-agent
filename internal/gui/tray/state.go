@@ -217,10 +217,16 @@ const (
 // MenuModel is the rendered intent — pure data, no widgets. The builder
 // in tray.go translates each field into a systray menu item.
 type MenuModel struct {
-	Kind         MenuKind
-	Icon         IconState
-	HeaderTitle  string // "● Connected", "○ Not signed in", etc.
-	AccountEmail string
+	Kind        MenuKind
+	Icon        IconState
+	HeaderTitle string // "● Connected", "○ Not signed in", etc.
+	// DegradedReason is a short summary of *why* the icon was promoted to
+	// IconDegraded (e.g. "Claude Code routing inactive"). Derived and folded
+	// into HeaderTitle by summariseAggregateHeader at the end of Update, so
+	// the single top-level status row states the cause while per-subsystem
+	// detail moves into submenus (waired#809). Empty unless degraded.
+	DegradedReason string
+	AccountEmail   string
 	DeviceName   string
 	OverlayIP    string
 	NetworkName  string
@@ -578,11 +584,17 @@ func Update(snap Snapshot) MenuModel {
 	// available update stays worth surfacing whether connected or paused.
 	applyUpdate(&m, snap.Update)
 
-	// Inference-activity icon (waired#811). Applied LAST so it can only
-	// ever promote a plain IconConnected to IconBusy — every error /
-	// degraded / disconnected decision above wins, and the busy hue never
-	// masks a problem the user needs to see.
+	// Inference-activity icon (waired#811). Runs before the aggregate
+	// header and only promotes a plain IconConnected to IconBusy, so a
+	// degraded/error/disconnected state — which summariseAggregateHeader
+	// then narrates in the header — is never masked by the busy hue.
 	applyInferenceActivity(&m, snap)
+
+	// Aggregate the top-level status line last, once every subsystem has
+	// had its say (waired#809): a degraded connected state collapses to a
+	// single "⚠ <cause>" header so the top level stays an at-a-glance
+	// health summary and the per-subsystem detail lives in submenus.
+	summariseAggregateHeader(&m)
 	return m
 }
 
@@ -615,6 +627,36 @@ func applyInferenceActivity(m *MenuModel, snap Snapshot) {
 	if snap.Observability.Agent.Inflight > 0 {
 		m.Icon = IconBusy
 	}
+}
+
+// summariseAggregateHeader folds a degraded *connected* state into one
+// top-level status line naming the cause (waired#809). The icon is already
+// IconDegraded by the time this runs; here we replace the plain
+// "● Connected" header with "⚠ <cause>" so the user sees *what* needs
+// attention without opening a submenu. No-op for healthy, disconnected,
+// error, or not-signed-in states — those already carry a self-explanatory
+// header. Cause precedence mirrors the order subsystems are evaluated in
+// Update (Claude routing first, then integrations, then inference
+// fallback), so the most user-facing breakage wins when several coincide.
+func summariseAggregateHeader(m *MenuModel) {
+	if m.Icon != IconDegraded || m.Kind != MenuConnected {
+		return
+	}
+	switch {
+	case strings.Contains(m.ClaudeHeader, "inactive"):
+		m.DegradedReason = "Claude Code routing inactive"
+	case strings.Contains(m.OpenCodeHeader, "stale"),
+		strings.Contains(m.OpenCodeHeader, "unreadable"):
+		m.DegradedReason = "OpenCode integration needs attention"
+	case strings.Contains(m.OpenClawHeader, "stale"),
+		strings.Contains(m.OpenClawHeader, "unreadable"):
+		m.DegradedReason = "OpenClaw integration needs attention"
+	case m.HasRecentFallbackBadge:
+		m.DegradedReason = "Inference fell back recently"
+	default:
+		m.DegradedReason = "Attention needed"
+	}
+	m.HeaderTitle = "⚠ " + m.DegradedReason
 }
 
 // applyUpdate surfaces the manual-update banner (#293) when the daemon
