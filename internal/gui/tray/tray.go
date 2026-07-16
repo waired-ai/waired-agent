@@ -88,11 +88,16 @@ type tray struct {
 	// adjacent once a neighbouring group is hidden. (They used to be
 	// empty-title menu items, which render as blank rows on every
 	// backend — see issue #281.)
-	miHeader          *systray.MenuItem
-	miEmail           *systray.MenuItem
-	miUpdate          *systray.MenuItem // "⚠ Update available — install vX"; hidden when current (#293)
-	miUpdateNotify    *systray.MenuItem // "✓ Notify me about updates"; under the banner, hidden when current (#294)
-	miToggle          *systray.MenuItem
+	miHeader       *systray.MenuItem
+	miEmail        *systray.MenuItem
+	miUpdate       *systray.MenuItem // "⚠ Update available — install vX"; hidden when current (#293)
+	miUpdateNotify *systray.MenuItem // "✓ Notify me about updates"; under the banner, hidden when current (#294)
+	miToggle       *systray.MenuItem
+	// miInference is the "Inference ▸" submenu parent (waired#809). The
+	// engine/share/mesh/worker/recommend rows below are its children instead
+	// of top-level rows, so the top level stays short. Shown when
+	// ShowInferenceMenu is set.
+	miInference       *systray.MenuItem
 	miInferenceToggle *systray.MenuItem
 	miInferenceState  *systray.MenuItem
 	miEngineToggle    *systray.MenuItem
@@ -102,11 +107,13 @@ type tray struct {
 	miMeshReachable   *systray.MenuItem
 	miEngineWarning   *systray.MenuItem
 	miActiveModel     *systray.MenuItem
-	miDeviceLabel     *systray.MenuItem
-	miDeviceName      *systray.MenuItem
-	miOverlayIP       *systray.MenuItem
-	miNetwork         *systray.MenuItem
-	miPeers           *systray.MenuItem
+	// miDeviceLabel is the "This device ▸" submenu parent (waired#809);
+	// name / IP / network / peers are its children.
+	miDeviceLabel *systray.MenuItem
+	miDeviceName  *systray.MenuItem
+	miOverlayIP   *systray.MenuItem
+	miNetwork     *systray.MenuItem
+	miPeers       *systray.MenuItem
 	// Claude integration group — pre-allocated even on daemons that
 	// do not expose the endpoint; each item Hides itself in apply()
 	// when the corresponding model field is empty. Since the transparent
@@ -180,8 +187,12 @@ type tray struct {
 	lastWorkerModes      []WorkerModeRow      // Mode lookup for click dispatch
 	lastWorkerPinEntries []WorkerPinEntryView // DeviceID lookup for pin click dispatch
 
-	miCodeUI    *systray.MenuItem
-	miAdmin     *systray.MenuItem
+	miCodeUI *systray.MenuItem
+	miAdmin  *systray.MenuItem
+	// miSettings is the "Settings ▸" submenu parent (waired#809): the
+	// OpenCode/OpenClaw integration rows, Recent activity, autostart toggle,
+	// About, and Log out live under it instead of at the top level.
+	miSettings  *systray.MenuItem
 	miAbout     *systray.MenuItem
 	miAutostart *systray.MenuItem
 	miLogout    *systray.MenuItem
@@ -266,44 +277,9 @@ func (t *tray) onReady(ctx context.Context) func() {
 		systray.AddSeparator()
 		t.miToggle = systray.AddMenuItem("", "")
 		systray.AddSeparator()
-		t.miInferenceToggle = systray.AddMenuItem("", "")
-		t.miInferenceState = systray.AddMenuItem("", "")
-		t.miInferenceState.Disable()
-		t.miEngineToggle = systray.AddMenuItem("", "Hard-stop the engine to free memory, or restart it")
-		// Disabled baseline so setEnabledIfChanged's diff is correct: the
-		// reuse/not-managed case (EngineToggleEnabled=false) must stay
-		// greyed out on the first paint, and the common enabled case
-		// flips it on via the zero-value→true diff.
-		t.miEngineToggle.Disable()
-		// Hidden by default (like miActiveModel / miMeshReachable): the
-		// initial (false,false) visibility diff is a no-op, so without this
-		// the row would render as a blank line on daemons that predate the
-		// #186 EngineToggleAction field (empty action ⇒ no label).
-		t.miEngineToggle.Hide()
-		t.miInstallEngine = systray.AddMenuItem("", "Download and install the local inference engine")
-		t.miInstallEngine.Hide()
-		t.miShareToggle = systray.AddMenuItem("", "")
-		t.miShareState = systray.AddMenuItem("", "")
-		t.miShareState.Disable()
-		t.miMeshReachable = systray.AddMenuItem("", "")
-		t.miMeshReachable.Disable()
-		// Hidden by default for the same reason as miActiveModel: the
-		// initial (false,false) diff is a no-op, so without this the row
-		// would show empty until the first non-empty label.
-		t.miMeshReachable.Hide()
-		t.miEngineWarning = systray.AddMenuItem("", "Engine provenance warning (version mismatch / port conflict)")
-		t.miEngineWarning.Disable()
-		t.miEngineWarning.Hide()
-		t.miActiveModel = systray.AddMenuItem("", "")
-		t.miActiveModel.Disable()
-		// Hide by default: setVisibleIfChanged otherwise no-ops the initial
-		// (false,false) diff and the item stays in its default-visible state
-		// even when MenuModel says it should be hidden (e.g. while
-		// ShowCatalog suppresses this row in favour of CatalogActiveLabel).
-		t.miActiveModel.Hide()
-		// Catalog + worker stay in the same "inference" block as the engine
-		// rows above — no divider between them, so a hidden worker/catalog
-		// section can't leave a stray separator (issue #281 follow-up).
+		// --- Models (top-level): switching models is a primary action, so
+		// the catalog stays out of a submenu. "Active: <model>" sits above
+		// the "Models" picker (waired#809).
 		t.miCatalogActive = systray.AddMenuItem("", "")
 		t.miCatalogActive.Disable()
 		t.miCatalogActive.Hide()
@@ -314,70 +290,72 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miCatalogEntries[i] = t.miCatalog.AddSubMenuItem("", "Select this model (agent will restart)")
 			t.miCatalogEntries[i].Hide()
 		}
-		// #133 step-down suggestion row. Hidden until the daemon reports a
-		// non-dismissed recommendation; clicking re-opens the popup.
-		t.miRecommend = systray.AddMenuItem("", "This host benchmarks below the interactive floor; a lighter model is recommended")
+
+		// --- Inference submenu (waired#809): the engine power / share / mesh
+		// status rows and the worker-routing submenu move off the top level
+		// into one "Inference" parent. Shown when ShowInferenceMenu is set
+		// (the daemon exposes the inference API); apply() fills the rows.
+		// Each row keeps its prior Disable()/Hide() baseline so the first
+		// paint's (false,false) visibility diffs stay no-ops.
+		t.miInference = systray.AddMenuItem("Inference", "Local inference engine status and controls")
+		t.miInference.Hide()
+		t.miInferenceToggle = t.miInference.AddSubMenuItem("", "")
+		t.miInferenceState = t.miInference.AddSubMenuItem("", "")
+		t.miInferenceState.Disable()
+		t.miEngineToggle = t.miInference.AddSubMenuItem("", "Hard-stop the engine to free memory, or restart it")
+		t.miEngineToggle.Disable()
+		t.miEngineToggle.Hide()
+		t.miInstallEngine = t.miInference.AddSubMenuItem("", "Download and install the local inference engine")
+		t.miInstallEngine.Hide()
+		t.miShareToggle = t.miInference.AddSubMenuItem("", "")
+		t.miShareState = t.miInference.AddSubMenuItem("", "")
+		t.miShareState.Disable()
+		t.miMeshReachable = t.miInference.AddSubMenuItem("", "")
+		t.miMeshReachable.Disable()
+		t.miMeshReachable.Hide()
+		t.miEngineWarning = t.miInference.AddSubMenuItem("", "Engine provenance warning (version mismatch / port conflict)")
+		t.miEngineWarning.Disable()
+		t.miEngineWarning.Hide()
+		t.miActiveModel = t.miInference.AddSubMenuItem("", "")
+		t.miActiveModel.Disable()
+		t.miActiveModel.Hide()
+		t.miRecommend = t.miInference.AddSubMenuItem("", "This host benchmarks below the interactive floor; a lighter model is recommended")
 		t.miRecommend.Hide()
-		// Inference-worker submenu pre-allocation. The "Worker: …"
-		// top-level summary sits above the "Inference worker" parent so the
-		// operator sees current state without expanding. No leading
-		// separator — it shares the inference block with the rows above.
-		t.miWorkerActive = systray.AddMenuItem("", "")
+		t.miWorkerActive = t.miInference.AddSubMenuItem("", "")
 		t.miWorkerActive.Disable()
 		t.miWorkerActive.Hide()
-		t.miWorker = systray.AddMenuItem("Inference worker", "Choose where outbound inference flows (Tailscale-exit-node style)")
+		// Worker routing rows are flattened directly under Inference (not a
+		// nested submenu): fyne.io/systray's Windows backend does not render
+		// items nested three levels deep, so miWorker is now just a disabled
+		// section label and the mode/pin/clear rows are siblings of the
+		// engine rows (waired#809). Click dispatch is unchanged — it keys off
+		// the item pointers.
+		t.miWorker = t.miInference.AddSubMenuItem("Inference worker", "Where outbound inference flows (Tailscale-exit-node style)")
+		t.miWorker.Disable()
 		t.miWorker.Hide()
 		t.miWorkerModes = make([]*systray.MenuItem, 3)
 		for i := 0; i < 3; i++ {
-			t.miWorkerModes[i] = t.miWorker.AddSubMenuItem("", "Set the routing mode")
+			t.miWorkerModes[i] = t.miInference.AddSubMenuItem("", "Set the routing mode")
 			t.miWorkerModes[i].Hide()
 		}
 		t.miWorkerPinEntries = make([]*systray.MenuItem, MaxWorkerPinEntries)
 		for i := 0; i < MaxWorkerPinEntries; i++ {
-			t.miWorkerPinEntries[i] = t.miWorker.AddSubMenuItem("", "Pin outbound inference to this peer")
+			t.miWorkerPinEntries[i] = t.miInference.AddSubMenuItem("", "Pin outbound inference to this peer")
 			t.miWorkerPinEntries[i].Hide()
 		}
-		t.miWorkerClearPin = t.miWorker.AddSubMenuItem("(clear pin)", "Return to auto routing")
+		t.miWorkerClearPin = t.miInference.AddSubMenuItem("(clear pin)", "Return to auto routing")
 		t.miWorkerClearPin.Hide()
-		systray.AddSeparator()
-		t.miDeviceLabel = systray.AddMenuItem("This device", "")
-		t.miDeviceLabel.Disable()
-		t.miDeviceName = systray.AddMenuItem("", "")
-		t.miDeviceName.Disable()
-		t.miOverlayIP = systray.AddMenuItem("", "Click to copy")
-		// Network + peers share the "this device" block — no divider.
-		t.miNetwork = systray.AddMenuItem("", "")
-		t.miNetwork.Disable()
-		t.miPeers = systray.AddMenuItem("", "")
-		t.miPeers.Disable()
-		// Phase 7 follow-up (C1b): per-peer Hardware rows live as
-		// submenu children of miPeers. Pre-allocated + disabled +
-		// hidden; apply() shows / sets the label of just the rows
-		// the projection populated. miPeerOverflow is a single
-		// "+N more" row that surfaces when the mesh exceeds the
-		// 16-row cap.
-		t.miPeerEntries = make([]*systray.MenuItem, MaxPeerHardwareRows)
-		for i := range MaxPeerHardwareRows {
-			t.miPeerEntries[i] = t.miPeers.AddSubMenuItem("", "")
-			t.miPeerEntries[i].Disable()
-			t.miPeerEntries[i].Hide()
-		}
-		t.miPeerOverflow = t.miPeers.AddSubMenuItem("", "")
-		t.miPeerOverflow.Disable()
-		t.miPeerOverflow.Hide()
-		systray.AddSeparator()
-		t.miClaudeHeader = systray.AddMenuItem("", "")
-		t.miClaudeHeader.Disable()
-		t.miClaudeProxy = systray.AddMenuItem("", "Claude Code managed-settings status (waired claude enable / disable / status)")
-		t.miClaudeProxy.Disable()
-		// "Claude Code" per-class routing submenu (#649/#650): a route
-		// selector for the main conversation and (independently) subagents.
-		// systray can't grow a submenu after onReady, so every slot is
-		// pre-allocated here and apply() only flips Show/Hide + SetTitle.
-		// Two disabled header rows label the groups; node selection lives in
-		// the Inference worker submenu, not here.
-		t.miClaudeCode = systray.AddMenuItem("Claude Code", "Choose where Claude Code runs (main conversation + subagents)")
+
+		// --- Claude Code submenu (waired#809): the Claude status header +
+		// managed-settings row fold into the same parent as the per-class
+		// route selectors, so no Claude detail sits at the top level. The
+		// parent is shown when ShowClaude || ShowClaudeCode (see apply()).
+		t.miClaudeCode = systray.AddMenuItem("Claude Code", "Claude Code routing status and per-class route selection")
 		t.miClaudeCode.Hide()
+		t.miClaudeHeader = t.miClaudeCode.AddSubMenuItem("", "")
+		t.miClaudeHeader.Disable()
+		t.miClaudeProxy = t.miClaudeCode.AddSubMenuItem("", "Claude Code managed-settings status (waired claude enable / disable / status)")
+		t.miClaudeProxy.Disable()
 		t.miClaudeMainHeader = t.miClaudeCode.AddSubMenuItem("Main conversation", "The route for Claude Code's main conversation")
 		t.miClaudeMainHeader.Disable()
 		t.miClaudeMainRoutes = make([]*systray.MenuItem, 3)
@@ -398,44 +376,75 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miClaudeEnableNote = t.miClaudeCode.AddSubMenuItem("", "Claude Code is not yet routed through Waired")
 		t.miClaudeEnableNote.Disable()
 		t.miClaudeEnableNote.Hide()
-		// OpenCode shares the "integrations" block with Claude — no divider
-		// between them (so a hidden OpenCode section can't double the rule).
-		t.miOpenCodeHeader = systray.AddMenuItem("", "")
+
+		systray.AddSeparator()
+		// Bundled coding-agent stays a top-level primary action (#429).
+		t.miCodeUI = systray.AddMenuItem("Open Coding Agent…", "Open the bundled OpenCode coding agent in your browser")
+		t.miCodeUI.Hide()
+		systray.AddSeparator()
+
+		// --- This device submenu (waired#809): name / IP / network / peers
+		// move under one parent. Shown only when enrolled — apply() tracks
+		// the parent in the device-visibility group, so it starts hidden.
+		t.miDeviceLabel = systray.AddMenuItem("This device", "This device's name, address, and mesh peers")
+		t.miDeviceLabel.Hide()
+		t.miDeviceName = t.miDeviceLabel.AddSubMenuItem("", "")
+		t.miDeviceName.Disable()
+		t.miOverlayIP = t.miDeviceLabel.AddSubMenuItem("", "Click to copy")
+		t.miNetwork = t.miDeviceLabel.AddSubMenuItem("", "")
+		t.miNetwork.Disable()
+		// Peers: the "Peers: N" label plus per-peer hardware rows are all
+		// flat children of This device (no third nesting level, per the
+		// Windows-backend limit above). miPeers stays a disabled label.
+		t.miPeers = t.miDeviceLabel.AddSubMenuItem("", "")
+		t.miPeers.Disable()
+		t.miPeerEntries = make([]*systray.MenuItem, MaxPeerHardwareRows)
+		for i := range MaxPeerHardwareRows {
+			t.miPeerEntries[i] = t.miDeviceLabel.AddSubMenuItem("", "")
+			t.miPeerEntries[i].Disable()
+			t.miPeerEntries[i].Hide()
+		}
+		t.miPeerOverflow = t.miDeviceLabel.AddSubMenuItem("", "")
+		t.miPeerOverflow.Disable()
+		t.miPeerOverflow.Hide()
+
+		t.miAdmin = systray.AddMenuItem("Open Admin Console…", "Open the Waired Control Plane admin UI")
+
+		// --- Settings submenu (waired#809): the OpenCode / OpenClaw
+		// integration rows, Recent activity, the startup toggle, About, and
+		// Log out move off the top level. The parent is always visible (About
+		// and the startup toggle are always available); each row keeps its
+		// own Show/Hide.
+		t.miSettings = systray.AddMenuItem("Settings", "Integrations, startup, and account")
+		t.miOpenCodeHeader = t.miSettings.AddSubMenuItem("", "")
 		t.miOpenCodeHeader.Disable()
-		t.miOpenCodeConfig = systray.AddMenuItem("", "")
+		t.miOpenCodeConfig = t.miSettings.AddSubMenuItem("", "")
 		t.miOpenCodeConfig.Disable()
-		t.miOpenCodeReconfigure = systray.AddMenuItem("", "Re-apply `waired link opencode` after a confirmation prompt")
-		// OpenClaw shares the same integrations block — no divider of its own.
-		t.miOpenClawHeader = systray.AddMenuItem("", "")
+		t.miOpenCodeReconfigure = t.miSettings.AddSubMenuItem("", "Re-apply `waired link opencode` after a confirmation prompt")
+		t.miOpenClawHeader = t.miSettings.AddSubMenuItem("", "")
 		t.miOpenClawHeader.Disable()
-		t.miOpenClawConfig = systray.AddMenuItem("", "")
+		t.miOpenClawConfig = t.miSettings.AddSubMenuItem("", "")
 		t.miOpenClawConfig.Disable()
-		t.miOpenClawReconfigure = systray.AddMenuItem("", "Re-apply `waired link openclaw` after a confirmation prompt")
-		// Recent activity submenu (Phase 9 observability). Pre-allocated
-		// so apply() only flips Show/Hide + SetTitle. No leading separator
-		// of its own (it is usually hidden); when shown it sits in the
-		// integrations block above the footer divider.
-		t.miRecent = systray.AddMenuItem("Recent activity", "Inference fallbacks observed in the last 10 minutes")
+		t.miOpenClawReconfigure = t.miSettings.AddSubMenuItem("", "Re-apply `waired link openclaw` after a confirmation prompt")
+		// Recent activity: a disabled "Recent activity" label plus its rows,
+		// flat under Settings (no third nesting level, per the Windows-backend
+		// limit above).
+		t.miRecent = t.miSettings.AddSubMenuItem("Recent activity", "Inference fallbacks observed in the last 10 minutes")
+		t.miRecent.Disable()
 		t.miRecent.Hide()
 		t.miRecentEntries = make([]*systray.MenuItem, MaxRecentActivity)
 		for i := 0; i < MaxRecentActivity; i++ {
-			t.miRecentEntries[i] = t.miRecent.AddSubMenuItem("", "")
+			t.miRecentEntries[i] = t.miSettings.AddSubMenuItem("", "")
 			t.miRecentEntries[i].Disable()
 			t.miRecentEntries[i].Hide()
 		}
-
-		// Bundled coding-agent (#429): hidden by default so the first
-		// apply()'s setVisibleIfChanged flips it on only when the daemon
-		// reports the feature enabled.
-		t.miCodeUI = systray.AddMenuItem("Open Coding Agent…", "Open the bundled OpenCode coding agent in your browser")
-		t.miCodeUI.Hide()
-		t.miAdmin = systray.AddMenuItem("Open Admin Console…", "Open the Waired Control Plane admin UI")
-		systray.AddSeparator()
-		t.miAbout = systray.AddMenuItem("About Waired", "")
-		t.miAutostart = systray.AddMenuItem("Start Waired on login", "Toggle launching the tray when you sign in")
+		t.miAbout = t.miSettings.AddSubMenuItem("About Waired", "")
+		t.miAutostart = t.miSettings.AddSubMenuItem("Start Waired on login", "Toggle launching the tray when you sign in")
 		t.refreshAutostartLabel()
 		t.ensureAutostartOnFirstLaunch()
-		t.miLogout = systray.AddMenuItem("Log out…", "Sign this device out and remove its identity")
+		t.miLogout = t.miSettings.AddSubMenuItem("Log out…", "Sign this device out and remove its identity")
+
+		systray.AddSeparator()
 		t.miQuit = systray.AddMenuItem("Quit", "Exit the Waired tray")
 
 		// Catalog submenu items each have their own ClickedCh; spawning
@@ -1644,9 +1653,12 @@ func (t *tray) apply(m MenuModel) {
 	setVisibleIfChanged(t.miToggle, prev.ToggleAction != "", m.ToggleAction != "")
 	setTitleIfChanged(t.miToggle, prev.ToggleAction, m.ToggleAction)
 
-	// Inference group: toggle + engine state + share toggle + share
-	// state + active model. Each inner item tracks its own field; the
-	// surrounding separators auto-collapse when the whole group is empty.
+	// Inference group: the "Inference" submenu parent plus its rows —
+	// toggle + engine state + share toggle + share state + active model +
+	// worker (waired#809). The parent shows when the daemon exposes the
+	// inference API (ShowInferenceMenu); each inner item still tracks its
+	// own field, so an empty row inside the open submenu stays hidden.
+	setVisibleIfChanged(t.miInference, prev.ShowInferenceMenu, m.ShowInferenceMenu)
 	setVisibleIfChanged(t.miInferenceToggle, prev.InferenceToggleAction != "", m.InferenceToggleAction != "")
 	setTitleIfChanged(t.miInferenceToggle, prev.InferenceToggleAction, m.InferenceToggleAction)
 	setVisibleIfChanged(t.miInferenceState, prev.InferenceStateLabel != "", m.InferenceStateLabel != "")
@@ -1745,19 +1757,26 @@ func (t *tray) apply(m MenuModel) {
 	setVisibleIfChanged(t.miAdmin, prev.AdminURL != "", m.AdminURL != "")
 	setVisibleIfChanged(t.miLogout, prev.AccountEmail != "", m.AccountEmail != "")
 
-	// Claude integration group — visible only on daemons that expose
-	// the endpoint (ShowClaude flag). The header reports live serving
-	// state; the single proxy row reports the OS-level proxy install
-	// status. ProxyLabel="" hides that row.
+	// Claude Code submenu parent (waired#809): visible when the daemon
+	// exposes *either* the Claude status endpoint (ShowClaude) or the
+	// per-class routing endpoint (ShowClaudeCode), since both the status
+	// rows and the route selectors now live inside this one parent. Old
+	// daemons exposing neither render no "Claude Code" entry at all.
+	prevShowClaudeParent := prev.ShowClaude || prev.ShowClaudeCode
+	showClaudeParent := m.ShowClaude || m.ShowClaudeCode
+	setVisibleIfChanged(t.miClaudeCode, prevShowClaudeParent, showClaudeParent)
+
+	// Claude status rows (now children of the parent above). The header
+	// reports live serving state; the proxy row reports the OS-level
+	// managed-settings status. ProxyLabel="" hides that row.
 	setVisibleIfChanged(t.miClaudeHeader, prev.ShowClaude, m.ShowClaude)
 	setTitleIfChanged(t.miClaudeHeader, prev.ClaudeHeader, m.ClaudeHeader)
 	setVisibleIfChanged(t.miClaudeProxy, prev.ClaudeProxyLabel != "", m.ClaudeProxyLabel != "")
 	setTitleIfChanged(t.miClaudeProxy, "  "+prev.ClaudeProxyLabel, "  "+m.ClaudeProxyLabel)
 
-	// Claude Code per-class routing submenu (#649/#650). The parent + two
-	// header rows follow ShowClaudeCode; the route slots + conditional
-	// notes diff via applyClaudeRoutes / setTitleIfChanged.
-	setVisibleIfChanged(t.miClaudeCode, prev.ShowClaudeCode, m.ShowClaudeCode)
+	// Claude Code per-class routing rows (#649/#650): the two header rows
+	// follow ShowClaudeCode; the route slots + conditional notes diff via
+	// applyClaudeRoutes / setTitleIfChanged.
 	claudeCodeParent := m.ClaudeCodeParent
 	if claudeCodeParent == "" {
 		claudeCodeParent = "Claude Code"
