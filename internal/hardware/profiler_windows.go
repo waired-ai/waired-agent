@@ -77,9 +77,11 @@ func defaultRAM(_ context.Context) (int, int, error) {
 	if r1 == 0 {
 		return 0, 0, callErr
 	}
-	const bytesPerGB = 1024 * 1024 * 1024
-	totalGB := int(memStatus.TotalPhys / bytesPerGB)
-	availGB := int(memStatus.AvailPhys / bytesPerGB)
+	// Round to nearest GiB (bytesToGBRounded, #61): TotalPhys already
+	// excludes hardware-reserved memory, so a 32 GB box reports ~31.9 GiB
+	// and flooring produced 31 — a spurious miss against a 32 GB threshold.
+	totalGB := bytesToGBRounded(memStatus.TotalPhys)
+	availGB := bytesToGBRounded(memStatus.AvailPhys)
 	return totalGB, availGB, nil
 }
 

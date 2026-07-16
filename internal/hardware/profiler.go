@@ -390,12 +390,25 @@ func parseProcMeminfo(r io.Reader) (totalGB, availGB int, err error) {
 	if !gotTotal {
 		return 0, 0, errors.New("MemTotal not found in /proc/meminfo")
 	}
-	const kbPerGB = 1024 * 1024
-	totalGB = int(totalKB / kbPerGB)
+	totalGB = bytesToGBRounded(uint64(totalKB) * 1024)
 	if gotAvail {
-		availGB = int(availKB / kbPerGB)
+		availGB = bytesToGBRounded(uint64(availKB) * 1024)
 	}
 	return totalGB, availGB, nil
+}
+
+// bytesToGBRounded converts a byte count to whole GiB, rounding to the
+// nearest GiB instead of truncating. Hardware-reserved memory makes a
+// machine's usable RAM report slightly below its marketed size — a 32 GB
+// box exposes ~31.9 GiB — and flooring turned that into 31, spuriously
+// failing a 32 GB fit threshold (#61). Rounding reports the honest
+// marketed capacity. Unit is GiB (1<<30), matching what the catalog's
+// min_ram_gb thresholds are compared against. Shared by all three OS RAM
+// probes (linux /proc/meminfo, windows GlobalMemoryStatusEx, darwin
+// hw.memsize) so the reported number is consistent cross-platform.
+func bytesToGBRounded(b uint64) int {
+	const gib = 1 << 30
+	return int((b + gib/2) / gib)
 }
 
 func parseMeminfoKB(line string) int64 {
