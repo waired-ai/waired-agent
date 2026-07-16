@@ -18,6 +18,13 @@ requirements in the [model catalog](/reference/model-catalog/).
 	auto-selection. The methods below change it on an already-enrolled machine.
 </Aside>
 
+<Aside type="note">
+	Switching from the tray's model list, or accepting a `waired runtimes benchmark`
+	recommendation, applies **live** — the local engine reloads in a few seconds while
+	Waired keeps running. The `agent.json` / environment / CLI-flag methods on this page
+	change the *bundled* default and take effect on the next service restart.
+</Aside>
+
 There are three ways to set it. When more than one is present, the higher-priority
 source wins:
 

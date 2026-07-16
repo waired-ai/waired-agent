@@ -18,6 +18,13 @@ import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 	済みのマシンで変更する場合のものです。
 </Aside>
 
+<Aside type="note">
+	トレイのモデル一覧からの切り替えや、`waired runtimes benchmark` の推奨の受け入れは
+	**ライブで**適用されます — Waired は動作したまま、ローカルエンジンが数秒で再ロードされます。
+	このページの `agent.json` / 環境変数 / CLI フラグの方法は*バンドル*既定を変更するもので、
+	次回のサービス再起動時に反映されます。
+</Aside>
+
 設定方法は 3 つあります。複数が存在する場合、優先度の高いソースが勝ちます:
 
 ```

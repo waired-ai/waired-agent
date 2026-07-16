@@ -154,9 +154,10 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 			return resp, nil
 		}
 
-		// Default No: an upgrade pulls a multi-GB download and restarts
-		// the agent — the opposite trade-off of the lighter flow.
-		if !ynPrompt(out, sc, fmt.Sprintf("Switch to %s? (downloads the model, agent restarts)", to), false) {
+		// Default No: an upgrade pulls a multi-GB download — the opposite
+		// trade-off of the lighter flow. The switch itself applies live
+		// (waired#812), so only the download is called out here.
+		if !ynPrompt(out, sc, fmt.Sprintf("Switch to %s? (downloads the model)", to), false) {
 			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
 				writePromptf(out, "warn: could not record your choice: %v\n", err)
 			} else {
@@ -181,7 +182,7 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc *bufio.Scan
 		return
 	}
 	if !pmr.Downloading {
-		writePromptf(out, "Switching to %s (already downloaded — the agent restarts to apply it).\n", label)
+		writePromptf(out, "Switching to %s (already downloaded).\n", label)
 		return
 	}
 	writePromptf(out, "Switching to %s — downloading it now. Press Enter anytime to continue in the background.\n", label)

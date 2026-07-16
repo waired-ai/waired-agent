@@ -126,7 +126,7 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	}
 	_ = tw.Flush()
 
-	b.WriteString("\nLegend: ● active  → preferred (pending restart)  ↓ downloaded  ⋯ downloading\n")
+	b.WriteString("\nLegend: ● active  → preferred (switching)  ↓ downloaded  ⋯ downloading\n")
 	b.WriteString("The Auto-Selector serves the highest quality-tier model that fits this host.\n")
 	b.WriteString("Why the current pick: `waired infer --explain`.\n")
 	b.WriteString("Full hardware-fit reference: https://docs.waired.ai/reference/model-catalog/\n")
