@@ -129,6 +129,7 @@ The architecture matrix is `amd64` and `arm64` on Linux and macOS,
 | `--stable`   | Install/switch to the latest stable release. On `--update`/`--check` this overrides channel-preservation. PowerShell: `-Stable`. |
 | `--clean`    | Clean install: run the uninstaller with `--clean` first (full wipe — config, keys, state, the apt source, and Ollama + its models), then install fresh. Destructive; asks to confirm unless `--yes`. Same as `WAIRED_CLEAN=1`. Cannot be combined with `--check`/`--update`. PowerShell: `-Clean` (expect two UAC prompts: wipe + install). |
 | `--yes`/`-y` | Assume "yes" to every prompt: the pre-install / pre-uninstall confirmation, the update prompt (needed on non-TTY hosts) and the `--clean` confirmation. PowerShell: `-Yes`. |
+| `--mask-pii` | Mask personal information in the output — the script masks your home dir + username, and `waired init` (via the shared `WAIRED_PII_MASK=1` env) additionally masks hostname + account email. For screenshots and bug reports; best-effort, not a security boundary. Works on the installers **and** the uninstallers. PowerShell: `-MaskPII`. |
 | `-h`/`--help`| Print usage and exit.                                |
 
 Both installers show a summary of what they are about to do (install
