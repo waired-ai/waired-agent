@@ -2,7 +2,9 @@ package management
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -78,6 +80,98 @@ func TestPreferredModel_KnownModelTriggersRestartAndPersists(t *testing.T) {
 	}
 	if atomic.LoadInt32(&restarts) != 1 {
 		t.Errorf("RestartScheduler should have fired exactly once, got %d", restarts)
+	}
+}
+
+// #812: with ApplyModelSwitch wired the switch applies in process, so the
+// response reports WillRestart:false and RestartScheduler never fires.
+func TestPreferredModel_InProcessSwapNoRestart(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	var swapCalls int
+	var swapModel string
+	inf := &fakeInference{
+		models: []ModelEntry{{ModelID: "qwen3-8b-instruct", State: catalog.ModelStateReady}},
+	}
+	cfg := &CatalogConfig{
+		PreferencePath:   filepath.Join(prefDir, "preferred-model.json"),
+		ManifestsFn:      func() ([]catalog.Manifest, error) { return catalogFixture(), nil },
+		RestartScheduler: func() { atomic.AddInt32(&restarts, 1) },
+		ApplyModelSwitch: func(_ context.Context, modelID string) (bool, error) {
+			// Called synchronously by the handler, so plain vars are race-free.
+			swapCalls++
+			swapModel = modelID
+			return true, nil // report a background pull started
+		},
+	}
+	s := New(stubStatus{}, stubPinger{}).WithInference(inf).WithCatalog(cfg)
+
+	w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+		PreferredModelRequest{ModelID: "qwen3-8b-instruct"})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	var got PreferredModelResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.WillRestart {
+		t.Errorf("in-process swap must report WillRestart=false, got %+v", got)
+	}
+	if !got.Downloading {
+		t.Errorf("Downloading should mirror the swap hook's return (true)")
+	}
+	if swapCalls != 1 || swapModel != "qwen3-8b-instruct" {
+		t.Errorf("ApplyModelSwitch: calls=%d model=%q, want 1 / qwen3-8b-instruct", swapCalls, swapModel)
+	}
+	// The whole point of #812: no restart on the common path.
+	if atomic.LoadInt32(&restarts) != 0 {
+		t.Errorf("in-process swap must not restart; restarts=%d", restarts)
+	}
+	if pref, ok, err := agentconfig.LoadPreference(filepath.Join(prefDir, "preferred-model.json")); err != nil || !ok || pref.ModelID != "qwen3-8b-instruct" {
+		t.Errorf("preference not persisted: %+v ok=%v err=%v", pref, ok, err)
+	}
+}
+
+// #812: when the in-process swap can't apply (here a stubbed error, standing in
+// for a cross-engine target / wedged setup) the handler falls back to the
+// supervised restart and reports WillRestart:true.
+func TestPreferredModel_SwapErrorFallsBackToRestart(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	var swapCalls int
+	inf := &fakeInference{
+		models: []ModelEntry{{ModelID: "qwen3-8b-instruct", State: catalog.ModelStateReady}},
+	}
+	cfg := &CatalogConfig{
+		PreferencePath:   filepath.Join(prefDir, "preferred-model.json"),
+		ManifestsFn:      func() ([]catalog.Manifest, error) { return catalogFixture(), nil },
+		RestartScheduler: func() { atomic.AddInt32(&restarts, 1) },
+		ApplyModelSwitch: func(_ context.Context, _ string) (bool, error) {
+			swapCalls++
+			return false, errors.New("cross-engine target needs restart")
+		},
+	}
+	s := New(stubStatus{}, stubPinger{}).WithInference(inf).WithCatalog(cfg)
+
+	w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+		PreferredModelRequest{ModelID: "qwen3-8b-instruct"})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	var got PreferredModelResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if !got.WillRestart {
+		t.Errorf("swap-error path must fall back to restart (WillRestart=true), got %+v", got)
+	}
+	if swapCalls != 1 {
+		t.Errorf("ApplyModelSwitch should have been attempted once, got %d", swapCalls)
+	}
+	for i := 0; i < 100 && atomic.LoadInt32(&restarts) == 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if atomic.LoadInt32(&restarts) != 1 {
+		t.Errorf("RestartScheduler should fire once on swap error, got %d", restarts)
 	}
 }
 

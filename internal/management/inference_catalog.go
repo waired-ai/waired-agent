@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -21,8 +22,18 @@ type CatalogConfig struct {
 	// RestartScheduler is invoked by /preferred-model after the response
 	// is sent. nil falls back to the default SIGTERM-to-self behaviour
 	// (defined where the Server is constructed). Tests inject a counter
-	// channel here.
+	// channel here. Since #812 this is the FALLBACK path (wedged engine /
+	// cross-engine / unenrolled); the common case applies the switch in
+	// process via ApplyModelSwitch with no restart.
 	RestartScheduler func()
+
+	// ApplyModelSwitch applies an operator's preferred-model switch in
+	// process (#812) — no whole-agent restart — and reports whether a
+	// background pull was started. nil (or a non-nil error return) makes
+	// /preferred-model fall back to RestartScheduler and answer
+	// WillRestart:true; a nil error means the switch is applying live and
+	// the response carries WillRestart:false. Tests inject a stub here.
+	ApplyModelSwitch func(ctx context.Context, modelID string) (downloading bool, err error)
 
 	// ManifestsFn returns the bundled manifests. nil falls back to
 	// catalog.BundledManifests. Tests inject a synthetic catalog.
