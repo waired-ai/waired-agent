@@ -43,6 +43,7 @@ func TestGenerateIcons(t *testing.T) {
 	muted := color.RGBA{0x88, 0x88, 0x88, 0xff}         // #888888 grey
 	errorFG := color.RGBA{0xd9, 0x4c, 0x4c, 0xff}       // #d94c4c red
 	warning := color.RGBA{0xff, 0xc6, 0x2a, 0xff}       // #ffc62a yellow
+	busyFG := color.RGBA{0x3d, 0xdc, 0x84, 0xff}        // #3ddc84 active green
 
 	type entry struct {
 		name string
@@ -60,6 +61,12 @@ func TestGenerateIcons(t *testing.T) {
 		// but the wrapper-side gating reports the Claude integration
 		// as unreachable (silent-breakage avoidance).
 		{"waired-degraded.png", overlayWarning(drawGate(size, ss, arcConnected, coreConnected, true), warning)},
+		// Busy: the GATE lit fully in "active green" while the local
+		// inference engine is serving at least one request (waired#811).
+		// A distinct hue (not blue/grey/red) so "Waired is working right
+		// now" reads at a glance and can't be confused with the connected,
+		// disconnected, or error states.
+		{"waired-busy.png", drawGate(size, ss, busyFG, busyFG, true)},
 	}
 	for _, e := range entries {
 		buf := bytes.Buffer{}
