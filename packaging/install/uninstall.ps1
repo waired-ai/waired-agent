@@ -65,8 +65,13 @@ param(
     [switch]$Help,
     # Internal: set on the re-elevated self-invoke so the child skips the
     # per-user teardown (it runs in the un-elevated parent, as the invoking
-    # user, so HKCU / %APPDATA% / ~/.claude hit the right hive). waired#754.
-    [switch]$FromElevation
+    # user, so HKCU / %APPDATA% / ~/.claude hit the right hive) and knows it
+    # runs in a spawned console (transcript + pause-on-exit). waired#754.
+    [switch]$FromElevation,
+    # Internal: path the elevated child writes its Start-Transcript log to.
+    # The un-elevated parent picks a path under its own %TEMP% (readable
+    # without elevation) and forwards it. Mirrors install.ps1 (waired#748).
+    [string]$LogPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,7 +81,17 @@ $ProgressPreference    = 'SilentlyContinue'
 # Configuration (mirrors install.ps1)
 # -------------------------------------------------------------------
 
-$InstallDir  = Join-Path $env:ProgramFiles 'Waired'
+# Install dir: WAIRED_INSTALL_DIR env > the HKLM registry value install.ps1 /
+# the GUI installer recorded (-InstallDir relocations) > the historical
+# %ProgramFiles%\Waired default.
+$InstallDirRegKey = 'HKLM:\SOFTWARE\Waired'
+$InstallDir = $env:WAIRED_INSTALL_DIR
+if (-not $InstallDir) {
+    try {
+        $InstallDir = (Get-ItemProperty -Path $InstallDirRegKey -Name 'InstallDir' -ErrorAction Stop).InstallDir
+    } catch { }
+}
+if (-not $InstallDir) { $InstallDir = Join-Path $env:ProgramFiles 'Waired' }
 $ServiceName = 'waired-agent'
 # SCM-mode state dir written by install.ps1 / the GUI installer.
 $StateDir    = if ($env:WAIRED_STATE_DIR) { $env:WAIRED_STATE_DIR } `
@@ -86,16 +101,103 @@ $StateDir    = if ($env:WAIRED_STATE_DIR) { $env:WAIRED_STATE_DIR } `
 $BaseUrl     = if ($env:WAIRED_INSTALL_BASE_URL) { $env:WAIRED_INSTALL_BASE_URL } `
                else { 'https://github.com/waired-ai/waired-agent/releases' }
 
+# Where the elevated child writes its Start-Transcript log so the uninstall
+# output survives the spawned console closing (mirror of install.ps1,
+# waired#748). Resolved in the un-elevated parent (its %TEMP% stays readable
+# without elevation) and forwarded via -LogPath.
+if (-not $LogPath) { $LogPath = Join-Path $env:TEMP 'waired-uninstall.log' }
+
 # -------------------------------------------------------------------
 # common_* helpers (mirror install.ps1 naming)
 # -------------------------------------------------------------------
 
+# Make emoji/box-drawing glyphs render on modern terminals (mirrors
+# install.ps1; harmless when it fails on a legacy host).
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
+
+# Emo <emoji> <ascii-fallback>: emoji on a UTF-8-capable console, else the
+# ASCII fallback. WAIRED_NO_EMOJI forces the fallback. (Mirror of install.ps1.)
+function Emo {
+    param([string]$Emoji, [string]$Ascii)
+    if ($env:WAIRED_NO_EMOJI) { return $Ascii }
+    try {
+        if ([Console]::OutputEncoding.CodePage -eq 65001) { return $Emoji }
+    } catch { }
+    return $Ascii
+}
+
 function Common-Log  { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Cyan }
 function Common-Warn { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Yellow }
+
+# Section prints a blank line + a horizontal-rule heading (mirror of
+# install.ps1's Section; the U+2500 glyph is built at runtime so this file
+# stays pure-ASCII on the wire -- scripts/install/encoding_test.go).
+function Section {
+    param([string]$Title)
+    $d = Emo ([char]::ConvertFromUtf32(0x2500)) '-'
+    $head = ($d * 3) + ' ' + $Title + ' '
+    $fill = 56 - 4 - $Title.Length
+    if ($fill -lt 3) { $fill = 3 }
+    Write-Host ''
+    Write-Host ($head + ($d * $fill)) -ForegroundColor DarkCyan
+}
+
+# Stop-TranscriptQuietly ends an active Start-Transcript without erroring
+# when none is running (mirror of install.ps1, waired#748).
+function Stop-TranscriptQuietly {
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
+}
+
+# True only inside the spawned elevated console (set in main when
+# -FromElevation). Gates the transcript + pause-on-exit so that window never
+# vanishes before its output can be read (the same waired#748 treatment
+# install.ps1 got; previously the uninstall window closed the instant it
+# finished and the user could not tell whether it succeeded).
+$ElevatedConsole = $false
+
 function Common-Die  {
     param([string]$Msg)
     Write-Host "[waired] $Msg" -ForegroundColor Red
+    if ($script:ElevatedConsole) {
+        if ($script:LogPath) { Write-Host "[waired] Full uninstall log: $($script:LogPath)" -ForegroundColor Red }
+        Stop-TranscriptQuietly
+        if (Test-InteractiveStdin) {
+            Read-Host '[waired] Uninstall FAILED. Press Enter to close this window' | Out-Null
+        }
+    }
     exit 1
+}
+
+# Test-InteractiveStdin reports whether Read-Host will work without wedging
+# (mirror of install.ps1, minus -NonInteractive which uninstall.ps1 lacks).
+function Test-InteractiveStdin {
+    try {
+        return -not [Console]::IsInputRedirected
+    } catch {
+        return [Environment]::UserInteractive
+    }
+}
+
+# Disable-QuickEdit clears conhost's QuickEdit mode in the spawned elevated
+# window, where a stray click otherwise freezes all output until Enter/Esc
+# (mirror of install.ps1; best-effort, transient console needs no restore).
+function Disable-QuickEdit {
+    try {
+        Add-Type -Namespace WairedNative -Name ConsoleMode -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+'@ -ErrorAction Stop
+        $h = [WairedNative.ConsoleMode]::GetStdHandle(-10)  # STD_INPUT_HANDLE
+        $mode = [uint32]0
+        if ([WairedNative.ConsoleMode]::GetConsoleMode($h, [ref]$mode)) {
+            $newMode = ($mode -band (-bnot [uint32]0x40)) -bor [uint32]0x80
+            [void][WairedNative.ConsoleMode]::SetConsoleMode($h, $newMode)
+        }
+    } catch { }
 }
 
 # Common-Run runs a scriptblock, or prints its description in dry-run mode.
@@ -127,8 +229,8 @@ deregisters this device from your Waired account (removed from your device list)
 Options:
   -Clean    also delete state (%ProgramData%\waired) and Ollama (binary +
             downloaded models). Destructive - asks to confirm unless -Yes.
-  -Yes      assume "yes" to the -Clean confirmation (required when piped /
-            non-interactive)
+  -Yes      assume "yes" to the pre-uninstall confirmation and the -Clean
+            confirmation (-Clean requires it when piped / non-interactive)
   -DryRun   show every change without making it (no elevation / UAC)
   -Help     print this help
 
@@ -143,54 +245,84 @@ Environment variables:
 "@ | Write-Host
 }
 
-# Confirm the destructive -Clean wipe. Skipped without -Clean. -Yes bypasses;
-# a non-interactive session without -Yes aborts so a piped invocation can
-# never silently wipe state. Runs in the un-elevated parent so the prompt
-# reaches a real console before UAC hands the child a fresh stdin.
-function Confirm-Clean {
-    if (-not $Clean) { return }
-    if ($Yes) { return }
-    $interactive = $false
-    try { $interactive = -not [Console]::IsInputRedirected }
-    catch { $interactive = [Environment]::UserInteractive }
-    if ($interactive) {
-        Common-Warn "-Clean will PERMANENTLY delete Waired config, keys and state,"
-        Common-Warn "and Ollama + its downloaded models."
-        $reply = Read-Host "[waired] Continue? [y/N]"
-        if ($reply -notmatch '^(y|yes)$') { Common-Die "aborted - nothing was removed" }
+# Confirm-Uninstall shows what is about to be removed, then asks before
+# ANYTHING runs (per-user teardown included). Default is NO -- uninstalling
+# is destructive, so a bare Enter aborts. -Yes bypasses (the CI /
+# already-consented path); -DryRun previews without asking. A
+# non-interactive session proceeds for the plain tier (preserves piped
+# `iwr | iex` uninstalls) but still refuses -Clean without -Yes, so a piped
+# invocation can never silently wipe state. Runs in the un-elevated parent so
+# the prompt reaches a real console before UAC hands the child a fresh stdin;
+# the -FromElevation child never re-asks.
+function Confirm-Uninstall {
+    if ($FromElevation) { return }
+
+    Section 'What this will remove'
+    Write-Host "  * The Waired binaries under $InstallDir"
+    Write-Host "  * The waired-agent background service + Start Menu / tray entries"
+    Write-Host "  * The Claude Code / coding-agent integration for this user"
+    Write-Host "  * This device's registration in your Waired account (best-effort)"
+    if ($Clean) {
+        Write-Host "  * ALL local state: config, keys, identity ($StateDir)" -ForegroundColor Yellow
+        Write-Host "  * Ollama and its downloaded models (PERMANENT)" -ForegroundColor Yellow
+    } else {
+        Write-Host "  (local state under $StateDir is KEPT; re-run with -Clean to wipe it)"
+    }
+
+    if ($Yes -or $DryRun) { return }
+    if (-not (Test-InteractiveStdin)) {
+        if ($Clean) {
+            Common-Die "-Clean is destructive; re-run with -Yes to confirm on a non-interactive session"
+        }
+        Common-Log "No interactive console detected -- proceeding without confirmation (use -Yes to silence this notice)."
         return
     }
-    Common-Die "-Clean is destructive; re-run with -Yes to confirm on a non-interactive session"
+    Write-Host ''
+    $reply = Read-Host '[waired] Proceed with the uninstall? [y/N] (Enter = No)'
+    if ($reply -notmatch '^(y|yes)$') { Common-Die "aborted - nothing was removed" }
 }
 
 # Re-invoke this script elevated. SCM, HKLM PATH and cert stores all need
-# admin. Consent for -Clean was already obtained in the un-elevated parent
-# (Confirm-Clean), so -Yes is forwarded to keep the child non-interactive.
-# Mirrors install.ps1's Invoke-SelfElevate (no sudo.exe: Start-Process
-# -Verb RunAs is universal back to Windows 10 1809).
+# admin. Consent was already obtained in the un-elevated parent
+# (Confirm-Uninstall), so -Yes is forwarded to keep the child
+# non-interactive. Mirrors install.ps1's Invoke-SelfElevate (no sudo.exe:
+# Start-Process -Verb RunAs is universal back to Windows 10 1809). Like
+# install.ps1, the `iwr | iex` case stages the fetched body to a temp .ps1
+# and re-launches it with -File -- NOT an in-memory ScriptBlock cradle, which
+# reads as a download-and-execute pattern to Defender's AMSI heuristics and
+# can get the whole script blocked (#552); -File also binds the named
+# passthrough params reliably.
 function Invoke-SelfElevate {
     Common-Log "Privileged step ahead -- requesting UAC..."
-    $passthrough = @('-FromElevation')
-    if ($Clean)  { $passthrough += @('-Clean', '-Yes') }
+    $passthrough = @('-FromElevation', '-Yes', '-LogPath', $LogPath)
+    if ($Clean)  { $passthrough += '-Clean' }
     if ($DryRun) { $passthrough += '-DryRun' }
 
     $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
+    $tempScript = $null
     if ($PSCommandPath) {
         $psArgs += @('-File', $PSCommandPath) + $passthrough
     } else {
-        # Sourced via `iwr | iex`: $PSCommandPath is null. Re-fetch the
-        # script body and bind params through a call-operator block (iex
-        # itself strips param() bindings).
-        $url  = "$BaseUrl/latest/download/uninstall.ps1"
-        $literal = $passthrough -join ' '
-        $bootstrap = "`$r = (iwr -useb '$url').Content; if (`$r -is [byte[]]) { `$r = [System.Text.Encoding]::UTF8.GetString(`$r) }; & ([ScriptBlock]::Create(`$r)) $literal"
-        $psArgs += @('-Command', $bootstrap)
+        # Sourced via `iwr | iex`: $PSCommandPath is null. Stage the body to
+        # a temp .ps1 and re-launch with -File (see the function comment).
+        $url = "$BaseUrl/latest/download/uninstall.ps1"
+        $tempScript = Join-Path $env:TEMP "waired-uninstall-elevate-$([Guid]::NewGuid().ToString('N')).ps1"
+        Invoke-WebRequest -Uri $url -OutFile $tempScript -UseBasicParsing
+        $psArgs += @('-File', $tempScript) + $passthrough
     }
 
-    $proc = Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList $psArgs -Verb RunAs -PassThru -Wait
-    if ($proc.ExitCode -ne 0) {
-        Common-Die "elevated uninstaller exited code $($proc.ExitCode)"
+    try {
+        $proc = Start-Process -FilePath 'powershell.exe' `
+            -ArgumentList $psArgs -Verb RunAs -PassThru -Wait
+        if ($proc.ExitCode -ne 0) {
+            Common-Die "elevated uninstaller exited code $($proc.ExitCode). Full uninstall log: $LogPath"
+        }
+    } finally {
+        # -Wait guarantees the elevated child finished reading the staged
+        # script before we delete it.
+        if ($tempScript) {
+            Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -351,6 +483,13 @@ function Remove-InstallDir {
             Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+    # Drop the install-location record install.ps1 / the GUI installer wrote
+    # (HKLM\SOFTWARE\Waired\InstallDir) so nothing points at the removed dir.
+    if (Test-Path -LiteralPath $InstallDirRegKey) {
+        Common-Run "Remove-Item $InstallDirRegKey" {
+            Remove-Item -Path $InstallDirRegKey -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Remove-State {
@@ -410,6 +549,7 @@ function Remove-Ollama {
 }
 
 function Show-Done {
+    Section 'Done'
     if ($Clean) {
         Common-Log "Waired fully removed (state wiped). Open a new shell to refresh PATH."
     } else {
@@ -425,8 +565,20 @@ function Show-Done {
 
 if ($Help) { Show-Help; exit 0 }
 
-# Confirm before elevating so the prompt reaches the real console.
-Confirm-Clean
+# The spawned elevated console closes the instant the script returns, taking
+# every message with it. Make it liveable: kill conhost QuickEdit (a stray
+# click otherwise freezes output), record a transcript, and (below) pause
+# before exiting so the outcome is actually readable. waired#748 parity.
+if ($FromElevation) {
+    $script:ElevatedConsole = $true
+    Disable-QuickEdit
+    try { Start-Transcript -Path $LogPath -Force -ErrorAction SilentlyContinue | Out-Null } catch { }
+}
+
+# Review + confirm before ANY change (per-user teardown included) and before
+# elevating, so the prompt reaches the real console. The elevated child
+# skips it (consent was collected here).
+Confirm-Uninstall
 
 # Per-user teardown as the INVOKING user: run in this un-elevated parent (or
 # inline when already admin) so HKCU / %APPDATA% / ~/.claude edits land in the
@@ -439,9 +591,14 @@ if (-not $FromElevation) {
 # Elevate for the machine-scoped steps (skipped for -DryRun: just print).
 if (-not $DryRun -and -not (Test-IsAdmin)) {
     Invoke-SelfElevate
+    # The elevated window paused for the operator and closed; repeat the
+    # outcome in THIS (persistent) console so it survives.
+    Show-Done
+    Common-Log "Full uninstall log: $LogPath"
     exit 0
 }
 
+Section 'Removing Waired'
 Common-Log "Uninstalling Waired..."
 Remove-ClaudeManaged
 Remove-Service
@@ -453,3 +610,10 @@ if ($Clean) {
     Remove-Ollama
 }
 Show-Done
+
+if ($FromElevation) {
+    Stop-TranscriptQuietly
+    if (Test-InteractiveStdin) {
+        Read-Host '[waired] Uninstall complete. Press Enter to close this window' | Out-Null
+    }
+}

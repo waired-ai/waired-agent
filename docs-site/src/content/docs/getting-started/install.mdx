@@ -64,6 +64,14 @@ machine you type from needs no special hardware.
 	</TabItem>
 </Tabs>
 
+On every OS the installer first shows a short summary of what it is about to
+do (install location, background service, the Ollama download, the browser
+sign-in and the admin-rights prompt) and asks `Proceed? [Y/n]` before anything
+runs; `--yes` / `-Yes` skips the question on unattended hosts. On Windows a
+fresh interactive install also lets you pick the install location (Enter keeps
+`C:\Program Files\Waired`; pin it with `-InstallDir <path>` or
+`WAIRED_INSTALL_DIR`).
+
 After the installer finishes, continue with [First run](/getting-started/first-run/)
 to enroll the device.
 
@@ -155,11 +163,16 @@ below to wipe them too); either way, a later re-install signs in fresh with
 	</TabItem>
 </Tabs>
 
+The uninstaller shows what it is about to remove and asks
+`Proceed? [y/N]` first (Enter aborts); pass `--yes` / `-Yes` to skip the
+prompt, or `--dry-run` / `-DryRun` to preview without changing anything. On
+Windows the elevated window stays open on a final "Press Enter to close", so
+you can always see whether the uninstall succeeded.
+
 For a **full wipe** — also delete your config and state, plus the bundled
 Ollama and its downloaded models — add `--clean` (Linux / macOS) or `-Clean`
-(Windows). This is destructive and asks you to confirm first; pass `--yes` /
-`-Yes` to skip the prompt, or `--dry-run` / `-DryRun` to preview without
-changing anything.
+(Windows). This is destructive; on a non-interactive shell it additionally
+hard-requires `--yes` / `-Yes`.
 
 <Tabs syncKey="os">
 	<TabItem label="Linux / macOS">

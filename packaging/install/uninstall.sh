@@ -99,6 +99,33 @@ tty_available() {
     ( exec </dev/tty >/dev/tty ) 2>/dev/null
 }
 
+# supports_emoji / section — mirror install.sh (see there for docs): a blank
+# line + horizontal-rule heading that splits the output into readable steps.
+supports_emoji() {
+    [ -n "${WAIRED_NO_EMOJI:-}" ] && return 1
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+        *UTF-8*|*UTF8*|*utf-8*|*utf8*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+section() {
+    _s_d='-'
+    if supports_emoji; then _s_d='─'; fi
+    _s_n=$((49 - ${#1}))
+    [ "$_s_n" -lt 3 ] && _s_n=3
+    _s_tail=''
+    while [ "$_s_n" -gt 0 ]; do
+        _s_tail="$_s_tail$_s_d"
+        _s_n=$((_s_n - 1))
+    done
+    if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+        printf '\n\033[36m%s %s %s\033[0m\n' "$_s_d$_s_d$_s_d" "$1" "$_s_tail"
+    else
+        printf '\n%s %s %s\n' "$_s_d$_s_d$_s_d" "$1" "$_s_tail"
+    fi
+}
+
 # real_user_home echoes the home directory of the human running the
 # uninstall, even under sudo (where $HOME is root's). Used (macOS only) to
 # reach the per-user LaunchAgent / Application Support / ~/.ollama. Falls
@@ -142,8 +169,8 @@ Options:
                    added, the legacy Claude-proxy trust, and Ollama (app +
                    downloaded models). Destructive — asks to confirm unless
                    --yes is given.
-  --yes, -y        assume "yes" to the --clean confirmation (required to
-                   --clean on a non-interactive / piped shell)
+  --yes, -y        assume "yes" to the pre-uninstall confirmation (--clean
+                   requires it on a non-interactive / piped shell)
   --dry-run        show every privileged command without running it
   -h, --help       print this help
 
@@ -154,23 +181,43 @@ Environment variables (shared with install.sh):
 HELP
 }
 
-# Confirm the destructive --clean wipe. Skipped entirely without --clean.
-# --yes bypasses the prompt; a non-interactive shell without --yes aborts so
-# `curl | sh -s -- --clean` can never silently nuke state.
-confirm_clean() {
-    [ "$FLAG_CLEAN" = 1 ] || return 0
-    [ "$FLAG_YES" = 1 ] && return 0
-    if tty_available; then
-        common_warn "--clean will PERMANENTLY delete Waired config, keys and state"
-        common_warn "(identity / secrets), the apt source, and Ollama + its models."
-        printf '\033[1;33m[waired]\033[0m %s' "Continue? [y/N] " >/dev/tty
-        read -r ans </dev/tty || ans=""
-        case "$ans" in
-            y|Y|yes|YES) return 0 ;;
-            *) common_die "aborted — nothing was removed" ;;
-        esac
+# confirm_proceed shows what is about to be removed, then asks before
+# anything runs. Default is NO — uninstalling is destructive, so a bare
+# Enter aborts. --yes bypasses; --dry-run previews without asking. A
+# non-interactive shell proceeds for the plain tier (preserves piped
+# `curl | sh` uninstalls) but still refuses --clean without --yes, so
+# `curl | sh -s -- --clean` can never silently nuke state. Mirrors
+# uninstall.ps1's Confirm-Uninstall.
+confirm_proceed() {
+    section 'What this will remove'
+    case "$OS_KIND" in
+        linux)  printf '  * The Waired apt packages (waired, waired-tray) and background service\n' ;;
+        darwin) printf '  * The Waired binaries under %s and the background service\n' "$WAIRED_DARWIN_BINDIR" ;;
+    esac
+    printf '  * The Claude Code / coding-agent integration for this user\n'
+    printf "  * This device's registration in your Waired account (best-effort)\n"
+    if [ "$FLAG_CLEAN" = 1 ]; then
+        printf '  * ALL local state: config, keys, identity (PERMANENT)\n'
+        printf '  * Ollama and its downloaded models (PERMANENT)\n'
+    else
+        printf '  (local config + state are KEPT; re-run with --clean to wipe them)\n'
     fi
-    common_die "--clean is destructive; re-run with --yes to confirm on a non-interactive shell"
+
+    [ "$FLAG_YES" = 1 ] && return 0
+    [ "$DRY_RUN" = 1 ] && return 0
+    if ! tty_available; then
+        if [ "$FLAG_CLEAN" = 1 ]; then
+            common_die "--clean is destructive; re-run with --yes to confirm on a non-interactive shell"
+        fi
+        common_log "No terminal detected — proceeding without confirmation (use --yes to silence this notice)."
+        return 0
+    fi
+    printf '\n\033[1;33m[waired]\033[0m %s' "Proceed with the uninstall? [y/N] (Enter = No) " >/dev/tty
+    read -r ans </dev/tty || ans=""
+    case "$ans" in
+        y|Y|yes|YES) return 0 ;;
+        *) common_die "aborted — nothing was removed" ;;
+    esac
 }
 
 detect_os() {
@@ -399,6 +446,7 @@ darwin_uninstall() {
 }
 
 print_done() {
+    section 'Done'
     if [ "$FLAG_CLEAN" = 1 ]; then
         common_log "Waired fully removed (config + state wiped)."
     else
@@ -421,9 +469,10 @@ main() {
     done
 
     detect_os
-    confirm_clean
+    confirm_proceed
     common_elevate
 
+    section 'Removing Waired'
     case "$OS_KIND:$OS_FAMILY" in
         linux:debian)
             linux_apt_uninstall
