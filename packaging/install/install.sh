@@ -118,9 +118,39 @@ OS_ARCH=""
 # common_* helpers
 # ---------------------------------------------------------------------
 
-common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$*"; }
-common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$*" >&2; }
-common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$*" >&2; exit 1; }
+# mask_pii <text> — best-effort masking of the invoking user's home dir and
+# username (as a path segment) when --mask-pii / WAIRED_PII_MASK is on, for
+# screenshots and bug reports. The Go binary masks its own output via the
+# same env var (incl. hostname + account email); this covers only the
+# script's log lines. awk index()/substr() replacement is literal — no
+# regex-metacharacter surprises from a path.
+mask_pii() {
+    if [ -z "${WAIRED_PII_MASK:-}" ]; then
+        printf '%s' "$*"
+        return 0
+    fi
+    printf '%s' "$*" | awk \
+        -v h="${HOME:-}" -v u="$(id -un 2>/dev/null || echo '')" -v s="${SUDO_USER:-}" '
+    function repl(str, pat, rep,   out, i) {
+        if (pat == "") return str
+        out = ""
+        while ((i = index(str, pat)) > 0) {
+            out = out substr(str, 1, i - 1) rep
+            str = substr(str, i + length(pat))
+        }
+        return out str
+    }
+    {
+        if (length(h) >= 3) $0 = repl($0, h, "<home>")
+        if (length(u) >= 3) $0 = repl($0, "/" u, "/<user>")
+        if (length(s) >= 3 && s != u) $0 = repl($0, "/" s, "/<user>")
+        print
+    }'
+}
+
+common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$(mask_pii "$*")"; }
+common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; }
+common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; exit 1; }
 
 # Run a command, or print it in dry-run mode.
 common_run() {
@@ -307,6 +337,10 @@ Options:
                    default runs sign-in + setup when a terminal is present)
   --yes, -y        assume "yes" for prompts (pre-install confirmation,
                    update, init non-interactive)
+  --mask-pii       mask personal information (home dir, username; the
+                   sign-in step also masks hostname + account email) in
+                   the output — for screenshots and bug reports.
+                   Best-effort. Same as WAIRED_PII_MASK=1.
   -h, --help       print this help
 
 Environment variables:
@@ -811,9 +845,13 @@ EOF
     [ "$FLAG_YES" = 1 ] && set -- "$@" --non-interactive
     # init has a root-time fallback that installs the bundled engine when the
     # pre-install above failed; keep --skip-ollama honoured across the sudo
-    # env_reset by threading WAIRED_NO_OLLAMA through `env`.
+    # env_reset by threading WAIRED_NO_OLLAMA through `env`. Same for the
+    # PII-masking request.
     if ollama_skip_requested; then
         set -- env WAIRED_NO_OLLAMA=1 "$@"
+    fi
+    if [ -n "${WAIRED_PII_MASK:-}" ]; then
+        set -- env WAIRED_PII_MASK=1 "$@"
     fi
     $SUDO "$@" </dev/tty || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
@@ -1274,6 +1312,9 @@ darwin_maybe_init() {
     if ollama_skip_requested; then
         set -- env WAIRED_NO_OLLAMA=1 "$@"
     fi
+    if [ -n "${WAIRED_PII_MASK:-}" ]; then
+        set -- env WAIRED_PII_MASK=1 "$@"
+    fi
     if [ "$DRY_RUN" = 1 ]; then
         common_log "  (dry-run) would: $SUDO $* </dev/tty"
         return 0
@@ -1429,6 +1470,9 @@ main() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --dry-run) DRY_RUN=1 ;;
+            # Export so children (waired init, the engine installer) mask
+            # their output through the same env contract.
+            --mask-pii) WAIRED_PII_MASK=1; export WAIRED_PII_MASK ;;
             --skip-ollama) FLAG_NO_OLLAMA=1 ;;
             --check) FLAG_CHECK=1 ;;
             --update) FLAG_UPDATE=1 ;;

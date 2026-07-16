@@ -103,6 +103,7 @@ type initFlags struct {
 	ollamaSource     string
 	bundledModelID   string
 	mgmtURL          string
+	maskPII          bool
 }
 
 const initLong = `Enroll this device into a Waired network (Google sign-in).
@@ -125,6 +126,10 @@ func newInitCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("share-with-mesh") {
 				o.inferenceShare = &infShare
+			}
+			if o.maskPII {
+				restore := enablePIIMask()
+				defer restore()
 			}
 			return runInitBody(o)
 		},
@@ -184,6 +189,8 @@ func newInitCmd() *cobra.Command {
 		"pin the bundled model to pre-pull (manifest model_id); empty auto-selects the largest model that fits this host above the coding-quality floor (#517). Combine with --inference-enabled=true to force-install on an under-spec host.")
 	f.StringVar(&o.mgmtURL, "mgmt", defaultMgmtURL,
 		"Local Management API base URL; when a waired-agent daemon is reachable there, login is driven through the daemon (Tailscale model) instead of enrolling locally")
+	f.BoolVar(&o.maskPII, "mask-pii", os.Getenv("WAIRED_PII_MASK") != "",
+		"mask personal information (home directory, username, hostname, account email) in init's output — for screenshots and bug reports. Best-effort; env form: WAIRED_PII_MASK=1 (set by the installers' --mask-pii / -MaskPII). Progress rendering falls back to plain lines while masking.")
 	return cmd
 }
 
