@@ -2,6 +2,15 @@
 /bin/
 /dist/
 
+# Stray `go build ./cmd/<x>` outputs dropped in the repo root (no -o).
+# The three binaries, with and without the Windows .exe suffix.
+/waired
+/waired.exe
+/waired-agent
+/waired-agent.exe
+/waired-tray
+/waired-tray.exe
+
 # docs-site build outputs (docs-site/.gitignore covers these too; kept
 # here so a root-level `git status` stays clean even if that file moves)
 /docs-site/node_modules/
