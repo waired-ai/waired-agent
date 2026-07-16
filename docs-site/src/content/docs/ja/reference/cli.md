@@ -21,7 +21,7 @@ description: すべての waired コマンドのリファレンス — セット
 
 | コマンド | 機能 |
 |---|---|
-| `waired models` | ローカルモデルを管理します: `ls` / `pull` / `rm` / `refresh`。`ls` はダウンロード済み一覧を表示し、`ls --detail` は推奨スペック・ハードウェア適合・選定基準を含むカタログを表示します（[モデルカタログ](/ja/reference/model-catalog/) を参照）。 |
+| `waired models` | ローカルモデルを管理します: `ls` / `pull` / `rm` / `refresh`。`ls` はダウンロード済み一覧を表示し、`ls --detail` は推奨スペック・ハードウェア適合・選定基準を含むカタログを表示します（[モデルカタログ](/ja/reference/model-catalog/) を参照）。`pull` はホストの推奨スペックを超えるモデルの場合に確認を求めます。スクリプトでは `--yes` / `-y` で確認を省略できます。 |
 | `waired runtimes` | 推論ランタイムを管理します: `ls` / `install` / `uninstall` / `refresh` / `status` / `benchmark`。 |
 | `waired infer "<prompt>"` | Local Gateway 経由でワンショットの推論リクエストを実行します。Auto-Selector のルーティングのドライランには `--explain` を追加します。 |
 | `waired inference share <on\|off\|status>` | このエンジンをメッシュピアに提供するかどうかを切り替えます。[下記](#sharing-vs-pausing) を参照。 |

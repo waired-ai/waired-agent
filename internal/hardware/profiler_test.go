@@ -298,11 +298,39 @@ func TestParseProcMeminfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseProcMeminfo: %v", err)
 	}
-	if total != 62 { // 65856900 / 1024 / 1024 ≈ 62.8 → floor to 62
-		t.Errorf("total GB = %d, want ~62", total)
+	if total != 63 { // 65856900 KiB ≈ 62.8 GiB → round to 63 (#61)
+		t.Errorf("total GB = %d, want 63", total)
 	}
-	if avail != 47 {
-		t.Errorf("avail GB = %d, want ~47", avail)
+	if avail != 48 { // 49876543 KiB ≈ 47.6 GiB → round to 48 (#61)
+		t.Errorf("avail GB = %d, want 48", avail)
+	}
+}
+
+func TestBytesToGBRounded(t *testing.T) {
+	const gib = uint64(1) << 30
+	cases := []struct {
+		name  string
+		bytes uint64
+		want  int
+	}{
+		// The #61 incident: a 32 GB box exposes ~31.9 GiB of usable RAM
+		// after hardware reserve; flooring gave 31 and failed a 32 GB
+		// threshold. Rounding must recover 32.
+		{"32GB box reports 31.9 GiB", 34_270_000_000, 32},
+		{"exact 32 GiB", 32 * gib, 32},
+		{"exact 64 GiB", 64 * gib, 64},
+		{"62.8 GiB rounds up to 63", 67_437_465_600, 63},
+		{"16.4 GiB rounds down to 16", 16*gib + gib/3, 16},
+		{"15.6 GiB rounds up to 16", 16*gib - gib/3, 16},
+		{"just over half rounds up", 8*gib + gib/2 + 1, 9},
+		{"zero", 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := bytesToGBRounded(c.bytes); got != c.want {
+				t.Errorf("bytesToGBRounded(%d) = %d, want %d", c.bytes, got, c.want)
+			}
+		})
 	}
 }
 

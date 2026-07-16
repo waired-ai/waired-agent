@@ -156,13 +156,25 @@ func TestSelector_NeedJSONMode(t *testing.T) {
 	}
 }
 
-func TestSelector_HardwareInsufficientRAM(t *testing.T) {
+func TestSelector_HardwareBelowRecommended_ServesAnyway(t *testing.T) {
+	// #61: a below-recommended-RAM local-ready model must no longer
+	// hard-block at serve time. The user selected and pulled it (an
+	// over-spec pick is gated by a confirmation at selection time), so
+	// Select serves it and records an advisory "below recommended" reason
+	// rather than returning ErrHardwareInsufficient / a 422.
 	hw := goodHardware()
 	hw.RAMTotalGB = 4 // less than min_ram_gb=12
 	s := NewSelector(Inputs{Manifests: []catalog.Manifest{qwen()}, LocalState: readyState(), Hardware: hw, Runtimes: registryWithOllama()})
-	_, err := s.Select(context.Background(), Request{Model: "waired/default"})
-	if !errors.Is(err, ErrHardwareInsufficient) {
-		t.Errorf("err = %v, want ErrHardwareInsufficient", err)
+	out, err := s.Select(context.Background(), Request{Model: "waired/default"})
+	if err != nil {
+		t.Fatalf("Select returned error, want serve-anyway: %v", err)
+	}
+	if out.ModelID != "qwen3-8b-instruct" {
+		t.Errorf("ModelID = %q", out.ModelID)
+	}
+	joined := strings.Join(out.Decision.Reason, " | ")
+	if !strings.Contains(joined, "below recommended") {
+		t.Errorf("reasons = %q, want a 'below recommended' advisory", joined)
 	}
 }
 

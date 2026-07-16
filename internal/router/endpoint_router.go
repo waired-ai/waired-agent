@@ -569,16 +569,26 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	if !ok {
 		return nil, fmt.Errorf("%w: variant %q not in manifest", ErrModelNotReady, modelState.VariantID)
 	}
-	if variant.MinRAMGB > 0 && s.in.Hardware.RAMTotalGB > 0 && s.in.Hardware.RAMTotalGB < variant.MinRAMGB {
-		return nil, fmt.Errorf("%w: %s/%s needs %dGB RAM, have %dGB",
-			ErrHardwareInsufficient, manifest.ModelID, variant.VariantID, variant.MinRAMGB, s.in.Hardware.RAMTotalGB)
-	}
-	reasons = append(reasons, fmt.Sprintf("hardware ok (variant min_ram=%d, host total_ram=%d)",
-		variant.MinRAMGB, s.in.Hardware.RAMTotalGB))
 	engine := pickEngine(variant, s.in.Hardware)
 	if engine == "" {
 		return nil, fmt.Errorf("%w: variant %q has no compatible engine on this host",
 			ErrHardwareInsufficient, variant.VariantID)
+	}
+	// Memory fit is ADVISORY at serve time (#61). This model is already
+	// local-ready — the user selected and pulled it, and an over-spec pick
+	// is gated by a confirmation at selection time (tray / CLI) — so never
+	// hard-block here: a tight fit should serve and let the engine surface a
+	// genuine OOM rather than a pre-emptive 422 (the old naive
+	// RAMTotalGB < MinRAMGB gate returned ErrHardwareInsufficient here).
+	// hostFits is UMA-aware: on unified-memory hosts it ignores the
+	// system-RAM gate and judges GPU residency, so the reason no longer
+	// mislabels Mac / Strix Halo as RAM-short.
+	if hostFits(engine, variant, s.in.Hardware) {
+		reasons = append(reasons, fmt.Sprintf("hardware ok (variant min_ram=%d, host total_ram=%d)",
+			variant.MinRAMGB, s.in.Hardware.RAMTotalGB))
+	} else {
+		reasons = append(reasons, fmt.Sprintf("hardware below recommended: %s — serving anyway (#61)",
+			deficitLabelFor(variant, engine, s.in.Hardware)))
 	}
 	reasons = append(reasons, fmt.Sprintf("engine %q selected", engine))
 	if _, ok := s.in.Runtimes.Lookup(engine); !ok {

@@ -124,12 +124,23 @@ func runModelsLsBody(mgmtVal string, detailVal bool) error {
 func newModelsPullCmd() *cobra.Command {
 	var mgmt string
 	var wait bool
+	var assumeYes bool
 	cmd := &cobra.Command{
 		Use:   "pull <model_id|alias>",
 		Short: "Pull a model and (by default) wait until it is ready.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			model := args[0]
+			// #61: over-spec picks are warn-but-allow — confirm before
+			// pulling a model that exceeds this host's recommended spec.
+			proceed, err := confirmModelFitsForPull(mgmt, model, assumeYes, os.Stdout, os.Stdin)
+			if err != nil {
+				return err
+			}
+			if !proceed {
+				fmt.Println("pull cancelled.")
+				return nil
+			}
 			body, _ := json.Marshal(map[string]string{"model": model})
 			resp, err := httpPost(mgmt+"/waired/v1/models/pull", body)
 			if err != nil {
@@ -153,6 +164,7 @@ func newModelsPullCmd() *cobra.Command {
 	}
 	addMgmtFlag(cmd, &mgmt)
 	cmd.Flags().BoolVar(&wait, "wait", true, "poll status until the model becomes ready")
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the over-spec confirmation prompt")
 	return cmd
 }
 

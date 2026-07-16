@@ -86,14 +86,13 @@ func defaultRAM(ctx context.Context) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	totalGB := int(total / (1024 * 1024 * 1024))
+	// Round to nearest GiB (bytesToGBRounded, #61) so a 32 GB Mac reporting
+	// ~31.9 GiB isn't floored to 31 and spuriously failing a 32 GB threshold.
+	totalGB := bytesToGBRounded(total)
 	availGB := totalGB // conservative fallback
 	if out, verr := vmStat(ctx); verr == nil {
 		if availBytes, perr := parseVMStatAvailableBytes(out); perr == nil {
-			ag := int(availBytes / (1024 * 1024 * 1024))
-			if ag < 0 {
-				ag = 0
-			}
+			ag := bytesToGBRounded(availBytes)
 			if ag > totalGB {
 				ag = totalGB
 			}
