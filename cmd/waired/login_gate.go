@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 
 	"github.com/waired-ai/waired-agent/internal/platform/browser"
@@ -54,28 +53,28 @@ var openBrowserFn = browser.Open
 // operator always has the link in hand. Blocking on Enter in gatePrompt is
 // fine: the login session outlives it (same model as gcloud).
 func presentLoginURL(in io.Reader, out io.Writer, loginURL, userCode string, gate browserGate) {
-	fmt.Fprintf(out, "\nSign in using this link:\n  %s\n", loginURL)
+	writePromptf(out, "\nSign in using this link:\n  %s\n", loginURL)
 	switch gate {
 	case gatePrintOnly:
 		if userCode != "" {
-			fmt.Fprintf(out, "\nCode: %s\n", userCode)
+			writePromptf(out, "\nCode: %s\n", userCode)
 		}
-		fmt.Fprintf(out, "\nOpen the link on this or another device.\n")
+		writePromptf(out, "\nOpen the link on this or another device.\n")
 	case gatePrompt:
-		fmt.Fprintf(out, "\n%s Press Enter to open your browser (or open the link above yourself)... ", emo("🌐", ">>"))
+		writePromptf(out, "\n%s Press Enter to open your browser (or open the link above yourself)... ", emo("🌐", ">>"))
 		bufio.NewScanner(in).Scan()
 		openLoginURL(out, loginURL)
 	case gateAutoOpen:
 		openLoginURL(out, loginURL)
 	}
-	fmt.Fprintf(out, "%s Waiting for sign-in to complete…\n", emo("⏳", "..."))
+	writePromptf(out, "%s Waiting for sign-in to complete…\n", emo("⏳", "..."))
 }
 
 func openLoginURL(out io.Writer, loginURL string) {
 	if err := openBrowserFn(loginURL); err != nil {
-		fmt.Fprintf(out, "%s Couldn't open a browser automatically (%v) — use the link above.\n",
+		writePromptf(out, "%s Couldn't open a browser automatically (%v) — use the link above.\n",
 			emo("⚠️", "!"), err)
 		return
 	}
-	fmt.Fprintf(out, "%s Opened your browser. If nothing appeared, use the link above.\n", emo("🌐", ">>"))
+	writePromptf(out, "%s Opened your browser. If nothing appeared, use the link above.\n", emo("🌐", ">>"))
 }
