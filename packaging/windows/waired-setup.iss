@@ -7,7 +7,7 @@
 ;   - runs `waired-agent.exe install` so the Go side handles SCM
 ;     registration, Event Log source, and the restrictive DACL on
 ;     %ProgramData%\waired\secrets (no duplicated logic here)
-;   - drops a Start Menu entry for "Waired Tray"
+;   - drops a Start Menu entry for "Waired" (the tray)
 ;   - on uninstall, runs `waired-agent.exe uninstall`
 ;
 ; AppId is the immutable identity Inno Setup uses to detect prior
@@ -70,7 +70,7 @@ Source: "dist\windows-amd64\LICENSE";              DestDir: "{app}"; Flags: igno
 Source: "dist\windows-amd64\THIRD_PARTY_LICENSES"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Waired Tray";       Filename: "{app}\waired-tray.exe"
+Name: "{group}\Waired";            Filename: "{app}\waired-tray.exe"
 Name: "{group}\Waired (CLI)";      Filename: "cmd.exe"; Parameters: "/k ""{app}\waired.exe"" --help"
 
 [Registry]
@@ -121,7 +121,7 @@ Filename: "{app}\waired.exe"; Parameters: "claude enable"; \
 ; run can write its HKCU\...\Run autostart entry via
 ; internal/platform/autostart/autostart_windows.go.
 Filename: "{app}\waired-tray.exe"; \
-    Description: "Launch Waired Tray now (recommended -- registers per-user autostart)"; \
+    Description: "Launch Waired now (recommended -- registers per-user autostart)"; \
     Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
