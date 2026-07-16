@@ -44,7 +44,7 @@ func TestPromptOllamaSource(t *testing.T) {
 			if got != tc.want {
 				t.Errorf("source = %q, want %q", got, tc.want)
 			}
-			warned := strings.Contains(out.String(), "supported minimum")
+			warned := strings.Contains(out.String(), "older than the version Waired supports")
 			if warned != tc.wantWarn {
 				t.Errorf("warning printed = %v, want %v (out=%q)", warned, tc.wantWarn, out.String())
 			}

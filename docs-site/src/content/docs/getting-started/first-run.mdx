@@ -36,15 +36,16 @@ Waired network with `waired init`. Run it once per machine.
    `--no-browser` to print the URL and code instead of opening a browser —
    useful on a headless server.)
 
-2. **Enable the inference engine? (Y/n)** — Choose **Y** on a machine that
+2. **Run AI models on this computer? (Y/n)** — Choose **Y** on a machine that
    should *run* a model (your GPU box). The default is Y when the machine has
    enough memory (roughly 8 GB of VRAM) and N otherwise. On a client laptop that
    only *uses* a remote model, choose **N**.
 
-3. **Share with mesh peers? (Y/n)** — Choose **Y** on a server so your other
-   devices can send it inference requests. Choose **N** to keep the engine
-   private to this machine (you can still use it yourself). This is independent
-   of the engine toggle — see [sharing vs. pausing](/reference/cli/#sharing-vs-pausing).
+3. **Let your other devices use this computer's AI? (Y/n)** — Choose **Y** on
+   a server so your other devices can send it inference requests. Choose **N**
+   to keep the AI private to this machine (you can still use it yourself). This
+   is independent of the run-AI toggle — see
+   [sharing vs. pausing](/reference/cli/#sharing-vs-pausing).
 </Steps>
 
 If you enabled the engine, `init` looks at this machine's CPU, memory, and GPU

@@ -78,7 +78,7 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 
 		if st.Phase != lastPhase {
 			if st.Phase == management.LoginPhaseActivating {
-				fmt.Println("Authorized; the daemon is bringing the agent online...")
+				fmt.Println("Signed in — starting Waired on this device...")
 			}
 			lastPhase = st.Phase
 		}
@@ -89,7 +89,7 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			if st.AccountEmail != "" {
 				fmt.Printf("Logged in as: %s\n", st.AccountEmail)
 			}
-			fmt.Println("The waired-agent daemon is signed in and the runtime is live.")
+			fmt.Println("Waired is signed in and running in the background.")
 			if skipIntegration {
 				fmt.Println("Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
 			} else if err := runPostLoginIntegration(postLoginIntegrationOpts{

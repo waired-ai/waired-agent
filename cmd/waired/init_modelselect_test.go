@@ -113,7 +113,7 @@ func TestApplyBundledModelSelection(t *testing.T) {
 		if cfg.Inference.Enabled {
 			t.Errorf("non-interactive under-spec must leave local inference off")
 		}
-		if !strings.Contains(out.String(), "left disabled") {
+		if !strings.Contains(out.String(), "local AI left off") {
 			t.Errorf("expected a non-interactive left-disabled note, got: %q", out.String())
 		}
 	})
