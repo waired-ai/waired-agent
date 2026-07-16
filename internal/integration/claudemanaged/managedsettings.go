@@ -29,7 +29,8 @@
 // ids not starting with "claude-", so it sizes the non-"claude-" local /model
 // directive id ("anthropic-waired-local") to an honest ~256k window while never
 // touching real "claude-*" ids — categorically different from the #771
-// auto-compact backstop that capped 1M Anthropic sessions. Off by default.
+// auto-compact backstop that capped 1M Anthropic sessions. On by default
+// (opt-out via agentconfig); WriteWithOptions gates the actual write.
 //
 // It also installs a Stop hook (hooks.Stop) that runs `waired claude
 // _fallback-hook` so a post-dispatch fallback to the real Anthropic API is

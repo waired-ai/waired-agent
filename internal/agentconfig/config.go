@@ -286,9 +286,11 @@ type InferenceConfig struct {
 	// and pause/resume desired-state files.
 	ShareWithMesh bool `json:"share_with_mesh"`
 
-	// ClaudeModelRouteDirectives opts into the reserved-model-id route
-	// directives for Claude Code (#52), default off. When true the Claude
-	// intercept (a) advertises two branded ids in /v1/models discovery so
+	// ClaudeModelRouteDirectives toggles the reserved-model-id route
+	// directives for Claude Code (#52), default ON so both switching
+	// mechanisms — /waired-route AND the /model picker — work out of the box
+	// (set false, via agent.json / env / flag, to opt out). When true the
+	// Claude intercept (a) advertises two branded ids in /v1/models discovery so
 	// they appear in Claude Code's /model picker — "anthropic-waired-local"
 	// (pins the conversation to LOCAL inference) and "claude-waired-cloud[1m]"
 	// (pins it to the real Anthropic API) — and (b) forces each request's
@@ -466,6 +468,8 @@ func Defaults() Config {
 			PreCacheUpdateCandidate:  true,
 			Enabled:                  true,
 			ShareWithMesh:            true,
+
+			ClaudeModelRouteDirectives: true,
 		},
 		Routing: RoutingConfig{Mode: state.RoutingModeAuto},
 	}

@@ -148,8 +148,9 @@ type Deps struct {
 	// Code's /model picker (which filters discovered ids to
 	// ^(claude|anthropic); their display names are free-form). Selecting one
 	// makes the intercept force this request's route, overriding the
-	// /waired-route policy. Gated by the agentconfig opt-in and wired only on
-	// the Claude-intercept HandlerSet; false leaves discovery unchanged.
+	// /waired-route policy. Gated by the agentconfig toggle (default on) and
+	// wired only on the Claude-intercept HandlerSet; false leaves discovery
+	// unchanged.
 	ClaudeModelDirectives bool
 
 	// TTFBBudget, when non-nil, returns the pre-commit time-to-first-byte

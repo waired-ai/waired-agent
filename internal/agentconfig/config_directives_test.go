@@ -5,21 +5,22 @@ import (
 	"testing"
 )
 
-// TestClaudeModelRouteDirectives_Plumbing: the #52 opt-in defaults off and is
-// settable via both env (WAIRED_INFERENCE_CLAUDE_MODEL_ROUTE_DIRECTIVES) and
-// the --inference-claude-model-route-directives flag.
+// TestClaudeModelRouteDirectives_Plumbing: the #52 feature defaults ON (so both
+// /waired-route and the /model directives work with no config) and is
+// opt-out-able via both env (WAIRED_INFERENCE_CLAUDE_MODEL_ROUTE_DIRECTIVES)
+// and the --inference-claude-model-route-directives flag.
 func TestClaudeModelRouteDirectives_Plumbing(t *testing.T) {
-	if Defaults().Inference.ClaudeModelRouteDirectives {
-		t.Fatal("ClaudeModelRouteDirectives default = true, want false (opt-in)")
+	if !Defaults().Inference.ClaudeModelRouteDirectives {
+		t.Fatal("ClaudeModelRouteDirectives default = false, want true (on by default)")
 	}
 
-	t.Run("env", func(t *testing.T) {
+	t.Run("env opts out", func(t *testing.T) {
 		cfg := Defaults()
-		if err := cfg.MergeEnv([]string{"WAIRED_INFERENCE_CLAUDE_MODEL_ROUTE_DIRECTIVES=true"}); err != nil {
+		if err := cfg.MergeEnv([]string{"WAIRED_INFERENCE_CLAUDE_MODEL_ROUTE_DIRECTIVES=false"}); err != nil {
 			t.Fatalf("MergeEnv: %v", err)
 		}
-		if !cfg.Inference.ClaudeModelRouteDirectives {
-			t.Error("env did not enable ClaudeModelRouteDirectives")
+		if cfg.Inference.ClaudeModelRouteDirectives {
+			t.Error("env=false did not disable ClaudeModelRouteDirectives")
 		}
 	})
 
@@ -30,15 +31,15 @@ func TestClaudeModelRouteDirectives_Plumbing(t *testing.T) {
 		}
 	})
 
-	t.Run("flag", func(t *testing.T) {
+	t.Run("flag opts out", func(t *testing.T) {
 		cfg := Defaults()
 		fs := flag.NewFlagSet("t", flag.ContinueOnError)
 		cfg.RegisterInferenceFlags(fs)
-		if err := fs.Parse([]string{"--inference-claude-model-route-directives"}); err != nil {
+		if err := fs.Parse([]string{"--inference-claude-model-route-directives=false"}); err != nil {
 			t.Fatalf("Parse: %v", err)
 		}
-		if !cfg.Inference.ClaudeModelRouteDirectives {
-			t.Error("flag did not enable ClaudeModelRouteDirectives")
+		if cfg.Inference.ClaudeModelRouteDirectives {
+			t.Error("flag=false did not disable ClaudeModelRouteDirectives")
 		}
 	})
 }

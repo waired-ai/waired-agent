@@ -169,10 +169,12 @@ type Config struct {
 	// (wairedLocalModel → route=waired, wairedCloudModel → route=anthropic),
 	// force that route for the request — overriding the per-class ClassRoute
 	// policy. This is what lets a Claude Code /model switch pick the backend
-	// in-session, alongside /waired-route. Opt-in (agentconfig) because it
-	// makes every main message-path request buffer+parse its body to read the
-	// id; off (zero value) keeps the historical fast path untouched. The
-	// gateway advertises the same ids in /v1/models under the same flag.
+	// in-session, alongside /waired-route. Default on in agentconfig; when set
+	// it makes every main message-path request buffer+parse its body to read
+	// the id (for the auto route the body is buffered anyway, so the extra cost
+	// falls on the pinned waired route). The zero value keeps the historical
+	// fast path untouched. The gateway advertises the same ids in /v1/models
+	// under the same flag.
 	ModelRouteDirectives bool
 }
 
