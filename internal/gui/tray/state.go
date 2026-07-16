@@ -260,6 +260,12 @@ type MenuModel struct {
 	// Inference group — present only on enrolled + Connected/Disconnected
 	// states when the daemon supports the inference toggle API. Empty
 	// strings hide the corresponding menu item.
+	//
+	// ShowInferenceMenu gates the "Inference ▸" submenu parent that houses
+	// this whole group (waired#809): true whenever applyInference ran (the
+	// daemon exposes the inference API), so old daemons render no empty
+	// parent. The engine/share/mesh/worker/recommend rows live under it.
+	ShowInferenceMenu     bool
 	InferenceToggleAction string // "Disable inference engine" | "Enable inference engine" | ""
 	InferenceStateLabel   string // "Engine: ready" / "Engine: disabled" / "Engine: loading" / ...
 	// EngineToggleAction drives the hard engine power axis (#186):
@@ -1375,6 +1381,9 @@ func applyOpenClaw(m *MenuModel, st *management.OpenClawIntegrationStatus) {
 // (operator's enable/disable intent) — the agent reports SubsystemState=
 // "disabled" when the operator has the engine turned off.
 func applyInference(m *MenuModel, inf *management.InferenceStatus) {
+	// The presence of the inference API is what surfaces the "Inference ▸"
+	// submenu parent (waired#809); the rows below fill it in.
+	m.ShowInferenceMenu = true
 	m.InferenceStateLabel = "Engine: " + humanInferenceState(inf.SubsystemState)
 	// Engine provenance (display-only): suffix non-spawned ownership to
 	// the state label and surface the agent-computed version warning /

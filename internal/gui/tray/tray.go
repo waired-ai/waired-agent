@@ -93,6 +93,11 @@ type tray struct {
 	miUpdate          *systray.MenuItem // "⚠ Update available — install vX"; hidden when current (#293)
 	miUpdateNotify    *systray.MenuItem // "✓ Notify me about updates"; under the banner, hidden when current (#294)
 	miToggle          *systray.MenuItem
+	// miInference is the "Inference ▸" submenu parent (waired#809). The
+	// engine/share/mesh/worker/recommend rows below are its children instead
+	// of top-level rows, so the top level stays short. Shown when
+	// ShowInferenceMenu is set.
+	miInference       *systray.MenuItem
 	miInferenceToggle *systray.MenuItem
 	miInferenceState  *systray.MenuItem
 	miEngineToggle    *systray.MenuItem
@@ -102,11 +107,13 @@ type tray struct {
 	miMeshReachable   *systray.MenuItem
 	miEngineWarning   *systray.MenuItem
 	miActiveModel     *systray.MenuItem
-	miDeviceLabel     *systray.MenuItem
-	miDeviceName      *systray.MenuItem
-	miOverlayIP       *systray.MenuItem
-	miNetwork         *systray.MenuItem
-	miPeers           *systray.MenuItem
+	// miDeviceLabel is the "This device ▸" submenu parent (waired#809);
+	// name / IP / network / peers are its children.
+	miDeviceLabel *systray.MenuItem
+	miDeviceName  *systray.MenuItem
+	miOverlayIP   *systray.MenuItem
+	miNetwork     *systray.MenuItem
+	miPeers       *systray.MenuItem
 	// Claude integration group — pre-allocated even on daemons that
 	// do not expose the endpoint; each item Hides itself in apply()
 	// when the corresponding model field is empty. Since the transparent
@@ -180,8 +187,12 @@ type tray struct {
 	lastWorkerModes      []WorkerModeRow      // Mode lookup for click dispatch
 	lastWorkerPinEntries []WorkerPinEntryView // DeviceID lookup for pin click dispatch
 
-	miCodeUI    *systray.MenuItem
-	miAdmin     *systray.MenuItem
+	miCodeUI *systray.MenuItem
+	miAdmin  *systray.MenuItem
+	// miSettings is the "Settings ▸" submenu parent (waired#809): the
+	// OpenCode/OpenClaw integration rows, Recent activity, autostart toggle,
+	// About, and Log out live under it instead of at the top level.
+	miSettings  *systray.MenuItem
 	miAbout     *systray.MenuItem
 	miAutostart *systray.MenuItem
 	miLogout    *systray.MenuItem
