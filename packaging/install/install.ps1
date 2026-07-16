@@ -128,6 +128,12 @@ param(
     # Force `waired init --non-interactive`. Auto-detected when stdin is
     # redirected (CI / piped through iex with a non-console stdin).
     [switch]$NonInteractive,
+    # Mask personal information (home dir, username) in this script's own
+    # output, and set WAIRED_PII_MASK=1 so `waired init` masks its output
+    # too (home dir, username, hostname, account email) -- for screenshots
+    # and bug reports. Best-effort, not a security boundary. Env form:
+    # WAIRED_PII_MASK=1 (the piped one-liner cannot bind switches).
+    [switch]$MaskPII,
     # -Check reports whether a newer waired is available and exits;
     # -Update applies it; -Yes assumes "yes" to the update prompt
     # (required to update on a non-interactive / no-TTY host). See #292.
@@ -250,6 +256,13 @@ if ($env:WAIRED_CLEAN) { $Clean = $true }
 # switch so every downstream check + the elevation re-invoke see one value.
 if ($env:WAIRED_NO_CLAUDE_PROXY) { $SkipClaudeProxy = $true }
 
+# WAIRED_PII_MASK is the env-var form of -MaskPII (mirrors install.sh's
+# --mask-pii). Folded both ways: the env sets the switch, and the switch sets
+# the env so every child (the elevated Phase 2, `waired init` and the engine
+# installer it runs) inherits the masking request.
+if ($env:WAIRED_PII_MASK) { $MaskPII = $true }
+if ($MaskPII) { $env:WAIRED_PII_MASK = '1' }
+
 # Built-in dogfood Control Plane URL surfaced via -Dev. Script-level only;
 # never compiled into the waired binary (spec section 10.4 -- binary hash stays
 # identical across environments).
@@ -320,8 +333,25 @@ function Emo {
     return $Ascii
 }
 
-function Common-Log  { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Cyan }
-function Common-Warn { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Yellow }
+# Protect-PII masks the invoking user's home dir + username in one message
+# when -MaskPII / WAIRED_PII_MASK is on (screenshots / bug reports;
+# best-effort). The Go binary masks its own output via the same env var --
+# this only covers the script's log lines. Longest token (the home dir,
+# which contains the username) is replaced first.
+function Protect-PII {
+    param([string]$Msg)
+    if (-not $MaskPII) { return $Msg }
+    if ($env:USERPROFILE -and $env:USERPROFILE.Length -ge 3) {
+        $Msg = $Msg.Replace($env:USERPROFILE, '<home>')
+    }
+    if ($env:USERNAME -and $env:USERNAME.Length -ge 3) {
+        $Msg = $Msg -replace "(?i)\b$([regex]::Escape($env:USERNAME))\b", '<user>'
+    }
+    return $Msg
+}
+
+function Common-Log  { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Cyan }
+function Common-Warn { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Yellow }
 
 # Section prints a blank line + a horizontal-rule heading so a run reads as
 # distinct steps (several tools write to this console; the rules make it easy
@@ -436,6 +466,7 @@ function Normalize-ExtraArgs {
             'skip-claude-proxy' { $script:SkipClaudeProxy = $true }
             'skip-proxy'        { $script:SkipClaudeProxy = $true }
             'non-interactive'   { $script:NonInteractive = $true }
+            'mask-pii'          { $script:MaskPII = $true; $env:WAIRED_PII_MASK = '1' }
             'dry-run'           { $script:DryRun = $true }
             'yes'               { $script:Yes = $true }
             'clean'             { $script:Clean = $true }
@@ -587,6 +618,10 @@ Switches:
                     as WAIRED_NO_CLAUDE_PROXY=1.
   -NonInteractive   Forward `--non-interactive` to `waired init`
                     (skip the install-time inference role prompts).
+  -MaskPII          Mask personal information (home dir, username; the
+                    sign-in step also masks hostname + account email) in
+                    the output -- for screenshots and bug reports.
+                    Best-effort. Same as WAIRED_PII_MASK=1.
   -Check            Report whether a newer waired is available, then exit.
                     Read-only: no download and no UAC prompt.
   -Update           Update an existing install to the latest release for
@@ -638,6 +673,8 @@ Environment variables:
   WAIRED_NO_CLAUDE_PROXY   If set, skip configuring Claude Code managed settings (same as -SkipClaudeProxy).
   WAIRED_INSTALL_DIR       Install location (same as -InstallDir; the env form
                            works with the piped one-liner).
+  WAIRED_PII_MASK          If set, mask personal information in the output
+                           (same as -MaskPII; works with the piped one-liner).
   WAIRED_STATE_DIR         Override on-disk state location. Default: %ProgramData%\waired.
   WAIRED_CONTROL_URL       Control Plane URL used when -Dev / -Control are
                            not given (lower-priority fallback for per-org
@@ -761,6 +798,7 @@ function Invoke-SelfElevate {
     if ($SkipInit)       { $passthroughArgs += '-SkipInit' }
     if ($SkipClaudeProxy){ $passthroughArgs += '-SkipClaudeProxy' }
     if ($NonInteractive) { $passthroughArgs += '-NonInteractive' }
+    if ($MaskPII)        { $passthroughArgs += '-MaskPII' }
     if ($OllamaGpuMode -and $OllamaGpuMode -ne 'auto') { $passthroughArgs += @('-OllamaGpuMode', $OllamaGpuMode) }
     if ($OllamaModelsDir)  { $passthroughArgs += @('-OllamaModelsDir',  $OllamaModelsDir) }
     if ($InferenceEnabled) { $passthroughArgs += @('-InferenceEnabled', $InferenceEnabled) }
