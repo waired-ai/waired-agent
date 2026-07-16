@@ -83,7 +83,7 @@ func (p *proxyHandle) localAdapter() http.Handler {
 // proxies everything else to the real api.anthropic.com. port<=0 disables it
 // (returns nil,nil,nil). The caller serves the returned listener via
 // srv.Serve(ctx, ln).
-func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController, logger *slog.Logger) (*intercept.Server, net.Listener, error) {
+func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController, modelRouteDirectives bool, logger *slog.Logger) (*intercept.Server, net.Listener, error) {
 	if port <= 0 {
 		return nil, nil, nil // disabled
 	}
@@ -128,7 +128,13 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 	}
 	// #757: annotate an auto-mode reroute in-conversation so the user can tell
 	// a turn/subagent left the mesh (a subagent-side record alone is invisible).
-	srv, err := intercept.NewServer(intercept.Config{Addr: addr, AnnotateReroute: true}, deps)
+	// #52: honour reserved /model directive ids as per-request route overrides
+	// (opt-in), the intercept half of the gateway's discovery advertisement.
+	srv, err := intercept.NewServer(intercept.Config{
+		Addr:                 addr,
+		AnnotateReroute:      true,
+		ModelRouteDirectives: modelRouteDirectives,
+	}, deps)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claude proxy: new server: %w", err)
 	}

@@ -142,6 +142,17 @@ type Deps struct {
 	// every other listener disables the behaviour.
 	ContextWindowFor func(modelID string) int
 
+	// ClaudeModelDirectives, when true, makes the Anthropic /v1/models
+	// discovery additionally advertise the reserved route-directive ids
+	// (ModelWairedLocal / ModelWairedCloud, #52) so they appear in Claude
+	// Code's /model picker (which filters discovered ids to
+	// ^(claude|anthropic); their display names are free-form). Selecting one
+	// makes the intercept force this request's route, overriding the
+	// /waired-route policy. Gated by the agentconfig toggle (default on) and
+	// wired only on the Claude-intercept HandlerSet; false leaves discovery
+	// unchanged.
+	ClaudeModelDirectives bool
+
 	// TTFBBudget, when non-nil, returns the pre-commit time-to-first-byte
 	// deadline for a PEER inference leg of the given traffic class
 	// ("main" / "sub", "" when unclassified). If the selected peer returns

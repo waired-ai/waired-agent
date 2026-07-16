@@ -24,6 +24,14 @@
 // own per-model resolution now governs the anthropic route, tracking /model
 // switches mid-session. Write scrubs the legacy value from earlier installs.
 //
+// The model-route-directives feature (#52), when opted in, additionally writes
+// env.CLAUDE_CODE_MAX_CONTEXT_TOKENS. That override is honoured ONLY for model
+// ids not starting with "claude-", so it sizes the non-"claude-" local /model
+// directive id ("anthropic-waired-local") to an honest ~256k window while never
+// touching real "claude-*" ids — categorically different from the #771
+// auto-compact backstop that capped 1M Anthropic sessions. On by default
+// (opt-out via agentconfig); WriteWithOptions gates the actual write.
+//
 // It also installs a Stop hook (hooks.Stop) that runs `waired claude
 // _fallback-hook` so a post-dispatch fallback to the real Anthropic API is
 // visible in the Claude Code TUI (#580; see hook.go). Stop hooks array-merge
@@ -99,6 +107,25 @@ const SubagentModelID = "waired/subagent"
 // one.
 const subagentModelKey = "CLAUDE_CODE_SUBAGENT_MODEL"
 
+// maxContextTokensKey is Claude Code's per-session context-window override for
+// model ids that do NOT start with "claude-" (verified against v2.1.207): for
+// such an id the window is CLAUDE_CODE_MAX_CONTEXT_TOKENS when set, else the
+// 200k default. It does NOT touch real "claude-*" ids, so — unlike the #771
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW backstop this package deliberately stopped
+// writing — it can never cap a genuine 1M Anthropic session. waired writes it
+// only for the model-route-directives feature (#52), to give the non-"claude-"
+// local id ("anthropic-waired-local") an honest ~256k window; like every
+// managed env it is frozen at Claude Code process start.
+const maxContextTokensKey = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+
+// directivesMaxContextTokensValue is the window waired advertises for the local
+// directive id (#52): a little under the ~256k local engine window so Claude
+// Code compacts proactively just before the gateway's per-request overflow 400
+// would fire. Treated as waired-owned: set when the feature is on, scrubbed
+// (only when it still carries this exact value, mirroring the auto-compact
+// backstop scrub) when it is off, so an operator's own override survives.
+const directivesMaxContextTokensValue = "250000"
+
 // loopbackPrefix is the signature of a URL waired itself writes. Remove only
 // strips ANTHROPIC_BASE_URL when it carries this prefix, so an operator's own
 // non-loopback gateway URL is never clobbered by a waired uninstall.
@@ -119,12 +146,30 @@ func resolvePath() string { return pathResolver() }
 // unsupported.
 func Path() string { return resolvePath() }
 
+// WriteOptions carries the feature toggles a managed-settings write depends on
+// beyond the base URL.
+type WriteOptions struct {
+	// ModelRouteDirectives mirrors agentconfig
+	// InferenceConfig.ClaudeModelRouteDirectives (#52). When true, Write sets
+	// CLAUDE_CODE_MAX_CONTEXT_TOKENS so the non-"claude-" local /model id gets
+	// an honest ~256k window; when false, Write scrubs the value waired wrote
+	// (leaving an operator's own override alone), so toggling the feature off
+	// and re-running `waired claude enable` cleans up after itself.
+	ModelRouteDirectives bool
+}
+
 // Write merges env.ANTHROPIC_BASE_URL=baseURL and the subagent traffic
 // label env.CLAUDE_CODE_SUBAGENT_MODEL=SubagentModelID (#646) into the OS
 // managed-settings.json (creating it and its parent dir if needed),
 // preserving every other key. No credential variable is written. Returns
-// the path written.
+// the path written. It is WriteWithOptions with all feature toggles off — the
+// common enable path.
 func Write(baseURL string) (string, error) {
+	return WriteWithOptions(baseURL, WriteOptions{})
+}
+
+// WriteWithOptions is Write with the caller's resolved feature toggles (#52).
+func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	path := resolvePath()
 	if path == "" {
 		return "", ErrUnsupportedOS
@@ -159,6 +204,15 @@ func Write(baseURL string) (string, error) {
 	// intercept rewrites the id back to a real Anthropic model on
 	// passthrough legs. Unconditional overwrite, like the base URL.
 	env[subagentModelKey] = SubagentModelID
+	// #52: give the non-"claude-" local /model directive id an honest ~256k
+	// window via CLAUDE_CODE_MAX_CONTEXT_TOKENS when the feature is on; scrub
+	// our value when it is off (an operator's own override — any other value —
+	// survives). Harmless when the feature is off and the key was never set.
+	if opts.ModelRouteDirectives {
+		env[maxContextTokensKey] = directivesMaxContextTokensValue
+	} else if cur, ok := env[maxContextTokensKey].(string); ok && cur == directivesMaxContextTokensValue {
+		delete(env, maxContextTokensKey)
+	}
 	obj["env"] = env
 
 	// Install the Stop hook (#580) so a post-dispatch fallback is visible in the
@@ -211,6 +265,11 @@ func Remove() (bool, error) {
 			delete(env, discoveryKey)
 			if cur, ok := env[autoCompactWindowKey].(string); ok && cur == legacyAutoCompactWindowValue {
 				delete(env, autoCompactWindowKey)
+			}
+			// #52: scrub our max-context-tokens value (an operator's own
+			// override — any other value — is preserved).
+			if cur, ok := env[maxContextTokensKey].(string); ok && cur == directivesMaxContextTokensValue {
+				delete(env, maxContextTokensKey)
 			}
 			removed = true
 		}

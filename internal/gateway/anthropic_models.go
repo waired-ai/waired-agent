@@ -26,6 +26,26 @@ type anthropicModel struct {
 
 const anthropicModelsPrefix = "/anthropic/v1/models/"
 
+// Reserved /model route-directive ids (#52), advertised in the Claude
+// intercept's /v1/models discovery (gated by Deps.ClaudeModelDirectives) so
+// they surface in Claude Code's /model picker — which filters discovered ids
+// to ^(claude|anthropic); their display_name is free-form. Selecting one makes
+// the intercept force this request's route, overriding the /waired-route
+// policy. The intercept duplicates these literals to stay stdlib-only — keep
+// both sides in sync (internal/proxy/intercept/model_rewrite.go).
+const (
+	// ModelWairedLocal pins the conversation to LOCAL inference (the intercept
+	// forces route=waired). It deliberately does NOT start with "claude-", so
+	// Claude Code applies the CLAUDE_CODE_MAX_CONTEXT_TOKENS managed-settings
+	// value to it (that env is honoured only for non-"claude-" ids) — the
+	// honest ~256k local window instead of Claude Code's 200k default.
+	ModelWairedLocal = "anthropic-waired-local"
+	// ModelWairedCloud pins the conversation to the real Anthropic API (the
+	// intercept forces route=anthropic and rewrites this id to a real model on
+	// passthrough). The "[1m]" suffix gives it Claude Code's 1M window.
+	ModelWairedCloud = "claude-waired-cloud[1m]"
+)
+
 // handleAnthropicModels serves the Anthropic Models API locally so Claude
 // Code — routed here by the intercept's /v1/models override (#623) —
 // discovers the LOCAL catalog and, crucially, each model's effective
@@ -86,6 +106,15 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 			m.MaxInputTokens = h.deps.ContextWindowFor(id)
 		}
 		out = append(out, m)
+	}
+	// #52: reserved route-directive ids first, so they are prominent in the
+	// /model picker. Opt-in via agentconfig; only advertised on the Claude
+	// intercept surface. add() stamps each with ContextWindowFor (harmless —
+	// Claude Code sizes the window from the id string, not this field); the
+	// honest local window comes from CLAUDE_CODE_MAX_CONTEXT_TOKENS instead.
+	if h.deps.ClaudeModelDirectives {
+		add(ModelWairedLocal, "Waired local (this device)")
+		add(ModelWairedCloud, "Waired cloud (Anthropic API)")
 	}
 	for _, id := range router.DynamicCodingAliases {
 		add(id, "")

@@ -25,6 +25,38 @@ const wairedModelPrefix = "waired/"
 // — so the last-observed main model is the closest approximation).
 const defaultPassthroughModel = "claude-sonnet-5"
 
+// wairedLocalModel / wairedCloudModel are the reserved /model route-directive
+// ids (#52). Selected in Claude Code's /model picker they force this request's
+// route regardless of the operator's /waired-route policy: local pins to the
+// device (route=waired), cloud pins to the real Anthropic API
+// (route=anthropic). The gateway advertises them in /v1/models discovery
+// (gateway.ModelWaired{Local,Cloud}); the literals are duplicated here to keep
+// this fail-open package stdlib-only — keep both sides in sync.
+const (
+	wairedLocalModel = "anthropic-waired-local"
+	wairedCloudModel = "claude-waired-cloud[1m]"
+)
+
+// directiveRoute maps a reserved directive model id to the route it forces,
+// or ("", false) for any other id (which follows the /waired-route policy).
+// Consulted only when Config.ModelRouteDirectives is set.
+func directiveRoute(model string) (route string, ok bool) {
+	switch model {
+	case wairedLocalModel:
+		return routeWaired, true
+	case wairedCloudModel:
+		return routeAnthropic, true
+	default:
+		return "", false
+	}
+}
+
+// isDirectiveModel reports whether model is one of the reserved directive ids.
+func isDirectiveModel(model string) bool {
+	_, ok := directiveRoute(model)
+	return ok
+}
+
 // bodyModel extracts the top-level "model" string from a JSON request
 // body. ok=false when the body is not a JSON object or model is not a
 // string — callers treat that as "leave the body alone" (fail-open).
@@ -45,16 +77,18 @@ func bodyModel(body []byte) (string, bool) {
 }
 
 // rewritePassthroughModel returns (newBody, true) when body is a JSON
-// object whose "model" is a waired/-prefixed string; otherwise
-// (nil, false) and the caller passes the original bytes through
-// verbatim. The mutation is lossless for every other field: the object
-// is decoded as map[string]json.RawMessage so numbers, unicode, and
-// unknown fields are re-emitted byte-exact — only the "model" value is
-// re-encoded.
+// object whose "model" is a waired/-prefixed string OR the reserved cloud
+// directive id (#52); otherwise (nil, false) and the caller passes the
+// original bytes through verbatim. Both are ids the real Anthropic API would
+// reject, so they must be rewritten to a real model on any passthrough leg.
+// The mutation is lossless for every other field: the object is decoded as
+// map[string]json.RawMessage so numbers, unicode, and unknown fields are
+// re-emitted byte-exact — only the "model" value is re-encoded.
 func rewritePassthroughModel(body []byte, replacement string) ([]byte, bool) {
-	// Cheap pre-filter: only subagent-labelled bodies contain the
-	// prefix at all; everything else skips the parse.
-	if !bytes.Contains(body, []byte(`"`+wairedModelPrefix)) {
+	// Cheap pre-filter: only subagent-labelled bodies carry the waired/
+	// prefix and only a cloud-directive selection carries that id;
+	// everything else skips the parse.
+	if !bytes.Contains(body, []byte(`"`+wairedModelPrefix)) && !bytes.Contains(body, []byte(wairedCloudModel)) {
 		return nil, false
 	}
 	var obj map[string]json.RawMessage
@@ -69,7 +103,7 @@ func rewritePassthroughModel(body []byte, replacement string) ([]byte, bool) {
 	if err := json.Unmarshal(raw, &model); err != nil {
 		return nil, false
 	}
-	if !strings.HasPrefix(model, wairedModelPrefix) {
+	if !strings.HasPrefix(model, wairedModelPrefix) && model != wairedCloudModel {
 		return nil, false
 	}
 	enc, err := json.Marshal(replacement)
@@ -89,7 +123,10 @@ func rewritePassthroughModel(body []byte, replacement string) ([]byte, bool) {
 // passthroughReplacement so subagent rewrites follow whatever model the
 // operator's Claude Code main loop is actually using.
 func (s *Server) observeMainModel(model string) {
-	if model == "" || strings.HasPrefix(model, wairedModelPrefix) {
+	// Skip waired/ ids and the reserved directive ids (#52): none is a real
+	// Anthropic model, so letting one become the passthrough replacement
+	// target would rewrite a fake id to itself and still be rejected upstream.
+	if model == "" || strings.HasPrefix(model, wairedModelPrefix) || isDirectiveModel(model) {
 		return
 	}
 	s.lastMainModel.Store(model)

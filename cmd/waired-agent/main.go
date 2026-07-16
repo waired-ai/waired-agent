@@ -1239,7 +1239,7 @@ func run(ctx context.Context, args []string) error {
 	// a nonzero port. Non-fatal by design: the WG/mesh data plane is independent
 	// of it, and a loopback bind failure must not crash-loop the whole agent.
 	if cfgRoot.Inference.AllowAnthropicAPI && cfgRoot.Inference.ClaudeGatewayPort > 0 {
-		if claudeSrv, claudeLn, cerr := buildClaudeListener(cfgRoot.Inference.ClaudeGatewayPort, proxyH, claudeRouting, logger); cerr != nil {
+		if claudeSrv, claudeLn, cerr := buildClaudeListener(cfgRoot.Inference.ClaudeGatewayPort, proxyH, claudeRouting, cfgRoot.Inference.ClaudeModelRouteDirectives, logger); cerr != nil {
 			logger.Error("claude loopback gateway: bind failed; Claude integration not serving", "err", cerr)
 		} else if claudeSrv != nil {
 			logger.Info("claude loopback gateway listening", "addr", claudeLn.Addr().String())

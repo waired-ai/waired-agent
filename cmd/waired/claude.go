@@ -113,6 +113,15 @@ func claudeBaseURL(stateDir string) (string, int) {
 	return fmt.Sprintf("http://127.0.0.1:%d", port), port
 }
 
+// claudeManagedWriteOptions resolves the managed-settings write options from
+// agent.json — currently the model-route-directives opt-in (#52), which adds
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS for the local /model directive id's window.
+func claudeManagedWriteOptions(stateDir string) claudemanaged.WriteOptions {
+	c := agentconfig.Defaults()
+	_ = c.MergeJSON(agentconfig.JSONPathFor(stateDir))
+	return claudemanaged.WriteOptions{ModelRouteDirectives: c.Inference.ClaudeModelRouteDirectives}
+}
+
 func runClaudeEnable(stateDir string, noStatusline bool) error {
 	baseURL, _ := claudeBaseURL(stateDir)
 
@@ -122,7 +131,7 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 
 	// Write also installs the Stop hook (managed-settings hooks.Stop) so a
 	// post-dispatch fallback is visible in the Claude Code TUI (#580).
-	path, err := claudemanaged.Write(baseURL)
+	path, err := claudemanaged.WriteWithOptions(baseURL, claudeManagedWriteOptions(stateDir))
 	if err != nil {
 		if errors.Is(err, claudemanaged.ErrUnsupportedOS) {
 			return fmt.Errorf("waired claude enable: managed settings are not supported on this OS")

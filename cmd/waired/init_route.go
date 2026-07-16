@@ -24,7 +24,7 @@ import (
 func promptClaudeRouting(out io.Writer, sc *bufio.Scanner, baseURL, stateDir string) bool {
 	return promptClaudeRoutingWith(out, sc, baseURL, func() (string, error) {
 		legacycleanup.Run(stateDir, stderrLogger())
-		return claudemanaged.Write(baseURL)
+		return claudemanaged.WriteWithOptions(baseURL, claudeManagedWriteOptions(stateDir))
 	})
 }
 
