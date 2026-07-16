@@ -227,12 +227,12 @@ type MenuModel struct {
 	// detail moves into submenus (waired#809). Empty unless degraded.
 	DegradedReason string
 	AccountEmail   string
-	DeviceName   string
-	OverlayIP    string
-	NetworkName  string
-	PeerCount    int
-	AdminURL     string // "" hides the Open Admin Console... item
-	StatusMsg    string // body for daemon-down / error states
+	DeviceName     string
+	OverlayIP      string
+	NetworkName    string
+	PeerCount      int
+	AdminURL       string // "" hides the Open Admin Console... item
+	StatusMsg      string // body for daemon-down / error states
 	// ToggleAction is the label the connect-toggle menu item should render:
 	// "Disconnect" | "Connect" | "Log in..." | "" (hidden).
 	ToggleAction string
