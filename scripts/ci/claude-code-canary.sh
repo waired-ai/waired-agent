@@ -18,6 +18,16 @@
 #      (internal/gateway/anthropic.go) is worded to match; the Go side of the
 #      contract is pinned by
 #      gateway.TestAnthropicMessages_OverflowMessageMatchesClaudeCodeParser.
+#   4. CLAUDE_CODE_MAX_CONTEXT_TOKENS — the per-session window override the
+#      model-route-directives opt-in (#52) writes so the non-"claude-" local
+#      /model id ("anthropic-waired-local") gets an honest ~256k window. It is
+#      honoured only for ids NOT starting with "claude-". If the knob
+#      disappears (or starts applying to "claude-*" ids), the directive
+#      window mechanism in internal/integration/claudemanaged must be
+#      re-verified. Note: two other #52 dependencies are NOT greppable stable
+#      literals and rely on the on-device verification recorded in the PR — the
+#      /model picker's ^(claude|anthropic) id filter, and the "[1m]" 1M-window
+#      suffix.
 #
 # This script greps the released binary for the strings those behaviors hang
 # off. A failure does NOT mean waired is broken — it means a Claude Code
@@ -53,6 +63,7 @@ check() {
 check "auto-compact env override"   "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 check "gateway model discovery env" "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 check "reactive-compact trigger"    "prompt is too long"
+check "max-context-tokens override" "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "One or more Claude Code invariants waired depends on have changed." >&2

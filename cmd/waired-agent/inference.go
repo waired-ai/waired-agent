@@ -569,6 +569,11 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// unknown-model resolver (#601).
 	claudeDeps.ContextWindowFor = provider.ContextWindowFor
 	claudeDeps.ClassifyModel = classifyClaudeModel
+	// #52 (opt-in): advertise the reserved route-directive ids in /v1/models
+	// discovery so they appear in Claude Code's /model picker. The intercept
+	// (buildClaudeListener) honours the same ids as per-request route
+	// directives under the same flag.
+	claudeDeps.ClaudeModelDirectives = cfg.ClaudeModelRouteDirectives
 	// #757: bound the pre-first-byte window on a PEER leg per traffic class so a
 	// stalled-but-reachable serving peer reroutes (auto mode only — see the
 	// intercept's X-Waired-Fallback-Allowed gate) instead of hanging the turn.

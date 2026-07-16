@@ -163,6 +163,17 @@ type Config struct {
 	// (tool_use) or non-stream response. Zero value off so tests opt in;
 	// production wiring (buildClaudeListener) sets it true.
 	AnnotateReroute bool
+
+	// ModelRouteDirectives (#52), when true, makes routeInference inspect each
+	// request's model id and, when it is a reserved directive id
+	// (wairedLocalModel → route=waired, wairedCloudModel → route=anthropic),
+	// force that route for the request — overriding the per-class ClassRoute
+	// policy. This is what lets a Claude Code /model switch pick the backend
+	// in-session, alongside /waired-route. Opt-in (agentconfig) because it
+	// makes every main message-path request buffer+parse its body to read the
+	// id; off (zero value) keeps the historical fast path untouched. The
+	// gateway advertises the same ids in /v1/models under the same flag.
+	ModelRouteDirectives bool
 }
 
 // Deps bundles the collaborators. Caller (cmd/waired-agent) wires the real
@@ -311,6 +322,32 @@ func (s *Server) Handler() http.Handler { return s.handler() }
 // request's route — the default (subagents follow main) keeps the historical
 // no-classification fast path.
 func (s *Server) routeInference(w http.ResponseWriter, r *http.Request) {
+	// #52: a reserved /model directive id forces this request's route,
+	// overriding the per-class /waired-route policy. Opt-in; only when on do we
+	// always buffer+parse to read the id (a directive request rides the
+	// buffered body straight into dispatchRoute). A non-directive id, a missing
+	// model, or an over-cap/unreadable body falls through to the per-class
+	// policy below — fail-open, exactly as the classify path already handles an
+	// unbufferable body.
+	if s.cfg.ModelRouteDirectives {
+		if body, buffered := readCappedBody(r, maxFallbackBodyBytes); buffered {
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.ContentLength = int64(len(body))
+			if model, ok := bodyModel(body); ok {
+				if route, forced := directiveRoute(model); forced {
+					class := classMain
+					if s.deps.ClassifyModel != nil {
+						class = s.deps.ClassifyModel(model)
+					}
+					s.log.Debug("intercept: model-route directive forcing route",
+						"path", r.URL.Path, "model", model, "route", route, "class", class)
+					s.dispatchRoute(w, r, route, class, body)
+					return
+				}
+			}
+		}
+	}
+
 	mainRoute := s.classRoute(classMain)
 	subRoute := s.classRoute(classSub)
 	if mainRoute == subRoute {

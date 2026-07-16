@@ -652,7 +652,7 @@ func runInitBody(o *initFlags) error {
 		fmt.Printf("\n%s %s\n", emo("🔌", "*"), bold("Configuring Claude Code integration (managed settings)…"))
 		legacycleanup.Run(*stateDir, stderrLogger())
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
-		if path, err := claudemanaged.Write(baseURL); err != nil {
+		if path, err := claudemanaged.WriteWithOptions(baseURL, claudemanaged.WriteOptions{ModelRouteDirectives: cfgRoot.Inference.ClaudeModelRouteDirectives}); err != nil {
 			fmt.Fprintf(os.Stderr,
 				"warn: writing Claude Code managed settings failed (%v); %s\n",
 				err, elevationHintFor(runtime.GOOS, "waired claude enable"))

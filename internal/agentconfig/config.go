@@ -285,6 +285,21 @@ type InferenceConfig struct {
 	// on next boot — the same precedence used by the inference-disable
 	// and pause/resume desired-state files.
 	ShareWithMesh bool `json:"share_with_mesh"`
+
+	// ClaudeModelRouteDirectives opts into the reserved-model-id route
+	// directives for Claude Code (#52), default off. When true the Claude
+	// intercept (a) advertises two branded ids in /v1/models discovery so
+	// they appear in Claude Code's /model picker — "anthropic-waired-local"
+	// (pins the conversation to LOCAL inference) and "claude-waired-cloud[1m]"
+	// (pins it to the real Anthropic API) — and (b) forces each request's
+	// route from the selected id, OVERRIDING the /waired-route per-class
+	// policy, so backend selection becomes a one-action /model switch that
+	// runs alongside /waired-route. It also makes `waired claude enable`
+	// write CLAUDE_CODE_MAX_CONTEXT_TOKENS so the non-"claude-"-prefixed
+	// local id carries an honest ~256k window instead of Claude Code's 200k
+	// default. Read at boot by the agent (intercept + gateway) and at
+	// enable-time by the CLI (managed-settings write).
+	ClaudeModelRouteDirectives bool `json:"claude_model_route_directives"`
 }
 
 // ExternalEndpoint configures one entry in InferenceConfig.ExternalEndpoints.
@@ -727,6 +742,12 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.ShareWithMesh = b
+	case "CLAUDE_MODEL_ROUTE_DIRECTIVES":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		c.ClaudeModelRouteDirectives = b
 	default:
 		// Unknown WAIRED_INFERENCE_* variable: ignore silently so we
 		// can add new env-overridable fields in later phases without
@@ -831,6 +852,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&c.Inference.ShareWithMesh, "inference-share-with-mesh",
 		c.Inference.ShareWithMesh,
 		"install-time default: expose local engine to mesh peers (runtime toggle: `waired inference share`)")
+	fs.BoolVar(&c.Inference.ClaudeModelRouteDirectives, "inference-claude-model-route-directives",
+		c.Inference.ClaudeModelRouteDirectives,
+		"opt-in: expose Waired as /model entries that switch Claude Code's backend + set an honest local window (#52)")
 }
 
 // DefaultJSONPath returns the canonical agent.json location under the
