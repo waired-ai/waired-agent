@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/browser"
 )
 
 // daemonReachable reports whether a waired-agent daemon is answering the
@@ -61,19 +62,11 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 	for {
 		if st.LoginURL != "" && !opened {
 			opened = true
-			if noBrowser {
-				fmt.Printf("\nOpen this URL on another device:\n  %s\n", st.LoginURL)
-				if st.UserCode != "" {
-					fmt.Printf("\nCode: %s\n", st.UserCode)
-				}
-				fmt.Println("\nWaiting for login...")
-			} else {
-				fmt.Printf("Opening browser for sign-in: %s\n", st.LoginURL)
-				if err := openBrowser(st.LoginURL); err != nil {
-					fmt.Fprintf(os.Stderr, "warn: could not auto-open browser (%v); paste this URL manually:\n  %s\n",
-						err, st.LoginURL)
-				}
-			}
+			// gcloud-style gate: URL first, browser only on Enter (or
+			// immediately when the session can't answer a prompt). See
+			// login_gate.go.
+			presentLoginURL(os.Stdin, os.Stdout, st.LoginURL, st.UserCode,
+				resolveBrowserGate(noBrowser, nonInteractive, isTerminal(os.Stdin), browser.HasDisplay()))
 		}
 
 		if st.Phase != lastPhase {

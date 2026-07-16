@@ -32,9 +32,11 @@ Waired network with `waired init`. Run it once per machine.
 `waired init` walks you through three prompts:
 
 <Steps>
-1. **Google sign-in.** A browser opens to complete the sign-in. (Add
-   `--no-browser` to print the URL and code instead of opening a browser —
-   useful on a headless server.)
+1. **Google sign-in.** `init` prints the sign-in link first, then — on an
+   interactive terminal — waits for you to press **Enter** before opening
+   your browser (you can also just open the link yourself). Non-interactive
+   sessions open the browser right away, and on a headless machine (or with
+   `--no-browser`) only the URL and pairing code are printed.
 
 2. **Enable the inference engine? (Y/n)** — Choose **Y** on a machine that
    should *run* a model (your GPU box). The default is Y when the machine has
