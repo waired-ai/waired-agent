@@ -55,9 +55,21 @@ func runOllamaWindowsInstallerImpl(ctx context.Context) error {
 		return fmt.Errorf("close temp script: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "powershell",
+	// GPU mode / models dir come from the same env knobs the one-liner
+	// installer exposes (install.ps1 -OllamaGpuMode / -OllamaModelsDir
+	// resolve into these before running `waired init`, which lands here).
+	gpuMode := os.Getenv("WAIRED_OLLAMA_GPU_MODE")
+	if gpuMode == "" {
+		gpuMode = "auto"
+	}
+	args := []string{
 		"-NoProfile", "-ExecutionPolicy", "Bypass",
-		"-File", tmp, "-GpuMode", "auto")
+		"-File", tmp, "-GpuMode", gpuMode,
+	}
+	if d := os.Getenv("WAIRED_OLLAMA_MODELS_DIR"); d != "" {
+		args = append(args, "-ModelsDir", d)
+	}
+	cmd := exec.CommandContext(ctx, "powershell", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

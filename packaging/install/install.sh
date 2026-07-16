@@ -62,10 +62,11 @@ WAIRED_APT_KEY_URL="${WAIRED_APT_KEY_URL:-https://asia-northeast1-apt.pkg.dev/do
 WAIRED_DEV_CONTROL_URL="${WAIRED_DEV_CONTROL_URL:-https://app.dev.waired.net}"
 
 # macOS only: the official Ollama.app download (universal binary, both
-# arches). darwin_install fetches this when no ollama is already present
-# and installs it into /Applications so waired's ResolveBinary finds the
-# CLI at /Applications/Ollama.app/Contents/Resources/ollama. Override to
-# pin a version or point at an internal mirror.
+# arches). The engine install itself happens inside `waired init` (which
+# asks "run local inference?" first); this URL is forwarded to it through
+# the sudo env_reset (darwin_maybe_init) so a pinned version / internal
+# mirror override still works. The app lands in /Applications so waired's
+# ResolveBinary finds the CLI at Ollama.app/Contents/Resources/ollama.
 WAIRED_OLLAMA_DARWIN_URL="${WAIRED_OLLAMA_DARWIN_URL:-https://github.com/ollama/ollama/releases/latest/download/Ollama-darwin.zip}"
 
 # Linux installs waired's BUNDLED Ollama (pinned official release into
@@ -806,9 +807,15 @@ EOF
         return 0
     fi
     common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
-    set -- init --state-dir /var/lib/waired
+    set -- waired init --state-dir /var/lib/waired
     [ "$FLAG_YES" = 1 ] && set -- "$@" --non-interactive
-    $SUDO waired "$@" </dev/tty || \
+    # init has a root-time fallback that installs the bundled engine when the
+    # pre-install above failed; keep --skip-ollama honoured across the sudo
+    # env_reset by threading WAIRED_NO_OLLAMA through `env`.
+    if ollama_skip_requested; then
+        set -- env WAIRED_NO_OLLAMA=1 "$@"
+    fi
+    $SUDO "$@" </dev/tty || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
 }
 
@@ -1081,12 +1088,12 @@ darwin_install() {
 
     section 'Installing Waired'
     darwin_install_binaries
-    section 'AI engine (Ollama)'
-    if ollama_skip_requested; then
-        common_log "Ollama install skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
-    else
-        darwin_install_ollama
-    fi
+    # The Ollama engine is NOT pre-installed here any more: `waired init`
+    # owns both the decision (its "run local inference?" answers) and the
+    # install (the official Ollama.app, with a live progress bar). Installing
+    # it here made init re-detect waired's own install as a "foreign" Ollama
+    # and ask a confusing reuse question about it. --skip-ollama is forwarded
+    # to init as WAIRED_NO_OLLAMA (darwin_maybe_init).
     section 'Background service'
     darwin_register_agent "$state_dir"
     darwin_install_log_rotation
@@ -1121,7 +1128,13 @@ darwin_install_binaries() {
     tmp="$(mktemp -d)"
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" EXIT
-    curl -fsSL "$url" -o "$tmp/$tarball"
+    # Single-line progress bar (-#) on a terminal so the multi-MB fetch is
+    # visibly alive; stay fully silent when piped/CI so logs don't fill up.
+    if [ -t 2 ]; then
+        curl -f#SL "$url" -o "$tmp/$tarball"
+    else
+        curl -fsSL "$url" -o "$tmp/$tarball"
+    fi
     curl -fsSL "$sha_url" -o "$tmp/$tarball.sha256"
 
     expected="$(awk '{print $1}' "$tmp/$tarball.sha256")"
@@ -1152,60 +1165,6 @@ darwin_install_binaries() {
         common_log "Installing waired-tray into $WAIRED_DARWIN_BINDIR (sudo)"
         $SUDO install -m 0755 "$tmp/waired-tray" "$WAIRED_DARWIN_BINDIR/waired-tray"
     fi
-}
-
-# Install Ollama. Reuse an existing install if one is resolvable on
-# $PATH or at the well-known paths waired's ResolveBinary checks;
-# otherwise download the official Ollama.app into /Applications. No
-# Homebrew dependency.
-darwin_install_ollama() {
-    for cand in \
-        "$(command -v ollama 2>/dev/null || true)" \
-        /Applications/Ollama.app/Contents/Resources/ollama \
-        /usr/local/bin/ollama \
-        /opt/homebrew/bin/ollama; do
-        if [ -n "$cand" ] && [ -x "$cand" ]; then
-            common_log "Ollama already present at $cand — skipping download"
-            return 0
-        fi
-    done
-
-    common_log "Installing Ollama.app from $WAIRED_OLLAMA_DARWIN_URL"
-    if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: download Ollama-darwin.zip, verify against sha256sum.txt,"
-        common_log "  (dry-run) would: unzip into /Applications, then 'open -a Ollama'"
-        return 0
-    fi
-    common_require_cmd unzip
-
-    otmp="$(mktemp -d)"
-    curl -fsSL "$WAIRED_OLLAMA_DARWIN_URL" -o "$otmp/Ollama-darwin.zip"
-    # Best-effort integrity check against Ollama's published checksum file
-    # (same release dir). Skipped silently if the file is unavailable.
-    if curl -fsSL "${WAIRED_OLLAMA_DARWIN_URL%/*}/sha256sum.txt" -o "$otmp/sha256sum.txt" 2>/dev/null; then
-        want="$(awk '/Ollama-darwin\.zip/{print $1; exit}' "$otmp/sha256sum.txt")"
-        got="$(shasum -a 256 "$otmp/Ollama-darwin.zip" | awk '{print $1}')"
-        if [ -n "$want" ] && [ "$want" != "$got" ]; then
-            rm -rf "$otmp"
-            common_die "Ollama.app checksum mismatch (expected '$want', got '$got')"
-        fi
-        [ -n "$want" ] && common_log "Ollama.app checksum OK"
-    fi
-
-    unzip -q -o "$otmp/Ollama-darwin.zip" -d "$otmp"
-    if [ ! -d "$otmp/Ollama.app" ]; then
-        rm -rf "$otmp"
-        common_die "Ollama-darwin.zip did not contain Ollama.app (layout changed?)"
-    fi
-    # /Applications is admin-writable; try unprivileged first, fall back
-    # to sudo for standard (non-admin) users.
-    if ! cp -R "$otmp/Ollama.app" /Applications/ 2>/dev/null; then
-        $SUDO cp -R "$otmp/Ollama.app" /Applications/
-    fi
-    rm -rf "$otmp"
-    common_log "Starting Ollama (menu-bar app + 127.0.0.1:11434 server)"
-    open -a Ollama 2>/dev/null || \
-        common_warn "could not auto-start Ollama; launch it from /Applications once."
 }
 
 # Register the system LaunchDaemon. Needs root: the plist lands in
@@ -1304,14 +1263,23 @@ darwin_maybe_init() {
     # WAIRED_CONTROL_URL); darwin_write_control_url has also persisted it to
     # agent.env, so this is belt-and-suspenders on the first sign-in and the
     # reader covers later bare re-runs.
-    set -- init --state-dir "$state_dir"
+    #
+    # init installs the Ollama engine itself when its answers call for one,
+    # so the Ollama knobs must survive the sudo env_reset: run through
+    # `env` with WAIRED_OLLAMA_DARWIN_URL (mirror override) and, on
+    # --skip-ollama, WAIRED_NO_OLLAMA=1.
+    set -- "$WAIRED_DARWIN_BINDIR/waired" init --state-dir "$state_dir"
     [ -n "$CONTROL_URL" ] && set -- "$@" --control "$CONTROL_URL"
+    set -- env "WAIRED_OLLAMA_DARWIN_URL=$WAIRED_OLLAMA_DARWIN_URL" "$@"
+    if ollama_skip_requested; then
+        set -- env WAIRED_NO_OLLAMA=1 "$@"
+    fi
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired $* </dev/tty"
+        common_log "  (dry-run) would: $SUDO $* </dev/tty"
         return 0
     fi
     common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
-    $SUDO "$WAIRED_DARWIN_BINDIR/waired" "$@" </dev/tty || \
+    $SUDO "$@" </dev/tty || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
 }
 
@@ -1409,8 +1377,10 @@ darwin_next_steps() {
     fi
     if ollama_skip_requested; then
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
+    elif [ -x /Applications/Ollama.app/Contents/Resources/ollama ] || command -v ollama >/dev/null 2>&1; then
+        ollama_status="installed (local AI engine)"
     else
-        ollama_status="installed (local inference engine)"
+        ollama_status="installed by sign-in when local inference is on (sudo waired init)"
     fi
     # Tray: bundled unless WAIRED_NO_TRAY. Like the Windows installer we
     # do not auto-launch it (launching a menu-bar app from `curl | sh`

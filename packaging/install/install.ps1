@@ -105,16 +105,13 @@ param(
     [switch]$Help,
     [switch]$Dev,
     [string]$Control = '',
-    # Skip the Ollama install. install.ps1 installs the bundled inference
-    # engine BY DEFAULT (parity with install.sh) -- it fetches
-    # scripts/install/ollama-windows.ps1 from the public mirror and runs it
-    # inside Phase 2 whether or not a Control Plane URL was resolved, so a
-    # plain `.\install.ps1` sets this host up for local inference.
-    # Pass -SkipOllama on headless / low-disk hosts; the operator can finish
-    # later from an elevated prompt (`waired runtimes install ollama`).
-    # Equivalent env var: WAIRED_NO_OLLAMA=1 (resolved into $SkipOllama
-    # below) -- same skip semantics as install.sh's --skip-ollama /
-    # WAIRED_NO_OLLAMA, so the two installers stay aligned.
+    # Skip the Ollama engine install. The engine is no longer installed by
+    # this script: `waired init` owns both the decision (its "run local
+    # inference?" answers) and the install, which runs elevated inside
+    # Phase 2 right after the questions. -SkipOllama resolves into
+    # WAIRED_NO_OLLAMA=1 for the init child, which then skips the engine;
+    # finish later from an elevated prompt (`waired runtimes install
+    # ollama`). Same semantics as install.sh's --skip-ollama.
     [switch]$SkipOllama,
     # Skip the post-SCM `waired init` invocation. When -Control / -Dev
     # resolved a CP URL the installer normally runs `waired init` so
@@ -163,15 +160,6 @@ param(
     # Optional models directory forwarded to ollama-windows.ps1
     # -ModelsDir. Empty = ollama's built-in default.
     [string]$OllamaModelsDir  = $env:WAIRED_OLLAMA_MODELS_DIR,
-    # URL of the ollama-windows.ps1 helper to fetch + run. Independent of
-    # WAIRED_INSTALL_BASE_URL (which hosts the *waired* binaries): the Ollama
-    # installer is an external dependency pulled from the official public
-    # channel, mirroring install.sh's WAIRED_OLLAMA_LINUX_URL /
-    # WAIRED_OLLAMA_DARWIN_URL. Empty -> the public-mirror default resolved
-    # below. Decoupling it keeps installer tests that point
-    # WAIRED_INSTALL_BASE_URL at a loopback mirror from redirecting (and
-    # 404-ing) the Ollama-helper fetch (#561).
-    [string]$OllamaWindowsUrl = $env:WAIRED_OLLAMA_WINDOWS_URL,
     # Install location. Resolution order: this param > WAIRED_INSTALL_DIR env
     # > the HKLM registry value a previous install recorded (so -Update and
     # re-runs find a relocated install) > an interactive prompt on a fresh
@@ -241,24 +229,13 @@ $InstallRepo = if ($env:WAIRED_INSTALL_REPO) { $env:WAIRED_INSTALL_REPO } else {
 $NoTray     = [bool]$env:WAIRED_NO_TRAY
 $StateDir   = $env:WAIRED_STATE_DIR
 
-# Ollama installer helper URL. Independent of WAIRED_INSTALL_BASE_URL -- the
-# Ollama engine is an external dependency fetched from the official public
-# channel (the helper lives in the public waired-ai/waired-agent release,
-# the same URL the docs' manual `iwr ... | iex` one-liner uses), mirroring
-# install.sh's WAIRED_OLLAMA_LINUX_URL / WAIRED_OLLAMA_DARWIN_URL. Resolved
-# here (not at the use site) so the elevated Phase-2 child inherits a concrete
-# value, and so installer tests that point WAIRED_INSTALL_BASE_URL at a
-# loopback mirror no longer drag this fetch onto the mirror (#561).
-if (-not $OllamaWindowsUrl) {
-    $OllamaWindowsUrl = 'https://github.com/waired-ai/waired-agent/releases/latest/download/ollama-windows.ps1'
-}
-
 # WAIRED_NO_OLLAMA is the env-var form of -SkipOllama (mirrors install.sh,
 # where --skip-ollama and WAIRED_NO_OLLAMA are equivalent). Fold it into
-# the switch here so every downstream check (Install-OllamaIfRequested,
-# the elevation re-invoke that forwards -SkipOllama) sees one resolved
-# value regardless of which form the operator used. The env block is also
-# inherited by the elevated child, so the resolution holds across phases.
+# the switch here so every downstream check (the summary, the elevation
+# re-invoke that forwards -SkipOllama, the init env below) sees one
+# resolved value regardless of which form the operator used. The env block
+# is also inherited by the elevated child, so the resolution holds across
+# phases. The engine install itself now happens inside `waired init`.
 if ($env:WAIRED_NO_OLLAMA) { $SkipOllama = $true }
 
 # WAIRED_CLEAN is the env-var form of -Clean (mirrors install.sh's --clean /
@@ -280,7 +257,7 @@ $DevControlUrl = if ($env:WAIRED_DEV_CONTROL_URL) { $env:WAIRED_DEV_CONTROL_URL 
                  else { 'https://app.dev.waired.net' }
 $ControlUrl    = ''   # resolved by Resolve-ControlUrl after param parsing.
 $InitRan       = $false  # set by Invoke-WairedInit; read by Show-NextSteps.
-$OllamaStatus  = ''      # set by Install-OllamaIfRequested; read by Show-NextSteps
+$OllamaStatus  = ''      # set by Set-OllamaEnvForInit; read by Show-NextSteps
                          # (Windows analog of install.sh's $ollama_status line).
 # True only inside the spawned elevated Phase-2 console (set in Phase 2). Gates
 # the transcript-path + pause-on-exit behaviour so that window never vanishes
@@ -599,8 +576,9 @@ Switches:
                     -Update/-Check this overrides the default, which
                     preserves the channel the host already tracks (edge
                     stays edge, stable stays stable).
-  -SkipOllama       Skip the Ollama install + bundled-model pre-pull
-                    (same as WAIRED_NO_OLLAMA=1).
+  -SkipOllama       Tell `waired init` not to install the Ollama engine
+                    (same as WAIRED_NO_OLLAMA=1). Add it later from an
+                    elevated prompt: waired runtimes install ollama.
   -SkipInit         Skip the post-install `waired init` invocation; finish
                     with the manual-Next-steps block instead.
   -SkipClaudeProxy  Don't configure Claude Code integration after enrolment
@@ -639,12 +617,10 @@ Parameters:
                              updates and the uninstaller find it. Env form:
                              WAIRED_INSTALL_DIR (for the piped one-liner).
   -OllamaGpuMode <mode>      auto | rocm | vulkan | cuda-only | cpu-only
-                             (default: auto)
-  -OllamaModelsDir <path>    Forward to ollama-windows.ps1 -ModelsDir.
-  -OllamaWindowsUrl <url>    URL of the ollama-windows.ps1 helper to install
-                             (default: the public waired-ai/waired-agent latest
-                             release). Independent of WAIRED_INSTALL_BASE_URL --
-                             the Ollama engine comes from its official channel.
+                             (default: auto). Forwarded to the engine install
+                             that `waired init` performs (WAIRED_OLLAMA_GPU_MODE).
+  -OllamaModelsDir <path>    Models directory for the init-time engine install
+                             (WAIRED_OLLAMA_MODELS_DIR).
   -InferenceEnabled <bool>   true | false to force `waired init
                              --inference-enabled`. Empty = prompt.
   -ShareWithMesh <bool>      true | false to force `waired init
@@ -654,7 +630,8 @@ Environment variables:
   WAIRED_VERSION           Pin a specific release tag (e.g. v1.2.3), or 'edge'
                            for the latest main build (same as -Edge). Default: latest.
   WAIRED_NO_TRAY           If set, skip waired-tray.exe.
-  WAIRED_NO_OLLAMA         If set, skip the Ollama install (same as -SkipOllama).
+  WAIRED_NO_OLLAMA         If set, `waired init` skips the Ollama engine
+                           install (same as -SkipOllama).
   WAIRED_CLEAN             If set, same as -Clean (full wipe first, then a
                            fresh install). The env form exists because the
                            piped `iwr | iex` one-liner cannot bind switches.
@@ -668,14 +645,11 @@ Environment variables:
   WAIRED_DEV_CONTROL_URL   Override the URL -Dev resolves to.
                            Default: https://app.dev.waired.net.
   WAIRED_OLLAMA_MODELS_DIR -OllamaModelsDir fallback.
-  WAIRED_OLLAMA_WINDOWS_URL -OllamaWindowsUrl fallback: the ollama-windows.ps1
-                           helper URL. Independent of WAIRED_INSTALL_BASE_URL
-                           (parallel to install.sh's WAIRED_OLLAMA_LINUX_URL /
-                           WAIRED_OLLAMA_DARWIN_URL). Default: the public
-                           waired-ai/waired-agent latest release.
   WAIRED_INSTALL_BASE_URL  Override the mirror base URL (tests / staging).
-                           Hosts the waired binaries only -- NOT the Ollama
-                           helper (see WAIRED_OLLAMA_WINDOWS_URL).
+                           Hosts the waired binaries only. (The retired
+                           WAIRED_OLLAMA_WINDOWS_URL is gone: the engine
+                           installer is embedded in the waired binary and run
+                           by `waired init` / `waired runtimes install ollama`.)
 
 Diagnostics:
   Get-Service waired-agent
@@ -789,7 +763,6 @@ function Invoke-SelfElevate {
     if ($NonInteractive) { $passthroughArgs += '-NonInteractive' }
     if ($OllamaGpuMode -and $OllamaGpuMode -ne 'auto') { $passthroughArgs += @('-OllamaGpuMode', $OllamaGpuMode) }
     if ($OllamaModelsDir)  { $passthroughArgs += @('-OllamaModelsDir',  $OllamaModelsDir) }
-    if ($OllamaWindowsUrl) { $passthroughArgs += @('-OllamaWindowsUrl', $OllamaWindowsUrl) }
     if ($InferenceEnabled) { $passthroughArgs += @('-InferenceEnabled', $InferenceEnabled) }
     if ($ShareWithMesh)    { $passthroughArgs += @('-ShareWithMesh',    $ShareWithMesh) }
 
@@ -985,6 +958,85 @@ function Resolve-ReleaseBase {
     return "$BaseUrl/download/$Version"
 }
 
+# Invoke-DownloadWithProgress streams $Url to $OutFile with a SINGLE in-place
+# progress line on an interactive console (sparse fresh lines when output is
+# redirected). Same implementation as scripts/install/ollama-windows.ps1's --
+# see there for the full rationale (waired#747: the silent Invoke-WebRequest
+# looked like a hang; a fresh line per few percent scrolled a wall of rows).
+function Invoke-DownloadWithProgress {
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$OutFile
+    )
+    $interactive = $true
+    try { $interactive = -not [Console]::IsOutputRedirected } catch { $interactive = $false }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol =
+            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch { }
+
+    $req = [System.Net.WebRequest]::Create($Url)
+    if ($req -is [System.Net.HttpWebRequest]) {
+        $req.UserAgent         = 'waired-installer'
+        $req.AllowAutoRedirect = $true
+        $req.Timeout           = 60000
+        $req.ReadWriteTimeout  = 120000
+    }
+
+    $resp = $null; $rs = $null; $fs = $null
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $resp    = $req.GetResponse()
+        $total   = [int64]$resp.ContentLength
+        $totalMB = if ($total -gt 0) { $total / 1MB } else { 0 }
+        $rs = $resp.GetResponseStream()
+        $fs = [System.IO.File]::Create($OutFile)
+        $buf      = [byte[]]::new(1MB)
+        $done     = [int64]0
+        $lastPct  = -100
+        $lastTick = [double]0
+        $read     = 0
+        while (($read = $rs.Read($buf, 0, $buf.Length)) -gt 0) {
+            $fs.Write($buf, 0, $read)
+            $done   += $read
+            $elapsed = $sw.Elapsed.TotalSeconds
+            $pct     = if ($total -gt 0) { [int]($done * 100 / $total) } else { -1 }
+            $rate    = if ($elapsed -gt 0) { ($done / 1MB) / $elapsed } else { 0 }
+            if ($interactive) {
+                if (($elapsed - $lastTick) -ge 0.25) {
+                    $line = if ($total -gt 0) {
+                        "  {0,3}%  ({1,7:N1} / {2:N1} MB)  {3:N1} MB/s" -f $pct, ($done / 1MB), $totalMB, $rate
+                    } else {
+                        "  {0:N1} MB downloaded  {1:N1} MB/s" -f ($done / 1MB), $rate
+                    }
+                    [Console]::Write("`r" + $line.PadRight(72))
+                    $lastTick = $elapsed
+                }
+            } elseif ((($pct -ge 0) -and ($pct -ge $lastPct + 10)) -or (($elapsed - $lastTick) -ge 5)) {
+                if ($total -gt 0) {
+                    Write-Host ("  {0,3}%  ({1,7:N1} / {2:N1} MB)  {3:N1} MB/s" -f `
+                        $pct, ($done / 1MB), $totalMB, $rate)
+                    $lastPct = $pct
+                } else {
+                    Write-Host ("  {0:N1} MB downloaded  {1:N1} MB/s" -f ($done / 1MB), $rate)
+                }
+                $lastTick = $elapsed
+            }
+        }
+        $fs.Flush()
+    } finally {
+        if ($fs)   { $fs.Close() }
+        if ($rs)   { $rs.Close() }
+        if ($resp) { $resp.Close() }
+        $sw.Stop()
+    }
+    if ($interactive) {
+        [Console]::Write("`r" + (' ' * 72) + "`r")
+    }
+    Write-Host ("  done: {0:N1} MB in {1:N0}s" -f `
+        ((Get-Item -LiteralPath $OutFile).Length / 1MB), $sw.Elapsed.TotalSeconds)
+}
+
 function Get-AssetWithChecksum {
     param([string]$WorkDir)
 
@@ -993,8 +1045,8 @@ function Get-AssetWithChecksum {
     $shaPath = Join-Path $WorkDir $ShaName
 
     Common-Log "Downloading $ZipName from $releaseBase"
-    Common-Run "Invoke-WebRequest $releaseBase/$ZipName -> $zipPath" {
-        Invoke-WebRequest -Uri "$releaseBase/$ZipName" -OutFile $zipPath -UseBasicParsing
+    Common-Run "download $releaseBase/$ZipName -> $zipPath" {
+        Invoke-DownloadWithProgress -Url "$releaseBase/$ZipName" -OutFile $zipPath
     }
     Common-Log "Downloading $ShaName"
     Common-Run "Invoke-WebRequest $releaseBase/$ShaName -> $shaPath" {
@@ -1198,22 +1250,6 @@ function Set-InstallDirRegistry {
     }
 }
 
-# Test-OllamaInstalled mirrors internal/download/ollama_path_windows.go's
-# discovery order so the installer can skip re-installing Ollama on
-# hosts where waired-agent (LocalSystem) can already find it.
-function Test-OllamaInstalled {
-    $candidates = @(
-        (Join-Path $env:ProgramFiles 'Ollama\ollama.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe')
-    )
-    foreach ($c in $candidates) {
-        if (Test-Path -LiteralPath $c) { return $c }
-    }
-    $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    return $null
-}
-
 # Test-InteractiveStdin reports whether Read-Host will work without
 # wedging. Honours -NonInteractive, then [Console]::IsInputRedirected
 # (CI / `iwr | iex` with a redirected stdin), and falls back to
@@ -1227,95 +1263,25 @@ function Test-InteractiveStdin {
     }
 }
 
-# Install-OllamaIfRequested fetches the ollama-windows.ps1 helper from
-# $OllamaWindowsUrl (the official public channel by default, independent of
-# WAIRED_INSTALL_BASE_URL -- see its resolution near the top) and runs it
-# inside Phase 2. Ollama installs BY DEFAULT -- parity with install.sh, which
-# installs the bundled inference engine on every host unless --skip-ollama /
-# WAIRED_NO_OLLAMA opts out (install.sh:773-778). A resolved Control Plane URL
-# is deliberately NOT required: a plain `.\install.ps1` sets this host up for
-# local inference just like a plain `curl ... | sh` does on Linux; the only
-# opt-out is -SkipOllama / WAIRED_NO_OLLAMA (folded into $SkipOllama up top).
-# Idempotent (the helper script handles existing installs); we still detect
-# them up front and ask before reinstall to avoid an unwanted ~10-min
-# re-download. The outcome is recorded in $script:OllamaStatus (read by
-# Show-NextSteps), mirroring install.sh's $ollama_status summary line.
-function Install-OllamaIfRequested {
+# Set-OllamaEnvForInit resolves the Ollama knobs into the environment the
+# `waired init` child inherits. The engine install itself moved INTO init
+# (it asks "run local inference?" first, then installs via the embedded
+# ollama-windows.ps1 when the answer calls for one) -- installing here,
+# before init, made init re-detect waired's own install as a "foreign"
+# Ollama and ask a confusing reuse question about it. The outcome line for
+# Show-NextSteps is set here too (mirror of install.sh's $ollama_status).
+function Set-OllamaEnvForInit {
     if ($SkipOllama) {
-        Common-Log "-SkipOllama set; not touching Ollama."
+        $env:WAIRED_NO_OLLAMA = '1'
         $script:OllamaStatus = 'skipped (-SkipOllama / WAIRED_NO_OLLAMA; bundled engine later from an elevated prompt: waired runtimes install ollama -- or bring your own and pick "reuse" at sign-in)'
         return
     }
-
-    $existing = Test-OllamaInstalled
-    if ($existing) {
-        if (-not (Test-InteractiveStdin)) {
-            Common-Log "Ollama already installed at $existing; -NonInteractive / non-TTY -> not reinstalling."
-            $script:OllamaStatus = "already installed (kept: $existing)"
-            return
-        }
-        $reply = Read-Host "[waired] Ollama already installed at $existing. Reinstall / upgrade now? [y/N]"
-        if ($reply -notmatch '^(y|yes)$') {
-            Common-Log "Keeping existing Ollama install."
-            $script:OllamaStatus = "already installed (kept: $existing)"
-            return
-        }
-    }
-
-    $ollamaScriptUrl = $OllamaWindowsUrl
-    Common-Log "Fetching $ollamaScriptUrl"
-    # Stage the helper to a temp .ps1 and run it from disk (the call operator
-    # on the path binds its param() block by name via the hashtable splat
-    # below). Downloading to a file rather than ScriptBlock-Create-ing the
-    # fetched bytes keeps install.ps1 out of Defender's in-memory
-    # download-and-execute AMSI heuristic (#552); reading the file back as
-    # text also sidesteps the Windows PowerShell 5.1 octet-stream byte[] pitfall.
-    $ollamaScript = $null
-    try {
-        if (-not $DryRun) {
-            $ollamaScript = Join-Path $env:TEMP "waired-ollama-$([Guid]::NewGuid().ToString('N')).ps1"
-            Invoke-WebRequest -Uri $ollamaScriptUrl -OutFile $ollamaScript -UseBasicParsing
-        }
-    } catch {
-        Common-Warn "could not fetch ollama-windows.ps1 ($($_.Exception.Message)); skipping Ollama install. Re-run by hand later: download $ollamaScriptUrl and run it from a saved file."
-        $script:OllamaStatus = 'not installed (could not fetch the installer helper; retry later from an elevated prompt: waired runtimes install ollama)'
-        return
-    }
-
-    # Splat a HASHTABLE so these bind to ollama-windows.ps1's param() block
-    # BY NAME. An array splat (@('-GpuMode', $mode)) binds POSITIONALLY:
-    # '-GpuMode' lands in $ZipUrl and the helper tries to download a URL
-    # literally named '-GpuMode' ("remote name could not be resolved").
-    $ollamaArgs = @{ GpuMode = $OllamaGpuMode }
-    if ($OllamaModelsDir) { $ollamaArgs['ModelsDir'] = $OllamaModelsDir }
-    Common-Log ("Installing Ollama (mode={0}{1})..." -f $OllamaGpuMode,
-        ($(if ($OllamaModelsDir) { "; models=$OllamaModelsDir" } else { '' })))
-
-    # Record the outcome for the summary. Under -DryRun, Common-Run below
-    # short-circuits WITHOUT running its block, so set the dry-run status here
-    # rather than inside it. Otherwise the inner try/catch settles it to
-    # installed / install-failed once the helper actually runs.
-    $script:OllamaStatus = if ($DryRun) { 'would install (dry-run)' } else { 'install attempted' }
-
-    $ollamaDesc = "ollama-windows.ps1 -GpuMode $OllamaGpuMode" + $(if ($OllamaModelsDir) { " -ModelsDir $OllamaModelsDir" } else { '' })
-    try {
-        Common-Run $ollamaDesc {
-            if ($DryRun) { return }
-            try {
-                # Call operator on the staged path + hashtable splat binds the
-                # helper's param() block by name. Invoke-Expression would
-                # discard the param() bindings.
-                & $ollamaScript @ollamaArgs
-                $script:OllamaStatus = 'installed (local inference engine)'
-            } catch {
-                Common-Warn "Ollama install failed: $($_.Exception.Message); the agent will retry pulling the bundled model at boot."
-                $script:OllamaStatus = 'install failed (waired-agent will retry the bundled-model pull at boot; retry the engine by hand from an elevated prompt: waired runtimes install ollama)'
-            }
-        }
-    } finally {
-        if ($ollamaScript) {
-            Remove-Item -LiteralPath $ollamaScript -Force -ErrorAction SilentlyContinue
-        }
+    if ($OllamaGpuMode -and $OllamaGpuMode -ne 'auto') { $env:WAIRED_OLLAMA_GPU_MODE = $OllamaGpuMode }
+    if ($OllamaModelsDir) { $env:WAIRED_OLLAMA_MODELS_DIR = $OllamaModelsDir }
+    $script:OllamaStatus = if ($SkipInit) {
+        'not installed yet (installed during sign-in: waired init)'
+    } else {
+        'decided at sign-in (installed by waired init when local inference is on)'
     }
 }
 
@@ -1404,7 +1370,7 @@ function Show-NextSteps {
         Write-Host ''
     }
     # Ollama status line, mirroring install.sh's `Ollama: $ollama_status`
-    # summary (set by Install-OllamaIfRequested). Guarded so callers that never
+    # summary (set by Set-OllamaEnvForInit). Guarded so callers that never
     # reach the install step (e.g. -Update) don't print a blank label.
     if ($script:OllamaStatus) {
         Write-Host "Ollama:            $script:OllamaStatus"
@@ -1434,9 +1400,10 @@ function Invoke-InstallSteps {
     Invoke-AgentInstall
     Add-InstallDirToPath
     Set-InstallDirRegistry
-    Section 'AI engine (Ollama)'
-    Install-OllamaIfRequested
     Section 'Sign in and set up'
+    # The Ollama engine is installed by `waired init` itself (after its
+    # inference questions); we only resolve the knobs into env for it.
+    Set-OllamaEnvForInit
     Invoke-WairedInit
     $initRan = $script:InitRan
     Ensure-AgentRunning
