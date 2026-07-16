@@ -80,11 +80,11 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool) bool {
 			}
 			if time.Now().After(noEngineDeadline) {
 				endProgressLine(out, tty, &line)
-				writePrompt(out, "The inference engine still isn't up; the agent will keep bringing it up in the background.")
+				writePrompt(out, "The AI engine still isn't up; Waired keeps bringing it up in the background.")
 				writePrompt(out, "Check progress with `waired status`; if it persists, see `waired doctor` or `journalctl -u waired-agent -e`.")
 				return false
 			}
-			announce("no_engine", "Waiting for the inference engine to start… "+
+			announce("no_engine", "Waiting for the AI engine to start… "+
 				dim("(first run installs the engine — this can take a few minutes)"))
 		default:
 			// Engine is up; a download may be in flight. Disarm the no_engine
@@ -95,7 +95,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool) bool {
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
 					dlHinted = true
-					announce("download_hint", dim("Downloading the model — a multi-GB transfer that can take a few minutes."))
+					announce("download_hint", dim("Downloading the AI model (several GB — this can take a while)."))
 				}
 				lastStep = stepDownloading // the bar owns the line; let a later step end it
 				drawDownloadLine(out, tty, &line, activeModelName(st), pct, dl.CompletedBytes, dl.TotalBytes, speed)
@@ -181,7 +181,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
 					dlHinted = true
-					announce("download_hint", dim("Downloading the model — a multi-GB transfer that can take a few minutes."))
+					announce("download_hint", dim("Downloading the AI model (several GB — this can take a while)."))
 				}
 				lastStep = stepDownloading // the bar owns the line; let a later step end it
 				drawDownloadLine(out, tty, &line, label, pct, dl.CompletedBytes, dl.TotalBytes, speed)
@@ -278,7 +278,7 @@ const stepDownloading = "__downloading__"
 func prepMessage(st management.InferenceStatus) string {
 	switch st.SubsystemState {
 	case "initializing":
-		return "Starting the inference engine…"
+		return "Starting the AI engine…"
 	case "starting":
 		return "Engine starting…"
 	case "loading":
@@ -286,7 +286,7 @@ func prepMessage(st management.InferenceStatus) string {
 	case "awaiting_model":
 		return "Preparing to download " + activeModelName(st) + "…"
 	case "degraded":
-		return "Using a fallback inference engine…"
+		return "Using a fallback AI engine…"
 	default:
 		return "Preparing the model…"
 	}

@@ -87,7 +87,7 @@ func promptInference(
 		writePromptf(out, "Detected hardware: %s.\n", describeHardware(profile))
 		sc := bufio.NewScanner(in)
 		enabled = ynPrompt(out, sc,
-			"Run a local inference engine here?", enabledDefault)
+			"Run AI models on this computer?", enabledDefault)
 		// Resolve ShareWithMesh (only if Enabled).
 		if !enabled {
 			return inferenceChoice{Enabled: false, ShareWithMesh: false}
@@ -98,7 +98,7 @@ func promptInference(
 			share = *shareOverride
 		default:
 			share = ynPrompt(out, sc,
-				"Share this engine with mesh peers?", shareDefault)
+				"Let your other devices use this computer's AI?", shareDefault)
 		}
 		return inferenceChoice{Enabled: true, ShareWithMesh: share}
 	}
@@ -152,16 +152,16 @@ func promptOllamaSource(
 		ver = "unknown version"
 	}
 	if det.Supported {
-		writePromptf(out, "Detected an existing Ollama at %s (%s).\n", det.Path, ver)
+		writePromptf(out, "Found an Ollama you installed yourself at %s (%s).\n", det.Path, ver)
 	} else {
 		writePromptf(out,
-			"Detected an existing Ollama at %s (%s) — below waired's supported minimum %s; the bundled engine is recommended.\n",
+			"Found an Ollama you installed yourself at %s (%s) — older than the version Waired supports (%s); letting Waired manage its own is recommended.\n",
 			det.Path, ver, infruntime.OllamaSupportedMinVersion)
 	}
 	sc := bufio.NewScanner(in)
 	// Default true = bundled (recommended). Answering N opts into reuse.
 	useBundled := ynPrompt(out, sc,
-		"Use Waired's bundled Ollama? (n = reuse the existing one)", true)
+		"Let Waired install and manage its own Ollama? (n = keep using yours)", true)
 	if useBundled {
 		return agentconfig.OllamaSourceBundled
 	}
@@ -413,7 +413,7 @@ func cliPullProgressSink(out io.Writer, tty bool) func(setup.PullEvent) {
 			}
 			if !hinted {
 				hinted = true
-				writePrompt(out, dim("Downloading the model — a multi-GB transfer that can take a few minutes."))
+				writePrompt(out, dim("Downloading the AI model (several GB — this can take a while)."))
 			}
 			announced = true
 			speed := ev.BytesPerSec
