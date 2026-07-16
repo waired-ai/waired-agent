@@ -21,7 +21,7 @@ subcommand, for grouped, command-specific help.
 
 | Command | What it does |
 |---|---|
-| `waired models` | Manage local models: `ls` / `pull` / `rm` / `refresh`. `ls` shows the download inventory; `ls --detail` shows the catalog with recommended specs, hardware fit, and selection criteria (see [Model catalog](/reference/model-catalog/)). |
+| `waired models` | Manage local models: `ls` / `pull` / `rm` / `refresh`. `ls` shows the download inventory; `ls --detail` shows the catalog with recommended specs, hardware fit, and selection criteria (see [Model catalog](/reference/model-catalog/)). `pull` asks for confirmation when the model exceeds this host's recommended spec; pass `--yes` / `-y` to skip that prompt in scripts. |
 | `waired runtimes` | Manage inference runtimes: `ls` / `install` / `uninstall` / `refresh` / `status` / `benchmark`. |
 | `waired infer "<prompt>"` | Run a one-shot inference request through the Local Gateway. Add `--explain` for an Auto-Selector routing dry-run. |
 | `waired inference share <on\|off\|status>` | Toggle whether this engine is offered to mesh peers. See [below](#sharing-vs-pausing). |

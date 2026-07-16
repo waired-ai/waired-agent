@@ -136,6 +136,27 @@ request overhead, so tok/s figures read higher than in earlier releases
 (which understated fast machines). The first start after upgrading re-measures
 once instead of reusing the old cached number.
 
+### I picked a model bigger than my hardware recommends
+
+Waired lets you run a model that exceeds your host's recommended spec — it
+**warns but does not block**. When you pull or switch to such a model you get a
+one-time confirmation showing the shortfall (e.g. `needs 32 GB RAM (have 31
+GB)`); confirm to proceed. Pass `--yes` to `waired models pull` to skip the
+prompt in scripts.
+
+Inference itself is never blocked for being over-spec: the model loads and
+runs, though it may be slower or — if the weights genuinely do not fit — fail
+to load in the engine (a clear engine error rather than a pre-emptive refusal).
+Earlier releases returned a `422 hardware_insufficient` at request time even
+when the model was only marginally over the recommended memory; that
+inference-time block is gone.
+
+The recommended RAM/VRAM figures carry a safety margin, and on unified-memory
+machines (Apple Silicon, AMD Strix Halo) fit is judged against the
+GPU-addressable pool rather than leftover system RAM. To see the fit for every
+model on this host, run `waired models ls --detail` or open the
+[model catalog](/reference/model-catalog/).
+
 ### The system tray icon doesn't appear (Linux / GNOME)
 
 GNOME has no built-in system tray, so the `waired-tray` icon only renders when an
