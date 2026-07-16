@@ -92,9 +92,16 @@ assert_inference_macos() {
     if [ -n "$cand" ] && [ -x "$cand" ]; then ollama_bin="$cand"; break; fi
   done
   if [ -n "$ollama_bin" ]; then
-    ok "ollama engine installed (install.sh, $ollama_bin)"
+    ok "ollama engine installed ($ollama_bin)"
   else
-    bad "ollama engine not installed (install.sh should have, without --skip-ollama)"
+    bad "ollama engine not installed (waired init --inference-enabled=true should have installed Ollama.app)"
+  fi
+  # init's install must drop the waired-managed marker at the bundle root so a
+  # later `waired init` never asks the bundled-vs-reuse question about it.
+  if [ -f /Applications/Ollama.app/.waired-managed.json ]; then
+    ok "waired-managed marker present (Ollama.app)"
+  else
+    bad "waired-managed marker missing (/Applications/Ollama.app/.waired-managed.json)"
   fi
 
   # #567: the bundled engine is waired-owned on :9475 with its own store; the
@@ -191,9 +198,11 @@ tar czf "$DIST/$tarball" -C "$WORK/stage" waired waired-agent VERSION \
   || it_die "checksumming $tarball failed"
 
 # --- Tier 1: run install.sh's darwin path + assert --------------------------
-# --inference drops --skip-ollama / WAIRED_NO_OLLAMA so install.sh installs
-# Ollama.app (the engine for the Tier-2 model pull + benchmark, #514). The
-# default path keeps Ollama out — Tier 1/2 only need the installer + enroll.
+# Ollama: install.sh no longer pre-installs the engine — `waired init` owns
+# the decision + install, so the Tier-2 `--inference-enabled=true` init below
+# downloads Ollama.app itself (#514 journey preserved, ordering fixed). The
+# default path opts out explicitly (--skip-ollama -> WAIRED_NO_OLLAMA for
+# init) — Tier 1/2 only need the installer + enroll.
 inst_args=(--no-init)
 inst_env=(WAIRED_INSTALL_BASE_URL="file://$DIST" WAIRED_NO_TRAY=1 WAIRED_NO_EMOJI=1)
 if [ "$INFER" = 1 ]; then

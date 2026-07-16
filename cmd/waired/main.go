@@ -521,6 +521,16 @@ func runInitBody(o *initFlags) error {
 			applyBundledModelSelection(&cfgRoot, prof, det,
 				*stateDir, homeDir, *bundledModelID, *inferenceEnabled,
 				*nonInteractive, os.Stdin, os.Stdout)
+			// Install the bundled engine NOW — after every answer is in,
+			// before Deploy's model pre-pull (which needs an engine). The
+			// installers no longer pre-install Ollama; init owns both the
+			// decision and the install. Re-check Enabled: an under-spec
+			// host may have just been demoted to gateway/relay-only by
+			// applyBundledModelSelection.
+			if cfgRoot.Inference.Enabled {
+				ensureBundledEngine(ctx, os.Stdout, det,
+					cfgRoot.Inference.OllamaSource, *stateDir)
+			}
 		}
 		if err := cfgRoot.Save(agentconfig.JSONPathFor(*stateDir)); err != nil {
 			// identity-side state is already enrolled; do not abort init for

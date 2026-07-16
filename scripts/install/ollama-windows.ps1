@@ -289,7 +289,7 @@ function Resolve-GpuMode {
     return 'cuda-only'
 }
 
-# Invoke-DownloadWithProgress streams $Url to $OutFile while printing periodic
+# Invoke-DownloadWithProgress streams $Url to $OutFile while printing
 # progress. The Ollama archive is ~1.4 GB, and the old silent
 # `Invoke-WebRequest -OutFile` left the console dead for minutes (waired#747).
 # This gives the byte-level feedback the Linux/macOS path already gets from
@@ -297,14 +297,20 @@ function Resolve-GpuMode {
 # drawDownloadLine: percent, transferred/total, rate). PS 5.1-safe: a raw
 # HttpWebRequest + manual read loop -- NOT Invoke-WebRequest, whose 5.1 progress
 # bar re-renders per read and cripples large-file throughput (the reason
-# $ProgressPreference is 'SilentlyContinue' above). Prints a fresh line (not an
-# in-place \r bar) every >=3% or ~2s so the elevated-UAC transcript and non-TTY
-# CI logs capture it cleanly.
+# $ProgressPreference is 'SilentlyContinue' above).
+#
+# Rendering matches drawDownloadLine's two modes: on an interactive console
+# ONE in-place line is rewritten via `r (the fresh-line-per-3% variant this
+# replaces scrolled a wall of progress rows past the user); when output is
+# redirected (CI logs / transcripts capture Write-Host, not [Console]::Write)
+# it falls back to a fresh line every >=10% or ~5s.
 function Invoke-DownloadWithProgress {
     param(
         [Parameter(Mandatory)][string]$Url,
         [Parameter(Mandatory)][string]$OutFile
     )
+    $interactive = $true
+    try { $interactive = -not [Console]::IsOutputRedirected } catch { $interactive = $false }
     # Windows PowerShell 5.1 on older .NET does not negotiate TLS 1.2 by
     # default; opt in for the raw request. Best-effort so this never throws.
     try {
@@ -336,10 +342,22 @@ function Invoke-DownloadWithProgress {
             $done   += $read
             $elapsed = $sw.Elapsed.TotalSeconds
             $pct     = if ($total -gt 0) { [int]($done * 100 / $total) } else { -1 }
-            # Throttle: advance printed percent by >=3, or >=2s since last line
-            # (the time gate also covers unknown-length downloads).
-            if ((($pct -ge 0) -and ($pct -ge $lastPct + 3)) -or (($elapsed - $lastTick) -ge 2)) {
-                $rate = if ($elapsed -gt 0) { ($done / 1MB) / $elapsed } else { 0 }
+            $rate    = if ($elapsed -gt 0) { ($done / 1MB) / $elapsed } else { 0 }
+            if ($interactive) {
+                # One in-place line, rewritten at most ~4x/s. Pad to clear
+                # residue from a previously longer render.
+                if (($elapsed - $lastTick) -ge 0.25) {
+                    $line = if ($total -gt 0) {
+                        "  {0,3}%  ({1,7:N1} / {2:N1} MB)  {3:N1} MB/s" -f $pct, ($done / 1MB), $totalMB, $rate
+                    } else {
+                        "  {0:N1} MB downloaded  {1:N1} MB/s" -f ($done / 1MB), $rate
+                    }
+                    [Console]::Write("`r" + $line.PadRight(72))
+                    $lastTick = $elapsed
+                }
+            } elseif ((($pct -ge 0) -and ($pct -ge $lastPct + 10)) -or (($elapsed - $lastTick) -ge 5)) {
+                # Redirected output: fresh lines, sparse (>=10% / ~5s), so CI
+                # logs and transcripts stay readable without scroll spam.
                 if ($total -gt 0) {
                     Write-Host ("  {0,3}%  ({1,7:N1} / {2:N1} MB)  {3:N1} MB/s" -f `
                         $pct, ($done / 1MB), $totalMB, $rate)
@@ -356,6 +374,10 @@ function Invoke-DownloadWithProgress {
         if ($rs)   { $rs.Close() }
         if ($resp) { $resp.Close() }
         $sw.Stop()
+    }
+    if ($interactive) {
+        # End the in-place line before the summary so it is not overwritten.
+        [Console]::Write("`r" + (' ' * 72) + "`r")
     }
     Write-Host ("  done: {0:N1} MB in {1:N0}s" -f `
         ((Get-Item -LiteralPath $OutFile).Length / 1MB), $sw.Elapsed.TotalSeconds)
@@ -449,6 +471,22 @@ function Add-ToMachinePath {
     Write-Host "Prepended $Dir to Machine PATH (new shells will pick it up)"
 }
 
+# Write-WairedManagedMarker drops the marker file `waired init` uses to
+# recognise this Ollama as waired's own install (internal/setup DetectOllama
+# -> WairedManaged), so init never asks the bundled-vs-reuse question about
+# an Ollama waired itself put here. Best-effort: a write failure only means
+# one extra question at sign-in.
+function Write-WairedManagedMarker {
+    param([string]$InstallDir)
+    $marker = Join-Path $InstallDir '.waired-managed.json'
+    try {
+        Set-Content -LiteralPath $marker -Encoding Ascii -Value '{"managed_by":"waired","installer":"ollama-windows.ps1"}'
+        Write-Host "Marked as waired-managed: $marker"
+    } catch {
+        Write-Warning "could not write $marker ($($_.Exception.Message)); `waired init` may ask about this install"
+    }
+}
+
 function Test-Install {
     param(
         [string]$InstallDir,
@@ -540,5 +578,6 @@ if ($resolvedMode -eq 'vulkan') {
     Set-MachineVulkanFlag
 }
 
+Write-WairedManagedMarker -InstallDir $InstallDir
 Test-Install -InstallDir $InstallDir -GpuMode $resolvedMode
 Write-Host 'Done.'

@@ -11,6 +11,7 @@ import (
 func TestPromptOllamaSource(t *testing.T) {
 	installedSupported := setup.OllamaDetection{Installed: true, Path: "/usr/bin/ollama", Version: "0.24.0", Supported: true}
 	installedOld := setup.OllamaDetection{Installed: true, Path: "/usr/bin/ollama", Version: "0.5.0", Supported: false}
+	wairedManaged := setup.OllamaDetection{Installed: true, Path: `C:\Program Files\Ollama\ollama.exe`, Version: "0.24.0", Supported: true, WairedManaged: true}
 	absent := setup.OllamaDetection{}
 
 	cases := []struct {
@@ -30,6 +31,11 @@ func TestPromptOllamaSource(t *testing.T) {
 		{"interactive N -> reuse", installedSupported, "", false, "n\n", agentconfig.OllamaSourceReuse, false},
 		{"unsupported still defaults bundled + warns", installedOld, "", false, "\n", agentconfig.OllamaSourceBundled, true},
 		{"unsupported opt-in reuse", installedOld, "", false, "n\n", agentconfig.OllamaSourceReuse, true},
+		// A waired-managed install (marker file) never prompts: input is
+		// empty (a Read would fail the test via a hang-free empty reader
+		// returning bundled anyway, so also assert no question was printed).
+		{"waired-managed skips the prompt", wairedManaged, "", false, "", agentconfig.OllamaSourceBundled, false},
+		{"override reuse still beats waired-managed", wairedManaged, "reuse", false, "", agentconfig.OllamaSourceReuse, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,6 +47,9 @@ func TestPromptOllamaSource(t *testing.T) {
 			warned := strings.Contains(out.String(), "supported minimum")
 			if warned != tc.wantWarn {
 				t.Errorf("warning printed = %v, want %v (out=%q)", warned, tc.wantWarn, out.String())
+			}
+			if tc.det.WairedManaged && strings.Contains(out.String(), "bundled Ollama?") {
+				t.Errorf("waired-managed install must not be asked about: out=%q", out.String())
 			}
 		})
 	}
