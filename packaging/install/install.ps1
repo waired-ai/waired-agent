@@ -172,6 +172,12 @@ param(
     # WAIRED_INSTALL_BASE_URL at a loopback mirror from redirecting (and
     # 404-ing) the Ollama-helper fetch (#561).
     [string]$OllamaWindowsUrl = $env:WAIRED_OLLAMA_WINDOWS_URL,
+    # Install location. Resolution order: this param > WAIRED_INSTALL_DIR env
+    # > the HKLM registry value a previous install recorded (so -Update and
+    # re-runs find a relocated install) > an interactive prompt on a fresh
+    # install > %ProgramFiles%\Waired. The env form exists because the piped
+    # `iwr | iex` one-liner cannot bind parameters.
+    [string]$InstallDir = '',
     # Force `waired init --inference-enabled <true|false>`. Empty = no
     # override (the prompt or hardware-based default decides).
     [string]$InferenceEnabled = '',
@@ -281,7 +287,28 @@ $OllamaStatus  = ''      # set by Install-OllamaIfRequested; read by Show-NextSt
 # before its output can be read (waired#748).
 $ElevatedConsole = $false
 
-$InstallDir  = Join-Path $env:ProgramFiles 'Waired'
+# Registry key where Phase 2 records the resolved install dir so the
+# uninstaller and later -Update / re-runs find a relocated install.
+$InstallDirRegKey = 'HKLM:\SOFTWARE\Waired'
+
+# Install dir resolution: -InstallDir param > WAIRED_INSTALL_DIR env >
+# registry (a previous install's recorded location) > %ProgramFiles%\Waired.
+# A fresh interactive install may still override the default via the
+# Request-InstallDir prompt (Phase 1 only). $InstallDirExplicit remembers
+# whether the operator pinned it, so the prompt is offered only for the
+# default.
+$InstallDirExplicit = [bool]$InstallDir
+if (-not $InstallDir -and $env:WAIRED_INSTALL_DIR) {
+    $InstallDir = $env:WAIRED_INSTALL_DIR
+    $InstallDirExplicit = $true
+}
+if (-not $InstallDir) {
+    try {
+        $regDir = (Get-ItemProperty -Path $InstallDirRegKey -Name 'InstallDir' -ErrorAction Stop).InstallDir
+        if ($regDir) { $InstallDir = $regDir; $InstallDirExplicit = $true }
+    } catch { }
+}
+if (-not $InstallDir) { $InstallDir = Join-Path $env:ProgramFiles 'Waired' }
 $ServiceName = 'waired-agent'
 $ZipName     = 'waired-windows-amd64.zip'
 $ShaName     = "$ZipName.sha256"
@@ -318,6 +345,49 @@ function Emo {
 
 function Common-Log  { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Cyan }
 function Common-Warn { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Yellow }
+
+# Section prints a blank line + a horizontal-rule heading so a run reads as
+# distinct steps (several tools write to this console; the rules make it easy
+# to see where one step ends, the next begins, and which output belongs to a
+# prompt). The U+2500 rule glyph is built at runtime via Glyph so the file
+# stays pure-ASCII on the wire (scripts/install/encoding_test.go); non-UTF-8
+# consoles / WAIRED_NO_EMOJI fall back to '-'. Mirrors install.sh's section().
+function Section {
+    param([string]$Title)
+    $d = Emo ([char]::ConvertFromUtf32(0x2500)) '-'
+    $head = ($d * 3) + ' ' + $Title + ' '
+    $fill = 56 - 4 - $Title.Length
+    if ($fill -lt 3) { $fill = 3 }
+    Write-Host ''
+    Write-Host ($head + ($d * $fill)) -ForegroundColor DarkCyan
+}
+
+# Disable-QuickEdit clears the console's QuickEdit mode. In the spawned
+# elevated conhost window (Win10; Windows Terminal is unaffected) a stray
+# click otherwise enters text-selection mode and FREEZES all output until the
+# user presses Enter/Esc -- which looks like a hung installer. Best-effort:
+# fails silently when output is redirected or the console API is unavailable.
+# No restore needed; the spawned console is transient.
+function Disable-QuickEdit {
+    try {
+        Add-Type -Namespace WairedNative -Name ConsoleMode -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+'@ -ErrorAction Stop
+        $h = [WairedNative.ConsoleMode]::GetStdHandle(-10)  # STD_INPUT_HANDLE
+        $mode = [uint32]0
+        if ([WairedNative.ConsoleMode]::GetConsoleMode($h, [ref]$mode)) {
+            # Clear ENABLE_QUICK_EDIT_MODE (0x40); ENABLE_EXTENDED_FLAGS (0x80)
+            # must be set for the QuickEdit bit to be honoured.
+            $newMode = ($mode -band (-bnot [uint32]0x40)) -bor [uint32]0x80
+            [void][WairedNative.ConsoleMode]::SetConsoleMode($h, $newMode)
+        }
+    } catch { }
+}
 
 # Stop-TranscriptQuietly ends an active Start-Transcript without erroring when
 # none is running (Stop-Transcript throws in that case). Used by the Phase-2
@@ -374,6 +444,15 @@ function Normalize-ExtraArgs {
                     $val = [string]$ExtraArgs[$i]
                 }
                 $script:Control = $val
+            }
+            'install-dir' {
+                if ($null -eq $val) {
+                    if ($i + 1 -ge $ExtraArgs.Count) { Common-Die "--install-dir requires a path argument (e.g. --install-dir D:\Waired)." }
+                    $i++
+                    $val = [string]$ExtraArgs[$i]
+                }
+                $script:InstallDir = $val
+                $script:InstallDirExplicit = $true
             }
             'skip-ollama'       { $script:SkipOllama = $true }
             'skip-init'         { $script:SkipInit = $true }
@@ -539,9 +618,11 @@ Switches:
                     %ProgramData%\waired are preserved; a reused Ollama is
                     not touched. Re-running install.ps1 on a host that
                     already has waired offers this automatically.
-  -Yes              Assume "yes" to the update prompt (required to update
-                    on a non-interactive / no-TTY host). Also skips the
-                    -Clean confirmation.
+  -Yes              Assume "yes" to every prompt: the pre-install
+                    confirmation, the update prompt (required to update on a
+                    non-interactive / no-TTY host) and the -Clean
+                    confirmation. Also accepts the default install location
+                    without asking.
   -Clean            Clean install: run the uninstaller with -Clean first
                     (PERMANENTLY deletes config, keys, state, and Ollama +
                     its models), then install fresh. Destructive -- asks to
@@ -552,6 +633,11 @@ Switches:
   -Help             Print this help.
 
 Parameters:
+  -InstallDir <path>         Install location (default: %ProgramFiles%\Waired;
+                             a fresh interactive install also offers a prompt).
+                             Recorded in the registry (HKLM\SOFTWARE\Waired) so
+                             updates and the uninstaller find it. Env form:
+                             WAIRED_INSTALL_DIR (for the piped one-liner).
   -OllamaGpuMode <mode>      auto | rocm | vulkan | cuda-only | cpu-only
                              (default: auto)
   -OllamaModelsDir <path>    Forward to ollama-windows.ps1 -ModelsDir.
@@ -573,6 +659,8 @@ Environment variables:
                            fresh install). The env form exists because the
                            piped `iwr | iex` one-liner cannot bind switches.
   WAIRED_NO_CLAUDE_PROXY   If set, skip configuring Claude Code managed settings (same as -SkipClaudeProxy).
+  WAIRED_INSTALL_DIR       Install location (same as -InstallDir; the env form
+                           works with the piped one-liner).
   WAIRED_STATE_DIR         Override on-disk state location. Default: %ProgramData%\waired.
   WAIRED_CONTROL_URL       Control Plane URL used when -Dev / -Control are
                            not given (lower-priority fallback for per-org
@@ -687,7 +775,9 @@ function Invoke-SelfElevate {
     # from $env in the elevated child too -- Start-Process inherits the
     # parent's environment block. Only switches / explicit values bound
     # to non-env params need explicit forwarding.
-    $passthroughArgs = @('-StagedZipPath', $ZipPath, '-LogPath', $LogPath)
+    # -InstallDir carries the RESOLVED location (including an interactive
+    # Request-InstallDir choice) into the child, which never re-prompts.
+    $passthroughArgs = @('-StagedZipPath', $ZipPath, '-LogPath', $LogPath, '-InstallDir', $InstallDir)
     if ($DryRun)         { $passthroughArgs += '-DryRun' }
     if ($Update)         { $passthroughArgs += '-Update' }
     if ($Yes)            { $passthroughArgs += '-Yes' }
@@ -764,6 +854,77 @@ function Confirm-CleanInstall {
         return
     }
     Common-Die "-Clean is destructive; re-run with -Yes to confirm on a non-interactive session (save the script to a file so -Clean -Yes bind)"
+}
+
+# -------------------------------------------------------------------
+# Pre-install review: install-location prompt + summary + confirmation
+# (fresh installs, Phase 1 only). Nothing -- no download, no UAC -- runs
+# before the operator has seen what the script will do and agreed to it.
+# -------------------------------------------------------------------
+
+# Request-InstallDir offers the install location on a fresh interactive
+# install when the operator did not pin one (-InstallDir / WAIRED_INSTALL_DIR
+# / --install-dir / a previous install's registry record). Enter keeps the
+# default. Validates that a custom path is absolute and warns when it lives
+# under the user profile (the service runs as LocalSystem, so a profile path
+# is fragile: profile ACLs, roaming, folder redirection).
+function Request-InstallDir {
+    if ($InstallDirExplicit) { return }
+    if ($Yes -or -not (Test-InteractiveStdin)) { return }
+    Write-Host ''
+    $reply = Read-Host "[waired] Install location [$InstallDir] (Enter = default)"
+    $reply = ([string]$reply).Trim().Trim('"')
+    if (-not $reply) { return }
+    if (-not [IO.Path]::IsPathRooted($reply)) {
+        Common-Die "install location must be an absolute path (got '$reply')"
+    }
+    if ($env:USERPROFILE -and $reply.ToLowerInvariant().StartsWith($env:USERPROFILE.ToLowerInvariant())) {
+        Common-Warn "that path is inside your user profile; the background service runs as LocalSystem and a profile path can break on ACL/roaming changes. Continuing anyway."
+    }
+    $script:InstallDir = $reply
+    $script:InstallDirExplicit = $true
+}
+
+# Show-InstallSummary tells the operator what a fresh install is about to do,
+# BEFORE anything runs. Content mirrors install.sh's show_install_summary.
+function Show-InstallSummary {
+    Section 'What this will do'
+    $verLabel = if ($Version -eq 'latest') { 'latest stable release' }
+                elseif ($Version -eq 'edge') { 'latest edge (main) build' }
+                else { $Version }
+    Write-Host "  * Download Waired ($verLabel) and install it to:"
+    Write-Host "      $InstallDir"
+    Write-Host "  * Register the waired-agent background service (starts at boot)"
+    if (-not $SkipOllama) {
+        Write-Host "  * Install the Ollama AI engine (a few GB download)"
+    }
+    if (-not $SkipInit) {
+        Write-Host "  * Sign you in (opens your web browser)"
+    }
+    if (-not (Test-Admin)) {
+        Write-Host "  * Ask for administrator rights (a Windows UAC prompt will appear)"
+    }
+    if ($ControlUrl) {
+        Write-Host "  * Enrol this device against: $ControlUrl"
+    }
+}
+
+# Confirm-Proceed is the single go / no-go gate for a fresh install. Runs in
+# Phase 1 only (the elevated Phase-2 child never re-asks), after the summary.
+# Skips: -Yes / -DryRun (preview) / -Clean (Confirm-CleanInstall already
+# collected consent) / a non-interactive session (proceeds with a notice so
+# CI one-liners keep working; pass -Yes to silence it).
+function Confirm-Proceed {
+    if ($Yes -or $DryRun -or $Clean) { return }
+    if (-not (Test-InteractiveStdin)) {
+        Common-Log "No interactive console detected -- proceeding without confirmation (use -Yes / -NonInteractive to silence this notice)."
+        return
+    }
+    Write-Host ''
+    $reply = Read-Host '[waired] Proceed with the install? [Y/n] (Enter = Yes)'
+    if ($reply -match '^(n|no)$') {
+        Common-Die 'aborted - nothing was installed'
+    }
 }
 
 # Invoke-CleanWipe -- the wipe half of -Clean: delegate to uninstall.ps1
@@ -1018,6 +1179,25 @@ function Add-InstallDirToPath {
     }
 }
 
+# Set-InstallDirRegistry records the resolved install dir under
+# HKLM\SOFTWARE\Waired so the uninstaller and later -Update / re-runs find a
+# relocated install (-InstallDir). Runs in the elevated phase (HKLM). The
+# GUI installer (waired-setup.iss) writes the same value. Best-effort: a
+# registry hiccup must not fail the install -- the default-location fallback
+# still works.
+function Set-InstallDirRegistry {
+    Common-Run "registry: $InstallDirRegKey\InstallDir = $InstallDir" {
+        try {
+            if (-not (Test-Path -LiteralPath $InstallDirRegKey)) {
+                New-Item -Path $InstallDirRegKey -Force | Out-Null
+            }
+            Set-ItemProperty -Path $InstallDirRegKey -Name 'InstallDir' -Value $InstallDir
+        } catch {
+            Common-Warn "could not record the install dir in the registry ($($_.Exception.Message.Trim())); uninstall/update will assume the default location"
+        }
+    }
+}
+
 # Test-OllamaInstalled mirrors internal/download/ollama_path_windows.go's
 # discovery order so the installer can skip re-installing Ollama on
 # hosts where waired-agent (LocalSystem) can already find it.
@@ -1199,6 +1379,7 @@ function Show-NextSteps {
     $cpHint  = if ($StateDir) { $StateDir } else { $AgentStateDir }
     $url     = if ($ControlUrl) { $ControlUrl } else { 'https://your-cp.example.com' }
     $haveUrl = [bool]$ControlUrl
+    Section 'Done'
     Write-Host ''
     Write-Host "$(Emo (Glyph 0x1F389) '*') Waired is installed." -ForegroundColor Green
     if ($haveUrl) {
@@ -1235,6 +1416,34 @@ function Show-NextSteps {
     Write-Host 'More:              waired init --help'
     Write-Host 'Quickstart:        https://github.com/waired-ai/waired/blob/main/docs/quickstarts/README.md'
     Write-Host ''
+}
+
+# Invoke-InstallSteps is the privileged fresh-install step sequence, shared
+# by the elevated Phase-2 child and the already-admin inline path (they used
+# to be two copy-pasted blocks). Section headings split the console output
+# into readable steps. Invoke-WairedInit runs as a bare statement (not
+# assigned) so waired init's stdout reaches the console; it records the
+# outcome in $script:InitRan.
+function Invoke-InstallSteps {
+    param([string]$ZipPath)
+    Section 'Installing files'
+    Stop-ExistingService
+    Extract-Zip -ZipPath $ZipPath
+    Remove-TrayIfRequested
+    Section 'Background service'
+    Invoke-AgentInstall
+    Add-InstallDirToPath
+    Set-InstallDirRegistry
+    Section 'AI engine (Ollama)'
+    Install-OllamaIfRequested
+    Section 'Sign in and set up'
+    Invoke-WairedInit
+    $initRan = $script:InitRan
+    Ensure-AgentRunning
+    if ($initRan) { Enable-ClaudeProxy }
+    New-StartMenuShortcuts
+    Start-TrayAsOriginalUser
+    Show-NextSteps -InitRan:$initRan
 }
 
 # -------------------------------------------------------------------
@@ -1494,6 +1703,9 @@ function Invoke-WairedUpdate {
             Invoke-WairedUpdateSwap -StagedZip $stagedZip
         } else {
             Invoke-SelfElevate -ZipPath $stagedZip
+            # Recap in this persistent console too -- the elevated window
+            # paused and closed, and its summary vanished with it.
+            Common-Log "Update finished in the elevated window (full log: $LogPath)."
         }
     } finally {
         Common-Run "Remove-Item -Recurse $workDir" {
@@ -1574,11 +1786,13 @@ if ($env:WAIRED_ARGTEST) {
     return
 }
 
-Detect-Platform
-
 # Welcome banner -- Phase 1 only ($StagedZipPath set => elevated Phase 2
-# child, which would otherwise print it a second time).
+# child, which would otherwise print it a second time). Printed before
+# Detect-Platform so the first thing an operator sees is the wordmark, not a
+# detection log line.
 if (-not $StagedZipPath) { Show-Banner }
+
+Detect-Platform
 
 # Clean install: collect consent, then wipe via uninstall.ps1. Phase 1
 # only -- the elevated Phase-2 child inherits WAIRED_CLEAN in its env
@@ -1644,10 +1858,19 @@ if (-not $StagedZipPath) {
     if (Test-Admin) {
         Common-Warn "already running elevated; doing download + install in one go (UAC was unnecessary)"
     }
+
+    # Pre-install review: offer the install location, show what is about to
+    # happen, and ask before ANY work (download, UAC) starts. Phase 1 only --
+    # the elevated child never re-asks.
+    Request-InstallDir
+    Show-InstallSummary
+    Confirm-Proceed
+
     $workDir = Join-Path $env:TEMP "waired-install-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $workDir -Force | Out-Null
     $stagedZip = $null
     try {
+        Section 'Downloading Waired'
         $stagedZip = Get-AssetWithChecksum -WorkDir $workDir
         if (Test-Admin) {
             # Already elevated -> skip the self-re-exec and just run
@@ -1656,27 +1879,19 @@ if (-not $StagedZipPath) {
             # pause -- this is the user's own console, it does not vanish.
             try { Start-Transcript -Path $LogPath -Force -ErrorAction SilentlyContinue | Out-Null } catch { }
             try {
-                Stop-ExistingService
-                Extract-Zip -ZipPath $stagedZip
-                Remove-TrayIfRequested
-                Invoke-AgentInstall
-                Add-InstallDirToPath
-                Install-OllamaIfRequested
-                # Invoke-WairedInit as a bare statement (not assigned) so waired
-                # init's stdout reaches the console; it records the outcome in
-                # $script:InitRan instead of returning it.
-                Invoke-WairedInit
-                $initRan = $script:InitRan
-                Ensure-AgentRunning
-                if ($initRan) { Enable-ClaudeProxy }
-                New-StartMenuShortcuts
-                Start-TrayAsOriginalUser
-                Show-NextSteps -InitRan:$initRan
+                Invoke-InstallSteps -ZipPath $stagedZip
             } finally {
                 Stop-TranscriptQuietly
             }
         } else {
+            Section 'Administrator step'
             Invoke-SelfElevate -ZipPath $stagedZip
+            # The elevated window paused for the operator and closed; leave a
+            # recap in THIS (persistent) console too, so the outcome is
+            # readable even after that window is gone.
+            Section 'Done'
+            Common-Log "Install finished in the elevated window (full log: $LogPath)."
+            Common-Log "Open a NEW shell to use 'waired' directly (PATH was updated)."
         }
     } finally {
         # Only the un-elevated parent owns the workdir lifecycle. The
@@ -1707,6 +1922,9 @@ if (-not (Test-Path -LiteralPath $StagedZipPath)) {
 # false under -NonInteractive / redirected stdin, and elevated CI runners take
 # the already-admin inline path above, never this spawned one.
 $script:ElevatedConsole = $true
+# Kill conhost QuickEdit first: a stray click in this spawned window would
+# otherwise freeze all output (looks like a hung install) until Enter/Esc.
+Disable-QuickEdit
 try { Start-Transcript -Path $LogPath -Force -ErrorAction SilentlyContinue | Out-Null } catch { }
 
 if ($Update) {
@@ -1719,21 +1937,7 @@ if ($Update) {
 
 try {
     Common-Log "elevated phase: installing from $StagedZipPath"
-    Stop-ExistingService
-    Extract-Zip -ZipPath $StagedZipPath
-    Remove-TrayIfRequested
-    Invoke-AgentInstall
-    Add-InstallDirToPath
-    Install-OllamaIfRequested
-    # Invoke-WairedInit as a bare statement (not assigned) so waired init's stdout
-    # reaches the console; it records the outcome in $script:InitRan.
-    Invoke-WairedInit
-    $initRan = $script:InitRan
-    Ensure-AgentRunning
-    if ($initRan) { Enable-ClaudeProxy }
-    New-StartMenuShortcuts
-    Start-TrayAsOriginalUser
-    Show-NextSteps -InitRan:$initRan
+    Invoke-InstallSteps -ZipPath $StagedZipPath
 } catch {
     # A terminating error that was NOT a Common-Die (those exit + pause on their
     # own). Route it through Common-Die for the same log-path + pause + exit 1.

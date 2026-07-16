@@ -167,6 +167,29 @@ emo() {
     if supports_emoji; then printf '%s' "$1"; else printf '%s' "$2"; fi
 }
 
+# section <title> prints a blank line + a horizontal-rule heading so a run
+# reads as distinct steps (several tools write to this terminal; the rules
+# make it easy to see where one step ends, the next begins, and which output
+# belongs to a prompt). Mirrors install.ps1's Section. Box-drawing U+2500 on
+# a UTF-8 terminal, '-' otherwise; colour only on an interactive stdout with
+# NO_COLOR unset (same rules as print_banner).
+section() {
+    _s_d='-'
+    if supports_emoji; then _s_d='─'; fi
+    _s_n=$((49 - ${#1}))
+    [ "$_s_n" -lt 3 ] && _s_n=3
+    _s_tail=''
+    while [ "$_s_n" -gt 0 ]; do
+        _s_tail="$_s_tail$_s_d"
+        _s_n=$((_s_n - 1))
+    done
+    if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+        printf '\n\033[36m%s %s %s\033[0m\n' "$_s_d$_s_d$_s_d" "$1" "$_s_tail"
+    else
+        printf '\n%s %s %s\n' "$_s_d$_s_d$_s_d" "$1" "$_s_tail"
+    fi
+}
+
 # tty_available reports whether we can interact with the user even when
 # stdin is a pipe — the `curl | sh` case. /dev/tty is the controlling
 # terminal, so prompts/redirects use it directly. We must actually try to
@@ -281,7 +304,8 @@ Options:
   --skip-ollama    do not install Ollama (same as WAIRED_NO_OLLAMA=1)
   --no-init        do not auto-run \`waired init\` after install (the
                    default runs sign-in + setup when a terminal is present)
-  --yes, -y        assume "yes" for prompts (update, init non-interactive)
+  --yes, -y        assume "yes" for prompts (pre-install confirmation,
+                   update, init non-interactive)
   -h, --help       print this help
 
 Environment variables:
@@ -490,6 +514,77 @@ confirm_clean_install() {
     common_die "--clean is destructive; re-run with --yes to confirm on a non-interactive shell"
 }
 
+# already_installed — true when this host already has waired (the dispatch
+# in main() then takes the update path, which asks its own prompt_update
+# question — so the pre-install confirmation below skips to avoid asking
+# twice). Requires detect_os to have run.
+already_installed() {
+    case "$OS_KIND" in
+        linux)  [ -n "$(linux_apt_detect_installed)" ] ;;
+        darwin) [ -n "$(darwin_detect_installed)" ] ;;
+        *) return 1 ;;
+    esac
+}
+
+# show_install_summary tells the operator what a fresh install is about to
+# do, BEFORE anything runs. Mirrors install.ps1's Show-InstallSummary.
+show_install_summary() {
+    section 'What this will do'
+    case "$(channel_from_env)" in
+        stable) _sum_ver='latest stable release' ;;
+        edge)   _sum_ver='latest edge (main) build' ;;
+        *)      _sum_ver="version $WAIRED_VERSION" ;;
+    esac
+    case "$OS_KIND" in
+        linux)
+            printf '  * Install Waired (%s) via apt (adds the Waired apt repository)\n' "$_sum_ver"
+            printf '  * Register the waired-agent background service (starts at boot)\n'
+            ;;
+        darwin)
+            printf '  * Download Waired (%s) and install it to %s\n' "$_sum_ver" "$WAIRED_DARWIN_BINDIR"
+            printf '  * Register the waired-agent background service (starts at boot)\n'
+            ;;
+    esac
+    if ! ollama_skip_requested; then
+        printf '  * Install the Ollama AI engine (a few GB download)\n'
+    fi
+    if [ "$FLAG_NO_INIT" != 1 ]; then
+        printf '  * Sign you in (opens your web browser)\n'
+    fi
+    if [ "$(id -u)" -ne 0 ]; then
+        printf '  * Ask for administrator rights (a sudo password prompt may appear)\n'
+    fi
+    if [ -n "$CONTROL_URL" ]; then
+        printf '  * Enrol this device against: %s\n' "$CONTROL_URL"
+    fi
+}
+
+# confirm_proceed is the single go / no-go gate for a fresh install: summary
+# first, then an explicit [Y/n]. Skips: --yes / --dry-run (preview) /
+# --clean (confirm_clean_install already collected consent) / --check /
+# --update and an already-installed host (the update path asks its own
+# question) / no controlling terminal (proceeds with a notice so CI
+# one-liners keep working). Mirrors install.ps1's Confirm-Proceed.
+confirm_proceed() {
+    [ "$FLAG_CLEAN" = 1 ] && return 0
+    [ "$FLAG_CHECK" = 1 ] && return 0
+    [ "$FLAG_UPDATE" = 1 ] && return 0
+    if already_installed; then return 0; fi
+    show_install_summary
+    [ "$FLAG_YES" = 1 ] && return 0
+    [ "$DRY_RUN" = 1 ] && return 0
+    if ! tty_available; then
+        common_log "No terminal detected — proceeding without confirmation (use --yes to silence this notice)."
+        return 0
+    fi
+    printf '\n\033[1;36m[waired]\033[0m Proceed with the install? [Y/n] (Enter = Yes) ' >/dev/tty
+    read -r ans </dev/tty || ans=""
+    case "$ans" in
+        n|N|no|NO|No) common_die "aborted — nothing was installed" ;;
+        *) return 0 ;;
+    esac
+}
+
 # run_clean_wipe — the wipe half of --clean: delegate to uninstall.sh
 # (published as a release asset next to install.sh on both channels)
 # rather than re-implementing the purge here. Prefers a sibling
@@ -692,6 +787,7 @@ linux_enrolled() {
 # is interactive).
 linux_maybe_init() {
     [ "$FLAG_NO_INIT" = 1 ] && return 0
+    section 'Sign in and set up'
     if linux_enrolled; then
         common_log "$(emo '✅' '[ok]') Already enrolled — skipping sign-in."
         return 0
@@ -819,6 +915,7 @@ linux_apt_update() {
 }
 
 linux_apt_install() {
+    section 'Installing Waired'
     common_log "Detected $OS_NAME $OS_VERSION (${OS_CODENAME:-unknown codename}) on $OS_ARCH"
 
     if [ -z "$OS_CODENAME" ]; then
@@ -848,6 +945,7 @@ linux_apt_install() {
 
     linux_apt_write_control_url
 
+    section 'AI engine (Ollama)'
     if ollama_skip_requested; then
         common_log "Ollama install skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; bundled engine later: sudo waired runtimes install ollama — or bring your own and pick \"reuse\" at sign-in)"
@@ -866,6 +964,7 @@ linux_apt_install() {
 # linux_done_banner prints the friendly "what just happened / you're ready"
 # summary after a fresh install. Branches on whether sign-in completed.
 linux_done_banner() {
+    section 'Done'
     party="$(emo '🎉' '*')"
     if linux_enrolled; then
         ready="$(emo '✅' '[ok]') Enrolled — the agent service is running."
@@ -980,12 +1079,15 @@ darwin_install() {
     # $SUDO empty, $SUDO_USER set) work.
     state_dir="/Library/Application Support/waired"
 
+    section 'Installing Waired'
     darwin_install_binaries
+    section 'AI engine (Ollama)'
     if ollama_skip_requested; then
         common_log "Ollama install skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
     else
         darwin_install_ollama
     fi
+    section 'Background service'
     darwin_register_agent "$state_dir"
     darwin_install_log_rotation
     darwin_write_control_url "$state_dir"
@@ -1188,6 +1290,7 @@ darwin_write_control_url() {
 darwin_maybe_init() {
     state_dir="$1"
     [ "$FLAG_NO_INIT" = 1 ] && return 0
+    section 'Sign in and set up'
     if [ -e "$state_dir/identity.json" ]; then
         common_log "$(emo '✅' '[ok]') Already enrolled — skipping sign-in."
         return 0
@@ -1294,6 +1397,7 @@ darwin_update() {
 
 darwin_next_steps() {
     state_dir="$1"
+    section 'Done'
     party="$(emo '🎉' '*')"
     if [ -e "$state_dir/identity.json" ]; then
         get_started="$(emo '✅' '[ok]') Enrolled — the agent is running.
@@ -1426,6 +1530,12 @@ main() {
     fi
 
     resolve_control_url
+
+    # Pre-install review: show what is about to happen and ask before ANY
+    # work (repo changes, sudo) starts. Skips itself for --clean (the
+    # dedicated consent below), --check/--update and already-installed
+    # hosts (the update path prompts on its own).
+    confirm_proceed
 
     # Clean install: collect consent before elevating (mirrors
     # uninstall.sh's confirm-then-elevate order), then wipe. This runs

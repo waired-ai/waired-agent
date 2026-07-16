@@ -63,6 +63,23 @@ stable (`edge` is also accepted — see
 	</TabItem>
 </Tabs>
 
+## Choose the install location (Windows)
+
+A fresh interactive `install.ps1` run asks for the install location (Enter
+keeps the default `C:\Program Files\Waired`). To pin it non-interactively,
+pass `-InstallDir <path>` (script on disk) or set `WAIRED_INSTALL_DIR` for the
+piped one-liner:
+
+```powershell
+$env:WAIRED_INSTALL_DIR = 'D:\Waired'
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+```
+
+The resolved location is recorded in the registry (`HKLM\SOFTWARE\Waired`),
+so later updates, re-runs and `uninstall.ps1` find a relocated install
+automatically. Linux (apt layout) and macOS (`WAIRED_DARWIN_BINDIR`) keep
+their existing conventions.
+
 ## Development preset (`--dev` / `-Dev`)
 
 For Waired development and dogfooding only: `--dev` (Linux / macOS) or `-Dev`

@@ -61,6 +61,23 @@ import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 	</TabItem>
 </Tabs>
 
+## インストール先を選ぶ（Windows）
+
+対話的な新規 `install.ps1` 実行では、インストール先を尋ねられます（Enter で既定の
+`C:\Program Files\Waired`）。非対話的に固定するには、`-InstallDir <path>`
+（スクリプトをファイルに保存した場合）を渡すか、パイプのワンライナーでは
+`WAIRED_INSTALL_DIR` を設定します:
+
+```powershell
+$env:WAIRED_INSTALL_DIR = 'D:\Waired'
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+```
+
+解決されたインストール先はレジストリ（`HKLM\SOFTWARE\Waired`）に記録されるため、
+以降のアップデート・再実行・`uninstall.ps1` は移設済みのインストールを自動で
+見つけます。Linux（apt の配置）と macOS（`WAIRED_DARWIN_BINDIR`）は従来の規約の
+ままです。
+
 ## 開発用プリセット（`--dev` / `-Dev`）
 
 Waired 自体の開発・ドッグフーディング専用です。`--dev`（Linux / macOS）または

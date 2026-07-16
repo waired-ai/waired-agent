@@ -126,8 +126,23 @@ The architecture matrix is `amd64` and `arm64` on Linux and macOS,
 | `--edge`/`--latest` | Install/switch to the latest main build (edge channel; same as `WAIRED_VERSION=edge`). PowerShell: `-Edge`/`-Latest`. |
 | `--stable`   | Install/switch to the latest stable release. On `--update`/`--check` this overrides channel-preservation. PowerShell: `-Stable`. |
 | `--clean`    | Clean install: run the uninstaller with `--clean` first (full wipe — config, keys, state, the apt source, and Ollama + its models), then install fresh. Destructive; asks to confirm unless `--yes`. Same as `WAIRED_CLEAN=1`. Cannot be combined with `--check`/`--update`. PowerShell: `-Clean` (expect two UAC prompts: wipe + install). |
-| `--yes`/`-y` | Assume "yes" to the update prompt (needed on non-TTY hosts) and to the `--clean` confirmation. PowerShell: `-Yes`. |
+| `--yes`/`-y` | Assume "yes" to every prompt: the pre-install / pre-uninstall confirmation, the update prompt (needed on non-TTY hosts) and the `--clean` confirmation. PowerShell: `-Yes`. |
 | `-h`/`--help`| Print usage and exit.                                |
+
+Both installers show a summary of what they are about to do (install
+location, background service, Ollama download, browser sign-in, the
+admin-rights prompt) right after the banner and ask **`Proceed? [Y/n]`**
+before anything runs. The uninstallers ask **`[y/N]`** (Enter aborts).
+`--yes` / `-Yes` skips the prompt; a non-interactive session (CI, piped
+without a terminal) proceeds with a notice — except `--clean`, which
+still hard-requires `--yes`.
+
+Windows only: a fresh interactive install also asks for the **install
+location** (Enter keeps `%ProgramFiles%\Waired`); pin it with
+`-InstallDir <path>` / `--install-dir <path>` / `WAIRED_INSTALL_DIR`.
+The resolved location is recorded under `HKLM\SOFTWARE\Waired` so
+`-Update`, re-runs and `uninstall.ps1` find a relocated install (the GUI
+`Setup.exe` writes the same value).
 
 ## Environment variables
 
@@ -163,6 +178,7 @@ Windows-only:
 | Variable             | Effect                                                                |
 |----------------------|-----------------------------------------------------------------------|
 | `WAIRED_STATE_DIR`   | Override on-disk state location. Default `%ProgramData%\waired`.      |
+| `WAIRED_INSTALL_DIR` | Install location (same as `-InstallDir`; the env form works with the piped one-liner). Default `%ProgramFiles%\Waired`. |
 
 `WAIRED_APT_SUITE` is intentionally exposed: AR's APT format publishes
 one suite per repository, so future stable/beta channel separation will
@@ -270,6 +286,13 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/un
 # Windows
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
 ```
+
+Both uninstallers show what they are about to remove and ask
+**`Proceed? [y/N]`** (Enter aborts) before touching anything; `--yes` /
+`-Yes` skips the prompt, and a non-interactive plain uninstall proceeds
+with a notice. On Windows the elevated window pauses on a final
+"Press Enter to close" (success or failure) and writes a transcript to
+`%TEMP%\waired-uninstall.log`, so the outcome is always readable.
 
 Two tiers, matching apt's `remove` / `purge` split:
 

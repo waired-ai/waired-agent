@@ -73,6 +73,13 @@ Source: "dist\windows-amd64\THIRD_PARTY_LICENSES"; DestDir: "{app}"; Flags: igno
 Name: "{group}\Waired Tray";       Filename: "{app}\waired-tray.exe"
 Name: "{group}\Waired (CLI)";      Filename: "cmd.exe"; Parameters: "/k ""{app}\waired.exe"" --help"
 
+[Registry]
+; Record the install location where install.ps1 / uninstall.ps1 look for it
+; (install.ps1 -InstallDir writes the same value), so the script uninstaller
+; and script updates find a GUI install even at a non-default directory.
+Root: HKLM; Subkey: "SOFTWARE\Waired"; ValueType: string; ValueName: "InstallDir"; \
+    ValueData: "{app}"; Flags: uninsdeletekey
+
 [Tasks]
 ; Default-checked, mirroring the Linux installer's default-on Claude
 ; integration (with disclosure). Unchecking it leaves Claude Code routing
