@@ -19,7 +19,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -35,6 +34,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
+	"github.com/waired-ai/waired-agent/internal/platform/browser"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
@@ -395,20 +395,12 @@ func runInitBody(o *initFlags) error {
 		}
 	} else {
 		fmt.Printf("%s %s\n", steps.signIn, bold("Sign in"))
+		// gcloud-style gate: URL first, browser only on Enter (or
+		// immediately when the session can't answer a prompt). Resolved
+		// once, outside the callback, so the decision is stable.
+		gate := resolveBrowserGate(*noBrowser, *nonInteractive, isTerminal(os.Stdin), browser.HasDisplay())
 		onLogin = func(loginURL, userCode string) {
-			if *noBrowser {
-				fmt.Printf("\nOpen this URL to sign in:\n  %s\n\nCode: %s\n\n%s Waiting for sign-in to complete…\n",
-					loginURL, userCode, emo("⏳", "..."))
-				return
-			}
-			if err := openBrowser(loginURL); err != nil {
-				fmt.Printf("%s Couldn't open a browser automatically. Open this URL to sign in:\n  %s\n",
-					emo("⚠️", "!"), loginURL)
-			} else {
-				fmt.Printf("%s Opened your browser to sign in. If nothing appeared, open this URL:\n  %s\n",
-					emo("🌐", ">>"), loginURL)
-			}
-			fmt.Printf("%s Waiting for sign-in to complete…\n", emo("⏳", "..."))
+			presentLoginURL(os.Stdin, os.Stdout, loginURL, userCode, gate)
 		}
 	}
 
@@ -1354,21 +1346,6 @@ func prettyPrint(body []byte) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	return cmd.Start()
 }
 
 // defaultStateDir is the --state-dir default for the daemon-interacting
