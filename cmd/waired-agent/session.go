@@ -39,6 +39,7 @@ type session struct {
 	meshAgg       *inferencemesh.Aggregator
 	infProvider   management.InferenceProvider // nil when --disable-inference
 	engControl    *engineController            // nil when --disable-inference (#186 hard engine power)
+	swapControl   *modelSwapController         // nil when --disable-inference (#812 in-process model swap)
 	obsState      *observabilityState
 
 	engine      *wgnet.Engine
@@ -263,6 +264,18 @@ func (a sbEngineControl) EngineState() (management.EnginePowerState, bool) {
 		return s.engControl.EngineState()
 	}
 	return "", false
+}
+
+type sbModelSwapControl struct{ sb *switchboard }
+
+// ApplyModelSwitch delegates the #812 in-process preferred-model switch to the
+// live session's controller. Returns errNotEnrolled (which the handler treats
+// as "fall back to the supervised restart") when no session is enrolled yet.
+func (a sbModelSwapControl) ApplyModelSwitch(ctx context.Context, modelID string) (bool, error) {
+	if s := a.sb.current(); s != nil && s.swapControl != nil {
+		return s.swapControl.ApplyModelSwitch(ctx, modelID)
+	}
+	return false, errNotEnrolled
 }
 
 type sbInfProvider struct{ sb *switchboard }

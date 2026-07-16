@@ -264,6 +264,17 @@ func run(ctx context.Context, args []string) error {
 	claudeRouting := newClaudeRoutingController(*stateDir, claudeRoutingPol, logger).
 		WithObservability(obsRing)
 
+	// supervisedRestart marks the restart intent before the SIGTERM so the
+	// otherwise-clean shutdown exits 17 and systemd/SCM/launchd brings the
+	// agent back up (issue #347). Since #812 this is the FALLBACK for the
+	// preferred-model switch (cross-engine / wedged engine / unenrolled); the
+	// common case swaps the model in process with no restart. Shared by the
+	// management RestartScheduler and the provider's wedged-engine self-heal.
+	supervisedRestart := func() {
+		restartRequested.Store(true)
+		management.DefaultRestartScheduler()
+	}
+
 	sb := &switchboard{}
 	mgmtSrv := management.New(sb, sb).
 		WithIdentity(sb).
@@ -287,13 +298,12 @@ func run(ctx context.Context, args []string) error {
 			WithEngineControl(sbEngineControl{sb}).
 			WithCatalog(&management.CatalogConfig{
 				PreferencePath: agentconfig.DefaultPreferencePath(),
-				// Mark the restart intent before the SIGTERM so the
-				// otherwise-clean shutdown exits 17 and systemd brings
-				// the agent back up (issue #347).
-				RestartScheduler: func() {
-					restartRequested.Store(true)
-					management.DefaultRestartScheduler()
-				},
+				// #812 in-process swap seam; delegates to the live session's
+				// controller (errNotEnrolled → the handler restart-falls-back).
+				ApplyModelSwitch: sbModelSwapControl{sb}.ApplyModelSwitch,
+				// Fallback when the in-process swap can't apply (cross-engine
+				// target / wedged engine / unenrolled).
+				RestartScheduler: supervisedRestart,
 			})
 	}
 	// The bundled OpenCode coding-agent web UI (#429/#486) now runs entirely
@@ -779,6 +789,10 @@ func run(ctx context.Context, args []string) error {
 		// subsystem owns, so it is built here and stored in the session;
 		// the engine routes are registered at boot like the inference ones.
 		var engCtl *engineController
+		// swapCtl backs the switchboard's #812 in-process model-swap
+		// delegation; like engCtl it needs the concrete provider the subsystem
+		// owns and is stored in the session.
+		var swapCtl *modelSwapController
 		if !*disableInference {
 			sub, ip, err := startInferenceSubsystem(ctx, &wg, logger, *stateDir, cfgRoot.Inference, inferenceSubsystemDeps{
 				IsPaused:             pm.IsPaused,
@@ -800,6 +814,11 @@ func run(ctx context.Context, args []string) error {
 			}
 			infProvider = ip
 			engCtl = newEngineController(ctx, sub.ollama, logger)
+			swapCtl = newModelSwapController(ctx, sub.provider, logger)
+			// Wedged-engine self-heal for the #812 in-process switch: if the
+			// engine won't come back after a switch bounce, the reconcile falls
+			// back to the supervised restart (the only restart #812 keeps).
+			sub.provider.restartOnWedge = supervisedRestart
 			overlayHandlerSet = sub.overlayHandlerSet
 			claudeHandlerSet = sub.claudeHandlerSet
 			inferenceSub = sub
@@ -1141,6 +1160,7 @@ func run(ctx context.Context, args []string) error {
 			meshAgg:       meshAgg,
 			infProvider:   infProvider,
 			engControl:    engCtl,
+			swapControl:   swapCtl,
 			obsState:      obsStateProvider,
 			engine:        engine,
 			stateWriter:   stateWriter,

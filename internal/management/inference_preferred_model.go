@@ -13,9 +13,11 @@ type PreferredModelRequest struct {
 	ModelID string `json:"model_id"`
 }
 
-// PreferredModelResponse is the 202-Accepted body. WillRestart is always
-// true on success; it exists as a wire field so a future Step 12
-// hot-swap path can flip it to false without breaking the tray.
+// PreferredModelResponse is the 202-Accepted body. WillRestart is false
+// when the switch applies in process (#812, the common case) and true when
+// the agent falls back to the supervised restart (cross-engine target,
+// wedged engine, or an older/unwired daemon). Clients must honour the field
+// rather than assume a restart.
 type PreferredModelResponse struct {
 	ModelID     string `json:"model_id"`
 	WillRestart bool   `json:"will_restart"`
@@ -55,14 +57,32 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Downloading only reports whether the chosen family still needs a
-	// pull; the pull itself is NOT dispatched here. The imminent restart
-	// (scheduled below) would cancel an in-flight request-scoped pull
-	// within milliseconds anyway, and its failure path would write a
-	// transient failed state a watching client (waired#774) could misread
-	// as terminal. The post-restart bootstrap (bootstrapPreferredModel,
-	// issue #347) performs the real pull and activates the model once it
-	// is ready — the old model keeps serving in the meantime.
+	// #812: apply the switch in process — no whole-agent restart, so the
+	// management API, gateway, and mesh all stay up. On any error (a
+	// cross-engine target, a not-yet-enrolled daemon, or a wedged setup) fall
+	// through to the supervised restart, which re-reads the just-saved
+	// preference on boot. Older/unwired daemons (nil hook) take the restart
+	// path too. When applying in process the swap layer owns the pull, so the
+	// #774 "don't pull pre-restart" reasoning below does not apply.
+	if s.catalog.ApplyModelSwitch != nil {
+		if downloading, err := s.catalog.ApplyModelSwitch(r.Context(), req.ModelID); err == nil {
+			writeJSON(w, http.StatusAccepted, PreferredModelResponse{
+				ModelID:     req.ModelID,
+				WillRestart: false,
+				Downloading: downloading,
+			})
+			return
+		}
+	}
+
+	// Restart fallback. Downloading only reports whether the chosen family
+	// still needs a pull; the pull itself is NOT dispatched here. The imminent
+	// restart (scheduled below) would cancel an in-flight request-scoped pull
+	// within milliseconds anyway, and its failure path would write a transient
+	// failed state a watching client (waired#774) could misread as terminal.
+	// The post-restart bootstrap (bootstrapPreferredModel, issue #347)
+	// performs the real pull and activates the model once it is ready — the
+	// old model keeps serving in the meantime.
 	downloading := !modelDownloaded(s.inference.ListModels(r.Context()), manifest.ModelID)
 
 	scheduler := s.catalog.RestartScheduler

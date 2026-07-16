@@ -446,6 +446,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	provider := &agentInferenceProvider{
 		cfg:                 cfg,
 		logger:              logger,
+		agentCtx:            ctx,
 		manifests:           manifests,
 		store:               store,
 		profiler:            profiler,
@@ -754,38 +755,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 				}
 				ollama.SetAppliedTuning(mt)
 			} else {
-				verifyTag := ollamaTuneTag
-				// #642: on the spilled discrete-GPU config the tuning forces
-				// a larger generation ubatch, delivered through a derived
-				// model (the engine has no batch env). Create it FROM the
-				// base tag now that the engine is up, then route + verify
-				// against the derived tag by storing it as the model's
-				// OllamaTag. Best-effort: if the base isn't pulled yet the
-				// create fails and we serve the base tag with Ollama's
-				// automatic batch, self-healing on a later boot.
-				if ollamaTune.NumBatch >= ollamaLargeBatch && ollamaTuneVariant.Source.Type == catalog.SourceOllama {
-					baseTag := ollamaTuneVariant.Source.Tag
-					if derived, derr := ensureOllamaDerivedModel(ctx, &http.Client{}, ollama.BaseURL(), baseTag, ollamaTune.NumBatch); derr != nil {
-						logger.Warn("ollama derived batch model unavailable; serving base tag with automatic batch",
-							"base", baseTag, "num_batch", ollamaTune.NumBatch, "err", derr)
-					} else {
-						verifyTag = derived
-						if uerr := store.Update(func(s *catalog.State) {
-							if ms, ok := s.Models[ollamaTune.ModelID]; ok {
-								ms.OllamaTag = derived
-								ms.BaseOllamaTag = baseTag
-								s.Models[ollamaTune.ModelID] = ms
-							}
-						}); uerr != nil {
-							logger.Warn("persist derived ollama tag failed", "err", uerr)
-						}
-						logger.Info("ollama derived batch model ready",
-							"tag", derived, "from", baseTag, "num_batch", ollamaTune.NumBatch)
-					}
-				}
-				applyOllamaTuningVerification(ctx, ollama, ollamaTune,
-					ollamaTuneManifest, ollamaTuneVariant, hwProfile,
-					verifyTag, ollama.BaseURL(), &http.Client{}, proclist.List, logger)
+				// #642 derived-batch-model creation + #621 post-spawn tuning
+				// verification, shared with the in-process reconcile (#812).
+				provider.finalizeOllamaServeTuning(ctx, ollamaTune,
+					ollamaTuneManifest, ollamaTuneVariant, ollamaTuneTag)
 			}
 		}
 	}()
@@ -906,8 +879,13 @@ func (l *localOnlySelector) SelectK(ctx context.Context, req router.Request, k i
 // (the loopback API surface) and gateway.SelectorIface (so the
 // gateway and management share one selector).
 type agentInferenceProvider struct {
-	cfg       agentconfig.InferenceConfig
-	logger    *slog.Logger
+	cfg    agentconfig.InferenceConfig
+	logger *slog.Logger
+	// agentCtx is the daemon's long-lived context (the one that drives the
+	// engine-startup + shutdown goroutines). The in-process reconcile (#812)
+	// runs its Stop → EnsureRunning bounce against THIS ctx, never a request
+	// or pull ctx, which are cancelled the moment their handler/job returns.
+	agentCtx  context.Context
 	manifests []catalog.Manifest
 	store     *catalog.Store
 	profiler  *hardware.Profiler
@@ -1002,11 +980,63 @@ type agentInferenceProvider struct {
 	// (#per-node-claude-serving), delivered by the CP via
 	// nm.Self.InferenceState.Capacity and applied to the ollama engine's
 	// OLLAMA_NUM_PARALLEL. 0 = automatic (VRAM-sized). Read lock-free by the
-	// spawn-time tuning provider and written by ApplyConcurrency; retuneInFlight
-	// coalesces the guarded restart goroutine so overlapping map updates don't
-	// stack engine restarts.
+	// spawn-time tuning provider and written by ApplyConcurrency;
+	// engineReconcileInFlight coalesces the guarded restart goroutine so
+	// overlapping map updates don't stack engine restarts.
 	desiredParallel atomic.Int64
-	retuneInFlight  atomic.Bool
+
+	// engineReconcileInFlight coalesces the single background goroutine
+	// (reconcileEngineServe) that owns every ollama serve-env change —
+	// operator concurrency retunes (ApplyConcurrency) and in-process model
+	// switches (#812) — so overlapping requests never stack two
+	// Stop/EnsureRunning cycles on the one subprocess.
+	engineReconcileInFlight atomic.Bool
+	// swapPending signals reconcileEngineServe that an in-process model
+	// switch is waiting: it forces a bounce (Option 2 — always stop-then-
+	// start on a switch) and resets KV to the q8_0 default for the new
+	// model (the old model's verify-degraded f16 does not carry over).
+	swapPending atomic.Bool
+	// pendingSwapModel holds the model_id of an operator switch whose weights
+	// are still downloading; runPullJob's completion kicks the reconcile once
+	// that model reaches Ready. It distinguishes an operator switch from a
+	// boot-time pull so boot never triggers a spurious engine bounce.
+	pendingSwapModel atomic.Pointer[string]
+	// preferredOverride is the in-process source of truth for the operator's
+	// preferred model after a #812 switch. cfg.PreferredModelID is a frozen
+	// boot snapshot (preferred-model.json is only re-read on a restart), so
+	// every in-process reader of the preference routes through
+	// effectivePreferredModelID() / effectiveCfg() instead.
+	preferredOverride atomic.Pointer[string]
+	// restartOnWedge, when non-nil, is the supervised-restart fallback the
+	// reconcile invokes if the engine fails to come back after a switch
+	// bounce (a wedged engine). Wired from main.go to the same scheduler the
+	// management RestartScheduler uses. nil in unit tests.
+	restartOnWedge func()
+}
+
+// effectivePreferredModelID returns the operator's currently-effective
+// preferred model_id: the in-process #812 switch override when one has been
+// set, else the boot-time cfg snapshot. The snapshot alone is stale after an
+// in-process switch (cfg is a frozen value copy; preferred-model.json is only
+// re-read on a restart), so every in-process reader of the preference must
+// route through here (or effectiveCfg).
+func (p *agentInferenceProvider) effectivePreferredModelID() string {
+	if v := p.preferredOverride.Load(); v != nil {
+		return *v
+	}
+	return p.cfg.PreferredModelID
+}
+
+// effectiveCfg returns a copy of the boot inference config with
+// PreferredModelID overwritten by the in-process #812 switch override, so the
+// free helpers that size/route off cfg (resolveTuningTarget,
+// modelDecisionReasons, defaultCodingModelID, computeAvailableUpdate) observe
+// the operator's current choice after an in-process switch rather than the
+// frozen boot value.
+func (p *agentInferenceProvider) effectiveCfg() agentconfig.InferenceConfig {
+	c := p.cfg
+	c.PreferredModelID = p.effectivePreferredModelID()
+	return c
 }
 
 // ApplyConcurrency applies the operator's max-concurrent-requests target
@@ -1035,56 +1065,176 @@ func (p *agentInferenceProvider) ApplyConcurrency(ctx context.Context, target in
 	if p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama || p.ollama.Borrowed() {
 		return // recorded; nothing we own to restart (vLLM / reuse / no engine)
 	}
-	if !p.retuneInFlight.CompareAndSwap(false, true) {
-		return // a re-tune is already running; it re-reads desiredParallel
-	}
-	go p.retuneParallelLoop(ctx)
+	p.requestEngineReconcile(false)
 }
 
-// retuneParallelLoop recomputes the ollama tuning for the current
-// desiredParallel and, when NumParallel actually changed, swaps the serve env
-// and restarts the engine once. It loops so a target that changed mid-restart is
-// not dropped. The KV type is preserved from the applied tuning (so a prior
-// verify f16 degrade is not undone); the recompute otherwise mirrors the boot
-// sizing, so context/spill decisions stay consistent with a normal spawn.
-func (p *agentInferenceProvider) retuneParallelLoop(ctx context.Context) {
-	defer p.retuneInFlight.Store(false)
+// requestEngineReconcile kicks the single background goroutine that owns every
+// ollama serve-env change. swap=true marks an in-process model switch (#812) so
+// the reconcile flips Active and force-bounces (Option 2 — always stop-then-
+// start on a switch). Coalesced via engineReconcileInFlight: if a reconcile is
+// already running it re-reads swapPending/desiredParallel on its next
+// iteration, so overlapping concurrency changes and switches never stack two
+// Stop/EnsureRunning cycles on the one subprocess. The bounce always runs on
+// the daemon's long-lived agentCtx, never the caller's request/pull ctx.
+func (p *agentInferenceProvider) requestEngineReconcile(swap bool) {
+	if swap {
+		p.swapPending.Store(true)
+	}
+	if !p.engineReconcileInFlight.CompareAndSwap(false, true) {
+		return // a reconcile is already running; it will observe the new intent
+	}
+	ctx := p.agentCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go p.reconcileEngineServe(ctx)
+}
+
+// reconcileEngineServe recomputes the ollama serve env for the currently
+// effective preferred/Active model and desiredParallel, and bounces the engine
+// (Stop → EnsureRunning) to apply it — the agent process, gateway, mesh, and
+// management API all stay up; only `ollama serve` restarts. It loops so a
+// target that moved mid-bounce is not dropped.
+//
+// A concurrency-only change bounces iff the resolved parallelism (or sized
+// model) moved and preserves the applied KV type (a prior #621 verify f16
+// degrade is kept). An in-process model switch (swapPending, #812) always
+// bounces, commits the new model as Active once it is Ready, and resets KV to
+// the q8_0 default (the old model's degrade does not carry over). On a
+// borrowed/parked/down engine the serve env is staged (or, for reuse mode,
+// only the Active flip applies) so the eventual (re)start serves the new
+// tuning without forcing a spawn. If the engine fails to come back after a
+// switch bounce (wedged), it self-heals via the supervised restart fallback —
+// the only restart #812 keeps.
+func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
+	defer p.engineReconcileInFlight.Store(false)
+	if p.ollama == nil {
+		return
+	}
 	for {
 		want := int(p.desiredParallel.Load())
-		cur := p.ollama.AppliedTuning()
+		swap := p.swapPending.Swap(false)
 		st, err := p.store.Load()
 		if err != nil {
 			return
 		}
-		tm, tv, ok := resolveTuningTarget(p.cfg, p.manifests, st)
+		// On an operator switch, commit the new preferred model as Active
+		// (once its weights are Ready) before sizing/bouncing, so routing and
+		// /inference/status reflect the target immediately.
+		if swap {
+			if tm, ok := p.preferredManifest(); ok {
+				vid := ""
+				if ms, found := st.Models[tm.ModelID]; found {
+					vid = ms.VariantID
+				}
+				p.activatePreferredIfNeeded(tm.ModelID, vid)
+				st, _ = p.store.Load() // re-read Active after the flip
+			}
+		}
+		cur := p.ollama.AppliedTuning()
+		tm, tv, ok := resolveTuningTarget(p.effectiveCfg(), p.manifests, st)
 		if !ok {
 			return
 		}
-		kvType := cur.KVCacheType
-		if kvType == "" {
-			kvType = "q8_0"
+		// KV cache type: an operator switch resets to the q8_0 default (the
+		// old model's post-verify f16 degrade does not carry over); a
+		// concurrency-only re-tune preserves the applied KV so a prior degrade
+		// is kept (#621).
+		kvType := "q8_0"
+		if !swap && cur.KVCacheType != "" {
+			kvType = cur.KVCacheType
 		}
 		tune := computeOllamaTuningOpts(tm, tv, p.profiler.Profile(ctx), kvType, true, want)
-		if tune.NumParallel == cur.NumParallel {
+		// Bounce predicate: an operator switch always bounces (Option 2) so the
+		// new model's per-model spawn env applies; a concurrency-only change
+		// bounces iff the resolved engine parallelism actually moved (the exact
+		// pre-#812 retuneParallelLoop behaviour).
+		if !swap && tune.NumParallel == cur.NumParallel {
 			return // already at the resolved parallelism
 		}
-		p.logger.Info("re-tuning ollama for operator concurrency change",
-			"target", want, "num_parallel", tune.NumParallel,
-			"recommended_max", tune.RecommendedMaxParallel, "warning", tune.Warning)
+		// Only a live, owned, un-parked ollama process can bounce. Borrowed
+		// (reuse mode): we own no process to restart or configure — the Active
+		// flip above is the whole switch. Owned but parked/not-yet-ready:
+		// stage the serve env so the eventual (re)start serves the new tuning,
+		// but don't force a spawn here.
+		if p.servingEngine() != catalog.RuntimeOllama || p.ollama.Borrowed() {
+			return
+		}
 		p.ollama.SetModelEnv(tune.Env())
 		p.ollama.SetAppliedTuning(tune.ModelTuning)
+		if p.ollama.IsParked() || p.ollama.Health(ctx).State != infruntime.StateReady {
+			return // staged; StartEngine / normal boot brings it up tuned
+		}
+		p.logger.Info("reconciling ollama serve env",
+			"model", tune.ModelID, "variant", tune.VariantID, "switch", swap,
+			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
+			"num_parallel", tune.NumParallel, "warning", tune.Warning)
 		if err := p.ollama.Stop(ctx); err != nil {
-			p.logger.Warn("stop for concurrency re-tune failed; keeping current engine", "err", err)
+			p.logger.Warn("stop for engine reconcile failed; keeping current engine", "err", err)
 			return
 		}
 		if err := p.ollama.EnsureRunning(ctx); err != nil {
-			p.logger.Warn("restart for concurrency re-tune failed; engine down until retry", "err", err)
+			p.logger.Warn("restart for engine reconcile failed; engine down until retry", "err", err)
+			if swap && p.restartOnWedge != nil {
+				// Wedged after an in-process model switch: fall back to the
+				// supervised restart (preferred-model.json is saved, so the
+				// reboot serves the new model). The only restart #812 keeps.
+				p.logger.Warn("engine wedged after in-process model switch; falling back to supervised restart")
+				p.restartOnWedge()
+			}
 			return
 		}
-		if int(p.desiredParallel.Load()) == want {
-			return // no newer target arrived during the restart
+		// Re-establish the post-spawn GPU-fit safety net for the (possibly new)
+		// model: create the #642 derived batch model if needed and verify the
+		// exported tuning, degrading KV once on spill evidence — the same
+		// finalize step a boot spawn runs.
+		tag := ""
+		if ms, found := st.Models[tm.ModelID]; found {
+			tag = ms.OllamaTag
+		}
+		if tag == "" && tv.Source.Type == catalog.SourceOllama {
+			tag = tv.Source.Tag
+		}
+		p.finalizeOllamaServeTuning(ctx, tune, tm, tv, tag)
+		if int(p.desiredParallel.Load()) == want && !p.swapPending.Load() {
+			return // no newer target/switch arrived during the bounce
 		}
 	}
+}
+
+// finalizeOllamaServeTuning runs the post-spawn tuning steps that need a live
+// engine, shared by the boot startup goroutine and the in-process engine
+// reconcile (#812) so a model switched without a restart gets the same GPU-fit
+// safety net a restart gives: create the #642 derived batch model when the
+// tuning forces a large generation ubatch, then verify the exported tuning
+// against the running engine and degrade KV once on spill/f16 evidence. tag is
+// the model's serving tag (state OllamaTag, else the variant's source tag).
+// Owned (non-borrowed) ollama only — the caller guards borrowed/reuse mode.
+func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, tune ollamaTuning, m catalog.Manifest, v catalog.Variant, tag string) {
+	verifyTag := tag
+	if tune.NumBatch >= ollamaLargeBatch && v.Source.Type == catalog.SourceOllama {
+		baseTag := v.Source.Tag
+		if derived, derr := ensureOllamaDerivedModel(ctx, &http.Client{}, p.ollama.BaseURL(), baseTag, tune.NumBatch); derr != nil {
+			p.logger.Warn("ollama derived batch model unavailable; serving base tag with automatic batch",
+				"base", baseTag, "num_batch", tune.NumBatch, "err", derr)
+		} else {
+			verifyTag = derived
+			if uerr := p.store.Update(func(s *catalog.State) {
+				if ms, ok := s.Models[m.ModelID]; ok {
+					ms.OllamaTag = derived
+					ms.BaseOllamaTag = baseTag
+					s.Models[m.ModelID] = ms
+				}
+			}); uerr != nil {
+				p.logger.Warn("persist derived ollama tag failed", "err", uerr)
+			}
+			p.logger.Info("ollama derived batch model ready",
+				"tag", derived, "from", baseTag, "num_batch", tune.NumBatch)
+		}
+	}
+	applyOllamaTuningVerification(ctx, p.ollama, tune,
+		m, v, p.profiler.Profile(ctx), verifyTag, p.ollama.BaseURL(),
+		&http.Client{}, proclist.List, p.logger)
 }
 
 func (p *agentInferenceProvider) Status(ctx context.Context) management.InferenceStatus {
@@ -1168,7 +1318,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		Models:          models,
 		ActiveEndpoints: endpoints,
 		Active:          activeFromCatalog(state.Active),
-		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.cfg, p.ollamaEngineVersion(ctx)),
+		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx)),
 		LongContext:     longContextBenchFor(depth),
 		DesiredState:    desiredStateStr,
 	}
@@ -1667,6 +1817,16 @@ func (p *agentInferenceProvider) runPullJob(parent context.Context, modelID, var
 	// switch never landed — nothing wrote Active after the restart, so
 	// the agent came back up serving the old model (issue #347).
 	p.activatePreferredIfNeeded(modelID, variantID)
+	// #812: if this pull completed an operator's in-process model switch
+	// (SwapPreferredModel recorded pendingSwapModel while the weights
+	// downloaded), bounce the engine now so the new model's per-model serve
+	// env applies — the same in-process swap the on-disk path takes, just
+	// deferred until the download finished. Boot-time / unrelated pulls never
+	// set pendingSwapModel, so they don't trigger a spurious bounce.
+	if psm := p.pendingSwapModel.Load(); psm != nil && *psm == modelID {
+		p.pendingSwapModel.CompareAndSwap(psm, nil)
+		p.requestEngineReconcile(true)
+	}
 }
 
 // bootstrapBundledModel kicks off the agent-startup pre-pull described
@@ -1783,7 +1943,7 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 // against the bundled manifests. ok=false when no preference is set
 // or it names nothing in the catalog.
 func (p *agentInferenceProvider) preferredManifest() (catalog.Manifest, bool) {
-	pref := p.cfg.PreferredModelID
+	pref := p.effectivePreferredModelID()
 	if pref == "" {
 		return catalog.Manifest{}, false
 	}
@@ -1853,6 +2013,63 @@ func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) {
 	}
 }
 
+// errSwapNeedsRestart signals that an in-process model switch is not possible
+// for this target — a cross-engine change (ollama↔vLLM) or a target with no
+// variant servable by the running engine — so the caller must fall back to the
+// supervised restart path (WillRestart:true). It is the sentinel the
+// preferred-model handler treats (like any non-nil error) as "restart to
+// apply". Cross-engine in-process swap is a deferred #812 follow-up.
+var errSwapNeedsRestart = errors.New("waired-agent: model switch needs restart (cross-engine)")
+
+// SwapPreferredModel applies an operator's preferred-model switch in process
+// (#812) instead of restarting the whole agent: it publishes the new preference
+// as the effective source of truth, ensures the weights are on disk (dispatching
+// a pull when they are not), and kicks the engine reconcile to flip Active and
+// bounce `ollama serve` onto the new model — the management API, gateway, and
+// mesh stay up throughout. The old model keeps serving until the new one is
+// Ready. downloading reports whether a background pull was started (the switch
+// then completes from runPullJob once the weights land). It returns
+// errSwapNeedsRestart for a cross-engine target so the caller restart-falls-back.
+func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOrAlias string) (downloading bool, err error) {
+	manifest, ok := catalog.LookupByAlias(modelOrAlias, p.manifests)
+	if !ok {
+		return false, fmt.Errorf("swap preferred model: unknown model %q", modelOrAlias)
+	}
+	// Same-engine only (v1): the in-process bounce restarts `ollama serve`; a
+	// cross-engine switch (ollama↔vLLM) needs adapter re-registration + a
+	// decision.Engine change and stays on the restart path.
+	if p.servingEngine() != catalog.RuntimeOllama {
+		return false, errSwapNeedsRestart
+	}
+	if _, pullable := router.FirstPullableVariant(manifest, catalog.RuntimeOllama, p.ollamaEngineVersion(ctx)); !pullable {
+		return false, errSwapNeedsRestart // target has no ollama-servable variant
+	}
+
+	// Publish the effective preference so every in-process reader (tuning
+	// target, Active-flip guard, coding-alias default, available-update pick)
+	// sees the new model rather than the frozen boot snapshot.
+	id := manifest.ModelID
+	p.preferredOverride.Store(&id)
+
+	st, _ := p.store.Load()
+	if ms, found := st.Models[manifest.ModelID]; found && ms.State == catalog.ModelStateReady {
+		// On disk: flip Active + bounce the engine now.
+		p.requestEngineReconcile(true)
+		return false, nil
+	}
+	// Not on disk: record the pending switch and start the pull. The bounce
+	// fires from runPullJob's completion once the weights reach Ready; the old
+	// model keeps serving until then. Best-effort — the preference is already
+	// published and self-heals on the next boot if the dispatch fails.
+	p.pendingSwapModel.Store(&id)
+	if _, perr := p.PullModel(ctx, manifest.ModelID); perr != nil {
+		p.pendingSwapModel.CompareAndSwap(&id, nil)
+		p.logger.Warn("swap preferred model: pull dispatch failed", "model", manifest.ModelID, "err", perr)
+		return false, nil
+	}
+	return true, nil
+}
+
 func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string) error {
 	state, err := p.store.Load()
 	if err != nil {
@@ -1905,7 +2122,7 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 		LocalState:     st,
 		Hardware:       hw,
 		Runtimes:       p.registry,
-		DefaultModelID: defaultCodingModelID(p.cfg, st),
+		DefaultModelID: defaultCodingModelID(p.effectiveCfg(), st),
 	}
 }
 
@@ -2269,7 +2486,7 @@ func availableUpdateFromPick(engine string, mp router.Pick, state catalog.State)
 // in the background. Idempotent: a candidate already on disk skips
 // straight through. Step 12 — keeps the next refresh fast.
 func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
-	upd := computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.cfg, p.ollamaEngineVersion(ctx))
+	upd := computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx))
 	if upd == nil {
 		return
 	}
