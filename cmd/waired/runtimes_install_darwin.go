@@ -14,6 +14,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
 // ollamaDarwinDefaultURL is the official universal (amd64+arm64)
@@ -115,7 +116,19 @@ func installOllamaAppImpl(ctx context.Context) error {
 		return fmt.Errorf("copy into %s — move Ollama.app there manually, or use the waired "+
 			"one-liner installer which escalates via sudo: %w", ollamaAppDest, err)
 	}
+	writeWairedManagedMarker(filepath.Join(ollamaAppDest, "Ollama.app"))
 	return nil
+}
+
+// writeWairedManagedMarker drops the waired-managed marker at the bundle
+// root so a later `waired init` recognises this Ollama as waired's own and
+// skips the bundled-vs-reuse question (setup.DetectOllama.WairedManaged).
+// Best-effort: a marker-write failure only means one extra question later.
+func writeWairedManagedMarker(dir string) {
+	body := []byte(`{"managed_by":"waired","installer":"waired runtimes install ollama"}` + "\n")
+	if err := os.WriteFile(filepath.Join(dir, setup.WairedManagedMarkerName), body, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: could not write the waired-managed marker: %v\n", err)
+	}
 }
 
 // downloadOllamaZip streams url into dest, emitting byte-level progress

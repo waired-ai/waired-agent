@@ -126,8 +126,11 @@ func promptInference(
 //
 // Precedence:
 //  1. override ("bundled"/"reuse" from --ollama-source) wins.
-//  2. No existing Ollama detected, or non-interactive => bundled.
-//  3. Existing Ollama detected => prompt, default bundled.
+//  2. Waired-managed install detected (marker file) => bundled, no prompt:
+//     waired itself installed that Ollama, so asking "reuse the existing
+//     one?" about it only confused first runs.
+//  3. No existing Ollama detected, or non-interactive => bundled.
+//  4. Existing Ollama detected => prompt, default bundled.
 func promptOllamaSource(
 	in io.Reader, out io.Writer,
 	det setup.OllamaDetection, override string, nonInteractive bool,
@@ -135,6 +138,10 @@ func promptOllamaSource(
 	switch override {
 	case agentconfig.OllamaSourceBundled, agentconfig.OllamaSourceReuse:
 		return override
+	}
+	if det.Installed && det.WairedManaged {
+		writePromptf(out, "Using the Ollama that Waired installed (%s).\n", det.Path)
+		return agentconfig.OllamaSourceBundled
 	}
 	if !det.Installed || nonInteractive {
 		return agentconfig.OllamaSourceBundled

@@ -6,9 +6,11 @@ description: Install the Waired client on Linux, macOS, or Windows with a single
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 
 Waired installs with a single command. The installer drops in the client
-(`waired` CLI + `waired-agent` background service), registers it to start
-automatically, and — on most platforms — installs the [Ollama](https://ollama.com)
-inference engine for you.
+(`waired` CLI + `waired-agent` background service) and registers it to start
+automatically; the [Ollama](https://ollama.com) inference engine is installed
+by the sign-in step (`waired init`) right after you answer its
+"run local inference?" questions — so the multi-GB engine download only
+happens when you actually want one.
 
 ## Supported platforms
 
@@ -37,9 +39,10 @@ machine you type from needs no special hardware.
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 
-		The same script detects macOS, installs the client to `/usr/local/bin`,
-		registers the `waired-agent` as a system launchd daemon, and installs
-		Ollama. The agent runs at boot, independent of login (like the Linux and
+		The same script detects macOS, installs the client to `/usr/local/bin`
+		and registers the `waired-agent` as a system launchd daemon; Ollama is
+		installed by the sign-in step when you enable local inference. The agent
+		runs at boot, independent of login (like the Linux and
 		Windows services), so the installer uses `sudo` for the privileged steps
 		— you'll be asked for your administrator password. Binaries are currently
 		unsigned (ad-hoc); signing and a Homebrew formula are planned.
@@ -49,13 +52,14 @@ machine you type from needs no special hardware.
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		Installs the client, registers the `waired-agent` Windows service, and
-		installs Ollama (a UAC prompt handles the elevated step). The agent runs
-		at boot, independent of login — the same defaults as the Linux and macOS
-		installers, and the ~1.4 GB Ollama download reports periodic progress.
+		Installs the client and registers the `waired-agent` Windows service (a
+		UAC prompt handles the elevated step); the ~1.4 GB Ollama engine is
+		downloaded by the sign-in step when you enable local inference, with a
+		single live progress line. The agent runs at boot, independent of login
+		— the same defaults as the Linux and macOS installers.
 
 		<Aside type="note" title="Ollama on Windows">
-			To install **without** the bundled engine — for example a headless or
+			To skip the engine entirely — for example a headless or
 			low-disk host — pass `-SkipOllama` or set `WAIRED_NO_OLLAMA=1`
 			([Skip the bundled Ollama](#skip-the-bundled-ollama), below). You can
 			add the engine later from an elevated prompt with
