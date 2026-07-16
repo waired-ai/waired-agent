@@ -176,15 +176,15 @@ func newInitCmd() *cobra.Command {
 	f.BoolVar(&o.startAgent, "start-agent", true,
 		"after a fresh enroll, start the registered waired-agent service (systemctl / launchctl / SCM); pass --start-agent=false to skip and start it yourself")
 	f.BoolVar(&o.noWaitModel, "no-wait-model", false,
-		"after a fresh bundled enroll, don't block while the bundled model downloads; let waired-agent pull it in the background (default: wait in the foreground showing percentage progress)")
+		"don't wait while the AI model downloads after a fresh setup; let it finish in the background (default: wait in the foreground showing progress)")
 	f.BoolVar(&o.resetConfig, "reset-config", false,
 		"ignore existing agent.json and re-prompt from hardware-derived defaults")
 	f.BoolVar(&infEnabled, "inference-enabled", false,
-		"force inference.enabled (overrides prompt). Pass --inference-enabled=false to disable.")
+		"answer \"Run AI models on this computer?\" without prompting: --inference-enabled=true / =false")
 	f.BoolVar(&infShare, "share-with-mesh", false,
-		"force inference.share_with_mesh (overrides prompt). The shorter name (vs --inference-share-with-mesh) is intentional: under 'waired init' the 'inference-' prefix is redundant.")
+		"answer \"Let your other devices use this computer's AI?\" without prompting: --share-with-mesh=true / =false. The shorter name (vs --inference-share-with-mesh) is intentional: under 'waired init' the 'inference-' prefix is redundant.")
 	f.StringVar(&o.ollamaSource, "ollama-source", "",
-		"Ollama engine source: \"bundled\" (waired-managed) or \"reuse\" (borrow an existing ollama); empty prompts (default bundled)")
+		"who provides the Ollama engine: \"bundled\" (Waired installs and manages its own) or \"reuse\" (keep using one you installed yourself); empty prompts (default bundled)")
 	f.StringVar(&o.bundledModelID, "inference-bundled-model-id", "",
 		"pin the bundled model to pre-pull (manifest model_id); empty auto-selects the largest model that fits this host above the coding-quality floor (#517). Combine with --inference-enabled=true to force-install on an under-spec host.")
 	f.StringVar(&o.mgmtURL, "mgmt", defaultMgmtURL,
@@ -501,13 +501,13 @@ func runInitBody(o *initFlags) error {
 					fmt.Printf("Ollama source: %s → %s\n", from, next)
 				}
 			}
-			fmt.Printf("%s %s\n", steps.persist, bold("Refresh tokens + certificate — done"))
+			fmt.Printf("%s %s\n", steps.persist, bold("Refresh this device's sign-in — done"))
 			return cfgRoot.Inference, nil
 		}
-		fmt.Printf("%s %s\n", steps.persist, bold("Persist identity + secrets + agent.json — done"))
+		fmt.Printf("%s %s\n", steps.persist, bold("Save this device's settings — done"))
 
 		prof := hardware.NewProfiler("").Profile(ctx)
-		fmt.Printf("%s %s\n", steps.inference, bold("Configure local inference"))
+		fmt.Printf("%s %s\n", steps.inference, bold("Set up AI on this computer"))
 		choice := promptInference(os.Stdin, os.Stdout,
 			cfgRoot.Inference, hasExisting, prof,
 			*inferenceEnabled, *inferenceShare,
@@ -614,10 +614,10 @@ func runInitBody(o *initFlags) error {
 		if res.Deploy.OllamaInstalled {
 			fmt.Printf("  ollama:        %s\n", res.Deploy.OllamaPath)
 		} else {
-			fmt.Println("  ollama:        not installed (the agent will pull it once installed)")
+			fmt.Println("  ollama:        not installed yet (Waired adds it when needed)")
 		}
 		if res.Deploy.BundledModel != "" {
-			fmt.Printf("  bundled model: %s (lazily pulled by waired-agent)\n", res.Deploy.BundledModel)
+			fmt.Printf("  AI model:      %s (downloaded in the background when needed)\n", res.Deploy.BundledModel)
 		}
 		if res.Deploy.GatewayPort != 0 {
 			fmt.Printf("  gateway:       http://127.0.0.1:%d (started by waired-agent)\n", res.Deploy.GatewayPort)

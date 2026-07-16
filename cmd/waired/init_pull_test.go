@@ -124,7 +124,7 @@ func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {
 	if ready {
 		t.Errorf("persistent no_engine must return false")
 	}
-	if !strings.Contains(out.String(), "inference engine still isn't up") {
+	if !strings.Contains(out.String(), "AI engine still isn't up") {
 		t.Errorf("expected the no_engine grace skip, got: %q", out.String())
 	}
 	if !strings.Contains(out.String(), "waired doctor") {
@@ -158,8 +158,8 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 	}
 	s := out.String()
 	for _, want := range []string{
-		"Starting the inference engine…",
-		"Waiting for the inference engine to start…",
+		"Starting the AI engine…",
+		"Waiting for the AI engine to start…",
 		"Preparing to download qwen…",
 		"Downloading qwen",
 		"qwen ready",
@@ -169,7 +169,7 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 		}
 	}
 	// Dedup: a repeated state prints its line exactly once.
-	if n := strings.Count(s, "Starting the inference engine…"); n != 1 {
+	if n := strings.Count(s, "Starting the AI engine…"); n != 1 {
 		t.Errorf("initializing step should print once, printed %d times: %q", n, s)
 	}
 	if n := strings.Count(s, "Preparing to download qwen…"); n != 1 {

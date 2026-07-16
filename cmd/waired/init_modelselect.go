@@ -97,8 +97,8 @@ func applyBundledModelSelection(
 	if sel.UnderSpec && sel.BelowFloorModelID != "" && enabledOverride == nil && pin == "" {
 		label := bundledModelLabel(manifests, sel.BelowFloorModelID)
 		if nonInteractive {
-			writePromptf(out, "  Under-spec host: only the %s model fits — local inference left disabled.\n", label)
-			writePrompt(out, "  Re-run interactively, or pass --inference-enabled=true to force it. Waired still runs as a gateway/relay.")
+			writePromptf(out, "  This computer is below the recommended spec for running AI locally: only the %s model fits — local AI left off.\n", label)
+			writePrompt(out, "  Re-run interactively, or pass --inference-enabled=true to force it. Waired still works as a gateway to your other devices.")
 			return
 		}
 		if promptTinyModelOptIn(out, in, label) {
@@ -107,7 +107,7 @@ func applyBundledModelSelection(
 			cfg.Inference.PullOnStartup = true
 			writePromptf(out, "  Enabling local inference with %s.\n", label)
 		} else {
-			writePrompt(out, "  Local inference left off — Waired runs as a gateway/relay. Re-run `waired init` to change this.")
+			writePrompt(out, "  Local AI left off — Waired still works as a gateway to your other devices. Re-run `waired init` to change this.")
 		}
 		return
 	}
@@ -183,12 +183,12 @@ func modelWithQuality(modelID, variantID string) string {
 // running a below-floor model locally is not recommended, but the node still
 // works as a gateway/relay when declined.
 func promptTinyModelOptIn(out io.Writer, in io.Reader, label string) bool {
-	writePromptf(out, "\n%s This machine can only run a very small, low-quality model (%s).\n", emo("⚠", "!"), label)
+	writePromptf(out, "\n%s This computer can only run a very small, low-quality model (%s).\n", emo("⚠", "!"), label)
 	writePrompt(out, "   At that size local coding help is often broken or unusable, so running")
-	writePrompt(out, "   a local inference engine here is not recommended. Waired still works")
-	writePrompt(out, "   as a secure gateway/relay without it.")
+	writePrompt(out, "   AI models on this computer is not recommended. Waired still works as a")
+	writePrompt(out, "   secure gateway to your other devices without it.")
 	writePrompt(out, "")
-	return ynPrompt(out, bufio.NewScanner(in), "Enable local inference on this machine anyway?", false)
+	return ynPrompt(out, bufio.NewScanner(in), "Run AI models on this computer anyway?", false)
 }
 
 // isBundledModelBelowFloor reports whether modelID (id or alias) resolves to a
