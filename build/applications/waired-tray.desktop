@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Waired Tray
+Name=Waired
 Comment=Tailscale-style system tray for Waired
 Exec=waired-tray
 Icon=network-vpn-symbolic

@@ -1077,7 +1077,7 @@ function Remove-TrayIfRequested {
 # both. These two helpers close that gap.
 
 # Create the machine-wide "Waired" Start Menu group, mirroring the .exe
-# installer's [Icons]: a "Waired Tray" launcher + a "Waired (CLI)" help shortcut.
+# installer's [Icons]: a "Waired" tray launcher + a "Waired (CLI)" help shortcut.
 # Runs elevated (writes under %ProgramData%). This is the surface the installtest
 # #755 contract asserts, and it gives users a discoverable launcher.
 function New-StartMenuShortcuts {
@@ -1092,7 +1092,7 @@ function New-StartMenuShortcuts {
             New-Item -ItemType Directory -Path $group -Force | Out-Null
             $ws = New-Object -ComObject WScript.Shell
             if (Test-Path -LiteralPath $tray) {
-                $lnk = $ws.CreateShortcut((Join-Path $group 'Waired Tray.lnk'))
+                $lnk = $ws.CreateShortcut((Join-Path $group 'Waired.lnk'))
                 $lnk.TargetPath  = $tray
                 $lnk.Description  = 'Waired system-tray app'
                 $lnk.Save()

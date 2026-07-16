@@ -10,6 +10,14 @@ import (
 	"strings"
 )
 
+// linuxDisplayName is the user-visible `Name=` written into the runtime
+// autostart .desktop entry. It is intentionally decoupled from appName:
+// appName ("waired-tray") remains the .desktop *filename* basename (and,
+// on Windows/macOS, the HKCU Run value / LaunchAgent label that installed
+// systems depend on), while end users should only ever see "Waired"
+// (waired#810). Keep this in sync with the static entries under build/.
+const linuxDisplayName = "Waired"
+
 type linuxManager struct {
 	appName string
 }
@@ -61,7 +69,7 @@ Exec=%s
 X-GNOME-Autostart-enabled=true
 NoDisplay=false
 Terminal=false
-`, m.appName, exec)
+`, linuxDisplayName, exec)
 	return os.WriteFile(path, []byte(body), 0o644)
 }
 

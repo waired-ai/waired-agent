@@ -36,6 +36,7 @@ help:
 	@echo "  build-tray           Build linux/amd64 waired-tray into ./bin/"
 	@echo "  build-tray-windows   Build windows/amd64 waired-tray.exe into ./bin/"
 	@echo "  build-tray-darwin    Build darwin/{amd64,arm64} waired-tray into ./bin/ (CGO=1)"
+	@echo "  versioninfo          Regenerate waired-tray.exe VERSIONINFO (.syso) from versioninfo.json"
 	@echo "  build-agent-prod     Hardened prod agent + CLI (-tags prod; bypass flags / test routes compiled out)"
 	@echo "  build-control        Build linux/amd64 waired-control into ./bin/ (rebuilds web/admin first)"
 	@echo "  build-control-prod   Hardened prod waired-control (-tags prod; mock-IdP + /test/* removed)"
@@ -171,6 +172,15 @@ catalog-docs:
 .PHONY: verify-catalog-docs
 verify-catalog-docs:
 	go run ./cmd/catalog-tool docs --check
+
+# versioninfo regenerates the Windows VERSIONINFO resource
+# (cmd/waired-tray/resource_windows_amd64.syso) from versioninfo.json so
+# waired-tray.exe reports the user-facing name "Waired" in Task Manager /
+# Explorer (waired#810). The .syso is committed and auto-linked on
+# windows/amd64 only; run this only after editing versioninfo.json.
+.PHONY: versioninfo
+versioninfo:
+	go generate ./cmd/waired-tray
 
 # build-tray builds the desktop tray binary. CGO is left at default —
 # fyne.io/systray's Linux backend talks DBus via pure-Go godbus and
