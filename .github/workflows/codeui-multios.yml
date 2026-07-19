@@ -14,12 +14,12 @@
 #        /session succeeds, then stops it (process-group on unix / Job Object on
 #        Windows). NO model/GPU - inference (L3) is out of scope and OS-agnostic.
 #
-# Cost control: the Windows + macOS legs now both run on self-hosted ephemeral
-# -VM pools (macOS = Mac mini tart #516; Windows = Hyper-V Win11 guest #547), so
-# neither carries GH-hosted billing anymore — but those pools are concurrency=1,
-# so this stays PATHS-GATED to the codeui surface + the opencode pin (which
-# lives, with its 6-platform sha256 set, in internal/runtime/codeui/install.go)
-# + the OS-split spawner the L2 smoke drives. It does NOT run on every PR.
+# All three legs run on GH-hosted runners (free on this public repo). The
+# L2 smoke still downloads the real opencode binary from GitHub releases on
+# every run, so this stays PATHS-GATED to the codeui surface + the opencode
+# pin (which lives, with its 6-platform sha256 set, in
+# internal/runtime/codeui/install.go) + the OS-split spawner the L2 smoke
+# drives. It does NOT run on every PR.
 #
 # NOTE: because it is paths-filtered, this workflow produces no check run when
 # the codeui surface is untouched, so it CANNOT be a required status check.
@@ -71,8 +71,7 @@ defaults:
 jobs:
   codeui:
     name: codeui (${{ matrix.goos }})
-    # Same-repo only: fork PRs get a skipped check (not failed). The
-    # self-hosted Windows/macOS golden VMs must not run fork code; a
+    # Same-repo only: fork PRs get a skipped check (not failed); a
     # maintainer arms a reviewed fork PR by pushing its branch to this repo.
     # Mirrors installtest.yml (public-repo caution, waired-agent CLAUDE.md).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -89,19 +88,13 @@ jobs:
             runs-on: ubuntu-24.04
             container: '{"image":"golang:1.24-trixie"}'
           # Windows/macOS: container-less. 'null' -> fromJSON -> no container.
-          # The key trick, per reusable-build-artifacts.yml. (Both self-hosted
-          # golden VMs have no Docker; a Linux-container job can't run there.)
-          # Windows: self-hosted Hyper-V ephemeral Win11 guest (#547); `build`
-          # is the windows-configs pool label the orchestrator registers (JIT),
-          # AND-matched by this subset. Revert to `windows-latest` to fall back.
+          # The key trick, per reusable-build-artifacts.yml.
           - goos: windows
-            runs-on: [self-hosted, windows, x64, build]
+            runs-on: windows-latest
             container: 'null'
-          # macOS: self-hosted Mac mini (tart ephemeral VM, #516). `build` is the
-          # shared mac-mini pool label (not "build-only"); the runner's labels are
-          # a superset so this subset still AND-matches.
+          # macOS: GH-hosted Apple-Silicon runner (pinned like the ubuntu leg).
           - goos: darwin
-            runs-on: [self-hosted, macos, arm64, build]
+            runs-on: macos-14
             container: 'null'
     steps:
       - uses: actions/checkout@v5
@@ -109,11 +102,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # windows/darwin run on self-hosted golden VMs (Go toolchain + module
-          # + build cache already baked), so the remote restore/save is
-          # redundant; only linux keeps GitHub's remote cache. Mirrors
-          # reusable-build-artifacts.yml (#516 / #547).
-          cache: ${{ matrix.goos == 'linux' }}
 
       # L1 - unit layer (fakes, no network). Fast; runs first so a logic
       # regression fails before we spend the download time.

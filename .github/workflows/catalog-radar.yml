@@ -20,8 +20,8 @@ name: catalog-radar
 
 on:
   schedule:
-    # Wednesday 00:00 UTC — offset from renovate's Monday so the two bots
-    # never contend for sv-mag at the same time. Weekly cadence.
+    # Wednesday 00:00 UTC — offset from renovate's Monday cadence so the
+    # two bots' PR/issue writes never interleave. Weekly cadence.
     - cron: "0 0 * * 3"
   workflow_dispatch:
     inputs:
@@ -39,7 +39,8 @@ concurrency:
   group: catalog-radar
   cancel-in-progress: false
 
-# Inline-inject safe.directory=* (Kata "dubious ownership") — see ci.yml.
+# Inline-inject safe.directory=* for git spawned inside the job container
+# (the container's root user vs the runner-owned workspace).
 env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: safe.directory
@@ -53,7 +54,7 @@ defaults:
 jobs:
   radar:
     name: model-catalog radar
-    runs-on: sv-mag-agent
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
       image: golang:1.26-trixie

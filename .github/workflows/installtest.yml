@@ -5,8 +5,7 @@
 # package postinst / systemd / SCM / LaunchDaemon behavior only fails on a
 # real `install → service-manager` machine — which the hermetic dash matrix
 # (ci.yml `install-scripts`) and Go unit tests can't exercise. Each leg runs
-# the installer in place on a disposable runner (GitHub-hosted Linux VM;
-# ephemeral self-hosted Windows / macOS VMs destroyed after the job), so the
+# the installer in place on a disposable GitHub-hosted VM, so the
 # destructive steps are contained by the VM boundary.
 #
 # 3-OS matrix: Linux (deb → systemd), Windows (install.ps1 → SCM, plus the
@@ -26,9 +25,9 @@
 # and cost ~2 min of the per-PR critical path.
 #
 # Fork PRs: the legs are skipped (not failed) — the job condition requires a
-# same-repo head. Fork code must not reach the self-hosted runners or the WIF
-# identity; GitHub also withholds the id-token from fork PRs. A maintainer
-# arms a reviewed fork PR by pushing its branch to this repo.
+# same-repo head. Fork code must not reach the WIF identity; GitHub also
+# withholds the id-token from fork PRs. A maintainer arms a reviewed fork PR
+# by pushing its branch to this repo.
 name: installtest
 
 on:
@@ -64,18 +63,16 @@ jobs:
             runs-on: ubuntu-24.04
             timeout: 20
           - os: windows
-            # Self-hosted ephemeral Windows guest — the job runs ELEVATED
-            # inside a disposable VM, so install.ps1's real SCM service
-            # install works while the host stays protected by the VM
-            # boundary. `build` is the pool label. Revert to `windows-latest`
-            # to fall back to GitHub-hosted.
-            runs-on: [self-hosted, windows, x64, build]
-            timeout: 30
+            # GH-hosted disposable VM — the job runs ELEVATED, so
+            # install.ps1's real SCM service install works and the
+            # destructive steps stay contained by the VM boundary.
+            runs-on: windows-latest
+            timeout: 35
           - os: macos
-            # Self-hosted ephemeral macOS VM; the runner carries a superset
-            # of these labels so this subset AND-matches.
-            runs-on: [self-hosted, macos, arm64, build]
-            timeout: 25
+            # GH-hosted Apple-Silicon disposable VM (pinned like the
+            # ubuntu leg); passwordless sudo for the LaunchDaemon install.
+            runs-on: macos-14
+            timeout: 30
     env:
       # Tier 2: hands-free enroll vs the real dev control plane (#339 grant).
       IT_ENROLL_MODE: oidc
@@ -86,23 +83,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # The self-hosted Windows/macOS images bake the Go toolchain +
-          # caches locally — a remote restore is redundant and the "Post"
-          # cache save is pure waste. Only Linux keeps GitHub's remote cache
-          # (mirrors reusable-build-artifacts.yml).
-          cache: ${{ matrix.os == 'linux' }}
-
-      # gcloud needs Python ≥3.10; the macOS image's default python3 is older
-      # and its runner .env is not applied to JIT jobs, so point gcloud at the
-      # baked Homebrew python explicitly. Windows bakes a Machine-scope
-      # CLOUDSDK_PYTHON (inherited by JIT jobs), Linux is already ≥3.10.
-      - name: point gcloud at the image's Python ≥3.10 (self-hosted macOS)
-        if: matrix.os == 'macos'
-        run: |
-          set -euo pipefail
-          py="$(/opt/homebrew/bin/brew --prefix python@3.14)/bin/python3.14"
-          test -x "$py"
-          echo "CLOUDSDK_PYTHON=$py" >> "$GITHUB_ENV"
 
       - uses: google-github-actions/auth@v3
         with:
@@ -110,11 +90,7 @@ jobs:
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
       # gcloud uses the WIF credential to mint the SA id_token in the harness.
-      # Windows skips the SDK install — the image already bakes gcloud, and
-      # setup-gcloud's extensionless-zip unpack fails outside GH-hosted images.
       - uses: google-github-actions/setup-gcloud@v3
-        with:
-          skip_install: ${{ matrix.os == 'windows' }}
 
       # Linux: build the worktree deb + serve it from a signed local apt repo
       # on loopback, then run install.sh in place (systemd is PID 1 on the
@@ -162,7 +138,7 @@ jobs:
       # (file://), run it, assert binaries + the system LaunchDaemon plist +
       # root-owned state dir, then a hands-free OIDC enroll (Tier 2). The
       # agent is a system LaunchDaemon — it bootstraps + enrolls headless.
-      # Needs passwordless sudo (the ephemeral VM admin has it).
+      # Needs passwordless sudo (the hosted runner user has it).
       - name: install test (macos, tier 1+2)
         if: matrix.os == 'macos'
         run: bash scripts/dev/installtest-macos.sh --tier 2

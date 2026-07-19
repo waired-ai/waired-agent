@@ -127,12 +127,7 @@ func TestServe_RealLifecycle(t *testing.T) {
 		t.Fatalf("state after EnsureRunning = %q, want %q", got, infruntime.StateReady)
 	}
 
-	// Generous per-request budget: serve answers GET / instantly, but the
-	// first POST /session does cold init (sqlite/workspace/runtime warmup) that
-	// takes a couple of seconds on Linux/macOS and noticeably longer on a cold
-	// GitHub-hosted Windows runner (Defender + slow file I/O). Linux and macOS
-	// pass session-create against the same unreachable :9473 gateway, so this is
-	// opencode's own startup latency, not the dead provider — just be patient.
+	// serve answers GET / instantly once ready; 60s is plenty for that.
 	client := &http.Client{Timeout: 60 * time.Second}
 
 	// (1) Embedded web UI answers on the loopback port.
@@ -152,12 +147,22 @@ func TestServe_RealLifecycle(t *testing.T) {
 	// shape change doesn't make it brittle; the point is that serve is alive
 	// and its HTTP API responds on this OS.
 	t.Run("session_create", func(t *testing.T) {
-		req, err := http.NewRequest(http.MethodPost, svc.URL()+"/session", strings.NewReader("{}"))
+		// The first session-create rides opencode's cold init
+		// (sqlite/workspace/runtime warmup): a couple of seconds on
+		// Linux/macOS, but on a cold GitHub-hosted Windows runner (Defender
+		// scanning every first-touched file + slow I/O) it exceeded the
+		// shared 60s client budget (waired#848), so it gets its own longer
+		// one. Linux and macOS pass session-create against the same
+		// unreachable :9473 gateway, so this is opencode's own startup
+		// latency, not the dead provider — just be patient.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, svc.URL()+"/session", strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
+		resp, err := (&http.Client{}).Do(req)
 		if err != nil {
 			t.Fatalf("POST /session: %v", err)
 		}

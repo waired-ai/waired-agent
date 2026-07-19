@@ -40,28 +40,14 @@ defaults:
 
 jobs:
   build:
-    # The linux leg runs on a GHA hosted runner (ephemeral hosted runner +
-    # GitHub OIDC gives a stronger SLSA-style builder provenance chain while
-    # Authenticode signing is still deferred). Cost is negligible — release
-    # fires on `v*` tags (~monthly) and edge runs nightly. See
-    # docs/decisions.md "Release builds run on GHA hosted runners".
-    #
-    # The windows and darwin legs run on self-hosted ephemeral-VM pools to
-    # cut the GH-hosted bill (macOS = 64% of it; Windows is billed at the 2×
-    # multiplier, and edge.yml rebuilds this matrix on every main merge):
-    #   - darwin  -> Apple-Silicon Mac mini, `tart` macOS VM, labels
-    #                [self-hosted, macos, arm64, build] (#516).
-    #   - windows -> Hyper-V ephemeral Win11 guest, labels
-    #                [self-hosted, windows, x64, build] (#547); the golden
-    #                bakes Inno Setup 6 + signtool + the Go toolchain/cache.
-    #                Host root is protected by the VM boundary (the
-    #                orchestrator runs as Hyper-V Administrators, NOT local
-    #                admin). Built/operated from the separate `windows-configs`
-    #                repo.
-    # Both clone a fresh guest per job and destroy it after. The publish jobs
-    # in edge.yml / release.yml stay GH-hosted. The per-leg runner is
-    # matrix.runs-on (a string for the hosted linux leg, a label array for the
-    # self-hosted windows/darwin legs).
+    # All four legs run on GitHub-hosted runners: the repo is public, so
+    # hosted standard runners are free, and the ephemeral hosted runner +
+    # GitHub OIDC give a stronger SLSA-style builder provenance chain
+    # while Authenticode signing is still deferred (see docs/decisions.md
+    # "Release builds run on GHA hosted runners"). The windows/darwin
+    # legs previously ran on self-hosted ephemeral-VM pools purely to cut
+    # the GH-hosted bill while the repo was private (#516 / #547); with
+    # the public-repo free allowance that rationale is gone.
     #
     # Linux legs use the golang:1.24-trixie container for build
     # reproducibility; Windows/macOS run container-less because
@@ -90,48 +76,22 @@ jobs:
             container: '{"image":"golang:1.24-trixie"}'
           - goos: windows
             goarch: amd64
-            # Self-hosted Hyper-V ephemeral Win11 guest (NOT GH-hosted
-            # windows-latest): Windows minutes are billed 2× and edge.yml
-            # rebuilds this matrix on every main merge. Each job clones a
-            # differencing child off a read-only golden VHDX and destroys it
-            # after; the golden bakes make + Inno Setup 6 (iscc) + signtool +
-            # the Go toolchain/cache, so dist-windows-installer + the GUI
-            # installer step run with no per-job installs. The labels
-            # AND-match the runner the windows-configs orchestrator registers
-            # (JIT). Availability: if the host is offline this leg queues
-            # (edge/release Windows artifacts are delayed) — same caveat as
-            # darwin; revert this one entry to `windows-latest` to fall back.
-            # See #547 and docs/decisions.md "Windows CI leg を自前 Hyper-V ...".
-            runs-on:
-              - self-hosted
-              - windows
-              - x64
-              - build
+            # GH-hosted windows-latest: the runner image ships make, Inno
+            # Setup 6 (iscc) and signtool — everything dist-windows-installer
+            # and the GUI installer step need, no per-job installs.
+            runs-on: windows-latest
             container: 'null'
           - goos: darwin
             goarch: all
-            # Self-hosted Apple-Silicon Mac mini, NOT GH-hosted macos-14:
-            # macOS is 64% of the GH-hosted Actions bill (edge.yml rebuilds
-            # this matrix on every main merge), so the darwin leg is
-            # offloaded to a self-hosted Mac mini that runs each build in an
-            # ephemeral `tart` macOS VM (clone-per-job, destroyed after).
-            # The labels [self-hosted, macos, arm64, build] AND-match the
-            # runner the mac-configs orchestrator registers (JIT). The guest
-            # is still Apple Silicon (arm64) with Xcode CLT, so the build is
-            # identical: build-agent-darwin cross-compiles the amd64 slice
+            # GH-hosted Apple-Silicon runner with Xcode CLT:
+            # build-agent-darwin cross-compiles the amd64 slice
             # (CGO_ENABLED=0); the bundled tray (build-tray-darwin) needs
             # CGO_ENABLED=1 + clang, and clang cross-targets the amd64 slice
             # with no extra flags. A single job emits both
             # waired-darwin-{amd64,arm64}.tar.gz, each containing waired +
             # waired-agent + waired-tray. Binaries are unsigned ad-hoc;
-            # notarization is #262. Availability: if the Mac mini is offline
-            # the darwin leg queues (fork PRs never run here). See #516 and
-            # docs/decisions.md "macOS ビルド leg を自前 Mac mini ...".
-            runs-on:
-              - self-hosted
-              - macos
-              - arm64
-              - build
+            # notarization is #262. Pinned like the ubuntu legs.
+            runs-on: macos-14
             container: 'null'
     steps:
       - uses: actions/checkout@v5
@@ -171,13 +131,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # Only the linux leg uses GitHub's remote setup-go cache. The
-          # self-hosted windows/darwin golden VMs already bake the Go
-          # toolchain, module cache, AND build cache locally, so a remote
-          # restore is redundant and the "Post" cache *save* is pure waste
-          # (~88s uploading to GitHub on every job). See #516 / #547 and the
-          # mac-configs / windows-configs golden provisioning (prewarm).
-          cache: ${{ matrix.goos == 'linux' }}
 
       - name: Install build deps (make, envsubst)
         if: matrix.goos == 'linux'
@@ -227,9 +180,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      # Windows-specific build. The self-hosted golden bakes `make` (via Git
-      # for Windows), `powershell.exe`, and `iscc.exe` (Inno Setup 6) -- exactly
-      # what `make dist-windows-installer` and the GUI installer step need.
+      # Windows-specific build. windows-latest ships `make`, `powershell.exe`,
+      # and `iscc.exe` (Inno Setup 6) -- exactly what `make
+      # dist-windows-installer` and the GUI installer step need.
       - name: Build Windows release zip
         if: matrix.goos == 'windows'
         run: |
@@ -243,8 +196,8 @@ jobs:
         run: |
           set -euo pipefail
           version="${WAIRED_SEMVER}"
-          # iscc is on PATH in the golden (choco's ISCC.exe shim). Fall back to
-          # the canonical Inno Setup 6 install dir if the PATH entry is missing.
+          # iscc is on PATH on windows-latest (choco's ISCC.exe shim). Fall back
+          # to the canonical Inno Setup 6 install dir if the PATH entry is missing.
           if ! command -v iscc >/dev/null 2>&1; then
             iscc='/c/Program Files (x86)/Inno Setup 6/ISCC.exe'
           else

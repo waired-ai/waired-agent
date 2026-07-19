@@ -40,7 +40,8 @@ concurrency:
   group: renovate-review-${{ github.event.workflow_run.head_branch || github.event.inputs.pr }}
   cancel-in-progress: true
 
-# Inline-inject safe.directory=* (Kata "dubious ownership") — see ci.yml.
+# Inline-inject safe.directory=* for git spawned inside the job container
+# (the container's root user vs the runner-owned workspace).
 env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: safe.directory
@@ -60,10 +61,9 @@ jobs:
       (github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        startsWith(github.event.workflow_run.head_branch, 'renovate/'))
-    runs-on: sv-mag-agent
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Root-default Debian image (node present for the claude CLI); see renovate.yml
-    # for why a non-root image breaks checkout on ARC k8s mode.
+    # Debian node image (node present for the claude CLI); mirrors renovate.yml.
     container:
       image: node:22-trixie
     steps:
@@ -104,9 +104,9 @@ jobs:
           ALLOW_NON_RENOVATE: ${{ github.event_name == 'workflow_dispatch' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_MODEL: claude-opus-4-8
-          # sv-mag pods have no IPv6 egress; keep Node (the claude CLI / WebFetch) on
-          # IPv4 to dodge the AAAA-first + Happy-Eyeballs ETIMEDOUT trap. See
-          # renovate.yml's NODE_OPTIONS note (#466).
+          # GitHub-hosted runners have no IPv6 egress; keep Node (the claude CLI /
+          # WebFetch) on IPv4 to dodge the AAAA-first + Happy-Eyeballs ETIMEDOUT
+          # trap. See renovate.yml's NODE_OPTIONS note (#466).
           NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection
         run: |
           set -euo pipefail
