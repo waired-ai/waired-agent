@@ -74,11 +74,19 @@ type RelayEstablished struct {
 // The relay forwards based on (NetworkID, DstDeviceID) only - it does not
 // decrypt Payload.
 type EncryptedPacket struct {
-	Type         string `json:"type"`
-	Version      int    `json:"version"`
-	NetworkID    string `json:"network_id"`
-	SrcDeviceID  string `json:"src_device_id"`
-	DstDeviceID  string `json:"dst_device_id"`
+	Type        string `json:"type"`
+	Version     int    `json:"version"`
+	NetworkID   string `json:"network_id"`
+	SrcDeviceID string `json:"src_device_id"`
+	DstDeviceID string `json:"dst_device_id"`
+	// DstNetworkID is the destination device's network when it differs
+	// from the sender's (cross-network Public Share forwarding, public
+	// share spec §10). Empty means "same network as NetworkID" — the
+	// pre-v0.2.0 behaviour — so with omitempty same-network frames stay
+	// byte-identical. The relay forwards cross-network only after a
+	// grant introspection verdict; frames are not signed, so this is
+	// routing input, not an authorization claim.
+	DstNetworkID string `json:"dst_network_id,omitempty"`
 	SrcNodeKeyID string `json:"src_node_key_id,omitempty"`
 	DstNodeKeyID string `json:"dst_node_key_id,omitempty"`
 	PacketID     string `json:"packet_id,omitempty"`

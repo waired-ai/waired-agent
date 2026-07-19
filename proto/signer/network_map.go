@@ -58,6 +58,37 @@ type NetworkMapPeer struct {
 	// counting it toward the mesh aggregate. omitempty keeps engine-
 	// less peers from inflating the network map.
 	InferenceState *InferenceState `json:"inference_state,omitempty"`
+	// Grant marks this peer as a cross-network Public Share peer
+	// injected by the CP (public share spec §7): nil for ordinary
+	// same-network peers. The CP only emits it to pollers that
+	// declared CapabilityPublicShareV1 (§8.4 gate), so with omitempty
+	// the signed map stays byte-identical for non-capable agents.
+	Grant *PeerGrant `json:"grant,omitempty"`
+}
+
+// PeerGrant is the CP-injected annotation on a cross-network Public
+// Share peer entry (public share spec §7). It tells the agent why a
+// foreign-network peer appears in its map and how to display it —
+// the authoritative grant state lives CP-side; this is a projection.
+//
+// All fields omitempty: the zero value must vanish from canonical
+// JSON so maps without public-share peers keep their pre-v0.2.0
+// signed bytes.
+type PeerGrant struct {
+	// ID is the CP-issued grant identifier. Agents echo it in usage
+	// reports (PublicUsageEntry.GrantID).
+	ID string `json:"id,omitempty"`
+	// Kind is the sharing flavour. v1 uses "public" only; "team" is
+	// reserved for future same-schema team sharing.
+	Kind string `json:"kind,omitempty"`
+	// Role is the peer's role as seen from the map's Self device:
+	// "provider" when the peer serves inference to Self, "consumer"
+	// when the peer is a guest using Self's engine.
+	Role string `json:"role,omitempty"`
+	// Pseudonym is the stable nickname for the peer's owner account
+	// (e.g. "guest-a7f3"), the only owner identity agents may show —
+	// real account identifiers never cross the trust boundary.
+	Pseudonym string `json:"pseudonym,omitempty"`
 }
 
 // EndpointCandidate is one possible address to reach a peer on the data
