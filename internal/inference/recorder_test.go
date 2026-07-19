@@ -81,7 +81,7 @@ func TestNewServerWithConfig_NoRecorderIsSafe(t *testing.T) {
 func TestCapacityGateAdapter_EmitsServedAndInflight_Success(t *testing.T) {
 	rec := &captureRecorder{}
 	counter := newInflightCounter(2)
-	gate := capacityGateAdapter(counter, rec)
+	gate := capacityGateAdapter(counter, rec, nil, nil)
 
 	called := atomic.Bool{}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func TestCapacityGateAdapter_EmitsServedAndInflight_Success(t *testing.T) {
 func TestCapacityGateAdapter_EmitsServedError(t *testing.T) {
 	rec := &captureRecorder{}
 	counter := newInflightCounter(2)
-	gate := capacityGateAdapter(counter, rec)
+	gate := capacityGateAdapter(counter, rec, nil, nil)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -136,7 +136,7 @@ func TestCapacityGateAdapter_OverloadDoesNotEmitServed(t *testing.T) {
 	if !counter.Acquire() {
 		t.Fatal("setup acquire failed")
 	}
-	gate := capacityGateAdapter(counter, rec)
+	gate := capacityGateAdapter(counter, rec, nil, nil)
 
 	called := atomic.Bool{}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +162,7 @@ func TestCapacityGateAdapter_OverloadDoesNotEmitServed(t *testing.T) {
 
 func TestCapacityGateAdapter_NilRecorderIsSafe(t *testing.T) {
 	counter := newInflightCounter(1)
-	gate := capacityGateAdapter(counter, nil)
+	gate := capacityGateAdapter(counter, nil, nil, nil)
 	if gate == nil {
 		t.Fatal("gate should be non-nil even with nil recorder")
 	}
@@ -175,7 +175,7 @@ func TestCapacityGateAdapter_NilRecorderIsSafe(t *testing.T) {
 
 func TestCapacityGateAdapter_NilCounterReturnsNil(t *testing.T) {
 	rec := &captureRecorder{}
-	if got := capacityGateAdapter(nil, rec); got != nil {
+	if got := capacityGateAdapter(nil, rec, nil, nil); got != nil {
 		t.Errorf("nil counter should return nil gate; got %T", got)
 	}
 }
