@@ -122,12 +122,42 @@ jobs:
         shell: pwsh
         run: ./scripts/dev/installtest-windows.ps1 -Tier 2 -Contract -ExeVariant
 
+      # The hosted windows-latest image ships with Defender real-time
+      # protection (and with it the AMSI provider) turned off, which made the
+      # canary below degrade to a meaningless no-provider soft-fail after the
+      # GH-hosted migration (waired#848). Tamper Protection is off on the
+      # runner image, so re-enabling via Set-MpPreference is possible; done
+      # right before the canary (not before the install test) so Defender
+      # doesn't slow or perturb the install run itself. Best-effort: if the
+      # provider still doesn't come alive, the canary keeps soft-failing and
+      # the fallback is moving it to the Defender-live nightly leg.
+      - name: enable Defender real-time protection (AMSI provider)
+        if: matrix.os == 'windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Start-Service WinDefend
+          Set-MpPreference -DisableRealtimeMonitoring $false `
+            -DisableScriptScanning $false -DisableIOAVProtection $false
+          # The image bakes definitions at image-build time (days stale;
+          # 1.455.137 vs same-day 1.455.219 when this landed). #552's lesson
+          # is that a defs update alone can flip a verdict, and the canary
+          # models a user's up-to-date stock Windows — so pull the latest
+          # security intelligence. Best-effort: on failure the scan still
+          # runs against the baked defs under a live provider.
+          try { Update-MpSignature -ErrorAction Stop }
+          catch { Write-Warning "Update-MpSignature failed: $_ (scanning with image-baked definitions)" }
+          Get-MpComputerStatus |
+            Select-Object AMRunningMode, RealTimeProtectionEnabled,
+              AntivirusEnabled, AntivirusSignatureVersion,
+              AntivirusSignatureLastUpdated | Format-List
+
       # High-fidelity AMSI canary (#553 Gate B). The install test above runs
       # a call-operator on the on-disk file, so the AMSI-of-body path that
       # `iwr | iex` users hit stays untested even here; this scans the
-      # installer scripts through the live Defender engine on the same
-      # Defender-live guest. SOFT-FAIL: a non-deterministic Defender verdict
-      # (engine/defs/cloud drift) must not red an always-on check.
+      # installer scripts through the live Defender engine. SOFT-FAIL: a
+      # non-deterministic Defender verdict (engine/defs/cloud drift) must not
+      # red an always-on check.
       - name: AMSI canary (windows, Defender-live) — soft-fail
         if: matrix.os == 'windows'
         continue-on-error: true
