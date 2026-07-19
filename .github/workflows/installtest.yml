@@ -139,9 +139,18 @@ jobs:
           Start-Service WinDefend
           Set-MpPreference -DisableRealtimeMonitoring $false `
             -DisableScriptScanning $false -DisableIOAVProtection $false
+          # The image bakes definitions at image-build time (days stale;
+          # 1.455.137 vs same-day 1.455.219 when this landed). #552's lesson
+          # is that a defs update alone can flip a verdict, and the canary
+          # models a user's up-to-date stock Windows — so pull the latest
+          # security intelligence. Best-effort: on failure the scan still
+          # runs against the baked defs under a live provider.
+          try { Update-MpSignature -ErrorAction Stop }
+          catch { Write-Warning "Update-MpSignature failed: $_ (scanning with image-baked definitions)" }
           Get-MpComputerStatus |
             Select-Object AMRunningMode, RealTimeProtectionEnabled,
-              AntivirusEnabled, AntivirusSignatureVersion | Format-List
+              AntivirusEnabled, AntivirusSignatureVersion,
+              AntivirusSignatureLastUpdated | Format-List
 
       # High-fidelity AMSI canary (#553 Gate B). The install test above runs
       # a call-operator on the on-disk file, so the AMSI-of-body path that
