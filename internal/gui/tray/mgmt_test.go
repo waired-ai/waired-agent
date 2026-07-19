@@ -93,6 +93,35 @@ func TestClient_Pause_OK(t *testing.T) {
 	}
 }
 
+// TestClient_EmptyBodyPost_SetsJSONContentType guards the waired#836 fix: the
+// browser-hardened management API 415s a write without Content-Type:
+// application/json, so the tray's empty-body POST helpers must set it too.
+// c.Pause exercises post(); c.StopEngine exercises postWithUnsupported().
+func TestClient_EmptyBodyPost_SetsJSONContentType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(c *Client) error
+	}{
+		{"pause", func(c *Client) error { return c.Pause(context.Background()) }},
+		{"stop-engine", func(c *Client) error { return c.StopEngine(context.Background()) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var ct string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ct = r.Header.Get("Content-Type")
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(srv.Close)
+			if err := tc.call(NewClient(srv.URL)); err != nil {
+				t.Fatal(err)
+			}
+			if ct != "application/json" {
+				t.Errorf("empty-body POST Content-Type = %q, want application/json", ct)
+			}
+		})
+	}
+}
+
 func TestClient_DialError(t *testing.T) {
 	c := NewClient("http://127.0.0.1:1") // unlikely to be listening
 	if _, err := c.Status(context.Background()); err == nil {

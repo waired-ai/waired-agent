@@ -123,6 +123,8 @@ func run(ctx context.Context, args []string) error {
 		"directory holding identity.json + secrets/* + cache/* (created by `waired init`)")
 	mgmtAddr := fs.String("mgmt", management.DefaultListen,
 		"loopback bind for the Local Management API")
+	mgmtHardening := fs.Bool("mgmt-hardening", true,
+		"enforce Host/Origin allow-listing + Content-Type: application/json on the Local Management API (defends against DNS-rebinding / cross-site requests from a web page; disable only for local debugging)")
 	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
 		"control plane base URL used for daemon-driven login (POST /waired/v1/login/start); a login request may override it")
 	loginListen := fs.String("login-listen", "127.0.0.1:0",
@@ -288,6 +290,13 @@ func run(ctx context.Context, args []string) error {
 			MetricsHandler: promHandler,
 			State:          sb,
 		})
+	// Browser-facing hardening (waired-ai/waired#836): the loopback bind
+	// alone does not stop a web page the user visits from reaching :9476 via
+	// DNS-rebinding or a cross-site simple request. On by default; the flag
+	// exists only as a local-debug escape hatch.
+	if *mgmtHardening {
+		mgmtSrv = mgmtSrv.WithBrowserHardening()
+	}
 	// Inference routes are gated on the install-time --disable-inference
 	// choice (a boot decision, not a session one), mirroring the old
 	// inline wiring: an inference-disabled agent leaves these routes

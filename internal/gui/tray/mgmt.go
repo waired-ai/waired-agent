@@ -558,6 +558,9 @@ func (c *Client) postWithUnsupported(ctx context.Context, path string, unsupport
 	if err != nil {
 		return err
 	}
+	// The browser-hardened management API (waired#836) requires a JSON
+	// Content-Type on writes even when the body is empty.
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return err
@@ -611,6 +614,9 @@ func (c *Client) post(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+	// The browser-hardened management API (waired#836) requires a JSON
+	// Content-Type on writes even when the body is empty.
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return err

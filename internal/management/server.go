@@ -312,6 +312,12 @@ type Server struct {
 	observability       ObservabilityConfig        // optional; zero value disables all Phase 9 endpoints
 	login               LoginController            // optional; nil disables /waired/v1/login/{start,status}
 	update              UpdateController           // optional; nil disables /waired/v1/update/{check,status,settings}
+
+	// browserHardening, when true, wraps the mux in browserGuard (Host /
+	// Origin allow-listing + Content-Type-on-writes). Off by default so
+	// unit tests drive Handler() without loopback Hosts; production wiring
+	// enables it via WithBrowserHardening. See security.go.
+	browserHardening bool
 }
 
 func New(status StatusProvider, pinger Pinger) *Server {
@@ -491,7 +497,7 @@ func (s *Server) Handler() http.Handler {
 	if s.observability.MetricsHandler != nil {
 		mux.Handle("/waired/v1/metrics", s.observability.MetricsHandler)
 	}
-	return loopbackOnly(mux)
+	return loopbackOnly(browserGuard(mux, s.browserHardening))
 }
 
 // Serve listens on addr (default 127.0.0.1:9476) until ctx is cancelled.
