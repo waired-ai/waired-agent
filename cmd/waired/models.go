@@ -170,11 +170,19 @@ func newModelsPullCmd() *cobra.Command {
 
 func newModelsRmCmd() *cobra.Command {
 	var mgmt, stateDir string
+	var assumeYes bool
 	cmd := &cobra.Command{
 		Use:   "rm <model_id>",
 		Short: "Remove a model.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// waired#845 §8.2: deleting weights gets an in-UI confirmation,
+			// not an OS elevation prompt — the model can be downloaded
+			// again, so the blast radius is bandwidth and time. Non-TTY
+			// callers (scripts) must pass --yes explicitly.
+			if !assumeYes && !confirmTTY(fmt.Sprintf("Remove model %q? You can download it again later", args[0])) {
+				return errors.New("models rm: aborted (pass --yes to skip the prompt)")
+			}
 			body, err := httpDelete(mgmt + "/waired/v1/models/" + args[0])
 			if err != nil {
 				return err
@@ -184,6 +192,7 @@ func newModelsRmCmd() *cobra.Command {
 	}
 	addMgmtFlag(cmd, &mgmt)
 	addStateDirFlag(cmd, &stateDir, "directory holding identity.json")
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the removal confirmation prompt")
 	return cmd
 }
 
