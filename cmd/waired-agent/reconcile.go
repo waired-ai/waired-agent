@@ -178,6 +178,29 @@ type reconciler struct {
 	mu    sync.Mutex
 	nm    *signer.NetworkMap
 	state map[string]*peerPathState // keyed by peer NodePublicKey (std-base64)
+	// logNames maps peer NodePublicKey → log display name: the Public
+	// Share grant pseudonym for foreign grant peers, the real DeviceID
+	// otherwise (spec §8.5). Rebuilt on every Apply.
+	logNames map[string]string
+}
+
+// peerLogName returns the identifier to print in logs for a map peer:
+// the grant pseudonym for Public Share peers, the DeviceID otherwise.
+func peerLogName(p signer.NetworkMapPeer) string {
+	if p.Grant != nil && p.Grant.Pseudonym != "" {
+		return p.Grant.Pseudonym
+	}
+	return p.DeviceID
+}
+
+// logNameLocked resolves a peer NodePublicKey to its log display name.
+// Caller holds r.mu. fallback is used for peers not in the current map
+// (e.g. a disco event racing a map update).
+func (r *reconciler) logNameLocked(nodePub, fallback string) string {
+	if n, ok := r.logNames[nodePub]; ok && n != "" {
+		return n
+	}
+	return fallback
 }
 
 // peerPathState is the per-peer book-keeping the reconciler keeps for
@@ -364,7 +387,7 @@ func (r *reconciler) handleRTTSample(e disco.EventProbeRTTSampled) {
 		st.directSampleCount++
 		st.lastDirectEvidenceAt = e.At
 	}
-	switched, reason := r.evaluateSwitchLocked(st, e.At, e.PeerDeviceID)
+	switched, reason := r.evaluateSwitchLocked(st, e.At, r.logNameLocked(e.PeerNodePub, e.PeerDeviceID))
 	r.mu.Unlock()
 	if switched {
 		if err := r.recompute(); err != nil {
@@ -392,7 +415,7 @@ func (r *reconciler) handleProbeMissed(e disco.EventProbeMissed) {
 		st = &peerPathState{lastEvalAt: e.At}
 		r.state[e.PeerNodePub] = st
 	}
-	switched, reason := r.evaluateSwitchLocked(st, e.At, e.PeerDeviceID)
+	switched, reason := r.evaluateSwitchLocked(st, e.At, r.logNameLocked(e.PeerNodePub, e.PeerDeviceID))
 	r.mu.Unlock()
 	if switched {
 		if err := r.recompute(); err != nil {
@@ -427,7 +450,7 @@ func (r *reconciler) handleRoundFinalized(e disco.EventProbeRoundFinalized) {
 	} else {
 		st.directMissStreak++
 	}
-	switched, reason := r.evaluateSwitchLocked(st, e.At, e.PeerDeviceID)
+	switched, reason := r.evaluateSwitchLocked(st, e.At, r.logNameLocked(e.PeerNodePub, e.PeerDeviceID))
 	r.mu.Unlock()
 	if switched {
 		if err := r.recompute(); err != nil {
@@ -620,8 +643,10 @@ func (r *reconciler) Apply(nm *signer.NetworkMap) error {
 	r.nm = nm
 	now := time.Now()
 	live := make(map[string]struct{}, len(nm.Peers))
+	r.logNames = make(map[string]string, len(nm.Peers))
 	for _, p := range nm.Peers {
 		live[p.NodePublicKey] = struct{}{}
+		r.logNames[p.NodePublicKey] = peerLogName(p)
 		if _, ok := r.state[p.NodePublicKey]; ok {
 			continue // preserve existing per-peer path state
 		}
@@ -706,6 +731,7 @@ func (r *reconciler) pushDiscoSnapshot(d discoSubsystem, nm *signer.NetworkMap) 
 		copy(nodePub[:], np)
 		peers[p.NodePublicKey] = disco.PeerSnapshot{
 			DeviceID:   p.DeviceID,
+			LogName:    peerLogName(p),
 			NodePub:    nodePub,
 			Candidates: cands,
 			RelayURL:   relayByID[p.HomeRelay],
@@ -784,7 +810,7 @@ func (r *reconciler) Tick(ctx context.Context) {
 		st.lastEvalAt = now
 		changed = true
 		r.logger.Info("path: downgrade to relay (safety net)",
-			"device_id", p.DeviceID,
+			"device_id", peerLogName(p),
 			"home_relay", p.HomeRelay,
 			"stale_for", now.Sub(hsTime).Truncate(time.Second).String(),
 		)
@@ -816,6 +842,7 @@ func (r *reconciler) Tick(ctx context.Context) {
 type cmmEmission struct {
 	peerNodePub  string
 	peerDeviceID string
+	peerLog      string // display name for logs (grant pseudonym for public peers)
 	peerNodeKey  string
 	relayURL     string
 	candidate    netip.AddrPort
@@ -878,7 +905,7 @@ func (r *reconciler) collectCMMEmissionsLocked(now time.Time) []cmmEmission {
 			st.callMeMaybeFailStreak++
 			st.cmmFailureRecorded = true
 			r.logger.Debug("call_me_maybe fail streak ++",
-				"device_id", p.DeviceID, "streak", st.callMeMaybeFailStreak)
+				"device_id", peerLogName(p), "streak", st.callMeMaybeFailStreak)
 			cadence = effectiveCMMCadence(r.cfg.CallMeMaybeInterval, r.cfg.CallMeMaybeBackoffMax, st.callMeMaybeFailStreak)
 		}
 		if !st.lastCallMeMaybeAt.IsZero() && now.Sub(st.lastCallMeMaybeAt) < cadence {
@@ -890,6 +917,7 @@ func (r *reconciler) collectCMMEmissionsLocked(now time.Time) []cmmEmission {
 		out = append(out, cmmEmission{
 			peerNodePub:  p.NodePublicKey,
 			peerDeviceID: p.DeviceID,
+			peerLog:      peerLogName(p),
 			peerNodeKey:  p.NodePublicKey,
 			relayURL:     relayURL,
 			candidate:    observed,
@@ -952,11 +980,11 @@ func (r *reconciler) emitCallMeMaybe(em cmmEmission) {
 	err := d.SendCallMeMaybe(em.peerNodePub, em.peerDeviceID, em.peerNodeKey, em.relayURL, []netip.AddrPort{em.candidate})
 	if err != nil {
 		r.logger.Debug("call_me_maybe send",
-			"device_id", em.peerDeviceID, "url", em.relayURL, "err", err)
+			"device_id", em.peerLog, "url", em.relayURL, "err", err)
 		return
 	}
 	r.logger.Info("call_me_maybe sent",
-		"device_id", em.peerDeviceID,
+		"device_id", em.peerLog,
 		"url", em.relayURL,
 		"observed", em.candidate.String(),
 	)
@@ -989,19 +1017,19 @@ func (r *reconciler) recompute() error {
 	for _, p := range nm.Peers {
 		ipAddr, err := netip.ParseAddr(p.OverlayIP)
 		if err != nil {
-			r.logger.Warn("skipping peer with bad overlay_ip", "device_id", p.DeviceID, "overlay_ip", p.OverlayIP, "err", err)
+			r.logger.Warn("skipping peer with bad overlay_ip", "device_id", peerLogName(p), "overlay_ip", p.OverlayIP, "err", err)
 			continue
 		}
 		pubKey, err := devicekeys.DecodeX25519PublicKey(p.NodePublicKey)
 		if err != nil {
-			r.logger.Warn("skipping peer with bad node_public_key", "device_id", p.DeviceID, "err", err)
+			r.logger.Warn("skipping peer with bad node_public_key", "device_id", peerLogName(p), "err", err)
 			continue
 		}
 		st := state[p.NodePublicKey]
 		useRelay := r.cfg.ForceRelay || st.currentPath == pathRelay
 		endpoint := pickEndpointWithHint(p, nm.Relays, useRelay, st.directHinted, st.observedAddr)
 		if endpoint == "" {
-			r.logger.Warn("skipping peer with no usable endpoint", "device_id", p.DeviceID, "force_relay", r.cfg.ForceRelay, "current_path", st.currentPath)
+			r.logger.Warn("skipping peer with no usable endpoint", "device_id", peerLogName(p), "force_relay", r.cfg.ForceRelay, "current_path", st.currentPath)
 			continue
 		}
 		peers = append(peers, wgnet.Peer{

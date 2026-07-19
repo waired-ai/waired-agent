@@ -23,6 +23,20 @@ import (
 type PeerIdentity struct {
 	DeviceID   string
 	MachineKey ed25519.PublicKey
+	// Pseudonym is non-empty for foreign peers present under a Public
+	// Share grant. Logs and events about such peers must use it in
+	// place of DeviceID so real device identifiers of other accounts
+	// never land in local logs (spec §8.5).
+	Pseudonym string
+}
+
+// DisplayName returns the identifier to use for this peer in logs and
+// events: the grant pseudonym when present, the real DeviceID otherwise.
+func (p PeerIdentity) DisplayName() string {
+	if p.Pseudonym != "" {
+		return p.Pseudonym
+	}
+	return p.DeviceID
 }
 
 // PeerLookup resolves a WG-source overlay IP to the peer that owns

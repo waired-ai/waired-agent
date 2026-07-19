@@ -58,10 +58,14 @@ func (d *peerDirectory) Update(nm *signer.NetworkMap) {
 		if err != nil || len(raw) != ed25519.PublicKeySize {
 			continue
 		}
-		next[ip] = inference.PeerIdentity{
+		id := inference.PeerIdentity{
 			DeviceID:   p.DeviceID,
 			MachineKey: ed25519.PublicKey(raw),
 		}
+		if p.Grant != nil {
+			id.Pseudonym = p.Grant.Pseudonym
+		}
+		next[ip] = id
 	}
 	d.mu.Lock()
 	d.byIP = next
