@@ -21,7 +21,20 @@
 // trays on a system-wide install).
 package localipc
 
-import "net"
+import (
+	"errors"
+	"net"
+)
+
+// ErrEndpointInUse reports that another process is already serving the
+// endpoint. Listen never takes an endpoint away from a live listener: on
+// Linux/macOS a stale socket node has to be removed before bind, and doing
+// that blindly would let a second agent instance silently steal a running
+// one's socket, leaving the first with a listener no client can reach
+// (waired#81). Callers treat this like any other bind failure — the daemon
+// logs it and keeps running with no write endpoint, which is safe because
+// the management server's writeGuard fails open.
+var ErrEndpointInUse = errors.New("endpoint is already served by another instance")
 
 // Listen creates the local IPC listener for endpoint.
 //

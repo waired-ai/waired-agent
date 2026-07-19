@@ -29,9 +29,15 @@ func osStateDir(m Mode) string {
 // dir. System uses /run/waired (created by the systemd unit's
 // RuntimeDirectory=waired, owned by the waired user, mode 0755, and
 // removed on stop). Interactive/dev uses the per-user XDG runtime dir.
-func osMgmtEndpoint(m Mode) string {
+//
+// A non-default stateDir wins over both: /run/waired is machine-wide, so
+// two instances would otherwise fight over one socket (waired#81).
+func osMgmtEndpoint(m Mode, stateDir string) string {
 	if v := os.Getenv(MgmtSocketEnvOverride); v != "" {
 		return v
+	}
+	if p := osInstanceMgmtEndpoint(stateDir); p != "" {
+		return p
 	}
 	switch m {
 	case System:

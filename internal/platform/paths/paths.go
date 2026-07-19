@@ -13,8 +13,12 @@
 package paths
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 // Mode selects between per-user (Interactive) and system-wide (System)
@@ -84,5 +88,79 @@ const MgmtSocketEnvOverride = "WAIRED_MGMT_SOCKET"
 // The path is not created here — platform/localipc.Listen creates the
 // parent runtime dir. $WAIRED_MGMT_SOCKET overrides it on Linux/macOS.
 func MgmtEndpoint(m Mode) string {
-	return osMgmtEndpoint(m)
+	return MgmtEndpointFor(m, StateDir(m))
+}
+
+// MgmtEndpointFor is MgmtEndpoint for an instance whose state dir is
+// stateDir. When stateDir is NOT one of this OS's default state dirs — i.e.
+// a dev or test instance started with $WAIRED_STATE_DIR — the endpoint moves
+// beside it so two agents on one machine cannot collide on the machine-wide
+// runtime path (waired#81). Resolution order:
+//
+//  1. $WAIRED_MGMT_SOCKET (Linux/macOS only)
+//  2. an instance-specific endpoint derived from a NON-DEFAULT stateDir
+//  3. the mode-derived default (/run/waired/mgmt.sock, \\.\pipe\waired-mgmt, …)
+//
+// Step 2 is deliberately gated on the state dir being non-default. Every
+// caller that exports $WAIRED_STATE_DIR pointing AT the OS default — the
+// install tests and the routing sentinel all do — must keep resolving to the
+// same runtime endpoint the service daemon binds, because there the daemon is
+// started by systemd/launchd/the SCM and never sees that variable at all.
+// Dropping the gate silently moves only the client and breaks every leg.
+//
+// Daemon and client derive this independently, so a dev instance must export
+// the same $WAIRED_STATE_DIR to both (the documented dev pattern).
+func MgmtEndpointFor(m Mode, stateDir string) string {
+	return osMgmtEndpoint(m, stateDir)
+}
+
+// InstanceMgmtEndpoint returns the instance-specific management endpoint
+// derived from stateDir, or "" when stateDir is empty or is one of this OS's
+// default state dirs. Clients use it to tell "this really is a separate
+// instance" apart from "$WAIRED_STATE_DIR happens to name the default dir",
+// which the install tests and routing sentinel all do.
+func InstanceMgmtEndpoint(stateDir string) string {
+	return osInstanceMgmtEndpoint(stateDir)
+}
+
+// nonDefaultStateDir returns stateDir cleaned when it is NOT one of this
+// OS's conventional state dirs, else "". Compared against osStateDir, never
+// StateDir: StateDir returns $WAIRED_STATE_DIR verbatim, so using it here
+// would make every overridden dir compare equal to the "default" and the
+// waired#81 branch would never fire.
+func nonDefaultStateDir(stateDir string) string {
+	if stateDir == "" {
+		return ""
+	}
+	for _, def := range []string{osStateDir(System), osStateDir(Interactive)} {
+		if samePath(runtime.GOOS, stateDir, def) {
+			return ""
+		}
+	}
+	return filepath.Clean(stateDir)
+}
+
+// samePath compares two filesystem paths the way goos does: Windows path
+// comparison is case-insensitive, the Unixes' is not.
+func samePath(goos, a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if goos == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// stateDirHash is a short, stable, filesystem- and pipe-name-safe digest of
+// a state dir, for endpoints that cannot simply live inside it (a Windows
+// pipe name, or a unix socket whose in-place path would overrun sun_path).
+func stateDirHash(stateDir string) string {
+	norm := filepath.Clean(stateDir)
+	if runtime.GOOS == "windows" {
+		norm = strings.ToLower(norm)
+	}
+	sum := sha256.Sum256([]byte(norm))
+	return hex.EncodeToString(sum[:])[:12]
 }

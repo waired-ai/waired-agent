@@ -3,6 +3,7 @@
 package localipc
 
 import (
+	"errors"
 	"io/fs"
 	"net"
 	"os"
@@ -50,6 +51,47 @@ func TestListenRemovesStaleNode(t *testing.T) {
 	c, err := net.Dial("unix", sock)
 	if err != nil {
 		t.Fatalf("dial fresh socket: %v", err)
+	}
+	_ = c.Close()
+}
+
+// TestListenRefusesLiveEndpoint is the waired#81 guard: a second instance
+// must NOT unlink a socket someone is still accepting on. Before the fix the
+// unconditional os.Remove let it take the endpoint over, leaving the first
+// listener alive but permanently unreachable — a silent split-brain.
+func TestListenRefusesLiveEndpoint(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+
+	first, err := Listen(sock)
+	if err != nil {
+		t.Fatalf("first Listen: %v", err)
+	}
+	defer first.Close()
+	// Accept in the background: a socket with no accepter still completes
+	// connect() from the backlog, but serving proves the whole path.
+	go func() {
+		for {
+			c, aerr := first.Accept()
+			if aerr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
+	second, err := Listen(sock)
+	if err == nil {
+		_ = second.Close()
+		t.Fatal("second Listen succeeded; it stole a live endpoint")
+	}
+	if !errors.Is(err, ErrEndpointInUse) {
+		t.Fatalf("second Listen err = %v, want ErrEndpointInUse", err)
+	}
+
+	// The first listener must still be reachable — the point of the guard.
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("first listener unreachable after the refused takeover: %v", err)
 	}
 	_ = c.Close()
 }

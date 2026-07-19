@@ -1250,14 +1250,18 @@ func run(ctx context.Context, args []string) error {
 	// auto-derives from the resolved state dir: a system install
 	// (--state-dir == the OS system dir) binds the System runtime socket
 	// (/run/waired, /var/run/waired, or the machine-wide named pipe); a
-	// dev / interactive run binds a per-user runtime socket.
+	// dev / interactive run binds a per-user runtime socket. A state dir
+	// that is neither OS default marks a dev/test instance, which gets an
+	// endpoint of its own so concurrent instances do not collide on the
+	// machine-wide one (waired#81) — MgmtEndpointFor decides that, which is
+	// why the state dir is passed rather than just the mode.
 	mgmtSocketEndpoint := *mgmtSocket
 	if mgmtSocketEndpoint == "" {
 		socketMode := paths.AutoDetect
 		if *stateDir == paths.StateDir(paths.System) {
 			socketMode = paths.System
 		}
-		mgmtSocketEndpoint = paths.MgmtEndpoint(socketMode)
+		mgmtSocketEndpoint = paths.MgmtEndpointFor(socketMode, *stateDir)
 	}
 
 	var srvWG sync.WaitGroup
