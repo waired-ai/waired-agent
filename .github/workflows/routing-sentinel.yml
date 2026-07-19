@@ -41,6 +41,10 @@ on:
       - internal/agentconfig/**
       - internal/router/**
       - internal/catalog/**
+      # bundled manifests + shared schema/tier resolver live in the proto
+      # module (SSoT with the control plane) — catalog data changes must
+      # still exercise routing.
+      - proto/catalog/**
       - internal/runtime/codeui/**
       - internal/e2e/integration/**
       - cmd/waired/**

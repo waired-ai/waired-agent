@@ -70,7 +70,7 @@ help:
 	@echo "  e2e-vllm-spec        ngram speculative decode boots+serves (GPU REQUIRED, #677)"
 	@echo "  integration-runtime  Real-Ollama lifecycle test (no model pull)"
 	@echo "  integration-codeui   Real-opencode serve lifecycle smoke (no model; #501)"
-	@echo "  catalog-docs         Regenerate the model table (docs/reference/models.md) from internal/catalog/bundled"
+	@echo "  catalog-docs         Regenerate the model table (docs/reference/models.md) from proto/catalog/bundled"
 	@echo "  verify-catalog-docs  Fail if that model table drifted from the bundled catalog"
 	@echo ""
 	@echo "End-user packaging (.deb via nfpm; requires nfpm in PATH):"
@@ -159,7 +159,7 @@ verify-cross:
 	GOOS=darwin  GOARCH=arm64 go vet $(DARWIN_VET_PKGS)
 
 # catalog-docs regenerates the machine-generated model table
-# (docs/reference/models.md) from internal/catalog/bundled/*.json.
+# (docs/reference/models.md) from proto/catalog/bundled/*.json.
 # Run after adding or editing a bundled manifest; catalog-radar runs the same
 # step inside its draft PRs.
 .PHONY: catalog-docs

@@ -17,7 +17,7 @@ import (
 // lived in the monorepo's dev-docs-site, which now carries a pointer
 // instead). The page answers "which models ship?" — a question the
 // prose pages deliberately leave to the catalog — and it must never
-// drift from internal/catalog/bundled/*.json. So instead of a
+// drift from proto/catalog/bundled/*.json. So instead of a
 // hand-maintained table (which the weekly catalog-radar bot, #413, would rot),
 // the table is rendered from catalog.BundledManifests() and the rendered region
 // lives between two HTML-comment markers in the page. `--check` re-renders and
@@ -141,7 +141,7 @@ func renderCatalogBlock(manifests []catalog.Manifest) string {
 		variantCount += len(m.Variants)
 	}
 
-	b.WriteString("> この節は `internal/catalog/bundled/*.json` から `catalog-tool docs` が機械生成する。")
+	b.WriteString("> この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が機械生成する。")
 	b.WriteString("**手で編集しない** — モデルを追加・更新したら `make catalog-docs`（または `catalog-tool docs`）で再生成してコミットする。")
 	b.WriteString("catalog-radar（#413）の自動更新も同じ経路を使う。空欄は `—`。\n\n")
 	fmt.Fprintf(&b, "bundled 済み: **%d ファミリ / %d バリアント**。\n\n", len(manifests), variantCount)
