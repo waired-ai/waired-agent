@@ -172,10 +172,14 @@ func (s *Service) handleProbe(f *wireframe.Frame, pkt wireframe.Inbound, srcNode
 	var peerNodeKey string
 	var peerNodePub [wireframe.NodeKeySize]byte
 	var found bool
+	peerLog := f.SrcDeviceID
 	for _, p := range s.peers {
 		if p.deviceID == f.SrcDeviceID {
 			peerNodeKey = p.nodeKey
 			peerNodePub = p.nodePub
+			if p.logName != "" {
+				peerLog = p.logName
+			}
 			found = true
 			break
 		}
@@ -186,11 +190,11 @@ func (s *Service) handleProbe(f *wireframe.Frame, pkt wireframe.Inbound, srcNode
 		return
 	}
 	if peerNodePub != srcNodeKey {
-		s.logger.Debug("probe srcNodeKey does not match CP NodePub", "device_id", f.SrcDeviceID)
+		s.logger.Debug("probe srcNodeKey does not match CP NodePub", "device_id", peerLog)
 		return
 	}
 	if !s.consumeNonce(f.Nonce, s.now()) {
-		s.logger.Debug("probe replay", "device_id", f.SrcDeviceID)
+		s.logger.Debug("probe replay", "device_id", peerLog)
 		return
 	}
 
@@ -225,7 +229,7 @@ func (s *Service) handleProbe(f *wireframe.Frame, pkt wireframe.Inbound, srcNode
 
 	if pkt.Path == wireframe.PathRelay {
 		if err := s.cfg.Bind.SendDiscoViaRelay(out, f.SrcDeviceID, peerNodeKey, pkt.RelayURL); err != nil {
-			s.logger.Warn("disco: send pong via relay", "device_id", f.SrcDeviceID, "url", pkt.RelayURL, "err", err)
+			s.logger.Warn("disco: send pong via relay", "device_id", peerLog, "url", pkt.RelayURL, "err", err)
 		}
 		return
 	}
@@ -243,10 +247,14 @@ func (s *Service) handlePong(f *wireframe.Frame, pkt wireframe.Inbound, srcNodeK
 	s.mu.Lock()
 	var peerNodePub string
 	var peerNodePubBytes [wireframe.NodeKeySize]byte
+	peerLog := f.SrcDeviceID
 	for k, p := range s.peers {
 		if p.deviceID == f.SrcDeviceID {
 			peerNodePub = k
 			peerNodePubBytes = p.nodePub
+			if p.logName != "" {
+				peerLog = p.logName
+			}
 			break
 		}
 	}
@@ -256,7 +264,7 @@ func (s *Service) handlePong(f *wireframe.Frame, pkt wireframe.Inbound, srcNodeK
 		return
 	}
 	if peerNodePubBytes != srcNodeKey {
-		s.logger.Debug("pong srcNodeKey does not match CP NodePub", "device_id", f.SrcDeviceID)
+		s.logger.Debug("pong srcNodeKey does not match CP NodePub", "device_id", peerLog)
 		return
 	}
 	// Was this pong solicited by a probe we sent?
@@ -289,7 +297,7 @@ func (s *Service) handlePong(f *wireframe.Frame, pkt wireframe.Inbound, srcNodeK
 		s.emit(roundEvent)
 	}
 	if !expected {
-		s.logger.Debug("pong with unknown nonce; replay or stale", "device_id", f.SrcDeviceID)
+		s.logger.Debug("pong with unknown nonce; replay or stale", "device_id", peerLog)
 		return
 	}
 	// Path consistency check: the sender's per-nonce path tag should
@@ -322,7 +330,7 @@ func (s *Service) handlePong(f *wireframe.Frame, pkt wireframe.Inbound, srcNodeK
 		}
 		s.emit(ev)
 		s.logger.Info("disco: peer reachable on direct UDP",
-			"device_id", f.SrcDeviceID,
+			"device_id", peerLog,
 			"direct_src", pkt.Src.String(),
 			"observed_self", ev.ObservedSelfAddr.String(),
 			"rtt_ms", rtt.Milliseconds(),
@@ -330,7 +338,7 @@ func (s *Service) handlePong(f *wireframe.Frame, pkt wireframe.Inbound, srcNodeK
 		return
 	}
 	s.logger.Debug("disco: peer pong via relay",
-		"device_id", f.SrcDeviceID,
+		"device_id", peerLog,
 		"relay_url", pkt.RelayURL,
 		"rtt_ms", rtt.Milliseconds(),
 	)

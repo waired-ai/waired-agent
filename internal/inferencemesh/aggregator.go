@@ -85,6 +85,7 @@ func (a *Aggregator) Update(nm *signer.NetworkMap) {
 			DeviceName:     p.DeviceName,
 			OverlayIP:      p.OverlayIP,
 			InferenceState: p.InferenceState,
+			Grant:          p.Grant,
 		}
 	}
 }

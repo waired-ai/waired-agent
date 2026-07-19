@@ -43,7 +43,7 @@ func (s *Service) SendCallMeMaybe(peerNodePub, peerDeviceID, peerNodeKey, relayU
 		return err
 	}
 	s.logger.Debug("disco: sent call_me_maybe",
-		"device_id", peerDeviceID, "url", relayURL, "candidates", len(candidates))
+		"device_id", s.logNameByNodePub(peerNodePub, peerDeviceID), "url", relayURL, "candidates", len(candidates))
 	return nil
 }
 
@@ -53,6 +53,19 @@ func (s *Service) SendCallMeMaybe(peerNodePub, peerDeviceID, peerNodeKey, relayU
 // the std-base64 string but the peer hasn't been ingested yet (rare;
 // CMM tests construct minimal Services) still work. Returns ok=false
 // when both paths fail.
+// logNameByNodePub returns the log identifier for the peer keyed by
+// peerNodePub — the grant pseudonym for Public Share peers (§8.5) —
+// falling back to the supplied deviceID when the peer is unknown.
+func (s *Service) logNameByNodePub(peerNodePub, fallback string) string {
+	s.mu.Lock()
+	p, ok := s.peers[peerNodePub]
+	s.mu.Unlock()
+	if ok && p.logName != "" {
+		return p.logName
+	}
+	return fallback
+}
+
 func (s *Service) lookupNodePub(peerNodePub string) ([wireframe.NodeKeySize]byte, bool) {
 	var zero [wireframe.NodeKeySize]byte
 	s.mu.Lock()
@@ -121,10 +134,14 @@ func (s *Service) handleCallMeMaybe(f *wireframe.Frame, pkt wireframe.Inbound, s
 	s.mu.Lock()
 	var peerNodePub string
 	var peerNodePubBytes [wireframe.NodeKeySize]byte
+	peerLog := f.SrcDeviceID
 	for k, p := range s.peers {
 		if p.deviceID == f.SrcDeviceID {
 			peerNodePub = k
 			peerNodePubBytes = p.nodePub
+			if p.logName != "" {
+				peerLog = p.logName
+			}
 			break
 		}
 	}
@@ -134,11 +151,11 @@ func (s *Service) handleCallMeMaybe(f *wireframe.Frame, pkt wireframe.Inbound, s
 		return
 	}
 	if peerNodePubBytes != srcNodeKey {
-		s.logger.Debug("cmm srcNodeKey does not match CP NodePub", "device_id", f.SrcDeviceID)
+		s.logger.Debug("cmm srcNodeKey does not match CP NodePub", "device_id", peerLog)
 		return
 	}
 	if !s.consumeNonce(f.Nonce, s.now()) {
-		s.logger.Debug("call_me_maybe replay", "device_id", f.SrcDeviceID)
+		s.logger.Debug("call_me_maybe replay", "device_id", peerLog)
 		return
 	}
 
@@ -155,7 +172,7 @@ func (s *Service) handleCallMeMaybe(f *wireframe.Frame, pkt wireframe.Inbound, s
 		dsts = append(dsts, makeUDPDstFromAddrPort(c))
 	}
 	if len(dsts) == 0 {
-		s.logger.Debug("call_me_maybe with no valid candidates", "device_id", f.SrcDeviceID)
+		s.logger.Debug("call_me_maybe with no valid candidates", "device_id", peerLog)
 		return
 	}
 
@@ -169,12 +186,12 @@ func (s *Service) handleCallMeMaybe(f *wireframe.Frame, pkt wireframe.Inbound, s
 
 	for _, dst := range dsts {
 		if err := s.sendProbeDirectFireAndForget(dst, f.SrcDeviceID, peerNodePubBytes); err != nil {
-			s.logger.Debug("disco probe send (cmm)", "device_id", f.SrcDeviceID, "addr", dst, "err", err)
+			s.logger.Debug("disco probe send (cmm)", "device_id", peerLog, "addr", dst, "err", err)
 		}
 	}
 
 	s.logger.Info("disco: handled call_me_maybe",
-		"device_id", f.SrcDeviceID,
+		"device_id", peerLog,
 		"candidates", len(dsts),
 		"hint_ttl_ms", s.cfg.CMMHintTTL.Milliseconds(),
 	)

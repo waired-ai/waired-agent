@@ -268,7 +268,13 @@ type directRoundState struct {
 // coupled via the Event channel.
 type peerState struct {
 	deviceID string
-	nodeKey  string // peer's std-base64 node public key (used in relay frame headers)
+	// logName is the identifier to print in logs for this peer: the
+	// Public Share grant pseudonym for foreign grant peers, the real
+	// deviceID otherwise (spec §8.5 — real device IDs of other
+	// accounts must not land in local logs). Wire frames keep using
+	// deviceID; only log output substitutes.
+	logName string
+	nodeKey string // peer's std-base64 node public key (used in relay frame headers)
 	// nodePub is the same NodeKey decoded to raw 32-byte form. Used
 	// as the peer half of ECDH key agreement for sealed (AEAD)
 	// disco frames (probe / pong / call_me_maybe). The base64 string
@@ -491,8 +497,13 @@ func (s *Service) UpdatePeers(peers map[string]PeerSnapshot) {
 	out := make(map[string]peerState, len(peers))
 	for k, p := range peers {
 		prev := s.peers[k]
+		logName := p.LogName
+		if logName == "" {
+			logName = p.DeviceID
+		}
 		out[k] = peerState{
 			deviceID:    p.DeviceID,
+			logName:     logName,
 			nodeKey:     k,
 			nodePub:     p.NodePub,
 			candidates:  append([]string(nil), p.Candidates...),
@@ -507,6 +518,10 @@ func (s *Service) UpdatePeers(peers map[string]PeerSnapshot) {
 // PeerSnapshot is the per-peer input to UpdatePeers.
 type PeerSnapshot struct {
 	DeviceID string
+	// LogName is the identifier to use for this peer in log output —
+	// the Public Share grant pseudonym for foreign grant peers. Empty
+	// falls back to DeviceID.
+	LogName string
 	// NodePub is the peer's curve25519 public key (32 B raw bytes).
 	// Used as the receiver half of ECDH when sealing outbound peer↔peer
 	// frames and as the cross-check key on inbound (sealed) frames —

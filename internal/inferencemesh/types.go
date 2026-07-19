@@ -58,4 +58,10 @@ type PeerView struct {
 	OverlayIP      string                 `json:"overlay_ip"`
 	Stale          bool                   `json:"stale"`
 	InferenceState *signer.InferenceState `json:"inference_state,omitempty"`
+	// Grant is set for foreign peers injected into the map under a
+	// Public Share grant (nil for own-network peers). The router uses
+	// it to partition own vs public candidates (D2), and consumers
+	// must display Grant.Pseudonym — never the real DeviceID — for
+	// such peers.
+	Grant *signer.PeerGrant `json:"grant,omitempty"`
 }

@@ -50,7 +50,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/internal/setup"
 	"github.com/waired-ai/waired-agent/internal/testharness"
-	"github.com/waired-ai/waired-agent/proto/signedreq"
 	"github.com/waired-ai/waired-agent/proto/signer"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -1034,10 +1033,13 @@ func run(ctx context.Context, args []string) error {
 		var infSrv *inference.Server
 		if overlayHandlerSet != nil {
 			cfg := inference.Config{
-				DeviceName:          id.DeviceID,
-				GatewayHandler:      overlayHandlerSet,
-				PeerLookup:          peerDir,
-				NonceCache:          signedreq.NewMemoryNonceCache(),
+				DeviceName:     id.DeviceID,
+				GatewayHandler: overlayHandlerSet,
+				PeerLookup:     peerDir,
+				// Bounded (per-device + global): Public Share grants put
+				// foreign device IDs into this cache, so growth must cap
+				// (spec §8.5).
+				NonceCache:          inference.NewBoundedNonceCache(0, 0),
 				IsPaused:            pm.IsPaused,
 				IsInferenceDisabled: infCtl.IsDisabled,
 				Recorder:            obsRecorder,

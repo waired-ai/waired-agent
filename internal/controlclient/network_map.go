@@ -80,7 +80,12 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		defer close(frames)
 		defer close(errs)
 
-		body := bytes.NewBufferString(`{}`)
+		// Declare capabilities (spec §8.4): public-share-v1 tells the
+		// CP this agent parses the Public Share map fields (Grant /
+		// PublicShare / PublicCapacity), so the CP may emit them and
+		// count this device as matchmaking-eligible. CPs predating the
+		// intake ignore the body entirely.
+		body := bytes.NewBufferString(`{"capabilities":["` + signer.CapabilityPublicShareV1 + `"]}`)
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/network-map/poll", body)
 		if err != nil {
 			errs <- err
