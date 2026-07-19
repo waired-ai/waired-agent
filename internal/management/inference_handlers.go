@@ -41,6 +41,12 @@ type InferenceProvider interface {
 	// re-surfaced after a re-benchmark of the same pairing. Empty from/to
 	// dismisses the current live recommendation.
 	DismissRecommendation(from, to string) error
+
+	// BenchmarkStatus reports the benchmark job's current state
+	// (waired#835 §12): the benchmark runs as a single-flight job
+	// detached from any request context, so callers that time out or
+	// disconnect can poll this instead of losing the measurement.
+	BenchmarkStatus() BenchmarkStatusResponse
 }
 
 // InferenceStatus is the body of GET /waired/v1/inference/status.

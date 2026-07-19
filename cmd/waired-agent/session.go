@@ -349,3 +349,10 @@ func (a sbInfProvider) DismissRecommendation(from, to string) error {
 	}
 	return errNotEnrolled
 }
+
+func (a sbInfProvider) BenchmarkStatus() management.BenchmarkStatusResponse {
+	if p := a.liveOrNil(); p != nil {
+		return p.BenchmarkStatus()
+	}
+	return management.BenchmarkStatusResponse{State: management.BenchmarkStateIdle}
+}

@@ -510,6 +510,7 @@ func (s *Server) mux() *http.ServeMux {
 		mux.HandleFunc("/waired/v1/inference/catalog", s.handleInferenceCatalog)
 		mux.HandleFunc("/waired/v1/inference/preferred-model", s.handleInferencePreferredModel)
 		mux.HandleFunc("/waired/v1/inference/benchmark", s.handleInferenceBenchmark)
+		mux.HandleFunc("/waired/v1/inference/benchmark/status", s.handleInferenceBenchmarkStatus)
 		mux.HandleFunc("/waired/v1/inference/recommendation/dismiss", s.handleInferenceRecommendationDismiss)
 	}
 	if s.publicUse != nil && s.publicUse.Path != "" {

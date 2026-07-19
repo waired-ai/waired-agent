@@ -66,6 +66,49 @@ func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// BenchmarkStatusResponse is the body of
+// GET /waired/v1/inference/benchmark/status (waired#835 §12). The
+// benchmark is a single-flight job detached from request contexts, so
+// a caller whose POST /inference/benchmark timed out (or the NAVI
+// setup flow, which never blocks on the POST) can poll this for the
+// eventual result. Gen is the declarative generation counter of the
+// last COMPLETED run (0 = a run not requested via the counter, e.g.
+// CLI/boot); it survives daemon restarts.
+type BenchmarkStatusResponse struct {
+	// State is one of "idle" (never ran), "running", "done", "failed".
+	State string `json:"state"`
+	// Gen is the generation of the last completed run.
+	Gen int `json:"gen,omitempty"`
+	// MeasuredTokps is the last completed measurement (0 when the run
+	// failed or was skipped).
+	MeasuredTokps float64 `json:"measured_tokps,omitempty"`
+	// MeasuredAt is the completion time of the last run, RFC3339. Empty
+	// while idle.
+	MeasuredAt string `json:"measured_at,omitempty"`
+	// Error carries the failure detail when State is "failed".
+	Error string `json:"error,omitempty"`
+}
+
+// Benchmark job states — values of BenchmarkStatusResponse.State.
+const (
+	BenchmarkStateIdle    = "idle"
+	BenchmarkStateRunning = "running"
+	BenchmarkStateDone    = "done"
+	BenchmarkStateFailed  = "failed"
+)
+
+func (s *Server) handleInferenceBenchmarkStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method_not_allowed", "GET only"))
+		return
+	}
+	if s.inference == nil {
+		http.Error(w, "inference not configured", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.inference.BenchmarkStatus())
+}
+
 // RecommendationDismissRequest is the body of
 // POST /waired/v1/inference/recommendation/dismiss. Empty fields dismiss
 // the current live recommendation.
