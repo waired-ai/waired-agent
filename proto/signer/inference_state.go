@@ -110,6 +110,18 @@ type InferenceState struct {
 	// `omitempty` + only-set-on-override keeps the common case byte-identical.
 	DesiredParallel int `json:"desired_parallel,omitempty"`
 
+	// PublicShare / PublicCapacity are the CP-injected Public Share state for
+	// the device's OWN Self entry only (public share spec §7): PublicShare
+	// mirrors Device.public_share_enabled so Tray/CLI render the toggle, and
+	// PublicCapacity is the effective public client budget. On injected
+	// provider PEER entries the CP folds the budget into Capacity instead —
+	// these two fields are never set on peers. omitempty keeps the signed map
+	// byte-identical for the (default OFF) common case, with the same
+	// fleet-upgrade caveat as Priority: only emitted to pollers that declared
+	// CapabilityPublicShareV1 (§8.4 gate).
+	PublicShare    bool `json:"public_share,omitempty"`
+	PublicCapacity int  `json:"public_capacity,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page
