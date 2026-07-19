@@ -314,6 +314,7 @@ func run(ctx context.Context, args []string) error {
 	if !*disableInference {
 		mgmtSrv = mgmtSrv.WithInference(sbInfProvider{sb}).
 			WithShareControl(sbShareControl{sb}).
+			WithPublicShareControl(sbPublicShareControl{sb}).
 			WithEngineControl(sbEngineControl{sb}).
 			WithCatalog(&management.CatalogConfig{
 				PreferencePath: agentconfig.DefaultPreferencePath(),
@@ -1103,6 +1104,29 @@ func run(ctx context.Context, args []string) error {
 				// Kill switch (§8.3 step 1): turning Public Share OFF
 				// terminates in-flight public streams immediately.
 				publicShareCtl.SetOnDisable(infSrv.AbortPublicInFlight)
+				// Public ON requires in-account mesh share ON: eligibility
+				// depends on fresh inference-state reports, which only flow
+				// while mesh share is on (spec §4.1). A mesh enable failure
+				// aborts the public enable.
+				if shareCtl != nil {
+					publicShareCtl.SetMeshAutoEnable(func(ctx context.Context) (bool, error) {
+						if shareCtl.IsShared() {
+							return false, nil
+						}
+						return true, shareCtl.Share(ctx)
+					})
+				}
+				// CP sync (§4.1/§6; §8.3 step 2 — the CP revokes the
+				// device's grants on OFF). Signed with the machine key:
+				// same client + bypass treatment as the probe push.
+				publicShareCtl.SetPusher(func(ctx context.Context, enabled bool, maxClients int) (controlclient.PublicSharePushResult, error) {
+					return infPushClient.PushPublicShare(ctx, id.DeviceID, enabled, maxClients, mk.Private)
+				})
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					publicShareCtl.RunSync(ctx)
+				}()
 			}
 		} else {
 			infSrv = inference.NewServer(id.DeviceID)
@@ -1172,7 +1196,7 @@ func run(ctx context.Context, args []string) error {
 		}()
 		go func() {
 			defer wg.Done()
-			applyConcurrency := func(capacity, parallel, publicCapacity int) {
+			applySelf := func(st *signer.InferenceState) {
 				// Admission gate (non-disruptive) reads Capacity; the ollama
 				// engine parallelism (restart-on-change) reads DesiredParallel,
 				// which is non-zero only under an explicit admin override — so a
@@ -1180,13 +1204,18 @@ func run(ctx context.Context, args []string) error {
 				// PublicCapacity retunes the public-consumer admission ceiling
 				// (waired#824); 0 until the CP starts emitting it (waired#820),
 				// which resolves to the bounded min(2, capacity−1) default.
-				infSrv.SetCapacity(capacity)
-				infSrv.SetPublicCapacity(publicCapacity)
+				infSrv.SetCapacity(st.Capacity)
+				infSrv.SetPublicCapacity(st.PublicCapacity)
 				if inferenceSub != nil && inferenceSub.provider != nil {
-					inferenceSub.provider.ApplyConcurrency(ctx, parallel)
+					inferenceSub.provider.ApplyConcurrency(ctx, st.DesiredParallel)
+				}
+				// Toggle echo (§5.1: the CP is authoritative) — adopt
+				// CP-side public share changes on the next frame.
+				if publicShareCtl != nil {
+					publicShareCtl.ReconcileRemote(st.PublicShare)
 				}
 			}
-			runNetworkMapLoop(ctx, logger, id, tokens.Get, rec, meshAgg, peerDir, dispatcher, applyConcurrency, applyDesiredSetup, *bypassCPIAM)
+			runNetworkMapLoop(ctx, logger, id, tokens.Get, rec, meshAgg, peerDir, dispatcher, applySelf, applyDesiredSetup, *bypassCPIAM)
 		}()
 		go func() {
 			defer wg.Done()
@@ -1224,6 +1253,7 @@ func run(ctx context.Context, args []string) error {
 			pause:         pm,
 			infControl:    infCtl,
 			shareControl:  shareCtl,
+			publicShare:   publicShareCtl,
 			workerControl: workerCtl,
 			meshAgg:       meshAgg,
 			infProvider:   infProvider,
@@ -1445,7 +1475,7 @@ func newPauseInfra(stateDir string, gatewayPort int, logger *slog.Logger) (*paus
 // When bypassCPIAM is set, the client's HTTP transport injects a GCE
 // identity token into Authorization (so the Cloud Run / IAP IAM gate
 // is happy) and the device access token rides X-Waired-Agent-Bearer.
-func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel, publicCapacity int), applyDesiredSetup func(*signer.InferenceState), bypassCPIAM bool) {
+func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applySelf func(st *signer.InferenceState), applyDesiredSetup func(*signer.InferenceState), bypassCPIAM bool) {
 	cli := controlclient.NewWithBearer(id.ControlURL, bearer)
 	if bypassCPIAM {
 		cli.HTTP = bypassCPHTTPClient(ctx, id.ControlURL, logger)
@@ -1460,7 +1490,7 @@ func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Id
 		frames, errs := cli.SubscribeNetworkMap(ctx)
 		streamCtx, streamCancel := context.WithCancel(ctx)
 
-		streaming(streamCtx, logger, rec, meshAgg, peerDir, dispatcher, applyConcurrency, applyDesiredSetup, frames, errs)
+		streaming(streamCtx, logger, rec, meshAgg, peerDir, dispatcher, applySelf, applyDesiredSetup, frames, errs)
 		streamCancel()
 
 		if ctx.Err() != nil {
@@ -1478,20 +1508,20 @@ func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Id
 	}
 }
 
-// applyConcurrency, when non-nil, is invoked on every frame that carries a Self
-// InferenceState with (Capacity, DesiredParallel). Capacity is the admission
-// ceiling (benchmark-derived unless an admin override is set) and drives the
-// overlay listener's gate live; DesiredParallel is non-zero ONLY when an admin
-// set inference_max_clients and drives the ollama engine parallelism
-// (restart-on-change) — kept distinct so a default host's benchmark capacity
-// never restarts its engine. See the applyConcurrency closure at the call site.
+// applySelf, when non-nil, is invoked on every frame that carries a Self
+// InferenceState. The call-site closure applies the CP's effective
+// per-device settings: Capacity (admission ceiling, live), DesiredParallel
+// (engine parallelism, restart-on-change, admin-override only — kept
+// distinct so a default host's benchmark capacity never restarts its
+// engine), PublicCapacity (public-consumer admission ceiling), and the
+// PublicShare toggle echo (waired#825).
 // applyDesiredSetup, when non-nil, receives the Self InferenceState of every
 // frame so the waired#835 desired-state applier can reconcile toward the
 // served desired_engine / desired_model_id / desired_benchmark_gen. It is
 // called with nil states too (the applier's own fast path handles them) and,
 // like everything on this stream, must be idempotent — there is no frame
 // dedup here.
-func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel, publicCapacity int), applyDesiredSetup func(*signer.InferenceState), frames <-chan *signer.NetworkMap, errs <-chan error) {
+func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applySelf func(st *signer.InferenceState), applyDesiredSetup func(*signer.InferenceState), frames <-chan *signer.NetworkMap, errs <-chan error) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1509,12 +1539,11 @@ func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAg
 			if peerDir != nil {
 				peerDir.Update(nm)
 			}
-			// Apply the CP's effective per-device settings: the admission cap
-			// (Capacity) and, only when an admin override set it, the engine
-			// parallelism target (DesiredParallel). nil InferenceState (engine
-			// not yet probed) leaves both untouched.
-			if applyConcurrency != nil && nm.Self.InferenceState != nil {
-				applyConcurrency(nm.Self.InferenceState.Capacity, nm.Self.InferenceState.DesiredParallel, nm.Self.InferenceState.PublicCapacity)
+			// Apply the CP's effective per-device settings (see applySelf
+			// doc above). nil InferenceState (engine not yet probed)
+			// leaves everything untouched.
+			if applySelf != nil && nm.Self.InferenceState != nil {
+				applySelf(nm.Self.InferenceState)
 			}
 			if applyDesiredSetup != nil {
 				applyDesiredSetup(nm.Self.InferenceState)

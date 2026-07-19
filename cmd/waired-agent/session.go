@@ -34,7 +34,8 @@ type session struct {
 	pinger        *agentPinger
 	pause         *pauseManager
 	infControl    *inferenceController
-	shareControl  *shareController // nil when --disable-inference
+	shareControl  *shareController       // nil when --disable-inference
+	publicShare   *publicShareController // nil when --disable-inference
 	workerControl *workerController
 	meshAgg       *inferencemesh.Aggregator
 	infProvider   management.InferenceProvider // nil when --disable-inference
@@ -211,6 +212,36 @@ func (a sbShareControl) State() (current, desired state.ShareMeshState) {
 		return s.shareControl.State()
 	}
 	return "", ""
+}
+
+type sbPublicShareControl struct{ sb *switchboard }
+
+func (a sbPublicShareControl) Enable(ctx context.Context, maxClients int) (management.PublicShareResult, error) {
+	if s := a.sb.current(); s != nil && s.publicShare != nil {
+		return s.publicShare.Enable(ctx, maxClients)
+	}
+	return management.PublicShareResult{}, errNotEnrolled
+}
+
+func (a sbPublicShareControl) Disable(ctx context.Context) (management.PublicShareResult, error) {
+	if s := a.sb.current(); s != nil && s.publicShare != nil {
+		return s.publicShare.Disable(ctx)
+	}
+	return management.PublicShareResult{}, errNotEnrolled
+}
+
+func (a sbPublicShareControl) State() (current, desired state.PublicShareState) {
+	if s := a.sb.current(); s != nil && s.publicShare != nil {
+		return s.publicShare.State()
+	}
+	return "", ""
+}
+
+func (a sbPublicShareControl) Synced() bool {
+	if s := a.sb.current(); s != nil && s.publicShare != nil {
+		return s.publicShare.Synced()
+	}
+	return true
 }
 
 type sbWorkerControl struct{ sb *switchboard }

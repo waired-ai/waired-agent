@@ -8,32 +8,38 @@ import (
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
-type applyArgs struct{ capacity, parallel, publicCapacity int }
-
 // TestStreamingAppliesSelfCapacity verifies the network-map stream loop applies
 // the CP's effective per-device settings (nm.Self.InferenceState) to the overlay
-// listener via the applyConcurrency callback, and leaves them untouched on
-// frames whose Self carries no InferenceState. It also pins the fix for the
+// listener via the applySelf callback, and leaves them untouched on frames
+// whose Self carries no InferenceState. It also pins the fix for the
 // benchmark-vs-override conflation: a Self carrying only a (benchmark) Capacity
-// must pass parallel=0 so the agent never restarts its engine on a default host.
+// must report DesiredParallel=0 so the agent never restarts its engine on a
+// default host — and, for waired#825, that the PublicShare toggle echo reaches
+// the callback on the same frame.
 func TestStreamingAppliesSelfCapacity(t *testing.T) {
 	eng := &fakeEngine{}
 	prov := &agentProvider{}
 	rec := newReconciler(eng, prov, quietLogger(), nil, cmmTestConfig())
 
-	got := make(chan applyArgs, 4)
-	applyConcurrency := func(capacity, parallel, publicCapacity int) {
-		got <- applyArgs{capacity, parallel, publicCapacity}
+	got := make(chan *signer.InferenceState, 4)
+	applySelf := func(st *signer.InferenceState) {
+		got <- st
 	}
 
 	// Frame 1 carries an effective capacity of 5 with NO admin override
-	// (DesiredParallel 0 = the benchmark case); frame 2 has no engine state
-	// (Self.InferenceState nil) and must NOT trigger a call.
+	// (DesiredParallel 0 = the benchmark case) and the CP's PublicShare
+	// echo; frame 2 has no engine state (Self.InferenceState nil) and
+	// must NOT trigger a call.
 	frames := make(chan *signer.NetworkMap, 2)
 	frames <- &signer.NetworkMap{
 		Self: signer.NetworkMapPeer{
-			DeviceID:       "self",
-			InferenceState: &signer.InferenceState{Reachable: true, Type: signer.InferenceTypeOllama, Capacity: 5},
+			DeviceID: "self",
+			InferenceState: &signer.InferenceState{
+				Reachable:   true,
+				Type:        signer.InferenceTypeOllama,
+				Capacity:    5,
+				PublicShare: true,
+			},
 		},
 	}
 	frames <- &signer.NetworkMap{
@@ -46,23 +52,26 @@ func TestStreamingAppliesSelfCapacity(t *testing.T) {
 	defer cancel()
 
 	// streaming returns once frames is closed.
-	streaming(ctx, quietLogger(), rec, nil, nil, nil, applyConcurrency, nil, frames, errs)
+	streaming(ctx, quietLogger(), rec, nil, nil, nil, applySelf, nil, frames, errs)
 
 	select {
-	case a := <-got:
-		if a.capacity != 5 {
-			t.Fatalf("applyConcurrency capacity = %d, want 5", a.capacity)
+	case st := <-got:
+		if st.Capacity != 5 {
+			t.Fatalf("applySelf capacity = %d, want 5", st.Capacity)
 		}
-		if a.parallel != 0 {
-			t.Fatalf("applyConcurrency parallel = %d, want 0 (benchmark capacity must not drive parallelism)", a.parallel)
+		if st.DesiredParallel != 0 {
+			t.Fatalf("applySelf parallel = %d, want 0 (benchmark capacity must not drive parallelism)", st.DesiredParallel)
+		}
+		if !st.PublicShare {
+			t.Fatalf("applySelf PublicShare = false, want true (toggle echo must reach the callback)")
 		}
 	case <-time.After(time.Second):
-		t.Fatalf("applyConcurrency was never called for the frame with Self.InferenceState")
+		t.Fatalf("applySelf was never called for the frame with Self.InferenceState")
 	}
 	// The nil-InferenceState frame must not have produced a second call.
 	select {
-	case a := <-got:
-		t.Fatalf("applyConcurrency called again with %+v; nil Self.InferenceState must leave settings untouched", a)
+	case st := <-got:
+		t.Fatalf("applySelf called again with %+v; nil Self.InferenceState must leave settings untouched", st)
 	default:
 	}
 }
