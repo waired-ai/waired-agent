@@ -83,9 +83,13 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		// Declare capabilities (spec §8.4): public-share-v1 tells the
 		// CP this agent parses the Public Share map fields (Grant /
 		// PublicShare / PublicCapacity), so the CP may emit them and
-		// count this device as matchmaking-eligible. CPs predating the
-		// intake ignore the body entirely.
-		body := bytes.NewBufferString(`{"capabilities":["` + signer.CapabilityPublicShareV1 + `"]}`)
+		// count this device as matchmaking-eligible. onboarding-v1
+		// declares the waired#835 desired-state applier below, so the
+		// CP may fold desired_engine / desired_model_id /
+		// desired_benchmark_gen into this device's own Self entry.
+		// CPs predating the intake ignore the body entirely.
+		body := bytes.NewBufferString(`{"capabilities":["` +
+			signer.CapabilityPublicShareV1 + `","` + signer.CapabilityOnboardingV1 + `"]}`)
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/network-map/poll", body)
 		if err != nil {
 			errs <- err
