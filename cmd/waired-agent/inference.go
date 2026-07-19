@@ -328,7 +328,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// runtime dir (ollama creates ~/.ollama there for its key/config);
 		// harmless where the launcher already sets HOME (Linux systemd).
 		ollamaCfg.StateHome = filepath.Join(stateDir, "runtimes", "ollama")
-		migrateLegacyOllamaModels(logger, bundledOllamaModels)
+		migrateLegacyOllamaModels(logger, bundledOllamaModels, "")
 	}
 	ollama := infruntime.NewOllamaAdapter(ollamaCfg)
 	registry.Register(ollama)
