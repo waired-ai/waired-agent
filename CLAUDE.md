@@ -133,10 +133,13 @@ message**, not in repo files.
 
 ## Public-repo cautions
 
-* Fork PRs only run CI after maintainer approval (they would otherwise
-  execute on the self-hosted `sv-mag-agent` runners). Do not weaken the
-  fork-PR approval policy or move the DCO / gitleaks jobs off
-  GitHub-hosted runners.
+* Fork PRs only run CI after maintainer approval. CI runs on
+  GitHub-hosted runners; only `installtest-inference.yml`'s nightly
+  Windows/macOS inference legs and banner check use self-hosted
+  hardware, and those are schedule/dispatch-only — never reachable
+  from fork PRs. Do not weaken the fork-PR approval policy, and keep
+  the DCO job checkout-free (it must give fork PRs feedback without
+  executing fork code).
 * The real-NAT testnet harness lives in the private monorepo; this
   repo gates on it via `scripts/ci/testnet-require-green-remote.sh`
   (secret `WAIRED_TESTNET_TOKEN`) at three points: per-PR

@@ -111,7 +111,7 @@ jobs:
       - name: Authenticate to Google Cloud (WIF)
         if: env.DEPLOY_ENABLED == 'true'
         uses: google-github-actions/auth@v3
-        # IPv4-first egress: sv-mag pods have no IPv6 route; Node's AAAA-first
+        # IPv4-first egress: hosted runners have no IPv6 route; Node's AAAA-first
         # + Happy-Eyeballs can abandon a slow IPv4 STS connect (~250ms) and race
         # the routeless IPv6 → transient "failed to generate federated token".
         # Same fix as renovate.yml. #542 / #466.

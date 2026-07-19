@@ -1,7 +1,7 @@
 # PR/push gate for waired-agent. Derived from the monorepo ci.yml at the
-# #184 split; jobs run on the per-repo ARC scale set `sv-mag-agent`
-# (registered by ubuntu-configs github-runner-microk8s-setup.yaml) with
-# the same private CI base image the monorepo uses.
+# #184 split. All jobs run on GitHub-hosted runners: the repo is public,
+# so hosted standard runners are free, and keeping PR CI off self-hosted
+# infrastructure is the safer default for a public repo.
 name: ci
 
 on:
@@ -17,13 +17,6 @@ concurrency:
 permissions:
   contents: read
 
-# See the monorepo ci.yml for why: git safe.directory for forked git
-# processes under ARC k8s mode, and bash as the default shell.
-env:
-  GIT_CONFIG_COUNT: "1"
-  GIT_CONFIG_KEY_0: safe.directory
-  GIT_CONFIG_VALUE_0: "*"
-
 defaults:
   run:
     shell: bash
@@ -31,19 +24,14 @@ defaults:
 jobs:
   lint:
     name: lint (gofmt + vet + golangci-lint)
-    runs-on: sv-mag-agent
+    runs-on: ubuntu-latest
     timeout-minutes: 10
-    container:
-      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # Host-local persistent /ci-cache volume replaces GitHub's
-          # network cache on this runner substrate (monorepo #523).
-          cache: false
 
       - name: gofmt
         run: |
@@ -127,14 +115,12 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
-          skip-cache: true
 
   dco:
     # DCO enforcement (#666): every PR commit needs a Signed-off-by
-    # trailer (CONTRIBUTING.md). Deliberately on a GitHub-hosted runner
-    # with no checkout: fork PRs get this feedback immediately without
-    # touching the self-hosted ARC runners (which require maintainer
-    # approval for outside contributors).
+    # trailer (CONTRIBUTING.md). Deliberately checkout-free: the job
+    # reads commit metadata via the API only, so fork PRs get this
+    # feedback without executing any fork code.
     name: dco (Signed-off-by on every commit)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -163,10 +149,8 @@ jobs:
 
   gitleaks:
     # Secret scan over the full git history (config: .gitleaks.toml).
-    # Like dco, deliberately on a GitHub-hosted runner so fork PRs get
-    # this feedback without touching the self-hosted ARC runners. Runs
-    # the pinned release binary instead of gitleaks-action (the action
-    # requires a license key for organization repos).
+    # Runs the pinned release binary instead of gitleaks-action (the
+    # action requires a license key for organization repos).
     name: gitleaks (secret scan)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -187,17 +171,14 @@ jobs:
 
   unit:
     name: unit tests
-    runs-on: sv-mag-agent
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    container:
-      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: go test (root)
         run: go test ./... -timeout 10m
@@ -207,27 +188,22 @@ jobs:
 
   unit-testharness:
     name: unit tests (testharness)
-    runs-on: sv-mag-agent
+    runs-on: ubuntu-latest
     timeout-minutes: 15
-    container:
-      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: go test -tags testharness
         run: go test -tags testharness ./internal/testharness/... -timeout 10m
 
   build:
     name: build (${{ matrix.goos }}/${{ matrix.goarch }})
-    runs-on: sv-mag-agent
+    runs-on: ubuntu-latest
     timeout-minutes: 10
-    container:
-      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
     strategy:
       fail-fast: false
       matrix:
@@ -240,7 +216,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: false
 
       - name: cross-compile every cmd/*
         env:
@@ -260,12 +235,15 @@ jobs:
 
   install-scripts:
     name: install-scripts (dash matrix + shellcheck)
-    runs-on: sv-mag-agent
+    runs-on: ubuntu-latest
     timeout-minutes: 10
-    container:
-      image: asia-northeast1-docker.pkg.dev/dev-waired/waired-dev/waired-ci-go:latest
     steps:
       - uses: actions/checkout@v5
+
+      # busybox is not preinstalled on the hosted image; without it
+      # installtest-dash.sh silently drops its `busybox sh` matrix leg.
+      - name: install busybox (third shell in the dash matrix)
+        run: sudo apt-get install -y busybox
 
       - name: shellcheck installer scripts
         run: make install-script-lint

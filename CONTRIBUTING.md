@@ -73,9 +73,9 @@ Do **not** open public issues for vulnerabilities — follow
 ## CI notes for external contributors
 
 Pull requests from forks require maintainer approval before workflows
-run (most CI executes on our self-hosted runners). The DCO and
-gitleaks checks run on GitHub-hosted runners, so you get that feedback
-immediately.
+run. CI executes on GitHub-hosted runners (only some nightly jobs use
+self-hosted hardware). The DCO and gitleaks checks run without
+executing any fork code, so you get that feedback immediately.
 
 PRs touching mesh / enrollment / `proto/` paths normally also run a
 real-NAT testnet gate (`testnet-pr.yml`), but it is skipped for fork
@@ -86,5 +86,5 @@ anything.
 
 The same applies to the 3-OS install test (`installtest.yml`): it runs
 on every same-repo PR but is skipped for fork PRs (it needs the cloud
-enroll identity and the self-hosted Windows/macOS runners). A
-maintainer arms it the same way after review.
+enroll identity, which is withheld from forks). A maintainer arms it
+the same way after review.

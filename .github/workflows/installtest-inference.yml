@@ -22,9 +22,14 @@
 # installer-surface changes, so it left the per-PR critical path (~2 min)
 # and runs here nightly instead.
 #
-# Runners mirror installtest.yml: Linux on a GH-hosted disposable VM (the
-# in-place root + systemd install can't run on the containerized ARC
-# runner), Windows/macOS on the self-hosted ephemeral-VM pools.
+# Runners: Linux on a GH-hosted disposable VM; Windows/macOS DELIBERATELY
+# stay on the self-hosted ephemeral-VM pools even though the rest of CI is
+# GH-hosted (public repo, free minutes): the inference tail needs hardware
+# representative of real user machines — hosted macOS runners are
+# virtualized with no GPU/Metal and little RAM (waired#573 showed even a
+# 4 GB tart VM can't boot the Metal engine) — and the banner render check
+# needs a real interactive console, which hosted runners (service session)
+# never have.
 name: installtest-inference
 
 on:

@@ -13,8 +13,8 @@ name: renovate
 on:
   schedule:
     # Monday 09:00 Asia/Tokyo == Monday 00:00 UTC. Weekly so the bot
-    # never floods sv-mag-agent CI; renovate.json's own `schedule` gates
-    # which updates it acts on within the run.
+    # never floods CI; renovate.json's own `schedule` gates which
+    # updates it acts on within the run.
     - cron: "0 0 * * 1"
   workflow_dispatch:
     inputs:
@@ -42,8 +42,9 @@ env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: safe.directory
   GIT_CONFIG_VALUE_0: "*"
-  # sv-mag-agent pods have no IPv6 egress; same Node dual-stack
-  # workarounds as the monorepo renovate.yml (see its header + #466).
+  # GitHub-hosted runners have no IPv6 egress either; keep Node on
+  # IPv4-first to dodge the AAAA-first + Happy-Eyeballs ETIMEDOUT trap
+  # (same dual-stack workarounds as the monorepo renovate.yml, #466).
   NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection
 
 defaults:
@@ -52,12 +53,11 @@ defaults:
 
 jobs:
   renovate:
-    runs-on: sv-mag-agent
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
-      # ARC kubernetes containerMode + root-default node image instead of
-      # the official renovate image (non-root USER can't write the ARC
-      # runner's pre-created command files — monorepo #459).
+      # Plain Debian node image (not the official renovate image) pins
+      # the Node major independently of the runner image.
       image: node:22-trixie
     steps:
       - uses: actions/checkout@v5
