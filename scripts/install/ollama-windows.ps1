@@ -210,6 +210,10 @@ function Get-DetectedGPUs {
 # !!! AMDGPU_TARGETS (see ollama/scripts/build_windows.sh upstream),
 # !!! revisit and adjust the patterns below. See docs/todo.md
 # !!! "Ollama Windows AMD support tracking" for the review checklist.
+# !!! The waired-agent runtime mirrors this same list in Go
+# !!! (amdROCmSupported in internal/runtime/ollama_backend.go) so the
+# !!! agent's backend routing matches the installed overlay -- update
+# !!! both together.
 #
 # Returns $true for (per Ollama docs):
 #   Radeon RX 7900 XTX/XT/GRE, 7800 XT, 7700 XT, 7600 XT, 7600

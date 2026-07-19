@@ -97,6 +97,16 @@ func strixHaloPlan() infruntime.BackendPlan {
 	return infruntime.ResolveOllamaBackend(infruntime.BackendInputs{GOOS: "linux", StrixHaloAPU: true})
 }
 
+// amdDiscretePlan is the 2-step [rocm, vulkan+igpu] plan a ROCm-capable
+// discrete AMD card resolves to (#40/#68) — same probe shape as Strix
+// Halo Linux, so discrete AMD also self-heals to Vulkan if ROCm is
+// CPU-bound.
+func amdDiscretePlan() infruntime.BackendPlan {
+	return infruntime.ResolveOllamaBackend(infruntime.BackendInputs{
+		GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 7900 XTX",
+	})
+}
+
 func TestResolveBackendWithProbe_SingleStepNoProbe(t *testing.T) {
 	// NVIDIA: single-step plan -> returns preferred without touching the
 	// engine or the network.
@@ -177,5 +187,36 @@ func TestResolveBackendWithProbe_RestartError_KeepsPreferred(t *testing.T) {
 	got := resolveBackendWithProbe(context.Background(), sw, strixHaloPlan(), f.srv.URL, &http.Client{}, discardLogger())
 	if got != infruntime.BackendROCm {
 		t.Errorf("backend = %q, want rocm (restart failed -> keep current, don't claim vulkan)", got)
+	}
+}
+
+func TestResolveBackendWithProbe_AMDDiscreteROCmEngages(t *testing.T) {
+	f := newFakeOllama([]string{"qwen3:8b"}, 800) // size_vram>0 => GPU
+	defer f.close()
+	sw := &fakeSwitcher{}
+	got := resolveBackendWithProbe(context.Background(), sw, amdDiscretePlan(), f.srv.URL, &http.Client{}, discardLogger())
+	if got != infruntime.BackendROCm {
+		t.Errorf("backend = %q, want rocm (discrete AMD engaged ROCm on first step)", got)
+	}
+	if sw.starts != 0 {
+		t.Errorf("no fallback expected; starts=%d", sw.starts)
+	}
+}
+
+func TestResolveBackendWithProbe_AMDDiscreteROCmCPUBound_FallsBackToVulkan(t *testing.T) {
+	f := newFakeOllama([]string{"qwen3:8b"}, 0) // ROCm load is CPU-bound
+	defer f.close()
+	sw := &fakeSwitcher{}
+	sw.onRestart = func() { f.setVRAM(900) } // Vulkan engages the GPU after restart
+	got := resolveBackendWithProbe(context.Background(), sw, amdDiscretePlan(), f.srv.URL, &http.Client{}, discardLogger())
+	if got != infruntime.BackendVulkan {
+		t.Errorf("backend = %q, want vulkan (fell back after CPU-bound ROCm)", got)
+	}
+	if sw.stops != 1 || sw.starts != 1 {
+		t.Errorf("expected exactly one fallback restart: stops=%d starts=%d", sw.stops, sw.starts)
+	}
+	if len(sw.setEnvs) != 1 || len(sw.setEnvs[0]) != 2 ||
+		sw.setEnvs[0][0] != "OLLAMA_VULKAN=1" || sw.setEnvs[0][1] != "OLLAMA_IGPU_ENABLE=1" {
+		t.Errorf("expected SetBackendEnv([OLLAMA_VULKAN=1 OLLAMA_IGPU_ENABLE=1]); got %v", sw.setEnvs)
 	}
 }

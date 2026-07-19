@@ -112,12 +112,18 @@ automatically and recovers.
 
 ### A model won't load on an integrated GPU
 
-Recent Ollama versions disable integrated GPUs (AMD Strix Halo / Radeon, Intel
-iGPU) by default and silently fall back to CPU. They need
-`OLLAMA_IGPU_ENABLE=1`. The Windows installer sets this for known iGPUs; on
-other systems, set the environment variable for the Ollama service and restart
-it. Also confirm the model fits — see the RAM/VRAM columns in the
-[model catalog](/reference/model-catalog/).
+Recent Ollama versions disable integrated GPUs (AMD Radeon iGPUs, Intel iGPU)
+by default and silently fall back to CPU unless `OLLAMA_IGPU_ENABLE=1` is set.
+Waired now recognises integrated AMD GPUs (Radeon 780M/760M and similar) and
+Intel iGPUs and starts the engine on the Vulkan backend with that flag set
+**automatically** — no manual step is normally needed. `waired doctor` shows the
+selected backend. On Linux a mobile-APU iGPU is invisible to the profiler
+without `rocm-smi`; Waired still enables the Vulkan path from the CPU model.
+Discrete AMD cards use ROCm where Ollama supports them (bundled on Linux, an
+installer overlay on Windows) and fall back to Vulkan if ROCm does not engage.
+If you run your own Ollama outside Waired's control, set `OLLAMA_IGPU_ENABLE=1`
+yourself and restart it. Also confirm the model fits — see the RAM/VRAM columns
+in the [model catalog](/reference/model-catalog/).
 
 ### "This machine can only run a very small model" — should I enable it?
 
