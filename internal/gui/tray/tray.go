@@ -90,6 +90,7 @@ type tray struct {
 	// backend — see issue #281.)
 	miHeader       *systray.MenuItem
 	miEmail        *systray.MenuItem
+	miStatus       *systray.MenuItem // renders MenuModel.StatusMsg (daemon-down hint / login code / error); hidden when empty (waired#808)
 	miUpdate       *systray.MenuItem // "⚠ Update available — install vX"; hidden when current (#293)
 	miUpdateNotify *systray.MenuItem // "✓ Notify me about updates"; under the banner, hidden when current (#294)
 	miToggle       *systray.MenuItem
@@ -222,6 +223,15 @@ type tray struct {
 	mu   sync.Mutex
 	last MenuModel
 
+	// Model-switch grace state (mu-protected, waired#808). lastOnline is
+	// the most recent model rendered while the daemon was reachable;
+	// switchingUntil, when in the future, marks the window during which an
+	// unreachable daemon is shown as "Switching model…" (keeping the last
+	// online menu) instead of the red agent-down state — covering the
+	// supervised restart a restart-fallback model switch triggers.
+	lastOnline     MenuModel
+	switchingUntil time.Time
+
 	// Observability poll state (mu-protected). recentFallbacks is the
 	// rolling buffer the projection's RecentFallbackWindow filters at
 	// render time. obsCursor is the next_since returned by the previous
@@ -262,6 +272,14 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miHeader.Disable()
 		t.miEmail = systray.AddMenuItem("", "")
 		t.miEmail.Disable()
+		// Status / hint line (waired#808): renders MenuModel.StatusMsg —
+		// the daemon-down "Start-Service…" hint, the login user-code, or an
+		// error reason. Hidden by default so the initial (false,false)
+		// visibility diff is a no-op and a healthy menu never shows a blank
+		// row.
+		t.miStatus = systray.AddMenuItem("", "")
+		t.miStatus.Disable()
+		t.miStatus.Hide()
 		// Manual-update banner (#293). Prominent near the top, like
 		// Tailscale's "Update available". Hidden by default — the initial
 		// (false,false) visibility diff is a no-op, so an up-to-date host
@@ -287,7 +305,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miCatalog.Hide()
 		t.miCatalogEntries = make([]*systray.MenuItem, MaxCatalogEntries)
 		for i := 0; i < MaxCatalogEntries; i++ {
-			t.miCatalogEntries[i] = t.miCatalog.AddSubMenuItem("", "Select this model (agent will restart)")
+			t.miCatalogEntries[i] = t.miCatalog.AddSubMenuItem("", "Switch the active inference model")
 			t.miCatalogEntries[i].Hide()
 		}
 
@@ -512,11 +530,34 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	if modelID == "" || disabled {
 		return
 	}
-	if _, err := t.cli.SetPreferredModel(ctx, modelID); err != nil {
+	resp, err := t.cli.SetPreferredModel(ctx, modelID)
+	if err != nil {
 		ShowError(fmt.Sprintf("Switch model failed: %v", err))
 		return
 	}
+	t.onModelSwitchAccepted(resp)
 	go t.pollOnce(ctx)
+}
+
+// onModelSwitchAccepted gives the user feedback for an accepted model
+// switch and, when the daemon reports it will restart (the restart
+// fallback — an in-process swap per waired#812 does not), arms the
+// grace window so the imminent daemon-down poll renders as "Switching
+// model…" instead of the red agent-down state (waired#808).
+func (t *tray) onModelSwitchAccepted(resp *management.PreferredModelResponse) {
+	if resp != nil && resp.WillRestart {
+		notify("Switching model — the agent will restart briefly.", notification.Info)
+		t.armSwitching()
+		return
+	}
+	notify("Model switched.", notification.Info)
+}
+
+// armSwitching opens the ~45s model-switch grace window (waired#808).
+func (t *tray) armSwitching() {
+	t.mu.Lock()
+	t.switchingUntil = time.Now().Add(45 * time.Second)
+	t.mu.Unlock()
 }
 
 // dispatchWorkerModeClicks handles clicks on the auto / local-only /
@@ -1363,11 +1404,12 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 		go t.pollOnce(ctx)
 		return
 	}
-	if _, err := t.cli.SetPreferredModel(ctx, rec.ToModelID); err != nil {
+	resp, err := t.cli.SetPreferredModel(ctx, rec.ToModelID)
+	if err != nil {
 		ShowError(fmt.Sprintf("Switch model failed: %v", err))
 		return
 	}
-	notify("Switching to "+rec.ToModelID+" (the agent will restart).", notification.Info)
+	t.onModelSwitchAccepted(resp)
 	go t.pollOnce(ctx)
 }
 
@@ -1404,8 +1446,16 @@ func (t *tray) pollOnce(ctx context.Context) {
 	st, statusErr := t.cli.Status(pollCtx)
 	snap := Snapshot{}
 	if statusErr != nil {
-		snap.Health = HealthOffline
-		t.apply(Update(snap))
+		// Unreachable daemon. During the model-switch grace window this is
+		// the expected supervised restart, so keep the last online menu and
+		// show "Switching model…" rather than the red agent-down state
+		// (waired#808). Once the window lapses (a genuinely failed restart)
+		// offlineModel falls back to the daemon-down model.
+		t.mu.Lock()
+		switching := time.Now().Before(t.switchingUntil)
+		lastOnline := t.lastOnline
+		t.mu.Unlock()
+		t.apply(offlineModel(lastOnline, switching))
 		return
 	}
 	snap.Health = HealthOnline
@@ -1466,7 +1516,15 @@ func (t *tray) pollOnce(ctx context.Context) {
 	// Manual-update check (#293): best-effort, 404-tolerant like the others.
 	t.pollUpdate(pollCtx, &snap)
 	snap.Now = time.Now()
-	t.apply(Update(snap))
+	m := Update(snap)
+	// The daemon is reachable again: remember this model for the switch
+	// grace window and close any open window so a later genuine crash is
+	// not masked as "Switching model…" (waired#808).
+	t.mu.Lock()
+	t.lastOnline = m
+	t.switchingUntil = time.Time{}
+	t.mu.Unlock()
+	t.apply(m)
 }
 
 // pollObservability fans out the two Phase 9 GETs, updates the cursor
@@ -1642,6 +1700,11 @@ func (t *tray) apply(m MenuModel) {
 	setTitleIfChanged(t.miHeader, prev.HeaderTitle, m.HeaderTitle)
 	setVisibleIfChanged(t.miEmail, prev.AccountEmail != "", m.AccountEmail != "")
 	setTitleIfChanged(t.miEmail, prev.AccountEmail, m.AccountEmail)
+	// Status/hint line (waired#808): the daemon-down "Start-Service…" hint,
+	// the login user-code, or an error reason. Previously computed into
+	// MenuModel.StatusMsg but never rendered.
+	setVisibleIfChanged(t.miStatus, prev.StatusMsg != "", m.StatusMsg != "")
+	setTitleIfChanged(t.miStatus, prev.StatusMsg, m.StatusMsg)
 
 	// Update banner (#293): visibility + title track ShowUpdate / UpdateLabel.
 	setVisibleIfChanged(t.miUpdate, prev.ShowUpdate, m.ShowUpdate)
@@ -1734,9 +1797,14 @@ func (t *tray) apply(m MenuModel) {
 	// "This device" group is shown only when enrolled (i.e. we have a name or IP).
 	hasDevice := m.DeviceName != "" || m.OverlayIP != ""
 	prevHasDevice := prev.DeviceName != "" || prev.OverlayIP != ""
-	for _, mi := range []*systray.MenuItem{t.miDeviceLabel, t.miDeviceName, t.miOverlayIP, t.miNetwork, t.miPeers} {
+	for _, mi := range []*systray.MenuItem{t.miDeviceLabel, t.miDeviceName, t.miOverlayIP, t.miNetwork} {
 		setVisibleIfChanged(mi, prevHasDevice, hasDevice)
 	}
+	// Peers row (waired#808): gate on peer presence, not just enrollment.
+	// Sharing hasDevice's visibility left a blank "Peers" chevron row in
+	// the steady peerless state (miPeers is allocated with an empty title,
+	// and the first-paint "Peers: 0" == "Peers: 0" diff is a no-op).
+	setVisibleIfChanged(t.miPeers, peersRowVisible(prev), peersRowVisible(m))
 	setTitleIfChanged(t.miDeviceName, prev.DeviceName, "  "+m.DeviceName)
 	if m.OverlayIP != "" {
 		setTitleIfChanged(t.miOverlayIP, "  "+prev.OverlayIP, "  "+m.OverlayIP)
