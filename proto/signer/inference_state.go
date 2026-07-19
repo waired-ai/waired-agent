@@ -122,6 +122,33 @@ type InferenceState struct {
 	PublicShare    bool `json:"public_share,omitempty"`
 	PublicCapacity int  `json:"public_capacity,omitempty"`
 
+	// DesiredEngine / DesiredModelID / DesiredBenchmarkGen are the
+	// CP-injected declarative onboarding targets (waired#835 §6) the
+	// NAVI setup flow drives: which engine the agent should install and
+	// run (InferenceTypeOllama / InferenceTypeVLLM), which catalog model
+	// it should pull and activate, and a generation counter whose bump
+	// requests a (re-)benchmark. They ride the signed map on the
+	// device's OWN Self entry only, are injected at map-assembly time
+	// (effectiveInferenceState), and the agent never sets them on its
+	// own push.
+	//
+	// DesiredModelID is a catalog ID only — URLs, filesystem paths, and
+	// commands are unrepresentable by contract, which is what keeps the
+	// desired-state channel free of RCE-shaped payloads. Empty string /
+	// 0 mean "no instruction"; `omitempty` keeps the common case off
+	// the wire so signed maps stay byte-identical for older agents.
+	// The CP only emits non-zero values to pollers that declared
+	// CapabilityOnboardingV1 — the same fleet-upgrade caveat as
+	// Priority applies.
+	//
+	// DesiredBenchmarkGen is declarative and idempotent: the agent
+	// persists the last generation it completed and re-runs the
+	// benchmark whenever the map's value is greater; re-bumping is
+	// always safe.
+	DesiredEngine       string `json:"desired_engine,omitempty"`
+	DesiredModelID      string `json:"desired_model_id,omitempty"`
+	DesiredBenchmarkGen int    `json:"desired_benchmark_gen,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page
