@@ -16,13 +16,22 @@ import (
 //
 // Only runs when the new store does not exist yet, so an already
 // migrated (or fresh) install is a no-op.
-func migrateLegacyOllamaModels(logger *slog.Logger, modelsDir string) {
+func migrateLegacyOllamaModels(logger *slog.Logger, modelsDir, home string) {
 	if _, err := os.Stat(modelsDir); err == nil {
 		return // new store already exists — never overwrite
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return
+	if home == "" {
+		// Resolve the OS home when the caller injects none. Production passes
+		// "" here, so runtime behaviour is identical to the prior direct
+		// os.UserHomeDir() call; tests inject a temp dir instead. The home is
+		// a parameter (not resolved unconditionally) because os.UserHomeDir()
+		// reads %USERPROFILE% on Windows, not $HOME — so a test that only set
+		// $HOME could never redirect it, and read the real profile (#82).
+		h, err := os.UserHomeDir()
+		if err != nil || h == "" {
+			return
+		}
+		home = h
 	}
 	legacy := filepath.Join(home, ".ollama", "models")
 	fi, err := os.Stat(legacy)
