@@ -297,6 +297,8 @@ if [ "$TIER" -le 2 ]; then
       source "$ROOT/scripts/dev/lib/installtest-integration.sh"
       assert_integration "$GUEST"
     fi
+    # Last: it toggles pause/resume, so keep it clear of the asserts above.
+    assert_mgmt_socket "$GUEST"
   fi
 else
   # Tier 3: two VMs, full installer + enrol on each, then overlay ping.

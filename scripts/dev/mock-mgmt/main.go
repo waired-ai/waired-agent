@@ -25,6 +25,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -57,6 +58,8 @@ type mockServer struct {
 func main() {
 	listen := flag.String("listen", "127.0.0.1:9476",
 		"address to bind (default matches management.DefaultListen)")
+	socket := flag.String("socket", "",
+		"also serve the same mux on this unix-domain socket path; export WAIRED_MGMT_SOCKET=<path> so the tray/CLI send their writes here (waired#838)")
 	initial := flag.String("state", "connected",
 		"initial state: connected | disconnected | paused | error")
 	flag.Parse()
@@ -74,6 +77,27 @@ func main() {
 	mux.HandleFunc("/waired/v1/integration/claude", srv.handleClaudeIntegration)
 	mux.HandleFunc("/waired/v1/integration/claude/route", srv.handleClaudeRouting)
 	mux.HandleFunc("/_mock/state", srv.handleSetState)
+
+	// Since waired#838 the tray and CLI send MUTATING requests over a local
+	// IPC socket rather than the loopback TCP port, so a TCP-only mock no
+	// longer sees pause/resume/enable/disable. Serving the same mux on a
+	// unix socket keeps those paths exercised; point clients at it with
+	// WAIRED_MGMT_SOCKET=<path>.
+	if *socket != "" {
+		_ = os.Remove(*socket)
+		ln, err := net.Listen("unix", *socket)
+		if err != nil {
+			log.Fatalf("mock-mgmt: listen unix %s: %v", *socket, err)
+		}
+		if err := os.Chmod(*socket, 0o666); err != nil {
+			log.Fatalf("mock-mgmt: chmod %s: %v", *socket, err)
+		}
+		fmt.Fprintf(os.Stderr, "mock-mgmt also serving writes on unix %s (export WAIRED_MGMT_SOCKET=%s)\n", *socket, *socket)
+		go func() {
+			sockSrv := &http.Server{Handler: mux, ReadHeaderTimeout: 2 * time.Second}
+			log.Fatal(sockSrv.Serve(ln))
+		}()
+	}
 
 	httpSrv := &http.Server{
 		Addr:              *listen,

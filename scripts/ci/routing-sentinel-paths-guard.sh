@@ -61,6 +61,7 @@ ALLOW=(
   internal/hardware              # hardware profiling; shared, own tests
   internal/inferencemesh         # mesh routing; shared, own tests
   internal/management            # mgmt server (event-ring endpoint); own tests + smoke-control
+  internal/management/ipcclient  # mgmt write-socket dialer (waired#838, dep of the e2e harness); loopback IPC only, no routing surface
   internal/management/observabilityclient
   internal/observability         # event-ring types; own tests
   internal/platform/elevation    # elevation predicate + per-OS elevation-hint wording (dep of internal/runtime since waired#752); no routing surface

@@ -34,6 +34,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
+	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/platform/browser"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
@@ -1327,10 +1328,30 @@ func httpGet(url string) ([]byte, error) {
 	return body, nil
 }
 
-func httpPost(url string, body []byte) ([]byte, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+// mgmtPingPath is the one mutating-verb management route that stays on the
+// loopback TCP port: POST /waired/v1/ping is a liveness/diagnostic probe,
+// not a state change, and the daemon's writeGuard exempts it too
+// (internal/management/socket.go).
+const mgmtPingPath = "/waired/v1/ping"
+
+// Management writes travel over the local IPC socket (unix socket on
+// Linux/macOS, named pipe on Windows) since waired#838: browsers and
+// network peers cannot open it, so a cross-site write is structurally
+// impossible rather than merely header-checked. --mgmt still governs
+// reads; $WAIRED_MGMT_SOCKET overrides the write endpoint. Both are vars
+// so tests can redirect writes at an httptest TCP server.
+var (
+	mgmtWriteBase   = ipcclient.BaseURL
+	mgmtWriteClient = func(timeout time.Duration) *http.Client { return ipcclient.NewHTTPClient(timeout) }
+)
+
+// readMgmtResponse drains a management response, mapping a transport error
+// to wording that names the right endpoint for the transport used.
+func readMgmtResponse(resp *http.Response, err error, viaSocket bool) ([]byte, error) {
 	if err != nil {
+		if viaSocket {
+			return nil, ipcclient.WrapDialError(err)
+		}
 		return nil, wrapDaemonDialError(err)
 	}
 	defer resp.Body.Close()
@@ -1341,22 +1362,42 @@ func httpPost(url string, body []byte) ([]byte, error) {
 	return out, nil
 }
 
-func httpDelete(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
+// mgmtWriteRoute decides where a management write goes. Production sends it
+// over the local IPC socket (waired#838). Two cases stay on the loopback TCP
+// port: the /ping liveness probe, which the daemon's writeGuard also exempts,
+// and tests, which clear mgmtWriteBase so they can address httptest servers
+// directly (the socket transport has its own coverage).
+func mgmtWriteRoute(rawURL string, timeout time.Duration) (target string, client *http.Client, viaSocket bool, err error) {
+	u, perr := url.Parse(rawURL)
+	if perr != nil {
+		return "", nil, false, perr
+	}
+	if mgmtWriteBase == "" || u.Path == mgmtPingPath {
+		return rawURL, &http.Client{Timeout: timeout}, false, nil
+	}
+	return mgmtWriteBase + u.RequestURI(), mgmtWriteClient(timeout), true, nil
+}
+
+func httpPost(rawURL string, body []byte) ([]byte, error) {
+	target, client, viaSocket, err := mgmtWriteRoute(rawURL, 10*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Do(req)
+	resp, perr := client.Post(target, "application/json", bytes.NewReader(body))
+	return readMgmtResponse(resp, perr, viaSocket)
+}
+
+func httpDelete(rawURL string) ([]byte, error) {
+	target, client, viaSocket, err := mgmtWriteRoute(rawURL, 10*time.Second)
 	if err != nil {
-		return nil, wrapDaemonDialError(err)
+		return nil, err
 	}
-	defer resp.Body.Close()
-	out, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, out)
+	req, err := http.NewRequest(http.MethodDelete, target, nil)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	resp, derr := client.Do(req)
+	return readMgmtResponse(resp, derr, viaSocket)
 }
 
 func prettyPrint(body []byte) error {

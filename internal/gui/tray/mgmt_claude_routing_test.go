@@ -22,7 +22,7 @@ func TestClient_ClaudeRouting_GET(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	got, err := c.ClaudeRouting(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestClient_SetClaudeRouting_POSTBody(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sub := state.ClaudeRouteWaired
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	got, err := c.SetClaudeRouting(context.Background(), management.ClaudeRoutingRequest{Sub: &sub})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +70,7 @@ func TestClient_ClaudeRouting_UnsupportedYields404Sentinel(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if _, err := c.ClaudeRouting(context.Background()); !errors.Is(err, ErrClaudeRoutingUnsupported) {
 		t.Errorf("GET: expected ErrClaudeRoutingUnsupported, got %v", err)
 	}

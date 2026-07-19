@@ -100,7 +100,7 @@ func TestPollObservability_SuccessfulPoll(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	tr := &tray{cli: NewClient(srv.URL), obsSupported: true}
+	tr := &tray{cli: newTestClient(srv.URL), obsSupported: true}
 	snap := Snapshot{}
 	tr.pollObservability(context.Background(), &snap)
 
@@ -145,7 +145,7 @@ func TestPollObservability_StickyCursorAcrossPolls(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	tr := &tray{cli: NewClient(srv.URL), obsSupported: true}
+	tr := &tray{cli: newTestClient(srv.URL), obsSupported: true}
 
 	// First poll: server returns NextSince=10.
 	tr.pollObservability(context.Background(), &Snapshot{})
@@ -173,7 +173,7 @@ func TestPollObservability_404FlipsObsSupportedOff(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	tr := &tray{cli: NewClient(srv.URL), obsSupported: true}
+	tr := &tray{cli: newTestClient(srv.URL), obsSupported: true}
 
 	tr.pollObservability(context.Background(), &Snapshot{})
 	tr.mu.Lock()

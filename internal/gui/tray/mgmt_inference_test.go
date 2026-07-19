@@ -25,7 +25,7 @@ func TestClient_InferenceStatus(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	got, err := c.InferenceStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestClient_InferenceStatus_404IsUnsupported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	_, err := c.InferenceStatus(context.Background())
 	if !errors.Is(err, ErrInferenceUnsupported) {
 		t.Errorf("expected ErrInferenceUnsupported, got %v", err)
@@ -62,7 +62,7 @@ func TestClient_DisableInference_OK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if err := c.DisableInference(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestClient_EnableInference_OK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if err := c.EnableInference(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestClient_InferenceToggle_404IsUnsupported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if err := c.DisableInference(context.Background()); !errors.Is(err, ErrInferenceUnsupported) {
 		t.Errorf("expected ErrInferenceUnsupported (Disable), got %v", err)
 	}
@@ -111,7 +111,7 @@ func TestClient_StopStartEngine_OK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if err := c.StopEngine(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestClient_EngineControl_404IsUnsupported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if err := c.StopEngine(context.Background()); !errors.Is(err, ErrEngineControlUnsupported) {
 		t.Errorf("expected ErrEngineControlUnsupported (Stop), got %v", err)
 	}

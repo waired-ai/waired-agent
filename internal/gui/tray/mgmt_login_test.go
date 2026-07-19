@@ -26,7 +26,7 @@ func TestClient_LoginStart_OK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	st, err := c.LoginStart(context.Background(), management.LoginStartRequest{ControlURL: "https://cp.example"})
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestClient_LoginStatus_OK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	st, err := c.LoginStatus(context.Background(), "sess-1")
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestClient_Login_404IsUnsupported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if _, err := c.LoginStart(context.Background(), management.LoginStartRequest{}); !errors.Is(err, ErrLoginUnsupported) {
 		t.Errorf("LoginStart: expected ErrLoginUnsupported, got %v", err)
 	}

@@ -22,6 +22,12 @@ RestartSec=5s
 # Same writable data dir as the production unit.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/waired
+# RuntimeDirectory creates /run/waired (owned by User=, mode 0755) for the
+# Local Management API write socket (waired#838), adds it to the writable set
+# under ProtectSystem=strict, and removes it on stop. Without it the socket
+# cannot bind and writes silently fall back to the loopback TCP port.
+RuntimeDirectory=waired
+RuntimeDirectoryMode=0755
 ProtectHome=yes
 # NoNewPrivileges deliberately omitted (default = no): iptables is
 # suid-root on most distros, and NoNewPrivileges=yes would block its

@@ -162,6 +162,43 @@ _it_wait_enrolled() {
   printf '%s' "$out"; return 1
 }
 
+# assert_mgmt_socket verifies the waired#838 write path end to end: mutating
+# requests must travel over the local IPC socket and must NOT be accepted on
+# the loopback TCP port, while reads stay on TCP.
+#
+# This assert is load-bearing because writeGuard fails OPEN when the socket
+# is not bound — without it, a socket that never binds would silently
+# degrade to the old TCP-write behaviour and nobody would notice.
+assert_mgmt_socket() {
+  local guest="$1" code
+  gx "$guest" test -S /run/waired/mgmt.sock \
+    && ok "management write socket present at /run/waired/mgmt.sock" \
+    || bad "management write socket missing at /run/waired/mgmt.sock (RuntimeDirectory / bind failure)"
+
+  # Positive: the CLI drives a mutating verb, which can only reach the
+  # daemon over the socket. Resume restores the pre-assert phase.
+  if gx "$guest" waired pause >/dev/null 2>&1 && gx "$guest" waired resume >/dev/null 2>&1; then
+    ok "waired pause/resume succeed over the local IPC socket"
+  else
+    bad "waired pause/resume failed over the local IPC socket"
+  fi
+
+  # Negative: the same mutating verb must be refused on the TCP port.
+  code=$(gx "$guest" curl -s -o /dev/null -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' \
+    http://127.0.0.1:9476/waired/v1/pause 2>/dev/null || true)
+  case "$code" in
+    2*) bad "TCP :9476 accepted a mutating write (HTTP $code); writeGuard not enforcing (waired#838)" ;;
+    "") bad "TCP :9476 mutating-write probe produced no status code" ;;
+    *)  ok "TCP :9476 refuses mutating writes (HTTP $code)" ;;
+  esac
+
+  # Reads deliberately stay on TCP.
+  gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/status >/dev/null 2>&1 \
+    && ok "TCP :9476 still serves reads" \
+    || bad "TCP :9476 no longer serves reads"
+}
+
 assert_tier2() {
   local guest="$1" v out
   gx "$guest" test -f /var/lib/waired/identity.json \

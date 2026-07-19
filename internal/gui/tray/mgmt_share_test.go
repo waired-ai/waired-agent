@@ -16,7 +16,7 @@ func TestClient_EnableShare_OK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if err := c.EnableShare(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestClient_DisableShare_OK(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if err := c.DisableShare(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestClient_ShareToggle_404IsUnsupported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	if err := c.EnableShare(context.Background()); !errors.Is(err, ErrShareUnsupported) {
 		t.Errorf("expected ErrShareUnsupported (Enable), got %v", err)
 	}
