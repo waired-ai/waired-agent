@@ -48,9 +48,15 @@ func userStateDir() string {
 // socket beside the per-user state dir (same user as the daemon, so 0700
 // is not a cross-user barrier there). AutoDetect keys on euid==0 like
 // osStateDir. macOS has no XDG_RUNTIME_DIR.
-func osMgmtEndpoint(m Mode) string {
+//
+// A non-default stateDir wins over both: /var/run/waired is machine-wide, so
+// two instances would otherwise fight over one socket (waired#81).
+func osMgmtEndpoint(m Mode, stateDir string) string {
 	if v := os.Getenv(MgmtSocketEnvOverride); v != "" {
 		return v
+	}
+	if p := osInstanceMgmtEndpoint(stateDir); p != "" {
+		return p
 	}
 	switch m {
 	case System:

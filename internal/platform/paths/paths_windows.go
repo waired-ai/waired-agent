@@ -52,12 +52,31 @@ func osStateDir(m Mode) string {
 }
 
 // osMgmtEndpoint returns the management write endpoint, a named pipe.
-// There is no unix-socket-style filesystem node on Windows; a single
-// machine runs one daemon instance so a fixed name is fine, and the pipe
-// DACL (see internal/platform/localipc) restricts connect to local
-// principals. m is unused because the pipe namespace is machine-global,
-// not per-user, and $WAIRED_MGMT_SOCKET does not apply on Windows.
-func osMgmtEndpoint(m Mode) string {
+// There is no unix-socket-style filesystem node on Windows; the service
+// install runs one daemon per machine so a fixed name is fine there, and
+// the pipe DACL (see internal/platform/localipc) restricts connect to local
+// principals. m is unused because the pipe namespace is machine-global, not
+// per-user, and $WAIRED_MGMT_SOCKET does not apply on Windows.
+//
+// A non-default stateDir (a dev/test instance) gets its own pipe name, since
+// the namespace being machine-global is exactly what makes two instances
+// collide (waired#81). The name cannot live "inside" the state dir the way a
+// unix socket does, so it carries a short digest of it instead.
+func osMgmtEndpoint(m Mode, stateDir string) string {
 	_ = m
+	if p := osInstanceMgmtEndpoint(stateDir); p != "" {
+		return p
+	}
 	return `\\.\pipe\waired-mgmt`
+}
+
+// osInstanceMgmtEndpoint is the Windows half of InstanceMgmtEndpoint. A pipe
+// name cannot live "inside" the state dir the way a unix socket does, so it
+// carries a short digest of the state dir instead.
+func osInstanceMgmtEndpoint(stateDir string) string {
+	dir := nonDefaultStateDir(stateDir)
+	if dir == "" {
+		return ""
+	}
+	return `\\.\pipe\waired-mgmt-` + stateDirHash(dir)
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // listen binds a unix-domain socket at socketPath. It creates the parent
@@ -23,7 +24,19 @@ func listen(socketPath string) (net.Listener, error) {
 	// A previous unclean exit can leave a stale socket node that would make
 	// bind fail with EADDRINUSE. systemd's RuntimeDirectory clears
 	// /run/waired on stop, but a raw-binary or crashed run may not — so
-	// remove it defensively. A genuine ENOENT is fine.
+	// remove it defensively.
+	//
+	// "Stale" must be proven, not assumed: an unconditional remove lets a
+	// second agent instance steal a RUNNING instance's socket, leaving the
+	// first with a listener no client can ever reach again (waired#81).
+	// A successful dial means someone is accepting there, so refuse instead.
+	// The probe/bind window is a benign TOCTOU: losing it just degrades to
+	// the pre-#81 behaviour, and the daemon fails open either way.
+	if c, derr := net.DialTimeout("unix", socketPath, 250*time.Millisecond); derr == nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("localipc: %s: %w", socketPath, ErrEndpointInUse)
+	}
+	// A genuine ENOENT is fine.
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("localipc: remove stale socket %s: %w", socketPath, err)
 	}
