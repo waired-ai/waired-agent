@@ -17,4 +17,12 @@ const (
 	// emits those fields to a poller that has not declared it, keeping
 	// the signed map byte-identical for older agents.
 	CapabilityPublicShareV1 = "public-share-v1"
+
+	// CapabilityOnboardingV1 declares that this agent understands the
+	// NAVI-onboarding desired-state map fields
+	// (InferenceState.DesiredEngine / DesiredModelID /
+	// DesiredBenchmarkGen, waired#835 §6/§14). The CP never emits
+	// those fields to a poller that has not declared it, keeping the
+	// signed map byte-identical for older agents.
+	CapabilityOnboardingV1 = "onboarding-v1"
 )
