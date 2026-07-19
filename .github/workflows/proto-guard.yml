@@ -1,0 +1,35 @@
+# Enforces the additive-only proto contract on PRs (decisions.md
+# 20260719): published proto versions are immutable and consumers rely
+# on unset fields staying byte-absent from canonical JSON, so exported
+# API that shipped in a proto/v* tag may never be removed or altered,
+# and fields added to existing structs must be omitempty (or json:"-").
+#
+# GitHub-hosted runner on purpose (like dco/gitleaks): a read-only
+# static check that is safe to run on fork PRs ahead of maintainer
+# approval of the heavier self-hosted CI.
+name: proto-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths: ["proto/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  additive:
+    name: proto additive-only guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: compare against latest proto tag
+        run: bash scripts/ci/proto-additive-guard.sh

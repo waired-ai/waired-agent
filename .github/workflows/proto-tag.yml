@@ -1,0 +1,75 @@
+# Auto-tags the shared proto module (decisions.md 20260719): every main
+# push touching proto/** cuts the next proto/vX.Y.(Z+1) patch tag, so
+# concurrent sessions never coordinate on tag numbers and a merged
+# contract is publishable the moment it lands. Minor/major milestone
+# bumps stay deliberate via workflow_dispatch.
+#
+# Dormant below the v0.2.0 floor: the Public Share contract freeze
+# (waired#816) requires a human to cut proto/v0.2.0 exactly once;
+# auto-tagging takes over from v0.2.1.
+name: proto-tag
+
+on:
+  push:
+    branches: [main]
+    paths: ["proto/**"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "version component to bump"
+        required: true
+        default: patch
+        type: choice
+        options: [patch, minor, major]
+
+# One tagging run at a time, never cancelled: back-to-back merges queue
+# up and each computes its number AFTER the previous tag exists, which
+# is what makes merge-order allocation race-free.
+concurrency:
+  group: proto-tag
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: cut next proto tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: compute and push next proto tag
+        env:
+          BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          set -euo pipefail
+          latest=$(git tag -l 'proto/v*' --sort=-v:refname | head -1)
+          if [ -z "${latest}" ]; then
+            echo "no proto/v* tag exists yet; cut the first version manually"
+            exit 0
+          fi
+          ver=${latest#proto/v}
+          floor="0.2.0"
+          if [ "$(printf '%s\n%s\n' "${floor}" "${ver}" | sort -V | head -1)" != "${floor}" ]; then
+            echo "latest ${latest} is below v${floor}; dormant until proto/v${floor} is cut manually (waired#816 freeze)"
+            exit 0
+          fi
+          if [ -n "$(git tag -l 'proto/v*' --points-at "${GITHUB_SHA}")" ]; then
+            echo "HEAD already carries a proto tag; nothing to do"
+            exit 0
+          fi
+          IFS=. read -r major minor patch <<<"${ver}"
+          case "${BUMP}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+            *) echo "unknown bump: ${BUMP}"; exit 1 ;;
+          esac
+          next="proto/v${major}.${minor}.${patch}"
+          git tag "${next}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${next}"
+          echo "tagged ${next} at ${GITHUB_SHA}"

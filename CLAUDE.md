@@ -36,6 +36,28 @@ gitleaks secret scan (config: `.gitleaks.toml`).
 * Protocol changes are public-first: change `proto/` here → tag
   `proto/vX.Y.Z` → bump in the CP repo. Never break verify/sign
   compatibility within a published version.
+* **Concurrent proto development** (decisions.md 20260719; CI-enforced):
+  - While iterating, never depend on unmerged proto. This repo builds
+    against the in-tree `replace`; the CP repo uses a temporary go.mod
+    `replace`, or a pseudo-version of a **merged main commit** (branch
+    hashes are forbidden — rebases erase them). Normalizing to the next
+    tag is a follow-up one-line chore, not a blocker.
+  - proto changes ship as their **own small PR** (not bundled into a
+    feature PR), and only after the tracking issue carries a settled
+    wire-contract field table (additions / types / json tags /
+    capability gating).
+  - **Additive-only** between published versions (`proto-guard` CI job
+    compares against the latest tag): never remove / retype / retag
+    published exported API or change const values; fields added to
+    published structs must be `omitempty` (or `json:"-"`). Pin the
+    byte-identity with a canonical-JSON test in the same PR.
+  - Tags are **cut automatically**: every main merge touching `proto/**`
+    gets the next patch tag (`proto-tag.yml`; merge-order allocation, no
+    coordination). Minor/major milestone bumps via workflow_dispatch.
+    Dormant until the manually-cut `proto/v0.2.0` milestone.
+  - New capability-gated map fields use a capability string constant in
+    `proto/signer` (e.g. `CapabilityPublicShareV1`) so unfinished
+    contract surface stays inert until an agent declares it.
 
 ## Cross-OS parity (linux / windows / darwin)
 
