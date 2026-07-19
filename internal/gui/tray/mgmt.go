@@ -14,6 +14,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/management/observabilityclient"
 	"github.com/waired-ai/waired-agent/internal/observability"
 )
@@ -25,10 +26,23 @@ import (
 type Client struct {
 	base string
 	hc   *http.Client
+	// wc carries mutating requests over the local IPC socket / named pipe
+	// instead of the loopback TCP port (waired#838). Reads stay on hc:
+	// they are already covered by the #836 browser guard, and the shared
+	// observabilityclient is TCP-bound.
+	wc *http.Client
+	// writeBase is the authority writes are addressed to. In production it
+	// is ipcclient.BaseURL, a dummy host the socket transport ignores;
+	// tests point it (with wc) at an httptest server to exercise endpoint
+	// semantics without a real socket.
+	writeBase string
 }
 
 // NewClient builds a Client targeting baseURL (default
-// http://127.0.0.1:9476). Trailing slashes are tolerated.
+// http://127.0.0.1:9476) for reads. Trailing slashes are tolerated.
+// Writes go to the local management socket, whose endpoint ipcclient
+// resolves on its own (honouring $WAIRED_MGMT_SOCKET), so no state dir
+// needs threading here.
 func NewClient(baseURL string) *Client {
 	if baseURL == "" {
 		baseURL = "http://" + management.DefaultListen
@@ -38,6 +52,8 @@ func NewClient(baseURL string) *Client {
 		hc: &http.Client{
 			Timeout: 3 * time.Second,
 		},
+		wc:        ipcclient.NewHTTPClient(3 * time.Second),
+		writeBase: ipcclient.BaseURL,
 	}
 }
 
@@ -514,7 +530,9 @@ func (c *Client) UpdateSettings(ctx context.Context, notify bool) (*management.U
 // out (when non-nil). 2xx is success; 4xx/5xx return an *httpError that
 // callers can match for sentinel translation.
 func (c *Client) postJSON(ctx context.Context, path string, body, out any) error {
-	u, err := url.Parse(c.base + path)
+	// Writes go over the local IPC socket (waired#838), addressed to a
+	// dummy authority the transport ignores.
+	u, err := url.Parse(c.writeBase + path)
 	if err != nil {
 		return err
 	}
@@ -527,9 +545,9 @@ func (c *Client) postJSON(ctx context.Context, path string, body, out any) error
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.hc.Do(req)
+	resp, err := c.wc.Do(req)
 	if err != nil {
-		return err
+		return ipcclient.WrapDialError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -550,7 +568,8 @@ func (c *Client) postJSON(ctx context.Context, path string, body, out any) error
 // sentinel on 404, so different endpoints can carry different "this
 // daemon doesn't support that" sentinels.
 func (c *Client) postWithUnsupported(ctx context.Context, path string, unsupported error) error {
-	u, err := url.Parse(c.base + path)
+	// Writes go over the local IPC socket (waired#838).
+	u, err := url.Parse(c.writeBase + path)
 	if err != nil {
 		return err
 	}
@@ -561,9 +580,9 @@ func (c *Client) postWithUnsupported(ctx context.Context, path string, unsupport
 	// The browser-hardened management API (waired#836) requires a JSON
 	// Content-Type on writes even when the body is empty.
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.hc.Do(req)
+	resp, err := c.wc.Do(req)
 	if err != nil {
-		return err
+		return ipcclient.WrapDialError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
@@ -606,7 +625,8 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 }
 
 func (c *Client) post(ctx context.Context, path string) error {
-	u, err := url.Parse(c.base + path)
+	// Writes go over the local IPC socket (waired#838).
+	u, err := url.Parse(c.writeBase + path)
 	if err != nil {
 		return err
 	}
@@ -617,9 +637,9 @@ func (c *Client) post(ctx context.Context, path string) error {
 	// The browser-hardened management API (waired#836) requires a JSON
 	// Content-Type on writes even when the body is empty.
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.hc.Do(req)
+	resp, err := c.wc.Do(req)
 	if err != nil {
-		return err
+		return ipcclient.WrapDialError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {

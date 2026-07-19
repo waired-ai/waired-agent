@@ -47,6 +47,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -71,6 +72,8 @@ var (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:9476", "listen address")
+	socket := flag.String("socket", "",
+		"also serve the same mux on this unix-domain socket path; export WAIRED_MGMT_SOCKET=<path> so the tray sends its writes here (waired#838)")
 	scenarioName := flag.String("scenario", "default",
 		"scenario: default (Phase 8.5 timeline) or idle (no fallbacks)")
 	flag.Parse()
@@ -114,6 +117,29 @@ func main() {
 			fmt.Fprintf(os.Stderr, "  t=%-9s %s\n", e.at.Truncate(time.Second), e.descr)
 		}
 	}
+	// Since waired#838 the tray sends MUTATING requests (pause/resume/...)
+	// over a local IPC socket rather than the loopback TCP port, so serve
+	// the same mux there too when asked; point the tray at it with
+	// WAIRED_MGMT_SOCKET=<path>.
+	if *socket != "" {
+		_ = os.Remove(*socket)
+		ln, lerr := net.Listen("unix", *socket)
+		if lerr != nil {
+			fmt.Fprintln(os.Stderr, lerr)
+			os.Exit(1)
+		}
+		if cerr := os.Chmod(*socket, 0o666); cerr != nil {
+			fmt.Fprintln(os.Stderr, cerr)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "mock-mgmt also serving writes on unix %s (export WAIRED_MGMT_SOCKET=%s)\n", *socket, *socket)
+		go func() {
+			if serr := http.Serve(ln, mux); serr != nil {
+				fmt.Fprintln(os.Stderr, serr)
+			}
+		}()
+	}
+
 	if err := http.ListenAndServe(*addr, mux); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

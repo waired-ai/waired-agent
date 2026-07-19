@@ -127,8 +127,8 @@ func run(ctx context.Context, args []string) error {
 		"enforce Host/Origin allow-listing + Content-Type: application/json on the Local Management API (defends against DNS-rebinding / cross-site requests from a web page; disable only for local debugging)")
 	mgmtSocket := fs.String("mgmt-socket", "",
 		"override the local IPC write endpoint (unix-domain socket path on Linux/macOS, named pipe on Windows); empty auto-derives from --state-dir. Mutating requests use this endpoint; the loopback TCP port serves reads (waired#838)")
-	mgmtSocketWritesOnly := fs.Bool("mgmt-socket-writes-only", false,
-		"refuse mutating requests on the loopback TCP port, requiring the local IPC socket instead (waired#838); enabled once the CLI and tray have been migrated to the socket")
+	mgmtSocketWritesOnly := fs.Bool("mgmt-socket-writes-only", true,
+		"refuse mutating requests on the loopback TCP port, requiring the local IPC socket instead (waired#838). The CLI and tray send writes over the socket; disable only for local debugging. Automatically inert while the socket is not bound, so a bind failure never blocks control of the agent")
 	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
 		"control plane base URL used for daemon-driven login (POST /waired/v1/login/start); a login request may override it")
 	loginListen := fs.String("login-listen", "127.0.0.1:0",

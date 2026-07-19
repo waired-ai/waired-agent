@@ -35,7 +35,7 @@ func TestClient_ObservabilityState(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	got, err := c.ObservabilityState(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestClient_ObservabilityState_404IsUnsupported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	_, err := c.ObservabilityState(context.Background())
 	if !errors.Is(err, ErrObservabilityUnsupported) {
 		t.Errorf("got %v, want ErrObservabilityUnsupported", err)
@@ -72,7 +72,7 @@ func TestClient_ObservabilityEvents(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	resp, err := c.ObservabilityEvents(
 		context.Background(),
 		3,
@@ -98,7 +98,7 @@ func TestClient_ObservabilityEvents_404IsUnsupported(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := NewClient(srv.URL)
+	c := newTestClient(srv.URL)
 	_, err := c.ObservabilityEvents(context.Background(), 0, nil, 0)
 	if !errors.Is(err, ErrObservabilityUnsupported) {
 		t.Errorf("got %v, want ErrObservabilityUnsupported", err)

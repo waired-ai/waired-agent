@@ -17,8 +17,16 @@ import (
 // binary so logout's securestore.Remove never deletes the developer's real
 // Keychain items when `go test` runs on darwin. On Linux/CI the keychain
 // stub already returns ErrUnsupported, but this keeps darwin dev runs safe.
+//
+// It also clears mgmtWriteBase for the whole binary: since waired#838
+// management writes travel over a local IPC socket, which httptest cannot
+// serve, so these tests address their httptest TCP servers verbatim. They
+// cover command logic and endpoint semantics, both transport-independent;
+// the socket routing itself is asserted in main_ipcwrite_unix_test.go and
+// the transport in internal/management/ipcclient.
 func TestMain(m *testing.M) {
 	restore := securestore.SwapStoreForTest(securestore.NewMemStore())
+	mgmtWriteBase = ""
 	code := m.Run()
 	restore()
 	os.Exit(code)
