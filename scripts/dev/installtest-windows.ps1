@@ -120,10 +120,7 @@ $script:ContractBlocking = @{
     '751' = $true    # waired#751: `waired status` exits 0 in non-elevated contexts (FIXED)
     '754' = $true    # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts (FIXED)
     '755' = $true    # waired#755: the install path surfaces the tray (Start Menu group / autostart) (FIXED)
-    # waired#838's fix IS merged; this entry stays $false only for the first CI
-    # run of #80, so the brand-new Windows pipe asserts are OBSERVED (WARN)
-    # before they gate. Flipped to $true in this same PR once that run is clean.
-    '838' = $false
+    '838' = $true    # waired#838: management writes travel over the local named pipe, not TCP (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -248,9 +245,10 @@ function Assert-Inference {
 # RuntimeDirectory.) The pipe DACL is SDDL "SY+BA+IU" — IU excludes network
 # logons, so the pipe is unreachable over SMB.
 #
-# Soft (ItSoft '838') on the first CI run only: the pipe path cannot be
-# exercised outside a real Windows host, so it is observed once as a WARN and
-# then flipped blocking in $ContractBlocking.
+# Written through ItSoft '838' so it shares the contract-assert plumbing. The
+# entry is BLOCKING ($ContractBlocking['838'] = $true): it was staged as a WARN
+# for one observation run (the pipe path cannot be exercised off a real Windows
+# host) and flipped once that run came back clean on all five legs.
 function Assert-MgmtPipe {
     $pipe = 'waired-mgmt'
 
@@ -291,13 +289,17 @@ function Assert-MgmtPipe {
     try {
         $pauseOut  = (& $waired pause  2>&1 | Out-String)
         $resumeOut = (& $waired resume 2>&1 | Out-String)
+        # The CLI pretty-prints the daemon's JSON reply; flatten it so each
+        # assert below stays one readable log line.
+        $pauseLine  = ($pauseOut  -replace '\s+', ' ').Trim()
+        $resumeLine = ($resumeOut -replace '\s+', ' ').Trim()
     } finally {
         $ErrorActionPreference = $prevEap
     }
     $pauseOk = ($pauseOut -match 'pause ok\.') -and ($pauseOut -notmatch 'not running')
-    ItSoft '838' $pauseOk "waired pause reached the daemon over the pipe -- $($pauseOut.Trim())"
+    ItSoft '838' $pauseOk "waired pause reached the daemon over the pipe -- $pauseLine"
     $resumeOk = ($resumeOut -match 'resume ok\.') -and ($resumeOut -notmatch 'not running')
-    ItSoft '838' $resumeOk "waired resume reached the daemon over the pipe -- $($resumeOut.Trim())"
+    ItSoft '838' $resumeOk "waired resume reached the daemon over the pipe -- $resumeLine"
 
     # Negative: the same mutating verb must be refused on the TCP port.
     # PS 5.1 has no -SkipHttpErrorCheck, so a non-2xx surfaces as a terminating
