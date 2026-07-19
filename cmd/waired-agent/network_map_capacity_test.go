@@ -46,7 +46,7 @@ func TestStreamingAppliesSelfCapacity(t *testing.T) {
 	defer cancel()
 
 	// streaming returns once frames is closed.
-	streaming(ctx, quietLogger(), rec, nil, nil, nil, applyConcurrency, frames, errs)
+	streaming(ctx, quietLogger(), rec, nil, nil, nil, applyConcurrency, nil, frames, errs)
 
 	select {
 	case a := <-got:

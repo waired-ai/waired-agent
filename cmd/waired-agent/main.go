@@ -1043,6 +1043,27 @@ func run(ctx context.Context, args []string) error {
 			})
 		}()
 
+		// NAVI onboarding desired-state applier + setup-progress
+		// reporter (waired#835 §6/§7). The applier consumes the
+		// desired_* fields the CP folds into our own Self map entry
+		// (we declare onboarding-v1 on the poll); the reporter pushes
+		// typed step progress back over the #860 channel. Hosts that
+		// never ran a NAVI setup see zero extra work and zero pushes.
+		var setupRec *setupReconciler
+		if inferenceSub != nil && inferenceSub.provider != nil {
+			setupRec = newSetupReconciler(inferenceSub.provider, infPushClient, id.DeviceID, mk.Private, logger)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				setupRec.runPush(ctx)
+			}()
+		}
+		applyDesiredSetup := func(st *signer.InferenceState) {
+			if setupRec != nil {
+				setupRec.Apply(ctx, st)
+			}
+		}
+
 		// Construct the overlay-side inference server. Mounts the gateway
 		// HandlerSet built by startInferenceSubsystem behind the peer-auth
 		// chain (wgPeerOnly + verifyPeerSignature + paused/inference
@@ -1165,7 +1186,7 @@ func run(ctx context.Context, args []string) error {
 					inferenceSub.provider.ApplyConcurrency(ctx, parallel)
 				}
 			}
-			runNetworkMapLoop(ctx, logger, id, tokens.Get, rec, meshAgg, peerDir, dispatcher, applyConcurrency, *bypassCPIAM)
+			runNetworkMapLoop(ctx, logger, id, tokens.Get, rec, meshAgg, peerDir, dispatcher, applyConcurrency, applyDesiredSetup, *bypassCPIAM)
 		}()
 		go func() {
 			defer wg.Done()
@@ -1424,7 +1445,7 @@ func newPauseInfra(stateDir string, gatewayPort int, logger *slog.Logger) (*paus
 // When bypassCPIAM is set, the client's HTTP transport injects a GCE
 // identity token into Authorization (so the Cloud Run / IAP IAM gate
 // is happy) and the device access token rides X-Waired-Agent-Bearer.
-func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel, publicCapacity int), bypassCPIAM bool) {
+func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel, publicCapacity int), applyDesiredSetup func(*signer.InferenceState), bypassCPIAM bool) {
 	cli := controlclient.NewWithBearer(id.ControlURL, bearer)
 	if bypassCPIAM {
 		cli.HTTP = bypassCPHTTPClient(ctx, id.ControlURL, logger)
@@ -1439,7 +1460,7 @@ func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Id
 		frames, errs := cli.SubscribeNetworkMap(ctx)
 		streamCtx, streamCancel := context.WithCancel(ctx)
 
-		streaming(streamCtx, logger, rec, meshAgg, peerDir, dispatcher, applyConcurrency, frames, errs)
+		streaming(streamCtx, logger, rec, meshAgg, peerDir, dispatcher, applyConcurrency, applyDesiredSetup, frames, errs)
 		streamCancel()
 
 		if ctx.Err() != nil {
@@ -1464,7 +1485,13 @@ func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Id
 // set inference_max_clients and drives the ollama engine parallelism
 // (restart-on-change) — kept distinct so a default host's benchmark capacity
 // never restarts its engine. See the applyConcurrency closure at the call site.
-func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel, publicCapacity int), frames <-chan *signer.NetworkMap, errs <-chan error) {
+// applyDesiredSetup, when non-nil, receives the Self InferenceState of every
+// frame so the waired#835 desired-state applier can reconcile toward the
+// served desired_engine / desired_model_id / desired_benchmark_gen. It is
+// called with nil states too (the applier's own fast path handles them) and,
+// like everything on this stream, must be idempotent — there is no frame
+// dedup here.
+func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel, publicCapacity int), applyDesiredSetup func(*signer.InferenceState), frames <-chan *signer.NetworkMap, errs <-chan error) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1488,6 +1515,9 @@ func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAg
 			// not yet probed) leaves both untouched.
 			if applyConcurrency != nil && nm.Self.InferenceState != nil {
 				applyConcurrency(nm.Self.InferenceState.Capacity, nm.Self.InferenceState.DesiredParallel, nm.Self.InferenceState.PublicCapacity)
+			}
+			if applyDesiredSetup != nil {
+				applyDesiredSetup(nm.Self.InferenceState)
 			}
 			if dispatcher != nil {
 				if s := nm.ActiveTestScenario; s != nil {
