@@ -21,6 +21,7 @@ package hostsfile
 import (
 	"os"
 	"strings"
+	"sync"
 )
 
 const (
@@ -30,7 +31,15 @@ const (
 
 // Manager edits a single marker-delimited block in the hosts file at path,
 // mapping each host to 127.0.0.1.
+//
+// mu serializes the non-atomic read → render → write in Add/Remove against
+// concurrent goroutines that share this Manager. withHostsLock adds
+// cross-process serialization on unix (flock) but is a no-op on Windows, and
+// flock alone does not guard same-process goroutines — so this in-process mutex
+// is what keeps concurrent Add/Remove from tearing the file or dropping entries
+// on every OS (#83).
 type Manager struct {
+	mu    sync.Mutex
 	path  string
 	hosts []string
 }
@@ -48,6 +57,8 @@ func New(path string, hosts []string) *Manager {
 // then flushes the OS resolver cache (Windows) so the redirect takes effect
 // immediately.
 func (m *Manager) Add() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return withHostsLock(m.path, func() error {
 		existing, err := m.read()
 		if err != nil {
@@ -65,6 +76,8 @@ func (m *Manager) Add() error {
 // flushes the OS resolver cache (Windows). A missing file or absent block is a
 // no-op (and skips the flush, since nothing changed).
 func (m *Manager) Remove() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return withHostsLock(m.path, func() error {
 		existing, err := m.read()
 		if err != nil {
