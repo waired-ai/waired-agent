@@ -319,19 +319,14 @@ func detectOllamaVersion(ctx context.Context, path string) string {
 	if err != nil {
 		return ""
 	}
-	// Output is typically "ollama version is 0.24.0"; keep the last
-	// whitespace-separated token of the first non-empty line.
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if i := strings.LastIndex(line, " "); i >= 0 {
-			return strings.TrimSpace(line[i+1:])
-		}
-		return line
-	}
-	return ""
+	// Output is "ollama version is 0.24.0", possibly preceded by
+	// "Warning: could not connect to a running Ollama instance" when the
+	// server isn't up (exactly the fresh-install case). Parse via the shared
+	// marker-based helper, which skips the Warning line; the old "last token
+	// of the first line" logic returned "instance" there, so a healthy engine
+	// was mis-flagged as below the supported minimum (the "(instance) — below
+	// waired's supported minimum" message).
+	return hardware.ParseEngineVersion("ollama", string(out))
 }
 
 // newPuller delegates to the optional factory or falls back to the

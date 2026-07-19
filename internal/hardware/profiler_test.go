@@ -345,17 +345,22 @@ func TestParseOllamaVersion(t *testing.T) {
 		"ollama version is 0.22.1\n":                   "0.22.1",
 		"ollama version is 0.1.0\nWarning: foo bar\n":  "0.1.0",
 		"Warning: ...\nollama version is 0.99.9-rc1\n": "0.99.9-rc1",
+		// Regression: the exact two-line output `ollama --version` prints when
+		// the server isn't running yet (fresh install). The old last-token
+		// parser returned "instance" from the Warning line and mis-flagged a
+		// healthy 0.31.1 engine as below the supported minimum.
+		"Warning: could not connect to a running Ollama instance\nollama version is 0.31.1\n": "0.31.1",
 	}
 	for in, want := range cases {
-		got := parseEngineVersion("ollama", in)
+		got := ParseEngineVersion("ollama", in)
 		if got != want {
-			t.Errorf("parseEngineVersion(%q) = %q, want %q", in, got, want)
+			t.Errorf("ParseEngineVersion(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
 func TestParseVLLMVersion(t *testing.T) {
-	if got := parseEngineVersion("vllm", "0.6.3.post1\n"); got != "0.6.3.post1" {
+	if got := ParseEngineVersion("vllm", "0.6.3.post1\n"); got != "0.6.3.post1" {
 		t.Errorf("vllm parse = %q, want 0.6.3.post1", got)
 	}
 }
