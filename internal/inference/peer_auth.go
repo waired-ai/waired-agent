@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/proto/signedreq"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // PeerIdentity carries the bits of a NetworkMap peer that the
@@ -28,6 +29,12 @@ type PeerIdentity struct {
 	// place of DeviceID so real device identifiers of other accounts
 	// never land in local logs (spec §8.5).
 	Pseudonym string
+	// Grant carries the netmap PeerGrant for foreign peers present
+	// under a Public Share grant (nil for same-network peers). The
+	// serving-side gate chain branches on it (spec §8.1): a peer with
+	// Role=="consumer" rides the public gates instead of the mesh
+	// shareGate.
+	Grant *signer.PeerGrant
 }
 
 // DisplayName returns the identifier to use for this peer in logs and
@@ -37,6 +44,16 @@ func (p PeerIdentity) DisplayName() string {
 		return p.Pseudonym
 	}
 	return p.DeviceID
+}
+
+// IsPublicConsumer reports whether this peer is a foreign device
+// consuming this agent's inference under a Public Share grant — the
+// request class subject to publicShareGate / publicAdmissionGate
+// rather than the intra-account shareGate. The literals match the
+// documented signer.PeerGrant value sets ("public"; role as seen from
+// Self, so a peer consuming from us is "consumer").
+func (p PeerIdentity) IsPublicConsumer() bool {
+	return p.Grant != nil && p.Grant.Kind == "public" && p.Grant.Role == "consumer"
 }
 
 // PeerLookup resolves a WG-source overlay IP to the peer that owns

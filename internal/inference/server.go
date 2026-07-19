@@ -26,6 +26,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -46,10 +47,12 @@ type Server struct {
 	now         func() time.Time
 	maxBodySize int64
 
-	pausedGate    func(http.Handler) http.Handler
-	inferenceGate func(http.Handler) http.Handler
-	shareGate     func(http.Handler) http.Handler
-	capacityGate  func(http.Handler) http.Handler
+	pausedGate          func(http.Handler) http.Handler
+	inferenceGate       func(http.Handler) http.Handler
+	shareGate           func(http.Handler) http.Handler
+	publicShareGate     func(http.Handler) http.Handler
+	publicAdmissionGate func(http.Handler) http.Handler
+	capacityGate        func(http.Handler) http.Handler
 
 	// Phase 8: the operator-gate closures and inflight counter are
 	// hoisted alongside the gate wrappers so the /healthz endpoint
@@ -58,6 +61,7 @@ type Server struct {
 	isPausedFn      func() bool
 	isShareDeniedFn func() bool
 	inflight        *inflightCounter
+	public          *publicAdmission
 	engineReadyFn   func() (bool, string)
 	recorder        Recorder
 }
@@ -124,6 +128,120 @@ func (s *Server) InflightCount() int {
 		return 0
 	}
 	return int(s.inflight.InFlight())
+}
+
+// publicAdmission is the state behind publicAdmissionGate (public share
+// spec §8.1–8.3): a second in-flight counter for requests from foreign
+// public-grant consumers, the owner-priority latch, and the registry of
+// in-flight public request cancel funcs the kill switch fires.
+//
+// Capacity semantics differ from inflightCounter on purpose: the
+// serving default is strictly bounded, so an UNSET public capacity
+// (publicCap <= 0) falls back to the min(2, capacity−1) headroom rule —
+// and when even that is ≤ 0 (total capacity 1) public admission is
+// fully closed, never unlimited.
+type publicAdmission struct {
+	n          atomic.Int32
+	publicCap  atomic.Int32 // CP-served PublicCapacity; <=0 ⇒ headroom default
+	totalCap   atomic.Int32 // mirror of the total capacity, for the default rule
+	latchUntil atomic.Int64 // unix nanos; owner-priority latch deadline
+
+	mu      sync.Mutex
+	nextID  uint64
+	cancels map[uint64]context.CancelFunc
+}
+
+func newPublicAdmission(publicCap, totalCap int) *publicAdmission {
+	p := &publicAdmission{cancels: map[uint64]context.CancelFunc{}}
+	p.publicCap.Store(int32(max(publicCap, 0)))
+	p.totalCap.Store(int32(max(totalCap, 0)))
+	return p
+}
+
+// effectiveCap resolves the live public admission ceiling:
+// the CP-served PublicCapacity when set, else min(2, totalCapacity−1)
+// (total capacity 0 = "unlimited" still gets the bounded default 2;
+// total capacity 1 leaves no headroom ⇒ 0 = no public admissions).
+func (p *publicAdmission) effectiveCap() int {
+	if pc := int(p.publicCap.Load()); pc > 0 {
+		return pc
+	}
+	total := int(p.totalCap.Load())
+	if total <= 0 {
+		return 2
+	}
+	return min(2, total-1)
+}
+
+func (p *publicAdmission) acquire() bool {
+	capacity := p.effectiveCap()
+	for {
+		cur := p.n.Load()
+		if int(cur) >= capacity {
+			return false
+		}
+		if p.n.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
+func (p *publicAdmission) release() { p.n.Add(-1) }
+
+// latch records an owner-priority event: new public admissions pause
+// until now+d (refreshed on every owner attempt, spec §8.2).
+func (p *publicAdmission) latch(now time.Time, d time.Duration) {
+	p.latchUntil.Store(now.Add(d).UnixNano())
+}
+
+func (p *publicAdmission) latched(now time.Time) bool {
+	return now.UnixNano() < p.latchUntil.Load()
+}
+
+// registerCancel records an in-flight public request's cancel func so
+// the kill switch can terminate it mid-stream.
+func (p *publicAdmission) registerCancel(cancel context.CancelFunc) uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nextID++
+	id := p.nextID
+	p.cancels[id] = cancel
+	return id
+}
+
+func (p *publicAdmission) deregisterCancel(id uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.cancels, id)
+}
+
+// abortAll cancels every in-flight public request (kill switch step 1,
+// spec §8.3). The cancel funcs are idempotent; entries are removed by
+// each request's own deferred deregister as it unwinds.
+func (p *publicAdmission) abortAll() {
+	p.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(p.cancels))
+	for _, c := range p.cancels {
+		cancels = append(cancels, c)
+	}
+	p.mu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+}
+
+// ownerPriorityLatchWindow is how long new public admissions stay
+// paused after the owner's own traffic hit the capacity ceiling
+// (refreshed per owner attempt, spec §8.2).
+const ownerPriorityLatchWindow = 30 * time.Second
+
+// PublicInflightCount reports the current public-consumer in-flight
+// count (subset of InflightCount).
+func (s *Server) PublicInflightCount() int {
+	if s.public == nil {
+		return 0
+	}
+	return int(s.public.n.Load())
 }
 
 // gatewayHandlerSet is the local interface satisfied by
@@ -211,6 +329,14 @@ type Config struct {
 	// 15s aggregator window, the listener-side 503 catches the gap.
 	IsShareDenied func() bool
 
+	// IsPublicShareDenied returns true when the operator has NOT
+	// enabled Public Share serving (public share spec §8.1). Applies
+	// only to requests whose peer IsPublicConsumer(): they get 503
+	// waired_inference_not_public instead of riding shareGate. nil is
+	// fail-closed — public consumers are always denied when no
+	// controller is wired.
+	IsPublicShareDenied func() bool
+
 	// Capacity bounds the number of concurrent peer-overlay inference
 	// requests this agent will admit before returning 503
 	// waired_inference_overloaded. Read once at server construction
@@ -220,6 +346,12 @@ type Config struct {
 	// external (openai-compat) endpoints — the upstream provider
 	// already does its own rate limiting in that path.
 	Capacity int
+
+	// PublicCapacity bounds concurrent PUBLIC-consumer requests
+	// (subset of Capacity). 0 = unset → the min(2, Capacity−1)
+	// headroom default (spec §5.1); live-retuned from the network
+	// map's Self.InferenceState.PublicCapacity via SetPublicCapacity.
+	PublicCapacity int
 
 	// EngineReadyFn reports whether the local inference engine is up
 	// and which catalog ModelID is currently active. Wired in Phase 8
@@ -293,7 +425,13 @@ func NewServerWithConfig(cfg Config) *Server {
 	// gate short-circuits in Acquire, so the only cost is one extra middleware
 	// hop on the hot path — cheap, and the price of admin-tunable admission.
 	s.inflight = newInflightCounter(cfg.Capacity)
-	s.capacityGate = capacityGateAdapter(s.inflight, cfg.Recorder)
+	// The public admission state is likewise always wired: its gates
+	// only act on peers classified as public-grant consumers, so
+	// same-network traffic pays one context lookup per hop at most.
+	s.public = newPublicAdmission(cfg.PublicCapacity, cfg.Capacity)
+	s.publicShareGate = publicShareGateAdapter(cfg.IsPublicShareDenied)
+	s.publicAdmissionGate = publicAdmissionGateAdapter(s.public, now)
+	s.capacityGate = capacityGateAdapter(s.inflight, cfg.Recorder, s.public, now)
 	if cfg.Recorder != nil {
 		cfg.Recorder.SetCapacity(cfg.Capacity)
 	}
@@ -311,9 +449,37 @@ func (s *Server) SetCapacity(n int) {
 		return
 	}
 	s.inflight.setCapacity(n)
+	if s.public != nil {
+		// The public headroom default derives from the total capacity,
+		// so a total retune also retunes the public ceiling.
+		s.public.totalCap.Store(int32(max(n, 0)))
+	}
 	if s.recorder != nil {
 		s.recorder.SetCapacity(n)
 	}
+}
+
+// SetPublicCapacity retunes the public-consumer admission ceiling live
+// (spec §8.1), driven from the network map's
+// Self.InferenceState.PublicCapacity the same way SetCapacity is driven
+// from Capacity. n <= 0 ⇒ unset ⇒ the min(2, capacity−1) headroom
+// default. No-op on a ping-only server.
+func (s *Server) SetPublicCapacity(n int) {
+	if s.public == nil {
+		return
+	}
+	s.public.publicCap.Store(int32(max(n, 0)))
+}
+
+// AbortPublicInFlight immediately cancels every in-flight
+// public-consumer request (kill switch, spec §8.3 step 1). Wired from
+// the publicShareController's OFF transition; new public requests are
+// already rejected by publicShareGate via IsPublicShareDenied.
+func (s *Server) AbortPublicInFlight() {
+	if s.public == nil {
+		return
+	}
+	s.public.abortAll()
 }
 
 // Handler returns the http.Handler for the overlay listener. It is
@@ -344,14 +510,17 @@ func (s *Server) Handler() http.Handler {
 }
 
 // peerAuthChain composes the middleware stack the overlay inference
-// routes ride behind. Order (outermost → innermost):
+// routes ride behind. Order (outermost → innermost), branching on the
+// request peer's class (public share spec §8.1):
 //
-//	wgPeerOnly         (= source IP must resolve to a known peer)
+//	wgPeerOnly          (= source IP must resolve to a known peer)
 //	verifyPeerSignature (= Ed25519 over canonical headers + body)
-//	pausedGate         (= 503 waired_paused while paused)
-//	inferenceGate      (= 503 waired_inference_disabled while disabled)
-//	shareGate          (= 503 waired_inference_not_shared while mesh-share opted out)
-//	capacityGate       (= 503 waired_inference_overloaded above Config.Capacity)
+//	pausedGate          (= 503 waired_paused while paused)
+//	inferenceGate       (= 503 waired_inference_disabled while disabled)
+//	shareGate           (same-network peers: 503 waired_inference_not_shared while mesh-share opted out)
+//	publicShareGate     (public consumers: 503 waired_inference_not_public while Public Share off)
+//	publicAdmissionGate (public consumers: 503 waired_inference_overloaded above the public cap / owner latch)
+//	capacityGate        (= 503 waired_inference_overloaded above Config.Capacity)
 //
 // capacityGate sits innermost so the operator's existence/visibility
 // gates fire first (a paused/disabled/un-shared agent should NOT burn
@@ -359,7 +528,11 @@ func (s *Server) Handler() http.Handler {
 // shareGate sits just outside capacityGate so an un-shared agent's
 // rejection reads as a privacy decision rather than overload — a
 // rotating set of pre-existing 503 envelopes still gets the right
-// type even when both conditions would apply.
+// type even when both conditions would apply. The public gates apply
+// only to peers under a consumer-role grant, which conversely skip
+// shareGate — a public consumer's admission is governed by the public
+// toggle + public capacity, not the intra-account mesh-share choice
+// (public ON implies mesh share anyway, spec §4.1).
 //
 // Pausing the agent, disabling inference, unsharing, or saturating
 // mid-flight rejects peer requests with the same JSON envelope a
@@ -369,6 +542,12 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) peerAuthChain(next http.Handler) http.Handler {
 	if s.capacityGate != nil {
 		next = s.capacityGate(next)
+	}
+	if s.publicAdmissionGate != nil {
+		next = s.publicAdmissionGate(next)
+	}
+	if s.publicShareGate != nil {
+		next = s.publicShareGate(next)
 	}
 	if s.shareGate != nil {
 		next = s.shareGate(next)
@@ -474,19 +653,83 @@ func inferenceGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 // shareGateAdapter rejects peer requests when this agent has opted out
 // of mesh-share (Phase 6). Sits innermost so the operator's privacy
 // choice surfaces as a typed error envelope rather than blending into
-// the broader "engine disabled" reply.
+// the broader "engine disabled" reply. Public-grant consumers pass
+// through untouched: their admission is governed by the public gates
+// (spec §8.1), not the intra-account mesh-share choice.
 func shareGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 	if fn == nil {
 		return nil
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if peer, ok := PeerFromContext(r.Context()); ok && peer.IsPublicConsumer() {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if fn() {
 				writeOverlay503(w, "waired_inference_not_shared",
 					"waired-agent on this peer is not currently sharing its local inference engine with the mesh.")
 				return
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// publicShareGateAdapter rejects PUBLIC-consumer requests while the
+// operator has not enabled Public Share serving (spec §8.1). Non-public
+// peers pass through untouched. Unlike the other gate adapters a nil fn
+// does NOT disable the gate — serving strangers is strictly opt-in, so
+// an unwired controller fails closed.
+func publicShareGateAdapter(fn func() bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer, ok := PeerFromContext(r.Context())
+			if !ok || !peer.IsPublicConsumer() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if fn == nil || fn() {
+				writeOverlay503(w, "waired_inference_not_public",
+					"waired-agent on this peer is not currently serving public shared inference.")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// publicAdmissionGateAdapter bounds concurrent PUBLIC-consumer requests
+// (spec §8.1–8.3). Admission requires a free public slot AND no active
+// owner-priority latch; the total-capacity condition is enforced by the
+// inner capacityGate. Admitted requests run under a cancellable context
+// registered with the kill-switch registry so publicShareController OFF
+// can terminate their streams immediately. Non-public peers pass
+// through untouched.
+func publicAdmissionGateAdapter(p *publicAdmission, now func() time.Time) func(http.Handler) http.Handler {
+	if p == nil {
+		return nil
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer, ok := PeerFromContext(r.Context())
+			if !ok || !peer.IsPublicConsumer() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if p.latched(nowOrTime(now)) || !p.acquire() {
+				writeOverlay503(w, "waired_inference_overloaded",
+					"waired-agent on this peer is at its concurrent-request capacity; retry on another peer or wait.")
+				return
+			}
+			ctx, cancel := context.WithCancel(r.Context())
+			id := p.registerCancel(cancel)
+			defer func() {
+				p.deregisterCancel(id)
+				cancel()
+				p.release()
+			}()
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -503,16 +746,34 @@ func shareGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 // Acquire / Release plus a RecordServed call at request termination
 // (status captured via a thin ResponseWriter wrapper so 2xx and 5xx
 // surfaces are distinguished without intercepting the body).
-func capacityGateAdapter(counter *inflightCounter, rec Recorder) func(http.Handler) http.Handler {
+//
+// When public is non-nil, the gate also drives the owner-priority
+// latch (spec §8.2): a NON-public request that is rejected at
+// capacity — or admitted exactly at saturation — pauses new public
+// admissions for ownerPriorityLatchWindow (refreshed per attempt), so
+// the owner reclaims slots as in-flight public requests drain.
+func capacityGateAdapter(counter *inflightCounter, rec Recorder, public *publicAdmission, now func() time.Time) func(http.Handler) http.Handler {
 	if counter == nil {
 		return nil
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer, peerOK := PeerFromContext(r.Context())
+			ownerRequest := public != nil && (!peerOK || !peer.IsPublicConsumer())
 			if !counter.Acquire() {
+				if ownerRequest {
+					public.latch(nowOrTime(now), ownerPriorityLatchWindow)
+				}
 				writeOverlay503(w, "waired_inference_overloaded",
 					"waired-agent on this peer is at its concurrent-request capacity; retry on another peer or wait.")
 				return
+			}
+			if ownerRequest {
+				if capacity := int(counter.capacity.Load()); capacity > 0 && int(counter.InFlight()) >= capacity {
+					// Admitted, but this owner request took the last
+					// slot — arriving at saturation also latches (§8.2).
+					public.latch(nowOrTime(now), ownerPriorityLatchWindow)
+				}
 			}
 			if rec != nil {
 				rec.SetInflight(int(counter.InFlight()))

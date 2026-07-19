@@ -57,6 +57,19 @@ const (
 	ShareMeshNotShared ShareMeshState = "not_shared"
 )
 
+// PublicShareState captures whether the operator has agreed to serve
+// inference to foreign devices holding a Public Share grant (public
+// share spec §4.1/§8). Persisted to <state-dir>/runtime/desired-public-share.
+// Distinct from ShareMeshState (intra-account mesh share): the public
+// toggle defaults to OFF and only an explicit "public" choice enables
+// serving strangers.
+type PublicShareState string
+
+const (
+	PublicShareOn  PublicShareState = "public"
+	PublicShareOff PublicShareState = "not_public"
+)
+
 // RoutingMode is the operator's chosen inference routing policy —
 // Tailscale-exit-node-style manual selection of where this agent's
 // outbound inference requests go. Persisted to
@@ -304,6 +317,13 @@ func DesiredSharePath(stateDir string) string {
 	return filepath.Join(stateDir, "runtime", "desired-share")
 }
 
+// DesiredPublicSharePath is the on-disk location of the operator's
+// Public Share (serve-strangers) choice. Missing file means the
+// operator never enabled it — the safe default is OFF.
+func DesiredPublicSharePath(stateDir string) string {
+	return filepath.Join(stateDir, "runtime", "desired-public-share")
+}
+
 // DesiredWorkerPath is the on-disk location of the operator's
 // inference-routing choice (Tailscale-exit-node-style manual peer
 // selection). Missing file means the operator has not touched the
@@ -533,6 +553,39 @@ func WriteDesiredShareMesh(stateDir string, s ShareMeshState) error {
 		return fmt.Errorf("runtime/state: invalid share state %q", s)
 	}
 	return atomicWrite(DesiredSharePath(stateDir), []byte(string(s)+"\n"), 0o644)
+}
+
+// ReadDesiredPublicShare parses <state-dir>/runtime/desired-public-share.
+// A missing or empty file returns the empty string — callers treat that
+// as OFF (public serving is strictly opt-in, spec §4.1), while still
+// being able to distinguish "never touched" from an explicit choice.
+func ReadDesiredPublicShare(stateDir string) (PublicShareState, error) {
+	body, err := os.ReadFile(DesiredPublicSharePath(stateDir))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	v := strings.TrimSpace(string(body))
+	switch PublicShareState(v) {
+	case "":
+		return "", nil
+	case PublicShareOn:
+		return PublicShareOn, nil
+	case PublicShareOff:
+		return PublicShareOff, nil
+	default:
+		return "", fmt.Errorf("runtime/state: unknown desired public-share state %q", v)
+	}
+}
+
+// WriteDesiredPublicShare persists the operator's Public Share choice.
+func WriteDesiredPublicShare(stateDir string, s PublicShareState) error {
+	if s != PublicShareOn && s != PublicShareOff {
+		return fmt.Errorf("runtime/state: invalid public-share state %q", s)
+	}
+	return atomicWrite(DesiredPublicSharePath(stateDir), []byte(string(s)+"\n"), 0o644)
 }
 
 // ReadDesiredWorker parses <state-dir>/runtime/desired-worker. A

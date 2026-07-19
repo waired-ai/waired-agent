@@ -40,4 +40,16 @@ func TestPeerDirectory_GrantPseudonym(t *testing.T) {
 	if got := foreign.DisplayName(); got != "amber-fox-42" {
 		t.Fatalf("foreign DisplayName = %q, want pseudonym", got)
 	}
+
+	// The whole grant annotation rides along (waired#824): the serving
+	// gate chain classifies public consumers on Kind/Role.
+	if foreign.Grant == nil || foreign.Grant.ID != "grant_1" || foreign.Grant.Kind != "public" || foreign.Grant.Role != "consumer" {
+		t.Fatalf("foreign Grant = %+v, want the full PeerGrant copied", foreign.Grant)
+	}
+	if !foreign.IsPublicConsumer() {
+		t.Fatal("foreign IsPublicConsumer() = false, want true")
+	}
+	if own.Grant != nil || own.IsPublicConsumer() {
+		t.Fatalf("own peer: Grant=%+v IsPublicConsumer=%v, want nil/false", own.Grant, own.IsPublicConsumer())
+	}
 }

@@ -605,6 +605,19 @@ func run(ctx context.Context, args []string) error {
 			shareCtl = newShareController(*stateDir, shareInitial, logger)
 		}
 
+		// Public Share serving toggle (waired#824, spec §4.1/§8). Same
+		// inference-enabled scoping as shareCtl; the default is OFF and
+		// only the persisted desired-public-share file can enable it
+		// (toggle surfaces + CP sync land with waired#825).
+		var publicShareCtl *publicShareController
+		if !*disableInference {
+			publicInitial, err := state.ReadDesiredPublicShare(*stateDir)
+			if err != nil {
+				return fmt.Errorf("read desired-public-share: %w", err)
+			}
+			publicShareCtl = newPublicShareController(*stateDir, publicInitial, logger)
+		}
+
 		// Tailscale-exit-node-style manual routing controller. The
 		// agentconfig.Routing default ("auto" unless the operator set a
 		// different value in agent.json) supplies the boot fallback; the
@@ -1053,6 +1066,9 @@ func run(ctx context.Context, args []string) error {
 			if shareCtl != nil {
 				cfg.IsShareDenied = shareCtl.IsShareDenied
 			}
+			if publicShareCtl != nil {
+				cfg.IsPublicShareDenied = publicShareCtl.IsPublicShareDenied
+			}
 			// Phase 8: /waired/v1/inference/healthz reports the local
 			// engine + active model so remote probe coordinators can
 			// distinguish "engine is loading" from "engine is up but at
@@ -1062,6 +1078,11 @@ func run(ctx context.Context, args []string) error {
 				cfg.EngineReadyFn = inferenceSub.EngineReady
 			}
 			infSrv = inference.NewServerWithConfig(cfg)
+			if publicShareCtl != nil {
+				// Kill switch (§8.3 step 1): turning Public Share OFF
+				// terminates in-flight public streams immediately.
+				publicShareCtl.SetOnDisable(infSrv.AbortPublicInFlight)
+			}
 		} else {
 			infSrv = inference.NewServer(id.DeviceID)
 		}
@@ -1130,12 +1151,16 @@ func run(ctx context.Context, args []string) error {
 		}()
 		go func() {
 			defer wg.Done()
-			applyConcurrency := func(capacity, parallel int) {
+			applyConcurrency := func(capacity, parallel, publicCapacity int) {
 				// Admission gate (non-disruptive) reads Capacity; the ollama
 				// engine parallelism (restart-on-change) reads DesiredParallel,
 				// which is non-zero only under an explicit admin override — so a
 				// default host's benchmark capacity never restarts its engine.
+				// PublicCapacity retunes the public-consumer admission ceiling
+				// (waired#824); 0 until the CP starts emitting it (waired#820),
+				// which resolves to the bounded min(2, capacity−1) default.
 				infSrv.SetCapacity(capacity)
+				infSrv.SetPublicCapacity(publicCapacity)
 				if inferenceSub != nil && inferenceSub.provider != nil {
 					inferenceSub.provider.ApplyConcurrency(ctx, parallel)
 				}
@@ -1399,7 +1424,7 @@ func newPauseInfra(stateDir string, gatewayPort int, logger *slog.Logger) (*paus
 // When bypassCPIAM is set, the client's HTTP transport injects a GCE
 // identity token into Authorization (so the Cloud Run / IAP IAM gate
 // is happy) and the device access token rides X-Waired-Agent-Bearer.
-func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel int), bypassCPIAM bool) {
+func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel, publicCapacity int), bypassCPIAM bool) {
 	cli := controlclient.NewWithBearer(id.ControlURL, bearer)
 	if bypassCPIAM {
 		cli.HTTP = bypassCPHTTPClient(ctx, id.ControlURL, logger)
@@ -1439,7 +1464,7 @@ func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Id
 // set inference_max_clients and drives the ollama engine parallelism
 // (restart-on-change) — kept distinct so a default host's benchmark capacity
 // never restarts its engine. See the applyConcurrency closure at the call site.
-func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel int), frames <-chan *signer.NetworkMap, errs <-chan error) {
+func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applyConcurrency func(capacity, parallel, publicCapacity int), frames <-chan *signer.NetworkMap, errs <-chan error) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1462,7 +1487,7 @@ func streaming(ctx context.Context, logger *slog.Logger, rec *reconciler, meshAg
 			// parallelism target (DesiredParallel). nil InferenceState (engine
 			// not yet probed) leaves both untouched.
 			if applyConcurrency != nil && nm.Self.InferenceState != nil {
-				applyConcurrency(nm.Self.InferenceState.Capacity, nm.Self.InferenceState.DesiredParallel)
+				applyConcurrency(nm.Self.InferenceState.Capacity, nm.Self.InferenceState.DesiredParallel, nm.Self.InferenceState.PublicCapacity)
 			}
 			if dispatcher != nil {
 				if s := nm.ActiveTestScenario; s != nil {

@@ -64,6 +64,10 @@ func (d *peerDirectory) Update(nm *signer.NetworkMap) {
 		}
 		if p.Grant != nil {
 			id.Pseudonym = p.Grant.Pseudonym
+			// Carry the whole grant annotation: the serving-side gate
+			// chain classifies public consumers on Kind/Role (§8.1).
+			g := *p.Grant
+			id.Grant = &g
 		}
 		next[ip] = id
 	}

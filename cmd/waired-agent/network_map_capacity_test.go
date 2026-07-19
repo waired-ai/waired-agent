@@ -8,7 +8,7 @@ import (
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
-type applyArgs struct{ capacity, parallel int }
+type applyArgs struct{ capacity, parallel, publicCapacity int }
 
 // TestStreamingAppliesSelfCapacity verifies the network-map stream loop applies
 // the CP's effective per-device settings (nm.Self.InferenceState) to the overlay
@@ -22,7 +22,9 @@ func TestStreamingAppliesSelfCapacity(t *testing.T) {
 	rec := newReconciler(eng, prov, quietLogger(), nil, cmmTestConfig())
 
 	got := make(chan applyArgs, 4)
-	applyConcurrency := func(capacity, parallel int) { got <- applyArgs{capacity, parallel} }
+	applyConcurrency := func(capacity, parallel, publicCapacity int) {
+		got <- applyArgs{capacity, parallel, publicCapacity}
+	}
 
 	// Frame 1 carries an effective capacity of 5 with NO admin override
 	// (DesiredParallel 0 = the benchmark case); frame 2 has no engine state
