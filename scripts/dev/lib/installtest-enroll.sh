@@ -170,17 +170,43 @@ _it_wait_enrolled() {
 # is not bound — without it, a socket that never binds would silently
 # degrade to the old TCP-write behaviour and nobody would notice.
 assert_mgmt_socket() {
-  local guest="$1" code
+  local guest="$1" code out wbin
   gx "$guest" test -S /run/waired/mgmt.sock \
     && ok "management write socket present at /run/waired/mgmt.sock" \
     || bad "management write socket missing at /run/waired/mgmt.sock (RuntimeDirectory / bind failure)"
 
   # Positive: the CLI drives a mutating verb, which can only reach the
   # daemon over the socket. Resume restores the pre-assert phase.
-  if gx "$guest" waired pause >/dev/null 2>&1 && gx "$guest" waired resume >/dev/null 2>&1; then
-    ok "waired pause/resume succeed over the local IPC socket"
+  #
+  # The EXIT CODE alone proves nothing: runPhaseTransition (cmd/waired/main.go)
+  # treats an unreachable daemon as the documented fallback — it persists the
+  # desired phase locally and returns 0 — and its isConnectionRefused() even
+  # matches "no such file or directory", i.e. a MISSING socket. So assert on
+  # stdout: "pause ok." is printed only on the daemon round-trip.
+  out="$(gx "$guest" waired pause 2>&1)"
+  if printf '%s' "$out" | grep -q 'not running'; then
+    bad "waired pause fell back to the offline desired-phase path (socket unreachable): $out"
+  elif printf '%s' "$out" | grep -q 'pause ok\.'; then
+    ok "waired pause reached the daemon over the local IPC socket"
   else
-    bad "waired pause/resume failed over the local IPC socket"
+    bad "waired pause produced no daemon acknowledgement: $out"
+  fi
+
+  # The #838 premise itself: the daemon runs as the `waired` service user and
+  # the socket is 0666 inside a 0755 runtime dir, so ANY local user must be
+  # able to drive it — that is what a system-wide install requires, and it is
+  # the reason peer-uid authorization was rejected. runuser (util-linux) is
+  # used over sudo so this does not depend on a sudoers policy in the guest.
+  wbin="$(gx "$guest" sh -c 'command -v waired' 2>/dev/null | tr -d '\r')"
+  if [ -n "$wbin" ]; then
+    out="$(gx "$guest" runuser -u nobody -- "$wbin" resume 2>&1)"
+    if printf '%s' "$out" | grep -q 'resume ok\.'; then
+      ok "an unprivileged local user reaches the service-user daemon's socket (#838 premise)"
+    else
+      bad "unprivileged 'waired resume' did not reach the daemon: $out"
+    fi
+  else
+    bad "could not locate the waired binary in the guest (command -v waired)"
   fi
 
   # Negative: the same mutating verb must be refused on the TCP port.
@@ -197,6 +223,10 @@ assert_mgmt_socket() {
   gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/status >/dev/null 2>&1 \
     && ok "TCP :9476 still serves reads" \
     || bad "TCP :9476 no longer serves reads"
+
+  # Leave the daemon active regardless of which leg above failed, so a
+  # failure here cannot cascade into unrelated asserts.
+  gx "$guest" waired resume >/dev/null 2>&1 || true
 }
 
 assert_tier2() {
