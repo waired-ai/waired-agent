@@ -66,3 +66,43 @@ func TestPeerLogName(t *testing.T) {
 		t.Fatalf("grant peer log name = %q, want pseudonym", got)
 	}
 }
+
+// TestReconciler_FeedsPeerNetworksToEngine pins the §10 stamping
+// conduit: Apply extracts NetworkID from CP-injected cross-network
+// peers into the engine's peer-network table (same-network peers
+// excluded), and removal clears the entry on the next frame.
+func TestReconciler_FeedsPeerNetworksToEngine(t *testing.T) {
+	pubOwn := mkPeerKey(t)
+	pubForeign := mkPeerKey(t)
+
+	eng := &fakeEngine{}
+	rec := newReconciler(eng, &agentProvider{}, quietLogger(), nil, fastTestConfig())
+
+	nm := nm1Peer(pubOwn, "udp4:198.51.100.10:51820")
+	nm.Peers = append(nm.Peers, signer.NetworkMapPeer{
+		DeviceID:      "dev_foreign",
+		DeviceName:    "amber-fox-42",
+		OverlayIP:     "100.99.0.3",
+		NodePublicKey: pubForeign,
+		NetworkID:     "net_foreign",
+		Grant:         &signer.PeerGrant{ID: "grant_1", Kind: "public", Role: "provider", Pseudonym: "amber-fox-42"},
+	})
+	if err := rec.Apply(nm); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	nets := eng.PeerNetworks()
+	if nets["dev_foreign"] != "net_foreign" {
+		t.Fatalf("engine peer networks = %v, want dev_foreign→net_foreign", nets)
+	}
+	if _, ok := nets[nm.Peers[0].DeviceID]; ok {
+		t.Fatalf("same-network peer leaked into the table: %v", nets)
+	}
+
+	// Peer leaves the map → table entry cleared on the next Apply.
+	if err := rec.Apply(nm1Peer(pubOwn, "udp4:198.51.100.10:51820")); err != nil {
+		t.Fatalf("Apply without foreign peer: %v", err)
+	}
+	if nets := eng.PeerNetworks(); len(nets) != 0 {
+		t.Fatalf("stale peer-network entries after removal: %v", nets)
+	}
+}
