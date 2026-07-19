@@ -64,6 +64,15 @@ type NetworkMapPeer struct {
 	// declared CapabilityPublicShareV1 (§8.4 gate), so with omitempty
 	// the signed map stays byte-identical for non-capable agents.
 	Grant *PeerGrant `json:"grant,omitempty"`
+	// NetworkID is the peer's home network, set by the CP only on
+	// cross-network Public Share peers injected alongside Grant (public
+	// share spec §7.1): it is the sender-side source for
+	// frame.EncryptedPacket.DstNetworkID when addressing relay frames at
+	// a foreign-network peer (§10). Empty for ordinary same-network
+	// peers — their network is the map's own NetworkID — so with
+	// omitempty the signed map bytes stay unchanged wherever it is
+	// unset.
+	NetworkID string `json:"network_id,omitempty"`
 }
 
 // PeerGrant is the CP-injected annotation on a cross-network Public
