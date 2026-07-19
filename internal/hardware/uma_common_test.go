@@ -26,6 +26,37 @@ func TestIsStrixHaloAPU(t *testing.T) {
 	}
 }
 
+func TestIsAMDMobileAPU(t *testing.T) {
+	cases := []struct {
+		name  string
+		model string
+		want  bool
+	}{
+		{"phoenix 780M", "AMD Ryzen 9 7940HS w/ Radeon 780M Graphics", true},
+		{"hawk point 780M", "AMD Ryzen 7 8840U w/ Radeon 780M Graphics", true},
+		{"phoenix 760M", "AMD Ryzen 5 7640U w/ Radeon 760M Graphics", true},
+		{"desktop APU 780M", "AMD Ryzen 7 8700G w/ Radeon 780M Graphics", true},
+		{"strix point 890M", "AMD Ryzen AI 9 HX 370 w/ Radeon 890M", true},
+		// Strix Halo: no three-digit "…M" token; also caught upstream by
+		// IsStrixHaloAPU before this is consulted.
+		{"strix halo 8060S not mobile-APU here", "AMD Ryzen AI Max+ 395 w/ Radeon 8060S", false},
+		// Vestigial desktop iGPU: bare "Radeon Graphics", no number —
+		// engaging a ~2 CU iGPU can be slower than the CPU.
+		{"desktop vestigial radeon graphics", "AMD Ryzen 9 7950X 16-Core Processor w/ Radeon Graphics", false},
+		{"desktop no igpu", "AMD Ryzen 9 5950X 16-Core Processor", false},
+		{"epyc server", "AMD EPYC 7763 64-Core Processor", false},
+		{"intel ignored", "13th Gen Intel(R) Core(TM) i7-13700K", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := IsAMDMobileAPU(c.model); got != c.want {
+				t.Errorf("IsAMDMobileAPU(%q) = %v, want %v", c.model, got, c.want)
+			}
+		})
+	}
+}
+
 func TestMinNonZero(t *testing.T) {
 	cases := []struct {
 		in   []int

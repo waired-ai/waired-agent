@@ -1,6 +1,9 @@
 package hardware
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // IsStrixHaloAPU recognises AMD's Ryzen AI Max series (Strix Halo) via
 // the human-readable CPU model string supplied by /proc/cpuinfo on
@@ -19,6 +22,32 @@ import "strings"
 // Strix Halo signal (#290).
 func IsStrixHaloAPU(modelName string) bool {
 	return strings.Contains(strings.ToLower(modelName), "ryzen ai max")
+}
+
+// amdMobileiGPURe matches a numbered AMD mobile-APU iGPU token — three
+// digits followed by "m" (Radeon 610M/660M/680M/740M/760M/780M/860M/
+// 880M/890M …). Exactly three digits, so it does NOT match a discrete
+// mobile card ("Radeon RX 7600M", four digits) or Strix Halo's Radeon
+// 8060S (no trailing "m").
+var amdMobileiGPURe = regexp.MustCompile(`\b\d{3}m\b`)
+
+// IsAMDMobileAPU recognises a non-Strix AMD APU that carries a *numbered*
+// mobile iGPU (Radeon 780M/760M/880M …) from the CPU model string, the
+// same way IsStrixHaloAPU keys off the CPU model. It is a last-resort
+// GPU-backend signal for the Ollama selector (internal/runtime): on Linux
+// such an iGPU is invisible to the profiler without rocm-smi, so the host
+// reports no GPU (PrimaryGPUVendor == "") and would fall to CPU even
+// though the iGPU is worth engaging via Vulkan (#68).
+//
+// The match requires BOTH the "radeon" marker and a three-digit "…M"
+// token, so a vestigial desktop iGPU reported as bare "Radeon Graphics"
+// (~2 CU, frequently slower than the CPU) deliberately does NOT match,
+// and neither does Strix Halo's "Radeon 8060S" (already handled upstream
+// by IsStrixHaloAPU). A detected AMD iGPU takes the internal/runtime
+// case "amd" path instead; this only fires when nothing was detected.
+func IsAMDMobileAPU(modelName string) bool {
+	m := strings.ToLower(modelName)
+	return strings.Contains(m, "radeon") && amdMobileiGPURe.MatchString(m)
 }
 
 // minNonZero returns the smallest positive value among the inputs, or

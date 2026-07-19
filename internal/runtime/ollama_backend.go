@@ -1,6 +1,9 @@
 package runtime
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+)
 
 // OllamaBackend names the GPU compute backend waired steers Ollama
 // toward via process environment. It is informational (surfaced in the
@@ -16,9 +19,12 @@ const (
 	// BackendCUDA is NVIDIA. Ollama detects it automatically; we set no
 	// override and only label it for diagnostics.
 	BackendCUDA OllamaBackend = "cuda"
-	// BackendROCm is the AMD HIP/ROCm path (Linux only). For Strix Halo
-	// it requires the gfx1151 HSA override; for supported discrete AMD
-	// cards Ollama engages it with no override.
+	// BackendROCm is the AMD HIP/ROCm path. On Linux Ollama bundles the
+	// HIP runtime; on Windows the base package ships no ROCm and the
+	// installer adds it as a ~350 MiB overlay only for the discrete SKUs
+	// in Ollama's supported set (see amdROCmSupported). For Strix Halo it
+	// requires the gfx1151 HSA override; for supported discrete AMD cards
+	// Ollama engages it with no override.
 	BackendROCm OllamaBackend = "rocm"
 	// BackendVulkan is Ollama's experimental Vulkan path (Mesa RADV on
 	// Linux, the AMD/Intel ICD on Windows). The only GPU route for AMD
@@ -64,7 +70,13 @@ const envOllamaIGPUEnable = "OLLAMA_IGPU_ENABLE=1"
 type BackendInputs struct {
 	GOOS             string // host runtime.GOOS: "linux" / "windows" / "darwin"
 	PrimaryGPUVendor string // lower-case vendor of the first detected GPU; "" if none
+	PrimaryGPUModel  string // model string of the first detected GPU (GPU.Model); "" if none
 	StrixHaloAPU     bool   // CPU model matched hardware.IsStrixHaloAPU
+	// AMDMobileAPU is true when the CPU model names a numbered AMD mobile
+	// iGPU (hardware.IsAMDMobileAPU). Consulted only when no GPU was
+	// detected (PrimaryGPUVendor == "") to still engage an iGPU that is
+	// invisible to the profiler on Linux without rocm-smi (#68).
+	AMDMobileAPU bool
 }
 
 // BackendStep is one spawn attempt: a labelled backend plus the env
@@ -92,6 +104,59 @@ func (p BackendPlan) Preferred() BackendStep { return p.Steps[0] }
 // Probes reports whether the plan has a fallback step that the caller
 // should activate when the preferred backend does not engage the GPU.
 func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }
+
+// amdROCmSupportedRes mirror scripts/install/ollama-windows.ps1's
+// Test-AMDRocmSupported: the AMD GPUs that Ollama's bundled *Windows*
+// ROCm overlay (v6.1) supports, matched against the GPU model string.
+// This gates whether the agent may prefer ROCm on Windows, because the
+// overlay is installed only for these SKUs — anything else has no ROCm
+// runtime on Windows and must use Vulkan.
+//
+// !!! MAINTENANCE: keep in sync with Test-AMDRocmSupported in
+// !!! scripts/install/ollama-windows.ps1 (that comment carries the
+// !!! per-Ollama-bump review checklist). Supported today (Ollama 0.31.x,
+// !!! ROCm v6.1 overlay): RX 7000 series, RX 6800/6900/6950, Radeon PRO
+// !!! W6xxx/W7xxx, Radeon PRO V620.
+var amdROCmSupportedRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)radeon\s+rx\s+7\d{3}`),                  // RX 7000 series
+	regexp.MustCompile(`(?i)radeon\s+rx\s+6[89]\d{2}`),              // RX 6800/6900/6950
+	regexp.MustCompile(`(?i)radeon\s+(\(tm\)\s+)?pro\s+w[67]\d{3}`), // PRO W6xxx/W7xxx
+	regexp.MustCompile(`(?i)radeon\s+(\(tm\)\s+)?pro\s+v620`),       // PRO V620
+}
+
+// amdROCmSupported reports whether an AMD GPU model is in Ollama's
+// Windows ROCm overlay support set (see amdROCmSupportedRes).
+func amdROCmSupported(model string) bool {
+	for _, re := range amdROCmSupportedRes {
+		if re.MatchString(model) {
+			return true
+		}
+	}
+	return false
+}
+
+// amdDiscreteRe matches discrete-AMD name markers (RX / PRO / FirePro /
+// Instinct). Checked first in amdIsIntegratedModel so a discrete mobile
+// card ("Radeon RX 7600M") is never mistaken for an iGPU.
+var amdDiscreteRe = regexp.MustCompile(`(?i)\b(rx|pro|firepro|instinct)\b`)
+
+// amdIntegratedRe matches integrated-AMD iGPU name markers: a three-digit
+// "…M" token (780M/760M/880M …), bare "Radeon Graphics" (Vega/Cezanne
+// APUs), or a "Vega" iGPU.
+var amdIntegratedRe = regexp.MustCompile(`(?i)(\b\d{3}m\b|radeon\s+graphics|\bvega\b)`)
+
+// amdIsIntegratedModel reports whether an AMD GPU model names an
+// integrated APU iGPU, which is not in Ollama's ROCm set and must use the
+// Vulkan + OLLAMA_IGPU_ENABLE path. Discrete markers win, so a mobile
+// discrete card ("Radeon RX 7600M") is not treated as integrated. An
+// empty/unknown model returns false: it is treated as discrete/unknown
+// and gets a ROCm attempt with a Vulkan probe fallback where ROCm exists.
+func amdIsIntegratedModel(model string) bool {
+	if amdDiscreteRe.MatchString(model) {
+		return false
+	}
+	return amdIntegratedRe.MatchString(model)
+}
 
 // ResolveOllamaBackend maps host facts to an ordered backend plan.
 //
@@ -165,13 +230,55 @@ func ResolveOllamaBackend(in BackendInputs) BackendPlan {
 			Reason: "nvidia gpu: cuda (ollama default, no override)",
 		}
 	case "amd":
-		// Discrete AMD (RX 7000 / Instinct / Radeon PRO) is in Ollama's
-		// supported ROCm list and engages without an override.
+		// Integrated AMD iGPUs (Radeon 780M / "Radeon Graphics" / Vega …)
+		// are not in Ollama's ROCm set, and 0.30.x drops any integrated GPU
+		// unless OLLAMA_IGPU_ENABLE is set — so route them to Vulkan + igpu.
+		// The env is set here so engagement does not depend on the
+		// installer's machine-scope OLLAMA_* flags having been written
+		// (bundled Ollama / non-installer deploy / cleared env) — the #40
+		// silent-CPU-plus-"rocm"-label case.
+		if amdIsIntegratedModel(in.PrimaryGPUModel) {
+			return BackendPlan{
+				Steps:  []BackendStep{{Backend: BackendVulkan, Env: []string{envOllamaVulkan, envOllamaIGPUEnable}}},
+				Reason: "amd integrated gpu: vulkan + igpu-enable (not in ollama rocm set)",
+			}
+		}
+		// On Windows the base package ships no ROCm; the installer adds the
+		// ROCm overlay only for the SKUs in amdROCmSupported. A discrete AMD
+		// outside that set therefore has no ROCm runtime and must use Vulkan
+		// (matches ollama-windows.ps1 Resolve-GpuMode's vulkan path).
+		if in.GOOS == "windows" && !amdROCmSupported(in.PrimaryGPUModel) {
+			return BackendPlan{
+				Steps:  []BackendStep{{Backend: BackendVulkan, Env: []string{envOllamaVulkan, envOllamaIGPUEnable}}},
+				Reason: "amd discrete (windows, outside ollama rocm overlay set): vulkan + igpu-enable",
+			}
+		}
+		// Discrete AMD with ROCm available (Linux bundles the HIP runtime;
+		// Windows has the overlay for supported SKUs): prefer ROCm and let
+		// the engagement probe fall back to Vulkan + igpu if the model does
+		// not actually land on the GPU. size_vram>0 on ROCm keeps ROCm with
+		// no restart; a CPU-bound ROCm load switches to Vulkan (#290 probe).
 		return BackendPlan{
-			Steps:  []BackendStep{{Backend: BackendROCm}},
-			Reason: "amd discrete gpu: rocm (ollama default, no override)",
+			Steps: []BackendStep{
+				{Backend: BackendROCm},
+				{Backend: BackendVulkan, Env: []string{envOllamaVulkan, envOllamaIGPUEnable}},
+			},
+			Reason: "amd discrete gpu: try rocm, fall back to vulkan + igpu if CPU-bound",
 		}
 	case "":
+		// No GPU was detected. On Linux a non-Strix AMD mobile-APU iGPU
+		// (Radeon 780M/760M/880M …) is invisible to the profiler without
+		// rocm-smi, so fall back to the CPU model: if it names a numbered
+		// mobile iGPU, try to engage it via Vulkan (Ollama drops to CPU on
+		// its own if no Vulkan device turns up). Vestigial desktop iGPUs
+		// (bare "Radeon Graphics", ~2 CU) do not match IsAMDMobileAPU and
+		// correctly stay on CPU (#68).
+		if in.AMDMobileAPU {
+			return BackendPlan{
+				Steps:  []BackendStep{{Backend: BackendVulkan, Env: []string{envOllamaVulkan, envOllamaIGPUEnable}}},
+				Reason: "amd mobile apu igpu (undetected, by cpu model): vulkan + igpu-enable",
+			}
+		}
 		return BackendPlan{
 			Steps:  []BackendStep{{Backend: BackendCPU}},
 			Reason: "no gpu detected: cpu",

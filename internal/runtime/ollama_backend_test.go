@@ -69,9 +69,70 @@ func TestResolveOllamaBackend(t *testing.T) {
 			wantSteps: []BackendStep{{Backend: BackendCUDA}},
 		},
 		{
-			name:      "amd discrete: rocm, no override",
-			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd"},
-			wantSteps: []BackendStep{{Backend: BackendROCm}},
+			name: "amd integrated 780M windows: vulkan + igpu (not rocm)",
+			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon 780M Graphics"},
+			wantSteps: []BackendStep{
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
+		},
+		{
+			name: "amd integrated 780M linux: vulkan + igpu (not rocm)",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon 780M Graphics"},
+			wantSteps: []BackendStep{
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
+		},
+		{
+			name: "amd rocm-supported RX 7900 windows: rocm then vulkan",
+			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 7900 XTX"},
+			wantSteps: []BackendStep{
+				{Backend: BackendROCm},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
+		},
+		{
+			name: "amd discrete RX 7900 linux: rocm then vulkan",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 7900 XTX"},
+			wantSteps: []BackendStep{
+				{Backend: BackendROCm},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
+		},
+		{
+			// Discrete AMD outside Ollama's Windows ROCm overlay set: no
+			// ROCm runtime is installed, so it must use Vulkan (#40).
+			name: "amd unsupported discrete RX 6600 windows: vulkan (no overlay)",
+			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 6600"},
+			wantSteps: []BackendStep{
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
+		},
+		{
+			// Same card on Linux: ROCm is bundled and covers a broader set,
+			// so try ROCm with the Vulkan probe fallback.
+			name: "amd discrete RX 6600 linux: rocm then vulkan (rocm bundled)",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd", PrimaryGPUModel: "AMD Radeon RX 6600"},
+			wantSteps: []BackendStep{
+				{Backend: BackendROCm},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
+		},
+		{
+			// Unknown model (amd detected, no name): safe default — Windows
+			// can't confirm the overlay, Linux has bundled ROCm to try.
+			name: "amd vendor, empty model, windows: vulkan",
+			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "amd"},
+			wantSteps: []BackendStep{
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
+		},
+		{
+			name: "amd vendor, empty model, linux: rocm then vulkan",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "amd"},
+			wantSteps: []BackendStep{
+				{Backend: BackendROCm},
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
 		},
 		{
 			name:      "intel igpu: vulkan",
@@ -82,6 +143,22 @@ func TestResolveOllamaBackend(t *testing.T) {
 			name:      "no gpu: cpu, no override",
 			in:        BackendInputs{GOOS: "linux", PrimaryGPUVendor: ""},
 			wantSteps: []BackendStep{{Backend: BackendCPU}},
+		},
+		{
+			// Linux mobile APU whose iGPU is invisible without rocm-smi:
+			// engage it via Vulkan by CPU-model signal instead of CPU (#68).
+			name: "undetected amd mobile apu linux: vulkan + igpu",
+			in:   BackendInputs{GOOS: "linux", PrimaryGPUVendor: "", AMDMobileAPU: true},
+			wantSteps: []BackendStep{
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
+		},
+		{
+			name: "undetected amd mobile apu windows: vulkan + igpu",
+			in:   BackendInputs{GOOS: "windows", PrimaryGPUVendor: "", AMDMobileAPU: true},
+			wantSteps: []BackendStep{
+				{Backend: BackendVulkan, Env: []string{"OLLAMA_VULKAN=1", "OLLAMA_IGPU_ENABLE=1"}},
+			},
 		},
 		{
 			name:      "unrecognised vendor: auto",
@@ -108,5 +185,56 @@ func TestResolveOllamaBackend(t *testing.T) {
 				t.Errorf("Preferred() = %+v, want %+v", plan.Preferred(), c.wantSteps[0])
 			}
 		})
+	}
+}
+
+func TestAMDROCmSupported(t *testing.T) {
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{"AMD Radeon RX 7900 XTX", true},
+		{"AMD Radeon RX 7600", true},
+		{"AMD Radeon RX 6800 XT", true},
+		{"AMD Radeon RX 6950 XT", true},
+		{"AMD Radeon PRO W7900", true},
+		{"AMD Radeon (TM) PRO W6800", true},
+		{"AMD Radeon PRO V620", true},
+		// Below Ollama's Windows overlay cut / not discrete.
+		{"AMD Radeon RX 6700 XT", false},
+		{"AMD Radeon RX 6600", false},
+		{"AMD Radeon RX 5700 XT", false},
+		{"AMD Radeon 780M Graphics", false},
+		{"AMD Radeon Graphics", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := amdROCmSupported(c.model); got != c.want {
+			t.Errorf("amdROCmSupported(%q) = %v, want %v", c.model, got, c.want)
+		}
+	}
+}
+
+func TestAMDIsIntegratedModel(t *testing.T) {
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{"AMD Radeon 780M Graphics", true},
+		{"AMD Radeon 760M Graphics", true},
+		{"AMD Radeon 890M", true},
+		{"AMD Radeon Graphics", true},            // bare Vega/Cezanne iGPU
+		{"AMD Radeon(TM) Vega 8 Graphics", true}, // Vega iGPU
+		// Discrete markers win, including mobile discrete.
+		{"AMD Radeon RX 7900 XTX", false},
+		{"AMD Radeon RX 7600M XT", false},
+		{"AMD Radeon PRO W7900", false},
+		{"AMD Instinct MI300X", false},
+		{"", false}, // unknown -> treated as discrete/unknown, not integrated
+	}
+	for _, c := range cases {
+		if got := amdIsIntegratedModel(c.model); got != c.want {
+			t.Errorf("amdIsIntegratedModel(%q) = %v, want %v", c.model, got, c.want)
+		}
 	}
 }

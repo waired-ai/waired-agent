@@ -282,13 +282,19 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// verifies the GPU actually engaged and falls back to the next step.
 	hwProfile := profiler.Profile(ctx)
 	gpuVendor := ""
+	gpuModel := ""
 	if len(hwProfile.GPUs) > 0 {
 		gpuVendor = strings.ToLower(hwProfile.GPUs[0].Vendor)
+		gpuModel = hwProfile.GPUs[0].Model
 	}
 	backendPlan := infruntime.ResolveOllamaBackend(infruntime.BackendInputs{
 		GOOS:             runtime.GOOS,
 		PrimaryGPUVendor: gpuVendor,
+		PrimaryGPUModel:  gpuModel,
 		StrixHaloAPU:     hardware.IsStrixHaloAPU(hwProfile.CPU.Model),
+		// Undetected-iGPU fallback: on Linux a non-Strix AMD mobile APU is
+		// invisible without rocm-smi, so route it to Vulkan by CPU model (#68).
+		AMDMobileAPU: hardware.IsAMDMobileAPU(hwProfile.CPU.Model),
 	})
 	logger.Info("ollama gpu backend selected",
 		"backend", backendPlan.Preferred().Backend,
