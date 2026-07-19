@@ -104,6 +104,7 @@ type initFlags struct {
 	bundledModelID   string
 	mgmtURL          string
 	maskPII          bool
+	skipClaudeRoute  bool
 }
 
 const initLong = `Enroll this device into a Waired network (Google sign-in).
@@ -191,6 +192,8 @@ func newInitCmd() *cobra.Command {
 		"Local Management API base URL; when a waired-agent daemon is reachable there, login is driven through the daemon (Tailscale model) instead of enrolling locally")
 	f.BoolVar(&o.maskPII, "mask-pii", os.Getenv("WAIRED_PII_MASK") != "",
 		"mask personal information (home directory, username, hostname, account email) in init's output — for screenshots and bug reports. Best-effort; env form: WAIRED_PII_MASK=1 (set by the installers' --mask-pii / -MaskPII). Progress rendering falls back to plain lines while masking.")
+	f.BoolVar(&o.skipClaudeRoute, "skip-claude-route", os.Getenv("WAIRED_NO_CLAUDE_PROXY") != "",
+		"do not point Claude Code at local inference; leave Claude Code talking to the Anthropic API directly. The rest of the coding-agent integration (skills / plugins) still installs. Enable routing later with an elevated `waired claude enable`. Env form: WAIRED_NO_CLAUDE_PROXY=1 (set by the installers' -SkipClaudeProxy / --skip-claude-proxy).")
 	return cmd
 }
 
@@ -222,6 +225,7 @@ func runInitBody(o *initFlags) error {
 	ollamaSource := &o.ollamaSource
 	bundledModelID := &o.bundledModelID
 	mgmtURL := &o.mgmtURL
+	skipClaudeRoute := &o.skipClaudeRoute
 
 	// Reject a typo'd --ollama-source up front so it errors instead of being
 	// silently dropped (enroll falls through to bundled; renew ignores it, #485).
@@ -543,11 +547,12 @@ func runInitBody(o *initFlags) error {
 		// by the sudo hop after Init).
 		if !*skipIntegration {
 			integConsent = promptIntegrationConsent(os.Stdin, os.Stdout, integrationConsentInput{
-				StepLabel:      steps.integration,
-				Detections:     detectIntegrationAgents(ctx, integTargetHome),
-				NonInteractive: *nonInteractive,
-				SudoTarget:     integSudoUser,
-				ClaudeManaged:  claudeManagedEligible,
+				StepLabel:       steps.integration,
+				Detections:      detectIntegrationAgents(ctx, integTargetHome),
+				NonInteractive:  *nonInteractive,
+				SudoTarget:      integSudoUser,
+				ClaudeManaged:   claudeManagedEligible,
+				SkipClaudeRoute: *skipClaudeRoute,
 			})
 		}
 		return cfgRoot.Inference, nil
@@ -657,7 +662,7 @@ func runInitBody(o *initFlags) error {
 	// when the local stack can actually serve. Non-interactive keeps the
 	// single-consent immediate flip.
 	claudeRouted := false
-	if integConsent && claudeManagedEligible && !renewing && *nonInteractive {
+	if claudeRouteEligible(integConsent, claudeManagedEligible, renewing, *skipClaudeRoute) && *nonInteractive {
 		fmt.Printf("\n%s %s\n", emo("🔌", "*"), bold("Configuring Claude Code integration (managed settings)…"))
 		legacycleanup.Run(*stateDir, stderrLogger())
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
@@ -759,7 +764,7 @@ func runInitBody(o *initFlags) error {
 	// leaves the integration artifacts installed and Claude traffic on the
 	// real Anthropic API. Interactive only; the non-interactive flip already
 	// happened above.
-	if integConsent && claudeManagedEligible && !renewing && !*nonInteractive {
+	if claudeRouteEligible(integConsent, claudeManagedEligible, renewing, *skipClaudeRoute) && !*nonInteractive {
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
 		claudeRouted = promptClaudeRouting(os.Stdout, postSC, baseURL, *stateDir)
 		if claudeRouted {
@@ -1414,6 +1419,21 @@ func initStateDirMode(goos string, euid int) paths.Mode {
 // written regardless.
 func claudeManagedEligibleFor(elevated bool, managedPath string) bool {
 	return elevated && managedPath != ""
+}
+
+// claudeRouteEligible is the testable core of init's Claude-routing gate: it
+// reports whether `waired init` should touch Claude Code routing at all. The
+// operator must have consented to the coding-agent integration (integConsent),
+// this init must be able to write the machine-wide managed settings
+// (claudeManagedEligible), it must be a fresh enroll rather than a renew
+// (!renewing), and the operator must not have opted out via --skip-claude-route
+// (WAIRED_NO_CLAUDE_PROXY / the installers' -SkipClaudeProxy). init is the
+// SINGLE decider of routing — the installers no longer run `waired claude
+// enable` after enrolment (that unconditional post-init enable silently
+// overrode an interactive "no"). The two call sites layer the interactive vs
+// non-interactive split on top of this shared predicate.
+func claudeRouteEligible(integConsent, claudeManagedEligible, renewing, skipClaudeRoute bool) bool {
+	return integConsent && claudeManagedEligible && !renewing && !skipClaudeRoute
 }
 
 // splitHostPort + newReservedUDPPort live in helpers.go to keep main.go

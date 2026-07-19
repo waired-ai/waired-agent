@@ -67,6 +67,11 @@ type integrationConsentInput struct {
 	// Code managed settings (elevated init; #488). It makes the consent disclose
 	// that ANTHROPIC_BASE_URL is set for all Claude Code users on this machine.
 	ClaudeManaged bool
+	// SkipClaudeRoute is true when routing was opted out via --skip-claude-route
+	// (WAIRED_NO_CLAUDE_PROXY / the installers' -SkipClaudeProxy). The skills and
+	// plugins still install, but init will not prompt for — or write — Claude
+	// routing, so the consent copy must not promise the end-of-install question.
+	SkipClaudeRoute bool
 }
 
 // printAgentDetections renders the per-agent detection status lines
@@ -127,15 +132,22 @@ func promptIntegrationConsent(in io.Reader, out io.Writer, inp integrationConsen
 	item("OpenCode", "plugin", "~/.config/opencode/plugin/waired.js")
 	item("OpenClaw", "plugin", "~/.openclaw/plugins/waired/")
 
-	if inp.ClaudeManaged && inp.NonInteractive {
+	if inp.ClaudeManaged && inp.SkipClaudeRoute {
+		// Routing was opted out (--skip-claude-route / -SkipClaudeProxy): the
+		// skills/plugins above still install, but init will neither prompt for
+		// nor write the managed settings, so don't promise the routing question.
+		writePrompt(out)
+		writePromptf(out, "  %s routing is turned %s for this install (%s); Claude Code keeps\n", product("Claude Code"), bold("off"), bold("--skip-claude-route"))
+		writePrompt(out, "  talking to the Anthropic API directly. Enable routing later with")
+		writePromptf(out, "  %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude enable")))
+	} else if inp.ClaudeManaged && inp.NonInteractive {
 		writePrompt(out)
 		writePromptf(out, "  For %s it also writes system-wide %s so\n", product("Claude Code"), bold("managed settings"))
 		writePromptf(out, "  %s points at your local gateway — %s, so your\n", bold("ANTHROPIC_BASE_URL"), bold("no credential"))
 		writePrompt(out, "  claude.ai subscription and auto-mode keep working. Local inference serves")
 		writePrompt(out, "  requests and falls back to the real Anthropic API when unavailable, so claude")
 		writePromptf(out, "  never breaks. Reverse anytime with %s.\n", cyan(elevatedCmdline(runtime.GOOS, "waired claude disable")))
-	}
-	if inp.ClaudeManaged && !inp.NonInteractive {
+	} else if inp.ClaudeManaged && !inp.NonInteractive {
 		// Interactive installs defer the actual routing flip: this consent
 		// only installs artifacts, and the managed-settings question is
 		// asked at the end of install, once the local stack can serve

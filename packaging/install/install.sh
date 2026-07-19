@@ -341,6 +341,12 @@ Options:
                    sign-in step also masks hostname + account email) in
                    the output — for screenshots and bug reports.
                    Best-effort. Same as WAIRED_PII_MASK=1.
+  --skip-claude-proxy
+                   leave Claude Code routed straight to the Anthropic API
+                   (do not point ANTHROPIC_BASE_URL at local inference).
+                   Forwarded to \`waired init\`, the single decider of
+                   routing; enable later with \`waired claude enable\`.
+                   Same as WAIRED_NO_CLAUDE_PROXY=1. (alias: --skip-proxy)
   -h, --help       print this help
 
 Environment variables:
@@ -351,6 +357,9 @@ Environment variables:
   WAIRED_NO_TRAY           if set, do not install waired-tray (Linux + macOS)
   WAIRED_NO_OLLAMA         if set, do not install Ollama (same as
                            --skip-ollama; Linux + macOS)
+  WAIRED_NO_CLAUDE_PROXY   if set, leave Claude Code on the Anthropic API
+                           (same as --skip-claude-proxy); forwarded to
+                           \`waired init\`, the single decider of routing
   WAIRED_CLEAN             if set, same as --clean (full wipe first, then
                            a fresh install)
   WAIRED_CONTROL_URL       Control Plane URL written to agent.env when
@@ -846,12 +855,17 @@ EOF
     # init has a root-time fallback that installs the bundled engine when the
     # pre-install above failed; keep --skip-ollama honoured across the sudo
     # env_reset by threading WAIRED_NO_OLLAMA through `env`. Same for the
-    # PII-masking request.
+    # PII-masking and Claude-routing opt-out requests: init is the single
+    # decider of routing, so --skip-claude-proxy / WAIRED_NO_CLAUDE_PROXY must
+    # reach it (it defaults --skip-claude-route from WAIRED_NO_CLAUDE_PROXY).
     if ollama_skip_requested; then
         set -- env WAIRED_NO_OLLAMA=1 "$@"
     fi
     if [ -n "${WAIRED_PII_MASK:-}" ]; then
         set -- env WAIRED_PII_MASK=1 "$@"
+    fi
+    if [ -n "${WAIRED_NO_CLAUDE_PROXY:-}" ]; then
+        set -- env WAIRED_NO_CLAUDE_PROXY=1 "$@"
     fi
     $SUDO "$@" </dev/tty || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
@@ -1315,6 +1329,12 @@ darwin_maybe_init() {
     if [ -n "${WAIRED_PII_MASK:-}" ]; then
         set -- env WAIRED_PII_MASK=1 "$@"
     fi
+    # Claude-routing opt-out (--skip-claude-proxy / WAIRED_NO_CLAUDE_PROXY):
+    # init is the single decider of routing and defaults --skip-claude-route
+    # from this env, so thread it through the sudo env_reset like the others.
+    if [ -n "${WAIRED_NO_CLAUDE_PROXY:-}" ]; then
+        set -- env WAIRED_NO_CLAUDE_PROXY=1 "$@"
+    fi
     if [ "$DRY_RUN" = 1 ]; then
         common_log "  (dry-run) would: $SUDO $* </dev/tty"
         return 0
@@ -1473,6 +1493,11 @@ main() {
             # Export so children (waired init, the engine installer) mask
             # their output through the same env contract.
             --mask-pii) WAIRED_PII_MASK=1; export WAIRED_PII_MASK ;;
+            # Leave Claude Code on the Anthropic API. Exported so it survives
+            # the sudo env_reset and reaches `waired init` (the single decider
+            # of routing, which defaults --skip-claude-route from this env).
+            # Mirrors install.ps1's -SkipClaudeProxy / WAIRED_NO_CLAUDE_PROXY.
+            --skip-claude-proxy|--skip-proxy) WAIRED_NO_CLAUDE_PROXY=1; export WAIRED_NO_CLAUDE_PROXY ;;
             --skip-ollama) FLAG_NO_OLLAMA=1 ;;
             --check) FLAG_CHECK=1 ;;
             --update) FLAG_UPDATE=1 ;;

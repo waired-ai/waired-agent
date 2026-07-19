@@ -612,10 +612,12 @@ Switches:
                     elevated prompt: waired runtimes install ollama.
   -SkipInit         Skip the post-install `waired init` invocation; finish
                     with the manual-Next-steps block instead.
-  -SkipClaudeProxy  Don't configure Claude Code integration after enrolment
-                    (default: on -- writes managed settings pointing
-                    ANTHROPIC_BASE_URL at local inference, no credential). Same
-                    as WAIRED_NO_CLAUDE_PROXY=1.
+  -SkipClaudeProxy  Leave Claude Code routed straight to the Anthropic API.
+                    Forwarded to `waired init --skip-claude-route`, which is the
+                    single place routing is decided (default: on -- init writes
+                    managed settings pointing ANTHROPIC_BASE_URL at local
+                    inference, no credential). Same as WAIRED_NO_CLAUDE_PROXY=1;
+                    enable later with an elevated `waired claude enable`.
   -NonInteractive   Forward `--non-interactive` to `waired init`
                     (skip the install-time inference role prompts).
   -MaskPII          Mask personal information (home dir, username; the
@@ -1360,6 +1362,13 @@ function Invoke-WairedInit {
     # explicit one. This is why init no longer needs a URL to run.
     if ($ControlUrl) { $initArgs += @('--control', $ControlUrl) }
     if (-not (Test-InteractiveStdin)) { $initArgs += '--non-interactive' }
+    # -SkipClaudeProxy is forwarded into `waired init` (the single decider of
+    # Claude Code routing) rather than being applied by a separate post-init
+    # `waired claude enable` step -- an unconditional enable there used to
+    # override an interactive "no" to the routing prompt (issue: routing left
+    # on despite declining). Env form WAIRED_NO_CLAUDE_PROXY is already folded
+    # into $SkipClaudeProxy above, so this one line covers both.
+    if ($SkipClaudeProxy)  { $initArgs += '--skip-claude-route' }
     if ($InferenceEnabled) { $initArgs += @('--inference-enabled', $InferenceEnabled) }
     if ($ShareWithMesh)    { $initArgs += @('--share-with-mesh',   $ShareWithMesh) }
 
@@ -1445,7 +1454,11 @@ function Invoke-InstallSteps {
     Invoke-WairedInit
     $initRan = $script:InitRan
     Ensure-AgentRunning
-    if ($initRan) { Enable-ClaudeProxy }
+    # Claude Code routing is decided entirely inside `waired init` (it asks
+    # interactively, or writes managed settings on --non-interactive unless
+    # -SkipClaudeProxy forwarded --skip-claude-route). No separate enable step
+    # here -- an unconditional post-init `waired claude enable` used to override
+    # an interactive "no" to init's routing prompt.
     New-StartMenuShortcuts
     Start-TrayAsOriginalUser
     Show-NextSteps -InitRan:$initRan
@@ -1614,35 +1627,6 @@ function Ensure-AgentRunning {
         Common-Log "$ServiceName is running."
     } catch {
         Common-Warn "could not start ${ServiceName}: $_ -- start it with: Start-Service $ServiceName"
-    }
-}
-
-# Enable-ClaudeProxy configures Claude Code routing via the elevated CLI (#488):
-# `waired claude enable` writes the system-wide Claude Code managed settings
-# (ANTHROPIC_BASE_URL -> the local gateway, NO credential, so the subscription
-# and auto-mode are preserved) and sweeps up any retired MITM proxy artifacts.
-# No certificate, hosts redirect, or :443 bind is involved. `waired init` already
-# does this when run elevated; this is the explicit fallback. Best-effort: a
-# failure warns but never aborts. Callers gate on a successful enrolment
-# ($initRan); -SkipClaudeProxy / WAIRED_NO_CLAUDE_PROXY opt out entirely.
-function Enable-ClaudeProxy {
-    if ($SkipClaudeProxy) {
-        Common-Log "-SkipClaudeProxy set; leaving Claude Code routed directly to api.anthropic.com."
-        return
-    }
-    $exe = Join-Path $InstallDir 'waired.exe'
-    if (-not (Test-Path -LiteralPath $exe)) {
-        Common-Warn "waired.exe not found at $exe; skipping Claude integration setup."
-        return
-    }
-    $stateForProxy = if ($StateDir) { $StateDir } else { $AgentStateDir }
-    Common-Log "Configuring Claude Code integration (writes managed settings: ANTHROPIC_BASE_URL -> local inference, no credential, subscription preserved). Opt out with -SkipClaudeProxy."
-    $proxyArgs = @('claude', 'enable', '--state-dir', $stateForProxy)
-    Common-Run "& $exe $($proxyArgs -join ' ')" {
-        & $exe @proxyArgs
-        if ($LASTEXITCODE -ne 0) {
-            Common-Warn "waired claude enable exited with code $LASTEXITCODE; enable later with: & `"$exe`" claude enable"
-        }
     }
 }
 

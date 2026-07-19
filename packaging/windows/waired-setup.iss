@@ -86,6 +86,15 @@ Root: HKLM; Subkey: "SOFTWARE\Waired"; ValueType: string; ValueName: "InstallDir
 ; straight to api.anthropic.com; it can be enabled later with an elevated
 ; `waired claude enable`. Task name kept as "claudeproxy" for upgrade
 ; continuity even though the mechanism is now managed settings, not a proxy.
+;
+; NOTE: this GUI installer does NOT run `waired init` (enrolment happens
+; later via the tray / CLI), so this checkbox is the ONLY place Claude
+; routing is decided in the GUI flow. It is therefore NOT the duplicate of
+; init's "Route now?" prompt that the CLI installer (install.ps1) dropped:
+; there the post-init `waired claude enable` step overrode an interactive
+; "no" and was removed, with the choice forwarded into init via
+; --skip-claude-route. Do not remove the [Run] claude-enable step below —
+; that would leave GUI installs unrouted.
 Name: "claudeproxy"; \
     Description: "Route Claude Code through Waired via Claude Code managed settings (points ANTHROPIC_BASE_URL at local inference, no credential; transparently falls back to the real Anthropic API). No CA certificate or hosts-file change."; \
     GroupDescription: "Claude Code integration:"

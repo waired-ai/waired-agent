@@ -833,9 +833,11 @@ if ($ExeVariant) {
         else { ItDie "ISCC produced no installer at $setup" }
 
         ItStep "ExeVariant: silent install (/VERYSILENT)"
-        # /MERGETASKS=!claudeproxy: the default-checked task still runs the
-        # REMOVED `waired proxy install` command (tracked with waired#754's
-        # uninstall analog); skipifsilent already suppresses the tray launch.
+        # /MERGETASKS=!claudeproxy: uncheck the default-on claudeproxy task so
+        # the [Run] `waired claude enable` step does not write machine-wide
+        # managed-settings during this test install (the GUI installer is the
+        # sole decider of routing in its own flow — there is no `waired init`
+        # here). skipifsilent already suppresses the tray launch.
         $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/MERGETASKS=!claudeproxy', "/LOG=$Work\innosetup.log" -Wait -PassThru
         if ($p.ExitCode -ne 0) { ItDie "WairedSetup exited $($p.ExitCode) (see $Work\innosetup.log)" }
 
