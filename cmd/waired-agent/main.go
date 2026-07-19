@@ -301,6 +301,12 @@ func run(ctx context.Context, args []string) error {
 		mgmtSrv = mgmtSrv.WithBrowserHardening()
 	}
 	mgmtSrv = mgmtSrv.WithSocketWritesOnly(*mgmtSocketWritesOnly)
+	// Public Share consumer settings + consent (waired#826): consuming
+	// public nodes is a routing concern, so the endpoints stay available
+	// even when local inference serving is disabled.
+	mgmtSrv = mgmtSrv.WithPublicUse(&management.PublicUseConfig{
+		Path: agentconfig.DefaultPublicUsePath(),
+	})
 	// Inference routes are gated on the install-time --disable-inference
 	// choice (a boot decision, not a session one), mirroring the old
 	// inline wiring: an inference-disabled agent leaves these routes
