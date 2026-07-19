@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -318,6 +319,19 @@ type Server struct {
 	// unit tests drive Handler() without loopback Hosts; production wiring
 	// enables it via WithBrowserHardening. See security.go.
 	browserHardening bool
+
+	// enforceSocketWrites, when true, makes the loopback-TCP Serve path
+	// refuse mutating verbs while the local IPC socket is up, so writes can
+	// only arrive over the peer-local socket/pipe (waired#838). Off by
+	// default: unit tests drive Handler() (which never applies the guard),
+	// and production leaves it off until the CLI/tray are migrated to the
+	// socket. Set via WithSocketWritesOnly. See socket.go.
+	enforceSocketWrites bool
+	// socketUp reflects whether ServeLocal currently has the local IPC
+	// socket bound. writeGuard reads it so a socket bind failure fails OPEN
+	// (TCP writes keep working, behind the #836 browserGuard) instead of
+	// bricking control of the agent.
+	socketUp atomic.Bool
 }
 
 func New(status StatusProvider, pinger Pinger) *Server {
@@ -434,8 +448,17 @@ func (s *Server) WithUpdateController(c UpdateController) *Server {
 	return s
 }
 
-// Handler returns the HTTP handler with the loopback guard wrapped around it.
+// Handler returns the loopback-TCP HTTP handler: the shared route mux
+// wrapped in the loopback-source guard and the #836 browser hardening.
 func (s *Server) Handler() http.Handler {
+	return loopbackOnly(browserGuard(s.mux(), s.browserHardening))
+}
+
+// mux builds the route table shared by the loopback-TCP handler
+// (Handler) and the local IPC socket handler (socketHandler, see
+// socket.go). It carries no transport middleware so both listeners expose
+// exactly the same routes.
+func (s *Server) mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/waired/v1/status", s.handleStatus)
 	mux.HandleFunc("/waired/v1/ping", s.handlePing)
@@ -497,7 +520,7 @@ func (s *Server) Handler() http.Handler {
 	if s.observability.MetricsHandler != nil {
 		mux.Handle("/waired/v1/metrics", s.observability.MetricsHandler)
 	}
-	return loopbackOnly(browserGuard(mux, s.browserHardening))
+	return mux
 }
 
 // Serve listens on addr (default 127.0.0.1:9476) until ctx is cancelled.
@@ -507,7 +530,7 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 	}
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           s.Handler(),
+		Handler:           writeGuard(s.Handler(), s.enforceSocketWrites, &s.socketUp),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}

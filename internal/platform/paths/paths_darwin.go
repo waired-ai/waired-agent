@@ -40,3 +40,29 @@ func userStateDir() string {
 	}
 	return "/Library/Application Support/waired"
 }
+
+// osMgmtEndpoint returns the management write-socket path. System uses
+// /var/run/waired — root-writable, short enough for the 104-byte darwin
+// sun_path limit, and (unlike the long, 0700 /Library/Application Support
+// state dir) traversable by the desktop user. Interactive/dev keeps the
+// socket beside the per-user state dir (same user as the daemon, so 0700
+// is not a cross-user barrier there). AutoDetect keys on euid==0 like
+// osStateDir. macOS has no XDG_RUNTIME_DIR.
+func osMgmtEndpoint(m Mode) string {
+	if v := os.Getenv(MgmtSocketEnvOverride); v != "" {
+		return v
+	}
+	switch m {
+	case System:
+		return "/var/run/waired/mgmt.sock"
+	case Interactive:
+		return filepath.Join(userStateDir(), "run", "mgmt.sock")
+	case AutoDetect:
+		if os.Geteuid() == 0 {
+			return "/var/run/waired/mgmt.sock"
+		}
+		return filepath.Join(userStateDir(), "run", "mgmt.sock")
+	default:
+		return "/var/run/waired/mgmt.sock"
+	}
+}

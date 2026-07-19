@@ -50,3 +50,14 @@ func osStateDir(m Mode) string {
 		return `C:\ProgramData\waired`
 	}
 }
+
+// osMgmtEndpoint returns the management write endpoint, a named pipe.
+// There is no unix-socket-style filesystem node on Windows; a single
+// machine runs one daemon instance so a fixed name is fine, and the pipe
+// DACL (see internal/platform/localipc) restricts connect to local
+// principals. m is unused because the pipe namespace is machine-global,
+// not per-user, and $WAIRED_MGMT_SOCKET does not apply on Windows.
+func osMgmtEndpoint(m Mode) string {
+	_ = m
+	return `\\.\pipe\waired-mgmt`
+}

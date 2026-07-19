@@ -200,6 +200,13 @@ func renderSystemdUnit(cfg Config, user string) string {
 	fmt.Fprintln(&b, "Group="+user)
 	fmt.Fprintln(&b, "EnvironmentFile=-"+LinuxEnvFilePath)
 	fmt.Fprintln(&b, "ReadWritePaths="+cfg.StateDir)
+	// RuntimeDirectory creates /run/waired (owned by User=, mode 0755) for
+	// the Local Management API write socket (waired#838), adds it to the
+	// service's writable set under ProtectSystem=strict, and removes it on
+	// stop (stale-socket cleanup). The desktop-user tray/CLI traverse the
+	// 0755 dir to reach the 0666 socket the daemon binds there.
+	fmt.Fprintln(&b, "RuntimeDirectory=waired")
+	fmt.Fprintln(&b, "RuntimeDirectoryMode=0755")
 	fmt.Fprintln(&b, "ProtectSystem=strict")
 	fmt.Fprintln(&b, "ProtectHome=yes")
 	fmt.Fprintln(&b, "NoNewPrivileges=yes")

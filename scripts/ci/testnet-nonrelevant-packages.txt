@@ -30,6 +30,7 @@ internal/observability/     # agent-side metrics/ring buffers for the management
 internal/platform/autostart/    # desktop login-item registration
 internal/platform/browser/      # open-URL helper for login flows
 internal/platform/elevation/    # process elevation predicate (root / elevated token); local privilege check, no mesh/enrollment surface
+internal/platform/localipc/     # local management-API write socket / named pipe listener; loopback IPC only, no mesh/enrollment surface
 internal/platform/logsink/      # local log-file sink
 internal/platform/notification/ # desktop notifications
 internal/platform/proclist/     # local process-table read (runner -np/-c for tuning verify); no mesh/enrollment surface

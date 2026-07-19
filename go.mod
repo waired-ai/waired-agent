@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.9.0
 	cloud.google.com/go/logging v1.18.0
 	fyne.io/systray v1.12.2
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/coder/websocket v1.8.15
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/klauspost/compress v1.19.0

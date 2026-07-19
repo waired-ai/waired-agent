@@ -23,3 +23,25 @@ func osStateDir(m Mode) string {
 		return ".waired"
 	}
 }
+
+// osMgmtEndpoint returns the management write-socket path. It lives in a
+// runtime dir traversable by the desktop user, never under the 0700 state
+// dir. System uses /run/waired (created by the systemd unit's
+// RuntimeDirectory=waired, owned by the waired user, mode 0755, and
+// removed on stop). Interactive/dev uses the per-user XDG runtime dir.
+func osMgmtEndpoint(m Mode) string {
+	if v := os.Getenv(MgmtSocketEnvOverride); v != "" {
+		return v
+	}
+	switch m {
+	case System:
+		return "/run/waired/mgmt.sock"
+	case AutoDetect, Interactive:
+		if x := os.Getenv("XDG_RUNTIME_DIR"); x != "" {
+			return filepath.Join(x, "waired", "mgmt.sock")
+		}
+		return filepath.Join(os.TempDir(), "waired", "mgmt.sock")
+	default:
+		return "/run/waired/mgmt.sock"
+	}
+}
