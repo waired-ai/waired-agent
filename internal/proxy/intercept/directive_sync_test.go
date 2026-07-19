@@ -18,6 +18,9 @@ func TestDirectiveIdsInSyncWithGateway(t *testing.T) {
 	if wairedLocalModel != gateway.ModelWairedLocal {
 		t.Errorf("local directive id drift: intercept %q != gateway %q", wairedLocalModel, gateway.ModelWairedLocal)
 	}
+	if wairedAutoModel != gateway.ModelWairedAuto {
+		t.Errorf("auto directive id drift: intercept %q != gateway %q", wairedAutoModel, gateway.ModelWairedAuto)
+	}
 	if wairedCloudModel != gateway.ModelWairedCloud {
 		t.Errorf("cloud directive id drift: intercept %q != gateway %q", wairedCloudModel, gateway.ModelWairedCloud)
 	}

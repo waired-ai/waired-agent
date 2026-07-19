@@ -20,6 +20,7 @@ import (
 // only mislabels the picker entry, it still forces the route).
 const (
 	wairedLocalDisplay = "Waired local (this device)"
+	wairedAutoDisplay  = "Waired auto (local, fallback to Anthropic)"
 	wairedCloudDisplay = "Waired cloud (Anthropic API)"
 )
 
@@ -30,22 +31,23 @@ type directiveEntry struct {
 	obj map[string]string
 }
 
-// directiveModelEntries builds the two directive model objects in picker order
-// (local first, cloud second — matching the local-serving path). The shape
-// mirrors gateway.anthropicModel's JSON: {type, id, display_name, created_at}.
-// max_input_tokens is intentionally omitted — Claude Code sizes the window from
-// the id string plus CLAUDE_CODE_MAX_CONTEXT_TOKENS, not this field.
+// directiveModelEntries builds the directive model objects in picker order
+// (auto first as the recommended default, then local, then cloud — matching the
+// local-serving path). The shape mirrors gateway.anthropicModel's JSON:
+// {type, id, display_name, created_at}. max_input_tokens is intentionally
+// omitted — Claude Code sizes the window from the id string plus
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS, not this field.
 func directiveModelEntries() []directiveEntry {
 	created := time.Now().UTC().Format(time.RFC3339)
+	entry := func(id, display string) directiveEntry {
+		return directiveEntry{id: id, obj: map[string]string{
+			"type": "model", "id": id, "display_name": display, "created_at": created,
+		}}
+	}
 	return []directiveEntry{
-		{id: wairedLocalModel, obj: map[string]string{
-			"type": "model", "id": wairedLocalModel,
-			"display_name": wairedLocalDisplay, "created_at": created,
-		}},
-		{id: wairedCloudModel, obj: map[string]string{
-			"type": "model", "id": wairedCloudModel,
-			"display_name": wairedCloudDisplay, "created_at": created,
-		}},
+		entry(wairedAutoModel, wairedAutoDisplay),
+		entry(wairedLocalModel, wairedLocalDisplay),
+		entry(wairedCloudModel, wairedCloudDisplay),
 	}
 }
 
@@ -54,6 +56,8 @@ func directiveDisplayName(id string) string {
 	switch id {
 	case wairedLocalModel:
 		return wairedLocalDisplay
+	case wairedAutoModel:
+		return wairedAutoDisplay
 	case wairedCloudModel:
 		return wairedCloudDisplay
 	default:
@@ -67,8 +71,8 @@ func directiveDisplayName(id string) string {
 // directive ids are made discoverable even though the real Anthropic model list
 // does not carry them:
 //
-//   - collection form → the upstream list is spliced (the two directive entries
-//     prepended to `data`) via a per-request ModifyResponse, so they appear in
+//   - collection form → the upstream list is spliced (the reserved directive
+//     entries prepended to `data`) via a per-request ModifyResponse, so they appear in
 //     Claude Code's /model picker even on the anthropic route. This is the whole
 //     point: the picker is populated once at startup, and only this makes the
 //     "switch back to Waired from /model while on anthropic" path possible.

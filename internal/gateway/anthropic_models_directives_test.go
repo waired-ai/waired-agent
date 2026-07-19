@@ -47,14 +47,14 @@ func discoveryModels(t *testing.T, directives bool) map[string]anthropicModel {
 // appear in discovery only when the opt-in is on.
 func TestAnthropicModels_DirectivesGatedByFlag(t *testing.T) {
 	off := discoveryModels(t, false)
-	for _, id := range []string{ModelWairedLocal, ModelWairedCloud} {
+	for _, id := range []string{ModelWairedLocal, ModelWairedAuto, ModelWairedCloud} {
 		if _, ok := off[id]; ok {
 			t.Errorf("reserved id %q must be absent from discovery when the feature is off", id)
 		}
 	}
 
 	on := discoveryModels(t, true)
-	for _, id := range []string{ModelWairedLocal, ModelWairedCloud} {
+	for _, id := range []string{ModelWairedLocal, ModelWairedAuto, ModelWairedCloud} {
 		m, ok := on[id]
 		if !ok {
 			t.Errorf("reserved id %q must be advertised when the feature is on", id)

@@ -90,20 +90,21 @@ func TestModelsAnthropicMergesDirectivesWhenFlagOn(t *testing.T) {
 	if err := json.Unmarshal(body, &env); err != nil {
 		t.Fatalf("merged body is not valid JSON: %v\n%s", err, body)
 	}
-	if len(env.Data) != 3 {
-		t.Fatalf("data length = %d, want 3 (2 directives + 1 upstream)", len(env.Data))
+	if len(env.Data) != 4 {
+		t.Fatalf("data length = %d, want 4 (3 directives + 1 upstream)", len(env.Data))
 	}
-	if env.Data[0].ID != wairedLocalModel || env.Data[1].ID != wairedCloudModel {
-		t.Errorf("directive order = %q,%q; want %q,%q", env.Data[0].ID, env.Data[1].ID, wairedLocalModel, wairedCloudModel)
+	if env.Data[0].ID != wairedAutoModel || env.Data[1].ID != wairedLocalModel || env.Data[2].ID != wairedCloudModel {
+		t.Errorf("directive order = %q,%q,%q; want %q,%q,%q",
+			env.Data[0].ID, env.Data[1].ID, env.Data[2].ID, wairedAutoModel, wairedLocalModel, wairedCloudModel)
 	}
-	if env.Data[0].DisplayName != wairedLocalDisplay {
-		t.Errorf("local display_name = %q, want %q", env.Data[0].DisplayName, wairedLocalDisplay)
+	if env.Data[0].DisplayName != wairedAutoDisplay {
+		t.Errorf("auto display_name = %q, want %q", env.Data[0].DisplayName, wairedAutoDisplay)
 	}
-	if env.Data[2].ID != "claude-sonnet-5" {
-		t.Errorf("upstream model dropped: data[2].id = %q, want claude-sonnet-5", env.Data[2].ID)
+	if env.Data[3].ID != "claude-sonnet-5" {
+		t.Errorf("upstream model dropped: data[3].id = %q, want claude-sonnet-5", env.Data[3].ID)
 	}
-	if env.FirstID != wairedLocalModel {
-		t.Errorf("first_id = %q, want %q (first prepended directive)", env.FirstID, wairedLocalModel)
+	if env.FirstID != wairedAutoModel {
+		t.Errorf("first_id = %q, want %q (first prepended directive)", env.FirstID, wairedAutoModel)
 	}
 	if env.LastID != "claude-sonnet-5" {
 		t.Errorf("last_id = %q, want claude-sonnet-5 (unchanged)", env.LastID)
@@ -115,7 +116,7 @@ func TestModelsAnthropicMergesDirectivesWhenFlagOn(t *testing.T) {
 
 // Both advertised ids must pass Claude Code's ^(claude|anthropic) picker filter.
 func TestMergedDirectiveIdsPassPickerFilter(t *testing.T) {
-	for _, id := range []string{wairedLocalModel, wairedCloudModel} {
+	for _, id := range []string{wairedAutoModel, wairedLocalModel, wairedCloudModel} {
 		if !strings.HasPrefix(id, "claude") && !strings.HasPrefix(id, "anthropic") {
 			t.Errorf("directive id %q must start with claude/anthropic to survive Claude Code's picker filter", id)
 		}
@@ -241,10 +242,11 @@ func TestModelsDirectivesIdempotent(t *testing.T) {
 	if err := json.Unmarshal(body, &env); err != nil {
 		t.Fatalf("body not JSON: %v (%s)", err, body)
 	}
-	locals := 0
-	clouds := 0
+	autos, locals, clouds := 0, 0, 0
 	for _, m := range env.Data {
 		switch m.ID {
+		case wairedAutoModel:
+			autos++
 		case wairedLocalModel:
 			locals++
 		case wairedCloudModel:
@@ -252,9 +254,12 @@ func TestModelsDirectivesIdempotent(t *testing.T) {
 		}
 	}
 	if locals != 1 {
-		t.Errorf("local directive appears %d times, want exactly 1 (idempotent)", locals)
+		t.Errorf("local directive appears %d times, want exactly 1 (idempotent — already present, not re-added)", locals)
+	}
+	if autos != 1 {
+		t.Errorf("auto directive appears %d times, want exactly 1 (missing one prepended)", autos)
 	}
 	if clouds != 1 {
-		t.Errorf("cloud directive appears %d times, want exactly 1 (only the missing one prepended)", clouds)
+		t.Errorf("cloud directive appears %d times, want exactly 1 (missing one prepended)", clouds)
 	}
 }

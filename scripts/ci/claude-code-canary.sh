@@ -81,6 +81,7 @@ stub="${here}/canary-models-stub.py"
 # Directive ids that MUST survive Claude Code's ^(claude|anthropic) filter, and
 # the junk id that MUST be filtered out. Keep in sync with canary-models-stub.py
 # and internal/proxy/intercept (wired{Local,Cloud}Model).
+want_auto="anthropic-waired-auto"
 want_local="anthropic-waired-local"
 want_cloud="claude-waired-cloud[1m]"
 junk_id="waired-junk-should-be-filtered"
@@ -143,6 +144,10 @@ discovery_e2e() {
 
   echo "discovery cache: ${cache}"
   local e2e_fail=0
+  if ! grep -qF -- "${want_auto}" "${cache}"; then
+    echo "FAIL: E2E — \"${want_auto}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
+    e2e_fail=1
+  fi
   if ! grep -qF -- "${want_local}" "${cache}"; then
     echo "FAIL: E2E — \"${want_local}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
     e2e_fail=1

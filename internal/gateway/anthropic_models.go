@@ -40,6 +40,14 @@ const (
 	// value to it (that env is honoured only for non-"claude-" ids) — the
 	// honest ~256k local window instead of Claude Code's 200k default.
 	ModelWairedLocal = "anthropic-waired-local"
+	// ModelWairedAuto pins the conversation to AUTO routing (the intercept forces
+	// route=auto): Waired inference first, falling back to the real Anthropic API
+	// when local/mesh serving is unavailable. Like the local id it does NOT start
+	// with "claude-", so it takes the CLAUDE_CODE_MAX_CONTEXT_TOKENS window — the
+	// conservative choice, since most turns serve locally and a fallback leg must
+	// not be sized to a window larger than the local engine's. On a fallback leg
+	// the intercept rewrites this id to a real model (same as the cloud id).
+	ModelWairedAuto = "anthropic-waired-auto"
 	// ModelWairedCloud pins the conversation to the real Anthropic API (the
 	// intercept forces route=anthropic and rewrites this id to a real model on
 	// passthrough). The "[1m]" suffix gives it Claude Code's 1M window.
@@ -113,6 +121,7 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 	// Claude Code sizes the window from the id string, not this field); the
 	// honest local window comes from CLAUDE_CODE_MAX_CONTEXT_TOKENS instead.
 	if h.deps.ClaudeModelDirectives {
+		add(ModelWairedAuto, "Waired auto (local, fallback to Anthropic)")
 		add(ModelWairedLocal, "Waired local (this device)")
 		add(ModelWairedCloud, "Waired cloud (Anthropic API)")
 	}
