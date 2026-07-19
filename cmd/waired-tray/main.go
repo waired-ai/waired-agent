@@ -20,6 +20,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/gui/tray"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
+	"github.com/waired-ai/waired-agent/internal/platform/singleinstance"
 )
 
 func main() {
@@ -42,6 +43,20 @@ func run(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+
+	// Single-instance guard (waired#807): the installer post-install
+	// launch, the Start-menu shortcut, and the next-logon HKCU Run
+	// autostart can all fire, and each launch would otherwise register
+	// its own tray icon. A guard failure is non-fatal — log it and run
+	// unguarded rather than refuse to start.
+	release, ok, err := singleinstance.Acquire("waired-tray")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "waired-tray: single-instance guard:", err)
+	}
+	if !ok {
+		return nil // another instance is already running; exit 0 silently
+	}
+	defer release()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
