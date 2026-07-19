@@ -161,3 +161,39 @@ func TestHandleInferenceRecommendationDismiss_EmptyBody(t *testing.T) {
 		t.Errorf("code = %d, want 204 (empty body dismisses current)", w.Code)
 	}
 }
+
+func TestHandleInferenceBenchmarkStatus(t *testing.T) {
+	inf := &fakeInference{benchStatus: BenchmarkStatusResponse{
+		State: BenchmarkStateDone, Gen: 3, MeasuredTokps: 78.2,
+		MeasuredAt: "2026-07-19T00:00:00Z",
+	}}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	r := httptest.NewRequest(http.MethodGet, "/waired/v1/inference/benchmark/status", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
+	}
+	var got BenchmarkStatusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.State != BenchmarkStateDone || got.Gen != 3 || got.MeasuredTokps != 78.2 {
+		t.Errorf("status = %+v, want done/gen=3/78.2", got)
+	}
+}
+
+func TestHandleInferenceBenchmarkStatus_POSTRejected(t *testing.T) {
+	inf := &fakeInference{}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/benchmark/status", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("code = %d, want 405", w.Code)
+	}
+}

@@ -928,6 +928,24 @@ type agentInferenceProvider struct {
 	// recommendation. nil lastBench = no benchmark has completed yet.
 	benchMu   sync.Mutex
 	lastBench *BenchResult
+
+	// benchJobMu guards the explicit-benchmark job state (waired#835
+	// §12). The measurement runs as a single-flight goroutine detached
+	// from any request context — a CLI timeout or dropped connection
+	// must not abort a 5-minute measurement — and its completion is
+	// persisted to catalog.State.LastBenchmark so the declarative
+	// generation counter survives restarts. benchJobDone is non-nil
+	// exactly while a run is in flight; concurrent RunBenchmark calls
+	// join it instead of starting a second engine-saturating run.
+	benchJobMu      sync.Mutex
+	benchJobDone    chan struct{}
+	benchJobOutcome *management.BenchmarkOutcome // last completed outcome (in-memory)
+	benchJobResult  *catalog.BenchmarkRecord     // last completed record (mirrors the persisted one)
+	// benchRun overrides the measurement itself for tests (the real
+	// path shells out to the engine over HTTP with multi-minute
+	// budgets). nil = RunBootBenchmark. Same injection style as
+	// ollamaUsable / BenchDeps.Now.
+	benchRun func(ctx context.Context) BenchResult
 	// lastDepthBench is the most recent #624 long-context sweep (nil =
 	// none yet). Shares benchMu with lastBench.
 	lastDepthBench *DepthBenchResult

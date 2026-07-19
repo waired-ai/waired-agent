@@ -249,12 +249,25 @@ func upgradeFromBench(
 	return rec
 }
 
+// benchJobTimeout bounds one detached benchmark run: warm-up is capped
+// at 180s and the measurement budget at 120s (inference_bench.go), so
+// 10 minutes covers the theoretical worst case with generous slack for
+// engine restarts mid-run.
+const benchJobTimeout = 10 * time.Minute
+
 // RunBenchmark forces a fresh on-device throughput benchmark of the
 // active model and returns the measurement plus the resulting
 // recommendation: lighter when below the interactive floor, upgrade
 // when there is headroom for a higher tier (mutually exclusive). ok is
 // false (with a nil error) when the engine/model is not ready yet —
 // the handler maps that to 425 so an installer flow can poll.
+//
+// The measurement itself runs as a single-flight job detached from ctx
+// (waired#835 §12): if the caller times out or disconnects, the run
+// completes anyway, is persisted (catalog.State.LastBenchmark), and is
+// retrievable via BenchmarkStatus / GET /inference/benchmark/status.
+// Concurrent calls join the in-flight run rather than starting a
+// second engine-saturating measurement.
 //
 // Unlike the boot benchmark, this bypasses the on-disk cache (Cache nil)
 // so an explicit re-run always re-measures — the user asked for a fresh
@@ -265,34 +278,139 @@ func (p *agentInferenceProvider) RunBenchmark(ctx context.Context) (management.B
 		return management.BenchmarkOutcome{}, false, nil
 	}
 
-	engineKind, enginePort := probeTargetForActive(p.cfg)
-	hw := p.profiler.Profile(ctx)
-	var firstGPU hardware.GPU
-	if len(hw.GPUs) > 0 {
-		firstGPU = hw.GPUs[0]
+	done := p.startBenchmarkJob(0)
+	select {
+	case <-done:
+	case <-ctx.Done():
+		// The job keeps running detached; the result lands in
+		// BenchmarkStatus once it completes.
+		return management.BenchmarkOutcome{}, false, ctx.Err()
 	}
 
-	bench := RunBootBenchmark(ctx, BenchDeps{
-		EngineKind:    engineKind,
-		EnginePort:    enginePort,
-		EngineModel:   engineModelForActive(p.cfg),
-		VariantID:     variantIDForActive(),
-		GPUModel:      firstGPU.Model,
-		VRAMTotalMB:   firstGPU.VRAMTotalMB,
-		DriverVersion: firstGPU.DriverVersion,
-		Logger:        p.logger,
-	})
+	p.benchJobMu.Lock()
+	defer p.benchJobMu.Unlock()
+	if p.benchJobOutcome == nil {
+		// Defensive: the job closed done without recording an outcome.
+		return management.BenchmarkOutcome{}, false, nil
+	}
+	return *p.benchJobOutcome, true, nil
+}
+
+// startBenchmarkJob starts the detached single-flight benchmark run
+// under the given declarative generation (0 = not counter-driven) and
+// returns a channel closed when it completes. If a run is already in
+// flight its channel is returned instead (join semantics).
+func (p *agentInferenceProvider) startBenchmarkJob(gen int) <-chan struct{} {
+	p.benchJobMu.Lock()
+	defer p.benchJobMu.Unlock()
+	if p.benchJobDone != nil {
+		return p.benchJobDone
+	}
+	done := make(chan struct{})
+	p.benchJobDone = done
+	go p.runBenchmarkJob(gen, done)
+	return done
+}
+
+// runBenchmarkJob is the detached job body: measure, derive
+// recommendations, persist the completion record, publish the outcome,
+// close done. Runs against its own bounded context — never a request's.
+func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
+	ctx, cancel := context.WithTimeout(context.Background(), benchJobTimeout)
+	defer cancel()
+
+	hw := p.profiler.Profile(ctx)
+	var bench BenchResult
+	if p.benchRun != nil {
+		bench = p.benchRun(ctx)
+	} else {
+		engineKind, enginePort := probeTargetForActive(p.cfg)
+		var firstGPU hardware.GPU
+		if len(hw.GPUs) > 0 {
+			firstGPU = hw.GPUs[0]
+		}
+		bench = RunBootBenchmark(ctx, BenchDeps{
+			EngineKind:    engineKind,
+			EnginePort:    enginePort,
+			EngineModel:   engineModelForActive(p.cfg),
+			VariantID:     variantIDForActive(),
+			GPUModel:      firstGPU.Model,
+			VRAMTotalMB:   firstGPU.VRAMTotalMB,
+			DriverVersion: firstGPU.DriverVersion,
+			Logger:        p.logger,
+		})
+	}
 	p.SetLastBench(bench)
 
 	engineVersion := p.ollamaEngineVersion(ctx)
 	p.benchMu.Lock()
 	depth := p.lastDepthBench
 	p.benchMu.Unlock()
-	return management.BenchmarkOutcome{
+	outcome := management.BenchmarkOutcome{
 		MeasuredTokps: bench.TokensPerSec,
 		Lighter:       recommendationFromBench(bench, depth, p.store, hw, p.manifests, p.cfg, engineVersion),
 		Upgrade:       upgradeFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
-	}, true, nil
+	}
+
+	record := catalog.BenchmarkRecord{
+		Gen:           gen,
+		MeasuredTokps: bench.TokensPerSec,
+		Failed:        bench.Failed,
+		Error:         bench.Err,
+		MeasuredAt:    time.Now().UTC(),
+	}
+	if err := p.store.Update(func(s *catalog.State) {
+		// A gen-0 (boot/CLI) run must not regress a counter-driven
+		// generation the CP already saw — keep the stored gen then.
+		if record.Gen == 0 && s.LastBenchmark != nil && s.LastBenchmark.Gen > 0 {
+			record.Gen = s.LastBenchmark.Gen
+		}
+		s.LastBenchmark = &record
+	}); err != nil {
+		p.logger.Warn("benchmark: persist completion record", "err", err)
+	}
+
+	p.benchJobMu.Lock()
+	p.benchJobOutcome = &outcome
+	p.benchJobResult = &record
+	p.benchJobDone = nil
+	p.benchJobMu.Unlock()
+	close(done)
+}
+
+// BenchmarkStatus reports the job's current state for
+// GET /waired/v1/inference/benchmark/status (waired#835 §12). Falls
+// back to the persisted completion record after a restart.
+func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusResponse {
+	p.benchJobMu.Lock()
+	running := p.benchJobDone != nil
+	last := p.benchJobResult
+	p.benchJobMu.Unlock()
+
+	if last == nil {
+		// Nothing completed this process lifetime — consult the
+		// persisted record (survives restarts).
+		if st, err := p.store.Load(); err == nil && st.LastBenchmark != nil {
+			rec := *st.LastBenchmark
+			last = &rec
+		}
+	}
+
+	resp := management.BenchmarkStatusResponse{State: management.BenchmarkStateIdle}
+	if last != nil {
+		resp.State = management.BenchmarkStateDone
+		if last.Failed {
+			resp.State = management.BenchmarkStateFailed
+			resp.Error = last.Error
+		}
+		resp.Gen = last.Gen
+		resp.MeasuredTokps = last.MeasuredTokps
+		resp.MeasuredAt = last.MeasuredAt.Format(time.RFC3339)
+	}
+	if running {
+		resp.State = management.BenchmarkStateRunning
+	}
+	return resp
 }
 
 // DismissRecommendation records that the user declined a model-switch

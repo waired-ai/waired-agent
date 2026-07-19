@@ -55,6 +55,24 @@ type State struct {
 	// toVariantID); the active variant's SHA changes when the user
 	// switches models, which naturally invalidates stale dismissals.
 	DismissedRecommendations map[string]time.Time `json:"dismissed_recommendations,omitempty"`
+
+	// LastBenchmark persists the most recent completed benchmark run
+	// (waired#835 §12) so the declarative generation counter and its
+	// result survive daemon restarts — the CP compares the pushed gen
+	// against desired_benchmark_gen, and an in-memory-only record would
+	// re-trigger a benchmark on every restart.
+	LastBenchmark *BenchmarkRecord `json:"last_benchmark,omitempty"`
+}
+
+// BenchmarkRecord is the persisted completion record of a benchmark
+// job. Gen is the desired_benchmark_gen generation the run was
+// requested under (0 for boot/CLI-triggered runs).
+type BenchmarkRecord struct {
+	Gen           int       `json:"gen,omitempty"`
+	MeasuredTokps float64   `json:"measured_tokps,omitempty"`
+	Failed        bool      `json:"failed,omitempty"`
+	Error         string    `json:"error,omitempty"`
+	MeasuredAt    time.Time `json:"measured_at"`
 }
 
 // DismissalKey builds the map key for DismissedRecommendations from the

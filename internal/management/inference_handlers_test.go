@@ -42,6 +42,7 @@ type fakeInference struct {
 	benchOut      BenchmarkOutcome
 	benchOK       bool
 	benchErr      error
+	benchStatus   BenchmarkStatusResponse
 	dismissedFrom string
 	dismissedTo   string
 	dismissErr    error
@@ -78,6 +79,12 @@ func (f *fakeInference) Select(_ context.Context, req router.Request) (router.Se
 }
 func (f *fakeInference) RunBenchmark(context.Context) (BenchmarkOutcome, bool, error) {
 	return f.benchOut, f.benchOK, f.benchErr
+}
+func (f *fakeInference) BenchmarkStatus() BenchmarkStatusResponse {
+	if f.benchStatus.State == "" {
+		return BenchmarkStatusResponse{State: BenchmarkStateIdle}
+	}
+	return f.benchStatus
 }
 func (f *fakeInference) DismissRecommendation(from, to string) error {
 	f.mu.Lock()
