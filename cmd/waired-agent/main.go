@@ -125,6 +125,10 @@ func run(ctx context.Context, args []string) error {
 		"loopback bind for the Local Management API")
 	mgmtHardening := fs.Bool("mgmt-hardening", true,
 		"enforce Host/Origin allow-listing + Content-Type: application/json on the Local Management API (defends against DNS-rebinding / cross-site requests from a web page; disable only for local debugging)")
+	mgmtSocket := fs.String("mgmt-socket", "",
+		"override the local IPC write endpoint (unix-domain socket path on Linux/macOS, named pipe on Windows); empty auto-derives from --state-dir. Mutating requests use this endpoint; the loopback TCP port serves reads (waired#838)")
+	mgmtSocketWritesOnly := fs.Bool("mgmt-socket-writes-only", false,
+		"refuse mutating requests on the loopback TCP port, requiring the local IPC socket instead (waired#838); enabled once the CLI and tray have been migrated to the socket")
 	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
 		"control plane base URL used for daemon-driven login (POST /waired/v1/login/start); a login request may override it")
 	loginListen := fs.String("login-listen", "127.0.0.1:0",
@@ -297,6 +301,7 @@ func run(ctx context.Context, args []string) error {
 	if *mgmtHardening {
 		mgmtSrv = mgmtSrv.WithBrowserHardening()
 	}
+	mgmtSrv = mgmtSrv.WithSocketWritesOnly(*mgmtSocketWritesOnly)
 	// Inference routes are gated on the install-time --disable-inference
 	// choice (a boot decision, not a session one), mirroring the old
 	// inline wiring: an inference-disabled agent leaves these routes
@@ -1241,6 +1246,20 @@ func run(ctx context.Context, args []string) error {
 	updateCtl := newUpdateController(*stateDir)
 	mgmtSrv = mgmtSrv.WithUpdateController(updateCtl)
 
+	// Resolve the local IPC write endpoint (waired#838). Empty --mgmt-socket
+	// auto-derives from the resolved state dir: a system install
+	// (--state-dir == the OS system dir) binds the System runtime socket
+	// (/run/waired, /var/run/waired, or the machine-wide named pipe); a
+	// dev / interactive run binds a per-user runtime socket.
+	mgmtSocketEndpoint := *mgmtSocket
+	if mgmtSocketEndpoint == "" {
+		socketMode := paths.AutoDetect
+		if *stateDir == paths.StateDir(paths.System) {
+			socketMode = paths.System
+		}
+		mgmtSocketEndpoint = paths.MgmtEndpoint(socketMode)
+	}
+
 	var srvWG sync.WaitGroup
 	srvWG.Add(1)
 	go func() {
@@ -1249,6 +1268,19 @@ func run(ctx context.Context, args []string) error {
 			logger.Error("management server stopped", "err", err)
 		}
 	}()
+	// Local IPC write channel (waired#838): a unix socket (Linux/macOS) /
+	// named pipe (Windows) that browsers and network peers cannot open.
+	// Fail-open: a bind failure logs but does not crash the agent — the TCP
+	// listener's writeGuard keys on the socket actually being up.
+	if mgmtSocketEndpoint != "" {
+		srvWG.Add(1)
+		go func() {
+			defer srvWG.Done()
+			if err := mgmtSrv.ServeLocal(ctx, mgmtSocketEndpoint); err != nil {
+				logger.Error("management local IPC socket stopped", "err", err, "endpoint", mgmtSocketEndpoint)
+			}
+		}()
+	}
 
 	// Background version-check loop (#294): refreshes the cached update
 	// status on a 6h cadence so a release published after boot surfaces on
