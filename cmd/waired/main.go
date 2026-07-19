@@ -1367,19 +1367,19 @@ func readMgmtResponse(resp *http.Response, err error, viaSocket bool) ([]byte, e
 // port: the /ping liveness probe, which the daemon's writeGuard also exempts,
 // and tests, which clear mgmtWriteBase so they can address httptest servers
 // directly (the socket transport has its own coverage).
-func mgmtWriteRoute(rawURL string) (target string, client *http.Client, viaSocket bool, err error) {
+func mgmtWriteRoute(rawURL string, timeout time.Duration) (target string, client *http.Client, viaSocket bool, err error) {
 	u, perr := url.Parse(rawURL)
 	if perr != nil {
 		return "", nil, false, perr
 	}
 	if mgmtWriteBase == "" || u.Path == mgmtPingPath {
-		return rawURL, &http.Client{Timeout: 10 * time.Second}, false, nil
+		return rawURL, &http.Client{Timeout: timeout}, false, nil
 	}
-	return mgmtWriteBase + u.RequestURI(), mgmtWriteClient(10 * time.Second), true, nil
+	return mgmtWriteBase + u.RequestURI(), mgmtWriteClient(timeout), true, nil
 }
 
 func httpPost(rawURL string, body []byte) ([]byte, error) {
-	target, client, viaSocket, err := mgmtWriteRoute(rawURL)
+	target, client, viaSocket, err := mgmtWriteRoute(rawURL, 10*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -1388,7 +1388,7 @@ func httpPost(rawURL string, body []byte) ([]byte, error) {
 }
 
 func httpDelete(rawURL string) ([]byte, error) {
-	target, client, viaSocket, err := mgmtWriteRoute(rawURL)
+	target, client, viaSocket, err := mgmtWriteRoute(rawURL, 10*time.Second)
 	if err != nil {
 		return nil, err
 	}

@@ -40,6 +40,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/management/observabilityclient"
 	"github.com/waired-ai/waired-agent/internal/observability"
 )
@@ -207,17 +208,22 @@ func daemonReachable(e Env) bool {
 // harness is self-sufficient when the shell hook hasn't pre-pulled it. Idempotent.
 func pullTinyModel(ctx context.Context, e Env) error {
 	body, _ := json.Marshal(map[string]string{"model": e.TinyAlias})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.MgmtURL+"/waired/v1/models/pull", bytes.NewReader(body))
+	// models/pull is a mutating verb: since waired#838 it travels over the
+	// local IPC socket, and the loopback TCP port (e.MgmtURL, still used for
+	// the reads above) refuses it with 403.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ipcclient.BaseURL+"/waired/v1/models/pull", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	status, resp, err := do(req)
+	httpResp, err := ipcclient.NewHTTPClient(60 * time.Second).Do(req)
 	if err != nil {
-		return err
+		return ipcclient.WrapDialError(err)
 	}
-	if status >= 400 {
-		return fmt.Errorf("models/pull %s: HTTP %d: %s", e.TinyAlias, status, resp)
+	defer httpResp.Body.Close()
+	resp, _ := io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode >= 400 {
+		return fmt.Errorf("models/pull %s: HTTP %d: %s", e.TinyAlias, httpResp.StatusCode, resp)
 	}
 	return nil
 }

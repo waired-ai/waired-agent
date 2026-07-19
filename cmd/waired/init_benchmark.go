@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 )
 
 // benchPollDeadline bounds how long `waired init` waits for the model to
@@ -425,9 +426,20 @@ func dismissRecommendation(mgmtURL, fromVariantID, toVariantID string) error {
 // benchPost performs a status-aware POST: it returns the HTTP status code
 // and body separately (unlike httpPost, which collapses non-2xx into an
 // error) so the caller can branch on 425 / 404.
-func benchPost(url string, body []byte) (int, []byte, error) {
-	resp, err := benchHTTP.Post(url, "application/json", bytes.NewReader(body))
+func benchPost(rawURL string, body []byte) (int, []byte, error) {
+	// The benchmark is a mutating verb, so it travels over the local IPC
+	// socket like every other write (waired#838) — the loopback TCP port
+	// refuses it. benchHTTP's long timeout still applies: a benchmark can
+	// run for minutes.
+	target, client, viaSocket, err := mgmtWriteRoute(rawURL, benchHTTP.Timeout)
 	if err != nil {
+		return 0, nil, err
+	}
+	resp, err := client.Post(target, "application/json", bytes.NewReader(body))
+	if err != nil {
+		if viaSocket {
+			return 0, nil, ipcclient.WrapDialError(err)
+		}
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
