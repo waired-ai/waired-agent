@@ -102,6 +102,60 @@ func TestDirectiveCloudForcesAnthropic(t *testing.T) {
 	}
 }
 
+// TestDirectiveAutoForcesAuto: the reserved auto id forces route=auto even
+// though the per-class policy says anthropic — so a healthy local engine serves
+// the turn instead of the real Anthropic API.
+func TestDirectiveAutoForcesAuto(t *testing.T) {
+	var gotPath string
+	s := newDirectiveServer(t, Deps{
+		LocalInference:       recordingHandler(&gotPath),
+		Degraded:             func() bool { return false },   // healthy
+		ClassRoute:           classRouteFunc(routeAnthropic), // opposite of the directive
+		PassthroughTransport: fakeUpstream(nil),
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/v1/messages", "application/json",
+		strings.NewReader(`{"model":"`+wairedAutoModel+`","max_tokens":16}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if gotPath != "/anthropic/v1/messages" {
+		t.Errorf("auto directive did not serve locally when healthy (gotPath=%q)", gotPath)
+	}
+	if resp.Header.Get("X-Fake-Upstream") == "1" {
+		t.Error("auto directive with healthy local must not pass through")
+	}
+}
+
+// TestDirectiveAutoFallsBackRewritten: the auto id is Waired-first with Anthropic
+// fallback — when local is degraded the turn fails open to the real API, and the
+// synthetic id MUST be rewritten to a real model (the auto id would otherwise be
+// rejected upstream). Guards the passthrough-rewrite generalization to all
+// directive ids.
+func TestDirectiveAutoFallsBackRewritten(t *testing.T) {
+	var bodies []string
+	var localHit bool
+	s := newDirectiveServer(t, Deps{
+		LocalInference:       recordingHandler2(&localHit),
+		Degraded:             func() bool { return true }, // degraded → fail open
+		ClassRoute:           classRouteFunc(routeWaired),
+		PassthroughTransport: bodyCapturingUpstream(&bodies),
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	postJSON(t, srv.URL+"/v1/messages", `{"model":"`+wairedAutoModel+`","max_tokens":16}`)
+	if len(bodies) != 1 {
+		t.Fatalf("auto+degraded upstream saw %d bodies, want 1 (fail open)", len(bodies))
+	}
+	if got := upstreamModel(t, bodies[0]); got != defaultPassthroughModel {
+		t.Errorf("auto fallback upstream model = %q, want rewritten %q (never the fake id)", got, defaultPassthroughModel)
+	}
+}
+
 // TestDirectiveIgnoredWhenFlagOff: with the feature off, the reserved id is a
 // plain unknown model and rides the per-class policy — proving the override is
 // strictly opt-in and does not perturb the default fast path.
@@ -165,6 +219,7 @@ func TestDirectiveRouteMapping(t *testing.T) {
 		wantOK    bool
 	}{
 		wairedLocalModel:      {routeWaired, true},
+		wairedAutoModel:       {routeAuto, true},
 		wairedCloudModel:      {routeAnthropic, true},
 		"claude-opus-4-8[1m]": {"", false},
 		"waired/subagent":     {"", false},

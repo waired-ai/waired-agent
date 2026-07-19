@@ -26,11 +26,11 @@
 //
 // The model-route-directives feature (#52), when opted in, additionally writes
 // env.CLAUDE_CODE_MAX_CONTEXT_TOKENS. That override is honoured ONLY for model
-// ids not starting with "claude-", so it sizes the non-"claude-" local /model
-// directive id ("anthropic-waired-local") to an honest ~256k window while never
-// touching real "claude-*" ids — categorically different from the #771
-// auto-compact backstop that capped 1M Anthropic sessions. On by default
-// (opt-out via agentconfig); WriteWithOptions gates the actual write.
+// ids not starting with "claude-", so it sizes the non-"claude-" directive ids
+// ("anthropic-waired-local" and "anthropic-waired-auto") to an honest ~256k
+// window while never touching real "claude-*" ids — categorically different
+// from the #771 auto-compact backstop that capped 1M Anthropic sessions. On by
+// default (opt-out via agentconfig); WriteWithOptions gates the actual write.
 //
 // It also installs a Stop hook (hooks.Stop) that runs `waired claude
 // _fallback-hook` so a post-dispatch fallback to the real Anthropic API is
@@ -114,8 +114,8 @@ const subagentModelKey = "CLAUDE_CODE_SUBAGENT_MODEL"
 // CLAUDE_CODE_AUTO_COMPACT_WINDOW backstop this package deliberately stopped
 // writing — it can never cap a genuine 1M Anthropic session. waired writes it
 // only for the model-route-directives feature (#52), to give the non-"claude-"
-// local id ("anthropic-waired-local") an honest ~256k window; like every
-// managed env it is frozen at Claude Code process start.
+// directive ids ("anthropic-waired-local" / "anthropic-waired-auto") an honest
+// ~256k window; like every managed env it is frozen at Claude Code process start.
 const maxContextTokensKey = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 
 // directivesMaxContextTokensValue is the window waired advertises for the local

@@ -523,19 +523,25 @@ func (s *Server) passthroughMessages(w http.ResponseWriter, r *http.Request) {
 //   - waired     → serve locally (the list needs only manifests + tuning,
 //     no running engine); passthrough only if no local handler is wired.
 //   - auto       → serve locally when healthy, else passthrough.
+//
+// On any passthrough leg the reserved #52 directive ids are spliced into the
+// upstream list (passthroughModels) when the feature is on, so they surface in
+// Claude Code's /model picker even on the anthropic route — the only way to
+// switch back to Waired from /model once the session started on anthropic. The
+// local-serving path (dispatchLocal → gateway) already advertises them.
 func (s *Server) routeModels(w http.ResponseWriter, r *http.Request) {
 	switch s.classRoute(classMain) {
 	case routeAnthropic:
-		s.passthrough(w, r)
+		s.passthroughModels(w, r)
 	case routeWaired:
 		if s.deps.LocalInference == nil {
-			s.passthrough(w, r)
+			s.passthroughModels(w, r)
 			return
 		}
 		s.dispatchLocal(w, r)
 	default: // routeAuto
 		if s.deps.LocalInference == nil || (s.deps.Degraded != nil && s.deps.Degraded()) {
-			s.passthrough(w, r)
+			s.passthroughModels(w, r)
 			return
 		}
 		s.dispatchLocal(w, r)

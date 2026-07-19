@@ -25,15 +25,17 @@ const wairedModelPrefix = "waired/"
 // — so the last-observed main model is the closest approximation).
 const defaultPassthroughModel = "claude-sonnet-5"
 
-// wairedLocalModel / wairedCloudModel are the reserved /model route-directive
-// ids (#52). Selected in Claude Code's /model picker they force this request's
-// route regardless of the operator's /waired-route policy: local pins to the
-// device (route=waired), cloud pins to the real Anthropic API
-// (route=anthropic). The gateway advertises them in /v1/models discovery
-// (gateway.ModelWaired{Local,Cloud}); the literals are duplicated here to keep
-// this fail-open package stdlib-only — keep both sides in sync.
+// wairedLocalModel / wairedAutoModel / wairedCloudModel are the reserved /model
+// route-directive ids (#52). Selected in Claude Code's /model picker they force
+// this request's route regardless of the operator's /waired-route policy: local
+// pins to the device (route=waired), auto is Waired-first with Anthropic
+// fallback (route=auto), cloud pins to the real Anthropic API (route=anthropic).
+// The gateway advertises them in /v1/models discovery
+// (gateway.ModelWaired{Local,Auto,Cloud}); the literals are duplicated here to
+// keep this fail-open package stdlib-only — keep both sides in sync.
 const (
 	wairedLocalModel = "anthropic-waired-local"
+	wairedAutoModel  = "anthropic-waired-auto"
 	wairedCloudModel = "claude-waired-cloud[1m]"
 )
 
@@ -44,6 +46,8 @@ func directiveRoute(model string) (route string, ok bool) {
 	switch model {
 	case wairedLocalModel:
 		return routeWaired, true
+	case wairedAutoModel:
+		return routeAuto, true
 	case wairedCloudModel:
 		return routeAnthropic, true
 	default:
@@ -77,18 +81,20 @@ func bodyModel(body []byte) (string, bool) {
 }
 
 // rewritePassthroughModel returns (newBody, true) when body is a JSON
-// object whose "model" is a waired/-prefixed string OR the reserved cloud
-// directive id (#52); otherwise (nil, false) and the caller passes the
-// original bytes through verbatim. Both are ids the real Anthropic API would
-// reject, so they must be rewritten to a real model on any passthrough leg.
-// The mutation is lossless for every other field: the object is decoded as
-// map[string]json.RawMessage so numbers, unicode, and unknown fields are
-// re-emitted byte-exact — only the "model" value is re-encoded.
+// object whose "model" is a waired/-prefixed string OR any reserved directive
+// id (#52); otherwise (nil, false) and the caller passes the original bytes
+// through verbatim. None is a real Anthropic model, so any that reaches a
+// passthrough leg must be rewritten or the API rejects it. In practice the auto
+// directive's Anthropic-fallback leg and the cloud directive both hit this; the
+// local directive never passes through (route=waired has no fallback), but it is
+// covered defensively. The mutation is lossless for every other field: the
+// object is decoded as map[string]json.RawMessage so numbers, unicode, and
+// unknown fields are re-emitted byte-exact — only the "model" value is re-encoded.
 func rewritePassthroughModel(body []byte, replacement string) ([]byte, bool) {
-	// Cheap pre-filter: only subagent-labelled bodies carry the waired/
-	// prefix and only a cloud-directive selection carries that id;
-	// everything else skips the parse.
-	if !bytes.Contains(body, []byte(`"`+wairedModelPrefix)) && !bytes.Contains(body, []byte(wairedCloudModel)) {
+	// Cheap pre-filter: only subagent-labelled bodies (waired/ prefix) and the
+	// reserved directive ids carry the substring "waired"; everything else skips
+	// the parse.
+	if !bytes.Contains(body, []byte("waired")) {
 		return nil, false
 	}
 	var obj map[string]json.RawMessage
@@ -103,7 +109,7 @@ func rewritePassthroughModel(body []byte, replacement string) ([]byte, bool) {
 	if err := json.Unmarshal(raw, &model); err != nil {
 		return nil, false
 	}
-	if !strings.HasPrefix(model, wairedModelPrefix) && model != wairedCloudModel {
+	if !strings.HasPrefix(model, wairedModelPrefix) && !isDirectiveModel(model) {
 		return nil, false
 	}
 	enc, err := json.Marshal(replacement)
