@@ -170,6 +170,65 @@ assert_inference_macos() {
   fi
 }
 
+# assert_mgmt_socket_macos — darwin analog of lib/installtest-enroll.sh's
+# assert_mgmt_socket (waired#838/#80). Mutating management requests must travel
+# over the local IPC socket and must NOT be accepted on the loopback TCP port,
+# while reads stay on TCP.
+#
+# Load-bearing because writeGuard fails OPEN: if the socket never binds, writes
+# silently fall back to the old TCP behaviour and NOTHING else goes red. On
+# Linux this assert is what caught the missing systemd RuntimeDirectory.
+#
+# Deliberately unelevated: the daemon is a root LaunchDaemon and the socket is
+# 0666 inside a 0755 /var/run/waired, so the desktop user must be able to drive
+# it. That cross-user reachability IS the #838 design premise (peer-uid
+# authorization was rejected because it contradicts a system-wide install), and
+# macOS is the only leg where the daemon and the CLI genuinely run as different
+# users.
+assert_mgmt_socket_macos() {
+  local sock=/var/run/waired/mgmt.sock out code
+
+  [ -S "$sock" ] && ok "management write socket present at $sock" \
+    || bad "management write socket missing at $sock (MkdirAll / bind failure)"
+
+  # The exit code alone proves nothing: runPhaseTransition treats an
+  # unreachable daemon as the documented offline fallback (persist the desired
+  # phase, return 0) and its isConnectionRefused() even matches "no such file
+  # or directory" — i.e. a MISSING socket. Assert on stdout instead; "pause
+  # ok." is printed only after a real daemon round-trip.
+  out="$("$BINDIR/waired" pause 2>&1)"
+  if printf '%s' "$out" | grep -q 'not running'; then
+    bad "waired pause fell back to the offline desired-phase path (socket unreachable): $out"
+  elif printf '%s' "$out" | grep -q 'pause ok\.'; then
+    ok "unelevated 'waired pause' reached the root daemon over $sock (#838 premise)"
+  else
+    bad "waired pause produced no daemon acknowledgement: $out"
+  fi
+
+  out="$("$BINDIR/waired" resume 2>&1)"
+  printf '%s' "$out" | grep -q 'resume ok\.' \
+    && ok "unelevated 'waired resume' reached the daemon over the socket" \
+    || bad "waired resume did not reach the daemon: $out"
+
+  # Negative: the same mutating verb must be refused on the TCP port.
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' \
+    http://127.0.0.1:9476/waired/v1/pause 2>/dev/null || true)
+  case "$code" in
+    2*) bad "TCP :9476 accepted a mutating write (HTTP $code); writeGuard not enforcing (waired#838)" ;;
+    "") bad "TCP :9476 mutating-write probe produced no status code" ;;
+    *)  ok "TCP :9476 refuses mutating writes (HTTP $code)" ;;
+  esac
+
+  # Reads deliberately stay on TCP.
+  curl -fsS --max-time 5 "$MGMT" >/dev/null 2>&1 \
+    && ok "TCP :9476 still serves reads" \
+    || bad "TCP :9476 no longer serves reads"
+
+  # Leave the daemon active whichever leg above failed.
+  "$BINDIR/waired" resume >/dev/null 2>&1 || true
+}
+
 # Passwordless sudo is a hard requirement now that the agent is a system
 # daemon (install.sh sudo's the register/init steps; we sudo the asserts).
 sudo -n true 2>/dev/null || it_die "passwordless sudo required (system LaunchDaemon install needs root)"
@@ -338,6 +397,10 @@ if [ "$TIER" -ge 2 ]; then
     sudo log show --predicate 'process == "waired-agent"' --last 2m 2>/dev/null | tail -40 >&2 || true
     [ -f /Library/Logs/waired-agent.err.log ] && sudo tail -40 /Library/Logs/waired-agent.err.log >&2 || true
   fi
+
+  # Cheap and fast, so it runs before the minutes-long inference asserts.
+  it_step "management write socket asserts (waired#838)"
+  assert_mgmt_socket_macos
 
   if [ "$INFER" = 1 ]; then
     it_step "inference asserts (--inference)"

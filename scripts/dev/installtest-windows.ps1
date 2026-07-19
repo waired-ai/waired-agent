@@ -120,6 +120,10 @@ $script:ContractBlocking = @{
     '751' = $true    # waired#751: `waired status` exits 0 in non-elevated contexts (FIXED)
     '754' = $true    # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts (FIXED)
     '755' = $true    # waired#755: the install path surfaces the tray (Start Menu group / autostart) (FIXED)
+    # waired#838's fix IS merged; this entry stays $false only for the first CI
+    # run of #80, so the brand-new Windows pipe asserts are OBSERVED (WARN)
+    # before they gate. Flipped to $true in this same PR once that run is clean.
+    '838' = $false
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -231,6 +235,94 @@ function Assert-Inference {
     } else {
         ItBad "no init transcript captured ($InitLog)"
     }
+}
+
+# --- management write pipe assert (waired#838/#80) --------------------------
+# Windows analog of lib/installtest-enroll.sh's assert_mgmt_socket: mutating
+# management requests must travel over the local named pipe and must NOT be
+# accepted on the loopback TCP port, while reads stay on TCP.
+#
+# Load-bearing because writeGuard fails OPEN: if the pipe never comes up,
+# writes silently fall back to the old TCP behaviour and nothing else goes
+# red. (On Linux this same assert is what caught a missing systemd
+# RuntimeDirectory.) The pipe DACL is SDDL "SY+BA+IU" — IU excludes network
+# logons, so the pipe is unreachable over SMB.
+#
+# Soft (ItSoft '838') on the first CI run only: the pipe path cannot be
+# exercised outside a real Windows host, so it is observed once as a WARN and
+# then flipped blocking in $ContractBlocking.
+function Assert-MgmtPipe {
+    $pipe = 'waired-mgmt'
+
+    # There is no filesystem node for a pipe, so connectability IS the
+    # existence proof.
+    $connected = $false
+    $client = $null
+    try {
+        $client = New-Object System.IO.Pipes.NamedPipeClientStream(
+            '.', $pipe, [System.IO.Pipes.PipeDirection]::InOut)
+        $client.Connect(3000)
+        $connected = $client.IsConnected
+    } catch {
+        ItLog "named-pipe connect threw: $($_.Exception.Message)"
+    } finally {
+        if ($client) { $client.Dispose() }
+    }
+    if (-not $connected) {
+        # Diagnostic: what waired-ish pipes exist at all?
+        try {
+            $names = [System.IO.Directory]::GetFiles('\\.\pipe\') |
+                     Where-Object { $_ -match 'waired' }
+            ItLog "pipes matching 'waired': $(if ($names) { $names -join ', ' } else { '(none)' })"
+        } catch { ItLog "could not enumerate \\.\pipe\: $($_.Exception.Message)" }
+    }
+    ItSoft '838' $connected "management write pipe \\.\pipe\$pipe is connectable"
+
+    # The exit code alone proves nothing: runPhaseTransition treats an
+    # unreachable daemon as the documented offline fallback (persist the
+    # desired phase, return 0). Assert on stdout — "pause ok." is printed
+    # only after a real daemon round-trip.
+    # EAP is relaxed around the native calls (redirected native stderr becomes
+    # a terminating NativeCommandError under EAP=Stop in PS 5.1 — the same
+    # trap the Tier-2 init call documents).
+    $waired  = Join-Path $InstallDir 'waired.exe'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $pauseOut  = (& $waired pause  2>&1 | Out-String)
+        $resumeOut = (& $waired resume 2>&1 | Out-String)
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    $pauseOk = ($pauseOut -match 'pause ok\.') -and ($pauseOut -notmatch 'not running')
+    ItSoft '838' $pauseOk "waired pause reached the daemon over the pipe -- $($pauseOut.Trim())"
+    $resumeOk = ($resumeOut -match 'resume ok\.') -and ($resumeOut -notmatch 'not running')
+    ItSoft '838' $resumeOk "waired resume reached the daemon over the pipe -- $($resumeOut.Trim())"
+
+    # Negative: the same mutating verb must be refused on the TCP port.
+    # PS 5.1 has no -SkipHttpErrorCheck, so a non-2xx surfaces as a terminating
+    # WebException whose Response carries the status.
+    $tcpCode = $null
+    try {
+        $r = Invoke-WebRequest -UseBasicParsing -Method POST `
+                -ContentType 'application/json' `
+                -Uri 'http://127.0.0.1:9476/waired/v1/pause' -TimeoutSec 5
+        $tcpCode = [int]$r.StatusCode
+    } catch {
+        if ($_.Exception.Response) { $tcpCode = [int]$_.Exception.Response.StatusCode }
+    }
+    $tcpRefused = ($null -ne $tcpCode) -and ($tcpCode -lt 200 -or $tcpCode -ge 300)
+    ItSoft '838' $tcpRefused "TCP :9476 refuses mutating writes (HTTP $tcpCode)"
+
+    # Reads deliberately stay on TCP.
+    $readOk = $false
+    try { $null = Invoke-RestMethod -Uri $MgmtStatus -TimeoutSec 5; $readOk = $true } catch { }
+    ItSoft '838' $readOk "TCP :9476 still serves reads"
+
+    # Leave the daemon active whichever leg above failed.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $waired resume *> $null } finally { $ErrorActionPreference = $prevEap }
 }
 
 # --- loopback HTTP mirror (no external deps) --------------------------------
@@ -640,6 +732,10 @@ if ($Tier -ge 2) {
         }
         if ($enrolled) { ItOk "daemon read the enrolled state and reports an identity" }
         else { ItBad "daemon did not report enrolled" }
+
+        # Cheap and fast, so it runs before the minutes-long inference asserts.
+        ItStep "management write pipe asserts (waired#838)"
+        Assert-MgmtPipe
 
         if ($WithInference) {
             ItStep "inference asserts (-WithInference)"
