@@ -65,6 +65,7 @@ ALLOW=(
   internal/observability         # event-ring types; own tests
   internal/platform/elevation    # elevation predicate + per-OS elevation-hint wording (dep of internal/runtime since waired#752); no routing surface
   internal/platform/keychain
+  internal/platform/localipc     # mgmt write socket / named pipe listener (waired#838); loopback IPC only, no routing surface
   internal/platform/paths
   internal/platform/secrets
   internal/platform/securestore
