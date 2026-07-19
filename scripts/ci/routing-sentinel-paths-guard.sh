@@ -40,6 +40,7 @@ for anchor in \
   'internal/agentconfig/**' \
   'internal/router/**' \
   'internal/catalog/**' \
+  'proto/catalog/**' \
   'internal/runtime/codeui/**' \
   'internal/e2e/integration/**' \
   'cmd/waired/**' \

@@ -110,7 +110,7 @@ for model_id in ${escalated}; do
   log "preparing draft PR for ${model_id} (${repo_id}) on ${branch}"
 
   git -C "${REPO_ROOT}" checkout -B "${branch}" origin/main --quiet
-  cp "${manifest}" "${REPO_ROOT}/internal/catalog/bundled/${model_id}.json"
+  cp "${manifest}" "${REPO_ROOT}/proto/catalog/bundled/${model_id}.json"
   merge_benchmarks "${model_id}" "${repo_id}"
   flag_seen "${repo_id}"
 
@@ -121,7 +121,7 @@ for model_id in ${escalated}; do
   ( cd "${REPO_ROOT}" && go run ./cmd/catalog-tool docs ) || die "regenerate model-catalog docs"
 
   git -C "${REPO_ROOT}" add \
-    "internal/catalog/bundled/${model_id}.json" \
+    "proto/catalog/bundled/${model_id}.json" \
     "internal/catalog/benchmarks.json" \
     "internal/catalog/discovery/seen.json" \
     "docs/reference/models.md"
