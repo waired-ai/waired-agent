@@ -414,16 +414,50 @@ type MenuModel struct {
 	WorkerShowClearPin bool                 // true when mode==pinned so "(clear pin)" appears
 }
 
+// daemonDownModel is the red "agent not running" menu shown when the
+// local management API is unreachable.
+func daemonDownModel() MenuModel {
+	return MenuModel{
+		Kind:        MenuDaemonDown,
+		Icon:        IconError,
+		HeaderTitle: "⚠ Waired agent is not running",
+		StatusMsg:   startAgentHint(),
+	}
+}
+
+// offlineModel decides what the tray renders when /status is unreachable.
+// During the model-switch grace window (switching) the daemon is expected
+// to be briefly down for a supervised restart, so we keep the last online
+// model and only relabel it "Switching model…" with the busy icon —
+// rather than alarming the user with the red daemon-down state. Outside
+// the window, or before any connected snapshot exists, we fall back to
+// the honest daemon-down model (waired#808).
+func offlineModel(lastOnline MenuModel, switching bool) MenuModel {
+	if !switching || lastOnline.Kind != MenuConnected {
+		return daemonDownModel()
+	}
+	m := lastOnline
+	m.Icon = IconBusy
+	m.HeaderTitle = "Switching model…"
+	m.DegradedReason = ""
+	m.StatusMsg = "The agent is restarting to apply the new model."
+	return m
+}
+
+// peersRowVisible reports whether the "Peers" row should show: only when
+// the device group shows AND there is at least one peer (or peer hardware
+// to expand). Gating on peer presence — not just enrollment — avoids a
+// blank "Peers: 0" chevron row in the steady peerless state (waired#808).
+func peersRowVisible(m MenuModel) bool {
+	hasDevice := m.DeviceName != "" || m.OverlayIP != ""
+	return hasDevice && (m.PeerCount > 0 || m.ShowPeerHardware)
+}
+
 // Update is the pure transition. No I/O, no goroutines — safe to call
 // from the polling goroutine directly.
 func Update(snap Snapshot) MenuModel {
 	if snap.Health == HealthOffline {
-		return MenuModel{
-			Kind:        MenuDaemonDown,
-			Icon:        IconError,
-			HeaderTitle: "⚠ Waired agent is not running",
-			StatusMsg:   startAgentHint(),
-		}
+		return daemonDownModel()
 	}
 
 	// Daemon up but identity not yet known (e.g. /identity returned nothing
