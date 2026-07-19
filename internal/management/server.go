@@ -310,6 +310,7 @@ type Server struct {
 	openCodeIntegration *OpenCodeIntegrationConfig // optional; nil disables /waired/v1/integration/opencode{,/reconfigure}
 	openClawIntegration *OpenClawIntegrationConfig // optional; nil disables /waired/v1/integration/openclaw{,/reconfigure}
 	catalog             *CatalogConfig             // optional; nil disables /waired/v1/inference/catalog and /preferred-model
+	publicUse           *PublicUseConfig           // optional; nil disables /waired/v1/public/* (consumer Public Share settings + consent)
 	observability       ObservabilityConfig        // optional; zero value disables all Phase 9 endpoints
 	login               LoginController            // optional; nil disables /waired/v1/login/{start,status}
 	update              UpdateController           // optional; nil disables /waired/v1/update/{check,status,settings}
@@ -510,6 +511,11 @@ func (s *Server) mux() *http.ServeMux {
 		mux.HandleFunc("/waired/v1/inference/preferred-model", s.handleInferencePreferredModel)
 		mux.HandleFunc("/waired/v1/inference/benchmark", s.handleInferenceBenchmark)
 		mux.HandleFunc("/waired/v1/inference/recommendation/dismiss", s.handleInferenceRecommendationDismiss)
+	}
+	if s.publicUse != nil && s.publicUse.Path != "" {
+		mux.HandleFunc("/waired/v1/public/use", s.handlePublicUse)
+		mux.HandleFunc("/waired/v1/public/consent", s.handlePublicConsent)
+		mux.HandleFunc("/waired/v1/public/warning", s.handlePublicWarning)
 	}
 	if s.observability.Ring != nil {
 		mux.HandleFunc("/waired/v1/observability/events", s.handleObservabilityEvents)
