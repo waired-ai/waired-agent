@@ -63,6 +63,9 @@ param(
     [switch]$Yes,
     [switch]$DryRun,
     [switch]$Help,
+    # Mask personal information (home dir, username) in the output -- for
+    # screenshots and bug reports. Best-effort. Env form: WAIRED_PII_MASK=1.
+    [switch]$MaskPII,
     # Internal: set on the re-elevated self-invoke so the child skips the
     # per-user teardown (it runs in the un-elevated parent, as the invoking
     # user, so HKCU / %APPDATA% / ~/.claude hit the right hive) and knows it
@@ -76,6 +79,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
+
+# WAIRED_PII_MASK is the env-var form of -MaskPII; folded both ways so the
+# elevated child and the waired.exe teardown helpers inherit the request.
+if ($env:WAIRED_PII_MASK) { $MaskPII = $true }
+if ($MaskPII) { $env:WAIRED_PII_MASK = '1' }
 
 # -------------------------------------------------------------------
 # Configuration (mirrors install.ps1)
@@ -126,8 +134,22 @@ function Emo {
     return $Ascii
 }
 
-function Common-Log  { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Cyan }
-function Common-Warn { param([string]$Msg) Write-Host "[waired] $Msg" -ForegroundColor Yellow }
+# Protect-PII masks the invoking user's home dir + username in one message
+# when -MaskPII / WAIRED_PII_MASK is on (mirror of install.ps1's).
+function Protect-PII {
+    param([string]$Msg)
+    if (-not $MaskPII) { return $Msg }
+    if ($env:USERPROFILE -and $env:USERPROFILE.Length -ge 3) {
+        $Msg = $Msg.Replace($env:USERPROFILE, '<home>')
+    }
+    if ($env:USERNAME -and $env:USERNAME.Length -ge 3) {
+        $Msg = $Msg -replace "(?i)\b$([regex]::Escape($env:USERNAME))\b", '<user>'
+    }
+    return $Msg
+}
+
+function Common-Log  { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Cyan }
+function Common-Warn { param([string]$Msg) Write-Host "[waired] $(Protect-PII $Msg)" -ForegroundColor Yellow }
 
 # Section prints a blank line + a horizontal-rule heading (mirror of
 # install.ps1's Section; the U+2500 glyph is built at runtime so this file
@@ -232,6 +254,9 @@ Options:
   -Yes      assume "yes" to the pre-uninstall confirmation and the -Clean
             confirmation (-Clean requires it when piped / non-interactive)
   -DryRun   show every change without making it (no elevation / UAC)
+  -MaskPII  mask personal information (home dir, username) in the output -
+            for screenshots and bug reports. Best-effort. Same as
+            WAIRED_PII_MASK=1.
   -Help     print this help
 
 If you installed Waired with the GUI installer (WairedSetup-*.exe), prefer
@@ -295,8 +320,9 @@ function Confirm-Uninstall {
 function Invoke-SelfElevate {
     Common-Log "Privileged step ahead -- requesting UAC..."
     $passthrough = @('-FromElevation', '-Yes', '-LogPath', $LogPath)
-    if ($Clean)  { $passthrough += '-Clean' }
-    if ($DryRun) { $passthrough += '-DryRun' }
+    if ($Clean)   { $passthrough += '-Clean' }
+    if ($DryRun)  { $passthrough += '-DryRun' }
+    if ($MaskPII) { $passthrough += '-MaskPII' }
 
     $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
     $tempScript = $null

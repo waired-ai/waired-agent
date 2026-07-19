@@ -137,10 +137,12 @@ function ItSoft {
 
 # --- inference assert (Windows analog of assert_inference) -------------------
 # Prove the Ollama-install -> bundled-model-pull -> benchmark tail of the
-# first-run journey ran (Tier-2 -WithInference): install.ps1 installed Ollama
-# (no -SkipOllama), and `waired init --inference-enabled=true` started the agent
-# and (via #519's waitForBundledModel) blocked until the agent pulled the
-# bundled model into the waired-owned engine on :9475, then ran the benchmark.
+# first-run journey ran (Tier-2 -WithInference): `waired init
+# --inference-enabled=true` installed the Ollama engine itself (init owns the
+# engine install now; install.ps1 no longer pre-installs it), started the
+# agent, and (via #519's waitForBundledModel) blocked until the agent pulled
+# the bundled model into the waired-owned engine on :9475, then ran the
+# benchmark.
 #
 # #564: the bundled engine is waired-owned on :9475 with its own model store; the
 # agent pulls there, NOT into the upstream Ollama default :11434. So readiness is
@@ -150,7 +152,7 @@ function ItSoft {
 function Assert-Inference {
     param([string]$InitLog)
 
-    # 1) ollama.exe discoverable (mirror install.ps1's Test-OllamaInstalled order)
+    # 1) ollama.exe discoverable (mirror internal/download's Windows order)
     $ollama = $null
     foreach ($p in @(
             (Join-Path $env:ProgramFiles 'Ollama\ollama.exe'),
@@ -162,7 +164,14 @@ function Assert-Inference {
         if ($cmd) { $ollama = $cmd.Source }
     }
     if ($ollama) { ItOk "ollama engine installed ($ollama)" }
-    else { ItBad "ollama engine not installed (install.ps1 should have, without -SkipOllama)" }
+    else { ItBad "ollama engine not installed (waired init --inference-enabled=true should have installed it)" }
+
+    # 1b) the waired-managed marker: init's install must drop it so a later
+    #     `waired init` recognises the engine as waired's own and never asks
+    #     the bundled-vs-reuse question about it.
+    $marker = Join-Path $env:ProgramFiles 'Ollama\.waired-managed.json'
+    if (Test-Path -LiteralPath $marker) { ItOk "waired-managed marker present ($marker)" }
+    else { ItBad "waired-managed marker missing ($marker)" }
 
     # 2) bundled model READY in the waired-owned store (:9475), via the agent
     #    mgmt API. init (#519) foreground-waits for the pull, so it is normally
@@ -446,11 +455,12 @@ try {
     # ASCII, matching the macOS/Linux legs.
     $env:WAIRED_DEV_CONTROL_URL  = $ControlUrl
 
-    # -WithInference (#514) installs Ollama so the Tier-2 model pull + benchmark
-    # have an engine. install.ps1 now installs Ollama BY DEFAULT (waired#747,
-    # matching install.sh), so the default installer+enroll leg opts OUT below via
-    # -SkipOllama / WAIRED_NO_OLLAMA; the -Dev URL here is only for enrolment, no
-    # longer the Ollama gate. Pass the switches inline per branch — array splat
+    # Ollama: install.ps1 no longer installs the engine at all — `waired init`
+    # owns the decision + install (the Tier-2 -WithInference init below, run
+    # elevated with --inference-enabled=true, installs it via the embedded
+    # ollama-windows.ps1). -SkipOllama now just resolves to WAIRED_NO_OLLAMA
+    # for the init child, so the default installer+enroll leg still opts out
+    # explicitly below. Pass the switches inline per branch — array splat
     # (@args) binds elements as POSITIONAL args, not named switches, so install.ps1
     # would misread -Dev as the control URL.
     $installPs1 = Join-Path $Root 'packaging\install\install.ps1'
@@ -508,7 +518,7 @@ try {
     else { ItBad "WAIRED_CLEAN env not resolved (exit $($r.Exit)): $($r.Out.Trim())" }
 
     if ($WithInference) {
-        ItStep "running install.ps1 (-Dev -SkipInit -NonInteractive; Ollama enabled for inference)"
+        ItStep "running install.ps1 (-Dev -SkipInit -NonInteractive; engine installed later by the Tier-2 init)"
         & $installPs1 -Dev -SkipInit -NonInteractive
     } else {
         $env:WAIRED_NO_OLLAMA = '1'
@@ -823,9 +833,11 @@ if ($ExeVariant) {
         else { ItDie "ISCC produced no installer at $setup" }
 
         ItStep "ExeVariant: silent install (/VERYSILENT)"
-        # /MERGETASKS=!claudeproxy: the default-checked task still runs the
-        # REMOVED `waired proxy install` command (tracked with waired#754's
-        # uninstall analog); skipifsilent already suppresses the tray launch.
+        # /MERGETASKS=!claudeproxy: uncheck the default-on claudeproxy task so
+        # the [Run] `waired claude enable` step does not write machine-wide
+        # managed-settings during this test install (the GUI installer is the
+        # sole decider of routing in its own flow — there is no `waired init`
+        # here). skipifsilent already suppresses the tray launch.
         $p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/MERGETASKS=!claudeproxy', "/LOG=$Work\innosetup.log" -Wait -PassThru
         if ($p.ExitCode -ne 0) { ItDie "WairedSetup exited $($p.ExitCode) (see $Work\innosetup.log)" }
 

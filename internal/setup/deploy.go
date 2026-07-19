@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -233,6 +235,49 @@ type OllamaDetection struct {
 	Path      string
 	Version   string // raw `ollama --version` token, e.g. "0.24.0"; "" if unknown
 	Supported bool   // Version >= OllamaSupportedMinVersion
+	// WairedManaged reports that this install was made BY waired (the
+	// installer helpers drop a marker file next to the binary / app
+	// bundle). The bundled-vs-reuse prompt skips itself for such installs:
+	// asking "reuse the existing Ollama?" about an Ollama waired itself put
+	// there confused every Windows/macOS first run (the installer used to
+	// pre-install the engine right before `waired init` re-detected it as
+	// "existing").
+	WairedManaged bool
+}
+
+// WairedManagedMarkerName is the marker file the waired installer helpers
+// (scripts/install/ollama-windows.ps1, the macOS Ollama.app installer) write
+// next to an Ollama install they created. Its presence is the only reliable
+// way to tell a waired-made install from the user's own: both live at the
+// exact same well-known paths (%ProgramFiles%\Ollama, /Applications).
+const WairedManagedMarkerName = ".waired-managed.json"
+
+// wairedManagedMarker reports whether the install at binPath carries the
+// waired-managed marker. Pure path logic (no GOOS branches): the marker is
+// looked up in the binary's own directory and in every ancestor up to and
+// including a `*.app` bundle root — the macOS layout puts the binary at
+// Ollama.app/Contents/Resources/ollama while the marker sits at the bundle
+// root, and Windows/Linux land on the first (same-dir) probe.
+func wairedManagedMarker(binPath string) bool {
+	dir := filepath.Dir(binPath)
+	if _, err := os.Stat(filepath.Join(dir, WairedManagedMarkerName)); err == nil {
+		return true
+	}
+	// App-bundle layout: probe the nearest *.app ancestor (the marker sits
+	// at the bundle root, three levels above Contents/Resources/ollama).
+	// Plain directory installs never match an .app ancestor and fall
+	// through to false without extra stats.
+	for d := dir; ; {
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+		if strings.HasSuffix(strings.ToLower(d), ".app") {
+			_, err := os.Stat(filepath.Join(d, WairedManagedMarkerName))
+			return err == nil
+		}
+	}
 }
 
 // DetectOllama resolves a pre-existing ollama and (best-effort) its
@@ -255,10 +300,11 @@ func DetectOllama(ctx context.Context) OllamaDetection {
 	}
 	ver := detectOllamaVersion(ctx, path)
 	return OllamaDetection{
-		Installed: true,
-		Path:      path,
-		Version:   ver,
-		Supported: ver != "" && infruntime.OllamaVersionAtLeast(ver, infruntime.OllamaSupportedMinVersion),
+		Installed:     true,
+		Path:          path,
+		Version:       ver,
+		Supported:     ver != "" && infruntime.OllamaVersionAtLeast(ver, infruntime.OllamaSupportedMinVersion),
+		WairedManaged: wairedManagedMarker(path),
 	}
 }
 
@@ -273,19 +319,14 @@ func detectOllamaVersion(ctx context.Context, path string) string {
 	if err != nil {
 		return ""
 	}
-	// Output is typically "ollama version is 0.24.0"; keep the last
-	// whitespace-separated token of the first non-empty line.
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if i := strings.LastIndex(line, " "); i >= 0 {
-			return strings.TrimSpace(line[i+1:])
-		}
-		return line
-	}
-	return ""
+	// Output is "ollama version is 0.24.0", possibly preceded by
+	// "Warning: could not connect to a running Ollama instance" when the
+	// server isn't up (exactly the fresh-install case). Parse via the shared
+	// marker-based helper, which skips the Warning line; the old "last token
+	// of the first line" logic returned "instance" there, so a healthy engine
+	// was mis-flagged as below the supported minimum (the "(instance) — below
+	// waired's supported minimum" message).
+	return hardware.ParseEngineVersion("ollama", string(out))
 }
 
 // newPuller delegates to the optional factory or falls back to the

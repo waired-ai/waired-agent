@@ -72,6 +72,56 @@ func TestClaudeManagedEligibleFor(t *testing.T) {
 	}
 }
 
+func TestClaudeRouteEligible(t *testing.T) {
+	cases := []struct {
+		name            string
+		integConsent    bool
+		claudeManaged   bool
+		renewing        bool
+		skipClaudeRoute bool
+		want            bool
+	}{
+		{"all conditions met -> route", true, true, false, false, true},
+		{"no integration consent", false, true, false, false, false},
+		{"not elevated / no managed path", true, false, false, false, false},
+		{"renew (not a fresh enroll)", true, true, true, false, false},
+		// --skip-claude-route / WAIRED_NO_CLAUDE_PROXY / installer -SkipClaudeProxy:
+		// the opt-out must win even when everything else says route. This is the
+		// gate that used to be bypassed by the installer's separate, unconditional
+		// `waired claude enable` after init.
+		{"opt-out overrides", true, true, false, true, false},
+	}
+	for _, c := range cases {
+		if got := claudeRouteEligible(c.integConsent, c.claudeManaged, c.renewing, c.skipClaudeRoute); got != c.want {
+			t.Errorf("%s: claudeRouteEligible(%v, %v, %v, %v) = %v, want %v",
+				c.name, c.integConsent, c.claudeManaged, c.renewing, c.skipClaudeRoute, got, c.want)
+		}
+	}
+}
+
+func TestSkipClaudeRouteFlagDefaultsFromEnv(t *testing.T) {
+	// The installers set WAIRED_NO_CLAUDE_PROXY=1 (from -SkipClaudeProxy /
+	// --skip-claude-proxy) to carry the routing opt-out into `waired init`,
+	// which is now the single decider of routing. The flag default must track
+	// that env, mirroring --mask-pii / WAIRED_PII_MASK.
+	for _, c := range []struct {
+		env  string
+		want string // cobra records the default as a string
+	}{
+		{"", "false"},
+		{"1", "true"},
+	} {
+		t.Setenv("WAIRED_NO_CLAUDE_PROXY", c.env)
+		f := newInitCmd().Flags().Lookup("skip-claude-route")
+		if f == nil {
+			t.Fatal("--skip-claude-route flag not registered on `waired init`")
+		}
+		if f.DefValue != c.want {
+			t.Errorf("WAIRED_NO_CLAUDE_PROXY=%q: --skip-claude-route default = %q, want %q", c.env, f.DefValue, c.want)
+		}
+	}
+}
+
 func TestInitStateDirMode(t *testing.T) {
 	cases := []struct {
 		goos string

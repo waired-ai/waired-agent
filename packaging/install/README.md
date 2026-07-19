@@ -23,11 +23,13 @@ The same `install.sh` detects Darwin and runs the macOS path: it
 downloads `waired-darwin-<arch>.tar.gz` + `.sha256` from the public
 mirror, verifies the hash, installs `waired` + `waired-agent` (and, by
 default, `waired-tray`) into `/usr/local/bin` (one `sudo` prompt for the
-copy), installs **Ollama** (reuses an existing install, otherwise
-downloads the official `Ollama.app` into `/Applications` — no Homebrew
-required), and registers a **per-user launchd LaunchAgent** via
+copy), and registers a **per-user launchd LaunchAgent** via
 `waired-agent install` (no root — the agent runs in your `gui/<uid>`
 session with state under `~/Library/Application Support/waired`).
+The **Ollama** engine is installed by `waired init` itself (after you
+answer its "run local inference?" questions): a genuinely pre-existing
+Ollama can be reused, otherwise init downloads the official `Ollama.app`
+into `/Applications` — no Homebrew required.
 
 The tray (`waired-tray`) is now bundled in the tarball, matching the
 Windows zip and Linux `.deb`. Set `WAIRED_NO_TRAY=1` to skip it on
@@ -127,6 +129,7 @@ The architecture matrix is `amd64` and `arm64` on Linux and macOS,
 | `--stable`   | Install/switch to the latest stable release. On `--update`/`--check` this overrides channel-preservation. PowerShell: `-Stable`. |
 | `--clean`    | Clean install: run the uninstaller with `--clean` first (full wipe — config, keys, state, the apt source, and Ollama + its models), then install fresh. Destructive; asks to confirm unless `--yes`. Same as `WAIRED_CLEAN=1`. Cannot be combined with `--check`/`--update`. PowerShell: `-Clean` (expect two UAC prompts: wipe + install). |
 | `--yes`/`-y` | Assume "yes" to every prompt: the pre-install / pre-uninstall confirmation, the update prompt (needed on non-TTY hosts) and the `--clean` confirmation. PowerShell: `-Yes`. |
+| `--mask-pii` | Mask personal information in the output — the script masks your home dir + username, and `waired init` (via the shared `WAIRED_PII_MASK=1` env) additionally masks hostname + account email. For screenshots and bug reports; best-effort, not a security boundary. Works on the installers **and** the uninstallers. PowerShell: `-MaskPII`. |
 | `-h`/`--help`| Print usage and exit.                                |
 
 Both installers show a summary of what they are about to do (install
@@ -155,13 +158,13 @@ Shared between `install.sh` and `install.ps1`:
 | `WAIRED_INSTALL_BASE_URL` | Override the URL hosting `install.sh` / `install.ps1` + the OS binaries (tests / mirrors). |
 | `WAIRED_INSTALL_REPO`     | Override the GitHub repo whose Releases API resolves `latest` during `--check` / `--update` on macOS + Windows (Linux uses the apt candidate). Default `waired-ai/waired-agent`. |
 | `WAIRED_CLEAN`            | If non-empty, same as `--clean` / `-Clean` (full wipe, then a fresh install). The env form is how the piped Windows `iwr \| iex` one-liner opts in — `iex` strips switches. |
+| `WAIRED_NO_OLLAMA`        | If non-empty, `waired init` skips the Ollama engine install (same as `--skip-ollama` / `-SkipOllama`). The installers no longer install the engine themselves — init owns the decision and the install, right after its "run local inference?" questions. |
 
 macOS-only:
 
 | Variable                   | Effect                                                                           |
 |----------------------------|----------------------------------------------------------------------------------|
-| `WAIRED_NO_OLLAMA`         | If non-empty, skip the Ollama install (bring your own inference engine).         |
-| `WAIRED_OLLAMA_DARWIN_URL` | Override the `Ollama.app` download URL (pin a version / point at a mirror).       |
+| `WAIRED_OLLAMA_DARWIN_URL` | Override the `Ollama.app` download URL used by init's engine install (pin a version / point at a mirror). |
 | `WAIRED_DARWIN_BINDIR`     | Override where `waired` / `waired-agent` are installed. Default `/usr/local/bin`. |
 
 Linux-only (apt repo metadata):

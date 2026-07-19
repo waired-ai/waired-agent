@@ -58,9 +58,35 @@ OS_NAME=""
 # common_* helpers (kept byte-compatible with install.sh)
 # ---------------------------------------------------------------------
 
-common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$*"; }
-common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$*" >&2; }
-common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$*" >&2; exit 1; }
+# mask_pii — mirror of install.sh's (see there for docs): best-effort
+# masking of the home dir + username path segments for screenshots/reports.
+mask_pii() {
+    if [ -z "${WAIRED_PII_MASK:-}" ]; then
+        printf '%s' "$*"
+        return 0
+    fi
+    printf '%s' "$*" | awk \
+        -v h="${HOME:-}" -v u="$(id -un 2>/dev/null || echo '')" -v s="${SUDO_USER:-}" '
+    function repl(str, pat, rep,   out, i) {
+        if (pat == "") return str
+        out = ""
+        while ((i = index(str, pat)) > 0) {
+            out = out substr(str, 1, i - 1) rep
+            str = substr(str, i + length(pat))
+        }
+        return out str
+    }
+    {
+        if (length(h) >= 3) $0 = repl($0, h, "<home>")
+        if (length(u) >= 3) $0 = repl($0, "/" u, "/<user>")
+        if (length(s) >= 3 && s != u) $0 = repl($0, "/" s, "/<user>")
+        print
+    }'
+}
+
+common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$(mask_pii "$*")"; }
+common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; }
+common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; exit 1; }
 
 # Run a command, or print it in dry-run mode.
 common_run() {
@@ -172,6 +198,9 @@ Options:
   --yes, -y        assume "yes" to the pre-uninstall confirmation (--clean
                    requires it on a non-interactive / piped shell)
   --dry-run        show every privileged command without running it
+  --mask-pii       mask personal information (home dir, username) in the
+                   output — for screenshots and bug reports. Best-effort.
+                   Same as WAIRED_PII_MASK=1.
   -h, --help       print this help
 
 Environment variables (shared with install.sh):
@@ -462,6 +491,7 @@ main() {
             --clean)    FLAG_CLEAN=1 ;;
             --yes|-y)   FLAG_YES=1 ;;
             --dry-run)  DRY_RUN=1 ;;
+            --mask-pii) WAIRED_PII_MASK=1; export WAIRED_PII_MASK ;;
             -h|--help)  show_help; exit 0 ;;
             *) common_die "unknown argument: $1 (try --help)" ;;
         esac

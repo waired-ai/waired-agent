@@ -62,10 +62,11 @@ WAIRED_APT_KEY_URL="${WAIRED_APT_KEY_URL:-https://asia-northeast1-apt.pkg.dev/do
 WAIRED_DEV_CONTROL_URL="${WAIRED_DEV_CONTROL_URL:-https://app.dev.waired.net}"
 
 # macOS only: the official Ollama.app download (universal binary, both
-# arches). darwin_install fetches this when no ollama is already present
-# and installs it into /Applications so waired's ResolveBinary finds the
-# CLI at /Applications/Ollama.app/Contents/Resources/ollama. Override to
-# pin a version or point at an internal mirror.
+# arches). The engine install itself happens inside `waired init` (which
+# asks "run local inference?" first); this URL is forwarded to it through
+# the sudo env_reset (darwin_maybe_init) so a pinned version / internal
+# mirror override still works. The app lands in /Applications so waired's
+# ResolveBinary finds the CLI at Ollama.app/Contents/Resources/ollama.
 WAIRED_OLLAMA_DARWIN_URL="${WAIRED_OLLAMA_DARWIN_URL:-https://github.com/ollama/ollama/releases/latest/download/Ollama-darwin.zip}"
 
 # Linux installs waired's BUNDLED Ollama (pinned official release into
@@ -117,9 +118,39 @@ OS_ARCH=""
 # common_* helpers
 # ---------------------------------------------------------------------
 
-common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$*"; }
-common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$*" >&2; }
-common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$*" >&2; exit 1; }
+# mask_pii <text> — best-effort masking of the invoking user's home dir and
+# username (as a path segment) when --mask-pii / WAIRED_PII_MASK is on, for
+# screenshots and bug reports. The Go binary masks its own output via the
+# same env var (incl. hostname + account email); this covers only the
+# script's log lines. awk index()/substr() replacement is literal — no
+# regex-metacharacter surprises from a path.
+mask_pii() {
+    if [ -z "${WAIRED_PII_MASK:-}" ]; then
+        printf '%s' "$*"
+        return 0
+    fi
+    printf '%s' "$*" | awk \
+        -v h="${HOME:-}" -v u="$(id -un 2>/dev/null || echo '')" -v s="${SUDO_USER:-}" '
+    function repl(str, pat, rep,   out, i) {
+        if (pat == "") return str
+        out = ""
+        while ((i = index(str, pat)) > 0) {
+            out = out substr(str, 1, i - 1) rep
+            str = substr(str, i + length(pat))
+        }
+        return out str
+    }
+    {
+        if (length(h) >= 3) $0 = repl($0, h, "<home>")
+        if (length(u) >= 3) $0 = repl($0, "/" u, "/<user>")
+        if (length(s) >= 3 && s != u) $0 = repl($0, "/" s, "/<user>")
+        print
+    }'
+}
+
+common_log()  { printf '\033[1;36m[waired]\033[0m %s\n' "$(mask_pii "$*")"; }
+common_warn() { printf '\033[1;33m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; }
+common_die()  { printf '\033[1;31m[waired]\033[0m %s\n' "$(mask_pii "$*")" >&2; exit 1; }
 
 # Run a command, or print it in dry-run mode.
 common_run() {
@@ -306,6 +337,16 @@ Options:
                    default runs sign-in + setup when a terminal is present)
   --yes, -y        assume "yes" for prompts (pre-install confirmation,
                    update, init non-interactive)
+  --mask-pii       mask personal information (home dir, username; the
+                   sign-in step also masks hostname + account email) in
+                   the output — for screenshots and bug reports.
+                   Best-effort. Same as WAIRED_PII_MASK=1.
+  --skip-claude-proxy
+                   leave Claude Code routed straight to the Anthropic API
+                   (do not point ANTHROPIC_BASE_URL at local inference).
+                   Forwarded to \`waired init\`, the single decider of
+                   routing; enable later with \`waired claude enable\`.
+                   Same as WAIRED_NO_CLAUDE_PROXY=1. (alias: --skip-proxy)
   -h, --help       print this help
 
 Environment variables:
@@ -316,6 +357,9 @@ Environment variables:
   WAIRED_NO_TRAY           if set, do not install waired-tray (Linux + macOS)
   WAIRED_NO_OLLAMA         if set, do not install Ollama (same as
                            --skip-ollama; Linux + macOS)
+  WAIRED_NO_CLAUDE_PROXY   if set, leave Claude Code on the Anthropic API
+                           (same as --skip-claude-proxy); forwarded to
+                           \`waired init\`, the single decider of routing
   WAIRED_CLEAN             if set, same as --clean (full wipe first, then
                            a fresh install)
   WAIRED_CONTROL_URL       Control Plane URL written to agent.env when
@@ -806,9 +850,24 @@ EOF
         return 0
     fi
     common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
-    set -- init --state-dir /var/lib/waired
+    set -- waired init --state-dir /var/lib/waired
     [ "$FLAG_YES" = 1 ] && set -- "$@" --non-interactive
-    $SUDO waired "$@" </dev/tty || \
+    # init has a root-time fallback that installs the bundled engine when the
+    # pre-install above failed; keep --skip-ollama honoured across the sudo
+    # env_reset by threading WAIRED_NO_OLLAMA through `env`. Same for the
+    # PII-masking and Claude-routing opt-out requests: init is the single
+    # decider of routing, so --skip-claude-proxy / WAIRED_NO_CLAUDE_PROXY must
+    # reach it (it defaults --skip-claude-route from WAIRED_NO_CLAUDE_PROXY).
+    if ollama_skip_requested; then
+        set -- env WAIRED_NO_OLLAMA=1 "$@"
+    fi
+    if [ -n "${WAIRED_PII_MASK:-}" ]; then
+        set -- env WAIRED_PII_MASK=1 "$@"
+    fi
+    if [ -n "${WAIRED_NO_CLAUDE_PROXY:-}" ]; then
+        set -- env WAIRED_NO_CLAUDE_PROXY=1 "$@"
+    fi
+    $SUDO "$@" </dev/tty || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
 }
 
@@ -1081,12 +1140,12 @@ darwin_install() {
 
     section 'Installing Waired'
     darwin_install_binaries
-    section 'AI engine (Ollama)'
-    if ollama_skip_requested; then
-        common_log "Ollama install skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
-    else
-        darwin_install_ollama
-    fi
+    # The Ollama engine is NOT pre-installed here any more: `waired init`
+    # owns both the decision (its "run local inference?" answers) and the
+    # install (the official Ollama.app, with a live progress bar). Installing
+    # it here made init re-detect waired's own install as a "foreign" Ollama
+    # and ask a confusing reuse question about it. --skip-ollama is forwarded
+    # to init as WAIRED_NO_OLLAMA (darwin_maybe_init).
     section 'Background service'
     darwin_register_agent "$state_dir"
     darwin_install_log_rotation
@@ -1121,7 +1180,13 @@ darwin_install_binaries() {
     tmp="$(mktemp -d)"
     # shellcheck disable=SC2064
     trap "rm -rf '$tmp'" EXIT
-    curl -fsSL "$url" -o "$tmp/$tarball"
+    # Single-line progress bar (-#) on a terminal so the multi-MB fetch is
+    # visibly alive; stay fully silent when piped/CI so logs don't fill up.
+    if [ -t 2 ]; then
+        curl -f#SL "$url" -o "$tmp/$tarball"
+    else
+        curl -fsSL "$url" -o "$tmp/$tarball"
+    fi
     curl -fsSL "$sha_url" -o "$tmp/$tarball.sha256"
 
     expected="$(awk '{print $1}' "$tmp/$tarball.sha256")"
@@ -1152,60 +1217,6 @@ darwin_install_binaries() {
         common_log "Installing waired-tray into $WAIRED_DARWIN_BINDIR (sudo)"
         $SUDO install -m 0755 "$tmp/waired-tray" "$WAIRED_DARWIN_BINDIR/waired-tray"
     fi
-}
-
-# Install Ollama. Reuse an existing install if one is resolvable on
-# $PATH or at the well-known paths waired's ResolveBinary checks;
-# otherwise download the official Ollama.app into /Applications. No
-# Homebrew dependency.
-darwin_install_ollama() {
-    for cand in \
-        "$(command -v ollama 2>/dev/null || true)" \
-        /Applications/Ollama.app/Contents/Resources/ollama \
-        /usr/local/bin/ollama \
-        /opt/homebrew/bin/ollama; do
-        if [ -n "$cand" ] && [ -x "$cand" ]; then
-            common_log "Ollama already present at $cand — skipping download"
-            return 0
-        fi
-    done
-
-    common_log "Installing Ollama.app from $WAIRED_OLLAMA_DARWIN_URL"
-    if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: download Ollama-darwin.zip, verify against sha256sum.txt,"
-        common_log "  (dry-run) would: unzip into /Applications, then 'open -a Ollama'"
-        return 0
-    fi
-    common_require_cmd unzip
-
-    otmp="$(mktemp -d)"
-    curl -fsSL "$WAIRED_OLLAMA_DARWIN_URL" -o "$otmp/Ollama-darwin.zip"
-    # Best-effort integrity check against Ollama's published checksum file
-    # (same release dir). Skipped silently if the file is unavailable.
-    if curl -fsSL "${WAIRED_OLLAMA_DARWIN_URL%/*}/sha256sum.txt" -o "$otmp/sha256sum.txt" 2>/dev/null; then
-        want="$(awk '/Ollama-darwin\.zip/{print $1; exit}' "$otmp/sha256sum.txt")"
-        got="$(shasum -a 256 "$otmp/Ollama-darwin.zip" | awk '{print $1}')"
-        if [ -n "$want" ] && [ "$want" != "$got" ]; then
-            rm -rf "$otmp"
-            common_die "Ollama.app checksum mismatch (expected '$want', got '$got')"
-        fi
-        [ -n "$want" ] && common_log "Ollama.app checksum OK"
-    fi
-
-    unzip -q -o "$otmp/Ollama-darwin.zip" -d "$otmp"
-    if [ ! -d "$otmp/Ollama.app" ]; then
-        rm -rf "$otmp"
-        common_die "Ollama-darwin.zip did not contain Ollama.app (layout changed?)"
-    fi
-    # /Applications is admin-writable; try unprivileged first, fall back
-    # to sudo for standard (non-admin) users.
-    if ! cp -R "$otmp/Ollama.app" /Applications/ 2>/dev/null; then
-        $SUDO cp -R "$otmp/Ollama.app" /Applications/
-    fi
-    rm -rf "$otmp"
-    common_log "Starting Ollama (menu-bar app + 127.0.0.1:11434 server)"
-    open -a Ollama 2>/dev/null || \
-        common_warn "could not auto-start Ollama; launch it from /Applications once."
 }
 
 # Register the system LaunchDaemon. Needs root: the plist lands in
@@ -1304,14 +1315,32 @@ darwin_maybe_init() {
     # WAIRED_CONTROL_URL); darwin_write_control_url has also persisted it to
     # agent.env, so this is belt-and-suspenders on the first sign-in and the
     # reader covers later bare re-runs.
-    set -- init --state-dir "$state_dir"
+    #
+    # init installs the Ollama engine itself when its answers call for one,
+    # so the Ollama knobs must survive the sudo env_reset: run through
+    # `env` with WAIRED_OLLAMA_DARWIN_URL (mirror override) and, on
+    # --skip-ollama, WAIRED_NO_OLLAMA=1.
+    set -- "$WAIRED_DARWIN_BINDIR/waired" init --state-dir "$state_dir"
     [ -n "$CONTROL_URL" ] && set -- "$@" --control "$CONTROL_URL"
+    set -- env "WAIRED_OLLAMA_DARWIN_URL=$WAIRED_OLLAMA_DARWIN_URL" "$@"
+    if ollama_skip_requested; then
+        set -- env WAIRED_NO_OLLAMA=1 "$@"
+    fi
+    if [ -n "${WAIRED_PII_MASK:-}" ]; then
+        set -- env WAIRED_PII_MASK=1 "$@"
+    fi
+    # Claude-routing opt-out (--skip-claude-proxy / WAIRED_NO_CLAUDE_PROXY):
+    # init is the single decider of routing and defaults --skip-claude-route
+    # from this env, so thread it through the sudo env_reset like the others.
+    if [ -n "${WAIRED_NO_CLAUDE_PROXY:-}" ]; then
+        set -- env WAIRED_NO_CLAUDE_PROXY=1 "$@"
+    fi
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired $* </dev/tty"
+        common_log "  (dry-run) would: $SUDO $* </dev/tty"
         return 0
     fi
     common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
-    $SUDO "$WAIRED_DARWIN_BINDIR/waired" "$@" </dev/tty || \
+    $SUDO "$@" </dev/tty || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
 }
 
@@ -1409,8 +1438,10 @@ darwin_next_steps() {
     fi
     if ollama_skip_requested; then
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
+    elif [ -x /Applications/Ollama.app/Contents/Resources/ollama ] || command -v ollama >/dev/null 2>&1; then
+        ollama_status="installed (local AI engine)"
     else
-        ollama_status="installed (local inference engine)"
+        ollama_status="installed by sign-in when local inference is on (sudo waired init)"
     fi
     # Tray: bundled unless WAIRED_NO_TRAY. Like the Windows installer we
     # do not auto-launch it (launching a menu-bar app from `curl | sh`
@@ -1459,6 +1490,14 @@ main() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --dry-run) DRY_RUN=1 ;;
+            # Export so children (waired init, the engine installer) mask
+            # their output through the same env contract.
+            --mask-pii) WAIRED_PII_MASK=1; export WAIRED_PII_MASK ;;
+            # Leave Claude Code on the Anthropic API. Exported so it survives
+            # the sudo env_reset and reaches `waired init` (the single decider
+            # of routing, which defaults --skip-claude-route from this env).
+            # Mirrors install.ps1's -SkipClaudeProxy / WAIRED_NO_CLAUDE_PROXY.
+            --skip-claude-proxy|--skip-proxy) WAIRED_NO_CLAUDE_PROXY=1; export WAIRED_NO_CLAUDE_PROXY ;;
             --skip-ollama) FLAG_NO_OLLAMA=1 ;;
             --check) FLAG_CHECK=1 ;;
             --update) FLAG_UPDATE=1 ;;

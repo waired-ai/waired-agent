@@ -103,6 +103,8 @@ type initFlags struct {
 	ollamaSource     string
 	bundledModelID   string
 	mgmtURL          string
+	maskPII          bool
+	skipClaudeRoute  bool
 }
 
 const initLong = `Enroll this device into a Waired network (Google sign-in).
@@ -125,6 +127,10 @@ func newInitCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("share-with-mesh") {
 				o.inferenceShare = &infShare
+			}
+			if o.maskPII {
+				restore := enablePIIMask()
+				defer restore()
 			}
 			return runInitBody(o)
 		},
@@ -171,19 +177,23 @@ func newInitCmd() *cobra.Command {
 	f.BoolVar(&o.startAgent, "start-agent", true,
 		"after a fresh enroll, start the registered waired-agent service (systemctl / launchctl / SCM); pass --start-agent=false to skip and start it yourself")
 	f.BoolVar(&o.noWaitModel, "no-wait-model", false,
-		"after a fresh bundled enroll, don't block while the bundled model downloads; let waired-agent pull it in the background (default: wait in the foreground showing percentage progress)")
+		"don't wait while the AI model downloads after a fresh setup; let it finish in the background (default: wait in the foreground showing progress)")
 	f.BoolVar(&o.resetConfig, "reset-config", false,
 		"ignore existing agent.json and re-prompt from hardware-derived defaults")
 	f.BoolVar(&infEnabled, "inference-enabled", false,
-		"force inference.enabled (overrides prompt). Pass --inference-enabled=false to disable.")
+		"answer \"Run AI models on this computer?\" without prompting: --inference-enabled=true / =false")
 	f.BoolVar(&infShare, "share-with-mesh", false,
-		"force inference.share_with_mesh (overrides prompt). The shorter name (vs --inference-share-with-mesh) is intentional: under 'waired init' the 'inference-' prefix is redundant.")
+		"answer \"Let your other devices use this computer's AI?\" without prompting: --share-with-mesh=true / =false. The shorter name (vs --inference-share-with-mesh) is intentional: under 'waired init' the 'inference-' prefix is redundant.")
 	f.StringVar(&o.ollamaSource, "ollama-source", "",
-		"Ollama engine source: \"bundled\" (waired-managed) or \"reuse\" (borrow an existing ollama); empty prompts (default bundled)")
+		"who provides the Ollama engine: \"bundled\" (Waired installs and manages its own) or \"reuse\" (keep using one you installed yourself); empty prompts (default bundled)")
 	f.StringVar(&o.bundledModelID, "inference-bundled-model-id", "",
 		"pin the bundled model to pre-pull (manifest model_id); empty auto-selects the largest model that fits this host above the coding-quality floor (#517). Combine with --inference-enabled=true to force-install on an under-spec host.")
 	f.StringVar(&o.mgmtURL, "mgmt", defaultMgmtURL,
 		"Local Management API base URL; when a waired-agent daemon is reachable there, login is driven through the daemon (Tailscale model) instead of enrolling locally")
+	f.BoolVar(&o.maskPII, "mask-pii", os.Getenv("WAIRED_PII_MASK") != "",
+		"mask personal information (home directory, username, hostname, account email) in init's output — for screenshots and bug reports. Best-effort; env form: WAIRED_PII_MASK=1 (set by the installers' --mask-pii / -MaskPII). Progress rendering falls back to plain lines while masking.")
+	f.BoolVar(&o.skipClaudeRoute, "skip-claude-route", os.Getenv("WAIRED_NO_CLAUDE_PROXY") != "",
+		"do not point Claude Code at local inference; leave Claude Code talking to the Anthropic API directly. The rest of the coding-agent integration (skills / plugins) still installs. Enable routing later with an elevated `waired claude enable`. Env form: WAIRED_NO_CLAUDE_PROXY=1 (set by the installers' -SkipClaudeProxy / --skip-claude-proxy).")
 	return cmd
 }
 
@@ -215,6 +225,7 @@ func runInitBody(o *initFlags) error {
 	ollamaSource := &o.ollamaSource
 	bundledModelID := &o.bundledModelID
 	mgmtURL := &o.mgmtURL
+	skipClaudeRoute := &o.skipClaudeRoute
 
 	// Reject a typo'd --ollama-source up front so it errors instead of being
 	// silently dropped (enroll falls through to bundled; renew ignores it, #485).
@@ -486,13 +497,13 @@ func runInitBody(o *initFlags) error {
 					fmt.Printf("Ollama source: %s → %s\n", from, next)
 				}
 			}
-			fmt.Printf("%s %s\n", steps.persist, bold("Refresh tokens + certificate — done"))
+			fmt.Printf("%s %s\n", steps.persist, bold("Refresh this device's sign-in — done"))
 			return cfgRoot.Inference, nil
 		}
-		fmt.Printf("%s %s\n", steps.persist, bold("Persist identity + secrets + agent.json — done"))
+		fmt.Printf("%s %s\n", steps.persist, bold("Save this device's settings — done"))
 
 		prof := hardware.NewProfiler("").Profile(ctx)
-		fmt.Printf("%s %s\n", steps.inference, bold("Configure local inference"))
+		fmt.Printf("%s %s\n", steps.inference, bold("Set up AI on this computer"))
 		choice := promptInference(os.Stdin, os.Stdout,
 			cfgRoot.Inference, hasExisting, prof,
 			*inferenceEnabled, *inferenceShare,
@@ -513,6 +524,16 @@ func runInitBody(o *initFlags) error {
 			applyBundledModelSelection(&cfgRoot, prof, det,
 				*stateDir, homeDir, *bundledModelID, *inferenceEnabled,
 				*nonInteractive, os.Stdin, os.Stdout)
+			// Install the bundled engine NOW — after every answer is in,
+			// before Deploy's model pre-pull (which needs an engine). The
+			// installers no longer pre-install Ollama; init owns both the
+			// decision and the install. Re-check Enabled: an under-spec
+			// host may have just been demoted to gateway/relay-only by
+			// applyBundledModelSelection.
+			if cfgRoot.Inference.Enabled {
+				ensureBundledEngine(ctx, os.Stdout, det,
+					cfgRoot.Inference.OllamaSource, *stateDir)
+			}
 		}
 		if err := cfgRoot.Save(agentconfig.JSONPathFor(*stateDir)); err != nil {
 			// identity-side state is already enrolled; do not abort init for
@@ -526,11 +547,12 @@ func runInitBody(o *initFlags) error {
 		// by the sudo hop after Init).
 		if !*skipIntegration {
 			integConsent = promptIntegrationConsent(os.Stdin, os.Stdout, integrationConsentInput{
-				StepLabel:      steps.integration,
-				Detections:     detectIntegrationAgents(ctx, integTargetHome),
-				NonInteractive: *nonInteractive,
-				SudoTarget:     integSudoUser,
-				ClaudeManaged:  claudeManagedEligible,
+				StepLabel:       steps.integration,
+				Detections:      detectIntegrationAgents(ctx, integTargetHome),
+				NonInteractive:  *nonInteractive,
+				SudoTarget:      integSudoUser,
+				ClaudeManaged:   claudeManagedEligible,
+				SkipClaudeRoute: *skipClaudeRoute,
 			})
 		}
 		return cfgRoot.Inference, nil
@@ -589,10 +611,10 @@ func runInitBody(o *initFlags) error {
 		if res.Deploy.OllamaInstalled {
 			fmt.Printf("  ollama:        %s\n", res.Deploy.OllamaPath)
 		} else {
-			fmt.Println("  ollama:        not installed (the agent will pull it once installed)")
+			fmt.Println("  ollama:        not installed yet (Waired adds it when needed)")
 		}
 		if res.Deploy.BundledModel != "" {
-			fmt.Printf("  bundled model: %s (lazily pulled by waired-agent)\n", res.Deploy.BundledModel)
+			fmt.Printf("  AI model:      %s (downloaded in the background when needed)\n", res.Deploy.BundledModel)
 		}
 		if res.Deploy.GatewayPort != 0 {
 			fmt.Printf("  gateway:       http://127.0.0.1:%d (started by waired-agent)\n", res.Deploy.GatewayPort)
@@ -640,7 +662,7 @@ func runInitBody(o *initFlags) error {
 	// when the local stack can actually serve. Non-interactive keeps the
 	// single-consent immediate flip.
 	claudeRouted := false
-	if integConsent && claudeManagedEligible && !renewing && *nonInteractive {
+	if claudeRouteEligible(integConsent, claudeManagedEligible, renewing, *skipClaudeRoute) && *nonInteractive {
 		fmt.Printf("\n%s %s\n", emo("🔌", "*"), bold("Configuring Claude Code integration (managed settings)…"))
 		legacycleanup.Run(*stateDir, stderrLogger())
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
@@ -742,7 +764,7 @@ func runInitBody(o *initFlags) error {
 	// leaves the integration artifacts installed and Claude traffic on the
 	// real Anthropic API. Interactive only; the non-interactive flip already
 	// happened above.
-	if integConsent && claudeManagedEligible && !renewing && !*nonInteractive {
+	if claudeRouteEligible(integConsent, claudeManagedEligible, renewing, *skipClaudeRoute) && !*nonInteractive {
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
 		claudeRouted = promptClaudeRouting(os.Stdout, postSC, baseURL, *stateDir)
 		if claudeRouted {
@@ -1397,6 +1419,21 @@ func initStateDirMode(goos string, euid int) paths.Mode {
 // written regardless.
 func claudeManagedEligibleFor(elevated bool, managedPath string) bool {
 	return elevated && managedPath != ""
+}
+
+// claudeRouteEligible is the testable core of init's Claude-routing gate: it
+// reports whether `waired init` should touch Claude Code routing at all. The
+// operator must have consented to the coding-agent integration (integConsent),
+// this init must be able to write the machine-wide managed settings
+// (claudeManagedEligible), it must be a fresh enroll rather than a renew
+// (!renewing), and the operator must not have opted out via --skip-claude-route
+// (WAIRED_NO_CLAUDE_PROXY / the installers' -SkipClaudeProxy). init is the
+// SINGLE decider of routing — the installers no longer run `waired claude
+// enable` after enrolment (that unconditional post-init enable silently
+// overrode an interactive "no"). The two call sites layer the interactive vs
+// non-interactive split on top of this shared predicate.
+func claudeRouteEligible(integConsent, claudeManagedEligible, renewing, skipClaudeRoute bool) bool {
+	return integConsent && claudeManagedEligible && !renewing && !skipClaudeRoute
 }
 
 // splitHostPort + newReservedUDPPort live in helpers.go to keep main.go

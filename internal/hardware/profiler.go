@@ -434,13 +434,18 @@ func defaultEngineVersion(ctx context.Context, binary string) (bool, string) {
 	if err != nil {
 		return false, ""
 	}
-	ver := parseEngineVersion(binary, string(out))
+	ver := ParseEngineVersion(binary, string(out))
 	return true, ver
 }
 
-// parseEngineVersion isolates the version-line parsing so it can be
-// unit-tested without invoking the real binaries.
-func parseEngineVersion(binary, output string) string {
+// ParseEngineVersion isolates `<engine> --version` line parsing so it can be
+// unit-tested without invoking the real binaries, and reused by callers such
+// as internal/setup's Ollama detection. For ollama it keys off the
+// "ollama version is " marker, which skips the "Warning: could not connect to
+// a running Ollama instance" line the CLI prints when the server isn't up —
+// the naive "last token of the first line" approach returned "instance" there
+// and mis-flagged a perfectly good engine as unsupported.
+func ParseEngineVersion(binary, output string) string {
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
