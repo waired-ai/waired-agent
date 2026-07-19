@@ -752,6 +752,12 @@ Remove-Job $lj -Force -ErrorAction SilentlyContinue | Out-Null
 if ($Contract) {
     try {
         ItStep "teardown = uninstall.ps1 -Clean + asserts (waired#754 soft)"
+        # Seed the GPU-backend machine env vars Set-MachineVulkanFlag writes on a
+        # Vulkan/iGPU host. CI runners have no such GPU so the install leg never
+        # sets them, which would make the clear-after-uninstall asserts below
+        # vacuous -- seed them here so -Clean's Remove-Ollama is actually exercised.
+        [Environment]::SetEnvironmentVariable('OLLAMA_VULKAN', '1', 'Machine')
+        [Environment]::SetEnvironmentVariable('OLLAMA_IGPU_ENABLE', '1', 'Machine')
         & (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes
         if ($LASTEXITCODE -ne 0) { ItBad "uninstall.ps1 -Clean exited $LASTEXITCODE" }
 
@@ -760,6 +766,10 @@ if ($Contract) {
         if (-not (Test-Path -LiteralPath $InstallDir)) { ItOk "InstallDir removed" } else { ItBad "InstallDir remains after uninstall" }
         if (-not (Test-Path -LiteralPath $StateDir))   { ItOk "state dir wiped (-Clean)" } else { ItBad "state dir remains after -Clean" }
         if (([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';') -notcontains $InstallDir) { ItOk "machine PATH entry removed" } else { ItBad "machine PATH entry remains" }
+        # (#45) -Clean clears the GPU-backend machine env vars Set-MachineVulkanFlag
+        # wrote (seeded above), not just OLLAMA_MODELS.
+        if (-not [Environment]::GetEnvironmentVariable('OLLAMA_VULKAN', 'Machine'))      { ItOk "OLLAMA_VULKAN cleared (-Clean)" }      else { ItBad "OLLAMA_VULKAN remains after -Clean" }
+        if (-not [Environment]::GetEnvironmentVariable('OLLAMA_IGPU_ENABLE', 'Machine')) { ItOk "OLLAMA_IGPU_ENABLE cleared (-Clean)" } else { ItBad "OLLAMA_IGPU_ENABLE remains after -Clean" }
 
         # (#754) zero per-user / cross-surface artifacts. uninstall.ps1 -Clean now
         # runs `waired claude disable` + `waired unlink` for the invoking user (the

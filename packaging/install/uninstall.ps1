@@ -502,8 +502,9 @@ function Remove-State {
 }
 
 # -Clean only: remove an Ollama installed by ollama-windows.ps1 (or the
-# official Windows installer), its machine-PATH entry, the OLLAMA_MODELS
-# env var and the model stores. Best-effort + existence-gated throughout.
+# official Windows installer), its machine-PATH entry, the OLLAMA_MODELS /
+# OLLAMA_VULKAN / OLLAMA_IGPU_ENABLE machine env vars and the model stores.
+# Best-effort + existence-gated throughout.
 function Remove-Ollama {
     Common-Log "Removing Ollama (binary, models, PATH, env)"
     Common-Run "Stop-Process ollama*" {
@@ -534,6 +535,15 @@ function Remove-Ollama {
     }
     Common-Run "clear OLLAMA_MODELS (machine env)" {
         [Environment]::SetEnvironmentVariable('OLLAMA_MODELS', $null, 'Machine')
+    }
+    # GPU-backend flags ollama-windows.ps1's Set-MachineVulkanFlag wrote at
+    # Machine scope (OLLAMA_VULKAN=1 + OLLAMA_IGPU_ENABLE=1). Clear them too, or
+    # a "clean" uninstall silently re-tunes any later/other Ollama on this host.
+    Common-Run "clear OLLAMA_VULKAN (machine env)" {
+        [Environment]::SetEnvironmentVariable('OLLAMA_VULKAN', $null, 'Machine')
+    }
+    Common-Run "clear OLLAMA_IGPU_ENABLE (machine env)" {
+        [Environment]::SetEnvironmentVariable('OLLAMA_IGPU_ENABLE', $null, 'Machine')
     }
     $modelHomes = @(
         (Join-Path $env:USERPROFILE '.ollama'),
