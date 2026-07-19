@@ -35,6 +35,7 @@ internal/platform/notification/ # desktop notifications
 internal/platform/proclist/     # local process-table read (runner -np/-c for tuning verify); no mesh/enrollment surface
 internal/platform/sdsocket/     # systemd socket activation glue
 internal/platform/service/      # OS service install/uninstall glue; testnet VMs exec the agent via the units in build/, not this
+internal/platform/singleinstance/ # tray single-instance guard (named mutex / flock); local process guard, no mesh/enrollment surface
 internal/platform/sockpass/     # local socket handoff helper
 internal/platform/trayhost/     # tray process hosting
 internal/proxy/             # Claude request intercept + hosts/trust + legacy cleanup; node selection over the mesh, not mesh coordination
