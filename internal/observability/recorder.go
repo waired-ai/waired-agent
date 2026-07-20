@@ -77,6 +77,14 @@ func (r *Recorder) RecordRequest(ev RequestEvent) {
 		}
 		r.metrics.InferenceRequestsTotal.WithLabelValues(ev.Kind, result, ev.ErrorReason).Inc()
 		r.metrics.InferenceRequestLatency.Observe(float64(ev.LatencyMs))
+		// Zero means "not observed" rather than "zero tokens", so the
+		// counters only move on a real reading (waired#829).
+		if ev.InputTokens > 0 {
+			r.metrics.InferenceInputTokensTotal.WithLabelValues(ev.Kind).Add(float64(ev.InputTokens))
+		}
+		if ev.OutputTokens > 0 {
+			r.metrics.InferenceOutputTokensTotal.WithLabelValues(ev.Kind).Add(float64(ev.OutputTokens))
+		}
 	}
 	if r.logger != nil && ev.ErrorReason != "" {
 		r.logger.LogAttrs(context.Background(), slog.LevelWarn, "inference request error",

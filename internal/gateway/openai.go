@@ -72,7 +72,7 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 // to that engine after rewriting the body's `model` field. SSE
 // streams pass through verbatim.
 func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Request) {
-	rr := h.startRequest("openai")
+	rr := h.startRequest(r, "openai")
 	defer rr.finish()
 
 	if r.Method != http.MethodPost {
@@ -148,7 +148,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w); err != nil {
+	if err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, rr); err != nil {
 		rr.fail(http.StatusOK, "mid_stream_truncate")
 		// Phase 8: if proxying failed AFTER the response headers were
 		// sent, HTTP semantics mean we can no longer switch the
@@ -204,7 +204,11 @@ func rewriteModelField(body []byte, newModel string) (string, []byte, error) {
 // proxyToEngine forwards the (already rewritten) body to baseURL+path
 // and streams the upstream response back to w. It propagates the
 // upstream Content-Type so SSE streams flow correctly.
-func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter) error {
+// rr may be nil: proxyToEngine is also called from paths that keep no
+// telemetry record. When non-nil, a passive sniffer reads the token
+// counts out of the bytes being forwarded (waired#829) — see
+// usageSniffer for why this is a tee and not a buffer.
+func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, rr *requestRec) error {
 	target, err := url.Parse(baseURL)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "bad_engine_url", err.Error())
@@ -243,16 +247,28 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 	}
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
+	sniff := newUsageSniffer(resp.Header.Get("Content-Type"), resp.Header.Get("Content-Encoding"))
+	// Record whatever was observed on every exit, including a truncated
+	// stream: the engine still did the work the client partially
+	// received, and a usage chunk may already have arrived.
+	defer func() {
+		if in, out, ok := sniff.Usage(); ok {
+			rr.setUsage(in, out)
+		}
+	}()
 	buf := make([]byte, 16*1024)
 	for {
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
+			// Forward first, meter second: the client's bytes are never
+			// delayed by, or dependent on, the sniffer.
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return werr
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
+			sniff.Feed(buf[:n])
 		}
 		if rerr == io.EOF {
 			return nil

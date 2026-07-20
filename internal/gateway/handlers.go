@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -21,27 +22,87 @@ type requestRec struct {
 	rec   Recorder
 	start time.Time
 	ev    observability.RequestEvent
+
+	// onUsage is Deps.OnUsage, invoked once at finish() for requests
+	// that actually reached an engine. nil on every surface that does
+	// not meter (waired#829).
+	onUsage usageSink
+	// ctx is the request context, captured at handler entry so finish()
+	// can hand it to onUsage. Used for value lookup only — the sink
+	// reads the peer identity the auth middleware stamped there — so its
+	// cancellation state at emit time is irrelevant.
+	ctx context.Context
+	// engineModel is the engine-native identifier the request ran
+	// against, kept separate from ev.Model (the catalog id) because the
+	// control plane resolves a quality tier from the engine form.
+	engineModel string
 }
 
-func (h *HandlerSet) startRequest(kind string) *requestRec {
-	return &requestRec{
-		rec:   h.deps.Recorder,
-		start: time.Now(),
-		ev:    observability.RequestEvent{Kind: kind},
+func (h *HandlerSet) startRequest(r *http.Request, kind string) *requestRec {
+	rr := &requestRec{
+		rec:     h.deps.Recorder,
+		start:   time.Now(),
+		ev:      observability.RequestEvent{Kind: kind},
+		onUsage: h.deps.OnUsage,
 	}
+	if r != nil {
+		rr.ctx = r.Context()
+	}
+	return rr
+}
+
+// setUsage records the upstream's own token counts. Called from the
+// proxy helpers once the response has been fully forwarded.
+func (rr *requestRec) setUsage(in, out int64) {
+	if rr == nil {
+		return
+	}
+	rr.ev.InputTokens, rr.ev.OutputTokens = in, out
 }
 
 func (rr *requestRec) finish() {
-	if rr == nil || rr.rec == nil || rr.ev.Model == "" {
+	if rr == nil || rr.ev.Model == "" {
 		return
 	}
 	rr.ev.LatencyMs = uint32(time.Since(rr.start).Milliseconds())
-	rr.rec.RecordRequest(rr.ev)
+	if rr.rec != nil {
+		rr.rec.RecordRequest(rr.ev)
+	}
+	rr.emitUsage()
+}
+
+// emitUsage hands the sample to Deps.OnUsage.
+//
+// Only requests that reached an engine are emitted: finish() also runs
+// for gateway-level failures (runtime_unavailable, runtime_unhealthy,
+// rewrite_failed), and counting those would inflate a ledger the user
+// sees. A mid-stream truncation is NOT a failure for this purpose — the
+// engine did the work and the client received part of it — and
+// rr.succeed() has already recorded 200 in that case.
+func (rr *requestRec) emitUsage() {
+	if rr.onUsage == nil || rr.ev.Status <= 0 || rr.ev.Status >= 400 {
+		return
+	}
+	ctx := rr.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	rr.onUsage(ctx, UsageSample{
+		Kind:         rr.ev.Kind,
+		ModelID:      rr.ev.Model,
+		EngineModel:  rr.engineModel,
+		Class:        rr.ev.Class,
+		InputTokens:  rr.ev.InputTokens,
+		OutputTokens: rr.ev.OutputTokens,
+		DurationMS:   int64(rr.ev.LatencyMs),
+		Status:       rr.ev.Status,
+	})
 }
 
 func (rr *requestRec) setSelection(sel router.Selection, fallbackFrom, fallbackReason string) {
 	rr.ev.Decision = sel.ExecutionMode
 	rr.ev.Model = sel.ModelID
+	rr.engineModel = sel.EngineModel
 	// Display identifier only — the event ring is served over the
 	// management API and rendered by the tray, so a Public Share peer
 	// appears as its grant pseudonym (spec §8.5).
