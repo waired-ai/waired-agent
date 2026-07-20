@@ -47,6 +47,12 @@ type Selection struct {
 	ExecutionMode string   `json:"execution_mode"` // "local" only in Phase A
 	Decision      Decision `json:"decision"`
 	Release       func()   `json:"-"`
+
+	// PeerDisplayID is the identifier display surfaces must use for a
+	// remote selection: the real DeviceID for own-network peers, the
+	// grant pseudonym for Public Share peers whose real identifier must
+	// never be shown (spec §8.5). Empty for local / external selections.
+	PeerDisplayID string `json:"peer_display_id,omitempty"`
 }
 
 // Decision is the human-readable trace of why this Selection won.
@@ -202,6 +208,34 @@ type Inputs struct {
 	// every other Selector behaviour is unchanged.
 	Recorder Recorder
 
+	// --- Public Share consumer inputs (waired#827) --------------------
+	//
+	// All three are optional and all three are left nil by the
+	// overlay-side Selector (localOnlySelector), which must never apply
+	// this device's outbound public-routing posture to a request that
+	// arrived FROM a peer.
+
+	// PublicPolicyFn returns the consumer's resolved Public Share
+	// posture. Called once per SelectK that reaches the mesh, so the
+	// implementation must be cheap — cmd/waired-agent serves it from an
+	// atomic.Pointer refreshed on settings writes, not from disk. nil
+	// (or a zero PublicPolicy) admits no public candidates.
+	PublicPolicyFn func() PublicPolicy
+
+	// OnPublicGrantDemand is called when policy would have used a public
+	// candidate but this device holds no Public Share grant, so the
+	// background acquirer can wake early instead of waiting out its
+	// periodic tick (spec §4.3 cold start). Must not block: the
+	// production implementation is a non-blocking send onto a
+	// coalescing buffered channel.
+	OnPublicGrantDemand func()
+
+	// OnPublicNudge is called when a request could not be served by the
+	// consumer's own nodes and no consent for Public Share has been
+	// recorded. The receiver owns once-ness; the Selector emits on every
+	// qualifying request and keeps no state.
+	OnPublicNudge func(PublicNudge)
+
 	// --- Manual routing override (Tailscale-exit-node style) -----
 	//
 	// RoutingMode controls how Step 3 (locality filter) of SelectK
@@ -313,13 +347,16 @@ var (
 // Decision mirrors Selection.Decision and is identical between
 // candidate and the Selection that Commit produces.
 type Candidate struct {
-	EndpointID    string   `json:"endpoint_id"`
-	ModelID       string   `json:"model_id"`
-	VariantID     string   `json:"variant_id"`
-	Runtime       string   `json:"runtime"`
-	EngineModel   string   `json:"engine_model"`
-	ExecutionMode string   `json:"execution_mode"`
-	PeerID        string   `json:"peer_id,omitempty"`
+	EndpointID    string `json:"endpoint_id"`
+	ModelID       string `json:"model_id"`
+	VariantID     string `json:"variant_id"`
+	Runtime       string `json:"runtime"`
+	EngineModel   string `json:"engine_model"`
+	ExecutionMode string `json:"execution_mode"`
+	PeerID        string `json:"peer_id,omitempty"`
+	// PeerDisplayID mirrors Selection.PeerDisplayID — the only peer
+	// identifier a display surface may render.
+	PeerDisplayID string   `json:"peer_display_id,omitempty"`
 	Decision      Decision `json:"decision"`
 
 	// commit performs the InFlightTracker Acquire and sticky Touch
@@ -447,6 +484,23 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	}
 	reasons := []string{}
 
+	// short records that the mesh could not supply a candidate, so the
+	// Public Share side signals can be emitted from ONE place: the
+	// deferred exit below, and only when SelectK really failed to serve
+	// the request. Emitting inside tryMeshFallbackK would fire on paths
+	// that still fall through to a healthy local engine
+	// (RoutingModePeerPreferred with a ready local model, and the pinned
+	// soft-fallback branch) — telling the user their request could not
+	// run on their own machines while it did, and burning the one-shot
+	// nudge on a false statement.
+	var short publicShortfall
+	modelID := ""
+	defer func() {
+		if err != nil {
+			s.emitPublicShortfall(short, modelID)
+		}
+	}()
+
 	// Emit one selection event per successful return with at least
 	// one candidate. The first candidate's ExecutionMode is the
 	// decision class (SelectK groups by class), so cands[0] is
@@ -456,7 +510,14 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			return
 		}
 		c := cands[0]
-		s.in.Recorder.RecordSelection(c.ExecutionMode, c.PeerID, c.ModelID)
+		// Display identifier: the SelectionEvent lands in the
+		// observability ring, which the management API serves and the
+		// tray renders (spec §8.5).
+		peerID := c.PeerDisplayID
+		if peerID == "" {
+			peerID = c.PeerID
+		}
+		s.in.Recorder.RecordSelection(c.ExecutionMode, peerID, c.ModelID)
 	}()
 
 	// Step 1: alias resolution.
@@ -464,6 +525,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrModelNotFound, req.Model)
 	}
+	modelID = manifest.ModelID
 
 	// Step 2: capability filter.
 	if req.Requirements.MaxContextTokens > 0 && manifest.ContextLength < req.Requirements.MaxContextTokens {
@@ -502,7 +564,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// consulted here — peer-preferred says "use the mesh", and
 		// an openai-compat adapter is local-only by definition.
 		if s.in.MeshSnapshotFn != nil {
-			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k)
+			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
 			}
@@ -535,7 +597,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			reasons = append(reasons, "routing=pinned: no mesh snapshot, falling back to local-ready")
 			// fall through to local-ready candidate construction.
 		} else {
-			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k)
+			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
 			}
@@ -566,7 +628,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 				}
 			}
 			if s.in.MeshSnapshotFn != nil {
-				cands, err := s.tryMeshFallbackK(req, manifest, reasons, k)
+				cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 				if err != nil {
 					return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
 				}
@@ -639,9 +701,18 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 // per-peer signals the Phase 7 scoring + tie-break chain consumes.
 type meshCandidate struct {
 	deviceID string
-	variant  catalog.Variant
-	runtime  string // catalog.RuntimeOllama or catalog.RuntimeVLLM
-	tag      string
+	// displayID is the only identifier that may be shown for this peer.
+	// Equal to deviceID for own-network peers; the grant pseudonym for
+	// public peers, whose real device identifier must never reach a
+	// header, an event, a log line or a CLI surface (spec §8.5).
+	displayID string
+	// public marks a Public Share provider injected from a foreign
+	// network. It is the dominant sort key (sortMeshCandidates) —
+	// own == team > public, per the Team Share routing-order decision.
+	public  bool
+	variant catalog.Variant
+	runtime string // catalog.RuntimeOllama or catalog.RuntimeVLLM
+	tag     string
 	// priority is the admin routing preference the CP folded into the peer's
 	// InferenceState: High(1) / Middle(0) / Low(-1). It is the dominant sort
 	// key (sortMeshCandidates), so among peers that can serve the request the
@@ -694,15 +765,21 @@ type meshCandidate struct {
 //
 // Loop prevention: overlay-side Selectors receive MeshSnapshotFn=nil
 // and never reach this function.
-func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reasons []string, k int) ([]Candidate, error) {
+func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reasons []string, k int, short *publicShortfall) ([]Candidate, error) {
 	snap := s.in.MeshSnapshotFn()
 	wantOllama, wantVLLM := variantWantSets(manifest)
 	if len(wantOllama) == 0 && len(wantVLLM) == 0 {
 		return nil, nil
 	}
 
-	raw := s.buildMeshCandidates(snap, req.Class, wantOllama, wantVLLM)
+	// Public Share admission gate for this request (waired#827). Resolved
+	// once per call; its own-best-tier input is filled lazily inside
+	// buildMeshCandidates, only if a grant-tagged peer actually appears.
+	gate := s.publicGateFor(req.Class)
+
+	raw := s.buildMeshCandidates(snap, req.Class, wantOllama, wantVLLM, &gate)
 	if len(raw) == 0 {
+		short.record(snap, gate, NudgeReasonNoCandidate)
 		// Manual pin needs a separate strict check: when the operator
 		// has pinned a peer that is not in the snapshot at all (down,
 		// stale, disco-unreachable), the request must surface 503
@@ -771,6 +848,16 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 		}
 	}
 
+	// Re-assert the own > public partition (waired#827). Both hoists
+	// above move a candidate to index 0 by deviceID alone, which would
+	// otherwise let a public peer outrank every own peer: sticky binds
+	// to whatever served the previous turn, and makeMeshCandidate's
+	// commit closure Touches the sticky store for public peers too, so
+	// one public selection would pin the conversation there for the
+	// 5-minute sticky TTL. SliceStable keeps each hoist's effect intact
+	// within its own partition.
+	partitionOwnFirst(raw)
+
 	// Admission pre-filter: drop peers we already know are at
 	// capacity. The Commit closure rechecks via Acquire at commit
 	// time so a concurrent request stealing the last slot fails
@@ -785,6 +872,7 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 		eligible = append(eligible, c)
 	}
 	if len(eligible) == 0 {
+		short.record(snap, gate, NudgeReasonAllOverloaded)
 		return nil, ErrAllPeersOverloaded
 	}
 
@@ -804,16 +892,30 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 // SelectK never modifies global state — only the gateway's call to
 // Commit does.
 func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, reasons []string, c meshCandidate, all []meshCandidate) Candidate {
+	kindLabel := "mesh fallback"
+	if c.public {
+		kindLabel = "public share fallback"
+	}
 	candReasons := append(append([]string{}, reasons...),
 		fmt.Sprintf("local state for %q is not ready", manifest.ModelID),
-		fmt.Sprintf("mesh fallback: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%d, in_flight=%d, cap=%d, load=%.2f)",
-			c.deviceID, c.runtime, c.tag, c.score, c.errorRate, c.rttMS, c.inFlight, c.capacity, c.loadFraction),
+		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%d, in_flight=%d, cap=%d, load=%.2f)",
+			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, c.rttMS, c.inFlight, c.capacity, c.loadFraction),
 	)
 	decision := Decision{
 		Reason:   candReasons,
 		Fallback: fallbackTrace(all, c.deviceID),
 	}
-	endpointID := computeEndpointID("remote-"+c.deviceID, c.runtime, manifest.ModelID)
+	// EndpointID is built from displayID, not deviceID: computeEndpointID
+	// is plain string concatenation, not a hash, and the whole Selection
+	// is serialised verbatim by the management API's /inference/select
+	// and printed by `waired infer --explain`. It is opaque by contract
+	// and nothing parses a peer back out of it, so substituting the
+	// pseudonym costs nothing and keeps a foreign device identifier off
+	// a user-facing surface (spec §8.5).
+	endpointID := computeEndpointID("remote-"+c.displayID, c.runtime, manifest.ModelID)
+	// Runtime stays keyed on the real deviceID — it is functional, the
+	// peer adapter resolves the dial target from it. Display sites
+	// substitute PeerDisplayID instead of printing it.
 	runtimeStr := "remote:" + c.deviceID
 	return Candidate{
 		EndpointID:    endpointID,
@@ -823,6 +925,7 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 		EngineModel:   c.tag,
 		ExecutionMode: "remote",
 		PeerID:        c.deviceID,
+		PeerDisplayID: c.displayID,
 		Decision:      decision,
 		commit: func() (Selection, bool) {
 			release, ok := s.acquireSlot(c)
@@ -839,6 +942,7 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 				Runtime:       runtimeStr,
 				EngineModel:   c.tag,
 				ExecutionMode: "remote",
+				PeerDisplayID: c.displayID,
 				Decision:      decision,
 				Release:       release,
 			}, true
@@ -924,6 +1028,7 @@ func (s *Selector) buildMeshCandidates(
 	snap inferencemesh.Snapshot,
 	class string,
 	wantOllama, wantVLLM map[string]catalog.Variant,
+	gate *publicGate,
 ) []meshCandidate {
 	var (
 		rtts      map[string]uint32
@@ -950,6 +1055,34 @@ func (s *Selector) buildMeshCandidates(
 	for _, p := range snap.Peers {
 		if p.InferenceState == nil || !p.InferenceState.Reachable || p.Stale {
 			continue
+		}
+		// Public Share partition (waired#827, spec §4.2). A grant-tagged
+		// peer is a stranger's machine: it enters the candidate set only
+		// under an explicit consumer policy, and it is displayed only by
+		// its grant pseudonym. A grant whose Role is not "provider" (i.e.
+		// a guest using OUR engine) is never a routing target.
+		displayID, isPublic := p.DeviceID, false
+		if p.Grant != nil {
+			if !isPublicProvider(&p) {
+				continue
+			}
+			pseudonym, ok := publicDisplayID(p.Grant)
+			if !ok {
+				continue
+			}
+			if !gate.admit {
+				continue
+			}
+			tier := s.peerTier(p.InferenceState.Type, p.InferenceState.Models)
+			if gate.auto {
+				// Deferred until a public peer actually shows up, so the
+				// common no-public-peers path never pays for the scan.
+				s.ensureBeat(gate, snap)
+			}
+			if !gate.admits(tier) {
+				continue
+			}
+			displayID, isPublic = pseudonym, true
 		}
 		// Per-class Claude serving eligibility: drop peers the admin marked
 		// ineligible for this request's traffic class (CP-folded into
@@ -990,14 +1123,16 @@ func (s *Selector) buildMeshCandidates(
 				continue
 			}
 			c := meshCandidate{
-				deviceID: p.DeviceID,
-				variant:  v,
-				runtime:  kind,
-				tag:      m,
-				priority: p.InferenceState.Priority,
-				capacity: p.InferenceState.Capacity,
-				score:    int64(v.ParamCount) * int64(v.QuantizationTier),
-				rttMS:    noRTT,
+				deviceID:  p.DeviceID,
+				displayID: displayID,
+				public:    isPublic,
+				variant:   v,
+				runtime:   kind,
+				tag:       m,
+				priority:  p.InferenceState.Priority,
+				capacity:  p.InferenceState.Capacity,
+				score:     int64(v.ParamCount) * int64(v.QuantizationTier),
+				rttMS:     noRTT,
 			}
 			if r, ok := rtts[p.DeviceID]; ok {
 				c.rttMS = r
@@ -1078,6 +1213,14 @@ func effectiveCapacity(capacity int) int {
 // earlier axis ties (the case existing tests with no admission wiring rely on).
 func sortMeshCandidates(cands []meshCandidate) {
 	sort.SliceStable(cands, func(i, j int) bool {
+		// Grant-kind tier is the dominant key: own == team > public
+		// (waired/docs/decisions.md, Team Share routing order). A public
+		// candidate is only ever a last resort — the auto-mode tier
+		// comparison in publicGate governs whether it may be a candidate
+		// at all, not where it ranks.
+		if cands[i].public != cands[j].public {
+			return !cands[i].public
+		}
 		if cands[i].priority != cands[j].priority {
 			return cands[i].priority > cands[j].priority
 		}
@@ -1111,9 +1254,12 @@ func fallbackTrace(cands []meshCandidate, chosen string) []FallbackCandidate {
 		if c.deviceID == chosen {
 			continue
 		}
+		// displayID throughout: the trace is rendered by
+		// `waired diagnose` and returned by the management API, so a
+		// public peer appears only under its grant pseudonym (§8.5).
 		out = append(out, FallbackCandidate{
-			EndpointID: computeEndpointID("remote-"+c.deviceID, c.runtime, "_"),
-			Runtime:    "remote:" + c.deviceID,
+			EndpointID: computeEndpointID("remote-"+c.displayID, c.runtime, "_"),
+			Runtime:    "remote:" + c.displayID,
 		})
 	}
 	return out

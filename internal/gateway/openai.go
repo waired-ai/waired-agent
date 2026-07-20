@@ -135,8 +135,11 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	adapter, err := h.lookupAdapter(sel)
 	if err != nil {
 		rr.fail(http.StatusServiceUnavailable, "runtime_unavailable")
+		// The raw error names the peer's real DeviceID and overlay IP;
+		// agent.log gets the same scrubbed rendering the client does.
+		slog.Warn("peer adapter lookup failed", "peer", peerDisplayID(sel), "err", adapterErrorForClient(sel, err))
 		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "runtime_unavailable",
-			fmt.Sprintf("runtime %q: %s", sel.Runtime, err.Error()))
+			adapterErrorForClient(sel, err))
 		return
 	}
 	if err := adapter.EnsureRunning(r.Context()); err != nil {
@@ -154,7 +157,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		// client only saw a truncated response.
 		slog.Warn("openai proxy truncated mid-stream",
 			"err", err,
-			"peer", strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix),
+			"peer", peerDisplayID(sel),
 			"model", sel.ModelID,
 		)
 		return

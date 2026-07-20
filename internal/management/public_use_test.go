@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/router"
 )
 
 func newPublicUseTestServer(t *testing.T) (*Server, string) {
@@ -144,4 +145,111 @@ func TestPublicUse_UnconfiguredRoutesAbsent(t *testing.T) {
 	if w := doGetRaw(t, s, "/waired/v1/public/use"); w.Code != http.StatusNotFound {
 		t.Fatalf("unconfigured GET status = %d, want 404", w.Code)
 	}
+}
+
+// The OnChange hook is the router's cache-invalidation signal
+// (waired#827): it must fire exactly once per successful write of
+// public_use.json, and never on a rejected request — a stale-but-valid
+// cached policy is better than one refreshed from a write that did not
+// happen.
+func TestPublicUse_OnChangeFiresOnlyOnSuccessfulWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		preConsent bool
+		path       string
+		body       string
+		wantStatus int
+		wantCalls  int
+	}{
+		{
+			name: "settings update", preConsent: true, path: "/waired/v1/public/use",
+			body: `{"mode":"off"}`, wantStatus: http.StatusOK, wantCalls: 1,
+		},
+		{
+			name: "settings update rejected by validation", preConsent: true, path: "/waired/v1/public/use",
+			body: `{"mode":"nonsense"}`, wantStatus: http.StatusBadRequest, wantCalls: 0,
+		},
+		{
+			name: "settings update before consent", path: "/waired/v1/public/use",
+			body: `{"mode":"auto"}`, wantStatus: http.StatusConflict, wantCalls: 0,
+		},
+		{
+			name: "consent accepted", path: "/waired/v1/public/consent",
+			body: `{"warning_version":1}`, wantStatus: http.StatusOK, wantCalls: 1,
+		},
+		{
+			name: "consent version mismatch", path: "/waired/v1/public/consent",
+			body: `{"warning_version":99}`, wantStatus: http.StatusConflict, wantCalls: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			srv := New(stubStatus{}, stubPinger{}).WithPublicUse(&PublicUseConfig{
+				Path:     filepath.Join(t.TempDir(), "inference", agentconfig.PublicUseFileName),
+				OnChange: func() { calls++ },
+			})
+			if tc.preConsent {
+				// The settings route is gated on consent; accept it first
+				// and discount that write from the assertion below.
+				cw := httptest.NewRecorder()
+				cr := httptest.NewRequest(http.MethodPost, "/waired/v1/public/consent",
+					strings.NewReader(`{"warning_version":1}`))
+				cr.RemoteAddr = "127.0.0.1:1"
+				srv.Handler().ServeHTTP(cw, cr)
+				if cw.Code != http.StatusOK {
+					t.Fatalf("consent setup failed: %d %s", cw.Code, cw.Body.String())
+				}
+				calls = 0
+			}
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			r.RemoteAddr = "127.0.0.1:1"
+			srv.Handler().ServeHTTP(w, r)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, tc.wantStatus, w.Body.String())
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("OnChange calls = %d, want %d", calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// A Public Share peer's real device identifier must not leave the
+// management API. /inference/select is a dry-run explain surface that
+// `waired infer --explain` prints verbatim, so Runtime — which carries
+// "remote:<DeviceID>" for the in-process gateway's benefit — is
+// rewritten to the grant pseudonym on the way out (spec §8.5).
+func TestScrubSelectionForDisplay(t *testing.T) {
+	const (
+		foreign = "dev_foreign00000001"
+		alias   = "guest-a7f3"
+	)
+	t.Run("public peer", func(t *testing.T) {
+		got := scrubSelectionForDisplay(router.Selection{
+			Runtime:       "remote:" + foreign,
+			PeerDisplayID: alias,
+			ExecutionMode: "remote",
+		})
+		if got.Runtime != "remote:"+alias {
+			t.Fatalf("Runtime = %q, want the pseudonym", got.Runtime)
+		}
+	})
+	t.Run("own peer keeps its device id", func(t *testing.T) {
+		got := scrubSelectionForDisplay(router.Selection{
+			Runtime:       "remote:dev_own00000001",
+			PeerDisplayID: "dev_own00000001",
+			ExecutionMode: "remote",
+		})
+		if got.Runtime != "remote:dev_own00000001" {
+			t.Fatalf("Runtime = %q", got.Runtime)
+		}
+	})
+	t.Run("local selection untouched", func(t *testing.T) {
+		got := scrubSelectionForDisplay(router.Selection{Runtime: "ollama", ExecutionMode: "local"})
+		if got.Runtime != "ollama" {
+			t.Fatalf("Runtime = %q", got.Runtime)
+		}
+	})
 }

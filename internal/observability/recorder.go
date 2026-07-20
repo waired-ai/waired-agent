@@ -184,6 +184,26 @@ func (r *Recorder) RecordPinnedPeerUnreachable(peerID, model, reason string) {
 	}
 }
 
+// RecordPublicShareNudge appends the one-shot Public Share hint
+// (KindPublicShareNudge). Ring only: there is no metric because the
+// event is emitted at most once per process, and no log line because
+// it is a user-facing suggestion rather than an operational condition.
+//
+// Once-ness belongs to the caller — the Ring appends unconditionally.
+func (r *Recorder) RecordPublicShareNudge(model, reason string) {
+	if r == nil || r.ring == nil {
+		return
+	}
+	r.ring.Append(Event{
+		Kind: KindPublicShareNudge,
+		PublicShareNudge: &PublicShareNudgeEvent{
+			Model:   model,
+			Reason:  reason,
+			Message: PublicShareNudgeMessage,
+		},
+	})
+}
+
 // --- Inference-facing emits ---
 
 // RecordServed is called once per request that this agent answered

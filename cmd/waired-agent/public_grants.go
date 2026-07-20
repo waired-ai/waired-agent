@@ -37,6 +37,18 @@ const (
 	// the netmap until the epoch bump propagates — don't drop it as
 	// map-absent before this.
 	publicGrantMapGrace = 2 * time.Minute
+	// publicGrantDemandMinInterval floors the gap between two
+	// demand-driven acquire cycles (waired#827). Deliberately far below
+	// publicGrantTick: a floor at the tick length would only ever admit
+	// a demand in the sliver between the floor expiring and the jittered
+	// tick firing, buying a couple of seconds and defeating the point.
+	//
+	// Measured against the last ACTUAL acquire attempt, not the last
+	// loop cycle, so mode-off and read-error cycles cannot push the
+	// window out. A demand rejected by this floor is simply dropped: the
+	// router re-signals on the next request that wants a public
+	// candidate, so nothing needs to be remembered.
+	publicGrantDemandMinInterval = 15 * time.Second
 )
 
 // publicGrantAPI is the controlclient seam (fake in tests).
@@ -58,6 +70,17 @@ type publicGrantDeps struct {
 	PublicUsePath  string
 	WarningVersion int
 	Logger         *slog.Logger
+
+	// Demand is the router's "a request wanted a public candidate and
+	// there is no grant to use" signal (waired#827). Receive-only: the
+	// sender owns the channel and uses a non-blocking send onto a
+	// buffered-1 chan, so bursts coalesce and the routing hot path never
+	// waits here. A wake runs one acquire cycle early instead of waiting
+	// out the periodic tick, which is what keeps the first request after
+	// consent from paying a full tick of cold start (spec §4.3).
+	//
+	// nil leaves the loop purely periodic.
+	Demand <-chan struct{}
 
 	Tick time.Duration    // 0 → publicGrantTick
 	Now  func() time.Time // nil → time.Now
@@ -115,7 +138,15 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 
 	timer := time.NewTimer(jitterTick(tick))
 	defer timer.Stop()
+	// lastAcquireAt gates demand-driven cycles. Zero until the first
+	// acquire attempt, so the very first demand — the one right after
+	// the user consents — is always admitted.
+	var lastAcquireAt time.Time
 	for {
+		// The timer is re-armed per arm, not unconditionally after the
+		// select: with more than one non-ctx arm, an unconditional
+		// Reset on a timer that has NOT fired leaves its pending value
+		// behind and the next wake is immediate.
 		select {
 		case <-ctx.Done():
 			rctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -123,8 +154,15 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			cancel()
 			return
 		case <-timer.C:
+			timer.Reset(jitterTick(tick))
+		case <-deps.Demand:
+			// Throttle only the demand path, and leave the timer
+			// untouched: re-arming here would let a stream of requests
+			// postpone the periodic cycle indefinitely.
+			if now().Sub(lastAcquireAt) < publicGrantDemandMinInterval {
+				continue
+			}
 		}
-		timer.Reset(jitterTick(tick))
 
 		pu, _, err := agentconfig.LoadPublicUse(deps.PublicUsePath)
 		if err != nil {
@@ -209,6 +247,7 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 		if pu.Consent != nil {
 			consentVersion = pu.Consent.WarningVersion
 		}
+		lastAcquireAt = tnow
 		res, err := deps.API.AcquirePublicGrants(ctx, controlclient.AcquirePublicGrantsRequest{
 			Class:          "",
 			MinQualityTier: pu.MinQualityTier,

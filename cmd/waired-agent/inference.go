@@ -151,6 +151,23 @@ type inferenceSubsystemDeps struct {
 	// uniformly; intermediate subsystems remain functionally unchanged.
 	Recorder *observability.Recorder
 
+	// --- Public Share consumer inputs (waired#827) --------------------
+	//
+	// Threaded into the LOOPBACK Selector only; localOnlySelector leaves
+	// them unset so an overlay-arriving peer request never applies this
+	// device's outbound public-routing posture (loop prevention, same
+	// reasoning as Sticky / LocalInFlight above).
+
+	// PublicPolicy returns the consumer's resolved Public Share posture.
+	// nil admits no public candidates.
+	PublicPolicy func() router.PublicPolicy
+	// OnPublicGrantDemand wakes the background grant acquirer when a
+	// request wanted a public candidate and no grant was held.
+	OnPublicGrantDemand func()
+	// OnPublicNudge receives the pre-consent hint; the receiver owns
+	// once-ness.
+	OnPublicNudge func(router.PublicNudge)
+
 	// Routing returns the operator's currently-live RoutingPreference
 	// (Tailscale-exit-node-style manual routing). The Selector calls
 	// it once per SelectK to read mode + pinned peer atomically. nil
@@ -471,6 +488,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		localRTT:            deps.LocalRTT,
 		localErrors:         deps.LocalErrors,
 		localReachable:      deps.LocalReachable,
+		publicPolicy:        deps.PublicPolicy,
+		onPublicGrantDemand: deps.OnPublicGrantDemand,
+		onPublicNudge:       deps.OnPublicNudge,
 		recorder:            deps.Recorder,
 		routing:             deps.Routing,
 	}
@@ -976,6 +996,12 @@ type agentInferenceProvider struct {
 	// Selector and gateway so the agent emits Phase 9 events from
 	// the loopback side. nil disables emission entirely.
 	recorder *observability.Recorder
+
+	// Public Share consumer inputs (waired#827); see
+	// inferenceSubsystemDeps for the contract.
+	publicPolicy        func() router.PublicPolicy
+	onPublicGrantDemand func()
+	onPublicNudge       func(router.PublicNudge)
 
 	// isInferenceDisabled, when non-nil and returning true, makes
 	// Status() report SubsystemState="disabled" regardless of engine
@@ -2183,6 +2209,12 @@ func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref sta
 	// pre-feature behaviour.
 	in.RoutingMode = pref.Mode
 	in.PinnedPeerDeviceID = pref.PinnedPeerDeviceID
+	// Public Share consumer posture (waired#827). Loopback only —
+	// localOnlySelector never sets these, so a peer-arriving request can
+	// never be re-routed onward to a public node.
+	in.PublicPolicyFn = p.publicPolicy
+	in.OnPublicGrantDemand = p.onPublicGrantDemand
+	in.OnPublicNudge = p.onPublicNudge
 	return router.NewSelector(in)
 }
 

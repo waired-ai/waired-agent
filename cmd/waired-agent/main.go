@@ -237,6 +237,15 @@ func run(ctx context.Context, args []string) error {
 	obsMetrics := observability.NewMetrics(obsRegistry)
 	obsRing := observability.NewRing(observability.DefaultRingCapacity)
 	obsRecorder := observability.NewRecorder(obsRing, obsMetrics, logger)
+
+	// Public Share consumer posture, cached for the routing hot path
+	// (waired#827). Boot scope, alongside obsRing: the management server
+	// owns the settings routes and outlives sessions, while `activate`
+	// below is re-entrant (node-key rotation calls it again). The
+	// controller holds only a path, a version and an atomic pointer, so
+	// re-activation reuses it safely.
+	publicUseCtl := newPublicUseController(
+		agentconfig.DefaultPublicUsePath(), publicUseWarningVersion, obsRing, logger)
 	promHandler := promhttp.HandlerFor(obsRegistry, promhttp.HandlerOpts{Registry: obsRegistry})
 
 	// Switchboard + management server: built ONCE here and started
@@ -306,6 +315,10 @@ func run(ctx context.Context, args []string) error {
 	// even when local inference serving is disabled.
 	mgmtSrv = mgmtSrv.WithPublicUse(&management.PublicUseConfig{
 		Path: agentconfig.DefaultPublicUsePath(),
+		// Exact cache invalidation: these handlers are the only writer
+		// of public_use.json, so the router's policy never needs a
+		// per-request disk read or an mtime poll.
+		OnChange: publicUseCtl.Reload,
 	})
 	// NAVI onboarding executor lease (waired#835 §9/§11). Registered
 	// UNCONDITIONALLY, unlike the inference group: the CLI probes these
@@ -817,6 +830,20 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 
+		// publicGrantDemand carries the router's "wanted a public
+		// candidate, hold no grant" signal to the acquirer (waired#827).
+		// Buffered-1 and written with a non-blocking send, so bursts
+		// coalesce and the routing hot path never waits. Session scope,
+		// matching its only consumer (runPublicGrantLoop below); never
+		// closed — ctx cancellation ends both sides.
+		publicGrantDemand := make(chan struct{}, 1)
+		notifyPublicGrantDemand := func() {
+			select {
+			case publicGrantDemand <- struct{}{}:
+			default:
+			}
+		}
+
 		var overlayHandlerSet *gateway.HandlerSet
 		var claudeHandlerSet *gateway.HandlerSet
 		var inferenceSub *inferenceSubsystem
@@ -849,6 +876,9 @@ func run(ctx context.Context, args []string) error {
 				Recorder:             obsRecorder,
 				Routing:              workerCtl.Routing,
 				OnClaudeNodeFallback: claudeRouting.RecordNodeFallback,
+				PublicPolicy:         publicUseCtl.Policy,
+				OnPublicGrantDemand:  notifyPublicGrantDemand,
+				OnPublicNudge:        publicUseCtl.Nudge,
 			})
 			if err != nil {
 				return fmt.Errorf("inference subsystem: %w", err)
@@ -1243,6 +1273,7 @@ func run(ctx context.Context, args []string) error {
 				PublicUsePath:  agentconfig.DefaultPublicUsePath(),
 				WarningVersion: management.PublicShareWarningVersion,
 				Logger:         logger,
+				Demand:         publicGrantDemand,
 			})
 		}()
 

@@ -414,7 +414,27 @@ func (s *Server) handleInferenceSelect(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, mapRouterStatus(err), errorBody("selection_failed", err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, sel)
+	writeJSON(w, http.StatusOK, scrubSelectionForDisplay(sel))
+}
+
+// scrubSelectionForDisplay replaces the functional peer key in Runtime
+// with the Selector's display identifier before the Selection leaves the
+// management API.
+//
+// This endpoint is a dry-run explain surface — `waired infer --explain`
+// prints its fields verbatim and nothing dials from the response — while
+// Selection.Runtime carries "remote:<DeviceID>" because the in-process
+// gateway resolves a peer adapter from it. For a Public Share peer that
+// DeviceID must never be shown; only the grant pseudonym may (public
+// share spec §8.5). Own-network peers are unaffected: their display
+// identifier IS their DeviceID.
+func scrubSelectionForDisplay(sel router.Selection) router.Selection {
+	const remotePrefix = "remote:"
+	if sel.PeerDisplayID == "" || !strings.HasPrefix(sel.Runtime, remotePrefix) {
+		return sel
+	}
+	sel.Runtime = remotePrefix + sel.PeerDisplayID
+	return sel
 }
 
 // handleModelsCollection serves GET /waired/v1/models. The trailing
