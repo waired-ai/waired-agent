@@ -1221,6 +1221,22 @@ func run(ctx context.Context, args []string) error {
 			defer wg.Done()
 			runFallbackLoop(ctx, rec, *fallbackAfter)
 		}()
+		// Public Share grant acquirer (waired#821, spec §6): consumer-side
+		// lifecycle only — routing consumes the netmap. Wired regardless
+		// of --disable-inference (consuming public nodes is a routing
+		// concern, same posture as WithPublicUse); the D1 consent gate
+		// keeps it inert until the operator opts in.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runPublicGrantLoop(ctx, publicGrantDeps{
+				API:            infPushClient,
+				Mesh:           meshAgg,
+				PublicUsePath:  agentconfig.DefaultPublicUsePath(),
+				WarningVersion: management.PublicShareWarningVersion,
+				Logger:         logger,
+			})
+		}()
 
 		if discoSvc != nil {
 			go func() {

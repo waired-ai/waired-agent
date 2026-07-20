@@ -43,6 +43,9 @@ import (
 type peerEngine interface {
 	UpdatePeers([]wgnet.Peer) error
 	PeerHandshakeTimes() (map[string]time.Time, error)
+	// SetPeerNetworks replaces the deviceID → foreign-home-network table
+	// used to stamp DstNetworkID on relay frames (public share spec §10).
+	SetPeerNetworks(map[string]string)
 }
 
 // reconcilerConfig is the bag of probe-driven-fallback knobs. All
@@ -663,6 +666,18 @@ func (r *reconciler) Apply(nm *signer.NetworkMap) error {
 	}
 	d := r.disco
 	r.mu.Unlock()
+
+	// Cross-network peer table (public share spec §10): CP-injected
+	// foreign peers carry their home NetworkID; the relay bind stamps
+	// it as DstNetworkID on frames to them. Fed BEFORE peers/disco so
+	// the registry exists before anything can trigger a send.
+	nets := map[string]string{}
+	for _, p := range nm.Peers {
+		if p.NetworkID != "" && p.NetworkID != nm.NetworkID {
+			nets[p.DeviceID] = p.NetworkID
+		}
+	}
+	r.engine.SetPeerNetworks(nets)
 
 	r.provider.replacePeers(nm)
 	if d != nil {

@@ -67,6 +67,15 @@ type MultiplexBind struct {
 	udpSendCount   atomic.Int64
 	relaySendCount atomic.Int64
 
+	// peerNets maps deviceID → home NetworkID for CP-injected
+	// cross-network Public Share peers (spec §10): relay frames to
+	// them must carry frame.EncryptedPacket.DstNetworkID so the relay
+	// can authorize + route across networks (waired#822). Same-network
+	// peers never appear here, keeping their frames byte-identical
+	// (omitempty). Replaced wholesale from the reconciler on every
+	// netmap application; nil until the first cross-network peer.
+	peerNets atomic.Pointer[map[string]string]
+
 	// discoIn fans out incoming disco frames demultiplexed from either
 	// the WG UDP socket (direct UDP path) or any active relay session
 	// (relay-tunnelled disco). The disco subsystem
@@ -237,16 +246,7 @@ func (b *MultiplexBind) SendDiscoViaRelay(payload []byte, dstDeviceID, dstNodeKe
 	if err != nil {
 		return err
 	}
-	pkt := frame.EncryptedPacket{
-		Type:         frame.TypeEncryptedPacket,
-		Version:      frame.Version,
-		NetworkID:    b.selfNetworkID,
-		SrcDeviceID:  b.selfDeviceID,
-		DstDeviceID:  dstDeviceID,
-		DstNodeKeyID: dstNodeKey,
-		SrcNodeKeyID: b.selfNodePub,
-		Payload:      base64Std(payload),
-	}
+	pkt := b.newEncryptedPacket(dstDeviceID, dstNodeKey, payload)
 	if err := h.cli.Send(pkt); err != nil {
 		return fmt.Errorf("multiplex bind: disco-via-relay send: %w", err)
 	}
@@ -257,6 +257,57 @@ func (b *MultiplexBind) SendDiscoViaRelay(payload []byte, dstDeviceID, dstNodeKe
 // DiscoRelaySendCount returns the number of disco frames pushed through
 // SendDiscoViaRelay. Tests use this to assert "agent probed via relay".
 func (b *MultiplexBind) DiscoRelaySendCount() int64 { return b.discoRelaySendCount.Load() }
+
+// SetPeerNetworks replaces the cross-network peer table (public share
+// spec §10): deviceID → the peer's home NetworkID for CP-injected
+// foreign peers (NetworkMapPeer.NetworkID). Same-network peers must
+// not appear. Called from the reconciler on every netmap application,
+// BEFORE peers/endpoints are updated, so the registry is populated by
+// the time any send can target a foreign peer.
+func (b *MultiplexBind) SetPeerNetworks(nets map[string]string) {
+	if len(nets) == 0 {
+		b.peerNets.Store(nil)
+		return
+	}
+	cp := make(map[string]string, len(nets))
+	for k, v := range nets {
+		cp[k] = v
+	}
+	b.peerNets.Store(&cp)
+}
+
+// peerNetworkFor returns the foreign home network for dstDeviceID, or
+// "" for same-network peers (the common case: nil table or no entry).
+func (b *MultiplexBind) peerNetworkFor(dstDeviceID string) string {
+	m := b.peerNets.Load()
+	if m == nil {
+		return ""
+	}
+	return (*m)[dstDeviceID]
+}
+
+// newEncryptedPacket builds one relay frame. Both relay send paths (WG
+// payloads via sendRelay, disco via SendDiscoViaRelay) MUST go through
+// here: cross-network peers need DstNetworkID stamped on every frame —
+// including disco, or hard-NAT×hard-NAT public pairs could never even
+// rendezvous (§15-7). Same-network frames leave it empty (omitempty ⇒
+// wire bytes unchanged).
+func (b *MultiplexBind) newEncryptedPacket(dstDeviceID, dstNodeKey string, payload []byte) frame.EncryptedPacket {
+	pkt := frame.EncryptedPacket{
+		Type:         frame.TypeEncryptedPacket,
+		Version:      frame.Version,
+		NetworkID:    b.selfNetworkID,
+		SrcDeviceID:  b.selfDeviceID,
+		DstDeviceID:  dstDeviceID,
+		DstNodeKeyID: dstNodeKey,
+		SrcNodeKeyID: b.selfNodePub,
+		Payload:      base64Std(payload),
+	}
+	if net := b.peerNetworkFor(dstDeviceID); net != "" && net != b.selfNetworkID {
+		pkt.DstNetworkID = net
+	}
+	return pkt
+}
 
 // UDPSendCount returns the number of packets routed via the embedded UDP
 // bind. Tests use this to assert relay-only enforcement (counter == 0).
@@ -417,16 +468,7 @@ func (b *MultiplexBind) sendRelay(bufs [][]byte, ep *relayEndpoint) error {
 	// belt-and-braces store for endpoints constructed by hand in tests.
 	h.endpts.Store(ep.dstDeviceID, ep)
 	for _, buf := range bufs {
-		pkt := frame.EncryptedPacket{
-			Type:         frame.TypeEncryptedPacket,
-			Version:      frame.Version,
-			NetworkID:    b.selfNetworkID,
-			SrcDeviceID:  b.selfDeviceID,
-			DstDeviceID:  ep.dstDeviceID,
-			DstNodeKeyID: ep.dstNodeKey,
-			SrcNodeKeyID: b.selfNodePub,
-			Payload:      base64Std(buf),
-		}
+		pkt := b.newEncryptedPacket(ep.dstDeviceID, ep.dstNodeKey, buf)
 		if err := h.cli.Send(pkt); err != nil {
 			b.logger.Warn("multiplex bind: relay send failed", "url", ep.url, "err", err)
 			continue

@@ -66,6 +66,15 @@ type Engine struct {
 // engine was built without relay support.
 func (e *Engine) Bind() *MultiplexBind { return e.bind }
 
+// SetPeerNetworks forwards the cross-network peer table (public share
+// spec §10) to the relay bind. No-op on engines built without relay
+// support — a relay-less engine cannot reach foreign networks anyway.
+func (e *Engine) SetPeerNetworks(nets map[string]string) {
+	if e.bind != nil {
+		e.bind.SetPeerNetworks(nets)
+	}
+}
+
 // LoadPrivateKey reads a base64-encoded WireGuard private key file.
 func LoadPrivateKey(path string) ([]byte, error) {
 	body, err := os.ReadFile(path)

@@ -28,6 +28,19 @@ type fakeEngine struct {
 	lastPeers      []wgnet.Peer
 	updateCalls    int
 	handshakeByPub map[string]time.Time
+	peerNets       map[string]string
+}
+
+func (f *fakeEngine) SetPeerNetworks(nets map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.peerNets = nets
+}
+
+func (f *fakeEngine) PeerNetworks() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peerNets
 }
 
 func (f *fakeEngine) UpdatePeers(peers []wgnet.Peer) error {
