@@ -38,6 +38,20 @@ Waired network with `waired init`. Run it once per machine.
    sessions open the browser right away, and on a headless machine (or with
    `--no-browser`) only the URL and pairing code are printed.
 
+   After you sign in, setup may continue **in the browser**. The terminal says
+   so and keeps running:
+
+   ```text
+   Setup is continuing in your browser…
+   (press Enter to continue in the terminal instead)
+   ```
+
+   **Leave that terminal open** while the browser finishes — some steps, such
+   as installing the AI software, need it. Pressing **Enter** hands control
+   back to the terminal and it asks the remaining questions itself; the browser
+   page then tells you what to run here. Closing the terminal is safe: your
+   progress is saved, and downloads keep going either way.
+
 2. **Run AI models on this computer? (Y/n)** — Choose **Y** on a machine that
    should *run* a model (your GPU box). The default is Y when the machine has
    enough memory (roughly 8 GB of VRAM) and N otherwise. On a client laptop that
