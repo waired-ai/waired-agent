@@ -23,8 +23,12 @@ import (
 // wording here is plain English: no Waired-internal vocabulary.
 const publicLong = `Control Public Share — using and sharing machines with other Waired users:
 
-  waired public status   Show whether this computer is shared publicly and
+  waired public status    Show whether this computer is shared publicly and
       whether this computer is allowed to use other people's public machines.
+  waired public share     Share this computer publicly so other Waired users
+      can run work on it (optionally cap guests with --max-clients).
+  waired public unshare   Stop sharing this computer publicly. Any requests
+      other people are running on it right now are cut off.
 
 Public machines are other people's computers. A security and privacy
 warning is shown before you can start using them.`
@@ -36,7 +40,7 @@ func newPublicCmd() *cobra.Command {
 		Long:  publicLong,
 		RunE:  namespaceRunE,
 	}
-	cmd.AddCommand(newPublicStatusCmd())
+	cmd.AddCommand(newPublicStatusCmd(), newPublicShareCmd(), newPublicUnshareCmd())
 	return cmd
 }
 
