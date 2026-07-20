@@ -145,3 +145,72 @@ func TestPublicUse_UnconfiguredRoutesAbsent(t *testing.T) {
 		t.Fatalf("unconfigured GET status = %d, want 404", w.Code)
 	}
 }
+
+// The OnChange hook is the router's cache-invalidation signal
+// (waired#827): it must fire exactly once per successful write of
+// public_use.json, and never on a rejected request — a stale-but-valid
+// cached policy is better than one refreshed from a write that did not
+// happen.
+func TestPublicUse_OnChangeFiresOnlyOnSuccessfulWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		preConsent bool
+		path       string
+		body       string
+		wantStatus int
+		wantCalls  int
+	}{
+		{
+			name: "settings update", preConsent: true, path: "/waired/v1/public/use",
+			body: `{"mode":"off"}`, wantStatus: http.StatusOK, wantCalls: 1,
+		},
+		{
+			name: "settings update rejected by validation", preConsent: true, path: "/waired/v1/public/use",
+			body: `{"mode":"nonsense"}`, wantStatus: http.StatusBadRequest, wantCalls: 0,
+		},
+		{
+			name: "settings update before consent", path: "/waired/v1/public/use",
+			body: `{"mode":"auto"}`, wantStatus: http.StatusConflict, wantCalls: 0,
+		},
+		{
+			name: "consent accepted", path: "/waired/v1/public/consent",
+			body: `{"warning_version":1}`, wantStatus: http.StatusOK, wantCalls: 1,
+		},
+		{
+			name: "consent version mismatch", path: "/waired/v1/public/consent",
+			body: `{"warning_version":99}`, wantStatus: http.StatusConflict, wantCalls: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			srv := New(stubStatus{}, stubPinger{}).WithPublicUse(&PublicUseConfig{
+				Path:     filepath.Join(t.TempDir(), "inference", agentconfig.PublicUseFileName),
+				OnChange: func() { calls++ },
+			})
+			if tc.preConsent {
+				// The settings route is gated on consent; accept it first
+				// and discount that write from the assertion below.
+				cw := httptest.NewRecorder()
+				cr := httptest.NewRequest(http.MethodPost, "/waired/v1/public/consent",
+					strings.NewReader(`{"warning_version":1}`))
+				cr.RemoteAddr = "127.0.0.1:1"
+				srv.Handler().ServeHTTP(cw, cr)
+				if cw.Code != http.StatusOK {
+					t.Fatalf("consent setup failed: %d %s", cw.Code, cw.Body.String())
+				}
+				calls = 0
+			}
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			r.RemoteAddr = "127.0.0.1:1"
+			srv.Handler().ServeHTTP(w, r)
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, tc.wantStatus, w.Body.String())
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("OnChange calls = %d, want %d", calls, tc.wantCalls)
+			}
+		})
+	}
+}
