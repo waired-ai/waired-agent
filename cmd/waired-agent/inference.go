@@ -167,6 +167,11 @@ type inferenceSubsystemDeps struct {
 	// OnPublicNudge receives the pre-consent hint; the receiver owns
 	// once-ness.
 	OnPublicNudge func(router.PublicNudge)
+	// OnPublicUsage receives per-request token metering for the PEER
+	// OVERLAY listener (:9474) only — the surface where this device
+	// serves other people's requests (waired#829). nil disables
+	// reporting; local telemetry is unaffected either way.
+	OnPublicUsage func(context.Context, gateway.UsageSample)
 
 	// Routing returns the operator's currently-live RoutingPreference
 	// (Tailscale-exit-node-style manual routing). The Selector calls
@@ -556,6 +561,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	overlaySelector := &localOnlySelector{p: provider}
 	overlayDeps := baseGatewayDeps()
 	overlayDeps.Selector = overlaySelector
+	// Public Share usage reporting rides the overlay set alone: the
+	// loopback / intercept / OpenCode surfaces serve this device's own
+	// operator, whose usage is nobody's to report (spec §12).
+	overlayDeps.OnUsage = deps.OnPublicUsage
 	overlayDeps.AllowOpenAI = cfg.AllowOpenAIAPI
 	overlayDeps.AllowAnthropic = cfg.AllowAnthropicAPI
 	// No ResolveUnknownModel here: the Claude intercept moved to
