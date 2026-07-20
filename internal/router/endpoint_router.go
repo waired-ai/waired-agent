@@ -236,9 +236,10 @@ type Inputs struct {
 var DynamicCodingAliases = []string{"waired/default", "waired/coding"}
 
 // resolveModel maps a requested model name to a manifest: dynamic
-// coding aliases go to DefaultModelID when it resolves, everything
-// else (and the fallback) is the static LookupByAlias path. Appends
-// the resolution reason on success.
+// coding aliases go to DefaultModelID when it resolves, then the static
+// LookupByAlias path, and finally the engine-native fallback for names
+// that only the mesh puts on the wire. Appends the resolution reason on
+// success.
 func (s *Selector) resolveModel(name string, reasons *[]string) (catalog.Manifest, bool) {
 	if s.in.DefaultModelID != "" && slices.Contains(DynamicCodingAliases, name) {
 		if m, ok := catalog.LookupByAlias(s.in.DefaultModelID, s.in.Manifests); ok {
@@ -247,11 +248,27 @@ func (s *Selector) resolveModel(name string, reasons *[]string) (catalog.Manifes
 			return m, true
 		}
 	}
-	m, ok := catalog.LookupByAlias(name, s.in.Manifests)
-	if ok {
+	if m, ok := catalog.LookupByAlias(name, s.in.Manifests); ok {
 		*reasons = append(*reasons, fmt.Sprintf("alias %q resolved to model_id %q", name, m.ModelID))
+		return m, true
 	}
-	return m, ok
+	// Engine-native fallback (#107). A request arriving from a mesh peer
+	// names the model the way the ENGINE does, not the way the catalog
+	// does: buildMeshCandidates matches the peer's advertised
+	// InferenceState.Models against Source.Tag / Source.RepoID,
+	// makeMeshCandidate carries the matched name as
+	// Selection.EngineModel, and the gateway rewrites the proxied body's
+	// `model` field to it. LookupByAlias only knows model_id and
+	// model_aliases, and no bundled manifest lists its own engine tag as
+	// an alias — so without this every peer hop 404s on the serving
+	// side. Alias resolution keeps priority above, so this can only add
+	// resolutions, never change one.
+	if m, ok := lookupByEngineModel(name, s.in.Manifests); ok {
+		*reasons = append(*reasons, fmt.Sprintf(
+			"engine-native model %q resolved to model_id %q", name, m.ModelID))
+		return m, true
+	}
+	return catalog.Manifest{}, false
 }
 
 // Sentinel errors. Wrap with %w so callers can use errors.Is.
