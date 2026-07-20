@@ -83,7 +83,7 @@ func TestProxyAnthropicStream_TTFBAbortsPreCommit(t *testing.T) {
 	w.Header().Set(HeaderInferencePeer, "peerX") // as setSelectionHeaders stages it
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", w, 50*time.Millisecond)
+		[]byte(ttfbStreamBody), "waired/default", w, 50*time.Millisecond, nil)
 
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body=%s", w.Code, w.Body.String())
@@ -106,7 +106,7 @@ func TestProxyAnthropicStream_FastPeerNotAborted(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", w, 100*time.Millisecond)
+		[]byte(ttfbStreamBody), "waired/default", w, 100*time.Millisecond, nil)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -128,7 +128,7 @@ func TestProxyAnthropicStream_PostCommitSlownessNotAborted(t *testing.T) {
 	// Budget shorter than the mid-stream delay: the deadline must disarm at
 	// headers, so the slow SECOND chunk is delivered rather than aborted.
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", w, 30*time.Millisecond)
+		[]byte(ttfbStreamBody), "waired/default", w, 30*time.Millisecond, nil)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -145,7 +145,7 @@ func TestProxyAnthropicStream_TTFBZeroDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", w, 0) // disabled
+		[]byte(ttfbStreamBody), "waired/default", w, 0, nil) // disabled
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (ttfb=0 disables the deadline)", w.Code)

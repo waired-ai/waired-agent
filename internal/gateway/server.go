@@ -97,6 +97,18 @@ type Deps struct {
 	// snapshot AND PeerAdapterFactory is nil here.
 	PeerAdapterFactory func(deviceID string) (runtime.Adapter, error)
 
+	// OnUsage, when non-nil, receives one UsageSample per request that
+	// reached an engine (waired#829). The gateway captures token counts
+	// on every surface for local telemetry regardless; this hook is what
+	// forwards them somewhere, and cmd/waired-agent wires it only on the
+	// peer overlay (:9474), where the Public Share batcher reports a
+	// provider's usage to the control plane.
+	//
+	// Called synchronously at the terminal point of the handler, so an
+	// implementation must not block: the production sink appends to an
+	// in-memory batch under a short-lived mutex.
+	OnUsage func(ctx context.Context, s UsageSample)
+
 	// Recorder, when non-nil, receives per-request telemetry from
 	// the gateway: RecordRequest at every terminal point with a
 	// resolved model, RecordFallback when probe-then-commit picks

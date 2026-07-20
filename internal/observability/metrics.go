@@ -32,6 +32,12 @@ type Metrics struct {
 	InferenceFallbackTotal        *prometheus.CounterVec
 	InferenceSelectDecisionsTotal *prometheus.CounterVec
 
+	// Token counters (waired#829). Partitioned by API kind only —
+	// deliberately not by peer or model, keeping the series count
+	// bounded per the note above.
+	InferenceInputTokensTotal  *prometheus.CounterVec
+	InferenceOutputTokensTotal *prometheus.CounterVec
+
 	// --- Tier 2 counters ---
 
 	InferenceProbeTotal                 *prometheus.CounterVec
@@ -74,6 +80,16 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Name: "waired_inference_requests_total",
 			Help: "Inference requests served by this agent's gateway, partitioned by API kind, terminal result, and error reason.",
 		}, []string{"kind", "result", "error_reason"}),
+
+		InferenceInputTokensTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "waired_inference_input_tokens_total",
+			Help: "Prompt tokens reported by the engine for requests served through this agent's gateway, partitioned by API kind.",
+		}, []string{"kind"}),
+
+		InferenceOutputTokensTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "waired_inference_output_tokens_total",
+			Help: "Completion tokens reported by the engine for requests served through this agent's gateway, partitioned by API kind.",
+		}, []string{"kind"}),
 
 		InferenceFallbackTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "waired_inference_fallback_total",
@@ -161,6 +177,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 
 	reg.MustRegister(
 		m.InferenceRequestsTotal,
+		m.InferenceInputTokensTotal,
+		m.InferenceOutputTokensTotal,
 		m.InferenceFallbackTotal,
 		m.InferenceSelectDecisionsTotal,
 		m.InferenceProbeTotal,

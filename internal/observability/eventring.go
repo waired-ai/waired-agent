@@ -157,6 +157,19 @@ type RequestEvent struct {
 	Status         int    `json:"status"`
 	LatencyMs      uint32 `json:"latency_ms"`
 	ErrorReason    string `json:"error_reason,omitempty"`
+
+	// Token counts as the upstream engine reported them, and the
+	// coding-agent traffic class when the surface derived one
+	// (waired#829, public share spec §12). All three are additive and
+	// omitempty, so an event from a path that observed none is byte-
+	// identical to before.
+	//
+	// Zero means "not observed", not "zero tokens": an engine that omits
+	// usage, a client that disconnected mid-stream, or a compressed
+	// response all land here.
+	InputTokens  int64  `json:"input_tokens,omitempty"`
+	OutputTokens int64  `json:"output_tokens,omitempty"`
+	Class        string `json:"class,omitempty"`
 }
 
 // FallbackEvent is emitted in addition to RequestEvent whenever the

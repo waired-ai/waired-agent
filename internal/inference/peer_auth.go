@@ -89,6 +89,15 @@ var peerCtxKey = peerCtxKeyType{}
 // wgPeerOnly + verifyPeerSignature. ok=false when called outside the
 // peer-auth chain (e.g., from the loopback handler set or an
 // anonymous /waired/v1/ping handler).
+// ContextWithPeer attaches p under the same key wgPeerOnly uses, so
+// callers outside this package — notably package-main tests that must
+// synthesise a public-consumer request context — can build a context
+// PeerFromContext will read back. Production code has no reason to call
+// it: the auth middleware is the only writer.
+func ContextWithPeer(ctx context.Context, p PeerIdentity) context.Context {
+	return context.WithValue(ctx, peerCtxKey, p)
+}
+
 func PeerFromContext(ctx context.Context) (PeerIdentity, bool) {
 	p, ok := ctx.Value(peerCtxKey).(PeerIdentity)
 	return p, ok

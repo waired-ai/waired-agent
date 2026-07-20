@@ -42,7 +42,7 @@ func writeAnthropicError(w http.ResponseWriter, status int, errType, message str
 // docs/knowledges/20260502.md), proxies to the selected engine, then
 // translates the response (or stream) back to Anthropic's wire shape.
 func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.Request) {
-	rr := h.startRequest("anthropic")
+	rr := h.startRequest(r, "anthropic")
 	defer rr.finish()
 
 	if r.Method != http.MethodPost {
@@ -96,6 +96,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	if stickyID != "" && class != "" {
 		stickyID += ":" + class
 	}
+	rr.ev.Class = class
 	routeReq := router.Request{Model: req.Model, StickyID: stickyID, Class: class}
 	probed, err := h.selectAndProbe(r.Context(), routeReq)
 	if errors.Is(err, router.ErrModelNotFound) && h.deps.ResolveUnknownModel != nil {
@@ -188,10 +189,10 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	client := h.clientFor(adapter)
 	if req.Stream {
 		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w,
-			ttfbBudgetFor(h.deps, sel, r, class))
+			ttfbBudgetFor(h.deps, sel, r, class), rr)
 		return
 	}
-	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w)
+	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w, rr)
 }
 
 // handleAnthropicCountTokensImpl returns an approximate token count.
@@ -219,29 +220,36 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, map[string]int{"input_tokens": CountTokensApprox(req)})
 }
 
-func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter) {
+// rr may be nil (direct calls from tests). The upstream response is
+// already decoded here, so metering costs one field read (waired#829).
+func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, rr *requestRec) {
 	resp, err := h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
 	if err != nil {
+		rr.fail(http.StatusBadGateway, "engine_request_failed")
 		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		rr.fail(http.StatusBadGateway, "engine_read_failed")
 		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
 	if resp.StatusCode/100 != 2 {
 		// Pass through upstream's error verbatim, wrapping it in our
 		// envelope so clients still see Anthropic-shaped errors.
+		rr.fail(resp.StatusCode, "upstream_error")
 		writeAnthropicError(w, resp.StatusCode, "upstream_error", strings.TrimSpace(string(respBody)))
 		return
 	}
 	var openaiResp OpenAIResponse
 	if err := json.Unmarshal(respBody, &openaiResp); err != nil {
+		rr.fail(http.StatusBadGateway, "malformed_engine_response")
 		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", "malformed engine response: "+err.Error())
 		return
 	}
+	rr.setUsage(int64(openaiResp.Usage.PromptTokens), int64(openaiResp.Usage.CompletionTokens))
 	out := OpenAIToAnthropic(openaiResp, originalModel)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -265,7 +273,11 @@ func ttfbBudgetFor(deps Deps, sel router.Selection, r *http.Request, class strin
 // streaming is best-effort: deltas are buffered until finish_reason
 // fires, then emitted as a single tool_use content_block (a known
 // Phase A gap; spec gap recorded in docs/knowledges/20260502.md).
-func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, ttfb time.Duration) {
+// rr may be nil (direct calls from tests). The stream loop already
+// accumulates the upstream's usage object; metering reuses it, so a
+// client that disconnects mid-stream still contributes whatever the
+// engine reported before the break (waired#829).
+func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, ttfb time.Duration, rr *requestRec) {
 	// #757: bound only the PRE-first-byte window. reqCtx governs the peer
 	// request; a time.AfterFunc cancels it if the engine returns no headers
 	// within ttfb, so postToEngine errors BEFORE the stream commits and the
@@ -517,6 +529,9 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": nextIdx})
 		nextIdx++
 	}
+	// Meter from the accumulated usage object rather than the emitted
+	// map: the SSE shape the client sees is unchanged by this PR.
+	rr.setUsage(int64(usage.PromptTokens), int64(usage.CompletionTokens))
 	emit("message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": mapFinishReason(finishReason), "stop_sequence": nil},
