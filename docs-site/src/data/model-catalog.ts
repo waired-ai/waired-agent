@@ -1,5 +1,5 @@
 // Build-time loader for the model-catalog table. Reads the bundled
-// manifests (internal/catalog/bundled/*.json — the same files the agent
+// manifests (proto/catalog/bundled/*.json — the same files the agent
 // embeds) at `astro build` time so the docs table can never drift from
 // the shipped catalog. Pure Node fs; runs server-side during the build.
 //
@@ -8,13 +8,21 @@
 // would point at the relocated chunk. `astro build` always runs with cwd
 // = docs-site/, so the manifests sit one level up; a repo-root fallback
 // keeps it working if invoked from elsewhere.
+//
+// The legacy internal/catalog/bundled candidates are kept because #101
+// moved the catalog data layer to proto/catalog and this loader was not
+// updated with it: the deploy workflow is path-filtered to docs-site/**,
+// so the break stayed latent until the next docs change. Keeping both
+// makes the loader survive the move in either direction.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 function resolveBundledDir(): string {
 	const candidates = [
-		join(process.cwd(), '..', 'internal', 'catalog', 'bundled'), // cwd = docs-site
-		join(process.cwd(), 'internal', 'catalog', 'bundled'), // cwd = repo root
+		join(process.cwd(), '..', 'proto', 'catalog', 'bundled'), // cwd = docs-site
+		join(process.cwd(), 'proto', 'catalog', 'bundled'), // cwd = repo root
+		join(process.cwd(), '..', 'internal', 'catalog', 'bundled'), // pre-#101
+		join(process.cwd(), 'internal', 'catalog', 'bundled'), // pre-#101
 	];
 	for (const c of candidates) {
 		if (existsSync(c)) return c;

@@ -754,7 +754,9 @@ func runInitBody(o *initFlags) error {
 		// agent wasn't started here, or under --no-wait-model (background pull).
 		bundled := cfgRoot.Inference.OllamaSource != agentconfig.OllamaSourceReuse
 		if *startAgent && bundled && cfgRoot.Inference.PullOnStartup && !*noWaitModel {
-			waitForBundledModel(*mgmtURL, os.Stdout, isTerminal(os.Stdout))
+			// Standalone path: unchanged budget, no executor, no
+			// backgrounding — byte-identical to the pre-#835 behaviour.
+			waitForBundledModel(*mgmtURL, os.Stdout, isTerminal(os.Stdout), benchPollDeadline, false, nil)
 		}
 		bench = offerBenchmark(*mgmtURL, *nonInteractive, os.Stdout, postSC, isTerminal(os.Stdout))
 	}

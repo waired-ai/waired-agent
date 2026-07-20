@@ -13,6 +13,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/browser"
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 )
 
 // daemonReachable reports whether a waired-agent daemon is answering the
@@ -83,7 +84,25 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				fmt.Printf("Logged in as: %s\n", st.AccountEmail)
 			}
 			fmt.Println("Waired is signed in and running in the background.")
-			if skipIntegration {
+
+			// waired#835 §9: attach as the setup executor BEFORE any stdin
+			// prompt. The browser wizard may already be on screen, and the
+			// two prompts below block on stdin — an executor attached after
+			// them would arrive minutes late, or never.
+			sess := attachSetupExecutor(mgmtURL, elevation.IsElevated())
+			defer sess.Release()
+
+			stdin := bufio.NewScanner(os.Stdin)
+			budget, setupActive, enter := awaitBrowserSetup(sess, stdin, os.Stdout, nonInteractive, noBrowser)
+
+			// §4.2: while the browser is driving setup, the terminal must not
+			// ask its own questions. Both prompts below read stdin, and the
+			// benchmark one can additionally offer to SWITCH the active model
+			// — a second writer racing desired_model_id, and a recommendation
+			// §20.6 says v1 must not make.
+			if setupActive {
+				fmt.Println("You can set up your coding tools later from this terminal with `waired link all`.")
+			} else if skipIntegration {
 				fmt.Println("Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
 			} else if err := runPostLoginIntegration(postLoginIntegrationOpts{
 				StepLabel:      emo("🔌", "*"),
@@ -105,10 +124,26 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			// benchmark the ready model. waitForBundledModel returns fast when
 			// the daemon reports inference disabled / stopped / no engine, so
 			// this never hangs an under-spec or gateway-only host.
-			waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout))
-			// #133: once the daemon has the model ready, benchmark it and
-			// offer a lighter model if this host can't sustain the pick.
-			resp, _ := benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, bufio.NewScanner(os.Stdin), isTerminal(os.Stdout))
+			waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget, setupActive, enter)
+			// The wait is over; reconcile the pending stdin read before any
+			// further prompt can be issued on the same scanner.
+			enter.Drain(os.Stdout)
+			if enter.Backgrounded() {
+				// The operator took the terminal back: stop being the
+				// executor (the wizard switches to "run this here") and
+				// resume the normal CLI tail.
+				sess.Release()
+				setupActive = false
+			}
+
+			var resp *management.BenchmarkRunResponse
+			if setupActive {
+				fmt.Println("Setup is continuing in your browser.")
+			} else {
+				// #133: once the daemon has the model ready, benchmark it and
+				// offer a lighter model if this host can't sustain the pick.
+				resp, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout))
+			}
 			// #756: the daemon chose the inference role from this host's
 			// hardware without an interactive prompt, so tell the user how to
 			// inspect and change it afterward.
