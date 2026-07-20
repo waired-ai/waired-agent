@@ -59,7 +59,7 @@ var groupFor = map[string]string{
 	"init": "setup", "status": "setup", "doctor": "setup", "auth": "setup", "logout": "setup",
 	"link": "agents", "unlink": "agents", "claude": "agents", "codeui": "agents",
 	"models": "inference", "runtimes": "inference", "infer": "inference",
-	"inference": "inference", "worker": "inference", "peers": "inference", "ping": "inference",
+	"inference": "inference", "public": "inference", "worker": "inference", "peers": "inference", "ping": "inference",
 	"pause": "routing", "resume": "routing",
 	"version": "maint", "update": "maint", "keygen": "maint",
 }
@@ -114,6 +114,7 @@ func newRootCmd() *cobra.Command {
 		newRuntimesCmd(),
 		newInferCmd(),
 		newInferenceCmd(),
+		newPublicCmd(),
 		newWorkerCmd(),
 		newPeersCmd(),
 		newPingCmd(),

@@ -19,6 +19,7 @@ func execCobra(cmd *cobra.Command, args []string) error {
 func runWorker(args []string) error    { return execCobra(newWorkerCmd(), args) }
 func runPeers(args []string) error     { return execCobra(newPeersCmd(), args) }
 func runInference(args []string) error { return execCobra(newInferenceCmd(), args) }
+func runPublic(args []string) error    { return execCobra(newPublicCmd(), args) }
 func runLogout(args []string) error    { return execCobra(newLogoutCmd(), args) }
 func runPause(args []string) error     { return execCobra(newPauseCmd(), args) }
 func runResume(args []string) error    { return execCobra(newResumeCmd(), args) }
