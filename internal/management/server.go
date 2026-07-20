@@ -302,6 +302,7 @@ type Server struct {
 	infControl          InferenceController        // optional; nil disables /waired/v1/inference/{enable,disable}
 	engineControl       EngineController           // optional; nil disables /waired/v1/inference/engine/{stop,start}
 	shareControl        ShareController            // optional; nil disables /waired/v1/inference/share/{enable,disable}
+	publicShare         PublicShareController      // optional; nil disables /waired/v1/public/share{,/enable,/disable}
 	workerControl       WorkerController           // optional; nil disables /waired/v1/worker and worker_routing in /v1/inference/status
 	infMesh             InferenceMeshProvider      // optional; nil disables /waired/v1/inference/mesh
 	identity            IdentityProvider           // optional; nil disables /waired/v1/identity (tray-facing)
@@ -517,6 +518,11 @@ func (s *Server) mux() *http.ServeMux {
 		mux.HandleFunc("/waired/v1/public/use", s.handlePublicUse)
 		mux.HandleFunc("/waired/v1/public/consent", s.handlePublicConsent)
 		mux.HandleFunc("/waired/v1/public/warning", s.handlePublicWarning)
+	}
+	if s.publicShare != nil {
+		mux.HandleFunc("/waired/v1/public/share", s.handlePublicShareStatus)
+		mux.HandleFunc("/waired/v1/public/share/enable", s.handlePublicShareEnable)
+		mux.HandleFunc("/waired/v1/public/share/disable", s.handlePublicShareDisable)
 	}
 	if s.observability.Ring != nil {
 		mux.HandleFunc("/waired/v1/observability/events", s.handleObservabilityEvents)
