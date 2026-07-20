@@ -63,6 +63,26 @@ func ConfirmYesNo(title, body string) (yes, ok bool) {
 	return r == idYes, true
 }
 
+// ConfirmWithLabels is ConfirmYesNo with caller-supplied button labels.
+// The public-use consent flow (waired#833) authors its accept/cancel
+// wording server-side and serves it over the management API so every UI
+// surface renders identical text.
+//
+// LIMITATION: MessageBoxW only offers a fixed set of button captions
+// (Yes/No here) — Windows provides no way to relabel them without a
+// full custom dialog/TaskDialog. So instead of rendering the served
+// labels as buttons we append them to the BODY text as a legend, and
+// map the standard Yes button to confirmed. If the tray ever needs true
+// custom captions on Windows, switch this to TaskDialogIndirect.
+func ConfirmWithLabels(title, body, acceptLabel, cancelLabel string) (confirmed, ok bool) {
+	body = body + "\n\n[Yes = " + acceptLabel + "]  [No = " + cancelLabel + "]"
+	r := messageBoxW(title, body, mbYesNo|mbIconQuestion)
+	if r == 0 {
+		return false, false
+	}
+	return r == idYes, true
+}
+
 func ShowAbout(version, sha string) {
 	body := fmt.Sprintf("Waired %s\nbuild %s\n\nhttps://github.com/waired-ai/waired", version, sha)
 	messageBoxW("About Waired", body, mbOk|mbIconInfo)
