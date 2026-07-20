@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -71,7 +72,7 @@ func TestWaitForBundledModel_NoEngineThenDownloadThenReady(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/) {
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil) {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
@@ -93,7 +94,7 @@ func TestWaitForBundledModel_PullFailed(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if waitForBundledModel(srv.URL, &out, false) {
+	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil) {
 		t.Fatalf("pull_failed must return false")
 	}
 	if !strings.Contains(out.String(), "Model download failed") {
@@ -113,7 +114,7 @@ func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {
 	var ready bool
 	done := make(chan struct{})
 	go func() {
-		ready = waitForBundledModel(srv.URL, &out, false)
+		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil)
 		close(done)
 	}()
 	select {
@@ -129,6 +130,54 @@ func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "waired doctor") {
 		t.Errorf("expected an actionable diagnostics hint on the grace skip, got: %q", out.String())
+	}
+}
+
+// During a browser setup the no_engine grace must NOT end the wait: the
+// executor is about to install the very engine that grace was written to
+// give up on. Before waired#835 this cut the terminal's residency to 3
+// minutes on exactly the hosts the onboarding flow targets, so the
+// executor was gone before the wizard's first instruction arrived.
+func TestWaitForBundledModel_NoEngineGraceIgnoredDuringSetup(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 20*time.Millisecond, time.Minute)
+	const mb = 1 << 20
+	stub := &pullStub{seq: []management.InferenceStatus{
+		// Long enough that the 20 ms grace would have fired several times.
+		{SubsystemState: "no_engine"}, {SubsystemState: "no_engine"},
+		{SubsystemState: "no_engine"}, {SubsystemState: "no_engine"},
+		{SubsystemState: "no_engine"}, {SubsystemState: "no_engine"},
+		// The executor finishes installing and the pull starts.
+		downloadingSnap("qwen", 1*mb, 4*mb),
+		{SubsystemState: "ready", Active: activeSel("qwen"), Models: management.ModelsSnapshot{Ready: []string{"qwen"}}},
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, true /*setupActive*/, nil) {
+		t.Fatalf("setup-active wait gave up on no_engine; out=%q", out.String())
+	}
+	if strings.Contains(out.String(), "AI engine still isn't up") {
+		t.Errorf("setup-active wait printed the give-up notice: %q", out.String())
+	}
+}
+
+// Enter backgrounds the wait so the operator can take the terminal back.
+func TestWaitForBundledModel_BackgroundedByEnter(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	stub := &pullStub{seq: []management.InferenceStatus{{SubsystemState: "no_engine"}}}
+	srv := stub.server()
+	defer srv.Close()
+
+	enter := listenForEnter(bufio.NewScanner(strings.NewReader("\n")))
+	waitForCond(t, enter.Backgrounded, "the Enter line to be read")
+
+	var out strings.Builder
+	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter) {
+		t.Fatal("a backgrounded wait must return false")
+	}
+	if !strings.Contains(out.String(), "Continuing in the background") {
+		t.Errorf("expected the background note, got: %q", out.String())
 	}
 }
 
@@ -153,7 +202,7 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/) {
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil) {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
