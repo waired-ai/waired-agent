@@ -265,6 +265,14 @@ type tray struct {
 	obsCursor       uint64
 	obsSupported    bool
 
+	// lastPublicNudgeSeq de-dupes the one-shot pre-consent Public Share
+	// nudge toast (waired#833). The daemon emits KindPublicShareNudge at
+	// most once per process, but the tray still re-reads it whenever the
+	// first-poll since=0 window replays the ring, so we key the toast on
+	// the event Seq (same shape as lastRecPopupKey) and fire only on a Seq
+	// we have not shown before. mu-protected.
+	lastPublicNudgeSeq uint64
+
 	// Daemon-driven login state (mu-protected). loginSessionID is the
 	// session returned by LoginStart; while non-empty, pollOnce polls
 	// LoginStatus and folds it into the snapshot. loginURLOpened guards
@@ -1833,7 +1841,11 @@ func (t *tray) pollObservability(ctx context.Context, snap *Snapshot) {
 	resp, err := t.cli.ObservabilityEvents(
 		ctx,
 		cursor,
-		[]observability.Kind{observability.KindFallback},
+		// One shared /events call carries both kinds; a second call would
+		// desync obsCursor and the fallback buffer. The loop below routes
+		// each event by Kind, so widening the filter leaves fallback
+		// handling untouched (waired#833).
+		[]observability.Kind{observability.KindFallback, observability.KindPublicShareNudge},
 		fallbackEventsBatch(cursor),
 	)
 	if err != nil {
@@ -1854,7 +1866,17 @@ func (t *tray) pollObservability(ctx context.Context, snap *Snapshot) {
 		slog.Info("tray: observability event ring gap; older entries may be missing",
 			"oldest_seq", resp.OldestSeq)
 	}
+	// The pre-consent Public Share nudge rides the same batch as the
+	// fallback events (waired#833). Capture the latest one here and show
+	// its toast after the lock is released; fallback routing is unchanged.
+	var nudge string
+	var nudgeSeq uint64
 	for _, ev := range resp.Events {
+		if ev.Kind == observability.KindPublicShareNudge && ev.PublicShareNudge != nil {
+			nudge = ev.PublicShareNudge.Message
+			nudgeSeq = ev.Seq
+			continue
+		}
 		if ev.Kind != observability.KindFallback || ev.Fallback == nil {
 			continue
 		}
@@ -1872,6 +1894,30 @@ func (t *tray) pollObservability(ctx context.Context, snap *Snapshot) {
 	// MaxRecentActivity cap drops oldest entries first.
 	snap.RecentFallbacks = reverseFallbacks(t.recentFallbacks)
 	t.mu.Unlock()
+
+	t.maybeShowPublicNudge(nudge, nudgeSeq)
+}
+
+// maybeShowPublicNudge shows the one-shot pre-consent Public Share hint
+// as a tray toast (waired#833). The message is rendered VERBATIM — it is
+// authored as user-facing copy on the daemon side (observability.
+// PublicShareNudgeMessage); the tray never re-words it and never renders
+// PublicShareNudgeEvent.Reason, which is a filter tag, not display text.
+// Suppressed when the message is empty, when this Seq has already been
+// shown (dedupe across polls and the first-poll since=0 replay), or when
+// consent already exists (the hint only makes sense pre-consent).
+func (t *tray) maybeShowPublicNudge(msg string, seq uint64) {
+	if msg == "" {
+		return
+	}
+	t.mu.Lock()
+	if seq == t.lastPublicNudgeSeq || t.last.PublicUseConsented {
+		t.mu.Unlock()
+		return
+	}
+	t.lastPublicNudgeSeq = seq
+	t.mu.Unlock()
+	notify(msg, notification.Info)
 }
 
 // fallbackEventsBatch chooses an /events limit per poll. On the very
