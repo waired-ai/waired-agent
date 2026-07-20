@@ -326,12 +326,51 @@ func partitionOwnFirst(cands []meshCandidate) {
 //   - the pre-consent nudge, when no consent has been recorded. Consent
 //     is a precondition for holding a grant, so an unconsented agent can
 //     never reach the demand branch.
-func (s *Selector) publicCameUpShort(snap inferencemesh.Snapshot, gate publicGate, modelID, reason string) {
-	policy := s.publicPolicy()
-	if gate.admit && !snapshotHasPublicProvider(snap) {
+//
+// publicShortfall remembers that the mesh could not supply a candidate,
+// so SelectK can decide — once, at its exit — whether the request truly
+// went unserved. Recording is not the same as emitting: several routing
+// modes consult the mesh first and still fall through to a healthy local
+// engine.
+type publicShortfall struct {
+	hit    bool
+	snap   inferencemesh.Snapshot
+	gate   publicGate
+	reason string
+}
+
+// record keeps the FIRST shortfall seen. There is at most one mesh
+// attempt per SelectK today; first-wins is the conservative choice if
+// that ever changes, since the earliest reason is the most specific.
+func (p *publicShortfall) record(snap inferencemesh.Snapshot, gate publicGate, reason string) {
+	if p == nil || p.hit {
+		return
+	}
+	p.hit, p.snap, p.gate, p.reason = true, snap, gate, reason
+}
+
+// emitPublicShortfall fires the two Public Share side signals, and is
+// called only from SelectK's failure exit — the request reached no
+// engine at all.
+//
+// The two are mutually exclusive by construction:
+//
+//   - the acquirer demand wake, when policy WOULD admit a public
+//     candidate but the map carries no provider grant to route to. A
+//     grant costs an acquire round trip plus map propagation, so without
+//     this the first request after consent waits out the acquirer's
+//     periodic tick (spec §4.3 cold start).
+//   - the pre-consent nudge, when no consent has been recorded. Consent
+//     is a precondition for holding a grant, so an unconsented agent can
+//     never reach the demand branch.
+func (s *Selector) emitPublicShortfall(short publicShortfall, modelID string) {
+	if !short.hit {
+		return
+	}
+	if short.gate.admit && !snapshotHasPublicProvider(short.snap) {
 		s.notifyPublicGrantDemand()
 	}
-	s.notifyPublicNudge(policy, modelID, reason)
+	s.notifyPublicNudge(s.publicPolicy(), modelID, short.reason)
 }
 
 // notifyPublicGrantDemand tells the background grant acquirer that a

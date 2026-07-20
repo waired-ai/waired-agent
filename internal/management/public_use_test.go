@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/router"
 )
 
 func newPublicUseTestServer(t *testing.T) (*Server, string) {
@@ -213,4 +214,42 @@ func TestPublicUse_OnChangeFiresOnlyOnSuccessfulWrite(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A Public Share peer's real device identifier must not leave the
+// management API. /inference/select is a dry-run explain surface that
+// `waired infer --explain` prints verbatim, so Runtime — which carries
+// "remote:<DeviceID>" for the in-process gateway's benefit — is
+// rewritten to the grant pseudonym on the way out (spec §8.5).
+func TestScrubSelectionForDisplay(t *testing.T) {
+	const (
+		foreign = "dev_foreign00000001"
+		alias   = "guest-a7f3"
+	)
+	t.Run("public peer", func(t *testing.T) {
+		got := scrubSelectionForDisplay(router.Selection{
+			Runtime:       "remote:" + foreign,
+			PeerDisplayID: alias,
+			ExecutionMode: "remote",
+		})
+		if got.Runtime != "remote:"+alias {
+			t.Fatalf("Runtime = %q, want the pseudonym", got.Runtime)
+		}
+	})
+	t.Run("own peer keeps its device id", func(t *testing.T) {
+		got := scrubSelectionForDisplay(router.Selection{
+			Runtime:       "remote:dev_own00000001",
+			PeerDisplayID: "dev_own00000001",
+			ExecutionMode: "remote",
+		})
+		if got.Runtime != "remote:dev_own00000001" {
+			t.Fatalf("Runtime = %q", got.Runtime)
+		}
+	})
+	t.Run("local selection untouched", func(t *testing.T) {
+		got := scrubSelectionForDisplay(router.Selection{Runtime: "ollama", ExecutionMode: "local"})
+		if got.Runtime != "ollama" {
+			t.Fatalf("Runtime = %q", got.Runtime)
+		}
+	})
 }

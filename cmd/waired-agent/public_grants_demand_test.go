@@ -43,9 +43,14 @@ func TestPublicGrantDemand_WakesAcquirerEarly(t *testing.T) {
 func TestPublicGrantDemand_ThrottledAfterRecentAcquire(t *testing.T) {
 	dir := t.TempDir()
 	path := writePublicUse(t, dir, "auto", 1)
-	// An empty grant list keeps held below K, so the acquire gate itself
-	// never blocks a retry — only the demand throttle can.
-	api := &fakeGrantAPI{}
+	// A NON-empty response is essential: an empty grant list arms the
+	// 5-minute publicGrantBackoff, which would hold this test green even
+	// with publicGrantDemandMinInterval set to zero. One grant keeps held
+	// below K, so the only thing that can stop a second acquire is the
+	// demand throttle itself.
+	api := &fakeGrantAPI{acquireRes: controlclient.AcquirePublicGrantsResponse{
+		Grants: []controlclient.PublicGrant{{GrantID: "grant_1", ProviderDeviceID: "dev_p0000001"}},
+	}}
 	demand := make(chan struct{}, 1)
 
 	deps := grantLoopDeps(api, &fakeMesh{}, path)

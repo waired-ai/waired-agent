@@ -1,6 +1,7 @@
 package router
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -394,21 +395,131 @@ func TestPublicNudge_OnlyBeforeConsent(t *testing.T) {
 	})
 }
 
-// TestOverlaySelectorAdmitsNoPublicCandidates pins loop prevention: the
-// overlay-side Selector leaves every Public Share input unset, so a
-// request arriving FROM a peer can never be re-routed onward to a
-// public node.
-func TestOverlaySelectorAdmitsNoPublicCandidates(t *testing.T) {
+// TestNilPublicPolicyAdmitsNothing pins the fail-closed default that
+// loop prevention rests on: the overlay-side Selector leaves
+// PublicPolicyFn unset, so even with a grant peer visible in the mesh a
+// request arriving FROM a peer can never be re-routed onward to a public
+// node. The mesh IS wired here, so the assertion is about the policy
+// input and not about the absent snapshot.
+func TestNilPublicPolicyAdmitsNothing(t *testing.T) {
+	snap := inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{
+		mkPublicPeer(publicPeerDeviceID, publicPeerAlias, "qwen3:8b-q4_K_M"),
+	}}
 	s := NewSelector(Inputs{
-		Manifests:  []catalog.Manifest{qwenTier(50)},
-		LocalState: emptyState(),
-		Hardware:   goodHardware(),
-		Runtimes:   registryWithOllama(),
-		// Overlay posture: nil MeshSnapshotFn and no PublicPolicyFn, so
-		// the grant peer above is unreachable from here by construction.
-		MeshSnapshotFn: nil,
+		Manifests:      []catalog.Manifest{qwenTier(50)},
+		LocalState:     emptyState(),
+		Hardware:       goodHardware(),
+		Runtimes:       registryWithOllama(),
+		MeshSnapshotFn: func() inferencemesh.Snapshot { return snap },
+		// PublicPolicyFn deliberately nil — the overlay posture.
 	})
 	if _, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3); err == nil {
-		t.Fatal("overlay selector produced a candidate")
+		t.Fatal("a nil public policy admitted a grant peer")
 	}
+}
+
+// TestPublicSideSignals_AllOverloadedPath covers the second shortfall
+// exit: own nodes have the model but every one is at capacity.
+func TestPublicSideSignals_AllOverloadedPath(t *testing.T) {
+	own := mkPeerWithCap("dev_own00000001", "qwen3:8b-q4_K_M", 1)
+	tracker := NewInFlightTracker()
+	rel, ok := tracker.Acquire("dev_own00000001", 1)
+	if !ok {
+		t.Fatal("setup: could not fill the peer")
+	}
+	defer rel()
+
+	var nudges []PublicNudge
+	demands := 0
+	snap := inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{own}}
+	s := NewSelector(Inputs{
+		Manifests:           []catalog.Manifest{qwenTier(50)},
+		LocalState:          emptyState(),
+		Hardware:            goodHardware(),
+		Runtimes:            registryWithOllama(),
+		MeshSnapshotFn:      func() inferencemesh.Snapshot { return snap },
+		LocalInFlight:       tracker,
+		PublicPolicyFn:      func() PublicPolicy { return allowAll() },
+		OnPublicNudge:       func(n PublicNudge) { nudges = append(nudges, n) },
+		OnPublicGrantDemand: func() { demands++ },
+	})
+
+	_, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
+	if !errors.Is(err, ErrAllPeersOverloaded) {
+		t.Fatalf("err = %v, want ErrAllPeersOverloaded", err)
+	}
+	if demands != 1 {
+		t.Errorf("demand signals = %d, want 1", demands)
+	}
+	// Consented in this fixture, so no nudge — but the reason recorded
+	// on the shortfall must be the overloaded one, which the demand
+	// branch above proves was reached.
+	if len(nudges) != 0 {
+		t.Errorf("nudges = %d, want 0 (already consented)", len(nudges))
+	}
+}
+
+// The side signals must NOT fire when the mesh came up empty but the
+// request was still served — peer-preferred routing consults the mesh
+// first and then falls through to a ready local engine.
+func TestPublicSideSignals_SilentWhenServedLocally(t *testing.T) {
+	var nudges []PublicNudge
+	demands := 0
+	snap := inferencemesh.Snapshot{} // no peers at all
+	s := NewSelector(Inputs{
+		Manifests:           []catalog.Manifest{qwenTier(50)},
+		LocalState:          readyState(), // local engine CAN serve
+		Hardware:            goodHardware(),
+		Runtimes:            registryWithOllama(),
+		MeshSnapshotFn:      func() inferencemesh.Snapshot { return snap },
+		RoutingMode:         state.RoutingModePeerPreferred,
+		PublicPolicyFn:      func() PublicPolicy { return allowAll() },
+		OnPublicNudge:       func(n PublicNudge) { nudges = append(nudges, n) },
+		OnPublicGrantDemand: func() { demands++ },
+	})
+
+	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
+	if err != nil || len(cands) == 0 {
+		t.Fatalf("expected a local candidate (err=%v, n=%d)", err, len(cands))
+	}
+	if demands != 0 || len(nudges) != 0 {
+		t.Fatalf("side signals fired for a request that ran locally: demands=%d nudges=%d", demands, len(nudges))
+	}
+}
+
+// ownBestTier unions three sources; the peer loop is covered by the auto
+// tests above, these cover the other two.
+func TestOwnBestTier_LocalAndSelfSources(t *testing.T) {
+	manifests := []catalog.Manifest{qwenTier(50)}
+
+	t.Run("ready local variant", func(t *testing.T) {
+		s := NewSelector(Inputs{Manifests: manifests, LocalState: readyState()})
+		if got := s.ownBestTier(inferencemesh.Snapshot{}); got != 50 {
+			t.Fatalf("ownBestTier = %d, want 50 from the ready local variant", got)
+		}
+	})
+
+	t.Run("snapshot self", func(t *testing.T) {
+		self := mkPeer("dev_self00000001", "qwen3:8b-q4_K_M", true, false)
+		s := NewSelector(Inputs{Manifests: manifests, LocalState: emptyState()})
+		if got := s.ownBestTier(inferencemesh.Snapshot{Self: self}); got != 50 {
+			t.Fatalf("ownBestTier = %d, want 50 from Snapshot.Self", got)
+		}
+	})
+
+	t.Run("unreachable self contributes nothing", func(t *testing.T) {
+		self := mkPeer("dev_self00000001", "qwen3:8b-q4_K_M", false, false)
+		s := NewSelector(Inputs{Manifests: manifests, LocalState: emptyState()})
+		if got := s.ownBestTier(inferencemesh.Snapshot{Self: self}); got != 0 {
+			t.Fatalf("ownBestTier = %d, want 0", got)
+		}
+	})
+
+	t.Run("public peers are excluded from the own baseline", func(t *testing.T) {
+		pub := mkPublicPeer(publicPeerDeviceID, publicPeerAlias, "qwen3:8b-q4_K_M")
+		s := NewSelector(Inputs{Manifests: manifests, LocalState: emptyState()})
+		if got := s.ownBestTier(inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{pub}}); got != 0 {
+			t.Fatalf("ownBestTier = %d, want 0 — a public peer must not raise the bar it has to clear", got)
+		}
+	})
 }

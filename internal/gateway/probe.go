@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -438,4 +439,25 @@ func displayRuntime(sel router.Selection) string {
 		return remoteRuntimePrefix + id
 	}
 	return sel.Runtime
+}
+
+// adapterErrorForClient renders a peer-adapter lookup failure for a
+// client-visible error body.
+//
+// displayRuntime alone is not enough: the production PeerAdapterFactory
+// formats the peer's real DeviceID and overlay IP into its error
+// strings ("peer %q not in current mesh snapshot"), and for a Public
+// Share peer neither may be shown (spec §8.5). A peer dropping out of
+// the snapshot between selection and dispatch is a routine race — grant
+// expiry and map propagation make it the expected teardown window — so
+// this is not an exotic path.
+//
+// Own-network selections keep the detailed error: the identifiers in it
+// are the operator's own, and support relies on them.
+func adapterErrorForClient(sel router.Selection, err error) string {
+	if sel.PeerDisplayID != "" && sel.PeerDisplayID != strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix) {
+		// Public peer: the pseudonym is the whole story the client gets.
+		return fmt.Sprintf("runtime %q: peer unavailable", displayRuntime(sel))
+	}
+	return fmt.Sprintf("runtime %q: %s", displayRuntime(sel), err.Error())
 }

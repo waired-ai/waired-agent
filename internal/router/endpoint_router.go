@@ -467,6 +467,23 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	}
 	reasons := []string{}
 
+	// short records that the mesh could not supply a candidate, so the
+	// Public Share side signals can be emitted from ONE place: the
+	// deferred exit below, and only when SelectK really failed to serve
+	// the request. Emitting inside tryMeshFallbackK would fire on paths
+	// that still fall through to a healthy local engine
+	// (RoutingModePeerPreferred with a ready local model, and the pinned
+	// soft-fallback branch) — telling the user their request could not
+	// run on their own machines while it did, and burning the one-shot
+	// nudge on a false statement.
+	var short publicShortfall
+	modelID := ""
+	defer func() {
+		if err != nil {
+			s.emitPublicShortfall(short, modelID)
+		}
+	}()
+
 	// Emit one selection event per successful return with at least
 	// one candidate. The first candidate's ExecutionMode is the
 	// decision class (SelectK groups by class), so cands[0] is
@@ -476,7 +493,14 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			return
 		}
 		c := cands[0]
-		s.in.Recorder.RecordSelection(c.ExecutionMode, c.PeerID, c.ModelID)
+		// Display identifier: the SelectionEvent lands in the
+		// observability ring, which the management API serves and the
+		// tray renders (spec §8.5).
+		peerID := c.PeerDisplayID
+		if peerID == "" {
+			peerID = c.PeerID
+		}
+		s.in.Recorder.RecordSelection(c.ExecutionMode, peerID, c.ModelID)
 	}()
 
 	// Step 1: alias resolution.
@@ -484,6 +508,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrModelNotFound, req.Model)
 	}
+	modelID = manifest.ModelID
 
 	// Step 2: capability filter.
 	if req.Requirements.MaxContextTokens > 0 && manifest.ContextLength < req.Requirements.MaxContextTokens {
@@ -522,7 +547,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// consulted here — peer-preferred says "use the mesh", and
 		// an openai-compat adapter is local-only by definition.
 		if s.in.MeshSnapshotFn != nil {
-			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k)
+			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
 			}
@@ -555,7 +580,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			reasons = append(reasons, "routing=pinned: no mesh snapshot, falling back to local-ready")
 			// fall through to local-ready candidate construction.
 		} else {
-			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k)
+			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
 			}
@@ -586,7 +611,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 				}
 			}
 			if s.in.MeshSnapshotFn != nil {
-				cands, err := s.tryMeshFallbackK(req, manifest, reasons, k)
+				cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 				if err != nil {
 					return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
 				}
@@ -723,7 +748,7 @@ type meshCandidate struct {
 //
 // Loop prevention: overlay-side Selectors receive MeshSnapshotFn=nil
 // and never reach this function.
-func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reasons []string, k int) ([]Candidate, error) {
+func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reasons []string, k int, short *publicShortfall) ([]Candidate, error) {
 	snap := s.in.MeshSnapshotFn()
 	wantOllama, wantVLLM := variantWantSets(manifest)
 	if len(wantOllama) == 0 && len(wantVLLM) == 0 {
@@ -737,7 +762,7 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 
 	raw := s.buildMeshCandidates(snap, req.Class, wantOllama, wantVLLM, &gate)
 	if len(raw) == 0 {
-		s.publicCameUpShort(snap, gate, manifest.ModelID, NudgeReasonNoCandidate)
+		short.record(snap, gate, NudgeReasonNoCandidate)
 		// Manual pin needs a separate strict check: when the operator
 		// has pinned a peer that is not in the snapshot at all (down,
 		// stale, disco-unreachable), the request must surface 503
@@ -830,7 +855,7 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 		eligible = append(eligible, c)
 	}
 	if len(eligible) == 0 {
-		s.publicCameUpShort(snap, gate, manifest.ModelID, NudgeReasonAllOverloaded)
+		short.record(snap, gate, NudgeReasonAllOverloaded)
 		return nil, ErrAllPeersOverloaded
 	}
 

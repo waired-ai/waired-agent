@@ -165,7 +165,10 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	adapter, err := h.lookupAdapter(sel)
 	if err != nil {
 		rr.fail(http.StatusServiceUnavailable, "runtime_unavailable")
-		writeAnthropicError(w, http.StatusServiceUnavailable, "runtime_unavailable", fmt.Sprintf("runtime %q: %s", displayRuntime(sel), err.Error()))
+		// The raw error names the peer's real DeviceID and overlay IP;
+		// agent.log gets the same scrubbed rendering the client does.
+		slog.Warn("peer adapter lookup failed", "peer", peerDisplayID(sel), "err", adapterErrorForClient(sel, err))
+		writeAnthropicError(w, http.StatusServiceUnavailable, "runtime_unavailable", adapterErrorForClient(sel, err))
 		return
 	}
 	if err := adapter.EnsureRunning(r.Context()); err != nil {
