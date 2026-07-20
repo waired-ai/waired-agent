@@ -39,7 +39,7 @@ var daemonReachable = func(mgmtURL string) bool {
 // and the state dir, so the CLI does no deploy here; the per-user
 // coding-agent integration consent runs once login is active (it lands
 // in the user's home, which the daemon never touches).
-func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string) error {
+func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string, inf daemonInitInference) error {
 	reqBody, _ := json.Marshal(management.LoginStartRequest{
 		ControlURL: control,
 		DeviceName: deviceName,
@@ -93,6 +93,14 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			sess := attachSetupExecutor(mgmtURL, elevation.IsElevated())
 			defer sess.Release()
 
+			// waired#835 §11.2: the installer passes the inference
+			// answers to `waired init`, but the daemon path never read
+			// them (LoginStartRequest carries only a control URL and a
+			// device name). Re-apply them through the management routes
+			// that already own these three controls, before anything
+			// below can act on a stale answer.
+			applyDaemonInitInference(mgmtURL, inf, os.Stdout)
+
 			stdin := bufio.NewScanner(os.Stdin)
 			budget, setupActive, enter := awaitBrowserSetup(sess, stdin, os.Stdout, nonInteractive, noBrowser)
 
@@ -127,6 +135,13 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			// until an engine exists.
 			if setupActive {
 				runSetupEngineInstall(context.Background(), sess, os.Stdout)
+			} else {
+				// No wizard is driving, but this host may still want an
+				// engine and have none — the default macOS install has
+				// been landing here all along, and the §11.2 ordering
+				// flip puts Linux and Windows here too. Condition is
+				// "does the host want inference", read from the daemon.
+				ensureDaemonPathEngine(context.Background(), sess, mgmtURL, os.Stdout)
 			}
 			// #756: the daemon pulls the bundled model in the background
 			// after enroll, so the daemon-mediated init used to return while a

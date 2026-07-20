@@ -77,14 +77,33 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 		return
 	}
 
-	claimed := s.Installing(st.DesiredEngine)
-	if claimed.InstallClaimed != "" && claimed.InstallClaimed != st.DesiredEngine {
+	installEngineAsExecutor(ctx, s, out, goos, elevated,
+		st.DesiredEngine, st.StateDir, engineInstallNarrationWizard)
+}
+
+// Narration for the two entry points. The install itself is identical;
+// only the reason we are doing it differs, and saying the wrong reason
+// is confusing on a terminal-only install where no browser is involved.
+const (
+	engineInstallNarrationWizard = "Installing the AI engine for the setup in your browser (one-time download)..."
+	engineInstallNarrationLocal  = "Installing the AI engine (one-time download)..."
+)
+
+// installEngineAsExecutor is the shared install core: claim the lease,
+// run the same decision the interactive path runs, install, hand the
+// state dir back, report the outcome. Both entry points reach it.
+func installEngineAsExecutor(
+	ctx context.Context, s *executorSession, out io.Writer,
+	goos string, elevated bool, engine, stateDir, narration string,
+) {
+	claimed := s.Installing(engine)
+	if claimed.InstallClaimed != "" && claimed.InstallClaimed != engine {
 		// Another executor got there first with a different engine.
 		return
 	}
 
 	bundledPresent := false
-	if p := bundledEnginePath(goos, st.StateDir); p != "" {
+	if p := bundledEnginePath(goos, stateDir); p != "" {
 		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
 			bundledPresent = true
 		}
@@ -100,29 +119,29 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 
 	switch action {
 	case engineActionInstall:
-		writePromptf(out, "%s Installing the AI engine for the setup in your browser (one-time download)...\n", emo("📦", ">>"))
-		if err := setupInstallEngine(true, st.StateDir); err != nil {
+		writePromptf(out, "%s %s\n", emo("📦", ">>"), narration)
+		if err := setupInstallEngine(true, stateDir); err != nil {
 			writePromptf(out, "%s Engine install failed: %v\n", emo("⚠️", "!"), err)
-			s.Failed(st.DesiredEngine, err.Error())
+			s.Failed(engine, err.Error())
 			return
 		}
 		// The tarball was extracted as root; hand the state dir back or
 		// the unprivileged daemon cannot read what we just installed
 		// (Linux only, no-op elsewhere).
-		setupHandState(st.StateDir)
+		setupHandState(stateDir)
 		writePromptf(out, "%s AI engine installed.\n", emo("✅", "*"))
-		s.Done(st.DesiredEngine)
+		s.Done(engine)
 
 	case engineActionSkipPresent, engineActionSkipReuse:
 		// Nothing to install. Report done so the wizard advances instead
 		// of waiting on the daemon's next profile refresh.
-		s.Done(st.DesiredEngine)
+		s.Done(engine)
 
 	case engineActionSkipNotElevated:
 		// The daemon already reports permission_denied for an unelevated
 		// lease; say it in the executor's own words so error_detail names
 		// the command that fixes it.
-		s.Failed(st.DesiredEngine,
+		s.Failed(engine,
 			"the setup command on this device is not running with administrator privileges; "+
 				elevation.Hint("waired init"))
 
@@ -132,7 +151,7 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 		// of the eight codes ("this device will not do it"); the detail
 		// carries the real reason (waired#835 decisions 20260720 13:00).
 		writePrompt(out, "Engine install skipped (WAIRED_NO_OLLAMA).")
-		s.Failed(st.DesiredEngine,
+		s.Failed(engine,
 			"engine installs are turned off on this device (WAIRED_NO_OLLAMA)")
 	}
 }
