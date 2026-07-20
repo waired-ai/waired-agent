@@ -41,6 +41,7 @@ type session struct {
 	infProvider   management.InferenceProvider // nil when --disable-inference
 	engControl    *engineController            // nil when --disable-inference (#186 hard engine power)
 	swapControl   *modelSwapController         // nil when --disable-inference (#812 in-process model swap)
+	setupRec      *setupReconciler             // nil when --disable-inference (waired#835 onboarding executor lease)
 	obsState      *observabilityState
 
 	engine      *wgnet.Engine
@@ -307,6 +308,30 @@ func (a sbModelSwapControl) ApplyModelSwitch(ctx context.Context, modelID string
 		return s.swapControl.ApplyModelSwitch(ctx, modelID)
 	}
 	return false, errNotEnrolled
+}
+
+// sbSetupExecutor delegates the onboarding executor lease (waired#835
+// §9/§11) to the live session's reconciler. The management server is
+// built once at boot but the reconciler only exists after enrollment, so
+// the routes stay registered and answer with the zero state until a
+// session is live — an executor polling before enrollment sees
+// active=false and simply keeps waiting, which is the same answer it
+// gets from an enrolled host where nobody has started setup yet.
+type sbSetupExecutor struct{ sb *switchboard }
+
+func (a sbSetupExecutor) liveOrNil() *setupReconciler {
+	if s := a.sb.current(); s != nil {
+		return s.setupRec
+	}
+	return nil
+}
+
+func (a sbSetupExecutor) SetupState(ctx context.Context) management.SetupStateResponse {
+	return a.liveOrNil().SetupState(ctx)
+}
+
+func (a sbSetupExecutor) NoteExecutor(ctx context.Context, req management.SetupExecutorRequest) management.SetupStateResponse {
+	return a.liveOrNil().NoteExecutor(ctx, req)
 }
 
 type sbInfProvider struct{ sb *switchboard }

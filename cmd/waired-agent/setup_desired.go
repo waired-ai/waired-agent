@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,23 @@ const (
 	setupStepEngineInstall = "engine_install"
 	setupStepModelPull     = "model_pull"
 	setupStepBenchmark     = "benchmark"
+)
+
+// Executor lease timings (waired#835 §9/§11). Both sides of the range
+// hurt, which is why these are named rather than inline:
+//   - too SHORT and a legitimate 15-minute elevated engine install
+//     (installOllama's ctx budget on all three OSes) trips a spurious
+//     executor_gone while it is still working — but note the executor
+//     heartbeats throughout, so only a stall that long matters;
+//   - too LONG and the wizard keeps claiming the install is in progress
+//     after the operator has already pressed Ctrl-C, which is exactly
+//     the never-resolving spinner §9-4 exists to forbid.
+//
+// 45 s tolerates four missed 10 s heartbeats before declaring the
+// executor gone.
+const (
+	setupExecutorTTL       = 45 * time.Second
+	setupExecutorHeartbeat = 10 * time.Second
 )
 
 // setupDesired is the (engine, model, benchmark-gen) triple the CP
@@ -79,6 +97,29 @@ type setupReconciler struct {
 	pullAttempted map[string]bool
 	pullRejected  map[string]string // PullModel refused (unknown model, ...)
 	kick          chan struct{}     // wakes the push loop on Apply changes
+
+	// Executor lease (§9/§11). The elevated CLI from `sudo waired init`
+	// heartbeats here; a stale lease is what turns an install step into
+	// executor_gone instead of a spinner. everSeen distinguishes "the
+	// executor died" (recoverable — re-run the command) from "no executor
+	// ever showed up" (permission_denied).
+	executorAttached bool
+	executorEverSeen bool
+	executorElevated bool
+	executorSeen     time.Time
+	executorPhase    string
+	executorErr      string
+	// installClaimed names the engine whose install a live lease claimed.
+	// Bound to the LEASE, never to desired_engine: a claim that outlived
+	// its executor would make the "re-run sudo waired init" recovery a
+	// no-op and would let one local POST block installation forever.
+	installClaimed string
+
+	// Last observed engine-installed state, used to detect the
+	// false->true transition that re-admits a model pull which failed
+	// only because there was no engine to pull with.
+	engineInstalled bool
+	engineObserved  bool
 }
 
 func newSetupReconciler(provider setupProvider, push *controlclient.Client, deviceID string, machineKey ed25519.PrivateKey, logger *slog.Logger) *setupReconciler {
@@ -131,6 +172,35 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		}
 	}
 
+	// Engine (§11): the agent cannot install one unprivileged — that is
+	// the executor's job. What Apply does here is watch for the engine
+	// APPEARING, because that transition is what unblocks a model pull
+	// that failed for the only reason it could have: on an engine-less
+	// host the inference subsystem starts inert, so PullModel fails
+	// immediately and the one-shot admission below would otherwise keep
+	// the download red for the rest of the process's life — even though
+	// the executor installed the engine seconds later. Keyed on the
+	// transition, not on every frame, so a genuinely failing download is
+	// still not re-queued in a loop.
+	if d.engine != "" {
+		installed, _ := r.provider.setupEngineState(ctx, d.engine)
+		r.mu.Lock()
+		appeared := installed && r.engineObserved && !r.engineInstalled
+		r.engineInstalled = installed
+		r.engineObserved = true
+		if appeared && d.modelID != "" {
+			delete(r.pullAttempted, d.modelID)
+			delete(r.pullRejected, d.modelID)
+			attempted = false
+			changed = true
+		}
+		r.mu.Unlock()
+		if appeared && r.logger != nil {
+			r.logger.Info("setup: engine became installed; re-admitting the desired model pull",
+				"engine", d.engine, "model", d.modelID)
+		}
+	}
+
 	// Model (§6: catalog IDs only — PullModel resolves against the
 	// catalog and refuses anything it doesn't know). Present/pulling
 	// models are left alone; only a genuinely absent model is queued,
@@ -152,17 +222,100 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		}
 	}
 
-	// Engine (§11): the agent cannot install an engine unprivileged —
-	// installation is the executor's (elevated CLI) job. Nothing to
-	// apply here; the snapshot below reports installed/ready truthfully
-	// and permission_denied when the engine is missing.
-
 	if changed {
-		select {
-		case r.kick <- struct{}{}:
-		default:
-		}
+		r.kickPush()
 	}
+}
+
+// kickPush wakes the reporter loop so a state change reaches NAVI on the
+// next push rather than on the next tick boundary.
+func (r *setupReconciler) kickPush() {
+	select {
+	case r.kick <- struct{}{}:
+	default:
+	}
+}
+
+// leaseLiveLocked reports whether the executor lease is still fresh and,
+// when it is not, drops the lease-bound install claim. Callers hold mu.
+func (r *setupReconciler) leaseLiveLocked() bool {
+	if !r.executorAttached {
+		return false
+	}
+	if r.now().Sub(r.executorSeen) > setupExecutorTTL {
+		r.executorAttached = false
+		r.installClaimed = ""
+		return false
+	}
+	return true
+}
+
+// NoteExecutor records one lease heartbeat or release from the elevated
+// CLI (§9/§11) and returns the resulting state, so the executor learns
+// the install claim in the same round trip.
+func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.SetupExecutorRequest) management.SetupStateResponse {
+	if r == nil {
+		return management.SetupStateResponse{}
+	}
+	r.mu.Lock()
+	phase := req.Phase
+	if phase == "" {
+		phase = management.SetupExecutorPhaseIdle
+	}
+	r.executorPhase = phase
+	r.executorErr = req.Error
+	if req.Attached {
+		r.executorAttached = true
+		r.executorEverSeen = true
+		r.executorElevated = req.Elevated
+		r.executorSeen = r.now()
+		switch phase {
+		case management.SetupExecutorPhaseInstalling:
+			if req.Engine != "" {
+				r.installClaimed = req.Engine
+			}
+		case management.SetupExecutorPhaseDone, management.SetupExecutorPhaseFailed:
+			// The attempt is over either way; a fresh executor (or this
+			// one, after the operator fixes whatever failed) may claim it
+			// again.
+			r.installClaimed = ""
+		}
+	} else {
+		// Explicit release — same effect as the lease expiring, minus the
+		// TTL wait, so Ctrl-C surfaces as executor_gone promptly.
+		r.executorAttached = false
+		r.installClaimed = ""
+	}
+	r.mu.Unlock()
+	r.kickPush()
+	return r.SetupState(ctx)
+}
+
+// SetupState projects what a setup executor needs in order to decide
+// whether to act. Everything here is derived from observable state.
+func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateResponse {
+	if r == nil {
+		return management.SetupStateResponse{}
+	}
+	r.mu.Lock()
+	d := r.desired
+	resp := management.SetupStateResponse{
+		Active:              r.active,
+		DesiredEngine:       d.engine,
+		DesiredModelID:      d.modelID,
+		DesiredBenchmarkGen: d.benchmarkGen,
+	}
+	if r.leaseLiveLocked() {
+		resp.ExecutorAttached = true
+		resp.ExecutorElevated = r.executorElevated
+	}
+	resp.InstallClaimed = r.installClaimed
+	r.mu.Unlock()
+
+	if d.engine != "" {
+		resp.EngineInstalled, resp.EngineReady = r.provider.setupEngineState(ctx, d.engine)
+	}
+	return resp
 }
 
 // snapshot builds the current typed progress (§7), or nil when this
@@ -173,6 +326,11 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	d := r.desired
 	active := r.active
 	rejected := r.pullRejected[d.modelID]
+	leaseLive := r.leaseLiveLocked()
+	everSeen := r.executorEverSeen
+	elevated := r.executorElevated
+	phase := r.executorPhase
+	execErr := r.executorErr
 	r.mu.Unlock()
 	if !active {
 		return nil
@@ -189,10 +347,32 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.Status = signer.SetupStatusDone
 		case installed:
 			step.Status = signer.SetupStatusRunning
+		case phase == management.SetupExecutorPhaseFailed:
+			// The executor tried and told us why. Its own text beats any
+			// guess we could make from here.
+			step.Status = signer.SetupStatusFailed
+			step.ErrorCode = classifySetupFailure(execErr)
+			step.ErrorDetail = clampSetupDetail(execErr)
+		case leaseLive && !elevated:
+			// An executor is present but cannot install — reporting
+			// executor_gone here would send the operator to re-run a
+			// command that would fail the same way.
+			step.Status = signer.SetupStatusFailed
+			step.ErrorCode = signer.SetupErrorPermissionDenied
+			step.ErrorDetail = "the setup command on this device is not running with administrator privileges"
+		case leaseLive:
+			// Elevated executor attached: installing, or about to.
+			step.Status = signer.SetupStatusRunning
+		case everSeen:
+			// §9-4: it was here and it is gone. This is the recoverable
+			// case — NAVI offers the command to re-run.
+			step.Status = signer.SetupStatusFailed
+			step.ErrorCode = signer.SetupErrorExecutorGone
+			step.ErrorDetail = "the setup command on this device exited before the engine was installed"
 		default:
-			// §11: unprivileged install is impossible; the executor
-			// (elevated CLI) owns installation. NAVI turns this into
-			// "continue on the device" guidance.
+			// §11: never attached at all. Unprivileged install is
+			// impossible, so this is a permissions problem, not a
+			// liveness one.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorPermissionDenied
 			step.ErrorDetail = "engine is not installed and the agent cannot install it unprivileged"
@@ -215,8 +395,8 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.TotalBytes = total
 		case state == catalog.ModelStateFailed:
 			step.Status = signer.SetupStatusFailed
-			step.ErrorCode = signer.SetupErrorNetworkError
-			step.ErrorDetail = errText
+			step.ErrorCode = classifySetupFailure(errText)
+			step.ErrorDetail = clampSetupDetail(errText)
 		default: // not_present / evicted / unknown — pull not admitted yet
 			step.Status = signer.SetupStatusPending
 		}
@@ -232,7 +412,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		case bs.Gen >= d.benchmarkGen && bs.State == management.BenchmarkStateFailed:
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorInternal
-			step.ErrorDetail = bs.Error
+			step.ErrorDetail = clampSetupDetail(bs.Error)
 			p.Benchmark = &signer.SetupBenchmark{Gen: bs.Gen}
 		case bs.State == management.BenchmarkStateRunning:
 			step.Status = signer.SetupStatusRunning
@@ -242,6 +422,47 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		p.Steps = append(p.Steps, step)
 	}
 	return p
+}
+
+// setupDetailMax mirrors the control plane's error_detail clamp
+// (waired#835 §20.5). Clamping here too keeps a long installer log from
+// costing a whole push.
+const setupDetailMax = 512
+
+func clampSetupDetail(s string) string {
+	if len(s) <= setupDetailMax {
+		return s
+	}
+	return s[:setupDetailMax]
+}
+
+// diskFullMarkers are the substrings that mean "out of disk" across the
+// three OSes and both engines' downloaders. Matching is best-effort by
+// nature — the failure arrives as text — but the cost of guessing wrong
+// is asymmetric: telling someone to check their internet connection when
+// the real problem is a full disk sends them nowhere, while the reverse
+// at least points at the machine.
+var diskFullMarkers = []string{
+	"no space left on device",
+	"not enough space",
+	"insufficient disk space",
+	"insufficient space",
+	"disk full",
+	"enospc",
+	"there is not enough space on the disk",
+}
+
+// classifySetupFailure maps a free-form failure string to the §7 error
+// code enum. Anything unrecognised stays network_error, which is what
+// this code path reported unconditionally before.
+func classifySetupFailure(errText string) string {
+	l := strings.ToLower(errText)
+	for _, m := range diskFullMarkers {
+		if strings.Contains(l, m) {
+			return signer.SetupErrorDiskFull
+		}
+	}
+	return signer.SetupErrorNetworkError
 }
 
 // progressKey canonicalizes a snapshot for change detection, ignoring
