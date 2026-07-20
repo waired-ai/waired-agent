@@ -62,7 +62,8 @@ func TestRunInitViaDaemonPollsToActive(t *testing.T) {
 	// noBrowser=true so the test never shells out to a browser;
 	// nonInteractive=true so the post-login #133 prompt never reads stdin.
 	if err := runInitViaDaemon(srv.URL, "https://cp.example", "dev-1", true, true,
-		true /* skipIntegration: keep the test hermetic (no home-dir writes) */, "http://127.0.0.1:9473"); err != nil {
+		true, /* skipIntegration: keep the test hermetic (no home-dir writes) */
+		"http://127.0.0.1:9473", daemonInitInference{}); err != nil {
 		t.Fatalf("runInitViaDaemon: %v", err)
 	}
 	if atomic.LoadInt32(&polls) < 2 {
@@ -91,7 +92,8 @@ func TestRunInitViaDaemonSurfacesError(t *testing.T) {
 	defer srv.Close()
 
 	err := runInitViaDaemon(srv.URL, "https://cp.example", "dev-1", true, true,
-		true /* skipIntegration: keep the test hermetic (no home-dir writes) */, "http://127.0.0.1:9473")
+		true, /* skipIntegration: keep the test hermetic (no home-dir writes) */
+		"http://127.0.0.1:9473", daemonInitInference{})
 	if err == nil {
 		t.Fatal("expected error from error phase")
 	}

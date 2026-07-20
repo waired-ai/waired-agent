@@ -317,11 +317,13 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 
 	if d.engine != "" {
 		resp.EngineInstalled, resp.EngineReady = r.provider.setupEngineState(ctx, d.engine)
-		// Only published alongside a desired engine: it exists to tell
-		// an executor where to install, and there is nothing to install
-		// otherwise.
-		resp.StateDir = r.provider.setupStateDir()
 	}
+	// Published unconditionally. #115 served this only alongside a desired
+	// engine, reasoning that there is nothing to install otherwise — that
+	// turned out to be false. `waired init` on the daemon path installs
+	// the engine whenever the host wants inference, wizard or not, and it
+	// needs the destination in exactly that case (waired#835 §11).
+	resp.StateDir = r.provider.setupStateDir()
 	return resp
 }
 

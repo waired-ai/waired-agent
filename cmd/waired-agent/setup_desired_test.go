@@ -645,14 +645,18 @@ func TestSetupStatePublishesStateDir(t *testing.T) {
 	}
 }
 
-// TestSetupStateOmitsStateDirWithoutDesiredEngine: the field exists to
-// say where to install, so it has no business being served when nothing
-// is to be installed.
-func TestSetupStateOmitsStateDirWithoutDesiredEngine(t *testing.T) {
+// TestSetupStatePublishesStateDirWithoutDesiredEngine: #115 served this
+// only alongside a desired engine, on the reasoning that there is
+// nothing to install otherwise. That was wrong — `waired init` on the
+// daemon path installs the engine whenever the host wants inference,
+// with or without a browser wizard, and no desired engine is set in that
+// case. Withholding the path is what would leave a terminal-only install
+// with no engine at all.
+func TestSetupStatePublishesStateDirWithoutDesiredEngine(t *testing.T) {
 	f := &fakeSetupProvider{stateDir: "/var/lib/waired"}
 	r, _ := leasedReconciler(t, f, "", "m-1")
-	if st := r.SetupState(context.Background()); st.StateDir != "" {
-		t.Fatalf("state = %+v, want no state dir without a desired engine", st)
+	if st := r.SetupState(context.Background()); st.StateDir != "/var/lib/waired" {
+		t.Fatalf("state = %+v, want the state dir served without a desired engine", st)
 	}
 }
 

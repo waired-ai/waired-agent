@@ -325,7 +325,11 @@ func runInitBody(o *initFlags) error {
 	if !*bypassMode && !*googleSALogin && !renewing && daemonReachable(*mgmtURL) {
 		fmt.Println("waired-agent is running; signing in via the daemon (no local enrollment).")
 		return runInitViaDaemon(*mgmtURL, *control, *deviceName, *noBrowser, *nonInteractive,
-			*skipIntegration, *gatewayBaseURL)
+			*skipIntegration, *gatewayBaseURL, daemonInitInference{
+				Enabled: *inferenceEnabled,
+				Share:   *inferenceShare,
+				ModelID: *bundledModelID,
+			})
 	}
 
 	listenAddr, err := chooseListenAddr(*listen)
