@@ -720,6 +720,10 @@ func run(ctx context.Context, args []string) error {
 		// inference-status endpoint. Same bypass-CP-IAM treatment as the
 		// network map loop so Cloud Run / IAP-gated deployments work.
 		infPushClient := controlclient.NewWithBearer(id.ControlURL, tokens.Get)
+		// Public Share usage accumulator (waired#829, spec §12). Session
+		// scope, matching the flush loop below and the overlay listener
+		// that feeds it.
+		publicUsageBatch := newPublicUsageBatch(nil)
 		if *bypassCPIAM {
 			infPushClient.HTTP = bypassCPHTTPClient(ctx, id.ControlURL, logger)
 			infPushClient.UseCustomAuthHeader = true
@@ -879,6 +883,7 @@ func run(ctx context.Context, args []string) error {
 				PublicPolicy:         publicUseCtl.Policy,
 				OnPublicGrantDemand:  notifyPublicGrantDemand,
 				OnPublicNudge:        publicUseCtl.Nudge,
+				OnPublicUsage:        publicUsageSink(publicUsageBatch),
 			})
 			if err != nil {
 				return fmt.Errorf("inference subsystem: %w", err)
@@ -1264,6 +1269,21 @@ func run(ctx context.Context, args []string) error {
 		// of --disable-inference (consuming public nodes is a routing
 		// concern, same posture as WithPublicUse); the D1 consent gate
 		// keeps it inert until the operator opts in.
+		// Public Share usage reporter (waired#829, spec §12): batches what
+		// this device served to guests and reports it to the CP. Like the
+		// grant loop it is wired regardless of --disable-inference; with
+		// serving off it simply never sees a sample.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runPublicUsageLoop(ctx, publicUsageDeps{
+				API:        infPushClient,
+				Batch:      publicUsageBatch,
+				DeviceID:   id.DeviceID,
+				MachineKey: mk.Private,
+				Logger:     logger,
+			})
+		}()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
