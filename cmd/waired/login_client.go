@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -116,6 +117,16 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				// must not turn it into a failed init.
 				fmt.Fprintf(os.Stderr,
 					"warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
+			}
+			// §11: on this path init returned long before reaching the
+			// standalone engine block, so nothing here could ever install
+			// an engine and the wizard's first step could only report
+			// permission_denied. As the elevated executor holding the
+			// lease, do the install the browser just asked for. Blocking
+			// is correct: the model pull below has nothing to pull with
+			// until an engine exists.
+			if setupActive {
+				runSetupEngineInstall(context.Background(), sess, os.Stdout)
 			}
 			// #756: the daemon pulls the bundled model in the background
 			// after enroll, so the daemon-mediated init used to return while a

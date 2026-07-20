@@ -61,6 +61,7 @@ func TestSetupStateHandler(t *testing.T) {
 		DesiredModelID:  "m-1",
 		EngineInstalled: true,
 		InstallClaimed:  "ollama",
+		StateDir:        "/var/lib/waired",
 	}}
 	srv := New(fakeStatus{}, fakePinger{}).WithSetupExecutor(f)
 
@@ -75,6 +76,11 @@ func TestSetupStateHandler(t *testing.T) {
 	}
 	if !got.Active || got.DesiredEngine != "ollama" || got.InstallClaimed != "ollama" {
 		t.Fatalf("state = %+v, want the scripted projection", got)
+	}
+	// The executor installs relative to this; a dropped field would send
+	// the engine somewhere the daemon never looks (waired#835 §11.1).
+	if got.StateDir != "/var/lib/waired" {
+		t.Fatalf("state = %+v, want the daemon's state dir on the wire", got)
 	}
 
 	rec = httptest.NewRecorder()

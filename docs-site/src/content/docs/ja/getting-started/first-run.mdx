@@ -47,7 +47,14 @@ import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
    ```
 
    ブラウザ側が終わるまで**そのターミナルは閉じずに開いたままにしてください** —
-   AI ソフトウェアの導入など、ターミナルを必要とする手順があります。**Enter** を
+   AI ソフトウェアの導入など、ターミナルを必要とする手順があります。その導入は
+   ターミナル側で実行され、初回セットアップで最も時間がかかる部分です。
+
+   ```text
+   📦 Installing the AI engine for the setup in your browser (one-time download)...
+   ```
+
+   **Enter** を
    押すとターミナル側に主導権が戻り、残りの質問はターミナルが尋ねます（ブラウザ側は
    ここで実行すべきコマンドを案内します）。ターミナルを閉じても安全です。進捗は
    保存され、ダウンロードはどちらの場合も続きます。
