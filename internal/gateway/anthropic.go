@@ -165,7 +165,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	adapter, err := h.lookupAdapter(sel)
 	if err != nil {
 		rr.fail(http.StatusServiceUnavailable, "runtime_unavailable")
-		writeAnthropicError(w, http.StatusServiceUnavailable, "runtime_unavailable", fmt.Sprintf("runtime %q: %s", sel.Runtime, err.Error()))
+		writeAnthropicError(w, http.StatusServiceUnavailable, "runtime_unavailable", fmt.Sprintf("runtime %q: %s", displayRuntime(sel), err.Error()))
 		return
 	}
 	if err := adapter.EnsureRunning(r.Context()); err != nil {

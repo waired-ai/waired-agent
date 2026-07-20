@@ -41,6 +41,22 @@ More: docs.waired.ai/public-share`
 // production); empty disables the routes.
 type PublicUseConfig struct {
 	Path string
+
+	// OnChange, when non-nil, is invoked after every successful write of
+	// public_use.json (settings update or consent acceptance). The
+	// loopback management API is the file's only writer, so this is an
+	// exact invalidation signal: cmd/waired-agent hangs the router's
+	// policy cache off it instead of re-reading the file per request or
+	// polling its mtime. Must not block — it runs on the handler
+	// goroutine, before the response is written.
+	OnChange func()
+}
+
+// notifyChange fires the settings-changed hook, if wired.
+func (c *PublicUseConfig) notifyChange() {
+	if c != nil && c.OnChange != nil {
+		c.OnChange()
+	}
 }
 
 // WithPublicUse attaches the consumer-side Public Share settings +
@@ -175,6 +191,7 @@ func (s *Server) handlePublicUse(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, errorBody("public_use_save_failed", err.Error()))
 			return
 		}
+		s.publicUse.notifyChange()
 		writeJSON(w, http.StatusOK, s.publicUseResponse(p))
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method_not_allowed", "GET or POST"))
@@ -225,5 +242,6 @@ func (s *Server) handlePublicConsent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errorBody("public_use_save_failed", err.Error()))
 		return
 	}
+	s.publicUse.notifyChange()
 	writeJSON(w, http.StatusOK, s.publicUseResponse(p))
 }

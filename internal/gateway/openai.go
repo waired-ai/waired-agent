@@ -136,7 +136,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	if err != nil {
 		rr.fail(http.StatusServiceUnavailable, "runtime_unavailable")
 		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "runtime_unavailable",
-			fmt.Sprintf("runtime %q: %s", sel.Runtime, err.Error()))
+			fmt.Sprintf("runtime %q: %s", displayRuntime(sel), err.Error()))
 		return
 	}
 	if err := adapter.EnsureRunning(r.Context()); err != nil {
@@ -154,7 +154,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		// client only saw a truncated response.
 		slog.Warn("openai proxy truncated mid-stream",
 			"err", err,
-			"peer", strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix),
+			"peer", peerDisplayID(sel),
 			"model", sel.ModelID,
 		)
 		return

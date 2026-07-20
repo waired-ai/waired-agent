@@ -213,7 +213,13 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 		}
 		got := probedSelection{Sel: sel}
 		if i > 0 && cands[0].PeerID != "" {
-			got.FallbackFrom = cands[0].PeerID
+			// Display identifier, never the raw DeviceID: FallbackFrom
+			// reaches the X-Waired-Fallback-From response header, the
+			// observability FallbackEvent (ring + slog + tray) and
+			// RequestEvent.FallbackFrom. Nothing consumes it
+			// functionally. Reachable with a public cands[0] whenever
+			// the own-candidate set is empty (spec §8.5).
+			got.FallbackFrom = candidateDisplayID(cands[0])
 			got.Reason = firstFailureReason(results)
 		}
 		return got, true, nil
@@ -247,7 +253,7 @@ func firstFailureReason(results []router.ProbeResult) string {
 // ring); when rec is nil, the Phase 8 direct slog.Warn line is
 // preserved for backwards-compatible test fixtures.
 func setSelectionHeaders(w http.ResponseWriter, sel router.Selection, fallbackFrom, reason string, rec Recorder) {
-	if peerID := strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix); peerID != sel.Runtime {
+	if peerID := peerDisplayID(sel); peerID != "" {
 		w.Header().Set(HeaderInferencePeer, peerID)
 	}
 	if fallbackFrom == "" {
@@ -258,8 +264,8 @@ func setSelectionHeaders(w http.ResponseWriter, sel router.Selection, fallbackFr
 		reason = "unknown"
 	}
 	w.Header().Set(HeaderFallbackReason, reason)
-	to := strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix)
-	if to == sel.Runtime {
+	to := peerDisplayID(sel)
+	if to == "" {
 		to = sel.Runtime
 	}
 	if rec != nil {
@@ -392,4 +398,44 @@ func ParallelProbe(ctx context.Context, cands []router.Candidate, lookup PeerPro
 		}
 	}
 	return winnerIdx, results
+}
+
+// peerDisplayID is the peer identifier every display surface must use
+// for a remote Selection: the Selector's PeerDisplayID when set (the
+// grant pseudonym for a Public Share peer, the DeviceID otherwise),
+// falling back to the runtime suffix for Selections built before the
+// field existed or by test fakes. Empty for local / external
+// selections.
+//
+// Real foreign device identifiers must never reach a header, an event,
+// a log line or a CLI surface (public share spec §8.5).
+func peerDisplayID(sel router.Selection) string {
+	if sel.PeerDisplayID != "" {
+		return sel.PeerDisplayID
+	}
+	if id := strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix); id != sel.Runtime {
+		return id
+	}
+	return ""
+}
+
+// candidateDisplayID is peerDisplayID for a pre-commit Candidate.
+func candidateDisplayID(c router.Candidate) string {
+	if c.PeerDisplayID != "" {
+		return c.PeerDisplayID
+	}
+	return c.PeerID
+}
+
+// displayRuntime renders Selection.Runtime for a human: the functional
+// value keys a remote selection on the real DeviceID, which must not
+// appear in an error body or a log line for a Public Share peer.
+func displayRuntime(sel router.Selection) string {
+	if !strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
+		return sel.Runtime
+	}
+	if id := peerDisplayID(sel); id != "" {
+		return remoteRuntimePrefix + id
+	}
+	return sel.Runtime
 }

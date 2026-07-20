@@ -42,9 +42,10 @@ func (rr *requestRec) finish() {
 func (rr *requestRec) setSelection(sel router.Selection, fallbackFrom, fallbackReason string) {
 	rr.ev.Decision = sel.ExecutionMode
 	rr.ev.Model = sel.ModelID
-	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
-		rr.ev.PeerID = strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix)
-	}
+	// Display identifier only — the event ring is served over the
+	// management API and rendered by the tray, so a Public Share peer
+	// appears as its grant pseudonym (spec §8.5).
+	rr.ev.PeerID = peerDisplayID(sel)
 	rr.ev.FallbackFrom = fallbackFrom
 	rr.ev.FallbackReason = fallbackReason
 }

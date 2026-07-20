@@ -48,6 +48,14 @@ const (
 	// was non-destructively retried locally (#648) — the persisted
 	// policy stays pinned; routing resumes when the peer returns.
 	KindClaudeNodeFallback Kind = "claude_node_fallback"
+	// KindPublicShareNudge is the one-shot hint that enabling Public
+	// Share MIGHT give this device access to more capable nodes,
+	// emitted when a request could not be served by the user's own
+	// nodes and no Public Share consent has been recorded (public share
+	// spec §4.2). It is a possibility hint, not evidence: a
+	// pre-consent agent holds no grants, so no public node is in its
+	// map and none can be observed. Never blocks or fails a request.
+	KindPublicShareNudge Kind = "public_share_nudge"
 )
 
 // Event is the unit stored in the ring buffer.
@@ -64,7 +72,32 @@ type Event struct {
 	PinnedPeerUnreachable *PinnedPeerUnreachableEvent `json:"pinned_peer_unreachable,omitempty"`
 	ClaudeNodeChange      *ClaudeNodeChangeEvent      `json:"claude_node_change,omitempty"`
 	ClaudeNodeFallback    *ClaudeNodeFallbackEvent    `json:"claude_node_fallback,omitempty"`
+	PublicShareNudge      *PublicShareNudgeEvent      `json:"public_share_nudge,omitempty"`
 }
+
+// PublicShareNudgeEvent carries the pre-consent Public Share hint.
+//
+// Message ships as data, in plain English that assumes no knowledge of
+// Waired internals, so the tray and the CLI render the same wording
+// without each re-inventing it. Reason is a stable tag for what came up
+// short ("no_candidate" / "all_overloaded") — for filtering, not for
+// display.
+//
+// No node, account, tier or device identifier appears here, by
+// construction: there is nothing to name.
+type PublicShareNudgeEvent struct {
+	Model   string `json:"model,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message"`
+}
+
+// PublicShareNudgeMessage is the user-facing copy for
+// KindPublicShareNudge. Plain English, no internal vocabulary, and
+// explicit that enabling shows a security warning first — the hint must
+// never read as a silent opt-in.
+const PublicShareNudgeMessage = "This request could not run on your own machines. " +
+	"Turning on public sharing may let you use more capable machines shared by other people. " +
+	"You will see a security and privacy warning before anything is enabled."
 
 // RoutingModeChangeEvent records an operator transition of the
 // inference routing mode. Mode strings are the string form of
