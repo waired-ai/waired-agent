@@ -47,6 +47,17 @@ func (d *fakeSetupDaemon) server(t *testing.T) *httptest.Server {
 		d.requests = append(d.requests, req)
 		d.state.ExecutorAttached = req.Attached
 		d.state.ExecutorElevated = req.Attached && req.Elevated
+		// Mirror the daemon's lease-bound install latch (§11.1) so the
+		// executor tests see the claim they would see in production.
+		switch {
+		case !req.Attached:
+			d.state.InstallClaimed = ""
+		case req.Phase == management.SetupExecutorPhaseInstalling && req.Engine != "":
+			d.state.InstallClaimed = req.Engine
+		case req.Phase == management.SetupExecutorPhaseDone ||
+			req.Phase == management.SetupExecutorPhaseFailed:
+			d.state.InstallClaimed = ""
+		}
 		_ = json.NewEncoder(w).Encode(d.state)
 	})
 	srv := httptest.NewServer(mux)
@@ -58,6 +69,14 @@ func (d *fakeSetupDaemon) setActive(active bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.state.Active = active
+}
+
+// setState replaces the served state wholesale, for tests that need to
+// script more than the active flag.
+func (d *fakeSetupDaemon) setState(st management.SetupStateResponse) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.state = st
 }
 
 func (d *fakeSetupDaemon) noted() []management.SetupExecutorRequest {

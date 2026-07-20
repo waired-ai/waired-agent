@@ -57,6 +57,21 @@ type SetupStateResponse struct {
 	// "re-run sudo waired init" recovery path actually recovers
 	// (waired#835 §11.1).
 	InstallClaimed string `json:"install_claimed,omitempty"`
+	// StateDir is the daemon's own state directory — where an executor
+	// must put a bundled engine so this daemon can find it again. The
+	// daemon declares it and the executor obeys rather than recomputing
+	// it, because a CLI-side defaultStateDir() silently diverges from a
+	// daemon started with --state-dir or $WAIRED_STATE_DIR, and the
+	// symptom of divergence is silent: the install succeeds, the daemon
+	// looks elsewhere, and engine_install spins forever (waired#835
+	// §11.1). Empty before enrollment or with inference off, which the
+	// executor must read as "do not install" — never as "guess".
+	//
+	// This does not weaken §17.1's no-paths-on-the-wire rule: that rule
+	// governs values crossing the control-plane trust boundary, and this
+	// is a daemon's own value returned to a co-local process that could
+	// already compute it.
+	StateDir string `json:"state_dir,omitempty"`
 }
 
 // SetupExecutorRequest is the body of POST /waired/v1/setup/executor:

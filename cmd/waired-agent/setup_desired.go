@@ -62,6 +62,9 @@ type setupDesired struct {
 type setupProvider interface {
 	// setupEngineState reports (installed, ready) for one engine kind.
 	setupEngineState(ctx context.Context, engine string) (installed, ready bool)
+	// setupStateDir is the agent's state root, published to the executor
+	// so a bundled engine lands where this daemon will look for it.
+	setupStateDir() string
 	// setupModelState reports one catalog model's lifecycle state plus
 	// live pull bytes and any stored failure detail.
 	setupModelState(modelID string) (state string, completed, total int64, errText string)
@@ -314,6 +317,10 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 
 	if d.engine != "" {
 		resp.EngineInstalled, resp.EngineReady = r.provider.setupEngineState(ctx, d.engine)
+		// Only published alongside a desired engine: it exists to tell
+		// an executor where to install, and there is nothing to install
+		// otherwise.
+		resp.StateDir = r.provider.setupStateDir()
 	}
 	return resp
 }
@@ -540,6 +547,11 @@ func (p *agentInferenceProvider) setupEngineState(ctx context.Context, engine st
 	r, _ := p.EngineReady()
 	return true, r
 }
+
+// setupStateDir is the agent's state root. The executor installs the
+// bundled engine relative to this, so it matches bundledOllamaBin's
+// join (inference.go) by construction rather than by coincidence.
+func (p *agentInferenceProvider) setupStateDir() string { return p.stateDir }
 
 // setupModelState reports one catalog model's lifecycle state, live
 // pull bytes (while downloading) and the stored failure detail.

@@ -34,12 +34,19 @@ type fakeSetupProvider struct {
 	benchStarts     []int
 	pulls           []string
 	pullErr         error
+	stateDir        string
 }
 
 func (f *fakeSetupProvider) setupEngineState(context.Context, string) (bool, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.engineInstalled, f.engineReady
+}
+
+func (f *fakeSetupProvider) setupStateDir() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stateDir
 }
 
 func (f *fakeSetupProvider) setupModelState(string) (string, int64, int64, string) {
@@ -623,6 +630,29 @@ func TestSetupStateProjection(t *testing.T) {
 	}
 	if st.ExecutorAttached {
 		t.Fatalf("state = %+v, want no executor attached", st)
+	}
+}
+
+// TestSetupStatePublishesStateDir: the executor has no state dir of its
+// own on the daemon path (runInitViaDaemon never receives one), and a
+// CLI-side guess diverges silently from a daemon started with
+// --state-dir. So the daemon declares it (waired#835 §11.1).
+func TestSetupStatePublishesStateDir(t *testing.T) {
+	f := &fakeSetupProvider{stateDir: "/var/lib/waired"}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	if st := r.SetupState(context.Background()); st.StateDir != "/var/lib/waired" {
+		t.Fatalf("state = %+v, want the provider's state dir published", st)
+	}
+}
+
+// TestSetupStateOmitsStateDirWithoutDesiredEngine: the field exists to
+// say where to install, so it has no business being served when nothing
+// is to be installed.
+func TestSetupStateOmitsStateDirWithoutDesiredEngine(t *testing.T) {
+	f := &fakeSetupProvider{stateDir: "/var/lib/waired"}
+	r, _ := leasedReconciler(t, f, "", "m-1")
+	if st := r.SetupState(context.Background()); st.StateDir != "" {
+		t.Fatalf("state = %+v, want no state dir without a desired engine", st)
 	}
 }
 
