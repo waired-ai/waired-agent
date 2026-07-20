@@ -818,9 +818,13 @@ linux_enrolled() {
 
 # linux_maybe_init runs `waired init` right after install so a single
 # `curl | sh` takes the user all the way to a working setup. It runs
-# BEFORE the service is started so init takes the full standalone path
-# (inference prompts, model download, benchmark) rather than the
-# thin/daemon login path. Enrollment + state live in /var/lib/waired
+# AFTER linux_service_up has started the daemon, so init attaches to the
+# running agent and takes the daemon-driven onboarding path (browser
+# sign-in + setup, with the engine installed under that flow) rather than
+# the legacy standalone enroll (waired#835 §11.2). The daemon boots
+# identity-less and idles until sign-in (#177), so bringing it up first is
+# safe; macOS starts its LaunchDaemon (RunAtLoad) before init for the same
+# reason. Enrollment + state live in /var/lib/waired
 # (root-owned, read by the daemon), so init runs under $SUDO. The
 # coding-agent integration is handled inside init itself: it asks one
 # consent question (default Yes) and — running under sudo — applies the
@@ -966,10 +970,12 @@ linux_apt_update() {
     # shellcheck disable=SC2086
     common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install $apt_mode -y $pkgs
     common_log "Ollama: managed separately; not modified by update."
-    # If this host was installed but never enrolled, finish sign-in now
-    # (no-op when already enrolled). Then ensure the new binary is running.
-    linux_maybe_init
+    # Restart onto the new binary first, then finish sign-in if this host
+    # was installed but never enrolled (no-op when already enrolled). With
+    # the daemon already running, that sign-in takes the daemon-driven
+    # onboarding path (waired#835 §11.2), matching a fresh install.
     linux_service_up update
+    linux_maybe_init
     common_log "$(emo '🎉' '*') waired updated and the service restarted. Check: waired status"
 }
 
@@ -1013,10 +1019,14 @@ linux_apt_install() {
         ollama_status="installed (local inference engine)"
     fi
 
-    # Drive the rest of first-run setup: sign-in (when interactive), then
-    # make sure the daemon is enabled + running regardless.
-    linux_maybe_init
+    # Start the daemon FIRST, then drive first-run sign-in: with the agent
+    # already running, `waired init` attaches to it and takes the
+    # daemon-driven onboarding path (waired#835 §11.2) rather than the
+    # legacy standalone enroll. linux_service_up is safe before sign-in (the
+    # daemon idles until enrolment, #177) and is a no-op on non-systemd
+    # hosts (e.g. container builds), where init falls back to standalone.
     linux_service_up install
+    linux_maybe_init
     linux_done_banner
 }
 

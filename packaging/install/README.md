@@ -71,11 +71,15 @@ The installer now drives first-run setup for you. On a normal interactive
 run (a terminal is available, even via `curl | sh`):
 
 1. it installs the packages,
-2. runs **`waired init`** — sign-in, local-inference setup, model download
-   (with a live progress bar), and coding-agent integration,
-3. offers a quick benchmark (which doubles as a "local inference works"
-   check), and
-4. **enables + starts** the `waired-agent` service.
+2. **enables + starts** the `waired-agent` service,
+3. runs **`waired init`** — sign-in, local-inference setup, model download
+   (with a live progress bar), and coding-agent integration, and
+4. offers a quick benchmark (which doubles as a "local inference works"
+   check).
+
+The service is started **before** `waired init` so sign-in attaches to the
+running agent (which drives the browser-based first-run setup) rather than
+the older terminal-only enrolment.
 
 Re-running the one-liner on an already-installed host detects it and
 interactively offers to **update**; if the host was installed but never

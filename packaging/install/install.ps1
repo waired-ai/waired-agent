@@ -1445,6 +1445,13 @@ function Invoke-InstallSteps {
     Remove-TrayIfRequested
     Section 'Background service'
     Invoke-AgentInstall
+    # Start the service now, BEFORE `waired init`: with the agent already
+    # running, init attaches to it and takes the daemon-driven onboarding
+    # path (browser sign-in + setup; waired#835 section 11.2) than the legacy
+    # standalone enroll. Safe before sign-in -- the daemon boots
+    # identity-less and idles until login (#177); macOS starts its
+    # LaunchDaemon (RunAtLoad) before init for the same reason.
+    Ensure-AgentRunning
     Add-InstallDirToPath
     Set-InstallDirRegistry
     Section 'Sign in and set up'
@@ -1453,7 +1460,6 @@ function Invoke-InstallSteps {
     Set-OllamaEnvForInit
     Invoke-WairedInit
     $initRan = $script:InitRan
-    Ensure-AgentRunning
     # Claude Code routing is decided entirely inside `waired init` (it asks
     # interactively, or writes managed settings on --non-interactive unless
     # -SkipClaudeProxy forwarded --skip-claude-route). No separate enable step
@@ -1611,12 +1617,15 @@ function Start-AgentService {
     }
 }
 
-# Ensure-AgentRunning -- best-effort start of the registered service after a
-# fresh install, regardless of whether init ran. The SCM service is
-# registered StartType=Automatic by `waired-agent install`, and the daemon
-# boots identity-less safely (#177), so starting it now lets a non-admin
-# user finish setup via the tray even when sign-in was skipped. Never
-# aborts the install: a start failure is a warning.
+# Ensure-AgentRunning -- best-effort start of the registered service on a
+# fresh install. Runs BEFORE `waired init` so init attaches to the running
+# agent and takes the daemon-driven onboarding path (waired#835 section
+# 11.2). The SCM service is registered StartType=Automatic by
+# `waired-agent install`,
+# and the daemon boots identity-less safely (#177), so starting it before
+# sign-in is safe -- and also lets a non-admin user finish setup via the
+# tray when sign-in is skipped. Never aborts the install: a start failure is
+# a warning.
 function Ensure-AgentRunning {
     if ($DryRun) {
         Common-Run "Start-Service $ServiceName" { }
