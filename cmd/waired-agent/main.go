@@ -307,6 +307,14 @@ func run(ctx context.Context, args []string) error {
 	mgmtSrv = mgmtSrv.WithPublicUse(&management.PublicUseConfig{
 		Path: agentconfig.DefaultPublicUsePath(),
 	})
+	// NAVI onboarding executor lease (waired#835 §9/§11). Registered
+	// UNCONDITIONALLY, unlike the inference group: the CLI probes these
+	// routes to tell a setup-capable daemon from an older one, and a
+	// 404 from an inference-disabled-but-current daemon would make it
+	// fall back to the pre-#835 path for the wrong reason. Before
+	// enrollment (or with --disable-inference) the delegate answers with
+	// the zero state, which reads as "no setup started".
+	mgmtSrv = mgmtSrv.WithSetupExecutor(sbSetupExecutor{sb})
 	// Inference routes are gated on the install-time --disable-inference
 	// choice (a boot decision, not a session one), mirroring the old
 	// inline wiring: an inference-disabled agent leaves these routes
@@ -1275,6 +1283,7 @@ func run(ctx context.Context, args []string) error {
 			infProvider:   infProvider,
 			engControl:    engCtl,
 			swapControl:   swapCtl,
+			setupRec:      setupRec,
 			obsState:      obsStateProvider,
 			engine:        engine,
 			stateWriter:   stateWriter,
