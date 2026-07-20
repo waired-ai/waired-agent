@@ -30,6 +30,12 @@ const (
 	PublicSharePendingNote = "Could not reach Waired right now. Your change is saved on this computer and will sync automatically."
 )
 
+// PublicShareDisableConfirmTitle/Text are the pre-confirmation shown before
+// the kill switch (spec §4.1: warn that running public inference is cut off).
+// Served as data so the CLI and tray render identical, non-hardcoded copy.
+const PublicShareDisableConfirmTitle = "Stop public sharing?"
+const PublicShareDisableConfirmText = "Any requests other people are running on this computer right now will be stopped, and their access is cancelled. You can turn public sharing back on at any time."
+
 // PublicShareResult reports what a toggle transition did beyond the
 // state flip, so UIs can explain side effects to the operator.
 type PublicShareResult struct {
