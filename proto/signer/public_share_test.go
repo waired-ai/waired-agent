@@ -33,6 +33,14 @@ func TestNetworkMapWithoutPublicShare_NoNewFieldsInCanonical(t *testing.T) {
 			t.Fatalf("canonical JSON unexpectedly contains %q:\n%s", key, canonical)
 		}
 	}
+	// NetworkMapPeer.NetworkID shares its JSON key with the map's own
+	// top-level network_id, so a Contains check cannot see a leak —
+	// count occurrences instead: exactly one (the top level) when no
+	// peer carries the field (Self + ≥1 peer in the scenario map, so
+	// any per-peer emission makes it ≥2).
+	if n := bytes.Count(canonical, []byte(`"network_id"`)); n != 1 {
+		t.Fatalf("canonical JSON contains %d network_id keys, want 1 (top-level only):\n%s", n, canonical)
+	}
 }
 
 // TestNetworkMapWithGrant_RoundTripVerifies covers the capable-poller
@@ -59,6 +67,7 @@ func TestNetworkMapWithGrant_RoundTripVerifies(t *testing.T) {
 		Role:      "provider",
 		Pseudonym: "pub-node-b21c",
 	}
+	nm.Peers[0].NetworkID = "net_provider"
 	signed, err := k.SignNetworkMap(nm)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -74,6 +83,7 @@ func TestNetworkMapWithGrant_RoundTripVerifies(t *testing.T) {
 		{"GrantID", func(m *signer.NetworkMap) { m.Peers[0].Grant.ID = "grant_2" }},
 		{"Role", func(m *signer.NetworkMap) { m.Peers[0].Grant.Role = "consumer" }},
 		{"Pseudonym", func(m *signer.NetworkMap) { m.Peers[0].Grant.Pseudonym = "guest-ffff" }},
+		{"PeerNetworkID", func(m *signer.NetworkMap) { m.Peers[0].NetworkID = "net_evil" }},
 		{"PublicShare", func(m *signer.NetworkMap) { m.Self.InferenceState.PublicShare = false }},
 		{"PublicCapacity", func(m *signer.NetworkMap) { m.Self.InferenceState.PublicCapacity = 9 }},
 	}
