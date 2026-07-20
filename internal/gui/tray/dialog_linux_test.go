@@ -63,6 +63,61 @@ func TestConfirmYesNo_NoBackendsFalseFalse(t *testing.T) {
 	}
 }
 
+// TestConfirmLabelCandidates_CarryLabels pins that the caller-supplied
+// accept/cancel labels reach each backend verbatim: zenity via
+// --ok-label/--cancel-label, kdialog via --yes-label/--no-label (which
+// must precede --yesno). This is what lets the server-authored consent
+// wording (waired#833) render identically across desktops.
+func TestConfirmLabelCandidates_CarryLabels(t *testing.T) {
+	accept := "OK — share my machine and start"
+	cancel := "Not now"
+	got := confirmLabelCandidates("Use public nodes?", "Body", accept, cancel)
+	if len(got) != 2 {
+		t.Fatalf("got %d candidates, want 2", len(got))
+	}
+	if got[0].binary != "zenity" || got[1].binary != "kdialog" {
+		t.Fatalf("candidate order = %q,%q want zenity,kdialog", got[0].binary, got[1].binary)
+	}
+
+	if !sliceContainsExact(got[0].args, "--ok-label="+accept) {
+		t.Errorf("zenity args missing --ok-label=%q: %v", accept, got[0].args)
+	}
+	if !sliceContainsExact(got[0].args, "--cancel-label="+cancel) {
+		t.Errorf("zenity args missing --cancel-label=%q: %v", cancel, got[0].args)
+	}
+
+	if !sliceContainsExact(got[1].args, accept) {
+		t.Errorf("kdialog args missing accept label %q: %v", accept, got[1].args)
+	}
+	if !sliceContainsExact(got[1].args, cancel) {
+		t.Errorf("kdialog args missing cancel label %q: %v", cancel, got[1].args)
+	}
+	// --yes-label / --no-label must come before --yesno for kdialog.
+	var yesLabelIdx, yesnoIdx = -1, -1
+	for i, a := range got[1].args {
+		switch a {
+		case "--yes-label":
+			yesLabelIdx = i
+		case "--yesno":
+			yesnoIdx = i
+		}
+	}
+	if yesLabelIdx < 0 || yesnoIdx < 0 || yesLabelIdx > yesnoIdx {
+		t.Errorf("kdialog --yes-label must precede --yesno: %v", got[1].args)
+	}
+}
+
+// TestConfirmWithLabels_NoBackendsFalseFalse mirrors the ConfirmYesNo
+// contract: no dialog binary on PATH → (false,false) so callers fall
+// back to a non-interactive route.
+func TestConfirmWithLabels_NoBackendsFalseFalse(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	confirmed, ok := ConfirmWithLabels("Title", "Body", "Accept", "Cancel")
+	if confirmed || ok {
+		t.Errorf("got confirmed=%v ok=%v, want false/false when no backends present", confirmed, ok)
+	}
+}
+
 func sliceContainsExact(s []string, want string) bool {
 	for _, v := range s {
 		if v == want {

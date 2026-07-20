@@ -54,9 +54,70 @@ func ConfirmYesNo(title, body string) (yes, ok bool) {
 	return false, false
 }
 
+// ConfirmWithLabels is ConfirmYesNo with caller-supplied button labels:
+// the affirmative button reads acceptLabel and the negative button
+// cancelLabel, carried verbatim to the desktop backend. Used by the
+// public-use consent flow (waired#833), whose accept/cancel wording is
+// authored server-side and served over the management API so every UI
+// surface renders identical text.
+//
+// Same backend contract and fallback semantics as ConfirmYesNo: zenity
+// first, then kdialog; (false,false) when neither is on PATH so callers
+// fall back to a non-interactive route.
+func ConfirmWithLabels(title, body, acceptLabel, cancelLabel string) (confirmed, ok bool) {
+	for _, prog := range confirmLabelCandidates(title, body, acceptLabel, cancelLabel) {
+		path, err := exec.LookPath(prog.binary)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, prog.args...) //nolint:gosec // args are static, computed by us
+		err = cmd.Run()
+		if err == nil {
+			return true, true
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			// Exit 1 = the negative button (cancelLabel). Any other
+			// non-zero code means the dialog itself failed → try the next
+			// candidate, only reporting ok=false once all are exhausted.
+			if exitErr.ExitCode() == 1 {
+				return false, true
+			}
+		}
+	}
+	return false, false
+}
+
 type confirmProgram struct {
 	binary string
 	args   []string
+}
+
+// confirmLabelCandidates mirrors confirmCandidates but threads the
+// caller's button labels through: zenity via --ok-label/--cancel-label,
+// kdialog via --yes-label/--no-label (which must precede --yesno).
+func confirmLabelCandidates(title, body, acceptLabel, cancelLabel string) []confirmProgram {
+	return []confirmProgram{
+		{
+			binary: "zenity",
+			args: []string{
+				"--question",
+				"--title=" + title,
+				"--text=" + body,
+				"--ok-label=" + acceptLabel,
+				"--cancel-label=" + cancelLabel,
+			},
+		},
+		{
+			binary: "kdialog",
+			args: []string{
+				"--title", title,
+				"--yes-label", acceptLabel,
+				"--no-label", cancelLabel,
+				"--yesno", body,
+			},
+		},
+	}
 }
 
 // confirmCandidates returns the desktop dialog spawns to try, in the

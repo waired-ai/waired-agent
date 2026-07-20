@@ -24,3 +24,25 @@ func ConfirmYesNo(title, body string) (yes, ok bool) {
 	}
 	return pressed == "Yes", true
 }
+
+// ConfirmWithLabels is ConfirmYesNo with caller-supplied button labels.
+// The public-use consent flow (waired#833) authors its accept/cancel
+// wording server-side and serves it over the management API so every UI
+// surface renders identical text; here those strings become the dialog
+// buttons.
+//
+// The affirmative button is placed second (and made the default) so the
+// layout matches ConfirmYesNo. runOsascriptDialogReturning returns the
+// pressed button string, so we compare it to acceptLabel rather than
+// returning its (string,bool) directly.
+func ConfirmWithLabels(title, body, acceptLabel, cancelLabel string) (confirmed, ok bool) {
+	pressed, dialogOk := runOsascriptDialogReturning(
+		title, body, "caution",
+		[]string{cancelLabel, acceptLabel},
+		acceptLabel,
+	)
+	if !dialogOk {
+		return false, false
+	}
+	return pressed == acceptLabel, true
+}
