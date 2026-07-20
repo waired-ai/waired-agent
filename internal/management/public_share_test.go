@@ -198,6 +198,29 @@ func TestPublicShareMethodAndBodyValidation(t *testing.T) {
 	}
 }
 
+// TestPublicShareDisableConfirmCopyIsCleanAndComplete guards the served
+// kill-switch confirmation copy: it must be present, mention that running
+// requests are stopped, and leak no Waired-internal vocabulary (the tray and
+// CLI render it verbatim, so a regression here ships internals to users).
+func TestPublicShareDisableConfirmCopyIsCleanAndComplete(t *testing.T) {
+	if PublicShareDisableConfirmTitle == "" {
+		t.Error("PublicShareDisableConfirmTitle is empty")
+	}
+	if PublicShareDisableConfirmText == "" {
+		t.Error("PublicShareDisableConfirmText is empty")
+	}
+	lower := strings.ToLower(PublicShareDisableConfirmText)
+	if !strings.Contains(lower, "stop") || !strings.Contains(lower, "requests") {
+		t.Errorf("disable-confirm text should say running requests are stopped: %q", PublicShareDisableConfirmText)
+	}
+	for _, internal := range []string{"relay", "direct", "grant", "map", "overlay"} {
+		if strings.Contains(lower, internal) {
+			t.Errorf("disable-confirm copy leaks internal token %q: title=%q text=%q",
+				internal, PublicShareDisableConfirmTitle, PublicShareDisableConfirmText)
+		}
+	}
+}
+
 func TestPublicShareErrorPropagates(t *testing.T) {
 	pc := newFakePublicShareCtl(state.PublicShareOff)
 	pc.err = errors.New("mesh share required")

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -73,6 +74,17 @@ type Snapshot struct {
 	// available" banner from it (in every reachable state) when
 	// Available is true. #293.
 	Update *management.UpdateStatus
+
+	// Public Share (waired#833). All three are best-effort and gate
+	// independently: each is nil on a daemon that predates the matching
+	// endpoint (a 404 on any one leaves it nil), so an old daemon renders
+	// the pre-feature menu unchanged. PublicShare is the provider toggle
+	// state; PublicUse is the consumer-side settings + consent status;
+	// PublicWarning is the served consent text (its "More:" line feeds the
+	// "Privacy & safety…" link).
+	PublicShare   *management.PublicShareStateResponse
+	PublicUse     *management.PublicUseResponse
+	PublicWarning *management.PublicWarningResponse
 
 	// Now is the wall-clock reference used by Update() when computing
 	// recent-fallback ages. Zero falls back to time.Now() so production
@@ -412,6 +424,36 @@ type MenuModel struct {
 	WorkerModes        []WorkerModeRow      // 3 fixed rows: auto / local-only / peer-preferred
 	WorkerPinEntries   []WorkerPinEntryView // ≤ MaxWorkerPinEntries peer rows
 	WorkerShowClearPin bool                 // true when mode==pinned so "(clear pin)" appears
+
+	// Public share submenu (waired#833). ShowPublicShareMenu gates the
+	// whole "Public share" parent: false on daemons exposing neither the
+	// provider toggle nor the consumer settings, so old daemons render the
+	// pre-feature menu. The provider group (PublicShareToggleAction /
+	// PublicShareStateLabel / PublicShareNote) drives the opt-in kill
+	// switch; the consumer group (ShowPublicUse + PublicUseHeaderLabel +
+	// PublicUseModes + PublicUseConsented) drives the three "use public
+	// computers" mode rows. PublicMoreURL is the "Privacy & safety…" link
+	// extracted from the served warning text — never hardcoded.
+	ShowPublicShareMenu     bool
+	PublicShareToggleAction string // "Share this computer publicly" | "Stop sharing this computer publicly" | ""
+	PublicShareStateLabel   string // "Public sharing: on" / "…: off" (+ " (saving…)") | ""
+	PublicShareNote         string // served pending-sync note, shown while CPSynced is false
+	ShowPublicUse           bool
+	PublicUseHeaderLabel    string // "Use public computers" section label
+	PublicUseModes          []PublicUseModeRow
+	PublicUseConsented      bool
+	PublicMoreURL           string // "Privacy & safety…" target, from the served warning's "More:" line
+}
+
+// PublicUseModeRow is one row inside the "Public share" submenu's
+// consumer-mode group (off / auto / explicit). Mode is the wire value
+// POSTed on click; Selected drives the leading "●" / "○" glyph in
+// apply(), like WorkerModeRow. The label is tray-authored plain English
+// (NOT the served consent copy).
+type PublicUseModeRow struct {
+	Mode     string
+	Label    string
+	Selected bool
 }
 
 // daemonDownModel is the red "agent not running" menu shown when the
@@ -623,6 +665,12 @@ func Update(snap Snapshot) MenuModel {
 	// Manual-update banner (#293). Independent of tunnel phase — an
 	// available update stays worth surfacing whether connected or paused.
 	applyUpdate(&m, snap.Update)
+
+	// Public share submenu (waired#833). Independent of tunnel phase —
+	// the provider toggle and the consumer consent/mode settings are
+	// management-level knobs, like the Claude integration section. Nil
+	// endpoints (old daemon) leave the whole parent hidden.
+	applyPublicShare(&m, snap)
 
 	// Inference-activity icon (waired#811). Runs before the aggregate
 	// header and only promotes a plain IconConnected to IconBusy, so a
@@ -959,6 +1007,99 @@ func applyMeshReachable(m *MenuModel, mesh *inferencemesh.Snapshot) {
 	} else {
 		m.MeshReachableLabel = "Mesh: no reachable peer engine"
 	}
+}
+
+// applyPublicShare projects the Public Share endpoints (waired#833) into
+// the "Public share" submenu. Two independent groups, each gated by its
+// own 404 so they render independently:
+//
+//  1. Provider toggle (snap.PublicShare): the opt-in kill switch that
+//     shares THIS computer to other people. Rendered from DesiredState —
+//     what the operator most recently asked for — so the label flips at
+//     once even while the control-plane sync is still in flight.
+//  2. Consumer settings (snap.PublicUse): the off/auto/explicit mode for
+//     USING other people's computers, plus consent status.
+//
+// The parent shows when EITHER endpoint is present, so a daemon exposing
+// only one still renders it. Both nil ⇒ nothing (old daemon renders the
+// pre-feature menu unchanged).
+func applyPublicShare(m *MenuModel, snap Snapshot) {
+	if snap.PublicShare == nil && snap.PublicUse == nil {
+		return
+	}
+	m.ShowPublicShareMenu = true
+
+	if ps := snap.PublicShare; ps != nil && (ps.State != "" || ps.DesiredState != "") {
+		// DesiredState is a plain string on the wire; the state constants
+		// are the typed PublicShareState, so compare via string(...).
+		switch ps.DesiredState {
+		case string(state.PublicShareOn):
+			m.PublicShareToggleAction = "Stop sharing this computer publicly"
+			m.PublicShareStateLabel = "Public sharing: on"
+		case string(state.PublicShareOff):
+			m.PublicShareToggleAction = "Share this computer publicly"
+			m.PublicShareStateLabel = "Public sharing: off"
+		}
+		// Pending control-plane sync: annotate the label and surface the
+		// served pending note verbatim (never tray-authored).
+		if ps.CPSynced != nil && !*ps.CPSynced && m.PublicShareStateLabel != "" {
+			m.PublicShareStateLabel += " (saving…)"
+			m.PublicShareNote = ps.Note
+		}
+	}
+
+	if pu := snap.PublicUse; pu != nil {
+		m.ShowPublicUse = true
+		m.PublicUseHeaderLabel = "Use public computers"
+		m.PublicUseConsented = pu.Consented
+		mode := pu.Mode
+		if mode == "" {
+			mode = agentconfig.PublicUseModeOff
+		}
+		// Labels are tray-authored plain English — NOT the served consent
+		// copy. The mode VALUE POSTed on click is the wire constant.
+		m.PublicUseModes = []PublicUseModeRow{
+			{Mode: agentconfig.PublicUseModeOff, Label: "Do not use public computers", Selected: mode == agentconfig.PublicUseModeOff},
+			{Mode: agentconfig.PublicUseModeAuto, Label: "Use only when better than my own computers", Selected: mode == agentconfig.PublicUseModeAuto},
+			{Mode: agentconfig.PublicUseModeExplicit, Label: "Always allow public computers", Selected: mode == agentconfig.PublicUseModeExplicit},
+		}
+	}
+
+	if snap.PublicWarning != nil {
+		m.PublicMoreURL = publicMoreURL(snap.PublicWarning.Text)
+	}
+}
+
+// publicMoreURL extracts the "Privacy & safety…" link from the served
+// consent warning text: the LAST line beginning "More: ", trimmed, with
+// https:// prepended when scheme-less. Returns "" when no such line
+// exists. The link is ALWAYS sourced from the served text, never
+// hardcoded, so a server-side copy change moves the link with it.
+func publicMoreURL(text string) string {
+	const prefix = "More: "
+	url := ""
+	for _, line := range strings.Split(text, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), prefix); ok {
+			url = strings.TrimSpace(rest)
+		}
+	}
+	if url == "" {
+		return ""
+	}
+	if !strings.Contains(url, "://") {
+		url = "https://" + url
+	}
+	return url
+}
+
+// publicUseModeRowLabel prefixes a mode row with the ● / ○ selection
+// glyph, mirroring workerModeRowLabel.
+func publicUseModeRowLabel(r PublicUseModeRow) string {
+	prefix := "○ "
+	if r.Selected {
+		prefix = "● "
+	}
+	return prefix + r.Label
 }
 
 // applyWorker projects the daemon's WorkerResponse + mesh snapshot

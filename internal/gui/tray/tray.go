@@ -14,6 +14,7 @@ import (
 
 	"fyne.io/systray"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/platform/autostart"
@@ -29,6 +30,12 @@ var notifier = notification.New()
 func notify(body string, level notification.Level) {
 	_ = notifier.Notify("Waired", body, level)
 }
+
+// confirmWithLabels is a seam over the per-OS ConfirmWithLabels dialog so
+// the public-consent / kill-switch flows can be exercised without a real
+// desktop backend (tests swap it). It is genuinely used by the handlers
+// below, so the linter does not flag it as dead.
+var confirmWithLabels = ConfirmWithLabels
 
 // iconConnected / iconDisconnected / iconError / iconDegraded are
 // defined in icons_unix.go and icons_windows.go: Unix (linux/darwin)
@@ -187,6 +194,23 @@ type tray struct {
 	miWorkerClearPin     *systray.MenuItem
 	lastWorkerModes      []WorkerModeRow      // Mode lookup for click dispatch
 	lastWorkerPinEntries []WorkerPinEntryView // DeviceID lookup for pin click dispatch
+
+	// Public share submenu (waired#833). miPublicShare is a NEW top-level
+	// parent (the Windows systray backend won't render three nesting
+	// levels, so every row below is a FLAT level-2 child). miPublicShareToggle
+	// is the provider kill switch; miPublicShareState / miPublicShareNote are
+	// display-only (Disable()). miPublicUseHeader is a disabled section label
+	// for the consumer group, followed by exactly three mode rows
+	// (off/auto/explicit). miPublicMore opens the served "Privacy & safety…"
+	// link. lastPublicUseModes backs the mode-row click dispatch under t.mu.
+	miPublicShare       *systray.MenuItem
+	miPublicShareToggle *systray.MenuItem
+	miPublicShareState  *systray.MenuItem
+	miPublicShareNote   *systray.MenuItem
+	miPublicUseHeader   *systray.MenuItem
+	miPublicUseModes    []*systray.MenuItem // 3 entries: off / auto / explicit
+	miPublicMore        *systray.MenuItem
+	lastPublicUseModes  []PublicUseModeRow
 
 	miCodeUI *systray.MenuItem
 	miAdmin  *systray.MenuItem
@@ -364,6 +388,34 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miWorkerClearPin = t.miInference.AddSubMenuItem("(clear pin)", "Return to auto routing")
 		t.miWorkerClearPin.Hide()
 
+		// --- Public share submenu (waired#833): a NEW top-level "Public
+		// share" parent. All rows are FLAT level-2 children (the Windows
+		// systray backend won't render three nesting levels — same limit as
+		// the worker rows above). Hidden until the daemon proves it exposes
+		// the public endpoints (apply() tracks ShowPublicShareMenu); each row
+		// keeps its Disable()/Hide() baseline so the first paint's
+		// (false,false) visibility diffs stay no-ops.
+		t.miPublicShare = systray.AddMenuItem("Public share", "Share this computer publicly, and choose whether to use other people's public computers")
+		t.miPublicShare.Hide()
+		t.miPublicShareToggle = t.miPublicShare.AddSubMenuItem("", "Turn public sharing of this computer on or off")
+		t.miPublicShareToggle.Hide()
+		t.miPublicShareState = t.miPublicShare.AddSubMenuItem("", "")
+		t.miPublicShareState.Disable()
+		t.miPublicShareState.Hide()
+		t.miPublicShareNote = t.miPublicShare.AddSubMenuItem("", "")
+		t.miPublicShareNote.Disable()
+		t.miPublicShareNote.Hide()
+		t.miPublicUseHeader = t.miPublicShare.AddSubMenuItem("", "")
+		t.miPublicUseHeader.Disable()
+		t.miPublicUseHeader.Hide()
+		t.miPublicUseModes = make([]*systray.MenuItem, 3)
+		for i := 0; i < 3; i++ {
+			t.miPublicUseModes[i] = t.miPublicShare.AddSubMenuItem("", "Choose how this computer uses other people's public computers")
+			t.miPublicUseModes[i].Hide()
+		}
+		t.miPublicMore = t.miPublicShare.AddSubMenuItem("Privacy & safety…", "Open the Public Share privacy and safety notes")
+		t.miPublicMore.Hide()
+
 		// --- Claude Code submenu (waired#809): the Claude status header +
 		// managed-settings row fold into the same parent as the per-class
 		// route selectors, so no Claude detail sits at the top level. The
@@ -495,6 +547,12 @@ func (t *tray) onReady(ctx context.Context) func() {
 		for i := 0; i < len(t.miClaudeSubRoutes); i++ {
 			idx := i
 			go t.dispatchClaudeSubRouteClicks(ctx, idx)
+		}
+		// Public-use mode rows (off / auto / explicit): one goroutine per
+		// fixed slot, same pattern as the worker mode rows (waired#833).
+		for i := 0; i < len(t.miPublicUseModes); i++ {
+			idx := i
+			go t.dispatchPublicUseModeClicks(ctx, idx)
 		}
 
 		go t.handleClicks(ctx)
@@ -716,6 +774,12 @@ func (t *tray) handleClicks(ctx context.Context) {
 			go t.onInstallEngine(ctx)
 		case <-t.miShareToggle.ClickedCh:
 			t.onShareToggle(ctx)
+		case <-t.miPublicShareToggle.ClickedCh:
+			// Dialog + HTTP: dispatch so the kill-switch confirmation and
+			// the enable side-effect note never stall the click loop.
+			go t.onPublicShareToggle(ctx)
+		case <-t.miPublicMore.ClickedCh:
+			go t.onPublicMore()
 		case <-t.miOverlayIP.ClickedCh:
 			t.onCopyIP()
 		case <-t.miOpenCodeReconfigure.ClickedCh:
@@ -1160,6 +1224,200 @@ func (t *tray) onShareToggle(ctx context.Context) {
 	go t.pollOnce(ctx)
 }
 
+// dispatchPublicUseModeClicks blocks on one public-use mode slot's
+// ClickedCh, mirroring dispatchWorkerModeClicks. The dispatch runs on its
+// own goroutine, so onPublicUseMode may safely block on a consent dialog.
+func (t *tray) dispatchPublicUseModeClicks(ctx context.Context, idx int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.miPublicUseModes[idx].ClickedCh:
+			t.onPublicUseMode(ctx, idx)
+		}
+	}
+}
+
+// onPublicShareToggle drives the provider Public Share toggle (waired#833).
+// It reads the last-rendered action under the lock and branches on the
+// literal:
+//   - "Share this computer publicly": enable. This path checks err FIRST
+//     and only on success surfaces the SERVED side-effect note (the mesh
+//     auto-enable / pending sentence) — there is no consent dialog here.
+//   - "Stop sharing this computer publicly": the kill switch. It confirms
+//     with the SERVED disable-confirm copy before disabling; with no dialog
+//     backend it hands off to the CLI rather than silently stopping other
+//     people's in-flight requests.
+func (t *tray) onPublicShareToggle(ctx context.Context) {
+	t.mu.Lock()
+	action := t.last.PublicShareToggleAction
+	t.mu.Unlock()
+	switch action {
+	case "Share this computer publicly":
+		resp, err := t.cli.EnablePublicShare(ctx, 0)
+		if err != nil {
+			ShowError(fmt.Sprintf("Public sharing: %v", err))
+			return
+		}
+		if resp.Note != "" {
+			// The served note carries the mesh auto-enable / pending-sync
+			// sentence — the only channel that side effect reaches the user.
+			notify(resp.Note, notification.Info)
+		}
+		go t.pollOnce(ctx)
+	case "Stop sharing this computer publicly":
+		yes, ok := confirmWithLabels(
+			management.PublicShareDisableConfirmTitle,
+			management.PublicShareDisableConfirmText,
+			"Stop sharing", "Cancel")
+		if !ok {
+			// No desktop dialog backend — do not stop other people's running
+			// requests without showing the warning; hand off to the CLI.
+			if err := CopyToClipboard("waired public unshare"); err != nil {
+				ShowError("Public sharing: " + err.Error())
+				return
+			}
+			notify("Run `waired public unshare` in a terminal to stop public sharing.", notification.Info)
+			return
+		}
+		if !yes {
+			return
+		}
+		resp, err := t.cli.DisablePublicShare(ctx)
+		if err != nil {
+			ShowError(fmt.Sprintf("Public sharing: %v", err))
+			return
+		}
+		if resp.Note != "" {
+			notify(resp.Note, notification.Info)
+		}
+		go t.pollOnce(ctx)
+	}
+}
+
+// onPublicUseMode applies a click on the off/auto/explicit mode row idx
+// (waired#833). The target mode is resolved from the latched projection
+// under the lock (never from the label). Choosing any non-off mode while
+// unconsented runs the consent flow first; because the server sets
+// mode=auto/main/sub on the FIRST consent, a just-completed first consent
+// that already lands the requested "auto" makes the follow-up POST
+// redundant, so it is skipped. A late server-side gate
+// (ErrPublicConsentRequired) runs consent once and retries.
+func (t *tray) onPublicUseMode(ctx context.Context, idx int) {
+	t.mu.Lock()
+	var mode string
+	if idx < len(t.lastPublicUseModes) {
+		mode = t.lastPublicUseModes[idx].Mode
+	}
+	consented := t.last.PublicUseConsented
+	t.mu.Unlock()
+	if mode == "" {
+		return
+	}
+
+	consentJustRan := false
+	if mode != agentconfig.PublicUseModeOff && !consented {
+		if !t.runPublicConsent(ctx) {
+			return
+		}
+		consentJustRan = true
+	}
+	// First consent already set mode=auto (main+sub on, no tier), so a
+	// follow-up POST for the same "auto" would be a no-op — skip it and let
+	// the post-click poll repaint the selection.
+	if consentJustRan && mode == agentconfig.PublicUseModeAuto {
+		go t.pollOnce(ctx)
+		return
+	}
+
+	_, err := t.cli.SetPublicUse(ctx, management.PublicUseUpdateRequest{Mode: &mode})
+	if errors.Is(err, ErrPublicConsentRequired) {
+		// Consent lapsed since the last poll; run it once and retry.
+		if !t.runPublicConsent(ctx) {
+			return
+		}
+		_, err = t.cli.SetPublicUse(ctx, management.PublicUseUpdateRequest{Mode: &mode})
+	}
+	if err != nil {
+		ShowError(fmt.Sprintf("Public use: %v", err))
+		return
+	}
+	go t.pollOnce(ctx)
+}
+
+// runPublicConsent shows the served Public Share warning and records
+// consent on acceptance (waired#833). It returns true only when consent
+// was actually recorded. The title / body / button labels are ALWAYS the
+// server-served copy — never string literals here — so every surface
+// renders identical wording and consent is never recorded without the
+// user seeing the text.
+func (t *tray) runPublicConsent(ctx context.Context) bool {
+	w, err := t.cli.PublicWarning(ctx)
+	if err != nil {
+		ShowError(fmt.Sprintf("Public use: %v", err))
+		return false
+	}
+	yes, ok := confirmWithLabels(w.Title, w.Text, w.AcceptLabel, w.CancelLabel)
+	if !ok {
+		// No dialog backend: consent MUST NOT be recorded without showing
+		// the text, so hand off to the CLI (which prints the warning).
+		if err := CopyToClipboard("waired public use --auto"); err != nil {
+			ShowError("Public use: " + err.Error())
+			return false
+		}
+		notify("Run `waired public use --auto` in a terminal to read the warning and turn this on.", notification.Info)
+		return false
+	}
+	if !yes {
+		return false
+	}
+	if _, err := t.cli.AcceptPublicConsent(ctx, w.Version); err != nil {
+		if !errors.Is(err, ErrPublicWarningVersionMismatch) {
+			ShowError(fmt.Sprintf("Public use: %v", err))
+			return false
+		}
+		// The served text changed between display and accept: re-fetch,
+		// re-display exactly once, then give up if it still mismatches.
+		w2, werr := t.cli.PublicWarning(ctx)
+		if werr != nil {
+			ShowError(fmt.Sprintf("Public use: %v", werr))
+			return false
+		}
+		yes2, ok2 := confirmWithLabels(w2.Title, w2.Text, w2.AcceptLabel, w2.CancelLabel)
+		if !ok2 || !yes2 {
+			return false
+		}
+		if _, rerr := t.cli.AcceptPublicConsent(ctx, w2.Version); rerr != nil {
+			ShowError(fmt.Sprintf("Public use: %v", rerr))
+			return false
+		}
+	}
+	// Reciprocity (owner-approved): a single accept also enables sharing
+	// this computer, since using public computers requires sharing one of
+	// yours. Best-effort — check err BEFORE touching resp (no nil-deref).
+	if ps, err := t.cli.PublicShareStatus(ctx); err == nil && ps.DesiredState == string(state.PublicShareOff) {
+		if resp, err := t.cli.EnablePublicShare(ctx, 0); err == nil && resp.Note != "" {
+			notify(resp.Note, notification.Info)
+		}
+	}
+	return true
+}
+
+// onPublicMore opens the served "Privacy & safety…" link (waired#833).
+// The URL is whatever publicMoreURL extracted from the served warning
+// text — never hardcoded. "" (no link served) is a no-op.
+func (t *tray) onPublicMore() {
+	t.mu.Lock()
+	url := t.last.PublicMoreURL
+	t.mu.Unlock()
+	if url == "" {
+		return
+	}
+	if err := OpenBrowser(url); err != nil {
+		ShowError(err.Error())
+	}
+}
+
 func (t *tray) onCopyIP() {
 	t.mu.Lock()
 	ip := t.last.OverlayIP
@@ -1515,6 +1773,19 @@ func (t *tray) pollOnce(ctx context.Context) {
 	t.pollObservability(pollCtx, &snap)
 	// Manual-update check (#293): best-effort, 404-tolerant like the others.
 	t.pollUpdate(pollCtx, &snap)
+	// Public share (waired#833): three independent best-effort GETs. Each
+	// 404 is swallowed on its own (via the ErrPublicShare*/ErrPublicUse*
+	// sentinels) so the two feature halves gate independently — a daemon
+	// exposing only one still renders that half.
+	if ps, err := t.cli.PublicShareStatus(pollCtx); err == nil {
+		snap.PublicShare = ps
+	}
+	if pu, err := t.cli.PublicUse(pollCtx); err == nil {
+		snap.PublicUse = pu
+	}
+	if pw, err := t.cli.PublicWarning(pollCtx); err == nil {
+		snap.PublicWarning = pw
+	}
 	snap.Now = time.Now()
 	m := Update(snap)
 	// The daemon is reachable again: remember this model for the switch
@@ -1794,6 +2065,26 @@ func (t *tray) apply(m MenuModel) {
 	t.lastWorkerPinEntries = m.WorkerPinEntries
 	t.mu.Unlock()
 
+	// Public share submenu (waired#833): the top-level parent follows
+	// ShowPublicShareMenu; the toggle / state / note / use-header / more
+	// rows track their own MenuModel fields, and the three mode rows diff
+	// via applyPublicUseModes. lastPublicUseModes is latched for the
+	// mode-row click dispatch, mirroring the worker rows above.
+	setVisibleIfChanged(t.miPublicShare, prev.ShowPublicShareMenu, m.ShowPublicShareMenu)
+	setVisibleIfChanged(t.miPublicShareToggle, prev.PublicShareToggleAction != "", m.PublicShareToggleAction != "")
+	setTitleIfChanged(t.miPublicShareToggle, prev.PublicShareToggleAction, m.PublicShareToggleAction)
+	setVisibleIfChanged(t.miPublicShareState, prev.PublicShareStateLabel != "", m.PublicShareStateLabel != "")
+	setTitleIfChanged(t.miPublicShareState, prev.PublicShareStateLabel, m.PublicShareStateLabel)
+	setVisibleIfChanged(t.miPublicShareNote, prev.PublicShareNote != "", m.PublicShareNote != "")
+	setTitleIfChanged(t.miPublicShareNote, prev.PublicShareNote, m.PublicShareNote)
+	setVisibleIfChanged(t.miPublicUseHeader, prev.PublicUseHeaderLabel != "", m.PublicUseHeaderLabel != "")
+	setTitleIfChanged(t.miPublicUseHeader, prev.PublicUseHeaderLabel, m.PublicUseHeaderLabel)
+	t.applyPublicUseModes(prev.PublicUseModes, m.PublicUseModes)
+	setVisibleIfChanged(t.miPublicMore, prev.PublicMoreURL != "", m.PublicMoreURL != "")
+	t.mu.Lock()
+	t.lastPublicUseModes = m.PublicUseModes
+	t.mu.Unlock()
+
 	// "This device" group is shown only when enrolled (i.e. we have a name or IP).
 	hasDevice := m.DeviceName != "" || m.OverlayIP != ""
 	prevHasDevice := prev.DeviceName != "" || prev.OverlayIP != ""
@@ -2032,6 +2323,27 @@ func workerModeRowLabel(r WorkerModeRow) string {
 		prefix = "● "
 	}
 	return prefix + r.Label
+}
+
+// applyPublicUseModes diffs the three public-use mode rows (off / auto /
+// explicit) against their pre-allocated slots, mirroring applyWorkerModes:
+// the ●/○ selection glyph comes from publicUseModeRowLabel and only
+// changed rows are mutated so the systray DBus traffic stays minimal.
+func (t *tray) applyPublicUseModes(prev, next []PublicUseModeRow) {
+	for i, mi := range t.miPublicUseModes {
+		var prevHas, nextHas bool
+		var prevLabel, nextLabel string
+		if i < len(prev) {
+			prevHas = true
+			prevLabel = publicUseModeRowLabel(prev[i])
+		}
+		if i < len(next) {
+			nextHas = true
+			nextLabel = publicUseModeRowLabel(next[i])
+		}
+		setVisibleIfChanged(mi, prevHas, nextHas)
+		setTitleIfChanged(mi, prevLabel, nextLabel)
+	}
 }
 
 // applyClaudeRoutes diffs a route-row group (main or sub) against its
