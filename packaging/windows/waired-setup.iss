@@ -115,6 +115,20 @@ Filename: "{app}\waired-agent.exe"; Parameters: "install"; \
     Check: ShouldRegisterAgent; \
     StatusMsg: "Registering waired-agent Windows Service..."
 
+; On a fresh install, START the service right after registering it, so the
+; daemon is already running when the operator later signs in with `waired
+; init` (this GUI installer does not run init itself). init then attaches to
+; the running agent and takes the daemon-driven onboarding path (waired#835
+; §11.2) rather than the legacy standalone enroll. Fresh-only
+; (ShouldRegisterAgent); on an upgrade CurStepChanged(ssPostInstall) owns the
+; restart. Safe before sign-in: the daemon idles until enrolment (#177);
+; parity with the .deb postinst start-on-fresh-install and install.ps1's
+; Ensure-AgentRunning.
+Filename: "{app}\waired-agent.exe"; Parameters: "start"; \
+    Flags: runhidden waituntilterminated; \
+    Check: ShouldRegisterAgent; \
+    StatusMsg: "Starting waired-agent Windows Service..."
+
 ; Enable Claude Code routing via managed settings (only when the task is
 ; checked): writes %ProgramFiles%\ClaudeCode\managed-settings.json pointing
 ; ANTHROPIC_BASE_URL at waired's local gateway (no credential, no CA, no
@@ -203,10 +217,12 @@ begin
   end else if CurStep = ssPostInstall then begin
     // After the new binaries are in place: restart the agent onto the new
     // exe so an upgrade never leaves the service stopped or on the old
-    // binary. Fresh installs are registered by the [Run] step above and
-    // started by `waired init`; here we cover only the upgrade path (parity
-    // with the .deb postinst restart-on-upgrade and install.ps1 -Update).
-    // A no-op if the proxy-install [Run] step already brought it up.
+    // binary. Fresh installs are registered AND started by the [Run] steps
+    // above (so a later `waired init` attaches to the running daemon and
+    // takes the daemon-driven onboarding path -- waired#835 §11.2); here we
+    // cover only the upgrade path (parity with the .deb postinst
+    // restart-on-upgrade and install.ps1 -Update). A no-op if the
+    // proxy-install [Run] step already brought it up.
     if gAgentServiceExisted then
       Exec(ExpandConstant('{app}\waired-agent.exe'), 'start', '',
            SW_HIDE, ewWaitUntilTerminated, ResultCode);

@@ -43,12 +43,22 @@ case "$1" in
       if systemctl --quiet is-enabled waired-agent.service 2>/dev/null; then
         _waired_was_enabled=yes
       fi
-      # Enable at boot. On a FRESH install ($2 empty) we deliberately do NOT
-      # start here: when the install.sh one-liner drives this, it runs
-      # `waired init` next and wants the standalone (not daemon-driven) enroll
-      # path, then starts the unit itself. A plain `apt install waired`
-      # enables-only; the banner below tells the operator how to finish.
+      # Enable at boot (always).
       systemctl enable waired-agent >/dev/null 2>&1 || true
+      # On a FRESH install ($2 empty) start the unit NOW so the daemon is
+      # already running when `waired init` runs next — whether driven by the
+      # install.sh one-liner (which also starts it) or by the operator after
+      # a plain `apt install`. init then attaches to the running agent and
+      # takes the daemon-driven onboarding path (browser sign-in + setup;
+      # waired#835 §11.2) instead of the legacy standalone enroll. Safe
+      # before sign-in: the daemon boots identity-less and idles until login
+      # (#177); macOS starts its LaunchDaemon (RunAtLoad) before init for the
+      # same reason. Not on upgrade — the restart below (gated on the
+      # captured enabled-state) owns that, so an operator-stopped unit is not
+      # revived.
+      if [ -z "$2" ]; then
+        systemctl start waired-agent.service >/dev/null 2>&1 || true
+      fi
       # On UPGRADE ($2 = previously-installed version) restart onto the new
       # binary so the agent is never left running old code — or, historically,
       # left stopped (prerm used to stop it on upgrade and nothing restarted
@@ -66,10 +76,10 @@ case "$1" in
     if [ -z "$2" ]; then
       cat <<'EOF'
 
-🎉 Waired agent installed (enabled at boot).
+🎉 Waired agent installed and running (also enabled at boot).
 
-  Sign in:  sudo waired init      (signs in, sets up inference + coding-agent
-                                   integration, starts the agent)
+  Sign in:  sudo waired init      (signs in and finishes setup — inference
+                                   + coding-agent integration)
   Verify:   waired status
 
 The agent boots without an identity and idles until you sign in, so a
