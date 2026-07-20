@@ -25,6 +25,9 @@ subcommand, for grouped, command-specific help.
 | `waired runtimes` | Manage inference runtimes: `ls` / `install` / `uninstall` / `refresh` / `status` / `benchmark`. |
 | `waired infer "<prompt>"` | Run a one-shot inference request through the Local Gateway. Add `--explain` for an Auto-Selector routing dry-run. |
 | `waired inference share <on\|off\|status>` | Toggle whether this engine is offered to mesh peers. See [below](#sharing-vs-pausing). |
+| `waired public status` | Show whether this computer is shared publicly with other Waired users, and whether it may use other people's public machines. Add `--json` for the raw objects. |
+| `waired public share` / `unshare` | Share this computer publicly so other Waired users can run work on it, or stop. `share --max-clients N` caps how many guests may use it at once; `unshare` cuts off any work others are running on it right now. |
+| `waired public use [--auto\|--explicit\|--off] [--min-tier N] [--main on\|off] [--sub on\|off]` | Show or change whether this computer uses other people's public machines. With no flags it just shows the current settings. The first time you enable it, a one-time privacy warning is shown in the terminal that you must read and accept. |
 | `waired worker get` / `set` | Choose where outbound inference flows: `set --mode=auto\|local-only\|peer-preferred`, or `set --pin=<peer>`. |
 | `waired peers list` | List known mesh peers (DeviceID, IP, engine, GPU, model) — useful for picking a `--pin` target. |
 
