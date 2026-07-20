@@ -26,13 +26,21 @@ import (
 // never coming up within benchNoEngineGrace, or benchPollDeadline elapsing).
 // The agent keeps pulling in the background regardless, so callers treat false
 // as a soft skip and continue.
-func waitForBundledModel(mgmtURL string, out io.Writer, tty bool) bool {
+//
+// budget bounds the wait; callers outside the NAVI onboarding path pass
+// benchPollDeadline, which keeps their behaviour byte-identical. setupActive
+// says a browser setup is driving this host (waired#835 §9), which changes
+// exactly one thing: the no_engine grace no longer ends the wait, because the
+// executor is about to install the very engine that grace was written to give
+// up on. enter (nil = no backgrounding) lets the operator take the terminal
+// back; callers must Drain it afterwards.
+func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, setupActive bool, enter *enterListener) bool {
 	if !waitDaemonReachable(mgmtURL, 15*time.Second) {
 		// The caller already prints a "start the agent, then …" hint; stay
 		// quiet here so we don't double up.
 		return false
 	}
-	deadline := time.Now().Add(benchPollDeadline)
+	deadline := time.Now().Add(budget)
 	var noEngineDeadline time.Time // armed on no_engine, disarmed once engine is up
 	line := downloadLineState{lastPct: -1}
 	var rate rateWindow
@@ -55,6 +63,12 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool) bool {
 	}
 
 	for {
+		if enter != nil && enter.Backgrounded() {
+			endProgressLine(out, tty, &line)
+			writePrompt(out, "Continuing in the background — the agent finishes the download on its own.")
+			return false
+		}
+
 		st, ok := fetchInferenceStatus(mgmtURL)
 		switch {
 		case !ok:
@@ -75,10 +89,16 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool) bool {
 			// Engine still being brought up on a fresh bundled install
 			// (issue #489): wait it out within the grace, then conclude it
 			// won't come up.
-			if noEngineDeadline.IsZero() {
+			//
+			// Except during a browser setup (waired#835 §9): there the
+			// executor is about to install the engine, so "no engine yet"
+			// is the expected state for minutes, not a reason to give up.
+			// Giving up here is what used to cut the terminal's residency
+			// to 3 minutes on exactly the hosts this feature exists for.
+			if noEngineDeadline.IsZero() && !setupActive {
 				noEngineDeadline = time.Now().Add(benchNoEngineGrace)
 			}
-			if time.Now().After(noEngineDeadline) {
+			if !noEngineDeadline.IsZero() && time.Now().After(noEngineDeadline) {
 				endProgressLine(out, tty, &line)
 				writePrompt(out, "The AI engine still isn't up; Waired keeps bringing it up in the background.")
 				writePrompt(out, "Check progress with `waired status`; if it persists, see `waired doctor` or `journalctl -u waired-agent -e`.")
