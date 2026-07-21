@@ -59,6 +59,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Architecture', slug: 'concepts/architecture' },
 						{ label: 'Privacy', slug: 'concepts/privacy' },
+						{ label: 'Public share', slug: 'public-share' },
 					],
 				},
 				{ label: 'Troubleshooting', slug: 'troubleshooting' },
