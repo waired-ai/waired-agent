@@ -13,7 +13,9 @@ linked automatically. You don't need any networking knowledge. See
 
 Yes. Your prompts and replies travel straight between your own machines over an
 end-to-end encrypted link. They never reach our servers, and even the relay
-can't read them. See [Privacy](/concepts/privacy/).
+can't read them. See [Privacy](/concepts/privacy/). Sharing beyond your own
+devices — a team, or [Public Share](/public-share/) — is opt-in and consented,
+and even then Waired's servers never see what you asked or what was answered.
 
 ## What do I need?
 
@@ -49,7 +51,16 @@ that introduces your devices is the part hosted for you.
 
 `waired init` signs you in with Google and enrolls the device. Enroll every
 device with the **same Google account** — that shared identity is what puts them
-on the same private network and lets one use another's model.
+on the same private network and lets one use another's model. Sharing with
+people outside your account — a team, or Public Share — is a separate, explicit
+opt-in.
+
+## Can other people use my computer?
+
+Only if you turn on [Public Share](/public-share/) (or join a team and share
+into it). It's off by default: nobody outside your own account can run work on
+your computer until you explicitly enable it, and turning it off again takes
+effect immediately.
 
 ## What if my network has a strict firewall or NAT?
 
