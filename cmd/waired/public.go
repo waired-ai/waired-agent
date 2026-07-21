@@ -29,6 +29,8 @@ const publicLong = `Control Public Share — using and sharing machines with oth
       can run work on it (optionally cap guests with --max-clients).
   waired public unshare   Stop sharing this computer publicly. Any requests
       other people are running on it right now are cut off.
+  waired public use       Show or change whether this computer uses other
+      people's public machines (mode, quality floor, which agents).
 
 Public machines are other people's computers. A security and privacy
 warning is shown before you can start using them.`
@@ -40,7 +42,7 @@ func newPublicCmd() *cobra.Command {
 		Long:  publicLong,
 		RunE:  namespaceRunE,
 	}
-	cmd.AddCommand(newPublicStatusCmd(), newPublicShareCmd(), newPublicUnshareCmd())
+	cmd.AddCommand(newPublicStatusCmd(), newPublicShareCmd(), newPublicUnshareCmd(), newPublicUseCmd())
 	return cmd
 }
 

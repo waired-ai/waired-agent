@@ -25,6 +25,9 @@ description: すべての waired コマンドのリファレンス — セット
 | `waired runtimes` | 推論ランタイムを管理します: `ls` / `install` / `uninstall` / `refresh` / `status` / `benchmark`。 |
 | `waired infer "<prompt>"` | Local Gateway 経由でワンショットの推論リクエストを実行します。Auto-Selector のルーティングのドライランには `--explain` を追加します。 |
 | `waired inference share <on\|off\|status>` | このエンジンをメッシュピアに提供するかどうかを切り替えます。[下記](#sharing-vs-pausing) を参照。 |
+| `waired public status` | このコンピューターが他の Waired ユーザーに公開共有されているか、また他人の公開マシンを利用してよいかを表示します。`--json` で生のオブジェクトを出力します。 |
+| `waired public share` / `unshare` | このコンピューターを公開共有して他の Waired ユーザーが作業を実行できるようにする、またはそれを停止します。`share --max-clients N` は同時に利用できるゲスト数を制限します。`unshare` は現在他人が実行中の作業を切断します。 |
+| `waired public use [--auto\|--explicit\|--off] [--min-tier N] [--main on\|off] [--sub on\|off]` | このコンピューターが他人の公開マシンを利用するかどうかを表示・変更します。フラグなしでは現在の設定を表示するだけです。初めて有効にするときは、読んで承諾する必要がある一度きりのプライバシー警告がターミナルに表示されます。 |
 | `waired worker get` / `set` | アウトバウンド推論の流れ先を選択します: `set --mode=auto\|local-only\|peer-preferred`、または `set --pin=<peer>`。 |
 | `waired peers list` | 既知のメッシュピア (DeviceID、IP、エンジン、GPU、モデル) を一覧表示します — `--pin` のターゲットを選ぶのに便利です。 |
 
