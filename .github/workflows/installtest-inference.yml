@@ -1,6 +1,7 @@
 # installtest-inference — the nightly installtest umbrella (#514, waired#760;
 # re-homed from the pre-split monorepo per #1): the install→inference tail of
-# the first-run journey, the 3-OS coding-agent routing sentinel, and the
+# the first-run journey, the 3-OS daemon-path setup-executor engine install
+# (waired#835 §9/§11), the 3-OS coding-agent routing sentinel, and the
 # Windows installer banner render check.
 #
 # installtest.yml (the per-PR gate) runs the real `install → service-manager
@@ -194,6 +195,83 @@ jobs:
               grep -iE 'summary:|[0-9.]+ *(tok|tokens)/s' it-inf.log \
                 | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -6 || true
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 3-OS daemon-path setup-executor engine install (waired#835 §9/§11). Unlike
+  # install+inference above, the engine is DELIBERATELY absent after install
+  # (install.sh/.ps1 run --skip-ollama) and the enrol is driven through the
+  # DAEMON path — the real post-#119 first-run — by completing the daemon's
+  # login session out-of-band via the OIDC grant, so the resident `waired init`
+  # executor installs the engine. The standalone --google-sa-login enrol the
+  # other legs use never reaches that path. Nightly (a real engine install +
+  # tiny model pull is minutes-scale + external-state, like install+inference).
+  # See scripts/dev/lib/installtest-daemon-engine.sh for the WHY.
+  daemon-engine:
+    needs: legs
+    name: daemon-path engine install (${{ matrix.os }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false      # a red Windows/macOS leg must not hide a green Linux
+      matrix: ${{ fromJSON(needs.legs.outputs.matrix) }}
+    env:
+      # Tier 2: hands-free enroll vs the real dev control plane (#339 grant).
+      IT_ENROLL_MODE: oidc
+      IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: ${{ matrix.os == 'linux' }}
+
+      - name: point gcloud at the image's Python ≥3.10 (self-hosted macOS)
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          py="$(/opt/homebrew/bin/brew --prefix python@3.14)/bin/python3.14"
+          test -x "$py"
+          echo "CLOUDSDK_PYTHON=$py" >> "$GITHUB_ENV"
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          skip_install: ${{ matrix.os == 'windows' }}
+
+      # Linux: in-place install (systemd is PID 1 on the disposable runner),
+      # engine ABSENT (--skip-ollama), then daemon-path init → executor install.
+      - name: daemon-path engine install (linux, tier 2)
+        if: matrix.os == 'linux'
+        env:
+          IT_LOCAL: "1"
+          IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/go/bin:$PATH"
+          bash scripts/dev/installtest-host-up.sh
+          bash scripts/dev/installtest-run.sh --tier 2 --daemon-engine
+
+      - name: daemon-path engine install (windows, tier 2)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: ./scripts/dev/installtest-windows.ps1 -Tier 2 -DaemonEngine
+
+      - name: daemon-path engine install (macos, tier 2)
+        if: matrix.os == 'macos'
+        run: bash scripts/dev/installtest-macos.sh --tier 2 --daemon-engine
+
+      - name: job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## daemon-path engine install (${{ matrix.os }})"
+            echo "- result: **${{ job.status }}**"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # 3-OS coding-agent routing sentinel (#496). Rides the SAME enrolled-daemon
