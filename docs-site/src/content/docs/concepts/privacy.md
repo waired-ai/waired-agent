@@ -1,9 +1,11 @@
 ---
 title: Privacy
-description: What stays on your machines, what the control plane and relay can see, and why Waired never silently breaks your coding agent.
+description: What stays on your machines by default, what each opt-in sharing tier means, and why Waired never silently sends your data anywhere.
 ---
 
-Waired is built so that **your prompts and replies stay on your own devices**.
+By default, Waired keeps **your prompts and replies on your own devices**.
+Anything beyond that — a team, public nodes, a cloud API — is an explicit,
+consented choice. Nothing is shared silently.
 
 ## Your data path
 
@@ -21,14 +23,34 @@ through any Waired-hosted service.
 In short: the coordination service hands out keys; the conversation happens
 directly between your devices.
 
+## Sharing beyond your own devices
+
+Your requests can run in three places, and each step outward is a separate,
+explicit opt-in with its own consent step — and an immediate off switch.
+
+- **Your own devices** — the default. Requests run only on machines enrolled
+  with your account. Nobody else is involved.
+- **Your team**, if you join one. Requests may also run on teammates'
+  computers, and you appear to them by your real name. The same honest caveat
+  applies as on any machine you don't own: the computer's owner could see what
+  you send.
+- **Public nodes**, if you enable Public Share. Requests may run on computers
+  shared by strangers, who see you only under a stable nickname. The full
+  disclosure — what the other side can and cannot see, and every control you
+  have — is at [Public share](/public-share/).
+
 ## No silent fallback
 
-Waired deliberately avoids "quietly send your data somewhere else" behavior. The
-one place a fallback exists — the [Claude Code integration](/guides/coding-agents/) —
-is **fail-open and visible**: if your local serving is down, Claude Code falls
-back to the real Anthropic API so it keeps working, and you can see the routing
-state at any time with `waired claude status` or `waired doctor`. You stay in
-control of when your own model is used versus the cloud.
+Waired deliberately avoids "quietly send your data somewhere else" behavior.
+The one place a cloud fallback exists — the
+[Claude Code integration](/guides/coding-agents/) — is **fail-open and
+visible**: if your local serving is down, Claude Code falls back to the real
+Anthropic API so it keeps working, and you can see the routing state at any
+time with `waired claude status` or `waired doctor`. Public and team routing
+never happens silently either: it exists only after you explicitly opted in
+and accepted the consent message, and you can see the current state at any
+time with `waired public status`. You stay in control of when your own model
+is used versus anyone else's.
 
 ## Hybrid mode is an explicit middle ground
 
@@ -53,10 +75,15 @@ coordination service that introduces your devices is the part hosted for you
 
 ## Sharing controls
 
-You decide which devices offer their engine to the rest of your network:
+You decide which devices offer their engine beyond their own keyboard:
 
 - `waired inference share off` keeps an engine private to its own machine while
   still letting you use it locally.
 - `waired pause` takes a device out of routing entirely.
+- `waired public share` / `waired public unshare` turn public sharing of a
+  computer on and off — `unshare` takes effect immediately, cutting off any
+  guest work in flight ([Public share](/public-share/)).
+- `waired public use --off` stops your own requests from ever using public
+  nodes.
 
 See [Sharing vs. pausing](/reference/cli/#sharing-vs-pausing).
