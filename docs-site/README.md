@@ -27,7 +27,8 @@ Firebase Hosting:
   **`dev-waired`** sandbox (Firebase site `waired-docs`), linked back as a PR
   comment.
 
-PRs are also build-checked by the `docs-site` job in `.github/workflows/ci.yml`.
+PRs are build-checked by the build step in `.github/workflows/deploy-docs.yml`
+(the build runs on every docs PR even when the deploy steps are skipped).
 
 Auth is Workload Identity Federation (OIDC) + `firebase-tools` via ADC — no
 long-lived service-account key secret. The deploy steps are gated on the
