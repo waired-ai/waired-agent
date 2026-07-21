@@ -72,7 +72,14 @@ param(
     # ISCC-compile the Inno installer from the same staged binaries, install it
     # silently, re-run Tier-1-level asserts (no second enroll), uninstall.
     # Implies -Contract (it needs the -Clean uninstall between the two installs).
-    [switch]$ExeVariant
+    [switch]$ExeVariant,
+    # -DaemonEngine (waired#835 §9/§11): drive the DAEMON-path first-run so the
+    # resident `waired init` executor installs the engine on an engine-less host
+    # -- the path the standalone --google-sa-login enrol never reaches (that flag
+    # forces the standalone path). Keeps install.ps1's engine-absent state,
+    # completes the daemon login out-of-band via the OIDC grant, and asserts the
+    # engine landed via the executor (not install.ps1). Its own mode; Tier 2.
+    [switch]$DaemonEngine
 )
 
 # -WithIntegration rides the inference engine.
@@ -81,6 +88,14 @@ if ($WithIntegration) { $WithInference = $true }
 if ($ExeVariant) { $Contract = $true }
 if ($Contract -and $Tier -lt 2) {
     Write-Host "[installtest] -Contract requires -Tier 2 (asserts need an enrolled device)" -ForegroundColor Red
+    exit 1
+}
+if ($DaemonEngine -and ($WithInference -or $WithIntegration)) {
+    Write-Host "[installtest] -DaemonEngine is its own mode; not with -WithInference/-WithIntegration" -ForegroundColor Red
+    exit 1
+}
+if ($DaemonEngine -and $Tier -lt 2) {
+    Write-Host "[installtest] -DaemonEngine requires -Tier 2 (it enrolls to reach the executor)" -ForegroundColor Red
     exit 1
 }
 
@@ -134,6 +149,48 @@ function ItSoft {
         $script:Warn++
         $script:WarnLines += "waired#${Issue}: $m"
     }
+}
+
+# --- daemon-path executor engine-install assert (waired#835 §9/§11) ----------
+# Windows analog of lib/installtest-daemon-engine.sh's assert_daemon_engine.
+# Regression bar: an engine-less daemon-path first-run ends up WITH an engine
+# (pre-N3 it stayed engine-less and engine_install was red forever). install.ps1
+# ran engine-absent, so only the resident executor could have installed one.
+function Assert-DaemonEngine {
+    param([string]$InitLog, [string]$Flag)
+
+    if (Select-String -Path $InitLog -Pattern 'signing in via the daemon' -Quiet -ErrorAction SilentlyContinue) {
+        ItOk "init took the daemon path (setup-executor-capable first-run)"
+    } else { ItBad "init did NOT take the daemon path (executor engine install not exercised)" }
+
+    $flagText = if (Test-Path -LiteralPath $Flag) { Get-Content -LiteralPath $Flag -Raw } else { '' }
+    if ($flagText -match '(?m)^completed=1') { ItOk "daemon login completed out-of-band via the OIDC grant" }
+    else { ItBad "out-of-band OIDC completion did not report success" }
+    if ($flagText -match '(?m)^executor_attached=1') { ItOk "setup executor lease was live during setup (executor_attached)" }
+    else { ItBad "never observed executor_attached -- executor engine-install path not reached" }
+    if ($flagText -match '(?m)^install_claimed=ollama') { ItOk "executor claimed the ollama install (install_claimed=ollama)" }
+    else { ItLog "did not catch install_claimed=ollama in the 2s poll -- non-fatal" }
+
+    # The regression bar: an engine is present (mirror Assert-Inference's lookup).
+    $ollama = $null
+    foreach ($p in @(
+            (Join-Path $env:ProgramFiles 'Ollama\ollama.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'))) {
+        if (Test-Path -LiteralPath $p) { $ollama = $p; break }
+    }
+    if (-not $ollama) { $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue; if ($cmd) { $ollama = $cmd.Source } }
+    if ($ollama) { ItOk "ollama engine installed by the daemon-path executor ($ollama)" }
+    else { ItBad "no engine after a daemon-path first-run (executor install did not land -- pre-N3 behaviour)" }
+
+    $state = ''
+    try { $state = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).subsystem_state } catch { }
+    if ($state -and $state -ne 'no_engine') { ItOk "inference subsystem left no_engine (state=$state)" }
+    else { ItBad "inference subsystem still reports '$state' (engine not installed)" }
+
+    $claim = ''
+    try { $claim = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/setup/state' -TimeoutSec 5).install_claimed } catch { }
+    if (-not $claim) { ItOk "no stuck executor install claim after init (install_claimed cleared)" }
+    else { ItBad "executor install claim still set after init (install_claimed=$claim; stuck)" }
 }
 
 # --- inference assert (Windows analog of assert_inference) -------------------
@@ -650,12 +707,15 @@ if ($Tier -ge 2) {
         if ($EnrollMode -ne 'oidc') { ItDie "installtest-windows.ps1 supports IT_ENROLL_MODE=oidc only (got '$EnrollMode')" }
         if (-not $ImpersonateSa)    { ItDie "IT_ENROLL_MODE=oidc needs IT_IMPERSONATE_SA (the #339 test SA)" }
 
-        ItStep "enrolling via OIDC grant (google-sa-login, host-minted token)"
+        ItStep "enrolling via OIDC grant (host-minted token)"
         # Stop the installer-started service so init's enroll writes identity
         # without daemon contention. init then starts the agent itself (default
         # --start-agent=true) — mirroring a real install — so #519's foreground
         # model wait runs; the Start-Service below is a redundant safety net.
-        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+        # Daemon-path mode is the exception: it leaves the service RUNNING —
+        # that (unenrolled but reachable) is what makes init take the daemon
+        # path and reach the setup executor engine install (waired#835 §11).
+        if (-not $DaemonEngine) { Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue }
 
         $aud = (Invoke-RestMethod -Uri "$ControlUrl/v1/login/oidc-grant/audience" -TimeoutSec 15).audience
         if (-not $aud) { ItDie "could not resolve the OIDC audience from $ControlUrl/v1/login/oidc-grant/audience" }
@@ -666,8 +726,77 @@ if ($Tier -ge 2) {
         $runId  = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { Get-Date -Format yyyyMMddHHmmss }
         $device = "win-ci-$runId"
         $waired = Join-Path $InstallDir 'waired.exe'
-        $inferFlag = if ($WithInference) { '--inference-enabled=true' } else { '--inference-enabled=false' }
         $initLog = Join-Path $Work 'init.log'
+        if ($DaemonEngine) {
+            # Daemon-path enrol: complete the login out-of-band so the resident
+            # executor installs the engine (waired#835 §9/§11). No
+            # --google-sa-login (that forces the standalone path); the running
+            # service makes init take the daemon path. A background job rejoins
+            # the in-flight session (POST /login/start is single-flight →
+            # init's session), completes it via the OIDC grant (the CP flips any
+            # waiting session), then watches the executor lease.
+            $daemonFlag = Join-Path $Work 'daemon-engine.flag'
+            $watcher = Start-Job -ScriptBlock {
+                param($controlUrl, $tok, $initLog, $flag)
+                $ErrorActionPreference = 'SilentlyContinue'
+                Set-Content -LiteralPath $flag -Value '' -NoNewline
+                # (1) Scrape the login session id from init's transcript (a READ:
+                # POST /login/start is refused on TCP by the #838 writeGuard). The
+                # session id is the login URL's last path segment (lastPathSegment).
+                $sess = $null
+                for ($i = 0; $i -lt 60 -and -not $sess; $i++) {
+                    $txt = ''
+                    try { $txt = Get-Content -LiteralPath $initLog -Raw -ErrorAction SilentlyContinue } catch { }
+                    if ($txt -and $txt -match 'https?://\S+') {
+                        $seg = (($Matches[0] -split '/')[-1] -split '[?#]')[0]
+                        if ($seg) { $sess = $seg }
+                    }
+                    if (-not $sess) { Start-Sleep 1 }
+                }
+                if (-not $sess) { Add-Content -LiteralPath $flag -Value 'no-session'; return }
+                Add-Content -LiteralPath $flag -Value "session=$sess"
+                # (2) Complete out-of-band at the CP (no writeGuard there).
+                try {
+                    Invoke-RestMethod -Uri "$controlUrl/v1/login/oidc-grant" -Method Post -ContentType 'application/json' `
+                        -Body (@{ login_session_id = $sess; id_token = $tok } | ConvertTo-Json -Compress) -TimeoutSec 20 | Out-Null
+                    Add-Content -LiteralPath $flag -Value 'completed=1'
+                } catch { Add-Content -LiteralPath $flag -Value 'complete-failed'; return }
+                $seenExec = $false; $seenClaim = $false
+                for ($i = 0; $i -lt 150; $i++) {
+                    try {
+                        $stt = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/setup/state' -TimeoutSec 5
+                        if (-not $seenExec  -and $stt.executor_attached)        { Add-Content -LiteralPath $flag -Value 'executor_attached=1'; $seenExec  = $true }
+                        if (-not $seenClaim -and $stt.install_claimed -eq 'ollama') { Add-Content -LiteralPath $flag -Value 'install_claimed=ollama'; $seenClaim = $true }
+                    } catch { }
+                    Start-Sleep 2
+                }
+            } -ArgumentList $ControlUrl, $tok, $initLog, $daemonFlag
+
+            # inference on + tiny model so an engine-less host installs one;
+            # --non-interactive so the resident executor runs
+            # ensureDaemonPathEngine. NO --google-sa-login → daemon path.
+            $initArgs = @(
+                'init'
+                '--control', $ControlUrl
+                '--device-name', $device
+                '--inference-enabled=true'
+                '--inference-bundled-model-id=qwen2.5-coder-0.5b-instruct'
+                '--non-interactive'
+                '--skip-integration'
+                '--state-dir', $StateDir
+            )
+            $env:WAIRED_NO_EMOJI = '1'
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            & $waired @initArgs 2>&1 | Tee-Object -FilePath $initLog
+            $initExit = $LASTEXITCODE
+            $ErrorActionPreference = $prevEap
+            Stop-Job $watcher -ErrorAction SilentlyContinue
+            Receive-Job $watcher -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job $watcher -Force -ErrorAction SilentlyContinue
+            if ($initExit -ne 0) { ItLog "daemon-path init exited $initExit -- asserts will surface what landed" }
+        } else {
+        $inferFlag = if ($WithInference) { '--inference-enabled=true' } else { '--inference-enabled=false' }
         # Build the whole init arg vector as ONE flat array and splat it once (matches
         # packaging/install/install.ps1's $initArgs idiom and the bash legs' initargs=(...)).
         # Do NOT build a separate $pinArgs via `if {@('x')} else {@()}` and splat it inline:
@@ -707,9 +836,11 @@ if ($Tier -ge 2) {
         $initExit = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
         if ($initExit -ne 0) { ItBad "waired init (oidc) exited $initExit" }
+        }
 
         # Safety net: init already started the agent (--start-agent default);
-        # this is a no-op unless that best-effort start was skipped.
+        # this is a no-op unless that best-effort start was skipped. Harmless in
+        # daemon-path mode too (the service was never stopped).
         Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
 
         ItStep "Tier 2 asserts"
@@ -739,7 +870,11 @@ if ($Tier -ge 2) {
         ItStep "management write pipe asserts (waired#838)"
         Assert-MgmtPipe
 
-        if ($WithInference) {
+        if ($DaemonEngine) {
+            ItStep "daemon-path executor engine-install asserts (waired#835 §9/§11)"
+            Assert-DaemonEngine -InitLog $initLog -Flag $daemonFlag
+        }
+        elseif ($WithInference) {
             ItStep "inference asserts (-WithInference)"
             Assert-Inference -InitLog $initLog
         }

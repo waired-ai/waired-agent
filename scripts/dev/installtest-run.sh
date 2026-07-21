@@ -27,6 +27,14 @@
 #   and asserts via the observability event ring that the completion was served
 #   LOCALLY and did not fail open to real Anthropic.
 #
+# --daemon-engine (waired#835 §9/§11): drive the DAEMON-path first-run so the
+#   resident `waired init` executor installs the engine on an engine-less host
+#   (the path the standalone oidc/bypass enrol never reaches). install.sh keeps
+#   --skip-ollama (engine ABSENT), enrol completes the daemon's login session
+#   out-of-band via the OIDC grant (lib/installtest-daemon-engine.sh), and a
+#   tiny bundled model keeps the trailing pull cheap. Pairs with Tier 2; its
+#   own mode (not combinable with --inference/--integration).
+#
 # A system container is used for Tier 1/2 (fast); Tier 3 forces a VM.
 #
 # Usage:
@@ -34,6 +42,7 @@
 #   bash scripts/dev/installtest-run.sh --tier 2        # + headless enroll
 #   bash scripts/dev/installtest-run.sh --tier 2 --inference   # + Ollama/model/benchmark (CPU)
 #   bash scripts/dev/installtest-run.sh --tier 2 --integration --local  # + routing sentinel (0.5B)
+#   bash scripts/dev/installtest-run.sh --tier 2 --daemon-engine  # + daemon-path executor engine install (waired#835)
 #   bash scripts/dev/installtest-run.sh --tier 3        # + data plane (2 VMs)
 #   bash scripts/dev/installtest-run.sh --keep          # don't delete the guest
 #   bash scripts/dev/installtest-run.sh --name foo --image ubuntu:22.04
@@ -49,6 +58,7 @@ WITH_TRAY=0
 USE_VM=0
 INFER=0
 INTEG=0
+DAEMON_ENGINE=0
 NAME="g1"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -58,11 +68,12 @@ while [ $# -gt 0 ]; do
     --with-tray) WITH_TRAY=1 ;;
     --inference) INFER=1 ;;
     --integration) INTEG=1; INFER=1 ;;   # routing sentinel rides the inference engine
+    --daemon-engine) DAEMON_ENGINE=1 ;;  # waired#835 §9/§11 daemon-path executor engine install
     --vm) USE_VM=1 ;;
     --local) IT_LOCAL=1 ;;
     --name) shift; NAME="${1:?--name needs a value}" ;;
     --image) shift; IT_IMAGE="${1:?--image needs a value}" ;;
-    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
     *) it_die "unknown argument: $1 (try --help)" ;;
   esac
   shift
@@ -73,6 +84,17 @@ done
 # The routing sentinel (#496) pins the tiny 0.5B as the bundled model so the
 # deploy pulls ~0.4 GB, not the 7B — cheap enough for a per-PR Linux leg.
 [ "$INTEG" = 1 ] && export IT_BUNDLED_MODEL_ID="${IT_BUNDLED_MODEL_ID:-qwen2.5-coder-0.5b-instruct}"
+
+# --daemon-engine (waired#835 §9/§11) is its own mode: unlike --inference it
+# keeps install.sh's --skip-ollama (engine ABSENT), so only the daemon-path
+# executor can install one. It pins the same tiny model for a cheap trailing
+# pull. Not combinable with --inference/--integration (different enrol paths).
+if [ "$DAEMON_ENGINE" = 1 ]; then
+  { [ "$INFER" = 1 ] || [ "$INTEG" = 1 ]; } && it_die \
+    "--daemon-engine is its own mode; do not combine it with --inference/--integration"
+  [ "$TIER" -ge 2 ] || it_die "--daemon-engine needs --tier 2 (it enrols to reach the executor)"
+  export IT_BUNDLED_MODEL_ID="${IT_BUNDLED_MODEL_ID:-qwen2.5-coder-0.5b-instruct}"
+fi
 
 # --local installs waired ON THIS HOST as root (apt + systemd + a service
 # user + a running daemon). Safe only on a disposable machine — guard so a
@@ -127,7 +149,7 @@ launch_guest() {
     return 0
   fi
   [ "$USE_VM" = 1 ] && extra+=(--vm)
-  if [ "$INFER" = 1 ] && [ -n "${IT_GUEST_MEMORY-16GiB}" ]; then
+  if { [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; } && [ -n "${IT_GUEST_MEMORY-16GiB}" ]; then
     # Applied at LAUNCH, not via a post-launch `lxc config set`: a VM's
     # memory is fixed at boot, so the old post-launch set was silently
     # ineffective (error swallowed by `|| true`) and a VM guest ran the
@@ -289,13 +311,21 @@ if [ "$TIER" -le 2 ]; then
   if [ "$TIER" -ge 2 ]; then
     # shellcheck source=scripts/dev/lib/installtest-enroll.sh
     source "$ROOT/scripts/dev/lib/installtest-enroll.sh"
-    it_enroll_guest "$GUEST"   # enrol (IT_ENROLL_MODE) against the Control Plane
-    assert_tier2 "$GUEST"
-    [ "$INFER" = 1 ] && assert_inference "$GUEST"
-    if [ "$INTEG" = 1 ]; then
-      # shellcheck source=scripts/dev/lib/installtest-integration.sh
-      source "$ROOT/scripts/dev/lib/installtest-integration.sh"
-      assert_integration "$GUEST"
+    if [ "$DAEMON_ENGINE" = 1 ]; then
+      # shellcheck source=scripts/dev/lib/installtest-daemon-engine.sh
+      source "$ROOT/scripts/dev/lib/installtest-daemon-engine.sh"
+      it_enroll_daemon_path "$GUEST"   # daemon-path enrol via out-of-band OIDC completion
+      assert_tier2 "$GUEST"            # identity chain still applies (the daemon owns it)
+      assert_daemon_engine "$GUEST"    # the waired#835 §9/§11 executor engine install
+    else
+      it_enroll_guest "$GUEST"   # enrol (IT_ENROLL_MODE) against the Control Plane
+      assert_tier2 "$GUEST"
+      [ "$INFER" = 1 ] && assert_inference "$GUEST"
+      if [ "$INTEG" = 1 ]; then
+        # shellcheck source=scripts/dev/lib/installtest-integration.sh
+        source "$ROOT/scripts/dev/lib/installtest-integration.sh"
+        assert_integration "$GUEST"
+      fi
     fi
     # Last: it toggles pause/resume, so keep it clear of the asserts above.
     assert_mgmt_socket "$GUEST"

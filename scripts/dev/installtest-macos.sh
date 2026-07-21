@@ -32,12 +32,14 @@ ROOT="$(git rev-parse --show-toplevel)"
 TIER=1
 INFER=0
 INTEG=0
+DAEMON_ENGINE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --tier) shift; TIER="${1:?--tier needs N}" ;;
     --tier=*) TIER="${1#--tier=}" ;;
     --inference) INFER=1 ;;
     --integration) INTEG=1; INFER=1 ;;   # routing sentinel rides the inference engine
+    --daemon-engine) DAEMON_ENGINE=1 ;;  # waired#835 §9/§11 daemon-path executor engine install
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -229,9 +231,127 @@ assert_mgmt_socket_macos() {
   "$BINDIR/waired" resume >/dev/null 2>&1 || true
 }
 
+# --- daemon-path setup-executor engine install (waired#835 §9/§11) ----------
+# macOS analog of lib/installtest-daemon-engine.sh. The system LaunchDaemon is
+# already running (Tier 1), so a `waired init` WITHOUT --google-sa-login takes
+# the DAEMON path and its resident executor installs the engine — the path the
+# --google-sa-login (standalone) enrol never reaches. We complete the daemon's
+# login session out-of-band via the OIDC grant (the CP flips any waiting
+# session, internal/controlplane/api/oidc_grant.go), then assert the engine
+# landed via the executor, not install.sh (which ran --skip-ollama).
+DAEMON_ENGINE_MODEL="qwen2.5-coder-0.5b-instruct"
+DAEMON_ENGINE_FLAG="$WORK/daemon-engine.flag"
+
+# _daemon_setup_watcher <token> — background half: scrape the login session id
+# from init's transcript (a READ — POST /login/start is refused on TCP by the
+# #838 writeGuard), complete it out-of-band at the CP, then watch the executor
+# lease while init installs the engine. Records facts into the flag.
+_daemon_setup_watcher() {
+  local tok="$1" url="" sess="" st _ seen_exec="" seen_claim=""
+  : > "$DAEMON_ENGINE_FLAG"
+  for _ in $(seq 1 60); do
+    url="$(grep -oE 'https?://[^[:space:]]+' "$INITLOG" 2>/dev/null | head -1)"
+    if [ -n "$url" ]; then sess="${url##*/}"; sess="${sess%%[?#]*}"; fi
+    [ -n "$sess" ] && break
+    sleep 1
+  done
+  if [ -z "$sess" ]; then echo "no-session" >> "$DAEMON_ENGINE_FLAG"; return; fi
+  echo "session=$sess" >> "$DAEMON_ENGINE_FLAG"
+  if curl -fsS --max-time 20 -X POST -H 'Content-Type: application/json' \
+      -d "{\"login_session_id\":\"$sess\",\"id_token\":\"$tok\"}" \
+      "$IT_CONTROL_URL/v1/login/oidc-grant" >/dev/null 2>&1; then
+    echo "completed=1" >> "$DAEMON_ENGINE_FLAG"
+  else
+    echo "complete-failed" >> "$DAEMON_ENGINE_FLAG"; return
+  fi
+  for _ in $(seq 1 150); do
+    st="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null || true)"
+    if [ -z "$seen_exec" ] && printf '%s' "$st" | grep -qE '"executor_attached"[[:space:]]*:[[:space:]]*true'; then
+      echo "executor_attached=1" >> "$DAEMON_ENGINE_FLAG"; seen_exec=1
+    fi
+    if [ -z "$seen_claim" ] && printf '%s' "$st" | grep -qE '"install_claimed"[[:space:]]*:[[:space:]]*"ollama"'; then
+      echo "install_claimed=ollama" >> "$DAEMON_ENGINE_FLAG"; seen_claim=1
+    fi
+    sleep 2
+  done
+}
+
+# daemon_path_enroll_macos <token> <device> — foreground daemon-path init while
+# the watcher completes login and observes the lease. init runs as root (sudo);
+# the already-running LaunchDaemon makes it take the daemon path.
+daemon_path_enroll_macos() {
+  local tok="$1" device="$2" watcher_pid rc
+  : > "$INITLOG"   # fresh: the watcher must not scrape a stale login URL
+  _daemon_setup_watcher "$tok" &
+  watcher_pid=$!
+  it_step "daemon-path 'waired init' (fg, no --google-sa-login → daemon path)"
+  # inference on + tiny model so an engine-less host installs one; --non-interactive
+  # so the resident executor runs ensureDaemonPathEngine; stdin from /dev/null.
+  # pipefail makes the `if` see init's exit; PIPESTATUS[0] is init's, not tee's.
+  if sudo env WAIRED_NO_EMOJI=1 "$BINDIR/waired" init --control "$IT_CONTROL_URL" \
+        --device-name "$device" --inference-enabled=true \
+        --inference-bundled-model-id="$DAEMON_ENGINE_MODEL" \
+        --non-interactive --skip-integration --state-dir "$STATE_DIR" \
+        </dev/null 2>&1 | tee "$INITLOG"; then
+    rc=0
+  else
+    rc="${PIPESTATUS[0]}"
+  fi
+  kill "$watcher_pid" 2>/dev/null || true
+  wait "$watcher_pid" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || it_warn "daemon-path init exited $rc — asserts will surface what landed"
+}
+
+# assert_daemon_engine_macos — the executor engine-install asserts (analog of
+# lib/installtest-daemon-engine.sh's assert_daemon_engine). Regression bar: an
+# engine-less daemon-path first-run ends up WITH an engine (pre-N3 it stayed
+# engine-less and engine_install was red forever).
+assert_daemon_engine_macos() {
+  local out state claim ollama_bin="" cand
+  grep -q "signing in via the daemon" "$INITLOG" 2>/dev/null \
+    && ok "init took the daemon path (setup-executor-capable first-run)" \
+    || bad "init did NOT take the daemon path (executor engine install not exercised)"
+  grep -q '^completed=1' "$DAEMON_ENGINE_FLAG" 2>/dev/null \
+    && ok "daemon login completed out-of-band via the OIDC grant" \
+    || bad "out-of-band OIDC completion did not report success"
+  grep -q '^executor_attached=1' "$DAEMON_ENGINE_FLAG" 2>/dev/null \
+    && ok "setup executor lease was live during setup (executor_attached)" \
+    || bad "never observed executor_attached — executor engine-install path not reached"
+  grep -q '^install_claimed=ollama' "$DAEMON_ENGINE_FLAG" 2>/dev/null \
+    && ok "executor claimed the ollama install (install_claimed=ollama)" \
+    || it_warn "did not catch install_claimed=ollama in the 2 s poll — non-fatal"
+  for cand in \
+      "$(command -v ollama 2>/dev/null || true)" \
+      /Applications/Ollama.app/Contents/Resources/ollama \
+      /usr/local/bin/ollama /opt/homebrew/bin/ollama; do
+    if [ -n "$cand" ] && [ -x "$cand" ]; then ollama_bin="$cand"; break; fi
+  done
+  [ -n "$ollama_bin" ] \
+    && ok "ollama engine installed by the daemon-path executor ($ollama_bin)" \
+    || bad "no engine after a daemon-path first-run (executor install did not land — pre-N3 behaviour)"
+  out="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
+  state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
+  case "$state" in
+    ""|no_engine) bad "inference subsystem still reports '${state:-unreachable}' (engine not installed)" ;;
+    *) ok "inference subsystem left no_engine (state=$state)" ;;
+  esac
+  claim="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null \
+    | sed -n 's/.*"install_claimed"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  [ -z "$claim" ] \
+    && ok "no stuck executor install claim after init (install_claimed cleared)" \
+    || bad "executor install claim still set after init (install_claimed=$claim; stuck)"
+}
+
 # Passwordless sudo is a hard requirement now that the agent is a system
 # daemon (install.sh sudo's the register/init steps; we sudo the asserts).
 sudo -n true 2>/dev/null || it_die "passwordless sudo required (system LaunchDaemon install needs root)"
+
+# --daemon-engine (waired#835 §9/§11) is its own mode: install.sh keeps
+# --skip-ollama (engine ABSENT), enrol goes daemon-path via out-of-band OIDC.
+if [ "$DAEMON_ENGINE" = 1 ]; then
+  { [ "$INFER" = 1 ] || [ "$INTEG" = 1 ]; } && it_die "--daemon-engine is its own mode; not with --inference/--integration"
+  [ "$TIER" -ge 2 ] || it_die "--daemon-engine needs --tier 2 (it enrols to reach the executor)"
+fi
 
 # --- build the darwin tarball install.sh will consume -----------------------
 arch="$(uname -m)"; [ "$arch" = "x86_64" ] && arch=amd64   # arm64 stays arm64
@@ -355,6 +475,13 @@ if [ "$TIER" -ge 2 ]; then
   [ -n "$tok" ] || it_die "failed to mint an SA id_token (CI principal in oidc_grant_token_creators?)"
 
   device="mac-ci-${GITHUB_RUN_ID:-$(date +%Y%m%d%H%M%S)}"
+  if [ "$DAEMON_ENGINE" = 1 ]; then
+    # Daemon-path enrol: complete the login out-of-band so the resident
+    # executor installs the engine (waired#835 §9/§11). No --google-sa-login
+    # (that forces the standalone path), so the running LaunchDaemon makes
+    # init take the daemon path.
+    daemon_path_enroll_macos "$tok" "$device"
+  else
   inf_flag="--inference-enabled=$([ "$INFER" = 1 ] && echo true || echo false)"
   # Routing sentinel pins the tiny 0.5B so the deploy pulls ~0.4 GB (fits the
   # 4 GB macOS runner; dodges the #573 7B OOM). Zero args when not --integration.
@@ -373,6 +500,7 @@ if [ "$TIER" -ge 2 ]; then
         --device-name "$device" --non-interactive "$inf_flag" ${pin_flag[@]+"${pin_flag[@]}"} \
         --skip-integration --state-dir "$STATE_DIR" 2>&1 | tee "$INITLOG"; then
     bad "waired init (oidc) failed"
+  fi
   fi
 
   it_step "Tier 2 asserts"
@@ -402,7 +530,10 @@ if [ "$TIER" -ge 2 ]; then
   it_step "management write socket asserts (waired#838)"
   assert_mgmt_socket_macos
 
-  if [ "$INFER" = 1 ]; then
+  if [ "$DAEMON_ENGINE" = 1 ]; then
+    it_step "daemon-path executor engine-install asserts (waired#835 §9/§11)"
+    assert_daemon_engine_macos
+  elif [ "$INFER" = 1 ]; then
     it_step "inference asserts (--inference)"
     assert_inference_macos
   fi
