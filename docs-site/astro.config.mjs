@@ -39,6 +39,7 @@ export default defineConfig({
 				{
 					label: 'Start here',
 					items: [
+						{ label: 'What is Waired?', slug: 'what-is-waired' },
 						{ label: 'Quickstart — your first answer', slug: 'quickstart' },
 					],
 				},
@@ -46,8 +47,13 @@ export default defineConfig({
 					label: 'Set it up',
 					items: [
 						{ label: 'Install', slug: 'getting-started/install' },
-						{ label: 'Sign in and add a device', slug: 'getting-started/first-run' },
+						{ label: 'Install on Windows', slug: 'getting-started/install/windows' },
+						{ label: 'Install on macOS', slug: 'getting-started/install/macos' },
+						{ label: 'Install on Linux', slug: 'getting-started/install/linux' },
+						{ label: 'Sign in and set up', slug: 'getting-started/first-run' },
 						{ label: 'Check it works', slug: 'getting-started/verify' },
+						{ label: 'Add another device', slug: 'getting-started/add-a-device' },
+						{ label: 'Update Waired', slug: 'getting-started/update' },
 						{ label: 'Uninstall', slug: 'getting-started/uninstall' },
 					],
 				},
