@@ -1,0 +1,132 @@
+---
+title: アンインストール
+description: Waired をパソコンから削除します。設定を残す方法と、ダウンロード済みモデルまで含めて完全に消す方法。
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+{/* プロトタイプ（ドキュメント再構成）。示したい方針:
+    ユーザーが実際に検索する動線には独立ページとサイドバー項目を与える
+    （250 行のインストールページの一節にしない）。
+    まず「どちらをやりたいか」を選ばせ、残るもの／消えるものを表で明示。
+    Windows は GUI の手順を先に。 */}
+
+Waired の削除は約 10 秒で終わり、バックグラウンドに何も残りません。
+
+## どちらをしたいですか？
+
+|  | **アプリだけ削除** | **すべて削除** |
+|---|---|---|
+| Waired 本体・常駐サービス | 削除 | 削除 |
+| Claude Code などとの連携設定 | 削除 | 削除 |
+| デバイス一覧からこのパソコン | 削除 | 削除 |
+| 設定とこの端末の識別情報 | **残る** | 削除 |
+| ダウンロード済みモデル（数 GB） | **残る** | 削除 |
+| あとで入れ直したとき | サインインからやり直し | サインインからやり直し |
+
+ディスクの空き容量に困っている場合や、パソコンを人に譲る場合以外は
+**「アプリだけ削除」**を選んでください。
+
+## アプリだけ削除する
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		ダウンロードしたインストーラーで入れた場合は、Windows の通常の手順で削除できます。
+
+		**設定 → アプリ → インストールされているアプリ → Waired → アンインストール**
+
+		<details>
+		<summary>コマンドで削除したい場合（PowerShell）</summary>
+
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
+		```
+
+		GUI インストーラーで入れた場合も、このコマンドで問題ありません。
+
+		</details>
+	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
+		```
+	</TabItem>
+</Tabs>
+
+削除するものの一覧が表示され、`Proceed with the uninstall? [y/N]` と確認されます。
+**Enter を押すと中止**されます。実行するには `y` を入力してください。
+
+**こう表示されれば成功です**:
+
+```
+[waired] Waired removed. Local config + state were kept; re-run with --clean to wipe them.
+```
+
+<Aside type="tip" title="何が消えるか先に見たいとき">
+	`--dry-run`（Windows は `-DryRun`）を付けると、実際には何も変更せずに
+	手順だけを表示します。
+</Aside>
+
+## モデルも含めてすべて削除する
+
+設定・この端末の識別情報・Ollama エンジン・ダウンロード済みモデルをすべて削除します。
+**元に戻せません。**
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 -OutFile $env:TEMP\uninstall.ps1
+		& $env:TEMP\uninstall.ps1 -Clean
+		```
+
+		1 行の形式では `-Clean` を渡せないため、2 行に分かれます。
+	</TabItem>
+	<TabItem label="macOS / Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
+		```
+	</TabItem>
+</Tabs>
+
+## 削除したあとは
+
+- **ほかのパソコンには影響しません。** これまでどおり使えます。ただし削除したのが
+  AI を動かしていたパソコンだった場合、ほかの端末から使える AI がなくなります。
+- **デバイス一覧からは自動で消えます。** 削除時にそのパソコンがオフラインだった場合は
+  一覧に残ることがあります。その場合は
+  [app.waired.ai](https://app.waired.ai) から手動で削除してください。
+- **料金や解約手続きはありません。** もともと従量課金ではありません。
+
+## 同じパソコンで最初からやり直す
+
+完全削除と再インストールを 1 コマンドでまとめて行えます
+（*インストーラー*側にオプションを付けます）。
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_CLEAN = '1'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+
+		許可を求める画面が**2 回**表示されます（削除用とインストール用）。
+	</TabItem>
+	<TabItem label="macOS / Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
+		```
+	</TabItem>
+</Tabs>
+
+実行前に確認されます。削除でこの端末の識別情報も消えるため、
+そのあとのサインインでは**新しいデバイス**として登録されます。
+
+<CardGrid>
+	<LinkCard title="削除ではなく一時停止したい" href="/ja/reference/cli/#sharing-vs-pausing" description="`waired pause` なら、何も削除せずに Waired の中継だけを止められます。" />
+	<LinkCard title="入れ直す" href="/ja/quickstart/" description="10 分のクイックスタートを最初から。" />
+</CardGrid>

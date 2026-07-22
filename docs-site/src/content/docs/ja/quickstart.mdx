@@ -1,0 +1,222 @@
+---
+title: クイックスタート
+description: 自分のパソコンで動く AI を用意し、Claude Code から使えるようにするまで、約 10 分。
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+{/* プロトタイプ（ドキュメント再構成）。示したい方針:
+    冒頭に「所要時間・必要なもの・終わったらできること」、道は 1 本だけ、
+    各ステップに「こう表示されれば成功」、GUI を先・コマンドは折りたたみ、
+    つまずきはその場で解決（Troubleshooting に飛ばさない）。 */}
+
+このページを最後まで進めると、**自分のパソコンで動く AI** ができあがり、
+Claude Code がクラウドではなくその AI に質問するようになります。
+
+## はじめる前に
+
+|  | |
+|---|---|
+| **かかる時間** | 操作は 10 分ほど。そのあとダウンロードの待ち時間が 5〜30 分あります（放置で OK）。 |
+| **必要なもの** | AI を動かすパソコン 1 台（Windows 11 / macOS 13 以降 / Ubuntu 24.04 以降・Debian trixie 以降）、Google アカウント、そのパソコンの管理者権限。 |
+| **なくてもいいもの** | グラフィックボード（GPU）。あれば速くなりますが、最近の CPU でも小さめのモデルなら動きます。 |
+
+<Aside type="tip" title="どのパソコンで動かせばいい？">
+	いちばん性能の高い 1 台を選んでください（グラフィックボード搭載のデスクトップ、
+	または Apple Silicon の Mac）。ノートパソコンは、あとから**どこにいても**
+	そのパソコンの AI を使えるようになります。ノートパソコン側では AI は動きません。
+	パソコンが 1 台しかない場合は、その 1 台で大丈夫です。
+</Aside>
+
+<Steps>
+
+1. ### Waired をインストールする
+
+	<Tabs syncKey="os">
+		<TabItem label="Windows">
+			**インストーラーをダウンロード**して、ダブルクリックします。
+
+			<LinkCard
+				title="WairedSetup-x64.exe"
+				href="https://github.com/waired-ai/waired-agent/releases/latest"
+				description="最新リリースページの WairedSetup-<バージョン>-x64.exe というファイルです。"
+			/>
+
+			「このアプリがデバイスに変更を加えることを許可しますか？」という
+			青い画面（ユーザーアカウント制御）が出たら、**「はい」**を選びます。
+
+			<Aside type="caution" title="「WindowsによってPCが保護されました」と出たら">
+				現在インストーラーにコード署名がないため、初回だけこの警告が出ます。
+				**「詳細情報」**をクリックし、**「実行」**を押してください。
+				気になる場合は、下のコマンドでも同じものをインストールできます。
+			</Aside>
+
+			<details>
+			<summary>コマンドで入れたい場合（PowerShell）</summary>
+
+			```powershell
+			iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+			```
+
+			</details>
+		</TabItem>
+		<TabItem label="macOS">
+			macOS 用のダブルクリック式インストーラーはまだありません。
+			**ターミナル**を開き（⌘ + スペース →「ターミナル」と入力 → Enter）、
+			次の 1 行を貼り付けて Enter を押します。
+
+			```sh
+			curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+			```
+
+			途中で Mac のパスワードを聞かれます。入力しても画面には何も表示されませんが、
+			故障ではありません。そのまま入力して Enter を押してください。
+		</TabItem>
+		<TabItem label="Linux">
+			ターミナルを開き、次の 1 行を貼り付けて Enter を押します。
+
+			```sh
+			curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+			```
+
+			途中でパスワードを聞かれます。入力しても画面には何も表示されませんが、
+			故障ではありません。そのまま入力して Enter を押してください。
+
+			<Aside type="note">
+				この 1 行のインストーラーが対応しているのは Ubuntu 24.04 以降と
+				Debian trixie 以降です。ほかのディストリビューションは未対応です。
+			</Aside>
+		</TabItem>
+	</Tabs>
+
+	インストーラーは何も変更する前に「これから何をするか」を表示し、
+	`Proceed? [Y/n]` と確認します。Enter を押せば続行します。
+
+	**こう表示されれば成功です**（最後の行）:
+
+	```
+	✓ Waired installed. Next: sign in with `waired init`.
+	```
+
+2. ### サインインする
+
+	サインインすると、インストールしたソフトが「あなたの AI」になります。
+	**同じ Google アカウント**でサインインしたパソコンどうしが、
+	あなた専用のネットワークでつながります。
+
+	<Tabs syncKey="os">
+		<TabItem label="Windows">
+			**管理者として PowerShell を開き**（スタートボタンを右クリック →
+			「ターミナル（管理者）」）、次を実行します。
+
+			```powershell
+			& "C:\Program Files\Waired\waired.exe" init
+			```
+		</TabItem>
+		<TabItem label="macOS">
+			```sh
+			sudo waired init
+			```
+		</TabItem>
+		<TabItem label="Linux">
+			```sh
+			sudo waired init
+			```
+		</TabItem>
+	</Tabs>
+
+	{/* 公開前に要検証: トレイの "Log in..." から同じサインインができる
+	    （internal/gui/tray state.go ToggleAction）。各 OS 実機で確認してから
+	    こちらを主導線にする。 */}
+
+	サインイン用のリンクが表示され、そこで止まります。**Enter** を押すと
+	ブラウザーが開くので、Google アカウントを選んでください。
+	終わったらターミナルに戻ります（あとは自動で進みます）。
+
+	続けて 2 つ質問されます。
+
+	- **Run AI models on this computer?**（このパソコンで AI を動かしますか？）
+	  — 上で選んだパソコンなら **Y**。AI を使うだけのノートパソコンなら **N**。
+	- **Let your other devices use this computer's AI?**（ほかの端末からこの
+	  パソコンの AI を使えるようにしますか？） — ノートパソコンなどから使いたいなら
+	  **Y**。このパソコン専用にするなら **N**。
+
+3. ### モデルのダウンロードを待つ
+
+	Waired がこのパソコンのメモリとグラフィックボードを調べ、
+	**実際に動かせる中でいちばん良いモデル**を自動で選びます。自分で選ぶ必要はありません。
+	数 GB あるので、ここがいちばん時間のかかる工程です。
+
+	**こう表示されていれば進んでいます**:
+
+	```
+	Starting the inference engine…
+	Preparing to download qwen3-coder-30b-a3b-instruct…
+	Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
+	```
+
+	ダウンロードが終わると簡単な速度テストが走ります。思ったより遅かった場合は
+	「もっと軽いモデルに変えますか？」と聞かれます。基本は変えて構いません。
+
+	最後に、**Claude Code を Waired 経由にしますか？**と聞かれます。**Y** を選びます。
+
+	**こう表示されれば完了です**:
+
+	```
+	╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
+	│  Account   you@example.com                                       │
+	│  Device    my-desktop  d-4f2a…                                   │
+	│  Network   personal  overlay 100.64.0.3                          │
+	│  Model     qwen3-coder-30b-a3b-instruct  (58 tok/s)              │
+	│  Gateway   http://127.0.0.1:9479                                 │
+	│  Claude    http://127.0.0.1:9473 (managed settings)              │
+	│                                                                  │
+	│  Point your coding agent at Waired and start building.           │
+	╰──────────────────────────────────────────────────────────────────╯
+	```
+
+	<Aside type="note" title="この表示が出ずに止まってしまったら">
+		`waired doctor` を実行してください。設定を上から順に点検して
+		✓ / ⚠ / ✗ で表示し、**f** キーを押すと直せるものは自動で直します。
+		初回のつまずきはこの 1 コマンドでほぼ解決します。
+	</Aside>
+
+4. ### 試しに話しかける
+
+	```sh
+	waired infer "say hi"
+	```
+
+	数秒であいさつが返ってきます。この返事は**あなたのパソコンの中だけ**で
+	作られたもので、クラウドの AI サービスには何も送られていません。
+
+5. ### Claude Code から使う
+
+	いつもどおり Claude Code を開いて質問してみてください。
+	画面下部に、どの AI が答えたかが表示されます。
+
+	確認や切り替えはこちら:
+
+	```sh
+	waired claude route           # 今どちらを使っているか表示
+	waired claude route waired    # 自分の AI だけを使う
+	waired claude route anthropic # 本来の Anthropic API を使う
+	```
+
+	Claude Code の会話中なら `/waired-route` でも同じ切り替えができます。
+
+</Steps>
+
+## 完了です。次にできること
+
+<CardGrid>
+	<LinkCard title="ほかの端末から使う" href="/ja/getting-started/first-run/" description="同じ Google アカウントでノートパソコンにも入れれば、外出先からこのパソコンの AI を使えます。" />
+	<LinkCard title="モデルを変える" href="/ja/guides/switch-model/" description="品質を上げる大きいモデル、速さを取る小さいモデルに切り替えます。" />
+	<LinkCard title="チャットアプリにつなぐ" href="/ja/guides/chat-clients/" description="OpenAI 互換のアプリならそのまま接続できます。" />
+	<LinkCard title="うまくいかないとき" href="/ja/troubleshooting/" description="症状から、直すためのコマンドを 1 つだけ探せます。" />
+</CardGrid>
+
+<Aside type="tip" title="やっぱりやめたくなったら">
+	削除はコマンド 1 つ・約 10 秒です。[アンインストール](/ja/getting-started/uninstall/)
+	を見てください。バックグラウンドに何も残りません。
+</Aside>

@@ -1,0 +1,149 @@
+---
+title: Choose which AI model runs
+description: See which model your computer is running, and switch to a bigger or smaller one — from the Waired icon, or from a terminal.
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+{/* PROTOTYPE (docs IA revision). Rewrite of guides/switch-model.mdx.
+    Demonstrates: lead with the outcome the user wants, not the mechanism;
+    the click-path first and the config file last; a plain-language
+    "which one should I pick" table instead of a precedence chain;
+    no jq / setx / systemd in the first screen. */}
+
+Waired picks a model for you when you sign in — the best one this computer can
+actually run. You only need this page if you want to change it.
+
+## Should you change it?
+
+| If you want… | Do this |
+|---|---|
+| Better answers, and you have memory to spare | Switch **up** a model |
+| Faster answers, or your computer feels slow | Switch **down** a model |
+| To know what you're running right now | See [Which model am I running?](#which-model-am-i-running) below |
+| Nothing in particular | Leave it — the automatic pick is a good default |
+
+<Aside type="note" title="Bigger is not always better">
+	A model that does not fit in memory does not run *slower* — it fails to
+	load, and your AI stops answering. Check the memory column for your model in
+	the [model catalog](/reference/model-catalog/) before switching up.
+</Aside>
+
+## Which model am I running?
+
+Click the **Waired icon** in your menu bar (macOS) / system tray (Windows,
+Linux) → **Inference**. The active model is listed there.
+
+<details>
+<summary>From a terminal</summary>
+
+```sh
+waired models ls              # what is downloaded, and what is active
+waired models ls --detail     # every model in the catalog, with what fits this computer
+```
+
+</details>
+
+## Switch models
+
+<Tabs syncKey="method">
+	<TabItem label="From the Waired icon">
+		<Steps>
+
+		1. Click the **Waired icon** in your menu bar / system tray.
+		2. Open **Models**.
+		3. Pick a model from the list.
+
+		</Steps>
+
+		The change applies **live** — the AI reloads in a few seconds and keeps
+		serving. If the model has not been downloaded yet, the download starts
+		and the icon shows progress; the old model keeps answering until the new
+		one is ready.
+
+		{/* VERIFY BEFORE PUBLISHING: tray Models submenu = internal/gui/tray
+		    (miCatalog / miCatalogEntries → preferred-model). Confirm the
+		    live-reload and download-progress wording on each OS. */}
+	</TabItem>
+	<TabItem label="After a speed test">
+		```sh
+		waired runtimes benchmark
+		```
+
+		This measures how fast this computer actually is. If a different model
+		would suit it better, Waired offers the swap and names both models with
+		their quality tier, so you can weigh speed against quality. Accept and
+		the download runs in the foreground with a progress bar — press
+		**Enter** at any time to let it finish in the background instead.
+	</TabItem>
+	<TabItem label="On a server with no desktop">
+		A headless machine has no Waired icon, so set the model in the config
+		file and restart the background service.
+
+		<Tabs syncKey="os">
+			<TabItem label="Linux">
+				Edit `/etc/waired/agent.json` and set `inference.bundled_model_id`
+				to the model ID you want, then:
+
+				```sh
+				sudo systemctl restart waired-agent
+				```
+			</TabItem>
+			<TabItem label="Windows">
+				Edit `%PROGRAMDATA%\waired\agent.json` the same way, then:
+
+				```powershell
+				Restart-Service waired-agent
+				```
+			</TabItem>
+		</Tabs>
+
+		Model IDs are the values in the ID column of the
+		[model catalog](/reference/model-catalog/), e.g.
+		`qwen3-coder-30b-a3b-instruct`.
+
+		<Aside type="note" title="Other ways to set the same thing">
+			The environment variable `WAIRED_INFERENCE_BUNDLED_MODEL_ID` and the
+			`--inference-bundled-model-id` flag also work, and override the config
+			file in that order. See
+			[Advanced install options](/reference/install-options/).
+		</Aside>
+	</TabItem>
+</Tabs>
+
+## Confirm the switch
+
+```sh
+waired status --observability
+```
+
+The **Engine** line names the model that is loaded now:
+
+```
+Engine:   ready (model=qwen3-coder-30b-a3b-instruct, 0/4 slots used, inflight=0)
+```
+
+If it says `not ready`, the model is probably still downloading —
+`waired models ls` shows how far along it is. If it stays `not ready` after the
+download finishes, the model does not fit this computer: switch back down.
+
+<Aside type="tip" title="Waired will let you pick a model that's too big">
+	It warns and asks you to confirm, showing the shortfall
+	(e.g. `needs 32 GB RAM (have 31 GB)`) — it does not block you. Marginal
+	over-spec usually works and is just slower.
+</Aside>
+
+## Free up disk space
+
+Models are several gigabytes each. To delete one you are not using:
+
+```sh
+waired models rm <model-id>
+```
+
+You will be asked to confirm first.
+
+<CardGrid>
+	<LinkCard title="Model catalog" href="/reference/model-catalog/" description="Every bundled model, with the memory it needs and how good it is." />
+	<LinkCard title="How Waired picks for you" href="/reference/model-catalog/#how-waired-picks-for-you" description="The rule behind the automatic choice." />
+</CardGrid>

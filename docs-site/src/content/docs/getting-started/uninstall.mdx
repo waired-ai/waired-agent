@@ -1,0 +1,139 @@
+---
+title: Uninstall
+description: Remove Waired from a computer — keeping your settings, or wiping everything including downloaded models.
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+{/* PROTOTYPE (docs IA revision). Demonstrates: a journey users actually
+    search for gets its OWN page and sidebar entry instead of being a section
+    inside a 250-line Install page; decision-first ("which of these two do you
+    want?"); an explicit kept/removed table; the GUI route on Windows first. */}
+
+Removing Waired takes about ten seconds and leaves nothing running in the
+background.
+
+## Which one do you want?
+
+|  | **Remove the app** | **Remove everything** |
+|---|---|---|
+| Waired app + background service | removed | removed |
+| Claude Code / coding-agent setup | removed | removed |
+| This computer in your device list | removed | removed |
+| Your settings and this device's identity | **kept** | deleted |
+| Downloaded AI models (several GB) | **kept** | deleted |
+| Reinstalling later | signs in fresh | signs in fresh |
+
+Pick **Remove the app** unless you are short on disk space or handing the
+computer to someone else.
+
+## Remove the app
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		If you installed with the downloadable installer, remove it the normal
+		Windows way:
+
+		**Settings → Apps → Installed apps → Waired → Uninstall**
+
+		<details>
+		<summary>Prefer a command? (PowerShell)</summary>
+
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
+		```
+
+		Safe to run either way — including if you installed with the GUI
+		installer.
+
+		</details>
+	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
+		```
+	</TabItem>
+</Tabs>
+
+The uninstaller lists what it is about to remove and asks
+`Proceed with the uninstall? [y/N]` first. **Pressing Enter cancels** — you have
+to type `y` to go ahead.
+
+**You should see**:
+
+```
+[waired] Waired removed. Local config + state were kept; re-run with --clean to wipe them.
+```
+
+<Aside type="tip" title="Just want to see what it would do?">
+	Add `--dry-run` (Windows: `-DryRun`) and it prints every step without
+	changing anything.
+</Aside>
+
+## Remove everything, including models
+
+This also deletes your settings, this device's identity, and the Ollama engine
+with every model you downloaded. It cannot be undone.
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 -OutFile $env:TEMP\uninstall.ps1
+		& $env:TEMP\uninstall.ps1 -Clean
+		```
+
+		Two lines, because the one-line form cannot pass the `-Clean` option.
+	</TabItem>
+	<TabItem label="macOS / Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
+		```
+	</TabItem>
+</Tabs>
+
+## After you uninstall
+
+- **Your other computers are unaffected.** They stay in your network and keep
+  working. If this computer was the one running the AI, the others no longer
+  have an AI to reach until you set another one up.
+- **The device disappears from your account** automatically. If the computer was
+  offline or already shut down when you uninstalled, it may still be listed —
+  remove it from your device list at
+  [app.waired.ai](https://app.waired.ai).
+- **Nothing is charged or left subscribed.** Waired never billed per message in
+  the first place.
+
+## Start over on the same computer
+
+To wipe and reinstall in a single step, run the *installer* with the clean
+option — it does the full wipe above and then installs fresh:
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_CLEAN = '1'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+
+		Expect **two** permission prompts — one for the wipe, one for the
+		install.
+	</TabItem>
+	<TabItem label="macOS / Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
+		```
+	</TabItem>
+</Tabs>
+
+It asks you to confirm before wiping. Because the wipe deletes this device's
+identity, the sign-in afterwards adds it back as a **new** device.
+
+<CardGrid>
+	<LinkCard title="Just want to pause it instead?" href="/reference/cli/#sharing-vs-pausing" description="`waired pause` stops Waired routing without removing anything." />
+	<LinkCard title="Reinstall" href="/quickstart/" description="The 10-minute quickstart, from the top." />
+</CardGrid>

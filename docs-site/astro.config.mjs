@@ -29,41 +29,67 @@ export default defineConfig({
 			// Explicit `slug` entries (not autogenerate) so order and labels
 			// are intentional and a typo'd slug fails the build. Slugs are
 			// locale-agnostic — Starlight prepends the active locale.
+			// PROTOTYPE sidebar (docs IA revision). Reordered around the
+			// journey a user actually walks — start → set up → use → fix →
+			// understand → look up — with labels written as the thing the
+			// reader wants, not the feature name. Pages that the prototype
+			// supersedes are parked in a collapsed group at the bottom so the
+			// old and new versions can be compared side by side.
 			sidebar: [
 				{
-					label: 'Getting started',
+					label: 'Start here',
 					items: [
-						{ label: 'Install', slug: 'getting-started/install' },
-						{ label: 'First run', slug: 'getting-started/first-run' },
-						{ label: 'Verify it works', slug: 'getting-started/verify' },
+						{ label: 'Quickstart — your first answer', slug: 'quickstart' },
 					],
 				},
 				{
-					label: 'Guides',
+					label: 'Set it up',
 					items: [
-						{ label: 'Coding agents (Claude Code / OpenCode)', slug: 'guides/coding-agents' },
-						{ label: 'Chat & OpenAI-compatible clients', slug: 'guides/chat-clients' },
-						{ label: 'Switch the bundled model', slug: 'guides/switch-model' },
+						{ label: 'Install', slug: 'getting-started/install' },
+						{ label: 'Sign in and add a device', slug: 'getting-started/first-run' },
+						{ label: 'Check it works', slug: 'getting-started/verify' },
+						{ label: 'Uninstall', slug: 'getting-started/uninstall' },
+					],
+				},
+				{
+					label: 'Use your AI',
+					items: [
+						{ label: 'Use it from Claude Code / OpenCode', slug: 'guides/coding-agents' },
+						{ label: 'Use it from a chat app', slug: 'guides/chat-clients' },
+						{ label: 'Choose which AI model runs', slug: 'guides/choose-a-model' },
+						{ label: 'Share it with other people', slug: 'public-share' },
+					],
+				},
+				{
+					label: 'When something looks wrong',
+					items: [
+						{ label: 'Troubleshooting', slug: 'troubleshooting' },
+						{ label: 'FAQ', slug: 'faq' },
+					],
+				},
+				{
+					label: 'How it works',
+					items: [
+						{ label: 'Privacy — what leaves your computer', slug: 'concepts/privacy' },
+						{ label: 'Architecture', slug: 'concepts/architecture' },
 					],
 				},
 				{
 					label: 'Reference',
 					items: [
+						{ label: 'Words used in this documentation', slug: 'reference/glossary' },
 						{ label: 'CLI commands', slug: 'reference/cli' },
 						{ label: 'Model catalog & specs', slug: 'reference/model-catalog' },
 						{ label: 'Advanced install options', slug: 'reference/install-options' },
 					],
 				},
 				{
-					label: 'How it works',
+					label: 'Superseded (kept for A/B review)',
+					collapsed: true,
 					items: [
-						{ label: 'Architecture', slug: 'concepts/architecture' },
-						{ label: 'Privacy', slug: 'concepts/privacy' },
-						{ label: 'Public share', slug: 'public-share' },
+						{ label: 'Switch the bundled model (old)', slug: 'guides/switch-model' },
 					],
 				},
-				{ label: 'Troubleshooting', slug: 'troubleshooting' },
-				{ label: 'FAQ', slug: 'faq' },
 			],
 		}),
 	],

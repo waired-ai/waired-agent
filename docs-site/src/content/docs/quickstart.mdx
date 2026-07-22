@@ -1,0 +1,228 @@
+---
+title: Quickstart
+description: Get your own AI running on your own computer, and answering from Claude Code, in about 10 minutes.
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+{/* PROTOTYPE (docs IA revision). Demonstrates: time-to-value up front,
+    "what you need" box, one linear path, per-step "what you should see",
+    GUI path first with the terminal as the fallback, inline recovery
+    instead of a link to Troubleshooting. */}
+
+By the end of this page you will have an AI model running on your own
+computer, and Claude Code answering from it instead of from the cloud.
+
+## Before you start
+
+|  | |
+|---|---|
+| **Time** | About 10 minutes of your attention, plus 5–30 minutes of unattended downloading. |
+| **You need** | One computer to run the AI on (Windows 11, macOS 13+, or Ubuntu 24.04+/Debian trixie+), a Google account, and administrator rights on that computer. |
+| **You don't need** | A graphics card. A GPU makes answers faster, but a recent CPU runs a small model fine. |
+
+<Aside type="tip" title="Which computer should run the AI?">
+	The most powerful one you own — a desktop with a graphics card, or a Mac with
+	Apple Silicon. Your laptop can use that computer's AI later, from anywhere,
+	without running anything itself. If you only have one computer, use it: it
+	will both run the AI and use it.
+</Aside>
+
+<Steps>
+
+1. ### Install Waired
+
+	<Tabs syncKey="os">
+		<TabItem label="Windows">
+			**Download the installer** and double-click it:
+
+			<LinkCard
+				title="WairedSetup-x64.exe"
+				href="https://github.com/waired-ai/waired-agent/releases/latest"
+				description="From the latest release page — the file named WairedSetup-<version>-x64.exe."
+			/>
+
+			Windows will ask for permission to make changes (a blue
+			**User Account Control** window) — choose **Yes**.
+
+			<Aside type="caution" title="“Windows protected your PC”">
+				Our installer is not code-signed yet, so Windows SmartScreen shows a
+				blue warning the first time. Click **More info**, then
+				**Run anyway**. If you would rather not, use the command below —
+				it downloads the same files.
+			</Aside>
+
+			<details>
+			<summary>Prefer a command? (PowerShell)</summary>
+
+			```powershell
+			iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+			```
+
+			</details>
+		</TabItem>
+		<TabItem label="macOS">
+			macOS has no double-click installer yet. Open **Terminal**
+			(press ⌘ + Space, type `Terminal`, press Enter), paste this line,
+			and press Enter:
+
+			```sh
+			curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+			```
+
+			You will be asked for your Mac password. Nothing is echoed as you
+			type it — that is normal; type it and press Enter.
+		</TabItem>
+		<TabItem label="Linux">
+			Open a terminal, paste this line, and press Enter:
+
+			```sh
+			curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+			```
+
+			You will be asked for your password. Nothing is echoed as you type
+			it — that is normal; type it and press Enter.
+
+			<Aside type="note">
+				The one-line installer supports Ubuntu 24.04+ and Debian trixie+.
+				Other distributions are not covered yet.
+			</Aside>
+		</TabItem>
+	</Tabs>
+
+	Before it changes anything, the installer prints a short summary of what it
+	is about to do and waits for you to answer `Proceed? [Y/n]` — press Enter to
+	continue.
+
+	**You should see** a line like this at the end:
+
+	```
+	✓ Waired installed. Next: sign in with `waired init`.
+	```
+
+2. ### Sign in
+
+	Signing in is what turns the installed software into *your* AI: it creates
+	your private network, and every computer you sign in with the **same Google
+	account** joins it.
+
+	<Tabs syncKey="os">
+		<TabItem label="Windows">
+			Open **PowerShell as Administrator** (right-click the Start button →
+			**Terminal (Administrator)**), then run:
+
+			```powershell
+			& "C:\Program Files\Waired\waired.exe" init
+			```
+		</TabItem>
+		<TabItem label="macOS">
+			```sh
+			sudo waired init
+			```
+		</TabItem>
+		<TabItem label="Linux">
+			```sh
+			sudo waired init
+			```
+		</TabItem>
+	</Tabs>
+
+	{/* VERIFY BEFORE PUBLISHING: the tray's "Log in..." entry (internal/gui/tray
+	    state.go ToggleAction) offers the same sign-in without a terminal. Needs a
+	    hardware check on each OS before we present it as the primary path. */}
+
+	Waired prints a sign-in link and waits. Press **Enter** to open it in your
+	browser, choose your Google account, and come back to the terminal — it
+	continues on its own.
+
+	It then asks you two questions:
+
+	- **Run AI models on this computer?** — answer **Y** on the computer you
+	  picked above. On a laptop that should only *use* another computer's AI,
+	  answer **N**.
+	- **Let your other devices use this computer's AI?** — answer **Y** so your
+	  laptop and phone can reach it. Answer **N** to keep it to this machine.
+
+3. ### Wait for the model to download
+
+	Waired looks at this computer's memory and graphics card and picks the best
+	model it can actually run — you don't have to choose one. The download is a
+	few gigabytes, so this is the slow step.
+
+	**You should see** the progress line moving:
+
+	```
+	Starting the inference engine…
+	Preparing to download qwen3-coder-30b-a3b-instruct…
+	Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
+	```
+
+	When it finishes, Waired runs a short speed test and — if this computer
+	turns out to be slower than expected — offers to switch to a lighter model.
+	Accepting is usually the right call.
+
+	Finally, on Windows/macOS/Linux with administrator rights, it asks whether to
+	**route Claude Code through Waired now**. Answer **Y**.
+
+	**You should see**:
+
+	```
+	╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
+	│  Account   you@example.com                                       │
+	│  Device    my-desktop  d-4f2a…                                   │
+	│  Network   personal  overlay 100.64.0.3                          │
+	│  Model     qwen3-coder-30b-a3b-instruct  (58 tok/s)              │
+	│  Gateway   http://127.0.0.1:9479                                 │
+	│  Claude    http://127.0.0.1:9473 (managed settings)              │
+	│                                                                  │
+	│  Point your coding agent at Waired and start building.           │
+	╰──────────────────────────────────────────────────────────────────╯
+	```
+
+	<Aside type="note" title="It stopped before the box appeared?">
+		Run `waired doctor`. It checks every part of the setup, marks each one
+		✓ / ⚠ / ✗, and — if you press **f** — repairs what it can. That single
+		command resolves most first-run problems.
+	</Aside>
+
+4. ### Ask it something
+
+	```sh
+	waired infer "say hi"
+	```
+
+	A greeting should come back within a few seconds. That answer was produced
+	on your own computer — nothing was sent to a cloud AI provider.
+
+5. ### Use it from Claude Code
+
+	Open Claude Code as you normally would, in any project, and ask it
+	something. The footer shows which AI answered.
+
+	To check, or to switch back and forth:
+
+	```sh
+	waired claude route          # show where Claude Code is running
+	waired claude route waired   # your own AI only
+	waired claude route anthropic # the real Anthropic API
+	```
+
+	Inside a Claude Code session, `/waired-route` does the same thing without
+	leaving the conversation.
+
+</Steps>
+
+## You're done — what next?
+
+<CardGrid>
+	<LinkCard title="Use it from your other devices" href="/getting-started/first-run/" description="Install Waired on your laptop with the same Google account, and it reaches this computer's AI from anywhere." />
+	<LinkCard title="Choose a different model" href="/guides/switch-model/" description="Swap in a bigger model for quality, or a smaller one for speed." />
+	<LinkCard title="Connect a chat app" href="/guides/chat-clients/" description="Any OpenAI-compatible app can talk to your AI." />
+	<LinkCard title="Something looks wrong" href="/troubleshooting/" description="Find your symptom, get the one command that fixes it." />
+</CardGrid>
+
+<Aside type="tip" title="Changed your mind?">
+	Removing Waired is one command and takes about ten seconds — see
+	[Uninstall](/getting-started/uninstall/). Nothing is left running in the
+	background.
+</Aside>
