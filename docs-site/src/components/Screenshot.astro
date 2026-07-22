@@ -1,0 +1,82 @@
+---
+// Screenshot renders a captioned figure for a file under `public/img/`.
+//
+// While a capture is still outstanding the file does not exist yet, and a
+// broken <img> would ship to docs.waired.ai. So the component checks the file
+// at build time and renders a labelled placeholder instead — the page keeps its
+// layout, the reader is told a picture belongs there, and dropping the real
+// PNG into public/img/ with the same name is the ONLY step needed to finish it
+// (no page edit, no diff to review twice).
+//
+// The outstanding list lives in docs-site/CAPTURES.md.
+import fs from 'node:fs';
+import path from 'node:path';
+
+interface Props {
+	/** File name under public/img/, e.g. "tray-menu-macos.png". */
+	src: string;
+	/** Alt text. Also the placeholder's description — write it for a reader who cannot see the image. */
+	alt: string;
+	/** Caption shown under the image. */
+	caption?: string;
+	/** Rendered width hint; defaults to the content column. */
+	width?: string;
+}
+
+const { src, alt, caption, width } = Astro.props;
+const exists = fs.existsSync(path.join(process.cwd(), 'public', 'img', src));
+---
+
+<figure class="wd-shot" style={width ? `max-width:${width}` : undefined}>
+	{exists ? (
+		<img src={`/img/${src}`} alt={alt} loading="lazy" />
+	) : (
+		<div class="wd-shot-todo" role="img" aria-label={alt}>
+			<span class="wd-shot-badge">screenshot pending</span>
+			<span class="wd-shot-alt">{alt}</span>
+			<code>public/img/{src}</code>
+		</div>
+	)}
+	{caption && <figcaption>{caption}</figcaption>}
+</figure>
+
+<style>
+	.wd-shot {
+		margin: 1.5rem 0;
+	}
+	.wd-shot img {
+		width: 100%;
+		height: auto;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+	}
+	.wd-shot figcaption {
+		margin-top: 0.5rem;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-3);
+	}
+	.wd-shot-todo {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		align-items: flex-start;
+		padding: 1.25rem;
+		border: 1px dashed var(--sl-color-gray-4);
+		border-radius: 0.5rem;
+		background: var(--sl-color-gray-7, transparent);
+	}
+	.wd-shot-badge {
+		font-size: var(--sl-text-xs);
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--sl-color-orange-high, var(--sl-color-gray-2));
+	}
+	.wd-shot-alt {
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+	}
+	.wd-shot-todo code {
+		font-size: var(--sl-text-xs);
+		color: var(--sl-color-gray-3);
+	}
+</style>
