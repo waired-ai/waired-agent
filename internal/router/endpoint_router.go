@@ -230,6 +230,15 @@ type Inputs struct {
 	// coalescing buffered channel.
 	OnPublicGrantDemand func()
 
+	// OnPublicGrantUsed is called with a Public Share grant's ID the moment
+	// a request is committed to that grant's provider (Commit succeeds).
+	// It is the ONLY signal that a held grant is carrying traffic, so the
+	// background acquirer can renew grants in use and let idle ones lapse
+	// (waired#898). Own-network and external candidates never call it.
+	// Must not block: the production implementation records a timestamp
+	// under a small lock. nil disables the report.
+	OnPublicGrantUsed func(grantID string)
+
 	// OnPublicNudge is called when a request could not be served by the
 	// consumer's own nodes and no consent for Public Share has been
 	// recorded. The receiver owns once-ness; the Selector emits on every
@@ -709,7 +718,14 @@ type meshCandidate struct {
 	// public marks a Public Share provider injected from a foreign
 	// network. It is the dominant sort key (sortMeshCandidates) —
 	// own == team > public, per the Team Share routing-order decision.
-	public  bool
+	public bool
+	// grantID is the Public Share grant this candidate routes under (the
+	// netmap PeerView.Grant.ID), set only when public. Reported to the
+	// background acquirer on Commit (OnPublicGrantUsed) so a grant that is
+	// actually carrying traffic gets renewed and an idle one lapses —
+	// closing the "idle consumer holds a stranger's peering forever" gap
+	// (waired#898). Empty for own-network peers.
+	grantID string
 	variant catalog.Variant
 	runtime string // catalog.RuntimeOllama or catalog.RuntimeVLLM
 	tag     string
@@ -932,6 +948,12 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 			if !ok {
 				return Selection{}, false
 			}
+			// A public grant is "used" exactly when a request is committed
+			// to its provider — after admission succeeds, so a candidate we
+			// probed but dropped for capacity is not counted (waired#898).
+			if c.public && c.grantID != "" {
+				s.notifyPublicGrantUsed(c.grantID)
+			}
 			if s.in.Sticky != nil && req.StickyID != "" {
 				s.in.Sticky.Touch(req.StickyID, c.deviceID)
 			}
@@ -1133,6 +1155,12 @@ func (s *Selector) buildMeshCandidates(
 				capacity:  p.InferenceState.Capacity,
 				score:     int64(v.ParamCount) * int64(v.QuantizationTier),
 				rttMS:     noRTT,
+			}
+			// isPublic is only ever set inside the p.Grant != nil branch
+			// above, so the grant is present here; carry its ID so Commit
+			// can report the grant as used (waired#898).
+			if isPublic {
+				c.grantID = p.Grant.ID
 			}
 			if r, ok := rtts[p.DeviceID]; ok {
 				c.rttMS = r

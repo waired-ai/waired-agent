@@ -164,6 +164,10 @@ type inferenceSubsystemDeps struct {
 	// OnPublicGrantDemand wakes the background grant acquirer when a
 	// request wanted a public candidate and no grant was held.
 	OnPublicGrantDemand func()
+	// OnPublicGrantUsed reports the Public Share grant behind each
+	// committed public route so the acquirer renews grants in use and
+	// lapses idle ones (waired#898). Loopback only. nil disables it.
+	OnPublicGrantUsed func(grantID string)
 	// OnPublicNudge receives the pre-consent hint; the receiver owns
 	// once-ness.
 	OnPublicNudge func(router.PublicNudge)
@@ -505,6 +509,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		localReachable:      deps.LocalReachable,
 		publicPolicy:        deps.PublicPolicy,
 		onPublicGrantDemand: deps.OnPublicGrantDemand,
+		onPublicGrantUsed:   deps.OnPublicGrantUsed,
 		onPublicNudge:       deps.OnPublicNudge,
 		recorder:            deps.Recorder,
 		routing:             deps.Routing,
@@ -1033,6 +1038,7 @@ type agentInferenceProvider struct {
 	// inferenceSubsystemDeps for the contract.
 	publicPolicy        func() router.PublicPolicy
 	onPublicGrantDemand func()
+	onPublicGrantUsed   func(grantID string)
 	onPublicNudge       func(router.PublicNudge)
 
 	// isInferenceDisabled, when non-nil and returning true, makes
@@ -2246,6 +2252,7 @@ func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref sta
 	// never be re-routed onward to a public node.
 	in.PublicPolicyFn = p.publicPolicy
 	in.OnPublicGrantDemand = p.onPublicGrantDemand
+	in.OnPublicGrantUsed = p.onPublicGrantUsed
 	in.OnPublicNudge = p.onPublicNudge
 	return router.NewSelector(in)
 }

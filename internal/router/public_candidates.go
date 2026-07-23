@@ -383,6 +383,17 @@ func (s *Selector) notifyPublicGrantDemand() {
 	}
 }
 
+// notifyPublicGrantUsed reports that a request was just committed to the
+// provider behind grantID, so the background acquirer treats the grant as
+// carrying traffic (waired#898). Fire and forget, nil-safe: the
+// production callback records a timestamp under a small lock and never
+// blocks the routing hot path.
+func (s *Selector) notifyPublicGrantUsed(grantID string) {
+	if s.in.OnPublicGrantUsed != nil {
+		s.in.OnPublicGrantUsed(grantID)
+	}
+}
+
 // notifyPublicNudge emits the one-shot pre-consent hint. The receiver
 // owns once-ness; the Selector emits on every qualifying request and
 // deliberately keeps no state of its own.
