@@ -149,6 +149,13 @@ build-agent-darwin:
 # rely on `make build-tray-darwin` (CGO=1) — run natively on a Mac —
 # as the build-tag gate for that subtree. Linux/Windows already vet
 # the full set; their systray backends are pure Go.
+#
+# That native leg is not "someone's laptop, eventually": the paths-gated
+# tray-darwin.yml job runs vet + tests + this target on a macos-14
+# runner for every PR touching the subtree (waired#901 I1), so a
+# darwin-only break fails the PR instead of turning main red after the
+# merge. scripts/ci/tray-darwin-paths-guard.sh keeps that filter — and
+# this exclusion's rationale — from drifting apart.
 DARWIN_VET_PKGS = $(shell go list ./... | grep -v -E '(cmd/waired-tray|internal/gui/tray)')
 
 .PHONY: verify-cross
