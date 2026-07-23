@@ -17,19 +17,18 @@
  */
 import config from 'virtual:starlight/user-config';
 import { Icon } from '@astrojs/starlight/components';
-import { APP_URL, SITE_URL, headerStrings } from '../lib/site-links';
+import { APP_URL, HEADER_LABELS, SITE_URL } from '../lib/site-links';
 
 const links = config.social || [];
-const t = headerStrings(Astro.currentLocale);
 ---
 
 <a href={SITE_URL} class="wd-home sl-flex">
 	<Icon name="external" size="1em" class="wd-home-icon" />
-	{t.home}
+	{HEADER_LABELS.home}
 </a>
 
 <a href={APP_URL} class="wd-signin sl-flex">
-	{t.signIn}
+	{HEADER_LABELS.signIn}
 </a>
 
 {

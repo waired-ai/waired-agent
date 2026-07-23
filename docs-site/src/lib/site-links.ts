@@ -14,15 +14,13 @@ export const SITE_URL = 'https://waired.ai';
 export const APP_URL = 'https://app.waired.ai';
 
 /**
- * Header link labels, per locale. Starlight has no translation mechanism for
- * component-authored strings, so the two locales are spelled out here and
- * picked by `Astro.currentLocale`.
+ * The header chrome is deliberately NOT localised: "Docs" and "Sign in" are
+ * how the product names itself, and transliterating them into katakana reads
+ * worse than leaving them in English. This applies only to strings this repo
+ * authors — Starlight's own header UI (search, theme, language) keeps its
+ * built-in translations, so the Japanese tree still says 検索.
  */
-export const HEADER_STRINGS = {
-	root: { home: 'waired.ai', signIn: 'Sign in' },
-	ja: { home: 'waired.ai', signIn: 'ログイン' },
+export const HEADER_LABELS = {
+	home: 'waired.ai',
+	signIn: 'Sign in',
 } as const;
-
-export function headerStrings(locale: string | undefined) {
-	return locale === 'ja' ? HEADER_STRINGS.ja : HEADER_STRINGS.root;
-}

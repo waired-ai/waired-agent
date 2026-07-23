@@ -16,14 +16,13 @@ export default defineConfig({
 			// The header has to say what this site IS. A reader arriving on a
 			// deep page from a search engine sees only the header, and "Waired"
 			// alone does not distinguish the documentation from the product
-			// site or the console. Per-locale so the Japanese tree says it in
-			// Japanese.
-			// Keyed by language tag (not by the `locales` key), which is why
-			// the root locale appears here as `en`.
-			title: {
-				en: 'Waired Docs',
-				ja: 'Waired ドキュメント',
-			},
+			// site or the console.
+			//
+			// Not localised, on purpose: "Docs" is how the product names
+			// itself, and ドキュメント in the chrome reads worse than leaving
+			// it. Starlight's own header UI keeps its built-in translations,
+			// so the Japanese tree still says 検索.
+			title: 'Waired Docs',
 			// The GATE mark, identical to the marketing site's and the admin
 			// console's favicons. It carries its own dark chip, so one asset
 			// serves both site themes — see src/assets/waired-mark.svg.
