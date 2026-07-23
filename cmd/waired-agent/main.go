@@ -947,18 +947,7 @@ func run(ctx context.Context, args []string) error {
 				if len(prof.GPUs) > 0 {
 					firstGPU = prof.GPUs[0]
 				}
-				gpus := prof.GPUSummary()
-				if len(gpus) > 0 || prof.RAMTotalGB > 0 {
-					summary := &signer.HardwareSummary{RAMTotalGB: prof.RAMTotalGB}
-					for _, g := range gpus {
-						summary.GPUs = append(summary.GPUs, signer.HardwareGPUSummary{
-							Model:       g.Model,
-							VRAMTotalMB: g.VRAMTotalMB,
-							ComputeCap:  g.ComputeCap,
-						})
-					}
-					hwSummary = summary
-				}
+				hwSummary = hardwareSummaryFor(prof)
 			}
 
 			// Phase 7: run the boot-time token/s benchmark to derive
