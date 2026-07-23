@@ -1,0 +1,102 @@
+---
+title: Waired documentation
+description: Run local LLMs on your own machines and use them from anywhere — over one private, end-to-end encrypted link.
+template: splash
+editUrl: false
+hero:
+  tagline: Type in Claude Code on any laptop, and the answer comes from a computer you own.
+  actions:
+    - text: Quickstart — 10 minutes
+      link: /quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: What is Waired?
+      link: /what-is-waired/
+      icon: open-book
+      variant: minimal
+---
+
+import { Tabs, TabItem, CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
+
+{/* LANDING PATTERN 3 — show it before selling it.
+    The diagram carries the explanation, so the reader understands the product
+    before deciding. Install command follows; panels are real links. */}
+
+<figure>
+<svg viewBox="0 0 700 250" role="img" aria-labelledby="wd-home-title" style="width:100%;height:auto">
+	<title id="wd-home-title">Without Waired, your laptop sends every prompt to a cloud AI provider and is billed per message. With Waired, your laptop sends prompts over a private encrypted link to your own computer, which runs the AI; the cloud is used only as a visible fallback.</title>
+	<style>{`
+		.wd-box { fill: none; stroke: currentColor; stroke-width: 1.5; opacity: .5 }
+		.wd-t { fill: currentColor; font: 13px system-ui, sans-serif }
+		.wd-s { fill: currentColor; font: 11px system-ui, sans-serif; opacity: .65 }
+		.wd-h { fill: currentColor; font: bold 11px system-ui, sans-serif; opacity: .75; letter-spacing: .08em }
+		.wd-line { stroke: currentColor; stroke-width: 1.5; opacity: .5; fill: none }
+		.wd-dash { stroke-dasharray: 5 4 }
+	`}</style>
+	<text x="0" y="14" class="wd-h">TODAY</text>
+	<rect x="0" y="28" width="128" height="50" rx="8" class="wd-box" />
+	<text x="15" y="52" class="wd-t">Your laptop</text>
+	<text x="15" y="68" class="wd-s">Claude Code</text>
+	<path d="M136 53 H 244" class="wd-line" markerEnd="url(#wd-a)" />
+	<text x="146" y="45" class="wd-s">every prompt</text>
+	<rect x="252" y="28" width="150" height="50" rx="8" class="wd-box" />
+	<text x="267" y="52" class="wd-t">Cloud AI provider</text>
+	<text x="267" y="68" class="wd-s">billed per message</text>
+
+	<text x="0" y="140" class="wd-h">WITH WAIRED</text>
+	<rect x="0" y="154" width="128" height="50" rx="8" class="wd-box" />
+	<text x="15" y="178" class="wd-t">Your laptop</text>
+	<text x="15" y="194" class="wd-s">Claude Code</text>
+	<path d="M136 179 H 244" class="wd-line" markerEnd="url(#wd-a)" />
+	<text x="140" y="171" class="wd-s">private, encrypted</text>
+	<rect x="252" y="154" width="150" height="50" rx="8" class="wd-box" />
+	<text x="267" y="178" class="wd-t">Your own computer</text>
+	<text x="267" y="194" class="wd-s">runs the AI model</text>
+	<path d="M410 179 H 518" class="wd-line wd-dash" />
+	<text x="416" y="171" class="wd-s">only if yours is down</text>
+	<rect x="526" y="154" width="150" height="50" rx="8" class="wd-box" />
+	<text x="541" y="178" class="wd-t">Cloud AI provider</text>
+	<text x="541" y="194" class="wd-s">and it tells you</text>
+	<defs>
+		<marker id="wd-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" opacity=".5" />
+		</marker>
+	</defs>
+</svg>
+<figcaption>Your prompts go to a computer you own. The cloud is only ever a visible fallback.</figcaption>
+</figure>
+
+## Install in one command
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+		```
+	</TabItem>
+</Tabs>
+
+It shows what it will do and asks before changing anything. Then finish setup
+on screen or in the terminal — the [Quickstart](/quickstart/) covers both,
+end to end.
+
+## Read next
+
+<CardGrid>
+	<LinkCard title="Quickstart →" href="/quickstart/" description="From nothing to your first answer, in about 10 minutes." />
+	<LinkCard title="What is Waired? →" href="/what-is-waired/" description="Plain language, including what it cannot do." />
+	<LinkCard title="Claude Code and OpenCode →" href="/guides/coding-agents/" description="Point your coding tools at your own model." />
+	<LinkCard title="Which model should I run? →" href="/guides/choose-a-model/" description="What fits your memory, and how to change it." />
+	<LinkCard title="Privacy →" href="/concepts/privacy/" description="What leaves your computer, and what does not." />
+	<LinkCard title="Troubleshooting →" href="/troubleshooting/" description="Start from the symptom, not the feature." />
+</CardGrid>

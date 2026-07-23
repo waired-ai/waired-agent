@@ -1,74 +1,62 @@
 ---
 title: Install on Windows
-description: Install Waired on Windows 11 or Server 2025 with the downloadable installer, or with one PowerShell line.
+description: Install Waired on Windows 11 or Server 2025 with a single PowerShell command.
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../../components/Screenshot.astro';
 
-Works on Windows 11 and Windows Server 2025, 64-bit.
+Works on Windows 11 and Windows Server 2025, 64-bit. Installing is one command.
 
-## Which one should I use?
-
-**Use the downloadable installer.** It is the normal Windows experience, it
-registers Waired in *Add or remove programs*, and it puts a Start Menu entry in
-place. Use the PowerShell line only if you are setting up several machines or
-scripting the install.
-
-## The installer (recommended)
+## Install
 
 <Steps>
 
-1. Download **`WairedSetup-<version>-x64.exe`** from the latest release:
+1. Open **PowerShell as Administrator**: right-click the Start button and choose
+	**Terminal (Administrator)**. Answer **Yes** to the permission prompt.
 
-	<LinkCard
-		title="Latest release"
-		href="https://github.com/waired-ai/waired-agent/releases/latest"
-		description="Look under Assets for the file starting with WairedSetup."
-	/>
-
-2. Double-click the file you downloaded.
-
-	<Aside type="caution" title="“Windows protected your PC”">
-		Waired's installer is not code-signed yet, so Windows SmartScreen shows a
-		blue warning the first time anyone runs it. Click **More info**, then
-		**Run anyway**.
-
-		<Screenshot
-			src="windows-smartscreen.png"
-			alt="The blue Windows SmartScreen dialog reading “Windows protected your PC”, with the More info link expanded to reveal the Run anyway button."
-			caption="Click More info, then Run anyway."
-			width="34rem"
-		/>
+	<Aside type="note" title="Why administrator?">
+		Waired registers a background service that starts with the computer,
+		before anyone logs in. That is a machine-wide change, so Windows asks
+		first.
 	</Aside>
 
-3. Answer **Yes** to the **User Account Control** prompt. Waired needs
-	administrator rights once, to register a service that starts with the
-	computer.
+2. Paste this line and press Enter:
 
-4. The installer finishes on its own. It installs to
-	`C:\Program Files\Waired`, registers the `waired-agent` service, and adds
-	**Waired** to your Start Menu.
+	```powershell
+	iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+	```
+
+	<Aside type="tip" title="What that line does">
+		`iwr` downloads Waired's install script and `iex` runs it. If you would
+		rather read it first, see [below](#read-the-script-before-running-it).
+	</Aside>
+
+3. It prints a summary of what it is about to do and asks `Proceed? [Y/n]`.
+	Press Enter.
+
+	A fresh interactive install also offers to change where Waired goes — press
+	Enter to accept `C:\Program Files\Waired`.
 
 </Steps>
 
 Now [sign in and set up](/getting-started/first-run/).
 
-## One PowerShell line
+## Read the script before running it
 
-Open **Terminal (Administrator)** — right-click the Start button — and run:
+Reasonable. Download it, read it, then run it:
 
 ```powershell
-iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
+notepad $env:TEMP\install.ps1
+& $env:TEMP\install.ps1
 ```
 
-It prints what it is about to do and asks `Proceed? [Y/n]` before changing
-anything. A fresh interactive install also lets you choose where to install
-(press Enter to accept `C:\Program Files\Waired`).
+This is also how you pass options — the piped one-liner cannot take them.
 
 <Aside type="note" title="Unattended installs">
-	Add `-Yes` to skip the confirmation, and `-InstallDir <path>` (or the
-	`WAIRED_INSTALL_DIR` environment variable) to pin the location. The full list
+	`-Yes` skips the confirmation and `-InstallDir <path>` (or the
+	`WAIRED_INSTALL_DIR` environment variable) pins the location. The full list
 	is in [Advanced install options](/reference/install-options/).
 </Aside>
 
@@ -93,9 +81,9 @@ You can add it later from an administrator prompt with
 | Program files | `C:\Program Files\Waired` (changeable) |
 | Background service | `waired-agent`, starts at boot |
 | Settings and state | `%ProgramData%\waired` (secrets are locked down to administrators) |
-| Start Menu | **Waired** (the tray icon) |
+| Start Menu | **Waired** (the icon you use day to day) |
 
 <CardGrid>
 	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="The next step." />
-	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="Settings → Apps → Waired, or one line." />
+	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="One line, about ten seconds." />
 </CardGrid>

@@ -9,13 +9,22 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
     uninstall, clean reinstall, the edge channel and the Ollama opt-out. It is
     now a hub: pick your OS. Update and Uninstall are their own pages. */}
 
-Waired installs in one step on all three platforms. Pick yours:
+Waired installs with **one command**, the same way on all three platforms: you
+paste a line into a terminal, it shows you what it will do, and you confirm.
+There is no installer to download and double-click.
 
 <CardGrid>
-	<LinkCard title="Windows" href="/getting-started/install/windows/" description="Double-click installer, or one PowerShell line." />
-	<LinkCard title="macOS" href="/getting-started/install/macos/" description="One Terminal line. Intel and Apple Silicon." />
+	<LinkCard title="Windows" href="/getting-started/install/windows/" description="One PowerShell line, from an administrator prompt." />
+	<LinkCard title="macOS" href="/getting-started/install/macos/" description="One Terminal line. Apple Silicon recommended." />
 	<LinkCard title="Linux" href="/getting-started/install/linux/" description="One Terminal line. Ubuntu 24.04+ and Debian trixie+." />
 </CardGrid>
+
+<Aside type="tip" title="Never used a terminal? It is one paste.">
+	Every platform page opens by telling you how to get to a terminal, and each
+	command comes with a plain sentence saying what it does. After this one
+	command you can do the rest from a browser and a menu-bar icon if you prefer
+	— see [Quickstart](/quickstart/).
+</Aside>
 
 If you just want to get going, follow the [Quickstart](/quickstart/) instead —
 it covers installing *and* setting up in one pass.
