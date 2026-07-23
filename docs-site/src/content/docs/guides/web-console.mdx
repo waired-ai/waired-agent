@@ -1,0 +1,123 @@
+---
+title: The web console
+description: app.waired.ai lists every computer on your network and lets you rename, disable or remove one, tune how much work it accepts, and manage your account — from any browser.
+meta:
+  audience: Anyone with more than one computer, or anyone who needs a computer's settings while away from it
+  needs: A browser and the Google account you signed in with
+  time: 5 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../components/Expected.astro';
+
+Everything you can do from the [Waired app](/guides/waired-app/) applies to the
+computer you are sitting at. The web console applies to **all of them**, from
+any browser — including a phone.
+
+Open **[app.waired.ai](https://app.waired.ai)** and sign in with the same
+Google account. From the Waired app you can also use **Open Admin Console…**,
+which signs you in automatically.
+
+## Devices
+
+The list you land on. One row per computer, with what it is running and whether
+it is reachable right now.
+
+| Column | What it tells you |
+|---|---|
+| **Status** | Whether that computer is currently online and reachable. |
+| **Inference** | Whether it runs AI itself, and which model. |
+| **Peers** | How many of your other computers it can currently talk to. |
+| **Last seen** | When it last reported in. |
+
+A computer whose setup never finished shows a **setup unfinished** banner that
+links to its setup page — the same page the
+[Quickstart](/quickstart/#step-3--finish-setup-in-your-browser) uses.
+
+## One computer's page
+
+Click a row.
+
+### Overview
+
+Its name, hardware, operating system, Waired version, address and when it was
+last seen. **Rename** it here — the name is only for your benefit, and changing
+it breaks nothing.
+
+### Authentication
+
+When this computer's sign-in expires, and whether expiry applies to it at all.
+You can also disable a computer temporarily (it stops being usable without
+being removed), or delete it.
+
+<Aside type="caution" title="Delete is for computers you no longer have">
+	Deleting removes the computer from your network from the outside. If you
+	still have the machine, [uninstall](/getting-started/uninstall/) on it
+	instead — that removes it cleanly from both sides. A deleted computer that
+	is still running Waired will simply stop working until it signs in again.
+</Aside>
+
+### Inference routing
+
+Whether this computer's AI is offered to your other computers, and whether it
+is currently in rotation.
+
+### Claude Code serving
+
+Two switches — **serve main conversation** and **serve sub-agents** — plus
+**max concurrent requests**.
+
+These control what this computer accepts *from your other computers*. Its own
+Claude Code always works regardless. Turning off *main* while leaving
+*sub-agents* on is the useful setting for a slower machine: it becomes a helper
+for bulk file reading without being asked to handle conversations.
+
+<Aside type="note" title="Concurrency costs memory">
+	Raising **max concurrent requests** lets more work run at once, but each
+	simultaneous request uses extra memory and makes every one of them slower.
+	The console shows a recommended maximum for that computer's hardware and asks
+	you to confirm before going above it.
+</Aside>
+
+### Public sharing
+
+Whether this computer is offered to *other Waired users*, and how many guests
+it accepts at once. Off unless you turned it on — read
+[Public share](/public-share/) first.
+
+## Public share
+
+A summary across your whole account: which of your computers are shared, and
+what you have been using. Stopping sharing here cuts off work that other people
+are running on it right now.
+
+## Settings
+
+Your network's name, and whether sign-ins expire (and after how long). Also
+which sign-in providers your account accepts.
+
+## Logs
+
+A record of things that changed and when — a computer joining, being renamed,
+disabled or deleted, routing or capacity being changed, keys rotated.
+
+This is where to look when something changed and you are not sure who or what
+changed it, particularly if more than one person uses the account.
+
+## Account
+
+Your display name and account ID, and the current session. It also holds
+**Delete account** — which removes the account and everything in it, and cannot
+be undone.
+
+<Expected tone="bad" title="A computer is missing from the list">
+	It never finished signing in, or it was deleted. On the computer itself, run
+	`waired status` — if it reports no identity, sign it in again with
+	[`waired init`](/getting-started/first-run/).
+</Expected>
+
+<CardGrid>
+	<LinkCard title="The Waired app" href="/guides/waired-app/" description="The same controls for the computer in front of you, without a browser." />
+	<LinkCard title="Add another device" href="/getting-started/add-a-device/" description="Put a second computer on the same private network." />
+	<LinkCard title="Public share" href="/public-share/" description="What sharing with other Waired users actually means." />
+</CardGrid>

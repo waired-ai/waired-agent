@@ -1,0 +1,124 @@
+---
+title: Run a health check
+description: waired doctor checks every part of your setup, shows what is wrong in plain terms, and repairs most of it when you press f.
+meta:
+  audience: Anyone whose Waired setup is not behaving
+  needs: A terminal on the computer in question
+  time: Under a minute
+---
+
+import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+import Expected from '../../components/Expected.astro';
+
+If something is wrong and you only try one thing, try this:
+
+```sh
+waired doctor
+```
+
+It checks every part of the setup in turn and prints one line per check. Then,
+if anything it can repair is broken, it offers to repair it.
+
+## Reading the output
+
+Each line is a symbol, the thing checked, and what was found.
+
+<Expected>
+```
+✓ state directory — /home/you/.config/waired
+✓ gateway token — /home/you/.config/waired/secrets/gateway-token
+✓ waired-agent management — /waired/v1/status
+✓ waired phase — active — overlay routing in effect
+✓ Local Gateway — /v1/models
+✓ claude-code managed settings — enabled
+```
+All ticks. Nothing to do.
+</Expected>
+
+| Symbol | Meaning |
+|---|---|
+| **✓** | Fine. |
+| **⚠** | Working, but not the way it should be. Worth reading, not urgent. |
+| **✗** | Broken. Something you are trying to do will not work. |
+
+When anything is not a ✓, the command finishes with a non-zero exit code and a
+count — useful in a script, ignorable when you are reading it yourself.
+
+## Pressing f
+
+If any finding can be repaired automatically, you are asked:
+
+<Expected title="At the end of the output">
+```
+Press f to fix [f/N]:
+```
+</Expected>
+
+Press **f**. It re-applies the coding-agent setup (the same work as
+`waired link all`) and tells you to run the check again:
+
+```
+Running repair (waired link all)...
+Done. Re-run `waired doctor` to verify.
+```
+
+<Aside type="note" title="What f does and does not touch">
+	The repair only re-applies **your own** coding-tool configuration and the
+	gateway token in your home directory. It does not reinstall Waired, does not
+	sign you out, does not touch models, and never edits a config file inside one
+	of your projects.
+</Aside>
+
+To repair without being asked — in a script, or over SSH:
+
+```sh
+waired doctor --fix
+```
+
+## What each check means
+
+| Check | What a failure means | Usual fix |
+|---|---|---|
+| **state directory** | Waired's own folder for identity, secrets and records is missing or unreadable. | Run the command with `sudo` (elevated on Windows). If it is genuinely missing, [sign in again](/getting-started/first-run/). |
+| **gateway token** | The key your coding tools use to reach your AI is missing, or you cannot read it. | `waired link` — or press **f**. |
+| **waired-agent management** | The background service is not answering. This is the one that stops everything else working. | See [Waired is not running](/troubleshooting/#waired-is-not-running). |
+| **waired phase** | Routing is paused, or in an unexpected state. | `waired resume` — see [Pause and resume](/guides/pause/). |
+| **Local Gateway** | The service is up, but the part that answers AI requests is not. A `503` usually means no model is loaded yet. | Wait for the download to finish (`waired models ls`), or [check your model](/guides/choose-a-model/). |
+| **coding-agent entries** | Claude Code, OpenCode or OpenClaw is not configured to use Waired. | Press **f**. |
+
+## When the check itself cannot see everything
+
+On a normal desktop install some of Waired's files belong to the system, not to
+you. Without administrator rights the doctor reports what it can and says so
+rather than guessing.
+
+<Tabs syncKey="os">
+	<TabItem label="macOS / Linux">
+		```sh
+		sudo waired doctor
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		Run it from a **Terminal (Administrator)** window — right-click the Start
+		button → **Terminal (Administrator)**.
+
+		```powershell
+		waired doctor
+		```
+	</TabItem>
+</Tabs>
+
+<Aside type="tip" title="Sharing the output">
+	If you are pasting the result into a bug report, add `--mask-pii` to
+	`waired status` and `waired init` to hide your home folder, username, machine
+	name and account email. `waired doctor` prints file paths, so read it before
+	you post it.
+</Aside>
+
+## Still stuck?
+
+<CardGrid>
+	<LinkCard title="Find your symptom" href="/troubleshooting/" description="Organised by what you are seeing, not by what is broken." />
+	<LinkCard title="Check it works" href="/getting-started/verify/" description="The three things that tell you a setup is healthy." />
+	<LinkCard title="Start over cleanly" href="/getting-started/uninstall/#start-over-on-the-same-computer" description="Remove everything and reinstall in two commands." />
+</CardGrid>

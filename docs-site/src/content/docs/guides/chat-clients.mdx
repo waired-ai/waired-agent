@@ -1,71 +1,103 @@
 ---
-title: Chat & OpenAI-compatible clients
-description: Connect any OpenAI- or Anthropic-compatible client to your Waired model through the Local Gateway on 127.0.0.1:9473.
+title: Use it from a chat app
+description: Point Open WebUI, LibreChat, Jan, an editor extension or your own script at your own AI — the address, the model names, and where to find the key.
+meta:
+  audience: Anyone with a tool that speaks the OpenAI or Anthropic API
+  needs: Waired signed in, with a model loaded
+  time: 5 minutes
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Steps, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../components/Expected.astro';
 
-Waired exposes a **Local Gateway** on `http://127.0.0.1:9473` that speaks both
-the OpenAI and Anthropic wire formats. Any tool that can talk to those APIs — a
-browser chat UI, an editor extension, a script — can use your own model by
-pointing at this address. [Claude Code and OpenCode](/guides/claude-code/)
-are wired up automatically; everything else uses the endpoints below.
+Waired answers on your own computer at an address that speaks the same language
+as the OpenAI and Anthropic APIs. Anything that can talk to those — a browser
+chat UI, an editor extension, a script — can use your AI instead.
 
-<Aside type="note" title="Loopback only">
-	The gateway listens on `127.0.0.1` and is never exposed to the network.
-	Requests from other machines reach your model over the encrypted mesh, not
-	this port. Run the client on the same machine as the agent (or tunnel
-	loopback yourself).
+[Claude Code](/guides/claude-code/), [OpenCode](/guides/opencode/) and
+[OpenClaw](/guides/openclaw/) are set up for you and need none of this page.
+
+## What to put in the settings
+
+<Steps>
+
+1. **Address (base URL)** — depends on which API your tool speaks:
+
+	| Your tool speaks | Base URL |
+	|---|---|
+	| OpenAI | `http://127.0.0.1:9473/v1` |
+	| Anthropic | `http://127.0.0.1:9473/anthropic` |
+
+2. **Model** — use a Waired name rather than a specific model, so your settings
+	do not change when you switch models:
+
+	| Name | What it gives you |
+	|---|---|
+	| `waired/default` | The default model |
+	| `waired/coding` | The coding model |
+	| `waired/small` | Something fast and short |
+
+3. **API key** — your tool will insist on one. Waired uses a key that lives on
+	your own computer:
+
+	<Tabs syncKey="os">
+		<TabItem label="Linux">
+			```sh
+			cat ~/.config/waired/secrets/gateway-token
+			```
+		</TabItem>
+		<TabItem label="macOS">
+			```sh
+			cat ~/Library/Application\ Support/waired/secrets/gateway-token
+			```
+		</TabItem>
+		<TabItem label="Windows">
+			```powershell
+			Get-Content "$env:AppData\waired\secrets\gateway-token"
+			```
+		</TabItem>
+	</Tabs>
+
+	Paste that value in as the API key.
+
+</Steps>
+
+<Aside type="caution" title="That file is a password">
+	Anything holding it can use your AI. It is readable only by you — keep it
+	that way, and do not paste it into a bug report or a screenshot.
 </Aside>
 
-## Endpoints
-
-| API | Endpoint | Base URL for clients |
-|---|---|---|
-| OpenAI chat | `POST /v1/chat/completions` | `http://127.0.0.1:9473/v1` |
-| OpenAI models | `GET /v1/models` | `http://127.0.0.1:9473/v1` |
-| OpenAI responses | `POST /v1/responses` | `http://127.0.0.1:9473/v1` |
-| Anthropic messages | `POST /anthropic/v1/messages` | `http://127.0.0.1:9473/anthropic` |
-
-## Model names
-
-Use one of the Waired aliases as the model. They resolve to whatever you have
-loaded, so your client config doesn't change when you switch models:
-
-- `waired/default` — the default model.
-- `waired/coding` — the coding model.
-
-Other aliases (`waired/small`, `waired/medium`, …) and concrete model IDs are
-listed in the [model catalog](/reference/model-catalog/). Call
-`GET /v1/models` to see what your gateway currently advertises.
-
-## Authentication
-
-The gateway authenticates requests with a **bearer token**:
-
-```
-Authorization: Bearer <gateway-token>
-```
-
-Running [`waired link`](/guides/claude-code/) generates this token and
-configures the supported coding agents with it. A third-party client needs the
-same token supplied as its **API key**. The token is held in your per-user
-secret store (the system keychain on macOS; a protected file under the agent's
-state directory on Linux and Windows).
-
-<Aside type="caution" title="Turnkey support is still landing">
-	Auto-configured clients today are Claude Code and OpenCode. Pointing other
-	OpenAI-compatible chat UIs (Open WebUI, LibreChat, Jan, …) at the gateway
-	works with the settings above, but supplying the token to them is still a
-	manual step we're smoothing out. If you hit friction, that's expected — the
-	endpoints and model names here are stable.
+<Aside type="note" title="No key file yet?">
+	It is created the first time a coding tool is connected. Run `waired link` to
+	create it, or [`waired doctor`](/getting-started/doctor/), which reports the
+	exact path it is using on your machine and creates it when you press **f**.
 </Aside>
 
-## Example request
+## Check it before configuring anything
+
+```sh
+curl http://127.0.0.1:9473/v1/models \
+  -H "Authorization: Bearer $(cat ~/.config/waired/secrets/gateway-token)"
+```
+
+<Expected>
+	A JSON list including `waired/default`. Those are exactly the names your
+	chat app can use.
+</Expected>
+
+<Expected tone="bad">
+```
+curl: (7) Failed to connect to 127.0.0.1 port 9473
+```
+	Waired is not running, or routing is paused. Run
+	[`waired doctor`](/getting-started/doctor/).
+</Expected>
+
+A full request looks like this:
 
 ```sh
 curl http://127.0.0.1:9473/v1/chat/completions \
-  -H "Authorization: Bearer $WAIRED_GATEWAY_TOKEN" \
+  -H "Authorization: Bearer $(cat ~/.config/waired/secrets/gateway-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "waired/default",
@@ -73,5 +105,38 @@ curl http://127.0.0.1:9473/v1/chat/completions \
   }'
 ```
 
-For a quick, token-free check from the same machine, use the CLI instead:
-`waired infer "say hi"` (see [Verify it works](/getting-started/verify/)).
+## Run the app on the same computer
+
+The address `127.0.0.1` means "this computer only". It is deliberately not
+reachable from the network — that is what keeps your AI from being exposed by
+accident.
+
+So a chat app in a browser must run on the **same computer** as Waired. If you
+want to use your AI from a different machine, install Waired there too and
+[sign in with the same account](/getting-started/add-a-device/) — the two
+connect privately, and the chat app then talks to `127.0.0.1` on that machine.
+
+<Aside type="caution" title="Setting these up by hand is still rough">
+	Claude Code, OpenCode and OpenClaw are configured for you. Everything else
+	works with the settings above, but you have to copy the key across yourself.
+	The address and the model names are stable, so what you set up now will keep
+	working.
+</Aside>
+
+## The full endpoint list
+
+| API | Endpoint |
+|---|---|
+| OpenAI chat | `POST /v1/chat/completions` |
+| OpenAI models | `GET /v1/models` |
+| OpenAI responses | `POST /v1/responses` |
+| Anthropic messages | `POST /anthropic/v1/messages` |
+
+Other model names, and the specific model each Waired name resolves to, are in
+the [model catalog](/reference/model-catalog/).
+
+<CardGrid>
+	<LinkCard title="Choose which AI model runs" href="/guides/choose-a-model/" description="What waired/default actually resolves to, and how to change it." />
+	<LinkCard title="Add another device" href="/getting-started/add-a-device/" description="Use your AI from a second computer, privately." />
+	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="When the address does not answer." />
+</CardGrid>
