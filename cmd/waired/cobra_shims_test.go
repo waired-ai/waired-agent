@@ -23,6 +23,7 @@ func runPublic(args []string) error    { return execCobra(newPublicCmd(), args) 
 func runLogout(args []string) error    { return execCobra(newLogoutCmd(), args) }
 func runPause(args []string) error     { return execCobra(newPauseCmd(), args) }
 func runResume(args []string) error    { return execCobra(newResumeCmd(), args) }
+func runConfig(args []string) error    { return execCobra(newConfigCmd(), args) }
 
 func runLink(args []string, uninstall bool) error {
 	if uninstall {

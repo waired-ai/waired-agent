@@ -61,7 +61,7 @@ var groupFor = map[string]string{
 	"models": "inference", "runtimes": "inference", "infer": "inference",
 	"inference": "inference", "public": "inference", "worker": "inference", "peers": "inference", "ping": "inference",
 	"pause": "routing", "resume": "routing",
-	"version": "maint", "update": "maint", "keygen": "maint",
+	"version": "maint", "update": "maint", "keygen": "maint", "config": "maint", "logs": "maint",
 }
 
 // newRetiredProxyCmd preserves a helpful redirect for the retired `waired
@@ -123,6 +123,7 @@ func newRootCmd() *cobra.Command {
 		newVersionCmd(),
 		newUpdateCmd(),
 		newKeygenCmd(),
+		newConfigCmd(),
 	}
 	for _, c := range cmds {
 		c.GroupID = groupFor[c.Name()]
