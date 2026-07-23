@@ -27,6 +27,11 @@ const (
 	mbSetForeground = 0x00010000
 	mbSystemModal   = 0x00001000
 	mbTopMost       = 0x00040000
+	// mbDefButton2 makes the SECOND button (No, in a YESNO box) the
+	// default one Return / Space activates. Used by the consent dialog
+	// so a stray keypress on a box that just took the foreground cannot
+	// accept it (waired#901 L5).
+	mbDefButton2 = 0x00000100
 )
 
 var (
@@ -74,9 +79,15 @@ func ConfirmYesNo(title, body string) (yes, ok bool) {
 // labels as buttons we append them to the BODY text as a legend, and
 // map the standard Yes button to confirmed. If the tray ever needs true
 // custom captions on Windows, switch this to TaskDialogIndirect.
+//
+// No is the DEFAULT button (mbDefButton2, waired#901 L5): this helper's
+// only caller is the consent flow — the single gate between "nothing
+// shared" and "strangers may use this machine" — and the box is
+// foreground + topmost, so a keypress meant for whatever had focus a
+// moment ago must not accept it.
 func ConfirmWithLabels(title, body, acceptLabel, cancelLabel string) (confirmed, ok bool) {
 	body = body + "\n\n[Yes = " + acceptLabel + "]  [No = " + cancelLabel + "]"
-	r := messageBoxW(title, body, mbYesNo|mbIconQuestion)
+	r := messageBoxW(title, body, mbYesNo|mbIconQuestion|mbDefButton2)
 	if r == 0 {
 		return false, false
 	}

@@ -31,15 +31,20 @@ func ConfirmYesNo(title, body string) (yes, ok bool) {
 // surface renders identical text; here those strings become the dialog
 // buttons.
 //
-// The affirmative button is placed second (and made the default) so the
-// layout matches ConfirmYesNo. runOsascriptDialogReturning returns the
-// pressed button string, so we compare it to acceptLabel rather than
-// returning its (string,bool) directly.
+// The affirmative button is placed second so the layout matches
+// ConfirmYesNo, and the NEGATIVE button is the default (waired#901 L5):
+// this helper's only caller is the consent flow, the single gate
+// between "nothing shared" and "strangers may use this machine", and
+// the dialog steals focus — a stray Return or Space must not accept it.
+// Same safe-default reasoning ConfirmYesNo documents above.
+// runOsascriptDialogReturning returns the pressed button string, so we
+// compare it to acceptLabel rather than returning its (string,bool)
+// directly.
 func ConfirmWithLabels(title, body, acceptLabel, cancelLabel string) (confirmed, ok bool) {
 	pressed, dialogOk := runOsascriptDialogReturning(
 		title, body, "caution",
 		[]string{cancelLabel, acceptLabel},
-		acceptLabel,
+		cancelLabel,
 	)
 	if !dialogOk {
 		return false, false

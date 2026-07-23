@@ -96,6 +96,13 @@ type confirmProgram struct {
 // confirmLabelCandidates mirrors confirmCandidates but threads the
 // caller's button labels through: zenity via --ok-label/--cancel-label,
 // kdialog via --yes-label/--no-label (which must precede --yesno).
+//
+// The consent flow is this helper's only caller, and it is the single
+// gate between "nothing shared" and "strangers may use this machine",
+// so the negative button is the default (waired#901 L5) — the same
+// safe-default reasoning ConfirmYesNo documents. kdialog's --yesno
+// offers no default-button switch, so on that backend the default stays
+// whatever KDE picks; zenity gets --default-cancel.
 func confirmLabelCandidates(title, body, acceptLabel, cancelLabel string) []confirmProgram {
 	return []confirmProgram{
 		{
@@ -106,6 +113,7 @@ func confirmLabelCandidates(title, body, acceptLabel, cancelLabel string) []conf
 				"--text=" + body,
 				"--ok-label=" + acceptLabel,
 				"--cancel-label=" + cancelLabel,
+				"--default-cancel",
 			},
 		},
 		{
