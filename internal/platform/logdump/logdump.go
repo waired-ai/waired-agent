@@ -45,25 +45,31 @@ func Collect(ctx context.Context, w io.Writer, opts Options) error {
 	}
 	writeHeader(w, opts)
 
-	fmt.Fprintf(w, "\n===== service log (%s, last %s) =====\n", runtime.GOOS, opts.Since)
+	fprintf(w, "\n===== service log (%s, last %s) =====\n", runtime.GOOS, opts.Since)
 	name, args := serviceLogCommand(runtime.GOOS, opts.Since, time.Now())
 	if name == "" {
-		fmt.Fprintf(w, "(no service-log source is known for %s)\n", runtime.GOOS)
+		fprintf(w, "(no service-log source is known for %s)\n", runtime.GOOS)
 	} else if err := runServiceLog(ctx, w, name, args); err != nil {
-		fmt.Fprintf(w, "(could not read the service log via %q: %v)\n", name, err)
+		fprintf(w, "(could not read the service log via %q: %v)\n", name, err)
 	}
 
-	fmt.Fprintf(w, "\n===== engine logs =====\n")
+	fprintf(w, "\n===== engine logs =====\n")
 	collectEngineLogs(w, opts.StateDir)
 	return nil
 }
 
+// fprintf / fprintln write to the bundle writer, dropping the write error:
+// a log bundle destined for a file or stdout has nowhere useful to report a
+// mid-write failure, and the caller sees the truncated file regardless.
+func fprintf(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+func fprintln(w io.Writer, a ...any)               { _, _ = fmt.Fprintln(w, a...) }
+
 func writeHeader(w io.Writer, opts Options) {
-	fmt.Fprintln(w, "===== waired log bundle =====")
-	fmt.Fprintf(w, "generated: %s\n", time.Now().Format(time.RFC3339))
-	fmt.Fprintf(w, "os/arch:   %s/%s\n", runtime.GOOS, runtime.GOARCH)
-	fmt.Fprintf(w, "agent:     %s (%s)\n", buildinfo.Version, buildinfo.BuildSHA)
-	fmt.Fprintf(w, "state-dir: %s\n", opts.StateDir)
+	fprintln(w, "===== waired log bundle =====")
+	fprintf(w, "generated: %s\n", time.Now().Format(time.RFC3339))
+	fprintf(w, "os/arch:   %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fprintf(w, "agent:     %s (%s)\n", buildinfo.Version, buildinfo.BuildSHA)
+	fprintf(w, "state-dir: %s\n", opts.StateDir)
 }
 
 // serviceLogCommand returns the executable name and arguments that dump the
@@ -113,7 +119,7 @@ func runServiceLog(ctx context.Context, w io.Writer, name string, args []string)
 // installed).
 func collectEngineLogs(w io.Writer, stateDir string) {
 	if stateDir == "" {
-		fmt.Fprintln(w, "(no --state-dir given; skipping engine logs)")
+		fprintln(w, "(no --state-dir given; skipping engine logs)")
 		return
 	}
 	found := false
@@ -129,10 +135,10 @@ func collectEngineLogs(w io.Writer, stateDir string) {
 			}
 			found = true
 			p := filepath.Join(logDir, e.Name())
-			fmt.Fprintf(w, "\n----- %s -----\n", p)
+			fprintf(w, "\n----- %s -----\n", p)
 			data, err := os.ReadFile(p)
 			if err != nil {
-				fmt.Fprintf(w, "(could not read: %v)\n", err)
+				fprintf(w, "(could not read: %v)\n", err)
 				continue
 			}
 			_, _ = w.Write(data)
@@ -142,6 +148,6 @@ func collectEngineLogs(w io.Writer, stateDir string) {
 		}
 	}
 	if !found {
-		fmt.Fprintln(w, "(no engine logs found)")
+		fprintln(w, "(no engine logs found)")
 	}
 }
