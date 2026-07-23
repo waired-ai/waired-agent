@@ -124,6 +124,7 @@ func newRootCmd() *cobra.Command {
 		newUpdateCmd(),
 		newKeygenCmd(),
 		newConfigCmd(),
+		newLogsCmd(),
 	}
 	for _, c := range cmds {
 		c.GroupID = groupFor[c.Name()]
