@@ -32,6 +32,11 @@ const { icon, title, href } = Astro.props;
 <style>
 	.wd-card {
 		--wd-pad: clamp(1rem, calc(0.125rem + 3vw), 2.5rem);
+		/* Same rotating icon-badge palette Starlight's own <Card> uses, copied
+		   rule for rule so these tiles sit next to stock cards without looking
+		   like a different component. Position in the grid picks the colour. */
+		--sl-card-border: var(--sl-color-purple);
+		--sl-card-bg: var(--sl-color-purple-low);
 		position: relative;
 		flex-direction: column;
 		gap: clamp(0.5rem, calc(0.125rem + 1vw), 1rem);
@@ -41,6 +46,22 @@ const { icon, title, href } = Astro.props;
 		transition:
 			border-color 0.15s ease,
 			background-color 0.15s ease;
+	}
+	.wd-card:nth-child(4n + 1) {
+		--sl-card-border: var(--sl-color-orange);
+		--sl-card-bg: var(--sl-color-orange-low);
+	}
+	.wd-card:nth-child(4n + 3) {
+		--sl-card-border: var(--sl-color-green);
+		--sl-card-bg: var(--sl-color-green-low);
+	}
+	.wd-card:nth-child(4n + 4) {
+		--sl-card-border: var(--sl-color-red);
+		--sl-card-bg: var(--sl-color-red-low);
+	}
+	.wd-card:nth-child(4n + 5) {
+		--sl-card-border: var(--sl-color-blue);
+		--sl-card-bg: var(--sl-color-blue-low);
 	}
 
 	/* Hover/focus state belongs to the whole tile, not just the text, so the
@@ -54,6 +75,7 @@ const { icon, title, href } = Astro.props;
 	.wd-title {
 		font-weight: 600;
 		font-size: var(--sl-text-h4);
+		color: var(--sl-color-white);
 		line-height: var(--sl-line-height-headings);
 		gap: 1rem;
 		align-items: center;
@@ -61,8 +83,8 @@ const { icon, title, href } = Astro.props;
 	}
 
 	.wd-icon {
-		border: 1px solid var(--sl-color-gray-5);
-		background-color: var(--sl-color-black);
+		border: 1px solid var(--sl-card-border);
+		background-color: var(--sl-card-bg);
 		padding: 0.2em;
 		border-radius: 0.25rem;
 		flex-shrink: 0;
