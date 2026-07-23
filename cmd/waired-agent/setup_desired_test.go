@@ -530,36 +530,89 @@ func TestSetupExecutorFailedPhaseCarriesItsOwnError(t *testing.T) {
 	}
 }
 
-// --- pull re-admission (the second blocker) ---
+// --- pull ordering and re-admission ---
 
-// TestSetupPullReadmittedWhenEngineBecomesInstalled is the other blocker
-// regression test. On an engine-less host the inference subsystem starts
-// inert, so the first PullModel fails and the one-shot admission would
-// keep the download red for the rest of the process's life — even after
-// the executor installs the engine seconds later.
-func TestSetupPullReadmittedWhenEngineBecomesInstalled(t *testing.T) {
+// TestSetupPullWaitsForEngineInstall pins the ordering guarantee that
+// lets the wizard write the engine and the model in ONE gesture
+// (waired#904). Firing PullModel against an engine that is not installed
+// yet cannot succeed — the inference subsystem starts inert on an
+// engine-less host — and the resulting failure is what the operator sees
+// for the whole multi-minute install: a red "Download the AI model" that
+// later turns green on its own. Skipping the doomed attempt leaves the
+// step at its honest `pending` instead.
+//
+// This is the belt that used to live in the browser as a sessionStorage
+// write-order effect. Moving it here is what makes the choice survive a
+// reload, a second sign-in, or a different device.
+func TestSetupPullWaitsForEngineInstall(t *testing.T) {
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
 	ctx := context.Background()
 	r, _ := leasedReconciler(t, f, "ollama", "m-1")
-	// First frame: no engine, the pull is admitted once and fails.
-	f.setModelState(catalog.ModelStateFailed, "pull: no engine available")
-	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
-	if got := f.pullCount(); got != 1 {
-		t.Fatalf("pulls before the engine appeared = %d, want 1", got)
+
+	// No engine yet: repeated frames must not touch PullModel at all,
+	// and the step must read pending — never failed.
+	for i := 0; i < 3; i++ {
+		r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
 	}
-	if got := stepByID(t, r.snapshot(ctx), setupStepModelPull); got.Status != signer.SetupStatusFailed {
-		t.Fatalf("model step = %+v, want failed", got)
+	if got := f.pullCount(); got != 0 {
+		t.Fatalf("pulls before the engine was installed = %d, want 0", got)
+	}
+	if got := stepByID(t, r.snapshot(ctx), setupStepModelPull); got.Status != signer.SetupStatusPending {
+		t.Fatalf("model step while the engine installs = %+v, want pending", got)
 	}
 
-	// The executor installs the engine; the next frame must re-admit
-	// exactly one pull.
+	// The executor finishes: exactly one pull, on the first frame after.
+	f.setEngine(true, false)
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	if got := f.pullCount(); got != 1 {
+		t.Fatalf("pulls after the engine appeared = %d, want 1", got)
+	}
+	for i := 0; i < 3; i++ {
+		r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	}
+	if got := f.pullCount(); got != 1 {
+		t.Fatalf("pulls after repeated frames = %d, want 1", got)
+	}
+}
+
+// TestSetupPullProceedsWithoutDesiredEngine: a desired state that names
+// only a model (an owner changing the model on a host that is already
+// set up) must not be held back — there is no install to wait for.
+func TestSetupPullProceedsWithoutDesiredEngine(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r.Apply(ctx, desiredFrame("", "m-1", 0))
+	if got := f.pullCount(); got != 1 {
+		t.Fatalf("pulls with no desired engine = %d, want 1", got)
+	}
+}
+
+// TestSetupPullReadmittedWhenEngineReappears keeps the re-admission path
+// covered now that the ordering gate above prevents the common
+// engine-less failure. It still matters: an engine that goes away and
+// comes back (a reinstall, or a profiler cache that briefly reports it
+// missing) invalidates the one-shot admission, and without the
+// transition hook the download would stay red for the rest of the
+// process's life.
+func TestSetupPullReadmittedWhenEngineReappears(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+	if got := f.pullCount(); got != 1 {
+		t.Fatalf("pulls on an installed engine = %d, want 1", got)
+	}
+	f.setModelState(catalog.ModelStateFailed, "connection reset")
+
+	// The engine disappears and returns: one — and only one — new pull.
+	f.setEngine(false, false)
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
 	f.setEngine(true, false)
 	f.setModelState(catalog.ModelStateNotPresent, "")
 	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
 	if got := f.pullCount(); got != 2 {
-		t.Fatalf("pulls after the engine appeared = %d, want 2", got)
+		t.Fatalf("pulls after the engine reappeared = %d, want 2", got)
 	}
-	// ...and no more on subsequent frames.
 	for i := 0; i < 3; i++ {
 		r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
 	}

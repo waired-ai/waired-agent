@@ -176,17 +176,24 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	}
 
 	// Engine (§11): the agent cannot install one unprivileged — that is
-	// the executor's job. What Apply does here is watch for the engine
-	// APPEARING, because that transition is what unblocks a model pull
-	// that failed for the only reason it could have: on an engine-less
-	// host the inference subsystem starts inert, so PullModel fails
-	// immediately and the one-shot admission below would otherwise keep
-	// the download red for the rest of the process's life — even though
-	// the executor installed the engine seconds later. Keyed on the
-	// transition, not on every frame, so a genuinely failing download is
-	// still not re-queued in a loop.
+	// the executor's job. Apply does two things with it.
+	//
+	// First, it gates the model pull below: until the engine is actually
+	// installed there is nothing to pull INTO, so firing PullModel can
+	// only fail. enginePresent carries that answer forward.
+	//
+	// Second, it watches for the engine APPEARING, because that
+	// transition invalidates the one-shot admission. With the gate in
+	// place the common engine-less case never burns the attempt, but an
+	// engine that goes away and comes back (a reinstall, a profiler
+	// cache that briefly reports it missing) still has to re-admit, or
+	// the download stays red for the rest of the process's life. Keyed
+	// on the transition, not on every frame, so a genuinely failing
+	// download is still not re-queued in a loop.
+	enginePresent := d.engine == ""
 	if d.engine != "" {
 		installed, _ := r.provider.setupEngineState(ctx, d.engine)
+		enginePresent = installed
 		r.mu.Lock()
 		appeared := installed && r.engineObserved && !r.engineInstalled
 		r.engineInstalled = installed
@@ -207,8 +214,13 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	// Model (§6: catalog IDs only — PullModel resolves against the
 	// catalog and refuses anything it doesn't know). Present/pulling
 	// models are left alone; only a genuinely absent model is queued,
-	// and only once per desired value.
-	if d.modelID != "" && !attempted {
+	// and only once per desired value — and never before the engine it
+	// would be pulled into exists (see enginePresent above). Holding the
+	// attempt back is what lets the wizard write the engine and the
+	// model in one gesture: the step sits at `pending` for the length of
+	// the install instead of showing a failure that resolves itself
+	// (waired#904).
+	if d.modelID != "" && !attempted && enginePresent {
 		state, _, _, _ := r.provider.setupModelState(d.modelID)
 		if state == "" || state == catalog.ModelStateNotPresent || state == catalog.ModelStateEvicted {
 			r.mu.Lock()
