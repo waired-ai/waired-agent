@@ -432,3 +432,86 @@ func TestKillSwitch_AbortsPublicInFlight(t *testing.T) {
 		t.Fatalf("PublicInflightCount after abort = %d, want 0", got)
 	}
 }
+
+// TestKillSwitch_AbortDuringAdmissionWindow: a request that has taken
+// its public slot but has not yet registered its cancel func is absent
+// from abortAll's snapshot. Without a generation check it would run to
+// completion after the operator turned sharing off — the single request
+// the kill switch could miss (spec §8.3 step 1).
+//
+// The window is entered deterministically through Config.Now: the
+// admission gate samples the kill epoch, then consults the clock for
+// the owner-priority latch, then registers. Firing abortAll from the
+// clock therefore lands exactly between the sample and the
+// registration.
+func TestKillSwitch_AbortDuringAdmissionWindow(t *testing.T) {
+	gw := newFakeGateway()
+	var srv *Server
+	var armed atomic.Bool
+	at := time.Date(2026, 5, 9, 18, 0, 0, 0, time.UTC)
+
+	srv, ownerPriv, guestPriv, _ := newPublicOverlayServer(t, gw, func(c *Config) {
+		c.IsPublicShareDenied = func() bool { return false }
+		c.Now = func() time.Time {
+			if armed.Load() && srv != nil {
+				srv.AbortPublicInFlight()
+			}
+			return at
+		}
+	})
+
+	// Baseline: the public consumer is served while nothing kills it.
+	rec := do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, at))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("baseline public request: got %d %q, want 200", rec.Code, rec.Body.String())
+	}
+	served := atomic.LoadInt32(&gw.hits)
+
+	armed.Store(true)
+	rec = do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, at))
+	if rec.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(rec.Body.String(), "waired_inference_not_public") {
+		t.Fatalf("killed mid-admission: got %d %q, want 503 waired_inference_not_public", rec.Code, rec.Body.String())
+	}
+	if got := atomic.LoadInt32(&gw.hits); got != served {
+		t.Fatalf("gateway ran for a request killed mid-admission (calls %d → %d)", served, got)
+	}
+	if got := srv.PublicInflightCount(); got != 0 {
+		t.Fatalf("PublicInflightCount = %d, want 0 (the refused slot must be released)", got)
+	}
+
+	// The owner path is unaffected by the epoch check.
+	armed.Store(false)
+	rec = do(srv, signedReqFrom(t, peerOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-owner", ownerPriv, at))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("owner peer: got %d %q, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPublicAdmission_RegisterCancelRejectsStaleEpoch pins the
+// mechanism directly: a cancel func registered against a pre-kill epoch
+// is refused, and the next request (fresh epoch) registers normally.
+func TestPublicAdmission_RegisterCancelRejectsStaleEpoch(t *testing.T) {
+	p := newPublicAdmission(2, 4)
+
+	epoch := p.killEpoch()
+	if !p.acquire() {
+		t.Fatal("acquire failed on an empty admission")
+	}
+	p.abortAll() // kill lands inside the acquire → register window
+	if _, ok := p.registerCancel(func() {}, epoch); ok {
+		t.Fatal("registerCancel accepted a cancel func from before the kill")
+	}
+	p.release()
+	if got := p.n.Load(); got != 0 {
+		t.Fatalf("in-flight = %d after the refused request released, want 0", got)
+	}
+
+	// A request that starts after the kill is unaffected.
+	if !p.acquire() {
+		t.Fatal("acquire failed after release")
+	}
+	if _, ok := p.registerCancel(func() {}, p.killEpoch()); !ok {
+		t.Fatal("registerCancel refused a request that started after the kill")
+	}
+}

@@ -173,16 +173,20 @@ func (pc *publicShareController) Enable(ctx context.Context, maxClients int) (ma
 // the in-flight abort via onDisable — always happens first and never
 // waits on the network (§8.3 step 1); the CP push (step 2, grant
 // revocation) follows and is retried in the background on failure.
+//
+// A transition error here can only be the desired-state write failing,
+// which happens AFTER the local stop. The CP push still runs — a
+// revoked grant is what stops consumers reconnecting — and the error is
+// returned alongside the result so the operator learns the choice may
+// not survive a restart.
 func (pc *publicShareController) Disable(ctx context.Context) (management.PublicShareResult, error) {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 
 	var res management.PublicShareResult
-	if err := pc.transition(state.PublicShareOff); err != nil {
-		return res, err
-	}
+	err := pc.transition(state.PublicShareOff)
 	pc.syncLocked(ctx, false, int(pc.lastMaxClients.Load()), &res)
-	return res, nil
+	return res, err
 }
 
 // syncLocked attempts the synchronous CP push for an operator
@@ -262,7 +266,12 @@ func (pc *publicShareController) ReconcileRemote(enabled bool) {
 		if pc.logger != nil {
 			pc.logger.Warn("adopting CP public share state failed", "state", string(target), "err", err)
 		}
-		return
+		// An OFF transition has already stopped serving by this point
+		// (only its persistence failed), so keep going and log the
+		// adoption; an ON transition genuinely did not take effect.
+		if target != state.PublicShareOff {
+			return
+		}
 	}
 	if pc.logger != nil {
 		pc.logger.Info("adopted CP public share state from network map", "state", string(target))
@@ -327,16 +336,47 @@ func (pc *publicShareController) State() (current, desired state.PublicShareStat
 	return
 }
 
+// transition applies one state change. The two directions order their
+// steps differently on purpose:
+//
+//   - OFF (the kill switch): flip the live flag and abort in-flight
+//     public requests FIRST, persist afterwards. Stopping the serving
+//     of strangers is a live-state operation; making it wait on a
+//     filesystem write means a full disk / read-only remount /
+//     permission change leaves the agent serving with the gate open and
+//     streams running (§8.3 step 1 explicitly does not wait on
+//     anything). A persistence error is still returned — the operator
+//     needs to know the choice may not survive a restart — but only
+//     after the stop has taken effect.
+//   - ON: persist first, as before. A failure there is fail-safe: the
+//     agent simply does not start sharing.
 func (pc *publicShareController) transition(target state.PublicShareState) error {
+	off := target == state.PublicShareOff
+	if off {
+		pc.public.Store(false)
+		if pc.onDisable != nil {
+			pc.onDisable()
+		}
+	}
 	if err := state.WriteDesiredPublicShare(pc.stateDir, target); err != nil {
+		if off {
+			// Serving already stopped; only restart-persistence is lost.
+			// The message is operator-facing (CLI / management API), so
+			// it leads with what is true right now.
+			if pc.logger != nil {
+				pc.logger.Warn("public sharing stopped but the setting could not be saved",
+					"err", err)
+			}
+			return fmt.Errorf("public sharing has stopped, but the setting could not be saved "+
+				"and may come back after a restart: %w", err)
+		}
 		return fmt.Errorf("persist desired-public-share: %w", err)
 	}
-	pc.public.Store(target == state.PublicShareOn)
+	if !off {
+		pc.public.Store(true)
+	}
 	if pc.logger != nil {
 		pc.logger.Info("public share controller state change", "state", string(target))
-	}
-	if target == state.PublicShareOff && pc.onDisable != nil {
-		pc.onDisable()
 	}
 	return nil
 }

@@ -36,12 +36,19 @@ type HealthSnapshot struct {
 	// CapacityTotal is the Config.Capacity value (= 0 means unlimited).
 	// Set by the Phase 7 boot benchmark; reported as-is for the probe
 	// client to compare against CapacityUsed.
+	//
+	// A public-share consumer instead reads the public admission
+	// ceiling: the totals belong to the owner's own network (§11), and
+	// the ceiling is what actually governs that peer's admission.
 	CapacityTotal int `json:"capacity_total"`
 
 	// CapacityUsed is the live in-flight inference count. The probe
 	// client treats CapacityTotal > 0 AND CapacityUsed >= CapacityTotal
 	// as "full, exclude" — the same threshold capacityGate enforces on
 	// the inference path.
+	//
+	// As with CapacityTotal, a public-share consumer reads the public
+	// in-flight count, not the owner's total load.
 	CapacityUsed int `json:"capacity_used"`
 
 	// Paused mirrors the `waired pause` admin flag. True means the
@@ -59,9 +66,18 @@ type HealthSnapshot struct {
 
 // handleHealthz serves the /waired/v1/inference/healthz endpoint. The
 // caller (Handler) is responsible for wrapping this in the
-// authentication chain (wgPeerOnly + verifyPeerSignature); the handler
-// itself reads the operator-gate closures and inflight counter the
-// Server has retained alongside the gate-wrappers.
+// authentication chain (wgPeerOnly + grantRoleGate +
+// verifyPeerSignature); the handler itself reads the operator-gate
+// closures and inflight counter the Server has retained alongside the
+// gate-wrappers.
+//
+// Capacity is reported per peer class (spec §11): a cross-account
+// public consumer sees the public admission ceiling and the public
+// in-flight count, never the machine's true total or the owner's own
+// load. The signed Network Map already overrides a provider's advertised
+// Capacity with its public cap for exactly this reason (§7.1) — healthz
+// would otherwise hand back what the map hides, and the numbers a guest
+// reads would not be the ones its own admission is judged against.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -77,7 +93,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if s.isShareDeniedFn != nil {
 		snap.ShareEnabled = !s.isShareDeniedFn()
 	}
-	if s.inflight != nil {
+	peer, peerOK := PeerFromContext(r.Context())
+	switch {
+	case peerOK && peer.IsPublicConsumer() && s.public != nil:
+		snap.CapacityTotal = s.public.effectiveCap()
+		snap.CapacityUsed = int(s.public.n.Load())
+	case s.inflight != nil:
 		snap.CapacityTotal = int(s.inflight.capacity.Load())
 		snap.CapacityUsed = int(s.inflight.InFlight())
 	}
