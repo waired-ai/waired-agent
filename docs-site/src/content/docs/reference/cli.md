@@ -337,6 +337,8 @@ it by hand when building something unusual.
 | `--gateway <url>` | Where your AI answers, for `waired infer` (default `http://127.0.0.1:9479`, the loopback address that needs no key). |
 | `--state-dir <dir>` | Where Waired keeps identity and secrets. Also settable as `WAIRED_STATE_DIR`. |
 
+<a id="sharing-vs-pausing"></a>
+
 ## Two controls people mix up
 
 - **`pause` / `resume`** stops *everything* — mesh routing and your own local

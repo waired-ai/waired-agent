@@ -1,55 +1,55 @@
 ---
 title: クイックスタート
-description: コマンド 1 つでインストールし、あとは画面でもターミナルでもセットアップ完了。約 10 分で自分の AI が動きます。
+description: コマンド 1 つで、インストール・起動・サインインまで一気に進みます。自分の AI が Claude Code に応答するまで約 10 分。
+meta:
+  audience: はじめて Waired をセットアップする人
+  needs: AI を動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
+  time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
+sourceHash: d30ac1a0db8b4231
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../components/Screenshot.astro';
+import Expected from '../../../components/Expected.astro';
 
-このページを最後まで進めると、**自分のパソコンで動く AI** ができあがり、
-Claude Code がクラウドではなくその AI に質問するようになります。
+このページを終えると、自分のパソコンで AI モデルが動き、Claude Code が
+クラウドではなくそこから応答するようになります。
 
-## はじめる前に
+<Aside type="tip" title="どのパソコンで AI を動かす？">
+	手持ちでいちばん強力なものです — グラフィックボードのあるデスクトップか、
+	Apple シリコンの Mac。ノートパソコンからは、あとでどこにいてもその AI を使えます
+	（ノート側では何も動かしません）。パソコンが 1 台だけならそれを使ってください。
+	動かす側と使う側を兼ねます。
 
-|  | |
-|---|---|
-| **かかる時間** | 操作は 10 分ほど。そのあとダウンロードの待ち時間が 5〜30 分あります（放置で OK）。 |
-| **必要なもの** | AI を動かすパソコン 1 台（Windows 11 / macOS 13 以降 / Ubuntu 24.04 以降・Debian trixie 以降）、Google アカウント、そのパソコンの管理者権限。 |
-| **なくてもいいもの** | グラフィックボード（GPU）。あれば速くなりますが、最近の CPU でも小さめのモデルなら動きます。 |
-
-<Aside type="tip" title="どのパソコンで動かせばいい？">
-	いちばん性能の高い 1 台を選んでください（グラフィックボード搭載のデスクトップ、
-	または Apple Silicon の Mac）。ノートパソコンは、あとから**どこにいても**
-	そのパソコンの AI を使えるようになります。
-	パソコンが 1 台しかない場合は、その 1 台で大丈夫です。
+	グラフィックボードは**不要**です。GPU があれば速くなりますが、
+	最近の CPU でも小さいモデルなら十分動きます。
 </Aside>
 
-## ステップ 1 — Waired をインストールする
+## ステップ 1 — コマンドを 1 つ実行する
 
-インストールはコマンド 1 つです。ターミナルを開き、自分の環境の行を貼り付けて
-Enter を押してください。
+ターミナルを開き、自分の OS の行を貼り付けて Enter を押します。
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
-		**管理者として PowerShell を開きます**: スタートボタンを右クリック →
-		**「ターミナル（管理者）」** →「はい」。
+		**PowerShell を管理者として**開きます。スタートボタンを右クリック →
+		**ターミナル（管理者）** → **はい**。
 
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 
-		`iwr` が Waired のインストールスクリプトをダウンロードし、`iex` が実行します。
+		`iwr` がインストールスクリプトをダウンロードし、`iex` がそれを実行します。
 	</TabItem>
 	<TabItem label="macOS">
-		**ターミナル**を開きます: ⌘ + スペース →「ターミナル」と入力 → Enter。
+		**ターミナル**を開きます。⌘ + スペースで `ターミナル` と入力して Enter。
 
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 
-		`curl` がスクリプトをダウンロードし、`sh` が実行します。途中で Mac の
-		パスワードを聞かれますが、**入力しても画面には何も表示されません**。故障では
-		ないので、そのまま入力して Enter を押してください。
+		`curl` がインストールスクリプトをダウンロードし、`sh` がそれを実行します。
+		Mac のパスワードを聞かれます — **入力しても画面には何も表示されません**が、
+		それが正常です。
 	</TabItem>
 	<TabItem label="Linux">
 		ターミナルを開きます。
@@ -58,202 +58,208 @@ Enter を押してください。
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
 
-		`curl` がスクリプトをダウンロードし、`sh` が実行します。途中でパスワードを
-		聞かれますが、**入力しても画面には何も表示されません**。故障ではありません。
+		`curl` がインストールスクリプトをダウンロードし、`sh` がそれを実行します。
+		パスワードを聞かれます — **入力しても画面には何も表示されません**が、
+		それが正常です。
 	</TabItem>
 </Tabs>
 
-インストーラーは何かを変更する前に、これから行う内容を表示して
-`Proceed? [Y/n]` と確認します。Enter を押せば続行します。
+何かを変更する前に、インストーラはこれから行う内容の一覧を表示し、
+`Proceed? [Y/n]` と確認します。Enter で進みます。
 
-<Aside type="tip" title="スクリプトの中身を先に読みたい場合">
-	ダウンロードしてから実行できます。各 OS のページを参照してください:
-	[Windows](/ja/getting-started/install/windows/) ·
+このコマンド 1 つが 3 つのことをします。Waired をインストールし、
+バックグラウンドで起動し、そのまま**サインインへ進みます**。
+ですのでこのウィンドウは閉じないでください — 次のステップはもう始まっています。
+
+<Aside type="tip" title="先にスクリプトを読みたい">
+	ダウンロードして、読んで、実行する手順は OS 別ページにあります:
+	[Windows](/ja/getting-started/install/windows/#read-the-script-before-running-it) ·
 	[macOS](/ja/getting-started/install/macos/) ·
 	[Linux](/ja/getting-started/install/linux/)
 </Aside>
 
-自分で打つ必要があるコマンドはこれだけです。ここから先は、進め方を選べます。
+## ステップ 2 — Google でサインインする
 
-## ステップ 2 — セットアップを終える
+インストーラはそのままサインインに引き継ぎます。リンクを表示して待ちます。
 
-<Tabs syncKey="mode">
-	<TabItem label="画面で進める">
+<Expected title="ターミナルの表示">
+```
+Sign in using this link:
+  https://app.waired.ai/login/…
 
-		<Steps>
+>> Press Enter to open your browser (or open the link above yourself)...
+```
+</Expected>
 
-		1. メニューバー（macOS）またはタスクトレイ（Windows / Linux）の
-			**Waired アイコン**をクリックし、**Log in…** を選びます。
+**Enter** を押します。ブラウザが開くので Google アカウントを選びます。
+ターミナルに戻ると:
 
-			<Screenshot
-				src="app-not-signed-in.png"
-				alt="Waired のメニューが開いた状態。先頭に「○ Not signed in」、その下に「Log in…」の項目が見えている。"
-				caption="サインイン前は「Not signed in」と表示されます。"
-				width="26rem"
-			/>
+<Expected>
+```
+Logged in as: you@example.com
+Waired is signed in and running in the background.
 
-		2. 開いたブラウザーで **Google アカウントを選んでサインイン**します。
+>> Setup is continuing in your browser…
+   (press Enter to continue in the terminal instead)
+```
+</Expected>
 
-		3. **ブラウザがセットアップを進めます。** AI ソフトの導入、モデルのダウンロード、
-			速度の計測が自動で進みます（→ [3 つの工程の中身](#3-つの工程の中身)）。
-
-			<Screenshot
-				src="setup-wizard-progress.png"
-				alt="ブラウザに表示された Waired のセットアップ画面。Install the AI software（完了）、Download the AI model（19.2 GB 中 7.9 GB で進行中）、Check the speed（待機中）の 3 ステップ。"
-				caption="このタブは閉じても大丈夫です — ダウンロードは続きます。"
-			/>
-
-		4. コーディングツールの連携を聞かれたら、**Claude Code を有効に**します。
-
-		</Steps>
-
-		<Aside type="caution" title="画面が「コマンドを実行してください」と言ってきたら">
-			管理者権限が必要な工程は、ブラウザからは実行できません。その場合は上の
-			**「ターミナルで進める」**タブに切り替えて `waired init` から進めてください。
-			それまでの進捗は失われません。
-		</Aside>
-
-	</TabItem>
-	<TabItem label="ターミナルで進める">
-
-		<Steps>
-
-		1. **セットアップを開始します。**
-
-			<Tabs syncKey="os">
-				<TabItem label="Windows">
-					```powershell
-					& "C:\Program Files\Waired\waired.exe" init
-					```
-					（先ほどの管理者 PowerShell のまま実行します）
-				</TabItem>
-				<TabItem label="macOS">
-					```sh
-					sudo waired init
-					```
-				</TabItem>
-				<TabItem label="Linux">
-					```sh
-					sudo waired init
-					```
-				</TabItem>
-			</Tabs>
-
-		2. **サインインします。** リンクが表示されて止まるので、**Enter** を押すと
-			ブラウザーが開きます。Google アカウントを選んでください。
-
-		3. **2 つの質問に答えます。**
-
-			- *Run AI models on this computer?*（このパソコンで AI を動かしますか？）
-			  — 上で選んだパソコンなら **Y**。使うだけのノートパソコンなら **N**。
-			- *Let your other devices use this computer's AI?*（ほかの端末から使えるように？）
-			  — ノートパソコンなどから使いたいなら **Y**。
-
-		4. **待ちます。** AI ソフトの導入、このマシンに合うモデルの選定とダウンロード、
-			速度の計測が進みます（→ [3 つの工程の中身](#3-つの工程の中身)）。
-
-			```
-			Starting the inference engine…
-			Preparing to download qwen3-coder-30b-a3b-instruct…
-			Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
-			```
-
-		5. Claude Code を Waired 経由にするか聞かれたら **Y** を選びます。
-
-		</Steps>
-
-		**こう表示されれば完了です**:
-
-		```
-		╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
-		│  Account   you@example.com                                       │
-		│  Device    my-desktop  d-4f2a…                                   │
-		│  Network   personal  overlay 100.64.0.3                          │
-		│  Model     qwen3-coder-30b-a3b-instruct  (58 tok/s)              │
-		│  Gateway   http://127.0.0.1:9479                                 │
-		│  Claude    http://127.0.0.1:9473 (managed settings)              │
-		│                                                                  │
-		│  Point your coding agent at Waired and start building.           │
-		╰──────────────────────────────────────────────────────────────────╯
-		```
-
-	</TabItem>
-</Tabs>
-
-<Aside type="note" title="どちらか一方に決める必要はありません">
-	同じセットアップを 2 か所から見ているだけです。ターミナルから始めてもブラウザの
-	画面は開きますし（*「Setup is continuing in your browser…」*で **Enter** を押せば
-	ターミナルに戻れます）、片方での変更はもう片方にも反映されます。画面のないサーバーでは
-	ターミナル一択です。
+<Aside type="caution" title="このターミナルは開いたままにしてください">
+	AI ソフトウェアのインストールには管理者権限が必要で、Web ページからは
+	それを取得できません。**いま開いているターミナルが、その作業を実際に行っています**
+	（ブラウザは指示を出しているだけです）。閉じると
+	*「セットアップコマンドが完了前に閉じられました」*と表示されて止まります。
+	作業内容は失われませんが、戻ってきて `waired init` をやり直す必要があります。
 </Aside>
 
-### 3 つの工程の中身
+## ステップ 3 — ブラウザでセットアップを終える
 
-| 工程 | 何をしているか | 目安 |
-|---|---|---|
-| **Install the AI software** | モデルを読み込んで動かすプログラムの導入。管理者権限が必要です。 | 1〜2 分 |
-| **Download the AI model** | AI 本体。このパソコンで実際に動かせる最良のモデルを Waired が選ぶので、自分で選ぶ必要はありません。 | 5〜30 分 |
-| **Check the speed** | 速度の計測。追いつかない場合は、より軽いモデルが提案されます。 | 最大 5 分 |
+開いたブラウザのタブに切り替えます。最初にどのモデルから始めるかを聞かれ、
+そのあと作業が進みます。
 
-## ステップ 3 — 試しに話しかける
+<Steps>
+
+1. 一覧から**モデルを選び**、**Yes, set it up** を押します。あとから変更できるので、
+	最初の項目のままで問題ありません。
+
+2. **3 つのステップが進むのを見ます。**
+
+	<Screenshot
+		src="setup-wizard-progress.png"
+		alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — AI ソフトウェアのインストール（完了）、AI モデルのダウンロード（進行中、19.2 GB 中 7.9 GB）、速度の確認（待機中）。"
+		caption="このタブは閉じても大丈夫です。ダウンロードは続きます。"
+	/>
+
+	| ステップ | 何をしているか | 所要時間 |
+	|---|---|---|
+	| **AI ソフトウェアのインストール** | モデルを読み込んで動かすプログラム。管理者権限が必要なのはここです。 | 1〜2 分 |
+	| **AI モデルのダウンロード** | AI 本体。数 GB あります。 | 5〜30 分 |
+	| **速度の確認** | このマシンが実用的な速度を出せるかの短い計測。届かない場合は軽いモデルを提案します。 | 最大 5 分 |
+
+3. **「Everything's ready」を待ちます。**そのあと **Go to device** を押します。
+
+</Steps>
+
+<Expected>
+	すべてのステップにチェックが付き、
+	**「Everything's ready — this computer can now run AI on its own.」**と表示されます。
+</Expected>
+
+<Expected tone="bad">
+	*「To finish, run `sudo waired init` on this computer.」*
+
+	作業を行っていたターミナルが無くなっています。閉じてしまったか、
+	管理者権限がなかったかのどちらかです。ターミナルを開いてそのコマンドを実行してください。
+	進捗は保存されていて、途中から再開します。
+</Expected>
+
+<details>
+<summary>ターミナルで進めたい場合</summary>
+
+*「Setup is continuing in your browser…」*の表示で **Enter** を押します。
+ターミナル側に切り替わり、Claude Code を Waired 経由にするか聞かれるので **Y** と答えます。
+そのあとモデルのインストールとダウンロードが、ターミナル上の進捗表示で進みます。
+
+```
+Starting the inference engine…
+Preparing to download qwen3-coder-30b-a3b-instruct…
+Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
+```
+
+完了すると:
+
+```
+╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
+│  Account   you@example.com                                       │
+│  Device    my-desktop  d-4f2a…                                   │
+│  Network   personal  overlay 100.64.0.3                          │
+│  Model     qwen3-coder-30b-a3b-instruct  (58 tok/s)              │
+│  Gateway   http://127.0.0.1:9479                                 │
+│  Claude    http://127.0.0.1:9473 (managed settings)              │
+│                                                                  │
+│  Point your coding agent at Waired and start building.           │
+╰──────────────────────────────────────────────────────────────────╯
+```
+
+画面のないサーバーではこちらが唯一の方法です →
+[サインインとセットアップ](/ja/getting-started/first-run/#no-desktop-no-browser)
+
+</details>
+
+## ステップ 4 — 動いているか確認する
 
 <Tabs syncKey="mode">
-	<TabItem label="画面で進める">
-		もう一度 **Waired アイコン**をクリックします。アカウント名が表示され、
-		**Inference** に動作中のモデル名が出ていれば成功です。
+	<TabItem label="Waired アプリで">
+		**Waired アイコン**をクリックします（macOS はメニューバー、
+		Windows・Linux は時計のとなり）。
 
 		<Screenshot
 			src="app-ready.png"
-			alt="Waired のメニュー。サインイン済みのアカウント、接続状態、Inference サブメニューに動作中のモデル名が表示されている。"
-			caption="サインイン済み・接続済み・モデル読み込み済み。これが正常な状態です。"
+			alt="Waired アプリのメニュー。サインイン中のアカウント、Connected の状態、動作中のモデル名を示す Inference の項目。"
+			caption="サインイン済み・接続済み・モデル読み込み済み。"
 			width="26rem"
 		/>
+
+		<Expected>
+			メニュー上部が **Connected**、その下に自分のメールアドレス、
+			**Inference** に動作中のモデル名が出ていれば成功です。
+		</Expected>
 	</TabItem>
-	<TabItem label="ターミナルで進める">
+	<TabItem label="ターミナルで">
 		```sh
 		waired infer "say hi"
 		```
 
-		数秒であいさつが返ってきます。この返事は**あなたのパソコンの中だけ**で
-		作られたもので、クラウドの AI サービスには何も送られていません。
+		<Expected>
+			数秒であいさつが返ります。この応答は自分のパソコンで生成されたもので、
+			クラウドの AI 事業者には何も送られていません。
+		</Expected>
 	</TabItem>
 </Tabs>
 
-<Aside type="note" title="何も返ってこないとき">
-	`waired doctor` を実行してください。設定を上から順に点検して ✓ / ⚠ / ✗ で表示し、
-	**f** キーを押すと直せるものは自動で直します。初回のつまずきはこの 1 コマンドで
-	ほぼ解決します。
+<Aside type="note" title="何も返ってこない場合">
+	[`waired doctor`](/ja/getting-started/doctor/) を実行してください。
+	セットアップの各部分を検査して ✓ / ⚠ / ✗ で示し、**f** を押せば直せるものは直します。
+	初回のトラブルはこの 1 コマンドでたいてい解決します。
 </Aside>
 
-## ステップ 4 — Claude Code から使う
+## ステップ 5 — Claude Code から使う
 
-いつもどおり Claude Code を開いて質問してみてください。
-画面下部に、どの AI が答えたかが表示されます。
+いつもどおり、任意のプロジェクトで Claude Code を起動して何か尋ねてみてください。
+どの AI が答えたかはフッターに表示されます。
 
 <Screenshot
 	src="claude-code-statusline.png"
-	alt="Claude Code のフッターに表示された Waired のステータス行。直前の応答を返したローカルモデル名が出ている。"
+	alt="Claude Code のフッターに表示された Waired のステータス行。直前の応答を返したローカルモデル名。"
 />
 
-会話中に `/waired-route` と入力すれば自分の AI とクラウドを切り替えられます。
-ターミナルからでも同じことができます:
+<Expected>
+```
+⚡ waired: on Waired (qwen3-coder-30b-a3b-instruct)
+```
+自分のハードウェアが、そのモデルで応答しました。
+</Expected>
+
+会話中に `/waired-route` と入力すれば、自分の AI とクラウドを切り替えられます。
+ターミナルからも同じことができます。
 
 ```sh
-waired claude route           # 今どちらを使っているか表示
-waired claude route waired    # 自分の AI だけを使う
-waired claude route anthropic # 本来の Anthropic API を使う
+waired claude route           # いまどこで動いているか
+waired claude route waired    # 自分の AI のみ
+waired claude route anthropic # 本来の Anthropic API
 ```
 
-## 完了です。次にできること
+## 完了 — 次は？
 
 <CardGrid>
-	<LinkCard title="ほかの端末から使う" href="/ja/getting-started/add-a-device/" description="同じ Google アカウントでノートパソコンにも入れれば、外出先からこのパソコンの AI を使えます。" />
-	<LinkCard title="モデルを変える" href="/ja/guides/choose-a-model/" description="品質を上げる大きいモデル、速さを取る小さいモデルに切り替えます。" />
-	<LinkCard title="チャットアプリにつなぐ" href="/ja/guides/chat-clients/" description="OpenAI 互換のアプリならそのまま接続できます。" />
-	<LinkCard title="うまくいかないとき" href="/ja/troubleshooting/" description="症状から、直すための手順を 1 つだけ探せます。" />
+	<LinkCard title="ほかの端末から使う" href="/ja/getting-started/add-a-device/" description="同じ Google アカウントでノートパソコンにも入れれば、外出先からこのパソコンの AI に届きます。" />
+	<LinkCard title="Waired アプリを知る" href="/ja/guides/waired-app/" description="Waired アイコンの中身すべて — モデル、経路、共有、サインアウト。" />
+	<LinkCard title="別のモデルを選ぶ" href="/ja/guides/choose-a-model/" description="品質重視なら大きいモデル、速度重視なら小さいモデル。" />
+	<LinkCard title="うまくいかないとき" href="/ja/troubleshooting/" description="症状から探して、直すコマンドを 1 つ見つけます。" />
 </CardGrid>
 
-<Aside type="tip" title="やっぱりやめたくなったら">
-	削除はコマンド 1 つ・約 10 秒です。[アンインストール](/ja/getting-started/uninstall/)
-	を見てください。バックグラウンドに何も残りません。
+<Aside type="tip" title="気が変わったら">
+	Waired の削除はコマンド 1 つ、10 秒ほどです →
+	[アンインストール](/ja/getting-started/uninstall/)。
+	バックグラウンドに何も残りません。
 </Aside>

@@ -1,0 +1,128 @@
+---
+title: しばらく使わないようにする
+description: Waired を止める方法は 4 通りあり、それぞれ結果が違います — ルーティングの一時停止、エンジン停止によるメモリ解放、共有の停止、切断。
+meta:
+  audience: Waired を一時的に止めたい人
+  needs: Waired アプリ、またはターミナル
+  time: 2 分
+sourceHash: 3757f12b6192430d
+---
+
+import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../../components/Expected.astro';
+
+「いったんオフにしたい」は、実際には 4 つの別々のことを意味します。結果も違うので、
+まず自分の行を見つけてください。
+
+| やりたいこと | すること |
+|---|---|
+| コーディングツールをしばらくクラウドに戻したい | [ルーティングを一時停止](#ルーティングを一時停止) |
+| ほかの作業のためにメモリを返してほしい | [エンジンを止める](#エンジンを止める) |
+| 自分のほかのパソコンから使われるのをやめたい | [共有をやめる](#共有をやめる) |
+| このパソコンをネットワークから外したい | [切断する](#切断する) |
+| Waired を削除したい | [アンインストール](/ja/getting-started/uninstall/) |
+
+## ルーティングを一時停止
+
+ツールは、Waired が入っていないときと同じようにクラウドと直接やりとりするようになります。
+アンインストールも、設定の破棄も起きません。
+
+```sh
+waired pause
+```
+
+```sh
+waired resume
+```
+
+この設定は再起動をまたいで保持されます（一時停止したまま翌日を迎えます）。
+
+<Expected title="効いているか確認する">
+```sh
+waired doctor
+```
+**waired phase** の行が `active — overlay routing in effect` ではなく
+`paused` になります。
+</Expected>
+
+<Aside type="note" title="一時停止は「すべて」に効きます">
+	停止中は自分の AI も応答しません。`waired infer` も、ローカルゲートウェイに向けた
+	チャットアプリも「利用不可」が返ります。**自分の AI は使い続けたいが、
+	ほかのパソコンからの利用だけ止めたい**場合は[共有をやめる](#共有をやめる)です。
+</Aside>
+
+## エンジンを止める
+
+モデルが確保しているメモリ（通常は数 GB）をいますぐ解放します。設定はそのままで、
+再開するとモデルを読み直します。
+
+<Tabs syncKey="method">
+	<TabItem label="Waired アプリから">
+		**Waired アイコン** → **Inference** → **Stop inference engine**。
+		同じ項目が **Start inference engine** に変わります。
+	</TabItem>
+	<TabItem label="ターミナルから">
+		```sh
+		waired inference engine stop
+		waired inference engine start
+		waired inference engine status
+		```
+	</TabItem>
+</Tabs>
+
+エンジンを止めている間、このパソコンからのリクエストは（あれば）ほかのパソコンへ回り、
+なければ再開するまで失敗します。
+
+## 共有をやめる
+
+自分での利用は続いたまま、自分のほかのパソコンからこのマシンの AI が使えなくなります。
+
+<Tabs syncKey="method">
+	<TabItem label="Waired アプリから">
+		**Waired アイコン** → **Inference** → **Stop sharing engine to mesh**。
+	</TabItem>
+	<TabItem label="ターミナルから">
+		```sh
+		waired inference share off
+		waired inference share on
+		waired inference share status
+		```
+	</TabItem>
+</Tabs>
+
+作業を邪魔されたくないワークステーションで、自分のモデルは使い続けたい、
+という場合に適した設定です。
+
+<Aside type="tip" title="パブリック共有はさらに別の話です">
+	ここで扱うのは**自分の**ほかのパソコンです。**ほかの Waired ユーザー**が
+	このマシンを使えるかどうかは[パブリック共有](/ja/public-share/)で、
+	自分でオンにしない限りオフです。
+</Aside>
+
+## 切断する
+
+サインアウトせずに、プライベートネットワークから外します。自分のほかのパソコンからは
+見えなくなり、こちらからも見えなくなります。
+
+**Waired アイコン** → **Disconnect**。同じ項目が **Connect** に変わります。
+
+<Aside type="caution" title="Log out… とは違います">
+	**Log out…** は識別情報の削除で、サインインし直すと**新しい端末として登録**されます。
+	**Disconnect** は片道ワンクリックで、永続的な変更は起きません。
+	→ [Waired アプリ](/ja/guides/waired-app/#settings)
+</Aside>
+
+## いまどれが効いているか
+
+```sh
+waired status --observability
+```
+
+フェーズ（active か paused か）、エンジンが読み込まれているか、
+このパソコンが自分のほかのパソコンに提供しているかが表示されます。
+
+<CardGrid>
+	<LinkCard title="Waired アプリ" href="/ja/guides/waired-app/" description="上記すべてをアイコンから。" />
+	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="一時停止ではなく削除したいとき。" />
+	<LinkCard title="状態を診断する" href="/ja/getting-started/doctor/" description="止めていないのに止まっているとき。" />
+</CardGrid>

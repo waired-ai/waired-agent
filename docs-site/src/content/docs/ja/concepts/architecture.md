@@ -1,6 +1,11 @@
 ---
 title: アーキテクチャ
 description: Waired がデバイス同士をどう接続するか — 4 つのバイナリ、コントロールプレーン経由のエンロール、リレーフォールバックを伴うダイレクト WireGuard。
+meta:
+  audience: 仕組みが気になる人
+  needs: 何も要りません
+  time: 10 分
+sourceHash: de3e679a8993a103
 ---
 
 Waired は **推論専用のオーバーレイネットワーク** です。コーディネーションサービスを

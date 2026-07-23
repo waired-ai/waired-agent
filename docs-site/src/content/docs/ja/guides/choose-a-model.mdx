@@ -1,6 +1,11 @@
 ---
 title: 使う AI モデルを選ぶ
 description: いま動いているモデルを確認し、大きいモデル・小さいモデルに切り替えます。Waired アイコンからでも、ターミナルからでも。
+meta:
+  audience: 応答が遅い、または品質が足りないと感じている人
+  needs: Waired アプリ、またはターミナル
+  time: 5 分＋ダウンロード
+sourceHash: cda326e4fafcbe2a
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -25,8 +30,7 @@ import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starli
 
 ## いま動いているモデルを確認する
 
-メニューバー（macOS）またはタスクトレイ（Windows / Linux）の
-**Waired アイコン**をクリックし、**Inference** を開きます。動作中のモデル名が表示されます。
+**Waired アイコン**をクリックし（macOS はメニューバー、Windows・Linux は時計のとなり）、**Inference** を開きます。動作中のモデル名が表示されます。
 
 <details>
 <summary>ターミナルで確認する</summary>
@@ -44,7 +48,7 @@ waired models ls --detail     # カタログ全体と、このパソコンで動
 	<TabItem label="Waired アイコンから">
 		<Steps>
 
-		1. メニューバー／タスクトレイの **Waired アイコン**をクリック。
+		1. **Waired アイコン**をクリック（macOS はメニューバー、Windows・Linux は時計のとなり）。
 		2. **Models** を開く。
 		3. 一覧からモデルを選ぶ。
 

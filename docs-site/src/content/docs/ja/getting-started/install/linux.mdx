@@ -1,6 +1,11 @@
 ---
 title: Linux へのインストール
 description: Ubuntu 24.04 以降 / Debian trixie 以降にコマンド 1 つでインストールする方法と、その他のディストリビューションについて。
+meta:
+  audience: Ubuntu 24.04 以降 / Debian trixie 以降の人
+  needs: sudo が使えるターミナル
+  time: 5 分
+sourceHash: 89900ec616789a4d
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -48,7 +53,7 @@ import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components'
 
 ## GNOME でアイコンが出ない場合
 
-GNOME にはシステムトレイがないため、Waired のアイコンには AppIndicator 拡張が必要です。
+GNOME は拡張機能なしでは時計のとなりにアイコンを表示しないため、Waired のアイコンには AppIndicator 拡張が必要です。
 セットアップは GNOME を検出すると自動で導入・有効化します。それでも出ない場合は
 [トラブルシューティング](/ja/troubleshooting/#the-waired-icon-is-missing-linux)を
 参照してください。KDE Plasma では何も必要ありません。

@@ -1,29 +1,51 @@
 ---
 title: サインインとセットアップ
-description: Google でサインインし、ブラウザでセットアップを完了します。各選択の意味と、ターミナルだけで進める方法も説明します。
+description: waired init が何をするコマンドなのか、なぜウィンドウを閉じてはいけないのか、そして画面のないマシンでのターミナル手順。
+meta:
+  audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
+  needs: そのパソコンの管理者権限と Google アカウント
+  time: 集中して 10 分ほど。加えてモデルのダウンロード
+sourceHash: 2bc47960b48568b6
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Screenshot from '../../../../components/Screenshot.astro';
+import Expected from '../../../../components/Expected.astro';
 
-ネットワークに入れたいパソコンごとに、1 回ずつ実行します。
+**通常のインストールでは、これは自動的に行われます。**インストールコマンドが Waired を起動し、
+そのままサインインへ進むので、初回セットアップは[クイックスタート](/ja/quickstart/)で完結し、
+`waired init` を自分で打つ機会はありません。
+
+このページは、自分で打つ必要がある場合のためのものです。
+
+- セットアップが中断され、再開したい
+- `--no-init` を付けてインストールした
+- 画面のないサーバーを設定している
+- それぞれの選択が実際に何を決めているのか知りたい
 
 <Aside type="tip" title="同じアカウント = 同じネットワーク">
 	**すべての**パソコンで**同じ Google アカウント**を使ってください。この共通の
-	サインインが、あるマシンの AI を別のマシンから使えるようにしています。
-	別々のアカウントだと、互いにつながらない別のネットワークになります。
+	サインインが、あるマシンから別のマシンの AI を使えるようにしています。
+	アカウントが違うと、互いにつながらない別々のネットワークになります。
 </Aside>
 
-## セットアップを開始する
+## 開始する
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
-		**管理者として PowerShell を開き**（スタートボタンを右クリック →
-		「ターミナル（管理者）」）、次を実行します。
+		**ターミナル（管理者）**を開き（スタートボタンを右クリック）、次を実行します。
 
 		```powershell
-		& "C:\Program Files\Waired\waired.exe" init
+		waired init
 		```
+
+		<Aside type="note" title="「waired は認識されません」と出る場合">
+			インストーラは Waired をシステムのパスに追加しますが、インストール**前**に
+			開いていたターミナルは古いパスのままです。**新しい**管理者ターミナルを
+			開いてください。開きたくない場合はフルパスで実行します:
+			`& "C:\Program Files\Waired\waired.exe" init`
+			（インストール先を変更した場合はそのフォルダに読み替えてください）
+		</Aside>
 	</TabItem>
 	<TabItem label="macOS">
 		```sh
@@ -37,96 +59,111 @@ import Screenshot from '../../../../components/Screenshot.astro';
 	</TabItem>
 </Tabs>
 
-サインイン用のリンクが表示され、**Enter** を押すとブラウザーで開きます。
-リンクを自分でコピーしてブラウザーに貼っても構いません。
+サインイン用のリンクを表示して待ちます。
 
-<Aside type="caution" title="セットアップが終わるまで、このウィンドウは閉じないでください">
-	セットアップはブラウザに移りますが、管理者権限が必要な作業（AI ソフトの導入と
-	コーディングツールの連携）はこのウィンドウが担当し続けます。
+<Expected>
+```
+Sign in using this link:
+  https://app.waired.ai/login/…
 
-	閉じてしまった場合はブラウザにそう表示されます
-	（*「The setup command on … was closed before this finished. Your progress was saved.」*）。
-	同じコマンドをもう一度実行すれば続きから再開できます。進捗は失われず、
-	モデルのダウンロードはそのまま続きます。
+>> Press Enter to open your browser (or open the link above yourself)...
+```
+</Expected>
+
+**Enter** を押して Google アカウントを選びます。リンクを任意のブラウザに
+コピーしても構いません（このパソコンでも、別のパソコンでも）。
+
+<Aside type="caution" title="セットアップが終わるまでウィンドウを閉じないでください">
+	AI ソフトウェアのインストールには管理者権限が必要で、Web ページからは取得できません。
+	**このコマンドが、その作業を実際に行っています**（ブラウザ側の画面は指示を出す役です）。
+
+	閉じてしまうと、ブラウザに *「The setup command on … was closed before this finished.
+	Your progress was saved.」*と表示されます。同じコマンドを実行し直せば続きから進みます。
+	失われるものはなく、モデルのダウンロードはそのまま続いています。
 </Aside>
 
-## ブラウザで完了させる
+## ブラウザで終える
 
-サインインすると、いま設定中のパソコンのセットアップ画面に移動します。
-そのパソコンの状況がそのまま表示されます。
+サインインすると、ブラウザはこのパソコンのセットアップ画面に着きます。
+モデルを選んで **Yes, set it up** を押すと、そのパソコンの状況がリアルタイムで表示されます。
 
 <Screenshot
 	src="setup-wizard-progress.png"
-	alt="ブラウザに表示された Waired のセットアップ画面。Install the AI software（完了）、Download the AI model（19.2 GB 中 7.9 GB で進行中）、Check the speed（待機中）の 3 ステップ。"
-	caption="パソコン自身が報告している 3 つの工程です。このタブを閉じても止まりません。"
+	alt="ブラウザに表示された Waired のセットアップ画面。3 つのステップ — AI ソフトウェアのインストール（完了）、AI モデルのダウンロード（進行中、19.2 GB 中 7.9 GB のバー）、速度の確認（待機中）。"
+	caption="3 つのステップは、パソコン自身が報告しています。このタブを閉じても止まりません。"
 />
 
-| 工程 | 何をしているか | 目安 |
+| ステップ | 何をしているか | 所要時間 |
 |---|---|---|
-| **Install the AI software** | モデルを読み込んで動かすプログラムの導入。管理者権限が必要なため、ターミナルを開いたままにする必要があります。 | 1〜2 分 |
-| **Download the AI model** | AI 本体。このパソコンで実際に動かせる最良のモデルを Waired が選びます。 | 5〜30 分 |
-| **Check the speed** | 速度の計測。このマシンが追いつけるかを判断します。 | 最大 5 分 |
+| **AI ソフトウェアのインストール** | モデルを読み込んで動かすプログラム。管理者権限が必要なのはここで、だからターミナルを開いたままにする必要があります。 | 1〜2 分 |
+| **AI モデルのダウンロード** | AI 本体。数 GB あります。 | 5〜30 分 |
+| **速度の確認** | このマシンが実用的な速度を出せるかの短い計測。 | 最大 5 分 |
 
-続いて、どのコーディングツールを連携するか聞かれます。使っているなら
-**Claude Code** を有効にしてください（あとから変更できます）。
+<Expected>
+	すべてのステップにチェックが付き、
+	**「Everything's ready — this computer can now run AI on its own.」**と表示されます。
+	**Go to device** を押します。
+</Expected>
 
-完了すると、そのデバイスのページに着地します。以降の確認・変更はそこから行えます。
-
-<Aside type="note" title="セットアップ画面は英語表示です">
-	Web 画面は現在英語のみです。日本語化は予定されています。
-</Aside>
-
-## ここで決めていること
-
-2 つの設定が、このパソコンの役割を決めます。ハードウェアから妥当な既定値が選ばれ、
-どちらもあとから変更できます。
-
-**このパソコンで AI モデルを動かすか**
-: デスクトップや GPU マシンなら「はい」。ほかのパソコンの AI を*使うだけ*の
-  ノートパソコンなら「いいえ」— ネットワークには参加しますが、モデルは持ちません。
-  実用的なモデルが載らないマシンでは既定が「いいえ」になり、何が足りないかが表示されます。
-
-**ほかの端末からこのパソコンの AI を使えるようにするか**
-: ノートパソコンやスマートフォンに応答させたいマシンなら「はい」。「いいえ」にすると
-  このパソコン専用になります（自分では引き続き使えます）。1 つ目の設定とは独立です
-  — [共有と一時停止の違い](/ja/reference/cli/#sharing-vs-pausing)を参照してください。
-
-<Aside type="caution" title="「非常に小さいモデルしか動かせません」と出たら">
-	メモリの少ないパソコンでは、そう報告したうえで「動かさない」ことを勧められます。
-	その助言に従ってください。そのサイズのコーディングモデルは、役に立つ出力より
-	壊れた出力のほうが多くなります。それでもこのパソコンをネットワークに入れる価値は
-	あります — ほかのパソコンの AI を使えるからです。
-</Aside>
-
-## ターミナルだけで進める
-
-ブラウザでの操作は便利のためであって、必須ではありません。開くブラウザがない場合
-（SSH 越しのサーバー、デスクトップ環境のないマシン、`--no-browser`、
-`--non-interactive`）は自動的にターミナル方式になり、次の表示で **Enter** を押せば
-いつでも切り替えられます。
+ブラウザが主導している間、ターミナルは何も聞いてきません。
+コーディングツールをあとから設定できる旨を 1 行表示するだけです。
 
 ```
-Setup is continuing in your browser…
-(press Enter to continue in the terminal instead)
+You can set up your coding tools later from this terminal with `waired link all`.
 ```
 
-聞かれる内容は同じです。
+<Aside type="note" title="セットアップ画面は英語のみです">
+	Web コンソールは現在英語のみです。翻訳は予定されています。
+</Aside>
+
+## ターミナルで進める
+
+*「Setup is continuing in your browser…」*の表示で **Enter** を押すと、
+ターミナル側に切り替わります。
+
+そこで何を聞かれるかは、どういう状態で動いているかによります。
+
+### 通常のインストール後
+
+コーディングツールについてだけ聞かれます。モデルはブラウザ側、
+またはインストーラ側ですでに決まっているためです。
+
+<Expected title="聞かれること">
+	Claude Code を Waired 経由にするかどうか。**Y** と答えます。
+
+	いいえと答えても連携自体はインストールされ、無効なだけです。
+	あとから `sudo waired claude enable` で有効にできます。
+</Expected>
+
+### <a id="no-desktop-no-browser"></a>サーバー、またはブラウザがない場合
+
+`--no-browser`、`--non-interactive`、あるいは引き継ぎ先のサービスに到達できない環境では、
+`waired init` がすべてを自分で行い、質問も一通り聞いてきます。
 
 <Steps>
 
-1. **Google サインイン。** リンクが表示されるので Enter で開きます。ディスプレイの
-	ないマシンでは URL とペアリングコードだけが表示されるので、別の端末で開きます。
+1. **Google サインイン。**リンクとペアリングコードだけが表示されるので、
+	別の端末で開きます。
 
-2. **Run AI models on this computer? (Y/n)** — 上記 1 つ目の設定です。既定値は
-	このマシンのメモリから決まります。
+2. **Run AI models on this computer? `[Y/n]`** — デスクトップや GPU マシンなら **Y**。
+	ほかのパソコンの AI を*使うだけ*のマシンなら **N**（それでもネットワークには参加します）。
+	既定値はこのマシンのメモリ量に従います。
 
-3. **Let your other devices use this computer's AI? (Y/n)** — 2 つ目の設定です。
+3. **Let your other devices use this computer's AI? `[Y/n]`** — ノートパソコンに
+	提供するためのマシンなら **Y**。前の回答とは独立した設定です。
+
+4. **Let Waired install and manage its own Ollama? `[Y/n]`** — 自前の Ollama が
+	すでに入っている場合にのみ聞かれます。**n** なら自前のものをそのまま使います。
+
+5. **Route Claude Code through Waired? `[Y/n]`**
+
+6. **Run a quick performance benchmark now? `[Y/n]`** — モデルの準備ができてから
+	聞かれます。実施をおすすめします。このパソコンの速度が足りない場合、
+	軽いモデルを提案し、両方の品質ランクを並べて示すので判断できます。
 
 </Steps>
 
-モデルを有効にした場合は、収まるモデルを選び、ディスク空き容量を確認したうえで
-（足りなければディスクを埋めるのではなく小さいモデルに落とします）、
-進捗表示つきでダウンロードします。
+そのあとモデルが進捗表示付きでダウンロードされます。
 
 ```
 Starting the inference engine…
@@ -134,14 +171,7 @@ Preparing to download qwen3-coder-30b-a3b-instruct…
 Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 ```
 
-そのあと速度を計測し、追いつかない場合はより軽いモデルを提案します
-（両方のモデル名と品質ランクを並べて表示するので、速さと質を見比べられます）。
-最後に、Claude Code を Waired 経由にするか聞かれます。「いいえ」でも連携は
-インストールされたまま無効になるだけで、あとから `sudo waired claude enable` で
-有効にできます。
-
-**こう表示されれば完了です**:
-
+<Expected>
 ```
 ╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
 │  Account   you@example.com                                       │
@@ -154,29 +184,52 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 │  Point your coding agent at Waired and start building.           │
 ╰──────────────────────────────────────────────────────────────────╯
 ```
+</Expected>
+
+<Aside type="caution" title="「非常に小さいモデルしか動かせません」と出たら">
+	メモリの少ないパソコンでは、ごく小さいモデルしか収まらないため
+	**動かさないこと**を勧められる場合があります。その助言に従ってください。
+	そのサイズのコーディングモデルは、役に立つ出力より壊れた出力のほうが多くなります。
+	そのパソコンをセットアップする価値はあります — ほかのマシンの AI を使えるからです。
+</Aside>
 
 <details>
 <summary>サーバー・スクリプト向けのオプション</summary>
 
 | フラグ | 効果 |
 |---|---|
-| `--no-browser` | ブラウザを開かず、URL とペアリングコードのみ表示 |
-| `--non-interactive` | ハードウェアから決まる既定値を使い、何も質問しない |
-| `--no-wait-model` | すぐシェルに戻り、ダウンロードは裏で続行 |
-| `--inference-bundled-model-id <id>` | 自動選択ではなくモデルを指定 |
-| `--inference-enabled=true` | 小さすぎると判定されたマシンでもモデルを動かす |
-| `--control <url>` | 既定以外の接続先を指定 |
-| `--mask-pii` | ホームディレクトリ・ユーザー名・ホスト名・メールアドレスを伏せる（不具合報告用） |
+| `--no-browser` | ブラウザを開かず、URL とペアリングコードを表示する |
+| `--non-interactive` | ハードウェアから導かれた既定値を採用し、何も聞かない |
+| `--no-wait-model` | すぐシェルに戻り、ダウンロードはバックグラウンドで続ける |
+| `--inference-bundled-model-id <id>` | 自動選択ではなくモデルを指定する |
+| `--inference-enabled=true\|false` | 1 つめの質問に、聞かれずに答える |
+| `--share-with-mesh=true\|false` | 2 つめの質問に、聞かれずに答える |
+| `--control <url>` | 既定以外のサービスを指定する |
+| `--mask-pii` | 出力中のホームディレクトリ・ユーザー名・ホスト名・メールアドレスを伏せる（バグ報告用） |
 
 </details>
 
-## もう一度セットアップする
+## Waired アプリからサインインする場合
 
-すでにサインイン済みのパソコンでもう一度実行しても安全です。再認証してセットアップ
-画面を開き直すだけで、**デバイス数の上限には数えられません**。
+[Waired アプリ](/ja/guides/waired-app/)には **Log in…** があり、
+このパソコンをサインインさせることはできます。
+
+<Aside type="caution" title="ただし初回セットアップは完結しません">
+	AI ソフトウェアのインストールに必要な管理者権限を、アプリ側から取得できないためです。
+	未セットアップのパソコンでアプリからサインインすると、セットアップ画面までは進み、
+	結局ターミナルで `waired init` を実行するよう促されます。
+
+	**Log in…** はサインアウト後の再サインインや、すでにセットアップ済みのパソコンで使ってください。
+	初回は上記のコマンドを使います。
+</Aside>
+
+## もう一度実行する場合
+
+すでにサインイン済みのパソコンでセットアップをやり直しても安全です。
+再認証してセットアップ画面を開き直すだけで、**新しい端末として数えられることはありません**。
 
 <CardGrid>
-	<LinkCard title="動作確認" href="/ja/getting-started/verify/" description="3 つの確認方法と、正常なときの見え方。" />
+	<LinkCard title="動作確認する" href="/ja/getting-started/verify/" description="3 つの確認と、正常な応答の見た目。" />
 	<LinkCard title="ほかの端末を追加する" href="/ja/getting-started/add-a-device/" description="ノートパソコンを同じネットワークに入れる。" />
-	<LinkCard title="途中で止まった" href="/ja/troubleshooting/#setup-stopped-partway" description="表示されたメッセージごとの意味と再開方法。" />
+	<LinkCard title="セットアップが途中で止まった" href="/ja/troubleshooting/#setup-stopped-partway" description="各エラーの意味と、再開の仕方。" />
 </CardGrid>

@@ -81,7 +81,7 @@ waired doctor --fix
 |---|---|---|
 | **state directory** | Waired's own folder for identity, secrets and records is missing or unreadable. | Run the command with `sudo` (elevated on Windows). If it is genuinely missing, [sign in again](/getting-started/first-run/). |
 | **gateway token** | The key your coding tools use to reach your AI is missing, or you cannot read it. | `waired link` — or press **f**. |
-| **waired-agent management** | The background service is not answering. This is the one that stops everything else working. | See [Waired is not running](/troubleshooting/#waired-is-not-running). |
+| **waired-agent management** | The background service is not answering. This is the one that stops everything else working. | See [Waired is not running](/troubleshooting/#a-command-says-waired-agent-is-not-running). |
 | **waired phase** | Routing is paused, or in an unexpected state. | `waired resume` — see [Pause and resume](/guides/pause/). |
 | **Local Gateway** | The service is up, but the part that answers AI requests is not. A `503` usually means no model is loaded yet. | Wait for the download to finish (`waired models ls`), or [check your model](/guides/choose-a-model/). |
 | **coding-agent entries** | Claude Code, OpenCode or OpenClaw is not configured to use Waired. | Press **f**. |

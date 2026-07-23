@@ -1,6 +1,11 @@
 ---
 title: うまくいかないとき
 description: いま実際に起きている症状を自分の言葉で探して、直すための手順を 1 つだけ見つけます。
+meta:
+  audience: Waired の様子がおかしい人
+  needs: 対象のパソコンのターミナル
+  time: 症状を探す。各対処は 1〜2 分
+sourceHash: f4245cad03b053cf
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -306,7 +311,7 @@ waired status --observability
 
 ## Waired のアイコンが出ない（Linux）
 
-GNOME にはシステムトレイがないため、アイコンの表示には AppIndicator 拡張が必要です。
+GNOME は拡張機能なしでは時計のとなりにアイコンを表示しません。Waired アイコンには AppIndicator 拡張が必要です。
 セットアップは GNOME を検出すると自動で導入し、無い場合は `waired doctor` が警告します。
 
 手動で入れる場合:

@@ -1,6 +1,7 @@
 ---
 title: 高度なインストールオプション
 description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
+sourceHash: 39d8b5943ac4de91
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -109,10 +110,37 @@ Waired 自体の開発・ドッグフーディング専用です。`--dev`（Lin
 どの OS でも使えます）、`--yes` / `-Yes` は無人ホスト向けに確認をスキップします —
 これを付けない非対話的な実行は削除を拒否します。
 
-## その他のオプション
+## インストーラのフラグ一覧
 
-インストーラーにはこのページで扱っていないフラグもあります（dry run、`waired init`
-のスキップ、ミラーの上書きなど）。完全かつ正式な一覧は、スクリプトを `--help` /
-`-Help` 付きで実行するか、リポジトリの
+Linux と macOS は `install.sh`、Windows は同じオプションの PowerShell 版を持つ
+`install.ps1` を使います。どちらも環境変数形式を受け付けます。パイプ形式の
+ワンライナーは、スクリプトをディスクに書かずにオプションを渡す手段としてこれを使います。
+
+| `install.sh` | `install.ps1` | 環境変数 | 内容 |
+|---|---|---|---|
+| `--dry-run` | `-DryRun` | | 特権が必要なコマンドをすべて表示するだけで、実行しません。 |
+| `--yes`, `-y` | `-Yes` | | インストール前の確認を含め、すべての質問に「はい」と答えます。 |
+| `--no-init` | `-SkipInit` | | インストール後に `waired init` を**実行しません**。付けない場合、インストールでサインインとセットアップまで一気に進みます。 |
+| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | AI ソフトウェアをインストールしません。自前の Ollama を使う場合に。 |
+| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Claude Code を自分の AI ではなく Anthropic API のままにします。 |
+| `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | 出力中のホームフォルダ・ユーザー名・マシン名・アカウントのメールアドレスを伏せます（スクリーンショットやバグ報告向け、ベストエフォート）。 |
+| `--check` | `-Check` | | 新しいバージョンがあるかを報告するだけで、何も変更しません。 |
+| `--update` | `-Update` | | 新規インストールではなく、既存のインストールを更新します。 |
+| `--edge`, `--latest` | `-Edge`, `-Latest` | `WAIRED_VERSION=edge` | 最新の main ビルドを入れる／切り替える。安定版ではありません → [更新情報](/ja/reference/release-notes/#stable-と-edge) |
+| `--stable` | `-Stable` | | 最新の安定版を入れる／切り替える。 |
+| `--clean` | `-Clean` | `WAIRED_CLEAN=1` | すべて消してから新規インストール。破壊的で、`--yes` がなければ確認します。 |
+| `--control <URL>` | `-Control <URL>` | `WAIRED_CONTROL_URL` | 指定したコントロールプレーンに登録します。 |
+| `--dev` | `-Dev` | | 内蔵の開発用コントロールプレーン。Waired の開発用のみ。 |
+| | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | インストール先（Windows）。 |
+| | `-NonInteractive` | | `waired init --non-interactive` を強制します。ターミナルがない場合は自動判定されます。 |
+| | `-InferenceEnabled`, `-ShareWithMesh` | | セットアップの 2 つの質問に、聞かれずに答えます。 |
+| `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | 特定のリリースに固定します。 |
+
+<Aside type="note" title="Windows でフラグを使うにはスクリプトをディスクに置きます">
+	`iwr … | iex` のワンライナーはパラメータを渡せません。上の表の環境変数を使うか、
+	先にスクリプトをダウンロードしてください（このページの前半の例を参照）。
+</Aside>
+
+正式な一覧はスクリプトを `--help` / `-Help` 付きで実行するか、リポジトリの
 [`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)
 を参照してください。
