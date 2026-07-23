@@ -180,6 +180,13 @@ func selectionStatus(err error) int {
 // proxy the request over the WG overlay.
 const remoteRuntimePrefix = "remote:"
 
+// externalRuntimePrefix marks a Selection served by an external
+// openai-compat endpoint (internal/runtime/openaicompat registers its
+// adapters as "openai-compat:<id>"; internal/router matches the same
+// prefix). Such a request leaves this machine's engine idle, so it is
+// excluded from the local admission accounting below.
+const externalRuntimePrefix = "openai-compat:"
+
 // ErrPeerRoutingDisabled is returned by lookupAdapter when a remote
 // Selection arrives at a listener whose Deps.PeerAdapterFactory is
 // nil. The agent's overlay-side gateway is configured this way as
@@ -256,6 +263,28 @@ func (h *HandlerSet) lookupAdapter(sel router.Selection) (runtime.Adapter, error
 		return nil, errors.New("gateway: runtime not registered")
 	}
 	return a, nil
+}
+
+// admitLocalEngine reports the request to Deps.LocalAdmission when
+// this listener is about to occupy THIS machine's engine, and returns
+// the release the handler defers. Remote (peer) and external
+// (openai-compat) selections run somewhere else and are not counted.
+//
+// Always returns a non-nil release, so callers can defer it
+// unconditionally.
+func (h *HandlerSet) admitLocalEngine(ctx context.Context, sel router.Selection) func() {
+	noop := func() {}
+	if h.deps.LocalAdmission == nil {
+		return noop
+	}
+	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) ||
+		strings.HasPrefix(sel.Runtime, externalRuntimePrefix) {
+		return noop
+	}
+	if release := h.deps.LocalAdmission(ctx); release != nil {
+		return release
+	}
+	return noop
 }
 
 // clientFor returns the http.Client to use against adapter. Adapters

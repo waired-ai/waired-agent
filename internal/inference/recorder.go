@@ -20,8 +20,10 @@ type Recorder interface {
 	// admission slot.
 	RecordServed(result string, latencyMs uint32)
 
-	// SetInflight updates the per-process inflight gauge to n.
-	// Called from the capacity-gate adapter on every Acquire / Release.
+	// SetInflight updates the per-process inflight gauge to n. Called
+	// on every Acquire / Release of the shared admission counter: from
+	// the capacity-gate adapter for peer-overlay requests, and from
+	// Server.AdmitLocal for the owner's own local-engine work.
 	SetInflight(n int)
 
 	// SetCapacity records the configured admission ceiling. Called

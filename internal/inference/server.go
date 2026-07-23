@@ -113,6 +113,17 @@ func (c *inflightCounter) Acquire() bool {
 	}
 }
 
+// AcquireOwner admits one of the OWNER's own requests without
+// enforcing the ceiling and reports whether the machine is now at (or
+// past) capacity. The owner is never turned away on their own machine,
+// so the counter is allowed to exceed the ceiling; what saturation
+// buys is the owner-priority latch (spec §8.2), not a rejection.
+func (c *inflightCounter) AcquireOwner() (atSaturation bool) {
+	n := c.n.Add(1)
+	capacity := c.capacity.Load()
+	return capacity > 0 && n >= capacity
+}
+
 func (c *inflightCounter) Release() {
 	c.n.Add(-1)
 }
@@ -121,14 +132,73 @@ func (c *inflightCounter) Release() {
 // tests and for future metrics.
 func (c *inflightCounter) InFlight() int32 { return c.n.Load() }
 
-// InflightCount returns the agent's currently-serving peer-overlay
-// request count, or 0 if Capacity was 0 (admission disabled). Wired
-// from main.go into the /waired/v1/observability/state handler.
+// InflightCount returns the machine's currently-serving inference
+// count — peer-overlay requests plus the owner's own local-engine work
+// (see AdmitLocal). 0 on a ping-only server. Wired from main.go into
+// the /waired/v1/observability/state handler.
 func (s *Server) InflightCount() int {
 	if s.inflight == nil {
 		return 0
 	}
 	return int(s.inflight.InFlight())
+}
+
+// AdmitLocal counts one of the OWNER's own requests against the shared
+// admission counter for as long as it occupies this machine's engine,
+// and raises the owner-priority latch when the machine is saturated —
+// the "local" half of spec §8.2.
+//
+// The owner's local traffic never touches the overlay listener: it
+// arrives on the loopback gateway, the Claude intercept or the
+// OpenCode surface, none of which run peerAuthChain / capacityGate. So
+// without this hook Config.Capacity described "concurrent requests
+// that arrived over the overlay" rather than "concurrent requests on
+// this machine", the engine could be oversubscribed by local + peer
+// work at once, and the latch that is supposed to be the owner's
+// priority guarantee could not fire on the single most common
+// deployment: one machine that serves strangers AND runs its owner's
+// coding agent (waired#899).
+//
+// Contract:
+//
+//   - Never rejects. The owner is not turned away on their own
+//     machine; the counter may exceed the ceiling and peers see the
+//     truth (503 overloaded, and a healthz capacity_used they can
+//     route around before even trying).
+//   - The returned release is always non-nil and idempotent; call it
+//     when the request lets go of the engine.
+//   - A request that already carries a peer identity is a no-op: it
+//     arrived over the overlay and capacityGate counted it. That makes
+//     double counting a property of the request rather than of the
+//     wiring, so mounting the hook on the overlay surface by mistake
+//     cannot silently halve this machine's capacity.
+func (s *Server) AdmitLocal(ctx context.Context) (release func()) {
+	if s.inflight == nil {
+		return func() {}
+	}
+	if _, ok := PeerFromContext(ctx); ok {
+		return func() {}
+	}
+	if s.inflight.AcquireOwner() && s.public != nil {
+		s.public.latch(nowOrTime(s.now), ownerPriorityLatchWindow)
+	}
+	s.recordInflight()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.inflight.Release()
+			s.recordInflight()
+		})
+	}
+}
+
+// recordInflight republishes the shared counter to the telemetry
+// gauge. capacityGate does this inline; the local path needs it too or
+// the gauge reads 0 on a machine that is busy serving its owner.
+func (s *Server) recordInflight() {
+	if s.recorder != nil {
+		s.recorder.SetInflight(int(s.inflight.InFlight()))
+	}
 }
 
 // publicAdmission is the state behind publicAdmissionGate (public share
