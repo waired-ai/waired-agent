@@ -43,7 +43,7 @@ explicit opt-in with its own consent step — and an immediate off switch.
 
 Waired deliberately avoids "quietly send your data somewhere else" behavior.
 The one place a cloud fallback exists — the
-[Claude Code integration](/guides/coding-agents/) — is **fail-open and
+[Claude Code integration](/guides/claude-code/) — is **fail-open and
 visible**: if your local serving is down, Claude Code falls back to the real
 Anthropic API so it keeps working, and you can see the routing state at any
 time with `waired claude status` or `waired doctor`. Public and team routing

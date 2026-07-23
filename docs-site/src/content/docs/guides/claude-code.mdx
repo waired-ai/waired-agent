@@ -1,0 +1,175 @@
+---
+title: Use it from Claude Code
+description: Point Claude Code at your own model, see which AI answered each turn, and switch between your machine and the cloud without restarting.
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../components/Screenshot.astro';
+
+{/* Split out of the old combined guides/coding-agents.mdx: one page per tool,
+    so a reader who uses Claude Code never reads OpenCode setup, and searches
+    for either land on the right page. */}
+
+Setup normally connects Claude Code for you. This page is what to do if it did
+not, and how to control it afterwards.
+
+You do not set an environment variable, edit a config file, or use an alias.
+Waired writes Claude Code's machine-wide settings so Claude Code talks to your
+model — the same way on Windows, macOS and Linux.
+
+<Aside type="caution" title="Your claude.ai subscription is untouched">
+	No credential is written, so your existing Claude Code sign-in and its
+	subscription behaviour keep working exactly as before. Waired changes where
+	requests go, not who you are signed in as.
+</Aside>
+
+## Connect it
+
+<Steps>
+
+1. Set up the integration:
+
+	```sh
+	waired link claude-code
+	```
+
+2. Turn on routing (setup usually did this already):
+
+	<Tabs syncKey="os">
+		<TabItem label="macOS / Linux">
+			```sh
+			sudo waired claude enable
+			```
+		</TabItem>
+		<TabItem label="Windows">
+			From an administrator prompt:
+
+			```powershell
+			waired claude enable
+			```
+		</TabItem>
+	</Tabs>
+
+3. Start Claude Code as you normally would:
+
+	```sh
+	claude
+	```
+
+</Steps>
+
+## Which AI answered?
+
+The footer tells you, every turn:
+
+<Screenshot
+	src="claude-code-statusline.png"
+	alt="The Claude Code footer showing the Waired status line — the current route and the local model that answered the last request."
+/>
+
+| What it says | What it means |
+|---|---|
+| `⚡ waired: on Waired (qwen3-8b-instruct)` | Answered by your own hardware, by that model |
+| `→ waired: Anthropic` | Answered by the real Anthropic API |
+| `✕ waired: agent down` | Waired is not running on this computer |
+
+After any turn that fell back to the cloud, Claude Code also prints a one-line
+notice. Nothing is ever silently redirected.
+
+<Aside type="note" title="No status line showing?">
+	A project-level `.claude/settings.json` overrides the one Waired installs.
+	Run `waired claude status` inside the project — it names the file that is
+	winning and gives you a line to paste into your own status-line script.
+	Waired never edits your project files.
+</Aside>
+
+## Switch where requests go
+
+Inside a session, no restart needed:
+
+```
+/waired-route waired      # your own AI only, never the cloud
+/waired-route anthropic   # the real Anthropic API
+/waired-route auto        # the default: prefer yours, fall back if needed
+```
+
+The change applies from your next message. The same switch from a terminal:
+
+```sh
+waired claude route                               # what is it doing now?
+waired claude route anthropic --subagents waired  # main in the cloud, subagents on yours
+```
+
+`--subagents` is worth knowing about: Claude Code's subagents do the bulk file
+reading, and keeping them on your own hardware while the main conversation uses
+the cloud is a real middle ground. See
+[Privacy](/concepts/privacy/#hybrid-mode-is-an-explicit-middle-ground).
+
+You can also change the route from the **Waired icon** → **Claude Code**, which
+has separate pickers for the main conversation and subagents.
+
+<Aside type="note" title="“waired” means your network, not this computer">
+	Which of your machines actually answers is decided by `waired worker` — see
+	[Add another device](/getting-started/add-a-device/#where-the-answer-comes-from).
+</Aside>
+
+## Things that surprise people
+
+**Claude Code still shows Anthropic model names.** It offers Opus, Sonnet and
+the rest as always. When a request is served by Waired, your device's active
+local model answers it, whatever the session has selected. The Anthropic name
+only matters for requests that actually go to the cloud.
+
+**Long sessions get summarized.** Local models hold less conversation at once,
+so Claude Code compacts older turns to fit. That is the session surviving, not
+failing — see
+[Long Claude Code sessions get summarized](/troubleshooting/#long-claude-code-sessions-get-summarized).
+
+**Failures fall back rather than break.** If your model cannot serve a request —
+paused, still downloading, an unsupported request shape — Claude Code uses the
+real Anthropic API so your turn completes. Choose the `waired` route if you
+would rather see the error than have it redirected.
+
+## Sharing one machine with your other devices
+
+In the [web console](https://app.waired.ai/), a machine's page decides how the
+rest of your devices may use it:
+
+- **Serve main / subagents** — two switches. Turning main off keeps a slower
+  machine for parallel subagent work only. This affects requests from *other*
+  machines; the machine always serves its own Claude Code.
+- **Max concurrent requests** — how many requests it handles at once. More
+  parallelism needs more memory and slows every request, so the page shows a
+  recommended maximum and warns before you pass it.
+
+## Check it, or remove it
+
+```sh
+waired claude status
+```
+
+Reports whether routing is on, and where the settings file lives:
+
+| | |
+|---|---|
+| Linux | `/etc/claude-code/managed-settings.json` |
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+
+To stop routing Claude Code through Waired — this restores Claude Code's normal
+behaviour:
+
+```sh
+sudo waired claude disable    # Windows: from an administrator prompt
+```
+
+To remove the integration files as well:
+
+```sh
+waired unlink claude-code
+```
+
+<CardGrid>
+	<LinkCard title="Claude Code is still using the cloud" href="/troubleshooting/#claude-code-is-still-using-the-cloud" description="The two commands that fix it." />
+	<LinkCard title="Use it from OpenCode" href="/guides/opencode/" description="The same, for OpenCode." />
+</CardGrid>

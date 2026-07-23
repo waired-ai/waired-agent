@@ -1,68 +1,85 @@
 ---
-title: Verify it works
-description: Confirm your Waired setup with waired status --observability and a one-shot waired infer request.
+title: Check it works
+description: Three ways to confirm your setup is healthy — on screen, with one question, and with the full status snapshot.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../components/Screenshot.astro';
 
-Two commands confirm a healthy setup: one shows the live state of the daemon and
-your mesh, the other runs a real inference request.
+Three checks, quickest first. If any of them fails, `waired doctor` is the one
+command to run next.
 
-## Check the live state
+## 1. Look at the Waired icon
 
-```sh
-waired status --observability
-```
+Click the icon in your menu bar (macOS) or system tray (Windows, Linux).
 
-A healthy inference server looks like this:
+<Screenshot
+	src="tray-ready.png"
+	alt="The Waired menu showing the signed-in account, a Connected status, and an Inference submenu naming the active model."
+	caption="Signed in, connected, and a model loaded."
+	width="26rem"
+/>
 
-```
-Observability:
-  Device:   dev-ubuntu  uptime: 1m23s
-  Engine:   ready (model=qwen2.5-coder-7b-instruct, 0/4 slots used, inflight=0)
-  Share:    enabled    Paused: no
-  Mesh:     2 enrolled / 1 reachable / 1 ready
-  Last:     -  (no inference requests yet)
-```
+**What good looks like:** your account address at the top, a connected state,
+and — on a computer that runs models — **Inference** naming the active model.
 
-What to look for:
-
-- **Engine: ready** — the model is loaded and can serve requests. If it says
-  `not ready`, the model may still be pulling (wait a few minutes) or the
-  runtime may be down (`waired runtimes status`).
-- **Share** / **Paused** — `Share: enabled` means peers can reach this engine;
-  `Paused: no` means routing is active.
-- **Mesh** — `enrolled / reachable / ready` peer counts. On a client, this is
-  how you confirm your server shows up as reachable.
-
-Add `-o json` for machine-readable output.
-
-## Run your first request
+## 2. Ask it something
 
 ```sh
 waired infer "say hi"
 ```
 
-This calls your local engine directly, so it works regardless of mesh
-reachability — it's the earliest way to confirm inference works. A greeting
-should come back within a few hundred milliseconds to a few seconds.
+**What good looks like:** a greeting, within a few seconds.
 
-To see the routing decision (local vs. peer, model resolution, estimated
-latency) alongside the answer:
+This goes straight to the model on this computer, so it works even if nothing
+else on your network is reachable. It is the fastest way to prove the AI itself
+is alive.
+
+To see *where* the answer came from and why:
 
 ```sh
 waired infer --explain "say hi"
 ```
 
-<Aside type="tip">
-	If a request returns a 503, it usually means the engine is paused
-	(`waired resume`) or not shared (`waired inference share on`). The
-	[Troubleshooting](/troubleshooting/) page maps each symptom to the
-	command that fixes it.
+## 3. Read the full status
+
+```sh
+waired status --observability
+```
+
+**What good looks like**, on a computer that runs models:
+
+```
+Observability:
+  Device:   my-desktop  uptime: 1m23s
+  Engine:   ready (model=qwen3-coder-30b-a3b-instruct, 0/4 slots used, inflight=0)
+  Share:    enabled    Paused: no
+  Mesh:     2 enrolled / 1 reachable / 1 ready
+  Last:     -  (no inference requests yet)
+```
+
+| Line | What to check |
+|---|---|
+| **Engine** | `ready` means a model is loaded and can answer. `not ready` usually means it is still downloading — see [No answer comes back](/troubleshooting/#no-answer-comes-back). |
+| **Share** | `enabled` means your other devices may use this computer's AI. Off is fine if you only use it here. |
+| **Paused** | `no` means Waired is handling requests. `yes` — run `waired resume`. |
+| **Mesh** | `enrolled / reachable / ready` across your computers. On a laptop, this is where you confirm your AI machine is up. |
+
+Add `-o json` for a machine-readable version.
+
+<Aside type="tip" title="On a laptop that does not run models">
+	`Engine: not ready` is correct there — that computer is not supposed to host
+	a model. What matters is the **Mesh** line showing at least `1 ready`, which
+	means one of your other computers is available to answer.
 </Aside>
 
-## What's next
+## Then try it for real
 
-- Route your coding agent through your model: [Coding agents](/guides/coding-agents/).
-- Connect a chat or OpenAI-compatible client: [Chat clients](/guides/chat-clients/).
-- Pick a bigger or smaller model: [Switch the bundled model](/guides/switch-model/).
+The real test is your own tools:
+
+<CardGrid>
+	<LinkCard title="Claude Code" href="/guides/claude-code/" description="Ask it something and read the footer — it names the AI that answered." />
+	<LinkCard title="OpenCode" href="/guides/opencode/" description="One command to connect it." />
+	<LinkCard title="A chat app" href="/guides/chat-clients/" description="Any OpenAI-compatible client." />
+	<LinkCard title="Something looks wrong" href="/troubleshooting/" description="Find the symptom, get the fix." />
+</CardGrid>

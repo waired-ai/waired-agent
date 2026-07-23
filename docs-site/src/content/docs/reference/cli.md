@@ -35,7 +35,7 @@ subcommand, for grouped, command-specific help.
 
 | Command | What it does |
 |---|---|
-| `waired link [agent]` | Set up the per-user coding-agent integration (Claude Code skills + OpenCode plugin + gateway token). See [Coding agents](/guides/coding-agents/). |
+| `waired link [agent]` | Set up the per-user coding-agent integration (Claude Code skills + OpenCode plugin + gateway token). See [Coding agents](/guides/claude-code/). |
 | `waired unlink [agent]` | Remove the integration (surgical — only undoes what `link` added). |
 | `waired codeui open` | Open the bundled OpenCode coding agent in your browser, on your real project, served by your local inference. Runs as you; only you can use it (other users on the machine and the network are blocked). Useful flags: `--project DIR`, `--no-browser` (headless/SSH), `--auth basic`. `status` / `url` / `stop` manage the running instance. |
 | `waired claude <enable\|disable\|status>` | Manage the Claude Code managed-settings integration (Linux/macOS/Windows): `enable` points Claude Code at your local inference (also done by `waired init`), installs the `/waired-route` slash command, a footer status line showing the route, and a per-turn fallback notice; `disable` reverts them; `status` shows the current state. No credential is written, so your claude.ai subscription is preserved; serving fails open to the real API when local serving is down. `enable`/`disable` need elevation (`sudo`, or run elevated on Windows). |

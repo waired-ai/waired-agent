@@ -8,7 +8,7 @@ import { Aside } from '@astrojs/starlight/components';
 Waired exposes a **Local Gateway** on `http://127.0.0.1:9473` that speaks both
 the OpenAI and Anthropic wire formats. Any tool that can talk to those APIs — a
 browser chat UI, an editor extension, a script — can use your own model by
-pointing at this address. [Claude Code and OpenCode](/guides/coding-agents/)
+pointing at this address. [Claude Code and OpenCode](/guides/claude-code/)
 are wired up automatically; everything else uses the endpoints below.
 
 <Aside type="note" title="Loopback only">
@@ -47,7 +47,7 @@ The gateway authenticates requests with a **bearer token**:
 Authorization: Bearer <gateway-token>
 ```
 
-Running [`waired link`](/guides/coding-agents/) generates this token and
+Running [`waired link`](/guides/claude-code/) generates this token and
 configures the supported coding agents with it. A third-party client needs the
 same token supplied as its **API key**. The token is held in your per-user
 secret store (the system keychain on macOS; a protected file under the agent's

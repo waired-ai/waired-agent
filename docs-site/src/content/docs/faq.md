@@ -1,92 +1,114 @@
 ---
 title: FAQ
-description: Common questions about Waired — setup, privacy, hardware, cost, models, sign-in, firewalls, offline use, and which tools work.
+description: The questions people ask before they install Waired, and the ones they ask afterwards.
 ---
 
-## Is it hard to set up?
+<!-- Grouped by when the question occurs to someone — deciding, hardware,
+     privacy, running it — rather than by feature. Headings are the question as
+     a reader would type it, so search lands on the answer. -->
 
-No. You run one short command, sign in with Google, and your coding agent is
-linked automatically. You don't need any networking knowledge. See
-[Install](/getting-started/install/).
+## Deciding whether to use it
 
-## Is it private?
+### Is it hard to set up?
 
-Yes. Your prompts and replies travel straight between your own machines over an
-end-to-end encrypted link. They never reach our servers, and even the relay
-can't read them. See [Privacy](/concepts/privacy/). Sharing beyond your own
-devices — a team, or [Public Share](/public-share/) — is opt-in and consented,
-and even then Waired's servers never see what you asked or what was answered.
+One command installs it. After that you finish setup either in a browser or by
+answering two questions in a terminal — about ten minutes either way, plus the
+time it takes to download a model. See the [Quickstart](/quickstart/).
 
-## What do I need?
+### Does it cost money?
 
-A computer to run the model — a GPU helps, but a recent CPU runs a 7B model
-fine — plus your everyday laptop. The client machine you type from needs no
-special hardware.
+No. There is no subscription and no per-message charge. The model runs on
+hardware you already own, so the cost is the electricity it uses.
 
-## Does it cost money?
+### Do I need a graphics card?
 
-The software is free, and the model runs on hardware you already own, so there's
-no per-message bill and no subscription.
+No, but it helps a lot. A recent processor runs a small model well enough to be
+useful; a graphics card makes answers several times faster. The
+[model catalog](/reference/model-catalog/) lists what each model needs — though
+you do not have to read it, because setup picks one that fits.
 
-## Which AI models work?
+### Which tools work with it?
 
-Any local model you can run with **Ollama**, plus larger models on **vLLM** for
-NVIDIA/AMD GPU servers. Waired bundles a coding model by default and you can
-swap in another anytime — see the [model catalog](/reference/model-catalog/)
-and [Switch the bundled model](/guides/switch-model/).
+Claude Code and OpenCode work out of the box. Any client that speaks the OpenAI
+or Anthropic API can point at your model — see
+[Use it from a chat app](/guides/chat-clients/).
 
-## Which tools work?
+### Is it open source?
 
-Claude Code and OpenCode are set up automatically by `waired link`. Any other
-OpenAI- or Anthropic-compatible client works too, by pointing it at the
-[Local Gateway](/guides/chat-clients/).
+The client — everything that runs on your machines — is open source and
+readable at [GitHub](https://github.com/waired-ai/waired). The coordination
+service that introduces your devices to each other is hosted for you.
 
-## Is it open source?
+## Hardware and models
 
-The Waired **client** is open source — you can read exactly what runs on your
-machines on [GitHub](https://github.com/waired-ai/waired). The coordination service
-that introduces your devices is the part hosted for you.
+### Which AI models can I run?
 
-## How does signing in work?
+Waired bundles a catalog of coding models and picks the best one your machine
+can actually run. You can switch at any time:
+[Choose which AI model runs](/guides/choose-a-model/).
 
-`waired init` signs you in with Google and enrolls the device. Enroll every
-device with the **same Google account** — that shared identity is what puts them
-on the same private network and lets one use another's model. Sharing with
-people outside your account — a team, or Public Share — is a separate, explicit
-opt-in.
+### How does Waired choose a model for me?
 
-## Can other people use my computer?
+It looks at your processor, memory and graphics card, and picks the highest
+quality model that fits with room to spare — then measures the real speed and
+offers a lighter one if this machine cannot keep up. It will not fill your disk:
+if space is short it steps down rather than failing halfway.
 
-Only if you turn on [Public Share](/public-share/) (or join a team and share
-into it). It's off by default: nobody outside your own account can run work on
-your computer until you explicitly enable it, and turning it off again takes
-effect immediately.
+### Can I run a model that is bigger than recommended?
 
-## What if my network has a strict firewall or NAT?
+Yes. Waired warns you and shows the shortfall, but does not block you. Slightly
+over usually works and is just slower; genuinely too big fails to load. See
+[I chose a model bigger than my hardware](/troubleshooting/#i-chose-a-model-bigger-than-my-hardware).
 
-Devices try a direct UDP link first. When a strict NAT or firewall blocks that,
-they fall back automatically to a relay that forwards the *encrypted* traffic.
-You don't configure anything; connectivity works either way. (Waired does not
-use UPnP or NAT-PMP to open ports.)
+## Privacy and networking
 
-## Can I use it offline after setup?
+### Is it private?
 
-Running a model on the same machine you're typing on works locally. Using a
-*remote* device's model needs network connectivity, because the control plane is
-what discovers peers and keeps the signed network map current. The control plane
-never sees your prompts — it only hands out keys and endpoints.
+Your prompts and answers travel between your own devices over an end-to-end
+encrypted connection. Waired's coordination service introduces your devices to
+each other and never receives what you send; the relay, used only when a direct
+connection is impossible, forwards sealed data it cannot read. Full detail:
+[Privacy](/concepts/privacy/).
 
-## How does Waired pick a model for me?
+### What if my model is down — does my data go to the cloud?
 
-The Auto-Selector chooses the highest-quality model that fits your hardware's
-memory, favoring efficient Mixture-of-Experts models on shared-memory machines.
-Preview a routing decision with `waired infer --explain "say hi"`.
+Only for Claude Code, only when your own serving cannot answer, and never
+silently: Claude Code falls back to the real Anthropic API so your turn
+completes, and Waired tells you it happened. If you would rather see the error,
+choose the `waired` route — see
+[Use it from Claude Code](/guides/claude-code/#switch-where-requests-go).
 
-## What happens if my local model is down?
+### Do I need to open ports or set up a VPN?
 
-For Claude Code, the [managed-settings integration](/guides/coding-agents/) is
-**fail-open**: if local serving is paused, disabled, or unavailable, requests go
-to the real Anthropic API so Claude keeps working — and the routing state is
-always visible via `waired claude status` and `waired doctor`. Because no
-credential is written into managed settings, your claude.ai subscription stays
-in use throughout. Waired never silently breaks your coding agent.
+No. Your computers connect directly when the network allows it, and fall back to
+an encrypted relay when a firewall or strict NAT gets in the way. Both are
+automatic.
+
+### How does signing in work?
+
+You sign in with Google. Every computer signed in with the **same account**
+joins the same private network and can reach the others — that shared sign-in
+is the whole mechanism. There is nothing to pair and no address to copy.
+
+### Can I use it offline?
+
+Once a model is downloaded, the computer running it can answer with no internet
+connection at all. Reaching that computer *from another device* needs a network
+path between them — on the same home or office network that works offline too.
+
+## Running it
+
+### How do I update?
+
+`waired update`, or the update entry on the Waired icon when one is available.
+See [Update Waired](/getting-started/update/).
+
+### How do I remove it?
+
+One command, about ten seconds — and you choose whether to keep your downloaded
+models. See [Uninstall](/getting-started/uninstall/).
+
+### Something is wrong. Where do I start?
+
+`waired doctor`. It checks everything and repairs what it can. Then
+[Troubleshooting](/troubleshooting/), which is organised by symptom.
