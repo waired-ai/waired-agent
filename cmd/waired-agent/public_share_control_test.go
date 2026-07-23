@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -136,6 +138,98 @@ func TestPublicShareController_DisableFiresKillSwitch(t *testing.T) {
 	}
 	if fired != 1 {
 		t.Fatalf("onDisable fired %d times after Enable, want still 1", fired)
+	}
+}
+
+// blockedStateDir returns a state dir whose runtime/ subdirectory
+// cannot be created — a regular file occupies the path — so every
+// WriteDesiredPublicShare against it fails. This stands in for the
+// real-world triggers (disk full, read-only remount, permission
+// change) without needing root or a filesystem fixture, and behaves
+// the same on all three OSes.
+func blockedStateDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "runtime"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("blockedStateDir: %v", err)
+	}
+	if err := state.WriteDesiredPublicShare(dir, state.PublicShareOff); err == nil {
+		t.Fatal("blockedStateDir: writes still succeed; the fixture is not blocking")
+	}
+	return dir
+}
+
+// TestPublicShareController_DisableStopsServingDespitePersistFailure:
+// the kill switch is a live-state operation, not a persistence one.
+// When the desired-state write fails, the agent must still close the
+// admission gate, abort in-flight public streams and tell the CP to
+// revoke — the persistence failure only costs the choice surviving a
+// restart, and is reported to the operator afterwards (§8.3 step 1).
+func TestPublicShareController_DisableStopsServingDespitePersistFailure(t *testing.T) {
+	pc := newPublicShareController(blockedStateDir(t), state.PublicShareOn, nil)
+	fired := 0
+	pc.SetOnDisable(func() { fired++ })
+	pusher := &fakePusher{}
+	pc.SetPusher(pusher.push)
+
+	res, err := pc.Disable(context.Background())
+	if err == nil {
+		t.Fatal("Disable: want the persistence failure surfaced to the operator")
+	}
+	if pc.IsPublic() || !pc.IsPublicShareDenied() {
+		t.Fatalf("gate still open: IsPublic=%v IsPublicShareDenied=%v", pc.IsPublic(), pc.IsPublicShareDenied())
+	}
+	if fired != 1 {
+		t.Fatalf("onDisable fired %d times, want 1 (in-flight public streams must be aborted)", fired)
+	}
+	if len(pusher.calls) != 1 {
+		t.Fatalf("CP pushes = %d, want 1 (grant revocation must still be attempted)", len(pusher.calls))
+	}
+	if enabled, _ := pusher.lastCall(); enabled {
+		t.Fatal("CP push sent enabled=true on a disable")
+	}
+	if !res.CPSynced {
+		t.Fatal("CPSynced = false although the push succeeded")
+	}
+}
+
+// TestPublicShareController_EnableStaysOffOnPersistFailure: the ON
+// direction keeps persist-first. A failure there must leave the agent
+// NOT sharing — the fail-safe side — and must not push an enable the
+// machine cannot honour after a restart.
+func TestPublicShareController_EnableStaysOffOnPersistFailure(t *testing.T) {
+	pc := newPublicShareController(blockedStateDir(t), "", nil)
+	pusher := &fakePusher{}
+	pc.SetPusher(pusher.push)
+
+	if _, err := pc.Enable(context.Background(), 0); err == nil {
+		t.Fatal("Enable: want the persistence failure surfaced")
+	}
+	if pc.IsPublic() || !pc.IsPublicShareDenied() {
+		t.Fatalf("enable leaked through: IsPublic=%v IsPublicShareDenied=%v", pc.IsPublic(), pc.IsPublicShareDenied())
+	}
+	if len(pusher.calls) != 0 {
+		t.Fatalf("CP pushes = %d, want 0", len(pusher.calls))
+	}
+}
+
+// TestPublicShareController_ReconcileRemoteOffDespitePersistFailure:
+// the CP-authoritative OFF adoption path runs the same transition, so
+// it must stop serving too — a machine that cannot write its state dir
+// would otherwise ignore the CP's kill switch entirely.
+func TestPublicShareController_ReconcileRemoteOffDespitePersistFailure(t *testing.T) {
+	pc := newPublicShareController(blockedStateDir(t), state.PublicShareOn, nil)
+	fired := 0
+	pc.SetOnDisable(func() { fired++ })
+
+	pc.ReconcileRemote(true)  // CP has echoed our ON at least once
+	pc.ReconcileRemote(false) // ...now it says OFF
+
+	if pc.IsPublic() || !pc.IsPublicShareDenied() {
+		t.Fatalf("gate still open: IsPublic=%v IsPublicShareDenied=%v", pc.IsPublic(), pc.IsPublicShareDenied())
+	}
+	if fired != 1 {
+		t.Fatalf("onDisable fired %d times, want 1", fired)
 	}
 }
 
