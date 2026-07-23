@@ -99,6 +99,7 @@ export default defineConfig({
 						{ label: 'Pattern 1d — 1b, trimmed to the fold', slug: 'home-1d' },
 						{ label: 'Pattern 1e — 1b with tiles above the command', slug: 'home-1e' },
 						{ label: 'Pattern 1f — 1e, tiles above the fold', slug: 'home-1f' },
+						{ label: 'Pattern 1g — 1e/1f midpoint, default margins', slug: 'home-1g' },
 						{ label: 'Pattern 2 — sort the reader', slug: 'home-2' },
 						{ label: 'Pattern 3 — show it first', slug: 'home-3' },
 					],
