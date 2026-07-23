@@ -94,6 +94,7 @@ export default defineConfig({
 					collapsed: true,
 					items: [
 						{ label: 'Pattern 1 — action first', slug: 'home-1' },
+						{ label: 'Pattern 1b — action first + value panels', slug: 'home-1b' },
 						{ label: 'Pattern 2 — sort the reader', slug: 'home-2' },
 						{ label: 'Pattern 3 — show it first', slug: 'home-3' },
 					],
