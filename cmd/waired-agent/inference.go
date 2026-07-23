@@ -173,6 +173,16 @@ type inferenceSubsystemDeps struct {
 	// reporting; local telemetry is unaffected either way.
 	OnPublicUsage func(context.Context, gateway.UsageSample)
 
+	// LocalAdmission is threaded into the LOCAL gateway surfaces
+	// (:9473 / :9472 / :9480) so the owner's own engine work shares one
+	// admission counter with the peer overlay — the "local" half of the
+	// owner-priority latch (public share spec §8.2, waired#899). The
+	// overlay surface deliberately leaves it unset: its requests are
+	// already counted by the inference server's capacityGate.
+	//
+	// nil disables the accounting (unit tests, pre-session boot).
+	LocalAdmission func(context.Context) func()
+
 	// Routing returns the operator's currently-live RoutingPreference
 	// (Tailscale-exit-node-style manual routing). The Selector calls
 	// it once per SelectK to read mode + pinned peer atomically. nil
@@ -548,6 +558,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	gwDeps.IsPaused = isPaused
 	gwDeps.IsInferenceDisabled = isInferenceDisabled
 	gwDeps.PeerAdapterFactory = deps.PeerAdapterFactory
+	// LOCAL surface: the owner's own engine work counts against the
+	// machine's shared admission counter (§8.2, waired#899).
+	gwDeps.LocalAdmission = deps.LocalAdmission
 	gw := gateway.NewServer(gateway.ServerConfig{
 		Addr: fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort),
 	}, gwDeps)
@@ -577,6 +590,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// IsPaused / IsInferenceDisabled also empty: the inference.Server
 	// wraps its own pausedGate / inferenceGate around this HandlerSet.
 	// PeerAdapterFactory stays nil to enforce loop prevention.
+	// LocalAdmission stays nil too: peer requests reach here THROUGH
+	// the inference server's capacityGate, which already counted them
+	// (§8.2). This is the one surface that is not the owner's own
+	// traffic.
 	overlayHandlerSet := gateway.NewHandlerSet(overlayDeps)
 
 	// Claude-intercept HandlerSet (#601/#647): the third HandlerSet,
@@ -643,6 +660,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// PeerAdapterFactory: unlike the overlay set, remote selections
 	// are dispatched — that's the point of #601.
 	claudeDeps.PeerAdapterFactory = deps.PeerAdapterFactory
+	// LOCAL surface (§8.2, waired#899): the busiest one — this is where
+	// the owner's coding agent lands. Only the legs this device's own
+	// engine serves are counted; a remote leg loads the peer, not us.
+	claudeDeps.LocalAdmission = deps.LocalAdmission
 	// AuthToken empty: Claude Code presents its own subscription
 	// credentials, not waired's gateway token; loopback is the
 	// trust boundary (same posture as :9479).
@@ -684,6 +705,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			ocDeps.IsPaused = isPaused
 			ocDeps.IsInferenceDisabled = isInferenceDisabled
 			ocDeps.PeerAdapterFactory = deps.PeerAdapterFactory
+			// LOCAL surface: same admission accounting as :9473 / :9472.
+			ocDeps.LocalAdmission = deps.LocalAdmission
 			ocGw := gateway.NewServer(gateway.ServerConfig{
 				Addr: fmt.Sprintf("127.0.0.1:%d", cfg.OpenCodeGatewayPort),
 			}, ocDeps)

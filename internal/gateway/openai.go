@@ -132,6 +132,10 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	}
 	_ = rewritten // kept for symmetry, the second rewrite uses the original body
 
+	// Hold a slot on the shared admission counter for as long as this
+	// request occupies the local engine — engine start included (§8.2).
+	defer h.admitLocalEngine(r.Context(), sel)()
+
 	adapter, err := h.lookupAdapter(sel)
 	if err != nil {
 		rr.fail(http.StatusServiceUnavailable, "runtime_unavailable")

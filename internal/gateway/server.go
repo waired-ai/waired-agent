@@ -97,6 +97,25 @@ type Deps struct {
 	// snapshot AND PeerAdapterFactory is nil here.
 	PeerAdapterFactory func(deviceID string) (runtime.Adapter, error)
 
+	// LocalAdmission, when non-nil, is called for every request this
+	// listener dispatches to THIS machine's engine, and returns the
+	// release to run when the request lets go of it. It exists so the
+	// owner's own local traffic shares one admission counter with the
+	// peer-overlay listener (spec §8.2, waired#899): without it,
+	// Config.Capacity only ever described overlay arrivals, the engine
+	// could be oversubscribed by local + peer work at once, and the
+	// owner-priority latch could not fire on a machine whose only load
+	// is its owner's.
+	//
+	// Wired on the LOCAL surfaces (loopback gateway, Claude intercept,
+	// OpenCode) in cmd/waired-agent. The overlay listener leaves it nil
+	// — its requests are counted by the inference server's capacityGate
+	// before they ever reach these handlers.
+	//
+	// Never consulted for remote: / openai-compat: selections; those
+	// run on a peer or an upstream provider, not here.
+	LocalAdmission func(ctx context.Context) (release func())
+
 	// OnUsage, when non-nil, receives one UsageSample per request that
 	// reached an engine (waired#829). The gateway captures token counts
 	// on every surface for local telemetry regardless; this hook is what
