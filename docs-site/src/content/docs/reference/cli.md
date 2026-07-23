@@ -56,7 +56,7 @@ subcommand, for grouped, command-specific help.
 | `waired ping <peer>` | Send an overlay ping to a peer via the daemon. |
 | `waired keygen` | Generate a WireGuard key pair (`init` normally does this for you). |
 | `waired version` | Print the build version (`--json` for `{version, buildSHA, os, arch}`). |
-| `waired update` | Check for and apply an update, staying on the host's current channel (`--check` to report only, `--yes` to apply non-interactively, `--edge` / `--stable` to switch channel). See [Install → Update](/getting-started/install/#update). |
+| `waired update` | Check for and apply an update, staying on the host's current channel (`--check` to report only, `--yes` to apply non-interactively, `--edge` / `--stable` to switch channel). See [Install → Update](/getting-started/update/). |
 
 ## Global flags
 

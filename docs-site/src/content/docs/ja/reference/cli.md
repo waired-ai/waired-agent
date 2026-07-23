@@ -55,7 +55,7 @@ description: すべての waired コマンドのリファレンス — セット
 | `waired ping <peer>` | デーモン経由でピアにオーバーレイ ping を送信します。 |
 | `waired keygen` | WireGuard キーペアを生成します (通常は `init` がこれを行います)。 |
 | `waired version` | ビルドバージョンを出力します (`{version, buildSHA, os, arch}` には `--json`)。 |
-| `waired update` | 現在のチャンネルを維持したまま更新を確認して適用します (報告のみは `--check`、非対話的に適用するには `--yes`、チャンネル切り替えは `--edge` / `--stable`)。[インストール → 更新](/ja/getting-started/install/#update) を参照。 |
+| `waired update` | 現在のチャンネルを維持したまま更新を確認して適用します (報告のみは `--check`、非対話的に適用するには `--yes`、チャンネル切り替えは `--edge` / `--stable`)。[インストール → 更新](/ja/getting-started/update/) を参照。 |
 
 ## グローバルフラグ
 
