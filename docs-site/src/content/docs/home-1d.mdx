@@ -20,60 +20,112 @@ hero:
 import { Tabs, TabItem, CardGrid, Aside } from '@astrojs/starlight/components';
 import IconLinkCard from '../../components/IconLinkCard.astro';
 
-{/* LANDING PATTERN 1d — between 1b and 1c.
+{/* LANDING PATTERN 1d — 1b's content and breathing room, with only the wasted
+    vertical space removed, so the fold lands around the "Find what you need"
+    heading rather than inside the panels.
 
-    1c compressed hard enough that the second card grid crept onto the first
-    screen too. 1d aims the fold at one specific line instead: the reader should
-    see the hero, the install command, the four panels, and the
-    "Find what you need" heading — and have to scroll for what is under it.
-    That heading is the promise that there is more, which is exactly what you
-    want the fold to cut on.
+    What is cut, and nothing else:
+      - The h1 was "Waired documentation" at full splash size. It is now
+        "Waired" — a docs site's home page does not need to announce that it
+        is a docs site, and that line alone was ~90px.
+      - The hero's block padding, which is sized for a marketing page.
+      - The splash page's paragraph rhythm, from generous to normal.
 
-    Everything below is 1b's content; only the vertical spacing differs.
-    Note that the fold is a range, not a number: a 13" laptop has roughly 700px
-    of content height and a maximised 1080p window about 900px, so this is tuned
-    for the smaller one and simply shows a little of the next grid on the
-    larger. */}
+    Panel copy, card padding and type sizes are 1b's. Compare with 1c, which
+    compresses all three and gets both grids above the fold as a result. */}
 
-<div id="wd-medium" hidden></div>
+<style is:global>{`
+	/*
+	 * Gated on body:has(#wd-airy) — the hidden marker below — so these
+	 * overrides cannot reach another route even if the bundler merges CSS
+	 * chunks. Unlayered, so they beat Starlight's @layer starlight.components
+	 * without !important.
+	 *
+	 * Editing note: MDX parses { as an expression start inside <style> too, so
+	 * this CSS is a template literal and must contain no backticks.
+	 */
+	body:has(#wd-airy) .hero {
+		padding-block: 1rem;
+	}
+	body:has(#wd-airy) .hero h1 {
+		font-size: var(--sl-text-5xl);
+		line-height: 1.15;
+	}
+	body:has(#wd-airy) .sl-markdown-content > :first-child {
+		margin-top: 2rem;
+	}
+	body:has(#wd-airy) .sl-markdown-content > * + * {
+		margin-top: 2rem;
+	}
+	body:has(#wd-airy) .sl-markdown-content h2 {
+		margin-top: 2.5rem;
+	}
+	/* Starlight's card padding scales to 2.5rem on a wide screen, which is more
+	   than a tile with three lines of text needs. This caps it without making
+	   the cards feel cramped. */
+	body:has(#wd-airy) .wd-card {
+		--wd-pad: clamp(1.25rem, calc(0.125rem + 2vw), 1.75rem);
+	}
+`}</style>
+
+<div id="wd-airy" hidden></div>
+
+Waired connects your laptops, GPU servers, VMs and home boxes so that
+**local AI models can be shared across your own devices** without exposing them
+to the public internet. Type in Claude Code on any laptop and the answer comes
+from your own machine — no per-message bill, no subscription, and your prompts
+never leave your devices.
+
+## Install in one command
 
 <Tabs syncKey="os">
 	<TabItem label="Windows">
+		From **Terminal (Administrator)** — right-click the Start button:
+
 		```powershell
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
-		From **Terminal (Administrator)** — right-click the Start button.
 	</TabItem>
 	<TabItem label="macOS">
+		From **Terminal** — press ⌘ + Space and type `Terminal`:
+
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
-		From **Terminal** — press ⌘ + Space and type `Terminal`. macOS 13+.
 	</TabItem>
 	<TabItem label="Linux">
+		From a terminal, on Ubuntu 24.04+ or Debian trixie+:
+
 		```sh
 		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
 		```
-		From a terminal, on Ubuntu 24.04+ / Debian trixie+.
 	</TabItem>
 </Tabs>
 
+It shows what it will do and asks before changing anything. Then finish setup
+**on screen or in the terminal** — the [Quickstart](/quickstart/) covers both.
+
+## Why people run it
+
 <CardGrid>
 	<IconLinkCard title="One command" icon="rocket" href="/quickstart/">
-		Install with one line, sign in with Google, and finish on screen or in the
-		terminal — about ten minutes either way.
+		Install with a single line, sign in with Google, and your coding agent is
+		linked for you. Finish setup on screen or in the terminal — about ten
+		minutes either way.
 	</IconLinkCard>
 	<IconLinkCard title="Free to run" icon="approve-check" href="/reference/model-catalog/">
-		The model runs on hardware you already own. See which one fits your
-		machine.
+		The model runs on hardware you already own. A recent processor handles a
+		small model; a graphics card makes it fast. See what fits your machine.
 	</IconLinkCard>
 	<IconLinkCard title="Private by design" icon="padlock" href="/concepts/privacy/">
-		Your devices talk directly, end-to-end encrypted. Waired's servers never
-		see your prompts.
+		Your devices talk directly over an end-to-end encrypted link. The
+		coordination service never sees your prompts or replies — and neither can
+		the relay.
 	</IconLinkCard>
 	<IconLinkCard title="Your tools, unchanged" icon="puzzle" href="/guides/coding-agents/">
-		Claude Code, OpenCode, and any OpenAI-compatible client keep working as
-		they are.
+		Claude Code and OpenCode work out of the box, plus any OpenAI- or
+		Anthropic-compatible client. Waired changes where the answer comes from,
+		not how you work.
 	</IconLinkCard>
 </CardGrid>
 
@@ -102,58 +154,3 @@ import IconLinkCard from '../../components/IconLinkCard.astro';
 	picture, in about two minutes — and it is honest about what Waired *cannot*
 	do.
 </Aside>
-
-<style is:global>{`
-	/*
-	 * Every rule is gated on body:has(#wd-medium), the hidden marker at the
-	 * top of this page. The gate — rather than relying on the stylesheet only
-	 * shipping with this route — is what guarantees the rest of the site keeps
-	 * Starlight's default spacing even if the bundler merges CSS chunks.
-	 *
-	 * These rules are unlayered, so they win over Starlight's own
-	 * @layer starlight.components without needing !important.
-	 */
-	body:has(#wd-medium) .hero {
-		padding-block: 0.5rem;
-		gap: 1.25rem;
-	}
-	body:has(#wd-medium) .hero h1 {
-		font-size: var(--sl-text-4xl);
-		line-height: 1.15;
-	}
-	body:has(#wd-medium) .hero .tagline {
-		font-size: var(--sl-text-lg);
-		margin-top: 0.4rem;
-		max-width: 48ch;
-	}
-	body:has(#wd-medium) .hero .actions {
-		margin-top: 1rem;
-	}
-	/* Splash pages set a generous vertical rhythm for marketing copy; this
-	   pulls the first block up under the buttons and tightens the rest. */
-	body:has(#wd-medium) .sl-markdown-content > :first-child {
-		margin-top: 1.5rem;
-	}
-	body:has(#wd-medium) .sl-markdown-content > * + * {
-		margin-top: 1.5rem;
-	}
-	body:has(#wd-medium) .sl-markdown-content h2 {
-		margin-top: 2rem;
-		font-size: var(--sl-text-2xl);
-	}
-	body:has(#wd-medium) .card-grid {
-		gap: 1rem;
-	}
-	body:has(#wd-medium) .wd-card {
-		--wd-pad: 1.25rem;
-	}
-	body:has(#wd-medium) .wd-title {
-		font-size: var(--sl-text-lg);
-	}
-	body:has(#wd-medium) .wd-body {
-		font-size: var(--sl-text-sm);
-	}
-	body:has(#wd-medium) .starlight-aside {
-		padding: 0.75rem 1rem;
-	}
-`}</style>
