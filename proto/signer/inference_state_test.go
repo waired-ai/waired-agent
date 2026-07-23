@@ -163,6 +163,91 @@ func TestHardwareSummary_OmitemptyOnEmpty(t *testing.T) {
 	}
 }
 
+// TestHardwareSummary_HostFitFields_CanonicalJSON is the byte-identity
+// pin required of every additive proto change (decisions.md 20260719).
+// UnifiedMemory / UsableVRAMMB / Vendor were added for the control
+// plane's onboarding host-fit; an agent that does not set them must
+// still produce EXACTLY the pre-addition bytes, because HardwareSummary
+// rides the signed NetworkMap and a shifted encoding would churn the
+// map for every peer on a rolling upgrade.
+func TestHardwareSummary_HostFitFields_CanonicalJSON(t *testing.T) {
+	// Discrete-GPU host that predates the three fields: byte-for-byte
+	// the encoding published under proto/v0.2.3.
+	legacy := HardwareSummary{
+		GPUs: []HardwareGPUSummary{{
+			Model:       "NVIDIA GeForce RTX 4090",
+			VRAMTotalMB: 24564,
+			ComputeCap:  "8.9",
+		}},
+		RAMTotalGB: 64,
+	}
+	const wantLegacy = `{"gpus":[{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,` +
+		`"compute_cap":"8.9"}],"ram_total_gb":64}`
+	data, err := json.Marshal(&legacy)
+	if err != nil {
+		t.Fatalf("marshal legacy: %v", err)
+	}
+	if got := string(data); got != wantLegacy {
+		t.Errorf("unset host-fit fields changed the encoding:\n got %s\nwant %s", got, wantLegacy)
+	}
+
+	// UMA host that does set them — the keys appear only when non-zero,
+	// and in struct-declaration order.
+	uma := HardwareSummary{
+		GPUs: []HardwareGPUSummary{{
+			Model:       "Apple M3 Max",
+			VRAMTotalMB: 40960,
+			Vendor:      "apple",
+		}},
+		RAMTotalGB:    64,
+		UnifiedMemory: true,
+		UsableVRAMMB:  49152,
+	}
+	const wantUMA = `{"gpus":[{"model":"Apple M3 Max","vram_total_mb":40960,"vendor":"apple"}],` +
+		`"ram_total_gb":64,"unified_memory":true,"usable_vram_mb":49152}`
+	data, err = json.Marshal(&uma)
+	if err != nil {
+		t.Fatalf("marshal uma: %v", err)
+	}
+	if got := string(data); got != wantUMA {
+		t.Errorf("host-fit encoding drifted:\n got %s\nwant %s", got, wantUMA)
+	}
+
+	// And they survive a round trip (the CP reads them off the stored
+	// push to decide which models it may offer for this device).
+	var out HardwareSummary
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&uma, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", uma, out)
+	}
+}
+
+// TestHardwareSummary_HostFitBackwardCompat pins the rolling-upgrade
+// direction the other way: JSON written by an agent that predates the
+// three fields parses cleanly, leaving them zero. The control plane
+// reads a zero UsableVRAMMB as "unknown" and falls back to the GPU's
+// raw VRAMTotalMB, so an old agent degrades to the previous behaviour
+// rather than being judged unable to run anything.
+func TestHardwareSummary_HostFitBackwardCompat(t *testing.T) {
+	preJSON := []byte(`{"gpus":[{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,` +
+		`"compute_cap":"8.9"}],"ram_total_gb":64}`)
+	var hs HardwareSummary
+	if err := json.Unmarshal(preJSON, &hs); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if hs.UnifiedMemory {
+		t.Errorf("UnifiedMemory = true, want false on a pre-addition payload")
+	}
+	if hs.UsableVRAMMB != 0 {
+		t.Errorf("UsableVRAMMB = %d, want 0 on a pre-addition payload", hs.UsableVRAMMB)
+	}
+	if len(hs.GPUs) != 1 || hs.GPUs[0].Vendor != "" {
+		t.Errorf("GPUs = %+v, want one GPU with an empty Vendor", hs.GPUs)
+	}
+}
+
 func indexOf(haystack, needle string) int {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {

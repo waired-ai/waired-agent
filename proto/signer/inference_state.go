@@ -175,13 +175,32 @@ type HardwareSummary struct {
 	// RAMTotalGB is the total system RAM in GB (rounded). Used for
 	// display when a peer is serving an ollama (CPU-bound) variant.
 	RAMTotalGB int `json:"ram_total_gb,omitempty"`
+
+	// UnifiedMemory / UsableVRAMMB describe hosts where the GPU and CPU
+	// share physical RAM (Apple Silicon, AMD Strix Halo). They mirror
+	// hardware.Profile's fields of the same name and exist so a consumer
+	// that is not the agent — today the control plane's onboarding
+	// host-fit, which decides which catalog models it may offer for a
+	// device — can reproduce the agent's own budget instead of comparing
+	// against a raw VRAMTotalMB that overstates what the GPU can wire
+	// down. UsableVRAMMB is the GPU-addressable upper bound after the OS
+	// reserve; 0 means "unknown", and a consumer must then fall back to
+	// GPUs[0].VRAMTotalMB (this is also what a pre-addition agent sends).
+	//
+	// Unlike RecommendedMaxParallel these DO ride the served NetworkMap:
+	// HardwareSummary is a broadcast type by construction, and both
+	// fields are fixed for the life of the host (the summary is sampled
+	// once at boot), so they add no map churn.
+	UnifiedMemory bool `json:"unified_memory,omitempty"`
+	UsableVRAMMB  int  `json:"usable_vram_mb,omitempty"`
 }
 
 // HardwareGPUSummary identifies one GPU. Fields mirror
 // hardware.GPU but stripped to what other peers can act on.
 type HardwareGPUSummary struct {
 	// Model is the vendor-reported model name, e.g. "NVIDIA GeForce
-	// RTX 4090". Free-form; do not parse for routing decisions.
+	// RTX 4090". Free-form; do not parse for routing decisions — read
+	// Vendor below, which carries the same answer as a fixed token.
 	Model string `json:"model"`
 
 	// VRAMTotalMB is the device's total VRAM in megabytes.
@@ -190,6 +209,23 @@ type HardwareGPUSummary struct {
 	// ComputeCap is the CUDA compute capability formatted as a
 	// string (e.g. "8.9" for Ada Lovelace). Empty for non-CUDA.
 	ComputeCap string `json:"compute_cap,omitempty"`
+
+	// Vendor is the lowercase GPU vendor token, mirroring
+	// hardware.GPU.Vendor. The shipped detectors emit exactly
+	// "nvidia", "amd" and "apple" today; the set grows as detectors are
+	// added (Intel Arc is the named next one), so treat an unrecognised
+	// token as "some GPU we have no rule for" rather than as invalid.
+	// It was
+	// deliberately absent while the summary served only peer display;
+	// the control plane's onboarding host-fit now needs it, because
+	// which engines a host can run is vendor-dependent (vLLM is an
+	// NVIDIA path; AMD is served through Ollama's ROCm/Vulkan
+	// backends, waired#290). Publishing the token is what lets a
+	// consumer honour the "do not parse Model" rule above. Empty means
+	// "unknown" — a pre-addition agent, or a detector that could not
+	// identify the adapter — and a consumer must not read that as "no
+	// GPU".
+	Vendor string `json:"vendor,omitempty"`
 }
 
 // Engine type constants — accepted values for InferenceState.Type.
