@@ -1,221 +1,355 @@
 ---
-title: トラブルシューティング
-description: 何かおかしいときに実行する 3 つのコマンド、症状から対処への対応表、そして最もよくある Waired の問題への対処法。
+title: うまくいかないとき
+description: いま実際に起きている症状を自分の言葉で探して、直すための手順を 1 つだけ見つけます。
 ---
 
-何かおかしいと感じたら、3 つのコマンドでほぼすべてを診断できます。順番に実行して
-ください。
+<!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
+     問題かではない。そのため索引は読者の言葉で書き、各項目は 1 つの対処へ導く。
 
-| # | コマンド | わかること |
+     各見出しの直前に英語の id を置いてあるのは、他ページ（EN / JA 双方）からの
+     アンカーリンクを言語間で同じ形に保つため。見出しを日本語にすると自動生成の
+     id が変わってしまい、リンクが切れる。 -->
+
+## まずこれ
+
+```sh
+waired doctor
+```
+
+セットアップの各部分を点検し、✓ / ⚠ / ✗ で表示します。**f** キーを押すと、
+直せるものは自動で修復します。このページの他の項目より先に実行してください。
+たいていはこれだけで解決します。
+
+## 症状から探す
+
+**セットアップ中**
+
+- [`waired` と入力したら「コマンドが見つかりません」と出た](#i-typed-waired-and-got-command-not-found)
+- [セットアップが途中で止まった](#setup-stopped-partway)
+- [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
+- [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
+- [「非常に小さいモデルしか動かせない」と言われた](#it-said-my-machine-can-only-run-a-very-small-model)
+
+**応答がない**
+
+- [応答が返ってこない / Engine が not ready のまま](#no-answer-comes-back)
+- [Claude Code がクラウドを使い続ける](#claude-code-is-still-using-the-cloud)
+- [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
+- [Windows で 502 エラーになる](#windows-i-get-a-502-error)
+
+**遅い・おかしい**
+
+- [応答がとても遅い](#answers-are-very-slow)
+- [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
+- [ハードウェアより大きいモデルを選んでしまった](#i-chose-a-model-bigger-than-my-hardware)
+- [長い Claude Code のセッションが要約される](#long-claude-code-sessions-get-summarized)
+
+**ほかのパソコン**
+
+- [ほかのパソコンから AI に届かない](#my-other-computer-cannot-reach-the-ai)
+
+**アプリ本体**
+
+- [Waired のアイコンが出ない（Linux）](#the-waired-icon-is-missing-linux)
+- [Claude Code にステータス行が出ない](#the-status-line-does-not-show-up-in-claude-code)
+
+---
+
+<a id="i-typed-waired-and-got-command-not-found"></a>
+
+## `waired` と入力したら「コマンドが見つかりません」と出た
+
+インストールが完了していないか、インストール前から開いていたターミナルが
+新しいコマンドをまだ認識していないかのどちらかです。
+
+1. **ターミナルを閉じて開き直してください。** 起動中のシェルはコマンドの場所を
+   記憶しているため、多くはこれだけで解決します。
+2. それでも出ない場合は、インストールコマンドをもう一度実行してください
+   （[インストール](/ja/getting-started/install/)）。2 回実行しても安全です。
+
+Windows ではコマンドの実体は `C:\Program Files\Waired\waired.exe` です。
+`waired` だけで動かない場合も、このフルパスなら必ず動きます。
+
+<a id="setup-stopped-partway"></a>
+
+## セットアップが途中で止まった
+
+セットアップ画面に、何が起きたかが表示されます。メッセージごとに意味が決まっています。
+
+| 表示 | 意味 | 対処 |
 |---|---|---|
-| 1 | `waired doctor` | ゲートウェイトークン、一時停止状態、エンジンの準備状況、メッシュピア、コーディングエージェント統合について ✓/⚠/✗ を表示。ターミナルでは `f` を押すと修復可能なものを修復します（非対話的に修復するには `--fix`）。 |
-| 2 | `waired status --observability` | ライブスナップショット: エンジン、共有、一時停止、メッシュ（enrolled / reachable / ready）、および直近の推論の判断 + レイテンシ。マシン可読な出力には `-o json` を追加します。 |
-| 3 | `waired claude status` | Claude Code のマネージド設定連携が有効かどうか、そして `managed-settings.json` ファイルの場所。 |
+| The setup command on … was closed before this finished. Your progress was saved. | セットアップを実行していたターミナルが閉じられた。管理者権限が必要な工程は、そのウィンドウだけが担当している。 | `sudo waired init`（Windows は管理者プロンプトで `waired init`）をもう一度実行。続きから再開し、進捗は失われません。 |
+| Setup on … needs administrator access to continue. | 管理者権限なしで開始された。 | 管理者のターミナルから開始し直してください（[サインインとセットアップ](/ja/getting-started/first-run/)）。 |
+| … has run out of disk space. | モデルが入りきらなかった。 | 空き容量を作るか、[カタログ](/ja/reference/model-catalog/)から小さいモデルを選びます。 |
+| … could not finish downloading. Check its internet connection. | ダウンロードが中断された。 | 再試行してください。最初からではなく途中から再開します。 |
+| The AI software on … has not started yet. | エンジンがまだ起動中。 | 1 分ほど待って再試行。続く場合は[応答が返ってこない](#no-answer-comes-back)へ。 |
+| This took too long on … and was stopped. | ある工程が制限時間を超えた。 | 再試行してください。同じ工程で 2 回起きる場合、そのモデルにはこのマシンが遅すぎる可能性が高いです。 |
 
-:::tip[まずは必ず `waired doctor` を実行]
-Waired は、障害が静かにではなく可視になるよう設計されています。`waired doctor` は
-正面玄関です。ログを掘り下げる前にこれを実行してください。
-:::
+なお**モデルのダウンロードだけは例外**で、ブラウザのタブを閉じても続きます。
+[app.waired.ai](https://app.waired.ai) でそのデバイスを開けば途中経過を確認できます。
 
-## 症状 → 最初のコマンド
+<a id="it-says-i-have-reached-the-device-limit"></a>
 
-| 症状 | まず実行 | 何が起きているか |
-|---|---|---|
-| Claude Code がローカルモデルではなくクラウドを使う | `waired doctor` → `waired claude status` | ゲートウェイトークン / 一時停止 / エンジン / メッシュピアが ✗ を示す場合、サービングは Anthropic へフェイルオープンしています。`f` を押してトークン + スキルを再構築してください。マネージド設定が未有効なら有効化します（下記参照）。 |
-| `waired infer` が 503 `waired_paused` を返す | `waired resume` | ルーティングが一時停止中です。再開してください。 |
-| `waired infer` が 503 `waired_inference_disabled` を返す | `waired inference share on` | 共有がオフになっています。（ローカル専用利用ならオフのままで問題ありません — 自分の `waired infer` は引き続き動作します。） |
-| `Engine: not ready` | `waired runtimes status` + `waired models ls` | ランタイムがダウンしているか、モデルがまだプル中です。 |
-| メッシュピアが現れない / `reachable=false` | `waired status --observability -o json` | エンロール、コントロールプレーン同期、WireGuard の到達性を確認してください。 |
-| システムトレイのアイコンが表示されない（Linux） | `waired doctor` | GNOME ではトレイに AppIndicator ホスト拡張が必要です。`system tray host` の行で拡張が無いことがわかります（下記参照）。 |
-| `waired status` が「システム全体でエンロール済み」だが要昇格と表示する | `sudo waired status` | サービスインストールではデバイス状態が root 所有です。完全な状態を見るには昇格して再実行してください（下記参照）。 |
-| コマンドが「waired-agent is not running」と表示する | `waired doctor` | ローカルデーモンに到達できません — サービスを再起動してください（[さらに深く](#さらに深くログ)参照）。 |
+## デバイス数の上限に達したと言われた
 
-## よくある対処法
+1 アカウントで十分な台数を登録できますが、たいていは使わなくなった古いマシンが
+残ったままになっているのが原因です。
 
-### `waired status` が「システム全体でエンロール済み」（要昇格）と表示する
+[app.waired.ai](https://app.waired.ai) を開き、不要なデバイスを削除してから
+もう一度セットアップしてください。
 
-サービスインストール(Linux/macOS で通常の `sudo waired init` を行ったケース、または
-Windows のサービス)では、デバイス状態は root(Windows では SYSTEM +
-Administrators)だけが読めるシステムディレクトリ(Linux では `/var/lib/waired`、
-Windows では `%ProgramData%\waired`)に保存されます。一般ユーザーで `waired status`
-や `waired auth status` を実行してもこれを読めないため、コマンドは推測せず、デバイスが
-**システム全体でエンロール済み**であることを伝えて終了コード 0 で終了します(状態確認は
-失敗ではありません)。完全な識別情報とデーモン状態を見るには、昇格して再実行してください
-— `sudo waired status`(Windows では管理者プロンプトから)。
+**すでにサインイン済み**のマシンでセットアップをやり直す分には、上限に数えられません。
 
-代わりに `Not enrolled. Run \`waired init\` to connect this device.` が終了コード 0 で
-表示される場合は、そのマシンは本当に未エンロールです — `waired init` を実行してください。
+<a id="it-says-the-device-is-enrolled-system-wide"></a>
 
-### `waired init` が「デバイス数の上限に達した」と表示する
+## 「enrolled system-wide」と表示される
 
-1 アカウントでエンロールできるデバイス数には（十分に大きめの）上限があります。
-`waired init` が **device limit reached**（デバイス数上限）のメッセージで止まった
-場合はこの上限に達しています。ほとんどは、もう使っていない古いマシンがまだエンロール
-されたままなのが原因です。Web 管理画面を開いて不要なデバイスを削除してから、もう一度
-`waired init` を実行してください。**すでにエンロール済み**のマシンで（再認証のために）
-`waired init` を実行する分には、上限にはカウントされません。
+エラーではありません。デバイスの識別情報は管理者しか読めないシステム領域に保存されて
+いるため、一般ユーザーとして実行した `waired status` からは見えません。推測で答える
+代わりに「このデバイスは登録済みです」と伝えて正常終了しています。
 
-### Claude Code（または OpenCode）が自分のモデルを使っていない
+すべて表示するには管理者権限で実行してください。
 
-`waired doctor` を実行します。ゲートウェイトークンや統合についてフラグが立った場合は、
-`f` を押す（または `waired link all` を実行する）と再構築されます。`waired claude status`
-がマネージド設定連携が未有効であることを示している場合は有効化します: `sudo waired claude enable`
-（Linux/macOS）、または管理者権限で `waired claude enable`（Windows）。
-[コーディングエージェント](/ja/guides/coding-agents/) を参照してください。
+```sh
+sudo waired status          # Windows は管理者プロンプトから
+```
 
-`waired claude status` は、リクエストが自分のモデルではなく本物の Anthropic API に
-送られた際の**最後のフォールバック**とその理由も表示します:
+代わりに `Not enrolled. Run 'waired init' to connect this device.` と出た場合は、
+本当にまだセットアップされていません
+（→ [サインインとセットアップ](/ja/getting-started/first-run/)）。
 
-- `local_no_model` — このデバイスでアクティブなローカルモデルがまだありません。
-  `waired status` を確認してモデルを選択/取得してください。
-- `local_status_<コード>` — フォールバック直前にローカル配信がその HTTP ステータスで
-  エラーになりました。詳細は `waired status --observability` で確認できます。
+<a id="it-said-my-machine-can-only-run-a-very-small-model"></a>
 
-### Claude Code の長いセッションがコンパクトされる（または「prompt is too long」）
+## 「非常に小さいモデルしか動かせない」と言われた
 
-これは想定どおりの正常な挙動です。ローカルモデルのコンテキスト窓は Claude の
-ホスト型モデルより小さいため、Waired が実際の窓を Claude Code に伝え、Claude Code
-が会話を自動コンパクト（要約）して収めます — 長いセッションでも、コンテキストの
-先頭が無言で切り捨てられることなく機能し続けます。一瞬「prompt is too long」の
-表示が出ても、Claude Code が自動でコンパクトして再送するので操作は不要です。
-より大きな窓が欲しい場合は `/waired-route anthropic` でセッションを本物の
-Anthropic API に切り替えられます — 選択中モデル本来の窓（`[1m]` モデルなら 1M）が、
-同じセッションでも次のリクエストから適用されます。
-[コーディングエージェント](/ja/guides/coding-agents/)を参照。
+その判断は信頼してください。そのサイズのコーディングモデルは、役に立つ出力より
+壊れた出力のほうが多くなります。既定が「いいえ」なのはそのためです。
 
-### Claude Code に waired のステータスラインが表示されない
+それでもこのマシンをネットワークに入れる価値はあります — ほかのパソコンの AI を
+使えるからです。どうしても入れたい場合は `--inference-enabled=true` を付けて
+セットアップし直してください。
 
-**プロジェクトディレクトリの中で** `waired claude status` を実行してください。
-Claude Code のステータスラインは単一スロットで優先順位が厳格に決まっており、
-プロジェクトの `.claude/settings.local.json` / `.claude/settings.json` は
-Waired が入れるユーザーレベルの設定より優先されます。shadow されている場合、
-status の出力が該当ファイル名と、そのステータスラインスクリプトに追記すれば
-ルートを表示できる 1 行スニペットを表示します。また `waired claude enable` の
-あとに Claude セッションを再起動したかも確認してください。
+<a id="no-answer-comes-back"></a>
 
-### エンジンが「not ready」のまま
+## 応答が返ってこない
 
-サインイン中、`waired init` はエンジンの起動を段階的に表示します — 「Starting the
-inference engine…」「Preparing to download <モデル>…」のあと、ライブの
-「Downloading <モデル>: NN%  X.X GB / Y.Y GB (Z MB/s)」バー、最後に「<モデル> ready」。
-大きなモデルの初回ダウンロードは数 GB あるため、ダウンロード段階に時間がかかるのは
-正常で、バーは進み続けます。
+エンジンの状態を確認します。
 
-代わりに「Waiting for the inference engine to start…」のまま止まり、その後エンジンが
-まだ起動していない旨が表示された場合は、ローカルエンジンが起動していません。
-`waired status` で現在の状態を、`waired doctor`（Linux では
-`journalctl -u waired-agent -e`）で詳細を確認してください。
-モデルがまだダウンロード中の可能性もあります — `waired models ls` で進捗が表示されます。
-ランタイム自体がダウンしている場合は、`waired runtimes status` に詳細が表示されます。
-モデルの初回ロードは遅く（コールドな CUDA ロードは約 60 秒かかることがあり、ROCm も
-同様です）、エンジンは自動的に再試行して回復します。
+```sh
+waired status --observability
+```
 
-<a id="a-model-wont-load-on-an-integrated-gpu"></a>
-### 統合 GPU でモデルがロードできない
+見るべきは **Engine** の行です。
 
-最近の Ollama バージョンは、統合 GPU（AMD Radeon iGPU、Intel iGPU）を
-デフォルトで無効にし、`OLLAMA_IGPU_ENABLE=1` が設定されていないと静かに CPU へ
-フォールバックします。Waired は統合 AMD GPU（Radeon 780M/760M など）や Intel
-iGPU を認識し、このフラグを設定したうえで Vulkan バックエンドでエンジンを
-**自動的に**起動します。通常、手動での設定は不要です。選択されたバックエンドは
-`waired doctor` で確認できます。Linux ではモバイル APU の iGPU は `rocm-smi` が
-無いとプロファイラから見えませんが、Waired は CPU モデル名から Vulkan
-パスを有効化します。ディスクリート AMD カードは Ollama が対応する範囲で ROCm を
-使い（Linux はバンドル、Windows はインストーラのオーバーレイ）、ROCm が有効に
-ならない場合は Vulkan にフォールバックします。Waired の管理外で独自の Ollama を
-動かしている場合は、`OLLAMA_IGPU_ENABLE=1` を自分で設定して再起動してください。
-また、モデルが収まるかどうかも確認してください —
-[モデルカタログ](/ja/reference/model-catalog/) の RAM/VRAM の列を参照してください。
+- **`ready`** — モデルは読み込まれています。それでも失敗するなら、原因は経路側です
+  → [Claude Code がクラウドを使い続ける](#claude-code-is-still-using-the-cloud)。
+- **`not ready`** — 多くはまだダウンロード中です。`waired models ls` で進捗を確認して
+  ください。最初のモデルは数 GB あります。
+- **ダウンロード完了後も `not ready`** — そのモデルがメモリに収まっていない可能性が
+  高いです。小さいものに変更してください
+  → [使う AI モデルを選ぶ](/ja/guides/choose-a-model/)。
 
-### 「このマシンはごく小さなモデルしか動かせません」— 有効化すべき?
+知っておくとよい原因が 2 つあります。
 
-RAM の少ないマシンでは、`waired init` が「ごく小さいモデルしか収まらない」と
-表示し、それでもローカル推論を有効にするか確認することがあります（既定は
-**いいえ**）。そのサイズではローカルのコーディング品質が極めて低く、壊れた出力に
-なりがちで、通常は動かす価値がありません。断っても Waired は安全な
-ゲートウェイ/リレーとして動作します（メッシュ上の能力あるピアへルーティング
-可能）。同様に、init 末尾のベンチマークでモデルが遅すぎ、さらに軽い選択肢が
-その極小モデルしか無い場合は、ローカル推論を無効化するか尋ねます。いずれの選択も
-後から `waired runtimes benchmark`、あるいはより高性能なハードウェアで
-`waired init` を再実行して見直せます。
+- モデルの**初回**読み込みは遅く（GPU でも 1 分前後）、固まったように見えます。
+  自動で復帰します。
+- **503** が返る場合は、ルーティングが一時停止中（`waired resume`）か、共有が
+  オフ（`waired inference share on`）です。
 
-補足: ベンチマークはリクエストのオーバーヘッドを除いた純粋なデコード速度を
-計測するようになったため、tok/s の値は以前のリリースより高く表示されます
-（従来は高速なマシンほど過小評価されていました）。アップグレード後の初回起動
-では、古いキャッシュ値を使わず一度だけ再計測します。
+それでも解決しない場合、`waired runtimes status` がエンジン自体の状態を、
+[ログを見る](#going-deeper-logs)がより詳しい情報を提供します。
 
-### 推奨スペックを超えるモデルを選んだ場合
+<a id="claude-code-is-still-using-the-cloud"></a>
 
-Waired はホストの推奨スペックを超えるモデルの実行を **警告はするが禁止はしません**。
-そのようなモデルを pull / 切り替えると、不足分（例: `needs 32 GB RAM (have 31 GB)`）
-を示す確認が一度だけ表示されるので、続行を選べます。スクリプトでは
-`waired models pull` に `--yes` を渡すと確認を省略できます。
+## Claude Code がクラウドを使い続ける
 
-推論自体はスペック超過を理由にブロックされません。モデルはロードされ動作します
-（遅くなる場合や、重みが本当に収まらない場合はエンジン側で明確なロード失敗と
-なります — 事前の一律拒否ではありません）。以前のリリースは、わずかに推奨メモリ
-を超えただけでもリクエスト時に `422 hardware_insufficient` を返していましたが、
-その推論時ブロックは廃止しました。
+```sh
+waired doctor          # f キーで見つかった問題を修復
+waired claude status
+```
 
-推奨 RAM/VRAM 値には安全マージンが含まれ、ユニファイドメモリ機（Apple Silicon,
-AMD Strix Halo）では残りのシステム RAM ではなく GPU が使えるプール容量で判定
-されます。ホスト上の各モデルの適合状況は `waired models ls --detail` または
-[モデルカタログ](/ja/reference/model-catalog/) で確認できます。
+`waired doctor` は、Claude Code と Waired の接続が壊れている場合に再構築します。
+`waired claude status` が「連携が無効」と表示する場合は有効化し、Claude Code の
+セッションを再起動してください。
 
-### システムトレイのアイコンが表示されない（Linux / GNOME）
+```sh
+sudo waired claude enable     # Windows は管理者プロンプトから
+```
 
-GNOME には組み込みのシステムトレイが無いため、`waired-tray` のアイコンは
-**AppIndicator ホスト拡張** がインストールされ有効になっているときだけ描画されます。
-`waired init` は GNOME を検出すると拡張を自動でインストール・有効化し、
-`waired doctor` は拡張が無いと `system tray host` の警告を表示します。手動で設定する
-場合:
+`waired claude status` は、**直近のフォールバック**とその理由も表示します。
+
+- `local_no_model` — このデバイスでまだモデルが動いていない
+  → [応答が返ってこない](#no-answer-comes-back)
+- `local_status_<コード>` — フォールバック直前にローカル側がそのエラーを返した。
+  詳細は `waired status --observability`
+
+クラウドへのフォールバックは意図的な設計です。失敗させるより作業を続けられることを
+優先し、**起きたことは必ず知らせます**。
+
+<a id="a-command-says-waired-agent-is-not-running"></a>
+
+## 「waired-agent is not running」と出る
+
+常駐サービスが停止しています。
+
+```sh
+sudo systemctl restart waired-agent    # Linux
+Restart-Service waired-agent           # Windows（管理者）
+```
+
+macOS ではシステムが自動的に再起動します。戻らない場合は `waired doctor` を実行するか、
+パソコンを再起動してください。
+
+再起動は一時的な不整合の多くを解消するので、込み入った対処の前に試す価値があります。
+
+<a id="windows-i-get-a-502-error"></a>
+
+## Windows で 502 エラーになる
+
+このパソコンに AI ソフトが入っていません（多くは `-SkipOllama` または
+`WAIRED_NO_OLLAMA=1` でインストールしたためです）。
+
+管理者プロンプトから:
+
+```powershell
+waired runtimes install ollama
+```
+
+<a id="answers-are-very-slow"></a>
+
+## 応答がとても遅い
+
+```sh
+waired runtimes benchmark
+```
+
+このパソコンの実際の速度を測ります。コーディング用途に必要な水準を下回る場合は、
+より軽いモデルが提案されます。受け入れるのが妥当なことがほとんどです。
+
+ほかに確認する点:
+
+- **グラフィックボードが使われているか**
+  → [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
+- **モデルがメモリに対して大きすぎないか** — はみ出した分は CPU で処理されるため
+  劇的に遅くなります。`waired models ls --detail` で収まり具合を確認できます。
+- **ほかのパソコンが答えていないか** — `waired infer --explain "hi"` が、
+  応答したマシンと推定遅延を表示します。
+
+<a id="my-graphics-card-is-not-being-used"></a>
+
+## グラフィックボードが使われていない
+
+`waired doctor` が、エンジンが選んだバックエンドを表示します。
+
+よくあるケースは Waired が自動処理します。統合 GPU（AMD / Intel）は Vulkan 経由で
+有効化し（最近の Ollama は既定で無効にし、黙って CPU にフォールバックします）、
+単体の AMD カードは対応していれば ROCm、うまく動かない場合は Vulkan に切り替えます。
+
+Waired の外で自前の Ollama を動かしている場合は、自分で `OLLAMA_IGPU_ENABLE=1` を
+設定して再起動してください。
+
+モデルが本当に収まっているかも確認してください
+（要件は[モデルカタログ](/ja/reference/model-catalog/)）。
+
+<a id="i-chose-a-model-bigger-than-my-hardware"></a>
+
+## ハードウェアより大きいモデルを選んでしまった
+
+Waired は警告しますが、禁止はしません。超過分（`needs 32 GB RAM (have 31 GB)` など）を
+表示して確認を求めます。
+
+- **少し超えている程度** — たいてい動きます。単に遅くなります。
+- **本当に大きすぎる** — エンジンが読み込みに失敗し、明確なエラーを返します。
+  小さいモデルに戻してください → [使う AI モデルを選ぶ](/ja/guides/choose-a-model/)。
+
+推奨値には安全マージンが含まれています。Apple Silicon と AMD Strix Halo では、
+GPU 側が実際に扱えるメモリ量で判定します。`waired models ls --detail` で、
+このマシンにおける全モデルの判定を確認できます。
+
+<a id="long-claude-code-sessions-get-summarized"></a>
+
+## 長い Claude Code のセッションが要約される
+
+正常な動作です。ローカルのモデルはクラウドのモデルより一度に保持できる会話量が
+少ないため、Waired が実際の上限を Claude Code に伝え、Claude Code が古いターンを
+要約して収めます。冒頭を黙って失うのではなく、セッションが生き延びているということです。
+
+一瞬「prompt is too long」と表示されても、Claude Code が自動で再試行します。
+
+しばらく大きなウィンドウを使いたい場合は `/waired-route anthropic` で本来の
+Anthropic API に送れば、次のメッセージから本来のウィンドウが適用されます。
+
+<a id="my-other-computer-cannot-reach-the-ai"></a>
+
+## ほかのパソコンから AI に届かない
+
+```sh
+waired status --observability
+```
+
+**Mesh** の行が `enrolled / reachable / ready` です。`reachable` が 0 の場合:
+
+1. **両方のパソコンが同じ Google アカウントでサインインしていますか。** これが
+   圧倒的に多い原因です。各マシンで `waired status` のアカウント行を見比べてください。
+2. **相手のパソコンは起動していて、Waired が動いていますか。** そちらで
+   `waired doctor` を実行します。
+3. **共有はオンですか。** ほかの端末に応答するには共有が必要です:
+   `waired inference share on`
+
+届いてはいるが `ready` にならない場合は、そのマシンにモデルが読み込まれていません。
+そちらで[応答が返ってこない](#no-answer-comes-back)を順に確認してください。
+
+ポート開放や VPN の設定は不要です。ネットワークが許せば直接つながり、ファイアウォールが
+邪魔する場合は暗号化された中継に自動で切り替わります。
+
+<a id="the-waired-icon-is-missing-linux"></a>
+
+## Waired のアイコンが出ない（Linux）
+
+GNOME にはシステムトレイがないため、アイコンの表示には AppIndicator 拡張が必要です。
+セットアップは GNOME を検出すると自動で導入し、無い場合は `waired doctor` が警告します。
+
+手動で入れる場合:
 
 ```sh
 sudo apt install gnome-shell-extension-appindicator
 gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
 ```
 
-その後、GNOME が拡張を読み込むよう **ログアウトして再ログイン**（Wayland では必須）
-してください。KDE Plasma はトレイホストを内蔵しているため何も不要です。MATE は
-アイコンをまったく表示できません — GNOME（拡張あり）か KDE で表示してください。
+そのあと**ログアウトして入り直してください**（Wayland では必須です）。
 
-### Windows: `waired infer` が 502 を返す（Ollama がインストールされていない）
+KDE Plasma では何も必要ありません。MATE では表示できません。
 
-現在のインストーラーはデフォルトで Ollama を同梱しますが、`-SkipOllama` /
-`WAIRED_NO_OLLAMA=1` でインストールしたホスト（または旧インストーラーで
-インストールしたホスト）にはエンジンがありません。昇格プロンプトで
-`waired runtimes install ollama` を実行して追加するか、直接インストールして
-ください:
+<a id="the-status-line-does-not-show-up-in-claude-code"></a>
 
-```powershell
-iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/ollama-windows.ps1 | iex
-```
+## Claude Code にステータス行が出ない
 
-### ピアに到達できない
+**プロジェクトのディレクトリ内で** `waired claude status` を実行してください。
 
-`waired status --observability -o json` を実行し、各ピアの `reachable` と
-`last_check` を確認してください。次に以下を確認します:
+Claude Code はステータス行を 1 つしか使わず、プロジェクト直下の設定
+（`.claude/settings.json` や `.claude/settings.local.json`）が、Waired がユーザー単位で
+入れた設定より優先されます。その場合、コマンドが優先されているファイル名と、
+自分のステータス行スクリプトに追加できる 1 行を表示します。
 
-- 両方のデバイスが **同じ Google アカウント** でエンロールされていること（同じ
-  ネットワーク）。各デバイスの `waired status` の `account` / `network` 行を比較して
-  ください。
-- WireGuard が接続できること — `waired peers list` でピアのエンドポイントが表示
-  されます。直接 UDP を開けない場合はファイアウォールや NAT を疑ってください。
-  Waired は自動的にリレーへフォールバックするため、直接の経路が機能しなくても接続性は
-  保たれるはずです。
-- Network Map が最新であること — `waired status` が古いマップを示している場合は、
-  エージェントを再起動してください。
+連携を有効にしたあとに Claude Code のセッションを再起動したかも確認してください。
 
-## さらに深く（ログ）
+---
 
-`waired doctor` を実行した後でのみ:
+<a id="going-deeper-logs"></a>
 
-- **Linux:** `journalctl -u waired-agent -e`
-- **Windows:** `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50`
-- **Ollama（同梱エンジン）:** モデルロード中に 503 が繰り返される場合は、waired の
-  state ディレクトリ配下のエンジンログ `…/runtimes/ollama/logs/engine.log`（Linux:
-  `/var/lib/waired/…`、macOS: `/Library/Application Support/waired/…`）。自前の
-  Ollama を使っている場合（`--skip-ollama` + reuse）は `~/.ollama/logs/server.log`。
+## さらに詳しく（ログ）
 
-`Restart-Service waired-agent`（Windows）または `systemctl restart waired-agent`
-（Linux）で、一時的な不整合のほとんどは解消します。
+`waired doctor` を実行したあとで:
+
+| | |
+|---|---|
+| Linux | `journalctl -u waired-agent -e` |
+| Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
+| AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`）。自前の Ollama を使っている場合は `~/.ollama/logs/server.log`。 |
+
+## 不具合を報告する
+
+`waired init --mask-pii`（ほかのコマンドでは環境変数 `WAIRED_PII_MASK=1`）を使うと、
+ホームディレクトリ・ユーザー名・ホスト名・アカウントのメールアドレスが伏せられるので、
+出力やスクリーンショットをそのまま
+[Issue](https://github.com/waired-ai/waired-agent/issues) に添付できます。

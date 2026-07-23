@@ -90,13 +90,6 @@ export default defineConfig({
 						{ label: 'Advanced install options', slug: 'reference/install-options' },
 					],
 				},
-				{
-					label: 'Superseded (kept for A/B review)',
-					collapsed: true,
-					items: [
-						{ label: 'Switch the bundled model (old)', slug: 'guides/switch-model' },
-					],
-				},
 			],
 		}),
 	],

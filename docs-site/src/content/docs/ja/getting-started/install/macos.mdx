@@ -1,0 +1,75 @@
+---
+title: macOS へのインストール
+description: macOS 13 以降（Apple Silicon / Intel）に、ターミナルのコマンド 1 つで Waired をインストールします。
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+macOS 13（Ventura）以降に対応します。この Mac で AI を動かすなら
+**Apple Silicon を強く推奨**します。ユニファイドメモリのおかげで、ノートパソコンでも
+実用的なモデルを載せられます。
+
+<Aside type="note" title="ドラッグして入れるアプリはまだありません">
+	`.dmg` も Homebrew formula もまだなく、バイナリにはコード署名がありません
+	（どちらも予定されています）。現時点では、ターミナルに 1 行貼り付ける形になります。
+</Aside>
+
+## インストール
+
+<Steps>
+
+1. **ターミナル**を開きます: ⌘ + スペース →「ターミナル」と入力 → Enter。
+
+2. 次の行を貼り付けて Enter を押します。
+
+	```sh
+	curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+	```
+
+	`curl` が Waired のインストールスクリプトをダウンロードし、`sh` が実行します。
+
+3. 表示された内容を確認し、`Proceed? [Y/n]` で Enter を押します。
+
+4. Mac のパスワードを入力します。
+
+	**入力しても画面には何も表示されません。** ターミナルのパスワード入力はそういう
+	仕様で、固まっているわけではありません。そのまま入力して Enter を押してください。
+
+	パスワードが必要なのは、常駐サービスをマシン全体に登録し、誰もログインしていなくても
+	起動時から動くようにするためです。
+
+</Steps>
+
+次は[サインインとセットアップ](/ja/getting-started/first-run/)です。
+
+<Aside type="tip" title="スクリプトをそのままシェルに流すのが不安な場合">
+	もっともです。先にダウンロードして読んでから実行できます。
+
+	```sh
+	curl -fsSLO https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh
+	less install.sh    # q キーで終了
+	sh install.sh
+	```
+</Aside>
+
+## AI ソフトを入れない
+
+モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
+モデルを動かすパソコンにだけ導入されます。まったく入れたくない場合:
+
+```sh
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
+```
+
+## インストールされるもの
+
+| | |
+|---|---|
+| コマンド | `/usr/local/bin/waired`、`/usr/local/bin/waired-agent` |
+| 常駐サービス | システムの `launchd` デーモン（起動時から動作） |
+| 設定と状態 | `/Library/Application Support/waired` |
+
+<CardGrid>
+	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="次のステップ。" />
+	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="1 行・約 10 秒。" />
+</CardGrid>

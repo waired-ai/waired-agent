@@ -1,0 +1,169 @@
+---
+title: Claude Code から使う
+description: Claude Code を自分のモデルに向け、どの AI が答えたかを確認し、再起動なしでクラウドと切り替えます。
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../../components/Screenshot.astro';
+
+通常はセットアップが Claude Code を接続します。このページは、接続されていなかった
+場合の手順と、あとから制御する方法です。
+
+環境変数の設定も、設定ファイルの編集も、エイリアスも必要ありません。Waired が
+Claude Code のマシン全体設定を書き込むことで、Claude Code が自分のモデルと話すように
+なります。Windows / macOS / Linux で同じ仕組みです。
+
+<Aside type="caution" title="claude.ai のサブスクリプションはそのままです">
+	認証情報は一切書き込まれないため、既存の Claude Code のサインインとサブスクリプションの
+	扱いはこれまでどおり動きます。Waired が変えるのは「リクエストの行き先」であって、
+	「誰としてサインインしているか」ではありません。
+</Aside>
+
+## 接続する
+
+<Steps>
+
+1. 連携を設定します。
+
+	```sh
+	waired link claude-code
+	```
+
+2. ルーティングを有効にします（通常はセットアップ時に済んでいます）。
+
+	<Tabs syncKey="os">
+		<TabItem label="macOS / Linux">
+			```sh
+			sudo waired claude enable
+			```
+		</TabItem>
+		<TabItem label="Windows">
+			管理者プロンプトから:
+
+			```powershell
+			waired claude enable
+			```
+		</TabItem>
+	</Tabs>
+
+3. いつもどおり Claude Code を起動します。
+
+	```sh
+	claude
+	```
+
+</Steps>
+
+## どの AI が答えた？
+
+フッターに毎回表示されます。
+
+<Screenshot
+	src="claude-code-statusline.png"
+	alt="Claude Code のフッターに表示された Waired のステータス行。現在のルートと、直前の応答を返したローカルモデル名。"
+/>
+
+| 表示 | 意味 |
+|---|---|
+| `⚡ waired: on Waired (qwen3-8b-instruct)` | 自分のハードウェアが、そのモデルで応答 |
+| `→ waired: Anthropic` | 本来の Anthropic API が応答 |
+| `✕ waired: agent down` | このパソコンで Waired が動いていない |
+
+クラウドにフォールバックしたターンの後には、その旨が 1 行表示されます。
+黙って転送されることはありません。
+
+<Aside type="note" title="ステータス行が出ない場合">
+	プロジェクト直下の `.claude/settings.json` が、Waired の設定より優先されています。
+	プロジェクト内で `waired claude status` を実行すると、優先されているファイル名と、
+	自分のステータス行スクリプトに貼れる 1 行が表示されます。Waired がプロジェクトの
+	ファイルを書き換えることはありません。
+</Aside>
+
+## 送り先を切り替える
+
+セッション中に、再起動なしで切り替えられます。
+
+```
+/waired-route waired      # 自分の AI だけ。クラウドには送らない
+/waired-route anthropic   # 本来の Anthropic API
+/waired-route auto        # 既定。自分を優先し、必要ならフォールバック
+```
+
+次のメッセージから反映されます。ターミナルからも同じことができます。
+
+```sh
+waired claude route                               # 今の状態を表示
+waired claude route anthropic --subagents waired  # 本体はクラウド、サブエージェントは自分
+```
+
+`--subagents` は知っておく価値があります。Claude Code のサブエージェントは大量の
+ファイル読み取りを担当するので、本体はクラウドを使いつつサブエージェントだけ自分の
+ハードウェアに残す、という中間案が実際に有効です
+（→ [プライバシー](/ja/concepts/privacy/)）。
+
+**Waired アイコン → Claude Code** からも変更でき、本体とサブエージェントを別々に
+選べます。
+
+<Aside type="note" title="「waired」は自分のネットワークであって、このパソコンとは限りません">
+	実際にどのマシンが応答するかは `waired worker` が決めます —
+	[ほかの端末を追加する](/ja/getting-started/add-a-device/)を参照してください。
+</Aside>
+
+## よく驚かれること
+
+**Claude Code には Anthropic のモデル名が出たままです。** Opus や Sonnet などが
+これまでどおり選べます。Waired が処理する場合は、セッションで何が選ばれていても
+**そのデバイスで動いているローカルモデル**が応答します。Anthropic のモデル名が
+意味を持つのは、実際にクラウドへ送られたときだけです。
+
+**長いセッションは要約されます。** ローカルのモデルは一度に保持できる会話量が
+少ないため、Claude Code が古いターンを要約して収めます。これは失敗ではなく、
+セッションが生き延びているということです
+（→ [長い Claude Code のセッションが要約される](/ja/troubleshooting/#long-claude-code-sessions-get-summarized)）。
+
+**失敗しても止まらず、クラウドに回ります。** 一時停止中・ダウンロード中・非対応の
+リクエスト形式などで応答できないとき、Claude Code は本来の Anthropic API を使って
+ターンを完了させます。転送されるくらいならエラーを見たい場合は、`waired` ルートを
+選んでください。
+
+## 1 台をほかの端末と共有する
+
+[Web 画面](https://app.waired.ai/)のマシンのページで、ほかの端末からの使われ方を
+調整できます。
+
+- **Serve main / subagents** — 2 つのスイッチ。main を切れば、遅いマシンを
+  サブエージェントの並列作業専用にできます。これは*ほかのマシンから*来るリクエストに
+  対する設定で、そのマシン自身の Claude Code は常に動きます。
+- **Max concurrent requests** — 同時に処理する数。並列を増やすとメモリを余分に使い、
+  1 件あたりも遅くなるため、推奨上限が表示され、超える前に警告が出ます。
+
+## 確認と解除
+
+```sh
+waired claude status
+```
+
+ルーティングの有効・無効と、設定ファイルの場所を表示します。
+
+| | |
+|---|---|
+| Linux | `/etc/claude-code/managed-settings.json` |
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+
+Claude Code を Waired 経由にするのをやめる（Claude Code は通常動作に戻ります）:
+
+```sh
+sudo waired claude disable    # Windows は管理者プロンプトから
+```
+
+連携ファイルごと削除する:
+
+```sh
+waired unlink claude-code
+```
+
+<CardGrid>
+	<LinkCard title="Claude Code がクラウドを使い続ける" href="/ja/troubleshooting/#claude-code-is-still-using-the-cloud" description="直すための 2 つのコマンド。" />
+	<LinkCard title="OpenCode から使う" href="/ja/guides/opencode/" description="OpenCode 版。" />
+</CardGrid>

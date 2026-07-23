@@ -1,253 +1,61 @@
 ---
 title: インストール
-description: Linux、macOS、Windows に Waired クライアントを 1 つのコマンドでインストールし、アップデートや edge チャンネルへの切り替え方法を学びます。
+description: Windows / macOS / Linux への Waired のインストール方法と、インストーラーがパソコンに何を置くのか。
 ---
 
-import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Waired は 1 つのコマンドでインストールできます。インストーラーはクライアント
-（`waired` CLI + `waired-agent` バックグラウンドサービス）を配置し、自動起動するように
-登録します。[Ollama](https://ollama.com) 推論エンジンは、サインインステップ
-（`waired init`）で「ローカル推論を動かすか」の質問に答えた直後にインストールされます —
-数 GB のエンジンダウンロードは、実際に必要と答えたときにだけ行われます。
+Waired は 3 つの OS すべてで、**コマンド 1 つ**で同じようにインストールできます。
+ターミナルに 1 行貼り付けると、何をするかが表示され、確認してから実行されます。
+ダウンロードしてダブルクリックする形式のインストーラーはありません。
 
-## 対応プラットフォーム
+<CardGrid>
+	<LinkCard title="Windows" href="/ja/getting-started/install/windows/" description="管理者の PowerShell で 1 行。" />
+	<LinkCard title="macOS" href="/ja/getting-started/install/macos/" description="ターミナルで 1 行。Apple Silicon 推奨。" />
+	<LinkCard title="Linux" href="/ja/getting-started/install/linux/" description="ターミナルで 1 行。Ubuntu 24.04 以降 / Debian trixie 以降。" />
+</CardGrid>
 
-| 役割 | 対応システム |
+<Aside type="tip" title="ターミナルを使ったことがなくても、貼り付けるだけです">
+	各 OS のページは「ターミナルの開き方」から始まり、コマンドには必ず
+	「何をするコマンドか」の 1 文が添えてあります。この 1 コマンドさえ済めば、
+	あとは画面（ブラウザとアイコン）だけでも進められます —
+	[クイックスタート](/ja/quickstart/)を参照してください。
+</Aside>
+
+## 自分のパソコンで動きますか？
+
+| 役割 | 対応 |
 |---|---|
-| 推論サーバー（モデルを実行する） | Ubuntu 24.04+、Debian trixie+、Windows 11 / Server 2025、macOS 13+（Apple Silicon 推奨） |
-| クライアント（普段使いのノートパソコン） | 上記のいずれか — GPU は**不要**です |
+| **AI を動かす** | Ubuntu 24.04 以降 / Debian trixie 以降 / Windows 11・Server 2025 / macOS 13 以降（Apple Silicon 推奨） |
+| **AI を使う** | 上記のいずれか — グラフィックボードは不要 |
 
-GPU があれば推論は高速になりますが、最近の CPU でも 7B モデルは問題なく動きます。
-入力に使うクライアントマシンには特別なハードウェアは必要ありません。
+グラフィックボードがあると回答は大幅に速くなりますが、最近の CPU でも小さいモデルなら
+問題なく動きます。入力に使うだけのパソコンには特別な性能は要りません。
 
-## インストール
+どのモデルにどれだけメモリが必要かは[モデルカタログ](/ja/reference/model-catalog/)に
+ありますが、セットアップ時に収まるモデルを Waired が選ぶので、読まなくても大丈夫です。
 
-<Tabs syncKey="os">
-	<TabItem label="Linux">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
-		```
+## インストーラーが置くもの
 
-		`waired` apt パッケージと systemd ユニットをインストールし、Ollama も
-		自動でインストールします。apt リポジトリは **Debian trixie+ / Ubuntu 24.04+
-		のみ**を対象としています。その他のディストリビューションは、現時点ではワンライナーでは
-		サポートされていません。
-	</TabItem>
-	<TabItem label="macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
-		```
+- **Waired 本体** — このパソコンを接続し続ける常駐サービスと、入力できる `waired`
+  コマンド。サービスは、誰もログインしていなくても電源投入時から動きます。
+- **アイコン** — メニューバー（macOS）またはタスクトレイ（Windows / Linux）。
+  日常の操作はここから行えます。
+- **それ以外はまだ何も。** AI ソフト本体（数 GB）はセットアップ時に、
+  「このパソコンでモデルを動かす」と答えた場合にだけ導入されます。
 
-		同じスクリプトが macOS を検出し、クライアントを `/usr/local/bin` に
-		インストールし、`waired-agent` をシステム launchd デーモンとして登録します。
-		Ollama はローカル推論を有効にしたときにサインインステップがインストール
-		します。エージェントはログイン不要でブート時に起動します
-		（Linux / Windows のサービスと同様）。そのため特権ステップで `sudo` を使い、
-		管理者パスワードの入力を求められます。バイナリは現時点では署名されていません
-		（ad-hoc）。署名と Homebrew formula は計画中です。
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
-		```
+どのインストーラーも、実行前に内容を表示して確認を求めます。
 
-		クライアントをインストールし、`waired-agent` Windows サービスを登録します
-		（昇格ステップは UAC プロンプトが処理します）。約 1.4 GB の Ollama エンジンは
-		ローカル推論を有効にしたときにサインインステップがダウンロードし、進捗は
-		1 行のライブ表示で更新されます。エージェントはログインとは独立してブート時に
-		起動します — Linux / macOS のインストーラーと同じ既定動作です。
-
-		<Aside type="note" title="Windows の Ollama">
-			エンジンを**まったく入れない**場合（ヘッドレスやディスク容量の
-			少ないホストなど）は、`-SkipOllama` を渡すか `WAIRED_NO_OLLAMA=1` を
-			設定します（後述の「同梱の Ollama をスキップする」を参照）。あとから
-			昇格プロンプトで `waired runtimes install ollama` を実行して追加できます。
-		</Aside>
-	</TabItem>
-</Tabs>
-
-どの OS でもインストーラーはまず、これから行うことの要約（インストール先、
-バックグラウンドサービス、Ollama のダウンロード、ブラウザでのサインイン、管理者権限の
-プロンプト）を表示し、`Proceed? [Y/n]` の確認を取ってから実行を始めます。無人ホストでは
-`--yes` / `-Yes` で確認を省略できます。Windows では対話的な新規インストール時に
-インストール先も選べます（Enter で既定の `C:\Program Files\Waired`。
-`-InstallDir <path>` または `WAIRED_INSTALL_DIR` で固定可能）。
-
-インストーラーが完了したら、[初回起動](/ja/getting-started/first-run/)に進んで
-デバイスを登録してください。
-
-<Aside type="note" title="GNOME のシステムトレイ（Linux）">
-	GNOME には組み込みのシステムトレイが無いため、トレイアイコンの表示には
-	AppIndicator ホスト拡張が必要です。`waired init` は GNOME を検出すると拡張を
-	自動でインストール・有効化します（KDE Plasma はそのまま動作します）。それでも
-	アイコンが表示されない場合は [トラブルシューティング](/ja/troubleshooting/) を
-	参照してください。
+<Aside type="note" title="すでに Ollama を使っている場合">
+	既存のインストールに触れないようにできます。
+	[高度なインストールオプション](/ja/reference/install-options/)を参照してください。
 </Aside>
 
-### 同梱の Ollama をスキップする
+## インストールのあと
 
-すでに Ollama を動かしている場合や、自分でインストールしたい場合は、フラグまたは
-環境変数のいずれかで同梱エンジンを抑制できます。
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
-		# または:
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | WAIRED_NO_OLLAMA=1 sh
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		# スクリプトをファイルに保存した状態で:
-		.\install.ps1 -SkipOllama
-		# または実行前に環境変数を設定する:
-		$env:WAIRED_NO_OLLAMA = '1'
-		```
-	</TabItem>
-</Tabs>
-
-### デフォルト以外の構成
-
-特定の（セルフホストやステージングなどの）コントロールプレーンに向けたインストール、
-バージョンの固定、その他のインストーラーフラグは
-[高度なインストールオプション](/ja/reference/install-options/)にまとめています —
-通常のインストールではいずれも不要です。
-
-<a id="update"></a>
-## アップデート
-
-インストール済みホストをアップデートする最も簡単な方法は CLI です（またはトレイの
-**「⚠ Update available」**バナー）。
-
-```sh
-waired update          # チェックし、より新しいバージョンがあれば適用する
-waired update --check  # レポートのみ（読み取り専用）
-waired update --yes    # 対話的プロンプトなしで適用する（非対話的ホスト向け）
-waired update --edge   # edge チャンネルで更新／edge に切り替え
-waired update --stable # stable チャンネルで更新／stable に切り替え
-```
-
-`waired update` は現在追従しているチャンネルを維持します — stable 版は最新 stable へ、
-edge 版は最新 edge へ更新され、edge ホストが黙って stable に落ちることはありません。
-チャンネルを切り替えるには `--edge` / `--stable` を使います（下の
-「edge チャンネル」の節を参照）。
-
-バックグラウンドサービスも数時間ごとにアップデートをチェックして通知します。適用は
-常にユーザーが起動する操作です。アップデートを行っても、登録情報、アイデンティティ、
-ディスク上の状態は保持されます。同梱の Ollama は別途管理されており、`waired update`
-では変更されません。
-
-## アンインストール
-
-対応するワンライナーで Waired クライアントを削除します。バイナリの削除とバックグラウンド
-サービスの登録解除に加えて、ベストエフォートで**このデバイスを Waired アカウントから
-登録解除します**（デバイス一覧から消え、ネットワークからも外れます）。ローカルの設定・
-状態はデフォルトでは**保持されます**（下記の `--clean` で併せて削除可能）。いずれの場合も、
-再インストール時は `waired init` で改めてサインインします。
-
-<Aside type="note" title="アンインストール時にオフラインだった場合">
-	登録解除はベストエフォートであり、アンインストールを妨げることはありません。その時点で
-	デバイスが Waired に到達できない場合（オフライン、またはサービス停止済みなど）は、
-	デバイス一覧に残ることがあります。その場合は Web 管理画面から手動で削除してください。
-</Aside>
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
-		```
-	</TabItem>
-</Tabs>
-
-アンインストーラーは削除内容の一覧を表示し、`Proceed? [y/N]`（Enter で中止）の確認を
-取ってから実行します。確認を省略するには `--yes` / `-Yes`、変更前にプレビューするには
-`--dry-run` / `-DryRun` を付けます。Windows では昇格ウィンドウが最後に
-「Press Enter to close」で停止するので、成否を必ず確認できます。
-
-**完全に削除する**場合 — 設定や状態に加えて、同梱の Ollama とダウンロード済みモデルも
-削除します — `--clean`（Linux / macOS）または `-Clean`（Windows）を付けます。これは
-破壊的な操作で、非対話的なシェルではさらに `--yes` / `-Yes` の明示が必須です。
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		# -Clean はスクリプトをファイルに保存して実行する必要があります（パイプ形式ではフラグを渡せません）:
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 -OutFile $env:TEMP\uninstall.ps1
-		& $env:TEMP\uninstall.ps1 -Clean
-		```
-	</TabItem>
-</Tabs>
-
-<Aside type="note" title="Windows の GUI インストーラーで入れた場合">
-	`WairedSetup-<version>-x64.exe` で Waired をインストールした場合は、**設定 → アプリ
-	→ Waired → アンインストール**からも削除できます。上記のワンライナーはどちらの方法で
-	インストールした場合でも安全に実行できます。
-</Aside>
-
-<a id="clean-install"></a>
-## クリーンインストール（完全削除してから再インストール）
-
-ホストをまっさらな状態から作り直すには、*インストーラー*にクリーンオプションを
-付けて実行します。1 コマンドで上記の完全削除アンインストール（設定・鍵・状態・
-同梱の Ollama とそのモデルをすべて削除）を行ってから、新規にインストールします。
-削除の前に確認を求めます — 非対話的なホストでは `--yes` / `-Yes` を付けて
-プロンプトをスキップしてください。
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		# パイプ形式では -Clean を渡せないため、環境変数でオプトインします:
-		$env:WAIRED_CLEAN = '1'
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
-		```
-
-		UAC プロンプトが **2 回**表示されます — 1 回目は削除、2 回目はインストールです。
-	</TabItem>
-</Tabs>
-
-削除によってこのデバイスの古いアイデンティティは消えるため、インストール終了時の
-サインイン（[初回起動](/ja/getting-started/first-run/)）で新しいデバイスとして
-登録されます。
-
-<a id="edge"></a>
-## edge チャンネル（最新・不安定版）
-
-安定リリースを待たずに最新の `main` ビルドを追いかけるには、**edge** チャンネルに
-オプトインします。edge はマージのたびに再ビルドされ、**本番利用向けではありません**。
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | WAIRED_VERSION=edge sh
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		$env:WAIRED_VERSION = 'edge'
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
-		```
-	</TabItem>
-</Tabs>
-
-edge に切り替えた後は `waired update` が自動的に edge を維持します。後からチャンネルを
-切り替えるには `waired update --edge` または `waired update --stable` を実行します
-（インストーラーを `--edge` / `--stable` 付きで再実行しても同じ）— apt ソース（Linux）
-またはリリースアセットを差し替え、どちらの方向のバージョン変更も許可します。
+<CardGrid>
+	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="コマンド 1 つで開始し、あとはブラウザで進みます。" />
+	<LinkCard title="アップデート" href="/ja/getting-started/update/" description="更新の確認と適用、チャンネルの切り替え。" />
+	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="モデルを残すか消すかを選んで削除。" />
+	<LinkCard title="高度なインストールオプション" href="/ja/reference/install-options/" description="バージョン固定、インストール先、接続先の変更。" />
+</CardGrid>

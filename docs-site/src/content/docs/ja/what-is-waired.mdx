@@ -1,0 +1,105 @@
+---
+title: Waired とは？
+description: 自分が持っている 1 台のパソコンで AI を動かし、ほかの端末からどこにいても使えるようにする仕組み。従量課金なし、プロンプトは外に出ません。
+---
+
+import { Aside, CardGrid, LinkCard, LinkButton } from '@astrojs/starlight/components';
+
+AI のコーディングツールは通常、入力した内容をすべて事業者のサーバーに送り、
+メッセージごとに課金します。Waired は代わりに、**すでに自分が持っている 1 台のパソコン**で
+AI を動かし、**ほかの端末からどこにいても使える**ようにします。
+
+## 図で見る違い
+
+<figure>
+<svg viewBox="0 0 720 260" role="img" aria-labelledby="waired-diagram-title-ja" style="width:100%;height:auto">
+	<title id="waired-diagram-title-ja">Waired がない場合、ノートパソコンはすべてのプロンプトをクラウドの AI 事業者に送り、メッセージごとに課金される。Waired がある場合、ノートパソコンは暗号化された専用の経路で自分のパソコンにプロンプトを送り、そこで AI が動く。</title>
+	<style>{`
+		.wd-box { fill: none; stroke: currentColor; stroke-width: 1.5; opacity: .55 }
+		.wd-t { fill: currentColor; font: 13px system-ui, sans-serif }
+		.wd-s { fill: currentColor; font: 11px system-ui, sans-serif; opacity: .7 }
+		.wd-h { fill: currentColor; font: bold 12px system-ui, sans-serif; opacity: .8; letter-spacing: .06em }
+		.wd-line { stroke: currentColor; stroke-width: 1.5; opacity: .55; fill: none }
+		.wd-dash { stroke-dasharray: 5 4 }
+	`}</style>
+
+	<text x="0" y="16" class="wd-h">これまで</text>
+	<rect x="0" y="30" width="140" height="52" rx="8" class="wd-box" />
+	<text x="16" y="55" class="wd-t">自分のノート PC</text>
+	<text x="16" y="71" class="wd-s">Claude Code</text>
+	<path d="M148 56 H 258" class="wd-line" markerEnd="url(#wd-arrow-ja)" />
+	<text x="158" y="48" class="wd-s">すべての入力</text>
+	<rect x="266" y="30" width="170" height="52" rx="8" class="wd-box" />
+	<text x="282" y="55" class="wd-t">クラウドの AI 事業者</text>
+	<text x="282" y="71" class="wd-s">メッセージごとに課金</text>
+
+	<text x="0" y="146" class="wd-h">WAIRED あり</text>
+	<rect x="0" y="160" width="140" height="52" rx="8" class="wd-box" />
+	<text x="16" y="185" class="wd-t">自分のノート PC</text>
+	<text x="16" y="201" class="wd-s">Claude Code</text>
+	<path d="M148 186 H 258" class="wd-line" markerEnd="url(#wd-arrow-ja)" />
+	<text x="152" y="178" class="wd-s">専用・暗号化</text>
+	<rect x="266" y="160" width="170" height="52" rx="8" class="wd-box" />
+	<text x="282" y="185" class="wd-t">自分のパソコン</text>
+	<text x="282" y="201" class="wd-s">ここで AI が動く</text>
+	<path d="M444 186 H 548" class="wd-line wd-dash" />
+	<text x="450" y="178" class="wd-s">動かないときだけ</text>
+	<rect x="556" y="160" width="150" height="52" rx="8" class="wd-box" />
+	<text x="572" y="185" class="wd-t">クラウドの AI</text>
+	<text x="572" y="201" class="wd-s">使ったら通知されます</text>
+
+	<defs>
+		<marker id="wd-arrow-ja" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" opacity=".55" />
+		</marker>
+	</defs>
+</svg>
+<figcaption>入力の宛先は自分のパソコンです。クラウドは、必ず知らされる形でのフォールバックとしてだけ使われます。</figcaption>
+</figure>
+
+## できること
+
+- **メッセージごとの課金がない。** すでに支払い済みのハードウェアで動きます。
+- **入力した内容が自分のものであり続ける。** 自分の端末どうしを暗号化された経路で
+  行き来します。Waired のサーバーは端末どうしを引き合わせるだけで、内容は受け取りません。
+- **ツールを変えなくていい。** Claude Code、OpenCode、OpenAI 互換アプリはそのままです。
+- **家の外でも使える。** 外出先のノートパソコンから自宅のパソコンの AI に届きます。
+  VPN の設定もポート開放も不要です。
+
+## できないこと
+
+- **チャットアプリではありません。** Waired 自体に会話画面はありません。いま使っている
+  ツールの接続先を、事業者から自分の AI に変えるものです。
+- **巨大な最新モデルが動くわけではありません。** 動かせる範囲はハードウェア次第です。
+  よいデスクトップなら実用的なコーディングモデル、薄型ノートなら小さいモデル。
+  Waired はどれが載るかを正直に伝えます。
+- **フォールバックを隠しません。** 自分の AI が答えられないときはクラウドに送られますが、
+  **必ずそう表示されます**。クラウドの回答を自分のマシンの回答のように見せることはしません。
+
+## 動かすのにかかる費用
+
+メッセージ単位の費用はありません。必要なのは、使いたいときに起動している
+パソコン 1 台と、モデルが載るだけのメモリです。具体的な数値は
+[モデルカタログ](/ja/reference/model-catalog/)にあります。
+
+<Aside type="note" title="グラフィックボードは必要？">
+	必須ではありません。あれば回答は大幅に速くなるので、持っているならそのパソコンを
+	使うべきです。ただし最近の CPU でも、小さいモデルなら十分実用になります。
+</Aside>
+
+## 仕組み（簡単に）
+
+サインインしたパソコンどうしが、自分専用のネットワークに加わります。質問すると
+Waired が「どこで処理するか」を決め（このパソコン、自分の別のパソコン、あるいは
+— 明示したうえで — クラウド）、暗号化された経路で送ります。ネットワークが許すかぎり
+端末どうしが**直接**通信し、ファイアウォールが邪魔する場合だけ、中身を読めない
+中継サーバーが暗号化されたまま受け渡します。
+
+<CardGrid>
+	<LinkCard title="プライバシー — 何が外に出るのか" href="/ja/concepts/privacy/" description="何がどこへ送られ、何が送られないのか。" />
+	<LinkCard title="アーキテクチャ" href="/ja/concepts/architecture/" description="構成要素を名前つきで説明した技術版。" />
+</CardGrid>
+
+---
+
+<LinkButton href="/ja/quickstart/" icon="right-arrow">セットアップする（約 10 分）</LinkButton>

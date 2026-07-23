@@ -35,7 +35,7 @@ description: すべての waired コマンドのリファレンス — セット
 
 | コマンド | 機能 |
 |---|---|
-| `waired link [agent]` | ユーザーごとのコーディングエージェント連携をセットアップします (Claude Code のスキル + OpenCode のプラグイン + ゲートウェイトークン)。[コーディングエージェント](/ja/guides/coding-agents/) を参照。 |
+| `waired link [agent]` | ユーザーごとのコーディングエージェント連携をセットアップします (Claude Code のスキル + OpenCode のプラグイン + ゲートウェイトークン)。[コーディングエージェント](/ja/guides/claude-code/) を参照。 |
 | `waired unlink [agent]` | 連携を削除します (外科的な操作で — `link` が追加したものだけを取り消します)。 |
 | `waired claude <enable\|disable\|status>` | Claude Code のマネージド設定連携を管理します (Linux/macOS/Windows): `enable` は Claude Code をローカル推論へ向け (`waired init` でも実行されます)、`/waired-route` スラッシュコマンド・現在のルートを示すフッターのステータスライン・ターンごとのフォールバック通知をインストール、`disable` はそれらを元に戻し、`status` は現在の状態を表示します。資格情報は書き込まれないため claude.ai サブスクリプションは維持され、ローカルでの配信が停止しているときは本物の API へ fail open します。`enable`/`disable` には昇格 (`sudo`、Windows では管理者権限) が必要です。 |
 | `waired claude route [auto\|waired\|anthropic] [--subagents same\|auto\|waired\|anthropic]` | Claude Code の実行先を再起動なしで表示・設定。引数は**メイン会話**、`--subagents` はサブエージェントを独立に設定(既定 `same` = main に追従)。`auto` は Waired 優先で失敗時に実 Anthropic API へフォールバック、`waired` は Waired 推論のみで Anthropic には一切繋がない、`anthropic` は Claude サインインで常に実 API。ハイブリッド: `waired claude route anthropic --subagents waired` はメイン会話を Anthropic、バルクなサブエージェントを Waired に([Privacy](/concepts/privacy/) 参照)。*どの* Waired ノードで配信するかは `waired worker` に従う。セッション内では `/waired-route` としても利用可。 |

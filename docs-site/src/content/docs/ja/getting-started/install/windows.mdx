@@ -1,0 +1,85 @@
+---
+title: Windows へのインストール
+description: Windows 11 / Server 2025 に、PowerShell のコマンド 1 つで Waired をインストールします。
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Windows 11 と Windows Server 2025（64 ビット）に対応します。インストールはコマンド 1 つです。
+
+## インストール
+
+<Steps>
+
+1. **管理者として PowerShell を開きます。** スタートボタンを右クリックし、
+	**「ターミナル（管理者）」**を選び、確認画面で**「はい」**を押します。
+
+	<Aside type="note" title="なぜ管理者権限が必要？">
+		Waired は、誰もログインしていなくても電源投入時から動く常駐サービスを登録します。
+		パソコン全体に対する変更なので、Windows が確認を求めます。
+	</Aside>
+
+2. 次の行を貼り付けて Enter を押します。
+
+	```powershell
+	iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+	```
+
+	<Aside type="tip" title="このコマンドが何をするか">
+		`iwr` が Waired のインストールスクリプトをダウンロードし、`iex` がそれを実行します。
+		先に中身を読みたい場合は[下記](#実行する前にスクリプトを読む)を参照してください。
+	</Aside>
+
+3. 実行内容が表示され、`Proceed? [Y/n]` と確認されます。Enter を押します。
+
+	初回の対話インストールでは、インストール先を変更するか聞かれます。
+	Enter を押せば `C:\Program Files\Waired` になります。
+
+</Steps>
+
+次は[サインインとセットアップ](/ja/getting-started/first-run/)です。
+
+## 実行する前にスクリプトを読む
+
+もっともな話です。ダウンロードして読んでから実行できます。
+
+```powershell
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
+notepad $env:TEMP\install.ps1
+& $env:TEMP\install.ps1
+```
+
+オプションを渡したい場合もこの形式にします（1 行版ではオプションを渡せません）。
+
+<Aside type="note" title="無人インストール">
+	`-Yes` で確認を省略、`-InstallDir <パス>`（または環境変数 `WAIRED_INSTALL_DIR`）で
+	インストール先を固定できます。一覧は
+	[高度なインストールオプション](/ja/reference/install-options/)にあります。
+</Aside>
+
+## AI ソフトを入れない
+
+モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
+モデルを動かすパソコンにだけ導入されます。まったく入れたくない場合
+（ディスクの少ないマシン、自前の Ollama がある場合など）:
+
+```powershell
+$env:WAIRED_NO_OLLAMA = '1'
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+```
+
+あとから管理者プロンプトで `waired runtimes install ollama` を実行すれば追加できます。
+
+## インストールされるもの
+
+| | |
+|---|---|
+| プログラム | `C:\Program Files\Waired`（変更可） |
+| 常駐サービス | `waired-agent`（起動時から動作） |
+| 設定と状態 | `%ProgramData%\waired`（秘密情報は管理者のみアクセス可） |
+| スタートメニュー | **Waired**（日常操作に使うアイコン） |
+
+<CardGrid>
+	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="次のステップ。" />
+	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="1 行・約 10 秒。" />
+</CardGrid>

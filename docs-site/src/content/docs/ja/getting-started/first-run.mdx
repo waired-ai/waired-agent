@@ -1,139 +1,182 @@
 ---
-title: 初回起動
-description: waired init でデバイスを登録し、Google でサインインし、モデルを実行・共有するかどうかを選び、バックグラウンドサービスを起動します。
+title: サインインとセットアップ
+description: Google でサインインし、ブラウザでセットアップを完了します。各選択の意味と、ターミナルだけで進める方法も説明します。
 ---
 
-import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../../components/Screenshot.astro';
 
-[インストール](/ja/getting-started/install/)が終わったら、`waired init` で
-デバイスを Waired ネットワークに登録します。マシンごとに 1 回実行してください。
+ネットワークに入れたいパソコンごとに、1 回ずつ実行します。
 
 <Aside type="tip" title="同じアカウント = 同じネットワーク">
-	**すべての**デバイスで**同じ Google アカウント**でサインインしてください。同じ
-	アカウントで登録されたデバイスは同じプライベートネットワークに参加し、互いに到達できる
-	ようになります。その共有されたアイデンティティこそが、あるマシンが別のマシンの
-	モデルを利用できる仕組みです。
+	**すべての**パソコンで**同じ Google アカウント**を使ってください。この共通の
+	サインインが、あるマシンの AI を別のマシンから使えるようにしています。
+	別々のアカウントだと、互いにつながらない別のネットワークになります。
 </Aside>
 
-## デバイスを登録する
+## セットアップを開始する
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		sudo waired init
-		```
-	</TabItem>
 	<TabItem label="Windows">
+		**管理者として PowerShell を開き**（スタートボタンを右クリック →
+		「ターミナル（管理者）」）、次を実行します。
+
 		```powershell
 		& "C:\Program Files\Waired\waired.exe" init
 		```
 	</TabItem>
+	<TabItem label="macOS">
+		```sh
+		sudo waired init
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		```sh
+		sudo waired init
+		```
+	</TabItem>
 </Tabs>
 
-`waired init` は 3 つのプロンプトに沿って進みます。
+サインイン用のリンクが表示され、**Enter** を押すとブラウザーで開きます。
+リンクを自分でコピーしてブラウザーに貼っても構いません。
+
+<Aside type="caution" title="セットアップが終わるまで、このウィンドウは閉じないでください">
+	セットアップはブラウザに移りますが、管理者権限が必要な作業（AI ソフトの導入と
+	コーディングツールの連携）はこのウィンドウが担当し続けます。
+
+	閉じてしまった場合はブラウザにそう表示されます
+	（*「The setup command on … was closed before this finished. Your progress was saved.」*）。
+	同じコマンドをもう一度実行すれば続きから再開できます。進捗は失われず、
+	モデルのダウンロードはそのまま続きます。
+</Aside>
+
+## ブラウザで完了させる
+
+サインインすると、いま設定中のパソコンのセットアップ画面に移動します。
+そのパソコンの状況がそのまま表示されます。
+
+<Screenshot
+	src="setup-wizard-progress.png"
+	alt="ブラウザに表示された Waired のセットアップ画面。Install the AI software（完了）、Download the AI model（19.2 GB 中 7.9 GB で進行中）、Check the speed（待機中）の 3 ステップ。"
+	caption="パソコン自身が報告している 3 つの工程です。このタブを閉じても止まりません。"
+/>
+
+| 工程 | 何をしているか | 目安 |
+|---|---|---|
+| **Install the AI software** | モデルを読み込んで動かすプログラムの導入。管理者権限が必要なため、ターミナルを開いたままにする必要があります。 | 1〜2 分 |
+| **Download the AI model** | AI 本体。このパソコンで実際に動かせる最良のモデルを Waired が選びます。 | 5〜30 分 |
+| **Check the speed** | 速度の計測。このマシンが追いつけるかを判断します。 | 最大 5 分 |
+
+続いて、どのコーディングツールを連携するか聞かれます。使っているなら
+**Claude Code** を有効にしてください（あとから変更できます）。
+
+完了すると、そのデバイスのページに着地します。以降の確認・変更はそこから行えます。
+
+<Aside type="note" title="セットアップ画面は英語表示です">
+	Web 画面は現在英語のみです。日本語化は予定されています。
+</Aside>
+
+## ここで決めていること
+
+2 つの設定が、このパソコンの役割を決めます。ハードウェアから妥当な既定値が選ばれ、
+どちらもあとから変更できます。
+
+**このパソコンで AI モデルを動かすか**
+: デスクトップや GPU マシンなら「はい」。ほかのパソコンの AI を*使うだけ*の
+  ノートパソコンなら「いいえ」— ネットワークには参加しますが、モデルは持ちません。
+  実用的なモデルが載らないマシンでは既定が「いいえ」になり、何が足りないかが表示されます。
+
+**ほかの端末からこのパソコンの AI を使えるようにするか**
+: ノートパソコンやスマートフォンに応答させたいマシンなら「はい」。「いいえ」にすると
+  このパソコン専用になります（自分では引き続き使えます）。1 つ目の設定とは独立です
+  — [共有と一時停止の違い](/ja/reference/cli/#sharing-vs-pausing)を参照してください。
+
+<Aside type="caution" title="「非常に小さいモデルしか動かせません」と出たら">
+	メモリの少ないパソコンでは、そう報告したうえで「動かさない」ことを勧められます。
+	その助言に従ってください。そのサイズのコーディングモデルは、役に立つ出力より
+	壊れた出力のほうが多くなります。それでもこのパソコンをネットワークに入れる価値は
+	あります — ほかのパソコンの AI を使えるからです。
+</Aside>
+
+## ターミナルだけで進める
+
+ブラウザでの操作は便利のためであって、必須ではありません。開くブラウザがない場合
+（SSH 越しのサーバー、デスクトップ環境のないマシン、`--no-browser`、
+`--non-interactive`）は自動的にターミナル方式になり、次の表示で **Enter** を押せば
+いつでも切り替えられます。
+
+```
+Setup is continuing in your browser…
+(press Enter to continue in the terminal instead)
+```
+
+聞かれる内容は同じです。
 
 <Steps>
-1. **Google サインイン。** `init` はまずサインイン用のリンクを表示し、対話的な
-   ターミナルでは **Enter** を押してからブラウザを開きます（リンクを自分で開いても
-   構いません）。非対話的なセッションではすぐにブラウザが開き、ヘッドレスなマシン
-   （または `--no-browser` 指定時）は URL とペアリングコードの表示のみになります。
 
-   サインイン後、続きが**ブラウザ側**で進むことがあります。その場合ターミナルには
-   次のように表示され、そのまま動き続けます。
+1. **Google サインイン。** リンクが表示されるので Enter で開きます。ディスプレイの
+	ないマシンでは URL とペアリングコードだけが表示されるので、別の端末で開きます。
 
-   ```text
-   Setup is continuing in your browser…
-   (press Enter to continue in the terminal instead)
-   ```
+2. **Run AI models on this computer? (Y/n)** — 上記 1 つ目の設定です。既定値は
+	このマシンのメモリから決まります。
 
-   ブラウザ側が終わるまで**そのターミナルは閉じずに開いたままにしてください** —
-   AI ソフトウェアの導入など、ターミナルを必要とする手順があります。その導入は
-   ターミナル側で実行され、初回セットアップで最も時間がかかる部分です。
+3. **Let your other devices use this computer's AI? (Y/n)** — 2 つ目の設定です。
 
-   ```text
-   📦 Installing the AI engine for the setup in your browser (one-time download)...
-   ```
-
-   **Enter** を
-   押すとターミナル側に主導権が戻り、残りの質問はターミナルが尋ねます（ブラウザ側は
-   ここで実行すべきコマンドを案内します）。ターミナルを閉じても安全です。進捗は
-   保存され、ダウンロードはどちらの場合も続きます。
-
-2. **このコンピュータで AI モデルを動かしますか?（Run AI models on this
-   computer? [Y/n]）** — モデルを*実行する*べきマシン（GPU ボックス）では **Y** を
-   選びます。マシンに十分なメモリ（おおよそ 8 GB の VRAM）がある場合はデフォルトが
-   Y、それ以外では N になります。リモートのモデルを*使う*だけのクライアント
-   ノートパソコンでは **N** を選びます。
-
-3. **他のデバイスからこのコンピュータの AI を使えるようにしますか?（Let your
-   other devices use this computer's AI? [Y/n]）** — 他のデバイスから推論
-   リクエストを送れるようにするには、サーバーで **Y** を選びます。AI をこのマシン
-   限定のプライベートに保つには **N** を選びます（自分自身では引き続き利用できます）。
-   これは AI 実行の切り替えとは独立しています —
-   [共有と一時停止の違い](/ja/reference/cli/#sharing-vs-pausing)を参照してください。
 </Steps>
 
-エンジンを有効化した場合、`init` はこのマシンの CPU・メモリ・GPU を見て、
-**収まる範囲で最良の同梱コーディングモデルを自動選択**します — 高性能機ではより大きく
-高品質なモデルを、控えめなノート PC ではより小さなモデルを選びます。先に空きディスクを
-確認し（足りなければより小さいモデルへ下げる、あるいはダウンロードを見送る）、選んだモデルを
-プルしてダウンロードの進捗を表示しながらフォアグラウンドで完了を待ちます。このプルには数分
-かかることがあります。完了すると `init` は簡単なベンチマークを実行し、このマシンの性能が
-足りない場合はさらに軽量なモデルへの切り替えを提案します。提案には現在のモデルと候補
-モデルがカタログ品質(quality)付きで表示されます。切り替えを受け入れると新しいモデルを
-進捗表示つきでフォアグラウンドでダウンロードします(Enter を押すとバックグラウンドに
-移せます)。失敗しても `init` 自体は成功し、再試行の方法を表示します。すぐにシェルに戻り、ダウンロードをバックグラウンドでエージェントに
-任せたい場合は `--no-wait-model` を渡してください。特定のモデルを固定するには
-`--inference-bundled-model-id <id>` を渡すか、
-[同梱モデルを切り替える](/ja/guides/switch-model/)を参照してください。
+モデルを有効にした場合は、収まるモデルを選び、ディスク空き容量を確認したうえで
+（足りなければディスクを埋めるのではなく小さいモデルに落とします）、
+進捗表示つきでダウンロードします。
 
-<Aside type="note" title="サービスがすでに起動している場合">
-	`waired init` を実行した時点で `waired-agent` サービスがすでに起動している場合
-	（新規インストールでは先にサービスが起動します）、登録はデーモンに引き継がれます。
-	デーモンはプロンプトを出す代わりに、このマシンのハードウェアから推論の役割を自動で
-	選び（上記と同じサイズ調整で、性能不足のマシンではローカルエンジンを見送ることも
-	含みます）、`init` はモデルのダウンロード進捗とベンチマークを表示します。役割は後から
-	`waired runtimes benchmark`（性能の再確認・モデル切り替え）、`waired models ls`、
-	`waired inference share on|off`、`waired inference engine stop|start`、あるいは
-	`waired init` の再実行で変更できます。
-</Aside>
+```
+Starting the inference engine…
+Preparing to download qwen3-coder-30b-a3b-instruct…
+Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
+```
 
-昇格した対話的インストール(Linux/macOS の `sudo waired init`)では、最後の質問として
-**Claude Code の推論を今から Waired 経由にルーティングするか**を確認します — モデルの
-ダウンロードとベンチマークが終わり、ローカルスタックが実際に応答できるようになった時点で
-聞かれます。「いいえ」でも統合自体はインストールされたまま、Claude のトラフィックは
-Anthropic API に残ります。後から有効化するには `sudo waired claude enable` を使って
-ください([コーディングエージェント](/ja/guides/coding-agents/)参照)。
+そのあと速度を計測し、追いつかない場合はより軽いモデルを提案します
+（両方のモデル名と品質ランクを並べて表示するので、速さと質を見比べられます）。
+最後に、Claude Code を Waired 経由にするか聞かれます。「いいえ」でも連携は
+インストールされたまま無効になるだけで、あとから `sudo waired claude enable` で
+有効にできます。
 
-<Aside type="caution" title="性能が足りないマシン">
-	**どのコーディングモデルも実用的に動かせない**ほど小さなマシンでは、`init` はローカル
-	エンジンを見送り、何が必要かを表示します。それでもデバイスはネットワークに参加するので、
-	**他のデバイスで動くモデルを利用する**ことはできます（自分でホストしないだけです）。
-	それでもエンジンを入れたい場合は `--inference-enabled=true` を付けて再実行してください。
-</Aside>
+**こう表示されれば完了です**:
 
-<Aside type="note">
-	CI やその他の非対話的ホストでは、`--non-interactive` を渡すと、プロンプトなしで
-	ハードウェアに基づいたデフォルトを受け入れます。デフォルト以外のコントロールプレーンを
-	指定するには、`--control https://your-control-plane.example.com` を追加します。
-</Aside>
+```
+╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
+│  Account   you@example.com                                       │
+│  Device    my-desktop  d-4f2a…                                   │
+│  Network   personal  overlay 100.64.0.3                          │
+│  Model     qwen3-coder-30b-a3b-instruct  (58 tok/s)              │
+│  Gateway   http://127.0.0.1:9479                                 │
+│  Claude    http://127.0.0.1:9473 (managed settings)              │
+│                                                                  │
+│  Point your coding agent at Waired and start building.           │
+╰──────────────────────────────────────────────────────────────────╯
+```
 
-## バックグラウンドサービスを起動する
+<details>
+<summary>サーバー・スクリプト向けのオプション</summary>
 
-登録はデバイスを構成します。`waired-agent` サービスはそれを接続状態に保ちます。
+| フラグ | 効果 |
+|---|---|
+| `--no-browser` | ブラウザを開かず、URL とペアリングコードのみ表示 |
+| `--non-interactive` | ハードウェアから決まる既定値を使い、何も質問しない |
+| `--no-wait-model` | すぐシェルに戻り、ダウンロードは裏で続行 |
+| `--inference-bundled-model-id <id>` | 自動選択ではなくモデルを指定 |
+| `--inference-enabled=true` | 小さすぎると判定されたマシンでもモデルを動かす |
+| `--control <url>` | 既定以外の接続先を指定 |
+| `--mask-pii` | ホームディレクトリ・ユーザー名・ホスト名・メールアドレスを伏せる（不具合報告用） |
 
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		sudo systemctl enable --now waired-agent
-		```
-		（macOS では、インストーラーがすでにロードしたシステム launchd デーモンを使用します。ログイン不要でブート時に起動します。）
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		Start-Service waired-agent
-		```
-	</TabItem>
-</Tabs>
+</details>
 
-次へ: [動作を確認する](/ja/getting-started/verify/)。
+## もう一度セットアップする
+
+すでにサインイン済みのパソコンでもう一度実行しても安全です。再認証してセットアップ
+画面を開き直すだけで、**デバイス数の上限には数えられません**。
+
+<CardGrid>
+	<LinkCard title="動作確認" href="/ja/getting-started/verify/" description="3 つの確認方法と、正常なときの見え方。" />
+	<LinkCard title="ほかの端末を追加する" href="/ja/getting-started/add-a-device/" description="ノートパソコンを同じネットワークに入れる。" />
+	<LinkCard title="途中で止まった" href="/ja/troubleshooting/#setup-stopped-partway" description="表示されたメッセージごとの意味と再開方法。" />
+</CardGrid>
