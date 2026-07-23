@@ -851,6 +851,12 @@ func run(ctx context.Context, args []string) error {
 		var overlayHandlerSet *gateway.HandlerSet
 		var claudeHandlerSet *gateway.HandlerSet
 		var inferenceSub *inferenceSubsystem
+		// localAdmit lets the LOCAL gateway surfaces count the owner's
+		// own engine work against the same admission counter the overlay
+		// listener enforces (§8.2 owner-priority latch, waired#899). The
+		// surfaces are built below; the inference.Server they report to
+		// only exists further down, so the relay is published then.
+		var localAdmit localAdmissionRelay
 		// infProvider feeds the switchboard's InferenceProvider delegation
 		// once this session is published. The matching inference + catalog
 		// routes are registered at boot in run() (gated on the same
@@ -884,6 +890,7 @@ func run(ctx context.Context, args []string) error {
 				OnPublicGrantDemand:  notifyPublicGrantDemand,
 				OnPublicNudge:        publicUseCtl.Nudge,
 				OnPublicUsage:        publicUsageSink(publicUsageBatch),
+				LocalAdmission:       localAdmit.Admit,
 			})
 			if err != nil {
 				return fmt.Errorf("inference subsystem: %w", err)
@@ -1143,6 +1150,11 @@ func run(ctx context.Context, args []string) error {
 				cfg.EngineReadyFn = inferenceSub.EngineReady
 			}
 			infSrv = inference.NewServerWithConfig(cfg)
+			// The owner-priority latch's local half (§8.2, waired#899):
+			// from here on, the loopback / Claude-intercept / OpenCode
+			// surfaces count the engine work they dispatch locally
+			// against this server's admission counter.
+			localAdmit.Set(infSrv)
 			if publicShareCtl != nil {
 				// Kill switch (§8.3 step 1): turning Public Share OFF
 				// terminates in-flight public streams immediately.
