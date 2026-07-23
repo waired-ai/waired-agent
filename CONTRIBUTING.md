@@ -77,6 +77,15 @@ run. CI executes on GitHub-hosted runners (only some nightly jobs use
 self-hosted hardware). The DCO and gitleaks checks run without
 executing any fork code, so you get that feedback immediately.
 
+`docs-guard.yml` also runs immediately, on every PR. If your change
+touches something a user sees — the Waired app, the CLI, the install
+scripts — it expects a matching update under `docs-site/`. When the
+change really alters nothing a user reads, add a line to the PR body:
+
+```
+docs-not-needed: internal refactor, no change to any printed or shown text
+```
+
 PRs touching mesh / enrollment / `proto/` paths normally also run a
 real-NAT testnet gate (`testnet-pr.yml`), but it is skipped for fork
 PRs — the cross-repo dispatch credential is not available to forks. A
