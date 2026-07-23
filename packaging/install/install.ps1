@@ -188,6 +188,12 @@ param(
     # log stays readable without elevation) and forwards it; empty -> the child
     # defaults it. Not documented in -Help. (waired#748)
     [string]$LogPath,
+    # Start the agent at this log verbosity: debug|info|warn|error (default
+    # info). The Windows service has no EnvironmentFile, so this is baked into
+    # the SCM service's ExecStart as --log-level. Same as WAIRED_LOG_LEVEL.
+    # Change it later at runtime (no reinstall) with `waired config log-level`.
+    # Mirrors install.sh --log-level.
+    [string]$LogLevel = $env:WAIRED_LOG_LEVEL,
     # Catch-all for stray tokens. PowerShell can't bind install.sh-style
     # `--dev` / `--control <url>` long options to the -Dev / -Control params
     # (they arrive as plain string values), so with PositionalBinding=$false
@@ -461,6 +467,14 @@ function Normalize-ExtraArgs {
                 $script:InstallDir = $val
                 $script:InstallDirExplicit = $true
             }
+            'log-level' {
+                if ($null -eq $val) {
+                    if ($i + 1 -ge $ExtraArgs.Count) { Common-Die "--log-level requires an argument (debug|info|warn|error)." }
+                    $i++
+                    $val = [string]$ExtraArgs[$i]
+                }
+                $script:LogLevel = $val
+            }
             'skip-ollama'       { $script:SkipOllama = $true }
             'skip-init'         { $script:SkipInit = $true }
             'skip-claude-proxy' { $script:SkipClaudeProxy = $true }
@@ -624,6 +638,11 @@ Switches:
                     sign-in step also masks hostname + account email) in
                     the output -- for screenshots and bug reports.
                     Best-effort. Same as WAIRED_PII_MASK=1.
+  -LogLevel LVL     Start the agent at this log verbosity: debug, info,
+                    warn, or error (default info). Use -LogLevel debug for
+                    pre-release debugging. Same as WAIRED_LOG_LEVEL=LVL.
+                    Change it later without reinstalling via
+                    `waired config log-level <level>`.
   -Check            Report whether a newer waired is available, then exit.
                     Read-only: no download and no UAC prompt.
   -Update           Update an existing install to the latest release for
@@ -1237,8 +1256,16 @@ function Invoke-AgentInstall {
     # failure but was really an automatic-variable scoping bug. The
     # developer-facing scripts/install/waired-agent-windows.ps1 already
     # uses `$installArgs` for exactly this reason; match it.
+    if ($LogLevel -and $LogLevel -notin @('debug','info','warn','error')) {
+        Common-Die "-LogLevel must be one of: debug info warn error (got: $LogLevel)"
+    }
     $installArgs = @('install')
     if ($StateDir) { $installArgs += "-state-dir=$StateDir" }
+    # The Windows service has no EnvironmentFile, so bake the log level into
+    # the service ExecStart as --log-level (everything after `--` becomes an
+    # agent flag; it wins over agent.json). Runtime changes: `waired config
+    # log-level`.
+    if ($LogLevel) { $installArgs += @('--', '--log-level', $LogLevel) }
     Common-Log "Running: $exe $($installArgs -join ' ')"
     Common-Run "& $exe $($installArgs -join ' ')" {
         & $exe @installArgs
