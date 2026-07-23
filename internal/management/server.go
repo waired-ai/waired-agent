@@ -315,6 +315,7 @@ type Server struct {
 	observability       ObservabilityConfig        // optional; zero value disables all Phase 9 endpoints
 	login               LoginController            // optional; nil disables /waired/v1/login/{start,status}
 	update              UpdateController           // optional; nil disables /waired/v1/update/{check,status,settings}
+	logControl          LogController              // optional; nil disables /waired/v1/log/{level,settings}
 	setupExecutor       SetupExecutorController    // optional; nil disables /waired/v1/setup/{state,executor}
 
 	// browserHardening, when true, wraps the mux in browserGuard (Host /
@@ -497,6 +498,10 @@ func (s *Server) mux() *http.ServeMux {
 		mux.HandleFunc("/waired/v1/update/check", s.handleUpdateCheck)
 		mux.HandleFunc("/waired/v1/update/status", s.handleUpdateStatus)
 		mux.HandleFunc("/waired/v1/update/settings", s.handleUpdateSettings)
+	}
+	if s.logControl != nil {
+		mux.HandleFunc("/waired/v1/log/level", s.handleLogLevel)
+		mux.HandleFunc("/waired/v1/log/settings", s.handleLogSettings)
 	}
 	if s.claudeIntegration != nil {
 		mux.HandleFunc("/waired/v1/integration/claude", s.handleClaudeIntegration)
