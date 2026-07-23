@@ -1,81 +1,344 @@
 ---
 title: CLI コマンド
-description: すべての waired コマンドのリファレンス — セットアップ、モデルと推論、コーディングエージェント連携、ルーティング制御、メンテナンス。
+description: すべての waired コマンドを、やりたいことごとにまとめたリファレンス。重要なフラグと、何が表示されるか。
+meta:
+  audience: ターミナルで作業する人、画面のないマシンを扱う人
+  needs: Waired がインストール済みであること
+  time: 索引を眺めて、必要な節だけ読む
+sourceHash: ff8ee266feefe9aa
 ---
 
-`waired` CLI は、ローカルの `waired-agent` サービスと通信します。`waired --help`、
-または任意のコマンド・サブコマンドで `waired <command> --help`(`-h` も可)を実行すると、
-グループ分けされたコマンド固有のヘルプが表示されます。
+このページの内容は、注記のあるもの以外すべて
+[Waired アプリ](/ja/guides/waired-app/)からも行えます。全フラグは
+`waired <コマンド> --help` で確認できます。このページは、そのフラグが**何のためにあるか**を扱います。
 
-## セットアップ & アイデンティティ
+## 索引
 
-| コマンド | 機能 |
+| コマンド | 内容 |
 |---|---|
-| `waired init` | このデバイスを Waired ネットワークに登録します (Google サインイン)。マシンごとに一度実行します。[初回実行](/ja/getting-started/first-run/) を参照。`--mask-pii`（または `WAIRED_PII_MASK=1`）を付けると、ホームディレクトリ・ユーザー名・ホスト名・アカウントのメールアドレスを出力上でマスクします — スクリーンショットや報告への貼り付け用のベストエフォート機能です。 |
-| `waired status` | デーモン + アイデンティティのステータスを表示します。ライブのエンジン/メッシュのスナップショットには `--observability` を追加します。サービスインストールではデバイス状態が root 所有のため `sudo` で実行してください（Windows は管理者プロンプト）— 権限が無い場合は推測せず permission エラーで終了します。 |
-| `waired doctor` | ✓/⚠/✗ チェックでセットアップを診断します。修正可能なものを修復するには `f` を押します (非対話的に修復するには `--fix`)。 |
-| `waired auth status` | デバイストークンの状態 + 有効期限を表示し、必要に応じて再 init を提案します。`waired status` と同様、サービスインストールでは `sudo` が必要です。 |
-| `waired logout` | このデバイスのアイデンティティ + シークレットを削除し、次の `init` がクリーンに再登録できるようにします。 |
+| [`waired init`](#waired-init) | このパソコンをサインインさせ、セットアップする |
+| [`waired status`](#waired-status) | ちゃんと動いている？ |
+| [`waired doctor`](#waired-doctor) | 全体を検査し、多くをその場で修復する |
+| [`waired auth status`](#waired-auth-status) | このパソコンのサインインはいつ切れる？ |
+| [`waired logout`](#waired-logout) | このパソコンの識別情報を削除する |
+| [`waired infer`](#waired-infer) | いますぐ自分の AI に尋ねる |
+| [`waired models`](#waired-models) | 何が入っているか、追加、削除 |
+| [`waired runtimes`](#waired-runtimes) | AI ソフトウェア本体と、速度テスト |
+| [`waired inference`](#waired-inference) | エンジンの起動・停止、自分のほかのパソコンへの提供 |
+| [`waired worker`](#waired-worker) | どのパソコンが答えるか |
+| [`waired peers`](#waired-peers) / [`ping`](#waired-ping) | 自分のほかのパソコン |
+| [`waired public`](#waired-public) | ほかの Waired ユーザーと空きマシンを貸し借りする |
+| [`waired link`](#waired-link--unlink) / [`unlink`](#waired-link--unlink) | コーディングツールをつなぐ |
+| [`waired claude`](#waired-claude) | Claude Code の実行先と、その場での切り替え |
+| [`waired codeui`](#waired-codeui) | ブラウザで動くコーディングエージェント |
+| [`waired pause`](#waired-pause--resume) / [`resume`](#waired-pause--resume) | ルーティングの停止と再開 |
+| [`waired update`](#waired-update) | 新しい Waired を入れる |
+| [`waired version`](#waired-version) | どのビルド？ |
+| [`waired keygen`](#waired-keygen) | 鍵ペアを手動で生成する |
 
-## モデル & 推論
+---
 
-| コマンド | 機能 |
+## セットアップとサインイン
+
+### `waired init`
+
+このパソコンをサインインさせ、セットアップします。1 台につき 1 回です。
+通常はインストーラが実行してくれるので、自分で打つのは中断したセットアップの再開や、
+`--no-init` でインストールしたマシンを設定するときだけです。
+
+```sh
+sudo waired init            # macOS / Linux
+waired init                 # Windows は管理者ターミナルから
+```
+
+AI ソフトウェアをインストールするため管理者権限が必要です。
+**実行中はこのコマンド自身が、ブラウザのセットアップ画面が要求する作業を行っています**。
+セットアップが終わるまでウィンドウを閉じないでください。
+→ [サインインとセットアップ](/ja/getting-started/first-run/)
+
+| フラグ | 使いどころ |
 |---|---|
-| `waired models` | ローカルモデルを管理します: `ls` / `pull` / `rm` / `refresh`。`ls` はダウンロード済み一覧を表示し、`ls --detail` は推奨スペック・ハードウェア適合・選定基準を含むカタログを表示します（[モデルカタログ](/ja/reference/model-catalog/) を参照）。`pull` はホストの推奨スペックを超えるモデルの場合に確認を求めます。スクリプトでは `--yes` / `-y` で確認を省略できます。 |
-| `waired runtimes` | 推論ランタイムを管理します: `ls` / `install` / `uninstall` / `refresh` / `status` / `benchmark`。 |
-| `waired infer "<prompt>"` | Local Gateway 経由でワンショットの推論リクエストを実行します。Auto-Selector のルーティングのドライランには `--explain` を追加します。 |
-| `waired inference share <on\|off\|status>` | このエンジンをメッシュピアに提供するかどうかを切り替えます。[下記](#sharing-vs-pausing) を参照。 |
-| `waired public status` | このコンピューターが他の Waired ユーザーに公開共有されているか、また他人の公開マシンを利用してよいかを表示します。`--json` で生のオブジェクトを出力します。詳細は[パブリック共有](/ja/public-share/)を参照。 |
-| `waired public share` / `unshare` | このコンピューターを公開共有して他の Waired ユーザーが作業を実行できるようにする、またはそれを停止します。`share --max-clients N` は同時に利用できるゲスト数を制限します。`unshare` は現在他人が実行中の作業を切断します。詳細は[パブリック共有](/ja/public-share/)を参照。 |
-| `waired public use [--auto\|--explicit\|--off] [--min-tier N] [--main on\|off] [--sub on\|off]` | このコンピューターが他人の公開マシンを利用するかどうかを表示・変更します。フラグなしでは現在の設定を表示するだけです。初めて有効にするときは、読んで承諾する必要がある一度きりのプライバシー警告がターミナルに表示されます。詳細は[パブリック共有](/ja/public-share/)を参照。 |
-| `waired worker get` / `set` | アウトバウンド推論の流れ先を選択します: `set --mode=auto\|local-only\|peer-preferred`、または `set --pin=<peer>`。 |
-| `waired peers list` | 既知のメッシュピア (DeviceID、IP、エンジン、GPU、モデル) を一覧表示します — `--pin` のターゲットを選ぶのに便利です。 |
+| `--mask-pii` | 出力中のホームフォルダ・ユーザー名・マシン名・アカウントのメールアドレスを伏せます。バグ報告に貼るとき用。ベストエフォート。 |
+| `--non-interactive` | 何も聞かず既定値で進めます。スクリプト用。 |
+| `--no-browser` | ブラウザを開かず、サインイン用リンクを表示します。SSH 用。 |
+| `--inference-enabled=true\|false` | 「このパソコンで AI を動かすか」に、聞かれずに答えます。 |
+| `--share-with-mesh=true\|false` | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 
-## コーディングエージェント
+### `waired status`
 
-| コマンド | 機能 |
+「動いているか」を手早く確認します。
+
+```sh
+waired status
+waired status --observability     # エンジン、モデル、自分のほかのパソコン
+waired status --observability -o json
+```
+
+通常のデスクトップ用インストールでは状態がシステムの所有物なので、
+`sudo` を付けて（Windows は管理者ターミナルで）実行するとすべて見えます。
+権限がない場合は「システム全体で登録済み」とだけ報告して終了します — 推測はしません。
+
+### `waired doctor`
+
+セットアップの各部分を検査し、項目ごとに ✓ / ⚠ / ✗ を表示して、
+**f** を押せば直せるものを直します。詳細:
+[状態を診断する](/ja/getting-started/doctor/)
+
+```sh
+waired doctor
+waired doctor --fix              # 確認なしで修復（スクリプト・SSH）
+```
+
+### `waired auth status`
+
+サインインの状態と期限を表示し、更新が必要なら `init` の再実行を促します。
+サービス用インストールでは `status` と同様に管理者権限が必要です。
+
+### `waired logout`
+
+このパソコンの識別情報と秘密を削除し、次の `waired init` が
+新しい端末としてきれいに登録できるようにします。一時的な措置ではありません。
+しばらく使わないだけなら [`pause`](#waired-pause--resume) を見てください。
+
+---
+
+## モデルと推論
+
+### `waired infer`
+
+プロンプトを 1 つ送って応答を表示します。経路全体が通っていることを確かめる最短の方法です。
+
+```sh
+waired infer "say hi"
+waired infer "say hi" --explain    # 実際には尋ねず、どのマシンとモデルが答えるかを表示
+```
+
+### `waired models`
+
+```sh
+waired models ls                  # ダウンロード済みのモデルと、動作中のモデル
+waired models ls --detail         # カタログ全体と、このパソコンで動くかどうか
+waired models pull <モデルID>      # ダウンロードする
+waired models rm <モデルID>        # 削除して数 GB 空ける
+waired models refresh             # このマシンにもっと合うモデルはあるか
+```
+
+`pull` はモデルが使える状態になるまで待ち、このパソコンの推奨スペックを超える場合は
+確認を求めます（スクリプトでは `--yes` で省略）。`rm` も実行前に確認します。
+モデル ID は[モデルカタログ](/ja/reference/model-catalog/)にあります。
+
+### `waired runtimes`
+
+モデルそのものではなく、モデルを読み込んで動かす **AI ソフトウェア**の側です。
+
+```sh
+waired runtimes ls
+waired runtimes status
+waired runtimes install [エンジン]
+waired runtimes uninstall <エンジン>
+waired runtimes benchmark         # このパソコンの実際の速度を測る
+```
+
+注目すべきは `benchmark` です。実測のスループットを計測し、
+別のモデルのほうが合っている場合は切り替えを提案し、
+両方のモデルを品質ランクつきで示すので、速さと質を見比べて選べます。
+
+### `waired inference`
+
+```sh
+waired inference engine start     # モデルを読み込む
+waired inference engine stop      # 確保しているメモリを解放する
+waired inference engine status
+
+waired inference share on         # 自分のほかのパソコンに、このマシンの AI を使わせる
+waired inference share off
+waired inference share status
+```
+
+`engine stop` はメモリ逼迫時の避難口、`share off` は自分の利用を保ったまま
+ほかのマシンからの利用だけを閉じる設定です。
+→ [しばらく使わないようにする](/ja/guides/pause/)
+
+### `waired worker`
+
+**このパソコン**のリクエストの行き先です。
+
+```sh
+waired worker get
+waired worker set --mode=auto            # 自前の AI があればそれ、なければ他（既定）
+waired worker set --mode=local-only      # ほかのパソコンは使わない
+waired worker set --mode=peer-preferred  # ほかのパソコンを優先する
+waired worker set --pin=<peer>           # 常にこの 1 台（--mode=pinned になる）
+```
+
+### `waired peers`
+
+```sh
+waired peers list
+```
+
+自分のほかのパソコンと、それぞれのアドレス・エンジン・グラフィックボード・モデル。
+`worker set --pin` に渡す名前はここで調べます。
+
+### `waired ping`
+
+```sh
+waired ping <peer>
+```
+
+このパソコンから、プライベートネットワーク越しに別のマシンへ実際に届くかを確認します。
+
+### `waired public`
+
+空いている処理能力をほかの Waired ユーザーに貸し、また借ります。
+自分でオンにしない限りオフです。**先に[パブリック共有](/ja/public-share/)を読んでください** —
+公開マシンの持ち主は、あなたが送った内容を読めます。
+
+```sh
+waired public status
+waired public share --max-clients N    # このパソコンを提供する
+waired public unshare                  # やめる（実行中の他人の処理も打ち切られます）
+waired public use                      # いまの設定を表示
+waired public use --auto               # 自分のより速いときは他人のマシンを使う
+waired public use --explicit           # 明示したときだけ使う
+waired public use --off
+waired public use --min-tier N         # この品質ランク以上のマシンだけ
+waired public use --main on|off --sub on|off
+```
+
+`use` を最初に有効にするとき、ターミナルに一度だけプライバシー警告が表示され、
+読んで承諾する必要があります。
+
+---
+
+## コーディングツール
+
+### `waired link` / `unlink`
+
+```sh
+waired link                  # 見つかったすべてのコーディングツールを設定
+waired link claude-code
+waired link opencode
+waired link openclaw
+waired unlink <エージェント>
+```
+
+`link` は、ほかのツールが必要とする鍵も作成します
+（→ [チャットアプリから使う](/ja/guides/chat-clients/)）。
+`unlink` は正確で、`link` が追加したものだけを取り消します。
+
+### `waired claude`
+
+```sh
+waired claude status
+sudo waired claude enable     # Claude Code を自分の AI に向ける（init も行います）
+sudo waired claude disable
+```
+
+`enable` / `disable` には管理者権限が必要です。認証情報は一切書き込まないので、
+claude.ai のサブスクリプションには影響しません。
+
+実行先の切り替えは、再起動なしでその場で反映されます。
+
+```sh
+waired claude route                                # 表示
+waired claude route waired                         # 自分の AI のみ
+waired claude route anthropic                      # 本来の Anthropic API
+waired claude route auto                           # 自分を優先し、必要ならフォールバック
+waired claude route anthropic --subagents waired   # 分ける
+```
+
+引数は**本体の会話**を設定し、`--subagents` はサブエージェントを独立に設定します。
+分けるのは実際に有効です → [Claude Code から使う](/ja/guides/claude-code/)。
+セッション中は `/waired-route` で同じことができます。
+*どのマシン*が応答するかは [`waired worker`](#waired-worker) 側の話で、これではありません。
+
+```sh
+waired claude statusline install [--wrap]
+waired claude statusline remove
+```
+
+現在の経路と、自分のハードウェアが応答した場合はそのモデル名を示すフッター行を管理します。
+`enable` が自動で入れるので通常は不要です。`--wrap` は既存のステータス行を
+置き換えずに包みます。
+
+### `waired codeui`
+
+コーディングエージェントをブラウザで、実際のプロジェクトを対象に、自分の AI で動かします。
+インストールは不要です。
+
+```sh
+waired codeui open
+waired codeui open --project DIR
+waired codeui open --no-browser     # ブラウザを開かずアドレスを表示（SSH）
+waired codeui url
+waired codeui status
+waired codeui stop
+```
+
+実行ユーザーは自分自身で、自分だけが使えます。
+同じマシンのほかのユーザーも、ネットワーク上のほかのパソコンも拒否されます。
+
+---
+
+## ルーティング、アップデート、その他
+
+### `waired pause` / `resume`
+
+```sh
+waired pause
+waired resume
+```
+
+一時停止は**すべて**を止めます。ツールはクラウドに戻り、自分の AI も応答しなくなります。
+再起動をまたいで保持されます。「オフにする」の 4 通りの意味については
+[しばらく使わないようにする](/ja/guides/pause/)を参照してください。
+
+### `waired update`
+
+```sh
+waired update              # 現在のチャンネルのまま確認して適用
+waired update --check      # 確認のみ
+waired update --yes        # インストーラの確認を省いて適用
+waired update --edge       # 最新の main ビルドへ切り替え
+waired update --stable     # stable へ戻す
+waired update --force      # キャッシュされた確認結果を無視
+waired update --notify on|off   # アプリのアップデート通知ポップアップ
+```
+
+→ [Waired を更新する](/ja/getting-started/update/)。`--notify off` はポップアップだけを止め、
+Waired アプリのメニュー内の項目はどちらでも残ります。
+
+### `waired version`
+
+```sh
+waired version
+waired version --json      # {version, buildSHA, os, arch}
+```
+
+### `waired keygen`
+
+WireGuard の鍵ペアを生成します。`init` が自動で行うので、
+手で実行するのは特殊なことをするときだけです。
+
+---
+
+## ほとんどのコマンドで使えるフラグ
+
+| フラグ | 意味 |
 |---|---|
-| `waired link [agent]` | ユーザーごとのコーディングエージェント連携をセットアップします (Claude Code のスキル + OpenCode のプラグイン + ゲートウェイトークン)。[コーディングエージェント](/ja/guides/coding-agents/) を参照。 |
-| `waired unlink [agent]` | 連携を削除します (外科的な操作で — `link` が追加したものだけを取り消します)。 |
-| `waired claude <enable\|disable\|status>` | Claude Code のマネージド設定連携を管理します (Linux/macOS/Windows): `enable` は Claude Code をローカル推論へ向け (`waired init` でも実行されます)、`/waired-route` スラッシュコマンド・現在のルートを示すフッターのステータスライン・ターンごとのフォールバック通知をインストール、`disable` はそれらを元に戻し、`status` は現在の状態を表示します。資格情報は書き込まれないため claude.ai サブスクリプションは維持され、ローカルでの配信が停止しているときは本物の API へ fail open します。`enable`/`disable` には昇格 (`sudo`、Windows では管理者権限) が必要です。 |
-| `waired claude route [auto\|waired\|anthropic] [--subagents same\|auto\|waired\|anthropic]` | Claude Code の実行先を再起動なしで表示・設定。引数は**メイン会話**、`--subagents` はサブエージェントを独立に設定(既定 `same` = main に追従)。`auto` は Waired 優先で失敗時に実 Anthropic API へフォールバック、`waired` は Waired 推論のみで Anthropic には一切繋がない、`anthropic` は Claude サインインで常に実 API。ハイブリッド: `waired claude route anthropic --subagents waired` はメイン会話を Anthropic、バルクなサブエージェントを Waired に([Privacy](/concepts/privacy/) 参照)。*どの* Waired ノードで配信するかは `waired worker` に従う。セッション内では `/waired-route` としても利用可。 |
-| `waired claude statusline [install [--wrap]\|remove]` | 現在のルート(ローカル配信中は直前のリクエストに応答したモデルも)を示す Claude Code フッターのステータスラインを管理。`enable` が自動で追加(既存のステータスラインがあれば確認)、`install --wrap` は既存を包み、`remove` で戻す。引数なしのコマンドは Claude Code が毎ターン実行するもの。 |
-
-## ルーティング制御
-
-| コマンド | 機能 |
-|---|---|
-| `waired pause` | Waired のルーティングを一時停止します — ローカルゲートウェイは Anthropic/OpenAI 呼び出しのリダイレクトを停止します。再起動後も保持されます。 |
-| `waired resume` | `pause` を取り消し、オーバーレイルーティングを復元します。 |
-
-## ネットワーク & メンテナンス
-
-| コマンド | 機能 |
-|---|---|
-| `waired ping <peer>` | デーモン経由でピアにオーバーレイ ping を送信します。 |
-| `waired keygen` | WireGuard キーペアを生成します (通常は `init` がこれを行います)。 |
-| `waired version` | ビルドバージョンを出力します (`{version, buildSHA, os, arch}` には `--json`)。 |
-| `waired update` | 現在のチャンネルを維持したまま更新を確認して適用します (報告のみは `--check`、非対話的に適用するには `--yes`、チャンネル切り替えは `--edge` / `--stable`)。[インストール → 更新](/ja/getting-started/install/#update) を参照。 |
-
-## グローバルフラグ
-
-これらは `status` / `ping` / `models` / `runtimes` / `infer` に適用されます:
-
-- `--mgmt <url>` — ローカル管理 API のベース URL (デフォルト `http://127.0.0.1:9476`)。
-- `--gateway <url>` — `waired infer` 用の Local Gateway のベース URL (デフォルト `http://127.0.0.1:9479`、トークン不要のローカルゲートウェイ。トークン保護された `http://127.0.0.1:9473` を指定した場合、読み取れる場合に限り gateway token を自動で付与します)。
+| `--mgmt <url>` | 常駐サービスの待ち受け先（既定 `http://127.0.0.1:9476`）。 |
+| `--gateway <url>` | `waired infer` 用の、自分の AI が応答するアドレス（既定 `http://127.0.0.1:9479`。鍵の要らないループバック）。 |
+| `--state-dir <dir>` | 識別情報と秘密の保存先。環境変数 `WAIRED_STATE_DIR` でも指定できます。 |
 
 <a id="sharing-vs-pausing"></a>
-## 共有と一時停止の違い
 
-これら 2 つの制御は独立しています:
+## 混同されやすい 2 つの操作
 
-- **`waired pause` / `resume`** は*すべての*オーバーレイルーティングを停止します — 一時停止中は
-  メッシュルーティングとローカル推論ゲートウェイの両方が 503 を返します。デバイスを
-  一時的にループから外すために使用します。
-- **`waired inference share on` / `off`** は、*他のピア*があなたのエンジンを使用できるか
-  どうかだけを制御します。共有をオフにしても、自分で推論を実行することはできます
-  (`waired infer` は動作します)。ピアがあなたのモデルに到達できなくなるだけです。
+- **`pause` / `resume`** は*すべて*を止めます。メッシュのルーティングも、
+  ローカルの AI も応答しなくなります。このパソコンを完全に外したいときに使います。
+- **`inference share on` / `off`** は、*自分のほかのパソコン*がこのマシンの AI を
+  使えるかどうかだけを制御します。共有オフでも、ここでは `waired infer` が動きます。
 
-したがって、プライベートなワークステーションでは共有を **オフ** に保ちつつ一時停止しない
-ままにしておくとよいでしょう。専用の GPU マシンでは、他のデバイスが使えるように共有を
-**オン** にするとよいでしょう。
+個人用のワークステーションなら共有は**オフ**のまま一時停止もしない、
+GPU 専用機なら共有を**オン**にしてノートパソコンから使えるようにする、という使い分けになります。

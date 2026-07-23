@@ -1,0 +1,86 @@
+---
+title: 更新情報
+description: いま動かしている Waired のバージョンの調べ方、各リリースの変更点の場所、stable と edge の違い。
+meta:
+  audience: このドキュメントと挙動が食い違う人
+  needs: ターミナル、または Waired アプリ
+  time: 2 分
+sourceHash: 52db3498a607c3a1
+---
+
+import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../../components/Expected.astro';
+
+このドキュメントは**現在の安定版**について書かれています。書かれている内容と実際が
+食い違う場合、いちばんありそうな原因は、お使いの Waired が古いこと
+（edge チャンネルなら、新しすぎること）です。
+
+## いまのバージョンを調べる
+
+<Tabs syncKey="method">
+	<TabItem label="Waired アプリから">
+		**Waired アイコン** → **Settings** → **About Waired**。
+	</TabItem>
+	<TabItem label="ターミナルから">
+		```sh
+		waired version
+		```
+
+		<Expected>
+```
+waired v1.4.2
+```
+			スクリプトから読む場合は `--json` を付けてください。
+			ビルドとプラットフォームも含まれます。
+		</Expected>
+	</TabItem>
+</Tabs>
+
+## 変更点の一覧
+
+すべてのリリースと、その変更内容は GitHub で公開されています。
+
+**[github.com/waired-ai/waired-agent/releases](https://github.com/waired-ai/waired-agent/releases)**
+
+このページが正式な情報源です。各エントリにバージョン・日付・修正/追加内容が記載され、
+全プラットフォームのインストーラも置かれています。
+
+## stable と edge
+
+| チャンネル | 内容 | 対象 |
+|---|---|---|
+| **stable** | 正式リリース版。既定値です。 | 全員 |
+| **edge** | 変更がマージされるたびに最新ソースから再ビルドされます。 | リリース前に修正を取り込みたい人。多少の粗さを許容できる場合。 |
+
+切り替え:
+
+```sh
+waired update --edge      # edge へ
+waired update --stable    # stable へ戻す
+```
+
+<Aside type="caution" title="edge はリリース版と同じ検証を経ていません">
+	edge ビルドも自動テストは通過していますが、リリース版はさらに 3 つの OS の実機で
+	インストールと推論のテストを受けています。業務で使うマシンでは stable のままにしてください。
+</Aside>
+
+## 最新に保つ
+
+```sh
+waired update --check     # 新しいものがあるか
+waired update             # 適用する
+```
+
+アップデートがあるときは、Waired アプリのメニュー上部に行が表示されます。
+詳細は [Waired を更新する](/ja/getting-started/update/)。
+
+<Aside type="note" title="ここに書かれている機能が手元にない場合">
+	まず更新し、そのうえで読み直してください。更新しても一致しないなら、それは
+	ドキュメントの不具合です。ページのアドレスと `waired version` の出力を添えて
+	[Issue を作成](https://github.com/waired-ai/waired-agent/issues)していただけると助かります。
+</Aside>
+
+<CardGrid>
+	<LinkCard title="Waired を更新する" href="/ja/getting-started/update/" description="OS ごとの更新方法。" />
+	<LinkCard title="状態を診断する" href="/ja/getting-started/doctor/" description="更新しても直らないとき。" />
+</CardGrid>

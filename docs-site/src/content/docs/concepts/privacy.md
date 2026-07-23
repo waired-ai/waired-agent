@@ -1,6 +1,10 @@
 ---
 title: Privacy
 description: What stays on your machines by default, what each opt-in sharing tier means, and why Waired never silently sends your data anywhere.
+meta:
+  audience: Anyone who wants to know what leaves their computer
+  needs: Nothing
+  time: 10 minutes
 ---
 
 By default, Waired keeps **your prompts and replies on your own devices**.
@@ -16,7 +20,7 @@ through any Waired-hosted service.
 - **The control plane** only introduces your machines to each other. It
   distributes peer public keys and endpoints via a signed Network Map. It never
   receives your prompts or completions.
-- **The relay**, used only when a direct connection isn't possible, forwards
+- **The [relay](/reference/glossary/#relay)**, used only when a direct connection isn't possible, forwards
   encrypted WireGuard datagrams. It cannot decrypt them — it sees ciphertext,
   not content.
 
@@ -43,7 +47,7 @@ explicit opt-in with its own consent step — and an immediate off switch.
 
 Waired deliberately avoids "quietly send your data somewhere else" behavior.
 The one place a cloud fallback exists — the
-[Claude Code integration](/guides/coding-agents/) — is **fail-open and
+[Claude Code integration](/guides/claude-code/) — is **fail-open and
 visible**: if your local serving is down, Claude Code falls back to the real
 Anthropic API so it keeps working, and you can see the routing state at any
 time with `waired claude status` or `waired doctor`. Public and team routing

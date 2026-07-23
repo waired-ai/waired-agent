@@ -1,0 +1,76 @@
+---
+title: OpenClaw から使う
+description: コマンド 1 つで OpenClaw を自分のモデルに向けます。API キーも環境変数も不要で、既定モデルの設定はそのままです。
+meta:
+  audience: OpenClaw ユーザー
+  needs: OpenClaw がインストール済みで、Waired がサインイン済みであること
+  time: 2 分
+sourceHash: 10e4cbcda02a2a5f
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../../components/Expected.astro';
+
+## つなぐ
+
+```sh
+waired link openclaw
+```
+
+これだけです。あとはいつもどおり OpenClaw を起動し、Waired のモデルを選びます。
+
+<Expected>
+	OpenClaw のモデル選択に、次の 3 つが追加されます。
+
+	| モデル | 用途 |
+	|---|---|
+	| `waired/auto` | 汎用の既定。Waired に選ばせる |
+	| `waired/coding` | コード |
+	| `waired/small` | 速く短い応答 |
+</Expected>
+
+API キーも環境変数も使いません。Waired が、自分のマシンで動いている AI へ
+OpenClaw を直接つなぎます。
+
+<Aside type="note" title="自分の既定モデルは変更されません">
+	リンクが行うのは、選べるモデルの一覧に Waired のモデルを**追加**することだけです。
+	OpenClaw が起動時に使うモデルはこれまでの設定のままで、使いたいときに切り替えます。
+</Aside>
+
+<Aside type="tip" title="コーディングツールを複数入れている場合">
+	名前を付けずに `waired link` を実行すると、見つかったすべて
+	（Claude Code・OpenCode・OpenClaw）を設定します。
+</Aside>
+
+## 何が変わったか
+
+変更されるのは、自分のホームフォルダの中の 2 か所だけです。
+
+| パス | 内容 |
+|---|---|
+| `~/.openclaw/plugins/waired/` | 自分の AI への接続方法を知っている小さなプラグイン |
+| `~/.openclaw/openclaw.json` | そのプラグインを有効化する 2 つの設定と、上記 3 モデルの追加 |
+
+このファイルのほかの内容には手を触れず、ホームフォルダの外も変更しません。
+
+## 確認と解除
+
+[`waired doctor`](/ja/getting-started/doctor/) が経路全体を検証します
+（接続、ルーティングが停止していないか、モデルが読み込まれているか）。
+**f** を押せば直せるものは直します。
+
+連携を削除するには:
+
+```sh
+waired unlink openclaw
+```
+
+`waired link` が追加したものだけを正確に取り消します。
+
+Waired アプリからも確認・再適用できます（**Waired アイコン** → **Settings** → **OpenClaw**）。
+
+<CardGrid>
+	<LinkCard title="Claude Code から使う" href="/ja/guides/claude-code/" description="セッション中の経路切り替えつき。" />
+	<LinkCard title="OpenCode から使う" href="/ja/guides/opencode/" description="Waired 同梱のブラウザ版も。" />
+	<LinkCard title="チャットアプリから使う" href="/ja/guides/chat-clients/" description="OpenAI 互換クライアント全般。" />
+</CardGrid>

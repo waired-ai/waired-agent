@@ -1,0 +1,79 @@
+---
+title: Use it from OpenClaw
+description: Point OpenClaw at your own model with one command — no API key, no environment variable, and your existing default model left alone.
+meta:
+  audience: OpenClaw users
+  needs: OpenClaw installed, and Waired signed in
+  time: 2 minutes
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../components/Expected.astro';
+
+## Connect it
+
+```sh
+waired link openclaw
+```
+
+That is the whole setup. Start OpenClaw as usual afterwards and pick one of the
+Waired models.
+
+<Expected>
+	OpenClaw's model picker lists three new entries:
+
+	| Model | Use it for |
+	|---|---|
+	| `waired/auto` | The general default — let Waired choose |
+	| `waired/coding` | Code |
+	| `waired/small` | Fast, short answers |
+</Expected>
+
+No API key and no environment variable are involved. Waired connects OpenClaw
+to the AI running on your own machine directly.
+
+<Aside type="note" title="Your own default model is not touched">
+	Linking adds the Waired models to the list you can choose from. Which model
+	OpenClaw starts with stays whatever you had set — you switch to a Waired one
+	when you want it.
+</Aside>
+
+<Aside type="tip" title="Have several coding tools installed?">
+	`waired link` with no name sets up every one it finds — Claude Code, OpenCode
+	and OpenClaw.
+</Aside>
+
+## What it changed
+
+Two things, both inside your own home folder:
+
+| Path | What it is |
+|---|---|
+| `~/.openclaw/plugins/waired/` | A small plugin that knows how to reach your AI |
+| `~/.openclaw/openclaw.json` | Two settings that switch that plugin on, and add the three models above to the list |
+
+Nothing else in that file is modified, and nothing outside your home folder is
+touched.
+
+## Check it, or remove it
+
+[`waired doctor`](/getting-started/doctor/) verifies the whole path — the
+connection, whether routing is paused, whether a model is loaded — and repairs
+what it can when you press **f**.
+
+To remove the integration:
+
+```sh
+waired unlink openclaw
+```
+
+It is surgical: it undoes what `waired link` added and nothing else.
+
+You can also see and re-apply it from the Waired app — click the **Waired
+icon** → **Settings** → **OpenClaw**.
+
+<CardGrid>
+	<LinkCard title="Use it from Claude Code" href="/guides/claude-code/" description="Plus route switching mid-session." />
+	<LinkCard title="Use it from OpenCode" href="/guides/opencode/" description="Including the browser-based one Waired ships." />
+	<LinkCard title="Use it from a chat app" href="/guides/chat-clients/" description="Any OpenAI-compatible client." />
+</CardGrid>

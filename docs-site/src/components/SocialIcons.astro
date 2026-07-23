@@ -1,0 +1,103 @@
+---
+/**
+ * SocialIcons override — the header's right-hand group.
+ *
+ * Starlight's header has no slot for product navigation; SocialIcons is the
+ * one component that renders there, so the way out to the rest of Waired
+ * goes through it. Renders, in order:
+ *
+ *   waired.ai   — back to the product site, for readers who arrived on a
+ *                 docs page from a search engine and have no other way back
+ *   Sign in     — the web console, the action a reader most often wants next
+ *   (defaults)  — the configured social links
+ *
+ * The header's right group is desktop-only (`sl-hidden md:sl-flex` in
+ * Starlight's Header), so MobileMenuFooter carries the same two links for
+ * narrow viewports. Keep the two in step.
+ */
+import config from 'virtual:starlight/user-config';
+import { Icon } from '@astrojs/starlight/components';
+import { APP_URL, HEADER_LABELS, SITE_URL } from '../lib/site-links';
+
+const links = config.social || [];
+---
+
+<a href={SITE_URL} class="wd-home sl-flex">
+	<Icon name="external" size="1em" class="wd-home-icon" />
+	{HEADER_LABELS.home}
+</a>
+
+<a href={APP_URL} class="wd-signin sl-flex">
+	{HEADER_LABELS.signIn}
+</a>
+
+{
+	links.map(({ label, href, icon }) => (
+		<a {href} rel="me" class="wd-social sl-flex">
+			<span class="sr-only">{label}</span>
+			<Icon name={icon} />
+		</a>
+	))
+}
+
+<style>
+	/* Unlayered, so these win over Starlight's `@layer starlight.core`
+	   rules for the sibling anchors without needing !important. */
+	.wd-home {
+		align-items: center;
+		gap: 0.3em;
+		font-size: var(--sl-text-sm);
+		font-weight: 500;
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+		white-space: nowrap;
+	}
+	.wd-home:hover {
+		color: var(--sl-color-white);
+	}
+	.wd-home-icon {
+		opacity: 0.65;
+	}
+
+	.wd-signin {
+		align-items: center;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.25rem;
+		padding: 0.3rem 0.85rem;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		line-height: 1.4;
+		color: var(--sl-color-white);
+		text-decoration: none;
+		white-space: nowrap;
+		transition: background-color 0.15s ease, border-color 0.15s ease;
+	}
+	.wd-signin:hover {
+		background: var(--sl-color-gray-6);
+		border-color: var(--sl-color-gray-4);
+	}
+
+	.wd-social {
+		color: var(--sl-color-text-accent);
+		padding: 0.5em;
+		margin: -0.5em;
+	}
+	.wd-social:hover {
+		color: var(--sl-color-white);
+	}
+
+	/* Below the widest header layout the row gets tight; the product link is
+	   the one that can go, because the logo already returns to the docs home
+	   and the mobile menu still carries both. */
+	@media (max-width: 72rem) {
+		.wd-home {
+			display: none;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.wd-signin {
+			transition: none;
+		}
+	}
+</style>

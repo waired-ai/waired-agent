@@ -1,0 +1,87 @@
+---
+title: What's new
+description: How to find out which Waired you are running, what changed in each release, and the difference between the stable and edge channels.
+meta:
+  audience: Anyone whose Waired behaves differently from these pages
+  needs: A terminal, or the Waired app
+  time: 2 minutes
+---
+
+import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../components/Expected.astro';
+
+This documentation describes the **current stable release**. If something here
+does not match what you see, the most likely reason is that your Waired is
+older — or newer, if you are on the edge channel.
+
+## Which version am I running?
+
+<Tabs syncKey="method">
+	<TabItem label="In the Waired app">
+		Click the **Waired icon** → **Settings** → **About Waired**.
+	</TabItem>
+	<TabItem label="In a terminal">
+		```sh
+		waired version
+		```
+
+		<Expected>
+```
+waired v1.4.2
+```
+			Add `--json` when a script needs to read it — that form also
+			carries the exact build and the platform.
+		</Expected>
+	</TabItem>
+</Tabs>
+
+## The full list of changes
+
+Every release, with what changed in it, is published on GitHub:
+
+**[github.com/waired-ai/waired-agent/releases](https://github.com/waired-ai/waired-agent/releases)**
+
+That page is the authority. Each entry names the version, the date, and what
+was fixed or added, and carries the installers for every platform.
+
+## Stable and edge
+
+| Channel | What it is | Who it is for |
+|---|---|---|
+| **stable** | Released versions, in order. The default. | Everyone. |
+| **edge** | Rebuilt from the latest source every time something is merged. | People who want a fix before it is released, and do not mind the occasional rough edge. |
+
+Switching between them:
+
+```sh
+waired update --edge      # move to edge
+waired update --stable    # move back
+```
+
+<Aside type="caution" title="Edge is not tested the way a release is">
+	Every edge build passes automated checks, but a release additionally gets
+	real-hardware install and inference testing on all three operating systems.
+	On a machine you depend on, stay on stable.
+</Aside>
+
+## Keeping up to date
+
+```sh
+waired update --check     # is there a newer one?
+waired update             # install it
+```
+
+The Waired app shows a line near the top of its menu when an update is
+available. Full detail on [Update Waired](/getting-started/update/).
+
+<Aside type="note" title="If a page here describes something you do not have">
+	Update first, then re-read the page. If it still does not match after
+	updating, that is a documentation bug — please
+	[open an issue](https://github.com/waired-ai/waired-agent/issues) with the
+	page address and the output of `waired version`.
+</Aside>
+
+<CardGrid>
+	<LinkCard title="Update Waired" href="/getting-started/update/" description="Every way to update, per platform." />
+	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="When updating did not fix it." />
+</CardGrid>

@@ -1,254 +1,77 @@
 ---
 title: Install
-description: Install the Waired client on Linux, macOS, or Windows with a single command, and learn how to update or switch to the edge channel.
+description: Choose how to install Waired on Windows, macOS, or Linux — and what the installer actually puts on your computer.
+meta:
+  audience: Anyone installing Waired
+  needs: A terminal, and administrator rights
+  time: 5 minutes, plus the download
 ---
 
-import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-Waired installs with a single command. The installer drops in the client
-(`waired` CLI + `waired-agent` background service) and registers it to start
-automatically; the [Ollama](https://ollama.com) inference engine is installed
-by the sign-in step (`waired init`) right after you answer its
-"run local inference?" questions — so the multi-GB engine download only
-happens when you actually want one.
+{/* Journey-first IA. This page used to be 254 lines covering install, update,
+    uninstall, clean reinstall, the edge channel and the Ollama opt-out. It is
+    now a hub: pick your OS. Update and Uninstall are their own pages. */}
 
-## Supported platforms
+Waired installs with **one command**, the same way on all three platforms: you
+paste a line into a terminal, it shows you what it will do, and you confirm.
+There is no installer to download and double-click.
 
-| Role | Supported systems |
+<CardGrid>
+	<LinkCard title="Windows" href="/getting-started/install/windows/" description="One PowerShell line, from an administrator prompt." />
+	<LinkCard title="macOS" href="/getting-started/install/macos/" description="One Terminal line. Apple Silicon recommended." />
+	<LinkCard title="Linux" href="/getting-started/install/linux/" description="One Terminal line. Ubuntu 24.04+ and Debian trixie+." />
+</CardGrid>
+
+<Aside type="tip" title="Never used a terminal? It is one paste.">
+	Every platform page opens by telling you how to get to a terminal, and each
+	command comes with a plain sentence saying what it does. After this one
+	command you can do the rest from a browser and a menu-bar icon if you prefer
+	— see [Quickstart](/quickstart/).
+</Aside>
+
+If you just want to get going, follow the [Quickstart](/quickstart/) instead —
+it covers installing *and* setting up in one pass.
+
+## Will it run on my computer?
+
+| Role | What works |
 |---|---|
-| Inference server (runs the model) | Ubuntu 24.04+, Debian trixie+, Windows 11 / Server 2025, macOS 13+ (Apple Silicon recommended) |
-| Client (your everyday laptop) | Any of the above — it does **not** need a GPU |
+| **Runs the AI** | Ubuntu 24.04+, Debian trixie+, Windows 11 / Server 2025, macOS 13+ (Apple Silicon recommended) |
+| **Uses the AI** | Any of the above — no graphics card needed |
 
-A GPU makes inference fast, but a recent CPU runs a 7B model fine. The client
-machine you type from needs no special hardware.
+A graphics card makes answers much faster, but a recent processor runs a small
+model fine. The computer you *type* on needs nothing special.
 
-## Install
+How much memory a given model needs is in the
+[model catalog](/reference/model-catalog/) — though you do not have to read it,
+because Waired picks a model that fits when you set up.
 
-<Tabs syncKey="os">
-	<TabItem label="Linux">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
-		```
+## What the installer puts on your computer
 
-		Installs the `waired` apt package and a systemd unit, and auto-installs
-		Ollama. The apt repository targets **Debian trixie+ / Ubuntu 24.04+
-		only**; other distributions are not supported by the one-liner yet.
-	</TabItem>
-	<TabItem label="macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
-		```
+- **The Waired app** — a background service that keeps this computer connected,
+  and a `waired` command you can type. The service starts with the computer,
+  before anyone logs in.
+- **The Waired app** — an icon in the menu bar on macOS, next to the clock on
+  Windows and Linux, for
+  everyday controls.
+- **Nothing else, yet.** The AI software itself (a multi-gigabyte download) is
+  installed later, during setup, and only if you say this computer should run
+  models.
 
-		The same script detects macOS, installs the client to `/usr/local/bin`
-		and registers the `waired-agent` as a system launchd daemon; Ollama is
-		installed by the sign-in step when you enable local inference. The agent
-		runs at boot, independent of login (like the Linux and
-		Windows services), so the installer uses `sudo` for the privileged steps
-		— you'll be asked for your administrator password. Binaries are currently
-		unsigned (ad-hoc); signing and a Homebrew formula are planned.
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
-		```
+Every installer prints a summary of what it is about to do and waits for you to
+confirm before touching anything.
 
-		Installs the client and registers the `waired-agent` Windows service (a
-		UAC prompt handles the elevated step); the ~1.4 GB Ollama engine is
-		downloaded by the sign-in step when you enable local inference, with a
-		single live progress line. The agent runs at boot, independent of login
-		— the same defaults as the Linux and macOS installers.
-
-		<Aside type="note" title="Ollama on Windows">
-			To skip the engine entirely — for example a headless or
-			low-disk host — pass `-SkipOllama` or set `WAIRED_NO_OLLAMA=1`
-			([Skip the bundled Ollama](#skip-the-bundled-ollama), below). You can
-			add the engine later from an elevated prompt with
-			`waired runtimes install ollama`.
-		</Aside>
-	</TabItem>
-</Tabs>
-
-On every OS the installer first shows a short summary of what it is about to
-do (install location, background service, the Ollama download, the browser
-sign-in and the admin-rights prompt) and asks `Proceed? [Y/n]` before anything
-runs; `--yes` / `-Yes` skips the question on unattended hosts. On Windows a
-fresh interactive install also lets you pick the install location (Enter keeps
-`C:\Program Files\Waired`; pin it with `-InstallDir <path>` or
-`WAIRED_INSTALL_DIR`).
-
-After the installer finishes, continue with [First run](/getting-started/first-run/)
-to enroll the device.
-
-<Aside type="note" title="System tray on GNOME (Linux)">
-	GNOME has no built-in system tray, so the tray icon needs an AppIndicator
-	host extension to show. `waired init` installs and enables one automatically
-	when it detects GNOME (KDE Plasma works out of the box). If the icon is still
-	missing, see [Troubleshooting](/troubleshooting/).
+<Aside type="note" title="Already run Ollama?">
+	Waired can leave your existing installation alone. See
+	[Advanced install options](/reference/install-options/).
 </Aside>
 
-### Skip the bundled Ollama
+## After installing
 
-If you already run Ollama, or want to install it yourself, suppress the bundled
-engine with either a flag or an environment variable:
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
-		# or:
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | WAIRED_NO_OLLAMA=1 sh
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		# with the script saved to a file:
-		.\install.ps1 -SkipOllama
-		# or set the environment variable before running:
-		$env:WAIRED_NO_OLLAMA = '1'
-		```
-	</TabItem>
-</Tabs>
-
-### Non-default setups
-
-Pointing the install at a specific (e.g. self-hosted or staging) control plane,
-pinning an exact version, and the other installer flags are covered in
-[Advanced install options](/reference/install-options/) — a normal install
-doesn't need any of them.
-
-## Update
-
-The simplest way to update an installed host is the CLI (or the tray's
-**“⚠ Update available”** banner):
-
-```sh
-waired update          # check, then apply if a newer version exists
-waired update --check  # report only (read-only)
-waired update --yes    # apply without an interactive prompt (non-interactive hosts)
-waired update --edge   # update on / switch to the edge channel
-waired update --stable # update on / switch to the stable channel
-```
-
-`waired update` stays on whatever channel this host is already on — a stable
-install updates to the latest stable, an edge install to the latest edge. It
-never silently moves an edge host onto stable. Use `--edge` or `--stable` to
-switch channels (see [Edge channel](#edge-channel-latest-unstable) below).
-
-The background service also checks for updates every few hours and notifies you;
-applying is always something you trigger. Updates preserve your enrollment,
-identity, and on-disk state. The bundled Ollama is managed separately and is not
-touched by `waired update`.
-
-## Uninstall
-
-Remove the Waired client with the matching one-liner. This deletes the binaries,
-unregisters the background service, and — best-effort — **deregisters this device
-from your Waired account**, so it's removed from your device list and drops out of
-your network. Your local config and state are **kept** by default (add `--clean`
-below to wipe them too); either way, a later re-install signs in fresh with
-`waired init`.
-
-<Aside type="note" title="Offline while uninstalling?">
-	Deregistration is best-effort and never blocks the uninstall. If the device
-	can't reach Waired at the time (offline, or the service is already stopped),
-	it may still appear in your device list — just remove it from the web admin.
-</Aside>
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 | iex
-		```
-	</TabItem>
-</Tabs>
-
-The uninstaller shows what it is about to remove and asks
-`Proceed? [y/N]` first (Enter aborts); pass `--yes` / `-Yes` to skip the
-prompt, or `--dry-run` / `-DryRun` to preview without changing anything. On
-Windows the elevated window stays open on a final "Press Enter to close", so
-you can always see whether the uninstall succeeded.
-
-For a **full wipe** — also delete your config and state, plus the bundled
-Ollama and its downloaded models — add `--clean` (Linux / macOS) or `-Clean`
-(Windows). This is destructive; on a non-interactive shell it additionally
-hard-requires `--yes` / `-Yes`.
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.sh | sh -s -- --clean
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		# -Clean needs the script on disk (the piped form can't pass flags):
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/uninstall.ps1 -OutFile $env:TEMP\uninstall.ps1
-		& $env:TEMP\uninstall.ps1 -Clean
-		```
-	</TabItem>
-</Tabs>
-
-<Aside type="note" title="Installed with the Windows GUI installer?">
-	If you installed Waired with `WairedSetup-<version>-x64.exe`, you can also
-	uninstall from **Settings → Apps → Waired → Uninstall**. The one-liner above
-	is safe to run either way.
-</Aside>
-
-## Clean install (full wipe, then reinstall)
-
-To rebuild a host from scratch in one command, run the *installer* with the
-clean option: it performs the full-wipe uninstall above (config, keys, state,
-and the bundled Ollama with its models all deleted) and then installs fresh.
-It asks you to confirm before wiping — add `--yes` / `-Yes` to skip the
-prompt on a non-interactive host.
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --clean
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		# The piped form can't bind -Clean, so opt in with the env var:
-		$env:WAIRED_CLEAN = '1'
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
-		```
-
-		Expect **two UAC prompts** — one for the wipe, one for the install.
-	</TabItem>
-</Tabs>
-
-The wipe deletes this device's old identity, so the sign-in at the end of the
-install ([First run](/getting-started/first-run/)) enrolls it as a new device.
-
-## Edge channel (latest, unstable)
-
-To track the latest `main` build instead of waiting for a stable release, opt in
-to the **edge** channel. Edge is rebuilt on every merge and is **not for
-production use**.
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
-		  | WAIRED_VERSION=edge sh
-		```
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		$env:WAIRED_VERSION = 'edge'
-		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
-		```
-	</TabItem>
-</Tabs>
-
-Once on edge, `waired update` keeps you on edge automatically. To switch channels
-later, run `waired update --edge` or `waired update --stable` (or re-run the
-installer with `--edge` / `--stable`) — it swaps the apt source (Linux) or release
-asset and allows the version change in either direction.
+<CardGrid>
+	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="One command starts it; the rest happens in your browser." />
+	<LinkCard title="Update Waired" href="/getting-started/update/" description="Check for and apply updates, and switch release channels." />
+	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="Remove it, with or without your downloaded models." />
+	<LinkCard title="Advanced install options" href="/reference/install-options/" description="Pin a version, choose a location, target a different service." />
+</CardGrid>

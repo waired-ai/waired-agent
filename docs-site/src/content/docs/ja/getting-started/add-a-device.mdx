@@ -1,0 +1,94 @@
+---
+title: ほかの端末を追加する
+description: ノートパソコンや 2 台目のデスクトップを同じネットワークに参加させ、すでに用意した AI を使えるようにします。
+meta:
+  audience: 2 台目のパソコンがある人
+  needs: 1 台目と同じ Google アカウント
+  time: 新しいパソコンで 10 分
+sourceHash: ed254f344ea11b9b
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+1 台で AI が動いていれば、サインインしたほかのパソコンから — 自宅でも職場でも
+カフェでも — その AI を使えます。
+
+<Aside type="tip" title="肝心なのはアカウントだけです">
+	1 台目と**同じ Google アカウント**でサインインしてください。それだけで同じ
+	プライベートネットワークに入ります。ペアリング操作も、アドレスのコピーも不要です。
+</Aside>
+
+## 新しいパソコンでの手順
+
+<Steps>
+
+1. **Waired をインストールします** — [Windows](/ja/getting-started/install/windows/) ·
+	[macOS](/ja/getting-started/install/macos/) ·
+	[Linux](/ja/getting-started/install/linux/)
+
+2. **サインインします。** 1 台目と同じ手順・同じ Google アカウントで:
+	[サインインとセットアップ](/ja/getting-started/first-run/)
+
+3. **「モデルを動かすか」には No** と答えます（このパソコンもモデルを動かせるだけの
+	性能がある場合を除く）。使うだけのノートパソコンなら、何もダウンロードする必要は
+	ありません。最初に設定したパソコンが答えてくれます。
+
+</Steps>
+
+## 1 台目に届いているか確認する
+
+```sh
+waired status --observability
+```
+
+**Mesh** の行を見ます:
+
+```
+Mesh:     2 enrolled / 1 reachable / 1 ready
+```
+
+- **enrolled** — ネットワークにあるパソコンの台数
+- **reachable** — いま通信できている台数
+- **ready** — そのうちモデルを読み込んで応答できる台数
+
+ノートパソコンで `1 reachable / 1 ready` と出ていれば、AI マシンが使える状態です。
+`0 reachable` の場合は
+[ほかのパソコンから AI に届かない](/ja/troubleshooting/#my-other-computer-cannot-reach-the-ai)を
+参照してください。
+
+続けて試します:
+
+```sh
+waired infer "say hi"
+```
+
+回答は暗号化された経路で、もう一方のパソコンから返ってきます。
+
+## どのパソコンが答えるか
+
+既定では Waired が自動で選びます（このパソコンに AI があればそれを使い、なければ
+自分の別のパソコンに依頼します）。固定したい場合:
+
+```sh
+waired worker get                    # 今どこに送られるか
+waired worker set --mode=local-only  # ほかのパソコンを使わない
+waired worker set --mode=peer-preferred
+waired peers list                    # 自分のパソコン一覧
+waired worker set --pin=<デバイス>    # このパソコンに固定
+```
+
+<Aside type="note" title="ルーターの設定は不要です">
+	ネットワークが許せば端末どうしが直接つながり、ファイアウォールが邪魔する場合は
+	暗号化された中継に自動で切り替わります。ポート開放も VPN 設定も要りません。
+</Aside>
+
+## あとから端末を外す
+
+そのパソコンで Waired をアンインストールすれば、一覧からも自動的に消えます。
+手元にないパソコンを外したい場合は、[app.waired.ai](https://app.waired.ai) の
+デバイス一覧から削除してください。
+
+<CardGrid>
+	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="パソコンをネットワークから正しく外す。" />
+	<LinkCard title="プライバシー" href="/ja/concepts/privacy/" description="端末間で何がやり取りされ、何がされないのか。" />
+</CardGrid>

@@ -1,0 +1,123 @@
+---
+title: 状態を診断する
+description: waired doctor がセットアップ全体を検査し、何がおかしいかを平易に示し、f キーで修復できるものはその場で直します。
+meta:
+  audience: Waired の様子がおかしい人
+  needs: 対象のパソコンのターミナル
+  time: 1 分以内
+sourceHash: fa701050f47180dd
+---
+
+import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
+import Expected from '../../../../components/Expected.astro';
+
+何かおかしくて、1 つだけ試すならこれです。
+
+```sh
+waired doctor
+```
+
+セットアップの各部分を順に検査し、1 項目 1 行で表示します。そのうえで、
+自動で直せるものがあれば修復を提案します。
+
+## 出力の読み方
+
+各行は「記号」「検査した対象」「結果」の順です。
+
+<Expected>
+```
+✓ state directory — /home/you/.config/waired
+✓ gateway token — /home/you/.config/waired/secrets/gateway-token
+✓ waired-agent management — /waired/v1/status
+✓ waired phase — active — overlay routing in effect
+✓ Local Gateway — /v1/models
+✓ claude-code managed settings — enabled
+```
+すべて ✓。することはありません。
+</Expected>
+
+| 記号 | 意味 |
+|---|---|
+| **✓** | 問題なし。 |
+| **⚠** | 動いてはいるが、本来の状態ではない。急ぎではないが読む価値あり。 |
+| **✗** | 壊れている。やろうとしていることが動きません。 |
+
+✓ 以外があると、終了コードが 0 以外になり件数が表示されます。スクリプトでは役に立ち、
+自分で読むぶんには気にしなくて構いません。
+
+## f を押す
+
+自動修復できる項目があると、最後にこう聞かれます。
+
+<Expected title="出力の末尾">
+```
+Press f to fix [f/N]:
+```
+</Expected>
+
+**f** を押してください。コーディングツールの設定を再適用し（`waired link all` と同じ処理）、
+再実行を促します。
+
+```
+Running repair (waired link all)...
+Done. Re-run `waired doctor` to verify.
+```
+
+<Aside type="note" title="f が触るもの・触らないもの">
+	修復するのは、**あなた自身の**ホームディレクトリにあるコーディングツールの設定と
+	ゲートウェイトークンだけです。Waired の再インストールもサインアウトもせず、
+	モデルにも触らず、プロジェクト内の設定ファイルを書き換えることもありません。
+</Aside>
+
+確認なしで修復する（スクリプトや SSH 越し）:
+
+```sh
+waired doctor --fix
+```
+
+## 各検査項目の意味
+
+| 検査項目 | 失敗した場合の意味 | 通常の対処 |
+|---|---|---|
+| **state directory** | 識別情報・秘密・記録を保持する Waired 自身のフォルダが無いか、読めない。 | `sudo` を付けて実行（Windows は管理者）。本当に無い場合は[サインインし直し](/ja/getting-started/first-run/)。 |
+| **gateway token** | コーディングツールが自分の AI に届くための鍵が無いか、読めない。 | `waired link`、または **f**。 |
+| **waired-agent management** | 常駐サービスが応答していない。これが失敗すると他もすべて動きません。 | [Waired が動いていない](/ja/troubleshooting/#a-command-says-waired-agent-is-not-running)を参照。 |
+| **waired phase** | ルーティングが一時停止しているか、想定外の状態。 | `waired resume` → [しばらく使わないようにする](/ja/guides/pause/)。 |
+| **Local Gateway** | サービスは動いているが、AI 応答を担う部分が動いていない。`503` はたいていモデル未読み込み。 | ダウンロード完了を待つ（`waired models ls`）か、[モデルを見直す](/ja/guides/choose-a-model/)。 |
+| **コーディングツールの各行** | Claude Code / OpenCode / OpenClaw が Waired を使う設定になっていない。 | **f** を押す。 |
+
+## 診断自体が全体を見られない場合
+
+通常のデスクトップ用インストールでは、Waired のファイルの一部はあなたではなく
+システムの所有物です。管理者権限がないと、doctor は見える範囲だけを報告し、
+「見えていない」ことを推測ではなく明示します。
+
+<Tabs syncKey="os">
+	<TabItem label="macOS / Linux">
+		```sh
+		sudo waired doctor
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		**ターミナル（管理者）**から実行します（スタートボタンを右クリック →
+		**ターミナル（管理者）**）。
+
+		```powershell
+		waired doctor
+		```
+	</TabItem>
+</Tabs>
+
+<Aside type="tip" title="出力を共有するとき">
+	バグ報告に貼るなら、`waired status` や `waired init` には `--mask-pii` を付けると
+	ホームフォルダ・ユーザー名・マシン名・アカウントのメールアドレスが伏せられます。
+	`waired doctor` はファイルパスを表示するので、貼る前に目を通してください。
+</Aside>
+
+## それでも直らないとき
+
+<CardGrid>
+	<LinkCard title="症状から探す" href="/ja/troubleshooting/" description="壊れているものではなく、いま見えているものから引けます。" />
+	<LinkCard title="動作確認する" href="/ja/getting-started/verify/" description="正常なセットアップを示す 3 つの確認。" />
+	<LinkCard title="まっさらからやり直す" href="/ja/getting-started/uninstall/#start-over-on-the-same-computer" description="全部消して入れ直す、2 コマンド。" />
+</CardGrid>

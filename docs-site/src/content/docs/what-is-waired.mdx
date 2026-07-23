@@ -1,0 +1,114 @@
+---
+title: What is Waired?
+description: Waired lets one computer you own run an AI model, and all your other devices use it — privately, from anywhere, with no per-message bill.
+meta:
+  audience: Anyone deciding whether Waired is for them
+  needs: Nothing — this page installs nothing
+  time: 2 minutes
+---
+
+import { Aside, CardGrid, LinkCard, LinkButton } from '@astrojs/starlight/components';
+
+AI coding tools normally send everything you type to a company's servers, and
+charge you per message. Waired lets **one computer you already own** run the AI
+instead, and lets **your other devices use it from anywhere**.
+
+## The difference in one picture
+
+<figure>
+<svg viewBox="0 0 720 260" role="img" aria-labelledby="waired-diagram-title" style="width:100%;height:auto">
+	<title id="waired-diagram-title">Without Waired, your laptop sends every prompt to a cloud AI provider and is billed per message. With Waired, your laptop sends prompts over a private encrypted link to your own computer, which runs the AI.</title>
+	<style>{`
+		.wd-box { fill: none; stroke: currentColor; stroke-width: 1.5; opacity: .55 }
+		.wd-t { fill: currentColor; font: 13px system-ui, sans-serif }
+		.wd-s { fill: currentColor; font: 11px system-ui, sans-serif; opacity: .7 }
+		.wd-h { fill: currentColor; font: bold 12px system-ui, sans-serif; opacity: .8; letter-spacing: .06em }
+		.wd-line { stroke: currentColor; stroke-width: 1.5; opacity: .55; fill: none }
+		.wd-dash { stroke-dasharray: 5 4 }
+	`}</style>
+
+	<text x="0" y="16" class="wd-h">WITHOUT WAIRED</text>
+	<rect x="0" y="30" width="130" height="52" rx="8" class="wd-box" />
+	<text x="16" y="55" class="wd-t">Your laptop</text>
+	<text x="16" y="71" class="wd-s">Claude Code</text>
+	<path d="M138 56 H 250" class="wd-line" markerEnd="url(#wd-arrow)" />
+	<text x="150" y="48" class="wd-s">every prompt</text>
+	<rect x="258" y="30" width="150" height="52" rx="8" class="wd-box" />
+	<text x="274" y="55" class="wd-t">Cloud AI provider</text>
+	<text x="274" y="71" class="wd-s">billed per message</text>
+
+	<text x="0" y="146" class="wd-h">WITH WAIRED</text>
+	<rect x="0" y="160" width="130" height="52" rx="8" class="wd-box" />
+	<text x="16" y="185" class="wd-t">Your laptop</text>
+	<text x="16" y="201" class="wd-s">Claude Code</text>
+	<path d="M138 186 H 250" class="wd-line" markerEnd="url(#wd-arrow)" />
+	<text x="142" y="178" class="wd-s">private, encrypted</text>
+	<rect x="258" y="160" width="150" height="52" rx="8" class="wd-box" />
+	<text x="274" y="185" class="wd-t">Your own computer</text>
+	<text x="274" y="201" class="wd-s">runs the AI model</text>
+	<path d="M416 186 H 530" class="wd-line wd-dash" />
+	<text x="424" y="178" class="wd-s">only if yours is down</text>
+	<rect x="538" y="160" width="150" height="52" rx="8" class="wd-box" />
+	<text x="554" y="185" class="wd-t">Cloud AI provider</text>
+	<text x="554" y="201" class="wd-s">and it tells you</text>
+
+	<defs>
+		<marker id="wd-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" opacity=".55" />
+		</marker>
+	</defs>
+</svg>
+<figcaption>Your prompts go to a computer you own. The cloud is only ever a visible fallback.</figcaption>
+</figure>
+
+## What you get
+
+- **No per-message bill.** The AI runs on hardware you already paid for.
+- **Your prompts stay yours.** They travel between your own devices over an
+  encrypted link. Waired's servers introduce your devices to each other and
+  never see what you send.
+- **Your tools don't change.** Claude Code, OpenCode, and any
+  OpenAI-compatible app keep working exactly as before.
+- **It works away from home.** Your laptop reaches your desktop's AI from a
+  café or an office, without you setting up a VPN or opening ports.
+
+## What it is not
+
+- **Not a chat app.** Waired has no chat window of its own. It makes the tools
+  you already use talk to your own AI instead of a company's.
+- **Not a way to run huge frontier models.** What you can run is bounded by
+  your hardware. A good desktop runs a capable coding model; a thin laptop runs
+  a small one. Waired tells you honestly which one fits.
+- **Not something that hides fallbacks.** If your own AI cannot answer, the
+  request goes to the cloud provider **and Waired says so** — it never pretends
+  a cloud answer came from your machine.
+
+## What it costs to run
+
+Nothing per message. You need one computer that stays on when you want to use
+it, and enough memory for the model — see the
+[model catalog](/reference/model-catalog/) for the numbers.
+
+<Aside type="note" title="Do I need a graphics card?">
+	No. A graphics card makes answers much faster, and if you have one you should
+	use that computer. But a recent processor runs a small model well enough to
+	be useful.
+</Aside>
+
+## How it works, briefly
+
+Every computer you sign in on joins a private network of your own. When you ask
+a question, Waired decides where it should run — this computer, another of your
+computers, or (visibly) the cloud — and sends it there over an encrypted
+connection. Your devices talk **directly** to each other whenever the network
+allows; when a firewall gets in the way, an encrypted [relay](/reference/glossary/#relay) passes the sealed
+data along without being able to read it.
+
+<CardGrid>
+	<LinkCard title="Privacy — what leaves your computer" href="/concepts/privacy/" description="Exactly what is sent, to whom, and what stays put." />
+	<LinkCard title="Architecture" href="/concepts/architecture/" description="The technical version, with the parts named." />
+</CardGrid>
+
+---
+
+<LinkButton href="/quickstart/" icon="right-arrow">Set it up — about 10 minutes</LinkButton>

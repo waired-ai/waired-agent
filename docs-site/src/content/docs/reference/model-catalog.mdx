@@ -1,13 +1,17 @@
 ---
 title: Model catalog & specs
 description: The models Waired bundles, split by runtime (Ollama / vLLM) and architecture (Dense / MoE), the RAM/VRAM each needs, the default model, and how Waired auto-selects one for your hardware.
+meta:
+  audience: Anyone choosing a model, or checking what fits
+  needs: Nothing
+  time: Look up your hardware
 ---
 
 import ModelCatalogTable from '../../../components/ModelCatalogTable.astro';
 
 Waired bundles a catalog of models spanning laptops to multi-GPU servers. On
 first run it auto-selects one that fits your hardware. You can switch at any
-time — see [Switch the bundled model](/guides/switch-model/).
+time — see [Choose which AI model runs](/guides/choose-a-model/).
 
 ## Finding the right table
 
@@ -72,7 +76,7 @@ model across them (tensor parallelism), so their combined VRAM counts toward
 the requirement. On recent NVIDIA GPUs (Ada/Hopper and newer — e.g. L4, RTX
 40-series), Waired serves the KV cache in fp8, which roughly doubles the context
 window that fits in the same VRAM at near-identical quality. If a model's full
-context window still doesn't fit your GPU memory, Waired serves it with a reduced
+[context window](/reference/glossary/#context-window) still doesn't fit your GPU memory, Waired serves it with a reduced
 window and notes that in `waired status` / `waired doctor` instead of failing to
 start.
 
@@ -105,4 +109,4 @@ Run `waired models ls --detail` to see this same fit + recommended-spec view for
 for the VRAM a loaded model is actually using.
 
 If you run an integrated GPU (Strix Halo, Intel) and a model won't load on
-Ollama, see [Troubleshooting → integrated GPUs](/troubleshooting/#a-model-wont-load-on-an-integrated-gpu).
+Ollama, see [Troubleshooting → integrated GPUs](/troubleshooting/#my-graphics-card-is-not-being-used).

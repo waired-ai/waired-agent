@@ -1,6 +1,11 @@
 ---
 title: モデルカタログと仕様
 description: Waired がバンドルするモデルを、ランタイム（Ollama / vLLM）とアーキテクチャ（Dense / MoE）で分けて掲載。各モデルに必要な RAM/VRAM、デフォルトモデル、そして Waired がハードウェアに合わせてモデルを自動選択する仕組み。
+meta:
+  audience: モデルを選ぶ人、何が動くか確認したい人
+  needs: 何も要りません
+  time: 自分のハードウェアの行を引く
+sourceHash: 67865b01c90d55bf
 ---
 
 import ModelCatalogTable from '../../../../components/ModelCatalogTable.astro';
@@ -8,7 +13,7 @@ import ModelCatalogTable from '../../../../components/ModelCatalogTable.astro';
 Waired は、ノートパソコンからマルチ GPU サーバーまでをカバーするモデルカタログを
 バンドルしています。初回起動時には、お使いのハードウェアに合うモデルを自動選択します。
 いつでも切り替え可能です。詳しくは
-[バンドルモデルを切り替える](/ja/guides/switch-model/) を参照してください。
+[使う AI モデルを選ぶ](/ja/guides/choose-a-model/) を参照してください。
 
 ## 自分に合う表の見つけ方
 
@@ -102,4 +107,4 @@ waired infer --explain "say hi"
 ロード済みモデルが実際に使用している VRAM を確認できます。
 
 統合 GPU（Strix Halo、Intel）を使用していてモデルが Ollama でロードできない場合は、
-[トラブルシューティング → 統合 GPU](/ja/troubleshooting/#a-model-wont-load-on-an-integrated-gpu) を参照してください。
+[トラブルシューティング → 統合 GPU](/ja/troubleshooting/#my-graphics-card-is-not-being-used) を参照してください。

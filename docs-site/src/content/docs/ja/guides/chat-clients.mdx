@@ -1,71 +1,104 @@
 ---
-title: チャット & OpenAI 互換クライアント
-description: OpenAI 互換または Anthropic 互換の任意のクライアントを、127.0.0.1:9473 の Local Gateway 経由で Waired モデルに接続します。
+title: チャットアプリから使う
+description: Open WebUI、LibreChat、Jan、エディタ拡張、自作スクリプトを自分の AI に向けます — アドレス、モデル名、鍵の在処。
+meta:
+  audience: OpenAI / Anthropic の API を話せるツールを使っている人
+  needs: Waired がサインイン済みで、モデルが読み込まれていること
+  time: 5 分
+sourceHash: 344ddc89f95ee827
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, Steps, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../../components/Expected.astro';
 
-Waired は `http://127.0.0.1:9473` で **Local Gateway** を公開しており、OpenAI と
-Anthropic の両方のワイヤーフォーマットを話します。これらの API と通信できるツール
-であれば — ブラウザのチャット UI、エディター拡張機能、スクリプトなど — このアドレスに
-向けることで自分のモデルを使えます。[Claude Code と OpenCode](/ja/guides/coding-agents/)
-は自動的に接続されます。それ以外はすべて以下のエンドポイントを使用します。
+Waired は自分のパソコン上で、OpenAI や Anthropic の API と同じ言葉を話すアドレスで応答します。
+それらに接続できるもの — ブラウザのチャット UI、エディタ拡張、スクリプト — なら、
+そのまま自分の AI を使えます。
 
-<Aside type="note" title="ループバックのみ">
-	ゲートウェイは `127.0.0.1` でリッスンしており、ネットワークに公開されることは
-	ありません。他のマシンからのリクエストは、このポートではなく暗号化されたメッシュ
-	経由でモデルに到達します。クライアントはエージェントと同じマシン上で実行してください
-	(または自分でループバックをトンネルしてください)。
+[Claude Code](/ja/guides/claude-code/)・[OpenCode](/ja/guides/opencode/)・
+[OpenClaw](/ja/guides/openclaw/) は自動で設定されるので、このページは不要です。
+
+## 設定に入れる値
+
+<Steps>
+
+1. **アドレス（ベース URL）** — ツールがどちらの API を話すかで変わります。
+
+	| ツールが話す API | ベース URL |
+	|---|---|
+	| OpenAI | `http://127.0.0.1:9473/v1` |
+	| Anthropic | `http://127.0.0.1:9473/anthropic` |
+
+2. **モデル** — 具体的なモデル名ではなく Waired の名前を使ってください。
+	モデルを切り替えても設定を変えずに済みます。
+
+	| 名前 | 内容 |
+	|---|---|
+	| `waired/default` | 既定のモデル |
+	| `waired/coding` | コーディング向けモデル |
+	| `waired/small` | 速く短い応答 |
+
+3. **API キー** — ツール側が必ず要求してきます。Waired が使う鍵は
+	自分のパソコンの中にあります。
+
+	<Tabs syncKey="os">
+		<TabItem label="Linux">
+			```sh
+			cat ~/.config/waired/secrets/gateway-token
+			```
+		</TabItem>
+		<TabItem label="macOS">
+			```sh
+			cat ~/Library/Application\ Support/waired/secrets/gateway-token
+			```
+		</TabItem>
+		<TabItem label="Windows">
+			```powershell
+			Get-Content "$env:AppData\waired\secrets\gateway-token"
+			```
+		</TabItem>
+	</Tabs>
+
+	表示された値を API キーとして貼り付けます。
+
+</Steps>
+
+<Aside type="caution" title="このファイルはパスワードです">
+	これを持っているものは自分の AI を使えます。自分だけが読める権限になっているので、
+	そのままにしてください。バグ報告やスクリーンショットに貼らないでください。
 </Aside>
 
-## エンドポイント
-
-| API | エンドポイント | クライアント用ベース URL |
-|---|---|---|
-| OpenAI chat | `POST /v1/chat/completions` | `http://127.0.0.1:9473/v1` |
-| OpenAI models | `GET /v1/models` | `http://127.0.0.1:9473/v1` |
-| OpenAI responses | `POST /v1/responses` | `http://127.0.0.1:9473/v1` |
-| Anthropic messages | `POST /anthropic/v1/messages` | `http://127.0.0.1:9473/anthropic` |
-
-## モデル名
-
-モデルとして Waired のエイリアスの 1 つを使用します。これらはロード済みのものに解決
-されるため、モデルを切り替えてもクライアント設定を変更する必要はありません:
-
-- `waired/default` — デフォルトモデル。
-- `waired/coding` — コーディングモデル。
-
-その他のエイリアス (`waired/small`、`waired/medium`、…) と具体的なモデル ID は
-[モデルカタログ](/ja/reference/model-catalog/) に掲載されています。
-`GET /v1/models` を呼び出すと、ゲートウェイが現在アドバタイズしているものを確認できます。
-
-## 認証
-
-ゲートウェイは **ベアラートークン** でリクエストを認証します:
-
-```
-Authorization: Bearer <gateway-token>
-```
-
-[`waired link`](/ja/guides/coding-agents/) を実行すると、このトークンが生成され、
-対応するコーディングエージェントがそれで設定されます。サードパーティのクライアントには、
-同じトークンを **API キー** として渡す必要があります。トークンはユーザーごとのシークレット
-ストア (macOS ではシステムキーチェーン、Linux と Windows ではエージェントの状態ディレクトリ
-配下の保護されたファイル) に保存されます。
-
-<Aside type="caution" title="ターンキー対応はまだ展開中です">
-	今日自動設定されるクライアントは Claude Code と OpenCode です。他の OpenAI 互換
-	チャット UI (Open WebUI、LibreChat、Jan、…) をゲートウェイに向けることは上記の
-	設定で動作しますが、それらにトークンを渡す作業は依然として手動のステップであり、
-	現在改善を進めています。摩擦に遭遇した場合、それは想定内です — ここに記載した
-	エンドポイントとモデル名は安定しています。
+<Aside type="note" title="鍵のファイルがまだない場合">
+	コーディングツールを最初に接続したときに作られます。`waired link` を実行して作るか、
+	[`waired doctor`](/ja/getting-started/doctor/) を実行してください。
+	後者は実際のパスを表示し、**f** を押せば作成もします。
 </Aside>
 
-## リクエスト例
+## 設定する前に確認する
+
+```sh
+curl http://127.0.0.1:9473/v1/models \
+  -H "Authorization: Bearer $(cat ~/.config/waired/secrets/gateway-token)"
+```
+
+<Expected>
+	`waired/default` を含む JSON の一覧が返ります。
+	これがそのままチャットアプリで使えるモデル名です。
+</Expected>
+
+<Expected tone="bad">
+```
+curl: (7) Failed to connect to 127.0.0.1 port 9473
+```
+	Waired が動いていないか、ルーティングが一時停止しています。
+	[`waired doctor`](/ja/getting-started/doctor/) を実行してください。
+</Expected>
+
+実際のリクエストはこうなります。
 
 ```sh
 curl http://127.0.0.1:9473/v1/chat/completions \
-  -H "Authorization: Bearer $WAIRED_GATEWAY_TOKEN" \
+  -H "Authorization: Bearer $(cat ~/.config/waired/secrets/gateway-token)" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "waired/default",
@@ -73,5 +106,36 @@ curl http://127.0.0.1:9473/v1/chat/completions \
   }'
 ```
 
-同じマシンからトークン不要で素早く確認するには、代わりに CLI を使用してください:
-`waired infer "say hi"` ([動作確認](/ja/getting-started/verify/) を参照)。
+## アプリは同じパソコンで動かしてください
+
+`127.0.0.1` は「このパソコンだけ」という意味です。ネットワークからは意図的に
+到達できないようにしてあり、それが自分の AI をうっかり公開してしまわないための仕組みです。
+
+つまりブラウザのチャットアプリは、Waired と**同じパソコン**で動かす必要があります。
+別のマシンから自分の AI を使いたい場合は、そちらにも Waired を入れて
+[同じアカウントでサインイン](/ja/getting-started/add-a-device/)してください。
+2 台がプライベートにつながるので、チャットアプリはそのマシンの `127.0.0.1` と話せばよくなります。
+
+<Aside type="caution" title="手動設定はまだ手間がかかります">
+	Claude Code・OpenCode・OpenClaw は自動で設定されます。それ以外も上記の設定で動きますが、
+	鍵のコピーは自分で行う必要があります。アドレスとモデル名は安定しているので、
+	いま設定したものはそのまま使い続けられます。
+</Aside>
+
+## エンドポイント一覧
+
+| API | エンドポイント |
+|---|---|
+| OpenAI chat | `POST /v1/chat/completions` |
+| OpenAI models | `GET /v1/models` |
+| OpenAI responses | `POST /v1/responses` |
+| Anthropic messages | `POST /anthropic/v1/messages` |
+
+ほかのモデル名や、Waired の名前が実際にどのモデルに解決されるかは
+[モデルカタログ](/ja/reference/model-catalog/)にあります。
+
+<CardGrid>
+	<LinkCard title="使う AI モデルを選ぶ" href="/ja/guides/choose-a-model/" description="waired/default の中身と、その変え方。" />
+	<LinkCard title="ほかの端末を追加する" href="/ja/getting-started/add-a-device/" description="2 台目から自分の AI をプライベートに使う。" />
+	<LinkCard title="状態を診断する" href="/ja/getting-started/doctor/" description="アドレスが応答しないとき。" />
+</CardGrid>

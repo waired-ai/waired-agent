@@ -1,0 +1,82 @@
+---
+title: Linux へのインストール
+description: Ubuntu 24.04 以降 / Debian trixie 以降にコマンド 1 つでインストールする方法と、その他のディストリビューションについて。
+meta:
+  audience: Ubuntu 24.04 以降 / Debian trixie 以降の人
+  needs: sudo が使えるターミナル
+  time: 5 分
+sourceHash: 89900ec616789a4d
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+1 行のインストーラーが対応しているのは **Ubuntu 24.04 以降**と
+**Debian trixie 以降**（64 ビットの x86 / ARM）です。Waired の apt リポジトリを
+追加するので、更新はシステムのほかのパッケージと同じ方法で届きます。
+
+## インストール
+
+<Steps>
+
+1. ターミナルを開いて次を実行します。
+
+	```sh
+	curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+	```
+
+	`curl` が Waired のインストールスクリプトをダウンロードし、`sh` が実行します。
+
+2. 表示された内容を確認し、`Proceed? [Y/n]` で Enter を押します。
+
+3. パスワードを入力します。入力しても画面には何も表示されませんが、正常です。
+
+</Steps>
+
+次は[サインインとセットアップ](/ja/getting-started/first-run/)です。
+
+<Aside type="tip" title="スクリプトをそのままシェルに流すのが不安な場合">
+	先にダウンロードして読んでから実行できます。
+
+	```sh
+	curl -fsSLO https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh
+	less install.sh    # q キーで終了
+	sh install.sh
+	```
+</Aside>
+
+## その他のディストリビューション
+
+1 行のインストーラーは apt リポジトリの設定しか行わないため、Fedora / Arch / Alpine
+などは未対応です。[最新リリース](https://github.com/waired-ai/waired-agent/releases/latest)から
+バイナリを取得して自分でサービス登録すれば動かせますが、自動化されておらず、
+更新も手動になります。
+
+## GNOME でアイコンが出ない場合
+
+GNOME は拡張機能なしでは時計のとなりにアイコンを表示しないため、Waired のアイコンには AppIndicator 拡張が必要です。
+セットアップは GNOME を検出すると自動で導入・有効化します。それでも出ない場合は
+[トラブルシューティング](/ja/troubleshooting/#the-waired-icon-is-missing-linux)を
+参照してください。KDE Plasma では何も必要ありません。
+
+## AI ソフトを入れない
+
+モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
+モデルを動かすパソコンにだけ導入されます。まったく入れたくない場合:
+
+```sh
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
+```
+
+## インストールされるもの
+
+| | |
+|---|---|
+| パッケージ | `waired`、`waired-tray`（Waired の apt リポジトリから） |
+| 常駐サービス | `waired-agent.service`（systemd、起動時から動作） |
+| 設定 | `/etc/waired` |
+| 状態 | `/var/lib/waired` |
+
+<CardGrid>
+	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="次のステップ。" />
+	<LinkCard title="アンインストール" href="/ja/getting-started/uninstall/" description="1 行・約 10 秒。" />
+</CardGrid>

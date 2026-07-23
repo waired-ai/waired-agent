@@ -1,0 +1,138 @@
+---
+title: 使う AI モデルを選ぶ
+description: いま動いているモデルを確認し、大きいモデル・小さいモデルに切り替えます。Waired アイコンからでも、ターミナルからでも。
+meta:
+  audience: 応答が遅い、または品質が足りないと感じている人
+  needs: Waired アプリ、またはターミナル
+  time: 5 分＋ダウンロード
+sourceHash: cda326e4fafcbe2a
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+サインインしたときに、Waired が**このパソコンで実際に動かせる中でいちばん良いモデル**を
+自動で選んでいます。変更したいときだけこのページを読んでください。
+
+## そもそも変えるべき？
+
+| こうしたい | すること |
+|---|---|
+| 回答の質を上げたい（メモリに余裕がある） | ひとつ**大きい**モデルへ |
+| 回答を速くしたい・動作が重い | ひとつ**小さい**モデルへ |
+| 今どれを使っているか知りたい | [いま動いているモデルを確認する](#いま動いているモデルを確認する) |
+| 特にない | そのままで大丈夫です（自動選択は妥当な既定値です） |
+
+<Aside type="note" title="大きいモデルが常に良いわけではありません">
+	メモリに収まらないモデルは「遅くなる」のではなく、**読み込みに失敗して
+	AI が応答しなくなります**。大きくする前に
+	[モデルカタログ](/ja/reference/model-catalog/)でメモリ要件を確認してください。
+</Aside>
+
+## いま動いているモデルを確認する
+
+**Waired アイコン**をクリックし（macOS はメニューバー、Windows・Linux は時計のとなり）、**Inference** を開きます。動作中のモデル名が表示されます。
+
+<details>
+<summary>ターミナルで確認する</summary>
+
+```sh
+waired models ls              # ダウンロード済みのモデルと、動作中のモデル
+waired models ls --detail     # カタログ全体と、このパソコンで動くかどうか
+```
+
+</details>
+
+## モデルを切り替える
+
+<Tabs syncKey="method">
+	<TabItem label="Waired アイコンから">
+		<Steps>
+
+		1. **Waired アイコン**をクリック（macOS はメニューバー、Windows・Linux は時計のとなり）。
+		2. **Models** を開く。
+		3. 一覧からモデルを選ぶ。
+
+		</Steps>
+
+		切り替えは**その場で反映**されます（数秒で AI が読み込み直され、Waired は動いたままです）。
+		未ダウンロードのモデルを選んだ場合はダウンロードが始まり、
+		完了するまでは今までのモデルが応答を続けます。
+	</TabItem>
+	<TabItem label="速度テストのあとで">
+		```sh
+		waired runtimes benchmark
+		```
+
+		このパソコンの実際の速度を測ります。別のモデルのほうが合っている場合は
+		切り替えを提案し、現在のモデルと候補の**品質ランク**を並べて表示するので、
+		速さと質を見比べて選べます。承諾するとダウンロードが進捗表示付きで始まります
+		（**Enter** を押せば、以降はバックグラウンドで続行します）。
+	</TabItem>
+	<TabItem label="画面のないサーバーの場合">
+		ヘッドレスのマシンには Waired アイコンがないため、設定ファイルを書き換えて
+		常駐サービスを再起動します。
+
+		<Tabs syncKey="os">
+			<TabItem label="Linux">
+				`/etc/waired/agent.json` の `inference.bundled_model_id` に
+				使いたいモデル ID を設定し、次を実行します。
+
+				```sh
+				sudo systemctl restart waired-agent
+				```
+			</TabItem>
+			<TabItem label="Windows">
+				`%PROGRAMDATA%\waired\agent.json` を同様に編集し、次を実行します。
+
+				```powershell
+				Restart-Service waired-agent
+				```
+			</TabItem>
+		</Tabs>
+
+		モデル ID は[モデルカタログ](/ja/reference/model-catalog/)の ID 列の値です
+		（例: `qwen3-coder-30b-a3b-instruct`）。
+
+		<Aside type="note" title="同じ設定をする別の方法">
+			環境変数 `WAIRED_INFERENCE_BUNDLED_MODEL_ID` と
+			`--inference-bundled-model-id` フラグでも指定でき、この順に設定ファイルより
+			優先されます。[高度なインストールオプション](/ja/reference/install-options/)を参照。
+		</Aside>
+	</TabItem>
+</Tabs>
+
+## 切り替わったか確認する
+
+```sh
+waired status --observability
+```
+
+**Engine** の行に、いま読み込まれているモデルが表示されます。
+
+```
+Engine:   ready (model=qwen3-coder-30b-a3b-instruct, 0/4 slots used, inflight=0)
+```
+
+`not ready` と出る場合、多くはまだダウンロード中です（`waired models ls` で進捗を確認）。
+ダウンロード完了後も `not ready` のままなら、そのモデルはこのパソコンに収まっていません。
+ひとつ小さいモデルに戻してください。
+
+<Aside type="tip" title="スペック超えのモデルも選べます">
+	不足分（例: `needs 32 GB RAM (have 31 GB)`）を示して確認を求めますが、
+	**禁止はしません**。少しの超過なら動くことが多く、単に遅くなるだけです。
+</Aside>
+
+## ディスクの空きを増やす
+
+モデルは 1 つ数 GB あります。使っていないものを削除するには:
+
+```sh
+waired models rm <モデルID>
+```
+
+実行前に確認されます。
+
+<CardGrid>
+	<LinkCard title="モデルカタログ" href="/ja/reference/model-catalog/" description="同梱モデルの一覧と、必要なメモリ・品質。" />
+	<LinkCard title="自動選択の仕組み" href="/ja/reference/model-catalog/#waired-によるモデル選択の仕組み" description="Waired がモデルを選ぶときの基準。" />
+</CardGrid>

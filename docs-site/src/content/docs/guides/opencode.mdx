@@ -1,0 +1,68 @@
+---
+title: Use it from OpenCode
+description: Point OpenCode at your own model with one command, and open the bundled OpenCode in a browser on your real project.
+meta:
+  audience: OpenCode users
+  needs: Waired signed in
+  time: 2 minutes
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+{/* Split out of the old combined guides/coding-agents.mdx. OpenCode had four
+    lines inside a page titled after Claude Code, which is not findable by
+    anyone searching for OpenCode. */}
+
+## Connect it
+
+```sh
+waired link opencode
+```
+
+That is the whole setup. It installs a provider plugin at
+`~/.config/opencode/plugin/waired.js`, which points OpenCode at your own model
+and handles the connection for you. Start OpenCode as usual afterwards.
+
+<Aside type="tip" title="Have several coding tools installed?">
+	`waired link` with no name sets up every one it finds.
+</Aside>
+
+## Or use the bundled one
+
+Waired ships an OpenCode you can open in a browser, already pointed at your own
+model and your real project — useful on a machine where you have not set up a
+coding tool at all:
+
+```sh
+waired codeui open
+```
+
+It runs as you, and **only you can use it** — other users on the machine and
+other computers on the network are refused.
+
+| Command | What it does |
+|---|---|
+| `waired codeui open --project DIR` | Open it on a specific project |
+| `waired codeui open --no-browser` | Print the address instead of opening a browser (over SSH) |
+| `waired codeui url` | Show the address of the running instance |
+| `waired codeui status` | Is it running? |
+| `waired codeui stop` | Stop it |
+
+## Check it, or remove it
+
+`waired doctor` verifies the whole path — the connection, whether routing is
+paused, whether a model is loaded — and repairs what it can when you press
+**f**.
+
+To remove the integration:
+
+```sh
+waired unlink opencode
+```
+
+It is surgical: it undoes what `waired link` added and nothing else.
+
+<CardGrid>
+	<LinkCard title="Use it from Claude Code" href="/guides/claude-code/" description="The same, for Claude Code — plus route switching mid-session." />
+	<LinkCard title="Use it from a chat app" href="/guides/chat-clients/" description="Any OpenAI-compatible client." />
+</CardGrid>

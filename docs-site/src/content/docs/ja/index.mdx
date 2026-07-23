@@ -1,56 +1,108 @@
 ---
 title: Waired ドキュメント
-description: 自分のマシンでローカル LLM を動かし、どこからでも利用する — 1 本のプライベートかつエンドツーエンド暗号化されたリンク経由で。インストール、初回起動、CLI、モデル、トラブルシューティング。
+description: 自分のマシンでローカル LLM を動かし、どこからでも利用する — 1 本のプライベートかつエンドツーエンド暗号化されたリンク経由で。インストール、セットアップ、CLI、モデル、トラブルシューティング。
 template: splash
+editUrl: false
 hero:
+  title: Waired
   tagline: 自分のハードウェアで動く、自分だけの AI — プライベートで暗号化されたリンク経由でどこからでも到達できます。
   actions:
-    - text: Waired をインストール
-      link: /ja/getting-started/install/
+    - text: クイックスタート（10 分）
+      link: /ja/quickstart/
       icon: right-arrow
       variant: primary
-    - text: GitHub で見る
-      link: https://github.com/waired-ai/waired
-      icon: external
-      variant: minimal
+    - text: Waired とは？
+      link: /ja/what-is-waired/
+      icon: open-book
+      variant: secondary
+sourceHash: c0467579f59cc399
 ---
 
-import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Tabs, TabItem, CardGrid, Aside } from '@astrojs/starlight/components';
+import IconLinkCard from '../../../components/IconLinkCard.astro';
 
-Waired は、推論専用のプライベートなオーバーレイネットワークです。ノートパソコン、
-GPU サーバー、VM、自宅マシンを接続し、**ローカル LLM を自分のデバイス間で共有**
-できるようにします。パブリックインターネットに公開することはありません。どこかの
-ノートパソコンで Claude Code に入力すると、その答えは自分のマシンから返ってきます —
-メッセージごとの課金もサブスクリプションもなく、プロンプトが自分のデバイスから外に
-出ることもありません。
+{/* トップページの役割は製品説明ではなく、旅の入口になること。よって:
+    ボタンは「やる」「知る」の 2 つ（何もセットアップしない Install ボタンは廃止）、
+    インストールコマンドはこのページ自身に、タイルはすべて実リンク
+    （従来の 4 枚はクリックできそうでできなかった）。
 
-<CardGrid>
-	<Card title="ワンコマンド" icon="rocket">
-		1 行でインストールし、Google でサインインすれば、コーディングエージェントが
-		自動的にリンクされます。[インストール](/ja/getting-started/install/)を参照してください。
-	</Card>
-	<Card title="無料で動かせる" icon="approve-check">
-		モデルはすでに所有しているハードウェアで動きます — 最近の CPU なら 7B
-		モデルを扱え、GPU があれば高速になります。
-	</Card>
-	<Card title="設計からプライベート" icon="seti:lock">
-		ピア同士はエンドツーエンド暗号化された WireGuard リンクで直接通信します。
-		協調サービスがプロンプトや応答を見ることはなく、リレーですらそれらを
-		読むことはできません。[プライバシー](/ja/concepts/privacy/)を参照してください。
-	</Card>
-	<Card title="ツールはそのまま" icon="seti:default">
-		Claude Code と OpenCode をそのまま利用でき、さらに任意の
-		OpenAI 互換・Anthropic 互換クライアントにも対応します。
-	</Card>
-</CardGrid>
+    順序は意図的: タイルで納得させ、納得した人向けにコマンドを置き、
+    それ以外を「目的から探す」で受ける。高さは余白の上書きではなく
+    文章量で調整する — マージンは Starlight の既定のまま。 */}
 
-## ここから始める
+どこかのノートパソコンで Claude Code に入力すると、その答えは**自分が持っているマシン**から
+返ってきます。メッセージごとの課金もサブスクリプションもなく、プロンプトが自分のデバイスから
+外に出ることもありません。
+
+## 選ばれている理由
 
 <CardGrid>
-	<LinkCard title="インストール" href="/ja/getting-started/install/" description="Linux、macOS、Windows 向けのワンライン・インストール。" />
-	<LinkCard title="初回起動" href="/ja/getting-started/first-run/" description="デバイスを登録し、推論を有効化し、最初のモデルをプルします。" />
-	<LinkCard title="コーディングエージェント" href="/ja/guides/coding-agents/" description="Claude Code と OpenCode を自分のモデル経由でルーティングします。" />
-	<LinkCard title="モデルカタログ" href="/ja/reference/model-catalog/" description="バンドルされたモデルと、各モデルが必要とする RAM / VRAM。" />
-	<LinkCard title="CLI リファレンス" href="/ja/reference/cli/" description="すべての `waired` コマンドをひと目で。" />
-	<LinkCard title="トラブルシューティング" href="/ja/troubleshooting/" description="何かおかしいときに実行する 3 つのコマンド。" />
+	<IconLinkCard title="コマンド 1 つ" icon="rocket" href="/ja/quickstart/">
+		1 行でインストールし、Google でサインイン。あとは画面でもターミナルでも
+		仕上げられます — どちらでも 10 分ほどです。
+	</IconLinkCard>
+	<IconLinkCard title="動かすのは無料" icon="approve-check" href="/ja/reference/model-catalog/">
+		モデルはすでに持っているハードウェアで動きます。最近の CPU でも動き、
+		グラフィックボードがあれば高速です。自分のマシンに何が載るか見てください。
+	</IconLinkCard>
+	<IconLinkCard title="設計からプライベート" icon="padlock" href="/ja/concepts/privacy/">
+		デバイス同士がエンドツーエンド暗号化された経路で直接通信します。
+		Waired 側のサーバーがプロンプトや応答を見ることはありません。
+	</IconLinkCard>
+	<IconLinkCard title="ツールはそのまま" icon="puzzle" href="/ja/guides/claude-code/">
+		Claude Code、OpenCode、OpenAI 互換クライアントはそのまま動きます。
+		変わるのは答えの出どころであって、作業のしかたではありません。
+	</IconLinkCard>
 </CardGrid>
+
+## コマンド 1 つでインストール
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		**ターミナル（管理者）**から — スタートボタンを右クリック:
+
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+	</TabItem>
+	<TabItem label="macOS">
+		**ターミナル**から — ⌘ + スペースで「ターミナル」と入力:
+
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+		```
+	</TabItem>
+	<TabItem label="Linux">
+		ターミナルから（Ubuntu 24.04 以降 / Debian trixie 以降）:
+
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+		```
+	</TabItem>
+</Tabs>
+
+何を行うかを表示し、変更前に必ず確認します。そのあとのセットアップは
+**画面でもターミナルでも**進められます — [クイックスタート](/ja/quickstart/)が両方を扱います。
+
+## 目的から探す
+
+<CardGrid>
+	<IconLinkCard title="ほかの端末から使う" icon="laptop" href="/ja/getting-started/add-a-device/">
+		同じアカウントでノートパソコンにサインインすれば、外出先からでも自分の AI に
+		届きます。ポート開放も VPN 設定も不要です。
+	</IconLinkCard>
+	<IconLinkCard title="使うモデルを選ぶ" icon="setting" href="/ja/guides/choose-a-model/">
+		品質重視なら大きいモデル、速度重視なら小さいモデル。壊さずに切り替える方法。
+	</IconLinkCard>
+	<IconLinkCard title="うまくいかないとき" icon="warning" href="/ja/troubleshooting/">
+		いま出ている症状から探して、直すためのコマンドを 1 つだけ見つけます。
+	</IconLinkCard>
+	<IconLinkCard title="コマンド一覧" icon="list-format" href="/ja/reference/cli/">
+		`waired` の全コマンドを、目的別にまとめたリファレンス。
+	</IconLinkCard>
+</CardGrid>
+
+<Aside type="tip" title="そもそも何なのか知りたい">
+	[Waired とは？](/ja/what-is-waired/) が、図つき・2 分で説明します。
+	**できないこと**についても正直に書いてあります。
+</Aside>

@@ -1,0 +1,264 @@
+---
+title: Quickstart
+description: One command installs Waired, starts it, and takes you straight into sign-in. Your own AI answering Claude Code in about 10 minutes.
+meta:
+  audience: Anyone setting Waired up for the first time
+  needs: A computer to run the AI on, a Google account, and administrator rights on that computer
+  time: About 10 minutes of your attention, plus 5–30 minutes of unattended downloading
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../components/Screenshot.astro';
+import Expected from '../../components/Expected.astro';
+
+By the end of this page you will have an AI model running on your own
+computer, and Claude Code answering from it instead of from the cloud.
+
+<Aside type="tip" title="Which computer should run the AI?">
+	The most powerful one you own — a desktop with a graphics card, or a Mac with
+	Apple Silicon. Your laptop can use that computer's AI later, from anywhere,
+	without running anything itself. If you only have one computer, use it: it
+	will both run the AI and use it.
+
+	You do **not** need a graphics card. A GPU makes answers faster, but a recent
+	CPU runs a small model fine.
+</Aside>
+
+## Step 1 — Run one command
+
+Open a terminal, paste the line for your system, and press Enter.
+
+<Tabs syncKey="os">
+	<TabItem label="Windows">
+		Open **PowerShell as Administrator**: right-click the Start button →
+		**Terminal (Administrator)** → **Yes**.
+
+		```powershell
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+
+		`iwr` downloads Waired's install script, `iex` runs it.
+	</TabItem>
+	<TabItem label="macOS">
+		Open **Terminal**: press ⌘ + Space, type `Terminal`, press Enter.
+
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+		```
+
+		`curl` downloads Waired's install script, `sh` runs it. You will be asked
+		for your Mac password — **nothing appears on screen as you type it**,
+		which is normal.
+	</TabItem>
+	<TabItem label="Linux">
+		Open a terminal.
+
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+		```
+
+		`curl` downloads Waired's install script, `sh` runs it. You will be asked
+		for your password — **nothing appears on screen as you type it**, which
+		is normal.
+	</TabItem>
+</Tabs>
+
+Before changing anything, the installer prints a summary of what it is about to
+do and asks `Proceed? [Y/n]` — press Enter to continue.
+
+That one command does three things: it installs Waired, starts it running in
+the background, and then goes **straight into sign-in**. So do not close this
+window — the next step is already happening in it.
+
+<Aside type="tip" title="Would rather read the script first?">
+	Download it, read it, run it — see the platform pages:
+	[Windows](/getting-started/install/windows/#read-the-script-before-running-it) ·
+	[macOS](/getting-started/install/macos/) ·
+	[Linux](/getting-started/install/linux/).
+</Aside>
+
+## Step 2 — Sign in with Google
+
+The installer hands over to sign-in on its own. It prints a link and waits:
+
+<Expected title="In the terminal">
+```
+Sign in using this link:
+  https://app.waired.ai/login/…
+
+>> Press Enter to open your browser (or open the link above yourself)...
+```
+</Expected>
+
+Press **Enter**. Your browser opens; choose your Google account. Back in the
+terminal:
+
+<Expected>
+```
+Logged in as: you@example.com
+Waired is signed in and running in the background.
+
+>> Setup is continuing in your browser…
+   (press Enter to continue in the terminal instead)
+```
+</Expected>
+
+<Aside type="caution" title="Leave this terminal window open">
+	Installing the AI software needs administrator rights, and a web page cannot
+	grant those. The terminal window you are in is what actually performs those
+	steps while the browser drives them. Close it and setup stops with *“The
+	setup command was closed before this finished”* — nothing is lost, but you
+	have to come back and run `waired init` again.
+</Aside>
+
+## Step 3 — Finish setup in your browser
+
+Switch to the browser tab that just opened. It asks which AI model to start
+with, then does the work.
+
+<Steps>
+
+1. **Pick a model** from the list and press **Yes, set it up**. You can change
+	it later, so the first entry is a fine choice.
+
+2. **Watch the three steps run.**
+
+	<Screenshot
+		src="setup-wizard-progress.png"
+		alt="The Waired setup page in a browser, showing three steps — Install the AI software (done), Download the AI model (in progress, 7.9 GB of 19.2 GB), and Check the speed (waiting)."
+		caption="You can close this tab — the download keeps going."
+	/>
+
+	| Step | What is happening | How long |
+	|---|---|---|
+	| **Install the AI software** | The program that loads and runs models. This is the part that needs administrator rights. | A minute or two |
+	| **Download the AI model** | The AI itself — several gigabytes. | 5–30 minutes |
+	| **Check the speed** | A short measurement, so Waired knows whether this machine keeps up. If it cannot, you are offered a lighter model. | Up to 5 minutes |
+
+3. **Wait for “Everything's ready.”** Then press **Go to device**.
+
+</Steps>
+
+<Expected>
+	Every step shows a tick, and the page says
+	**“Everything's ready — this computer can now run AI on its own.”**
+</Expected>
+
+<Expected tone="bad">
+	*“To finish, run `sudo waired init` on this computer.”*
+
+	The terminal window that was doing the work is gone — usually because it was
+	closed, or because it never had administrator rights. Open a terminal and run
+	that command; your progress is saved and it picks up where it stopped.
+</Expected>
+
+<details>
+<summary>I would rather do this in the terminal</summary>
+
+At *“Setup is continuing in your browser…”*, press **Enter**. The terminal
+takes over and asks whether to route Claude Code through Waired; answer **Y**.
+Model installation and download then run with a progress bar in the terminal:
+
+```
+Starting the inference engine…
+Preparing to download qwen3-coder-30b-a3b-instruct…
+Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
+```
+
+When it finishes:
+
+```
+╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
+│  Account   you@example.com                                       │
+│  Device    my-desktop  d-4f2a…                                   │
+│  Network   personal  overlay 100.64.0.3                          │
+│  Model     qwen3-coder-30b-a3b-instruct  (58 tok/s)              │
+│  Gateway   http://127.0.0.1:9479                                 │
+│  Claude    http://127.0.0.1:9473 (managed settings)              │
+│                                                                  │
+│  Point your coding agent at Waired and start building.           │
+╰──────────────────────────────────────────────────────────────────╯
+```
+
+On a server with no desktop this is the only option — see
+[Sign in and set up](/getting-started/first-run/#no-desktop-no-browser).
+
+</details>
+
+## Step 4 — Check it worked
+
+<Tabs syncKey="mode">
+	<TabItem label="In the Waired app">
+		Click the **Waired icon** — in the menu bar on macOS, next to the clock
+		on Windows and Linux.
+
+		<Screenshot
+			src="app-ready.png"
+			alt="The Waired app menu showing the signed-in account, a Connected status, and an Inference submenu naming the active model."
+			caption="Signed in, connected, and a model loaded."
+			width="26rem"
+		/>
+
+		<Expected>
+			The top of the menu says **Connected**, your email is below it, and
+			**Inference** names the model that is running.
+		</Expected>
+	</TabItem>
+	<TabItem label="In the terminal">
+		```sh
+		waired infer "say hi"
+		```
+
+		<Expected>
+			A greeting comes back within a few seconds. That answer was produced
+			on your own computer — nothing was sent to a cloud AI provider.
+		</Expected>
+	</TabItem>
+</Tabs>
+
+<Aside type="note" title="Nothing came back?">
+	Run [`waired doctor`](/getting-started/doctor/). It checks every part of the
+	setup, marks each one ✓ / ⚠ / ✗, and — if you press **f** — repairs what it
+	can. That single command resolves most first-run problems.
+</Aside>
+
+## Step 5 — Use it from Claude Code
+
+Open Claude Code as you normally would, in any project, and ask it something.
+The footer tells you which AI answered.
+
+<Screenshot
+	src="claude-code-statusline.png"
+	alt="The Claude Code footer showing the Waired status line, naming the local model that answered the last request."
+/>
+
+<Expected>
+```
+⚡ waired: on Waired (qwen3-coder-30b-a3b-instruct)
+```
+Your own hardware answered, using that model.
+</Expected>
+
+Type `/waired-route` in the conversation to switch between your own AI and the
+cloud, or from a terminal:
+
+```sh
+waired claude route           # show where Claude Code is running
+waired claude route waired    # your own AI only
+waired claude route anthropic # the real Anthropic API
+```
+
+## You're done — what next?
+
+<CardGrid>
+	<LinkCard title="Use it from your other devices" href="/getting-started/add-a-device/" description="Install Waired on your laptop with the same Google account, and it reaches this computer's AI from anywhere." />
+	<LinkCard title="Get to know the Waired app" href="/guides/waired-app/" description="Everything behind the Waired icon — models, routing, sharing, sign-out." />
+	<LinkCard title="Choose a different model" href="/guides/choose-a-model/" description="Swap in a bigger model for quality, or a smaller one for speed." />
+	<LinkCard title="Something looks wrong" href="/troubleshooting/" description="Find your symptom, get the one command that fixes it." />
+</CardGrid>
+
+<Aside type="tip" title="Changed your mind?">
+	Removing Waired is one command and takes about ten seconds — see
+	[Uninstall](/getting-started/uninstall/). Nothing is left running in the
+	background.
+</Aside>

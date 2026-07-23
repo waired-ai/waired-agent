@@ -1,0 +1,130 @@
+---
+title: Stop using your AI for a while
+description: Three different ways to take Waired out of the loop — pause routing, stop the engine to free memory, or disconnect — and which one you actually want.
+meta:
+  audience: Anyone who wants Waired to stop doing something, temporarily
+  needs: The Waired app, or a terminal
+  time: 2 minutes
+---
+
+import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Expected from '../../../components/Expected.astro';
+
+"Turn it off for now" means four different things in practice, and they have
+different consequences. Find your row first.
+
+| What you actually want | Do this |
+|---|---|
+| My coding tools should use the cloud again for a bit | [Pause routing](#pause-routing) |
+| I need this memory back for something else | [Stop the engine](#stop-the-engine) |
+| Stop my other computers using this one's AI | [Stop sharing](#stop-sharing) |
+| Take this computer off my network entirely | [Disconnect](#disconnect) |
+| Remove Waired from this computer | [Uninstall](/getting-started/uninstall/) |
+
+## Pause routing
+
+Your tools go back to talking to the cloud directly, as if Waired were not
+installed. Nothing is uninstalled and nothing is forgotten.
+
+```sh
+waired pause
+```
+
+```sh
+waired resume
+```
+
+The setting survives restarts — a paused computer is still paused tomorrow.
+
+<Expected title="Confirming it took effect">
+```sh
+waired doctor
+```
+The **waired phase** line reads `paused` rather than
+`active — overlay routing in effect`.
+</Expected>
+
+<Aside type="note" title="Paused means paused for everything">
+	While paused, your own AI does not answer either — `waired infer` and any
+	chat app pointed at the local gateway get a "not available" response. If you
+	want your own AI to keep working and only want to stop *other computers*
+	using it, that is [stop sharing](#stop-sharing) instead.
+</Aside>
+
+## Stop the engine
+
+Frees the memory the model is holding — usually several gigabytes — right now.
+Settings are untouched, and starting it again reloads the model.
+
+<Tabs syncKey="method">
+	<TabItem label="In the Waired app">
+		Click the **Waired icon** → **Inference** → **Stop inference engine**.
+		The same item becomes **Start inference engine**.
+	</TabItem>
+	<TabItem label="In a terminal">
+		```sh
+		waired inference engine stop
+		waired inference engine start
+		waired inference engine status
+		```
+	</TabItem>
+</Tabs>
+
+With the engine stopped, requests from this computer go to one of your other
+computers if you have one, and otherwise fail until you start it again.
+
+## Stop sharing
+
+Your own use continues; your other computers stop being able to use this one's
+AI.
+
+<Tabs syncKey="method">
+	<TabItem label="In the Waired app">
+		Click the **Waired icon** → **Inference** → **Stop sharing engine to
+		mesh**.
+	</TabItem>
+	<TabItem label="In a terminal">
+		```sh
+		waired inference share off
+		waired inference share on
+		waired inference share status
+		```
+	</TabItem>
+</Tabs>
+
+This is the right setting for a workstation you do not want interrupted, while
+still using your own model yourself.
+
+<Aside type="tip" title="Sharing publicly is a separate thing again">
+	This controls **your own** other computers. Whether *other Waired users* may
+	use this machine is [Public share](/public-share/), which is off unless you
+	turned it on.
+</Aside>
+
+## Disconnect
+
+Takes the computer off your private network without signing out. Your other
+computers stop seeing it, and it stops seeing them.
+
+Click the **Waired icon** → **Disconnect**. The same item becomes **Connect**.
+
+<Aside type="caution" title="Not the same as Log out…">
+	**Log out…** removes this computer's identity, and signing back in enrolls it
+	as a new device. **Disconnect** is one click each way and changes nothing
+	permanent. See [The Waired app](/guides/waired-app/#settings).
+</Aside>
+
+## Which one do I have on?
+
+```sh
+waired status --observability
+```
+
+It reports the phase (active or paused), whether the engine is loaded, and
+whether this computer is offering it to your others.
+
+<CardGrid>
+	<LinkCard title="The Waired app" href="/guides/waired-app/" description="All of the above, from the icon." />
+	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="When you want it gone rather than paused." />
+	<LinkCard title="Run a health check" href="/getting-started/doctor/" description="If something stopped and you did not stop it." />
+</CardGrid>

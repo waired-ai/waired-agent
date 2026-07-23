@@ -1,6 +1,10 @@
 ---
 title: Architecture
 description: How Waired connects your devices — the four binaries, enrollment via the control plane, and direct WireGuard with relay fallback.
+meta:
+  audience: Anyone curious how it works underneath
+  needs: Nothing
+  time: 10 minutes
 ---
 
 Waired is an **inference-only overlay network**. It introduces your machines to
@@ -38,7 +42,7 @@ directly, peer-to-peer, over an encrypted link.
 1. **Enroll.** `waired init` signs you in with Google and registers the device
    with the control plane.
 2. **Discover.** The control plane streams each agent a CP-signed Network Map —
-   the public keys, endpoints, and relay URLs of the other devices on your
+   the public keys, endpoints, and [relay](/reference/glossary/#relay) URLs of the other devices on your
    network.
 3. **Connect directly.** Agents open a direct WireGuard UDP link to each other.
    The data plane runs in userspace, so there's no OS-level VPN interface to
@@ -46,7 +50,7 @@ directly, peer-to-peer, over an encrypted link.
 4. **Fall back to relay.** When two boxes can't open a direct path (strict NAT
    or firewall), they fall back to a relay that forwards the *encrypted*
    WireGuard datagrams. This is automatic.
-5. **Infer.** Your coding agent or client hits the [Local Gateway](/guides/chat-clients/),
+5. **Infer.** Your [coding agent](/reference/glossary/#coding-agent) or client hits the [Local Gateway](/guides/chat-clients/),
    which routes the request to a local or peer engine and streams the answer
    back over the encrypted link.
 

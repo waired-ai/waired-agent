@@ -1,143 +1,242 @@
 ---
-title: First run
-description: Enroll a device with waired init, sign in with Google, choose whether it runs and shares a model, and start the background service.
+title: Sign in and set up
+description: What waired init does, why the window has to stay open, and the terminal route for machines with no desktop.
+meta:
+  audience: Anyone resuming an interrupted setup, or setting up a server
+  needs: Administrator rights on the computer, and a Google account
+  time: 10 minutes of attention, plus the model download
 ---
 
-import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../components/Screenshot.astro';
+import Expected from '../../../components/Expected.astro';
 
-After [installing](/getting-started/install/), enroll the device into your
-Waired network with `waired init`. Run it once per machine.
+**Installing normally does this for you.** The install command starts Waired
+and then goes straight into sign-in, so a first-time setup is covered by the
+[Quickstart](/quickstart/) and you never type `waired init` yourself.
+
+This page is for the times you do:
+
+- setup was interrupted and you are resuming it
+- you installed with `--no-init`
+- you are setting up a server with no desktop
+- you want to know what each choice actually does
 
 <Aside type="tip" title="Same account = same network">
-	Sign in to **every** device with the **same Google account**. Devices
-	enrolled under the same account join the same private network and can reach
-	each other; that shared identity is what lets one machine use another's model.
+	Sign in to **every** computer with the **same Google account**. That shared
+	sign-in is what lets one machine use another's AI. Different accounts make
+	separate, unconnected networks.
 </Aside>
 
-## Enroll the device
+## Start it
 
 <Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
+	<TabItem label="Windows">
+		Open **Terminal (Administrator)** — right-click the Start button — and
+		run:
+
+		```powershell
+		waired init
+		```
+
+		<Aside type="note" title="“waired is not recognized”">
+			The installer added Waired to your system path, but a terminal
+			opened *before* the install still has the old one. Open a **new**
+			Administrator terminal. If you would rather not, run it by full
+			path: `& "C:\Program Files\Waired\waired.exe" init` — adjusting the
+			folder if you chose a different install location.
+		</Aside>
+	</TabItem>
+	<TabItem label="macOS">
 		```sh
 		sudo waired init
 		```
 	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		& "C:\Program Files\Waired\waired.exe" init
+	<TabItem label="Linux">
+		```sh
+		sudo waired init
 		```
 	</TabItem>
 </Tabs>
 
-`waired init` walks you through three prompts:
+It prints a sign-in link and waits:
+
+<Expected>
+```
+Sign in using this link:
+  https://app.waired.ai/login/…
+
+>> Press Enter to open your browser (or open the link above yourself)...
+```
+</Expected>
+
+Press **Enter** and choose your Google account. You can also copy the link into
+any browser, on this computer or another one.
+
+<Aside type="caution" title="Leave that window open until setup finishes">
+	Installing the AI software needs administrator rights, and a web page cannot
+	grant them. **This command is what actually performs those steps** while the
+	browser page drives them.
+
+	If you close it, the browser says *“The setup command on … was closed before
+	this finished. Your progress was saved.”* Run the same command again to carry
+	on — nothing is lost, and any model download continues regardless.
+</Aside>
+
+## Finish in the browser
+
+After sign-in your browser lands on the setup page for this computer. Pick a
+model, press **Yes, set it up**, and it reports what the computer is doing,
+live:
+
+<Screenshot
+	src="setup-wizard-progress.png"
+	alt="The Waired setup page in a browser, showing three steps — Install the AI software (done), Download the AI model (in progress, with a bar reading 7.9 GB of 19.2 GB), and Check the speed (waiting)."
+	caption="Three steps, reported by the computer itself. Closing this tab does not stop them."
+/>
+
+| Step | What is happening | How long |
+|---|---|---|
+| **Install the AI software** | The program that loads and runs models. This is the part that needs administrator rights — which is why the terminal window has to stay open. | A minute or two |
+| **Download the AI model** | The AI itself, several gigabytes. | 5–30 minutes |
+| **Check the speed** | A short measurement, so Waired knows whether this machine keeps up. | Up to 5 minutes |
+
+<Expected>
+	Every step ticked, and **“Everything's ready — this computer can now run AI
+	on its own.”** Press **Go to device**.
+</Expected>
+
+While the browser is driving, the terminal stays quiet and asks nothing. It
+prints one line telling you that you can connect your coding tools later:
+
+```
+You can set up your coding tools later from this terminal with `waired link all`.
+```
+
+<Aside type="note" title="The setup page is in English">
+	The web console is English-only for now. Translations are planned.
+</Aside>
+
+## Set up in the terminal instead
+
+At *“Setup is continuing in your browser…”*, press **Enter**. The terminal
+takes over.
+
+What it asks depends on how it is running.
+
+### After a normal install
+
+The terminal asks about your coding tools, and nothing else — the model was
+chosen in the browser, or by the installer:
+
+<Expected title="You are asked">
+	Whether to route Claude Code through Waired. Answer **Y**.
+
+	Answering no leaves the connection installed but inactive; turn it on later
+	with `sudo waired claude enable`.
+</Expected>
+
+### <a id="no-desktop-no-browser"></a>On a server, or with no browser
+
+With `--no-browser`, `--non-interactive`, or on a machine where Waired cannot
+reach a running service to hand over to, `waired init` does the whole job
+itself and asks the full set of questions:
 
 <Steps>
-1. **Google sign-in.** `init` prints the sign-in link first, then — on an
-   interactive terminal — waits for you to press **Enter** before opening
-   your browser (you can also just open the link yourself). Non-interactive
-   sessions open the browser right away, and on a headless machine (or with
-   `--no-browser`) only the URL and pairing code are printed.
 
-   After you sign in, setup may continue **in the browser**. The terminal says
-   so and keeps running:
+1. **Google sign-in.** Only the link and a pairing code are printed — open them
+	on another device.
 
-   ```text
-   Setup is continuing in your browser…
-   (press Enter to continue in the terminal instead)
-   ```
+2. **Run AI models on this computer? `[Y/n]`** — **Y** on a desktop or GPU box.
+	**N** on a machine that should only *use* another computer's AI; it still
+	joins your network. The default follows this machine's memory.
 
-   **Leave that terminal open** while the browser finishes — some steps, such
-   as installing the AI software, need it. That one runs right there in the
-   terminal, and it is the slowest part of a first run:
+3. **Let your other devices use this computer's AI? `[Y/n]`** — **Y** on a
+	machine meant to serve your laptop. This is independent of the previous
+	answer.
 
-   ```text
-   📦 Installing the AI engine for the setup in your browser (one-time download)...
-   ```
+4. **Let Waired install and manage its own Ollama? `[Y/n]`** — only asked when
+	you already have your own Ollama installed. **n** keeps yours and Waired
+	uses it as it is.
 
-   Pressing **Enter** hands control
-   back to the terminal and it asks the remaining questions itself; the browser
-   page then tells you what to run here. Closing the terminal is safe: your
-   progress is saved, and downloads keep going either way.
+5. **Route Claude Code through Waired? `[Y/n]`**
 
-2. **Run AI models on this computer? (Y/n)** — Choose **Y** on a machine that
-   should *run* a model (your GPU box). The default is Y when the machine has
-   enough memory (roughly 8 GB of VRAM) and N otherwise. On a client laptop that
-   only *uses* a remote model, choose **N**.
+6. **Run a quick performance benchmark now? `[Y/n]`** — asked once the model is
+	ready. Worth doing: if this computer cannot keep up, Waired offers a lighter
+	model and names both with their quality tiers so you can weigh the
+	trade-off.
 
-3. **Let your other devices use this computer's AI? (Y/n)** — Choose **Y** on
-   a server so your other devices can send it inference requests. Choose **N**
-   to keep the AI private to this machine (you can still use it yourself). This
-   is independent of the run-AI toggle — see
-   [sharing vs. pausing](/reference/cli/#sharing-vs-pausing).
 </Steps>
 
-If you enabled the engine, `init` looks at this machine's CPU, memory, and GPU
-and **automatically picks the best bundled coding model that fits** — a larger,
-higher-quality model on a capable box, a smaller one on a modest laptop. It
-checks free disk first (and steps down to a smaller model, or skips the
-download, rather than filling the disk), then pulls the chosen model and waits
-for it in the foreground, showing download progress. The pull can take a few
-minutes; once it finishes, `init` runs a quick benchmark and — if this machine
-can't keep up — offers to switch to an even lighter model, naming the current
-and candidate models with their catalog quality tiers. Accepting a switch
-downloads the new model in the foreground with progress (press Enter to let it
-finish in the background). If the download fails, `init` still succeeds and
-prints how to retry. Pass `--no-wait-model` to
-return to the shell right away and let the agent finish the download in the
-background instead. To pin a specific model, pass
-`--inference-bundled-model-id <id>` or see
-[Switch the bundled model](/guides/switch-model/).
+The model then downloads in the foreground with a progress bar:
 
-<Aside type="note" title="When the service is already running">
-	If the `waired-agent` service is already up when you run `waired init` (a
-	fresh install starts it first), enrollment is handed to the daemon. It picks
-	the inference role automatically from this machine's hardware — the same
-	sizing as above, including skipping the local engine on an under-spec box —
-	rather than prompting, and `init` shows the model-download progress and
-	benchmark. Adjust the role afterward with `waired runtimes benchmark`
-	(re-check performance / switch model), `waired models ls`,
-	`waired inference share on|off`, `waired inference engine stop|start`, or by
-	re-running `waired init`.
+```
+Starting the inference engine…
+Preparing to download qwen3-coder-30b-a3b-instruct…
+Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
+```
+
+<Expected>
+```
+╭─ 🎉 Waired is ready — everything completed successfully! ─────────╮
+│  Account   you@example.com                                       │
+│  Device    my-desktop  d-4f2a…                                   │
+│  Network   personal  overlay 100.64.0.3                          │
+│  Model     qwen3-coder-30b-a3b-instruct  (58 tok/s)              │
+│  Gateway   http://127.0.0.1:9479                                 │
+│  Claude    http://127.0.0.1:9473 (managed settings)              │
+│                                                                  │
+│  Point your coding agent at Waired and start building.           │
+╰──────────────────────────────────────────────────────────────────╯
+```
+</Expected>
+
+<Aside type="caution" title="“This machine can only run a very small model”">
+	On a low-memory computer, setup may report that only a very small model fits
+	and suggest **not** running one. Take that advice: at that size a coding
+	model produces broken output more often than useful output. The computer is
+	still worth setting up — it can use the AI on your other machines.
 </Aside>
 
-On an elevated interactive install (Linux/macOS `sudo waired init`), the very
-last question is whether to **route Claude Code inference through Waired
-now** — asked only after the model download and benchmark, when the local
-stack can actually serve. Answering no keeps the integration installed with
-Claude traffic on the Anthropic API; enable later with
-`sudo waired claude enable` (see [Coding agents](/guides/coding-agents/)).
+<details>
+<summary>Options for servers and scripts</summary>
 
-<Aside type="caution" title="Under-spec machines">
-	If the machine is too small to run **any** usable coding model, `init` skips
-	the local engine and tells you what it would need. The device still enrolls
-	and works as part of your network — so it can **use** models running on your
-	other devices, just not host one. To install the engine anyway, re-run with
-	`--inference-enabled=true`.
+| Flag | Effect |
+|---|---|
+| `--no-browser` | Never open a browser; print the URL and pairing code |
+| `--non-interactive` | Accept the hardware-derived defaults, ask nothing |
+| `--no-wait-model` | Return to the shell immediately; download in the background |
+| `--inference-bundled-model-id <id>` | Pin a model instead of letting Waired choose |
+| `--inference-enabled=true\|false` | Answer the first question without being asked |
+| `--share-with-mesh=true\|false` | Answer the second question without being asked |
+| `--control <url>` | Point at a non-default service |
+| `--mask-pii` | Mask home directory, username, hostname and email in the output, for pasting into a bug report |
+
+</details>
+
+## Signing in from the Waired app instead
+
+The [Waired app](/guides/waired-app/) has a **Log in…** entry, and it does sign
+this computer in.
+
+<Aside type="caution" title="It cannot finish a first-time setup on its own">
+	Installing the AI software needs administrator rights that the app cannot
+	grant. On a computer that has never been set up, signing in from the app
+	gets as far as the setup page and then asks you to run `waired init` in a
+	terminal anyway.
+
+	Use **Log in…** for signing back in after a sign-out, or on a computer that
+	is already set up. For a first setup, use the command above.
 </Aside>
 
-<Aside type="note">
-	On CI or other non-interactive hosts, pass `--non-interactive` to accept the
-	hardware-derived defaults without prompting. To target a non-default control
-	plane, add `--control https://your-control-plane.example.com`.
-</Aside>
+## Setting up again
 
-## Start the background service
+Running setup again on a computer that is already signed in is safe: it
+re-authenticates and reopens the setup page, and does **not** count as a new
+device against your account.
 
-Enrollment configures the device; the `waired-agent` service keeps it connected.
-
-<Tabs syncKey="os">
-	<TabItem label="Linux / macOS">
-		```sh
-		sudo systemctl enable --now waired-agent
-		```
-		(macOS uses a system launchd daemon that the installer already loaded; it
-		starts at boot, no login required.)
-	</TabItem>
-	<TabItem label="Windows">
-		```powershell
-		Start-Service waired-agent
-		```
-	</TabItem>
-</Tabs>
-
-Next: [verify it works](/getting-started/verify/).
+<CardGrid>
+	<LinkCard title="Check it works" href="/getting-started/verify/" description="Three checks, and what a healthy answer looks like." />
+	<LinkCard title="Add another device" href="/getting-started/add-a-device/" description="Put your laptop on the same network." />
+	<LinkCard title="Setup stopped partway" href="/troubleshooting/#setup-stopped-partway" description="What each failure message means, and how to resume." />
+</CardGrid>

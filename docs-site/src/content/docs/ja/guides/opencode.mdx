@@ -1,0 +1,61 @@
+---
+title: OpenCode から使う
+description: コマンド 1 つで OpenCode を自分のモデルに向けます。ブラウザで開ける同梱版 OpenCode も使えます。
+meta:
+  audience: OpenCode ユーザー
+  needs: Waired がサインイン済みであること
+  time: 2 分
+sourceHash: bdb41d1e67c948e4
+---
+
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## 接続する
+
+```sh
+waired link opencode
+```
+
+設定はこれだけです。`~/.config/opencode/plugin/waired.js` にプラグインが入り、
+OpenCode の接続先が自分のモデルになります。あとは普段どおり OpenCode を起動してください。
+
+<Aside type="tip" title="コーディングツールを複数入れている場合">
+	`waired link` を名前なしで実行すると、見つかったツールをすべて設定します。
+</Aside>
+
+## 同梱版をブラウザで使う
+
+Waired には、自分のモデルと実際のプロジェクトに接続済みの OpenCode が同梱されています。
+コーディングツールを入れていないマシンで便利です。
+
+```sh
+waired codeui open
+```
+
+**自分だけが使えます**（同じマシンの他ユーザーも、ネットワーク上の他のパソコンも拒否されます）。
+
+| コマンド | 動作 |
+|---|---|
+| `waired codeui open --project DIR` | プロジェクトを指定して開く |
+| `waired codeui open --no-browser` | ブラウザを開かずアドレスを表示（SSH 越しなど） |
+| `waired codeui url` | 実行中インスタンスのアドレスを表示 |
+| `waired codeui status` | 動作しているか確認 |
+| `waired codeui stop` | 停止する |
+
+## 確認・削除
+
+`waired doctor` が経路全体（接続、一時停止の有無、モデルの読み込み状況）を点検し、
+**f** キーで直せるものは修復します。
+
+連携を外すには:
+
+```sh
+waired unlink opencode
+```
+
+`waired link` が追加したものだけを取り消します。
+
+<CardGrid>
+	<LinkCard title="Claude Code から使う" href="/ja/guides/claude-code/" description="Claude Code 版。会話中の切り替えにも対応。" />
+	<LinkCard title="チャットアプリから使う" href="/ja/guides/chat-clients/" description="OpenAI 互換のクライアント。" />
+</CardGrid>

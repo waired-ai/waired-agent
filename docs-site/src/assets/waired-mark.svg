@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img">
+  <!-- WAIRED GATE mark. Kept byte-for-byte in step with the marketing site
+       (web/site/public/favicon.svg) and the admin console
+       (web/admin/public/favicon.svg) in the private repo: two facing arcs
+       around a glowing core, on its own rounded dark chip.
+
+       The chip is why this one asset serves both site themes — the mark
+       carries its own background, so it needs no light/dark variant and
+       cannot end up invisible against either header. Its colours are fixed
+       cyan on purpose, independent of any accent variable, so the mark
+       stays constant if the accent is ever repointed. -->
+  <rect width="64" height="64" rx="13" fill="#0b0b0f" />
+  <g fill="none" stroke="#8fbdf0" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40,15 A18,18 0 0 1 40,49" />
+    <path d="M24,49 A18,18 0 0 1 24,15" />
+  </g>
+  <circle cx="32" cy="32" r="6.4" fill="#7fe9ff" />
+</svg>

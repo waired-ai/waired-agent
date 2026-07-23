@@ -103,6 +103,17 @@ jobs:
         working-directory: docs-site
         run: npm ci
 
+      # The Japanese tree is a 1:1 mirror, and Starlight's fallback only
+      # covers a MISSING page — a stale one renders as if it were current.
+      # This gate fails the build when an English page has moved on without
+      # its Japanese counterpart being looked at. Resolving it is
+      # `npm run i18n:accept -- <path>` after translating (or after deciding
+      # the English-only edit needs no translation). Runs before the build so
+      # the failure is the first thing an author sees.
+      - name: japanese mirror in sync
+        working-directory: docs-site
+        run: npm run i18n:check
+
       - name: build
         working-directory: docs-site
         run: npm run build

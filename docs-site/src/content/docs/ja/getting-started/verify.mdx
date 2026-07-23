@@ -1,68 +1,88 @@
 ---
-title: 動作を確認する
-description: waired status --observability と単発の waired infer リクエストで Waired のセットアップを確認します。
+title: 動作確認
+description: セットアップが正常かを確かめる 3 つの方法 — アイコン、1 つの質問、詳細ステータス。
+meta:
+  audience: セットアップを終えたばかりの人
+  needs: Waired アプリ、またはターミナル
+  time: 2 分
+sourceHash: 3f1cce7d3d246726
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../../components/Screenshot.astro';
 
-2 つのコマンドで健全なセットアップを確認できます。一方はデーモンとメッシュのライブな
-状態を表示し、もう一方は実際の推論リクエストを実行します。
+手軽な順に 3 つあります。どれかが失敗したら、次に実行するのは `waired doctor` です。
 
-## ライブな状態を確認する
+## 1. Waired アイコンを見る
 
-```sh
-waired status --observability
-```
+**Waired アイコン**をクリックします（macOS はメニューバー、Windows・Linux は時計のとなり）。
 
-健全な推論サーバーは次のように表示されます。
+<Screenshot
+	src="app-ready.png"
+	alt="Waired のメニュー。サインイン済みのアカウント、接続状態、Inference サブメニューに動作中のモデル名が表示されている。"
+	caption="サインイン済み・接続済み・モデル読み込み済み。"
+	width="26rem"
+/>
 
-```
-Observability:
-  Device:   dev-ubuntu  uptime: 1m23s
-  Engine:   ready (model=qwen2.5-coder-7b-instruct, 0/4 slots used, inflight=0)
-  Share:    enabled    Paused: no
-  Mesh:     2 enrolled / 1 reachable / 1 ready
-  Last:     -  (no inference requests yet)
-```
+**正常な状態:** 先頭に自分のアカウント、接続済みの表示、そしてモデルを動かす
+パソコンなら **Inference** に動作中のモデル名。
 
-確認すべきポイント:
-
-- **Engine: ready** — モデルがロードされ、リクエストに応えられる状態です。
-  `not ready` と表示される場合は、モデルがまだプル中（数分待つ）か、ランタイムが
-  停止している（`waired runtimes status`）可能性があります。
-- **Share** / **Paused** — `Share: enabled` はピアがこのエンジンに到達できることを
-  意味し、`Paused: no` はルーティングが有効であることを意味します。
-- **Mesh** — `enrolled / reachable / ready` のピア数です。クライアントでは、これが
-  自分のサーバーが reachable として現れることを確認する方法です。
-
-機械可読な出力を得るには `-o json` を追加します。
-
-## 最初のリクエストを実行する
+## 2. 話しかけてみる
 
 ```sh
 waired infer "say hi"
 ```
 
-これはローカルエンジンを直接呼び出すため、メッシュの到達性に関わらず動作します —
-推論が動くことを確認する最も早い方法です。あいさつが数百ミリ秒から数秒以内に
-返ってくるはずです。
+**正常な状態:** 数秒であいさつが返ってくる。
 
-ルーティングの判断（ローカルかピアか、モデルの解決、推定レイテンシ）を答えと一緒に
-確認するには、次のようにします。
+これはこのパソコンのモデルに直接送るので、ネットワークの状態に関係なく動きます。
+AI 自体が生きているかを確かめる最短の方法です。
+
+どこで処理されたか、なぜそう判断したかを見るには:
 
 ```sh
 waired infer --explain "say hi"
 ```
 
-<Aside type="tip">
-	リクエストが 503 を返す場合、たいていはエンジンが一時停止しているか
-	（`waired resume`）、共有されていない（`waired inference share on`）ことを意味します。
-	[トラブルシューティング](/ja/troubleshooting/)のページでは、各症状を、それを
-	修正するコマンドに対応付けています。
+## 3. 詳細ステータスを読む
+
+```sh
+waired status --observability
+```
+
+モデルを動かすパソコンでの**正常な表示**:
+
+```
+Observability:
+  Device:   my-desktop  uptime: 1m23s
+  Engine:   ready (model=qwen3-coder-30b-a3b-instruct, 0/4 slots used, inflight=0)
+  Share:    enabled    Paused: no
+  Mesh:     2 enrolled / 1 reachable / 1 ready
+  Last:     -  (no inference requests yet)
+```
+
+| 行 | 見るべき点 |
+|---|---|
+| **Engine** | `ready` ならモデルが読み込まれ応答可能。`not ready` は多くの場合ダウンロード中 — [応答が返ってこない](/ja/troubleshooting/#no-answer-comes-back)を参照。 |
+| **Share** | `enabled` なら、ほかの端末からこのパソコンの AI を使えます。自分だけで使うなら off でも問題ありません。 |
+| **Paused** | `no` なら処理中。`yes` の場合は `waired resume`。 |
+| **Mesh** | パソコン全体の `enrolled / reachable / ready`。ノートパソコンでは、AI マシンが動いているかをここで確認します。 |
+
+`-o json` を付けると機械可読な形式で出力されます。
+
+<Aside type="tip" title="モデルを動かさないノートパソコンの場合">
+	そのマシンで `Engine: not ready` と出るのは正常です（モデルを持たない役割のため）。
+	大事なのは **Mesh** の行で、`1 ready` 以上あれば、応答してくれるパソコンが
+	存在しているということです。
 </Aside>
 
-## 次のステップ
+## 実際に使ってみる
 
-- コーディングエージェントを自分のモデル経由でルーティングする: [コーディングエージェント](/ja/guides/coding-agents/)。
-- チャットや OpenAI 互換クライアントを接続する: [チャットクライアント](/ja/guides/chat-clients/)。
-- より大きい、または小さいモデルを選ぶ: [同梱モデルを切り替える](/ja/guides/switch-model/)。
+最終的な確認は、いつものツールで動くかどうかです。
+
+<CardGrid>
+	<LinkCard title="Claude Code" href="/ja/guides/claude-code/" description="質問してフッターを見る — どの AI が答えたか表示されます。" />
+	<LinkCard title="OpenCode" href="/ja/guides/opencode/" description="コマンド 1 つで接続。" />
+	<LinkCard title="チャットアプリ" href="/ja/guides/chat-clients/" description="OpenAI 互換のクライアント全般。" />
+	<LinkCard title="うまくいかないとき" href="/ja/troubleshooting/" description="症状から探して直す。" />
+</CardGrid>

@@ -1,0 +1,79 @@
+---
+title: Install on macOS
+description: Install Waired on macOS 13 or later, on Apple Silicon or Intel, with one Terminal command.
+meta:
+  audience: macOS 13 or later
+  needs: Terminal, and your Mac password
+  time: 5 minutes
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Works on macOS 13 (Ventura) and later. **Apple Silicon is strongly
+recommended** if this Mac will run the AI — its unified memory is what lets a
+laptop hold a useful model.
+
+<Aside type="note" title="No app to drag yet">
+	There is no `.dmg` or Homebrew formula yet, and the binaries are not
+	code-signed. Both are planned. For now, installing means pasting one line
+	into Terminal.
+</Aside>
+
+## Install
+
+<Steps>
+
+1. Open **Terminal**: press ⌘ + Space, type `Terminal`, press Enter.
+
+2. Paste this line and press Enter:
+
+	```sh
+	curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh
+	```
+
+3. Read the summary it prints, and press Enter at `Proceed? [Y/n]`.
+
+4. Enter your Mac password when asked.
+
+	**Nothing appears on screen as you type it.** That is how Terminal handles
+	passwords — it is not frozen. Type it and press Enter.
+
+	Waired asks for it because the background service is registered for the
+	whole machine, so it starts at boot without anyone logging in.
+
+</Steps>
+
+Now [sign in and set up](/getting-started/first-run/).
+
+<Aside type="tip" title="Not comfortable piping a script into a shell?">
+	Reasonable. Download it first, read it, then run it:
+
+	```sh
+	curl -fsSLO https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh
+	less install.sh    # press q to quit
+	sh install.sh
+	```
+</Aside>
+
+## Skip the AI software
+
+Waired installs [Ollama](https://ollama.com) — the program that runs models —
+during setup, and only on computers that will run models. To make sure it is
+never installed:
+
+```sh
+curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
+```
+
+## What gets installed
+
+| | |
+|---|---|
+| Commands | `/usr/local/bin/waired`, `/usr/local/bin/waired-agent` |
+| Background service | A system `launchd` daemon, starts at boot |
+| Settings and state | `/Library/Application Support/waired` |
+
+<CardGrid>
+	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="The next step." />
+	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="One line, about ten seconds." />
+</CardGrid>

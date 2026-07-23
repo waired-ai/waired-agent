@@ -1,0 +1,93 @@
+---
+title: Install on Windows
+description: Install Waired on Windows 11 or Server 2025 with a single PowerShell command.
+meta:
+  audience: Windows 11 users
+  needs: An Administrator terminal
+  time: 5 minutes
+---
+
+import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Screenshot from '../../../../components/Screenshot.astro';
+
+Works on Windows 11 and Windows Server 2025, 64-bit. Installing is one command.
+
+## Install
+
+<Steps>
+
+1. Open **PowerShell as Administrator**: right-click the Start button and choose
+	**Terminal (Administrator)**. Answer **Yes** to the permission prompt.
+
+	<Aside type="note" title="Why administrator?">
+		Waired registers a background service that starts with the computer,
+		before anyone logs in. That is a machine-wide change, so Windows asks
+		first.
+	</Aside>
+
+2. Paste this line and press Enter:
+
+	```powershell
+	iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+	```
+
+	<Aside type="tip" title="What that line does">
+		`iwr` downloads Waired's install script and `iex` runs it. If you would
+		rather read it first, see [below](#read-the-script-before-running-it).
+	</Aside>
+
+3. It prints a summary of what it is about to do and asks `Proceed? [Y/n]`.
+	Press Enter.
+
+	A fresh interactive install also offers to change where Waired goes — press
+	Enter to accept `C:\Program Files\Waired`.
+
+</Steps>
+
+Now [sign in and set up](/getting-started/first-run/).
+
+## Read the script before running it
+
+Reasonable. Download it, read it, then run it:
+
+```powershell
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
+notepad $env:TEMP\install.ps1
+& $env:TEMP\install.ps1
+```
+
+This is also how you pass options — the piped one-liner cannot take them.
+
+<Aside type="note" title="Unattended installs">
+	`-Yes` skips the confirmation and `-InstallDir <path>` (or the
+	`WAIRED_INSTALL_DIR` environment variable) pins the location. The full list
+	is in [Advanced install options](/reference/install-options/).
+</Aside>
+
+## Skip the AI software
+
+Waired installs [Ollama](https://ollama.com) — the program that runs models —
+during setup, and only on computers that will run models. To make sure it is
+never installed (a headless or low-disk host, or you already run your own):
+
+```powershell
+$env:WAIRED_NO_OLLAMA = '1'
+iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+```
+
+You can add it later from an administrator prompt with
+`waired runtimes install ollama`.
+
+## What gets installed
+
+| | |
+|---|---|
+| Program files | `C:\Program Files\Waired` (changeable) |
+| Background service | `waired-agent`, starts at boot |
+| Settings and state | `%ProgramData%\waired` (secrets are locked down to administrators) |
+| Start Menu | **Waired** (the icon you use day to day) |
+
+<CardGrid>
+	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="The next step." />
+	<LinkCard title="Uninstall" href="/getting-started/uninstall/" description="One line, about ten seconds." />
+</CardGrid>

@@ -1,0 +1,92 @@
+---
+title: アップデート
+description: Waired の更新の確認と適用、更新で保持されるもの、stable / edge チャンネルの切り替え。
+meta:
+  audience: 古いバージョンを使っている人
+  needs: 管理者権限
+  time: 2 分
+sourceHash: 85c2ab94385f47d0
+---
+
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+更新があることは Waired が知らせますが、**適用するかどうかは常にあなたが決めます**。
+勝手に更新されることはありません。
+
+## いま更新する
+
+**Waired アイコン**（macOS はメニューバー、Windows・Linux は時計のとなり）をクリックし、
+**「⚠ Update available」**の項目を選びます。
+
+ターミナルからでも同じです:
+
+```sh
+waired update
+```
+
+確認し、見つかった内容を表示し、適用前に聞いてきます。
+
+| コマンド | 動作 |
+|---|---|
+| `waired update` | 確認して、新しければ適用 |
+| `waired update --check` | 確認のみ（何も変更しない） |
+| `waired update --yes` | 確認なしで適用（スクリプトやサーバー向け） |
+
+## 更新で保持されるもの
+
+大事なものはすべて保持されます。サインインしたまま、このパソコンの識別情報も
+ネットワーク上の位置もそのままで、設定も残ります。**セットアップをやり直す必要はありません。**
+
+AI ソフトとダウンロード済みモデルは別管理で、`waired update` では触りません。
+
+## リリースチャンネル
+
+| チャンネル | 対象 |
+|---|---|
+| **stable**（既定） | 全員。リリース済みバージョンのみ。 |
+| **edge** | 未リリースの変更を試す人向け。マージのたびに再ビルドされ、**本番利用は非推奨**。 |
+
+`waired update` は、そのパソコンが今いるチャンネルを維持します。stable のマシンが
+黙って edge に移ることも、その逆もありません。
+
+切り替えるには:
+
+```sh
+waired update --edge     # edge へ / edge のまま
+waired update --stable   # stable に戻す
+```
+
+apt のソース（Linux）または取得するファイル（macOS / Windows）が入れ替わり、
+どちらの方向にも切り替えられます。
+
+<details>
+<summary>最初から edge を入れる</summary>
+
+<Tabs syncKey="os">
+	<TabItem label="macOS / Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | WAIRED_VERSION=edge sh
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_VERSION = 'edge'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+	</TabItem>
+</Tabs>
+
+一度 edge にすると、`waired update` はそのまま edge を追い続けます。
+
+</details>
+
+<Aside type="note" title="更新の通知">
+	常駐サービスが数時間おきに確認し、更新があると知らせます。通知を止めたい場合は
+	Waired アイコンの **Settings** サブメニューから設定できます。
+</Aside>
+
+<CardGrid>
+	<LinkCard title="動作確認" href="/ja/getting-started/verify/" description="更新が反映され、正常に動いているかを確認します。" />
+	<LinkCard title="高度なインストールオプション" href="/ja/reference/install-options/" description="チャンネルではなく特定バージョンに固定する方法。" />
+</CardGrid>

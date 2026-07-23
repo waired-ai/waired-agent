@@ -1,0 +1,95 @@
+---
+title: Update Waired
+description: Check for and apply Waired updates, what an update preserves, and how to switch between the stable and edge release channels.
+meta:
+  audience: Anyone running an older version
+  needs: Administrator rights
+  time: 2 minutes
+---
+
+import { Tabs, TabItem, Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Waired tells you when an update is available; applying it is always something
+you trigger. Nothing updates itself behind your back.
+
+## Update now
+
+Click the **Waired icon** — in the menu bar on macOS, next to the clock on
+Windows and Linux — and choose the
+**“⚠ Update available”** entry when it appears.
+
+Or from a terminal:
+
+```sh
+waired update
+```
+
+That checks, shows what it found, and asks before applying.
+
+| Command | What it does |
+|---|---|
+| `waired update` | Check, then apply if a newer version exists |
+| `waired update --check` | Report only — changes nothing |
+| `waired update --yes` | Apply without asking (for scripts and servers) |
+
+## What an update keeps
+
+Everything that matters: you stay signed in, this computer keeps its identity
+and its place in your network, and your settings are preserved. You do **not**
+have to set up again.
+
+The AI software and your downloaded models are managed separately and are not
+touched by `waired update`.
+
+## Release channels
+
+| Channel | Who it is for |
+|---|---|
+| **stable** (default) | Everyone. Released versions only. |
+| **edge** | Trying unreleased changes. Rebuilt on every merge, **not for production.** |
+
+`waired update` keeps this computer on whichever channel it is already on — a
+stable install never gets silently moved onto edge, or the other way round.
+
+To switch:
+
+```sh
+waired update --edge     # move to / stay on edge
+waired update --stable   # move back to stable
+```
+
+Switching swaps the apt source (Linux) or the download it pulls (macOS,
+Windows), and is allowed in both directions.
+
+<details>
+<summary>Installing straight onto edge</summary>
+
+<Tabs syncKey="os">
+	<TabItem label="macOS / Linux">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | WAIRED_VERSION=edge sh
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_VERSION = 'edge'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+	</TabItem>
+</Tabs>
+
+Once on edge, `waired update` keeps you there.
+
+</details>
+
+<Aside type="note" title="Update notifications">
+	The background service checks every few hours and tells you when something is
+	available. To silence the notification, use the **Settings** submenu of the
+	Waired icon.
+</Aside>
+
+<CardGrid>
+	<LinkCard title="Check it works" href="/getting-started/verify/" description="Confirm the update landed and everything is running." />
+	<LinkCard title="Advanced install options" href="/reference/install-options/" description="Pin an exact version instead of following a channel." />
+</CardGrid>
