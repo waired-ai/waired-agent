@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -233,5 +234,51 @@ func TestHealthz_EngineReadyFnNilIsOptional(t *testing.T) {
 	}
 	if got.ShareEnabled != true {
 		t.Errorf("ShareEnabled defaults to true when IsShareDenied is nil; got %v", got.ShareEnabled)
+	}
+}
+
+// TestHealthz_PublicConsumerSeesPublicCapacityOnly: /healthz sits
+// behind peerAuthOnly, so a cross-account public consumer can read it.
+// It must see the public admission ceiling and the public in-flight
+// count — never the machine's real total capacity or the owner's own
+// load, neither of which is in the §11 disclosure set. The signed
+// Network Map already replaces a provider's advertised Capacity with
+// its public cap (§7.1); healthz has to agree with it.
+func TestHealthz_PublicConsumerSeesPublicCapacityOnly(t *testing.T) {
+	gw := newFakeGateway()
+	srv, ownerPriv, guestPriv, at := newPublicOverlayServer(t, gw, func(c *Config) {
+		c.Capacity = 8
+		c.PublicCapacity = 2
+		c.IsPublicShareDenied = func() bool { return false }
+	})
+
+	healthz := func(ip, deviceID string, priv ed25519.PrivateKey) HealthSnapshot {
+		t.Helper()
+		req := newSignedGetRequest(t, "/waired/v1/inference/healthz", deviceID, priv, at)
+		req.RemoteAddr = ip + ":54321"
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("healthz for %s: status=%d body=%s", deviceID, rec.Code, rec.Body.String())
+		}
+		var snap HealthSnapshot
+		if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+			t.Fatalf("decode: %v body=%s", err, rec.Body.String())
+		}
+		return snap
+	}
+
+	guest := healthz(publicOverlayIP, "dev-guest-1", guestPriv)
+	if guest.CapacityTotal != 2 {
+		t.Errorf("public consumer CapacityTotal = %d, want the public cap 2", guest.CapacityTotal)
+	}
+	if guest.CapacityUsed != 0 {
+		t.Errorf("public consumer CapacityUsed = %d, want 0", guest.CapacityUsed)
+	}
+
+	// A same-network mesh peer still sees the real totals.
+	owner := healthz(peerOverlayIP, "dev-owner", ownerPriv)
+	if owner.CapacityTotal != 8 {
+		t.Errorf("mesh peer CapacityTotal = %d, want the real total 8", owner.CapacityTotal)
 	}
 }
