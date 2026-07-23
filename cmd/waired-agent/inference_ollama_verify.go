@@ -44,6 +44,11 @@ const (
 	// #624 intentional-spill tuning planned for — a working
 	// configuration, reported informationally, never degraded.
 	tuningOKPlannedSpill
+	// tuningGpuNotEngaged: the model reports size_vram == 0 on a
+	// discrete GPU: no VRAM is being used for the KV cache (full
+	// CPU fallback). This is not a spill; the tuning is ineffective
+	// because the GPU is not engaged.
+	tuningGpuNotEngaged
 )
 
 // f16DetectMinMarginBytes is the minimum gap between the expected q8_0
@@ -139,6 +144,10 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	// prediction counts as wrong and the no-spill fallback kicks in.
 	plannedSpillDetail := ""
 	if !hw.UnifiedMemory && len(hw.GPUs) > 0 && psm.Size > 0 {
+			if psm.SizeVRAM == 0 {
+				return tuningGpuNotEngaged, fmt.Sprintf(
+					"%s not using GPU (size_vram==0)", psm.Name)
+			}
 		allowed := 0.01
 		if t.ExpectedSpillFraction > 0 {
 			allowed = 2 * t.ExpectedSpillFraction
@@ -349,6 +358,10 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		// appended to (never replaces) the intentional-spill warning.
 		logger.Info("ollama tuning verified (planned spill within bound)", "detail", detail)
 		record(t, true, joinTuningWarn(t.Warning, detail))
+		return
+	case verdict == tuningGpuNotEngaged:
+		logger.Info("ollama tuning verification GPU not engaged", "detail", detail)
+		record(t, false, t.Warning)
 		return
 	case next.ContextLength == t.ContextLength && next.KVCacheType == t.KVCacheType:
 		// The recompute changed nothing (already at the floor): a
