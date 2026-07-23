@@ -171,9 +171,16 @@ message**, not in repo files.
 ## Documentation
 
 * `docs-site/` is the public user help site (docs.waired.ai) — keep it
-  current when changing anything a user sees (CLI flags, install flow,
-  model catalog, troubleshooting). English canonical, `ja/` mirror.
+  current when changing anything a user sees on ANY surface: the CLI
+  (commands, flags, prompts, printed wording), the install / first-run
+  flow, **the Waired app** (`internal/gui/` — menus, icon states,
+  dialogs, status text), the model catalog, troubleshooting. GUI-only is
+  not an exemption: on a desktop the app is what the user calls Waired.
+  English canonical, `ja/` mirror (`npm run i18n:check` gates it).
   Internal architecture depth stays in the monorepo's dev-docs-site.
+* `docs-guard.yml` enforces the above: touching those surfaces without
+  `docs-site/` fails unless the PR body carries a
+  `docs-not-needed: <reason>` line.
 
 ## Knowledge Notes
 

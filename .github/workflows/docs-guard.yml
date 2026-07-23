@@ -1,0 +1,42 @@
+# Fails a PR that changes a user-visible surface (the Waired app, the
+# CLI, the install scripts) without touching docs-site/. Rationale and
+# the one-line opt-out: scripts/ci/docs-surface-guard.sh.
+#
+# No `paths:` filter on purpose — a paths-gated job produces no check
+# run when the filter misses, so it could never be a required check.
+# The script exits 0 in a second when no surface is touched.
+#
+# GitHub-hosted runner, like dco/gitleaks/proto-guard: a read-only
+# static check with no secrets, safe to run on fork PRs ahead of
+# maintainer approval of the heavier self-hosted CI.
+name: docs-guard
+
+on:
+  pull_request:
+    # `edited` matters: the opt-out lives in the PR body, so editing the
+    # body has to re-run this check without needing a push.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  surface:
+    name: user-visible surface documented
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: docs-site covers the changed surface
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash scripts/ci/docs-surface-guard.sh
