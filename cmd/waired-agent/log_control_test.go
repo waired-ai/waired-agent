@@ -11,54 +11,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
-func envFrom(m map[string]string) func(string) string {
-	return func(k string) string { return m[k] }
-}
-
-func TestResolveLogLevel_Precedence(t *testing.T) {
-	cases := []struct {
-		name     string
-		cfgLevel string
-		flagVal  string
-		env      map[string]string
-		want     slog.Level
-	}{
-		{"default info", "", "", nil, slog.LevelInfo},
-		{"config debug", "debug", "", nil, slog.LevelDebug},
-		{"flag beats config", "warn", "debug", nil, slog.LevelDebug},
-		{"flag beats env", "", "error", map[string]string{"WAIRED_LOG_LEVEL": "warn"}, slog.LevelError},
-		{"env beats config", "warn", "", map[string]string{"WAIRED_LOG_LEVEL": "error"}, slog.LevelError},
-		{"env beats WAIRED_DEBUG", "", "", map[string]string{"WAIRED_LOG_LEVEL": "warn", "WAIRED_DEBUG": "1"}, slog.LevelWarn},
-		{"WAIRED_DEBUG legacy", "", "", map[string]string{"WAIRED_DEBUG": "1"}, slog.LevelDebug},
-		{"WAIRED_DEBUG beats config", "info", "", map[string]string{"WAIRED_DEBUG": "yes"}, slog.LevelDebug},
-		{"invalid flag falls through to config", "warn", "bogus", nil, slog.LevelWarn},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveLogLevel(tc.cfgLevel, tc.flagVal, envFrom(tc.env))
-			if got != tc.want {
-				t.Errorf("resolveLogLevel(%q, %q, %v) = %v, want %v",
-					tc.cfgLevel, tc.flagVal, tc.env, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestLevelName_RoundTrip(t *testing.T) {
-	for _, name := range []string{
-		agentconfig.LogLevelDebug, agentconfig.LogLevelInfo,
-		agentconfig.LogLevelWarn, agentconfig.LogLevelError,
-	} {
-		lvl, err := agentconfig.ParseLogLevel(name)
-		if err != nil {
-			t.Fatalf("ParseLogLevel(%q): %v", name, err)
-		}
-		if got := levelName(lvl); got != name {
-			t.Errorf("levelName(%v) = %q, want %q", lvl, got, name)
-		}
-	}
-}
-
 func TestLogController_SetLogLevel_LiveAndPersisted(t *testing.T) {
 	dir := t.TempDir()
 	jsonPath := filepath.Join(dir, "agent.json")

@@ -226,7 +226,7 @@ func run(ctx context.Context, args []string) error {
 	// flag > $WAIRED_LOG_LEVEL > $WAIRED_DEBUG (legacy) > agent.json
 	// logging.level > info. See resolveLogLevel.
 	logLevelVar := new(slog.LevelVar)
-	logLevelVar.Set(resolveLogLevel(cfgRoot.Logging.Level, *logLevel, os.Getenv))
+	logLevelVar.Set(agentconfig.ResolveLogLevel(cfgRoot.Logging.Level, *logLevel, os.Getenv))
 	primary := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevelVar})
 	// Wrap with the OS-native secondary sink so Warn/Error records
 	// survive stderr being closed (e.g. Windows SCM dispatcher).

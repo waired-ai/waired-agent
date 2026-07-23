@@ -10,52 +10,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
-// resolveLogLevel picks the daemon's boot log level. Precedence, highest
-// first:
-//
-//  1. --log-level flag (flagVal), when non-empty
-//  2. $WAIRED_LOG_LEVEL
-//  3. $WAIRED_DEBUG (legacy switch: any non-empty value → debug)
-//  4. cfgLevel — agent.json logging.level (already overlaid by
-//     WAIRED_LOG_LEVEL during MergeEnv; re-checked at step 2 so it also
-//     outranks the WAIRED_DEBUG back-compat switch)
-//  5. info
-//
-// getenv is injected (os.Getenv in production) so the precedence is unit
-// testable.
-func resolveLogLevel(cfgLevel, flagVal string, getenv func(string) string) slog.Level {
-	if flagVal != "" {
-		if lvl, err := agentconfig.ParseLogLevel(flagVal); err == nil {
-			return lvl
-		}
-	}
-	if v := getenv("WAIRED_LOG_LEVEL"); v != "" {
-		if lvl, err := agentconfig.ParseLogLevel(v); err == nil {
-			return lvl
-		}
-	}
-	if getenv("WAIRED_DEBUG") != "" {
-		return slog.LevelDebug
-	}
-	lvl, _ := agentconfig.ParseLogLevel(cfgLevel)
-	return lvl
-}
-
-// levelName maps a slog.Level back to its config/API name. Range-based so
-// an out-of-band value still resolves to the nearest bucket.
-func levelName(l slog.Level) string {
-	switch {
-	case l <= slog.LevelDebug:
-		return agentconfig.LogLevelDebug
-	case l < slog.LevelWarn:
-		return agentconfig.LogLevelInfo
-	case l < slog.LevelError:
-		return agentconfig.LogLevelWarn
-	default:
-		return agentconfig.LogLevelError
-	}
-}
-
 // logController implements management.LogController. It flips the process's
 // live slog level (a *slog.LevelVar shared with the JSON handler) and
 // persists the choice to agent.json so a restart keeps it.
@@ -71,7 +25,7 @@ func newLogController(levelVar *slog.LevelVar, jsonPath string) *logController {
 }
 
 func (c *logController) LogLevel(context.Context) (string, error) {
-	return levelName(c.levelVar.Level()), nil
+	return agentconfig.LogLevelName(c.levelVar.Level()), nil
 }
 
 func (c *logController) SetLogLevel(_ context.Context, level string) (string, error) {

@@ -451,6 +451,52 @@ func NormalizeLogLevel(s string) (string, error) {
 	return n, nil
 }
 
+// LogLevelName maps a slog.Level back to its config/API name. Range-based
+// so an out-of-band level still resolves to the nearest bucket.
+func LogLevelName(l slog.Level) string {
+	switch {
+	case l <= slog.LevelDebug:
+		return LogLevelDebug
+	case l < slog.LevelWarn:
+		return LogLevelInfo
+	case l < slog.LevelError:
+		return LogLevelWarn
+	default:
+		return LogLevelError
+	}
+}
+
+// ResolveLogLevel picks the effective boot log level for a binary from,
+// in precedence order (highest first):
+//
+//  1. flagVal — an explicit --log-level flag, when non-empty
+//  2. $WAIRED_LOG_LEVEL
+//  3. $WAIRED_DEBUG — legacy switch: any non-empty value → debug
+//  4. cfgLevel — a persisted logging.level (agent.json); pass "" for a
+//     binary that has no config layer (e.g. the tray)
+//  5. info
+//
+// getenv is injected (os.Getenv in production) so precedence is unit
+// testable. Unrecognized flag/env values are ignored (fall through to the
+// next source) rather than failing the process at boot.
+func ResolveLogLevel(cfgLevel, flagVal string, getenv func(string) string) slog.Level {
+	if flagVal != "" {
+		if lvl, err := ParseLogLevel(flagVal); err == nil {
+			return lvl
+		}
+	}
+	if v := getenv("WAIRED_LOG_LEVEL"); v != "" {
+		if lvl, err := ParseLogLevel(v); err == nil {
+			return lvl
+		}
+	}
+	if getenv("WAIRED_DEBUG") != "" {
+		return slog.LevelDebug
+	}
+	lvl, _ := ParseLogLevel(cfgLevel)
+	return lvl
+}
+
 // Defaults returns the Config that ships when no file / env / flag is
 // supplied. Update spec §19-6 (and bump Phase A docs) whenever these
 // change.

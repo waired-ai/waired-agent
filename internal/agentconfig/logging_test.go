@@ -105,3 +105,49 @@ func TestMergeEnv_LogLevel_OverridesJSONLayer(t *testing.T) {
 		t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, LogLevelError)
 	}
 }
+
+func envFrom(m map[string]string) func(string) string {
+	return func(k string) string { return m[k] }
+}
+
+func TestResolveLogLevel_Precedence(t *testing.T) {
+	cases := []struct {
+		name     string
+		cfgLevel string
+		flagVal  string
+		env      map[string]string
+		want     slog.Level
+	}{
+		{"default info", "", "", nil, slog.LevelInfo},
+		{"config debug", "debug", "", nil, slog.LevelDebug},
+		{"flag beats config", "warn", "debug", nil, slog.LevelDebug},
+		{"flag beats env", "", "error", map[string]string{"WAIRED_LOG_LEVEL": "warn"}, slog.LevelError},
+		{"env beats config", "warn", "", map[string]string{"WAIRED_LOG_LEVEL": "error"}, slog.LevelError},
+		{"env beats WAIRED_DEBUG", "", "", map[string]string{"WAIRED_LOG_LEVEL": "warn", "WAIRED_DEBUG": "1"}, slog.LevelWarn},
+		{"WAIRED_DEBUG legacy", "", "", map[string]string{"WAIRED_DEBUG": "1"}, slog.LevelDebug},
+		{"WAIRED_DEBUG beats config", "info", "", map[string]string{"WAIRED_DEBUG": "yes"}, slog.LevelDebug},
+		{"invalid flag falls through to config", "warn", "bogus", nil, slog.LevelWarn},
+		{"empty tray cfg, env only", "", "", map[string]string{"WAIRED_LOG_LEVEL": "debug"}, slog.LevelDebug},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveLogLevel(tc.cfgLevel, tc.flagVal, envFrom(tc.env))
+			if got != tc.want {
+				t.Errorf("ResolveLogLevel(%q, %q, %v) = %v, want %v",
+					tc.cfgLevel, tc.flagVal, tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLogLevelName_RoundTrip(t *testing.T) {
+	for _, name := range []string{LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError} {
+		lvl, err := ParseLogLevel(name)
+		if err != nil {
+			t.Fatalf("ParseLogLevel(%q): %v", name, err)
+		}
+		if got := LogLevelName(lvl); got != name {
+			t.Errorf("LogLevelName(%v) = %q, want %q", lvl, got, name)
+		}
+	}
+}
