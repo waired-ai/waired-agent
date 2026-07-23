@@ -135,3 +135,26 @@ func sliceContainsAny(s []string, prefix string) bool {
 	}
 	return false
 }
+
+// TestConfirmLabelCandidates_DefaultsToCancel: the consent dialog is the
+// only gate between "nothing shared" and "strangers may use this
+// machine", so a stray Enter on a dialog that just stole focus must not
+// accept it (waired#901 L5). zenity has --default-cancel; kdialog's
+// --yesno has no default-button switch, so the parity here is
+// best-effort per backend.
+func TestConfirmLabelCandidates_DefaultsToCancel(t *testing.T) {
+	got := confirmLabelCandidates("Use public nodes?", "Body", "Accept", "Not now")
+	if !sliceContainsExact(got[0].args, "--default-cancel") {
+		t.Errorf("zenity consent dialog must default to cancel: %v", got[0].args)
+	}
+}
+
+// TestConfirmCandidates_KeepsBackendDefault: the plain yes/no helper is
+// used for ordinary confirmations, where zenity's own default is fine —
+// only the consent path opts into --default-cancel.
+func TestConfirmCandidates_KeepsBackendDefault(t *testing.T) {
+	got := confirmCandidates("Title", "Body")
+	if sliceContainsExact(got[0].args, "--default-cancel") {
+		t.Errorf("plain ConfirmYesNo must not change zenity's default: %v", got[0].args)
+	}
+}

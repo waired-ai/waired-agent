@@ -1,0 +1,92 @@
+# Native macOS build + vet + unit tests for the tray subtree (waired#901 I1).
+#
+# fyne.io/systray's darwin backend is NSStatusItem via Cocoa, so it needs
+# CGO_ENABLED=1 and the macOS SDK. `make verify-cross` runs its darwin vet with
+# CGO off from a Linux runner and therefore SKIPS cmd/waired-tray and
+# internal/gui/tray (see DARWIN_VET_PKGS in the Makefile). Until this workflow
+# existed, the only build of that subtree was post-merge (edge.yml) or at a
+# release tag: a darwin-only break in the tray sailed through every PR gate and
+# turned main red after the fact.
+#
+# That subtree is not incidental — the Public Share consent dialog (the single
+# gate between "nothing shared" and "strangers may use this machine") lives in
+# dialog_darwin.go / actions_darwin.go, with no other CI touching it.
+#
+# GH-hosted runners are free on this public repo, but macOS minutes are the
+# expensive kind on private forks, so this stays PATHS-GATED to the tray
+# surface. Being paths-filtered means it produces no check run when the tray is
+# untouched and so CANNOT be a required status check;
+# scripts/ci/tray-darwin-paths-guard.sh (run in ci.yml's always-on lint job)
+# keeps the filter from rotting — the same belt-and-braces pattern as
+# codeui-multios-paths-guard.sh.
+name: tray-darwin
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - internal/gui/tray/**
+      - cmd/waired-tray/**
+      - Makefile
+      - go.mod
+      - go.sum
+      - .github/workflows/tray-darwin.yml
+  push:
+    branches: [main]
+    paths:
+      - internal/gui/tray/**
+      - cmd/waired-tray/**
+      - Makefile
+      - go.mod
+      - go.sum
+      - .github/workflows/tray-darwin.yml
+
+concurrency:
+  group: tray-darwin-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tray-darwin:
+    name: tray (darwin, CGO)
+    # Same-repo only: fork PRs get a skipped check (not failed); a maintainer
+    # arms a reviewed fork PR by pushing its branch to this repo. Mirrors
+    # installtest.yml / codeui-multios.yml (public-repo caution, CLAUDE.md).
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # vet is the gate this issue (waired#901 I1) asks for: it type-checks
+      # every darwin file INCLUDING _test.go files (so a build/type break in
+      # the darwin-tagged consent-dialog test is caught here), and names the
+      # error at its source line rather than through the systray cgo layer.
+      #
+      # Running the tray UNIT suite on darwin is deliberately NOT done yet:
+      # the darwin dialog helpers (ShowError / ShowConfirm) block on a real
+      # modal osascript dialog, so tests that reach an error path hang on a
+      # headless runner. The Linux/Windows equivalents no-op without a dialog
+      # backend, which is why the same tests pass there. Making the suite
+      # darwin-safe needs test seams over those helpers and is tracked
+      # separately (waired-agent#152); until then vet + the build below are
+      # the darwin gate.
+      - name: go vet (tray subtree, CGO)
+        env:
+          CGO_ENABLED: "1"
+        run: go vet ./cmd/waired-tray/... ./internal/gui/tray/...
+
+      # The real artifact gate: both darwin arches, as edge.yml / release.yml
+      # build them.
+      - name: make build-tray-darwin
+        run: make build-tray-darwin

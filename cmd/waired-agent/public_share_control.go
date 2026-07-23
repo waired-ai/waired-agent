@@ -146,6 +146,13 @@ func (pc *publicShareController) SetMeshAutoEnable(fn func(ctx context.Context) 
 // transition (management.PublicShareController).
 func (pc *publicShareController) Synced() bool { return !pc.pushPending.Load() }
 
+// MaxClients reports the guest cap this agent last asked the control
+// plane for; 0 means "never set on this device — the control plane's
+// default applies" (management.PublicShareController). The status route
+// serves it so `waired public status` and the web console can show the
+// operator the limit they configured (waired#901 L6).
+func (pc *publicShareController) MaxClients() int { return int(pc.lastMaxClients.Load()) }
+
 // Enable turns public sharing on: mesh-share prerequisite first, then
 // the local transition, then the CP push (management route surface).
 // maxClients 0 keeps the CP's default cap.

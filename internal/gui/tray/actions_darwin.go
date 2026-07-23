@@ -232,6 +232,33 @@ func runOsascriptDialog(title, body, icon string, buttons []string, defaultButto
 // pathological body (e.g. embedded "Library/" with escaped quotes)
 // renders correctly.
 func runOsascriptDialogReturning(title, body, icon string, buttons []string, defaultButton string) (string, bool) {
+	cmd := exec.Command("/usr/bin/osascript", "-e",
+		osascriptDialogScript(title, body, icon, buttons, defaultButton))
+	out, err := cmd.Output()
+	if err != nil {
+		// osascript exits non-zero when the user pressed the script's
+		// "Cancel" button via Esc / Cmd-. ; treat that as
+		// "no selection." Other errors (osascript missing) we also
+		// return false from.
+		return "", false
+	}
+	// osascript prints: `button returned:OK, gave up:false` (with a
+	// trailing newline). We only care about the button name.
+	s := strings.TrimSpace(string(out))
+	if i := strings.Index(s, "button returned:"); i >= 0 {
+		rest := s[i+len("button returned:"):]
+		if j := strings.Index(rest, ","); j >= 0 {
+			rest = rest[:j]
+		}
+		return strings.TrimSpace(rest), true
+	}
+	return "", true
+}
+
+// osascriptDialogScript renders the `display dialog` AppleScript. Split
+// out from the exec so the button layout — in particular which button
+// the Return key activates — is assertable without a real dialog.
+func osascriptDialogScript(title, body, icon string, buttons []string, defaultButton string) string {
 	var script bytes.Buffer
 	script.WriteString(`display dialog `)
 	script.WriteString(quoteAppleScript(body))
@@ -255,27 +282,7 @@ func runOsascriptDialogReturning(title, body, icon string, buttons []string, def
 		script.WriteString(` default button `)
 		script.WriteString(quoteAppleScript(defaultButton))
 	}
-
-	cmd := exec.Command("/usr/bin/osascript", "-e", script.String())
-	out, err := cmd.Output()
-	if err != nil {
-		// osascript exits non-zero when the user pressed the script's
-		// "Cancel" button via Esc / Cmd-. ; treat that as
-		// "no selection." Other errors (osascript missing) we also
-		// return false from.
-		return "", false
-	}
-	// osascript prints: `button returned:OK, gave up:false` (with a
-	// trailing newline). We only care about the button name.
-	s := strings.TrimSpace(string(out))
-	if i := strings.Index(s, "button returned:"); i >= 0 {
-		rest := s[i+len("button returned:"):]
-		if j := strings.Index(rest, ","); j >= 0 {
-			rest = rest[:j]
-		}
-		return strings.TrimSpace(rest), true
-	}
-	return "", true
+	return script.String()
 }
 
 // quoteAppleScript returns the literal AppleScript form of s — that

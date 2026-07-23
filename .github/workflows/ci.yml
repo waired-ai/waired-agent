@@ -112,6 +112,9 @@ jobs:
       - name: routing-sentinel paths guard
         run: bash scripts/ci/routing-sentinel-paths-guard.sh
 
+      - name: tray-darwin paths guard
+        run: bash scripts/ci/tray-darwin-paths-guard.sh
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2

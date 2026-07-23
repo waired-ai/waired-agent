@@ -64,6 +64,9 @@ type PublicShareController interface {
 	Disable(ctx context.Context) (PublicShareResult, error)
 	State() (current, desired state.PublicShareState)
 	Synced() bool
+	// MaxClients is the guest cap the agent currently holds for this
+	// device; 0 means unset (the control plane's default applies).
+	MaxClients() int
 }
 
 // WithPublicShareControl attaches a PublicShareController so the server
@@ -111,6 +114,11 @@ func (s *Server) handlePublicShareStatus(w http.ResponseWriter, r *http.Request)
 		State:        string(cur),
 		DesiredState: string(desired),
 		CPSynced:     &synced,
+		// The agent has held this value since the last enable; without
+		// it the status surfaces could only say "not reported by this
+		// daemon", which reads as a broken daemon rather than as an
+		// unset option (waired#901 L6).
+		MaxClients: s.publicShare.MaxClients(),
 	}
 	if !synced {
 		resp.Note = PublicSharePendingNote
