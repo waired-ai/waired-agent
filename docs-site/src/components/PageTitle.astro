@@ -1,0 +1,182 @@
+---
+/**
+ * PageTitle override — Starlight's h1, plus two conventions the stock
+ * component has no slot for:
+ *
+ *  1. The per-page header block ("who this is for / what you need / how
+ *     long"), driven by the `meta` frontmatter field. Every comparable docs
+ *     site puts this above the fold; ours used to have it on Quickstart
+ *     only, written by hand.
+ *
+ *  2. A translation-freshness notice on `ja/` pages. `scripts/i18n-sync.mjs`
+ *     is the enforcing gate — CI fails on a stale page. This is the second
+ *     line of defence: if a stale page ever does reach the site, the reader
+ *     is told rather than quietly misled.
+ */
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+// Starlight does not export its `constants` module through package
+// exports, so the id is mirrored here. It is the anchor the "Back to top"
+// link and the table of contents both target — changing it silently breaks
+// both, which is why it is pinned with a name rather than inlined below.
+const PAGE_TITLE_ID = '_top';
+
+const route = Astro.locals.starlightRoute;
+const entry = route.entry;
+const data = entry.data as {
+	title: string;
+	sourceHash?: string;
+	meta?: { audience?: string; needs?: string; time?: string };
+};
+
+const DOCS_DIR = path.join(process.cwd(), 'src', 'content', 'docs');
+
+// digest must match scripts/i18n-sync.mjs exactly — same normalisation,
+// same algorithm, same truncation. They are two readers of one contract.
+function digest(abs: string): string | null {
+	try {
+		const text = fs.readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
+		return createHash('sha256').update(text).digest('hex').slice(0, 16);
+	} catch {
+		return null;
+	}
+}
+
+// englishSource resolves the English counterpart of a `ja/` page. The
+// content layer gives us filePath; when it does not, the entry id (a
+// slug like "ja/guides/claude-code") reconstructs it, trying both
+// extensions.
+function englishSource(): string | null {
+	const filePath = (entry as { filePath?: string }).filePath;
+	let rel: string | null = null;
+	if (filePath) {
+		const idx = filePath.indexOf('src/content/docs/');
+		if (idx >= 0) rel = filePath.slice(idx + 'src/content/docs/'.length);
+	}
+	if (!rel) {
+		const id = entry.id;
+		if (!id.startsWith('ja/')) return null;
+		for (const ext of ['.mdx', '.md']) {
+			const guess = path.join(DOCS_DIR, `${id.slice(3)}${ext}`);
+			if (fs.existsSync(guess)) return guess;
+		}
+		return null;
+	}
+	if (!rel.startsWith('ja/')) return null;
+	const abs = path.join(DOCS_DIR, rel.slice(3));
+	if (fs.existsSync(abs)) return abs;
+	for (const ext of ['.mdx', '.md']) {
+		const guess = abs.replace(/\.(md|mdx)$/, ext);
+		if (fs.existsSync(guess)) return guess;
+	}
+	return null;
+}
+
+const enSource = englishSource();
+const stale = enSource !== null && data.sourceHash !== digest(enSource);
+// The English page this one mirrors, for the "read the English version"
+// escape hatch in the notice.
+const enHref = route.id.replace(/^ja\//, '/').replace(/^(?!\/)/, '/');
+
+const meta = data.meta;
+const metaRows = meta
+	? ([
+			['Who', meta.audience],
+			['You need', meta.needs],
+			['Time', meta.time],
+		].filter(([, v]) => !!v) as [string, string][])
+	: [];
+const isJa = route.locale === 'ja';
+const label = isJa
+	? { Who: '対象', 'You need': '必要なもの', Time: '所要時間' }
+	: { Who: 'Who this is for', 'You need': 'You need', Time: 'Time' };
+---
+
+<h1 id={PAGE_TITLE_ID}>{data.title}</h1>
+
+{
+	stale && (
+		<aside class="wd-stale" aria-label="翻訳の鮮度">
+			<p>
+				<strong>この日本語ページは英語版より古い可能性があります。</strong>
+				英語版が更新され、まだ翻訳が追いついていません。正確な内容は
+				<a href={enHref}>英語版のページ</a>をご覧ください。
+			</p>
+		</aside>
+	)
+}
+
+{
+	metaRows.length > 0 && (
+		<dl class="wd-pagemeta">
+			{metaRows.map(([k, v]) => (
+				<div class="wd-pagemeta-row">
+					<dt>{label[k as keyof typeof label]}</dt>
+					<dd>{v}</dd>
+				</div>
+			))}
+		</dl>
+	)
+}
+
+<style>
+	@layer starlight.core {
+		h1 {
+			margin-top: 1rem;
+			font-size: var(--sl-text-h1);
+			line-height: var(--sl-line-height-headings);
+			font-weight: 600;
+			color: var(--sl-color-white);
+		}
+	}
+
+	.wd-stale {
+		margin-top: 1rem;
+		border: 1px solid var(--sl-color-orange);
+		border-inline-start-width: 4px;
+		border-radius: 0.25rem;
+		background: var(--sl-color-orange-low);
+		padding: 0.75rem 1rem;
+	}
+	.wd-stale p {
+		margin: 0;
+		font-size: var(--sl-text-sm);
+		line-height: 1.6;
+	}
+
+	/* The header block is deliberately quiet: it is scaffolding the reader
+	   checks once, not content. Label column stays narrow so the values
+	   line up into a scannable column. */
+	.wd-pagemeta {
+		margin: 1.25rem 0 0;
+		display: grid;
+		gap: 0.35rem;
+		border-inline-start: 2px solid var(--sl-color-hairline);
+		padding-inline-start: 1rem;
+	}
+	.wd-pagemeta-row {
+		display: grid;
+		grid-template-columns: minmax(6.5rem, max-content) 1fr;
+		gap: 0.25rem 1rem;
+	}
+	.wd-pagemeta dt {
+		font-size: var(--sl-text-xs);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: var(--sl-color-gray-3);
+		padding-top: 0.15em;
+	}
+	.wd-pagemeta dd {
+		margin: 0;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+		line-height: 1.55;
+	}
+	@media (max-width: 30rem) {
+		.wd-pagemeta-row {
+			grid-template-columns: 1fr;
+			gap: 0;
+		}
+	}
+</style>

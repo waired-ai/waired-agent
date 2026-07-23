@@ -26,6 +26,13 @@ export default defineConfig({
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/waired-ai/waired' },
 			],
+			// PageTitle is overridden to carry two site-wide conventions the
+			// stock component has no slot for: the per-page header block
+			// (`meta` frontmatter) and the Japanese translation-freshness
+			// notice. See src/components/PageTitle.astro.
+			components: {
+				PageTitle: './src/components/PageTitle.astro',
+			},
 			// Explicit `slug` entries (not autogenerate) so order and labels
 			// are intentional and a typo'd slug fails the build. Slugs are
 			// locale-agnostic — Starlight prepends the active locale.

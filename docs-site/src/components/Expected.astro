@@ -1,0 +1,93 @@
+---
+/**
+ * Expected — the "what you should see" convention.
+ *
+ * Every page that tells the reader to run something must also tell them how
+ * to know it worked. Written by hand, that came out differently on every
+ * page (sometimes a bold line, sometimes a sentence, often nothing), which
+ * left the reader to judge raw output on their own. This component makes it
+ * one shape, so a reader learns to look for the same box everywhere.
+ *
+ *   <Expected>              — this is the good outcome
+ *   <Expected tone="bad">   — this looks like a failure, and here is why
+ *
+ * `title` overrides the heading when the default reads wrong ("You should
+ * see" is not right for, say, a status line that only appears sometimes).
+ * The default is locale-aware, so ja/ pages need not restate it.
+ */
+import { Icon } from '@astrojs/starlight/components';
+
+interface Props {
+	tone?: 'good' | 'bad';
+	title?: string;
+}
+
+const { tone = 'good', title } = Astro.props;
+const ja = Astro.currentLocale === 'ja';
+
+const DEFAULT_TITLE = {
+	good: ja ? 'こう表示されれば成功です' : 'You should see',
+	bad: ja ? 'これが出たら失敗です' : "That's not right",
+};
+
+const heading = title ?? DEFAULT_TITLE[tone];
+const icon = tone === 'good' ? 'approve-check' : 'warning';
+---
+
+<div class:list={['wd-expected', `wd-${tone}`]}>
+	<p class="wd-expected-title">
+		<Icon name={icon} size="1.1em" class="wd-expected-icon" />
+		{heading}
+	</p>
+	<div class="wd-expected-body"><slot /></div>
+</div>
+
+<style>
+	.wd-expected {
+		--wd-accent: var(--sl-color-green);
+		--wd-accent-low: var(--sl-color-green-low);
+		margin: 1.25rem 0;
+		border: 1px solid var(--sl-color-gray-5);
+		border-inline-start: 3px solid var(--wd-accent);
+		border-radius: 0.25rem;
+		background: var(--sl-color-black);
+		overflow: hidden;
+	}
+	.wd-expected.wd-bad {
+		--wd-accent: var(--sl-color-orange);
+		--wd-accent-low: var(--sl-color-orange-low);
+	}
+
+	.wd-expected-title {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin: 0;
+		padding: 0.5rem 0.9rem;
+		background: var(--wd-accent-low);
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		line-height: 1.4;
+		color: var(--sl-color-white);
+	}
+	.wd-expected-icon {
+		color: var(--wd-accent);
+		flex-shrink: 0;
+	}
+
+	/* The body holds a code block, a screenshot, or prose. Pull the code
+	   block's own margin so the box does not double up on padding, and let
+	   it keep its own background — the point is the frame, not a restyle. */
+	.wd-expected-body {
+		padding: 0.9rem;
+	}
+	.wd-expected-body > :global(:first-child) {
+		margin-top: 0;
+	}
+	.wd-expected-body > :global(:last-child) {
+		margin-bottom: 0;
+	}
+	.wd-expected-body :global(.expressive-code) {
+		margin: 0;
+	}
+</style>
