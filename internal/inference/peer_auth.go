@@ -33,7 +33,8 @@ type PeerIdentity struct {
 	// under a Public Share grant (nil for same-network peers). The
 	// serving-side gate chain branches on it (spec §8.1): a peer with
 	// Role=="consumer" rides the public gates instead of the mesh
-	// shareGate.
+	// shareGate, and any OTHER grant peer is refused outright by
+	// grantRoleGate.
 	Grant *signer.PeerGrant
 }
 
@@ -54,6 +55,45 @@ func (p PeerIdentity) DisplayName() string {
 // Self, so a peer consuming from us is "consumer").
 func (p PeerIdentity) IsPublicConsumer() bool {
 	return p.Grant != nil && p.Grant.Kind == "public" && p.Grant.Role == "consumer"
+}
+
+// IsForeignGrantPeer reports whether this peer belongs to another
+// account and is present in our NetworkMap only because the control
+// plane injected it under a grant (spec §7.1). Same-network peers
+// carry no grant annotation, so Grant != nil is the account boundary.
+func (p PeerIdentity) IsForeignGrantPeer() bool { return p.Grant != nil }
+
+// grantRoleGate refuses inbound serving requests from foreign grant
+// peers that are NOT public consumers — in practice the provider-role
+// peers whose engines WE borrow (waired#896).
+//
+// Such a peer is reachable on the overlay because consuming from it
+// requires a bidirectional WireGuard peering, but the grant entitles it
+// to nothing on our side: the consumer-side router only ever probes and
+// routes to provider-role peers (internal/router/public_candidates.go),
+// so no legitimate request flows in this direction. Without this gate
+// the peer classified as "not a public consumer" and therefore skipped
+// publicShareGate / publicAdmissionGate entirely, fell through the
+// default-ON mesh shareGate, and was accounted as an OWNER request by
+// capacityGate — full local capacity, no kill switch, and the ability
+// to trip the owner-priority latch against our own guests.
+//
+// Classification is fail-closed: only the documented public/consumer
+// pair rides on. A reserved Kind ("team"), a missing Role, or any
+// future value refuses rather than degrading to mesh trust.
+//
+// Placed between wgPeerOnly (which resolves the peer) and
+// verifyPeerSignature (which consumes a nonce), so a refused peer never
+// spends entries in the bounded nonce cache (spec §8.5).
+func grantRoleGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if peer, ok := PeerFromContext(r.Context()); ok && peer.IsForeignGrantPeer() && !peer.IsPublicConsumer() {
+			writePeerAuthError(w, http.StatusForbidden, "grant_not_consumer",
+				"this peer's grant does not entitle it to consume inference from this device")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // PeerLookup resolves a WG-source overlay IP to the peer that owns

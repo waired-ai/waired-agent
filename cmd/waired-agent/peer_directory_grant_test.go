@@ -52,4 +52,43 @@ func TestPeerDirectory_GrantPseudonym(t *testing.T) {
 	if own.Grant != nil || own.IsPublicConsumer() {
 		t.Fatalf("own peer: Grant=%+v IsPublicConsumer=%v, want nil/false", own.Grant, own.IsPublicConsumer())
 	}
+	if own.IsForeignGrantPeer() {
+		t.Fatal("own peer: IsForeignGrantPeer() = true, want false")
+	}
+	if !foreign.IsForeignGrantPeer() {
+		t.Fatal("foreign peer: IsForeignGrantPeer() = false, want true")
+	}
+}
+
+// TestPeerDirectory_ProviderRoleGrantPeer pins the classification the
+// serving-side grantRoleGate depends on (waired#896): a peer we CONSUME
+// from is indexed with its real machine key (the WG peering is
+// bidirectional and it must be able to answer us), but it resolves as a
+// foreign grant peer that is NOT a public consumer — the identity the
+// gate refuses on the inbound path.
+func TestPeerDirectory_ProviderRoleGrantPeer(t *testing.T) {
+	d := newPeerDirectory()
+	_, b64 := mustKeyB64(t)
+	d.Update(&signer.NetworkMap{
+		Peers: []signer.NetworkMapPeer{
+			{
+				DeviceID: "dev-foreign-provider", OverlayIP: "100.99.0.4", MachinePublicKey: b64,
+				Grant: &signer.PeerGrant{ID: "grant_2", Kind: "public", Role: "provider", Pseudonym: "pub-node-11"},
+			},
+		},
+	})
+
+	p, ok := d.LookupByOverlayIP(netip.MustParseAddr("100.99.0.4"))
+	if !ok {
+		t.Fatal("provider-role grant peer not indexed")
+	}
+	if !p.IsForeignGrantPeer() {
+		t.Fatal("IsForeignGrantPeer() = false, want true")
+	}
+	if p.IsPublicConsumer() {
+		t.Fatal("IsPublicConsumer() = true, want false — this peer serves US, not the other way round")
+	}
+	if got := p.DisplayName(); got != "pub-node-11" {
+		t.Fatalf("DisplayName = %q, want pseudonym", got)
+	}
 }
