@@ -69,11 +69,11 @@ func TestChooseEngine_PreferredVLLM_OptsIn(t *testing.T) {
 	}
 }
 
-// The core opt-in invariant (#557): a fully vLLM-capable host with NO
-// explicit preference must stay on Ollama while the auto-picker gate is
-// off (router.VLLMAutoSelectable=false, the default per #574). This is the
-// regression lock that keeps "explicit opt-in only" true.
-func TestChooseEngine_VLLMCapableButNoPreference_StaysOllama(t *testing.T) {
+// The default since #557 landed (router.VLLMAutoSelectable=true): a fully
+// vLLM-capable host (NVIDIA + CUDA + installed venv) with NO explicit
+// preference auto-picks vLLM. This is the #153 behaviour change — the
+// regression lock that keeps the new default on.
+func TestChooseEngine_NoPreference_AutoPicksVLLM(t *testing.T) {
 	stateDir := t.TempDir()
 	fakeVLLMVenv(t, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
@@ -84,17 +84,16 @@ func TestChooseEngine_VLLMCapableButNoPreference_StaysOllama(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chooseEngine: %v", err)
 	}
-	if d.Engine != catalog.RuntimeOllama {
-		t.Fatalf("got engine=%q, want ollama (vLLM must stay opt-in)", d.Engine)
+	if d.Engine != catalog.RuntimeVLLM {
+		t.Fatalf("got engine=%q, want vllm (auto-select on by default, #153)", d.Engine)
 	}
 }
 
-// With the hardware auto-picker explicitly enabled, the same host
-// auto-selects vLLM — proving the gate, not a hard block, is what keeps
-// vLLM off by default.
-func TestChooseEngine_AutoSelectableEnabled_PicksVLLM(t *testing.T) {
+// The gate is a var, not a hard wire: gated off, the same capable host
+// stays on Ollama. Pins that an operator/build can still opt out.
+func TestChooseEngine_AutoSelectGatedOff_StaysOllama(t *testing.T) {
 	old := router.VLLMAutoSelectable
-	router.VLLMAutoSelectable = true
+	router.VLLMAutoSelectable = false
 	t.Cleanup(func() { router.VLLMAutoSelectable = old })
 
 	stateDir := t.TempDir()
@@ -107,8 +106,26 @@ func TestChooseEngine_AutoSelectableEnabled_PicksVLLM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chooseEngine: %v", err)
 	}
-	if d.Engine != catalog.RuntimeVLLM {
-		t.Fatalf("got engine=%q, want vllm", d.Engine)
+	if d.Engine != catalog.RuntimeOllama {
+		t.Fatalf("got engine=%q, want ollama (auto-select gated off)", d.Engine)
+	}
+}
+
+// Auto-select is advisory, not a force: with the gate on but NO vLLM venv
+// installed, engineViable declines vLLM and the chain falls straight
+// through to Ollama. A capable host is only switched once the venv exists.
+func TestChooseEngine_AutoPickVLLM_NoVenv_StaysOllama(t *testing.T) {
+	stateDir := t.TempDir() // capable hardware below, but no venv laid down
+	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
+	prof := chooseEngineProfiler(t, true, true) // CUDA present, ollama installed
+	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
+
+	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
+	if err != nil {
+		t.Fatalf("chooseEngine: %v", err)
+	}
+	if d.Engine != catalog.RuntimeOllama {
+		t.Fatalf("got engine=%q, want ollama (no vLLM venv, auto-pick declines)", d.Engine)
 	}
 }
 
