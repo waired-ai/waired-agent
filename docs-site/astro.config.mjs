@@ -95,7 +95,8 @@ export default defineConfig({
 					items: [
 						{ label: 'Pattern 1 — action first', slug: 'home-1' },
 						{ label: 'Pattern 1b — action first + value panels', slug: 'home-1b' },
-						{ label: 'Pattern 1c — 1b, tightened to fit the fold', slug: 'home-1c' },
+						{ label: 'Pattern 1c — 1b, tightened hard', slug: 'home-1c' },
+						{ label: 'Pattern 1d — fold lands on "Find what you need"', slug: 'home-1d' },
 						{ label: 'Pattern 2 — sort the reader', slug: 'home-2' },
 						{ label: 'Pattern 3 — show it first', slug: 'home-3' },
 					],
