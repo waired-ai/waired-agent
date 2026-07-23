@@ -191,7 +191,19 @@ func TestVerifyOllamaTuning(t *testing.T) {
 			t.Errorf("= (%v, %q), want OK after forced load", v, detail)
 		}
 	})
-}
+t.Run("gpu-not-engaged", func(t *testing.T) {
+			f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: 0,
+				psCtx: 262144, tagSize: weight}
+			v, detail := run(f, tn, hw)
+			if v != tuningGpuNotEngaged {
+				t.Errorf("= (%v, %q), want tuningGpuNotEngaged", v, detail)
+			}
+			// Also, we expect no context shrink, so the detail should indicate GPU not engaged
+			if !strings.Contains(detail, "not using GPU") {
+				t.Errorf("detail should indicate GPU not engaged: %q", detail)
+			}
+		})
+	}
 
 type fakeModelEnvSwitcher struct {
 	envs     [][]string
