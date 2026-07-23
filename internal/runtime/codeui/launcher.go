@@ -130,8 +130,12 @@ const DefaultCodeUIPort = 9480
 // for `waired codeui open` and the tray.
 func Open(ctx context.Context, opts Options) (*RuntimeInfo, error) {
 	opts.withDefaults()
+	opts.Logger.Debug("codeui open: request",
+		"project", opts.Project, "bind", opts.Bind, "auth", opts.Auth, "port", opts.Port)
 	if info, ok := liveInstance(opts.BaseDir); ok {
 		if instanceMatches(info, opts) {
+			opts.Logger.Debug("codeui open: reusing live instance",
+				"proxy_addr", info.ProxyAddr, "pid", info.PID)
 			return info, nil
 		}
 		opts.Logger.Info("codeui: restarting onto a new project/bind",
@@ -158,6 +162,7 @@ func Stop(opts Options) error {
 		return nil
 	}
 	if info.PID > 0 {
+		opts.Logger.Debug("codeui stop: signalling serve host", "pid", info.PID)
 		signalStop(info.PID)
 	}
 	removeRuntime(opts.BaseDir)
@@ -191,6 +196,7 @@ func Serve(ctx context.Context, opts Options) error {
 	}); err != nil {
 		return fmt.Errorf("codeui: install: %w", err)
 	}
+	log.Debug("codeui serve: opencode binary ready", "path", installer.BinaryPath())
 
 	// Seed the isolated config (opencode reads <XDG_CONFIG_HOME>/opencode/).
 	if _, err := WriteDefaultConfig(installer.OpenCodeConfigDir()); err != nil {
@@ -206,6 +212,7 @@ func Serve(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("codeui: pick backend port: %w", err)
 	}
+	log.Debug("codeui serve: picked backend loopback port", "port", backendPort)
 	backendPassword, err := GenerateToken()
 	if err != nil {
 		return err
@@ -224,6 +231,7 @@ func Serve(ctx context.Context, opts Options) error {
 	if err := svc.EnsureRunning(ctx); err != nil {
 		return err
 	}
+	log.Debug("codeui serve: opencode backend ready", "backend_port", backendPort)
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -249,11 +257,13 @@ func Serve(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	log.Debug("codeui serve: resolved bind host", "bind", opts.Bind, "host", frontHost)
 	ln, err := net.Listen("tcp", net.JoinHostPort(frontHost, strconv.Itoa(opts.Port)))
 	if err != nil {
 		return fmt.Errorf("codeui: bind proxy on %s:%d: %w", frontHost, opts.Port, err)
 	}
 	info.ProxyAddr = ln.Addr().String()
+	log.Debug("codeui serve: proxy listening", "addr", info.ProxyAddr)
 	backendAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(backendPort))
 	srv := &http.Server{Handler: ProxyHandler(backendAddr, backendPassword, auth)}
 	serveErr := make(chan error, 1)
@@ -406,6 +416,7 @@ func spawnServe(opts Options) error {
 	if err != nil {
 		return fmt.Errorf("codeui: locate waired binary: %w", err)
 	}
+	opts.Logger.Debug("codeui spawn: resolved waired binary", "path", self)
 	args := []string{
 		"codeui", "serve",
 		"--project", opts.Project,
@@ -433,6 +444,8 @@ func spawnServe(opts Options) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("codeui: start serve host: %w", err)
 	}
+	opts.Logger.Debug("codeui spawn: detached serve host started",
+		"pid", cmd.Process.Pid, "project", opts.Project, "port", opts.Port, "log", logPath)
 	// Detach: do not Wait — the host outlives us.
 	return nil
 }
@@ -440,12 +453,15 @@ func spawnServe(opts Options) error {
 // waitForInstance polls until the detached serve publishes a healthy
 // runtime.json (the first run includes a ~55MB download), or fails.
 func waitForInstance(ctx context.Context, opts Options) (*RuntimeInfo, error) {
+	opts.Logger.Debug("codeui open: waiting for serve host to become ready", "base_dir", opts.BaseDir)
 	deadline := time.NewTimer(3 * time.Minute)
 	defer deadline.Stop()
 	tick := time.NewTicker(400 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		if info, ok := liveInstance(opts.BaseDir); ok && instanceMatches(info, opts) {
+			opts.Logger.Debug("codeui open: serve host is live",
+				"proxy_addr", info.ProxyAddr, "pid", info.PID)
 			return info, nil
 		}
 		select {

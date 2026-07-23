@@ -60,6 +60,10 @@ func (ic *inferenceController) State() (current, desired state.InferenceState) {
 }
 
 func (ic *inferenceController) transition(target state.InferenceState) error {
+	if ic.logger != nil {
+		ic.logger.Debug("inference transition requested",
+			"from_disabled", ic.disabled.Load(), "target", string(target))
+	}
 	if err := state.WriteDesiredInferenceState(ic.stateDir, target); err != nil {
 		return fmt.Errorf("persist desired-inference: %w", err)
 	}

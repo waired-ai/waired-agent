@@ -124,6 +124,7 @@ func (r *tokenRefresher) Run(ctx context.Context) {
 			return
 		}
 		sleep := r.nextSleep(time.Now())
+		r.logger.Debug("token refresh scheduled", "sleep", sleep.String())
 		select {
 		case <-ctx.Done():
 			return
@@ -215,6 +216,7 @@ func (r *tokenRefresher) nextSleep(now time.Time) time.Duration {
 }
 
 func (r *tokenRefresher) refreshOnce(ctx context.Context) error {
+	r.logger.Debug("token refresh attempt", "device_id", r.deviceID, "network_id", r.networkID)
 	refresh := ""
 	if p := r.refreshToken.Load(); p != nil {
 		refresh = *p

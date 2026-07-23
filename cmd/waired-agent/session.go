@@ -61,6 +61,9 @@ func (s *session) teardown() {
 	if s == nil {
 		return
 	}
+	if s.logger != nil {
+		s.logger.Debug("session teardown: begin")
+	}
 	s.cancel()
 	sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
 	_ = s.dispatcher.Stop(sctx)
@@ -69,6 +72,9 @@ func (s *session) teardown() {
 	s.engine.Close()
 	if err := s.stateWriter.Remove(); err != nil {
 		s.logger.Warn("remove runtime/state file on shutdown", "err", err)
+	}
+	if s.logger != nil {
+		s.logger.Debug("session teardown: complete")
 	}
 }
 
@@ -96,7 +102,11 @@ func (sb *switchboard) current() *session { return sb.cur.Load() }
 // clobber an existing session; the loser's caller is expected to tear
 // its half down.
 func (sb *switchboard) publish(s *session) bool {
-	return sb.cur.CompareAndSwap(nil, s)
+	ok := sb.cur.CompareAndSwap(nil, s)
+	if s.logger != nil {
+		s.logger.Debug("session publish", "published", ok)
+	}
+	return ok
 }
 
 // reset clears the live session pointer back to nil so a subsequent

@@ -95,6 +95,15 @@ func (r *Recorder) RecordRequest(ev RequestEvent) {
 			slog.String("peer_id", ev.PeerID),
 		)
 	}
+	if r.logger != nil {
+		r.logger.LogAttrs(context.Background(), slog.LevelDebug, "recorder request event",
+			slog.String("kind", ev.Kind),
+			slog.String("model", ev.Model),
+			slog.String("decision", ev.Decision),
+			slog.Int("status", ev.Status),
+			slog.Uint64("latency_ms", uint64(ev.LatencyMs)),
+		)
+	}
 }
 
 // RecordFallback emits the supplementary fallback event whenever
@@ -114,6 +123,12 @@ func (r *Recorder) RecordFallback(ev FallbackEvent) {
 	}
 	if r.logger != nil {
 		r.logger.LogAttrs(context.Background(), slog.LevelWarn, "inference fallback",
+			slog.String("from", ev.From),
+			slog.String("to", ev.To),
+			slog.String("reason", ev.Reason),
+			slog.String("model", ev.Model),
+		)
+		r.logger.LogAttrs(context.Background(), slog.LevelDebug, "recorder fallback event",
 			slog.String("from", ev.From),
 			slog.String("to", ev.To),
 			slog.String("reason", ev.Reason),
@@ -166,6 +181,13 @@ func (r *Recorder) RecordSelection(decision, peerID, model string) {
 	if r.metrics != nil {
 		r.metrics.InferenceSelectDecisionsTotal.WithLabelValues(decision).Inc()
 	}
+	if r.logger != nil {
+		r.logger.LogAttrs(context.Background(), slog.LevelDebug, "recorder selection event",
+			slog.String("decision", decision),
+			slog.String("peer_id", peerID),
+			slog.String("model", model),
+		)
+	}
 }
 
 // RecordPinnedPeerUnreachable is called from the router's Tailscale-
@@ -190,6 +212,13 @@ func (r *Recorder) RecordPinnedPeerUnreachable(peerID, model, reason string) {
 	if r.metrics != nil && r.metrics.InferencePinnedPeerUnreachableTotal != nil {
 		r.metrics.InferencePinnedPeerUnreachableTotal.WithLabelValues(reason).Inc()
 	}
+	if r.logger != nil {
+		r.logger.LogAttrs(context.Background(), slog.LevelDebug, "recorder pinned-peer-unreachable event",
+			slog.String("peer_id", peerID),
+			slog.String("model", model),
+			slog.String("reason", reason),
+		)
+	}
 }
 
 // RecordPublicShareNudge appends the one-shot Public Share hint
@@ -210,6 +239,12 @@ func (r *Recorder) RecordPublicShareNudge(model, reason string) {
 			Message: PublicShareNudgeMessage,
 		},
 	})
+	if r.logger != nil {
+		r.logger.LogAttrs(context.Background(), slog.LevelDebug, "recorder public-share nudge event",
+			slog.String("model", model),
+			slog.String("reason", reason),
+		)
+	}
 }
 
 // --- Inference-facing emits ---
@@ -324,6 +359,12 @@ func (r *Recorder) transitionEvent(flag string, value bool, known *bool, prev *b
 	if !*known {
 		*known = true
 		*prev = value
+		if r.logger != nil {
+			r.logger.LogAttrs(context.Background(), slog.LevelDebug, "engine state baseline recorded",
+				slog.String("flag", flag),
+				slog.Bool("value", value),
+			)
+		}
 		return
 	}
 	if *prev == value {

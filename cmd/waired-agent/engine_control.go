@@ -39,7 +39,11 @@ func (e *engineController) StopEngine(ctx context.Context) error {
 	if e.logger != nil {
 		e.logger.Info("engine controller: hard stop requested")
 	}
-	return e.ollama.Park(ctx)
+	err := e.ollama.Park(ctx)
+	if e.logger != nil {
+		e.logger.Debug("engine controller: hard stop result", "ok", err == nil)
+	}
+	return err
 }
 
 // StartEngine clears the parked latch and restarts the engine
@@ -58,6 +62,9 @@ func (e *engineController) StartEngine(_ context.Context) error {
 				e.logger.Warn("engine controller: start failed", "err", err)
 			}
 			return
+		}
+		if e.logger != nil {
+			e.logger.Debug("engine controller: engine running", "mode", string(e.ollama.Mode()))
 		}
 		if e.logger != nil && e.ollama.Mode() == infruntime.EngineModeAdopted {
 			e.logger.Info("engine controller: adopted orphan bundled ollama (exact pin match)",

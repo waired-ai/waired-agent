@@ -190,6 +190,9 @@ func runUpdateCheckLoop(ctx context.Context, uc *updateController, interval time
 	if uc == nil || interval <= 0 {
 		return
 	}
+	if logger != nil {
+		logger.Debug("update check loop started", "interval", interval.String())
+	}
 	select {
 	case <-ctx.Done():
 		return
@@ -213,6 +216,14 @@ func runUpdateCheckLoop(ctx context.Context, uc *updateController, interval time
 // agents (no tray to toast); the tray itself prompts off /update/status.
 func (c *updateController) checkAndLog(ctx context.Context, logger *slog.Logger) {
 	st, _ := c.Check(ctx, management.UpdateCheckRequest{}) // Check folds feed errors into st; never a Go err
+	if logger != nil {
+		logger.Debug("update check complete",
+			"phase", string(st.Phase),
+			"available", st.Available,
+			"current", st.CurrentVersion,
+			"latest", st.LatestVersion,
+		)
+	}
 	if st.Phase != management.UpdatePhaseAvailable || st.LatestVersion == "" {
 		return
 	}

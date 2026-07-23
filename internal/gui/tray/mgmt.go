@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -547,17 +548,20 @@ func (c *Client) postJSON(ctx context.Context, path string, body, out any) error
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.wc.Do(req)
 	if err != nil {
+		slog.Debug("tray: mgmt write", "endpoint", path, "result", "dial_error", "err", err)
 		return ipcclient.WrapDialError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<14))
+		slog.Debug("tray: mgmt write", "endpoint", path, "result", "error", "status", resp.StatusCode)
 		return &httpError{
 			StatusCode: resp.StatusCode,
 			Path:       path,
 			Body:       strings.TrimSpace(string(errBody)),
 		}
 	}
+	slog.Debug("tray: mgmt write", "endpoint", path, "result", "ok", "status", resp.StatusCode)
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
@@ -582,20 +586,24 @@ func (c *Client) postWithUnsupported(ctx context.Context, path string, unsupport
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.wc.Do(req)
 	if err != nil {
+		slog.Debug("tray: mgmt write", "endpoint", path, "result", "dial_error", "err", err)
 		return ipcclient.WrapDialError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
+		slog.Debug("tray: mgmt write", "endpoint", path, "result", "unsupported", "status", resp.StatusCode)
 		return unsupported
 	}
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<14))
+		slog.Debug("tray: mgmt write", "endpoint", path, "result", "error", "status", resp.StatusCode)
 		return &httpError{
 			StatusCode: resp.StatusCode,
 			Path:       path,
 			Body:       strings.TrimSpace(string(body)),
 		}
 	}
+	slog.Debug("tray: mgmt write", "endpoint", path, "result", "ok", "status", resp.StatusCode)
 	return nil
 }
 
@@ -615,6 +623,12 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<14))
+		// A 404 is the expected "daemon predates this endpoint" signal — the
+		// caller folds it into a nil feature. Only log genuine read failures
+		// (5xx / decode-worthy statuses) so an older daemon stays quiet.
+		if resp.StatusCode != http.StatusNotFound {
+			slog.Debug("tray: mgmt read", "endpoint", path, "result", "error", "status", resp.StatusCode)
+		}
 		return &httpError{
 			StatusCode: resp.StatusCode,
 			Path:       path,
@@ -639,20 +653,24 @@ func (c *Client) post(ctx context.Context, path string) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.wc.Do(req)
 	if err != nil {
+		slog.Debug("tray: mgmt write", "endpoint", path, "result", "dial_error", "err", err)
 		return ipcclient.WrapDialError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
+		slog.Debug("tray: mgmt write", "endpoint", path, "result", "unsupported", "status", resp.StatusCode)
 		return ErrPauseUnsupported
 	}
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<14))
+		slog.Debug("tray: mgmt write", "endpoint", path, "result", "error", "status", resp.StatusCode)
 		return &httpError{
 			StatusCode: resp.StatusCode,
 			Path:       path,
 			Body:       strings.TrimSpace(string(body)),
 		}
 	}
+	slog.Debug("tray: mgmt write", "endpoint", path, "result", "ok", "status", resp.StatusCode)
 	return nil
 }
 

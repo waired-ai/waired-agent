@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -238,6 +239,8 @@ func verifyPeerSignature(
 		// the same bytes the signature covers.
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		r.ContentLength = int64(len(body))
+		slog.DebugContext(r.Context(), "overlay peer request authenticated",
+			"device", peer.DisplayName(), "path", r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -245,6 +248,7 @@ func verifyPeerSignature(
 // writePeerAuthError emits the same JSON shape the gateway uses so
 // proxied responses on the loopback side don't see schema drift.
 func writePeerAuthError(w http.ResponseWriter, status int, errType, msg string) {
+	slog.Debug("overlay peer auth rejected", "type", errType, "status", status)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{

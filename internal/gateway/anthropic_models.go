@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -72,6 +73,7 @@ func (h *HandlerSet) handleAnthropicModels(w http.ResponseWriter, r *http.Reques
 	}
 
 	models := h.anthropicModelList()
+	slog.Debug("anthropic models request", "method", r.Method, "path", r.URL.Path, "count", len(models))
 
 	// Single-object form: a non-empty id after the collection prefix.
 	if id, ok := strings.CutPrefix(r.URL.Path, anthropicModelsPrefix); ok && id != "" {

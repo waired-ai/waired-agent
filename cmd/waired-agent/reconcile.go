@@ -647,25 +647,39 @@ func (r *reconciler) Apply(nm *signer.NetworkMap) error {
 	now := time.Now()
 	live := make(map[string]struct{}, len(nm.Peers))
 	r.logNames = make(map[string]string, len(nm.Peers))
+	added := 0
 	for _, p := range nm.Peers {
 		live[p.NodePublicKey] = struct{}{}
 		r.logNames[p.NodePublicKey] = peerLogName(p)
 		if _, ok := r.state[p.NodePublicKey]; ok {
 			continue // preserve existing per-peer path state
 		}
+		added++
 		r.state[p.NodePublicKey] = &peerPathState{
 			currentPath:          pathDirect,
 			lastEvalAt:           now,
 			lastDirectEvidenceAt: now,
 		}
 	}
+	removed := 0
 	for k := range r.state {
 		if _, ok := live[k]; !ok {
 			delete(r.state, k)
+			removed++
 		}
 	}
 	d := r.disco
 	r.mu.Unlock()
+
+	if r.logger != nil {
+		r.logger.Debug("reconcile: applying network map",
+			"network_id", nm.NetworkID,
+			"peers", len(nm.Peers),
+			"relays", len(nm.Relays),
+			"peers_added", added,
+			"peers_removed", removed,
+		)
+	}
 
 	// Cross-network peer table (public share spec §10): CP-injected
 	// foreign peers carry their home NetworkID; the relay bind stamps
@@ -753,6 +767,10 @@ func (r *reconciler) pushDiscoSnapshot(d discoSubsystem, nm *signer.NetworkMap) 
 		}
 	}
 	d.UpdatePeers(peers)
+	if r.logger != nil {
+		r.logger.Debug("reconcile: disco snapshot pushed",
+			"relay_urls", len(urls), "peers", len(peers))
+	}
 }
 
 // Tick is the safety-net path. Probe-driven downgrade (RTT ratio /
@@ -1054,6 +1072,10 @@ func (r *reconciler) recompute() error {
 			Endpoint:            endpoint,
 			PersistentKeepalive: 25,
 		})
+	}
+	if r.logger != nil {
+		r.logger.Debug("reconcile: pushing peer set to engine",
+			"peers", len(peers), "map_peers", len(nm.Peers), "force_relay", r.cfg.ForceRelay)
 	}
 	return r.engine.UpdatePeers(peers)
 }

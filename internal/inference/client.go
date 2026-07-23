@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -71,11 +72,14 @@ func (c *Client) Ping(ctx context.Context, ip netip.Addr, port uint16) (PingResp
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		slog.DebugContext(ctx, "overlay ping non-200", "addr", url, "status", resp.StatusCode)
 		return PingResponse{}, 0, fmt.Errorf("peer returned status %d", resp.StatusCode)
 	}
 	var body PingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return PingResponse{}, 0, err
 	}
-	return body, time.Since(start), nil
+	rtt := time.Since(start)
+	slog.DebugContext(ctx, "overlay ping ok", "device", body.Device, "rtt_ms", rtt.Milliseconds())
+	return body, rtt, nil
 }

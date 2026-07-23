@@ -596,6 +596,7 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	if modelID == "" || disabled {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "select-model", "model", modelID)
 	resp, err := t.cli.SetPreferredModel(ctx, modelID)
 	if err != nil {
 		ShowError(fmt.Sprintf("Switch model failed: %v", err))
@@ -672,6 +673,7 @@ func (t *tray) onSelectWorkerMode(ctx context.Context, idx int) {
 	if mode == "" {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "worker-mode", "mode", string(mode))
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Mode: mode}); err != nil {
 		ShowError(fmt.Sprintf("Set worker mode failed: %v", err))
 		return
@@ -689,6 +691,8 @@ func (t *tray) onSelectWorkerPin(ctx context.Context, idx int) {
 	if entry.DeviceID == "" {
 		return
 	}
+	// Log the action, not the peer device ID (avoid emitting identifiers).
+	slog.Debug("tray: menu action", "action", "worker-pin")
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{
 		Mode:               state.RoutingModePinned,
 		PinnedPeerDeviceID: entry.DeviceID,
@@ -700,6 +704,7 @@ func (t *tray) onSelectWorkerPin(ctx context.Context, idx int) {
 }
 
 func (t *tray) onWorkerClearPin(ctx context.Context) {
+	slog.Debug("tray: menu action", "action", "worker-clear-pin")
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Mode: state.RoutingModeAuto}); err != nil {
 		ShowError(fmt.Sprintf("Clear pin failed: %v", err))
 		return
@@ -750,6 +755,7 @@ func (t *tray) onSelectClaudeRoute(ctx context.Context, class string, idx int) {
 	if route == "" {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "claude-route", "class", class, "route", string(route))
 	var req management.ClaudeRoutingRequest
 	if class == state.ClaudeClassSub {
 		req.Sub = &route
@@ -883,6 +889,7 @@ func (t *tray) onToggleAutostart() {
 		ShowError(fmt.Sprintf("Autostart query failed: %v", err))
 		return
 	}
+	slog.Debug("tray: menu action", "action", "toggle-autostart", "was_enabled", enabled)
 	if enabled {
 		if err := t.autostartMgr.Disable(); err != nil {
 			ShowError(fmt.Sprintf("Disable autostart failed: %v", err))
@@ -922,6 +929,7 @@ func (t *tray) onToggle(ctx context.Context) {
 	t.mu.Lock()
 	kind := t.last.Kind
 	t.mu.Unlock()
+	slog.Debug("tray: menu action", "action", "toggle", "kind", int(kind))
 	switch kind {
 	case MenuConnected:
 		if err := t.cli.Pause(ctx); err != nil {
@@ -945,8 +953,10 @@ func (t *tray) onToggle(ctx context.Context) {
 // (404 → ErrLoginUnsupported) we fall back to the legacy pkexec
 // elevation path so the tray still works against pre-#177 agents.
 func (t *tray) startLogin(ctx context.Context) {
+	slog.Debug("tray: menu action", "action", "login-start")
 	st, err := t.cli.LoginStart(ctx, management.LoginStartRequest{ControlURL: t.opts.ControlURL})
 	if errors.Is(err, ErrLoginUnsupported) {
+		slog.Debug("tray: login: daemon lacks login API, using elevation fallback")
 		if err := LoginViaElevation(ctx, t.opts.ControlURL, t.opts.StateDir); err != nil {
 			ShowError(err.Error())
 		}
@@ -1007,10 +1017,12 @@ func (t *tray) pollLogin(ctx context.Context, snap *Snapshot) {
 
 	switch st.Phase {
 	case management.LoginPhaseActive:
+		slog.Debug("tray: login finished", "phase", string(st.Phase))
 		t.mu.Lock()
 		t.loginSessionID = ""
 		t.mu.Unlock()
 	case management.LoginPhaseError:
+		slog.Debug("tray: login finished", "phase", string(st.Phase))
 		msg := st.Error
 		if msg == "" {
 			msg = "sign-in failed"
@@ -1030,6 +1042,7 @@ func (t *tray) onInferenceToggle(ctx context.Context) {
 	t.mu.Lock()
 	action := t.last.InferenceToggleAction
 	t.mu.Unlock()
+	slog.Debug("tray: menu action", "action", "inference-toggle", "want", action)
 	switch action {
 	case "Disable inference engine":
 		if err := t.cli.DisableInference(ctx); err != nil {
@@ -1052,6 +1065,7 @@ func (t *tray) onEngineToggle(ctx context.Context) {
 	t.mu.Lock()
 	action := t.last.EngineToggleAction
 	t.mu.Unlock()
+	slog.Debug("tray: menu action", "action", "engine-toggle", "want", action)
 	switch action {
 	case "Stop inference engine":
 		if err := t.cli.StopEngine(ctx); err != nil {
@@ -1077,6 +1091,7 @@ func (t *tray) onInstallEngine(ctx context.Context) {
 	if action == "" {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "install-engine")
 	if err := InstallOllamaViaElevation(ctx, t.opts.StateDir); err != nil {
 		ShowError(fmt.Sprintf("Install Ollama failed: %v", err))
 		return
@@ -1099,6 +1114,7 @@ func (t *tray) onUpdate(ctx context.Context) {
 	if !show {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "update", "version", ver)
 	if ver != "" {
 		notify("Updating Waired to "+ver+"…", notification.Info)
 	} else {
@@ -1139,6 +1155,7 @@ func (t *tray) pollUpdate(ctx context.Context, snap *Snapshot) {
 	}
 	if err != nil {
 		if errors.Is(err, ErrUpdateUnsupported) {
+			slog.Debug("tray: update endpoints unavailable; skipping henceforth")
 			t.mu.Lock()
 			t.updateSupported = false
 			t.mu.Unlock()
@@ -1203,6 +1220,7 @@ func (t *tray) onUpdateNotifyToggle(ctx context.Context) {
 	if !show {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "update-notify-toggle", "enabled", enabled)
 	if _, err := t.cli.UpdateSettings(ctx, !enabled); err != nil {
 		ShowError(fmt.Sprintf("Update-notification toggle failed: %v", err))
 		return
@@ -1219,6 +1237,7 @@ func (t *tray) onShareToggle(ctx context.Context) {
 	t.mu.Lock()
 	action := t.last.ShareToggleAction
 	t.mu.Unlock()
+	slog.Debug("tray: menu action", "action", "share-toggle", "want", action)
 	switch action {
 	case "Stop sharing engine to mesh":
 		if err := t.cli.DisableShare(ctx); err != nil {
@@ -1260,6 +1279,7 @@ func (t *tray) onPublicShareToggle(ctx context.Context) {
 	t.mu.Lock()
 	action := t.last.PublicShareToggleAction
 	t.mu.Unlock()
+	slog.Debug("tray: menu action", "action", "public-share-toggle", "want", action)
 	switch action {
 	case "Share this computer publicly":
 		resp, err := t.cli.EnablePublicShare(ctx, 0)
@@ -1322,6 +1342,7 @@ func (t *tray) onPublicUseMode(ctx context.Context, idx int) {
 	if mode == "" {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "public-use-mode", "mode", mode, "consented", consented)
 
 	consentJustRan := false
 	if mode != agentconfig.PublicUseModeOff && !consented {
@@ -1421,6 +1442,7 @@ func (t *tray) onPublicMore() {
 	if url == "" {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "public-more")
 	if err := OpenBrowser(url); err != nil {
 		ShowError(err.Error())
 	}
@@ -1433,6 +1455,8 @@ func (t *tray) onCopyIP() {
 	if ip == "" {
 		return
 	}
+	// Log the action, not the overlay IP value.
+	slog.Debug("tray: menu action", "action", "copy-ip")
 	if err := CopyToClipboard(ip); err != nil {
 		ShowError(err.Error())
 	}
@@ -1446,6 +1470,8 @@ func (t *tray) onAdmin() {
 		ShowError("Admin URL is unknown — sign in first.")
 		return
 	}
+	// Log the action, not the admin URL (may carry a network identifier).
+	slog.Debug("tray: menu action", "action", "open-admin")
 	if err := OpenBrowser(url); err != nil {
 		ShowError(err.Error())
 	}
@@ -1459,6 +1485,7 @@ func (t *tray) onAdmin() {
 // home (opencode's default landing — no folder picker). Long-running on first
 // run (a ~55 MB download), so callers dispatch this in a goroutine.
 func (t *tray) onCodeUI(ctx context.Context) {
+	slog.Debug("tray: menu action", "action", "code-ui")
 	bin, err := wairedCLIPath()
 	if err != nil {
 		ShowError("Coding agent: waired CLI not found (" + err.Error() + ")")
@@ -1535,6 +1562,7 @@ func (t *tray) onReconfigureOpenCode(ctx context.Context) {
 		return
 	}
 
+	slog.Debug("tray: menu action", "action", "reconfigure-opencode")
 	if err := t.cli.ReconfigureOpenCode(ctx); err != nil {
 		notify("OpenCode reconfigure failed: "+err.Error(), notification.Warning)
 		ShowError("OpenCode reconfigure: " + err.Error())
@@ -1567,6 +1595,7 @@ func (t *tray) onReconfigureOpenClaw(ctx context.Context) {
 		return
 	}
 
+	slog.Debug("tray: menu action", "action", "reconfigure-openclaw")
 	if err := t.cli.ReconfigureOpenClaw(ctx); err != nil {
 		notify("OpenClaw reconfigure failed: "+err.Error(), notification.Warning)
 		ShowError("OpenClaw reconfigure: " + err.Error())
@@ -1683,6 +1712,7 @@ func (t *tray) onLogout(ctx context.Context) {
 	if !ShowConfirm("Sign this device out of Waired?\nThe identity and secrets will be removed.") {
 		return
 	}
+	slog.Debug("tray: menu action", "action", "logout")
 	go func() {
 		if err := LogoutViaElevation(ctx, t.opts.StateDir); err != nil {
 			ShowError(err.Error())
@@ -1721,6 +1751,7 @@ func (t *tray) pollOnce(ctx context.Context) {
 		switching := time.Now().Before(t.switchingUntil)
 		lastOnline := t.lastOnline
 		t.mu.Unlock()
+		slog.Debug("tray: poll: daemon unreachable", "err", statusErr, "switching", switching)
 		t.apply(offlineModel(lastOnline, switching))
 		return
 	}
@@ -1796,6 +1827,19 @@ func (t *tray) pollOnce(ctx context.Context) {
 	}
 	snap.Now = time.Now()
 	m := Update(snap)
+	// One concise line per online poll: what the fan-out saw (which
+	// best-effort endpoints were present) and the resulting header. No
+	// identity/PII values — only presence booleans and the rendered state.
+	slog.Debug("tray: poll ok",
+		"enrolled", snap.Identity != nil && snap.Identity.Enrolled,
+		"inference", snap.Inference != nil,
+		"claude", snap.Claude != nil,
+		"routing", snap.ClaudeRouting != nil,
+		"opencode", snap.OpenCode != nil,
+		"openclaw", snap.OpenClaw != nil,
+		"catalog", snap.Catalog != nil,
+		"mesh", snap.Mesh != nil,
+		"menu", m.HeaderTitle)
 	// The daemon is reachable again: remember this model for the switch
 	// grace window and close any open window so a later genuine crash is
 	// not masked as "Switching model…" (waired#808).
@@ -1993,6 +2037,15 @@ func (t *tray) apply(m MenuModel) {
 	prev := t.last
 	t.last = m
 	t.mu.Unlock()
+
+	// Log only the transitions (icon / kind / header changed) so a steady
+	// state is silent while every state flip is recorded. kind/icon are the
+	// raw enum values; header is the human-readable label.
+	if prev.Kind != m.Kind || prev.Icon != m.Icon || prev.HeaderTitle != m.HeaderTitle {
+		slog.Debug("tray: menu transition",
+			"from", prev.HeaderTitle, "to", m.HeaderTitle,
+			"kind", int(m.Kind), "icon", int(m.Icon))
+	}
 
 	// Best-effort debug dump for the Phase W-3 Windows screenshot
 	// loop; no-op unless WAIRED_TRAY_DEBUG is set. Kept here (in the

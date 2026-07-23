@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -159,6 +160,8 @@ func (s *Service) EnsureRunning(ctx context.Context) error {
 	// Spawn under a Service-owned context cancelled only by Stop() / a failed
 	// startup. ctx still governs the readiness wait below.
 	procCtx, procCancel := context.WithCancel(context.Background())
+	slog.DebugContext(ctx, "codeui service: spawning opencode",
+		"binary", s.cfg.BinaryPath, "host", s.cfg.Host, "port", s.cfg.Port)
 	proc, err := s.cfg.Spawner.Spawn(procCtx, s.cfg.BinaryPath, args, s.processEnv(), logW)
 	if err != nil {
 		procCancel()
@@ -182,9 +185,11 @@ func (s *Service) EnsureRunning(ctx context.Context) error {
 		if ctxErr := startCtx.Err(); ctxErr != nil {
 			err = fmt.Errorf("codeui: not ready within %s (see %s)", s.cfg.StartupReadyTimeout, s.logPath())
 		}
+		slog.DebugContext(ctx, "codeui service: opencode failed to become ready", "err", err)
 		s.setState(infruntime.Health{State: infruntime.StateFailed, LastErr: err.Error()})
 		return err
 	}
+	slog.DebugContext(ctx, "codeui service: opencode ready", "url", s.baseURL)
 	s.setState(infruntime.Health{State: infruntime.StateReady, LastOK: time.Now()})
 	return nil
 }
@@ -296,6 +301,7 @@ func (s *Service) Stop(ctx context.Context) error {
 		return nil
 	}
 	s.mu.Unlock()
+	slog.DebugContext(ctx, "codeui service: stopping opencode")
 	if err := s.stopProcess(ctx); err != nil {
 		s.setState(infruntime.Health{State: infruntime.StateFailed, LastErr: err.Error()})
 		return err
@@ -317,6 +323,7 @@ func (s *Service) stopProcess(ctx context.Context) error {
 	case <-proc.Done():
 		s.closeLog()
 	case <-time.After(s.cfg.StopTimeout):
+		slog.Debug("codeui service: opencode did not exit on SIGTERM; killing", "grace", s.cfg.StopTimeout)
 		_ = proc.Kill()
 		<-proc.Done()
 		s.closeLog()

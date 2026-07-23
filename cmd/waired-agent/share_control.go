@@ -83,6 +83,10 @@ func (sc *shareController) State() (current, desired state.ShareMeshState) {
 }
 
 func (sc *shareController) transition(target state.ShareMeshState) error {
+	if sc.logger != nil {
+		sc.logger.Debug("share transition requested",
+			"from_shared", sc.shared.Load(), "target", string(target))
+	}
 	if err := state.WriteDesiredShareMesh(sc.stateDir, target); err != nil {
 		return fmt.Errorf("persist desired-share: %w", err)
 	}

@@ -144,6 +144,7 @@ func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request) (pr
 	// Brief queue: short sleep that often coincides with another
 	// request completing on a peer (in-flight count drops below
 	// capacity). Cheaper than asking the client to retry.
+	slog.Debug("gateway brief-queue retry", "delay_ms", briefQueueDelay.Milliseconds())
 	select {
 	case <-time.After(briefQueueDelay):
 	case <-ctx.Done():
@@ -181,10 +182,12 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 	if err != nil {
 		return probedSelection{}, false, err
 	}
+	slog.Debug("probe candidates", "model", req.Model, "count", len(cands))
 	if len(cands) == 0 {
 		return probedSelection{}, false, nil
 	}
 	winnerIdx, results := ParallelProbe(ctx, cands, h.peerProbeLookup, probeBudget)
+	slog.Debug("probe complete", "candidates", len(cands), "winner_idx", winnerIdx)
 	// Emit per-probe telemetry for every candidate that actually
 	// reached out over the WG mesh. Fast-path (local / external)
 	// slots carry a synthetic ProbeOK with zero latency and are

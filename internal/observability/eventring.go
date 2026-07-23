@@ -10,6 +10,7 @@
 package observability
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -250,6 +251,10 @@ func (r *Ring) Append(e Event) uint64 {
 	r.head = (r.head + 1) % r.cap
 	if r.count < r.cap {
 		r.count++
+		if r.count == r.cap {
+			slog.Debug("observability ring reached capacity; oldest events evicted on further appends",
+				"capacity", r.cap)
+		}
 	}
 	return e.Seq
 }
@@ -273,6 +278,8 @@ func (r *Ring) Since(since uint64, kinds []Kind, limit int) (events []Event, old
 	oldestSeq = r.nextSeq - uint64(r.count)
 	if since > 0 && since+1 < oldestSeq {
 		gap = true
+		slog.Debug("observability ring history gap: consumer cursor behind oldest retained event",
+			"since", since, "oldest_seq", oldestSeq)
 	}
 
 	start := r.head - r.count
