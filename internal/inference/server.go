@@ -149,6 +149,7 @@ type publicAdmission struct {
 
 	mu      sync.Mutex
 	nextID  uint64
+	epoch   uint64 // kill-switch generation; bumped by abortAll
 	cancels map[uint64]context.CancelFunc
 }
 
@@ -199,15 +200,32 @@ func (p *publicAdmission) latched(now time.Time) bool {
 	return now.UnixNano() < p.latchUntil.Load()
 }
 
-// registerCancel records an in-flight public request's cancel func so
-// the kill switch can terminate it mid-stream.
-func (p *publicAdmission) registerCancel(cancel context.CancelFunc) uint64 {
+// killEpoch returns the current kill-switch generation. A caller that
+// samples it before taking a public slot can detect, at registration
+// time, that a kill happened in between (see registerCancel).
+func (p *publicAdmission) killEpoch() uint64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.epoch
+}
+
+// registerCancel records an in-flight public request's cancel func so
+// the kill switch can terminate it mid-stream. It reports false when a
+// kill switch fired since epoch was sampled: that request took its slot
+// before abortAll snapshotted the registry and would otherwise run to
+// completion after the operator turned sharing off — the one request
+// the kill switch could miss. The caller must then cancel and release
+// its own slot; nothing is registered.
+func (p *publicAdmission) registerCancel(cancel context.CancelFunc, epoch uint64) (uint64, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.epoch != epoch {
+		return 0, false
+	}
 	p.nextID++
 	id := p.nextID
 	p.cancels[id] = cancel
-	return id
+	return id, true
 }
 
 func (p *publicAdmission) deregisterCancel(id uint64) {
@@ -218,9 +236,13 @@ func (p *publicAdmission) deregisterCancel(id uint64) {
 
 // abortAll cancels every in-flight public request (kill switch step 1,
 // spec §8.3). The cancel funcs are idempotent; entries are removed by
-// each request's own deferred deregister as it unwinds.
+// each request's own deferred deregister as it unwinds. Bumping the
+// epoch under the same lock as the snapshot closes the acquire →
+// registerCancel window: a request that is mid-admission when this runs
+// registers against a stale epoch and is rejected instead of served.
 func (p *publicAdmission) abortAll() {
 	p.mu.Lock()
+	p.epoch++
 	cancels := make([]context.CancelFunc, 0, len(p.cancels))
 	for _, c := range p.cancels {
 		cancels = append(cancels, c)
@@ -737,13 +759,25 @@ func publicAdmissionGateAdapter(p *publicAdmission, now func() time.Time) func(h
 				next.ServeHTTP(w, r)
 				return
 			}
+			epoch := p.killEpoch()
 			if p.latched(nowOrTime(now)) || !p.acquire() {
 				writeOverlay503(w, "waired_inference_overloaded",
 					"waired-agent on this peer is at its concurrent-request capacity; retry on another peer or wait.")
 				return
 			}
 			ctx, cancel := context.WithCancel(r.Context())
-			id := p.registerCancel(cancel)
+			id, ok := p.registerCancel(cancel, epoch)
+			if !ok {
+				// The kill switch fired while this request was between
+				// acquiring its slot and registering; it is not in the
+				// abort snapshot, so refuse it here rather than serve a
+				// stranger after the operator turned sharing off.
+				cancel()
+				p.release()
+				writeOverlay503(w, "waired_inference_not_public",
+					"waired-agent on this peer is not currently serving public shared inference.")
+				return
+			}
 			defer func() {
 				p.deregisterCancel(id)
 				cancel()
