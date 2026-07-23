@@ -282,7 +282,7 @@ If it is reachable but never `ready`, it has no model loaded — work through
 [No answer comes back](#no-answer-comes-back) on that machine.
 
 You should not need to open ports or configure a VPN. Your computers connect
-directly when the network allows it, and fall back to an encrypted relay when a
+directly when the network allows it, and fall back to an encrypted [relay](/reference/glossary/#relay) when a
 firewall gets in the way, automatically.
 
 ## The Waired icon is missing (Linux)

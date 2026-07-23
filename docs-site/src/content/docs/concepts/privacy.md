@@ -20,7 +20,7 @@ through any Waired-hosted service.
 - **The control plane** only introduces your machines to each other. It
   distributes peer public keys and endpoints via a signed Network Map. It never
   receives your prompts or completions.
-- **The relay**, used only when a direct connection isn't possible, forwards
+- **The [relay](/reference/glossary/#relay)**, used only when a direct connection isn't possible, forwards
   encrypted WireGuard datagrams. It cannot decrypt them — it sees ciphertext,
   not content.
 

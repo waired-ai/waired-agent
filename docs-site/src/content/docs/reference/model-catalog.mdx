@@ -76,7 +76,7 @@ model across them (tensor parallelism), so their combined VRAM counts toward
 the requirement. On recent NVIDIA GPUs (Ada/Hopper and newer — e.g. L4, RTX
 40-series), Waired serves the KV cache in fp8, which roughly doubles the context
 window that fits in the same VRAM at near-identical quality. If a model's full
-context window still doesn't fit your GPU memory, Waired serves it with a reduced
+[context window](/reference/glossary/#context-window) still doesn't fit your GPU memory, Waired serves it with a reduced
 window and notes that in `waired status` / `waired doctor` instead of failing to
 start.
 
