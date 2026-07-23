@@ -61,6 +61,12 @@ func (f *fakePublicShareCtl) Synced() bool {
 	return f.synced
 }
 
+func (f *fakePublicShareCtl) MaxClients() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.maxClients
+}
+
 func publicShareReq(method, path, body string) *http.Request {
 	var req *http.Request
 	if body == "" {
@@ -233,5 +239,33 @@ func TestPublicShareErrorPropagates(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "mesh share required") {
 		t.Errorf("error body: %s", rec.Body.String())
+	}
+}
+
+// TestPublicShareStatusReportsMaxClients: the GET route used to omit
+// MaxClients entirely, so `waired public status` could only print
+// "not reported by this daemon" for a cap the agent was holding all
+// along (waired#901 L6). An unset cap stays 0 (omitempty) so callers
+// can still distinguish "automatic" from a configured number.
+func TestPublicShareStatusReportsMaxClients(t *testing.T) {
+	pc := newFakePublicShareCtl(state.PublicShareOn)
+	pc.maxClients = 3
+	srv := New(fakeStatus{}, fakePinger{}).WithPublicShareControl(pc)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, publicShareReq(http.MethodGet, "/waired/v1/public/share", ""))
+	var got PublicShareStateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.MaxClients != 3 {
+		t.Fatalf("status max_clients = %d, want 3", got.MaxClients)
+	}
+
+	pc.maxClients = 0
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, publicShareReq(http.MethodGet, "/waired/v1/public/share", ""))
+	if strings.Contains(rec.Body.String(), "max_clients") {
+		t.Fatalf("an unset cap must stay omitted: %s", rec.Body.String())
 	}
 }

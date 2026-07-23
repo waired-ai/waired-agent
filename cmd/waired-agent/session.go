@@ -245,6 +245,13 @@ func (a sbPublicShareControl) Synced() bool {
 	return true
 }
 
+func (a sbPublicShareControl) MaxClients() int {
+	if s := a.sb.current(); s != nil && s.publicShare != nil {
+		return s.publicShare.MaxClients()
+	}
+	return 0
+}
+
 type sbWorkerControl struct{ sb *switchboard }
 
 func (a sbWorkerControl) SetMode(ctx context.Context, mode state.RoutingMode) error {

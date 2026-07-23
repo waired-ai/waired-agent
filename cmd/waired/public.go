@@ -118,9 +118,15 @@ func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
 			// not-yet-synced state (management.PublicSharePendingNote).
 			pln(out, share.Note)
 		}
-		// GET /public/share does not populate MaxClients — only the
-		// enable/disable responses carry the control-plane-echoed cap.
-		pln(out, "Guest limit: not reported by this daemon")
+		// 0 means the operator never set one, so the control plane's
+		// automatic default applies. Say that, and say how to change it
+		// — the old "not reported by this daemon" wording described a
+		// wiring gap on our side and read as a broken daemon.
+		if share.MaxClients > 0 {
+			pf(out, "Guest limit: %d at once\n", share.MaxClients)
+		} else {
+			pln(out, "Guest limit: automatic (set one with `waired public share --max-clients N`)")
+		}
 	}
 
 	// Consumer side — may this computer use other people's public machines?

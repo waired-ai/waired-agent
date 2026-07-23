@@ -61,6 +61,7 @@ func TestRunPublicStatus_RendersProviderAndConsumerState(t *testing.T) {
 			State:        "public",
 			DesiredState: "public",
 			CPSynced:     pubBoolPtr(true),
+			MaxClients:   3,
 		},
 		useStatus: http.StatusOK,
 		useBody: management.PublicUseResponse{
@@ -81,7 +82,7 @@ func TestRunPublicStatus_RendersProviderAndConsumerState(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"Sharing this computer: on",
-		"Guest limit: not reported by this daemon",
+		"Guest limit: 3 at once",
 		"Use public nodes: auto",
 		"Consented: yes",
 		"Minimum quality tier: 2",
@@ -298,5 +299,38 @@ func TestRunPublicStatus_JSONNullOnUnsupported(t *testing.T) {
 func TestRunPublic_BogusSubcommand(t *testing.T) {
 	if err := runPublic([]string{"bogus"}); err == nil {
 		t.Fatal("runPublic([bogus]) = nil, want an error")
+	}
+}
+
+// TestRunPublicStatus_GuestLimitUnset: 0 means the operator never chose
+// a cap, so the control plane's automatic default applies. Say that and
+// say how to change it — the previous "not reported by this daemon"
+// wording described a wiring gap on our side (waired#901 L6) and read
+// as a broken daemon, which invites a pointless upgrade or re-share.
+func TestRunPublicStatus_GuestLimitUnset(t *testing.T) {
+	url := newPublicServer(t, publicHandlers{
+		shareStatus: http.StatusOK,
+		shareBody: management.PublicShareStateResponse{
+			State:        "public",
+			DesiredState: "public",
+			CPSynced:     pubBoolPtr(true),
+		},
+		useStatus: http.StatusOK,
+		useBody:   management.PublicUseResponse{Mode: "off", EffectiveMode: "off"},
+	})
+
+	var buf bytes.Buffer
+	if err := runPublicStatus(url, false, &buf); err != nil {
+		t.Fatalf("runPublicStatus: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Guest limit: automatic") {
+		t.Errorf("unset guest limit should read as automatic\n---\n%s", out)
+	}
+	if !strings.Contains(out, "--max-clients") {
+		t.Errorf("unset guest limit should point at the flag that sets it\n---\n%s", out)
+	}
+	if strings.Contains(out, "not reported by this daemon") {
+		t.Errorf("stale daemon-fault wording still present\n---\n%s", out)
 	}
 }
