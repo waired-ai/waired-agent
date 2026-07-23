@@ -1,0 +1,91 @@
+---
+/**
+ * MobileMenuFooter override — the same two product links the header carries.
+ *
+ * Starlight's header right group is `sl-hidden md:sl-flex`, so on a phone the
+ * SocialIcons override never renders. Without this, a mobile reader has no
+ * way to reach the product site or sign in. Keep in step with
+ * SocialIcons.astro.
+ */
+import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
+import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
+import config from 'virtual:starlight/user-config';
+import { Icon } from '@astrojs/starlight/components';
+import { APP_URL, SITE_URL, headerStrings } from '../lib/site-links';
+
+const links = config.social || [];
+const t = headerStrings(Astro.currentLocale);
+---
+
+<div class="wd-mobile-links sl-flex">
+	<a href={APP_URL} class="wd-signin">{t.signIn}</a>
+	<a href={SITE_URL} class="wd-home sl-flex">
+		<Icon name="external" size="1em" />
+		{t.home}
+	</a>
+</div>
+
+<div class="mobile-preferences sl-flex">
+	<div class="social-icons">
+		{
+			links.map(({ label, href, icon }) => (
+				<a {href} rel="me" class="wd-social sl-flex">
+					<span class="sr-only">{label}</span>
+					<Icon name={icon} />
+				</a>
+			))
+		}
+	</div>
+	<ThemeSelect />
+	<LanguageSelect />
+</div>
+
+<style>
+	.wd-mobile-links {
+		align-items: center;
+		gap: 1rem;
+		flex-wrap: wrap;
+		padding-block: 1rem;
+		border-top: 1px solid var(--sl-color-gray-6);
+	}
+	.wd-signin {
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.25rem;
+		padding: 0.4rem 1rem;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		color: var(--sl-color-white);
+		text-decoration: none;
+	}
+	.wd-home {
+		align-items: center;
+		gap: 0.3em;
+		font-size: var(--sl-text-sm);
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+	}
+
+	.wd-social {
+		color: var(--sl-color-text-accent);
+	}
+
+	@layer starlight.core {
+		.social-icons {
+			display: flex;
+			margin-inline-end: auto;
+			gap: 1rem;
+			align-items: center;
+			padding-block: 1rem;
+		}
+		.social-icons:empty {
+			display: none;
+		}
+		.mobile-preferences {
+			justify-content: space-between;
+			flex-wrap: wrap;
+			border-top: 1px solid var(--sl-color-gray-6);
+			column-gap: 1rem;
+			padding: 0.5rem 0;
+		}
+	}
+</style>

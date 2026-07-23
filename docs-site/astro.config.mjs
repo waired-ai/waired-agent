@@ -13,7 +13,25 @@ export default defineConfig({
 	base: '/',
 	integrations: [
 		starlight({
-			title: 'Waired',
+			// The header has to say what this site IS. A reader arriving on a
+			// deep page from a search engine sees only the header, and "Waired"
+			// alone does not distinguish the documentation from the product
+			// site or the console. Per-locale so the Japanese tree says it in
+			// Japanese.
+			// Keyed by language tag (not by the `locales` key), which is why
+			// the root locale appears here as `en`.
+			title: {
+				en: 'Waired Docs',
+				ja: 'Waired ドキュメント',
+			},
+			// The GATE mark, identical to the marketing site's and the admin
+			// console's favicons. It carries its own dark chip, so one asset
+			// serves both site themes — see src/assets/waired-mark.svg.
+			logo: {
+				src: './src/assets/waired-mark.svg',
+				alt: 'Waired',
+				replacesTitle: false,
+			},
 			// English is the canonical/base language and sits at the site
 			// root (`/...`); Japanese is a mirror under `/ja/...`.
 			// Untranslated `ja` pages fall back to English automatically, so
@@ -26,12 +44,18 @@ export default defineConfig({
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/waired-ai/waired' },
 			],
-			// PageTitle is overridden to carry two site-wide conventions the
-			// stock component has no slot for: the per-page header block
-			// (`meta` frontmatter) and the Japanese translation-freshness
-			// notice. See src/components/PageTitle.astro.
 			components: {
+				// Two site-wide conventions the stock component has no slot
+				// for: the per-page header block (`meta` frontmatter) and the
+				// Japanese translation-freshness notice.
 				PageTitle: './src/components/PageTitle.astro',
+				// Starlight's header has no slot for product navigation, and
+				// SocialIcons is the only component rendered there — so the
+				// links out to waired.ai and the console live in it. The
+				// header's right group is desktop-only, hence the matching
+				// MobileMenuFooter override; keep the two in step.
+				SocialIcons: './src/components/SocialIcons.astro',
+				MobileMenuFooter: './src/components/MobileMenuFooter.astro',
 			},
 			// Explicit `slug` entries (not autogenerate) so order and labels
 			// are intentional and a typo'd slug fails the build. Slugs are
