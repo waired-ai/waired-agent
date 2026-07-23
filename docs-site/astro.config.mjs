@@ -39,15 +39,17 @@ export default defineConfig({
 			// PROTOTYPE sidebar (docs IA revision). Reordered around the
 			// journey a user actually walks — start → set up → use → fix →
 			// understand → look up — with labels written as the thing the
-			// reader wants, not the feature name. Pages that the prototype
-			// supersedes are parked in a collapsed group at the bottom so the
-			// old and new versions can be compared side by side.
+			// reader wants, not the feature name.
 			sidebar: [
 				{
 					label: 'Start here',
 					items: [
 						{ label: 'What is Waired?', slug: 'what-is-waired' },
 						{ label: 'Quickstart — your first answer', slug: 'quickstart' },
+						// Third, not last: on a desktop the app IS Waired, so a
+						// reader who finishes the Quickstart needs this before
+						// any of the task guides make sense.
+						{ label: 'The Waired app', slug: 'guides/waired-app' },
 					],
 				},
 				{
@@ -69,14 +71,20 @@ export default defineConfig({
 					items: [
 						{ label: 'Use it from Claude Code', slug: 'guides/claude-code' },
 						{ label: 'Use it from OpenCode', slug: 'guides/opencode' },
+						{ label: 'Use it from OpenClaw', slug: 'guides/openclaw' },
 						{ label: 'Use it from a chat app', slug: 'guides/chat-clients' },
 						{ label: 'Choose which AI model runs', slug: 'guides/choose-a-model' },
+						{ label: 'Stop using your AI for a while', slug: 'guides/pause' },
+						{ label: 'The web console', slug: 'guides/web-console' },
 						{ label: 'Share it with other people', slug: 'public-share' },
 					],
 				},
 				{
 					label: 'When something looks wrong',
 					items: [
+						// First: it is the one command that resolves most
+						// first-run problems, and every other page points here.
+						{ label: 'Run a health check', slug: 'getting-started/doctor' },
 						{ label: 'Troubleshooting', slug: 'troubleshooting' },
 						{ label: 'FAQ', slug: 'faq' },
 					],
@@ -95,6 +103,7 @@ export default defineConfig({
 						{ label: 'CLI commands', slug: 'reference/cli' },
 						{ label: 'Model catalog & specs', slug: 'reference/model-catalog' },
 						{ label: 'Advanced install options', slug: 'reference/install-options' },
+						{ label: "What's new", slug: 'reference/release-notes' },
 					],
 				},
 			],

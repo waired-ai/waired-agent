@@ -1,6 +1,10 @@
 ---
 title: Words used in this documentation
 description: Plain-language definitions of every Waired-specific and AI-specific word you will meet in these docs.
+meta:
+  audience: Anyone who hit a word they did not know
+  needs: Nothing
+  time: Look up one term
 ---
 
 <!-- PROTOTYPE (docs IA revision). Demonstrates: every coined or borrowed term
@@ -17,7 +21,8 @@ page stops you.
 **Waired app**
 : The two things the installer puts on your computer: a background service that
   stays connected, and the `waired` command you type. You mostly interact with
-  the icon in your menu bar / system tray.
+  the Waired icon — in the menu bar on macOS, next to the clock on Windows
+  and Linux.
 
 **Sign in / enroll**
 : Signing in with Google adds this computer to your private network. Every

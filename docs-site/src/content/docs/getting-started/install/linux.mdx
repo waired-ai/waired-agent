@@ -1,6 +1,10 @@
 ---
 title: Install on Linux
 description: Install Waired on Ubuntu 24.04+ or Debian trixie+ with one command, and what to do on other distributions.
+meta:
+  audience: Ubuntu 24.04+ or Debian trixie+
+  needs: A terminal with sudo
+  time: 5 minutes
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -49,8 +53,8 @@ updates are manual.
 
 ## Desktop icon on GNOME
 
-GNOME has no system tray of its own, so Waired's icon needs an AppIndicator
-extension. Setup installs and enables one automatically when it detects GNOME.
+GNOME does not show icons next to the clock without an extension, so Waired's
+icon needs the AppIndicator extension. Setup installs and enables one automatically when it detects GNOME.
 If the icon still does not appear, see
 [Troubleshooting](/troubleshooting/#the-waired-icon-is-missing-linux).
 KDE Plasma needs nothing.

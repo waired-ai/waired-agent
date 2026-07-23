@@ -1,6 +1,10 @@
 ---
 title: Advanced install options
 description: Installer flags for non-default control planes, version pinning, and development builds. Not needed for a normal install.
+meta:
+  audience: Administrators and Waired developers
+  needs: A terminal
+  time: Look up the flag you need
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -110,10 +114,39 @@ form (it's how the piped Windows `iwr | iex` one-liner opts in, and works on
 every OS), and `--yes` / `-Yes` skips the confirmation for unattended hosts —
 without it, a non-interactive run refuses to wipe.
 
-## Everything else
+## Every installer flag
 
-The installers take more flags than this page covers (dry runs, skipping
-`waired init`, mirror overrides, …). For the full, authoritative list, run the
-script with `--help` / `-Help`, or see
+Linux and macOS use `install.sh`; Windows uses `install.ps1` with the
+PowerShell spelling of the same option. Both accept the environment-variable
+form, which is how the piped one-liner passes an option without writing the
+script to disk.
+
+| `install.sh` | `install.ps1` | Environment variable | What it does |
+|---|---|---|---|
+| `--dry-run` | `-DryRun` | | Print every privileged command without running any of them. |
+| `--yes`, `-y` | `-Yes` | | Assume yes at every prompt, including the pre-install summary. |
+| `--no-init` | `-SkipInit` | | Do **not** run `waired init` after installing. Without this, installing signs you in and sets you up in one pass. |
+| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the AI software. Use it when you already run your own Ollama. |
+| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of your own AI. |
+| `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, machine name and account email in the output, for screenshots and bug reports. Best-effort. |
+| `--check` | `-Check` | | Report whether a newer version is available; change nothing. |
+| `--update` | `-Update` | | Update an existing install rather than installing fresh. |
+| `--edge`, `--latest` | `-Edge`, `-Latest` | `WAIRED_VERSION=edge` | Install or switch to the latest main build. Not a stable release — see [What's new](/reference/release-notes/#stable-and-edge). |
+| `--stable` | `-Stable` | | Install or switch to the latest stable release. |
+| `--clean` | `-Clean` | `WAIRED_CLEAN=1` | Wipe everything first, then install fresh. Destructive; asks to confirm unless `--yes`. |
+| `--control <URL>` | `-Control <URL>` | `WAIRED_CONTROL_URL` | Enroll against a specific control plane. |
+| `--dev` | `-Dev` | | The built-in development control plane. For Waired development only. |
+| | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | Where to install (Windows). |
+| | `-NonInteractive` | | Force `waired init --non-interactive`. Auto-detected when there is no terminal. |
+| | `-InferenceEnabled`, `-ShareWithMesh` | | Answer the two setup questions without asking. |
+| `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | Pin an exact release. |
+
+<Aside type="note" title="Windows flags need the script on disk">
+	The `iwr … | iex` one-liner cannot pass parameters. Either use the
+	environment-variable column above, or download the script first — see the
+	examples earlier on this page.
+</Aside>
+
+Run the script with `--help` / `-Help` for the authoritative list, or read
 [`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)
 in the repository.

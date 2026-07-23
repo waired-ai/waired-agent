@@ -1,6 +1,10 @@
 ---
 title: FAQ
 description: The questions people ask before they install Waired, and the ones they ask afterwards.
+meta:
+  audience: Anyone deciding, or newly set up
+  needs: Nothing
+  time: Skim
 ---
 
 <!-- Grouped by when the question occurs to someone — deciding, hardware,

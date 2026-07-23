@@ -1,6 +1,10 @@
 ---
 title: Choose which AI model runs
 description: See which model your computer is running, and switch to a bigger or smaller one — from the Waired icon, or from a terminal.
+meta:
+  audience: Anyone whose answers are too slow, or not good enough
+  needs: The Waired app, or a terminal
+  time: 5 minutes, plus any download
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -25,8 +29,8 @@ actually run. You only need this page if you want to change it.
 
 ## Which model am I running?
 
-Click the **Waired icon** in your menu bar (macOS) / system tray (Windows,
-Linux) → **Inference**. The active model is listed there.
+Click the **Waired icon** — in the menu bar on macOS, next to the clock on
+Windows and Linux → **Inference**. The active model is listed there.
 
 <details>
 <summary>From a terminal</summary>
@@ -44,7 +48,8 @@ waired models ls --detail     # every model in the catalog, with what fits this 
 	<TabItem label="From the Waired icon">
 		<Steps>
 
-		1. Click the **Waired icon** in your menu bar / system tray.
+		1. Click the **Waired icon** (menu bar on macOS, next to the clock on Windows
+and Linux).
 		2. Open **Models**.
 		3. Pick a model from the list.
 
@@ -54,10 +59,6 @@ waired models ls --detail     # every model in the catalog, with what fits this 
 		serving. If the model has not been downloaded yet, the download starts
 		and the icon shows progress; the old model keeps answering until the new
 		one is ready.
-
-		{/* VERIFY BEFORE PUBLISHING: tray Models submenu = internal/gui/tray
-		    (miCatalog / miCatalogEntries → preferred-model). Confirm the
-		    live-reload and download-progress wording on each OS. */}
 	</TabItem>
 	<TabItem label="After a speed test">
 		```sh

@@ -1,6 +1,10 @@
 ---
 title: Public Share
 description: What sharing your computer with other Waired users means — what the other side can and cannot see, why sharing is required, and every control you have.
+meta:
+  audience: Anyone considering Public Share, in either direction
+  needs: Nothing — read this before turning it on
+  time: 10 minutes
 ---
 
 This page is the full disclosure behind the consent message you saw when
@@ -103,7 +107,7 @@ shared computer qualifies your whole account.
 
 ## Choosing when public nodes are used
 
-`waired public use` (or the tray's "Use public computers" rows) controls when
+`waired public use` (or **Public share → Use public computers** in the Waired app) controls when
 your requests may go to public nodes:
 
 - **off** (the default) — public nodes are never used.

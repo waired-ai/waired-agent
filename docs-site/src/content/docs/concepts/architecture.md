@@ -1,6 +1,10 @@
 ---
 title: Architecture
 description: How Waired connects your devices — the four binaries, enrollment via the control plane, and direct WireGuard with relay fallback.
+meta:
+  audience: Anyone curious how it works underneath
+  needs: Nothing
+  time: 10 minutes
 ---
 
 Waired is an **inference-only overlay network**. It introduces your machines to

@@ -1,6 +1,10 @@
 ---
 title: Troubleshooting
 description: Find the symptom you are actually seeing, in plain words, and get the one command that fixes it.
+meta:
+  audience: Anyone whose Waired is not behaving
+  needs: A terminal on the computer in question
+  time: Find your symptom; each fix is 1–2 minutes
 ---
 
 <!-- Symptom-first. The reader knows what they are seeing, not which subsystem
@@ -283,7 +287,8 @@ firewall gets in the way, automatically.
 
 ## The Waired icon is missing (Linux)
 
-GNOME has no built-in system tray, so the icon needs an AppIndicator extension.
+GNOME does not show icons next to the clock on its own — the Waired icon needs
+the AppIndicator extension.
 Setup installs one automatically when it detects GNOME, and `waired doctor`
 warns when it is missing.
 

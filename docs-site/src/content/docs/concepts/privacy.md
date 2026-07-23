@@ -1,6 +1,10 @@
 ---
 title: Privacy
 description: What stays on your machines by default, what each opt-in sharing tier means, and why Waired never silently sends your data anywhere.
+meta:
+  audience: Anyone who wants to know what leaves their computer
+  needs: Nothing
+  time: 10 minutes
 ---
 
 By default, Waired keeps **your prompts and replies on your own devices**.
