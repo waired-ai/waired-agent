@@ -16,47 +16,21 @@ hero:
       variant: secondary
 ---
 
-import { Tabs, TabItem, CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
+import { Tabs, TabItem, CardGrid, Aside } from '@astrojs/starlight/components';
+import IconLinkCard from '../../components/IconLinkCard.astro';
 
-{/* LANDING PATTERN 1b — pattern 1, with the current page's four value panels
-    kept and turned into real links.
+{/* LANDING PATTERN 1b — pattern 1, keeping the current page's four value
+    panels with their icons, and making each one a real link.
 
-    Note on the trade-off: Starlight's <Card> takes an icon but is not
-    clickable; <LinkCard> is clickable but takes no icon. Keeping the panels
-    clickable therefore costs the rocket / lock / check icons. If the icons
-    matter more than the links, the alternative is a custom component wrapping
-    Card in an anchor. */}
+    The icons come back via src/components/IconLinkCard.astro: Starlight's own
+    <Card> has an icon but is inert, and <LinkCard> is clickable but has no
+    icon, so neither alone does what a landing tile needs. */}
 
 Waired connects your laptops, GPU servers, VMs and home boxes so that
 **local AI models can be shared across your own devices** without exposing them
 to the public internet. Type in Claude Code on any laptop and the answer comes
 from your own machine — no per-message bill, no subscription, and your prompts
 never leave your devices.
-
-## Why people run it
-
-<CardGrid>
-	<LinkCard
-		title="One command →"
-		href="/quickstart/"
-		description="Install with a single line, sign in with Google, and your coding agent is linked for you. Finish setup on screen or in the terminal — about 10 minutes either way."
-	/>
-	<LinkCard
-		title="Free to run →"
-		href="/reference/model-catalog/"
-		description="The model runs on hardware you already own. A recent processor handles a small model; a graphics card makes it fast. See what fits your machine."
-	/>
-	<LinkCard
-		title="Private by design →"
-		href="/concepts/privacy/"
-		description="Your devices talk directly over an end-to-end encrypted link. The coordination service never sees your prompts or replies — and neither can the relay."
-	/>
-	<LinkCard
-		title="Your tools, unchanged →"
-		href="/guides/coding-agents/"
-		description="Claude Code and OpenCode work out of the box, plus any OpenAI- or Anthropic-compatible client. Waired changes where the answer comes from, not how you work."
-	/>
-</CardGrid>
 
 ## Install in one command
 
@@ -87,29 +61,48 @@ never leave your devices.
 It shows what it will do and asks before changing anything. Then finish setup
 **on screen or in the terminal** — the [Quickstart](/quickstart/) covers both.
 
+## Why people run it
+
+<CardGrid>
+	<IconLinkCard title="One command" icon="rocket" href="/quickstart/">
+		Install with a single line, sign in with Google, and your coding agent is
+		linked for you. Finish setup on screen or in the terminal — about ten
+		minutes either way.
+	</IconLinkCard>
+	<IconLinkCard title="Free to run" icon="approve-check" href="/reference/model-catalog/">
+		The model runs on hardware you already own. A recent processor handles a
+		small model; a graphics card makes it fast. See what fits your machine.
+	</IconLinkCard>
+	<IconLinkCard title="Private by design" icon="padlock" href="/concepts/privacy/">
+		Your devices talk directly over an end-to-end encrypted link. The
+		coordination service never sees your prompts or replies — and neither can
+		the relay.
+	</IconLinkCard>
+	<IconLinkCard title="Your tools, unchanged" icon="puzzle" href="/guides/coding-agents/">
+		Claude Code and OpenCode work out of the box, plus any OpenAI- or
+		Anthropic-compatible client. Waired changes where the answer comes from,
+		not how you work.
+	</IconLinkCard>
+</CardGrid>
+
 ## Find what you need
 
 <CardGrid>
-	<LinkCard
-		title="Use it from another device →"
-		href="/getting-started/add-a-device/"
-		description="Sign in on your laptop with the same account and it reaches your AI from anywhere — no ports to open, no VPN to configure."
-	/>
-	<LinkCard
-		title="Choose which model runs →"
-		href="/guides/choose-a-model/"
-		description="A bigger model for better answers, a smaller one for speed — and how to switch without breaking anything."
-	/>
-	<LinkCard
-		title="Something looks wrong →"
-		href="/troubleshooting/"
-		description="Start from the symptom you are seeing and get the one command that fixes it."
-	/>
-	<LinkCard
-		title="Every command →"
-		href="/reference/cli/"
-		description="The full `waired` reference, grouped by what you are trying to do."
-	/>
+	<IconLinkCard title="Use it from another device" icon="laptop" href="/getting-started/add-a-device/">
+		Sign in on your laptop with the same account and it reaches your AI from
+		anywhere — no ports to open, no VPN to configure.
+	</IconLinkCard>
+	<IconLinkCard title="Choose which model runs" icon="setting" href="/guides/choose-a-model/">
+		A bigger model for better answers, a smaller one for speed — and how to
+		switch without breaking anything.
+	</IconLinkCard>
+	<IconLinkCard title="Something looks wrong" icon="warning" href="/troubleshooting/">
+		Start from the symptom you are seeing and get the one command that fixes
+		it.
+	</IconLinkCard>
+	<IconLinkCard title="Every command" icon="list-format" href="/reference/cli/">
+		The full `waired` reference, grouped by what you are trying to do.
+	</IconLinkCard>
 </CardGrid>
 
 <Aside type="tip" title="New to all of this?">

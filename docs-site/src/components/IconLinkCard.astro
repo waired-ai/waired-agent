@@ -1,0 +1,126 @@
+---
+// IconLinkCard — a card that has an icon AND is a link.
+//
+// Starlight ships two components and each is missing half of what a landing
+// page needs: <Card> takes an icon but is inert, <LinkCard> is clickable but
+// has no icon. This is <Card>'s look with <LinkCard>'s behaviour: the whole
+// tile is a click target (the anchor's ::after covers it), and it uses only
+// Starlight's own custom properties, so it follows the theme in light and dark
+// without a second set of colours to maintain.
+import { Icon } from '@astrojs/starlight/components';
+import type { StarlightIcon } from '@astrojs/starlight/types';
+
+interface Props {
+	/** Starlight icon name, e.g. "rocket", "padlock", "puzzle". */
+	icon: StarlightIcon;
+	title: string;
+	href: string;
+}
+
+const { icon, title, href } = Astro.props;
+---
+
+<article class="wd-card sl-flex">
+	<p class="wd-title sl-flex">
+		<Icon name={icon} class="wd-icon" size="1.333em" />
+		<a href={href} class="wd-link">{title}</a>
+	</p>
+	<div class="wd-body"><slot /></div>
+	<Icon name="right-arrow" class="wd-arrow rtl:flip" size="1.1rem" />
+</article>
+
+<style>
+	.wd-card {
+		--wd-pad: clamp(1rem, calc(0.125rem + 3vw), 2.5rem);
+		position: relative;
+		flex-direction: column;
+		gap: clamp(0.5rem, calc(0.125rem + 1vw), 1rem);
+		border: 1px solid var(--sl-color-gray-5);
+		background-color: var(--sl-color-black);
+		padding: var(--wd-pad);
+		transition:
+			border-color 0.15s ease,
+			background-color 0.15s ease;
+	}
+
+	/* Hover/focus state belongs to the whole tile, not just the text, so the
+	   card reads as one control. :focus-within keeps it usable from a keyboard. */
+	.wd-card:hover,
+	.wd-card:focus-within {
+		border-color: var(--sl-color-accent);
+		background-color: var(--sl-color-gray-7, var(--sl-color-black));
+	}
+
+	.wd-title {
+		font-weight: 600;
+		font-size: var(--sl-text-h4);
+		line-height: var(--sl-line-height-headings);
+		gap: 1rem;
+		align-items: center;
+		margin: 0;
+	}
+
+	.wd-icon {
+		border: 1px solid var(--sl-color-gray-5);
+		background-color: var(--sl-color-black);
+		padding: 0.2em;
+		border-radius: 0.25rem;
+		flex-shrink: 0;
+	}
+
+	.wd-link {
+		color: var(--sl-color-white);
+		text-decoration: none;
+	}
+
+	/* The anchor grows to cover the card, so any click inside it navigates.
+	   The arrow sits above it (z-index) purely so it stays visible. */
+	.wd-link::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+	}
+
+	.wd-card:hover .wd-link,
+	.wd-card:focus-within .wd-link {
+		color: var(--sl-color-white);
+		text-decoration: underline;
+	}
+
+	.wd-body {
+		font-size: var(--sl-text-body);
+		color: var(--sl-color-gray-2);
+	}
+
+	.wd-arrow {
+		position: absolute;
+		top: var(--wd-pad);
+		inset-inline-end: var(--wd-pad);
+		color: var(--sl-color-gray-3);
+		z-index: 1;
+		transition:
+			transform 0.15s ease,
+			color 0.15s ease;
+	}
+
+	.wd-card:hover .wd-arrow,
+	.wd-card:focus-within .wd-arrow {
+		color: var(--sl-color-white);
+		transform: translateX(0.25rem);
+	}
+
+	/* Keep the heading clear of the arrow at narrow widths. */
+	.wd-title {
+		padding-inline-end: 1.75rem;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.wd-card,
+		.wd-arrow {
+			transition: none;
+		}
+		.wd-card:hover .wd-arrow {
+			transform: none;
+		}
+	}
+</style>
