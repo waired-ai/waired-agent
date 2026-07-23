@@ -13,7 +13,8 @@
 //     to a gateway.HandlerSet (the same routes the loopback gateway
 //     serves) but with the peer-auth middleware stack:
 //
-//     wgPeerOnly → verifyPeerSignature → pausedGate → inferenceGate
+//     wgPeerOnly → grantRoleGate → verifyPeerSignature → pausedGate →
+//     inferenceGate
 //
 //     The Selector behind the gateway.HandlerSet is wired with
 //     MeshSnapshotFn=nil so a peer-side request never recurses to a
@@ -514,6 +515,8 @@ func (s *Server) Handler() http.Handler {
 // request peer's class (public share spec §8.1):
 //
 //	wgPeerOnly          (= source IP must resolve to a known peer)
+//	grantRoleGate       (= 403 grant_not_consumer for foreign grant peers
+//	                       that are not public consumers)
 //	verifyPeerSignature (= Ed25519 over canonical headers + body)
 //	pausedGate          (= 503 waired_paused while paused)
 //	inferenceGate       (= 503 waired_inference_disabled while disabled)
@@ -533,6 +536,12 @@ func (s *Server) Handler() http.Handler {
 // shareGate — a public consumer's admission is governed by the public
 // toggle + public capacity, not the intra-account mesh-share choice
 // (public ON implies mesh share anyway, spec §4.1).
+//
+// grantRoleGate runs before signature verification because it is an
+// authorization decision on the peer's class, not on the request: a
+// foreign grant peer that is not a public consumer has no serving-side
+// entitlement here at all, and refusing it early keeps it out of the
+// nonce cache (waired#896, spec §8.1/§8.5).
 //
 // Pausing the agent, disabling inference, unsharing, or saturating
 // mid-flight rejects peer requests with the same JSON envelope a
@@ -559,20 +568,27 @@ func (s *Server) peerAuthChain(next http.Handler) http.Handler {
 		next = s.pausedGate(next)
 	}
 	next = verifyPeerSignature(next, s.peerLookup, s.nonces, s.skewWindow, s.nonceTTL, s.maxBodySize, s.now)
+	next = grantRoleGate(next)
 	next = wgPeerOnly(next, s.peerLookup)
 	return next
 }
 
 // peerAuthOnly wraps next in just the authentication layers
-// (wgPeerOnly + verifyPeerSignature) without the operator gates. Used
-// for /waired/v1/inference/healthz: probes from authenticated peers
-// must always receive the current state in the JSON body, even when
-// the agent is paused / inference-disabled / share-denied / at
-// capacity — the gates would mask that information behind a single
-// 503, defeating the probe's purpose. The body keeps the state, the
-// gates still apply to the actual inference path.
+// (wgPeerOnly + grantRoleGate + verifyPeerSignature) without the
+// operator gates. Used for /waired/v1/inference/healthz: probes from
+// authenticated peers must always receive the current state in the JSON
+// body, even when the agent is paused / inference-disabled /
+// share-denied / at capacity — the gates would mask that information
+// behind a single 503, defeating the probe's purpose. The body keeps
+// the state, the gates still apply to the actual inference path.
+//
+// grantRoleGate is NOT one of those operator gates: a foreign grant
+// peer with no serving entitlement here has no business reading this
+// agent's engine/capacity state either, so it is refused on this
+// surface too (waired#896).
 func (s *Server) peerAuthOnly(next http.Handler) http.Handler {
 	next = verifyPeerSignature(next, s.peerLookup, s.nonces, s.skewWindow, s.nonceTTL, s.maxBodySize, s.now)
+	next = grantRoleGate(next)
 	next = wgPeerOnly(next, s.peerLookup)
 	return next
 }
@@ -653,16 +669,20 @@ func inferenceGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 // shareGateAdapter rejects peer requests when this agent has opted out
 // of mesh-share (Phase 6). Sits innermost so the operator's privacy
 // choice surfaces as a typed error envelope rather than blending into
-// the broader "engine disabled" reply. Public-grant consumers pass
-// through untouched: their admission is governed by the public gates
-// (spec §8.1), not the intra-account mesh-share choice.
+// the broader "engine disabled" reply. It governs SAME-NETWORK peers
+// only (Grant == nil): a foreign grant peer's admission is decided by
+// the public gates (spec §8.1), not by the intra-account mesh-share
+// choice. Testing for the grant rather than for IsPublicConsumer keeps
+// mesh trust structurally unreachable from across an account boundary —
+// grantRoleGate has already refused every grant peer that is not a
+// public consumer (waired#896).
 func shareGateAdapter(fn func() bool) func(http.Handler) http.Handler {
 	if fn == nil {
 		return nil
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if peer, ok := PeerFromContext(r.Context()); ok && peer.IsPublicConsumer() {
+			if peer, ok := PeerFromContext(r.Context()); ok && peer.IsForeignGrantPeer() {
 				next.ServeHTTP(w, r)
 				return
 			}
