@@ -1,7 +1,7 @@
 ---
 title: 高度なインストールオプション
 description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
-sourceHash: 39d8b5943ac4de91
+sourceHash: fa63cb4fc4ae5d03
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -124,6 +124,7 @@ Linux と macOS は `install.sh`、Windows は同じオプションの PowerShel
 | `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | AI ソフトウェアをインストールしません。自前の Ollama を使う場合に。 |
 | `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Claude Code を自分の AI ではなく Anthropic API のままにします。 |
 | `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | 出力中のホームフォルダ・ユーザー名・マシン名・アカウントのメールアドレスを伏せます（スクリーンショットやバグ報告向け、ベストエフォート）。 |
+| `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | エージェントをこのログ詳細度で起動します。`debug` / `info`（既定）/ `warn` / `error`。リリース前のデバッグには `debug` を使います。あとから再インストールせずに変更するには [`waired config log-level`](/ja/reference/cli/#waired-config) を使います。 |
 | `--check` | `-Check` | | 新しいバージョンがあるかを報告するだけで、何も変更しません。 |
 | `--update` | `-Update` | | 新規インストールではなく、既存のインストールを更新します。 |
 | `--edge`, `--latest` | `-Edge`, `-Latest` | `WAIRED_VERSION=edge` | 最新の main ビルドを入れる／切り替える。安定版ではありません → [更新情報](/ja/reference/release-notes/#stable-と-edge) |

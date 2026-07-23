@@ -33,6 +33,8 @@ covers what the flags are *for*.
 | [`waired codeui`](#waired-codeui) | A coding agent in your browser |
 | [`waired pause`](#waired-pause--resume) / [`resume`](#waired-pause--resume) | Stop and restart routing |
 | [`waired update`](#waired-update) | Install a newer Waired |
+| [`waired config`](#waired-config) | Turn detailed logging on or off |
+| [`waired logs`](#waired-logs) | Save recent logs to a file for a bug report |
 | [`waired version`](#waired-version) | Which build is this? |
 | [`waired keygen`](#waired-keygen) | Generate a key pair by hand |
 
@@ -314,6 +316,47 @@ waired update --notify on|off   # the app's pop-up update prompt
 
 See [Update Waired](/getting-started/update/). `--notify off` silences the
 pop-up; the update entry in the Waired app stays either way.
+
+### `waired config`
+
+Change persisted agent settings. Today that means the **log detail level**.
+
+```sh
+waired config log-level              # show the current level
+waired config log-level debug        # turn on detailed logs
+waired config log-level info         # back to normal
+```
+
+The levels are `debug`, `info` (the default), `warn` and `error`. `debug` is
+the switch to flip before reproducing a problem: it takes effect immediately —
+**no restart** — on both the background service and the Waired app, and is
+remembered across restarts. Set it back to `info` when you are done so the logs
+stay small. If the service is not running, the choice is saved and applies the
+next time it starts.
+
+### `waired logs`
+
+Collects the recent logs into a single file you can attach to a bug report.
+
+```sh
+waired logs                          # writes waired-logs-<time>.txt here
+waired logs -o report.txt            # choose the file
+waired logs --since 30m              # how far back to look (default 1h)
+```
+
+It gathers the background service's log (from the system log) and the AI
+engine's log. For the most useful report, turn on detail first, reproduce the
+problem, then collect it:
+
+```sh
+waired config log-level debug
+# ...reproduce the problem...
+waired logs -o report.txt
+waired config log-level info
+```
+
+Look over the file before sharing it — it can contain local file paths or your
+username.
 
 ### `waired version`
 
