@@ -396,11 +396,16 @@ func TestProfile_GPUSummary_NilForCPUOnly(t *testing.T) {
 }
 
 // TestProfile_GPUSummary_StripsOperatorMetadata verifies the helper
-// drops Vendor / DriverVersion / UUID — these are operator-side
-// concerns. Other peers in the mesh only need Model + VRAM + compute
-// cap for the tray display; broadcasting driver version or device
-// UUID would leak machine-fingerprintable detail with no routing
-// utility.
+// drops DriverVersion / UUID — these are operator-side concerns, and
+// broadcasting them would leak machine-fingerprintable detail with no
+// routing utility.
+//
+// Vendor is deliberately NOT stripped (waired-agent#142): the control
+// plane's onboarding host-fit needs it to decide which serving engines
+// a device may be offered, and it adds no fingerprinting surface — it
+// is a three-value token that the Model string already spells out
+// ("NVIDIA GeForce RTX 4090"). Publishing it is what lets consumers
+// honour Model's "do not parse for routing decisions" rule.
 func TestProfile_GPUSummary_StripsOperatorMetadata(t *testing.T) {
 	p := Profile{
 		GPUs: []GPU{
@@ -422,8 +427,8 @@ func TestProfile_GPUSummary_StripsOperatorMetadata(t *testing.T) {
 	}
 	got := p.GPUSummary()
 	want := []GPUSummary{
-		{Model: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24564, ComputeCap: "8.9"},
-		{Model: "NVIDIA GeForce RTX 3060", VRAMTotalMB: 12000, ComputeCap: "8.6"},
+		{Model: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24564, ComputeCap: "8.9", Vendor: "nvidia"},
+		{Model: "NVIDIA GeForce RTX 3060", VRAMTotalMB: 12000, ComputeCap: "8.6", Vendor: "nvidia"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("GPUSummary() len = %d, want %d (%+v)", len(got), len(want), got)
