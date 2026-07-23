@@ -45,6 +45,11 @@ on:
         default: all
         type: choice
         options: [all, linux, windows, macos]
+      gpu:
+        description: GPU vLLM install+serve lane (needs a self-hosted L4 runner)
+        default: 'off'
+        type: choice
+        options: ['off', quick, full]
 
 concurrency:
   group: installtest-inference
@@ -406,3 +411,80 @@ jobs:
             echo "## banner render check (windows)"
             echo "- result: **${{ job.status }}**"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # GPU vLLM install + serve (waired#835 Phase 2, #153). This is the GPU lane
+  # the "GPU テスト実行義務" decision (docs/decisions.md) has mandated since
+  # Step 2: "when CI is built, include a GPU lane that runs make e2e-vllm".
+  # It reuses that harness verbatim — a real `waired runtimes install vllm`
+  # venv build (the same vllmInstallCore the setup executor drives on the
+  # onboarding path) followed by a served /v1/chat/completions smoke against a
+  # real GPU (in-process gateway; no daemon/CP/enrol needed).
+  #
+  # Runs ONLY on a self-hosted L4 runner and ONLY when the GPU_RUNNER_ENABLED
+  # repo variable is set (schedule) or a dispatch selects it — so it is
+  # dormant, not queued-forever, until the GCP L4 ephemeral runner pool is
+  # provisioned (blocking requirement per the same decision). GitHub-hosted
+  # GPU runners are a single Tesla T4 (compute capability 7.5) — below vLLM's
+  # SM_80 floor (internal/runtime/vllm_install.go VLLMVerifyImports) — so they
+  # cannot host this; L4 (Ada, SM 8.9, 24 GB) is the target (g2-standard-4).
+  vllm-install:
+    name: vLLM install + serve (linux, l4)
+    if: >-
+      ${{ (github.event_name == 'schedule' && vars.GPU_RUNNER_ENABLED == 'true')
+       || (github.event_name == 'workflow_dispatch' && (github.event.inputs.gpu || 'off') != 'off') }}
+    runs-on: [self-hosted, linux, gpu, l4]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # The L4 image bakes the Go toolchain + caches locally (mirrors the
+          # other self-hosted legs).
+          cache: false
+
+      - name: nvidia-smi (fail fast if the runner lost its GPU)
+        run: nvidia-smi
+
+      - name: state dir (install + e2e both resolve <state-dir>/runtimes/vllm)
+        run: echo "WAIRED_STATE_DIR=$RUNNER_TEMP/waired-state" >> "$GITHUB_ENV"
+
+      - name: build waired
+        run: go build -o "$RUNNER_TEMP/waired" ./cmd/waired
+
+      - name: install vLLM venv (real ~6 GB build; exercises vllmInstallCore)
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/waired" runtimes install vllm --yes --state-dir "$WAIRED_STATE_DIR" 2>&1 | tee vllm-install.log
+
+      - name: serve smoke (make e2e-vllm-quick; full on schedule / dispatch=full)
+        run: |
+          set -euo pipefail
+          target=e2e-vllm-quick
+          if [ "${{ github.event_name }}" = schedule ] || [ "${{ github.event.inputs.gpu }}" = full ]; then
+            target=e2e-vllm
+          fi
+          echo "running make $target (WAIRED_STATE_DIR=$WAIRED_STATE_DIR)"
+          make "$target" 2>&1 | tee vllm-e2e.log
+
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## vLLM install + serve (l4)"
+            echo "- result: **${{ job.status }}**"
+            grep -iE 'installed at|[0-9.]+ *tok/s|--- PASS|--- FAIL' vllm-e2e.log vllm-install.log 2>/dev/null \
+              | sed -E 's/\x1b\[[0-9;]*m//g; s/^/- /' | tail -8 || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vllm-gpu-${{ github.run_attempt }}
+          path: |
+            vllm-install.log
+            vllm-e2e.log
+          if-no-files-found: ignore
+          retention-days: 14
