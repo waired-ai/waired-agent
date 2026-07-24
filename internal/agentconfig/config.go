@@ -26,6 +26,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -383,6 +384,117 @@ func (r RoutingConfig) AsPreference() state.RoutingPreference {
 type Config struct {
 	Inference InferenceConfig `json:"inference"`
 	Routing   RoutingConfig   `json:"routing,omitempty"`
+	Logging   LoggingConfig   `json:"logging,omitempty"`
+}
+
+// Log level names accepted in agent.json (logging.level), the
+// WAIRED_LOG_LEVEL env var, and the `--log-level` flags. These map 1:1
+// onto slog levels via ParseLogLevel.
+const (
+	LogLevelDebug = "debug"
+	LogLevelInfo  = "info"
+	LogLevelWarn  = "warn"
+	LogLevelError = "error"
+)
+
+// LoggingConfig captures logging behavior an operator may tune without
+// recompiling. It is read once at boot by both the daemon and the tray;
+// the daemon additionally exposes a live toggle over the management API
+// (surfaced as `waired config log-level`) that updates the running level
+// immediately and persists the choice back here so it survives a restart.
+type LoggingConfig struct {
+	// Level is the minimum slog level emitted: "debug", "info", "warn",
+	// or "error". Empty is treated as "info". Raising it to "debug" is
+	// the pre-release debugging switch for both the service and the app.
+	Level string `json:"level,omitempty"`
+}
+
+// SlogLevel maps the configured Level to a slog.Level. An empty or
+// unrecognized value falls back to slog.LevelInfo — Validate rejects
+// unrecognized values on the config path, so this is only the defensive
+// read-path default.
+func (l LoggingConfig) SlogLevel() slog.Level {
+	lvl, _ := ParseLogLevel(l.Level)
+	return lvl
+}
+
+// ParseLogLevel converts a level name to a slog.Level. It accepts
+// "debug", "info", "warn", and "error" (case-insensitive, surrounding
+// whitespace ignored); "" maps to info. An unrecognized value returns
+// slog.LevelInfo together with an error.
+func ParseLogLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", LogLevelInfo:
+		return slog.LevelInfo, nil
+	case LogLevelDebug:
+		return slog.LevelDebug, nil
+	case LogLevelWarn:
+		return slog.LevelWarn, nil
+	case LogLevelError:
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("agentconfig: unknown log level %q (want %s|%s|%s|%s)",
+			s, LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError)
+	}
+}
+
+// NormalizeLogLevel lower-cases and trims a level name, returning the
+// canonical form used for storage. It errors on an unrecognized value.
+func NormalizeLogLevel(s string) (string, error) {
+	if _, err := ParseLogLevel(s); err != nil {
+		return "", err
+	}
+	n := strings.ToLower(strings.TrimSpace(s))
+	if n == "" {
+		n = LogLevelInfo
+	}
+	return n, nil
+}
+
+// LogLevelName maps a slog.Level back to its config/API name. Range-based
+// so an out-of-band level still resolves to the nearest bucket.
+func LogLevelName(l slog.Level) string {
+	switch {
+	case l <= slog.LevelDebug:
+		return LogLevelDebug
+	case l < slog.LevelWarn:
+		return LogLevelInfo
+	case l < slog.LevelError:
+		return LogLevelWarn
+	default:
+		return LogLevelError
+	}
+}
+
+// ResolveLogLevel picks the effective boot log level for a binary from,
+// in precedence order (highest first):
+//
+//  1. flagVal — an explicit --log-level flag, when non-empty
+//  2. $WAIRED_LOG_LEVEL
+//  3. $WAIRED_DEBUG — legacy switch: any non-empty value → debug
+//  4. cfgLevel — a persisted logging.level (agent.json); pass "" for a
+//     binary that has no config layer (e.g. the tray)
+//  5. info
+//
+// getenv is injected (os.Getenv in production) so precedence is unit
+// testable. Unrecognized flag/env values are ignored (fall through to the
+// next source) rather than failing the process at boot.
+func ResolveLogLevel(cfgLevel, flagVal string, getenv func(string) string) slog.Level {
+	if flagVal != "" {
+		if lvl, err := ParseLogLevel(flagVal); err == nil {
+			return lvl
+		}
+	}
+	if v := getenv("WAIRED_LOG_LEVEL"); v != "" {
+		if lvl, err := ParseLogLevel(v); err == nil {
+			return lvl
+		}
+	}
+	if getenv("WAIRED_DEBUG") != "" {
+		return slog.LevelDebug
+	}
+	lvl, _ := ParseLogLevel(cfgLevel)
+	return lvl
 }
 
 // Defaults returns the Config that ships when no file / env / flag is
@@ -472,6 +584,7 @@ func Defaults() Config {
 			ClaudeModelRouteDirectives: true,
 		},
 		Routing: RoutingConfig{Mode: state.RoutingModeAuto},
+		Logging: LoggingConfig{Level: LogLevelInfo},
 	}
 }
 
@@ -507,6 +620,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := validateRouting(c.Routing); err != nil {
+		return err
+	}
+	if _, err := ParseLogLevel(c.Logging.Level); err != nil {
 		return err
 	}
 	return nil
@@ -582,9 +698,11 @@ func (c *Config) MergeJSON(path string) error {
 }
 
 // MergeEnv overlays values from a list of "KEY=VALUE" strings (i.e. the
-// shape returned by os.Environ()). Only keys with the WAIRED_INFERENCE_
-// prefix are consulted. Unknown keys are ignored. Malformed values for
-// known keys produce an error.
+// shape returned by os.Environ()). Keys with the WAIRED_INFERENCE_
+// prefix set inference fields; WAIRED_LOG_LEVEL sets logging.level.
+// Unknown keys are ignored. Malformed values for known keys produce an
+// error. (WAIRED_DEBUG is a separate legacy debug switch resolved by the
+// binaries at boot, not a config field, so it is not consulted here.)
 func (c *Config) MergeEnv(env []string) error {
 	const inferencePrefix = "WAIRED_INFERENCE_"
 	for _, kv := range env {
@@ -594,6 +712,12 @@ func (c *Config) MergeEnv(env []string) error {
 		}
 		key, val := kv[:eq], kv[eq+1:]
 		switch {
+		case key == "WAIRED_LOG_LEVEL":
+			n, err := NormalizeLogLevel(val)
+			if err != nil {
+				return fmt.Errorf("agentconfig: env %s: %w", key, err)
+			}
+			c.Logging.Level = n
 		case strings.HasPrefix(key, inferencePrefix):
 			name := key[len(inferencePrefix):]
 			if err := setInferenceField(&c.Inference, name, val); err != nil {

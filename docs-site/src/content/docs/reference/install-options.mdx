@@ -129,6 +129,7 @@ script to disk.
 | `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the AI software. Use it when you already run your own Ollama. |
 | `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of your own AI. |
 | `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, machine name and account email in the output, for screenshots and bug reports. Best-effort. |
+| `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | Start the agent at this log detail: `debug`, `info` (default), `warn` or `error`. Use `debug` for pre-release debugging. Change it later without reinstalling via [`waired config log-level`](/reference/cli/#waired-config). |
 | `--check` | `-Check` | | Report whether a newer version is available; change nothing. |
 | `--update` | `-Update` | | Update an existing install rather than installing fresh. |
 | `--edge`, `--latest` | `-Edge`, `-Latest` | `WAIRED_VERSION=edge` | Install or switch to the latest main build. Not a stable release — see [What's new](/reference/release-notes/#stable-and-edge). |

@@ -172,6 +172,8 @@ func run(ctx context.Context, args []string) error {
 		"delete the boot benchmark cache (~/.cache/waired/bench.json) before measuring so the next start re-runs the token/s benchmark from scratch. Diagnostic flag; the cache key already changes on driver/variant updates.")
 	devForcePhase := fs.String("dev-force-phase", "",
 		"DEV ONLY: override Status.Phase value reported to the management API (one of: starting, stopping, error). Used to drive tray UI verification of states the daemon never holds long enough to capture in normal operation.")
+	logLevel := fs.String("log-level", "",
+		"log verbosity: debug|info|warn|error. Overrides agent.json logging.level and $WAIRED_LOG_LEVEL; empty uses those (default info). Live-toggle a running daemon with `waired config log-level <level>`.")
 
 	// Inference config: defaults → agent.json → env → flags.
 	//
@@ -218,11 +220,14 @@ func run(ctx context.Context, args []string) error {
 		*disableInference = true
 	}
 
-	level := slog.LevelInfo
-	if os.Getenv("WAIRED_DEBUG") != "" {
-		level = slog.LevelDebug
-	}
-	primary := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	// Log level is a slog.LevelVar (not a fixed level) so the management
+	// API can live-toggle verbosity — e.g. flip to debug for pre-release
+	// diagnostics — without a daemon restart. Initial value: --log-level
+	// flag > $WAIRED_LOG_LEVEL > $WAIRED_DEBUG (legacy) > agent.json
+	// logging.level > info. See resolveLogLevel.
+	logLevelVar := new(slog.LevelVar)
+	logLevelVar.Set(agentconfig.ResolveLogLevel(cfgRoot.Logging.Level, *logLevel, os.Getenv))
+	primary := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevelVar})
 	// Wrap with the OS-native secondary sink so Warn/Error records
 	// survive stderr being closed (e.g. Windows SCM dispatcher).
 	logger := slog.New(logsink.New(primary, service.ServiceName))
@@ -1417,6 +1422,14 @@ func run(ctx context.Context, args []string) error {
 	// the actual apply under elevation.
 	updateCtl := newUpdateController(*stateDir)
 	mgmtSrv = mgmtSrv.WithUpdateController(updateCtl)
+
+	// Live log-level control (#157): flip verbosity (e.g. to debug for
+	// pre-release diagnostics) without a restart, and persist the choice to
+	// agent.json so it survives one. Read via GET /waired/v1/log/level (the
+	// tray mirrors it); write via POST /waired/v1/log/settings over the
+	// local IPC socket.
+	logCtl := newLogController(logLevelVar, agentJSONPath)
+	mgmtSrv = mgmtSrv.WithLogController(logCtl)
 
 	// Resolve the local IPC write endpoint (waired#838). Empty --mgmt-socket
 	// auto-derives from the resolved state dir: a system install

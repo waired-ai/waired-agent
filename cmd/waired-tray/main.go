@@ -11,11 +11,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/gui/tray"
 	"github.com/waired-ai/waired-agent/internal/management"
@@ -40,6 +42,8 @@ func run(args []string) error {
 		"directory holding identity.json (passed to `waired init` / `waired logout` via pkexec)")
 	pollEvery := fs.Duration("poll-every", 5*time.Second,
 		"polling interval for /v1/status and /v1/identity")
+	logLevel := fs.String("log-level", "",
+		"log verbosity: debug|info|warn|error (default info, or $WAIRED_LOG_LEVEL). Without this flag the tray follows the daemon's live level, so `waired config log-level <level>` toggles the service and the app together.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -60,6 +64,19 @@ func run(args []string) error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// Logging: a LevelVar-backed handler so the tray's verbosity can change
+	// at runtime. Initial level: --log-level > $WAIRED_LOG_LEVEL >
+	// $WAIRED_DEBUG > info. Unless --log-level pinned a level, follow the
+	// daemon's live level (waired config log-level) so one toggle covers
+	// both the service and the app. Before this the tray had no logger init
+	// and could not be put into debug mode at all.
+	logLevelVar := new(slog.LevelVar)
+	logLevelVar.Set(agentconfig.ResolveLogLevel("", *logLevel, os.Getenv))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevelVar})))
+	if !flagPassed(fs, "log-level") {
+		go followDaemonLogLevel(ctx, *mgmtURL, logLevelVar, *pollEvery)
+	}
 
 	tray.Run(ctx, tray.Options{
 		MgmtURL:    *mgmtURL,

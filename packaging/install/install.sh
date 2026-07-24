@@ -83,6 +83,12 @@ CONTROL_URL=""
 FLAG_USE_DEV=0
 FLAG_CONTROL_URL=""
 FLAG_NO_OLLAMA=0
+# LOG_LEVEL, when set (--log-level or $WAIRED_LOG_LEVEL), starts the agent at
+# that slog verbosity: debug|info|warn|error. On Linux it is written to
+# /etc/waired/agent.env (systemd EnvironmentFile); on macOS it is baked into
+# the LaunchDaemon's ProgramArguments as --log-level. Change it later at
+# runtime (no restart) with `waired config log-level`.
+LOG_LEVEL="${WAIRED_LOG_LEVEL:-}"
 # FLAG_CHECK / FLAG_UPDATE / FLAG_YES default to 0 so they can be read
 # under `set -u` even when the corresponding flag is not passed. Without
 # FLAG_CHECK/FLAG_UPDATE defaults a fresh `curl | sh` aborts with
@@ -341,6 +347,11 @@ Options:
                    sign-in step also masks hostname + account email) in
                    the output — for screenshots and bug reports.
                    Best-effort. Same as WAIRED_PII_MASK=1.
+  --log-level LVL  start the agent at this log verbosity: debug, info,
+                   warn, or error (default info). Use --log-level debug for
+                   pre-release debugging. Same as WAIRED_LOG_LEVEL=LVL.
+                   Change it later without reinstalling via
+                   \`waired config log-level <level>\`.
   --skip-claude-proxy
                    leave Claude Code routed straight to the Anthropic API
                    (do not point ANTHROPIC_BASE_URL at local inference).
@@ -367,6 +378,8 @@ Environment variables:
                            fallback for per-org installer wrappers)
   WAIRED_DEV_CONTROL_URL   override the URL --dev resolves to
                            (default: https://app.dev.waired.net)
+  WAIRED_LOG_LEVEL         start the agent at this log verbosity
+                           (debug|info|warn|error; same as --log-level)
   WAIRED_INSTALL_BASE_URL  override URL for install.sh itself
                            (default: github.com/waired-ai/waired-agent releases)
   WAIRED_OLLAMA_DARWIN_URL macOS only: override the Ollama.app download URL
@@ -1009,6 +1022,7 @@ linux_apt_install() {
     common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $pkgs
 
     linux_apt_write_control_url
+    linux_write_log_level_env
 
     section 'AI engine (Ollama)'
     if ollama_skip_requested; then
@@ -1086,6 +1100,33 @@ linux_apt_write_control_url() {
 
     common_log "Writing WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
     printf 'WAIRED_CONTROL_URL=%s\n' "$CONTROL_URL" | $SUDO tee -a "$env_file" >/dev/null
+}
+
+# Persist $LOG_LEVEL into /etc/waired/agent.env so the systemd daemon starts
+# at that verbosity (the unit's EnvironmentFile is read at boot). Parallels
+# linux_apt_write_control_url: append-only, and an existing active setting is
+# left alone. Runtime changes go through `waired config log-level`.
+linux_write_log_level_env() {
+    [ -z "$LOG_LEVEL" ] && return 0
+    env_file=/etc/waired/agent.env
+
+    if [ "$DRY_RUN" = 1 ]; then
+        common_log "Would write WAIRED_LOG_LEVEL=$LOG_LEVEL to $env_file"
+        return 0
+    fi
+
+    if [ ! -f "$env_file" ]; then
+        common_warn "$env_file not present after install — skipping log-level auto-config"
+        return 0
+    fi
+
+    if $SUDO grep -Eq '^[[:space:]]*WAIRED_LOG_LEVEL=.+' "$env_file"; then
+        common_warn "$env_file already sets WAIRED_LOG_LEVEL — leaving it as-is"
+        return 0
+    fi
+
+    common_log "Writing WAIRED_LOG_LEVEL=$LOG_LEVEL to $env_file"
+    printf 'WAIRED_LOG_LEVEL=%s\n' "$LOG_LEVEL" | $SUDO tee -a "$env_file" >/dev/null
 }
 
 # Install waired's BUNDLED Ollama on Linux via `waired runtimes install
@@ -1235,11 +1276,21 @@ darwin_install_binaries() {
 darwin_register_agent() {
     state_dir="$1"
     common_log "Registering waired-agent system LaunchDaemon (sudo)"
+    # The macOS LaunchDaemon does not read agent.env at runtime, so unlike
+    # Linux the log level cannot ride an EnvironmentFile. Bake it into the
+    # plist's ProgramArguments instead by passing --log-level as an install
+    # ExtraArg (everything after `--` becomes ExecStart/ProgramArguments
+    # tokens; the agent flag wins over agent.json). Runtime changes still go
+    # through `waired config log-level`.
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$state_dir\""
+        common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$state_dir\"${LOG_LEVEL:+ -- --log-level $LOG_LEVEL}"
         return 0
     fi
-    $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir"
+    if [ -n "$LOG_LEVEL" ]; then
+        $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir" -- --log-level "$LOG_LEVEL"
+    else
+        $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir"
+    fi
 }
 
 # darwin_install_log_rotation drops a newsyslog(8) config so the agent's
@@ -1532,11 +1583,29 @@ main() {
                 FLAG_CONTROL_URL="${1#--control=}"
                 [ -n "$FLAG_CONTROL_URL" ] || common_die "--control= requires a URL"
                 ;;
+            --log-level)
+                shift
+                [ "$#" -gt 0 ] || common_die "--log-level requires an argument (debug|info|warn|error)"
+                LOG_LEVEL="$1"
+                ;;
+            --log-level=*)
+                LOG_LEVEL="${1#--log-level=}"
+                ;;
             -h|--help) show_help; exit 0 ;;
             *) common_die "unknown argument: $1 (try --help)" ;;
         esac
         shift
     done
+
+    # Validate --log-level / $WAIRED_LOG_LEVEL now so a typo fails at install
+    # time rather than silently at daemon boot (the agent tolerates a bad env
+    # value by falling back to info).
+    if [ -n "$LOG_LEVEL" ]; then
+        case "$LOG_LEVEL" in
+            debug|info|warn|error) : ;;
+            *) common_die "--log-level must be one of: debug info warn error (got: $LOG_LEVEL)" ;;
+        esac
+    fi
 
     # --clean always wipes and installs fresh, so the read-only --check
     # and the in-place --update contradict it.
