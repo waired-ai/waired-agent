@@ -31,10 +31,11 @@ func setVLLMAutoSelectable(t *testing.T, v bool) {
 	t.Cleanup(func() { VLLMAutoSelectable = old })
 }
 
-// While vLLM serving is unwired (#557, VLLMAutoSelectable=false), a large
-// NVIDIA host must auto-pick ollama — the only engine that can actually pull
-// and serve — and say why.
-func TestPickEngine_NVIDIASufficientVRAM_AutoOllamaWhileVLLMUnwired(t *testing.T) {
+// With the auto-picker gated off (VLLMAutoSelectable=false — an operator/build
+// opt-out, no longer the default since #557 landed), a large NVIDIA host
+// auto-picks ollama and says why. Pins that the gate still works.
+func TestPickEngine_NVIDIASufficientVRAM_AutoOllamaWhenGatedOff(t *testing.T) {
+	setVLLMAutoSelectable(t, false)
 	hw := hardware.Profile{
 		RAMTotalGB: 64,
 		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24467}},

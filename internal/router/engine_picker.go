@@ -17,20 +17,20 @@ import (
 const MinVLLMVRAMMB = 8 * 1024
 
 // VLLMAutoSelectable gates whether the hardware auto-picker (and the CLI's
-// recommendEngine) may choose vLLM. It is false while vLLM local serving is
-// unwired (#557): the adapter isn't registered and no model can be pulled or
-// served on it, so auto-selecting vLLM would only advertise an engine the host
-// can't actually run — a stale `available_update`, a "via vllm" catalog line,
-// a benchmark "upgrade" that can never apply, or a `runtimes install` that pulls
-// an unusable engine. The agent's own serving path (chooseEngine/engineViable)
-// already declines vLLM without an installed venv; this keeps the advisory
-// surfaces consistent with what is actually served. An explicit
-// `--prefer vllm` (Preference) still forces vLLM for the GA multi-tenant path.
-// Flip to true when #557 lands.
+// recommendEngine) may choose vLLM. It is true now that vLLM local serving is
+// wired (#557 COMPLETED): the Linux adapter is registered
+// (cmd/waired-agent/inference_vllm_linux.go) and bootstrapVLLM serves against a
+// real venv, so a large NVIDIA host can actually run what the picker advertises.
+// A qualifying host (NVIDIA GPU, VRAM >= MinVLLMVRAMMB) auto-picks vLLM; smaller
+// GPUs, non-NVIDIA vendors, and non-Linux hosts still fall to ollama. The
+// picker only advertises vLLM — the agent's own serving path
+// (chooseEngine/engineViable) still declines it without an installed venv, so a
+// host that auto-picks vLLM without one keeps serving on ollama until the venv
+// is installed. An explicit `--prefer vllm` (Preference) forces vLLM regardless.
 //
-// A var, not a const, so the vLLM branch stays compiled/reachable for when the
-// toggle flips, and tests can exercise both states.
-var VLLMAutoSelectable = false
+// A var, not a const, so an operator/build can still gate it off and tests can
+// exercise both states.
+var VLLMAutoSelectable = true
 
 // EngineSource describes where the engine choice came from. Surfaces
 // in the decision trace so refresh prompts can say "preference" vs

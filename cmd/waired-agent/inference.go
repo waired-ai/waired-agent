@@ -2371,15 +2371,15 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 	hw := profiler.Profile(ctx)
 
 	// Explicit operator opt-in — agent.json `inference.preferred_engine`,
-	// the --inference-preferred-engine flag, or the matching env var. This
-	// is THE switch for local vLLM serving (#557): the hardware auto-picker
-	// keeps vLLM off by default (router.VLLMAutoSelectable=false, #574)
-	// because a single-stream user is better served by Ollama, so vLLM only
-	// runs when the operator deliberately asks for it. A viable preference
-	// wins over a stale persisted Active so setting preferred_engine="vllm"
-	// takes effect on the next boot without hand-editing state.json (the
-	// bootstrap clears the mismatched ActiveSelection — see
-	// startInferenceSubsystem).
+	// the --inference-preferred-engine flag, or the matching env var. A
+	// viable preference forces an engine regardless of the auto-picker: it
+	// wins over both a stale persisted Active and the auto-pick chain, so
+	// preferred_engine="vllm" (or "ollama") takes effect on the next boot
+	// without hand-editing state.json (the bootstrap clears the mismatched
+	// ActiveSelection — see startInferenceSubsystem). Since #557 landed the
+	// auto-picker can itself choose vLLM on a qualifying host
+	// (router.VLLMAutoSelectable=true), so a preference is now an override,
+	// not the only route onto vLLM.
 	if pref := cfg.PreferredEngine; pref != "" {
 		if engineViable(pref, hw, stateDir) {
 			return engineDecision{
@@ -2430,11 +2430,14 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 		// Fall through to chain walk.
 	}
 
-	// Auto-pick chain. vLLM stays OUT of the chain unless the hardware
-	// auto-picker is explicitly enabled (router.VLLMAutoSelectable, false
-	// today per #574): on a merely vLLM-capable host we must not silently
-	// switch a user off Ollama. Local vLLM is opt-in via preferred_engine
-	// above (#557); the chain is the default path for everyone else.
+	// Auto-pick chain. Since #557 landed vLLM serving is wired, so the
+	// hardware auto-picker may include it (router.VLLMAutoSelectable=true):
+	// on a qualifying host (NVIDIA GPU, VRAM >= MinVLLMVRAMMB) vLLM leads the
+	// chain and ollama backs it up. engineViable still gates each entry, so a
+	// host without an installed venv falls straight through to ollama — the
+	// picker advertises vLLM, it never forces an uninstalled engine. A
+	// persisted Active (checked above) still wins, so an existing ollama host
+	// is not silently switched. Gate the picker off to pin ollama-only.
 	chain := []string{catalog.RuntimeOllama}
 	if router.VLLMAutoSelectable {
 		chain = []string{catalog.RuntimeVLLM, catalog.RuntimeOllama}
