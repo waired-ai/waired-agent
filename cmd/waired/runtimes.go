@@ -448,21 +448,51 @@ var vllmInstall = func(ctx context.Context, baseDir string, onProgress func(infr
 	return infruntime.NewVLLMInstallerAt(baseDir).Install(ctx, infruntime.InstallOpts{}, onProgress)
 }
 
-// installVLLM drives VLLMInstaller and renders the staged progress to
-// stdout in the "[N/5] stage..." format the plan described. The venv is
-// rooted at <state-dir>/runtimes/vllm — the same path the daemon resolves
-// — so a sudo-run install isn't stranded under root's home (#525).
-func installVLLM(stateDir string) error {
+// setupVLLMInstallTimeout bounds a vLLM venv build. vLLM's ~6 GB download
+// + uv/pip build + CUDA JIT verify runs longer than ollama's tarball, so
+// it gets a wider budget than the interactive path used to give it (was
+// 30 min). The setup executor's residency budget and the CP's
+// store.SetupTicketTTL are widened to match so a browser-driven install
+// completes inside one wizard session (waired#835 Phase 2).
+const setupVLLMInstallTimeout = 45 * time.Minute
+
+// vllmInstallCore builds (or rebuilds) the vLLM venv rooted at
+// <state-dir>/runtimes/vllm — the same path the daemon resolves, so a
+// sudo-run install isn't stranded under root's home (#525) — and renders
+// staged progress in the "[N/5] stage..." format to stdout. It is the
+// shared core of the interactive CLI (installVLLM) and the setup executor
+// (installVLLMForSetup); neither the ownership handoff nor the CLI's opt-in
+// epilogue lives here, so each caller adds only what its context needs.
+func vllmInstallCore(ctx context.Context, stateDir string) (infruntime.InstallResult, error) {
 	baseDir := filepath.Join(stateDir, "runtimes", "vllm")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	res, err := vllmInstall(ctx, baseDir, func(p infruntime.InstallProgress) {
+	return vllmInstall(ctx, baseDir, func(p infruntime.InstallProgress) {
 		pct := ""
 		if p.Percent >= 0 {
 			pct = fmt.Sprintf(" %d%%", p.Percent)
 		}
 		fmt.Printf("[%d/%d %s]%s %s\n", p.Step, p.Total, p.Stage, pct, p.Message)
 	})
+}
+
+// installVLLMForSetup is the setup executor's vLLM install: the shared venv
+// build with the wider budget, WITHOUT the interactive CLI's opt-in epilogue
+// (the browser wizard IS the opt-in) and WITHOUT the ownership handoff (the
+// executor's install path calls setupHandState itself, mirroring the ollama
+// seam). Returns the installer's error verbatim so the wizard shows the real
+// reason.
+func installVLLMForSetup(stateDir string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
+	defer cancel()
+	_, err := vllmInstallCore(ctx, stateDir)
+	return err
+}
+
+// installVLLM drives VLLMInstaller and renders the staged progress to
+// stdout in the "[N/5] stage..." format the plan described.
+func installVLLM(stateDir string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
+	defer cancel()
+	res, err := vllmInstallCore(ctx, stateDir)
 	if err != nil {
 		return err
 	}

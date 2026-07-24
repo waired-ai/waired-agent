@@ -4,11 +4,14 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
@@ -17,6 +20,29 @@ import (
 // per-OS installOllama the interactive path uses (waired#835 §11.1
 // requires reuse, not a second installer).
 var setupInstallEngine = installOllama
+
+// setupInstallVLLM is the vLLM install seam. The real one builds the venv
+// with the wider vLLM budget (installVLLMForSetup); a test fake records the
+// call without a ~6 GB build.
+var setupInstallVLLM = installVLLMForSetup
+
+// setupVLLMActive reports whether a verified vLLM venv already exists under
+// the state dir, so the executor reports the step done without a needless
+// rebuild. Seam so tests decide the answer.
+var setupVLLMActive = func(stateDir string) bool {
+	_, ok := infruntime.NewVLLMInstallerAt(filepath.Join(stateDir, "runtimes", "vllm")).Active()
+	return ok
+}
+
+// setupDetectNVIDIA reports whether this host has an NVIDIA driver
+// (nvidia-smi on PATH). It is a cheap fast-fail guard: a host the CP's
+// broadcast summary called NVIDIA but which cannot actually serve vLLM
+// (no driver, wrong OS) is refused before a ~45-minute doomed venv build,
+// not after. The installer's own SM_80 verify stays the final authority.
+var setupDetectNVIDIA = func(context.Context) bool {
+	_, err := exec.LookPath("nvidia-smi")
+	return err == nil
+}
 
 // setupDetectEngine is the detection seam, for the same reason.
 var setupDetectEngine = setup.DetectOllama
@@ -56,10 +82,10 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 	if !st.Active || st.DesiredEngine == "" || st.EngineInstalled {
 		return
 	}
-	// vllm has its own installer with a different shape (a venv, not a
-	// tarball) and no wizard offers it yet; leave it to the daemon's
-	// existing reporting rather than half-supporting it here.
-	if st.DesiredEngine != "ollama" {
+	// Only the two engines the executor knows how to install. An unknown
+	// desired engine is left to the daemon's own reporting rather than
+	// half-supported here.
+	if st.DesiredEngine != "ollama" && st.DesiredEngine != "vllm" {
 		return
 	}
 	// A live lease already claimed this install. The claim is bound to
@@ -77,6 +103,14 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 		return
 	}
 
+	// vLLM's installer has a different shape (a uv/pip venv, not a tarball)
+	// and needs an NVIDIA GPU on Linux, so it takes its own path rather than
+	// ollama's decision tree (waired#835 Phase 2).
+	if st.DesiredEngine == "vllm" {
+		installVLLMAsExecutor(ctx, s, out, goos, elevated, st.StateDir)
+		return
+	}
+
 	installEngineAsExecutor(ctx, s, out, goos, elevated,
 		st.DesiredEngine, st.StateDir, engineInstallNarrationWizard)
 }
@@ -87,7 +121,103 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 const (
 	engineInstallNarrationWizard = "Installing the AI engine for the setup in your browser (one-time download)..."
 	engineInstallNarrationLocal  = "Installing the AI engine (one-time download)..."
+	engineInstallNarrationVLLM   = "Installing the vLLM engine for the setup in your browser (a larger one-time download)..."
 )
+
+// vllmInstallAction is what the executor should do for a vLLM setup request
+// on one concrete host. vLLM has no "reuse your own" or bundled tarball (it
+// is always a fresh uv/pip venv) and requires an NVIDIA GPU on Linux, so its
+// decision is its own rather than engineInstallDecision's.
+type vllmInstallAction int
+
+const (
+	vllmActionInstall           vllmInstallAction = iota
+	vllmActionSkipPresent                         // a verified venv is already here
+	vllmActionSkipNotElevated                     // needs root and we have none
+	vllmActionSkipOptOut                          // WAIRED_NO_VLLM
+	vllmActionFailUnsupportedOS                   // vLLM setup is Linux-only
+	vllmActionFailNoGPU                           // no NVIDIA GPU / driver on this host
+)
+
+// vllmInstallDecision decides what the executor does for a vLLM request.
+// Pure so the whole tree is table-testable on every OS from an unprivileged
+// runner (repo rule: route GOOS-varying decisions through runtime.GOOS).
+// A host that already has a verified venv reports present regardless of the
+// other conditions — the engine is genuinely there.
+func vllmInstallDecision(goos string, elevated, nvidiaPresent, alreadyActive, optOut bool) vllmInstallAction {
+	switch {
+	case alreadyActive:
+		return vllmActionSkipPresent
+	case optOut:
+		return vllmActionSkipOptOut
+	case goos != "linux":
+		return vllmActionFailUnsupportedOS
+	case !nvidiaPresent:
+		return vllmActionFailNoGPU
+	case !elevated:
+		return vllmActionSkipNotElevated
+	default:
+		return vllmActionInstall
+	}
+}
+
+// installVLLMAsExecutor installs vLLM as the elevated executor holding the
+// lease. Unlike ollama it fast-fails on the two conditions that would
+// otherwise waste a ~45-minute venv build — a non-Linux host and a host with
+// no NVIDIA GPU — before claiming and building. The CP already gates the
+// wizard's vLLM offer on those, so reaching a fail here means the offer and
+// the host disagree; the executor is the final authority (waired#835 §11).
+func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Writer, goos string, elevated bool, stateDir string) {
+	action := vllmInstallDecision(goos, elevated,
+		setupDetectNVIDIA(ctx),
+		setupVLLMActive(stateDir),
+		os.Getenv("WAIRED_NO_VLLM") != "")
+
+	switch action {
+	case vllmActionInstall:
+		claimed := s.Installing("vllm")
+		if claimed.InstallClaimed != "" && claimed.InstallClaimed != "vllm" {
+			// Another executor got there first with a different engine.
+			return
+		}
+		writePromptf(out, "%s %s\n", emo("📦", ">>"), engineInstallNarrationVLLM)
+		if err := setupInstallVLLM(stateDir); err != nil {
+			writePromptf(out, "%s vLLM install failed: %v\n", emo("⚠️", "!"), err)
+			s.Failed("vllm", err.Error())
+			return
+		}
+		// Built as root; hand the state dir back or the unprivileged daemon
+		// cannot read the venv we just created (Linux only, no-op elsewhere).
+		setupHandState(stateDir)
+		writePromptf(out, "%s vLLM installed.\n", emo("✅", "*"))
+		s.Done("vllm")
+
+	case vllmActionSkipPresent:
+		// A verified venv is already here; report done so the wizard advances
+		// instead of waiting on the daemon's next profile refresh.
+		s.Done("vllm")
+
+	case vllmActionSkipNotElevated:
+		s.Failed("vllm",
+			"the setup command on this device is not running with administrator privileges; "+
+				elevation.Hint("waired init"))
+
+	case vllmActionSkipOptOut:
+		writePrompt(out, "vLLM install skipped (WAIRED_NO_VLLM).")
+		s.Failed("vllm",
+			"engine installs are turned off on this device (WAIRED_NO_VLLM)")
+
+	case vllmActionFailUnsupportedOS:
+		// Defense in depth: the CP only offers vLLM on Linux, so this is a
+		// host that reached vllm some other way. Name the fix.
+		s.Failed("vllm",
+			"vLLM setup is only supported on Linux; use the standard engine on this device")
+
+	case vllmActionFailNoGPU:
+		s.Failed("vllm",
+			"no NVIDIA GPU was detected on this device; vLLM needs an NVIDIA graphics card (CUDA)")
+	}
+}
 
 // installEngineAsExecutor is the shared install core: claim the lease,
 // run the same decision the interactive path runs, install, hand the

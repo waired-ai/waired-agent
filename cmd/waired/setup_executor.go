@@ -19,9 +19,12 @@ import (
 var (
 	// setupResidencyBudget bounds how long `waired init` stays resident
 	// once a browser setup is actually running. Matched to the control
-	// plane's setup ticket TTL (30 min) so the terminal and the wizard
-	// stop caring at the same moment.
-	setupResidencyBudget = 30 * time.Minute
+	// plane's setup ticket TTL so the terminal and the wizard stop caring
+	// at the same moment. Widened to 60 min for the vLLM install envelope
+	// (~6 GB download + CUDA JIT build, up to setupVLLMInstallTimeout); the
+	// CP's store.SetupTicketTTL is widened to match (waired#835 Phase 2).
+	// An ollama install finishes far inside this.
+	setupResidencyBudget = 60 * time.Minute
 
 	// setupAwaitGrace bounds the gap between "login finished" and "the
 	// operator clicked Yes in the browser". The daemon cannot report this
