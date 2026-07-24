@@ -852,6 +852,11 @@ func run(ctx context.Context, args []string) error {
 			default:
 			}
 		}
+		// grantUsage bridges the router (which reports the grant behind
+		// each committed public route) to the acquirer (which renews grants
+		// in use and lapses idle ones). Shared between the two goroutines;
+		// session-scoped like publicGrantDemand (waired#898).
+		grantUsage := newGrantUsage()
 
 		var overlayHandlerSet *gateway.HandlerSet
 		var claudeHandlerSet *gateway.HandlerSet
@@ -893,6 +898,7 @@ func run(ctx context.Context, args []string) error {
 				OnClaudeNodeFallback: claudeRouting.RecordNodeFallback,
 				PublicPolicy:         publicUseCtl.Policy,
 				OnPublicGrantDemand:  notifyPublicGrantDemand,
+				OnPublicGrantUsed:    func(id string) { grantUsage.Mark(id, time.Now()) },
 				OnPublicNudge:        publicUseCtl.Nudge,
 				OnPublicUsage:        publicUsageSink(publicUsageBatch),
 				LocalAdmission:       localAdmit.Admit,
@@ -1311,6 +1317,7 @@ func run(ctx context.Context, args []string) error {
 				WarningVersion: management.PublicShareWarningVersion,
 				Logger:         logger,
 				Demand:         publicGrantDemand,
+				Usage:          grantUsage,
 			})
 		}()
 

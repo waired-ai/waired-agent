@@ -17,6 +17,7 @@ import (
 type fakeGrantAPI struct {
 	mu           sync.Mutex
 	acquireCalls int
+	lastAcquire  controlclient.AcquirePublicGrantsRequest
 	renewCalls   [][]string
 	releaseCalls [][]string
 	acquireRes   controlclient.AcquirePublicGrantsResponse
@@ -28,7 +29,14 @@ func (f *fakeGrantAPI) AcquirePublicGrants(_ context.Context, req controlclient.
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.acquireCalls++
+	f.lastAcquire = req
 	return f.acquireRes, f.acquireErr
+}
+
+func (f *fakeGrantAPI) lastAcquireReq() controlclient.AcquirePublicGrantsRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastAcquire
 }
 
 func (f *fakeGrantAPI) RenewPublicGrants(_ context.Context, ids []string) (controlclient.RenewPublicGrantsResponse, error) {
@@ -115,6 +123,32 @@ func grantLoopDeps(api *fakeGrantAPI, mesh *fakeMesh, path string) publicGrantDe
 	}
 }
 
+// fireDemand does one non-blocking send on the acquirer's demand channel,
+// mirroring the router's coalescing sender. Acquisition is demand-driven
+// (waired#898), so tests must signal demand to trigger an acquire.
+func fireDemand(demand chan struct{}) {
+	select {
+	case demand <- struct{}{}:
+	default:
+	}
+}
+
+// grantWaitForDemand polls cond, re-firing demand each iteration so a
+// demand-driven acquire is not starved by the periodic tick (the loop's
+// select picks randomly among simultaneously-ready arms).
+func grantWaitForDemand(t *testing.T, demand chan struct{}, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		fireDemand(demand)
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("condition not reached within %v", timeout)
+}
+
 // TestPublicGrantLoopOffModeMakesNoCalls: unconsented (or off) mode
 // must produce zero CP traffic.
 func TestPublicGrantLoopOffModeMakesNoCalls(t *testing.T) {
@@ -145,10 +179,13 @@ func TestPublicGrantLoopAcquiresAndReleasesOnShutdown(t *testing.T) {
 	mesh.setGrantPeers("grant_1", "grant_2")
 	path := writePublicUse(t, t.TempDir(), "auto", 1)
 
+	demand := make(chan struct{}, 1)
+	deps := grantLoopDeps(api, mesh, path)
+	deps.Demand = demand
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { runPublicGrantLoop(ctx, grantLoopDeps(api, mesh, path)); close(done) }()
-	grantWaitFor(t, 5*time.Second, func() bool {
+	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
+	grantWaitForDemand(t, demand, 5*time.Second, func() bool {
 		calls, _, _ := api.snapshot()
 		return calls >= 1
 	})
@@ -173,11 +210,14 @@ func TestPublicGrantLoopModeOffReleases(t *testing.T) {
 	dir := t.TempDir()
 	path := writePublicUse(t, dir, "auto", 1)
 
+	demand := make(chan struct{}, 1)
+	deps := grantLoopDeps(api, mesh, path)
+	deps.Demand = demand
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
-	go func() { runPublicGrantLoop(ctx, grantLoopDeps(api, mesh, path)); close(done) }()
-	grantWaitFor(t, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
+	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
 
 	writePublicUse(t, dir, "off", 1)
 	grantWaitFor(t, 5*time.Second, func() bool { _, _, rel := api.snapshot(); return len(rel) >= 1 })
@@ -190,16 +230,42 @@ func TestPublicGrantLoopModeOffReleases(t *testing.T) {
 }
 
 // TestPublicGrantLoopBackoffOnNotEligible: a 403 suppresses further
-// acquire attempts (no hammering inside the backoff window).
+// acquire attempts inside the backoff window, even when demand keeps
+// arriving PAST the shorter demand throttle (so this isolates backoff,
+// not the throttle).
 func TestPublicGrantLoopBackoffOnNotEligible(t *testing.T) {
 	api := &fakeGrantAPI{acquireErr: controlclient.ErrPublicShareNotEligible}
 	path := writePublicUse(t, t.TempDir(), "auto", 1)
+	demand := make(chan struct{}, 1)
+	deps := grantLoopDeps(api, &fakeMesh{}, path)
+	deps.Demand = demand
+	base := time.Now()
+	var clockMu sync.Mutex
+	offset := time.Duration(0)
+	deps.Now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return base.Add(offset)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})
-	go func() { runPublicGrantLoop(ctx, grantLoopDeps(api, &fakeMesh{}, path)); close(done) }()
-	grantWaitFor(t, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
-	time.Sleep(80 * time.Millisecond) // many ticks worth
+	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
+
+	// First demand → one acquire attempt → 403 → backoff (5m from now).
+	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+
+	// Jump past the demand throttle (15s) but stay inside the backoff
+	// window, then keep signalling demand. Backoff, not the throttle, is
+	// what must keep acquire from firing again.
+	clockMu.Lock()
+	offset = 30 * time.Second
+	clockMu.Unlock()
+	for i := 0; i < 40; i++ {
+		fireDemand(demand)
+		time.Sleep(2 * time.Millisecond)
+	}
 	cancel()
 	<-done
 	if calls, _, _ := api.snapshot(); calls != 1 {
@@ -231,6 +297,12 @@ func TestPublicGrantLoopDropsMapAbsentAndRenews(t *testing.T) {
 	path := writePublicUse(t, t.TempDir(), "auto", 1)
 
 	deps := grantLoopDeps(api, mesh, path)
+	demand := make(chan struct{}, 1)
+	deps.Demand = demand
+	// Usage left nil: this test covers map-absence + renew mechanics, not
+	// last-used gating (which has its own tests), so every held grant is
+	// renew-eligible here.
+	//
 	// Advancing test clock: acquire happens at base; we then jump past
 	// the map-propagation grace before removing the peer, so absence
 	// acts on the very next tick.
@@ -247,7 +319,7 @@ func TestPublicGrantLoopDropsMapAbsentAndRenews(t *testing.T) {
 	done := make(chan struct{})
 	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
 
-	grantWaitFor(t, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
 	// Jump past the grace, then remove grant_gone from the map: the
 	// next tick must drop it before renewing, so only grant_keep ever
 	// reaches the renew batch.
@@ -266,5 +338,143 @@ func TestPublicGrantLoopDropsMapAbsentAndRenews(t *testing.T) {
 				t.Fatalf("map-absent grant was renewed: %v", renews)
 			}
 		}
+	}
+}
+
+// TestPublicGrantLoop_AcquireIsDemandDriven is the core waired#898 fix:
+// consented + auto mode alone must NOT acquire — an idle consumer holds
+// no grant (no WG peering to a stranger). Only the router's demand signal
+// triggers an acquire. The pre-fix loop topped up to K=3 on every tick,
+// so it fails this test.
+func TestPublicGrantLoop_AcquireIsDemandDriven(t *testing.T) {
+	api := &fakeGrantAPI{acquireRes: controlclient.AcquirePublicGrantsResponse{
+		Status: "ok",
+		Grants: []controlclient.PublicGrant{{GrantID: "grant_1", ProviderDeviceID: "dev_p1",
+			ExpiresAt: time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)}},
+	}}
+	path := writePublicUse(t, t.TempDir(), "auto", 1)
+	demand := make(chan struct{}, 1)
+	deps := grantLoopDeps(api, &fakeMesh{}, path)
+	deps.Demand = demand
+	deps.Usage = newGrantUsage()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
+
+	// Many periodic ticks with no demand: still zero acquires.
+	time.Sleep(80 * time.Millisecond)
+	if calls, _, _ := api.snapshot(); calls != 0 {
+		cancel()
+		<-done
+		t.Fatalf("acquired %d times without demand, want 0 (acquisition must be demand-driven)", calls)
+	}
+
+	// One demand triggers the acquire.
+	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	cancel()
+	<-done
+}
+
+// TestPublicGrantLoop_RenewGatingLapsesIdleGrants is the renew half of the
+// waired#898 fix and the §15-8 acceptance check at unit scope: a held
+// grant that carried traffic within the last IdleTTL is renewed; one that
+// went idle (here: never used) is NOT renewed, so it lapses CP-side and
+// its WG peering is torn down. The pre-fix loop renewed every held grant
+// unconditionally, so it fails this test.
+func TestPublicGrantLoop_RenewGatingLapsesIdleGrants(t *testing.T) {
+	now := time.Now()
+	api := &fakeGrantAPI{
+		acquireRes: controlclient.AcquirePublicGrantsResponse{
+			Status: "ok",
+			Grants: []controlclient.PublicGrant{
+				{GrantID: "grant_used", ProviderDeviceID: "dev_p1", ExpiresAt: now.Add(30 * time.Millisecond).UTC().Format(time.RFC3339Nano)},
+				{GrantID: "grant_idle", ProviderDeviceID: "dev_p2", ExpiresAt: now.Add(30 * time.Millisecond).UTC().Format(time.RFC3339Nano)},
+			},
+		},
+		renewRes: controlclient.RenewPublicGrantsResponse{
+			Status: "ok", Renewed: []string{"grant_used"},
+			ExpiresAt: now.Add(10 * time.Minute).UTC().Format(time.RFC3339),
+		},
+	}
+	mesh := &fakeMesh{}
+	mesh.setGrantPeers("grant_used", "grant_idle")
+	path := writePublicUse(t, t.TempDir(), "auto", 1)
+	usage := newGrantUsage()
+
+	deps := grantLoopDeps(api, mesh, path)
+	demand := make(chan struct{}, 1)
+	deps.Demand = demand
+	deps.Usage = usage
+	var clockMu sync.Mutex
+	offset := time.Duration(0)
+	deps.Now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now.Add(offset)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
+
+	// Acquire both grants (full active set), then mark only grant_used as
+	// carrying traffic.
+	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	usage.Mark("grant_used", now)
+
+	// Jump past the renew schedule but well within IdleTTL of `now`, so
+	// both grants are renew-DUE and only the used one is renewed.
+	clockMu.Lock()
+	offset = time.Minute
+	clockMu.Unlock()
+	grantWaitForDemand(t, demand, 5*time.Second, func() bool { _, renews, _ := api.snapshot(); return len(renews) >= 1 })
+	cancel()
+	<-done
+
+	_, renews, _ := api.snapshot()
+	sawUsed := false
+	for _, batch := range renews {
+		for _, id := range batch {
+			if id == "grant_idle" {
+				t.Fatalf("idle grant was renewed: %v", renews)
+			}
+			if id == "grant_used" {
+				sawUsed = true
+			}
+		}
+	}
+	if !sawUsed {
+		t.Fatalf("used grant was never renewed (gating must not lapse in-use grants): %v", renews)
+	}
+}
+
+// TestPublicGrantLoop_AcquireWantsOne: the consumer acquires K=1 (one
+// stranger connection, the one it is about to use), not the server
+// default of 3 (waired#898). The pre-fix loop sent Want:0.
+func TestPublicGrantLoop_AcquireWantsOne(t *testing.T) {
+	api := &fakeGrantAPI{acquireRes: controlclient.AcquirePublicGrantsResponse{
+		Status: "ok",
+		Grants: []controlclient.PublicGrant{{GrantID: "grant_1", ProviderDeviceID: "dev_p1",
+			ExpiresAt: time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)}},
+	}}
+	path := writePublicUse(t, t.TempDir(), "auto", 1)
+	demand := make(chan struct{}, 1)
+	deps := grantLoopDeps(api, &fakeMesh{}, path)
+	deps.Demand = demand
+	deps.Usage = newGrantUsage()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
+	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	cancel()
+	<-done
+
+	if got := api.lastAcquireReq().Want; got != 1 {
+		t.Fatalf("acquire Want = %d, want 1 (K=1, publicGrantWant=%d)", got, publicGrantWant)
 	}
 }

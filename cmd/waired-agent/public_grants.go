@@ -13,22 +13,39 @@ import (
 )
 
 // Background Public Share grant acquirer/renewer (waired#821 second
-// half, spec §6). Consumer side: while the operator's public-use mode
-// is on (consented, D1), pre-acquire up to K=3 grants so the router
-// (D2) finds granted foreign peers already in the netmap when it wants
-// them — spec §6 keeps acquire OFF the request hot path; periodic
-// pre-acquisition is the v1 trigger (router-driven acquisition can
-// layer on later without changing the CP contract).
+// half, spec §6). Consumer side, "hold what you use" (waired#898): while
+// the operator's public-use mode is on (consented, D1), acquire a grant
+// only when the router actually wants a public candidate and holds none
+// (the Demand signal), and keep it only while it carries traffic. This
+// is spec §6's own model — acquire OFF the request hot path, triggered
+// by the router observing it wants a public candidate but has no valid
+// grant. An earlier revision instead pre-acquired K=3 on every periodic
+// tick regardless of use, which left an idle consumer peered to three
+// strangers' machines forever (§15-8 break); demand-driven acquisition
+// plus last-used renew gating replaces it.
 //
 // The acquirer only manages grant LIFECYCLE. Routing consumes the
-// netmap (PeerView.Grant, injected CP-side by waired#820); no local
-// grant store exists or is needed — the acquire response always
-// returns the device's full active set, so state self-corrects across
-// restarts.
+// netmap (PeerView.Grant, injected CP-side by waired#820); it reports
+// which grant it routed through via the shared grantUsage tracker
+// (Deps.Usage). No local grant store exists or is needed — the acquire
+// response always returns the device's full active set, so state
+// self-corrects across restarts.
 const (
-	publicGrantTTL      = 10 * time.Minute
-	publicGrantTick     = 75 * time.Second
-	publicGrantWant     = 3
+	publicGrantTTL  = 10 * time.Minute
+	publicGrantTick = 75 * time.Second
+	// publicGrantWant is how many grants a single demand acquires and the
+	// ceiling the loop holds. K=1 (waired#898): a held grant is a live WG
+	// peering to a stranger, so we hold exactly the one the router is
+	// using. The CP still supports up to K=3 per device (spec §6); this is
+	// the consumer's posture, not the CP ceiling.
+	publicGrantWant = 1
+	// publicGrantIdleTTL is the traffic-idle window past which a held grant
+	// is no longer renewed and is allowed to lapse (spec §6 renew row: renew
+	// only grants with traffic in the last IdleTTL window; §7.3 idle
+	// teardown). Equal to the grant TTL: once a grant has gone a full TTL
+	// without carrying a request, stopping its renewal lets the CP expire it
+	// and the reconciler GC the WG peer.
+	publicGrantIdleTTL  = publicGrantTTL
 	publicGrantBatchMax = 16
 	// publicGrantBackoff pauses acquire attempts after 403 not_eligible,
 	// 429, or an empty candidate list (all "try later", none errors).
@@ -82,6 +99,17 @@ type publicGrantDeps struct {
 	// nil leaves the loop purely periodic.
 	Demand <-chan struct{}
 
+	// Usage is the shared last-used tracker the router writes to on every
+	// committed public route (waired#898). The loop reads LastUsed at renew
+	// time to lapse traffic-idle grants, and calls Forget when it drops a
+	// grant so the map does not grow unbounded. nil disables last-used
+	// gating (every due grant is renewed — the pre-#898 behaviour) and
+	// pruning; production and the gating tests wire it.
+	Usage interface {
+		LastUsed(grantID string) time.Time
+		Forget(grantID string)
+	}
+
 	Tick time.Duration    // 0 → publicGrantTick
 	Now  func() time.Time // nil → time.Now
 }
@@ -113,6 +141,15 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 	held := map[string]*heldGrant{}
 	var backoffUntil time.Time
 
+	// forgetUsage prunes a grant's last-used record when the loop stops
+	// tracking it, so the shared map can't grow across a long-lived
+	// agent's churn of grants (waired#898). No-op when usage is unwired.
+	forgetUsage := func(id string) {
+		if deps.Usage != nil {
+			deps.Usage.Forget(id)
+		}
+	}
+
 	release := func(rctx context.Context, reason string) {
 		if len(held) == 0 {
 			return
@@ -133,6 +170,9 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			}
 		}
 		logger.Info("public grants: released", "reason", reason, "count", len(held))
+		for id := range held {
+			forgetUsage(id)
+		}
 		held = map[string]*heldGrant{}
 	}
 
@@ -143,6 +183,12 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 	// the user consents — is always admitted.
 	var lastAcquireAt time.Time
 	for {
+		// demandWake is per-iteration: acquisition runs only when THIS
+		// wake came from the router's demand signal (waired#898). A
+		// periodic tick still runs renew + map-GC + release, but never
+		// acquires — so an idle consumer (mode on, no requests) holds
+		// nothing. Re-declared each iteration, so it resets naturally.
+		demandWake := false
 		// The timer is re-armed per arm, not unconditionally after the
 		// select: with more than one non-ctx arm, an unconditional
 		// Reset on a timer that has NOT fired leaves its pending value
@@ -162,6 +208,7 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			if now().Sub(lastAcquireAt) < publicGrantDemandMinInterval {
 				continue
 			}
+			demandWake = true
 		}
 
 		pu, _, err := agentconfig.LoadPublicUse(deps.PublicUsePath)
@@ -192,16 +239,30 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			}
 			logger.Info("public grants: dropping map-absent grant", "grant_id", id)
 			delete(held, id)
+			forgetUsage(id)
 		}
 
-		// Renew due grants (TTL/2 + jitter schedule set at admission).
+		// Renew due grants (TTL/2 + jitter schedule set at admission), but
+		// only those that carried traffic within the last IdleTTL window
+		// (waired#898, spec §6 renew row). A grant with no recent use — or
+		// none ever — is left out of `due`, so its renewal stops, the CP
+		// expires it at its TTL, and the reconciler GCs the WG peering
+		// (§7.3 idle teardown). It is NOT deleted from `held` here: if
+		// traffic resumes before the CP expiry, the next cycle sees fresh
+		// use and renews it again (robust to a paused-then-resumed
+		// conversation); otherwise the map-absent drop above removes it
+		// once the CP drops it from the netmap.
 		var due []string
 		for id, h := range held {
-			if tnow.After(h.nextRenewAt) {
-				due = append(due, id)
-				if len(due) == publicGrantBatchMax {
-					break
-				}
+			if !tnow.After(h.nextRenewAt) {
+				continue
+			}
+			if deps.Usage != nil && tnow.Sub(deps.Usage.LastUsed(id)) >= publicGrantIdleTTL {
+				continue
+			}
+			due = append(due, id)
+			if len(due) == publicGrantBatchMax {
+				break
 			}
 		}
 		if len(due) > 0 {
@@ -227,6 +288,7 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 					if !renewed[id] {
 						logger.Info("public grants: dropped by renew", "grant_id", id)
 						delete(held, id)
+						forgetUsage(id)
 						continue
 					}
 					if !exp.IsZero() {
@@ -239,8 +301,11 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			}
 		}
 
-		// Top up to K when consented and out of backoff.
-		if len(held) >= publicGrantWant || tnow.Before(backoffUntil) {
+		// Acquire is demand-driven (waired#898): only a router demand wake
+		// acquires, and only up to K=publicGrantWant, out of backoff. A
+		// periodic tick reaches here with demandWake false and stops,
+		// having done just renew + map-GC.
+		if !demandWake || len(held) >= publicGrantWant || tnow.Before(backoffUntil) {
 			continue
 		}
 		consentVersion := 0
@@ -251,7 +316,7 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 		res, err := deps.API.AcquirePublicGrants(ctx, controlclient.AcquirePublicGrantsRequest{
 			Class:          "",
 			MinQualityTier: pu.MinQualityTier,
-			Want:           0, // server default (3)
+			Want:           publicGrantWant, // K=1 (waired#898)
 			ConsentVersion: consentVersion,
 		})
 		switch {
@@ -290,6 +355,13 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 			}
 			logger.Info("public grants: acquired",
 				"grant_id", g.GrantID, "provider_pseudonym", g.ProviderPseudonym, "created", g.Created)
+		}
+		// Any previously-held grant absent from the fresh active set is
+		// gone CP-side; prune its usage record along with it.
+		for id := range held {
+			if _, ok := next[id]; !ok {
+				forgetUsage(id)
+			}
 		}
 		held = next
 	}
