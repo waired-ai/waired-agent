@@ -2,6 +2,7 @@ package inference
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -102,6 +103,14 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		snap.CapacityTotal = int(s.inflight.capacity.Load())
 		snap.CapacityUsed = int(s.inflight.InFlight())
 	}
+	slog.DebugContext(r.Context(), "overlay healthz served",
+		"engine_ready", snap.EngineReady,
+		"model_id", snap.ModelID,
+		"capacity_total", snap.CapacityTotal,
+		"capacity_used", snap.CapacityUsed,
+		"paused", snap.Paused,
+		"share_enabled", snap.ShareEnabled,
+	)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(snap)
 }

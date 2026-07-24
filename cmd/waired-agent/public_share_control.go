@@ -160,6 +160,9 @@ func (pc *publicShareController) Enable(ctx context.Context, maxClients int) (ma
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 
+	if pc.logger != nil {
+		pc.logger.Debug("public share enable requested", "max_clients", maxClients)
+	}
 	var res management.PublicShareResult
 	if pc.meshAutoEnable != nil {
 		changed, err := pc.meshAutoEnable(ctx)
@@ -190,6 +193,9 @@ func (pc *publicShareController) Disable(ctx context.Context) (management.Public
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 
+	if pc.logger != nil {
+		pc.logger.Debug("public share disable requested")
+	}
 	var res management.PublicShareResult
 	err := pc.transition(state.PublicShareOff)
 	pc.syncLocked(ctx, false, int(pc.lastMaxClients.Load()), &res)
@@ -205,6 +211,9 @@ func (pc *publicShareController) syncLocked(ctx context.Context, enabled bool, m
 	}
 	pctx, cancel := context.WithTimeout(ctx, publicSharePushTimeout)
 	defer cancel()
+	if pc.logger != nil {
+		pc.logger.Debug("public share CP push", "enabled", enabled, "max_clients", maxClients)
+	}
 	out, err := pc.pusher(pctx, enabled, maxClients)
 	if err != nil {
 		pc.pushPending.Store(true)
@@ -236,6 +245,9 @@ func (pc *publicShareController) ReconcileRemote(enabled bool) {
 	}
 	if pc.pushPending.Load() {
 		if pc.now().UnixNano()-pc.pendingSince.Load() < int64(publicSharePendingWindow) {
+			if pc.logger != nil {
+				pc.logger.Debug("public share: CP echo suppressed (local push pending)", "enabled", enabled)
+			}
 			return
 		}
 		// The CP never acknowledged our push inside the window; stop
@@ -248,6 +260,9 @@ func (pc *publicShareController) ReconcileRemote(enabled bool) {
 	if !enabled && !pc.echoTrueSeen.Load() {
 		// A CP that predates the B2 map fold reports false
 		// unconditionally — do not let it revert a local enable.
+		if pc.logger != nil {
+			pc.logger.Debug("public share: ignoring CP false echo (never observed CP true)")
+		}
 		return
 	}
 	if !pc.mu.TryLock() {
@@ -310,6 +325,10 @@ func (pc *publicShareController) RunSync(ctx context.Context) {
 		}
 		if !pc.pushPending.Load() || pc.pusher == nil {
 			continue
+		}
+		if pc.logger != nil {
+			pc.logger.Debug("public share CP sync retry",
+				"enabled", pc.public.Load(), "backoff", backoff.String())
 		}
 		pctx, cancel := context.WithTimeout(ctx, publicSharePushTimeout)
 		out, err := pc.pusher(pctx, pc.public.Load(), int(pc.lastMaxClients.Load()))

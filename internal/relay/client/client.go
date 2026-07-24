@@ -156,17 +156,22 @@ func (c *Client) Run(ctx context.Context) error {
 	hdr := http.Header{}
 	hdr.Set("Authorization", "Bearer "+c.cfg.Bearer)
 
+	c.cfg.Logger.Debug("relay dial: connecting",
+		"url", c.cfg.URL, "handshake_timeout", c.cfg.HandshakeTimeout)
 	ws, _, err := websocket.Dial(dialCtx, c.cfg.URL, &websocket.DialOptions{
 		Subprotocols: []string{frame.Subprotocol},
 		HTTPClient:   httpClient,
 		HTTPHeader:   hdr,
 	})
 	if err != nil {
+		c.cfg.Logger.Debug("relay dial: failed", "url", c.cfg.URL, "err", err)
 		return fmt.Errorf("relay dial: %w", err)
 	}
 	defer ws.CloseNow()
 
+	c.cfg.Logger.Debug("relay dial: connected; starting handshake", "url", c.cfg.URL)
 	if err := c.handshake(ctx, ws); err != nil {
+		c.cfg.Logger.Debug("relay handshake: failed", "url", c.cfg.URL, "err", err)
 		return fmt.Errorf("handshake: %w", err)
 	}
 	c.cfg.Logger.Info("relay session established",
@@ -182,6 +187,7 @@ func (c *Client) Run(ctx context.Context) error {
 	readerErr := c.runReader(pumpCtx, ws)
 	cancel()
 	<-writerErr
+	c.cfg.Logger.Debug("relay session closed", "url", c.cfg.URL, "err", readerErr)
 	if readerErr != nil && !errors.Is(readerErr, context.Canceled) {
 		return readerErr
 	}
@@ -216,6 +222,7 @@ func (c *Client) handshake(ctx context.Context, ws *websocket.Conn) error {
 		return fmt.Errorf("expected relay_challenge, got %s", typ)
 	}
 	challenge := v.(frame.RelayChallenge)
+	c.cfg.Logger.Debug("relay handshake: challenge received")
 
 	transcript := frame.ProofTranscript(hello, challenge)
 	sig := ed25519.Sign(c.cfg.MachinePrivateKey, transcript)

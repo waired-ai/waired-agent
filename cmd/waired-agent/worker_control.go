@@ -81,6 +81,9 @@ func (wc *workerController) SetMode(ctx context.Context, mode state.RoutingMode)
 	default:
 		return fmt.Errorf("worker controller: unknown mode %q", mode)
 	}
+	if wc.logger != nil {
+		wc.logger.Debug("worker set mode", "mode", string(mode))
+	}
 	return wc.transition(state.RoutingPreference{Mode: mode})
 }
 
@@ -91,6 +94,9 @@ func (wc *workerController) SetPin(ctx context.Context, peerDeviceID string) err
 	_ = ctx
 	if peerDeviceID == "" {
 		return fmt.Errorf("worker controller: SetPin requires a non-empty peer device ID")
+	}
+	if wc.logger != nil {
+		wc.logger.Debug("worker set pin", "peer_device_id", peerDeviceID)
 	}
 	return wc.transition(state.RoutingPreference{
 		Mode:               state.RoutingModePinned,

@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -192,6 +193,11 @@ func (i *Installer) Install(ctx context.Context, progress func(InstallProgress))
 	// current pin (a waired upgrade bumps the pin, so a stale binary fails
 	// this check and is replaced below).
 	if !i.NeedsInstall() {
+		if i.LocalBinary != "" {
+			slog.DebugContext(ctx, "codeui install: using local binary override; skipping download", "path", i.LocalBinary)
+		} else {
+			slog.DebugContext(ctx, "codeui install: binary present and current; skipping download", "version", OpenCodePinnedVersion)
+		}
 		return nil
 	}
 
@@ -199,6 +205,8 @@ func (i *Installer) Install(ctx context.Context, progress func(InstallProgress))
 	if !ok {
 		return fmt.Errorf("codeui install: unsupported platform %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
+	slog.DebugContext(ctx, "codeui install: resolved release artifact",
+		"platform", runtime.GOOS+"/"+runtime.GOARCH, "asset", art.name, "version", OpenCodePinnedVersion)
 	url := fmt.Sprintf("%s/v%s/%s", OpenCodeDownloadURLBase, OpenCodePinnedVersion, art.name)
 	progress(InstallProgress{Stage: "download", Message: url})
 	body, err := i.downloadFn(ctx, url)

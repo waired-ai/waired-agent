@@ -45,6 +45,8 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	rr := h.startRequest(r, "anthropic")
 	defer rr.finish()
 
+	slog.Debug("anthropic messages request", "method", r.Method, "path", r.URL.Path)
+
 	if r.Method != http.MethodPost {
 		writeAnthropicError(w, http.StatusMethodNotAllowed, "invalid_request_error", "POST only")
 		return
@@ -116,6 +118,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 			return
 		}
 		routeReq.Model = mapped
+		slog.Debug("anthropic model mapped", "requested", req.Model, "mapped", mapped, "class", class)
 		probed, err = h.selectAndProbe(r.Context(), routeReq)
 		if err == nil {
 			w.Header().Set(HeaderLocalModel, mapped)
@@ -139,6 +142,15 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	// can show which peer served the request and why a fallback fired.
 	setSelectionHeaders(w, sel, probed.FallbackFrom, probed.Reason, h.deps.Recorder)
 	openaiReq.Model = sel.EngineModel
+	slog.Debug("anthropic dispatch",
+		"model", req.Model,
+		"engine_model", sel.EngineModel,
+		"mode", sel.ExecutionMode,
+		"peer", peerDisplayID(sel),
+		"fallback_from", probed.FallbackFrom,
+		"stream", req.Stream,
+		"class", class,
+	)
 
 	// #623 context-window guard: reject a prompt that overruns the served
 	// model's effective window with the exact Anthropic 400 that triggers
@@ -155,6 +167,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		if win := h.deps.ContextWindowFor(sel.ModelID); win > 0 {
 			if n := CountTokensApprox(req); n > win {
 				rr.fail(http.StatusBadRequest, "context_overflow")
+				slog.Debug("anthropic context overflow", "model", sel.ModelID, "tokens", n, "window", win)
 				w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
 				writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error",
 					fmt.Sprintf("prompt is too long: %d tokens > %d maximum", n, win))
@@ -178,6 +191,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	}
 	if err := adapter.EnsureRunning(r.Context()); err != nil {
 		rr.fail(http.StatusServiceUnavailable, "runtime_unhealthy")
+		slog.Debug("anthropic engine not running", "runtime", displayRuntime(sel))
 		writeAnthropicError(w, http.StatusServiceUnavailable, "runtime_unhealthy", err.Error())
 		return
 	}
@@ -227,13 +241,16 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 // rr may be nil (direct calls from tests). The upstream response is
 // already decoded here, so metering costs one field read (waired#829).
 func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, rr *requestRec) {
+	start := time.Now()
 	resp, err := h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
 	if err != nil {
 		rr.fail(http.StatusBadGateway, "engine_request_failed")
+		slog.Debug("anthropic upstream unreachable", "latency_ms", time.Since(start).Milliseconds())
 		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
 	defer resp.Body.Close()
+	slog.Debug("anthropic upstream response", "status", resp.StatusCode, "latency_ms", time.Since(start).Milliseconds())
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		rr.fail(http.StatusBadGateway, "engine_read_failed")
@@ -308,6 +325,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		})
 	}
 
+	start := time.Now()
 	resp, err := h.postToEngine(reqCtx, client, baseURL, "/v1/chat/completions", body)
 	var firedBeforeHeaders bool
 	if ttfbTimer != nil {
@@ -341,6 +359,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		return
 	}
 	defer resp.Body.Close()
+	slog.Debug("anthropic upstream stream", "status", resp.StatusCode, "ttfb_ms", time.Since(start).Milliseconds())
 	if resp.StatusCode/100 != 2 {
 		errBody, _ := io.ReadAll(resp.Body)
 		writeAnthropicError(w, resp.StatusCode, "upstream_error", strings.TrimSpace(string(errBody)))

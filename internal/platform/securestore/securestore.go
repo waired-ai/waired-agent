@@ -77,9 +77,11 @@ func Read(item keychain.Item, path string) ([]byte, error) {
 	data, err := st.Get(item)
 	switch {
 	case err == nil:
+		logger.Debug("securestore: read served from keychain", "service", item.Service)
 		return data, nil
 	case errors.Is(err, keychain.ErrUnsupported):
 		// No Keychain on this OS: file is the only store.
+		logger.Debug("securestore: keychain unsupported; reading from file", "service", item.Service)
 		return os.ReadFile(path)
 	case errors.Is(err, keychain.ErrNotFound):
 		// Genuine miss on a Keychain-capable OS: read the file and
@@ -97,6 +99,7 @@ func Read(item keychain.Item, path string) ([]byte, error) {
 	if ferr != nil {
 		// Both stores empty (or a real file error): return it verbatim so
 		// os.IsNotExist still works for the "generate new" path.
+		logger.Debug("securestore: secret absent from keychain and file", "service", item.Service)
 		return nil, ferr
 	}
 	// Opportunistic migration: copy the pre-existing file secret into the
@@ -107,6 +110,7 @@ func Read(item keychain.Item, path string) ([]byte, error) {
 		logger.Warn("securestore: opportunistic keychain migration failed; using file",
 			"service", item.Service, "err", serr)
 	}
+	logger.Debug("securestore: keychain miss; served from file", "service", item.Service)
 	return fileData, nil
 }
 
@@ -121,6 +125,7 @@ func Write(item keychain.Item, path string, data []byte) error {
 	st := currentStore()
 	if err := st.Set(item, data); err != nil {
 		if errors.Is(err, keychain.ErrUnsupported) {
+			logger.Debug("securestore: secret written to file (keychain unsupported)", "service", item.Service)
 			return nil // expected steady state off-darwin; not worth logging
 		}
 		logger.Warn("securestore: keychain write failed; file written, clearing any stale entry",
@@ -132,6 +137,8 @@ func Write(item keychain.Item, path string, data []byte) error {
 			logger.Warn("securestore: failed to clear stale keychain entry after write failure",
 				"service", item.Service, "err", derr)
 		}
+	} else {
+		logger.Debug("securestore: secret written to file and keychain", "service", item.Service)
 	}
 	return nil
 }
@@ -150,6 +157,7 @@ func Remove(item keychain.Item, path string) error {
 		logger.Warn("securestore: could not delete keychain item; it may linger after removal",
 			"service", item.Service, "err", err)
 	}
+	logger.Debug("securestore: secret removed from file and keychain", "service", item.Service)
 	return nil
 }
 

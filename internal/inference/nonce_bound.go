@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
@@ -75,6 +76,8 @@ func (c *BoundedNonceCache) Consume(deviceID, nonce string, now time.Time, ttl t
 		c.buckets[deviceID] = bucket
 	}
 	if len(bucket) >= c.perDevice {
+		slog.Debug("nonce cache: per-device cap reached, evicting oldest live entry",
+			"per_device_cap", c.perDevice, "total", c.total)
 		evictOldestLocked(bucket, &c.total)
 	}
 
@@ -94,6 +97,8 @@ func (c *BoundedNonceCache) Consume(deviceID, nonce string, now time.Time, ttl t
 			}
 		}
 		if largest != "" {
+			slog.Debug("nonce cache: global cap reached, evicting oldest from largest bucket",
+				"max_total", c.maxTotal)
 			evictOldestLocked(c.buckets[largest], &c.total)
 		}
 	}

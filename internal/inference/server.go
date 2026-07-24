@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -714,6 +715,7 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 		Device: s.deviceName,
 		Time:   nowOrTime(s.now).UTC().Format(time.RFC3339Nano),
 	})
+	slog.DebugContext(r.Context(), "overlay ping served", "device", s.deviceName)
 }
 
 func nowOrTime(fn func() time.Time) time.Time {
@@ -906,13 +908,16 @@ func capacityGateAdapter(counter *inflightCounter, rec Recorder, public *publicA
 			sw := &statusWriter{ResponseWriter: w}
 			defer func() {
 				counter.Release()
+				result := "success"
+				if sw.status >= 400 {
+					result = "error"
+				}
+				latencyMs := uint32(time.Since(start).Milliseconds())
+				slog.DebugContext(r.Context(), "overlay inference request served",
+					"result", result, "status", sw.status, "latency_ms", latencyMs)
 				if rec != nil {
 					rec.SetInflight(int(counter.InFlight()))
-					result := "success"
-					if sw.status >= 400 {
-						result = "error"
-					}
-					rec.RecordServed(result, uint32(time.Since(start).Milliseconds()))
+					rec.RecordServed(result, latencyMs)
 				}
 			}()
 			next.ServeHTTP(sw, r)
@@ -956,6 +961,7 @@ func (s *statusWriter) Flush() {
 // uses, so a peer that proxies a 503 response back to its client sees
 // a uniform error envelope.
 func writeOverlay503(w http.ResponseWriter, errType, msg string) {
+	slog.Debug("overlay request rejected by gate", "type", errType, "status", http.StatusServiceUnavailable)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusServiceUnavailable)
 	_ = json.NewEncoder(w).Encode(map[string]any{

@@ -64,6 +64,7 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 			out = append(out, model{ID: id, Object: "model", Created: created, OwnedBy: "waired"})
 		}
 	}
+	slog.Debug("openai models listed", "count", len(out))
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": out})
 }
 
@@ -74,6 +75,8 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	rr := h.startRequest(r, "openai")
 	defer rr.finish()
+
+	slog.Debug("openai chat request", "method", r.Method, "path", r.URL.Path)
 
 	if r.Method != http.MethodPost {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method_not_allowed", "POST only")
@@ -108,6 +111,13 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	}
 	sel := probed.Sel
 	rr.setSelection(sel, probed.FallbackFrom, probed.Reason)
+	slog.Debug("openai dispatch",
+		"model", model,
+		"engine_model", sel.EngineModel,
+		"mode", sel.ExecutionMode,
+		"peer", peerDisplayID(sel),
+		"fallback_from", probed.FallbackFrom,
+	)
 	// Release the in-flight slot the Selector held on our behalf.
 	// Production Selector always sets a non-nil Release (noopRelease
 	// for local/external, tracker.Acquire's release for mesh peers);
@@ -148,6 +158,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	}
 	if err := adapter.EnsureRunning(r.Context()); err != nil {
 		rr.fail(http.StatusServiceUnavailable, "runtime_unhealthy")
+		slog.Debug("openai engine not running", "runtime", displayRuntime(sel))
 		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "runtime_unhealthy", err.Error())
 		return
 	}
@@ -236,12 +247,21 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		req.Header.Set("Content-Type", "application/json")
 	}
 
+	// baseURL / host is deliberately not logged: for a remote leg it is the
+	// peer's overlay address, which must never reach a log line (spec §8.5).
+	slog.Debug("gateway upstream request", "path", target.Path, "body_bytes", len(body))
+	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "engine_request_failed", err.Error())
 		return err
 	}
 	defer resp.Body.Close()
+	slog.Debug("gateway upstream response",
+		"status", resp.StatusCode,
+		"ttfb_ms", time.Since(start).Milliseconds(),
+		"content_type", resp.Header.Get("Content-Type"),
+	)
 
 	// Forward upstream headers (Content-Type especially) so SSE works.
 	for k, vv := range resp.Header {
