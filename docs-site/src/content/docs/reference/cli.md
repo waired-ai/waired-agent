@@ -342,6 +342,7 @@ Collects the recent logs into a single file you can attach to a bug report.
 waired logs                          # writes waired-logs-<time>.txt here
 waired logs -o report.txt            # choose the file
 waired logs --since 30m              # how far back to look (default 1h)
+waired logs --mask-pii               # redact home dir / username / hostname / email
 ```
 
 It gathers the background service's log (from the system log) and the AI
@@ -351,12 +352,14 @@ problem, then collect it:
 ```sh
 waired config log-level debug
 # ...reproduce the problem...
-waired logs -o report.txt
+waired logs --mask-pii -o report.txt
 waired config log-level info
 ```
 
-Look over the file before sharing it — it can contain local file paths or your
-username.
+`--mask-pii` replaces your home folder, username, machine name and account
+email with placeholders — the same masking as `waired init --mask-pii`, and on
+by default when `WAIRED_PII_MASK=1`. It is best-effort, so look over the file
+before sharing it either way — it can still contain other local paths.
 
 ### `waired version`
 

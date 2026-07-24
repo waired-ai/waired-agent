@@ -42,6 +42,56 @@ func TestLogs_WritesBundleFile(t *testing.T) {
 	}
 }
 
+func TestLogs_MaskPII(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || len(home) < 3 {
+		t.Skip("no usable home dir to exercise masking")
+	}
+	dir := t.TempDir()
+	logs := filepath.Join(dir, "runtimes", "ollama", "logs")
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Seed an engine log that embeds the real home path, so masking has
+	// something concrete to redact.
+	line := "loaded model from " + home + "/models/foo.gguf"
+	if err := os.WriteFile(filepath.Join(logs, "engine.log"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without --mask-pii, the home path passes through verbatim (control).
+	plain := filepath.Join(dir, "plain.txt")
+	_ = captureStdout(t, func() {
+		if err := runLogs([]string{"-o", plain, "--state-dir", dir, "--since", "5m"}); err != nil {
+			t.Fatalf("runLogs plain: %v", err)
+		}
+	})
+	if b, _ := os.ReadFile(plain); !strings.Contains(string(b), home) {
+		t.Fatalf("control: expected the home path to appear unmasked; got:\n%s", b)
+	}
+
+	// With --mask-pii, the home path is replaced by <home>.
+	masked := filepath.Join(dir, "masked.txt")
+	out := captureStdout(t, func() {
+		if err := runLogs([]string{"-o", masked, "--state-dir", dir, "--since", "5m", "--mask-pii"}); err != nil {
+			t.Fatalf("runLogs masked: %v", err)
+		}
+	})
+	body, err := os.ReadFile(masked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), home) {
+		t.Errorf("masked bundle still contains the home path %q:\n%s", home, body)
+	}
+	if !strings.Contains(string(body), "<home>") {
+		t.Errorf("masked bundle should contain the <home> token; got:\n%s", body)
+	}
+	if !strings.Contains(out, "Masked") {
+		t.Errorf("stdout should note masking; got: %q", out)
+	}
+}
+
 func TestLogs_DefaultOutputName(t *testing.T) {
 	dir := t.TempDir()
 	// Run in a temp cwd so the default-named file lands somewhere clean.
