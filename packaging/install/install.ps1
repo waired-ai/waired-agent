@@ -172,10 +172,11 @@ param(
     # install > %ProgramFiles%\Waired. The env form exists because the piped
     # `iwr | iex` one-liner cannot bind parameters.
     [string]$InstallDir = '',
-    # Force `waired init --inference-enabled <true|false>`. Empty = no
-    # override (the prompt or hardware-based default decides).
+    # Force `waired init --inference-enabled=<true|false>`. Empty = no
+    # override (the prompt or hardware-based default decides). Validated in
+    # Resolve-InitAnswers (main) so a typo fails before UAC.
     [string]$InferenceEnabled = '',
-    # Force `waired init --share-with-mesh <true|false>`. Empty = no
+    # Force `waired init --share-with-mesh=<true|false>`. Empty = no
     # override.
     [string]$ShareWithMesh = '',
     # Internal: non-empty when re-invoked elevated by Phase 1 after the
@@ -193,6 +194,12 @@ param(
     # the SCM service's ExecStart as --log-level. Same as WAIRED_LOG_LEVEL.
     # Change it later at runtime (no reinstall) with `waired config log-level`.
     # Mirrors install.sh --log-level.
+    #
+    # The two forms are one value: this default folds the env into the param,
+    # and Resolve-LogLevel (main) folds the param back into the env -- which is
+    # what carries it across UAC into the elevated Phase 2, where this default
+    # is re-evaluated. Before that fold existed the flag was silently dropped
+    # on the normal (self-elevating) install path (#164).
     [string]$LogLevel = $env:WAIRED_LOG_LEVEL,
     # Catch-all for stray tokens. PowerShell can't bind install.sh-style
     # `--dev` / `--control <url>` long options to the -Dev / -Control params
@@ -504,6 +511,60 @@ function Normalize-ExtraArgs {
     }
 }
 
+# Resolve-LogLevel validates the requested verbosity and republishes it to the
+# environment. Both halves matter, and both used to be missing (#164):
+#
+#   * Validation here, at parameter-resolution time, mirrors install.sh
+#     (which validates right after its arg loop). It used to live inside
+#     Invoke-AgentInstall -- i.e. AFTER UAC, inside the elevated window that
+#     closes on exit, so a typo was reported where nobody could read it.
+#
+#   * The $env write IS the propagation mechanism. Start-Process inherits the
+#     parent's environment block, and the elevated Phase-2 child re-evaluates
+#     `[string]$LogLevel = $env:WAIRED_LOG_LEVEL` from it. -LogLevel is
+#     deliberately NOT added to Invoke-SelfElevate's passthrough list: one
+#     mechanism (the same one -Edge and -SkipOllama already use), and the env
+#     form reaches the `waired init` child too, not just `waired-agent
+#     install`. Without it, `-LogLevel debug` was silently dropped on the
+#     ordinary (self-elevating) install path -- the agent installed at info
+#     with no warning, which is the one flag you reach for when reproducing a
+#     pre-release bug.
+#
+# Must run after Normalize-ExtraArgs so the install.sh-style `--log-level LVL`
+# spelling is covered as well as the -LogLevel param and the env form.
+function Resolve-LogLevel {
+    if (-not $LogLevel) { return }
+    $lvl = $LogLevel.ToLowerInvariant()
+    if ($lvl -notin @('debug','info','warn','error')) {
+        Common-Die "-LogLevel must be one of: debug info warn error (got: $LogLevel)"
+    }
+    $script:LogLevel    = $lvl
+    $env:WAIRED_LOG_LEVEL = $lvl
+}
+
+# Resolve-InitAnswers validates the two pre-answered setup questions. `waired
+# init`'s --inference-enabled / --share-with-mesh are Go bool flags, so the
+# only value spellings that reach them are `true` / `false` (see
+# Get-WairedInitArgs for why the `=` form is mandatory). Checking here means a
+# typo dies before UAC instead of surfacing as a flag-parse error inside the
+# elevated init.
+function Resolve-InitAnswers {
+    if ($InferenceEnabled) {
+        $v = $InferenceEnabled.ToLowerInvariant()
+        if ($v -notin @('true','false')) {
+            Common-Die "-InferenceEnabled must be true or false (got: $InferenceEnabled)"
+        }
+        $script:InferenceEnabled = $v
+    }
+    if ($ShareWithMesh) {
+        $v = $ShareWithMesh.ToLowerInvariant()
+        if ($v -notin @('true','false')) {
+            Common-Die "-ShareWithMesh must be true or false (got: $ShareWithMesh)"
+        }
+        $script:ShareWithMesh = $v
+    }
+}
+
 # Show-Banner prints the WAIRED "GATE" splash at the start of a run.
 # Two tiers, mirroring install.sh:
 #   * rich  -- a block WAIRED wordmark + GATE emblem ( o ) with a
@@ -803,10 +864,14 @@ function Invoke-SelfElevate {
 
     Common-Log "Privileged step ahead -- requesting UAC..."
 
-    # WAIRED_NO_TRAY / WAIRED_STATE_DIR / WAIRED_CONTROL_URL are read
-    # from $env in the elevated child too -- Start-Process inherits the
-    # parent's environment block. Only switches / explicit values bound
-    # to non-env params need explicit forwarding.
+    # WAIRED_NO_TRAY / WAIRED_STATE_DIR / WAIRED_CONTROL_URL / WAIRED_VERSION /
+    # WAIRED_PII_MASK / WAIRED_LOG_LEVEL are read from $env in the elevated
+    # child too -- Start-Process inherits the parent's environment block. Only
+    # switches / explicit values bound to non-env params need explicit
+    # forwarding. -LogLevel rides the env (Resolve-LogLevel writes it) rather
+    # than the list below, so the flag and env forms share one path and the
+    # value reaches the `waired init` child as well; it is absent here on
+    # purpose, not by omission (#164).
     # -InstallDir carries the RESOLVED location (including an interactive
     # Request-InstallDir choice) into the child, which never re-prompts.
     $passthroughArgs = @('-StagedZipPath', $ZipPath, '-LogPath', $LogPath, '-InstallDir', $InstallDir)
@@ -1256,9 +1321,8 @@ function Invoke-AgentInstall {
     # failure but was really an automatic-variable scoping bug. The
     # developer-facing scripts/install/waired-agent-windows.ps1 already
     # uses `$installArgs` for exactly this reason; match it.
-    if ($LogLevel -and $LogLevel -notin @('debug','info','warn','error')) {
-        Common-Die "-LogLevel must be one of: debug info warn error (got: $LogLevel)"
-    }
+    # $LogLevel was validated + normalised by Resolve-LogLevel in main, before
+    # UAC (both phases run main, so the elevated child re-validates too).
     $installArgs = @('install')
     if ($StateDir) { $installArgs += "-state-dir=$StateDir" }
     # The Windows service has no EnvironmentFile, so bake the log level into
@@ -1352,6 +1416,37 @@ function Set-OllamaEnvForInit {
     }
 }
 
+# Get-WairedInitArgs builds the `waired init` argv. Split out of
+# Invoke-WairedInit so the WAIRED_ARGTEST seam can print the exact argv a run
+# would use without installing anything -- the argv is where the
+# --inference-enabled spelling bug lived, and an assert needs to see it.
+function Get-WairedInitArgs {
+    $stateForInit = if ($StateDir) { $StateDir } else { $AgentStateDir }
+    $initArgs = @('init', '--state-dir', $stateForInit)
+    # waired init self-defaults the Control Plane URL (machine env var /
+    # baked production default), so --control is only passed when we have an
+    # explicit one. This is why init no longer needs a URL to run.
+    if ($ControlUrl) { $initArgs += @('--control', $ControlUrl) }
+    if (-not (Test-InteractiveStdin)) { $initArgs += '--non-interactive' }
+    # -SkipClaudeProxy is forwarded into `waired init` (the single decider of
+    # Claude Code routing) rather than being applied by a separate post-init
+    # `waired claude enable` step -- an unconditional enable there used to
+    # override an interactive "no" to the routing prompt (issue: routing left
+    # on despite declining). Env form WAIRED_NO_CLAUDE_PROXY is already folded
+    # into $SkipClaudeProxy above, so this one line covers both.
+    if ($SkipClaudeProxy) { $initArgs += '--skip-claude-route' }
+    # --inference-enabled / --share-with-mesh are Go BOOL flags, and Go's flag
+    # parser does not consume the following token for a bool. The space form
+    # `--inference-enabled true` therefore set the flag to true and left "true"
+    # as a positional argument, which `waired init` (cobra.NoArgs) rejected:
+    # `unknown command "true"`, exit 1 -- so BOTH true and false killed
+    # enrolment outright. Emit the single-token `=` form, the spelling every
+    # other caller in the repo already uses.
+    if ($InferenceEnabled) { $initArgs += "--inference-enabled=$InferenceEnabled" }
+    if ($ShareWithMesh)    { $initArgs += "--share-with-mesh=$ShareWithMesh" }
+    return $initArgs
+}
+
 # Invoke-WairedInit runs `waired.exe init` so enrolment happens inside
 # the installer instead of as a manual post-install step. The elevated
 # PS console opened by Start-Process -Verb RunAs has its own stdin, so
@@ -1383,21 +1478,7 @@ function Invoke-WairedInit {
     }
 
     $stateForInit = if ($StateDir) { $StateDir } else { $AgentStateDir }
-    $initArgs = @('init', '--state-dir', $stateForInit)
-    # waired init self-defaults the Control Plane URL (machine env var /
-    # baked production default), so --control is only passed when we have an
-    # explicit one. This is why init no longer needs a URL to run.
-    if ($ControlUrl) { $initArgs += @('--control', $ControlUrl) }
-    if (-not (Test-InteractiveStdin)) { $initArgs += '--non-interactive' }
-    # -SkipClaudeProxy is forwarded into `waired init` (the single decider of
-    # Claude Code routing) rather than being applied by a separate post-init
-    # `waired claude enable` step -- an unconditional enable there used to
-    # override an interactive "no" to the routing prompt (issue: routing left
-    # on despite declining). Env form WAIRED_NO_CLAUDE_PROXY is already folded
-    # into $SkipClaudeProxy above, so this one line covers both.
-    if ($SkipClaudeProxy)  { $initArgs += '--skip-claude-route' }
-    if ($InferenceEnabled) { $initArgs += @('--inference-enabled', $InferenceEnabled) }
-    if ($ShareWithMesh)    { $initArgs += @('--share-with-mesh',   $ShareWithMesh) }
+    $initArgs = Get-WairedInitArgs
 
     Common-Log "Running: $exe $($initArgs -join ' ')"
     if ($DryRun) {
@@ -1782,6 +1863,15 @@ if ($Help) {
     return
 }
 
+# Value-bearing options are validated + normalised HERE, in Phase 1, before any
+# download / UAC / privileged step -- mirroring install.sh, which validates
+# right after its arg loop (a typo must not cost a UAC click, nor be reported
+# inside the elevated window that closes on exit). Resolve-LogLevel also
+# republishes the level to $env:WAIRED_LOG_LEVEL, which is what carries it into
+# the elevated Phase 2 (#164).
+Resolve-LogLevel
+Resolve-InitAnswers
+
 # -Clean always wipes and installs fresh, so the read-only -Check and the
 # in-place -Update contradict it (mirror of install.sh's --clean guard).
 if ($Clean -and ($Check -or $Update)) {
@@ -1804,10 +1894,17 @@ Resolve-ControlUrl
 # test can assert --dev / --control parity (and that a bad URL / unknown token
 # dies) without doing privileged work. Kept pure-ASCII (wire-safe under iwr|iex,
 # scripts/install/encoding_test.go).
+#
+# EnvLogLevel is deliberately separate from LogLevel: it is the value the
+# elevated Phase-2 child actually inherits, so it is the thing an assert must
+# look at to know -LogLevel survives UAC (#164). InitArgs prints the argv
+# Get-WairedInitArgs would hand to `waired init`.
 if ($env:WAIRED_ARGTEST) {
-    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11} Clean={12}" -f `
+    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11} Clean={12} LogLevel={13} EnvLogLevel={14} InferenceEnabled={15} ShareWithMesh={16}" -f `
         [bool]$Dev, $Control, $ControlUrl, $Version, [bool]$SkipOllama, [bool]$SkipInit, `
-        [bool]$SkipClaudeProxy, [bool]$NonInteractive, [bool]$DryRun, [bool]$Update, [bool]$Check, [bool]$Yes, [bool]$Clean)
+        [bool]$SkipClaudeProxy, [bool]$NonInteractive, [bool]$DryRun, [bool]$Update, [bool]$Check, [bool]$Yes, [bool]$Clean, `
+        $LogLevel, $env:WAIRED_LOG_LEVEL, $InferenceEnabled, $ShareWithMesh)
+    Write-Host ("ARGTEST InitArgs=[{0}]" -f ((Get-WairedInitArgs) -join ' '))
     return
 }
 

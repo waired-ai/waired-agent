@@ -623,7 +623,7 @@ try {
     # and that a stray / mistyped arg fails loudly instead of silently
     # mis-binding to -Control (the pre-fix bug ran `waired init --control --dev`).
     ItStep "install.ps1 arg-parsing asserts (waired#746)"
-    function Invoke-Argtest([string[]]$a) {
+    function Invoke-ArgtestRaw([string]$cmd) {
         # Invoke install.ps1 the way Phase 1 actually runs -- IN-SESSION
         # (`& install.ps1 <args>` / iwr|iex), NOT -File. That is the parse mode
         # where a bare `--dev` is a positional value (the #746 bug); -File would
@@ -631,10 +631,12 @@ try {
         # in a child process so a Common-Die (exit 1) can't tear down this test.
         $env:WAIRED_ARGTEST = '1'
         try {
-            $cmd = "& '$installPs1' " + ($a -join ' ')
             $o = & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $cmd 2>&1 | Out-String
         } finally { Remove-Item Env:WAIRED_ARGTEST -ErrorAction SilentlyContinue }
         [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $o }
+    }
+    function Invoke-Argtest([string[]]$a) {
+        Invoke-ArgtestRaw ("& '$installPs1' " + ($a -join ' '))
     }
     $r = Invoke-Argtest @('--dev')
     if ($r.Exit -eq 0 -and $r.Out -match 'ControlUrl=https?://\S') { ItOk "--dev resolves a Control URL (install.sh parity)" }
@@ -668,15 +670,65 @@ try {
     if ($r.Exit -eq 0 -and $r.Out -match 'Clean=True') { ItOk "WAIRED_CLEAN env resolves to -Clean (piped iwr|iex form)" }
     else { ItBad "WAIRED_CLEAN env not resolved (exit $($r.Exit)): $($r.Out.Trim())" }
 
+    # --- -LogLevel (#164) ----------------------------------------------------
+    # This CI runner is already Administrator, so the Tier-1 install below takes
+    # install.ps1's inline Phase-2 path and NEVER crosses Invoke-SelfElevate --
+    # which is exactly why #164 (the flag being dropped across UAC) survived
+    # unnoticed. These ARGTEST cases are the regression bar instead: they assert
+    # the propagation MECHANISM (the $env:WAIRED_LOG_LEVEL write that
+    # Start-Process passes to the elevated child) rather than the crossing.
+    ItStep "install.ps1 -LogLevel asserts (#164)"
+    $r = Invoke-Argtest @('-LogLevel','debug')
+    if ($r.Exit -eq 0 -and $r.Out -match 'LogLevel=debug EnvLogLevel=debug') { ItOk "-LogLevel debug is published to the env the elevated child inherits" }
+    else { ItBad "-LogLevel not published to the env (exit $($r.Exit)): $($r.Out.Trim())" }
+    $r = Invoke-Argtest @('--log-level','DEBUG')
+    if ($r.Exit -eq 0 -and $r.Out -match 'LogLevel=debug EnvLogLevel=debug') { ItOk "--log-level DEBUG folds + normalises (install.sh parity)" }
+    else { ItBad "--log-level parity broken (exit $($r.Exit)): $($r.Out.Trim())" }
+    # The actual #164 regression test: two invocations in ONE process. The
+    # second gets no -LogLevel and must still resolve debug -- the same
+    # environment-block inheritance Start-Process gives the elevated Phase 2.
+    $r = Invoke-ArgtestRaw ("& '$installPs1' -LogLevel debug; & '$installPs1'")
+    $levels = [regex]::Matches($r.Out, 'LogLevel=(\S+) EnvLogLevel=') | ForEach-Object { $_.Groups[1].Value }
+    if ($r.Exit -eq 0 -and $levels.Count -eq 2 -and $levels[1] -eq 'debug') { ItOk "-LogLevel survives into a re-invoked install.ps1 (the UAC hand-off, #164)" }
+    else { ItBad "-LogLevel lost on re-invoke (levels: $($levels -join ',')): $($r.Out.Trim())" }
+    # Validation must fire in Phase 1. ARGTEST returns before any download or
+    # UAC, so reaching this die at all proves the check is no longer buried in
+    # Invoke-AgentInstall (i.e. after the UAC click, inside a window that
+    # closes on exit).
+    $r = Invoke-Argtest @('--log-level','bogus')
+    if ($r.Exit -ne 0 -and $r.Out -match 'must be one of') { ItOk "a bad --log-level dies before any privileged step" }
+    else { ItBad "bad --log-level not rejected early (exit $($r.Exit)): $($r.Out.Trim())" }
+
+    # --- the two pre-answered setup questions --------------------------------
+    # `waired init`'s --inference-enabled / --share-with-mesh are Go bool flags:
+    # the space form leaves the value as a positional arg, which cobra.NoArgs
+    # rejects, so install.ps1 used to kill enrolment for BOTH true and false.
+    # Assert the single-token `=` spelling, and that no bare value survives.
+    ItStep "install.ps1 init-answer asserts"
+    $r = Invoke-Argtest @('-InferenceEnabled','false','-ShareWithMesh','TRUE')
+    $initArgs = if ($r.Out -match 'InitArgs=\[([^\]]*)\]') { $Matches[1] } else { '' }
+    if ($r.Exit -eq 0 -and $initArgs -match '--inference-enabled=false' -and $initArgs -match '--share-with-mesh=true') { ItOk "init answers use the = form and normalise case" }
+    else { ItBad "init answers not in = form (exit $($r.Exit)) InitArgs=[$initArgs]" }
+    if ($initArgs -notmatch '(^|\s)(true|false)(\s|$)') { ItOk "no bare true/false left as a positional arg (cobra.NoArgs would reject it)" }
+    else { ItBad "a bare bool value survived into the init argv: [$initArgs]" }
+    $r = Invoke-Argtest @('-InferenceEnabled','yes')
+    if ($r.Exit -ne 0 -and $r.Out -match 'must be true or false') { ItOk "a non-bool -InferenceEnabled dies before any privileged step" }
+    else { ItBad "bad -InferenceEnabled not rejected early (exit $($r.Exit)): $($r.Out.Trim())" }
+
     if ($WithInference) {
         ItStep "running install.ps1 (-Dev -SkipInit -NonInteractive; engine installed later by the Tier-2 init)"
-        & $installPs1 -Dev -SkipInit -NonInteractive
+        & $installPs1 -Dev -SkipInit -NonInteractive -LogLevel debug
     } else {
         $env:WAIRED_NO_OLLAMA = '1'
-        ItStep "running install.ps1 (-Dev -SkipOllama -SkipInit -NonInteractive)"
-        & $installPs1 -Dev -SkipOllama -SkipInit -NonInteractive
+        ItStep "running install.ps1 (-Dev -SkipOllama -SkipInit -NonInteractive -LogLevel debug)"
+        & $installPs1 -Dev -SkipOllama -SkipInit -NonInteractive -LogLevel debug
     }
     if ($LASTEXITCODE -ne 0) { ItDie "install.ps1 exited $LASTEXITCODE" }
+    # install.ps1 runs in THIS session (`&`, not a child process), so its
+    # Resolve-LogLevel left WAIRED_LOG_LEVEL in our environment. Clear it so
+    # Tier 2 runs with a stock environment; the level under test is the one
+    # baked into the service ExecStart, asserted below.
+    Remove-Item Env:WAIRED_LOG_LEVEL -ErrorAction SilentlyContinue
 
     ItStep "Tier 1 asserts"
     $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
@@ -684,8 +736,13 @@ try {
     # The service may take a beat to reach Running after install starts it.
     for ($i = 0; $i -lt 15 -and $svc -and $svc.Status -ne 'Running'; $i++) { Start-Sleep 1; $svc.Refresh() }
     if ($svc -and $svc.Status -eq 'Running') { ItOk "service Running" } else { ItBad "service not Running (status=$($svc.Status))" }
-    $startType = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).StartMode
+    $svcCim = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+    $startType = $svcCim.StartMode
     if ($startType -match 'Auto') { ItOk "service start mode = $startType" } else { ItBad "service start mode = $startType (want Auto)" }
+    # The Windows service has no EnvironmentFile, so -LogLevel can only reach
+    # the daemon by being baked into the SCM ExecStart (#164).
+    if ($svcCim.PathName -match '--log-level\s+debug') { ItOk "-LogLevel debug reached the service command line" }
+    else { ItBad "-LogLevel debug missing from the service command line: $($svcCim.PathName)" }
 
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'waired.exe'))       { ItOk "waired.exe installed" }       else { ItBad "waired.exe missing in $InstallDir" }
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'waired-agent.exe')) { ItOk "waired-agent.exe installed" } else { ItBad "waired-agent.exe missing in $InstallDir" }
