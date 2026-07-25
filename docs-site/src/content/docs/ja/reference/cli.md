@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 100fd94ddac56fb7
+sourceHash: b7c9c3cb661c06fc
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -65,6 +65,17 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 | `--no-browser` | ブラウザを開かず、サインイン用リンクを表示します。SSH 用。 |
 | `--inference-enabled=true\|false` | 「このパソコンで AI を動かすか」に、聞かれずに答えます。 |
 | `--share-with-mesh=true\|false` | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
+| `--ollama-source bundled\|reuse` | AI ソフトウェアの提供元。`bundled` は Waired が自前で入れて管理し、`reuse` は自分で入れたものをそのまま使います。指定しなければ質問されます。 |
+| `--no-wait-model` | モデルのダウンロード完了を待たずに、バックグラウンドで続けさせてプロンプトを返します。 |
+| `--skip-claude-route` | セットアップは行いつつ、Claude Code は Anthropic API のままにします。スキルやプラグインは入ります。あとから `waired claude enable` で切り替えられます。 |
+| `--skip-integration` | コーディングツールの設定を丸ごと省きます（Claude Code も OpenCode も変更しません）。 |
+| `--device-name <name>` | ホスト名ではなく、指定した名前でこのパソコンを登録します。 |
+| `--reset-config` | 前回の設定を無視して、最初からすべて聞き直します。 |
+| `--start-agent=false` | 終了後にバックグラウンドサービスを起動しません（自分で起動する場合）。 |
+| `--control <URL>` | 既定ではなく指定したコントロールプレーンでサインインします。→ [インストールの詳細オプション](/ja/reference/install-options/) |
+
+正式な一覧は `waired init --help` です。ここに載せていない開発者向け・CI 専用の
+フラグもそちらに含まれます。
 
 ### `waired status`
 
