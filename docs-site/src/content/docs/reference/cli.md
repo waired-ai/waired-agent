@@ -65,6 +65,17 @@ is running it is also what performs the steps the browser setup page asks for**
 | `--no-browser` | Prints the sign-in link instead of opening a browser. For SSH. |
 | `--inference-enabled=true\|false` | Answers "run AI models on this computer?" without asking. |
 | `--share-with-mesh=true\|false` | Answers "let your other devices use this computer's AI?" without asking. |
+| `--ollama-source bundled\|reuse` | Who provides the AI software: `bundled` lets Waired install and manage its own, `reuse` keeps using one you installed yourself. Asks when not given. |
+| `--no-wait-model` | Don't sit and watch the model download — let it finish in the background and get your prompt back. |
+| `--skip-claude-route` | Finish setup but leave Claude Code talking to the Anthropic API. Skills and plugins still install; turn routing on later with `waired claude enable`. |
+| `--skip-integration` | Skip the coding-tool setup entirely (no Claude Code or OpenCode changes). |
+| `--device-name <name>` | Register this computer under a name you choose instead of its hostname. |
+| `--reset-config` | Ignore the settings from a previous run and ask everything again from scratch. |
+| `--start-agent=false` | Don't start the background service afterwards; you'll start it yourself. |
+| `--control <URL>` | Sign in against a specific control plane instead of the default. See [Advanced install options](/reference/install-options/). |
+
+`waired init --help` is the authoritative list; it also carries developer and
+CI-only flags not shown here.
 
 ### `waired status`
 

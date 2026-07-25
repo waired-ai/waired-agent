@@ -86,8 +86,42 @@ $env:WAIRED_CLEAN = '1'
 iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 ```
 
-Details and all installer flags: [docs.waired.ai](https://docs.waired.ai/)
-and `packaging/install/README.md`.
+### Install options
+
+Linux and macOS use `install.sh`; Windows uses `install.ps1` with the
+PowerShell spelling of the same option. The environment-variable form is
+how the piped one-liner passes an option — the Windows `iwr … | iex`
+form **cannot bind parameters**, so either set the env var or save the
+script to disk first and run it with the flag.
+
+| `install.sh` | `install.ps1` | Environment variable | What it does |
+|---|---|---|---|
+| `--no-init` | `-SkipInit` | | Do **not** run `waired init` after installing. Without this, installing signs you in and sets you up in one pass. |
+| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the AI software. Use it when you already run your own Ollama. |
+| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of your own AI. |
+| `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | Start the agent at this log detail: `debug`, `info` (default), `warn` or `error`. Change it later without reinstalling via `waired config log-level`. |
+| `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, machine name and account email in the output, for screenshots and bug reports. Best-effort. |
+| `--dry-run` | `-DryRun` | | Print every privileged command without running any of them. |
+| `--yes`, `-y` | `-Yes` | | Assume yes at every prompt, including the pre-install summary. |
+| `--check` | `-Check` | | Report whether a newer version is available; change nothing. |
+| `--update` | `-Update` | | Update an existing install rather than installing fresh. |
+| `--edge`, `--latest` | `-Edge`, `-Latest` | `WAIRED_VERSION=edge` | Install or switch to the latest `main` build. Not a stable release. |
+| `--stable` | `-Stable` | | Install or switch to the latest stable release. |
+| `--clean` | `-Clean` | `WAIRED_CLEAN=1` | Wipe everything first, then install fresh. Destructive; asks to confirm unless `--yes`. |
+| `--control <URL>` | `-Control <URL>` | `WAIRED_CONTROL_URL` | Enroll against a specific control plane. |
+| `--dev` | `-Dev` | | The built-in development control plane. For Waired development only. |
+| | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | Where to install (Windows). |
+| | | `WAIRED_VERSION` | Pin an exact release, e.g. `1.2.3`. |
+| | | `WAIRED_NO_TRAY=1` | Do not install `waired-tray` (headless hosts). |
+
+`uninstall.sh` / `uninstall.ps1` take `--clean`, `--yes`, `--dry-run` and
+`--mask-pii`.
+
+The scripts' own `--help` / `-Help` output is authoritative. See also
+[docs.waired.ai](https://docs.waired.ai/) — [Advanced install
+options](https://docs.waired.ai/reference/install-options/) and [CLI
+commands](https://docs.waired.ai/reference/cli/) — and
+`packaging/install/README.md`.
 
 ## Layout
 
