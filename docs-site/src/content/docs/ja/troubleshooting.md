@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 3f6a225e64d3b85a
+sourceHash: cd71a78ad724c860
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -353,6 +353,10 @@ Claude Code はステータス行を 1 つしか使わず、プロジェクト�
 | AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`）。自前の Ollama を使っている場合は `~/.ollama/logs/server.log`。 |
 
 ## 不具合を報告する
+
+[不具合を報告する](/ja/getting-started/report-a-problem/)の手順に従ってください。
+再現する**前に**詳細ログを有効化し、1 つのファイルにまとめて添付します。この順番が
+重要です — 原因を説明するだけの詳細は、先に頼まないと記録されません。
 
 `waired init --mask-pii`（ほかのコマンドでは環境変数 `WAIRED_PII_MASK=1`）を使うと、
 ホームディレクトリ・ユーザー名・ホスト名・アカウントのメールアドレスが伏せられるので、

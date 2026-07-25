@@ -372,6 +372,10 @@ email with placeholders — the same masking as `waired init --mask-pii`, and on
 by default when `WAIRED_PII_MASK=1`. It is best-effort, so look over the file
 before sharing it either way — it can still contain other local paths.
 
+The whole sequence, including what to do when the problem happens during
+install and what else to attach, is on [Report a
+problem](/getting-started/report-a-problem/).
+
 ### `waired version`
 
 ```sh

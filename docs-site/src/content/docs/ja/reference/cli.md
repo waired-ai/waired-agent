@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: b7c9c3cb661c06fc
+sourceHash: 21bfc9123adf17bb
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -363,6 +363,9 @@ waired config log-level info
 プレースホルダに置き換えます（`waired init --mask-pii` と同じマスク。`WAIRED_PII_MASK=1`
 のときは既定で ON）。ベストエフォートなので、いずれにせよ共有前にファイルの中身を
 確認してください。ほかのローカルパスが残ることがあります。
+
+インストール中に問題が起きた場合の対処や、ほかに添付すべきものを含めた全体の流れは
+[不具合を報告する](/ja/getting-started/report-a-problem/)にあります。
 
 ### `waired version`
 

@@ -109,6 +109,10 @@ export default defineConfig({
 						// first-run problems, and every other page points here.
 						{ label: 'Run a health check', slug: 'getting-started/doctor' },
 						{ label: 'Troubleshooting', slug: 'troubleshooting' },
+						// Last resort of this group: what to do when doctor and
+						// the troubleshooting pages did not resolve it, i.e.
+						// how to hand the problem to somebody else.
+						{ label: 'Report a problem', slug: 'getting-started/report-a-problem' },
 						{ label: 'FAQ', slug: 'faq' },
 					],
 				},

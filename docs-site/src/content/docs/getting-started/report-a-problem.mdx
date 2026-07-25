@@ -1,0 +1,183 @@
+---
+title: Report a problem
+description: Turn on detailed logs, reproduce the problem, collect the logs into one file, and know what is safe to attach.
+meta:
+  audience: Anyone about to file a bug report, or asked to send diagnostics
+  needs: A terminal on the computer with the problem
+  time: A few minutes, plus however long the problem takes to reproduce
+---
+
+import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
+
+If something is wrong, run [`waired doctor`](/getting-started/doctor/) first —
+it fixes most of it. This page is for what comes after: getting the evidence
+that lets somebody else work out what happened.
+
+<Aside type="tip" title="Turn on detailed logs before you reproduce it">
+	Waired normally logs the important events only. The detail that explains a
+	bug is not written down unless you ask for it **first** — so turning it on
+	after the problem happened gives you a log of everything except the part
+	you need.
+</Aside>
+
+## Collect the diagnostics
+
+<Steps>
+
+1. **Turn on detailed logs.** This takes effect immediately, on both the
+   background service and the Waired app. No restart.
+
+   ```sh
+   waired config log-level debug
+   ```
+
+2. **Reproduce the problem.** Do the thing that went wrong, the same way.
+
+3. **Collect the logs into one file.**
+
+   ```sh
+   waired logs --mask-pii --since 30m -o report.txt
+   ```
+
+   `--since` is how far back to look — widen it if the problem happened a while
+   ago. The default is one hour.
+
+4. **Turn the detail back off**, so your logs stay small.
+
+   ```sh
+   waired config log-level info
+   ```
+
+</Steps>
+
+`report.txt` holds the background service's log and the AI engine's log
+together. That one file is what to attach.
+
+## What `--mask-pii` does, and does not
+
+It replaces four things with placeholders: your **home folder**, your
+**username**, your **computer's name**, and the **email address** you signed in
+with.
+
+It is best-effort, not a guarantee. It does not know about every path or name
+that could be personal to you — a project folder somewhere else on disk, a
+hostname you configured yourself, a URL you typed. **Read the file before you
+attach it**, whether or not you used the option.
+
+<Aside type="note" title="It works on any command">
+	`waired logs --mask-pii` masks that one command. To mask everything —
+	including the installer and sign-in — set `WAIRED_PII_MASK=1` in your
+	environment instead. See [Advanced install
+	options](/reference/install-options/).
+</Aside>
+
+## When the problem happens during install
+
+The steps above need Waired already installed. If it fails while installing,
+ask the installer for detailed logs from the start instead.
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --log-level debug --mask-pii
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_LOG_LEVEL = 'debug'
+		$env:WAIRED_PII_MASK = '1'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+
+		The one-line form cannot take options, so set them as environment
+		variables — they reach the installer and everything it runs, including
+		the administrator step.
+	</TabItem>
+</Tabs>
+
+On Windows the installer also writes its own transcript to
+`%TEMP%\waired-install.log`. The administrator window closes when it finishes,
+so that file is often the only place the failure survives — attach it too.
+
+## Start over from a clean slate
+
+If the setup looks confused rather than broken in one specific way, wiping and
+reinstalling in one step is often faster than diagnosing it.
+
+<Aside type="danger" title="This deletes things">
+	A clean install permanently removes your settings, keys, local state, and
+	the AI models you downloaded. You sign in again afterwards, and the models
+	download again. It asks you to confirm first.
+</Aside>
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --clean
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		$env:WAIRED_CLEAN = '1'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
+		```
+	</TabItem>
+</Tabs>
+
+Full details, including how to wipe without reinstalling, are on
+[Uninstall](/getting-started/uninstall/#start-over-on-the-same-computer).
+
+## If you were asked to try a test build
+
+Two options exist for this, and they combine.
+
+- **`--edge` / `WAIRED_VERSION=edge`** — the latest build of the main branch,
+  rebuilt on every change. Not a release. See [Update
+  Waired](/getting-started/update/#release-channels).
+- **`--dev` / `-Dev`** — connects to Waired's own development service instead of
+  the normal one. This is for people working on Waired itself; a device
+  registered this way does not appear in your normal account.
+
+<Tabs syncKey="os">
+	<TabItem label="Linux / macOS">
+		```sh
+		curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh \
+		  | sh -s -- --edge --dev --log-level debug
+		```
+	</TabItem>
+	<TabItem label="Windows">
+		```powershell
+		# Save the script first: the one-line form cannot pass -Dev.
+		$env:WAIRED_VERSION = 'edge'
+		$env:WAIRED_LOG_LEVEL = 'debug'
+		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 -OutFile $env:TEMP\install.ps1
+		& $env:TEMP\install.ps1 -Dev
+		```
+	</TabItem>
+</Tabs>
+
+<Aside type="caution" title="Windows: name the service every time">
+	On Windows the chosen service is not remembered. If you run `waired init`
+	again later on a machine installed with `-Dev`, pass `--control` with the
+	same address — otherwise it signs you back in to the normal service. The
+	installer prints the address it used.
+</Aside>
+
+To get back to a normal install afterwards, do a clean install as above (the
+`--stable` option alone changes the build, not which service you are registered
+with).
+
+## What to attach
+
+| | |
+|---|---|
+| `report.txt` | From the four steps at the top |
+| `waired version --json` | Exact build |
+| `waired doctor` output | What it found, even if it fixed it |
+| Windows install failures | `%TEMP%\waired-install.log` |
+| What you expected | And what happened instead |
+
+File it at
+[github.com/waired-ai/waired-agent/issues](https://github.com/waired-ai/waired-agent/issues).
