@@ -329,6 +329,11 @@ Only after `waired doctor`:
 
 ## Reporting a problem
 
+Follow [Report a problem](/getting-started/report-a-problem/): turn on detailed
+logs **before** reproducing it, collect them into one file, and attach that.
+Doing it in that order matters — the detail that explains a bug is not written
+down unless you ask for it first.
+
 `waired init --mask-pii` (or `WAIRED_PII_MASK=1` on other commands) masks your
 home directory, username, hostname and account email in the output, so a
 transcript or screenshot is safe to attach to an
