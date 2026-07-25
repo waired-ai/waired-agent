@@ -54,9 +54,22 @@ printf 'waired:\n  Installed: %s\n  Candidate: %s\n' \
 STUB
 # Safety no-ops: even if a --dry-run guard ever regresses, the matrix must
 # never mutate the host. None of these are reached in --dry-run today.
-for c in apt-get sudo systemctl curl gpg dpkg; do
+for c in apt-get systemctl curl gpg dpkg; do
   printf '#!/bin/sh\nexit 0\n' > "$STUBDIR/$c"
 done
+# sudo is a no-op like the rest, with ONE functional case: install.sh probes
+# enrolment with `$SUDO test -e /var/lib/waired/identity.json`, and a blanket
+# `exit 0` answered "already enrolled" — so linux_maybe_init short-circuited
+# and no case ever reached the sign-in arm. Report not-enrolled by default
+# (the fresh-install state the matrix is meant to drive); IT_STUB_ENROLLED=1
+# picks the other arm. Everything else still exits 0 without running.
+cat > "$STUBDIR/sudo" <<'STUB'
+#!/bin/sh
+case "$1" in
+  test) if [ -n "${IT_STUB_ENROLLED:-}" ]; then exit 0; else exit 1; fi ;;
+esac
+exit 0
+STUB
 chmod +x "$STUBDIR"/*
 export PATH="$STUBDIR:$PATH"
 
@@ -109,6 +122,76 @@ run_case zero "fresh (maybe-init)"  "$FRESH"                                 -- 
 run_case zero "fresh NO_TRAY"       "$FRESH WAIRED_NO_TRAY=1"                -- --dry-run --skip-ollama --no-init
 run_case zero "fresh CONTROL_URL"   "$FRESH WAIRED_CONTROL_URL=http://h:9479" -- --dry-run --skip-ollama --no-init
 run_case zero "fresh NO_OLLAMA env" "$FRESH WAIRED_NO_OLLAMA=1"              -- --dry-run --no-init
+run_case zero "fresh --non-interactive" "$FRESH"                             -- --dry-run --skip-ollama --non-interactive
+run_case zero "fresh init answers"  "$FRESH"                                 -- --dry-run --skip-ollama --inference-enabled=false --share-with-mesh=true
+run_case zero "fresh init answers (space form)" "$FRESH"                     -- --dry-run --skip-ollama --inference-enabled false --share-with-mesh true
+run_case zero "fresh enrolled arm"  "$FRESH IT_STUB_ENROLLED=1"              -- --dry-run --skip-ollama
+
+# 3b. The `waired init` hand-off (#165, #166). These assert OUTPUT, not just
+#     exit status, so they run under setsid: without a controlling terminal
+#     the terminal gate is live and deterministic whether this harness is run
+#     from a dev terminal or from CI.
+#
+#     The contract under test:
+#       * no terminal          -> sign-in is skipped, with a "finish later" note
+#       * --non-interactive    -> sign-in is attempted anyway, stdin from
+#                                 /dev/null (</dev/tty cannot open without one)
+#       * --yes                -> init gets --non-interactive, but does NOT
+#                                 clear the terminal gate
+#       * the two answers      -> forwarded in the `=` form. The space form is
+#                                 a trap: they are Go bool flags, so
+#                                 `--inference-enabled false` would leave
+#                                 "false" as a positional arg and `waired init`
+#                                 (cobra.NoArgs) would reject it outright.
+init_out() {  # init_out <args...> -> install.sh output with no controlling tty
+  setsid env IT_STUB_INSTALLED= sh "$INSTALL_SH" --dry-run --skip-ollama "$@" </dev/null 2>&1 || true
+}
+if command -v setsid >/dev/null 2>&1; then
+  out="$(init_out --non-interactive --inference-enabled=false --share-with-mesh=true)"
+  if printf '%s' "$out" | grep -q -- 'waired init .*--non-interactive .*--inference-enabled=false .*--share-with-mesh=true'; then
+    ok "--non-interactive runs sign-in with no tty, answers in = form"
+  else
+    fail "--non-interactive init hand-off wrong: $(printf '%s' "$out" | grep -i 'init\|terminal' | tr '\n' '|')"
+  fi
+  if printf '%s' "$out" | grep -q -- '</dev/null'; then
+    ok "no-tty sign-in reads stdin from /dev/null (</dev/tty cannot open)"
+  else
+    fail "no-tty sign-in did not switch stdin off /dev/tty"
+  fi
+  if ! printf '%s' "$out" | grep -qE 'init .*(--inference-enabled|--share-with-mesh) (true|false)'; then
+    ok "no bare true/false left as a positional arg (cobra.NoArgs would reject it)"
+  else
+    fail "a bool value was passed in the space form"
+  fi
+
+  out="$(init_out --inference-enabled=false)"
+  if printf '%s' "$out" | grep -q 'No terminal detected'; then
+    ok "no terminal + no --non-interactive skips sign-in (unchanged default)"
+  else
+    fail "the terminal gate did not hold: $(printf '%s' "$out" | grep -i 'init\|terminal' | tr '\n' '|')"
+  fi
+
+  out="$(init_out --yes)"
+  if printf '%s' "$out" | grep -q 'No terminal detected'; then
+    ok "--yes does not override the terminal gate"
+  else
+    fail "--yes cleared the terminal gate: $(printf '%s' "$out" | grep -i 'init\|terminal' | tr '\n' '|')"
+  fi
+
+  out="$(init_out --non-interactive --yes)"
+  if printf '%s' "$out" | grep -q -- 'waired init .*--non-interactive'; then
+    ok "--yes forwards init --non-interactive (install.sh --help has always said so)"
+  else
+    fail "--yes did not forward --non-interactive to init"
+  fi
+else
+  log "setsid unavailable -- skipping the init hand-off cases"
+fi
+
+# 3c. Bad values die at parse time, before any privileged step.
+run_case nonzero "--inference-enabled bogus" "$FRESH" -- --dry-run --inference-enabled bogus
+run_case nonzero "--share-with-mesh bogus"   "$FRESH" -- --dry-run --share-with-mesh=maybe
+run_case nonzero "--inference-enabled (no value)" "$FRESH" -- --dry-run --inference-enabled
 
 # 4. Update dispatch (IT_STUB_INSTALLED set -> linux_apt_update). This is
 #    the arm where #328's FLAG_YES lived, reached only when a package is

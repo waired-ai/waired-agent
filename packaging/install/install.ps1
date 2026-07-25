@@ -482,6 +482,22 @@ function Normalize-ExtraArgs {
                 }
                 $script:LogLevel = $val
             }
+            'inference-enabled' {
+                if ($null -eq $val) {
+                    if ($i + 1 -ge $ExtraArgs.Count) { Common-Die "--inference-enabled requires an argument (true|false)." }
+                    $i++
+                    $val = [string]$ExtraArgs[$i]
+                }
+                $script:InferenceEnabled = $val
+            }
+            'share-with-mesh' {
+                if ($null -eq $val) {
+                    if ($i + 1 -ge $ExtraArgs.Count) { Common-Die "--share-with-mesh requires an argument (true|false)." }
+                    $i++
+                    $val = [string]$ExtraArgs[$i]
+                }
+                $script:ShareWithMesh = $val
+            }
             'skip-ollama'       { $script:SkipOllama = $true }
             'skip-init'         { $script:SkipInit = $true }
             'skip-claude-proxy' { $script:SkipClaudeProxy = $true }
@@ -693,8 +709,12 @@ Switches:
                     managed settings pointing ANTHROPIC_BASE_URL at local
                     inference, no credential). Same as WAIRED_NO_CLAUDE_PROXY=1;
                     enable later with an elevated `waired claude enable`.
-  -NonInteractive   Forward `--non-interactive` to `waired init`
-                    (skip the install-time inference role prompts).
+  -NonInteractive   Never prompt: forward `--non-interactive` to `waired
+                    init` (skip the install-time inference role prompts)
+                    AND attempt sign-in even when no terminal is
+                    available -- the default there is to skip sign-in and
+                    tell you to finish later. Same as install.sh's
+                    --non-interactive.
   -MaskPII          Mask personal information (home dir, username; the
                     sign-in step also masks hostname + account email) in
                     the output -- for screenshots and bug reports.
@@ -715,9 +735,11 @@ Switches:
                     already has waired offers this automatically.
   -Yes              Assume "yes" to every prompt: the pre-install
                     confirmation, the update prompt (required to update on a
-                    non-interactive / no-TTY host) and the -Clean
-                    confirmation. Also accepts the default install location
-                    without asking.
+                    non-interactive / no-TTY host), the -Clean confirmation,
+                    and `waired init`'s own prompts (it is run with
+                    --non-interactive). Also accepts the default install
+                    location without asking. Does NOT make sign-in run on a
+                    host with no terminal -- see -NonInteractive.
   -Clean            Clean install: run the uninstaller with -Clean first
                     (PERMANENTLY deletes config, keys, state, and Ollama +
                     its models), then install fresh. Destructive -- asks to
@@ -739,9 +761,11 @@ Parameters:
   -OllamaModelsDir <path>    Models directory for the init-time engine install
                              (WAIRED_OLLAMA_MODELS_DIR).
   -InferenceEnabled <bool>   true | false to force `waired init
-                             --inference-enabled`. Empty = prompt.
+                             --inference-enabled`. Empty = prompt. Same as
+                             install.sh's --inference-enabled.
   -ShareWithMesh <bool>      true | false to force `waired init
-                             --share-with-mesh`. Empty = prompt.
+                             --share-with-mesh`. Empty = prompt. Same as
+                             install.sh's --share-with-mesh.
 
 Environment variables:
   WAIRED_VERSION           Pin a specific release tag (e.g. v1.2.3), or 'edge'
@@ -1427,7 +1451,12 @@ function Get-WairedInitArgs {
     # baked production default), so --control is only passed when we have an
     # explicit one. This is why init no longer needs a URL to run.
     if ($ControlUrl) { $initArgs += @('--control', $ControlUrl) }
-    if (-not (Test-InteractiveStdin)) { $initArgs += '--non-interactive' }
+    # -Yes means "assume yes at every prompt", which install.sh --help has
+    # always spelled out as covering init's prompts too; Windows never applied
+    # it there. Folded in HERE rather than into $NonInteractive globally --
+    # that would also suppress the Phase-2 "Press Enter to close this window"
+    # pause (waired#748) and take the elevated window's output with it.
+    if ($Yes -or -not (Test-InteractiveStdin)) { $initArgs += '--non-interactive' }
     # -SkipClaudeProxy is forwarded into `waired init` (the single decider of
     # Claude Code routing) rather than being applied by a separate post-init
     # `waired claude enable` step -- an unconditional enable there used to
@@ -1468,6 +1497,21 @@ function Invoke-WairedInit {
     $script:InitRan = $false
     if ($SkipInit) {
         Common-Log "-SkipInit set; not running waired init."
+        return
+    }
+    # No terminal -> skip sign-in, the same call install.sh has always made
+    # (linux_maybe_init / darwin_maybe_init gate on tty_available and print a
+    # "finish later" note). Windows used to attempt it regardless, so an
+    # unattended image build ended up in a different state per OS. Sign-in is
+    # browser-driven and interactive; --non-interactive only means "take
+    # hardware-derived defaults for the setup questions", it does not make
+    # sign-in headless. -NonInteractive is the explicit override for callers
+    # that do want the attempt -- also mirroring install.sh.
+    if (-not $NonInteractive -and -not (Test-InteractiveStdin)) {
+        Common-Log "No terminal detected -- sign-in skipped. To finish setup:"
+        Common-Log "  - run:  waired init"
+        Common-Log "  - or open the tray app and pick `"Log in...`""
+        Common-Log "  - or re-run the installer with -NonInteractive to attempt it anyway"
         return
     }
 

@@ -714,6 +714,21 @@ try {
     $r = Invoke-Argtest @('-InferenceEnabled','yes')
     if ($r.Exit -ne 0 -and $r.Out -match 'must be true or false') { ItOk "a non-bool -InferenceEnabled dies before any privileged step" }
     else { ItBad "bad -InferenceEnabled not rejected early (exit $($r.Exit)): $($r.Out.Trim())" }
+    # install.sh spellings, for the same parity reason --dev / --control have them.
+    $r = Invoke-Argtest @('--inference-enabled','false','--share-with-mesh=TRUE')
+    $initArgs = if ($r.Out -match 'InitArgs=\[([^\]]*)\]') { $Matches[1] } else { '' }
+    if ($r.Exit -eq 0 -and $initArgs -match '--inference-enabled=false' -and $initArgs -match '--share-with-mesh=true') { ItOk "--inference-enabled / --share-with-mesh fold from the install.sh spelling" }
+    else { ItBad "install.sh spelling of the init answers not folded (exit $($r.Exit)) InitArgs=[$initArgs]" }
+
+    # --- -Yes implies init --non-interactive (#166) ---------------------------
+    # install.sh --help has always said --yes covers "init non-interactive";
+    # Windows never applied it there, so the same documented flag drove init
+    # differently per OS.
+    ItStep "install.ps1 -Yes / non-interactive contract asserts (#166)"
+    $r = Invoke-Argtest @('-Yes')
+    $initArgs = if ($r.Out -match 'InitArgs=\[([^\]]*)\]') { $Matches[1] } else { '' }
+    if ($r.Exit -eq 0 -and $initArgs -match '--non-interactive') { ItOk "-Yes forwards --non-interactive to waired init (install.sh parity)" }
+    else { ItBad "-Yes did not forward --non-interactive (exit $($r.Exit)) InitArgs=[$initArgs]" }
 
     if ($WithInference) {
         ItStep "running install.ps1 (-Dev -SkipInit -NonInteractive; engine installed later by the Tier-2 init)"

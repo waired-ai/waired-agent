@@ -1,7 +1,7 @@
 ---
 title: 高度なインストールオプション
 description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
-sourceHash: fa63cb4fc4ae5d03
+sourceHash: fd4dfa18eecaf599
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -133,14 +133,41 @@ Linux と macOS は `install.sh`、Windows は同じオプションの PowerShel
 | `--control <URL>` | `-Control <URL>` | `WAIRED_CONTROL_URL` | 指定したコントロールプレーンに登録します。 |
 | `--dev` | `-Dev` | | 内蔵の開発用コントロールプレーン。Waired の開発用のみ。 |
 | | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | インストール先（Windows）。 |
-| | `-NonInteractive` | | `waired init --non-interactive` を強制します。ターミナルがない場合は自動判定されます。 |
-| | `-InferenceEnabled`, `-ShareWithMesh` | | セットアップの 2 つの質問に、聞かれずに答えます。 |
+| `--non-interactive` | `-NonInteractive` | | 一切質問しません。ターミナルのないパソコンでもサインインを試みます（既定はサインインを飛ばします）→ 下記 |
+| `--inference-enabled true\|false` | `-InferenceEnabled` | | 「このパソコンで AI を動かすか」に、聞かれずに答えます。 |
+| `--share-with-mesh true\|false` | `-ShareWithMesh` | | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | 特定のリリースに固定します。 |
+| | | `WAIRED_STATE_DIR` | 識別情報や設定の保存先。macOS と Windows のみ → 下記 |
 
 <Aside type="note" title="Windows でフラグを使うにはスクリプトをディスクに置きます">
 	`iwr … | iex` のワンライナーはパラメータを渡せません。上の表の環境変数を使うか、
 	先にスクリプトをダウンロードしてください（このページの前半の例を参照）。
 </Aside>
+
+## 画面のないパソコンにインストールする
+
+サーバーや CI、イメージビルドではサインインする人がおらず、サインインには
+ブラウザが必要です。そのためインストーラは **Waired を入れて起動するところまで
+進め、サインインの手前で止まり**、あとで済ませるよう案内します。
+
+```
+Note: No terminal detected — sign-in skipped. To finish setup:
+  - run:  sudo waired init
+```
+
+それでも試させたい場合は `--non-interactive` / `-NonInteractive` を付けます。
+セットアップの質問は聞かずに、無難な答えを選びます。`--yes` は別物です —
+質問には答えますが、サインインの手前で止まる動作は変わりません。
+
+## 保存先を変える
+
+`WAIRED_STATE_DIR` で、識別情報・鍵・設定の保存先を既定以外にできます。
+
+効くのは **macOS と Windows** です。この 2 つはインストーラがバックグラウンド
+サービスを登録するので、保存先を自由に指定できます。**Linux では無視されます**
+— サービス定義がパッケージに同梱されていて、既定の場所（`/var/lib/waired`）が
+最初から書き込まれているため、インストーラが選ぶ余地がありません。`--clean`
+でのアンインストールは、移動先のフォルダも削除します。
 
 正式な一覧はスクリプトを `--help` / `-Help` 付きで実行するか、リポジトリの
 [`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)

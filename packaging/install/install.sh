@@ -107,6 +107,27 @@ FLAG_STABLE=0
 # terminal is available). Top-level default so it's readable under set -u
 # even when --no-init isn't passed.
 FLAG_NO_INIT=0
+# FLAG_NON_INTERACTIVE (--non-interactive, mirroring install.ps1's
+# -NonInteractive) is the explicit "no terminal, enrol anyway" opt-in. It does
+# two things --yes does not:
+#   * it runs `waired init` even when no terminal is available, where the
+#     default is to skip sign-in entirely (linux_maybe_init / darwin_maybe_init
+#     print a "finish later" note instead), and
+#   * it feeds init stdin from /dev/null, since the usual </dev/tty redirect
+#     cannot work on a host with no controlling terminal.
+# --yes still implies init's own --non-interactive (skip its prompts, take
+# hardware-derived defaults) but does NOT override the terminal gate: an
+# unattended image build has to say so explicitly.
+FLAG_NON_INTERACTIVE=0
+# INFERENCE_ENABLED / SHARE_WITH_MESH pre-answer the two setup questions
+# without prompting (--inference-enabled / --share-with-mesh, mirroring
+# install.ps1's -InferenceEnabled / -ShareWithMesh). Empty = no override; the
+# prompt or the hardware-derived default decides. Values are validated in
+# main() and forwarded to `waired init` in the `=` form, which is mandatory:
+# these are Go bool flags, and the space form leaves the value as a positional
+# argument that `waired init` (cobra.NoArgs) rejects.
+INFERENCE_ENABLED=""
+SHARE_WITH_MESH=""
 # FLAG_CLEAN: clean install — run the full-wipe uninstall (delegated to
 # uninstall.sh --clean) before installing fresh. WAIRED_CLEAN is the
 # env-var form, mirroring WAIRED_NO_OLLAMA (and it is how the Windows
@@ -342,7 +363,21 @@ Options:
   --no-init        do not auto-run \`waired init\` after install (the
                    default runs sign-in + setup when a terminal is present)
   --yes, -y        assume "yes" for prompts (pre-install confirmation,
-                   update, init non-interactive)
+                   update, init non-interactive). Does NOT make sign-in
+                   run on a host with no terminal — see --non-interactive.
+  --non-interactive
+                   never prompt: run \`waired init\` with --non-interactive
+                   AND, unlike --yes, attempt sign-in even when no
+                   terminal is available (unattended images / CI, where
+                   the default is to skip sign-in and tell you to finish
+                   later). Same as install.ps1's -NonInteractive.
+  --inference-enabled true|false
+                   answer "Run AI models on this computer?" without
+                   prompting. Forwarded to \`waired init\`. Same as
+                   install.ps1's -InferenceEnabled.
+  --share-with-mesh true|false
+                   answer "Let your other devices use this computer's
+                   AI?" without prompting. Same as -ShareWithMesh.
   --mask-pii       mask personal information (home dir, username; the
                    sign-in step also masks hostname + account email) in
                    the output — for screenshots and bug reports.
@@ -380,6 +415,14 @@ Environment variables:
                            (default: https://app.dev.waired.net)
   WAIRED_LOG_LEVEL         start the agent at this log verbosity
                            (debug|info|warn|error; same as --log-level)
+  WAIRED_STATE_DIR         macOS only: where identity / keys / settings
+                           live (default: /Library/Application Support/
+                           waired). IGNORED on Linux — the systemd unit
+                           ships in the package with
+                           \`--state-dir /var/lib/waired\` already baked
+                           into ExecStart, and the flag beats the
+                           EnvironmentFile. uninstall.sh removes this
+                           path too under --clean.
   WAIRED_INSTALL_BASE_URL  override URL for install.sh itself
                            (default: github.com/waired-ai/waired-agent releases)
   WAIRED_OLLAMA_DARWIN_URL macOS only: override the Ollama.app download URL
@@ -853,22 +896,41 @@ linux_maybe_init() {
         common_log "$(emo '✅' '[ok]') Already enrolled — skipping sign-in."
         return 0
     fi
+    # No controlling terminal: sign-in is browser-driven and interactive, so
+    # the default is to skip it and say so. --non-interactive is the explicit
+    # override for unattended images / CI, and it also decides the stdin
+    # redirect below — </dev/tty cannot open on a host without one.
+    init_stdin=/dev/tty
     if ! tty_available; then
-        cat <<EOF
+        if [ "$FLAG_NON_INTERACTIVE" != 1 ]; then
+            cat <<EOF
 
 $(emo '💡' 'Note:') No terminal detected — sign-in skipped. To finish setup:
   - run:  sudo waired init
   - or open the tray app and pick "Log in…"
+  - or re-run the installer with --non-interactive to attempt it anyway
 EOF
-        return 0
+            return 0
+        fi
+        init_stdin=/dev/null
     fi
-    if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO waired init --state-dir /var/lib/waired </dev/tty"
-        return 0
-    fi
-    common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
     set -- waired init --state-dir /var/lib/waired
-    [ "$FLAG_YES" = 1 ] && set -- "$@" --non-interactive
+    # --yes has always promised "init non-interactive" in --help; the explicit
+    # --non-interactive means the same for init's prompts (and additionally
+    # cleared the terminal gate above). install.ps1 applies the same rule.
+    if [ "$FLAG_YES" = 1 ] || [ "$FLAG_NON_INTERACTIVE" = 1 ]; then
+        set -- "$@" --non-interactive
+    fi
+    # The two pre-answered setup questions. The `=` form is mandatory: these
+    # are Go bool flags, so `--inference-enabled false` would set the flag true
+    # and leave "false" as a positional argument, which `waired init`
+    # (cobra.NoArgs) rejects outright.
+    if [ -n "$INFERENCE_ENABLED" ]; then
+        set -- "$@" "--inference-enabled=$INFERENCE_ENABLED"
+    fi
+    if [ -n "$SHARE_WITH_MESH" ]; then
+        set -- "$@" "--share-with-mesh=$SHARE_WITH_MESH"
+    fi
     # init has a root-time fallback that installs the bundled engine when the
     # pre-install above failed; keep --skip-ollama honoured across the sudo
     # env_reset by threading WAIRED_NO_OLLAMA through `env`. Same for the
@@ -884,7 +946,14 @@ EOF
     if [ -n "${WAIRED_NO_CLAUDE_PROXY:-}" ]; then
         set -- env WAIRED_NO_CLAUDE_PROXY=1 "$@"
     fi
-    $SUDO "$@" </dev/tty || \
+    # Print the argv actually built, not a fixed string (which drifted out of
+    # date and hid the flags this function forwards) — mirrors darwin_maybe_init.
+    if [ "$DRY_RUN" = 1 ]; then
+        common_log "  (dry-run) would: $SUDO $* <$init_stdin"
+        return 0
+    fi
+    common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
+    $SUDO "$@" <"$init_stdin" || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
 }
 
@@ -1175,6 +1244,16 @@ linux_install_ollama() {
 # ---------------------------------------------------------------------
 
 WAIRED_DARWIN_BINDIR="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
+# Where identity / keys / settings live on macOS. WAIRED_STATE_DIR overrides it
+# (parity with install.ps1, and uninstall.sh already removes the override under
+# --clean). It works here — and NOT on Linux — because of who writes the
+# service definition: macOS registers the LaunchDaemon at install time via
+# `waired-agent install --state-dir <dir>`, so the path is ours to choose,
+# whereas the Linux systemd unit ships inside the .deb/.rpm with
+# `--state-dir /var/lib/waired` already baked into ExecStart (and the flag beats
+# the EnvironmentFile). Honouring it there would mean a second, drop-in unit
+# definition to keep in sync; see `show_help`.
+DARWIN_STATE_DIR="${WAIRED_STATE_DIR:-/Library/Application Support/waired}"
 
 darwin_install() {
     common_log "Detected macOS $OS_VERSION on $OS_ARCH"
@@ -1187,7 +1266,7 @@ darwin_install() {
     # applied as the invoking user via $SUDO_USER. Both `bash install.sh`
     # (non-root, $SUDO=sudo) and `sudo bash install.sh` (already root,
     # $SUDO empty, $SUDO_USER set) work.
-    state_dir="/Library/Application Support/waired"
+    state_dir="$DARWIN_STATE_DIR"
 
     section 'Installing Waired'
     darwin_install_binaries
@@ -1367,9 +1446,16 @@ darwin_maybe_init() {
         common_log "$(emo '✅' '[ok]') Already enrolled — skipping sign-in."
         return 0
     fi
+    # Same terminal rule as linux_maybe_init: skip by default, and let the
+    # explicit --non-interactive override it (feeding init /dev/null, since
+    # </dev/tty cannot open without a controlling terminal).
+    init_stdin=/dev/tty
     if ! tty_available; then
-        common_log "$(emo '💡' 'Note:') No terminal detected — run 'sudo waired init' (or use the tray) to sign in."
-        return 0
+        if [ "$FLAG_NON_INTERACTIVE" != 1 ]; then
+            common_log "$(emo '💡' 'Note:') No terminal detected — run 'sudo waired init' (or use the tray) to sign in, or re-run the installer with --non-interactive."
+            return 0
+        fi
+        init_stdin=/dev/null
     fi
     # Build the init argv (mirrors linux_maybe_init's `set --`). Pass
     # --control only when a CP URL was resolved (--dev / --control /
@@ -1383,6 +1469,16 @@ darwin_maybe_init() {
     # --skip-ollama, WAIRED_NO_OLLAMA=1.
     set -- "$WAIRED_DARWIN_BINDIR/waired" init --state-dir "$state_dir"
     [ -n "$CONTROL_URL" ] && set -- "$@" --control "$CONTROL_URL"
+    if [ "$FLAG_YES" = 1 ] || [ "$FLAG_NON_INTERACTIVE" = 1 ]; then
+        set -- "$@" --non-interactive
+    fi
+    # `=` form is mandatory for these two — Go bool flags; see linux_maybe_init.
+    if [ -n "$INFERENCE_ENABLED" ]; then
+        set -- "$@" "--inference-enabled=$INFERENCE_ENABLED"
+    fi
+    if [ -n "$SHARE_WITH_MESH" ]; then
+        set -- "$@" "--share-with-mesh=$SHARE_WITH_MESH"
+    fi
     set -- env "WAIRED_OLLAMA_DARWIN_URL=$WAIRED_OLLAMA_DARWIN_URL" "$@"
     if ollama_skip_requested; then
         set -- env WAIRED_NO_OLLAMA=1 "$@"
@@ -1397,11 +1493,11 @@ darwin_maybe_init() {
         set -- env WAIRED_NO_CLAUDE_PROXY=1 "$@"
     fi
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO $* </dev/tty"
+        common_log "  (dry-run) would: $SUDO $* <$init_stdin"
         return 0
     fi
     common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
-    $SUDO "$@" </dev/tty || \
+    $SUDO "$@" <"$init_stdin" || \
         common_warn "sign-in did not complete; finish later with: sudo waired init"
 }
 
@@ -1437,7 +1533,7 @@ darwin_restart_agent() {
     fi
     if ! $SUDO launchctl kickstart -k "system/com.waired.agent" 2>/dev/null; then
         common_warn "LaunchDaemon not loaded; (re-)registering it."
-        darwin_register_agent "/Library/Application Support/waired"
+        darwin_register_agent "$DARWIN_STATE_DIR"
     fi
 }
 
@@ -1479,8 +1575,8 @@ darwin_update() {
     # Finish sign-in if this host was installed but never enrolled (no-op
     # when already enrolled). Persist any resolved CP first so a not-yet-
     # enrolled host picks it up, matching the fresh-install path.
-    darwin_write_control_url "/Library/Application Support/waired"
-    darwin_maybe_init "/Library/Application Support/waired"
+    darwin_write_control_url "$DARWIN_STATE_DIR"
+    darwin_maybe_init "$DARWIN_STATE_DIR"
     common_log "Ollama: managed separately; not modified by update."
     common_log "$(emo '🎉' '*') waired updated to $latest. Check: waired status"
 }
@@ -1591,6 +1687,26 @@ main() {
             --log-level=*)
                 LOG_LEVEL="${1#--log-level=}"
                 ;;
+            # Mirrors install.ps1's -NonInteractive. More than a --yes alias:
+            # it is also the opt-in that lets sign-in run on a host with no
+            # terminal (see linux_maybe_init / darwin_maybe_init).
+            --non-interactive) FLAG_NON_INTERACTIVE=1 ;;
+            --inference-enabled)
+                shift
+                [ "$#" -gt 0 ] || common_die "--inference-enabled requires an argument (true|false)"
+                INFERENCE_ENABLED="$1"
+                ;;
+            --inference-enabled=*)
+                INFERENCE_ENABLED="${1#--inference-enabled=}"
+                ;;
+            --share-with-mesh)
+                shift
+                [ "$#" -gt 0 ] || common_die "--share-with-mesh requires an argument (true|false)"
+                SHARE_WITH_MESH="$1"
+                ;;
+            --share-with-mesh=*)
+                SHARE_WITH_MESH="${1#--share-with-mesh=}"
+                ;;
             -h|--help) show_help; exit 0 ;;
             *) common_die "unknown argument: $1 (try --help)" ;;
         esac
@@ -1604,6 +1720,22 @@ main() {
         case "$LOG_LEVEL" in
             debug|info|warn|error) : ;;
             *) common_die "--log-level must be one of: debug info warn error (got: $LOG_LEVEL)" ;;
+        esac
+    fi
+
+    # Same reasoning for the two pre-answered setup questions: `waired init`
+    # takes them as Go bool flags, so anything other than true|false is a
+    # parse error deep inside init, long after the privileged steps started.
+    if [ -n "$INFERENCE_ENABLED" ]; then
+        case "$INFERENCE_ENABLED" in
+            true|false) : ;;
+            *) common_die "--inference-enabled must be true or false (got: $INFERENCE_ENABLED)" ;;
+        esac
+    fi
+    if [ -n "$SHARE_WITH_MESH" ]; then
+        case "$SHARE_WITH_MESH" in
+            true|false) : ;;
+            *) common_die "--share-with-mesh must be true or false (got: $SHARE_WITH_MESH)" ;;
         esac
     fi
 

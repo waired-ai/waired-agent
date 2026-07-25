@@ -92,12 +92,24 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 
 Notes / escape hatches:
 
-- **No terminal? (CI, Docker build):** sign-in is skipped, but the service
-  is still enabled + started. It boots without an identity and idles until
-  login, so a **non-root desktop user can finish via the tray** ("Log
-  in…"), or you can run `sudo waired init` later.
+- **No terminal? (CI, Docker build):** sign-in is skipped on **every OS**,
+  but the service is still enabled + started. It boots without an identity
+  and idles until login, so a **non-root desktop user can finish via the
+  tray** ("Log in…"), or you can run `sudo waired init` later. Windows
+  used to attempt sign-in here regardless; both scripts now make the same
+  call, and `--non-interactive` / `-NonInteractive` is the explicit opt-in
+  that runs it anyway (init reads stdin from `/dev/null`, since `/dev/tty`
+  cannot open without a controlling terminal).
 - `--no-init` skips the automatic `waired init`; `--yes` accepts prompts
-  (update, and `waired init --non-interactive` for the inference choices).
+  (update, and `waired init --non-interactive` for the inference choices)
+  but does **not** override the terminal gate above — that is what
+  `--non-interactive` is for.
+- `--inference-enabled true|false` / `--share-with-mesh true|false`
+  pre-answer the two setup questions (`-InferenceEnabled` /
+  `-ShareWithMesh` on Windows). They are forwarded to `waired init` in the
+  `--flag=value` form, which is required: these are Go bool flags, so the
+  space form would leave the value as a positional argument and `waired
+  init` would reject it.
 - On Linux, `sudo waired init` writes identity to `/var/lib/waired` (the
   dir the systemd unit reads) and chowns it to the service user, and reads
   `WAIRED_CONTROL_URL` from `/etc/waired/agent.env` when set. With nothing
