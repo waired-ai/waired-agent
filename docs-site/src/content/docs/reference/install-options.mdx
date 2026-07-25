@@ -138,15 +138,43 @@ script to disk.
 | `--control <URL>` | `-Control <URL>` | `WAIRED_CONTROL_URL` | Enroll against a specific control plane. |
 | `--dev` | `-Dev` | | The built-in development control plane. For Waired development only. |
 | | `-InstallDir <path>` | `WAIRED_INSTALL_DIR` | Where to install (Windows). |
-| | `-NonInteractive` | | Force `waired init --non-interactive`. Auto-detected when there is no terminal. |
-| | `-InferenceEnabled`, `-ShareWithMesh` | | Answer the two setup questions without asking. |
+| `--non-interactive` | `-NonInteractive` | | Never ask anything. Also signs in on a computer with no terminal, where the default is to skip sign-in — see below. |
+| `--inference-enabled true\|false` | `-InferenceEnabled` | | Answer "run AI models on this computer?" without being asked. |
+| `--share-with-mesh true\|false` | `-ShareWithMesh` | | Answer "let your other devices use this computer's AI?" without being asked. |
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | Pin an exact release. |
+| | | `WAIRED_STATE_DIR` | Where Waired keeps identity and settings. macOS and Windows only — see below. |
 
 <Aside type="note" title="Windows flags need the script on disk">
 	The `iwr … | iex` one-liner cannot pass parameters. Either use the
 	environment-variable column above, or download the script first — see the
 	examples earlier on this page.
 </Aside>
+
+## Installing on a computer with no screen
+
+On a server, a CI runner or an image build there is nobody to sign in, and
+signing in needs a browser. So the installer **installs Waired and starts it,
+then stops before sign-in** and tells you to finish later:
+
+```
+Note: No terminal detected — sign-in skipped. To finish setup:
+  - run:  sudo waired init
+```
+
+Add `--non-interactive` / `-NonInteractive` if you want it to try anyway — it
+takes the sensible answer to every setup question instead of asking. `--yes` is
+not the same thing: it answers the questions, but still stops before sign-in.
+
+## Moving where Waired keeps its files
+
+`WAIRED_STATE_DIR` moves identity, keys and settings somewhere other than the
+default.
+
+It works on **macOS and Windows**, where the installer registers the background
+service and can point it wherever you like. On **Linux it is ignored**: the
+service definition ships inside the package with the standard location
+(`/var/lib/waired`) already written into it, so the installer has nothing to
+choose. Uninstalling with `--clean` removes a relocated folder as well.
 
 Run the script with `--help` / `-Help` for the authoritative list, or read
 [`packaging/install/README.md`](https://github.com/waired-ai/waired-agent/blob/main/packaging/install/README.md)
