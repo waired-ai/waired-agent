@@ -5,7 +5,7 @@ meta:
   audience: 不具合を報告する人、診断情報を求められた人
   needs: 問題が起きているパソコンのターミナル
   time: 数分（再現にかかる時間は別）
-sourceHash: ade8bae058c064f9
+sourceHash: 0d71e64db196a401
 ---
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
@@ -158,12 +158,9 @@ Windows ではインストーラ自身の記録が `%TEMP%\waired-install.log` �
 	</TabItem>
 </Tabs>
 
-<Aside type="caution" title="Windows では毎回サービスを指定します">
-	Windows では、選んだサービスが記憶されません。`-Dev` で入れたパソコンで
-	あとから `waired init` をやり直すときは、同じアドレスを `--control` で
-	渡してください。付けないと通常のサービスにサインインし直してしまいます。
-	アドレスはインストーラが表示します。
-</Aside>
+選んだサービスはインストーラが記憶します（どの OS でも同じです）。あとから
+このパソコンで `waired init` をやり直しても同じサービスにサインインするので、
+`--dev` や `--control` を付け直す必要はありません。
 
 通常のインストールに戻すには、上のクリーンインストールを行ってください
 （`--stable` だけではビルドが変わるだけで、登録先のサービスは変わりません）。

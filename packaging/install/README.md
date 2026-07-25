@@ -111,9 +111,19 @@ Notes / escape hatches:
   space form would leave the value as a positional argument and `waired
   init` would reject it.
 - On Linux, `sudo waired init` writes identity to `/var/lib/waired` (the
-  dir the systemd unit reads) and chowns it to the service user, and reads
-  `WAIRED_CONTROL_URL` from `/etc/waired/agent.env` when set. With nothing
-  configured it falls back to the production Control Plane.
+  dir the systemd unit reads) and chowns it to the service user.
+- `--control` / `--dev` / `-Control` / `-Dev` are **remembered**: every
+  script persists the resolved URL to an agent env file — Linux
+  `/etc/waired/agent.env`, macOS and Windows `<state dir>/agent.env`
+  (`%ProgramData%\waired\agent.env`) — and `waired init` reads
+  `WAIRED_CONTROL_URL` back from it as the `--control` default. That is
+  what lets a later bare `waired init` (after `--no-init` / `-SkipInit`,
+  or a sign-in that was cancelled) reach the same Control Plane instead of
+  the baked production one. Only Linux's file also feeds the daemon (the
+  systemd `EnvironmentFile`); the launchd plist and the Windows SCM cannot
+  consume one, so there it feeds `waired init` alone.
+- With nothing configured, enrollment falls back to the production Control
+  Plane.
 - A scheme-less Control Plane host (`--control dev.waired.net`) is accepted
   and normalised — `https://` for remote hosts, `http://` for loopback.
 - The full set of enrollment flags (`--control`, `--non-interactive`,

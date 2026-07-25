@@ -158,12 +158,9 @@ Two options exist for this, and they combine.
 	</TabItem>
 </Tabs>
 
-<Aside type="caution" title="Windows: name the service every time">
-	On Windows the chosen service is not remembered. If you run `waired init`
-	again later on a machine installed with `-Dev`, pass `--control` with the
-	same address — otherwise it signs you back in to the normal service. The
-	installer prints the address it used.
-</Aside>
+The installer remembers which service you chose, on every operating system, so
+running `waired init` again later on this computer signs you back in to the same
+one — you do not have to repeat `--dev` or `--control`.
 
 To get back to a normal install afterwards, do a clean install as above (the
 `--stable` option alone changes the build, not which service you are registered

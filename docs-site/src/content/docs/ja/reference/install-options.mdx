@@ -1,7 +1,7 @@
 ---
 title: 高度なインストールオプション
 description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
-sourceHash: fd4dfa18eecaf599
+sourceHash: 346a9382e1cf8d03
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -37,9 +37,13 @@ import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
 	</TabItem>
 </Tabs>
 
-コントロールプレーンは後から `waired init --control <URL>` で設定することもできます。
-組織向けのインストーラーラッパーでは、環境変数 `WAIRED_CONTROL_URL` が
-`--control` / `-Control` フラグ未指定時の低優先度フォールバックとして使われます。
+インストーラーはこの URL をマシンに記録します。そのため、あとから同じマシンで
+`waired init` を実行しても、フラグを付け直さずに同じコントロールプレーンへ登録
+されます。`--control` を再度渡すのは、変更したいときだけです。
+
+最初の設定を `waired init --control <URL>` で行うこともできます。組織向けの
+インストーラーラッパーでは、環境変数 `WAIRED_CONTROL_URL` が `--control` /
+`-Control` フラグ未指定時の低優先度フォールバックとして使われます。
 
 ## 特定のバージョンに固定する
 

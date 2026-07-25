@@ -764,6 +764,23 @@ try {
     if (Test-Path -LiteralPath (Join-Path $InstallDir 'waired-tray.exe'))  { ItOk "waired-tray.exe installed (zip ships it, WAIRED_NO_TRAY unset)" } else { ItBad "waired-tray.exe missing in $InstallDir" }
     if (Test-Path -LiteralPath $StateDir) { ItOk "state dir present ($StateDir)" } else { ItBad "state dir missing ($StateDir)" }
 
+    # #42: the installer must persist the resolved Control Plane URL. This
+    # Tier-1 run used -SkipInit, i.e. exactly the case where `waired init` never
+    # bakes the URL into identity.json -- without agent.env a later bare
+    # `waired init` falls back to the baked production CP. Windows analog of
+    # installtest-run.sh's /etc/waired/agent.env assert.
+    #
+    # (?m)^ also fails on a UTF-8 BOM, which is the encoding trap here: the Go
+    # reader (cmd/waired/control_url_shared.go) scans raw lines, so a BOM'd
+    # first key would never match.
+    $envFile = Join-Path $StateDir 'agent.env'
+    $envText = if (Test-Path -LiteralPath $envFile) { Get-Content -LiteralPath $envFile -Raw } else { '' }
+    if ($envText -match "(?m)^WAIRED_CONTROL_URL=$([regex]::Escape($ControlUrl))\s*$") {
+        ItOk "control URL persisted to agent.env (#42; parity with /etc/waired/agent.env)"
+    } else {
+        ItBad "agent.env missing or wrong at ${envFile}: want WAIRED_CONTROL_URL=$ControlUrl, got [$($envText -replace '\r?\n', '\\n')]"
+    }
+
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
     if ($machinePath -contains $InstallDir) { ItOk "InstallDir on machine PATH (#482)" } else { ItBad "InstallDir NOT on machine PATH (#482 regression)" }
 }

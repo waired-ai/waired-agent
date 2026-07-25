@@ -684,6 +684,10 @@ Switches:
   -Dev              Pre-configure for the built-in dogfood Control Plane
                     ($DevControlUrl); the installer enrols this device
                     against that CP automatically (UAC + browser sign-in).
+                    Persists WAIRED_CONTROL_URL to the agent env file
+                    (%ProgramData%\waired\agent.env) so a later
+                    `waired init` with no -Control still finds this CP --
+                    parity with install.sh on Linux/macOS.
   -Control <URL>    Same as -Dev but with an explicit URL; takes precedence
                     over -Dev when both are given. A scheme-less host
                     (dev.waired.net) is accepted and normalised by
@@ -782,9 +786,9 @@ Environment variables:
   WAIRED_PII_MASK          If set, mask personal information in the output
                            (same as -MaskPII; works with the piped one-liner).
   WAIRED_STATE_DIR         Override on-disk state location. Default: %ProgramData%\waired.
-  WAIRED_CONTROL_URL       Control Plane URL used when -Dev / -Control are
-                           not given (lower-priority fallback for per-org
-                           installer wrappers).
+  WAIRED_CONTROL_URL       Control Plane URL written to agent.env when
+                           -Dev / -Control are not given (lower-priority
+                           fallback for per-org installer wrappers).
   WAIRED_DEV_CONTROL_URL   Override the URL -Dev resolves to.
                            Default: https://app.dev.waired.net.
   WAIRED_OLLAMA_MODELS_DIR -OllamaModelsDir fallback.
@@ -1363,6 +1367,95 @@ function Invoke-AgentInstall {
     }
 }
 
+# Get-AgentStateDir returns the state dir this install actually uses:
+# $WAIRED_STATE_DIR when set, else %ProgramData%\waired. It was copy-pasted
+# into four call sites (init argv, the re-run hint, Next steps, the update
+# summary) plus the new agent.env writer below -- and every one of them has to
+# agree, or `waired init` reads a control URL from a directory the installer
+# never wrote to. One expression, one place.
+function Get-AgentStateDir {
+    if ($StateDir) { $StateDir } else { $AgentStateDir }
+}
+
+# Write-ControlUrlEnvFile persists the resolved Control Plane URL to
+# <state dir>\agent.env, the Windows analog of Linux's /etc/waired/agent.env
+# and macOS's <state dir>/agent.env (install.sh's linux_apt_write_control_url /
+# darwin_write_control_url). `waired init` reads it back as the --control
+# default via platformDefaultControlURL (cmd/waired/control_url_windows.go).
+#
+# Why it matters (#42): Get-WairedInitArgs passes --control only when init runs
+# here. On any install where it does not enroll -- -SkipInit, a cancelled or
+# failed sign-in, or the `iwr | iex` form where -Dev / -Control cannot bind --
+# a later bare `waired init` had nothing to recover the URL from and silently
+# fell back to the baked production Control Plane. Linux and macOS never had
+# that hole. Unlike Linux there is no SCM EnvironmentFile, so this feeds
+# `waired init` only; the daemon reads ControlURL from the agent.json init
+# writes.
+#
+# Overwrite, unlike darwin_write_control_url's "already set -- leaving it
+# as-is". That rule exists because on Linux agent.env is a .deb conffile an
+# operator may hand-edit, and it also clears $CONTROL_URL so init drops
+# --control. Copying it here would make `install.ps1 -Control https://new` on a
+# host that still has an old agent.env (a non-clean uninstall keeps the state
+# dir) silently enrol against the OLD URL -- a regression against today's
+# behaviour. On Windows the file is installer-owned and single-purpose, so the
+# rule is simply: it always reflects what THIS install enrols against.
+#
+# Must run after Invoke-AgentInstall, which creates the state dir and applies
+# its SYSTEM + Administrators DACL (secrets.SecureDir). The file inherits that
+# DACL, exactly as identity.json does -- no explicit ACL work here.
+function Write-ControlUrlEnvFile {
+    if (-not $ControlUrl) { return }
+    # NOT named $stateDir: PowerShell variable names are case-insensitive, so
+    # that would shadow the script-scoped $StateDir for the rest of this
+    # function.
+    $agentState = Get-AgentStateDir
+    $envFile    = Join-Path $agentState 'agent.env'
+
+    if ($DryRun) {
+        Common-Log "  (dry-run) would write WAIRED_CONTROL_URL=$ControlUrl to $envFile"
+        return
+    }
+
+    # Never create the directory here: an un-ACLed %ProgramData%\waired would
+    # defeat the lockdown waired-agent install applies. If it is missing the
+    # install already failed louder than this.
+    if (-not (Test-Path -LiteralPath $agentState)) {
+        Common-Warn "$agentState not present after install -- skipping control-URL auto-config"
+        return
+    }
+
+    $existing = @()
+    if (Test-Path -LiteralPath $envFile) {
+        $existing = @(Get-Content -LiteralPath $envFile -ErrorAction SilentlyContinue)
+    }
+    $prior = $existing | Where-Object { $_ -match '^\s*WAIRED_CONTROL_URL\s*=\s*\S' } | Select-Object -Last 1
+    if ($prior) {
+        $priorUrl = ($prior -replace '^\s*WAIRED_CONTROL_URL\s*=\s*', '').Trim()
+        if ($priorUrl -ne $ControlUrl) {
+            Common-Warn "$envFile had WAIRED_CONTROL_URL=$priorUrl; replacing it with $ControlUrl"
+        }
+    }
+    # Keep any other keys a future version (or an operator) put there.
+    $lines = @($existing | Where-Object { $_ -notmatch '^\s*WAIRED_CONTROL_URL\s*=' })
+    $lines += "WAIRED_CONTROL_URL=$ControlUrl"
+
+    Common-Log "Writing WAIRED_CONTROL_URL=$ControlUrl to $envFile"
+    try {
+        # UTF-8 WITHOUT a BOM, explicitly. `Set-Content -Encoding UTF8` emits a
+        # BOM on Windows PowerShell 5.1, and the Go reader scans raw lines --
+        # it would see a BOM'd first key and never match WAIRED_CONTROL_URL.
+        # ASCII would dodge the BOM but mangle a non-ASCII -Control value.
+        [IO.File]::WriteAllText($envFile, (($lines -join "`r`n") + "`r`n"),
+            (New-Object Text.UTF8Encoding $false))
+    } catch {
+        # Best-effort, like Set-InstallDirRegistry: the install itself is fine
+        # and this run still passes --control to init. Only a LATER bare
+        # `waired init` loses the URL, and saying so beats failing the install.
+        Common-Warn "could not write $envFile ($($_.Exception.Message.Trim())); a later 'waired init' will need --control $ControlUrl"
+    }
+}
+
 # Add-InstallDirToPath appends $InstallDir to the machine PATH so `waired` and
 # `waired-agent` resolve as bare commands in newly-opened shells (the original
 # install left them callable only by full path). Runs only in the elevated
@@ -1445,8 +1538,7 @@ function Set-OllamaEnvForInit {
 # would use without installing anything -- the argv is where the
 # --inference-enabled spelling bug lived, and an assert needs to see it.
 function Get-WairedInitArgs {
-    $stateForInit = if ($StateDir) { $StateDir } else { $AgentStateDir }
-    $initArgs = @('init', '--state-dir', $stateForInit)
+    $initArgs = @('init', '--state-dir', (Get-AgentStateDir))
     # waired init self-defaults the Control Plane URL (machine env var /
     # baked production default), so --control is only passed when we have an
     # explicit one. This is why init no longer needs a URL to run.
@@ -1521,7 +1613,7 @@ function Invoke-WairedInit {
         return
     }
 
-    $stateForInit = if ($StateDir) { $StateDir } else { $AgentStateDir }
+    $stateForInit = Get-AgentStateDir
     $initArgs = Get-WairedInitArgs
 
     Common-Log "Running: $exe $($initArgs -join ' ')"
@@ -1541,7 +1633,7 @@ function Invoke-WairedInit {
 
 function Show-NextSteps {
     param([bool]$InitRan = $false)
-    $cpHint  = if ($StateDir) { $StateDir } else { $AgentStateDir }
+    $cpHint  = Get-AgentStateDir
     $url     = if ($ControlUrl) { $ControlUrl } else { 'https://your-cp.example.com' }
     $haveUrl = [bool]$ControlUrl
     Section 'Done'
@@ -1597,6 +1689,12 @@ function Invoke-InstallSteps {
     Remove-TrayIfRequested
     Section 'Background service'
     Invoke-AgentInstall
+    # Persist the resolved CP URL now that waired-agent install has created +
+    # locked down the state dir, and BEFORE Invoke-WairedInit -- the same
+    # ordering install.sh uses (darwin_register_agent -> darwin_write_control_url
+    # -> darwin_maybe_init). It is what lets a later bare `waired init` find the
+    # right Control Plane when this run does not enrol (#42).
+    Write-ControlUrlEnvFile
     # Start the service now, BEFORE `waired init`: with the agent already
     # running, init attaches to it and takes the daemon-driven onboarding
     # path (browser sign-in + setup; waired#835 section 11.2) than the legacy
@@ -1805,7 +1903,7 @@ function Show-UpdateResult {
         }
     }
     Write-Host 'Ollama:   managed separately; not modified by update (update a reused engine yourself).'
-    Write-Host "State:    $(if ($StateDir) { $StateDir } else { $AgentStateDir }) (identity/config preserved)."
+    Write-Host "State:    $(Get-AgentStateDir) (identity/config preserved)."
     Write-Host ''
 }
 
