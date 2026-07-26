@@ -41,10 +41,14 @@ different one, pass its URL at install time:
 	</TabItem>
 </Tabs>
 
-You can also set the control plane later with `waired init --control <URL>`.
-For per-org installer wrappers, the `WAIRED_CONTROL_URL` environment variable
-is a lower-priority fallback used when no `--control` / `-Control` flag is
-given.
+The installer records the URL on the machine, so a later `waired init` on that
+machine enrolls against the same control plane without repeating the flag. Pass
+`--control` again only to change it.
+
+You can also set the control plane for the first time with
+`waired init --control <URL>`. For per-org installer wrappers, the
+`WAIRED_CONTROL_URL` environment variable is a lower-priority fallback used when
+no `--control` / `-Control` flag is given.
 
 ## Pin a specific version
 
