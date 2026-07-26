@@ -3,6 +3,7 @@ package download
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -151,5 +152,59 @@ func TestFetch_NilProgress(t *testing.T) {
 	n, err := Fetch(context.Background(), nil, srv.URL, &buf, nil, nil)
 	if err != nil || n != int64(len(body)) || !bytes.Equal(buf.Bytes(), body) {
 		t.Fatalf("Fetch: err=%v n=%d buf=%q, want %q", err, n, buf.Bytes(), body)
+	}
+}
+
+// A body that goes quiet mid-transfer must be abandoned on the stall bound
+// and reported as a stall, not left hanging until some outer deadline (#189).
+func TestFetch_StallsOut(t *testing.T) {
+	restore := FetchStallTimeout
+	FetchStallTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { FetchStallTimeout = restore })
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1024")
+		_, _ = w.Write(bytes.Repeat([]byte("a"), 16))
+		w.(http.Flusher).Flush()
+		<-release // then stop sending, without closing the connection
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+
+	var buf bytes.Buffer
+	n, err := Fetch(context.Background(), nil, srv.URL, &buf, nil, nil)
+	if !errors.Is(err, ErrStalled) {
+		t.Fatalf("err = %v, want ErrStalled", err)
+	}
+	if n != 16 {
+		t.Errorf("n = %d, want the 16 bytes that did arrive", n)
+	}
+}
+
+// A slow but steady transfer must NOT be killed: every read resets the
+// countdown, which is the whole point of bounding on progress rather than
+// on total elapsed time. This body takes ~5x the stall bound to finish.
+func TestFetch_SlowButSteadySurvives(t *testing.T) {
+	restore := FetchStallTimeout
+	FetchStallTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { FetchStallTimeout = restore })
+
+	const chunks = 10
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		for i := 0; i < chunks; i++ {
+			_, _ = w.Write([]byte("chunk"))
+			w.(http.Flusher).Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}))
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	n, err := Fetch(context.Background(), nil, srv.URL, &buf, nil, nil)
+	if err != nil {
+		t.Fatalf("Fetch: %v (a slow-but-alive transfer must not trip the stall bound)", err)
+	}
+	if want := int64(chunks * len("chunk")); n != want {
+		t.Errorf("n = %d, want %d", n, want)
 	}
 }

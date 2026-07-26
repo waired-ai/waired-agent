@@ -142,6 +142,7 @@ Linux と macOS は `install.sh`、Windows は同じオプションの PowerShel
 | `--share-with-mesh true\|false` | `-ShareWithMesh` | | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | 特定のリリースに固定します。 |
 | | | `WAIRED_STATE_DIR` | 識別情報や設定の保存先。macOS と Windows のみ → 下記 |
+| | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | AI ソフトウェアの初回ダウンロードを打ち切るまでの時間。既定は `60m`。回線が非常に遅い場合のみ `3h` などに延ばしてください。 |
 
 <Aside type="note" title="Windows でフラグを使うにはスクリプトをディスクに置きます">
 	`iwr … | iex` のワンライナーはパラメータを渡せません。上の表の環境変数を使うか、
