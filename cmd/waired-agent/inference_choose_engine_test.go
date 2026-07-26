@@ -33,10 +33,16 @@ func fakeVLLMVenv(t *testing.T, stateDir string) {
 	}
 }
 
-// chooseEngineProfiler builds a Profiler whose GPU + engine detection are
-// seeded so chooseEngine's viability checks are deterministic on a
-// GPU-less CI host.
-func chooseEngineProfiler(t *testing.T, cuda, ollamaInstalled bool) *hardware.Profiler {
+// chooseEngineProfiler builds a Profiler whose GPU detection is seeded
+// so chooseEngine's CUDA gate is deterministic on a GPU-less CI host.
+//
+// It no longer decides whether OLLAMA is viable: since #179 that comes
+// from engineInstalledOnHost — an on-disk resolution — so the tests
+// below express "ollama is installed" by laying one down with
+// fakeBundledOllama rather than by seeding the profiler's PATH probe.
+// The engine-version seam is kept wired (the profile's Version field is
+// still read elsewhere) but reports a fixed version.
+func chooseEngineProfiler(t *testing.T, cuda bool) *hardware.Profiler {
 	t.Helper()
 	return hardware.NewProfiler(t.TempDir(),
 		hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
@@ -44,7 +50,7 @@ func chooseEngineProfiler(t *testing.T, cuda, ollamaInstalled bool) *hardware.Pr
 		}),
 		hardware.WithEngineVersion(func(_ context.Context, name string) (bool, string) {
 			if name == "ollama" {
-				return ollamaInstalled, "0.30.0"
+				return true, "0.30.0"
 			}
 			return false, ""
 		}),
@@ -57,7 +63,7 @@ func TestChooseEngine_PreferredVLLM_OptsIn(t *testing.T) {
 	stateDir := t.TempDir()
 	fakeVLLMVenv(t, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
-	prof := chooseEngineProfiler(t, true, true)
+	prof := chooseEngineProfiler(t, true)
 	cfg := agentconfig.InferenceConfig{PreferredEngine: catalog.RuntimeVLLM, AllowAutoFallback: true}
 
 	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
@@ -77,7 +83,7 @@ func TestChooseEngine_NoPreference_AutoPicksVLLM(t *testing.T) {
 	stateDir := t.TempDir()
 	fakeVLLMVenv(t, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
-	prof := chooseEngineProfiler(t, true, true)
+	prof := chooseEngineProfiler(t, true)
 	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true} // no PreferredEngine
 
 	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
@@ -98,8 +104,9 @@ func TestChooseEngine_AutoSelectGatedOff_StaysOllama(t *testing.T) {
 
 	stateDir := t.TempDir()
 	fakeVLLMVenv(t, stateDir)
+	fakeBundledOllama(t, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
-	prof := chooseEngineProfiler(t, true, true)
+	prof := chooseEngineProfiler(t, true)
 	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
 
 	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
@@ -116,8 +123,9 @@ func TestChooseEngine_AutoSelectGatedOff_StaysOllama(t *testing.T) {
 // through to Ollama. A capable host is only switched once the venv exists.
 func TestChooseEngine_AutoPickVLLM_NoVenv_StaysOllama(t *testing.T) {
 	stateDir := t.TempDir() // capable hardware below, but no venv laid down
+	fakeBundledOllama(t, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
-	prof := chooseEngineProfiler(t, true, true) // CUDA present, ollama installed
+	prof := chooseEngineProfiler(t, true)
 	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
 
 	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
@@ -133,8 +141,9 @@ func TestChooseEngine_AutoPickVLLM_NoVenv_StaysOllama(t *testing.T) {
 // viable Ollama when AllowAutoFallback is set, rather than failing boot.
 func TestChooseEngine_PreferredVLLM_NotViable_FallsBack(t *testing.T) {
 	stateDir := t.TempDir() // no venv laid down
+	fakeBundledOllama(t, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
-	prof := chooseEngineProfiler(t, false, true) // no CUDA
+	prof := chooseEngineProfiler(t, false) // no CUDA
 	cfg := agentconfig.InferenceConfig{PreferredEngine: catalog.RuntimeVLLM, AllowAutoFallback: true}
 
 	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
@@ -143,5 +152,67 @@ func TestChooseEngine_PreferredVLLM_NotViable_FallsBack(t *testing.T) {
 	}
 	if d.Engine != catalog.RuntimeOllama {
 		t.Fatalf("got engine=%q, want ollama fallback", d.Engine)
+	}
+}
+
+// THE #179 REGRESSION BAR at the boot-decision level. A Linux host whose
+// engine waired installed itself — under the state dir, deliberately NOT
+// on $PATH — must boot onto ollama. engineViable used to read the
+// profiler's PATH probe, so this host chose "no-engine" at boot and then
+// resolved a binary anyway: the two halves of the same daemon disagreed
+// about whether an engine existed.
+func TestChooseEngine_StateDirOllamaWithEmptyPATH(t *testing.T) {
+	t.Setenv("PATH", "")
+	t.Setenv("WAIRED_OLLAMA_BINARY", "")
+	stateDir := t.TempDir()
+	fakeBundledOllama(t, stateDir)
+	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
+	prof := chooseEngineProfiler(t, false) // no GPU, so vLLM is out of the chain
+	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
+
+	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
+	if err != nil {
+		t.Fatalf("chooseEngine: %v", err)
+	}
+	if d.Engine != catalog.RuntimeOllama || d.NoEngine {
+		t.Fatalf("got engine=%q no_engine=%v, want ollama (state-dir install, nothing on PATH)",
+			d.Engine, d.NoEngine)
+	}
+}
+
+// The other direction, and the reason the Linux rule is strict: bundled
+// mode must not adopt a system ollama that happens to be on $PATH. That
+// binary is not the pinned engine the daemon would spawn, so calling the
+// host viable would leave the bootstrap resolving nothing.
+func TestChooseEngine_BundledLinuxIgnoresSystemOllamaOnPATH(t *testing.T) {
+	t.Setenv("WAIRED_OLLAMA_BINARY", "")
+	pathDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pathDir, "ollama"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDir)
+
+	stateDir := t.TempDir() // no bundled engine
+	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
+	prof := chooseEngineProfiler(t, false)
+	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true} // OllamaSource "" == bundled
+
+	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
+	if err != nil {
+		t.Fatalf("chooseEngine: %v", err)
+	}
+	if !d.NoEngine {
+		t.Fatalf("got engine=%q source=%q, want no-engine (a system ollama is not the bundled engine)",
+			d.Engine, d.Source)
+	}
+
+	// Reuse mode is the supported way to borrow it, and there it counts.
+	cfg.OllamaSource = agentconfig.OllamaSourceReuse
+	d, err = chooseEngine(context.Background(), store, prof, cfg, stateDir)
+	if err != nil {
+		t.Fatalf("chooseEngine (reuse): %v", err)
+	}
+	if d.Engine != catalog.RuntimeOllama {
+		t.Fatalf("got engine=%q, want ollama (reuse mode borrows the PATH engine)", d.Engine)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -542,17 +543,25 @@ func (r *setupReconciler) runPush(ctx context.Context) {
 
 // setupEngineState reports whether the desired engine kind is installed
 // on this host and whether it is the one currently serving and ready.
-// Installation state comes from the cached hardware profile (cheap);
-// readiness from the provider's usual EngineReady gate.
-func (p *agentInferenceProvider) setupEngineState(ctx context.Context, engine string) (installed, ready bool) {
-	prof := p.profiler.Profile(ctx)
-	switch engine {
-	case "ollama":
-		installed = prof.Engines.Ollama.Installed
-	case "vllm":
-		installed = prof.Engines.VLLM.Installed
-	}
-	if !installed {
+// Installation state goes through engineInstalledOnHost — the daemon's
+// own resolution rule — and readiness through the provider's usual
+// EngineReady gate.
+//
+// It used to read the hardware profile's Engines map, which is a
+// PATH-only probe: an engine installed under the state dir (the normal
+// case, and the only one on Linux) read as absent, so /setup/state and
+// /inference/status contradicted each other on the same host at the
+// same instant. The wizard then never admitted the model pull, the step
+// contents never changed, the progress push deduped everything away,
+// last_check froze, and the run ended as executor_gone (#179).
+//
+// Resolving live also drops the profile's 30 s cache from the path, so
+// an engine the executor just installed is visible on the next frame
+// rather than up to half a minute later.
+// The context parameter is kept for the setupProvider interface (a fake
+// implements it too) but is no longer needed: nothing here profiles.
+func (p *agentInferenceProvider) setupEngineState(_ context.Context, engine string) (installed, ready bool) {
+	if !engineInstalledOnHost(runtime.GOOS, p.stateDir, p.cfg, engine) {
 		return false, false
 	}
 	if p.servingEngine() != engine {
@@ -563,8 +572,8 @@ func (p *agentInferenceProvider) setupEngineState(ctx context.Context, engine st
 }
 
 // setupStateDir is the agent's state root. The executor installs the
-// bundled engine relative to this, so it matches bundledOllamaBin's
-// join (inference.go) by construction rather than by coincidence.
+// bundled engine relative to this, so it matches bundledOllamaBinPath's
+// join (engine_resolve.go) by construction rather than by coincidence.
 func (p *agentInferenceProvider) setupStateDir() string { return p.stateDir }
 
 // setupModelState reports one catalog model's lifecycle state, live
