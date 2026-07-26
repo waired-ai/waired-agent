@@ -184,6 +184,12 @@ param(
     # to the privileged install steps. Not documented in -Help -- callers
     # never set this directly.
     [string]$StagedZipPath,
+    # Internal: path to the JSON document Phase 1 wrote with its fully
+    # resolved state (every WAIRED_* value plus every resolved parameter).
+    # It is THE configuration channel across the UAC boundary -- see the
+    # handoff block below for why the environment cannot be one (#192).
+    # Not documented in -Help -- callers never set this directly.
+    [string]$StateFile,
     # Internal: path the elevated Phase-2 child writes its Start-Transcript
     # log to. The un-elevated parent picks a path under its own %TEMP% (so the
     # log stays readable without elevation) and forwards it; empty -> the child
@@ -196,10 +202,10 @@ param(
     # Mirrors install.sh --log-level.
     #
     # The two forms are one value: this default folds the env into the param,
-    # and Resolve-LogLevel (main) folds the param back into the env -- which is
-    # what carries it across UAC into the elevated Phase 2, where this default
-    # is re-evaluated. Before that fold existed the flag was silently dropped
-    # on the normal (self-elevating) install path (#164).
+    # and Resolve-LogLevel (main) folds the param back into the env so every
+    # child of this process sees it. Across UAC it travels in -StateFile --
+    # the environment does not survive that boundary (#192), which is why the
+    # flag stayed silently dropped on the self-elevating path after #164.
     [string]$LogLevel = $env:WAIRED_LOG_LEVEL,
     # Catch-all for stray tokens. PowerShell can't bind install.sh-style
     # `--dev` / `--control <url>` long options to the -Dev / -Control params
@@ -214,6 +220,229 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
+
+# -------------------------------------------------------------------
+# Phase 1 -> Phase 2 handoff (#192, #177)
+# -------------------------------------------------------------------
+#
+# These helpers live HERE, immediately after param(), and not with the
+# other functions below, because -StateFile has to be loaded BEFORE the
+# Configuration block resolves $BaseUrl / $Version / $NoTray / $StateDir /
+# $DevControlUrl / $InstallDir / $LogPath out of the environment.
+# PowerShell runs top-level statements in order, so a function defined
+# further down does not exist yet at that point.
+#
+# Why a file and not the environment: Start-Process -Verb RunAs forces
+# UseShellExecute, so the elevated child is created by the AppInfo service,
+# which builds a FRESH environment block via CreateEnvironmentBlock. The
+# parent's environment is not inherited and -Environment is ignored for
+# RunAs, so every WAIRED_* value Phase 1 resolved was silently dropped
+# (#192) -- WAIRED_LOG_LEVEL, WAIRED_STATE_DIR, WAIRED_NO_TRAY (which has
+# no parameter form, i.e. no workaround), WAIRED_CONTROL_URL,
+# WAIRED_DEV_CONTROL_URL, WAIRED_NO_EMOJI.
+#
+# install.sh hits the same wall at sudo's env_reset and answers it by
+# threading `env VAR=value` onto the argv (linux_maybe_init /
+# darwin_maybe_init). Windows has no equivalent, so Phase 1 writes its
+# resolved state to a file and passes exactly one -StateFile token.
+# Collapsing the argv to two tokens is also what makes #177 tractable:
+# less to quote, and nothing left that a space can split.
+
+# Schema of the -StateFile document. A mismatch means the two phases came
+# from different installer versions; that is a hard error, never a
+# half-applied configuration.
+$InstallStateSchema = 1
+
+# Leave a one-line cause next to the state file. The elevated console closes
+# the instant the script exits, so this is what the un-elevated parent reads
+# back and prints when the child exits non-zero (#177). Both the trap below
+# and Common-Die write it -- Common-Die calls exit, which no trap can see.
+# Best-effort by design: a diagnostic must never become the failure.
+function Write-InstallStatus {
+    param([string]$Text)
+    $p = if ($StateFile) { "$StateFile.status" } elseif ($LogPath) { "$LogPath.status" } else { '' }
+    if (-not $p) { return }
+    try {
+        [System.IO.File]::WriteAllText($p, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+
+# Quote one token per the CommandLineToArgvW rules.
+# Start-Process -ArgumentList joins its elements with a single space and
+# quotes NOTHING (the claim that -Verb RunAs auto-quotes them was simply
+# wrong), so an unquoted 'C:\Program Files\Waired' arrived at the child as
+# two arguments and killed it before any diagnostics were armed (#177).
+function ConvertTo-NativeArg {
+    param([string]$Value)
+    if ($null -eq $Value) { $Value = '' }
+    if ($Value -ne '' -and $Value -notmatch '[ \t"]') { return $Value }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    for ($i = 0; $i -lt $Value.Length; $i++) {
+        $slashes = 0
+        while ($i -lt $Value.Length -and $Value[$i] -eq '\') { $i++; $slashes++ }
+        if ($i -ge $Value.Length) {
+            # Backslashes that run into the closing quote must be doubled,
+            # or they escape the quote itself.
+            [void]$sb.Append('\' * ($slashes * 2))
+            break
+        }
+        if ($Value[$i] -eq '"') {
+            [void]$sb.Append('\' * ($slashes * 2 + 1))
+            [void]$sb.Append('"')
+        } else {
+            [void]$sb.Append('\' * $slashes)
+            [void]$sb.Append($Value[$i])
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+# Serialize everything Phase 1 resolved. After this file is written the
+# argv carries no configuration at all, so anything omitted here is lost
+# -- which is exactly the bug this replaces. WAIRED_CLEAN and -Check are
+# deliberately absent: the wipe and the check are Phase-1-only branches
+# (gated on -not $StagedZipPath) and restoring them would arm a step that
+# must never run twice.
+function Export-InstallState {
+    param([string]$Path)
+    $state = [ordered]@{
+        schema = $InstallStateSchema
+        env    = [ordered]@{
+            WAIRED_LOG_LEVEL         = $env:WAIRED_LOG_LEVEL
+            WAIRED_STATE_DIR         = $env:WAIRED_STATE_DIR
+            WAIRED_NO_TRAY           = $env:WAIRED_NO_TRAY
+            WAIRED_CONTROL_URL       = $env:WAIRED_CONTROL_URL
+            WAIRED_DEV_CONTROL_URL   = $env:WAIRED_DEV_CONTROL_URL
+            WAIRED_NO_EMOJI          = $env:WAIRED_NO_EMOJI
+            WAIRED_VERSION           = $env:WAIRED_VERSION
+            WAIRED_INSTALL_BASE_URL  = $env:WAIRED_INSTALL_BASE_URL
+            WAIRED_INSTALL_REPO      = $env:WAIRED_INSTALL_REPO
+            WAIRED_INSTALL_DIR       = $env:WAIRED_INSTALL_DIR
+            WAIRED_PII_MASK          = $env:WAIRED_PII_MASK
+            WAIRED_NO_OLLAMA         = $env:WAIRED_NO_OLLAMA
+            WAIRED_NO_CLAUDE_PROXY   = $env:WAIRED_NO_CLAUDE_PROXY
+            WAIRED_OLLAMA_MODELS_DIR = $env:WAIRED_OLLAMA_MODELS_DIR
+        }
+        params = [ordered]@{
+            # $InstallDirExplicit and $ControlUrl are not carried: the
+            # Configuration block and Resolve-ControlUrl re-derive both from
+            # the values above, after the import, and would overwrite them.
+            InstallDir         = [string]$InstallDir
+            LogPath            = [string]$LogPath
+            LogLevel           = [string]$LogLevel
+            Control            = [string]$Control
+            OllamaGpuMode      = [string]$OllamaGpuMode
+            OllamaModelsDir    = [string]$OllamaModelsDir
+            InferenceEnabled   = [string]$InferenceEnabled
+            ShareWithMesh      = [string]$ShareWithMesh
+            Dev                = [bool]$Dev
+            DryRun             = [bool]$DryRun
+            Update             = [bool]$Update
+            Yes                = [bool]$Yes
+            SkipOllama         = [bool]$SkipOllama
+            SkipInit           = [bool]$SkipInit
+            SkipClaudeProxy    = [bool]$SkipClaudeProxy
+            NonInteractive     = [bool]$NonInteractive
+            MaskPII            = [bool]$MaskPII
+        }
+    }
+    # UTF-8 with NO BOM: Set-Content -Encoding UTF8 writes one on Windows
+    # PowerShell 5.1 and ConvertFrom-Json rejects the BOM'd first key.
+    [System.IO.File]::WriteAllText($Path, ($state | ConvertTo-Json -Depth 4),
+        (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Rehydrate the child from the state file. Runs before the Configuration
+# block, so restoring the environment is enough for everything derived
+# there -- except the two parameters whose defaults were already evaluated
+# at BIND time (-LogLevel :$env:WAIRED_LOG_LEVEL and -OllamaModelsDir),
+# which is why every param is assigned explicitly below.
+# Common-Die does not exist yet, so failures throw and the trap picks them
+# up.
+function Import-InstallState {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw "install state file not found at $Path (the un-elevated parent may have crashed)"
+    }
+    try {
+        # NOT Get-Content -Raw: on Windows PowerShell 5.1 it decodes a BOM-less
+        # file with the system ANSI code page, which mangles a non-ASCII install
+        # dir or user profile path. Read as UTF-8 explicitly, matching the write.
+        $state = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    } catch {
+        throw "install state file $Path is not readable JSON: $($_.Exception.Message)"
+    }
+    if (-not $state -or -not $state.schema) {
+        throw "install state file $Path has no schema field"
+    }
+    if ([int]$state.schema -ne $InstallStateSchema) {
+        throw "install state file schema $($state.schema) != expected $InstallStateSchema (the two phases are different installer versions)"
+    }
+    foreach ($e in $state.env.PSObject.Properties) {
+        # Name filter, not decoration: this runs in an ELEVATED process reading a
+        # file from the un-elevated caller's %TEMP%. Without it a tampered
+        # document could set PSModulePath or ComSpec here. The caller already
+        # owns the staged zip, so this is defence in depth rather than the only
+        # thing standing in the way -- but the restore has no business touching
+        # anything outside our own namespace.
+        if ($e.Name -notmatch '^WAIRED_[A-Za-z0-9_]+$') { continue }
+        $val = [string]$e.Value
+        if ($val -eq '') { $val = $null }   # $null removes the variable
+        [Environment]::SetEnvironmentVariable($e.Name, $val)
+    }
+    $p = $state.params
+    $script:InstallDir         = [string]$p.InstallDir
+    $script:LogPath            = [string]$p.LogPath
+    $script:LogLevel           = [string]$p.LogLevel
+    $script:Control            = [string]$p.Control
+    $script:OllamaGpuMode      = [string]$p.OllamaGpuMode
+    $script:OllamaModelsDir    = [string]$p.OllamaModelsDir
+    $script:InferenceEnabled   = [string]$p.InferenceEnabled
+    $script:ShareWithMesh      = [string]$p.ShareWithMesh
+    $script:Dev                = [bool]$p.Dev
+    $script:DryRun             = [bool]$p.DryRun
+    $script:Update             = [bool]$p.Update
+    $script:Yes                = [bool]$p.Yes
+    $script:SkipOllama         = [bool]$p.SkipOllama
+    $script:SkipInit           = [bool]$p.SkipInit
+    $script:SkipClaudeProxy    = [bool]$p.SkipClaudeProxy
+    $script:NonInteractive     = [bool]$p.NonInteractive
+    $script:MaskPII            = [bool]$p.MaskPII
+}
+
+# The elevated console closes the instant the script exits, so an uncaught
+# terminating error left nothing behind at all (waired#748's transcript is
+# armed further down, and a failure before that point missed it entirely).
+# Drop a marker next to the state file, which lives in the un-elevated
+# parent's own workdir, so the parent can read the cause back and print it.
+#
+# Deliberately self-contained: it must work before Common-Die /
+# Test-InteractiveStdin exist. It also cannot catch a parse error or a
+# parameter-binding failure -- both happen before the first statement runs.
+# Those are covered by the other half of this change: an argv short enough
+# and quoted well enough that it cannot mis-bind.
+trap {
+    $msg = "$($_.Exception.Message)"
+    Write-InstallStatus $msg
+    Write-Host "[waired] install failed: $msg" -ForegroundColor Red
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
+    if ($script:ElevatedConsole) {
+        # Test-InteractiveStdin is ~1000 lines below and may not exist yet;
+        # this is its inlined equivalent.
+        try {
+            if (-not $NonInteractive -and -not [Console]::IsInputRedirected) {
+                Read-Host '[waired] Install FAILED. Press Enter to close this window' | Out-Null
+            }
+        } catch { }
+    }
+    exit 1
+}
+
+# Restore the resolved Phase-1 state before anything derives from the
+# environment below.
+if ($StateFile) { Import-InstallState -Path $StateFile }
 
 # -------------------------------------------------------------------
 # Configuration (overridable via environment, mirrors install.sh)
@@ -426,6 +655,10 @@ function Common-Die  {
     # persists). Runs here (not just in a try/finally) because install steps
     # call Common-Die -> exit 1, which can bypass a wrapping finally.
     if ($script:ElevatedConsole) {
+        # The trap cannot see this: exit is not a terminating error. Without
+        # this line the most common elevated failure -- any Common-Die inside
+        # Phase 2 -- would still reach the parent as a bare exit code (#177).
+        Write-InstallStatus $Msg
         if ($script:LogPath) { Write-Host "[waired] Full install log: $($script:LogPath)" -ForegroundColor Red }
         Stop-TranscriptQuietly
         if (Test-InteractiveStdin) {
@@ -433,6 +666,26 @@ function Common-Die  {
         }
     }
     exit 1
+}
+
+# Arm the elevated-console diagnostics as early as the helpers allow (#177).
+# The spawned Phase-2 console closes the instant the script exits, so
+# anything failing before this point vanished with it -- which is exactly how
+# a mis-bound -InstallDir died: Normalize-ExtraArgs -> Common-Die, with the
+# transcript still ~1500 lines further down the file. Everything between here
+# and main is function definitions, which cannot fail.
+#
+# Gated on $StagedZipPath, the Phase-2 discriminator, so Phase 1 and the
+# already-admin inline path (which wraps its own transcript around the install
+# steps) are untouched. $LogPath is resolved by now -- and after the -StateFile
+# load -- so it is the path the un-elevated parent picked under its own %TEMP%,
+# where it stays readable without elevation (waired#748).
+if ($StagedZipPath) {
+    $script:ElevatedConsole = $true
+    # QuickEdit first: a stray click in this spawned window would otherwise
+    # freeze all output (it looks like a hung install) until Enter/Esc.
+    Disable-QuickEdit
+    try { Start-Transcript -Path $LogPath -Force -ErrorAction SilentlyContinue | Out-Null } catch { }
 }
 
 # Normalize-ExtraArgs folds install.sh-style long options that PowerShell left
@@ -535,16 +788,14 @@ function Normalize-ExtraArgs {
 #     Invoke-AgentInstall -- i.e. AFTER UAC, inside the elevated window that
 #     closes on exit, so a typo was reported where nobody could read it.
 #
-#   * The $env write IS the propagation mechanism. Start-Process inherits the
-#     parent's environment block, and the elevated Phase-2 child re-evaluates
-#     `[string]$LogLevel = $env:WAIRED_LOG_LEVEL` from it. -LogLevel is
-#     deliberately NOT added to Invoke-SelfElevate's passthrough list: one
-#     mechanism (the same one -Edge and -SkipOllama already use), and the env
-#     form reaches the `waired init` child too, not just `waired-agent
-#     install`. Without it, `-LogLevel debug` was silently dropped on the
-#     ordinary (self-elevating) install path -- the agent installed at info
-#     with no warning, which is the one flag you reach for when reproducing a
-#     pre-release bug.
+#   * The $env write folds the flag and the WAIRED_LOG_LEVEL form onto one
+#     value, so every child of THIS process (`waired-agent install`,
+#     `waired init`) sees it without a second passthrough. What it is not is
+#     the UAC carrier: -Verb RunAs rebuilds the environment block, so across
+#     elevation the value rides -StateFile like everything else (#192).
+#     Claiming otherwise is why `-LogLevel debug` stayed silently dropped on
+#     the ordinary self-elevating path after #164 was called fixed -- the one
+#     flag you reach for when reproducing a pre-release bug.
 #
 # Must run after Normalize-ExtraArgs so the install.sh-style `--log-level LVL`
 # spelling is covered as well as the -LogLevel param and the env form.
@@ -869,7 +1120,10 @@ function Test-Admin {
 # Re-invoke this script elevated, AFTER the un-elevated download +
 # checksum-verify have already finished. The staged zip path is passed
 # along so the elevated child does not re-download (one UAC prompt
-# total, no double-fetch). Two cases for re-invocation source:
+# total, no double-fetch), and the resolved configuration travels in the
+# -StateFile document -- NOT in the environment, which -Verb RunAs
+# rebuilds from scratch (see the handoff block at the top, #192).
+# Two cases for re-invocation source:
 #   (a) Running from a .ps1 on disk (`powershell -File install.ps1`):
 #       $PSCommandPath gives the absolute script path; re-launch
 #       powershell.exe -File against it with -StagedZipPath.
@@ -887,41 +1141,40 @@ function Test-Admin {
 # 24H2+ Pro builds and is not present on the majority of supported
 # targets. Start-Process -Verb RunAs is universal back to Windows 10
 # 1809.
+#
+# The argv is deliberately tiny -- powershell's own switches, -File, and the
+# two internal handoff parameters. Everything else travels in the state file
+# (#192). Every token still goes through ConvertTo-NativeArg, because
+# Start-Process quotes nothing and both the script path and %TEMP% can
+# contain spaces (#177).
+function Get-ElevateArgs {
+    param([string]$ScriptPath, [string]$ZipPath, [string]$StatePath)
+    $argv = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', $ScriptPath,
+        '-StagedZipPath', $ZipPath,
+        '-StateFile', $StatePath
+    )
+    return @($argv | ForEach-Object { ConvertTo-NativeArg $_ })
+}
+
 function Invoke-SelfElevate {
     param([string]$ZipPath)
 
     Common-Log "Privileged step ahead -- requesting UAC..."
 
-    # WAIRED_NO_TRAY / WAIRED_STATE_DIR / WAIRED_CONTROL_URL / WAIRED_VERSION /
-    # WAIRED_PII_MASK / WAIRED_LOG_LEVEL are read from $env in the elevated
-    # child too -- Start-Process inherits the parent's environment block. Only
-    # switches / explicit values bound to non-env params need explicit
-    # forwarding. -LogLevel rides the env (Resolve-LogLevel writes it) rather
-    # than the list below, so the flag and env forms share one path and the
-    # value reaches the `waired init` child as well; it is absent here on
-    # purpose, not by omission (#164).
-    # -InstallDir carries the RESOLVED location (including an interactive
-    # Request-InstallDir choice) into the child, which never re-prompts.
-    $passthroughArgs = @('-StagedZipPath', $ZipPath, '-LogPath', $LogPath, '-InstallDir', $InstallDir)
-    if ($DryRun)         { $passthroughArgs += '-DryRun' }
-    if ($Update)         { $passthroughArgs += '-Update' }
-    if ($Yes)            { $passthroughArgs += '-Yes' }
-    if ($Dev)            { $passthroughArgs += '-Dev' }
-    if ($Control)        { $passthroughArgs += @('-Control', $Control) }
-    if ($SkipOllama)     { $passthroughArgs += '-SkipOllama' }
-    if ($SkipInit)       { $passthroughArgs += '-SkipInit' }
-    if ($SkipClaudeProxy){ $passthroughArgs += '-SkipClaudeProxy' }
-    if ($NonInteractive) { $passthroughArgs += '-NonInteractive' }
-    if ($MaskPII)        { $passthroughArgs += '-MaskPII' }
-    if ($OllamaGpuMode -and $OllamaGpuMode -ne 'auto') { $passthroughArgs += @('-OllamaGpuMode', $OllamaGpuMode) }
-    if ($OllamaModelsDir)  { $passthroughArgs += @('-OllamaModelsDir',  $OllamaModelsDir) }
-    if ($InferenceEnabled) { $passthroughArgs += @('-InferenceEnabled', $InferenceEnabled) }
-    if ($ShareWithMesh)    { $passthroughArgs += @('-ShareWithMesh',    $ShareWithMesh) }
+    # The state file lives beside the staged zip, in the workdir the
+    # un-elevated parent created -- so the caller's existing finally already
+    # cleans it up, and the parent can read the failure marker back afterwards.
+    # The elevated token can read it: the default user-profile ACL grants
+    # Administrators full control, which is already what lets the child open
+    # the staged zip at all.
+    $stateFile = Join-Path (Split-Path -Parent $ZipPath) 'install-state.json'
+    Export-InstallState -Path $stateFile
 
-    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
     $tempScript = $null
     if ($PSCommandPath) {
-        $psArgs += @('-File', $PSCommandPath) + $passthroughArgs
+        $scriptPath = $PSCommandPath
     } else {
         $url = if ($Version -eq 'latest') {
             "$BaseUrl/latest/download/install.ps1"
@@ -930,22 +1183,39 @@ function Invoke-SelfElevate {
         }
         # No on-disk path (sourced via iwr|iex): stage the script body to a
         # temp .ps1 and re-launch it with -File, which binds the named
-        # passthrough params just like case (a). Writing to a file -- rather
+        # handoff params just like case (a). Writing to a file -- rather
         # than ScriptBlock-Create on the fetched bytes -- keeps install.ps1
         # out of Defender's in-memory download-and-execute AMSI heuristic
         # (#552) and reads the body back as text, so the Windows PowerShell
-        # 5.1 octet-stream byte[] pitfall cannot occur. -Verb RunAs auto-quotes
-        # each -ArgumentList element, so a $env:TEMP with spaces is fine.
+        # 5.1 octet-stream byte[] pitfall cannot occur.
         $tempScript = Join-Path $env:TEMP "waired-install-elevate-$([Guid]::NewGuid().ToString('N')).ps1"
         Invoke-WebRequest -Uri $url -OutFile $tempScript -UseBasicParsing
-        $psArgs += @('-File', $tempScript) + $passthroughArgs
+        # The fetched script comes from the RELEASE, which a pinned
+        # WAIRED_VERSION can make older than this one. An older body has no
+        # -StateFile parameter, and a binding failure happens before the first
+        # statement runs -- no trap, no transcript, just a UAC window closing.
+        # Refuse here, where the operator can still read it.
+        if ((Get-Content -LiteralPath $tempScript -Raw) -notmatch '\[string\]\$StateFile\b') {
+            Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
+            Common-Die "the pinned release's install.ps1 ($Version) is older than this one and cannot receive the elevated handoff. Unset WAIRED_VERSION, or download install.ps1 and run it from disk."
+        }
+        $scriptPath = $tempScript
     }
+
+    $psArgs = Get-ElevateArgs -ScriptPath $scriptPath -ZipPath $ZipPath -StatePath $stateFile
 
     try {
         $proc = Start-Process -FilePath 'powershell.exe' `
             -ArgumentList $psArgs -Verb RunAs -PassThru -Wait
         if ($proc.ExitCode -ne 0) {
-            Common-Die "elevated installer exited code $($proc.ExitCode). Full install log: $LogPath"
+            # A child that died before its transcript existed still leaves the
+            # trap's marker behind (#177).
+            $why = ''
+            $marker = "$stateFile.status"
+            if (Test-Path -LiteralPath $marker) {
+                $why = " -- $(((Get-Content -LiteralPath $marker -Raw) -split "`r?`n")[0])"
+            }
+            Common-Die "elevated installer exited code $($proc.ExitCode)$why. Full install log: $LogPath"
         }
     } finally {
         # -Wait guarantees the elevated child finished reading the staged
@@ -1084,8 +1354,12 @@ function Invoke-CleanWipe {
     if (-not $DryRun) {
         Common-Log "(expect two UAC prompts total: one for the wipe, one for the install)"
     }
+    # Quoted for the same reason as the elevation argv: -ArgumentList does no
+    # quoting of its own, and $wipeScript sits next to a script path that can
+    # contain spaces (#177).
     $wipeArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wipeScript, '-Clean', '-Yes')
     if ($DryRun) { $wipeArgs += '-DryRun' }
+    $wipeArgs = @($wipeArgs | ForEach-Object { ConvertTo-NativeArg $_ })
     try {
         $proc = Start-Process -FilePath 'powershell.exe' `
             -ArgumentList $wipeArgs -NoNewWindow -PassThru -Wait
@@ -2037,16 +2311,36 @@ Resolve-ControlUrl
 # dies) without doing privileged work. Kept pure-ASCII (wire-safe under iwr|iex,
 # scripts/install/encoding_test.go).
 #
-# EnvLogLevel is deliberately separate from LogLevel: it is the value the
-# elevated Phase-2 child actually inherits, so it is the thing an assert must
-# look at to know -LogLevel survives UAC (#164). InitArgs prints the argv
+# EnvLogLevel is deliberately separate from LogLevel: it is the value every
+# child of THIS process inherits. Fields are append-only -- the harness matches
+# on positions up to ShareWithMesh.
+#
+# NoTray / StateDir / DevControlUrl / InstallDir are the values #192 showed were
+# dropped across UAC, so they are what a -StateFile round-trip assert reads.
+# WAIRED_ARGTEST_STATEFILE additionally writes the real state document, so a
+# test can hand it to a second process whose environment has been scrubbed --
+# the only way to observe the boundary without elevation, which the runner
+# cannot provide. ElevateArgs prints the argv the elevated re-invoke would get,
+# for the quoting assert (#177) -- real paths where this invocation has them, so
+# the printed vector is one a test can execute as-is. InitArgs prints the argv
 # Get-WairedInitArgs would hand to `waired init`.
 if ($env:WAIRED_ARGTEST) {
-    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11} Clean={12} LogLevel={13} EnvLogLevel={14} InferenceEnabled={15} ShareWithMesh={16}" -f `
+    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11} Clean={12} LogLevel={13} EnvLogLevel={14} InferenceEnabled={15} ShareWithMesh={16} NoTray={17} StateDir={18} InstallDir={19} DevControlUrl={20}" -f `
         [bool]$Dev, $Control, $ControlUrl, $Version, [bool]$SkipOllama, [bool]$SkipInit, `
         [bool]$SkipClaudeProxy, [bool]$NonInteractive, [bool]$DryRun, [bool]$Update, [bool]$Check, [bool]$Yes, [bool]$Clean, `
-        $LogLevel, $env:WAIRED_LOG_LEVEL, $InferenceEnabled, $ShareWithMesh)
+        $LogLevel, $env:WAIRED_LOG_LEVEL, $InferenceEnabled, $ShareWithMesh, `
+        [bool]$NoTray, $StateDir, $InstallDir, $DevControlUrl)
     Write-Host ("ARGTEST InitArgs=[{0}]" -f ((Get-WairedInitArgs) -join ' '))
+    if ($env:WAIRED_ARGTEST_STATEFILE) {
+        Export-InstallState -Path $env:WAIRED_ARGTEST_STATEFILE
+    }
+    # Real paths where we have them, so the printed vector is one a test can
+    # actually execute; a spaced placeholder otherwise, since the token that
+    # has to survive quoting is the one with a space in it.
+    Write-Host ("ARGTEST ElevateArgs=[{0}]" -f ((Get-ElevateArgs `
+        -ScriptPath $(if ($PSCommandPath) { $PSCommandPath } else { 'C:\Program Files\Waired\install.ps1' }) `
+        -ZipPath    'C:\Temp Dir\waired.zip' `
+        -StatePath  $(if ($env:WAIRED_ARGTEST_STATEFILE) { $env:WAIRED_ARGTEST_STATEFILE } else { 'C:\Temp Dir\install-state.json' })) -join ' '))
     return
 }
 
@@ -2178,18 +2472,11 @@ if (-not (Test-Path -LiteralPath $StagedZipPath)) {
     Common-Die "staged zip not found at $StagedZipPath (parent installer may have crashed)"
 }
 
-# This is the spawned elevated console: it closes the instant the script
-# returns, taking every message with it. Record a transcript and pause on exit
-# so its output (Show-NextSteps, or any failure) survives (waired#748).
-# $ElevatedConsole also makes Common-Die pause, covering steps that exit 1
-# directly. Both the pause and the CI legs are safe: Test-InteractiveStdin is
-# false under -NonInteractive / redirected stdin, and elevated CI runners take
-# the already-admin inline path above, never this spawned one.
-$script:ElevatedConsole = $true
-# Kill conhost QuickEdit first: a stray click in this spawned window would
-# otherwise freeze all output (looks like a hung install) until Enter/Esc.
-Disable-QuickEdit
-try { Start-Transcript -Path $LogPath -Force -ErrorAction SilentlyContinue | Out-Null } catch { }
+# The transcript, the QuickEdit fix and $ElevatedConsole (which makes
+# Common-Die pause) are armed far earlier now -- right after Common-Die is
+# defined -- so that a failure between here and there is still recorded.
+# Arming them here was too late: a mis-bound parameter died in
+# Normalize-ExtraArgs and the window closed with nothing on disk (#177).
 
 if ($Update) {
     # Elevated swap-only path (the parent already gated + downloaded).
