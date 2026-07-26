@@ -5,7 +5,7 @@ meta:
   audience: はじめて Waired をセットアップする人
   needs: AI を動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
   time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
-sourceHash: d30ac1a0db8b4231
+sourceHash: 2096c065d8b1f118
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -92,6 +92,14 @@ Sign in using this link:
 </Expected>
 
 **Enter** を押します。ブラウザが開くので Google アカウントを選びます。
+
+<Aside type="note" title="画面のないマシンの場合">
+	開くブラウザがないため、ターミナルはリンクを表示したうえで
+	*「Nothing to press here — sign-in continues on its own once you open the
+	link.」*（ここで押すキーはありません）と伝えます。スマートフォンや別の
+	コンピューターでリンクを開いてください。ターミナルは自分でサインインを検知します。
+</Aside>
+
 ターミナルに戻ると:
 
 <Expected>
@@ -157,8 +165,20 @@ Waired is signed in and running in the background.
 <summary>ターミナルで進めたい場合</summary>
 
 *「Setup is continuing in your browser…」*の表示で **Enter** を押します。
-ターミナル側に切り替わり、Claude Code を Waired 経由にするか聞かれるので **Y** と答えます。
-そのあとモデルのインストールとダウンロードが、ターミナル上の進捗表示で進みます。
+すぐには切り替わらず、まず確認が表示されます:
+
+```
+   Taking over means this terminal drives setup and the browser page stops.
+   Any model download keeps running either way.
+   Take over setup in this terminal? [y/N] (default: No)
+```
+
+**y** と答えると切り替わります。もう一度 Enter を押した場合は *No* と答えたことになり、
+ブラウザ側が引き続きセットアップを進めます（意図しないキー入力でセットアップが
+移ってしまうことはありません）。
+
+切り替わったあと、Claude Code を Waired 経由にするか聞かれるので **Y** と答えます。
+モデルのインストールとダウンロードが、ターミナル上の進捗表示で進みます。
 
 ```
 Starting the inference engine…

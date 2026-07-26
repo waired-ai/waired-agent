@@ -90,8 +90,16 @@ Sign in using this link:
 ```
 </Expected>
 
-Press **Enter**. Your browser opens; choose your Google account. Back in the
-terminal:
+Press **Enter**. Your browser opens; choose your Google account.
+
+<Aside type="note" title="On a machine with no desktop">
+	There is no browser to open, so the terminal prints the link and says
+	*“Nothing to press here — sign-in continues on its own once you open the
+	link.”* Open it on your phone or another computer; the terminal notices
+	by itself.
+</Aside>
+
+Back in the terminal:
 
 <Expected>
 ```
@@ -156,8 +164,20 @@ with, then does the work.
 <summary>I would rather do this in the terminal</summary>
 
 At *“Setup is continuing in your browser…”*, press **Enter**. The terminal
-takes over and asks whether to route Claude Code through Waired; answer **Y**.
-Model installation and download then run with a progress bar in the terminal:
+asks you to confirm before it takes anything over:
+
+```
+   Taking over means this terminal drives setup and the browser page stops.
+   Any model download keeps running either way.
+   Take over setup in this terminal? [y/N] (default: No)
+```
+
+Answer **y**. (Pressing Enter again answers *No* and leaves the browser in
+charge — so a stray keystroke never moves setup out from under you.)
+
+The terminal then takes over and asks whether to route Claude Code through
+Waired; answer **Y**. Model installation and download run with a progress
+bar in the terminal:
 
 ```
 Starting the inference engine…

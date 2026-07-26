@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 2bc47960b48568b6
+sourceHash: c8454f0da21820a5
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -118,20 +118,34 @@ You can set up your coding tools later from this terminal with `waired link all`
 
 ## ターミナルで進める
 
-*「Setup is continuing in your browser…」*の表示で **Enter** を押すと、
-ターミナル側に切り替わります。
+*「Setup is continuing in your browser…」*の表示で **Enter** を押します。
+すぐには切り替わりません。まず、切り替えると何が起きるかを示して確認されます。
 
-そこで何を聞かれるかは、どういう状態で動いているかによります。
+<Expected title="聞かれること">
+```
+   Taking over means this terminal drives setup and the browser page stops.
+   Any model download keeps running either way.
+   Take over setup in this terminal? [y/N] (default: No)
+```
+
+**y** と答えると切り替わります。もう一度 Enter を押した場合は *No* と答えたことに
+なるため、意図しないキー入力でセットアップがブラウザから移ってしまうことはありません。
+気が変わればあとからでも切り替えられます。
+</Expected>
+
+そのあと何を聞かれるかは、どういう状態で動いているかによります。
 
 ### 通常のインストール後
 
 コーディングツールについてだけ聞かれます。モデルはブラウザ側、
-またはインストーラ側ですでに決まっているためです。
+またはインストーラ側ですでに決まっているためです。質問はどちらも
+モデルのダウンロードが**終わってから**なので、転送が中断されることはありません。
 
 <Expected title="聞かれること">
-	Claude Code を Waired 経由にするかどうか。**Y** と答えます。
+	コーディングエージェント連携を設定するかどうか、続けて Claude Code を
+	Waired 経由にするかどうか。どちらも **Y** と答えます。
 
-	いいえと答えても連携自体はインストールされ、無効なだけです。
+	経由設定にいいえと答えても連携自体はインストールされ、無効なだけです。
 	あとから `sudo waired claude enable` で有効にできます。
 </Expected>
 
@@ -143,7 +157,8 @@ You can set up your coding tools later from this terminal with `waired link all`
 <Steps>
 
 1. **Google サインイン。**リンクとペアリングコードだけが表示されるので、
-	別の端末で開きます。
+	別の端末で開きます。ターミナルには *「Nothing to press here」*（ここで押す
+	キーはありません）と表示されます。サインインは自動で検知されます。
 
 2. **Run AI models on this computer? `[Y/n]`** — デスクトップや GPU マシンなら **Y**。
 	ほかのパソコンの AI を*使うだけ*のマシンなら **N**（それでもネットワークには参加します）。
@@ -184,6 +199,22 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 │  Point your coding agent at Waired and start building.           │
 ╰──────────────────────────────────────────────────────────────────╯
 ```
+</Expected>
+
+<Expected tone="bad">
+```
+!  The AI engine could not be installed on this device.
+   no space left on device
+
+   Sign-in worked — this device is signed in and running. Only local AI is missing.
+   Retry the install with: sudo waired init
+```
+
+AI ソフトウェアをインストールできませんでした。多くはディスク容量不足、
+ネットワーク不通、または管理者権限なしで実行した場合です。サインイン自体は
+成功しているので、このパソコンはネットワークに参加していて、ほかのマシンの AI を
+すでに使えます。表示された原因を解消してから、同じコマンドを実行し直してください。
+来ないエンジンを待ち続けることはせず、ここでセットアップは止まります。
 </Expected>
 
 <Aside type="caution" title="「非常に小さいモデルしか動かせません」と出たら">
