@@ -364,17 +364,39 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	if d.engine != "" {
 		step := signer.SetupStep{ID: setupStepEngineInstall}
 		installed, ready := r.provider.setupEngineState(ctx, d.engine)
+		// Arm order is the contract here, not an accident (#187). It is
+		// strongest-evidence-first: an engine that is serving beats a
+		// stale failed phase from an earlier attempt; a failure the
+		// executor reported beats mere on-disk presence, because a
+		// half-configured install leaves a binary behind and still failed.
 		switch {
 		case ready:
 			step.Status = signer.SetupStatusDone
-		case installed:
-			step.Status = signer.SetupStatusRunning
 		case phase == management.SetupExecutorPhaseFailed:
 			// The executor tried and told us why. Its own text beats any
-			// guess we could make from here.
+			// guess we could make from here. Ahead of `installed` so a
+			// half-configured engine — a binary on disk that cannot
+			// serve — reports the real failure instead of sitting at
+			// "working on it" forever.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = classifySetupFailure(execErr)
 			step.ErrorDetail = clampSetupDetail(execErr)
+		case installed:
+			// This step is "install the engine", and the engine is
+			// installed. It used to complete only once the engine was
+			// READY, which in this projection means the active MODEL is
+			// ready — so the row said "working on it" for the whole model
+			// download while the progress bar tracked the model step, and
+			// the wizard showed two rows running at once.
+			step.Status = signer.SetupStatusDone
+		case phase == management.SetupExecutorPhaseDone:
+			// The executor says it finished and we cannot see it yet.
+			// Rare now that detection matches the daemon's own rule
+			// (#179), but its explicit completion exists precisely to
+			// advance the wizard, and discarding it is what left the step
+			// spinning. The model step stays honest either way: its pull
+			// is admitted from the engine probe, not from this.
+			step.Status = signer.SetupStatusDone
 		case leaseLive && !elevated:
 			// An executor is present but cannot install — reporting
 			// executor_gone here would send the operator to re-run a

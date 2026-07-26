@@ -230,16 +230,17 @@ func TestSetupSnapshotStatuses(t *testing.T) {
 		t.Fatalf("benchmark step = %+v, want running", bench)
 	}
 
-	// Engine installed-but-not-ready → running; ready → done. Benchmark
-	// done at gen carries the measurement.
+	// Engine installed → done: this step installs the engine, and the
+	// engine is installed (#187 — it used to wait for the MODEL to be
+	// ready). Benchmark done at gen carries the measurement.
 	f.mu.Lock()
 	f.engineInstalled = true
 	f.modelState = catalog.ModelStateReady
 	f.bench = management.BenchmarkStatusResponse{State: management.BenchmarkStateDone, Gen: 1, MeasuredTokps: 42.5}
 	f.mu.Unlock()
 	snap = r.snapshot(ctx)
-	if snap.Steps[0].Status != signer.SetupStatusRunning {
-		t.Fatalf("installed engine step = %+v, want running", snap.Steps[0])
+	if snap.Steps[0].Status != signer.SetupStatusDone {
+		t.Fatalf("installed engine step = %+v, want done", snap.Steps[0])
 	}
 	if snap.Steps[1].Status != signer.SetupStatusDone {
 		t.Fatalf("ready model step = %+v, want done", snap.Steps[1])
@@ -527,6 +528,108 @@ func TestSetupExecutorFailedPhaseCarriesItsOwnError(t *testing.T) {
 	}
 	if got := r.SetupState(ctx).InstallClaimed; got != "" {
 		t.Fatalf("install_claimed = %q after a failed attempt, want empty so a retry can claim it", got)
+	}
+}
+
+// TestSetupEngineStepMatrix walks the whole (installed, ready, phase)
+// space of the engine_install arm, because the arm ORDER is the contract
+// (#187) and order bugs only show up as a specific pair disagreeing.
+//
+// Every row has a live elevated lease, so the `leaseLive` arm is the
+// thing each earlier arm has to beat — which is exactly the shape the
+// bug had: a real state falling through to "working on it".
+func TestSetupEngineStepMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		installed       bool
+		ready           bool
+		phase           string
+		wantStatus      string
+		wantErrCode     string
+		wantErrorDetail bool
+	}{
+		{
+			// THE regression bar #187 names. A half-configured engine
+			// leaves a binary behind, so `installed` is true while the
+			// install genuinely failed. It used to shadow the failed arm
+			// and render "working on it" forever.
+			name: "installed but the executor reported failure", installed: true, phase: management.SetupExecutorPhaseFailed,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorDiskFull, wantErrorDetail: true,
+		},
+		{
+			// The common case during a multi-GB model download. This is
+			// the row that used to read `running` for the whole pull,
+			// putting two rows in flight at once in the wizard.
+			name: "installed, model not ready yet", installed: true,
+			wantStatus: signer.SetupStatusDone,
+		},
+		{
+			// Serving beats a stale failed phase from an earlier attempt.
+			name: "ready despite an older failed phase", installed: true, ready: true, phase: management.SetupExecutorPhaseFailed,
+			wantStatus: signer.SetupStatusDone,
+		},
+		{
+			// The executor's explicit completion, which exists to advance
+			// the wizard and used to be discarded outright.
+			name: "executor done before we can see the engine", phase: management.SetupExecutorPhaseDone,
+			wantStatus: signer.SetupStatusDone,
+		},
+		{
+			name: "installing, engine not visible yet", phase: management.SetupExecutorPhaseInstalling,
+			wantStatus: signer.SetupStatusRunning,
+		},
+		{
+			name: "attached and idle", phase: management.SetupExecutorPhaseIdle,
+			wantStatus: signer.SetupStatusRunning,
+		},
+		{
+			name: "failed with nothing installed", phase: management.SetupExecutorPhaseFailed,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorDiskFull, wantErrorDetail: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSetupProvider{engineInstalled: tc.installed, engineReady: tc.ready}
+			r, _ := leasedReconciler(t, f, "ollama", "")
+			ctx := context.Background()
+			r.NoteExecutor(ctx, management.SetupExecutorRequest{
+				Attached: true, Elevated: true, Phase: tc.phase, Engine: "ollama",
+				Error: "download failed: no space left on device",
+			})
+
+			step := stepByID(t, r.snapshot(ctx), setupStepEngineInstall)
+			if step.Status != tc.wantStatus {
+				t.Errorf("status = %q, want %q (step: %+v)", step.Status, tc.wantStatus, step)
+			}
+			if step.ErrorCode != tc.wantErrCode {
+				t.Errorf("error_code = %q, want %q", step.ErrorCode, tc.wantErrCode)
+			}
+			if got := step.ErrorDetail != ""; got != tc.wantErrorDetail {
+				t.Errorf("has error_detail = %v, want %v (%q)", got, tc.wantErrorDetail, step.ErrorDetail)
+			}
+		})
+	}
+}
+
+// TestSetupEngineStepDoneDoesNotOutrunTheModelStep: completing the
+// engine row on `installed` must not make the model row look complete
+// too. The two answers come from different providers on purpose — the
+// wizard showing "engine installed, model downloading" is the whole
+// point of splitting them.
+func TestSetupEngineStepDoneDoesNotOutrunTheModelStep(t *testing.T) {
+	f := &fakeSetupProvider{
+		engineInstalled: true,
+		modelState:      catalog.ModelStateDownloading,
+		modelCompleted:  512, modelTotal: 4096,
+	}
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+	snap := r.snapshot(context.Background())
+
+	if got := stepByID(t, snap, setupStepEngineInstall); got.Status != signer.SetupStatusDone {
+		t.Errorf("engine step = %+v, want done", got)
+	}
+	mod := stepByID(t, snap, setupStepModelPull)
+	if mod.Status != signer.SetupStatusRunning || mod.CompletedBytes != 512 || mod.TotalBytes != 4096 {
+		t.Errorf("model step = %+v, want running with byte progress", mod)
 	}
 }
 
