@@ -63,13 +63,51 @@ done
 # and no case ever reached the sign-in arm. Report not-enrolled by default
 # (the fresh-install state the matrix is meant to drive); IT_STUB_ENROLLED=1
 # picks the other arm. Everything else still exits 0 without running.
+#
+# `sudo launchctl …` is forwarded to the launchctl stub below rather than
+# swallowed, because darwin_install_complete reads its exit status to decide
+# install-vs-update; a blanket `exit 0` would make every host look complete.
 cat > "$STUBDIR/sudo" <<'STUB'
 #!/bin/sh
 case "$1" in
   test) if [ -n "${IT_STUB_ENROLLED:-}" ]; then exit 0; else exit 1; fi ;;
+  launchctl) shift; exec launchctl "$@" ;;
 esac
 exit 0
 STUB
+
+# --- darwin stubs: let the macOS dispatch run on a Linux runner ---------
+# Without these, install.sh's darwin arm is only ever `sh -n`-parsed here,
+# and the real macOS leg (installtest.yml, runs-on macos-14) only ever sees a
+# clean host — so nothing executed the install-vs-update decision on a
+# half-installed one, which is exactly the state that got stuck.
+REAL_UNAME="$(command -v uname)"
+cat > "$STUBDIR/uname" <<STUB
+#!/bin/sh
+# Passes through to the real uname unless a case asks for a specific answer,
+# so the Linux cases above are untouched.
+case "\$1" in
+  -s) if [ -n "\${IT_STUB_UNAME_S:-}" ]; then printf '%s\n' "\$IT_STUB_UNAME_S"; exit 0; fi ;;
+  -m) if [ -n "\${IT_STUB_UNAME_M:-}" ]; then printf '%s\n' "\$IT_STUB_UNAME_M"; exit 0; fi ;;
+esac
+exec $REAL_UNAME "\$@"
+STUB
+printf '#!/bin/sh\nprintf %%s\\\\n 15.0\n' > "$STUBDIR/sw_vers"
+# `print` is the one functional verb: darwin_install_complete uses it as
+# launchd's own view of whether the job exists.
+cat > "$STUBDIR/launchctl" <<'STUB'
+#!/bin/sh
+case "$1" in
+  print) if [ -n "${IT_STUB_LAUNCHD_LOADED:-}" ]; then exit 0; else exit 1; fi ;;
+esac
+exit 0
+STUB
+# Present-on-PATH only: common_require_cmd checks for them, and every use is
+# behind the --dry-run guard.
+for c in shasum tar; do
+  printf '#!/bin/sh\nexit 0\n' > "$STUBDIR/$c"
+done
+
 chmod +x "$STUBDIR"/*
 export PATH="$STUBDIR:$PATH"
 
@@ -95,6 +133,33 @@ run_case() {
       zero)    [ "$rc" -eq 0 ] || { fail "[$sh] $label — expected exit 0, got $rc"; continue; } ;;
       nonzero) [ "$rc" -ne 0 ] || { fail "[$sh] $label — expected nonzero, got 0"; continue; } ;;
     esac
+    ok "[$sh] $label (exit $rc)"
+  done
+}
+
+# run_case_grep <zero|nonzero|any> <label> <env-assignments> <expect-regex> -- <args...>
+# Same checks as run_case plus "the output proves which arm ran". Needed for
+# the darwin dispatch cases, where a wrong-but-successful dispatch (update
+# where a fresh install was required) exits 0 and would pass run_case.
+run_case_grep() {
+  local expect="$1" label="$2" envs="$3" want="$4"; shift 4; shift
+  local sh out rc
+  for sh in "${SHELLS[@]}"; do
+    out="$(env $envs $sh "$INSTALL_SH" "$@" 2>&1)" && rc=0 || rc=$?
+    if printf '%s' "$out" | grep -Eq "$FAIL_RE"; then
+      fail "[$sh] $label — set -u/syntax signature:"
+      printf '%s\n' "$out" | grep -E "$FAIL_RE" | sed 's/^/        /' >&2
+      continue
+    fi
+    case "$expect" in
+      zero)    [ "$rc" -eq 0 ] || { fail "[$sh] $label — expected exit 0, got $rc"; continue; } ;;
+      nonzero) [ "$rc" -ne 0 ] || { fail "[$sh] $label — expected nonzero, got 0"; continue; } ;;
+    esac
+    if ! printf '%s' "$out" | grep -Eq "$want"; then
+      fail "[$sh] $label — output does not match /$want/:"
+      printf '%s\n' "$out" | tail -n 12 | sed 's/^/        /' >&2
+      continue
+    fi
     ok "[$sh] $label (exit $rc)"
   done
 }
@@ -252,6 +317,54 @@ fi
 
 # 5. Bad flag — clean failure, not a set -u error.
 run_case nonzero "unknown flag" "$FRESH" -- --bogus
+
+# 6. darwin dispatch (install vs update), driven on this Linux runner via the
+# uname / launchctl stubs. The regression this guards: "installed" used to be
+# decided by the binary alone, so an install that aborted after the binaries
+# landed was sent to the update path — which installs none of the pieces it
+# was missing, so the host never converged however many times it ran.
+DWORK="$(mktemp -d)"
+trap 'rm -rf "$STUBDIR" "$DWORK"' EXIT
+
+mkdir -p "$DWORK/bin-empty" "$DWORK/bin-installed"
+cat > "$DWORK/bin-installed/waired" <<'STUB'
+#!/bin/sh
+case "$*" in
+  "version --json") printf '{"version":"0.0.1"}\n' ;;
+esac
+exit 0
+STUB
+printf '#!/bin/sh\nexit 0\n' > "$DWORK/bin-installed/waired-agent"
+chmod +x "$DWORK"/bin-installed/*
+: > "$DWORK/present.plist"
+
+# A PATH without /usr/local/bin, so darwin_detect_installed's `command -v
+# waired` fallback cannot pick up a real install on a developer's own Mac —
+# the cases below must describe the host, not the machine running them.
+DPATH="PATH=$STUBDIR:/usr/bin:/bin:/usr/sbin:/sbin"
+DBASE="$DPATH IT_STUB_UNAME_S=Darwin IT_STUB_UNAME_M=arm64 WAIRED_NO_EMOJI=1"
+D_FRESH="$DBASE WAIRED_DARWIN_BINDIR=$DWORK/bin-empty WAIRED_DARWIN_PLIST=$DWORK/absent.plist"
+D_HALF="$DBASE WAIRED_DARWIN_BINDIR=$DWORK/bin-installed WAIRED_DARWIN_PLIST=$DWORK/absent.plist"
+D_FULL="$DBASE WAIRED_DARWIN_BINDIR=$DWORK/bin-installed WAIRED_DARWIN_PLIST=$DWORK/present.plist IT_STUB_LAUNCHD_LOADED=1"
+
+# Nothing installed → fresh install.
+run_case_grep zero "darwin fresh -> install" "$D_FRESH" \
+  'Waired is installed \(macOS' -- --dry-run --skip-ollama --no-init --yes
+# Binary present but no plist: the aborted-install state. MUST take the fresh
+# arm, not the update prompt.
+run_case_grep zero "darwin half-install -> install" "$D_HALF" \
+  'Waired is installed \(macOS' -- --dry-run --skip-ollama --no-init --yes
+# Binary + plist + a job launchd knows about → genuinely installed, update.
+run_case_grep zero "darwin complete -> update" "$D_FULL WAIRED_VERSION=edge" \
+  'waired updated to edge' -- --dry-run --skip-ollama --no-init --yes
+# An explicit --check still reaches the update path on a half-installed host
+# (the flag is the operator saying what they want), as on Linux.
+run_case_grep zero "darwin half-install --check -> update" "$D_HALF WAIRED_VERSION=edge" \
+  'Update available' -- --dry-run --skip-ollama --check
+# The update path must install log rotation too, or a host that only ever
+# updates never acquires the drop-in a fresh install would have given it.
+run_case_grep zero "darwin update installs log rotation" "$D_FULL WAIRED_VERSION=edge" \
+  'newsyslog rotation at /etc/newsyslog.d/waired-agent.conf' -- --dry-run --skip-ollama --no-init --yes
 
 echo
 log "summary: $PASS passed, $FAIL failed"

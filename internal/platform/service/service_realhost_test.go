@@ -30,7 +30,7 @@ import (
 //  8. stat the plist path — must be gone.
 //  9. launchctl print-disabled — Uninstall must leave no override (#176).
 //  10. Install again — the uninstall→reinstall leg, which is the only way
-//      to observe the override bug against real launchd.
+//     to observe the override bug against real launchd.
 //
 // To run manually:
 //

@@ -626,7 +626,10 @@ confirm_clean_install() {
 already_installed() {
     case "$OS_KIND" in
         linux)  [ -n "$(linux_apt_detect_installed)" ] ;;
-        darwin) [ -n "$(darwin_detect_installed)" ] ;;
+        # Same predicate as main()'s darwin dispatch below — a half-installed
+        # host must not skip the pre-install summary here and then be sent
+        # down the fresh-install arm there.
+        darwin) darwin_install_complete ;;
         *) return 1 ;;
     esac
 }
@@ -1259,6 +1262,12 @@ WAIRED_DARWIN_BINDIR="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
 # the EnvironmentFile). Honouring it there would mean a second, drop-in unit
 # definition to keep in sync; see `show_help`.
 DARWIN_STATE_DIR="${WAIRED_STATE_DIR:-/Library/Application Support/waired}"
+DARWIN_LABEL=com.waired.agent
+# WAIRED_DARWIN_PLIST is a test seam, not part of the documented option
+# surface (it is absent from show_help and the docs reference on purpose):
+# it lets the dash dispatch matrix drive darwin_install_complete on a Linux
+# runner without a /Library to point at.
+DARWIN_PLIST="${WAIRED_DARWIN_PLIST:-/Library/LaunchDaemons/$DARWIN_LABEL.plist}"
 
 darwin_install() {
     common_log "Detected macOS $OS_VERSION on $OS_ARCH"
@@ -1578,6 +1587,25 @@ darwin_detect_installed() {
     fi
 }
 
+# darwin_install_complete is true only when this host carries a COMPLETE
+# install: the binary, the LaunchDaemon plist, and a job launchd actually
+# knows about. darwin_detect_installed alone is the wrong signal for the
+# install-vs-update dispatch, because an install that aborted after
+# darwin_install_binaries leaves a working binary behind — so a plain re-run
+# was dispatched to the update path, which installs none of the missing
+# pieces, and the host could never converge no matter how often it ran.
+darwin_install_complete() {
+    [ -n "$(darwin_detect_installed)" ] || return 1
+    [ -f "$DARWIN_PLIST" ] || return 1
+    # launchd's own view of the job. This one needs root, and
+    # already_installed() asks before common_elevate has resolved $SUDO — so
+    # there the two checks above are the answer, while main()'s dispatch runs
+    # post-elevation and gets the full signal.
+    [ -n "$SUDO" ] || [ "$(id -u)" -eq 0 ] || return 0
+    # shellcheck disable=SC2086
+    $SUDO launchctl print "system/$DARWIN_LABEL" >/dev/null 2>&1 || return 1
+}
+
 # darwin_restart_agent reloads the system LaunchDaemon so the freshly
 # swapped binary takes effect, falling back to (re-)registration if the
 # job is not currently loaded. The system domain needs root, so it runs
@@ -1585,10 +1613,10 @@ darwin_detect_installed() {
 darwin_restart_agent() {
     common_log "Restarting waired-agent (launchctl kickstart, sudo)"
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO launchctl kickstart -k system/com.waired.agent"
+        common_log "  (dry-run) would: $SUDO launchctl kickstart -k system/$DARWIN_LABEL"
         return 0
     fi
-    if ! $SUDO launchctl kickstart -k "system/com.waired.agent" 2>/dev/null; then
+    if ! $SUDO launchctl kickstart -k "system/$DARWIN_LABEL" 2>/dev/null; then
         common_warn "LaunchDaemon not loaded; (re-)registering it."
         darwin_register_agent "$DARWIN_STATE_DIR"
     fi
@@ -1629,6 +1657,13 @@ darwin_update() {
     # darwin_install_binaries).
     darwin_install_binaries update
     darwin_restart_agent
+    # Converge on the complete state rather than only swapping binaries: hosts
+    # installed before log rotation existed, and hosts whose fresh install was
+    # interrupted before it, would otherwise never get the drop-in however
+    # many times they updated. Idempotent (overwrites), and the analog of
+    # linux_apt_update re-running linux_service_up. darwin_restart_agent above
+    # covers the plist the same way, by re-registering when the job is absent.
+    darwin_install_log_rotation
     # Finish sign-in if this host was installed but never enrolled (no-op
     # when already enrolled). Persist any resolved CP first so a not-yet-
     # enrolled host picks it up, matching the fresh-install path.
@@ -1882,7 +1917,12 @@ main() {
             common_die "Arch support is not yet available. Track it via the AUR — coming later."
             ;;
         darwin:*)
-            if [ "$FLAG_CLEAN" != 1 ] && { [ "$FLAG_CHECK" = 1 ] || [ "$FLAG_UPDATE" = 1 ] || [ -n "$(darwin_detect_installed)" ]; }; then
+            # darwin_install_complete, not darwin_detect_installed: a host
+            # whose install aborted part-way still has the binary, and
+            # dispatching that to the update path is how it got stuck (the
+            # update path never installed the pieces it was missing). An
+            # explicit --check/--update still wins, as on Linux.
+            if [ "$FLAG_CLEAN" != 1 ] && { [ "$FLAG_CHECK" = 1 ] || [ "$FLAG_UPDATE" = 1 ] || darwin_install_complete; }; then
                 darwin_update
             else
                 darwin_install
