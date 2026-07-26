@@ -194,17 +194,6 @@ func wairedCLIPath() (string, error) {
 	return "", fmt.Errorf("waired CLI not found in PATH, /usr/bin, or /usr/local/bin")
 }
 
-// OpenBrowser launches the user's preferred handler for url. xdg-open
-// is the only standard on Linux desktops; we don't try Wayland-specific
-// hacks here because xdg-open is a thin shell over .desktop MIME
-// resolution that Wayland sessions also honor.
-func OpenBrowser(url string) error {
-	cmd := exec.Command("xdg-open", url)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	return cmd.Start()
-}
-
 // CopyToClipboard copies text into the clipboard, picking wl-copy on
 // Wayland and xclip on X11. A failure is non-fatal — the menu builder
 // just shows the failure via ShowError.

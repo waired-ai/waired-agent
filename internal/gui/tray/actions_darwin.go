@@ -156,20 +156,6 @@ func locateWairedBinary() (string, error) {
 // `waired codeui …`. Same resolution as the elevation helpers.
 func wairedCLIPath() (string, error) { return locateWairedBinary() }
 
-// OpenBrowser launches url with the user's default handler. macOS
-// ships `open(1)` which is the canonical way to invoke
-// LaunchServices — equivalent to xdg-open on Linux / ShellExecute on
-// Windows.
-func OpenBrowser(url string) error {
-	if url == "" {
-		return errors.New("OpenBrowser: empty url")
-	}
-	cmd := exec.Command("/usr/bin/open", url)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	return cmd.Start()
-}
-
 // CopyToClipboard pipes text to /usr/bin/pbcopy. Trailing CRLF is
 // trimmed to match Linux/Windows behaviour where Ctrl+V into a text
 // field should not paste a stray newline.

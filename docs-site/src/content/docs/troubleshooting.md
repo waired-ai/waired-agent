@@ -27,6 +27,7 @@ most problems on its own.
 **Setting up**
 
 - [I typed `waired` and got “command not found”](#i-typed-waired-and-got-command-not-found)
+- [No browser opened at sign-in, or the wrong one did](#no-browser-opened-at-sign-in)
 - [Setup stopped partway](#setup-stopped-partway)
 - [It says I have reached the device limit](#it-says-i-have-reached-the-device-limit)
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
@@ -69,6 +70,25 @@ and has not picked up the new command yet.
 
 On Windows the command lives at `C:\Program Files\Waired\waired.exe`. If
 `waired` alone does not work, that full path always does.
+
+<a id="no-browser-opened-at-sign-in"></a>
+
+## No browser opened at sign-in, or the wrong one did
+
+The sign-in link is always printed in the terminal before anything opens, so you
+can finish by hand at any time: copy that link and paste it into the browser you
+normally use. Sign in there, and stay in that same browser for the rest of
+setup — the setup page only works in the browser you signed in with.
+
+If a browser you never use opened instead, close it without signing in and open
+the printed link in the one you want.
+
+Both cases were caused by setup running with administrator rights, and are fixed
+in current versions:
+
+```sh
+waired update
+```
 
 ## Setup stopped partway
 
