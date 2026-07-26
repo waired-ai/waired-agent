@@ -6,6 +6,8 @@ import (
 	"context"
 	"os/exec"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/platform/pwsh"
 )
 
 // list enumerates processes via PowerShell's CIM cmdlet, which returns each
@@ -21,6 +23,9 @@ func list() ([]ProcInfo, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe",
 		"-NoProfile", "-NonInteractive", "-Command",
 		"Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Depth 3 -Compress")
+	// Windows PowerShell 5.1 must not inherit a PowerShell 7 PSModulePath
+	// (#178) — see internal/platform/pwsh.
+	cmd.Env = pwsh.Env()
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

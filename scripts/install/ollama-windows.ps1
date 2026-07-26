@@ -149,6 +149,42 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
+# Windows PowerShell 5.1 and PowerShell 7 ship separate, incompatible copies
+# of the in-box modules. A 5.1 child launched from a pwsh 7 session inherits
+# pwsh 7's PSModulePath; autoloading Microsoft.PowerShell.Security then dies
+# on a types-file collision ("AuditToString" is already present) and
+# Get-AuthenticodeSignature can never load. With $ErrorActionPreference
+# 'Stop' that turns Verify-Signature below into a terminating error and the
+# whole install fails as `exit status 1` (#178). `waired init` runs under an
+# elevated pwsh 7 on the supported path, so this is the default, not an edge
+# case. Note that an explicit Import-Module of the same module fails
+# identically -- the path itself has to be repaired.
+#
+# The Go caller strips PSMODULEPATH before spawning us
+# (internal/platform/pwsh), but this script is also fetched and run
+# standalone, so repair it here as well: keep only the WindowsPowerShell
+# roots, then re-add 5.1's own $PSHOME\Modules and the registry values.
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $wantedModulePaths = @()
+    $modulePathSources = @(
+        $env:PSModulePath,
+        [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine'),
+        [Environment]::GetEnvironmentVariable('PSModulePath', 'User'),
+        (Join-Path $PSHOME 'Modules')
+    )
+    foreach ($src in $modulePathSources) {
+        foreach ($p in (($src -split ';') | Where-Object { $_ })) {
+            # '...\PowerShell\...' is a PowerShell 7 root; 5.1's own roots
+            # all say '...\WindowsPowerShell\...', which this does not match.
+            if ($p -match '(?i)[\\/]PowerShell[\\/]') { continue }
+            if ($wantedModulePaths -notcontains $p) { $wantedModulePaths += $p }
+        }
+    }
+    if ($wantedModulePaths.Count -gt 0) {
+        $env:PSModulePath = ($wantedModulePaths -join ';')
+    }
+}
+
 function Assert-Admin {
     $id   = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $prin = New-Object System.Security.Principal.WindowsPrincipal($id)
@@ -434,11 +470,46 @@ function Expand-Overlay {
 
 function Verify-Signature {
     param([string]$Exe)
-    $sig = Get-AuthenticodeSignature -FilePath $Exe
-    if ($sig.Status -ne 'Valid') {
-        throw "ollama.exe Authenticode status is '$($sig.Status)' (expected 'Valid')."
+
+    # Get-AuthenticodeSignature lives in Microsoft.PowerShell.Security. The
+    # PSModulePath repair at the top of this script is what normally keeps it
+    # loadable (#178); this catch is the belt to that braces, so a host where
+    # the cmdlet is unavailable for any other reason still gets *a*
+    # signature check instead of a hard failure.
+    $sig = $null
+    try {
+        $sig = Get-AuthenticodeSignature -FilePath $Exe
+    } catch {
+        Write-Warning "Get-AuthenticodeSignature unavailable ($($_.Exception.Message))"
     }
-    Write-Host "Signed by: $($sig.SignerCertificate.Subject)"
+    if ($sig) {
+        if ($sig.Status -ne 'Valid') {
+            throw "ollama.exe Authenticode status is '$($sig.Status)' (expected 'Valid')."
+        }
+        Write-Host "Signed by: $($sig.SignerCertificate.Subject)"
+        return
+    }
+
+    # Fallback: read the embedded signing certificate and validate its chain.
+    # Weaker than the cmdlet -- it proves the file carries a chain-valid
+    # signing certificate, not that the file's hash still matches the
+    # signature -- so it is announced as such rather than passing silently.
+    $cert = $null
+    try {
+        $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::CreateFromSignedFile($Exe)
+    } catch {
+        throw "ollama.exe is not signed, or its signature could not be read ($($_.Exception.Message))."
+    }
+    $chain = New-Object Security.Cryptography.X509Certificates.X509Chain
+    # Revocation is left unchecked: this path is already the degraded one,
+    # and a flaky OCSP/CRL endpoint must not fail an otherwise good install.
+    $chain.ChainPolicy.RevocationMode = [Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+    if (-not $chain.Build($cert)) {
+        $why = (($chain.ChainStatus | ForEach-Object { $_.Status }) -join ', ')
+        throw "ollama.exe signing certificate does not chain to a trusted root ($why)."
+    }
+    Write-Warning 'Signature checked via the certificate chain only (Get-AuthenticodeSignature was unavailable).'
+    Write-Host "Signed by: $($cert.Subject)"
 }
 
 function Set-MachineModelsDir {

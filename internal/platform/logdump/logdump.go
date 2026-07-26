@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
+	"github.com/waired-ai/waired-agent/internal/platform/pwsh"
 )
 
 // Options controls a collection run.
@@ -99,7 +100,12 @@ func serviceLogCommand(goos string, since time.Duration, now time.Time) (name st
 }
 
 func runServiceLog(ctx context.Context, w io.Writer, name string, args []string) error {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// The Windows branch spawns Windows PowerShell 5.1, which must not
+	// inherit a PowerShell 7 PSModulePath (#178) — see
+	// internal/platform/pwsh. Harmless on the journalctl / log branches.
+	cmd.Env = pwsh.Env()
+	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
 		_, _ = w.Write(out)
 		if out[len(out)-1] != '\n' {

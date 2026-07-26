@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/platform/pwsh"
 	installscripts "github.com/waired-ai/waired-agent/scripts/install"
 )
 
@@ -55,6 +56,16 @@ func runOllamaWindowsInstallerImpl(ctx context.Context) error {
 		return fmt.Errorf("close temp script: %w", err)
 	}
 
+	cmd := newOllamaInstallerCmd(ctx, tmp)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// newOllamaInstallerCmd builds the PowerShell invocation of the embedded
+// installer script. Split out of runOllamaWindowsInstallerImpl so the argv
+// and the child environment are assertable without spawning anything.
+func newOllamaInstallerCmd(ctx context.Context, scriptPath string) *exec.Cmd {
 	// GPU mode / models dir come from the same env knobs the one-liner
 	// installer exposes (install.ps1 -OllamaGpuMode / -OllamaModelsDir
 	// resolve into these before running `waired init`, which lands here).
@@ -64,13 +75,17 @@ func runOllamaWindowsInstallerImpl(ctx context.Context) error {
 	}
 	args := []string{
 		"-NoProfile", "-ExecutionPolicy", "Bypass",
-		"-File", tmp, "-GpuMode", gpuMode,
+		"-File", scriptPath, "-GpuMode", gpuMode,
 	}
 	if d := os.Getenv("WAIRED_OLLAMA_MODELS_DIR"); d != "" {
 		args = append(args, "-ModelsDir", d)
 	}
 	cmd := exec.CommandContext(ctx, "powershell", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// `powershell` is Windows PowerShell 5.1. It must NOT inherit the
+	// PSModulePath of the PowerShell 7 session `waired init` runs under, or
+	// Get-AuthenticodeSignature can never autoload and the script's
+	// signature check fails as `exit status 1` (#178). Leaving Env nil
+	// would inherit the parent environment verbatim.
+	cmd.Env = pwsh.Env()
+	return cmd
 }
