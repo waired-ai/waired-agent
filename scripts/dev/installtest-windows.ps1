@@ -1216,6 +1216,12 @@ if ($Contract) {
         # vacuous -- seed them here so -Clean's Remove-Ollama is actually exercised.
         [Environment]::SetEnvironmentVariable('OLLAMA_VULKAN', '1', 'Machine')
         [Environment]::SetEnvironmentVariable('OLLAMA_IGPU_ENABLE', '1', 'Machine')
+        # (#191) Same reasoning for the download staging directory: the CI
+        # install leg succeeds, so it never leaves one behind, and the sweep
+        # assert below would be vacuous without a planted victim.
+        $stageProbe = Join-Path $env:TEMP ('ollama-stage-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $stageProbe -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $stageProbe 'ollama-windows-amd64.zip') -Value 'stub'
         & (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes
         if ($LASTEXITCODE -ne 0) { ItBad "uninstall.ps1 -Clean exited $LASTEXITCODE" }
 
@@ -1228,6 +1234,13 @@ if ($Contract) {
         # wrote (seeded above), not just OLLAMA_MODELS.
         if (-not [Environment]::GetEnvironmentVariable('OLLAMA_VULKAN', 'Machine'))      { ItOk "OLLAMA_VULKAN cleared (-Clean)" }      else { ItBad "OLLAMA_VULKAN remains after -Clean" }
         if (-not [Environment]::GetEnvironmentVariable('OLLAMA_IGPU_ENABLE', 'Machine')) { ItOk "OLLAMA_IGPU_ENABLE cleared (-Clean)" } else { ItBad "OLLAMA_IGPU_ENABLE remains after -Clean" }
+        # (#191) -Clean reclaims the ~1.4 GB staging directories a killed
+        # engine download used to leave behind forever (seeded above).
+        if (-not (Test-Path -LiteralPath $stageProbe)) { ItOk "ollama staging directories swept (-Clean)" }
+        else {
+            ItBad "ollama-stage-* remains after -Clean ($stageProbe)"
+            Remove-Item -LiteralPath $stageProbe -Recurse -Force -ErrorAction SilentlyContinue
+        }
 
         # (#754) zero per-user / cross-surface artifacts. uninstall.ps1 -Clean now
         # runs `waired claude disable` + `waired unlink` for the invoking user (the

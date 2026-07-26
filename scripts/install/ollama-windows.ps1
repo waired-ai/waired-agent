@@ -115,6 +115,13 @@
     %SystemProfile%\.ollama under LocalSystem) which often shares the system
     drive with the OS.
 
+.PARAMETER StageDir
+    Directory to download archives into. Defaults to %TEMP%. The Go caller
+    (cmd/waired/runtimes_install_windows.go) passes a directory it created
+    and removes itself, so a staging tree cannot outlive an install that was
+    terminated by its parent -- this script's own cleanup lives in a
+    `finally` block, which a terminated process never reaches.
+
 .PARAMETER NoPath
     Skip prepending InstallDir to the Machine PATH. waired-agent itself does
     not require ollama on PATH (it uses absolute paths), but interactive
@@ -152,6 +159,7 @@ param(
     [string]$InstallDir = (Join-Path $env:ProgramFiles 'Ollama'),
     [switch]$Force,
     [string]$ModelsDir,
+    [string]$StageDir,
     [switch]$NoPath,
     [ValidateSet('auto', 'rocm', 'vulkan', 'cuda-only', 'cpu-only')]
     [string]$GpuMode    = 'auto'
@@ -434,12 +442,44 @@ function Invoke-DownloadWithProgress {
         ((Get-Item -LiteralPath $OutFile).Length / 1MB), $sw.Elapsed.TotalSeconds)
 }
 
+# Remove-StaleStagingDirs sweeps leftover ollama-stage-* directories from
+# earlier runs. Each holds the ~1.4 GB archive, this script can only clean up
+# from a `finally` (which a terminated process never reaches), and nothing
+# else on the system ever swept them -- so N killed installs cost N x 1.4 GB
+# forever (#191). The Go caller now owns the staging directory, which stops
+# new leaks; this handles hosts that already carry old ones.
+#
+# Anything whose directory or files were touched inside $OlderThanHours is
+# left alone, so a concurrently running install is never swept out from
+# under itself.
+function Remove-StaleStagingDirs {
+    param(
+        [string]$Root,
+        [int]$OlderThanHours = 6
+    )
+    if (-not $Root -or -not (Test-Path -LiteralPath $Root)) { return }
+    $cutoff = (Get-Date).AddHours(-$OlderThanHours)
+    foreach ($d in @(Get-ChildItem -LiteralPath $Root -Directory -Filter 'ollama-stage-*' -ErrorAction SilentlyContinue)) {
+        $stamps = @($d.LastWriteTime)
+        foreach ($f in @(Get-ChildItem -LiteralPath $d.FullName -File -Recurse -ErrorAction SilentlyContinue)) {
+            $stamps += $f.LastWriteTime
+        }
+        if (($stamps | Measure-Object -Maximum).Maximum -ge $cutoff) { continue }
+        Write-Host "Removing stale staging directory $($d.FullName)"
+        Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Stage-ZipDownload {
     param(
         [string]$Url,
         [int]$MinSizeBytes
     )
-    $tmpDir = Join-Path $env:TEMP ("ollama-stage-" + [Guid]::NewGuid().ToString('N'))
+    $root = if ($StageDir) { $StageDir } else { $env:TEMP }
+    if (-not (Test-Path -LiteralPath $root)) {
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+    }
+    $tmpDir = Join-Path $root ("ollama-stage-" + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
     $zip = Join-Path $tmpDir ([IO.Path]::GetFileName(([Uri]$Url).AbsolutePath))
     Write-Host "Downloading $Url"
@@ -671,6 +711,10 @@ function Test-Install {
 # --- main ---
 
 Assert-Admin
+
+# Reclaim disk from earlier killed installs before downloading another
+# ~1.4 GB archive.
+Remove-StaleStagingDirs -Root $env:TEMP
 
 $resolvedMode = Resolve-GpuMode -Requested $GpuMode
 

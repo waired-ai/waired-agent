@@ -16,7 +16,7 @@ import (
 func TestNewOllamaInstallerCmd_DropsPSModulePath(t *testing.T) {
 	t.Setenv("PSModulePath", `C:\Program Files\PowerShell\7\Modules`)
 
-	cmd := newOllamaInstallerCmd(context.Background(), `C:\Temp\ollama-install.ps1`)
+	cmd := newOllamaInstallerCmd(context.Background(), `C:\Temp\ollama-install.ps1`, `C:\Temp\ollama-stage-1`)
 
 	if cmd.Env == nil {
 		t.Fatal("Env is nil: the child would inherit the parent environment verbatim")
@@ -35,7 +35,7 @@ func TestNewOllamaInstallerCmd_Args(t *testing.T) {
 		t.Setenv("WAIRED_OLLAMA_GPU_MODE", "")
 		t.Setenv("WAIRED_OLLAMA_MODELS_DIR", "")
 
-		cmd := newOllamaInstallerCmd(context.Background(), script)
+		cmd := newOllamaInstallerCmd(context.Background(), script, "")
 
 		want := []string{
 			"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -46,15 +46,19 @@ func TestNewOllamaInstallerCmd_Args(t *testing.T) {
 		}
 	})
 
-	t.Run("forwards the install.ps1 knobs", func(t *testing.T) {
+	t.Run("forwards the install.ps1 knobs and the staging dir", func(t *testing.T) {
 		t.Setenv("WAIRED_OLLAMA_GPU_MODE", "vulkan")
 		t.Setenv("WAIRED_OLLAMA_MODELS_DIR", `D:\ollama\models`)
 
-		cmd := newOllamaInstallerCmd(context.Background(), script)
+		cmd := newOllamaInstallerCmd(context.Background(), script, `C:\Temp\ollama-stage-1`)
 
+		// -StageDir is what keeps a context kill from leaking ~1.4 GB: the
+		// script's own cleanup lives in a `finally` the terminated process
+		// never reaches, so the Go side owns the directory instead (#191).
 		want := []string{
 			"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
 			"-File", script, "-GpuMode", "vulkan",
+			"-StageDir", `C:\Temp\ollama-stage-1`,
 			"-ModelsDir", `D:\ollama\models`,
 		}
 		if !slices.Equal(cmd.Args, want) {

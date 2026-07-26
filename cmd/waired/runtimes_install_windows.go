@@ -56,7 +56,19 @@ func runOllamaWindowsInstallerImpl(ctx context.Context) error {
 		return fmt.Errorf("close temp script: %w", err)
 	}
 
-	cmd := newOllamaInstallerCmd(ctx, tmp)
+	// Own the download staging directory here rather than letting the script
+	// mint its own under %TEMP%. The script can only clean up from a
+	// `finally`, which does not run when the context deadline terminates the
+	// process -- and each abandoned directory holds the ~1.4 GB archive
+	// forever, since nothing else ever swept them (#191). This defer runs in
+	// the surviving parent even when the child is killed.
+	stage, err := os.MkdirTemp("", "ollama-stage-")
+	if err != nil {
+		return fmt.Errorf("create staging dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(stage) }()
+
+	cmd := newOllamaInstallerCmd(ctx, tmp, stage)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -65,7 +77,7 @@ func runOllamaWindowsInstallerImpl(ctx context.Context) error {
 // newOllamaInstallerCmd builds the PowerShell invocation of the embedded
 // installer script. Split out of runOllamaWindowsInstallerImpl so the argv
 // and the child environment are assertable without spawning anything.
-func newOllamaInstallerCmd(ctx context.Context, scriptPath string) *exec.Cmd {
+func newOllamaInstallerCmd(ctx context.Context, scriptPath, stageDir string) *exec.Cmd {
 	// GPU mode / models dir come from the same env knobs the one-liner
 	// installer exposes (install.ps1 -OllamaGpuMode / -OllamaModelsDir
 	// resolve into these before running `waired init`, which lands here).
@@ -76,6 +88,9 @@ func newOllamaInstallerCmd(ctx context.Context, scriptPath string) *exec.Cmd {
 	args := []string{
 		"-NoProfile", "-ExecutionPolicy", "Bypass",
 		"-File", scriptPath, "-GpuMode", gpuMode,
+	}
+	if stageDir != "" {
+		args = append(args, "-StageDir", stageDir)
 	}
 	if d := os.Getenv("WAIRED_OLLAMA_MODELS_DIR"); d != "" {
 		args = append(args, "-ModelsDir", d)
