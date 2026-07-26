@@ -28,13 +28,16 @@ import (
 // as a soft skip and continue.
 //
 // budget bounds the wait; callers outside the NAVI onboarding path pass
-// benchPollDeadline, which keeps their behaviour byte-identical. setupActive
-// says a browser setup is driving this host (waired#835 §9), which changes
-// exactly one thing: the no_engine grace no longer ends the wait, because the
-// executor is about to install the very engine that grace was written to give
-// up on. enter (nil = no backgrounding) lets the operator take the terminal
-// back; callers must Drain it afterwards.
-func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, setupActive bool, enter *enterListener) bool {
+// benchPollDeadline, which keeps their behaviour byte-identical.
+// engineComing says an engine can still plausibly appear on this host
+// (engineArrivalPending, setup_install.go), which changes exactly one thing:
+// the no_engine grace no longer ends the wait, because the executor is about
+// to install the very engine that grace was written to give up on. It used to
+// be "a browser setup is active" (waired#835 §9) — too wide, because a setup
+// whose engine install had just FAILED still qualified, and the terminal then
+// waited out the whole setup budget for an engine that was never coming (#188).
+// enter (nil = no takeover offer) lets the operator take the terminal back.
+func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *takeoverWatch) bool {
 	if !waitDaemonReachable(mgmtURL, 15*time.Second) {
 		// The caller already prints a "start the agent, then …" hint; stay
 		// quiet here so we don't double up.
@@ -63,10 +66,19 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 	}
 
 	for {
-		if enter != nil && enter.Backgrounded() {
+		// The takeover exchange (init_takeover.go) speaks through this
+		// loop rather than printing for itself, so its lines land after
+		// the in-place progress bar has been terminated.
+		if took, note := enter.Poll(); note != "" || took {
 			endProgressLine(out, tty, &line)
-			writePrompt(out, "Continuing in the background — the agent finishes the download on its own.")
-			return false
+			if note != "" {
+				writePrompt(out, note)
+			}
+			if took {
+				writePrompt(out, "Continuing in the background — the agent finishes the download on its own.")
+				return false
+			}
+			lastStep = "" // re-announce the current phase after the interruption
 		}
 
 		st, ok := fetchInferenceStatus(mgmtURL)
@@ -90,12 +102,14 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			// (issue #489): wait it out within the grace, then conclude it
 			// won't come up.
 			//
-			// Except during a browser setup (waired#835 §9): there the
-			// executor is about to install the engine, so "no engine yet"
-			// is the expected state for minutes, not a reason to give up.
-			// Giving up here is what used to cut the terminal's residency
-			// to 3 minutes on exactly the hosts this feature exists for.
-			if noEngineDeadline.IsZero() && !setupActive {
+			// Except while an engine is still on its way (waired#835 §9):
+			// there the executor is about to install the very engine this
+			// grace gives up on, so "no engine yet" is the expected state
+			// for minutes. Giving up here is what used to cut the
+			// terminal's residency to 3 minutes on exactly the hosts this
+			// feature exists for — and, once the install has failed,
+			// NOT giving up is what cost an hour (#188).
+			if noEngineDeadline.IsZero() && !engineComing {
 				noEngineDeadline = time.Now().Add(benchNoEngineGrace)
 			}
 			if !noEngineDeadline.IsZero() && time.Now().After(noEngineDeadline) {

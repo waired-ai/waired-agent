@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -120,11 +119,13 @@ func TestExecutorSessionOlderDaemonIsInert(t *testing.T) {
 		t.Fatalf("posted %d lease updates to an older daemon, want 0", got)
 	}
 
-	budget, active, enter := awaitBrowserSetup(s, bufio.NewScanner(strings.NewReader("")), io.Discard, false, false)
+	budget, active, enter := awaitBrowserSetup(s, nil, io.Discard, false, false)
 	if budget != benchPollDeadline || active {
 		t.Fatalf("budget=%v active=%v, want the legacy deadline and no setup", budget, active)
 	}
-	enter.Drain(io.Discard) // must not block
+	if took, note := enter.Poll(); took || note != "" {
+		t.Fatalf("inert watch produced (%v, %q)", took, note)
+	}
 }
 
 func TestExecutorSessionAttachHeartbeatRelease(t *testing.T) {
@@ -230,21 +231,43 @@ func TestAwaitSetupBudgetFallsBackAfterGrace(t *testing.T) {
 	}
 }
 
-// TestAwaitSetupBudgetBackgroundedByEnter: pressing Enter is how the
+// TestAwaitSetupBudgetTakenOver: confirming the takeover is how the
 // operator takes the terminal back, and it must not wait out the grace.
-func TestAwaitSetupBudgetBackgroundedByEnter(t *testing.T) {
+func TestAwaitSetupBudgetTakenOver(t *testing.T) {
 	shrinkSetupTimers(t)
 	d := &fakeSetupDaemon{}
 	srv := d.server(t)
 	s := attachSetupExecutor(srv.URL, true)
 	t.Cleanup(s.Release)
 
-	enter := listenForEnter(bufio.NewScanner(strings.NewReader("\n")))
-	waitForCond(t, enter.Backgrounded, "the Enter line to be read")
+	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\ny\n")))
 
-	budget, active := awaitSetupBudget(s, time.Minute, io.Discard, enter)
+	var out strings.Builder
+	budget, active := awaitSetupBudget(s, time.Minute, &out, enter)
 	if active || budget != benchPollDeadline {
-		t.Fatalf("budget=%v active=%v, want the legacy deadline after Enter", budget, active)
+		t.Fatalf("budget=%v active=%v, want the legacy deadline after a takeover", budget, active)
+	}
+	if !strings.Contains(out.String(), "Take over setup in this terminal?") {
+		t.Errorf("the takeover was never confirmed out loud: %q", out.String())
+	}
+}
+
+// A bare Enter must NOT take the terminal back: it asks, and the
+// default answer keeps the browser driving (#184).
+func TestAwaitSetupBudgetBareEnterKeepsBrowser(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{state: management.SetupStateResponse{Active: true}}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	t.Cleanup(s.Release)
+
+	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\n\n")))
+	budget, active := awaitSetupBudget(s, time.Minute, io.Discard, enter)
+	if !active || budget != setupResidencyBudget {
+		t.Fatalf("budget=%v active=%v, want the setup budget", budget, active)
+	}
+	if enter.TookOver() {
+		t.Error("a bare Enter took the terminal over")
 	}
 }
 
@@ -262,12 +285,14 @@ func TestAwaitBrowserSetupSkipsNonInteractive(t *testing.T) {
 		{true, false},
 		{false, true},
 	} {
-		budget, active, enter := awaitBrowserSetup(s, bufio.NewScanner(strings.NewReader("")), io.Discard, tc.nonInteractive, tc.noBrowser)
+		budget, active, enter := awaitBrowserSetup(s, nil, io.Discard, tc.nonInteractive, tc.noBrowser)
 		if active || budget != benchPollDeadline {
 			t.Fatalf("nonInteractive=%v noBrowser=%v: budget=%v active=%v, want the legacy path",
 				tc.nonInteractive, tc.noBrowser, budget, active)
 		}
-		enter.Drain(io.Discard) // must not block
+		if took, note := enter.Poll(); took || note != "" {
+			t.Fatalf("inert watch produced (%v, %q)", took, note)
+		}
 	}
 }
 

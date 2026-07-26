@@ -74,15 +74,16 @@ func outcomeFrom(resp *management.BenchmarkRunResponse) benchmarkOutcome {
 }
 
 // benchmarkWithScanner is the body of promptBenchmarkRecommendation,
-// taking an already-constructed scanner so a caller that already prompted
-// on the same stdin (offerBenchmark's "run benchmark now?" gate) can share
-// one scanner instead of layering two bufio readers over os.Stdin. tty
+// taking an already-constructed line source so a caller that already
+// prompted on the same stdin (offerBenchmark's "run benchmark now?" gate,
+// or the daemon path's stdin owner) can share one reader instead of
+// layering two bufio readers over os.Stdin. tty
 // selects the in-place progress rendering of the post-accept download wait.
 // It returns the raw benchmark response (nil when no measurement could be
 // obtained) so the caller can surface the throughput in the final success
 // summary; the error is always nil today (every give-up path is
 // best-effort) but kept for future use.
-func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc *bufio.Scanner, tty bool) (*management.BenchmarkRunResponse, error) {
+func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) (*management.BenchmarkRunResponse, error) {
 	resp, ok := waitForBenchmark(mgmtURL, out)
 	if !ok {
 		return nil, nil // already explained inside waitForBenchmark
@@ -176,7 +177,7 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 // needs a download, foreground-waits for it with progress — the machine
 // should be usable when the flow returns (waired#774). A pending Enter
 // backgrounds the wait; the agent owns the pull either way.
-func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc *bufio.Scanner, tty bool) {
+func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader, tty bool) {
 	pmr, err := acceptRecommendation(mgmtURL, modelID)
 	if err != nil {
 		writePromptf(out, "warn: could not switch model: %v\n", err)
@@ -199,7 +200,7 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc *bufio.Scan
 // inference by dropping to that very-low-quality model, or turn it off. Default
 // No → disable local inference; the node keeps working as a gateway/relay.
 func tinyBenchmarkDisableFlow(
-	mgmtURL string, nonInteractive bool, out io.Writer, sc *bufio.Scanner, tty bool,
+	mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool,
 	rec *management.BenchmarkRecommendation, resp *management.BenchmarkRunResponse,
 ) (*management.BenchmarkRunResponse, error) {
 	from := modelWithQuality(rec.FromModelID, rec.FromVariantID)
@@ -243,7 +244,7 @@ func disableLocalInference(mgmtURL string) error {
 // inference (proving the path works end-to-end) and offers a lighter model
 // if throughput is below the interactive floor. Non-interactive callers
 // run it report-only (never switches). Best-effort: never errors / blocks.
-func offerBenchmark(mgmtURL string, nonInteractive bool, out io.Writer, sc *bufio.Scanner, tty bool) benchmarkOutcome {
+func offerBenchmark(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) benchmarkOutcome {
 	if !waitDaemonReachable(mgmtURL, 15*time.Second) {
 		writePrompt(out, emo("💡", "Tip:")+" once the agent is running, run `waired runtimes benchmark` to check interactive performance.")
 		return benchmarkOutcome{}
@@ -257,8 +258,8 @@ func offerBenchmark(mgmtURL string, nonInteractive bool, out io.Writer, sc *bufi
 		return benchmarkOutcome{}
 	}
 	writePrompt(out, dim("Benchmarking local inference — warming up the model, please wait…"))
-	// Reuse the same scanner for the (possible) model-switch prompt so we
-	// don't layer two bufio readers over stdin.
+	// Reuse the same line source for the (possible) model-switch prompt so
+	// we don't layer two bufio readers over stdin.
 	resp, _ := benchmarkWithScanner(mgmtURL, false, out, sc, tty)
 	return outcomeFrom(resp)
 }

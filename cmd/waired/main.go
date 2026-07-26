@@ -416,7 +416,7 @@ func runInitBody(o *initFlags) error {
 		// once, outside the callback, so the decision is stable.
 		gate := resolveBrowserGate(*noBrowser, *nonInteractive, isTerminal(os.Stdin), browser.HasDisplay())
 		onLogin = func(loginURL, userCode string) {
-			presentLoginURL(os.Stdin, os.Stdout, loginURL, userCode, gate)
+			presentLoginURL(bufio.NewScanner(os.Stdin), os.Stdout, loginURL, userCode, gate)
 		}
 	}
 
@@ -551,7 +551,7 @@ func runInitBody(o *initFlags) error {
 		// answer is consumed by the ConfigureIntegration hook below (and
 		// by the sudo hop after Init).
 		if !*skipIntegration {
-			integConsent = promptIntegrationConsent(os.Stdin, os.Stdout, integrationConsentInput{
+			integConsent = promptIntegrationConsent(bufio.NewScanner(os.Stdin), os.Stdout, integrationConsentInput{
 				StepLabel:       steps.integration,
 				Detections:      detectIntegrationAgents(ctx, integTargetHome),
 				NonInteractive:  *nonInteractive,
