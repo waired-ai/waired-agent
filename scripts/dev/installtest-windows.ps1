@@ -720,7 +720,7 @@ try {
     $env:WAIRED_NO_TRAY           = '1'
     $env:WAIRED_STATE_DIR         = 'C:\WairedStateProbe'
     try {
-        $r = Invoke-ArgtestRaw ("& '$probeScript' -LogLevel debug -Control https://cp.example.test -LogPath '$stateLog'")
+        $r = Invoke-ArgtestRaw ("& '$probeScript' -LogLevel debug -Control https://cp.example.test -LogPath '$stateLog' -NonInteractive")
     } finally {
         Remove-Item Env:WAIRED_ARGTEST_STATEFILE -ErrorAction SilentlyContinue
         Remove-Item Env:WAIRED_NO_TRAY           -ErrorAction SilentlyContinue
@@ -771,11 +771,22 @@ try {
 
     # A child that dies before its transcript exists still has to leave a trace
     # the un-elevated parent can print -- the whole point of #177's third item.
+    # Two paths, because they are caught by different machinery: an uncaught
+    # terminating error (the trap) and Common-Die (which calls exit, so no trap
+    # can see it -- that is the path every ordinary Phase-2 failure takes).
     $corruptState = Join-Path $probeDir 'corrupt.json'
     Set-Content -LiteralPath $corruptState -Value '{ not json'
     $r = Invoke-ArgtestRaw ("& '$probeScript' -StateFile '$corruptState'")
     if ($r.Exit -ne 0 -and (Test-Path -LiteralPath "$corruptState.status")) { ItOk "an early elevated failure leaves a .status marker for the parent to read" }
     else { ItBad "no .status marker after an early failure (exit $($r.Exit)): $($r.Out.Trim())" }
+    # No ARGTEST here on purpose: that seam returns before the Phase-2 guards,
+    # so it would never reach a Common-Die. -NonInteractive rides the state file
+    # so the failure cannot sit on a Read-Host.
+    Remove-Item -LiteralPath "$stateFile.status" -Force -ErrorAction SilentlyContinue
+    $o = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $probeScript `
+            -StateFile $stateFile -StagedZipPath (Join-Path $probeDir 'missing.zip') 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -and (Test-Path -LiteralPath "$stateFile.status")) { ItOk "a Common-Die inside the elevated phase leaves a .status marker too" }
+    else { ItBad "no .status marker after a Common-Die (exit $LASTEXITCODE): $($o.Trim())" }
 
     Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $stateLog  -Force -ErrorAction SilentlyContinue

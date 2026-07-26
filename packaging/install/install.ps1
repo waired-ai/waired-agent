@@ -253,6 +253,20 @@ $ProgressPreference    = 'SilentlyContinue'
 # half-applied configuration.
 $InstallStateSchema = 1
 
+# Leave a one-line cause next to the state file. The elevated console closes
+# the instant the script exits, so this is what the un-elevated parent reads
+# back and prints when the child exits non-zero (#177). Both the trap below
+# and Common-Die write it -- Common-Die calls exit, which no trap can see.
+# Best-effort by design: a diagnostic must never become the failure.
+function Write-InstallStatus {
+    param([string]$Text)
+    $p = if ($StateFile) { "$StateFile.status" } elseif ($LogPath) { "$LogPath.status" } else { '' }
+    if (-not $p) { return }
+    try {
+        [System.IO.File]::WriteAllText($p, $Text, (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+
 # Quote one token per the CommandLineToArgvW rules.
 # Start-Process -ArgumentList joins its elements with a single space and
 # quotes NOTHING (the claim that -Verb RunAs auto-quotes them was simply
@@ -353,7 +367,10 @@ function Import-InstallState {
         throw "install state file not found at $Path (the un-elevated parent may have crashed)"
     }
     try {
-        $state = (Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json
+        # NOT Get-Content -Raw: on Windows PowerShell 5.1 it decodes a BOM-less
+        # file with the system ANSI code page, which mangles a non-ASCII install
+        # dir or user profile path. Read as UTF-8 explicitly, matching the write.
+        $state = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
     } catch {
         throw "install state file $Path is not readable JSON: $($_.Exception.Message)"
     }
@@ -364,6 +381,13 @@ function Import-InstallState {
         throw "install state file schema $($state.schema) != expected $InstallStateSchema (the two phases are different installer versions)"
     }
     foreach ($e in $state.env.PSObject.Properties) {
+        # Name filter, not decoration: this runs in an ELEVATED process reading a
+        # file from the un-elevated caller's %TEMP%. Without it a tampered
+        # document could set PSModulePath or ComSpec here. The caller already
+        # owns the staged zip, so this is defence in depth rather than the only
+        # thing standing in the way -- but the restore has no business touching
+        # anything outside our own namespace.
+        if ($e.Name -notmatch '^WAIRED_[A-Za-z0-9_]+$') { continue }
         $val = [string]$e.Value
         if ($val -eq '') { $val = $null }   # $null removes the variable
         [Environment]::SetEnvironmentVariable($e.Name, $val)
@@ -400,18 +424,15 @@ function Import-InstallState {
 # Those are covered by the other half of this change: an argv short enough
 # and quoted well enough that it cannot mis-bind.
 trap {
-    $msg    = "$($_.Exception.Message)"
-    $marker = if ($StateFile) { "$StateFile.status" } elseif ($LogPath) { "$LogPath.status" } else { '' }
-    if ($marker) {
-        try {
-            [System.IO.File]::WriteAllText($marker, $msg, (New-Object System.Text.UTF8Encoding($false)))
-        } catch { }
-    }
+    $msg = "$($_.Exception.Message)"
+    Write-InstallStatus $msg
     Write-Host "[waired] install failed: $msg" -ForegroundColor Red
     try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
     if ($script:ElevatedConsole) {
+        # Test-InteractiveStdin is ~1000 lines below and may not exist yet;
+        # this is its inlined equivalent.
         try {
-            if (-not [Console]::IsInputRedirected) {
+            if (-not $NonInteractive -and -not [Console]::IsInputRedirected) {
                 Read-Host '[waired] Install FAILED. Press Enter to close this window' | Out-Null
             }
         } catch { }
@@ -634,6 +655,10 @@ function Common-Die  {
     # persists). Runs here (not just in a try/finally) because install steps
     # call Common-Die -> exit 1, which can bypass a wrapping finally.
     if ($script:ElevatedConsole) {
+        # The trap cannot see this: exit is not a terminating error. Without
+        # this line the most common elevated failure -- any Common-Die inside
+        # Phase 2 -- would still reach the parent as a bare exit code (#177).
+        Write-InstallStatus $Msg
         if ($script:LogPath) { Write-Host "[waired] Full install log: $($script:LogPath)" -ForegroundColor Red }
         Stop-TranscriptQuietly
         if (Test-InteractiveStdin) {
