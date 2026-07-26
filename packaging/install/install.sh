@@ -134,6 +134,11 @@ SHARE_WITH_MESH=""
 # piped `iwr | iex` one-liner opts in, so both OSes accept it).
 FLAG_CLEAN=0
 if [ -n "${WAIRED_CLEAN:-}" ]; then FLAG_CLEAN=1; fi
+# DARWIN_REGISTER_FAILED: set by darwin_register_agent when LaunchDaemon
+# registration failed. The install deliberately continues (see that function),
+# so darwin_next_steps repeats the recovery at the end rather than letting the
+# user's last line of output be an unexplained warning from much earlier.
+DARWIN_REGISTER_FAILED=0
 OS_KIND=""
 OS_FAMILY=""
 OS_NAME=""
@@ -1352,6 +1357,14 @@ darwin_install_binaries() {
 # Register the system LaunchDaemon. Needs root: the plist lands in
 # /Library/LaunchDaemons and bootstrap targets the system domain, and the
 # state dir is the root-owned /Library/Application Support/waired.
+# darwin_register_agent registers the system LaunchDaemon. Non-fatal by
+# design: install.sh runs under `set -eu`, so an unguarded failure here used
+# to abort the whole installer, skipping log rotation, the control-URL write,
+# `waired init` and the next-steps block — and leaving a raw Go error as the
+# last thing on screen with no guidance. Linux does not behave that way
+# (linux_service_up warns and continues) and neither does Windows; macOS was
+# the outlier. Warn, record it for darwin_next_steps, and let the rest of the
+# configuration land.
 darwin_register_agent() {
     state_dir="$1"
     common_log "Registering waired-agent system LaunchDaemon (sudo)"
@@ -1365,11 +1378,28 @@ darwin_register_agent() {
         common_log "  (dry-run) would: $SUDO $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$state_dir\"${LOG_LEVEL:+ -- --log-level $LOG_LEVEL}"
         return 0
     fi
+    _reg_rc=0
     if [ -n "$LOG_LEVEL" ]; then
-        $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir" -- --log-level "$LOG_LEVEL"
+        $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir" -- --log-level "$LOG_LEVEL" || _reg_rc=$?
     else
-        $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir"
+        $SUDO "$WAIRED_DARWIN_BINDIR/waired-agent" install --state-dir "$state_dir" || _reg_rc=$?
     fi
+    if [ "$_reg_rc" -ne 0 ]; then
+        DARWIN_REGISTER_FAILED=1
+        common_warn "could not register the background service (exit $_reg_rc) — continuing with the rest of the install."
+        darwin_register_recovery_hint
+    fi
+    return 0
+}
+
+# darwin_register_recovery_hint prints the actionable recovery for a failed
+# LaunchDaemon registration. Shared by the warning at failure time and by
+# darwin_next_steps, so the instruction is also the LAST thing on screen —
+# a warning 200 lines up is a warning nobody reads.
+darwin_register_recovery_hint() {
+    common_warn "  Retry with: sudo $WAIRED_DARWIN_BINDIR/waired-agent install --state-dir \"$DARWIN_STATE_DIR\""
+    common_warn "  If it says 'bootstrap: exit status 5', clear a stale launchd override first:"
+    common_warn "    sudo launchctl enable system/com.waired.agent"
 }
 
 # darwin_install_log_rotation drops a newsyslog(8) config so the agent's
@@ -1383,9 +1413,18 @@ darwin_install_log_rotation() {
         common_log "  (dry-run) would install newsyslog rotation at $conf"
         return 0
     fi
+    # Capability guard + non-fatal write, the same shape as linux_service_up's
+    # `[ -d /run/systemd/system ] || return 0` and `|| common_warn`. Under
+    # `set -eu` an unguarded tee here would abort the installer over log
+    # rotation — cosmetic next to the sign-in and next-steps blocks that come
+    # after it.
+    if [ ! -d /etc/newsyslog.d ]; then
+        common_warn "/etc/newsyslog.d not present — skipping log rotation; the daemon logs under /Library/Logs will grow unbounded."
+        return 0
+    fi
     common_log "Installing log rotation ($conf)"
     # shellcheck disable=SC2086  # $SUDO is intentionally word-split (empty when root)
-    $SUDO tee "$conf" >/dev/null <<'NEWSYSLOG'
+    if ! $SUDO tee "$conf" >/dev/null <<'NEWSYSLOG'
 # waired-agent system LaunchDaemon stdout/stderr. macOS has no journald, so
 # bound these the way the Linux journal and the Windows Event Log are bounded:
 # rotate at 1 MB, keep 5 gzip'd archives (size-based only). Caveat: launchd
@@ -1395,6 +1434,10 @@ darwin_install_log_rotation() {
 /Library/Logs/waired-agent.out.log   root:wheel    644  5     1024 *    ZN
 /Library/Logs/waired-agent.err.log   root:wheel    644  5     1024 *    ZN
 NEWSYSLOG
+    then
+        common_warn "could not write $conf — skipping log rotation; the daemon logs under /Library/Logs will grow unbounded."
+    fi
+    return 0
 }
 
 # darwin_write_control_url persists $CONTROL_URL into the macOS state-dir
@@ -1405,7 +1448,8 @@ NEWSYSLOG
 # right Control Plane. Unlike Linux (systemd EnvironmentFile) the launchd
 # plist cannot consume an env file, so this feeds `waired init` only; the
 # daemon reads ControlURL from agent.json that init writes. Must run after
-# darwin_register_agent has created the (0700, root-owned) state dir.
+# darwin_register_agent has created the (0700, root-owned) state dir — and
+# since that step is now non-fatal, the dir may legitimately be absent here.
 darwin_write_control_url() {
     state_dir="$1"
     [ -z "$CONTROL_URL" ] && return 0
@@ -1413,6 +1457,16 @@ darwin_write_control_url() {
 
     if [ "$DRY_RUN" = 1 ]; then
         common_log "  (dry-run) would write WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
+        return 0
+    fi
+
+    # No state dir means darwin_register_agent did not get far enough to
+    # create it. Skip rather than abort (parity with linux_apt_write_control_url's
+    # "env_file not present after install — skipping auto-config"); `waired
+    # init` still takes --control directly from darwin_maybe_init.
+    # shellcheck disable=SC2086
+    if ! $SUDO test -d "$state_dir"; then
+        common_warn "$state_dir does not exist — skipping the control-URL write."
         return 0
     fi
 
@@ -1425,7 +1479,10 @@ darwin_write_control_url() {
     fi
 
     common_log "Writing WAIRED_CONTROL_URL=$CONTROL_URL to $env_file"
-    printf 'WAIRED_CONTROL_URL=%s\n' "$CONTROL_URL" | $SUDO tee -a "$env_file" >/dev/null
+    if ! printf 'WAIRED_CONTROL_URL=%s\n' "$CONTROL_URL" | $SUDO tee -a "$env_file" >/dev/null; then
+        common_warn "could not write $env_file — pass --control to 'sudo waired init' instead."
+        return 0
+    fi
     # Keep it owner-only, consistent with the 0700 state dir.
     $SUDO chmod 0600 "$env_file" 2>/dev/null || true
 }
@@ -1637,6 +1694,12 @@ More:         waired init --help
 Quickstart:   https://github.com/waired-ai/waired/blob/main/docs/quickstarts/README.md
 
 EOF
+    # Registration failed earlier and the install deliberately carried on, so
+    # say so last — everything printed above assumes a running daemon.
+    if [ "$DARWIN_REGISTER_FAILED" = 1 ]; then
+        common_warn "The background service is NOT registered — waired status will report it as not running."
+        darwin_register_recovery_hint
+    fi
 }
 
 # ---------------------------------------------------------------------

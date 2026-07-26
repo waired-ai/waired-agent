@@ -55,6 +55,7 @@ BINDIR="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
 STATE_DIR="/Library/Application Support/waired"
 LABEL="com.waired.agent"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
+NEWSYSLOG_CONF="/etc/newsyslog.d/waired-agent.conf"
 MGMT="http://127.0.0.1:9476/waired/v1/status"
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
@@ -412,6 +413,15 @@ fi
 
 sudo test -f "$PLIST"         && ok "system LaunchDaemon plist written ($LABEL)" || bad "LaunchDaemon plist missing ($PLIST)"
 sudo test -d "$STATE_DIR"     && ok "system state dir present"                   || bad "state dir missing ($STATE_DIR)"
+
+# Log rotation is installed immediately AFTER daemon registration, so its
+# absence is the signature of an installer that aborted mid-run — which is
+# exactly what an unguarded `set -eu` failure in darwin_register_agent used to
+# cause, silently skipping this, the control-URL write, init and next-steps.
+# Asserting the last step of the run is how that class of abort becomes a test
+# failure rather than a half-configured host.
+sudo test -f "$NEWSYSLOG_CONF" && ok "log rotation installed ($NEWSYSLOG_CONF)" \
+  || bad "newsyslog drop-in missing ($NEWSYSLOG_CONF) — did install.sh abort mid-run?"
 owner="$(sudo stat -f '%Su' "$STATE_DIR" 2>/dev/null || true)"
 [ "$owner" = "root" ] && ok "state dir owned by root ($owner)" || bad "state dir owner = $owner (want root)"
 
