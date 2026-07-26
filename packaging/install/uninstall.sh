@@ -414,6 +414,15 @@ darwin_uninstall() {
     fi
     # shellcheck disable=SC2086
     common_run $SUDO launchctl bootout system/com.waired.agent 2>/dev/null || true
+    # Clear any persistent launchd override (#176). waired-agent builds between
+    # 2026-07-15 and that fix ran `launchctl disable` here, which WRITES an
+    # entry into /var/db/com.apple.xpc.launchd/disabled.plist — it outlives the
+    # plist removed below, the state dir, --clean and a reboot, and makes every
+    # later `launchctl bootstrap` fail with EIO(5). The binary we just delegated
+    # to may well be one of those builds, so undo it unconditionally rather than
+    # leaving the host unable to reinstall.
+    # shellcheck disable=SC2086
+    common_run $SUDO launchctl enable system/com.waired.agent 2>/dev/null || true
     # shellcheck disable=SC2086
     common_run $SUDO rm -f /Library/LaunchDaemons/com.waired.agent.plist
     # newsyslog log-rotation drop-in (install.sh's darwin_install_log_rotation).
@@ -463,8 +472,14 @@ darwin_uninstall() {
             common_run $SUDO rm -rf "$WAIRED_STATE_DIR"
         fi
         common_log "Removing logs"
+        # The *.gz globs catch the archives newsyslog's drop-in rotates the
+        # daemon logs into (waired-agent.out.log.0.gz …); without them a
+        # --clean left most of the log data on disk. An unmatched glob passes
+        # through literally and `rm -f` ignores it, so this is safe when the
+        # host never rotated.
         # shellcheck disable=SC2086
-        common_run $SUDO rm -f /Library/Logs/waired-agent.out.log /Library/Logs/waired-agent.err.log
+        common_run $SUDO rm -f /Library/Logs/waired-agent.out.log /Library/Logs/waired-agent.err.log \
+            /Library/Logs/waired-agent.out.log.*.gz /Library/Logs/waired-agent.err.log.*.gz
         [ -n "$home" ] && common_run rm -f \
             "$home/Library/Logs/waired-tray.out.log" \
             "$home/Library/Logs/waired-tray.err.log"

@@ -41,6 +41,7 @@ waired doctor
 - [応答が返ってこない / Engine が not ready のまま](#no-answer-comes-back)
 - [Claude Code がクラウドを使い続ける](#claude-code-is-still-using-the-cloud)
 - [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
+- [macOS で常駐サービスが一度も起動しない](#macos-the-background-service-never-starts)
 - [Windows で 502 エラーになる](#windows-i-get-a-502-error)
 
 **遅い・おかしい**
@@ -224,9 +225,37 @@ Restart-Service waired-agent           # Windows（管理者）
 ```
 
 macOS ではシステムが自動的に再起動します。戻らない場合は `waired doctor` を実行するか、
-パソコンを再起動してください。
+パソコンを再起動してください。一度も起動していない場合は
+[次の項目](#macos-the-background-service-never-starts)を参照してください。
 
 再起動は一時的な不整合の多くを解消するので、込み入った対処の前に試す価値があります。
+
+<a id="macos-the-background-service-never-starts"></a>
+
+## macOS で常駐サービスが一度も起動しない
+
+インストールは完了したのに常駐サービスが立ち上がらず、`--clean` を付けて入れ直しても
+変わらない — この組み合わせはたいてい、macOS 側でサービスが**無効（disabled）**として
+記録されていることを意味します。2026 年 7 月 15 日から今回のリリースまでの間に
+インストールして削除した Waired は、この記録を残していました。アンインストールや
+再インストール、パソコンの再起動でも消えません。
+
+確認方法:
+
+```sh
+sudo launchctl print-disabled system | grep waired
+```
+
+`"com.waired.agent" => true` と出れば無効化されています。記録を消してサービスを
+起動します:
+
+```sh
+sudo launchctl enable system/com.waired.agent
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.waired.agent.plist
+```
+
+現在は Waired のインストール／アップデート時に自動で解除されるので、これらのコマンドが
+必要なのはインストーラー自体を実行できないパソコンだけです。
 
 <a id="windows-i-get-a-502-error"></a>
 
@@ -370,6 +399,7 @@ Claude Code はステータス行を 1 つしか使わず、プロジェクト�
 | | |
 |---|---|
 | Linux | `journalctl -u waired-agent -e` |
+| macOS | `/Library/Logs/waired-agent.err.log`、または `sudo log show --predicate 'process == "waired-agent"' --last 10m` |
 | Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
 | AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`）。自前の Ollama を使っている場合は `~/.ollama/logs/server.log`。 |
 

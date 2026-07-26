@@ -115,6 +115,13 @@ func TestRenderLaunchDaemonPlist_EscapesSpecialChars(t *testing.T) {
 type fakeLaunchctl struct {
 	calls   [][]string
 	respond map[string]launchctlResp
+
+	// simulateDisabledDB models the one launchd behaviour that matters for
+	// #176: a per-label entry in /var/db/com.apple.xpc.launchd/disabled.plist
+	// makes `bootstrap` fail with EIO(5) until `enable` clears it. Off by
+	// default, so every other test sees the plain recorder above.
+	simulateDisabledDB bool
+	disabled           bool
 }
 
 type launchctlResp struct {
@@ -125,6 +132,19 @@ type launchctlResp struct {
 
 func (f *fakeLaunchctl) fn(args []string) ([]byte, []byte, error) {
 	f.calls = append(f.calls, append([]string(nil), args...))
+	if f.simulateDisabledDB {
+		switch args[0] {
+		case "enable":
+			f.disabled = false
+		case "disable":
+			f.disabled = true
+		case "bootstrap":
+			if f.disabled {
+				return nil, []byte("Bootstrap failed: 5: Input/output error"),
+					fmt.Errorf("exit status 5")
+			}
+		}
+	}
 	if r, ok := f.respond[args[0]]; ok {
 		return r.stdout, r.stderr, r.err
 	}
@@ -334,24 +354,88 @@ func TestInstall_SecuresStateDir(t *testing.T) {
 	}
 }
 
-// TestUninstall_DisablesSystemLabel asserts Uninstall inverts Install's
-// `launchctl enable` with a best-effort `launchctl disable`, so no stale
-// per-label override lingers in launchd's disabled DB (the macOS analog of
-// Linux's `systemctl disable`).
-func TestUninstall_DisablesSystemLabel(t *testing.T) {
+// TestUninstall_DoesNotDisableSystemLabel pins the inverse of what this test
+// used to assert (#176). `launchctl disable` looks like the macOS analog of
+// Linux Uninstall's `systemctl disable`, but it is not: systemd's disable
+// removes symlinks, while launchd's WRITES a persistent per-label entry into
+// /var/db/com.apple.xpc.launchd/disabled.plist. That entry survives the plist
+// removal below it, the state dir, `uninstall.sh --clean` and a reboot, and
+// makes every later `launchctl bootstrap` fail with EIO(5) — so uninstalling
+// once left the host unable to ever run the daemon again.
+func TestUninstall_DoesNotDisableSystemLabel(t *testing.T) {
 	f := withFakeLaunchctl(t)
 	withTempDaemonDir(t)
 	if err := (darwinManager{}).Uninstall(); err != nil {
 		t.Fatalf("Uninstall: %v", err)
 	}
-	var sawDisable bool
 	for _, c := range f.calls {
-		if c[0] == "disable" && len(c) >= 2 && c[1] == "system/"+darwinLabel {
-			sawDisable = true
+		if c[0] == "disable" {
+			t.Errorf("Uninstall must NOT `launchctl disable` (it writes a persistent "+
+				"override that no later install can clear); calls=%v", f.calls)
 		}
 	}
-	if !sawDisable {
-		t.Errorf("Uninstall must `launchctl disable system/%s`; calls=%v", darwinLabel, f.calls)
+}
+
+// TestInstall_EnablesBeforeBootstrap pins the ordering that makes the #176
+// self-heal work. Install still enables after bootstrap (the "survives a
+// reboot" bit), but that call is unreachable on an already-disabled host,
+// because bootstrap returns EIO(5) and Install returns early. The clearing
+// enable therefore has to come first.
+func TestInstall_EnablesBeforeBootstrap(t *testing.T) {
+	f := withFakeLaunchctl(t)
+	withRoot(t)
+	withTempDaemonDir(t)
+
+	cfg := Config{
+		Binary:   "/usr/local/bin/waired-agent",
+		StateDir: filepath.Join(t.TempDir(), "state"),
+		MgmtAddr: "127.0.0.1:9476",
+	}
+	if err := (darwinManager{}).Install(cfg); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	firstEnable, firstBootstrap := -1, -1
+	for i, c := range f.calls {
+		if firstEnable < 0 && c[0] == "enable" && len(c) >= 2 && c[1] == "system/"+darwinLabel {
+			firstEnable = i
+		}
+		if firstBootstrap < 0 && c[0] == "bootstrap" {
+			firstBootstrap = i
+		}
+	}
+	if firstEnable < 0 || firstBootstrap < 0 {
+		t.Fatalf("want both an `enable system/%s` and a `bootstrap` call; calls=%v", darwinLabel, f.calls)
+	}
+	if firstEnable > firstBootstrap {
+		t.Errorf("`enable` (call %d) must precede `bootstrap` (call %d); calls=%v",
+			firstEnable, firstBootstrap, f.calls)
+	}
+}
+
+// TestInstall_RecoversFromDisabledLabel is the #176 regression test: a host
+// carrying the override an older uninstall wrote must come back on the next
+// installer run, with no manual step. The installer replaces binaries before
+// registering, so this Install is what every affected Mac reaches — including
+// via `install.sh --clean`, which is the flag users try when things break and
+// which (before this fix) was the very path that pinned the broken state.
+func TestInstall_RecoversFromDisabledLabel(t *testing.T) {
+	f := withFakeLaunchctl(t)
+	f.simulateDisabledDB = true
+	f.disabled = true // as left by a pre-#176 `waired-agent uninstall`
+	withRoot(t)
+	withTempDaemonDir(t)
+
+	cfg := Config{
+		Binary:   "/usr/local/bin/waired-agent",
+		StateDir: filepath.Join(t.TempDir(), "state"),
+		MgmtAddr: "127.0.0.1:9476",
+	}
+	if err := (darwinManager{}).Install(cfg); err != nil {
+		t.Fatalf("Install on a disabled label must self-heal, got: %v", err)
+	}
+	if f.disabled {
+		t.Errorf("label still disabled after Install; calls=%v", f.calls)
 	}
 }
 

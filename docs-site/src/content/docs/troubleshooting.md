@@ -38,6 +38,7 @@ most problems on its own.
 - [No answer comes back / the engine stays “not ready”](#no-answer-comes-back)
 - [Claude Code is still using the cloud](#claude-code-is-still-using-the-cloud)
 - [A command says “waired-agent is not running”](#a-command-says-waired-agent-is-not-running)
+- [macOS: the background service never starts](#macos-the-background-service-never-starts)
 - [Windows: I get a 502 error](#windows-i-get-a-502-error)
 
 **Answers are wrong or slow**
@@ -206,10 +207,36 @@ Restart-Service waired-agent           # Windows (administrator)
 ```
 
 On macOS the system restarts it for you; if it does not come back, run
-`waired doctor` or restart the computer.
+`waired doctor` or restart the computer — and if it has *never* started, see
+[the next section](#macos-the-background-service-never-starts).
 
 A restart also clears most temporary inconsistencies, so it is worth trying
 before anything more involved.
+
+## macOS: the background service never starts
+
+The installer finished, but the service never comes up — and reinstalling,
+even with `--clean`, changes nothing. That combination usually means macOS
+has the service marked as **disabled**. A Waired version that was installed
+and then removed between 15 July 2026 and this release left that mark behind,
+and it survives uninstalling, reinstalling and restarting the computer.
+
+Check for it:
+
+```sh
+sudo launchctl print-disabled system | grep waired
+```
+
+`"com.waired.agent" => true` means it is disabled. Clear the mark and start
+the service:
+
+```sh
+sudo launchctl enable system/com.waired.agent
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.waired.agent.plist
+```
+
+Installing or updating Waired now clears this for you, so you should only need
+these commands on a machine where the installer itself cannot be run.
 
 ## Windows: I get a 502 error
 
@@ -344,6 +371,7 @@ Only after `waired doctor`:
 | | |
 |---|---|
 | Linux | `journalctl -u waired-agent -e` |
+| macOS | `/Library/Logs/waired-agent.err.log`, or `sudo log show --predicate 'process == "waired-agent"' --last 10m` |
 | Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
 | The AI engine | `…/runtimes/ollama/logs/engine.log` under Waired's state folder — `/var/lib/waired/…` on Linux, `/Library/Application Support/waired/…` on macOS. If you brought your own Ollama: `~/.ollama/logs/server.log`. |
 

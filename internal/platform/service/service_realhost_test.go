@@ -28,6 +28,9 @@ import (
 //  6. Start (kickstart -k) — restarts the job.
 //  7. Uninstall — bootout + remove plist.
 //  8. stat the plist path — must be gone.
+//  9. launchctl print-disabled — Uninstall must leave no override (#176).
+//  10. Install again — the uninstall→reinstall leg, which is the only way
+//      to observe the override bug against real launchd.
 //
 // To run manually:
 //
@@ -99,4 +102,31 @@ func TestRealLaunchdRoundTrip(t *testing.T) {
 	if _, err := os.Stat(systemLaunchDaemonPath(darwinLabel)); err == nil {
 		t.Errorf("plist should be removed after Uninstall")
 	}
+
+	// 8. Uninstall must leave nothing behind in launchd's disabled DB
+	// (#176). A `disable` here would be invisible on disk — the plist is
+	// gone and the state dir is gone — yet it would persist across reboots
+	// in /var/db/com.apple.xpc.launchd/disabled.plist and break step 9
+	// forever. Absent, "=> false" and "=> enabled" all mean enabled; only
+	// "=> true" / "=> disabled" is the failure.
+	dis, _ := exec.Command("/bin/launchctl", "print-disabled", "system").CombinedOutput()
+	for _, line := range strings.Split(string(dis), "\n") {
+		if !strings.Contains(line, darwinLabel) {
+			continue
+		}
+		low := strings.ToLower(line)
+		if strings.Contains(low, "=> true") || strings.Contains(low, "=> disabled") {
+			t.Errorf("Uninstall left a persistent launchd override: %s", strings.TrimSpace(line))
+		}
+	}
+
+	// 9. Reinstall. This is the leg CI cannot provide — installtest runs on
+	// a fresh macos-14 VM per run and never reinstalls after its teardown —
+	// and it is exactly where the override bug surfaced in the field:
+	// bootstrap fails EIO(5) on a disabled label, so a host that had ever
+	// been uninstalled could not be reinstalled.
+	if err := (darwinManager{}).Install(cfg); err != nil {
+		t.Fatalf("Install after Uninstall (uninstall→reinstall leg): %v", err)
+	}
+	t.Logf("reinstall after uninstall OK")
 }
