@@ -1601,8 +1601,17 @@ function Start-TrayAsOriginalUser {
     if (-not (Test-Path -LiteralPath $tray)) { return }
     Common-Run "launch waired-tray as the original user (via explorer.exe)" {
         try {
+            # Quoted: Start-Process does no quoting of its own, and the default
+            # install dir is 'C:\Program Files\Waired' -- always a space. Unlike
+            # the elevation argv (#177) this token is consumed by explorer.exe,
+            # which takes a shell path rather than a CommandLineToArgvW argv, so
+            # a failure here would surface as "the tray silently never starts"
+            # rather than a parameter error. Explorer's tolerance of the
+            # unquoted form is undocumented; the quoted form is the documented
+            # one, and for a real file path (no embedded quote, no trailing
+            # backslash) the two quoting rules coincide.
             Start-Process -FilePath (Join-Path $env:SystemRoot 'explorer.exe') `
-                -ArgumentList $tray -ErrorAction Stop
+                -ArgumentList (ConvertTo-NativeArg $tray) -ErrorAction Stop
         } catch {
             Common-Warn "could not auto-launch the tray ($($_.Exception.Message.Trim())); start `"$tray`" yourself or it runs at next logon"
         }

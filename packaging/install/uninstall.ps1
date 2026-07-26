@@ -235,6 +235,39 @@ function Test-IsAdmin {
     return $prin.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# Quote one token per the CommandLineToArgvW rules. Start-Process joins
+# -ArgumentList with single spaces and quotes NOTHING, for -Verb RunAs exactly
+# as for a plain launch, so an unquoted path with a space arrives at the child
+# split across two parameters. install.ps1 carries the same helper for the same
+# reason (#177); the two scripts are downloaded and run independently, so each
+# has to be self-contained.
+function ConvertTo-NativeArg {
+    param([string]$Value)
+    if ($null -eq $Value) { $Value = '' }
+    if ($Value -ne '' -and $Value -notmatch '[ \t"]') { return $Value }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    for ($i = 0; $i -lt $Value.Length; $i++) {
+        $slashes = 0
+        while ($i -lt $Value.Length -and $Value[$i] -eq '\') { $i++; $slashes++ }
+        if ($i -ge $Value.Length) {
+            # Backslashes that run into the closing quote must be doubled,
+            # or they escape the quote itself.
+            [void]$sb.Append('\' * ($slashes * 2))
+            break
+        }
+        if ($Value[$i] -eq '"') {
+            [void]$sb.Append('\' * ($slashes * 2 + 1))
+            [void]$sb.Append('"')
+        } else {
+            [void]$sb.Append('\' * $slashes)
+            [void]$sb.Append($Value[$i])
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
 function Show-Help {
 @"
 uninstall.ps1 - remove Waired on Windows.
@@ -336,6 +369,13 @@ function Invoke-SelfElevate {
         Invoke-WebRequest -Uri $url -OutFile $tempScript -UseBasicParsing
         $psArgs += @('-File', $tempScript) + $passthrough
     }
+
+    # Both value-bearing tokens can contain a space: $PSCommandPath (the
+    # uninstaller may sit anywhere, and install.ps1 -Clean invokes a sibling of
+    # its own path) and $LogPath / $tempScript, which are %TEMP%-derived and so
+    # carry the username. Unquoted, the child bound half a path and dropped the
+    # rest, exactly as install.ps1 did before #177.
+    $psArgs = @($psArgs | ForEach-Object { ConvertTo-NativeArg $_ })
 
     try {
         $proc = Start-Process -FilePath 'powershell.exe' `
