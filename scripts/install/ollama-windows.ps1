@@ -76,6 +76,17 @@
     ROCm overlay) runs on every invocation so re-running with -GpuMode rocm
     on a previously vulkan-installed host correctly adds the overlay.
 
+    Install atomicity and the completion receipt:
+        The base archive is extracted and signature-verified in
+        "<InstallDir>.new" and only then swapped into place, so a failed
+        download or a failed signature check cannot leave a partially
+        installed Ollama behind. The .waired-managed.json marker is
+        written LAST, after PATH, models dir, GPU env and the post-install
+        check have all succeeded -- it is a completion receipt, and
+        `waired init` repairs an install under %ProgramFiles%\Ollama that
+        does not carry one. Re-running against such an install is cheap:
+        the base bits are already there, so nothing is downloaded again.
+
 .PARAMETER ZipUrl
     URL of ollama-windows-amd64.zip. Defaults to the bundled-pinned
     v0.31.1 (kept in sync with OllamaPinnedVersion in
@@ -468,6 +479,32 @@ function Expand-Overlay {
     Expand-Archive -LiteralPath $ZipPath -DestinationPath $Target -Force
 }
 
+# Promote-StagedInstall replaces $Target's contents with an already-verified
+# staging tree. $Staged sits beside $Target on the same volume, so each
+# per-entry Move-Item is a rename rather than a copy. The target directory
+# itself is kept (not renamed) for the same reason Clean-InstallDir keeps it:
+# Defender / antivirus commonly holds a handle on it, which fails a directory
+# rename but not a move into it.
+function Promote-StagedInstall {
+    param(
+        [string]$Staged,
+        [string]$Target
+    )
+    Clean-InstallDir -Target $Target
+    Write-Host "Installing into $Target"
+    try {
+        Get-ChildItem -LiteralPath $Staged -Force | ForEach-Object {
+            Move-Item -LiteralPath $_.FullName -Destination (Join-Path $Target $_.Name) -Force
+        }
+    } catch {
+        # A failure part-way through the swap would leave a tree that still
+        # has ollama.exe in it, which the next run would read as a complete
+        # base install and never re-extract. Remove it instead.
+        Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
 function Verify-Signature {
     param([string]$Exe)
 
@@ -549,8 +586,15 @@ function Add-ToMachinePath {
 # Write-WairedManagedMarker drops the marker file `waired init` uses to
 # recognise this Ollama as waired's own install (internal/setup DetectOllama
 # -> WairedManaged), so init never asks the bundled-vs-reuse question about
-# an Ollama waired itself put here. Best-effort: a write failure only means
-# one extra question at sign-in.
+# an Ollama waired itself put here.
+#
+# It is also the install's COMPLETION RECEIPT: the caller writes it only
+# after PATH, models dir, GPU env and Test-Install have all succeeded, and
+# cmd/waired/init_engine.go treats bits under %ProgramFiles%\Ollama with no
+# marker as an incomplete install to repair (#190). Still best-effort: a
+# write failure costs one cheap repair pass on the next run (the base bits
+# are already there, so nothing is re-downloaded), which is a far better
+# outcome than failing an otherwise complete install.
 function Write-WairedManagedMarker {
     param([string]$InstallDir)
     $marker = Join-Path $InstallDir '.waired-managed.json'
@@ -558,14 +602,15 @@ function Write-WairedManagedMarker {
         Set-Content -LiteralPath $marker -Encoding Ascii -Value '{"managed_by":"waired","installer":"ollama-windows.ps1"}'
         Write-Host "Marked as waired-managed: $marker"
     } catch {
-        Write-Warning "could not write $marker ($($_.Exception.Message)); `waired init` may ask about this install"
+        Write-Warning "could not write $marker ($($_.Exception.Message)); this install will be treated as incomplete and repaired on the next run"
     }
 }
 
 function Test-Install {
     param(
         [string]$InstallDir,
-        [string]$GpuMode
+        [string]$GpuMode,
+        [switch]$NoPath
     )
 
     $exe = Join-Path $InstallDir 'ollama.exe'
@@ -574,6 +619,29 @@ function Test-Install {
     }
     Write-Host "Installed at: $exe"
     Write-Host "GPU mode:     $GpuMode"
+
+    # PATH and the GPU env vars are part of a COMPLETE install, and the
+    # marker written straight after this call is what records that
+    # completeness -- so verify them here rather than trusting that the
+    # writers above ran. Without the GPU vars recent Ollama drops the iGPU
+    # and quietly runs on CPU, which is exactly the half-configured state
+    # #190 is about.
+    if (-not $NoPath) {
+        $machinePath = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+        if ((($machinePath -split ';') | Where-Object { $_ -eq $InstallDir }).Count -eq 0) {
+            throw "Post-install check: $InstallDir is not on the machine PATH."
+        }
+        Write-Host "Machine PATH: $InstallDir"
+    }
+
+    if ($GpuMode -eq 'vulkan') {
+        foreach ($name in @('OLLAMA_VULKAN', 'OLLAMA_IGPU_ENABLE')) {
+            if ([Environment]::GetEnvironmentVariable($name, 'Machine') -ne '1') {
+                throw "Post-install check: $name is not set at Machine scope (GPU mode is 'vulkan')."
+            }
+        }
+        Write-Host 'GPU env:      OLLAMA_VULKAN=1, OLLAMA_IGPU_ENABLE=1 (Machine scope)'
+    }
 
     if ($GpuMode -eq 'rocm') {
         $rocmDir = Join-Path $InstallDir 'lib\ollama\rocm'
@@ -606,28 +674,52 @@ Assert-Admin
 
 $resolvedMode = Resolve-GpuMode -Requested $GpuMode
 
-$existing = Get-OllamaExePath
-$needBaseInstall = (-not $existing) -or $Force
+# Decide on OUR target directory, not on "an Ollama exists somewhere":
+# Get-OllamaExePath also matches the per-user OllamaSetup.exe layout under
+# %LOCALAPPDATA%, and counting that as installed left $InstallDir empty
+# while every step below still ran against it -- adding a non-existent
+# directory to PATH, failing to write the marker, and finally throwing in
+# Test-Install.
+$targetExe = Join-Path $InstallDir 'ollama.exe'
+$existing  = Get-OllamaExePath
+$needBaseInstall = (-not (Test-Path -LiteralPath $targetExe)) -or $Force
 $needRocmInstall = $resolvedMode -eq 'rocm' -and (
     $needBaseInstall -or
     -not (Test-Path -LiteralPath (Join-Path $InstallDir 'lib\ollama\rocm'))
 )
 
 if ($needBaseInstall) {
-    $baseZip = Stage-ZipDownload -Url $ZipUrl -MinSizeBytes (50MB)
+    if ($existing -and ($existing -ne $targetExe)) {
+        Write-Host "Note: another Ollama is present at $existing; installing waired's own copy into $InstallDir"
+    }
+    $stagedDir = "$InstallDir.new"
+    $baseZip   = Stage-ZipDownload -Url $ZipUrl -MinSizeBytes (50MB)
+    $stageRoot = Split-Path -Parent $baseZip
     try {
-        Clean-InstallDir -Target $InstallDir
-        Expand-Overlay -ZipPath $baseZip -Target $InstallDir -Label 'base archive'
-        $exe = Join-Path $InstallDir 'ollama.exe'
-        if (-not (Test-Path -LiteralPath $exe)) {
-            throw "Extraction completed but ollama.exe was not found at $exe."
+        # Extract and verify BESIDE the target, and swap only once the bits
+        # are known good. Verifying after Clean-InstallDir + Expand-Overlay
+        # had already run is what stranded a half-installed Ollama whenever
+        # the signature check failed (#190): binaries on disk, no PATH
+        # entry, no GPU env and no marker -- and every later run then
+        # skipped the install, so repeated clean reinstalls reproduced the
+        # identical failure.
+        Remove-Item -LiteralPath $stagedDir -Recurse -Force -ErrorAction SilentlyContinue
+        Expand-Overlay -ZipPath $baseZip -Target $stagedDir -Label 'base archive'
+        $stagedExe = Join-Path $stagedDir 'ollama.exe'
+        if (-not (Test-Path -LiteralPath $stagedExe)) {
+            throw "Extraction completed but ollama.exe was not found at $stagedExe."
         }
-        Verify-Signature -Exe $exe
+        Verify-Signature -Exe $stagedExe
+        # Free the archive before the swap so peak disk use does not grow
+        # relative to extracting in place.
+        Remove-Item -LiteralPath $baseZip -Force -ErrorAction SilentlyContinue
+        Promote-StagedInstall -Staged $stagedDir -Target $InstallDir
     } finally {
-        Remove-Item -LiteralPath (Split-Path -Parent $baseZip) -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stagedDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 } else {
-    Write-Host "Base install already present: $existing (pass -Force to reinstall)"
+    Write-Host "Base install already present: $targetExe (pass -Force to reinstall)"
 }
 
 if ($needRocmInstall) {
@@ -653,6 +745,10 @@ if ($resolvedMode -eq 'vulkan') {
     Set-MachineVulkanFlag
 }
 
+# Order matters: the marker is the completion receipt, so it goes last, only
+# once the post-install check has confirmed the binary, the PATH entry and
+# the GPU env vars. A marker written before this point would make a
+# half-configured install look complete forever (#190).
+Test-Install -InstallDir $InstallDir -GpuMode $resolvedMode -NoPath:$NoPath
 Write-WairedManagedMarker -InstallDir $InstallDir
-Test-Install -InstallDir $InstallDir -GpuMode $resolvedMode
 Write-Host 'Done.'
