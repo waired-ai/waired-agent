@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/waired-ai/waired-agent/internal/platform/browser"
 )
 
 // Check probes the live session for an SNI host and classifies the desktop.
@@ -14,7 +16,7 @@ import (
 // mutating anything.
 func Check() Result {
 	return evaluate(facts{
-		hasDisplay:     hasDisplay(),
+		hasDisplay:     browser.HasDisplay(),
 		hostRegistered: sniHostRegistered(),
 		desktop:        detectDesktop(),
 		wayland:        isWayland(),
@@ -81,20 +83,12 @@ func parseDesktop(xdgCurrentDesktop string) Desktop {
 	}
 }
 
-// hasDisplay reports whether a graphical session is present. A headless SSH
-// server has neither DISPLAY (X11) nor WAYLAND_DISPLAY — mirrors
-// internal/platform/browser.HasDisplay (kept local to avoid importing the
-// browser package for one predicate).
-func hasDisplay() bool {
-	return os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != ""
-}
-
 func isWayland() bool {
 	return os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("XDG_SESSION_TYPE") == "wayland"
 }
 
 func detectDesktop() Desktop {
-	if !hasDisplay() {
+	if !browser.HasDisplay() {
 		return DesktopNone
 	}
 	d := parseDesktop(os.Getenv("XDG_CURRENT_DESKTOP"))

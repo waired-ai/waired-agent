@@ -179,39 +179,6 @@ func shellExecuteRunAs(_ context.Context, exe string, args []string) error {
 	}
 }
 
-// OpenBrowser launches the URL with the user's default handler.
-// rundll32 url.dll,FileProtocolHandler is the safe form: it does not
-// require COM init and is the same call `start <url>` makes
-// internally. We deliberately do NOT shell out via `cmd /c start` —
-// that would inherit the tray's stdin and risk a window flash.
-func OpenBrowser(url string) error {
-	if url == "" {
-		return errors.New("OpenBrowser: empty url")
-	}
-	rundll, err := windows.UTF16PtrFromString("rundll32.exe")
-	if err != nil {
-		return err
-	}
-	args, err := windows.UTF16PtrFromString(`rundll32.exe url.dll,FileProtocolHandler ` + url)
-	if err != nil {
-		return err
-	}
-	var startupInfo windows.StartupInfo
-	startupInfo.Cb = uint32(unsafe.Sizeof(startupInfo))
-	var procInfo windows.ProcessInformation
-	if err := windows.CreateProcess(
-		rundll, args, nil, nil, false,
-		windows.CREATE_NO_WINDOW, // no console flash
-		nil, nil,
-		&startupInfo, &procInfo,
-	); err != nil {
-		return fmt.Errorf("OpenBrowser: CreateProcess: %w", err)
-	}
-	_ = windows.CloseHandle(procInfo.Process)
-	_ = windows.CloseHandle(procInfo.Thread)
-	return nil
-}
-
 // Clipboard format constants (winuser.h).
 const (
 	cfUnicodeText = 13

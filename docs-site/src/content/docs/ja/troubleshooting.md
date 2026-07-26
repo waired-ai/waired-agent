@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: cd71a78ad724c860
+sourceHash: 8b4b1052d107aece
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -30,6 +30,7 @@ waired doctor
 **セットアップ中**
 
 - [`waired` と入力したら「コマンドが見つかりません」と出た](#i-typed-waired-and-got-command-not-found)
+- [サインインでブラウザが開かない／別のブラウザが開く](#no-browser-opened-at-sign-in)
 - [セットアップが途中で止まった](#setup-stopped-partway)
 - [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
@@ -74,6 +75,26 @@ waired doctor
 
 Windows ではコマンドの実体は `C:\Program Files\Waired\waired.exe` です。
 `waired` だけで動かない場合も、このフルパスなら必ず動きます。
+
+<a id="no-browser-opened-at-sign-in"></a>
+
+## サインインでブラウザが開かない／別のブラウザが開く
+
+サインイン用のリンクは、ブラウザが開くより先に必ずターミナルに表示されます。
+そのため、いつでも手動で進められます。表示されたリンクをコピーして、普段使って
+いるブラウザに貼り付けてください。サインインはそのブラウザで行い、以降の
+セットアップも同じブラウザのまま進めてください。セットアップ画面は、
+サインインしたブラウザでしか開けません。
+
+普段使っていないブラウザが開いてしまった場合も同じです。サインインせずに閉じて、
+表示されたリンクを使いたいブラウザで開いてください。
+
+どちらも管理者権限でセットアップを実行したときに起きていたもので、最新版では
+修正済みです。
+
+```sh
+waired update
+```
 
 <a id="setup-stopped-partway"></a>
 
