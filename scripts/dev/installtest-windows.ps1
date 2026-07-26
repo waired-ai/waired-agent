@@ -674,23 +674,15 @@ try {
     # This CI runner is already Administrator, so the Tier-1 install below takes
     # install.ps1's inline Phase-2 path and NEVER crosses Invoke-SelfElevate --
     # which is exactly why #164 (the flag being dropped across UAC) survived
-    # unnoticed. These ARGTEST cases are the regression bar instead: they assert
-    # the propagation MECHANISM (the $env:WAIRED_LOG_LEVEL write that
-    # Start-Process passes to the elevated child) rather than the crossing.
+    # unnoticed. These cases assert the in-process fold; the crossing itself is
+    # asserted by the -StateFile block below.
     ItStep "install.ps1 -LogLevel asserts (#164)"
     $r = Invoke-Argtest @('-LogLevel','debug')
-    if ($r.Exit -eq 0 -and $r.Out -match 'LogLevel=debug EnvLogLevel=debug') { ItOk "-LogLevel debug is published to the env the elevated child inherits" }
+    if ($r.Exit -eq 0 -and $r.Out -match 'LogLevel=debug EnvLogLevel=debug') { ItOk "-LogLevel debug is published to the env every child of this process inherits" }
     else { ItBad "-LogLevel not published to the env (exit $($r.Exit)): $($r.Out.Trim())" }
     $r = Invoke-Argtest @('--log-level','DEBUG')
     if ($r.Exit -eq 0 -and $r.Out -match 'LogLevel=debug EnvLogLevel=debug') { ItOk "--log-level DEBUG folds + normalises (install.sh parity)" }
     else { ItBad "--log-level parity broken (exit $($r.Exit)): $($r.Out.Trim())" }
-    # The actual #164 regression test: two invocations in ONE process. The
-    # second gets no -LogLevel and must still resolve debug -- the same
-    # environment-block inheritance Start-Process gives the elevated Phase 2.
-    $r = Invoke-ArgtestRaw ("& '$installPs1' -LogLevel debug; & '$installPs1'")
-    $levels = [regex]::Matches($r.Out, 'LogLevel=(\S+) EnvLogLevel=') | ForEach-Object { $_.Groups[1].Value }
-    if ($r.Exit -eq 0 -and $levels.Count -eq 2 -and $levels[1] -eq 'debug') { ItOk "-LogLevel survives into a re-invoked install.ps1 (the UAC hand-off, #164)" }
-    else { ItBad "-LogLevel lost on re-invoke (levels: $($levels -join ',')): $($r.Out.Trim())" }
     # Validation must fire in Phase 1. ARGTEST returns before any download or
     # UAC, so reaching this die at all proves the check is no longer buried in
     # Invoke-AgentInstall (i.e. after the UAC click, inside a window that
@@ -698,6 +690,96 @@ try {
     $r = Invoke-Argtest @('--log-level','bogus')
     if ($r.Exit -ne 0 -and $r.Out -match 'must be one of') { ItOk "a bad --log-level dies before any privileged step" }
     else { ItBad "bad --log-level not rejected early (exit $($r.Exit)): $($r.Out.Trim())" }
+
+    # --- the UAC hand-off: -StateFile and the elevated argv (#192, #177) ------
+    # The previous regression test for this ran two install.ps1 invocations in
+    # ONE process and asserted the second still saw $env:WAIRED_LOG_LEVEL. That
+    # is a tautology: it observes an environment it never lost. The real child
+    # is created by the AppInfo service under -Verb RunAs, which builds a FRESH
+    # environment block -- so every WAIRED_* value Phase 1 resolved was dropped
+    # (#192), and -LogLevel was never actually fixed on that path.
+    #
+    # This runner is always Administrator, so it cannot raise UAC. It does not
+    # need to: scrubbing WAIRED_* from a child process reproduces exactly what
+    # CreateEnvironmentBlock does to the elevated one, and everything that has
+    # to survive now travels in -StateFile.
+    ItStep "install.ps1 UAC hand-off asserts (#192, #177)"
+    $stateFile   = Join-Path $env:TEMP "waired-it-state-$([Guid]::NewGuid().ToString('N')).json"
+    $stateLog    = Join-Path $env:TEMP "waired-it-state-$([Guid]::NewGuid().ToString('N')).log"
+    $probeDir    = Join-Path $env:TEMP "waired it space $([Guid]::NewGuid().ToString('N'))"
+    $probeScript = Join-Path $probeDir 'install.ps1'
+    New-Item -ItemType Directory -Path $probeDir -Force | Out-Null
+    Copy-Item -LiteralPath $installPs1 -Destination $probeScript -Force
+
+    # Phase 1: resolve a configuration that uses every mechanism at once -- a
+    # parameter (-LogLevel), a parameter whose default is an env read
+    # (-Control), and two env-only knobs with no parameter form at all
+    # (WAIRED_NO_TRAY, WAIRED_STATE_DIR) -- and capture the state document
+    # Invoke-SelfElevate would hand the child.
+    $env:WAIRED_ARGTEST_STATEFILE = $stateFile
+    $env:WAIRED_NO_TRAY           = '1'
+    $env:WAIRED_STATE_DIR         = 'C:\WairedStateProbe'
+    try {
+        $r = Invoke-ArgtestRaw ("& '$probeScript' -LogLevel debug -Control https://cp.example.test -LogPath '$stateLog'")
+    } finally {
+        Remove-Item Env:WAIRED_ARGTEST_STATEFILE -ErrorAction SilentlyContinue
+        Remove-Item Env:WAIRED_NO_TRAY           -ErrorAction SilentlyContinue
+        Remove-Item Env:WAIRED_STATE_DIR         -ErrorAction SilentlyContinue
+    }
+    $elevateArgs = if ($r.Out -match 'ElevateArgs=\[([^\]]*)\]') { $Matches[1] } else { '' }
+    if ($r.Exit -eq 0 -and (Test-Path -LiteralPath $stateFile)) { ItOk "Phase 1 writes the resolved state document" }
+    else { ItBad "Phase 1 wrote no state document (exit $($r.Exit)): $($r.Out.Trim())" }
+
+    # The crossing. Nothing but -StateFile reaches this process.
+    $r = Invoke-ArgtestRaw ("Get-ChildItem Env:WAIRED_* -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue; " +
+                            "`$env:WAIRED_ARGTEST='1'; & '$probeScript' -StateFile '$stateFile'")
+    if ($r.Exit -eq 0 -and $r.Out -match 'LogLevel=debug EnvLogLevel=debug') { ItOk "-LogLevel survives an environment the child did not inherit (#164 on the self-elevating path)" }
+    else { ItBad "-LogLevel lost across the boundary (exit $($r.Exit)): $($r.Out.Trim())" }
+    if ($r.Out -match 'NoTray=True') { ItOk "WAIRED_NO_TRAY crosses (it has no parameter form, so there was no workaround)" }
+    else { ItBad "WAIRED_NO_TRAY lost across the boundary: $($r.Out.Trim())" }
+    if ($r.Out -match 'StateDir=C:\\WairedStateProbe') { ItOk "WAIRED_STATE_DIR crosses" }
+    else { ItBad "WAIRED_STATE_DIR lost across the boundary: $($r.Out.Trim())" }
+    if ($r.Out -match 'ControlUrl=https://cp\.example\.test') { ItOk "the resolved Control URL crosses (it decided which CP the device enrols against)" }
+    else { ItBad "the Control URL lost across the boundary: $($r.Out.Trim())" }
+    if ($r.Out -match 'InstallDir=\S+ Files\\Waired') { ItOk "the resolved install dir crosses whole, spaces and all" }
+    else { ItBad "the install dir did not survive: $($r.Out.Trim())" }
+
+    # The argv itself (#177). 'C:\Program Files\Waired' used to split across two
+    # parameters, and the child died in Normalize-ExtraArgs before any
+    # diagnostics existed. Nothing configuration-bearing belongs in it any more.
+    if ($elevateArgs -match '-File "[^"]+ [^"]+"') { ItOk "the elevated argv quotes a script path containing spaces" }
+    else { ItBad "the elevated argv leaves a spaced script path unquoted: [$elevateArgs]" }
+    if ($elevateArgs -match '-StateFile' -and $elevateArgs -notmatch '-InstallDir' -and $elevateArgs -notmatch '-Control' -and $elevateArgs -notmatch '-LogLevel') { ItOk "the elevated argv carries no configuration, only -StagedZipPath / -StateFile" }
+    else { ItBad "configuration is still riding the elevated argv: [$elevateArgs]" }
+
+    # Execute that exact command line. Start-Process passes a single-string
+    # -ArgumentList through verbatim, so this is the real construction, not a
+    # re-quoted copy of it -- run from a directory whose name contains spaces.
+    if (-not $elevateArgs) {
+        ItBad "no elevated argv was printed, so it could not be executed"
+    } else {
+        $probeOut = Join-Path $probeDir 'child.out'
+        $env:WAIRED_ARGTEST = '1'
+        try {
+            $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $elevateArgs `
+                    -NoNewWindow -PassThru -Wait -RedirectStandardOutput $probeOut
+            $childOut = if (Test-Path -LiteralPath $probeOut) { (Get-Content -LiteralPath $probeOut -Raw) } else { '' }
+        } finally { Remove-Item Env:WAIRED_ARGTEST -ErrorAction SilentlyContinue }
+        if ($p.ExitCode -eq 0 -and $childOut -match 'LogLevel=debug') { ItOk "the constructed argv binds in a real child process (#177)" }
+        else { ItBad "the constructed argv did not bind (exit $($p.ExitCode)): $($childOut.Trim())" }
+    }
+
+    # A child that dies before its transcript exists still has to leave a trace
+    # the un-elevated parent can print -- the whole point of #177's third item.
+    $corruptState = Join-Path $probeDir 'corrupt.json'
+    Set-Content -LiteralPath $corruptState -Value '{ not json'
+    $r = Invoke-ArgtestRaw ("& '$probeScript' -StateFile '$corruptState'")
+    if ($r.Exit -ne 0 -and (Test-Path -LiteralPath "$corruptState.status")) { ItOk "an early elevated failure leaves a .status marker for the parent to read" }
+    else { ItBad "no .status marker after an early failure (exit $($r.Exit)): $($r.Out.Trim())" }
+
+    Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stateLog  -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $probeDir  -Recurse -Force -ErrorAction SilentlyContinue
 
     # --- the two pre-answered setup questions --------------------------------
     # `waired init`'s --inference-enabled / --share-with-mesh are Go bool flags:
