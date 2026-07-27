@@ -16,27 +16,28 @@ import (
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
 
-// mgmtSockPath returns a socket path short enough to bind. sockaddr_un's
-// sun_path is 104 bytes on darwin (108 on Linux), and t.TempDir() cannot stay
-// under that here: macOS puts TMPDIR at /var/folders/<2>/<30>/T/ — 49 bytes
-// before Go appends the test name, ten random digits and /001. This package's
-// names are long enough to reach 115, and bind() then fails with EINVAL, which
-// is what turned the darwin leg red the first time it ran (#152).
+// shortTempDir is t.TempDir() with a path short enough to bind a unix socket
+// under. macOS puts TMPDIR at /var/folders/<2>/<30>/T — 48 bytes — and
+// t.TempDir() then appends the test name, ten random digits and /001, which
+// overruns darwin's 104-byte sockaddr_un.sun_path and makes bind() fail with
+// EINVAL. That is what turned this suite red the first time it ran on macOS
+// (#152). Every site in the tree is fixed, not just the ones that happen to
+// overrun today: the rest sit near the boundary and fail as soon as a test
+// name grows. Reproducible on Linux with a 52-byte TMPDIR, which leaves the
+// same headroom against Linux's 108-byte limit (#216).
 //
-// os.MkdirTemp with a two-character prefix leaves ~33 bytes of headroom and,
-// unlike shortening TMPDIR from the workflow, keeps the constraint stated
-// where a test author will see it. The product solves the same problem for
-// real at internal/platform/paths/paths_unix.go (sunPathBudget + a hashed
-// fallback), pinned by a TMPDIR-independent test — so nothing here weakens
-// that guard.
-func mgmtSockPath(t *testing.T, name string) string {
+// Doing this here rather than shortening TMPDIR from the workflow keeps the
+// constraint stated where a test author will see it, and leaves the product's
+// own answer (internal/platform/paths/paths_unix.go's sunPathBudget plus a
+// hashed fallback, pinned by a TMPDIR-independent test) untouched.
+func shortTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "wt")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return filepath.Join(dir, name)
+	return dir
 }
 
 // serveMgmtSocket starts an httptest server on a unix-domain socket and
@@ -46,7 +47,7 @@ func mgmtSockPath(t *testing.T, name string) string {
 // the loopback TCP port.
 func serveMgmtSocket(t *testing.T, h http.Handler) {
 	t.Helper()
-	sock := mgmtSockPath(t, "mgmt.sock")
+	sock := filepath.Join(shortTempDir(t), "mgmt.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
@@ -123,7 +124,7 @@ func TestClient_WriteDialError(t *testing.T) {
 	// Short path here too: the contract under test is "the socket file is
 	// absent", and a path over sun_path would make it fail for the wrong
 	// reason on darwin.
-	t.Setenv(paths.MgmtSocketEnvOverride, mgmtSockPath(t, "absent.sock"))
+	t.Setenv(paths.MgmtSocketEnvOverride, filepath.Join(shortTempDir(t), "absent.sock"))
 	err := NewClient("").Pause(context.Background())
 	if err == nil {
 		t.Fatal("expected an error dialing a missing socket")

@@ -9,6 +9,24 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// shortTempDir is t.TempDir() with a path short enough to bind a unix socket
+// under. macOS puts TMPDIR at /var/folders/<2>/<30>/T — 48 bytes — and
+// t.TempDir() then appends the test name, ten random digits and /001, which
+// overruns darwin's 104-byte sockaddr_un.sun_path and makes bind() fail with
+// EINVAL. Every site here is fixed, not just the ones that happen to overrun
+// today: the rest sit near the boundary and fail as soon as a test name grows.
+// Reproducible on Linux with a 52-byte TMPDIR, which leaves the same headroom
+// against Linux's 108-byte limit (#216).
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wt")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // socketpairConns returns a connected pair of *net.UnixConn backed by an
 // AF_UNIX SOCK_STREAM socketpair — the in-memory analog of the broker<->agent
 // unix socket, so the fd hand-off can be tested without root or a real :443.
@@ -102,7 +120,7 @@ func TestSendRejectsNonTCP(t *testing.T) {
 	defer func() { _ = brokerConn.Close() }()
 	defer func() { _ = agentConn.Close() }()
 
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	uln, err := net.Listen("unix", dir+"/x.sock")
 	if err != nil {
 		t.Fatalf("unix listen: %v", err)
@@ -117,7 +135,7 @@ func TestSendRejectsNonTCP(t *testing.T) {
 // TestReceiveMissingSocket confirms the "broker not installed" path returns
 // (nil, nil) rather than an error, so the agent reads it as "proxy off".
 func TestReceiveMissingSocket(t *testing.T) {
-	ln, err := Receive(t.TempDir() + "/does-not-exist.sock")
+	ln, err := Receive(shortTempDir(t) + "/does-not-exist.sock")
 	if err != nil {
 		t.Fatalf("Receive(missing) error = %v, want nil", err)
 	}

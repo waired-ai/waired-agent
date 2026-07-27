@@ -6,12 +6,31 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
+
+// shortTempDir is t.TempDir() with a path short enough to bind a unix socket
+// under. macOS puts TMPDIR at /var/folders/<2>/<30>/T — 48 bytes — and
+// t.TempDir() then appends the test name, ten random digits and /001, which
+// overruns darwin's 104-byte sockaddr_un.sun_path and makes bind() fail with
+// EINVAL. Every site here is fixed, not just the ones that happen to overrun
+// today: the rest sit near the boundary and fail as soon as a test name grows.
+// Reproducible on Linux with a 52-byte TMPDIR, which leaves the same headroom
+// against Linux's 108-byte limit (#216).
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wt")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 
 // TestMgmtWritesRouteToSocket asserts the waired#838 routing contract: a
 // management write issued against the loopback TCP URL actually travels
@@ -27,7 +46,7 @@ func TestMgmtWritesRouteToSocket(t *testing.T) {
 
 	var sockPath, sockMethod, tcpPath string
 
-	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	sock := filepath.Join(shortTempDir(t), "mgmt.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
