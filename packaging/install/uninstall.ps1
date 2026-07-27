@@ -177,15 +177,65 @@ function Stop-TranscriptQuietly {
 # finished and the user could not tell whether it succeeded).
 $ElevatedConsole = $false
 
+# Leave a one-line cause where the un-elevated parent can read it back: the
+# spawned console closes with the child, and the parent otherwise has nothing
+# but an exit code to report. The marker sits next to the transcript, in the
+# parent's own %TEMP%, so it stays readable without elevation. Mirror of
+# install.ps1's marker (#177), with one difference that matters: the path here
+# is fixed rather than derived from a per-run workdir, so the parent MUST clear
+# a stale one before elevating -- see Invoke-SelfElevate. Best-effort by
+# design; a diagnostic must never become the failure.
+function Write-UninstallStatus {
+    param([string]$Text)
+    if (-not $script:ElevatedConsole -or -not $script:LogPath) { return }
+    try {
+        [System.IO.File]::WriteAllText("$($script:LogPath).status", $Text,
+            (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+
 function Common-Die  {
     param([string]$Msg)
     Write-Host "[waired] $Msg" -ForegroundColor Red
     if ($script:ElevatedConsole) {
+        # The trap below cannot see this: exit is not a terminating error, and
+        # Common-Die is the path every ordinary elevated failure takes.
+        Write-UninstallStatus $Msg
         if ($script:LogPath) { Write-Host "[waired] Full uninstall log: $($script:LogPath)" -ForegroundColor Red }
         Stop-TranscriptQuietly
         if (Test-InteractiveStdin) {
             Read-Host '[waired] Uninstall FAILED. Press Enter to close this window' | Out-Null
         }
+    }
+    exit 1
+}
+
+# Last resort for a terminating error that no try/catch and no Common-Die
+# handled -- those would otherwise reach the elevated console as a stack trace
+# on a window that closes, and reach the parent as a bare exit code. A trap is
+# registered for the whole script scope regardless of where it is written, so
+# this covers main below as well. It cannot catch a parse error or a parameter
+# binding failure: both happen before the first statement runs, which is why
+# the elevation argv is also quoted rather than merely diagnosed (#177).
+# Deliberately self-contained rather than calling the helpers above: a trap is
+# registered for the whole scope, so it can fire from the Configuration block
+# too -- which runs before any of them is defined.
+trap {
+    $msg = "$($_.Exception.Message)"
+    if ($script:ElevatedConsole -and $script:LogPath) {
+        try {
+            [System.IO.File]::WriteAllText("$($script:LogPath).status", $msg,
+                (New-Object System.Text.UTF8Encoding($false)))
+        } catch { }
+    }
+    Write-Host "[waired] uninstall failed: $msg" -ForegroundColor Red
+    try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
+    if ($script:ElevatedConsole) {
+        try {
+            if (-not [Console]::IsInputRedirected) {
+                Read-Host '[waired] Uninstall FAILED. Press Enter to close this window' | Out-Null
+            }
+        } catch { }
     }
     exit 1
 }
@@ -233,6 +283,39 @@ function Test-IsAdmin {
     $id   = [Security.Principal.WindowsIdentity]::GetCurrent()
     $prin = New-Object Security.Principal.WindowsPrincipal($id)
     return $prin.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# Quote one token per the CommandLineToArgvW rules. Start-Process joins
+# -ArgumentList with single spaces and quotes NOTHING, for -Verb RunAs exactly
+# as for a plain launch, so an unquoted path with a space arrives at the child
+# split across two parameters. install.ps1 carries the same helper for the same
+# reason (#177); the two scripts are downloaded and run independently, so each
+# has to be self-contained.
+function ConvertTo-NativeArg {
+    param([string]$Value)
+    if ($null -eq $Value) { $Value = '' }
+    if ($Value -ne '' -and $Value -notmatch '[ \t"]') { return $Value }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    for ($i = 0; $i -lt $Value.Length; $i++) {
+        $slashes = 0
+        while ($i -lt $Value.Length -and $Value[$i] -eq '\') { $i++; $slashes++ }
+        if ($i -ge $Value.Length) {
+            # Backslashes that run into the closing quote must be doubled,
+            # or they escape the quote itself.
+            [void]$sb.Append('\' * ($slashes * 2))
+            break
+        }
+        if ($Value[$i] -eq '"') {
+            [void]$sb.Append('\' * ($slashes * 2 + 1))
+            [void]$sb.Append('"')
+        } else {
+            [void]$sb.Append('\' * $slashes)
+            [void]$sb.Append($Value[$i])
+        }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
 }
 
 function Show-Help {
@@ -337,11 +420,30 @@ function Invoke-SelfElevate {
         $psArgs += @('-File', $tempScript) + $passthrough
     }
 
+    # Both value-bearing tokens can contain a space: $PSCommandPath (the
+    # uninstaller may sit anywhere, and install.ps1 -Clean invokes a sibling of
+    # its own path) and $LogPath / $tempScript, which are %TEMP%-derived and so
+    # carry the username. Unquoted, the child bound half a path and dropped the
+    # rest, exactly as install.ps1 did before #177.
+    $psArgs = @($psArgs | ForEach-Object { ConvertTo-NativeArg $_ })
+
+    # The marker path is fixed, not per-run, so a marker left by an earlier
+    # failed uninstall would otherwise be reported as this run's cause.
+    $marker = "$LogPath.status"
+    Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+
     try {
         $proc = Start-Process -FilePath 'powershell.exe' `
             -ArgumentList $psArgs -Verb RunAs -PassThru -Wait
         if ($proc.ExitCode -ne 0) {
-            Common-Die "elevated uninstaller exited code $($proc.ExitCode). Full uninstall log: $LogPath"
+            # A child that died before its transcript existed still leaves the
+            # marker; one that never started at all leaves nothing, and saying
+            # so is itself the diagnosis.
+            $why = ''
+            if (Test-Path -LiteralPath $marker) {
+                $why = " -- $(((Get-Content -LiteralPath $marker -Raw) -split "`r?`n")[0])"
+            }
+            Common-Die "elevated uninstaller exited code $($proc.ExitCode)$why. Full uninstall log: $LogPath"
         }
     } finally {
         # -Wait guarantees the elevated child finished reading the staged

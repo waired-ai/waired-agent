@@ -792,6 +792,46 @@ try {
     Remove-Item -LiteralPath $stateLog  -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $probeDir  -Recurse -Force -ErrorAction SilentlyContinue
 
+    # --- ConvertTo-NativeArg, and the two copies of it ------------------------
+    # install.ps1 and uninstall.ps1 are downloaded and run independently, so
+    # each carries its own copy of the quoter. Two copies drift; assert they do
+    # not, and pin the behaviour itself so neither can regress quietly.
+    ItStep "install.ps1 / uninstall.ps1 argument-quoting asserts (#177)"
+    $uninstallPs1 = Join-Path $Root 'packaging\install\uninstall.ps1'
+    function Get-Ps1Function {
+        param([string]$Path, [string]$Name)
+        $lines = Get-Content -LiteralPath $Path
+        $start = ($lines | Select-String -Pattern "^function\s+$([regex]::Escape($Name))\b" | Select-Object -First 1).LineNumber
+        if (-not $start) { return $null }
+        for ($i = $start - 1; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^\}') { break } }
+        return (($lines[($start - 1)..$i]) -join "`n")
+    }
+    $qInstall   = Get-Ps1Function -Path $installPs1   -Name 'ConvertTo-NativeArg'
+    $qUninstall = Get-Ps1Function -Path $uninstallPs1 -Name 'ConvertTo-NativeArg'
+    if ($qInstall -and $qUninstall -and $qInstall -ceq $qUninstall) { ItOk "both installers carry an identical ConvertTo-NativeArg (no drift)" }
+    else { ItBad "ConvertTo-NativeArg differs between install.ps1 and uninstall.ps1 (or is missing from one)" }
+    if ($qInstall) {
+        Invoke-Expression $qInstall
+        # Cases that actually occur: the default install dir, a %TEMP%-derived
+        # path under a username with a space, and a directory value an operator
+        # may well type with a trailing separator.
+        $cases = @(
+            @{ In = 'simple';                    Out = 'simple' },
+            @{ In = '-DryRun';                   Out = '-DryRun' },
+            @{ In = 'C:\Program Files\Waired';   Out = '"C:\Program Files\Waired"' },
+            @{ In = 'D:\Waired\';                Out = 'D:\Waired\' },
+            @{ In = 'C:\a b\c\';                 Out = '"C:\a b\c\\"' },
+            @{ In = '';                          Out = '""' }
+        )
+        $bad = @()
+        foreach ($c in $cases) {
+            $got = ConvertTo-NativeArg $c.In
+            if ($got -cne $c.Out) { $bad += "[$($c.In)] -> [$got], want [$($c.Out)]" }
+        }
+        if ($bad.Count -eq 0) { ItOk "ConvertTo-NativeArg follows the CommandLineToArgvW rules" }
+        else { ItBad ("ConvertTo-NativeArg wrong: " + ($bad -join '; ')) }
+    }
+
     # --- the two pre-answered setup questions --------------------------------
     # `waired init`'s --inference-enabled / --share-with-mesh are Go bool flags:
     # the space form leaves the value as a positional arg, which cobra.NoArgs
