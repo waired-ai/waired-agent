@@ -301,3 +301,27 @@ jobs:
 
       - name: autostart Exec path guard
         run: bash scripts/ci/autostart-exec-guard.sh
+
+  # The PowerShell counterpart of install-scripts. A separate job, not extra
+  # steps there: install-scripts is a required status check, and renaming it to
+  # describe the new content would leave every open PR waiting on a check name
+  # that no longer reports.
+  installer-pwsh:
+    name: installer-pwsh (install.ps1 dry-run matrix + PSScriptAnalyzer)
+    runs-on: ubuntu-latest        # pwsh 7 is preinstalled; the matrix is hermetic
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pinned: PSScriptAnalyzer ships new rules in minor releases, and this is
+      # a required check -- an unrelated PR must not go red because the gallery
+      # moved. Bump deliberately, with the settings file updated in the same PR.
+      - name: install PSScriptAnalyzer
+        shell: pwsh
+        run: Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force -Scope CurrentUser
+
+      - name: PSScriptAnalyzer (shipped .ps1)
+        run: make ps-script-lint
+
+      - name: install.ps1 dry-run dispatch matrix
+        run: pwsh -NoProfile -File scripts/dev/installtest-pwsh.ps1

@@ -77,6 +77,7 @@ help:
 	@echo "  deb-all              Build waired + waired-tray .deb for amd64 and arm64"
 	@echo "  deb-amd64 deb-arm64  Same, for one arch"
 	@echo "  install-script-lint  shellcheck install.sh + maintainer scripts"
+	@echo "  ps-script-lint       PSScriptAnalyzer over the shipped .ps1 scripts"
 
 .PHONY: build-agent
 build-agent:
@@ -557,3 +558,14 @@ install-script-lint:
 	           scripts/ci/installer-mirror-guard-test.sh \
 	           scripts/ci/platform-test-floor-guard.sh \
 	           scripts/ci/platform-test-floor-guard-test.sh
+
+# The PowerShell half of install-script-lint. Separate because the two have
+# different prerequisites -- shellcheck is a package, PSScriptAnalyzer is a
+# PSGallery module inside pwsh -- and a dev box that has one rarely has both.
+# Rules that do not apply to an installer are declared, with reasons, in
+# scripts/ci/PSScriptAnalyzerSettings.psd1.
+.PHONY: ps-script-lint
+ps-script-lint:
+	@command -v pwsh >/dev/null 2>&1 || { \
+	  echo "error: pwsh not found in PATH" >&2; exit 1; }
+	pwsh -NoProfile -File scripts/ci/ps-script-lint.ps1
