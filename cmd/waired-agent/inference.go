@@ -276,28 +276,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// anything else (incl. "" for pre-#188 configs) is the bundled model
 	// where waired downloads + supervises its own binary under state-dir.
 	borrowedOllama := cfg.OllamaSource == agentconfig.OllamaSourceReuse
-	bundledOllamaBin := filepath.Join(stateDir, "runtimes", "ollama", "bin", "ollama")
 	bundledOllamaModels := filepath.Join(stateDir, "runtimes", "ollama", "models")
 	// ollamaResolver resolves the engine binary lazily (re-run on each
 	// EnsureRunning so a freshly installed ollama is picked up without
-	// an agent restart). Bundled mode on Linux is STRICT: only the
-	// waired-managed binary qualifies — falling back to PATH used to
-	// spawn whatever system ollama was installed (unpinned version) on
-	// our port. Windows/macOS keep the PATH fallback because their
-	// "bundled" installs live outside state-dir (follow-up issue).
-	// Reuse mode keeps the fallback too: the binary is only used as a
-	// pull client there, never spawned.
+	// an agent restart). The rule itself lives in resolveOllamaBinary so
+	// everything that asks "is the engine here" gets the SAME answer —
+	// see engineInstalledOnHost.
 	ollamaResolver := func() (string, error) {
-		if fi, statErr := os.Stat(bundledOllamaBin); statErr == nil && fi.Mode().IsRegular() {
-			return bundledOllamaBin, nil
-		}
-		if !borrowedOllama && runtime.GOOS == "linux" {
-			return "", fmt.Errorf(
-				"bundled ollama not installed (expected at %s): run `sudo waired runtimes install ollama`, "+
-					"or switch ollama_source to \"reuse\" in agent.json / re-run `sudo waired init`",
-				bundledOllamaBin)
-		}
-		return download.ResolveBinary("")
+		return resolveOllamaBinary(runtime.GOOS, stateDir, borrowedOllama)
 	}
 
 	binary, err := ollamaResolver()
@@ -2388,7 +2374,7 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 	// (router.VLLMAutoSelectable=true), so a preference is now an override,
 	// not the only route onto vLLM.
 	if pref := cfg.PreferredEngine; pref != "" {
-		if engineViable(pref, hw, stateDir) {
+		if engineViable(pref, hw, cfg, stateDir) {
 			return engineDecision{
 				Engine:          pref,
 				Source:          "preference",
@@ -2412,7 +2398,7 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 	}
 
 	if state.Active != nil {
-		if engineViable(state.Active.Runtime, hw, stateDir) {
+		if engineViable(state.Active.Runtime, hw, cfg, stateDir) {
 			return engineDecision{
 				Engine:          state.Active.Runtime,
 				Source:          "persisted",
@@ -2452,7 +2438,7 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 	walked := []string{}
 	for _, e := range chain {
 		walked = append(walked, e)
-		if engineViable(e, hw, stateDir) {
+		if engineViable(e, hw, cfg, stateDir) {
 			d := engineDecision{
 				Engine:          e,
 				Source:          sourceForChainHop(state.Active != nil, e),
@@ -2489,22 +2475,23 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 // would land as an additional `|| hw.Accelerators.ROCm && ...`
 // clause; Windows + vLLM stays disabled per the W-1 decision.
 //
+// Presence goes through engineInstalledOnHost, i.e. the SAME rule the
+// bootstrap's resolver uses. It used to read hw.Engines.Ollama.Installed,
+// a PATH probe that cannot see a state-dir install — so on a host whose
+// engine waired installed itself, boot picked "no-engine" and then
+// resolved a binary anyway (#179).
+//
 // Doesn't actually start the engine; the bootstrap's EnsureRunning
 // still has to succeed.
-func engineViable(name string, hw hardware.Profile, stateDir string) bool {
+func engineViable(name string, hw hardware.Profile, cfg agentconfig.InferenceConfig, stateDir string) bool {
 	switch name {
 	case catalog.RuntimeVLLM:
 		if !hw.Accelerators.CUDA {
 			return false
 		}
-		// We approximate "venv installed" by checking VLLMInstaller.Active()
-		// rooted at <state-dir>/runtimes/vllm — the same path the installer
-		// writes (#525). A $HOME-relative default would diverge from a
-		// sudo-run install (root's home ≠ the User=waired daemon's home).
-		_, ok := infruntime.NewVLLMInstallerAt(filepath.Join(stateDir, "runtimes", "vllm")).Active()
-		return ok
+		return engineInstalledOnHost(runtime.GOOS, stateDir, cfg, name)
 	case catalog.RuntimeOllama:
-		return hw.Engines.Ollama.Installed
+		return engineInstalledOnHost(runtime.GOOS, stateDir, cfg, name)
 	default:
 		return false
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -363,17 +364,39 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	if d.engine != "" {
 		step := signer.SetupStep{ID: setupStepEngineInstall}
 		installed, ready := r.provider.setupEngineState(ctx, d.engine)
+		// Arm order is the contract here, not an accident (#187). It is
+		// strongest-evidence-first: an engine that is serving beats a
+		// stale failed phase from an earlier attempt; a failure the
+		// executor reported beats mere on-disk presence, because a
+		// half-configured install leaves a binary behind and still failed.
 		switch {
 		case ready:
 			step.Status = signer.SetupStatusDone
-		case installed:
-			step.Status = signer.SetupStatusRunning
 		case phase == management.SetupExecutorPhaseFailed:
 			// The executor tried and told us why. Its own text beats any
-			// guess we could make from here.
+			// guess we could make from here. Ahead of `installed` so a
+			// half-configured engine — a binary on disk that cannot
+			// serve — reports the real failure instead of sitting at
+			// "working on it" forever.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = classifySetupFailure(execErr)
 			step.ErrorDetail = clampSetupDetail(execErr)
+		case installed:
+			// This step is "install the engine", and the engine is
+			// installed. It used to complete only once the engine was
+			// READY, which in this projection means the active MODEL is
+			// ready — so the row said "working on it" for the whole model
+			// download while the progress bar tracked the model step, and
+			// the wizard showed two rows running at once.
+			step.Status = signer.SetupStatusDone
+		case phase == management.SetupExecutorPhaseDone:
+			// The executor says it finished and we cannot see it yet.
+			// Rare now that detection matches the daemon's own rule
+			// (#179), but its explicit completion exists precisely to
+			// advance the wizard, and discarding it is what left the step
+			// spinning. The model step stays honest either way: its pull
+			// is admitted from the engine probe, not from this.
+			step.Status = signer.SetupStatusDone
 		case leaseLive && !elevated:
 			// An executor is present but cannot install — reporting
 			// executor_gone here would send the operator to re-run a
@@ -542,17 +565,25 @@ func (r *setupReconciler) runPush(ctx context.Context) {
 
 // setupEngineState reports whether the desired engine kind is installed
 // on this host and whether it is the one currently serving and ready.
-// Installation state comes from the cached hardware profile (cheap);
-// readiness from the provider's usual EngineReady gate.
-func (p *agentInferenceProvider) setupEngineState(ctx context.Context, engine string) (installed, ready bool) {
-	prof := p.profiler.Profile(ctx)
-	switch engine {
-	case "ollama":
-		installed = prof.Engines.Ollama.Installed
-	case "vllm":
-		installed = prof.Engines.VLLM.Installed
-	}
-	if !installed {
+// Installation state goes through engineInstalledOnHost — the daemon's
+// own resolution rule — and readiness through the provider's usual
+// EngineReady gate.
+//
+// It used to read the hardware profile's Engines map, which is a
+// PATH-only probe: an engine installed under the state dir (the normal
+// case, and the only one on Linux) read as absent, so /setup/state and
+// /inference/status contradicted each other on the same host at the
+// same instant. The wizard then never admitted the model pull, the step
+// contents never changed, the progress push deduped everything away,
+// last_check froze, and the run ended as executor_gone (#179).
+//
+// Resolving live also drops the profile's 30 s cache from the path, so
+// an engine the executor just installed is visible on the next frame
+// rather than up to half a minute later.
+// The context parameter is kept for the setupProvider interface (a fake
+// implements it too) but is no longer needed: nothing here profiles.
+func (p *agentInferenceProvider) setupEngineState(_ context.Context, engine string) (installed, ready bool) {
+	if !engineInstalledOnHost(runtime.GOOS, p.stateDir, p.cfg, engine) {
 		return false, false
 	}
 	if p.servingEngine() != engine {
@@ -563,8 +594,8 @@ func (p *agentInferenceProvider) setupEngineState(ctx context.Context, engine st
 }
 
 // setupStateDir is the agent's state root. The executor installs the
-// bundled engine relative to this, so it matches bundledOllamaBin's
-// join (inference.go) by construction rather than by coincidence.
+// bundled engine relative to this, so it matches bundledOllamaBinPath's
+// join (engine_resolve.go) by construction rather than by coincidence.
 func (p *agentInferenceProvider) setupStateDir() string { return p.stateDir }
 
 // setupModelState reports one catalog model's lifecycle state, live
