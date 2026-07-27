@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -135,10 +136,13 @@ func TestInstallStatusLineWrapAndRestore(t *testing.T) {
 	if got := statusLineCmd(t, home); got != statuslineWrapperPath(home) {
 		t.Errorf("statusLine.command = %q, want wrapper path", got)
 	}
-	// Wrapper artifacts exist and are executable.
+	// Wrapper artifacts exist and are executable. The exec bit is a Unix
+	// concept — Windows decides executability from the extension and reports
+	// every file as 0666 — so only its existence is asserted there
+	// (same reading as adapter_test.go's exec-bit skips, #216).
 	if fi, err := os.Stat(statuslineWrapperPath(home)); err != nil {
 		t.Fatalf("wrapper missing: %v", err)
-	} else if fi.Mode().Perm()&0o100 == 0 {
+	} else if runtime.GOOS != "windows" && fi.Mode().Perm()&0o100 == 0 {
 		t.Errorf("wrapper not executable: %v", fi.Mode())
 	}
 	if b, err := os.ReadFile(statuslineOrigPath(home)); err != nil || string(b) != "~/my-statusline.sh --flag\n" {

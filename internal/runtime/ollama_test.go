@@ -66,6 +66,14 @@ func (p *fakeProcess) sentSignals() []os.Signal {
 	copy(out, p.signals)
 	return out
 }
+func (p *fakeProcess) hasExited() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
 func (p *fakeProcess) wasKilled() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -96,7 +104,15 @@ func (s *fakeSpawner) Spawn(_ context.Context, binary string, args, env []string
 	if s.startErr != nil {
 		return nil, s.startErr
 	}
-	if s.process == nil {
+	// A RESPAWN always yields a new process, as exec.Command does. Handing
+	// back the same one after a Stop/Park had killed it modelled a corpse
+	// coming back to life, which nothing real can do — and waitReady's exit
+	// check now (correctly) refuses to call such a child ready. The first
+	// spawn still returns whatever a test injected, including the
+	// already-exited process exitingSpawner uses to stage an EADDRINUSE
+	// survivor. s.process follows the latest, so assertions read the live
+	// child (#216).
+	if s.process == nil || (s.calls > 1 && s.process.hasExited()) {
 		s.process = newFakeProcess()
 	}
 	return s.process, nil

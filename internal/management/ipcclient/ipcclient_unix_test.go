@@ -15,11 +15,29 @@ import (
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
 
+// shortTempDir is t.TempDir() with a path short enough to bind a unix socket
+// under. macOS puts TMPDIR at /var/folders/<2>/<30>/T — 48 bytes — and
+// t.TempDir() then appends the test name, ten random digits and /001, which
+// overruns darwin's 104-byte sockaddr_un.sun_path and makes bind() fail with
+// EINVAL. Every site here is fixed, not just the ones that happen to overrun
+// today: the rest sit near the boundary and fail as soon as a test name grows.
+// Reproducible on Linux with a 52-byte TMPDIR, which leaves the same headroom
+// against Linux's 108-byte limit (#216).
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wt")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // serveSocket starts an httptest server on a unix socket and points
 // $WAIRED_MGMT_SOCKET at it, so Endpoint/dial resolve to it.
 func serveSocket(t *testing.T, h http.Handler) string {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	sock := filepath.Join(shortTempDir(t), "mgmt.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
@@ -34,7 +52,7 @@ func serveSocket(t *testing.T, h http.Handler) string {
 }
 
 func TestEndpointHonoursEnvOverride(t *testing.T) {
-	want := filepath.Join(t.TempDir(), "custom.sock")
+	want := filepath.Join(shortTempDir(t), "custom.sock")
 	t.Setenv(paths.MgmtSocketEnvOverride, want)
 	if got := Endpoint(); got != want {
 		t.Fatalf("Endpoint() = %q, want %q", got, want)
@@ -67,7 +85,7 @@ func TestRoundTripOverSocket(t *testing.T) {
 // a missing socket must be reported as "not found" and name the endpoint,
 // not surface a bare "dial unix ...: no such file or directory".
 func TestWrapDialErrorNamesMissingSocket(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "absent.sock")
+	missing := filepath.Join(shortTempDir(t), "absent.sock")
 	t.Setenv(paths.MgmtSocketEnvOverride, missing)
 
 	_, err := NewHTTPClient(2 * time.Second).Get(BaseURL + "/waired/v1/status")
@@ -109,9 +127,9 @@ func bindSocket(t *testing.T, path string) {
 }
 
 func TestResolveEndpoint_SocketOverrideBeatsStateDir(t *testing.T) {
-	forced := filepath.Join(t.TempDir(), "forced.sock")
+	forced := filepath.Join(shortTempDir(t), "forced.sock")
 	t.Setenv(paths.MgmtSocketEnvOverride, forced)
-	t.Setenv(paths.EnvOverride, t.TempDir())
+	t.Setenv(paths.EnvOverride, shortTempDir(t))
 	if got := resolveEndpoint(); got != forced {
 		t.Fatalf("resolveEndpoint = %q, want %q", got, forced)
 	}
@@ -122,7 +140,7 @@ func TestResolveEndpoint_SocketOverrideBeatsStateDir(t *testing.T) {
 // live, address it rather than the machine-wide runtime socket.
 func TestResolveEndpoint_InstanceStateDir(t *testing.T) {
 	t.Setenv(paths.MgmtSocketEnvOverride, "")
-	stateDir := t.TempDir()
+	stateDir := shortTempDir(t)
 	t.Setenv(paths.EnvOverride, stateDir)
 
 	want := paths.InstanceMgmtEndpoint(stateDir)
@@ -143,7 +161,7 @@ func TestResolveEndpoint_InstanceStateDir(t *testing.T) {
 // /run/waired path they never asked for.
 func TestResolveEndpoint_UnboundInstanceStillNamesTheInstance(t *testing.T) {
 	t.Setenv(paths.MgmtSocketEnvOverride, "")
-	stateDir := t.TempDir() // non-default, but no socket inside
+	stateDir := shortTempDir(t) // non-default, but no socket inside
 	t.Setenv(paths.EnvOverride, stateDir)
 
 	if _, err := os.Stat(paths.MgmtEndpoint(paths.System)); err == nil {

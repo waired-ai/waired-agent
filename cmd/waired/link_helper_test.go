@@ -108,7 +108,11 @@ func TestAtomicWriteFile(t *testing.T) {
 		t.Errorf("content = %q", b)
 	}
 	fi, _ := os.Stat(path)
-	if fi.Mode().Perm() != 0o600 {
+	// Windows has no Unix mode bits: os.Chmod maps only the read-only
+	// attribute, so a 0600 file stats as 0666 there. The rest of the
+	// contract — content, and no temp residue — is checked on all three
+	// (same reading as internal/platform/secrets/secrets_test.go, #216).
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Errorf("perm = %v, want 0600", fi.Mode().Perm())
 	}
 	// No temp residue left behind.

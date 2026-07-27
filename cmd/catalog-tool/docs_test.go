@@ -152,7 +152,14 @@ func TestModelCatalogPageFresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("splice %s: %v", rel, err)
 	}
-	if string(existing) != string(updated) {
+	// Compared with line endings normalised. The generator always writes LF,
+	// but a Windows checkout inherits core.autocrlf=true (the default on
+	// GitHub's windows runners, and this repo ships no .gitattributes), so the
+	// file arrives with CRLF outside the regenerated block and reads as
+	// permanently stale. The contract is that the generated block is current,
+	// not that the working tree uses one particular line ending (#216).
+	lf := func(b []byte) string { return strings.ReplaceAll(string(b), "\r\n", "\n") }
+	if lf(existing) != lf(updated) {
 		t.Fatalf("%s is stale — run `make catalog-docs` (or `catalog-tool docs`) and commit the result", docsDefaultFile)
 	}
 }

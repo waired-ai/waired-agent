@@ -680,6 +680,35 @@ func (a *OllamaAdapter) waitReady(ctx context.Context, supervised bool) error {
 			consecOK++
 			consecFail = 0
 			if consecOK >= a.cfg.HealthSuccess {
+				// A supervised child that has ALREADY exited must not be
+				// reported ready, however healthy the port looks: something
+				// else is answering there — normally an orphan of a previous
+				// agent run, which is what the adopt path below EnsureRunning's
+				// waitReady call exists to handle. Returning nil here instead
+				// hands the caller a live-looking engine backed by a dead
+				// process handle, so Stop()/Park() signal a corpse and report
+				// success while the real engine keeps serving.
+				//
+				// The select at the bottom of this loop already returns on
+				// procDone, but only when it is the only ready case. Once a
+				// probe takes longer than one HealthInterval both it and
+				// tick.C are ready and Go picks between them uniformly at
+				// random, so the exit is observed or missed on a coin flip —
+				// which is how TestEngineController_AdoptedNotManaged became
+				// an intermittent failure, and why it turned up as soon as
+				// the suite ran on a slower Windows runner (#216).
+				if supervised {
+					a.mu.Lock()
+					proc := a.proc
+					a.mu.Unlock()
+					if proc != nil {
+						select {
+						case <-proc.Done():
+							return startupExitError("ollama", a.engineLogPath(), proc.Err())
+						default:
+						}
+					}
+				}
 				return nil
 			}
 		} else {

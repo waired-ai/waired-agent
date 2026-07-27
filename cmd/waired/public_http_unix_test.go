@@ -29,7 +29,7 @@ func TestPublicPostJSON_RoutesThroughMgmtWriteRoute(t *testing.T) {
 
 	var sockPath, sockMethod, sockCT string
 
-	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	sock := filepath.Join(shortTempDir(t), "mgmt.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)

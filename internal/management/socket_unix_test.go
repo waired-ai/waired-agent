@@ -6,10 +6,29 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// shortTempDir is t.TempDir() with a path short enough to bind a unix socket
+// under. macOS puts TMPDIR at /var/folders/<2>/<30>/T — 48 bytes — and
+// t.TempDir() then appends the test name, ten random digits and /001, which
+// overruns darwin's 104-byte sockaddr_un.sun_path and makes bind() fail with
+// EINVAL. Every site here is fixed, not just the ones that happen to overrun
+// today: the rest sit near the boundary and fail as soon as a test name grows.
+// Reproducible on Linux with a 52-byte TMPDIR, which leaves the same headroom
+// against Linux's 108-byte limit (#216).
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wt")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 
 // TestServeLocalUnixSocket exercises the real kernel path a unit test over
 // Handler() cannot: ServeLocal binds a unix-domain socket and serves the
@@ -17,7 +36,7 @@ import (
 // the socket gets a 200 from GET /status (waired#838).
 func TestServeLocalUnixSocket(t *testing.T) {
 	srv := newServer(Status{DeviceName: "alice"}, fakePinger{})
-	sockPath := filepath.Join(t.TempDir(), "mgmt.sock")
+	sockPath := filepath.Join(shortTempDir(t), "mgmt.sock")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
