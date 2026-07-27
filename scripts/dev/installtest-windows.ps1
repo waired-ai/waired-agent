@@ -223,8 +223,27 @@ function Assert-DaemonEngine {
     if ($state -and $state -ne 'no_engine') { ItOk "inference subsystem left no_engine (state=$state)" }
     else { ItBad "inference subsystem still reports '$state' (engine not installed)" }
 
-    $claim = ''
-    try { $claim = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/setup/state' -TimeoutSec 5).install_claimed } catch { }
+    $setupState = $null
+    try { $setupState = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/setup/state' -TimeoutSec 5 } catch { }
+
+    # engine_installed -- what the SETUP WIZARD reads (#195/#179). The checks
+    # above look at the filesystem and at the inference subsystem; neither is
+    # the value the daemon reports to the UI, and the two have disagreed
+    # (#179: an engine on disk but not on PATH, so the wizard kept offering to
+    # install it). desired_engine is read first because SetupState computes
+    # engine_installed only when one is set -- see
+    # lib/installtest-daemon-engine.sh's item 7.
+    if ($null -eq $setupState) {
+        ItBad "could not read /setup/state (daemon unreachable) -- engine_installed unverifiable"
+    } elseif (-not $setupState.desired_engine) {
+        ItLog "no desired_engine at the end of the leg, so engine_installed is false by definition -- not a #179 signal: $($setupState | ConvertTo-Json -Compress)"
+    } elseif ($setupState.engine_installed) {
+        ItOk "daemon reports engine_installed=true for desired_engine=$($setupState.desired_engine) (setup wizard sees the engine)"
+    } else {
+        ItBad "engine is on the host but the daemon reports engine_installed=false for desired_engine=$($setupState.desired_engine) (#179 class)"
+    }
+
+    $claim = if ($setupState) { $setupState.install_claimed } else { '' }
     if (-not $claim) { ItOk "no stuck executor install claim after init (install_claimed cleared)" }
     else { ItBad "executor install claim still set after init (install_claimed=$claim; stuck)" }
 }

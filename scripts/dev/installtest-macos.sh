@@ -348,7 +348,7 @@ daemon_path_enroll_macos() {
 # engine-less daemon-path first-run ends up WITH an engine (pre-N3 it stayed
 # engine-less and engine_install was red forever).
 assert_daemon_engine_macos() {
-  local out state claim ollama_bin="" cand
+  local out state setup_state desired_engine installed claim ollama_bin="" cand
   grep -q "signing in via the daemon" "$INITLOG" 2>/dev/null \
     && ok "init took the daemon path (setup-executor-capable first-run)" \
     || bad "init did NOT take the daemon path (executor engine install not exercised)"
@@ -376,7 +376,28 @@ assert_daemon_engine_macos() {
     ""|no_engine) bad "inference subsystem still reports '${state:-unreachable}' (engine not installed)" ;;
     *) ok "inference subsystem left no_engine (state=$state)" ;;
   esac
-  claim="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null \
+  setup_state="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null || true)"
+  # engine_installed — what the SETUP WIZARD reads (#195/#179). The checks
+  # above look at the host and at the inference subsystem; neither is the value
+  # the daemon reports to the UI, and the two have disagreed (#179: an engine
+  # on disk but not on PATH, so the wizard kept offering to install it).
+  # desired_engine is read first because SetupState computes engine_installed
+  # only when one is set — see lib/installtest-daemon-engine.sh's item 7.
+  desired_engine="$(printf '%s' "$setup_state" \
+    | sed -n 's/.*"desired_engine"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  installed="$(printf '%s' "$setup_state" \
+    | grep -oE '"engine_installed"[[:space:]]*:[[:space:]]*(true|false)' | head -1 \
+    | grep -oE '(true|false)$')"
+  if [ -z "$setup_state" ]; then
+    bad "could not read /setup/state (daemon unreachable) — engine_installed unverifiable"
+  elif [ -z "$desired_engine" ]; then
+    it_warn "no desired_engine at the end of the leg, so engine_installed is false by definition — not a #179 signal: $setup_state"
+  elif [ "$installed" = true ]; then
+    ok "daemon reports engine_installed=true for desired_engine=$desired_engine (setup wizard sees the engine)"
+  else
+    bad "engine is on the host but the daemon reports engine_installed=false for desired_engine=$desired_engine (#179 class)"
+  fi
+  claim="$(printf '%s' "$setup_state" \
     | sed -n 's/.*"install_claimed"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
   [ -z "$claim" ] \
     && ok "no stuck executor install claim after init (install_claimed cleared)" \
