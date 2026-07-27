@@ -161,23 +161,27 @@ const (
 	// second residual out of the tail and into the bulk.
 	BandwidthSystemRAMGBs = 60.0
 
-	// BandwidthUnifiedGBs is the same quantity for a unified-memory pool:
-	// an Apple M-series base chip is ~120 GB/s and every larger part is
-	// above it (M4 Pro 273, AMD Strix Halo 256, M4 Max 546, M3 Ultra
-	// 819).
+	// BandwidthUnifiedGBs is the same quantity for a unified-memory pool,
+	// and since waired-ai/waired-agent#251 it is only the FALLBACK: a host
+	// whose part Host.MemoryBandwidthSpecGBs identifies uses that chip's
+	// published peak instead, and only then is ClassUnified allowed to
+	// exclude anything.
 	//
-	// Unlike its neighbour this one is a FLOOR, and is allowed to be,
-	// because ClassUnified never excludes: EstimateOllamaDecode sets no
-	// UpperBound there, so the figure only decides whether the wizard
-	// adds "may be slow". A floor over-warns on the large parts — an M4
-	// Max is judged as if it were an M4 base — and refuses nothing.
+	// Here, where the part is unknown, the figure stays annotate-only —
+	// EstimateOllamaDecode leaves UpperBound unset — so it may be a rough
+	// middle rather than a bound in either direction, which is what it
+	// is. It is NOT the floor of the population, a claim this comment
+	// carried until #251 checked it: the M1 base is 68.25 GB/s and the M2
+	// and M3 bases are 100, all below 120. Nothing single-valued is an
+	// upper bound across the 68..819 GB/s span the population actually
+	// covers, which is the whole reason the per-chip table exists rather
+	// than a retuned constant.
 	//
-	// Which also means it cannot simply be promoted. Letting UMA exclude
-	// (the change that would stop a 24 GB Mac being handed a 7 tok/s
-	// dense model in preference to a 50 tok/s MoE) needs the per-chip
-	// spec figure from waired-ai/waired-agent#251, not a retuned
-	// constant: nothing single-valued is an upper bound across a
-	// 120..819 GB/s span.
+	// Consequences of landing here are therefore bounded by construction:
+	// an unrecognised part is never refused a model on speed, only told
+	// that one "may be slow" — possibly wrongly in either direction. The
+	// fix for a part that lands here often is to add it to the table in
+	// internal/hardware, not to move this number.
 	BandwidthUnifiedGBs = 120.0
 
 	// DecodeFloorTokps is the decode rate below which a model should not
@@ -220,6 +224,29 @@ type Host struct {
 	// discrete-GPU hosts, and the fallback when a UMA host reports no
 	// usable figure.
 	VRAM0MB int
+
+	// MemoryBandwidthSpecGBs is the published PEAK read bandwidth of the
+	// pool the weights are read from, in GB/s. 0 means "unknown", and
+	// that is a case this package must keep working for rather than an
+	// error: the producer keys it off a chip table, and a part that is
+	// not in the table reports nothing instead of guessing.
+	//
+	// A peak, therefore an UPPER bound on decode speed — which is exactly
+	// what EstimateOllamaDecode needs before it may set Estimate.UpperBound
+	// on a unified-memory host, and why a MEASURED figure cannot be
+	// substituted here. On a unified host a CPU-side measurement is a
+	// LOWER bound (it cannot reach what the GPU pulls from the same
+	// pool), so feeding one in would license exclusions in the direction
+	// the bound does not support. See signer.HardwareSummary's field doc:
+	// spec and measured are separate fields on the wire for this reason.
+	//
+	// json:"-" for the reason Verdict.Estimate and Estimate.UpperBound
+	// carry it: Host is an INPUT to a decision, not a payload — the wire
+	// type is signer.HardwareSummary and each side adapts into this one.
+	// The additive-only guard asks a field added to a published struct to
+	// say so explicitly; the neighbouring fields predate the guard's view
+	// of this struct and cannot be retagged now.
+	MemoryBandwidthSpecGBs float64 `json:"-"`
 }
 
 // FromHardwareSummary adapts the broadcast hardware summary — what a
@@ -234,10 +261,11 @@ func FromHardwareSummary(hw *signer.HardwareSummary) Host {
 		return Host{}
 	}
 	h := Host{
-		RAMTotalGB:    hw.RAMTotalGB,
-		GPUCount:      len(hw.GPUs),
-		UnifiedMemory: hw.UnifiedMemory,
-		UsableVRAMMB:  hw.UsableVRAMMB,
+		RAMTotalGB:             hw.RAMTotalGB,
+		GPUCount:               len(hw.GPUs),
+		UnifiedMemory:          hw.UnifiedMemory,
+		UsableVRAMMB:           hw.UsableVRAMMB,
+		MemoryBandwidthSpecGBs: hw.MemoryBandwidthSpecGBs,
 	}
 	if len(hw.GPUs) > 0 {
 		h.VRAM0MB = hw.GPUs[0].VRAMTotalMB
@@ -338,12 +366,13 @@ type Verdict struct {
 // resident discrete GPU is not the wall.
 //
 // Everywhere else the estimate is INFORMATIONAL unless UpperBound says
-// otherwise. Only the spilled-discrete case carries a margin no unknown
-// hardware can eat — the card's own reads are priced at zero — so only
-// there does MeetsSpeedFloor being false mean "slow even under
-// favourable assumptions" rather than a constant that happened to land
-// low. See UpperBound, and the constants above for which direction each
-// of them is deliberately wrong in.
+// otherwise. Two cases earn it: the spilled-discrete case, which carries
+// a margin no unknown hardware can eat because the card's own reads are
+// priced at zero, and a unified host that published its part's peak
+// bandwidth, where the bound is a fact about that machine rather than a
+// constant. Only there does MeetsSpeedFloor being false mean "slow even
+// under favourable assumptions". See UpperBound, and the constants above
+// for which direction each of them is deliberately wrong in.
 type Estimate struct {
 	// TokpsEstimate is the predicted decode rate in tokens/second, or 0
 	// when no claim is made (resident on a discrete GPU, or a variant
@@ -367,24 +396,32 @@ type Estimate struct {
 	// TokpsEstimate, which is the only condition under which a caller
 	// may exclude a model for being slow.
 	//
-	// It holds exactly for the spilled-discrete case, where the GPU's
-	// contribution is priced at zero precisely so the unknown card
-	// cannot make the answer wrong. That over-estimate is STRUCTURAL: it
-	// survives whatever the bandwidth constants happen to be, and no
-	// other class has anything like it.
+	// Two cases set it, for different reasons:
 	//
-	// ClassUnified rests entirely on BandwidthUnifiedGBs, which is the
-	// floor of its population, so the real machine is usually faster —
-	// a lower bound, and rejecting on one would withhold from an M4 Max
-	// models an M4 base runs. ClassCPUOnly rests entirely on
+	//   - ClassDiscrete spilled, where the GPU's contribution is priced at
+	//     zero precisely so the unknown card cannot make the answer wrong.
+	//     That over-estimate is STRUCTURAL: it survives whatever the
+	//     bandwidth constants happen to be.
+	//   - ClassUnified WHERE THE PART IS KNOWN, i.e. the host published
+	//     Host.MemoryBandwidthSpecGBs. A published peak is an upper bound
+	//     on that specific machine by definition, so "too slow even at
+	//     peak" is a claim about the host rather than about a constant
+	//     (waired-ai/waired-agent#251).
+	//
+	// ClassUnified where the part is NOT known falls back to
+	// BandwidthUnifiedGBs, which is neither bound (see its doc), and stays
+	// annotate-only. ClassCPUOnly rests entirely on
 	// BandwidthSystemRAMGBs, which IS meant as an upper bound, but with
 	// no structural margin behind it: a host whose memory beats the
 	// constant would be excluded on the strength of the constant alone.
-	// Both classes may still SAY "this may be slow", because that costs
-	// the user a sentence rather than a choice.
+	// Both may still SAY "this may be slow", because that costs the user a
+	// sentence rather than a choice.
 	//
-	// Measured per-device bandwidth (waired-ai/waired-agent#251) is what
-	// turns the other classes into decisions rather than annotations.
+	// Per-chip SPEC bandwidth is what turned unified hosts into decisions
+	// rather than annotations. Note "spec", not "measured": a measurement
+	// on a unified host is a LOWER bound (a CPU-side benchmark cannot
+	// reach what the GPU pulls from the same pool), so #252's measured
+	// figure will NOT be usable here however precise it gets.
 	//
 	// json:"-" for the same reason Verdict.Estimate carries it: nothing
 	// marshals a decision, each consumer projects what it needs onto its
@@ -423,7 +460,10 @@ func ActiveBytesPerToken(v catalog.Variant) float64 {
 //   - ClassCPUOnly — every byte comes from system RAM.
 //   - ClassUnified — one pool, so the same single-domain arithmetic at
 //     the unified bandwidth. Residency is enforced by OllamaFit here, so
-//     there is no spilled case to model.
+//     there is no spilled case to model. The bandwidth is the host's own
+//     published peak when it reported one, and only then may the result
+//     exclude (UpperBound); otherwise it falls back to the population
+//     constant and stays an annotation (#251).
 //   - ClassDiscrete, resident — no claim (see Estimate).
 //   - ClassDiscrete, spilled — the resident share is priced at ZERO
 //     read time, leaving only the share the CPU must fetch. That is an
@@ -452,7 +492,15 @@ func EstimateOllamaDecode(v catalog.Variant, h Host) Estimate {
 	case ClassCPUOnly:
 		return rate(BandwidthSystemRAMGBs, 0)
 	case ClassUnified:
-		e := rate(BandwidthUnifiedGBs, 1)
+		// A published peak is an upper bound on THIS machine, so it may
+		// exclude; the fallback constant is a population figure that is
+		// neither bound, so it may only annotate (#251).
+		bw, bounded := BandwidthUnifiedGBs, false
+		if h.MemoryBandwidthSpecGBs > 0 {
+			bw, bounded = h.MemoryBandwidthSpecGBs, true
+		}
+		e := rate(bw, 1)
+		e.UpperBound = bounded
 		e.Resident = true
 		return e
 	}

@@ -210,6 +210,36 @@ type HardwareSummary struct {
 	// once at boot), so they add no map churn.
 	UnifiedMemory bool `json:"unified_memory,omitempty"`
 	UsableVRAMMB  int  `json:"usable_vram_mb,omitempty"`
+
+	// MemoryBandwidthSpecGBs is the PUBLISHED PEAK read bandwidth of the
+	// pool the weights are read from — on a unified-memory host, the
+	// shared SoC pool. 0 means "unknown", which a consumer must read as
+	// "no bandwidth claim", never as "no bandwidth".
+	//
+	// It is the part's SPEC, not a measurement, and that is what makes it
+	// useful: a peak is an UPPER BOUND on decode speed, and "too slow
+	// even at peak" is the only claim that licenses excluding a model for
+	// being slow. A figure that is not an upper bound may annotate but
+	// must not exclude — see hostfit.Estimate.UpperBound, which this
+	// field is what flips on unified-memory hosts
+	// (waired-ai/waired-agent#251).
+	//
+	// The MEASURED counterpart is a SEPARATE field
+	// (memory_bandwidth_measured_gbs, owned by #252) and must never be
+	// published here, because the two bound from opposite directions: on
+	// a unified host a CPU-side benchmark cannot reach what the GPU pulls
+	// from the same pool, so a measurement is a LOWER bound. Carrying
+	// both in one field — with or without a provenance discriminator —
+	// would let a consumer silently invert the bound, and proto is
+	// additive-only, so the shape cannot be corrected afterwards. When
+	// #252 lands, it publishes the median of N samples together with
+	// their spread, never a single reading, on every OS.
+	//
+	// Like UnifiedMemory / UsableVRAMMB this rides the served NetworkMap:
+	// it is fixed for the life of the host (sampled once at boot), so it
+	// adds no map churn, and omitempty keeps it off the wire entirely for
+	// a host whose part is not in the table and for a pre-addition agent.
+	MemoryBandwidthSpecGBs float64 `json:"memory_bandwidth_spec_gbs,omitempty"`
 }
 
 // HardwareGPUSummary identifies one GPU. Fields mirror
