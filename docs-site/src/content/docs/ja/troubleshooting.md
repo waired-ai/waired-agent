@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 4e3021cd6a5331ab
+sourceHash: 7d86ed458f645e3f
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -31,6 +31,7 @@ waired doctor
 
 - [`waired` と入力したら「コマンドが見つかりません」と出た](#i-typed-waired-and-got-command-not-found)
 - [サインインでブラウザが開かない／別のブラウザが開く](#no-browser-opened-at-sign-in)
+- [常駐サービスが応答せずサインインが止まる](#sign-in-stops-because-the-background-service-is-not-responding)
 - [セットアップが途中で止まった](#setup-stopped-partway)
 - [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
@@ -96,6 +97,35 @@ Windows ではコマンドの実体は `C:\Program Files\Waired\waired.exe` で�
 ```sh
 waired update
 ```
+
+<a id="sign-in-stops-because-the-background-service-is-not-responding"></a>
+
+## 常駐サービスが応答せずサインインが止まる
+
+サインインは常駐サービス**を通して**行われます。Waired と通信するのも、その後
+このパソコンを接続し続けるのも常駐サービスです。応答がないときは、サービス抜きで
+続行せずにサインインを中止します。
+
+```
+Waired's background service is installed but isn't responding, so sign-in can't continue.
+  Check what's wrong:  waired doctor
+  Start it:            sudo systemctl start waired-agent
+  Then run again:      sudo waired init
+```
+
+表示された 3 行を上から順に実行してください。実際の原因は `waired doctor` が
+教えてくれます。macOS でよくあるのは[常駐サービスが一度も起動していない
+場合](#macos-the-background-service-never-starts)です。
+
+以前のバージョンは、この状況でもそのままサインインしていました。一見うまく
+いったように見えますが、実際にはサインイン済みなのにブラウザでセットアップを
+完了できない状態になり、しかもその理由がパソコン側には何も出ませんでした。
+対処できるメッセージを出して止まるようにしたのは、そのためです。
+
+**「Waired isn't running in the background」**と表示された場合は、このパソコンに
+常駐サービスがそもそも登録されていません。通常はインストーラを使わずプログラムを
+直接実行しているときに出ます。先に `waired-agent` を起動してから、`waired init`
+をもう一度実行してください。
 
 <a id="setup-stopped-partway"></a>
 

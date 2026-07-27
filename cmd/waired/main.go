@@ -189,7 +189,7 @@ func newInitCmd() *cobra.Command {
 	f.StringVar(&o.bundledModelID, "inference-bundled-model-id", "",
 		"pin the bundled model to pre-pull (manifest model_id); empty auto-selects the largest model that fits this host above the coding-quality floor (#517). Combine with --inference-enabled=true to force-install on an under-spec host.")
 	f.StringVar(&o.mgmtURL, "mgmt", defaultMgmtURL,
-		"Local Management API base URL; when a waired-agent daemon is reachable there, login is driven through the daemon (Tailscale model) instead of enrolling locally")
+		"Local Management API base URL. Sign-in is driven through the waired-agent running here (the Tailscale model); if nothing answers, init reports it instead of enrolling locally")
 	f.BoolVar(&o.maskPII, "mask-pii", os.Getenv("WAIRED_PII_MASK") != "",
 		"mask personal information (home directory, username, hostname, account email) in init's output — for screenshots and bug reports. Best-effort; env form: WAIRED_PII_MASK=1 (set by the installers' --mask-pii / -MaskPII). Progress rendering falls back to plain lines while masking.")
 	f.BoolVar(&o.skipClaudeRoute, "skip-claude-route", os.Getenv("WAIRED_NO_CLAUDE_PROXY") != "",
@@ -328,14 +328,22 @@ func runInitBody(o *initFlags) error {
 		welcomeBanner(os.Stdout)
 	}
 
-	// Thin-client path: when a waired-agent daemon is already running,
-	// drive the daemon-owned login MGMT API rather than enrolling
-	// locally. The daemon owns the runtime + state dir and brings the
-	// tunnel up live (the Tailscale model). Bypass-idp and re-auth keep
-	// the standalone path below: the daemon login does not implement the
-	// mock-complete-login shortcut or token-only refresh, and a no-daemon
-	// host (headless / CI / pre-service-start) naturally falls through.
-	if !*bypassMode && !*googleSALogin && !renewing && daemonReachable(*mgmtURL) {
+	// Which enrollment journey this run takes. Enrollment is daemon-owned
+	// (the Tailscale model): the running waired-agent performs it and this
+	// process is a thin client over its login API. There is no implicit
+	// fallback to the standalone path below — a probe that failed because
+	// the service never started used to silently produce a registered but
+	// capability-less device (#175). See init_route_daemon.go.
+	route := chooseEnrollRoute(enrollFacts{
+		bypassMode:       *bypassMode,
+		googleSALogin:    *googleSALogin,
+		renewing:         renewing,
+		serviceInstalled: serviceInstalledFn(),
+	}, func(serviceInstalled bool) bool {
+		return waitForDaemonStartup(*mgmtURL, serviceInstalled, os.Stdout)
+	})
+	switch route {
+	case routeDaemon:
 		fmt.Println("waired-agent is running; signing in via the daemon (no local enrollment).")
 		return runInitViaDaemon(*mgmtURL, *control, *deviceName, *noBrowser, *nonInteractive,
 			*skipIntegration, *gatewayBaseURL, stdinOwner, daemonInitInference{
@@ -343,8 +351,13 @@ func runInitBody(o *initFlags) error {
 				Share:   *inferenceShare,
 				ModelID: *bundledModelID,
 			})
+	case routeAgentDown, routeAgentAbsent:
+		return daemonRequiredError(route, runtime.GOOS, serviceStartHintFn())
 	}
 
+	// routeLocal: explicitly-selected local enrollment (--bypass-mode /
+	// --google-sa-login / re-auth). Removed once the daemon login covers
+	// all three (#175).
 	listenAddr, err := chooseListenAddr(*listen)
 	if err != nil {
 		return err

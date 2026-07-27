@@ -28,6 +28,7 @@ most problems on its own.
 
 - [I typed `waired` and got “command not found”](#i-typed-waired-and-got-command-not-found)
 - [No browser opened at sign-in, or the wrong one did](#no-browser-opened-at-sign-in)
+- [Sign-in stops because the background service is not responding](#sign-in-stops-because-the-background-service-is-not-responding)
 - [Setup stopped partway](#setup-stopped-partway)
 - [It says I have reached the device limit](#it-says-i-have-reached-the-device-limit)
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
@@ -90,6 +91,33 @@ in current versions:
 ```sh
 waired update
 ```
+
+## Sign-in stops because the background service is not responding
+
+Signing in happens *through* the background service: it is what talks to Waired,
+and what keeps this computer connected afterwards. If it is not answering,
+sign-in stops rather than continuing without it:
+
+```
+Waired's background service is installed but isn't responding, so sign-in can't continue.
+  Check what's wrong:  waired doctor
+  Start it:            sudo systemctl start waired-agent
+  Then run again:      sudo waired init
+```
+
+Work through those three lines in order. `waired doctor` names the actual fault;
+on macOS the usual one is [the service never starting at
+all](#macos-the-background-service-never-starts).
+
+Earlier versions signed in anyway when this happened. It looked like it worked —
+but the computer ended up signed in and unable to finish setup in the browser,
+with nothing on the machine itself explaining why. Stopping with a message you
+can act on replaced that.
+
+If the message says **“Waired isn't running in the background”** instead, no
+background service is registered on this computer at all — normally because the
+programs are being run directly rather than installed. Start `waired-agent`
+first, then run `waired init` again.
 
 ## Setup stopped partway
 

@@ -10,9 +10,11 @@
 # ------------------------------------------------
 # The other installtest legs enroll hands-free with `waired init
 # --google-sa-login` (oidc) or `--bypass-mode`. Both of those FORCE the
-# standalone enroll path (cmd/waired/main.go: the daemon path is gated on
-# `!bypassMode && !googleSALogin && !renewing && daemonReachable`). On the
-# standalone path the engine, when installed at all, is installed by
+# local enroll path: they are two of the three explicit selectors for it
+# (with re-auth), and since #175 they are the ONLY way to reach it — an
+# unreachable daemon is now an error, not a silent downgrade. See
+# cmd/waired/init_route_daemon.go `chooseEnrollRoute`. On the local enroll
+# path the engine, when installed at all, is installed by
 # install.sh (--inference) or by the interactive `configureInference` hook —
 # never by the setup executor. So the waired#835 §9/§11 executor engine
 # install (`ensureDaemonPathEngine` / `runSetupEngineInstall`, the resident

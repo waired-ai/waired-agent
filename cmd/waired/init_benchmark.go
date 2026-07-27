@@ -274,22 +274,6 @@ func offerBenchmark(mgmtURL string, nonInteractive bool, out io.Writer, sc lineR
 	return outcomeFrom(resp)
 }
 
-// waitDaemonReachable polls the Management API until it answers or the
-// timeout elapses; returns true once reachable. Used to give the
-// just-started daemon a moment to bind before the benchmark probe.
-func waitDaemonReachable(mgmtURL string, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		if daemonReachable(mgmtURL) {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-}
-
 // waitForBenchmark polls the daemon until the engine + active model are
 // ready, then runs the benchmark and returns the full response (with
 // the measurement plus any lighter/upgrade suggestion). ok=false means

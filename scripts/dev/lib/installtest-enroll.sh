@@ -49,11 +49,20 @@ _it_dev_name() { printf '%s' "${1#"$IT_PREFIX"-}"; }
 
 # it_enroll_guest <guest> — reproduce install.sh's real first-run enrol:
 # `waired init` running as root *before* the daemon owns the identity, so
-# it takes the standalone path that writes identity as root and chowns the
-# state dir to the service user (FixStateOwnership — the #335 chain).
+# it takes the local-enrolment path that writes identity as root and chowns
+# the state dir to the service user (FixStateOwnership — the #335 chain).
 # bypass-mode never auto-starts the agent and the headless guest has no
 # tty for install.sh's own maybe_init, so we drive it explicitly:
 # stop daemon -> init -> (re)start daemon on the enrolled, chowned state.
+#
+# Only for the two modes that select local enrolment explicitly (bypass /
+# oidc). Since #175 `waired init` no longer infers that path from a failed
+# daemon probe: with a systemd unit registered and the daemon stopped it
+# fails with "the background service is installed but isn't responding"
+# instead of enrolling locally. The interactive mode carries no such flag,
+# so it keeps the daemon up and takes the daemon-driven journey — which is
+# what a real interactive install does anyway (install.sh brings the
+# service up before maybe_init).
 it_enroll_guest() {
   local guest name initlog inf_flag
   guest="$1"
@@ -67,8 +76,12 @@ it_enroll_guest() {
   mkdir -p "$IT_LOGDIR"
   initlog="$IT_LOGDIR/init-$name.log"
 
-  it_log "stopping waired-agent so init takes the standalone root-enrol path (#335)"
-  gx "$guest" systemctl stop waired-agent 2>/dev/null || true
+  if [ "$IT_ENROLL_MODE" != interactive ]; then
+    it_log "stopping waired-agent so init takes the local root-enrol path (#335)"
+    gx "$guest" systemctl stop waired-agent 2>/dev/null || true
+  else
+    it_log "leaving waired-agent running: interactive enrol takes the daemon path (#175)"
+  fi
 
   # Build the `waired init` argv per mode; run it once through tee so the
   # init transcript (model pull progress + benchmark) is captured for
@@ -128,8 +141,10 @@ or use IT_ENROLL_MODE=oidc (real app.dev.waired.net) / interactive."
     it_die "waired init ($IT_ENROLL_MODE) failed in $guest — see $initlog"
   fi
 
-  # Boot the daemon on the freshly enrolled + chowned state (bypass/oidc do
-  # not auto-start it; restart is a no-op->reload for interactive).
+  # Boot the daemon on the freshly enrolled + chowned state. bypass/oidc
+  # enrolled with it stopped and never auto-start it; interactive enrolled
+  # THROUGH it, and the restart re-reads the state it just wrote — which is
+  # the property the #335 assertions below are about either way.
   gx "$guest" systemctl restart waired-agent
 }
 
