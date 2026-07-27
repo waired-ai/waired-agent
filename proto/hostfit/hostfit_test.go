@@ -357,3 +357,256 @@ func assertFit(t *testing.T, manifests []catalog.Manifest, host hostfit.Host, mo
 func supports(v catalog.Variant, engine string) bool {
 	return slices.Contains(v.RuntimeSupport, engine)
 }
+
+// --- host class + decode estimate (waired-ai/waired-agent#229) --------
+
+// TestHostClass pins the three-way split. The classes are not
+// interchangeable: what happens when the weights do not fit differs in
+// kind, not degree — a discrete card spills to system RAM, a unified
+// pool has nowhere to spill to, and a CPU-only host was never holding
+// anything anywhere else.
+func TestHostClass(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host hostfit.Host
+		want hostfit.Class
+	}{
+		{"cpu only", hostFromWire(t, wireCPUOnly), hostfit.ClassCPUOnly},
+		{"discrete nvidia", hostFromWire(t, wireRTX4090), hostfit.ClassDiscrete},
+		{"apple unified memory", hostFromWire(t, wireMac16), hostfit.ClassUnified},
+		{
+			// Strix Halo enumerates a device AND shares the pool. Unified
+			// wins: the spill target is the same memory the weights are
+			// already in, so treating it as discrete would model a
+			// transfer that does not happen.
+			"unified memory that also enumerates a gpu",
+			hostfit.Host{RAMTotalGB: 128, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 96 * 1024},
+			hostfit.ClassUnified,
+		},
+		{
+			// A pre-v0.2.4 agent sends no unified_memory flag. Reading it
+			// as discrete is the safe wrong answer — it is what the rules
+			// did before the flag existed.
+			"a pre-v0.2.4 agent reads as discrete",
+			hostFromWire(t, wireLegacyGPU), hostfit.ClassDiscrete,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.host.Class(); got != tc.want {
+				t.Errorf("Class() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestActiveBytesPerToken pins the term capacity math cannot see. These
+// are product contracts: the two 27B-class entries below sit within
+// 6 GB of each other on disk and differ by SEVEN TIMES in what a decode
+// step must read, because one is a mixture of experts. Ranking them by
+// size gets the speed order exactly backwards.
+func TestActiveBytesPerToken(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		v    catalog.Variant
+		want float64
+	}{
+		{
+			"a dense model reads all of its weights",
+			catalog.Variant{EstimatedWeightGB: 16.3, ParamCount: 27_000_000_000},
+			16.3,
+		},
+		{
+			"a mixture of experts reads only the active share",
+			catalog.Variant{EstimatedWeightGB: 22.6, ParamCount: 35_000_000_000, ActiveParams: 3_300_000_000},
+			22.6 * 3.3 / 35,
+		},
+		{
+			"an unannotated variant makes no claim",
+			catalog.Variant{ParamCount: 27_000_000_000},
+			0,
+		},
+		{
+			// Defensive: a manifest saying the active share is the whole
+			// model is a dense model spelled differently.
+			"active >= total is dense",
+			catalog.Variant{EstimatedWeightGB: 4.0, ParamCount: 7_000_000_000, ActiveParams: 7_000_000_000},
+			4.0,
+		},
+		{
+			// No param_count to scale by: fall back to the full weight
+			// rather than inventing an active share.
+			"no param count is dense",
+			catalog.Variant{EstimatedWeightGB: 4.0, ActiveParams: 1_000_000_000},
+			4.0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hostfit.ActiveBytesPerToken(tc.v)
+			if diff := got - tc.want; diff > 0.01 || diff < -0.01 {
+				t.Errorf("ActiveBytesPerToken() = %.3f, want %.3f", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEstimateOllamaDecode walks the per-class arithmetic.
+//
+// The tok/s figures themselves are a record of today's model at today's
+// bandwidth constants — they move when those constants are replaced by
+// measured per-device bandwidth. What is CONTRACT is the verdicts: a
+// dense 27B is too slow on a small unified pool, a mixture of experts of
+// similar size is not, and a discrete card holding the whole model is
+// never the wall.
+func TestEstimateOllamaDecode(t *testing.T) {
+	dense27b := catalog.Variant{
+		VariantID: "q4-gguf", EstimatedWeightGB: 16.3,
+		ParamCount: 27_000_000_000, KVBytesPerTokenFP16: 65536,
+	}
+	moe35b := catalog.Variant{
+		VariantID: "mtp-q4-gguf", EstimatedWeightGB: 22.6,
+		ParamCount: 35_000_000_000, ActiveParams: 3_300_000_000, KVBytesPerTokenFP16: 20480,
+	}
+	big120b := catalog.Variant{
+		VariantID: "mxfp4-gguf", EstimatedWeightGB: 62.0, MinRAMGB: 96,
+		ParamCount: 116_800_000_000, ActiveParams: 5_100_000_000, KVBytesPerTokenFP16: 98304,
+	}
+	moe122b := catalog.Variant{
+		VariantID: "q4-gguf", EstimatedWeightGB: 81.0, MinRAMGB: 128,
+		ParamCount: 122_000_000_000, ActiveParams: 10_000_000_000, KVBytesPerTokenFP16: 24576,
+	}
+
+	mac24 := hostfit.Host{RAMTotalGB: 24, UnifiedMemory: true, UsableVRAMMB: 18432, VRAM0MB: 24576}
+	cpu128 := hostfit.Host{RAMTotalGB: 128}
+	card24 := hostfit.Host{RAMTotalGB: 128, GPUCount: 1, VRAM0MB: 24564}
+
+	for _, tc := range []struct {
+		name      string
+		v         catalog.Variant
+		host      hostfit.Host
+		wantFloor bool
+		wantRes   bool
+	}{
+		// The 24 GB Mac is why this term exists. Both models sit in the
+		// pool; the dense one decodes at a fraction of the speed.
+		{"a dense 27B is too slow on a small unified pool", dense27b, mac24, false, true},
+		{"a 3B-active MoE is not", moe35b, mac24, true, true},
+
+		{"a dense 27B is far too slow on the cpu", dense27b, cpu128, false, false},
+		{"the same cpu runs a 3B-active MoE", moe35b, cpu128, true, false},
+
+		// A card holding the whole model decides the rate with its own
+		// bandwidth, which this package does not know — so it makes no
+		// claim rather than a wrong one.
+		{"a resident discrete card is never the wall", moe35b, card24, true, true},
+		// Spilled, but the active share per token is small enough that
+		// even the RAM-only bound clears the floor.
+		{"a heavily spilled 5B-active MoE still clears the floor", big120b, card24, true, false},
+		// Spilled with twice the active share: this is the one that must
+		// not be recommended.
+		{"a spilled 10B-active MoE does not", moe122b, card24, false, false},
+
+		{
+			"a variant with no sizing annotations makes no claim",
+			catalog.Variant{VariantID: "unknown"}, card24, true, false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hostfit.EstimateOllamaDecode(tc.v, tc.host)
+			if got.MeetsSpeedFloor != tc.wantFloor || got.Resident != tc.wantRes {
+				t.Errorf("EstimateOllamaDecode() = %+v, want MeetsSpeedFloor=%v Resident=%v",
+					got, tc.wantFloor, tc.wantRes)
+			}
+			if got.Resident && got.ResidentShare != 1 {
+				t.Errorf("resident verdict with share %.2f", got.ResidentShare)
+			}
+		})
+	}
+}
+
+// TestEstimateIsMonotoneInHardware: adding a graphics card cannot make a
+// machine slower, so the estimate must never demote a model from "fast
+// enough" to "slow" when a card appears. Asserted as a property over the
+// real catalog rather than as cases, because the invariant is the point:
+// it is what lets the capacity gate drop its residency requirement on
+// discrete hosts without the wizard's recommendation getting worse.
+func TestEstimateIsMonotoneInHardware(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	for _, ram := range []int{8, 16, 32, 64, 128, 512} {
+		for _, vram := range []int{4096, 8192, 12288, 16384, 24564, 49152} {
+			bare := hostfit.Host{RAMTotalGB: ram}
+			carded := hostfit.Host{RAMTotalGB: ram, GPUCount: 1, VRAM0MB: vram}
+			for _, m := range manifests {
+				for _, v := range m.Variants {
+					if !supports(v, catalog.RuntimeOllama) {
+						continue
+					}
+					b := hostfit.EstimateOllamaDecode(v, bare)
+					c := hostfit.EstimateOllamaDecode(v, carded)
+					if b.MeetsSpeedFloor && !c.MeetsSpeedFloor {
+						t.Fatalf("%s/%s: %d GB of RAM clears the speed floor (%.1f tok/s), "+
+							"but adding a %d MB card drops it to %.1f",
+							m.ModelID, v.VariantID, ram, b.TokpsEstimate, vram, c.TokpsEstimate)
+					}
+					if !c.Resident && c.TokpsEstimate < b.TokpsEstimate {
+						t.Fatalf("%s/%s: a %d MB card made the estimate WORSE (%.1f -> %.1f tok/s)",
+							m.ModelID, v.VariantID, vram, b.TokpsEstimate, c.TokpsEstimate)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestBundledCatalog_SmallMacPrefersSpeed is the concrete outcome the
+// estimate buys, measured against the real catalog: on a 24 GB Mac the
+// highest-tier model that FITS decodes at a fraction of the speed of a
+// lower-tier one that also fits. Capacity alone picks the slow one, and
+// that is what ships today.
+func TestBundledCatalog_SmallMacPrefersSpeed(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	mac := hostfit.Host{RAMTotalGB: 24, UnifiedMemory: true, UsableVRAMMB: 18432, VRAM0MB: 24576}
+
+	type cand struct {
+		id    string
+		tier  int
+		tokps float64
+	}
+	var byCapacity, bySpeed *cand
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			got := hostfit.OllamaFit(v, mac)
+			if !got.Fits {
+				continue
+			}
+			c := &cand{m.ModelID, v.QualityTier, got.Estimate.TokpsEstimate}
+			if byCapacity == nil || c.tier > byCapacity.tier {
+				byCapacity = c
+			}
+			if got.Estimate.MeetsSpeedFloor && (bySpeed == nil || c.tier > bySpeed.tier) {
+				bySpeed = c
+			}
+		}
+	}
+	if byCapacity == nil || bySpeed == nil {
+		t.Fatal("a 24 GB Mac fits nothing at all; the rule is rejecting everything")
+	}
+	if byCapacity.id == bySpeed.id {
+		t.Fatalf("capacity and speed agree on %s here, so this fixture no longer "+
+			"demonstrates the problem — re-check the catalog", byCapacity.id)
+	}
+	if byCapacity.tokps >= bySpeed.tokps {
+		t.Fatalf("the capacity pick (%s, %.1f tok/s) is not slower than the speed pick (%s, %.1f tok/s)",
+			byCapacity.id, byCapacity.tokps, bySpeed.id, bySpeed.tokps)
+	}
+	t.Logf("24 GB Mac: capacity picks %s (tier %d, %.1f tok/s); speed picks %s (tier %d, %.1f tok/s)",
+		byCapacity.id, byCapacity.tier, byCapacity.tokps, bySpeed.id, bySpeed.tier, bySpeed.tokps)
+}
