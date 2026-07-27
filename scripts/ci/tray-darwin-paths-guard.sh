@@ -53,6 +53,16 @@ grep -q '^build-tray-darwin:' Makefile || {
   exit 1
 }
 
+# The unit suite is the second half of what this job is for (#152). Before it
+# existed, the darwin dialog helpers hung a headless runner, so the step was
+# deliberately absent — and re-deleting it would silently restore a
+# vet-and-build-only gate over the one subtree with no other darwin coverage.
+grep -qE '^[[:space:]]*run: go test .*internal/gui/tray' "${wf}" || {
+  echo "::error::${wf} no longer runs 'go test' over internal/gui/tray." >&2
+  echo "That step is what makes the darwin-tagged tray assertions execute (#152); vet alone does not run them." >&2
+  exit 1
+}
+
 if (( ${#missing[@]} )); then
   echo "::error::${wf} paths is missing required anchors:" >&2
   printf '  - %s\n' "${missing[@]}" >&2

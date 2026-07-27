@@ -8,12 +8,36 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
+
+// mgmtSockPath returns a socket path short enough to bind. sockaddr_un's
+// sun_path is 104 bytes on darwin (108 on Linux), and t.TempDir() cannot stay
+// under that here: macOS puts TMPDIR at /var/folders/<2>/<30>/T/ — 49 bytes
+// before Go appends the test name, ten random digits and /001. This package's
+// names are long enough to reach 115, and bind() then fails with EINVAL, which
+// is what turned the darwin leg red the first time it ran (#152).
+//
+// os.MkdirTemp with a two-character prefix leaves ~33 bytes of headroom and,
+// unlike shortening TMPDIR from the workflow, keeps the constraint stated
+// where a test author will see it. The product solves the same problem for
+// real at internal/platform/paths/paths_unix.go (sunPathBudget + a hashed
+// fallback), pinned by a TMPDIR-independent test — so nothing here weakens
+// that guard.
+func mgmtSockPath(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "wt")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, name)
+}
 
 // serveMgmtSocket starts an httptest server on a unix-domain socket and
 // points $WAIRED_MGMT_SOCKET at it, so the tray's write client (which
@@ -22,7 +46,7 @@ import (
 // the loopback TCP port.
 func serveMgmtSocket(t *testing.T, h http.Handler) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "mgmt.sock")
+	sock := mgmtSockPath(t, "mgmt.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listen unix: %v", err)
@@ -96,7 +120,10 @@ func TestClient_EmptyBodyPost_SetsJSONContentType(t *testing.T) {
 // TestClient_WriteDialError confirms a missing socket surfaces the wrapped,
 // operator-facing message rather than a raw "dial unix ...: no such file".
 func TestClient_WriteDialError(t *testing.T) {
-	t.Setenv(paths.MgmtSocketEnvOverride, filepath.Join(t.TempDir(), "absent.sock"))
+	// Short path here too: the contract under test is "the socket file is
+	// absent", and a path over sun_path would make it fail for the wrong
+	// reason on darwin.
+	t.Setenv(paths.MgmtSocketEnvOverride, mgmtSockPath(t, "absent.sock"))
 	err := NewClient("").Pause(context.Background())
 	if err == nil {
 		t.Fatal("expected an error dialing a missing socket")

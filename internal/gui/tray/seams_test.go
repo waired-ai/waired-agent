@@ -1,0 +1,180 @@
+package tray
+
+import (
+	"context"
+	"os"
+	"sync"
+	"testing"
+)
+
+// TestMain installs no-op stubs over every dialog / host-integration seam
+// declared in tray.go, for the whole package, before any test runs.
+//
+// This is deliberately not a per-test opt-in. tray.go reaches showError from
+// 48 places, and on darwin the real one opens a modal `osascript display
+// dialog` that never returns without a click: one test that forgets to stub
+// hangs the macOS runner to its job timeout instead of failing (#152 —
+// TestRunPublicConsent_VersionMismatchRefetchesOnce was that test). Stubbing
+// centrally means a NEW test cannot reintroduce the hang, which is the whole
+// point of the change; scripts/ci/tray-dialog-seam-guard.sh keeps this file
+// and the seam block in tray.go from drifting apart.
+//
+// The stubs record their arguments rather than discarding them, so what the
+// user would have been shown is assertable (see seams). Answers default to
+// the most conservative reading — "no dialog backend / user declined" — which
+// is exactly what the real helpers return on a Linux CI box with no zenity,
+// so turning the seams on changes no existing test's outcome.
+func TestMain(m *testing.M) {
+	installSeamStubs()
+	os.Exit(m.Run())
+}
+
+// seamLog records what the seamed helpers were asked to do. Handlers spawn
+// goroutines (onLogout, startLogin), so the recording is mutex-guarded.
+type seamLog struct {
+	mu         sync.Mutex
+	errors     []string
+	confirms   []string
+	yesNos     []string
+	abouts     int
+	clipboard  []string
+	browsers   []string
+	elevations []string
+}
+
+func (l *seamLog) add(field *[]string, v string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	*field = append(*field, v)
+}
+
+func (l *seamLog) snapshot(field *[]string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, len(*field))
+	copy(out, *field)
+	return out
+}
+
+// seams is the package-wide recording of seam traffic. Tests that care about
+// it call resetSeams first; tests that do not simply ignore it.
+var seams = &seamLog{}
+
+// resetSeams clears the recording for one test and clears it again on
+// cleanup, so a later test never reads a neighbour's dialogs.
+func resetSeams(t *testing.T) *seamLog {
+	t.Helper()
+	// Field-by-field, not `*seams = seamLog{}`: that would copy the mutex
+	// while holding it and unlock a different one on the way out.
+	reset := func() {
+		seams.mu.Lock()
+		defer seams.mu.Unlock()
+		seams.errors, seams.confirms, seams.yesNos = nil, nil, nil
+		seams.clipboard, seams.browsers, seams.elevations = nil, nil, nil
+		seams.abouts = 0
+	}
+	reset()
+	t.Cleanup(reset)
+	return seams
+}
+
+func installSeamStubs() {
+	showAbout = func(string, string) {
+		seams.mu.Lock()
+		defer seams.mu.Unlock()
+		seams.abouts++
+	}
+	showError = func(message string) { seams.add(&seams.errors, message) }
+	showConfirm = func(prompt string) bool {
+		seams.add(&seams.confirms, prompt)
+		return false
+	}
+	confirmYesNo = func(title, body string) (bool, bool) {
+		seams.add(&seams.yesNos, title+"\n"+body)
+		return false, false
+	}
+	confirmWithLabels = func(_, _, _, _ string) (bool, bool) { return false, false }
+	copyToClipboard = func(text string) error {
+		seams.add(&seams.clipboard, text)
+		return nil
+	}
+	openBrowser = func(url string) error {
+		seams.add(&seams.browsers, url)
+		return nil
+	}
+	loginViaElevation = func(context.Context, string, string) error {
+		seams.add(&seams.elevations, "login")
+		return nil
+	}
+	logoutViaElevation = func(context.Context, string) error {
+		seams.add(&seams.elevations, "logout")
+		return nil
+	}
+	installOllamaViaElevation = func(context.Context, string) error {
+		seams.add(&seams.elevations, "install-ollama")
+		return nil
+	}
+	updateViaElevation = func(context.Context) error {
+		seams.add(&seams.elevations, "update")
+		return nil
+	}
+	// notifier is the pre-existing seam over the OS toast backend; on darwin
+	// the real one also execs osascript. Give it the same package-wide
+	// default so no test has to remember installStubNotifier just to stay
+	// hermetic (tests that assert on toasts still install their own).
+	notifier = &stubNotifier{}
+}
+
+// TestSeamStubsCoverEveryDeclaredSeam is the runtime half of
+// scripts/ci/tray-dialog-seam-guard.sh: it proves that installSeamStubs
+// actually replaced each seam, rather than leaving one pointing at the real
+// per-OS helper. A seam added to tray.go without a stub here shows up as the
+// hang this file exists to prevent, so it must fail loudly instead.
+func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
+	l := resetSeams(t)
+
+	showAbout("v", "sha")
+	showError("boom")
+	showConfirm("really?")
+	confirmYesNo("t", "b")
+	copyToClipboard("clip")
+	if err := openBrowser("https://example.invalid"); err != nil {
+		t.Fatalf("openBrowser stub returned %v", err)
+	}
+	ctx := context.Background()
+	for _, call := range []func() error{
+		func() error { return loginViaElevation(ctx, "", "") },
+		func() error { return logoutViaElevation(ctx, "") },
+		func() error { return installOllamaViaElevation(ctx, "") },
+		func() error { return updateViaElevation(ctx) },
+	} {
+		if err := call(); err != nil {
+			t.Fatalf("elevation stub returned %v", err)
+		}
+	}
+
+	if l.abouts != 1 {
+		t.Errorf("showAbout not stubbed: abouts = %d, want 1", l.abouts)
+	}
+	for name, got := range map[string][]string{
+		"showError":       l.snapshot(&l.errors),
+		"showConfirm":     l.snapshot(&l.confirms),
+		"confirmYesNo":    l.snapshot(&l.yesNos),
+		"copyToClipboard": l.snapshot(&l.clipboard),
+		"openBrowser":     l.snapshot(&l.browsers),
+	} {
+		if len(got) != 1 {
+			t.Errorf("%s not stubbed: recorded %v, want exactly one call", name, got)
+		}
+	}
+	if got := l.snapshot(&l.elevations); len(got) != 4 {
+		t.Errorf("elevation seams not all stubbed: recorded %v, want 4 calls", got)
+	}
+
+	// confirmWithLabels predates #152 and has its own stub shape (labelStub);
+	// assert only that the package default denies, which is what a host with
+	// no dialog backend does.
+	if yes, ok := confirmWithLabels("t", "b", "a", "c"); yes || ok {
+		t.Errorf("confirmWithLabels default = (%v, %v), want (false, false)", yes, ok)
+	}
+}

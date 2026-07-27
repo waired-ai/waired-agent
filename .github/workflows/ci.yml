@@ -151,6 +151,15 @@ jobs:
         # #182 and #183. Nothing could have gone red.
         run: bash scripts/ci/platform-test-floor-guard.sh
 
+      - name: tray dialog seams
+        # The tray's darwin dialog helpers block on a real modal until a
+        # human clicks; the elevation ones raise a password prompt. A test
+        # reaching one does not fail on a headless macOS runner, it hangs to
+        # the job timeout — which is why the tray unit suite could not run on
+        # darwin at all (#152). This checks both halves of the fix: every
+        # handler goes through the seam, and every seam has a TestMain stub.
+        run: bash scripts/ci/tray-dialog-seam-guard.sh
+
       # Self-tests for the two shell guards in this repo that take their
       # input from outside git (a fixture tree, a changed-file list), so
       # a change to either one's decision table cannot ship unexercised.
