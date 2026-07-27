@@ -544,7 +544,10 @@ jobs:
   # ruleset, the same call already made for the testnet gate.
   report:
     name: report a red nightly
-    needs: [installtest-inference, daemon-engine, routing, banner, vllm-install]
+    # `legs` is in here too: if the matrix selector fails, every lane below
+    # it is SKIPPED rather than failed, and without this the night would go
+    # entirely unreported — the exact silence this job exists to end.
+    needs: [legs, installtest-inference, daemon-engine, routing, banner, vllm-install]
     if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
