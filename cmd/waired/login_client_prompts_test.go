@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
@@ -405,7 +406,9 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 func stubEngineInstallFailure(t *testing.T) {
 	t.Helper()
 	origInstall, origDetect := setupInstallEngine, setupDetectEngine
-	setupInstallEngine = func(bool, string) error { return errors.New("no space left on device") }
+	setupInstallEngine = func(bool, string, func(infruntime.OllamaInstallProgress)) error {
+		return errors.New("no space left on device")
+	}
 	setupDetectEngine = func(context.Context) setup.OllamaDetection { return setup.OllamaDetection{} }
 	t.Cleanup(func() { setupInstallEngine, setupDetectEngine = origInstall, origDetect })
 }

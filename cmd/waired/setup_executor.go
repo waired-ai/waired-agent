@@ -79,7 +79,33 @@ type executorSession struct {
 	// elevated install start.
 	phase  string
 	engine string
+	// step names which §7 row the phase and the figures below belong to,
+	// and progress is the last transfer report for it. The heartbeat
+	// resends both for the same reason it resends the phase: the daemon's
+	// view of a step must not decay to nothing between two real updates
+	// (waired-agent#197).
+	step     string
+	progress executorProgress
+	// progressAt paces Progress. The installer's own callback fires far
+	// faster than either this local IPC or the CP's 1-push-per-2 s intake
+	// can use, so ordinary byte updates are throttled; a step change or a
+	// terminal phase always posts immediately.
+	progressAt time.Time
 }
+
+// executorProgress is one step's byte-level transfer figures.
+type executorProgress struct {
+	completed int64
+	total     int64
+	rateBps   int64
+}
+
+// executorProgressInterval throttles ordinary byte updates from the
+// installer's progress callback. 500 ms is four updates per CP push
+// window — enough that the browser's bar moves smoothly, few enough that
+// a download does not spend its time posting about itself. A var for the
+// same reason as the budgets above: tests shrink it.
+var executorProgressInterval = 500 * time.Millisecond
 
 // attachSetupExecutor probes the daemon for the executor routes and, when
 // they exist, attaches a lease and starts heartbeating it. The returned
@@ -131,15 +157,25 @@ func (s *executorSession) State() management.SetupStateResponse {
 // failed heartbeat is indistinguishable to the operator from a slow one,
 // and the daemon's TTL already covers a session that stops reporting.
 func (s *executorSession) post(attached bool, phase, engine, errText string) management.SetupStateResponse {
+	step, prog := s.currentProgress()
+	return s.postStep(attached, phase, engine, errText, step, prog)
+}
+
+// postStep is post with an explicit step and its transfer figures.
+func (s *executorSession) postStep(attached bool, phase, engine, errText, step string, prog executorProgress) management.SetupStateResponse {
 	if !s.Supported() {
 		return management.SetupStateResponse{}
 	}
 	body, _ := json.Marshal(management.SetupExecutorRequest{
-		Attached: attached,
-		Elevated: s.elevated,
-		Phase:    phase,
-		Engine:   engine,
-		Error:    errText,
+		Attached:       attached,
+		Elevated:       s.elevated,
+		Phase:          phase,
+		Engine:         engine,
+		Error:          errText,
+		Step:           step,
+		CompletedBytes: prog.completed,
+		TotalBytes:     prog.total,
+		RateBps:        prog.rateBps,
 	})
 	out, err := httpPost(s.mgmtURL+"/waired/v1/setup/executor", body)
 	if err != nil {
@@ -179,10 +215,70 @@ func (s *executorSession) currentEngine() string {
 	return s.engine
 }
 
+// currentProgress returns the step the lease is reporting against and its
+// last transfer figures, so a heartbeat repeats them rather than letting
+// the daemon's view of the row decay between real updates.
+func (s *executorSession) currentProgress() (string, executorProgress) {
+	if s == nil {
+		return "", executorProgress{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.step, s.progress
+}
+
 // Installing claims the engine install for this lease.
 func (s *executorSession) Installing(engine string) management.SetupStateResponse {
 	s.setPhase(management.SetupExecutorPhaseInstalling, engine)
 	return s.post(true, management.SetupExecutorPhaseInstalling, engine, "")
+}
+
+// Progress reports byte-level movement on one step (waired-agent#197).
+//
+// This is what the browser wizard has been missing: the engine install
+// runs in this elevated process and draws its bar on this terminal, so
+// without a report the wizard has "Working on it…" and nothing else for
+// the length of a 1.4 GB download. Ordinary updates are throttled to
+// executorProgressInterval; a change of step is not, because that is the
+// event that closes one row and opens the next.
+//
+// A step change also posts the OUTGOING step as done first, so the row
+// the operator was watching finishes rather than being abandoned
+// mid-bar.
+func (s *executorSession) Progress(step, engine string, completed, total, rateBps int64) {
+	if !s.Supported() || step == "" {
+		return
+	}
+	prog := executorProgress{completed: completed, total: total, rateBps: rateBps}
+
+	s.mu.Lock()
+	prev := s.step
+	changed := prev != step
+	throttled := !changed && time.Since(s.progressAt) < executorProgressInterval
+	if !throttled {
+		s.progressAt = time.Now()
+	}
+	s.step = step
+	s.progress = prog
+	if engine != "" {
+		s.engine = engine
+	}
+	phase := s.phase
+	if phase == "" {
+		phase = management.SetupExecutorPhaseInstalling
+	}
+	s.mu.Unlock()
+
+	if throttled {
+		return
+	}
+	if changed && prev != "" {
+		// The previous row is finished by definition: the executor only
+		// moves on once it is. No figures — the daemon keeps the ones it
+		// already has for that row, and a `done` row does not draw a bar.
+		s.postStep(true, management.SetupExecutorPhaseDone, engine, "", prev, executorProgress{})
+	}
+	s.postStep(true, phase, engine, "", step, prog)
 }
 
 // Done reports a completed install and drops the claim.

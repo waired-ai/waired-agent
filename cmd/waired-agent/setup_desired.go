@@ -22,12 +22,30 @@ import (
 // dedupes identical snapshots, so steady state pushes nothing at all.
 const setupPushInterval = 2 * time.Second
 
-// Onboarding step IDs (waired#835 §7). The CP treats them as opaque
-// strings; NAVI's wizard keys its step rows off them.
+// setupKeepaliveInterval is how long an UNCHANGED snapshot may go
+// unpushed while a setup is live (#130).
+//
+// Content dedup alone froze last_check for the length of a step with no
+// moving field — a 15-minute ollama install, a 45-minute vLLM build, a
+// running benchmark — and the wizard's staleness window (120 s) then
+// called a perfectly healthy install offline and told the operator to
+// intervene. Re-pushing the same content every 30 s advances last_check
+// with four times the margin that window needs, and costs 2 pushes /
+// minute on a host that is mid-setup — a state in which the fleet is not
+// at rest anyway. A host with no onboarding activity still snapshots nil
+// and pushes nothing at all.
+const setupKeepaliveInterval = 30 * time.Second
+
+// Onboarding step IDs (waired#835 §7, five ids as of waired#934). The CP
+// treats them as opaque strings; NAVI's wizard keys its step rows off
+// them. The three the elevated executor drives are named in
+// internal/management, because the executor and the daemon have to agree
+// on which row a report belongs to.
 const (
-	setupStepEngineInstall = "engine_install"
-	setupStepModelPull     = "model_pull"
-	setupStepBenchmark     = "benchmark"
+	setupStepEngineDownload = management.SetupStepEngineDownload
+	setupStepEngineInstall  = management.SetupStepEngineInstall
+	setupStepModelPull      = "model_pull"
+	setupStepBenchmark      = "benchmark"
 )
 
 // Executor lease timings (waired#835 §9/§11). Both sides of the range
@@ -55,6 +73,21 @@ type setupDesired struct {
 	engine       string
 	modelID      string
 	benchmarkGen int
+}
+
+// setupExecutorStep is what the elevated CLI last reported about one
+// setup step: its phase, the failure detail if it failed, and the live
+// transfer figures for a byte-denominated step.
+//
+// Byte fields are only overwritten by a report that actually carries
+// them, so the terminating `done` post — which has nothing to say about
+// bytes — does not blank the last figures the row was drawn from.
+type setupExecutorStep struct {
+	phase          string
+	errText        string
+	completedBytes int64
+	totalBytes     int64
+	rateBps        int64
 }
 
 // setupProvider is the narrow view of agentInferenceProvider the
@@ -111,8 +144,13 @@ type setupReconciler struct {
 	executorEverSeen bool
 	executorElevated bool
 	executorSeen     time.Time
-	executorPhase    string
-	executorErr      string
+	// executorSteps is the lease's phase and byte progress PER STEP
+	// (#197). It used to be one phase for the whole lease, which was
+	// enough while the executor drove exactly one row; now that the
+	// engine download and the install proper are separate rows — and
+	// waired#935 adds the integration — a single field would let the
+	// install's phase erase the finished download's.
+	executorSteps map[string]setupExecutorStep
 	// installClaimed names the engine whose install a live lease claimed.
 	// Bound to the LEASE, never to desired_engine: a claim that outlived
 	// its executor would make the "re-run sudo waired init" recovery a
@@ -137,6 +175,7 @@ func newSetupReconciler(provider setupProvider, push *controlclient.Client, devi
 		interval:      setupPushInterval,
 		pullAttempted: map[string]bool{},
 		pullRejected:  map[string]string{},
+		executorSteps: map[string]setupExecutorStep{},
 		kick:          make(chan struct{}, 1),
 	}
 }
@@ -278,23 +317,49 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 	if phase == "" {
 		phase = management.SetupExecutorPhaseIdle
 	}
-	r.executorPhase = phase
-	r.executorErr = req.Error
+	// An unnamed step is the engine install: that is all a lease could
+	// report before the split, and all it ever meant.
+	stepID := req.Step
+	if stepID == "" {
+		stepID = setupStepEngineInstall
+	}
+	st := r.executorSteps[stepID]
+	st.phase = phase
+	st.errText = req.Error
+	if req.CompletedBytes > 0 || req.TotalBytes > 0 {
+		st.completedBytes = req.CompletedBytes
+		st.totalBytes = req.TotalBytes
+		st.rateBps = req.RateBps
+	}
+	r.executorSteps[stepID] = st
 	if req.Attached {
 		r.executorAttached = true
 		r.executorEverSeen = true
 		r.executorElevated = req.Elevated
 		r.executorSeen = r.now()
-		switch phase {
-		case management.SetupExecutorPhaseInstalling:
-			if req.Engine != "" {
-				r.installClaimed = req.Engine
+		// Only an engine step moves the install claim. An integration
+		// report (waired#935) rides the same lease and must not hand the
+		// engine install to a second executor by reporting `done`.
+		if management.IsEngineSetupStep(req.Step) {
+			switch phase {
+			case management.SetupExecutorPhaseInstalling:
+				if req.Engine != "" {
+					r.installClaimed = req.Engine
+				}
+			case management.SetupExecutorPhaseDone, management.SetupExecutorPhaseFailed:
+				// The attempt is over either way; a fresh executor (or this
+				// one, after the operator fixes whatever failed) may claim it
+				// again.
+				//
+				// Except while the download is still the step being
+				// reported: `engine_download: done` means the bytes are
+				// here and the install proper is next, in the SAME lease.
+				// Dropping the claim there would invite a second elevated
+				// install of the engine this one is mid-way through.
+				if stepID != setupStepEngineDownload || phase != management.SetupExecutorPhaseDone {
+					r.installClaimed = ""
+				}
 			}
-		case management.SetupExecutorPhaseDone, management.SetupExecutorPhaseFailed:
-			// The attempt is over either way; a fresh executor (or this
-			// one, after the operator fixes whatever failed) may claim it
-			// again.
-			r.installClaimed = ""
 		}
 	} else {
 		// Explicit release — same effect as the lease expiring, minus the
@@ -351,8 +416,10 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	leaseLive := r.leaseLiveLocked()
 	everSeen := r.executorEverSeen
 	elevated := r.executorElevated
-	phase := r.executorPhase
-	execErr := r.executorErr
+	download, downloadSeen := r.executorSteps[setupStepEngineDownload]
+	install := r.executorSteps[setupStepEngineInstall]
+	phase := install.phase
+	execErr := install.errText
 	r.mu.Unlock()
 	if !active {
 		return nil
@@ -362,8 +429,17 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		LastCheck: r.now().UTC().Format(time.RFC3339Nano),
 	}
 	if d.engine != "" {
-		step := signer.SetupStep{ID: setupStepEngineInstall}
 		installed, ready := r.provider.setupEngineState(ctx, d.engine)
+		// engine_download exists only when this host actually downloaded
+		// something. A machine that already had the engine, or one whose
+		// executor is older than the split, reports the single
+		// engine_install row it always did — inventing a download row for
+		// a transfer that never happened would be a step the wizard waits
+		// on forever.
+		if downloadSeen {
+			p.Steps = append(p.Steps, engineDownloadStep(download, installed || ready))
+		}
+		step := signer.SetupStep{ID: setupStepEngineInstall}
 		// Arm order is the contract here, not an accident (#187). It is
 		// strongest-evidence-first: an engine that is serving beats a
 		// stale failed phase from an earlier attempt; a failure the
@@ -389,6 +465,18 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			// download while the progress bar tracked the model step, and
 			// the wizard showed two rows running at once.
 			step.Status = signer.SetupStatusDone
+		case downloadSeen && download.phase == management.SetupExecutorPhaseFailed:
+			// The bytes never arrived, so there is nothing to install.
+			// The failure is reported once, on the row it happened on;
+			// repeating it here would show the operator two red steps for
+			// one event and invite them to fix it twice.
+			step.Status = signer.SetupStatusPending
+		case downloadSeen && download.phase != management.SetupExecutorPhaseDone:
+			// A download is still in flight. Keeping this row pending is
+			// the same rule #187 settled for the model pull: exactly one
+			// row is allowed to be the live one, or the wizard shows two
+			// spinners and the progress bar belongs to neither.
+			step.Status = signer.SetupStatusPending
 		case phase == management.SetupExecutorPhaseDone:
 			// The executor says it finished and we cannot see it yet.
 			// Rare now that detection matches the daemon's own rule
@@ -468,6 +556,32 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	return p
 }
 
+// engineDownloadStep projects the executor's engine-download report onto
+// its §7 row (#197). enginePresent short-circuits it: whatever the last
+// lease said, an engine that is on this host was downloaded.
+//
+// The byte counters ride the row while it runs and are dropped once it is
+// done — a finished download is a finished download, and a "1.4 GB /
+// 1.4 GB" bar left on screen next to a green check is the kind of detail
+// that reads as an unfinished step.
+func engineDownloadStep(st setupExecutorStep, enginePresent bool) signer.SetupStep {
+	step := signer.SetupStep{ID: setupStepEngineDownload}
+	switch {
+	case enginePresent || st.phase == management.SetupExecutorPhaseDone:
+		step.Status = signer.SetupStatusDone
+	case st.phase == management.SetupExecutorPhaseFailed:
+		step.Status = signer.SetupStatusFailed
+		step.ErrorCode = classifySetupFailure(st.errText)
+		step.ErrorDetail = clampSetupDetail(st.errText)
+	default:
+		step.Status = signer.SetupStatusRunning
+		step.CompletedBytes = st.completedBytes
+		step.TotalBytes = st.totalBytes
+		step.RateBps = st.rateBps
+	}
+	return step
+}
+
 // setupDetailMax mirrors the control plane's error_detail clamp
 // (waired#835 §20.5). Clamping here too keeps a long installer log from
 // costing a whole push.
@@ -522,10 +636,12 @@ func progressKey(p *signer.SetupProgress) string {
 }
 
 // runPush is the reporter loop (§5.2/§7): every setupPushInterval it
-// snapshots the step states and pushes to CP only when the content
-// changed since the last successful push. Hosts with no onboarding
-// activity snapshot nil and never touch the network — the setup
-// channel adds zero heartbeat to a fleet at rest.
+// snapshots the step states and pushes to CP when the content changed
+// since the last successful push, or when the last push has aged past
+// setupKeepaliveInterval (#130 — an unchanging step must still prove it
+// is alive). Hosts with no onboarding activity snapshot nil and never
+// touch the network: the setup channel adds zero heartbeat to a fleet at
+// rest, and the keepalive only runs for a host that is mid-setup.
 func (r *setupReconciler) runPush(ctx context.Context) {
 	if r == nil || r.push == nil || r.deviceID == "" || len(r.machineKey) != ed25519.PrivateKeySize {
 		return
@@ -533,6 +649,7 @@ func (r *setupReconciler) runPush(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
 	var lastPushed string
+	var lastPushAt time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -545,7 +662,10 @@ func (r *setupReconciler) runPush(ctx context.Context) {
 			continue
 		}
 		key := progressKey(snap)
-		if key == "" || key == lastPushed {
+		if key == "" {
+			continue
+		}
+		if key == lastPushed && r.now().Sub(lastPushAt) < setupKeepaliveInterval {
 			continue
 		}
 		pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -558,6 +678,7 @@ func (r *setupReconciler) runPush(ctx context.Context) {
 			continue // retry with fresh content next tick
 		}
 		lastPushed = key
+		lastPushAt = r.now()
 	}
 }
 

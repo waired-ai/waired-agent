@@ -162,11 +162,18 @@ param(
     [string]$StageDir,
     [switch]$NoPath,
     [ValidateSet('auto', 'rocm', 'vulkan', 'cuda-only', 'cpu-only')]
-    [string]$GpuMode    = 'auto'
+    [string]$GpuMode    = 'auto',
+    # MachineProgress emits one machine-readable line per progress tick
+    # alongside the human ones (see Write-MachineProgress). Off by default:
+    # the operator running this script by hand gets exactly the output it
+    # has always produced, and only `waired init` driving a browser setup
+    # asks for the extra lines it knows how to parse (waired-agent#197).
+    [switch]$MachineProgress
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
+$script:MachineProgressEnabled = [bool]$MachineProgress
 
 # Windows PowerShell 5.1 and PowerShell 7 ship separate, incompatible copies
 # of the in-box modules. A 5.1 child launched from a pwsh 7 session inherits
@@ -363,10 +370,37 @@ function Resolve-GpuMode {
 # replaces scrolled a wall of progress rows past the user); when output is
 # redirected (CI logs / transcripts capture Write-Host, not [Console]::Write)
 # it falls back to a fresh line every >=10% or ~5s.
+# Write-MachineProgress emits the one line the Go caller parses
+# (cmd/waired/ollama_progress_line.go). Linux and macOS install through a
+# Go downloader whose callback the setup executor can simply subscribe to;
+# on Windows the transfer happens inside this script, so the same figures
+# have to cross a process boundary as text.
+#
+# Deliberately its own line rather than a parse of the human output: the
+# human rendering is formatted for reading (MB, one decimal, localised
+# thousands separators under some locales) and re-deriving bytes from it
+# would be lossy and locale-dependent. Fixed prefix, raw integers, ASCII.
+function Write-MachineProgress {
+    param(
+        [Parameter(Mandatory)][string]$Stage,
+        [Parameter(Mandatory)][int64]$Completed,
+        [Parameter(Mandatory)][int64]$Total,
+        [Parameter(Mandatory)][int64]$Bps
+    )
+    if (-not $script:MachineProgressEnabled) { return }
+    # A server that omits Content-Length reports -1; the wire has one value
+    # for "unknown" and it is 0.
+    if ($Total -lt 0) { $Total = 0 }
+    if ($Bps   -lt 0) { $Bps   = 0 }
+    Write-Host ("WAIRED-PROGRESS stage={0} completed={1} total={2} bps={3}" -f `
+        $Stage, $Completed, $Total, $Bps)
+}
+
 function Invoke-DownloadWithProgress {
     param(
         [Parameter(Mandatory)][string]$Url,
-        [Parameter(Mandatory)][string]$OutFile
+        [Parameter(Mandatory)][string]$OutFile,
+        [string]$Stage = 'download'
     )
     $interactive = $true
     try { $interactive = -not [Console]::IsOutputRedirected } catch { $interactive = $false }
@@ -395,6 +429,7 @@ function Invoke-DownloadWithProgress {
         $done     = [int64]0
         $lastPct  = -100
         $lastTick = [double]0
+        $lastMach = [double]0
         $read     = 0
         while (($read = $rs.Read($buf, 0, $buf.Length)) -gt 0) {
             $fs.Write($buf, 0, $read)
@@ -402,6 +437,15 @@ function Invoke-DownloadWithProgress {
             $elapsed = $sw.Elapsed.TotalSeconds
             $pct     = if ($total -gt 0) { [int]($done * 100 / $total) } else { -1 }
             $rate    = if ($elapsed -gt 0) { ($done / 1MB) / $elapsed } else { 0 }
+            # The machine line runs on its own cadence, not the human one:
+            # the redirected human rendering is deliberately sparse (>=10%
+            # or ~5 s) so CI logs stay readable, and a browser progress bar
+            # that moves twice a minute reads as a hang.
+            if (($elapsed - $lastMach) -ge 0.5) {
+                Write-MachineProgress -Stage $Stage -Completed $done -Total $total `
+                    -Bps ([int64]($(if ($elapsed -gt 0) { $done / $elapsed } else { 0 })))
+                $lastMach = $elapsed
+            }
             if ($interactive) {
                 # One in-place line, rewritten at most ~4x/s. Pad to clear
                 # residue from a previously longer render.
@@ -438,8 +482,13 @@ function Invoke-DownloadWithProgress {
         # End the in-place line before the summary so it is not overwritten.
         [Console]::Write("`r" + (' ' * 72) + "`r")
     }
+    $finalBytes = [int64](Get-Item -LiteralPath $OutFile).Length
+    # A final tick at 100%: the loop's last emission can be up to half a
+    # second short of the end, and a bar parked at 99% while the install
+    # moves on is the kind of detail that reads as a stall.
+    Write-MachineProgress -Stage $Stage -Completed $finalBytes -Total $finalBytes -Bps 0
     Write-Host ("  done: {0:N1} MB in {1:N0}s" -f `
-        ((Get-Item -LiteralPath $OutFile).Length / 1MB), $sw.Elapsed.TotalSeconds)
+        ($finalBytes / 1MB), $sw.Elapsed.TotalSeconds)
 }
 
 # Remove-StaleStagingDirs sweeps leftover ollama-stage-* directories from
@@ -473,7 +522,11 @@ function Remove-StaleStagingDirs {
 function Stage-ZipDownload {
     param(
         [string]$Url,
-        [int]$MinSizeBytes
+        [int]$MinSizeBytes,
+        # Stage names which transfer this is, matching the stage vocabulary
+        # the Go installers emit ('download' / 'download-rocm') so one
+        # parser serves all three OSes.
+        [string]$Stage = 'download'
     )
     $root = if ($StageDir) { $StageDir } else { $env:TEMP }
     if (-not (Test-Path -LiteralPath $root)) {
@@ -484,7 +537,7 @@ function Stage-ZipDownload {
     $zip = Join-Path $tmpDir ([IO.Path]::GetFileName(([Uri]$Url).AbsolutePath))
     Write-Host "Downloading $Url"
     Write-Host "          -> $zip"
-    Invoke-DownloadWithProgress -Url $Url -OutFile $zip
+    Invoke-DownloadWithProgress -Url $Url -OutFile $zip -Stage $Stage
     $size = (Get-Item $zip).Length
     if ($size -lt $MinSizeBytes) {
         Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -767,7 +820,7 @@ if ($needBaseInstall) {
 }
 
 if ($needRocmInstall) {
-    $rocmZip = Stage-ZipDownload -Url $RocmZipUrl -MinSizeBytes (100MB)
+    $rocmZip = Stage-ZipDownload -Url $RocmZipUrl -MinSizeBytes (100MB) -Stage 'download-rocm'
     try {
         Expand-Overlay -ZipPath $rocmZip -Target $InstallDir -Label 'ROCm overlay'
     } finally {

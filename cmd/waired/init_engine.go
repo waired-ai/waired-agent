@@ -155,7 +155,9 @@ func ensureBundledEngine(
 		} else {
 			writePromptf(out, "%s Installing the Ollama engine (one-time download)...\n", emo("📦", ">>"))
 		}
-		if err := installOllama(true, stateDir); err != nil {
+		// No sink: this is the standalone init path, with no browser
+		// wizard to report to and no executor lease to report through.
+		if err := installOllama(true, stateDir, nil); err != nil {
 			writePromptf(out,
 				"%s Engine install failed: %v\n  The agent retries once an engine appears; install it by hand later: %s\n",
 				emo("⚠️", "!"), err, elevation.Hint("waired runtimes install ollama --yes"))

@@ -92,14 +92,18 @@ live:
 <Screenshot
 	src="setup-wizard-progress.png"
 	alt="The Waired setup page in a browser, showing three steps — Install the AI software (done), Download the AI model (in progress, with a bar reading 7.9 GB of 19.2 GB), and Check the speed (waiting)."
-	caption="Three steps, reported by the computer itself. Closing this tab does not stop them."
+	caption="Every step is reported by the computer itself. Closing this tab does not stop them."
 />
 
 | Step | What is happening | How long |
 |---|---|---|
-| **Install the AI software** | The program that loads and runs models. This is the part that needs administrator rights — which is why the terminal window has to stay open. | A minute or two |
+| **Download the AI software** | Fetching the program that loads and runs models — around 1.5 GB. The page shows how far it has got and how fast it is going, the same figures the terminal shows. | A few minutes |
+| **Install the AI software** | Unpacking and setting it up. This is the part that needs administrator rights — which is why the terminal window has to stay open. | A minute or two |
 | **Download the AI model** | The AI itself, several gigabytes. | 5–30 minutes |
 | **Check the speed** | A short measurement, so Waired knows whether this machine keeps up. | Up to 5 minutes |
+
+The download step only appears when there is something to download: a computer
+that already has the AI software goes straight to the next step.
 
 <Expected>
 	Every step ticked, and **“Everything's ready — this computer can now run AI

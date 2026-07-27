@@ -39,7 +39,12 @@ var installOllamaApp = installOllamaAppImpl
 // one-liner installer (packaging/install/install.sh) does for fresh
 // hosts. Unlike Linux's bundled-tarball model the app is global, not
 // per-state-dir, so stateDir is unused here.
-func installOllama(yes bool, stateDir string) error {
+//
+// sink, when non-nil, receives the same progress events the terminal
+// renderer draws — that is how the browser wizard gets the download it
+// used to have no view of (waired-agent#197). nil for every caller that
+// is not the setup executor.
+func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstallProgress)) error {
 	_ = stateDir
 	if path, err := download.ResolveBinary(""); err == nil {
 		fmt.Printf("Ollama already present at %s — nothing to do.\n", path)
@@ -57,7 +62,7 @@ func installOllama(yes bool, stateDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	fmt.Println("Installing Ollama.app (downloading the official release)...")
-	if err := installOllamaApp(ctx); err != nil {
+	if err := installOllamaApp(ctx, sink); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf(
 				"ollama install: timed out after %s (raise it with %s, e.g. %s=3h): %w",
@@ -95,8 +100,13 @@ var ollamaZipMinBytes int64 = 50 << 20 // 50 MiB (var so tests can lower it)
 // transfer draws the same live progress bar + please-wait hint as the
 // Linux tarball install, instead of the former buffered `curl -fsSL`
 // silence (#615). unzip/cp stay as shelled-out steps.
-func installOllamaAppImpl(ctx context.Context) error {
-	progress := newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama.app")
+func installOllamaAppImpl(ctx context.Context, sink func(infruntime.OllamaInstallProgress)) error {
+	// The terminal bar and the daemon sink are peers: teeOllamaProgress
+	// keeps the former even when the latter is absent.
+	progress := teeOllamaProgress(
+		newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama.app"),
+		sink,
+	)
 
 	tmp, err := os.MkdirTemp("", "waired-ollama-*")
 	if err != nil {

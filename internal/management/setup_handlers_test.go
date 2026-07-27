@@ -133,6 +133,16 @@ func TestSetupExecutorHandlerRejectsBadInput(t *testing.T) {
 		{"malformed json", "{", http.StatusBadRequest},
 		{"unknown phase", `{"attached":true,"phase":"exploding"}`, http.StatusBadRequest},
 		{"known phase", `{"attached":true,"phase":"done"}`, http.StatusOK},
+		// A step outside the settled set would open a row in the wizard
+		// that nothing ever closes (waired-agent#197).
+		{"unknown step", `{"attached":true,"step":"engine_warp"}`, http.StatusBadRequest},
+		{"known step", `{"attached":true,"step":"engine_download"}`, http.StatusOK},
+		{"absent step is the install", `{"attached":true,"phase":"installing"}`, http.StatusOK},
+		// The control plane rejects a negative rate outright, so a report
+		// carrying the renderer's "unknown" sentinel must be caught here
+		// rather than silently poisoning a push the CP will 400.
+		{"negative rate", `{"attached":true,"step":"engine_download","rate_bps":-1}`, http.StatusBadRequest},
+		{"negative bytes", `{"attached":true,"step":"engine_download","completed_bytes":-5}`, http.StatusBadRequest},
 	} {
 		rec := httptest.NewRecorder()
 		srv.mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/waired/v1/setup/executor", strings.NewReader(tc.body)))

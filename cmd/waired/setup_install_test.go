@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
@@ -27,7 +28,7 @@ type fakeEngineInstaller struct {
 func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 	t.Helper()
 	prevInstall, prevDetect, prevHand := setupInstallEngine, setupDetectEngine, setupHandState
-	setupInstallEngine = func(_ bool, stateDir string) error {
+	setupInstallEngine = func(_ bool, stateDir string, _ func(infruntime.OllamaInstallProgress)) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.calls = append(f.calls, stateDir)
@@ -122,7 +123,7 @@ func TestSetupEngineInstallClaimsBeforeInstalling(t *testing.T) {
 	var phaseAtInstall string
 	f := &fakeEngineInstaller{}
 	f.install(t)
-	setupInstallEngine = func(_ bool, _ string) error {
+	setupInstallEngine = func(_ bool, _ string, _ func(infruntime.OllamaInstallProgress)) error {
 		phaseAtInstall = lastPhase(t, d).Phase
 		return nil
 	}

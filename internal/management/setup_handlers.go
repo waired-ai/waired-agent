@@ -30,6 +30,41 @@ func validSetupExecutorPhase(p string) bool {
 	return false
 }
 
+// Setup step ids the executor can report against (waired#835 §7, the
+// five-id set settled in waired#934). The ids are free-form strings on
+// the CP wire — this constant block is not a wire schema, it is the
+// vocabulary the CLI and the daemon must share to talk about the same
+// row, and it lives here because both `cmd/waired` and
+// `cmd/waired-agent` import this package.
+//
+// Only the steps a privileged executor drives appear here. `model_pull`
+// and `benchmark` are the daemon's own and never cross this API.
+const (
+	SetupStepEngineDownload = "engine_download"
+	SetupStepEngineInstall  = "engine_install"
+	SetupStepIntegration    = "integration"
+)
+
+// validSetupExecutorStep reports whether s names a step an executor may
+// report. Empty is accepted and means engine_install — that is what a
+// CLI predating the split reports, and it only ever meant the install.
+func validSetupExecutorStep(s string) bool {
+	switch s {
+	case "", SetupStepEngineDownload, SetupStepEngineInstall, SetupStepIntegration:
+		return true
+	}
+	return false
+}
+
+// IsEngineSetupStep reports whether a step id refers to the engine
+// install the lease claims. The claim covers both halves of it — the
+// download and the install proper — so a phase reported against either
+// moves the same claim, while a step outside the engine (the coding-agent
+// integration) must never touch it.
+func IsEngineSetupStep(s string) bool {
+	return s == "" || s == SetupStepEngineDownload || s == SetupStepEngineInstall
+}
+
 // SetupStateResponse is the body of GET /waired/v1/setup/state — what a
 // setup executor needs to decide whether to act, entirely derived from
 // observable daemon state (waired#835 §6: no second source of truth).
@@ -99,6 +134,30 @@ type SetupExecutorRequest struct {
 	Engine string `json:"engine,omitempty"`
 	// Error carries the install failure detail for phase=failed.
 	Error string `json:"error,omitempty"`
+
+	// Step names which setup step (§7) this report is about; empty means
+	// engine_install, which is what every executor predating the split
+	// reported. The lease drives more than one step now — the engine
+	// download, the install proper, and the coding-agent integration —
+	// and the daemon keeps one phase per step rather than one per lease,
+	// so a finished download is not overwritten by the install that
+	// follows it (waired-agent#197).
+	Step string `json:"step,omitempty"`
+	// CompletedBytes / TotalBytes / RateBps are the live transfer figures
+	// for a byte-denominated step. They exist because the engine install
+	// runs in the elevated CLI and writes its progress to that terminal:
+	// without them the browser wizard has nothing to show for a 1.4 GB
+	// download and renders "Working on it…" for the whole install
+	// (waired-agent#197).
+	//
+	// 0 / omitted means unknown, for the rate as much as for the counts.
+	// A stall is derived from CompletedBytes not advancing, deliberately
+	// NOT from RateBps == 0 — the CP wire collapses 0 into absent, so the
+	// CLI renderer's "-1 = unknown / 0 = stalled" sentinel pair cannot
+	// survive the trip and must not be reinvented here.
+	CompletedBytes int64 `json:"completed_bytes,omitempty"`
+	TotalBytes     int64 `json:"total_bytes,omitempty"`
+	RateBps        int64 `json:"rate_bps,omitempty"`
 }
 
 // SetupExecutorController is implemented by the agent's desired-state
@@ -150,6 +209,14 @@ func (s *Server) handleSetupExecutor(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validSetupExecutorPhase(req.Phase) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid phase"})
+		return
+	}
+	if !validSetupExecutorStep(req.Step) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid step"})
+		return
+	}
+	if req.CompletedBytes < 0 || req.TotalBytes < 0 || req.RateBps < 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "progress figures must be non-negative"})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.setupExecutor.NoteExecutor(r.Context(), req))
