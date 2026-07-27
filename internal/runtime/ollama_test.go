@@ -1141,6 +1141,48 @@ func TestOllamaAdapter_ProcessEnv_ModelEnvOverridesInherited(t *testing.T) {
 	}
 }
 
+// TestOllamaAdapter_ProcessEnv_OmittedTuningKeyStillDropsInherited pins the
+// consequence of the tuning no longer always exporting
+// OLLAMA_FLASH_ATTENTION (waired-agent#29): the drop set is the whole tuning
+// key SET, not just the keys we happen to emit.
+//
+// PRODUCT CONTRACT. An omitted key means "let the engine choose"; an
+// inherited value (systemd's /etc/waired/agent.env, a developer shell) would
+// silently override that and re-arm the flash-attention + quantized-KV
+// combination on a host that deliberately opted out of it.
+func TestOllamaAdapter_ProcessEnv_OmittedTuningKeyStillDropsInherited(t *testing.T) {
+	t.Setenv("OLLAMA_FLASH_ATTENTION", "1") // inherited; the tuning omits it
+	t.Setenv("OLLAMA_KV_CACHE_TYPE", "q8_0")
+
+	a := NewOllamaAdapter(OllamaConfig{
+		Binary: "/fake/ollama", Host: "127.0.0.1", Port: 9475,
+	})
+	// An f16 tuning: no flash-attention key at all.
+	a.SetModelEnv([]string{
+		"OLLAMA_CONTEXT_LENGTH=32768",
+		"OLLAMA_KV_CACHE_TYPE=f16",
+		"OLLAMA_NUM_PARALLEL=2",
+	})
+	env := a.processEnv()
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "OLLAMA_FLASH_ATTENTION=") {
+			t.Errorf("inherited OLLAMA_FLASH_ATTENTION leaked past an f16 tuning: %v", env)
+		}
+	}
+	if !contains(env, "OLLAMA_KV_CACHE_TYPE=f16") || contains(env, "OLLAMA_KV_CACHE_TYPE=q8_0") {
+		t.Errorf("the computed KV type must win over the inherited one: %v", env)
+	}
+
+	// With NO computed tuning the operator's own values are left alone —
+	// reuse/borrowed mode must stay configurable from the environment.
+	b := NewOllamaAdapter(OllamaConfig{
+		Binary: "/fake/ollama", Host: "127.0.0.1", Port: 9475,
+	})
+	if benv := b.processEnv(); !contains(benv, "OLLAMA_FLASH_ATTENTION=1") {
+		t.Errorf("with no computed tuning the inherited value must survive: %v", benv)
+	}
+}
+
 // TestOllamaAdapter_SetModelEnv_NextSpawn verifies the #621 degrade path
 // mechanism: swapping the model env then re-spawning (after Stop)
 // launches `ollama serve` with the recomputed values.

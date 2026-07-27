@@ -396,7 +396,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			logger.Warn("state.json unreadable; ollama serve keeps engine-default context", "err", serr)
 		} else if tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState); ok {
 			ollamaTuneManifest, ollamaTuneVariant = tm, tv
-			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, "q8_0")
+			ollamaTune = computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest())
 			ollamaTuned = true
 			if ms, found := tuneState.Models[tm.ModelID]; found && ms.OllamaTag != "" {
 				ollamaTuneTag = ms.OllamaTag
@@ -442,7 +442,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			if !ok {
 				return nil, infruntime.ModelTuning{}, false
 			}
-			tune := computeOllamaTuning(tm, tv, hwProfile, "q8_0")
+			tune := computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest())
 			reasons, extraWarn := modelDecisionReasons(cfg, tm, tune)
 			if extraWarn != "" {
 				tune.Warning = joinTuningWarn(tune.Warning, extraWarn)
@@ -1242,11 +1242,13 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if !ok {
 			return
 		}
-		// KV cache type: an operator switch resets to the q8_0 default (the
-		// old model's post-verify f16 degrade does not carry over); a
-		// concurrency-only re-tune preserves the applied KV so a prior degrade
-		// is kept (#621).
-		kvType := "q8_0"
+		// KV cache type: an operator switch re-decides from scratch (the old
+		// model's post-verify f16 degrade does not carry over, and the new
+		// model may not want the same cache); a concurrency-only re-tune
+		// preserves the applied KV so a prior degrade is kept (#621). An
+		// explicit type is a pin, so preserving it still works now that the
+		// default is decided per host (waired-agent#29).
+		kvType := ollamaKVRequest()
 		if !swap && cur.KVCacheType != "" {
 			kvType = cur.KVCacheType
 		}

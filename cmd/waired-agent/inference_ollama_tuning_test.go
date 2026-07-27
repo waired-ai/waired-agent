@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,6 +40,28 @@ func discrete24GB() hardware.Profile {
 		RAMTotalGB: 64,
 		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24576}},
 	}
+}
+
+// tinyCoderManifest is the bundled qwen2.5-coder-0.5b-instruct's real numbers
+// (proto/catalog/bundled/qwen2.5-coder-0.5b-instruct.json) — the model the
+// routing sentinel pins, and the one whose llama-server segfaulted under
+// q8_0 + flash attention on a CPU-only runner (waired-agent#29).
+func tinyCoderManifest() catalog.Manifest {
+	return catalog.Manifest{
+		ModelID:       "qwen2.5-coder-0.5b-instruct",
+		ContextLength: 32768,
+		Variants: []catalog.Variant{{
+			VariantID:           "q4_K_M",
+			RuntimeSupport:      []string{catalog.RuntimeOllama},
+			EstimatedWeightGB:   0.4,
+			KVBytesPerTokenFP16: 12288,
+		}},
+	}
+}
+
+// ciRunner16GB is the hosted ubuntu-24.04 CI runner: CPU-only, 16 GB.
+func ciRunner16GB() hardware.Profile {
+	return hardware.Profile{RAMTotalGB: 16}
 }
 
 func TestComputeOllamaTuning(t *testing.T) {
@@ -201,11 +224,99 @@ func TestComputeOllamaTuning(t *testing.T) {
 
 	t.Run("cpu-only-uses-ram-budget", func(t *testing.T) {
 		hw := hardware.Profile{RAMTotalGB: 32}
-		got := computeOllamaTuning(m, m.Variants[1], hw, "q8_0")
+		got := computeOllamaTuning(m, m.Variants[1], hw, ollamaKVAuto)
 		// budget = 28 GB; leftover 7 GB → q8_0 → ~683k tokens → capped
 		// at the manifest window.
 		if got.ContextLength != m.ContextLength {
 			t.Errorf("ContextLength = %d, want manifest %d", got.ContextLength, m.ContextLength)
+		}
+		// PRODUCT CONTRACT: a genuinely tight CPU host KEEPS the quantized KV
+		// cache. f16 here affords only ~341k tokens, short of 2 x 262144, so
+		// quantizing is buying real context. This pins that waired-agent#29's
+		// fix is "only when it buys context", not "CPU means f16".
+		if got.KVCacheType != "q8_0" || !got.FlashAttention {
+			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true on a tight CPU host",
+				got.KVCacheType, got.FlashAttention)
+		}
+	})
+
+	// PRODUCT CONTRACT (waired-agent#29): the CI runner reproduced exactly.
+	// Quantizing here saves ~400 MB of a 12 GB budget while forcing
+	// llama.cpp's CPU + flash-attention + quantized-KV path, where the
+	// llama-server segfault lives. Everything else about the sizing must be
+	// untouched — especially NumParallel, which is why the f16 test uses the
+	// same 2x threshold the slot grant does.
+	t.Run("cpu-only-small-model-drops-quantized-kv", func(t *testing.T) {
+		tm := tinyCoderManifest()
+		got := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto)
+		if got.KVCacheType != "f16" {
+			t.Errorf("KVCacheType = %q, want f16 (f16 affords ~943k tokens vs the 65k served)", got.KVCacheType)
+		}
+		if got.FlashAttention {
+			t.Error("FlashAttention = true, want false: there is no quantized cache to protect")
+		}
+		if got.ContextLength != tm.ContextLength {
+			t.Errorf("ContextLength = %d, want the full manifest window %d", got.ContextLength, tm.ContextLength)
+		}
+		if got.NumParallel != ollamaMaxAutoParallel {
+			t.Errorf("NumParallel = %d, want %d — choosing f16 must not cost a request slot",
+				got.NumParallel, ollamaMaxAutoParallel)
+		}
+		if got.NumBatch != 0 {
+			t.Errorf("NumBatch = %d, want 0 on CPU-only", got.NumBatch)
+		}
+		if got.Warning != "" {
+			t.Errorf("unexpected warning: %q", got.Warning)
+		}
+	})
+
+	// PRODUCT CONTRACT: GPU hosts are bit-for-bit unchanged. The discrete
+	// overhead model (proto/hostfit) is calibrated against a flash-attention
+	// load, so dropping FA there would silently invalidate the spill
+	// reservation.
+	t.Run("gpu-auto-matches-pinned-q8", func(t *testing.T) {
+		auto := computeOllamaTuning(m, m.Variants[1], discrete24GB(), ollamaKVAuto)
+		pinned := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0")
+		if auto != pinned {
+			t.Errorf("auto sizing on a discrete GPU differs from the q8_0 pin:\n auto   = %+v\n pinned = %+v", auto, pinned)
+		}
+		if !auto.FlashAttention {
+			t.Error("FlashAttention = false on a discrete GPU, want true")
+		}
+	})
+
+	t.Run("uma-auto-keeps-quantized-kv", func(t *testing.T) {
+		// Reaches the VRAM branch via UsableVRAMMB, not GPUs.
+		hw := hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304}
+		got := computeOllamaTuning(m, m.Variants[0], hw, ollamaKVAuto)
+		if got.KVCacheType != "q8_0" || !got.FlashAttention {
+			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true on UMA",
+				got.KVCacheType, got.FlashAttention)
+		}
+	})
+
+	// PRODUCT CONTRACT: an explicit f16 (the verify pass's degrade) must not
+	// carry flash attention — there is no quantized cache left to protect.
+	t.Run("explicit-f16-pin-drops-flash-attention", func(t *testing.T) {
+		got := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "f16")
+		if got.KVCacheType != "f16" {
+			t.Errorf("KVCacheType = %q, want the f16 pin honoured", got.KVCacheType)
+		}
+		if got.FlashAttention {
+			t.Error("FlashAttention = true on an f16 pin, want false")
+		}
+	})
+
+	// PRODUCT CONTRACT: never change behaviour on a host we cannot size.
+	t.Run("unknown-sizing-keeps-quantized-kv", func(t *testing.T) {
+		v := catalog.Variant{VariantID: "unknown", RuntimeSupport: []string{catalog.RuntimeOllama}}
+		got := computeOllamaTuning(m, v, hardware.Profile{RAMTotalGB: 32}, ollamaKVAuto)
+		if got.KVCacheType != "q8_0" || !got.FlashAttention {
+			t.Errorf("KVCacheType/FlashAttention = %q/%v, want q8_0/true when the sizing inputs are unknown",
+				got.KVCacheType, got.FlashAttention)
+		}
+		if got.ContextLength != 0 {
+			t.Errorf("ContextLength = %d, want 0 (never guess a window)", got.ContextLength)
 		}
 	})
 
@@ -334,6 +445,104 @@ func TestOllamaTuningEnv(t *testing.T) {
 		if strings.HasPrefix(kv, "OLLAMA_CONTEXT_LENGTH=") {
 			t.Errorf("context var should be omitted when sizing is unknown: %v", unsized.Env())
 		}
+	}
+
+	// PRODUCT CONTRACT (waired-agent#29): on a host that does not need the
+	// quantized cache, OLLAMA_FLASH_ATTENTION is not exported at all — the
+	// engine picks. Exporting =0 was rejected: f16 + engine-chosen FA is the
+	// upstream default that every non-waired user runs, i.e. the
+	// best-exercised configuration.
+	t.Run("cpu-only-auto-omits-flash-attention", func(t *testing.T) {
+		tm := tinyCoderManifest()
+		env := computeOllamaTuning(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto).Env()
+		for _, want := range []string{
+			"OLLAMA_CONTEXT_LENGTH=32768",
+			"OLLAMA_KV_CACHE_TYPE=f16",
+			"OLLAMA_NUM_PARALLEL=2",
+		} {
+			if !slices.Contains(env, want) {
+				t.Errorf("Env() missing %q: %v", want, env)
+			}
+		}
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "OLLAMA_FLASH_ATTENTION=") {
+				t.Errorf("flash attention must not be exported on an f16 cache: %v", env)
+			}
+		}
+	})
+}
+
+// TestPlanOllamaKV is the seam-level table: the decision, isolated from the
+// sizing that consumes it. Both sides of the boundary are pinned, because the
+// whole point of the rule is that it turns over exactly where quantizing stops
+// buying context.
+func TestPlanOllamaKV(t *testing.T) {
+	tm := tinyCoderManifest()
+	tv := tm.Variants[0]
+	m := tuningTestManifest()
+
+	// want = 32768 (the manifest window), so the boundary is 2*32768 = 65536
+	// f16 tokens. kv/tok = 12288 at f16, weights 0.4 GB, so a budget B gives
+	// (B*1e9 - 0.4e9)/12288 tokens.
+	//   65536 tokens exactly  -> 0.4e9 + 65536*12288 = 1.2054e9 -> 5.2054 GB
+	//                            budget => RAMTotalGB 9.2054 (headroom 4)
+	atBoundary := hardware.Profile{RAMTotalGB: 10} // budget 6 GB -> ~455k >= 65536
+	belowBoundary := hardware.Profile{RAMTotalGB: 5}
+
+	cases := []struct {
+		name      string
+		m         catalog.Manifest
+		v         catalog.Variant
+		hw        hardware.Profile
+		requested string
+		want      ollamaKVPlan
+	}{
+		{"pin-q8_0", tm, tv, ciRunner16GB(), "q8_0", ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
+		{"pin-q4_0", tm, tv, ciRunner16GB(), "q4_0", ollamaKVPlan{Type: "q4_0", FlashAttention: true}},
+		{"pin-f16", tm, tv, ciRunner16GB(), "f16", ollamaKVPlan{Type: "f16"}},
+		{"auto-cpu-roomy", tm, tv, ciRunner16GB(), ollamaKVAuto, ollamaKVPlan{Type: "f16"}},
+		{"auto-cpu-at-boundary", tm, tv, atBoundary, ollamaKVAuto, ollamaKVPlan{Type: "f16"}},
+		{"auto-cpu-below-boundary", tm, tv, belowBoundary, ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
+		{"auto-gpu-via-gpus", m, m.Variants[1], discrete24GB(), ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true}},
+		{
+			"auto-gpu-via-usable-vram", m, m.Variants[0],
+			hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304},
+			ollamaKVAuto, ollamaKVPlan{Type: "q8_0", FlashAttention: true},
+		},
+		{
+			"auto-unsizable-host", tm, catalog.Variant{VariantID: "no-kv"},
+			hardware.Profile{RAMTotalGB: 16}, ollamaKVAuto,
+			ollamaKVPlan{Type: "q8_0", FlashAttention: true},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := planOllamaKV(c.m, c.v, c.hw, c.requested); got != c.want {
+				t.Errorf("planOllamaKV(%s) = %+v, want %+v", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// TestOllamaKVRequest pins the nightly override seam that keeps q8_0 + flash
+// attention exercised against a real engine (the GPU CI runner is vLLM-only,
+// so without this the combination would have no real-engine coverage at all).
+func TestOllamaKVRequest(t *testing.T) {
+	cases := map[string]string{
+		"":        ollamaKVAuto,
+		"q8_0":    "q8_0",
+		"f16":     "f16",
+		"q4_0":    "q4_0",
+		" Q8_0 ":  "q8_0",
+		"garbage": ollamaKVAuto,
+	}
+	for in, want := range cases {
+		t.Run("in="+in, func(t *testing.T) {
+			t.Setenv(ollamaKVOverrideEnv, in)
+			if got := ollamaKVRequest(); got != want {
+				t.Errorf("ollamaKVRequest() with %q = %q, want %q", in, got, want)
+			}
+		})
 	}
 }
 
