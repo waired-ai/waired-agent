@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -103,7 +102,7 @@ func printAgentDetections(out io.Writer, dets []agentDetection) {
 // Detection is informational only: a Yes force-applies every adapter even
 // when the agent is not installed yet (Detect()=false), so the integration
 // activates the moment the user later installs OpenCode / OpenClaw.
-func promptIntegrationConsent(in io.Reader, out io.Writer, inp integrationConsentInput) bool {
+func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConsentInput) bool {
 	writePromptf(out, "%s %s%s%s%s%s%s\n", inp.StepLabel,
 		bold("Coding-agent integration"), dim("  —  "),
 		product("Claude Code"), dim(" · "), product("OpenCode"), dim(" · ")+product("OpenClaw"))
@@ -166,7 +165,6 @@ func promptIntegrationConsent(in io.Reader, out io.Writer, inp integrationConsen
 		return true
 	}
 	writePrompt(out)
-	sc := bufio.NewScanner(in)
 	ok := ynPrompt(out, sc, "Set up coding-agent integration?", true)
 	if !ok {
 		writePromptf(out, "  Skipped. Set up the per-user integration anytime with: %s\n", cyan("waired link"))
@@ -282,7 +280,7 @@ type postLoginIntegrationOpts struct {
 	StepLabel      string
 	GatewayBaseURL string
 	NonInteractive bool
-	In             io.Reader
+	In             lineReader
 	Out            io.Writer
 	ErrOut         io.Writer
 }
@@ -338,10 +336,13 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) error {
 			return fmt.Errorf("integration: %s: %w", ar.Agent, ar.Err)
 		}
 	}
+	// nil reader: the helpers only print next-steps (Interactive is false
+	// and none of them reads), and handing them a second view of stdin
+	// would put a reader behind the one that owns it.
 	printSetupHelper("all", helperPrintOptions{
 		HomeDir:     homeDir,
 		WiredBinary: wairedBinaryPath(),
 		Interactive: false,
-	}, o.Out, o.In)
+	}, o.Out, nil)
 	return nil
 }

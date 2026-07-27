@@ -90,7 +90,9 @@ func TestSetupEngineInstallHappyPath(t *testing.T) {
 
 	s := attachSetupExecutor(srv.URL, true)
 	defer s.Release()
-	setupEngineInstall(context.Background(), s, io.Discard, "linux", true)
+	if err := setupEngineInstall(context.Background(), s, io.Discard, "linux", true); err != nil {
+		t.Fatalf("a successful install returned %v, want nil (#188)", err)
+	}
 
 	if got := f.installed(); len(got) != 1 || got[0] != "/var/lib/waired" {
 		t.Fatalf("installer calls = %v, want one call with the daemon's state dir", got)
@@ -143,7 +145,11 @@ func TestSetupEngineInstallReportsFailure(t *testing.T) {
 
 	s := attachSetupExecutor(srv.URL, true)
 	defer s.Release()
-	setupEngineInstall(context.Background(), s, io.Discard, "linux", true)
+	// #188: the caller needs the same answer the wizard gets, or it walks
+	// into a model wait for an engine that will never appear.
+	if err := setupEngineInstall(context.Background(), s, io.Discard, "linux", true); err == nil {
+		t.Fatal("a failed install returned nil")
+	}
 
 	last := lastPhase(t, d)
 	if last.Phase != management.SetupExecutorPhaseFailed {
@@ -327,6 +333,38 @@ func TestSetupEngineInstallWanted(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := setupEngineInstallWanted(tc.st); got != tc.want {
 				t.Fatalf("setupEngineInstallWanted = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEngineArrivalPending is the #188 half of the no_engine grace: the
+// model wait may only ignore its own give-up window while an engine can
+// still plausibly show up. Everything else — above all a setup whose
+// install has just failed — gets the ordinary grace back, instead of
+// sitting on "Waiting for the AI engine to start…" for the hour the
+// setup budget allows.
+func TestEngineArrivalPending(t *testing.T) {
+	tests := []struct {
+		name string
+		st   management.SetupStateResponse
+		want bool
+	}{
+		{"no setup at all", management.SetupStateResponse{}, false},
+		{"engine not picked yet", management.SetupStateResponse{Active: true}, true},
+		{"install claimed by a live lease", management.SetupStateResponse{
+			Active: true, DesiredEngine: "ollama", EngineInstalled: true, InstallClaimed: "ollama"}, true},
+		{"desired engine not in place", management.SetupStateResponse{
+			Active: true, DesiredEngine: "ollama"}, true},
+		{"engine installed, nobody installing", management.SetupStateResponse{
+			Active: true, DesiredEngine: "ollama", EngineInstalled: true}, false},
+		{"inactive setup with an engine on the way", management.SetupStateResponse{
+			DesiredEngine: "ollama", InstallClaimed: "ollama"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := engineArrivalPending(tc.st); got != tc.want {
+				t.Fatalf("engineArrivalPending = %v, want %v", got, tc.want)
 			}
 		})
 	}

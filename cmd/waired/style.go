@@ -131,7 +131,20 @@ func welcomeBanner(out io.Writer) {
 // install logs stay grep-able and box chars never leak. Keep caller lines
 // ≤ ~66 display columns so the box fits an 80-column terminal.
 func box(out io.Writer, marker, title string, lines []string) {
-	header := marker + " " + bold(green(title))
+	boxTinted(out, marker, title, green, lines)
+}
+
+// boxWarn is box for an outcome that is not a failure but is not
+// "everything completed" either — `waired init` finished and signed the
+// device in, but one part of it did not land (#188). Same frame, amber
+// title, so the summary cannot be misread as an all-green result.
+func boxWarn(out io.Writer, marker, title string, lines []string) {
+	boxTinted(out, marker, title, yellow, lines)
+}
+
+// boxTinted is the shared body; tint colours the title.
+func boxTinted(out io.Writer, marker, title string, tint func(string) string, lines []string) {
+	header := marker + " " + bold(tint(title))
 	writePrompt(out)
 	if !useEmoji() {
 		writePrompt(out, rule())

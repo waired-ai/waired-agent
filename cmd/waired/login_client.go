@@ -32,6 +32,19 @@ var daemonReachable = func(mgmtURL string) bool {
 	return resp.StatusCode < 500
 }
 
+// initStdinOwner builds the process-wide stdin owner for a daemon-path
+// `waired init`, or nil when init is not attached to a terminal (see
+// stdinReader for why a pipe must not be read ahead). A package var so
+// tests can hand the flow a scripted terminal — `go test` never has a
+// real one, and the prompt-ordering these issues are about is only
+// observable when something is typing.
+var initStdinOwner = func() *stdinReader {
+	if !isTerminal(os.Stdin) {
+		return nil
+	}
+	return newStdinReader(os.Stdin)
+}
+
 // runInitViaDaemon drives the daemon-owned login MGMT API instead of
 // enrolling locally (the Tailscale model). It POSTs /login/start, opens
 // the browser on the first login URL, then polls /login/status until the
@@ -57,6 +70,25 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 	}
 
 	fmt.Println(bold("Sign in"))
+
+	// One reader owns stdin for the rest of this run. Everything below
+	// that reads the keyboard — the sign-in gate, the browser-setup
+	// takeover offer, the coding-agent question, the benchmark prompts —
+	// consumes from it, because two readers over one fd is how an answer
+	// meant for one question ended up answering another (#184, #185).
+	//
+	// Only on a terminal: a piped stdin belongs to the script driving
+	// init, and reading ahead from it would swallow input meant for a
+	// later command in that script. Off a TTY the prompts keep the
+	// on-demand scanner they have always used.
+	owner := initStdinOwner()
+	var stdin lineReader = bufio.NewScanner(os.Stdin)
+	if owner != nil {
+		stdin = owner
+	}
+	// Resolved once, outside the loop, so the decision is stable.
+	gate := resolveBrowserGate(noBrowser, nonInteractive, isTerminal(os.Stdin), browser.HasDisplay())
+
 	opened := false
 	lastPhase := management.LoginPhase("")
 	deadline := time.Now().Add(12 * time.Minute)
@@ -67,8 +99,7 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			// gcloud-style gate: URL first, browser only on Enter (or
 			// immediately when the session can't answer a prompt). See
 			// login_gate.go.
-			presentLoginURL(os.Stdin, os.Stdout, st.LoginURL, st.UserCode,
-				resolveBrowserGate(noBrowser, nonInteractive, isTerminal(os.Stdin), browser.HasDisplay()))
+			presentLoginURL(stdin, os.Stdout, st.LoginURL, st.UserCode, gate)
 		}
 
 		if st.Phase != lastPhase {
@@ -101,14 +132,64 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			// below can act on a stale answer.
 			applyDaemonInitInference(mgmtURL, inf, os.Stdout)
 
-			stdin := bufio.NewScanner(os.Stdin)
-			budget, setupActive, enter := awaitBrowserSetup(sess, stdin, os.Stdout, nonInteractive, noBrowser)
+			budget, setupActive, enter := awaitBrowserSetup(sess, owner, os.Stdout, nonInteractive, noBrowser)
+
+			// §11: on this path init returned long before reaching the
+			// standalone engine block, so nothing here could ever install
+			// an engine and the wizard's first step could only report
+			// permission_denied. As the elevated executor holding the
+			// lease, do the install the browser just asked for. Blocking
+			// is correct: the model pull below has nothing to pull with
+			// until an engine exists.
+			var engineErr error
+			if setupActive {
+				engineErr = runSetupEngineInstall(context.Background(), sess, os.Stdout)
+			} else {
+				// No wizard is driving, but this host may still want an
+				// engine and have none — the default macOS install has
+				// been landing here all along, and the §11.2 ordering
+				// flip puts Linux and Windows here too. Condition is
+				// "does the host want inference", read from the daemon.
+				engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, os.Stdout)
+			}
+
+			if engineErr != nil {
+				// #188: the install failed, so there is nothing for the
+				// model wait to wait for and nothing for the benchmark to
+				// measure. Say what happened once, here, instead of
+				// parking the terminal on "Waiting for the AI engine to
+				// start…" until the setup budget runs out.
+				printEngineInstallFailure(os.Stdout, engineErr, setupActive)
+			} else {
+				// #756: the daemon pulls the bundled model in the background
+				// after enroll, so the daemon-mediated init used to return while a
+				// multi-GB download ran invisibly. Block in the foreground with the
+				// same percentage progress bar the local path shows (main.go), then
+				// benchmark the ready model. waitForBundledModel returns fast when
+				// the daemon reports inference disabled / stopped / no engine, so
+				// this never hangs an under-spec or gateway-only host.
+				waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
+					engineArrivalPending(sess.State()), enter)
+			}
+			if enter.TookOver() {
+				// The operator took the terminal back: stop being the
+				// executor (the wizard switches to "run this here") and
+				// resume the normal CLI tail.
+				sess.Release()
+				setupActive = false
+			}
 
 			// §4.2: while the browser is driving setup, the terminal must not
 			// ask its own questions. Both prompts below read stdin, and the
 			// benchmark one can additionally offer to SWITCH the active model
 			// — a second writer racing desired_model_id, and a recommendation
 			// §20.6 says v1 must not make.
+			//
+			// #186: this block used to sit ABOVE the engine install, so in
+			// terminal mode it interrupted a multi-GB download to ask about
+			// coding tools, and a terminal that took over late was never
+			// asked at all. Asking here fixes both — setupActive is settled
+			// by now, and the download is done.
 			if setupActive {
 				fmt.Println("You can set up your coding tools later from this terminal with `waired link all`.")
 			} else if skipIntegration {
@@ -117,7 +198,7 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				StepLabel:      emo("🔌", "*"),
 				GatewayBaseURL: gatewayBaseURL,
 				NonInteractive: nonInteractive,
-				In:             os.Stdin,
+				In:             stdin,
 				Out:            os.Stdout,
 				ErrOut:         os.Stderr,
 			}); err != nil {
@@ -126,46 +207,14 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				fmt.Fprintf(os.Stderr,
 					"warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
 			}
-			// §11: on this path init returned long before reaching the
-			// standalone engine block, so nothing here could ever install
-			// an engine and the wizard's first step could only report
-			// permission_denied. As the elevated executor holding the
-			// lease, do the install the browser just asked for. Blocking
-			// is correct: the model pull below has nothing to pull with
-			// until an engine exists.
-			if setupActive {
-				runSetupEngineInstall(context.Background(), sess, os.Stdout)
-			} else {
-				// No wizard is driving, but this host may still want an
-				// engine and have none — the default macOS install has
-				// been landing here all along, and the §11.2 ordering
-				// flip puts Linux and Windows here too. Condition is
-				// "does the host want inference", read from the daemon.
-				ensureDaemonPathEngine(context.Background(), sess, mgmtURL, os.Stdout)
-			}
-			// #756: the daemon pulls the bundled model in the background
-			// after enroll, so the daemon-mediated init used to return while a
-			// multi-GB download ran invisibly. Block in the foreground with the
-			// same percentage progress bar the local path shows (main.go), then
-			// benchmark the ready model. waitForBundledModel returns fast when
-			// the daemon reports inference disabled / stopped / no engine, so
-			// this never hangs an under-spec or gateway-only host.
-			waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget, setupActive, enter)
-			// The wait is over; reconcile the pending stdin read before any
-			// further prompt can be issued on the same scanner.
-			enter.Drain(os.Stdout)
-			if enter.Backgrounded() {
-				// The operator took the terminal back: stop being the
-				// executor (the wizard switches to "run this here") and
-				// resume the normal CLI tail.
-				sess.Release()
-				setupActive = false
-			}
 
 			var resp *management.BenchmarkRunResponse
-			if setupActive {
+			switch {
+			case setupActive:
 				fmt.Println("Setup is continuing in your browser.")
-			} else {
+			case engineErr != nil:
+				// Nothing to measure: there is no engine.
+			default:
 				// #133: once the daemon has the model ready, benchmark it and
 				// offer a lighter model if this host can't sustain the pick.
 				resp, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout))
@@ -174,7 +223,13 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			// hardware without an interactive prompt, so tell the user how to
 			// inspect and change it afterward.
 			printInferenceRoleGuidance(os.Stdout)
-			printDaemonSuccessBox(st.AccountEmail, outcomeFrom(resp))
+			if engineErr != nil {
+				printDaemonEngineFailedBox(st.AccountEmail)
+			} else {
+				printDaemonSuccessBox(st.AccountEmail, outcomeFrom(resp))
+			}
+			// Sign-in succeeded either way, so init succeeds either way:
+			// the engine is a part of setup, not the point of it (#188).
 			return nil
 		case management.LoginPhaseError:
 			if st.Error != "" {
@@ -185,6 +240,19 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 
 		if time.Now().After(deadline) {
 			return errors.New("login timed out waiting for the daemon")
+		}
+		// #184: on the print-only gate nothing above reads stdin, so an
+		// Enter pressed out of muscle memory — the other two gates open a
+		// browser with it — used to sit in the buffer until the takeover
+		// offer answered it, silently switching setup to the terminal at
+		// the moment the user was asking for a browser. Answer it here,
+		// where it was pressed. Non-blocking on purpose: the link may
+		// well be opened on a phone, and a terminal parked on a read
+		// would never see the sign-in complete.
+		if opened && gate == gatePrintOnly {
+			if _, typed := owner.Poll(); typed {
+				fmt.Println(dim("Nothing to press here — waiting for you to sign in with the link above."))
+			}
 		}
 		time.Sleep(time.Second)
 
@@ -213,6 +281,44 @@ func printInferenceRoleGuidance(out io.Writer) {
 	writePrompt(out, dim("  waired inference share on|off        expose (or stop exposing) this engine to mesh peers"))
 	writePrompt(out, dim("  waired inference engine stop|start   power the local engine down / up"))
 	writePrompt(out, dim("  re-run `waired init`                 reconfigure inference from scratch"))
+}
+
+// printEngineInstallFailure is the one block `waired init` prints when
+// the engine install it just ran failed (#188).
+//
+// It exists because the failure used to be invisible from the terminal:
+// runSetupEngineInstall reported the outcome to the daemon and returned
+// nothing, so init walked into a model wait for an engine that was never
+// coming and sat there for up to the whole setup budget. Everything the
+// operator needs to recover is here — what failed, the exact elevated
+// command that retries it, and (when a wizard is watching) the fact that
+// the same failure is already on their screen.
+func printEngineInstallFailure(out io.Writer, err error, setupActive bool) {
+	writePrompt(out)
+	writePromptf(out, "%s %s\n", emo("⚠️", "!"), bold("The AI engine could not be installed on this device."))
+	writePromptf(out, "  %v\n", err)
+	writePrompt(out)
+	writePrompt(out, "  Sign-in worked — this device is signed in and running. Only local AI is missing.")
+	writePromptf(out, "  Retry the install with: %s\n", cyan(elevation.Hint("waired init")))
+	if setupActive {
+		writePrompt(out, "  "+dim("The setup page in your browser shows this same failure."))
+	}
+	writePrompt(out)
+}
+
+// printDaemonEngineFailedBox is the summary for a run that signed the
+// device in but could not install the engine. Deliberately not the
+// success box: "everything completed successfully" over a failed engine
+// install is how an operator ends up not realising local AI never
+// arrived (#188).
+func printDaemonEngineFailedBox(accountEmail string) {
+	var lines []string
+	if accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
+	}
+	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	lines = append(lines, dim("Local AI is not installed yet; the command above finishes it."))
+	boxWarn(os.Stdout, emo("⚠️", "!"), "Waired is signed in — local AI still needs installing", lines)
 }
 
 // printDaemonSuccessBox renders the final "Waired is ready" summary for the

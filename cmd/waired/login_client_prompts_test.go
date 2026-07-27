@@ -1,0 +1,359 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/setup"
+)
+
+// These are the regression tests for the four "who owns stdin" issues
+// of the daemon-driven `waired init`: #184 (the sign-in Enter silently
+// became a takeover), #185 (the takeover watch ate the coding-agent
+// answer), #186 (that question was asked mid-download, and never at all
+// after a late takeover) and #188 (a failed engine install parked the
+// terminal on a wait for an engine that was never coming). #132 — the
+// spurious "Press Enter to continue…" on the browser-driven path — falls
+// out of the same change and is asserted here too.
+
+// promptsDaemon is a scripted daemon covering everything the
+// daemon-mediated init touches: login, the reachability probe, the
+// inference status/benchmark pair, and the executor lease.
+type promptsDaemon struct {
+	mu         sync.Mutex
+	setupState management.SetupStateResponse
+
+	statusSeq   []management.InferenceStatus
+	statusCalls int32
+	loginPolls  int32
+
+	// onStatus fires on each /inference/status poll, so a test can time
+	// a keystroke to a real point in the flow instead of a wall clock.
+	onStatus func(poll int32)
+}
+
+func (d *promptsDaemon) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/waired/v1/status", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+	mux.HandleFunc("/waired/v1/login/start", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(management.LoginStatus{
+			SessionID: "s1", Phase: management.LoginPhaseLoggingIn,
+			LoginURL: "https://login.example/abc", UserCode: "CODE-1",
+		})
+	})
+	mux.HandleFunc("/waired/v1/login/status", func(w http.ResponseWriter, _ *http.Request) {
+		st := management.LoginStatus{SessionID: "s1", Phase: management.LoginPhaseActivating}
+		// Two polls before active, so the loop's per-tick work (the #184
+		// stray-Enter acknowledgement) actually runs.
+		if atomic.AddInt32(&d.loginPolls, 1) >= 2 {
+			st.Phase = management.LoginPhaseActive
+			st.AccountEmail = "user@example.com"
+		}
+		_ = json.NewEncoder(w).Encode(st)
+	})
+	mux.HandleFunc("/waired/v1/inference/status", func(w http.ResponseWriter, _ *http.Request) {
+		n := atomic.AddInt32(&d.statusCalls, 1)
+		if d.onStatus != nil {
+			d.onStatus(n)
+		}
+		i := int(n) - 1
+		if i >= len(d.statusSeq) {
+			i = len(d.statusSeq) - 1
+		}
+		_ = json.NewEncoder(w).Encode(d.statusSeq[i])
+	})
+	mux.HandleFunc("/waired/v1/inference/benchmark", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, MeasuredTokps: 42})
+	})
+	mux.HandleFunc("/waired/v1/setup/state", func(w http.ResponseWriter, _ *http.Request) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(d.setupState)
+	})
+	mux.HandleFunc("/waired/v1/setup/executor", func(w http.ResponseWriter, r *http.Request) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		var req management.SetupExecutorRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		d.setupState.ExecutorAttached = req.Attached
+		switch {
+		case !req.Attached:
+			d.setupState.InstallClaimed = ""
+		case req.Phase == management.SetupExecutorPhaseInstalling && req.Engine != "":
+			d.setupState.InstallClaimed = req.Engine
+		case req.Phase == management.SetupExecutorPhaseDone ||
+			req.Phase == management.SetupExecutorPhaseFailed:
+			d.setupState.InstallClaimed = ""
+		}
+		_ = json.NewEncoder(w).Encode(d.setupState)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// downloadingRun is n polls' worth of in-flight download followed by a
+// ready model, so a wait has room to observe a keystroke before it ends.
+func downloadingRun(n int) []management.InferenceStatus {
+	seq := make([]management.InferenceStatus, 0, n+1)
+	for i := range n {
+		seq = append(seq, downloadingStatus(int64(i+1)<<28, 8<<30))
+	}
+	return append(seq, readyStatus())
+}
+
+func readyStatus() management.InferenceStatus {
+	return management.InferenceStatus{
+		SubsystemState: "ready",
+		Models:         management.ModelsSnapshot{Ready: []string{bundledModel}},
+		Active:         &management.ActiveSelection{ModelID: bundledModel},
+	}
+}
+
+// scriptStdin points the daemon path at a scripted terminal: the same
+// single-owner reader production uses, over a canned keystroke sequence.
+func scriptStdin(t *testing.T, keys string) {
+	t.Helper()
+	orig := initStdinOwner
+	initStdinOwner = func() *stdinReader { return newStdinReader(strings.NewReader(keys)) }
+	t.Cleanup(func() { initStdinOwner = orig })
+}
+
+// scriptStdinPipe is scriptStdin for a scenario that must type DURING
+// the run: awaitBrowserSetup drops whatever was typed before the
+// takeover offer existed (#184), which in a canned string is the whole
+// script. The returned writer feeds keystrokes in as the flow reaches
+// the point they would really be pressed.
+func scriptStdinPipe(t *testing.T) *io.PipeWriter {
+	t.Helper()
+	pr, pw := io.Pipe()
+	orig := initStdinOwner
+	initStdinOwner = func() *stdinReader { return newStdinReader(pr) }
+	t.Cleanup(func() {
+		initStdinOwner = orig
+		_ = pw.Close()
+	})
+	return pw
+}
+
+// daemonInitOpts is what the four scenarios below vary.
+type daemonInitOpts struct {
+	noBrowser       bool
+	nonInteractive  bool
+	skipIntegration bool
+}
+
+// runDaemonInit runs the flow under a hard timeout — a regression that
+// blocks (which is exactly what #188 was) must fail, not hang.
+func runDaemonInit(t *testing.T, url string, o daemonInitOpts) string {
+	t.Helper()
+	stubOpener(t, nil) // no browser may be launched from a test
+	// Pin the browser gate: without a display, Linux resolves to the
+	// print-only gate and the scenarios that are not about that gate
+	// would drift by OS (macOS and Windows always report a display).
+	// --no-browser still forces print-only, which is what that test wants.
+	t.Setenv("DISPLAY", ":0")
+	var runErr error
+	timedOut := false
+	out := captureStdout(t, func() {
+		done := make(chan error, 1)
+		go func() {
+			done <- runInitViaDaemon(url, "https://cp.example", "dev-1",
+				o.noBrowser, o.nonInteractive, o.skipIntegration,
+				"http://127.0.0.1:9473", daemonInitInference{})
+		}()
+		select {
+		case runErr = <-done:
+		case <-time.After(30 * time.Second):
+			timedOut = true
+		}
+	})
+	if timedOut {
+		t.Fatal("runInitViaDaemon hung")
+	}
+	// Sign-in succeeded in every scenario here, so init must succeed —
+	// including the failed-engine one (#188).
+	if runErr != nil {
+		t.Fatalf("runInitViaDaemon: %v\n---\n%s", runErr, out)
+	}
+	return out
+}
+
+// #184: on the print-only gate nothing reads stdin at the sign-in step,
+// so an Enter pressed there used to fall through to the next reader. It
+// must be answered where it was pressed instead.
+func TestRunInitViaDaemon_PrintOnlyGateAcksStrayEnter(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	scriptStdin(t, "\n")
+	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
+
+	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{noBrowser: true, skipIntegration: true})
+
+	for _, want := range []string{
+		"Nothing to press here — sign-in continues on its own once you open the link.",
+		"Nothing to press here — waiting for you to sign in with the link above.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("print-only gate missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+// #184 + #185 + #186 in one run: a bare Enter opens the takeover
+// question instead of switching modes, `y` confirms it, and the NEXT
+// line answers the coding-agent question — which is asked at all only
+// because #186 moved it after the wait, and reaches the prompt only
+// because #185's second reader is gone.
+func TestRunInitViaDaemon_TakeoverThenIntegrationGetsItsOwnAnswer(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	keys := scriptStdinPipe(t)
+	d := &promptsDaemon{
+		// A download in flight, so the wait actually runs and the watch
+		// gets the polls a real terminal would have.
+		statusSeq:  downloadingRun(200),
+		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
+	}
+	d.onStatus = func(poll int32) {
+		switch poll {
+		case 3:
+			_, _ = keys.Write([]byte("\n")) // the muscle-memory Enter
+		case 6:
+			// The confirmation, and then the coding-agent answer that the
+			// old code's still-parked listener would have eaten (#185).
+			_, _ = keys.Write([]byte("y\nn\n"))
+		}
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{})
+
+	for _, want := range []string{
+		"Take over setup in this terminal?",                // Enter asked, it did not switch
+		"Taking over — setup continues",                    // `y` confirmed it
+		"Coding-agent integration",                         // the terminal now owns the run, so it asks
+		"Skipped. Set up the per-user integration anytime", // and `n` was ITS answer
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("takeover run missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+// #186: in terminal mode the coding-agent question must come after the
+// model wait, not interrupt it. #132: the browser-driven path must not
+// print the old reconciling "Press Enter to continue…" on its way out.
+func TestRunInitViaDaemon_BrowserDrivenAsksNothingAndNeverPromptsToContinue(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	scriptStdin(t, "") // the operator never touches the terminal
+	d := &promptsDaemon{
+		statusSeq:  []management.InferenceStatus{readyStatus()},
+		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{})
+
+	if strings.Contains(out, "Press Enter to continue") {
+		t.Errorf("browser-driven path still prompts to continue (#132)\n---\n%s", out)
+	}
+	if strings.Contains(out, "Coding-agent integration") {
+		t.Errorf("the terminal asked its own question while the browser was driving (§4.2)\n---\n%s", out)
+	}
+	for _, want := range []string{
+		"You can set up your coding tools later",
+		"Setup is continuing in your browser.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("browser-driven run missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+// #186 ordering, stated directly: the coding-agent question comes after
+// the model is ready. It used to sit above the engine install, so it
+// interrupted a multi-GB download to ask about coding tools.
+func TestRunInitViaDaemon_IntegrationComesAfterTheModelWait(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	scriptStdin(t, "n\n")
+	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
+
+	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{noBrowser: true})
+
+	ready := strings.Index(out, bundledModel+" ready")
+	integ := strings.Index(out, "Coding-agent integration")
+	if ready < 0 || integ < 0 {
+		t.Fatalf("missing markers (ready=%d integration=%d)\n---\n%s", ready, integ, out)
+	}
+	if integ < ready {
+		t.Errorf("the coding-agent question was asked before the model was ready\n---\n%s", out)
+	}
+}
+
+// #188: a failed engine install must end the run with an explanation and
+// a retry command — not with a model wait for an engine that will never
+// start, which cost an observed 2.5 hours on a real host.
+func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	scriptStdin(t, "")
+	stubEngineInstallFailure(t)
+
+	d := &promptsDaemon{
+		// no_engine forever: the state the old code waited out to the
+		// full setup budget.
+		statusSeq: []management.InferenceStatus{{SubsystemState: "no_engine"}},
+		setupState: management.SetupStateResponse{
+			Active: true, DesiredEngine: "ollama", StateDir: t.TempDir(),
+		},
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{skipIntegration: true})
+
+	for _, want := range []string{
+		"The AI engine could not be installed on this device.",
+		"Retry the install with:",
+		"local AI still needs installing", // the degraded summary, not the success box
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("engine-failure run missing %q\n---\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"Waiting for the AI engine to start", // the wait was skipped entirely
+		"Waired is ready — everything completed successfully",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("engine-failure run still printed %q\n---\n%s", unwanted, out)
+		}
+	}
+}
+
+// stubEngineInstallFailure makes the executor's engine install fail on
+// every OS and privilege level: an unelevated Linux/Windows runner never
+// reaches the installer (it refuses for want of rights, which is itself
+// a reported failure), while macOS and a root runner do — and the stub
+// fails there. Detection is stubbed too so a developer box that happens
+// to have ollama does not take the "already present" branch.
+func stubEngineInstallFailure(t *testing.T) {
+	t.Helper()
+	origInstall, origDetect := setupInstallEngine, setupDetectEngine
+	setupInstallEngine = func(bool, string) error { return errors.New("no space left on device") }
+	setupDetectEngine = func(context.Context) setup.OllamaDetection { return setup.OllamaDetection{} }
+	t.Cleanup(func() { setupInstallEngine, setupDetectEngine = origInstall, origDetect })
+}

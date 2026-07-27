@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -154,30 +153,67 @@ func TestWaitForBundledModel_NoEngineGraceIgnoredDuringSetup(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, true /*setupActive*/, nil) {
-		t.Fatalf("setup-active wait gave up on no_engine; out=%q", out.String())
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, true /*engineComing*/, nil) {
+		t.Fatalf("engine-coming wait gave up on no_engine; out=%q", out.String())
 	}
 	if strings.Contains(out.String(), "AI engine still isn't up") {
-		t.Errorf("setup-active wait printed the give-up notice: %q", out.String())
+		t.Errorf("engine-coming wait printed the give-up notice: %q", out.String())
 	}
 }
 
-// Enter backgrounds the wait so the operator can take the terminal back.
-func TestWaitForBundledModel_BackgroundedByEnter(t *testing.T) {
+// A confirmed takeover ends the wait so the operator can drive setup
+// from the terminal. Enter alone only opens the question (#184), so the
+// scripted stdin has to answer it.
+func TestWaitForBundledModel_EndedByConfirmedTakeover(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	stub := &pullStub{seq: []management.InferenceStatus{{SubsystemState: "no_engine"}}}
 	srv := stub.server()
 	defer srv.Close()
 
-	enter := listenForEnter(bufio.NewScanner(strings.NewReader("\n")))
-	waitForCond(t, enter.Backgrounded, "the Enter line to be read")
+	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\ny\n")))
 
 	var out strings.Builder
 	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter) {
-		t.Fatal("a backgrounded wait must return false")
+		t.Fatal("a taken-over wait must return false")
 	}
-	if !strings.Contains(out.String(), "Continuing in the background") {
-		t.Errorf("expected the background note, got: %q", out.String())
+	s := out.String()
+	for _, want := range []string{"Take over setup in this terminal?", "Continuing in the background"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in the takeover output: %q", want, s)
+		}
+	}
+	if !enter.TookOver() {
+		t.Error("the watch did not record the takeover")
+	}
+}
+
+// The same keystroke WITHOUT the confirmation must leave the wait
+// running: a stray Enter — the one the sign-in step teaches — cannot
+// silently switch the run into terminal mode (#184).
+func TestWaitForBundledModel_BareEnterDoesNotTakeOver(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	const mb = 1 << 20
+	stub := &pullStub{seq: []management.InferenceStatus{
+		{SubsystemState: "no_engine"},
+		downloadingSnap("qwen", 1*mb, 4*mb),
+		{SubsystemState: "ready", Active: activeSel("qwen"), Models: management.ModelsSnapshot{Ready: []string{"qwen"}}},
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	// One Enter opens the question; the second answers it with the
+	// default, No. The wait must run to completion either way.
+	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\n\n")))
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter) {
+		t.Fatalf("a declined takeover ended the wait; out=%q", out.String())
+	}
+	if enter.TookOver() {
+		t.Fatal("a bare Enter took the terminal over without confirmation")
+	}
+	if !strings.Contains(out.String(), "Continuing in your browser") {
+		t.Errorf("the declined takeover was not acknowledged: %q", out.String())
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -63,55 +64,60 @@ var setupHandState = handStateToServiceUser
 // engineInstallDecision as interactive init, so opt-out, already-present,
 // reuse and not-elevated all resolve identically (§11.1).
 //
-// It never returns an error: the outcome is reported to the daemon,
-// which is what NAVI renders. Like ensureBundledEngine, a failure here
-// must not fail login.
-func runSetupEngineInstall(ctx context.Context, s *executorSession, out io.Writer) {
-	setupEngineInstall(ctx, s, out, runtime.GOOS, elevation.IsElevated())
+// A failure here must not fail login (like ensureBundledEngine), and the
+// outcome is reported to the daemon either way — that is what NAVI
+// renders. The error return exists for the CALLER, not for the wizard:
+// it used to return nothing, so the terminal walked straight into a
+// model wait for an engine that would never appear and sat there for up
+// to the whole setup budget (#188). The contract is exactly "did we tell
+// the daemon this install failed": non-nil ⇔ s.Failed was called.
+func runSetupEngineInstall(ctx context.Context, s *executorSession, out io.Writer) error {
+	return setupEngineInstall(ctx, s, out, runtime.GOOS, elevation.IsElevated())
 }
 
 // setupEngineInstall is runSetupEngineInstall with the two host facts
 // that vary by OS passed in, so the whole decision tree is table-testable
 // on every OS from an unprivileged CI runner (repo rule: route
 // GOOS-varying decisions through a function taking runtime.GOOS).
-func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, goos string, elevated bool) {
+func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, goos string, elevated bool) error {
 	if !s.Supported() {
-		return
+		return nil
 	}
 	st := s.State()
 	if !st.Active || st.DesiredEngine == "" || st.EngineInstalled {
-		return
+		return nil
 	}
 	// Only the two engines the executor knows how to install. An unknown
 	// desired engine is left to the daemon's own reporting rather than
 	// half-supported here.
 	if st.DesiredEngine != "ollama" && st.DesiredEngine != "vllm" {
-		return
+		return nil
 	}
 	// A live lease already claimed this install. The claim is bound to
 	// the lease (§11.1), so a stale one cannot be here — whoever holds
-	// it is alive and working.
+	// it is alive and working. Not our failure, so no error: the caller
+	// keeps waiting for the engine that other executor is installing.
 	if st.InstallClaimed != "" {
-		return
+		return nil
 	}
 	// The daemon could not tell us where to install. Guessing would risk
 	// installing somewhere this daemon never looks, which presents to the
 	// operator as an install that "worked" and a step that never turns
 	// green.
 	if st.StateDir == "" {
-		s.Failed(st.DesiredEngine, "the background service did not report where to install the engine")
-		return
+		const detail = "the background service did not report where to install the engine"
+		s.Failed(st.DesiredEngine, detail)
+		return errors.New(detail)
 	}
 
 	// vLLM's installer has a different shape (a uv/pip venv, not a tarball)
 	// and needs an NVIDIA GPU on Linux, so it takes its own path rather than
 	// ollama's decision tree (waired#835 Phase 2).
 	if st.DesiredEngine == "vllm" {
-		installVLLMAsExecutor(ctx, s, out, goos, elevated, st.StateDir)
-		return
+		return installVLLMAsExecutor(ctx, s, out, goos, elevated, st.StateDir)
 	}
 
-	installEngineAsExecutor(ctx, s, out, goos, elevated,
+	return installEngineAsExecutor(ctx, s, out, goos, elevated,
 		st.DesiredEngine, st.StateDir, engineInstallNarrationWizard)
 }
 
@@ -167,7 +173,7 @@ func vllmInstallDecision(goos string, elevated, nvidiaPresent, alreadyActive, op
 // no NVIDIA GPU — before claiming and building. The CP already gates the
 // wizard's vLLM offer on those, so reaching a fail here means the offer and
 // the host disagree; the executor is the final authority (waired#835 §11).
-func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Writer, goos string, elevated bool, stateDir string) {
+func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Writer, goos string, elevated bool, stateDir string) error {
 	action := vllmInstallDecision(goos, elevated,
 		setupDetectNVIDIA(ctx),
 		setupVLLMActive(stateDir),
@@ -178,13 +184,13 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 		claimed := s.Installing("vllm")
 		if claimed.InstallClaimed != "" && claimed.InstallClaimed != "vllm" {
 			// Another executor got there first with a different engine.
-			return
+			return nil
 		}
 		writePromptf(out, "%s %s\n", emo("📦", ">>"), engineInstallNarrationVLLM)
 		if err := setupInstallVLLM(stateDir); err != nil {
 			writePromptf(out, "%s vLLM install failed: %v\n", emo("⚠️", "!"), err)
 			s.Failed("vllm", err.Error())
-			return
+			return err
 		}
 		// Built as root; hand the state dir back or the unprivileged daemon
 		// cannot read the venv we just created (Linux only, no-op elsewhere).
@@ -198,25 +204,34 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 		s.Done("vllm")
 
 	case vllmActionSkipNotElevated:
-		s.Failed("vllm",
+		return failEngineInstall(s, "vllm",
 			"the setup command on this device is not running with administrator privileges; "+
 				elevation.Hint("waired init"))
 
 	case vllmActionSkipOptOut:
 		writePrompt(out, "vLLM install skipped (WAIRED_NO_VLLM).")
-		s.Failed("vllm",
+		return failEngineInstall(s, "vllm",
 			"engine installs are turned off on this device (WAIRED_NO_VLLM)")
 
 	case vllmActionFailUnsupportedOS:
 		// Defense in depth: the CP only offers vLLM on Linux, so this is a
 		// host that reached vllm some other way. Name the fix.
-		s.Failed("vllm",
+		return failEngineInstall(s, "vllm",
 			"vLLM setup is only supported on Linux; use the standard engine on this device")
 
 	case vllmActionFailNoGPU:
-		s.Failed("vllm",
+		return failEngineInstall(s, "vllm",
 			"no NVIDIA GPU was detected on this device; vLLM needs an NVIDIA graphics card (CUDA)")
 	}
+	return nil
+}
+
+// failEngineInstall reports a failed install to the daemon and returns
+// the same detail as an error, so the wizard and the terminal always say
+// the same thing about the same failure (#188).
+func failEngineInstall(s *executorSession, engine, detail string) error {
+	s.Failed(engine, detail)
+	return errors.New(detail)
 }
 
 // installEngineAsExecutor is the shared install core: claim the lease,
@@ -225,11 +240,11 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 func installEngineAsExecutor(
 	ctx context.Context, s *executorSession, out io.Writer,
 	goos string, elevated bool, engine, stateDir, narration string,
-) {
+) error {
 	claimed := s.Installing(engine)
 	if claimed.InstallClaimed != "" && claimed.InstallClaimed != engine {
 		// Another executor got there first with a different engine.
-		return
+		return nil
 	}
 
 	bundledPresent := false
@@ -253,7 +268,7 @@ func installEngineAsExecutor(
 		if err := setupInstallEngine(true, stateDir); err != nil {
 			writePromptf(out, "%s Engine install failed: %v\n", emo("⚠️", "!"), err)
 			s.Failed(engine, err.Error())
-			return
+			return err
 		}
 		// The tarball was extracted as root; hand the state dir back or
 		// the unprivileged daemon cannot read what we just installed
@@ -271,7 +286,7 @@ func installEngineAsExecutor(
 		// The daemon already reports permission_denied for an unelevated
 		// lease; say it in the executor's own words so error_detail names
 		// the command that fixes it.
-		s.Failed(engine,
+		return failEngineInstall(s, engine,
 			"the setup command on this device is not running with administrator privileges; "+
 				elevation.Hint("waired init"))
 
@@ -281,9 +296,27 @@ func installEngineAsExecutor(
 		// of the eight codes ("this device will not do it"); the detail
 		// carries the real reason (waired#835 decisions 20260720 13:00).
 		writePrompt(out, "Engine install skipped (WAIRED_NO_OLLAMA).")
-		s.Failed(engine,
+		return failEngineInstall(s, engine,
 			"engine installs are turned off on this device (WAIRED_NO_OLLAMA)")
 	}
+	return nil
+}
+
+// engineArrivalPending reports whether an engine can still plausibly
+// appear on this host, which is the only condition under which the model
+// wait should ignore its own no_engine grace (#188).
+//
+// The wait used to disable that grace for the whole of a browser setup,
+// so a failed install parked the terminal on "Waiting for the AI engine
+// to start…" until the setup budget ran out — an hour, on the exact
+// hosts where the engine was never coming. Three states genuinely mean
+// "keep waiting": the wizard has not picked an engine yet, a live lease
+// holds the install claim (someone else is installing), or the desired
+// engine is not in place. Anything else gets the ordinary grace back,
+// and a failed install skips the wait entirely at the caller.
+func engineArrivalPending(st management.SetupStateResponse) bool {
+	return st.Active &&
+		(st.DesiredEngine == "" || st.InstallClaimed != "" || !st.EngineInstalled)
 }
 
 // setupEngineInstallWanted reports whether the daemon's state calls for

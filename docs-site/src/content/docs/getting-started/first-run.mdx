@@ -119,21 +119,35 @@ You can set up your coding tools later from this terminal with `waired link all`
 
 ## Set up in the terminal instead
 
-At *“Setup is continuing in your browser…”*, press **Enter**. The terminal
-takes over.
+At *“Setup is continuing in your browser…”*, press **Enter**. Nothing moves
+yet — the terminal first says what taking over means and asks you to confirm:
 
-What it asks depends on how it is running.
+<Expected title="You are asked">
+```
+   Taking over means this terminal drives setup and the browser page stops.
+   Any model download keeps running either way.
+   Take over setup in this terminal? [y/N] (default: No)
+```
+
+Answer **y** to take over. Pressing Enter again answers *No*, so a keystroke
+you did not mean cannot move setup out of the browser; the offer stays open
+if you change your mind.
+</Expected>
+
+What the terminal asks after that depends on how it is running.
 
 ### After a normal install
 
 The terminal asks about your coding tools, and nothing else — the model was
-chosen in the browser, or by the installer:
+chosen in the browser, or by the installer. Both questions come **after** the
+model has finished downloading, so nothing interrupts the transfer:
 
 <Expected title="You are asked">
-	Whether to route Claude Code through Waired. Answer **Y**.
+	Whether to set up coding-agent integration, then whether to route Claude
+	Code through Waired. Answer **Y** to both.
 
-	Answering no leaves the connection installed but inactive; turn it on later
-	with `sudo waired claude enable`.
+	Answering no to the routing question leaves the connection installed but
+	inactive; turn it on later with `sudo waired claude enable`.
 </Expected>
 
 ### <a id="no-desktop-no-browser"></a>On a server, or with no browser
@@ -145,7 +159,8 @@ itself and asks the full set of questions:
 <Steps>
 
 1. **Google sign-in.** Only the link and a pairing code are printed — open them
-	on another device.
+	on another device. The terminal says *“Nothing to press here”*: no key is
+	needed at this step, and it notices the sign-in on its own.
 
 2. **Run AI models on this computer? `[Y/n]`** — **Y** on a desktop or GPU box.
 	**N** on a machine that should only *use* another computer's AI; it still
@@ -189,6 +204,22 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 │  Point your coding agent at Waired and start building.           │
 ╰──────────────────────────────────────────────────────────────────╯
 ```
+</Expected>
+
+<Expected tone="bad">
+```
+!  The AI engine could not be installed on this device.
+   no space left on device
+
+   Sign-in worked — this device is signed in and running. Only local AI is missing.
+   Retry the install with: sudo waired init
+```
+
+The AI software could not be installed — most often no disk space, no network,
+or the command was not run with administrator rights. Sign-in is unaffected:
+the computer is on your network and can use the AI on your other machines
+already. Fix what the message names and run the command again; setup stops
+there rather than waiting for an engine that is not coming.
 </Expected>
 
 <Aside type="caution" title="“This machine can only run a very small model”">

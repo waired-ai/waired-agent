@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"strings"
 	"testing"
@@ -44,7 +45,7 @@ func stubOpener(t *testing.T, err error) *int {
 func TestPresentLoginURL_PrintOnly(t *testing.T) {
 	calls := stubOpener(t, nil)
 	var out strings.Builder
-	presentLoginURL(strings.NewReader(""), &out, "https://cp.example/login/abc", "XKCD-42", gatePrintOnly)
+	presentLoginURL(bufio.NewScanner(strings.NewReader("")), &out, "https://cp.example/login/abc", "XKCD-42", gatePrintOnly)
 	if *calls != 0 {
 		t.Errorf("browser opened %d times in print-only mode", *calls)
 	}
@@ -52,6 +53,26 @@ func TestPresentLoginURL_PrintOnly(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output missing %q: %q", want, out.String())
 		}
+	}
+	// #184: the gate above this one means "Enter opens your browser".
+	// This one has nothing for Enter to do, and saying so is what stops
+	// the keystroke from being spent on the next thing that reads stdin.
+	if !strings.Contains(out.String(), "Nothing to press here") {
+		t.Errorf("print-only gate does not say Enter has no role here: %q", out.String())
+	}
+}
+
+// TestPresentLoginURL_PrintOnlyReadsNothing pins the other half of #184:
+// this gate must not consume a line either. Blocking here would strand a
+// terminal whose operator signed in on another device, so the keystroke
+// is answered by the caller's poll loop instead.
+func TestPresentLoginURL_PrintOnlyReadsNothing(t *testing.T) {
+	stubOpener(t, nil)
+	var out strings.Builder
+	sc := bufio.NewScanner(strings.NewReader("typed-ahead\n"))
+	presentLoginURL(sc, &out, "https://cp.example/login/abc", "", gatePrintOnly)
+	if !sc.Scan() || sc.Text() != "typed-ahead" {
+		t.Errorf("the print-only gate consumed the pending line (got %q)", sc.Text())
 	}
 }
 
@@ -64,7 +85,7 @@ func TestPresentLoginURL_AutoOpen_URLPrintedBeforeOpen(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { openBrowserFn = orig })
-	presentLoginURL(strings.NewReader(""), &out, "https://cp.example/login/abc", "", gateAutoOpen)
+	presentLoginURL(bufio.NewScanner(strings.NewReader("")), &out, "https://cp.example/login/abc", "", gateAutoOpen)
 	if !urlAlreadyPrinted {
 		t.Error("browser opened before the URL was printed")
 	}
@@ -76,7 +97,7 @@ func TestPresentLoginURL_AutoOpen_URLPrintedBeforeOpen(t *testing.T) {
 func TestPresentLoginURL_Prompt_OpensAfterEnter(t *testing.T) {
 	calls := stubOpener(t, nil)
 	var out strings.Builder
-	presentLoginURL(strings.NewReader("\n"), &out, "https://cp.example/login/abc", "", gatePrompt)
+	presentLoginURL(bufio.NewScanner(strings.NewReader("\n")), &out, "https://cp.example/login/abc", "", gatePrompt)
 	if *calls != 1 {
 		t.Errorf("browser open calls = %d, want 1", *calls)
 	}
@@ -88,7 +109,7 @@ func TestPresentLoginURL_Prompt_OpensAfterEnter(t *testing.T) {
 func TestPresentLoginURL_OpenFailureFallsBackToLink(t *testing.T) {
 	calls := stubOpener(t, errors.New("no xdg-open"))
 	var out strings.Builder
-	presentLoginURL(strings.NewReader(""), &out, "https://cp.example/login/abc", "", gateAutoOpen)
+	presentLoginURL(bufio.NewScanner(strings.NewReader("")), &out, "https://cp.example/login/abc", "", gateAutoOpen)
 	if *calls != 1 {
 		t.Errorf("browser open calls = %d, want 1", *calls)
 	}

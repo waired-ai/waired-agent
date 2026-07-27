@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"io"
 	"os"
@@ -241,18 +240,29 @@ func (s *executorSession) watchSignals() {
 // terminal, and wait out the gap until they actually start setup there.
 //
 // Returns the model-wait budget, whether a browser setup is driving this
-// host, and the Enter listener (never nil, so callers can Drain
+// host, and the takeover watch (never nil, so callers can poll
 // unconditionally). Non-interactive / --no-browser / an older daemon all
-// return the legacy budget with no listener attached, which is what keeps
+// return the legacy budget with an inert watch, which is what keeps
 // those paths byte-identical.
-func awaitBrowserSetup(s *executorSession, stdin *bufio.Scanner, out io.Writer, nonInteractive, noBrowser bool) (time.Duration, bool, *enterListener) {
-	idle := &enterListener{resolved: true} // inert: Drain and Backgrounded are no-ops
+//
+// in is the process's stdin owner, or nil when init is not running on a
+// terminal. Two things follow from a nil owner: the offer line is not
+// printed (there is no keyboard to press it on), and the watch is inert
+// — a piped stdin belongs to the script driving init, and letting it
+// take the terminal over is how a scripted answer went missing (#185).
+func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonInteractive, noBrowser bool) (time.Duration, bool, *takeoverWatch) {
 	if !s.Supported() || nonInteractive || noBrowser {
-		return benchPollDeadline, false, idle
+		return benchPollDeadline, false, newTakeoverWatch(nil)
 	}
 	writePrompt(out, "Setup is continuing in your browser…")
-	writePrompt(out, dim("(press Enter to continue in the terminal instead)"))
-	enter := listenForEnter(stdin)
+	if in != nil {
+		writePrompt(out, dim("(press Enter to continue in the terminal instead)"))
+	}
+	// #184: drop anything typed before the offer existed — most of all
+	// the Enter pressed at the sign-in step above, which used to arrive
+	// here and switch modes without ever being acknowledged.
+	in.Discard()
+	enter := newTakeoverWatch(in)
 	budget, active := awaitSetupBudget(s, setupAwaitGrace, out, enter)
 	return budget, active, enter
 }
@@ -268,9 +278,9 @@ func awaitBrowserSetup(s *executorSession, stdin *bufio.Scanner, out io.Writer, 
 // first write landed.
 //
 // Returns the residency budget to use and whether a setup actually
-// started. Pressing Enter backgrounds the wait and returns the legacy
+// started. Confirming the takeover ends the wait and returns the legacy
 // budget, which is how the operator takes the terminal back.
-func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, enter *enterListener) (time.Duration, bool) {
+func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, enter *takeoverWatch) (time.Duration, bool) {
 	if !s.Supported() {
 		return benchPollDeadline, false
 	}
@@ -279,7 +289,11 @@ func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, en
 	}
 	deadline := time.Now().Add(grace)
 	for time.Now().Before(deadline) {
-		if enter != nil && enter.Backgrounded() {
+		took, note := enter.Poll()
+		if note != "" && out != nil {
+			writePrompt(out, note)
+		}
+		if took {
 			return benchPollDeadline, false
 		}
 		time.Sleep(setupStatePollInterval)

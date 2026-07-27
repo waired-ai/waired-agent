@@ -103,8 +103,12 @@ var engineWaitForStatus = 20 * time.Second
 // The condition is therefore "does this host want inference", not "is a
 // wizard driving" — read from the daemon's own subsystem state rather
 // than from any flag, so it reflects what the agent actually decided.
-func ensureDaemonPathEngine(ctx context.Context, s *executorSession, mgmtURL string, out io.Writer) {
-	daemonPathEngineInstall(ctx, s, mgmtURL, out, runtime.GOOS, elevation.IsElevated())
+//
+// Like the wizard-driven entry point it returns an error only when it
+// told the daemon an install failed, so the caller can skip a model wait
+// that has nothing to wait for (#188).
+func ensureDaemonPathEngine(ctx context.Context, s *executorSession, mgmtURL string, out io.Writer) error {
+	return daemonPathEngineInstall(ctx, s, mgmtURL, out, runtime.GOOS, elevation.IsElevated())
 }
 
 // daemonPathEngineInstall is ensureDaemonPathEngine with the OS-varying
@@ -113,28 +117,28 @@ func ensureDaemonPathEngine(ctx context.Context, s *executorSession, mgmtURL str
 func daemonPathEngineInstall(
 	ctx context.Context, s *executorSession, mgmtURL string, out io.Writer,
 	goos string, elevated bool,
-) {
+) error {
 	if !s.Supported() {
 		// No executor routes means a daemon older than this feature. It
 		// cannot report progress and we cannot claim an install, so stay
 		// on the pre-#835 behaviour exactly.
-		return
+		return nil
 	}
 	st := s.State()
 	if st.StateDir == "" {
 		// The daemon did not say where to install. Guessing risks
 		// installing somewhere it never looks — an install that
 		// "succeeds" and changes nothing.
-		return
+		return nil
 	}
 	if !daemonWantsEngine(mgmtURL) {
-		return
+		return nil
 	}
 	// A wizard-driven install may already hold the claim; do not race it.
 	if st.InstallClaimed != "" {
-		return
+		return nil
 	}
-	installEngineAsExecutor(ctx, s, out, goos, elevated,
+	return installEngineAsExecutor(ctx, s, out, goos, elevated,
 		"ollama", st.StateDir, engineInstallNarrationLocal)
 }
 

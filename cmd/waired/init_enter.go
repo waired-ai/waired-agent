@@ -1,15 +1,20 @@
 package main
 
-import (
-	"bufio"
-	"io"
-)
+import "io"
 
 // enterListener watches the shared stdin scanner for one line — the
 // "press Enter to continue in the background" escape of the post-accept
 // model-download wait (waired#774) — without corrupting the scanner for
 // later prompts on the same stdin (the init flow asks the routing
 // question after the benchmark).
+//
+// This is the escape of a wait the operator explicitly asked for (they
+// just accepted a model switch), where a bare Enter genuinely means
+// "stop watching" and the standalone path's routing question follows on
+// the same scanner and needs the reconciling Drain. The browser-setup
+// takeover is the opposite situation — an offer nobody asked for,
+// competing with later prompts — and uses takeoverWatch over the stdin
+// owner instead (init_takeover.go), which needs no Drain at all.
 //
 // It deliberately reads a whole line via the scanner instead of a raw
 // single-key read: raw terminal mode would fight bytes already buffered
@@ -27,8 +32,8 @@ type enterListener struct {
 
 // listenForEnter starts a goroutine that performs exactly one sc.Scan()
 // and reports the result. The caller MUST call Drain before issuing any
-// further prompt on the same scanner.
-func listenForEnter(sc *bufio.Scanner) *enterListener {
+// further prompt on the same line source.
+func listenForEnter(sc lineReader) *enterListener {
 	l := &enterListener{ch: make(chan bool, 1)}
 	go func() { l.ch <- sc.Scan() }()
 	return l

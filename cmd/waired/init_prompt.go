@@ -229,8 +229,10 @@ func describeHardware(p hardware.Profile) string {
 
 // ynPrompt reads one [Y/n] / [y/N] answer. Empty input returns def.
 // Unparseable input re-prompts up to 3 times then falls back to def.
-// Reads through the supplied scanner (caller owns it).
-func ynPrompt(out io.Writer, sc *bufio.Scanner, label string, def bool) bool {
+// Reads through the supplied line source (caller owns it) — a plain
+// bufio.Scanner, or the init stdin owner when one process-wide reader is
+// what keeps two prompts from fighting over the keyboard (init_stdin.go).
+func ynPrompt(out io.Writer, sc lineReader, label string, def bool) bool {
 	// Spell out the default ("default: Yes/No") alongside the [Y/n]
 	// capitalization so it reads like a conventional interactive installer
 	// — the older "(Enter = Yes)" form looked like an instruction to type

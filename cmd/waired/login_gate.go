@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"io"
 
 	"github.com/waired-ai/waired-agent/internal/platform/browser"
@@ -52,7 +51,12 @@ var openBrowserFn = browser.Open
 // The URL is printed before any browser opens in every mode, so the
 // operator always has the link in hand. Blocking on Enter in gatePrompt is
 // fine: the login session outlives it (same model as gcloud).
-func presentLoginURL(in io.Reader, out io.Writer, loginURL, userCode string, gate browserGate) {
+//
+// in is the caller's line source, never a fresh scanner of our own: on the
+// daemon path it is the process's stdin owner, and a second reader layered
+// over stdin here is how an Enter pressed at this step ended up answering a
+// later question (#184).
+func presentLoginURL(in lineReader, out io.Writer, loginURL, userCode string, gate browserGate) {
 	writePromptf(out, "\nSign in using this link:\n  %s\n", loginURL)
 	switch gate {
 	case gatePrintOnly:
@@ -60,9 +64,15 @@ func presentLoginURL(in io.Reader, out io.Writer, loginURL, userCode string, gat
 			writePromptf(out, "\nCode: %s\n", userCode)
 		}
 		writePromptf(out, "\nOpen the link on this or another device.\n")
+		// #184: the two gates sit at the same step and used to teach
+		// opposite meanings for the same key — Enter opens a browser
+		// above, Enter does nothing here. Say so, because the next thing
+		// that reads stdin is the browser-setup takeover offer, and an
+		// unexplained keystroke landing there is a silent mode switch.
+		writePromptf(out, "%s\n", dim("Nothing to press here — sign-in continues on its own once you open the link."))
 	case gatePrompt:
 		writePromptf(out, "\n%s Press Enter to open your browser (or open the link above yourself)... ", emo("🌐", ">>"))
-		bufio.NewScanner(in).Scan()
+		in.Scan()
 		openLoginURL(out, loginURL)
 	case gateAutoOpen:
 		openLoginURL(out, loginURL)
