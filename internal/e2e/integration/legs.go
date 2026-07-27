@@ -26,7 +26,7 @@ func claudeLeg() Leg {
 	return Leg{
 		Name:       "claude",
 		ExpectKind: "anthropic",
-		Drive: func(ctx context.Context, e Env) (int, []byte, error) {
+		Drive: func(ctx context.Context, e Env) (driveResponse, error) {
 			return driveAnthropic(ctx, e.ClaudeURL, e.TinyAlias)
 		},
 	}
@@ -41,7 +41,7 @@ func claudeModelMapLeg() Leg {
 	return Leg{
 		Name:       "claude-anthropic-model-id",
 		ExpectKind: "anthropic",
-		Drive: func(ctx context.Context, e Env) (int, []byte, error) {
+		Drive: func(ctx context.Context, e Env) (driveResponse, error) {
 			return driveAnthropic(ctx, e.ClaudeURL, "claude-fable-5[1m]")
 		},
 	}
@@ -66,7 +66,7 @@ func openCodeLeg() Leg {
 			}
 			return cleanup, nil
 		},
-		Drive: func(ctx context.Context, e Env) (int, []byte, error) {
+		Drive: func(ctx context.Context, e Env) (driveResponse, error) {
 			return driveOpenAI(ctx, e.DataPlaneURL, e.TinyAlias)
 		},
 	}
@@ -91,7 +91,7 @@ func openClawLeg() Leg {
 			}
 			return cleanup, nil
 		},
-		Drive: func(ctx context.Context, e Env) (int, []byte, error) {
+		Drive: func(ctx context.Context, e Env) (driveResponse, error) {
 			return driveOpenAI(ctx, e.DataPlaneURL, e.TinyAlias)
 		},
 	}

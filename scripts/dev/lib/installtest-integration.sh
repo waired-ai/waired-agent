@@ -19,6 +19,36 @@
 
 : "${IT_TINY_ALIAS:=waired/tiny}"
 : "${IT_MGMT_URL:=http://127.0.0.1:9476}"
+# Defaults duplicated from installtest-enroll.sh so this file does not depend on
+# source order (installtest-run.sh sources enroll first today, but the coupling
+# is invisible and one reorder away from an empty path).
+: "${IT_BUNDLED_OLLAMA_BIN:=/var/lib/waired/runtimes/ollama/bin/ollama}"
+: "${IT_ENGINE_LOG:=/var/lib/waired/runtimes/ollama/logs/engine.log}"
+
+# _it_integration_diag <guest> — the evidence the routing harness cannot reach.
+#
+# The Claude legs only ever see the intercept's fail-open 502, and the engine's
+# own reason (a crashed llama-server, an OOM, a refused bind) lives ONLY in
+# engine.log. waired-agent#29 went undiagnosed for a week because this hook had
+# no failure branch at all: a segfaulted model runner presented as "waired proxy
+# could not reach the upstream API".
+#
+# Note engine.log is O_TRUNCed on every engine respawn, so this runs as soon
+# after the failure as possible — which is also why the Go harness now fails
+# fast on a terminal engine error instead of retrying for three minutes first.
+_it_integration_diag() {
+  local guest="$1"
+  gx "$guest" sh -c "OLLAMA_HOST=127.0.0.1:9475 '$IT_BUNDLED_OLLAMA_BIN' ps" 2>&1 \
+    | sed 's/^/    :9475 ps| /' || true
+  gx "$guest" sh -c "OLLAMA_HOST=127.0.0.1:9475 '$IT_BUNDLED_OLLAMA_BIN' list" 2>&1 \
+    | sed 's/^/    :9475 list| /' || true
+  gx "$guest" curl -fsS --max-time 5 "$IT_MGMT_URL/waired/v1/inference/status" 2>&1 \
+    | sed 's/^/    status| /' || true
+  gx "$guest" journalctl -u waired-agent --no-pager -n 120 2>&1 \
+    | sed 's/^/    agent| /' || true
+  gx "$guest" sh -c "tail -n 200 '$IT_ENGINE_LOG' 2>/dev/null || echo '(no engine.log)'" 2>&1 \
+    | sed 's/^/    engine.log| /' || true
+}
 
 # assert_integration <guest> — run the routing sentinel against the enrolled
 # daemon. Records ok()/bad(); never aborts the run itself.
@@ -49,9 +79,11 @@ assert_integration() {
        WAIRED_MGMT_URL="$IT_MGMT_URL" \
        WAIRED_TINY_ALIAS="$IT_TINY_ALIAS" \
        WAIRED_STATE_DIR=/var/lib/waired \
-       go test -tags integration -count=1 -v ./internal/e2e/integration/... ); then
+       WAIRED_ANTHROPIC_BLACKHOLED="${IT_ANTHROPIC_BLACKHOLED:-0}" \
+       go test -tags integration -count=1 -v -timeout 15m ./internal/e2e/integration/... ); then
     ok "coding-agent routing sentinel: every leg served locally (no fail-open)"
   else
     bad "coding-agent routing sentinel failed (see go test output above)"
+    _it_integration_diag "$guest"
   fi
 }

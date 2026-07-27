@@ -1,0 +1,252 @@
+package integration
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestLegDriveBudget pins the worked numbers for the deadlines the sentinel
+// actually runs under. PRODUCT CONTRACT: the 10m row is Go's default
+// -timeout, which is what the harness gets when a caller forgets the flag.
+func TestLegDriveBudget(t *testing.T) {
+	cases := []struct {
+		name      string
+		until     time.Duration
+		remaining int
+		want      time.Duration
+	}{
+		// (10m - 60s)/4 - 45s = 90s. Four legs then fit in exactly 9m,
+		// leaving runReserve for the binary to report its own failure.
+		{"go-default-timeout", 10 * time.Minute, 4, 90 * time.Second},
+		// (15m - 60s)/4 - 45s = 165s, capped at maxLegDriveBudget.
+		{"chosen-timeout-hits-cap", 15 * time.Minute, 4, maxLegDriveBudget},
+		{"single-leg-hits-cap", 10 * time.Minute, 1, maxLegDriveBudget},
+		// Too little time for even one round of overhead: one attempt each,
+		// no retries. A 0 budget is a legal answer -- the caller still makes
+		// one attempt, so a failure always carries a real status.
+		{"squeezed-timeout", 3 * time.Minute, 4, 0},
+		// -timeout 0 (no deadline): the cap is the only bound.
+		{"no-deadline", 0, 4, maxLegDriveBudget},
+		{"no-legs", 10 * time.Minute, 0, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := legDriveBudget(c.until, c.remaining); got != c.want {
+				t.Errorf("legDriveBudget(%s, %d) = %s, want %s", c.until, c.remaining, got, c.want)
+			}
+		})
+	}
+}
+
+// TestLegDriveBudgetInvariant is the assertion that makes waired-agent#29
+// unrepresentable. That bug was pure arithmetic: 4 legs x 3min of retries
+// exceeded go test's 10min default, so the last leg was killed mid-request
+// and its t.Fatalf -- the one line naming the real HTTP status -- never
+// printed. Every occurrence cost 10 minutes and produced only a goroutine
+// dump.
+//
+// PRODUCT CONTRACT: whenever a leg gets a non-zero drive budget, all the
+// remaining legs plus their non-drive overhead must fit inside the test
+// binary's own deadline with runReserve to spare. Change any constant in a
+// way that breaks this and ci.yml's always-on unit lane fails in seconds
+// rather than the sentinel failing silently 15 minutes in.
+func TestLegDriveBudgetInvariant(t *testing.T) {
+	for _, until := range []time.Duration{3 * time.Minute, 5 * time.Minute, 10 * time.Minute, 15 * time.Minute, 25 * time.Minute} {
+		for remaining := 1; remaining <= 8; remaining++ {
+			budget := legDriveBudget(until, remaining)
+			if budget == 0 {
+				// Nothing fits; one attempt per leg is all we can promise.
+				continue
+			}
+			worst := time.Duration(remaining) * (budget + legOverhead)
+			if worst > until-runReserve {
+				t.Errorf("until=%s remaining=%d: budget %s -> worst case %s exceeds %s (until - runReserve)",
+					until, remaining, budget, worst, until-runReserve)
+			}
+		}
+	}
+}
+
+// TestBudgetConstantsAreCoherent pins the relationships between the timing
+// constants. PRODUCT CONTRACT: each of these is a way the harness could go
+// silent again, so they are asserted rather than left to a reader to re-derive.
+func TestBudgetConstantsAreCoherent(t *testing.T) {
+	if driveAttemptTimeout > maxLegDriveBudget {
+		t.Errorf("driveAttemptTimeout (%s) exceeds maxLegDriveBudget (%s): one attempt could consume a leg's whole budget",
+			driveAttemptTimeout, maxLegDriveBudget)
+	}
+	if legOverhead < sentinelTimeout {
+		t.Errorf("legOverhead (%s) does not cover sentinelTimeout (%s): the served-locally poll would eat into the next leg's budget",
+			legOverhead, sentinelTimeout)
+	}
+	if driveRetryDelay >= driveAttemptTimeout {
+		t.Errorf("driveRetryDelay (%s) is not small relative to driveAttemptTimeout (%s)",
+			driveRetryDelay, driveAttemptTimeout)
+	}
+	if progressEvery >= driveAttemptTimeout {
+		t.Errorf("progressEvery (%s) >= driveAttemptTimeout (%s): a stalled attempt would time out without ever reporting",
+			progressEvery, driveAttemptTimeout)
+	}
+}
+
+// TestWatchLegStopIsIdempotent pins that the progress watcher shuts down
+// cleanly and that a double stop (defer + explicit) does not panic.
+func TestWatchLegStopIsIdempotent(t *testing.T) {
+	stop := watchLeg("claude", "drive attempt 1")
+	stop()
+	stop()
+}
+
+// ciSegfaultBody is the verbatim body the OpenCode/OpenClaw legs received in
+// the waired-agent#29 failures (runs 30273349362 / 30278247061 / 30280425468).
+// The gateway forwards the engine's own error through unchanged, so this is
+// the only place the real reason reaches the wire.
+const ciSegfaultBody = `{"error":{"message":"llama-server process has terminated: signal: segmentation fault (core dumped)","type":"api_error","param":null,"code":null}}`
+
+// ciFailOpenBody is the verbatim body the two Claude legs received in the same
+// runs: the intercept discarded the local 500 and replayed upstream, which CI
+// blackholes, so the engine's death read as "cannot reach the upstream API".
+const ciFailOpenBody = `{"error":{"message":"waired proxy could not reach the upstream API: dial tcp 0.0.0.0:443: connect: connection refused","type":"waired_upstream_unreachable"},"type":"error"}`
+
+func hdr(kv ...string) http.Header {
+	h := http.Header{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		h.Set(kv[i], kv[i+1])
+	}
+	return h
+}
+
+// TestClassifyDrive pins retryable-vs-terminal. PRODUCT CONTRACT: the
+// classifier is deliberately conservative -- anything it does not recognise
+// keeps retrying, because the loop's original purpose (letting a cold model
+// load finish) must survive. Only signals that PROVE the request can never
+// become a 2xx are terminal.
+func TestClassifyDrive(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		hdr        http.Header
+		body       string
+		blackholed bool
+		want       driveVerdict
+		wantReason string // substring
+	}{
+		{name: "ok", status: 200, want: driveOK},
+		{name: "ok-201", status: 201, want: driveOK},
+
+		// The waired-agent#29 signature, both halves.
+		{
+			name: "ci-segfault-500", status: 500, body: ciSegfaultBody,
+			want: driveTerminal, wantReason: "process has terminated",
+		},
+		{
+			name: "ci-fail-open-502-unmasked-by-header", status: 502,
+			hdr:  hdr(headerFallback, "anthropic; reason=local_status_500"),
+			body: ciFailOpenBody, blackholed: true,
+			want: driveTerminal, wantReason: "local HTTP 500",
+		},
+		// The row that stops the classifier being too eager: the SAME
+		// fail-open shape during a cold load must still be retried.
+		{
+			name: "fail-open-502-over-a-transient-local-503", status: 502,
+			hdr:  hdr(headerFallback, "anthropic; reason=local_status_503"),
+			body: ciFailOpenBody, blackholed: true,
+			want: driveRetry,
+		},
+		{
+			name: "fail-open-502-named-local-reason-is-retried", status: 502,
+			hdr:  hdr(headerFallback, "anthropic; reason=local_peer_ttfb_timeout"),
+			body: ciFailOpenBody, blackholed: true,
+			want: driveRetry,
+		},
+		// Without the blackhole an unreachable upstream is a real network
+		// blip, not proof the sentinel's assertion already failed.
+		{
+			name: "fail-open-502-not-blackholed", status: 502, body: ciFailOpenBody,
+			blackholed: false, want: driveRetry,
+		},
+		{
+			name: "fail-open-502-blackholed-no-header", status: 502, body: ciFailOpenBody,
+			blackholed: true, want: driveTerminal, wantReason: "blackhole",
+		},
+
+		// Genuinely transient: the cold-load window the retry loop exists for.
+		{name: "too-early", status: 425, want: driveRetry},
+		{name: "model-not-ready", status: 503, body: `{"error":{"type":"model_not_ready"}}`, want: driveRetry},
+		{name: "runtime-unhealthy-no-retry-after", status: 503, body: `{"error":{"type":"runtime_unhealthy"}}`, want: driveRetry},
+		{name: "engine-request-failed", status: 502, body: `{"error":{"type":"engine_request_failed"}}`, want: driveRetry},
+		{name: "retry-after-header", status: 418, hdr: hdr("Retry-After", "5"), want: driveRetry},
+		{name: "too-many-requests", status: 429, want: driveRetry},
+
+		// Wiring/config regressions the sentinel exists to catch: no amount
+		// of waiting fixes them.
+		{name: "model-not-found", status: 404, body: `{"error":{"type":"model_not_found"}}`, want: driveTerminal},
+		{name: "unauthorized", status: 401, want: driveTerminal},
+		{name: "forbidden", status: 403, want: driveTerminal},
+		{name: "capability-not-met", status: 400, want: driveTerminal},
+		{name: "hardware-insufficient", status: 422, want: driveTerminal},
+
+		// Default-safe: unrecognised means keep trying.
+		{name: "unknown-teapot", status: 418, body: "\x00\x01garbage", want: driveRetry},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, reason := classifyDrive(c.status, c.hdr, []byte(c.body), c.blackholed)
+			if got != c.want {
+				t.Errorf("classifyDrive(%d, blackholed=%v) = %v (%q), want %v",
+					c.status, c.blackholed, got, reason, c.want)
+			}
+			if c.wantReason != "" && !strings.Contains(reason, c.wantReason) {
+				t.Errorf("reason = %q, want it to mention %q", reason, c.wantReason)
+			}
+			if got == driveTerminal && reason == "" {
+				t.Error("a terminal verdict must carry a reason")
+			}
+		})
+	}
+}
+
+func TestLocalStatusFromFallback(t *testing.T) {
+	cases := []struct {
+		in         string
+		wantStatus int
+		wantNamed  string
+		wantOK     bool
+	}{
+		{"anthropic; reason=local_status_500", 500, "", true},
+		{"anthropic; reason=local_status_503", 503, "", true},
+		{"anthropic; reason=local_no_model", 0, "no_model", true},
+		{"anthropic; reason=local_peer_ttfb_timeout", 0, "peer_ttfb_timeout", true},
+		// The mirror-image header (upstream unreachable -> served locally)
+		// says nothing about a local failure.
+		{"local; reason=anthropic_unreachable", 0, "", false},
+		{"anthropic; reason=local_status_notanumber", 0, "status_notanumber", true},
+		{"", 0, "", false},
+		{"anthropic", 0, "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			status, named, ok := localStatusFromFallback(c.in)
+			if status != c.wantStatus || named != c.wantNamed || ok != c.wantOK {
+				t.Errorf("localStatusFromFallback(%q) = (%d, %q, %v), want (%d, %q, %v)",
+					c.in, status, named, ok, c.wantStatus, c.wantNamed, c.wantOK)
+			}
+		})
+	}
+}
+
+// TestIncludedLeg covers the WAIRED_INTEGRATION_LEGS filter, which had no test.
+func TestIncludedLeg(t *testing.T) {
+	if !includedLeg("claude", nil) {
+		t.Error("a nil filter must include every leg")
+	}
+	only := map[string]bool{"claude": true, "opencode": true}
+	if !includedLeg("claude", only) {
+		t.Error("claude must be included")
+	}
+	if includedLeg("openclaw", only) {
+		t.Error("openclaw must be excluded")
+	}
+}

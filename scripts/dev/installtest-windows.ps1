@@ -1145,7 +1145,7 @@ if ($Tier -ge 2) {
                 $env:WAIRED_TINY_ALIAS = 'waired/tiny'
                 $env:WAIRED_STATE_DIR  = $StateDir
                 Push-Location -LiteralPath $Root
-                & go test -tags integration -count=1 -v ./internal/e2e/integration/...
+                & go test -tags integration -count=1 -v -timeout 15m ./internal/e2e/integration/...
                 $goExit = $LASTEXITCODE
                 Pop-Location
                 if ($goExit -eq 0) { ItOk "coding-agent routing sentinel: every leg served locally (no fail-open)" }

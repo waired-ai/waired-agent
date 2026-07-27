@@ -337,6 +337,10 @@ jobs:
         env:
           IT_LOCAL: "1"
           IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
+          # Matches the blackhole step above: with the guard armed, "cannot
+          # reach the upstream API" proves the request escaped local routing,
+          # so the harness fails fast instead of retrying a lost cause.
+          IT_ANTHROPIC_BLACKHOLED: "1"
         run: |
           set -euo pipefail
           export PATH="$HOME/go/bin:$PATH"
@@ -369,6 +373,28 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ollama-diag-routing-macos-${{ github.run_attempt }}
+          path: diag/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # waired-agent#29: the Linux leg had no equivalent, so a crashed
+      # llama-server left no trace at all. `cancelled()` too — a job killed by
+      # timeout-minutes is exactly when the evidence matters most.
+      - name: collect ollama diagnostics (linux)
+        if: (failure() || cancelled()) && matrix.os == 'linux'
+        run: |
+          set +e
+          mkdir -p diag
+          sudo cp /var/lib/waired/runtimes/ollama/logs/engine.log diag/engine.log
+          sudo journalctl -u waired-agent --no-pager -n 2000 > diag/waired-agent.journal 2>&1
+          curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status > diag/inference-status.json 2>&1
+          sudo chown -R "$(id -un)" diag
+          ls -la diag
+      - name: upload ollama diagnostics (linux)
+        if: (failure() || cancelled()) && matrix.os == 'linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ollama-diag-routing-linux-${{ github.run_attempt }}
           path: diag/
           if-no-files-found: ignore
           retention-days: 14
