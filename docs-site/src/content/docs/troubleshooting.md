@@ -215,6 +215,19 @@ The **Engine** line is the one that matters.
 - **`not ready` after the download finished** — the model probably does not fit
   this computer's memory. Switch to a smaller one:
   [Choose which AI model runs](/guides/choose-a-model/).
+- **`engine failed`** — the AI engine stopped on its own. Waired restarts it for
+  you (up to three times), so this usually clears within a minute; the reason it
+  stopped is shown on the same line. If it keeps happening, Waired stops
+  restarting and says so — fix what the reason points at, then start it again:
+
+  ```sh
+  waired inference engine start
+  ```
+
+  A model that is too large for this computer is the usual cause; the engine's
+  own log has the detail (see [Going deeper](#going-deeper-logs)). While the
+  engine is down this computer stops offering the AI to your other machines, so
+  they fail over instead of waiting on it.
 
 Two more causes worth knowing:
 

@@ -293,7 +293,10 @@ _it_wait_inference_ready() {
     # Bail early on a terminal state instead of burning the whole budget.
     # (no_engine/initializing are transient during engine cold start.)
     state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
-    case "$state" in pull_failed|disabled|stopped) printf '%s' "$out"; return 1 ;; esac
+    # engine_failed is terminal too (waired-agent#29): the engine crashed and
+    # automatic recovery either is mid-flight (which shows as "starting") or has
+    # given up. Either way, polling for "ready" will not fix it.
+    case "$state" in pull_failed|disabled|stopped|engine_failed) printf '%s' "$out"; return 1 ;; esac
     sleep 5
   done
   printf '%s' "$out"; return 1

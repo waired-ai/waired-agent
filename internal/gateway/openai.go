@@ -15,6 +15,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // OpenAIError mirrors the OpenAI error envelope so clients with strict
@@ -163,7 +164,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, rr); err != nil {
+	if err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, rr, asFailureReporter(adapter)); err != nil {
 		rr.fail(http.StatusOK, "mid_stream_truncate")
 		// Phase 8: if proxying failed AFTER the response headers were
 		// sent, HTTP semantics mean we can no longer switch the
@@ -223,7 +224,12 @@ func rewriteModelField(body []byte, newModel string) (string, []byte, error) {
 // telemetry record. When non-nil, a passive sniffer reads the token
 // counts out of the bytes being forwarded (waired#829) — see
 // usageSniffer for why this is a tee and not a buffer.
-func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, rr *requestRec) error {
+// engineErrorSniffMax bounds how much of a non-2xx engine body is read
+// before forwarding, so the adapter can classify it without buffering an
+// arbitrarily large error.
+const engineErrorSniffMax = 32 << 10
+
+func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) error {
 	target, err := url.Parse(baseURL)
 	if err != nil {
 		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "bad_engine_url", err.Error())
@@ -268,6 +274,33 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
+	}
+	if resp.StatusCode/100 != 2 {
+		// The engine refused. Two things must happen that used not to
+		// (waired-agent#29):
+		//
+		//  1. Tell the adapter. Only it knows its engine's error
+		//     vocabulary, and a body naming a dead model runner is the
+		//     ONLY signal that separates "engine broken" from "bad
+		//     request" — the parent `ollama serve` keeps answering
+		//     /api/tags with 200 after its llama-server child dies.
+		//  2. Record the real status. This path used to fall through to
+		//     the caller's rr.succeed(), which logged 200 for a wire-500
+		//     in the event ring AND counted a failed request as a
+		//     billable usage sample.
+		//
+		// The body is read HEAD-first so the reporter can classify it,
+		// then forwarded verbatim — including anything past the sniff cap,
+		// so a large upstream error still reaches the client intact.
+		head, _ := io.ReadAll(io.LimitReader(resp.Body, engineErrorSniffMax))
+		if reporter != nil {
+			reporter.ReportUpstreamFailure(resp.StatusCode, head)
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(head)
+		_, _ = io.Copy(w, resp.Body)
+		rr.fail(resp.StatusCode, "engine_error")
+		return nil
 	}
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)

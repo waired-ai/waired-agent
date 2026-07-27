@@ -62,6 +62,11 @@ type InferenceProvider interface {
 //	"no_engine"        no engine alive — inference API returns 503
 //	"stopped"          engine hard-stopped by operator (parked, #186)
 //	"starting"         engine restart in flight after a start request
+//	"engine_failed"    the engine is down: a crashed model runner, an
+//	                   exhausted recovery budget, or a boot that never came
+//	                   up. Previously any of these read as "ready" whenever
+//	                   the active model happened to be on disk
+//	                   (waired-agent#29).
 type InferenceStatus struct {
 	SubsystemState  string                   `json:"subsystem_state"`
 	Runtimes        map[string]RuntimeStatus `json:"runtimes"`

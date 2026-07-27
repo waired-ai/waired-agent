@@ -53,6 +53,11 @@ func (e *engineController) StopEngine(ctx context.Context) error {
 // as the background spawn progresses.
 func (e *engineController) StartEngine(_ context.Context) error {
 	e.ollama.Unpark()
+	// An explicit start is also the documented reset for a crash-recovery
+	// give-up (waired-agent#29): the operator has presumably changed
+	// something, so let the engine try again. No new endpoint or CLI verb —
+	// this is already `waired inference engine start`.
+	e.ollama.ClearFailure()
 	if e.logger != nil {
 		e.logger.Info("engine controller: start requested")
 	}
