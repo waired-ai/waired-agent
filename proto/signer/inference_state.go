@@ -149,6 +149,23 @@ type InferenceState struct {
 	DesiredModelID      string `json:"desired_model_id,omitempty"`
 	DesiredBenchmarkGen int    `json:"desired_benchmark_gen,omitempty"`
 
+	// DesiredIntegrations is the fourth CP-injected onboarding target:
+	// which coding agents the wizard asked this device to configure. It
+	// follows the three fields above exactly — Self entry only, injected
+	// at map-assembly time, never set by the agent's own push, nil in
+	// the common case so the signed map stays byte-identical — and
+	// carries enum target IDs only, for the same reason DesiredModelID
+	// is a catalog ID.
+	//
+	// It is gated on CapabilityOnboardingV2, NOT V1. The distinction
+	// matters beyond byte-identity: an onboarding-v1 agent would drop
+	// this field on canonical re-marshal and fail verification, and even
+	// if it did not, it would silently never report an integration step
+	// and leave the wizard waiting forever.
+	//
+	// See DesiredIntegrations for the nil / empty / populated semantics.
+	DesiredIntegrations *DesiredIntegrations `json:"desired_integrations,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page

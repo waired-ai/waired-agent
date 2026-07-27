@@ -25,4 +25,24 @@ const (
 	// those fields to a poller that has not declared it, keeping the
 	// signed map byte-identical for older agents.
 	CapabilityOnboardingV1 = "onboarding-v1"
+
+	// CapabilityOnboardingV2 declares that this agent understands the
+	// second wave of NAVI-onboarding wire (waired#932): the signed-map
+	// field InferenceState.DesiredIntegrations, and the setup-progress
+	// additions SetupProgress.Driver, SetupStep.RateBps and the
+	// SetupBenchmark trial fields.
+	//
+	// Only DesiredIntegrations needs the gate for correctness — it is
+	// the one that rides the signed map, where an agent that does not
+	// know the field drops it on canonical re-marshal and fails
+	// verification. The progress additions travel the separate
+	// telemetry push, which is never signed or distributed, so they are
+	// safe to send unconditionally.
+	//
+	// They are nonetheless covered by the same constant because the
+	// reader needs them to be: absent a declaration, a wizard cannot
+	// tell "this agent does not publish a driver" from "no surface has
+	// claimed this run yet", and would have to treat a legitimate empty
+	// value as a fault. One capability answers both questions.
+	CapabilityOnboardingV2 = "onboarding-v2"
 )
