@@ -87,6 +87,32 @@ type BenchmarkStatusResponse struct {
 	MeasuredAt string `json:"measured_at,omitempty"`
 	// Error carries the failure detail when State is "failed".
 	Error string `json:"error,omitempty"`
+
+	// Per-measurement progress (waired-agent#199). The benchmark takes
+	// benchSampleCount samples after a warm-up that can itself run for
+	// ~180 s on a cold multi-GB model; with nothing emitted in between,
+	// the setup wizard could only show an unbounded spinner for the
+	// whole of it.
+	//
+	// Phase is "warmup" or "measuring" while State is "running", and
+	// empty otherwise. Trial is the 1-based index of the last completed
+	// sample — 0 during warm-up, which is exactly how the §7 wire
+	// distinguishes the two without a phase field of its own.
+	Phase  string `json:"phase,omitempty"`
+	Trial  int    `json:"trial,omitempty"`
+	Trials int    `json:"trials,omitempty"`
+	// SampleTokps is the last completed sample; MedianTokps and
+	// SpreadPct are over the samples so far while running, and over the
+	// whole run once it is done. MeasuredTokps above stays the FINAL
+	// answer and is never a running value — shipped consumers render it
+	// as "Speed: about N" (waired#934 §7.2).
+	SampleTokps float64 `json:"sample_tokps,omitempty"`
+	MedianTokps float64 `json:"median_tokps,omitempty"`
+	SpreadPct   float64 `json:"spread_pct,omitempty"`
+	// Method is how the figure was obtained: ollama_eval | openai_slope |
+	// wall_clock. A wall_clock result carries request overhead and must
+	// be treated as low-confidence downstream.
+	Method string `json:"method,omitempty"`
 }
 
 // Benchmark job states — values of BenchmarkStatusResponse.State.

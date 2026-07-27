@@ -87,9 +87,15 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		// declares the waired#835 desired-state applier below, so the
 		// CP may fold desired_engine / desired_model_id /
 		// desired_benchmark_gen into this device's own Self entry.
-		// CPs predating the intake ignore the body entirely.
+		// onboarding-v2 adds desired_integrations to that set
+		// (waired#935): a v1 agent would silently ignore the field and
+		// leave the wizard waiting forever for a step it will never
+		// emit, so the CP must not send it until an agent says it can
+		// apply it. CPs predating the intake ignore the body entirely.
 		body := bytes.NewBufferString(`{"capabilities":["` +
-			signer.CapabilityPublicShareV1 + `","` + signer.CapabilityOnboardingV1 + `"]}`)
+			signer.CapabilityPublicShareV1 + `","` +
+			signer.CapabilityOnboardingV1 + `","` +
+			signer.CapabilityOnboardingV2 + `"]}`)
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/network-map/poll", body)
 		if err != nil {
 			errs <- err

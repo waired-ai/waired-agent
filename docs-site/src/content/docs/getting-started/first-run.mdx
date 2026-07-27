@@ -111,13 +111,19 @@ that already has the AI software goes straight to the next step.
 </Expected>
 
 While the browser is driving, the terminal asks you nothing. It reminds you to
-leave it open, and tells you that you can connect your coding tools later:
+leave it open, and — when the setup page has asked which coding tools to
+connect — it is this window that writes them, because that needs administrator
+access the page does not have:
 
 ```
 Keep this terminal window open until setup finishes — it does the parts the
 browser can't.
-You can set up your coding tools later from this terminal with `waired link all`.
+🔌 Setting up your coding tools (claude-code, opencode)…
 ```
+
+On an older setup page, which does not ask, it tells you how to do it yourself
+instead: *“You can set up your coding tools later from this terminal with
+`waired link all`.”*
 
 The setup page says the same thing while it works. When the terminal has
 finished its share it says so — *“Setup is continuing in your browser — nothing
@@ -143,6 +149,26 @@ yet — the terminal first says what taking over means and asks you to confirm:
 Answer **y** to take over. Pressing Enter again answers *No*, so a keystroke
 you did not mean cannot move setup out of the browser; the offer stays open
 if you change your mind.
+</Expected>
+
+The offer closes once you press **Yes, set it up** in the browser. From that
+point this window is running the installation, and the terminal says so:
+
+<Expected>
+```
+Setup has started in your browser — this window now runs the installation.
+```
+
+Enter still answers, but it no longer switches:
+
+```
+Setup is running in your browser and this window is doing the installation.
+To abandon it, press Ctrl-C and run the setup command again.
+```
+
+Abandoning costs the work in progress, which is why it takes a deliberate
+Ctrl-C rather than a keystroke. If the browser tab is what went wrong, you do
+not need this: open the computer's page again and choose **Resume setup**.
 </Expected>
 
 What the terminal asks after that depends on how it is running.

@@ -144,24 +144,12 @@ var producedInProto = []exemption{
 // producerPending: this repo owes the writer. Each entry names the issue
 // that lands it; delete the entry in that PR rather than editing it.
 //
-// These are live instances of the class this guard exists for. The
-// onboarding-v2 wire landed as its own additive proto PR (#196, as the
-// workspace rules require) while the agent-side producers stayed open —
-// so right now the control plane can read `driver` and the benchmark
-// trial fields, and every one of them is absent on the wire.
-// `rate_bps` left this table with #197, which gave it its writer.
-var producerPending = []exemption{
-	{reflect.TypeFor[signer.SetupProgress](), "Driver",
-		"onboarding-v2 wire landed in #196; the agent-side publisher is #198"},
-	{reflect.TypeFor[signer.SetupBenchmark](), "Trial",
-		"onboarding-v2 wire landed in #196; per-measurement benchmark progress is #199"},
-	{reflect.TypeFor[signer.SetupBenchmark](), "Trials",
-		"onboarding-v2 wire landed in #196; per-measurement benchmark progress is #199"},
-	{reflect.TypeFor[signer.SetupBenchmark](), "SampleTokps",
-		"onboarding-v2 wire landed in #196; per-measurement benchmark progress is #199"},
-	{reflect.TypeFor[signer.SetupBenchmark](), "MedianTokps",
-		"onboarding-v2 wire landed in #196; per-measurement benchmark progress is #199"},
-}
+// Empty, and that is the point: the onboarding-v2 wire landed as its own
+// additive proto PR (#196, as the workspace rules require) with every
+// agent-side producer still open, and this table held the debt in the
+// open until each one was paid — `rate_bps` by #197, `driver` and the
+// benchmark trial fields by #198/#199.
+var producerPending = []exemption{}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the

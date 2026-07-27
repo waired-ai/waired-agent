@@ -68,11 +68,21 @@ type State struct {
 // job. Gen is the desired_benchmark_gen generation the run was
 // requested under (0 for boot/CLI-triggered runs).
 type BenchmarkRecord struct {
-	Gen           int       `json:"gen,omitempty"`
-	MeasuredTokps float64   `json:"measured_tokps,omitempty"`
-	Failed        bool      `json:"failed,omitempty"`
-	Error         string    `json:"error,omitempty"`
-	MeasuredAt    time.Time `json:"measured_at"`
+	Gen           int     `json:"gen,omitempty"`
+	MeasuredTokps float64 `json:"measured_tokps,omitempty"`
+	// Method and SpreadPct describe HOW the figure was obtained: which
+	// of the three measurement methods produced it, and how far apart
+	// the samples behind it were. Persisted alongside the number because
+	// a wall_clock result carries request overhead and must stay
+	// low-confidence after a restart too — a bare tokens/s that has
+	// forgotten its method reads as authoritative (waired-agent#199).
+	Method    string  `json:"method,omitempty"`
+	SpreadPct float64 `json:"spread_pct,omitempty"`
+	Trials    int     `json:"trials,omitempty"`
+
+	Failed     bool      `json:"failed,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	MeasuredAt time.Time `json:"measured_at"`
 }
 
 // DismissalKey builds the map key for DismissedRecommendations from the
