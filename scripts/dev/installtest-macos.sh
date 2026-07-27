@@ -57,6 +57,10 @@ LABEL="com.waired.agent"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
 NEWSYSLOG_CONF="/etc/newsyslog.d/waired-agent.conf"
 MGMT="http://127.0.0.1:9476/waired/v1/status"
+# Mirror of lib/installtest-enroll.sh's IT_INSTALL_FAILURE_RE — see the comment
+# there. scripts/ci/harness-failure-strings-guard.sh checks the three copies
+# agree and that every branch still exists in the product source.
+IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
@@ -128,14 +132,27 @@ assert_launchd_healthy() {
 # state dir root-owned.
 assert_inference_macos() {
   local ollama_bin="" cand tps
+
+  # PRIMARY: init's own transcript. See IT_INSTALL_FAILURE_RE's comment in
+  # lib/installtest-enroll.sh — the installer's verdict outranks anything
+  # still findable on disk (#215/#178). First, so the reason leads.
+  if [ -f "$INITLOG" ] && grep -qE "$IT_INSTALL_FAILURE_RE" "$INITLOG"; then
+    bad "init transcript reports an engine install failure ($INITLOG)"
+    grep -nE "$IT_INSTALL_FAILURE_RE" "$INITLOG" | sed 's/^/    /' >&2 || true
+  else
+    ok "init transcript reports no engine install failure"
+  fi
+
   for cand in \
       "$(command -v ollama 2>/dev/null || true)" \
       /Applications/Ollama.app/Contents/Resources/ollama \
       /usr/local/bin/ollama /opt/homebrew/bin/ollama; do
     if [ -n "$cand" ] && [ -x "$cand" ]; then ollama_bin="$cand"; break; fi
   done
+  # SECONDARY, and worded as presence rather than success: a half-finished
+  # install leaves an unpacked binary behind (#178).
   if [ -n "$ollama_bin" ]; then
-    ok "ollama engine installed ($ollama_bin)"
+    ok "ollama binary present ($ollama_bin)"
   else
     bad "ollama engine not installed (waired init --inference-enabled=true should have installed Ollama.app)"
   fi

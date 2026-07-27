@@ -118,6 +118,18 @@ $Work         = Join-Path ([System.IO.Path]::GetTempPath()) 'waired-installtest-
 $Stage        = Join-Path $Work 'stage'
 $Mirror       = Join-Path $Work 'mirror'
 
+# Failure lines `waired init` prints when an engine install did not succeed.
+# A leg whose transcript contains one of these FAILED, whatever else it can
+# still find on disk -- #178 printed the exact reason into CI logs for five
+# straight days while the leg said `ok  ollama engine installed`.
+#
+# Mirror of lib/installtest-enroll.sh's IT_INSTALL_FAILURE_RE. Kept as one
+# alternation per harness so scripts/ci/harness-failure-strings-guard.sh can
+# check the three copies agree and that every branch still exists in the
+# product source (cmd/waired/init_engine.go, cmd/waired/setup_install.go) --
+# a grep for wording the product stopped printing is green forever.
+$InstallFailureRe = 'Engine install failed:|vLLM install failed:'
+
 # --- logging / assert counters ----------------------------------------------
 $script:Pass = 0
 $script:Fail = 0
@@ -265,7 +277,28 @@ function Assert-DaemonEngine {
 function Assert-Inference {
     param([string]$InitLog)
 
-    # 1) ollama.exe discoverable (mirror internal/download's Windows order)
+    # 0) PRIMARY: init's own transcript. A leg whose transcript says the engine
+    #    install failed FAILED, whatever it can still find on disk. #178 is the
+    #    reason this is first and the reason it outranks (1): the ollama.exe
+    #    lookup below found a binary the half-finished install had already
+    #    unpacked before Get-AuthenticodeSignature blew up, so this function
+    #    printed `ok  ollama engine installed` while the exact failure sat in
+    #    the same CI log, for five straight days.
+    #    See $InstallFailureRe's declaration for the string provenance.
+    if (Test-Path -LiteralPath $InitLog) {
+        $hits = @(Select-String -Path $InitLog -Pattern $InstallFailureRe -ErrorAction SilentlyContinue)
+        if ($hits.Count) {
+            ItBad "init transcript reports an engine install failure ($InitLog)"
+            $hits | Select-Object -First 5 | ForEach-Object { Write-Host "    $($_.LineNumber): $($_.Line.Trim())" }
+        } else {
+            ItOk "init transcript reports no engine install failure"
+        }
+    } else {
+        ItBad "no init transcript to check for install failures ($InitLog)"
+    }
+
+    # 1) ollama.exe discoverable (mirror internal/download's Windows order).
+    #    SECONDARY, and worded as presence rather than success -- see (0).
     $ollama = $null
     foreach ($p in @(
             (Join-Path $env:ProgramFiles 'Ollama\ollama.exe'),
@@ -276,7 +309,7 @@ function Assert-Inference {
         $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue
         if ($cmd) { $ollama = $cmd.Source }
     }
-    if ($ollama) { ItOk "ollama engine installed ($ollama)" }
+    if ($ollama) { ItOk "ollama binary present ($ollama)" }
     else { ItBad "ollama engine not installed (waired init --inference-enabled=true should have installed it)" }
 
     # 1b) the waired-managed marker and the machine PATH entry: see
