@@ -16,7 +16,7 @@ import (
 func TestNewOllamaInstallerCmd_DropsPSModulePath(t *testing.T) {
 	t.Setenv("PSModulePath", `C:\Program Files\PowerShell\7\Modules`)
 
-	cmd := newOllamaInstallerCmd(context.Background(), `C:\Temp\ollama-install.ps1`, `C:\Temp\ollama-stage-1`)
+	cmd := newOllamaInstallerCmd(context.Background(), `C:\Temp\ollama-install.ps1`, `C:\Temp\ollama-stage-1`, false)
 
 	if cmd.Env == nil {
 		t.Fatal("Env is nil: the child would inherit the parent environment verbatim")
@@ -35,7 +35,7 @@ func TestNewOllamaInstallerCmd_Args(t *testing.T) {
 		t.Setenv("WAIRED_OLLAMA_GPU_MODE", "")
 		t.Setenv("WAIRED_OLLAMA_MODELS_DIR", "")
 
-		cmd := newOllamaInstallerCmd(context.Background(), script, "")
+		cmd := newOllamaInstallerCmd(context.Background(), script, "", false)
 
 		want := []string{
 			"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -50,7 +50,7 @@ func TestNewOllamaInstallerCmd_Args(t *testing.T) {
 		t.Setenv("WAIRED_OLLAMA_GPU_MODE", "vulkan")
 		t.Setenv("WAIRED_OLLAMA_MODELS_DIR", `D:\ollama\models`)
 
-		cmd := newOllamaInstallerCmd(context.Background(), script, `C:\Temp\ollama-stage-1`)
+		cmd := newOllamaInstallerCmd(context.Background(), script, `C:\Temp\ollama-stage-1`, false)
 
 		// -StageDir is what keeps a context kill from leaking ~1.4 GB: the
 		// script's own cleanup lives in a `finally` the terminated process
@@ -63,6 +63,24 @@ func TestNewOllamaInstallerCmd_Args(t *testing.T) {
 		}
 		if !slices.Equal(cmd.Args, want) {
 			t.Errorf("Args = %q, want %q", cmd.Args, want)
+		}
+	})
+
+	t.Run("asks for machine progress only when a sink is listening", func(t *testing.T) {
+		t.Setenv("WAIRED_OLLAMA_GPU_MODE", "")
+		t.Setenv("WAIRED_OLLAMA_MODELS_DIR", "")
+
+		// The switch is what keeps a hand-run install's output exactly what
+		// it has always been: the extra parseable lines exist for the setup
+		// executor's sink and nobody else (waired-agent#197).
+		plain := newOllamaInstallerCmd(context.Background(), script, "", false)
+		if slices.Contains(plain.Args, "-MachineProgress") {
+			t.Errorf("Args = %q, want no -MachineProgress without a sink", plain.Args)
+		}
+
+		withSink := newOllamaInstallerCmd(context.Background(), script, "", true)
+		if !slices.Contains(withSink.Args, "-MachineProgress") {
+			t.Errorf("Args = %q, want -MachineProgress when a sink is listening", withSink.Args)
 		}
 	})
 }

@@ -269,7 +269,11 @@ func installEngineAsExecutor(
 	// unconfigured (#190); it skips the base download, so it is cheap.
 	case engineActionInstall, engineActionRepair:
 		writePromptf(out, "%s %s\n", emo("📦", ">>"), narration)
-		if err := setupInstallEngine(true, stateDir); err != nil {
+		// The sink is what turns this install into two live rows in the
+		// browser (waired-agent#197). It is bound to THIS lease, so a
+		// session that is inert (no daemon routes) yields nil and the
+		// installer behaves exactly as it did.
+		if err := setupInstallEngine(true, stateDir, newExecutorProgressSink(s, engine)); err != nil {
 			writePromptf(out, "%s Engine install failed: %v\n", emo("⚠️", "!"), err)
 			s.Failed(engine, err.Error())
 			return err

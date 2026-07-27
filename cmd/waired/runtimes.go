@@ -220,7 +220,9 @@ func runRuntimesInstallBody(autoVal bool, preferVal string, yesVal bool, stateDi
 		}
 		return installVLLM(*stateDir)
 	case "ollama":
-		return installOllama(*yes, *stateDir)
+		// No sink: `waired runtimes install` is a hand-run command, with
+		// nothing on the other side of a lease to report to.
+		return installOllama(*yes, *stateDir, nil)
 	default:
 		return fmt.Errorf("unknown engine %q (supported: ollama, vllm)", engine)
 	}

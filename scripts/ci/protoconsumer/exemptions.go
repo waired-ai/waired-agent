@@ -147,13 +147,12 @@ var producedInProto = []exemption{
 // These are live instances of the class this guard exists for. The
 // onboarding-v2 wire landed as its own additive proto PR (#196, as the
 // workspace rules require) while the agent-side producers stayed open —
-// so right now the control plane can read `driver`, `rate_bps` and the
-// benchmark trial fields, and every one of them is absent on the wire.
+// so right now the control plane can read `driver` and the benchmark
+// trial fields, and every one of them is absent on the wire.
+// `rate_bps` left this table with #197, which gave it its writer.
 var producerPending = []exemption{
 	{reflect.TypeFor[signer.SetupProgress](), "Driver",
 		"onboarding-v2 wire landed in #196; the agent-side publisher is #198"},
-	{reflect.TypeFor[signer.SetupStep](), "RateBps",
-		"onboarding-v2 wire landed in #196; engine download/install rate streaming is #197"},
 	{reflect.TypeFor[signer.SetupBenchmark](), "Trial",
 		"onboarding-v2 wire landed in #196; per-measurement benchmark progress is #199"},
 	{reflect.TypeFor[signer.SetupBenchmark](), "Trials",

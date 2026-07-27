@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // TestInstallOllamaLinux_Bundled verifies installOllama drives the
@@ -21,15 +23,19 @@ func TestInstallOllamaLinux_Bundled(t *testing.T) {
 	var gotBaseDir string
 	var gotDeadline time.Time
 	var hadDeadline bool
+	gotSink := true
 	called := false
-	// The fake takes the ctx it is given and records its deadline. It used
-	// to accept `_ context.Context` and drop it, which made the install
+	// The fake takes every argument it is given and records it. It used to
+	// accept `_ context.Context` and drop it, which made the install
 	// budget — the whole subject of #189 — unobservable from any test:
 	// installOllama derives a deadline two lines above this call and
-	// nothing could see it (CLAUDE.md §Test discipline).
-	installOllamaBundled = func(ctx context.Context, baseDir string) error {
+	// nothing could see it (CLAUDE.md §Test discipline). The same now
+	// holds for the progress sink: a hand-run install has no wizard to
+	// report to, and a fake that discarded it could not say so.
+	installOllamaBundled = func(ctx context.Context, baseDir string, sink func(infruntime.OllamaInstallProgress)) error {
 		called = true
 		gotBaseDir = baseDir
+		gotSink = sink != nil
 		gotDeadline, hadDeadline = ctx.Deadline()
 		return nil
 	}
@@ -44,7 +50,7 @@ func TestInstallOllamaLinux_Bundled(t *testing.T) {
 		return nil
 	}
 
-	if err := installOllama(true, "/var/lib/waired"); err != nil {
+	if err := installOllama(true, "/var/lib/waired", nil); err != nil {
 		t.Fatalf("installOllama(-y): %v", err)
 	}
 	if !called {
@@ -52,6 +58,11 @@ func TestInstallOllamaLinux_Bundled(t *testing.T) {
 	}
 	if gotBaseDir != "/var/lib/waired/runtimes/ollama" {
 		t.Errorf("baseDir = %q, want <state-dir>/runtimes/ollama", gotBaseDir)
+	}
+	// `waired runtimes install` is a hand-run command: there is no browser
+	// wizard on the other end of a lease to report bytes to.
+	if gotSink {
+		t.Error("a progress sink reached the installer on the hand-run path")
 	}
 	// The whole state dir (not just runtimes/ollama) is handed back, so a
 	// root-run install can't leave the daemon locked out of its identity.
@@ -85,7 +96,7 @@ func TestInstallOllamaLinux_BudgetFollowsTheEnvironment(t *testing.T) {
 	t.Cleanup(func() { installOllamaBundled = orig })
 	var got time.Duration
 	var ok bool
-	installOllamaBundled = func(ctx context.Context, _ string) error {
+	installOllamaBundled = func(ctx context.Context, _ string, _ func(infruntime.OllamaInstallProgress)) error {
 		var dl time.Time
 		dl, ok = ctx.Deadline()
 		got = time.Until(dl)
@@ -96,7 +107,7 @@ func TestInstallOllamaLinux_BudgetFollowsTheEnvironment(t *testing.T) {
 	t.Cleanup(func() { fixStateOwnership = origFix })
 	fixStateOwnership = func(string) error { return nil }
 
-	if err := installOllama(true, t.TempDir()); err != nil {
+	if err := installOllama(true, t.TempDir(), nil); err != nil {
 		t.Fatalf("installOllama(-y): %v", err)
 	}
 	if !ok {
@@ -117,7 +128,7 @@ func TestInstallOllamaLinux_Error(t *testing.T) {
 	// download reported as a plain "exit status 1", so a test that wants
 	// to tell "the budget expired" from "the download failed" needs the
 	// ctx here too.
-	installOllamaBundled = func(ctx context.Context, _ string) error {
+	installOllamaBundled = func(ctx context.Context, _ string, _ func(infruntime.OllamaInstallProgress)) error {
 		if _, ok := ctx.Deadline(); !ok {
 			t.Error("installer ran with no deadline on the error path either")
 		}
@@ -129,7 +140,7 @@ func TestInstallOllamaLinux_Error(t *testing.T) {
 	fixCalled := false
 	fixStateOwnership = func(string) error { fixCalled = true; return nil }
 
-	if err := installOllama(true, t.TempDir()); err == nil {
+	if err := installOllama(true, t.TempDir(), nil); err == nil {
 		t.Fatal("expected installer error to propagate")
 	}
 	if fixCalled {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // fakeSetupDaemon serves the two executor routes and records every lease
@@ -306,4 +307,153 @@ func waitForCond(t *testing.T, cond func() bool, what string) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// --- progress reporting (waired-agent#197) ---
+
+// shrinkProgressThrottle removes the 500 ms throttle for tests that care
+// about what is reported rather than how often.
+func shrinkProgressThrottle(t *testing.T) {
+	t.Helper()
+	prev := executorProgressInterval
+	executorProgressInterval = 0
+	t.Cleanup(func() { executorProgressInterval = prev })
+}
+
+// progressReports filters a daemon's recorded traffic down to the reports
+// that carry a step, which is all the progress assertions care about.
+func progressReports(reqs []management.SetupExecutorRequest, step string) []management.SetupExecutorRequest {
+	var out []management.SetupExecutorRequest
+	for _, r := range reqs {
+		if r.Step == step {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// The figures the terminal draws must reach the daemon, tagged with the
+// row they belong to — that is the whole of #197 on this side.
+func TestExecutorSessionProgressReportsBytes(t *testing.T) {
+	shrinkSetupTimers(t)
+	shrinkProgressThrottle(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	s.Installing("ollama")
+	s.Progress(management.SetupStepEngineDownload, "ollama", 700<<20, 1400<<20, 76_281_364)
+
+	got := progressReports(d.noted(), management.SetupStepEngineDownload)
+	if len(got) == 0 {
+		t.Fatal("no engine_download report reached the daemon")
+	}
+	last := got[len(got)-1]
+	if last.CompletedBytes != 700<<20 || last.TotalBytes != 1400<<20 || last.RateBps != 76_281_364 {
+		t.Errorf("report = %+v, want the installer's own figures", last)
+	}
+	if last.Phase != management.SetupExecutorPhaseInstalling {
+		t.Errorf("phase = %q, want the install phase to survive a progress tick", last.Phase)
+	}
+}
+
+// Moving to the next step closes the previous row. Without this the
+// download sits at "running" in the wizard for the whole install that
+// follows it, because nothing else ever says it finished.
+func TestExecutorSessionProgressClosesThePreviousStep(t *testing.T) {
+	shrinkSetupTimers(t)
+	shrinkProgressThrottle(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	s.Installing("ollama")
+	s.Progress(management.SetupStepEngineDownload, "ollama", 1400<<20, 1400<<20, 1000)
+	s.Progress(management.SetupStepEngineInstall, "ollama", 0, 0, 0)
+
+	var sawDownloadDone bool
+	for _, r := range d.noted() {
+		if r.Step == management.SetupStepEngineDownload && r.Phase == management.SetupExecutorPhaseDone {
+			sawDownloadDone = true
+		}
+	}
+	if !sawDownloadDone {
+		t.Fatalf("engine_download was never reported done: %+v", d.noted())
+	}
+}
+
+// The installer's callback fires far faster than either this IPC or the
+// control plane's 1-push-per-2 s intake can use.
+func TestExecutorSessionProgressIsThrottled(t *testing.T) {
+	shrinkSetupTimers(t)
+	prev := executorProgressInterval
+	executorProgressInterval = time.Hour
+	t.Cleanup(func() { executorProgressInterval = prev })
+
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+
+	for i := 0; i < 50; i++ {
+		s.Progress(management.SetupStepEngineDownload, "ollama", int64(i)<<20, 1400<<20, 1000)
+	}
+	if got := len(progressReports(d.noted(), management.SetupStepEngineDownload)); got != 1 {
+		t.Fatalf("%d download reports for 50 ticks, want 1 — the throttle is not holding", got)
+	}
+}
+
+// An inert session (no daemon, or one predating the executor routes) must
+// stay silent rather than panic or block the install.
+func TestExecutorSessionProgressInertWhenUnsupported(t *testing.T) {
+	d := &fakeSetupDaemon{notFound: true}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	s.Progress(management.SetupStepEngineDownload, "ollama", 1, 2, 3)
+	if len(d.noted()) != 0 {
+		t.Fatalf("inert session posted %+v", d.noted())
+	}
+	if newExecutorProgressSink(s, "ollama") != nil {
+		t.Error("sink for an inert session should be nil so the installer takes its no-callback path")
+	}
+}
+
+// The sink is the seam between the installer's vocabulary and the §7
+// rows: transfer stages become the download row with figures, everything
+// else becomes the install row.
+func TestExecutorProgressSinkMapsInstallerStages(t *testing.T) {
+	shrinkSetupTimers(t)
+	shrinkProgressThrottle(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+
+	sink := newExecutorProgressSink(s, "ollama")
+	if sink == nil {
+		t.Fatal("want a live sink for a supported session")
+	}
+	// The stage-opening event carries the URL and no bytes; reporting it
+	// would open the row with a bar of unknown size that the next event
+	// immediately replaces.
+	sink(infruntime.OllamaInstallProgress{Stage: "download", Message: "https://example.invalid/x.tgz"})
+	if got := progressReports(d.noted(), management.SetupStepEngineDownload); len(got) != 0 {
+		t.Fatalf("the byte-less stage opener was reported: %+v", got)
+	}
+
+	sink(infruntime.OllamaInstallProgress{Stage: "download", Completed: 5, Total: 10, BytesPerSec: -1})
+	got := progressReports(d.noted(), management.SetupStepEngineDownload)
+	if len(got) != 1 {
+		t.Fatalf("%d download reports, want 1", len(got))
+	}
+	if got[0].RateBps != 0 {
+		t.Errorf("rate_bps = %d, want the renderer's -1 flattened to 0", got[0].RateBps)
+	}
+
+	sink(infruntime.OllamaInstallProgress{Stage: "extract", Message: "/var/lib/waired"})
+	if len(progressReports(d.noted(), management.SetupStepEngineInstall)) == 0 {
+		t.Fatalf("a non-transfer stage did not become the install row: %+v", d.noted())
+	}
 }

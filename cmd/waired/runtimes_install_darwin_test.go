@@ -19,7 +19,7 @@ import (
 )
 
 // withSeam swaps installOllamaApp for the duration of a test.
-func withSeam(t *testing.T, fn func(context.Context) error) {
+func withSeam(t *testing.T, fn func(context.Context, func(infruntime.OllamaInstallProgress)) error) {
 	t.Helper()
 	prev := installOllamaApp
 	installOllamaApp = fn
@@ -36,11 +36,11 @@ func TestInstallOllama_SkipsWhenResolvable(t *testing.T) {
 	}
 	t.Setenv("WAIRED_OLLAMA_BINARY", stub)
 
-	withSeam(t, func(context.Context) error {
+	withSeam(t, func(context.Context, func(infruntime.OllamaInstallProgress)) error {
 		t.Fatal("installOllamaApp must not run when ollama is already resolvable")
 		return nil
 	})
-	if err := installOllama(true, t.TempDir()); err != nil {
+	if err := installOllama(true, t.TempDir(), nil); err != nil {
 		t.Fatalf("installOllama: %v", err)
 	}
 }
@@ -55,8 +55,11 @@ func TestInstallOllama_RunsWhenAbsent(t *testing.T) {
 	}
 
 	called := false
-	withSeam(t, func(context.Context) error { called = true; return nil })
-	if err := installOllama(true, t.TempDir()); err != nil {
+	withSeam(t, func(context.Context, func(infruntime.OllamaInstallProgress)) error {
+		called = true
+		return nil
+	})
+	if err := installOllama(true, t.TempDir(), nil); err != nil {
 		t.Fatalf("installOllama: %v", err)
 	}
 	if !called {
@@ -73,8 +76,8 @@ func TestInstallOllama_PropagatesError(t *testing.T) {
 	}
 
 	sentinel := errors.New("boom")
-	withSeam(t, func(context.Context) error { return sentinel })
-	err := installOllama(true, t.TempDir())
+	withSeam(t, func(context.Context, func(infruntime.OllamaInstallProgress)) error { return sentinel })
+	err := installOllama(true, t.TempDir(), nil)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want wrapped %v", err, sentinel)
 	}

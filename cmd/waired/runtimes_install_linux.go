@@ -24,7 +24,12 @@ var installOllamaBundled = installOllamaBundledImpl
 // service, no systemctl — that is the whole point of the bundle model
 // (#188). Reuse of an existing/user-run Ollama is selected at
 // `waired init` instead, not here.
-func installOllama(yes bool, stateDir string) error {
+//
+// sink, when non-nil, receives the same progress events the terminal
+// renderer draws — that is how the browser wizard gets the download it
+// used to have no view of (waired-agent#197). nil for every caller that
+// is not the setup executor.
+func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstallProgress)) error {
 	baseDir := filepath.Join(stateDir, "runtimes", "ollama")
 	if !yes && !confirmTTY(fmt.Sprintf("Install waired's bundled Ollama %s into %s ?", infruntime.OllamaPinnedVersion, baseDir)) {
 		return errors.New("aborted by user")
@@ -35,7 +40,7 @@ func installOllama(yes bool, stateDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	fmt.Printf("Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
-	if err := installOllamaBundled(ctx, baseDir); err != nil {
+	if err := installOllamaBundled(ctx, baseDir, sink); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf(
 				"ollama install: timed out after %s (raise it with %s, e.g. %s=3h): %w",
@@ -51,11 +56,16 @@ func installOllama(yes bool, stateDir string) error {
 	return nil
 }
 
-func installOllamaBundledImpl(ctx context.Context, baseDir string) error {
+func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(infruntime.OllamaInstallProgress)) error {
 	inst := infruntime.NewOllamaInstaller(baseDir)
 	inst.GPUVendor = detectOllamaGPUVendor(ctx)
 	// Renderer shared with the darwin flow: runtimes_install_render.go.
-	return inst.Install(ctx, newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion))
+	// The terminal bar and the daemon sink are peers — teeOllamaProgress
+	// keeps the former even when the latter is absent.
+	return inst.Install(ctx, teeOllamaProgress(
+		newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
+		sink,
+	))
 }
 
 // detectOllamaGPUVendor returns "amd" when an AMD GPU is present so the
