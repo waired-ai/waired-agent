@@ -550,4 +550,8 @@ install-script-lint:
 	           packaging/debian/waired-tray/postinst \
 	           packaging/debian/waired-tray/postrm
 	shellcheck scripts/ci/autostart-exec-guard.sh \
-	           scripts/ci/docs-surface-guard.sh
+	           scripts/ci/docs-surface-guard.sh \
+	           scripts/ci/installer-mirror-guard.sh \
+	           scripts/ci/installer-mirror-guard-test.sh \
+	           scripts/ci/platform-test-floor-guard.sh \
+	           scripts/ci/platform-test-floor-guard-test.sh
