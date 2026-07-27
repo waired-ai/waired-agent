@@ -60,6 +60,17 @@ type Profile struct {
 	// `/sys/class/drm/card*/device/mem_info_vram_total` (fallback:
 	// min(75 % of RAMTotalGB, 96 GB) per BIOS UMA / Vulkan caps).
 	UsableVRAMMB int `json:"usable_vram_mb,omitempty"`
+
+	// MemoryBandwidthSpecGBs is the published PEAK read bandwidth of the
+	// unified pool in GB/s, looked up from the chip name by
+	// UnifiedMemoryBandwidthGBs. 0 on discrete and CPU-only hosts, and on
+	// any unified part not yet in that table.
+	//
+	// A spec figure, so an UPPER bound on decode speed — which is what
+	// lets the fit rules exclude a model for being too slow instead of
+	// only annotating it (#251). Populated by the per-OS UMA hook, which
+	// runs last and can therefore read CPU.Model.
+	MemoryBandwidthSpecGBs float64 `json:"memory_bandwidth_spec_gbs,omitempty"`
 }
 
 // HostFit projects the profile onto the shared host-fit facts
@@ -75,10 +86,11 @@ type Profile struct {
 // (waired-ai/waired#942, waired-ai/waired-agent#228).
 func (p Profile) HostFit() hostfit.Host {
 	h := hostfit.Host{
-		RAMTotalGB:    p.RAMTotalGB,
-		GPUCount:      len(p.GPUs),
-		UnifiedMemory: p.UnifiedMemory,
-		UsableVRAMMB:  p.UsableVRAMMB,
+		RAMTotalGB:             p.RAMTotalGB,
+		GPUCount:               len(p.GPUs),
+		UnifiedMemory:          p.UnifiedMemory,
+		UsableVRAMMB:           p.UsableVRAMMB,
+		MemoryBandwidthSpecGBs: p.MemoryBandwidthSpecGBs,
 	}
 	if len(p.GPUs) > 0 {
 		h.VRAM0MB = p.GPUs[0].VRAMTotalMB
@@ -333,6 +345,13 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 	if p.umaFn != nil {
 		p.umaFn(ctx, &prof)
 	}
+	// Then the pool's peak bandwidth, which is a pure function of the two
+	// facts the hook just settled. Deliberately here rather than inside
+	// each per-OS hook: the lookup is identical on all three, and three
+	// copies of an identical rule is how the OSes drift apart
+	// (CLAUDE.md §Cross-OS parity). Untagged, so it is reachable from a
+	// test on any host.
+	prof.MemoryBandwidthSpecGBs = unifiedBandwidthFor(prof.UnifiedMemory, prof.CPU.Model)
 
 	p.cached = &prof
 	p.cachedAt = now
