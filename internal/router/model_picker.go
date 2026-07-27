@@ -3,13 +3,13 @@ package router
 import (
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/version"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // PickInput is the world the model picker reasons over. Engine is
@@ -353,145 +353,55 @@ func FirstPullableVariant(m catalog.Manifest, engine, engineVersion string) (cat
 	return catalog.Variant{}, false
 }
 
-// hostFits is the per-engine fit predicate. vllm consults the host's
-// engine-aware VRAM budget (VLLMVRAMBudgetMB, #678: single GPU keeps
-// Profile.EffectiveVRAMMB semantics — UnifiedMemory hosts like Apple
-// Silicon / Strix Halo use UsableVRAMMB instead of the raw VRAMTotalMB
-// so OS-reserved memory isn't double-counted — while identical
-// multi-NVIDIA hosts aggregate across the tensor-parallel set). Ollama
-// consults RAMTotalGB on non-UMA hosts and additionally, on discrete-GPU
-// hosts, requires the variant to fit GPU-resident (ollamaFitsVRAM) —
-// never aggregated, ollama does not shard. On UMA hosts the model loads
-// into the GPU-addressable pool, so the residency check against
-// EffectiveVRAMMB governs and the MinRAMGB gate is skipped (see below).
-// A variant with no declared minimum (0) trivially fits.
+// hostFits is the per-engine fit predicate.
+//
+// The rules themselves live in proto/hostfit, the module the control
+// plane also imports — see hostfit's package doc for why. This function
+// is the agent's binding of them: which budget vLLM is judged against,
+// and the mapping from a Verdict to the bool the picker wants.
+//
+// vLLM consults the host's engine-aware VRAM budget (VLLMVRAMBudgetMB,
+// #678: a single GPU keeps Profile.EffectiveVRAMMB semantics, while
+// identical multi-NVIDIA hosts aggregate across the tensor-parallel
+// set). That aggregation stays here rather than in the shared package:
+// the control plane sees a broadcast summary and cannot reproduce it,
+// and it is a serving-topology decision rather than a fit rule. Ollama
+// is never aggregated — it does not shard — so it is judged on the
+// shared Host directly.
 func hostFits(engine string, v catalog.Variant, hw hardware.Profile) bool {
 	switch engine {
 	case catalog.RuntimeVLLM:
-		if v.MinVRAMMB <= 0 {
-			return true
-		}
-		eff := VLLMVRAMBudgetMB(hw)
-		if eff <= 0 {
-			return false
-		}
-		return eff >= v.MinVRAMMB
+		// Pre-hostfit this branch answered "fits" for a variant with no
+		// declared minimum even on a host with no GPU at all; hostfit
+		// reports no_gpu there instead. Unreachable in practice — every
+		// bundled vLLM variant declares min_vram_mb, and PickEngine only
+		// selects vllm on an NVIDIA host — and "it fits" was the worse
+		// answer of the two.
+		return hostfit.VLLMFit(v, VLLMVRAMBudgetMB(hw)).Fits
 	case catalog.RuntimeOllama:
-		// On UMA carve-out hosts (Strix Halo, Apple Silicon) the weights
-		// load into the GPU-addressable pool (UsableVRAMMB), not the
-		// leftover system RAM. On a BIOS carve-out box RAMTotalGB reports
-		// only the ~31 GB the OS keeps after a 96 GB iGPU allocation, so
-		// the MinRAMGB gate (authored for a host that loads into system
-		// RAM) would wrongly reject every large MoE. Skip it on UMA and
-		// let ollamaFitsVRAM's residency check against EffectiveVRAMMB be
-		// authoritative. Discrete-GPU and CPU-only paths are unchanged.
-		if !hw.UnifiedMemory {
-			// RAMTotalGB == 0 likely means detection failed (e.g. non-Linux
-			// host); treat as "skip the fit check rather than reject all".
-			if v.MinRAMGB > 0 && hw.RAMTotalGB > 0 && hw.RAMTotalGB < v.MinRAMGB {
-				return false
-			}
-		}
-		return ollamaFitsVRAM(v, hw)
+		return hostfit.OllamaFit(v, hw.HostFit()).Fits
 	default:
 		// Unknown engine: be conservative.
 		return false
 	}
 }
 
-// Inputs of the ollama VRAM-residency fit check (ollamaFitsVRAM).
-const (
-	// ollamaKVBudgetTokens is the KV-cache budget reserved at fit time.
-	// 16k tokens is the floor for useful coding-agent context; variants
-	// whose weights leave less than that spill layers to the CPU.
-	ollamaKVBudgetTokens = 16384
-
-	// Discrete-GPU overhead model: base + per-weight slope, replacing
-	// the old flat 4096 MiB. The flat constant was calibrated against
-	// an ollama-defaults load (f16 KV, no flash attention); the #621
-	// serve tuning always spawns with OLLAMA_FLASH_ATTENTION=1, which
-	// shrinks the compute graph substantially. Measured on a 24 GB
-	// RTX PRO 4000 (docs/reports/20260704-mtp-vs-spill-24gb.md):
-	// qwen3.6-35b mtp (22.62 GB weights) shows ~1.9 GB effective
-	// overhead — the flat 4096 was floor()ing the context window to
-	// 32768 while 114688 demonstrably fit. Single-point calibration:
-	// base 1024 (device context, matches the UMA measurement below) +
-	// 40 MiB per decimal GB of weights (compute/scratch buffers scale
-	// with layer width). 22.62 GB → 1024+904 ≈ 1928 MiB. If a card
-	// family under-reserves, the #621 post-load verify probe detects
-	// the spill and shrinks the window — that safety net is what makes
-	// the optimistic calibration acceptable.
-	ollamaVRAMOverheadBaseDiscreteMB = 1024
-	ollamaVRAMOverheadPerWeightGBMB  = 40
-	// ollamaVRAMOverheadUnknownWeightMB is the conservative fallback
-	// when the variant has no weight annotation (keeps the historical
-	// flat reservation).
-	ollamaVRAMOverheadUnknownWeightMB = 4096
-
-	// ollamaVRAMOverheadUMAMB is the UMA (Apple Silicon / Strix Halo)
-	// counterpart. A unified-memory host has no multi-GB device context
-	// to reserve — the model lives in the shared pool, so the only
-	// beyond-weights cost is the compute/scratch graph. The discrete
-	// 4 GB constant ~2× over-estimated Metal: on a real Apple M4,
-	// qwen2.5-coder-7b q4 (4.7 GB weights) resided at runner.vram=4.4 GiB,
-	// yet the discrete math budgeted ~9 GB and collapsed an 8 GB Mac's
-	// auto-pick to a 1.9 GB model (#424). 1024 MB is the largest reduction
-	// that still keeps the real-M4-confirmed 16 GB pick (qwen3.5-9b) and
-	// the qwen2.5-coder-14b GPU-residency rejection intact. Strix Halo
-	// (UMA HIP/Vulkan) shares the unified-memory argument; its value is
-	// extrapolated from the Metal measurement pending a real-host probe.
-	ollamaVRAMOverheadUMAMB = 1024
-)
-
 // OllamaVRAMOverheadMB returns the fit-time overhead reservation for the
-// host: the small flat UMA constant on unified-memory hosts (Apple
-// Silicon / Strix Halo), the weight-scaled discrete model otherwise
-// (base + slope, falling back to the conservative flat reservation when
-// the weight is unknown, #624). Keyed on UnifiedMemory — the same axis
-// EffectiveVRAMMB() uses — so the overhead matches the budget it is
-// compared against (#424). Exported so the #621 context-length clamp
-// subtracts the same overhead the fit gate assumes; scoring's
-// MaxContextTokens counts RAW weights precisely because the whole
-// overhead lives in this budget subtraction (never double-count).
+// host. Kept as the agent-facing name over hostfit.OllamaVRAMOverheadMB
+// because callers hold a hardware.Profile, not a Host: the #621
+// context-length clamp subtracts the same overhead this gate assumes,
+// and scoring's MaxContextTokens counts RAW weights precisely because
+// the whole overhead lives in that subtraction (never double-count).
 func OllamaVRAMOverheadMB(hw hardware.Profile, weightGB float64) int {
-	if hw.UnifiedMemory {
-		return ollamaVRAMOverheadUMAMB
-	}
-	if weightGB <= 0 {
-		return ollamaVRAMOverheadUnknownWeightMB
-	}
-	return ollamaVRAMOverheadBaseDiscreteMB + int(float64(ollamaVRAMOverheadPerWeightGBMB)*weightGB)
+	return hostfit.OllamaVRAMOverheadMB(hw.UnifiedMemory, weightGB)
 }
 
 // ollamaFitsVRAM reports whether v fits fully resident in the host's
-// GPU-addressable budget. The system-RAM gate alone let multi-GB models
-// "fit" hosts whose GPU could never hold them — ollama then silently
-// spills layers to the CPU and decode collapses to single-digit tok/s
-// (a 120 GB-RAM host with a 24 GB card would auto-pick a 62 GB model).
-//
-// On discrete-GPU hosts the budget is GPUs[0].VRAMTotalMB; on UMA hosts
-// (Strix Halo, Apple Silicon) it is UsableVRAMMB — both surfaced via
-// EffectiveVRAMMB(). UMA hosts run the same residency math (the model
-// still has to fit the GPU-addressable pool, which on a BIOS carve-out
-// is the 96 GB iGPU allocation, NOT the leftover system RAM) but reserve
-// a smaller engine overhead — they have no discrete device context (see
-// ollamaVRAMOverheadMB). CPU-only hosts spill to system RAM by design,
-// and variants without a weight annotation or with an unknown budget
-// fall back to the RAM gate.
+// GPU-addressable budget — the residency half of the ollama fit, without
+// the system-RAM gate. Callers that need to explain WHICH constraint
+// bound (deficitLabelFor) depend on that separation.
 func ollamaFitsVRAM(v catalog.Variant, hw hardware.Profile) bool {
-	if len(hw.GPUs) == 0 && !hw.UnifiedMemory {
-		return true // CPU-only: spilling is the design; RAM gate governs.
-	}
-	if v.EstimatedWeightGB <= 0 {
-		return true
-	}
-	eff := hw.EffectiveVRAMMB()
-	if eff <= 0 {
-		return true // budget unknown: don't reject the whole catalog
-	}
-	weightMiB := int(math.Ceil(v.EstimatedWeightGB * 1e9 / (1 << 20)))
-	kvMiB := v.KVBytesPerTokenFP16 * ollamaKVBudgetTokens / (1 << 20)
-	return weightMiB+kvMiB+OllamaVRAMOverheadMB(hw, v.EstimatedWeightGB) <= eff
+	return hostfit.OllamaResident(v, hw.HostFit()).Fits
 }
 
 // hasCapabilityCI is a case-insensitive variant of hasCapability used

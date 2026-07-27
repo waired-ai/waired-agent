@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -239,6 +240,22 @@ func TestHardwareSummaryFor_WireForm(t *testing.T) {
 			prof: hardware.Profile{RAMTotalGB: 32},
 			want: `{"ram_total_gb":32}`,
 		},
+		{
+			// The waired#942 host: plenty of system RAM, a card that
+			// cannot hold what that RAM figure suggests. The control
+			// plane compared RAM alone and offered this machine a 62 GB
+			// model as its DEFAULT.
+			name: "big ram, small gpu",
+			prof: hardware.Profile{
+				RAMTotalGB: 128,
+				GPUs: []hardware.GPU{{
+					Vendor: "nvidia", Model: "NVIDIA GeForce RTX 4090",
+					VRAMTotalMB: 24564, ComputeCap: "8.9",
+				}},
+			},
+			want: `{"gpus":[{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,` +
+				`"compute_cap":"8.9","vendor":"nvidia"}],"ram_total_gb":128}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := json.Marshal(hardwareSummaryFor(tc.prof))
@@ -247,6 +264,92 @@ func TestHardwareSummaryFor_WireForm(t *testing.T) {
 			}
 			if got := string(data); got != tc.want {
 				t.Errorf("published wire form drifted:\n got %s\nwant %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHardwareSummaryFor_SurvivesTheRoundTrip is the producer↔consumer
+// contract for host fit (waired-ai/waired#946 L3).
+//
+// Two parties judge the same machine: this agent, from its own
+// hardware.Profile, and the control plane, from the summary this
+// function publishes. Since proto/hostfit they run the SAME rules — but
+// only if the publish → decode round trip preserves every fact those
+// rules read. Drop a field from hardwareSummaryFor and the agent keeps
+// deciding correctly while the control plane silently decides something
+// else, which is exactly how #180 stayed invisible for weeks.
+//
+// So: marshal what the agent broadcasts, decode it the way the control
+// plane does, and require the resulting Host to equal the one the agent
+// judges itself with.
+func TestHardwareSummaryFor_SurvivesTheRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		prof hardware.Profile
+	}{
+		{
+			"discrete nvidia",
+			hardware.Profile{
+				RAMTotalGB: 64,
+				GPUs: []hardware.GPU{{
+					Vendor: "nvidia", Model: "NVIDIA GeForce RTX 4090",
+					VRAMTotalMB: 24564, ComputeCap: "8.9",
+					DriverVersion: "535.171.04", UUID: "GPU-12345678",
+				}},
+			},
+		},
+		{
+			"big ram, small gpu",
+			hardware.Profile{
+				RAMTotalGB: 128,
+				GPUs: []hardware.GPU{{
+					Vendor: "nvidia", Model: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24564,
+				}},
+			},
+		},
+		{
+			"unified memory",
+			hardware.Profile{
+				RAMTotalGB: 16, UnifiedMemory: true, UsableVRAMMB: 12288,
+				GPUs: []hardware.GPU{{Vendor: "apple", Model: "Apple M3", VRAMTotalMB: 16384}},
+			},
+		},
+		{"cpu only", hardware.Profile{RAMTotalGB: 32}},
+		{
+			// Multi-GPU: ollama never aggregates, so the shared Host
+			// carries the first device — the same figure the agent's own
+			// residency check uses. (vLLM's tensor-parallel aggregate is
+			// deliberately not part of Host; see router.hostFits.)
+			"two identical cards",
+			hardware.Profile{
+				RAMTotalGB: 256,
+				GPUs: []hardware.GPU{
+					{Vendor: "nvidia", Model: "NVIDIA L4", VRAMTotalMB: 23034},
+					{Vendor: "nvidia", Model: "NVIDIA L4", VRAMTotalMB: 23034},
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(hardwareSummaryFor(tc.prof))
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var decoded signer.HardwareSummary
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			want := tc.prof.HostFit()
+			got := hostfit.FromHardwareSummary(&decoded)
+			if got != want {
+				t.Errorf("the control plane would judge a different machine than this agent does:\n"+
+					" published %s\n as host   %+v\n agent has %+v", data, got, want)
+			}
+			if got.EffectiveVRAMMB() != tc.prof.EffectiveVRAMMB() {
+				t.Errorf("effective VRAM after the round trip = %d, agent sees %d",
+					got.EffectiveVRAMMB(), tc.prof.EffectiveVRAMMB())
 			}
 		})
 	}
