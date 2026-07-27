@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"strings"
 	"testing"
@@ -54,7 +55,7 @@ func TestConfirmRenewBypassSkipsPrompt(t *testing.T) {
 		ControlURL:   "https://cp.example.com",
 	}
 	var out bytes.Buffer
-	got := confirmRenew(strings.NewReader(""), &out, id, true, false)
+	got := confirmRenew(bufio.NewScanner(strings.NewReader("")), &out, id, true, false)
 	if !got {
 		t.Fatalf("bypass mode should auto-confirm renew, got false")
 	}
@@ -69,7 +70,7 @@ func TestConfirmRenewBypassSkipsPrompt(t *testing.T) {
 func TestConfirmRenewNonInteractiveSkipsPrompt(t *testing.T) {
 	id := &identity.Identity{AccountEmail: "alice@example.com"}
 	var out bytes.Buffer
-	got := confirmRenew(strings.NewReader(""), &out, id, false, true)
+	got := confirmRenew(bufio.NewScanner(strings.NewReader("")), &out, id, false, true)
 	if !got {
 		t.Fatalf("--non-interactive should auto-confirm renew")
 	}
@@ -79,7 +80,7 @@ func TestConfirmRenewInteractiveDefaultsToYes(t *testing.T) {
 	id := &identity.Identity{AccountEmail: "alice@example.com"}
 	var out bytes.Buffer
 	// Empty answer → ynPrompt returns the default (true).
-	got := confirmRenew(strings.NewReader("\n"), &out, id, false, false)
+	got := confirmRenew(bufio.NewScanner(strings.NewReader("\n")), &out, id, false, false)
 	if !got {
 		t.Fatalf("empty input should fall through to default Y")
 	}
@@ -88,7 +89,7 @@ func TestConfirmRenewInteractiveDefaultsToYes(t *testing.T) {
 func TestConfirmRenewInteractiveRejected(t *testing.T) {
 	id := &identity.Identity{AccountEmail: "alice@example.com"}
 	var out bytes.Buffer
-	got := confirmRenew(strings.NewReader("n\n"), &out, id, false, false)
+	got := confirmRenew(bufio.NewScanner(strings.NewReader("n\n")), &out, id, false, false)
 	if got {
 		t.Fatalf("n response must abort renew")
 	}
@@ -97,7 +98,7 @@ func TestConfirmRenewInteractiveRejected(t *testing.T) {
 func TestConfirmRenewInteractiveAccepted(t *testing.T) {
 	id := &identity.Identity{AccountEmail: "alice@example.com"}
 	var out bytes.Buffer
-	got := confirmRenew(strings.NewReader("y\n"), &out, id, false, false)
+	got := confirmRenew(bufio.NewScanner(strings.NewReader("y\n")), &out, id, false, false)
 	if !got {
 		t.Fatalf("y response must continue with renew")
 	}
@@ -109,7 +110,7 @@ func TestConfirmRenewSummaryFallbacksToDash(t *testing.T) {
 		DeviceID: "dev_abc",
 	}
 	var out bytes.Buffer
-	confirmRenew(strings.NewReader(""), &out, id, true, false)
+	confirmRenew(bufio.NewScanner(strings.NewReader("")), &out, id, true, false)
 	// DeviceID fallback for DeviceName.
 	if !strings.Contains(out.String(), "Device:  dev_abc") {
 		t.Errorf("DeviceID should be used when DeviceName is empty; out=%q", out.String())

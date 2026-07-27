@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -122,7 +123,7 @@ func TestPromptBenchmark_AcceptSwitches(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false)
+	err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false)
 	if err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestPromptBenchmark_DeclineDismisses(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"), false)
+	err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false)
 	if err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
@@ -159,7 +160,7 @@ func TestPromptBenchmark_NonInteractiveNeither(t *testing.T) {
 
 	var out strings.Builder
 	// stdin must NOT be consulted; pass an empty reader.
-	if err := promptBenchmarkRecommendation(srv.URL, true, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, true, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 0 || stub.dismissCount != 0 {
@@ -176,7 +177,7 @@ func TestPromptBenchmark_NoRecommendationQuiet(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 0 || stub.dismissCount != 0 {
@@ -197,7 +198,7 @@ func TestPromptBenchmark_NotFoundExplains(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if strings.TrimSpace(out.String()) == "" {
@@ -214,7 +215,7 @@ func TestPromptBenchmark_UnexpectedStatusExplains(t *testing.T) {
 	}))
 	defer srv.Close()
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if !strings.Contains(out.String(), "Benchmark unavailable (HTTP 500)") {
@@ -225,7 +226,7 @@ func TestPromptBenchmark_UnexpectedStatusExplains(t *testing.T) {
 func TestPromptBenchmark_TransportErrorExplains(t *testing.T) {
 	// Point at a closed port so the POST fails at the transport layer.
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation("http://127.0.0.1:1", false, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation("http://127.0.0.1:1", false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if !strings.Contains(out.String(), "Could not reach the waired-agent service") {
@@ -241,7 +242,7 @@ func TestPromptBenchmark_DismissedQuiet(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 0 || stub.dismissCount != 0 {
@@ -256,7 +257,7 @@ func TestPromptBenchmark_TerminalStateSkips(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if !strings.Contains(out.String(), "download failed") {
@@ -272,7 +273,7 @@ func TestPromptBenchmark_TinyDeclineDisables(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.disableCount != 1 {
@@ -293,7 +294,7 @@ func TestPromptBenchmark_TinyAcceptSwitches(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 1 || stub.acceptedID != "qwen2.5-coder-0.5b-instruct" {
@@ -311,7 +312,7 @@ func TestPromptBenchmark_TinyNonInteractiveNeither(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, true, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, true, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if stub.acceptCount != 0 || stub.disableCount != 0 {
@@ -345,7 +346,7 @@ func TestPromptBenchmark_TransientNoEngineThenRuns(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if strings.Contains(out.String(), "No inference engine available") {
@@ -369,7 +370,7 @@ func TestPromptBenchmark_PersistentNoEngineSkipsAfterGrace(t *testing.T) {
 	var out strings.Builder
 	done := make(chan struct{})
 	go func() {
-		_ = promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false)
+		_ = promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false)
 		close(done)
 	}()
 	select {
@@ -401,7 +402,7 @@ func TestPromptBenchmark_NamesFromToAndQuality(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	got := out.String()
@@ -424,7 +425,7 @@ func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	want := "Local inference works — Qwen3 Coder 30B-A3B Instruct (quality 65) measured 120 tok/s"
@@ -441,7 +442,7 @@ func TestPromptBenchmark_WorksLineFallsBackWhenActiveUnknown(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader(""), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	want := "Local inference works — measured 120 tok/s"
@@ -464,7 +465,7 @@ func TestPromptBenchmark_UpgradeNamesFromToAndQuality(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("n\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	want := "Qwen3.6 35B-A3B (quality 89) is predicted to run at ~110 tok/s here (vs 140 tok/s measured on Qwen3.6 27B (quality 70))"
@@ -521,7 +522,9 @@ func TestAcceptSwitch_WaitsThroughRestartThenReady(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+	// The Enter escape is offered only when this run owns stdin, which on
+	// a real terminal it does (#223).
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, newStdinReader(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	got := out.String()
@@ -553,7 +556,7 @@ func TestAcceptSwitch_EnterBackgrounds(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		// "y" accepts the switch; the second line is the backgrounding Enter.
-		_ = promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n\n"), false)
+		_ = promptBenchmarkRecommendation(srv.URL, false, &out, newStdinReader(strings.NewReader("y\n\n")), false)
 		close(done)
 	}()
 	select {
@@ -569,6 +572,36 @@ func TestAcceptSwitch_EnterBackgrounds(t *testing.T) {
 	}
 }
 
+// Off a terminal there is no owner, so no Enter escape is offered — and
+// none is possible: a scripted stdin that ran out of lines never
+// backgrounded anything even before #223. The wait still runs to
+// completion, which is the behaviour `waired runtimes benchmark | tee`
+// and the installtest legs have always had.
+func TestAcceptSwitch_NoOwnerOffersNoEscape(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Second, 30*time.Second)
+	const target = "qwen3.6-27b"
+	stub := &benchStub{ready: true, rec: realRec(), downloading: true,
+		statusSeq: []statusStep{
+			switchDownloading(target, 1<<30, 4<<30),
+			switchReady(target),
+		}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "Press Enter anytime") {
+		t.Errorf("offered an Enter escape with no terminal to press it on:\n%s", got)
+	}
+	if !strings.Contains(got, "downloading it now") {
+		t.Errorf("missing the switch narration:\n%s", got)
+	}
+}
+
 // A target that is already on disk skips the wait entirely.
 func TestAcceptSwitch_AlreadyDownloadedSkipsWait(t *testing.T) {
 	stub := &benchStub{ready: true, rec: realRec(), downloading: false}
@@ -576,7 +609,7 @@ func TestAcceptSwitch_AlreadyDownloadedSkipsWait(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if !strings.Contains(out.String(), "already downloaded") {
@@ -598,7 +631,7 @@ func TestAcceptSwitch_PersistentFailureExplains(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if !strings.Contains(out.String(), "Download failed") ||
@@ -622,7 +655,7 @@ func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if err := promptBenchmarkRecommendation(srv.URL, false, &out, strings.NewReader("y\n"), false); err != nil {
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
 	if strings.Contains(out.String(), "Download failed") {

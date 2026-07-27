@@ -45,7 +45,7 @@ func TestPromptInference_FlagOverridesWin(t *testing.T) {
 	// stdin should be consumed (the bytes.Buffer below is empty so a
 	// Scan() would return false anyway, but assert we never touched it).
 	out := &bytes.Buffer{}
-	in := strings.NewReader("")
+	in := bufio.NewScanner(strings.NewReader(""))
 	got := promptInference(in, out,
 		agentconfig.InferenceConfig{}, false,
 		cpuProfile(),
@@ -60,7 +60,7 @@ func TestPromptInference_FlagOverridesWin(t *testing.T) {
 }
 
 func TestPromptInference_NonInteractive_LargeVRAM(t *testing.T) {
-	got := promptInference(strings.NewReader(""), &bytes.Buffer{},
+	got := promptInference(bufio.NewScanner(strings.NewReader("")), &bytes.Buffer{},
 		agentconfig.InferenceConfig{}, false,
 		gpuProfile(12288),
 		nil, nil,
@@ -71,7 +71,7 @@ func TestPromptInference_NonInteractive_LargeVRAM(t *testing.T) {
 }
 
 func TestPromptInference_NonInteractive_CPUOnly(t *testing.T) {
-	got := promptInference(strings.NewReader(""), &bytes.Buffer{},
+	got := promptInference(bufio.NewScanner(strings.NewReader("")), &bytes.Buffer{},
 		agentconfig.InferenceConfig{}, false,
 		cpuProfile(),
 		nil, nil,
@@ -82,7 +82,7 @@ func TestPromptInference_NonInteractive_CPUOnly(t *testing.T) {
 }
 
 func TestPromptInference_NonInteractive_AppleSilicon(t *testing.T) {
-	got := promptInference(strings.NewReader(""), &bytes.Buffer{},
+	got := promptInference(bufio.NewScanner(strings.NewReader("")), &bytes.Buffer{},
 		agentconfig.InferenceConfig{}, false,
 		umaProfile(16384),
 		nil, nil,
@@ -93,7 +93,7 @@ func TestPromptInference_NonInteractive_AppleSilicon(t *testing.T) {
 }
 
 func TestPromptInference_NonInteractive_LowVRAM_iGPU(t *testing.T) {
-	got := promptInference(strings.NewReader(""), &bytes.Buffer{},
+	got := promptInference(bufio.NewScanner(strings.NewReader("")), &bytes.Buffer{},
 		agentconfig.InferenceConfig{}, false,
 		gpuProfile(2048), // 2 GB iGPU — under the 8 GB threshold.
 		nil, nil,
@@ -108,7 +108,7 @@ func TestPromptInference_ExistingConfigBeatsHardware(t *testing.T) {
 	// true. Interactive mode with empty input should preserve the
 	// existing value.
 	out := &bytes.Buffer{}
-	in := strings.NewReader("\n") // accept first prompt default.
+	in := bufio.NewScanner(strings.NewReader("\n")) // accept first prompt default.
 	got := promptInference(in, out,
 		agentconfig.InferenceConfig{Enabled: false, ShareWithMesh: false}, true,
 		gpuProfile(12288),
@@ -124,7 +124,7 @@ func TestPromptInference_ExistingConfigBeatsHardware(t *testing.T) {
 
 func TestPromptInference_DisabledSkipsShareQuestion(t *testing.T) {
 	out := &bytes.Buffer{}
-	in := strings.NewReader("n\n") // answer N to Enabled.
+	in := bufio.NewScanner(strings.NewReader("n\n")) // answer N to Enabled.
 	got := promptInference(in, out,
 		agentconfig.InferenceConfig{}, false,
 		gpuProfile(12288),
@@ -140,7 +140,7 @@ func TestPromptInference_DisabledSkipsShareQuestion(t *testing.T) {
 
 func TestPromptInference_InteractiveYY(t *testing.T) {
 	out := &bytes.Buffer{}
-	in := strings.NewReader("y\ny\n")
+	in := bufio.NewScanner(strings.NewReader("y\ny\n"))
 	got := promptInference(in, out,
 		agentconfig.InferenceConfig{}, false,
 		cpuProfile(), // hardware default would be N — operator overrides.

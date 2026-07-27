@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"io"
 
 	"github.com/waired-ai/waired-agent/internal/identity"
@@ -50,7 +49,7 @@ func initStepLabels(renewing bool) initStepLabelSet {
 // In bypass-mode (test harness) or --non-interactive mode the prompt is
 // skipped and renewal proceeds — those invocations are scripted and
 // already signal intent.
-func confirmRenew(in io.Reader, out io.Writer, existing *identity.Identity, bypass, nonInteractive bool) bool {
+func confirmRenew(in lineReader, out io.Writer, existing *identity.Identity, bypass, nonInteractive bool) bool {
 	writePrompt(out, "Existing Waired configuration found:")
 	writePromptf(out, "  Account: %s\n", displayOrDash(existing.AccountEmail))
 	writePromptf(out, "  Device:  %s\n", displayOrDash(displayDeviceName(existing)))
@@ -61,8 +60,7 @@ func confirmRenew(in io.Reader, out io.Writer, existing *identity.Identity, bypa
 		writePrompt(out, "Proceeding with re-authentication (non-interactive).")
 		return true
 	}
-	sc := bufio.NewScanner(in)
-	return ynPrompt(out, sc, "Re-authenticate this device with Google?", true)
+	return ynPrompt(out, in, "Re-authenticate this device with Google?", true)
 }
 
 func displayOrDash(s string) string {

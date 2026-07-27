@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -21,7 +20,7 @@ import (
 // leaves the integration artifacts installed, Claude traffic on the real
 // Anthropic API, and prints how to enable later. Returns whether routing
 // was enabled.
-func promptClaudeRouting(out io.Writer, sc *bufio.Scanner, baseURL, stateDir string) bool {
+func promptClaudeRouting(out io.Writer, sc lineReader, baseURL, stateDir string) bool {
 	return promptClaudeRoutingWith(out, sc, baseURL, func() (string, error) {
 		legacycleanup.Run(stateDir, stderrLogger())
 		return claudemanaged.WriteWithOptions(baseURL, claudeManagedWriteOptions(stateDir))
@@ -30,7 +29,7 @@ func promptClaudeRouting(out io.Writer, sc *bufio.Scanner, baseURL, stateDir str
 
 // promptClaudeRoutingWith is promptClaudeRouting with the apply step
 // injectable, so prompt-level tests don't write system managed settings.
-func promptClaudeRoutingWith(out io.Writer, sc *bufio.Scanner, baseURL string, apply func() (string, error)) bool {
+func promptClaudeRoutingWith(out io.Writer, sc lineReader, baseURL string, apply func() (string, error)) bool {
 	writePrompt(out)
 	writePromptf(out, "%s %s\n", emo("🔌", "*"), bold("Claude Code request routing"))
 	writePrompt(out, "Routing points Claude Code's ANTHROPIC_BASE_URL at your local Waired gateway")

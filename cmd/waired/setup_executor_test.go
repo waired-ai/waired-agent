@@ -266,7 +266,7 @@ func TestAwaitSetupBudgetBareEnterKeepsBrowser(t *testing.T) {
 	if !active || budget != setupResidencyBudget {
 		t.Fatalf("budget=%v active=%v, want the setup budget", budget, active)
 	}
-	if enter.TookOver() {
+	if enter.Fired() {
 		t.Error("a bare Enter took the terminal over")
 	}
 }

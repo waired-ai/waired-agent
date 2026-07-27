@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -43,7 +42,7 @@ func applyBundledModelSelection(
 	stateDir, homeDir, pin string,
 	enabledOverride *bool,
 	nonInteractive bool,
-	in io.Reader,
+	in lineReader,
 	out io.Writer,
 ) {
 	manifests, err := catalog.BundledManifests()
@@ -182,13 +181,13 @@ func modelWithQuality(modelID, variantID string) string {
 // model" confirmation and returns true iff the operator opts in. Default No —
 // running a below-floor model locally is not recommended, but the node still
 // works as a gateway/relay when declined.
-func promptTinyModelOptIn(out io.Writer, in io.Reader, label string) bool {
+func promptTinyModelOptIn(out io.Writer, in lineReader, label string) bool {
 	writePromptf(out, "\n%s This computer can only run a very small, low-quality model (%s).\n", emo("⚠", "!"), label)
 	writePrompt(out, "   At that size local coding help is often broken or unusable, so running")
 	writePrompt(out, "   AI models on this computer is not recommended. Waired still works as a")
 	writePrompt(out, "   secure gateway to your other devices without it.")
 	writePrompt(out, "")
-	return ynPrompt(out, bufio.NewScanner(in), "Run AI models on this computer anyway?", false)
+	return ynPrompt(out, in, "Run AI models on this computer anyway?", false)
 }
 
 // isBundledModelBelowFloor reports whether modelID (id or alias) resolves to a

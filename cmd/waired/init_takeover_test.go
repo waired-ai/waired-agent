@@ -8,7 +8,7 @@ import (
 
 // pollWatch drives the watch until it has something to say, the way the
 // foreground waits do (once per poll tick).
-func pollWatch(t *testing.T, w *takeoverWatch) (bool, string) {
+func pollWatch(t *testing.T, w *enterWatch) (bool, string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -36,8 +36,8 @@ func TestTakeoverWatchEnterAsksFirst(t *testing.T) {
 	if !strings.Contains(note, "browser page stops") {
 		t.Errorf("note does not say what taking over does: %q", note)
 	}
-	if w.TookOver() {
-		t.Error("TookOver reported true before an answer")
+	if w.Fired() {
+		t.Error("Fired reported true before an answer")
 	}
 }
 
@@ -50,8 +50,8 @@ func TestTakeoverWatchAffirmativeTakesOver(t *testing.T) {
 	if !took {
 		t.Fatalf("`y` did not confirm the takeover (note=%q)", note)
 	}
-	if !w.TookOver() {
-		t.Error("TookOver is false after a confirmed takeover")
+	if !w.Fired() {
+		t.Error("Fired is false after a confirmed takeover")
 	}
 	// Sticky: later polls keep reporting the takeover and stop talking.
 	if took, note := w.Poll(); !took || note != "" {
@@ -73,8 +73,8 @@ func TestTakeoverWatchSecondEnterDeclines(t *testing.T) {
 	if !strings.Contains(note, "Continuing in your browser") {
 		t.Errorf("declining note = %q", note)
 	}
-	if w.TookOver() {
-		t.Error("TookOver is true after declining")
+	if w.Fired() {
+		t.Error("Fired is true after declining")
 	}
 }
 
@@ -105,12 +105,12 @@ func TestTakeoverWatchEOFIsSilent(t *testing.T) {
 // Off a terminal there is no stdin owner, so the watch is inert and
 // callers need no nil check of their own.
 func TestTakeoverWatchInertWithoutOwner(t *testing.T) {
-	for _, w := range []*takeoverWatch{nil, newTakeoverWatch(nil)} {
+	for _, w := range []*enterWatch{nil, newTakeoverWatch(nil)} {
 		if took, note := w.Poll(); took || note != "" {
 			t.Errorf("inert watch produced (%v, %q)", took, note)
 		}
-		if w.TookOver() {
-			t.Error("inert watch reported a takeover")
+		if w.Fired() {
+			t.Error("inert watch reported a fired wait")
 		}
 	}
 }

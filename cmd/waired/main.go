@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -260,6 +259,20 @@ func runInitBody(o *initFlags) error {
 		*control = norm
 	}
 
+	// One reader owns stdin for this whole run, and every prompt below —
+	// the re-auth confirmation, the sign-in gate, the inference answers,
+	// the benchmark, the routing and statusline questions — reads through
+	// it. `waired init` used to layer four independent readers over the
+	// same fd, so a keystroke aimed at one step was spent on the next
+	// (#223, the standalone twin of #184/#185). Terminal-only: a piped
+	// stdin belongs to the script driving init, and reading ahead from it
+	// would swallow input meant for a later command in that script.
+	var stdinOwner *stdinReader
+	if isTerminal(os.Stdin) {
+		stdinOwner = newStdinReader(os.Stdin)
+	}
+	in := promptReader(stdinOwner)
+
 	// `waired init` doubles as the re-auth entry point (gcloud-init
 	// style). When an existing identity is already on disk we:
 	//   - Reuse its ControlURL / DeviceName when the operator didn't
@@ -292,7 +305,7 @@ func runInitBody(o *initFlags) error {
 		// already on disk stays untouched.
 		*skipDeploy = true
 		*skipIntegration = true
-		if !confirmRenew(os.Stdin, os.Stdout, existing, *bypassMode || *googleSALogin, *nonInteractive) {
+		if !confirmRenew(in, os.Stdout, existing, *bypassMode || *googleSALogin, *nonInteractive) {
 			fmt.Println("Nothing changed.")
 			return nil
 		}
@@ -325,7 +338,7 @@ func runInitBody(o *initFlags) error {
 	if !*bypassMode && !*googleSALogin && !renewing && daemonReachable(*mgmtURL) {
 		fmt.Println("waired-agent is running; signing in via the daemon (no local enrollment).")
 		return runInitViaDaemon(*mgmtURL, *control, *deviceName, *noBrowser, *nonInteractive,
-			*skipIntegration, *gatewayBaseURL, daemonInitInference{
+			*skipIntegration, *gatewayBaseURL, stdinOwner, daemonInitInference{
 				Enabled: *inferenceEnabled,
 				Share:   *inferenceShare,
 				ModelID: *bundledModelID,
@@ -416,7 +429,7 @@ func runInitBody(o *initFlags) error {
 		// once, outside the callback, so the decision is stable.
 		gate := resolveBrowserGate(*noBrowser, *nonInteractive, isTerminal(os.Stdin), browser.HasDisplay())
 		onLogin = func(loginURL, userCode string) {
-			presentLoginURL(bufio.NewScanner(os.Stdin), os.Stdout, loginURL, userCode, gate)
+			presentLoginURL(in, os.Stdout, loginURL, userCode, gate)
 		}
 	}
 
@@ -509,7 +522,14 @@ func runInitBody(o *initFlags) error {
 
 		prof := hardware.NewProfiler("").Profile(ctx)
 		fmt.Printf("%s %s\n", steps.inference, bold("Set up AI on this computer"))
-		choice := promptInference(os.Stdin, os.Stdout,
+		// #223: this is the run's first question after sign-in, and the
+		// sign-in step above may have left a keystroke behind — most
+		// likely the Enter someone pressed at the print-only gate, which
+		// has nothing to open a browser with and says so. Nothing typed
+		// before a question is displayed can be an answer to it, so drop
+		// it rather than let it pick this question's default.
+		stdinOwner.Discard()
+		choice := promptInference(in, os.Stdout,
 			cfgRoot.Inference, hasExisting, prof,
 			*inferenceEnabled, *inferenceShare,
 			*nonInteractive)
@@ -521,14 +541,14 @@ func runInitBody(o *initFlags) error {
 		if choice.Enabled {
 			det := setup.DetectOllama(ctx)
 			cfgRoot.Inference.OllamaSource = promptOllamaSource(
-				os.Stdin, os.Stdout, det, *ollamaSource, *nonInteractive)
+				in, os.Stdout, det, *ollamaSource, *nonInteractive)
 			// #517: pick the bundled model from the detected hardware (largest
 			// fitting model above the coding-quality floor), disable LOCAL
 			// inference when the host is under-spec (still a gateway/relay), and
 			// pre-flight free disk. Mutates cfgRoot.Inference; never aborts init.
 			applyBundledModelSelection(&cfgRoot, prof, det,
 				*stateDir, homeDir, *bundledModelID, *inferenceEnabled,
-				*nonInteractive, os.Stdin, os.Stdout)
+				*nonInteractive, in, os.Stdout)
 			// Install the bundled engine NOW — after every answer is in,
 			// before Deploy's model pre-pull (which needs an engine). The
 			// installers no longer pre-install Ollama; init owns both the
@@ -551,7 +571,7 @@ func runInitBody(o *initFlags) error {
 		// answer is consumed by the ConfigureIntegration hook below (and
 		// by the sudo hop after Init).
 		if !*skipIntegration {
-			integConsent = promptIntegrationConsent(bufio.NewScanner(os.Stdin), os.Stdout, integrationConsentInput{
+			integConsent = promptIntegrationConsent(in, os.Stdout, integrationConsentInput{
 				StepLabel:       steps.integration,
 				Detections:      detectIntegrationAgents(ctx, integTargetHome),
 				NonInteractive:  *nonInteractive,
@@ -683,7 +703,7 @@ func runInitBody(o *initFlags) error {
 			// is --non-interactive only (installer --yes), which must never
 			// block on the y/N read even though install.sh reattaches stdin
 			// to /dev/tty — guidance only.
-			installStatuslineForInvoker(false, false)
+			installStatuslineForInvoker(false, false, in)
 		}
 	}
 
@@ -736,12 +756,6 @@ func runInitBody(o *initFlags) error {
 		}
 	}
 
-	// postSC is the single stdin scanner for every post-enroll prompt (the
-	// benchmark gate, its model-switch questions, and the routing
-	// confirmation below) — layering a second bufio reader over os.Stdin
-	// would eat buffered input between prompts.
-	postSC := bufio.NewScanner(os.Stdin)
-
 	// #133: on a fresh install with inference enabled, offer an end-of-init
 	// benchmark (which doubles as the "local inference works" smoke test)
 	// and, if the host can't sustain the auto-picked model, offer a lighter
@@ -762,7 +776,7 @@ func runInitBody(o *initFlags) error {
 			// backgrounding — byte-identical to the pre-#835 behaviour.
 			waitForBundledModel(*mgmtURL, os.Stdout, isTerminal(os.Stdout), benchPollDeadline, false, nil)
 		}
-		bench = offerBenchmark(*mgmtURL, *nonInteractive, os.Stdout, postSC, isTerminal(os.Stdout))
+		bench = offerBenchmark(*mgmtURL, *nonInteractive, os.Stdout, in, isTerminal(os.Stdout))
 	}
 
 	// The deferred routing question (waired#772): now that the engine setup,
@@ -773,11 +787,11 @@ func runInitBody(o *initFlags) error {
 	// happened above.
 	if claudeRouteEligible(integConsent, claudeManagedEligible, renewing, *skipClaudeRoute) && !*nonInteractive {
 		baseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.ClaudeGatewayPort)
-		claudeRouted = promptClaudeRouting(os.Stdout, postSC, baseURL, *stateDir)
+		claudeRouted = promptClaudeRouting(os.Stdout, in, baseURL, *stateDir)
 		if claudeRouted {
 			// Same ask-before-wrapping statusline flow as `waired claude
 			// enable`; init keeps the TTY, so prompting is allowed here.
-			installStatuslineForInvoker(false, true)
+			installStatuslineForInvoker(false, true, in)
 		}
 	}
 

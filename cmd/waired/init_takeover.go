@@ -12,9 +12,26 @@ const (
 	takeoverDeclinedLine = "Continuing in your browser."
 )
 
-// takeoverWatch is waired#835 §4.1's "set up in the terminal instead"
-// affordance: while the browser drives setup, the terminal watches for
-// the operator asking for it back.
+// enterWatch is how a foreground wait notices the operator asking for
+// the terminal back, without a reader of its own: it polls whatever the
+// stdin owner already has, so nothing is ever parked in a read that a
+// later prompt would have to reconcile (#185, #132, #223).
+//
+// It serves the two waits that offer an escape, and they are NOT the
+// same question:
+//
+//   - the takeover (waired#835 §4.1, newTakeoverWatch) — an offer nobody
+//     asked for, competing with later prompts. Enter is still the key the
+//     offer names and the docs teach, but it no longer switches mode by
+//     itself: it says what taking over does and asks a [y/N] question
+//     that only an affirmative answer completes (#184). That matters
+//     because the sign-in step above can leave an Enter in the buffer —
+//     pressed to open a browser, arriving here — and a silent mode switch
+//     at that moment is the failure #184 describes. A second bare Enter
+//     answers with the default, No.
+//   - Enter-to-background (waired#774, newBackgroundWatch) — the escape
+//     of a download the operator explicitly accepted. There a bare Enter
+//     genuinely means "stop watching", so the first line acts.
 //
 // Enter is still the key the offer names and the docs teach, but it no
 // longer switches mode on its own. Pressing it says what taking over
@@ -30,17 +47,25 @@ const (
 // in a read that a later prompt would have to reconcile (#185) — which
 // is also what retires the spurious "Press Enter to continue…" the
 // browser-driven path used to print on its way out (#132).
-type takeoverWatch struct {
-	in       *stdinReader // nil = inert (no terminal, or an older daemon)
-	asked    bool         // the confirmation question is on screen
-	tookOver bool
+type enterWatch struct {
+	in      *stdinReader // nil = inert (no terminal, or an older daemon)
+	confirm bool         // ask before acting (the takeover)
+	asked   bool         // the confirmation question is on screen
+	fired   bool
 }
 
-// newTakeoverWatch arms a watch over the init stdin owner. A nil owner
-// yields an inert watch — never a nil one — so callers can poll
-// unconditionally.
-func newTakeoverWatch(in *stdinReader) *takeoverWatch {
-	return &takeoverWatch{in: in}
+// newTakeoverWatch arms the confirming watch over the init stdin owner.
+// A nil owner yields an inert watch — never a nil one — so callers can
+// poll unconditionally.
+func newTakeoverWatch(in *stdinReader) *enterWatch {
+	return &enterWatch{in: in, confirm: true}
+}
+
+// newBackgroundWatch arms the non-confirming watch: the first line
+// backgrounds the wait, which is the waired#774 contract for a download
+// the operator just accepted.
+func newBackgroundWatch(in *stdinReader) *enterWatch {
+	return &enterWatch{in: in}
 }
 
 // Poll consumes at most one already-typed line and advances the
@@ -48,15 +73,21 @@ func newTakeoverWatch(in *stdinReader) *takeoverWatch {
 //
 // note is what the terminal should say, if anything; the caller prints
 // it AFTER terminating any in-place progress line, so the bar is not
-// clobbered. tookOver latches true once the operator has confirmed, and
-// later polls then stay silent.
-func (w *takeoverWatch) Poll() (tookOver bool, note string) {
-	if w == nil || w.in == nil || w.tookOver {
-		return w.TookOver(), ""
+// clobbered. fired latches true once the wait should end, and later
+// polls then stay silent.
+func (w *enterWatch) Poll() (fired bool, note string) {
+	if w == nil || w.in == nil || w.fired {
+		return w.Fired(), ""
 	}
 	line, ok := w.in.Poll()
 	if !ok {
 		return false, ""
+	}
+	if !w.confirm {
+		// waired#774: the operator asked for this wait, so a keystroke
+		// ends it. The caller narrates what happens next.
+		w.fired = true
+		return true, ""
 	}
 	if !w.asked {
 		// First keystroke: explain, then ask. Nothing has changed yet.
@@ -66,15 +97,15 @@ func (w *takeoverWatch) Poll() (tookOver bool, note string) {
 	// The question is on screen; this line is its answer.
 	w.asked = false
 	if takeoverAffirmative(line) {
-		w.tookOver = true
+		w.fired = true
 		return true, takeoverAcceptedLine
 	}
 	return false, takeoverDeclinedLine
 }
 
-// TookOver reports whether the operator confirmed taking the terminal
-// back. Safe on a nil watch.
-func (w *takeoverWatch) TookOver() bool { return w != nil && w.tookOver }
+// Fired reports whether the watch has ended its wait — for the takeover,
+// that the operator confirmed. Safe on a nil watch.
+func (w *enterWatch) Fired() bool { return w != nil && w.fired }
 
 // takeoverAffirmative recognises the same yes vocabulary as ynPrompt, so
 // the confirmation behaves like every other question `waired init` asks.

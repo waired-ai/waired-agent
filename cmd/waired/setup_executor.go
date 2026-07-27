@@ -250,7 +250,7 @@ func (s *executorSession) watchSignals() {
 // printed (there is no keyboard to press it on), and the watch is inert
 // — a piped stdin belongs to the script driving init, and letting it
 // take the terminal over is how a scripted answer went missing (#185).
-func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonInteractive, noBrowser bool) (time.Duration, bool, *takeoverWatch) {
+func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonInteractive, noBrowser bool) (time.Duration, bool, *enterWatch) {
 	if !s.Supported() || nonInteractive || noBrowser {
 		return benchPollDeadline, false, newTakeoverWatch(nil)
 	}
@@ -280,7 +280,7 @@ func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonIn
 // Returns the residency budget to use and whether a setup actually
 // started. Confirming the takeover ends the wait and returns the legacy
 // budget, which is how the operator takes the terminal back.
-func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, enter *takeoverWatch) (time.Duration, bool) {
+func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, enter *enterWatch) (time.Duration, bool) {
 	if !s.Supported() {
 		return benchPollDeadline, false
 	}
