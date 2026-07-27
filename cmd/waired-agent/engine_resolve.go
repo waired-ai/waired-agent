@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,8 +18,9 @@ import (
 // engineInstalledOnHost. The reason it exists as a single named
 // predicate rather than three convenient inline probes is that the
 // convenient probe — exec.LookPath — is WRONG here, and has been wrong
-// three separate times in this repo (#67's nvidia-smi detection, the
-// deploy-path one, and #179's setup state). The engine waired installs
+// four separate times in this repo (#67's nvidia-smi detection, the
+// deploy-path one, #179's setup state, and #238's engine-version probe
+// one layer below it). The engine waired installs
 // for itself lives under the state dir and is deliberately NOT on
 // $PATH; a LocalSystem service on Windows does not inherit a user PATH
 // at all. A PATH-only probe therefore reports "no engine" on exactly
@@ -68,26 +70,39 @@ func resolveOllamaBinary(goos, stateDir string, borrowed bool) (string, error) {
 	return download.ResolveBinary("")
 }
 
-// vllmVenvActive reports whether a verified vLLM venv exists under
-// <state-dir>/runtimes/vllm — the path the installer writes (#525). A
-// $HOME-relative default would diverge from a sudo-run install (root's
-// home is not the User=waired daemon's home). The Windows/darwin
-// installer stubs always answer "no active install", which is what
-// makes vLLM Linux-only without a build tag here.
+// vllmActiveVersion returns the version recorded by the verified vLLM
+// venv under <state-dir>/runtimes/vllm — the path the installer writes
+// (#525). A $HOME-relative default would diverge from a sudo-run
+// install (root's home is not the User=waired daemon's home). The
+// Windows/darwin installer stubs always answer "no active install",
+// which is what makes vLLM Linux-only without a build tag here.
+//
+// Presence and version come from this one call, so they cannot disagree
+// the way a separate PATH probe did (#238).
+func vllmActiveVersion(stateDir string) (string, bool) {
+	active, ok := infruntime.NewVLLMInstallerAt(filepath.Join(stateDir, "runtimes", "vllm")).Active()
+	if !ok {
+		return "", false
+	}
+	return active.Version, true
+}
+
+// vllmVenvActive reports whether that venv exists at all.
 func vllmVenvActive(stateDir string) bool {
-	_, ok := infruntime.NewVLLMInstallerAt(filepath.Join(stateDir, "runtimes", "vllm")).Active()
+	_, ok := vllmActiveVersion(stateDir)
 	return ok
 }
 
 // engineInstalledOnHost answers "is this engine installed here" the way
 // the daemon itself would. Unknown engine kinds are not installed.
 //
-// It deliberately does NOT consult hardware.Profile.Engines: that field
-// comes from a PATH probe (internal/hardware/profiler.go
-// defaultEngineVersion) and is cached for 30 s, so it is both wrong for
-// state-dir installs and late for fresh ones. The profile keeps it for
-// what it is genuinely good at — reporting an engine's VERSION, which
-// needs the binary executed either way.
+// It deliberately does NOT consult hardware.Profile.Engines. That field
+// now resolves through this same rule (engineVersionOnHost is injected
+// into the daemon's profiler, #238), but it is cached for 30 s, so it
+// is still LATE for a fresh install — which is exactly what the wizard
+// could not tolerate (#179). The profile keeps it for what it is
+// genuinely good at: reporting an engine's VERSION, which needs the
+// binary executed either way.
 func engineInstalledOnHost(goos, stateDir string, cfg agentconfig.InferenceConfig, engine string) bool {
 	switch engine {
 	case catalog.RuntimeOllama:
@@ -97,5 +112,46 @@ func engineInstalledOnHost(goos, stateDir string, cfg agentconfig.InferenceConfi
 		return vllmVenvActive(stateDir)
 	default:
 		return false
+	}
+}
+
+// engineVersionOnHost answers "which version of this engine is
+// installed here" through the SAME resolution as engineInstalledOnHost,
+// shaped for hardware.WithEngineVersion so the profiler's
+// Profile.Engines stops being a second opinion.
+//
+// The profiler's own probe was PATH-only: it named the engine and asked
+// $PATH (#238). That is the predicate #179 removed from the wizard
+// path, still live one layer down — a bundled engine under the state
+// dir reported no version at all, and an unknown version makes the
+// catalog's MinEngineVersion floors fail closed, so variant selection
+// silently narrowed on exactly the hosts waired provisioned.
+//
+// run is a parameter rather than a direct call so the resolution can be
+// table-tested across all three GOOS values without executing anything;
+// production passes hardware.EngineVersionAt.
+func engineVersionOnHost(
+	goos, stateDir string,
+	cfg agentconfig.InferenceConfig,
+	run func(ctx context.Context, engine, path string) (bool, string),
+) func(context.Context, string) (bool, string) {
+	return func(ctx context.Context, engine string) (bool, string) {
+		switch engine {
+		case catalog.RuntimeOllama:
+			bin, err := resolveOllamaBinary(goos, stateDir, cfg.OllamaSource == agentconfig.OllamaSourceReuse)
+			if err != nil {
+				return false, ""
+			}
+			return run(ctx, engine, bin)
+		case catalog.RuntimeVLLM:
+			// Nothing to execute: the installer already verified the
+			// venv and recorded what it holds.
+			if v, ok := vllmActiveVersion(stateDir); ok {
+				return true, v
+			}
+			return false, ""
+		default:
+			return false, ""
+		}
 	}
 }

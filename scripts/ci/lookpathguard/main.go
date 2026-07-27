@@ -2,8 +2,9 @@
 // internal/ a declared one.
 //
 // Why this exists: "is X installed" answered from $PATH alone has been
-// wrong here four separate times — #67's nvidia-smi detection, the
-// deploy path, #179's wizard engine state, and the setup-install probe.
+// wrong here five separate times — #67's nvidia-smi detection, the
+// deploy path, #179's wizard engine state, the setup-install probe, and
+// #238's engine-version probe, which this guard's own table surfaced.
 // The reason is structural, and cmd/waired-agent/engine_resolve.go
 // states it: the engine waired installs for itself lives under the state
 // dir and is deliberately NOT on $PATH, and a LocalSystem service on
@@ -15,8 +16,8 @@
 // contents frozen, wizard "offline", lease expired, executor_gone.
 //
 // #179 collapsed five mutually contradicting engine predicates into one
-// (resolveOllamaBinary). This guard is the other half: it stops them
-// growing back. Probing a system tool — sudo, systemctl, zenity — is
+// (resolveOllamaBinary), and #238 removed the last straggler this table
+// had frozen. This guard is the other half: it stops them growing back. Probing a system tool — sudo, systemctl, zenity — is
 // fine and stays fine; what must not happen silently is a NEW call site
 // deciding whether a waired-managed component is present.
 //

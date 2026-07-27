@@ -253,7 +253,16 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	store := catalog.NewStore(statePath)
 
 	cachePath := defaultCachePath()
-	profiler := hardware.NewProfiler(cachePath)
+	// The engine probe resolves the binary the way the daemon resolves
+	// the one it spawns (state dir first), not from $PATH — waired's own
+	// engine is deliberately off $PATH, so the stock PATH probe reported
+	// no version on exactly the hosts waired provisioned (#238).
+	// cfg.OllamaSource is boot-fixed (effectiveCfg only overrides the
+	// preferred model), so capturing it by value here is the same
+	// assumption borrowedOllama makes below.
+	profiler := hardware.NewProfiler(cachePath,
+		hardware.WithEngineVersion(
+			engineVersionOnHost(runtime.GOOS, stateDir, cfg, hardware.EngineVersionAt)))
 
 	// Step 5 migration runs inside Load; warm it once now so the
 	// bootstrap log records what happened.
@@ -1744,10 +1753,8 @@ func (p *agentInferenceProvider) servingEngine() string {
 // live engine probe.
 func (p *agentInferenceProvider) engineVersionFor(ctx context.Context, engine string) string {
 	if engine == catalog.RuntimeVLLM {
-		if active, ok := infruntime.NewVLLMInstallerAt(filepath.Join(p.stateDir, "runtimes", "vllm")).Active(); ok {
-			return active.Version
-		}
-		return ""
+		v, _ := vllmActiveVersion(p.stateDir)
+		return v
 	}
 	return p.ollamaEngineVersion(ctx)
 }

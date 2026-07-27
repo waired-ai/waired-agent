@@ -80,24 +80,17 @@ var declared = []lookpath{
 	{"internal/integration/detect.go", "binary",
 		userTool + " (the coding-agent CLIs: claude, opencode, code, …)"},
 
-	// The two engine-adjacent sites. Both are declared deliberately, and
-	// they are not the same kind of thing.
+	// The one engine-adjacent site left. ollama.go is step 3 of a
+	// documented chain — $WAIRED_OLLAMA_BINARY, then PATH, then the
+	// well-known install locations — so PATH is a hint here, never the
+	// verdict.
 	//
-	// ollama.go is step 3 of a documented chain — $WAIRED_OLLAMA_BINARY,
-	// then PATH, then the well-known install locations — so PATH is a
-	// hint here, never the verdict.
+	// internal/hardware/profiler.go used to sit beside it, frozen rather
+	// than forgiven: defaultEngineVersion answered "which engine version
+	// can I run" from PATH alone. #238 removed it — the daemon now hands
+	// the profiler a resolved path (engineVersionOnHost →
+	// hardware.EngineVersionAt), so no PATH probe is left to declare.
 	{"internal/download/ollama.go", "ollamaCmdName",
 		"step 3 of ResolveBinary's documented chain ($WAIRED_OLLAMA_BINARY → PATH → " +
 			"well-known paths); PATH is a hint, not the verdict"},
-	//
-	// profiler.go IS the #179 class, and is declared as such rather than
-	// forgiven: defaultEngineVersion answers "which engine version can I
-	// run" from PATH alone, so a bundled engine under the state dir
-	// reports no version and the catalog picker sees no engine. It feeds
-	// variant selection rather than the wizard's engine_installed, which
-	// is why it did not produce the G1 chain — but it is the same
-	// predicate, and the entry exists to freeze it, not to bless it.
-	{"internal/hardware/profiler.go", "binary",
-		"defaultEngineVersion's PATH-only engine probe — the #179 class, tracked by #238; " +
-			"declared to freeze it, not to bless it"},
 }
