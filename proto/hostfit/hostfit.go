@@ -120,21 +120,64 @@ const (
 // order exactly backwards. So the rule carries a speed term, and it is
 // a roofline: autoregressive decode is memory-bandwidth-bound, and the
 // bytes it must read per token are the ACTIVE weights.
+//
+// The two bandwidth constants below look like the same kind of number
+// and are NOT. They are asked for opposite things, because only one of
+// the classes they serve is allowed to exclude a model, and each
+// constant has to be wrong in the direction that class can afford. Read
+// them together before changing either.
 const (
-	// BandwidthSystemRAMGBs is the assumed system-memory read bandwidth.
-	// Deliberately the FLOOR of the shipping population rather than a
-	// representative value: DDR4-3200 dual channel is 51.2 GB/s and
-	// DDR5-5600 dual channel is 89.6, and the errors are asymmetric.
-	// Guessing high produces a confident recommendation that is slow to
-	// use — the failure waired-ai/waired#942 shipped. Guessing low only
-	// adds "this may be slow" to a model that would have been fine.
+	// BandwidthSystemRAMGBs is the assumed ACHIEVABLE system-memory read
+	// bandwidth — what a streaming read sustains, not the spec-sheet
+	// product of clock x width x channels. Sustained throughput runs
+	// around 60 % of spec: a DDR5-4800 dual-channel host (76.8 GB/s on
+	// paper) measures ~48 GB/s, and that ratio puts DDR4-3200 near 32
+	// and DDR5-5600 near 56.
+	//
+	// It has to be an UPPER bound on that figure. An earlier revision of
+	// this comment claimed the opposite — "guessing low only adds 'this
+	// may be slow'" — and that is exactly backwards for the branch that
+	// matters. This constant enters the one case permitted to EXCLUDE a
+	// model (ClassDiscrete spilled, the only place Estimate.UpperBound is
+	// set), and there the estimate is directly proportional to it: lower
+	// the constant, the predicted rate falls, it breaches
+	// DecodeFloorTokps sooner, and the wizard starts refusing models the
+	// machine runs perfectly well. "Guess low, stay safe" holds only for
+	// the annotate-only classes.
+	//
+	// 60 therefore sits ABOVE the achievable figure of the mainstream
+	// population rather than at its floor. Two residuals follow, both
+	// accepted until waired-ai/waired-agent#252 measures the host:
+	//
+	//   - Below the line: a DDR4 laptop sustaining ~32 GB/s is credited
+	//     with 60, so "may be slow" under-triggers. Costs a sentence.
+	//   - Above the line: DDR5-6400 and multi-channel workstation memory
+	//     exceed 60 achievable, so for them it is not a bound at all, and
+	//     a model they would run can be wrongly excluded.
+	//
+	// Do NOT lower this to match a measured effective figure. A
+	// measurement describes one host; this constant stands in for a
+	// population, and moving it toward that population's middle moves the
+	// second residual out of the tail and into the bulk.
 	BandwidthSystemRAMGBs = 60.0
 
-	// BandwidthUnifiedGBs is the same figure for a unified-memory pool,
-	// again the floor of the shipping population: an Apple M-series base
-	// chip is ~120 GB/s, and every larger part is above it (M4 Pro 273,
-	// M4 Max 546, AMD Strix Halo 256). A host at the floor that clears
-	// the speed floor clears it everywhere.
+	// BandwidthUnifiedGBs is the same quantity for a unified-memory pool:
+	// an Apple M-series base chip is ~120 GB/s and every larger part is
+	// above it (M4 Pro 273, AMD Strix Halo 256, M4 Max 546, M3 Ultra
+	// 819).
+	//
+	// Unlike its neighbour this one is a FLOOR, and is allowed to be,
+	// because ClassUnified never excludes: EstimateOllamaDecode sets no
+	// UpperBound there, so the figure only decides whether the wizard
+	// adds "may be slow". A floor over-warns on the large parts — an M4
+	// Max is judged as if it were an M4 base — and refuses nothing.
+	//
+	// Which also means it cannot simply be promoted. Letting UMA exclude
+	// (the change that would stop a 24 GB Mac being handed a 7 tok/s
+	// dense model in preference to a 50 tok/s MoE) needs the per-chip
+	// spec figure from waired-ai/waired-agent#251, not a retuned
+	// constant: nothing single-valued is an upper bound across a
+	// 120..819 GB/s span.
 	BandwidthUnifiedGBs = 120.0
 
 	// DecodeFloorTokps is the decode rate below which a model should not
@@ -292,12 +335,15 @@ type Verdict struct {
 // It is deliberately partial. On a discrete GPU holding the whole model
 // the card's bandwidth decides the answer and this package does not know
 // it, so TokpsEstimate is left at zero and MeetsSpeedFloor is true — a
-// resident discrete GPU is not the wall. Everywhere else the estimate is
-// an UPPER BOUND on speed built from bandwidth figures chosen at the
-// floor of their population, so MeetsSpeedFloor being false means "slow
-// even under favourable assumptions", never a guess that happened to
-// land low. See the constants above for why the errors are taken in that
-// direction.
+// resident discrete GPU is not the wall.
+//
+// Everywhere else the estimate is INFORMATIONAL unless UpperBound says
+// otherwise. Only the spilled-discrete case carries a margin no unknown
+// hardware can eat — the card's own reads are priced at zero — so only
+// there does MeetsSpeedFloor being false mean "slow even under
+// favourable assumptions" rather than a constant that happened to land
+// low. See UpperBound, and the constants above for which direction each
+// of them is deliberately wrong in.
 type Estimate struct {
 	// TokpsEstimate is the predicted decode rate in tokens/second, or 0
 	// when no claim is made (resident on a discrete GPU, or a variant
@@ -323,12 +369,19 @@ type Estimate struct {
 	//
 	// It holds exactly for the spilled-discrete case, where the GPU's
 	// contribution is priced at zero precisely so the unknown card
-	// cannot make the answer wrong. Everywhere else the figure rests on
-	// a bandwidth constant set at the FLOOR of its population, so the
-	// real machine is usually faster — a lower bound. Rejecting on a
-	// lower bound would withhold, from an M4 Max, models that an M4 base
-	// runs; the wizard may still SAY "this may be slow", because that
-	// costs the user a sentence rather than a choice.
+	// cannot make the answer wrong. That over-estimate is STRUCTURAL: it
+	// survives whatever the bandwidth constants happen to be, and no
+	// other class has anything like it.
+	//
+	// ClassUnified rests entirely on BandwidthUnifiedGBs, which is the
+	// floor of its population, so the real machine is usually faster —
+	// a lower bound, and rejecting on one would withhold from an M4 Max
+	// models an M4 base runs. ClassCPUOnly rests entirely on
+	// BandwidthSystemRAMGBs, which IS meant as an upper bound, but with
+	// no structural margin behind it: a host whose memory beats the
+	// constant would be excluded on the strength of the constant alone.
+	// Both classes may still SAY "this may be slow", because that costs
+	// the user a sentence rather than a choice.
 	//
 	// Measured per-device bandwidth (waired-ai/waired-agent#251) is what
 	// turns the other classes into decisions rather than annotations.
