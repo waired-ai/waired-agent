@@ -118,6 +118,16 @@ type inferenceSubsystemDeps struct {
 	IsPaused            func() bool
 	IsInferenceDisabled func() bool
 	InferenceState      func() (current, desired state.InferenceState)
+
+	// PreferencePath is where the operator's chosen model is persisted
+	// (preferred-model.json). It is threaded in rather than resolved here
+	// because the loopback management API writes the SAME file from its
+	// preferred-model handler: one expression in main.go feeds both, so
+	// the browser wizard and the tray cannot end up pinning two different
+	// files (#230). Empty disables the persistence half of
+	// setupApplyModel, which is what unit tests that construct a provider
+	// directly want.
+	PreferencePath string
 	// MeshSnapshotFn, when non-nil, enables Phase 4 peer-engine
 	// routing on the LOOPBACK gateway: a Selection.Runtime of the
 	// form "remote:<deviceID>" gets routed through PeerAdapterFactory.
@@ -482,6 +492,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		ollama:              ollama,
 		puller:              puller,
 		stateDir:            stateDir,
+		preferencePath:      deps.PreferencePath,
 		engine:              decision.Engine,
 		dlProgress:          newDownloadProgress(),
 		ollamaUsable:        func() bool { _, e := ollamaResolver(); return e == nil },
@@ -954,6 +965,13 @@ type agentInferenceProvider struct {
 	stateDir string
 	engine   string
 	vllm     infruntime.Adapter
+
+	// preferencePath is preferred-model.json — the same file the loopback
+	// management API's preferred-model handler writes. The setup
+	// reconciler persists the wizard's choice here so it survives the
+	// restart an engine install may cause (#230). "" means "do not
+	// persist", which is the unit-test default.
+	preferencePath string
 
 	// dlProgress holds live byte progress for in-flight model pulls so
 	// Status() (and thus `waired status`) can show a percentage + size.

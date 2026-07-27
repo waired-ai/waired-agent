@@ -295,6 +295,13 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	sb := &switchboard{}
+	// preferencePath is preferred-model.json, and this is the ONLY place
+	// it is resolved: the loopback preferred-model handler (tray / CLI)
+	// and the setup reconciler (the browser wizard, #230) both pin the
+	// operator's chosen model, and two resolutions would let them pin two
+	// different files.
+	preferencePath := agentconfig.DefaultPreferencePath()
+
 	mgmtSrv := management.New(sb, sb).
 		WithIdentity(sb).
 		WithPause(sb).
@@ -343,7 +350,7 @@ func run(ctx context.Context, args []string) error {
 			WithPublicShareControl(sbPublicShareControl{sb}).
 			WithEngineControl(sbEngineControl{sb}).
 			WithCatalog(&management.CatalogConfig{
-				PreferencePath: agentconfig.DefaultPreferencePath(),
+				PreferencePath: preferencePath,
 				// #812 in-process swap seam; delegates to the live session's
 				// controller (errNotEnrolled → the handler restart-falls-back).
 				ApplyModelSwitch: sbModelSwapControl{sb}.ApplyModelSwitch,
@@ -886,6 +893,7 @@ func run(ctx context.Context, args []string) error {
 				IsPaused:             pm.IsPaused,
 				IsInferenceDisabled:  infCtl.IsDisabled,
 				InferenceState:       infCtl.State,
+				PreferencePath:       preferencePath,
 				MeshSnapshotFn:       meshAgg.Snapshot,
 				PeerAdapterFactory:   peerAdapterFactory,
 				Sticky:               stickyStore,

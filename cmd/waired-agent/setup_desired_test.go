@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/management"
@@ -48,6 +51,20 @@ type fakeSetupProvider struct {
 	pulls           []string
 	pullErr         error
 	stateDir        string
+
+	// applies records every model the reconciler asked to APPLY, in
+	// order. Separate from pulls because the two are different
+	// operations: applying makes the device serve the model, pulling only
+	// fetches its weights, and #230 was the gap between them.
+	applies []string
+	// applyErr, when set, is returned by setupApplyModel. errSwapNeedsRestart
+	// exercises the cross-engine fallback to a bare pull.
+	applyErr error
+	// preferred is what the device is currently set to serve, i.e. what
+	// the real provider reads back from effectivePreferredModelID. A
+	// successful apply sets it, which is what makes the reconciler's
+	// convergence observable rather than flag-based.
+	preferred string
 }
 
 // engineStateCall is one observed setupEngineState call. The context is
@@ -134,6 +151,41 @@ func (f *fakeSetupProvider) PullModel(_ context.Context, model string) (manageme
 	}
 	f.modelState = catalog.ModelStateQueued
 	return management.PullJob{JobID: "job-1", ModelID: model, Status: "queued"}, nil
+}
+
+// setupPreferredModelID reports what the device is set to serve.
+func (f *fakeSetupProvider) setupPreferredModelID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.preferred
+}
+
+// setupApplyModel mirrors the real adapter's observable contract: it
+// records the model it was given, marks it as the served one, and starts
+// a download ONLY when the weights are not already local — the same
+// split SwapPreferredModel makes. A fake that always pulled would hide
+// the "already on disk, so nothing happened" half of #230; one that
+// never pulled would hide the wizard's progress bar.
+func (f *fakeSetupProvider) setupApplyModel(_ context.Context, model string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applies = append(f.applies, model)
+	if f.applyErr != nil {
+		if !errors.Is(f.applyErr, errSwapNeedsRestart) {
+			return false, f.applyErr
+		}
+		// Cross-engine: the real adapter falls back to a bare pull.
+		f.pulls = append(f.pulls, model)
+		f.modelState = catalog.ModelStateQueued
+		return true, nil
+	}
+	f.preferred = model
+	if f.modelState == catalog.ModelStateReady {
+		return false, nil
+	}
+	f.pulls = append(f.pulls, model)
+	f.modelState = catalog.ModelStateQueued
+	return true, nil
 }
 
 // setEngine scripts the (installed, ready) pair the reconciler observes,
@@ -299,6 +351,11 @@ func TestSetupApplyZeroDesiredIsFree(t *testing.T) {
 // already local (any in-flight/ready state) is never re-pulled, and a
 // benchmark that already ran at the requested generation — even a
 // FAILED one — is never rerun (failure is an answer; NAVI re-bumps).
+//
+// Product contract, with one clause inverted by #230: the choice is
+// still APPLIED when the weights are already on disk. Skipping the whole
+// model step for a locally-present model is precisely how a wizard run
+// could finish having changed nothing at all.
 func TestSetupApplySkipsPresentModelAndAnsweredBenchmark(t *testing.T) {
 	f := &fakeSetupProvider{
 		modelState: catalog.ModelStateReady,
@@ -309,8 +366,167 @@ func TestSetupApplySkipsPresentModelAndAnsweredBenchmark(t *testing.T) {
 	if len(f.pulls) != 0 {
 		t.Fatalf("ready model re-pulled: %v", f.pulls)
 	}
+	if len(f.applies) != 1 || f.applies[0] != "qwen3-8b-instruct" {
+		t.Fatalf("applies = %v, want the ready model applied exactly once", f.applies)
+	}
 	if len(f.benchStarts) != 0 {
 		t.Fatalf("answered (failed) gen rerun: %v", f.benchStarts)
+	}
+}
+
+// TestSetupDesiredModelBecomesTheServedModel is the #230 regression
+// test, and a product contract: the model the wizard writes is the model
+// the device ends up SERVING, not merely one it downloads.
+//
+// Before this, Apply handed the desired model to PullModel and to
+// nothing else. PullModel writes weights and catalog state; it does not
+// touch the preference or the active selection, and neither activation
+// path could pick the choice up — activateBundledIfUnset fires only for
+// the install-time bundled model, activatePreferredIfNeeded needs a
+// preference the setup path never wrote. A user who chose anything other
+// than what the daemon had already auto-selected for itself got a
+// multi-gigabyte download, a green wizard, and the old model still
+// answering every request.
+func TestSetupDesiredModelBecomesTheServedModel(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+
+	r.Apply(context.Background(), desiredFrame("", "qwen3-8b-instruct", 0))
+
+	if len(f.applies) != 1 || f.applies[0] != "qwen3-8b-instruct" {
+		t.Fatalf("applies = %v, want the desired model applied exactly once", f.applies)
+	}
+	if got := f.setupPreferredModelID(); got != "qwen3-8b-instruct" {
+		t.Fatalf("served model after setup = %q, want the desired one", got)
+	}
+	// The weights still have to arrive; applying is what makes them the
+	// model that answers once they do.
+	if len(f.pulls) != 1 || f.pulls[0] != "qwen3-8b-instruct" {
+		t.Fatalf("pulls = %v, want the desired model fetched", f.pulls)
+	}
+}
+
+// TestSetupAlreadyServedModelIsNotReapplied pins the other half of the
+// convergence rule: admission is keyed on OBSERVABLE state, so a daemon
+// that restarts and re-reads the same instruction does not re-apply it.
+// Re-applying would bounce `ollama serve` on every boot of a host that
+// is already exactly where the wizard left it.
+func TestSetupAlreadyServedModelIsNotReapplied(t *testing.T) {
+	f := &fakeSetupProvider{
+		modelState: catalog.ModelStateReady,
+		preferred:  "qwen3-8b-instruct",
+	}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	for i := 0; i < 3; i++ {
+		r.Apply(context.Background(), desiredFrame("", "qwen3-8b-instruct", 0))
+	}
+	if len(f.applies) != 0 {
+		t.Fatalf("applies on a converged host = %v, want none", f.applies)
+	}
+}
+
+// TestSetupDesiredModelChangeIsReapplied: the owner picking a different
+// model in the wizard has to reach the device. The one-shot admission is
+// per desired VALUE, not per session.
+func TestSetupDesiredModelChangeIsReapplied(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("", "model-a", 0))
+	f.setModelState(catalog.ModelStateNotPresent, "")
+	r.Apply(ctx, desiredFrame("", "model-b", 0))
+	r.Apply(ctx, desiredFrame("", "model-b", 0))
+
+	if len(f.applies) != 2 || f.applies[0] != "model-a" || f.applies[1] != "model-b" {
+		t.Fatalf("applies = %v, want [model-a model-b]", f.applies)
+	}
+	if got := f.setupPreferredModelID(); got != "model-b" {
+		t.Fatalf("served model = %q, want model-b", got)
+	}
+}
+
+// TestSetupApplyModel_RealAdapterPinsAndActivates exercises the REAL
+// provider adapter, not the fake: the reconciler's fake sits above this
+// seam, so without this the production path — persist the preference,
+// then flip the active selection — is never executed by any test.
+//
+// Product contract, and the end-to-end statement of #230: after the
+// wizard's model is applied, preferred-model.json names it (so it
+// survives the restart an engine install causes) AND the active
+// selection points at it (so it is what actually answers requests).
+func TestSetupApplyModel_RealAdapterPinsAndActivates(t *testing.T) {
+	manifests := recTestManifests()
+	store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
+	if err := store.Update(func(s *catalog.State) {
+		s.Models = map[string]catalog.ModelState{
+			"heavy": {State: catalog.ModelStateReady, VariantID: "q4", OllamaTag: "heavy:8b"},
+			"light": {State: catalog.ModelStateReady, VariantID: "q4", OllamaTag: "light:2b"},
+		}
+		// The daemon auto-selected "heavy" for itself; the wizard asks
+		// for "light". That mismatch is the whole of #230.
+		s.Active = &catalog.ActiveSelection{
+			Runtime: catalog.RuntimeOllama, ModelID: "heavy", VariantID: "q4", DecidedBy: "auto",
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adapter, _ := newSwapTestAdapter(t)
+	if err := adapter.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	prefPath := filepath.Join(t.TempDir(), "preferred-model.json")
+
+	p := &agentInferenceProvider{
+		cfg:            agentconfig.InferenceConfig{BundledModelID: "heavy"},
+		manifests:      manifests,
+		store:          store,
+		ollama:         adapter,
+		profiler:       cpuSwapProfiler(t),
+		preferencePath: prefPath,
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	if _, err := p.setupApplyModel(context.Background(), "light"); err != nil {
+		t.Fatalf("setupApplyModel: %v", err)
+	}
+
+	pref, ok, err := agentconfig.LoadPreference(prefPath)
+	if err != nil || !ok || pref.ModelID != "light" {
+		t.Fatalf("preference = %+v ok=%v err=%v, want light persisted", pref, ok, err)
+	}
+	// The activation runs on the reconcile goroutine.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if st, _ := store.Load(); st.Active != nil && st.Active.ModelID == "light" {
+			return // success
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	st, _ := store.Load()
+	t.Fatalf("the chosen model never became active: Active=%+v", st.Active)
+}
+
+// TestSetupApplyModelCrossEngineFallsBackToPull: a target the in-process
+// switch cannot apply (a cross-engine change) still has to get its
+// weights now — the preference the adapter persisted activates them
+// after the restart the engine change causes. Reporting the refusal as a
+// model failure instead would show the operator a red step for a setup
+// that is in fact on its way.
+func TestSetupApplyModelCrossEngineFallsBackToPull(t *testing.T) {
+	f := &fakeSetupProvider{
+		modelState: catalog.ModelStateNotPresent,
+		applyErr:   errSwapNeedsRestart,
+	}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+	r.Apply(ctx, desiredFrame("", "m-1", 0))
+
+	if len(f.pulls) != 1 || f.pulls[0] != "m-1" {
+		t.Fatalf("pulls = %v, want the weights fetched anyway", f.pulls)
+	}
+	if got := stepByID(t, r.snapshot(ctx), setupStepModelPull); got.Status != signer.SetupStatusRunning {
+		t.Fatalf("model step = %+v, want running", got)
 	}
 }
 
@@ -379,19 +595,27 @@ func TestSetupSnapshotStatuses(t *testing.T) {
 	}
 }
 
-// TestSetupPullRejectedReportsModelNotFound: PullModel refusing the ID
-// (not in the catalog) surfaces as failed/model_not_found and is not
-// retried on later frames.
-func TestSetupPullRejectedReportsModelNotFound(t *testing.T) {
-	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent, pullErr: errors.New("unknown model")}
+// TestSetupModelRejectedReportsModelNotFound: the provider refusing the
+// ID (not in the catalog, or no variant the engine can serve) surfaces
+// as failed/model_not_found and is not retried on later frames.
+//
+// The refusal now arrives from setupApplyModel rather than PullModel
+// (#230) — same failure, one layer up, because applying the choice is
+// what resolves it against the catalog. A refused model is never
+// downloaded.
+func TestSetupModelRejectedReportsModelNotFound(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent, applyErr: errors.New("unknown model")}
 	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 
 	frame := desiredFrame("", "no-such-model", 0)
 	r.Apply(ctx, frame)
 	r.Apply(ctx, frame)
-	if len(f.pulls) != 1 {
-		t.Fatalf("rejected pull retried: %v", f.pulls)
+	if len(f.applies) != 1 {
+		t.Fatalf("rejected model retried: %v", f.applies)
+	}
+	if len(f.pulls) != 0 {
+		t.Fatalf("a refused model must not be downloaded: %v", f.pulls)
 	}
 	snap := r.snapshot(ctx)
 	if len(snap.Steps) != 1 || snap.Steps[0].Status != signer.SetupStatusFailed ||
