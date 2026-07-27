@@ -1,7 +1,7 @@
 // Package claudecode implements the Adapter for Claude Code.
 //
 // Since the transparent proxy became the Claude routing method on Linux
-// (docs/decisions.md), this adapter installs ONLY the two slash-command
+// (waired/docs/decisions/), this adapter installs ONLY the two slash-command
 // skills under ~/.claude/skills/. It no longer writes any shell alias or
 // VSCode `claudeProcessWrapper` — request routing is handled by the proxy,
 // not by env injection. Uninstall still reverts any legacy VSCode wrapper a

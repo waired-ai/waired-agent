@@ -6,7 +6,7 @@
 // cmd/waired-agent call sites so the binaries compile but every
 // install / spawn call returns the platform-specific
 // "vLLM is not supported" error.
-// Decision: docs/decisions.md
+// Decision: waired/docs/decisions/
 //   - "Windows 版 waired-agent の方針" (20260514)
 //   - "Mac 版 waired-agent の推論エンジン方針" (20260517)
 

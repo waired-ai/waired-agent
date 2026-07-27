@@ -417,7 +417,7 @@ e2e-inference:
 # uses Qwen3-14B-Instruct-AWQ (~9 GB, ~30 min).
 #
 # REQUIRED before any release made from a GPU-equipped host. CI must
-# include a GPU lane that runs this target — see docs/decisions.md
+# include a GPU lane that runs this target — see waired/docs/decisions/
 # 'GPU test mandate' entry.
 .PHONY: e2e-vllm
 e2e-vllm:

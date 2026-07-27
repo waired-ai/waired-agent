@@ -2,7 +2,7 @@
 // Claude Code wrapper integration.
 //
 // Since the transparent proxy became the sole Claude-routing method on
-// Linux (docs/decisions.md), Waired no longer WRITES a VSCode
+// Linux (waired/docs/decisions/), Waired no longer WRITES a VSCode
 // `claudeProcessWrapper` setting — request routing is handled by the proxy,
 // not by env injection inside the IDE. The only surviving surface is
 // Remove: claudecode's Uninstall calls it to revert a settings.json edit a

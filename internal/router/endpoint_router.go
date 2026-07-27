@@ -1242,7 +1242,7 @@ func effectiveCapacity(capacity int) int {
 func sortMeshCandidates(cands []meshCandidate) {
 	sort.SliceStable(cands, func(i, j int) bool {
 		// Grant-kind tier is the dominant key: own == team > public
-		// (waired/docs/decisions.md, Team Share routing order). A public
+		// (waired/docs/decisions/, Team Share routing order). A public
 		// candidate is only ever a last resort — the auto-mode tier
 		// comparison in publicGate governs whether it may be a candidate
 		// at all, not where it ranks.

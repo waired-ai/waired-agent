@@ -15,7 +15,7 @@
 // real Linux build byte-for-byte so the renderer code in
 // cmd/waired/runtimes.go is identical across platforms.
 //
-// Decision: docs/decisions.md "Mac 版 waired-agent の推論エンジン方針"
+// Decision: waired/docs/decisions/ "Mac 版 waired-agent の推論エンジン方針"
 // (20260517).
 
 package runtime

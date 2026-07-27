@@ -20,7 +20,7 @@
 # NO long-lived service-account JSON secret. We deliberately do NOT use
 # FirebaseExtended/action-hosting-deploy: it requires a `firebaseServiceAccount`
 # key secret and has no WIF support, which conflicts with the recorded WIF
-# decision (docs/decisions.md). docs-site moves to the public `waired-agent`
+# decision (waired/docs/decisions/). docs-site moves to the public `waired-agent`
 # repo later (#184), so keeping zero long-lived secrets matters.
 #
 # The build job ALWAYS runs (it is the docs validation gate, incl. fork PRs).

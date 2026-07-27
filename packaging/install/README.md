@@ -63,7 +63,7 @@ on `%ProgramData%\waired\`).
 Users who prefer a GUI can instead double-click
 `WairedSetup-<version>-x64.exe` (Inno Setup) from the same release.
 The CLI one-liner is the recommended path while Authenticode signing
-is not yet in place — see `docs/decisions.md`.
+is not yet in place — see `waired/docs/decisions/`.
 
 ## After install — it just runs
 
@@ -505,5 +505,5 @@ version** and **cloud-delivered protection**, so a clean local scan
 reduces risk but does not *guarantee* every end-user machine passes, and
 a later definitions update can re-flag a script that passed before. The
 durable guarantee is **Authenticode signing** (deferred — see
-`docs/decisions.md`). CI coverage is the two gates above (`#553`); both stay
+`waired/docs/decisions/`). CI coverage is the two gates above (`#553`); both stay
 advisory / soft-fail for the same non-determinism reason.

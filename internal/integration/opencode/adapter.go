@@ -11,7 +11,7 @@
 // found"), and a self-contained plugin file we fully own is cleaner to
 // install and remove than merging into the user's opencode.json — no
 // backup, no surgical key removal, one-file uninstall. See
-// docs/decisions.md and the work record for the spike that established this.
+// waired/docs/decisions/ and the work record for the spike that established this.
 //
 // Two affordance command files (waired-status, waired-doctor) are also
 // installed under ~/.config/opencode/commands/.

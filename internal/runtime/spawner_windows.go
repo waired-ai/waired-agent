@@ -130,7 +130,7 @@ func (p *osProcess) Err() error            { return p.errStore.Load() }
 //
 // Engine-specific graceful shutdown (e.g. Ollama's POST /api/shutdown)
 // is the adapter's responsibility on Windows, not the spawner's.
-// Documented as a Phase W-1 trade-off in docs/decisions.md (20260514).
+// Documented as a Phase W-1 trade-off in waired/docs/decisions/ (20260514).
 func (p *osProcess) Signal(_ os.Signal) error {
 	return nil
 }

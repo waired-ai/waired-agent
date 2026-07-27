@@ -14,7 +14,7 @@ import (
 // host has zero or one NVIDIA GPU or a heterogeneous mix.
 //
 // vLLM is the engine we reserve for NVIDIA multi-parallel tiers
-// (decisions.md "推論エンジンを Ollama に集約し vLLM を NVIDIA 高並列
+// (waired/docs/decisions/ "推論エンジンを Ollama に集約し vLLM を NVIDIA 高並列
 // ティアに限定する", 20260527), so multi-GPU hosts should shard by
 // default instead of leaving every device past GPUs[0] idle.
 //

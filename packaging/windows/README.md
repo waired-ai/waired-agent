@@ -95,7 +95,7 @@ When a code-signing identity is available, drop the PFX (base64) into
 `secrets.WAIRED_SIGN_CERT` + the password into
 `secrets.WAIRED_SIGN_CERT_PASSWORD` and the `Sign Windows GUI
 installer (optional)` step in `.github/workflows/release.yml`
-activates. See `docs/decisions.md` for the long-form rationale and
+activates. See `waired/docs/decisions/` for the long-form rationale and
 `docs/todo.md` for the unblock condition (agent OSS -> SignPath
 Foundation application).
 
