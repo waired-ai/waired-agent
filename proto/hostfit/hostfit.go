@@ -201,8 +201,9 @@ const (
 // signer.HardwareSummary is a wire type whose shape is fixed by
 // compatibility rather than by this decision. Each side adapts once —
 // the control plane via FromHardwareSummary, the agent via a Profile
-// adapter in internal/router — and everything downstream sees the same
-// five numbers.
+// adapter in internal/hardware — and everything downstream sees the
+// same small set of numbers. (Deliberately not spelled as a count: this
+// sentence has said "five" through two additions.)
 type Host struct {
 	// RAMTotalGB is total system RAM. 0 means "detection failed", which
 	// is treated as "skip the RAM gate", never as "no memory".
@@ -224,6 +225,25 @@ type Host struct {
 	// discrete-GPU hosts, and the fallback when a UMA host reports no
 	// usable figure.
 	VRAM0MB int
+
+	// VRAMPoolMB is the VRAM ollama may pool ACROSS devices on a
+	// multi-GPU host, 0 when there is nothing to pool (which is every
+	// single-GPU host, so 0 is the common case rather than an error).
+	// Computed by OllamaVRAMPoolMB from the device list each producer
+	// already has; see that function for which devices may be summed
+	// and why.
+	//
+	// It is read only through OllamaVRAMBudgetMB, never directly:
+	// EffectiveVRAMMB stays the single-device figure that min_vram_mb,
+	// engine selection and vLLM's TP=1 fallback were authored against,
+	// and widening THAT would silently move all of them
+	// (waired-ai/waired#678 makes the same argument in the other
+	// direction).
+	//
+	// json:"-" for the reason MemoryBandwidthSpecGBs carries it: Host is
+	// an INPUT to a decision, not a payload, and the additive-only guard
+	// asks a field added to a published struct to say so explicitly.
+	VRAMPoolMB int `json:"-"`
 
 	// MemoryBandwidthSpecGBs is the published PEAK read bandwidth of the
 	// pool the weights are read from, in GB/s. 0 means "unknown", and
@@ -249,6 +269,84 @@ type Host struct {
 	MemoryBandwidthSpecGBs float64 `json:"-"`
 }
 
+// Device is the per-device facts the pool rule reads. Like Host it is
+// deliberately neither producer type: the agent's hardware.GPU carries
+// driver versions and UUIDs no fit rule reads, and
+// signer.HardwareGPUSummary is a wire shape fixed by compatibility.
+// Both sides already hold everything below, so the rule can live here
+// and be computed identically by each adapter — which is the whole
+// point of this package, and why nothing new has to cross the wire.
+type Device struct {
+	// Vendor is lower-case, as both producers already spell it
+	// ("nvidia" / "amd" / "apple").
+	Vendor string
+
+	// VRAMTotalMB is the device's raw total VRAM. 0 means "unknown" —
+	// the AMD Windows registry fallback reports devices this way — and
+	// such a device contributes nothing to a pool.
+	VRAMTotalMB int
+}
+
+// OllamaVRAMPoolMB is the VRAM ollama may pool across devices, or 0
+// when there is nothing to pool.
+//
+// Ollama DOES aggregate, which this package assumed it did not. Read
+// the pinned engine's scheduler (ollama 0.31.1,
+// server/sched.go:selectLlamaServerPlacement) rather than the folklore:
+//
+//   - Devices are grouped by backend library (ml.ByLibrary — "CUDA",
+//     "ROCm", "Metal", "Vulkan"). A CUDA device and a ROCm device are
+//     NEVER in one group, so any sum must be per-vendor at minimum.
+//   - By default the scheduler first tries bestSingleGPUFit: a model
+//     that fits in 80 % of ONE device's free memory runs on that one
+//     device. Only when nothing fits alone does it take a whole group
+//     via bestGPUGroupByAvailableMemory, and availableMemoryForLoad
+//     then SUMS the group's free memory. So the pool is the capacity
+//     bound, and the single device is merely the preferred placement
+//     within it.
+//   - There is no homogeneity requirement inside a group: a 4090 and a
+//     3060 both under CUDA are pooled. This is why the rule cannot
+//     simply mirror vLLM's tensor-parallel aggregate, which requires
+//     identical devices because it shards each tensor rather than
+//     splitting by layer.
+//
+// NVIDIA-only, and that is a scope decision rather than an oversight.
+// discover/runner.go:filterIntegratedGPUs drops integrated devices —
+// "dropping integrated GPU; to enable, set OLLAMA_IGPU_ENABLE=1" —
+// except integratedGPUAllowedByDefault, which admits EVERY "CUDA"
+// device and admits "ROCm" only for an allowlist of GFX targets this
+// repo does not detect. So for NVIDIA the integrated/discrete question
+// does not arise: the engine pools those devices either way, and no
+// integrated flag is needed to be right about them. Extending the sum
+// to AMD needs that flag as a detected FACT — inferring it from a model
+// name would put a second copy of internal/runtime's heuristic in the
+// contract module, which is the drift this package exists to prevent
+// (waired-ai/waired-agent#264 item 4).
+//
+// The deduction is per ADDITIONAL device, not per device: the base term
+// is a per-card device context (see OllamaVRAMOverheadBaseDiscreteMB),
+// so it repeats, while the per-weight slope is compute/scratch that
+// splits with the layers and must not. OllamaVRAMOverheadMB still
+// charges base + slope once against the resulting budget, which makes
+// the total n*base + slope. Never double-count it elsewhere.
+func OllamaVRAMPoolMB(devs []Device) int {
+	var n, sum int
+	for _, d := range devs {
+		if d.Vendor != "nvidia" || d.VRAMTotalMB <= 0 {
+			continue
+		}
+		n++
+		sum += d.VRAMTotalMB
+	}
+	if n < 2 {
+		// Nothing to pool. Reported as "unknown" rather than as the
+		// single device's figure so every single-GPU host stays
+		// bit-identical to the behaviour that predates this rule.
+		return 0
+	}
+	return sum - (n-1)*OllamaVRAMOverheadBaseDiscreteMB
+}
+
 // FromHardwareSummary adapts the broadcast hardware summary — what a
 // device publishes and the control plane stores — into a Host.
 //
@@ -270,6 +368,15 @@ func FromHardwareSummary(hw *signer.HardwareSummary) Host {
 	if len(hw.GPUs) > 0 {
 		h.VRAM0MB = hw.GPUs[0].VRAMTotalMB
 	}
+	// Every GPU has always been on the wire; only this adapter and its
+	// agent-side twin threw the rest away. Nothing new has to be
+	// published for the pool, so the fix reaches every already-deployed
+	// agent the moment the control plane bumps its proto tag.
+	devs := make([]Device, 0, len(hw.GPUs))
+	for _, g := range hw.GPUs {
+		devs = append(devs, Device{Vendor: g.Vendor, VRAMTotalMB: g.VRAMTotalMB})
+	}
+	h.VRAMPoolMB = OllamaVRAMPoolMB(devs)
 	return h
 }
 
@@ -279,11 +386,43 @@ func FromHardwareSummary(hw *signer.HardwareSummary) Host {
 // wins there; everyone else uses the first GPU's raw figure. Returns 0
 // for CPU-only hosts, and for a unified-memory host that reports no
 // usable figure it degrades to the raw one rather than to "no GPU".
+//
+// This is the SINGLE-DEVICE budget and stays that way. The ollama path
+// asks OllamaVRAMBudgetMB instead, because ollama pools across devices
+// and the callers of this one — min_vram_mb, engine selection, vLLM's
+// TP=1 fallback — were all authored against a single card's figure.
 func (h Host) EffectiveVRAMMB() int {
 	if h.UnifiedMemory && h.UsableVRAMMB > 0 {
 		return h.UsableVRAMMB
 	}
 	return h.VRAM0MB
+}
+
+// OllamaVRAMBudgetMB is the VRAM budget the OLLAMA path may use: the
+// cross-device pool where there is one, the single-device figure
+// otherwise.
+//
+// Two clamps, both load-bearing:
+//
+// A unified-memory host is one pool by construction — there is nothing
+// to aggregate, and UsableVRAMMB is already the honest bound on what
+// the GPU can wire down, so it keeps winning.
+//
+// The aggregate may never come in BELOW the single-device figure. That
+// is the mirror of router.VLLMVRAMBudgetMB's own floor, and here it is
+// what makes this change structurally unable to regress: the worst a
+// wrong pool can do is leave today's behaviour in place. It is also why
+// no "floor at the largest device" clause is needed — a host whose
+// GPUs[0] is its small card gets the pool, which already exceeds the
+// large one. Whether EffectiveVRAMMB itself should rank devices rather
+// than trust enumeration order is a separate question, deliberately not
+// answered here (waired-ai/waired-agent#264 item 6).
+func (h Host) OllamaVRAMBudgetMB() int {
+	eff := h.EffectiveVRAMMB()
+	if h.UnifiedMemory || h.VRAMPoolMB <= eff {
+		return eff
+	}
+	return h.VRAMPoolMB
 }
 
 // HasGPU reports whether the host has any GPU-addressable memory at
@@ -505,21 +644,35 @@ func EstimateOllamaDecode(v catalog.Variant, h Host) Estimate {
 		return e
 	}
 
-	// Discrete: how much of the weights the card can hold, after the
-	// same overhead and KV reservation the residency gate assumes.
-	budgetMB := h.EffectiveVRAMMB() -
+	// Discrete: how much of the weights the cards can hold, after the
+	// same overhead and KV reservation the residency gate assumes. The
+	// budget is the POOL where ollama has one — under-counting it here
+	// is the costliest error this function can make, because this is
+	// the branch that may exclude (#264).
+	budget := h.OllamaVRAMBudgetMB()
+	budgetMB := budget -
 		OllamaVRAMOverheadMB(false, v.EstimatedWeightGB) -
 		v.KVBytesPerTokenFP16*OllamaKVBudgetTokens/(1<<20)
 	weightMB := v.EstimatedWeightGB * 1e9 / (1 << 20)
-	if weightMB <= 0 || h.EffectiveVRAMMB() <= 0 {
+	if weightMB <= 0 || budget <= 0 {
 		return pass
 	}
 	share := float64(budgetMB) / weightMB
 	switch {
 	case share >= 1:
-		// The card holds all of it. Its bandwidth decides the rate and
+		// The cards hold all of it. Their bandwidth decides the rate and
 		// this package does not know it; the slowest shipping card that
 		// could hold the weights at all is still far above the floor.
+		//
+		// That argument is per-DEVICE, and pooling weakens it: ollama
+		// splits by layer, so two cards roughly double capacity while
+		// leaving read bandwidth flat, and a pair of small cards can
+		// reach a size their speed does not deserve. It is not wrong
+		// enough to withhold the fix — this branch leaves UpperBound
+		// unset, so it can only over-annotate, never exclude — but a
+		// pooled host is exactly where a discrete per-card bandwidth
+		// term would first pay for itself (#266, the discrete sibling
+		// of #251's chip table).
 		return Estimate{Resident: true, ResidentShare: 1, MeetsSpeedFloor: true}
 	case share < 0:
 		share = 0
@@ -579,10 +732,13 @@ func OllamaResidentMB(v catalog.Variant, unifiedMemory bool) int {
 // it is meant to run, and the RAM gate is its real bound.
 //
 // This is NO LONGER the capacity gate on discrete GPUs — see OllamaFit
-// for why — but it remains the honest answer to "can the card hold all
+// for why — but it remains the honest answer to "can the GPUs hold all
 // of this", which is what the agent's deficit labels and the control
-// plane's shortfall figures are explaining. It IS still the capacity
-// gate on unified memory, where there is nowhere to spill.
+// plane's shortfall figures are explaining. Plural because on a
+// multi-GPU host the answer is about the pool ollama would spread the
+// layers over, not about whichever card enumerated first (#264). It IS
+// still the capacity gate on unified memory, where there is nowhere to
+// spill.
 //
 // Exposed separately from OllamaFit because a caller explaining WHY a
 // model was rejected has to know which of the two gates bound: naming
@@ -596,7 +752,7 @@ func OllamaResident(v catalog.Variant, h Host) Verdict {
 	if need <= 0 {
 		return Verdict{Fits: true} // unannotated weight: nothing to compare
 	}
-	have := h.EffectiveVRAMMB()
+	have := h.OllamaVRAMBudgetMB()
 	if have <= 0 {
 		return Verdict{Fits: true} // budget unknown: don't reject the catalog
 	}

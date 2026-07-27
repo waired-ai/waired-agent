@@ -324,10 +324,18 @@ func TestHardwareSummaryFor_SurvivesTheRoundTrip(t *testing.T) {
 		},
 		{"cpu only", hardware.Profile{RAMTotalGB: 32}},
 		{
-			// Multi-GPU: ollama never aggregates, so the shared Host
-			// carries the first device — the same figure the agent's own
-			// residency check uses. (vLLM's tensor-parallel aggregate is
-			// deliberately not part of Host; see router.hostFits.)
+			// Multi-GPU. Every device has always ridden the wire, and
+			// since #264 both adapters read all of them: the ollama pool
+			// is computed from the published list on each side rather
+			// than published as a number, so this case is what pins the
+			// two computations together. It went in asserting the
+			// opposite ("ollama never aggregates, so the shared Host
+			// carries the first device") — that claim was wrong about
+			// the engine, which pools a whole ml.ByLibrary group when a
+			// model will not fit one card.
+			//
+			// (vLLM's tensor-parallel aggregate is still deliberately
+			// not part of Host; see router.hostFits.)
 			"two identical cards",
 			hardware.Profile{
 				RAMTotalGB: 256,
@@ -358,7 +366,53 @@ func TestHardwareSummaryFor_SurvivesTheRoundTrip(t *testing.T) {
 				t.Errorf("effective VRAM after the round trip = %d, agent sees %d",
 					got.EffectiveVRAMMB(), tc.prof.EffectiveVRAMMB())
 			}
+			if got.OllamaVRAMBudgetMB() != tc.prof.OllamaVRAMBudgetMB() {
+				t.Errorf("ollama VRAM budget after the round trip = %d, agent sees %d",
+					got.OllamaVRAMBudgetMB(), tc.prof.OllamaVRAMBudgetMB())
+			}
 		})
+	}
+}
+
+// TestHardwareSummaryFor_RoundTripCarriesThePool is the anti-vacuity
+// guard for the multi-GPU case above.
+//
+// That case asserts the two sides AGREE, and two sides that both
+// computed "no pool" agree perfectly. If the fixture's cards ever stop
+// pooling — a vendor rename, a VRAM figure dropped from the summary,
+// GPUs[1:] stopped crossing the wire — the equality assertion would
+// stay green while the fact it exists to protect had gone. So assert
+// separately that the pool is engaged at all, and that it is the figure
+// the ollama path actually spends.
+func TestHardwareSummaryFor_RoundTripCarriesThePool(t *testing.T) {
+	prof := hardware.Profile{
+		RAMTotalGB: 256,
+		GPUs: []hardware.GPU{
+			{Vendor: "nvidia", Model: "NVIDIA L4", VRAMTotalMB: 23034},
+			{Vendor: "nvidia", Model: "NVIDIA L4", VRAMTotalMB: 23034},
+		},
+	}
+	data, err := json.Marshal(hardwareSummaryFor(prof))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var decoded signer.HardwareSummary
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	host := hostfit.FromHardwareSummary(&decoded)
+
+	// 23034 + 23034 - 1024 for the second card's device context.
+	const wantPool = 45044
+	if host.VRAMPoolMB != wantPool {
+		t.Errorf("the control plane pools %d MB from %s, want %d — "+
+			"two cards are being judged as one",
+			host.VRAMPoolMB, data, wantPool)
+	}
+	if host.OllamaVRAMBudgetMB() <= host.EffectiveVRAMMB() {
+		t.Errorf("ollama budget %d does not exceed the single-device figure %d, "+
+			"so this fixture no longer demonstrates the multi-GPU case",
+			host.OllamaVRAMBudgetMB(), host.EffectiveVRAMMB())
 	}
 }
 
