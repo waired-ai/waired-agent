@@ -129,10 +129,6 @@ var receiveOnly = []exemption{
 // its own parsed structs. guard() verifies the claim: an entry here
 // whose field nothing under proto/ writes fails.
 var producedInProto = []exemption{
-	{reflect.TypeFor[hostfit.Host](), "GPUCount",
-		"derived from the hardware summary by hostfit.FromHardwareSummary"},
-	{reflect.TypeFor[hostfit.Host](), "VRAM0MB",
-		"derived from the hardware summary by hostfit.FromHardwareSummary"},
 	{reflect.TypeFor[hostfit.Verdict](), "NeedMB",
 		"a fit result, written by the hostfit decision itself"},
 	{reflect.TypeFor[hostfit.Verdict](), "HaveMB",
