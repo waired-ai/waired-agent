@@ -132,6 +132,20 @@ tests (waired#932 G7):
 
 ## Submitting a PR
 
+**Granularity**: default to **one PR per reviewable unit of work** — a
+change together with its tests and docs — not one per file, layer, or
+commit. Split only for a concrete reason:
+
+* `proto/` contract changes — required, see §Modules,
+* a mechanical or generated change that would drown a semantic one,
+* a change that must land and be verified before the next can depend on
+  it,
+* CI cost — a path-gated job (per-PR testnet) that would otherwise
+  attach to unrelated work. Say so in the PR body when this is why.
+
+"It could be split" is not a reason. Prefer one PR a reviewer can hold in
+their head over three they must reassemble.
+
 When a unit of work is complete and the local checks above pass, open a
 pull request via `gh pr create` — don't leave the branch sitting on the
 remote. Link the resolving issue with `Fixes #N` when applicable.
