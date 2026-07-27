@@ -124,13 +124,11 @@ func readyStatus() management.InferenceStatus {
 	}
 }
 
-// scriptStdin points the daemon path at a scripted terminal: the same
-// single-owner reader production uses, over a canned keystroke sequence.
-func scriptStdin(t *testing.T, keys string) {
-	t.Helper()
-	orig := initStdinOwner
-	initStdinOwner = func() *stdinReader { return newStdinReader(strings.NewReader(keys)) }
-	t.Cleanup(func() { initStdinOwner = orig })
+// scriptStdin builds a scripted terminal: the same single-owner reader
+// production uses, over a canned keystroke sequence. runInit owns the
+// real one and hands it down, so the tests hand one down too.
+func scriptStdin(keys string) *stdinReader {
+	return newStdinReader(strings.NewReader(keys))
 }
 
 // scriptStdinPipe is scriptStdin for a scenario that must type DURING
@@ -138,16 +136,11 @@ func scriptStdin(t *testing.T, keys string) {
 // takeover offer existed (#184), which in a canned string is the whole
 // script. The returned writer feeds keystrokes in as the flow reaches
 // the point they would really be pressed.
-func scriptStdinPipe(t *testing.T) *io.PipeWriter {
+func scriptStdinPipe(t *testing.T) (*stdinReader, *io.PipeWriter) {
 	t.Helper()
 	pr, pw := io.Pipe()
-	orig := initStdinOwner
-	initStdinOwner = func() *stdinReader { return newStdinReader(pr) }
-	t.Cleanup(func() {
-		initStdinOwner = orig
-		_ = pw.Close()
-	})
-	return pw
+	t.Cleanup(func() { _ = pw.Close() })
+	return newStdinReader(pr), pw
 }
 
 // daemonInitOpts is what the four scenarios below vary.
@@ -159,7 +152,7 @@ type daemonInitOpts struct {
 
 // runDaemonInit runs the flow under a hard timeout — a regression that
 // blocks (which is exactly what #188 was) must fail, not hang.
-func runDaemonInit(t *testing.T, url string, o daemonInitOpts) string {
+func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitOpts) string {
 	t.Helper()
 	stubOpener(t, nil) // no browser may be launched from a test
 	// Pin the browser gate: without a display, Linux resolves to the
@@ -174,7 +167,7 @@ func runDaemonInit(t *testing.T, url string, o daemonInitOpts) string {
 		go func() {
 			done <- runInitViaDaemon(url, "https://cp.example", "dev-1",
 				o.noBrowser, o.nonInteractive, o.skipIntegration,
-				"http://127.0.0.1:9473", daemonInitInference{})
+				"http://127.0.0.1:9473", owner, daemonInitInference{})
 		}()
 		select {
 		case runErr = <-done:
@@ -199,10 +192,10 @@ func runDaemonInit(t *testing.T, url string, o daemonInitOpts) string {
 func TestRunInitViaDaemon_PrintOnlyGateAcksStrayEnter(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	shrinkSetupTimers(t)
-	scriptStdin(t, "\n")
+	owner := scriptStdin("\n")
 	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
 
-	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{noBrowser: true, skipIntegration: true})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{noBrowser: true, skipIntegration: true})
 
 	for _, want := range []string{
 		"Nothing to press here — sign-in continues on its own once you open the link.",
@@ -222,7 +215,7 @@ func TestRunInitViaDaemon_PrintOnlyGateAcksStrayEnter(t *testing.T) {
 func TestRunInitViaDaemon_TakeoverThenIntegrationGetsItsOwnAnswer(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	shrinkSetupTimers(t)
-	keys := scriptStdinPipe(t)
+	owner, keys := scriptStdinPipe(t)
 	d := &promptsDaemon{
 		// A download in flight, so the wait actually runs and the watch
 		// gets the polls a real terminal would have.
@@ -240,7 +233,7 @@ func TestRunInitViaDaemon_TakeoverThenIntegrationGetsItsOwnAnswer(t *testing.T) 
 		}
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{})
 
 	for _, want := range []string{
 		"Take over setup in this terminal?",                // Enter asked, it did not switch
@@ -260,13 +253,13 @@ func TestRunInitViaDaemon_TakeoverThenIntegrationGetsItsOwnAnswer(t *testing.T) 
 func TestRunInitViaDaemon_BrowserDrivenAsksNothingAndNeverPromptsToContinue(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	shrinkSetupTimers(t)
-	scriptStdin(t, "") // the operator never touches the terminal
+	owner := scriptStdin("") // the operator never touches the terminal
 	d := &promptsDaemon{
 		statusSeq:  []management.InferenceStatus{readyStatus()},
 		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{})
 
 	if strings.Contains(out, "Press Enter to continue") {
 		t.Errorf("browser-driven path still prompts to continue (#132)\n---\n%s", out)
@@ -290,10 +283,10 @@ func TestRunInitViaDaemon_BrowserDrivenAsksNothingAndNeverPromptsToContinue(t *t
 func TestRunInitViaDaemon_IntegrationComesAfterTheModelWait(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	shrinkSetupTimers(t)
-	scriptStdin(t, "n\n")
+	owner := scriptStdin("n\n")
 	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
 
-	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{noBrowser: true})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{noBrowser: true})
 
 	ready := strings.Index(out, bundledModel+" ready")
 	integ := strings.Index(out, "Coding-agent integration")
@@ -311,7 +304,7 @@ func TestRunInitViaDaemon_IntegrationComesAfterTheModelWait(t *testing.T) {
 func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	shrinkSetupTimers(t)
-	scriptStdin(t, "")
+	owner := scriptStdin("")
 	stubEngineInstallFailure(t)
 
 	d := &promptsDaemon{
@@ -323,7 +316,7 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 		},
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, daemonInitOpts{skipIntegration: true})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{skipIntegration: true})
 
 	for _, want := range []string{
 		"The AI engine could not be installed on this device.",

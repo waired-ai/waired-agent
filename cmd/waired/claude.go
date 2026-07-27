@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -153,7 +154,7 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 
 	// Add the routing statusline segment to the invoking user's Claude Code
 	// footer (#580). Absent ⇒ injected; a pre-existing one ⇒ ask before wrapping.
-	installStatuslineForInvoker(noStatusline, true)
+	installStatuslineForInvoker(noStatusline, true, bufio.NewScanner(os.Stdin))
 	return nil
 }
 

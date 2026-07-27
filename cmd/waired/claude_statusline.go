@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -372,7 +371,12 @@ func pruneFallbackCache(dir string) {
 // TTY: a foreign statusLine gets guidance instead of a blocking y/N read.
 // Best-effort: warnings, not failures (the managed-settings write is the core
 // of the caller).
-func installStatuslineForInvoker(skip, allowPrompt bool) {
+//
+// in is the caller's line source. `waired init` hands its stdin owner down
+// so this question reads from the same queue as every other prompt of the
+// run: a reader of our own here would sit behind the owner and never see
+// its answer (#223).
+func installStatuslineForInvoker(skip, allowPrompt bool, in lineReader) {
 	if skip {
 		return
 	}
@@ -397,7 +401,7 @@ func installStatuslineForInvoker(skip, allowPrompt bool) {
 		}
 		q := fmt.Sprintf("  You already have a Claude Code statusLine (%s).\n"+
 			"  May waired edit ~/.claude/settings.json to also show routing (waired-marked, restored on `waired claude disable`)?", existing)
-		if promptYesNo(q) {
+		if promptYesNo(q, in) {
 			runStatuslineInstall(viaSudo, sudoUser, home, true)
 			warnStatuslineShadow(home)
 		} else {
@@ -517,10 +521,12 @@ func invokerHome() (home string, viaSudo bool, sudoUser string) {
 
 func stdinIsInteractive() bool { return isTerminal(os.Stdin) }
 
-func promptYesNo(question string) bool {
+func promptYesNo(question string, in lineReader) bool {
 	fmt.Printf("%s [y/N] ", question)
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(line)) {
+	if !in.Scan() {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(in.Text())) {
 	case "y", "yes":
 		return true
 	default:

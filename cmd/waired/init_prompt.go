@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -58,7 +57,7 @@ func hardwareEnabledDefault(p hardware.Profile) bool {
 // skipped (sharing a non-existent engine is meaningless) and false is
 // returned for it.
 func promptInference(
-	in io.Reader, out io.Writer,
+	in lineReader, out io.Writer,
 	existing agentconfig.InferenceConfig, hasExisting bool,
 	profile hardware.Profile,
 	enabledOverride, shareOverride *bool,
@@ -85,8 +84,7 @@ func promptInference(
 			writePrompt(out, "Existing agent.json found — your previous answers are the defaults below.")
 		}
 		writePromptf(out, "Detected hardware: %s.\n", describeHardware(profile))
-		sc := bufio.NewScanner(in)
-		enabled = ynPrompt(out, sc,
+		enabled = ynPrompt(out, in,
 			"Run AI models on this computer?", enabledDefault)
 		// Resolve ShareWithMesh (only if Enabled).
 		if !enabled {
@@ -97,7 +95,7 @@ func promptInference(
 		case shareOverride != nil:
 			share = *shareOverride
 		default:
-			share = ynPrompt(out, sc,
+			share = ynPrompt(out, in,
 				"Let your other devices use this computer's AI?", shareDefault)
 		}
 		return inferenceChoice{Enabled: true, ShareWithMesh: share}
@@ -132,7 +130,7 @@ func promptInference(
 //  3. No existing Ollama detected, or non-interactive => bundled.
 //  4. Existing Ollama detected => prompt, default bundled.
 func promptOllamaSource(
-	in io.Reader, out io.Writer,
+	in lineReader, out io.Writer,
 	det setup.OllamaDetection, override string, nonInteractive bool,
 ) string {
 	switch override {
@@ -158,9 +156,8 @@ func promptOllamaSource(
 			"Found an Ollama you installed yourself at %s (%s) — older than the version Waired supports (%s); letting Waired manage its own is recommended.\n",
 			det.Path, ver, infruntime.OllamaSupportedMinVersion)
 	}
-	sc := bufio.NewScanner(in)
 	// Default true = bundled (recommended). Answering N opts into reuse.
-	useBundled := ynPrompt(out, sc,
+	useBundled := ynPrompt(out, in,
 		"Let Waired install and manage its own Ollama? (n = keep using yours)", true)
 	if useBundled {
 		return agentconfig.OllamaSourceBundled

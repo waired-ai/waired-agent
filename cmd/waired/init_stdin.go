@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"io"
+	"os"
 )
 
 // lineReader is the read side of every `waired init` prompt — the two
@@ -109,6 +110,19 @@ func (s *stdinReader) Poll() (string, bool) {
 	}
 }
 
+// promptReader is the line source a run's prompts read through: the
+// owner when init is on a terminal, and otherwise the same on-demand
+// scanner over stdin that every prompt built for itself before there was
+// an owner. Callers hold both — the interface for prompting, the
+// concrete owner for Poll/Discard — because only the owner can offer
+// those, and only a terminal has an owner.
+func promptReader(owner *stdinReader) lineReader {
+	if owner == nil {
+		return bufio.NewScanner(os.Stdin)
+	}
+	return owner
+}
+
 // Discard drops the lines that have already been typed. Callers use it
 // immediately before arming a watch, or before a question whose answer
 // must be deliberate, so a keystroke aimed at an earlier step cannot
@@ -118,18 +132,24 @@ func (s *stdinReader) Poll() (string, bool) {
 // later) and it is why the takeover needs an affirmative answer rather
 // than trusting the flush alone. It is only ever correct on a terminal,
 // which is the only place a stdinReader exists.
-func (s *stdinReader) Discard() {
+//
+// It reports how many lines it dropped. Callers ignore that; it is what
+// lets a test wait for the keystroke it is about to discard, instead of
+// racing the reader goroutine with a sleep.
+func (s *stdinReader) Discard() int {
 	if s == nil {
-		return
+		return 0
 	}
+	dropped := 0
 	for {
 		select {
 		case _, ok := <-s.lines:
 			if !ok {
-				return // EOF: nothing more will arrive
+				return dropped // EOF: nothing more will arrive
 			}
+			dropped++
 		default:
-			return
+			return dropped
 		}
 	}
 }

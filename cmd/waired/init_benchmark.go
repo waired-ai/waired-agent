@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -52,8 +51,12 @@ var benchHTTP = &http.Client{Timeout: 240 * time.Second}
 // It is best-effort: any transport / not-configured / timeout condition
 // prints an informational line (or nothing) and returns nil so it never
 // blocks `waired init` from succeeding.
-func promptBenchmarkRecommendation(mgmtURL string, nonInteractive bool, out io.Writer, in io.Reader, tty bool) error {
-	_, err := benchmarkWithScanner(mgmtURL, nonInteractive, out, bufio.NewScanner(in), tty)
+// sc is the line source for its prompts. `waired runtimes benchmark`
+// hands it an owner on a terminal so the model-switch wait can offer the
+// Enter escape without a second reader (#223); every other caller passes
+// its own scanner.
+func promptBenchmarkRecommendation(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) error {
+	_, err := benchmarkWithScanner(mgmtURL, nonInteractive, out, sc, tty)
 	return err
 }
 
@@ -187,10 +190,17 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader,
 		writePromptf(out, "Switching to %s (already downloaded).\n", label)
 		return
 	}
-	writePromptf(out, "Switching to %s — downloading it now. Press Enter anytime to continue in the background.\n", label)
-	el := listenForEnter(sc)
-	waitForModelSwitch(mgmtURL, modelID, out, tty, el)
-	el.Drain(out)
+	// The Enter escape is a terminal gesture: it exists only when this run
+	// owns stdin (init_stdin.go). Off a terminal the wait simply runs to
+	// completion, which is what a scripted stdin did before too — EOF
+	// never backgrounded anything.
+	owner, _ := sc.(*stdinReader)
+	if owner != nil {
+		writePromptf(out, "Switching to %s — downloading it now. Press Enter anytime to continue in the background.\n", label)
+	} else {
+		writePromptf(out, "Switching to %s — downloading it now.\n", label)
+	}
+	waitForModelSwitch(mgmtURL, modelID, out, tty, newBackgroundWatch(owner))
 }
 
 // tinyBenchmarkDisableFlow is the benchmark-time counterpart of the install

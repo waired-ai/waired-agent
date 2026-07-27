@@ -37,7 +37,7 @@ import (
 // whose engine install had just FAILED still qualified, and the terminal then
 // waited out the whole setup budget for an engine that was never coming (#188).
 // enter (nil = no takeover offer) lets the operator take the terminal back.
-func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *takeoverWatch) bool {
+func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *enterWatch) bool {
 	if !waitDaemonReachable(mgmtURL, 15*time.Second) {
 		// The caller already prints a "start the agent, then …" hint; stay
 		// quiet here so we don't double up.
@@ -162,10 +162,10 @@ const switchFailedStreak = 3
 // keep polling). Unlike waitForBundledModel it keys strictly off modelID
 // in Models.Ready / Models.Failed / Models.Downloads, NOT st.Active: the
 // switch target only becomes the active model once its pull completes.
-// enter (nil = no backgrounding) lets the user press Enter to leave the
-// download running in the background; callers must Drain it afterwards.
+// enter (inert = no backgrounding) lets the user press Enter to leave the
+// download running in the background.
 // Returns true once the model is ready and serving.
-func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter *enterListener) bool {
+func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter *enterWatch) bool {
 	deadline := time.Now().Add(benchPollDeadline)
 	line := downloadLineState{lastPct: -1}
 	var rate rateWindow
@@ -184,7 +184,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 	}
 
 	for {
-		if enter != nil && enter.Backgrounded() {
+		if fired, _ := enter.Poll(); fired {
 			endProgressLine(out, tty, &line)
 			printSwitchBackgroundNote(out, label)
 			return false

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestPromptOllamaSource(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var out strings.Builder
-			got := promptOllamaSource(strings.NewReader(tc.input), &out, tc.det, tc.override, tc.nonInteractive)
+			got := promptOllamaSource(bufio.NewScanner(strings.NewReader(tc.input)), &out, tc.det, tc.override, tc.nonInteractive)
 			if got != tc.want {
 				t.Errorf("source = %q, want %q", got, tc.want)
 			}

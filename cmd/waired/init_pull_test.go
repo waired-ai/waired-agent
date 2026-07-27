@@ -182,7 +182,7 @@ func TestWaitForBundledModel_EndedByConfirmedTakeover(t *testing.T) {
 			t.Errorf("missing %q in the takeover output: %q", want, s)
 		}
 	}
-	if !enter.TookOver() {
+	if !enter.Fired() {
 		t.Error("the watch did not record the takeover")
 	}
 }
@@ -209,7 +209,7 @@ func TestWaitForBundledModel_BareEnterDoesNotTakeOver(t *testing.T) {
 	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter) {
 		t.Fatalf("a declined takeover ended the wait; out=%q", out.String())
 	}
-	if enter.TookOver() {
+	if enter.Fired() {
 		t.Fatal("a bare Enter took the terminal over without confirmation")
 	}
 	if !strings.Contains(out.String(), "Continuing in your browser") {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,19 +31,6 @@ var daemonReachable = func(mgmtURL string) bool {
 	return resp.StatusCode < 500
 }
 
-// initStdinOwner builds the process-wide stdin owner for a daemon-path
-// `waired init`, or nil when init is not attached to a terminal (see
-// stdinReader for why a pipe must not be read ahead). A package var so
-// tests can hand the flow a scripted terminal — `go test` never has a
-// real one, and the prompt-ordering these issues are about is only
-// observable when something is typing.
-var initStdinOwner = func() *stdinReader {
-	if !isTerminal(os.Stdin) {
-		return nil
-	}
-	return newStdinReader(os.Stdin)
-}
-
 // runInitViaDaemon drives the daemon-owned login MGMT API instead of
 // enrolling locally (the Tailscale model). It POSTs /login/start, opens
 // the browser on the first login URL, then polls /login/status until the
@@ -52,7 +38,7 @@ var initStdinOwner = func() *stdinReader {
 // and the state dir, so the CLI does no deploy here; the per-user
 // coding-agent integration consent runs once login is active (it lands
 // in the user's home, which the daemon never touches).
-func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string, inf daemonInitInference) error {
+func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string, owner *stdinReader, inf daemonInitInference) error {
 	reqBody, _ := json.Marshal(management.LoginStartRequest{
 		ControlURL: control,
 		DeviceName: deviceName,
@@ -80,12 +66,10 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 	// Only on a terminal: a piped stdin belongs to the script driving
 	// init, and reading ahead from it would swallow input meant for a
 	// later command in that script. Off a TTY the prompts keep the
-	// on-demand scanner they have always used.
-	owner := initStdinOwner()
-	var stdin lineReader = bufio.NewScanner(os.Stdin)
-	if owner != nil {
-		stdin = owner
-	}
+	// on-demand scanner they have always used. runInit owns the decision
+	// and hands the owner down, so the two init journeys can never end up
+	// with two readers between them (#223).
+	stdin := promptReader(owner)
 	// Resolved once, outside the loop, so the decision is stable.
 	gate := resolveBrowserGate(noBrowser, nonInteractive, isTerminal(os.Stdin), browser.HasDisplay())
 
@@ -171,7 +155,7 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
 					engineArrivalPending(sess.State()), enter)
 			}
-			if enter.TookOver() {
+			if enter.Fired() {
 				// The operator took the terminal back: stop being the
 				// executor (the wizard switches to "run this here") and
 				// resume the normal CLI tail.
