@@ -100,9 +100,18 @@ type GPU struct {
 }
 
 // GPUSummary is the minimal per-device shape suitable for inclusion in
-// inference-mesh broadcasts. Drops the operator-side metadata
-// (vendor, driver, UUID) that other peers can't act on, keeping the
-// fields that drive Phase 7 display ("peer X: RTX 4090, 24 GB").
+// inference-mesh broadcasts. Drops the operator-side metadata (driver,
+// UUID) that other peers can't act on, keeping the fields that drive
+// Phase 7 display ("peer X: RTX 4090, 24 GB").
+//
+// Vendor used to be dropped here for the same reason, but it is now
+// carried: the control plane decides which serving engines and catalog
+// models a device may be offered during onboarding, and that answer is
+// vendor-dependent (vLLM is an NVIDIA path; AMD is served through
+// Ollama's ROCm/Vulkan backends, waired#290). Model is documented as
+// free-form and must not be parsed for such decisions, so publishing
+// the token the detectors already produce is what keeps consumers
+// honest.
 //
 // Defined in hardware (rather than in signer) so the hardware package
 // stays the single source of truth for GPU shape and so signer keeps
@@ -113,6 +122,7 @@ type GPUSummary struct {
 	Model       string `json:"model"`
 	VRAMTotalMB int    `json:"vram_total_mb,omitempty"`
 	ComputeCap  string `json:"compute_cap,omitempty"`
+	Vendor      string `json:"vendor,omitempty"`
 }
 
 // GPUSummary returns the per-device subset of Profile.GPUs that's
@@ -130,6 +140,7 @@ func (p Profile) GPUSummary() []GPUSummary {
 			Model:       g.Model,
 			VRAMTotalMB: g.VRAMTotalMB,
 			ComputeCap:  g.ComputeCap,
+			Vendor:      g.Vendor,
 		}
 	}
 	return out
