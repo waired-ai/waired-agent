@@ -9,8 +9,8 @@
 # WHY A SEPARATE LEG (the coverage gap it closes)
 # ------------------------------------------------
 # The other installtest legs enroll hands-free with `waired init
-# --auth-key` (authkey) or `--bypass-mode`. Both of those settle the login
-# before the executor can see it, or FORCE the
+# --auth-key` (authkey), which settles the login inside the create call and
+# leaves the executor lease nothing to observe. It also used to FORCE the
 # local enroll path: they are two of the three explicit selectors for it
 # (with re-auth), and since #175 they are the ONLY way to reach it — an
 # unreachable daemon is now an error, not a silent downgrade. See

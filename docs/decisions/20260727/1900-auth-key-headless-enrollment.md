@@ -51,10 +51,13 @@ control plane 側に認証キー(waired#976)が入り、`POST /v1/auth/login-ses
 
 **払ったもの / 制約**
 
-- `--bypass-mode` は**まだ消せない**。testnet のコンテナ
+- `--bypass-mode` の削除は 1 本後ろの PR になった。testnet のコンテナ
   (`build/agent-bootstrap.sh`)が使っており、コンテナの反転には
-  waired 側の terraform 配線(waired#982)が先に deploy されている必要がある。
-  これは後続 PR に分けた。
+  waired 側の terraform 配線(waired#982)が先に deploy されている必要が
+  あったため。waired#982 の testnet 実行で鍵の発行と注入が確認できた
+  時点で反転し、`--bypass-mode` / `--bypass-email` / `bypass.go` /
+  `login_retry.go` を削除した。これで `routeLocal` に到達するのは
+  re-auth だけになった。
 - macOS / Windows の `--daemon-engine` レグは認証キーを**使わない**。
   あのレグの目的は「init 実行中に常駐 executor がエンジンを入れる様子」を
   観測することで、認証キーは作成リクエスト内で session を authorize して
