@@ -97,6 +97,14 @@ func (p Profile) HostFit() hostfit.Host {
 	if len(p.GPUs) > 0 {
 		h.VRAM0MB = p.GPUs[0].VRAMTotalMB
 	}
+	// The pool rule itself lives in hostfit so this adapter and
+	// FromHardwareSummary cannot drift — the same reason every other
+	// field here is a projection rather than a computation.
+	devs := make([]hostfit.Device, 0, len(p.GPUs))
+	for _, g := range p.GPUs {
+		devs = append(devs, hostfit.Device{Vendor: g.Vendor, VRAMTotalMB: g.VRAMTotalMB})
+	}
+	h.VRAMPoolMB = hostfit.OllamaVRAMPoolMB(devs)
 	return h
 }
 
@@ -105,8 +113,22 @@ func (p Profile) HostFit() hostfit.Host {
 // discrete-GPU hosts (and any host where the UMA path hasn't filled
 // UsableVRAMMB) it falls back to the first GPU's VRAMTotalMB. Returns
 // 0 only on CPU-only hosts.
+//
+// This is the SINGLE-DEVICE budget. Ollama sizing asks
+// OllamaVRAMBudgetMB instead — see there.
 func (p Profile) EffectiveVRAMMB() int {
 	return p.HostFit().EffectiveVRAMMB()
+}
+
+// OllamaVRAMBudgetMB returns the VRAM budget ollama sizing should use:
+// the cross-device pool on a multi-GPU host, EffectiveVRAMMB otherwise.
+// It is the ollama counterpart of router.VLLMVRAMBudgetMB, and the
+// figure every ollama residency, context-floor and serve-tuning
+// calculation compares against — selection and serving have to size
+// against the same budget or a model admitted because it pools across
+// two cards gets a context window sized for one (#264).
+func (p Profile) OllamaVRAMBudgetMB() int {
+	return p.HostFit().OllamaVRAMBudgetMB()
 }
 
 type CPUInfo struct {

@@ -46,6 +46,21 @@ const (
 	wireMac48M4Max = `{"gpus":[{"model":"Apple M4 Max","vram_total_mb":49152,"vendor":"apple"}],` +
 		`"ram_total_gb":48,"unified_memory":true,"usable_vram_mb":36864,` +
 		`"memory_bandwidth_spec_gbs":546}`
+	// Two cards. Nothing about the wire form changed for #264 — every
+	// device has ridden it since the summary existed — so this is what
+	// a multi-GPU agent has been publishing all along, and what both
+	// adapters used to read only the first entry of.
+	wireDual4090 = `{"gpus":[` +
+		`{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,"compute_cap":"8.9","vendor":"nvidia"},` +
+		`{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,"compute_cap":"8.9","vendor":"nvidia"}],` +
+		`"ram_total_gb":128}`
+	// A discrete NVIDIA card beside an AMD device. ml.ByLibrary puts
+	// them in different groups, so ollama can never pool them and the
+	// host must be judged exactly as the single card it can use.
+	wireMixedVendors = `{"gpus":[` +
+		`{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,"compute_cap":"8.9","vendor":"nvidia"},` +
+		`{"model":"AMD Radeon RX 7900 XTX","vram_total_mb":24576,"vendor":"amd"}],` +
+		`"ram_total_gb":128}`
 )
 
 func hostFromWire(t *testing.T, payload string) hostfit.Host {
@@ -95,6 +110,23 @@ func TestFromHardwareSummary(t *testing.T) {
 				UsableVRAMMB: 18432, VRAM0MB: 24576,
 			},
 		},
+		{
+			// The pool is derived here rather than published, so the
+			// adapter is where a multi-GPU host stops being judged as
+			// one card (#264). 24564 x2 - 1024 for the second device
+			// context.
+			"two cards pool",
+			wireDual4090,
+			hostfit.Host{RAMTotalGB: 128, GPUCount: 2, VRAM0MB: 24564, VRAMPoolMB: 48104},
+		},
+		{
+			// GPUCount 2, pool 0: the count is every accelerator that
+			// was detected, the pool only what one engine can actually
+			// spread over. They are allowed to disagree.
+			"cards of different vendors do not pool",
+			wireMixedVendors,
+			hostfit.Host{RAMTotalGB: 128, GPUCount: 2, VRAM0MB: 24564},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := hostFromWire(t, tc.wire); got != tc.want {
@@ -127,12 +159,157 @@ func TestEffectiveVRAMMB(t *testing.T) {
 			hostfit.Host{UnifiedMemory: true, GPUCount: 1, VRAM0MB: 8192},
 			8192,
 		},
+		{
+			// The pin that #264 did not move this function. Widening
+			// EffectiveVRAMMB itself would have moved min_vram_mb,
+			// engine selection and vLLM's TP=1 fallback with it — all
+			// authored against one card's figure.
+			"a pooled host still reports the single device here",
+			hostFromWire(t, wireDual4090),
+			24564,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.host.EffectiveVRAMMB(); got != tc.want {
 				t.Errorf("EffectiveVRAMMB() = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestOllamaVRAMPoolMB pins which devices may be summed.
+//
+// The rule models the pinned engine's placement (ollama 0.31.1,
+// server/sched.go): devices are grouped by backend library, and a group
+// is pooled whole when a model will not fit one card. So the axes that
+// matter are vendor (never crosses a library boundary), device count,
+// and whether a device reports a VRAM figure at all.
+func TestOllamaVRAMPoolMB(t *testing.T) {
+	nv := func(mb int) hostfit.Device { return hostfit.Device{Vendor: "nvidia", VRAMTotalMB: mb} }
+	amd := func(mb int) hostfit.Device { return hostfit.Device{Vendor: "amd", VRAMTotalMB: mb} }
+
+	for _, tc := range []struct {
+		name string
+		devs []hostfit.Device
+		want int
+	}{
+		{"no devices", nil, 0},
+		{"one card has nothing to pool", []hostfit.Device{nv(24564)}, 0},
+		{"two identical cards", []hostfit.Device{nv(24564), nv(24564)}, 24564*2 - 1024},
+		{"three cards charge two extra contexts", []hostfit.Device{nv(24564), nv(24564), nv(24564)}, 24564*3 - 2048},
+		{
+			// ml.ByLibrary imposes no homogeneity requirement inside a
+			// group — unlike vLLM's tensor-parallel set, which needs
+			// identical devices because it shards each tensor rather
+			// than splitting by layer.
+			"unequal cards still pool",
+			[]hostfit.Device{nv(24564), nv(12288)},
+			24564 + 12288 - 1024,
+		},
+		{
+			// Different libraries, so ollama can never place one model
+			// across both. Judged as the single card it can use.
+			"nvidia beside amd does not pool",
+			[]hostfit.Device{nv(24564), amd(24576)},
+			0,
+		},
+		{
+			// AMD is out of scope until an integrated flag is a
+			// detected fact rather than a model-name guess (#264 item
+			// 4): ollama drops integrated ROCm devices unless their GFX
+			// target is allowlisted, and this repo does not read one.
+			"two amd cards do not pool yet",
+			[]hostfit.Device{amd(24576), amd(24576)},
+			0,
+		},
+		{
+			// The AMD Windows registry fallback reports devices with no
+			// VRAM figure. Summing a 0 would be summing an unknown.
+			"a device with no vram figure is not a pooled device",
+			[]hostfit.Device{nv(24564), nv(0)},
+			0,
+		},
+		{
+			"unified-memory parts never reach here as a pool",
+			[]hostfit.Device{{Vendor: "apple", VRAMTotalMB: 24576}},
+			0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hostfit.OllamaVRAMPoolMB(tc.devs); got != tc.want {
+				t.Errorf("OllamaVRAMPoolMB(%+v) = %d, want %d", tc.devs, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOllamaVRAMBudgetMB pins the accessor, which is where the two
+// clamps live: unified memory keeps its usable budget, and the
+// aggregate may never come in below the single-device figure.
+func TestOllamaVRAMBudgetMB(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host hostfit.Host
+		want int
+	}{
+		{"no pool falls back to the single device", hostFromWire(t, wireRTX4090), 24564},
+		{"two cards spend the pool", hostFromWire(t, wireDual4090), 24564*2 - 1024},
+		{"mixed vendors spend one card", hostFromWire(t, wireMixedVendors), 24564},
+		{"cpu-only has no budget", hostFromWire(t, wireCPUOnly), 0},
+		{
+			// One physical pool, so there is nothing to aggregate and
+			// the OS-reserve figure has to keep winning. A pool set
+			// here at all would be a producer bug; the clamp means it
+			// still cannot do damage.
+			"unified memory ignores a pool",
+			hostfit.Host{UnifiedMemory: true, GPUCount: 2, UsableVRAMMB: 18432, VRAM0MB: 24576, VRAMPoolMB: 49152},
+			18432,
+		},
+		{
+			// A degenerate aggregate — tiny second card, overhead
+			// eating more than it brings — must not shrink the host.
+			"a pool smaller than one card is ignored",
+			hostfit.Host{GPUCount: 2, VRAM0MB: 24564, VRAMPoolMB: 20000},
+			24564,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.host.OllamaVRAMBudgetMB(); got != tc.want {
+				t.Errorf("OllamaVRAMBudgetMB() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOllamaBudgetNeverShrinksTheHost is the anti-waired#942 invariant,
+// and the reason this change is safe to make without a per-host
+// measurement behind it.
+//
+// #264 is an UNDER-count: a host is refused a model it runs. The
+// opposite error — over-counting, and offering a model that spills — is
+// the failure waired#942 was, and it is the one this package must never
+// reintroduce while fixing the first. The accessor's floor makes that
+// structural rather than a matter of getting the pool arithmetic right:
+// whatever OllamaVRAMPoolMB returns, wrong or right, the budget cannot
+// come in under today's figure, so no producer error can shrink a
+// host's catalog.
+func TestOllamaBudgetNeverShrinksTheHost(t *testing.T) {
+	for _, unified := range []bool{false, true} {
+		for _, usable := range []int{0, 8192, 18432} {
+			for _, vram0 := range []int{0, 4096, 24564, 49152} {
+				for _, pool := range []int{0, 1, 8192, 24564, 98304} {
+					h := hostfit.Host{
+						GPUCount: 2, UnifiedMemory: unified,
+						UsableVRAMMB: usable, VRAM0MB: vram0, VRAMPoolMB: pool,
+					}
+					if got, floor := h.OllamaVRAMBudgetMB(), h.EffectiveVRAMMB(); got < floor {
+						t.Fatalf("%+v: ollama budget %d is BELOW the single-device figure %d — "+
+							"a pool must never take a model away from a host that ran it",
+							h, got, floor)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -675,6 +852,15 @@ func TestEstimateOllamaDecode(t *testing.T) {
 	mac48Max := hostFromWire(t, wireMac48M4Max)
 	cpu128 := hostfit.Host{RAMTotalGB: 128}
 	card24 := hostfit.Host{RAMTotalGB: 128, GPUCount: 1, VRAM0MB: 24564}
+	// The same machine with the second card no longer invisible (#264).
+	// VRAM0MB is identical: the pool is the only difference.
+	twoCard24 := hostfit.Host{
+		RAMTotalGB: 128, GPUCount: 2, VRAM0MB: 24564,
+		VRAMPoolMB: hostfit.OllamaVRAMPoolMB([]hostfit.Device{
+			{Vendor: "nvidia", VRAMTotalMB: 24564},
+			{Vendor: "nvidia", VRAMTotalMB: 24564},
+		}),
+	}
 
 	for _, tc := range []struct {
 		name      string
@@ -720,6 +906,19 @@ func TestEstimateOllamaDecode(t *testing.T) {
 		// card's contribution free, which is what makes the exclusion
 		// safe on a card of any speed.
 		{"a spilled 10B-active MoE does not", moe122b, card24, false, false, true},
+		// #264, against the row above it: the SAME variant on the same
+		// machine, with the second card no longer invisible. 81 GB of
+		// weights do not fit a 48 GB pool either, so this stays spilled
+		// and stays an upper bound — but the pool halves the share that
+		// spills, and the estimate crosses DecodeFloorTokps. The verdict
+		// flips from "excluded, and permitted to be" to "kept", which is
+		// the whole issue in two rows.
+		//
+		// It clears the floor by a hair (~20.7 against 20). That is the
+		// honest arithmetic and not a fixture chosen to look close: it
+		// is what makes the one-card row's exclusion so costly, since a
+		// machine barely over the line is judged as one barely under it.
+		{"the same MoE across two cards clears the floor", moe122b, twoCard24, true, false, true},
 
 		{
 			"a variant with no sizing annotations makes no claim",
@@ -869,10 +1068,93 @@ func TestEstimateIsMonotoneInHardware(t *testing.T) {
 						t.Fatalf("%s/%s: a %d MB card made the estimate WORSE (%.1f -> %.1f tok/s)",
 							m.ModelID, v.VariantID, vram, b.TokpsEstimate, c.TokpsEstimate)
 					}
+					// The same argument one step further: a SECOND card
+					// cannot make the machine slower either. Before #264
+					// it could, on paper — the extra card was invisible,
+					// so the estimate stayed put while the machine grew.
+					// Now it must actually improve or hold.
+					pooled := hostfit.Host{
+						RAMTotalGB: ram, GPUCount: 2, VRAM0MB: vram,
+						VRAMPoolMB: hostfit.OllamaVRAMPoolMB([]hostfit.Device{
+							{Vendor: "nvidia", VRAMTotalMB: vram},
+							{Vendor: "nvidia", VRAMTotalMB: vram},
+						}),
+					}
+					p := hostfit.EstimateOllamaDecode(v, pooled)
+					if c.MeetsSpeedFloor && !p.MeetsSpeedFloor {
+						t.Fatalf("%s/%s: one %d MB card clears the speed floor but two do not",
+							m.ModelID, v.VariantID, vram)
+					}
+					if !p.Resident && p.TokpsEstimate < c.TokpsEstimate {
+						t.Fatalf("%s/%s: a second %d MB card made the estimate WORSE (%.1f -> %.1f tok/s)",
+							m.ModelID, v.VariantID, vram, c.TokpsEstimate, p.TokpsEstimate)
+					}
 				}
 			}
 		}
 	}
+}
+
+// TestBundledCatalog_TwoCardsAdmitWhatOneRefuses is the concrete outcome
+// #264 buys, measured against the real catalog.
+//
+// The harm was never a wrong number on a card. Since #229 the
+// discrete-SPILLED estimate is the only branch that sets
+// Estimate.UpperBound, and UpperBound is the only licence to EXCLUDE a
+// model — so pricing a two-card host at one card manufactures exactly
+// the condition that drops a model the machine runs fine. That is the
+// mirror image of waired#942: there the wizard offered what the host
+// could not run, here it refuses what the host can.
+//
+// The assertion is on the exclusion licence rather than on a model ID,
+// because the ID is a catalog fact that will move; what must not move
+// is that the second card changes the verdict.
+func TestBundledCatalog_TwoCardsAdmitWhatOneRefuses(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	// Two 24 GB cards and the RAM to back them — the host shape from
+	// the issue. Same VRAM0MB either way: only the pool differs.
+	const vram = 24564
+	one := hostfit.Host{RAMTotalGB: 128, GPUCount: 1, VRAM0MB: vram}
+	two := hostfit.Host{
+		RAMTotalGB: 128, GPUCount: 2, VRAM0MB: vram,
+		VRAMPoolMB: hostfit.OllamaVRAMPoolMB([]hostfit.Device{
+			{Vendor: "nvidia", VRAMTotalMB: vram},
+			{Vendor: "nvidia", VRAMTotalMB: vram},
+		}),
+	}
+
+	var rescued []string
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			a := hostfit.EstimateOllamaDecode(v, one)
+			b := hostfit.EstimateOllamaDecode(v, two)
+			// Excluded on one card (an upper-bound estimate under the
+			// floor), kept on two.
+			if a.UpperBound && !a.MeetsSpeedFloor && (!b.UpperBound || b.MeetsSpeedFloor) {
+				rescued = append(rescued, m.ModelID+"/"+v.VariantID)
+			}
+			if !a.UpperBound || a.MeetsSpeedFloor {
+				continue
+			}
+			if b.UpperBound && !b.MeetsSpeedFloor && b.TokpsEstimate < a.TokpsEstimate {
+				t.Errorf("%s/%s: the second card made the estimate worse (%.1f -> %.1f tok/s)",
+					m.ModelID, v.VariantID, a.TokpsEstimate, b.TokpsEstimate)
+			}
+		}
+	}
+
+	if len(rescued) == 0 {
+		t.Fatal("no bundled variant is excluded on one 24 GB card but kept on two — " +
+			"this fixture no longer demonstrates #264, and the test proves nothing. " +
+			"Re-pick the host shape against the current catalog rather than deleting it.")
+	}
+	t.Logf("two 24 GB cards keep %d variant(s) one card excludes: %v", len(rescued), rescued)
 }
 
 // TestBundledCatalog_SmallMacPrefersSpeed is the concrete outcome the
