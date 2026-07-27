@@ -119,12 +119,28 @@ func TestHardwareSummaryFor_MatchesEffectiveVRAM(t *testing.T) {
 	}
 }
 
-// notPublishedByAgent lists summary fields the agent deliberately leaves
-// unset. It is empty, and an addition needs a stated reason: every field
-// on these two structs exists because a consumer asked for a fact only
-// the agent can observe, so "nobody fills it in" is the defect this file
-// exists to prevent, not a design choice.
-var notPublishedByAgent = map[string]bool{}
+// notPublishedByAgent lists summary fields the agent does not set. An
+// addition needs a stated reason: every field on these two structs exists
+// because a consumer asked for a fact only the agent can observe, so
+// "nobody fills it in" is the defect this file exists to prevent, not a
+// design choice.
+//
+// The entry below is a DEBT rather than a design choice, and takes the
+// same shape protoconsumer's producerPending table uses. The workspace
+// requires a proto contract change to ship as its OWN PR (CLAUDE.md
+// §Modules), which necessarily lands a new wire field one PR ahead of its
+// producer. Name the work that pays it, and delete the entry there rather
+// than editing it.
+var notPublishedByAgent = map[string]bool{
+	// #251. The producer is internal/hardware's chip-name -> published-peak
+	// table, landing in the agent-side PR along with the wiring through
+	// Profile and hardwareSummaryFor. Until then no host publishes a
+	// bandwidth at all — which is exactly the unrecognised-part case
+	// hostfit.EstimateOllamaDecode is built to fall back on, so the gap is
+	// invisible on the wire and this entry is the only thing holding it
+	// open.
+	"HardwareSummary.MemoryBandwidthSpecGBs": true,
+}
 
 // TestHardwareSummaryFor_PublishesEveryWireField guards the bug class
 // rather than the three fields: a field added to the broadcast summary

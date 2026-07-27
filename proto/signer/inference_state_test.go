@@ -249,6 +249,81 @@ func TestHardwareSummary_HostFitBackwardCompat(t *testing.T) {
 	}
 }
 
+// TestHardwareSummary_MemoryBandwidthSpec_CanonicalJSON is the same
+// byte-identity pin for the #251 addition. It matters more than most:
+// MemoryBandwidthSpecGBs is populated from a chip table, so the hosts
+// that leave it unset are not just old agents — they are every part
+// nobody has added yet, indefinitely. If omitempty did not hold here,
+// those hosts would churn the signed NetworkMap for every peer.
+func TestHardwareSummary_MemoryBandwidthSpec_CanonicalJSON(t *testing.T) {
+	// Unset: byte-for-byte the pre-#251 encoding, including for a UMA
+	// host, which is the case the field was added for.
+	unknownPart := HardwareSummary{
+		GPUs: []HardwareGPUSummary{{
+			Model:       "Apple M9 Ultra",
+			VRAMTotalMB: 262144,
+			Vendor:      "apple",
+		}},
+		RAMTotalGB:    256,
+		UnifiedMemory: true,
+		UsableVRAMMB:  196608,
+	}
+	const wantUnknown = `{"gpus":[{"model":"Apple M9 Ultra","vram_total_mb":262144,"vendor":"apple"}],` +
+		`"ram_total_gb":256,"unified_memory":true,"usable_vram_mb":196608}`
+	data, err := json.Marshal(&unknownPart)
+	if err != nil {
+		t.Fatalf("marshal unknown part: %v", err)
+	}
+	if got := string(data); got != wantUnknown {
+		t.Errorf("an unrecognised part changed the encoding:\n got %s\nwant %s", got, wantUnknown)
+	}
+
+	// Set, including a fractional figure — the M1 base is 68.25 GB/s, so
+	// the field cannot be an int and the encoding has to keep the decimal.
+	m1 := HardwareSummary{
+		GPUs: []HardwareGPUSummary{{
+			Model:       "Apple M1",
+			VRAMTotalMB: 16384,
+			Vendor:      "apple",
+		}},
+		RAMTotalGB:             16,
+		UnifiedMemory:          true,
+		UsableVRAMMB:           12288,
+		MemoryBandwidthSpecGBs: 68.25,
+	}
+	const wantM1 = `{"gpus":[{"model":"Apple M1","vram_total_mb":16384,"vendor":"apple"}],` +
+		`"ram_total_gb":16,"unified_memory":true,"usable_vram_mb":12288,` +
+		`"memory_bandwidth_spec_gbs":68.25}`
+	data, err = json.Marshal(&m1)
+	if err != nil {
+		t.Fatalf("marshal m1: %v", err)
+	}
+	if got := string(data); got != wantM1 {
+		t.Errorf("bandwidth encoding drifted:\n got %s\nwant %s", got, wantM1)
+	}
+
+	var out HardwareSummary
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&m1, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", m1, out)
+	}
+
+	// The other rolling-upgrade direction: a pre-#251 payload parses
+	// cleanly and leaves the field at 0, which every consumer must read as
+	// "no claim" — hostfit then falls back to the population constant and
+	// declines to exclude anything.
+	var pre HardwareSummary
+	if err := json.Unmarshal([]byte(wantUnknown), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.MemoryBandwidthSpecGBs != 0 {
+		t.Errorf("MemoryBandwidthSpecGBs = %v, want 0 on a pre-addition payload",
+			pre.MemoryBandwidthSpecGBs)
+	}
+}
+
 func indexOf(haystack, needle string) int {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {

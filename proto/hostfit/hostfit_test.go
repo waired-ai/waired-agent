@@ -30,6 +30,22 @@ const (
 	// A pre-v0.2.4 agent: a GPU, but none of the host-fit facts.
 	wireLegacyGPU = `{"gpus":[{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,` +
 		`"compute_cap":"8.9"}],"ram_total_gb":64}`
+	// A 24 GB Mac whose part the agent's chip table recognised, so it
+	// publishes that part's published peak (#251). The pool size is
+	// identical to wireMac24UnknownChip below — the bandwidth is the only
+	// difference, which is the whole point of the pair.
+	wireMac24M4 = `{"gpus":[{"model":"Apple M4","vram_total_mb":24576,"vendor":"apple"}],` +
+		`"ram_total_gb":24,"unified_memory":true,"usable_vram_mb":18432,` +
+		`"memory_bandwidth_spec_gbs":120}`
+	// The same machine as far as capacity is concerned, but the part was
+	// not in the table (a new chip, or an agent from before #251). No
+	// bandwidth claim, so nothing may be excluded on speed.
+	wireMac24UnknownChip = `{"gpus":[{"model":"Apple M4","vram_total_mb":24576,"vendor":"apple"}],` +
+		`"ram_total_gb":24,"unified_memory":true,"usable_vram_mb":18432}`
+	// A large part, where the floor constant used to warn needlessly.
+	wireMac48M4Max = `{"gpus":[{"model":"Apple M4 Max","vram_total_mb":49152,"vendor":"apple"}],` +
+		`"ram_total_gb":48,"unified_memory":true,"usable_vram_mb":36864,` +
+		`"memory_bandwidth_spec_gbs":546}`
 )
 
 func hostFromWire(t *testing.T, payload string) hostfit.Host {
@@ -60,6 +76,25 @@ func TestFromHardwareSummary(t *testing.T) {
 		},
 		{"cpu only", wireCPUOnly, hostfit.Host{RAMTotalGB: 128}},
 		{"pre-v0.2.4 agent", wireLegacyGPU, hostfit.Host{RAMTotalGB: 64, GPUCount: 1, VRAM0MB: 24564}},
+		{
+			"unified memory with a published peak",
+			wireMac24M4,
+			hostfit.Host{
+				RAMTotalGB: 24, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 18432,
+				VRAM0MB: 24576, MemoryBandwidthSpecGBs: 120,
+			},
+		},
+		{
+			// Absent, not zero-by-accident: a consumer must be able to tell
+			// "no claim" from "0 GB/s", and omitempty is what makes the
+			// pre-#251 wire and an unrecognised part decode identically.
+			"unified memory, part not in the table",
+			wireMac24UnknownChip,
+			hostfit.Host{
+				RAMTotalGB: 24, GPUCount: 1, UnifiedMemory: true,
+				UsableVRAMMB: 18432, VRAM0MB: 24576,
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := hostFromWire(t, tc.wire); got != tc.want {
@@ -583,14 +618,20 @@ func TestActiveBytesPerToken(t *testing.T) {
 // mainstream host (DDR5-4800 dual channel, ~62 % of its 76.8 GB/s spec),
 // so the constant has to stay above that.
 //
-// BandwidthUnifiedGBs is the reverse. It may only annotate, so it is a
-// floor and has to stay at or below the smallest shipping unified part.
-// Raising it would silence the warning on exactly the machines that need
-// it.
+// BandwidthUnifiedGBs is no longer either bound, and #251 is why. It now
+// applies only where the part was NOT recognised, and there the estimate
+// stays annotate-only, so the constant is a rough middle rather than a
+// bound in either direction. The claim that it was "the floor of the
+// population" was checked while landing #251 and is simply false: the M1
+// base is 68.25 GB/s and the M2 and M3 bases are 100, all below 120. What
+// has to hold instead is BEHAVIOURAL — that an unrecognised part is never
+// refused a model on speed — and that is pinned in
+// TestUnifiedExcludesOnlyWithAPublishedPeak rather than by a number here.
 func TestBandwidthConstantsKeepTheirDirection(t *testing.T) {
 	const (
 		sustainedMainstreamGBs = 48.0  // DDR5-4800 dual channel, measured
-		smallestUnifiedPartGBs = 120.0 // Apple M-series base
+		largestUnifiedPartGBs  = 819.0 // Apple M3 Ultra
+		smallestUnifiedPartGBs = 68.25 // Apple M1 base
 	)
 	if hostfit.BandwidthSystemRAMGBs < sustainedMainstreamGBs {
 		t.Errorf("BandwidthSystemRAMGBs = %v, below the %v GB/s a mainstream host actually sustains. "+
@@ -598,10 +639,16 @@ func TestBandwidthConstantsKeepTheirDirection(t *testing.T) {
 			"Per-host measurement (#252) is the fix, not a smaller constant",
 			hostfit.BandwidthSystemRAMGBs, sustainedMainstreamGBs)
 	}
-	if hostfit.BandwidthUnifiedGBs > smallestUnifiedPartGBs {
-		t.Errorf("BandwidthUnifiedGBs = %v, above the smallest shipping unified part (%v GB/s). "+
-			"It is a FLOOR that may only annotate; raising it silences the warning on the parts that need it",
-			hostfit.BandwidthUnifiedGBs, smallestUnifiedPartGBs)
+	// Not a bound, but it must stay inside the population it stands in
+	// for: outside that span it is not even a plausible middle, and the
+	// annotation it drives would be wrong for every host that lands here.
+	if hostfit.BandwidthUnifiedGBs < smallestUnifiedPartGBs ||
+		hostfit.BandwidthUnifiedGBs > largestUnifiedPartGBs {
+		t.Errorf("BandwidthUnifiedGBs = %v, outside the shipping unified population "+
+			"(%v..%v GB/s). Since #251 it is only the fallback for a part that is not "+
+			"in the chip table, and it may only annotate — the fix for a part that "+
+			"lands here often is to add it to internal/hardware's table, not to move "+
+			"this number", hostfit.BandwidthUnifiedGBs, smallestUnifiedPartGBs, largestUnifiedPartGBs)
 	}
 }
 
@@ -624,6 +671,8 @@ func TestEstimateOllamaDecode(t *testing.T) {
 	}
 
 	mac24 := hostfit.Host{RAMTotalGB: 24, UnifiedMemory: true, UsableVRAMMB: 18432, VRAM0MB: 24576}
+	mac24M4 := hostFromWire(t, wireMac24M4)
+	mac48Max := hostFromWire(t, wireMac48M4Max)
 	cpu128 := hostfit.Host{RAMTotalGB: 128}
 	card24 := hostfit.Host{RAMTotalGB: 128, GPUCount: 1, VRAM0MB: 24564}
 
@@ -636,11 +685,25 @@ func TestEstimateOllamaDecode(t *testing.T) {
 		wantBound bool
 	}{
 		// The 24 GB Mac is why this term exists. Both models sit in the
-		// pool; the dense one decodes at a fraction of the speed. Neither
-		// figure is an upper bound — a faster chip of the same pool size
-		// beats it — so both are annotations, not exclusions.
+		// pool; the dense one decodes at a fraction of the speed. With no
+		// published peak the figure is not an upper bound — a faster chip
+		// of the same pool size beats it — so both are annotations.
 		{"a dense 27B is too slow on a small unified pool", dense27b, mac24, false, true, false},
 		{"a 3B-active MoE is not", moe35b, mac24, true, true, false},
+
+		// The same pool, now with the part's published peak (#251). The
+		// arithmetic is unchanged at 120 GB/s; what changes is that the
+		// figure now bounds THIS machine, so the dense verdict may be
+		// acted on instead of merely printed.
+		{"a published peak turns the dense verdict into a decision", dense27b, mac24M4, false, true, true},
+		{"the MoE clears the same bound", moe35b, mac24M4, true, true, true},
+
+		// And the bound has to be the part's, not the population's: an M4
+		// Max runs the dense 27B at ~33 tok/s, so a rule anchored on the
+		// 120 GB/s fallback would withhold a model this machine is good at.
+		// This is the case that makes the table load-bearing rather than
+		// cosmetic.
+		{"a large part keeps the dense model the floor would refuse", dense27b, mac48Max, true, true, true},
 
 		{"a dense 27B is far too slow on the cpu", dense27b, cpu128, false, false, false},
 		{"the same cpu runs a 3B-active MoE", moe35b, cpu128, true, false, false},
@@ -674,11 +737,104 @@ func TestEstimateOllamaDecode(t *testing.T) {
 			}
 			// The rule the router acts on: only an upper bound may
 			// exclude. Anything else is a sentence in the wizard.
-			if got.UpperBound && got.Resident {
-				t.Error("a resident estimate cannot be an upper bound; the card's " +
-					"speed is the whole answer there")
+			//
+			// This used to read "a resident estimate can never be an upper
+			// bound", which was true while the spilled-discrete case was
+			// the only one that set it. #251 makes resident+bounded the
+			// NORMAL shape on a unified host: residency there does not
+			// hide an unknown card, it means the weights sit in a pool
+			// whose peak the host published. The claim is therefore
+			// narrowed to the class it was always really about.
+			if got.UpperBound && got.Resident && tc.host.Class() == hostfit.ClassDiscrete {
+				t.Error("a resident DISCRETE estimate cannot be an upper bound; " +
+					"the card's own speed is the whole answer there and this " +
+					"package does not know it")
 			}
 		})
+	}
+}
+
+// TestUnifiedExcludesOnlyWithAPublishedPeak is the safety property that
+// makes the chip table incremental: a part nobody has added to it yet
+// must behave exactly as it did before #251 — an annotation, never a
+// refusal.
+//
+// This is the invariant that lets the table ship with holes in it. Get it
+// wrong in the other direction and every unrecognised part — a new chip,
+// or an agent older than the table entry — silently starts having models
+// withheld on the strength of a constant that is not a bound for it.
+func TestUnifiedExcludesOnlyWithAPublishedPeak(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	unknown := hostFromWire(t, wireMac24UnknownChip)
+	known := hostFromWire(t, wireMac24M4)
+	if unknown.MemoryBandwidthSpecGBs != 0 {
+		t.Fatal("fixture drift: the unknown-chip host must publish no bandwidth")
+	}
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			if got := hostfit.EstimateOllamaDecode(v, unknown); got.UpperBound {
+				t.Fatalf("%s/%s: an unrecognised unified part claimed an upper bound "+
+					"(%.1f tok/s). It rests on BandwidthUnifiedGBs, which is not a bound "+
+					"for it, so this would refuse models the machine may well run",
+					m.ModelID, v.VariantID, got.TokpsEstimate)
+			}
+			// The pair differs only in the published peak, so anything the
+			// bounded one claims has to come from that figure.
+			if got := hostfit.EstimateOllamaDecode(v, known); !got.UpperBound && got.TokpsEstimate > 0 {
+				t.Fatalf("%s/%s: a published peak did not produce a bound", m.ModelID, v.VariantID)
+			}
+		}
+	}
+}
+
+// TestUnifiedFitIsMonotoneInBandwidth: a faster part must never be
+// offered FEWER models than a slower one of the same pool size. This is
+// the #229 monotonicity argument applied to the axis #251 introduces —
+// before it, every unified host shared one bandwidth and the question
+// could not arise.
+func TestUnifiedFitIsMonotoneInBandwidth(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	// Ascending, and every one of them a real shipping part.
+	bandwidths := []float64{68.25, 100, 120, 150, 200, 256, 273, 400, 546, 819}
+	for _, usable := range []int{12288, 18432, 36864, 98304} {
+		for i := 1; i < len(bandwidths); i++ {
+			slow := hostfit.Host{
+				RAMTotalGB: 32, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: usable,
+				MemoryBandwidthSpecGBs: bandwidths[i-1],
+			}
+			fast := slow
+			fast.MemoryBandwidthSpecGBs = bandwidths[i]
+			for _, m := range manifests {
+				for _, v := range m.Variants {
+					if !supports(v, catalog.RuntimeOllama) {
+						continue
+					}
+					s := hostfit.EstimateOllamaDecode(v, slow)
+					f := hostfit.EstimateOllamaDecode(v, fast)
+					if s.MeetsSpeedFloor && !f.MeetsSpeedFloor {
+						t.Fatalf("%s/%s on a %d MB pool: %.2f GB/s clears the speed floor "+
+							"(%.1f tok/s) but the faster %.2f GB/s part does not (%.1f)",
+							m.ModelID, v.VariantID, usable,
+							slow.MemoryBandwidthSpecGBs, s.TokpsEstimate,
+							fast.MemoryBandwidthSpecGBs, f.TokpsEstimate)
+					}
+					if f.TokpsEstimate < s.TokpsEstimate {
+						t.Fatalf("%s/%s on a %d MB pool: more bandwidth made the estimate "+
+							"WORSE (%.1f -> %.1f tok/s)", m.ModelID, v.VariantID, usable,
+							s.TokpsEstimate, f.TokpsEstimate)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -768,4 +924,111 @@ func TestBundledCatalog_SmallMacPrefersSpeed(t *testing.T) {
 	}
 	t.Logf("24 GB Mac: capacity picks %s (tier %d, %.1f tok/s); speed picks %s (tier %d, %.1f tok/s)",
 		byCapacity.id, byCapacity.tier, byCapacity.tokps, bySpeed.id, bySpeed.tier, bySpeed.tokps)
+}
+
+// pickForUnifiedHost reproduces what the agent's RankModels lands on: the
+// highest quality_tier that fits, minus anything an UPPER-BOUND estimate
+// puts below the decode floor. It is the two-line core of
+// router.RankModels' narrow(), restated here because the outcome of #251
+// is a claim about that pipeline's ANSWER, and proto cannot import the
+// agent's router.
+func pickForUnifiedHost(t *testing.T, manifests []catalog.Manifest, h hostfit.Host) (string, float64) {
+	t.Helper()
+	var id string
+	var tokps float64
+	best := -1
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			got := hostfit.OllamaFit(v, h)
+			if !got.Fits {
+				continue
+			}
+			if got.Estimate.UpperBound && !got.Estimate.MeetsSpeedFloor {
+				continue // the only exclusion the router performs on speed
+			}
+			if v.QualityTier > best {
+				best, id, tokps = v.QualityTier, m.ModelID, got.Estimate.TokpsEstimate
+			}
+		}
+	}
+	return id, tokps
+}
+
+// TestBundledCatalog_ChipTableFixesTheSmallMac is the outcome
+// waired-ai/waired-agent#251 was opened for, asserted against the real
+// bundled catalog rather than a fixture.
+//
+// #229 gave the 24 GB Mac's mis-recommendation a "may be slow" note and
+// left the recommendation in place, because the estimate rested on a
+// population constant that could not bound any particular machine. The
+// chip table replaces that constant with the part's published peak, and
+// the peak — being an upper bound on THIS host — is what licenses the
+// exclusion that finally changes the answer.
+//
+// The three rows are one claim each, and the third is the one that makes
+// the table load-bearing rather than a retuned constant: excluding on the
+// 120 GB/s fallback alone would have taken the dense 27B away from an M4
+// Max that runs it at ~33 tok/s.
+func TestBundledCatalog_ChipTableFixesTheSmallMac(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+
+	unknownID, unknownTokps := pickForUnifiedHost(t, manifests, hostFromWire(t, wireMac24UnknownChip))
+	knownID, knownTokps := pickForUnifiedHost(t, manifests, hostFromWire(t, wireMac24M4))
+	maxID, maxTokps := pickForUnifiedHost(t, manifests, hostFromWire(t, wireMac48M4Max))
+
+	// 1. Before: capacity wins and the machine is pointed at a model it
+	//    decodes at single digits. This is the shipped behaviour, retained
+	//    for any part the table does not recognise.
+	if unknownTokps >= hostfit.DecodeFloorTokps {
+		t.Errorf("the unrecognised-part 24 GB Mac picked %s at %.1f tok/s, at or above the "+
+			"%.0f floor — the fixture no longer demonstrates the problem #251 exists for",
+			unknownID, unknownTokps, hostfit.DecodeFloorTokps)
+	}
+
+	// 2. After: the same machine, now identified, is pointed at something
+	//    it can actually work in.
+	if knownTokps < hostfit.DecodeFloorTokps {
+		t.Errorf("the identified 24 GB Mac still picked %s at %.1f tok/s, below the %.0f floor",
+			knownID, knownTokps, hostfit.DecodeFloorTokps)
+	}
+	if knownID == unknownID {
+		t.Errorf("publishing the part's peak did not change the 24 GB Mac's pick (%s both ways); "+
+			"the exclusion is not reaching the recommendation", knownID)
+	}
+
+	// 3. The reason it has to be the part's figure and not a promoted
+	//    constant: a larger part keeps what the constant would refuse.
+	if maxTokps < hostfit.DecodeFloorTokps {
+		t.Errorf("the 48 GB M4 Max picked %s at %.1f tok/s, below the floor", maxID, maxTokps)
+	}
+	dense27bSurvives := false
+	for _, m := range manifests {
+		if m.ModelID != "qwen3.6-27b" {
+			continue
+		}
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			e := hostfit.EstimateOllamaDecode(v, hostFromWire(t, wireMac48M4Max))
+			if e.MeetsSpeedFloor {
+				dense27bSurvives = true
+			}
+		}
+	}
+	if !dense27bSurvives {
+		t.Error("the dense 27B was excluded on a 546 GB/s M4 Max, which runs it at ~33 tok/s. " +
+			"That is the over-exclusion the per-chip table exists to prevent — check that the " +
+			"host's own peak, not BandwidthUnifiedGBs, is reaching the estimate")
+	}
+
+	t.Logf("24 GB Mac: unrecognised part picks %s (%.1f tok/s); identified as M4 picks %s (%.1f tok/s); "+
+		"48 GB M4 Max picks %s (%.1f tok/s)",
+		unknownID, unknownTokps, knownID, knownTokps, maxID, maxTokps)
 }
