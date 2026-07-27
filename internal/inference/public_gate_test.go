@@ -330,11 +330,9 @@ func TestOwnerPriorityLatch(t *testing.T) {
 	}
 
 	// Drain the public requests; slots are now free but the latch holds.
+	// The waits are what make "now free" true at the probe below.
 	for range 2 {
-		gw.release()
-	}
-	for range 2 {
-		<-results
+		gw.releaseAndWait(t, results)
 	}
 	rec = do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, now()))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -349,8 +347,7 @@ func TestOwnerPriorityLatch(t *testing.T) {
 		results <- do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, now())).Code
 	}()
 	gw.waitForInFlight(t, 1)
-	gw.release()
-	if code := <-results; code != http.StatusOK {
+	if code := gw.releaseAndWait(t, results); code != http.StatusOK {
 		t.Fatalf("public after latch expiry: got %d, want 200", code)
 	}
 }
@@ -378,17 +375,23 @@ func TestOwnerPriorityLatch_ArrivalAtSaturation(t *testing.T) {
 	}()
 	gw.waitForInFlight(t, 2)
 
-	// Free one slot; the latch still blocks new public admissions.
-	gw.release()
+	// Free one slot, and wait for it to actually come back before
+	// probing. Without that barrier the probe below hit a still-full
+	// node and its 503 came from capacityGate — the latch this test
+	// exists to pin was never consulted, so the assertion passed for
+	// the wrong reason on every single run (measured: 50/50, idle and
+	// loaded alike). Same hazard as #144, surfacing as a permanently
+	// vacuous assertion rather than as a flake.
+	if code := gw.releaseAndWait(t, results); code != http.StatusOK {
+		t.Fatalf("drained request: got %d, want 200", code)
+	}
 	rec := do(srv, signedReqFrom(t, publicOverlayIP, "/v1/chat/completions", []byte(`{}`), "dev-guest-1", guestPriv, at))
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("public during saturation latch: got %d, want 503", rec.Code)
+		t.Fatalf("public with a free slot during the saturation latch: got %d, want 503", rec.Code)
 	}
 
 	gw.release()
-	for range 2 {
-		<-results
-	}
+	<-results
 }
 
 // TestKillSwitch_AbortsPublicInFlight: AbortPublicInFlight cancels the

@@ -41,6 +41,12 @@ func (b *blockingGateway) Handler() http.Handler {
 }
 
 // release closes one parked gate (FIFO). Returns false if none parked.
+//
+// Closing the gate is NOT the same as freeing the request's admission
+// slot: the slot is returned by capacityGateAdapter's
+// `defer counter.Release()` (server.go), which runs only after the
+// handler has returned — arbitrarily later on a loaded machine. Use
+// releaseAndWait whenever the next assertion depends on that slot.
 func (b *blockingGateway) release() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -53,6 +59,35 @@ func (b *blockingGateway) release() bool {
 	return true
 }
 
+// releaseAndWait frees one parked handler AND waits for that request to
+// finish, returning its status code. Callers pass the channel their
+// request goroutines report into; the value read is the released
+// request's own result, which do()/ServeHTTP only produces after the
+// deferred Release() above has run — i.e. after the admission slot is
+// genuinely free.
+//
+// Reach for this rather than a bare release() whenever the next step
+// expects to BE ADMITTED. Issuing that request straight after release()
+// races the counter: it sees a still-full node, takes a 503, and never
+// parks — so a following waitForInFlight can never be satisfied no
+// matter how long it waits. An idle machine wins that race almost every
+// time; a loaded CI runner (go test ./... schedules package binaries
+// concurrently) loses it, which is how the flake lands on whichever PR
+// happens to add test weight elsewhere in the tree (#144, #222).
+func (b *blockingGateway) releaseAndWait(t *testing.T, results <-chan int) int {
+	t.Helper()
+	if !b.release() {
+		t.Fatal("releaseAndWait: no parked gate to release")
+	}
+	select {
+	case code := <-results:
+		return code
+	case <-time.After(5 * time.Second):
+		t.Fatal("releaseAndWait: the released request never reported a result")
+		return 0
+	}
+}
+
 func (b *blockingGateway) inFlight() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -61,6 +96,12 @@ func (b *blockingGateway) inFlight() int {
 
 // waitForInFlight spins until at least n handlers are parked or the
 // deadline expires. Test scaffolding for the multi-goroutine cases.
+//
+// It observes PARKING, not admission accounting: a request counts here
+// once it has reached the gateway, and stops counting the moment its
+// gate is closed by release() — before its slot is returned. So this
+// can be used to wait for requests to arrive, never to wait for
+// capacity to free up (releaseAndWait does that).
 func (b *blockingGateway) waitForInFlight(t *testing.T, n int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
