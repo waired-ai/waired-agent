@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/management"
@@ -163,6 +164,25 @@ type setupProvider interface {
 	// given generation (waired#835 §12; join semantics from #99 make
 	// repeated calls safe).
 	startSetupBenchmark(gen int)
+	// setupPreferredModelID reports the model this device is currently
+	// set to serve, or "" when nothing has been chosen. It is what makes
+	// the model step converge on OBSERVABLE state rather than on an
+	// in-memory "did I already do this" flag: a daemon restart clears the
+	// flag, and re-applying an already-applied choice would bounce the
+	// engine on every boot of a host that is already set up.
+	setupPreferredModelID() string
+	// setupApplyModel makes modelID the model this device serves — the
+	// same operation the operator's own model switch performs (#347/#812),
+	// not merely a download. downloading reports whether the weights still
+	// had to be fetched; the activation then lands when the pull completes.
+	//
+	// It replaced a bare PullModel call, which downloaded the wizard's
+	// choice and then served something else entirely (#230).
+	setupApplyModel(ctx context.Context, modelID string) (downloading bool, err error)
+	// PullModel is the fallback for a target the in-process switch cannot
+	// apply (a cross-engine change). The weights are fetched now and the
+	// activation happens on the next boot, from the preference
+	// setupApplyModel already persisted.
 	PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error)
 }
 
@@ -170,11 +190,13 @@ type setupProvider interface {
 // and reports typed step progress back (§7). Apply is invoked on EVERY
 // network-map frame — streaming has no dedup — so every action here
 // must be idempotent: convergence is derived from observable state
-// (catalog model states, the persisted benchmark generation), never
-// from "did I already do this" flags that could desync from reality.
-// The one exception is pull admission (one PullModel call per desired
-// model value) so a permanently failing download is not re-queued on
-// every frame; an agent restart retries it once more.
+// (catalog model states, the persisted preference, the persisted
+// benchmark generation), never from "did I already do this" flags that
+// could desync from reality. The one exception is model admission (one
+// setupApplyModel call per desired model value) so a permanently failing
+// download is not re-queued on every frame; an agent restart retries it
+// once more, and the persisted preference stops that retry from bouncing
+// the engine on a host that already converged.
 type setupReconciler struct {
 	provider   setupProvider
 	push       *controlclient.Client // nil = report-nothing (no CP push)
@@ -184,12 +206,15 @@ type setupReconciler struct {
 	now        func() time.Time // test seam
 	interval   time.Duration    // push cadence; setupPushInterval outside tests
 
-	mu            sync.Mutex
-	desired       setupDesired
-	active        bool // a desired instruction has been seen this session
-	pullAttempted map[string]bool
-	pullRejected  map[string]string // PullModel refused (unknown model, ...)
-	kick          chan struct{}     // wakes the push loop on Apply changes
+	mu           sync.Mutex
+	desired      setupDesired
+	active       bool            // a desired instruction has been seen this session
+	modelApplied map[string]bool // one setupApplyModel call per desired model value
+	// modelRejected records why applying the desired model was refused
+	// (an unknown model, an engine that cannot serve it). It feeds the
+	// model step's model_not_found rather than leaving it pending.
+	modelRejected map[string]string
+	kick          chan struct{} // wakes the push loop on Apply changes
 
 	// Executor lease (§9/§11). The elevated CLI from `sudo waired init`
 	// heartbeats here; a stale lease is what turns an install step into
@@ -235,8 +260,8 @@ func newSetupReconciler(provider setupProvider, push *controlclient.Client, devi
 		logger:        logger,
 		now:           time.Now,
 		interval:      setupPushInterval,
-		pullAttempted: map[string]bool{},
-		pullRejected:  map[string]string{},
+		modelApplied:  map[string]bool{},
+		modelRejected: map[string]string{},
 		executorSteps: map[string]setupExecutorStep{},
 		kick:          make(chan struct{}, 1),
 	}
@@ -263,7 +288,7 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	changed := d != r.desired
 	r.desired = d
 	r.active = true
-	attempted := r.pullAttempted[d.modelID]
+	applied := r.modelApplied[d.modelID]
 	r.mu.Unlock()
 
 	// Benchmark (§12): the served generation counter is the request;
@@ -281,9 +306,9 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	// Engine (§11): the agent cannot install one unprivileged — that is
 	// the executor's job. Apply does two things with it.
 	//
-	// First, it gates the model pull below: until the engine is actually
-	// installed there is nothing to pull INTO, so firing PullModel can
-	// only fail. enginePresent carries that answer forward.
+	// First, it gates the model step below: until the engine is actually
+	// installed there is nothing to serve the model FROM, so applying the
+	// choice can only fail. enginePresent carries that answer forward.
 	//
 	// Second, it watches for the engine APPEARING, because that
 	// transition invalidates the one-shot admission. With the gate in
@@ -302,39 +327,60 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		r.engineInstalled = installed
 		r.engineObserved = true
 		if appeared && d.modelID != "" {
-			delete(r.pullAttempted, d.modelID)
-			delete(r.pullRejected, d.modelID)
-			attempted = false
+			delete(r.modelApplied, d.modelID)
+			delete(r.modelRejected, d.modelID)
+			applied = false
 			changed = true
 		}
 		r.mu.Unlock()
 		if appeared && r.logger != nil {
-			r.logger.Info("setup: engine became installed; re-admitting the desired model pull",
+			r.logger.Info("setup: engine became installed; re-admitting the desired model",
 				"engine", d.engine, "model", d.modelID)
 		}
 	}
 
-	// Model (§6: catalog IDs only — PullModel resolves against the
-	// catalog and refuses anything it doesn't know). Present/pulling
-	// models are left alone; only a genuinely absent model is queued,
-	// and only once per desired value — and never before the engine it
-	// would be pulled into exists (see enginePresent above). Holding the
-	// attempt back is what lets the wizard write the engine and the
+	// Model (§6: catalog IDs only — the provider resolves against the
+	// catalog and refuses anything it doesn't know).
+	//
+	// This APPLIES the choice; it does not merely download it. Until
+	// #230 the desired model was handed to PullModel and nowhere else,
+	// so the wizard's choice was fetched — tens of gigabytes of it — and
+	// then the daemon went on serving whatever it had auto-selected for
+	// itself. Neither activation path could rescue it:
+	// activateBundledIfUnset only fires for the install-time bundled
+	// model, and activatePreferredIfNeeded needs a preference the setup
+	// path never wrote. Worse, a choice whose weights were ALREADY on
+	// disk skipped the pull condition entirely and therefore did nothing
+	// at all. Applying it is the operator's own model switch (#347/#812):
+	// persist the preference, then flip the active selection.
+	//
+	// Admission is once per desired model value, and never before the
+	// engine that would serve it exists (see enginePresent above).
+	// Holding it back is what lets the wizard write the engine and the
 	// model in one gesture: the step sits at `pending` for the length of
 	// the install instead of showing a failure that resolves itself
 	// (waired#904).
-	if d.modelID != "" && !attempted && enginePresent {
+	//
+	// A device that has already CONVERGED — the desired model is the one
+	// it is set to serve, and its weights are on disk — is left alone, so
+	// a daemon restart re-reading the same instruction does not bounce a
+	// healthy engine on every boot. Convergence needs both halves: a
+	// preference alone is satisfied the instant the switch is published,
+	// which would make the engine-reappears retry below a no-op and leave
+	// a failed download red for the rest of the process's life.
+	if d.modelID != "" && !applied && enginePresent {
 		state, _, _, _ := r.provider.setupModelState(d.modelID)
-		if state == "" || state == catalog.ModelStateNotPresent || state == catalog.ModelStateEvicted {
+		converged := state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == d.modelID
+		if !converged {
 			r.mu.Lock()
-			r.pullAttempted[d.modelID] = true
+			r.modelApplied[d.modelID] = true
 			r.mu.Unlock()
-			if _, err := r.provider.PullModel(ctx, d.modelID); err != nil {
+			if _, err := r.provider.setupApplyModel(ctx, d.modelID); err != nil {
 				r.mu.Lock()
-				r.pullRejected[d.modelID] = err.Error()
+				r.modelRejected[d.modelID] = err.Error()
 				r.mu.Unlock()
 				if r.logger != nil {
-					r.logger.Warn("setup: desired model pull refused", "model", d.modelID, "err", err)
+					r.logger.Warn("setup: desired model refused", "model", d.modelID, "err", err)
 				}
 			}
 		}
@@ -489,7 +535,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	r.mu.Lock()
 	d := r.desired
 	active := r.active
-	rejected := r.pullRejected[d.modelID]
+	rejected := r.modelRejected[d.modelID]
 	leaseLive := r.leaseLiveLocked()
 	everSeen := r.executorEverSeen
 	elevated := r.executorElevated
@@ -900,4 +946,65 @@ func (p *agentInferenceProvider) setupModelState(modelID string) (string, int64,
 // the served generation without waiting for it.
 func (p *agentInferenceProvider) startSetupBenchmark(gen int) {
 	p.startBenchmarkJob(gen)
+}
+
+// setupPreferredModelID is the model this device is currently set to
+// serve. It reads the EFFECTIVE preference (the in-process #812
+// override when one has been published, else the boot snapshot), not
+// the file, so a choice applied moments ago is already visible and the
+// reconciler does not re-apply it on the next frame.
+func (p *agentInferenceProvider) setupPreferredModelID() string {
+	return p.effectivePreferredModelID()
+}
+
+// setupApplyModel makes modelID the model this device serves. It is the
+// setup path's half of the operator model switch, and mirrors
+// management.handleInferencePreferredModel step for step:
+//
+//  1. Persist the preference, so the choice survives the restart an
+//     engine install may cause. bootstrapPreferredModel re-pulls or
+//     activates it on the next boot without any further instruction.
+//  2. Apply it in process (#812): on-disk weights flip the active
+//     selection and bounce the engine now; absent weights start a pull
+//     whose completion runs activatePreferredIfNeeded.
+//  3. Fall back to a bare pull when the in-process switch declines the
+//     target (errSwapNeedsRestart — a cross-engine change). The weights
+//     land now and step 1's preference activates them after the restart.
+//
+// Unlike the management handler this NEVER schedules a restart of its
+// own: it runs while a browser wizard is watching the setup steps, and
+// taking the daemon down mid-run is the class of silence #130 exists to
+// prevent. The engine install the wizard is driving supplies whatever
+// restart is genuinely needed.
+//
+// The switch runs on the daemon's long-lived context, never the frame's:
+// Apply's context belongs to the network-map stream, and the pull plus
+// engine bounce have to outlive it (same reason as modelSwapController).
+func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID string) (bool, error) {
+	if p.preferencePath != "" {
+		if err := agentconfig.SavePreference(p.preferencePath, agentconfig.Preference{ModelID: modelID}); err != nil {
+			// Not fatal: the in-process switch below still makes this the
+			// served model for the life of this process. Only the
+			// survives-a-restart guarantee is lost, and saying so beats
+			// failing a setup the user can see working.
+			p.logger.Warn("setup: persisting the chosen model failed", "model", modelID, "err", err)
+		}
+	}
+	applyCtx := p.agentCtx
+	if applyCtx == nil {
+		applyCtx = ctx
+	}
+	downloading, err := p.SwapPreferredModel(applyCtx, modelID)
+	if err == nil {
+		return downloading, nil
+	}
+	if !errors.Is(err, errSwapNeedsRestart) {
+		return false, err
+	}
+	p.logger.Info("setup: model switch needs a restart; downloading now and activating on the next boot",
+		"model", modelID)
+	if _, perr := p.PullModel(applyCtx, modelID); perr != nil {
+		return false, perr
+	}
+	return true, nil
 }
