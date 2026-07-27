@@ -11,6 +11,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/setup"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // fakeEngineInstaller records install attempts without downloading a
@@ -228,6 +229,13 @@ func TestSetupEngineInstallWithoutStateDirRefuses(t *testing.T) {
 // TestSetupEngineInstallPerOS is the cross-OS parity table. It also
 // pins the two skip reasons that must report through the lease rather
 // than dying silently: an unelevated executor and an opt-out host.
+//
+// wantCode is the §7 code this executor DECLARES (waired-agent#135).
+// Both refusals below are decisions this process made, and both used to
+// reach the wizard as network_error because the daemon could only guess
+// from the prose; the empty rows are the failures whose text really is
+// the only evidence, where the daemon's own classification is still the
+// right answer.
 func TestSetupEngineInstallPerOS(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -238,6 +246,7 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 		wantInstall bool
 		wantPhase   string
 		wantDetail  string
+		wantCode    string
 	}{
 		{
 			name: "linux elevated installs", goos: "linux", elevated: true,
@@ -246,6 +255,7 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 		{
 			name: "linux unelevated reports permission", goos: "linux",
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "administrator privileges",
+			wantCode: signer.SetupErrorPermissionDenied,
 		},
 		{
 			name: "windows elevated installs", goos: "windows", elevated: true,
@@ -254,6 +264,7 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 		{
 			name: "windows unelevated reports permission", goos: "windows",
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "administrator privileges",
+			wantCode: signer.SetupErrorPermissionDenied,
 		},
 		{
 			// /Applications is admin-group-writable, so macOS attempts
@@ -269,6 +280,7 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 		{
 			name: "opt-out refuses and says why", goos: "linux", elevated: true, optOut: true,
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "WAIRED_NO_OLLAMA",
+			wantCode: signer.SetupErrorPermissionDenied,
 		},
 	}
 	for _, tc := range tests {
@@ -295,6 +307,9 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 			}
 			if tc.wantDetail != "" && !strings.Contains(last.Error, tc.wantDetail) {
 				t.Fatalf("error detail = %q, want it to mention %q", last.Error, tc.wantDetail)
+			}
+			if last.ErrorCode != tc.wantCode {
+				t.Fatalf("declared error_code = %q, want %q", last.ErrorCode, tc.wantCode)
 			}
 		})
 	}
@@ -518,26 +533,34 @@ func TestSetupVLLMInstallDecisionsThroughExecutor(t *testing.T) {
 		wantInstall      bool
 		wantPhase        string
 		wantDetail       string
+		wantCode         string
 	}{
 		{
 			name: "linux nvidia elevated installs", goos: "linux", elevated: true, nvidia: true,
 			wantInstall: true, wantPhase: management.SetupExecutorPhaseDone,
 		},
 		{
+			// internal, not permission_denied: none of the eight §7 codes
+			// means "this computer cannot run this engine", and the detail
+			// is what names the missing hardware.
 			name: "no gpu fails fast", goos: "linux", elevated: true, nvidia: false,
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "NVIDIA",
+			wantCode: signer.SetupErrorInternal,
 		},
 		{
 			name: "non-linux is unsupported", goos: "darwin", elevated: true, nvidia: true,
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "Linux",
+			wantCode: signer.SetupErrorInternal,
 		},
 		{
 			name: "unelevated reports permission", goos: "linux", nvidia: true,
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "administrator privileges",
+			wantCode: signer.SetupErrorPermissionDenied,
 		},
 		{
 			name: "opt-out refuses and says why", goos: "linux", elevated: true, nvidia: true, optOut: true,
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "WAIRED_NO_VLLM",
+			wantCode: signer.SetupErrorPermissionDenied,
 		},
 		{
 			name: "already present is done without a rebuild", goos: "linux", elevated: true, nvidia: true, active: true,
@@ -568,6 +591,9 @@ func TestSetupVLLMInstallDecisionsThroughExecutor(t *testing.T) {
 			}
 			if tc.wantDetail != "" && !strings.Contains(last.Error, tc.wantDetail) {
 				t.Fatalf("error detail = %q, want it to mention %q", last.Error, tc.wantDetail)
+			}
+			if last.ErrorCode != tc.wantCode {
+				t.Fatalf("declared error_code = %q, want %q", last.ErrorCode, tc.wantCode)
 			}
 		})
 	}

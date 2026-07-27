@@ -120,7 +120,7 @@ func TestExecutorSessionOlderDaemonIsInert(t *testing.T) {
 	// Every method must be a safe no-op.
 	s.Installing("ollama")
 	s.Done("ollama")
-	s.Failed("ollama", "boom")
+	s.Failed("ollama", signer.SetupErrorPermissionDenied, "boom")
 	s.Release()
 	if got := len(d.noted()); got != 0 {
 		t.Fatalf("posted %d lease updates to an older daemon, want 0", got)

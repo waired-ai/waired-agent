@@ -143,6 +143,13 @@ func TestSetupExecutorHandlerRejectsBadInput(t *testing.T) {
 		// rather than silently poisoning a push the CP will 400.
 		{"negative rate", `{"attached":true,"step":"engine_download","rate_bps":-1}`, http.StatusBadRequest},
 		{"negative bytes", `{"attached":true,"step":"engine_download","completed_bytes":-5}`, http.StatusBadRequest},
+		// The declared error code (waired-agent#135) is copied onto the
+		// step and pushed to a CP that validates the enum, so an unknown
+		// one has to be refused here rather than 400-ing every subsequent
+		// push from this device.
+		{"unknown error code", `{"attached":true,"phase":"failed","error_code":"sad"}`, http.StatusBadRequest},
+		{"known error code", `{"attached":true,"phase":"failed","error_code":"permission_denied"}`, http.StatusOK},
+		{"absent error code is 'you classify it'", `{"attached":true,"phase":"failed","error":"boom"}`, http.StatusOK},
 	} {
 		rec := httptest.NewRecorder()
 		srv.mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/waired/v1/setup/executor", strings.NewReader(tc.body)))

@@ -4,7 +4,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 )
@@ -15,7 +15,10 @@ import (
 // already returns false so neither is reached in practice.
 
 func (p *agentInferenceProvider) dispatchHFPull(_ context.Context, _ catalog.Manifest, _ catalog.Variant, _ string) error {
-	return errors.New("vllm serving is only supported on linux")
+	// Wrapped so the setup reconciler reports this as a host limitation
+	// rather than "that model is not available" — the model is fine, this
+	// OS just cannot serve it (waired-agent#134).
+	return fmt.Errorf("vllm serving is only supported on linux: %w", errUnsupportedSource)
 }
 
 func (p *agentInferenceProvider) bootstrapVLLM(_ context.Context) {

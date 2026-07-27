@@ -1278,7 +1278,10 @@ func run(ctx context.Context, args []string) error {
 					publicShareCtl.ReconcileRemote(st.PublicShare)
 				}
 			}
-			runNetworkMapLoop(ctx, logger, id, tokens.Get, rec, meshAgg, peerDir, dispatcher, applySelf, applyDesiredSetup, *bypassCPIAM)
+			// setupRec != nil IS the onboarding capability: it is the
+			// applier the declaration promises, and it exists only when
+			// local AI is on (waired-agent#133).
+			runNetworkMapLoop(ctx, logger, id, tokens.Get, rec, meshAgg, peerDir, dispatcher, applySelf, applyDesiredSetup, setupRec != nil, *bypassCPIAM)
 		}()
 		go func() {
 			defer wg.Done()
@@ -1580,8 +1583,14 @@ func newPauseInfra(stateDir string, gatewayPort int, logger *slog.Logger) (*paus
 // When bypassCPIAM is set, the client's HTTP transport injects a GCE
 // identity token into Authorization (so the Cloud Run / IAP IAM gate
 // is happy) and the device access token rides X-Waired-Agent-Bearer.
-func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applySelf func(st *signer.InferenceState), applyDesiredSetup func(*signer.InferenceState), bypassCPIAM bool) {
+//
+// onboardingCapable is whether this process actually built the
+// desired-state applier — passed rather than re-derived, because the
+// declaration and the applier have to agree or the wizard waits on a
+// device that will never answer (waired-agent#133).
+func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applySelf func(st *signer.InferenceState), applyDesiredSetup func(*signer.InferenceState), onboardingCapable, bypassCPIAM bool) {
 	cli := controlclient.NewWithBearer(id.ControlURL, bearer)
+	cli.OnboardingCapable = onboardingCapable
 	if bypassCPIAM {
 		cli.HTTP = bypassCPHTTPClient(ctx, id.ControlURL, logger)
 		cli.UseCustomAuthHeader = true

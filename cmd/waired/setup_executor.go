@@ -161,13 +161,18 @@ func (s *executorSession) State() management.SetupStateResponse {
 // post sends one lease update. Errors are deliberately swallowed: a
 // failed heartbeat is indistinguishable to the operator from a slow one,
 // and the daemon's TTL already covers a session that stops reporting.
+//
+// It carries no error code: everything that reaches here either is not a
+// failure or is one whose text is the only evidence there is. The paths
+// that DO know their code call postStep (waired-agent#135).
 func (s *executorSession) post(attached bool, phase, engine, errText string) management.SetupStateResponse {
 	step, prog := s.currentProgress()
-	return s.postStep(attached, phase, engine, errText, step, prog)
+	return s.postStep(attached, phase, engine, errText, "", step, prog)
 }
 
-// postStep is post with an explicit step and its transfer figures.
-func (s *executorSession) postStep(attached bool, phase, engine, errText, step string, prog executorProgress) management.SetupStateResponse {
+// postStep is post with an explicit step, error code, and transfer
+// figures.
+func (s *executorSession) postStep(attached bool, phase, engine, errText, errCode, step string, prog executorProgress) management.SetupStateResponse {
 	if !s.Supported() {
 		return management.SetupStateResponse{}
 	}
@@ -177,6 +182,7 @@ func (s *executorSession) postStep(attached bool, phase, engine, errText, step s
 		Phase:          phase,
 		Engine:         engine,
 		Error:          errText,
+		ErrorCode:      errCode,
 		Step:           step,
 		CompletedBytes: prog.completed,
 		TotalBytes:     prog.total,
@@ -312,9 +318,9 @@ func (s *executorSession) Progress(step, engine string, completed, total, rateBp
 		// The previous row is finished by definition: the executor only
 		// moves on once it is. No figures — the daemon keeps the ones it
 		// already has for that row, and a `done` row does not draw a bar.
-		s.postStep(true, management.SetupExecutorPhaseDone, engine, "", prev, executorProgress{})
+		s.postStep(true, management.SetupExecutorPhaseDone, engine, "", "", prev, executorProgress{})
 	}
-	s.postStep(true, phase, engine, "", step, prog)
+	s.postStep(true, phase, engine, "", "", step, prog)
 }
 
 // Done reports a completed install and drops the claim.
@@ -331,12 +337,16 @@ func (s *executorSession) Done(engine string) {
 // the engine.
 func (s *executorSession) DoneStep(step string) {
 	s.setStepPhase(step, management.SetupExecutorPhaseDone)
-	s.postStep(true, management.SetupExecutorPhaseDone, "", "", step, executorProgress{})
+	s.postStep(true, management.SetupExecutorPhaseDone, "", "", "", step, executorProgress{})
 }
 
+// FailedStep reports a failed non-engine step. It declares no code: the
+// integration failures are small file writes whose text is the only
+// evidence, and classifyIntegrationFailure already reads the one case
+// (permission denied) that is worth distinguishing.
 func (s *executorSession) FailedStep(step, errText string) {
 	s.setStepPhase(step, management.SetupExecutorPhaseFailed)
-	s.postStep(true, management.SetupExecutorPhaseFailed, "", errText, step, executorProgress{})
+	s.postStep(true, management.SetupExecutorPhaseFailed, "", errText, "", step, executorProgress{})
 }
 
 // setStepPhase moves the lease's reporting focus to one step and records
@@ -353,9 +363,19 @@ func (s *executorSession) setStepPhase(step, phase string) {
 
 // Failed reports a failed install with its detail and drops the claim, so
 // the wizard shows the real reason rather than a generic executor_gone.
-func (s *executorSession) Failed(engine, errText string) {
+//
+// code is this executor's own §7 classification, or "" to let the daemon
+// classify from the text (waired-agent#135). Empty is right for a
+// failure that arrived as an installer's error string — the daemon's
+// disk-full detection is the best reading anyone has of those. It is
+// wrong for a failure this process DECIDED on: not elevated, opted out,
+// a host that cannot run this engine. Those know their code, and passing
+// it is what stops "run as administrator" from being reported as a
+// network problem.
+func (s *executorSession) Failed(engine, code, errText string) {
 	s.setPhase(management.SetupExecutorPhaseFailed, engine)
-	s.post(true, management.SetupExecutorPhaseFailed, engine, errText)
+	step, prog := s.currentProgress()
+	s.postStep(true, management.SetupExecutorPhaseFailed, engine, errText, code, step, prog)
 }
 
 // setPhase records an ENGINE phase, and moves the lease's reporting

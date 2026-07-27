@@ -38,6 +38,15 @@ type Client struct {
 	// that gate token into Authorization. CP-side fallback lives in
 	// internal/controlplane/api.agentBearer.
 	UseCustomAuthHeader bool
+
+	// OnboardingCapable declares whether this agent can actually carry
+	// out a browser-driven setup — i.e. whether the desired-state applier
+	// exists at all (waired-agent#133). It gates the onboarding
+	// capabilities in the poll body; see SubscribeNetworkMap.
+	//
+	// The zero value withholds them. Only the daemon's own subscription
+	// declares onboarding, and it says so explicitly.
+	OnboardingCapable bool
 }
 
 // New constructs a Client with a static access token. Use this when
@@ -92,10 +101,29 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		// leave the wizard waiting forever for a step it will never
 		// emit, so the CP must not send it until an agent says it can
 		// apply it. CPs predating the intake ignore the body entirely.
-		body := bytes.NewBufferString(`{"capabilities":["` +
-			signer.CapabilityPublicShareV1 + `","` +
-			signer.CapabilityOnboardingV1 + `","` +
-			signer.CapabilityOnboardingV2 + `"]}`)
+		//
+		// The onboarding pair is conditional (waired-agent#133). It used
+		// to be unconditional, including on a host with local AI turned
+		// off — where the applier is never constructed, so nothing would
+		// ever act on the desired state or report a step. The wizard
+		// offered a model picker whose confirm button then stayed
+		// disabled forever behind a message about the device coming
+		// online. Withholding the pair is what lets the CP say the true
+		// thing instead (onboarding_reason=unavailable).
+		//
+		// public-share-v1 stays unconditional, and not only because it is
+		// unrelated: the CP tells "declares capabilities, not this one"
+		// apart from "polled from a build predating capability intake" by
+		// whether the CSV is empty at all, so an empty declaration would
+		// have it report an out-of-date client instead.
+		caps := `"` + signer.CapabilityPublicShareV1 + `"`
+		if c.OnboardingCapable {
+			// Both or neither: the CP gates desired_integrations on v2 and
+			// the rest on v1, so declaring v2 alone would invite an
+			// instruction with no engine or model to go with it.
+			caps += `,"` + signer.CapabilityOnboardingV1 + `","` + signer.CapabilityOnboardingV2 + `"`
+		}
+		body := bytes.NewBufferString(`{"capabilities":[` + caps + `]}`)
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/network-map/poll", body)
 		if err != nil {
 			errs <- err
