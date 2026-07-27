@@ -357,6 +357,15 @@ Invoke-Case -Label 'fresh non-admin -> UAC handoff' -Params $fresh `
     -Assert @('Administrator step', '\[itstub\] elevate verb=RunAs file=powershell\.exe',
               'argv\[0\]=-NoProfile', 'argv\[3\]=-File', 'argv\[7\]=-StateFile')
 
+#    ARGTEST reports the predicate that PICKED that arm, so the Windows leg can
+#    check it against a real restricted token -- the one thing this harness
+#    cannot do, because Test-Admin is stubbed here (#195). Both arms, so a
+#    constant-folded Admin= would fail one of them.
+Invoke-Case -Label 'ARGTEST Admin=False when not elevated' -Params $fresh `
+    -Env @{ WAIRED_ARGTEST = '1' } -Assert @('ARGTEST .*Admin=False')
+Invoke-Case -Label 'ARGTEST Admin=True when elevated' -Params $fresh -Admin `
+    -Env @{ WAIRED_ARGTEST = '1' } -Assert @('ARGTEST .*Admin=True')
+
 # 6. Value validation happens in Phase 1, before any UAC or download: a typo
 #    must not cost a UAC click, nor be reported inside a window that closes.
 Invoke-Case -Label 'unknown token dies' -Expect nonzero `

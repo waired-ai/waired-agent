@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderLaunchDaemonPlist_HappyPath(t *testing.T) {
@@ -153,11 +154,27 @@ func (f *fakeLaunchctl) fn(args []string) ([]byte, []byte, error) {
 
 func withFakeLaunchctl(t *testing.T) *fakeLaunchctl {
 	t.Helper()
-	f := &fakeLaunchctl{respond: map[string]launchctlResp{}}
+	f := &fakeLaunchctl{respond: map[string]launchctlResp{
+		// `print` is bootoutAndSettle's probe: it FAILS for a job that is
+		// not in the domain, which is the state right after a settled
+		// bootout and the state every test here starts from. Without this
+		// the default nil error would read as "still loaded" and every
+		// Install/Uninstall would sit in the settle loop until its timeout.
+		"print": {err: errors.New("Could not find service in domain for system")},
+	}}
 	orig := runLaunchctlFn
 	runLaunchctlFn = f.fn
 	t.Cleanup(func() { runLaunchctlFn = orig })
 	return f
+}
+
+// withFastSettle shrinks the bootout settle bounds so a test can exercise
+// the loop (including its timeout) without spending real seconds.
+func withFastSettle(t *testing.T, timeout, poll time.Duration) {
+	t.Helper()
+	ot, op := launchdSettleTimeout, launchdSettlePoll
+	launchdSettleTimeout, launchdSettlePoll = timeout, poll
+	t.Cleanup(func() { launchdSettleTimeout, launchdSettlePoll = ot, op })
 }
 
 // withRoot makes geteuidFn report root so the Install/Uninstall root
@@ -509,6 +526,128 @@ func TestRenderLaunchDaemonPlist_PreservesArgvOrder(t *testing.T) {
 			t.Errorf("order violation: %q appeared before earlier arg", want)
 		}
 		prev = idx
+	}
+}
+
+// --- bootoutAndSettle (#195) -------------------------------------------
+//
+// These pin a PRODUCT CONTRACT, not today's behaviour: `bootout` is
+// asynchronous, so both Install and Uninstall have to wait for launchd to
+// finish before they act on the result. Without the wait, `waired-agent
+// uninstall` followed by `waired-agent install` — the ordinary repair —
+// left the host with no daemon and the installer reporting exit 1.
+
+// TestBootoutAndSettle_WaitsUntilTheJobIsGone: while `print` still
+// succeeds the job is still registered, so the loop must keep probing;
+// it returns on the probe that fails.
+func TestBootoutAndSettle_WaitsUntilTheJobIsGone(t *testing.T) {
+	f := withFakeLaunchctl(t)
+	withFastSettle(t, 5*time.Second, time.Millisecond)
+
+	// Three "still there" probes, then gone.
+	prints := 0
+	f.respond["print"] = launchctlResp{}
+	orig := runLaunchctlFn
+	runLaunchctlFn = func(args []string) ([]byte, []byte, error) {
+		if args[0] == "print" {
+			prints++
+			if prints <= 3 {
+				return nil, nil, nil // still registered
+			}
+			return nil, nil, errors.New("Could not find service")
+		}
+		return orig(args)
+	}
+
+	bootoutAndSettle("system/" + darwinLabel)
+
+	if prints != 4 {
+		t.Errorf("probed %d times, want 4 (3 still-there + the one that saw it gone)", prints)
+	}
+}
+
+// TestBootoutAndSettle_GivesUpAtTheDeadline: a launchd that never lets go
+// must not hang the installer forever. Returning lets the caller's own
+// bootstrap report the real failure.
+func TestBootoutAndSettle_GivesUpAtTheDeadline(t *testing.T) {
+	f := withFakeLaunchctl(t)
+	withFastSettle(t, 20*time.Millisecond, time.Millisecond)
+	f.respond["print"] = launchctlResp{} // never fails: job never goes away
+
+	done := make(chan struct{})
+	go func() { defer close(done); bootoutAndSettle("system/" + darwinLabel) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootoutAndSettle did not return; the deadline is not bounding the loop")
+	}
+}
+
+// TestInstall_WaitsForBootoutBeforeBootstrap: the ordering is the whole
+// point — a bootstrap issued before the bootout settles is the failure.
+func TestInstall_WaitsForBootoutBeforeBootstrap(t *testing.T) {
+	f := withFakeLaunchctl(t)
+	withRoot(t)
+	withTempDaemonDir(t)
+
+	cfg := Config{
+		Binary:   "/usr/local/bin/waired-agent",
+		StateDir: filepath.Join(t.TempDir(), "state"),
+		MgmtAddr: "127.0.0.1:9476",
+	}
+	if err := (darwinManager{}).Install(cfg); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	// Index of the system-domain bootout, of the settle probe that
+	// followed it, and of the bootstrap.
+	target := "system/" + darwinLabel
+	bootout, probe, bootstrap := -1, -1, -1
+	for i, c := range f.calls {
+		switch {
+		case bootout < 0 && c[0] == "bootout" && len(c) > 1 && c[1] == target:
+			bootout = i
+		case bootout >= 0 && probe < 0 && c[0] == "print" && len(c) > 1 && c[1] == target:
+			probe = i
+		case bootstrap < 0 && c[0] == "bootstrap":
+			bootstrap = i
+		}
+	}
+	if bootout < 0 || probe < 0 || bootstrap < 0 {
+		t.Fatalf("missing bootout/print/bootstrap; calls=%v", f.calls)
+	}
+	if !(bootout < probe && probe < bootstrap) {
+		t.Errorf("want bootout(%d) < settle probe(%d) < bootstrap(%d); calls=%v",
+			bootout, probe, bootstrap, f.calls)
+	}
+}
+
+// TestUninstall_WaitsForBootoutBeforeRemovingThePlist: Uninstall promises
+// the job is gone on return, so the settle has to happen inside it.
+func TestUninstall_WaitsForBootoutBeforeRemovingThePlist(t *testing.T) {
+	f := withFakeLaunchctl(t)
+	withRoot(t)
+	dir := withTempDaemonDir(t)
+
+	plist := filepath.Join(dir, darwinLabel+".plist")
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := (darwinManager{}).Uninstall(); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+
+	target := "system/" + darwinLabel
+	bootout, probe := -1, -1
+	for i, c := range f.calls {
+		if bootout < 0 && c[0] == "bootout" && len(c) > 1 && c[1] == target {
+			bootout = i
+		} else if bootout >= 0 && probe < 0 && c[0] == "print" && len(c) > 1 && c[1] == target {
+			probe = i
+		}
+	}
+	if bootout < 0 || probe < 0 {
+		t.Fatalf("Uninstall must bootout then probe until settled; calls=%v", f.calls)
 	}
 }
 

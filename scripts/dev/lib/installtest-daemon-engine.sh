@@ -191,7 +191,7 @@ endpoint is unreachable / --enable-oidc-grant is off)"
 # engine-less daemon-path first-run stayed engine-less and engine_install was
 # red forever; N3 makes the resident executor install it.
 assert_daemon_engine() {
-  local guest="$1" name initlog flag out state claim
+  local guest="$1" name initlog flag out state setup_state desired_engine installed claim
   name="$(_it_dev_name "$guest")"
   initlog="$IT_LOGDIR/init-daemon-$name.log"
   flag="$IT_LOGDIR/daemon-engine-$name.flag"
@@ -244,8 +244,36 @@ assert_daemon_engine() {
     *) ok "inference subsystem left no_engine (state=$state)" ;;
   esac
 
-  # 7. No stuck install claim after init (§9-4: no never-resolving spinner).
-  claim="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null \
+  setup_state="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null || true)"
+
+  # 7. engine_installed — what the SETUP WIZARD reads (#195/#179). Steps 5 and
+  #    6 look at the host and at the inference subsystem; neither is the value
+  #    the daemon reports to the UI, and the two have disagreed: #179 was an
+  #    engine that existed on disk but not on PATH, so the wizard kept offering
+  #    to install it. A leg that only stats the binary cannot see that.
+  #
+  #    Read desired_engine first: SetupState computes engine_installed ONLY
+  #    when a desired engine is set (setup_desired.go), so a bare
+  #    `engine_installed == true` assert would fail for the wrong reason the
+  #    day the control plane stops publishing one. That case is reported as
+  #    itself, not as a #179 regression.
+  desired_engine="$(printf '%s' "$setup_state" \
+    | sed -n 's/.*"desired_engine"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  installed="$(printf '%s' "$setup_state" \
+    | grep -oE '"engine_installed"[[:space:]]*:[[:space:]]*(true|false)' | head -1 \
+    | grep -oE '(true|false)$')"
+  if [ -z "$setup_state" ]; then
+    bad "could not read /setup/state (daemon unreachable) — engine_installed unverifiable"
+  elif [ -z "$desired_engine" ]; then
+    it_warn "no desired_engine at the end of the leg, so engine_installed is false by definition — not a #179 signal: $setup_state"
+  elif [ "$installed" = true ]; then
+    ok "daemon reports engine_installed=true for desired_engine=$desired_engine (setup wizard sees the engine)"
+  else
+    bad "engine is on the host but the daemon reports engine_installed=false for desired_engine=$desired_engine (#179 class: resolution disagrees with reality)"
+  fi
+
+  # 8. No stuck install claim after init (§9-4: no never-resolving spinner).
+  claim="$(printf '%s' "$setup_state" \
     | sed -n 's/.*"install_claimed"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
   if [ -z "$claim" ]; then
     ok "no stuck executor install claim after init (install_claimed cleared)"

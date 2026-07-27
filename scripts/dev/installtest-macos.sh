@@ -81,6 +81,46 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# assert_launchd_healthy <context> — the three things that have to be true of
+# the registered system LaunchDaemon. Factored out of the Tier-1 block because
+# it is asserted TWICE: once on the fresh install, and again after the
+# uninstall -> reinstall round trip below (#195/#176).
+assert_launchd_healthy() {
+  local ctx="$1" disabled running=0
+
+  # The whole point of #520: the system domain loads on a headless runner with
+  # no GUI (Aqua) session — no per-user gui/<uid> probe, no subprocess fallback.
+  if sudo launchctl print "system/$LABEL" >/dev/null 2>&1; then
+    ok "LaunchDaemon loaded in the system domain ($ctx)"
+  else
+    bad "LaunchDaemon not loaded in system/ ($ctx; headless system daemon must load without a GUI session)"
+  fi
+
+  # Enabled bit: `launchctl enable system/<label>` (run by `waired-agent
+  # install`) is what makes the daemon return after a reboot — distinct from
+  # "loaded this boot". A stale disabled override would pass the loaded check
+  # above yet leave the host agent-less post-reboot. Absent from print-disabled
+  # (or "=> false"/"=> enabled") means enabled; only "=> true"/"=> disabled" is
+  # a real miss. Mirrors Linux's `systemctl is-enabled` assert.
+  disabled="$(sudo launchctl print-disabled system 2>/dev/null | grep -F "\"$LABEL\"" || true)"
+  if printf '%s' "$disabled" | grep -qiE '=>[[:space:]]*(true|disabled)'; then
+    bad "LaunchDaemon disabled in launchd's DB ($ctx; won't return after reboot): $disabled"
+  else
+    ok "LaunchDaemon enabled ($ctx; survives reboot)"
+  fi
+
+  # Liveness: RunAtLoad + KeepAlive should have the job actually running, not
+  # just loaded — and a crash-loop (e.g. an unreadable state dir) would show
+  # here instead of a silent pass. Poll briefly; launchd spawns it
+  # asynchronously after bootstrap.
+  for _ in $(seq 1 15); do
+    if sudo launchctl print "system/$LABEL" 2>/dev/null | grep -qE 'state[[:space:]]*=[[:space:]]*running'; then running=1; break; fi
+    sleep 1
+  done
+  [ "$running" = 1 ] && ok "LaunchDaemon is running ($ctx; state = running)" \
+    || bad "LaunchDaemon not running after bootstrap ($ctx; RunAtLoad/KeepAlive; state dir unreadable?)"
+}
+
 # assert_inference_macos — macOS analog of lib/installtest-enroll.sh's
 # assert_inference: prove the Ollama-install -> bundled-model-pull -> benchmark
 # tail of the journey ran (Tier-2 --inference). Paths are darwin-specific
@@ -310,7 +350,7 @@ daemon_path_enroll_macos() {
 # engine-less daemon-path first-run ends up WITH an engine (pre-N3 it stayed
 # engine-less and engine_install was red forever).
 assert_daemon_engine_macos() {
-  local out state claim ollama_bin="" cand
+  local out state setup_state desired_engine installed claim ollama_bin="" cand
   grep -q "signing in via the daemon" "$INITLOG" 2>/dev/null \
     && ok "init took the daemon path (setup-executor-capable first-run)" \
     || bad "init did NOT take the daemon path (executor engine install not exercised)"
@@ -338,7 +378,28 @@ assert_daemon_engine_macos() {
     ""|no_engine) bad "inference subsystem still reports '${state:-unreachable}' (engine not installed)" ;;
     *) ok "inference subsystem left no_engine (state=$state)" ;;
   esac
-  claim="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null \
+  setup_state="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null || true)"
+  # engine_installed — what the SETUP WIZARD reads (#195/#179). The checks
+  # above look at the host and at the inference subsystem; neither is the value
+  # the daemon reports to the UI, and the two have disagreed (#179: an engine
+  # on disk but not on PATH, so the wizard kept offering to install it).
+  # desired_engine is read first because SetupState computes engine_installed
+  # only when one is set — see lib/installtest-daemon-engine.sh's item 7.
+  desired_engine="$(printf '%s' "$setup_state" \
+    | sed -n 's/.*"desired_engine"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  installed="$(printf '%s' "$setup_state" \
+    | grep -oE '"engine_installed"[[:space:]]*:[[:space:]]*(true|false)' | head -1 \
+    | grep -oE '(true|false)$')"
+  if [ -z "$setup_state" ]; then
+    bad "could not read /setup/state (daemon unreachable) — engine_installed unverifiable"
+  elif [ -z "$desired_engine" ]; then
+    it_warn "no desired_engine at the end of the leg, so engine_installed is false by definition — not a #179 signal: $setup_state"
+  elif [ "$installed" = true ]; then
+    ok "daemon reports engine_installed=true for desired_engine=$desired_engine (setup wizard sees the engine)"
+  else
+    bad "engine is on the host but the daemon reports engine_installed=false for desired_engine=$desired_engine (#179 class)"
+  fi
+  claim="$(printf '%s' "$setup_state" \
     | sed -n 's/.*"install_claimed"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
   [ -z "$claim" ] \
     && ok "no stuck executor install claim after init (install_claimed cleared)" \
@@ -438,38 +499,57 @@ else
   bad "state dir world-accessible (mode ${mode:-?}; want no world rwx)"
 fi
 
-# The whole point of #520: the system domain loads on a headless runner with no
-# GUI (Aqua) session — no per-user gui/<uid> probe, no subprocess fallback.
-if sudo launchctl print "system/$LABEL" >/dev/null 2>&1; then
-  ok "LaunchDaemon loaded in the system domain"
+assert_launchd_healthy "fresh install"
+
+# --- uninstall -> reinstall round trip (#195; the #176 regression bar) -------
+# A fresh VM per run means a poisoned host NEVER arrives from the outside, so
+# the enabled-bit assert above can only ever see a clean launchd DB. The bug
+# #176 actually described — `waired-agent uninstall` leaving a persistent
+# `launchctl disable` override, so the NEXT install produces a host that is
+# loaded now and agent-less after a reboot — is therefore invisible to a
+# single-install suite. It only shows up if the same host uninstalls and
+# reinstalls, which is what a real user does on every repair or channel
+# switch.
+#
+# Deliberately NOT a defensive `launchctl enable` at suite start: on both the
+# hosted and the self-hosted macOS pools the VM is disposable, so a defensive
+# enable could not fix a real problem and would instead mask the one this leg
+# exists to catch.
+#
+# Runs before Tier 2 for two reasons: the enrol that follows then happens on a
+# REINSTALLED host ("a repaired install can still enrol" comes free), and
+# `waired-agent uninstall` calls deregisterOnUninstall() — harmless here
+# because nothing has enrolled yet, but it would drop the device out of the
+# control plane mid-suite if this ran after Tier 2.
+#
+# The reinstall mirrors install.sh's darwin_register_agent exactly (its
+# no-LOG_LEVEL branch; the harness sets none), so this re-runs the real
+# registration, not a lookalike.
+it_step "uninstall -> reinstall round trip (#176)"
+uninstall_rc=0
+sudo "$BINDIR/waired-agent" uninstall >/dev/null 2>&1 || uninstall_rc=$?
+[ "$uninstall_rc" -eq 0 ] && ok "waired-agent uninstall exited 0" \
+  || bad "waired-agent uninstall exited $uninstall_rc"
+sudo test -f "$PLIST" && bad "LaunchDaemon plist survived uninstall ($PLIST)" \
+  || ok "LaunchDaemon plist removed by uninstall"
+sudo launchctl print "system/$LABEL" >/dev/null 2>&1 \
+  && bad "LaunchDaemon still loaded after uninstall (bootout did not run)" \
+  || ok "LaunchDaemon booted out of the system domain"
+
+# THE REGRESSION BAR: uninstall must leave launchd's disabled DB clean. An
+# override here is what made the post-#176 reinstall come back dead on reboot.
+disabled_after_uninstall="$(sudo launchctl print-disabled system 2>/dev/null | grep -F "\"$LABEL\"" || true)"
+if printf '%s' "$disabled_after_uninstall" | grep -qiE '=>[[:space:]]*(true|disabled)'; then
+  bad "uninstall left a launchd disable override (#176): $disabled_after_uninstall"
 else
-  bad "LaunchDaemon not loaded in system/ (headless system daemon must load without a GUI session)"
+  ok "uninstall left no launchd disable override (#176)"
 fi
 
-# Enabled bit: `launchctl enable system/<label>` (run by `waired-agent
-# install`) is what makes the daemon return after a reboot — distinct from
-# "loaded this boot". A stale disabled override would pass the loaded check
-# above yet leave the host agent-less post-reboot. Absent from print-disabled
-# (or "=> false"/"=> enabled") means enabled; only "=> true"/"=> disabled" is
-# a real miss. Mirrors Linux's `systemctl is-enabled` assert.
-disabled="$(sudo launchctl print-disabled system 2>/dev/null | grep -F "\"$LABEL\"" || true)"
-if printf '%s' "$disabled" | grep -qiE '=>[[:space:]]*(true|disabled)'; then
-  bad "LaunchDaemon disabled in launchd's DB (won't return after reboot): $disabled"
-else
-  ok "LaunchDaemon enabled (survives reboot)"
-fi
-
-# Liveness: RunAtLoad + KeepAlive should have the job actually running, not
-# just loaded — and a crash-loop (e.g. an unreadable state dir) would show
-# here instead of a silent Tier-1 pass. Poll briefly; launchd spawns it
-# asynchronously after bootstrap.
-running=0
-for _ in $(seq 1 15); do
-  if sudo launchctl print "system/$LABEL" 2>/dev/null | grep -qE 'state[[:space:]]*=[[:space:]]*running'; then running=1; break; fi
-  sleep 1
-done
-[ "$running" = 1 ] && ok "LaunchDaemon is running (state = running)" \
-  || bad "LaunchDaemon not running after bootstrap (RunAtLoad/KeepAlive; state dir unreadable?)"
+reinstall_rc=0
+sudo "$BINDIR/waired-agent" install --state-dir "$STATE_DIR" >/dev/null 2>&1 || reinstall_rc=$?
+[ "$reinstall_rc" -eq 0 ] && ok "waired-agent install (reinstall) exited 0" \
+  || bad "waired-agent install (reinstall) exited $reinstall_rc"
+assert_launchd_healthy "reinstall"
 
 # --- Tier 2: hands-free enroll + assert -------------------------------------
 if [ "$TIER" -ge 2 ]; then

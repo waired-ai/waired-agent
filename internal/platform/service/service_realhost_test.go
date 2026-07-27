@@ -17,6 +17,12 @@ import (
 // (the system domain + /Library/LaunchDaemons are root-only), so it
 // skips when euid != 0.
 //
+// CI runs it: installtest.yml's macOS leg sets both, before the install
+// harness (this registers the same label the product does, so it has to
+// finish and clean up first). Until #195 nothing set either gate, and the
+// one test written for #176 had never actually executed — keep the CI step
+// and this test together.
+//
 // Steps:
 //
 //  1. renderLaunchDaemonPlist with /usr/bin/yes as the program (benign
@@ -120,11 +126,12 @@ func TestRealLaunchdRoundTrip(t *testing.T) {
 		}
 	}
 
-	// 9. Reinstall. This is the leg CI cannot provide — installtest runs on
-	// a fresh macos-14 VM per run and never reinstalls after its teardown —
-	// and it is exactly where the override bug surfaced in the field:
-	// bootstrap fails EIO(5) on a disabled label, so a host that had ever
-	// been uninstalled could not be reinstalled.
+	// 9. Reinstall — where the override bug surfaced in the field: bootstrap
+	// fails EIO(5) on a disabled label, so a host that had ever been
+	// uninstalled could not be reinstalled. installtest-macos.sh asserts the
+	// same round trip one level up, through the shipped `waired-agent
+	// install` / `uninstall` commands (#195); this one pins the manager
+	// itself, so a regression is attributed to the right layer.
 	if err := (darwinManager{}).Install(cfg); err != nil {
 		t.Fatalf("Install after Uninstall (uninstall→reinstall leg): %v", err)
 	}

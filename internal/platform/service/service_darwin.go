@@ -13,9 +13,54 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
 )
+
+// Bounds for the bootout settle loop below. Variables so a test can
+// shorten them; the loop's exit condition is the observable state, not
+// the clock, so these only cap how long a wedged launchd can stall us.
+var (
+	launchdSettleTimeout = 10 * time.Second
+	launchdSettlePoll    = 50 * time.Millisecond
+)
+
+// bootoutAndSettle removes the job from the given launchd domain target
+// and waits until launchd has actually finished doing it.
+//
+// `launchctl bootout` is ASYNCHRONOUS: it returns as soon as the removal
+// is REQUESTED, and the job lingers in the domain for a moment after.
+// A `bootstrap` issued into that window fails, so `waired-agent uninstall`
+// immediately followed by `waired-agent install` — a repair, the most
+// ordinary reason anyone reinstalls — failed with the installer reporting
+// exit 1 and the host left with no daemon at all. The uninstall→reinstall
+// leg added in #195 caught it on its first CI run; nothing before that ever
+// reinstalled on a host that had just uninstalled.
+//
+// The wait is a poll of the observable state rather than a sleep: for a
+// registered job `launchctl print <target>` succeeds, and once launchd has
+// torn it down it fails. That makes this a barrier (a happens-before on the
+// teardown) instead of a guess about how long teardown takes — the same
+// correction #144 made to the gateway release path.
+//
+// Best-effort throughout: a target that was never loaded fails the first
+// probe and returns immediately, and a timeout returns rather than erroring
+// so the caller's own bootstrap reports the real failure.
+func bootoutAndSettle(target string) {
+	_, _, _ = runLaunchctlFn([]string{"bootout", target})
+
+	deadline := time.Now().Add(launchdSettleTimeout)
+	for {
+		if _, _, err := runLaunchctlFn([]string{"print", target}); err != nil {
+			return // gone from the domain
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(launchdSettlePoll)
+	}
+}
 
 // Darwin runs waired-agent as a system LaunchDaemon (not a per-user
 // LaunchAgent): a root-owned job under /Library/LaunchDaemons that
@@ -144,8 +189,9 @@ func (m darwinManager) Install(cfg Config) error {
 	// `launchctl bootstrap` loads + registers the job in the system
 	// domain. Idempotent failure mode: bootstrap returns exit 17 if the
 	// job is already loaded, so we bootout first (best-effort) and
-	// re-bootstrap.
-	_, _, _ = runLaunchctlFn([]string{"bootout", "system/" + darwinLabel})
+	// re-bootstrap — and WAIT for that bootout, because an unsettled one
+	// makes the bootstrap below fail. See bootoutAndSettle.
+	bootoutAndSettle("system/" + darwinLabel)
 	if _, stderr, err := runLaunchctlFn([]string{
 		"bootstrap", "system", plistPath,
 	}); err != nil {
@@ -178,7 +224,12 @@ func (m darwinManager) Uninstall() error {
 	// everything this function removes — plist, state dir, `--clean`, reboot
 	// — and permanently breaks the `bootstrap` in Install with EIO(5).
 	// Nothing here should leave state behind that Uninstall cannot remove.
-	_, _, _ = runLaunchctlFn([]string{"bootout", "system/" + darwinLabel})
+	//
+	// Settled, not just requested: on return this function promises the job
+	// is gone, and callers act on that promise — `waired-agent uninstall`
+	// followed by `waired-agent install` is the ordinary repair, and it
+	// failed while the teardown was still in flight. See bootoutAndSettle.
+	bootoutAndSettle("system/" + darwinLabel)
 	if err := os.Remove(plistPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", plistPath, err)
 	}

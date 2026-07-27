@@ -164,11 +164,47 @@ jobs:
         shell: pwsh
         run: ./scripts/dev/amsi-scan.ps1 -Strict -OnNoProvider fail -ClearExclusionsForScan
 
+      # macOS, the launchd manager against REAL launchctl (#195/#176).
+      # TestRealLaunchdRoundTrip has existed since #218 and covers the whole
+      # install -> stop -> start -> uninstall -> print-disabled -> reinstall
+      # cycle, but it is gated on WAIRED_LAUNCHD_REALHOST + euid 0 (it mutates
+      # /Library/LaunchDaemons and the system launchd domain), and nothing set
+      # either — so the one test written specifically for #176 had never
+      # executed anywhere. It does here: the runner is disposable.
+      #
+      # BEFORE the harness, not after: this test registers the SAME label
+      # (com.waired.agent) as the product, so running it against an installed
+      # host would bootout the harness's real daemon. Its own t.Cleanup
+      # uninstalls, leaving a clean host for the install test below.
+      #
+      # COMPILE as the runner user, RUN as root. `sudo go test` would invoke
+      # the toolchain as root, which writes root-owned entries into the shared
+      # GOCACHE / GOMODCACHE under ~/go — and every later unprivileged build in
+      # this job then dies with "mkdir ...: permission denied" (observed on the
+      # first run of this step). Only the compiled binary needs the privilege.
+      #
+      # `sudo env` because sudo strips the environment, so the gate variable
+      # has to be re-applied inside it.
+      - name: real launchd round trip (macos, #176)
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          go test -c -o "$RUNNER_TEMP/service.test" ./internal/platform/service/
+          sudo env WAIRED_LAUNCHD_REALHOST=1 "$RUNNER_TEMP/service.test" \
+            -test.run TestRealLaunchdRoundTrip -test.v 2>&1 | tee "$RUNNER_TEMP/launchd.log"
+          # A compiled test binary reports "no tests to run" -> PASS when the
+          # -test.run pattern matches nothing, and the test SKIPs when its two
+          # gates are not both set. Either would make this step vacuously
+          # green, which is the failure mode #215 is about — so require the
+          # test to have actually passed.
+          grep -q '^--- PASS: TestRealLaunchdRoundTrip' "$RUNNER_TEMP/launchd.log"
+
       # macOS: build the darwin tarball, point install.sh's darwin path at it
       # (file://), run it, assert binaries + the system LaunchDaemon plist +
-      # root-owned state dir, then a hands-free OIDC enroll (Tier 2). The
-      # agent is a system LaunchDaemon — it bootstraps + enrolls headless.
-      # Needs passwordless sudo (the hosted runner user has it).
+      # root-owned state dir, the uninstall -> reinstall round trip (#195),
+      # then a hands-free OIDC enroll (Tier 2). The agent is a system
+      # LaunchDaemon — it bootstraps + enrolls headless. Needs passwordless
+      # sudo (the hosted runner user has it).
       - name: install test (macos, tier 1+2)
         if: matrix.os == 'macos'
         run: bash scripts/dev/installtest-macos.sh --tier 2
