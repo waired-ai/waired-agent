@@ -92,6 +92,27 @@ func TestPickEngine_NVIDIASmallVRAM_FallsToOllama(t *testing.T) {
 	}
 }
 
+// A GPU detected without a VRAM figure is the shape the #67 fallbacks
+// can produce: the Linux procfs inventory names the card but carries no
+// capacity, and a Windows driver may publish no registry memory value.
+// Product contract: an unknown budget must not be spent as if it were a
+// large one — vLLM needs a real 8 GB+ figure, so the pick stays on
+// ollama, which degrades to CPU offload on its own if the card cannot
+// hold the model.
+func TestPickEngine_NVIDIAUnknownVRAM_FallsToOllama(t *testing.T) {
+	hw := hardware.Profile{
+		RAMTotalGB: 64,
+		GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "NVIDIA GeForce RTX 3060 Ti"}},
+	}
+	pick, err := PickEngine(EnginePickInput{Hardware: hw})
+	if err != nil {
+		t.Fatalf("PickEngine: %v", err)
+	}
+	if pick.Engine != "ollama" {
+		t.Errorf("Engine = %q, want ollama (VRAM unknown is not a vLLM budget)", pick.Engine)
+	}
+}
+
 func TestPickEngine_NonNVIDIAVendor_FallsToOllama(t *testing.T) {
 	// AMD GPU detected, but the vLLM ROCm runtime adapter is not wired
 	// yet — picker must route to Ollama (working ROCm/Vulkan path).

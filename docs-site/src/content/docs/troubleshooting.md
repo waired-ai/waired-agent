@@ -325,12 +325,45 @@ Other things worth checking:
 
 ## My graphics card is not being used
 
-`waired doctor` reports which backend the engine chose.
+First, see what Waired found:
+
+```sh
+waired models ls --detail
+```
+
+The first line names your card and its memory. If it says `no GPU` on a
+computer that has one, the card was never detected — and everything after
+that, including which model you were given, was sized for the processor.
 
 Waired handles the common cases automatically: integrated AMD and Intel
 graphics are enabled through Vulkan (recent Ollama versions disable them by
 default and fall back to the processor silently), and discrete AMD cards use
 ROCm where it is supported, falling back to Vulkan when it does not engage.
+
+NVIDIA cards are found through the driver itself, not by looking for
+`nvidia-smi` on your `PATH` — the background service does not inherit the
+`PATH` from your terminal, so a card is still found when the tool is not on
+it. If your card is genuinely not showing up, point Waired straight at the
+tool and restart the service:
+
+On Linux, `sudo systemctl edit waired-agent` and add:
+
+```ini
+[Service]
+Environment=WAIRED_NVIDIA_SMI=/usr/bin/nvidia-smi
+```
+
+On Windows, in an administrator PowerShell:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'WAIRED_NVIDIA_SMI', 'C:\Windows\System32\nvidia-smi.exe', 'Machine')
+```
+
+Then restart the service (see
+[“waired-agent is not running”](#a-command-says-waired-agent-is-not-running))
+and run `waired models ls --detail` again. On Windows a full reboot is the
+surest way to make the service pick up a new machine-wide variable.
 
 If you run your own Ollama outside Waired, set `OLLAMA_IGPU_ENABLE=1` yourself
 and restart it.

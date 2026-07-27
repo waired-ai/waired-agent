@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 91d6b33dd19bc0da
+sourceHash: 28c84b274ed1ec32
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -352,11 +352,42 @@ waired runtimes benchmark
 
 ## グラフィックボードが使われていない
 
-`waired doctor` が、エンジンが選んだバックエンドを表示します。
+まず、Waired が何を見つけているかを確認します。
+
+```sh
+waired models ls --detail
+```
+
+1 行目にカード名と搭載メモリが出ます。カードがあるのに `no GPU` と表示される場合、
+カードは検出できていません。渡されたモデルを含め、その後の判断はすべて CPU 前提で
+サイジングされています。
 
 よくあるケースは Waired が自動処理します。統合 GPU（AMD / Intel）は Vulkan 経由で
 有効化し（最近の Ollama は既定で無効にし、黙って CPU にフォールバックします）、
 単体の AMD カードは対応していれば ROCm、うまく動かない場合は Vulkan に切り替えます。
+
+NVIDIA のカードはドライバ自身に問い合わせて検出します。`PATH` 上に `nvidia-smi` が
+あるかは見ません — 常駐サービスは端末の `PATH` を引き継がないため、`PATH` に無くても
+カードは見つかります。それでも検出されない場合は、ツールの場所を直接指定して
+サービスを再起動してください。
+
+Linux では `sudo systemctl edit waired-agent` に次を追加します。
+
+```ini
+[Service]
+Environment=WAIRED_NVIDIA_SMI=/usr/bin/nvidia-smi
+```
+
+Windows では管理者権限の PowerShell で次を実行します。
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  'WAIRED_NVIDIA_SMI', 'C:\Windows\System32\nvidia-smi.exe', 'Machine')
+```
+
+そのうえでサービスを再起動し（[「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)）、
+もう一度 `waired models ls --detail` を実行します。Windows では、マシン全体の環境変数を
+サービスに確実に反映させるには再起動が最も確実です。
 
 Waired の外で自前の Ollama を動かしている場合は、自分で `OLLAMA_IGPU_ENABLE=1` を
 設定して再起動してください。

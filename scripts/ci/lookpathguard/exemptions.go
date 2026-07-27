@@ -24,9 +24,10 @@ const (
 	desktopHelper = "desktop helper binary; picking whichever the user's desktop ships " +
 		"is precisely a PATH question"
 	systemTool = "OS-provided system tool, not a waired component"
-	vendorTool = "GPU vendor driver tool; its presence IS the driver-installed signal"
-	userTool   = "third-party CLI the user installed themselves; waired never manages it"
-	ownCLI     = "waired's own CLI, which the installer puts on PATH because it is what " +
+	vendorTool = "GPU vendor driver tool, probed as ONE step of a chain that continues " +
+		"past a PATH miss — never the verdict on its own"
+	userTool = "third-party CLI the user installed themselves; waired never manages it"
+	ownCLI   = "waired's own CLI, which the installer puts on PATH because it is what " +
 		"the user types; a state-dir lookup would not find it"
 )
 
@@ -67,10 +68,25 @@ var declared = []lookpath{
 	{"internal/proxy/trust/install_linux.go", "update-ca-certificates", systemTool},
 	{"internal/proxy/trust/install_windows.go", "certutil", systemTool},
 
-	// GPU vendor tools: absence is the answer, not a lookup failure.
-	{"cmd/waired/setup_install.go", "nvidia-smi", vendorTool},
+	// GPU vendor tools.
+	//
+	// This block used to read "absence is the answer, not a lookup
+	// failure", and that reason was wrong in the same way the engine
+	// predicates were: a driver tool missing from a LocalSystem service's
+	// PATH says nothing about the driver. #67 was the cost — a host with a
+	// working card profiled as CPU-only, silently. detectNvidia now
+	// resolves through a chain ($WAIRED_NVIDIA_SMI → PATH → the OS's
+	// well-known locations) and falls back to NVML / the OS device
+	// inventory, so the site below is a hint inside that chain. The
+	// declaration stays to keep the chain readable in one list, not to
+	// bless a PATH-only verdict.
 	{"internal/hardware/gpu_nvidia.go", "nvidia-smi", vendorTool},
 	{"internal/hardware/gpu_amd.go", "rocm-smi", vendorTool},
+	// vllm.go is Linux-only (the wheels are), where nvidia-smi ships in
+	// /usr/bin and the vLLM install runs elevated with a normal PATH; it
+	// also wants the tool itself for --query-compute-apps, not a presence
+	// verdict. internal/runtime deliberately does not import
+	// internal/hardware (see ollama_backend.go), so it keeps its own probe.
 	{"internal/runtime/vllm.go", "nvidia-smi", vendorTool},
 
 	// Third-party CLIs the user brings.

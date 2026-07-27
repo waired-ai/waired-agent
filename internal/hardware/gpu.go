@@ -13,11 +13,23 @@ import (
 	"errors"
 )
 
-// VendorDetector probes one vendor's tooling and returns 0 GPUs when
-// the vendor's binary/probe is absent (NOT an error) — matching the
-// "missing nvidia-smi is non-fatal" contract from Step 2. The
-// Accelerators returned reflect ONLY this vendor's flags;
-// composeDetectors OR-merges them across all registered vendors.
+// VendorDetector probes one vendor and must distinguish two answers a
+// single "0 GPUs, no error" cannot:
+//
+//   - ABSENT — this host has no GPU from this vendor. 0 GPUs, no error.
+//     A CPU-only host must still build a Profile cleanly, so this stays
+//     non-fatal.
+//   - UNKNOWN — a device from this vendor is or may be present, and the
+//     detector could not enumerate it. This is an ERROR (optionally
+//     alongside whatever partial devices were read), because reporting
+//     it as ABSENT is what silently profiled a GPU host as CPU-only,
+//     sized the model picker for RAM and wasted the card (#67).
+//
+// Returning devices AND an error is legitimate and both detectors do it:
+// registry/NVML-sourced adapters whose VRAM could not be read are real
+// devices with an incomplete budget. The Accelerators returned reflect
+// ONLY this vendor's flags; composeDetectors OR-merges them across all
+// registered vendors and joins the errors.
 type VendorDetector func(ctx context.Context) ([]GPU, Accelerators, error)
 
 // vendorDetectors lists every GPU vendor waired-agent probes. The
@@ -26,7 +38,7 @@ type VendorDetector func(ctx context.Context) ([]GPU, Accelerators, error)
 // irrelevant for merge correctness; it only affects Profile.GPUs
 // ordering when multiple vendors coexist on one host.
 var vendorDetectors = []VendorDetector{
-	detectNvidia, // gpu_nvidia.go
+	detectNvidia, // gpu_nvidia.go (nvidia-smi chain + NVML / OS inventory)
 	detectAMD,    // gpu_amd.go (rocm-smi + Windows registry fallback)
 	detectApple,  // gpu_apple_darwin.go (system_profiler) + gpu_apple_other.go (stub)
 	// Future: detectIntel (xpu-smi) — append here.

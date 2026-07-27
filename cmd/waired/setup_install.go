@@ -5,11 +5,11 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -37,15 +37,17 @@ var setupVLLMActive = func(stateDir string) bool {
 	return ok
 }
 
-// setupDetectNVIDIA reports whether this host has an NVIDIA driver
-// (nvidia-smi on PATH). It is a cheap fast-fail guard: a host the CP's
-// broadcast summary called NVIDIA but which cannot actually serve vLLM
-// (no driver, wrong OS) is refused before a ~45-minute doomed venv build,
-// not after. The installer's own SM_80 verify stays the final authority.
-var setupDetectNVIDIA = func(context.Context) bool {
-	_, err := exec.LookPath("nvidia-smi")
-	return err == nil
-}
+// setupDetectNVIDIA reports whether this host has an NVIDIA driver. It
+// is a cheap fast-fail guard: a host the CP's broadcast summary called
+// NVIDIA but which cannot actually serve vLLM (no driver, wrong OS) is
+// refused before a ~45-minute doomed venv build, not after. The
+// installer's own SM_80 verify stays the final authority.
+//
+// It asks the profiler's detector rather than $PATH: this runs from the
+// elevated executor, whose PATH is not the desktop user's, and a
+// PATH-only probe there refuses vLLM on a perfectly capable card — the
+// same defect as #67, one gate along.
+var setupDetectNVIDIA = hardware.NVIDIADriverPresent
 
 // setupDetectEngine is the detection seam, for the same reason.
 var setupDetectEngine = setup.DetectOllama

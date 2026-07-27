@@ -774,6 +774,17 @@ func TestOllamaFitsVRAM(t *testing.T) {
 				GPUs: []hardware.GPU{{Vendor: "amd", VRAMTotalMB: 96 * 1024}}}, false},
 		{"variant without a weight annotation is not rejected",
 			catalog.Variant{}, gpu24, true},
+		// The shape the #67 fallbacks can produce: the card is named but
+		// its capacity is not readable (Linux procfs, or a Windows driver
+		// that publishes no registry memory value). Product contract: an
+		// unknown budget suspends the residency gate rather than failing
+		// it — ollama offloads what fits and runs the rest from RAM, so
+		// rejecting the catalog here would be strictly worse than the
+		// CPU-only host this machine was mistaken for.
+		{"detected GPU with an unreadable VRAM figure does not reject the catalog",
+			catalog.Variant{EstimatedWeightGB: 62.0, KVBytesPerTokenFP16: 65536},
+			hardware.Profile{RAMTotalGB: 120,
+				GPUs: []hardware.GPU{{Vendor: "nvidia", Model: "NVIDIA GeForce RTX 3060 Ti"}}}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if got := ollamaFitsVRAM(c.v, c.hw); got != c.want {

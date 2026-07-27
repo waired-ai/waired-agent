@@ -2,11 +2,13 @@
 // running LLM runtimes: OS / arch / CPU / RAM / GPU / installed engines.
 //
 // GPU detection composes vendor-specific detectors (see gpu.go and
-// gpu_<vendor>.go). NVIDIA via `nvidia-smi` CSV. AMD via `rocm-smi`
-// CSV with a Windows registry fallback for hosts where Ollama
-// supplies its own HIP runtime and the user has not installed the
-// ROCm/HIP SDK separately. Apple Metal remains future, addable via
-// the same VendorDetector seam.
+// gpu_<vendor>.go). NVIDIA via `nvidia-smi` CSV, resolved through a
+// chain rather than $PATH alone and backed by NVML / the OS device
+// inventory so a service account with no PATH still sees the card
+// (#67). AMD via `rocm-smi` CSV with a Windows registry fallback for
+// hosts where Ollama supplies its own HIP runtime and the user has not
+// installed the ROCm/HIP SDK separately. Apple Metal remains future,
+// addable via the same VendorDetector seam.
 package hardware
 
 import (
