@@ -9,7 +9,8 @@
 # WHY A SEPARATE LEG (the coverage gap it closes)
 # ------------------------------------------------
 # The other installtest legs enroll hands-free with `waired init
-# --google-sa-login` (oidc) or `--bypass-mode`. Both of those FORCE the
+# --auth-key` (authkey) or `--bypass-mode`. Both of those settle the login
+# before the executor can see it, or FORCE the
 # local enroll path: they are two of the three explicit selectors for it
 # (with re-auth), and since #175 they are the ONLY way to reach it — an
 # unreachable daemon is now an error, not a silent downgrade. See
@@ -33,7 +34,7 @@
 # {control}/v1/login/oidc-grant, internal/controlplane/api/oidc_grant.go)
 # completes ANY waiting session by id — it does not care which client created
 # it. So we:
-#   1. run `waired init` in the FOREGROUND *without* --google-sa-login (so it
+#   1. run `waired init` in the FOREGROUND *without* a credential flag (so it
 #      takes the daemon path) and with --non-interactive (so awaitBrowserSetup
 #      returns at once and the resident executor runs ensureDaemonPathEngine),
 #      inference on + a tiny bundled model so an engine-less host installs one;
@@ -156,7 +157,7 @@ endpoint is unreachable / --enable-oidc-grant is off)"
   _it_daemon_setup_watcher "$guest" "$initlog" "$tok" "$flag" &
   watcher_pid=$!
 
-  # Foreground daemon-path init: NO --google-sa-login (→ daemon path),
+  # Foreground daemon-path init: NO credential flag (→ daemon path),
   # --non-interactive (→ awaitBrowserSetup returns at once → the resident
   # executor runs ensureDaemonPathEngine), inference on + tiny model so an
   # engine-less host installs one. Blocks through engine install + model pull

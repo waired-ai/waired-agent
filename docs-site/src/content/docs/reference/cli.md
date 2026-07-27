@@ -73,6 +73,7 @@ is running it is also what performs the steps the browser setup page asks for**
 | `--reset-config` | Ignore the settings from a previous run and ask everything again from scratch. |
 | `--start-agent=false` | Don't start the background service afterwards; you'll start it yourself. |
 | `--control <URL>` | Sign in against a specific control plane instead of the default. See [Advanced install options](/reference/install-options/). |
+| `--auth-key <key>` | Sign in with an auth key instead of a browser, for servers and containers. Also accepts `file:/path/to/key`, or reads `$WAIRED_AUTH_KEY` when the flag is omitted. Create one under **Settings → Auth keys** in the [web console](/guides/web-console/). See [Sign in and set up](/getting-started/first-run/#servers-and-containers-auth-keys). |
 
 `waired init --help` is the authoritative list; it also carries developer and
 CI-only flags not shown here.

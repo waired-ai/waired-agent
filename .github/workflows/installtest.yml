@@ -75,7 +75,7 @@ jobs:
             timeout: 30
     env:
       # Tier 2: hands-free enroll vs the real dev control plane (#339 grant).
-      IT_ENROLL_MODE: oidc
+      IT_ENROLL_MODE: authkey
       IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
     steps:
       - uses: actions/checkout@v5

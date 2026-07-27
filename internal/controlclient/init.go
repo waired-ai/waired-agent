@@ -55,6 +55,13 @@ type InitParams struct {
 	// the poll token is sent in the X-Waired-Poll-Token header so it
 	// doesn't collide with the Cloud Run IAM bearer in Authorization.
 	HTTPClient *http.Client
+
+	// AuthKey redeems an unattended-enrollment credential (waired#976)
+	// instead of a browser sign-in. When it is accepted the Control Plane
+	// authorizes the session inside the create call and returns the
+	// registration ticket there, so RunInit never calls OnLoginURL and
+	// never enters the poll loop.
+	AuthKey string
 }
 
 // InitResult is what RunInit returns on success.
@@ -100,7 +107,7 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 		return nil, err
 	}
 
-	createBody, _ := json.Marshal(map[string]string{
+	createFields := map[string]string{
 		"client_version":     p.ClientVersion,
 		"device_name":        p.DeviceName,
 		"platform":           p.Platform,
@@ -108,7 +115,14 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 		"machine_public_key": p.MachineKey.PublicBase64(),
 		"node_public_key":    p.NodeKey.PublicBase64(),
 		"client_nonce":       base64.StdEncoding.EncodeToString(clientNonce),
-	})
+	}
+	// Only send the field when there is a key: a Control Plane predating
+	// auth keys decodes with DisallowUnknownFields and would 400 on an
+	// empty one, breaking the interactive flow for no reason.
+	if p.AuthKey != "" {
+		createFields["auth_key"] = p.AuthKey
+	}
+	createBody, _ := json.Marshal(createFields)
 	create, err := postJSON(ctx, httpClient, p.ControlURL+"/v1/auth/login-sessions", "", createBody)
 	if err != nil {
 		return nil, fmt.Errorf("create login session: %w", err)
@@ -119,10 +133,28 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 		UserCode       string `json:"user_code"`
 		PollToken      string `json:"poll_token"`
 		ExpiresAt      string `json:"expires_at"`
+		// Populated only for an auth-key enrollment: the CP authorized the
+		// session inside the create call, so the ticket arrives here
+		// instead of on the first poll.
+		RegistrationTicket string `json:"registration_ticket"`
+		AccountEmail       string `json:"account_email"`
+		NetworkID          string `json:"network_id"`
+		NetworkName        string `json:"network_name"`
 	}
 	if err := json.Unmarshal(create, &createResp); err != nil {
 		return nil, fmt.Errorf("decode create response: %w", err)
 	}
+
+	// Auth-key enrollment: already authorized. Skip OnLoginURL (there is
+	// no URL for anyone to open) and the whole poll loop.
+	if createResp.RegistrationTicket != "" {
+		if p.OnLoginComplete != nil {
+			p.OnLoginComplete(createResp.AccountEmail, createResp.NetworkName)
+		}
+		return enrollWithTicket(ctx, httpClient, p, createResp.RegistrationTicket,
+			createResp.AccountEmail, createResp.NetworkName)
+	}
+
 	if p.OnLoginURL != nil {
 		p.OnLoginURL(createResp.LoginURL, createResp.UserCode)
 	}
@@ -182,12 +214,30 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 		}
 	}
 
+	return enrollWithTicket(ctx, httpClient, p, pollResp.RegistrationTicket,
+		pollResp.AccountEmail, pollResp.NetworkName)
+}
+
+// enrollWithTicket performs the second half of enrollment — sign the
+// transcript, POST /v1/devices/enroll/complete, decode the result. Shared
+// by both ways of obtaining the ticket: the browser flow's poll loop and
+// the auth-key flow's inline authorization.
+//
+// accountEmail / networkName come from whichever half produced the ticket
+// (the CP reports them alongside it). The network ID is deliberately NOT a
+// parameter: the enroll response carries it and is authoritative.
+func enrollWithTicket(
+	ctx context.Context,
+	httpClient *http.Client,
+	p InitParams,
+	ticket, accountEmail, networkName string,
+) (*InitResult, error) {
 	// Build & sign the enrollment transcript.
-	transcript := machineSignatureTranscript(p.MachineKey.PublicBase64(), p.NodeKey.PublicBase64(), pollResp.RegistrationTicket)
+	transcript := machineSignatureTranscript(p.MachineKey.PublicBase64(), p.NodeKey.PublicBase64(), ticket)
 	sig := p.MachineKey.Sign(transcript)
 
 	enrollBody, _ := json.Marshal(map[string]any{
-		"registration_ticket": pollResp.RegistrationTicket,
+		"registration_ticket": ticket,
 		"machine_public_key":  p.MachineKey.PublicBase64(),
 		"node_public_key":     p.NodeKey.PublicBase64(),
 		"machine_signature":   base64.StdEncoding.EncodeToString(sig),
@@ -226,9 +276,9 @@ func RunInit(ctx context.Context, p InitParams) (*InitResult, error) {
 	return &InitResult{
 		DeviceID:                   er.DeviceID,
 		NetworkID:                  er.NetworkID,
-		NetworkName:                pollResp.NetworkName,
+		NetworkName:                networkName,
 		AccountID:                  er.AccountID,
-		AccountEmail:               pollResp.AccountEmail,
+		AccountEmail:               accountEmail,
 		OverlayIP:                  er.OverlayIP,
 		DeviceCertificateJSON:      []byte(er.DeviceCertificate),
 		DeviceAccessToken:          er.DeviceAccessToken,

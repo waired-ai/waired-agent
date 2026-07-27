@@ -127,19 +127,3 @@ func TestBypassCompleteLoginTypedError(t *testing.T) {
 		t.Fatalf("status = %d, want 500", ce.status)
 	}
 }
-
-func TestOIDCGrantCompleteLoginTypedError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"error":{"type":"session_not_pending"}}`, http.StatusConflict)
-	}))
-	defer srv.Close()
-
-	err := oidcGrantCompleteLogin(context.Background(), srv.Client(), srv.URL, "ls_x", "tok")
-	var ce *completionError
-	if !errors.As(err, &ce) {
-		t.Fatalf("expected *completionError, got %T: %v", err, err)
-	}
-	if ce.status != http.StatusConflict {
-		t.Fatalf("status = %d, want 409", ce.status)
-	}
-}

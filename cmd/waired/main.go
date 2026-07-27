@@ -66,10 +66,6 @@ type initFlags struct {
 	stateDir         string
 	bypassMode       bool
 	bypassEmail      string
-	googleSALogin    bool
-	impersonateSA    string
-	oidcIDToken      string
-	oidcAudience     string
 	skipDeploy       bool
 	skipIntegration  bool
 	gatewayBaseURL   string
@@ -82,6 +78,7 @@ type initFlags struct {
 	ollamaSource     string
 	bundledModelID   string
 	mgmtURL          string
+	authKey          string
 	maskPII          bool
 	skipClaudeRoute  bool
 }
@@ -137,14 +134,6 @@ func newInitCmd() *cobra.Command {
 		f.StringVar(&o.bypassEmail, "bypass-email", "",
 			"email passed to /test/complete-login when --bypass-mode is set (default: <hostname>@test.waired.local)")
 	}
-	f.BoolVar(&o.googleSALogin, "google-sa-login", false,
-		"complete login by presenting a Google service-account ID token to the Control Plane's /v1/login/oidc-grant endpoint (no browser). For hands-free testing against a production-like CP (e.g. dev.waired.net) that has --enable-oidc-grant on. Mints the token via gcloud unless --oidc-id-token is given.")
-	f.StringVar(&o.impersonateSA, "impersonate-sa", "",
-		"service account to impersonate when minting the ID token for --google-sa-login (gcloud auth print-identity-token --impersonate-service-account). Requires roles/iam.serviceAccountTokenCreator on it.")
-	f.StringVar(&o.oidcIDToken, "oidc-id-token", "",
-		"explicit Google ID token to present with --google-sa-login; when empty the token is minted via gcloud + --impersonate-sa. Lets CI mint the token out-of-band (e.g. after a Workload Identity Federation auth step).")
-	f.StringVar(&o.oidcAudience, "oidc-audience", "",
-		"audience (Google OAuth client_id) for the minted ID token under --google-sa-login; when empty it is discovered from {control}/v1/login/oidc-grant/audience.")
 	f.BoolVar(&o.skipDeploy, "skip-deploy", false,
 		"skip the deploy phase (hardware profile / runtime check / bundled-model plan)")
 	f.BoolVar(&o.skipIntegration, "skip-integration", false,
@@ -169,6 +158,8 @@ func newInitCmd() *cobra.Command {
 		"pin the bundled model to pre-pull (manifest model_id); empty auto-selects the largest model that fits this host above the coding-quality floor (#517). Combine with --inference-enabled=true to force-install on an under-spec host.")
 	f.StringVar(&o.mgmtURL, "mgmt", defaultMgmtURL,
 		"Local Management API base URL. Sign-in is driven through the waired-agent running here (the Tailscale model); if nothing answers, init reports it instead of enrolling locally")
+	f.StringVar(&o.authKey, "auth-key", "",
+		"enroll with an auth key instead of a browser sign-in, for servers and containers. Accepts the key itself, \"file:/path/to/key\" (preferred on a shared host — a key in argv is visible in `ps`), or $WAIRED_AUTH_KEY when the flag is omitted. Create one in the Waired console. Requires the background service to be running: an auth key is a credential, not a way to skip the daemon.")
 	f.BoolVar(&o.maskPII, "mask-pii", os.Getenv("WAIRED_PII_MASK") != "",
 		"mask personal information (home directory, username, hostname, account email) in init's output — for screenshots and bug reports. Best-effort; env form: WAIRED_PII_MASK=1 (set by the installers' --mask-pii / -MaskPII). Progress rendering falls back to plain lines while masking.")
 	f.BoolVar(&o.skipClaudeRoute, "skip-claude-route", os.Getenv("WAIRED_NO_CLAUDE_PROXY") != "",
@@ -188,10 +179,6 @@ func runInitBody(o *initFlags) error {
 	stateDir := &o.stateDir
 	bypassMode := &o.bypassMode
 	bypassEmail := &o.bypassEmail
-	googleSALogin := &o.googleSALogin
-	impersonateSA := &o.impersonateSA
-	oidcIDToken := &o.oidcIDToken
-	oidcAudience := &o.oidcAudience
 	skipDeploy := &o.skipDeploy
 	skipIntegration := &o.skipIntegration
 	gatewayBaseURL := &o.gatewayBaseURL
@@ -204,21 +191,13 @@ func runInitBody(o *initFlags) error {
 	ollamaSource := &o.ollamaSource
 	bundledModelID := &o.bundledModelID
 	mgmtURL := &o.mgmtURL
+	authKeyFlag := &o.authKey
 	skipClaudeRoute := &o.skipClaudeRoute
 
 	// Reject a typo'd --ollama-source up front so it errors instead of being
 	// silently dropped (enroll falls through to bundled; renew ignores it, #485).
 	if err := validateOllamaSourceFlag(*ollamaSource); err != nil {
 		return err
-	}
-
-	if *googleSALogin {
-		if *bypassMode {
-			return errors.New("--google-sa-login and --bypass-mode are mutually exclusive")
-		}
-		if *oidcIDToken == "" && *impersonateSA == "" {
-			return errors.New("--google-sa-login requires either --oidc-id-token or --impersonate-sa")
-		}
 	}
 
 	// Fall back to the installer-configured control URL (e.g. what
@@ -286,7 +265,7 @@ func runInitBody(o *initFlags) error {
 		// already on disk stays untouched.
 		*skipDeploy = true
 		*skipIntegration = true
-		if !confirmRenew(in, os.Stdout, existing, *bypassMode || *googleSALogin, *nonInteractive) {
+		if !confirmRenew(in, os.Stdout, existing, *bypassMode, *nonInteractive) {
 			fmt.Println("Nothing changed.")
 			return nil
 		}
@@ -315,23 +294,29 @@ func runInitBody(o *initFlags) error {
 	// fallback to the standalone path below — a probe that failed because
 	// the service never started used to silently produce a registered but
 	// capability-less device (#175). See init_route_daemon.go.
+	authKey, err := authKeyFromFlags(*authKeyFlag)
+	if err != nil {
+		return err
+	}
 	route := chooseEnrollRoute(enrollFacts{
 		bypassMode:       *bypassMode,
-		googleSALogin:    *googleSALogin,
 		renewing:         renewing,
+		authKey:          authKey != "",
 		serviceInstalled: serviceInstalledFn(),
 	}, func(serviceInstalled bool) bool {
 		return waitForDaemonStartup(*mgmtURL, serviceInstalled, os.Stdout)
 	})
 	switch route {
 	case routeDaemon:
-		fmt.Println("waired-agent is running; signing in via the daemon (no local enrollment).")
+		if authKey == "" {
+			fmt.Println("waired-agent is running; signing in via the daemon (no local enrollment).")
+		}
 		return runInitViaDaemon(*mgmtURL, *control, *deviceName, *noBrowser, *nonInteractive,
 			*skipIntegration, *gatewayBaseURL, stdinOwner, daemonInitInference{
 				Enabled: *inferenceEnabled,
 				Share:   *inferenceShare,
 				ModelID: *bundledModelID,
-			})
+			}, authKey)
 	case routeAgentDown, routeAgentAbsent:
 		return daemonRequiredError(route, runtime.GOOS, serviceStartHintFn())
 	}
@@ -384,37 +369,6 @@ func runInitBody(o *initFlags) error {
 				return
 			}
 			fmt.Printf("Mock-completed login as %s (session=%s)\n", email, sessionID)
-		}
-	} else if *googleSALogin {
-		// dev.waired.net is publicly reachable, so a plain client suffices
-		// (no Cloud Run IAM token transport). The CP authenticates us via
-		// the Google-signed SA id_token in the grant body, not the HTTP
-		// layer.
-		httpClient = &http.Client{Timeout: 30 * time.Second}
-		fmt.Printf("%s %s\n", steps.signIn, bold("Sign in (Google service account, no browser)"))
-		onLogin = func(loginURL, _ string) {
-			// Same headless retry + fail-fast semantics as bypass-mode
-			// above; the token mint is inside the retried closure so a
-			// transient gcloud / metadata hiccup also self-heals.
-			sessionID := lastPathSegment(loginURL)
-			if sessionID == "" {
-				fmt.Fprintf(os.Stderr, "google-sa-login: cannot parse session id from %q — aborting init\n", loginURL)
-				cancel()
-				return
-			}
-			err := retryHeadlessCompletion(ctx, "google-sa-login", func(ctx context.Context) error {
-				token, err := obtainSAIDToken(ctx, httpClient, *control, *oidcIDToken, *impersonateSA, *oidcAudience)
-				if err != nil {
-					return fmt.Errorf("obtain id_token: %w", err)
-				}
-				return oidcGrantCompleteLogin(ctx, httpClient, *control, sessionID, token)
-			})
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "google-sa-login: completion failed: %v — aborting init so the supervisor retries with a fresh session\n", err)
-				cancel()
-				return
-			}
-			fmt.Printf("Completed login via OIDC grant (session=%s)\n", sessionID)
 		}
 	} else {
 		fmt.Printf("%s %s\n", steps.signIn, bold("Sign in"))

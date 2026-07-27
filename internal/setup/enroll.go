@@ -43,6 +43,11 @@ type EnrollOptions struct {
 	OnLoginURL      func(loginURL, userCode string)
 	OnLoginComplete func(accountEmail, networkName string)
 	ClientVersion   string
+	// AuthKey enrolls with an unattended-enrollment credential instead of
+	// a browser sign-in (#175, waired#976). When set, RunInit skips
+	// OnLoginURL and the poll loop entirely — the Control Plane authorizes
+	// the session in the create call and hands back the ticket there.
+	AuthKey string
 }
 
 // EnrollResult is what callers print after a successful enroll. It
@@ -104,6 +109,7 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 		OnLoginURL:      opts.OnLoginURL,
 		OnLoginComplete: opts.OnLoginComplete,
 		HTTPClient:      opts.HTTPClient,
+		AuthKey:         opts.AuthKey,
 	})
 	if err != nil {
 		return nil, err

@@ -177,7 +177,7 @@ func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitOpt
 		go func() {
 			done <- runInitViaDaemon(url, "https://cp.example", "dev-1",
 				o.noBrowser, o.nonInteractive, o.skipIntegration,
-				"http://127.0.0.1:9473", owner, daemonInitInference{})
+				"http://127.0.0.1:9473", owner, daemonInitInference{}, "")
 		}()
 		select {
 		case runErr = <-done:

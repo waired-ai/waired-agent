@@ -30,6 +30,14 @@ const (
 type LoginStartRequest struct {
 	ControlURL string `json:"control_url,omitempty"`
 	DeviceName string `json:"device_name,omitempty"`
+	// AuthKey redeems an unattended-enrollment credential (#175,
+	// waired#976) instead of waiting for a browser sign-in. Optional; an
+	// empty value is the unchanged interactive flow.
+	//
+	// This route is a mutating verb, so the management server's write
+	// guard already confines it to the local IPC socket (unix socket /
+	// named pipe) — the key never crosses the TCP listener.
+	AuthKey string `json:"auth_key,omitempty"`
 }
 
 // LoginStatus is returned by both /waired/v1/login/start and
