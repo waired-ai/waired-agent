@@ -115,6 +115,33 @@ jobs:
       - name: tray-darwin paths guard
         run: bash scripts/ci/tray-darwin-paths-guard.sh
 
+      # Boundary invariants (#209). Each one closes a place where a
+      # defect class re-entered the tree unopposed.
+      - name: exec.LookPath allowlist
+        # "Is X installed" answered from $PATH alone has been wrong four
+        # times (#67, the deploy path, #179, the setup-install probe):
+        # waired's own engine lives under the state dir, off $PATH, and a
+        # Windows LocalSystem service inherits no user PATH at all. #179
+        # collapsed five contradicting engine predicates into one; this
+        # stops them growing back. Every call site is declared, with its
+        # reason, in scripts/ci/lookpathguard/exemptions.go.
+        run: go run ./scripts/ci/lookpathguard
+
+      - name: internal/platform test floor
+        # internal/platform/browser shipped three OSes' worth of
+        # implementation with no _test.go at all, then produced #181,
+        # #182 and #183. Nothing could have gone red.
+        run: bash scripts/ci/platform-test-floor-guard.sh
+
+      # Self-tests for the two shell guards in this repo that take their
+      # input from outside git (a fixture tree, a changed-file list), so
+      # a change to either one's decision table cannot ship unexercised.
+      - name: platform test floor guard self-test
+        run: bash scripts/ci/platform-test-floor-guard-test.sh
+
+      - name: installer mirror guard self-test
+        run: bash scripts/ci/installer-mirror-guard-test.sh
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
