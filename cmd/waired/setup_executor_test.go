@@ -12,6 +12,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // fakeSetupDaemon serves the two executor routes and records every lease
@@ -90,11 +91,16 @@ func (d *fakeSetupDaemon) noted() []management.SetupExecutorRequest {
 func shrinkSetupTimers(t *testing.T) {
 	t.Helper()
 	prevPoll, prevBeat, prevResidency := setupStatePollInterval, setupExecutorHeartbeatInterval, setupResidencyBudget
+	prevGrace := setupAwaitGrace
 	setupStatePollInterval = 5 * time.Millisecond
 	setupExecutorHeartbeatInterval = 5 * time.Millisecond
 	setupResidencyBudget = 42 * time.Minute // distinguishable from benchPollDeadline
+	// Long enough for a scripted keystroke to arrive, short enough that a
+	// test which never sends one fails in seconds instead of minutes.
+	setupAwaitGrace = 2 * time.Second
 	t.Cleanup(func() {
 		setupStatePollInterval, setupExecutorHeartbeatInterval, setupResidencyBudget = prevPoll, prevBeat, prevResidency
+		setupAwaitGrace = prevGrace
 	})
 }
 
@@ -455,5 +461,119 @@ func TestExecutorProgressSinkMapsInstallerStages(t *testing.T) {
 	sink(infruntime.OllamaInstallProgress{Stage: "extract", Message: "/var/lib/waired"})
 	if len(progressReports(d.noted(), management.SetupStepEngineInstall)) == 0 {
 		t.Fatalf("a non-transfer stage did not become the install row: %+v", d.noted())
+	}
+}
+
+// --- driver + the integration step (waired-agent#198, waired#935) ---
+
+// The lease says who is driving so the wizard can tell a deliberate
+// handoff from a crash. Before this, taking over released the lease and
+// both looked like `executor_gone`.
+func TestExecutorSessionTakeOverClaimsTheTerminalWithoutReleasing(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	s.TakeOver()
+
+	notes := d.noted()
+	last := notes[len(notes)-1]
+	if last.Driver != signer.SetupDriverTerminal {
+		t.Errorf("driver = %q, want terminal", last.Driver)
+	}
+	if !last.Attached {
+		t.Error("TakeOver released the lease; the wizard would report executor_gone for a deliberate handoff")
+	}
+
+	// And it keeps saying so: the daemon's claim is lease-bound, so a
+	// heartbeat that dropped the driver would let it lapse mid-run.
+	s.post(true, management.SetupExecutorPhaseIdle, "", "")
+	notes = d.noted()
+	if got := notes[len(notes)-1].Driver; got != signer.SetupDriverTerminal {
+		t.Errorf("driver = %q on a later post, want it repeated", got)
+	}
+}
+
+// A terminal phase belongs to the step it is about. Reporting the
+// integration through Done/Failed would set the SESSION phase, which the
+// heartbeat repeats and the daemon reads as the engine install's state.
+func TestExecutorSessionStepPhasesDoNotLeakAcrossSteps(t *testing.T) {
+	shrinkSetupTimers(t)
+	shrinkProgressThrottle(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	s.Installing("ollama")
+	s.Done("ollama")
+
+	// Now the integration starts. The engine is done; this must not be
+	// reported as done before it has begun.
+	s.Progress(management.SetupStepIntegration, "", 0, 0, 0)
+	for _, r := range progressReports(d.noted(), management.SetupStepIntegration) {
+		if r.Phase == management.SetupExecutorPhaseDone {
+			t.Fatalf("the engine's done phase leaked onto the integration row: %+v", r)
+		}
+	}
+
+	s.DoneStep(management.SetupStepIntegration)
+	notes := d.noted()
+	last := notes[len(notes)-1]
+	if last.Step != management.SetupStepIntegration || last.Phase != management.SetupExecutorPhaseDone {
+		t.Fatalf("final report = %+v, want integration/done", last)
+	}
+	if last.Engine != "" {
+		t.Errorf("engine = %q on an integration report, want none", last.Engine)
+	}
+}
+
+// The subset form of the per-user hop. Flags must precede the target:
+// stdlib flag parsing stops at the first non-flag argument, so anything
+// after it is silently ignored.
+func TestLinkOneChildArgs(t *testing.T) {
+	got := linkOneChildArgs("http://127.0.0.1:9473", "claude-code")
+	want := []string{"link", "--force", "--no-prompt", "--gateway-base-url", "http://127.0.0.1:9473", "claude-code"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args = %q, want %q", got, want)
+		}
+	}
+}
+
+// Nothing to write must stay nothing to write. Both "no instruction" and
+// "asked, every toggle off" leave the machine untouched — the difference
+// between them is reported by the daemon, not acted on here.
+func TestRunSetupIntegrationsSkipsWhenThereIsNothingToWrite(t *testing.T) {
+	shrinkSetupTimers(t)
+	none := []string{}
+	for _, tc := range []struct {
+		name    string
+		targets *[]string
+	}{
+		{"no instruction", nil},
+		{"asked, all toggles off", &none},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &fakeSetupDaemon{}
+			d.setState(management.SetupStateResponse{Active: true, Integrations: tc.targets})
+			srv := d.server(t)
+			s := attachSetupExecutor(srv.URL, true)
+			defer s.Release()
+
+			if err := runSetupIntegrations(s, io.Discard, io.Discard, "http://127.0.0.1:9473"); err != nil {
+				t.Fatalf("runSetupIntegrations: %v", err)
+			}
+			for _, r := range d.noted() {
+				if r.Step == management.SetupStepIntegration {
+					t.Fatalf("an integration outcome was reported with nothing to write: %+v", r)
+				}
+			}
+		})
 	}
 }

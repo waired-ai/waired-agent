@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // Executor residency budgets (waired#835 §9). Vars so tests can shrink
@@ -91,6 +92,10 @@ type executorSession struct {
 	// can use, so ordinary byte updates are throttled; a step change or a
 	// terminal phase always posts immediately.
 	progressAt time.Time
+	// driver is this surface's claim on the setup (waired-agent#198),
+	// repeated on every post so a daemon that restarted mid-run learns it
+	// again rather than reporting a setup nobody is driving.
+	driver string
 }
 
 // executorProgress is one step's byte-level transfer figures.
@@ -176,6 +181,7 @@ func (s *executorSession) postStep(attached bool, phase, engine, errText, step s
 		CompletedBytes: prog.completed,
 		TotalBytes:     prog.total,
 		RateBps:        prog.rateBps,
+		Driver:         s.currentDriver(),
 	})
 	out, err := httpPost(s.mgmtURL+"/waired/v1/setup/executor", body)
 	if err != nil {
@@ -213,6 +219,34 @@ func (s *executorSession) currentEngine() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.engine
+}
+
+// TakeOver claims the setup for this terminal (waired-agent#198).
+//
+// The lease is deliberately NOT released here. Before this, taking over
+// dropped it, and the wizard — which cannot tell a deliberate handoff
+// from a crash — reported `executor_gone` and sent the operator back to
+// a machine that was in fact busy setting itself up. Holding the lease
+// with a driver claim says which of the two happened, and keeps the
+// answer honest: if this process dies, the lease expires and the claim
+// goes with it.
+func (s *executorSession) TakeOver() {
+	if !s.Supported() {
+		return
+	}
+	s.mu.Lock()
+	s.driver = signer.SetupDriverTerminal
+	s.mu.Unlock()
+	s.post(true, s.currentPhase(), s.currentEngine(), "")
+}
+
+func (s *executorSession) currentDriver() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.driver
 }
 
 // currentProgress returns the step the lease is reporting against and its
@@ -263,10 +297,12 @@ func (s *executorSession) Progress(step, engine string, completed, total, rateBp
 	if engine != "" {
 		s.engine = engine
 	}
+	// Reporting progress on a step IS its in-flight phase, and it
+	// replaces whatever the previous step ended on. Carrying a finished
+	// step's `done` forward would have the heartbeat announce the new
+	// step complete before it started.
+	s.phase = management.SetupExecutorPhaseInstalling
 	phase := s.phase
-	if phase == "" {
-		phase = management.SetupExecutorPhaseInstalling
-	}
 	s.mu.Unlock()
 
 	if throttled {
@@ -287,6 +323,34 @@ func (s *executorSession) Done(engine string) {
 	s.post(true, management.SetupExecutorPhaseDone, engine, "")
 }
 
+// DoneStep / FailedStep report a terminal phase for a NON-engine step —
+// today only the coding-agent integration (waired#935). They are
+// deliberately not Done/Failed: those set the session phase, which the
+// heartbeat then repeats and the daemon reads as the engine install's
+// state. A row outside the engine must not be able to say anything about
+// the engine.
+func (s *executorSession) DoneStep(step string) {
+	s.setStepPhase(step, management.SetupExecutorPhaseDone)
+	s.postStep(true, management.SetupExecutorPhaseDone, "", "", step, executorProgress{})
+}
+
+func (s *executorSession) FailedStep(step, errText string) {
+	s.setStepPhase(step, management.SetupExecutorPhaseFailed)
+	s.postStep(true, management.SetupExecutorPhaseFailed, "", errText, step, executorProgress{})
+}
+
+// setStepPhase moves the lease's reporting focus to one step and records
+// its phase. The heartbeat repeats whatever is set here, so leaving a
+// terminal phase attached to the step it belongs to is what keeps a
+// finished integration from being re-announced as an engine install —
+// and vice versa.
+func (s *executorSession) setStepPhase(step, phase string) {
+	s.mu.Lock()
+	s.step = step
+	s.phase = phase
+	s.mu.Unlock()
+}
+
 // Failed reports a failed install with its detail and drops the claim, so
 // the wizard shows the real reason rather than a generic executor_gone.
 func (s *executorSession) Failed(engine, errText string) {
@@ -294,10 +358,16 @@ func (s *executorSession) Failed(engine, errText string) {
 	s.post(true, management.SetupExecutorPhaseFailed, engine, errText)
 }
 
+// setPhase records an ENGINE phase, and moves the lease's reporting
+// focus back to the engine rows: an empty step is the engine install
+// everywhere in this protocol, and a phase left attached to whatever
+// step was last reported (the integration, say) would be read by the
+// daemon as that step's outcome.
 func (s *executorSession) setPhase(phase, engine string) {
 	s.mu.Lock()
 	s.phase = phase
 	s.engine = engine
+	s.step = ""
 	s.mu.Unlock()
 }
 
@@ -399,6 +469,7 @@ func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, en
 		return benchPollDeadline, false
 	}
 	if st := s.State(); st.Active {
+		enter.Close(out)
 		return setupResidencyBudget, true
 	}
 	deadline := time.Now().Add(grace)
@@ -408,10 +479,17 @@ func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, en
 			writePrompt(out, note)
 		}
 		if took {
+			s.TakeOver()
 			return benchPollDeadline, false
 		}
 		time.Sleep(setupStatePollInterval)
 		if st := s.State(); st.Active {
+			// The point of no return (waired-agent#198): the operator has
+			// confirmed their choices in the browser and the desired state
+			// is written. Terminal takeover is no longer accepted, so the
+			// offer is withdrawn here rather than left standing as
+			// something that would silently fail.
+			enter.Close(out)
 			return setupResidencyBudget, true
 		}
 	}

@@ -165,10 +165,16 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 					engineArrivalPending(sess.State()), enter)
 			}
 			if enter.Fired() {
-				// The operator took the terminal back: stop being the
-				// executor (the wizard switches to "run this here") and
-				// resume the normal CLI tail.
-				sess.Release()
+				// The operator took the terminal back. The lease is
+				// deliberately KEPT (waired-agent#198): this used to
+				// release it, and the wizard — which cannot tell a
+				// deliberate handoff from a crash — reported
+				// `executor_gone` and sent the operator back to a machine
+				// that was in fact busy setting itself up. Claiming the
+				// driver instead says which of the two happened, and stays
+				// honest by construction: if this process dies the lease
+				// expires and the claim dies with it.
+				sess.TakeOver()
 				setupActive = false
 			}
 
@@ -184,7 +190,21 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			// asked at all. Asking here fixes both — setupActive is settled
 			// by now, and the download is done.
 			if setupActive {
-				fmt.Println("You can set up your coding tools later from this terminal with `waired link all`.")
+				// waired#935: the browser asks which coding tools to
+				// connect, and this process is the only one that can write
+				// them — the daemon runs as a service account with no
+				// business in a user's home, and Claude Code's settings are
+				// root-owned. Warn-only, like every other integration path:
+				// sign-in already succeeded, and the step reports its own
+				// failure to the wizard.
+				if err := runSetupIntegrations(sess, os.Stdout, os.Stderr, gatewayBaseURL); err != nil {
+					fmt.Fprintf(os.Stderr,
+						"warn: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
+				} else if sess.State().Integrations == nil {
+					// No instruction at all — an older control plane, or a
+					// wizard that has not asked yet.
+					fmt.Println("You can set up your coding tools later from this terminal with `waired link all`.")
+				}
 			} else if skipIntegration {
 				fmt.Println("Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
 			} else if err := runPostLoginIntegration(postLoginIntegrationOpts{

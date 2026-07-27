@@ -36,6 +36,44 @@ type BenchResult struct {
 	Err       string
 }
 
+// BenchProgress is one report from a measurement in flight
+// (waired-agent#199).
+//
+// Phase separates the two things that take time. Warm-up can take ~180 s
+// on a cold multi-GB model and is NOT a measurement; three minutes of no
+// output reads as a hang, so it is shown as its own phase rather than
+// hidden inside "measuring".
+//
+// The wire has no phase field and does not need one: waired#934's
+// contract expresses warm-up as Trials set with Trial still 0 — nothing
+// has been measured yet. Keeping the distinction here as a named phase
+// rather than an implied zero is for the reader of this package.
+type BenchProgress struct {
+	Phase  string
+	Trial  int // 1-based index of the sample just completed; 0 during warm-up
+	Trials int // planned sample count
+	// SampleTokps is the sample just completed; MedianTokps and SpreadPct
+	// are over the samples completed SO FAR, which is what makes the
+	// figure the wizard shows converge instead of jump.
+	SampleTokps float64
+	MedianTokps float64
+	SpreadPct   float64
+	Method      string
+}
+
+// Benchmark phases — values of BenchProgress.Phase.
+const (
+	benchPhaseWarmup    = "warmup"
+	benchPhaseMeasuring = "measuring"
+)
+
+// report is a nil-safe Progress call.
+func (d BenchDeps) report(p BenchProgress) {
+	if d.Progress != nil {
+		d.Progress(p)
+	}
+}
+
 // avgCodingAgentTokRate is the rough steady-state token throughput
 // one coding-agent session consumes (claude / codex /
 // continue.dev-style). Used as the divisor in N = floor(tokps / 30):
@@ -187,6 +225,14 @@ type BenchDeps struct {
 	// warmup blips don't stick. nil = caching disabled.
 	Cache *benchCache
 
+	// Progress, when non-nil, is called as the measurement advances
+	// (waired-agent#199). The benchmark aggregates internally and used to
+	// emit nothing until it was over, so the wizard could only show a
+	// spinner for up to two minutes — three, counting a cold warm-up.
+	//
+	// Called from the measuring goroutine, synchronously; keep it cheap.
+	Progress func(BenchProgress)
+
 	// Now defaults to time.Now if nil. Test injection.
 	Now func() time.Time
 
@@ -272,6 +318,10 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 	// model OUTSIDE the measured window. Without it a cold multi-GB
 	// load dominated the elapsed time and the host read as an order of
 	// magnitude slower than its real decode rate.
+	//
+	// Announced before it starts: this is the longest silent stretch of
+	// the whole run (#199).
+	deps.report(BenchProgress{Phase: benchPhaseWarmup, Trials: benchSampleCount})
 	if err := warmUpEngine(ctx, deps); err != nil {
 		return failBench(deps, "warmup", err)
 	}
@@ -492,8 +542,26 @@ func measureOllamaNative(ctx context.Context, deps BenchDeps) (float64, float64,
 			return 0, 0, 0, err
 		}
 		rates = append(rates, r)
+		deps.report(sampleProgress(rates, r, benchMethodOllamaEval))
 	}
 	return medianFloat(rates), spreadPercent(rates), len(rates), nil
+}
+
+// sampleProgress builds the report for one completed sample: the sample
+// itself plus the running median and spread over everything measured so
+// far. Running rather than final on purpose — the number on screen then
+// converges instead of jumping, and MeasuredTokps stays what it has
+// always meant (the finished answer, waired#934 §7.2).
+func sampleProgress(all []float64, sample float64, method string) BenchProgress {
+	return BenchProgress{
+		Phase:       benchPhaseMeasuring,
+		Trial:       len(all),
+		Trials:      benchSampleCount,
+		SampleTokps: sample,
+		MedianTokps: medianFloat(all),
+		SpreadPct:   spreadPercent(all),
+		Method:      method,
+	}
 }
 
 // benchSingleRun is one completed OpenAI-compat run, retained so the
@@ -551,7 +619,12 @@ func measureOpenAISlope(ctx context.Context, deps BenchDeps) (float64, float64, 
 		if longEl <= shortEl || longTok <= shortTok {
 			continue // degenerate pair; nothing to divide
 		}
-		slopes = append(slopes, float64(longTok-shortTok)/(longEl-shortEl).Seconds())
+		slope := float64(longTok-shortTok) / (longEl - shortEl).Seconds()
+		slopes = append(slopes, slope)
+		// One PAIR is one data point here, and that is what the wizard
+		// counts. #199 settles the vocabulary: the UI says "measurement n
+		// of 3" and never exposes that a slope sample is two requests.
+		deps.report(sampleProgress(slopes, slope, benchMethodSlope))
 	}
 	if len(slopes) == 0 {
 		return 0, 0, 0, best, errSlopeDegenerate

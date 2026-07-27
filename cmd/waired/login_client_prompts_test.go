@@ -37,10 +37,15 @@ type promptsDaemon struct {
 	statusSeq   []management.InferenceStatus
 	statusCalls int32
 	loginPolls  int32
+	setupPolls  int32
 
 	// onStatus fires on each /inference/status poll, so a test can time
 	// a keystroke to a real point in the flow instead of a wall clock.
 	onStatus func(poll int32)
+	// onSetupState is the same seam one stage earlier, for the window in
+	// which the takeover offer is still open — i.e. before the browser
+	// has written any desired state (waired-agent#198).
+	onSetupState func(poll int32)
 }
 
 func (d *promptsDaemon) server(t *testing.T) *httptest.Server {
@@ -81,6 +86,10 @@ func (d *promptsDaemon) server(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{Ran: true, MeasuredTokps: 42})
 	})
 	mux.HandleFunc("/waired/v1/setup/state", func(w http.ResponseWriter, _ *http.Request) {
+		n := atomic.AddInt32(&d.setupPolls, 1)
+		if d.onSetupState != nil {
+			d.onSetupState(n)
+		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(d.setupState)
@@ -220,14 +229,20 @@ func TestRunInitViaDaemon_TakeoverThenIntegrationGetsItsOwnAnswer(t *testing.T) 
 	d := &promptsDaemon{
 		// A download in flight, so the wait actually runs and the watch
 		// gets the polls a real terminal would have.
-		statusSeq:  downloadingRun(200),
-		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
+		statusSeq: downloadingRun(200),
+		// Deliberately NOT Active: the takeover offer is only open while
+		// the browser has written nothing (waired-agent#198), so the
+		// keystrokes are timed to the grace loop's own polls rather than
+		// to the model wait that follows it. The inverted case — Enter
+		// AFTER the browser committed — is
+		// TestRunInitViaDaemon_TakeoverRefusedAfterTheBrowserCommits.
+		setupState: management.SetupStateResponse{EngineInstalled: true, DesiredEngine: "ollama"},
 	}
-	d.onStatus = func(poll int32) {
+	d.onSetupState = func(poll int32) {
 		switch poll {
-		case 3:
+		case 2:
 			_, _ = keys.Write([]byte("\n")) // the muscle-memory Enter
-		case 6:
+		case 4:
 			// The confirmation, and then the coding-agent answer that the
 			// old code's still-parked listener would have eaten (#185).
 			_, _ = keys.Write([]byte("y\nn\n"))
@@ -244,6 +259,53 @@ func TestRunInitViaDaemon_TakeoverThenIntegrationGetsItsOwnAnswer(t *testing.T) 
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("takeover run missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+// TestRunInitViaDaemon_TakeoverRefusedAfterTheBrowserCommits is the
+// inverted half of the test above, and a deliberate inversion of what
+// this flow used to do (waired-agent#198): with desired state already
+// written, Enter no longer moves setup to the terminal.
+//
+// The offer was open until the process exited, so a keystroke minutes
+// after the browser had committed still switched modes — leaving the
+// wizard driving a setup the terminal had taken over, with the control
+// plane's desired state pointing at neither. It is degraded rather than
+// disabled: a browser that crashes must still leave a way out, and an
+// operator pressing the key the docs taught them deserves an answer.
+func TestRunInitViaDaemon_TakeoverRefusedAfterTheBrowserCommits(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	owner, keys := scriptStdinPipe(t)
+	d := &promptsDaemon{
+		statusSeq:  downloadingRun(200),
+		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
+	}
+	d.onStatus = func(poll int32) {
+		if poll == 3 {
+			_, _ = keys.Write([]byte("\n"))
+		}
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{})
+
+	// The offer is withdrawn where it stops being true...
+	if !strings.Contains(out, takeoverClosedLine) {
+		t.Errorf("the closed-offer line was never printed\n---\n%s", out)
+	}
+	// ...the keystroke is answered rather than ignored...
+	if !strings.Contains(out, "press Ctrl-C and run the setup command again") {
+		t.Errorf("Enter after the commit said nothing\n---\n%s", out)
+	}
+	// ...and setup did NOT move to the terminal.
+	for _, unwanted := range []string{
+		"Take over setup in this terminal?",
+		"Taking over — setup continues",
+		"Coding-agent integration",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("takeover happened after the browser committed: found %q\n---\n%s", unwanted, out)
 		}
 	}
 }
