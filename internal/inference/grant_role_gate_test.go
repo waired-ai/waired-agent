@@ -187,23 +187,10 @@ func TestGrantRoleGate_NoOwnerLatchFromForeignPeer(t *testing.T) {
 	}
 
 	// Drain one slot; a public guest is admitted immediately — proof the
-	// latch never engaged.
-	//
-	// Reading the drained request's own result first is the barrier that
-	// matters, and it is not decoration. gw.release() only closes the
-	// gate channel: the capacity SLOT is freed by capacityGate's
-	// `defer s.inflight.Release()`, which runs after the handler returns
-	// — i.e. strictly before do() returns and this send happens, and
-	// possibly long after release() returned. Issuing the next request
-	// without that barrier raced the counter: the new guest saw the node
-	// still at capacity, took a 503, never parked, and the
-	// waitForInFlight below could then never be satisfied no matter how
-	// long it waited. An idle machine won that race almost every time; a
-	// loaded CI runner (go test ./... schedules package binaries
-	// concurrently) lost it, and the flake landed on whichever PR
-	// happened to add test weight elsewhere in the tree.
-	gw.release()
-	if code := <-results; code != http.StatusOK {
+	// latch never engaged. releaseAndWait, not a bare release(), is what
+	// makes the slot genuinely free before the next request is issued
+	// (see its doc comment: that race is #144 / #222).
+	if code := gw.releaseAndWait(t, results); code != http.StatusOK {
 		t.Fatalf("drained public guest: got %d, want 200", code)
 	}
 
