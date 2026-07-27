@@ -17,7 +17,7 @@
 // agents.defaults.models. The user's default model (agents.defaults.model)
 // is never touched. A plugin alone cannot make a brand-new provider's models
 // resolvable for inference — the resolveDynamicModel provider hook is what
-// does, and it also controls the on-wire model string. See docs/decisions.md
+// does, and it also controls the on-wire model string. See waired/docs/decisions/
 // and the work record for the spike that established this.
 package openclaw
 

@@ -325,7 +325,7 @@ type MenuModel struct {
 	// the pre-extension menu.
 	//
 	// Since the transparent proxy became the sole Claude-routing method
-	// on Linux (docs/decisions.md), this section reports PROXY status
+	// on Linux (waired/docs/decisions/), this section reports PROXY status
 	// (header = live serving state, ProxyLabel = OS-level install state)
 	// instead of the retired shell-alias / IDE-wrapper detection.
 	ShowClaude   bool

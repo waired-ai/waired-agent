@@ -677,7 +677,7 @@ func run(ctx context.Context, args []string) error {
 		// (b) runNetworkMapLoop → Update on every frame
 		// Read by GET /waired/v1/inference/mesh on the management API.
 		// The 15 s staleness threshold matches the 5 s probe / push
-		// cadence × 3 — see docs/decisions.md.
+		// cadence × 3 — see waired/docs/decisions/.
 		meshAgg := inferencemesh.New(id.DeviceID, 15*time.Second, time.Now)
 
 		// Phase 4 peer-overlay auth lookup. Fed alongside the aggregator

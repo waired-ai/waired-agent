@@ -12,7 +12,7 @@
 // Apply is idempotent. Uninstall reverts everything Apply touched, by
 // reading the ledger written to ~/.config/waired/integrations/applied.json.
 //
-// Critical design choices (see docs/decisions.md):
+// Critical design choices (see waired/docs/decisions/):
 //
 //   - ~/.claude/settings.json is NEVER touched. We rely on the shell
 //     environment instead, in pyenv/nvm/conda style.

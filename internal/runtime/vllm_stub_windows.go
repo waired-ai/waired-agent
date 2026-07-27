@@ -7,7 +7,7 @@
 // compile time; the stubs let those binaries compile on Windows and
 // surface "vLLM is not supported on Windows" errors at runtime.
 //
-// Decision: docs/decisions.md "Windows 版 waired-agent の方針" (20260514).
+// Decision: waired/docs/decisions/ "Windows 版 waired-agent の方針" (20260514).
 
 package runtime
 

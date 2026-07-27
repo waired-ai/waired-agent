@@ -19,7 +19,7 @@
 //
 // REQUIRED before any release made from a GPU-equipped host. CI must
 // include a GPU lane that runs `make e2e-vllm` — see
-// docs/decisions.md "GPU test mandate" entry.
+// waired/docs/decisions/ "GPU test mandate" entry.
 package inference_e2e
 
 import (

@@ -260,6 +260,9 @@ public-repo caution as Knowledge Notes applies.
   another, link both ways (`superseded_by` on the old, `supersedes` on the
   new) — `scripts/ci/decision-log-guard.py` fails lint on a one-way or
   dangling link, and on front-matter that disagrees with `## Status`.
+  Link partial supersessions too — `## Status` says which parts, and
+  `status:` follows that prose, so a partly-superseded decision stays
+  `accepted` and just gains `superseded_by`.
 * Prefer concise entries that explain context, decision, and
   consequences.
 

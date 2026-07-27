@@ -16,7 +16,7 @@
 # point for the one-liners above; the former waired-install mirror was
 # folded into this repo at the #184 cutover).
 #
-# RELEASE-STREAM SPLIT (docs/decisions.md "client repo public 分離", #184):
+# RELEASE-STREAM SPLIT (waired/docs/decisions/ "client repo public 分離", #184):
 # this `v*` pipeline is the AGENT / client stable-channel publisher and lives
 # in the public waired-ai/waired-agent repo (every job is guarded on
 # github.repository so the copy kept in the monorepo until the cutover PR is

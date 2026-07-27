@@ -80,7 +80,7 @@ type PublicPolicy struct {
 // §4.2): enabling Public Share MIGHT give access to better nodes. It
 // deliberately carries no tier and names no node — a pre-consent agent
 // holds no grants, so no public node is in its map and none is
-// observable. See waired/docs/decisions.md (20260720).
+// observable. See waired/docs/decisions/ (20260720).
 //
 // Primitive fields only: the router does not import
 // internal/observability, matching the narrow-interface convention the

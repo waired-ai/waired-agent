@@ -23,7 +23,7 @@ import (
 // statusLine already exists — only after the user consents, wrapping rather than
 // clobbering it. This narrowly overrides the historical "never touch
 // ~/.claude/settings.json" posture (see internal/integration/claudecode/adapter.go
-// and docs/decisions.md); it is confined to the statusLine key and is fully
+// and waired/docs/decisions/); it is confined to the statusLine key and is fully
 // restorable.
 //
 // The injected command self-guards on `command -v waired`, so an uninstalled

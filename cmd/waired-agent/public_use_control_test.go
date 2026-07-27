@@ -120,7 +120,7 @@ func TestPublicUseController_NudgeIsOneShotAndAnonymous(t *testing.T) {
 		t.Errorf("Message = %q", ev.Message)
 	}
 	// The hint names no node and asserts no tier: pre-consent there is
-	// nothing observable to name (see waired/docs/decisions.md 20260720).
+	// nothing observable to name (see waired/docs/decisions/ 20260720).
 	if ev.Model != "qwen3-8b-instruct" || ev.Reason != router.NudgeReasonNoCandidate {
 		t.Errorf("payload = %+v", ev)
 	}

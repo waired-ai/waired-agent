@@ -3,7 +3,7 @@
 # proto/v* tag and fails on any non-additive change (removed / retyped /
 # retagged exported API, non-omitempty additions to existing structs,
 # changed const values). Rules and rationale: scripts/ci/protoguard and
-# docs/decisions.md (20260719). Run from the repository root; CI entry
+# docs/decisions/20260719/0000-concurrent-proto-development.md (20260719). Run from the repository root; CI entry
 # point is .github/workflows/proto-guard.yml.
 set -euo pipefail
 

@@ -44,7 +44,7 @@ type publicUseController struct {
 	// way to have seen it. It would also make this a second writer to a
 	// file D1 documents as management-API-only, and put a
 	// read-modify-write on the inference hot path. See
-	// waired/docs/decisions.md (20260720).
+	// waired/docs/decisions/ (20260720).
 	nudged atomic.Bool
 }
 

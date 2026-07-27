@@ -15,7 +15,7 @@ import (
 // Anthropic API because local inference errored and auto-mode fell back. This is
 // the one built-in Claude Code channel (besides the statusline) that shows text
 // *in the TUI*, so it is how waired keeps the fallback honest and non-silent
-// (see docs/decisions.md, feedback: Claude integration must never break silently).
+// (see waired/docs/decisions/, feedback: Claude integration must never break silently).
 //
 // It lives in managed-settings.json — not the user's ~/.claude/settings.json —
 // because Stop hooks *array-merge* across every settings scope (managed included),

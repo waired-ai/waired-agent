@@ -413,7 +413,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # GPU vLLM install + serve (waired#835 Phase 2, #153). This is the GPU lane
-  # the "GPU テスト実行義務" decision (docs/decisions.md) has mandated since
+  # the "GPU テスト実行義務" decision (waired/docs/decisions/) has mandated since
   # Step 2: "when CI is built, include a GPU lane that runs make e2e-vllm".
   # It reuses that harness verbatim — a real `waired runtimes install vllm`
   # venv build (the same vllmInstallCore the setup executor drives on the

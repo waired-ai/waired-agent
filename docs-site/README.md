@@ -37,7 +37,7 @@ operator provisions Firebase (until then it only builds). Live vs preview
 project is selected by a conditional `environment:` on the deploy job: `push`
 runs in the GitHub `production` Environment (prod vars), `pull_request` uses the
 repo-level dev vars (#453). `firebase.json` uses `target: docs`, resolved per
-project by `.firebaserc`. See `docs/decisions.md` for the hosting decision.
+project by `.firebaserc`. See `waired/docs/decisions/` for the hosting decision.
 
 ## Layout
 

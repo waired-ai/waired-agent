@@ -21,7 +21,7 @@ import (
 // This file implements the coding-agent integration consent step shared
 // by `waired init`'s standalone and daemon-driven journeys.
 //
-// Policy (docs/decisions.md): the integration is no longer gated on
+// Policy (waired/docs/decisions/): the integration is no longer gated on
 // Detect() — the operator is asked exactly once, default Yes, and a Yes
 // force-applies every adapter so the integration activates the moment
 // the coding agent is installed. Detection results are shown as

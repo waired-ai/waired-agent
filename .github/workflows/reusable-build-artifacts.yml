@@ -43,7 +43,7 @@ jobs:
     # All four legs run on GitHub-hosted runners: the repo is public, so
     # hosted standard runners are free, and the ephemeral hosted runner +
     # GitHub OIDC give a stronger SLSA-style builder provenance chain
-    # while Authenticode signing is still deferred (see docs/decisions.md
+    # while Authenticode signing is still deferred (see waired/docs/decisions/
     # "Release builds run on GHA hosted runners"). The windows/darwin
     # legs previously ran on self-hosted ephemeral-VM pools purely to cut
     # the GH-hosted bill while the repo was private (#516 / #547); with
@@ -207,7 +207,7 @@ jobs:
           ls -lh dist/WairedSetup-*.exe
 
       # Authenticode signing placeholder. Inert until a code-signing
-      # identity is provisioned (see docs/decisions.md). When the secret
+      # identity is provisioned (see waired/docs/decisions/). When the secret
       # is set, base64-decode the PFX and signtool the Setup.exe. The
       # bare EXEs inside the zip are verified by SHA-256 + run via SCM,
       # so SmartScreen mostly only matters for the GUI Setup.exe.
