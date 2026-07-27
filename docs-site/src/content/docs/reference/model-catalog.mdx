@@ -95,10 +95,23 @@ Big total size with a small active footprint — pairs well with multi-GPU serve
 ## How Waired picks for you
 
 The Auto-Selector chooses the highest-quality model that fits your machine's
-memory. On shared-memory systems (Apple Silicon, AMD Strix Halo), MoE models
-with a small *active* parameter count are favored because decode speed tracks
-active params, not total size. To preview a routing decision without changing
-anything:
+memory **and is fast enough to be worth using**. On shared-memory systems
+(Apple Silicon, AMD Strix Halo), MoE models with a small *active* parameter
+count are favored because decode speed tracks active params, not total size.
+
+Fitting in memory is not the same as running well: on a shared-memory Mac a
+large dense model can fit and still answer at single-digit words per second,
+while a mixture-of-experts model of similar size answers many times faster.
+Where Waired recognises your exact chip it takes that chip's memory speed into
+account and skips a model that would be too slow on it, instead of recommending
+it and warning you afterwards. A faster chip keeps what a slower one skips — an
+M4 Max is not held to what an M4 base can do. On a chip Waired does not
+recognise yet nothing is skipped, and you may simply see a "may be slow" note.
+
+This only affects what Waired picks *for* you. You can still choose any model
+that fits — see [Choose which AI model runs](/guides/choose-a-model/).
+
+To preview a routing decision without changing anything:
 
 ```sh
 waired infer --explain "say hi"

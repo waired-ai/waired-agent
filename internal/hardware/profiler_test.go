@@ -558,3 +558,74 @@ func TestNearestExistingDir(t *testing.T) {
 		t.Errorf("nearestExistingDir(existing) = %q, want %q", got, dir)
 	}
 }
+
+// TestProfile_MemoryBandwidthFromChipName pins the wiring #251 adds: the
+// profiler fills MemoryBandwidthSpecGBs from CPU.Model AFTER the UMA hook
+// has run, and carries it through HostFit() into the shared fit rules.
+//
+// It runs on every OS because the population step is untagged — the
+// lookup is identical on all three, and keeping it out of the per-OS
+// hooks is what stops them drifting (CLAUDE.md §Cross-OS parity).
+func TestProfile_MemoryBandwidthFromChipName(t *testing.T) {
+	newProfiler := func(cpuModel string, uma func(context.Context, *Profile)) *Profiler {
+		return NewProfiler("/tmp/cache",
+			WithOSArch(func() (string, string) { return "darwin", "arm64" }),
+			WithCPU(func(context.Context) CPUInfo { return CPUInfo{Model: cpuModel, Cores: 10} }),
+			WithRAM(func(context.Context) (int, int, error) { return 24, 18, nil }),
+			WithStorage(func(context.Context, string) (int64, error) { return 1, nil }),
+			WithEngineVersion(func(context.Context, string) (bool, string) { return false, "" }),
+			WithGPU(func(context.Context) ([]GPU, Accelerators, error) {
+				return []GPU{{Vendor: "apple", Model: "Apple GPU"}}, Accelerators{Metal: true}, nil
+			}),
+			WithUMA(uma),
+		)
+	}
+	markUnified := func(_ context.Context, prof *Profile) {
+		prof.UnifiedMemory = true
+		prof.UsableVRAMMB = 18432
+	}
+
+	t.Run("known part", func(t *testing.T) {
+		prof := newProfiler("Apple M4", markUnified).Profile(context.Background())
+		if prof.MemoryBandwidthSpecGBs != 120 {
+			t.Errorf("MemoryBandwidthSpecGBs = %v, want 120", prof.MemoryBandwidthSpecGBs)
+		}
+		if got := prof.HostFit().MemoryBandwidthSpecGBs; got != 120 {
+			t.Errorf("HostFit() dropped the bandwidth: %v", got)
+		}
+	})
+
+	t.Run("unknown part stays at zero", func(t *testing.T) {
+		prof := newProfiler("Apple M9 Ultra", markUnified).Profile(context.Background())
+		if prof.MemoryBandwidthSpecGBs != 0 {
+			t.Errorf("MemoryBandwidthSpecGBs = %v, want 0 for an unrecognised part",
+				prof.MemoryBandwidthSpecGBs)
+		}
+	})
+
+	t.Run("ordering: the lookup runs after the UMA hook", func(t *testing.T) {
+		// The hook is what decides UnifiedMemory, and the lookup is gated
+		// on it. Running the lookup first would silently yield 0 on every
+		// unified host — a regression that changes no test that does not
+		// assert this ordering.
+		prof := newProfiler("Apple M4 Max", func(_ context.Context, p *Profile) {
+			if p.MemoryBandwidthSpecGBs != 0 {
+				t.Errorf("bandwidth was populated BEFORE the UMA hook (%v); the hook "+
+					"sets UnifiedMemory, which the lookup is gated on",
+					p.MemoryBandwidthSpecGBs)
+			}
+			markUnified(context.Background(), p)
+		}).Profile(context.Background())
+		if prof.MemoryBandwidthSpecGBs != 546 {
+			t.Errorf("MemoryBandwidthSpecGBs = %v, want 546", prof.MemoryBandwidthSpecGBs)
+		}
+	})
+
+	t.Run("no UMA hook means no bandwidth", func(t *testing.T) {
+		prof := newProfiler("Apple M4", func(context.Context, *Profile) {}).Profile(context.Background())
+		if prof.MemoryBandwidthSpecGBs != 0 {
+			t.Errorf("MemoryBandwidthSpecGBs = %v, want 0 when nothing marked the host unified",
+				prof.MemoryBandwidthSpecGBs)
+		}
+	})
+}
