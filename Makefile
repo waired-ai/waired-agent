@@ -561,7 +561,9 @@ install-script-lint:
 	           scripts/ci/platform-test-floor-guard-test.sh \
 	           scripts/ci/tray-darwin-paths-guard.sh \
 	           scripts/ci/tray-dialog-seam-guard.sh \
-	           scripts/ci/harness-failure-strings-guard.sh
+	           scripts/ci/harness-failure-strings-guard.sh \
+	           scripts/ci/nightly-file-issue.sh \
+	           scripts/ci/nightly-file-issue-test.sh
 
 # The PowerShell half of install-script-lint. Separate because the two have
 # different prerequisites -- shellcheck is a package, PSScriptAnalyzer is a

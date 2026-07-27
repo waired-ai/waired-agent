@@ -522,3 +522,59 @@ jobs:
             vllm-e2e.log
           if-no-files-found: ignore
           retention-days: 14
+
+  # --- the signal (#215) -------------------------------------------------
+  # A nightly is the one lane nobody is watching. This workflow ran red for
+  # five consecutive working days while the failure it was reporting (#178)
+  # sat in its own logs, and the way anyone eventually found out was a user
+  # hitting the bug and filing it by hand. Job summaries do not help: a
+  # summary is read only by someone who already opened the run.
+  #
+  # One job that needs() every lane rather than a step inside each: matrix
+  # legs finish concurrently, so per-leg filing would race and produce
+  # several issues for one broken night. This names every red lane in one
+  # issue, and dedupes on the tag until a human closes it.
+  #
+  # Schedule only. A workflow_dispatch is someone watching the run already;
+  # filing an issue at them is noise.
+  #
+  # NOT required-check instead: these lanes install a real engine, pull a
+  # multi-GB model from an external registry and run on self-hosted
+  # hardware — exactly the externally-flaky shape that stays out of the
+  # ruleset, the same call already made for the testnet gate.
+  report:
+    name: report a red nightly
+    needs: [installtest-inference, daemon-engine, routing, banner, vllm-install]
+    if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: file an issue naming the red lanes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE_TAG: "[nightly-installtest]"
+          RESULT_INFERENCE: ${{ needs.installtest-inference.result }}
+          RESULT_DAEMON_ENGINE: ${{ needs.daemon-engine.result }}
+          RESULT_ROUTING: ${{ needs.routing.result }}
+          RESULT_BANNER: ${{ needs.banner.result }}
+          RESULT_VLLM: ${{ needs.vllm-install.result }}
+        run: |
+          set -euo pipefail
+          red=""
+          for pair in \
+              "install+inference:${RESULT_INFERENCE}" \
+              "daemon-path engine install:${RESULT_DAEMON_ENGINE}" \
+              "routing sentinel:${RESULT_ROUTING}" \
+              "banner render check:${RESULT_BANNER}" \
+              "vLLM install+serve:${RESULT_VLLM}"; do
+            [ "${pair##*:}" = "failure" ] && red="${red}- ${pair%:*}"$'\n'
+          done
+          export TITLE="${TITLE_TAG} installtest-inference nightly failed"
+          export BODY="$(printf 'Red lanes:\n\n%s\nRun: %s/%s/actions/runs/%s\n\nThis issue dedupes on %s, so it is filed once per outage, not once per night. Closing it re-arms the report.\n' \
+            "${red}" "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${TITLE_TAG}")"
+          bash scripts/ci/nightly-file-issue.sh
