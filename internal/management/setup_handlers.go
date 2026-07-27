@@ -153,6 +153,26 @@ type SetupExecutorRequest struct {
 	Engine string `json:"engine,omitempty"`
 	// Error carries the install failure detail for phase=failed.
 	Error string `json:"error,omitempty"`
+	// ErrorCode is the executor's own §7 classification of that failure —
+	// one of the signer.SetupError* values (waired-agent#135).
+	//
+	// The executor KNOWS why it stopped: not elevated, opted out, a host
+	// that cannot run this engine. Before this it could only post the
+	// prose, and the daemon re-derived a code from it by substring match
+	// — which recognised "out of disk" and called everything else a
+	// network error, so a permissions problem told the operator to check
+	// their internet connection. Declaring the code keeps the intent from
+	// being lost and re-guessed.
+	//
+	// Empty means "you classify it": that is what an executor predating
+	// this field sends, and what this one still sends for a genuine
+	// install failure whose text is the only evidence there is (the
+	// disk-full detection in classifySetupFailure).
+	//
+	// Self-asserted like Attached and Elevated above, and with the same
+	// blast radius — a local process that lies here changes which words
+	// the wizard shows, not what anyone is allowed to do.
+	ErrorCode string `json:"error_code,omitempty"`
 
 	// Step names which setup step (§7) this report is about; empty means
 	// engine_install, which is what every executor predating the split
@@ -256,6 +276,12 @@ func (s *Server) handleSetupExecutor(w http.ResponseWriter, r *http.Request) {
 	// push from this device.
 	if !signer.IsValidSetupDriver(req.Driver) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid driver"})
+		return
+	}
+	// Same reasoning for the declared error code: it is copied onto the
+	// step verbatim, and the CP validates the enum on intake.
+	if !signer.IsValidSetupErrorCode(req.ErrorCode) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid error code"})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.setupExecutor.NoteExecutor(r.Context(), req))

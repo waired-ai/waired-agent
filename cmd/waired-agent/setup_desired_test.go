@@ -6,11 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1183,4 +1185,240 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// --- error classification (waired-agent#131 / #134 / #135 / #137) ---
+
+// TestSetupFailureDetailSurvivesHeartbeatAndRelease is the #131
+// regression bar, and the bar is DELIBERATELY the heartbeat rather than
+// the release the issue named: the heartbeat repeats the phase every 10 s
+// with an empty Error, so before this the executor's failure detail
+// survived at most ten seconds even on a lease nobody had released. Once
+// it was gone, classifySetupFailure("") reported network_error — every
+// failed engine install, whatever had actually happened.
+//
+// Product contract: a report that says nothing about the failure does not
+// erase the failure.
+func TestSetupFailureDetailSurvivesHeartbeatAndRelease(t *testing.T) {
+	const detail = "the setup command on this device is not running with administrator privileges"
+	// Both follow-ups carry phase=failed and no text, because that is
+	// exactly what the CLI sends: heartbeat() and Release() both repeat
+	// s.currentPhase(), which Failed() has just set to failed, and neither
+	// has any error text to repeat.
+	for _, tc := range []struct {
+		name string
+		next management.SetupExecutorRequest
+	}{
+		{"heartbeat", management.SetupExecutorRequest{
+			Attached: true, Elevated: true, Engine: "ollama",
+			Phase: management.SetupExecutorPhaseFailed,
+		}},
+		{"release", management.SetupExecutorRequest{
+			Attached: false, Engine: "ollama",
+			Phase: management.SetupExecutorPhaseFailed,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSetupProvider{}
+			r, _ := leasedReconciler(t, f, "ollama", "")
+			ctx := context.Background()
+			r.NoteExecutor(ctx, management.SetupExecutorRequest{
+				Attached: true, Elevated: true, Phase: management.SetupExecutorPhaseFailed,
+				Engine: "ollama", Error: detail, ErrorCode: signer.SetupErrorPermissionDenied,
+			})
+			r.NoteExecutor(ctx, tc.next)
+			step := stepByID(t, r.snapshot(ctx), setupStepEngineInstall)
+			if step.ErrorCode != signer.SetupErrorPermissionDenied {
+				t.Errorf("error_code = %q, want permission_denied", step.ErrorCode)
+			}
+			if step.ErrorDetail != detail {
+				t.Errorf("error_detail = %q, want the executor's own text", step.ErrorDetail)
+			}
+		})
+	}
+}
+
+// TestSetupIntegrationFailureDetailSurvivesHeartbeat: the same erasure hit
+// the integration row, because FailedStep leaves the lease reporting
+// against it and the next heartbeat repeats that step with no text.
+func TestSetupIntegrationFailureDetailSurvivesHeartbeat(t *testing.T) {
+	f := &fakeSetupProvider{}
+	r, _ := leasedReconciler(t, f, "", "")
+	ctx := context.Background()
+	targets := []string{signer.IntegrationClaudeCode}
+	r.Apply(ctx, integrationFrame(&targets))
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Step: setupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed, Error: "open settings.json: permission denied",
+	})
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Step: setupStepIntegration,
+		Phase: management.SetupExecutorPhaseFailed,
+	})
+	step := stepByID(t, r.snapshot(ctx), setupStepIntegration)
+	if step.ErrorDetail == "" || step.ErrorCode != signer.SetupErrorPermissionDenied {
+		t.Fatalf("integration step = %+v, want the detail kept and permission_denied", step)
+	}
+}
+
+// TestSetupMovingOffFailedClearsTheReason: the preservation rule above
+// must not latch. A step that starts working again carries no stale
+// failure with it.
+func TestSetupMovingOffFailedClearsTheReason(t *testing.T) {
+	f := &fakeSetupProvider{}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	ctx := context.Background()
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Phase: management.SetupExecutorPhaseFailed,
+		Engine: "ollama", Error: "boom", ErrorCode: signer.SetupErrorInternal,
+	})
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Phase: management.SetupExecutorPhaseInstalling, Engine: "ollama",
+	})
+	step := stepByID(t, r.snapshot(ctx), setupStepEngineInstall)
+	if step.Status != signer.SetupStatusRunning || step.ErrorCode != "" || step.ErrorDetail != "" {
+		t.Fatalf("engine step = %+v, want running with no error left over", step)
+	}
+}
+
+// TestSetupExecutorDeclaredCodeBeatsTextClassification is #135: the
+// executor knows why it stopped, and the text it sends is exactly the
+// kind classifySetupFailure would have called a network error.
+func TestSetupExecutorDeclaredCodeBeatsTextClassification(t *testing.T) {
+	const detail = "engine installs are turned off on this device (WAIRED_NO_OLLAMA)"
+	// The pin that makes this test meaningful: this text really does
+	// classify as network_error without a declared code.
+	if got := classifySetupFailure(detail); got != signer.SetupErrorNetworkError {
+		t.Fatalf("precondition: classifySetupFailure(opt-out text) = %q, want network_error", got)
+	}
+	f := &fakeSetupProvider{}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	ctx := context.Background()
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Phase: management.SetupExecutorPhaseFailed,
+		Engine: "ollama", Error: detail, ErrorCode: signer.SetupErrorPermissionDenied,
+	})
+	step := stepByID(t, r.snapshot(ctx), setupStepEngineInstall)
+	if step.ErrorCode != signer.SetupErrorPermissionDenied {
+		t.Fatalf("engine step = %+v, want the executor's declared permission_denied", step)
+	}
+}
+
+// TestSetupExecutorWithoutCodeStillClassifiesText: an executor that
+// declares nothing — an older CLI, or a real installer error whose text
+// is the only evidence — keeps the disk-full reading it always had.
+func TestSetupExecutorWithoutCodeStillClassifiesText(t *testing.T) {
+	f := &fakeSetupProvider{}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	ctx := context.Background()
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Phase: management.SetupExecutorPhaseFailed,
+		Engine: "ollama", Error: "extract: no space left on device",
+	})
+	step := stepByID(t, r.snapshot(ctx), setupStepEngineInstall)
+	if step.ErrorCode != signer.SetupErrorDiskFull {
+		t.Fatalf("engine step = %+v, want disk_full from the text", step)
+	}
+}
+
+// TestSetupUnelevatedExecutorTerminatesAsPermissionDenied is #137. The
+// pair is the point: the SAME departure means different things depending
+// on whether the executor could have installed anything, and reporting
+// executor_gone for the unprivileged one loops the operator through
+// re-running a command that fails identically every time.
+func TestSetupUnelevatedExecutorTerminatesAsPermissionDenied(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		elevated bool
+		want     string
+	}{
+		{"unelevated executor exits", false, signer.SetupErrorPermissionDenied},
+		{"elevated executor exits", true, signer.SetupErrorExecutorGone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeSetupProvider{}
+			r, clock := leasedReconciler(t, f, "ollama", "")
+			ctx := context.Background()
+			r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: tc.elevated})
+			clock.advance(setupExecutorTTL + time.Second)
+			step := stepByID(t, r.snapshot(ctx), setupStepEngineInstall)
+			if step.Status != signer.SetupStatusFailed || step.ErrorCode != tc.want {
+				t.Fatalf("engine step = %+v, want failed/%s", step, tc.want)
+			}
+		})
+	}
+}
+
+// TestSetupDownloadTerminatesWhenTheLeaseDies is #256: the download row
+// had no arm for a lease that went away, so a transfer interrupted by
+// Ctrl-C drew a bar at whatever percentage it reached, forever.
+//
+// The install row stays PENDING, which is the rule already settled for a
+// failed download: one event, one red row.
+func TestSetupDownloadTerminatesWhenTheLeaseDies(t *testing.T) {
+	f := &fakeSetupProvider{}
+	r, clock := leasedReconciler(t, f, "ollama", "")
+	ctx := context.Background()
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Engine: "ollama",
+		Step: setupStepEngineDownload, Phase: management.SetupExecutorPhaseInstalling,
+		CompletedBytes: 600 << 20, TotalBytes: 1500 << 20,
+	})
+	if step := stepByID(t, r.snapshot(ctx), setupStepEngineDownload); step.Status != signer.SetupStatusRunning {
+		t.Fatalf("download step while the lease is live = %+v, want running", step)
+	}
+	clock.advance(setupExecutorTTL + time.Second)
+	snap := r.snapshot(ctx)
+	dl := stepByID(t, snap, setupStepEngineDownload)
+	if dl.Status != signer.SetupStatusFailed || dl.ErrorCode != signer.SetupErrorExecutorGone {
+		t.Fatalf("download step after the lease died = %+v, want failed/executor_gone", dl)
+	}
+	if ins := stepByID(t, snap, setupStepEngineInstall); ins.Status != signer.SetupStatusPending {
+		t.Fatalf("install step = %+v, want pending — the failure belongs to the download row alone", ins)
+	}
+}
+
+// TestClassifyModelRejection is #134: every refusal used to be reported
+// as model_not_found, whose recovery ("choose another model") is wrong
+// for two of these and impossible to satisfy for a third.
+func TestClassifyModelRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"engine too old", fmt.Errorf("model m requires ollama >= 0.9: %w", errEngineTooOld), signer.SetupErrorEngineNotReady},
+		{"pulls disabled", fmt.Errorf("allow_pull=false: %w", errPullsDisabled), signer.SetupErrorInternal},
+		{"unsupported source", fmt.Errorf("vllm is linux-only: %w", errUnsupportedSource), signer.SetupErrorInternal},
+		{"unknown model", errors.New(`unknown model "nope"`), signer.SetupErrorModelNotFound},
+		{"no variants", errors.New("manifest m has no variants"), signer.SetupErrorModelNotFound},
+	} {
+		if got := classifyModelRejection(tc.err); got != tc.want {
+			t.Errorf("%s: classifyModelRejection = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestSetupEngineTooOldReportsEngineNotReady drives the classification
+// through the reconciler, because the code has to reach the step and not
+// merely exist. engine_not_ready has had no producer anywhere in this
+// repo until now; this is it.
+func TestSetupEngineTooOldReportsEngineNotReady(t *testing.T) {
+	f := &fakeSetupProvider{
+		engineInstalled: true,
+		modelState:      catalog.ModelStateNotPresent,
+		applyErr: fmt.Errorf(
+			"model m-1 requires ollama >= 0.12.0 (engine reports 0.9.0); upgrade the engine or choose another model: %w",
+			errEngineTooOld),
+	}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	step := stepByID(t, r.snapshot(ctx), setupStepModelPull)
+	if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorEngineNotReady {
+		t.Fatalf("model step = %+v, want failed/engine_not_ready", step)
+	}
+	if !strings.Contains(step.ErrorDetail, "upgrade the engine") {
+		t.Fatalf("model step detail = %q, want the engine-version text kept", step.ErrorDetail)
+	}
 }

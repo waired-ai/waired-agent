@@ -1759,9 +1759,30 @@ func (p *agentInferenceProvider) engineVersionFor(ctx context.Context, engine st
 	return p.ollamaEngineVersion(ctx)
 }
 
+// Pull-refusal sentinels. PullModel's callers used to have only its
+// prose to go on, so the setup reconciler reported every refusal as
+// model_not_found — "pick another model" — including the two cases where
+// no other model helps (waired-agent#134). These carry the distinction
+// as a value; each is wrapped into the message that already explains it,
+// so what the operator reads is unchanged apart from the parenthetical.
+//
+// Deliberately NOT a catch-all "pull failed" sentinel: the default for
+// an unmarked refusal is still model_not_found, which is the truth for
+// an unknown alias or a manifest with no servable variant.
+var (
+	// errPullsDisabled: this host does not download models at all.
+	errPullsDisabled = errors.New("pulls are turned off on this device")
+	// errEngineTooOld: the model is real and the engine cannot load it.
+	errEngineTooOld = errors.New("the engine on this device is too old for this model")
+	// errUnsupportedSource: the variant's source cannot be fetched by
+	// this engine on this OS (an HF/vLLM variant off Linux, a source type
+	// no runtime claims).
+	errUnsupportedSource = errors.New("this device cannot fetch this model's files")
+)
+
 func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error) {
 	if !p.cfg.AllowPull {
-		return management.PullJob{}, errors.New("pulls are disabled by config (allow_pull=false)")
+		return management.PullJob{}, fmt.Errorf("pulls are disabled by config (allow_pull=false): %w", errPullsDisabled)
 	}
 	manifest, ok := catalog.LookupByAlias(modelOrAlias, p.manifests)
 	if !ok {
@@ -1784,8 +1805,8 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 			have = "unknown"
 		}
 		return management.PullJob{}, fmt.Errorf(
-			"model %s requires %s >= %s (engine reports %s); upgrade the engine or choose another model",
-			manifest.ModelID, engine, floor, have)
+			"model %s requires %s >= %s (engine reports %s); upgrade the engine or choose another model: %w",
+			manifest.ModelID, engine, floor, have, errEngineTooOld)
 	}
 	if variant.VariantID != manifest.Variants[0].VariantID {
 		p.logger.Info("pull skipped a variant the engine cannot load",
@@ -1832,7 +1853,7 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 			return management.PullJob{}, err
 		}
 	default:
-		return management.PullJob{}, fmt.Errorf("unsupported variant source type %q for engine %q", variant.Source.Type, engine)
+		return management.PullJob{}, fmt.Errorf("unsupported variant source type %q for engine %q: %w", variant.Source.Type, engine, errUnsupportedSource)
 	}
 	return management.PullJob{JobID: jobID, ModelID: manifest.ModelID, Status: "queued"}, nil
 }

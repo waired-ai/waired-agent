@@ -133,18 +133,37 @@ func integrationTargets(flat string) []string {
 }
 
 // setupExecutorStep is what the elevated CLI last reported about one
-// setup step: its phase, the failure detail if it failed, and the live
-// transfer figures for a byte-denominated step.
+// setup step: its phase, the failure detail and declared code if it
+// failed, and the live transfer figures for a byte-denominated step.
 //
 // Byte fields are only overwritten by a report that actually carries
 // them, so the terminating `done` post — which has nothing to say about
-// bytes — does not blank the last figures the row was drawn from.
+// bytes — does not blank the last figures the row was drawn from. The
+// failure text and code follow the same rule for the same reason
+// (waired-agent#131); see NoteExecutor.
 type setupExecutorStep struct {
 	phase          string
 	errText        string
+	errCode        string
 	completedBytes int64
 	totalBytes     int64
 	rateBps        int64
+}
+
+// executorErrorCode is the §7 code for a failed executor-reported step:
+// what the executor declared, or — for an executor that declared nothing
+// — whatever this row's own classifier can make of the text
+// (waired-agent#135).
+//
+// The declaration wins because the executor is the only party that knows
+// the difference between "no disk space" and "not running as
+// administrator": both arrive here as prose, and prose is what the
+// classifiers have been guessing from.
+func executorErrorCode(st setupExecutorStep, classify func(string) string) string {
+	if st.errCode != "" {
+		return st.errCode
+	}
+	return classify(st.errText)
 }
 
 // setupProvider is the narrow view of agentInferenceProvider the
@@ -211,9 +230,10 @@ type setupReconciler struct {
 	active       bool            // a desired instruction has been seen this session
 	modelApplied map[string]bool // one setupApplyModel call per desired model value
 	// modelRejected records why applying the desired model was refused
-	// (an unknown model, an engine that cannot serve it). It feeds the
-	// model step's model_not_found rather than leaving it pending.
-	modelRejected map[string]string
+	// (an unknown model, an engine that cannot serve it, a host whose
+	// pulls are turned off). It feeds the model step's failure rather
+	// than leaving it pending.
+	modelRejected map[string]setupModelRejection
 	kick          chan struct{} // wakes the push loop on Apply changes
 
 	// Executor lease (§9/§11). The elevated CLI from `sudo waired init`
@@ -261,7 +281,7 @@ func newSetupReconciler(provider setupProvider, push *controlclient.Client, devi
 		now:           time.Now,
 		interval:      setupPushInterval,
 		modelApplied:  map[string]bool{},
-		modelRejected: map[string]string{},
+		modelRejected: map[string]setupModelRejection{},
 		executorSteps: map[string]setupExecutorStep{},
 		kick:          make(chan struct{}, 1),
 	}
@@ -377,7 +397,14 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 			r.mu.Unlock()
 			if _, err := r.provider.setupApplyModel(ctx, d.modelID); err != nil {
 				r.mu.Lock()
-				r.modelRejected[d.modelID] = err.Error()
+				// Classified HERE, where the error value still exists.
+				// Storing only the text and re-deriving a code from it in
+				// snapshot() is what collapsed every refusal into
+				// model_not_found (waired-agent#134).
+				r.modelRejected[d.modelID] = setupModelRejection{
+					code:   classifyModelRejection(err),
+					detail: err.Error(),
+				}
 				r.mu.Unlock()
 				if r.logger != nil {
 					r.logger.Warn("setup: desired model refused", "model", d.modelID, "err", err)
@@ -435,7 +462,21 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 	}
 	st := r.executorSteps[stepID]
 	st.phase = phase
-	st.errText = req.Error
+	// A report that says nothing about the failure must not erase the
+	// reason we already have (waired-agent#131). Two posts do exactly
+	// that: the heartbeat repeats the phase every 10 s with an empty
+	// Error, and Release posts one last time on the way out — so the
+	// detail the executor sent with Failed() survived at most ten
+	// seconds, and classifySetupFailure("") then called every failed
+	// install a network error, whatever had actually gone wrong.
+	//
+	// Anything that moves the step off `failed` clears both fields
+	// normally, so a stale reason cannot outlive the failure it belongs
+	// to.
+	if req.Error != "" || req.ErrorCode != "" || phase != management.SetupExecutorPhaseFailed {
+		st.errText = req.Error
+		st.errCode = req.ErrorCode
+	}
 	if req.CompletedBytes > 0 || req.TotalBytes > 0 {
 		st.completedBytes = req.CompletedBytes
 		st.totalBytes = req.TotalBytes
@@ -578,7 +619,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		// a transfer that never happened would be a step the wizard waits
 		// on forever.
 		if downloadSeen {
-			p.Steps = append(p.Steps, engineDownloadStep(download, installed || ready))
+			p.Steps = append(p.Steps, engineDownloadStep(download, installed || ready, leaseLive))
 		}
 		step := signer.SetupStep{ID: setupStepEngineInstall}
 		// Arm order is the contract here, not an accident (#187). It is
@@ -596,7 +637,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			// serve — reports the real failure instead of sitting at
 			// "working on it" forever.
 			step.Status = signer.SetupStatusFailed
-			step.ErrorCode = classifySetupFailure(execErr)
+			step.ErrorCode = executorErrorCode(install, classifySetupFailure)
 			step.ErrorDetail = clampSetupDetail(execErr)
 		case installed:
 			// This step is "install the engine", and the engine is
@@ -636,6 +677,17 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		case leaseLive:
 			// Elevated executor attached: installing, or about to.
 			step.Status = signer.SetupStatusRunning
+		case everSeen && !elevated:
+			// It was here, it is gone, and it could not have installed
+			// anything while it was here (waired-agent#137). Ahead of the
+			// plain `everSeen` arm because that one says "run the command
+			// again", and running the same unprivileged command again
+			// fails the same way — the operator loops without ever being
+			// told that privileges are the problem. executorElevated
+			// outlives the lease precisely so this arm can be reached.
+			step.Status = signer.SetupStatusFailed
+			step.ErrorCode = signer.SetupErrorPermissionDenied
+			step.ErrorDetail = "the setup command on this device ran without administrator privileges and has exited"
 		case everSeen:
 			// §9-4: it was here and it is gone. This is the recoverable
 			// case — NAVI offers the command to re-run.
@@ -656,10 +708,10 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		step := signer.SetupStep{ID: setupStepModelPull}
 		state, completed, total, errText := r.provider.setupModelState(d.modelID)
 		switch {
-		case rejected != "":
+		case rejected.detail != "":
 			step.Status = signer.SetupStatusFailed
-			step.ErrorCode = signer.SetupErrorModelNotFound
-			step.ErrorDetail = rejected
+			step.ErrorCode = rejected.code
+			step.ErrorDetail = clampSetupDetail(rejected.detail)
 		case state == catalog.ModelStateReady:
 			step.Status = signer.SetupStatusDone
 		case state == catalog.ModelStateQueued || state == catalog.ModelStateDownloading || state == catalog.ModelStateVerifying:
@@ -740,7 +792,7 @@ func integrationStep(flat string, st setupExecutorStep) signer.SetupStep {
 		step.Status = signer.SetupStatusDone
 	case management.SetupExecutorPhaseFailed:
 		step.Status = signer.SetupStatusFailed
-		step.ErrorCode = classifyIntegrationFailure(st.errText)
+		step.ErrorCode = executorErrorCode(st, classifyIntegrationFailure)
 		step.ErrorDetail = clampSetupDetail(st.errText)
 	case management.SetupExecutorPhaseInstalling:
 		step.Status = signer.SetupStatusRunning
@@ -772,15 +824,28 @@ func classifyIntegrationFailure(errText string) string {
 // done — a finished download is a finished download, and a "1.4 GB /
 // 1.4 GB" bar left on screen next to a green check is the kind of detail
 // that reads as an unfinished step.
-func engineDownloadStep(st setupExecutorStep, enginePresent bool) signer.SetupStep {
+//
+// leaseLive is what terminates the row when nobody is downloading any
+// more (#256). This row only exists because a lease reported bytes
+// against it, so a dead lease and a non-terminal phase can only mean the
+// executor left mid-transfer: without this the bar sat at 40% forever,
+// which is the never-resolving progress §9-4 exists to forbid.
+func engineDownloadStep(st setupExecutorStep, enginePresent, leaseLive bool) signer.SetupStep {
 	step := signer.SetupStep{ID: setupStepEngineDownload}
 	switch {
 	case enginePresent || st.phase == management.SetupExecutorPhaseDone:
 		step.Status = signer.SetupStatusDone
 	case st.phase == management.SetupExecutorPhaseFailed:
 		step.Status = signer.SetupStatusFailed
-		step.ErrorCode = classifySetupFailure(st.errText)
+		step.ErrorCode = executorErrorCode(st, classifySetupFailure)
 		step.ErrorDetail = clampSetupDetail(st.errText)
+	case !leaseLive:
+		// The bytes stopped arriving because the process fetching them is
+		// gone (Ctrl-C, a closed terminal, a crash). Recoverable, and the
+		// same recovery as the install proper: run the command again.
+		step.Status = signer.SetupStatusFailed
+		step.ErrorCode = signer.SetupErrorExecutorGone
+		step.ErrorDetail = "the setup command on this device exited while the download was still running"
 	default:
 		step.Status = signer.SetupStatusRunning
 		step.CompletedBytes = st.completedBytes
@@ -816,6 +881,48 @@ var diskFullMarkers = []string{
 	"disk full",
 	"enospc",
 	"there is not enough space on the disk",
+}
+
+// setupModelRejection is why applying the desired model was refused: the
+// §7 code and the text the operator sees under it.
+//
+// The pair is stored rather than the text alone because the code cannot
+// be recovered from the text afterwards. Every refusal used to be
+// reported as model_not_found, whose recovery is "pick a different
+// model" — so an operator whose engine was simply too old for their
+// choice tried model after model, and a host with pulls turned off got
+// the same advice with nothing that could ever satisfy it
+// (waired-agent#134).
+type setupModelRejection struct {
+	code   string
+	detail string
+}
+
+// classifyModelRejection maps a refusal from setupApplyModel to the §7
+// enum, by SENTINEL rather than by prose: the errors are produced in
+// this same package (PullModel, SwapPreferredModel), so the value is
+// still here to inspect and there is no reason to guess from a string
+// the way the cross-process classifiers above have to.
+//
+// The default stays model_not_found — an unknown alias and a manifest
+// with no variants really are "that model is not available", and that is
+// what this path reported for everything before.
+func classifyModelRejection(err error) string {
+	switch {
+	case errors.Is(err, errEngineTooOld):
+		// The model exists and this host simply cannot load it yet.
+		// Telling the operator to choose another model is not wrong, but
+		// it is not the fix either — this is the enum's engine-side code,
+		// and this is its first producer anywhere in the repo.
+		return signer.SetupErrorEngineNotReady
+	case errors.Is(err, errPullsDisabled), errors.Is(err, errUnsupportedSource):
+		// Configuration and host-shape refusals. Nothing about the model
+		// is wrong and changing it changes nothing, so model_not_found
+		// would send the operator round a loop; `internal` says "this
+		// computer will not do it" and the detail says why.
+		return signer.SetupErrorInternal
+	}
+	return signer.SetupErrorModelNotFound
 }
 
 // classifySetupFailure maps a free-form failure string to the §7 error

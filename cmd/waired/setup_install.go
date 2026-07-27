@@ -14,6 +14,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/setup"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // setupInstallEngine is the install seam so the executor path is
@@ -106,7 +107,7 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 	// green.
 	if st.StateDir == "" {
 		const detail = "the background service did not report where to install the engine"
-		s.Failed(st.DesiredEngine, detail)
+		s.Failed(st.DesiredEngine, signer.SetupErrorInternal, detail)
 		return errors.New(detail)
 	}
 
@@ -189,7 +190,10 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 		writePromptf(out, "%s %s\n", emo("📦", ">>"), engineInstallNarrationVLLM)
 		if err := setupInstallVLLM(stateDir); err != nil {
 			writePromptf(out, "%s vLLM install failed: %v\n", emo("⚠️", "!"), err)
-			s.Failed("vllm", err.Error())
+			// No declared code: the build failed somewhere inside uv/pip
+			// and its text is all the evidence there is, so the daemon's
+			// disk-full reading of it beats anything we could assert.
+			s.Failed("vllm", "", err.Error())
 			return err
 		}
 		// Built as root; hand the state dir back or the unprivileged daemon
@@ -204,23 +208,29 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 		s.Done("vllm")
 
 	case vllmActionSkipNotElevated:
-		return failEngineInstall(s, "vllm",
+		return failEngineInstall(s, "vllm", signer.SetupErrorPermissionDenied,
 			"the setup command on this device is not running with administrator privileges; "+
 				elevation.Hint("waired init"))
 
 	case vllmActionSkipOptOut:
 		writePrompt(out, "vLLM install skipped (WAIRED_NO_VLLM).")
-		return failEngineInstall(s, "vllm",
+		return failEngineInstall(s, "vllm", signer.SetupErrorPermissionDenied,
 			"engine installs are turned off on this device (WAIRED_NO_VLLM)")
 
 	case vllmActionFailUnsupportedOS:
 		// Defense in depth: the CP only offers vLLM on Linux, so this is a
 		// host that reached vllm some other way. Name the fix.
-		return failEngineInstall(s, "vllm",
+		//
+		// `internal` for both this and the no-GPU arm below: none of the
+		// eight §7 codes means "this computer cannot run this engine", and
+		// the detail says which one it is. A dedicated code would be a
+		// proto addition — a tagged release, a CP validator bump, and new
+		// wizard copy — for two arms the CP already gates the offer on.
+		return failEngineInstall(s, "vllm", signer.SetupErrorInternal,
 			"vLLM setup is only supported on Linux; use the standard engine on this device")
 
 	case vllmActionFailNoGPU:
-		return failEngineInstall(s, "vllm",
+		return failEngineInstall(s, "vllm", signer.SetupErrorInternal,
 			"no NVIDIA GPU was detected on this device; vLLM needs an NVIDIA graphics card (CUDA)")
 	}
 	return nil
@@ -229,8 +239,12 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 // failEngineInstall reports a failed install to the daemon and returns
 // the same detail as an error, so the wizard and the terminal always say
 // the same thing about the same failure (#188).
-func failEngineInstall(s *executorSession, engine, detail string) error {
-	s.Failed(engine, detail)
+//
+// Every caller is a DECISION this process made rather than an installer
+// error it caught, so every caller has a code to declare — that is what
+// this helper is for (waired-agent#135).
+func failEngineInstall(s *executorSession, engine, code, detail string) error {
+	s.Failed(engine, code, detail)
 	return errors.New(detail)
 }
 
@@ -275,7 +289,10 @@ func installEngineAsExecutor(
 		// installer behaves exactly as it did.
 		if err := setupInstallEngine(true, stateDir, newExecutorProgressSink(s, engine)); err != nil {
 			writePromptf(out, "%s Engine install failed: %v\n", emo("⚠️", "!"), err)
-			s.Failed(engine, err.Error())
+			// No declared code, for the same reason as the vLLM build
+			// above: the installer's text is the evidence, and the
+			// daemon's disk-full reading of it is the best available.
+			s.Failed(engine, "", err.Error())
 			return err
 		}
 		// The tarball was extracted as root; hand the state dir back or
@@ -291,10 +308,12 @@ func installEngineAsExecutor(
 		s.Done(engine)
 
 	case engineActionSkipNotElevated:
-		// The daemon already reports permission_denied for an unelevated
-		// lease; say it in the executor's own words so error_detail names
-		// the command that fixes it.
-		return failEngineInstall(s, engine,
+		// The daemon reports permission_denied for an unelevated lease
+		// only while that lease is LIVE, and this process is about to
+		// exit — so declaring the code here is what keeps the answer from
+		// decaying into executor_gone ("run it again", which would fail
+		// the same way) the moment we go (waired-agent#135/#137).
+		return failEngineInstall(s, engine, signer.SetupErrorPermissionDenied,
 			"the setup command on this device is not running with administrator privileges; "+
 				elevation.Hint("waired init"))
 
@@ -303,8 +322,10 @@ func installEngineAsExecutor(
 		// asked for one in the browser. permission_denied is the closest
 		// of the eight codes ("this device will not do it"); the detail
 		// carries the real reason (waired#835 decisions 20260720 13:00).
+		// That was the intent from the start — until now the daemon
+		// re-derived network_error from this text and the intent was lost.
 		writePrompt(out, "Engine install skipped (WAIRED_NO_OLLAMA).")
-		return failEngineInstall(s, engine,
+		return failEngineInstall(s, engine, signer.SetupErrorPermissionDenied,
 			"engine installs are turned off on this device (WAIRED_NO_OLLAMA)")
 	}
 	return nil
