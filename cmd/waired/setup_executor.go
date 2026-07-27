@@ -16,14 +16,26 @@ import (
 // them; the non-setup path keeps benchPollDeadline / benchNoEngineGrace
 // unchanged, which is the acceptance-item-12 regression bar.
 var (
-	// setupResidencyBudget bounds how long `waired init` stays resident
-	// once a browser setup is actually running. Matched to the control
-	// plane's setup ticket TTL so the terminal and the wizard stop caring
-	// at the same moment. Widened to 60 min for the vLLM install envelope
-	// (~6 GB download + CUDA JIT build, up to setupVLLMInstallTimeout); the
-	// CP's store.SetupTicketTTL is widened to match (waired#835 Phase 2).
-	// An ollama install finishes far inside this.
-	setupResidencyBudget = 60 * time.Minute
+	// setupResidencyBudget bounds how long `waired init` stays in the
+	// foreground watching the model download once a browser setup is
+	// actually driving this host. It is NOT matched to the control
+	// plane's setup ticket TTL any more: since waired#944 that window
+	// starts at 60 min and then slides while both the browser and this
+	// device are live, so there is no single number left to match — and
+	// 60 min is now the *shortest* it can be, which would guarantee the
+	// terminal gives up while the wizard is still working. This tracks
+	// the CP's ceiling instead (api.SetupTicketMaxTTL, 8 h).
+	//
+	// The accepted cost is terminal occupancy: on a stalled pull with
+	// piped stdin the takeover watch is inert, so there is no Enter
+	// escape and `waired init` can hold a terminal for eight hours.
+	// Hitting the budget is a soft skip, never a failure — the daemon
+	// keeps pulling either way and the CLI falls through to its tail.
+	//
+	// This does not bound the engine install: runSetupEngineInstall runs
+	// before the wait under its own setupVLLMInstallTimeout /
+	// ollamaInstallTimeoutDefault.
+	setupResidencyBudget = 8 * time.Hour
 
 	// setupAwaitGrace bounds the gap between "login finished" and "the
 	// operator clicked Yes in the browser". The daemon cannot report this

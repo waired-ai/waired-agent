@@ -455,9 +455,11 @@ var vllmInstall = func(ctx context.Context, baseDir string, onProgress func(infr
 // setupVLLMInstallTimeout bounds a vLLM venv build. vLLM's ~6 GB download
 // + uv/pip build + CUDA JIT verify runs longer than ollama's tarball, so
 // it gets a wider budget than the interactive path used to give it (was
-// 30 min). The setup executor's residency budget and the CP's
-// store.SetupTicketTTL are widened to match so a browser-driven install
-// completes inside one wizard session (waired#835 Phase 2).
+// 30 min). This install runs BEFORE setupResidencyBudget's model wait
+// and is not covered by it. The CP's setup window was widened to 60 min
+// to cover an install of this length in one wizard session (waired#835
+// Phase 2), and since waired#944 it slides rather than staying fixed, so
+// neither this timeout nor the residency budget is pinned to it.
 const setupVLLMInstallTimeout = 45 * time.Minute
 
 // vllmInstallCore builds (or rebuilds) the vLLM venv rooted at
