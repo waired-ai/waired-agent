@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/setup"
@@ -19,17 +20,19 @@ import (
 // release before returning, letting a test observe the intermediate
 // phase deterministically.
 type fakeEnroll struct {
-	urled       chan struct{} // signalled after OnLoginURL fires
-	release     chan struct{} // enroll returns once this is closed/received
-	result      *setup.EnrollResult
-	err         error
-	calls       int32
-	gotEndpoint atomic.Value // last opts.Endpoint seen (string)
+	urled         chan struct{} // signalled after OnLoginURL fires
+	release       chan struct{} // enroll returns once this is closed/received
+	result        *setup.EnrollResult
+	err           error
+	calls         int32
+	gotEndpoint   atomic.Value // last opts.Endpoint seen (string)
+	gotControlURL atomic.Value // last opts.ControlURL seen (string)
 }
 
 func (f *fakeEnroll) fn(ctx context.Context, opts setup.EnrollOptions) (*setup.EnrollResult, error) {
 	atomic.AddInt32(&f.calls, 1)
 	f.gotEndpoint.Store(opts.Endpoint)
+	f.gotControlURL.Store(opts.ControlURL)
 	if opts.OnLoginURL != nil {
 		opts.OnLoginURL("https://login.example/abc", "WXYZ-1234")
 	}
@@ -150,6 +153,61 @@ func TestLoginResolvesEndpointPortBeforeEnroll(t *testing.T) {
 	}
 	if port == 0 {
 		t.Fatalf("enroll endpoint %q still has port 0", ep)
+	}
+}
+
+// TestLoginUsesBakedDefaultOnStockInstall is the #174 regression. A stock
+// install has no --control and no $WAIRED_CONTROL_URL in the daemon's
+// environment — launchd and the Windows SCM cannot supply one, and Linux's
+// EnvironmentFile only carries a URL when install.sh was given
+// --control/--dev — so the app's "Log in…" used to fail outright with
+// "login: no control URL". With main.go resolving through
+// resolveDaemonControlURL, that same daemon reaches enroll against the
+// production Control Plane. Product contract.
+func TestLoginUsesBakedDefaultOnStockInstall(t *testing.T) {
+	sb := &switchboard{}
+	fe := &fakeEnroll{result: &setup.EnrollResult{AccountEmail: "u@e"}}
+	lc := newLoginController(sb, loginControllerConfig{
+		StateDir: "/tmp/does-not-matter",
+		// What main.go now computes when nothing is configured.
+		DefaultControlURL: resolveDaemonControlURL("", "", testLogger()),
+		Endpoint:          "udp4:127.0.0.1:0",
+		RootCtx:           context.Background(),
+		Activate:          func(context.Context) error { return nil },
+		Logger:            testLogger(),
+		Enroll:            fe.fn,
+	})
+
+	// No control_url on the request either: the tray sends an empty one
+	// unless it was itself started with --control.
+	st, err := lc.Start(context.Background(), management.LoginStartRequest{})
+	if err != nil {
+		t.Fatalf("Start on a stock install must not fail: %v", err)
+	}
+	waitPhase(t, lc, st.SessionID, management.LoginPhaseActive)
+
+	if got, want := fe.gotControlURL.Load().(string), controlurl.Default; got != want {
+		t.Errorf("enroll called with control URL %q, want the production default %q", got, want)
+	}
+}
+
+// TestLoginRequestControlURLWins keeps the daemon's default from
+// overriding an explicit per-request choice now that it is never empty.
+func TestLoginRequestControlURLWins(t *testing.T) {
+	sb := &switchboard{}
+	fe := &fakeEnroll{result: &setup.EnrollResult{AccountEmail: "u@e"}}
+	lc := newTestLoginController(sb, fe.fn, func(context.Context) error { return nil })
+
+	st, err := lc.Start(context.Background(), management.LoginStartRequest{
+		ControlURL: "https://from-request.example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, lc, st.SessionID, management.LoginPhaseActive)
+
+	if got, want := fe.gotControlURL.Load().(string), "https://from-request.example"; got != want {
+		t.Errorf("enroll called with control URL %q, want %q", got, want)
 	}
 }
 
