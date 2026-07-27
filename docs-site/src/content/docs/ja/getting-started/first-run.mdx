@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: c8454f0da21820a5
+sourceHash: bc12ef35d3d227bc
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -105,12 +105,19 @@ Sign in using this link:
 	**Go to device** を押します。
 </Expected>
 
-ブラウザが主導している間、ターミナルは何も聞いてきません。
-コーディングツールをあとから設定できる旨を 1 行表示するだけです。
+ブラウザが主導している間、ターミナルは何も聞いてきません。開いたままにするよう
+促し、コーディングツールをあとから設定できる旨を表示します。
 
 ```
+Keep this terminal window open until setup finishes — it does the parts the
+browser can't.
 You can set up your coding tools later from this terminal with `waired link all`.
 ```
+
+作業中はブラウザのセットアップ画面も同じことを表示します。ターミナル側の担当分が
+終わると *「Setup is continuing in your browser — nothing more is needed from
+this terminal」* と表示され、そこから先は閉じてかまいません。モデルのダウンロードと
+速度チェックにターミナルは不要です。
 
 <Aside type="note" title="セットアップ画面は英語のみです">
 	Web コンソールは現在英語のみです。翻訳は予定されています。

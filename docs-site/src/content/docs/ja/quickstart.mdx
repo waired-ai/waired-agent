@@ -5,7 +5,7 @@ meta:
   audience: はじめて Waired をセットアップする人
   needs: AI を動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
   time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
-sourceHash: 2096c065d8b1f118
+sourceHash: e84895503d139c71
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -108,6 +108,8 @@ Logged in as: you@example.com
 Waired is signed in and running in the background.
 
 >> Setup is continuing in your browser…
+   Keep this terminal window open until setup finishes — it does the parts the
+   browser can't.
    (press Enter to continue in the terminal instead)
 ```
 </Expected>
@@ -118,6 +120,10 @@ Waired is signed in and running in the background.
 	（ブラウザは指示を出しているだけです）。閉じると
 	*「セットアップコマンドが完了前に閉じられました」*と表示されて止まります。
 	作業内容は失われませんが、戻ってきて `waired init` をやり直す必要があります。
+
+	ブラウザのセットアップ画面も、作業中は同じことを表示します。ターミナル側の
+	担当分が終わると *「nothing more is needed from this terminal」* と表示され、
+	そこから先は閉じてかまいません。
 </Aside>
 
 ## ステップ 3 — ブラウザでセットアップを終える

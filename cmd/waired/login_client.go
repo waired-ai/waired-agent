@@ -152,6 +152,15 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				// benchmark the ready model. waitForBundledModel returns fast when
 				// the daemon reports inference disabled / stopped / no engine, so
 				// this never hangs an under-spec or gateway-only host.
+				//
+				// waired#939: say it once more before the longest wait of
+				// the flow. The engine install above can take minutes, so
+				// the warning printed at the handoff has scrolled away by
+				// then — and this is the stretch where a terminal that looks
+				// idle invites closing it.
+				if setupActive && !enter.Fired() {
+					writePrompt(os.Stdout, setupKeepTerminalOpenLine)
+				}
 				waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
 					engineArrivalPending(sess.State()), enter)
 			}
@@ -195,7 +204,12 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			var resp *management.BenchmarkRunResponse
 			switch {
 			case setupActive:
-				fmt.Println("Setup is continuing in your browser.")
+				// waired#939: the degraded wording. Everything this process
+				// owed the setup is done and init is about to return, so the
+				// keep-open instruction no longer applies — saying it here
+				// would leave the operator guarding a terminal for nothing,
+				// and the wizard would be telling them the opposite.
+				fmt.Println(setupTerminalDoneLine)
 			case engineErr != nil:
 				// Nothing to measure: there is no engine.
 			default:
