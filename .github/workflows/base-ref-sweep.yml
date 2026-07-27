@@ -1,0 +1,67 @@
+# Nightly report of merged PRs whose base was not `main`.
+#
+# base-ref-guard.yml stops new ones. This one shows the ones already
+# merged, because the guard cannot see history and the damage is
+# invisible by construction: GitHub shows the same purple "Merged" badge
+# whether the work reached main or an orphaned branch.
+#
+# REPORT ONLY. It never fails, and it deliberately does not try to decide
+# whether a given PR's commits later reached main by another route.
+# Measured on this repo, 6 of the 7 historical non-main-base merges had
+# already been re-landed — an automatic verdict would have been wrong
+# most of the time, and a check that cries wolf six times out of seven
+# gets muted. The list goes in the job summary for a human to read.
+name: base-ref-sweep
+
+on:
+  schedule:
+    # 03:20 UTC daily. Off the hour to avoid the Actions scheduling peak.
+    - cron: "20 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sweep:
+    name: merged PRs with a non-main base
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: list them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          rows=$(gh pr list --repo "${REPO}" --state merged --limit 200 \
+            --json number,baseRefName,title,mergedAt,url \
+            --jq '.[] | select(.baseRefName != "main")
+                      | "| [#\(.number)](\(.url)) | `\(.baseRefName)` | \(.mergedAt[0:10]) | \(.title) |"')
+
+          {
+            echo "## Merged PRs with a non-main base"
+            echo
+            if [ -z "${rows}" ]; then
+              echo "None in the last 200 merged PRs."
+              exit 0
+            fi
+            echo "| PR | base | merged | title |"
+            echo "|---|---|---|---|"
+            printf '%s\n' "${rows}"
+            echo
+            echo "These merged into a branch, not into \`main\`. Most are"
+            echo "harmless — the work was usually re-landed — but this is how"
+            echo "#146 and waired#911 disappeared while showing as merged."
+            echo
+            echo "For each one, check whether its commits are on main:"
+            echo
+            echo '```sh'
+            echo 'gh pr view <N> --json mergeCommit --jq .mergeCommit.oid \'
+            echo '  | xargs -I{} git merge-base --is-ancestor {} origin/main \'
+            echo '  && echo "on main" || echo "NOT on main"'
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          printf '%s\n' "${rows}"

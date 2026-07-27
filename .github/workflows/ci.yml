@@ -43,6 +43,13 @@ jobs:
             exit 1
           fi
 
+      # The base-ref guard's decision table (base branch + the
+      # `stacked-on:` opt-out) runs entirely off two environment
+      # variables, so it is exercised here rather than only in the PR
+      # context where it fires. See scripts/ci/base-ref-guard.sh.
+      - name: base-ref guard self-test
+        run: bash scripts/ci/base-ref-guard-test.sh
+
       - name: go vet (root + proto)
         run: |
           set -euo pipefail
