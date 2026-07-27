@@ -18,6 +18,15 @@
 # AND the update->prompt path deterministically, regardless of whether
 # the dev box already has waired installed. No LXD, no root, no network.
 #
+# Sections 1-6 run install.sh in --dry-run. Section 7 runs it FOR REAL
+# (see its header): the branch it guards sits on the far side of a
+# --dry-run guard and cannot be reached any other way.
+#
+# There is deliberately no WAIRED_FORCE_OS-style test hook in install.sh:
+# the `uname` stub below already forces the OS from out here, so the
+# subject stays free of test-only branches (CLAUDE.md "Test discipline":
+# put the seam below the behaviour under test).
+#
 # Usage:
 #   bash scripts/dev/installtest-dash.sh
 #   INSTALL_SH=/path/to/install.sh bash scripts/dev/installtest-dash.sh
@@ -31,6 +40,10 @@ SHELLS=()
 for s in dash bash; do command -v "$s" >/dev/null 2>&1 && SHELLS+=("$s"); done
 command -v busybox >/dev/null 2>&1 && SHELLS+=("busybox sh")
 [ "${#SHELLS[@]}" -gt 0 ] || { echo "no POSIX shell available" >&2; exit 1; }
+
+# The shells the case helpers iterate. Sections 6-7 narrow it (see there);
+# everything else runs the full matrix.
+MATRIX_SHELLS=("${SHELLS[@]}")
 
 # --- stub host-state probes + neutralise mutating commands -------------
 STUBDIR="$(mktemp -d)"
@@ -122,7 +135,7 @@ ok()   { printf '\033[1;32m[dash-matrix]  ok \033[0m %s\n' "$*"; PASS=$((PASS+1)
 run_case() {
   local expect="$1" label="$2" envs="$3"; shift 3; shift   # drop the literal --
   local sh out rc
-  for sh in "${SHELLS[@]}"; do
+  for sh in "${MATRIX_SHELLS[@]}"; do
     out="$(env $envs $sh "$INSTALL_SH" "$@" 2>&1)" && rc=0 || rc=$?
     if printf '%s' "$out" | grep -Eq "$FAIL_RE"; then
       fail "[$sh] $label — set -u/syntax signature:"
@@ -144,7 +157,7 @@ run_case() {
 run_case_grep() {
   local expect="$1" label="$2" envs="$3" want="$4"; shift 4; shift
   local sh out rc
-  for sh in "${SHELLS[@]}"; do
+  for sh in "${MATRIX_SHELLS[@]}"; do
     out="$(env $envs $sh "$INSTALL_SH" "$@" 2>&1)" && rc=0 || rc=$?
     if printf '%s' "$out" | grep -Eq "$FAIL_RE"; then
       fail "[$sh] $label — set -u/syntax signature:"
@@ -158,6 +171,50 @@ run_case_grep() {
     if ! printf '%s' "$out" | grep -Eq "$want"; then
       fail "[$sh] $label — output does not match /$want/:"
       printf '%s\n' "$out" | tail -n 12 | sed 's/^/        /' >&2
+      continue
+    fi
+    ok "[$sh] $label (exit $rc)"
+  done
+}
+
+# run_case_asserts <zero|nonzero|any> <label> <env-assignments> <asserts> -- <args...>
+# Same checks as run_case plus a LIST of assertions, newline-separated, ALL of
+# which must hold. A pattern prefixed with '!' must NOT match.
+#
+# One regex is not enough for the section-7 cases: "the installer kept going
+# after a failed step" is a claim about several later lines of output, and an
+# installer that printed the warning and then died would satisfy any single one
+# of them. The negative form is what stops the positive assertions from passing
+# vacuously — a case that asserts a warning appears is only meaningful next to
+# one asserting it does not appear when the failure is not injected.
+run_case_asserts() {
+  local expect="$1" label="$2" envs="$3" asserts="$4"; shift 4; shift
+  local sh out rc want bad
+  for sh in "${MATRIX_SHELLS[@]}"; do
+    out="$(env $envs $sh "$INSTALL_SH" "$@" 2>&1)" && rc=0 || rc=$?
+    if printf '%s' "$out" | grep -Eq "$FAIL_RE"; then
+      fail "[$sh] $label — set -u/syntax signature:"
+      printf '%s\n' "$out" | grep -E "$FAIL_RE" | sed 's/^/        /' >&2
+      continue
+    fi
+    case "$expect" in
+      zero)    [ "$rc" -eq 0 ] || { fail "[$sh] $label — expected exit 0, got $rc"; continue; } ;;
+      nonzero) [ "$rc" -ne 0 ] || { fail "[$sh] $label — expected nonzero, got 0"; continue; } ;;
+    esac
+    bad=""
+    while IFS= read -r want; do
+      [ -n "$want" ] || continue
+      case "$want" in
+        '!'*)
+          if printf '%s' "$out" | grep -Eq "${want#!}"; then bad="present: /${want#!}/"; fi ;;
+        *)
+          if ! printf '%s' "$out" | grep -Eq "$want"; then bad="missing: /$want/"; fi ;;
+      esac
+      [ -z "$bad" ] || break
+    done <<< "$asserts"
+    if [ -n "$bad" ]; then
+      fail "[$sh] $label — $bad"
+      printf '%s\n' "$out" | tail -n 20 | sed 's/^/        /' >&2
       continue
     fi
     ok "[$sh] $label (exit $rc)"
@@ -323,6 +380,25 @@ run_case nonzero "unknown flag" "$FRESH" -- --bogus
 # decided by the binary alone, so an install that aborted after the binaries
 # landed was sent to the update path — which installs none of the pieces it
 # was missing, so the host never converged however many times it ran.
+#
+# The darwin cases can only run under a shell that resolves `uname` through
+# PATH. busybox's shell may run applets — uname among them — without consulting
+# PATH at all, depending on how it was built; where it does, the stub never
+# takes effect and every case below quietly executes the LINUX arm instead.
+# Ask each shell rather than special-casing busybox by name: what decides this
+# is whether the stub is reachable, not which shell it is. Narrowing the matrix
+# here (with a log line) beats reporting install.sh failures it did not cause.
+DARWIN_SHELLS=()
+for sh in "${SHELLS[@]}"; do
+  if [ "$(env "PATH=$STUBDIR:$PATH" IT_STUB_UNAME_S=Darwin $sh -c 'uname -s' 2>/dev/null)" = Darwin ]; then
+    DARWIN_SHELLS+=("$sh")
+  else
+    log "$sh resolves uname without PATH — skipping the darwin cases for it"
+  fi
+done
+[ "${#DARWIN_SHELLS[@]}" -gt 0 ] || { echo "no shell can drive the darwin cases" >&2; exit 1; }
+MATRIX_SHELLS=("${DARWIN_SHELLS[@]}")
+
 DWORK="$(mktemp -d)"
 trap 'rm -rf "$STUBDIR" "$DWORK"' EXIT
 
@@ -365,6 +441,136 @@ run_case_grep zero "darwin half-install --check -> update" "$D_HALF WAIRED_VERSI
 # updates never acquires the drop-in a fresh install would have given it.
 run_case_grep zero "darwin update installs log rotation" "$D_FULL WAIRED_VERSION=edge" \
   'newsyslog rotation at /etc/newsyslog.d/waired-agent.conf' -- --dry-run --skip-ollama --no-init --yes
+
+# 7. darwin registration failure (#193) — the one darwin branch --dry-run
+# cannot reach, so these cases run install.sh FOR REAL.
+#
+# #193: a `waired-agent install` that failed took the whole installer with it
+# (`set -eu`), so log rotation, the control-URL write, `waired init` and the
+# next-steps block were all skipped and the last thing on screen was a raw Go
+# error. Linux warns and continues; macOS was the outlier. The fix made the
+# step non-fatal — but the failure arm lives past `if [ "$DRY_RUN" = 1 ]; then
+# ... return 0; fi`, so no --dry-run case above can execute it, and only a real
+# macOS host with a genuinely broken launchd would otherwise catch a
+# regression.
+#
+# So this section swaps in a second stub layer, ahead of $STUBDIR on PATH, that
+# makes the un-dry-run path survivable on a Linux runner: curl/shasum/tar
+# materialise a "release" instead of fetching one, and sudo passes through
+# (a real `install`, `chmod`, `mkdir` into temp dirs) instead of swallowing the
+# command. Sections 1-6 keep the safe no-op stubs — nothing here changes them.
+#
+# Still no network and no root: the only thing that leaves a temp dir is the
+# newsyslog write, which install.sh already guards on /etc/newsyslog.d being a
+# directory (absent here, so it warns and moves on).
+DSTUB="$(mktemp -d)"
+DREAL="$(mktemp -d)"
+trap 'rm -rf "$STUBDIR" "$DWORK" "$DSTUB" "$DREAL"' EXIT
+
+# Functional: create whatever -o names, and put the same constant the shasum
+# stub prints into the .sha256, so darwin_install_binaries' checksum compare
+# passes on its own terms rather than being bypassed.
+cat > "$DSTUB/curl" <<'STUB'
+#!/bin/sh
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+[ -n "$out" ] || exit 0
+case "$out" in
+  *.sha256) printf '%s  x\n' "$IT_STUB_SHA" > "$out" ;;
+  *)        printf 'not-a-real-tarball\n' > "$out" ;;
+esac
+exit 0
+STUB
+cat > "$DSTUB/shasum" <<'STUB'
+#!/bin/sh
+printf '%s  -\n' "$IT_STUB_SHA"
+STUB
+# Functional: stand in for the release tarball. The waired-agent it writes is
+# the injection point — `waired-agent install` is what darwin_register_agent
+# runs, and IT_STUB_REGISTER_RC is its exit status.
+cat > "$DSTUB/tar" <<'STUB'
+#!/bin/sh
+dir=""; prev=""
+for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done
+[ -n "$dir" ] || exit 0
+cat > "$dir/waired" <<'W'
+#!/bin/sh
+case "$*" in "version --json") printf '{"version":"0.0.1"}\n' ;; esac
+exit 0
+W
+# `waired-agent install` creates and locks down the state dir first, then
+# bootstraps the LaunchDaemon. #193's failure is the bootstrap one, which
+# happens AFTER the dir exists — so create it even when exiting nonzero, or the
+# steps that legitimately skip on a missing state dir would look like the
+# regression.
+cat > "$dir/waired-agent" <<'W'
+#!/bin/sh
+prev=""
+for a in "$@"; do [ "$prev" = "--state-dir" ] && mkdir -p "$a"; prev="$a"; done
+exit ${IT_STUB_REGISTER_RC:-0}
+W
+printf '#!/bin/sh\nexit 0\n' > "$dir/waired-tray"
+chmod +x "$dir"/waired "$dir"/waired-agent "$dir"/waired-tray
+exit 0
+STUB
+# Pass-through, unlike $STUBDIR's swallowing sudo: the real install/chmod/mkdir
+# have to run for the steps after the failed registration to be observable at
+# all. `test` is spelled out because $STUBDIR's version answers the enrolment
+# probe from IT_STUB_ENROLLED, and here we want the real answer about real dirs.
+cat > "$DSTUB/sudo" <<'STUB'
+#!/bin/sh
+case "$1" in test) shift; exec test "$@" ;; esac
+exec "$@"
+STUB
+chmod +x "$DSTUB"/*
+
+# $DSTUB first, $STUBDIR second: uname / launchctl / sw_vers still come from the
+# section-6 layer.
+R_PATH="PATH=$DSTUB:$STUBDIR:/usr/bin:/bin:/usr/sbin:/sbin"
+R_BASE="$R_PATH IT_STUB_UNAME_S=Darwin IT_STUB_UNAME_M=arm64 WAIRED_NO_EMOJI=1 IT_STUB_SHA=0000000000000000000000000000000000000000000000000000000000000000"
+# An empty bindir + absent plist is the fresh-install dispatch, so these run the
+# install arm rather than the update one.
+r_env() {  # r_env <case-dir> [extra env...]
+  mkdir -p "$DREAL/$1/bin"
+  printf '%s WAIRED_DARWIN_BINDIR=%s/%s/bin WAIRED_DARWIN_PLIST=%s/%s/absent.plist WAIRED_STATE_DIR=%s/%s/state %s' \
+    "$R_BASE" "$DREAL" "$1" "$DREAL" "$1" "$DREAL" "$1" "${2:-}"
+}
+
+# The contract: a failed registration warns, says how to recover, and lets
+# EVERY later step run. "Waired is installed (macOS" is darwin_next_steps, i.e.
+# the far end of the function list darwin_install calls.
+run_case_asserts zero "darwin register fails -> install continues" \
+  "$(r_env reg-fail IT_STUB_REGISTER_RC=1)" \
+  'could not register the background service \(exit 1\)
+Retry with: sudo .*/waired-agent install
+Waired is installed \(macOS
+The background service is NOT registered' \
+  -- --skip-ollama --no-init --yes
+
+# The same run without the injected failure. Without this, the case above would
+# still pass if the warning became unconditional, and "continues after a
+# failure" would stop meaning anything.
+run_case_asserts zero "darwin register succeeds -> no failure warning" \
+  "$(r_env reg-ok IT_STUB_REGISTER_RC=0)" \
+  '!could not register the background service
+!The background service is NOT registered
+Waired is installed \(macOS' \
+  -- --skip-ollama --no-init --yes
+
+# Configuration lands too, not just console output: agent.env is what a later
+# bare `sudo waired init` reads the Control Plane URL back from (#42), and it is
+# written two steps past the registration that failed. Asserted on the file, and
+# run once — darwin_write_control_url deliberately leaves an existing active
+# setting alone, so a second shell would take that arm instead.
+R_CTRL_DIR="$DREAL/reg-fail-control"
+mkdir -p "$R_CTRL_DIR/bin"
+env $(r_env reg-fail-control IT_STUB_REGISTER_RC=1) sh "$INSTALL_SH" \
+  --skip-ollama --no-init --yes --control http://127.0.0.1:9479 >/dev/null 2>&1 || true
+if grep -q '^WAIRED_CONTROL_URL=http://127.0.0.1:9479$' "$R_CTRL_DIR/state/agent.env" 2>/dev/null; then
+  ok "darwin register fails -> agent.env still written"
+else
+  fail "darwin register fails — no WAIRED_CONTROL_URL in $R_CTRL_DIR/state/agent.env"
+fi
 
 echo
 log "summary: $PASS passed, $FAIL failed"
