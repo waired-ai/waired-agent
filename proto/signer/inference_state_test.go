@@ -164,7 +164,8 @@ func TestHardwareSummary_OmitemptyOnEmpty(t *testing.T) {
 }
 
 // TestHardwareSummary_HostFitFields_CanonicalJSON is the byte-identity
-// pin required of every additive proto change (decisions.md 20260719).
+// pin required of every additive proto change
+// (docs/decisions/20260719/0000-concurrent-proto-development.md).
 // UnifiedMemory / UsableVRAMMB / Vendor were added for the control
 // plane's onboarding host-fit; an agent that does not set them must
 // still produce EXACTLY the pre-addition bytes, because HardwareSummary

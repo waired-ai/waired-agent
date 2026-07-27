@@ -1,5 +1,6 @@
-# Enforces the additive-only proto contract on PRs (decisions.md
-# 20260719): published proto versions are immutable and consumers rely
+# Enforces the additive-only proto contract on PRs
+# (docs/decisions/20260719/0000-concurrent-proto-development.md):
+# published proto versions are immutable and consumers rely
 # on unset fields staying byte-absent from canonical JSON, so exported
 # API that shipped in a proto/v* tag may never be removed or altered,
 # and fields added to existing structs must be omitempty (or json:"-").
