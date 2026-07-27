@@ -2154,7 +2154,9 @@ var errSwapNeedsRestart = errors.New("waired-agent: model switch needs restart (
 // mesh stay up throughout. The old model keeps serving until the new one is
 // Ready. downloading reports whether a background pull was started (the switch
 // then completes from runPullJob once the weights land). It returns
-// errSwapNeedsRestart for a cross-engine target so the caller restart-falls-back.
+// errSwapNeedsRestart for a cross-engine target so the caller restart-falls-back,
+// and management.ErrModelSwitchUnavailable when the weights cannot be fetched at
+// all, which no restart would fix.
 func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOrAlias string) (downloading bool, err error) {
 	manifest, ok := catalog.LookupByAlias(modelOrAlias, p.manifests)
 	if !ok {
@@ -2184,13 +2186,26 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 	}
 	// Not on disk: record the pending switch and start the pull. The bounce
 	// fires from runPullJob's completion once the weights reach Ready; the old
-	// model keeps serving until then. Best-effort — the preference is already
-	// published and self-heals on the next boot if the dispatch fails.
+	// model keeps serving until then. The preference is already published and
+	// self-heals on the next boot, so it is left in place either way.
+	//
+	// A dispatch that fails is REPORTED, not swallowed (waired-agent#257).
+	// Returning (false, nil) here made this indistinguishable from "the
+	// weights were already on disk and the switch is done": the setup
+	// reconciler recorded no refusal, its model_pull row sat at pending
+	// forever — admission is once per desired value, so nothing retried it —
+	// and the operator's own switch reported success while nothing was
+	// downloading.
+	//
+	// Two %w on purpose: the cause sentinel (errPullsDisabled and friends)
+	// has to stay in the chain, because classifyModelRejection reads it to
+	// pick the §7 code the wizard renders.
 	p.pendingSwapModel.Store(&id)
 	if _, perr := p.PullModel(ctx, manifest.ModelID); perr != nil {
 		p.pendingSwapModel.CompareAndSwap(&id, nil)
 		p.logger.Warn("swap preferred model: pull dispatch failed", "model", manifest.ModelID, "err", perr)
-		return false, nil
+		return false, fmt.Errorf("start the download for %s: %w: %w",
+			manifest.ModelID, perr, management.ErrModelSwitchUnavailable)
 	}
 	return true, nil
 }

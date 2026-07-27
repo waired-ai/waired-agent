@@ -1392,6 +1392,28 @@ func TestClassifyModelRejection(t *testing.T) {
 		{"unsupported source", fmt.Errorf("vllm is linux-only: %w", errUnsupportedSource), signer.SetupErrorInternal},
 		{"unknown model", errors.New(`unknown model "nope"`), signer.SetupErrorModelNotFound},
 		{"no variants", errors.New("manifest m has no variants"), signer.SetupErrorModelNotFound},
+		// #257 wraps the seam sentinel AROUND the cause, so the specific
+		// arms above have to keep winning through the extra layer.
+		{
+			"pulls disabled, through the swap",
+			fmt.Errorf("start the download for m: %w: %w",
+				fmt.Errorf("allow_pull=false: %w", errPullsDisabled),
+				management.ErrModelSwitchUnavailable),
+			signer.SetupErrorInternal,
+		},
+		{
+			"dispatch failed with nothing more specific",
+			fmt.Errorf("start the download for m: %w: %w",
+				errors.New("write state.json: boom"), management.ErrModelSwitchUnavailable),
+			signer.SetupErrorNetworkError,
+		},
+		{
+			"dispatch failed on a full disk",
+			fmt.Errorf("start the download for m: %w: %w",
+				errors.New("write state.json: no space left on device"),
+				management.ErrModelSwitchUnavailable),
+			signer.SetupErrorDiskFull,
+		},
 	} {
 		if got := classifyModelRejection(tc.err); got != tc.want {
 			t.Errorf("%s: classifyModelRejection = %q, want %q", tc.name, got, tc.want)
@@ -1420,5 +1442,144 @@ func TestSetupEngineTooOldReportsEngineNotReady(t *testing.T) {
 	}
 	if !strings.Contains(step.ErrorDetail, "upgrade the engine") {
 		t.Fatalf("model step detail = %q, want the engine-version text kept", step.ErrorDetail)
+	}
+}
+
+// TestSetupSwallowedPullDispatchFailsTheModelRow is waired-agent#257 at
+// the level the operator sees it: the swap layer used to return
+// (false, nil) when it could not start the download, so nothing was
+// recorded, the row fell through to the not_present default, and it sat
+// at `pending` for the rest of the process's life — admission is once
+// per desired model value, so no later frame retried it either.
+func TestSetupSwallowedPullDispatchFailsTheModelRow(t *testing.T) {
+	f := &fakeSetupProvider{
+		engineInstalled: true,
+		modelState:      catalog.ModelStateNotPresent,
+		applyErr: fmt.Errorf("start the download for m-1: %w: %w",
+			fmt.Errorf("pulls are disabled by config (allow_pull=false): %w", errPullsDisabled),
+			management.ErrModelSwitchUnavailable),
+	}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+
+	step := stepByID(t, r.snapshot(ctx), setupStepModelPull)
+	if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorInternal {
+		t.Fatalf("model step = %+v, want failed/internal — pending is the #257 defect", step)
+	}
+	if !strings.Contains(step.ErrorDetail, "allow_pull=false") {
+		t.Fatalf("model step detail = %q, want the refusal's own text", step.ErrorDetail)
+	}
+}
+
+// --- the coding-tool row terminates (waired-agent#258) ---
+
+// integrationsFrame is desiredFrame plus a coding-tool instruction, for
+// the cases that need a model row as well.
+func integrationsFrame(engine, model string, targets ...string) *signer.InferenceState {
+	st := desiredFrame(engine, model, 0)
+	st.DesiredIntegrations = &signer.DesiredIntegrations{Enabled: targets}
+	return st
+}
+
+// TestSetupIntegrationTerminatesWhenNobodyCanWriteIt is #258. Only the
+// elevated executor can write these files — the daemon deliberately will
+// not touch a user's home — so with no executor the row had no author and
+// no arm that could ever end it: a grey "coding tools" row forever, and
+// setup_complete false with it.
+//
+// The two terminal codes are not interchangeable. Both send the operator
+// back to the machine (NAVI renders a command for either), but one says
+// the command was closed and the other says it never ran, and a wizard
+// that tells someone to resume a terminal they never opened sends them
+// nowhere.
+func TestSetupIntegrationTerminatesWhenNobodyCanWriteIt(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a live lease has simply not got here yet", func(t *testing.T) {
+		f := &fakeSetupProvider{engineInstalled: true, engineReady: true, modelState: catalog.ModelStateReady}
+		r, _ := leasedReconciler(t, f, "ollama", "")
+		r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationOpenCode))
+		r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
+		// The coding tools are the LAST thing the executor does, after the
+		// engine and the model: pending here is a wait, not a stall.
+		if step := stepByID(t, r.snapshot(ctx), setupStepIntegration); step.Status != signer.SetupStatusPending {
+			t.Fatalf("step = %+v, want pending while an executor is attached", step)
+		}
+	})
+
+	t.Run("the executor left before it got here", func(t *testing.T) {
+		f := &fakeSetupProvider{engineInstalled: true, engineReady: true, modelState: catalog.ModelStateReady}
+		r, clock := leasedReconciler(t, f, "ollama", "")
+		r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationOpenCode))
+		r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
+		clock.advance(setupExecutorTTL + time.Second)
+
+		snap := r.snapshot(ctx)
+		step := stepByID(t, snap, setupStepIntegration)
+		if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorExecutorGone {
+			t.Fatalf("step = %+v, want failed/executor_gone", step)
+		}
+		// Nothing else is red: this is the one thing that did not happen.
+		if eng := stepByID(t, snap, setupStepEngineInstall); eng.Status != signer.SetupStatusDone {
+			t.Fatalf("engine step = %+v, want done", eng)
+		}
+	})
+
+	t.Run("no executor ever attached", func(t *testing.T) {
+		// The browser-only host waired#935 left undecided: the engine is
+		// already installed, so nothing sends the operator to a terminal —
+		// and the toggles they just confirmed have no author at all.
+		f := &fakeSetupProvider{engineInstalled: true, engineReady: true, modelState: catalog.ModelStateReady}
+		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.now = newFakeClock().now
+		r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationClaudeCode))
+
+		snap := r.snapshot(ctx)
+		step := stepByID(t, snap, setupStepIntegration)
+		if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorPermissionDenied {
+			t.Fatalf("step = %+v, want failed/permission_denied", step)
+		}
+		if eng := stepByID(t, snap, setupStepEngineInstall); eng.Status != signer.SetupStatusDone {
+			t.Fatalf("engine step = %+v, want done — this host needed no executor for the engine", eng)
+		}
+	})
+
+	t.Run("an all-off answer still reports skipped", func(t *testing.T) {
+		// The terminal arms must not reach an instruction that asks for
+		// nothing: there is nothing for an executor to write, so `skipped`
+		// stays the answer whether one ever attached or not.
+		f := &fakeSetupProvider{engineInstalled: true, engineReady: true}
+		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, integrationsFrame("ollama", ""))
+		if step := stepByID(t, r.snapshot(ctx), setupStepIntegration); step.Status != signer.SetupStatusSkipped {
+			t.Fatalf("step = %+v, want skipped", step)
+		}
+	})
+}
+
+// TestSetupIntegrationStaysPendingWhileAnEngineRowIsRed is the
+// no-double-red bar for #258: one event must produce one red row, or the
+// operator is invited to fix the same thing twice. An executor killed
+// mid-install ends the engine row and leaves this one waiting, exactly as
+// a failed download leaves engine_install pending.
+func TestSetupIntegrationStaysPendingWhileAnEngineRowIsRed(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeSetupProvider{}
+	r, clock := leasedReconciler(t, f, "ollama", "")
+	r.Apply(ctx, integrationsFrame("ollama", "", signer.IntegrationOpenCode))
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Engine: "ollama",
+		Phase: management.SetupExecutorPhaseInstalling,
+	})
+	clock.advance(setupExecutorTTL + time.Second)
+
+	snap := r.snapshot(ctx)
+	eng := stepByID(t, snap, setupStepEngineInstall)
+	if eng.Status != signer.SetupStatusFailed || eng.ErrorCode != signer.SetupErrorExecutorGone {
+		t.Fatalf("engine step = %+v, want failed/executor_gone", eng)
+	}
+	if step := stepByID(t, snap, setupStepIntegration); step.Status != signer.SetupStatusPending {
+		t.Fatalf("integration step = %+v, want pending — the engine row already carries this failure", step)
 	}
 }
