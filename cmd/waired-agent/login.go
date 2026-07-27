@@ -28,8 +28,13 @@ type enrollFunc func(ctx context.Context, opts setup.EnrollOptions) (*setup.Enro
 type loginController struct {
 	sb       *switchboard
 	activate func(parent context.Context) error
-	enroll   enrollFunc
-	rootCtx  context.Context
+	// reactivate tears the live session down and rebuilds it from the
+	// state a re-auth just rewrote. activate alone cannot do this: it
+	// refuses to publish over a session that is already current, which is
+	// precisely the state every re-auth starts from.
+	reactivate func(parent context.Context) error
+	enroll     enrollFunc
+	rootCtx    context.Context
 
 	stateDir          string
 	defaultControlURL string
@@ -56,7 +61,12 @@ type loginControllerConfig struct {
 	Endpoint          string
 	RootCtx           context.Context
 	Activate          func(parent context.Context) error
-	Logger            *slog.Logger
+	// Reactivate replaces a live session with one built from the state on
+	// disk. Required for re-auth; optional otherwise (a nil one makes a
+	// re-auth fail loudly rather than half-succeed with stale tokens in
+	// the running session).
+	Reactivate func(parent context.Context) error
+	Logger     *slog.Logger
 	// Enroll is optional; nil uses setup.Enroll.
 	Enroll enrollFunc
 }
@@ -69,6 +79,7 @@ func newLoginController(sb *switchboard, cfg loginControllerConfig) *loginContro
 	return &loginController{
 		sb:                sb,
 		activate:          cfg.Activate,
+		reactivate:        cfg.Reactivate,
 		enroll:            enroll,
 		rootCtx:           cfg.RootCtx,
 		stateDir:          cfg.StateDir,
@@ -82,9 +93,25 @@ func (lc *loginController) Start(ctx context.Context, req management.LoginStartR
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 
-	// Already enrolled + active: idempotent no-op.
-	if lc.sb.current() != nil {
+	// Already enrolled + active: idempotent no-op. `waired init` run twice
+	// must not re-enrol, and the tray's start-on-click must not either.
+	//
+	// Reauth is the one caller that means it. It is how an enrolled device
+	// renews credentials the refresh loop can no longer renew for itself
+	// (#175) — the control plane matches the machine key and renews the
+	// same device row, so this replaces tokens, it does not add a device.
+	// Read the session once: lc.mu does not cover the switchboard, and the
+	// node-key rotator can swap it underneath. Two reads could disagree and
+	// leave this taking the no-op branch with reauth already true.
+	live := lc.sb.current() != nil
+	reauth := req.Reauth && live
+	if live && !req.Reauth {
 		return management.LoginStatus{Phase: management.LoginPhaseActive}, nil
+	}
+	if reauth && lc.reactivate == nil {
+		// Enrolling would rewrite the tokens on disk while the live session
+		// kept using the old ones — worse than refusing, and invisible.
+		return management.LoginStatus{}, errors.New("login: this daemon cannot re-authenticate a live session")
 	}
 	// A login is already in flight: single-flight — return its status
 	// rather than spawning a second browser OAuth.
@@ -118,7 +145,7 @@ func (lc *loginController) Start(ctx context.Context, req management.LoginStartR
 		phase:  management.LoginPhaseLoggingIn,
 		cancel: cancel,
 	}
-	go lc.run(loginCtx, sessID, controlURL, deviceName, req.AuthKey)
+	go lc.run(loginCtx, sessID, controlURL, deviceName, req.AuthKey, reauth)
 
 	return lc.snapshotLocked(), nil
 }
@@ -139,8 +166,10 @@ func (lc *loginController) Status(ctx context.Context, sessionID string) (manage
 }
 
 // run executes enrollment then live activation on a background
-// goroutine, advancing the session's phase as it goes.
-func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceName, authKey string) {
+// goroutine, advancing the session's phase as it goes. reauth selects
+// the activation that replaces a live session instead of publishing a
+// first one.
+func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceName, authKey string, reauth bool) {
 	// Resolve a port-0 login endpoint (default "udp4:127.0.0.1:0") to a
 	// concrete free UDP port before enrolling. The endpoint is persisted into
 	// identity.json and later parsed by udpListenPortFromEndpoint (which
@@ -185,7 +214,15 @@ func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceNa
 
 	// Live activation. Runs on rootCtx (process lifetime): the resulting
 	// session must outlive both this goroutine and the login context.
-	if err := lc.activate(lc.rootCtx); err != nil {
+	// A re-auth has a session already running on the credentials we just
+	// replaced, so it tears that down first — activate refuses to publish
+	// over a live one, and leaving it up would mean the daemon kept using
+	// tokens the control plane has already rotated away from.
+	activate := lc.activate
+	if reauth {
+		activate = lc.reactivate
+	}
+	if err := activate(lc.rootCtx); err != nil {
 		lc.fail(sessID, err)
 		return
 	}

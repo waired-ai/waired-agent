@@ -21,11 +21,15 @@ import (
 // failure into a silent, remote, unfixable one.
 //
 // So the probe no longer decides *which implementation runs*; it decides
-// whether the agent is there at all. Local enrollment runs only when it is
-// explicitly selected, and an agent that is not answering is an error.
-// Tailscale has no fallback either: `tailscale up` fails when tailscaled
-// is not answering, and even its container image starts tailscaled first
-// and authenticates it with an auth key.
+// whether the agent is there at all. Tailscale has no fallback either:
+// `tailscale up` fails when tailscaled is not answering, and even its
+// container image starts tailscaled first and authenticates it with an
+// auth key.
+//
+// Since the daemon can re-authenticate an already-enrolled device (#175),
+// there is no second implementation left to choose between: every
+// enrollment — first run, unattended with an auth key, or re-auth — runs
+// in the daemon. The only remaining question is whether it is there.
 
 type enrollRoute int
 
@@ -34,11 +38,6 @@ const (
 	// Drive its login endpoints; it owns enrollment, the state dir and the
 	// live tunnel.
 	routeDaemon enrollRoute = iota
-	// routeLocal: local enrollment, explicitly selected. Only re-auth
-	// reaches it now — the daemon login refreshes no tokens yet. Once it
-	// can, this route and the local enrollment implementation behind it go
-	// away entirely (#175).
-	routeLocal
 	// routeAgentDown: a service is registered but the management API never
 	// answered inside the wait window. This is exactly the state the silent
 	// fallback used to hide, so it fails loudly instead.
@@ -52,36 +51,23 @@ const (
 // itself is a pure function that can be table-tested over every
 // combination (CLAUDE.md §Test discipline).
 type enrollFacts struct {
-	// The one remaining explicit selector for local enrollment: re-auth.
-	// The daemon login cannot refresh tokens for an already-enrolled device
-	// yet; when it can, this route and the local enrollment implementation
-	// behind it both go away (#175).
-	renewing bool
-	// authKey is set when the operator passed --auth-key (or
-	// $WAIRED_AUTH_KEY). It is a credential for the DAEMON's enrollment,
-	// never a selector for the local one: the local path has no way to
-	// redeem it, and silently ignoring it would enrol the host
-	// capability-less — the exact failure #175 exists to remove.
-	authKey bool
 	// serviceInstalled reports whether an OS service is registered
 	// (systemd unit / LaunchDaemon plist / SCM entry) — i.e. whether an
 	// agent is *supposed* to be running here.
 	serviceInstalled bool
 }
 
-// chooseEnrollRoute picks the journey. probe is invoked only when an
-// explicit selector has not already settled the answer, so a re-auth run
-// never pays the wait window; it receives serviceInstalled
-// because the probe waits longer for a service that is registered (and is
-// therefore probably still starting).
+// chooseEnrollRoute picks the journey. It receives serviceInstalled twice
+// over — once as a fact and once through probe — because the probe waits
+// longer for a service that is registered (and is therefore probably
+// still starting), while the answer to "is this host missing an install or
+// missing a running process" is the fact itself.
+//
+// PRODUCT CONTRACT (#175): no input selects an enrollment that bypasses
+// the daemon, because there is no longer one to select. Whatever the run
+// carries — an auth key, an existing identity to renew, neither — it goes
+// to the daemon or it fails saying why.
 func chooseEnrollRoute(f enrollFacts, probe func(serviceInstalled bool) bool) enrollRoute {
-	// An auth key outranks the local selectors. Only the daemon can
-	// redeem one, so a run that carries a key must reach the daemon or
-	// fail saying why — never quietly fall back to a local enrollment
-	// that would drop the credential on the floor.
-	if !f.authKey && f.renewing {
-		return routeLocal
-	}
 	if probe(f.serviceInstalled) {
 		return routeDaemon
 	}

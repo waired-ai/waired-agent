@@ -274,17 +274,15 @@ func runInitBody(o *initFlags) error {
 
 	// Which enrollment journey this run takes. Enrollment is daemon-owned
 	// (the Tailscale model): the running waired-agent performs it and this
-	// process is a thin client over its login API. There is no implicit
-	// fallback to the standalone path below — a probe that failed because
-	// the service never started used to silently produce a registered but
+	// process is a thin client over its login API. There is no fallback to
+	// the standalone path below — a probe that failed because the service
+	// never started used to silently produce a registered but
 	// capability-less device (#175). See init_route_daemon.go.
 	authKey, err := authKeyFromFlags(*authKeyFlag)
 	if err != nil {
 		return err
 	}
 	route := chooseEnrollRoute(enrollFacts{
-		renewing:         renewing,
-		authKey:          authKey != "",
 		serviceInstalled: serviceInstalledFn(),
 	}, func(serviceInstalled bool) bool {
 		return waitForDaemonStartup(*mgmtURL, serviceInstalled, os.Stdout)
@@ -299,14 +297,16 @@ func runInitBody(o *initFlags) error {
 				Enabled: *inferenceEnabled,
 				Share:   *inferenceShare,
 				ModelID: *bundledModelID,
-			}, authKey)
+			}, authKey, renewing)
 	case routeAgentDown, routeAgentAbsent:
 		return daemonRequiredError(route, runtime.GOOS, serviceStartHintFn())
 	}
 
-	// routeLocal: explicitly-selected local enrollment (--bypass-mode /
-	// --google-sa-login / re-auth). Removed once the daemon login covers
-	// all three (#175).
+	// UNREACHABLE from here down: chooseEnrollRoute returns only the three
+	// routes above and every one of them returns. What follows is the
+	// standalone enrollment implementation, kept for one more PR so this
+	// one is only the behaviour change; #175's deletion PR removes it
+	// together with the `waired init` flags that exist solely to steer it.
 	listenAddr, err := chooseListenAddr(*listen)
 	if err != nil {
 		return err
