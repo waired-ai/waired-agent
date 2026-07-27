@@ -164,11 +164,35 @@ jobs:
         shell: pwsh
         run: ./scripts/dev/amsi-scan.ps1 -Strict -OnNoProvider fail -ClearExclusionsForScan
 
+      # macOS, the launchd manager against REAL launchctl (#195/#176).
+      # TestRealLaunchdRoundTrip has existed since #218 and covers the whole
+      # install -> stop -> start -> uninstall -> print-disabled -> reinstall
+      # cycle, but it is gated on WAIRED_LAUNCHD_REALHOST + euid 0 (it mutates
+      # /Library/LaunchDaemons and the system launchd domain), and nothing set
+      # either — so the one test written specifically for #176 had never
+      # executed anywhere. It does here: the runner is disposable.
+      #
+      # BEFORE the harness, not after: this test registers the SAME label
+      # (com.waired.agent) as the product, so running it against an installed
+      # host would bootout the harness's real daemon. Its own t.Cleanup
+      # uninstalls, leaving a clean host for the install test below.
+      #
+      # `sudo env` rather than plain sudo: sudo strips the environment, so the
+      # gate variable has to be re-applied inside, and `go` needs an absolute
+      # path because secure_path drops the runner's PATH.
+      - name: real launchd round trip (macos, #176)
+        if: matrix.os == 'macos'
+        run: |
+          set -euo pipefail
+          sudo env WAIRED_LAUNCHD_REALHOST=1 "$(command -v go)" test \
+            ./internal/platform/service/ -run TestRealLaunchdRoundTrip -count=1 -v
+
       # macOS: build the darwin tarball, point install.sh's darwin path at it
       # (file://), run it, assert binaries + the system LaunchDaemon plist +
-      # root-owned state dir, then a hands-free OIDC enroll (Tier 2). The
-      # agent is a system LaunchDaemon — it bootstraps + enrolls headless.
-      # Needs passwordless sudo (the hosted runner user has it).
+      # root-owned state dir, the uninstall -> reinstall round trip (#195),
+      # then a hands-free OIDC enroll (Tier 2). The agent is a system
+      # LaunchDaemon — it bootstraps + enrolls headless. Needs passwordless
+      # sudo (the hosted runner user has it).
       - name: install test (macos, tier 1+2)
         if: matrix.os == 'macos'
         run: bash scripts/dev/installtest-macos.sh --tier 2
