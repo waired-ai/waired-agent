@@ -387,10 +387,15 @@ func TestEngineArrivalPending(t *testing.T) {
 }
 
 // fakeVLLMInstaller records vLLM install attempts and answers the GPU /
-// already-present probes, without building a real ~6 GB venv.
+// already-present probes, without building a real ~9 GB venv.
 type fakeVLLMInstaller struct {
-	mu     sync.Mutex
-	calls  []string // stateDir per install
+	mu    sync.Mutex
+	calls []string // stateDir per install
+	// sinks records the progress callback each call was handed. It is
+	// recorded rather than dropped because "the executor passed a live
+	// sink" is the whole of waired-agent#255 on this path, and a fake
+	// that swallowed the argument would make that case unwritable.
+	sinks  []func(infruntime.InstallProgress)
 	handed []string // stateDir passed to the ownership handoff
 	err    error
 	nvidia bool // what setupDetectNVIDIA reports
@@ -401,10 +406,11 @@ type fakeVLLMInstaller struct {
 func (f *fakeVLLMInstaller) install(t *testing.T) *fakeVLLMInstaller {
 	t.Helper()
 	prevInstall, prevNvidia, prevActive, prevHand := setupInstallVLLM, setupDetectNVIDIA, setupVLLMActive, setupHandState
-	setupInstallVLLM = func(stateDir string) error {
+	setupInstallVLLM = func(stateDir string, sink func(infruntime.InstallProgress)) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.calls = append(f.calls, stateDir)
+		f.sinks = append(f.sinks, sink)
 		return f.err
 	}
 	setupDetectNVIDIA = func(context.Context) bool { return f.nvidia }
@@ -430,6 +436,12 @@ func (f *fakeVLLMInstaller) handedOff() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.handed...)
+}
+
+func (f *fakeVLLMInstaller) progressSinks() []func(infruntime.InstallProgress) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]func(infruntime.InstallProgress){}, f.sinks...)
 }
 
 // activeVLLMInstallState is the state a daemon serves when the wizard asked
@@ -490,6 +502,12 @@ func TestSetupVLLMInstallHappyPath(t *testing.T) {
 	if got := f.handedOff(); len(got) != 1 || got[0] != "/var/lib/waired" {
 		t.Fatalf("ownership handoff = %v, want one call with the state dir", got)
 	}
+	// A live lease must hand the installer a live sink, or the wizard is
+	// back to 45 minutes of "Working on it…" (waired-agent#255). This is
+	// the one place that wiring is observable.
+	if sinks := f.progressSinks(); len(sinks) != 1 || sinks[0] == nil {
+		t.Fatalf("progress sinks = %d, want exactly one non-nil sink", len(sinks))
+	}
 	if last := lastPhase(t, d); last.Phase != management.SetupExecutorPhaseDone {
 		t.Fatalf("final phase = %q, want done", last.Phase)
 	}
@@ -510,7 +528,7 @@ func TestSetupVLLMClaimsBeforeInstalling(t *testing.T) {
 	f := &fakeVLLMInstaller{nvidia: true}
 	f.install(t)
 	var phaseAtInstall string
-	setupInstallVLLM = func(_ string) error {
+	setupInstallVLLM = func(_ string, _ func(infruntime.InstallProgress)) error {
 		phaseAtInstall = lastPhase(t, d).Phase
 		return nil
 	}

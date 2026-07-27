@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
@@ -471,15 +473,41 @@ const setupVLLMInstallTimeout = 45 * time.Minute
 // shared core of the interactive CLI (installVLLM) and the setup executor
 // (installVLLMForSetup); neither the ownership handoff nor the CLI's opt-in
 // epilogue lives here, so each caller adds only what its context needs.
-func vllmInstallCore(ctx context.Context, stateDir string) (infruntime.InstallResult, error) {
+//
+// sink is the second consumer of the same events — the setup executor's
+// lease, so the browser wizard draws the download the terminal is drawing
+// (waired-agent#255). It may be nil, which is what a hand-run install
+// looks like; the two are peers and neither may suppress the other.
+func vllmInstallCore(ctx context.Context, stateDir string, sink func(infruntime.InstallProgress)) (infruntime.InstallResult, error) {
 	baseDir := filepath.Join(stateDir, "runtimes", "vllm")
-	return vllmInstall(ctx, baseDir, func(p infruntime.InstallProgress) {
-		pct := ""
-		if p.Percent >= 0 {
-			pct = fmt.Sprintf(" %d%%", p.Percent)
+	return vllmInstall(ctx, baseDir, teeProgress(renderVLLMInstallProgress(os.Stdout), sink))
+}
+
+// renderVLLMInstallProgress is the terminal half: one line per event in
+// the "[N/5 stage]" format, with the transfer figures appended once uv
+// has announced a download.
+//
+// Until #255 there were no figures to append — uv hides its progress bar
+// when stderr is not a terminal, so the percentage this used to print was
+// never populated on the pip-install stage and the operator watched a
+// silent ~4 GB download. The byte grammar matches the ollama renderer's
+// so the two engines read the same on one terminal.
+func renderVLLMInstallProgress(w io.Writer) func(infruntime.InstallProgress) {
+	return func(p infruntime.InstallProgress) {
+		var detail string
+		switch {
+		case p.TotalBytes > 0:
+			detail = fmt.Sprintf(" %3d%%  %s / %s",
+				int(float64(p.CompletedBytes)/float64(p.TotalBytes)*100),
+				download.HumanBytes(p.CompletedBytes), download.HumanBytes(p.TotalBytes))
+			if p.BytesPerSec > 0 {
+				detail += fmt.Sprintf(" (%s/s)", download.HumanBytes(p.BytesPerSec))
+			}
+		case p.Percent >= 0:
+			detail = fmt.Sprintf(" %d%%", p.Percent)
 		}
-		fmt.Printf("[%d/%d %s]%s %s\n", p.Step, p.Total, p.Stage, pct, p.Message)
-	})
+		_, _ = fmt.Fprintf(w, "[%d/%d %s]%s %s\n", p.Step, p.Total, p.Stage, detail, p.Message)
+	}
 }
 
 // installVLLMForSetup is the setup executor's vLLM install: the shared venv
@@ -488,10 +516,10 @@ func vllmInstallCore(ctx context.Context, stateDir string) (infruntime.InstallRe
 // executor's install path calls setupHandState itself, mirroring the ollama
 // seam). Returns the installer's error verbatim so the wizard shows the real
 // reason.
-func installVLLMForSetup(stateDir string) error {
+func installVLLMForSetup(stateDir string, sink func(infruntime.InstallProgress)) error {
 	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
 	defer cancel()
-	_, err := vllmInstallCore(ctx, stateDir)
+	_, err := vllmInstallCore(ctx, stateDir, sink)
 	return err
 }
 
@@ -500,7 +528,9 @@ func installVLLMForSetup(stateDir string) error {
 func installVLLM(stateDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), setupVLLMInstallTimeout)
 	defer cancel()
-	res, err := vllmInstallCore(ctx, stateDir)
+	// No sink: `waired runtimes install` is a hand-run command, with
+	// nothing on the other side of a lease to report to.
+	res, err := vllmInstallCore(ctx, stateDir, nil)
 	if err != nil {
 		return err
 	}

@@ -255,6 +255,13 @@ func TestVLLMInstall_Uninstall(t *testing.T) {
 	}
 }
 
+// TestExtractInstallPercent is a RECORD of today's behaviour, not a
+// product contract. The inputs below were invented, and waired-agent#255
+// established that uv emits no percentage at all when its output is
+// piped — which is every path the installer takes. The matcher is kept
+// because it still fires for any tool line that does carry an NN%, but
+// nothing user-facing depends on it any more: the pip-install stage is
+// byte-denominated now (uv_progress.go).
 func TestExtractInstallPercent(t *testing.T) {
 	cases := map[string]int{
 		"Downloading torch (700 MB) 47%": 47,
@@ -269,6 +276,73 @@ func TestExtractInstallPercent(t *testing.T) {
 		if got := extractInstallPercent(in); got != want {
 			t.Errorf("extractInstallPercent(%q) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+// TestVLLMInstall_PipStageCarriesBytes pins the whole of
+// waired-agent#255's producer half: the byte figures ride the
+// pip-install stage and only that stage, and they come from uv's real
+// announcements rather than an estimate.
+func TestVLLMInstall_PipStageCarriesBytes(t *testing.T) {
+	dir := t.TempDir()
+	uvDir := t.TempDir()
+	uvBin := filepath.Join(uvDir, "uv")
+	if err := os.WriteFile(uvBin, []byte("#!/bin/sh\necho 0.11.8\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verbatim uv 0.11.26 output for the pip call; anything else answers
+	// with the non-transfer chatter the other stages produce.
+	r := &scriptedRunner{t: t, respond: func(c scriptedCall) ([]string, error) {
+		if len(c.args) >= 2 && c.args[0] == "pip" && c.args[1] == "install" {
+			return []string{
+				"Resolved 190 packages in 2.47s",
+				"Downloading torch (506.1MiB)",
+				"Downloading nvidia-nvjitlink (38.8MiB)",
+				" Downloaded nvidia-nvjitlink",
+				" Downloaded torch",
+				"Prepared 190 packages in 1m 20s",
+				"Installed 190 packages in 53ms",
+			}, nil
+		}
+		return []string{"ok"}, nil
+	}}
+	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow}
+
+	var progress []InstallProgress
+	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, func(p InstallProgress) {
+		progress = append(progress, p)
+	}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	wantTotal := mib(506.1) + mib(38.8)
+	var sawTotal, maxCompleted int64
+	for _, p := range progress {
+		if p.Stage != StagePipInstall {
+			if p.CompletedBytes != 0 || p.TotalBytes != 0 || p.BytesPerSec != 0 {
+				t.Errorf("stage %s carries bytes %d/%d/%d — only pip-install transfers anything",
+					p.Stage, p.CompletedBytes, p.TotalBytes, p.BytesPerSec)
+			}
+			continue
+		}
+		if p.TotalBytes > sawTotal {
+			sawTotal = p.TotalBytes
+		}
+		if p.CompletedBytes > maxCompleted {
+			maxCompleted = p.CompletedBytes
+		}
+		if p.CompletedBytes > p.TotalBytes {
+			t.Errorf("completed %d > total %d — the two must stay in the same units",
+				p.CompletedBytes, p.TotalBytes)
+		}
+	}
+	if sawTotal != wantTotal {
+		t.Errorf("pip-install total = %d, want %d (the two announced sizes)", sawTotal, wantTotal)
+	}
+	if maxCompleted != wantTotal {
+		t.Errorf("pip-install completed peaked at %d, want %d — the row must finish full",
+			maxCompleted, wantTotal)
 	}
 }
 

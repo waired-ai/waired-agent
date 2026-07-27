@@ -61,12 +61,58 @@ func wireRateBps(bps int64) int64 {
 	return bps
 }
 
-// teeOllamaProgress fans one installer callback out to several, skipping
-// nil ones. The stdout renderer and the daemon sink are peers: neither
-// may suppress the other, and the terminal must keep its bar even on a
-// host where the daemon routes are absent.
-func teeOllamaProgress(fns ...func(infruntime.OllamaInstallProgress)) func(infruntime.OllamaInstallProgress) {
-	live := make([]func(infruntime.OllamaInstallProgress), 0, len(fns))
+// vllmProgressStage reports which §7 row an InstallProgress event
+// belongs to. Same shape as ollamaProgressStage one engine over: the
+// installer's stages are its own vocabulary (resolve-uv / create-venv /
+// pip-install / verify / activate), the wizard's rows are the settled
+// five, and only the stage that transfers anything is byte-denominated.
+//
+// pip-install is ~90% of the wall clock and all ~4 GB of the download;
+// the four stages around it are a uv resolve, a venv creation, a CUDA
+// import check and a symlink swap (waired-agent#255).
+func vllmProgressStage(stage infruntime.InstallStage) string {
+	if stage == infruntime.StagePipInstall {
+		return management.SetupStepEngineDownload
+	}
+	return management.SetupStepEngineInstall
+}
+
+// newVLLMProgressSink returns a VLLMInstaller progress callback that
+// republishes the installer's figures to the daemon, so the browser
+// wizard draws the same download the terminal is drawing.
+//
+// Returns nil for an inert session, exactly as newExecutorProgressSink
+// does — a nil callback is what "render to stdout only" already looks
+// like everywhere else in the installer.
+func newVLLMProgressSink(s *executorSession, engine string) func(infruntime.InstallProgress) {
+	if !s.Supported() {
+		return nil
+	}
+	return func(p infruntime.InstallProgress) {
+		step := vllmProgressStage(p.Stage)
+		if step == management.SetupStepEngineDownload && p.TotalBytes == 0 {
+			// pip-install has started but uv has not announced a download
+			// yet (it resolves first, and a fully cached host announces
+			// nothing at all). Reporting it would open the row with a bar
+			// of unknown size, which is the same thing the ollama sink
+			// refuses to do for the stage-opening event.
+			return
+		}
+		s.Progress(step, engine, p.CompletedBytes, p.TotalBytes, wireRateBps(p.BytesPerSec))
+	}
+}
+
+// teeProgress fans one installer callback out to several, skipping nil
+// ones. The stdout renderer and the daemon sink are peers: neither may
+// suppress the other, and the terminal must keep its bar even on a host
+// where the daemon routes are absent.
+//
+// Generic over the event type because the two installers report
+// different shapes — ollama is byte-denominated end to end, vLLM is
+// staged with one byte-denominated stage — and the fan-out is the same
+// either way.
+func teeProgress[T any](fns ...func(T)) func(T) {
+	live := make([]func(T), 0, len(fns))
 	for _, f := range fns {
 		if f != nil {
 			live = append(live, f)
@@ -78,9 +124,15 @@ func teeOllamaProgress(fns ...func(infruntime.OllamaInstallProgress)) func(infru
 	if len(live) == 1 {
 		return live[0]
 	}
-	return func(p infruntime.OllamaInstallProgress) {
+	return func(p T) {
 		for _, f := range live {
 			f(p)
 		}
 	}
+}
+
+// teeOllamaProgress is teeProgress at the ollama event type. Kept as a
+// named function so the three per-OS installers keep reading as prose.
+func teeOllamaProgress(fns ...func(infruntime.OllamaInstallProgress)) func(infruntime.OllamaInstallProgress) {
+	return teeProgress(fns...)
 }

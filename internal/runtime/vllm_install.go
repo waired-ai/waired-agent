@@ -70,11 +70,29 @@ const (
 // runs. The CLI converts these to the "[3/5] Installing vllm... 47%"
 // presentation described in the plan.
 type InstallProgress struct {
-	Stage   InstallStage
-	Step    int
+	Stage InstallStage
+	Step  int
+	// Total is the number of STAGES (5), not a byte count — it predates
+	// the byte fields below and keeps its meaning.
 	Total   int
 	Percent int // 0-100 when the underlying tool reports it; -1 otherwise
 	Message string
+
+	// CompletedBytes / TotalBytes / BytesPerSec are the transfer figures
+	// for the one byte-denominated stage, pip-install. They are read off
+	// uv's own per-package announcements (uv_progress.go) rather than
+	// estimated, and are 0 on every other stage.
+	//
+	// Named for the wire they end up on (SetupStep / SetupExecutorRequest)
+	// so the setup sink is a straight field copy, and named apart from
+	// Total above so the stage counter cannot be mistaken for a size
+	// (waired-agent#255).
+	//
+	// 0 = unknown, for the rate as much as for the counts. A stall is
+	// derived from CompletedBytes not advancing, matching #197's rule.
+	CompletedBytes int64
+	TotalBytes     int64
+	BytesPerSec    int64
 }
 
 // InstallResult is the venv that Install successfully materialised.
@@ -187,13 +205,19 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// `uv venv --python 3.12 <dir>` creates a fresh venv. If <dir>
 	// already exists with the same interpreter, uv exits successfully
 	// without rebuilding, which gives us idempotency for free.
-	if err := i.runCapturing(ctx, uvBin, []string{"venv", "--python", py, venvDir}, nil, onProgress, StageCreateVenv, 2, totalStages); err != nil {
+	if err := i.runCapturing(ctx, uvBin, []string{"venv", "--python", py, venvDir}, nil, onProgress, StageCreateVenv, 2, totalStages, nil); err != nil {
 		i.maybeRollback(versionDir, opts.KeepFailed)
 		return InstallResult{}, fmt.Errorf("vllm install: uv venv: %w", err)
 	}
 
 	// Stage 3: pip install. Pass --python so uv doesn't infer from PATH.
-	onProgress(InstallProgress{Stage: StagePipInstall, Step: 3, Total: totalStages, Percent: -1, Message: "installing vllm==" + version + " hf_transfer==" + hf + " (this may take 5-15 minutes, ~6 GB)..."})
+	//
+	// This stage is ~90% of the wall clock and all of the transfer, so it
+	// is the one that gets byte-denominated progress — everything the
+	// browser wizard's engine_download row is drawn from comes from here
+	// (waired-agent#255).
+	pipBytes := newUVDownloadTracker()
+	onProgress(InstallProgress{Stage: StagePipInstall, Step: 3, Total: totalStages, Percent: -1, Message: "installing vllm==" + version + " hf_transfer==" + hf + " (this may take 5-15 minutes, ~4 GB download)..."})
 	pipArgs := []string{
 		"pip", "install",
 		"--python", filepath.Join(venvDir, "bin", "python"),
@@ -218,7 +242,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 		TransformersConstraint,
 	}
 	pipArgs = append(pipArgs, opts.ExtraPipPackages...)
-	if err := i.runCapturing(ctx, uvBin, pipArgs, nil, onProgress, StagePipInstall, 3, totalStages); err != nil {
+	if err := i.runCapturing(ctx, uvBin, pipArgs, nil, onProgress, StagePipInstall, 3, totalStages, pipBytes); err != nil {
 		i.maybeRollback(versionDir, opts.KeepFailed)
 		return InstallResult{}, fmt.Errorf("vllm install: uv pip install: %w", err)
 	}
@@ -226,7 +250,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// Stage 4: verify.
 	onProgress(InstallProgress{Stage: StageVerify, Step: 4, Total: totalStages, Percent: -1, Message: "verifying: python -c 'import vllm, torch; assert torch.cuda.is_available()'..."})
 	pythonBin := filepath.Join(venvDir, "bin", "python")
-	if err := i.runCapturing(ctx, pythonBin, []string{"-c", VLLMVerifyImports}, nil, onProgress, StageVerify, 4, totalStages); err != nil {
+	if err := i.runCapturing(ctx, pythonBin, []string{"-c", VLLMVerifyImports}, nil, onProgress, StageVerify, 4, totalStages, nil); err != nil {
 		i.maybeRollback(versionDir, opts.KeepFailed)
 		return InstallResult{}, fmt.Errorf("vllm install: verify: %w", err)
 	}
@@ -294,19 +318,29 @@ func (i *VLLMInstaller) Active() (InstallResult, bool) {
 // events. Lines that look like uv/pip percent updates surface
 // through onProgress; everything else flows into the message field
 // for diagnostic logging.
-func (i *VLLMInstaller) runCapturing(ctx context.Context, binary string, args, env []string, onProgress func(InstallProgress), stage InstallStage, step, total int) error {
+//
+// bytes, when non-nil, also reads uv's download announcements off the
+// same lines and rides its running totals on every event of the stage —
+// so the row the wizard is drawing keeps its figures while unrelated
+// output flows past (waired-agent#255). Only pip-install passes one;
+// the other stages transfer nothing worth a bar.
+func (i *VLLMInstaller) runCapturing(ctx context.Context, binary string, args, env []string, onProgress func(InstallProgress), stage InstallStage, step, total int, bytes *uvDownloadTracker) error {
 	return i.Runner.Run(ctx, binary, args, env, func(line string) {
 		if line == "" {
 			return
 		}
-		pct := extractInstallPercent(line)
-		onProgress(InstallProgress{
+		p := InstallProgress{
 			Stage:   stage,
 			Step:    step,
 			Total:   total,
-			Percent: pct,
+			Percent: extractInstallPercent(line),
 			Message: line,
-		})
+		}
+		if bytes != nil {
+			bytes.Observe(line, i.now())
+			p.CompletedBytes, p.TotalBytes, p.BytesPerSec = bytes.Snapshot()
+		}
+		onProgress(p)
 	})
 }
 

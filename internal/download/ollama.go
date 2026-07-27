@@ -215,7 +215,7 @@ func extractSizes(s string) (completed, total int64) {
 	if m == nil {
 		return 0, 0
 	}
-	return parseSize(m[1], m[2]), parseSize(m[3], m[4])
+	return ParseSize(m[1], m[2]), ParseSize(m[3], m[4])
 }
 
 // speedRE matches "<n> <unit>/s" (e.g. "40 MB/s").
@@ -223,15 +223,20 @@ var speedRE = regexp.MustCompile(`([0-9.]+)\s*([KMGTP]?i?B)/s`)
 
 func extractSpeed(s string) int64 {
 	if m := speedRE.FindStringSubmatch(s); m != nil {
-		return parseSize(m[1], m[2])
+		return ParseSize(m[1], m[2])
 	}
 	return 0
 }
 
-// parseSize converts a value + unit ("2.3", "GB") into bytes. Decimal
+// ParseSize converts a value + unit ("2.3", "GB") into bytes. Decimal
 // units (KB/MB/GB/TB/PB) use 1000; binary units (KiB/MiB/...) use 1024,
 // matching how Ollama formats progress.
-func parseSize(val, unit string) int64 {
+//
+// Exported because uv denominates its own download announcements the
+// same way ("506.1MiB") and internal/runtime's reader for them
+// (uv_progress.go, waired-agent#255) must agree with this table rather
+// than grow a second one.
+func ParseSize(val, unit string) int64 {
 	f, err := strconv.ParseFloat(val, 64)
 	if err != nil {
 		return 0
