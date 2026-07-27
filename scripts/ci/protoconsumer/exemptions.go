@@ -141,7 +141,7 @@ var producedInProto = []exemption{
 		"the roofline decode prediction, computed inside hostfit"},
 	{reflect.TypeFor[hostfit.Estimate](), "ResidentShare",
 		"the roofline decode prediction, computed inside hostfit"},
-	{reflect.TypeFor[hostfit.Estimate](), "MeetsSpeedFloor",
+	{reflect.TypeFor[hostfit.Estimate](), "UpperBound",
 		"the roofline decode prediction, computed inside hostfit"},
 	{reflect.TypeFor[disco.Frame](), "Ed25519Sig",
 		"the peer↔peer signature; disco.Decode fills it on receipt"},

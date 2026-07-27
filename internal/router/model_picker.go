@@ -67,6 +67,14 @@ type Pick struct {
 	// serving the effective floor window on this host (0 when the
 	// window fits fully GPU-resident, or on non-ollama engines).
 	ExpectedSpillFraction float64
+
+	// DecodeEstimate is the roofline decode prediction for this candidate
+	// on this host (hostfit.EstimateOllamaDecode; zero on non-ollama
+	// engines). It is what separates "the host can run this" from "the
+	// host can run this usefully" — a distinction weight alone cannot
+	// make, because a dense 27B and a 3B-active mixture of experts of the
+	// same size decode seven times apart (#229).
+	DecodeEstimate hostfit.Estimate
 }
 
 // RankModels applies the Step 2.5 filter + sort and returns EVERY
@@ -129,6 +137,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 		variant     catalog.Variant
 		floorOK     bool
 		spill       float64
+		est         hostfit.Estimate
 	}
 	var fits []candidate
 	for i, m := range capable {
@@ -145,7 +154,10 @@ func RankModels(in PickInput) ([]Pick, error) {
 			if !hostFits(in.Engine, v, in.Hardware) {
 				continue
 			}
-			c := candidate{manifestIdx: i, manifest: m, variant: v}
+			// No speed claim by default — vLLM has no roofline model
+			// here, and hostfit spells "no claim" as a passing floor.
+			c := candidate{manifestIdx: i, manifest: m, variant: v,
+				est: hostfit.Estimate{MeetsSpeedFloor: true}}
 			// #624 coding-agent context floor: native window plus the
 			// per-engine host gate — bounded-spill on ollama, the
 			// utilization-budget window check on vllm (#675/#678; vLLM
@@ -155,6 +167,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 				hostOK, spill := OllamaServesContextFloor(m, v, in.Hardware)
 				c.spill = spill
 				c.floorOK = c.floorOK && hostOK
+				c.est = hostfit.EstimateOllamaDecode(v, in.Hardware.HostFit())
 			}
 			if in.Engine == catalog.RuntimeVLLM {
 				c.floorOK = c.floorOK && VLLMServesContextFloor(m, v, in.Hardware)
@@ -166,22 +179,44 @@ func RankModels(in PickInput) ([]Pick, error) {
 		return nil, fmt.Errorf("%w: no variant fits hardware (engine=%s)", ErrHardwareInsufficient, in.Engine)
 	}
 
-	// Two-pass floor gating (#624). Auto-selection keeps only the
-	// candidates that satisfy the coding-agent context floor; when NONE
-	// do (small hosts), every fitting candidate stays as a best-effort
-	// fallback so the floor never newly disables inference. An explicit
-	// PreferredModelID bypasses the floor entirely — the user asked for
-	// that model — with the floor status still reported on the Pick.
-	if in.PreferredModelID == "" && !in.NoContextFloor {
+	// Three-pass quality gating, best bar first, each falling through
+	// only when it would leave nothing. An explicit PreferredModelID
+	// bypasses all of it — the user asked for that model — with the
+	// status still reported on the Pick.
+	//
+	//  1. #624 coding-agent context floor: native window plus the
+	//     per-engine host gate.
+	//  2. #229 decode floor: fast enough to be worth serving at all.
+	//     This pass is the counterweight to the capacity gate no longer
+	//     requiring GPU residency on discrete hosts — without it a host
+	//     would auto-select a model that spills most of its layers
+	//     whenever that model carried a higher quality tier.
+	//
+	//     It applies ONLY where the estimate is an upper bound, which is
+	//     the spilled-discrete case. The CPU-only and unified-memory
+	//     figures rest on a bandwidth constant set at the FLOOR of its
+	//     population, so they are lower bounds, and excluding on a lower
+	//     bound would withhold from an M4 Max what an M4 base runs.
+	//     Those hosts get an annotation rather than a smaller catalog
+	//     until measured per-device bandwidth lands (#251).
+	//  3. Everything that fits, so neither floor can newly turn a
+	//     working host into an under-spec one.
+	narrow := func(keep func(candidate) bool) {
 		var pass []candidate
 		for _, c := range fits {
-			if c.floorOK {
+			if keep(c) {
 				pass = append(pass, c)
 			}
 		}
 		if len(pass) > 0 {
 			fits = pass
 		}
+	}
+	if in.PreferredModelID == "" && !in.NoContextFloor {
+		narrow(func(c candidate) bool { return c.floorOK })
+	}
+	if in.PreferredModelID == "" {
+		narrow(func(c candidate) bool { return !c.est.UpperBound || c.est.MeetsSpeedFloor })
 	}
 
 	// Step 5: sort by tier desc, then MinVRAM/MinRAM asc, then manifest order.
@@ -211,6 +246,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 				c.manifest.ModelID, c.variant.VariantID, c.variant.QualityTier)},
 			ContextFloorSatisfied: c.floorOK,
 			ExpectedSpillFraction: c.spill,
+			DecodeEstimate:        c.est,
 		}
 		switch {
 		case c.floorOK && c.spill > 0:

@@ -161,16 +161,18 @@ func TestOllamaFit(t *testing.T) {
 	}{
 		{"small fits a 64 GB box with a 24 GB card", small, hostFromWire(t, wireRTX4090), true, hostfit.ReasonOK},
 		{
-			// waired#942, the whole point: 128 GB of RAM clears MinRAMGB=96,
-			// but 62 GB of weights cannot live in a 24 GB card. The control
-			// plane said "runnable" here and made it the DEFAULT.
-			"big does not fit a 24 GB card however much RAM the host has",
-			big, hostFromWire(t, wireBigRAMSmallGPU), false, hostfit.ReasonInsufficientVRAM,
+			// #229, and an inverted pin: this used to be rejected on
+			// residency, which meant a graphics card REMOVED a model the
+			// same host served without one. Capacity now says yes to both
+			// — the card holds what fits and the rest runs from the same
+			// system RAM — and speed, asserted separately, is what keeps a
+			// genuinely slow combination out of an auto-selection.
+			"big fits a 24 GB card because the host has the RAM behind it",
+			big, hostFromWire(t, wireBigRAMSmallGPU), true, hostfit.ReasonOK,
 		},
 		{
 			// Same variant, same RAM, no GPU: spilling to system RAM is how
 			// a CPU host is meant to run, so the RAM gate is the only bound.
-			// The asymmetry is deliberate here and questioned in #229.
 			"big fits the same RAM with no GPU at all",
 			big, hostFromWire(t, wireCPUOnly), true, hostfit.ReasonOK,
 		},
@@ -243,7 +245,10 @@ func TestOllamaResident_IgnoresTheRAMGate(t *testing.T) {
 func TestOllamaFit_ShortfallNumbers(t *testing.T) {
 	big := catalog.Variant{MinRAMGB: 96, EstimatedWeightGB: 62.0, KVBytesPerTokenFP16: 98304}
 
-	vram := hostfit.OllamaFit(big, hostFromWire(t, wireBigRAMSmallGPU))
+	// The VRAM shortfall is still what a deficit label reports, but on a
+	// discrete card it no longer decides the capacity verdict (#229), so
+	// it is read from the residency half directly.
+	vram := hostfit.OllamaResident(big, hostFromWire(t, wireBigRAMSmallGPU))
 	if want := hostfit.OllamaResidentMB(big, false); vram.NeedMB != want || vram.HaveMB != 24564 {
 		t.Errorf("vram shortfall = need %d have %d, want %d / 24564", vram.NeedMB, vram.HaveMB, want)
 	}
@@ -252,6 +257,49 @@ func TestOllamaFit_ShortfallNumbers(t *testing.T) {
 	if ram.NeedMB != 96*1024 || ram.HaveMB != 64*1024 {
 		t.Errorf("ram shortfall = need %d have %d, want %d / %d",
 			ram.NeedMB, ram.HaveMB, 96*1024, 64*1024)
+	}
+
+	// Unified memory still rejects on residency — one pool has nowhere to
+	// spill to — so there the shortfall IS the capacity verdict.
+	uma := hostfit.OllamaFit(big, hostFromWire(t, wireMac16))
+	if uma.Fits || uma.Reason != hostfit.ReasonInsufficientVRAM || uma.NeedMB <= 0 {
+		t.Errorf("uma verdict = %+v, want an insufficient_vram shortfall", uma)
+	}
+}
+
+// TestOllamaFitIsMonotoneInHardware is the #229 regression test, and the
+// reason the discrete capacity gate dropped its residency requirement.
+//
+// Adding a graphics card cannot make a machine slower, so it must not
+// make it able to serve FEWER models. The old rule broke that: a 128 GB
+// host served a 62 GB model and the same host with a 24 GB card did not.
+// A property over the real catalog rather than a case list, because the
+// invariant is the point — any future rule change that reintroduces the
+// inversion fails here regardless of which model exposes it.
+func TestOllamaFitIsMonotoneInHardware(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	for _, ram := range []int{8, 16, 32, 64, 128, 512} {
+		for _, vram := range []int{4096, 8192, 12288, 16384, 24564, 49152} {
+			bare := hostfit.Host{RAMTotalGB: ram}
+			carded := hostfit.Host{RAMTotalGB: ram, GPUCount: 1, VRAM0MB: vram}
+			for _, m := range manifests {
+				for _, v := range m.Variants {
+					if !supports(v, catalog.RuntimeOllama) {
+						continue
+					}
+					if !hostfit.OllamaFit(v, bare).Fits {
+						continue
+					}
+					if !hostfit.OllamaFit(v, carded).Fits {
+						t.Fatalf("%s/%s: %d GB of RAM serves it, but the same host with a %d MB card does not",
+							m.ModelID, v.VariantID, ram, vram)
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -291,21 +339,26 @@ func TestVLLMFit(t *testing.T) {
 	}
 }
 
-// TestBundledCatalog_WaiRed942 runs the rule against the REAL bundled
-// catalog on the host the issue was reported from: 128 GB of RAM and a
-// 24 GB card. Before this package the control plane compared system RAM
-// alone, so the largest ollama model in the catalog passed and — being
-// the first runnable entry in filename order — became the wizard's
-// default.
+// TestBundledCatalog_WaiRed942 runs the rules against the REAL bundled
+// catalog on the host waired#942 was reported from: 128 GB of RAM and a
+// 24 GB card. The control plane compared system RAM alone there, so the
+// largest ollama model passed and — being the first runnable entry in
+// filename order — became the wizard's DEFAULT.
+//
+// The claim moved with #229. Being offered is no longer the failure;
+// being auto-SELECTED is. Withholding a model a machine can run, because
+// it owns a graphics card, was never the right answer either. So what is
+// asserted is: the machine is pointed at the model that lives in its
+// card, and anything that would be genuinely slow there is excluded from
+// that choice by the speed bound rather than by capacity.
 func TestBundledCatalog_WaiRed942(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
 	host := hostFromWire(t, wireBigRAMSmallGPU)
-	eff := host.EffectiveVRAMMB()
 
-	var fitting int
+	var fitting, selectable int
 	for _, m := range manifests {
 		for _, v := range m.Variants {
 			if !supports(v, catalog.RuntimeOllama) {
@@ -316,22 +369,80 @@ func TestBundledCatalog_WaiRed942(t *testing.T) {
 				continue
 			}
 			fitting++
-			// Every accepted variant must genuinely be resident-able.
-			if need := hostfit.OllamaResidentMB(v, false); need > eff {
-				t.Errorf("%s/%s accepted on a %d MB card while needing %d MB",
-					m.ModelID, v.VariantID, eff, need)
+			if !got.Estimate.UpperBound || got.Estimate.MeetsSpeedFloor {
+				selectable++
 			}
 		}
 	}
-	if fitting == 0 {
-		t.Fatal("no bundled ollama variant fits a 128 GB / 24 GB-card host; " +
-			"the rule is rejecting everything")
+	if selectable == 0 {
+		t.Fatal("nothing is auto-selectable on a 128 GB / 24 GB-card host; " +
+			"the rules are rejecting everything")
+	}
+	if fitting == selectable {
+		t.Error("every fitting variant also cleared the speed bound on this host; " +
+			"the speed term is not discriminating and this test proves nothing")
 	}
 
-	// And the specific pair from the report: the 62 GB model is out, the
-	// 22.6 GB one is in.
-	assertFit(t, manifests, host, "gpt-oss-120b", false)
+	// Both models from the report RUN — that is the #229 correction, and
+	// the 62 GB one is a 5.1B-active mixture of experts that decodes
+	// usefully with two thirds of its weights in system RAM.
+	assertFit(t, manifests, host, "gpt-oss-120b", true)
 	assertFit(t, manifests, host, "qwen3.6-35b-a3b", true)
+	// The one that should not be auto-selected here reads twice the
+	// active parameters through the same spill.
+	assertSelectable(t, manifests, host, "qwen3.5-122b-a10b", false)
+
+	// waired#942 itself — the DEFAULT — stays fixed, and now by the
+	// honest mechanism: the model that lives in the card is also the
+	// highest-quality one, so it wins outright rather than by its rivals
+	// being hidden.
+	if best := bestByTier(t, manifests, host); best != "qwen3.6-35b-a3b" {
+		t.Errorf("highest-tier auto-selectable model on the waired#942 host = %s, "+
+			"want qwen3.6-35b-a3b (a 62 GB model must not be what this machine is pointed at)", best)
+	}
+}
+
+// assertSelectable checks whether ANY ollama variant of modelID survives
+// both gates — capacity, and the speed bound where one exists.
+func assertSelectable(t *testing.T, manifests []catalog.Manifest, host hostfit.Host, modelID string, want bool) {
+	t.Helper()
+	for _, m := range manifests {
+		if m.ModelID != modelID {
+			continue
+		}
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			got := hostfit.OllamaFit(v, host)
+			ok := got.Fits && (!got.Estimate.UpperBound || got.Estimate.MeetsSpeedFloor)
+			if ok == want {
+				return
+			}
+		}
+		t.Fatalf("%s: no ollama variant with selectable=%v on %+v", modelID, want, host)
+	}
+	t.Fatalf("%s is not in the bundled catalog", modelID)
+}
+
+// bestByTier is what a tier-ordered picker lands on — the agent's
+// RankModels and the control plane's recommendation both do this.
+func bestByTier(t *testing.T, manifests []catalog.Manifest, host hostfit.Host) string {
+	t.Helper()
+	best, bestTier := "", -1
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			got := hostfit.OllamaFit(v, host)
+			ok := got.Fits && (!got.Estimate.UpperBound || got.Estimate.MeetsSpeedFloor)
+			if ok && v.QualityTier > bestTier {
+				best, bestTier = m.ModelID, v.QualityTier
+			}
+		}
+	}
+	return best
 }
 
 func assertFit(t *testing.T, manifests []catalog.Manifest, host hostfit.Host, modelID string, want bool) {
@@ -485,39 +596,50 @@ func TestEstimateOllamaDecode(t *testing.T) {
 		host      hostfit.Host
 		wantFloor bool
 		wantRes   bool
+		wantBound bool
 	}{
 		// The 24 GB Mac is why this term exists. Both models sit in the
-		// pool; the dense one decodes at a fraction of the speed.
-		{"a dense 27B is too slow on a small unified pool", dense27b, mac24, false, true},
-		{"a 3B-active MoE is not", moe35b, mac24, true, true},
+		// pool; the dense one decodes at a fraction of the speed. Neither
+		// figure is an upper bound — a faster chip of the same pool size
+		// beats it — so both are annotations, not exclusions.
+		{"a dense 27B is too slow on a small unified pool", dense27b, mac24, false, true, false},
+		{"a 3B-active MoE is not", moe35b, mac24, true, true, false},
 
-		{"a dense 27B is far too slow on the cpu", dense27b, cpu128, false, false},
-		{"the same cpu runs a 3B-active MoE", moe35b, cpu128, true, false},
+		{"a dense 27B is far too slow on the cpu", dense27b, cpu128, false, false, false},
+		{"the same cpu runs a 3B-active MoE", moe35b, cpu128, true, false, false},
 
 		// A card holding the whole model decides the rate with its own
 		// bandwidth, which this package does not know — so it makes no
 		// claim rather than a wrong one.
-		{"a resident discrete card is never the wall", moe35b, card24, true, true},
-		// Spilled, but the active share per token is small enough that
-		// even the RAM-only bound clears the floor.
-		{"a heavily spilled 5B-active MoE still clears the floor", big120b, card24, true, false},
-		// Spilled with twice the active share: this is the one that must
-		// not be recommended.
-		{"a spilled 10B-active MoE does not", moe122b, card24, false, false},
+		{"a resident discrete card is never the wall", moe35b, card24, true, true, false},
+		// Spilled: the card's own reads are priced at zero, so this IS an
+		// upper bound and may be acted on. The active share per token is
+		// small enough that it still clears the floor.
+		{"a heavily spilled 5B-active MoE still clears the floor", big120b, card24, true, false, true},
+		// Spilled with twice the active share: too slow even with the
+		// card's contribution free, which is what makes the exclusion
+		// safe on a card of any speed.
+		{"a spilled 10B-active MoE does not", moe122b, card24, false, false, true},
 
 		{
 			"a variant with no sizing annotations makes no claim",
-			catalog.Variant{VariantID: "unknown"}, card24, true, false,
+			catalog.Variant{VariantID: "unknown"}, card24, true, false, false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := hostfit.EstimateOllamaDecode(tc.v, tc.host)
-			if got.MeetsSpeedFloor != tc.wantFloor || got.Resident != tc.wantRes {
-				t.Errorf("EstimateOllamaDecode() = %+v, want MeetsSpeedFloor=%v Resident=%v",
-					got, tc.wantFloor, tc.wantRes)
+			if got.MeetsSpeedFloor != tc.wantFloor || got.Resident != tc.wantRes || got.UpperBound != tc.wantBound {
+				t.Errorf("EstimateOllamaDecode() = %+v, want MeetsSpeedFloor=%v Resident=%v UpperBound=%v",
+					got, tc.wantFloor, tc.wantRes, tc.wantBound)
 			}
 			if got.Resident && got.ResidentShare != 1 {
 				t.Errorf("resident verdict with share %.2f", got.ResidentShare)
+			}
+			// The rule the router acts on: only an upper bound may
+			// exclude. Anything else is a sentence in the wizard.
+			if got.UpperBound && got.Resident {
+				t.Error("a resident estimate cannot be an upper bound; the card's " +
+					"speed is the whole answer there")
 			}
 		})
 	}
