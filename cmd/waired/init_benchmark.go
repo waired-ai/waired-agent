@@ -143,8 +143,14 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 				emo("✅", "[ok]"), resp.MeasuredTokps)
 		}
 	} else {
-		// Older daemon without measured_tokps on the wire.
-		writePrompt(out, emo("✅", "[ok]")+" Local inference works — interactive performance looks good on this host.")
+		// measured_tokps is absent. On a current daemon a FAILED benchmark is
+		// a non-200 (handled in waitForBenchmark), so reaching here means an
+		// older daemon that never reported the figure: we know a generation
+		// ran, not how fast. Do NOT claim "works" — that wording is what
+		// turned a dead engine into a green line (waired-agent#29), because a
+		// failed run and a too-slow host both arrive here with a zero rate.
+		writePrompt(out, emo("ℹ", "[i]")+" Benchmark ran, but this waired-agent build does not report a "+
+			"throughput figure. Upgrade, then run `waired runtimes benchmark` to see it.")
 	}
 
 	if rec := resp.Upgrade; rec != nil && !rec.Dismissed {
@@ -356,6 +362,18 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 					announcedWait = true
 				}
 			}
+		case status == http.StatusServiceUnavailable:
+			// The benchmark ran and did not complete (waired-agent#29). The
+			// engine is the thing to look at, so say so and point at the
+			// tools that show why — never a success line.
+			if msg := parseMgmtError(status, body).Message; msg != "" {
+				writePromptf(out, "%s Local inference could not complete a test generation: %s\n",
+					emo("⚠", "[!]"), msg)
+			} else {
+				writePromptf(out, "%s Local inference could not complete a test generation.\n", emo("⚠", "[!]"))
+			}
+			writePrompt(out, "  Check `waired status`, then `waired doctor`, for the engine's own reason.")
+			return nil, false
 		default:
 			// Unexpected status — surface it (don't block init) instead of
 			// exiting silently.

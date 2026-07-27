@@ -239,6 +239,16 @@ type BenchmarkOutcome struct {
 	MeasuredTokps float64
 	Lighter       *BenchmarkRecommendation
 	Upgrade       *BenchmarkRecommendation
+	// Failed reports that the benchmark RAN and did not complete — the
+	// warm-up got an engine error, the measurement timed out, and so on.
+	// It is distinct from RunBenchmark's ok=false, which means "not ready
+	// yet, retry" (425). Without it a failed run is indistinguishable from
+	// a host too slow to measure a rate: both yield MeasuredTokps 0, and
+	// that ambiguity is how a dead engine printed a green "Local inference
+	// works" (waired-agent#29).
+	Failed bool
+	// Error is the failure reason when Failed, for the caller to show.
+	Error string
 }
 
 // ModelsSnapshot summarises model lifecycle states for display.

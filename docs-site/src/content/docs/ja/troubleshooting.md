@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 7d86ed458f645e3f
+sourceHash: 91d6b33dd19bc0da
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -36,6 +36,7 @@ waired doctor
 - [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
 - [「非常に小さいモデルしか動かせない」と言われた](#it-said-my-machine-can-only-run-a-very-small-model)
+- [セットアップで「テスト生成を完了できませんでした」と出た](#setup-said-it-could-not-complete-a-test-generation)
 
 **応答がない**
 
@@ -185,6 +186,33 @@ sudo waired status          # Windows は管理者プロンプトから
 それでもこのマシンをネットワークに入れる価値はあります — ほかのパソコンの AI を
 使えるからです。どうしても入れたい場合は `--inference-enabled=true` を付けて
 セットアップし直してください。
+
+<a id="setup-said-it-could-not-complete-a-test-generation"></a>
+
+## セットアップで「テスト生成を完了できませんでした」と出た
+
+セットアップの最後に、Waired はこのパソコンの速さを測るため AI に短い質問を
+します。このメッセージは、質問はしたものの答えが返ってこなかった、という意味
+です。測定できなかったので、Waired は「動いています」とは表示しません。
+
+ほとんどの場合、AI エンジン自体が停止しています。確認してください。
+
+```sh
+waired status
+waired doctor
+```
+
+`waired status` のエンジンの行に、エンジン自身が報告した理由が出ます。
+クラッシュしていた場合、詳細はエンジンのログにあります
+（[さらに詳しく調べる（ログ）](#going-deeper-logs) を参照）。
+
+Waired のほかの機能には影響ありません。デバイスはサインインしたままで、
+ほかのパソコンで動いている AI は引き続き使えます。エンジンが正常に戻ったら、
+次のコマンドで測定し直せます。
+
+```sh
+waired runtimes benchmark
+```
 
 <a id="no-answer-comes-back"></a>
 

@@ -22,7 +22,11 @@ type benchStub struct {
 	// readyAfter simulates a transient startup: /benchmark returns 425 (and
 	// /status returns `state`) for the first readyAfter polls, then flips to
 	// ready (200). 0 means "honour `ready` verbatim" (never auto-flips).
-	readyAfter   int
+	readyAfter int
+	// failed makes /benchmark answer 503 benchmark_did_not_complete — the
+	// benchmark RAN and did not finish, as opposed to 425 "not ready yet".
+	failed       bool
+	failedMsg    string
 	active       *management.ActiveSelection         // /status Active (names the benchmarked model)
 	measured     float64                             // /benchmark measured_tokps
 	upgrade      *management.BenchmarkRecommendation // /benchmark upgrade suggestion
@@ -49,6 +53,14 @@ func (b *benchStub) server() *httptest.Server {
 		b.mu.Unlock()
 		if !b.ready && !flipped {
 			w.WriteHeader(http.StatusTooEarly)
+			return
+		}
+		if b.failed {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error_code": "benchmark_did_not_complete",
+				"message":    b.failedMsg,
+			})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{
@@ -172,7 +184,7 @@ func TestPromptBenchmark_NonInteractiveNeither(t *testing.T) {
 }
 
 func TestPromptBenchmark_NoRecommendationQuiet(t *testing.T) {
-	stub := &benchStub{ready: true, rec: nil}
+	stub := &benchStub{ready: true, rec: nil, measured: 120}
 	srv := stub.server()
 	defer srv.Close()
 
@@ -185,6 +197,70 @@ func TestPromptBenchmark_NoRecommendationQuiet(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Local inference works") {
 		t.Errorf("expected an inference-works line, got: %q", out.String())
+	}
+}
+
+// TestPromptBenchmark_OldDaemonWithoutRateIsNeutral covers the other half of
+// the split: a 200 carrying NO measured_tokps. That is now only reachable
+// from an OLDER daemon (a current one 503s a failed run), so the wording
+// states what is actually known — a generation ran — without claiming local
+// inference works.
+//
+// This test and the one above replace a single case that asserted the green
+// "Local inference works" line for measured_tokps == 0. That assertion
+// pinned the defect: a benchmark whose warm-up got an engine 500 also
+// reports 0, so a dead engine printed a success line (waired-agent#29).
+func TestPromptBenchmark_OldDaemonWithoutRateIsNeutral(t *testing.T) {
+	stub := &benchStub{ready: true, rec: nil} // measured stays 0
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "Local inference works") {
+		t.Errorf("a daemon that reports no rate must not claim inference works: %q", got)
+	}
+	if !strings.Contains(got, "does not report a throughput figure") {
+		t.Errorf("expected the neutral old-daemon wording, got: %q", got)
+	}
+}
+
+// TestPromptBenchmark_FailedBenchmarkPrintsNoSuccessLine is the direct
+// regression test for waired-agent#29: the daemon reports that the benchmark
+// ran and failed, and init must say so instead of printing a green line.
+//
+// PRODUCT CONTRACT.
+func TestPromptBenchmark_FailedBenchmarkPrintsNoSuccessLine(t *testing.T) {
+	stub := &benchStub{
+		ready:     true,
+		failed:    true,
+		failedMsg: "warm-up failed: HTTP 500: llama-server process has terminated",
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	for _, forbidden := range []string{"Local inference works", "tok/s", "looks good"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("a failed benchmark must not print %q: %q", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "could not complete a test generation") {
+		t.Errorf("expected the failure line, got: %q", got)
+	}
+	// The engine's own reason must survive to the operator.
+	if !strings.Contains(got, "llama-server process has terminated") {
+		t.Errorf("expected the daemon's reason to be surfaced, got: %q", got)
+	}
+	if !strings.Contains(got, "waired doctor") {
+		t.Errorf("expected a pointer at the diagnosis tools, got: %q", got)
 	}
 }
 

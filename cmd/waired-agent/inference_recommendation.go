@@ -357,6 +357,12 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		MeasuredTokps: bench.TokensPerSec,
 		Lighter:       recommendationFromBench(bench, depth, p.store, hw, p.manifests, p.cfg, engineVersion),
 		Upgrade:       upgradeFromBench(bench, p.store, hw, p.manifests, p.cfg, engineVersion),
+		// Carried, not dropped: the BenchmarkRecord below has recorded these
+		// two fields all along, and the outcome was the only place they were
+		// lost — which is what let the handler answer 200 for a run that
+		// failed (waired-agent#29).
+		Failed: bench.Failed,
+		Error:  bench.Err,
 	}
 
 	record := catalog.BenchmarkRecord{

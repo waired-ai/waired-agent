@@ -343,24 +343,33 @@ assert_inference() {
     bad "inference not enabled in persisted config"
   fi
 
-  # The end-of-init benchmark (offerBenchmark, non-bypass) proves the inference
-  # tail ran. Accept a throughput number (tok/s|tokens/s|throughput) OR the
-  # "Local inference works" smoke line: a host too slow to measure a stable rate
-  # exhausts the boot benchmark's budget and reports MeasuredTokps=0 ("…looks
-  # good"), yet a real generation still ran. Both print ONLY after a benchmark
-  # ran, never the "run `waired runtimes benchmark` later" tip (#564 false
-  # positive).
-  if [ -f "$initlog" ] && grep -qiE 'tok/s|tokens/s|throughput|Local inference works' "$initlog"; then
-    # `|| true`: with the smoke-line match above, the transcript may carry no
-    # numeric rate (host too slow → MeasuredTokps=0); a no-match grep exits 1
-    # and would trip `set -e` in the sourcing driver. head-closing a multi-match
-    # grep (SIGPIPE 141) would too — both are non-fatal here.
-    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1 || true)"
-    ok "benchmark ran during init${tps:+ (}${tps}${tps:+)}"
+  # The end-of-init benchmark (offerBenchmark, non-bypass) must report a
+  # THROUGHPUT NUMBER.
+  #
+  # This assert used to also accept the bare "Local inference works" line, on
+  # the theory that a host too slow to measure a stable rate reports
+  # MeasuredTokps=0 yet still ran a real generation. But a benchmark whose
+  # warm-up got an engine 500 printed exactly that same line, so this assert
+  # passed 13 seconds before the routing sentinel found a dead engine
+  # (waired-agent#29). A current daemon now 503s a failed run and the CLI
+  # prints no success line at all, so requiring the number is both correct and
+  # achievable: with at least one valid sample inside the measurement budget
+  # the median is always a number, and total failure is a 503.
+  #
+  # `|| true`: a no-match grep exits 1 and would trip `set -e` in the sourcing
+  # driver; head-closing a multi-match grep (SIGPIPE 141) would too.
+  tps=""
+  [ -f "$initlog" ] && tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1 || true)"
+  if [ -n "$tps" ]; then
+    ok "benchmark ran during init ($tps)"
   else
-    bad "no benchmark output captured in init transcript ($initlog)"
-    # Genuine miss — surface the daemon's own boot benchmark slog for the reason.
+    bad "no benchmark THROUGHPUT figure in init transcript ($initlog)"
+    grep -iE 'benchmark|inference|engine' "$initlog" 2>/dev/null | tail -20 | sed 's/^/    init| /' || true
+    # Surface the daemon's own boot benchmark slog and the engine's log — a
+    # failed benchmark is usually the engine's fault, and engine.log is where
+    # it says so.
     gx "$guest" sh -c 'journalctl -u waired-agent --no-pager -n 200 | grep -iE "boot benchmark|benchmark" | tail -15' 2>&1 | sed 's/^/    agent| /' || true
+    gx "$guest" sh -c 'tail -n 60 /var/lib/waired/runtimes/ollama/logs/engine.log 2>/dev/null || echo "(no engine.log)"' 2>&1 | sed 's/^/    engine.log| /' || true
   fi
 }
 
