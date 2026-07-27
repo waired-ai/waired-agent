@@ -1,19 +1,20 @@
-// Package setup is the orchestrator behind `waired init` and the
-// shared targets `waired link` / `waired deploy` re-run individually.
+// Package setup holds the pieces of first-run setup that are shared
+// between the daemon and the CLI:
 //
-// Phases (mapping to docs/specs/waired_product_spec.md §5.1 step numbers):
+//	Enroll       sign-in / device key generation / CP registration.
+//	             Called by the daemon's login controller (cmd/waired-agent),
+//	             which owns enrollment since #175.
+//	Integration  Claude Code / OpenCode / OpenClaw auto-config. Called by
+//	             `waired link`, `waired doctor`, and the post-login
+//	             integration step of a daemon-driven `waired init`.
+//	DetectOllama / SelectBundledModel
+//	             engine + model decisions, read by both sides.
 //
-//	enroll       (1–4)  : Google sign-in / device key gen / CP register
-//	deploy       (5–9)  : hardware profile, runtime/model placement, gateway up
-//	integration  (10)   : Claude Code / OpenCode auto-config (transparent proxy + skills + OpenCode plugin)
-//
-// `waired init` runs all three sequentially and fails-fast on any
-// non-skipped error so the user does not have to debug a half-set-up
-// install. `--skip-deploy` and `--skip-integration` opt out of phases
-// 2 and 3 respectively.
-//
-// `waired link` re-runs phase 3 only. A future `waired deploy` will
-// re-run phase 2 only.
+// It used to also hold Init and Deploy — a second, in-process
+// implementation of the whole journey that `waired init` ran itself.
+// That is gone (#175): a device the CLI enrolled never declared the agent
+// capabilities the control plane learns from the daemon's network-map
+// poll, so it enrolled "successfully" into a setup that could not finish.
 package setup
 
 import (

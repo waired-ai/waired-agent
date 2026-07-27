@@ -1,15 +1,10 @@
 package main
 
 import (
-	"context"
-	"io"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
-	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
@@ -125,50 +120,4 @@ func bundledEnginePath(goos, stateDir string) string {
 		return ""
 	}
 	return filepath.Join(stateDir, "runtimes", "ollama", "bin", "ollama")
-}
-
-// ensureBundledEngine installs the bundled Ollama engine when the operator's
-// answers call for one and none is usable yet. Never fails init: the agent
-// tolerates a missing engine (deploy/pull retry once one appears), so every
-// failure path degrades to a warning + a copyable manual command.
-func ensureBundledEngine(
-	ctx context.Context, out io.Writer,
-	det setup.OllamaDetection, source, stateDir string,
-) {
-	_ = ctx // per-OS installOllama manages its own timeout today
-	bundledPresent := false
-	if p := bundledEnginePath(runtime.GOOS, stateDir); p != "" {
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
-			bundledPresent = true
-		}
-	}
-	action := engineInstallDecision(
-		runtime.GOOS, elevation.IsElevated(), det, source,
-		bundledPresent, os.Getenv("WAIRED_NO_OLLAMA") != "",
-		engineIncomplete(runtime.GOOS, det, os.Getenv("ProgramFiles")))
-	switch action {
-	case engineActionInstall, engineActionRepair:
-		// The repair path re-runs the same installer: it skips the base
-		// bits it finds already extracted, so nothing is re-downloaded.
-		if action == engineActionRepair {
-			writePromptf(out, "%s Repairing an unfinished Ollama engine install...\n", emo("📦", ">>"))
-		} else {
-			writePromptf(out, "%s Installing the Ollama engine (one-time download)...\n", emo("📦", ">>"))
-		}
-		// No sink: this is the standalone init path, with no browser
-		// wizard to report to and no executor lease to report through.
-		if err := installOllama(true, stateDir, nil); err != nil {
-			writePromptf(out,
-				"%s Engine install failed: %v\n  The agent retries once an engine appears; install it by hand later: %s\n",
-				emo("⚠️", "!"), err, elevation.Hint("waired runtimes install ollama --yes"))
-		}
-	case engineActionSkipNotElevated:
-		writePromptf(out,
-			"%s Skipping the engine install (needs admin rights). Install it later: %s\n",
-			emo("💡", "note:"), elevation.Hint("waired runtimes install ollama --yes"))
-	case engineActionSkipOptOut:
-		writePrompt(out, "Engine install skipped (WAIRED_NO_OLLAMA).")
-	case engineActionSkipPresent, engineActionSkipReuse:
-		// Nothing to do; promptOllamaSource already narrated the state.
-	}
 }

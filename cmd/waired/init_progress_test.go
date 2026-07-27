@@ -5,22 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/waired-ai/waired-agent/internal/download"
-	"github.com/waired-ai/waired-agent/internal/setup"
 )
-
-func pullEvents(model string) []setup.PullEvent {
-	return []setup.PullEvent{
-		{ModelName: model, Progress: download.Progress{State: download.StatePulling, Digest: "a", Percent: 0, Completed: 0, Total: 5_000_000_000}},
-		{ModelName: model, Progress: download.Progress{State: download.StatePulling, Digest: "a", Percent: 50, Completed: 2_500_000_000, Total: 5_000_000_000, BytesPerSec: 40_000_000}},
-		{ModelName: model, Progress: download.Progress{State: download.StatePulling, Digest: "a", Percent: 100, Completed: 5_000_000_000, Total: 5_000_000_000}},
-		{ModelName: model, Progress: download.Progress{State: download.StateVerifying}},
-		{ModelName: model, Progress: download.Progress{State: download.StateVerifying}},
-		{ModelName: model, Progress: download.Progress{State: download.StateVerifying}},
-		{ModelName: model, Progress: download.Progress{State: download.StateSuccess}},
-	}
-}
 
 // The rate segment must render whenever the rate is known — including a
 // stalled "(0 B/s)" — and be omitted only while unknown (< 0). Its absence
@@ -77,55 +62,5 @@ func TestRateWindow(t *testing.T) {
 	// Byte regression (pull restarted) resets the window to unknown.
 	if got := w.observe(t0.Add(4*time.Second+rateWindowSpan), 500); got != -1 {
 		t.Errorf("rate after regression = %d, want -1 (reset)", got)
-	}
-}
-
-func TestCliPullProgressSink_NonTTY(t *testing.T) {
-	var buf bytes.Buffer
-	sink := cliPullProgressSink(&buf, false)
-	for _, e := range pullEvents("demo") {
-		sink(e)
-	}
-	out := buf.String()
-
-	if !strings.Contains(out, "Downloading demo") {
-		t.Errorf("missing labelled download line, got:\n%s", out)
-	}
-	// Aggregated byte counts + speed must render.
-	if !strings.Contains(out, "2.5 GB / 5.0 GB") {
-		t.Errorf("missing aggregated bytes, got:\n%s", out)
-	}
-	if !strings.Contains(out, "40.0 MB/s") {
-		t.Errorf("missing speed, got:\n%s", out)
-	}
-	// Verifying must be deduped to a single line (the old sink echoed it
-	// per layer event — the bug the user reported).
-	if n := strings.Count(out, "Verifying"); n != 1 {
-		t.Errorf("Verifying printed %d times, want 1; got:\n%s", n, out)
-	}
-	if !strings.Contains(out, "demo ready") {
-		t.Errorf("missing completion line, got:\n%s", out)
-	}
-}
-
-func TestCliPullProgressSink_TTYDedups(t *testing.T) {
-	var buf bytes.Buffer
-	sink := cliPullProgressSink(&buf, true)
-	for _, e := range pullEvents("demo") {
-		sink(e)
-	}
-	out := buf.String()
-	if !strings.Contains(out, "Downloading demo") {
-		t.Errorf("missing download line, got:\n%q", out)
-	}
-	if n := strings.Count(out, "Verifying"); n != 1 {
-		t.Errorf("Verifying printed %d times, want 1; got:\n%q", n, out)
-	}
-	if !strings.Contains(out, "demo ready") {
-		t.Errorf("missing completion line, got:\n%q", out)
-	}
-	// No leftover legacy spam.
-	if strings.Contains(out, "pull:") {
-		t.Errorf("legacy 'pull:' marker should be gone, got:\n%q", out)
 	}
 }
