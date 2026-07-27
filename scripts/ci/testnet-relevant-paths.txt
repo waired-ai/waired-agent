@@ -36,6 +36,12 @@ internal/relay/
 
 # --- agent<->CP coordination / enrollment / auth ------------------------
 internal/controlclient/
+# controlurl decides WHICH Control Plane an unenrolled device enrolls
+# against (flag/env -> installer agent.env -> baked production default).
+# A precedence regression sends `waired init` and daemon-driven login at
+# the wrong CP, which is exactly the "enrollment against the bypass CP"
+# leg testnet verifies.
+internal/controlurl/
 internal/devicekeys/
 internal/identity/
 internal/deauth/

@@ -30,6 +30,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/buildflag"
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
+	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
@@ -52,28 +53,6 @@ func main() {
 }
 
 // ---------------- waired init ----------------
-
-// defaultControlURL is the production Control Plane `waired init` falls
-// back to when the operator passed no --control, set no
-// $WAIRED_CONTROL_URL, and the installer recorded none in agent.env. It
-// lets a bare `waired init` (or the installer's auto-init) work with no
-// flags. Overridable by any of the three higher-priority sources.
-const defaultControlURL = "https://app.waired.ai"
-
-// resolveControlURL applies the control-URL precedence: an explicit
-// --control / $WAIRED_CONTROL_URL (explicit) wins, then the
-// installer-recorded value from agent.env (platformDefault), then the
-// baked-in production default. The result still flows through
-// normalizeControlURL afterwards.
-func resolveControlURL(explicit, platformDefault string) string {
-	if explicit != "" {
-		return explicit
-	}
-	if platformDefault != "" {
-		return platformDefault
-	}
-	return defaultControlURL
-}
 
 // initFlags holds every `waired init` flag value. The tri-state
 // inferenceEnabled / inferenceShare are *bool (nil unless the operator
@@ -245,14 +224,16 @@ func runInitBody(o *initFlags) error {
 	// Fall back to the installer-configured control URL (e.g. what
 	// `install.sh --control <URL>` wrote to /etc/waired/agent.env) when the
 	// operator passed neither --control nor $WAIRED_CONTROL_URL, so the
-	// common `sudo waired init` (no flag) just works.
-	*control = resolveControlURL(*control, platformDefaultControlURL())
+	// common `sudo waired init` (no flag) just works. The daemon's
+	// login controller resolves the same three tiers through the same
+	// package (#174).
+	*control = controlurl.Resolve(*control, controlurl.PlatformDefault())
 	// Normalize the scheme up front (bare "dev.waired.net" -> https://...,
 	// loopback -> http://...). Done before the renew comparison below so a
 	// scheme-less flag matches the stored (already-normalized) ControlURL
 	// instead of tripping a spurious "already enrolled to X" error.
 	if *control != "" {
-		norm, err := normalizeControlURL(*control)
+		norm, err := controlurl.Normalize(*control)
 		if err != nil {
 			return err
 		}
@@ -879,44 +860,6 @@ func chooseListenAddr(listen string) (netip.AddrPort, error) {
 	return netip.ParseAddrPort(host + ":" + port)
 }
 
-// normalizeControlURL canonicalises a Control Plane URL the operator
-// supplied via --control, $WAIRED_CONTROL_URL, or /etc/waired/agent.env.
-// A bare host like "dev.waired.net" (no scheme) is the natural thing to
-// type, but net/http rejects it ("unsupported protocol scheme \"\"")
-// once it reaches the enroll POST, so we prepend a scheme here: https for
-// remote hosts, http for loopback (matching the --control example
-// http://127.0.0.1:9477). An empty input is returned unchanged so the
-// caller's "required" check still fires. Non-http(s) schemes and
-// host-less inputs are rejected with a clear message.
-func normalizeControlURL(raw string) (string, error) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return "", nil
-	}
-	if !strings.Contains(s, "://") {
-		host := s
-		if i := strings.IndexAny(host, "/?#"); i >= 0 {
-			host = host[:i]
-		}
-		if isLoopbackHost(host) {
-			s = "http://" + s
-		} else {
-			s = "https://" + s
-		}
-	}
-	u, err := url.ParseRequestURI(s)
-	if err != nil {
-		return "", fmt.Errorf("invalid control URL %q: %w", raw, err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("invalid control URL %q: scheme %q is not http or https", raw, u.Scheme)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("invalid control URL %q: missing host", raw)
-	}
-	return strings.TrimRight(s, "/"), nil
-}
-
 // Service-control seams, overridable in tests so startAgentServiceBestEffort
 // can be exercised without a real systemd/launchd/SCM.
 var (
@@ -949,27 +892,6 @@ func startAgentServiceBestEffort(out io.Writer) {
 		return
 	}
 	_, _ = fmt.Fprintln(out, "Started waired-agent.")
-}
-
-// isLoopbackHost reports whether host (a hostname or host:port, no
-// scheme) is loopback. Loopback control planes are the local-dev default
-// and speak plain http.
-func isLoopbackHost(host string) bool {
-	h := host
-	if strings.HasPrefix(h, "[") { // [::1]:port
-		if i := strings.Index(h, "]"); i >= 0 {
-			h = h[1:i]
-		}
-	} else if i := strings.LastIndex(h, ":"); i >= 0 && !strings.Contains(h[:i], ":") {
-		h = h[:i] // host:port (single colon → not a bare IPv6)
-	}
-	if strings.EqualFold(h, "localhost") {
-		return true
-	}
-	if addr, err := netip.ParseAddr(h); err == nil {
-		return addr.IsLoopback()
-	}
-	return false
 }
 
 // ---------------- waired status ----------------

@@ -7,44 +7,6 @@ import (
 	"testing"
 )
 
-func TestNormalizeControlURL(t *testing.T) {
-	cases := []struct {
-		in      string
-		want    string
-		wantErr bool
-	}{
-		{"", "", false},
-		{"  ", "", false},
-		{"dev.waired.net", "https://dev.waired.net", false},
-		{"dev.waired.net/", "https://dev.waired.net", false},
-		{"  dev.waired.net  ", "https://dev.waired.net", false},
-		{"https://cp.example.com/", "https://cp.example.com", false},
-		{"http://cp.example.com", "http://cp.example.com", false},
-		{"127.0.0.1:9477", "http://127.0.0.1:9477", false},
-		{"localhost:9477", "http://localhost:9477", false},
-		{"localhost", "http://localhost", false},
-		{"[::1]:9477", "http://[::1]:9477", false},
-		{"ftp://cp.example.com", "", true},
-		{"https://", "", true},
-	}
-	for _, c := range cases {
-		got, err := normalizeControlURL(c.in)
-		if c.wantErr {
-			if err == nil {
-				t.Errorf("normalizeControlURL(%q) = %q, want error", c.in, got)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("normalizeControlURL(%q) unexpected error: %v", c.in, err)
-			continue
-		}
-		if got != c.want {
-			t.Errorf("normalizeControlURL(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestStartAgentServiceBestEffort(t *testing.T) {
 	savedInstalled, savedStart, savedHint := serviceInstalledFn, serviceStartFn, serviceStartHintFn
 	t.Cleanup(func() {
