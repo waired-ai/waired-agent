@@ -5,12 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
+	"github.com/waired-ai/waired-agent/internal/hardware"
 )
 
 // fakeBundledOllama lays down the on-disk shape resolveOllamaBinary
@@ -182,6 +184,166 @@ func TestSetupEngineState_SeesStateDirEngineImmediately(t *testing.T) {
 	}
 	if ready {
 		t.Error("setupEngineState ready = true with no active model; readiness is a separate gate")
+	}
+}
+
+// recordingRun is the version-runner seam's fake. It records the exact
+// (engine, path) pair it was handed, because that pair IS the defect in
+// #238 — a fake that dropped the path would make the failing case
+// unwritable (CLAUDE.md §Test discipline).
+type recordingRun struct {
+	calls   int
+	engine  string
+	path    string
+	version string // "" ⇒ report not-installed
+}
+
+func (r *recordingRun) run(_ context.Context, engine, path string) (bool, string) {
+	r.calls++
+	r.engine, r.path = engine, path
+	if r.version == "" {
+		return false, ""
+	}
+	return true, r.version
+}
+
+func sourceLabel(source string) string {
+	if source == "" {
+		return "unset"
+	}
+	return source
+}
+
+// THE #238 REGRESSION BAR. Product contract: the engine VERSION is
+// probed on the binary the daemon resolved — state dir first — not on
+// whatever `ollama` happens to name on $PATH. The old probe was
+// hardware.defaultEngineVersion's exec.LookPath, the same predicate
+// #179 removed one layer up: it answered "no engine, no version" on
+// exactly the hosts waired had set up itself, and an unknown version
+// makes the catalog's MinEngineVersion floors fail closed.
+//
+// Runs across all three GOOS values because the state-dir branch is the
+// first thing resolveOllamaBinary tries, before any OS-specific
+// fallback, and across all three ollama_source values because the
+// version question is the same in bundled and reuse mode.
+func TestEngineVersionOnHost_StateDirEngineWithEmptyPATH(t *testing.T) {
+	sealPATH(t)
+	stateDir := t.TempDir()
+	want := fakeBundledOllama(t, stateDir)
+
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		for _, source := range []string{agentconfig.OllamaSourceBundled, agentconfig.OllamaSourceReuse, ""} {
+			t.Run(goos+"/"+sourceLabel(source), func(t *testing.T) {
+				rec := &recordingRun{version: "0.31.1"}
+				fn := engineVersionOnHost(goos, stateDir,
+					agentconfig.InferenceConfig{OllamaSource: source}, rec.run)
+
+				installed, ver := fn(context.Background(), catalog.RuntimeOllama)
+				if !installed || ver != "0.31.1" {
+					t.Errorf("engineVersionOnHost(%q, source=%q)(ollama) = (%v, %q), want (true, %q)",
+						goos, source, installed, ver, "0.31.1")
+				}
+				if rec.calls != 1 {
+					t.Fatalf("version runner called %d times, want 1", rec.calls)
+				}
+				if rec.engine != catalog.RuntimeOllama {
+					t.Errorf("version runner engine = %q, want %q (the parse keys off the kind, "+
+						"not the path)", rec.engine, catalog.RuntimeOllama)
+				}
+				if rec.path != want {
+					t.Errorf("version runner path = %q, want %q (the state-dir binary — this is #238)",
+						rec.path, want)
+				}
+			})
+		}
+	}
+}
+
+// The same bar with the REAL runner, so the fake above cannot be the
+// only thing that ever calls it (CLAUDE.md §Test discipline: a seam
+// needs a test on the real implementation too). This is the exact
+// composition setupInference wires: engineVersionOnHost +
+// hardware.EngineVersionAt, against an engine that exists only under
+// the state dir with $PATH sealed.
+//
+// Unix-only, and the reason is a product fact rather than a test
+// limitation: bundledOllamaBinPath deliberately has no ".exe", because
+// only the Linux installer lands an engine inside the state dir. The
+// Windows / macOS "bundled" install goes to an OS well-known location,
+// which download.ResolveBinary covers and TestResolveOllamaBinary_*
+// exercises.
+func TestEngineVersionOnHost_RealRunnerExecutesTheStateDirBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the state-dir engine is a Linux/macOS shape; see bundledOllamaBinPath")
+	}
+	sealPATH(t)
+	stateDir := t.TempDir()
+	bin := bundledOllamaBinPath(stateDir)
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Prints what a fresh install prints: the warning line first, which
+	// the parse must skip.
+	script := "#!/bin/sh\n" +
+		"echo 'Warning: could not connect to a running Ollama instance'\n" +
+		"echo 'ollama version is 0.31.1'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fn := engineVersionOnHost(runtime.GOOS, stateDir,
+		agentconfig.InferenceConfig{}, hardware.EngineVersionAt)
+	installed, ver := fn(context.Background(), catalog.RuntimeOllama)
+	if !installed || ver != "0.31.1" {
+		t.Errorf("engineVersionOnHost with the production runner = (%v, %q), want (true, %q) "+
+			"(engine under the state dir, nothing on $PATH — this is #238)", installed, ver, "0.31.1")
+	}
+}
+
+// The other direction: no engine resolves, so nothing is executed and
+// the version is unknown rather than guessed. Asserted on Linux bundled
+// mode, whose strictness is host-independent — the darwin/windows
+// fallback can legitimately find a real ollama at an OS well-known path
+// on the machine running the tests.
+func TestEngineVersionOnHost_NoEngineRunsNothing(t *testing.T) {
+	sealPATH(t)
+	stateDir := t.TempDir() // deliberately empty: no bundled engine
+	rec := &recordingRun{version: "0.31.1"}
+	fn := engineVersionOnHost("linux", stateDir, agentconfig.InferenceConfig{}, rec.run)
+
+	if installed, ver := fn(context.Background(), catalog.RuntimeOllama); installed || ver != "" {
+		t.Errorf("engineVersionOnHost(linux, empty state dir)(ollama) = (%v, %q), want (false, \"\")",
+			installed, ver)
+	}
+	if rec.calls != 0 {
+		t.Errorf("version runner called %d times with no engine to run, want 0", rec.calls)
+	}
+}
+
+// vLLM's version comes from the venv the installer verified, and an
+// unknown engine kind has no version at all. Neither may execute
+// anything: the vLLM installer already recorded the version, and
+// running an unknown binary name would be the PATH probe again.
+func TestEngineVersionOnHost_VLLMAndUnknownExecuteNothing(t *testing.T) {
+	sealPATH(t)
+	stateDir := t.TempDir()
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			rec := &recordingRun{version: "0.31.1"}
+			fn := engineVersionOnHost(goos, stateDir, agentconfig.InferenceConfig{}, rec.run)
+
+			if installed, ver := fn(context.Background(), catalog.RuntimeVLLM); installed || ver != "" {
+				t.Errorf("engineVersionOnHost(%q)(vllm) = (%v, %q) with no venv, want (false, \"\")",
+					goos, installed, ver)
+			}
+			if installed, ver := fn(context.Background(), "tensorrt"); installed || ver != "" {
+				t.Errorf("engineVersionOnHost(%q)(tensorrt) = (%v, %q), want (false, \"\")",
+					goos, installed, ver)
+			}
+			if rec.calls != 0 {
+				t.Errorf("version runner called %d times for vllm / unknown, want 0", rec.calls)
+			}
+		})
 	}
 }
 

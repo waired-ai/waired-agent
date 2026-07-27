@@ -452,22 +452,50 @@ func parseMeminfoKB(line string) int64 {
 	return n
 }
 
-// defaultEngineVersion runs `<binary> --version` and extracts a
-// version string. A non-zero exit or missing binary is treated as
-// "not installed".
+// defaultEngineVersion probes an engine NAMED ON $PATH, and is only the
+// fallback for Profilers built without an injected resolver — the CLI's
+// one-shot hardware reads, which do not consult Profile.Engines at all.
+//
+// It is deliberately not the daemon's answer: waired's own engine lives
+// under the state dir and is off $PATH by design, so this reports no
+// version on exactly the hosts waired provisioned (#238, the #179
+// predicate one layer down). The daemon injects
+// engineVersionOnHost (cmd/waired-agent/engine_resolve.go) via
+// WithEngineVersion, which resolves the binary the same way it resolves
+// the one it spawns.
 func defaultEngineVersion(ctx context.Context, binary string) (bool, string) {
-	if _, err := exec.LookPath(binary); err != nil {
+	return EngineVersionAt(ctx, binary, binary)
+}
+
+// EngineVersionAt runs `<path> --version` and extracts a version
+// string. A non-zero exit, or a path that cannot be executed, is
+// treated as "not installed"; an installed engine whose output does not
+// parse reports (true, "").
+//
+// engine and path are separate arguments on purpose. The parse keys off
+// the ENGINE KIND, while the executable is wherever the caller resolved
+// it — for a waired-managed install that is
+// <state-dir>/runtimes/<engine>/bin/..., a path whose basename
+// ParseEngineVersion could not switch on reliably.
+func EngineVersionAt(ctx context.Context, engine, path string) (bool, string) {
+	if path == "" {
 		return false, ""
 	}
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, engineVersionTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, binary, "--version").CombinedOutput()
+	out, err := exec.CommandContext(cctx, path, "--version").CombinedOutput()
 	if err != nil {
 		return false, ""
 	}
-	ver := ParseEngineVersion(binary, string(out))
-	return true, ver
+	return true, ParseEngineVersion(engine, string(out))
 }
+
+// engineVersionTimeout bounds the `--version` probe. The two call sites
+// this helper unified had disagreed (3 s here, 5 s in internal/setup's
+// copy); 5 s wins because a timeout is indistinguishable from "not
+// installed" downstream, and a cold binary on a Windows host doing a
+// first-exec scan is a real way to spend three seconds.
+const engineVersionTimeout = 5 * time.Second
 
 // ParseEngineVersion isolates `<engine> --version` line parsing so it can be
 // unit-tested without invoking the real binaries, and reused by callers such

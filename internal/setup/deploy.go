@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -308,25 +307,19 @@ func DetectOllama(ctx context.Context) OllamaDetection {
 	}
 }
 
-// detectOllamaVersion runs `<path> --version` and returns the trimmed
-// version string (e.g. "0.24.0"), or "" on any error. Best-effort: the
-// init prompt only uses it to decide whether to show an "unsupported"
-// warning, never to block.
+// detectOllamaVersion returns the version of the ollama at path, or ""
+// on any error. Best-effort: the init prompt only uses it to decide
+// whether to show an "unsupported" warning, never to block.
+//
+// hardware.EngineVersionAt does the running and the parsing — it is the
+// same "execute the RESOLVED path, parse as the engine kind" operation
+// the profiler needs (#238), and it skips the "could not connect to a
+// running Ollama instance" line a fresh install prints (the old
+// last-token-of-the-first-line logic returned "instance" there and
+// mis-flagged a healthy engine as unsupported).
 func detectOllamaVersion(ctx context.Context, path string) string {
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(cctx, path, "--version").CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	// Output is "ollama version is 0.24.0", possibly preceded by
-	// "Warning: could not connect to a running Ollama instance" when the
-	// server isn't up (exactly the fresh-install case). Parse via the shared
-	// marker-based helper, which skips the Warning line; the old "last token
-	// of the first line" logic returned "instance" there, so a healthy engine
-	// was mis-flagged as below the supported minimum (the "(instance) — below
-	// waired's supported minimum" message).
-	return hardware.ParseEngineVersion("ollama", string(out))
+	_, ver := hardware.EngineVersionAt(ctx, "ollama", path)
+	return ver
 }
 
 // newPuller delegates to the optional factory or falls back to the
