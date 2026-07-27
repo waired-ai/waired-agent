@@ -2333,12 +2333,20 @@ Resolve-ControlUrl
 # for the quoting assert (#177) -- real paths where this invocation has them, so
 # the printed vector is one a test can execute as-is. InitArgs prints the argv
 # Get-WairedInitArgs would hand to `waired init`.
+#
+# Admin is Test-Admin, i.e. WHICH branch the install would take: elevated ->
+# Invoke-InstallSteps inline, non-elevated -> Invoke-SelfElevate. The CI runner
+# is always Administrator, so that decision was never observed under a real
+# restricted token (#195); the harness now runs this seam under a standard user
+# and a filtered token and asserts it flips, along with the argv THAT token
+# builds. Printing the predicate is the whole seam -- Invoke-SelfElevate itself
+# still raises a real UAC prompt and is never reached from here.
 if ($env:WAIRED_ARGTEST) {
-    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11} Clean={12} LogLevel={13} EnvLogLevel={14} InferenceEnabled={15} ShareWithMesh={16} NoTray={17} StateDir={18} InstallDir={19} DevControlUrl={20}" -f `
+    Write-Host ("ARGTEST Dev={0} Control={1} ControlUrl={2} Version={3} SkipOllama={4} SkipInit={5} SkipClaudeProxy={6} NonInteractive={7} DryRun={8} Update={9} Check={10} Yes={11} Clean={12} LogLevel={13} EnvLogLevel={14} InferenceEnabled={15} ShareWithMesh={16} NoTray={17} StateDir={18} InstallDir={19} DevControlUrl={20} Admin={21}" -f `
         [bool]$Dev, $Control, $ControlUrl, $Version, [bool]$SkipOllama, [bool]$SkipInit, `
         [bool]$SkipClaudeProxy, [bool]$NonInteractive, [bool]$DryRun, [bool]$Update, [bool]$Check, [bool]$Yes, [bool]$Clean, `
         $LogLevel, $env:WAIRED_LOG_LEVEL, $InferenceEnabled, $ShareWithMesh, `
-        [bool]$NoTray, $StateDir, $InstallDir, $DevControlUrl)
+        [bool]$NoTray, $StateDir, $InstallDir, $DevControlUrl, [bool](Test-Admin))
     Write-Host ("ARGTEST InitArgs=[{0}]" -f ((Get-WairedInitArgs) -join ' '))
     if ($env:WAIRED_ARGTEST_STATEFILE) {
         Export-InstallState -Path $env:WAIRED_ARGTEST_STATEFILE

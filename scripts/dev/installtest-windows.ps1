@@ -458,8 +458,13 @@ $TestUser = 'waired-it'
 # before '>' — `echo 0> file` would parse `0>` as a HANDLE redirect (stdin)
 # and write "ECHO is off." instead of the code; the trailing space is trimmed
 # on read. It also sits on its own line so cmd expands it at run time.
+#
+# -Env sets variables INSIDE the wrapper. The restricted contexts below are
+# reached through a scheduled task (a fresh logon) or runas (a new token), and
+# neither inherits this process's environment — so `set` in the wrapper is the
+# only way to hand an env knob to the wrapped command.
 function Write-ItCmdWrapper {
-    param([string]$Exe, [string]$ArgLine, [string]$Tag)
+    param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env)
     New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
     $paths = @{
         Cmd = Join-Path $PubWork "$Tag.cmd"
@@ -467,11 +472,13 @@ function Write-ItCmdWrapper {
         Rc  = Join-Path $PubWork "$Tag.rc"
     }
     Remove-Item -LiteralPath $paths.Out, $paths.Rc -Force -ErrorAction SilentlyContinue
-    @(
-        '@echo off'
+    $lines = @('@echo off')
+    if ($Env) { foreach ($k in $Env.Keys) { $lines += "set $k=$($Env[$k])" } }
+    $lines += @(
         "`"$Exe`" $ArgLine > `"$($paths.Out)`" 2>&1"
         "echo %ERRORLEVEL% > `"$($paths.Rc)`""
-    ) | Set-Content -LiteralPath $paths.Cmd -Encoding ASCII
+    )
+    $lines | Set-Content -LiteralPath $paths.Cmd -Encoding ASCII
     return $paths
 }
 
@@ -526,7 +533,7 @@ function Grant-ItBatchLogonRight {
 # REAL exit code. The plaintext /RP on the command line is fine: throwaway
 # password, throwaway user, disposable guest.
 function Invoke-AsStandardUser {
-    param([string]$Exe, [string]$ArgLine, [string]$Tag)
+    param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env)
     if (-not $script:TestUserPw) {
         # Random password satisfying default complexity; the guest is ephemeral.
         $script:TestUserPw = "Wt1!$([Guid]::NewGuid().ToString('N').Substring(0,12))"
@@ -544,7 +551,7 @@ function Invoke-AsStandardUser {
     # Public-folder defaults may not cover it.
     New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
     & icacls $PubWork /grant "${TestUser}:(OI)(CI)M" | Out-Null
-    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag
+    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
     $task = "waired-it-$Tag"
     # $PubWork deliberately contains no spaces, so /TR needs no inner quotes —
     # schtasks mangles nested quoting notoriously; keep the action bare.
@@ -568,8 +575,8 @@ function Invoke-AsStandardUser {
 # context). runas detaches immediately (its exit code only reflects launch),
 # hence the wrapper + marker poll.
 function Invoke-AsBasicToken {
-    param([string]$Exe, [string]$ArgLine, [string]$Tag)
-    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag
+    param([string]$Exe, [string]$ArgLine, [string]$Tag, [hashtable]$Env)
+    $paths = Write-ItCmdWrapper -Exe $Exe -ArgLine $ArgLine -Tag $Tag -Env $Env
     & runas /trustlevel:0x20000 "cmd /c `"$($paths.Cmd)`"" | Out-Null
     return (Wait-ItCmdWrapper -Paths $paths -TimeoutSec 45)
 }
@@ -824,6 +831,63 @@ try {
     Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $stateLog  -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $probeDir  -Recurse -Force -ErrorAction SilentlyContinue
+
+    # --- Test-Admin against a REAL restricted token (#195) --------------------
+    # Which arm install.ps1 takes -- inline Phase 2 vs Invoke-SelfElevate -- is
+    # decided by one predicate, Test-Admin. Both existing layers stub it:
+    # installtest-pwsh.ps1 aliases it to $env:IT_ADMIN (so it covers the BRANCH
+    # on every PR, on any host), and this runner is permanently Administrator,
+    # so the True arm is all it has ever produced. That leaves the predicate
+    # itself untested against a token that is actually restricted -- CLAUDE.md
+    # §Test discipline: "a `var xFn = realFn` seam needs a table test on
+    # realFn, or the real one is never called by any test".
+    #
+    # The two restricted contexts are the two real ones a user arrives in: a
+    # plain standard user, and a UAC-FILTERED administrator (the default for an
+    # admin who has not clicked through — the #751 context). Both must answer
+    # False, and this elevated session must answer True; asserting only one side
+    # would pass against a Test-Admin folded to a constant.
+    #
+    # ARGTEST returns before any download, SCM or UAC work, so these install
+    # nothing. install.ps1 is copied under C:\Users\Public because the runner's
+    # workspace is not reliably readable by a second local user.
+    ItStep "install.ps1 Test-Admin under real restricted tokens (#195)"
+    New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
+    $pubInstall = Join-Path $PubWork 'install.ps1'
+    Copy-Item -LiteralPath $installPs1 -Destination $pubInstall -Force
+    $argtestLine = "-NoProfile -ExecutionPolicy Bypass -File `"$pubInstall`" -NonInteractive"
+
+    $r = Invoke-ArgtestRaw ("& '$pubInstall' -NonInteractive")
+    if ($r.Out -match 'ARGTEST .*Admin=True') { ItOk "Test-Admin reports True in this elevated session (the arm CI has always taken)" }
+    else { ItBad "elevated session did not report Admin=True (exit $($r.Exit)): $($r.Out.Trim())" }
+
+    foreach ($ctx in @(
+            @{ Tag = 'argtest-stduser';    Label = 'a standard user';                Run = { param($e) Invoke-AsStandardUser -Exe 'powershell.exe' -ArgLine $argtestLine -Tag 'argtest-stduser' -Env $e } },
+            @{ Tag = 'argtest-basictoken'; Label = 'a UAC-filtered admin token';     Run = { param($e) Invoke-AsBasicToken  -Exe 'powershell.exe' -ArgLine $argtestLine -Tag 'argtest-basictoken' -Env $e } })) {
+        $r = & $ctx.Run @{ WAIRED_ARGTEST = '1' }
+        $out = [string]$r.Out
+        if ($r.Exit -ne 0) {
+            ItBad "install.ps1 -WAIRED_ARGTEST failed under $($ctx.Label) (exit $($r.Exit)): $($out.Trim())"
+            continue
+        }
+        # The predicate. False here is what routes the install through
+        # Invoke-SelfElevate; True would silently run the privileged step list
+        # in a process that cannot write %ProgramFiles%.
+        if ($out -match 'ARGTEST .*Admin=False') { ItOk "Test-Admin reports False under $($ctx.Label) (install would raise UAC)" }
+        else { ItBad "Test-Admin did not report False under $($ctx.Label): $($out.Trim())" }
+
+        # The argv THAT token builds. The quoting assert above ran as an
+        # administrator, whose %TEMP% differs from a restricted user's -- and
+        # #177 was a path that split on a space, so the path has to come from
+        # the same context that would hand it to Start-Process.
+        $ea = if ($out -match 'ElevateArgs=\[([^\]]*)\]') { $Matches[1] } else { '' }
+        if ($ea -match '-File "[^"]+ [^"]+"') { ItOk "the elevated argv built under $($ctx.Label) quotes its spaced script path (#177)" }
+        else { ItBad "the elevated argv built under $($ctx.Label) leaves a spaced path unquoted: [$ea]" }
+        if ($ea -match '-StateFile' -and $ea -notmatch '-InstallDir' -and $ea -notmatch '-Control' -and $ea -notmatch '-LogLevel') {
+            ItOk "the elevated argv built under $($ctx.Label) carries no configuration (#192)"
+        } else { ItBad "configuration rides the elevated argv built under $($ctx.Label): [$ea]" }
+    }
+    Remove-Item -LiteralPath $pubInstall -Force -ErrorAction SilentlyContinue
 
     # --- ConvertTo-NativeArg, and the two copies of it ------------------------
     # install.ps1 and uninstall.ps1 are downloaded and run independently, so
@@ -1399,10 +1463,15 @@ if ($ExeVariant) {
 # The mirror job's HttpListener thread is blocked in a synchronous
 # GetContext(), so a graceful Stop-Job would hang — force-remove.
 Remove-Job $mirrorJob -Force -ErrorAction SilentlyContinue | Out-Null
-# Contract-assert scratch: test user + profile + C:\Users\Public\waired-it.
+# Restricted-context scratch: test user + profile + C:\Users\Public\waired-it.
 # Best-effort — the guest is disposable; done AFTER the #754 asserts, which
 # inspect the test user's %AppData%.
-if ($Contract) {
+#
+# Not keyed on -Contract alone: the #195 Test-Admin asserts also reach
+# Invoke-AsStandardUser, which creates the account lazily. $TestUserPw is set
+# exactly when that happened, so it is the precise condition — otherwise a
+# plain `-Tier 2` run on a dev box would leave a local account behind.
+if ($Contract -or $script:TestUserPw) {
     Remove-Item -LiteralPath $PubWork -Recurse -Force -ErrorAction SilentlyContinue
     if (Get-LocalUser -Name $TestUser -ErrorAction SilentlyContinue) {
         Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue |
