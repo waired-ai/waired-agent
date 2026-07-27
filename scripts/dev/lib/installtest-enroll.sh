@@ -92,12 +92,25 @@ waired-devtest-login@dev-waired.iam.gserviceaccount.com)."
 (is --enable-oidc-grant live on the CP?)"
 
   it_log "minting SA id_token on host (sa=$IT_IMPERSONATE_SA)"
+  # gcloud's stderr goes to a file rather than /dev/null: it carries the ONLY
+  # statement of why impersonation failed (wrong audience, missing
+  # tokenCreator, an IAM propagation delay, a 429), and swallowing it leaves
+  # the guess below as the whole diagnosis. stdout — the token — is captured
+  # separately and never printed.
+  local gerr
+  gerr="$(mktemp)"
   tok="$(gcloud auth print-identity-token \
     --impersonate-service-account="$IT_IMPERSONATE_SA" \
-    --audiences="$aud" --include-email 2>/dev/null || true)"
-  [ -n "$tok" ] || it_die \
-    "failed to mint an SA id_token — is your identity in oidc_grant_token_creators \
-on $IT_IMPERSONATE_SA? (roles/iam.serviceAccountTokenCreator)"
+    --audiences="$aud" --include-email 2>"$gerr" || true)"
+  if [ -z "$tok" ]; then
+    printf '\033[1;31m[installtest]\033[0m gcloud said:\n' >&2
+    sed 's/^/    /' "$gerr" >&2 || true
+    rm -f "$gerr"
+    it_die "failed to mint an SA id_token for $IT_IMPERSONATE_SA — see gcloud's \
+own error above (a missing roles/iam.serviceAccountTokenCreator on that SA is \
+the usual cause; see docs/runbooks/oidc-grant-login.md)"
+  fi
+  rm -f "$gerr"
 
   it_log "exchanging the id_token for a reusable auth key ($IT_CONTROL_URL/test/auth-key)"
   # --data @- keeps the token off the process's argv.
