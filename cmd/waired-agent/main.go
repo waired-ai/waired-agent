@@ -25,6 +25,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
+	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/devicekeys"
 	"github.com/waired-ai/waired-agent/internal/gateway"
 	"github.com/waired-ai/waired-agent/internal/gcptoken"
@@ -129,7 +130,7 @@ func run(ctx context.Context, args []string) error {
 	mgmtSocketWritesOnly := fs.Bool("mgmt-socket-writes-only", true,
 		"refuse mutating requests on the loopback TCP port, requiring the local IPC socket instead (waired#838). The CLI and tray send writes over the socket; disable only for local debugging. Automatically inert while the socket is not bound, so a bind failure never blocks control of the agent")
 	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
-		"control plane base URL used for daemon-driven login (POST /waired/v1/login/start); a login request may override it")
+		"control plane base URL used for daemon-driven login (POST /waired/v1/login/start); a login request may override it. Empty falls back to the installer-recorded agent.env, then the production Control Plane — same precedence as `waired init`")
 	loginListen := fs.String("login-listen", "127.0.0.1:0",
 		"UDP listen address advertised at enrollment time for daemon-driven login (host:port; 0 picks a random port). The local-candidate loop corrects the advertised endpoint after the engine binds.")
 	forceRelay := fs.Bool("force-relay", false,
@@ -1416,7 +1417,7 @@ func run(ctx context.Context, args []string) error {
 	// so a login request can never arrive before the controller exists.
 	loginCtl := newLoginController(sb, loginControllerConfig{
 		StateDir:          *stateDir,
-		DefaultControlURL: *controlURL,
+		DefaultControlURL: resolveDaemonControlURL(*controlURL, controlurl.PlatformDefault(), logger),
 		Endpoint:          "udp4:" + *loginListen,
 		RootCtx:           ctx,
 		Activate:          activate,

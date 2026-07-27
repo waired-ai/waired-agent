@@ -1451,12 +1451,13 @@ NEWSYSLOG
 
 # darwin_write_control_url persists $CONTROL_URL into the macOS state-dir
 # agent.env, the darwin analog of Linux's /etc/waired/agent.env. `waired
-# init` reads it as the --control default via platformDefaultControlURL
-# (control_url_darwin.go), so a later bare `sudo waired init` — where sudo
+# init` reads it as the --control default via controlurl.PlatformDefault
+# (internal/controlurl), so a later bare `sudo waired init` — where sudo
 # has stripped the caller's $WAIRED_CONTROL_URL — still enrolls against the
-# right Control Plane. Unlike Linux (systemd EnvironmentFile) the launchd
-# plist cannot consume an env file, so this feeds `waired init` only; the
-# daemon reads ControlURL from agent.json that init writes. Must run after
+# right Control Plane. The daemon reads the same file for sign-in from the
+# app (#174): the launchd plist cannot consume an env file the way Linux's
+# systemd unit does, so reading it directly is the only way daemon-driven
+# login can honour a --dev/--control install. Must run after
 # darwin_register_agent has created the (0700, root-owned) state dir — and
 # since that step is now non-fatal, the dir may legitimately be absent here.
 darwin_write_control_url() {

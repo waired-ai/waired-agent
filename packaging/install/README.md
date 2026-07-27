@@ -119,11 +119,12 @@ Notes / escape hatches:
   `WAIRED_CONTROL_URL` back from it as the `--control` default. That is
   what lets a later bare `waired init` (after `--no-init` / `-SkipInit`,
   or a sign-in that was cancelled) reach the same Control Plane instead of
-  the baked production one. Only Linux's file also feeds the daemon (the
-  systemd `EnvironmentFile`); the launchd plist and the Windows SCM cannot
-  consume one, so there it feeds `waired init` alone.
+  the baked production one. The daemon reads the same file for sign-in
+  from the Waired app, on all three OSes (#174) — it used to depend on
+  having the URL in its environment, which only Linux's systemd
+  `EnvironmentFile` could provide.
 - With nothing configured, enrollment falls back to the production Control
-  Plane.
+  Plane — from `waired init` and from the app's **Log in…** alike.
 - A scheme-less Control Plane host (`--control dev.waired.net`) is accepted
   and normalised — `https://` for remote hosts, `http://` for loopback.
 - The full set of enrollment flags (`--control`, `--non-interactive`,

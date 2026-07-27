@@ -1664,16 +1664,16 @@ function Get-AgentStateDir {
 # <state dir>\agent.env, the Windows analog of Linux's /etc/waired/agent.env
 # and macOS's <state dir>/agent.env (install.sh's linux_apt_write_control_url /
 # darwin_write_control_url). `waired init` reads it back as the --control
-# default via platformDefaultControlURL (cmd/waired/control_url_windows.go).
+# default via controlurl.PlatformDefault (internal/controlurl).
 #
 # Why it matters (#42): Get-WairedInitArgs passes --control only when init runs
 # here. On any install where it does not enroll -- -SkipInit, a cancelled or
 # failed sign-in, or the `iwr | iex` form where -Dev / -Control cannot bind --
 # a later bare `waired init` had nothing to recover the URL from and silently
 # fell back to the baked production Control Plane. Linux and macOS never had
-# that hole. Unlike Linux there is no SCM EnvironmentFile, so this feeds
-# `waired init` only; the daemon reads ControlURL from the agent.json init
-# writes.
+# that hole. The daemon reads the same file for sign-in from the app (#174):
+# there is no SCM EnvironmentFile, so reading it directly is the only way
+# daemon-driven login can honour a -Dev/-Control install.
 #
 # Overwrite, unlike darwin_write_control_url's "already set -- leaving it
 # as-is". That rule exists because on Linux agent.env is a .deb conffile an
