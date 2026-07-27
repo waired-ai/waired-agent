@@ -24,7 +24,8 @@ var setupInstallEngine = installOllama
 
 // setupInstallVLLM is the vLLM install seam. The real one builds the venv
 // with the wider vLLM budget (installVLLMForSetup); a test fake records the
-// call without a ~6 GB build.
+// call without a ~9 GB build. It takes the progress sink for the same
+// reason setupInstallEngine does — see the call site.
 var setupInstallVLLM = installVLLMForSetup
 
 // setupVLLMActive reports whether a verified vLLM venv already exists under
@@ -187,7 +188,11 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 			return nil
 		}
 		writePromptf(out, "%s %s\n", emo("📦", ">>"), engineInstallNarrationVLLM)
-		if err := setupInstallVLLM(stateDir); err != nil {
+		// The sink is what turns the ~4 GB venv build into a live row in
+		// the browser instead of 45 minutes of "Working on it…"
+		// (waired-agent#255). Bound to THIS lease, so an inert session
+		// yields nil and the installer behaves exactly as it did.
+		if err := setupInstallVLLM(stateDir, newVLLMProgressSink(s, "vllm")); err != nil {
 			writePromptf(out, "%s vLLM install failed: %v\n", emo("⚠️", "!"), err)
 			s.Failed("vllm", err.Error())
 			return err

@@ -49,6 +49,10 @@ type InstallProgress struct {
 	Total   int
 	Percent int
 	Message string
+
+	CompletedBytes int64
+	TotalBytes     int64
+	BytesPerSec    int64
 }
 
 type InstallResult struct {
