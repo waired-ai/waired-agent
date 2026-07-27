@@ -122,9 +122,13 @@ func newInitCmd() *cobra.Command {
 	return cmd
 }
 
-// runInitBody holds the original init logic verbatim. The leading block
-// re-aliases the parsed flags (now fields of o) back to the pointer names
-// the body uses, so the ~460-line implementation below is unchanged.
+// runInitBody resolves the control URL and device name, confirms a
+// re-auth, and hands the run to the daemon. It performs no enrollment
+// itself: the daemon owns that (#175), and a daemon that is not answering
+// is an error rather than a reason to do it here.
+//
+// The leading block re-aliases the parsed flags (fields of o) to the
+// pointer names the body uses.
 func runInitBody(o *initFlags) error {
 	control := &o.control
 	deviceName := &o.deviceName
@@ -780,6 +784,3 @@ func initStateDirMode(goos string, euid int) paths.Mode {
 func claudeManagedEligibleFor(elevated bool, managedPath string) bool {
 	return elevated && managedPath != ""
 }
-
-// splitHostPort + newReservedUDPPort live in helpers.go to keep main.go
-// readable; both are tiny.
