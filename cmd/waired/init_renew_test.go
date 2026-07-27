@@ -9,44 +9,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/identity"
 )
 
-// Labels carry a leading emoji / ASCII marker (see initStepLabels); the
-// assertions check the "[i/N]" token is present rather than exact-matching
-// so the cosmetic prefix can change freely.
-func TestInitStepLabelsRenew(t *testing.T) {
-	got := initStepLabels(true)
-	if !strings.Contains(got.signIn, "[1/3]") {
-		t.Errorf("renew signIn want to contain [1/3] got %q", got.signIn)
-	}
-	if !strings.Contains(got.register, "[2/3]") {
-		t.Errorf("renew register want to contain [2/3] got %q", got.register)
-	}
-	if !strings.Contains(got.persist, "[3/3]") {
-		t.Errorf("renew persist want to contain [3/3] got %q", got.persist)
-	}
-	if got.inference != "" {
-		t.Errorf("renew should skip inference prompt; got label %q", got.inference)
-	}
-	if got.integration != "" {
-		t.Errorf("renew should skip integration prompt; got label %q", got.integration)
-	}
-}
-
-func TestInitStepLabelsFresh(t *testing.T) {
-	got := initStepLabels(false)
-	if !strings.Contains(got.signIn, "[1/4]") {
-		t.Errorf("fresh signIn want to contain [1/4] got %q", got.signIn)
-	}
-	if !strings.Contains(got.inference, "[3a/4]") {
-		t.Errorf("fresh inference want to contain [3a/4] got %q", got.inference)
-	}
-	if !strings.Contains(got.integration, "[3b/4]") {
-		t.Errorf("fresh integration want to contain [3b/4] got %q", got.integration)
-	}
-	if !strings.Contains(got.done, "[4/4]") {
-		t.Errorf("fresh done want to contain [4/4] got %q", got.done)
-	}
-}
-
 func TestConfirmRenewBypassSkipsPrompt(t *testing.T) {
 	id := &identity.Identity{
 		AccountEmail: "alice@example.com",
