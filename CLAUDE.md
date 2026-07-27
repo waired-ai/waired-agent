@@ -71,6 +71,24 @@ Most regressions to date were one OS silently behaving differently
 * install.sh/uninstall.sh changes mirror to install.ps1/uninstall.ps1
   (and waired-setup.iss where applicable), and vice versa.
 
+## Test discipline
+
+Most of the 2026-07 install-review escapes were test *shape*, not missing
+tests (waired#932 G7):
+
+* **Put the seam below the behaviour under test.** Route OS/environment
+  decisions through an untagged `(GOOS, facts) -> plan` function and
+  table-test all three values — `initStateDirMode` is the model, and this
+  is now the default, not a suggestion. A fake placed at the defect
+  boundary means the subject never runs.
+* **Fakes take and record the real arguments.** A fake that drops a
+  parameter is a defect: it makes the failing case unwritable. Corollary:
+  a `var xFn = realFn` seam needs a table test on `realFn`, or the real
+  one is never called by any test.
+* **Declare pins.** A test that pins behaviour states in a comment
+  whether it is a product contract or a record of today's behaviour. A PR
+  that inverts an existing test says so in the PR body first.
+
 ## Tags / releases
 
 * `v*` — agent releases (never directory-prefixed). Pushing the tag

@@ -22,8 +22,21 @@ import (
 // fakeSetupProvider implements setupProvider with scriptable state. Its
 // benchmark start flips the status to running, mirroring the real
 // single-flight job so idempotency tests reflect the production contract.
+//
+// setupEngineState RECORDS its arguments and can answer differently per
+// engine (CLAUDE.md §Test discipline). It used to accept
+// `(context.Context, string)` with both parameters unnamed and discarded,
+// which made the whole of #179 inexpressible: the real predicate answers
+// "installed" per engine kind by stat-ing the state dir, and a fake that
+// cannot see which engine it was asked about cannot distinguish "the
+// engine waired installed" from "some engine on PATH" — the exact
+// distinction that failed.
 type fakeSetupProvider struct {
-	mu              sync.Mutex
+	mu sync.Mutex
+	// engineStateCalls records every setupEngineState call in order.
+	engineStateCalls []engineStateCall
+	// perEngine overrides the default answer for one engine kind.
+	perEngine       map[string]engineState
 	engineInstalled bool
 	engineReady     bool
 	modelState      string
@@ -37,10 +50,54 @@ type fakeSetupProvider struct {
 	stateDir        string
 }
 
-func (f *fakeSetupProvider) setupEngineState(context.Context, string) (bool, bool) {
+// engineStateCall is one observed setupEngineState call. The context is
+// recorded as "was one passed" rather than kept: the real implementation
+// no longer profiles and ignores it (setup_desired.go), but a fake that
+// silently accepted a nil context would hide a caller that stopped
+// threading one.
+type engineStateCall struct {
+	Engine string
+	HadCtx bool
+}
+
+type engineState struct{ installed, ready bool }
+
+func (f *fakeSetupProvider) setupEngineState(ctx context.Context, engine string) (bool, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.engineStateCalls = append(f.engineStateCalls, engineStateCall{Engine: engine, HadCtx: ctx != nil})
+	if st, ok := f.perEngine[engine]; ok {
+		return st.installed, st.ready
+	}
 	return f.engineInstalled, f.engineReady
+}
+
+// enginesAsked is the ordered list of engine kinds the reconciler asked
+// about, deduplicated to first appearance.
+func (f *fakeSetupProvider) enginesAsked() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	seen := map[string]bool{}
+	for _, c := range f.engineStateCalls {
+		if !seen[c.Engine] {
+			seen[c.Engine] = true
+			out = append(out, c.Engine)
+		}
+	}
+	return out
+}
+
+// setEngineFor scripts one engine kind independently of the default,
+// so a test can say "the bundled engine is installed, the other one is
+// not" — which is what #179 is about.
+func (f *fakeSetupProvider) setEngineFor(engine string, installed, ready bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.perEngine == nil {
+		f.perEngine = map[string]engineState{}
+	}
+	f.perEngine[engine] = engineState{installed: installed, ready: ready}
 }
 
 func (f *fakeSetupProvider) setupStateDir() string {
@@ -145,6 +202,59 @@ func desiredFrame(engine, model string, gen int) *signer.InferenceState {
 		DesiredEngine:       engine,
 		DesiredModelID:      model,
 		DesiredBenchmarkGen: gen,
+	}
+}
+
+// TestSetupEngineStateIsAskedPerDesiredEngine pins that the reconciler
+// asks about the DESIRED engine kind, and that the answer for one engine
+// does not leak into another.
+//
+// It exists because the fake used to discard both arguments, which made
+// this unwritable — and "the predicate answers per engine, resolved
+// against the state dir" is the whole content of #179. With the
+// arguments discarded, a reconciler that asked about the wrong engine,
+// or stopped passing the desired one at all, would have gone unnoticed
+// by every test in this file.
+func TestSetupEngineStateIsAskedPerDesiredEngine(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	// The desired engine is installed and serving; a different engine
+	// kind on the same host is not installed at all.
+	f.setEngineFor("ollama", true, true)
+	f.setEngineFor("vllm", false, false)
+
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+	r.Apply(ctx, desiredFrame("ollama", "m1", 0))
+	snap := r.snapshot(ctx)
+
+	if got := f.enginesAsked(); len(got) != 1 || got[0] != "ollama" {
+		t.Fatalf("engines asked = %v, want exactly [ollama] — the desired engine", got)
+	}
+	for _, c := range f.engineStateCalls {
+		if !c.HadCtx {
+			t.Errorf("setupEngineState called with a nil context: %+v", c)
+		}
+	}
+	if st := stepByID(t, snap, setupStepEngineInstall).Status; st != signer.SetupStatusDone {
+		t.Errorf("engine step = %q, want done — ollama is installed and serving", st)
+	}
+
+	// Flip it. The DEFAULT here is "installed and ready" — which is what
+	// an argument-blind fake would return no matter what it was asked —
+	// while the desired engine is scripted as absent. Both halves of this
+	// test therefore fail against a fake that discards its arguments,
+	// which is the point: before this change neither could be written.
+	g := &fakeSetupProvider{
+		modelState:      catalog.ModelStateNotPresent,
+		engineInstalled: true,
+		engineReady:     true,
+	}
+	g.setEngineFor("ollama", false, false)
+	r2 := newSetupReconciler(g, nil, "dev-1", nil, quietLogger())
+	r2.Apply(ctx, desiredFrame("ollama", "m1", 0))
+	if st := stepByID(t, r2.snapshot(ctx), setupStepEngineInstall).Status; st == signer.SetupStatusDone {
+		t.Error("engine step is done, but the DESIRED engine (ollama) is not installed — " +
+			"an answer meant for some other engine leaked through")
 	}
 }
 
