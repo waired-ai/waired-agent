@@ -14,6 +14,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -175,4 +176,53 @@ func TestSwapPreferredModel_OnDiskFlipsActiveAndBounces(t *testing.T) {
 	}
 	st, _ := store.Load()
 	t.Fatalf("swap did not complete: Active=%+v spawns=%d (before=%d)", st.Active, sp.count(), spawnsBefore)
+}
+
+// TestSwapPreferredModel_PullDispatchFailureIsReported is
+// waired-agent#257: a switch whose download could not even be STARTED
+// used to return (false, nil), which every caller read as "applied".
+//
+// Product contract, not a record of today's behaviour: the setup
+// reconciler derives its model_pull row from what this returns, and a
+// nil error there left that row pending forever — admission is once per
+// desired model value, so nothing ever retried it.
+//
+// The two things the error has to carry are asserted separately: the
+// seam sentinel, which tells the management handler that restarting
+// would not help, and the CAUSE sentinel, which is what
+// classifyModelRejection reads to pick the §7 code the wizard renders.
+func TestSwapPreferredModel_PullDispatchFailureIsReported(t *testing.T) {
+	p := &agentInferenceProvider{
+		// Pulls turned off: PullModel refuses before it touches the network,
+		// which is the failure mode #257 was reported from.
+		cfg:       agentconfig.InferenceConfig{AllowPull: false},
+		manifests: recTestManifests(),
+		store:     catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		profiler:  cpuSwapProfiler(t),
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	downloading, err := p.SwapPreferredModel(t.Context(), "light")
+	if err == nil {
+		t.Fatalf("SwapPreferredModel err = nil; a dispatch that never started must not read as applied")
+	}
+	if !errors.Is(err, management.ErrModelSwitchUnavailable) {
+		t.Errorf("err = %v, want it to wrap management.ErrModelSwitchUnavailable "+
+			"(the handler falls back to a pointless restart without it)", err)
+	}
+	if !errors.Is(err, errPullsDisabled) {
+		t.Errorf("err = %v, want the cause sentinel kept in the chain "+
+			"(classifyModelRejection reads it)", err)
+	}
+	if downloading {
+		t.Errorf("downloading = true after a failed dispatch")
+	}
+	if psm := p.pendingSwapModel.Load(); psm != nil {
+		t.Errorf("pendingSwapModel = %q, want cleared — no pull is coming to complete it", *psm)
+	}
+	// The published preference is deliberately KEPT: it is the operator's
+	// stated choice and it applies by itself once pulls are possible again.
+	if got := p.effectivePreferredModelID(); got != "light" {
+		t.Errorf("effectivePreferredModelID = %q, want light (the choice is not rolled back)", got)
+	}
 }

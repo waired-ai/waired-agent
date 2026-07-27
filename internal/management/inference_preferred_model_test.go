@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -172,6 +173,57 @@ func TestPreferredModel_SwapErrorFallsBackToRestart(t *testing.T) {
 	}
 	if atomic.LoadInt32(&restarts) != 1 {
 		t.Errorf("RestartScheduler should fire once on swap error, got %d", restarts)
+	}
+}
+
+// TestPreferredModel_UnavailableSwitchIsReportedNotRestarted is
+// waired-agent#257's other half: the restart fallback above is the right
+// answer for "this daemon cannot apply it in process" and the WRONG one
+// for "this host will not fetch the weights at all" — restarting bounces
+// the management API, gateway and mesh to re-run a bootstrap that fails
+// for the same reason. The sentinel is how the handler tells them apart;
+// the test above (a plain error) pins that the fallback still happens for
+// everything else.
+func TestPreferredModel_UnavailableSwitchIsReportedNotRestarted(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	var swapCalls int
+	inf := &fakeInference{
+		models: []ModelEntry{{ModelID: "qwen3-8b-instruct", State: catalog.ModelStateReady}},
+	}
+	cfg := &CatalogConfig{
+		PreferencePath:   filepath.Join(prefDir, "preferred-model.json"),
+		ManifestsFn:      func() ([]catalog.Manifest, error) { return catalogFixture(), nil },
+		RestartScheduler: func() { atomic.AddInt32(&restarts, 1) },
+		ApplyModelSwitch: func(_ context.Context, _ string) (bool, error) {
+			swapCalls++
+			return false, fmt.Errorf("start the download: %w: %w",
+				errors.New("pulls are disabled by config (allow_pull=false)"),
+				ErrModelSwitchUnavailable)
+		},
+	}
+	s := New(stubStatus{}, stubPinger{}).WithInference(inf).WithCatalog(cfg)
+
+	w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+		PreferredModelRequest{ModelID: "qwen3-8b-instruct"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("allow_pull=false")) {
+		t.Errorf("body = %s, want the cause carried through to the caller", w.Body.String())
+	}
+	if swapCalls != 1 {
+		t.Errorf("ApplyModelSwitch calls = %d, want 1", swapCalls)
+	}
+	// Give a stray restart time to land before declaring there was none.
+	time.Sleep(50 * time.Millisecond)
+	if n := atomic.LoadInt32(&restarts); n != 0 {
+		t.Errorf("restarts = %d, want 0 — a restart cannot make this switch work", n)
+	}
+	// The preference is deliberately left saved: it is the operator's
+	// stated choice, and it applies by itself once pulls are possible.
+	if pref, ok, err := agentconfig.LoadPreference(filepath.Join(prefDir, "preferred-model.json")); err != nil || !ok || pref.ModelID != "qwen3-8b-instruct" {
+		t.Errorf("preference = %+v ok=%v err=%v, want the choice kept", pref, ok, err)
 	}
 }
 

@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -32,13 +33,32 @@ type CatalogConfig struct {
 	// background pull was started. nil (or a non-nil error return) makes
 	// /preferred-model fall back to RestartScheduler and answer
 	// WillRestart:true; a nil error means the switch is applying live and
-	// the response carries WillRestart:false. Tests inject a stub here.
+	// the response carries WillRestart:false. The one error the fallback
+	// is wrong for is ErrModelSwitchUnavailable — see below. Tests inject
+	// a stub here.
 	ApplyModelSwitch func(ctx context.Context, modelID string) (downloading bool, err error)
 
 	// ManifestsFn returns the bundled manifests. nil falls back to
 	// catalog.BundledManifests. Tests inject a synthetic catalog.
 	ManifestsFn func() ([]catalog.Manifest, error)
 }
+
+// ErrModelSwitchUnavailable is ApplyModelSwitch reporting that the
+// switch did not happen AND that restarting would not make it happen:
+// this host declined to fetch the weights (pulls turned off, a state
+// store that could not be written).
+//
+// It exists because the restart fallback is the wrong answer for
+// exactly this case, and the handler cannot tell it from the case the
+// fallback is right for ("this daemon cannot apply it in process") by
+// looking at an ordinary error. Restarting would bounce the whole agent
+// — management API, gateway, and mesh — to re-run a bootstrap that
+// fails for the same reason it just failed here.
+//
+// Implementations wrap it around the cause rather than replacing the
+// cause, so a caller that classifies the failure still sees what went
+// wrong underneath (waired-agent#257).
+var ErrModelSwitchUnavailable = errors.New("management: this host cannot apply that model switch")
 
 // ModelCatalogResponse is the body of GET /waired/v1/inference/catalog.
 //

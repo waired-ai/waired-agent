@@ -2,6 +2,7 @@ package management
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -65,12 +66,29 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 	// path too. When applying in process the swap layer owns the pull, so the
 	// #774 "don't pull pre-restart" reasoning below does not apply.
 	if s.catalog.ApplyModelSwitch != nil {
-		if downloading, err := s.catalog.ApplyModelSwitch(r.Context(), req.ModelID); err == nil {
+		downloading, err := s.catalog.ApplyModelSwitch(r.Context(), req.ModelID)
+		switch {
+		case err == nil:
 			writeJSON(w, http.StatusAccepted, PreferredModelResponse{
 				ModelID:     req.ModelID,
 				WillRestart: false,
 				Downloading: downloading,
 			})
+			return
+		case errors.Is(err, ErrModelSwitchUnavailable):
+			// The host declined to fetch the weights. Restarting would
+			// take the whole agent down to re-run a bootstrap that fails
+			// the same way, and answering 202 — which is what this did
+			// before the swap layer reported the refusal at all — told
+			// the operator a switch had happened when nothing had
+			// (waired-agent#257).
+			//
+			// The preference saved above is deliberately kept: it is the
+			// choice the operator stated, and it applies by itself once
+			// pulls are possible again. The restart path has always left
+			// it behind for the same reason.
+			writeJSON(w, http.StatusConflict,
+				errorBody("model_switch_unavailable", err.Error()))
 			return
 		}
 	}

@@ -767,9 +767,49 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		p.Steps = append(p.Steps, step)
 	}
 	if d.integrations != "" {
-		p.Steps = append(p.Steps, integrationStep(d.integrations, integ))
+		p.Steps = append(p.Steps, integrationStep(d.integrations, integ, integrationWriter{
+			leaseLive: leaseLive,
+			everSeen:  everSeen,
+			// Read from the rows already projected above, not from the raw
+			// phases they came from: engine_download terminates itself on a
+			// dead lease (#256) without its stored phase ever changing, and
+			// the row on screen is what "already reported" has to mean.
+			engineFailed: engineRowFailed(p.Steps),
+		}))
 	}
 	return p
+}
+
+// engineRowFailed reports whether the rows the executor works through
+// before it reaches the coding tools already carry a failure.
+//
+// model_pull and benchmark are deliberately not among them. Their
+// failures have their own recovery — pick a different model, re-run the
+// measurement — which is not the integration row's ("go back and run the
+// setup command"), so those genuinely are two different things to tell
+// the operator about.
+func engineRowFailed(steps []signer.SetupStep) bool {
+	for _, s := range steps {
+		switch s.ID {
+		case setupStepEngineDownload, setupStepEngineInstall:
+			if s.Status == signer.SetupStatusFailed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// integrationWriter is what snapshot() knows about the only party that
+// can write the coding-tool row: the elevated executor. The daemon
+// deliberately cannot — two of the three targets write into the invoking
+// user's home and the third is root-owned managed settings — so with no
+// executor this row has no author at all, and saying so is the whole of
+// waired-agent#258.
+type integrationWriter struct {
+	leaseLive    bool // one is attached right now
+	everSeen     bool // one was attached at some point this session
+	engineFailed bool // an engine row already reports a failure
 }
 
 // integrationStep projects the coding-agent instruction onto its §7 row
@@ -781,7 +821,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 // the control plane tell an integration that was declined from one that
 // was never asked about. Until now nothing in the agent produced
 // `skipped`; this is its first producer.
-func integrationStep(flat string, st setupExecutorStep) signer.SetupStep {
+func integrationStep(flat string, st setupExecutorStep, w integrationWriter) signer.SetupStep {
 	step := signer.SetupStep{ID: setupStepIntegration}
 	if flat == integrationsNone {
 		step.Status = signer.SetupStatusSkipped
@@ -796,11 +836,43 @@ func integrationStep(flat string, st setupExecutorStep) signer.SetupStep {
 		step.ErrorDetail = clampSetupDetail(st.errText)
 	case management.SetupExecutorPhaseInstalling:
 		step.Status = signer.SetupStatusRunning
+	// No executor has spoken for this row (idle, or no report at all).
+	// Which arm below applies is the difference between "wait" and
+	// "nobody is coming": this used to be one unconditional `pending`, so
+	// a wizard whose setup command had been closed showed a grey
+	// coding-tools row for the rest of time, and setup_complete could
+	// never become true (waired-agent#258).
 	default:
-		// No executor has spoken for this row yet. Pending rather than a
-		// failure: the engine and the model come first, and the terminal
-		// reaches the integration only after them.
-		step.Status = signer.SetupStatusPending
+		switch {
+		case w.leaseLive:
+			// An executor is here and has not reached this row yet. The
+			// coding tools are the LAST thing it does — after the engine
+			// install and after the model download (login_client.go) — so
+			// pending is a wait, not a stall.
+			step.Status = signer.SetupStatusPending
+		case w.engineFailed:
+			// The failure is already on screen, on the row it happened on.
+			// Same rule as `downloadSeen && download.phase == failed`
+			// keeping engine_install pending: one event gets one red row,
+			// or the operator is invited to fix it twice. Re-running the
+			// setup command is the recovery for both, and it resumes here.
+			step.Status = signer.SetupStatusPending
+		case w.everSeen:
+			// §9-4: it was here and it is gone, before it got to this row.
+			step.Status = signer.SetupStatusFailed
+			step.ErrorCode = signer.SetupErrorExecutorGone
+			step.ErrorDetail = "the setup command on this device exited before the coding tools were set up"
+		default:
+			// Never attached at all — the browser-only host waired#935
+			// left undecided. The daemon must not become a privilege
+			// bridge into a user's home, so nothing here can write these
+			// files: this is a permissions problem, not a liveness one,
+			// and its code is the one NAVI answers with the command to
+			// run.
+			step.Status = signer.SetupStatusFailed
+			step.ErrorCode = signer.SetupErrorPermissionDenied
+			step.ErrorDetail = "the coding tools on this device can only be set up by the setup command, and it has not run"
+		}
 	}
 	return step
 }
@@ -921,6 +993,14 @@ func classifyModelRejection(err error) string {
 		// would send the operator round a loop; `internal` says "this
 		// computer will not do it" and the detail says why.
 		return signer.SetupErrorInternal
+	case errors.Is(err, management.ErrModelSwitchUnavailable):
+		// The download could not be STARTED, and the two cases above did
+		// not claim it — so this is the state store failing to record the
+		// job, whose text is the only evidence there is. Reading it is
+		// what the cross-process classifier is for, and it is the one
+		// place a full disk shows up on this path. Last, so the specific
+		// sentinels the swap wraps still win.
+		return classifySetupFailure(err.Error())
 	}
 	return signer.SetupErrorModelNotFound
 }
