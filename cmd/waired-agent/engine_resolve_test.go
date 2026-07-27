@@ -77,7 +77,17 @@ func TestEngineInstalledOnHost_StateDirEngineWithEmptyPATH(t *testing.T) {
 func TestResolveOllamaBinary_LinuxBundledIsStrict(t *testing.T) {
 	sealPATH(t)
 	dir := t.TempDir()
-	stub := filepath.Join(dir, "ollama")
+	// The stub carries the RUNNING OS's binary name, as the sibling test
+	// below explains: download.ResolveBinary looks for the name fixed by the
+	// build tag of the host, not by the goos argument. On Windows an
+	// extensionless "ollama" is invisible to exec.LookPath, which consults
+	// PATHEXT — so without the suffix this reads as "no engine on PATH" and
+	// the reuse way-out below cannot be exercised at all (#216).
+	stubName := "ollama"
+	if runtime.GOOS == "windows" {
+		stubName = "ollama.exe"
+	}
+	stub := filepath.Join(dir, stubName)
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +105,8 @@ func TestResolveOllamaBinary_LinuxBundledIsStrict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveOllamaBinary(linux, reuse): %v, want the PATH stub", err)
 	}
-	if filepath.Base(got) != "ollama" {
-		t.Errorf("reuse resolved %q, want the PATH stub", got)
+	if filepath.Base(got) != stubName {
+		t.Errorf("reuse resolved %q, want the PATH stub %q", got, stubName)
 	}
 
 	// Way out 2: install the bundled engine. It wins over PATH.
