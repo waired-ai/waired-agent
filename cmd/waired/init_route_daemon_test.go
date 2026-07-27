@@ -59,18 +59,54 @@ func TestChooseEnrollRoute(t *testing.T) {
 			wantProbed: false,
 		},
 		{
-			name:       "--google-sa-login selects local enrollment without probing",
-			facts:      enrollFacts{googleSALogin: true, serviceInstalled: true},
-			daemonUp:   true,
-			want:       routeLocal,
-			wantProbed: false,
-		},
-		{
 			name:       "re-auth selects local enrollment without probing",
 			facts:      enrollFacts{renewing: true, serviceInstalled: true},
 			daemonUp:   false,
 			want:       routeLocal,
 			wantProbed: false,
+		},
+
+		// PRODUCT CONTRACT (#175): an auth key is a credential for the
+		// DAEMON's enrollment. Only the daemon can redeem one, so a run
+		// carrying a key must reach the daemon or fail saying why — it
+		// must NEVER fall back to a local enrollment that would drop the
+		// credential and register the host capability-less, which is the
+		// exact failure this issue exists to remove. The key therefore
+		// outranks every local selector.
+		{
+			name:       "--auth-key takes the daemon route",
+			facts:      enrollFacts{authKey: true, serviceInstalled: true},
+			daemonUp:   true,
+			want:       routeDaemon,
+			wantProbed: true,
+		},
+		{
+			name:       "--auth-key with a dead service fails, never local",
+			facts:      enrollFacts{authKey: true, serviceInstalled: true},
+			daemonUp:   false,
+			want:       routeAgentDown,
+			wantProbed: true,
+		},
+		{
+			name:       "--auth-key with no agent at all fails, never local",
+			facts:      enrollFacts{authKey: true},
+			daemonUp:   false,
+			want:       routeAgentAbsent,
+			wantProbed: true,
+		},
+		{
+			name:       "--auth-key overrides --bypass-mode",
+			facts:      enrollFacts{authKey: true, bypassMode: true, serviceInstalled: true},
+			daemonUp:   true,
+			want:       routeDaemon,
+			wantProbed: true,
+		},
+		{
+			name:       "--auth-key overrides re-auth",
+			facts:      enrollFacts{authKey: true, renewing: true, serviceInstalled: true},
+			daemonUp:   true,
+			want:       routeDaemon,
+			wantProbed: true,
 		},
 	}
 

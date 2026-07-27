@@ -220,6 +220,47 @@ itself and asks the full set of questions:
 
 </Steps>
 
+### <a id="servers-and-containers-auth-keys"></a>Servers and containers: auth keys
+
+Sign-in normally needs a person and a browser. On a fleet of servers, or in a
+container image that has to come up on its own, there is neither. An **auth
+key** stands in: you create it once in the web console while signed in, and
+each machine presents it instead of signing in.
+
+Create one under **Settings → Auth keys**, then on the machine:
+
+```sh
+sudo waired init --auth-key waired_ak_...
+```
+
+Choose **one device** for a key you use once, or **many devices** for a key a
+fleet or a container image shares. Keys expire after at most 90 days, and you
+can revoke one at any time — revoking stops *new* machines from joining and
+leaves the ones already added signed in.
+
+<Aside type="caution" title="A key on the command line is visible to others">
+	Anything in a command line shows up in `ps` for every user on the machine,
+	and in your shell history. On a machine you share, put the key in a file and
+	point at it instead:
+
+	```sh
+	sudo waired init --auth-key file:/etc/waired/authkey
+	```
+
+	In a container, set `WAIRED_AUTH_KEY` in the environment and drop the flag
+	entirely — `waired init` reads it from there.
+</Aside>
+
+Waired must already be installed and its background service running: an auth
+key is a credential, not a way to skip the service. If the service is not
+answering, `waired init` says so and stops rather than half-joining the
+machine.
+
+Setting up this way, the machine joins your network and appears in the console
+straight away, but the browser setup wizard does not open for it — there is no
+browser. Everything else, including choosing its AI model, is available from
+the console.
+
 The model then downloads in the foreground with a progress bar:
 
 ```

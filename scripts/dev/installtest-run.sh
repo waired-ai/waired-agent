@@ -17,7 +17,7 @@
 # --inference: exercise the full first-run journey on CPU — install.sh
 #   installs Ollama (no --skip-ollama), `waired init` force-enables
 #   inference so its deploy phase pulls the bundled model and runs the
-#   end-of-init benchmark. Pairs with Tier 2 (IT_ENROLL_MODE=oidc against
+#   end-of-init benchmark. Pairs with Tier 2 (IT_ENROLL_MODE=authkey against
 #   the real app.dev.waired.net is the no-human path). GPU not required.
 #
 # --integration (--local/native only; #496): implies --inference but PINS the

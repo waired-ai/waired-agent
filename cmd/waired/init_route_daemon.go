@@ -34,12 +34,12 @@ const (
 	// Drive its login endpoints; it owns enrollment, the state dir and the
 	// live tunnel.
 	routeDaemon enrollRoute = iota
-	// routeLocal: local enrollment, explicitly selected. --bypass-mode and
-	// --google-sa-login complete the login session programmatically and
-	// re-auth refreshes tokens only; the daemon login implements neither
-	// yet. Both move daemon-side in the follow-ups to #175, after which
-	// this route (and the local enrollment implementation behind it) goes
-	// away entirely.
+	// routeLocal: local enrollment, explicitly selected. --bypass-mode
+	// completes the login session against a mock IdP and re-auth refreshes
+	// tokens only; the daemon login implements neither yet. --bypass-mode
+	// goes once the testnet container enrols with an auth key, and re-auth
+	// once the daemon can drive it — after which this route (and the local
+	// enrollment implementation behind it) goes away entirely (#175).
 	routeLocal
 	// routeAgentDown: a service is registered but the management API never
 	// answered inside the wait window. This is exactly the state the silent
@@ -54,10 +54,15 @@ const (
 // itself is a pure function that can be table-tested over every
 // combination (CLAUDE.md §Test discipline).
 type enrollFacts struct {
-	// The three explicit selectors for local enrollment.
-	bypassMode    bool
-	googleSALogin bool
-	renewing      bool
+	// The explicit selectors for local enrollment.
+	bypassMode bool
+	renewing   bool
+	// authKey is set when the operator passed --auth-key (or
+	// $WAIRED_AUTH_KEY). It is a credential for the DAEMON's enrollment,
+	// never a selector for the local one: the local path has no way to
+	// redeem it, and silently ignoring it would enrol the host
+	// capability-less — the exact failure #175 exists to remove.
+	authKey bool
 	// serviceInstalled reports whether an OS service is registered
 	// (systemd unit / LaunchDaemon plist / SCM entry) — i.e. whether an
 	// agent is *supposed* to be running here.
@@ -65,12 +70,16 @@ type enrollFacts struct {
 }
 
 // chooseEnrollRoute picks the journey. probe is invoked only when an
-// explicit selector has not already settled the answer, so a bypass / SA /
+// explicit selector has not already settled the answer, so a bypass /
 // re-auth run never pays the wait window; it receives serviceInstalled
 // because the probe waits longer for a service that is registered (and is
 // therefore probably still starting).
 func chooseEnrollRoute(f enrollFacts, probe func(serviceInstalled bool) bool) enrollRoute {
-	if f.bypassMode || f.googleSALogin || f.renewing {
+	// An auth key outranks the local selectors. Only the daemon can
+	// redeem one, so a run that carries a key must reach the daemon or
+	// fail saying why — never quietly fall back to a local enrollment
+	// that would drop the credential on the floor.
+	if !f.authKey && (f.bypassMode || f.renewing) {
 		return routeLocal
 	}
 	if probe(f.serviceInstalled) {

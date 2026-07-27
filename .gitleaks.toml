@@ -6,3 +6,20 @@
 
 [extend]
 useDefault = true
+
+# Waired auth keys (#175, waired#976) — the unattended-enrollment
+# credential a headless host presents to `waired init --auth-key`. The
+# default ruleset has no pattern for it, so a key pasted into a test
+# fixture, a doc example, or a debugging commit would sail through. This
+# repo is public: a leaked key admits a device to someone's network until
+# it expires or is revoked.
+#
+# Shape is fixed by the control plane: "waired_ak_" + 32 bytes of
+# crypto/rand as lowercase hex (internal/controlplane/api/authkey.go).
+# Docs deliberately use short placeholders like "waired_ak_..." which do
+# not match, so no allowlist is needed for them.
+[[rules]]
+id = "waired-auth-key"
+description = "Waired auth key (unattended enrollment credential)"
+regex = '''waired_ak_[0-9a-f]{64}'''
+keywords = ["waired_ak_"]

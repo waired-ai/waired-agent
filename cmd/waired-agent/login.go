@@ -118,7 +118,7 @@ func (lc *loginController) Start(ctx context.Context, req management.LoginStartR
 		phase:  management.LoginPhaseLoggingIn,
 		cancel: cancel,
 	}
-	go lc.run(loginCtx, sessID, controlURL, deviceName)
+	go lc.run(loginCtx, sessID, controlURL, deviceName, req.AuthKey)
 
 	return lc.snapshotLocked(), nil
 }
@@ -140,7 +140,7 @@ func (lc *loginController) Status(ctx context.Context, sessionID string) (manage
 
 // run executes enrollment then live activation on a background
 // goroutine, advancing the session's phase as it goes.
-func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceName string) {
+func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceName, authKey string) {
 	// Resolve a port-0 login endpoint (default "udp4:127.0.0.1:0") to a
 	// concrete free UDP port before enrolling. The endpoint is persisted into
 	// identity.json and later parsed by udpListenPortFromEndpoint (which
@@ -158,6 +158,10 @@ func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceNa
 		Endpoint:      endpoint,
 		StateDir:      lc.stateDir,
 		ClientVersion: buildinfo.Version,
+		// #175: when set, setup.Enroll redeems the key in the login-session
+		// create call and never reaches OnLoginURL below — there is no URL
+		// for anyone to open.
+		AuthKey: authKey,
 		OnLoginURL: func(loginURL, userCode string) {
 			lc.mu.Lock()
 			if lc.session != nil && lc.session.id == sessID {

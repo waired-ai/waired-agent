@@ -131,6 +131,7 @@ Start-VM -Name waired-edge
   post-elevation install logic is fully covered. To cover the consent, open
   `vmconnect` as `wuser` and run the one-liner once (interactive).
 - **Headless enrollment**: `Invoke-EdgeVmVerify.ps1` mints a Google OIDC
-  id_token on the host (`gcloud ... print-identity-token --impersonate-service-account`)
-  and passes it to `waired init --google-sa-login --oidc-id-token` — no
-  browser OAuth needed.
+  id_token on the host (`gcloud ... print-identity-token --impersonate-service-account`),
+  exchanges it for a reusable auth key at the control plane's dev issuer, and
+  passes that to `waired init --auth-key` — no browser OAuth needed. The
+  enrolment goes through the running service, like a real install.

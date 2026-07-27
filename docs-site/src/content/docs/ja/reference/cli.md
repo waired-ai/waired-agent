@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 21bfc9123adf17bb
+sourceHash: 994b51f9d79a3316
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -73,6 +73,7 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 | `--reset-config` | 前回の設定を無視して、最初からすべて聞き直します。 |
 | `--start-agent=false` | 終了後にバックグラウンドサービスを起動しません（自分で起動する場合）。 |
 | `--control <URL>` | 既定ではなく指定したコントロールプレーンでサインインします。→ [インストールの詳細オプション](/ja/reference/install-options/) |
+| `--auth-key <key>` | ブラウザでのサインインの代わりに認証キーで参加します（サーバーやコンテナ向け）。`file:/path/to/key` も指定でき、フラグを省略すると `$WAIRED_AUTH_KEY` を読みます。キーは[管理コンソール](/ja/guides/web-console/)の **設定 → 認証キー** で作成します。→ [サインインとセットアップ](/ja/getting-started/first-run/#servers-and-containers-auth-keys) |
 
 正式な一覧は `waired init --help` です。ここに載せていない開発者向け・CI 専用の
 フラグもそちらに含まれます。

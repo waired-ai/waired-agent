@@ -15,12 +15,14 @@
       %ProgramData%\waired state dir exists; the binaries are in place; and
       %ProgramFiles%\Waired is on the machine PATH (#482 regression guard).
     Tier 2 (-Tier 2): + hands-free enroll against the real app.dev.waired.net
-      via the #339 SA-OIDC grant — gcloud (WIF) mints the SA id_token, then
-      `waired init --google-sa-login --oidc-id-token <tok>`. Asserts identity
+      hands-free — gcloud (WIF) mints the SA id_token (#339), exchanges it for
+      a reusable auth key at the CP's dev issuer (waired#976), then
+      `waired init --auth-key <key>` enrols THROUGH the running service (#175).
+      Asserts identity
       lands under %ProgramData%\waired and the daemon reports it on the mgmt API.
 
     Designed to run directly on a disposable runner (no nesting). Mirrors the
-    enroll knobs of lib/installtest-enroll.sh: IT_ENROLL_MODE (only `oidc`
+    enroll knobs of lib/installtest-enroll.sh: IT_ENROLL_MODE (only `authkey`
     supported here), IT_IMPERSONATE_SA, IT_CONTROL_URL.
 
 .PARAMETER Tier
@@ -75,7 +77,7 @@ param(
     [switch]$ExeVariant,
     # -DaemonEngine (waired#835 §9/§11): drive the DAEMON-path first-run so the
     # resident `waired init` executor installs the engine on an engine-less host
-    # -- the path the standalone --google-sa-login enrol never reaches (that flag
+    # -- the path a local (--bypass-mode) enrol never reaches (that flag
     # forces the standalone path). Keeps install.ps1's engine-absent state,
     # completes the daemon login out-of-band via the OIDC grant, and asserts the
     # engine landed via the executor (not install.ps1). Its own mode; Tier 2.
@@ -110,7 +112,7 @@ $StateDir     = Join-Path $env:ProgramData 'waired'
 $ZipName      = 'waired-windows-amd64.zip'
 $Port         = if ($env:IT_REPO_PORT) { [int]$env:IT_REPO_PORT } else { 8099 }
 $ControlUrl   = if ($env:IT_CONTROL_URL) { $env:IT_CONTROL_URL } else { 'https://app.dev.waired.net' }
-$EnrollMode   = if ($env:IT_ENROLL_MODE) { $env:IT_ENROLL_MODE } else { 'oidc' }
+$EnrollMode   = if ($env:IT_ENROLL_MODE) { $env:IT_ENROLL_MODE } else { 'authkey' }
 $ImpersonateSa= $env:IT_IMPERSONATE_SA
 $MgmtStatus   = 'http://127.0.0.1:9476/waired/v1/status'
 
@@ -1097,24 +1099,31 @@ catch {
 # ============================================================================
 if ($Tier -ge 2) {
     try {
-        if ($EnrollMode -ne 'oidc') { ItDie "installtest-windows.ps1 supports IT_ENROLL_MODE=oidc only (got '$EnrollMode')" }
-        if (-not $ImpersonateSa)    { ItDie "IT_ENROLL_MODE=oidc needs IT_IMPERSONATE_SA (the #339 test SA)" }
+        if ($EnrollMode -ne 'authkey') { ItDie "installtest-windows.ps1 supports IT_ENROLL_MODE=authkey only (got '$EnrollMode')" }
+        if (-not $ImpersonateSa)       { ItDie "IT_ENROLL_MODE=authkey needs IT_IMPERSONATE_SA (the #339 test SA)" }
 
-        ItStep "enrolling via OIDC grant (host-minted token)"
-        # Stop the installer-started service so init's enroll writes identity
-        # without daemon contention. init then starts the agent itself (default
-        # --start-agent=true) — mirroring a real install — so #519's foreground
-        # model wait runs; the Start-Service below is a redundant safety net.
-        # Daemon-path mode is the exception: it leaves the service RUNNING —
-        # that (unenrolled but reachable) is what makes init take the daemon
-        # path and reach the setup executor engine install (waired#835 §11).
-        if (-not $DaemonEngine) { Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue }
+        ItStep "enrolling with an auth key (host-minted SA token -> CP dev issuer)"
+        # The service stays RUNNING. Since #175 an auth key is redeemed by the
+        # DAEMON, so init must reach it — stopping the service would now fail
+        # the run with "the background service is installed but isn't
+        # responding" instead of silently enrolling locally, which is the whole
+        # point of the change. Daemon-path (-DaemonEngine) mode already relied
+        # on the service being up for the setup executor (waired#835 §11).
 
         $aud = (Invoke-RestMethod -Uri "$ControlUrl/v1/login/oidc-grant/audience" -TimeoutSec 15).audience
         if (-not $aud) { ItDie "could not resolve the OIDC audience from $ControlUrl/v1/login/oidc-grant/audience" }
         ItLog "minting SA id_token (sa=$ImpersonateSa)"
         $tok = (& gcloud auth print-identity-token --impersonate-service-account="$ImpersonateSa" --audiences="$aud" --include-email).Trim()
         if (-not $tok) { ItDie "failed to mint an SA id_token (is the CI principal in oidc_grant_token_creators on $ImpersonateSa?)" }
+
+        # Exchange the token for a reusable auth key. -DaemonEngine keeps using
+        # the raw token: that leg completes an ordinary login session
+        # out-of-band so the executor lease has an in-flight window to work in,
+        # which an auth key would collapse.
+        $authKey = (Invoke-RestMethod -Uri "$ControlUrl/test/auth-key" -Method Post `
+            -ContentType 'application/json' -TimeoutSec 30 `
+            -Body (@{ id_token = $tok; reusable = $true; description = 'installtest windows' } | ConvertTo-Json -Compress)).auth_key
+        if (-not $authKey) { ItDie "could not mint an auth key at $ControlUrl/test/auth-key (is the CP new enough - waired#976?)" }
 
         $runId  = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { Get-Date -Format yyyyMMddHHmmss }
         $device = "win-ci-$runId"
@@ -1123,7 +1132,7 @@ if ($Tier -ge 2) {
         if ($DaemonEngine) {
             # Daemon-path enrol: complete the login out-of-band so the resident
             # executor installs the engine (waired#835 §9/§11). No
-            # --google-sa-login (that forces the standalone path); the running
+            # a credential flag (an auth key would collapse the window); the running
             # service makes init take the daemon path. A background job rejoins
             # the in-flight session (POST /login/start is single-flight →
             # init's session), completes it via the OIDC grant (the CP flips any
@@ -1167,7 +1176,7 @@ if ($Tier -ge 2) {
 
             # inference on + tiny model so an engine-less host installs one;
             # --non-interactive so the resident executor runs
-            # ensureDaemonPathEngine. NO --google-sa-login → daemon path.
+            # ensureDaemonPathEngine. No credential flag -> daemon path.
             $initArgs = @(
                 'init'
                 '--control', $ControlUrl
@@ -1199,8 +1208,7 @@ if ($Tier -ge 2) {
         $initArgs = @(
             'init'
             '--control', $ControlUrl
-            '--google-sa-login'
-            '--oidc-id-token', $tok
+            '--auth-key', $authKey
             '--device-name', $device
             '--non-interactive'
             $inferFlag

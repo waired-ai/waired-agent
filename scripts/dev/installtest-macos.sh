@@ -7,10 +7,12 @@
 #   darwin path at the local tarball via WAIRED_INSTALL_BASE_URL (file://), run
 #   it, and assert the binaries land in /usr/local/bin, the system LaunchDaemon
 #   plist is written + loaded, and the system state dir exists root-owned.
-# Tier 2 (--tier 2): + hands-free OIDC enroll (#339) — gcloud (WIF) mints the SA
-#   id_token, then `sudo waired init --google-sa-login --oidc-id-token`. Asserts
-#   the identity lands under /Library/Application Support/waired and the REAL
-#   system daemon reports it on the mgmt API.
+# Tier 2 (--tier 2): + hands-free enroll — gcloud (WIF) mints the SA id_token
+#   (#339), exchanges it for a reusable auth key at the CP's dev issuer
+#   (waired#976), then `sudo waired init --auth-key` enrols THROUGH the running
+#   LaunchDaemon (#175). Asserts the identity lands under
+#   /Library/Application Support/waired and the REAL system daemon reports it
+#   on the mgmt API.
 #
 # --inference (pairs with --tier 2; #514): exercise the full first-run journey on
 #   CPU — install.sh installs Ollama (no --skip-ollama) and `waired init
@@ -48,7 +50,7 @@ done
 
 # --- enroll knobs (mirror lib/installtest-enroll.sh) ------------------------
 IT_CONTROL_URL="${IT_CONTROL_URL:-https://app.dev.waired.net}"
-IT_ENROLL_MODE="${IT_ENROLL_MODE:-oidc}"
+IT_ENROLL_MODE="${IT_ENROLL_MODE:-authkey}"
 IT_IMPERSONATE_SA="${IT_IMPERSONATE_SA:-}"
 
 BINDIR="${WAIRED_DARWIN_BINDIR:-/usr/local/bin}"
@@ -295,12 +297,14 @@ assert_mgmt_socket_macos() {
 
 # --- daemon-path setup-executor engine install (waired#835 §9/§11) ----------
 # macOS analog of lib/installtest-daemon-engine.sh. The system LaunchDaemon is
-# already running (Tier 1), so a `waired init` WITHOUT --google-sa-login takes
-# the DAEMON path and its resident executor installs the engine — the path the
-# --google-sa-login (standalone) enrol never reaches. We complete the daemon's
-# login session out-of-band via the OIDC grant (the CP flips any waiting
-# session, internal/controlplane/api/oidc_grant.go), then assert the engine
-# landed via the executor, not install.sh (which ran --skip-ollama).
+# already running (Tier 1), so `waired init` takes the DAEMON path and its
+# resident executor installs the engine. This leg deliberately does NOT use an
+# auth key: a key authorizes the session inside the create call, leaving the
+# executor lease with nothing to observe. Instead we let init open an ordinary
+# login session and complete it out-of-band via the OIDC grant (the CP flips
+# any waiting session, internal/controlplane/api/oidc_grant.go), so the
+# in-flight window the executor works in actually exists. Then assert the
+# engine landed via the executor, not install.sh (which ran --skip-ollama).
 DAEMON_ENGINE_MODEL="qwen2.5-coder-0.5b-instruct"
 DAEMON_ENGINE_FLAG="$WORK/daemon-engine.flag"
 
@@ -346,7 +350,7 @@ daemon_path_enroll_macos() {
   : > "$INITLOG"   # fresh: the watcher must not scrape a stale login URL
   _daemon_setup_watcher "$tok" &
   watcher_pid=$!
-  it_step "daemon-path 'waired init' (fg, no --google-sa-login → daemon path)"
+  it_step "daemon-path 'waired init' (fg, no credential flag → daemon path)"
   # inference on + tiny model so an engine-less host installs one; --non-interactive
   # so the resident executor runs ensureDaemonPathEngine; stdin from /dev/null.
   # pipefail makes the `if` see init's exit; PIPESTATUS[0] is init's, not tee's.
@@ -572,11 +576,11 @@ assert_launchd_healthy "reinstall"
 
 # --- Tier 2: hands-free enroll + assert -------------------------------------
 if [ "$TIER" -ge 2 ]; then
-  [ "$IT_ENROLL_MODE" = oidc ] || it_die "installtest-macos.sh supports IT_ENROLL_MODE=oidc only (got '$IT_ENROLL_MODE')"
-  [ -n "$IT_IMPERSONATE_SA" ]  || it_die "IT_ENROLL_MODE=oidc needs IT_IMPERSONATE_SA (the #339 test SA)"
-  command -v gcloud >/dev/null 2>&1 || it_die "oidc enroll mints the SA id_token on the host; gcloud not found"
+  [ "$IT_ENROLL_MODE" = authkey ] || it_die "installtest-macos.sh supports IT_ENROLL_MODE=authkey only (got '$IT_ENROLL_MODE')"
+  [ -n "$IT_IMPERSONATE_SA" ]  || it_die "IT_ENROLL_MODE=authkey needs IT_IMPERSONATE_SA (the #339 test SA)"
+  command -v gcloud >/dev/null 2>&1 || it_die "authkey enroll mints the SA id_token on the host; gcloud not found"
 
-  it_step "enrolling via OIDC grant (google-sa-login, host-minted token)"
+  it_step "minting an auth key (host-minted SA token -> CP dev issuer)"
   aud="$(curl -fsS --max-time 15 "$IT_CONTROL_URL/v1/login/oidc-grant/audience" 2>/dev/null \
     | sed -n 's/.*"audience":"\([^"]*\)".*/\1/p')"
   [ -n "$aud" ] || it_die "could not resolve the OIDC audience from $IT_CONTROL_URL"
@@ -585,12 +589,23 @@ if [ "$TIER" -ge 2 ]; then
     --audiences="$aud" --include-email 2>/dev/null)"
   [ -n "$tok" ] || it_die "failed to mint an SA id_token (CI principal in oidc_grant_token_creators?)"
 
+  # Exchange the token for a reusable auth key. The daemon-engine leg below
+  # still completes its login out-of-band with the raw token, so the token
+  # itself is kept. --data @- keeps it off the process's argv.
+  authkey="$(printf '{"id_token":"%s","reusable":true,"description":"installtest macos"}' "$tok" \
+    | curl -fsS --max-time 30 -X POST "$IT_CONTROL_URL/test/auth-key" \
+        -H 'Content-Type: application/json' --data @- 2>/dev/null \
+    | sed -n 's/.*"auth_key":"\([^"]*\)".*/\1/p')"
+  [ -n "$authkey" ] || it_die "could not mint an auth key at $IT_CONTROL_URL/test/auth-key (CP new enough — waired#976?)"
+
   device="mac-ci-${GITHUB_RUN_ID:-$(date +%Y%m%d%H%M%S)}"
   if [ "$DAEMON_ENGINE" = 1 ]; then
-    # Daemon-path enrol: complete the login out-of-band so the resident
-    # executor installs the engine (waired#835 §9/§11). No --google-sa-login
-    # (that forces the standalone path), so the running LaunchDaemon makes
-    # init take the daemon path.
+    # Daemon-path enrol with an OUT-OF-BAND completion: the point of this
+    # leg is to watch the resident executor install the engine
+    # (waired#835 §9/§11) while init is mid-flight, which needs a login the
+    # watcher completes at the CP. An auth key would authorize the session
+    # in the create call and leave nothing to observe, so this leg keeps
+    # the interactive-shaped login and the raw SA token.
     daemon_path_enroll_macos "$tok" "$device"
   else
   inf_flag="--inference-enabled=$([ "$INFER" = 1 ] && echo true || echo false)"
@@ -607,10 +622,10 @@ if [ "$TIER" -ge 2 ]; then
   # ${pin_flag[@]+...} is the unset-safe expansion: an empty array must expand
   # to zero args even under `set -u` on macOS's system bash 3.2.
   if ! sudo env WAIRED_NO_EMOJI=1 "$BINDIR/waired" init --control "$IT_CONTROL_URL" \
-        --google-sa-login --oidc-id-token "$tok" \
+        --auth-key "$authkey" \
         --device-name "$device" --non-interactive "$inf_flag" ${pin_flag[@]+"${pin_flag[@]}"} \
         --skip-integration --state-dir "$STATE_DIR" 2>&1 | tee "$INITLOG"; then
-    bad "waired init (oidc) failed"
+    bad "waired init (authkey) failed"
   fi
   fi
 

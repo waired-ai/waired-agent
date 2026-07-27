@@ -75,6 +75,16 @@ $oidcToken = (& gcloud auth print-identity-token --impersonate-service-account=$
 if (-not $oidcToken) { throw "gcloud failed to mint id_token (tokenCreator on $ImpersonateSa?)" }
 Log "id_token minted (len=$($oidcToken.Length)), audience=$aud"
 
+# Exchange it for a reusable auth key (waired#976). Since #175 `waired init`
+# enrols through the daemon, and an auth key is the credential the daemon
+# redeems — the old --google-sa-login flag drove a second, local enrolment
+# implementation that no longer exists.
+$authKey = (Invoke-RestMethod -Uri "$ControlUrl/test/auth-key" -Method Post `
+    -ContentType 'application/json' -TimeoutSec 30 `
+    -Body (@{ id_token = $oidcToken; reusable = $true; description = 'hyperv edge verify' } | ConvertTo-Json -Compress)).auth_key
+if (-not $authKey) { throw "could not mint an auth key at $ControlUrl/test/auth-key (CP new enough - waired#976?)" }
+Log "auth key minted"
+
 # --- 2. PS Direct session ---------------------------------------------------
 $sec  = ConvertTo-SecureString $GuestPassword -AsPlainText -Force
 $cred = New-Object System.Management.Automation.PSCredential("$VmName\$GuestAdmin", $sec)
@@ -239,11 +249,11 @@ if (-not $ollamaEnsure.preInstalled) { Add-Finding 'mid' 'installer' 'installer 
 if (-not $ollamaEnsure.ollamaExe)    { Add-Finding 'high' 'inference' 'Ollama could not be installed (manual fallback failed)' }
 
 # ===========================================================================
-# Phase B — enrollment (headless OIDC)
+# Phase B — enrollment (headless, auth key)
 # ===========================================================================
-Log "Phase B: OIDC enrollment"
-$phaseB = Invoke-Command -Session $s -ArgumentList $ControlUrl,$oidcToken -ScriptBlock {
-    param($ControlUrl,$Token)
+Log "Phase B: auth-key enrollment"
+$phaseB = Invoke-Command -Session $s -ArgumentList $ControlUrl,$authKey -ScriptBlock {
+    param($ControlUrl,$AuthKey)
     $ErrorActionPreference = 'Continue'
     $pf = Join-Path $env:ProgramFiles 'Waired'
     $waired = Join-Path $pf 'waired.exe'
@@ -253,7 +263,7 @@ $phaseB = Invoke-Command -Session $s -ArgumentList $ControlUrl,$oidcToken -Scrip
     # --state-dir, init writes to the per-user dir and the LocalSystem agent
     # never sees it (and the identity.json check below would false-fail).
     $stateDir = Join-Path $env:ProgramData 'waired'
-    $out = (& $waired init --control $ControlUrl --state-dir $stateDir --google-sa-login --oidc-id-token $Token --non-interactive --inference-enabled=true --skip-integration 2>&1) -join "`n"
+    $out = (& $waired init --control $ControlUrl --state-dir $stateDir --auth-key $AuthKey --non-interactive --inference-enabled=true --skip-integration 2>&1) -join "`n"
     $r.initExit = $LASTEXITCODE
     $r.initOutput = $out
     # restart service so the agent picks up identity + converges proxy

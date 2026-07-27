@@ -8,15 +8,23 @@
 #
 # Enrol modes (IT_ENROLL_MODE):
 #
-#   oidc — fully automated against the REAL production-like CP
-#     (app.dev.waired.net) via the #339 SA-OIDC direct grant. The host mints a
-#     Google-signed service-account id_token (gcloud impersonation of
-#     IT_IMPERSONATE_SA, audience auto-discovered from the CP) and injects
-#     it into the gcloud-less guest as `waired init --google-sa-login
-#     --oidc-id-token <tok>`. Needs the minting identity to hold
-#     roles/iam.serviceAccountTokenCreator on that SA (CP-side
-#     oidc_grant_token_creators) — see docs/runbooks/oidc-grant-login.md.
-#     This is the no-human path for real-CP inference verification.
+#   authkey — fully automated against the REAL production-like CP
+#     (app.dev.waired.net), and the mode CI uses. The host mints a
+#     Google-signed service-account id_token exactly as before (gcloud
+#     impersonation of IT_IMPERSONATE_SA, audience auto-discovered from the
+#     CP), but now exchanges it ONCE for a reusable auth key at
+#     POST {cp}/test/auth-key, and the gcloud-less guest runs
+#     `waired init --auth-key <key>` with the daemon UP. Needs the minting
+#     identity to hold roles/iam.serviceAccountTokenCreator on that SA
+#     (CP-side oidc_grant_token_creators) — see
+#     docs/runbooks/oidc-grant-login.md.
+#
+#     This replaces the old `oidc` mode, which drove
+#     `waired init --google-sa-login` down the LOCAL enrolment path with the
+#     daemon stopped. That path is what waired-agent#175 is removing: it
+#     registers a device whose capabilities the control plane never learns.
+#     The key is a credential the DAEMON redeems, so the leg now exercises
+#     the same journey a real headless install takes.
 #
 #   bypass — fully automated, no human. Runs
 #     `waired init --bypass-mode --bypass-email "$IT_BYPASS_EMAIL"`
@@ -31,8 +39,11 @@
 #     open in a browser and sign in once per guest.
 #
 # All guests in one run share the same identity (IT_BYPASS_EMAIL for
-# bypass, IT_IMPERSONATE_SA for oidc) so they land in the same network
-# (required for the Tier-3 ping); device-name distinguishes them.
+# bypass, IT_IMPERSONATE_SA for authkey) so they land in the same network
+# (required for the Tier-3 ping); device-name distinguishes them. The
+# authkey mode mints ONE reusable key per run and hands it to every guest,
+# which is both the fleet case a real operator has and the cheapest way to
+# guarantee one network.
 #
 # IT_INFERENCE_ENABLED (default false): when true, init force-enables local
 # inference so the deploy phase pulls the bundled model and runs the
@@ -40,12 +51,76 @@
 
 IT_CONTROL_URL="${IT_CONTROL_URL:-https://app.dev.waired.net}"
 IT_ENROLL_MODE="${IT_ENROLL_MODE:-bypass}"
+# Run-scoped auth key, minted lazily by _it_mint_auth_key on first use.
+IT_AUTH_KEY="${IT_AUTH_KEY:-}"
 IT_BYPASS_EMAIL="${IT_BYPASS_EMAIL:-}"
 IT_IMPERSONATE_SA="${IT_IMPERSONATE_SA:-}"
 IT_OIDC_AUDIENCE="${IT_OIDC_AUDIENCE:-}"
 IT_INFERENCE_ENABLED="${IT_INFERENCE_ENABLED:-false}"
 
 _it_dev_name() { printf '%s' "${1#"$IT_PREFIX"-}"; }
+
+# _it_mint_auth_key sets IT_AUTH_KEY once per run.
+#
+# CI has no browser, so it cannot use the console's key issuer. It mints a
+# Google-signed SA id_token on the HOST (the guests have no gcloud) and
+# exchanges it at the CP's dev-only issuer, which verifies the token with
+# the same real Google verifier the browser callback uses and accepts only
+# allowlisted identities (waired#976, authkey_dev.go). The key is reusable
+# so every guest in the run lands in one network — the Tier-3 ping needs
+# them to see each other.
+_it_mint_auth_key() {
+  [ -n "$IT_AUTH_KEY" ] && return 0
+
+  [ -n "$IT_IMPERSONATE_SA" ] || it_die \
+    "IT_ENROLL_MODE=authkey needs IT_IMPERSONATE_SA (the #339 test SA, e.g. \
+waired-devtest-login@dev-waired.iam.gserviceaccount.com)."
+  command -v gcloud >/dev/null 2>&1 || it_die \
+    "authkey enrol mints the SA id_token on the host; gcloud not found on PATH."
+
+  # `|| true` on the three substitutions below: this function is reached
+  # through a BARE call (it_enroll_guest, from installtest-run.sh), so the
+  # driver's `set -euo pipefail` applies to every assignment in it. Without
+  # the guard an unreachable CP or a failed gcloud aborts the whole run at
+  # the assignment — before the `it_die` on the next line ever gets to say
+  # which step failed, and with no FAIL line and no summary (#215). The
+  # guard changes only the substitution's exit status, never the captured
+  # value, and each one is followed by a test on that value.
+  #
+  # Deliberately NOT guarded: the IT_AUTH_KEY extraction below is
+  # `printf | sed`, neither of which can fail — a no-match `sed -n .../p`
+  # exits 0. Adding one there would imply a hazard that does not exist.
+  local aud tok resp
+  aud="$IT_OIDC_AUDIENCE"
+  if [ -z "$aud" ]; then
+    aud="$(curl -fsS --max-time 15 "$IT_CONTROL_URL/v1/login/oidc-grant/audience" 2>/dev/null \
+      | sed -n 's/.*"audience":"\([^"]*\)".*/\1/p' || true)"
+  fi
+  [ -n "$aud" ] || it_die \
+    "could not resolve the OIDC audience from $IT_CONTROL_URL/v1/login/oidc-grant/audience \
+(is --enable-oidc-grant live on the CP?)"
+
+  it_log "minting SA id_token on host (sa=$IT_IMPERSONATE_SA)"
+  tok="$(gcloud auth print-identity-token \
+    --impersonate-service-account="$IT_IMPERSONATE_SA" \
+    --audiences="$aud" --include-email 2>/dev/null || true)"
+  [ -n "$tok" ] || it_die \
+    "failed to mint an SA id_token — is your identity in oidc_grant_token_creators \
+on $IT_IMPERSONATE_SA? (roles/iam.serviceAccountTokenCreator)"
+
+  it_log "exchanging the id_token for a reusable auth key ($IT_CONTROL_URL/test/auth-key)"
+  # --data @- keeps the token off the process's argv.
+  resp="$(printf '{"id_token":"%s","reusable":true,"description":"installtest %s"}' \
+    "$tok" "$IT_PREFIX" \
+    | curl -fsS --max-time 30 -X POST "$IT_CONTROL_URL/test/auth-key" \
+        -H 'Content-Type: application/json' --data @- 2>/dev/null || true)"
+  IT_AUTH_KEY="$(printf '%s' "$resp" | sed -n 's/.*"auth_key":"\([^"]*\)".*/\1/p')"
+  [ -n "$IT_AUTH_KEY" ] || it_die \
+    "could not mint an auth key at $IT_CONTROL_URL/test/auth-key \
+(is the CP new enough — waired#976 — and started with --enable-oidc-grant?)"
+  # Never print the key: these logs are archived as CI artifacts.
+  it_log "auth key minted (reusable, one per run)"
+}
 
 # it_enroll_guest <guest> — reproduce install.sh's real first-run enrol:
 # `waired init` running as root *before* the daemon owns the identity, so
@@ -55,14 +130,14 @@ _it_dev_name() { printf '%s' "${1#"$IT_PREFIX"-}"; }
 # tty for install.sh's own maybe_init, so we drive it explicitly:
 # stop daemon -> init -> (re)start daemon on the enrolled, chowned state.
 #
-# Only for the two modes that select local enrolment explicitly (bypass /
-# oidc). Since #175 `waired init` no longer infers that path from a failed
-# daemon probe: with a systemd unit registered and the daemon stopped it
-# fails with "the background service is installed but isn't responding"
-# instead of enrolling locally. The interactive mode carries no such flag,
-# so it keeps the daemon up and takes the daemon-driven journey — which is
-# what a real interactive install does anyway (install.sh brings the
-# service up before maybe_init).
+# Only for `bypass`, the one remaining mode that selects local enrolment
+# explicitly. Since #175 `waired init` no longer infers that path from a
+# failed daemon probe: with a systemd unit registered and the daemon
+# stopped it fails with "the background service is installed but isn't
+# responding" instead of enrolling locally. The authkey and interactive
+# modes carry no such flag, so they keep the daemon up and take the
+# daemon-driven journey — which is what a real install does anyway
+# (install.sh brings the service up before maybe_init).
 it_enroll_guest() {
   local guest name initlog inf_flag
   guest="$1"
@@ -76,11 +151,11 @@ it_enroll_guest() {
   mkdir -p "$IT_LOGDIR"
   initlog="$IT_LOGDIR/init-$name.log"
 
-  if [ "$IT_ENROLL_MODE" != interactive ]; then
+  if [ "$IT_ENROLL_MODE" = bypass ]; then
     it_log "stopping waired-agent so init takes the local root-enrol path (#335)"
     gx "$guest" systemctl stop waired-agent 2>/dev/null || true
   else
-    it_log "leaving waired-agent running: interactive enrol takes the daemon path (#175)"
+    it_log "leaving waired-agent running: $IT_ENROLL_MODE enrols through the daemon (#175)"
   fi
 
   # Build the `waired init` argv per mode; run it once through tee so the
@@ -88,31 +163,11 @@ it_enroll_guest() {
   # assert_inference while still streaming to the run's stdout.
   local -a initargs
   case "$IT_ENROLL_MODE" in
-    oidc)
-      [ -n "$IT_IMPERSONATE_SA" ] || it_die \
-        "IT_ENROLL_MODE=oidc needs IT_IMPERSONATE_SA (the #339 test SA, e.g. \
-waired-devtest-login@dev-waired.iam.gserviceaccount.com)."
-      command -v gcloud >/dev/null 2>&1 || it_die \
-        "oidc enrol mints the SA id_token on the host; gcloud not found on PATH."
-      local aud tok
-      aud="$IT_OIDC_AUDIENCE"
-      if [ -z "$aud" ]; then
-        aud="$(curl -fsS --max-time 15 "$IT_CONTROL_URL/v1/login/oidc-grant/audience" 2>/dev/null \
-          | sed -n 's/.*"audience":"\([^"]*\)".*/\1/p' || true)"
-      fi
-      [ -n "$aud" ] || it_die \
-        "could not resolve the OIDC audience from $IT_CONTROL_URL/v1/login/oidc-grant/audience \
-(is --enable-oidc-grant live on the CP?)"
-      it_log "minting SA id_token on host (sa=$IT_IMPERSONATE_SA)"
-      tok="$(gcloud auth print-identity-token \
-        --impersonate-service-account="$IT_IMPERSONATE_SA" \
-        --audiences="$aud" --include-email 2>/dev/null || true)"
-      [ -n "$tok" ] || it_die \
-        "failed to mint an SA id_token — is your identity in oidc_grant_token_creators \
-on $IT_IMPERSONATE_SA? (roles/iam.serviceAccountTokenCreator)"
-      it_log "enrolling $guest via OIDC grant (google-sa-login, host-minted token, cp=$IT_CONTROL_URL)"
+    authkey)
+      _it_mint_auth_key
+      it_log "enrolling $guest with an auth key through the daemon (cp=$IT_CONTROL_URL)"
       initargs=(waired init --control "$IT_CONTROL_URL"
-        --google-sa-login --oidc-id-token "$tok"
+        --auth-key "$IT_AUTH_KEY"
         --device-name "$name" --non-interactive "$inf_flag" "${pin_flag[@]}"
         --skip-integration --state-dir /var/lib/waired)
       ;;
@@ -134,15 +189,15 @@ or use IT_ENROLL_MODE=oidc (real app.dev.waired.net) / interactive."
         --device-name "$name" --non-interactive "$inf_flag" "${pin_flag[@]}"
         --skip-integration --state-dir /var/lib/waired)
       ;;
-    *) it_die "unknown IT_ENROLL_MODE=$IT_ENROLL_MODE (want oidc|bypass|interactive)" ;;
+    *) it_die "unknown IT_ENROLL_MODE=$IT_ENROLL_MODE (want authkey|bypass|interactive)" ;;
   esac
 
   if ! gx "$guest" env WAIRED_NO_EMOJI=1 "${initargs[@]}" 2>&1 | tee "$initlog"; then
     it_die "waired init ($IT_ENROLL_MODE) failed in $guest — see $initlog"
   fi
 
-  # Boot the daemon on the freshly enrolled + chowned state. bypass/oidc
-  # enrolled with it stopped and never auto-start it; interactive enrolled
+  # Boot the daemon on the freshly enrolled + chowned state. bypass enrolled
+  # with it stopped and never auto-starts it; authkey/interactive enrolled
   # THROUGH it, and the restart re-reads the state it just wrote — which is
   # the property the #335 assertions below are about either way.
   gx "$guest" systemctl restart waired-agent

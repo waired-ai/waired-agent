@@ -38,14 +38,21 @@ var daemonReachable = func(mgmtURL string) bool {
 // and the state dir, so the CLI does no deploy here; the per-user
 // coding-agent integration consent runs once login is active (it lands
 // in the user's home, which the daemon never touches).
-func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string, owner *stdinReader, inf daemonInitInference) error {
+// authKey is appended rather than slotted next to control/deviceName on
+// purpose: three adjacent string parameters invite a silent swap, and a
+// trailing argument leaves every existing call site's positions untouched.
+func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string, owner *stdinReader, inf daemonInitInference, authKey string) error {
 	reqBody, _ := json.Marshal(management.LoginStartRequest{
 		ControlURL: control,
 		DeviceName: deviceName,
+		AuthKey:    authKey,
 	})
 	out, err := httpPost(mgmtURL+"/waired/v1/login/start", reqBody)
 	if err != nil {
-		return fmt.Errorf("start login via daemon: %w", err)
+		// A control plane predating auth keys rejects the unknown field
+		// outright, which reads as "your key is malformed" unless we say
+		// otherwise.
+		return classifyAuthKeyError(fmt.Errorf("start login via daemon: %w", err), authKey != "")
 	}
 	var st management.LoginStatus
 	if err := json.Unmarshal(out, &st); err != nil {
@@ -55,7 +62,11 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 		return errors.New("daemon did not return a login session id")
 	}
 
-	fmt.Println(bold("Sign in"))
+	if authKey != "" {
+		fmt.Println(bold("Signing in with an auth key"))
+	} else {
+		fmt.Println(bold("Sign in"))
+	}
 
 	// One reader owns stdin for the rest of this run. Everything below
 	// that reads the keyboard — the sign-in gate, the browser-setup
