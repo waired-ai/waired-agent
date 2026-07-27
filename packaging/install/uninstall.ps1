@@ -494,7 +494,7 @@ function Remove-ClaudeManaged {
 # Application Control Policy (Smart App Control / WDAC / AppLocker). The
 # fallback is functionally equivalent (stop, sc.exe delete, DeleteEventSource)
 # and launches no blocked exe, so it works even under app-control.
-function Remove-Service {
+function Remove-WairedService {
     $agent = Join-Path $InstallDir 'waired-agent.exe'
 
     if (Test-Path -LiteralPath $agent) {
@@ -756,7 +756,7 @@ if (-not $DryRun -and -not (Test-IsAdmin)) {
 Section 'Removing Waired'
 Common-Log "Uninstalling Waired..."
 Remove-ClaudeManaged
-Remove-Service
+Remove-WairedService
 Stop-Tray
 Remove-StartMenu
 Remove-InstallDir
