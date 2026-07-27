@@ -308,6 +308,9 @@ func (p *agentInferenceProvider) startBenchmarkJob(gen int) <-chan struct{} {
 	}
 	done := make(chan struct{})
 	p.benchJobDone = done
+	// A fresh run starts with no progress of its own; the previous run's
+	// last sample must not be served as this one's first.
+	p.benchJobProgress = nil
 	go p.runBenchmarkJob(gen, done)
 	return done
 }
@@ -338,6 +341,10 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 			VRAMTotalMB:   firstGPU.VRAMTotalMB,
 			DriverVersion: firstGPU.DriverVersion,
 			Logger:        p.logger,
+			// Republish each sample so /benchmark/status — and through it
+			// the setup wizard — can show a real measurement in place of a
+			// two-minute spinner (waired-agent#199).
+			Progress: p.publishBenchProgress,
 		})
 	}
 	p.SetLastBench(bench)
@@ -355,6 +362,9 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	record := catalog.BenchmarkRecord{
 		Gen:           gen,
 		MeasuredTokps: bench.TokensPerSec,
+		Method:        bench.Method,
+		SpreadPct:     bench.SpreadPct,
+		Trials:        benchSampleCount,
 		Failed:        bench.Failed,
 		Error:         bench.Err,
 		MeasuredAt:    time.Now().UTC(),
@@ -374,8 +384,19 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 	p.benchJobOutcome = &outcome
 	p.benchJobResult = &record
 	p.benchJobDone = nil
+	// The run is over; its live progress would otherwise be reported
+	// forever beside a finished result.
+	p.benchJobProgress = nil
 	p.benchJobMu.Unlock()
 	close(done)
+}
+
+// publishBenchProgress records one in-flight measurement report for
+// /benchmark/status to serve (waired-agent#199).
+func (p *agentInferenceProvider) publishBenchProgress(bp BenchProgress) {
+	p.benchJobMu.Lock()
+	p.benchJobProgress = &bp
+	p.benchJobMu.Unlock()
 }
 
 // BenchmarkStatus reports the job's current state for
@@ -385,6 +406,7 @@ func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusRes
 	p.benchJobMu.Lock()
 	running := p.benchJobDone != nil
 	last := p.benchJobResult
+	live := p.benchJobProgress
 	p.benchJobMu.Unlock()
 
 	if last == nil {
@@ -406,9 +428,31 @@ func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusRes
 		resp.Gen = last.Gen
 		resp.MeasuredTokps = last.MeasuredTokps
 		resp.MeasuredAt = last.MeasuredAt.Format(time.RFC3339)
+		resp.Method = last.Method
+		resp.SpreadPct = last.SpreadPct
+		resp.Trials = last.Trials
 	}
 	if running {
 		resp.State = management.BenchmarkStateRunning
+		// A run in flight replaces the previous run's summary figures
+		// with its own progress. Leaving the old ones would present a
+		// finished measurement as if it belonged to the one now running,
+		// which is exactly the "stale result read as current" confusion
+		// the generation counter exists to prevent.
+		resp.MeasuredTokps = 0
+		resp.MeasuredAt = ""
+		resp.SpreadPct = 0
+		resp.Method = ""
+		resp.Trials = 0
+		if live != nil {
+			resp.Phase = live.Phase
+			resp.Trial = live.Trial
+			resp.Trials = live.Trials
+			resp.SampleTokps = live.SampleTokps
+			resp.MedianTokps = live.MedianTokps
+			resp.SpreadPct = live.SpreadPct
+			resp.Method = live.Method
+		}
 	}
 	return resp
 }

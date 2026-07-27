@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // Setup executor phases (waired#835 §9/§11). The executor is the still-
@@ -77,6 +79,23 @@ type SetupStateResponse struct {
 	DesiredEngine       string `json:"desired_engine,omitempty"`
 	DesiredModelID      string `json:"desired_model_id,omitempty"`
 	DesiredBenchmarkGen int    `json:"desired_benchmark_gen,omitempty"`
+	// Integrations is the coding-agent instruction (waired#935), for the
+	// elevated executor to apply — the daemon deliberately does not,
+	// because writing into a user's home (and, for Claude Code,
+	// root-owned managed settings) would make it a privilege bridge.
+	//
+	// A POINTER for its three states: nil means no instruction, an empty
+	// slice means asked with every toggle off, and a populated one names
+	// what to write. The middle state is what stops "nobody asked" from
+	// reading as "asked and satisfied".
+	//
+	// Named without the `Desired` prefix its siblings carry, on purpose:
+	// scripts/ci/protoconsumer matches field WRITES by name, so a local
+	// `DesiredIntegrations` here would look like a producer for
+	// signer.InferenceState.DesiredIntegrations — which the control plane
+	// injects and this repo must never write — and would silently retire
+	// the guard's cover for it.
+	Integrations *[]string `json:"desired_integrations,omitempty"`
 	// EngineInstalled / EngineReady describe the desired engine on this
 	// host; both false when no engine is desired.
 	EngineInstalled bool `json:"engine_installed"`
@@ -158,6 +177,19 @@ type SetupExecutorRequest struct {
 	CompletedBytes int64 `json:"completed_bytes,omitempty"`
 	TotalBytes     int64 `json:"total_bytes,omitempty"`
 	RateBps        int64 `json:"rate_bps,omitempty"`
+
+	// Driver claims the setup for a surface — one of the
+	// signer.SetupDriver* values (waired-agent#198). Only the terminal
+	// ever sets it: the browser's claim is implicit in the desired state
+	// it wrote, which the daemon can already see, while a terminal
+	// takeover leaves no trace anywhere else.
+	//
+	// It is bound to the LEASE, like the install claim: the terminal is
+	// only driving for as long as the process holding it is alive, and a
+	// latch that outlived its executor would leave the wizard reporting
+	// a terminal that is not there. Empty leaves the current claim
+	// untouched, so a heartbeat need not repeat it.
+	Driver string `json:"driver,omitempty"`
 }
 
 // SetupExecutorController is implemented by the agent's desired-state
@@ -217,6 +249,13 @@ func (s *Server) handleSetupExecutor(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CompletedBytes < 0 || req.TotalBytes < 0 || req.RateBps < 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "progress figures must be non-negative"})
+		return
+	}
+	// The control plane rejects an unknown driver outright, so an invalid
+	// one has to be caught here rather than poisoning every subsequent
+	// push from this device.
+	if !signer.IsValidSetupDriver(req.Driver) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid driver"})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.setupExecutor.NoteExecutor(r.Context(), req))

@@ -984,6 +984,11 @@ type agentInferenceProvider struct {
 	benchJobDone    chan struct{}
 	benchJobOutcome *management.BenchmarkOutcome // last completed outcome (in-memory)
 	benchJobResult  *catalog.BenchmarkRecord     // last completed record (mirrors the persisted one)
+	// benchJobProgress is the live per-measurement report of the run in
+	// flight (waired-agent#199), nil between runs. Guarded by benchJobMu
+	// like the rest of the job state: it is written from the detached
+	// measuring goroutine and read by every /benchmark/status poll.
+	benchJobProgress *BenchProgress
 	// benchRun overrides the measurement itself for tests (the real
 	// path shells out to the engine over HTTP with multi-minute
 	// budgets). nil = RunBootBenchmark. Same injection style as

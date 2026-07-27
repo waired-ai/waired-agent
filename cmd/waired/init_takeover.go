@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"io"
+	"strings"
+)
 
 // The copy of the takeover exchange. Kept together so the wording of the
 // question and of both answers can be read as one conversation.
@@ -35,6 +38,21 @@ const (
 	// repeating "keep it open" would be an instruction that no longer
 	// applies (waired#939 asks for the degraded wording, not the same one).
 	setupTerminalDoneLine = "Setup is continuing in your browser — nothing more is needed from this terminal."
+
+	// takeoverClosedLine withdraws the offer once the browser has written
+	// the operator's choices (waired-agent#198). Leaving it standing would
+	// be worse than silence: it names a key that no longer does what it
+	// says, at the exact moment this window becomes load-bearing.
+	takeoverClosedLine = "Setup has started in your browser — this window now runs the installation."
+
+	// takeoverAfterCommitLine is what Enter says AFTER that point. The
+	// offer is degraded, not disabled: a browser that crashes must still
+	// leave a way out, and an operator pressing a key the docs taught them
+	// deserves an answer rather than nothing happening. It costs an
+	// explicit Ctrl-C, which is the point — abandoning a running install
+	// should be deliberate.
+	takeoverAfterCommitLine = "Setup is running in your browser and this window is doing the installation. " +
+		"To abandon it, press Ctrl-C and run the setup command again."
 )
 
 // enterWatch is how a foreground wait notices the operator asking for
@@ -62,6 +80,11 @@ type enterWatch struct {
 	confirm bool         // ask before acting (the takeover)
 	asked   bool         // the confirmation question is on screen
 	fired   bool
+	// closed latches the point of no return (waired-agent#198). Past it
+	// the watch still CONSUMES keystrokes — leaving them queued would let
+	// a stray Enter answer a later question — but it can no longer fire,
+	// and answers with the escape-hatch line instead.
+	closed bool
 }
 
 // newTakeoverWatch arms the confirming watch over the init stdin owner.
@@ -93,6 +116,13 @@ func (w *enterWatch) Poll() (fired bool, note string) {
 	if !ok {
 		return false, ""
 	}
+	if w.closed {
+		// Past the point of no return. The keystroke is consumed either
+		// way; what changes is that it explains the situation instead of
+		// moving setup somewhere it can no longer go.
+		w.asked = false
+		return false, takeoverAfterCommitLine
+	}
 	if !w.confirm {
 		// waired#774: the operator asked for this wait, so a keystroke
 		// ends it. The caller narrates what happens next.
@@ -116,6 +146,30 @@ func (w *enterWatch) Poll() (fired bool, note string) {
 // Fired reports whether the watch has ended its wait — for the takeover,
 // that the operator confirmed. Safe on a nil watch.
 func (w *enterWatch) Fired() bool { return w != nil && w.fired }
+
+// Close withdraws the takeover offer at the point of no return: the
+// browser has written the operator's choices, and moving setup to the
+// terminal from here would strand a setup the control plane believes is
+// running elsewhere (waired-agent#198).
+//
+// It narrates the change once. A watch that already fired is left alone
+// — the operator took the terminal before the browser committed, and
+// telling them the browser now owns it would be false. Safe on a nil
+// watch, and on an inert one (nothing was ever offered, so there is
+// nothing to withdraw and nothing to say).
+func (w *enterWatch) Close(out io.Writer) {
+	if w == nil || w.in == nil || w.fired || w.closed {
+		return
+	}
+	w.closed = true
+	w.asked = false
+	if out != nil {
+		writePrompt(out, takeoverClosedLine)
+	}
+}
+
+// Closed reports whether the offer has been withdrawn.
+func (w *enterWatch) Closed() bool { return w != nil && w.closed }
 
 // takeoverAffirmative recognises the same yes vocabulary as ynPrompt, so
 // the confirmation behaves like every other question `waired init` asks.

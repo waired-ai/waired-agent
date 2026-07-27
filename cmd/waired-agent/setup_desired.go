@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,7 @@ const (
 	setupStepEngineInstall  = management.SetupStepEngineInstall
 	setupStepModelPull      = "model_pull"
 	setupStepBenchmark      = "benchmark"
+	setupStepIntegration    = management.SetupStepIntegration
 )
 
 // Executor lease timings (waired#835 §9/§11). Both sides of the range
@@ -73,6 +75,60 @@ type setupDesired struct {
 	engine       string
 	modelID      string
 	benchmarkGen int
+	// integrations is the coding-agent instruction (waired#935), flattened
+	// so this struct stays comparable — change detection here is a plain
+	// `!=`, and a slice field would not compile.
+	//
+	// Three states, and the difference between the last two is the whole
+	// point: absent = never asked, integrationsNone = asked and every
+	// toggle was off, a list = write these. Collapsing the middle case
+	// into "no instruction" is how the wizard would report success for a
+	// device it never configured — the waired#904 class.
+	integrations string
+}
+
+// integrationsNone is the flattened form of "asked, and nothing was
+// selected". Not a valid target id, so it cannot collide with one.
+const integrationsNone = "\x00none"
+
+// flattenIntegrations renders the desired-integrations instruction as a
+// comparable string: "" when there is no instruction at all, the
+// sentinel when the instruction is an empty set, and the sorted,
+// de-duplicated, validated ids joined otherwise.
+//
+// Sorting matters: the wire order is the control plane's, and a reorder
+// with the same contents is not a change the agent should react to.
+func flattenIntegrations(d *signer.DesiredIntegrations) string {
+	if d == nil {
+		return ""
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range d.Enabled {
+		// Unknown targets are ignored rather than rejected: the set can
+		// grow, and a newer control plane naming one this build has never
+		// heard of must not cost the whole instruction.
+		if !signer.IsValidIntegrationTarget(t) || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return integrationsNone
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+// integrationTargets is flattenIntegrations in reverse: the ids to
+// write, or nil for either "no instruction" or "asked, none selected"
+// (the caller separates those by comparing against integrationsNone).
+func integrationTargets(flat string) []string {
+	if flat == "" || flat == integrationsNone {
+		return nil
+	}
+	return strings.Split(flat, ",")
 }
 
 // setupExecutorStep is what the elevated CLI last reported about one
@@ -151,6 +207,12 @@ type setupReconciler struct {
 	// waired#935 adds the integration — a single field would let the
 	// install's phase erase the finished download's.
 	executorSteps map[string]setupExecutorStep
+	// executorDriver is the surface a live lease claims to be driving
+	// (waired-agent#198) — in practice only ever "terminal". Bound to the
+	// lease exactly like installClaimed below: a claim that outlived its
+	// executor would have the wizard reporting a terminal that is not
+	// running, with no way back.
+	executorDriver string
 	// installClaimed names the engine whose install a live lease claimed.
 	// Bound to the LEASE, never to desired_engine: a claim that outlived
 	// its executor would make the "re-run sudo waired init" recovery a
@@ -191,6 +253,7 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		engine:       st.DesiredEngine,
 		modelID:      st.DesiredModelID,
 		benchmarkGen: st.DesiredBenchmarkGen,
+		integrations: flattenIntegrations(st.DesiredIntegrations),
 	}
 	r.mu.Lock()
 	if d == (setupDesired{}) && !r.active {
@@ -300,6 +363,7 @@ func (r *setupReconciler) leaseLiveLocked() bool {
 	if r.now().Sub(r.executorSeen) > setupExecutorTTL {
 		r.executorAttached = false
 		r.installClaimed = ""
+		r.executorDriver = ""
 		return false
 	}
 	return true
@@ -337,6 +401,11 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 		r.executorEverSeen = true
 		r.executorElevated = req.Elevated
 		r.executorSeen = r.now()
+		// Empty leaves the claim alone: a heartbeat does not have to
+		// repeat it, and nothing else may quietly drop it.
+		if req.Driver != "" {
+			r.executorDriver = req.Driver
+		}
 		// Only an engine step moves the install claim. An integration
 		// report (waired#935) rides the same lease and must not hand the
 		// engine install to a second executor by reporting `done`.
@@ -366,6 +435,7 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 		// TTL wait, so Ctrl-C surfaces as executor_gone promptly.
 		r.executorAttached = false
 		r.installClaimed = ""
+		r.executorDriver = ""
 	}
 	r.mu.Unlock()
 	r.kickPush()
@@ -391,6 +461,13 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 		resp.ExecutorElevated = r.executorElevated
 	}
 	resp.InstallClaimed = r.installClaimed
+	if d.integrations != "" {
+		targets := integrationTargets(d.integrations)
+		if targets == nil {
+			targets = []string{} // asked, nothing selected
+		}
+		resp.Integrations = &targets
+	}
 	r.mu.Unlock()
 
 	if d.engine != "" {
@@ -418,15 +495,33 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	elevated := r.executorElevated
 	download, downloadSeen := r.executorSteps[setupStepEngineDownload]
 	install := r.executorSteps[setupStepEngineInstall]
+	integ := r.executorSteps[setupStepIntegration]
 	phase := install.phase
 	execErr := install.errText
+	// leaseLiveLocked above already dropped the driver if the lease died,
+	// so reading it here needs no second liveness check.
+	driver := r.executorDriver
+	if driver == "" && active {
+		// Nobody claimed it, and there is desired state: the browser
+		// wrote it, so the browser is driving. Derived rather than
+		// reported, because the wizard has no lease to report through
+		// and the write it made is already the evidence.
+		driver = signer.SetupDriverBrowser
+	}
 	r.mu.Unlock()
-	if !active {
+	// A terminal takeover produces no desired state and therefore no
+	// steps — but the wizard is on screen waiting for this device, and
+	// with nothing pushed it waits forever. A driver alone is worth a
+	// push: zero steps keeps setup_complete false and the "setup
+	// unfinished" banner away, and tells the wizard who has it
+	// (waired-agent#198).
+	if !active && driver == "" {
 		return nil
 	}
 
 	p := &signer.SetupProgress{
 		LastCheck: r.now().UTC().Format(time.RFC3339Nano),
+		Driver:    driver,
 	}
 	if d.engine != "" {
 		installed, ready := r.provider.setupEngineState(ctx, d.engine)
@@ -540,7 +635,13 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		switch {
 		case bs.Gen >= d.benchmarkGen && bs.State == management.BenchmarkStateDone:
 			step.Status = signer.SetupStatusDone
-			p.Benchmark = &signer.SetupBenchmark{Gen: bs.Gen, MeasuredTokps: bs.MeasuredTokps}
+			p.Benchmark = &signer.SetupBenchmark{
+				Gen:           bs.Gen,
+				MeasuredTokps: bs.MeasuredTokps,
+				Trials:        bs.Trials,
+				SpreadPct:     bs.SpreadPct,
+				Method:        bs.Method,
+			}
 		case bs.Gen >= d.benchmarkGen && bs.State == management.BenchmarkStateFailed:
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorInternal
@@ -548,12 +649,73 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			p.Benchmark = &signer.SetupBenchmark{Gen: bs.Gen}
 		case bs.State == management.BenchmarkStateRunning:
 			step.Status = signer.SetupStatusRunning
+			// Per-measurement progress (waired-agent#199). MeasuredTokps
+			// is deliberately absent while running: it is the FINAL
+			// answer, and shipped wizards render it as "Speed: about N".
+			// The converging figure goes in MedianTokps, and warm-up is
+			// Trials set with Trial still 0.
+			p.Benchmark = &signer.SetupBenchmark{
+				Gen:         d.benchmarkGen,
+				Trial:       bs.Trial,
+				Trials:      bs.Trials,
+				SampleTokps: bs.SampleTokps,
+				MedianTokps: bs.MedianTokps,
+				SpreadPct:   bs.SpreadPct,
+				Method:      bs.Method,
+			}
 		default:
 			step.Status = signer.SetupStatusPending
 		}
 		p.Steps = append(p.Steps, step)
 	}
+	if d.integrations != "" {
+		p.Steps = append(p.Steps, integrationStep(d.integrations, integ))
+	}
 	return p
+}
+
+// integrationStep projects the coding-agent instruction onto its §7 row
+// (waired#935).
+//
+// "Asked, and every toggle was off" reports `skipped` rather than no row
+// at all. §7 defines skipped as "already true on this computer", which is
+// exactly what an all-off answer means — and reporting it is what lets
+// the control plane tell an integration that was declined from one that
+// was never asked about. Until now nothing in the agent produced
+// `skipped`; this is its first producer.
+func integrationStep(flat string, st setupExecutorStep) signer.SetupStep {
+	step := signer.SetupStep{ID: setupStepIntegration}
+	if flat == integrationsNone {
+		step.Status = signer.SetupStatusSkipped
+		return step
+	}
+	switch st.phase {
+	case management.SetupExecutorPhaseDone:
+		step.Status = signer.SetupStatusDone
+	case management.SetupExecutorPhaseFailed:
+		step.Status = signer.SetupStatusFailed
+		step.ErrorCode = classifyIntegrationFailure(st.errText)
+		step.ErrorDetail = clampSetupDetail(st.errText)
+	case management.SetupExecutorPhaseInstalling:
+		step.Status = signer.SetupStatusRunning
+	default:
+		// No executor has spoken for this row yet. Pending rather than a
+		// failure: the engine and the model come first, and the terminal
+		// reaches the integration only after them.
+		step.Status = signer.SetupStatusPending
+	}
+	return step
+}
+
+// classifyIntegrationFailure maps an integration failure to the §7 enum.
+// Unlike an engine install these never fail for disk or network reasons
+// — they write small files into a home directory — so the honest default
+// is `internal`, and the detail carries the real text.
+func classifyIntegrationFailure(errText string) string {
+	if strings.Contains(strings.ToLower(errText), "permission denied") {
+		return signer.SetupErrorPermissionDenied
+	}
+	return signer.SetupErrorInternal
 }
 
 // engineDownloadStep projects the executor's engine-download report onto

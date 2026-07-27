@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 4df6a5e97536121f
+sourceHash: 0138abd67075a6a2
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -110,13 +110,18 @@ AI ソフトウェアが入っているパソコンでは、次のステップ�
 </Expected>
 
 ブラウザが主導している間、ターミナルは何も聞いてきません。開いたままにするよう
-促し、コーディングツールをあとから設定できる旨を表示します。
+促し、そしてセットアップ画面でどのコーディングツールをつなぐか選ばれていれば、
+それを書き込むのはこのウィンドウです（Web ページには無い管理者権限が要るため）。
 
 ```
 Keep this terminal window open until setup finishes — it does the parts the
 browser can't.
-You can set up your coding tools later from this terminal with `waired link all`.
+🔌 Setting up your coding tools (claude-code, opencode)…
 ```
+
+まだ選択を聞かない古いセットアップ画面では、代わりに自分で設定する方法が
+表示されます — *「You can set up your coding tools later from this terminal with
+`waired link all`.」*
 
 作業中はブラウザのセットアップ画面も同じことを表示します。ターミナル側の担当分が
 終わると *「Setup is continuing in your browser — nothing more is needed from
@@ -142,6 +147,26 @@ this terminal」* と表示され、そこから先は閉じてかまいませ�
 **y** と答えると切り替わります。もう一度 Enter を押した場合は *No* と答えたことに
 なるため、意図しないキー入力でセットアップがブラウザから移ってしまうことはありません。
 気が変わればあとからでも切り替えられます。
+</Expected>
+
+この申し出は、ブラウザで **Yes, set it up** を押した時点で閉じます。そこから先は
+このウィンドウがインストールを実行しており、ターミナルもそう表示します。
+
+<Expected>
+```
+Setup has started in your browser — this window now runs the installation.
+```
+
+Enter は応答しますが、もう切り替えは行いません。
+
+```
+Setup is running in your browser and this window is doing the installation.
+To abandon it, press Ctrl-C and run the setup command again.
+```
+
+中止すれば進行中の作業は失われます。だからこそキー 1 つではなく、明示的な
+Ctrl-C が必要です。おかしくなったのがブラウザのタブのほうなら、これは不要です —
+そのパソコンのページを開き直して **Resume setup** を選んでください。
 </Expected>
 
 そのあと何を聞かれるかは、どういう状態で動いているかによります。
