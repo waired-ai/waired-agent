@@ -151,25 +151,27 @@ assert_inference_macos() {
     bad "inference not enabled in persisted config"
   fi
 
-  # The end-of-init benchmark (offerBenchmark) proves the inference tail ran.
-  # Accept either a throughput number (tok/s|tokens/s|throughput) OR the
-  # "Local inference works" smoke line: on a host too slow/constrained to
-  # measure a stable rate the boot benchmark exhausts its time budget and
-  # reports MeasuredTokps=0 ("…interactive performance looks good"), yet a real
-  # generation still ran (the 200 that emits the smoke line). Both are printed
-  # ONLY after a benchmark ran — never the "run `waired runtimes benchmark`
-  # later" tip — so neither is the #564 false positive.
-  if [ -f "$INITLOG" ] && grep -qiE 'tok/s|tokens/s|throughput|Local inference works' "$INITLOG"; then
-    # `|| true`: the smoke-line match above may carry no numeric rate (host too
-    # slow → MeasuredTokps=0); a no-match / multi-match(SIGPIPE) grep must not
-    # trip a `set -e` driver even though this script itself runs set -uo only.
-    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$INITLOG" | head -1 || true)"
-    ok "benchmark ran during init${tps:+ (}${tps}${tps:+)}"
+  # The end-of-init benchmark (offerBenchmark) must report a THROUGHPUT NUMBER.
+  # Mirrors installtest-enroll.sh's assert (cross-OS parity): the bare "Local
+  # inference works" line used to be accepted for a host too slow to measure a
+  # rate, but a benchmark whose warm-up got an engine 500 printed exactly that
+  # line too — so the assert passed while the engine was dead
+  # (waired-agent#29). A current daemon 503s a failed run and the CLI then
+  # prints no success line at all.
+  #
+  # `|| true`: a no-match / multi-match(SIGPIPE) grep must not trip a `set -e`
+  # driver even though this script itself runs set -uo only.
+  tps=""
+  [ -f "$INITLOG" ] && tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$INITLOG" | head -1 || true)"
+  if [ -n "$tps" ]; then
+    ok "benchmark ran during init ($tps)"
   else
-    bad "no benchmark output captured in init transcript ($INITLOG)"
-    # Genuine miss (the benchmark never ran) — surface the daemon's own boot
-    # benchmark slog for the reason (endpoint 404, engine not ready, …).
+    bad "no benchmark THROUGHPUT figure in init transcript ($INITLOG)"
+    grep -iE 'benchmark|inference|engine' "$INITLOG" 2>/dev/null | tail -20 | sed 's/^/    init| /' >&2 || true
+    # Surface the daemon's own boot benchmark slog and the engine log — a
+    # failed benchmark is usually the engine's fault.
     sudo grep -iE 'boot benchmark|benchmark' /Library/Logs/waired-agent.err.log 2>/dev/null | tail -15 | sed 's/^/    agent.err| /' >&2 || true
+    sudo tail -n 60 "/Library/Application Support/waired/runtimes/ollama/logs/engine.log" 2>/dev/null | sed 's/^/    engine.log| /' >&2 || true
   fi
 }
 

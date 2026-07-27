@@ -52,6 +52,23 @@ func (s *Server) handleInferenceBenchmark(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if out.Failed {
+		// The benchmark RAN and failed (the warm-up got an engine 5xx via
+		// warmUpEngine → failBench, the measurement timed out, …). Returning
+		// 200 with measured_tokps=0 is how a dead engine came to print a
+		// green "Local inference works": both this handler and the CLI read
+		// a zero rate as "old daemon that doesn't report the figure".
+		//
+		// 503 rather than 500 because the 500 above means the provider itself
+		// errored; a benchmark that ran and failed is a retryable engine
+		// condition. The distinct error_code keeps them apart — and a non-200
+		// is what makes an OLD CLI safe too: it falls into "Benchmark
+		// unavailable (HTTP 503); skipping" and prints no success line.
+		writeJSON(w, http.StatusServiceUnavailable,
+			errorBody("benchmark_did_not_complete", out.Error))
+		return
+	}
+
 	resp := BenchmarkRunResponse{Ran: true, MeasuredTokps: out.MeasuredTokps}
 	// A nil / empty-ToModelID entry means "benched fine, nothing to
 	// suggest" in that direction.

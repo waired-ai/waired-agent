@@ -303,21 +303,23 @@ function Assert-Inference {
     if ($cfgEnabled) { ItOk "inference enabled in persisted agent config" }
     else { ItBad "inference not enabled in persisted config" }
 
-    # 4) benchmark ran in the init transcript (offerBenchmark). Accept a
-    #    throughput number (tok/s | tokens/s | throughput) OR the "Local
-    #    inference works" smoke line: a host too slow to measure a stable rate
-    #    exhausts the boot benchmark's budget and reports MeasuredTokps=0
-    #    ("…interactive performance looks good"), yet a real generation still
-    #    ran. Both print ONLY after a benchmark ran — never the "run `waired
-    #    runtimes benchmark` later" tip (the #564 false positive).
+    # 4) benchmark ran in the init transcript (offerBenchmark): require a
+    #    THROUGHPUT NUMBER (tok/s | tokens/s). Mirrors installtest-enroll.sh
+    #    and installtest-macos.sh (cross-OS parity). The bare "Local inference
+    #    works" line used to be accepted for a host too slow to measure a
+    #    rate — but a benchmark whose warm-up got an engine 500 printed that
+    #    same line, so the assert passed while the engine was dead
+    #    (waired-agent#29). A current daemon 503s a failed run and the CLI
+    #    then prints no success line at all.
     if (Test-Path -LiteralPath $InitLog) {
         $txt = Get-Content -LiteralPath $InitLog -Raw
-        if ($txt -match '(?i)tok/s|tokens/s|throughput|Local inference works') {
-            $m = [regex]::Match($txt, '(?i)[0-9]+(\.[0-9]+)?\s*(tok|tokens)/s')
-            $tps = if ($m.Success) { " ($($m.Value))" } else { '' }
-            ItOk "benchmark ran during init$tps"
+        $m = [regex]::Match($txt, '(?i)[0-9]+(\.[0-9]+)?\s*(tok|tokens)/s')
+        if ($m.Success) {
+            ItOk "benchmark ran during init ($($m.Value))"
         } else {
-            ItBad "no benchmark output captured in init transcript ($InitLog)"
+            ItBad "no benchmark THROUGHPUT figure in init transcript ($InitLog)"
+            ($txt -split "`n" | Select-String -Pattern 'benchmark|inference|engine' |
+                Select-Object -Last 20 | ForEach-Object { "    init| $_" }) | Write-Host
         }
     } else {
         ItBad "no init transcript captured ($InitLog)"

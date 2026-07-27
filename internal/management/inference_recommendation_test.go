@@ -48,6 +48,46 @@ func TestHandleInferenceBenchmark_Recommendation(t *testing.T) {
 	}
 }
 
+// TestHandleInferenceBenchmark_FailedRunIsNot200 pins that a benchmark which
+// RAN and did not complete is reported as a failure, not as a 200 carrying a
+// zero rate.
+//
+// PRODUCT CONTRACT (waired-agent#29). The zero-rate 200 was ambiguous with
+// "old daemon that doesn't report the figure", so a benchmark whose warm-up
+// got an engine 500 made `waired init` print a green "Local inference works"
+// — 13 seconds before the routing sentinel found the engine dead. A non-200
+// also makes an OLD CLI safe: it falls into "Benchmark unavailable" and
+// prints no success line.
+func TestHandleInferenceBenchmark_FailedRunIsNot200(t *testing.T) {
+	inf := &fakeInference{
+		benchOK: true, // ready — this is NOT the 425 not-ready case
+		benchOut: BenchmarkOutcome{
+			Failed: true,
+			Error:  "warm-up failed: HTTP 500: llama-server process has terminated",
+		},
+	}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/benchmark", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["error_code"] != "benchmark_did_not_complete" {
+		t.Errorf("error_code = %q, want benchmark_did_not_complete", body["error_code"])
+	}
+	if !strings.Contains(body["message"], "llama-server process has terminated") {
+		t.Errorf("message must carry the engine's reason, got %q", body["message"])
+	}
+}
+
 // TestHandleInferenceBenchmark_Upgrade pins the wire split: upgrades
 // ride the NEW "upgrade" key while "recommendation" stays empty, so an
 // old CLI/tray decoding only the legacy key sees "nothing to suggest"

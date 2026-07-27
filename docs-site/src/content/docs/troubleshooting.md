@@ -33,6 +33,7 @@ most problems on its own.
 - [It says I have reached the device limit](#it-says-i-have-reached-the-device-limit)
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
 - [It said my machine can only run a very small model](#it-said-my-machine-can-only-run-a-very-small-model)
+- [Setup said it could not complete a test generation](#setup-said-it-could-not-complete-a-test-generation)
 
 **Nothing answers**
 
@@ -171,6 +172,31 @@ useful output, which is why the default answer is **No**.
 The machine is still worth having in your network — it can use the AI running on
 your other computers. To install a model anyway, set up again with
 `--inference-enabled=true`.
+
+## Setup said it could not complete a test generation
+
+At the end of setup Waired asks the AI a short question to check the speed of
+this machine. This message means the question was asked and no answer came
+back — so setup could not measure anything, and it will not pretend the AI is
+working.
+
+Almost always the AI engine itself stopped. Check it:
+
+```sh
+waired status
+waired doctor
+```
+
+`waired status` shows the engine's own reason on the line for the engine. If it
+crashed, the detail is in its log — see [Going deeper (logs)](#going-deeper-logs).
+
+The rest of Waired is unaffected: your device stays signed in, and it can still
+use the AI running on your other computers. Once the engine is healthy, measure
+again with:
+
+```sh
+waired runtimes benchmark
+```
 
 ## No answer comes back
 
