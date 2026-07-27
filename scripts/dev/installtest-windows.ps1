@@ -869,10 +869,20 @@ try {
     #
     # ARGTEST returns before any download, SCM or UAC work, so these install
     # nothing. install.ps1 is copied under C:\Users\Public because the runner's
-    # workspace is not reliably readable by a second local user.
+    # workspace is not reliably readable by a second local user -- into a
+    # SPACED subdirectory, because the argv assert below is #177's and the
+    # token that has to survive quoting is the one with a space in it.
+    # ($PubWork itself stays unspaced: Invoke-AsStandardUser's schtasks /TR
+    # takes the wrapper path bare.) The ACL is granted explicitly rather than
+    # inherited: Invoke-AsStandardUser's own (OI)(CI) grant only reaches
+    # children created after it runs, and this directory exists before.
     ItStep "install.ps1 Test-Admin under real restricted tokens (#195)"
-    New-Item -ItemType Directory -Path $PubWork -Force | Out-Null
-    $pubInstall = Join-Path $PubWork 'install.ps1'
+    $argDir = Join-Path $PubWork 'arg test'
+    New-Item -ItemType Directory -Path $argDir -Force | Out-Null
+    # *S-1-5-32-545 = BUILTIN\Users by SID, so this does not depend on the
+    # runner image's display language.
+    & icacls $argDir /grant '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    $pubInstall = Join-Path $argDir 'install.ps1'
     Copy-Item -LiteralPath $installPs1 -Destination $pubInstall -Force
     $argtestLine = "-NoProfile -ExecutionPolicy Bypass -File `"$pubInstall`" -NonInteractive"
 
@@ -906,7 +916,7 @@ try {
             ItOk "the elevated argv built under $($ctx.Label) carries no configuration (#192)"
         } else { ItBad "configuration rides the elevated argv built under $($ctx.Label): [$ea]" }
     }
-    Remove-Item -LiteralPath $pubInstall -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $argDir -Recurse -Force -ErrorAction SilentlyContinue
 
     # --- ConvertTo-NativeArg, and the two copies of it ------------------------
     # install.ps1 and uninstall.ps1 are downloaded and run independently, so
