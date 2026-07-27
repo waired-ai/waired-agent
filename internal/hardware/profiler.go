@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // Profile is a snapshot of a machine's relevant hardware/runtime state
@@ -60,19 +62,37 @@ type Profile struct {
 	UsableVRAMMB int `json:"usable_vram_mb,omitempty"`
 }
 
+// HostFit projects the profile onto the shared host-fit facts
+// (proto/hostfit.Host). It is the agent's ONLY adapter into the fit
+// rules, and the counterpart of hostfit.FromHardwareSummary on the
+// control-plane side: both repositories decide "does this model fit
+// this host" with one implementation, reached through one adapter each.
+//
+// Before proto/hostfit existed, the control plane re-derived the rules
+// from the broadcast summary and drifted — it compared system RAM with
+// no VRAM term at all, so a 128 GB host with a 24 GB card was offered a
+// 62 GB model as its default while this package's own picker refused it
+// (waired-ai/waired#942, waired-ai/waired-agent#228).
+func (p Profile) HostFit() hostfit.Host {
+	h := hostfit.Host{
+		RAMTotalGB:    p.RAMTotalGB,
+		GPUCount:      len(p.GPUs),
+		UnifiedMemory: p.UnifiedMemory,
+		UsableVRAMMB:  p.UsableVRAMMB,
+	}
+	if len(p.GPUs) > 0 {
+		h.VRAM0MB = p.GPUs[0].VRAMTotalMB
+	}
+	return h
+}
+
 // EffectiveVRAMMB returns the VRAM budget the picker should compare
 // against Variant.MinVRAMMB. For UMA hosts that's UsableVRAMMB; for
 // discrete-GPU hosts (and any host where the UMA path hasn't filled
 // UsableVRAMMB) it falls back to the first GPU's VRAMTotalMB. Returns
 // 0 only on CPU-only hosts.
 func (p Profile) EffectiveVRAMMB() int {
-	if p.UnifiedMemory && p.UsableVRAMMB > 0 {
-		return p.UsableVRAMMB
-	}
-	if len(p.GPUs) > 0 {
-		return p.GPUs[0].VRAMTotalMB
-	}
-	return 0
+	return p.HostFit().EffectiveVRAMMB()
 }
 
 type CPUInfo struct {

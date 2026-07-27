@@ -1,6 +1,10 @@
 package router
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
+)
 
 // InstallQualityFloorTier is the coding-quality floor for install-time
 // bundled-model auto-selection (#517). At install / `waired init` the
@@ -14,7 +18,11 @@ import "errors"
 // 30 == qwen2.5-coder-3b-instruct, the smallest usable coding model we
 // ship. qwen3.5-2b (tier 27) and qwen3.5-0.8b (tier 12) fall below the
 // floor and do not qualify for auto-selection.
-const InstallQualityFloorTier = 30
+//
+// The value lives in proto/hostfit so the control plane's onboarding
+// wizard can recommend what this host would have picked for itself
+// rather than re-deriving the floor from prose (waired-ai/waired#941).
+const InstallQualityFloorTier = hostfit.InstallQualityFloorTier
 
 // SelectInstallModel chooses the bundled model to pre-pull at install
 // time: the highest-quality_tier variant that both fits the host (via

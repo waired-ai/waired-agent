@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // MinVLLMVRAMMB is the smallest VRAM size for which the auto-picker
@@ -14,7 +15,11 @@ import (
 // fall through to Ollama because vLLM's overhead (CUDA context,
 // engine workers, KV cache) eats most of a tiny GPU before any model
 // loads. 8 GB matches the smallest reasonable model card we ship.
-const MinVLLMVRAMMB = 8 * 1024
+//
+// The value lives in proto/hostfit because the control plane's
+// onboarding decides the same thing about the same hosts and used to
+// carry its own copy of the number.
+const MinVLLMVRAMMB = hostfit.MinVLLMVRAMMB
 
 // VLLMAutoSelectable gates whether the hardware auto-picker (and the CLI's
 // recommendEngine) may choose vLLM. It is true now that vLLM local serving is
