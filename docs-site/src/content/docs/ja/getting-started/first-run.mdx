@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: bc12ef35d3d227bc
+sourceHash: 8f9d6e7ca6a4af32
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -192,6 +192,23 @@ Starting the inference engine…
 Preparing to download qwen3-coder-30b-a3b-instruct…
 Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 ```
+
+<Aside type="note" title="ダウンロードが終わらないうちは">
+	ファイルは数十 GB あるため、回線が遅い環境では時間がかかります。
+	そのあとどうなるかは、どちらが主導しているかで変わります。
+
+	- **この経路**（`--no-browser` / `--non-interactive`、またはブラウザに
+		到達できない場合）では、10 分ほどでシェルに戻り、ダウンロードは
+		バックグラウンドで続く旨が表示されます。
+	- **ブラウザが主導している場合**は、ダウンロードが終わるまでターミナルが
+		進捗表示のまま残ります。ターミナル側とブラウザ側で「終わったかどうか」の
+		認識がずれないようにするためです。
+
+	いずれの場合も、ダウンロードを行っているのはバックグラウンドサービスであって
+	このコマンドではありません。<kbd>Ctrl</kbd>+<kbd>C</kbd> を押しても
+	**中止されません**。状況は `waired status` でいつでも確認できます。
+	最初から待たないようにするには `--no-wait-model` を使います。
+</Aside>
 
 <Expected>
 ```
