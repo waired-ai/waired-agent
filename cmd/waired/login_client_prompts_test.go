@@ -269,11 +269,70 @@ func TestRunInitViaDaemon_BrowserDrivenAsksNothingAndNeverPromptsToContinue(t *t
 	}
 	for _, want := range []string{
 		"You can set up your coding tools later",
-		"Setup is continuing in your browser.",
+		setupTerminalDoneLine,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("browser-driven run missing %q\n---\n%s", want, out)
 		}
+	}
+}
+
+// waired#939: the terminal must ask to be left open, and must ask BEFORE
+// it offers to take setup over — the offer used to be the only thing said
+// at the handoff, which reads as permission to walk away from the one
+// process that can install anything. It must also stop saying it once it
+// has nothing left to do, or the two surfaces contradict each other.
+func TestRunInitViaDaemon_BrowserDrivenSaysKeepThisTerminalOpen(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	owner := scriptStdin("") // the operator never touches the terminal
+	d := &promptsDaemon{
+		statusSeq:  []management.InferenceStatus{readyStatus()},
+		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{})
+
+	keep := strings.Index(out, setupKeepTerminalOpenLine)
+	offer := strings.Index(out, "press Enter to continue in the terminal instead")
+	if keep < 0 {
+		t.Fatalf("browser-driven run never said to keep the terminal open\n---\n%s", out)
+	}
+	if offer < 0 {
+		t.Fatalf("browser-driven run stopped offering the takeover\n---\n%s", out)
+	}
+	if keep > offer {
+		t.Errorf("the switch offer comes before the persistence line\n---\n%s", out)
+	}
+	// Said again before the model wait, which is the longest stretch of the
+	// flow and the one where the first warning has scrolled away.
+	if n := strings.Count(out, setupKeepTerminalOpenLine); n < 2 {
+		t.Errorf("persistence line printed %d times, want it repeated before the model wait\n---\n%s", n, out)
+	}
+	// And withdrawn at the end: this process is done, so the instruction is
+	// no longer true.
+	done := strings.Index(out, setupTerminalDoneLine)
+	if done < 0 || done < strings.LastIndex(out, setupKeepTerminalOpenLine) {
+		t.Errorf("the terminal never withdrew the keep-open instruction\n---\n%s", out)
+	}
+}
+
+// The regression bar for the paths §18-12 requires to stay unchanged: with
+// no browser driving, nothing about keeping a terminal open is printed —
+// there is no browser to keep it open for.
+func TestRunInitViaDaemon_NoBrowserSaysNothingAboutKeepingOpen(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	owner := scriptStdin("n\n")
+	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
+
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{noBrowser: true})
+
+	if strings.Contains(out, setupKeepTerminalOpenLine) {
+		t.Errorf("--no-browser run printed the browser-handoff warning\n---\n%s", out)
+	}
+	if strings.Contains(out, setupTerminalDoneLine) {
+		t.Errorf("--no-browser run printed the browser-handoff wrap-up\n---\n%s", out)
 	}
 }
 

@@ -9,7 +9,32 @@ const (
 		"Any model download keeps running either way."
 	takeoverQuestionLine = "  Take over setup in this terminal? [y/N] (default: No)"
 	takeoverAcceptedLine = "Taking over — setup continues in this terminal."
-	takeoverDeclinedLine = "Continuing in your browser."
+	takeoverDeclinedLine = "Continuing in your browser — keep this terminal window open until setup finishes."
+
+	// setupKeepTerminalOpenLine is the load-bearing line of the whole
+	// browser-driven flow (waired#939). Neither surface used to say it,
+	// and the terminal said the opposite — it offered to switch, at
+	// exactly the point where closing it costs the install.
+	//
+	// The asymmetry is the reason: this process is the elevated executor,
+	// the management API has no engine-install route, so a closed terminal
+	// leaves the browser with nothing it can do but send the operator back
+	// to the machine. The published walkthrough has carried this caution
+	// since it was written; the product never spoke it.
+	//
+	// It lives beside the takeover copy so the two are read as one
+	// conversation — and so the ordering rule survives: the persistence
+	// line comes BEFORE any mention of switching. When waired-agent#198
+	// removes the switch offer after the point of no return, it only has
+	// to drop a line, not rewrite this one.
+	setupKeepTerminalOpenLine = "Keep this terminal window open until setup finishes — " +
+		"it does the parts the browser can't."
+
+	// setupTerminalDoneLine replaces it once this process has finished its
+	// share: the executor's work is done and the lease is about to drop, so
+	// repeating "keep it open" would be an instruction that no longer
+	// applies (waired#939 asks for the degraded wording, not the same one).
+	setupTerminalDoneLine = "Setup is continuing in your browser — nothing more is needed from this terminal."
 )
 
 // enterWatch is how a foreground wait notices the operator asking for
@@ -32,21 +57,6 @@ const (
 //   - Enter-to-background (waired#774, newBackgroundWatch) — the escape
 //     of a download the operator explicitly accepted. There a bare Enter
 //     genuinely means "stop watching", so the first line acts.
-//
-// Enter is still the key the offer names and the docs teach, but it no
-// longer switches mode on its own. Pressing it says what taking over
-// does and asks a [y/N] question that only an affirmative answer
-// completes (#184). That matters because the sign-in step above can
-// leave an Enter in the buffer — pressed to open a browser, arriving
-// here — and a silent, unannounced mode switch at that exact moment is
-// the failure #184 describes. A second bare Enter answers the question
-// with its default, No, so the muscle-memory double-tap is safe too.
-//
-// It is driven by polling rather than by a reader of its own: Poll takes
-// whatever the stdin owner already has, so nothing is ever left parked
-// in a read that a later prompt would have to reconcile (#185) — which
-// is also what retires the spurious "Press Enter to continue…" the
-// browser-driven path used to print on its way out (#132).
 type enterWatch struct {
 	in      *stdinReader // nil = inert (no terminal, or an older daemon)
 	confirm bool         // ask before acting (the takeover)

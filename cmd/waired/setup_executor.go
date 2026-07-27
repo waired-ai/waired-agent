@@ -255,6 +255,12 @@ func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonIn
 		return benchPollDeadline, false, newTakeoverWatch(nil)
 	}
 	writePrompt(out, "Setup is continuing in your browser…")
+	// waired#939: the persistence warning comes BEFORE the offer to switch.
+	// This process is the elevated executor and the browser has no route to
+	// replace it, so "don't close this" outranks "you may leave" — and the
+	// order is what stops the offer reading as permission to walk away.
+	// Printed whether or not there is a keyboard: it is true either way.
+	writePrompt(out, setupKeepTerminalOpenLine)
 	if in != nil {
 		writePrompt(out, dim("(press Enter to continue in the terminal instead)"))
 	}
