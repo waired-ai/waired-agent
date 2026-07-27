@@ -204,6 +204,20 @@ assert_mgmt_socket() {
   # and nothing naming which check was in flight (#215). The exit code is not
   # the assert here — the stdout below is, deliberately, because
   # runPhaseTransition returns 0 on the offline fallback path.
+  #
+  # Where this guard is NOT needed, and deliberately absent: errexit is
+  # suppressed inside a function called from a CONDITION, so the assignments
+  # in _it_wait_inference_ready (called as `if _it_wait_inference_ready ...`)
+  # and in assert_inference (called as `[ "$INFER" = 1 ] && assert_inference`)
+  # cannot abort anything. Adding `|| true` there would imply a hazard that
+  # does not exist. Check the CALL SITE before adding one — and note that
+  # moving such a function to a bare call re-arms the hazard for every bare
+  # assignment inside it.
+  #
+  # `|| true` never changes the captured VALUE, only the substitution's exit
+  # status, and every one of these is followed by a test on the value — so no
+  # assert loses information; the ones above gain a reported failure where
+  # they used to get a silent exit.
   out="$(gx "$guest" waired pause 2>&1 || true)"
   if printf '%s' "$out" | grep -q 'not running'; then
     bad "waired pause fell back to the offline desired-phase path (socket unreachable): $out"
@@ -317,7 +331,7 @@ _it_wait_inference_ready() {
     fi
     # Bail early on a terminal state instead of burning the whole budget.
     # (no_engine/initializing are transient during engine cold start.)
-    state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"' || true)"
+    state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
     # engine_failed is terminal too (waired-agent#29): the engine crashed and
     # automatic recovery either is mid-flight (which shows as "starting") or has
     # given up. Either way, polling for "ready" will not fix it.
@@ -363,7 +377,7 @@ assert_inference() {
   # from the mgmt API and poll until ready, never a bare `ollama list` (:11434,
   # always empty here, the original false negative).
   if out="$(_it_wait_inference_ready "$guest")"; then
-    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oiE '(qwen|coder)[^",]*' | head -1 || true)"
+    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oiE '(qwen|coder)[^",]*' | head -1)"
     ok "bundled model ready in waired store :9475 (${model:-ready}; via mgmt API)"
   else
     bad "bundled model not ready via mgmt API (deploy/pull failed?)"

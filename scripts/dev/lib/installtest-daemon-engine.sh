@@ -64,7 +64,7 @@ _it_daemon_mint_token() {
   local aud="$IT_OIDC_AUDIENCE"
   if [ -z "$aud" ]; then
     aud="$(curl -fsS --max-time 15 "$IT_CONTROL_URL/v1/login/oidc-grant/audience" 2>/dev/null \
-      | sed -n 's/.*"audience":"\([^"]*\)".*/\1/p' || true)"
+      | sed -n 's/.*"audience":"\([^"]*\)".*/\1/p')"
   fi
   [ -n "$aud" ] || return 1
   gcloud auth print-identity-token \
