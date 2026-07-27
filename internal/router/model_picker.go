@@ -192,17 +192,23 @@ func RankModels(in PickInput) ([]Pick, error) {
 	//     would auto-select a model that spills most of its layers
 	//     whenever that model carried a higher quality tier.
 	//
-	//     It applies ONLY where the estimate is an upper bound, which is
-	//     the spilled-discrete case: there the card's own reads are
-	//     priced at zero, a margin no unknown hardware can eat. The
-	//     unified-memory figure rests on a bandwidth constant set at the
-	//     FLOOR of its population, so it is a lower bound, and excluding
-	//     on one would withhold from an M4 Max what an M4 base runs. The
-	//     CPU-only figure rests on a constant meant as an upper bound but
-	//     with no such margin behind it, so a host whose memory beats the
-	//     constant would be excluded on the constant alone. Both get an
-	//     annotation rather than a smaller catalog until measured
-	//     per-device bandwidth lands (#251).
+	//     It applies ONLY where the estimate is an upper bound. Two
+	//     cases qualify. The spilled-discrete one: there the GPUs' own
+	//     reads are priced at zero, a margin no unknown hardware can
+	//     eat — and since #264 that share is computed against the POOL,
+	//     because pricing two cards as one manufactures the very spill
+	//     this pass then acts on. And, since #251, the unified-memory
+	//     one when the host published its part's peak: a peak is an
+	//     upper bound on THAT machine.
+	//
+	//     A unified host with no published peak falls back to a
+	//     population constant that is neither bound — #270 checked, and
+	//     the M1/M2/M3 bases sit below it, so it is not the FLOOR this
+	//     comment used to claim. The CPU-only figure rests on a constant
+	//     meant as an upper bound but with no margin behind it, so a
+	//     host whose memory beats it would be excluded on the constant
+	//     alone. Both get an annotation rather than a smaller catalog
+	//     until per-device bandwidth lands (#252, #266).
 	//  3. Everything that fits, so neither floor can newly turn a
 	//     working host into an under-spec one.
 	narrow := func(keep func(candidate) bool) {
@@ -309,9 +315,16 @@ func PickModel(in PickInput) (Pick, error) {
 				fmt.Sprintf("RAM fit: variant min=%d GB ≤ host total=%d GB",
 					winner.Variant.MinRAMGB, in.Hardware.RAMTotalGB))
 			if len(in.Hardware.GPUs) > 0 && winner.Variant.EstimatedWeightGB > 0 {
+				// "GPU0" was accurate while the budget was one device.
+				// Since #264 it is the pool where there is one, so the
+				// label has to name what was actually compared.
+				where := fmt.Sprintf("GPU0=%d MB", in.Hardware.OllamaVRAMBudgetMB())
+				if n := ollamaPooledGPUs(in.Hardware); n > 1 {
+					where = fmt.Sprintf("%d GPUs=%d MB pooled", n, in.Hardware.OllamaVRAMBudgetMB())
+				}
 				reasons = append(reasons,
-					fmt.Sprintf("VRAM fit: ~%.1f GB weights + KV/overhead resident within GPU0=%d MB",
-						winner.Variant.EstimatedWeightGB, in.Hardware.EffectiveVRAMMB()))
+					fmt.Sprintf("VRAM fit: ~%.1f GB weights + KV/overhead resident within %s",
+						winner.Variant.EstimatedWeightGB, where))
 			}
 		}
 	}
@@ -400,14 +413,27 @@ func FirstPullableVariant(m catalog.Manifest, engine, engineVersion string) (cat
 // is the agent's binding of them: which budget vLLM is judged against,
 // and the mapping from a Verdict to the bool the picker wants.
 //
-// vLLM consults the host's engine-aware VRAM budget (VLLMVRAMBudgetMB,
-// #678: a single GPU keeps Profile.EffectiveVRAMMB semantics, while
-// identical multi-NVIDIA hosts aggregate across the tensor-parallel
-// set). That aggregation stays here rather than in the shared package:
-// the control plane sees a broadcast summary and cannot reproduce it,
-// and it is a serving-topology decision rather than a fit rule. Ollama
-// is never aggregated — it does not shard — so it is judged on the
-// shared Host directly.
+// BOTH engines aggregate across devices, differently, and only one of
+// the two aggregations lives here.
+//
+// vLLM shards each tensor, so it can only aggregate across an IDENTICAL
+// set, and the size of that set is a serving-topology decision the
+// control plane cannot reproduce from a broadcast summary. Hence
+// VLLMVRAMBudgetMB in this package, passed to hostfit as a budget
+// argument (#678: a single GPU keeps Profile.EffectiveVRAMMB
+// semantics).
+//
+// Ollama does NOT shard — it splits by layer, and pools a whole
+// ml.ByLibrary group only when a model will not fit one card (#264).
+// That is a property of the devices themselves, derivable from the
+// device list the summary has always carried, so it is a fit rule and
+// lives in the shared package: hostfit computes it and both adapters
+// get the same answer. This function passes the whole Host and the
+// budget is chosen inside.
+//
+// The older claim here — "ollama is never aggregated, it does not
+// shard" — conflated sharding with pooling and was wrong about the
+// engine.
 func hostFits(engine string, v catalog.Variant, hw hardware.Profile) bool {
 	switch engine {
 	case catalog.RuntimeVLLM:
@@ -442,6 +468,29 @@ func OllamaVRAMOverheadMB(hw hardware.Profile, weightGB float64) int {
 // bound (deficitLabelFor) depend on that separation.
 func ollamaFitsVRAM(v catalog.Variant, hw hardware.Profile) bool {
 	return hostfit.OllamaResident(v, hw.HostFit()).Fits
+}
+
+// ollamaPooledGPUs is how many devices the ollama budget is spread
+// across: >1 only when hostfit actually pooled them, 1 otherwise.
+//
+// For display only — the budget itself comes from
+// Profile.OllamaVRAMBudgetMB, and this exists so a reason string can say
+// "across N GPUs" the way the vLLM arm already does rather than naming a
+// single card's VRAM after judging the host on several (#264). It reads
+// the pool back off the Host instead of re-deriving which devices
+// qualified, so it cannot disagree with the figure it annotates.
+func ollamaPooledGPUs(hw hardware.Profile) int {
+	h := hw.HostFit()
+	if h.OllamaVRAMBudgetMB() <= h.EffectiveVRAMMB() {
+		return 1
+	}
+	var n int
+	for _, g := range hw.GPUs {
+		if g.Vendor == "nvidia" && g.VRAMTotalMB > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // hasCapabilityCI is a case-insensitive variant of hasCapability used

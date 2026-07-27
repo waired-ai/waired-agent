@@ -132,6 +132,73 @@ func TestRankModels_MultiGPU_VLLMBudgetAggregates(t *testing.T) {
 	}
 }
 
+// TestRankModels_MultiGPU_OllamaKeepsWhatOneCardRefuses is #264's
+// end-to-end claim: the wizard stops refusing a model the machine runs.
+//
+// Deliberately built on a local catalog rather than fixtureCatalog,
+// whose ollama variants are all small enough to be resident on one card
+// — the bug needs a model that spills on one and pools onto two. The
+// small variant is load-bearing too: RankModels' narrow() falls through
+// when nothing passes, so an exclusion only bites while something else
+// still qualifies.
+func TestRankModels_MultiGPU_OllamaKeepsWhatOneCardRefuses(t *testing.T) {
+	// 33 GB of weights: past one 24 GB card, comfortably inside the
+	// 2×24467−1024 = 47910 MiB pool. Sized so the machine genuinely
+	// serves the coding floor on two cards — the point is that the
+	// judgment was wrong, not that the gate is being loosened.
+	big := catalog.Manifest{
+		ModelID: "big-moe-ollama", ContextLength: 262144,
+		Capabilities: []string{"chat", "tool_use"},
+		Variants: []catalog.Variant{{
+			VariantID: "q4-gguf", Format: "ollama-tag",
+			Quantization: "Q4_K_M", RuntimeSupport: []string{"ollama"},
+			EstimatedWeightGB: 33.0, MinRAMGB: 64, QualityTier: 88,
+			ParamCount: 70_000_000_000, ActiveParams: 10_000_000_000,
+			KVBytesPerTokenFP16: 24576,
+			Source:              catalog.VariantSource{Type: "ollama", Tag: "big:70b-a10b-q4_K_M"},
+		}},
+	}
+	small := catalog.Manifest{
+		ModelID: "small-ollama", ContextLength: 262144,
+		Capabilities: []string{"chat", "tool_use"},
+		Variants: []catalog.Variant{{
+			VariantID: "q4-gguf", Format: "ollama-tag",
+			Quantization: "Q4_K_M", RuntimeSupport: []string{"ollama"},
+			EstimatedWeightGB: 5.0, MinRAMGB: 12, QualityTier: 42,
+			ParamCount: 8_000_000_000, KVBytesPerTokenFP16: 8192,
+			Source: catalog.VariantSource{Type: "ollama", Tag: "small:8b-q4_K_M"},
+		}},
+	}
+	cat := []catalog.Manifest{big, small}
+
+	gpu := hardware.GPU{Vendor: "nvidia", Model: "RTX PRO 4000 Blackwell", VRAMTotalMB: 24467}
+	one := hardware.Profile{RAMTotalGB: 256, GPUs: []hardware.GPU{gpu}}
+	two := hardware.Profile{RAMTotalGB: 256, GPUs: []hardware.GPU{gpu, gpu}}
+
+	kept := func(hw hardware.Profile) bool {
+		t.Helper()
+		ranked, err := RankModels(PickInput{Catalog: cat, Hardware: hw, Engine: "ollama"})
+		if err != nil {
+			t.Fatalf("RankModels: %v", err)
+		}
+		for _, p := range ranked {
+			if p.Manifest.ModelID == "big-moe-ollama" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if kept(one) {
+		t.Fatal("one 24 GB card no longer refuses the 81 GB variant, so this test " +
+			"proves nothing — re-pick the weights against the current constants")
+	}
+	if !kept(two) {
+		t.Error("two 24 GB cards still refuse the 81 GB variant: the picker is " +
+			"judging the host as if the second card were not there (#264)")
+	}
+}
+
 // #678: the winner trace reports the aggregated budget on TP>1 hosts
 // instead of the misleading single-GPU figure.
 func TestPickModel_MultiGPU_VLLMReasonReportsTPBudget(t *testing.T) {

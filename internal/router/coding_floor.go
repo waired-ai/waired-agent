@@ -141,7 +141,7 @@ func EffectiveContextFloor(m catalog.Manifest) int {
 // GPU budget, scaled by the measured calibration factor. 0 = no spill
 // expected; results are clamped to [0, 1].
 func OllamaExpectedSpillFraction(weightGB float64, kvBytesPerTokFP16 int, kvFactor float64, ctxTokens int, hw hardware.Profile) float64 {
-	eff := hw.EffectiveVRAMMB()
+	eff := hw.OllamaVRAMBudgetMB()
 	if weightGB <= 0 || kvBytesPerTokFP16 <= 0 || kvFactor <= 0 || ctxTokens <= 0 || eff <= 0 {
 		return 0
 	}
@@ -168,6 +168,12 @@ func OllamaExpectedSpillFraction(weightGB float64, kvBytesPerTokFP16 int, kvFact
 // Unknown sizing inputs and CPU-only hosts pass permissively: the #621
 // serve tuning and its post-load verify probe are the backstop, same
 // philosophy as ollamaFitsVRAM.
+//
+// The budget is Profile.OllamaVRAMBudgetMB, not EffectiveVRAMMB. This
+// gate runs BEFORE the #229 speed pass in RankModels and does not fall
+// through while any smaller model still passes, so on a multi-GPU host
+// it, not the estimate, is what actually drops a large model — pricing
+// two cards as one here would have made #264's fix invisible.
 func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.Profile) (bool, float64) {
 	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 {
 		return true, 0
@@ -175,7 +181,7 @@ func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware
 	if len(hw.GPUs) == 0 && !hw.UnifiedMemory {
 		return true, 0 // CPU-only: spilling to RAM is the design.
 	}
-	eff := hw.EffectiveVRAMMB()
+	eff := hw.OllamaVRAMBudgetMB()
 	if eff <= 0 {
 		return true, 0
 	}
@@ -232,7 +238,7 @@ func VLLMServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.P
 // unknown or even a zero-token window would exceed the bound (weights
 // alone spill too far).
 func OllamaMaxContextAtSpill(weightGB float64, kvBytesPerTokFP16 int, kvFactor, maxExpected float64, hw hardware.Profile) int {
-	eff := hw.EffectiveVRAMMB()
+	eff := hw.OllamaVRAMBudgetMB()
 	if weightGB <= 0 || kvBytesPerTokFP16 <= 0 || kvFactor <= 0 || eff <= 0 || maxExpected <= 0 || maxExpected >= ollamaSpillCalibration {
 		return 0
 	}

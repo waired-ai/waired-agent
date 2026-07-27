@@ -360,8 +360,13 @@ func describeProfile(hw hardware.Profile) string {
 	}
 	if n := len(hw.GPUs); n > 1 {
 		// #678: make additional devices visible; the MB figure stays
-		// per-device (engine budgets differ — vllm aggregates, ollama
-		// doesn't).
+		// per-device, because both engines aggregate but neither does
+		// so as a plain sum — vLLM only across an identical
+		// tensor-parallel set, ollama only across one ml.ByLibrary
+		// group and net of a per-card reservation (#264). "×2 (24 GB
+		// each)" is true for every engine; one summed number would be
+		// true for none. Reasons that need the engine's own budget say
+		// so explicitly (see router.deficitLabelFor).
 		return fmt.Sprintf("%s ×%d (%d MB VRAM each)", label, n, hw.EffectiveVRAMMB())
 	}
 	return fmt.Sprintf("%s (%d MB VRAM)", label, hw.EffectiveVRAMMB())

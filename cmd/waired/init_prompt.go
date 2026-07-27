@@ -213,7 +213,10 @@ func describeHardware(p hardware.Profile) string {
 		label = g.Vendor
 	}
 	if n := len(p.GPUs); n > 1 && !p.UnifiedMemory {
-		// #678: surface additional devices; the figure stays per-device.
+		// #678: surface additional devices; the figure stays per-device
+		// — both engines aggregate, but on different rules and neither
+		// as a plain sum (#264), so a summed number here would be wrong
+		// for whichever engine the host ends up running.
 		label = fmt.Sprintf("%s ×%d", label, n)
 	}
 	vram := p.EffectiveVRAMMB()
