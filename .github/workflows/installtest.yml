@@ -177,15 +177,27 @@ jobs:
       # host would bootout the harness's real daemon. Its own t.Cleanup
       # uninstalls, leaving a clean host for the install test below.
       #
-      # `sudo env` rather than plain sudo: sudo strips the environment, so the
-      # gate variable has to be re-applied inside, and `go` needs an absolute
-      # path because secure_path drops the runner's PATH.
+      # COMPILE as the runner user, RUN as root. `sudo go test` would invoke
+      # the toolchain as root, which writes root-owned entries into the shared
+      # GOCACHE / GOMODCACHE under ~/go — and every later unprivileged build in
+      # this job then dies with "mkdir ...: permission denied" (observed on the
+      # first run of this step). Only the compiled binary needs the privilege.
+      #
+      # `sudo env` because sudo strips the environment, so the gate variable
+      # has to be re-applied inside it.
       - name: real launchd round trip (macos, #176)
         if: matrix.os == 'macos'
         run: |
           set -euo pipefail
-          sudo env WAIRED_LAUNCHD_REALHOST=1 "$(command -v go)" test \
-            ./internal/platform/service/ -run TestRealLaunchdRoundTrip -count=1 -v
+          go test -c -o "$RUNNER_TEMP/service.test" ./internal/platform/service/
+          sudo env WAIRED_LAUNCHD_REALHOST=1 "$RUNNER_TEMP/service.test" \
+            -test.run TestRealLaunchdRoundTrip -test.v 2>&1 | tee "$RUNNER_TEMP/launchd.log"
+          # A compiled test binary reports "no tests to run" -> PASS when the
+          # -test.run pattern matches nothing, and the test SKIPs when its two
+          # gates are not both set. Either would make this step vacuously
+          # green, which is the failure mode #215 is about — so require the
+          # test to have actually passed.
+          grep -q '^--- PASS: TestRealLaunchdRoundTrip' "$RUNNER_TEMP/launchd.log"
 
       # macOS: build the darwin tarball, point install.sh's darwin path at it
       # (file://), run it, assert binaries + the system LaunchDaemon plist +
