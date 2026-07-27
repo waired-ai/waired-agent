@@ -1,0 +1,41 @@
+# Fails a PR whose base is not `main`, unless the body declares it as
+# deliberately stacked. Rationale and the one-line opt-out:
+# scripts/ci/base-ref-guard.sh.
+#
+# No `paths:` filter on purpose — a paths-gated job produces no check run
+# when the filter misses, so it could never be a required check. There is
+# nothing to filter on here anyway: the base ref is a property of every
+# PR, not of its diff. Same reasoning as docs-guard.yml.
+#
+# GitHub-hosted runner, like dco/gitleaks/docs-guard: a read-only static
+# check with no secrets, safe to run on fork PRs ahead of maintainer
+# approval of the heavier CI. No fetch-depth: the guard reads event
+# metadata, never history.
+name: base-ref-guard
+
+on:
+  pull_request:
+    # `edited` matters: the opt-out lives in the PR body, so editing the
+    # body has to re-run this check without needing a push.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: base-ref-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  base-is-main:
+    name: PR base is main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: base is main
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash scripts/ci/base-ref-guard.sh
