@@ -1,0 +1,250 @@
+package integration
+
+// This file is deliberately UNTAGGED (the rest of the package is
+// `//go:build integration`). The sentinel's two failure-prone decisions —
+// how long a leg may retry, and whether a non-2xx can ever become a 2xx —
+// are pure functions here, so ci.yml's always-on unit lane compiles and
+// tests them on every PR. waired-agent#29 was a silent arithmetic bug in
+// exactly this logic that no lane could see: 4 legs x 3min of retries
+// exceeded go test's 10min default, so the run was killed before the
+// harness could name the HTTP status it had been given.
+
+import (
+	"fmt"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/waired-ai/waired-agent/internal/proxy/intercept"
+)
+
+// headerFallback is the response header the Claude intercept sets on the real
+// ResponseWriter BEFORE replaying upstream, so it survives even the 502 that
+// an unreachable upstream produces. It is the ONLY wire evidence of the local
+// error the proxy discarded, and taking it from the intercept package (rather
+// than re-typing the literal) means a rename cannot silently downgrade the
+// classifier to "retry" and re-hide waired-agent#29.
+const headerFallback = intercept.HeaderFallback
+
+const (
+	// maxLegDriveBudget caps how long ONE leg retries a non-2xx. Two minutes
+	// covers a cold 0.5B load plus first prefill on the slowest lane we run;
+	// a terminal engine error now ends in seconds instead of consuming it.
+	maxLegDriveBudget = 2 * time.Minute
+	// legOverhead is the non-drive time a leg still needs after its last
+	// attempt: Configure, the ring cursor, the served-locally sentinel, and
+	// the failure-path ring read.
+	legOverhead = 45 * time.Second
+	// runReserve stays unspent so the test binary reports its OWN failure
+	// instead of being killed by -timeout. That kill is the regression this
+	// file exists to make unrepresentable.
+	runReserve = 60 * time.Second
+	// driveAttemptTimeout bounds ONE request. Without it a single attempt
+	// could burn the HTTP client's whole timeout and overshoot the leg budget.
+	driveAttemptTimeout = 45 * time.Second
+	// sentinelTimeout is how long the event ring is polled for the
+	// served-locally proof after a 2xx drive.
+	sentinelTimeout = 30 * time.Second
+	// driveRetryDelay is the pause between drive attempts.
+	driveRetryDelay = 2 * time.Second
+	// progressEvery is how often a slow attempt reports that it is still
+	// waiting, so a hang is visible WHILE it hangs.
+	progressEvery = 15 * time.Second
+)
+
+// legDriveBudget divides the time the test binary has LEFT evenly among the
+// legs still to run and subtracts each leg's non-drive overhead. Deriving the
+// budget from -timeout makes "the legs cannot outlive the test binary"
+// structural rather than arithmetic a reviewer has to redo.
+//
+// until <= 0 means no deadline (go test -timeout 0); the cap is then the only
+// bound. A budget of 0 is a legal answer — the caller still makes ONE attempt,
+// so a failure always carries a real status.
+func legDriveBudget(until time.Duration, remainingLegs int) time.Duration {
+	if remainingLegs <= 0 {
+		return 0
+	}
+	if until <= 0 {
+		return maxLegDriveBudget
+	}
+	per := (until-runReserve)/time.Duration(remainingLegs) - legOverhead
+	return max(min(per, maxLegDriveBudget), 0)
+}
+
+// driveVerdict is what to do about one drive response.
+type driveVerdict int
+
+const (
+	// driveOK is a 2xx: the leg served.
+	driveOK driveVerdict = iota
+	// driveRetry means "not ready yet" — keep polling until the budget runs out.
+	driveRetry
+	// driveTerminal means the response can never become a 2xx; fail now, with
+	// the reason, while the engine's own logs still describe why.
+	driveTerminal
+)
+
+// engineDeadMarkers are substrings of an engine error body that prove the
+// MODEL RUNNER is gone rather than the request being bad. The parent
+// `ollama serve` keeps answering /api/tags with 200 after its llama-server
+// child dies, and the gateway forwards the child's error verbatim, so this
+// body is the only signal that separates "engine broken" from "bad request".
+var engineDeadMarkers = []string{
+	"process has terminated",
+	"model runner has unexpectedly stopped",
+	"signal: segmentation fault",
+	"signal: killed",
+	"signal: aborted",
+	"core dumped",
+}
+
+// engineDeadReason returns the marker proving the model runner died, or "".
+func engineDeadReason(body []byte) string {
+	s := string(body)
+	for _, m := range engineDeadMarkers {
+		if strings.Contains(s, m) {
+			return m
+		}
+	}
+	return ""
+}
+
+// retryableStatus reports whether a bare status code is plausibly transient.
+// Used both for a direct response and for the local status recovered from the
+// fallback header (where no local body survives).
+func retryableStatus(status int) bool {
+	switch status {
+	case http.StatusTooEarly, // 425 — engine/model not ready yet
+		http.StatusServiceUnavailable, // 503 — model_not_ready, runtime_unhealthy, …
+		http.StatusTooManyRequests,    // 429
+		http.StatusRequestTimeout:     // 408
+		return true
+	}
+	return false
+}
+
+// localStatusFromFallback parses the intercept's `X-Waired-Fallback` value.
+// A `local_status_<N>` reason yields the HTTP status the local gateway
+// returned before the proxy discarded it; a `local_<name>` reason yields the
+// staged X-Waired-Local-Error marker. Anything else (including the
+// mirror-image `local; reason=anthropic_unreachable`) says nothing about a
+// local failure.
+func localStatusFromFallback(v string) (status int, named string, ok bool) {
+	_, reason, found := strings.Cut(v, "reason=")
+	if !found {
+		return 0, "", false
+	}
+	reason = strings.TrimSpace(reason)
+	rest, isLocal := strings.CutPrefix(reason, "local_")
+	if !isLocal || rest == "" {
+		return 0, "", false
+	}
+	if n, isStatus := strings.CutPrefix(rest, "status_"); isStatus {
+		if code, err := strconv.Atoi(n); err == nil {
+			return code, "", true
+		}
+	}
+	return 0, rest, true
+}
+
+// classifyDrive decides whether a non-2xx drive response can still become a
+// 2xx. CONSERVATIVE BY CONSTRUCTION: only signals that PROVE a dead or
+// mis-wired engine are terminal, and everything unrecognised keeps retrying,
+// so a genuinely cold model load still gets its full budget — the retry
+// loop's original purpose.
+//
+// blackholed reports whether the run points api.anthropic.com at 0.0.0.0
+// (the CI fail-open guard), which is what turns "cannot reach upstream" from
+// a network blip into proof that the request already escaped local routing.
+func classifyDrive(status int, hdr http.Header, body []byte, blackholed bool) (driveVerdict, string) {
+	if status >= 200 && status < 300 {
+		return driveOK, ""
+	}
+
+	// The engine said its own runner is gone. True on any status, and the
+	// most useful reason available, so it wins.
+	if m := engineDeadReason(body); m != "" {
+		return driveTerminal, fmt.Sprintf("the local model runner is dead (engine said %q); "+
+			"no amount of retrying brings it back", m)
+	}
+
+	// Un-mask the Claude proxy's fail-open: the local error it discarded is
+	// recoverable from the header it leaves on the response.
+	if fb := hdr.Get(headerFallback); fb != "" {
+		if local, named, ok := localStatusFromFallback(fb); ok {
+			switch {
+			case local != 0 && retryableStatus(local):
+				return driveRetry, ""
+			case local != 0:
+				return driveTerminal, fmt.Sprintf(
+					"the Claude proxy discarded a local HTTP %d and replayed upstream (%s)", local, fb)
+			default:
+				// A named local error (no_model, peer_ttfb_timeout, …).
+				// Retry: the budget is the bound, and these can clear.
+				return driveRetry, "local_" + named
+			}
+		}
+	}
+
+	if hdr.Get("Retry-After") != "" || retryableStatus(status) {
+		return driveRetry, ""
+	}
+
+	switch status {
+	case http.StatusBadGateway: // 502
+		if blackholed && strings.Contains(string(body), "waired_upstream_unreachable") {
+			return driveTerminal, "the request left local routing and CI blackholes api.anthropic.com — " +
+				"the sentinel's core assertion (served locally, no fail-open) has already failed"
+		}
+		// e.g. engine_request_failed while the engine socket comes up.
+		return driveRetry, ""
+	case http.StatusInternalServerError: // 500
+		return driveTerminal, "the gateway returned 500 (a code/config fault or a verbatim engine 5xx); neither self-heals"
+	case http.StatusNotFound: // 404 model_not_found
+		return driveTerminal, "the model the leg requested does not resolve (model_not_found) — a catalog/mapping regression"
+	case http.StatusUnauthorized, http.StatusForbidden: // 401 / 403
+		return driveTerminal, fmt.Sprintf("HTTP %d — an auth/wiring regression, and the tell that the request reached real Anthropic", status)
+	case http.StatusBadRequest: // 400 capability_not_met
+		return driveTerminal, "HTTP 400 — the request is rejected on its merits (capability_not_met), not on timing"
+	case http.StatusUnprocessableEntity: // 422 hardware_insufficient
+		return driveTerminal, "HTTP 422 — this host cannot serve the model (hardware_insufficient)"
+	}
+	return driveRetry, ""
+}
+
+// includedLeg applies the WAIRED_INTEGRATION_LEGS filter. A nil filter means
+// "every leg".
+func includedLeg(name string, only map[string]bool) bool {
+	return only == nil || only[name]
+}
+
+// progressf streams one line to stderr NOW. t.Logf buffers until the subtest
+// returns, which is useless for watching a hang: waired-agent#29 presented as
+// three minutes of total silence per leg followed by a kill.
+func progressf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "    [sentinel] "+format+"\n", args...)
+}
+
+// watchLeg reports every progressEvery that a phase is still running, so a
+// stalled attempt is visible while it stalls. The returned func stops it.
+func watchLeg(leg, phase string) (stop func()) {
+	done := make(chan struct{})
+	started := time.Now()
+	go func() {
+		t := time.NewTicker(progressEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				progressf("%s: %s still waiting after %s", leg, phase, time.Since(started).Round(time.Second))
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
+}

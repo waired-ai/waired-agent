@@ -559,7 +559,7 @@ if [ "$TIER" -ge 2 ]; then
            WAIRED_MGMT_URL="http://127.0.0.1:9476" \
            WAIRED_TINY_ALIAS="waired/tiny" \
            WAIRED_STATE_DIR="$STATE_DIR" \
-           go test -tags integration -count=1 -v ./internal/e2e/integration/... ); then
+           go test -tags integration -count=1 -v -timeout 15m ./internal/e2e/integration/... ); then
         ok "coding-agent routing sentinel: every leg served locally (no fail-open)"
       else
         bad "coding-agent routing sentinel failed (see go test output above)"

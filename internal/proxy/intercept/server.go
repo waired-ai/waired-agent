@@ -73,6 +73,13 @@ var maxFallbackBodyBytes int64 = 8 << 20 // 8 MiB
 // it, but it makes the reroute observable to curl / logs / proxies.
 const fallbackHeader = "X-Waired-Fallback"
 
+// HeaderFallback exports fallbackHeader for out-of-package consumers. The
+// routing sentinel (internal/e2e/integration) reads it to recover the local
+// status this proxy discarded before replaying upstream: on a fail-open the
+// staged local error never reaches the client, so this header is the only
+// evidence left on the wire (waired-agent#29).
+const HeaderFallback = fallbackHeader
+
 // Traffic classes the per-class routing policy is keyed by (#645). String
 // values mirror state.ClaudeClass* — literals duplicated to keep this
 // fail-open package stdlib-only; keep both sides in sync.

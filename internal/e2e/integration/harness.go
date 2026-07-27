@@ -62,6 +62,12 @@ type Env struct {
 	// Only, when non-empty, restricts the run to a comma-separated leg name set
 	// (WAIRED_INTEGRATION_LEGS), e.g. "claude,opencode".
 	Only map[string]bool
+	// AnthropicBlackholed reports whether the run points api.anthropic.com at
+	// 0.0.0.0 (the CI fail-open guard, WAIRED_ANTHROPIC_BLACKHOLED=1). With the
+	// guard armed, "cannot reach the upstream API" is not a network blip: it
+	// proves the request already escaped local routing, so the sentinel's core
+	// assertion has failed and retrying is pointless.
+	AnthropicBlackholed bool
 }
 
 func env(name, def string) string {
@@ -78,6 +84,10 @@ func LoadEnv() Env {
 		ClaudeURL:    strings.TrimRight(env("WAIRED_CLAUDE_GATEWAY_URL", "http://127.0.0.1:9472"), "/"),
 		DataPlaneURL: strings.TrimRight(env("WAIRED_OPENCODE_GATEWAY_URL", "http://127.0.0.1:9479"), "/"),
 		TinyAlias:    env("WAIRED_TINY_ALIAS", "waired/tiny"),
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("WAIRED_ANTHROPIC_BLACKHOLED"))) {
+	case "1", "true", "yes":
+		e.AnthropicBlackholed = true
 	}
 	if only := strings.TrimSpace(os.Getenv("WAIRED_INTEGRATION_LEGS")); only != "" {
 		e.Only = map[string]bool{}
@@ -103,22 +113,37 @@ type Leg struct {
 	// none — the intercept proxy is the surface).
 	Configure func(ctx context.Context, e Env) (func(), error)
 	// Drive issues ONE inference request at the gateway surface the tool's
-	// config targets, returning the HTTP status + body for diagnostics.
-	Drive func(ctx context.Context, e Env) (status int, body []byte, err error)
+	// config targets, returning the response for diagnostics.
+	Drive func(ctx context.Context, e Env) (driveResponse, error)
 }
 
 // --- HTTP drives ---
 
-var driveClient = &http.Client{Timeout: 2 * time.Minute}
+// driveResponse is one drive attempt's response. It carries the HEADERS the
+// old (status, body) pair threw away: on a Claude-leg fail-open the local
+// error is discarded before the upstream replay, and X-Waired-Fallback is the
+// only evidence of it left on the wire. Dropping that header is exactly why a
+// dead model runner read as "waired proxy could not reach the upstream API"
+// for a week (waired-agent#29).
+type driveResponse struct {
+	Status int
+	Header http.Header
+	Body   []byte
+}
+
+// driveClient bounds a request as a backstop only; the real per-attempt bound
+// is the context in the drive loop (driveAttemptTimeout), which is what keeps
+// one slow attempt from overrunning the whole leg budget.
+var driveClient = &http.Client{Timeout: driveAttemptTimeout + 15*time.Second}
 
 // driveAnthropic POSTs an Anthropic-shaped request at baseURL/v1/messages with
 // a deliberately-bogus auth token: a regression that fails open to real
 // Anthropic gets a 401 (and records no local event), so the sentinel catches it.
-func driveAnthropic(ctx context.Context, baseURL, model string) (int, []byte, error) {
+func driveAnthropic(ctx context.Context, baseURL, model string) (driveResponse, error) {
 	body := fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"Reply with one word: hi"}]}`, model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/messages", strings.NewReader(body))
 	if err != nil {
-		return 0, nil, err
+		return driveResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -129,24 +154,24 @@ func driveAnthropic(ctx context.Context, baseURL, model string) (int, []byte, er
 // driveOpenAI POSTs an OpenAI-compatible chat request at
 // baseURL/v1/chat/completions — the exact wire request the OpenCode / OpenClaw
 // waired provider plugins make against the no-token data-plane gateway.
-func driveOpenAI(ctx context.Context, baseURL, model string) (int, []byte, error) {
+func driveOpenAI(ctx context.Context, baseURL, model string) (driveResponse, error) {
 	body := fmt.Sprintf(`{"model":%q,"stream":false,"messages":[{"role":"user","content":"Reply with one word: hi"}]}`, model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/v1/chat/completions", strings.NewReader(body))
 	if err != nil {
-		return 0, nil, err
+		return driveResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return do(req)
 }
 
-func do(req *http.Request) (int, []byte, error) {
+func do(req *http.Request) (driveResponse, error) {
 	resp, err := driveClient.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return driveResponse{}, err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, b, nil
+	return driveResponse{Status: resp.StatusCode, Header: resp.Header, Body: b}, nil
 }
 
 // --- sentinel ---
@@ -193,6 +218,65 @@ func awaitLocalRequest(ctx context.Context, e Env, since uint64, wantKind string
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// ringSummary renders the LAST KindRequest event of wantKind since the cursor,
+// whatever its decision/status, or "" if there is none.
+//
+// The drive-failure path needs it because on the Claude legs the real local
+// status survives ONLY here: the gateway records the engine's status
+// (rr.fail(500, "upstream_error")) while the intercept discards the staged
+// error body before replaying upstream, so the client sees an opaque 502.
+func ringSummary(ctx context.Context, e Env, since uint64, wantKind string) string {
+	resp, err := observabilityclient.GetEvents(ctx, e.MgmtURL, since, []observability.Kind{observability.KindRequest}, 0)
+	if err != nil {
+		return fmt.Sprintf("(event ring unreadable: %v)", err)
+	}
+	var last *observability.RequestEvent
+	for i := range resp.Events {
+		if r := resp.Events[i].Request; r != nil && r.Kind == wantKind {
+			last = r
+		}
+	}
+	if last == nil {
+		return ""
+	}
+	return fmt.Sprintf("kind=%s decision=%s status=%d error_reason=%q model=%s latency=%dms",
+		last.Kind, last.Decision, last.Status, last.ErrorReason, last.Model, last.LatencyMs)
+}
+
+// driveFailureDetail assembles everything known about a failed drive into one
+// block: the wire response, the local status recovered from the fail-open
+// header, the event-ring record, and where the engine's own reason lives.
+// waired-agent#29 took a week to diagnose because each of these existed but
+// none of them was ever printed together with the others.
+func driveFailureDetail(e Env, since uint64, wantKind string, last driveResponse) string {
+	// A fresh context on purpose: the caller's leg context is frequently the
+	// thing that just expired, and the ring read is the most valuable line in
+	// the block precisely on that path.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var b strings.Builder
+	fmt.Fprintf(&b, "        last response: HTTP %d\n", last.Status)
+	if fb := last.Header.Get(headerFallback); fb != "" {
+		fmt.Fprintf(&b, "        %s: %s\n", headerFallback, fb)
+		if local, named, ok := localStatusFromFallback(fb); ok {
+			switch {
+			case local != 0:
+				fmt.Fprintf(&b, "        local status:  %d (discarded by internal/proxy/intercept before the upstream replay)\n", local)
+			default:
+				fmt.Fprintf(&b, "        local error:   %s (discarded before the upstream replay)\n", named)
+			}
+		}
+	}
+	if s := ringSummary(ctx, e, since, wantKind); s != "" {
+		fmt.Fprintf(&b, "        event ring:    %s\n", s)
+	}
+	fmt.Fprintf(&b, "        body:          %s\n", truncate(last.Body))
+	b.WriteString("        next:          the engine's own reason is NOT on the wire. See engine.log\n")
+	b.WriteString("                       (<state-dir>/runtimes/ollama/logs/engine.log) — the CI job\n")
+	b.WriteString("                       uploads it as the routing-sentinel-diag artifact.\n")
+	return b.String()
 }
 
 // daemonReachable reports whether the management API answers (the "enrolled

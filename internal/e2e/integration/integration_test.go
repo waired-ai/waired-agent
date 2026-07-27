@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -30,14 +31,29 @@ func TestIntegration(t *testing.T) {
 		t.Logf("warn: models/pull %s: %v (continuing; the model may already be ready)", e.TinyAlias, err)
 	}
 
+	selected := make([]Leg, 0, 4)
 	for _, leg := range legs() {
+		if includedLeg(leg.Name, e.Only) {
+			selected = append(selected, leg)
+		}
+	}
+	deadline, hasDeadline := t.Deadline()
+
+	for i, leg := range selected {
 		leg := leg
-		if e.Only != nil && !e.Only[leg.Name] {
-			continue
+		// Derive each leg's retry budget from the time the TEST BINARY has
+		// left, so the legs structurally cannot outlive -timeout. Before
+		// waired-agent#29 this was a flat 3 minutes: 4 legs x 3min exceeded
+		// go test's 10min default, the last leg was killed mid-request, and
+		// the t.Fatalf naming the real HTTP status never printed.
+		budget := maxLegDriveBudget
+		if hasDeadline {
+			budget = legDriveBudget(time.Until(deadline), len(selected)-i)
 		}
 		t.Run(leg.Name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), budget+legOverhead+15*time.Second)
 			defer cancel()
+			progressf("%s: drive budget %s, attempt timeout %s", leg.Name, budget, driveAttemptTimeout)
 
 			if leg.Configure != nil {
 				teardown, err := leg.Configure(ctx, e)
@@ -56,31 +72,52 @@ func TestIntegration(t *testing.T) {
 
 			// Drive with retries: the first request triggers a cold model load,
 			// so a transient 425/503 (not-ready) is expected before the engine
-			// warms. Stop on the first 2xx.
-			var lastStatus int
-			var lastBody []byte
-			driveDeadline := time.Now().Add(3 * time.Minute)
-			for {
-				status, body, derr := leg.Drive(ctx, e)
-				if derr != nil {
-					t.Fatalf("drive: %v", derr)
+			// warms. Stop on the first 2xx — or the moment the response proves
+			// no amount of waiting can produce one (classifyDrive), so the
+			// failure lands while the engine's logs still explain it.
+			var last driveResponse
+			started := time.Now()
+			driveDeadline := started.Add(budget)
+			for attempt := 1; ; attempt++ {
+				attemptTimeout := driveAttemptTimeout
+				if remaining := time.Until(driveDeadline); remaining > 0 && remaining < attemptTimeout {
+					attemptTimeout = remaining
 				}
-				lastStatus, lastBody = status, body
-				if status >= 200 && status < 300 {
+				attemptCtx, acancel := context.WithTimeout(ctx, attemptTimeout)
+				stopWatch := watchLeg(leg.Name, fmt.Sprintf("drive attempt %d", attempt))
+				resp, derr := leg.Drive(attemptCtx, e)
+				stopWatch()
+				acancel()
+				if derr != nil {
+					t.Fatalf("drive attempt %d after %s: %v", attempt, time.Since(started).Round(time.Second), derr)
+				}
+				last = resp
+				verdict, why := classifyDrive(resp.Status, resp.Header, resp.Body, e.AnthropicBlackholed)
+				progressf("%s attempt %d: HTTP %d after %s", leg.Name, attempt, resp.Status,
+					time.Since(started).Round(time.Millisecond))
+				if verdict == driveOK {
 					break
 				}
-				if time.Now().After(driveDeadline) {
-					t.Fatalf("drive never returned 2xx (last HTTP %d): %s", lastStatus, truncate(lastBody))
+				if verdict == driveTerminal {
+					t.Fatalf("drive gave up after %d attempt(s) in %s: %s\n%s",
+						attempt, time.Since(started).Round(time.Second), why,
+						driveFailureDetail(e, cursor, leg.ExpectKind, last))
 				}
-				time.Sleep(2 * time.Second)
+				if time.Now().After(driveDeadline) {
+					t.Fatalf("drive never returned 2xx within %s (%d attempts, last HTTP %d):\n%s",
+						budget, attempt, last.Status,
+						driveFailureDetail(e, cursor, leg.ExpectKind, last))
+				}
+				time.Sleep(driveRetryDelay)
 			}
 
 			// Sentinel: the event ring must show a LOCALLY-served 2xx request of
 			// the expected kind since the cursor. Its existence excludes a
 			// fail-open passthrough (which the recorder never sees).
-			ev, err := awaitLocalRequest(ctx, e, cursor, leg.ExpectKind, 30*time.Second)
+			ev, err := awaitLocalRequest(ctx, e, cursor, leg.ExpectKind, sentinelTimeout)
 			if err != nil {
-				t.Fatalf("served-locally sentinel: %v\n(drive returned HTTP %d: %s)", err, lastStatus, truncate(lastBody))
+				t.Fatalf("served-locally sentinel: %v\n%s", err,
+					driveFailureDetail(e, cursor, leg.ExpectKind, last))
 			}
 			t.Logf("served locally: kind=%s model=%s decision=%s status=%d latency=%dms",
 				ev.Kind, ev.Model, ev.Decision, ev.Status, ev.LatencyMs)

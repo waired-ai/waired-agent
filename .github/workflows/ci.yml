@@ -71,6 +71,12 @@ jobs:
           go vet -tags prod ./...
           go test -tags prod ./internal/buildflag/...
 
+      # The routing harness is behind `-tags integration`, so nothing in the
+      # always-on lanes compiles it: a typo there used to surface only when the
+      # paths-gated sentinel ran, 15 minutes in (waired-agent#29).
+      - name: integration-tag build smoke (routing harness)
+        run: go vet -tags integration ./internal/e2e/integration/...
+
       - name: proto dependency allowlist
         run: |
           set -euo pipefail
