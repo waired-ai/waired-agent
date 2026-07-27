@@ -1,5 +1,7 @@
 // Command protoguard enforces the additive-only rule for the published
-// proto module (docs/decisions.md 20260719). Published proto/v* versions
+// proto module
+// (docs/decisions/20260719/0000-concurrent-proto-development.md).
+// Published proto/v* versions
 // are immutable and consumers depend on unset fields staying byte-absent
 // from canonical JSON, so relative to the last published tag:
 //

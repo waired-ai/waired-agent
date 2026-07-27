@@ -36,7 +36,8 @@ gitleaks secret scan (config: `.gitleaks.toml`).
 * Protocol changes are public-first: change `proto/` here → tag
   `proto/vX.Y.Z` → bump in the CP repo. Never break verify/sign
   compatibility within a published version.
-* **Concurrent proto development** (decisions.md 20260719; CI-enforced):
+* **Concurrent proto development** (CI-enforced;
+  `docs/decisions/20260719/0000-concurrent-proto-development.md`):
   proto changes ship as their **own small PR**, only after the tracking
   issue carries a settled wire-contract field table. **Additive-only**
   vs the latest tag (`proto-guard`): no removals / retypes / retags /
@@ -247,24 +248,42 @@ Decision records are optional. Use them for meaningful technical,
 architectural, or operational decisions made during work. The same
 public-repo caution as Knowledge Notes applies.
 
-* Location: `docs/decisions.md` (append new entries at the top)
-* Update previous decisions when they change.
+* Location: `docs/decisions/YYYYMMDD/HHMM-<slug>.md` — **one file per
+  decision**, same layout as Knowledge Notes. Filename: `HHMM` is 24h
+  zero-padded (`0000` when the decision carries no time); `<slug>` is
+  kebab-case ASCII (≤ ~44 chars, no Japanese); the body stays Japanese.
+* Never collect decisions into a single append-only file again — a shared
+  reverse-chronological log puts every concurrent PR on the same insertion
+  point, and no line-based merge can keep the entries apart.
+* Update previous decisions when they change; edit the file in place.
+* Cross-references use the file path directly. When one decision replaces
+  another, link both ways (`superseded_by` on the old, `supersedes` on the
+  new) — `scripts/ci/decision-log-guard.py` fails lint on a one-way or
+  dangling link, and on front-matter that disagrees with `## Status`.
 * Prefer concise entries that explain context, decision, and
   consequences.
 
 ```markdown
-## Title (YYYYMMDD HH:MM)
+---
+status: accepted          # accepted | superseded | rejected | deferred
+superseded_by:            # optional, repo-relative paths
+  - docs/decisions/YYYYMMDD/HHMM-<slug>.md
+supersedes:               # optional, the mirror of the above
+  - docs/decisions/YYYYMMDD/HHMM-<slug>.md
+---
 
-### Status
+# Title (YYYYMMDD HH:MM)
+
+## Status
 Accepted | Superseded | Rejected | Deferred
 
-### Context
+## Context
 
-### Decision
+## Decision
 
-### Consequences
+## Consequences
 
-### Refs
+## Refs
 - PR / issue links
 ```
 

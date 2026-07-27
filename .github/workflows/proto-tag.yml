@@ -1,4 +1,5 @@
-# Auto-tags the shared proto module (decisions.md 20260719): every main
+# Auto-tags the shared proto module
+# (docs/decisions/20260719/0000-concurrent-proto-development.md): every main
 # push touching proto/** cuts the next proto/vX.Y.(Z+1) patch tag, so
 # concurrent sessions never coordinate on tag numbers and a merged
 # contract is publishable the moment it lands. Minor/major milestone

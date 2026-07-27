@@ -107,6 +107,13 @@ jobs:
             --ignore github.com/waired-ai/waired-agent \
             --ignore github.com/waired-ai/waired-agent/proto
 
+      - name: decision log guard (front-matter + supersede graph)
+        # One file per decision under docs/decisions/; this checks the parts
+        # a reviewer cannot eyeball across the whole tree — front-matter
+        # status, its agreement with the `## Status` prose, and that
+        # supersedes / superseded_by resolve and agree both ways.
+        run: python3 scripts/ci/decision-log-guard.py
+
       - name: testnet gate guard (every internal/ package classified)
         # Keeps the per-PR testnet gate's judgement-based allowlist honest:
         # a new internal/ package fails lint until it is classified in
