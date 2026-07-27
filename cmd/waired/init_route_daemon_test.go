@@ -52,13 +52,6 @@ func TestChooseEnrollRoute(t *testing.T) {
 			wantProbed: true,
 		},
 		{
-			name:       "--bypass-mode selects local enrollment without probing",
-			facts:      enrollFacts{bypassMode: true, serviceInstalled: true},
-			daemonUp:   true,
-			want:       routeLocal,
-			wantProbed: false,
-		},
-		{
 			name:       "re-auth selects local enrollment without probing",
 			facts:      enrollFacts{renewing: true, serviceInstalled: true},
 			daemonUp:   false,
@@ -92,13 +85,6 @@ func TestChooseEnrollRoute(t *testing.T) {
 			facts:      enrollFacts{authKey: true},
 			daemonUp:   false,
 			want:       routeAgentAbsent,
-			wantProbed: true,
-		},
-		{
-			name:       "--auth-key overrides --bypass-mode",
-			facts:      enrollFacts{authKey: true, bypassMode: true, serviceInstalled: true},
-			daemonUp:   true,
-			want:       routeDaemon,
 			wantProbed: true,
 		},
 		{

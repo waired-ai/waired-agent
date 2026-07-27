@@ -28,7 +28,6 @@ import (
 	"golang.org/x/crypto/curve25519"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
-	"github.com/waired-ai/waired-agent/internal/buildflag"
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -64,8 +63,6 @@ type initFlags struct {
 	endpoint         string
 	noBrowser        bool
 	stateDir         string
-	bypassMode       bool
-	bypassEmail      string
 	skipDeploy       bool
 	skipIntegration  bool
 	gatewayBaseURL   string
@@ -124,16 +121,6 @@ func newInitCmd() *cobra.Command {
 		"don't open the browser; print the URL and code instead")
 	f.StringVar(&o.stateDir, "state-dir", defaultInitStateDir(),
 		"directory for identity / secrets / cache files")
-	// Bypass-mode (headless mock-IdP login via /test/complete-login) is a
-	// dev/e2e affordance. The prod CLI build (-tags prod) compiles these flags
-	// out so they cannot be passed and bypassMode stays false — real browser
-	// (or daemon-driven) Google login only.
-	if buildflag.AllowBypassFlags {
-		f.BoolVar(&o.bypassMode, "bypass-mode", false,
-			"non-interactively complete login against a Control Plane started with --bypass-idp; calls /test/complete-login with --bypass-email instead of opening a browser")
-		f.StringVar(&o.bypassEmail, "bypass-email", "",
-			"email passed to /test/complete-login when --bypass-mode is set (default: <hostname>@test.waired.local)")
-	}
 	f.BoolVar(&o.skipDeploy, "skip-deploy", false,
 		"skip the deploy phase (hardware profile / runtime check / bundled-model plan)")
 	f.BoolVar(&o.skipIntegration, "skip-integration", false,
@@ -177,8 +164,6 @@ func runInitBody(o *initFlags) error {
 	endpoint := &o.endpoint
 	noBrowser := &o.noBrowser
 	stateDir := &o.stateDir
-	bypassMode := &o.bypassMode
-	bypassEmail := &o.bypassEmail
 	skipDeploy := &o.skipDeploy
 	skipIntegration := &o.skipIntegration
 	gatewayBaseURL := &o.gatewayBaseURL
@@ -265,7 +250,7 @@ func runInitBody(o *initFlags) error {
 		// already on disk stays untouched.
 		*skipDeploy = true
 		*skipIntegration = true
-		if !confirmRenew(in, os.Stdout, existing, *bypassMode, *nonInteractive) {
+		if !confirmRenew(in, os.Stdout, existing, false, *nonInteractive) {
 			fmt.Println("Nothing changed.")
 			return nil
 		}
@@ -280,11 +265,10 @@ func runInitBody(o *initFlags) error {
 		*deviceName = host
 	}
 
-	// Friendly intro for a fresh interactive first-run (both the daemon and
-	// standalone journeys below). Skipped on re-auth (quieter) and in
-	// bypass/CI headless runs. Renders a framed banner on a capable TTY, a
-	// single plain line otherwise.
-	if !renewing && !*bypassMode {
+	// Friendly intro for a fresh interactive first-run. Skipped on re-auth
+	// (quieter). Renders a framed banner on a capable TTY, a single plain
+	// line otherwise.
+	if !renewing {
 		welcomeBanner(os.Stdout)
 	}
 
@@ -299,7 +283,6 @@ func runInitBody(o *initFlags) error {
 		return err
 	}
 	route := chooseEnrollRoute(enrollFacts{
-		bypassMode:       *bypassMode,
 		renewing:         renewing,
 		authKey:          authKey != "",
 		serviceInstalled: serviceInstalledFn(),
@@ -339,38 +322,7 @@ func runInitBody(o *initFlags) error {
 
 	var httpClient *http.Client
 	var onLogin func(loginURL, userCode string)
-	if *bypassMode {
-		httpClient = bypassHTTPClient(ctx, *control)
-		email := *bypassEmail
-		if email == "" {
-			host, _ := os.Hostname()
-			email = host + "@test.waired.local"
-		}
-		fmt.Printf("%s %s\n", steps.signIn, bold("Sign in (bypass-idp mode)"))
-		onLogin = func(loginURL, _ string) {
-			// Headless completion: retry transient failures, and on a
-			// permanent one cancel the init ctx so the poll loop dies
-			// immediately instead of burning its 10-minute budget on a
-			// session that will never authorize (#352). The supervisor
-			// (systemd / the bootstrap wrapper) restarts us with a
-			// fresh session within seconds.
-			sessionID := lastPathSegment(loginURL)
-			if sessionID == "" {
-				fmt.Fprintf(os.Stderr, "bypass-mode: cannot parse session id from %q — aborting init\n", loginURL)
-				cancel()
-				return
-			}
-			err := retryHeadlessCompletion(ctx, "bypass-mode", func(ctx context.Context) error {
-				return bypassCompleteLogin(ctx, httpClient, *control, sessionID, email)
-			})
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "bypass-mode: complete-login failed: %v — aborting init so the supervisor retries with a fresh session\n", err)
-				cancel()
-				return
-			}
-			fmt.Printf("Mock-completed login as %s (session=%s)\n", email, sessionID)
-		}
-	} else {
+	{
 		fmt.Printf("%s %s\n", steps.signIn, bold("Sign in"))
 		// gcloud-style gate: URL first, browser only on Enter (or
 		// immediately when the session can't answer a prompt). Resolved
@@ -693,7 +645,7 @@ func runInitBody(o *initFlags) error {
 			}
 			fmt.Println("Tokens and device certificate were refreshed; the running waired-agent will pick them up on the next refresh cycle.")
 		} else {
-			if *startAgent && !*bypassMode {
+			if *startAgent {
 				// The unit no longer crash-loops once an identity exists —
 				// bring it up so the operator doesn't have to. Best-effort;
 				// falls back to a manual hint on any failure.
@@ -710,7 +662,7 @@ func runInitBody(o *initFlags) error {
 	// one. init started the daemon just above, so offerBenchmark waits for
 	// it to come up before probing.
 	var bench benchmarkOutcome
-	if !renewing && cfgRoot.Inference.Enabled && !*bypassMode {
+	if !renewing && cfgRoot.Inference.Enabled {
 		// #490: on a fresh bundled enroll the agent pulls the multi-GB model
 		// in the background after we start it above, so without this the shell
 		// would return on a half-downloaded model. Block in the foreground with
@@ -760,7 +712,7 @@ func runInitBody(o *initFlags) error {
 	// "Device enrolled" line — is the "everything completed" marker. Fresh
 	// standalone enroll only; renew keeps its terser tokens-refreshed ending
 	// and bypass/CI runs stay quiet.
-	if !renewing && !*bypassMode && res.Enroll != nil {
+	if !renewing && res.Enroll != nil {
 		printInitSuccessBox(res, cfgRoot.Inference, claudeRouted, *deviceName, bench)
 	}
 	return nil

@@ -215,7 +215,7 @@ jobs:
   # (install.sh/.ps1 run --skip-ollama) and the enrol is driven through the
   # DAEMON path — the real post-#119 first-run — by completing the daemon's
   # login session out-of-band via the OIDC grant, so the resident `waired init`
-  # executor installs the engine. The local (--bypass-mode) enrol the
+  # executor installs the engine. The auth-key enrol the
   # other legs use never reaches that path. Nightly (a real engine install +
   # tiny model pull is minutes-scale + external-state, like install+inference).
   # See scripts/dev/lib/installtest-daemon-engine.sh for the WHY.
