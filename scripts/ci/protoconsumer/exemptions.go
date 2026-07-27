@@ -143,27 +143,6 @@ var producedInProto = []exemption{
 		"the roofline decode prediction, computed inside hostfit"},
 	{reflect.TypeFor[hostfit.Estimate](), "UpperBound",
 		"the roofline decode prediction, computed inside hostfit"},
-	// #251, both halves, and BOTH ENTRIES COME OUT in the agent-side PR
-	// that adds internal/hardware's chip table: a field with a writer
-	// under cmd/ or internal/ may not carry an exemption at all, so the
-	// check fails until they are deleted.
-	//
-	// Host's entry is the literal truth — FromHardwareSummary is proto's
-	// own adapter and assigns it. HardwareSummary's is a consequence of
-	// this check being NAME-based by design (see the package doc): the
-	// only write of "MemoryBandwidthSpecGBs" under proto/ today is the
-	// one into Host, and the check cannot tell the two structs apart, so
-	// producerPending — the category that is semantically right for it —
-	// is rejected. Until the agent lands the producer, nothing publishes
-	// the field, which is exactly the unrecognised-part case hostfit
-	// falls back on; the debt is therefore invisible on the wire, and
-	// this comment is the only thing holding it open.
-	{reflect.TypeFor[hostfit.Host](), "MemoryBandwidthSpecGBs",
-		"adapted from the wire summary by FromHardwareSummary (#251)"},
-	{reflect.TypeFor[signer.HardwareSummary](), "MemoryBandwidthSpecGBs",
-		"#251: agent-side chip table owes the producer; name-based check " +
-			"sees only proto's write into hostfit.Host"},
-
 	{reflect.TypeFor[disco.Frame](), "Ed25519Sig",
 		"the peer↔peer signature; disco.Decode fills it on receipt"},
 	{reflect.TypeFor[disco.SealedHeader](), "Vers",

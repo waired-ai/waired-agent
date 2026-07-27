@@ -119,28 +119,18 @@ func TestHardwareSummaryFor_MatchesEffectiveVRAM(t *testing.T) {
 	}
 }
 
-// notPublishedByAgent lists summary fields the agent does not set. An
-// addition needs a stated reason: every field on these two structs exists
-// because a consumer asked for a fact only the agent can observe, so
-// "nobody fills it in" is the defect this file exists to prevent, not a
-// design choice.
+// notPublishedByAgent lists summary fields the agent does not set. It is
+// empty, and an addition needs a stated reason: every field on these two
+// structs exists because a consumer asked for a fact only the agent can
+// observe, so "nobody fills it in" is the defect this file exists to
+// prevent, not a design choice.
 //
-// The entry below is a DEBT rather than a design choice, and takes the
-// same shape protoconsumer's producerPending table uses. The workspace
-// requires a proto contract change to ship as its OWN PR (CLAUDE.md
-// §Modules), which necessarily lands a new wire field one PR ahead of its
-// producer. Name the work that pays it, and delete the entry there rather
-// than editing it.
-var notPublishedByAgent = map[string]bool{
-	// #251. The producer is internal/hardware's chip-name -> published-peak
-	// table, landing in the agent-side PR along with the wiring through
-	// Profile and hardwareSummaryFor. Until then no host publishes a
-	// bandwidth at all — which is exactly the unrecognised-part case
-	// hostfit.EstimateOllamaDecode is built to fall back on, so the gap is
-	// invisible on the wire and this entry is the only thing holding it
-	// open.
-	"HardwareSummary.MemoryBandwidthSpecGBs": true,
-}
+// It briefly held HardwareSummary.MemoryBandwidthSpecGBs while the proto
+// contract was on main and its producer was not — the gap a required
+// proto-only PR opens. This PR lands internal/hardware's chip table, so
+// the entry is deleted rather than edited, which is the whole point of
+// recording it as a debt.
+var notPublishedByAgent = map[string]bool{}
 
 // TestHardwareSummaryFor_PublishesEveryWireField guards the bug class
 // rather than the three fields: a field added to the broadcast summary
@@ -154,9 +144,10 @@ func TestHardwareSummaryFor_PublishesEveryWireField(t *testing.T) {
 	// carry is present, so any zero in the output is the producer
 	// dropping it rather than the host not having it.
 	prof := hardware.Profile{
-		RAMTotalGB:    64,
-		UnifiedMemory: true,
-		UsableVRAMMB:  49152,
+		RAMTotalGB:             64,
+		UnifiedMemory:          true,
+		UsableVRAMMB:           49152,
+		MemoryBandwidthSpecGBs: 400, // Apple M3 Max, matching the GPU below
 		GPUs: []hardware.GPU{{
 			Vendor:        "apple",
 			Model:         "Apple M3 Max",
@@ -366,6 +357,62 @@ func TestHardwareSummaryFor_SurvivesTheRoundTrip(t *testing.T) {
 			if got.EffectiveVRAMMB() != tc.prof.EffectiveVRAMMB() {
 				t.Errorf("effective VRAM after the round trip = %d, agent sees %d",
 					got.EffectiveVRAMMB(), tc.prof.EffectiveVRAMMB())
+			}
+		})
+	}
+}
+
+// TestHardwareSummaryFor_MemoryBandwidthWireForm pins the #251 field end
+// to end: a recognised part puts the number on the wire, and an
+// unrecognised one puts NOTHING there.
+//
+// The second half is the compatibility contract. The field is populated
+// from a chip table, so the hosts that leave it unset are not just old
+// agents — they are every part nobody has added yet, indefinitely. A
+// summary that started emitting "memory_bandwidth_spec_gbs":0 for those
+// would churn the signed NetworkMap for every peer on the mesh.
+func TestHardwareSummaryFor_MemoryBandwidthWireForm(t *testing.T) {
+	mac := func(bandwidthGBs float64) hardware.Profile {
+		return hardware.Profile{
+			RAMTotalGB:             24,
+			UnifiedMemory:          true,
+			UsableVRAMMB:           18432,
+			MemoryBandwidthSpecGBs: bandwidthGBs,
+			GPUs: []hardware.GPU{{
+				Vendor: "apple", Model: "Apple M4", VRAMTotalMB: 24576,
+			}},
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		prof hardware.Profile
+		want string
+	}{
+		{
+			"a recognised part publishes its peak",
+			mac(120),
+			`{"gpus":[{"model":"Apple M4","vram_total_mb":24576,"vendor":"apple"}],` +
+				`"ram_total_gb":24,"unified_memory":true,"usable_vram_mb":18432,` +
+				`"memory_bandwidth_spec_gbs":120}`,
+		},
+		{
+			"an unrecognised part publishes nothing",
+			mac(0),
+			`{"gpus":[{"model":"Apple M4","vram_total_mb":24576,"vendor":"apple"}],` +
+				`"ram_total_gb":24,"unified_memory":true,"usable_vram_mb":18432}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := hardwareSummaryFor(tc.prof)
+			if summary == nil {
+				t.Fatal("hardwareSummaryFor() = nil")
+			}
+			got, err := json.Marshal(summary)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("wire form drifted:\n got %s\nwant %s", got, tc.want)
 			}
 		})
 	}

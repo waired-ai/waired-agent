@@ -24,18 +24,26 @@ import (
 //     (vLLM is an NVIDIA path; AMD is served through Ollama's
 //     ROCm/Vulkan backends, waired#290) and GPUSummary.Model is
 //     documented as free-form and not to be parsed for such decisions.
+//   - MemoryBandwidthSpecGBs, the unified pool's published peak. It is
+//     what lets the fit rules REFUSE a model for being too slow rather
+//     than merely annotate it: a peak is an upper bound, so "too slow
+//     even at peak" is a claim about this host (#251). Publishing the
+//     number rather than the chip name is also what keeps the "do not
+//     parse Model" rule intact for consumers.
 //
-// All three are omitempty, so a non-UMA host with an undetected vendor
-// still serializes byte-identically to the pre-addition wire.
+// All are omitempty, so a non-UMA host with an undetected vendor still
+// serializes byte-identically to the pre-addition wire — as does a
+// unified host whose part is not yet in the chip table.
 func hardwareSummaryFor(prof hardware.Profile) *signer.HardwareSummary {
 	gpus := prof.GPUSummary()
 	if len(gpus) == 0 && prof.RAMTotalGB <= 0 {
 		return nil
 	}
 	summary := &signer.HardwareSummary{
-		RAMTotalGB:    prof.RAMTotalGB,
-		UnifiedMemory: prof.UnifiedMemory,
-		UsableVRAMMB:  prof.UsableVRAMMB,
+		RAMTotalGB:             prof.RAMTotalGB,
+		UnifiedMemory:          prof.UnifiedMemory,
+		UsableVRAMMB:           prof.UsableVRAMMB,
+		MemoryBandwidthSpecGBs: prof.MemoryBandwidthSpecGBs,
 	}
 	for _, g := range gpus {
 		summary.GPUs = append(summary.GPUs, signer.HardwareGPUSummary{
