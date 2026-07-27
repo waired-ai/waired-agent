@@ -55,6 +55,12 @@ jobs:
           set -euo pipefail
           go vet ./...
           (cd proto && go vet ./...)
+          # `make verify-cross` covers the ROOT module on all three OSes but
+          # not proto/, so until now the shared wire-protocol module had no
+          # cross-OS check of any kind (#216). It has no _GOOS.go files today
+          # and touches neither os nor path/filepath, which is exactly why
+          # this is ~2s — and why it is the tripwire for the day that changes.
+          (cd proto && GOOS=windows go vet ./... && GOOS=darwin go vet ./...)
 
       # The hardened production build (-tags prod) must compile and vet
       # cleanly; buildflag gates the agent-side bypass flags off.
@@ -242,6 +248,72 @@ jobs:
 
       - name: go test (proto)
         run: cd proto && go test ./... -timeout 5m
+
+  # The same suite on the other two OSes (#216). 25 OS-tagged _test.go files
+  # (18 darwin, 7 windows) had never executed anywhere: `make verify-cross`
+  # only ever VETTED them. service_darwin_test.go's 20 assertions, which pin
+  # the #176 launchd bug, were inert. So were the 13 files tagged
+  # `linux || darwin`, which ran on exactly one of the two.
+  #
+  # A NEW job rather than a matrix on `unit` above: `unit tests` is a required
+  # status check, and matrixing it would rename the context to
+  # `unit tests (linux)` and leave every open PR waiting on one that no longer
+  # reports. Same reasoning as installer-pwsh next to install-scripts.
+  #
+  # The check name keys off matrix.goos, not the runner label, so a
+  # macos-14 -> macos-15 image bump is a one-line change here and not a
+  # ruleset edit.
+  #
+  # This is reinforcement, not the main line. The primary strategy is pushing
+  # OS-varying decisions into untagged (GOOS, facts) -> plan functions with
+  # three-value table tests (CLAUDE.md "Test discipline"); this job is the
+  # catch-basin for what genuinely cannot be untagged — real launchctl, SCM,
+  # the registry, AF_UNIX. As that work lands, this job should matter less.
+  #
+  # No same-repo `if:` guard, unlike installtest.yml / codeui-multios.yml.
+  # Those hold an OIDC identity or execute a downloaded third-party binary.
+  # This runs the same `go test` the already-required, guard-free `unit` job
+  # runs on fork PRs today; guarding it would mean a check that is skipped
+  # precisely where cross-OS signal is wanted most.
+  unit-multios:
+    name: unit tests (${{ matrix.goos }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false      # a red windows leg must not hide a green darwin one
+      matrix:
+        include:
+          - goos: darwin
+            runs-on: macos-14
+            # internal/gui/tray links Cocoa (activation_darwin.m, and
+            # fyne.io/systray's NSStatusItem backend). Stated rather than
+            # left to the default so a runner image without the Xcode CLT
+            # fails as a compile error instead of silently flipping tags.
+            cgo: "1"
+            timeout: 25
+          - goos: windows
+            runs-on: windows-latest
+            cgo: ""         # empty = Go's default; nothing here needs cgo
+            timeout: 35
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # -count=1 so a "Re-run failed jobs" genuinely re-executes: setup-go
+      # caches GOCACHE, and Go caches test RESULTS there, so a re-run of the
+      # same commit could otherwise replay a verdict. That re-run loop is how
+      # a flaky leg gets judged before this becomes a required check.
+      #
+      # proto/ is deliberately not tested here: it has no _GOOS.go files and
+      # never touches os, path/filepath or runtime.GOOS, so a cross-OS run
+      # buys no information. The `lint` job vets it for all three OSes instead.
+      - name: go test (root)
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+        run: go test ./... -count=1 -timeout 10m
 
   unit-testharness:
     name: unit tests (testharness)
