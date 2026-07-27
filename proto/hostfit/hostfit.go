@@ -450,11 +450,11 @@ func OllamaResidentMB(v catalog.Variant, unifiedMemory bool) int {
 // A CPU-only host is reported as fitting: spilling to system RAM is how
 // it is meant to run, and the RAM gate is its real bound.
 //
-// This is NO LONGER the capacity gate for discrete GPUs — see OllamaFit
-// for why — but it remains the honest answer to "can the card hold all
-// of this", which is what the agent's deficit labels and the control
-// plane's shortfall figures are explaining. It is still the capacity
-// gate on unified memory, where there is nowhere to spill.
+// Note the asymmetry that creates — a host WITH a small GPU is judged
+// more strictly than the same host without one, even though it would
+// serve the model faster. That is what waired-ai/waired-agent#229 is
+// about, and the fix changes what every consumer offers, so it lands
+// with them; this file supplies the measurement it needs.
 //
 // Exposed separately from OllamaFit because a caller explaining WHY a
 // model was rejected has to know which of the two gates bound: naming
