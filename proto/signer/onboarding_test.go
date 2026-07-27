@@ -28,7 +28,8 @@ func TestNetworkMapWithoutDesiredState_NoNewFieldsInCanonical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
 	}
-	for _, key := range []string{"desired_engine", "desired_model_id", "desired_benchmark_gen"} {
+	for _, key := range []string{"desired_engine", "desired_model_id", "desired_benchmark_gen",
+		"desired_integrations"} {
 		if bytes.Contains(canonical, []byte(`"`+key+`"`)) {
 			t.Fatalf("canonical JSON unexpectedly contains %q:\n%s", key, canonical)
 		}
@@ -54,6 +55,9 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		DesiredEngine:       signer.InferenceTypeOllama,
 		DesiredModelID:      "qwen3:8b",
 		DesiredBenchmarkGen: 3,
+		DesiredIntegrations: &signer.DesiredIntegrations{
+			Enabled: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenCode},
+		},
 	}
 	signed, err := k.SignNetworkMap(nm)
 	if err != nil {
@@ -70,6 +74,14 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		{"DesiredEngine", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredEngine = signer.InferenceTypeVLLM }},
 		{"DesiredModelID", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredModelID = "evil:latest" }},
 		{"DesiredBenchmarkGen", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredBenchmarkGen = 4 }},
+		// Replaces the pointer rather than editing the slice in place:
+		// the copy above is shallow, so mutating Enabled would rewrite
+		// the signed map every later subtest verifies against.
+		{"DesiredIntegrations", func(m *signer.NetworkMap) {
+			m.Self.InferenceState.DesiredIntegrations = &signer.DesiredIntegrations{
+				Enabled: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -90,22 +102,31 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 func TestSetupProgress_RoundTrip(t *testing.T) {
 	progress := signer.SetupProgress{
 		Steps: []signer.SetupStep{
+			{ID: "engine_download", Status: signer.SetupStatusDone,
+				CompletedBytes: 1503238553, TotalBytes: 1503238553, RateBps: 72800000},
 			{ID: "engine_install", Status: signer.SetupStatusDone},
 			{ID: "model_pull", Status: signer.SetupStatusRunning,
-				CompletedBytes: 3221225472, TotalBytes: 8589934592},
+				CompletedBytes: 3221225472, TotalBytes: 8589934592, RateBps: 41943040},
 			{ID: "benchmark", Status: signer.SetupStatusFailed,
 				ErrorCode: signer.SetupErrorEngineNotReady, ErrorDetail: "probe: connection refused"},
+			{ID: "integration", Status: signer.SetupStatusPending},
 		},
-		Benchmark: &signer.SetupBenchmark{Gen: 3, MeasuredTokps: 78.2},
+		Benchmark: &signer.SetupBenchmark{
+			Gen: 3, MeasuredTokps: 78.2,
+			Trial: 2, Trials: 3, SampleTokps: 80.1, MedianTokps: 78.2, SpreadPct: 4.5,
+			Method: signer.BenchmarkMethodOllamaEval,
+		},
 		LastCheck: "2026-07-19T00:00:00Z",
+		Driver:    signer.SetupDriverBrowser,
 	}
 	raw, err := json.Marshal(progress)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 	for _, key := range []string{"steps", "id", "status", "completed_bytes",
-		"total_bytes", "error_code", "error_detail", "benchmark", "gen",
-		"measured_tokps", "last_check"} {
+		"total_bytes", "rate_bps", "error_code", "error_detail", "benchmark", "gen",
+		"measured_tokps", "trial", "trials", "sample_tokps", "median_tokps",
+		"spread_pct", "method", "last_check", "driver"} {
 		if !bytes.Contains(raw, []byte(`"`+key+`"`)) {
 			t.Fatalf("marshalled progress missing %q:\n%s", key, raw)
 		}
@@ -131,8 +152,8 @@ func TestSetupProgress_OmitemptyKeepsHealthyPushSmall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, key := range []string{"completed_bytes", "total_bytes",
-		"error_code", "error_detail", "benchmark"} {
+	for _, key := range []string{"completed_bytes", "total_bytes", "rate_bps",
+		"error_code", "error_detail", "benchmark", "driver"} {
 		if bytes.Contains(raw, []byte(`"`+key+`"`)) {
 			t.Fatalf("marshalled progress unexpectedly contains %q:\n%s", key, raw)
 		}
@@ -161,6 +182,88 @@ func TestSetupEnums(t *testing.T) {
 	if signer.IsValidSetupErrorCode("sad") {
 		t.Fatal(`IsValidSetupErrorCode("sad") = true, want false`)
 	}
+	// Empty is valid for both v2 enums: an onboarding-v1 agent reports
+	// neither, and rejecting its push over a field it cannot know would
+	// take the whole progress report down with it.
+	for _, d := range []string{"", signer.SetupDriverBrowser, signer.SetupDriverTerminal} {
+		if !signer.IsValidSetupDriver(d) {
+			t.Fatalf("IsValidSetupDriver(%q) = false, want true", d)
+		}
+	}
+	if signer.IsValidSetupDriver("tray") {
+		t.Fatal(`IsValidSetupDriver("tray") = true, want false`)
+	}
+	for _, m := range []string{"", signer.BenchmarkMethodOllamaEval,
+		signer.BenchmarkMethodOpenAISlope, signer.BenchmarkMethodWallClock} {
+		if !signer.IsValidBenchmarkMethod(m) {
+			t.Fatalf("IsValidBenchmarkMethod(%q) = false, want true", m)
+		}
+	}
+	if signer.IsValidBenchmarkMethod("vibes") {
+		t.Fatal(`IsValidBenchmarkMethod("vibes") = true, want false`)
+	}
+	// Integration targets are the one enum where empty is NOT valid:
+	// unlike a status the agent may not report yet, an entry in
+	// Enabled names something to configure, and "" names nothing.
+	for _, target := range []string{signer.IntegrationClaudeCode,
+		signer.IntegrationOpenCode, signer.IntegrationOpenClaw} {
+		if !signer.IsValidIntegrationTarget(target) {
+			t.Fatalf("IsValidIntegrationTarget(%q) = false, want true", target)
+		}
+	}
+	for _, target := range []string{"", "emacs"} {
+		if signer.IsValidIntegrationTarget(target) {
+			t.Fatalf("IsValidIntegrationTarget(%q) = true, want false", target)
+		}
+	}
+}
+
+// TestDesiredIntegrations_ThreeStates pins the reason the field is a
+// pointer to a struct rather than a bare []string: "asked, and every
+// toggle is off" has to stay distinguishable from "never asked", or the
+// wizard cannot tell an integration step that is never coming from a
+// device that was never given the instruction.
+func TestDesiredIntegrations_ThreeStates(t *testing.T) {
+	cases := []struct {
+		name string
+		in   *signer.DesiredIntegrations
+		want string
+	}{
+		{"no instruction", nil, `{}`},
+		{"asked, all off", &signer.DesiredIntegrations{}, `{"desired_integrations":{}}`},
+		{"asked, one on",
+			&signer.DesiredIntegrations{Enabled: []string{signer.IntegrationOpenCode}},
+			`{"desired_integrations":{"enabled":["opencode"]}}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw, err := json.Marshal(struct {
+				D *signer.DesiredIntegrations `json:"desired_integrations,omitempty"`
+			}{D: c.in})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(raw) != c.want {
+				t.Fatalf("marshalled %s:\n got %s\nwant %s", c.name, raw, c.want)
+			}
+		})
+	}
+}
+
+// TestIntegrationTargets_WireValues pins the target literals to the
+// agent's own adapter IDs (internal/integration.AgentID). proto may not
+// import internal/, so the two lists are only kept in step by this
+// test failing when one side is reworded.
+func TestIntegrationTargets_WireValues(t *testing.T) {
+	for _, c := range []struct{ got, want string }{
+		{signer.IntegrationClaudeCode, "claude-code"},
+		{signer.IntegrationOpenCode, "opencode"},
+		{signer.IntegrationOpenClaw, "openclaw"},
+	} {
+		if c.got != c.want {
+			t.Fatalf("integration target = %q, want %q", c.got, c.want)
+		}
+	}
 }
 
 // TestCapabilityOnboardingV1_WireValue pins the capability literal:
@@ -170,5 +273,19 @@ func TestCapabilityOnboardingV1_WireValue(t *testing.T) {
 	if signer.CapabilityOnboardingV1 != "onboarding-v1" {
 		t.Fatalf("CapabilityOnboardingV1 = %q, want %q",
 			signer.CapabilityOnboardingV1, "onboarding-v1")
+	}
+}
+
+// TestCapabilityOnboardingV2_WireValue does the same for the v2 gate,
+// which the CP compares before emitting DesiredIntegrations. v1 must
+// keep its own value: the two are separate declarations, and folding
+// them would emit a signed-map field to agents that reject it.
+func TestCapabilityOnboardingV2_WireValue(t *testing.T) {
+	if signer.CapabilityOnboardingV2 != "onboarding-v2" {
+		t.Fatalf("CapabilityOnboardingV2 = %q, want %q",
+			signer.CapabilityOnboardingV2, "onboarding-v2")
+	}
+	if signer.CapabilityOnboardingV2 == signer.CapabilityOnboardingV1 {
+		t.Fatal("onboarding v1 and v2 capabilities must stay distinct")
 	}
 }
