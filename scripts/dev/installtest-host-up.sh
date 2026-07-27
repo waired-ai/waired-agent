@@ -141,7 +141,7 @@ $(it_step "host is up")
 Next:
   bash scripts/dev/installtest-run.sh            # Tier 1 (install + systemd)
   # Tier 2/3 enrol (automated bypass): set the dev test endpoint + account
-  IT_BYPASS_EMAIL=<test-acct> IT_CONTROL_URL=<bypass-cp> \\
+  IT_IMPERSONATE_SA=<test-sa> IT_CONTROL_URL=<control-plane> \\
     bash scripts/dev/installtest-run.sh --tier 2
   bash scripts/dev/installtest-host-down.sh      # when finished
 EOF

@@ -5,9 +5,11 @@
 #
 # Bootstrap flow:
 #   1. agent-bootstrap.sh reads GCE metadata for internal IP + hostname.
-#   2. Runs `waired init --bypass-mode` against $WAIRED_CONTROL_URL,
+#   2. Starts waired-agent, waits for its management API, and enrols
+#      through it with `waired init --auth-key` against $WAIRED_CONTROL_URL,
 #      generating identity.json + secrets/* under $WAIRED_STATE_DIR.
-#   3. exec waired-agent (optionally with --force-relay / --fallback-after).
+#   3. stays as PID 1 waiting on the agent (optionally started with
+#      --force-relay / --fallback-after), forwarding signals to it.
 #
 # The runtime stage uses Alpine (not distroless) because the bootstrap
 # needs sh + curl to read metadata. Image size is acceptably small

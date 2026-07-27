@@ -77,8 +77,9 @@ param(
     [switch]$ExeVariant,
     # -DaemonEngine (waired#835 §9/§11): drive the DAEMON-path first-run so the
     # resident `waired init` executor installs the engine on an engine-less host
-    # -- the path a local (--bypass-mode) enrol never reaches (that flag
-    # forces the standalone path). Keeps install.ps1's engine-absent state,
+    # -- the path an auth-key enrol never reaches, because the key settles the
+    # login inside the create call and leaves the executor lease nothing to
+    # observe. Keeps install.ps1's engine-absent state,
     # completes the daemon login out-of-band via the OIDC grant, and asserts the
     # engine landed via the executor (not install.ps1). Its own mode; Tier 2.
     [switch]$DaemonEngine
