@@ -179,14 +179,30 @@ jobs:
         # handler goes through the seam, and every seam has a TestMain stub.
         run: bash scripts/ci/tray-dialog-seam-guard.sh
 
-      # Self-tests for the two shell guards in this repo that take their
-      # input from outside git (a fixture tree, a changed-file list), so
-      # a change to either one's decision table cannot ship unexercised.
+      - name: installtest failure strings still exist in the product
+        # The three installtest harnesses fail a leg when `waired init`'s
+        # transcript reports an engine-install failure (#215). That assert is
+        # a grep for product wording, and a grep for wording the product
+        # stopped printing is green forever — the same "cannot fail" shape
+        # #178 shipped through. This checks the three copies agree and that
+        # every string is still printed by cmd/waired.
+        run: bash scripts/ci/harness-failure-strings-guard.sh
+
+      # Self-tests for the shell guards in this repo that take their input
+      # from outside git (a fixture tree, a changed-file list, GitHub's
+      # issue search), so a change to any one's decision table cannot ship
+      # unexercised.
       - name: platform test floor guard self-test
         run: bash scripts/ci/platform-test-floor-guard-test.sh
 
       - name: installer mirror guard self-test
         run: bash scripts/ci/installer-mirror-guard-test.sh
+
+      - name: nightly issue filer self-test
+        # The dedupe-vs-create decision only runs when the script talks to
+        # GitHub, so neither DRY_RUN nor a green nightly reaches it. A stub
+        # `gh` exercises it without a token or a broken nightly (#215).
+        run: bash scripts/ci/nightly-file-issue-test.sh
 
       - uses: golangci/golangci-lint-action@v9
         with:

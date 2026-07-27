@@ -118,6 +118,18 @@ $Work         = Join-Path ([System.IO.Path]::GetTempPath()) 'waired-installtest-
 $Stage        = Join-Path $Work 'stage'
 $Mirror       = Join-Path $Work 'mirror'
 
+# Failure lines `waired init` prints when an engine install did not succeed.
+# A leg whose transcript contains one of these FAILED, whatever else it can
+# still find on disk -- #178 printed the exact reason into CI logs for five
+# straight days while the leg said `ok  ollama engine installed`.
+#
+# Mirror of lib/installtest-enroll.sh's IT_INSTALL_FAILURE_RE. Kept as one
+# alternation per harness so scripts/ci/harness-failure-strings-guard.sh can
+# check the three copies agree and that every branch still exists in the
+# product source (cmd/waired/init_engine.go, cmd/waired/setup_install.go) --
+# a grep for wording the product stopped printing is green forever.
+$InstallFailureRe = 'Engine install failed:|vLLM install failed:'
+
 # --- logging / assert counters ----------------------------------------------
 $script:Pass = 0
 $script:Fail = 0
@@ -126,6 +138,16 @@ function ItLog  { param([string]$m) Write-Host "[installtest] $m" -ForegroundCol
 function ItOk   { param([string]$m) Write-Host "[installtest]  ok  $m" -ForegroundColor Green; $script:Pass++ }
 function ItBad  { param([string]$m) Write-Host "[installtest] FAIL $m" -ForegroundColor Red; $script:Fail++ }
 function ItDie  { param([string]$m) Write-Host "[installtest] $m" -ForegroundColor Red; exit 1 }
+# ItSkip -- an assert deliberately not run, WITH its reason. Counted and
+# printed in the summary. The SYSTEM branch below used to take this path
+# through ItLog, which moves no counter at all: the two asserts it covers
+# simply stopped existing and the leg still reported success (#215).
+$script:Skip = 0
+$script:SkipLines = @()
+function ItSkip { param([string]$m)
+    Write-Host "[installtest] SKIP $m" -ForegroundColor Yellow
+    $script:Skip++; $script:SkipLines += $m
+}
 
 # --- contract asserts (waired#760): soft-fail while the underlying issue is
 # open. When a fix merges, its PR flips the ONE matching line below to $true
@@ -265,7 +287,28 @@ function Assert-DaemonEngine {
 function Assert-Inference {
     param([string]$InitLog)
 
-    # 1) ollama.exe discoverable (mirror internal/download's Windows order)
+    # 0) PRIMARY: init's own transcript. A leg whose transcript says the engine
+    #    install failed FAILED, whatever it can still find on disk. #178 is the
+    #    reason this is first and the reason it outranks (1): the ollama.exe
+    #    lookup below found a binary the half-finished install had already
+    #    unpacked before Get-AuthenticodeSignature blew up, so this function
+    #    printed `ok  ollama engine installed` while the exact failure sat in
+    #    the same CI log, for five straight days.
+    #    See $InstallFailureRe's declaration for the string provenance.
+    if (Test-Path -LiteralPath $InitLog) {
+        $hits = @(Select-String -Path $InitLog -Pattern $InstallFailureRe -ErrorAction SilentlyContinue)
+        if ($hits.Count) {
+            ItBad "init transcript reports an engine install failure ($InitLog)"
+            $hits | Select-Object -First 5 | ForEach-Object { Write-Host "    $($_.LineNumber): $($_.Line.Trim())" }
+        } else {
+            ItOk "init transcript reports no engine install failure"
+        }
+    } else {
+        ItBad "no init transcript to check for install failures ($InitLog)"
+    }
+
+    # 1) ollama.exe discoverable (mirror internal/download's Windows order).
+    #    SECONDARY, and worded as presence rather than success -- see (0).
     $ollama = $null
     foreach ($p in @(
             (Join-Path $env:ProgramFiles 'Ollama\ollama.exe'),
@@ -276,7 +319,7 @@ function Assert-Inference {
         $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue
         if ($cmd) { $ollama = $cmd.Source }
     }
-    if ($ollama) { ItOk "ollama engine installed ($ollama)" }
+    if ($ollama) { ItOk "ollama binary present ($ollama)" }
     else { ItBad "ollama engine not installed (waired init --inference-enabled=true should have installed it)" }
 
     # 1b) the waired-managed marker and the machine PATH entry: see
@@ -1286,7 +1329,7 @@ if ($Contract) {
 
         $isSystem = ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18')
         if ($isSystem) {
-            ItLog "running as SYSTEM -- skipping non-elevated context asserts (CreateProcessWithLogonW unavailable)"
+            ItSkip "non-elevated context asserts: running as SYSTEM, where CreateProcessWithLogonW is unavailable"
         } else {
             $r = Invoke-AsStandardUser -Exe $waired -ArgLine 'status' -Tag 'status-stduser'
             $first = (($r.Out -split "`r?`n") | Where-Object { $_ } | Select-Object -First 2) -join ' / '
@@ -1513,8 +1556,39 @@ if ($Contract -or $script:TestUserPw) {
 }
 
 Write-Host ""
-ItStep "Tier $Tier summary: $script:Pass passed, $script:Fail failed, $script:Warn warn (open-issue soft asserts)"
+ItStep "Tier $Tier summary: $script:Pass passed, $script:Fail failed, $script:Warn warn (open-issue soft asserts), $script:Skip skipped"
 if ($script:Warn -gt 0) {
     $script:WarnLines | ForEach-Object { Write-Host "[installtest]   WARN $_" -ForegroundColor Yellow }
 }
+if ($script:Skip -gt 0) {
+    $script:SkipLines | ForEach-Object { Write-Host "[installtest]   SKIP $_" -ForegroundColor Yellow }
+}
+
+# Assert-count floor (#215). Zero failures is not the same as having tested
+# anything: a block that stops running -- an early return, a guard that
+# silently opts out, a helper that stops being called -- subtracts asserts
+# without ever printing FAIL, and the leg reports success. That is the shape
+# behind "the leg said ok while the reason sat in the same log".
+#
+# MEASURED from a green run of the configuration CI uses, not estimated:
+# -Tier 2 -Contract -ExeVariant executes 78. The floor is set at the tier
+# level only, and every option (-Contract, -ExeVariant, -Inference) only ADDS
+# asserts, so a leaner invocation of the same tier still clears it.
+#
+# Tier 1 deliberately has NO floor: CI only ever runs -Tier 2, so there is no
+# green tier-1 run to take a number from, and a guessed floor is either
+# useless (too low) or a spurious red (too high). Measure one and add it
+# rather than estimating.
+#
+# Raise this when you add an assert that always runs; lower it, in the same
+# commit and with the reason, if a leg legitimately becomes conditional.
+$executed = $script:Pass + $script:Fail
+if ($Tier -ge 2) {
+    $floor = 78
+    if ($executed -lt $floor) {
+        Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
+        exit 1
+    }
+}
+
 if ($script:Fail -gt 0) { exit 1 }

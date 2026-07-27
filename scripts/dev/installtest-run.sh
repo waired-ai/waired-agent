@@ -124,9 +124,13 @@ it_wait_url "$WAIRED_APT_BASE_URL/key.asc" 10 \
 # (written to agent.env) and as the Tier-2/3 enrol --control.
 CONTROL_URL="${IT_CONTROL_URL:-https://app.dev.waired.net}"
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 ok()   { printf '\033[1;32m[installtest]  ok \033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '\033[1;31m[installtest] FAIL\033[0m %s\n' "$*" >&2; FAIL=$((FAIL+1)); }
+# skip <reason> — an assert deliberately not run. Counted and printed in the
+# summary: a skip nobody can see is how a leg quietly stops testing anything
+# (#215).
+skip() { printf '\033[1;33m[installtest] SKIP\033[0m %s\n' "$*"; SKIP=$((SKIP+1)); }
 # gx <guest> <cmd...> — run a privileged command in the test environment.
 # LXD: `lxc exec` (root in the guest). --local: `sudo` on this host (the LXD
 # guest's root maps to host root). The <guest> arg is ignored in --local.
@@ -370,5 +374,31 @@ else
 fi
 
 echo
-it_step "Tier $TIER summary: $PASS passed, $FAIL failed"
+it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
+
+# Assert-count floor (#215). Zero failures is not the same as having tested
+# anything: a block that stops running — an early `return`, a guard that
+# silently opts out, a helper that stops being called — subtracts asserts
+# without ever printing FAIL, and the leg reports success. This is the shape
+# behind "the leg said ok while the reason sat in the same log".
+#
+# The floors are MEASURED from a green run of the leanest configuration for
+# each tier, not estimated: tier 1 = the 10 package/unit/state-dir asserts,
+# tier 2 = those plus the 8 enrol + mgmt-socket ones. Options only ever ADD
+# asserts (--inference, --daemon-engine, tier 3), so a floor keyed on the
+# tier alone holds for every invocation of it.
+#
+# Raise these when you add an assert that always runs; lower them, in the
+# same commit and with the reason, if a leg legitimately becomes conditional.
+case "$TIER" in
+  1) floor=10 ;;
+  *) floor=18 ;;
+esac
+executed=$((PASS + FAIL))
+if [ "$executed" -lt "$floor" ]; then
+  printf '\033[1;31m[installtest] FAIL\033[0m only %d asserts ran at tier %s; at least %d must (a block stopped executing — see the assert-count floor in %s)\n' \
+    "$executed" "$TIER" "$floor" "$(basename "$0")" >&2
+  exit 1
+fi
+
 [ "$FAIL" -eq 0 ] || exit 1

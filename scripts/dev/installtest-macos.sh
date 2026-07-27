@@ -57,18 +57,24 @@ LABEL="com.waired.agent"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
 NEWSYSLOG_CONF="/etc/newsyslog.d/waired-agent.conf"
 MGMT="http://127.0.0.1:9476/waired/v1/status"
+# Mirror of lib/installtest-enroll.sh's IT_INSTALL_FAILURE_RE — see the comment
+# there. scripts/ci/harness-failure-strings-guard.sh checks the three copies
+# agree and that every branch still exists in the product source.
+IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
 
 # --- logging / counters -----------------------------------------------------
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 it_step() { printf '\033[1;32m[installtest]\033[0m ==> %s\n' "$*"; }
 it_log()  { printf '\033[1;36m[installtest]\033[0m %s\n' "$*"; }
 it_warn() { printf '\033[1;33m[installtest]\033[0m %s\n' "$*" >&2; }
 ok()   { printf '\033[1;32m[installtest]  ok \033[0m %s\n' "$*"; PASS=$((PASS+1)); }
 bad()  { printf '\033[1;31m[installtest] FAIL\033[0m %s\n' "$*" >&2; FAIL=$((FAIL+1)); }
-skip() { printf '\033[1;33m[installtest] SKIP\033[0m %s\n' "$*"; }
+# Counted, and printed in the summary: a skip nobody can see is how a leg
+# quietly stops testing anything (#215).
+skip() { printf '\033[1;33m[installtest] SKIP\033[0m %s\n' "$*"; SKIP=$((SKIP+1)); }
 it_die() { printf '\033[1;31m[installtest]\033[0m %s\n' "$*" >&2; cleanup; exit 1; }
 
 cleanup() {
@@ -128,14 +134,27 @@ assert_launchd_healthy() {
 # state dir root-owned.
 assert_inference_macos() {
   local ollama_bin="" cand tps
+
+  # PRIMARY: init's own transcript. See IT_INSTALL_FAILURE_RE's comment in
+  # lib/installtest-enroll.sh — the installer's verdict outranks anything
+  # still findable on disk (#215/#178). First, so the reason leads.
+  if [ -f "$INITLOG" ] && grep -qE "$IT_INSTALL_FAILURE_RE" "$INITLOG"; then
+    bad "init transcript reports an engine install failure ($INITLOG)"
+    grep -nE "$IT_INSTALL_FAILURE_RE" "$INITLOG" | sed 's/^/    /' >&2 || true
+  else
+    ok "init transcript reports no engine install failure"
+  fi
+
   for cand in \
       "$(command -v ollama 2>/dev/null || true)" \
       /Applications/Ollama.app/Contents/Resources/ollama \
       /usr/local/bin/ollama /opt/homebrew/bin/ollama; do
     if [ -n "$cand" ] && [ -x "$cand" ]; then ollama_bin="$cand"; break; fi
   done
+  # SECONDARY, and worded as presence rather than success: a half-finished
+  # install leaves an unpacked binary behind (#178).
   if [ -n "$ollama_bin" ]; then
-    ok "ollama engine installed ($ollama_bin)"
+    ok "ollama binary present ($ollama_bin)"
   else
     bad "ollama engine not installed (waired init --inference-enabled=true should have installed Ollama.app)"
   fi
@@ -653,5 +672,22 @@ if [ "$TIER" -ge 2 ]; then
 fi
 
 echo
-it_step "Tier $TIER summary: $PASS passed, $FAIL failed"
+it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
+
+# Assert-count floor (#215) — see the same block in installtest-run.sh for
+# the rationale. Floors MEASURED from a green run of the leanest config:
+# tier 1 = the binaries / Gatekeeper / plist / state-dir / launchd asserts
+# plus the uninstall->reinstall round trip, tier 2 = those plus enrol and
+# the mgmt-socket set. Options only ever add asserts.
+case "$TIER" in
+  1) floor=21 ;;
+  *) floor=28 ;;
+esac
+executed=$((PASS + FAIL))
+if [ "$executed" -lt "$floor" ]; then
+  printf '\033[1;31m[installtest] FAIL\033[0m only %d asserts ran at tier %s; at least %d must (a block stopped executing — see the assert-count floor in %s)\n' \
+    "$executed" "$TIER" "$floor" "$(basename "$0")" >&2
+  exit 1
+fi
+
 [ "$FAIL" -eq 0 ] || exit 1

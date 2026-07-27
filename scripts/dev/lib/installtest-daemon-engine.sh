@@ -238,7 +238,7 @@ assert_daemon_engine() {
 
   # 6. The inference subsystem left the no_engine state.
   out="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
-  state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
+  state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"' || true)"
   case "$state" in
     ""|no_engine) bad "inference subsystem still reports '${state:-unreachable}' (engine not installed)" ;;
     *) ok "inference subsystem left no_engine (state=$state)" ;;
@@ -261,7 +261,7 @@ assert_daemon_engine() {
     | sed -n 's/.*"desired_engine"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
   installed="$(printf '%s' "$setup_state" \
     | grep -oE '"engine_installed"[[:space:]]*:[[:space:]]*(true|false)' | head -1 \
-    | grep -oE '(true|false)$')"
+    | grep -oE '(true|false)$' || true)"
   if [ -z "$setup_state" ]; then
     bad "could not read /setup/state (daemon unreachable) — engine_installed unverifiable"
   elif [ -z "$desired_engine" ]; then

@@ -98,7 +98,7 @@ waired-devtest-login@dev-waired.iam.gserviceaccount.com)."
       aud="$IT_OIDC_AUDIENCE"
       if [ -z "$aud" ]; then
         aud="$(curl -fsS --max-time 15 "$IT_CONTROL_URL/v1/login/oidc-grant/audience" 2>/dev/null \
-          | sed -n 's/.*"audience":"\([^"]*\)".*/\1/p')"
+          | sed -n 's/.*"audience":"\([^"]*\)".*/\1/p' || true)"
       fi
       [ -n "$aud" ] || it_die \
         "could not resolve the OIDC audience from $IT_CONTROL_URL/v1/login/oidc-grant/audience \
@@ -106,7 +106,7 @@ waired-devtest-login@dev-waired.iam.gserviceaccount.com)."
       it_log "minting SA id_token on host (sa=$IT_IMPERSONATE_SA)"
       tok="$(gcloud auth print-identity-token \
         --impersonate-service-account="$IT_IMPERSONATE_SA" \
-        --audiences="$aud" --include-email 2>/dev/null)"
+        --audiences="$aud" --include-email 2>/dev/null || true)"
       [ -n "$tok" ] || it_die \
         "failed to mint an SA id_token — is your identity in oidc_grant_token_creators \
 on $IT_IMPERSONATE_SA? (roles/iam.serviceAccountTokenCreator)"
@@ -198,7 +198,27 @@ assert_mgmt_socket() {
   # desired phase locally and returns 0 — and its isConnectionRefused() even
   # matches "no such file or directory", i.e. a MISSING socket. So assert on
   # stdout: "pause ok." is printed only on the daemon round-trip.
-  out="$(gx "$guest" waired pause 2>&1)"
+  # `|| true` because the driver runs `set -euo pipefail` and this is a BARE
+  # assignment, so the shell's errexit applies to it: a non-zero `waired pause`
+  # would abort the whole run mid-assert, with no summary line, no bad line,
+  # and nothing naming which check was in flight (#215). The exit code is not
+  # the assert here — the stdout below is, deliberately, because
+  # runPhaseTransition returns 0 on the offline fallback path.
+  #
+  # Where this guard is NOT needed, and deliberately absent: errexit is
+  # suppressed inside a function called from a CONDITION, so the assignments
+  # in _it_wait_inference_ready (called as `if _it_wait_inference_ready ...`)
+  # and in assert_inference (called as `[ "$INFER" = 1 ] && assert_inference`)
+  # cannot abort anything. Adding `|| true` there would imply a hazard that
+  # does not exist. Check the CALL SITE before adding one — and note that
+  # moving such a function to a bare call re-arms the hazard for every bare
+  # assignment inside it.
+  #
+  # `|| true` never changes the captured VALUE, only the substitution's exit
+  # status, and every one of these is followed by a test on the value — so no
+  # assert loses information; the ones above gain a reported failure where
+  # they used to get a silent exit.
+  out="$(gx "$guest" waired pause 2>&1 || true)"
   if printf '%s' "$out" | grep -q 'not running'; then
     bad "waired pause fell back to the offline desired-phase path (socket unreachable): $out"
   elif printf '%s' "$out" | grep -q 'pause ok\.'; then
@@ -212,9 +232,15 @@ assert_mgmt_socket() {
   # able to drive it — that is what a system-wide install requires, and it is
   # the reason peer-uid authorization was rejected. runuser (util-linux) is
   # used over sudo so this does not depend on a sudoers policy in the guest.
-  wbin="$(gx "$guest" sh -c 'command -v waired' 2>/dev/null | tr -d '\r')"
+  # Bare assignment of a PIPELINE, so `set -o pipefail` makes a failing `gx`
+  # abort the run even though `tr` succeeded — and "waired not on PATH" is a
+  # perfectly ordinary answer here, handled by the `-n` test below.
+  wbin="$(gx "$guest" sh -c 'command -v waired' 2>/dev/null | tr -d '\r' || true)"
   if [ -n "$wbin" ]; then
-    out="$(gx "$guest" runuser -u nobody -- "$wbin" resume 2>&1)"
+    # Same errexit hazard as the pause above, and more likely to fire: this
+    # one is EXPECTED to fail on a host where the socket is unreachable, which
+    # is precisely the regression it exists to report.
+    out="$(gx "$guest" runuser -u nobody -- "$wbin" resume 2>&1 || true)"
     if printf '%s' "$out" | grep -q 'resume ok\.'; then
       ok "an unprivileged local user reaches the service-user daemon's socket (#838 premise)"
     else
@@ -267,6 +293,19 @@ assert_tier2() {
 # :9475, never the upstream default :11434.
 IT_BUNDLED_OLLAMA_BIN=/var/lib/waired/runtimes/ollama/bin/ollama
 
+# Failure lines `waired init` prints when an engine install did not succeed.
+# A leg whose transcript contains one of these FAILED, whatever else it can
+# still find on disk — #178 printed the exact reason into CI logs for five
+# straight days while the leg said `ok  ollama engine installed`, because the
+# primary assert stat'd an ollama binary that a half-finished install had
+# already unpacked before signature verification failed.
+#
+# Kept as one alternation per harness rather than inline so
+# scripts/ci/harness-failure-strings-guard.sh can check every branch of it
+# still exists in the product source. Mirror any change in
+# installtest-macos.sh and installtest-windows.ps1.
+IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
+
 # _it_wait_inference_ready — poll the agent mgmt API's inference status
 # until the bundled model is ready in the waired-owned engine, proving the
 # install -> enroll -> engine-spawn -> model-pull tail ran. Mirrors
@@ -316,8 +355,21 @@ assert_inference() {
   name="$(_it_dev_name "$guest")"
   initlog="$IT_LOGDIR/init-$name.log"
 
+  # PRIMARY: init's own transcript. If it says the engine install failed, the
+  # leg failed — no amount of on-disk evidence overrides the installer's own
+  # verdict (#215/#178). Runs first so the reason is the first thing printed.
+  if [ -f "$initlog" ] && grep -qE "$IT_INSTALL_FAILURE_RE" "$initlog"; then
+    bad "init transcript reports an engine install failure ($initlog)"
+    grep -nE "$IT_INSTALL_FAILURE_RE" "$initlog" | sed 's/^/    /' >&2 || true
+  else
+    ok "init transcript reports no engine install failure"
+  fi
+
+  # SECONDARY: the binary exists. Deliberately worded as presence, not as
+  # success: a half-finished install leaves an unpacked binary behind, so this
+  # line saying `ok` was exactly the #178 false positive.
   gx "$guest" test -x "$IT_BUNDLED_OLLAMA_BIN" \
-    && ok "bundled ollama engine installed ($IT_BUNDLED_OLLAMA_BIN, CPU)" \
+    && ok "bundled ollama binary present ($IT_BUNDLED_OLLAMA_BIN, CPU)" \
     || bad "bundled ollama not installed at $IT_BUNDLED_OLLAMA_BIN (install.sh should have, without --skip-ollama)"
 
   # #567: the bundled engine is waired-owned on :9475 with its own store; the
