@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // DefaultUpgradeSafetyMargin is the factor by which a candidate's
@@ -20,14 +21,17 @@ const DefaultUpgradeSafetyMargin = 1.25
 // active-parameter fraction; dense variants stream all weights.
 // Returns 0 when the variant declares no weight (prediction
 // impossible).
+//
+// The body moved to proto/hostfit, where the SELECTION-time decode
+// estimate needs the identical quantity (#229). The two had converged on
+// the same arithmetic independently — this picker deriving it from a
+// measured throughput, the fit rules from an assumed bandwidth — which
+// is the shape of duplication waired-agent#228 exists to prevent. It is
+// also a good sign for both: the upgrade prediction has been in
+// production use, so the fit estimate is not a new model, only the same
+// one applied before any measurement exists.
 func ActiveWeightGB(v catalog.Variant) float64 {
-	if v.EstimatedWeightGB <= 0 {
-		return 0
-	}
-	if v.ActiveParams > 0 && v.ParamCount > 0 && v.ActiveParams < v.ParamCount {
-		return v.EstimatedWeightGB * float64(v.ActiveParams) / float64(v.ParamCount)
-	}
-	return v.EstimatedWeightGB
+	return hostfit.ActiveBytesPerToken(v)
 }
 
 // UpgradeInput parameterises UpgradeCandidate.
@@ -69,9 +73,16 @@ type UpgradeInput struct {
 // ok=false when there is nothing to suggest: the active variant is
 // unknown or carries no weight annotation, the measurement is missing,
 // or no fitting candidate of a strictly higher tier clears the bar.
-// Candidates come from RankModels, so the VRAM-residency gate has
-// already excluded variants that would spill to the CPU (where the
-// bandwidth model would be wildly optimistic).
+//
+// The extrapolation assumes the candidate reads at the same effective
+// bandwidth the measurement was taken at, which stops being true the
+// moment a candidate spills to system memory: the measured host was
+// reading from a graphics card, the candidate would read a large share
+// over PCIe. That used to be handled for free, because RankModels'
+// residency gate could not return a spilled candidate at all — the gate
+// is gone (#229), so the prediction is capped by the candidate's own
+// spill bound where one exists. Two estimates of the same quantity; the
+// honest answer is the smaller.
 func UpgradeCandidate(in UpgradeInput) (Pick, float64, bool) {
 	if in.MeasuredTokps <= 0 || in.FloorTokps <= 0 {
 		return Pick{}, 0, false
@@ -112,6 +123,12 @@ func UpgradeCandidate(in UpgradeInput) (Pick, float64, bool) {
 			continue // no weight annotation → no prediction
 		}
 		predicted := effBW / w
+		// Cap by the spill bound: a candidate whose weights do not all
+		// fit the card cannot reach the rate a resident measurement
+		// extrapolates to, however much headroom that measurement showed.
+		if est := c.DecodeEstimate; est.UpperBound && est.TokpsEstimate > 0 && est.TokpsEstimate < predicted {
+			predicted = est.TokpsEstimate
+		}
 		if predicted < bar {
 			continue
 		}

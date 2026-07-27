@@ -312,9 +312,33 @@ type Estimate struct {
 	// [0,1]. 0 on a CPU-only host, 1 when Resident.
 	ResidentShare float64
 
-	// MeetsSpeedFloor reports whether this is worth offering at all —
-	// TokpsEstimate >= DecodeFloorTokps, or true when no claim is made.
+	// MeetsSpeedFloor reports whether TokpsEstimate clears
+	// DecodeFloorTokps, and is true when no claim is made. INFORMATIONAL
+	// on its own — see UpperBound for whether it may be acted on.
 	MeetsSpeedFloor bool
+
+	// UpperBound reports that the real machine cannot be FASTER than
+	// TokpsEstimate, which is the only condition under which a caller
+	// may exclude a model for being slow.
+	//
+	// It holds exactly for the spilled-discrete case, where the GPU's
+	// contribution is priced at zero precisely so the unknown card
+	// cannot make the answer wrong. Everywhere else the figure rests on
+	// a bandwidth constant set at the FLOOR of its population, so the
+	// real machine is usually faster — a lower bound. Rejecting on a
+	// lower bound would withhold, from an M4 Max, models that an M4 base
+	// runs; the wizard may still SAY "this may be slow", because that
+	// costs the user a sentence rather than a choice.
+	//
+	// Measured per-device bandwidth (waired-ai/waired-agent#251) is what
+	// turns the other classes into decisions rather than annotations.
+	//
+	// json:"-" for the same reason Verdict.Estimate carries it: nothing
+	// marshals a decision, each consumer projects what it needs onto its
+	// own wire shape, and the additive-only guard asks an addition to a
+	// published struct to say so. The neighbouring fields predate the
+	// guard's view of this struct and cannot be retagged now.
+	UpperBound bool `json:"-"`
 }
 
 // ActiveBytesPerToken is how many bytes of weights a decode step must
@@ -401,6 +425,9 @@ func EstimateOllamaDecode(v catalog.Variant, h Host) Estimate {
 	}
 	e := rate(BandwidthSystemRAMGBs/(1-share), share)
 	e.Resident = false
+	// The only figure here that no unknown hardware can improve on: the
+	// card's own reads were priced at zero.
+	e.UpperBound = true
 	return e
 }
 
@@ -450,11 +477,11 @@ func OllamaResidentMB(v catalog.Variant, unifiedMemory bool) int {
 // A CPU-only host is reported as fitting: spilling to system RAM is how
 // it is meant to run, and the RAM gate is its real bound.
 //
-// Note the asymmetry that creates — a host WITH a small GPU is judged
-// more strictly than the same host without one, even though it would
-// serve the model faster. That is what waired-ai/waired-agent#229 is
-// about, and the fix changes what every consumer offers, so it lands
-// with them; this file supplies the measurement it needs.
+// This is NO LONGER the capacity gate on discrete GPUs — see OllamaFit
+// for why — but it remains the honest answer to "can the card hold all
+// of this", which is what the agent's deficit labels and the control
+// plane's shortfall figures are explaining. It IS still the capacity
+// gate on unified memory, where there is nowhere to spill.
 //
 // Exposed separately from OllamaFit because a caller explaining WHY a
 // model was rejected has to know which of the two gates bound: naming
@@ -489,27 +516,41 @@ func OllamaResident(v catalog.Variant, h Host) Verdict {
 // authored for a host that loads into system RAM would wrongly reject
 // every large MoE there — residency is the honest bound on UMA.
 //
-// The residency requirement on DISCRETE hosts is what makes this rule
-// non-monotone in hardware: a 128 GB host serves a 62 GB model, and the
-// same host with a 24 GB card does not, even though the card can only
-// make it faster (waired-ai/waired-agent#229). Fixing that changes which
-// models every consumer offers, so it lands with the consumers rather
-// than here; this change adds the measurement it needs. Estimate is
-// populated on every verdict today, including the ones Fits rejects.
+// Residency is required only where there is nowhere to spill TO:
+//
+//	ClassCPUOnly   system RAM >= min_ram_gb
+//	ClassDiscrete  system RAM >= min_ram_gb  (residency NOT required)
+//	ClassUnified   the weights fit the usable pool (min_ram_gb ignored)
+//
+// The discrete row is the correction waired-ai/waired-agent#229 exists
+// for. Requiring full residency there made adding a graphics card REMOVE
+// models: a 128 GB host served a 62 GB model, and the same host with a
+// 24 GB card did not — even though ollama offloads what fits and runs
+// the remainder from the same system RAM the card-less host was using,
+// which is strictly faster. A capacity rule has to be monotone in
+// hardware, and this one now is by construction: the discrete gate IS
+// the CPU-only gate, and Estimate's spill bound is >= the CPU-only rate
+// for every resident share.
+//
+// Fits is capacity only. Whether the result would be fast enough to want
+// rides on Verdict.Estimate, so a caller can offer a slow-but-working
+// model with a warning rather than silently withholding it — which is
+// what withholding the 62 GB model above amounted to.
 func OllamaFit(v catalog.Variant, h Host) Verdict {
-	if !h.UnifiedMemory {
+	var out Verdict
+	if h.Class() == ClassUnified {
+		out = OllamaResident(v, h)
+	} else if v.MinRAMGB > 0 && h.RAMTotalGB > 0 && h.RAMTotalGB < v.MinRAMGB {
 		// RAMTotalGB == 0 means detection failed (e.g. an OS whose probe
 		// we do not have); skip the gate rather than reject everything.
-		if v.MinRAMGB > 0 && h.RAMTotalGB > 0 && h.RAMTotalGB < v.MinRAMGB {
-			return Verdict{
-				Reason:   ReasonInsufficientRAM,
-				NeedMB:   v.MinRAMGB * 1024,
-				HaveMB:   h.RAMTotalGB * 1024,
-				Estimate: EstimateOllamaDecode(v, h),
-			}
+		out = Verdict{
+			Reason: ReasonInsufficientRAM,
+			NeedMB: v.MinRAMGB * 1024,
+			HaveMB: h.RAMTotalGB * 1024,
 		}
+	} else {
+		out = Verdict{Fits: true}
 	}
-	out := OllamaResident(v, h)
 	out.Estimate = EstimateOllamaDecode(v, h)
 	return out
 }

@@ -183,3 +183,79 @@ func TestActiveWeightGB(t *testing.T) {
 		})
 	}
 }
+
+// TestUpgradeCandidate_SpillBoundCapsThePrediction closes a gap #229
+// opened. The prediction extrapolates from a measurement taken on the
+// ACTIVE model, and that silently assumes the candidate reads at the
+// same effective bandwidth. It used to be safe by accident: RankModels'
+// residency gate could not return a candidate the card would not hold.
+// With the gate gone, a measurement taken on a resident model would
+// otherwise promise graphics-card speed for a model that reads most of
+// its weights over PCIe.
+//
+// Product contract, and it takes some setting up, because the cap is
+// the LAST guard rather than the first. The candidate is a mixture of
+// experts so its small active share carries it past the speed floor, and
+// both models are 131072-native so the #624 context floor finds nothing
+// to prefer and falls through — which is exactly the situation the
+// residency gate used to backstop. A dense candidate, or a 262144-native
+// one, is dropped an earlier gate and proves nothing about this one.
+func TestUpgradeCandidate_SpillBoundCapsThePrediction(t *testing.T) {
+	// An 8 GB card with plenty of RAM behind it: the active model is
+	// resident and measured fast, the candidate is eight times larger.
+	hw := hardware.Profile{
+		RAMTotalGB: 128,
+		GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4060", VRAMTotalMB: 8192}},
+	}
+	active := catalog.Variant{
+		VariantID: "q4-gguf", Format: "ollama-tag", RuntimeSupport: []string{"ollama"},
+		EstimatedWeightGB: 3.0, MinRAMGB: 8, QualityTier: 40,
+		ParamCount: 4_000_000_000, KVBytesPerTokenFP16: 16384,
+		Source: catalog.VariantSource{Type: "ollama", Tag: "small:4b"},
+	}
+	candidate := catalog.Variant{
+		VariantID: "q4-gguf", Format: "ollama-tag", RuntimeSupport: []string{"ollama"},
+		EstimatedWeightGB: 24.0, MinRAMGB: 32, QualityTier: 80,
+		ParamCount: 32_000_000_000, ActiveParams: 3_000_000_000,
+		KVBytesPerTokenFP16: 16384,
+		Source:              catalog.VariantSource{Type: "ollama", Tag: "big:32b-a3b"},
+	}
+	cat := []catalog.Manifest{
+		{ModelID: "active-small", ContextLength: 131072, Capabilities: []string{"chat"},
+			Variants: []catalog.Variant{active}},
+		{ModelID: "candidate-big", ContextLength: 131072, Capabilities: []string{"chat"},
+			Variants: []catalog.Variant{candidate}},
+	}
+
+	in := UpgradeInput{
+		Pick:            PickInput{Catalog: cat, Hardware: hw, Engine: catalog.RuntimeOllama},
+		ActiveModelID:   "active-small",
+		ActiveVariantID: "q4-gguf",
+		// 200 tok/s over 3 GB of active weights implies ~600 GB/s of
+		// effective bandwidth. Extrapolated onto the candidate's 2.25 GB
+		// active share that is ~266 tok/s — far above the bar — while the
+		// card holds barely a quarter of its weights.
+		MeasuredTokps: 200,
+		FloorTokps:    40,
+	}
+
+	// The fixture is only meaningful if both gates it must pass are real.
+	if naive := in.MeasuredTokps * ActiveWeightGB(active) / ActiveWeightGB(candidate); naive < in.FloorTokps*DefaultUpgradeSafetyMargin {
+		t.Fatalf("fixture no longer exercises the cap: the naive prediction %.1f is "+
+			"already below the bar", naive)
+	}
+	ranked, err := RankModels(in.Pick)
+	if err != nil {
+		t.Fatalf("RankModels: %v", err)
+	}
+	if len(ranked) == 0 || ranked[0].Manifest.ModelID != "candidate-big" {
+		t.Fatalf("fixture no longer exercises the cap: the candidate did not survive "+
+			"selection (ranked=%d)", len(ranked))
+	}
+
+	if _, predicted, ok := UpgradeCandidate(in); ok {
+		t.Errorf("suggested an upgrade at %.1f tok/s; the candidate holds about a quarter "+
+			"of its weights on an 8 GB card and cannot reach the rate a resident "+
+			"measurement implies", predicted)
+	}
+}

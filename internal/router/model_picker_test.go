@@ -853,3 +853,123 @@ func TestOllamaVRAMOverheadMB(t *testing.T) {
 		})
 	}
 }
+
+// TestRankModels_SpeedFloorGuardsTheRelaxedCapacityGate is the router
+// half of #229, and it only makes sense as a pair with the capacity
+// change it accompanies.
+//
+// hostFits stopped requiring GPU residency on discrete hosts, because
+// requiring it meant adding a graphics card REMOVED models. That leaves
+// the ranking exposed: a model with a higher quality tier now survives
+// the filter even when the card holds almost none of it, and tier-desc
+// sorting would hand it the auto-selection. The speed pass is what stops
+// that, and it may only exclude on an upper bound — the card's own reads
+// priced at zero — so the exclusion holds for a card of any speed.
+//
+// Product contract. The two candidates below are built to differ ONLY in
+// active parameters: same weight, same tier order, same host.
+func TestRankModels_SpeedFloorGuardsTheRelaxedCapacityGate(t *testing.T) {
+	// 128 GB of RAM behind a 24 GB card: both models clear the RAM gate,
+	// neither is resident, so capacity alone cannot separate them.
+	hw := hardware.Profile{
+		RAMTotalGB: 128,
+		GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4090", VRAMTotalMB: 24564}},
+	}
+	dense := catalog.Manifest{
+		ModelID: "spilled-dense", ContextLength: 262144,
+		Capabilities: []string{"chat", "tool_use"},
+		Variants: []catalog.Variant{{
+			VariantID: "q4-gguf", Format: "ollama-tag", RuntimeSupport: []string{"ollama"},
+			EstimatedWeightGB: 81.0, MinRAMGB: 96, QualityTier: 95,
+			ParamCount: 122_000_000_000, ActiveParams: 122_000_000_000,
+			KVBytesPerTokenFP16: 24576,
+			Source:              catalog.VariantSource{Type: "ollama", Tag: "dense:122b"},
+		}},
+	}
+	moe := catalog.Manifest{
+		ModelID: "spilled-moe", ContextLength: 262144,
+		Capabilities: []string{"chat", "tool_use"},
+		Variants: []catalog.Variant{{
+			VariantID: "q4-gguf", Format: "ollama-tag", RuntimeSupport: []string{"ollama"},
+			EstimatedWeightGB: 81.0, MinRAMGB: 96, QualityTier: 90,
+			ParamCount: 122_000_000_000, ActiveParams: 3_300_000_000,
+			KVBytesPerTokenFP16: 24576,
+			Source:              catalog.VariantSource{Type: "ollama", Tag: "moe:122b"},
+		}},
+	}
+
+	// Both fit: the capacity gate is the RAM gate on a discrete host now.
+	for _, m := range []catalog.Manifest{dense, moe} {
+		if !hostFits(catalog.RuntimeOllama, m.Variants[0], hw) {
+			t.Fatalf("%s does not fit; the capacity gate is still requiring residency", m.ModelID)
+		}
+	}
+
+	// The higher tier reads 122B parameters per token through a spill and
+	// cannot clear the floor on any card. The lower tier reads 3.3B and
+	// does. Auto-selection must take the one that works.
+	pick, err := PickModel(PickInput{
+		Catalog: []catalog.Manifest{dense, moe}, Hardware: hw, Engine: catalog.RuntimeOllama,
+	})
+	if err != nil {
+		t.Fatalf("PickModel: %v", err)
+	}
+	if pick.Manifest.ModelID != "spilled-moe" {
+		t.Errorf("ModelID = %q, want spilled-moe — tier 95 spilled at 122B active "+
+			"per token is not a usable auto-selection", pick.Manifest.ModelID)
+	}
+	if !pick.DecodeEstimate.MeetsSpeedFloor {
+		t.Errorf("the chosen pick reports %+v; auto-selection must not land below the floor",
+			pick.DecodeEstimate)
+	}
+
+	// The user may still ASK for it: an explicit preference bypasses the
+	// pass, exactly as it bypasses the #624 context floor.
+	pinned, err := PickModel(PickInput{
+		Catalog: []catalog.Manifest{dense, moe}, Hardware: hw,
+		Engine: catalog.RuntimeOllama, PreferredModelID: "spilled-dense",
+	})
+	if err != nil {
+		t.Fatalf("PickModel(pinned): %v", err)
+	}
+	if pinned.Manifest.ModelID != "spilled-dense" {
+		t.Errorf("pinned ModelID = %q, want spilled-dense — a preference must survive "+
+			"the speed pass the way it survives the context floor", pinned.Manifest.ModelID)
+	}
+}
+
+// TestHostFitsIsMonotoneInHardware is the router-level statement of the
+// #229 invariant: whatever a host can serve, the same host with a
+// graphics card added can serve too. hostFits is the predicate
+// RankModels filters on, so an inversion here is an inversion in
+// everything downstream — including what the wizard offers, since the
+// control plane calls the same rule.
+func TestHostFitsIsMonotoneInHardware(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	for _, ram := range []int{8, 16, 32, 64, 128, 512} {
+		for _, vram := range []int{4096, 8192, 12288, 16384, 24564} {
+			bare := hardware.Profile{RAMTotalGB: ram}
+			carded := hardware.Profile{
+				RAMTotalGB: ram,
+				GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: vram}},
+			}
+			for _, m := range manifests {
+				for _, v := range m.Variants {
+					if !engineSupports(v, catalog.RuntimeOllama) {
+						continue
+					}
+					if !hostFits(catalog.RuntimeOllama, v, bare) {
+						continue
+					}
+					if !hostFits(catalog.RuntimeOllama, v, carded) {
+						t.Fatalf("%s/%s: %d GB of RAM serves it, but the same host with a "+
+							"%d MB card does not", m.ModelID, v.VariantID, ram, vram)
+					}
+				}
+			}
+		}
+	}
+}
