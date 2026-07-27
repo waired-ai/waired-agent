@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
@@ -30,6 +31,7 @@ const (
 	engineActionSkipReuse                           // operator chose to reuse their own Ollama
 	engineActionSkipOptOut                          // WAIRED_NO_OLLAMA / --skip-ollama opt-out
 	engineActionSkipNotElevated                     // install needs admin/root and we have neither
+	engineActionRepair                              // our own bits are there but unconfigured
 )
 
 // engineInstallDecision decides whether init should install the bundled
@@ -44,7 +46,7 @@ const (
 // message for non-admin users.
 func engineInstallDecision(
 	goos string, elevated bool, det setup.OllamaDetection,
-	source string, bundledPresent, optOut bool,
+	source string, bundledPresent, optOut, incomplete bool,
 ) engineInstallAction {
 	if optOut {
 		return engineActionSkipOptOut
@@ -62,11 +64,14 @@ func engineInstallDecision(
 		}
 		return engineActionInstall
 	case "windows":
-		if det.Installed {
+		if det.Installed && !incomplete {
 			return engineActionSkipPresent
 		}
 		if !elevated {
 			return engineActionSkipNotElevated
+		}
+		if incomplete {
+			return engineActionRepair
 		}
 		return engineActionInstall
 	default: // darwin
@@ -75,6 +80,40 @@ func engineInstallDecision(
 		}
 		return engineActionInstall
 	}
+}
+
+// engineIncomplete reports whether det points at an install this installer
+// started and never finished.
+//
+// scripts/install/ollama-windows.ps1 writes the waired-managed marker as its
+// LAST step, only once the binary, the machine PATH entry and the GPU env
+// vars are all in place — so bits sitting in waired's own install directory
+// with no marker mean "extracted, never configured". That is exactly the
+// state a failed signature check used to leave behind, and because the
+// Windows branch above keyed on det.Installed alone, every later run skipped
+// the install and the host stayed broken forever (#190).
+//
+// Only waired's own directory counts. A user's own Ollama — the per-user
+// OllamaSetup.exe layout under %LOCALAPPDATA%, or anything on PATH — is
+// never called incomplete, and an operator who explicitly chose to reuse
+// their own engine short-circuits above this anyway.
+//
+// Windows-only, and pure so the table test runs on every OS: it compares
+// Windows paths textually rather than through filepath, whose separator
+// would differ on the Linux CI runner.
+func engineIncomplete(goos string, det setup.OllamaDetection, programFiles string) bool {
+	if goos != "windows" || !det.Installed || det.WairedManaged || programFiles == "" {
+		return false
+	}
+	return normalizeWindowsPath(det.Path) ==
+		normalizeWindowsPath(programFiles+`\Ollama\ollama.exe`)
+}
+
+// normalizeWindowsPath lower-cases and unifies separators so two spellings
+// of the same Windows path compare equal. Windows paths are
+// case-insensitive and accept either separator.
+func normalizeWindowsPath(p string) string {
+	return strings.ToLower(strings.ReplaceAll(p, `/`, `\`))
 }
 
 // bundledEnginePath is where Linux's strict bundled resolver expects the
@@ -105,10 +144,17 @@ func ensureBundledEngine(
 	}
 	action := engineInstallDecision(
 		runtime.GOOS, elevation.IsElevated(), det, source,
-		bundledPresent, os.Getenv("WAIRED_NO_OLLAMA") != "")
+		bundledPresent, os.Getenv("WAIRED_NO_OLLAMA") != "",
+		engineIncomplete(runtime.GOOS, det, os.Getenv("ProgramFiles")))
 	switch action {
-	case engineActionInstall:
-		writePromptf(out, "%s Installing the Ollama engine (one-time download)...\n", emo("📦", ">>"))
+	case engineActionInstall, engineActionRepair:
+		// The repair path re-runs the same installer: it skips the base
+		// bits it finds already extracted, so nothing is re-downloaded.
+		if action == engineActionRepair {
+			writePromptf(out, "%s Repairing an unfinished Ollama engine install...\n", emo("📦", ">>"))
+		} else {
+			writePromptf(out, "%s Installing the Ollama engine (one-time download)...\n", emo("📦", ">>"))
+		}
 		if err := installOllama(true, stateDir); err != nil {
 			writePromptf(out,
 				"%s Engine install failed: %v\n  The agent retries once an engine appears; install it by hand later: %s\n",

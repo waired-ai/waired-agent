@@ -151,6 +151,35 @@ function ItSoft {
     }
 }
 
+# --- engine-install completeness assert (#190) -------------------------------
+# An install that failed after extraction used to leave binaries on disk with
+# no PATH entry, no GPU env and no marker -- and every later run treated that
+# as "installed" and skipped the repair, so repeated clean reinstalls
+# reproduced the identical failure. ollama-windows.ps1 now writes the marker
+# LAST, as a completion receipt, so these two are the observable difference
+# between a finished install and a stranded one.
+#
+# Deliberately NOT asserted here: OLLAMA_VULKAN / OLLAMA_IGPU_ENABLE. They are
+# set only when GPU-mode resolution picks 'vulkan', and CI runners have no
+# such GPU -- which is why the teardown block below seeds them by hand before
+# exercising uninstall's clear. The script's own Test-Install asserts them on
+# a host where the vulkan path actually runs.
+function Assert-EngineComplete {
+    param([string]$Context)
+
+    $ollamaDir = Join-Path $env:ProgramFiles 'Ollama'
+    $marker    = Join-Path $ollamaDir '.waired-managed.json'
+    if (Test-Path -LiteralPath $marker) { ItOk "waired-managed marker present ($Context): $marker" }
+    else { ItBad "waired-managed marker missing ($Context): $marker -- install did not run to completion" }
+
+    $machinePath = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+    if ((($machinePath -split ';') | Where-Object { $_ -eq $ollamaDir }).Count -gt 0) {
+        ItOk "ollama install dir on the machine PATH ($Context)"
+    } else {
+        ItBad "ollama install dir NOT on the machine PATH ($Context): $ollamaDir"
+    }
+}
+
 # --- daemon-path executor engine-install assert (waired#835 §9/§11) ----------
 # Windows analog of lib/installtest-daemon-engine.sh's assert_daemon_engine.
 # Regression bar: an engine-less daemon-path first-run ends up WITH an engine
@@ -181,6 +210,13 @@ function Assert-DaemonEngine {
     if (-not $ollama) { $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue; if ($cmd) { $ollama = $cmd.Source } }
     if ($ollama) { ItOk "ollama engine installed by the daemon-path executor ($ollama)" }
     else { ItBad "no engine after a daemon-path first-run (executor install did not land -- pre-N3 behaviour)" }
+
+    # (#190) The marker is the install's completion receipt, not just a
+    # provenance stamp: ollama-windows.ps1 writes it last, after PATH, models
+    # dir, GPU env and the post-install check. Bits without it mean an
+    # install that died half-way, which the next run now repairs -- so an
+    # exe alone is no longer evidence that this leg succeeded.
+    Assert-EngineComplete -Context 'daemon-path executor'
 
     $state = ''
     try { $state = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).subsystem_state } catch { }
@@ -224,12 +260,9 @@ function Assert-Inference {
     if ($ollama) { ItOk "ollama engine installed ($ollama)" }
     else { ItBad "ollama engine not installed (waired init --inference-enabled=true should have installed it)" }
 
-    # 1b) the waired-managed marker: init's install must drop it so a later
-    #     `waired init` recognises the engine as waired's own and never asks
-    #     the bundled-vs-reuse question about it.
-    $marker = Join-Path $env:ProgramFiles 'Ollama\.waired-managed.json'
-    if (Test-Path -LiteralPath $marker) { ItOk "waired-managed marker present ($marker)" }
-    else { ItBad "waired-managed marker missing ($marker)" }
+    # 1b) the waired-managed marker and the machine PATH entry: see
+    #     Assert-EngineComplete.
+    Assert-EngineComplete -Context 'waired init'
 
     # 2) bundled model READY in the waired-owned store (:9475), via the agent
     #    mgmt API. init (#519) foreground-waits for the pull, so it is normally
@@ -1223,6 +1256,12 @@ if ($Contract) {
         # vacuous -- seed them here so -Clean's Remove-Ollama is actually exercised.
         [Environment]::SetEnvironmentVariable('OLLAMA_VULKAN', '1', 'Machine')
         [Environment]::SetEnvironmentVariable('OLLAMA_IGPU_ENABLE', '1', 'Machine')
+        # (#191) Same reasoning for the download staging directory: the CI
+        # install leg succeeds, so it never leaves one behind, and the sweep
+        # assert below would be vacuous without a planted victim.
+        $stageProbe = Join-Path $env:TEMP ('ollama-stage-' + [Guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $stageProbe -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $stageProbe 'ollama-windows-amd64.zip') -Value 'stub'
         & (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes
         if ($LASTEXITCODE -ne 0) { ItBad "uninstall.ps1 -Clean exited $LASTEXITCODE" }
 
@@ -1235,6 +1274,13 @@ if ($Contract) {
         # wrote (seeded above), not just OLLAMA_MODELS.
         if (-not [Environment]::GetEnvironmentVariable('OLLAMA_VULKAN', 'Machine'))      { ItOk "OLLAMA_VULKAN cleared (-Clean)" }      else { ItBad "OLLAMA_VULKAN remains after -Clean" }
         if (-not [Environment]::GetEnvironmentVariable('OLLAMA_IGPU_ENABLE', 'Machine')) { ItOk "OLLAMA_IGPU_ENABLE cleared (-Clean)" } else { ItBad "OLLAMA_IGPU_ENABLE remains after -Clean" }
+        # (#191) -Clean reclaims the ~1.4 GB staging directories a killed
+        # engine download used to leave behind forever (seeded above).
+        if (-not (Test-Path -LiteralPath $stageProbe)) { ItOk "ollama staging directories swept (-Clean)" }
+        else {
+            ItBad "ollama-stage-* remains after -Clean ($stageProbe)"
+            Remove-Item -LiteralPath $stageProbe -Recurse -Force -ErrorAction SilentlyContinue
+        }
 
         # (#754) zero per-user / cross-surface artifacts. uninstall.ps1 -Clean now
         # runs `waired claude disable` + `waired unlink` for the invoking user (the

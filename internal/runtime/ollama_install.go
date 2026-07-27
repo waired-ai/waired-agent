@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -65,12 +66,35 @@ type OllamaInstaller struct {
 func NewOllamaInstaller(baseDir string) *OllamaInstaller {
 	i := &OllamaInstaller{
 		BaseDir:    baseDir,
-		HTTPClient: &http.Client{Timeout: 10 * time.Minute},
+		HTTPClient: newOllamaDownloadClient(),
 		Now:        time.Now,
 	}
 	i.downloadFn = i.httpGet
 	i.extractFn = extractTarZst
 	return i
+}
+
+// newOllamaDownloadClient builds the HTTP client for the ~700 MB tarball.
+//
+// Deliberately NO http.Client.Timeout: that is a whole-request cap, so it
+// counts body streaming and fails deterministically below roughly 2.5 MB/s
+// no matter how healthy the transfer is (#189). The phases that genuinely
+// should be bounded by elapsed time -- connect, TLS, waiting for response
+// headers -- are bounded individually here, and the body is bounded on
+// no-progress by download.Fetch's stall watchdog.
+func newOllamaDownloadClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			ForceAttemptHTTP2:     true,
+		},
+	}
 }
 
 // BinaryPath is the absolute path to the bundled ollama binary.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/pwsh"
 	"github.com/waired-ai/waired-agent/internal/update"
 )
 
@@ -309,6 +310,10 @@ func runInstaller(target string, checkOnly, yes bool, channel, hostChannel strin
 
 	name, args := update.InstallerArgs(goos, scriptPath, checkOnly, yes, channel)
 	cmd := exec.Command(name, args...)
+	// On Windows this is Windows PowerShell 5.1, which must not inherit a
+	// PowerShell 7 PSModulePath (#178) — see internal/platform/pwsh. The
+	// helper is an identity transform on the sh branches.
+	cmd.Env = pwsh.Env()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("installer (%s) failed: %w", name, err)

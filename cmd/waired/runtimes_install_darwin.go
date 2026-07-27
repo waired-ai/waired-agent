@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -52,10 +51,18 @@ func installOllama(yes bool, stateDir string) error {
 		return errors.New("aborted by user")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	// A backstop, not the working bound: the download itself is bounded by
+	// download.Fetch's no-progress watchdog (#189).
+	budget := ollamaInstallTimeout(os.Getenv)
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	fmt.Println("Installing Ollama.app (downloading the official release)...")
 	if err := installOllamaApp(ctx); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf(
+				"ollama install: timed out after %s (raise it with %s, e.g. %s=3h): %w",
+				budget, ollamaInstallTimeoutEnv, ollamaInstallTimeoutEnv, err)
+		}
 		return fmt.Errorf("ollama install: %w", err)
 	}
 	fmt.Println("Ollama installed. Launch it once so the 127.0.0.1:11434 server starts:")

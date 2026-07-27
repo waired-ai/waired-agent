@@ -684,6 +684,23 @@ function Remove-Ollama {
             }
         }
     }
+
+    # (#191) Staging directories left by killed engine downloads: ~1.4 GB
+    # each, and until now nothing swept them -- not even a -Clean uninstall,
+    # so the disk stayed occupied after every trace of Ollama was gone. Both
+    # temp roots: the elevated user's, and LocalSystem's, since the
+    # daemon-path setup executor can run the installer as SYSTEM.
+    $tempRoots = @($env:TEMP, (Join-Path $env:SystemRoot 'Temp')) |
+        Where-Object { $_ } | Select-Object -Unique
+    foreach ($t in $tempRoots) {
+        if (-not (Test-Path -LiteralPath $t)) { continue }
+        foreach ($d in @(Get-ChildItem -LiteralPath $t -Directory -Filter 'ollama-stage-*' -ErrorAction SilentlyContinue)) {
+            $stage = $d.FullName
+            Common-Run "Remove-Item $stage" {
+                Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 function Show-Done {

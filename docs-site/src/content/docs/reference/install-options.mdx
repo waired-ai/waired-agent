@@ -147,6 +147,7 @@ script to disk.
 | `--share-with-mesh true\|false` | `-ShareWithMesh` | | Answer "let your other devices use this computer's AI?" without being asked. |
 | `WAIRED_VERSION=1.2.3` | `$env:WAIRED_VERSION` | `WAIRED_VERSION` | Pin an exact release. |
 | | | `WAIRED_STATE_DIR` | Where Waired keeps identity and settings. macOS and Windows only — see below. |
+| | | `WAIRED_OLLAMA_INSTALL_TIMEOUT` | How long the AI software's one-time download may take before Waired gives up. Defaults to `60m` — raise it (e.g. `3h`) only on a very slow connection. |
 
 <Aside type="note" title="Windows flags need the script on disk">
 	The `iwr … | iex` one-liner cannot pass parameters. Either use the

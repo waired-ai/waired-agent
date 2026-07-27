@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -30,10 +29,18 @@ func installOllama(yes bool, stateDir string) error {
 	if !yes && !confirmTTY(fmt.Sprintf("Install waired's bundled Ollama %s into %s ?", infruntime.OllamaPinnedVersion, baseDir)) {
 		return errors.New("aborted by user")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	// A backstop, not the working bound: the download itself is bounded by
+	// download.Fetch's no-progress watchdog (#189).
+	budget := ollamaInstallTimeout(os.Getenv)
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	fmt.Printf("Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
 	if err := installOllamaBundled(ctx, baseDir); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf(
+				"ollama install: timed out after %s (raise it with %s, e.g. %s=3h): %w",
+				budget, ollamaInstallTimeoutEnv, ollamaInstallTimeoutEnv, err)
+		}
 		return fmt.Errorf("ollama install: %w", err)
 	}
 	// The engine was just extracted under sudo (root-owned); hand the state

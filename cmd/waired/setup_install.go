@@ -257,13 +257,17 @@ func installEngineAsExecutor(
 	// no terminal question on this path, and we only get here when the
 	// daemon reports no engine installed at all — so there is nothing to
 	// reuse. A host that already has one never reaches this line.
+	det := setupDetectEngine(ctx)
 	action := engineInstallDecision(
-		goos, elevated, setupDetectEngine(ctx),
+		goos, elevated, det,
 		agentconfig.OllamaSourceBundled, bundledPresent,
-		os.Getenv("WAIRED_NO_OLLAMA") != "")
+		os.Getenv("WAIRED_NO_OLLAMA") != "",
+		engineIncomplete(goos, det, os.Getenv("ProgramFiles")))
 
 	switch action {
-	case engineActionInstall:
+	// Repair runs the same installer against bits an earlier attempt left
+	// unconfigured (#190); it skips the base download, so it is cheap.
+	case engineActionInstall, engineActionRepair:
 		writePromptf(out, "%s %s\n", emo("📦", ">>"), narration)
 		if err := setupInstallEngine(true, stateDir); err != nil {
 			writePromptf(out, "%s Engine install failed: %v\n", emo("⚠️", "!"), err)
