@@ -31,11 +31,38 @@ func notify(body string, level notification.Level) {
 	_ = notifier.Notify("Waired", body, level)
 }
 
-// confirmWithLabels is a seam over the per-OS ConfirmWithLabels dialog so
-// the public-consent / kill-switch flows can be exercised without a real
-// desktop backend (tests swap it). It is genuinely used by the handlers
-// below, so the linter does not flag it as dead.
-var confirmWithLabels = ConfirmWithLabels
+// Seams over the per-OS dialog and host-integration helpers. Every handler
+// below calls the lowercase name; nothing in the handler layer calls the
+// exported one directly (scripts/ci/tray-dialog-seam-guard.sh enforces that).
+//
+// The reason is that on darwin these are not no-ops. ShowAbout / ShowError /
+// ShowConfirm / ConfirmYesNo / ConfirmWithLabels shell out to `osascript
+// display dialog`, which shows a real modal and does not return until a human
+// clicks it: a unit test that reaches one hangs a headless runner to the job
+// timeout. That is #152, and it is why tray-darwin.yml could vet this package
+// but not test it. The *ViaElevation four are worse still — they raise a real
+// administrator-password prompt. OpenBrowser and CopyToClipboard do return
+// promptly, but they launch a browser and overwrite the pasteboard, which a
+// test has no business doing either.
+//
+// seams_test.go's TestMain replaces all of them with recording no-ops, so the
+// suite is hermetic by construction rather than by each test remembering to
+// opt in. The layer BELOW each seam stays under test per OS: the real helpers
+// and their pure argv / AppleScript builders are exercised by
+// dialog_darwin_test.go, dialog_linux_test.go and actions_windows_test.go.
+var (
+	showAbout                 = ShowAbout
+	showError                 = ShowError
+	showConfirm               = ShowConfirm
+	confirmYesNo              = ConfirmYesNo
+	confirmWithLabels         = ConfirmWithLabels
+	copyToClipboard           = CopyToClipboard
+	openBrowser               = OpenBrowser
+	loginViaElevation         = LoginViaElevation
+	logoutViaElevation        = LogoutViaElevation
+	installOllamaViaElevation = InstallOllamaViaElevation
+	updateViaElevation        = UpdateViaElevation
+)
 
 // iconConnected / iconDisconnected / iconError / iconDegraded are
 // defined in icons_unix.go and icons_windows.go: Unix (linux/darwin)
@@ -599,7 +626,7 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	slog.Debug("tray: menu action", "action", "select-model", "model", modelID)
 	resp, err := t.cli.SetPreferredModel(ctx, modelID)
 	if err != nil {
-		ShowError(fmt.Sprintf("Switch model failed: %v", err))
+		showError(fmt.Sprintf("Switch model failed: %v", err))
 		return
 	}
 	t.onModelSwitchAccepted(resp)
@@ -675,7 +702,7 @@ func (t *tray) onSelectWorkerMode(ctx context.Context, idx int) {
 	}
 	slog.Debug("tray: menu action", "action", "worker-mode", "mode", string(mode))
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Mode: mode}); err != nil {
-		ShowError(fmt.Sprintf("Set worker mode failed: %v", err))
+		showError(fmt.Sprintf("Set worker mode failed: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -697,7 +724,7 @@ func (t *tray) onSelectWorkerPin(ctx context.Context, idx int) {
 		Mode:               state.RoutingModePinned,
 		PinnedPeerDeviceID: entry.DeviceID,
 	}); err != nil {
-		ShowError(fmt.Sprintf("Pin worker failed: %v", err))
+		showError(fmt.Sprintf("Pin worker failed: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -706,7 +733,7 @@ func (t *tray) onSelectWorkerPin(ctx context.Context, idx int) {
 func (t *tray) onWorkerClearPin(ctx context.Context) {
 	slog.Debug("tray: menu action", "action", "worker-clear-pin")
 	if _, err := t.cli.SetWorker(ctx, management.WorkerRequest{Mode: state.RoutingModeAuto}); err != nil {
-		ShowError(fmt.Sprintf("Clear pin failed: %v", err))
+		showError(fmt.Sprintf("Clear pin failed: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -763,7 +790,7 @@ func (t *tray) onSelectClaudeRoute(ctx context.Context, class string, idx int) {
 		req.Main = &route
 	}
 	if _, err := t.cli.SetClaudeRouting(ctx, req); err != nil {
-		ShowError(fmt.Sprintf("Set Claude route failed: %v", err))
+		showError(fmt.Sprintf("Set Claude route failed: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -805,7 +832,7 @@ func (t *tray) handleClicks(ctx context.Context) {
 		case <-t.miAdmin.ClickedCh:
 			t.onAdmin()
 		case <-t.miAbout.ClickedCh:
-			ShowAbout(t.opts.Version, t.opts.BuildSHA)
+			showAbout(t.opts.Version, t.opts.BuildSHA)
 		case <-t.miAutostart.ClickedCh:
 			t.onToggleAutostart()
 		case <-t.miLogout.ClickedCh:
@@ -886,24 +913,24 @@ func (t *tray) ensureAutostartOnFirstLaunch() {
 func (t *tray) onToggleAutostart() {
 	enabled, err := t.autostartMgr.IsEnabled()
 	if err != nil {
-		ShowError(fmt.Sprintf("Autostart query failed: %v", err))
+		showError(fmt.Sprintf("Autostart query failed: %v", err))
 		return
 	}
 	slog.Debug("tray: menu action", "action", "toggle-autostart", "was_enabled", enabled)
 	if enabled {
 		if err := t.autostartMgr.Disable(); err != nil {
-			ShowError(fmt.Sprintf("Disable autostart failed: %v", err))
+			showError(fmt.Sprintf("Disable autostart failed: %v", err))
 			return
 		}
 	} else {
 		exe, err := os.Executable()
 		if err != nil {
-			ShowError(fmt.Sprintf("Enable autostart: cannot locate self: %v", err))
+			showError(fmt.Sprintf("Enable autostart: cannot locate self: %v", err))
 			return
 		}
 		args := []string{"-mgmt", t.opts.MgmtURL}
 		if err := t.autostartMgr.Enable(exe, args); err != nil {
-			ShowError(fmt.Sprintf("Enable autostart failed: %v", err))
+			showError(fmt.Sprintf("Enable autostart failed: %v", err))
 			return
 		}
 	}
@@ -933,11 +960,11 @@ func (t *tray) onToggle(ctx context.Context) {
 	switch kind {
 	case MenuConnected:
 		if err := t.cli.Pause(ctx); err != nil {
-			ShowError(fmt.Sprintf("Disconnect failed: %v", err))
+			showError(fmt.Sprintf("Disconnect failed: %v", err))
 		}
 	case MenuDisconnected:
 		if err := t.cli.Resume(ctx); err != nil {
-			ShowError(fmt.Sprintf("Connect failed: %v", err))
+			showError(fmt.Sprintf("Connect failed: %v", err))
 		}
 	case MenuNotSignedIn:
 		go t.startLogin(ctx)
@@ -957,13 +984,13 @@ func (t *tray) startLogin(ctx context.Context) {
 	st, err := t.cli.LoginStart(ctx, management.LoginStartRequest{ControlURL: t.opts.ControlURL})
 	if errors.Is(err, ErrLoginUnsupported) {
 		slog.Debug("tray: login: daemon lacks login API, using elevation fallback")
-		if err := LoginViaElevation(ctx, t.opts.ControlURL, t.opts.StateDir); err != nil {
-			ShowError(err.Error())
+		if err := loginViaElevation(ctx, t.opts.ControlURL, t.opts.StateDir); err != nil {
+			showError(err.Error())
 		}
 		return
 	}
 	if err != nil {
-		ShowError(fmt.Sprintf("Sign-in failed: %v", err))
+		showError(fmt.Sprintf("Sign-in failed: %v", err))
 		return
 	}
 	t.mu.Lock()
@@ -1009,8 +1036,8 @@ func (t *tray) pollLogin(ctx context.Context, snap *Snapshot) {
 		}
 		t.mu.Unlock()
 		if open {
-			if oerr := OpenBrowser(st.LoginURL); oerr != nil {
-				ShowError(fmt.Sprintf("Could not open browser; visit:\n%s", st.LoginURL))
+			if oerr := openBrowser(st.LoginURL); oerr != nil {
+				showError(fmt.Sprintf("Could not open browser; visit:\n%s", st.LoginURL))
 			}
 		}
 	}
@@ -1027,7 +1054,7 @@ func (t *tray) pollLogin(ctx context.Context, snap *Snapshot) {
 		if msg == "" {
 			msg = "sign-in failed"
 		}
-		ShowError("Sign-in failed: " + msg)
+		showError("Sign-in failed: " + msg)
 		t.mu.Lock()
 		t.loginSessionID = ""
 		t.mu.Unlock()
@@ -1046,11 +1073,11 @@ func (t *tray) onInferenceToggle(ctx context.Context) {
 	switch action {
 	case "Disable inference engine":
 		if err := t.cli.DisableInference(ctx); err != nil {
-			ShowError(fmt.Sprintf("Disable inference failed: %v", err))
+			showError(fmt.Sprintf("Disable inference failed: %v", err))
 		}
 	case "Enable inference engine":
 		if err := t.cli.EnableInference(ctx); err != nil {
-			ShowError(fmt.Sprintf("Enable inference failed: %v", err))
+			showError(fmt.Sprintf("Enable inference failed: %v", err))
 		}
 	}
 	go t.pollOnce(ctx)
@@ -1069,11 +1096,11 @@ func (t *tray) onEngineToggle(ctx context.Context) {
 	switch action {
 	case "Stop inference engine":
 		if err := t.cli.StopEngine(ctx); err != nil {
-			ShowError(fmt.Sprintf("Stop inference engine failed: %v", err))
+			showError(fmt.Sprintf("Stop inference engine failed: %v", err))
 		}
 	case "Start inference engine":
 		if err := t.cli.StartEngine(ctx); err != nil {
-			ShowError(fmt.Sprintf("Start inference engine failed: %v", err))
+			showError(fmt.Sprintf("Start inference engine failed: %v", err))
 		}
 	}
 	go t.pollOnce(ctx)
@@ -1092,8 +1119,8 @@ func (t *tray) onInstallEngine(ctx context.Context) {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "install-engine")
-	if err := InstallOllamaViaElevation(ctx, t.opts.StateDir); err != nil {
-		ShowError(fmt.Sprintf("Install Ollama failed: %v", err))
+	if err := installOllamaViaElevation(ctx, t.opts.StateDir); err != nil {
+		showError(fmt.Sprintf("Install Ollama failed: %v", err))
 		return
 	}
 	t.pollOnce(ctx)
@@ -1120,8 +1147,8 @@ func (t *tray) onUpdate(ctx context.Context) {
 	} else {
 		notify("Updating Waired…", notification.Info)
 	}
-	if err := UpdateViaElevation(ctx); err != nil {
-		ShowError(fmt.Sprintf("Update failed: %v", err))
+	if err := updateViaElevation(ctx); err != nil {
+		showError(fmt.Sprintf("Update failed: %v", err))
 		return
 	}
 	// The installer restarts the daemon as part of the swap; the next poll
@@ -1222,7 +1249,7 @@ func (t *tray) onUpdateNotifyToggle(ctx context.Context) {
 	}
 	slog.Debug("tray: menu action", "action", "update-notify-toggle", "enabled", enabled)
 	if _, err := t.cli.UpdateSettings(ctx, !enabled); err != nil {
-		ShowError(fmt.Sprintf("Update-notification toggle failed: %v", err))
+		showError(fmt.Sprintf("Update-notification toggle failed: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -1241,11 +1268,11 @@ func (t *tray) onShareToggle(ctx context.Context) {
 	switch action {
 	case "Stop sharing engine to mesh":
 		if err := t.cli.DisableShare(ctx); err != nil {
-			ShowError(fmt.Sprintf("Stop sharing failed: %v", err))
+			showError(fmt.Sprintf("Stop sharing failed: %v", err))
 		}
 	case "Share engine to mesh":
 		if err := t.cli.EnableShare(ctx); err != nil {
-			ShowError(fmt.Sprintf("Share failed: %v", err))
+			showError(fmt.Sprintf("Share failed: %v", err))
 		}
 	}
 	go t.pollOnce(ctx)
@@ -1284,7 +1311,7 @@ func (t *tray) onPublicShareToggle(ctx context.Context) {
 	case "Share this computer publicly":
 		resp, err := t.cli.EnablePublicShare(ctx, 0)
 		if err != nil {
-			ShowError(fmt.Sprintf("Public sharing: %v", err))
+			showError(fmt.Sprintf("Public sharing: %v", err))
 			return
 		}
 		if resp.Note != "" {
@@ -1301,8 +1328,8 @@ func (t *tray) onPublicShareToggle(ctx context.Context) {
 		if !ok {
 			// No desktop dialog backend — do not stop other people's running
 			// requests without showing the warning; hand off to the CLI.
-			if err := CopyToClipboard("waired public unshare"); err != nil {
-				ShowError("Public sharing: " + err.Error())
+			if err := copyToClipboard("waired public unshare"); err != nil {
+				showError("Public sharing: " + err.Error())
 				return
 			}
 			notify("Run `waired public unshare` in a terminal to stop public sharing.", notification.Info)
@@ -1313,7 +1340,7 @@ func (t *tray) onPublicShareToggle(ctx context.Context) {
 		}
 		resp, err := t.cli.DisablePublicShare(ctx)
 		if err != nil {
-			ShowError(fmt.Sprintf("Public sharing: %v", err))
+			showError(fmt.Sprintf("Public sharing: %v", err))
 			return
 		}
 		if resp.Note != "" {
@@ -1368,7 +1395,7 @@ func (t *tray) onPublicUseMode(ctx context.Context, idx int) {
 		_, err = t.cli.SetPublicUse(ctx, management.PublicUseUpdateRequest{Mode: &mode})
 	}
 	if err != nil {
-		ShowError(fmt.Sprintf("Public use: %v", err))
+		showError(fmt.Sprintf("Public use: %v", err))
 		return
 	}
 	go t.pollOnce(ctx)
@@ -1383,15 +1410,15 @@ func (t *tray) onPublicUseMode(ctx context.Context, idx int) {
 func (t *tray) runPublicConsent(ctx context.Context) bool {
 	w, err := t.cli.PublicWarning(ctx)
 	if err != nil {
-		ShowError(fmt.Sprintf("Public use: %v", err))
+		showError(fmt.Sprintf("Public use: %v", err))
 		return false
 	}
 	yes, ok := confirmWithLabels(w.Title, w.Text, w.AcceptLabel, w.CancelLabel)
 	if !ok {
 		// No dialog backend: consent MUST NOT be recorded without showing
 		// the text, so hand off to the CLI (which prints the warning).
-		if err := CopyToClipboard("waired public use --auto"); err != nil {
-			ShowError("Public use: " + err.Error())
+		if err := copyToClipboard("waired public use --auto"); err != nil {
+			showError("Public use: " + err.Error())
 			return false
 		}
 		notify("Run `waired public use --auto` in a terminal to read the warning and turn this on.", notification.Info)
@@ -1402,14 +1429,14 @@ func (t *tray) runPublicConsent(ctx context.Context) bool {
 	}
 	if _, err := t.cli.AcceptPublicConsent(ctx, w.Version); err != nil {
 		if !errors.Is(err, ErrPublicWarningVersionMismatch) {
-			ShowError(fmt.Sprintf("Public use: %v", err))
+			showError(fmt.Sprintf("Public use: %v", err))
 			return false
 		}
 		// The served text changed between display and accept: re-fetch,
 		// re-display exactly once, then give up if it still mismatches.
 		w2, werr := t.cli.PublicWarning(ctx)
 		if werr != nil {
-			ShowError(fmt.Sprintf("Public use: %v", werr))
+			showError(fmt.Sprintf("Public use: %v", werr))
 			return false
 		}
 		yes2, ok2 := confirmWithLabels(w2.Title, w2.Text, w2.AcceptLabel, w2.CancelLabel)
@@ -1417,7 +1444,7 @@ func (t *tray) runPublicConsent(ctx context.Context) bool {
 			return false
 		}
 		if _, rerr := t.cli.AcceptPublicConsent(ctx, w2.Version); rerr != nil {
-			ShowError(fmt.Sprintf("Public use: %v", rerr))
+			showError(fmt.Sprintf("Public use: %v", rerr))
 			return false
 		}
 	}
@@ -1443,8 +1470,8 @@ func (t *tray) onPublicMore() {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "public-more")
-	if err := OpenBrowser(url); err != nil {
-		ShowError(err.Error())
+	if err := openBrowser(url); err != nil {
+		showError(err.Error())
 	}
 }
 
@@ -1457,8 +1484,8 @@ func (t *tray) onCopyIP() {
 	}
 	// Log the action, not the overlay IP value.
 	slog.Debug("tray: menu action", "action", "copy-ip")
-	if err := CopyToClipboard(ip); err != nil {
-		ShowError(err.Error())
+	if err := copyToClipboard(ip); err != nil {
+		showError(err.Error())
 	}
 }
 
@@ -1467,13 +1494,13 @@ func (t *tray) onAdmin() {
 	url := t.last.AdminURL
 	t.mu.Unlock()
 	if url == "" {
-		ShowError("Admin URL is unknown — sign in first.")
+		showError("Admin URL is unknown — sign in first.")
 		return
 	}
 	// Log the action, not the admin URL (may carry a network identifier).
 	slog.Debug("tray: menu action", "action", "open-admin")
-	if err := OpenBrowser(url); err != nil {
-		ShowError(err.Error())
+	if err := openBrowser(url); err != nil {
+		showError(err.Error())
 	}
 }
 
@@ -1488,13 +1515,13 @@ func (t *tray) onCodeUI(ctx context.Context) {
 	slog.Debug("tray: menu action", "action", "code-ui")
 	bin, err := wairedCLIPath()
 	if err != nil {
-		ShowError("Coding agent: waired CLI not found (" + err.Error() + ")")
+		showError("Coding agent: waired CLI not found (" + err.Error() + ")")
 		return
 	}
 	// Reuse a running instance rather than restarting it onto a new project.
 	if url := codeUIRunningURL(ctx, bin); url != "" {
-		if oerr := OpenBrowser(url); oerr != nil {
-			ShowError(oerr.Error())
+		if oerr := openBrowser(url); oerr != nil {
+			showError(oerr.Error())
 		}
 		return
 	}
@@ -1510,7 +1537,7 @@ func (t *tray) onCodeUI(ctx context.Context) {
 	cmd.Stderr = os.Stderr
 	if rerr := cmd.Run(); rerr != nil {
 		notify("Coding agent failed to start: "+rerr.Error(), notification.Warning)
-		ShowError("Coding agent failed to start — see the tray log.")
+		showError("Coding agent failed to start — see the tray log.")
 	}
 }
 
@@ -1548,11 +1575,11 @@ func (t *tray) onReconfigureOpenCode(ctx context.Context) {
 		"(~/.config/opencode/plugin/waired.js) to point at the current " +
 		"waired gateway. Proceed?"
 
-	yes, ok := ConfirmYesNo(title, body)
+	yes, ok := confirmYesNo(title, body)
 	if !ok {
 		// No desktop dialog available — fall back to clipboard.
-		if err := CopyToClipboard("waired link opencode"); err != nil {
-			ShowError("Reconfigure: " + err.Error())
+		if err := copyToClipboard("waired link opencode"); err != nil {
+			showError("Reconfigure: " + err.Error())
 			return
 		}
 		notify("Run `waired link opencode` in a terminal to reconfigure.", notification.Info)
@@ -1565,7 +1592,7 @@ func (t *tray) onReconfigureOpenCode(ctx context.Context) {
 	slog.Debug("tray: menu action", "action", "reconfigure-opencode")
 	if err := t.cli.ReconfigureOpenCode(ctx); err != nil {
 		notify("OpenCode reconfigure failed: "+err.Error(), notification.Warning)
-		ShowError("OpenCode reconfigure: " + err.Error())
+		showError("OpenCode reconfigure: " + err.Error())
 		return
 	}
 	notify("OpenCode integration reconfigured.", notification.Info)
@@ -1582,10 +1609,10 @@ func (t *tray) onReconfigureOpenClaw(ctx context.Context) {
 		"(~/.openclaw/plugins/waired/) and refreshes its openclaw.json keys to " +
 		"point at the current waired gateway. Proceed?"
 
-	yes, ok := ConfirmYesNo(title, body)
+	yes, ok := confirmYesNo(title, body)
 	if !ok {
-		if err := CopyToClipboard("waired link openclaw"); err != nil {
-			ShowError("Reconfigure: " + err.Error())
+		if err := copyToClipboard("waired link openclaw"); err != nil {
+			showError("Reconfigure: " + err.Error())
 			return
 		}
 		notify("Run `waired link openclaw` in a terminal to reconfigure.", notification.Info)
@@ -1598,7 +1625,7 @@ func (t *tray) onReconfigureOpenClaw(ctx context.Context) {
 	slog.Debug("tray: menu action", "action", "reconfigure-openclaw")
 	if err := t.cli.ReconfigureOpenClaw(ctx); err != nil {
 		notify("OpenClaw reconfigure failed: "+err.Error(), notification.Warning)
-		ShowError("OpenClaw reconfigure: " + err.Error())
+		showError("OpenClaw reconfigure: " + err.Error())
 		return
 	}
 	notify("OpenClaw integration reconfigured.", notification.Info)
@@ -1680,11 +1707,11 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 			rec.MeasuredTokps, rec.ToModelID, rec.PredictedTokps)
 	}
 
-	yes, ok := ConfirmYesNo(title, body)
+	yes, ok := confirmYesNo(title, body)
 	if !ok {
 		// No desktop dialog backend — fall back to the CLI command.
-		if err := CopyToClipboard("waired runtimes benchmark"); err != nil {
-			ShowError("Recommendation: " + err.Error())
+		if err := copyToClipboard("waired runtimes benchmark"); err != nil {
+			showError("Recommendation: " + err.Error())
 			return
 		}
 		notify("Run `waired runtimes benchmark` in a terminal to switch models.", notification.Info)
@@ -1693,7 +1720,7 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	if !yes {
 		if err := t.cli.DismissRecommendation(ctx, rec.FromVariantID, rec.ToVariantID); err != nil &&
 			!errors.Is(err, ErrCatalogUnsupported) {
-			ShowError("Dismiss recommendation: " + err.Error())
+			showError("Dismiss recommendation: " + err.Error())
 			return
 		}
 		go t.pollOnce(ctx)
@@ -1701,7 +1728,7 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	}
 	resp, err := t.cli.SetPreferredModel(ctx, rec.ToModelID)
 	if err != nil {
-		ShowError(fmt.Sprintf("Switch model failed: %v", err))
+		showError(fmt.Sprintf("Switch model failed: %v", err))
 		return
 	}
 	t.onModelSwitchAccepted(resp)
@@ -1709,13 +1736,13 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 }
 
 func (t *tray) onLogout(ctx context.Context) {
-	if !ShowConfirm("Sign this device out of Waired?\nThe identity and secrets will be removed.") {
+	if !showConfirm("Sign this device out of Waired?\nThe identity and secrets will be removed.") {
 		return
 	}
 	slog.Debug("tray: menu action", "action", "logout")
 	go func() {
-		if err := LogoutViaElevation(ctx, t.opts.StateDir); err != nil {
-			ShowError(err.Error())
+		if err := logoutViaElevation(ctx, t.opts.StateDir); err != nil {
+			showError(err.Error())
 		}
 		t.pollOnce(ctx)
 	}()

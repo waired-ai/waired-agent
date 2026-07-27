@@ -152,11 +152,12 @@ build-agent-darwin:
 # the full set; their systray backends are pure Go.
 #
 # That native leg is not "someone's laptop, eventually": the paths-gated
-# tray-darwin.yml job runs vet + tests + this target on a macos-14
-# runner for every PR touching the subtree (waired#901 I1), so a
-# darwin-only break fails the PR instead of turning main red after the
-# merge. scripts/ci/tray-darwin-paths-guard.sh keeps that filter — and
-# this exclusion's rationale — from drifting apart.
+# tray-darwin.yml job runs vet, the unit suite, and this target on a
+# macos-14 runner for every PR touching the subtree (waired#901 I1, with
+# the unit suite added by #152), so a darwin-only break fails the PR
+# instead of turning main red after the merge.
+# scripts/ci/tray-darwin-paths-guard.sh keeps that filter — and this
+# exclusion's rationale — from drifting apart.
 DARWIN_VET_PKGS = $(shell go list ./... | grep -v -E '(cmd/waired-tray|internal/gui/tray)')
 
 .PHONY: verify-cross
@@ -557,7 +558,9 @@ install-script-lint:
 	           scripts/ci/installer-mirror-guard.sh \
 	           scripts/ci/installer-mirror-guard-test.sh \
 	           scripts/ci/platform-test-floor-guard.sh \
-	           scripts/ci/platform-test-floor-guard-test.sh
+	           scripts/ci/platform-test-floor-guard-test.sh \
+	           scripts/ci/tray-darwin-paths-guard.sh \
+	           scripts/ci/tray-dialog-seam-guard.sh
 
 # The PowerShell half of install-script-lint. Separate because the two have
 # different prerequisites -- shellcheck is a package, PSScriptAnalyzer is a
