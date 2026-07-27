@@ -85,7 +85,7 @@ func runViaDaemonGuarded(t *testing.T, url string) string {
 		go func() {
 			done <- runInitViaDaemon(url, "https://cp.example", "dev-1",
 				true /*noBrowser*/, true /*nonInteractive*/, true /*skipIntegration*/, "http://127.0.0.1:9473",
-				nil /*no terminal*/, daemonInitInference{}, "")
+				nil /*no terminal*/, daemonInitInference{}, "", false /*reauth*/)
 		}()
 		select {
 		case runErr = <-done:

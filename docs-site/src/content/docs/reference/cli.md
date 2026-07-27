@@ -109,6 +109,13 @@ waired doctor --fix              # repair without asking (scripts, SSH)
 Shows the sign-in state and when it expires, and tells you to re-run `init` if
 it needs renewing. Needs elevation on a service install, like `status`.
 
+Renewing is the same `waired init` you ran the first time — it recognises that
+this computer is already signed in, confirms before continuing, and replaces
+only the sign-in. Your settings, your AI software and this computer's place in
+your network all stay as they are; it stays the same device on your device
+list. Waired has to be running in the background for it to work, because the
+background service is what holds the sign-in.
+
 ### `waired logout`
 
 Removes this computer's identity and secrets, so the next `waired init` enrolls

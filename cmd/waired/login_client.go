@@ -41,11 +41,17 @@ var daemonReachable = func(mgmtURL string) bool {
 // authKey is appended rather than slotted next to control/deviceName on
 // purpose: three adjacent string parameters invite a silent swap, and a
 // trailing argument leaves every existing call site's positions untouched.
-func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string, owner *stdinReader, inf daemonInitInference, authKey string) error {
+//
+// reauth is set when this host already has an identity. Without it the
+// daemon treats a Start on an active session as an idempotent no-op and
+// this function would print a successful sign-in for a run that renewed
+// nothing (#175).
+func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string, owner *stdinReader, inf daemonInitInference, authKey string, reauth bool) error {
 	reqBody, _ := json.Marshal(management.LoginStartRequest{
 		ControlURL: control,
 		DeviceName: deviceName,
 		AuthKey:    authKey,
+		Reauth:     reauth,
 	})
 	out, err := httpPost(mgmtURL+"/waired/v1/login/start", reqBody)
 	if err != nil {
@@ -59,6 +65,14 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 		return fmt.Errorf("decode login start: %w", err)
 	}
 	if st.SessionID == "" {
+		// An agent too old to know about `reauth` ignores the field and
+		// answers with its idempotent no-op: active, no session. Saying
+		// "no session id" there would send the operator looking for a bug
+		// in a daemon that is working exactly as it was built to (#175).
+		if reauth && st.Phase == management.LoginPhaseActive {
+			return errors.New("this device is signed in, but the background service is too old to renew that sign-in.\n" +
+				"  Update Waired, then run `waired init` again")
+		}
 		return errors.New("daemon did not return a login session id")
 	}
 

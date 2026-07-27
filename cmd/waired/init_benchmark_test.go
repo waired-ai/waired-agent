@@ -341,6 +341,56 @@ func TestPromptBenchmark_TerminalStateSkips(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT: a subsystem that is switched off or parked never
+// produces a ready model, so the wait must end at the first poll — the
+// same call waitForBundledModel already makes (init_pull.go).
+//
+// These two states used to fall through to "engine is up, a download must
+// be in flight", so `waired init --inference-enabled=false` on the daemon
+// path printed "Waiting for the model to finish downloading…" and held the
+// terminal for the full ten-minute deadline before reporting that it had
+// given up — on a host with no model and no intention of getting one.
+// Measured: three installtest legs, ten minutes each, every PR.
+func TestPromptBenchmark_OffSubsystemSkipsImmediately(t *testing.T) {
+	for _, state := range []string{"disabled", "stopped"} {
+		t.Run(state, func(t *testing.T) {
+			stub := &benchStub{ready: false, state: state}
+			srv := stub.server()
+			defer srv.Close()
+
+			var out strings.Builder
+			done := make(chan error, 1)
+			go func() {
+				done <- promptBenchmarkRecommendation(srv.URL, false, &out,
+					bufio.NewScanner(strings.NewReader("")), false)
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("prompt: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("still waiting: an off subsystem must not be waited out")
+			}
+
+			if got := out.String(); !strings.Contains(got, "Local inference is off") {
+				t.Errorf("expected the off-subsystem skip notice, got: %q", got)
+			}
+			if got := out.String(); strings.Contains(got, "finish downloading") {
+				t.Errorf("announced a model download for state %q: %q", state, got)
+			}
+			// One probe of each endpoint is enough to decide; anything more
+			// means the loop kept going after a terminal answer.
+			stub.mu.Lock()
+			calls := stub.benchCalls
+			stub.mu.Unlock()
+			if calls != 1 {
+				t.Errorf("/benchmark polled %d times, want 1", calls)
+			}
+		})
+	}
+}
+
 // When the only lighter step-down is the tiny 0.5B, declining (default No)
 // disables local inference rather than switching / dismissing.
 func TestPromptBenchmark_TinyDeclineDisables(t *testing.T) {
