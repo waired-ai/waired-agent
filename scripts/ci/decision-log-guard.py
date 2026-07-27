@@ -96,10 +96,10 @@ def main():
             if not isinstance(status, str) or status not in STATUSES:
                 err(path, f'status が不正: {status!r}（{"/".join(sorted(STATUSES))}）')
                 status = None
-            m = re.search(r'^## Status\n\s*(\S+)', body, re.M)
+            m = re.search(r'^## Status\n\s*([A-Za-z]+)', body, re.M)
             if not m:
-                err(path, '`## Status` セクションがない')
-            elif status and m.group(1).rstrip('（(—-').lower() != status:
+                err(path, '`## Status` セクションが無いか、状態語で始まっていない')
+            elif status and m.group(1).lower() != status:
                 err(path, f'front-matter status={status} と `## Status` '
                           f'"{m.group(1)}" が食い違う')
             for key in LIST_KEYS:
