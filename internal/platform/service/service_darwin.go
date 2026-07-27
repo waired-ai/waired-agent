@@ -131,6 +131,16 @@ func (m darwinManager) Install(cfg Config) error {
 		return fmt.Errorf("write %s: %w", plistPath, err)
 	}
 
+	// Self-heal, and it MUST come before bootstrap. Builds between
+	// 2026-07-15 and #176 ran `launchctl disable` on uninstall, which does
+	// not "clear" anything — it WRITES a persistent per-label override into
+	// /var/db/com.apple.xpc.launchd/disabled.plist. That override outlives
+	// the plist, the state dir, `uninstall.sh --clean` and a reboot, and
+	// `bootstrap` fails with EIO(5) on a disabled label, so the enable below
+	// the bootstrap could never be reached. `enable` is the only call that
+	// clears it. Best-effort: a no-op on a host that was never disabled.
+	_, _, _ = runLaunchctlFn([]string{"enable", "system/" + darwinLabel})
+
 	// `launchctl bootstrap` loads + registers the job in the system
 	// domain. Idempotent failure mode: bootstrap returns exit 17 if the
 	// job is already loaded, so we bootout first (best-effort) and
@@ -159,12 +169,16 @@ func (m darwinManager) Uninstall() error {
 
 	// Best-effort sequence — every step tolerated so a partial install
 	// (plist written, never bootstrapped, etc.) can still be cleaned.
+	//
+	// Deliberately NO `launchctl disable` here (#176). It reads like the
+	// macOS analog of Linux Uninstall's `systemctl disable`, but the two are
+	// not analogous: `systemctl disable` removes symlinks, and the unit file
+	// is deleted on the next line anyway, whereas `launchctl disable` writes
+	// a PERSISTENT per-label entry into launchd's disabled DB that outlives
+	// everything this function removes — plist, state dir, `--clean`, reboot
+	// — and permanently breaks the `bootstrap` in Install with EIO(5).
+	// Nothing here should leave state behind that Uninstall cannot remove.
 	_, _, _ = runLaunchctlFn([]string{"bootout", "system/" + darwinLabel})
-	// Invert Install's `launchctl enable`: clear the persisted enable state
-	// so no stale per-label override lingers in launchd's disabled DB (the
-	// macOS analog of Linux Uninstall's `systemctl disable`). Best-effort —
-	// the plist is removed below regardless.
-	_, _, _ = runLaunchctlFn([]string{"disable", "system/" + darwinLabel})
 	if err := os.Remove(plistPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", plistPath, err)
 	}
