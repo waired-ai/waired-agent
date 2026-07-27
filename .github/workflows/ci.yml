@@ -77,6 +77,17 @@ jobs:
             exit 1
           fi
 
+      - name: proto-consumer guard (every proto field has a producer)
+        # Fails when an exported proto field has no writer under cmd/ or
+        # internal/. proto-guard cannot see this class: the additive rule
+        # REQUIRES omitempty, so a field nobody writes is byte-identical
+        # on the wire to one that does not exist, and proto, agent and
+        # control-plane tests all stay green (#180). Fields written
+        # elsewhere, written inside proto/, or still owed a producer are
+        # declared — with the category checked — in
+        # scripts/ci/protoconsumer/exemptions.go.
+        run: go run ./scripts/ci/protoconsumer
+
       - name: license check (no copyleft dependencies)
         # Apache-2.0 repo (#666): fail fast when a new dependency brings
         # forbidden/restricted (GPL/LGPL-class) licensing. Own modules
