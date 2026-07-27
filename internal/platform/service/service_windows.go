@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -19,20 +20,45 @@ import (
 func newManager() Manager { return &windowsManager{} }
 
 // Installed reports whether the SCM service is registered. Used by
-// `waired init` to decide whether auto-starting the agent is possible.
-func Installed() bool {
-	scm, err := mgr.Connect()
+// `waired init` to decide whether auto-starting the agent is possible, and
+// to tell "the service is registered but not answering" apart from "no
+// agent here at all" (#175).
+func Installed() bool { return installedNamed(ServiceName) }
+
+// installedNamed is Installed's testable core.
+//
+// It deliberately does NOT use mgr.Connect(): that opens the SCM with
+// SC_MANAGER_ALL_ACCESS (x/sys windows/svc/mgr/mgr.go), which requires
+// Administrator. A non-elevated `waired init` therefore saw a perfectly
+// well-registered service as absent, and #175's "the service is installed
+// but isn't responding" diagnosis could never fire on Windows. Asking only
+// for SC_MANAGER_CONNECT + SERVICE_QUERY_STATUS is a read that any
+// authenticated user is granted, which is all a presence check needs.
+func installedNamed(name string) bool {
+	scm, err := windows.OpenSCManager(nil, nil, installedSCMAccess)
 	if err != nil {
 		return false
 	}
-	defer scm.Disconnect()
-	s, err := scm.OpenService(ServiceName)
+	defer func() { _ = windows.CloseServiceHandle(scm) }()
+	namePtr, err := windows.UTF16PtrFromString(name)
 	if err != nil {
 		return false
 	}
-	s.Close()
+	svcHandle, err := windows.OpenService(scm, namePtr, installedServiceAccess)
+	if err != nil {
+		return false
+	}
+	_ = windows.CloseServiceHandle(svcHandle)
 	return true
 }
+
+// The access rights installedNamed asks for. Named (rather than inline) so
+// a test can assert no privileged bit creeps back in — adding one would
+// silently restore the elevation requirement that hid #175 on Windows.
+const (
+	installedSCMAccess     uint32 = windows.SC_MANAGER_CONNECT
+	installedServiceAccess uint32 = windows.SERVICE_QUERY_STATUS
+)
 
 // StartHint is the manual command shown when init cannot (or is told not
 // to) auto-start the agent.
