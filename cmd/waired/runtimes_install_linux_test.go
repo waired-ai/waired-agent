@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // TestInstallOllamaLinux_Bundled verifies installOllama drives the
@@ -18,10 +19,18 @@ func TestInstallOllamaLinux_Bundled(t *testing.T) {
 	t.Cleanup(func() { installOllamaBundled = orig })
 
 	var gotBaseDir string
+	var gotDeadline time.Time
+	var hadDeadline bool
 	called := false
-	installOllamaBundled = func(_ context.Context, baseDir string) error {
+	// The fake takes the ctx it is given and records its deadline. It used
+	// to accept `_ context.Context` and drop it, which made the install
+	// budget — the whole subject of #189 — unobservable from any test:
+	// installOllama derives a deadline two lines above this call and
+	// nothing could see it (CLAUDE.md §Test discipline).
+	installOllamaBundled = func(ctx context.Context, baseDir string) error {
 		called = true
 		gotBaseDir = baseDir
+		gotDeadline, hadDeadline = ctx.Deadline()
 		return nil
 	}
 
@@ -52,6 +61,50 @@ func TestInstallOllamaLinux_Bundled(t *testing.T) {
 	if gotOwnedDir != "/var/lib/waired" {
 		t.Errorf("fixStateOwnership dir = %q, want the state dir /var/lib/waired", gotOwnedDir)
 	}
+	// The installer must run under a deadline — an unbounded install is
+	// what left the terminal waiting (#188) — and that deadline must be
+	// the resolved backstop, not a hardcoded wall clock (#189).
+	if !hadDeadline {
+		t.Fatal("installer ran with no deadline: the install budget is not being applied")
+	}
+	want := ollamaInstallTimeout(func(string) string { return "" })
+	if got := time.Until(gotDeadline); got > want || got < want-time.Minute {
+		t.Errorf("install budget = %s, want ~%s (the resolved backstop)", got.Round(time.Second), want)
+	}
+}
+
+// TestInstallOllamaLinux_BudgetFollowsTheEnvironment pins that the
+// backstop is the resolved one rather than a fixed wall clock. #189 was
+// exactly this: a hardcoded 15 minutes killed healthy slow downloads and
+// reported the kill as "exit status 1". The override has to reach the
+// context the installer actually runs under, not just the error message.
+func TestInstallOllamaLinux_BudgetFollowsTheEnvironment(t *testing.T) {
+	t.Setenv(ollamaInstallTimeoutEnv, "3h")
+
+	orig := installOllamaBundled
+	t.Cleanup(func() { installOllamaBundled = orig })
+	var got time.Duration
+	var ok bool
+	installOllamaBundled = func(ctx context.Context, _ string) error {
+		var dl time.Time
+		dl, ok = ctx.Deadline()
+		got = time.Until(dl)
+		return nil
+	}
+
+	origFix := fixStateOwnership
+	t.Cleanup(func() { fixStateOwnership = origFix })
+	fixStateOwnership = func(string) error { return nil }
+
+	if err := installOllama(true, t.TempDir()); err != nil {
+		t.Fatalf("installOllama(-y): %v", err)
+	}
+	if !ok {
+		t.Fatal("installer ran with no deadline")
+	}
+	if got > 3*time.Hour || got < 3*time.Hour-time.Minute {
+		t.Errorf("install budget = %s, want ~3h from %s", got.Round(time.Second), ollamaInstallTimeoutEnv)
+	}
 }
 
 // TestInstallOllamaLinux_Error surfaces an installer failure and skips the
@@ -60,7 +113,16 @@ func TestInstallOllamaLinux_Bundled(t *testing.T) {
 func TestInstallOllamaLinux_Error(t *testing.T) {
 	orig := installOllamaBundled
 	t.Cleanup(func() { installOllamaBundled = orig })
-	installOllamaBundled = func(context.Context, string) error { return errors.New("download failed") }
+	// Even the error path takes the ctx: #189's failure mode was a KILLED
+	// download reported as a plain "exit status 1", so a test that wants
+	// to tell "the budget expired" from "the download failed" needs the
+	// ctx here too.
+	installOllamaBundled = func(ctx context.Context, _ string) error {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("installer ran with no deadline on the error path either")
+		}
+		return errors.New("download failed")
+	}
 
 	origFix := fixStateOwnership
 	t.Cleanup(func() { fixStateOwnership = origFix })
