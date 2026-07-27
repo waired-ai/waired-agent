@@ -349,6 +349,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		Port:           cfg.ResolvedOllamaPort(),
 		Spawner:        infruntime.DefaultSpawner{},
 		BinaryResolver: ollamaResolver,
+		// waired-agent#29: the adapter reports a dead engine here; the
+		// provider owns the recovery policy. Assigned after the provider
+		// exists (the closure needs it), just below.
 		// #290: GPU-backend env (e.g. OLLAMA_VULKAN / HSA override).
 		BackendEnv: backendPlan.Preferred().Env,
 		// reuse: probe the user's running ollama, never spawn/stop it.
@@ -519,6 +522,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		onPublicNudge:       deps.OnPublicNudge,
 		recorder:            deps.Recorder,
 		routing:             deps.Routing,
+	}
+
+	// waired-agent#29: hand the adapter a way to report its engine's death.
+	// Installed here rather than in OllamaConfig because the handler is a
+	// provider method and the provider is built from the adapter.
+	if ollama != nil {
+		ollama.SetOnUnhealthy(provider.onEngineUnhealthy)
 	}
 
 	// Engine switch (#557): an explicit preferred_engine that differs from
@@ -1102,6 +1112,22 @@ type agentInferenceProvider struct {
 	// start on a switch) and resets KV to the q8_0 default for the new
 	// model (the old model's verify-degraded f16 does not carry over).
 	swapPending atomic.Bool
+	// engineRecoverPending marks the next reconcile as a crash-recovery
+	// bounce (waired-agent#29). Reusing reconcileEngineServe rather than
+	// adding a parallel restart path buys mutual exclusion with model swaps
+	// and concurrency retunes for free — that is what engineReconcileInFlight
+	// already exists for.
+	engineRecoverPending atomic.Bool
+	// crashMu guards the crash bookkeeping below.
+	crashMu sync.Mutex
+	// crashStrikes counts engine deaths inside engineRecoveryStableFor.
+	crashStrikes int
+	// lastEngineCrash is when the last death was observed; a run that stays
+	// up for engineRecoveryStableFor resets the strike count, so one crash a
+	// day never accumulates into a give-up.
+	lastEngineCrash time.Time
+	// now is time.Now, injectable so the stability window is testable.
+	now func() time.Time
 	// pendingSwapModel holds the model_id of an operator switch whose weights
 	// are still downloading; runPullJob's completion kicks the reconcile once
 	// that model reaches Ready. It distinguishes an operator switch from a
@@ -1196,6 +1222,92 @@ func (p *agentInferenceProvider) requestEngineReconcile(swap bool) {
 	go p.reconcileEngineServe(ctx)
 }
 
+// engineRecoveryMaxAttempts / engineRecoveryStableFor bound automatic crash
+// recovery. Three attempts at 0s / 15s / 60s cover a transient runner fault
+// (the observed segfault class), while a deterministically-crashing model — a
+// corrupt GGUF, a sizing that always OOMs — exhausts the budget in ~75s and
+// then reports the truth instead of respawning forever.
+//
+// The first attempt has NO delay on purpose: the common case is a one-off
+// fault with a human sitting at a Claude Code prompt. (The boot retry at
+// startLocalInference uses 10s/20s because nobody is waiting there.)
+const (
+	engineRecoveryMaxAttempts = 3
+	engineRecoveryStableFor   = 5 * time.Minute
+)
+
+// engineRecoveryBackoff is the delay before recovery attempt n (1-based).
+func engineRecoveryBackoff(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return 0
+	case 2:
+		return 15 * time.Second
+	default:
+		return 60 * time.Second
+	}
+}
+
+// onEngineUnhealthy is the OllamaConfig.OnUnhealthy handler: the adapter has
+// just found its engine dead and moved to StateFailed, and this decides what
+// to do about it.
+//
+// Before waired-agent#29 nothing did. ollama's parent process keeps answering
+// /api/tags with 200 after its llama-server child segfaults, so the adapter
+// stayed latched Ready, every request 500'd forever, and `waired status` kept
+// saying the engine was fine.
+func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
+	if p.ollama == nil || p.ollama.Borrowed() ||
+		p.ollama.Mode() == infruntime.EngineModeAdopted || p.ollama.IsParked() {
+		// Nothing waired owns to restart. The StateFailed the adapter just
+		// recorded IS the whole answer: an adopted orphan has no handle to
+		// signal, and a reused engine belongs to the operator.
+		return
+	}
+
+	nowFn := p.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	p.crashMu.Lock()
+	if !p.lastEngineCrash.IsZero() && nowFn().Sub(p.lastEngineCrash) > engineRecoveryStableFor {
+		p.crashStrikes = 0
+	}
+	p.crashStrikes++
+	n := p.crashStrikes
+	p.lastEngineCrash = nowFn()
+	p.crashMu.Unlock()
+
+	if n > engineRecoveryMaxAttempts {
+		p.logger.Error("ollama engine crashed repeatedly; automatic restart disabled",
+			"crashes", n, "window", engineRecoveryStableFor)
+		p.ollama.LatchFailed(fmt.Sprintf(
+			"engine crashed %d times within %s; automatic restart disabled — see the engine log, "+
+				"then `waired inference engine start` (or switch model) to retry\n%s",
+			n, engineRecoveryStableFor, detail))
+		return
+	}
+
+	delay := engineRecoveryBackoff(n)
+	p.logger.Warn("ollama engine died; scheduling restart",
+		"crash", n, "max", engineRecoveryMaxAttempts, "in", delay)
+	ctx := p.agentCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		if delay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+		p.engineRecoverPending.Store(true)
+		p.requestEngineReconcile(false)
+	}()
+}
+
 // reconcileEngineServe recomputes the ollama serve env for the currently
 // effective preferred/Active model and desiredParallel, and bounces the engine
 // (Stop → EnsureRunning) to apply it — the agent process, gateway, mesh, and
@@ -1220,6 +1332,10 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 	for {
 		want := int(p.desiredParallel.Load())
 		swap := p.swapPending.Swap(false)
+		// recover: a crash-recovery bounce. Unlike a concurrency retune it must
+		// run even when the resolved tuning is unchanged, and even though the
+		// engine is NOT StateReady — that is the whole point (waired-agent#29).
+		recover := p.engineRecoverPending.Swap(false)
 		st, err := p.store.Load()
 		if err != nil {
 			return
@@ -1257,7 +1373,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		// new model's per-model spawn env applies; a concurrency-only change
 		// bounces iff the resolved engine parallelism actually moved (the exact
 		// pre-#812 retuneParallelLoop behaviour).
-		if !swap && tune.NumParallel == cur.NumParallel {
+		if !swap && !recover && tune.NumParallel == cur.NumParallel {
 			return // already at the resolved parallelism
 		}
 		// Only a live, owned, un-parked ollama process can bounce. Borrowed
@@ -1270,16 +1386,23 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		}
 		p.ollama.SetModelEnv(tune.Env())
 		p.ollama.SetAppliedTuning(tune.ModelTuning)
-		if p.ollama.IsParked() || p.ollama.Health(ctx).State != infruntime.StateReady {
+		if p.ollama.IsParked() {
+			return // staged; Unpark / StartEngine brings it up tuned
+		}
+		if !recover && p.ollama.Health(ctx).State != infruntime.StateReady {
 			return // staged; StartEngine / normal boot brings it up tuned
 		}
 		p.logger.Info("reconciling ollama serve env",
 			"model", tune.ModelID, "variant", tune.VariantID, "switch", swap,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
 			"num_parallel", tune.NumParallel, "warning", tune.Warning)
-		if err := p.ollama.Stop(ctx); err != nil {
+		if err := p.ollama.Stop(ctx); err != nil && !recover {
 			p.logger.Warn("stop for engine reconcile failed; keeping current engine", "err", err)
 			return
+		} else if err != nil {
+			// On the recovery path a failed Stop is expected — the child is
+			// usually already gone. Keep going: EnsureRunning reaps it.
+			p.logger.Debug("stop during engine recovery reported an error (child likely already exited)", "err", err)
 		}
 		if err := p.ollama.EnsureRunning(ctx); err != nil {
 			p.logger.Warn("restart for engine reconcile failed; engine down until retry", "err", err)
@@ -1399,6 +1522,12 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		// Engine restart in flight (e.g. just after a start request);
 		// it isn't serving yet even if the active model is on disk.
 		subState = "starting"
+	case p.ollama != nil && p.ollama.Health(ctx).State == infruntime.StateFailed:
+		// The engine is down: a crashed model runner, an exhausted recovery
+		// budget, or a boot that never came up. This case used to be absent,
+		// so any of those fell straight through to "ready" whenever the
+		// active model happened to be on disk (waired-agent#29).
+		subState = "engine_failed"
 	case state.Active == nil:
 		subState = "awaiting_model"
 	default:
@@ -1515,6 +1644,17 @@ func (p *agentInferenceProvider) EngineReady() (bool, string) {
 	// coordinator must not advertise capacity that would 503.
 	if p.ollama != nil && p.ollama.IsParked() {
 		return false, ""
+	}
+	// The engine's OWN health, not just the catalog record (waired-agent#29):
+	// an ollama whose model runner died keeps answering /api/tags with 200
+	// while every inference request 500s, and this function is what the peer
+	// /healthz, the observability gauges, `waired doctor`, the setup engine
+	// gate and the benchmark ready gate all read. A whitelist (!= Ready)
+	// rather than a blacklist, so an unforeseen state reads as not-ready.
+	if p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama {
+		if p.ollama.Health(context.Background()).State != infruntime.StateReady {
+			return false, ""
+		}
 	}
 	st, _ := p.store.Load()
 	if st.Active == nil {

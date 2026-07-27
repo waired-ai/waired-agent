@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -116,6 +117,13 @@ type OllamaConfig struct {
 	// StopTimeout is how long Stop waits after SIGTERM before
 	// SIGKILL (default 5s).
 	StopTimeout time.Duration
+	// OnUnhealthy, when set, is called once per detected engine death with
+	// the reason (including a tail of engine.log). The adapter has already
+	// moved to StateFailed by then; the callback owns the recovery policy
+	// — how many restarts, how spaced, and when to give up honestly —
+	// because the adapter has no view of the model, the operator, or the
+	// other engines. Invoked on its own goroutine, so it may call back in.
+	OnUnhealthy func(detail string)
 }
 
 // ErrEngineParked is returned by EnsureRunning when the engine has been
@@ -216,9 +224,182 @@ type OllamaAdapter struct {
 	liveVersion string
 	// logFile is the open <LogDir>/engine.log handle for the current
 	// spawned child (nil when LogDir is unset or the engine is not
-	// running). Re-opened (truncated) on each spawn and closed when the
+	// running). Re-opened (rotated) on each spawn and closed when the
 	// process is stopped, so it tracks the child's lifetime. Guarded by mu.
 	logFile *os.File
+	// ensuring is non-nil while one EnsureRunning is in flight; later
+	// callers JOIN it instead of erroring. Before waired-agent#29 a
+	// concurrent entry during StateStarting returned a hard error, which
+	// the gateway mapped to 503 runtime_unhealthy — and a crash-recovery
+	// restart is precisely what makes entry concurrent, so recovery
+	// without this would trade a permanent 500 for a wall of 503s.
+	// Guarded by mu.
+	ensuring chan struct{}
+	// ensureErr is the in-flight EnsureRunning's result, published to
+	// joiners when ensuring closes. Guarded by mu.
+	ensureErr error
+	// procGen counts spawned-process generations. superviseChild pins the
+	// generation it watches so a DELIBERATE Stop / Park / reconcile bounce
+	// — which also closes proc.Done() — is never reported as a crash.
+	// Guarded by mu.
+	procGen uint64
+	// lastUnhealthy debounces markUnhealthy: the observed failure mode is
+	// ~90 requests over 6 minutes all receiving the same engine 500, and
+	// every one of them lands there. Guarded by mu.
+	lastUnhealthy time.Time
+	// giveUp latches "repeatedly crashed; stop respawning" so a
+	// deterministically-crashing model cannot turn every request into a
+	// fresh 150-second spawn attempt. Cleared by ClearFailure (which
+	// engineController.StartEngine calls). Guarded by mu.
+	giveUp bool
+	// giveUpErr is the reason recorded when giveUp latched. Guarded by mu.
+	giveUpErr string
+}
+
+// FailureReporter is an OPTIONAL interface a LOCAL, waired-supervised
+// adapter implements when an engine's error reply can prove the ENGINE is
+// broken rather than the request being bad. The gateway calls it for every
+// non-2xx from the selected adapter; the adapter — which knows its own
+// engine's error vocabulary — decides whether that means "dead".
+//
+// Peer adapters and openai-compat adapters deliberately do NOT implement
+// it, so a remote peer's 500 can never demote THIS host's engine.
+type FailureReporter interface {
+	ReportUpstreamFailure(status int, body []byte)
+}
+
+// ErrEngineUnrecoverable is returned by EnsureRunning once automatic
+// recovery has given up. The reason is in Health().LastErr, which the
+// mgmt API, `waired status`, and the tray already surface.
+var ErrEngineUnrecoverable = errors.New("ollama: engine repeatedly crashed; not retrying (see last_error)")
+
+// engineDeadMarkers are substrings of an ollama error body that prove the
+// MODEL RUNNER is gone rather than the request being bad. The parent
+// `ollama serve` keeps answering /api/tags with 200 after its llama-server
+// child dies, so this reply is the only signal separating "engine broken"
+// from "bad request".
+var engineDeadMarkers = []string{
+	"process has terminated",
+	"model runner has unexpectedly stopped",
+}
+
+// unhealthyDebounce collapses a burst of engine failures into one report.
+const unhealthyDebounce = 2 * time.Second
+
+// engineDeadBody reports whether an engine error body names a dead runner.
+func engineDeadBody(body []byte) bool {
+	s := string(body)
+	for _, m := range engineDeadMarkers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReportUpstreamFailure implements FailureReporter: it demotes the engine
+// out of StateReady when its own error reply proves the model runner died.
+//
+// Requiring the marker (rather than treating any 5xx as fatal) is what
+// keeps a one-off bad request from bouncing a healthy engine. An unmatched
+// 5xx is logged instead, as a canary: if a future pinned ollama rewords
+// its terminal error, detection silently reverts to the old behaviour and
+// this line is the only way to notice.
+func (a *OllamaAdapter) ReportUpstreamFailure(status int, body []byte) {
+	if status < 500 {
+		return // a 4xx is the request's fault, not the engine's
+	}
+	if !engineDeadBody(body) {
+		slog.Warn("ollama returned 5xx with no dead-runner marker",
+			"status", status, "body", firstLine(body))
+		return
+	}
+	a.markUnhealthy(fmt.Sprintf("engine returned HTTP %d: %s", status, firstLine(body)))
+}
+
+// firstLine returns up to the first 300 bytes of b's first line.
+func firstLine(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 300 {
+		s = s[:300] + "…"
+	}
+	return s
+}
+
+// markUnhealthy demotes a serving engine out of StateReady and notifies the
+// owner exactly once per death. The StateReady check under the mutex is
+// what collapses a request burst to one notification; the debounce is
+// belt-and-braces against a Ready→dead→Ready flap counting several strikes.
+func (a *OllamaAdapter) markUnhealthy(detail string) {
+	a.mu.Lock()
+	if a.parked || a.state.State != StateReady || time.Since(a.lastUnhealthy) < unhealthyDebounce {
+		a.mu.Unlock()
+		return
+	}
+	a.lastUnhealthy = time.Now()
+	// Fold the crash trace into LastErr NOW: an automatic restart is about
+	// to reopen engine.log, and LastErr is what the mgmt API, `waired
+	// status` and the tray surface without any change on their side.
+	if tail := tailEngineLog(a.engineLogPath(), engineLogTailMaxBytes); tail != "" {
+		detail += "\n--- ollama serve stderr (tail, full log: " + a.engineLogPath() + ") ---\n" + tail
+	}
+	a.state = Health{State: StateFailed, LastErr: detail}
+	cb := a.cfg.OnUnhealthy
+	a.mu.Unlock()
+	if cb != nil {
+		// Off-lock and on its own goroutine: the handler calls back into
+		// IsParked()/Health(), which take a.mu.
+		go cb(detail)
+	}
+}
+
+// superviseChild watches a spawned child AFTER it reached Ready. Before
+// waired-agent#29 nothing watched it once waitReady returned, so a crash
+// left the adapter latched Ready for the rest of the process lifetime.
+//
+// gen pins the process generation, so a deliberate Stop/Park/reconcile
+// bounce (which also closes proc.Done()) is not mistaken for a crash.
+func (a *OllamaAdapter) superviseChild(proc RunningProcess, gen uint64) {
+	<-proc.Done()
+	a.mu.Lock()
+	stale := a.procGen != gen
+	a.mu.Unlock()
+	if stale {
+		return
+	}
+	a.markUnhealthy(startupExitError("ollama", a.engineLogPath(), proc.Err()).Error())
+}
+
+// LatchFailed marks the engine unrecoverable until ClearFailure. The
+// per-request EnsureRunning then returns ErrEngineUnrecoverable instead of
+// respawning. Symmetric with Park/Unpark/IsParked (#186), the existing
+// vocabulary for "the engine is deliberately not coming back".
+func (a *OllamaAdapter) LatchFailed(detail string) {
+	a.mu.Lock()
+	a.giveUp = true
+	a.giveUpErr = detail
+	a.state = Health{State: StateFailed, LastErr: detail}
+	a.mu.Unlock()
+}
+
+// ClearFailure releases the LatchFailed latch and the crash bookkeeping so
+// a manual start (or a model switch) can try again.
+func (a *OllamaAdapter) ClearFailure() {
+	a.mu.Lock()
+	a.giveUp = false
+	a.giveUpErr = ""
+	a.lastUnhealthy = time.Time{}
+	a.mu.Unlock()
+}
+
+// FailureLatched reports whether automatic recovery has given up.
+func (a *OllamaAdapter) FailureLatched() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.giveUp
 }
 
 // NewOllamaAdapter constructs an adapter with sensible defaults.
@@ -286,10 +467,10 @@ func (a *OllamaAdapter) Health(_ context.Context) Health {
 	return a.state
 }
 
-// EnsureRunning starts the Ollama subprocess (if not already running)
-// and blocks until either the engine is StateReady or the readiness
-// probe gives up. The first call wins; subsequent calls return the
-// memoised result without re-spawning.
+// EnsureRunning starts the Ollama subprocess (if not already running) and
+// blocks until either the engine is StateReady or the readiness probe gives
+// up. Already-ready returns immediately; a call that arrives while another
+// is starting JOINS it and returns its result.
 func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 	a.mu.Lock()
 	// Parked check first: a hard-stopped engine must not be revived by
@@ -300,17 +481,69 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 		a.mu.Unlock()
 		return ErrEngineParked
 	}
+	if a.giveUp {
+		e := a.giveUpErr
+		a.mu.Unlock()
+		return fmt.Errorf("%w: %s", ErrEngineUnrecoverable, e)
+	}
 	if a.state.State == StateReady {
 		a.mu.Unlock()
 		return nil
 	}
-	if a.state.State == StateStarting {
+	if ch := a.ensuring; ch != nil {
+		// Join the in-flight start rather than erroring. This used to be a
+		// hard error that the gateway mapped to 503 runtime_unhealthy for
+		// every concurrent request (waired-agent#29).
 		a.mu.Unlock()
-		return errors.New("ollama: EnsureRunning called while already starting")
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err() // the joiner's own deadline still applies
+		}
+		a.mu.Lock()
+		err := a.ensureErr
+		a.mu.Unlock()
+		return err
 	}
+	done := make(chan struct{})
+	a.ensuring = done
 	a.state = Health{State: StateStarting}
 	borrowed := a.cfg.Borrowed
+	needReap := a.proc != nil
+	if needReap {
+		// Bump the generation BEFORE the stop so superviseChild treats the
+		// exit as ours, not as a fresh crash.
+		a.procGen++
+	}
 	a.mu.Unlock()
+
+	// Reap a dead child before respawning: after a crash a.proc still holds
+	// the exited process and Spawner.Spawn would leak the old handle. On an
+	// already-exited process stopProcess returns immediately and closes the
+	// log handle — which is also what makes the rotation in openEngineLog safe.
+	if needReap {
+		_ = a.stopProcess(context.Background())
+		a.mu.Lock()
+		a.proc = nil
+		a.mu.Unlock()
+	}
+
+	var err error
+	defer func() {
+		a.mu.Lock()
+		a.ensureErr = err
+		a.ensuring = nil
+		a.mu.Unlock()
+		close(done)
+	}()
+	err = a.ensureRunningLeader(ctx, borrowed)
+	return err
+}
+
+// ensureRunningLeader is EnsureRunning's body, run by whichever caller won
+// the single-flight gate. Split out only so the gate's bookkeeping can live
+// in one deferred block regardless of which of the many exits below is taken.
+func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context, borrowed bool) error {
 
 	// Reuse mode: an ollama is expected to be running already. Probe it,
 	// never spawn (a.proc stays nil so Stop is a no-op). No supervised
@@ -348,6 +581,8 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 	}
 	a.mu.Lock()
 	a.proc = proc
+	a.procGen++
+	procGen := a.procGen
 	a.mu.Unlock()
 
 	// Spawned engine: we own and supervise this child, so wait for it to
@@ -429,6 +664,10 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 	a.mu.Unlock()
 
 	a.setState(Health{State: StateReady, LastOK: time.Now()})
+	// Keep watching the child now that it is serving. Before
+	// waired-agent#29 nothing did: waitReady's exit watcher ended with the
+	// readiness wait, so a crash left the adapter latched Ready forever.
+	go a.superviseChild(proc, procGen)
 	return nil
 }
 
@@ -547,6 +786,16 @@ func (a *OllamaAdapter) BackendEnv() []string {
 func (a *OllamaAdapter) SetModelEnvProvider(fn func() ([]string, ModelTuning, bool)) {
 	a.mu.Lock()
 	a.modelEnvProvider = fn
+	a.mu.Unlock()
+}
+
+// SetOnUnhealthy installs the engine-death handler after construction. The
+// production handler is a provider method, and the provider is built from the
+// adapter — so the callback cannot be part of the initial config. Same shape
+// as SetModelEnvProvider above.
+func (a *OllamaAdapter) SetOnUnhealthy(fn func(detail string)) {
+	a.mu.Lock()
+	a.cfg.OnUnhealthy = fn
 	a.mu.Unlock()
 }
 
@@ -874,6 +1123,9 @@ func (a *OllamaAdapter) Stop(ctx context.Context) error {
 func (a *OllamaAdapter) stopProcess(ctx context.Context) error {
 	a.mu.Lock()
 	proc := a.proc
+	// Retire this generation before signalling: proc.Done() closes on a
+	// deliberate stop too, and superviseChild must not report that as a crash.
+	a.procGen++
 	a.mu.Unlock()
 	if proc == nil {
 		return nil
@@ -911,6 +1163,14 @@ func (a *OllamaAdapter) openEngineLog() io.Writer {
 	if err := os.MkdirAll(a.cfg.LogDir, 0o755); err != nil {
 		return nil
 	}
+	// Rotate rather than truncate: automatic crash recovery respawns the
+	// engine, and O_TRUNC would destroy the trace explaining WHY it crashed
+	// — the only artifact that reaches CI, `waired doctor`, and a bug report
+	// (waired-agent#29). Exactly one generation is kept, so the on-disk cost
+	// stays bounded at 2 x engineLogMaxBytes. Best-effort like the rest of
+	// this function: a rename failure falls through to the truncating open
+	// rather than blocking the engine coming up.
+	_ = os.Rename(a.engineLogPath(), a.engineLogPath()+".1")
 	f, err := os.OpenFile(a.engineLogPath(), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil

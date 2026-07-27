@@ -1645,6 +1645,8 @@ func humanInferenceState(s string) string {
 		return "pull failed"
 	case "stopped":
 		return "stopped (memory freed)"
+	case "engine_failed":
+		return "engine failed"
 	}
 	return s // ready / loading / starting / disabled / degraded / initializing
 }

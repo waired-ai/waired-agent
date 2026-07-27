@@ -1081,6 +1081,14 @@ func run(ctx context.Context, args []string) error {
 				deps.RecommendedMaxParallel = func() int {
 					return prov.ollama.AppliedTuning().RecommendedMaxParallel
 				}
+				// waired-agent#29: stop advertising a node whose model runner
+				// died. StateFailed ONLY — a boot in progress (StateStarting /
+				// StateNotStarted) must keep the probe's own verdict, because
+				// flipping this false also degrades the `waired claude` wrapper
+				// and fails the transparent proxy open.
+				deps.EngineDead = func() bool {
+					return prov.ollama.Health(context.Background()).State == infruntime.StateFailed
+				}
 			}
 			if shareCtl != nil {
 				deps.IsShared = shareCtl.IsShared

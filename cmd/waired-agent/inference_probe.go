@@ -28,6 +28,11 @@ type inferenceProbeDeps struct {
 	PushClient  *controlclient.Client     // optional; nil = no CP push
 	DeviceID    string
 	MachineKey  ed25519.PrivateKey
+	// EngineDead, when non-nil and returning true, forces Reachable=false
+	// regardless of what the HTTP probe saw. See the call site in tick for
+	// why the probe alone is not enough, and why the predicate is
+	// StateFailed-only.
+	EngineDead func() bool
 
 	// EngineKind selects which probe runs each tick. Accepted values:
 	// signer.InferenceTypeOllama, signer.InferenceTypeVLLM. Empty
@@ -133,6 +138,20 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 
 	tick := func() {
 		s := probe()
+		// waired-agent#29: the HTTP probe cannot see a dead model runner —
+		// ollama's parent keeps answering /api/tags with 200 — so without
+		// this the node keeps advertising itself to mesh peers as a healthy
+		// inference target that 500s every request. Fail-open: nil, or "not
+		// sure", keeps the probe's own verdict, and the wired predicate is
+		// StateFailed-ONLY. It must not fire during a normal boot, because
+		// flipping InferenceReachableLocal false also degrades the `waired
+		// claude` wrapper and the transparent proxy.
+		if deps.EngineDead != nil && deps.EngineDead() {
+			s.Reachable = false
+			if s.LastError == "" {
+				s.LastError = "engine model runner is not serving"
+			}
+		}
 		narrowPublishedModels(&s, deps.ActiveTag, &lastSurplusSig, deps.Logger)
 		// Phase 7: decorate the probe result with Hardware and Capacity.
 		// Both are baked in once at boot and omitempty on the wire so a

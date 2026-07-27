@@ -111,7 +111,13 @@ func (rr *requestRec) setSelection(sel router.Selection, fallbackFrom, fallbackR
 	rr.ev.FallbackReason = fallbackReason
 }
 
+// fail records the failing status and reason. Nil-safe, matching setUsage /
+// finish: proxyToEngine documents that rr may be nil, and it now reports
+// engine errors from inside that function.
 func (rr *requestRec) fail(status int, reason string) {
+	if rr == nil {
+		return
+	}
 	rr.ev.Status = status
 	rr.ev.ErrorReason = reason
 }
@@ -298,6 +304,29 @@ func (h *HandlerSet) clientFor(adapter runtime.Adapter) *http.Client {
 		}
 	}
 	return h.deps.HTTPClient
+}
+
+// asFailureReporter returns adapter as a runtime.FailureReporter, or nil.
+//
+// Same optional-interface shape as clientFor above. The nil result is the
+// load-bearing case: peer adapters and openai-compat adapters deliberately do
+// NOT implement it, so a remote peer's 500 can never demote THIS host's
+// engine (waired-agent#29).
+func asFailureReporter(adapter runtime.Adapter) runtime.FailureReporter {
+	if r, ok := adapter.(runtime.FailureReporter); ok {
+		return r
+	}
+	return nil
+}
+
+// reportEngineFailure hands a non-2xx engine reply to the adapter when the
+// adapter can act on it. Nil-safe so the anthropic proxies (which are also
+// driven directly by tests) need no guard at each call site.
+func reportEngineFailure(reporter runtime.FailureReporter, status int, body []byte) {
+	if reporter == nil {
+		return
+	}
+	reporter.ReportUpstreamFailure(status, body)
 }
 
 // peerProbeLookup is the PeerProbeLookup callback the Phase 8

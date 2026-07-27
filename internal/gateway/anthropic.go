@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // anthropicErrorEnvelope mirrors Anthropic's JSON error shape.
@@ -207,10 +208,10 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	client := h.clientFor(adapter)
 	if req.Stream {
 		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w,
-			ttfbBudgetFor(h.deps, sel, r, class), rr)
+			ttfbBudgetFor(h.deps, sel, r, class), rr, asFailureReporter(adapter))
 		return
 	}
-	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w, rr)
+	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w, rr, asFailureReporter(adapter))
 }
 
 // handleAnthropicCountTokensImpl returns an approximate token count.
@@ -240,7 +241,7 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 
 // rr may be nil (direct calls from tests). The upstream response is
 // already decoded here, so metering costs one field read (waired#829).
-func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, rr *requestRec) {
+func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) {
 	start := time.Now()
 	resp, err := h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
 	if err != nil {
@@ -260,6 +261,10 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 	if resp.StatusCode/100 != 2 {
 		// Pass through upstream's error verbatim, wrapping it in our
 		// envelope so clients still see Anthropic-shaped errors.
+		// Tell the adapter too: on this surface the Claude intercept
+		// discards the error before replaying upstream, so nobody else
+		// ever learns the engine died (waired-agent#29).
+		reportEngineFailure(reporter, resp.StatusCode, respBody)
 		rr.fail(resp.StatusCode, "upstream_error")
 		writeAnthropicError(w, resp.StatusCode, "upstream_error", strings.TrimSpace(string(respBody)))
 		return
@@ -298,7 +303,7 @@ func ttfbBudgetFor(deps Deps, sel router.Selection, r *http.Request, class strin
 // accumulates the upstream's usage object; metering reuses it, so a
 // client that disconnects mid-stream still contributes whatever the
 // engine reported before the break (waired#829).
-func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, ttfb time.Duration, rr *requestRec) {
+func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, ttfb time.Duration, rr *requestRec, reporter runtime.FailureReporter) {
 	// #757: bound only the PRE-first-byte window. reqCtx governs the peer
 	// request; a time.AfterFunc cancels it if the engine returns no headers
 	// within ttfb, so postToEngine errors BEFORE the stream commits and the
@@ -362,6 +367,10 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	slog.Debug("anthropic upstream stream", "status", resp.StatusCode, "ttfb_ms", time.Since(start).Milliseconds())
 	if resp.StatusCode/100 != 2 {
 		errBody, _ := io.ReadAll(resp.Body)
+		// Same as the non-stream leg: tell the adapter, and record the real
+		// status (this leg recorded nothing at all before waired-agent#29).
+		reportEngineFailure(reporter, resp.StatusCode, errBody)
+		rr.fail(resp.StatusCode, "upstream_error")
 		writeAnthropicError(w, resp.StatusCode, "upstream_error", strings.TrimSpace(string(errBody)))
 		return
 	}
