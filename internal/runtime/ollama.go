@@ -433,6 +433,16 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 }
 
 // processEnv returns the environment variables passed to `ollama
+// ollamaTuningKeys are the #621 serve-tuning variables. They are dropped from
+// the inherited environment as a SET (not just the ones we emit) whenever a
+// tuning was computed — see processEnv.
+var ollamaTuningKeys = []string{
+	"OLLAMA_CONTEXT_LENGTH",
+	"OLLAMA_KV_CACHE_TYPE",
+	"OLLAMA_NUM_PARALLEL",
+	"OLLAMA_FLASH_ATTENTION",
+}
+
 // serve`, derived from the parent process env plus the spec-mandated
 // overrides and the GPU-backend selection (#290). Any inherited env var
 // whose key we set ourselves is dropped from the base so our value wins
@@ -473,6 +483,20 @@ func (a *OllamaAdapter) processEnv() []string {
 	}
 	for _, kv := range model {
 		if k := envKey(kv); k != "" {
+			drop[k] = true
+		}
+	}
+	if len(model) > 0 {
+		// When we have a computed serve tuning at all, drop EVERY tuning key
+		// from the inherited environment — including ones the tuning
+		// deliberately omits. An omission means "let the engine choose", and
+		// an inherited value would silently override that: since the tuning
+		// stopped always exporting OLLAMA_FLASH_ATTENTION (waired-agent#29), a
+		// stray value in /etc/waired/agent.env or a developer shell would
+		// otherwise re-arm exactly the combination this host opted out of.
+		// With no computed tuning (reuse/borrowed mode, or no resolvable
+		// target) the operator's own values are left alone.
+		for _, k := range ollamaTuningKeys {
 			drop[k] = true
 		}
 	}
@@ -599,10 +623,16 @@ type ModelTuning struct {
 	// Non-zero only on spilled discrete-GPU hosts, where Ollama's own
 	// automaticGenerationBatch would otherwise fall back to 512.
 	NumBatch int
-	// KVCacheType is the OLLAMA_KV_CACHE_TYPE the sizing assumed —
-	// normally "q8_0"; flips to "f16" when the post-load check detected
-	// the engine fell back.
+	// KVCacheType is the OLLAMA_KV_CACHE_TYPE the sizing assumed — "q8_0"
+	// where halving the KV cache buys context, "f16" where it does not (or
+	// when the post-load check detected the engine fell back).
 	KVCacheType string
+	// FlashAttention is whether OLLAMA_FLASH_ATTENTION=1 is exported. It
+	// tracks KVCacheType and is never set independently: Ollama silently
+	// degrades a quantized KV cache to f16 without flash attention, so a
+	// quantized cache REQUIRES it — and on an f16 cache it would force
+	// llama.cpp's flash-attention path for no memory saving at all.
+	FlashAttention bool
 	// Verified is true once the post-load /api/ps verification completed
 	// (regardless of outcome).
 	Verified bool

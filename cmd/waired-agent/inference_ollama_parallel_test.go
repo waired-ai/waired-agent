@@ -74,6 +74,27 @@ func TestComputeOllamaTuning_OperatorOverride(t *testing.T) {
 		}
 	})
 
+	// PRODUCT CONTRACT (waired-agent#29): dropping the quantized KV cache on a
+	// roomy CPU host must not cost a request slot. planOllamaKV's f16
+	// threshold is deliberately the same 2x the slot grant uses, which is what
+	// makes this a proof rather than a coincidence.
+	t.Run("auto-cpu-host-keeps-parallelism", func(t *testing.T) {
+		tm := tinyCoderManifest()
+		got := computeOllamaTuningOpts(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, true, 0)
+		if got.KVCacheType != "f16" {
+			t.Fatalf("precondition: KVCacheType = %q, want f16", got.KVCacheType)
+		}
+		if got.NumParallel != ollamaMaxAutoParallel {
+			t.Errorf("NumParallel = %d, want %d", got.NumParallel, ollamaMaxAutoParallel)
+		}
+		// The operator override still wins, and still warns above the
+		// recommendation.
+		over := computeOllamaTuningOpts(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, true, 8)
+		if over.NumParallel != 8 {
+			t.Errorf("NumParallel = %d, want the operator override 8", over.NumParallel)
+		}
+	})
+
 	t.Run("override-honored-in-spill-regime", func(t *testing.T) {
 		// The 22 GB variant spills to the coding floor (recommended = 1). The
 		// override is still honored, with the concurrency warning joined onto the

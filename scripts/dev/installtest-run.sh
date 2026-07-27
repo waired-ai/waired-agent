@@ -165,6 +165,32 @@ launch_guest() {
   it_wait_guest_ready "$guest" || it_die "$guest never became ready"
 }
 
+# IT_AGENT_ENV_EXTRA — newline- or semicolon-separated KEY=VALUE pairs appended
+# to /etc/waired/agent.env (the systemd EnvironmentFile install.sh already
+# writes), then the daemon is restarted so it picks them up.
+#
+# The reason this exists: a nightly leg needs to pin an agent-side knob the
+# auto path would not choose on that host. Concretely (waired-agent#29), the
+# serve tuning now requests a quantized KV cache + flash attention only where
+# it buys context, so CPU-only hosts stop exercising that combination — and
+# every CI leg that runs ollama at all is CPU-only (the GPU runner is
+# vLLM-only). One nightly leg pins WAIRED_OLLAMA_KV_CACHE_TYPE=q8_0 so the
+# combination keeps a real-engine exercise deliberately, rather than by
+# accident as before.
+#
+# No-op when unset, which is every per-PR run.
+apply_agent_env_extra() {
+  local guest="$1"
+  [ -n "${IT_AGENT_ENV_EXTRA:-}" ] || return 0
+  it_log "appending IT_AGENT_ENV_EXTRA to /etc/waired/agent.env"
+  printf '%s\n' "$IT_AGENT_ENV_EXTRA" | tr ';' '\n' | while IFS= read -r kv; do
+    [ -n "$kv" ] || continue
+    it_log "  agent.env += $kv"
+    gx "$guest" sh -c "printf '%s\n' '$kv' >> /etc/waired/agent.env"
+  done
+  gx "$guest" systemctl restart waired-agent
+}
+
 # Run the working-tree install.sh inside the guest, as root, against the
 # local apt repo. We exercise the canonical dogfood one-liner shape
 # (`--dev`, resolving to CONTROL_URL via WAIRED_DEV_CONTROL_URL). Tier 1
@@ -305,6 +331,7 @@ it_step "Tier $TIER run (guest=$GUEST)"
 if [ "$TIER" -le 2 ]; then
   launch_guest "$GUEST"
   run_install "$GUEST"
+  apply_agent_env_extra "$GUEST"
   assert_tier1 "$GUEST"
   assert_idempotent "$GUEST"
   assert_postinst_selfheal "$GUEST"

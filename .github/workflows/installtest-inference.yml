@@ -140,6 +140,14 @@ jobs:
         env:
           IT_LOCAL: "1"
           IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
+          # Keep q8_0 + flash attention exercised against a REAL engine.
+          # Since waired-agent#29 the serve tuning requests that pair only
+          # where it buys context, so a CPU-only host would otherwise never
+          # run it — and the GPU runner below is vLLM-only, so this is the
+          # last real-engine coverage that combination has. Deliberately NOT
+          # on the routing-sentinel leg: that one must exercise the
+          # configuration real users get.
+          IT_AGENT_ENV_EXTRA: WAIRED_OLLAMA_KV_CACHE_TYPE=q8_0
         run: |
           set -euo pipefail
           export PATH="$HOME/go/bin:$PATH"

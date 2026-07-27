@@ -9,10 +9,13 @@
 //
 //	OLLAMA_CONTEXT_LENGTH  manifest context_length, clamped down so
 //	                       weights + KV cache fit host memory un-spilled
-//	OLLAMA_KV_CACHE_TYPE   q8_0 by default (near-lossless, halves KV)
+//	OLLAMA_KV_CACHE_TYPE   q8_0 (near-lossless, halves KV) only where
+//	                       halving KV actually buys context — see
+//	                       planOllamaKV; f16 otherwise
 //	OLLAMA_NUM_PARALLEL    1 unless doubling KV still costs no context
-//	OLLAMA_FLASH_ATTENTION 1 (KV quantization is a silent f16 no-op
-//	                       without flash attention)
+//	OLLAMA_FLASH_ATTENTION 1 ONLY alongside a quantized KV cache (KV
+//	                       quantization is a silent f16 no-op without it);
+//	                       omitted on f16 so the engine chooses
 //
 // The values are computed once per process spawn from the tuning target
 // (preferred > active > bundled model) and the hardware profile, and
@@ -21,6 +24,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -53,6 +58,85 @@ const ollamaLargeBatch = 2048
 // scoring.SuggestMinRAMGB's 2 GB OS allowance plus margin for the agent
 // itself).
 const ollamaCPUOnlyRAMHeadroomGB = 4
+
+// ollamaMaxAutoParallel is the most request slots the sizing ever grants
+// itself (see the NumParallel branch below). planOllamaKV uses the same
+// figure, which is what makes "choosing f16 cannot cost a slot" a proof
+// rather than a hope.
+const ollamaMaxAutoParallel = 2
+
+// ollamaKVAuto is the kvType value meaning "decide": planOllamaKV then picks
+// q8_0 + flash attention only where quantizing the KV actually buys context.
+// Any explicit type is a PIN — that is how the verify pass's f16 degrade and
+// the ollamaKVOverrideEnv test lane both express intent, and it is why every
+// existing caller that passes "q8_0"/"f16" keeps its exact behaviour.
+const ollamaKVAuto = "auto"
+
+// ollamaKVOverrideEnv pins the KV/flash-attention pair the tuning would
+// otherwise choose. It exists so the q8_0 + flash-attention combination keeps
+// a real nightly exercise against a real engine even on hosts where the auto
+// decision drops it: the only CI legs that run ollama at all are CPU-only
+// (the GPU runner is vLLM-only), so without this the combination would be
+// covered by env-string unit tests and nothing else.
+// Values: f16 | q8_0 | q4_0; anything else is ignored.
+const ollamaKVOverrideEnv = "WAIRED_OLLAMA_KV_CACHE_TYPE"
+
+// ollamaKVPlan is the KV half of the tuning decision. The two fields are
+// INSEPARABLE: Ollama silently degrades a quantized KV cache to f16 without
+// flash attention, so "q8_0" without FA is a lie, and FA without a quantized
+// cache is a forced code path bought for nothing.
+type ollamaKVPlan struct {
+	Type           string
+	FlashAttention bool
+}
+
+// planOllamaKV decides whether requesting a quantized KV cache buys anything
+// on this host. Pure: the env pin is resolved by the caller (ollamaKVRequest).
+//
+// GPU / UMA hosts keep q8_0 + flash attention unconditionally. Two reasons:
+// the discrete overhead model (proto/hostfit OllamaVRAMOverhead*) is
+// calibrated against an FA load, so dropping FA there would silently
+// invalidate the spill reservation; and the post-load verify pass is the
+// safety net on exactly those hosts.
+//
+// CPU-only hosts get f16 whenever the f16 budget already covers the window
+// AND the slots we would serve. On those hosts quantizing saves memory nobody
+// needs — on a 16 GB runner serving a 0.5B model it saves ~400 MB out of a
+// 12 GB budget, about 3% — while forcing llama.cpp's least-exercised
+// CPU + flash-attention + quantized-KV path, which is where waired-agent#29's
+// llama-server segfault lives.
+func planOllamaKV(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, requested string) ollamaKVPlan {
+	if requested != ollamaKVAuto {
+		// A pin. f16 needs no flash attention; a quantized pin does.
+		return ollamaKVPlan{Type: requested, FlashAttention: requested != "f16"}
+	}
+	if hw.EffectiveVRAMMB() > 0 {
+		return ollamaKVPlan{Type: "q8_0", FlashAttention: true}
+	}
+	want := m.ContextLength
+	if want <= 0 || want < ollamaContextFloor {
+		want = ollamaContextFloor
+	}
+	budgetGB := ollamaTuningBudgetGB(hw, v.EstimatedWeightGB)
+	f16Max := scoring.MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, scoring.KVFactorF16, budgetGB)
+	if f16Max >= ollamaMaxAutoParallel*want {
+		return ollamaKVPlan{Type: "f16"}
+	}
+	// A genuinely tight CPU host — and, when f16Max is 0, one we cannot size
+	// at all. Never change behaviour on a host whose budget is unknown.
+	return ollamaKVPlan{Type: "q8_0", FlashAttention: true}
+}
+
+// ollamaKVRequest is the kvType production passes to the sizing: auto unless a
+// test lane pinned one. Impure by design, so computeOllamaTuning* stays pure.
+func ollamaKVRequest() string {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(ollamaKVOverrideEnv))); v {
+	case "f16", "q8_0", "q4_0":
+		return v
+	default:
+		return ollamaKVAuto
+	}
+}
 
 // ollamaTuning is the env decision for one (manifest, variant, host).
 type ollamaTuning struct {
@@ -164,14 +248,18 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// The operator override is applied at every exit (named return + defer) so
 	// each sizing branch just records its RecommendedMaxParallel and returns.
 	defer func() { finalizeParallel(&t, operatorParallel) }()
+	// Resolve the KV/flash-attention pair FIRST: every sizing branch below is
+	// a function of KVFactor, and nothing downstream may ever see "auto".
+	kv := planOllamaKV(m, v, hw, kvType)
 	t = ollamaTuning{
 		ModelTuning: infruntime.ModelTuning{
-			ModelID:     m.ModelID,
-			VariantID:   v.VariantID,
-			NumParallel: 1,
-			KVCacheType: kvType,
+			ModelID:        m.ModelID,
+			VariantID:      v.VariantID,
+			NumParallel:    1,
+			KVCacheType:    kv.Type,
+			FlashAttention: kv.FlashAttention,
 		},
-		KVFactor:          kvFactorFor(kvType),
+		KVFactor:          kvFactorFor(kv.Type),
 		kvBytesPerTokFP16: v.KVBytesPerTokenFP16,
 	}
 
@@ -264,8 +352,8 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// Parallelism never costs context: only serve >1 request slot when
 	// the full manifest window is already granted AND doubling the KV
 	// allocation (Ollama reserves num_ctx × num_parallel) still fits.
-	if m.ContextLength > 0 && ctx == m.ContextLength && maxCtx >= 2*ctx {
-		t.NumParallel = 2
+	if m.ContextLength > 0 && ctx == m.ContextLength && maxCtx >= ollamaMaxAutoParallel*ctx {
+		t.NumParallel = ollamaMaxAutoParallel
 	}
 	// The VRAM-safe ceiling the admin's override is advised against exceeding:
 	// how many full-window slots the KV budget holds.
@@ -286,11 +374,15 @@ func (t ollamaTuning) Env() []string {
 	env = append(env,
 		"OLLAMA_KV_CACHE_TYPE="+t.KVCacheType,
 		fmt.Sprintf("OLLAMA_NUM_PARALLEL=%d", t.NumParallel),
+	)
+	if t.FlashAttention {
 		// KV-cache quantization silently degrades to f16 without flash
 		// attention; the engine still auto-disables FA per-model where
 		// unsupported (that case is what the post-load verify catches).
-		"OLLAMA_FLASH_ATTENTION=1",
-	)
+		// Omitted on an f16 cache: there is no KV saving to protect, and
+		// forcing FA there buys llama.cpp's least-exercised path for free.
+		env = append(env, "OLLAMA_FLASH_ATTENTION=1")
+	}
 	return env
 }
 
