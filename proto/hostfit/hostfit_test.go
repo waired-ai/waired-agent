@@ -568,6 +568,43 @@ func TestActiveBytesPerToken(t *testing.T) {
 // dense 27B is too slow on a small unified pool, a mixture of experts of
 // similar size is not, and a discrete card holding the whole model is
 // never the wall.
+// TestBandwidthConstantsKeepTheirDirection pins WHICH WAY each bandwidth
+// constant is allowed to be wrong. That is the property a comment alone
+// already failed to protect once: the original text on
+// BandwidthSystemRAMGBs argued for treating it as a population floor and
+// asserted that "guessing low only adds 'this may be slow'", which is the
+// opposite of what the one deciding branch needs.
+//
+// BandwidthSystemRAMGBs feeds ClassDiscrete-spilled, the only case that
+// may EXCLUDE a model, and the estimate there is directly proportional to
+// it. Lowering it toward a measured effective figure — the intuitive edit
+// — turns models a machine runs into models the wizard refuses to offer.
+// 48 GB/s is the highest sustained streaming read on record for a
+// mainstream host (DDR5-4800 dual channel, ~62 % of its 76.8 GB/s spec),
+// so the constant has to stay above that.
+//
+// BandwidthUnifiedGBs is the reverse. It may only annotate, so it is a
+// floor and has to stay at or below the smallest shipping unified part.
+// Raising it would silence the warning on exactly the machines that need
+// it.
+func TestBandwidthConstantsKeepTheirDirection(t *testing.T) {
+	const (
+		sustainedMainstreamGBs = 48.0  // DDR5-4800 dual channel, measured
+		smallestUnifiedPartGBs = 120.0 // Apple M-series base
+	)
+	if hostfit.BandwidthSystemRAMGBs < sustainedMainstreamGBs {
+		t.Errorf("BandwidthSystemRAMGBs = %v, below the %v GB/s a mainstream host actually sustains. "+
+			"It is an UPPER bound on the branch that excludes; lowering it refuses runnable models. "+
+			"Per-host measurement (#252) is the fix, not a smaller constant",
+			hostfit.BandwidthSystemRAMGBs, sustainedMainstreamGBs)
+	}
+	if hostfit.BandwidthUnifiedGBs > smallestUnifiedPartGBs {
+		t.Errorf("BandwidthUnifiedGBs = %v, above the smallest shipping unified part (%v GB/s). "+
+			"It is a FLOOR that may only annotate; raising it silences the warning on the parts that need it",
+			hostfit.BandwidthUnifiedGBs, smallestUnifiedPartGBs)
+	}
+}
+
 func TestEstimateOllamaDecode(t *testing.T) {
 	dense27b := catalog.Variant{
 		VariantID: "q4-gguf", EstimatedWeightGB: 16.3,

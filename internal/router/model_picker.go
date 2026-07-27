@@ -193,12 +193,16 @@ func RankModels(in PickInput) ([]Pick, error) {
 	//     whenever that model carried a higher quality tier.
 	//
 	//     It applies ONLY where the estimate is an upper bound, which is
-	//     the spilled-discrete case. The CPU-only and unified-memory
-	//     figures rest on a bandwidth constant set at the FLOOR of its
-	//     population, so they are lower bounds, and excluding on a lower
-	//     bound would withhold from an M4 Max what an M4 base runs.
-	//     Those hosts get an annotation rather than a smaller catalog
-	//     until measured per-device bandwidth lands (#251).
+	//     the spilled-discrete case: there the card's own reads are
+	//     priced at zero, a margin no unknown hardware can eat. The
+	//     unified-memory figure rests on a bandwidth constant set at the
+	//     FLOOR of its population, so it is a lower bound, and excluding
+	//     on one would withhold from an M4 Max what an M4 base runs. The
+	//     CPU-only figure rests on a constant meant as an upper bound but
+	//     with no such margin behind it, so a host whose memory beats the
+	//     constant would be excluded on the constant alone. Both get an
+	//     annotation rather than a smaller catalog until measured
+	//     per-device bandwidth lands (#251).
 	//  3. Everything that fits, so neither floor can newly turn a
 	//     working host into an under-spec one.
 	narrow := func(keep func(candidate) bool) {
