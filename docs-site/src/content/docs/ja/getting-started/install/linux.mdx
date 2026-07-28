@@ -5,7 +5,7 @@ meta:
   audience: Ubuntu 24.04 以降 / Debian trixie 以降の人
   needs: sudo が使えるターミナル
   time: 5 分
-sourceHash: 89900ec616789a4d
+sourceHash: 394a5297978f1ac8
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -54,9 +54,11 @@ import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components'
 ## GNOME でアイコンが出ない場合
 
 GNOME は拡張機能なしでは時計のとなりにアイコンを表示しないため、Waired のアイコンには AppIndicator 拡張が必要です。
-セットアップは GNOME を検出すると自動で導入・有効化します。それでも出ない場合は
+セットアップは、そのパソコンに GNOME が入っていることを確認したうえで導入・有効化します。
+サインインのたびに確認し直すので、あとから無効になっても自動で戻ります。それでも出ない場合は
+`waired doctor --fix` を実行するか、
 [トラブルシューティング](/ja/troubleshooting/#the-waired-icon-is-missing-linux)を
-参照してください。KDE Plasma では何も必要ありません。
+参照してください。KDE Plasma では何も必要ありません。デスクトップのないパソコンには何も入りません。
 
 ## AI ソフトを入れない
 

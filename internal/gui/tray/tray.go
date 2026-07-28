@@ -319,6 +319,11 @@ type tray struct {
 	updateSeeded              bool
 	lastNotifiedUpdateVersion string
 	lastNotifiedUpdateAt      time.Time
+
+	// Tray-host toast state (mu-protected). Same cadence shape as the update
+	// toast: fire on the first sighting, then re-remind at most once per
+	// trayHostRenotifyInterval while the host is still missing (#295).
+	lastNotifiedTrayHostAt time.Time
 }
 
 func (t *tray) onReady(ctx context.Context) func() {
@@ -592,6 +597,12 @@ func (t *tray) onReady(ctx context.Context) func() {
 
 		go t.handleClicks(ctx)
 		go t.pollLoop(ctx)
+		// Tray-host self-check (#295). This process is the one that knows
+		// whether it has a host to draw on, and it only ever runs inside a
+		// desktop session — which makes it the natural place for the check
+		// that no package metadata can express. Off the GUI thread: it makes
+		// a D-Bus round trip and may shell out to gnome-extensions.
+		go t.checkTrayHost(ctx)
 	}
 }
 

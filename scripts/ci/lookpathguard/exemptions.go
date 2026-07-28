@@ -49,12 +49,25 @@ var declared = []lookpath{
 	{"internal/platform/browser/browser_linux.go", "runuser", privHelper},
 	{"internal/platform/browser/browser_linux.go", "sudo", privHelper},
 	{"internal/gui/tray/actions_linux.go", "pkexec", privHelper},
+	// The tray-host repair (#295) needs both directions: sudo to raise apt to
+	// root, runuser/sudo to drop back to the desktop user whose dconf holds
+	// the enabled-extensions list.
+	{"internal/platform/trayhost/repair_linux.go", "runuser", privHelper},
+	{"internal/platform/trayhost/repair_linux.go", "sudo", privHelper},
 
 	// Desktop helpers. `prog.binary` walks the zenity/kdialog candidate list.
 	{"internal/gui/tray/actions_linux.go", "zenity", desktopHelper},
 	{"internal/gui/tray/actions_linux.go", "kdialog", desktopHelper},
 	{"internal/gui/tray/dialog_linux.go", "prog.binary", desktopHelper},
 	{"internal/platform/notification/notification_linux.go", "notify-send", desktopHelper},
+	// Tray-host repair (#295). gnome-shell is the load-bearing one: it is what
+	// tells a GNOME desktop apart from a server, and PlanRepair refuses to
+	// plan an apt install without it — on Ubuntu 26.04 the extension name is a
+	// virtual package provided by gnome-shell-ubuntu-extensions, which
+	// `Depends: gnome-shell`, so installing it on a host that has none would
+	// pull a whole desktop onto a server.
+	{"internal/platform/trayhost/repair_linux.go", "gnome-shell", desktopHelper},
+	{"internal/platform/trayhost/repair_linux.go", "gnome-extensions", desktopHelper},
 
 	// OS-provided system tools.
 	{"internal/platform/service/service_linux.go", "systemctl", systemTool},
@@ -62,6 +75,7 @@ var declared = []lookpath{
 	{"internal/platform/service/service_linux.go", "getent", systemTool},
 	{"internal/platform/service/service_linux.go", "chown", systemTool},
 	{"internal/proxy/trust/install_linux.go", "update-ca-certificates", systemTool},
+	{"internal/platform/trayhost/repair_linux.go", "apt-get", systemTool},
 	{"internal/proxy/trust/install_windows.go", "certutil", systemTool},
 
 	// GPU vendor tools.

@@ -54,10 +54,12 @@ updates are manual.
 ## Desktop icon on GNOME
 
 GNOME does not show icons next to the clock without an extension, so Waired's
-icon needs the AppIndicator extension. Setup installs and enables one automatically when it detects GNOME.
-If the icon still does not appear, see
+icon needs the AppIndicator extension. Setup installs and switches one on when
+it finds GNOME on the computer, and Waired checks again each time you sign in —
+so if the extension is ever turned off, it is turned back on for you.
+If the icon still does not appear, run `waired doctor --fix`, or see
 [Troubleshooting](/troubleshooting/#the-waired-icon-is-missing-linux).
-KDE Plasma needs nothing.
+KDE Plasma needs nothing. Computers without a desktop are left alone.
 
 ## Skip the AI software
 

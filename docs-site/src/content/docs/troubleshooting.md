@@ -436,10 +436,20 @@ firewall gets in the way, automatically.
 
 GNOME does not show icons next to the clock on its own — the Waired icon needs
 the AppIndicator extension.
-Setup installs one automatically when it detects GNOME, and `waired doctor`
-warns when it is missing.
+Setup installs one when it finds GNOME on the computer, and Waired checks again
+each time you sign in — an extension that is present but switched off is
+switched back on for you.
 
-To install it by hand:
+If the icon is still missing, this fixes it:
+
+```sh
+waired doctor --fix
+```
+
+It reports what is wrong, asks before changing anything, and installs or
+switches on the extension as needed.
+
+To do the same by hand:
 
 ```sh
 sudo apt install gnome-shell-extension-appindicator
