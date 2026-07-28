@@ -36,6 +36,19 @@ const (
 	Unsupported
 )
 
+func (s Status) String() string {
+	switch s {
+	case HostPresent:
+		return "host-present"
+	case NoHost:
+		return "no-host"
+	case Unsupported:
+		return "unsupported"
+	default:
+		return "not-applicable"
+	}
+}
+
 // Desktop is the detected desktop environment.
 type Desktop int
 

@@ -5,6 +5,8 @@ import (
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 )
 
 // TestMain installs no-op stubs over every dialog / host-integration seam
@@ -40,6 +42,12 @@ type seamLog struct {
 	clipboard  []string
 	browsers   []string
 	elevations []string
+	// Tray-host seams (#295). trayHostPlans records the Status each plan was
+	// asked about, so a test can prove checkTrayHost fed the probe's verdict
+	// through rather than deciding on its own.
+	trayHostChecks  int
+	trayHostPlans   []string
+	trayHostEnables int
 }
 
 func (l *seamLog) add(field *[]string, v string) {
@@ -72,6 +80,7 @@ func resetSeams(t *testing.T) *seamLog {
 		seams.errors, seams.confirms, seams.yesNos = nil, nil, nil
 		seams.clipboard, seams.browsers, seams.elevations = nil, nil, nil
 		seams.abouts = 0
+		seams.trayHostChecks, seams.trayHostPlans, seams.trayHostEnables = 0, nil, 0
 	}
 	reset()
 	t.Cleanup(reset)
@@ -116,6 +125,32 @@ func installSeamStubs() {
 	}
 	updateViaElevation = func(context.Context) error {
 		seams.add(&seams.elevations, "update")
+		return nil
+	}
+	// Tray-host seams (#295). The real Check makes a D-Bus round trip against
+	// the runner's session bus and the real Enable shells out to
+	// gnome-extensions against the developer's OWN desktop — a unit test must
+	// reach neither. The default reports a healthy host, which plans to
+	// RepairNone, so checkTrayHost is a no-op for every test that does not
+	// deliberately override these.
+	trayHostCheck = func() trayhost.Result {
+		seams.mu.Lock()
+		defer seams.mu.Unlock()
+		seams.trayHostChecks++
+		return trayhost.Result{Status: trayhost.HostPresent, Desktop: trayhost.DesktopGNOME}
+	}
+	trayHostPlan = func(r trayhost.Result) trayhost.RepairAction {
+		seams.mu.Lock()
+		seams.trayHostPlans = append(seams.trayHostPlans, r.Status.String())
+		seams.mu.Unlock()
+		// The real planner is pure; only its fact-gathering touches the host,
+		// so feed it facts that assert nothing about the runner.
+		return trayhost.PlanRepair("linux", trayhost.RepairFacts{Status: r.Status, Desktop: r.Desktop})
+	}
+	trayHostEnable = func(context.Context) error {
+		seams.mu.Lock()
+		defer seams.mu.Unlock()
+		seams.trayHostEnables++
 		return nil
 	}
 	// notifier is the pre-existing seam over the OS toast backend; on darwin

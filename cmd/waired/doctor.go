@@ -64,7 +64,8 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	findings := collectDoctorFindings(ctx, homeDir, *stateDir, *gatewayBaseURL, *mgmtURL)
+	tray := checkTray()
+	findings := collectDoctorFindings(ctx, homeDir, *stateDir, *gatewayBaseURL, *mgmtURL, tray)
 	hasFail := false
 	for _, f := range findings {
 		fmt.Println(formatFinding(f))
@@ -73,23 +74,32 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 		}
 	}
 
-	switch {
-	case *fix:
-		fmt.Println("\nRunning repair (waired link all)...")
-		return repairWithUse(ctx, homeDir, *stateDir, *gatewayBaseURL)
-	case *noInteractive:
-	case isTerminal(os.Stdin):
-		if hasFail {
-			fmt.Println()
-			if pressedF(os.Stdin) {
-				fmt.Println("Running repair (waired link all)...")
-				if err := repairWithUse(ctx, homeDir, *stateDir, *gatewayBaseURL); err != nil {
-					return err
-				}
-				fmt.Println("Done. Re-run `waired doctor` to verify.")
-				return nil
-			}
+	plan := planDoctorFix(hasFail, tray.Repair, *fix, *noInteractive, isTerminal(os.Stdin))
+
+	if plan.Prompt {
+		fmt.Println()
+		if !pressedF(os.Stdin) {
+			plan.Integration, plan.Tray = false, false
 		}
+	}
+
+	if plan.Integration {
+		fmt.Println("Running repair (waired link all)...")
+		if err := repairWithUse(ctx, homeDir, *stateDir, *gatewayBaseURL); err != nil {
+			return err
+		}
+	}
+	if plan.Tray {
+		if err := repairTrayHost(ctx, tray.Repair, os.Stdout); err != nil {
+			// Warn-only: the tray is a convenience, and the finding it
+			// repairs never contributed to the exit code. Print what went
+			// wrong and the manual commands rather than failing the run.
+			fmt.Fprintf(os.Stderr, "warn: tray host repair failed: %v\n", err)
+		}
+	}
+	if plan.Integration || plan.Tray {
+		fmt.Println("Done. Re-run `waired doctor` to verify.")
+		return nil
 	}
 
 	if hasFail && !*fix {
@@ -101,7 +111,74 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	return nil
 }
 
-func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string) []integration.AuditFinding {
+// doctorFixPlan is what runDoctorBody does after printing the findings.
+type doctorFixPlan struct {
+	// Prompt asks "Press f to fix" before running anything. When the answer
+	// is no, Integration and Tray are both dropped.
+	Prompt bool
+	// Integration re-applies the coding-agent integration (waired link all).
+	Integration bool
+	// Tray installs / enables the SNI host extension.
+	Tray bool
+}
+
+// planDoctorFix decides the fix flow. Pure, and split out of runDoctorBody so
+// the matrix is table-tested without a TTY, a session bus, or a repair actually
+// running (CLAUDE.md §Test discipline).
+//
+// Two things changed here for #295. The prompt used to be offered only when
+// some finding had failed, and the repair was always "waired link all" — which
+// cannot install a GNOME extension. Now a fixable tray warning also earns the
+// prompt, and each half of the repair is selected independently, so `f` on a
+// host whose only problem is the tray does not also re-link every coding agent.
+//
+// What did NOT change: a tray warning still never makes `waired doctor` exit
+// non-zero (see trayFindingFromResult). Fixable is not the same as failing.
+func planDoctorFix(hasFail bool, tray trayhost.RepairAction, forced, noInteractive, tty bool) doctorFixPlan {
+	fixable := tray.Fixable()
+	switch {
+	case forced:
+		// --fix skips the prompt and repairs whatever is repairable. It runs
+		// the integration unconditionally (its historical behaviour: it is
+		// idempotent, and --fix predates there being anything else to fix).
+		return doctorFixPlan{Integration: true, Tray: fixable}
+	case noInteractive, !tty:
+		return doctorFixPlan{}
+	case hasFail:
+		return doctorFixPlan{Prompt: true, Integration: true, Tray: fixable}
+	case fixable:
+		// Nothing failed, but the tray can be repaired — offer just that.
+		return doctorFixPlan{Prompt: true, Tray: true}
+	default:
+		return doctorFixPlan{}
+	}
+}
+
+// repairTrayHost carries out a tray-host repair plan: install the AppIndicator
+// extension when it is missing (privileged; PlanRepair guarantees this host
+// already runs GNOME), then enable it for the desktop user (unprivileged).
+func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out *os.File) error {
+	if !action.Fixable() {
+		return nil
+	}
+	fmt.Fprintln(out, "Repairing the system tray host...")
+	if action.NeedsPrivilege() {
+		if err := trayhost.Install(ctx, out); err != nil {
+			return err
+		}
+	}
+	if err := trayhost.Enable(ctx); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "  Enabled. Log out and back in (required on Wayland) to show the tray icon.")
+	return nil
+}
+
+// collectDoctorFindings gathers every finding for one run. tray is passed in
+// rather than probed here so the session bus is queried exactly once per run,
+// and so tests can pass the zero value and stay independent of whatever desktop
+// the runner happens to have.
+func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor) []integration.AuditFinding {
 	var out []integration.AuditFinding
 
 	// Token presence + permission check. PathsUnder computes the layout
@@ -162,12 +239,13 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	// surface a single StatusSkip explaining the upgrade path.
 	out = append(out, probeObservability(ctx, mgmtURL)...)
 
-	// Linux desktop tray host (#493): on GNOME the waired-tray SNI icon does
-	// not render without an AppIndicator host extension. Surface a warn finding
-	// (with the install/enable/re-login hint) when no SNI host is present.
-	// Empty Subject — NotApplicable on servers / macOS / Windows — is skipped.
-	if f := trayFindingFromResult(trayhost.Check()); f.Subject != "" {
-		out = append(out, f)
+	// Linux desktop tray host (waired#493): on GNOME the waired-tray SNI icon
+	// does not render without an AppIndicator host extension. Surface a warn
+	// finding (with the install/enable/re-login hint) when no SNI host is
+	// present. Empty Subject — NotApplicable on servers / macOS / Windows, and
+	// the zero value tests pass — is skipped.
+	if tray.Finding.Subject != "" {
+		out = append(out, tray.Finding)
 	}
 
 	return out
