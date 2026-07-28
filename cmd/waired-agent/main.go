@@ -1423,12 +1423,26 @@ func run(ctx context.Context, args []string) error {
 	// enrollment in-process and, on success, calls activate to bring the
 	// runtime up live. Wired before the management server starts serving
 	// so a login request can never arrive before the controller exists.
+	// Under --bypass-cp-iam the control plane is an IAM-gated Cloud Run
+	// service: an unauthenticated POST gets a 403 HTML page from ingress,
+	// never the API. The token refresher and the node-key rotator already
+	// mint a GCE identity token for it; enrollment did not, because it used
+	// to happen in `waired init --bypass-mode`, which built its own client.
+	// #175 moved enrollment in here and that client was deleted with the
+	// flag, so the testnet's agents enrolled against a 403 until this.
+	var enrollHTTPFor func(context.Context, string) *http.Client
+	if *bypassCPIAM {
+		enrollHTTPFor = func(c context.Context, cpURL string) *http.Client {
+			return bypassCPHTTPClient(c, cpURL, logger)
+		}
+	}
 	loginCtl := newLoginController(sb, loginControllerConfig{
 		StateDir:          *stateDir,
 		DefaultControlURL: resolveDaemonControlURL(*controlURL, controlurl.PlatformDefault(), logger),
 		Endpoint:          "udp4:" + *loginListen,
 		RootCtx:           ctx,
 		Activate:          activate,
+		EnrollHTTPFor:     enrollHTTPFor,
 		Logger:            logger,
 	})
 	mgmtSrv = mgmtSrv.WithLogin(loginCtl)

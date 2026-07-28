@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,12 +28,16 @@ type fakeEnroll struct {
 	calls         int32
 	gotEndpoint   atomic.Value // last opts.Endpoint seen (string)
 	gotControlURL atomic.Value // last opts.ControlURL seen (string)
+	gotHTTPClient atomic.Value // last opts.HTTPClient seen (*http.Client)
 }
 
 func (f *fakeEnroll) fn(ctx context.Context, opts setup.EnrollOptions) (*setup.EnrollResult, error) {
 	atomic.AddInt32(&f.calls, 1)
 	f.gotEndpoint.Store(opts.Endpoint)
 	f.gotControlURL.Store(opts.ControlURL)
+	if opts.HTTPClient != nil {
+		f.gotHTTPClient.Store(opts.HTTPClient)
+	}
 	if opts.OnLoginURL != nil {
 		opts.OnLoginURL("https://login.example/abc", "WXYZ-1234")
 	}
@@ -309,5 +314,71 @@ func TestLoginStatusUnknownSessionResting(t *testing.T) {
 	}
 	if st.Phase != management.LoginPhaseUnenrolled {
 		t.Errorf("unknown session on fresh daemon should be unenrolled, got %+v", st)
+	}
+}
+
+// PRODUCT CONTRACT: whatever client the daemon was configured to enrol
+// with must actually reach setup.Enroll, and it must be built for the
+// control URL this login resolved.
+//
+// Under --bypass-cp-iam that client carries a GCE identity token whose
+// audience IS that URL; without it the IAM-gated control plane answers the
+// enrolment POST with a 403 HTML page from ingress. That is what the
+// testnet's agents hit after #175 moved enrolment into the daemon and the
+// CLI-side client was deleted along with --bypass-mode.
+func TestLoginEnrollUsesTheConfiguredHTTPClient(t *testing.T) {
+	sb := &switchboard{}
+	fe := &fakeEnroll{result: &setup.EnrollResult{DeviceID: "d1"}}
+
+	want := &http.Client{}
+	var sawURL atomic.Value
+	lc := newLoginController(sb, loginControllerConfig{
+		StateDir:          "/tmp/does-not-matter",
+		DefaultControlURL: "https://cp.example",
+		Endpoint:          "udp4:127.0.0.1:0",
+		RootCtx:           context.Background(),
+		Activate:          func(context.Context) error { return nil },
+		Logger:            testLogger(),
+		Enroll:            fe.fn,
+		EnrollHTTPFor: func(_ context.Context, cpURL string) *http.Client {
+			sawURL.Store(cpURL)
+			return want
+		},
+	})
+
+	st, err := lc.Start(context.Background(), management.LoginStartRequest{
+		ControlURL: "https://bypass.example",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, lc, st.SessionID, management.LoginPhaseActive)
+
+	// The factory takes the RESOLVED url, not the daemon default: the token
+	// audience has to match the host the request actually goes to.
+	if got, _ := sawURL.Load().(string); got != "https://bypass.example" {
+		t.Errorf("factory got control URL %q, want the one the request resolved to", got)
+	}
+	if got, _ := fe.gotHTTPClient.Load().(*http.Client); got != want {
+		t.Errorf("enroll got HTTPClient %p, want the configured one %p", got, want)
+	}
+}
+
+// A daemon with no factory configured enrols with the default client --
+// the ordinary desktop case, where the control plane needs no per-request
+// credential.
+func TestLoginEnrollDefaultsToNoHTTPClient(t *testing.T) {
+	sb := &switchboard{}
+	fe := &fakeEnroll{result: &setup.EnrollResult{DeviceID: "d1"}}
+	lc := newTestLoginController(sb, fe.fn, func(context.Context) error { return nil })
+
+	st, err := lc.Start(context.Background(), management.LoginStartRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, lc, st.SessionID, management.LoginPhaseActive)
+
+	if got := fe.gotHTTPClient.Load(); got != nil {
+		t.Errorf("enroll got a client (%v) with no factory configured; want nil", got)
 	}
 }
