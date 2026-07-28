@@ -43,9 +43,15 @@ FROM alpine:3.20
 # dispatcher fork-execs `iptables ... WAIRED_TESTHARNESS ...`). A
 # production image carries the binary unused; ~1 MB cost, no
 # behavioural impact since the dispatcher in prod builds is Noop.
+# /run/waired is the Local Management API's WRITE socket dir (waired#838).
+# On a host the systemd unit's RuntimeDirectory=waired creates it; a
+# container has no systemd and runs unprivileged, so nothing would — and
+# `waired init` drives the daemon through that socket since #175, so
+# without this the container comes up healthy on TCP and cannot enrol.
 RUN apk add --no-cache curl ca-certificates iptables \
  && addgroup -S waired && adduser -S -G waired waired \
- && mkdir -p /var/lib/waired && chown waired:waired /var/lib/waired
+ && mkdir -p /var/lib/waired && chown waired:waired /var/lib/waired \
+ && mkdir -p /run/waired && chown waired:waired /run/waired
 COPY --from=build /out/waired /usr/local/bin/waired
 COPY --from=build /out/waired-agent /usr/local/bin/waired-agent
 COPY build/agent-bootstrap.sh /usr/local/bin/agent-bootstrap.sh

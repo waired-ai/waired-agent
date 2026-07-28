@@ -57,19 +57,37 @@ mdget() {
 # the metadata SA token + the Cloud Logging REST entries:write API is the only
 # path available in both, so we use it uniformly rather than gcloud. The VM SA
 # (test_agent) carries roles/logging.logWriter. Best-effort: never fails boot.
+#
+# milestone <name> [detail] — the optional detail carries a failure reason.
+# It is JSON-escaped rather than interpolated raw: an error message holds
+# quotes, backslashes and newlines, and a malformed body would make the
+# entry vanish exactly when it is the only evidence there is.
 _ms_iname=""
+_ms_json_escape() {
+  # Order matters: backslashes first, or the escapes we add get re-escaped.
+  printf '%s' "$1" \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' \
+    | awk 'NR>1{printf "\\n"} {printf "%s", $0}'
+}
 milestone() {
   ms_name="$1"
+  ms_detail="${2:-}"
   [ -n "${_ms_iname}" ] || _ms_iname="$(mdget instance/name 2>/dev/null || echo unknown)"
   ms_proj="$(mdget project/project-id 2>/dev/null || echo '')"
   ms_tok="$(mdget instance/service-accounts/default/token 2>/dev/null \
     | sed -n 's/.*"access_token" *: *"\([^"]*\)".*/\1/p')"
   [ -n "${ms_proj}" ] && [ -n "${ms_tok}" ] || return 0
+  ms_sev="INFO"
+  ms_extra=""
+  if [ -n "${ms_detail}" ]; then
+    ms_sev="ERROR"
+    ms_extra=",\"detail\":\"$(_ms_json_escape "${ms_detail}")\""
+  fi
   curl -fsS -m 5 -X POST \
     -H "Authorization: Bearer ${ms_tok}" \
     -H "Content-Type: application/json" \
     "https://logging.googleapis.com/v2/entries:write" \
-    -d "{\"logName\":\"projects/${ms_proj}/logs/waired-bootstrap\",\"resource\":{\"type\":\"gce_instance\"},\"labels\":{\"instance_name\":\"${_ms_iname}\",\"event\":\"${ms_name}\"},\"entries\":[{\"severity\":\"INFO\",\"jsonPayload\":{\"msg\":\"bootstrap_milestone\",\"milestone\":\"${ms_name}\",\"instance_name\":\"${_ms_iname}\",\"ts_unix\":$(date +%s)}}]}" \
+    -d "{\"logName\":\"projects/${ms_proj}/logs/waired-bootstrap\",\"resource\":{\"type\":\"gce_instance\"},\"labels\":{\"instance_name\":\"${_ms_iname}\",\"event\":\"${ms_name}\"},\"entries\":[{\"severity\":\"${ms_sev}\",\"jsonPayload\":{\"msg\":\"bootstrap_milestone\",\"milestone\":\"${ms_name}\",\"instance_name\":\"${_ms_iname}\",\"ts_unix\":$(date +%s)${ms_extra}}}]}" \
     >/dev/null 2>&1 || true
   return 0
 }
@@ -107,14 +125,37 @@ trap forward_signal TERM INT
 # Wait for the management API before enrolling: `waired init` now drives the
 # daemon and fails loudly if nothing answers (#175), so racing it would turn
 # a slow start into a hard failure.
+#
+# Wait for the WRITE socket, not just the TCP read port. `waired init` POSTs
+# /login/start, and every mutating route is confined to the local IPC socket
+# (waired#838) — the loopback port answers such a POST with 403. So a probe
+# of /waired/v1/status proves only that reads work: it went green while the
+# socket was missing entirely, and the leg failed twenty minutes later with
+# nothing but "did not appear in recent stats" to go on.
+#
+# The daemon binds the socket fail-open (a bind failure logs and the agent
+# keeps serving reads), which is right for a desktop but means this script
+# is the only thing that can turn it into a loud failure here.
+mgmt_sock="${WAIRED_MGMT_SOCKET:-/run/waired/mgmt.sock}"
 i=0
 while [ "$i" -lt 60 ]; do
-  if curl -fsS -m 2 http://127.0.0.1:9476/waired/v1/status >/dev/null 2>&1; then
+  if curl -fsS -m 2 --unix-socket "${mgmt_sock}" \
+      http://waired-mgmt/waired/v1/status >/dev/null 2>&1; then
     break
   fi
   i=$((i + 1))
   sleep 1
 done
+if ! curl -fsS -m 2 --unix-socket "${mgmt_sock}" \
+    http://waired-mgmt/waired/v1/status >/dev/null 2>&1; then
+  echo "agent-bootstrap: the management write socket never came up at ${mgmt_sock};" >&2
+  echo "  enrolment needs it (waired#838). On a host systemd's RuntimeDirectory=waired" >&2
+  echo "  creates the dir; in a container the image must (build/Dockerfile.waired-agent)." >&2
+  milestone mgmt_socket_missing
+  kill -TERM "${agent_pid}" 2>/dev/null || true
+  wait "${agent_pid}" 2>/dev/null || true
+  exit 1
+fi
 
 if [ ! -f "${state_dir}/identity.json" ]; then
   if [ -z "${WAIRED_AUTH_KEY:-}" ]; then
@@ -129,15 +170,30 @@ if [ ! -f "${state_dir}/identity.json" ]; then
   # hardware-derived default: these VMs exist to exercise NAT traversal, and
   # an accidental "yes" would have the daemon pull gigabytes of model.
   # --skip-integration because there is no user home to wire a coding tool into.
-  if ! waired init \
+  # Captured to a file rather than piped: `sh` has no pipefail, so
+  # `waired init ... | tee` would report TEE's exit status and this branch
+  # could never fire — the same shape as the readiness probe that could
+  # never go red.
+  init_log=/tmp/waired-init.log
+  set +e
+  waired init \
     --state-dir "${state_dir}" \
     --control "${WAIRED_CONTROL_URL}" \
     --auth-key "${WAIRED_AUTH_KEY}" \
     --device-name "${short_host}" \
     --non-interactive \
     --inference-enabled=false \
-    --skip-integration; then
-    echo "agent-bootstrap: waired init failed" >&2
+    --skip-integration >"${init_log}" 2>&1
+  init_rc=$?
+  set -e
+  cat "${init_log}"
+  if [ "${init_rc}" -ne 0 ]; then
+    # init's own output is the only statement of WHY, and it went to
+    # container stdout, which nothing collects — so a crash-looping agent
+    # was visible only as a device that never appeared. Carry the tail into
+    # Cloud Logging, where the bring-up is already looking.
+    echo "agent-bootstrap: waired init failed (rc=${init_rc})" >&2
+    milestone enroll_failed "$(tail -c 400 "${init_log}" 2>/dev/null || echo unknown)"
     kill -TERM "${agent_pid}" 2>/dev/null || true
     wait "${agent_pid}" 2>/dev/null || true
     exit 1
