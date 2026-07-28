@@ -161,7 +161,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out *os.F
 	if !action.Fixable() {
 		return nil
 	}
-	fmt.Fprintln(out, "Repairing the system tray host...")
+	_, _ = fmt.Fprintln(out, "Repairing the system tray host...")
 	if action.NeedsPrivilege() {
 		if err := trayhost.Install(ctx, out); err != nil {
 			return err
@@ -170,7 +170,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out *os.F
 	if err := trayhost.Enable(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "  Enabled. Log out and back in (required on Wayland) to show the tray icon.")
+	_, _ = fmt.Fprintln(out, "  Enabled. Log out and back in (required on Wayland) to show the tray icon.")
 	return nil
 }
 

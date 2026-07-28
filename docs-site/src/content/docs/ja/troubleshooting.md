@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: f715b3d16a477931
+sourceHash: b94fa07ad51e7fbe
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -464,9 +464,18 @@ waired status --observability
 ## Waired のアイコンが出ない（Linux）
 
 GNOME は拡張機能なしでは時計のとなりにアイコンを表示しません。Waired アイコンには AppIndicator 拡張が必要です。
-セットアップは GNOME を検出すると自動で導入し、無い場合は `waired doctor` が警告します。
+セットアップは、そのパソコンに GNOME が入っていれば導入します。サインインのたびに確認し直すので、
+拡張が入っているのに無効になっている場合は自動で有効に戻ります。
 
-手動で入れる場合:
+それでもアイコンが出ない場合は、これで直ります:
+
+```sh
+waired doctor --fix
+```
+
+何が問題かを表示し、変更する前に確認を取ったうえで、必要に応じて拡張の導入・有効化を行います。
+
+同じことを手動で行う場合:
 
 ```sh
 sudo apt install gnome-shell-extension-appindicator

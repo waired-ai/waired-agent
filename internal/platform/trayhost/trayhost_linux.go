@@ -36,7 +36,7 @@ const (
 	gnomeHintNoHost = "GNOME has no built-in tray; install an AppIndicator host extension " +
 		"(`sudo apt install gnome-shell-extension-appindicator`), enable it " +
 		"(`gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com`), then log out and " +
-		"back in on Wayland. `waired init` does this automatically when it detects GNOME."
+		"back in on Wayland. `waired doctor --fix` does all of this for you."
 	mateHint = "this desktop can't render StatusNotifierItem tray icons; " +
 		"use GNOME (with the AppIndicator extension) or KDE Plasma to see the waired-tray icon."
 	genericHintNoHost = "no system-tray (SNI) host detected; the waired-tray icon may not appear. " +

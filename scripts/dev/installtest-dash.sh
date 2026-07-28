@@ -54,6 +54,7 @@ trap 'rm -rf "$STUBDIR"' EXIT
 cat > "$STUBDIR/dpkg-query" <<'STUB'
 #!/bin/sh
 case "$*" in
+  *gnome-shell*) [ -n "${IT_STUB_GNOME:-}" ] && exit 0 || exit 1 ;;
   *waired-tray*) [ -n "${IT_STUB_TRAY:-}" ] && exit 0 || exit 1 ;;
   *waired*)      [ -n "${IT_STUB_INSTALLED:-}" ] && printf '%s' "$IT_STUB_INSTALLED"; exit 0 ;;
 esac
@@ -370,6 +371,40 @@ if command -v setsid >/dev/null 2>&1; then
   fi
 else
   log "setsid unavailable — skipping the no-tty consent-gate case"
+fi
+
+# 4d. GNOME tray host extension (#295). The extension is added to the apt
+#     transaction at RUNTIME, gated on gnome-shell already being installed,
+#     because apt cannot express "only on a GNOME host": the package name is a
+#     virtual one provided by gnome-shell-ubuntu-extensions on Ubuntu 26.04,
+#     which `Depends: gnome-shell` — so a Depends/Recommends in the tray package
+#     would install a desktop onto every server. That makes the negative case
+#     below the safety-critical one, and it is asserted on every host.
+run_case_asserts zero "tray host: no GNOME, no extension package" "$FRESH" \
+  "$(printf 'Installing packages: waired waired-tray\n!%s\n!GNOME detected' 'gnome-shell-extension-appindicator')" \
+  -- --dry-run --skip-ollama --no-init
+
+run_case_asserts zero "tray host: WAIRED_NO_TRAY never adds it" "$FRESH IT_STUB_GNOME=1 WAIRED_NO_TRAY=1" \
+  "$(printf '!%s\n!GNOME detected' 'gnome-shell-extension-appindicator')" \
+  -- --dry-run --skip-ollama --no-init
+
+# The positive case needs a host with no AppIndicator extension already
+# installed, which is the state of a CI runner but not of a real GNOME desktop
+# (Ubuntu Desktop ships ubuntu-appindicators, where doing nothing is correct).
+# Assert whichever of the two this host actually is, rather than skipping: both
+# are real behaviours worth pinning.
+GNOME_EXT_PRESENT=0
+for uuid in appindicatorsupport@rgcjonas.gmail.com ubuntu-appindicators@ubuntu.com; do
+  [ -d "/usr/share/gnome-shell/extensions/$uuid" ] && GNOME_EXT_PRESENT=1
+done
+if [ "$GNOME_EXT_PRESENT" -eq 0 ]; then
+  run_case_asserts zero "tray host: GNOME without an extension pulls one in" "$FRESH IT_STUB_GNOME=1" \
+    "$(printf 'GNOME detected\nInstalling packages: waired waired-tray %s' 'gnome-shell-extension-appindicator')" \
+    -- --dry-run --skip-ollama --no-init
+else
+  run_case_asserts zero "tray host: GNOME that already has one is left alone" "$FRESH IT_STUB_GNOME=1" \
+    "$(printf 'Installing packages: waired waired-tray\n!%s' 'gnome-shell-extension-appindicator')" \
+    -- --dry-run --skip-ollama --no-init
 fi
 
 # 5. Bad flag — clean failure, not a set -u error.

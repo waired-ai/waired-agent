@@ -1069,6 +1069,71 @@ linux_apt_update() {
     common_log "$(emo '🎉' '*') waired updated and the service restarted. Check: waired status"
 }
 
+# GNOME AppIndicator host extension (#295). GNOME ships no StatusNotifierItem
+# host, so without one of these the waired-tray icon is silently absent. Kept in
+# step with internal/platform/trayhost/repair_linux.go, which is what repairs the
+# same thing later from waired-tray and `waired doctor --fix`.
+TRAY_HOST_EXT_PKG='gnome-shell-extension-appindicator'
+TRAY_HOST_EXT_UUID='appindicatorsupport@rgcjonas.gmail.com'
+
+# linux_wants_tray_host_extension decides whether to add the extension to the
+# apt transaction. Two conditions, and both matter:
+#
+#   1. gnome-shell must already be installed. This is the whole reason the
+#      decision is made HERE rather than as a package dependency: apt has no
+#      conditional-dependency form, and on Ubuntu 26.04 the package name above
+#      is a *virtual* package whose only provider is gnome-shell-ubuntu-extensions,
+#      which `Depends: gnome-shell (>= 49~)`. A Depends/Recommends in
+#      packaging/nfpm/waired-tray.yaml.tmpl would therefore install GNOME Shell
+#      onto every server that installs Waired. A server has no gnome-shell, so
+#      this test is false there and the apt transaction is byte-for-byte what it
+#      was before.
+#   2. No known host extension may already be present. Ubuntu Desktop ships
+#      ubuntu-appindicators (via ubuntu-desktop → gnome-shell-ubuntu-extensions)
+#      and enables it through the `ubuntu` session mode, so there is nothing to
+#      do on the commonest desktop of all.
+#
+# The gnome-shell test asks dpkg, not $PATH: this function only ever runs on the
+# apt path, where the package database is the authority and a stray binary is
+# not. internal/platform/trayhost asks $PATH for the same fact because it also
+# has to answer on tarball installs and non-Debian hosts.
+linux_wants_tray_host_extension() {
+    dpkg-query -W gnome-shell >/dev/null 2>&1 || return 1
+    for uuid in "$TRAY_HOST_EXT_UUID" 'ubuntu-appindicators@ubuntu.com'; do
+        [ -d "/usr/share/gnome-shell/extensions/$uuid" ] && return 1
+    done
+    return 0
+}
+
+# linux_enable_tray_host_extension turns the extension on for the user who
+# invoked the installer, so the icon is there at their next login rather than
+# after a trip through `waired doctor`.
+#
+# Enabling is a per-user dconf write, so it has to happen AS that user, in their
+# session — which is why it cannot ride along in the apt transaction above, and
+# why waired-tray re-checks at every session start (this covers one user on one
+# machine at one moment; nothing more).
+#
+# Best-effort throughout: every failure here still leaves a working Waired, and
+# waired-tray or `waired doctor --fix` picks the same repair up later.
+linux_enable_tray_host_extension() {
+    [ -z "${WAIRED_NO_TRAY:-}" ] || return 0
+    [ -n "${SUDO_USER:-}" ] || return 0
+    [ "$SUDO_USER" != root ] || return 0
+    dpkg-query -W gnome-shell >/dev/null 2>&1 || return 0
+    command -v runuser >/dev/null 2>&1 || return 0
+
+    uid="$(id -u "$SUDO_USER" 2>/dev/null)" || return 0
+    [ -n "$uid" ] || return 0
+
+    common_log "Enabling the tray icon extension for $SUDO_USER"
+    common_run $SUDO runuser -u "$SUDO_USER" -- env \
+        "XDG_RUNTIME_DIR=/run/user/$uid" \
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
+        gnome-extensions enable "$TRAY_HOST_EXT_UUID" >/dev/null 2>&1 || \
+        common_log "  (could not enable it now — waired-tray will do it at your next login)"
+}
+
 linux_apt_install() {
     section 'Installing Waired'
     common_log "Detected $OS_NAME $OS_VERSION (${OS_CODENAME:-unknown codename}) on $OS_ARCH"
@@ -1094,9 +1159,16 @@ linux_apt_install() {
         common_log "WAIRED_NO_TRAY set — skipping waired-tray"
     fi
 
+    if [ -z "${WAIRED_NO_TRAY:-}" ] && linux_wants_tray_host_extension; then
+        common_log "GNOME detected — adding $TRAY_HOST_EXT_PKG so the Waired icon renders"
+        pkgs="$pkgs $TRAY_HOST_EXT_PKG"
+    fi
+
     common_log "Installing packages: $pkgs"
     # shellcheck disable=SC2086
     common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y $pkgs
+
+    linux_enable_tray_host_extension
 
     linux_apt_write_control_url
     linux_write_log_level_env

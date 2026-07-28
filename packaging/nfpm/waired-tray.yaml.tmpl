@@ -25,12 +25,30 @@ depends:
   - pkexec | policykit-1
 
 # GNOME has no built-in SNI host, so on GNOME the tray icon only renders with an
-# AppIndicator host extension (issue #493). This is Suggests, NOT Recommends, on
-# purpose: Recommends is auto-installed by apt and would pull a GNOME extension
-# (and its gnome-shell deps) onto KDE / minimal / server installs that don't need
-# it. The actual fix is runtime: `waired init` auto-installs+enables this when it
-# detects GNOME, and `waired doctor` reports when no SNI host is present. The
-# Suggests just advertises it (apt show / GUI front-ends) for manual installs.
+# AppIndicator host extension (waired#493). This is Suggests, NOT Recommends,
+# and promoting it would be a bug, not an improvement:
+#
+# On Ubuntu 26.04 `gnome-shell-extension-appindicator` is no longer a real
+# package — it is a VIRTUAL one whose only provider is
+# gnome-shell-ubuntu-extensions, which itself `Depends: gnome-shell (>= 49~)`.
+# apt auto-installs Recommends, so a Recommends here would install GNOME Shell,
+# gjs and the whole gir stack onto every server that runs `apt install
+# waired-tray`. Depends would be worse. Nor is there a middle ground: apt has no
+# conditional-dependency form, and `A | B` means "satisfied if either is
+# installed, else install the first" — not "only if a desktop is already here".
+#
+# So the decision has to be made at runtime, where the host can be looked at,
+# and it is, in three places that share one rule — never install unless
+# gnome-shell is already present (#295):
+#
+#   - install.sh adds the package to its own apt transaction on a GNOME host,
+#     and pre-enables it for the invoking user (linux_wants_tray_host_extension);
+#   - waired-tray re-checks the session bus at every login and enables an
+#     installed-but-disabled extension itself, needing no privilege;
+#   - `waired doctor --fix` does both for anything the other two missed.
+#
+# The Suggests stays to advertise the relationship (apt show / GUI front-ends)
+# for someone installing by hand.
 suggests:
   - gnome-shell-extension-appindicator
 
