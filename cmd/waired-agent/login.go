@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"sync"
 
@@ -30,6 +31,12 @@ type loginController struct {
 	activate func(parent context.Context) error
 	enroll   enrollFunc
 	rootCtx  context.Context
+	// enrollHTTPFor builds the HTTP client enrollment talks to the control
+	// plane with, given the control URL that run() resolved. It is a
+	// factory, not a client: under --bypass-cp-iam the transport mints a
+	// GCE identity token whose AUDIENCE is that URL, and the URL is not
+	// known until a login starts. nil = the default client.
+	enrollHTTPFor func(ctx context.Context, controlURL string) *http.Client
 
 	stateDir          string
 	defaultControlURL string
@@ -57,6 +64,11 @@ type loginControllerConfig struct {
 	RootCtx           context.Context
 	Activate          func(parent context.Context) error
 	Logger            *slog.Logger
+	// EnrollHTTPFor is optional; nil enrolls with the default client. Set
+	// it when the control plane is behind something that needs a
+	// per-request credential — the IAM-gated Cloud Run service the testnet
+	// runs against answers an unauthenticated POST with a 403 HTML page.
+	EnrollHTTPFor func(ctx context.Context, controlURL string) *http.Client
 	// Enroll is optional; nil uses setup.Enroll.
 	Enroll enrollFunc
 }
@@ -70,6 +82,7 @@ func newLoginController(sb *switchboard, cfg loginControllerConfig) *loginContro
 		sb:                sb,
 		activate:          cfg.Activate,
 		enroll:            enroll,
+		enrollHTTPFor:     cfg.EnrollHTTPFor,
 		rootCtx:           cfg.RootCtx,
 		stateDir:          cfg.StateDir,
 		defaultControlURL: cfg.DefaultControlURL,
@@ -152,8 +165,13 @@ func (lc *loginController) run(ctx context.Context, sessID, controlURL, deviceNa
 		lc.fail(sessID, fmt.Errorf("resolve login endpoint %q: %w", lc.endpoint, err))
 		return
 	}
+	var enrollHTTP *http.Client
+	if lc.enrollHTTPFor != nil {
+		enrollHTTP = lc.enrollHTTPFor(ctx, controlURL)
+	}
 	res, err := lc.enroll(ctx, setup.EnrollOptions{
 		ControlURL:    controlURL,
+		HTTPClient:    enrollHTTP,
 		DeviceName:    deviceName,
 		Endpoint:      endpoint,
 		StateDir:      lc.stateDir,
