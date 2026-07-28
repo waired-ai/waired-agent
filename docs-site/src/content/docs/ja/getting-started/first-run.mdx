@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 032a79ae793b32c5
+sourceHash: cc54e457ff3cdac4
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -118,6 +118,13 @@ Keep this terminal window open until setup finishes — it does the parts the
 browser can't.
 🔌 Setting up your coding tools (claude-code, opencode)…
 ```
+
+ここで **Claude Code** にチェックを入れると、画面の説明どおりのことが起きます。
+このコンピュータを使う全員に対して、Claude Code の送信先が Waired に変わります。
+残り 2 つのツールは自分のホームフォルダにファイルを置くだけです。これはブラウザを
+使わないインストールでターミナルが尋ねるルーティングと同じもので、決める場所が
+ブラウザに変わっただけです。インストール時の `--skip-claude-proxy` は引き続き
+こちらより優先されます。
 
 まだ選択を聞かない古いセットアップ画面では、代わりに自分で設定する方法が
 表示されます — *「You can set up your coding tools later from this terminal with
@@ -252,6 +259,20 @@ Waired がインストール済みで、バックグラウンドサービスが�
 この方法で参加させたマシンは、すぐにネットワークに加わりコンソールにも現れますが、
 ブラウザのセットアップ画面は開きません（ブラウザが無いためです）。AI モデルの選択を
 含め、それ以外はすべてコンソールから操作できます。
+
+<Aside type="note" title="無人インストールは確認なしで Claude Code をルーティングします">
+	ルーティングの質問に答える人がターミナルにいないため、無人インストールでは
+	対話インストールの既定と同じ「はい」が採用されます。そのマシンの Claude Code は
+	**それを使う全員に対して** Waired を向くようになります（ユーザーごとではなく
+	マシン全体の設定です）。
+
+	Claude Code を Anthropic API のままにしたい場合は、`--skip-claude-proxy`
+	（Windows は `-SkipClaudeProxy`、環境変数なら `WAIRED_NO_CLAUDE_PROXY=1`）を
+	付けてインストールしてください。ネットワークへの参加、モデル、スキルや
+	プラグインなど、それ以外はこれまでどおり実行されます。あとから
+	`sudo waired claude enable` で有効化、`sudo waired claude disable` で
+	無効化できます。
+</Aside>
 
 そのあとモデルが進捗表示付きでダウンロードされます。
 

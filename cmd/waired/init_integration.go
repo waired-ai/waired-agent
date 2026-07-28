@@ -283,6 +283,13 @@ type postLoginIntegrationOpts struct {
 	In             lineReader
 	Out            io.Writer
 	ErrOut         io.Writer
+	// ClaudeManaged / SkipClaudeRoute drive the consent disclosure only —
+	// the routing flip itself happens later, after the benchmark
+	// (waired#772). They are what tells the operator whether this run will
+	// change Claude Code machine-wide, so a daemon-path init that leaves
+	// them unset promises the wrong thing (#294).
+	ClaudeManaged   bool
+	SkipClaudeRoute bool
 }
 
 // runPostLoginIntegration is the consent → apply-or-hop → summary
@@ -291,7 +298,12 @@ type postLoginIntegrationOpts struct {
 // Yes), then either applies in-process as the current user or — under
 // sudo — delegates to `waired link all` as the invoking user. Errors are
 // returned for the caller to treat warn-only (login already succeeded).
-func runPostLoginIntegration(o postLoginIntegrationOpts) error {
+//
+// The bool reports whether the operator CONSENTED, independently of
+// whether the apply then succeeded. The caller needs it because Claude
+// routing is part of the same consent but is applied later, once the
+// local stack can serve (#294) — and a "no" there must leave routing off.
+func runPostLoginIntegration(o postLoginIntegrationOpts) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -305,18 +317,20 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) error {
 	}
 
 	if !promptIntegrationConsent(o.In, o.Out, integrationConsentInput{
-		StepLabel:      o.StepLabel,
-		Detections:     detectIntegrationAgents(ctx, targetHome),
-		NonInteractive: o.NonInteractive,
-		SudoTarget:     sudoUser,
+		StepLabel:       o.StepLabel,
+		Detections:      detectIntegrationAgents(ctx, targetHome),
+		NonInteractive:  o.NonInteractive,
+		SudoTarget:      sudoUser,
+		ClaudeManaged:   o.ClaudeManaged,
+		SkipClaudeRoute: o.SkipClaudeRoute,
 	}) {
-		return nil
+		return false, nil
 	}
 
 	if isSudo {
 		writePromptf(o.Out, "%s %s\n", emo("🔌", "*"),
 			bold(fmt.Sprintf("Setting up coding-agent integration for user %q…", sudoUser)))
-		return runLinkAllAsUser(ctx, sudoUser, linkAllChildArgs(o.GatewayBaseURL), o.Out, o.ErrOut)
+		return true, runLinkAllAsUser(ctx, sudoUser, linkAllChildArgs(o.GatewayBaseURL), o.Out, o.ErrOut)
 	}
 
 	res, err := setup.Integration(ctx, setup.IntegrationOptions{
@@ -328,12 +342,12 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) error {
 		WiredBinary:    wairedBinaryPath(),
 	})
 	if err != nil {
-		return err
+		return true, err
 	}
 	printIntegrationSummary(res)
 	for _, ar := range res.Agents {
 		if ar.Err != nil {
-			return fmt.Errorf("integration: %s: %w", ar.Agent, ar.Err)
+			return true, fmt.Errorf("integration: %s: %w", ar.Agent, ar.Err)
 		}
 	}
 	// nil reader: the helpers only print next-steps (Interactive is false
@@ -344,5 +358,5 @@ func runPostLoginIntegration(o postLoginIntegrationOpts) error {
 		WiredBinary: wairedBinaryPath(),
 		Interactive: false,
 	}, o.Out, nil)
-	return nil
+	return true, nil
 }

@@ -566,7 +566,9 @@ func TestRunSetupIntegrationsSkipsWhenThereIsNothingToWrite(t *testing.T) {
 			s := attachSetupExecutor(srv.URL, true)
 			defer s.Release()
 
-			if err := runSetupIntegrations(s, io.Discard, io.Discard, "http://127.0.0.1:9473"); err != nil {
+			if err := runSetupIntegrations(s, io.Discard, io.Discard, setupIntegrationOpts{
+				GatewayBaseURL: "http://127.0.0.1:9473",
+			}); err != nil {
 				t.Fatalf("runSetupIntegrations: %v", err)
 			}
 			for _, r := range d.noted() {

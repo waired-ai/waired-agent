@@ -347,10 +347,12 @@ if [ "$TIER" -le 2 ]; then
       source "$ROOT/scripts/dev/lib/installtest-daemon-engine.sh"
       it_enroll_daemon_path "$GUEST"   # daemon-path enrol via out-of-band OIDC completion
       assert_tier2 "$GUEST"            # identity chain still applies (the daemon owns it)
+      assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
       assert_daemon_engine "$GUEST"    # the waired#835 §9/§11 executor engine install
     else
       it_enroll_guest "$GUEST"   # enrol (IT_ENROLL_MODE) against the Control Plane
       assert_tier2 "$GUEST"
+      assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
       [ "$INFER" = 1 ] && assert_inference "$GUEST"
       if [ "$INTEG" = 1 ]; then
         # shellcheck source=scripts/dev/lib/installtest-integration.sh
@@ -384,15 +386,17 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 #
 # The floors are MEASURED from a green run of the leanest configuration for
 # each tier, not estimated: tier 1 = the 10 package/unit/state-dir asserts,
-# tier 2 = those plus the 8 enrol + mgmt-socket ones. Options only ever ADD
-# asserts (--inference, --daemon-engine, tier 3), so a floor keyed on the
-# tier alone holds for every invocation of it.
+# tier 2 = those plus the 8 enrol + mgmt-socket ones and the 2 Claude-routing
+# ones (#294 — assert_claude_route runs both ways round, so it contributes
+# the same 2 whether or not the leg set IT_SKIP_INTEGRATION). Options only
+# ever ADD asserts (--inference, --daemon-engine, tier 3), so a floor keyed
+# on the tier alone holds for every invocation of it.
 #
 # Raise these when you add an assert that always runs; lower them, in the
 # same commit and with the reason, if a leg legitimately becomes conditional.
 case "$TIER" in
   1) floor=10 ;;
-  *) floor=18 ;;
+  *) floor=20 ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then

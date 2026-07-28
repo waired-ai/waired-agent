@@ -153,8 +153,8 @@ func scriptStdinPipe(t *testing.T) (*stdinReader, *io.PipeWriter) {
 	return newStdinReader(pr), pw
 }
 
-// daemonInitOpts is what the four scenarios below vary.
-type daemonInitOpts struct {
+// daemonInitScenario is what the four scenarios below vary.
+type daemonInitScenario struct {
 	noBrowser       bool
 	nonInteractive  bool
 	skipIntegration bool
@@ -162,7 +162,7 @@ type daemonInitOpts struct {
 
 // runDaemonInit runs the flow under a hard timeout — a regression that
 // blocks (which is exactly what #188 was) must fail, not hang.
-func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitOpts) string {
+func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitScenario) string {
 	t.Helper()
 	stubOpener(t, nil) // no browser may be launched from a test
 	// Pin the browser gate: without a display, Linux resolves to the
@@ -175,9 +175,17 @@ func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitOpt
 	out := captureStdout(t, func() {
 		done := make(chan error, 1)
 		go func() {
-			done <- runInitViaDaemon(url, "https://cp.example", "dev-1",
-				o.noBrowser, o.nonInteractive, o.skipIntegration,
-				"http://127.0.0.1:9473", owner, daemonInitInference{}, "", false /*reauth*/)
+			done <- runInitViaDaemon(daemonInitOpts{
+				MgmtURL: url, Control: "https://cp.example", DeviceName: "dev-1",
+				GatewayBaseURL:  "http://127.0.0.1:9473",
+				NoBrowser:       o.noBrowser,
+				NonInteractive:  o.nonInteractive,
+				SkipIntegration: o.skipIntegration,
+				// The routing flip writes a machine-wide file; these
+				// scenarios are about the prompts, so opt out of it.
+				SkipClaudeRoute: true,
+				Owner:           owner,
+			})
 		}()
 		select {
 		case runErr = <-done:
@@ -205,7 +213,7 @@ func TestRunInitViaDaemon_PrintOnlyGateAcksStrayEnter(t *testing.T) {
 	owner := scriptStdin("\n")
 	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{noBrowser: true, skipIntegration: true})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{noBrowser: true, skipIntegration: true})
 
 	for _, want := range []string{
 		"Nothing to press here — sign-in continues on its own once you open the link.",
@@ -249,7 +257,7 @@ func TestRunInitViaDaemon_TakeoverThenIntegrationGetsItsOwnAnswer(t *testing.T) 
 		}
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
 
 	for _, want := range []string{
 		"Take over setup in this terminal?",                // Enter asked, it did not switch
@@ -288,7 +296,7 @@ func TestRunInitViaDaemon_TakeoverRefusedAfterTheBrowserCommits(t *testing.T) {
 		}
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
 
 	// The offer is withdrawn where it stops being true...
 	if !strings.Contains(out, takeoverClosedLine) {
@@ -322,7 +330,7 @@ func TestRunInitViaDaemon_BrowserDrivenAsksNothingAndNeverPromptsToContinue(t *t
 		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
 
 	if strings.Contains(out, "Press Enter to continue") {
 		t.Errorf("browser-driven path still prompts to continue (#132)\n---\n%s", out)
@@ -354,7 +362,7 @@ func TestRunInitViaDaemon_BrowserDrivenSaysKeepThisTerminalOpen(t *testing.T) {
 		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
 
 	keep := strings.Index(out, setupKeepTerminalOpenLine)
 	offer := strings.Index(out, "press Enter to continue in the terminal instead")
@@ -389,7 +397,7 @@ func TestRunInitViaDaemon_NoBrowserSaysNothingAboutKeepingOpen(t *testing.T) {
 	owner := scriptStdin("n\n")
 	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{noBrowser: true})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{noBrowser: true})
 
 	if strings.Contains(out, setupKeepTerminalOpenLine) {
 		t.Errorf("--no-browser run printed the browser-handoff warning\n---\n%s", out)
@@ -408,7 +416,7 @@ func TestRunInitViaDaemon_IntegrationComesAfterTheModelWait(t *testing.T) {
 	owner := scriptStdin("n\n")
 	d := &promptsDaemon{statusSeq: []management.InferenceStatus{readyStatus()}}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{noBrowser: true})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{noBrowser: true})
 
 	ready := strings.Index(out, bundledModel+" ready")
 	integ := strings.Index(out, "Coding-agent integration")
@@ -438,7 +446,7 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 		},
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitOpts{skipIntegration: true})
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{skipIntegration: true})
 
 	for _, want := range []string{
 		"The AI engine could not be installed on this device.",

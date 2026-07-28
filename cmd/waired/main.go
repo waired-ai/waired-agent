@@ -249,12 +249,25 @@ func runInitBody(o *initFlags) error {
 		if authKey == "" {
 			fmt.Println("waired-agent is running; signing in via the daemon (no local enrollment).")
 		}
-		return runInitViaDaemon(*mgmtURL, *control, *deviceName, *noBrowser, *nonInteractive,
-			*skipIntegration, *gatewayBaseURL, stdinOwner, daemonInitInference{
+		return runInitViaDaemon(daemonInitOpts{
+			MgmtURL:         *mgmtURL,
+			Control:         *control,
+			DeviceName:      *deviceName,
+			GatewayBaseURL:  *gatewayBaseURL,
+			StateDir:        *stateDir,
+			NoBrowser:       *noBrowser,
+			NonInteractive:  *nonInteractive,
+			SkipIntegration: *skipIntegration,
+			SkipClaudeRoute: o.skipClaudeRoute,
+			AuthKey:         authKey,
+			Reauth:          renewing,
+			Inference: daemonInitInference{
 				Enabled: *inferenceEnabled,
 				Share:   *inferenceShare,
 				ModelID: *bundledModelID,
-			}, authKey, renewing)
+			},
+			Owner: stdinOwner,
+		})
 	default:
 		// Every other route means "no agent to talk to", and there is no
 		// longer anywhere else for enrollment to happen. The second return

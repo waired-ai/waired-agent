@@ -164,11 +164,19 @@ endpoint is unreachable / --enable-oidc-grant is off)"
   # + benchmark. stdin from /dev/null: a rerouted terminal must not block on a
   # prompt. Teed for the daemon-path signature assert. `if` guards `set -e`
   # around a non-zero init; PIPESTATUS[0] is init's own exit (not tee's).
+  # Integration (and with it Claude routing) is on by default here for the
+  # same reason as it_enroll_guest: a real install never passes
+  # --skip-integration, and passing it everywhere is what hid #294 from the
+  # e2e. IT_SKIP_INTEGRATION=1 opts back out; assert_claude_route reads the
+  # same knob and asserts whichever way it was set.
+  local integ_flag=''
+  [ "${IT_SKIP_INTEGRATION:-0}" = 1 ] && integ_flag='--skip-integration'
+
   it_log "running daemon-path 'waired init' (fg) in $guest (cp=$IT_CONTROL_URL, model=$IT_DAEMON_ENGINE_MODEL)"
   if gx "$guest" sh -c "WAIRED_NO_EMOJI=1 waired init \
         --control '$IT_CONTROL_URL' --device-name '$name' \
         --inference-enabled=true --inference-bundled-model-id='$IT_DAEMON_ENGINE_MODEL' \
-        --non-interactive --skip-integration --state-dir /var/lib/waired </dev/null 2>&1" \
+        --non-interactive $integ_flag --state-dir /var/lib/waired </dev/null 2>&1" \
       | tee "$initlog"; then
     rc=0
   else

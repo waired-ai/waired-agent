@@ -150,6 +150,16 @@ it_enroll_guest() {
 
   it_log "leaving waired-agent running: $IT_ENROLL_MODE enrols through the daemon (#175)"
 
+  # Coding-agent integration. A real install NEVER passes
+  # --skip-integration, and this harness passed it on every leg — which is
+  # how #294 survived: the flag suppresses the whole integration, Claude
+  # routing included, so the e2e that drives the real installer could not
+  # see that a real install finished unrouted. Default off, so the leg
+  # exercises what an operator actually gets; IT_SKIP_INTEGRATION=1 opts
+  # back out for a leg that wants nothing written outside the state dir.
+  local -a integ_flag=()
+  [ "${IT_SKIP_INTEGRATION:-0}" = 1 ] && integ_flag=(--skip-integration)
+
   # Build the `waired init` argv per mode; run it once through tee so the
   # init transcript (model pull progress + benchmark) is captured for
   # assert_inference while still streaming to the run's stdout.
@@ -161,14 +171,14 @@ it_enroll_guest() {
       initargs=(waired init --control "$IT_CONTROL_URL"
         --auth-key "$IT_AUTH_KEY"
         --device-name "$name" --non-interactive "$inf_flag" "${pin_flag[@]}"
-        --skip-integration --state-dir /var/lib/waired)
+        "${integ_flag[@]}" --state-dir /var/lib/waired)
       ;;
     interactive)
       printf '\033[1;33m[installtest]\033[0m ===> %s needs a one-time Google sign-in.\n' "$guest" >&2
       printf '\033[1;33m[installtest]\033[0m ===> open the URL printed below (device: %s)\n' "$name" >&2
       initargs=(waired init --no-browser --control "$IT_CONTROL_URL"
         --device-name "$name" --non-interactive "$inf_flag" "${pin_flag[@]}"
-        --skip-integration --state-dir /var/lib/waired)
+        "${integ_flag[@]}" --state-dir /var/lib/waired)
       ;;
     *) it_die "unknown IT_ENROLL_MODE=$IT_ENROLL_MODE (want authkey|interactive)" ;;
   esac
@@ -303,6 +313,56 @@ assert_mgmt_socket() {
   # Leave the daemon active regardless of which leg above failed, so a
   # failure here cannot cascade into unrelated asserts.
   gx "$guest" waired resume >/dev/null 2>&1 || true
+}
+
+# IT_CLAUDE_MANAGED_SETTINGS is the machine-wide Claude Code
+# managed-settings file on Linux (claudemanaged.managedSettingsPath()), and
+# IT_CLAUDE_GATEWAY the loopback base URL init writes into it (the default
+# Inference.ClaudeGatewayPort). Kept as named constants so a port or path
+# change shows up as one edit here rather than a silently-passing grep.
+IT_CLAUDE_MANAGED_SETTINGS=/etc/claude-code/managed-settings.json
+IT_CLAUDE_GATEWAY='http://127.0.0.1:9472'
+
+# assert_claude_route <guest> — where a real install leaves Claude Code.
+#
+# The gap this closes: `waired init` is the single decider of routing (the
+# installers deleted their own post-init `waired claude enable` and forward
+# --skip-claude-route into init instead), but only the deleted standalone
+# enrollment path ever wrote the file. Every real install takes the daemon
+# path, so every real install finished with Claude Code still talking to
+# the Anthropic API — and no e2e noticed, because the routing sentinel
+# drives the gateway on :9472 directly rather than reading what Claude Code
+# was actually configured to use (#294).
+#
+# Asserts in BOTH directions, and always exactly two asserts, so the
+# assert-count floor in installtest-run.sh holds whichever way the leg was
+# configured: routing must happen on a normal install, and --skip-integration
+# must leave Claude Code alone.
+assert_claude_route() {
+  local guest="$1" body present=0 pointed=0 want=1 label='a normal install must route Claude'
+  if [ "${IT_SKIP_INTEGRATION:-0}" = 1 ]; then
+    want=0
+    label='--skip-integration must leave Claude Code alone'
+  fi
+
+  gx "$guest" test -f "$IT_CLAUDE_MANAGED_SETTINGS" && present=1
+  body="$(gx "$guest" cat "$IT_CLAUDE_MANAGED_SETTINGS" 2>/dev/null || true)"
+  # The file existing is not the point — an ANTHROPIC_BASE_URL pointing
+  # somewhere else (or absent) leaves Claude Code on the real API just as
+  # surely as no file at all.
+  printf '%s' "$body" | grep -q "$IT_CLAUDE_GATEWAY" && pointed=1
+
+  if [ "$present" = "$want" ]; then
+    ok "Claude Code managed settings present=$present ($label)"
+  else
+    bad "Claude Code managed settings present=$present, want $want — $label ($IT_CLAUDE_MANAGED_SETTINGS)"
+  fi
+  if [ "$pointed" = "$want" ]; then
+    ok "ANTHROPIC_BASE_URL -> $IT_CLAUDE_GATEWAY: $pointed ($label)"
+  else
+    bad "ANTHROPIC_BASE_URL -> $IT_CLAUDE_GATEWAY: $pointed, want $want — $label"
+    printf '%s\n' "$body" | sed 's/^/    managed-settings| /' >&2
+  fi
 }
 
 assert_tier2() {
