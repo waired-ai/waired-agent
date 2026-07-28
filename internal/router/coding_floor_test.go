@@ -75,6 +75,68 @@ func TestOllamaServesContextFloor_HeavierVariantExcluded(t *testing.T) {
 	}
 }
 
+// TestOllamaServesContextFloor_SecondCardAdmitsIt is #264 against the
+// row above it: the SAME variant on the SAME card, twice.
+//
+// This gate — not the #229 speed pass — is what actually drops a large
+// model on a multi-GPU host, because RankModels narrows on floorOK
+// first and does not fall through while smaller models still pass. So
+// this is where the under-count had to be fixed for the fix to be
+// visible at all.
+func TestOllamaServesContextFloor_SecondCardAdmitsIt(t *testing.T) {
+	m := floorManifest(262144)
+	v := catalog.Variant{EstimatedWeightGB: 23.9, KVBytesPerTokenFP16: 20480}
+
+	one := anchorHost()
+	two := anchorHost()
+	two.GPUs = append(two.GPUs, hardware.GPU{Vendor: "nvidia", VRAMTotalMB: 24467})
+
+	if ok, _ := OllamaServesContextFloor(m, v, one); ok {
+		t.Fatal("the one-card case no longer excludes this variant, so this test " +
+			"proves nothing — re-pick the variant against the current constants")
+	}
+	ok, spill := OllamaServesContextFloor(m, v, two)
+	if !ok {
+		t.Errorf("two %d MB cards still fail the floor gate (expected spill %.3f); "+
+			"a host that can hold the weights is being judged as if the second "+
+			"card were not there", one.GPUs[0].VRAMTotalMB, spill)
+	}
+	if spill != 0 {
+		t.Errorf("expected spill fraction = %.4f on the pooled host, want 0 — "+
+			"the weights and the floor window fit the pool outright", spill)
+	}
+}
+
+// TestOllamaBudgetSitesAgreeOnTheSameHost pins that selection and
+// serving size against ONE budget.
+//
+// They are computed in different packages (router's floor gate,
+// cmd/waired-agent's serve tuning) and drifting apart is silent: a model
+// admitted because its weights pool across two cards would be given a
+// context window sized for one, and only #621's post-load verify probe
+// would notice, at serve time, by shrinking and restarting.
+func TestOllamaBudgetSitesAgreeOnTheSameHost(t *testing.T) {
+	two := anchorHost()
+	two.GPUs = append(two.GPUs, hardware.GPU{Vendor: "nvidia", VRAMTotalMB: 24467})
+
+	if got, single := two.OllamaVRAMBudgetMB(), two.EffectiveVRAMMB(); got <= single {
+		t.Fatalf("the pooled budget %d does not exceed the single-device figure %d, "+
+			"so this fixture no longer exercises the multi-GPU path", got, single)
+	}
+	// OllamaExpectedSpillFraction is the shared core both the floor gate
+	// and OllamaMaxContextAtSpill are built on; if it reads the pool,
+	// they do too.
+	v := catalog.Variant{EstimatedWeightGB: 23.9, KVBytesPerTokenFP16: 20480}
+	oneCard := OllamaExpectedSpillFraction(v.EstimatedWeightGB, v.KVBytesPerTokenFP16,
+		1.0, 262144, anchorHost())
+	pooled := OllamaExpectedSpillFraction(v.EstimatedWeightGB, v.KVBytesPerTokenFP16,
+		1.0, 262144, two)
+	if !(pooled < oneCard) {
+		t.Errorf("expected spill %.4f on two cards is not below %.4f on one — "+
+			"the spill model is still pricing the host at one device", pooled, oneCard)
+	}
+}
+
 func TestOllamaServesContextFloor_UMANoSpillOnly(t *testing.T) {
 	m := floorManifest(262144)
 	v := catalog.Variant{EstimatedWeightGB: 22.62, KVBytesPerTokenFP16: 20480}

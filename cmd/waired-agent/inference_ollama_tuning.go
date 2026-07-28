@@ -169,12 +169,19 @@ func kvFactorFor(kvType string) float64 {
 }
 
 // ollamaTuningBudgetGB returns the decimal-GB memory budget available for
-// weights + KV on this host: effective VRAM minus the same engine
-// overhead the fit gate reserves (weight-scaled on discrete GPUs, flat
-// on UMA), or, on CPU-only hosts (spilling to RAM is the design there),
-// total RAM minus OS headroom. Returns 0 when the budget is unknown.
+// weights + KV on this host: the ollama VRAM budget minus the same
+// engine overhead the fit gate reserves (weight-scaled on discrete GPUs,
+// flat on UMA), or, on CPU-only hosts (spilling to RAM is the design
+// there), total RAM minus OS headroom. Returns 0 when the budget is
+// unknown.
+//
+// OllamaVRAMBudgetMB rather than EffectiveVRAMMB, and it has to be the
+// same one selection used: a model admitted because its weights pool
+// across two cards would otherwise be given a context window sized for
+// one, which is the selection↔serving drift #621's post-load verify
+// probe then has to discover the hard way (#264).
 func ollamaTuningBudgetGB(hw hardware.Profile, weightGB float64) float64 {
-	if eff := hw.EffectiveVRAMMB(); eff > 0 {
+	if eff := hw.OllamaVRAMBudgetMB(); eff > 0 {
 		mib := eff - router.OllamaVRAMOverheadMB(hw, weightGB)
 		if mib <= 0 {
 			return 0

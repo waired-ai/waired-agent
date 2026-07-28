@@ -108,6 +108,12 @@ it and warning you afterwards. A faster chip keeps what a slower one skips — a
 M4 Max is not held to what an M4 base can do. On a chip Waired does not
 recognise yet nothing is skipped, and you may simply see a "may be slow" note.
 
+If your machine has more than one NVIDIA graphics card, Waired counts them
+together. A model too large for either card alone can still be a good pick when
+it fits across both, and Waired no longer passes it over as though the extra
+cards were not there. Cards from different makers are not combined, because the
+engine cannot spread one model across them.
+
 This only affects what Waired picks *for* you. You can still choose any model
 that fits — see [Choose which AI model runs](/guides/choose-a-model/).
 

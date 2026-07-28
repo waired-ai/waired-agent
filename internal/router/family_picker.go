@@ -171,10 +171,21 @@ func deficitLabelFor(v catalog.Variant, engine string, hw hardware.Profile) stri
 		}
 		// When the RAM gate passes but the variant still doesn't fit,
 		// the binding constraint is GPU residency (ollamaFitsVRAM).
+		//
+		// The "have" figure is the budget that gate actually compared
+		// against — the cross-device pool where there is one (#264),
+		// mirroring the vLLM arm above. Naming one card's VRAM after
+		// judging the host on two would send the operator to buy
+		// hardware they already have.
 		ramOK := v.MinRAMGB <= 0 || hw.RAMTotalGB <= 0 || hw.RAMTotalGB >= v.MinRAMGB
 		if ramOK && !ollamaFitsVRAM(v, hw) {
+			have := hw.OllamaVRAMBudgetMB()
+			if n := ollamaPooledGPUs(hw); n > 1 {
+				return fmt.Sprintf("needs ~%.0f GB GPU-resident (have %d MB VRAM across %d GPUs)",
+					v.EstimatedWeightGB, have, n)
+			}
 			return fmt.Sprintf("needs ~%.0f GB GPU-resident (have %d MB VRAM)",
-				v.EstimatedWeightGB, hw.EffectiveVRAMMB())
+				v.EstimatedWeightGB, have)
 		}
 		if hw.RAMTotalGB <= 0 {
 			return fmt.Sprintf("needs %d GB RAM", v.MinRAMGB)
