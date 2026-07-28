@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 9b3ffce69a71d8ac
+sourceHash: e1085b723a0beeba
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -34,7 +34,10 @@ Claude Code のマシン全体設定を書き込むことで、Claude Code が�
 	waired link claude-code
 	```
 
-2. ルーティングを有効にします（通常はセットアップ時に済んでいます）。
+2. ルーティングを有効にします。ルーティングの質問に「いいえ」と答えた、ブラウザで
+	Claude Code をつながなかった、`--skip-claude-proxy` を付けてインストールした、
+	のいずれでもなければ **セットアップ時に済んでいます**。この手順は、あとから
+	有効化したいときのためのものです。
 
 	<Tabs syncKey="os">
 		<TabItem label="macOS / Linux">

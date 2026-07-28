@@ -121,6 +121,12 @@ browser can't.
 🔌 Setting up your coding tools (claude-code, opencode)…
 ```
 
+Ticking **Claude Code** there does what the page says it does: it points
+Claude Code at Waired for everyone who uses this computer. The other two
+tools only drop a file in your own home folder. This is the same routing the
+terminal asks about after a non-browser install, decided in the browser
+instead — and `--skip-claude-proxy` at install time still overrides it.
+
 On an older setup page, which does not ask, it tells you how to do it yourself
 instead: *“You can set up your coding tools later from this terminal with
 `waired link all`.”*
@@ -260,6 +266,20 @@ Setting up this way, the machine joins your network and appears in the console
 straight away, but the browser setup wizard does not open for it — there is no
 browser. Everything else, including choosing its AI model, is available from
 the console.
+
+<Aside type="note" title="Unattended installs route Claude Code without asking">
+	There is nobody at the terminal to answer the routing question, so an
+	unattended install takes the same answer an attended one defaults to: yes.
+	Claude Code on that machine is pointed at Waired for **everyone who uses
+	it** — it is a machine-wide setting, not a per-user one.
+
+	To leave Claude Code on the Anthropic API instead, install with
+	`--skip-claude-proxy` (`-SkipClaudeProxy` on Windows, or
+	`WAIRED_NO_CLAUDE_PROXY=1` in the environment). Everything else — joining
+	your network, the model, the skills and plugins — still happens. You can
+	turn routing on later with `sudo waired claude enable`, and off again with
+	`sudo waired claude disable`.
+</Aside>
 
 The model then downloads in the foreground with a progress bar:
 
