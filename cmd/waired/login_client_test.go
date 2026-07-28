@@ -62,9 +62,12 @@ func TestRunInitViaDaemonPollsToActive(t *testing.T) {
 
 	// noBrowser=true so the test never shells out to a browser;
 	// nonInteractive=true so the post-login #133 prompt never reads stdin.
-	if err := runInitViaDaemon(srv.URL, "https://cp.example", "dev-1", true, true,
-		true, /* skipIntegration: keep the test hermetic (no home-dir writes) */
-		"http://127.0.0.1:9473", nil /*no terminal*/, daemonInitInference{}, "", false /*reauth*/); err != nil {
+	if err := runInitViaDaemon(daemonInitOpts{
+		MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+		GatewayBaseURL: "http://127.0.0.1:9473",
+		NoBrowser:      true, NonInteractive: true,
+		SkipIntegration: true, // keep the test hermetic (no home-dir writes)
+	}); err != nil {
 		t.Fatalf("runInitViaDaemon: %v", err)
 	}
 	if atomic.LoadInt32(&polls) < 2 {
@@ -105,8 +108,12 @@ func TestRunInitViaDaemonSendsReauthOnlyWhenRenewing(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			if err := runInitViaDaemon(srv.URL, "https://cp.example", "dev-1", true, true,
-				true, "http://127.0.0.1:9473", nil, daemonInitInference{}, "", tc.reauth); err != nil {
+			if err := runInitViaDaemon(daemonInitOpts{
+				MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+				GatewayBaseURL: "http://127.0.0.1:9473",
+				NoBrowser:      true, NonInteractive: true,
+				SkipIntegration: true, Reauth: tc.reauth,
+			}); err != nil {
 				t.Fatalf("runInitViaDaemon: %v", err)
 			}
 
@@ -140,8 +147,12 @@ func TestRunInitViaDaemonNamesAnAgentTooOldToReauth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := runInitViaDaemon(srv.URL, "https://cp.example", "dev-1", true, true,
-		true, "http://127.0.0.1:9473", nil, daemonInitInference{}, "", true /*reauth*/)
+	err := runInitViaDaemon(daemonInitOpts{
+		MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+		GatewayBaseURL: "http://127.0.0.1:9473",
+		NoBrowser:      true, NonInteractive: true,
+		SkipIntegration: true, Reauth: true,
+	})
 	if err == nil {
 		t.Fatal("want an error when the agent cannot re-authenticate")
 	}
@@ -174,9 +185,12 @@ func TestRunInitViaDaemonSurfacesError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := runInitViaDaemon(srv.URL, "https://cp.example", "dev-1", true, true,
-		true, /* skipIntegration: keep the test hermetic (no home-dir writes) */
-		"http://127.0.0.1:9473", nil /*no terminal*/, daemonInitInference{}, "", false /*reauth*/)
+	err := runInitViaDaemon(daemonInitOpts{
+		MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+		GatewayBaseURL: "http://127.0.0.1:9473",
+		NoBrowser:      true, NonInteractive: true,
+		SkipIntegration: true, // keep the test hermetic (no home-dir writes)
+	})
 	if err == nil {
 		t.Fatal("expected error from error phase")
 	}

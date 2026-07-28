@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/browser"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
@@ -31,26 +32,60 @@ var daemonReachable = func(mgmtURL string) bool {
 	return resp.StatusCode < 500
 }
 
+// daemonInitOpts is everything runInitViaDaemon needs from `waired init`.
+//
+// A struct rather than a parameter list: this started as six positional
+// arguments and had grown to twelve, three of them adjacent strings and
+// five adjacent bools — a shape where a silent swap at a call site
+// compiles and changes what the run does. Named fields make each call
+// site say which knob it is setting.
+type daemonInitOpts struct {
+	MgmtURL        string
+	Control        string
+	DeviceName     string
+	GatewayBaseURL string
+	// StateDir is the agent's state directory. Read for agent.json
+	// (the Claude gateway port and the managed-settings write options),
+	// not written: the daemon owns this directory.
+	StateDir        string
+	NoBrowser       bool
+	NonInteractive  bool
+	SkipIntegration bool
+	// SkipClaudeRoute is --skip-claude-route (WAIRED_NO_CLAUDE_PROXY /
+	// the installers' -SkipClaudeProxy). init is the single decider of
+	// Claude Code routing, and this is the opt-out (#294).
+	SkipClaudeRoute bool
+	// AuthKey enrolls without a browser sign-in, for servers and
+	// containers.
+	AuthKey string
+	// Reauth is set when this host already has an identity. Without it the
+	// daemon treats a Start on an active session as an idempotent no-op
+	// and this function would print a successful sign-in for a run that
+	// renewed nothing (#175).
+	Reauth    bool
+	Inference daemonInitInference
+	// Owner is the process-wide stdin reader, or nil off a TTY.
+	Owner *stdinReader
+}
+
 // runInitViaDaemon drives the daemon-owned login MGMT API instead of
 // enrolling locally (the Tailscale model). It POSTs /login/start, opens
 // the browser on the first login URL, then polls /login/status until the
 // daemon reaches a terminal phase. The running daemon owns the runtime
 // and the state dir, so the CLI does no deploy here; the per-user
-// coding-agent integration consent runs once login is active (it lands
-// in the user's home, which the daemon never touches).
-// authKey is appended rather than slotted next to control/deviceName on
-// purpose: three adjacent string parameters invite a silent swap, and a
-// trailing argument leaves every existing call site's positions untouched.
-//
-// reauth is set when this host already has an identity. Without it the
-// daemon treats a Start on an active session as an idempotent no-op and
-// this function would print a successful sign-in for a run that renewed
-// nothing (#175).
-func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInteractive, skipIntegration bool, gatewayBaseURL string, owner *stdinReader, inf daemonInitInference, authKey string, reauth bool) error {
+// coding-agent integration consent — and the Claude Code routing flip it
+// covers — run once login is active, because both write outside the
+// daemon's reach (a user's home, and a root-owned machine-wide file).
+func runInitViaDaemon(o daemonInitOpts) error {
+	mgmtURL, gatewayBaseURL := o.MgmtURL, o.GatewayBaseURL
+	noBrowser, nonInteractive := o.NoBrowser, o.NonInteractive
+	skipIntegration, owner, inf := o.SkipIntegration, o.Owner, o.Inference
+	reauth, authKey := o.Reauth, o.AuthKey
+
 	reqBody, _ := json.Marshal(management.LoginStartRequest{
-		ControlURL: control,
-		DeviceName: deviceName,
-		AuthKey:    authKey,
+		ControlURL: o.Control,
+		DeviceName: o.DeviceName,
+		AuthKey:    o.AuthKey,
 		Reauth:     reauth,
 	})
 	out, err := httpPost(mgmtURL+"/waired/v1/login/start", reqBody)
@@ -214,6 +249,15 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			// coding tools, and a terminal that took over late was never
 			// asked at all. Asking here fixes both — setupActive is settled
 			// by now, and the download is done.
+			// claudeManaged: can this process write the machine-wide
+			// Claude Code managed settings at all? Elevation is the real
+			// gate (the installers run init elevated); an OS with no
+			// managed-settings location can never be routed.
+			claudeManaged := claudeManagedEligibleFor(isElevatedFn(), claudemanaged.Path())
+			// integConsent feeds the routing decision below. Both branches
+			// that can set it are the same consent, asked in two places:
+			// the wizard's coding-tool toggles, or the terminal question.
+			integConsent := false
 			if setupActive {
 				// waired#935: the browser asks which coding tools to
 				// connect, and this process is the only one that can write
@@ -222,7 +266,11 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				// root-owned. Warn-only, like every other integration path:
 				// sign-in already succeeded, and the step reports its own
 				// failure to the wizard.
-				if err := runSetupIntegrations(sess, os.Stdout, os.Stderr, gatewayBaseURL); err != nil {
+				if err := runSetupIntegrations(sess, os.Stdout, os.Stderr, setupIntegrationOpts{
+					GatewayBaseURL:  gatewayBaseURL,
+					StateDir:        o.StateDir,
+					SkipClaudeRoute: o.SkipClaudeRoute,
+				}); err != nil {
 					fmt.Fprintf(os.Stderr,
 						"warn: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
 				} else if sess.State().Integrations == nil {
@@ -230,20 +278,30 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 					// wizard that has not asked yet.
 					fmt.Println("You can set up your coding tools later from this terminal with `waired link all`.")
 				}
+				// The wizard's own claude-code toggle is the consent, and
+				// the routing it promises is applied by runSetupIntegrations
+				// (setup_integration.go) — not here. §4.2: this terminal
+				// must not ask, so the block below stays out of its way.
 			} else if skipIntegration {
 				fmt.Println("Run `waired link <agent>` to (re)configure coding-agent integration if needed.")
-			} else if err := runPostLoginIntegration(postLoginIntegrationOpts{
-				StepLabel:      emo("🔌", "*"),
-				GatewayBaseURL: gatewayBaseURL,
-				NonInteractive: nonInteractive,
-				In:             stdin,
-				Out:            os.Stdout,
-				ErrOut:         os.Stderr,
-			}); err != nil {
-				// Warn-only: login already succeeded; a broken integration
-				// must not turn it into a failed init.
-				fmt.Fprintf(os.Stderr,
-					"warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
+			} else {
+				consented, err := runPostLoginIntegration(postLoginIntegrationOpts{
+					StepLabel:       emo("🔌", "*"),
+					GatewayBaseURL:  gatewayBaseURL,
+					NonInteractive:  nonInteractive,
+					In:              stdin,
+					Out:             os.Stdout,
+					ErrOut:          os.Stderr,
+					ClaudeManaged:   claudeManaged,
+					SkipClaudeRoute: o.SkipClaudeRoute,
+				})
+				if err != nil {
+					// Warn-only: login already succeeded; a broken integration
+					// must not turn it into a failed init.
+					fmt.Fprintf(os.Stderr,
+						"warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
+				}
+				integConsent = consented
 			}
 
 			var resp *management.BenchmarkRunResponse
@@ -262,6 +320,46 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 				// offer a lighter model if this host can't sustain the pick.
 				resp, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout))
 			}
+			// Claude Code request routing (#294). The installers deleted
+			// their own post-init `waired claude enable` and forward the
+			// opt-out here instead, making init the single decider — but
+			// only the deleted standalone path ever wrote managed
+			// settings, so every real install (all of which take this
+			// daemon path) finished unrouted and --skip-claude-route had
+			// nothing to skip.
+			//
+			// Asked HERE, after the engine install, the model download and
+			// the benchmark: waired#772's deferred question, so a "yes"
+			// flips the route at the moment the local stack can actually
+			// serve. Skipped entirely while the wizard drives — its own
+			// claude-code toggle already decided, and §4.2 forbids a
+			// terminal prompt.
+			claudeRouted := false
+			if !setupActive {
+				switch planClaudeRoute(claudeRouteFacts{
+					integConsent:    integConsent,
+					elevated:        isElevatedFn(),
+					managedPath:     claudemanaged.Path(),
+					skipClaudeRoute: o.SkipClaudeRoute,
+					nonInteractive:  nonInteractive,
+				}) {
+				case claudeRouteAsk:
+					claudeRouted = promptClaudeRouting(os.Stdout, stdin, o.StateDir)
+				case claudeRouteApply:
+					claudeRouted = routeClaudeNow(claudeRouteApplyOpts{
+						StateDir: o.StateDir, In: stdin, AllowPrompt: false,
+					}, os.Stdout)
+				case claudeRouteNeedsElevation:
+					// waired#749: say it instead of skipping silently — the
+					// consent copy above already described the machine-wide
+					// change this run turns out not to be able to make.
+					printClaudeRouteElevationHint(os.Stdout)
+				case claudeRouteNone:
+					// No consent, an explicit opt-out, or an OS with no
+					// managed-settings location: nothing to say.
+				}
+			}
+
 			// #756: the daemon chose the inference role from this host's
 			// hardware without an interactive prompt, so tell the user how to
 			// inspect and change it afterward.
@@ -269,7 +367,7 @@ func runInitViaDaemon(mgmtURL, control, deviceName string, noBrowser, nonInterac
 			if engineErr != nil {
 				printDaemonEngineFailedBox(st.AccountEmail)
 			} else {
-				printDaemonSuccessBox(st.AccountEmail, outcomeFrom(resp))
+				printDaemonSuccessBox(st.AccountEmail, outcomeFrom(resp), claudeRouted)
 			}
 			// Sign-in succeeded either way, so init succeeds either way:
 			// the engine is a part of setup, not the point of it (#188).
@@ -366,15 +464,25 @@ func printDaemonEngineFailedBox(accountEmail string) {
 
 // printDaemonSuccessBox renders the final "Waired is ready" summary for the
 // daemon-driven journey. The daemon owns the runtime, so we only surface the
-// account and (when the benchmark ran) the measured throughput — the box
-// otherwise matches the standalone printInitSuccessBox.
-func printDaemonSuccessBox(accountEmail string, bench benchmarkOutcome) {
+// account, (when the benchmark ran) the measured throughput, and where
+// Claude Code's requests now go.
+//
+// claudeRouted is reported either way (#294): "routed" is the whole point
+// of a first install for a Claude Code user, and a box that stays silent
+// when routing did not happen is how an operator walks away believing it
+// did.
+func printDaemonSuccessBox(accountEmail string, bench benchmarkOutcome, claudeRouted bool) {
 	var lines []string
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
 	if bench.Measured {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Model", green(fmt.Sprintf("%.0f tok/s", bench.Tokps))))
+	}
+	if claudeRouted {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
+	} else {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
 	}
 	lines = append(lines, dim("Local inference is live via the waired-agent daemon."))
 	lines = append(lines, dim("Point your coding agent at Waired and start building."))

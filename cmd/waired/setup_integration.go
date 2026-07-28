@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
+	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/setup"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // The browser wizard's coding-agent toggles are applied HERE, by the
@@ -39,7 +41,7 @@ const setupIntegrationBudget = 3 * time.Minute
 // toggles off" both leave the machine untouched. The daemon distinguishes
 // those two on the wire — it reports `skipped` for the second — which is
 // what stops "never asked" from reading as "asked and satisfied".
-func runSetupIntegrations(s *executorSession, out, errOut io.Writer, gatewayBaseURL string) error {
+func runSetupIntegrations(s *executorSession, out, errOut io.Writer, o setupIntegrationOpts) error {
 	if !s.Supported() {
 		return nil
 	}
@@ -62,13 +64,28 @@ func runSetupIntegrations(s *executorSession, out, errOut io.Writer, gatewayBase
 	writePromptf(out, "%s %s\n", emo("🔌", "*"),
 		bold(fmt.Sprintf("Setting up your coding tools (%s)…", strings.Join(targets, ", "))))
 
-	if err := applySetupIntegrations(ctx, targets, gatewayBaseURL, out, errOut); err != nil {
+	if err := applySetupIntegrations(ctx, targets, o, out, errOut); err != nil {
 		writePromptf(out, "%s Coding-tool setup failed: %v\n", emo("⚠️", "!"), err)
 		s.FailedStep(management.SetupStepIntegration, err.Error())
 		return err
 	}
 	s.DoneStep(management.SetupStepIntegration)
 	return nil
+}
+
+// setupIntegrationOpts is what the wizard's apply needs beyond the target
+// list itself.
+type setupIntegrationOpts struct {
+	GatewayBaseURL string
+	// StateDir is read for the Claude gateway port and the
+	// managed-settings write options.
+	StateDir string
+	// SkipClaudeRoute is --skip-claude-route. The wizard's claude-code
+	// toggle and the CLI opt-out can disagree — an operator who passed
+	// --skip-claude-proxy to the installer and then ticked Claude Code in
+	// the browser. The command-line opt-out wins: it is the more explicit
+	// instruction, and the conservative one.
+	SkipClaudeRoute bool
 }
 
 // applySetupIntegrations writes the named integrations for the invoking
@@ -83,14 +100,27 @@ func runSetupIntegrations(s *executorSession, out, errOut io.Writer, gatewayBase
 // has one row for this step and one error to show, and continuing past a
 // failure would leave a half-configured machine reported as either
 // wholly done or wholly failed. Neither would be true.
-func applySetupIntegrations(ctx context.Context, targets []string, gatewayBaseURL string, out, errOut io.Writer) error {
+func applySetupIntegrations(ctx context.Context, targets []string, o setupIntegrationOpts, out, errOut io.Writer) error {
 	sudoUser, isSudo := invokingSudoUser()
 	homeDir, _ := os.UserHomeDir()
 
 	for _, target := range targets {
 		id := integration.AgentID(target)
+		// The claude-code toggle is the only one that changes the whole
+		// machine, and the wizard says so in as many words ("Changes where
+		// Claude Code sends its requests for everyone on this computer —
+		// an administrator-owned setting, not just yours"). Until #294 the
+		// applier delivered only the per-user skills, so that sentence was
+		// a promise nothing kept. The managed-settings write happens HERE,
+		// in the elevated parent: the per-user hop below drops root by
+		// design and could not write a root-owned machine-wide file.
+		if target == signer.IntegrationClaudeCode {
+			if err := applySetupClaudeRoute(o, out); err != nil {
+				return fmt.Errorf("%s: %w", target, err)
+			}
+		}
 		if isSudo {
-			if err := runLinkAllAsUser(ctx, sudoUser, linkOneChildArgs(gatewayBaseURL, target), out, errOut); err != nil {
+			if err := runLinkAllAsUser(ctx, sudoUser, linkOneChildArgs(o.GatewayBaseURL, target), out, errOut); err != nil {
 				return fmt.Errorf("%s: %w", target, err)
 			}
 			continue
@@ -101,7 +131,7 @@ func applySetupIntegrations(ctx context.Context, targets []string, gatewayBaseUR
 		res, err := setup.IntegrationOne(ctx, id, setup.IntegrationOptions{
 			HomeDir:        homeDir,
 			StateDir:       defaultStateDir(),
-			GatewayBaseURL: gatewayBaseURL,
+			GatewayBaseURL: o.GatewayBaseURL,
 			NonInteractive: true,
 			WiredBinary:    wairedBinaryPath(),
 		})
@@ -113,6 +143,38 @@ func applySetupIntegrations(ctx context.Context, targets []string, gatewayBaseUR
 				return fmt.Errorf("%s: %w", ar.Agent, ar.Err)
 			}
 		}
+	}
+	return nil
+}
+
+// applySetupClaudeRoute performs the wizard's claude-code routing flip.
+//
+// planClaudeRoute owns the decision, with integConsent already settled
+// (this runs only because the toggle was on) and wizardDriving set, so it
+// never asks — §4.2: while the browser drives, this terminal has no
+// question to put on screen and nobody watching it.
+//
+// A run that cannot write the file is NOT an error: --skip-claude-route
+// means the operator declined, and a non-elevated executor means this
+// host has a step it can finish later with `waired claude enable`.
+// Failing the wizard's whole integration row for either would turn a
+// deliberate choice into a red step.
+func applySetupClaudeRoute(o setupIntegrationOpts, out io.Writer) error {
+	switch planClaudeRoute(claudeRouteFacts{
+		integConsent:    true,
+		elevated:        isElevatedFn(),
+		managedPath:     claudemanaged.Path(),
+		skipClaudeRoute: o.SkipClaudeRoute,
+		wizardDriving:   true,
+	}) {
+	case claudeRouteApply:
+		// nil reader: AllowPrompt is false, so nothing below reads it.
+		_, err := applyClaudeRouteFn(claudeRouteApplyOpts{
+			StateDir: o.StateDir, In: nil, AllowPrompt: false,
+		})
+		return err
+	case claudeRouteNeedsElevation:
+		printClaudeRouteElevationHint(out)
 	}
 	return nil
 }

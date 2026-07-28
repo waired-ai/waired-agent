@@ -126,13 +126,16 @@ func claudeManagedWriteOptions(stateDir string) claudemanaged.WriteOptions {
 func runClaudeEnable(stateDir string, noStatusline bool) error {
 	baseURL, _ := claudeBaseURL(stateDir)
 
-	// Sweep any retired MITM proxy artifacts first: a stale api.anthropic.com
-	// hosts redirect would otherwise break the new gateway's passthrough leg.
-	legacycleanup.Run(stateDir, stderrLogger())
-
-	// Write also installs the Stop hook (managed-settings hooks.Stop) so a
-	// post-dispatch fallback is visible in the Claude Code TUI (#580).
-	path, err := claudemanaged.WriteWithOptions(baseURL, claudeManagedWriteOptions(stateDir))
+	// The flip itself — legacy-MITM sweep, managed-settings write, and the
+	// two per-user extras — is applyClaudeRoute (init_route_claude.go), so
+	// `waired claude enable` and `waired init`'s routing step leave a host
+	// in the same state (#294).
+	path, err := applyClaudeRoute(claudeRouteApplyOpts{
+		StateDir:       stateDir,
+		In:             bufio.NewScanner(os.Stdin),
+		AllowPrompt:    true,
+		SkipStatusline: noStatusline,
+	})
 	if err != nil {
 		if errors.Is(err, claudemanaged.ErrUnsupportedOS) {
 			return fmt.Errorf("waired claude enable: managed settings are not supported on this OS")
@@ -145,16 +148,7 @@ func runClaudeEnable(stateDir string, noStatusline bool) error {
 	fmt.Printf("Claude Code managed settings written: %s\n", path)
 	fmt.Printf("  ANTHROPIC_BASE_URL = %s  (no credential — subscription / auto-mode preserved)\n", baseURL)
 	fmt.Println("  Restart any running `claude` session (or open a new shell) to pick it up.")
-
-	// Install the /waired-route in-session escape hatch (#580) into the
-	// invoking user's ~/.claude/skills/. Best-effort — the managed-settings
-	// write above is the core of enable.
-	installRouteSkillForInvoker()
 	fmt.Println("  In a Claude Code session, /waired-route switches routing (auto | waired | anthropic) live.")
-
-	// Add the routing statusline segment to the invoking user's Claude Code
-	// footer (#580). Absent ⇒ injected; a pre-existing one ⇒ ask before wrapping.
-	installStatuslineForInvoker(noStatusline, true, bufio.NewScanner(os.Stdin))
 	return nil
 }
 
