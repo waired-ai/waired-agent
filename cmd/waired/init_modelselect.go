@@ -2,119 +2,11 @@ package main
 
 import (
 	"fmt"
-	"io"
-	"os"
 	"strings"
 
-	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
-	"github.com/waired-ai/waired-agent/internal/setup"
 )
-
-// applyBundledModelSelection runs the install-time, hardware-aware
-// bundled-model selection (#517) and applies the verdict to cfg.Inference:
-//
-//   - override BundledModelID with the largest catalog model that fits the
-//     host above the coding-quality floor;
-//   - disable LOCAL inference when the host is under-spec (the node still
-//     enrolls and runs as a gateway/relay) — unless the operator pinned a
-//     model (--inference-bundled-model-id) or forced it on
-//     (--inference-enabled=true);
-//   - turn off the startup pull when free disk is too small, so the agent
-//     doesn't retry a download that can't land.
-//
-// It is best-effort: any failure (catalog unreadable, engine-pick error)
-// degrades to the already-configured default and prints a warning rather
-// than aborting an otherwise-successful enroll. enabledOverride is the
-// tri-state --inference-enabled flag value (nil when not passed).
-//
-// When the host is under-spec for a floor-clearing model but the tiny 0.5B
-// still fits, it does NOT silently disable: interactively it confirms whether
-// to run local inference on that very-low-quality model at all (default No);
-// non-interactively it leaves inference off with a note. in/out carry that
-// prompt; nonInteractive suppresses it.
-func applyBundledModelSelection(
-	cfg *agentconfig.Config,
-	prof hardware.Profile,
-	det setup.OllamaDetection,
-	stateDir, homeDir, pin string,
-	enabledOverride *bool,
-	nonInteractive bool,
-	in lineReader,
-	out io.Writer,
-) {
-	manifests, err := catalog.BundledManifests()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warn: bundled catalog unavailable (%v); keeping default model %s\n",
-			err, cfg.Inference.BundledModelID)
-		return
-	}
-
-	pinned := pin != ""
-	if pinned {
-		cfg.Inference.BundledModelID = pin
-	}
-
-	// A detected version only matters in reuse mode; bundled uses the
-	// pinned bundled engine version (resolved inside SelectBundledModel).
-	reuseVer := ""
-	if cfg.Inference.OllamaSource == agentconfig.OllamaSourceReuse {
-		reuseVer = det.Version
-	}
-
-	sel, err := setup.SelectBundledModel(setup.BundledModelInputs{
-		Hardware:       prof,
-		Manifests:      manifests,
-		Inference:      cfg.Inference,
-		StateDir:       stateDir,
-		HomeDir:        homeDir,
-		ReuseOllamaVer: reuseVer,
-		FloorTier:      router.InstallQualityFloorTier,
-		Forced:         enabledOverride != nil && *enabledOverride,
-		Pinned:         pinned,
-		FreeDiskBytes:  hardware.FreeDiskBytes,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warn: bundled model selection failed (%v); keeping %s\n",
-			err, cfg.Inference.BundledModelID)
-		return
-	}
-
-	cfg.Inference.BundledModelID = sel.ModelID
-	cfg.Inference.Enabled = sel.EnableInference
-	if sel.SkipPull {
-		cfg.Inference.PullOnStartup = false
-	}
-
-	// Under-spec host where only a below-floor (very low quality) model — today
-	// the 0.5B — fits. Rather than silently disabling, confirm whether to run
-	// local inference on it at all. Skipped when the operator already forced /
-	// disabled inference (--inference-enabled) or pinned a model (those are
-	// deliberate choices we honour verbatim).
-	if sel.UnderSpec && sel.BelowFloorModelID != "" && enabledOverride == nil && pin == "" {
-		label := bundledModelLabel(manifests, sel.BelowFloorModelID)
-		if nonInteractive {
-			writePromptf(out, "  This computer is below the recommended spec for running AI locally: only the %s model fits — local AI left off.\n", label)
-			writePrompt(out, "  Re-run interactively, or pass --inference-enabled=true to force it. Waired still works as a gateway to your other devices.")
-			return
-		}
-		if promptTinyModelOptIn(out, in, label) {
-			cfg.Inference.Enabled = true
-			cfg.Inference.BundledModelID = sel.BelowFloorModelID
-			cfg.Inference.PullOnStartup = true
-			writePromptf(out, "  Enabling local inference with %s.\n", label)
-		} else {
-			writePrompt(out, "  Local AI left off — Waired still works as a gateway to your other devices. Re-run `waired init` to change this.")
-		}
-		return
-	}
-
-	for _, n := range sel.Notes {
-		writePrompt(out, "  "+n)
-	}
-}
 
 // bundledModelLabel returns a short human-facing label for a bundled model
 // id/alias — the display name with any trailing parenthetical dropped (e.g.
@@ -175,19 +67,6 @@ func modelWithQuality(modelID, variantID string) string {
 		return fmt.Sprintf("%s (quality %d)", label, q)
 	}
 	return label
-}
-
-// promptTinyModelOptIn shows the "this machine can only run the smallest
-// model" confirmation and returns true iff the operator opts in. Default No —
-// running a below-floor model locally is not recommended, but the node still
-// works as a gateway/relay when declined.
-func promptTinyModelOptIn(out io.Writer, in lineReader, label string) bool {
-	writePromptf(out, "\n%s This computer can only run a very small, low-quality model (%s).\n", emo("⚠", "!"), label)
-	writePrompt(out, "   At that size local coding help is often broken or unusable, so running")
-	writePrompt(out, "   AI models on this computer is not recommended. Waired still works as a")
-	writePrompt(out, "   secure gateway to your other devices without it.")
-	writePrompt(out, "")
-	return ynPrompt(out, in, "Run AI models on this computer anyway?", false)
 }
 
 // isBundledModelBelowFloor reports whether modelID (id or alias) resolves to a

@@ -282,8 +282,7 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 
 	Either way the download belongs to the background service, not to this
 	command: <kbd>Ctrl</kbd>+<kbd>C</kbd> **does not cancel it**. Check on it any
-	time with `waired status`, or skip the wait from the start with
-	`--no-wait-model`.
+	time with `waired status`.
 </Aside>
 
 <Expected>
@@ -331,7 +330,6 @@ there rather than waiting for an engine that is not coming.
 |---|---|
 | `--no-browser` | Never open a browser; print the URL and pairing code |
 | `--non-interactive` | Accept the hardware-derived defaults, ask nothing |
-| `--no-wait-model` | Return to the shell immediately; download in the background |
 | `--inference-bundled-model-id <id>` | Pin a model instead of letting Waired choose |
 | `--inference-enabled=true\|false` | Answer the first question without being asked |
 | `--share-with-mesh=true\|false` | Answer the second question without being asked |

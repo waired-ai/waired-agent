@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 811e2e6721b15894
+sourceHash: 032a79ae793b32c5
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -275,7 +275,6 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 	いずれの場合も、ダウンロードを行っているのはバックグラウンドサービスであって
 	このコマンドではありません。<kbd>Ctrl</kbd>+<kbd>C</kbd> を押しても
 	**中止されません**。状況は `waired status` でいつでも確認できます。
-	最初から待たないようにするには `--no-wait-model` を使います。
 </Aside>
 
 <Expected>
@@ -323,7 +322,6 @@ AI ソフトウェアをインストールできませんでした。多くは�
 |---|---|
 | `--no-browser` | ブラウザを開かず、URL とペアリングコードを表示する |
 | `--non-interactive` | ハードウェアから導かれた既定値を採用し、何も聞かない |
-| `--no-wait-model` | すぐシェルに戻り、ダウンロードはバックグラウンドで続ける |
 | `--inference-bundled-model-id <id>` | 自動選択ではなくモデルを指定する |
 | `--inference-enabled=true\|false` | 1 つめの質問に、聞かれずに答える |
 | `--share-with-mesh=true\|false` | 2 つめの質問に、聞かれずに答える |

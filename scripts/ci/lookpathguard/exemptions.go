@@ -46,15 +46,11 @@ var declared = []lookpath{
 	{"cmd/waired/codeui.go", "sudo", privHelper},
 	{"cmd/waired/init_integration.go", "runuser", privHelper},
 	{"cmd/waired/init_integration.go", "sudo", privHelper},
-	{"cmd/waired/init_tray_linux.go", "runuser", privHelper},
-	{"cmd/waired/init_tray_linux.go", "sudo", privHelper},
 	{"internal/platform/browser/browser_linux.go", "runuser", privHelper},
 	{"internal/platform/browser/browser_linux.go", "sudo", privHelper},
 	{"internal/gui/tray/actions_linux.go", "pkexec", privHelper},
 
-	// Desktop helpers. `name` is lookPathOK's parameter (apt-get today);
-	// `prog.binary` walks the zenity/kdialog candidate list.
-	{"cmd/waired/init_tray_linux.go", "name", desktopHelper},
+	// Desktop helpers. `prog.binary` walks the zenity/kdialog candidate list.
 	{"internal/gui/tray/actions_linux.go", "zenity", desktopHelper},
 	{"internal/gui/tray/actions_linux.go", "kdialog", desktopHelper},
 	{"internal/gui/tray/dialog_linux.go", "prog.binary", desktopHelper},

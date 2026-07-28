@@ -128,7 +128,7 @@ Notes / escape hatches:
 - A scheme-less Control Plane host (`--control dev.waired.net`) is accepted
   and normalised — `https://` for remote hosts, `http://` for loopback.
 - The full set of enrollment flags (`--control`, `--non-interactive`,
-  `--skip-deploy`, `--start-agent`, …) lives in **`waired init --help`**.
+  `--non-interactive`, `--skip-integration`, …) lives in **`waired init --help`**.
 
 ## Supported targets
 

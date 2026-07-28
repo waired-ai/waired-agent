@@ -254,32 +254,6 @@ func disableLocalInference(mgmtURL string) error {
 	return err
 }
 
-// offerBenchmark is the end-of-init interactive performance check + smoke
-// test. After init starts the daemon, it waits briefly for the Management
-// API, then asks whether to run a quick benchmark; on yes it runs a real
-// inference (proving the path works end-to-end) and offers a lighter model
-// if throughput is below the interactive floor. Non-interactive callers
-// run it report-only (never switches). Best-effort: never errors / blocks.
-func offerBenchmark(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) benchmarkOutcome {
-	if !waitDaemonReachable(mgmtURL, 15*time.Second) {
-		writePrompt(out, emo("💡", "Tip:")+" once the agent is running, run `waired runtimes benchmark` to check interactive performance.")
-		return benchmarkOutcome{}
-	}
-	if nonInteractive {
-		resp, _ := benchmarkWithScanner(mgmtURL, true, out, sc, tty)
-		return outcomeFrom(resp)
-	}
-	if !ynPrompt(out, sc, "Run a quick performance benchmark now?", true) {
-		writePrompt(out, "Skipped. Run `waired runtimes benchmark` anytime to check performance.")
-		return benchmarkOutcome{}
-	}
-	writePrompt(out, dim("Benchmarking local inference — warming up the model, please wait…"))
-	// Reuse the same line source for the (possible) model-switch prompt so
-	// we don't layer two bufio readers over stdin.
-	resp, _ := benchmarkWithScanner(mgmtURL, false, out, sc, tty)
-	return outcomeFrom(resp)
-}
-
 // waitForBenchmark polls the daemon until the engine + active model are
 // ready, then runs the benchmark and returns the full response (with
 // the measurement plus any lighter/upgrade suggestion). ok=false means
