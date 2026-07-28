@@ -12,87 +12,44 @@ import (
 // daemon-driven login and a second, local enrollment implementation from a
 // single 1-second probe, with no user-visible signal — so a host whose
 // service failed to start enrolled "successfully" into a permanently
-// dead-ended setup. These pin the replacement: local enrollment runs ONLY
-// when explicitly selected, and an agent that is not answering is an error,
+// dead-ended setup. Now that the daemon can also re-authenticate an
+// enrolled device, there is no second implementation to choose: every run
+// goes to the daemon, and an agent that is not answering is an error,
 // never a silent downgrade.
+//
+// The table is therefore the full input space (2 facts × 2 probe results),
+// not a sample of it — which is the point: if a later change reintroduces
+// an input that steers somewhere else, there is nowhere for it to steer to.
 func TestChooseEnrollRoute(t *testing.T) {
 	tests := []struct {
-		name       string
-		facts      enrollFacts
-		daemonUp   bool
-		want       enrollRoute
-		wantProbed bool
+		name     string
+		facts    enrollFacts
+		daemonUp bool
+		want     enrollRoute
 	}{
 		{
-			name:       "daemon answers, service registered",
-			facts:      enrollFacts{serviceInstalled: true},
-			daemonUp:   true,
-			want:       routeDaemon,
-			wantProbed: true,
+			name:     "daemon answers, service registered",
+			facts:    enrollFacts{serviceInstalled: true},
+			daemonUp: true,
+			want:     routeDaemon,
 		},
 		{
-			name:       "daemon answers, no registered service (raw-binary dev run)",
-			facts:      enrollFacts{},
-			daemonUp:   true,
-			want:       routeDaemon,
-			wantProbed: true,
+			name:     "daemon answers, no registered service (raw-binary dev run)",
+			facts:    enrollFacts{},
+			daemonUp: true,
+			want:     routeDaemon,
 		},
 		{
-			name:       "service registered but never answers: loud failure, not local enroll",
-			facts:      enrollFacts{serviceInstalled: true},
-			daemonUp:   false,
-			want:       routeAgentDown,
-			wantProbed: true,
+			name:     "service registered but never answers: loud failure, not local enroll",
+			facts:    enrollFacts{serviceInstalled: true},
+			daemonUp: false,
+			want:     routeAgentDown,
 		},
 		{
-			name:       "nothing registered and nothing answering",
-			facts:      enrollFacts{},
-			daemonUp:   false,
-			want:       routeAgentAbsent,
-			wantProbed: true,
-		},
-		{
-			name:       "re-auth selects local enrollment without probing",
-			facts:      enrollFacts{renewing: true, serviceInstalled: true},
-			daemonUp:   false,
-			want:       routeLocal,
-			wantProbed: false,
-		},
-
-		// PRODUCT CONTRACT (#175): an auth key is a credential for the
-		// DAEMON's enrollment. Only the daemon can redeem one, so a run
-		// carrying a key must reach the daemon or fail saying why — it
-		// must NEVER fall back to a local enrollment that would drop the
-		// credential and register the host capability-less, which is the
-		// exact failure this issue exists to remove. The key therefore
-		// outranks every local selector.
-		{
-			name:       "--auth-key takes the daemon route",
-			facts:      enrollFacts{authKey: true, serviceInstalled: true},
-			daemonUp:   true,
-			want:       routeDaemon,
-			wantProbed: true,
-		},
-		{
-			name:       "--auth-key with a dead service fails, never local",
-			facts:      enrollFacts{authKey: true, serviceInstalled: true},
-			daemonUp:   false,
-			want:       routeAgentDown,
-			wantProbed: true,
-		},
-		{
-			name:       "--auth-key with no agent at all fails, never local",
-			facts:      enrollFacts{authKey: true},
-			daemonUp:   false,
-			want:       routeAgentAbsent,
-			wantProbed: true,
-		},
-		{
-			name:       "--auth-key overrides re-auth",
-			facts:      enrollFacts{authKey: true, renewing: true, serviceInstalled: true},
-			daemonUp:   true,
-			want:       routeDaemon,
-			wantProbed: true,
+			name:     "nothing registered and nothing answering",
+			facts:    enrollFacts{},
+			daemonUp: false,
+			want:     routeAgentAbsent,
 		},
 	}
 
@@ -108,12 +65,15 @@ func TestChooseEnrollRoute(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("chooseEnrollRoute() = %v, want %v", got, tt.want)
 			}
-			if probed != tt.wantProbed {
-				t.Errorf("probe called = %v, want %v", probed, tt.wantProbed)
+			// Every route is decided by the probe now; nothing short-circuits
+			// it. A fact that skipped the probe would be a fact that picked an
+			// implementation without asking whether the agent is there.
+			if !probed {
+				t.Error("probe was not called; every route decision must consult the agent")
 			}
 			// The probe waits longer for a registered service, so it must
 			// receive that fact verbatim rather than re-deriving it.
-			if probed && sawInstalled != tt.facts.serviceInstalled {
+			if sawInstalled != tt.facts.serviceInstalled {
 				t.Errorf("probe got serviceInstalled=%v, want %v", sawInstalled, tt.facts.serviceInstalled)
 			}
 		})
@@ -258,13 +218,11 @@ func TestDaemonRequiredError(t *testing.T) {
 	}
 }
 
-// The successful routes carry no error — the caller switches on the route
-// and only asks for an error on the two failing ones.
+// The one successful route carries no error — the caller switches on the
+// route and only asks for an error on the two failing ones.
 func TestDaemonRequiredErrorNilForSuccessfulRoutes(t *testing.T) {
-	for _, route := range []enrollRoute{routeDaemon, routeLocal} {
-		if err := daemonRequiredError(route, "linux", "hint"); err != nil {
-			t.Errorf("route %v: expected no error, got %v", route, err)
-		}
+	if err := daemonRequiredError(routeDaemon, "linux", "hint"); err != nil {
+		t.Errorf("route %v: expected no error, got %v", routeDaemon, err)
 	}
 }
 

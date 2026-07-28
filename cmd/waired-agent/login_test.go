@@ -65,6 +65,22 @@ func newTestLoginController(sb *switchboard, enroll enrollFunc, activate func(co
 	})
 }
 
+// newTestReauthController is the same, plus the reactivate hook a re-auth
+// needs. Separate so the tests above keep proving that a controller
+// WITHOUT one still serves every non-reauth login (#175).
+func newTestReauthController(sb *switchboard, enroll enrollFunc, activate, reactivate func(context.Context) error) *loginController {
+	return newLoginController(sb, loginControllerConfig{
+		StateDir:          "/tmp/does-not-matter",
+		DefaultControlURL: "https://cp.example",
+		Endpoint:          "udp4:127.0.0.1:0",
+		RootCtx:           context.Background(),
+		Activate:          activate,
+		Reactivate:        reactivate,
+		Logger:            testLogger(),
+		Enroll:            enroll,
+	})
+}
+
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func waitPhase(t *testing.T, lc *loginController, sessID string, want management.LoginPhase) management.LoginStatus {
@@ -301,6 +317,92 @@ func TestLoginIdempotentWhenAlreadyActive(t *testing.T) {
 	}
 	if atomic.LoadInt32(&fe.calls) != 0 {
 		t.Error("enroll must not run when already enrolled")
+	}
+}
+
+// PRODUCT CONTRACT (#175): Reauth is the one request that means "yes, I
+// know this device is enrolled — enrol it again anyway". It is what
+// replaced the standalone re-auth path, so if this stops working there is
+// no other way for an enrolled device to renew credentials its refresh
+// loop can no longer renew.
+//
+// This does not invert TestLoginIdempotentWhenAlreadyActive above: that
+// pins the no-op for a request that did NOT ask, and still does.
+func TestLoginReauthReenrollsALiveDevice(t *testing.T) {
+	sb := &switchboard{}
+	sb.publish(&session{provider: &agentProvider{id: &identity.Identity{DeviceID: "d1"}}})
+	fe := &fakeEnroll{result: &setup.EnrollResult{DeviceID: "d1", AccountEmail: "ops@example.com"}}
+
+	var activates, reactivates int32
+	lc := newTestReauthController(sb, fe.fn,
+		func(context.Context) error { atomic.AddInt32(&activates, 1); return nil },
+		func(context.Context) error { atomic.AddInt32(&reactivates, 1); return nil })
+
+	st, err := lc.Start(context.Background(), management.LoginStartRequest{Reauth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SessionID == "" {
+		t.Fatal("a re-auth must open a real session, not report the no-op status")
+	}
+	got := waitPhase(t, lc, st.SessionID, management.LoginPhaseActive)
+	if got.AccountEmail != "ops@example.com" {
+		t.Errorf("account email = %q, want the one the re-enrolment returned", got.AccountEmail)
+	}
+	if n := atomic.LoadInt32(&fe.calls); n != 1 {
+		t.Errorf("enroll ran %d times, want exactly 1", n)
+	}
+	// The live session is running on the credentials that were just
+	// replaced, so it has to be rebuilt — activate alone refuses to
+	// publish over a current session, and leaving it up would keep the
+	// daemon on tokens the control plane has rotated away from.
+	if atomic.LoadInt32(&reactivates) != 1 {
+		t.Errorf("reactivate ran %d times, want 1", reactivates)
+	}
+	if atomic.LoadInt32(&activates) != 0 {
+		t.Errorf("plain activate ran %d times on a re-auth, want 0", activates)
+	}
+}
+
+// A fresh daemon has no session to tear down, so a Reauth request there is
+// just a login. Worth pinning because the CLI sets the flag from "does
+// identity.json exist", which the daemon has no reason to agree with — a
+// state dir restored from backup, or an identity the daemon failed to
+// activate, both land here.
+func TestLoginReauthOnUnenrolledDaemonIsAPlainLogin(t *testing.T) {
+	sb := &switchboard{}
+	fe := &fakeEnroll{result: &setup.EnrollResult{DeviceID: "d1"}}
+
+	var activates, reactivates int32
+	lc := newTestReauthController(sb, fe.fn,
+		func(context.Context) error { atomic.AddInt32(&activates, 1); return nil },
+		func(context.Context) error { atomic.AddInt32(&reactivates, 1); return nil })
+
+	st, err := lc.Start(context.Background(), management.LoginStartRequest{Reauth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, lc, st.SessionID, management.LoginPhaseActive)
+	if atomic.LoadInt32(&activates) != 1 || atomic.LoadInt32(&reactivates) != 0 {
+		t.Errorf("activate=%d reactivate=%d; an unenrolled daemon has nothing to rebuild",
+			activates, reactivates)
+	}
+}
+
+// Refusing beats half-succeeding: with no way to rebuild the session, a
+// re-auth would rewrite the tokens on disk and leave the running session
+// using the old ones — an inconsistency nothing would report.
+func TestLoginReauthRefusedWithoutARebuildHook(t *testing.T) {
+	sb := &switchboard{}
+	sb.publish(&session{provider: &agentProvider{id: &identity.Identity{DeviceID: "d1"}}})
+	fe := &fakeEnroll{}
+	lc := newTestLoginController(sb, fe.fn, func(context.Context) error { return nil })
+
+	if _, err := lc.Start(context.Background(), management.LoginStartRequest{Reauth: true}); err == nil {
+		t.Fatal("want an error when the controller cannot rebuild the session")
+	}
+	if atomic.LoadInt32(&fe.calls) != 0 {
+		t.Error("enroll must not run when the rebuild it depends on is impossible")
 	}
 }
 

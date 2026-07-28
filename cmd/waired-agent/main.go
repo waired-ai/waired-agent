@@ -1398,23 +1398,28 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	// reactivate rebuilds the live session from the (now rotated) node key
-	// on disk: it tears down the current session and re-runs activate,
-	// which re-loads node.key and reconstructs the engine / multiplex-bind
-	// / relay factory / disco around it (#228). Serialised by its own mutex
-	// so a rotation cannot race a second rotation; the once-per-~150d
-	// cadence makes a race with a concurrent login implausible. Runs on a
-	// detached goroutine (the rotator triggers it via `go reactivate()`)
-	// because teardown cancels the rotator's own context.
+	// rebuildSession replaces the live session with one built from the
+	// state now on disk: it tears the current one down and re-runs
+	// activate, which re-loads node.key and reconstructs the engine /
+	// multiplex-bind / relay factory / disco around it (#228). Two callers
+	// need it — node-key rotation and a re-auth through the login
+	// controller (#175) — and both must be serialised against each other,
+	// so they share one mutex rather than each holding their own.
 	var reactivateMu sync.Mutex
-	reactivate = func() {
+	rebuildSession := func(parent context.Context) error {
 		reactivateMu.Lock()
 		defer reactivateMu.Unlock()
 		if s := sb.current(); s != nil {
 			s.teardown()
 		}
 		sb.reset()
-		if err := activate(ctx); err != nil {
+		return activate(parent)
+	}
+	// The rotator's entry point: same rebuild, error logged rather than
+	// returned. Runs on a detached goroutine (the rotator triggers it via
+	// `go reactivate()`) because teardown cancels the rotator's own context.
+	reactivate = func() {
+		if err := rebuildSession(ctx); err != nil {
 			logger.Error("re-activate after node-key rotation failed; device unenrolled until restart", "err", err)
 		}
 	}
@@ -1442,6 +1447,7 @@ func run(ctx context.Context, args []string) error {
 		Endpoint:          "udp4:" + *loginListen,
 		RootCtx:           ctx,
 		Activate:          activate,
+		Reactivate:        rebuildSession,
 		EnrollHTTPFor:     enrollHTTPFor,
 		Logger:            logger,
 	})

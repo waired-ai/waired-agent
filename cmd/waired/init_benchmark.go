@@ -327,6 +327,22 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 			case "pull_failed":
 				writePrompt(out, "Model download failed; skipping the interactive-performance check.")
 				return nil, false
+			case "disabled", "stopped":
+				// Terminal, the same way waitForBundledModel already treats
+				// them (init_pull.go): a subsystem that is off or parked will
+				// never report a ready model, so waiting is waiting for
+				// something nobody has asked to happen.
+				//
+				// This used to fall into the default arm below, which reads
+				// any unrecognised state as "engine is up, download in
+				// flight" — so `waired init --inference-enabled=false` sat on
+				// "Waiting for the model to finish downloading…" for the full
+				// ten-minute deadline and then reported it had given up, on a
+				// host with no model and no intention of getting one. Found
+				// by #175's installtest migration, which made this the path
+				// CI takes: ten minutes per leg, three legs, every PR.
+				writePrompt(out, "Local inference is off on this device; skipping the performance check.")
+				return nil, false
 			case "no_engine":
 				// On a fresh bundled install the engine is still being
 				// brought up at the first polls, so `no_engine` is transient

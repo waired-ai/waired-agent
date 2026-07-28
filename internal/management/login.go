@@ -38,6 +38,18 @@ type LoginStartRequest struct {
 	// guard already confines it to the local IPC socket (unix socket /
 	// named pipe) — the key never crosses the TCP listener.
 	AuthKey string `json:"auth_key,omitempty"`
+	// Reauth re-runs enrollment for a device that is ALREADY enrolled and
+	// active, replacing its tokens and certificate while keeping the same
+	// device (the control plane matches on the machine key and renews the
+	// row). Without it Start is an idempotent no-op on an active daemon,
+	// which is right for a repeated `waired init` but wrong for the one
+	// case that needs to reach the control plane again: re-auth (#175).
+	//
+	// An agent predating this field IGNORES it (handleLoginStart decodes
+	// leniently) and answers with the no-op status: active, and no session
+	// id. That is a version skew the CLI has to name rather than read as
+	// success — see runInitViaDaemon.
+	Reauth bool `json:"reauth,omitempty"`
 }
 
 // LoginStatus is returned by both /waired/v1/login/start and
@@ -58,7 +70,9 @@ type LoginStatus struct {
 // (Tailscale-model: the daemon, not a spawned CLI, drives enrollment),
 // so the tray/CLI never need polkit elevation. Start is idempotent /
 // single-flight: a second Start while a login is in flight returns the
-// existing session rather than spawning a second OAuth.
+// existing session rather than spawning a second OAuth, and a Start on an
+// already-active daemon reports active without re-enrolling — unless
+// LoginStartRequest.Reauth asks for exactly that.
 type LoginController interface {
 	// Start kicks off (or rejoins) a login session and returns its
 	// current status. It returns quickly; the browser OAuth + device
