@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: c3198f879fd99ec1
+sourceHash: db5cc01140e1a662
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -81,6 +81,11 @@ Sign in using this link:
 	閉じてしまうと、ブラウザに *「The setup command on … was closed before this finished.
 	Your progress was saved.」*と表示されます。同じコマンドを実行し直せば続きから進みます。
 	失われるものはなく、モデルのダウンロードはそのまま続いています。
+
+	実行し直してもサインインからやり直しにはなりません。*「Already signed in as
+	you@example.com — resuming setup」*と表示され、中断した続きから進みます。
+	あらためてサインインし直したい場合は `waired init --force-reauth` です。Waired が
+	自分からサインインし直すのは、既存のサインインが修復不能なほど期限切れのときだけです。
 </Aside>
 
 ## ブラウザで終える

@@ -64,12 +64,16 @@ type daemonInitOpts struct {
 	// AuthKey enrolls without a browser sign-in, for servers and
 	// containers.
 	AuthKey string
-	// Reauth is set when this host already has an identity. Without it the
-	// daemon treats a Start on an active session as an idempotent no-op
-	// and this function would print a successful sign-in for a run that
-	// renewed nothing (#175).
-	Reauth    bool
-	Inference daemonInitInference
+	// Reauth asks the daemon to re-authenticate a device that is already
+	// signed in. Without it a Start on an active session is an idempotent
+	// no-op, and this function resumes rather than printing a successful
+	// sign-in for a run that renewed nothing (#175, #313).
+	Reauth bool
+	// AccountEmail is what the daemon reports it is enrolled as, when the
+	// caller already asked. Used only to name the account in the resume
+	// notice: the no-op answer carries no session and no email of its own.
+	AccountEmail string
+	Inference    daemonInitInference
 	// Owner is the process-wide stdin reader, or nil off a TTY.
 	Owner *stdinReader
 }
@@ -105,21 +109,44 @@ func runInitViaDaemon(o daemonInitOpts) error {
 	if err := json.Unmarshal(out, &st); err != nil {
 		return fmt.Errorf("decode login start: %w", err)
 	}
+	// A daemon that is already signed in answers with its idempotent
+	// no-op: phase active, no session. There is nothing to poll and
+	// nothing to sign in to — the run picks up from there.
+	resuming := false
 	if st.SessionID == "" {
+		if st.Phase != management.LoginPhaseActive {
+			// No phase name in the copy: "unenrolled" / "logging_in" are
+			// this protocol's words, not the operator's, and the previous
+			// wording ("no login session id") is the whole reason #313
+			// read as a protocol bug rather than a working daemon.
+			return errors.New("the background service did not start a sign-in.\n" +
+				"  Run `waired init` again; if it keeps happening, `waired doctor` says what is wrong with the service")
+		}
 		// An agent too old to know about `reauth` ignores the field and
-		// answers with its idempotent no-op: active, no session. Saying
-		// "no session id" there would send the operator looking for a bug
-		// in a daemon that is working exactly as it was built to (#175).
-		if reauth && st.Phase == management.LoginPhaseActive {
+		// answers with the same no-op. Saying "no session id" there would
+		// send the operator looking for a bug in a daemon that is working
+		// exactly as it was built to (#175).
+		if reauth {
 			return errors.New("this device is signed in, but the background service is too old to renew that sign-in.\n" +
 				"  Update Waired, then run `waired init` again")
 		}
-		return errors.New("daemon did not return a login session id")
+		// #313: this is the resume NAVI prescribes for a stuck setup. It
+		// used to be reported as a protocol failure, which on Windows was
+		// the only outcome `waired init` had on an enrolled device.
+		resuming = true
+		if st.AccountEmail == "" {
+			st.AccountEmail = o.AccountEmail
+		}
 	}
 
-	if authKey != "" {
+	switch {
+	case resuming:
+		for _, line := range resumeLines(st.AccountEmail, authKey != "") {
+			fmt.Println(line)
+		}
+	case authKey != "":
 		fmt.Println(bold("Signing in with an auth key"))
-	} else {
+	default:
 		fmt.Println(bold("Sign in"))
 	}
 

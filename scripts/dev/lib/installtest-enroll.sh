@@ -382,6 +382,50 @@ assert_tier2() {
   fi
 }
 
+# assert_reinit_resumes: `waired init` on a device that is already signed
+# in must resume the setup, not fail (waired-agent#313).
+#
+# The leg is defined by what it does NOT pass: no --state-dir, the way an
+# operator types it and the way NAVI prescribes it for a stuck setup. On
+# Windows that combination failed on every enrolled device — the CLI
+# resolved a per-user dir the daemon does not use, found no identity,
+# asked for a plain login, and reported the daemon's idempotent no-op as
+# "daemon did not return a login session id". Here it is the parity bar:
+# root resolves the same /var/lib/waired the daemon reads, so this leg
+# pins the resume contract rather than reproducing the Windows defect.
+#
+# The auth key is deliberately still passed: an already-signed-in device
+# must not spend it (the `tailscale up` rule), and must say so.
+# Exactly three asserts, always — the tier-2 floor counts on it.
+assert_reinit_resumes() {
+  local guest="$1" name log rc=0
+  name="$(_it_dev_name "$guest")"
+  mkdir -p "$IT_LOGDIR"
+  log="$IT_LOGDIR/reinit-$name.log"
+
+  local -a args=(waired init --control "$IT_CONTROL_URL" --device-name "$name"
+    --non-interactive --skip-integration)
+  # Keyed on the key itself, not the mode: the daemon-path leg (oidc)
+  # never mints one, and an empty --auth-key is not the same argv.
+  [ -n "${IT_AUTH_KEY:-}" ] && args+=(--auth-key "$IT_AUTH_KEY")
+
+  it_log "re-running waired init in $guest with no --state-dir (waired-agent#313)"
+  gx "$guest" env WAIRED_NO_EMOJI=1 "${args[@]}" >"$log" 2>&1 || rc=$?
+  [ "$rc" = 0 ] && ok "re-init on an enrolled device exits 0 (no --state-dir)" \
+    || bad "re-init exited $rc — see $log"
+  grep -q 'resuming setup' "$log" \
+    && ok "re-init resumes setup instead of starting a sign-in" \
+    || bad "re-init did not resume — see $log"
+  if [ -n "${IT_AUTH_KEY:-}" ]; then
+    grep -q 'auth key was not used' "$log" \
+      && ok "re-init says the auth key went unused" \
+      || bad "re-init spent or silently dropped the auth key — see $log"
+  else
+    ok "no auth key to leave unused ($IT_ENROLL_MODE enrol)"
+  fi
+  [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
+}
+
 # Bundled engine path on Linux: install.sh now provisions waired's BUNDLED
 # Ollama (`waired runtimes install ollama`, #567) under the state dir — it
 # is NOT a system ollama on PATH, and it serves on the waired-owned port

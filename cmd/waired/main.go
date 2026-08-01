@@ -27,6 +27,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
+	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
@@ -58,6 +59,7 @@ type initFlags struct {
 	bundledModelID   string
 	mgmtURL          string
 	authKey          string
+	forceReauth      bool
 	maskPII          bool
 	skipClaudeRoute  bool
 }
@@ -115,6 +117,8 @@ func newInitCmd() *cobra.Command {
 		"Local Management API base URL. Sign-in is driven through the waired-agent running here (the Tailscale model); if nothing answers, init reports it instead of enrolling locally")
 	f.StringVar(&o.authKey, "auth-key", "",
 		"enroll with an auth key instead of a browser sign-in, for servers and containers. Accepts the key itself, \"file:/path/to/key\" (preferred on a shared host — a key in argv is visible in `ps`), or $WAIRED_AUTH_KEY when the flag is omitted. Create one in the Waired console. Requires the background service to be running: an auth key is a credential, not a way to skip the daemon.")
+	f.BoolVar(&o.forceReauth, "force-reauth", false,
+		"sign in again even though this device is already signed in. Without it, `waired init` on an enrolled device resumes setup and leaves the existing credentials alone — including when an --auth-key is passed, which is then not used. Re-authentication also happens on its own when the device's sign-in has expired beyond repair.")
 	f.BoolVar(&o.maskPII, "mask-pii", os.Getenv("WAIRED_PII_MASK") != "",
 		"mask personal information (home directory, username, hostname, account email) in init's output — for screenshots and bug reports. Best-effort; env form: WAIRED_PII_MASK=1 (set by the installers' --mask-pii / -MaskPII). Progress rendering falls back to plain lines while masking.")
 	f.BoolVar(&o.skipClaudeRoute, "skip-claude-route", os.Getenv("WAIRED_NO_CLAUDE_PROXY") != "",
@@ -142,6 +146,7 @@ func runInitBody(o *initFlags) error {
 	bundledModelID := &o.bundledModelID
 	mgmtURL := &o.mgmtURL
 	authKeyFlag := &o.authKey
+	forceReauth := &o.forceReauth
 
 	// Fall back to the installer-configured control URL (e.g. what
 	// `install.sh --control <URL>` wrote to /etc/waired/agent.env) when the
@@ -176,17 +181,28 @@ func runInitBody(o *initFlags) error {
 	}
 	in := promptReader(stdinOwner)
 
-	// `waired init` doubles as the re-auth entry point (gcloud-init
-	// style). When an existing identity is already on disk we:
+	// `waired init` is the entry point for an already-enrolled device too
+	// (gcloud-init style). When one is found we:
 	//   - Reuse its ControlURL / DeviceName when the operator didn't
 	//     pass new ones explicitly.
 	//   - Refuse to silently move the device to a *different* CP — the
 	//     operator must run `waired logout` first.
-	//   - Confirm before re-running the sign-in.
-	//   - Skip the coding-agent integration (auth-only refresh).
+	//
+	// Whether it also re-authenticates is a separate question, decided
+	// below from what the daemon says about its credentials (#313).
 	existing, idErr := identity.Load(*stateDir)
 	if idErr != nil {
 		return fmt.Errorf("load existing identity: %w", idErr)
+	}
+	// #313: the daemon is the authority on enrollment. This CLI's state
+	// dir can be the wrong one (an unelevated Windows run resolves
+	// %AppData% while the daemon reads %ProgramData%) or unreadable (a
+	// standard user against the ACL'd tree, waired#751) — and reading
+	// "not enrolled" off either used to turn a resume into a protocol
+	// error. Nil means "no answer", which leaves the disk's verdict.
+	view := daemonIdentity(*mgmtURL)
+	if existing == nil {
+		existing = identityFromView(view)
 	}
 	renewing := existing != nil
 	if renewing {
@@ -204,10 +220,18 @@ func runInitBody(o *initFlags) error {
 				*deviceName = existing.DeviceID
 			}
 		}
-		// Renew is auth-only; whatever hardware / integration state is
-		// already on disk stays untouched.
+	}
+	// Re-authenticating rotates this device's credentials, so it happens
+	// only when asked for or when the credentials are what is broken —
+	// the `tailscale up` split, where re-auth is its own flag and the
+	// plain command is idempotent. Everything else resumes.
+	reauth := reauthWanted(*forceReauth, view)
+	if reauth && renewing {
+		// Auth-only refresh: whatever hardware / integration state is
+		// already on disk stays untouched. A resume must NOT skip it —
+		// the coding-tool step is part of the setup being resumed.
 		*skipIntegration = true
-		if !confirmRenew(in, os.Stdout, existing, false, *nonInteractive) {
+		if !confirmRenew(in, os.Stdout, existing, *forceReauth, *nonInteractive) {
 			fmt.Println("Nothing changed.")
 			return nil
 		}
@@ -260,7 +284,8 @@ func runInitBody(o *initFlags) error {
 			SkipIntegration: *skipIntegration,
 			SkipClaudeRoute: o.skipClaudeRoute,
 			AuthKey:         authKey,
-			Reauth:          renewing,
+			Reauth:          reauth,
+			AccountEmail:    accountEmailFromView(view),
 			Inference: daemonInitInference{
 				Enabled: *inferenceEnabled,
 				Share:   *inferenceShare,
@@ -326,6 +351,10 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 	id, err := identity.Load(gf.StateDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
+			if notice, ok := unreadableSystemStateNotice(gf.StateDir, "waired status"); ok {
+				fmt.Println(notice)
+				return nil
+			}
 			return fmt.Errorf("permission denied reading state in %s — %s",
 				gf.StateDir, elevationHint("waired status"))
 		}
@@ -757,7 +786,7 @@ func prettyPrint(body []byte) error {
 // everything else → Interactive. $WAIRED_STATE_DIR and an explicit
 // --state-dir still override (paths.StateDir honours the env var first).
 func defaultStateDir() string {
-	return paths.StateDir(initStateDirMode(runtime.GOOS, os.Geteuid()))
+	return paths.StateDir(initStateDirMode(runtime.GOOS, os.Geteuid(), elevation.IsElevated()))
 }
 
 // defaultInitStateDir is the --state-dir default for `waired init`. It
@@ -767,20 +796,39 @@ func defaultStateDir() string {
 // line. Without this, `sudo waired init` would write identity to
 // /root/.config/waired (or root's ~/Library) and the daemon never sees
 // it: the device enrolls at the Control Plane but the local agent stays
-// unenrolled. os.Geteuid() returns -1 on Windows, so the guard is a
-// no-op there (Windows resolves System via the SCM probe instead).
+// unenrolled. On Windows the same split runs off elevation instead of
+// euid — see initStateDirMode.
 func defaultInitStateDir() string {
-	return paths.StateDir(initStateDirMode(runtime.GOOS, os.Geteuid()))
+	return paths.StateDir(initStateDirMode(runtime.GOOS, os.Geteuid(), elevation.IsElevated()))
 }
 
-// initStateDirMode is the testable core of defaultInitStateDir: root on
-// Linux or macOS → System (the service-owned dir the root daemon reads),
-// everything else → Interactive. macOS joined Linux here when its agent
-// became a system LaunchDaemon (#520); before that it was a per-user
-// LaunchAgent with no root/state split.
-func initStateDirMode(goos string, euid int) paths.Mode {
-	if (goos == "linux" || goos == "darwin") && euid == 0 {
-		return paths.System
+// initStateDirMode is the testable core of defaultInitStateDir: an
+// administrator targets the service-owned System dir the daemon reads,
+// everyone else gets their per-user one. macOS joined Linux here when its
+// agent became a system LaunchDaemon (#520); before that it was a
+// per-user LaunchAgent with no root/state split.
+//
+// Windows needs its own fact (#313). `os.Geteuid()` is -1 there, so a
+// euid guard is dead code — an elevated `waired init` resolved
+// %AppData%\waired while the daemon reads %ProgramData%\waired, and the
+// CLI then found no identity, sent Reauth=false, and reported the
+// daemon's idempotent no-op as a protocol error. Every invocation on an
+// enrolled Windows device failed that way; the installer's own init only
+// worked because it passes --state-dir explicitly.
+//
+// The old code deferred to "Windows resolves System via the SCM probe",
+// which is true of paths.AutoDetect and only of paths.AutoDetect — this
+// decision passes Interactive, so the probe never ran.
+func initStateDirMode(goos string, euid int, elevated bool) paths.Mode {
+	switch goos {
+	case "windows":
+		if elevated {
+			return paths.System
+		}
+	case "linux", "darwin":
+		if euid == 0 {
+			return paths.System
+		}
 	}
 	return paths.Interactive
 }

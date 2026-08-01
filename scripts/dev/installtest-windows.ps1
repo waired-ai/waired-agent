@@ -161,19 +161,24 @@ $script:ContractBlocking = @{
     '754' = $true    # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts (FIXED)
     '755' = $true    # waired#755: the install path surfaces the tray (Start Menu group / autostart) (FIXED)
     '838' = $true    # waired#838: management writes travel over the local named pipe, not TCP (FIXED)
+    '313' = $true    # waired-agent#313: `waired init` on an enrolled device resumes instead of failing (FIXED)
     '315' = $true    # waired#315: SCM recovery actions also fire on a non-crash failure exit (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
 function ItSoft {
-    param([string]$Issue, [bool]$Ok, [string]$m)
-    if ($Ok) { ItOk "$m (waired#$Issue)"; return }
+    # Repo names which tracker the issue lives in: the contract asserts
+    # started as monorepo-only, and an agent-repo number rendered as
+    # "waired#313" points at an unrelated issue.
+    param([string]$Issue, [bool]$Ok, [string]$m, [string]$Repo = 'waired')
+    $ref = "$Repo#$Issue"
+    if ($Ok) { ItOk "$m ($ref)"; return }
     if ($script:ContractBlocking[$Issue]) {
-        ItBad "$m (waired#$Issue fix merged -- blocking)"
+        ItBad "$m ($ref fix merged -- blocking)"
     } else {
-        Write-Host "[installtest] WARN $m (waired#$Issue open -- soft)" -ForegroundColor Yellow
+        Write-Host "[installtest] WARN $m ($ref open -- soft)" -ForegroundColor Yellow
         $script:Warn++
-        $script:WarnLines += "waired#${Issue}: $m"
+        $script:WarnLines += "${ref}: $m"
     }
 }
 
@@ -1326,6 +1331,42 @@ if ($Tier -ge 2) {
         }
         if ($enrolled) { ItOk "daemon read the enrolled state and reports an identity" }
         else { ItBad "daemon did not report enrolled" }
+
+        # waired-agent#313: re-init on an enrolled device. The point of the
+        # leg is what it does NOT pass -- no --state-dir, the way an operator
+        # types it, and the way NAVI prescribes it to resume a stuck setup.
+        # That is exactly what used to fail on every Windows box: the CLI
+        # resolved %AppData%\waired, found no identity, asked for a plain
+        # login, and reported the daemon's idempotent no-op as
+        # "daemon did not return a login session id".
+        #
+        # The auth key is deliberately still passed: an already-signed-in
+        # device must not spend it (the `tailscale up` rule), and must say so.
+        if ($authKey) {
+            ItStep "re-init on an enrolled device (waired-agent#313)"
+            $reinitLog  = Join-Path $Work 'reinit.log'
+            $reinitArgs = @(
+                'init'
+                '--control', $ControlUrl
+                '--auth-key', $authKey
+                '--device-name', $device
+                '--non-interactive'
+                '--skip-integration'
+            )
+            $env:WAIRED_NO_EMOJI = '1'
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            & $waired @reinitArgs 2>&1 | Tee-Object -FilePath $reinitLog
+            $reinitExit = $LASTEXITCODE
+            $ErrorActionPreference = $prevEap
+
+            ItSoft '313' ($reinitExit -eq 0) "re-init on an enrolled device exits 0 (no --state-dir)" -Repo 'waired-agent'
+            $resumed = Select-String -Path $reinitLog -Pattern 'resuming setup' -Quiet -ErrorAction SilentlyContinue
+            ItSoft '313' ([bool]$resumed) "re-init resumes setup instead of starting a sign-in" -Repo 'waired-agent'
+            $keyNoted = Select-String -Path $reinitLog -Pattern 'auth key was not used' -Quiet -ErrorAction SilentlyContinue
+            ItSoft '313' ([bool]$keyNoted) "re-init says the auth key went unused" -Repo 'waired-agent'
+            if (-not $resumed) { Get-Content -LiteralPath $reinitLog -Tail 20 | ForEach-Object { ItLog "    reinit| $_" } }
+        }
 
         # Cheap and fast, so they run before the minutes-long inference asserts.
         ItStep "service recovery-policy assert (waired#315)"

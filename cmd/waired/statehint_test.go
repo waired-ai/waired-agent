@@ -77,3 +77,29 @@ func TestSystemEnrolledElevationNotice(t *testing.T) {
 		}
 	}
 }
+
+// TestUnreadableSystemStateNoticeAt: a status query against an unreadable
+// SYSTEM dir is informational (waired#751), and against any other
+// unreadable dir it is not — an explicit --state-dir that cannot be read
+// is a real error, and calling it "enrolled system-wide" would send the
+// operator to elevate a prompt that would still fail.
+//
+// Reachable since waired-agent#313 made an elevated CLI target the System
+// dir: "elevated" does not imply "can read the service's ACL'd tree" —
+// a filtered/basic token (runas /trustlevel:0x20000) still reports
+// TokenIsElevated.
+func TestUnreadableSystemStateNoticeAt(t *testing.T) {
+	const sys = `C:\ProgramData\waired`
+	notice, ok := unreadableSystemStateNoticeAt(sys, sys, "waired status", "windows")
+	if !ok {
+		t.Fatal("an unreadable System dir did not produce a notice")
+	}
+	for _, want := range []string{sys, "elevation", "waired status"} {
+		if !strings.Contains(notice, want) {
+			t.Errorf("notice missing %q: %q", want, notice)
+		}
+	}
+	if _, ok := unreadableSystemStateNoticeAt(`D:\elsewhere`, sys, "waired status", "windows"); ok {
+		t.Error("an unreadable explicit --state-dir was reported as a system-wide enrollment")
+	}
+}

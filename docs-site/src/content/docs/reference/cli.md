@@ -69,9 +69,15 @@ is running it is also what performs the steps the browser setup page asks for**
 | `--device-name <name>` | Register this computer under a name you choose instead of its hostname. |
 | `--control <URL>` | Sign in against a specific control plane instead of the default. See [Advanced install options](/reference/install-options/). |
 | `--auth-key <key>` | Sign in with an auth key instead of a browser, for servers and containers. Also accepts `file:/path/to/key`, or reads `$WAIRED_AUTH_KEY` when the flag is omitted. Create one under **Settings → Auth keys** in the [web console](/guides/web-console/). See [Sign in and set up](/getting-started/first-run/#servers-and-containers-auth-keys). |
+| `--force-reauth` | Sign in again on a computer that is already signed in. Without it, `waired init` picks up where setup left off and leaves the existing sign-in alone — including when you pass `--auth-key`, which is then not used. |
 
 `waired init --help` is the authoritative list; it also carries developer and
 CI-only flags not shown here.
+
+Running it again on a computer that is already signed in is safe: it resumes
+setup rather than signing in from scratch, so you can run it as many times as
+you like. Waired signs in again by itself only when the existing sign-in has
+expired beyond repair.
 
 ### `waired status`
 

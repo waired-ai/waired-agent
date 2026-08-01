@@ -165,6 +165,118 @@ func TestRunInitViaDaemonNamesAnAgentTooOldToReauth(t *testing.T) {
 	}
 }
 
+// TestRunInitViaDaemonResumesAnEnrolledDevice is the #313 bar. The same
+// answer as the test above — active, no session id — but WITHOUT reauth
+// asked for, which is what every `waired init` on an enrolled Windows
+// device sent, because the CLI resolved a state dir the daemon does not
+// use and so found no identity to renew. It used to fail with "daemon
+// did not return a login session id"; NAVI hands operators this command
+// to resume a stuck setup, so setup was unresumable there.
+func TestRunInitViaDaemonResumesAnEnrolledDevice(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/waired/v1/login/start":
+			_ = json.NewEncoder(w).Encode(management.LoginStatus{Phase: management.LoginPhaseActive})
+		case "/waired/v1/status":
+			_, _ = w.Write([]byte(`{}`))
+		case "/waired/v1/inference/status":
+			_ = json.NewEncoder(w).Encode(management.InferenceStatus{SubsystemState: "disabled"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	out := captureStdout(t, func() {
+		err := runInitViaDaemon(daemonInitOpts{
+			MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+			GatewayBaseURL: "http://127.0.0.1:9473",
+			NoBrowser:      true, NonInteractive: true,
+			SkipIntegration: true, SkipClaudeRoute: true,
+			AccountEmail: "you@example.com",
+		})
+		if err != nil {
+			t.Errorf("re-init on an enrolled device failed: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Already signed in as you@example.com — resuming setup.") {
+		t.Errorf("the run did not announce the resume\n---\n%s", out)
+	}
+	if strings.Contains(out, "Sign in\n") {
+		t.Errorf("the run announced a sign-in it did not do\n---\n%s", out)
+	}
+}
+
+// An auth key is not spent on a device that is already signed in (the
+// `tailscale up` rule), and — unlike tailscale#7995 — it does not go
+// unmentioned either.
+func TestRunInitViaDaemonSaysTheAuthKeyWentUnused(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/waired/v1/login/start":
+			_ = json.NewEncoder(w).Encode(management.LoginStatus{Phase: management.LoginPhaseActive})
+		case "/waired/v1/status":
+			_, _ = w.Write([]byte(`{}`))
+		case "/waired/v1/inference/status":
+			_ = json.NewEncoder(w).Encode(management.InferenceStatus{SubsystemState: "disabled"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	out := captureStdout(t, func() {
+		if err := runInitViaDaemon(daemonInitOpts{
+			MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+			GatewayBaseURL: "http://127.0.0.1:9473",
+			NoBrowser:      true, NonInteractive: true,
+			SkipIntegration: true, SkipClaudeRoute: true,
+			AuthKey: "waired_ak_test", AccountEmail: "you@example.com",
+		}); err != nil {
+			t.Errorf("re-init with an auth key failed: %v", err)
+		}
+	})
+	if !strings.Contains(out, "The auth key was not used") {
+		t.Errorf("the unused auth key was passed over in silence\n---\n%s", out)
+	}
+	if strings.Contains(out, "Signing in with an auth key") {
+		t.Errorf("the run claimed to sign in with the key\n---\n%s", out)
+	}
+}
+
+// A no-session answer that is NOT the idempotent no-op is still a
+// failure — but one that names the phase instead of the protocol.
+func TestRunInitViaDaemonNamesAPhaselessStart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/waired/v1/login/start" {
+			_ = json.NewEncoder(w).Encode(management.LoginStatus{Phase: management.LoginPhaseUnenrolled})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	err := runInitViaDaemon(daemonInitOpts{
+		MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+		GatewayBaseURL: "http://127.0.0.1:9473",
+		NoBrowser:      true, NonInteractive: true, SkipIntegration: true,
+	})
+	if err == nil {
+		t.Fatal("want an error when the daemon starts no sign-in")
+	}
+	if !strings.Contains(err.Error(), "did not start a sign-in") {
+		t.Errorf("error should say what did not happen, got: %v", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "session id") {
+		t.Errorf("error leaks the protocol-level symptom: %v", err)
+	}
+}
+
 func TestRunInitViaDaemonSurfacesError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

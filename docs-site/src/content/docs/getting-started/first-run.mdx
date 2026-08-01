@@ -82,6 +82,11 @@ that keystroke, and picks up as soon as you are signed in.
 	If you close it, the browser says *“The setup command on … was closed before
 	this finished. Your progress was saved.”* Run the same command again to carry
 	on — nothing is lost, and any model download continues regardless.
+
+	Re-running it does not sign you in again: it says *“Already signed in as
+	you@example.com — resuming setup”* and picks up where it left off. Signing in
+	again is `waired init --force-reauth`, and Waired does it by itself only when
+	the existing sign-in has expired beyond repair.
 </Aside>
 
 ## Finish in the browser

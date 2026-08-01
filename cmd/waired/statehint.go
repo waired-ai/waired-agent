@@ -78,3 +78,27 @@ func capitalize(s string) string {
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
 }
+
+// unreadableSystemStateNotice turns a permission-denied state read into
+// the same informational answer an empty per-user dir gets (waired#751):
+// a status query says what would make it readable and exits 0.
+//
+// It fires only for the System dir. An explicit --state-dir or
+// $WAIRED_STATE_DIR that cannot be read is a genuine error — nothing
+// about it is "enrolled system-wide", and claiming so would send the
+// operator to elevate a prompt that would still fail.
+//
+// The case is reachable because "elevated" does not imply "can read the
+// service's ACL'd tree": a filtered/basic token (runas /trustlevel) still
+// reports TokenIsElevated, and since waired-agent#313 that is what picks
+// the System dir.
+func unreadableSystemStateNotice(stateDir, cmdline string) (string, bool) {
+	return unreadableSystemStateNoticeAt(stateDir, paths.StateDir(paths.System), cmdline, runtime.GOOS)
+}
+
+func unreadableSystemStateNoticeAt(stateDir, sysDir, cmdline, goos string) (string, bool) {
+	if filepath.Clean(stateDir) != filepath.Clean(sysDir) {
+		return "", false
+	}
+	return systemEnrolledElevationNotice(sysDir, cmdline, goos), true
+}

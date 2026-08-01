@@ -63,21 +63,34 @@ func TestSkipClaudeRouteFlagDefaultsFromEnv(t *testing.T) {
 	}
 }
 
+// TestInitStateDirMode covers all three OSes against the fact each one
+// actually has. The windows/elevated row INVERTS what this table pinned
+// before #313: `os.Geteuid()` is -1 on Windows, so the euid guard was a
+// no-op there and even an elevated `waired init` resolved the per-user
+// %AppData% dir — never the %ProgramData% one the daemon reads. The old
+// comment deferred to "System via the SCM probe", but that probe only
+// fires for paths.AutoDetect and this decision passes Interactive.
 func TestInitStateDirMode(t *testing.T) {
 	cases := []struct {
-		goos string
-		euid int
-		want paths.Mode
+		name     string
+		goos     string
+		euid     int
+		elevated bool
+		want     paths.Mode
 	}{
-		{"linux", 0, paths.System},         // sudo waired init -> /var/lib/waired (daemon's dir)
-		{"linux", 1000, paths.Interactive}, // non-root dev -> per-user
-		{"darwin", 0, paths.System},        // sudo waired init -> /Library (system LaunchDaemon's dir, #520)
-		{"darwin", 501, paths.Interactive}, // non-root dev / tray -> ~/Library
-		{"windows", -1, paths.Interactive}, // Geteuid()==-1 on Windows (System via SCM probe)
+		{"linux root", "linux", 0, true, paths.System},               // sudo waired init -> /var/lib/waired (daemon's dir)
+		{"linux user", "linux", 1000, false, paths.Interactive},      // non-root dev -> per-user
+		{"darwin root", "darwin", 0, true, paths.System},             // sudo waired init -> /Library (system LaunchDaemon's dir, #520)
+		{"darwin user", "darwin", 501, false, paths.Interactive},     // non-root dev / tray -> ~/Library
+		{"windows admin", "windows", -1, true, paths.System},         // #313: the daemon's %ProgramData%\waired
+		{"windows user", "windows", -1, false, paths.Interactive},    // standard user -> %AppData%
+		{"linux root not elevated", "linux", 0, false, paths.System}, // euid decides on Unix; elevated is the Windows fact
 	}
 	for _, c := range cases {
-		if got := initStateDirMode(c.goos, c.euid); got != c.want {
-			t.Errorf("initStateDirMode(%q, %d) = %v, want %v", c.goos, c.euid, got, c.want)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			if got := initStateDirMode(c.goos, c.euid, c.elevated); got != c.want {
+				t.Errorf("initStateDirMode(%q, %d, %v) = %v, want %v", c.goos, c.euid, c.elevated, got, c.want)
+			}
+		})
 	}
 }
