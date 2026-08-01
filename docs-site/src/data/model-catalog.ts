@@ -50,6 +50,12 @@ interface Manifest {
 	display_name?: string;
 	model_aliases?: string[];
 	variants?: Variant[];
+	/**
+	 * Set (to a reason) on models this build ships but does not offer —
+	 * today, the cheap fixture the routing sentinel pins on every PR.
+	 * They must not appear in a table a reader would shop from.
+	 */
+	internal_only?: string;
 }
 
 export interface CatalogRow {
@@ -84,14 +90,28 @@ function humanizeParams(n: number): string {
 	return `${n}`;
 }
 
-/** loadCatalog returns one row per bundled manifest, smallest first. */
+/**
+ * loadCatalog returns one row per OFFERED bundled manifest, smallest
+ * first.
+ *
+ * The Go side filters internal-only entries inside
+ * catalog.BundledManifests, which every other surface goes through.
+ * This loader reads the JSON files directly at build time, so it is the
+ * one place that has to repeat the rule — hence the assertion in the
+ * test that the two agree.
+ */
 export function loadCatalog(): CatalogRow[] {
 	const files = readdirSync(BUNDLED_DIR)
 		.filter((f) => f.endsWith('.json'))
 		.sort();
 
-	const rows: CatalogRow[] = files.map((file) => {
-		const m: Manifest = JSON.parse(readFileSync(join(BUNDLED_DIR, file), 'utf8'));
+	const rows: CatalogRow[] = files
+		.map((file): [Manifest, string] => [
+			JSON.parse(readFileSync(join(BUNDLED_DIR, file), 'utf8')) as Manifest,
+			file,
+		])
+		.filter(([m]) => !m.internal_only)
+		.map(([m]) => {
 		const variants = m.variants ?? [];
 
 		const ollamaRam = variants

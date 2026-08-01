@@ -41,6 +41,30 @@ type Manifest struct {
 	Runtime       RuntimePolicy `json:"runtime"`
 	Variants      []Variant     `json:"variants"`
 	Security      Security      `json:"security"`
+
+	// InternalOnly, when non-empty, keeps this model out of everything a
+	// person sees or is given: auto-selection, the install picker
+	// (including its below-the-floor fallback for under-spec hosts), the
+	// tray catalog, the control plane's device catalog, `models ls
+	// --detail`, and the generated docs tables. The value is the REASON
+	// it is withheld.
+	//
+	// It does NOT make the model unresolvable. An internal entry still
+	// resolves by model id or alias, still pulls, and still serves —
+	// that is the whole point. The routing sentinel needs a real
+	// catalog model cheap enough to pull on every PR across three
+	// operating systems, and the daemon resolves the pinned
+	// `--inference-bundled-model-id` against this catalog, so a test
+	// fixture cannot simply live outside it.
+	//
+	// A reason string rather than a bool, for the same reason the
+	// agent-grade store's "unmeasurable" map carries reasons: an
+	// exemption nobody has to justify is an exemption nobody revisits.
+	//
+	// Withholding is orthogonal to quality. quality_tier and the install
+	// quality floor answer "is this good enough to recommend"; this
+	// answers "is this ours to offer at all".
+	InternalOnly string `json:"internal_only,omitempty"`
 }
 
 // RuntimePolicy expresses the manifest author's runtime preference.
@@ -199,10 +223,51 @@ const (
 	VendorSupportUnsupported  = "unsupported"  // does not work; picker must exclude
 )
 
-// BundledManifests decodes every JSON file under proto/catalog/bundled
-// into a Manifest. They are sorted alphabetically by file name so the
-// order is deterministic across builds.
+// BundledManifests decodes the models this build OFFERS: every JSON
+// file under proto/catalog/bundled except those marked InternalOnly.
+// They are sorted alphabetically by file name so the order is
+// deterministic across builds.
+//
+// "Offered" is the default on purpose. Every surface that shows a model
+// to a person or picks one on their behalf — auto-selection, the
+// install picker and its under-spec fallback, the tray catalog, the
+// control plane's device catalog, `models ls --detail`, the generated
+// docs table — reaches the catalog through this one function. Filtering
+// HERE means a surface that forgets the distinction shows too little
+// rather than too much, and too little is recoverable.
+//
+// The inverse default was considered and rejected: it would put the
+// obligation on every present and future caller, and one miss is the
+// defect class this exists to prevent — a model nobody should be
+// offered turning up as somebody's recommendation.
+//
+// Callers that must see EVERY entry — model-name resolution, tier
+// lookup for usage ingest, the catalog tooling that validates the whole
+// set — call BundledManifestsIncludingInternal and say why.
 func BundledManifests() ([]Manifest, error) {
+	all, err := BundledManifestsIncludingInternal()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Manifest, 0, len(all))
+	for _, m := range all {
+		if m.InternalOnly != "" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// BundledManifestsIncludingInternal decodes every JSON file under
+// proto/catalog/bundled, including entries marked InternalOnly.
+//
+// Use it only where the question is "does this name resolve" rather
+// than "what may we offer". An internal model has to stay resolvable:
+// the routing sentinel pins one as the daemon's bundled model, and a
+// device already serving one still has to resolve to a quality tier
+// when its usage is ingested.
+func BundledManifestsIncludingInternal() ([]Manifest, error) {
 	entries, err := bundledFS.ReadDir("bundled")
 	if err != nil {
 		return nil, fmt.Errorf("catalog: read bundled dir: %w", err)

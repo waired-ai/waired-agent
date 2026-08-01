@@ -60,7 +60,12 @@ var bundledOnce = sync.OnceValue(func() []Manifest {
 	// A decode failure of the embedded catalog would be a build defect
 	// (the bundled files are validated by tests); degrade to "no tier
 	// info" rather than panicking in a server hot path.
-	ms, err := BundledManifests()
+	//
+	// Including internal models: this resolves names a device is
+	// ALREADY serving — usage ingest, Public Share matchmaking — so
+	// withholding one from the offer surfaces must not make its traffic
+	// unattributable.
+	ms, err := BundledManifestsIncludingInternal()
 	if err != nil {
 		return nil
 	}

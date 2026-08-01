@@ -52,9 +52,19 @@ const (
 	VendorSupportUnsupported  = protocatalog.VendorSupportUnsupported
 )
 
-// BundledManifests decodes the catalog embedded in proto/catalog/bundled.
+// BundledManifests decodes the models this build OFFERS from the
+// catalog embedded in proto/catalog/bundled. Entries marked
+// InternalOnly are excluded — see the proto function for why that is
+// the default.
 func BundledManifests() ([]Manifest, error) {
 	return protocatalog.BundledManifests()
+}
+
+// BundledManifestsIncludingInternal decodes every embedded manifest,
+// including the internal-only ones. Only for callers answering "does
+// this name resolve", never "what may we offer".
+func BundledManifestsIncludingInternal() ([]Manifest, error) {
+	return protocatalog.BundledManifestsIncludingInternal()
 }
 
 // LookupByAlias finds the first manifest whose ModelID equals name or

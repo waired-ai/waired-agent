@@ -226,7 +226,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	isPaused := deps.IsPaused
 	isInferenceDisabled := deps.IsInferenceDisabled
 	inferenceState := deps.InferenceState
-	manifests, err := catalog.BundledManifests()
+	// Including internal models: this list backs model-name RESOLUTION
+	// for the router and gateway. An internal entry has to resolve —
+	// the routing sentinel pins one as this daemon's bundled model —
+	// and withholding it here would 404 the very request that proves
+	// routing works. What must not offer it are the pickers, and those
+	// take the filtered list.
+	manifests, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return nil, nil, fmt.Errorf("inference: load bundled manifests: %w", err)
 	}
@@ -3097,7 +3103,9 @@ func variantSHAForActive() string {
 	if st.Active == nil {
 		return ""
 	}
-	manifests, err := catalog.BundledManifests()
+	// Including internal models: the active model may BE one (CI pins
+	// it), and a device serving a model it cannot name reads as broken.
+	manifests, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return ""
 	}

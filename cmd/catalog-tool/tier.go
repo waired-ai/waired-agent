@@ -33,7 +33,7 @@ func runTier(args []string) error {
 		return err
 	}
 
-	manifests, err := catalog.BundledManifests()
+	manifests, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return fmt.Errorf("tier: load bundled catalog: %w", err)
 	}

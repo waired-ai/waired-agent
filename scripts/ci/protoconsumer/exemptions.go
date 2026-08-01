@@ -46,6 +46,8 @@ var receiveOnly = []exemption{
 		"bundled catalog manifest field; authored upstream, decoded here"},
 	{reflect.TypeFor[catalog.VariantSource](), "Tag",
 		"bundled catalog manifest field; authored upstream, decoded here"},
+	{reflect.TypeFor[catalog.Manifest](), "InternalOnly",
+		"withholds a shipped model from every offer surface; authored in the manifest, read by BundledManifests"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "LlamaCPP",
 		"vendor×runtime support cell; authored in the catalog, read by the picker"},
 	{reflect.TypeFor[catalog.VendorRuntimeSupport](), "MLX",
