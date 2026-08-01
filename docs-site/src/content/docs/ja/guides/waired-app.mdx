@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 0c7f8b5cc4a42e8a
+sourceHash: 5de315f2cf2cea86
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -89,13 +89,19 @@ import Expected from '../../../../components/Expected.astro';
 
 | 項目 | 内容 |
 |---|---|
-| **Enable / Disable inference engine** | このパソコンで AI を動かすかどうか。無効でも、**ほかの**パソコンの AI は使えます。 |
+| **Pause / Resume local inference** | このパソコンが AI リクエストに応答するかどうか。停止中でも**ほかの**パソコンの AI は使えます。モデルは**載ったまま**なので再開は一瞬です。 |
 | **Start / Stop inference engine** | 設定を変えずに、いますぐエンジンを止めてメモリ（数 GB）を解放します。再開するとモデルを読み直します。 |
 | **Install Ollama…** | AI ソフトウェアが未導入のときに表示されます。 |
 | **Share engine to mesh** | **自分のほかのパソコン**にこのマシンの AI を使わせるかどうか。オフでも自分では使えます。 |
 | **Engine: ready / loading / disabled** | エンジンの状態と、読み込まれているモデル。 |
 | **Reachable** | いま通信できている自分のパソコンの台数。 |
 | **Inference worker** | このパソコンのリクエストの行き先（下記）。 |
+
+<Aside type="note" title="Pause と Stop は別のボタンです">
+	**Pause local inference** は応答を止めるだけで、モデルはメモリに載ったまま
+	（再開のコストがゼロ）です。メモリを返すのは **Stop inference engine** の方です。
+	数 GB を空けたくて来たなら Stop を選んでください。
+</Aside>
 
 ### どのマシンが答えるか
 
@@ -182,8 +188,13 @@ import Expected from '../../../../components/Expected.astro';
 
 ## 終了する
 
-**Quit** はアイコンを閉じるだけです。Waired は動き続け、ほかのパソコンからも
-このマシンに届き、コーディングツールもそのまま動きます。
+**Quit** はアイコンを閉じると同時に、このパソコンを片付けます。AI エンジンを止めて
+メモリを返し、誰も操作していない間はほかのパソコンから処理が回ってこないようにします。
+Waired 自体はバックグラウンドで動き続け、コーディングツールもそのまま使えます
+（ほかのパソコンか、クラウドに回ります）。
+
+設定は何も失われません。共有の設定はそのままなので、アイコンを起動し直せば
+このパソコンは元どおり AI を提供します。共有をオフにしていたなら、オフのままです。
 
 アイコンを戻すには、アプリ一覧から Waired を起動するか、
 （**Start Waired on login** にチェックがあれば）パソコンにサインインし直します。

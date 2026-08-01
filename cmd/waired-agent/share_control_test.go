@@ -80,6 +80,86 @@ func TestShareController_EmptyInitialMeansShared(t *testing.T) {
 	}
 }
 
+// --- #316 session suspension (live-only) ---
+
+// TestShareController_SuspendWithholdsWithoutPersisting is the PRODUCT
+// CONTRACT the tray's Quit path depends on: peers stop being served
+// immediately, but nothing is written to disk, so the operator's sharing
+// preference survives. Persisting not_shared here instead would revoke
+// that preference for good the first time someone closed the tray.
+func TestShareController_SuspendWithholdsWithoutPersisting(t *testing.T) {
+	dir := t.TempDir()
+	sc := newShareController(dir, state.ShareMeshShared, nil)
+
+	if err := sc.Suspend(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sc.IsShared() {
+		t.Error("suspended agent still reports shared; peers would keep routing to it")
+	}
+	if !sc.IsShareDenied() {
+		t.Error("IsShareDenied must be true while suspended — it gates the peer overlay")
+	}
+	if !sc.IsSuspended() {
+		t.Error("IsSuspended = false after Suspend")
+	}
+	if got, err := state.ReadDesiredShareMesh(dir); err != nil {
+		t.Fatal(err)
+	} else if got != "" {
+		t.Errorf("desired-share was written (%q); a suspension must persist nothing", got)
+	}
+	cur, desired := sc.State()
+	if cur != state.ShareMeshNotShared {
+		t.Errorf("current = %q, want not_shared while suspended", cur)
+	}
+	if desired != state.ShareMeshShared {
+		t.Errorf("desired = %q, want the operator's choice (shared) to survive", desired)
+	}
+
+	if err := sc.Unsuspend(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !sc.IsShared() {
+		t.Error("Unsuspend did not restore sharing")
+	}
+}
+
+// A suspension must never turn sharing ON: lifting it returns to the
+// persisted choice, which may well be not_shared.
+func TestShareController_UnsuspendKeepsOperatorOff(t *testing.T) {
+	dir := t.TempDir()
+	sc := newShareController(dir, state.ShareMeshNotShared, nil)
+
+	if err := sc.Suspend(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.Unsuspend(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sc.IsShared() {
+		t.Error("Unsuspend turned sharing on; it must only lift the override")
+	}
+}
+
+// An explicit operator toggle clears the session override, so a stale
+// suspension can never swallow the very action the operator just took.
+func TestShareController_ExplicitToggleClearsSuspension(t *testing.T) {
+	dir := t.TempDir()
+	sc := newShareController(dir, state.ShareMeshShared, nil)
+	if err := sc.Suspend(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.Share(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sc.IsSuspended() {
+		t.Error("Share left the suspension latched")
+	}
+	if !sc.IsShared() {
+		t.Error("Share did not take effect while suspended")
+	}
+}
+
 func TestShareController_StateReportsDesiredFromDisk(t *testing.T) {
 	dir := t.TempDir()
 	sc := newShareController(dir, state.ShareMeshShared, nil)

@@ -262,6 +262,27 @@ func (a sbShareControl) Unshare(ctx context.Context) error {
 	return errNotEnrolled
 }
 
+func (a sbShareControl) Suspend(ctx context.Context) error {
+	if s := a.sb.current(); s != nil && s.shareControl != nil {
+		return s.shareControl.Suspend(ctx)
+	}
+	return errNotEnrolled
+}
+
+func (a sbShareControl) Unsuspend(ctx context.Context) error {
+	if s := a.sb.current(); s != nil && s.shareControl != nil {
+		return s.shareControl.Unsuspend(ctx)
+	}
+	return errNotEnrolled
+}
+
+func (a sbShareControl) IsSuspended() bool {
+	if s := a.sb.current(); s != nil && s.shareControl != nil {
+		return s.shareControl.IsSuspended()
+	}
+	return false
+}
+
 func (a sbShareControl) State() (current, desired state.ShareMeshState) {
 	if s := a.sb.current(); s != nil && s.shareControl != nil {
 		return s.shareControl.State()

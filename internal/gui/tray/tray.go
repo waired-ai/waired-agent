@@ -433,7 +433,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// paint's (false,false) visibility diffs stay no-ops.
 		t.miInference = systray.AddMenuItem("Inference", "Local inference engine status and controls")
 		t.miInference.Hide()
-		t.miInferenceToggle = t.miInference.AddSubMenuItem("", "")
+		t.miInferenceToggle = t.miInference.AddSubMenuItem("", tipInferenceToggle)
 		t.miInferenceState = t.miInference.AddSubMenuItem("", "")
 		t.miInferenceState.Disable()
 		t.miEngineToggle = t.miInference.AddSubMenuItem("", "Hard-stop the engine to free memory, or restart it")
@@ -644,6 +644,11 @@ func (t *tray) onReady(ctx context.Context) func() {
 			idx := i
 			go t.dispatchPublicUseModeClicks(ctx, idx)
 		}
+
+		// Lift any share suspension a previous Quit left behind, before
+		// the first poll renders the share row (#316). Off the GUI
+		// thread: it is an IPC round trip.
+		go t.resumeSharingOnStart(ctx)
 
 		go t.handleClicks(ctx)
 		go t.pollLoop(ctx)
@@ -878,7 +883,10 @@ func (t *tray) handleClicks(ctx context.Context) {
 		case <-t.miInferenceToggle.ClickedCh:
 			t.onInferenceToggle(ctx)
 		case <-t.miEngineToggle.ClickedCh:
-			t.onEngineToggle(ctx)
+			// Stopping the engine waits for the process to actually die,
+			// which can take seconds. Dispatch so a slow stop cannot
+			// freeze every other menu item behind it (#316).
+			go t.onEngineToggle(ctx)
 		case <-t.miInstallEngine.ClickedCh:
 			go t.onInstallEngine(ctx)
 		case <-t.miShareToggle.ClickedCh:
@@ -909,17 +917,49 @@ func (t *tray) handleClicks(ctx context.Context) {
 	}
 }
 
-// onQuit runs the hard-stop on tray exit (#186): quitting the tray frees
-// the engine's VRAM/RAM. Best-effort and bounded — the tray must not hang
-// on a slow/unreachable daemon, and the daemon-side SIGTERM→SIGKILL
-// continues server-side after this call returns. The daemon itself keeps
-// running (the engine is left parked); a later Start brings it back.
+// quitBudget bounds how long Quit may wait on the daemon. It is generous
+// compared to the pre-#316 2s because the calls it makes are now worth
+// waiting for — but it is only a bound on the WAIT: since the daemon
+// commits to the kill, giving up here no longer abandons a live engine.
+const quitBudget = 5 * time.Second
+
+// onQuit winds this machine down on tray exit: the engine is hard-stopped
+// so its VRAM/RAM comes back (#186), and sharing is suspended so mesh
+// peers stop routing work here while nobody is at the keyboard (#316).
+// The daemon itself keeps running; the next tray start resumes sharing
+// and a later Start brings the engine back.
+//
+// Both calls are best-effort — an old daemon (404), reuse mode (409), or
+// a daemon already down are all expected on the way out. Unlike the
+// pre-#316 version, abandoning the stop mid-flight is now safe rather
+// than merely hoped-for: the daemon runs the kill to completion under its
+// own budget, so a timeout here means "we stopped watching", not "the
+// engine survived".
 func (t *tray) onQuit() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), quitBudget)
 	defer cancel()
-	// Best-effort: an old daemon (no engine control), reuse mode (409), or
-	// a daemon already down are all expected on the way out and ignored.
+	// Suspend first: withdrawing from the mesh is a local flag flip, so
+	// peers stop being routed here before the engine they would have been
+	// routed to disappears. The reverse order strands in-flight peer
+	// requests against a dying engine.
+	_ = t.cli.SuspendShare(ctx)
 	_ = t.cli.StopEngine(ctx)
+}
+
+// resumeSharingOnStart lifts any share suspension left by a previous
+// Quit. Sharing is suspended for exactly as long as the tray is closed,
+// which is the whole point of it being live-only state (#316): the
+// operator's persisted choice was never touched, so this only removes the
+// override — an operator who turned sharing off stays off.
+//
+// Best-effort and silent: a daemon that predates the override answers
+// 404, and a daemon that is down will be re-polled soon enough.
+func (t *tray) resumeSharingOnStart(ctx context.Context) {
+	c, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	if err := t.cli.ResumeShare(c); err != nil {
+		slog.Debug("tray: resume sharing on start", "err", err)
+	}
 }
 
 // ensureAutostartOnFirstLaunch registers the per-user "launch on
@@ -1135,13 +1175,13 @@ func (t *tray) onInferenceToggle(ctx context.Context) {
 	t.mu.Unlock()
 	slog.Debug("tray: menu action", "action", "inference-toggle", "want", action)
 	switch action {
-	case "Disable inference engine":
+	case labelPauseInference:
 		if err := t.cli.DisableInference(ctx); err != nil {
-			showError(fmt.Sprintf("Disable inference failed: %v", err))
+			showError(fmt.Sprintf("Pause inference failed: %v", err))
 		}
-	case "Enable inference engine":
+	case labelResumeInference:
 		if err := t.cli.EnableInference(ctx); err != nil {
-			showError(fmt.Sprintf("Enable inference failed: %v", err))
+			showError(fmt.Sprintf("Resume inference failed: %v", err))
 		}
 	}
 	go t.pollOnce(ctx)
@@ -1158,11 +1198,11 @@ func (t *tray) onEngineToggle(ctx context.Context) {
 	t.mu.Unlock()
 	slog.Debug("tray: menu action", "action", "engine-toggle", "want", action)
 	switch action {
-	case "Stop inference engine":
+	case labelStopEngine:
 		if err := t.cli.StopEngine(ctx); err != nil {
 			showError(fmt.Sprintf("Stop inference engine failed: %v", err))
 		}
-	case "Start inference engine":
+	case labelStartEngine:
 		if err := t.cli.StartEngine(ctx); err != nil {
 			showError(fmt.Sprintf("Start inference engine failed: %v", err))
 		}
@@ -1473,11 +1513,11 @@ func (t *tray) onShareToggle(ctx context.Context) {
 	t.mu.Unlock()
 	slog.Debug("tray: menu action", "action", "share-toggle", "want", action)
 	switch action {
-	case "Stop sharing engine to mesh":
+	case labelStopSharing:
 		if err := t.cli.DisableShare(ctx); err != nil {
 			showError(fmt.Sprintf("Stop sharing failed: %v", err))
 		}
-	case "Share engine to mesh":
+	case labelStartSharing:
 		if err := t.cli.EnableShare(ctx); err != nil {
 			showError(fmt.Sprintf("Share failed: %v", err))
 		}

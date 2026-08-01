@@ -62,7 +62,7 @@ func TestUpdate_ShareHiddenWhenDaemonDoesntSupportIt(t *testing.T) {
 		t.Errorf("ShareStateLabel=%q, want empty when daemon predates share API", got.ShareStateLabel)
 	}
 	// Engine toggle must still render.
-	if got.InferenceToggleAction != "Disable inference engine" {
+	if got.InferenceToggleAction != "Pause local inference" {
 		t.Errorf("inference toggle must still render: %q", got.InferenceToggleAction)
 	}
 }
@@ -102,8 +102,8 @@ func TestUpdate_ShareVisibleWhenInferenceDisabled(t *testing.T) {
 	if got.ShareToggleAction != "Stop sharing engine to mesh" {
 		t.Errorf("ShareToggleAction=%q, want Stop sharing engine to mesh", got.ShareToggleAction)
 	}
-	if got.InferenceToggleAction != "Enable inference engine" {
-		t.Errorf("InferenceToggleAction=%q, want Enable inference engine", got.InferenceToggleAction)
+	if got.InferenceToggleAction != "Resume local inference" {
+		t.Errorf("InferenceToggleAction=%q, want the soft-gate resume label", got.InferenceToggleAction)
 	}
 }
 
@@ -138,5 +138,34 @@ func TestUpdate_ShareHiddenWhenNotConnectedOrDisconnected(t *testing.T) {
 				t.Errorf("share fields must be empty for %s, got %+v", c.name, got)
 			}
 		})
+	}
+}
+
+// TestUpdate_ShareSuspended pins how the live-only session override
+// renders (#316). It is normally invisible — the tray lifts the
+// suspension when it starts — so a user only ever sees this if that lift
+// did not land. In that case the row must not offer "Stop sharing" for
+// something already withheld: it offers the action that clears the
+// override, and the state line says paused rather than enabled.
+//
+// PRODUCT CONTRACT: share_with_mesh keeps reporting the operator's
+// persisted choice while suspended, so the two fields must be read
+// together.
+func TestUpdate_ShareSuspended(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
+	st := &management.Status{Phase: "active"}
+	inf := &management.InferenceStatus{
+		SubsystemState: "ready",
+		DesiredState:   "enabled",
+		ShareWithMesh:  "shared",
+		ShareSuspended: true,
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
+
+	if got.ShareToggleAction != "Share engine to mesh" {
+		t.Errorf("ShareToggleAction=%q, want the action that clears the suspension", got.ShareToggleAction)
+	}
+	if got.ShareStateLabel != "Sharing: paused" {
+		t.Errorf("ShareStateLabel=%q, want Sharing: paused", got.ShareStateLabel)
 	}
 }

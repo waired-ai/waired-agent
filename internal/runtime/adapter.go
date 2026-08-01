@@ -99,11 +99,25 @@ type Spawner interface {
 	Spawn(ctx context.Context, binary string, args, env []string, logW io.Writer) (RunningProcess, error)
 }
 
+// ErrSignalUnsupported is returned by RunningProcess.Signal on platforms
+// that cannot deliver a signal to an arbitrary process — Windows, which
+// has no SIGTERM equivalent. Callers MUST escalate to Kill immediately
+// instead of waiting out a grace period the child was never asked to
+// honour: the pre-#316 spawner returned nil here, so every Windows stop
+// burned the full StopTimeout before escalating and lost the race with
+// the caller's own (shorter) budget.
+var ErrSignalUnsupported = errors.New("runtime: process signals are not supported on this platform")
+
 // RunningProcess abstracts an started OS process.
 type RunningProcess interface {
 	PID() int
 	Done() <-chan struct{}
 	Err() error
+	// Signal requests a graceful stop. It returns ErrSignalUnsupported
+	// when the platform cannot deliver signals at all — that is not a
+	// transient failure and the caller must go straight to Kill. Any
+	// other error means the signal was not delivered to THIS process
+	// (typically because it already exited) and is safe to ignore.
 	Signal(sig os.Signal) error
 	Kill() error
 }

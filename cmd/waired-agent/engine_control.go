@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -32,14 +33,26 @@ func newEngineController(ctx context.Context, ollama *infruntime.OllamaAdapter, 
 	return &engineController{ollama: ollama, agentCtx: ctx, logger: logger}
 }
 
+// engineStopBudget bounds a hard stop end to end: the adapter's graceful
+// grace period plus its post-kill reap, both StopTimeout (5s by default),
+// plus headroom. It is deliberately larger than any client budget — the
+// kill runs to completion regardless of who is still listening.
+const engineStopBudget = 15 * time.Second
+
 // StopEngine hard-stops the engine (SIGTERM→SIGKILL) and latches it
-// parked. Synchronous and bounded by the adapter's StopTimeout — the
-// caller learns the memory was actually freed before the HTTP response.
+// parked. Synchronous — the caller learns the memory was actually freed
+// before the HTTP response — but the caller's context bounds only how
+// long IT waits, never how long the kill runs (#316). Dropping the
+// request context here matters twice: a tray that gives up at 3s must not
+// truncate the SIGTERM grace period on Unix, and it must never leave a
+// live engine behind a latched "stopped" power state.
 func (e *engineController) StopEngine(ctx context.Context) error {
 	if e.logger != nil {
 		e.logger.Info("engine controller: hard stop requested")
 	}
-	err := e.ollama.Park(ctx)
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), engineStopBudget)
+	defer cancel()
+	err := e.ollama.Park(stopCtx)
 	if e.logger != nil {
 		e.logger.Debug("engine controller: hard stop result", "ok", err == nil)
 	}

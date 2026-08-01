@@ -3,7 +3,6 @@ package tray
 import (
 	"net/http"
 	"strings"
-	"time"
 )
 
 // newTestClient returns a Client whose WRITE path targets baseURL (an
@@ -17,6 +16,10 @@ import (
 func newTestClient(baseURL string) *Client {
 	c := NewClient(baseURL)
 	c.writeBase = strings.TrimRight(baseURL, "/")
-	c.wc = &http.Client{Timeout: 3 * time.Second}
+	c.wc = &http.Client{Timeout: writeTimeout}
+	// Keep the two budgets distinct, as production does: a test that
+	// leans on the engine endpoints outlasting the cheap ones (#316)
+	// must fail here if that separation is ever collapsed.
+	c.wcEngine = &http.Client{Timeout: engineWriteTimeout}
 	return c
 }

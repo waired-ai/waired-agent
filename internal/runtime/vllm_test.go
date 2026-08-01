@@ -330,6 +330,45 @@ func TestVLLMAdapter_Stop_SIGKILLEscalation(t *testing.T) {
 	}
 }
 
+// TestVLLMAdapter_Stop_KillsWhenCallerCancels pins the same commit-to-kill
+// contract as the Ollama adapter (#316): vLLM's multiprocessing workers
+// hold GPU memory, so a caller that gives up mid-stop must not leave them
+// running. PRODUCT CONTRACT, not a record of today's behaviour.
+func TestVLLMAdapter_Stop_KillsWhenCallerCancels(t *testing.T) {
+	server := newVLLMFakeServer("x")
+	defer server.srv.Close()
+	server.healthy.Store(true)
+	host, port := server.hostPort(t)
+
+	spawner := &fakeSpawner{}
+	a := NewVLLMAdapter(VLLMConfig{
+		Python: "/venv/bin/python", Host: host, Port: port,
+		Model: "/m", ServedModelName: "x",
+		Spawner: spawner, HTTPClient: vllmHTTPClient(),
+		HealthInterval: 10 * time.Millisecond, HealthSuccess: 1,
+		StopTimeout: 30 * time.Second, // never reached: the caller gives up first
+	})
+	if err := a.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	if err := a.Stop(ctx); err != nil {
+		t.Fatalf("Stop after caller cancellation = %v, want nil (the memory WAS freed)", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Stop waited %s; it must escalate as soon as the caller gives up", elapsed)
+	}
+	if !spawner.process.wasKilled() {
+		t.Errorf("caller cancellation abandoned the vLLM workers alive")
+	}
+}
+
 func TestVLLMAdapter_Idempotent(t *testing.T) {
 	server := newVLLMFakeServer("x")
 	defer server.srv.Close()

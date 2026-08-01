@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -408,6 +409,9 @@ func (a *VLLMAdapter) Stop(ctx context.Context) error {
 	return nil
 }
 
+// stopProcess mirrors OllamaAdapter.stopProcess, including its
+// commit-to-kill rule: once the stop has begun, a cancelled caller must
+// not leave the child alive holding GPU memory (#316).
 func (a *VLLMAdapter) stopProcess(ctx context.Context) error {
 	a.mu.Lock()
 	proc := a.proc
@@ -419,20 +423,39 @@ func (a *VLLMAdapter) stopProcess(ctx context.Context) error {
 	// Setpgid:true) so vLLM's multiprocessing children also receive
 	// it. proc.Signal forwards to the leader; the OS broadcasts
 	// because we used setpgid.
-	_ = proc.Signal(syscall.SIGTERM)
+	//
+	// vLLM is Linux-only, so ErrSignalUnsupported cannot occur here
+	// today; it is handled anyway so the two adapters do not drift.
+	if err := proc.Signal(syscall.SIGTERM); errors.Is(err, ErrSignalUnsupported) {
+		return a.killAndReap(proc)
+	}
 	select {
 	case <-proc.Done():
 		a.closeEngineLog()
 		return nil
 	case <-time.After(a.cfg.StopTimeout):
-		if err := proc.Kill(); err != nil {
-			return fmt.Errorf("vllm: kill: %w", err)
-		}
-		<-proc.Done()
+		return a.killAndReap(proc)
+	case <-ctx.Done():
+		slog.Warn("vllm: stop caller cancelled; killing the engine rather than abandoning it",
+			"pid", proc.PID(), "err", ctx.Err())
+		return a.killAndReap(proc)
+	}
+}
+
+// killAndReap force-kills proc and waits (bounded by StopTimeout) for the
+// process group to be reaped, closing the engine log on every path.
+func (a *VLLMAdapter) killAndReap(proc RunningProcess) error {
+	if err := proc.Kill(); err != nil {
+		a.closeEngineLog()
+		return fmt.Errorf("vllm: kill: %w", err)
+	}
+	select {
+	case <-proc.Done():
 		a.closeEngineLog()
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-time.After(a.cfg.StopTimeout):
+		a.closeEngineLog()
+		return fmt.Errorf("vllm: process %d did not exit within %s of being killed", proc.PID(), a.cfg.StopTimeout)
 	}
 }
 
