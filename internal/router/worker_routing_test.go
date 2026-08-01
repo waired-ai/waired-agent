@@ -126,6 +126,76 @@ func TestWorkerRouting_PeerPreferred_ErrorsWhenLocalAndMeshBothEmpty(t *testing.
 	}
 }
 
+// --- peer-only --------------------------------------------------------
+
+func TestWorkerRouting_PeerOnly_PrefersMeshOverLocal(t *testing.T) {
+	// Like peer-preferred: a ready local model does not win.
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{mkPeer("peer-B", "qwen3:8b-q4_K_M", true, false)},
+	}
+	s := NewSelector(Inputs{
+		Manifests:      []catalog.Manifest{qwen()},
+		LocalState:     readyState(),
+		Hardware:       goodHardware(),
+		Runtimes:       registryWithOllama(),
+		MeshSnapshotFn: func() inferencemesh.Snapshot { return snap },
+		RoutingMode:    state.RoutingModePeerOnly,
+	})
+	sel, err := s.Select(t.Context(), Request{Model: "waired/default"})
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if sel.ExecutionMode != "remote" {
+		t.Errorf("peer-only with a serving peer: ExecutionMode = %q, want remote", sel.ExecutionMode)
+	}
+}
+
+// TestWorkerRouting_PeerOnly_FailsClosedWhenMeshEmpty pins the PRODUCT
+// CONTRACT that separates peer-only from peer-preferred (#327): with no
+// mesh candidate it errors even though the local engine could serve.
+// Falling back would silently undo the operator's "not on this machine"
+// choice — the same failure shape as the Claude surface's silent local
+// fallback (#325).
+func TestWorkerRouting_PeerOnly_FailsClosedWhenMeshEmpty(t *testing.T) {
+	snap := inferencemesh.Snapshot{} // no peers
+	s := NewSelector(Inputs{
+		Manifests:      []catalog.Manifest{qwen()},
+		LocalState:     readyState(), // local COULD serve — and must not
+		Hardware:       goodHardware(),
+		Runtimes:       registryWithOllama(),
+		MeshSnapshotFn: func() inferencemesh.Snapshot { return snap },
+		RoutingMode:    state.RoutingModePeerOnly,
+	})
+	_, err := s.Select(t.Context(), Request{Model: "waired/default"})
+	if !errors.Is(err, ErrModelNotReady) {
+		t.Fatalf("peer-only without a mesh candidate must error ErrModelNotReady, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "peer-only") {
+		t.Errorf("error message should mention routing=peer-only, got %v", err)
+	}
+}
+
+func TestWorkerRouting_PeerOnly_OverlaySideFailsClosed(t *testing.T) {
+	// Defensive, and deliberately the opposite of the pinned case: the
+	// overlay-side Selector has MeshSnapshotFn=nil, and "serve it locally
+	// instead" is precisely what peer-only forbids.
+	s := NewSelector(Inputs{
+		Manifests:      []catalog.Manifest{qwen()},
+		LocalState:     readyState(),
+		Hardware:       goodHardware(),
+		Runtimes:       registryWithOllama(),
+		MeshSnapshotFn: nil,
+		RoutingMode:    state.RoutingModePeerOnly,
+	})
+	_, err := s.Select(t.Context(), Request{Model: "waired/default"})
+	if !errors.Is(err, ErrModelNotReady) {
+		t.Fatalf("overlay-side peer-only must fail closed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "no mesh snapshot") {
+		t.Errorf("error should name the missing snapshot, got %v", err)
+	}
+}
+
 // --- pinned -----------------------------------------------------------
 
 func TestWorkerRouting_Pinned_HoistsPinToHead(t *testing.T) {

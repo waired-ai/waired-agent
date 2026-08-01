@@ -67,13 +67,14 @@ func (wc *workerController) Routing() state.RoutingPreference {
 	return *p
 }
 
-// SetMode flips to a non-pinned mode (auto / local-only / peer-preferred)
-// and clears any pinned peer. Pinned mode goes through SetPin instead so
-// the caller cannot forget to supply a peer device ID.
+// SetMode flips to a non-pinned mode (auto / local-only / peer-preferred /
+// peer-only) and clears any pinned peer. Pinned mode goes through SetPin
+// instead so the caller cannot forget to supply a peer device ID.
 func (wc *workerController) SetMode(ctx context.Context, mode state.RoutingMode) error {
 	_ = ctx
 	switch mode {
-	case state.RoutingModeAuto, state.RoutingModeLocalOnly, state.RoutingModePeerPreferred:
+	case state.RoutingModeAuto, state.RoutingModeLocalOnly,
+		state.RoutingModePeerPreferred, state.RoutingModePeerOnly:
 	case state.RoutingModePinned:
 		return fmt.Errorf("worker controller: SetMode(%q) requires a peer device ID — call SetPin instead", mode)
 	case "":

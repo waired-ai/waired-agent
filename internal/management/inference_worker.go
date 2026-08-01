@@ -108,6 +108,16 @@ func (s *Server) applyWorkerRequest(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, errorBody("worker_set_failed", err.Error()))
 			return
 		}
+	case state.RoutingModePeerOnly:
+		if req.PinnedPeerDeviceID != "" {
+			writeJSON(w, http.StatusBadRequest, errorBody("bad_request",
+				"peer-only mode must not carry pinned_peer_device_id"))
+			return
+		}
+		if err := s.workerControl.SetMode(ctx, state.RoutingModePeerOnly); err != nil {
+			writeJSON(w, http.StatusInternalServerError, errorBody("worker_set_failed", err.Error()))
+			return
+		}
 	case state.RoutingModePinned:
 		if req.PinnedPeerDeviceID == "" {
 			writeJSON(w, http.StatusBadRequest, errorBody("bad_request",

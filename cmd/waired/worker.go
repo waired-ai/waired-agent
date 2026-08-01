@@ -22,10 +22,13 @@ import (
 const workerLong = `Manual inference routing target (Tailscale-exit-node-style):
 
   waired worker get
-  waired worker set --mode=auto|local-only|peer-preferred
+  waired worker set --mode=auto|local-only|peer-preferred|peer-only
   waired worker set --pin=<peer-name-or-device-id>
 
-Choose where outbound inference flows. Persisted across daemon restarts.`
+Choose where outbound inference flows. Persisted across daemon restarts.
+
+peer-preferred tries another computer first and falls back to this one;
+peer-only never falls back — requests fail while no peer can serve them.`
 
 func newWorkerCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -100,7 +103,7 @@ func newWorkerSetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mgmt, "mgmt", defaultMgmtAddr, "Local Management API base URL")
-	cmd.Flags().StringVar(&mode, "mode", "", "routing mode: auto|local-only|peer-preferred|pinned")
+	cmd.Flags().StringVar(&mode, "mode", "", "routing mode: auto|local-only|peer-preferred|peer-only|pinned")
 	cmd.Flags().StringVar(&pin, "pin", "", "peer name or DeviceID to pin (implies --mode=pinned)")
 	return cmd
 }
@@ -139,14 +142,15 @@ func buildWorkerRequest(mgmt, mode, pin string) (management.WorkerRequest, error
 	}
 	// pin == ""
 	switch state.RoutingMode(mode) {
-	case state.RoutingModeAuto, state.RoutingModeLocalOnly, state.RoutingModePeerPreferred:
+	case state.RoutingModeAuto, state.RoutingModeLocalOnly,
+		state.RoutingModePeerPreferred, state.RoutingModePeerOnly:
 		return management.WorkerRequest{Mode: state.RoutingMode(mode)}, nil
 	case state.RoutingModePinned:
 		return management.WorkerRequest{}, fmt.Errorf(
 			"waired worker set: --mode=pinned requires --pin=<peer>")
 	default:
 		return management.WorkerRequest{}, fmt.Errorf(
-			"waired worker set: unknown --mode %q (want auto|local-only|peer-preferred)", mode)
+			"waired worker set: unknown --mode %q (want auto|local-only|peer-preferred|peer-only)", mode)
 	}
 }
 

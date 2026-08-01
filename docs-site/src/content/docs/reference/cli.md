@@ -219,7 +219,8 @@ Where *this* computer's requests go.
 waired worker get
 waired worker set --mode=auto            # this computer's AI if it has one, else another (default)
 waired worker set --mode=local-only      # never use another computer
-waired worker set --mode=peer-preferred  # prefer another computer
+waired worker set --mode=peer-preferred  # prefer another computer, fall back to this one
+waired worker set --mode=peer-only       # only another computer; fail rather than run here
 waired worker set --pin=<peer>           # always this one (implies --mode=pinned)
 ```
 

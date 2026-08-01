@@ -82,7 +82,14 @@ const (
 	RoutingModeAuto          RoutingMode = "auto"
 	RoutingModeLocalOnly     RoutingMode = "local-only"
 	RoutingModePeerPreferred RoutingMode = "peer-preferred"
-	RoutingModePinned        RoutingMode = "pinned"
+	// RoutingModePeerOnly is the mirror image of RoutingModeLocalOnly:
+	// serve from another device on the mesh or fail. Unlike
+	// RoutingModePeerPreferred it never falls back to the local engine,
+	// so an operator who chose it because this machine must stay free
+	// (thermals, battery, a GPU held by something else) gets an error
+	// instead of a silent local run (#327).
+	RoutingModePeerOnly RoutingMode = "peer-only"
+	RoutingModePinned   RoutingMode = "pinned"
 )
 
 // RoutingPreference is the on-disk form of the operator's routing
@@ -828,7 +835,7 @@ func WriteDesiredUpdateNotify(stateDir string, s UpdateNotifyState) error {
 
 func validateRoutingPreference(p RoutingPreference) error {
 	switch p.Mode {
-	case "", RoutingModeAuto, RoutingModeLocalOnly, RoutingModePeerPreferred:
+	case "", RoutingModeAuto, RoutingModeLocalOnly, RoutingModePeerPreferred, RoutingModePeerOnly:
 		if p.PinnedPeerDeviceID != "" {
 			return fmt.Errorf("runtime/state: mode %q must not carry pinned_peer_device_id", p.Mode)
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -215,5 +216,48 @@ func TestClaudeSelector_NilRoutingDefaultsLocal(t *testing.T) {
 	}
 	if len(cands) == 0 || cands[0].ExecutionMode != "local" {
 		t.Fatalf("candidate = %+v, want local (privacy default)", cands)
+	}
+}
+
+// TestClaudeSelector_PeerOnlyDoesNotFallBackLocal pins the PRODUCT
+// CONTRACT that makes peer-only worth having on the Claude surface too
+// (#327): the non-destructive local retry in selectWithWorkerPref is
+// gated on pinned mode, so peer-only must surface the error instead of
+// quietly running the turn on this machine. That silent-local-fallback
+// shape is exactly what #325 is unifying away for pins; peer-only must
+// not reintroduce it.
+func TestClaudeSelector_PeerOnlyDoesNotFallBackLocal(t *testing.T) {
+	// Empty mesh, and the local engine IS ready to serve small-local.
+	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return inferencemesh.Snapshot{} }),
+		state.RoutingPreference{Mode: state.RoutingModePeerOnly})
+	var rec fallbackRecord
+	sel := &claudeSelector{p: p, onNodeFallback: rec.hook}
+
+	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
+	if err == nil {
+		t.Fatalf("peer-only with no peer must fail, got candidates %+v", cands)
+	}
+	if !errors.Is(err, router.ErrModelNotReady) {
+		t.Fatalf("error = %v, want ErrModelNotReady", err)
+	}
+	if rec.count != 0 {
+		t.Fatalf("peer-only must not record a local fallback, got %+v", rec)
+	}
+}
+
+// TestClaudeSelector_PeerOnlyServesRemote is the positive half: with a
+// peer that can serve, the turn runs there.
+func TestClaudeSelector_PeerOnlyServesRemote(t *testing.T) {
+	snap := peerSnapshot("big:32b")
+	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
+		state.RoutingPreference{Mode: state.RoutingModePeerOnly})
+	sel := &claudeSelector{p: p}
+
+	cands, err := sel.SelectK(t.Context(), router.Request{Model: "big-peer", Class: state.ClaudeClassMain}, 1)
+	if err != nil {
+		t.Fatalf("SelectK: %v", err)
+	}
+	if len(cands) == 0 || cands[0].ExecutionMode != "remote" || cands[0].PeerID != "peer-X" {
+		t.Fatalf("candidate = %+v, want remote on peer-X", cands)
 	}
 }

@@ -97,6 +97,22 @@ func TestWorkerSet_ModeLocalOnly(t *testing.T) {
 	}
 }
 
+// TestWorkerSet_ModePeerOnly covers the mode added in #327 reaching the
+// daemon over the wire — the CLI validates --mode locally, so an
+// unlisted value never gets that far.
+func TestWorkerSet_ModePeerOnly(t *testing.T) {
+	srv, spy := workerTestServer(t, inferencemesh.Snapshot{})
+	defer srv.Close()
+	_ = captureStdout(t, func() {
+		if err := runWorker([]string{"set", "--mgmt", srv.URL, "--mode=peer-only"}); err != nil {
+			t.Fatalf("runWorker set: %v", err)
+		}
+	})
+	if spy.posts[0].Mode != state.RoutingModePeerOnly {
+		t.Errorf("mode = %q, want peer-only", spy.posts[0].Mode)
+	}
+}
+
 func TestWorkerSet_PinByDeviceID(t *testing.T) {
 	snap := inferencemesh.Snapshot{
 		Peers: []inferencemesh.PeerView{
@@ -273,7 +289,8 @@ func TestWorkerGet_JSON(t *testing.T) {
 // Probe for stable rendering of all 4 modes in non-JSON output.
 func TestPrintWorkerResponse_AllModes(t *testing.T) {
 	cases := []state.RoutingMode{
-		state.RoutingModeAuto, state.RoutingModeLocalOnly, state.RoutingModePeerPreferred,
+		state.RoutingModeAuto, state.RoutingModeLocalOnly,
+		state.RoutingModePeerPreferred, state.RoutingModePeerOnly,
 	}
 	for _, m := range cases {
 		t.Run(string(m), func(t *testing.T) {

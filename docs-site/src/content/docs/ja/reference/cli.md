@@ -212,7 +212,8 @@ waired inference share status
 waired worker get
 waired worker set --mode=auto            # 自前の AI があればそれ、なければ他（既定）
 waired worker set --mode=local-only      # ほかのパソコンは使わない
-waired worker set --mode=peer-preferred  # ほかのパソコンを優先する
+waired worker set --mode=peer-preferred  # ほかのパソコンを優先し、駄目ならここで動かす
+waired worker set --mode=peer-only       # ほかのパソコンだけ。駄目ならここで動かさずエラー
 waired worker set --pin=<peer>           # 常にこの 1 台（--mode=pinned になる）
 ```
 
