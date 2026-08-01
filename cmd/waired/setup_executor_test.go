@@ -22,6 +22,13 @@ type fakeSetupDaemon struct {
 	state    management.SetupStateResponse
 	requests []management.SetupExecutorRequest
 	notFound bool // simulate a daemon older than the executor lease
+	// onState fires on each /setup/state poll, so a test can time a
+	// keystroke to a real point in the flow. The grace loop's polls are
+	// the only events that happen strictly AFTER awaitBrowserSetup has
+	// discarded pre-offer input (#184) and armed its watch — typing
+	// before that is a race the discard is designed to win.
+	onState func(poll int)
+	polls   int
 }
 
 func (d *fakeSetupDaemon) server(t *testing.T) *httptest.Server {
@@ -29,12 +36,18 @@ func (d *fakeSetupDaemon) server(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/waired/v1/setup/state", func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
-		defer d.mu.Unlock()
+		d.polls++
+		poll, hook := d.polls, d.onState
+		st := d.state
+		d.mu.Unlock()
+		if hook != nil {
+			hook(poll)
+		}
 		if d.notFound {
 			http.NotFound(w, r)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(d.state)
+		_ = json.NewEncoder(w).Encode(st)
 	})
 	mux.HandleFunc("/waired/v1/setup/executor", func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
@@ -339,8 +352,23 @@ func TestAwaitBrowserSetupKeepsAFiredTakeover(t *testing.T) {
 	s := attachSetupExecutor(srv.URL, true)
 	t.Cleanup(s.Release)
 
+	// Typed while the offer is on screen, not before it: awaitBrowserSetup
+	// drops anything queued ahead of the offer (#184), and which of the
+	// two wins is a race — one this test lost on Windows, where the
+	// reader goroutine publishes before the discard runs.
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	// Poll 1 is attachSetupExecutor's support probe, which still precedes
+	// the discard; poll 2 is awaitSetupBudget's own first read, by which
+	// point the offer is on screen and the watch is armed.
+	d.onState = func(poll int) {
+		if poll == 2 {
+			_, _ = pw.Write([]byte("\ny\n"))
+		}
+	}
+
 	var out strings.Builder
-	_, active, enter, _ := awaitBrowserSetup(s, newStdinReader(strings.NewReader("\ny\n")), &out, false, false)
+	_, active, enter, _ := awaitBrowserSetup(s, newStdinReader(pr), &out, false, false)
 	if active {
 		t.Fatal("a takeover left the run marked browser-driven")
 	}
