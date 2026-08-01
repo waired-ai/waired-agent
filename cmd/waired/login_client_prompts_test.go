@@ -204,6 +204,116 @@ func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitSce
 	return out
 }
 
+// pinGate forces the browser gate for one test. These runs are not on a
+// TTY, so the real decision can only ever be gateAutoOpen / gatePrintOnly
+// — and the gate #308 is about is the interactive third one.
+func pinGate(t *testing.T, mode browserGate) {
+	t.Helper()
+	prev := resolveGateFn
+	resolveGateFn = func(_, _, _, _ bool) browserGate { return mode }
+	t.Cleanup(func() { resolveGateFn = prev })
+}
+
+// shrinkLoginTimers makes the login poll loop and the browser-setup grace
+// run in milliseconds. shrinkSetupTimers' 2-second grace is deliberate for
+// tests that time a keystroke to it; the ones below only need it to expire.
+func shrinkLoginTimers(t *testing.T, grace time.Duration) {
+	t.Helper()
+	prevPoll, prevGrace := loginPollInterval, setupAwaitGrace
+	loginPollInterval, setupAwaitGrace = time.Millisecond, grace
+	t.Cleanup(func() { loginPollInterval, setupAwaitGrace = prevPoll, prevGrace })
+}
+
+// TestRunInitViaDaemon_PromptGateNeverStallsTheLoginPoll is the #308
+// acceptance bar for the sign-in gate: the operator opened the printed
+// link themselves and drove the wizard from the browser, without ever
+// pressing Enter in the terminal.
+//
+// That used to stop the CLI dead — presentLoginURL called Scan() from
+// inside this loop, so /login/status was never polled, the setup executor
+// was never attached, and every wizard step failed on "cannot install
+// unprivileged" until Enter was pressed. The run must now complete on its
+// own, and must not fling a browser at a sign-in that is already done.
+func TestRunInitViaDaemon_PromptGateNeverStallsTheLoginPoll(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	shrinkLoginTimers(t, 20*time.Millisecond)
+	pinGate(t, gatePrompt)
+	// An open pipe nobody writes to — a real terminal whose operator is in
+	// the browser. A canned empty string would be EOF, and a blocking read
+	// on EOF returns instead of stalling, which is the very thing this
+	// test has to catch.
+	owner, _ := scriptStdinPipe(t)
+	d := &promptsDaemon{
+		statusSeq:  []management.InferenceStatus{readyStatus()},
+		setupState: management.SetupStateResponse{Active: true, EngineInstalled: true, DesiredEngine: "ollama"},
+	}
+
+	// runDaemonInit fails the test if the flow hangs, which is the defect
+	// itself: with a blocking gate and nothing typed, it never returns.
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
+
+	if !strings.Contains(out, "Press Enter to open your browser") {
+		t.Errorf("the prompt gate stopped offering the browser\n---\n%s", out)
+	}
+	if strings.Contains(out, "Opened your browser") {
+		t.Errorf("a browser was opened at a sign-in that completed without Enter\n---\n%s", out)
+	}
+	// The offer is withdrawn by closing its parked line, so the phase line
+	// that follows — the one that tells the operator the wait is over —
+	// lands on a line of its own rather than on the prompt.
+	if !strings.Contains(out, "yourself)... \nSigned in") {
+		t.Errorf("the withdrawn prompt line was not terminated before the phase line\n---\n%q", out)
+	}
+}
+
+// TestRunInitViaDaemon_LateBrowserStartSuppressesTerminalQuestions is the
+// #308 acceptance bar for the other half: the operator was still choosing
+// a model when awaitSetupBudget's grace expired, so the run fell into
+// terminal-driven mode — and then the browser setup started anyway.
+//
+// The terminal has to notice. It used to keep the takeover offer standing
+// (#309) and go on to ask its own questions over a browser that was
+// driving, which is exactly what §4.2 forbids.
+func TestRunInitViaDaemon_LateBrowserStartSuppressesTerminalQuestions(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	shrinkLoginTimers(t, 20*time.Millisecond)
+	owner := scriptStdin("") // the operator is in the browser, not here
+	d := &promptsDaemon{
+		statusSeq: downloadingRun(200),
+		// Nothing written yet: the grace below expires with the terminal
+		// as the driver.
+		setupState: management.SetupStateResponse{EngineInstalled: true, DesiredEngine: "ollama"},
+	}
+	d.onStatus = func(poll int32) {
+		if poll == 8 { // well inside the model wait
+			d.mu.Lock()
+			d.setupState.Active = true
+			d.mu.Unlock()
+		}
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
+
+	// The run really did give up on the browser first...
+	if !strings.Contains(out, "No setup started in the browser") {
+		t.Fatalf("the grace did not expire, so this is not the late-start case\n---\n%s", out)
+	}
+	// ...then noticed, and withdrew an offer that had stopped being true.
+	if !strings.Contains(out, takeoverClosedLine) {
+		t.Errorf("the takeover offer was left standing after the browser started (#309)\n---\n%s", out)
+	}
+	// ...and handed the run to the browser: no terminal questions, and the
+	// browser-driven tail instead of the benchmark.
+	if strings.Contains(out, "Coding-agent integration") {
+		t.Errorf("the terminal asked its own question while the browser was driving (§4.2)\n---\n%s", out)
+	}
+	if !strings.Contains(out, setupTerminalDoneLine) {
+		t.Errorf("the run did not end on the browser-driven tail\n---\n%s", out)
+	}
+}
+
 // #184: on the print-only gate nothing reads stdin at the sign-in step,
 // so an Enter pressed there used to fall through to the next reader. It
 // must be answered where it was pressed instead.
