@@ -60,10 +60,6 @@ const (
 	installedServiceAccess uint32 = windows.SERVICE_QUERY_STATUS
 )
 
-// StartHint is the manual command shown when init cannot (or is told not
-// to) auto-start the agent.
-func StartHint() string { return "Start-Service " + ServiceName }
-
 // FixStateOwnership is a no-op on Windows: the SCM service runs as
 // LocalSystem and reads %ProgramData%\waired, which an elevated
 // `waired init` can already write — there is no separate service user to

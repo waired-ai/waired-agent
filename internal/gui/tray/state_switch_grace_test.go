@@ -12,7 +12,7 @@ import (
 // the red agent-down state.
 
 func TestOfflineModel_NotSwitching_IsDaemonDown(t *testing.T) {
-	got := offlineModel(MenuModel{}, false)
+	got := offlineModel(MenuModel{}, false, installedFacts())
 	if got.Kind != MenuDaemonDown {
 		t.Errorf("Kind=%v, want MenuDaemonDown", got.Kind)
 	}
@@ -28,7 +28,7 @@ func TestOfflineModel_SwitchingButNoConnectedSnapshot_IsDaemonDown(t *testing.T)
 	// A zero MenuModel has Kind == MenuDaemonDown: before any connected
 	// snapshot exists we must not fabricate a "Switching…" menu from
 	// nothing even when the window is armed.
-	got := offlineModel(MenuModel{}, true)
+	got := offlineModel(MenuModel{}, true, installedFacts())
 	if got.Kind != MenuDaemonDown {
 		t.Errorf("Kind=%v, want MenuDaemonDown (no connected lastOnline)", got.Kind)
 	}
@@ -43,7 +43,7 @@ func TestOfflineModel_Switching_KeepsLastOnlineAsSwitching(t *testing.T) {
 		AccountEmail:   "user@example.com",
 		CatalogEntries: []CatalogEntryView{{ModelID: "m1", Label: "Model One"}},
 	}
-	got := offlineModel(last, true)
+	got := offlineModel(last, true, installedFacts())
 
 	if got.Kind != MenuConnected {
 		t.Errorf("Kind=%v, want MenuConnected (last online preserved)", got.Kind)
@@ -73,7 +73,7 @@ func TestOfflineModel_WindowLapsed_FallsBackToDaemonDown(t *testing.T) {
 	// A genuinely failed restart: the window lapsed (switching=false) even
 	// though we still hold a connected lastOnline → honest daemon-down.
 	last := MenuModel{Kind: MenuConnected, HeaderTitle: "● Connected"}
-	got := offlineModel(last, false)
+	got := offlineModel(last, false, installedFacts())
 	if got.Kind != MenuDaemonDown {
 		t.Errorf("Kind=%v, want MenuDaemonDown once the grace window lapses", got.Kind)
 	}

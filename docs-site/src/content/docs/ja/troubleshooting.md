@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: b94fa07ad51e7fbe
+sourceHash: 94ecefc08fb816a8
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -42,6 +42,7 @@ waired doctor
 
 - [応答が返ってこない / Engine が not ready のまま](#no-answer-comes-back)
 - [Claude Code がクラウドを使い続ける](#claude-code-is-still-using-the-cloud)
+- [Waired のアイコンに「エージェントが起動していません」と出る](#the-waired-icon-says-the-agent-is-not-running)
 - [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
 - [macOS で常駐サービスが一度も起動しない](#macos-the-background-service-never-starts)
 - [Windows で 502 エラーになる](#windows-i-get-a-502-error)
@@ -284,6 +285,25 @@ sudo waired claude enable     # Windows は管理者プロンプトから
 クラウドへのフォールバックは意図的な設計です。失敗させるより作業を続けられることを
 優先し、**起きたことは必ず知らせます**。
 
+<a id="the-waired-icon-says-the-agent-is-not-running"></a>
+
+## Waired のアイコンに「エージェントが起動していません」と出る
+
+Waired のメニューを開いて **Start the Waired agent…** を選んでください。パソコンが
+管理者の確認を求めます。これは OS 自身の確認画面で、常駐サービスが特定のユーザーでは
+なくパソコン全体のものであるために必要です。自分でコマンドを打ちたい場合は
+**Copy start command** を選ぶと、このパソコン向けのコマンドがクリップボードに入ります。
+
+メニューは次の 2 つを区別して表示します。
+
+- **「Waired agent is starting…」** — 正常です。Windows では常駐サービスがサインインの
+  数分後に起動する設定になっているため、Waired のアイコンのほうが先に出ます。異常では
+  ないので、待っても、その場で起動しても構いません。
+- **「Waired agent is not running」** — 起動しているはずなのに起動していない状態です。
+  メニューから起動し、それでも戻らない場合は `waired doctor` を実行してください。
+
+手動でサービスを停止しても、その状態は残りません（パソコンの起動時にまた立ち上がります）。
+
 <a id="a-command-says-waired-agent-is-not-running"></a>
 
 ## 「waired-agent is not running」と出る
@@ -300,6 +320,17 @@ macOS ではシステムが自動的に再起動します。戻らない場合�
 [次の項目](#macos-the-background-service-never-starts)を参照してください。
 
 再起動は一時的な不整合の多くを解消するので、込み入った対処の前に試す価値があります。
+
+### Windows: 起動時に立ち上がらなくなった
+
+Windows が起動時に Waired の常駐サービスをブロックすることがあります。Waired の
+プログラムには、まだ Windows が認識する証明書による署名が付いていないためです。
+スマート アプリ コントロールが有効だと、Windows は起動時に（ネットワーク確認に頼れない
+状態で）これを判断し、サービスが起動しません。毎回ではなく、同じパソコンでも次の起動では
+正常に立ち上がることがあります。
+
+署名付きの配布を始めるまでは、この状態になったら Waired のメニューから起動してください。
+壊れているわけではなく、同じサービスを手動で起動すれば正常に動作します。
 
 <a id="macos-the-background-service-never-starts"></a>
 

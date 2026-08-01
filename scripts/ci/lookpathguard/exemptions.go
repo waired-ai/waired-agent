@@ -71,6 +71,12 @@ var declared = []lookpath{
 
 	// OS-provided system tools.
 	{"internal/platform/service/service_linux.go", "systemctl", systemTool},
+	// The tray's daemon-down "Start the Waired agent" row runs
+	// `pkexec <systemctl> start waired-agent`; pkexec needs the absolute path
+	// because polkit matches its actions on the program path. Absent
+	// systemctl means no systemd, which means no service to start — the
+	// handler says so instead of guessing (#315/#317).
+	{"internal/gui/tray/actions_linux.go", "systemctl", systemTool},
 	{"internal/platform/service/service_linux.go", "useradd", systemTool},
 	{"internal/platform/service/service_linux.go", "getent", systemTool},
 	{"internal/platform/service/service_linux.go", "chown", systemTool},

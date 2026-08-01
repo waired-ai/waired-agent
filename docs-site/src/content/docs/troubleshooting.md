@@ -39,6 +39,7 @@ most problems on its own.
 
 - [No answer comes back / the engine stays “not ready”](#no-answer-comes-back)
 - [Claude Code is still using the cloud](#claude-code-is-still-using-the-cloud)
+- [The Waired icon says the agent is not running](#the-waired-icon-says-the-agent-is-not-running)
 - [A command says “waired-agent is not running”](#a-command-says-waired-agent-is-not-running)
 - [macOS: the background service never starts](#macos-the-background-service-never-starts)
 - [Windows: I get a 502 error](#windows-i-get-a-502-error)
@@ -264,6 +265,24 @@ sudo waired claude enable     # Windows: from an administrator prompt
 Falling back to the cloud is deliberate: Waired would rather keep you working
 than fail — and it always tells you it happened.
 
+## The Waired icon says the agent is not running
+
+Open the Waired menu and choose **Start the Waired agent…**. Your computer asks
+for administrator access — that is the operating system's own prompt, and it is
+required because the background service belongs to the whole computer, not to
+one account. If you would rather run it yourself, **Copy start command** puts
+the right command for this computer on your clipboard.
+
+Two things this menu tells you apart:
+
+- **“Waired agent is starting…”** — normal. On Windows the service is set to
+  start a couple of minutes *after* you sign in, so the Waired icon is up before
+  it is. Nothing is wrong; you can wait, or start it now.
+- **“Waired agent is not running”** — it should be up and is not. Start it from
+  the menu, and if it does not come back, run `waired doctor`.
+
+Stopping the service by hand does not stick: it starts again with the computer.
+
 ## A command says “waired-agent is not running”
 
 The background service has stopped.
@@ -279,6 +298,18 @@ On macOS the system restarts it for you; if it does not come back, run
 
 A restart also clears most temporary inconsistencies, so it is worth trying
 before anything more involved.
+
+### Windows: it stopped starting at boot on its own
+
+Windows can block Waired's background service at startup, because Waired's
+programs are not yet signed with a certificate Windows recognises. When Smart
+App Control is switched on it decides at boot, without a network check to fall
+back on, and the service does not start. It is not consistent: the same
+computer may start normally on the next boot.
+
+Until Waired ships signed programs, start the service from the Waired menu when
+this happens — nothing is damaged, and manually starting the same service
+works.
 
 ## macOS: the background service never starts
 

@@ -26,8 +26,5 @@ func (stubManager) Stop() error          { return errUnsupportedOS }
 // Installed always reports false on unsupported platforms.
 func Installed() bool { return false }
 
-// StartHint has no platform-native start command on unsupported OSes.
-func StartHint() string { return "" }
-
 // FixStateOwnership is a no-op on unsupported platforms.
 func FixStateOwnership(string) error { return nil }

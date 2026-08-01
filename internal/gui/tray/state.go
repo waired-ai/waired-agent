@@ -5,12 +5,14 @@ package tray
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
@@ -28,11 +30,17 @@ const (
 // when the corresponding endpoint has not yet been queried (cold start)
 // or returned an error.
 type Snapshot struct {
-	Health    Health
-	Identity  *management.IdentityView
-	Status    *management.Status
-	Inference *management.InferenceStatus         // nil for daemons predating the inference toggle API
-	Claude    *management.ClaudeIntegrationStatus // nil for daemons predating /waired/v1/integration/claude
+	Health Health
+	// IdentityErr marks a failed /identity call — a transport error, not the
+	// daemon answering "nobody is enrolled" (Client.Identity folds 404 into
+	// {Enrolled:false}). Update needs the distinction: a device with an
+	// identity on disk must not be shown the signed-out menu because one poll
+	// could not reach the endpoint (#317 item 5 / #318).
+	IdentityErr bool
+	Identity    *management.IdentityView
+	Status      *management.Status
+	Inference   *management.InferenceStatus         // nil for daemons predating the inference toggle API
+	Claude      *management.ClaudeIntegrationStatus // nil for daemons predating /waired/v1/integration/claude
 	// ClaudeRouting is the unified per-class routing state (#649); nil for
 	// daemons predating /waired/v1/integration/claude/route so the "Claude
 	// Code" routing submenu stays hidden.
@@ -249,6 +257,17 @@ type MenuModel struct {
 	// "Disconnect" | "Connect" | "Log in..." | "" (hidden).
 	ToggleAction string
 
+	// Daemon-down actions (#315/#317). StartAgentAction and StartAgentCopy
+	// are the two rows' labels — non-empty shows the row — and StartAgentCmd
+	// is the command they act on: the elevated start runs it via the OS
+	// service manager, and the copy row puts it on the clipboard for a user
+	// who would rather run it themselves. All three are empty unless the
+	// service is registered and the OS has a service backend, since a button
+	// that cannot work is worse than no button.
+	StartAgentAction string
+	StartAgentCopy   string
+	StartAgentCmd    string
+
 	// Update banner (#293). ShowUpdate is true when the daemon reports a
 	// newer release; UpdateLabel is the menu text ("⚠ Update available —
 	// install vX"), UpdateVersion the bare version, and UpdateMethod the
@@ -456,16 +475,78 @@ type PublicUseModeRow struct {
 	Selected bool
 }
 
-// daemonDownModel is the red "agent not running" menu shown when the
-// local management API is unreachable.
-func daemonDownModel() MenuModel {
-	return MenuModel{
-		Kind:        MenuDaemonDown,
-		Icon:        IconError,
-		HeaderTitle: "⚠ Waired agent is not running",
-		StatusMsg:   startAgentHint(),
-	}
+// daemonDownFacts is everything outside the /status poll that shapes the
+// agent-is-down menu.
+type daemonDownFacts struct {
+	// ServiceInstalled is service.Installed(). False on a raw-binary dev run,
+	// where there is no service to start and the button would be a dead end.
+	ServiceInstalled bool
+	// Starting marks the window right after login/boot during which the
+	// service is expected to still be coming up (see startGraceFor).
+	Starting bool
+	// LastEmail is the account from the last snapshot taken while the daemon
+	// was reachable. A stopped service does not sign anyone out, so the menu
+	// keeps saying who is signed in (#317: the tray "read as logged out").
+	LastEmail string
 }
+
+// daemonDownModel is the "agent not running" menu shown when the local
+// management API is unreachable.
+func daemonDownModel(f daemonDownFacts) MenuModel {
+	return daemonDownModelFor(runtime.GOOS, f)
+}
+
+// daemonDownModelFor is untagged and takes the GOOS so all three platforms'
+// copy and affordances are table-tested on the Linux leg — the only leg that
+// runs tests. The previous shape (a per-OS startAgentHint() in hint_*.go) is
+// exactly how macOS shipped a command for a launchd job that #520 had deleted.
+//
+// Two states, not one:
+//
+//   - Starting. The tray autostarts at login while the service is registered
+//     delayed-auto-start, so on Windows there is a 2-3 minute window at every
+//     boot where the agent is legitimately not up yet (#315, root cause 2).
+//     Painting the red "not running" alarm there — and, now, offering a button
+//     that pops UAC — trains people to ignore both. The start row still shows,
+//     because a user who wants it sooner should not have to wait out a timer.
+//   - Down. Past the window, this is a real failure and says so.
+func daemonDownModelFor(goos string, f daemonDownFacts) MenuModel {
+	cmd := service.StartHintFor(goos)
+	m := MenuModel{
+		Kind:             MenuDaemonDown,
+		Icon:             IconError,
+		HeaderTitle:      "⚠ Waired agent is not running",
+		StatusMsg:        "The background service is stopped or still starting — it can take about 2 minutes after you sign in.",
+		AccountEmail:     f.LastEmail,
+		StartAgentAction: startAgentActionLabel,
+		StartAgentCopy:   startAgentCopyLabel,
+		StartAgentCmd:    cmd,
+	}
+	if f.Starting {
+		m.Icon = IconBusy
+		m.HeaderTitle = "◐ Waired agent is starting…"
+		m.StatusMsg = "The background service starts a couple of minutes after you sign in. You can start it now if you don't want to wait."
+	}
+	// Nothing to start: a hand-built binary run from a terminal has no
+	// registered service, and an OS with no service backend has no command to
+	// offer. Say so rather than presenting an action that cannot work.
+	if !f.ServiceInstalled || cmd == "" {
+		m.StartAgentAction = ""
+		m.StartAgentCopy = ""
+		m.StartAgentCmd = ""
+		m.StatusMsg = "Waired is not registered as a background service on this computer."
+	}
+	return m
+}
+
+// Labels for the two daemon-down action rows. Static, so the rows carry their
+// title from creation and apply() never has to SetTitle them — a row whose
+// title is never pushed cannot be resurrected by the Windows systray backend
+// (see rows.go).
+const (
+	startAgentActionLabel = "Start the Waired agent…"
+	startAgentCopyLabel   = "Copy start command"
+)
 
 // offlineModel decides what the tray renders when /status is unreachable.
 // During the model-switch grace window (switching) the daemon is expected
@@ -474,9 +555,9 @@ func daemonDownModel() MenuModel {
 // rather than alarming the user with the red daemon-down state. Outside
 // the window, or before any connected snapshot exists, we fall back to
 // the honest daemon-down model (waired#808).
-func offlineModel(lastOnline MenuModel, switching bool) MenuModel {
+func offlineModel(lastOnline MenuModel, switching bool, f daemonDownFacts) MenuModel {
 	if !switching || lastOnline.Kind != MenuConnected {
-		return daemonDownModel()
+		return daemonDownModel(f)
 	}
 	m := lastOnline
 	m.Icon = IconBusy
@@ -499,13 +580,27 @@ func peersRowVisible(m MenuModel) bool {
 // from the polling goroutine directly.
 func Update(snap Snapshot) MenuModel {
 	if snap.Health == HealthOffline {
-		return daemonDownModel()
+		return daemonDownModel(daemonDownFacts{})
+	}
+
+	// The daemon is up but did not answer /identity. That is a transport
+	// failure, and it says nothing about whether this device is enrolled — so
+	// do not render the signed-out menu. During the rc7 review this state
+	// (paired with an expiring device token, #318) read as "logged out" on a
+	// device with months of validity on disk, and pushed the reviewer into a
+	// re-login that re-ran the whole setup.
+	if snap.IdentityErr && snap.Identity == nil {
+		return MenuModel{
+			Kind:        MenuConnecting,
+			Icon:        IconBusy,
+			HeaderTitle: "◐ Reconnecting to the Waired agent…",
+			StatusMsg:   "The agent is running but hasn't answered yet. This is usually brief — you are still signed in.",
+		}
 	}
 
 	// Daemon up but identity not yet known (e.g. /identity returned nothing
-	// because the daemon predates this PR, or transient error). Render the
-	// not-signed-in state — safer to under-promise than to claim Connected
-	// without the email.
+	// because the daemon predates this PR). Render the not-signed-in state —
+	// safer to under-promise than to claim Connected without the email.
 	if snap.Identity == nil || !snap.Identity.Enrolled {
 		m := MenuModel{
 			Kind:         MenuNotSignedIn,
