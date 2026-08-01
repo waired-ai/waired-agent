@@ -472,17 +472,19 @@ run_case_grep zero "darwin complete -> update" "$D_FULL WAIRED_VERSION=edge" \
 # (the flag is the operator saying what they want), as on Linux.
 run_case_grep zero "darwin half-install --check -> update" "$D_HALF WAIRED_VERSION=edge" \
   'Update available' -- --dry-run --skip-ollama --check
-# The update path must install log rotation too, or a host that only ever
-# updates never acquires the drop-in a fresh install would have given it.
-run_case_grep zero "darwin update installs log rotation" "$D_FULL WAIRED_VERSION=edge" \
-  'newsyslog rotation at /etc/newsyslog.d/waired-agent.conf' -- --dry-run --skip-ollama --no-init --yes
+# The update path must retire the newsyslog drop-in too (#331), or a host that
+# only ever updates keeps a second rotator racing the agent's own — renaming
+# the log file out from under the descriptor the agent writes through, which is
+# the whole failure this replaced.
+run_case_grep zero "darwin update retires the legacy log rotation" "$D_FULL WAIRED_VERSION=edge" \
+  'legacy newsyslog rotation at /etc/newsyslog.d/waired-agent.conf' -- --dry-run --skip-ollama --no-init --yes
 
 # 7. darwin registration failure (#193) — the one darwin branch --dry-run
 # cannot reach, so these cases run install.sh FOR REAL.
 #
 # #193: a `waired-agent install` that failed took the whole installer with it
-# (`set -eu`), so log rotation, the control-URL write, `waired init` and the
-# next-steps block were all skipped and the last thing on screen was a raw Go
+# (`set -eu`), so the rotation step, the control-URL write, `waired init` and
+# the next-steps block were all skipped and the last thing on screen was a raw Go
 # error. Linux warns and continues; macOS was the outlier. The fix made the
 # step non-fatal — but the failure arm lives past `if [ "$DRY_RUN" = 1 ]; then
 # ... return 0; fi`, so no --dry-run case above can execute it, and only a real
@@ -495,9 +497,9 @@ run_case_grep zero "darwin update installs log rotation" "$D_FULL WAIRED_VERSION
 # (a real `install`, `chmod`, `mkdir` into temp dirs) instead of swallowing the
 # command. Sections 1-6 keep the safe no-op stubs — nothing here changes them.
 #
-# Still no network and no root: the only thing that leaves a temp dir is the
-# newsyslog write, which install.sh already guards on /etc/newsyslog.d being a
-# directory (absent here, so it warns and moves on).
+# Still no network and no root: the only thing that reaches outside a temp dir
+# is the newsyslog drop-in removal, which is a no-op when the file is absent
+# (it is, on a Linux runner).
 DSTUB="$(mktemp -d)"
 DREAL="$(mktemp -d)"
 trap 'rm -rf "$STUBDIR" "$DWORK" "$DSTUB" "$DREAL"' EXIT

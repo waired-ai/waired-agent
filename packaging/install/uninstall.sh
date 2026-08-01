@@ -427,7 +427,10 @@ darwin_uninstall() {
     common_run $SUDO launchctl enable system/com.waired.agent 2>/dev/null || true
     # shellcheck disable=SC2086
     common_run $SUDO rm -f /Library/LaunchDaemons/com.waired.agent.plist
-    # newsyslog log-rotation drop-in (install.sh's darwin_install_log_rotation).
+    # newsyslog log-rotation drop-in. Retired in #331 (the agent rotates its own
+    # logs now — install.sh's darwin_retire_log_rotation removes it on install
+    # and update), but an uninstall still has to clear it from hosts that were
+    # installed before that and never updated.
     # It is config the installer added, so remove it on any uninstall — like
     # the plist above — not just under --clean (which handles the log data).
     # shellcheck disable=SC2086
@@ -475,17 +478,21 @@ darwin_uninstall() {
             common_run $SUDO rm -rf "$WAIRED_STATE_DIR"
         fi
         common_log "Removing logs"
-        # The *.gz globs catch the archives newsyslog's drop-in rotates the
-        # daemon logs into (waired-agent.out.log.0.gz …); without them a
-        # --clean left most of the log data on disk. An unmatched glob passes
-        # through literally and `rm -f` ignores it, so this is safe when the
-        # host never rotated.
+        # The trailing globs catch the rotated archives (waired-agent.out.log.0.gz
+        # …); without them a --clean left most of the log data on disk. `.log.*`
+        # rather than `.log.*.gz` so it also takes the uncompressed `.log.0` a
+        # rotation interrupted between the rename and the gzip leaves behind
+        # (#331). An unmatched glob passes through literally and `rm -f` ignores
+        # it, so this is safe when the host never rotated. The tray's logs rotate
+        # the same way now, so they get the same treatment.
         # shellcheck disable=SC2086
         common_run $SUDO rm -f /Library/Logs/waired-agent.out.log /Library/Logs/waired-agent.err.log \
-            /Library/Logs/waired-agent.out.log.*.gz /Library/Logs/waired-agent.err.log.*.gz
+            /Library/Logs/waired-agent.out.log.* /Library/Logs/waired-agent.err.log.*
         [ -n "$home" ] && common_run rm -f \
             "$home/Library/Logs/waired-tray.out.log" \
-            "$home/Library/Logs/waired-tray.err.log"
+            "$home/Library/Logs/waired-tray.err.log" \
+            "$home/Library/Logs/waired-tray.out.log."* \
+            "$home/Library/Logs/waired-tray.err.log."*
         common_log "Removing Ollama.app"
         # shellcheck disable=SC2086
         common_run $SUDO rm -rf /Applications/Ollama.app
