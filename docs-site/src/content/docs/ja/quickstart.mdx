@@ -5,7 +5,7 @@ meta:
   audience: はじめて Waired をセットアップする人
   needs: AI を動かすパソコン 1 台、Google アカウント、そのパソコンの管理者権限
   time: 集中して 10 分ほど。加えてダウンロードの待ち時間 5〜30 分
-sourceHash: e84895503d139c71
+sourceHash: debc556077acd47f
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -91,7 +91,9 @@ Sign in using this link:
 ```
 </Expected>
 
-**Enter** を押します。ブラウザが開くので Google アカウントを選びます。
+**Enter** を押します。ブラウザが開くので Google アカウントを選びます。表示された
+リンクを自分で開いても構いません（このパソコンでも別のパソコンでも、どのブラウザ
+でも）。どちらの場合もターミナルは動き続け、サインインを自分で検知します。
 
 <Aside type="note" title="画面のないマシンの場合">
 	開くブラウザがないため、ターミナルはリンクを表示したうえで

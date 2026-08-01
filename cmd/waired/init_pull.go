@@ -37,7 +37,11 @@ import (
 // whose engine install had just FAILED still qualified, and the terminal then
 // waited out the whole setup budget for an engine that was never coming (#188).
 // enter (nil = no takeover offer) lets the operator take the terminal back.
-func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *enterWatch) bool {
+// setup (nil = nothing to watch for) reports a browser setup starting
+// during the wait — the case awaitSetupBudget's 3-minute grace gave up on
+// (#308). This is the longest wait in the flow, so it is where a slow
+// operator's browser setup actually lands.
+func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *enterWatch, setup *setupWatch) bool {
 	if !waitDaemonReachable(mgmtURL, 15*time.Second) {
 		// The caller already prints a "start the agent, then …" hint; stay
 		// quiet here so we don't double up.
@@ -66,11 +70,39 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 	}
 
 	for {
-		// The takeover exchange (init_takeover.go) speaks through this
-		// loop rather than printing for itself, so its lines land after
-		// the in-place progress bar has been terminated.
+		// The watches speak through this loop rather than printing for
+		// themselves, so their lines land after the in-place progress bar
+		// has been terminated — and at most once per tick, however many
+		// of them have something to say.
+		barEnded := false
+		endBar := func() {
+			if !barEnded {
+				barEnded = true
+				endProgressLine(out, tty, &line)
+			}
+		}
+
+		// #308: the browser setup started after the grace expired. Close
+		// the takeover offer (it would strand a setup the control plane
+		// believes is running elsewhere), say what this window is doing
+		// now, and give the wait the residency budget it would have had if
+		// the operator had clicked three minutes sooner.
+		if started, setupBudget, coming := setup.Poll(); started {
+			endBar()
+			enter.Close(out)
+			writePrompt(out, setupKeepTerminalOpenLine)
+			deadline = time.Now().Add(setupBudget)
+			engineComing = coming
+			// The engine the grace gave up on is the one the wizard is
+			// about to install, so a grace already counting down would
+			// otherwise end the wait for it (#188 in reverse).
+			noEngineDeadline = time.Time{}
+			lastStep = "" // re-announce the current phase after the interruption
+		}
+
+		// The takeover exchange (init_takeover.go).
 		if took, note := enter.Poll(); note != "" || took {
-			endProgressLine(out, tty, &line)
+			endBar()
 			if note != "" {
 				writePrompt(out, note)
 			}

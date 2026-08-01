@@ -32,6 +32,12 @@ var daemonReachable = func(mgmtURL string) bool {
 	return resp.StatusCode < 500
 }
 
+// loginPollInterval is how often the login loop re-reads /login/status —
+// and, with it, how often the sign-in gate gets to notice a keystroke. A
+// var so tests can shrink it: the loop is now the thing under test for
+// #308, and a second per tick is a second per test.
+var loginPollInterval = time.Second
+
 // daemonInitOpts is everything runInitViaDaemon needs from `waired init`.
 //
 // A struct rather than a parameter list: this started as six positional
@@ -131,19 +137,31 @@ func runInitViaDaemon(o daemonInitOpts) error {
 	// with two readers between them (#223).
 	stdin := promptReader(owner)
 	// Resolved once, outside the loop, so the decision is stable.
-	gate := resolveBrowserGate(noBrowser, nonInteractive, isTerminal(os.Stdin), browser.HasDisplay())
+	mode := resolveGateFn(noBrowser, nonInteractive, isTerminal(os.Stdin), browser.HasDisplay())
 
-	opened := false
+	var gate *loginGate
 	lastPhase := management.LoginPhase("")
+	// #308: this deadline now bounds the operator's think-time at the
+	// Enter prompt too. It never used to: the gate blocked the loop, so
+	// the clock only started once Enter had been pressed.
 	deadline := time.Now().Add(12 * time.Minute)
 
 	for {
-		if st.LoginURL != "" && !opened {
-			opened = true
+		if st.LoginURL != "" && gate == nil {
 			// gcloud-style gate: URL first, browser only on Enter (or
-			// immediately when the session can't answer a prompt). See
-			// login_gate.go.
-			presentLoginURL(stdin, os.Stdout, st.LoginURL, st.UserCode, gate)
+			// immediately when the session can't answer a prompt). It
+			// returns rather than reading, and the loop polls it below —
+			// blocking here is what made a browser-driven sign-in report
+			// a failure on every wizard step (#308). See login_gate.go.
+			gate = presentLoginURL(owner, os.Stdout, st.LoginURL, st.UserCode, mode)
+		}
+
+		switch st.Phase {
+		case management.LoginPhaseActivating, management.LoginPhaseActive, management.LoginPhaseError:
+			// The sign-in resolved without the Enter the gate offered.
+			// Withdraw before anything else prints, so the phase line
+			// below lands on its own line and not on the parked prompt.
+			gate.Withdraw(os.Stdout)
 		}
 
 		if st.Phase != lastPhase {
@@ -176,7 +194,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// below can act on a stale answer.
 			applyDaemonInitInference(mgmtURL, inf, os.Stdout)
 
-			budget, setupActive, enter := awaitBrowserSetup(sess, owner, os.Stdout, nonInteractive, noBrowser)
+			budget, setupActive, enter, watch := awaitBrowserSetup(sess, owner, os.Stdout, nonInteractive, noBrowser)
 
 			// §11: on this path init returned long before reaching the
 			// standalone engine block, so nothing here could ever install
@@ -195,6 +213,16 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// flip puts Linux and Windows here too. Condition is
 				// "does the host want inference", read from the daemon.
 				engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, os.Stdout)
+			}
+
+			// #308: the engine step above can run for minutes, so the
+			// browser setup may have started long after awaitSetupBudget's
+			// grace gave up on one. Read the edge here, where setupActive
+			// still decides what this terminal is allowed to say and ask.
+			engineComing := engineArrivalPending(sess.State())
+			if started, setupBudget, coming := watch.Poll(); started && !enter.Fired() {
+				enter.Close(os.Stdout)
+				setupActive, budget, engineComing = true, setupBudget, coming
 			}
 
 			if engineErr != nil {
@@ -222,7 +250,15 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					writePrompt(os.Stdout, setupKeepTerminalOpenLine)
 				}
 				waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
-					engineArrivalPending(sess.State()), enter)
+					engineComing, enter, watch)
+			}
+			// #308: a setup that started during the wait leaves this
+			// terminal as the browser's executor, so it must stop asking
+			// its own questions below (§4.2). Applied before the takeover
+			// check, which overrides it: an operator who did take the
+			// terminal back owns it regardless.
+			if watch.Started() {
+				setupActive = true
 			}
 			if enter.Fired() {
 				// The operator took the terminal back. The lease is
@@ -382,20 +418,12 @@ func runInitViaDaemon(o daemonInitOpts) error {
 		if time.Now().After(deadline) {
 			return errors.New("login timed out waiting for the daemon")
 		}
-		// #184: on the print-only gate nothing above reads stdin, so an
-		// Enter pressed out of muscle memory — the other two gates open a
-		// browser with it — used to sit in the buffer until the takeover
-		// offer answered it, silently switching setup to the terminal at
-		// the moment the user was asking for a browser. Answer it here,
-		// where it was pressed. Non-blocking on purpose: the link may
-		// well be opened on a phone, and a terminal parked on a read
-		// would never see the sign-in complete.
-		if opened && gate == gatePrintOnly {
-			if _, typed := owner.Poll(); typed {
-				fmt.Println(dim("Nothing to press here — waiting for you to sign in with the link above."))
-			}
-		}
-		time.Sleep(time.Second)
+		// The sign-in step's side of the keyboard: open the browser on the
+		// Enter the prompt gate offered, or answer the stray one the
+		// print-only gate has no use for (#184). Both are non-blocking —
+		// see login_gate.go.
+		gate.Poll(os.Stdout)
+		time.Sleep(loginPollInterval)
 
 		body, err := httpGet(mgmtURL + "/waired/v1/login/status?session=" + url.QueryEscape(st.SessionID))
 		if err != nil {
