@@ -166,3 +166,9 @@ func TestPullModel_FailedFreshPullMarksFailed(t *testing.T) {
 		t.Errorf("state = %q after failed fresh pull, want failed", ms.State)
 	}
 }
+
+// newTestPuller wires a Puller over a fake runner without a real binary,
+// for tests that need to build the runner after the provider exists.
+func newTestPuller(r download.CommandRunner) *download.Puller {
+	return download.NewPuller("ollama-fake", r)
+}

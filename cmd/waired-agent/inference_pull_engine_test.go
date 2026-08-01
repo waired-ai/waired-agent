@@ -100,3 +100,53 @@ func TestRunPullJob_ParkedEngineIsNotRevivedByAPull(t *testing.T) {
 		t.Fatal("a pull un-parked the engine; only an explicit start may")
 	}
 }
+
+// THE #305/R0 REGRESSION BAR. PRODUCT CONTRACT: a pull that starts the
+// engine must not take it down again when the download finishes.
+//
+// #304 added an EnsureRunning join to runPullJob so a pull dispatched the
+// moment the engine binary appears waits for the server. But runPullJob
+// wrapped its work in a self-cancelling context and passed THAT to
+// EnsureRunning. When the pull wins the single-flight leader race — which
+// is exactly the fresh-install case #304 targets — the ctx reaches
+// ensureRunningLeader -> Spawner.Spawn -> exec.CommandContext, so the
+// `defer cancel()` killed `ollama serve` on completion. The engine then
+// self-healed via crash recovery, burning one of three strikes toward the
+// give-up latch.
+//
+// It escaped review because fakeSpawner discarded the ctx; it now honours
+// it, the way DefaultSpawner does.
+func TestRunPullJob_DoesNotKillTheEngineItStarted(t *testing.T) {
+	p, sp := pullEngineProvider(t)
+	ctx := context.Background()
+
+	if _, err := p.PullModel(ctx, "dense-mtp"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	if got := sp.count(); got != 1 {
+		t.Fatalf("spawns during the pull = %d, want 1 (the pull must bring the engine up)", got)
+	}
+	// Assert on the context the child was spawned with rather than waiting
+	// for the child to notice a cancellation: the former is deterministic,
+	// the latter is a race against the kill goroutine.
+	spawnCtx := sp.lastCtx()
+	if spawnCtx == nil {
+		t.Fatal("no child was spawned")
+	}
+	if err := spawnCtx.Err(); err != nil {
+		t.Fatalf("the engine was spawned on a context that is already cancelled (%v); "+
+			"a finished pull must not take the engine down with it", err)
+	}
+	if proc := sp.lastProc(); proc != nil {
+		select {
+		case <-proc.Done():
+			t.Fatal("the engine child died when the pull finished")
+		default:
+		}
+	}
+	if st := p.ollama.Health(ctx).State; st != infruntime.StateReady {
+		t.Fatalf("engine state after the pull = %s, want %s", st, infruntime.StateReady)
+	}
+}

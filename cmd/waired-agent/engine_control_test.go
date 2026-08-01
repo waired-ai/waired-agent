@@ -23,7 +23,27 @@ type fakeProc struct {
 	once sync.Once
 }
 
-func newFakeProc() *fakeProc              { return &fakeProc{done: make(chan struct{})} }
+func newFakeProc() *fakeProc { return &fakeProc{done: make(chan struct{})} }
+
+// watchCtx mirrors what exec.CommandContext does to a real child: the
+// process dies when the context that spawned it is cancelled. Without
+// this the fake could not express #305/R0 — a pull that spawned the
+// engine on its own self-cancelling context killed it on completion, and
+// a spawner that discards the ctx makes that case unwritable.
+func (p *fakeProc) watchCtx(ctx context.Context) *fakeProc {
+	if ctx == nil || ctx.Done() == nil {
+		return p
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = p.Kill()
+		case <-p.done:
+		}
+	}()
+	return p
+}
+
 func (p *fakeProc) PID() int              { return 4242 }
 func (p *fakeProc) Done() <-chan struct{} { return p.done }
 func (p *fakeProc) Err() error            { return nil }
@@ -39,13 +59,44 @@ func (p *fakeProc) Kill() error {
 type fakeSpawner struct {
 	mu    sync.Mutex
 	calls int
+	procs []*fakeProc
+	ctxs  []context.Context
 }
 
-func (s *fakeSpawner) Spawn(context.Context, string, []string, []string, io.Writer) (infruntime.RunningProcess, error) {
+// Spawn honours the context it is handed, because DefaultSpawner does:
+// it builds the child with exec.CommandContext (internal/runtime/
+// spawner_unix.go, spawner_windows.go), so cancelling the spawning
+// context kills the engine.
+func (s *fakeSpawner) Spawn(ctx context.Context, _ string, _, _ []string, _ io.Writer) (infruntime.RunningProcess, error) {
+	p := newFakeProc().watchCtx(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
-	return newFakeProc(), nil
+	s.procs = append(s.procs, p)
+	s.ctxs = append(s.ctxs, ctx)
+	return p, nil
+}
+
+// lastProc returns the most recently spawned child, or nil.
+func (s *fakeSpawner) lastProc() *fakeProc {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.procs) == 0 {
+		return nil
+	}
+	return s.procs[len(s.procs)-1]
+}
+
+// lastCtx returns the context the most recent child was spawned with, or
+// nil. Asserting on this is deterministic where waiting for the child to
+// notice a cancellation is not.
+func (s *fakeSpawner) lastCtx() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.ctxs) == 0 {
+		return nil
+	}
+	return s.ctxs[len(s.ctxs)-1]
 }
 
 func hostPort(t *testing.T, raw string) (string, int) {

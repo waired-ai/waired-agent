@@ -22,6 +22,15 @@ type InferenceProvider interface {
 	Hardware(ctx context.Context) hardware.Profile
 	Runtimes(ctx context.Context) []RuntimeStatus
 	ListModels(ctx context.Context) []ModelEntry
+	// PullModel starts a model download and returns as soon as it is
+	// admitted. ctx bounds the SYNCHRONOUS admission only — the
+	// implementation MUST run the download itself on its own long-lived
+	// context. Handlers pass r.Context(), which net/http cancels the
+	// moment the response is written, so a job that inherited it would be
+	// killed within milliseconds of the 202 (#305).
+	//
+	// A pull already in flight for the same model is joined rather than
+	// duplicated; the returned PullJob then describes the running job.
 	PullModel(ctx context.Context, modelOrAlias string) (PullJob, error)
 	DeleteModel(ctx context.Context, modelID string) error
 	Select(ctx context.Context, req router.Request) (router.Selection, error)
