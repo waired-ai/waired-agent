@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
+	"github.com/waired-ai/waired-agent/internal/platform/servicediag"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
@@ -109,7 +110,7 @@ func TestCollectDoctorFindings_HermeticMissingState(t *testing.T) {
 	state := t.TempDir()
 	// Zero trayDoctor: no tray finding, so the assertions below do not depend
 	// on whether the test runner happens to have a desktop session.
-	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{})
+	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{})
 
 	subjects := map[string]integration.Status{}
 	for _, f := range findings {

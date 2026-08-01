@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 99c5ed7c9b13ac83
+sourceHash: 9665f5461a99c25b
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -85,6 +85,7 @@ waired doctor --fix
 | **gateway token** | コーディングツールが自分の AI に届くための鍵が無いか、読めない。 | `waired link`、または **f**。 |
 | **device sign-in** | このパソコンのサインインが無効になっている。ローカルの AI は動き続けるが、アカウント上にこのパソコンが現れず、他の端末からも届かない。 | `waired init` → [サインインしたのに「サインインしていない」と出る](/ja/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out)を参照。 |
 | **network connection** | サインインは有効だが、このパソコンがまだ接続できていない。Waired が自動で再試行し続けます。 | 1 分ほど待ってもう一度実行。 |
+| **waired-agent service** | 常駐サービスが起動しておらず、その**理由**を OS 自身のサービス記録から読み取って表示します。Windows なら「Windows のセキュリティ機能に起動をブロックされた」「起動がタイムアウトした」「予期せず停止した」など、Linux / macOS ならサービスマネージャーが記録した終了ステータスです。根拠となった記録は角かっこ内に引用されるので、自分で確認できます。 | Waired のメニューから起動するか、その行に書かれた対処に従ってください。 |
 | **waired-agent management** | 常駐サービスが応答していない。これが失敗すると他もすべて動きません。 | [Waired が動いていない](/ja/troubleshooting/#a-command-says-waired-agent-is-not-running)を参照。 |
 | **waired phase** | ルーティングが一時停止しているか、想定外の状態。 | `waired resume` → [しばらく使わないようにする](/ja/guides/pause/)。 |
 | **Local Gateway** | サービスは動いているが、AI 応答を担う部分が動いていない。`503` はたいていモデル未読み込み。 | ダウンロード完了を待つ（`waired models ls`）か、[モデルを見直す](/ja/guides/choose-a-model/)。 |

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
+	"github.com/waired-ai/waired-agent/internal/platform/servicediag"
 )
 
 // TestCollectDoctorFindings_TokenPermissionDenied pins #633: when the
@@ -37,7 +38,7 @@ func TestCollectDoctorFindings_TokenPermissionDenied(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(secretsDir, 0o700) })
 
-	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{})
+	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{})
 
 	var tok *integration.AuditFinding
 	for i := range findings {
