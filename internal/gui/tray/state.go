@@ -153,7 +153,7 @@ type WorkerModeRow struct {
 // subagent route (same/auto/waired/anthropic). Selected drives the
 // leading "●" / "○" glyph in apply(); Class is the value POSTed on
 // click. Node selection is deliberately NOT here — it lives in the
-// "Inference worker" submenu (#649: `waired worker`).
+// "Inference routing" submenu (#649: `waired worker`).
 type ClaudeRouteRow struct {
 	Class    state.ClaudeRouteClass
 	Label    string
@@ -374,7 +374,7 @@ type MenuModel struct {
 	// selector nested under a "Claude Code" parent. Populated when the
 	// daemon exposes /waired/v1/integration/claude/route; ShowClaudeCode=
 	// false hides the whole submenu so older daemons render the pre-feature
-	// menu. Node selection is NOT here — that stays in the Inference worker
+	// menu. Node selection is NOT here — that stays in the Inference routing
 	// submenu. ClaudeFallbackNote is a disabled row surfaced only when the
 	// daemon reports a last fallback (no-silent-breakage). ClaudeEnableNote
 	// is a disabled row shown only when managed-settings is not yet routing
@@ -1594,7 +1594,7 @@ func renderManagedSettingsLabel(ms management.ClaudeManagedSettingsView) string 
 // into the "Claude Code" submenu: a main-conversation route group
 // (auto/waired/anthropic) and a subagent group (same/auto/waired/anthropic),
 // each with the current selection flagged. Node selection is intentionally
-// absent — that lives in the Inference worker submenu. claude carries the
+// absent — that lives in the Inference routing submenu. claude carries the
 // managed-settings view (may be nil) so the submenu can note when routing is
 // not active yet with the OS-correct enable hint.
 func applyClaudeRouting(m *MenuModel, st *management.ClaudeRoutingState, claude *management.ClaudeIntegrationStatus) {
