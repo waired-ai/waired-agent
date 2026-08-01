@@ -88,13 +88,15 @@ func TestHumanBytes(t *testing.T) {
 // fakeRunner emits a scripted sequence of stderr lines and then
 // returns a configured error from Wait.
 type fakeRunner struct {
-	lines     []string
-	finalErr  error
-	calledArg []string
-	calledEnv []string
+	lines        []string
+	finalErr     error
+	calledBinary []string
+	calledArg    []string
+	calledEnv    []string
 }
 
 func (r *fakeRunner) Run(ctx context.Context, binary string, args, env []string, onLine func(string)) error {
+	r.calledBinary = append(r.calledBinary, binary)
 	r.calledArg = args
 	r.calledEnv = env
 	for _, line := range r.lines {
@@ -205,6 +207,66 @@ func TestPuller_PassesEnv(t *testing.T) {
 	}
 	if len(r.calledEnv) != 1 || r.calledEnv[0] != "OLLAMA_HOST=127.0.0.1:9475" {
 		t.Errorf("runner env = %v, want [OLLAMA_HOST=127.0.0.1:9475]", r.calledEnv)
+	}
+}
+
+// Product contract (#304): a Puller built with a resolver asks it on
+// EVERY pull, so an agent that booted before the engine existed reaches
+// a binary that appeared afterwards — including one the $PATH/well-known
+// walk in ResolveBinary cannot see, which is where waired's own Linux
+// install lands.
+func TestPuller_ResolvesTheBinaryOnEveryPull(t *testing.T) {
+	r := &fakeRunner{lines: []string{"success"}}
+	calls := 0
+	puller := NewResolvingPuller(func() (string, error) {
+		calls++
+		return "/var/lib/waired/runtimes/ollama/bin/ollama", nil
+	}, r)
+
+	for i := range 2 {
+		if err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", nil); err != nil {
+			t.Fatalf("pull %d: %v", i, err)
+		}
+	}
+	if calls != 2 {
+		t.Errorf("resolver calls = %d, want 2 (a re-install must be picked up)", calls)
+	}
+	want := []string{
+		"/var/lib/waired/runtimes/ollama/bin/ollama",
+		"/var/lib/waired/runtimes/ollama/bin/ollama",
+	}
+	if !equal(r.calledBinary, want) {
+		t.Errorf("runner binary = %v, want %v", r.calledBinary, want)
+	}
+}
+
+// Product contract: the resolver's error reaches the caller intact. The
+// daemon's resolver returns an actionable "run `waired runtimes install
+// ollama`" message that a bare ErrNotInstalled would have swallowed.
+func TestPuller_ResolverErrorIsSurfaced(t *testing.T) {
+	r := &fakeRunner{lines: []string{"success"}}
+	sentinel := errors.New("ollama not installed under the state dir")
+	puller := NewResolvingPuller(func() (string, error) { return "", sentinel }, r)
+
+	err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", nil)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Pull() error = %v, want %v", err, sentinel)
+	}
+	if len(r.calledBinary) != 0 {
+		t.Errorf("runner ran with %v; an unresolved binary must not spawn", r.calledBinary)
+	}
+}
+
+// Records today's behaviour: NewPuller's explicit path still wins, so the
+// callers that were not migrated to a resolver are unaffected.
+func TestNewPuller_ExplicitBinaryStillWins(t *testing.T) {
+	r := &fakeRunner{lines: []string{"success"}}
+	puller := NewPuller("/usr/bin/ollama", r)
+	if err := puller.Pull(context.Background(), "qwen3:8b-q4_K_M", nil); err != nil {
+		t.Fatalf("Pull() error = %v", err)
+	}
+	if !equal(r.calledBinary, []string{"/usr/bin/ollama"}) {
+		t.Errorf("runner binary = %v, want [/usr/bin/ollama]", r.calledBinary)
 	}
 }
 

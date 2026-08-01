@@ -61,9 +61,10 @@ type CommandRunner interface {
 
 // Puller drives `ollama pull` and parses its progress output.
 type Puller struct {
-	binary string
-	runner CommandRunner
-	env    []string
+	binary  string
+	resolve func() (string, error)
+	runner  CommandRunner
+	env     []string
 }
 
 // NewPuller wires a Puller with the given ollama binary path and
@@ -77,6 +78,18 @@ func NewPuller(binary string, runner CommandRunner, env ...string) *Puller {
 	return &Puller{binary: binary, runner: runner, env: env}
 }
 
+// NewResolvingPuller is NewPuller for a caller whose ollama binary may
+// not exist yet AND may not land anywhere ResolveBinary looks. waired's
+// own Linux install lives under the agent state dir, deliberately off
+// $PATH (see cmd/waired-agent/engine_resolve.go), so Pull's $PATH /
+// well-known-paths fallback answers "not installed" on exactly the hosts
+// waired provisioned (#304). resolve is consulted on every Pull, so an
+// engine installed — or re-installed — after boot is picked up without
+// an agent restart.
+func NewResolvingPuller(resolve func() (string, error), runner CommandRunner, env ...string) *Puller {
+	return &Puller{resolve: resolve, runner: runner, env: env}
+}
+
 // Pull runs `ollama pull <tag>` and forwards parsed Progress events
 // to onProgress (which may be nil). It returns the runner's error
 // verbatim on failure; success is determined by the runner's exit
@@ -87,8 +100,18 @@ func (p *Puller) Pull(ctx context.Context, tag string, onProgress func(Progress)
 	}
 	// Lazily resolve the binary when it was empty at construction time:
 	// an agent that booted before ollama was installed can pull as soon
-	// as the binary appears, without a restart (#188).
+	// as the binary appears, without a restart (#188). Prefer the
+	// caller's resolver when it has one — ResolveBinary alone cannot see
+	// a state-dir install (#304). Nothing is cached back into p.binary:
+	// Puller has no mutex and Pull runs on many goroutines.
 	binary := p.binary
+	if binary == "" && p.resolve != nil {
+		resolved, err := p.resolve()
+		if err != nil {
+			return err
+		}
+		binary = resolved
+	}
 	if binary == "" {
 		resolved, err := ResolveBinary("")
 		if err != nil {
