@@ -5,7 +5,7 @@ meta:
   audience: 不具合を報告する人、診断情報を求められた人
   needs: 問題が起きているパソコンのターミナル
   time: 数分（再現にかかる時間は別）
-sourceHash: 0d71e64db196a401
+sourceHash: 344204bb03db0c7f
 ---
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
@@ -95,9 +95,18 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
 	</TabItem>
 </Tabs>
 
-Windows ではインストーラ自身の記録が `%TEMP%\waired-install.log` に残ります。
-管理者ウィンドウは終了と同時に閉じるため、失敗の内容がこのファイルにしか
-残らないことがよくあります。こちらも添付してください。
+Windows ではインストーラ自身の記録が実行ごとに 1 ファイルずつ
+`%TEMP%\waired-install-<日付>-<時刻>-<ID>.log` に残ります。管理者ウィンドウは
+終了と同時に閉じるため、失敗の内容がこのファイルにしか残らないことがよく
+あります。こちらも添付してください。インストーラは開始前と、問題が起きた
+ときに、このパスを表示します。最新のものを自分で探すには次のようにします。
+
+```powershell
+Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Select-Object -Last 1
+```
+
+直近 5 件が保持されるため、やり直しても実際に失敗した回のログが上書きされる
+ことはなくなりました。
 
 ## まっさらな状態からやり直す
 
@@ -172,7 +181,7 @@ Windows ではインストーラ自身の記録が `%TEMP%\waired-install.log` �
 | `report.txt` | 冒頭の 4 ステップで作ったもの |
 | `waired version --json` | 正確なビルド |
 | `waired doctor` の出力 | 修復された場合でも、何が見つかったか |
-| Windows のインストール失敗時 | `%TEMP%\waired-install.log` |
+| Windows のインストール失敗時 | 最新の `%TEMP%\waired-install-*.log` |
 | 期待した動作 | と、実際に起きたこと |
 
 報告先は

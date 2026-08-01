@@ -117,7 +117,42 @@ function global:Stub-StartProcess {
             Write-Host '[itstub] child-exit'
         }
     }
-    [pscustomobject]@{ ExitCode = 0 }
+    $rc = 0
+    if ($Verb) {
+        # Stand in for the artefacts the elevated child leaves behind. The
+        # parent's entire diagnosis is now built from these two files (#314),
+        # so a stub that skipped them would make every interesting branch
+        # unreachable -- which is exactly what the hardcoded ExitCode 0 below
+        # used to do to the failure path.
+        $s = [Array]::IndexOf($ArgumentList, '-StateFile')
+        if ($s -ge 0 -and ($s + 1) -lt $ArgumentList.Count) {
+            $statePath = $ArgumentList[$s + 1].Trim('"')
+            if ($env:IT_ELEVATE_PROGRESS) {
+                Set-Content -LiteralPath "$statePath.progress" -Value ($env:IT_ELEVATE_PROGRESS -split ',')
+            }
+            if ($env:IT_ELEVATE_STATUS) {
+                Set-Content -LiteralPath "$statePath.status" -Value $env:IT_ELEVATE_STATUS
+            }
+        }
+        if ($env:IT_ELEVATE_THROW) {
+            # Shape-accurate on purpose. The real cmdlet catches the
+            # Win32Exception ShellExecute raised -- 1223 when the user answers
+            # No to UAC -- and rethrows a BARE InvalidOperationException with
+            # no InnerException, on Windows PowerShell 5.1 and pwsh 7 alike.
+            # Reproducing that exactly is the point: install.ps1 code that
+            # tries `catch [Win32Exception]` or walks InnerException for
+            # NativeErrorCode must fail this case rather than quietly never
+            # firing on a real host.
+            throw (New-Object System.InvalidOperationException(
+                'This command cannot be run due to the error: The operation was canceled by the user.'))
+        }
+        if ($env:IT_ELEVATE_EXIT) { $rc = [int]$env:IT_ELEVATE_EXIT }
+    }
+    # install.ps1 no longer passes -Wait for the RunAs arm: it drives the wait
+    # itself so it can mirror the child's transcript. So the object has to
+    # answer .Handle / .HasExited / .WaitForExit() too, not just .ExitCode.
+    $obj = [pscustomobject]@{ ExitCode = $rc; Handle = [IntPtr]::Zero; HasExited = $true }
+    $obj | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { } -PassThru
 }
 
 function global:Stub-InvokeRestMethod {
@@ -478,6 +513,62 @@ if (Test-Path -LiteralPath $stateFile) {
 } else {
     Write-Bad '#192 state file was not written'
 }
+
+# 11. #314 -- what the parent says when the elevated phase does not exit 0.
+#     None of this was reachable before: the Windows CI leg runs elevated and
+#     so never enters Invoke-SelfElevate at all, and this stub hardcoded
+#     ExitCode 0. Every assert below is a product contract, not a snapshot.
+#
+#     The pre-elevation notice: the reviewed operators closed the elevated
+#     window partly because nothing said it was the one doing the work.
+Invoke-Case -Label '#314 parent says where the work happens before UAC' -Params $fresh `
+    -Assert @('The rest of setup runs THERE', 'Do NOT close that window')
+
+#     STATUS_CONTROL_C_EXIT is what Windows reports for a closed console. The
+#     bare signed integer is what users saw and could not act on; the negative
+#     assert keeps it from regressing to that.
+Invoke-Case -Label '#314 closed window decodes instead of a bare NTSTATUS' -Params $fresh -Expect nonzero `
+    -Env @{ IT_ELEVATE_EXIT = '-1073741510' } `
+    -Assert @('Administrator window was closed', '0xC000013A',
+              'setup did not finish', '!(?m)exited code -1073741510\s*\.')
+
+#     The highest-value case in the file: a run that COMPLETED and whose
+#     window was closed at the "Press Enter" pause exits the same way as one
+#     killed mid-setup. Before the done sentinel the parent called Common-Die
+#     on a fully successful install.
+Invoke-Case -Label '#314 done sentinel turns a closed success window into exit 0' -Params $fresh `
+    -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-running,init-ok,done' } `
+    -Assert @('setup had already finished', '!setup did not finish')
+
+#     A cause the child managed to record still wins over the decode: the
+#     marker is specific, the exit code is generic.
+Invoke-Case -Label '#314 .status marker still wins over the exit-code decode' -Params $fresh -Expect nonzero `
+    -Env @{ IT_ELEVATE_EXIT = '1'; IT_ELEVATE_STATUS = 'disk was full' } `
+    -Assert @('disk was full', '!Administrator window was closed')
+
+#     Breadcrumbs drive the recap, so a half-done run reports what survived
+#     rather than a blanket failure.
+Invoke-Case -Label '#314 recap reports how far setup actually got' -Params $fresh -Expect nonzero `
+    -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-installed' } `
+    -Assert @('It stopped during: starting the background service',
+              'What is on this machine now', 'Sign in:\s+not reached')
+Invoke-Case -Label '#314 recap distinguishes a failed sign-in from an unreached one' -Params $fresh -Expect nonzero `
+    -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-running,path-ok,init-start,init-failed' } `
+    -Assert @('Sign in:\s+did not complete')
+
+#     A declined UAC prompt never returns a process at all -- Start-Process
+#     raises a terminating error. It used to reach the trap and print only the
+#     localized OS string.
+Invoke-Case -Label '#314 declined elevation explains itself' -Params $fresh -Expect nonzero `
+    -Env @{ IT_ELEVATE_THROW = '1' } `
+    -Assert @('The Administrator step did not start', 'choosing No on the Administrator \(UAC\) prompt',
+              'Windows reported: This command cannot be run')
+
+# 12. #314 -- per-run transcript names. A fixed name plus -Force meant the next
+#     run destroyed the failed run's evidence, which is how one reviewed host
+#     lost its only useful log.
+Invoke-Case -Label '#314 install log is per-run, not a fixed name' -Params $fresh `
+    -Assert @('waired-install-\d{8}-\d{6}-\d+\.log', '!waired-install\.log')
 
 } finally {
     Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue

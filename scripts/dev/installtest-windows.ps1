@@ -1006,6 +1006,43 @@ try {
         else { ItBad ("ConvertTo-NativeArg wrong: " + ($bad -join '; ')) }
     }
 
+    # --- Get-ExitCodeReason, and its two copies ------------------------------
+    # Same shape and same reason as the quoter above: both installers decode
+    # the elevated child's exit code, so both carry the table and the two must
+    # not drift. This leg cannot be end-to-end here -- the runner is already
+    # Administrator, so Invoke-SelfElevate never executes on this host -- which
+    # is precisely why the decoder is a pure function: it can be lifted out of
+    # the source and driven directly. installtest-pwsh.ps1 covers the wiring.
+    ItStep "install.ps1 / uninstall.ps1 exit-code decode asserts (#314)"
+    $dInstall   = Get-Ps1Function -Path $installPs1   -Name 'Get-ExitCodeReason'
+    $dUninstall = Get-Ps1Function -Path $uninstallPs1 -Name 'Get-ExitCodeReason'
+    if ($dInstall -and $dUninstall -and $dInstall -ceq $dUninstall) { ItOk "both installers carry an identical Get-ExitCodeReason (no drift)" }
+    else { ItBad "Get-ExitCodeReason differs between install.ps1 and uninstall.ps1 (or is missing from one)" }
+    if ($dInstall) {
+        Invoke-Expression $dInstall
+        # Product contract, not a snapshot: 0xC000013A is the code a closed
+        # elevated console produces and the one the whole of #314 is about, so
+        # it must always decode to something an operator can act on. An
+        # unrecognised code must decode to '' -- that is what makes the caller
+        # fall back to printing the raw value instead of inventing a cause.
+        $bad = @()
+        if ((Get-ExitCodeReason -Code -1073741510) -notmatch 'closed') {
+            $bad += '0xC000013A does not mention the window being closed'
+        }
+        foreach ($known in @(-1073741502, -1073741819, -1073741515, -1073740791)) {
+            if (-not (Get-ExitCodeReason -Code $known)) { $bad += "no reason for $known" }
+        }
+        foreach ($unknown in @(0, 1, 5, 1223)) {
+            if ((Get-ExitCodeReason -Code $unknown) -ne '') { $bad += "$unknown should decode to '' (caller prints the raw code)" }
+        }
+        # The hex the caller pairs with the reason. Int32 formats its
+        # two's-complement bit pattern, which is the whole reason the decoder
+        # matches signed literals and never casts to [uint32] (that throws).
+        if (('{0:X8}' -f -1073741510) -cne 'C000013A') { $bad += "'{0:X8}' does not render -1073741510 as C000013A" }
+        if ($bad.Count -eq 0) { ItOk "Get-ExitCodeReason decodes the known NTSTATUS codes and only those" }
+        else { ItBad ("Get-ExitCodeReason wrong: " + ($bad -join '; ')) }
+    }
+
     # --- the two pre-answered setup questions --------------------------------
     # `waired init`'s --inference-enabled / --share-with-mesh are Go bool flags:
     # the space form leaves the value as a positional arg, which cobra.NoArgs
@@ -1580,7 +1617,12 @@ if ($script:Skip -gt 0) {
 # behind "the leg said ok while the reason sat in the same log".
 #
 # MEASURED from a green run of the configuration CI uses, not estimated:
-# -Tier 2 -Contract -ExeVariant executes 78. The floor is set at the tier
+# -Tier 2 -Contract -ExeVariant executed 78, and 80 once the #314 exit-code
+# decode block added its 2 unconditional asserts (the install/uninstall drift
+# check and the decode table). Both sit in the same always-run Tier-1 section
+# as the ConvertTo-NativeArg pair above them; 80 was confirmed against a green
+# run of this configuration, not derived and left unchecked. The floor
+# is set at the tier
 # level only, and every option (-Contract, -ExeVariant, -Inference) only ADDS
 # asserts, so a leaner invocation of the same tier still clears it.
 #
@@ -1593,7 +1635,7 @@ if ($script:Skip -gt 0) {
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = 78
+    $floor = 80
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
