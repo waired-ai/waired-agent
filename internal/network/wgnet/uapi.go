@@ -27,7 +27,12 @@ func BuildUAPI(cfg UAPIConfig) (string, error) {
 	if len(cfg.PrivateKey) != 32 {
 		return "", fmt.Errorf("private_key must be 32 bytes (got %d)", len(cfg.PrivateKey))
 	}
-	if cfg.ListenPort < 1 || cfg.ListenPort > 65535 {
+	// 0 is meaningful, not missing: wireguard-go reads it as "bind any
+	// free port" and reports the chosen one back through the device
+	// state. The agent asks for it when the port pinned at enrollment
+	// turns out to be unbindable (waired-agent#318). Negative and
+	// out-of-range values are still errors.
+	if cfg.ListenPort < 0 || cfg.ListenPort > 65535 {
 		return "", fmt.Errorf("listen_port out of range: %d", cfg.ListenPort)
 	}
 

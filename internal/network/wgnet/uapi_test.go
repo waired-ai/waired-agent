@@ -2,9 +2,45 @@ package wgnet
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// TestBuildUAPIListenPortRange pins port 0 as valid (waired-agent#318):
+// wireguard-go reads it as "bind any free port", which is what the agent
+// asks for when the port pinned at enrollment cannot be bound. This test
+// previously had no port-0 case and the check rejected it, so the
+// ephemeral fallback would have failed before reaching the socket.
+func TestBuildUAPIListenPortRange(t *testing.T) {
+	priv := bytes.Repeat([]byte{0x11}, 32)
+	cases := []struct {
+		port    int
+		wantErr bool
+	}{
+		{0, false},
+		{41820, false},
+		{65535, false},
+		{-1, true},
+		{65536, true},
+	}
+	for _, tc := range cases {
+		got, err := BuildUAPI(UAPIConfig{PrivateKey: priv, ListenPort: tc.port})
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("port %d: expected an error", tc.port)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("port %d: %v", tc.port, err)
+			continue
+		}
+		if !strings.Contains(got, "listen_port="+strconv.Itoa(tc.port)+"\n") {
+			t.Errorf("port %d: missing listen_port line. got:\n%s", tc.port, got)
+		}
+	}
+}
 
 func TestBuildUAPIWithTwoPeers(t *testing.T) {
 	priv := bytes.Repeat([]byte{0x11}, 32)

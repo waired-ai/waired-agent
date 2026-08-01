@@ -24,6 +24,19 @@ import (
 
 const DefaultMTU = 1280
 
+// ErrBindFailed marks a NewEngine failure that happened while opening
+// the UDP socket, as opposed to anywhere else in device construction.
+//
+// Callers use it to decide whether retrying on a different port could
+// help (waired-agent#318): a port can be unavailable for reasons that
+// have nothing to do with waired — already in use, or, on Windows, sitting
+// inside one of the winnat/Hyper-V excluded UDP ranges, which are
+// reshuffled on every boot and reject the bind with a permissions error.
+// Classifying by *stage* rather than by errno keeps this portable: the
+// three OSes report those conditions with different error values, and a
+// retry on an ephemeral port is the right answer to all of them.
+var ErrBindFailed = errors.New("wgnet: could not bind the UDP listen port")
+
 // Peer is the minimal data the Engine needs about a remote device.
 type Peer struct {
 	DeviceName          string
@@ -149,17 +162,55 @@ func NewEngine(cfg Config) (*Engine, error) {
 		return nil, fmt.Errorf("ipc set: %w", err)
 	}
 	if err := dev.Up(); err != nil {
+		// Up() is where the bind happens: everything above only builds
+		// state in memory. Tag it so the caller can retry on another
+		// port instead of giving up on the whole session.
 		dev.Close()
-		return nil, fmt.Errorf("device up: %w", err)
+		return nil, fmt.Errorf("device up: %w: %w", ErrBindFailed, err)
 	}
+	e := &Engine{cfg: cfg, dev: dev, tnet: tnet, bind: muxBind}
+	// Report the port actually bound, not the one requested: they differ
+	// whenever the caller asked for 0.
+	bound, perr := e.ListenPort()
+	if perr != nil || bound == 0 {
+		bound = cfg.ListenPort
+	}
+	e.cfg.ListenPort = bound
 	cfg.Logger.Info("wgnet engine up",
 		"self", cfg.SelfName,
 		"overlay_ip", cfg.SelfOverlayIP.String(),
-		"listen_port", cfg.ListenPort,
+		"listen_port", bound,
+		"requested_listen_port", cfg.ListenPort,
 		"peer_count", len(cfg.Peers),
 		"relay_enabled", muxBind != nil,
 	)
-	return &Engine{cfg: cfg, dev: dev, tnet: tnet, bind: muxBind}, nil
+	return e, nil
+}
+
+// ListenPort reports the UDP port the device is actually bound to.
+//
+// Distinct from Config.ListenPort as supplied by the caller: passing 0
+// means "any free port", and the answer is only knowable after the bind.
+func (e *Engine) ListenPort() (int, error) {
+	if e == nil || e.dev == nil {
+		return 0, errors.New("wgnet: engine not initialized")
+	}
+	raw, err := e.dev.IpcGet()
+	if err != nil {
+		return 0, fmt.Errorf("ipc get: %w", err)
+	}
+	for line := range strings.SplitSeq(raw, "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || k != "listen_port" {
+			continue
+		}
+		port, perr := strconv.Atoi(v)
+		if perr != nil {
+			return 0, fmt.Errorf("parse listen_port %q: %w", v, perr)
+		}
+		return port, nil
+	}
+	return 0, errors.New("wgnet: no listen_port in device state")
 }
 
 // UpdatePeers atomically replaces the device's peer set. Used by the

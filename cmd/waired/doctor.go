@@ -214,6 +214,18 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 		}
 	}
 
+	// Sign-in health, straight from persisted state so it answers with
+	// the daemon down (waired-agent#318).
+	if f := signInFinding(stateDir); f.Subject != "" {
+		out = append(out, f)
+	}
+
+	// Whether a signed-in device actually connected. Needs the daemon,
+	// so it comes from the management API rather than disk.
+	if f := connectionFinding(ctx, mgmtURL); f.Subject != "" {
+		out = append(out, f)
+	}
+
 	// Pause/resume phase. Surfaces an explicit warn finding when the
 	// agent is paused so the user sees `waired resume` in the doctor
 	// output rather than just a vague "Local Gateway HTTP 503".

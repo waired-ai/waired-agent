@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: b94fa07ad51e7fbe
+sourceHash: c1ca345971519597
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -40,6 +40,7 @@ waired doctor
 
 **応答がない**
 
+- [サインインしたのに「サインインしていない」と出る](#i-signed-in-but-waired-says-i-am-signed-out)
 - [応答が返ってこない / Engine が not ready のまま](#no-answer-comes-back)
 - [Claude Code がクラウドを使い続ける](#claude-code-is-still-using-the-cloud)
 - [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
@@ -213,6 +214,42 @@ Waired のほかの機能には影響ありません。デバイスはサイン�
 ```sh
 waired runtimes benchmark
 ```
+
+<a id="i-signed-in-but-waired-says-i-am-signed-out"></a>
+
+## サインインしたのに「サインインしていない」と出る
+
+Waired のアイコンが「Not signed in」になる、あるいはアカウント上からこの
+パソコンが消える。サインアウトした覚えがないのに、再起動直後に起きがちです。
+
+見た目は同じでも原因は 2 通りあります。`waired doctor` で切り分けられます。
+
+```sh
+waired doctor
+```
+
+**`network connection` が ⚠ の場合** — サインインは有効で、このパソコンがまだ
+接続できていないだけです。いつも使うネットワークポートが再起動時に別のものに
+使われていた場合も含め、Waired が自動で再試行し続けるので、1 分ほど待って
+もう一度確認してください。いつまでも解消しない場合は常駐サービスを再起動します。
+
+```sh
+sudo systemctl restart waired-agent    # Linux
+Restart-Service waired-agent           # Windows（管理者）
+```
+
+**`device sign-in` が ✗ の場合** — このパソコンのサインインが実際に無効に
+なっており、サインインし直す以外に戻す方法はありません。
+
+```sh
+sudo waired init      # Linux / macOS
+waired init           # Windows（管理者）
+```
+
+モデル・設定・コーディングツールの構成はそのまま残ります。このパソコンの
+アカウント上の位置づけを復旧するだけです。ローカルの AI はこの間も応答し
+続けますが、アカウントを必要とする機能は止まります。サインインし直すまで、
+Web コンソールにこのパソコンは表示されず、他の端末からも届きません。
 
 <a id="no-answer-comes-back"></a>
 

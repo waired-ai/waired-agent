@@ -66,6 +66,13 @@ const inferenceServicePort uint16 = 9474
 // `systemctl stop` still stays down (issue #347).
 const restartRequestedExitCode = 17
 
+// bootRefreshTimeout bounds the pre-flight token refresh that activation
+// runs when the persisted access token is already stale
+// (waired-agent#318). Long enough for one round trip on a slow link,
+// short enough that a host booting with no network yet — the common case
+// for a service that starts before DHCP settles — does not sit here.
+const bootRefreshTimeout = 10 * time.Second
+
 // restartRequested is set by the management API's RestartScheduler
 // just before it SIGTERMs the process, turning the subsequent clean
 // shutdown into an exit-17 "restart me" signal for systemd.
@@ -478,6 +485,10 @@ func run(ctx context.Context, args []string) error {
 		if *bypassCPIAM {
 			refresherHTTP = bypassCPHTTPClient(parent, id.ControlURL, logger)
 		}
+		// gate owns the CP-facing context (armed below, once the session
+		// context exists). Built before the refresher so the refresher's
+		// terminal callback can close over it.
+		gate := &authGate{}
 		tokens := newTokenRefresher(tokenRefresherConfig{
 			StateDir:       *stateDir,
 			ControlURL:     id.ControlURL,
@@ -488,8 +499,27 @@ func run(ctx context.Context, args []string) error {
 			InitialAccess:  accessToken,
 			InitialRefresh: refreshToken,
 			InitialMeta:    tokenMeta,
-			Logger:         logger,
+			OnTerminal: func(err error) {
+				logger.Error("device sign-in is no longer valid; stopping control-plane sync until `waired init` is run", "err", err)
+				gate.markReauthRequired(err)
+			},
+			Logger: logger,
 		})
+		// Renew before first use (waired-agent#318). A host that was off
+		// for longer than the access-token lifetime wakes up holding an
+		// expired bearer; without this the push loops start anyway and
+		// spray 401s at the Control Plane until the refresh schedule
+		// catches up. Bounded and non-fatal: an offline boot must not
+		// stall activation, and the refresh loop retries on its own.
+		if tokens.accessTokenStale(time.Now()) {
+			preCtx, preCancel := context.WithTimeout(parent, bootRefreshTimeout)
+			if err := tokens.refreshOnce(preCtx); err != nil {
+				logger.Warn("pre-flight token refresh failed; continuing (auto-refresh will retry)", "err", err)
+			} else {
+				logger.Info("refreshed the access token before first use")
+			}
+			preCancel()
+		}
 
 		overlayIP, err := netip.ParseAddr(id.OverlayIP)
 		if err != nil {
@@ -510,7 +540,7 @@ func run(ctx context.Context, args []string) error {
 		// is invoked lazily by the engine when a relay endpoint is parsed,
 		// at which point the network map (and therefore the pin) is
 		// guaranteed to have been populated at least once.
-		provider := &agentProvider{id: id, engine: nil, wgListenPort: listenPort} // engine wired below
+		provider := &agentProvider{id: id, engine: nil, wgListenPort: listenPort, gate: gate} // engine wired below
 		relayFactory := newRelayClientFactory(logger, id, mk, nk.PublicBase64(), tokens.Get, deviceCert, provider)
 
 		// published flips true only once the fully-built session is handed
@@ -520,7 +550,7 @@ func run(ctx context.Context, args []string) error {
 		// success the session owns them and teardown() releases them.
 		published := false
 
-		engine, err := wgnet.NewEngine(wgnet.Config{
+		engine, listenPort, err := bringUpEngine(wgnet.Config{
 			SelfName:           id.DeviceID,
 			SelfOverlayIP:      overlayIP,
 			SelfPrivateKey:     nk.Private[:],
@@ -531,10 +561,18 @@ func run(ctx context.Context, args []string) error {
 			SelfNetworkID:      id.NetworkID,
 			SelfNodePub:        nk.PublicBase64(),
 			RelayClientFactory: relayFactory,
-		})
+		}, wgnet.NewEngine, logger)
 		if err != nil {
 			return err
 		}
+		// listenPort is now the port really bound, which may differ from
+		// the one pinned in identity.json. Everything downstream — the
+		// provider's status, the candidates advertised to the CP — has to
+		// use the real one. It is deliberately NOT written back to
+		// identity.json: the excluded ranges that force the fallback are
+		// reshuffled on every boot, so pinning today's fallback buys
+		// nothing, and enrollment stays the only writer of that file.
+		provider.wgListenPort = listenPort
 		defer func() {
 			if !published {
 				engine.Close()
@@ -552,6 +590,12 @@ func run(ctx context.Context, args []string) error {
 				cancel()
 			}
 		}()
+
+		// cpCtx is the session context minus "the Control Plane still
+		// accepts us" (waired-agent#318). Every loop that authenticates
+		// to the CP runs on it, so a terminal auth failure stops them in
+		// one move; everything local stays on ctx.
+		cpCtx := gate.attach(ctx)
 
 		// Periodic agent-stats publisher. Started AS EARLY AS POSSIBLE —
 		// before reconciler / disco / inference subsystem boot — so the
@@ -1063,6 +1107,7 @@ func run(ctx context.Context, args []string) error {
 				StateWriter: stateWriter,
 				Aggregator:  meshAgg,
 				PushClient:  infPushClient,
+				CPCtx:       cpCtx,
 				DeviceID:    id.DeviceID,
 				MachineKey:  mk.Private,
 				EngineKind:  engineKind,
@@ -1102,7 +1147,7 @@ func run(ctx context.Context, args []string) error {
 		// treatment) and the device's machine key.
 		go func() {
 			defer wg.Done()
-			runConnectivityPush(ctx, connectivityPushDeps{
+			runConnectivityPush(cpCtx, connectivityPushDeps{
 				PushClient: infPushClient,
 				DeviceID:   id.DeviceID,
 				MachineKey: mk.Private,
@@ -1123,7 +1168,7 @@ func run(ctx context.Context, args []string) error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				setupRec.runPush(ctx)
+				setupRec.runPush(cpCtx)
 			}()
 		}
 		applyDesiredSetup := func(st *signer.InferenceState) {
@@ -1290,7 +1335,7 @@ func run(ctx context.Context, args []string) error {
 			// setupRec != nil IS the onboarding capability: it is the
 			// applier the declaration promises, and it exists only when
 			// local AI is on (waired-agent#133).
-			runNetworkMapLoop(ctx, logger, id, tokens.Get, rec, meshAgg, peerDir, dispatcher, applySelf, applyDesiredSetup, setupRec != nil, *bypassCPIAM)
+			runNetworkMapLoop(cpCtx, logger, id, tokens.Get, rec, meshAgg, peerDir, dispatcher, applySelf, applyDesiredSetup, setupRec != nil, *bypassCPIAM)
 		}()
 		go func() {
 			defer wg.Done()
@@ -1308,7 +1353,7 @@ func run(ctx context.Context, args []string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runPublicUsageLoop(ctx, publicUsageDeps{
+			runPublicUsageLoop(cpCtx, publicUsageDeps{
 				API:        infPushClient,
 				Batch:      publicUsageBatch,
 				DeviceID:   id.DeviceID,
@@ -1319,7 +1364,7 @@ func run(ctx context.Context, args []string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runPublicGrantLoop(ctx, publicGrantDeps{
+			runPublicGrantLoop(cpCtx, publicGrantDeps{
 				API:            infPushClient,
 				Mesh:           meshAgg,
 				PublicUsePath:  agentconfig.DefaultPublicUsePath(),
@@ -1339,13 +1384,13 @@ func run(ctx context.Context, args []string) error {
 			}()
 			go func() {
 				defer wg.Done()
-				runDiscoEventLoop(ctx, logger, id, tokens.Get, mk.Private, discoSvc, rec, *bypassCPIAM)
+				runDiscoEventLoop(cpCtx, logger, id, tokens.Get, mk.Private, discoSvc, rec, *bypassCPIAM)
 			}()
 		}
 
 		go func() {
 			defer wg.Done()
-			runLocalCandidateLoop(ctx, logger, id, tokens.Get, mk.Private, localCandidateOptions{
+			runLocalCandidateLoop(cpCtx, logger, id, tokens.Get, mk.Private, localCandidateOptions{
 				listenPort:     uint16(listenPort),
 				ipv6Enabled:    *ipv6Enabled,
 				includeULA:     *ipv6IncludeULA,
@@ -1553,9 +1598,12 @@ func run(ctx context.Context, args []string) error {
 	if id, lerr := identity.Load(*stateDir); lerr != nil {
 		return fmt.Errorf("load identity: %w", lerr)
 	} else if id != nil {
-		if aerr := activate(ctx); aerr != nil {
-			logger.Error("activate session at boot", "err", aerr)
-		}
+		// Publish what we know about the enrollment before trying to
+		// bring the runtime up, so that a daemon which cannot activate
+		// still reports "signed in, not connected" rather than looking
+		// logged out (waired-agent#318).
+		sb.setOffline(offlineIdentityView(id))
+		go runBootActivation(ctx, sb, activate, logger)
 	} else {
 		logger.Info("waired-agent ready (unenrolled); awaiting login", "mgmt", *mgmtAddr)
 	}
@@ -2170,10 +2218,16 @@ type agentProvider struct {
 	id     *identity.Identity
 	engine *wgnet.Engine
 
-	// wgListenPort is the actual UDP port the WireGuard engine bound,
-	// derived once from id.Endpoint at startup. Stable for the lifetime
-	// of the daemon, so no mutex is needed.
+	// wgListenPort is the actual UDP port the WireGuard engine bound.
+	// Normally the port pinned in id.Endpoint, but an ephemeral one when
+	// that port could not be bound (waired-agent#318) — always the port
+	// really in use, because it is what gets advertised as a candidate.
+	// Written once during activation, before the session is published.
 	wgListenPort int
+
+	// gate reports whether the device can still renew its Control-Plane
+	// credentials. Optional: nil reads as OK.
+	gate *authGate
 
 	mu         sync.RWMutex
 	peerCount  int
@@ -2311,7 +2365,7 @@ func (p *agentProvider) Identity() management.IdentityView {
 	if deviceName == "" {
 		deviceName = p.id.DeviceID
 	}
-	return management.IdentityView{
+	v := management.IdentityView{
 		Enrolled:     true,
 		AccountEmail: p.id.AccountEmail,
 		NetworkName:  p.id.NetworkName,
@@ -2320,7 +2374,12 @@ func (p *agentProvider) Identity() management.IdentityView {
 		DeviceName:   deviceName,
 		OverlayIP:    p.id.OverlayIP,
 		ControlURL:   p.id.ControlURL,
+		// A provider only ever answers from inside a published session,
+		// so reaching here means the runtime is up.
+		Active: true,
 	}
+	p.gate.apply(&v)
+	return v
 }
 
 func (p *agentProvider) replacePeers(nm *signer.NetworkMap) {

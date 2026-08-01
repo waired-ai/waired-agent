@@ -37,6 +37,7 @@ most problems on its own.
 
 **Nothing answers**
 
+- [I signed in, but Waired says I am signed out](#i-signed-in-but-waired-says-i-am-signed-out)
 - [No answer comes back / the engine stays “not ready”](#no-answer-comes-back)
 - [Claude Code is still using the cloud](#claude-code-is-still-using-the-cloud)
 - [A command says “waired-agent is not running”](#a-command-says-waired-agent-is-not-running)
@@ -197,6 +198,43 @@ again with:
 ```sh
 waired runtimes benchmark
 ```
+
+## I signed in, but Waired says I am signed out
+
+The Waired icon shows “Not signed in”, or the computer is missing from your
+account — most often right after a restart, even though you never signed out.
+
+Two different things look the same from the outside. `waired doctor` tells them
+apart:
+
+```sh
+waired doctor
+```
+
+**`network connection` is a ⚠** — you *are* signed in and this computer simply
+has not connected yet. Waired keeps retrying by itself, including after a
+restart where the network port it normally uses was taken by something else, so
+give it a minute and check again. If it never clears, restart the background
+service:
+
+```sh
+sudo systemctl restart waired-agent    # Linux
+Restart-Service waired-agent           # Windows (administrator)
+```
+
+**`device sign-in` is a ✗** — this computer's sign-in really has stopped
+working and only signing in again restores it:
+
+```sh
+sudo waired init      # Linux / macOS
+waired init           # Windows (administrator)
+```
+
+Your models, settings and coding-tool setup all survive this — it re-establishes
+this computer's place in your account and nothing else. Local AI keeps answering
+throughout; what stops is everything that needs your account, so the computer
+disappears from the web console and your other devices cannot reach it until
+you sign in again.
 
 ## No answer comes back
 

@@ -93,6 +93,39 @@ func (s *session) teardown() {
 // *switchboard.
 type switchboard struct {
 	cur atomic.Pointer[session]
+
+	// offline answers Identity() while no session is published. Without
+	// it a daemon that is signed in on disk but could not activate — a
+	// boot where the WireGuard socket failed to bind, say — reported
+	// Enrolled=false and the tray rendered "Not signed in", which is how
+	// waired-agent#318's "logged out after reboot" reports were
+	// generated. Set once during boot, before activation is attempted.
+	offline atomic.Pointer[offlineIdentity]
+}
+
+// offlineIdentity is what the daemon knows about its own enrollment
+// without a live session: the persisted identity plus why the runtime is
+// not up.
+type offlineIdentity struct {
+	view management.IdentityView
+	// lastErr is the most recent activation failure, replaced on each
+	// retry so the surface always reflects the current reason.
+	lastErr atomic.Pointer[string]
+}
+
+// setOffline records the persisted identity for the no-session case.
+func (sb *switchboard) setOffline(v management.IdentityView) {
+	sb.offline.Store(&offlineIdentity{view: v})
+}
+
+// noteActivationError updates the reason reported while inactive.
+func (sb *switchboard) noteActivationError(err error) {
+	o := sb.offline.Load()
+	if o == nil || err == nil {
+		return
+	}
+	msg := err.Error()
+	o.lastErr.Store(&msg)
 }
 
 func (sb *switchboard) current() *session { return sb.cur.Load() }
@@ -131,6 +164,17 @@ func (sb *switchboard) Status() management.Status {
 func (sb *switchboard) Identity() management.IdentityView {
 	if s := sb.current(); s != nil {
 		return s.provider.Identity()
+	}
+	// No live session. "Enrolled but not active" and "never signed in"
+	// are different situations and only one of them means the user has
+	// to log in — see offlineIdentity.
+	if o := sb.offline.Load(); o != nil {
+		v := o.view
+		v.Active = false
+		if msg := o.lastErr.Load(); msg != nil {
+			v.ActivationError = *msg
+		}
+		return v
 	}
 	return management.IdentityView{Enrolled: false}
 }
