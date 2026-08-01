@@ -75,3 +75,38 @@ func TestInstallVLLM_Error(t *testing.T) {
 		t.Error("fixStateOwnership should not run when the install failed")
 	}
 }
+
+// Product contract (waired-agent#319): `waired runtimes install --auto` must
+// not offer to install vLLM on a host that cannot serve it. The CLI used to
+// carry its own copy of the auto-pick rule with no OS term, so a Windows host
+// with a large NVIDIA card was told to install a Linux-only engine. The rule
+// now lives once, in router.VLLMAutoEligible.
+func TestRecommendEngineFor(t *testing.T) {
+	big := []recommendGPU{{Vendor: "nvidia", VRAMTotalMB: 24467}}
+	cases := []struct {
+		name string
+		goos string
+		gpus []recommendGPU
+		want string
+	}{
+		{"linux big nvidia", "linux", big, "vllm"},
+		{"windows big nvidia", "windows", big, "ollama"},
+		{"darwin big nvidia", "darwin", big, "ollama"},
+		{"linux small nvidia", "linux", []recommendGPU{{Vendor: "nvidia", VRAMTotalMB: 4096}}, "ollama"},
+		{"linux amd", "linux", []recommendGPU{{Vendor: "amd", VRAMTotalMB: 64000}}, "ollama"},
+		{"linux no gpu", "linux", nil, "ollama"},
+		{
+			"linux second gpu qualifies",
+			"linux",
+			[]recommendGPU{{Vendor: "amd", VRAMTotalMB: 64000}, {Vendor: "nvidia", VRAMTotalMB: 24467}},
+			"vllm",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recommendEngineFor(tc.goos, tc.gpus); got != tc.want {
+				t.Errorf("recommendEngineFor(%q, %+v) = %q, want %q", tc.goos, tc.gpus, got, tc.want)
+			}
+		})
+	}
+}

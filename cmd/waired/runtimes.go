@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -418,12 +419,16 @@ func printLongContextBench(st map[string]interface{}) {
 	}
 }
 
+// recommendGPU is the slice of /waired/v1/inference/hardware the engine
+// recommendation needs.
+type recommendGPU struct {
+	Vendor      string `json:"vendor"`
+	VRAMTotalMB int    `json:"vram_total_mb"`
+}
+
 // recommendEngine asks the agent's /waired/v1/inference/hardware
-// endpoint and applies the same auto-pick rule as the bootstrap
-// (router.PickEngine semantics, replicated here against the trimmed
-// /hardware payload). It honours router.VLLMAutoSelectable so the CLI
-// never recommends installing vLLM while its serving path is unwired
-// (#557); an explicit --prefer still wins via the early return above.
+// endpoint and applies the same auto-pick rule as the bootstrap against
+// the trimmed payload. An explicit --prefer wins via the early return.
 func recommendEngine(prefer string) (string, error) {
 	if prefer != "" {
 		return prefer, nil
@@ -433,20 +438,30 @@ func recommendEngine(prefer string) (string, error) {
 		return "", err
 	}
 	var hw struct {
-		GPUs []struct {
-			Vendor      string `json:"vendor"`
-			VRAMTotalMB int    `json:"vram_total_mb"`
-		} `json:"gpus"`
+		GPUs []recommendGPU `json:"gpus"`
 	}
 	if err := json.Unmarshal(body, &hw); err != nil {
 		return "", err
 	}
-	for _, g := range hw.GPUs {
-		if strings.EqualFold(g.Vendor, "nvidia") && g.VRAMTotalMB >= 8*1024 && router.VLLMAutoSelectable {
-			return "vllm", nil
+	// The daemon we just queried is this host's own loopback daemon, so
+	// runtime.GOOS is its OS.
+	return recommendEngineFor(runtime.GOOS, hw.GPUs), nil
+}
+
+// recommendEngineFor is the pure half: which engine should `waired runtimes
+// install --auto` put on a host running goos with these GPUs.
+//
+// It defers to router.VLLMAutoEligible rather than restating the rule. It
+// used to carry its own copy — NVIDIA plus 8 GB plus the #557 gate — and
+// that copy, like PickEngine's, had no OS term, so on Windows the CLI
+// offered to install a vLLM the host can never serve (waired-agent#319).
+func recommendEngineFor(goos string, gpus []recommendGPU) string {
+	for _, g := range gpus {
+		if router.VLLMAutoEligible(goos, g.Vendor, g.VRAMTotalMB) {
+			return "vllm"
 		}
 	}
-	return "ollama", nil
+	return "ollama"
 }
 
 // vllmInstall is a seam so tests exercise installVLLM's path/ownership
