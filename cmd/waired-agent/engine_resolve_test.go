@@ -374,3 +374,59 @@ func TestEngineInstalledOnHost_UnknownAndAbsentVLLM(t *testing.T) {
 		}
 	}
 }
+
+// THE #304 D2 REGRESSION BAR, and the cross-OS artifact for the puller
+// seam. PRODUCT CONTRACT: `ollama pull` shells out to the SAME binary the
+// daemon would spawn.
+//
+// The puller used to freeze the boot-time path and, when that was empty,
+// fall back to download.ResolveBinary — a $WAIRED_OLLAMA_BINARY / $PATH /
+// OS-well-known-paths walk that has no idea about
+// <stateDir>/runtimes/ollama/bin/ollama. That is where the bundled
+// install lands, deliberately off $PATH, so on the very hosts waired
+// provisioned every pull answered "not installed" even with the engine
+// serving — which would have made the rest of the #304 fix a no-op there.
+func TestOllamaResolverFeedsThePuller(t *testing.T) {
+	sealPATH(t)
+	stateDir := t.TempDir()
+	bin := fakeBundledOllama(t, stateDir)
+
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			r := &recordingRunner{}
+			puller := download.NewResolvingPuller(func() (string, error) {
+				return resolveOllamaBinary(goos, stateDir, false)
+			}, r)
+			if err := puller.Pull(context.Background(), "m:q4", nil); err != nil {
+				t.Fatalf("Pull: %v", err)
+			}
+			if r.binary != bin {
+				t.Errorf("pull ran %q, want the bundled engine %q", r.binary, bin)
+			}
+		})
+	}
+
+	t.Run("linux bundled with no engine surfaces the resolver error", func(t *testing.T) {
+		empty := t.TempDir()
+		r := &recordingRunner{}
+		puller := download.NewResolvingPuller(func() (string, error) {
+			return resolveOllamaBinary("linux", empty, false)
+		}, r)
+		err := puller.Pull(context.Background(), "m:q4", nil)
+		if err == nil {
+			t.Fatal("Pull succeeded with no bundled engine; the PATH fallback must not apply here")
+		}
+		if r.binary != "" {
+			t.Errorf("pull ran %q; an unresolved engine must not spawn anything", r.binary)
+		}
+	})
+}
+
+// recordingRunner captures the binary a pull actually shelled out to.
+type recordingRunner struct{ binary string }
+
+func (r *recordingRunner) Run(_ context.Context, binary string, _, _ []string, onLine func(string)) error {
+	r.binary = binary
+	onLine("success")
+	return nil
+}

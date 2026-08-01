@@ -203,6 +203,19 @@ type setupProvider interface {
 	// activation happens on the next boot, from the preference
 	// setupApplyModel already persisted.
 	PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error)
+	// startSetupEngine asks the daemon to start an engine that may have
+	// been installed after it booted, and to run the post-start bootstrap
+	// (#304). Before this existed nothing performed the executor's printed
+	// promise of a "next engine start": the daemon resolved the binary once
+	// at boot, found none, and stayed inert for the life of the process
+	// while the reconciler dispatched `ollama pull` at a server nobody had
+	// started.
+	//
+	// Fire-and-forget, and no ctx by design: the real implementation runs
+	// on the daemon's long-lived context because both callers' contexts (an
+	// HTTP request handler, a network-map frame) die long before a cold
+	// start finishes. reason is for the daemon log.
+	startSetupEngine(reason string)
 }
 
 // setupReconciler applies the CP-served desired state (waired#835 §6)
@@ -353,9 +366,18 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 			changed = true
 		}
 		r.mu.Unlock()
-		if appeared && r.logger != nil {
-			r.logger.Info("setup: engine became installed; re-admitting the desired model",
-				"engine", d.engine, "model", d.modelID)
+		if appeared {
+			if r.logger != nil {
+				r.logger.Info("setup: engine became installed; re-admitting the desired model",
+					"engine", d.engine, "model", d.modelID)
+			}
+			// Re-admitting the model without an engine to pull WITH is the
+			// other half of #304: `ollama pull` is a client of a server
+			// nobody started. Not gated on d.modelID — an engine that just
+			// appeared is worth starting either way. This is the
+			// observable-state backstop for an executor that died mid-install
+			// or a daemon that restarted while the wizard was running.
+			r.provider.startSetupEngine("setup: engine binary appeared")
 		}
 	}
 
@@ -461,6 +483,7 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 		stepID = setupStepEngineInstall
 	}
 	st := r.executorSteps[stepID]
+	prevPhase := st.phase
 	st.phase = phase
 	// A report that says nothing about the failure must not erase the
 	// reason we already have (waired-agent#131). Two posts do exactly
@@ -524,7 +547,27 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 		r.installClaimed = ""
 		r.executorDriver = ""
 	}
+	// #304: the executor has finished installing the engine, so perform
+	// the "next engine start" it just promised the operator — the daemon
+	// resolved the binary once at boot and would otherwise stay inert for
+	// the rest of the process.
+	//
+	// Strictly an EDGE. Done(engine) sets phase=done with an empty step,
+	// and the executor then re-posts that same pair every 10 s for as long
+	// as it stays attached — which is the whole model download, up to the
+	// 8 h residency budget. A level trigger here would fire thousands of
+	// times per session.
+	//
+	// engine_download:done is excluded: the bytes are here but the install
+	// proper is next in the same lease, which is why the install claim is
+	// deliberately kept there too.
+	startEngine := stepID == setupStepEngineInstall &&
+		phase == management.SetupExecutorPhaseDone &&
+		prevPhase != management.SetupExecutorPhaseDone
 	r.mu.Unlock()
+	if startEngine {
+		r.provider.startSetupEngine("setup: executor reported the engine install done")
+	}
 	r.kickPush()
 	return r.SetupState(ctx)
 }
@@ -1133,6 +1176,13 @@ func (p *agentInferenceProvider) setupModelState(modelID string) (string, int64,
 // the served generation without waiting for it.
 func (p *agentInferenceProvider) startSetupBenchmark(gen int) {
 	p.startBenchmarkJob(gen)
+}
+
+// startSetupEngine adopts an engine installed after this daemon booted
+// (#304). Coalesced and dispatched on the daemon's own context by
+// requestEngineStart; a parked or crash-latched engine is left alone.
+func (p *agentInferenceProvider) startSetupEngine(reason string) {
+	p.requestEngineStart(reason)
 }
 
 // setupPreferredModelID is the model this device is currently set to

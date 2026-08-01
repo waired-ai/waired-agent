@@ -50,9 +50,13 @@ type fakeSetupProvider struct {
 	modelErr        string
 	bench           management.BenchmarkStatusResponse
 	benchStarts     []int
-	pulls           []string
-	pullErr         error
-	stateDir        string
+	// engineStarts records the reason of every startSetupEngine call, in
+	// order. The reason is kept rather than a bare count so a test can
+	// tell the executor-done trigger from the engine-appeared one (#304).
+	engineStarts []string
+	pulls        []string
+	pullErr      error
+	stateDir     string
 
 	// applies records every model the reconciler asked to APPLY, in
 	// order. Separate from pulls because the two are different
@@ -210,6 +214,18 @@ func (f *fakeSetupProvider) pullCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.pulls)
+}
+
+func (f *fakeSetupProvider) startSetupEngine(reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.engineStarts = append(f.engineStarts, reason)
+}
+
+func (f *fakeSetupProvider) engineStartCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.engineStarts)
 }
 
 // fakeClock drives the reconciler's `now` seam so lease expiry is tested
@@ -1581,5 +1597,120 @@ func TestSetupIntegrationStaysPendingWhileAnEngineRowIsRed(t *testing.T) {
 	}
 	if step := stepByID(t, snap, setupStepIntegration); step.Status != signer.SetupStatusPending {
 		t.Fatalf("integration step = %+v, want pending — the engine row already carries this failure", step)
+	}
+}
+
+// --- #304: adopting an engine installed after the daemon booted -------
+//
+// The daemon resolves the engine binary once, at boot. On a fresh
+// install there is none, so its engine-startup goroutine returns having
+// done nothing and the process stays inert for its whole life: the
+// executor installs ollama, the reconciler sees the binary appear and
+// dispatches `ollama pull` at a server nobody ever started, the pull
+// fails, and admission is once-per-desired-value so nothing retries.
+// These pin the two triggers that now perform the promised "next engine
+// start". All are product contracts.
+
+// The executor finishing the engine install starts the engine. Done(engine)
+// posts phase=done with an EMPTY step, which the reconciler normalises to
+// engine_install — so the empty step is what this asserts on.
+func TestSetupExecutorInstallDoneStartsTheEngine(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: false, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Phase: management.SetupExecutorPhaseInstalling, Engine: "ollama",
+	})
+	if got := f.engineStartCount(); got != 0 {
+		t.Fatalf("engine starts while still installing = %d, want 0", got)
+	}
+
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Phase: management.SetupExecutorPhaseDone, Engine: "ollama",
+	})
+	if got := f.engineStartCount(); got != 1 {
+		t.Fatalf("engine starts after the install reported done = %d, want 1", got)
+	}
+}
+
+// The trigger is an EDGE. The executor re-posts phase=done every 10 s for
+// as long as it stays attached — which is the whole model download, up to
+// the 8 h residency budget — so a level trigger would fire thousands of
+// times a session and, with no in-flight pull dedup yet (#305), dispatch a
+// duplicate multi-GB pull each time.
+func TestSetupExecutorHeartbeatDoesNotRestartTheEngine(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: false, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+
+	for range 5 {
+		r.NoteExecutor(ctx, management.SetupExecutorRequest{
+			Attached: true, Elevated: true,
+			Phase: management.SetupExecutorPhaseDone, Engine: "ollama",
+		})
+	}
+	if got := f.engineStartCount(); got != 1 {
+		t.Fatalf("engine starts across 5 identical done posts = %d, want 1", got)
+	}
+}
+
+// `engine_download: done` means the bytes are here and the install proper
+// is next, in the same lease — there is nothing to start yet. This is the
+// same boundary the install claim is deliberately kept across.
+func TestSetupExecutorDownloadDoneDoesNotStartTheEngine(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: false, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Step: setupStepEngineDownload,
+		Phase: management.SetupExecutorPhaseDone, Engine: "ollama",
+		CompletedBytes: 1400, TotalBytes: 1400,
+	})
+	if got := f.engineStartCount(); got != 0 {
+		t.Fatalf("engine starts on engine_download done = %d, want 0", got)
+	}
+}
+
+// An integration report (waired#935) rides the same lease and says nothing
+// about the engine.
+func TestSetupExecutorIntegrationDoneDoesNotStartTheEngine(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateReady}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Step: setupStepIntegration,
+		Phase: management.SetupExecutorPhaseDone,
+	})
+	if got := f.engineStartCount(); got != 0 {
+		t.Fatalf("engine starts on integration done = %d, want 0", got)
+	}
+}
+
+// The observable-state backstop, for an executor that died mid-install or
+// a daemon that restarted while the wizard was running: the same false→true
+// edge that re-admits the model also starts the engine, exactly once.
+func TestSetupEngineAppearedStartsTheEngine(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: false, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+	if got := f.engineStartCount(); got != 0 {
+		t.Fatalf("engine starts before it was ever installed = %d, want 0", got)
+	}
+
+	f.setEngine(true, false)
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	if got := f.engineStartCount(); got != 1 {
+		t.Fatalf("engine starts on the appearance edge = %d, want 1", got)
+	}
+	for range 3 {
+		r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	}
+	if got := f.engineStartCount(); got != 1 {
+		t.Fatalf("engine starts after repeated frames = %d, want 1", got)
 	}
 }
