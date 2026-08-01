@@ -55,6 +55,9 @@ func runAgentGrade(args []string) error {
 		return nil
 	}
 
+	// Offered-only for the report: coverage and the retirement worklist
+	// are questions about what we hand people, and a withheld model is
+	// neither required to be agent-grade nor retirable for failing.
 	bundled, err := catalog.BundledManifests()
 	if err != nil {
 		return fmt.Errorf("agentgrade: load bundled catalog: %w", err)
@@ -65,6 +68,14 @@ func runAgentGrade(args []string) error {
 	}
 
 	if *importPath != "" {
+		// The COMPLETE set for import: a withheld model is shipped, and
+		// measuring one is how it earned the job. Resolving its tag
+		// against the offered set would reject the verdict that
+		// justified withholding it.
+		all, err := catalog.BundledManifestsIncludingInternal()
+		if err != nil {
+			return fmt.Errorf("agentgrade: load bundled catalog: %w", err)
+		}
 		return importAgentGrade(*importPath, importOpts{
 			EngineVersion: *engineVersion,
 			Host:          *host,
@@ -72,7 +83,7 @@ func runAgentGrade(args []string) error {
 			Retrieved:     *retrieved,
 			Notes:         *notes,
 			Revision:      rev,
-			Bundled:       bundled,
+			Bundled:       all,
 		})
 	}
 

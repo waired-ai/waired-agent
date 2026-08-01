@@ -31,6 +31,39 @@
         }
       }
     },
+    "granite4-350m": {
+      "variants": {
+        "bf16-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "fail_no_tool_call",
+              "trials": 3,
+              "failed": 1
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "read-file"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "granite4:350m",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; withheld CI fixture"
+        }
+      }
+    },
     "qwen2.5-coder-0.5b-instruct": {
       "variants": {
         "q4-gguf": {

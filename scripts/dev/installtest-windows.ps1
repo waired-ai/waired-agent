@@ -60,8 +60,8 @@ param(
     [int]$Tier = 1,
     [switch]$WithInference,
     # -WithIntegration: after enroll, run the coding-agent routing sentinel
-    # (#496). Implies inference but PINS the tiny 0.5B as the bundled model (so
-    # the deploy pulls ~0.4 GB), then runs the Go harness that drives each leg at
+    # (#496). Implies inference but PINS the withheld 350M as the bundled model
+    # (so the deploy pulls ~0.7 GB), then runs the Go harness that drives each leg at
     # the gateway surface and asserts served-locally via the event ring.
     [switch]$WithIntegration,
     # -Contract (waired#760): behavioral-contract asserts + non-elevated
@@ -1247,7 +1247,7 @@ if ($Tier -ge 2) {
                 '--control', $ControlUrl
                 '--device-name', $device
                 '--inference-enabled=true'
-                '--inference-bundled-model-id=qwen2.5-coder-0.5b-instruct'
+                '--inference-bundled-model-id=granite4-350m'
                 '--non-interactive'
                 '--skip-integration'
                 '--state-dir', $StateDir
@@ -1280,8 +1280,8 @@ if ($Tier -ge 2) {
             '--skip-integration'
             '--state-dir', $StateDir
         )
-        # Routing sentinel pins the tiny 0.5B as the bundled model (deploy pulls ~0.4 GB).
-        if ($WithIntegration) { $initArgs += '--inference-bundled-model-id=qwen2.5-coder-0.5b-instruct' }
+        # Routing sentinel pins the withheld 350M as the bundled model (deploy pulls ~0.7 GB).
+        if ($WithIntegration) { $initArgs += '--inference-bundled-model-id=granite4-350m' }
         # With -WithInference, init starts the agent and foreground-waits (#519)
         # while the agent pulls the bundled model into the :9475 engine, then runs
         # the end-of-init benchmark; tee for Assert-Inference. We let init own the

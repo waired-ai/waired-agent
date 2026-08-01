@@ -44,12 +44,17 @@ import (
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
-// defaultModelTag is what runs when no model is named: the smallest
-// cached tag the other e2e already uses, so a bare `make e2e-agentgrade`
-// exercises the plumbing without a download. It is NOT a model anyone
-// expects to pass — a 0.5B has no business driving a coding agent — so
-// treat a failing grade there as the plumbing working.
-const defaultModelTag = "qwen2.5:0.5b"
+// defaultModelTag is what runs when no model is named: the catalog's
+// withheld CI fixture, so a bare `make e2e-agentgrade` exercises the
+// plumbing on the same model the routing sentinel pulls on every PR
+// rather than on a tag nothing else uses.
+//
+// It emits real structured tool calls — that is why it was chosen over
+// the smaller qwen2.5-coder-0.5b, which cannot — but a 352M model
+// produces nothing worth offering, so it is internal_only in the
+// catalog. Expect a grade of "fail": one under-claim on read-file in
+// three trials. That is the plumbing working, not a regression.
+const defaultModelTag = "granite4:350m"
 
 func modelTag() string {
 	if v := strings.TrimSpace(os.Getenv("WAIRED_AGENTGRADE_MODEL")); v != "" {

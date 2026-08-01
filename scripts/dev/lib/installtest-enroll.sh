@@ -140,8 +140,8 @@ it_enroll_guest() {
   guest="$1"
   name="$(_it_dev_name "$guest")"
   inf_flag="--inference-enabled=${IT_INFERENCE_ENABLED}"
-  # Optional bundled-model pin (routing sentinel pins the tiny 0.5B so the
-  # deploy pulls ~0.4 GB, not the hardware-selected 7B). Expands to zero args
+  # Optional bundled-model pin (routing sentinel pins the withheld 350M so the
+  # deploy pulls ~0.7 GB, not the hardware-selected 7B). Expands to zero args
   # when unset.
   local -a pin_flag=()
   [ -n "${IT_BUNDLED_MODEL_ID:-}" ] && pin_flag=("--inference-bundled-model-id=${IT_BUNDLED_MODEL_ID}")

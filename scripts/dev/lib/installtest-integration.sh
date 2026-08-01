@@ -2,8 +2,8 @@
 # installtest-integration.sh — Tier-2.5 coding-agent routing sentinel (#496).
 #
 # Rides the enrolled daemon + gateway that Tier 2 stood up. `--integration`
-# enables local inference but PINS the tiny 0.5B model (IT_BUNDLED_MODEL_ID),
-# so the deploy pulls ~0.4 GB instead of the bundled 7B — cheap enough for a
+# enables local inference but PINS the withheld 350M model (IT_BUNDLED_MODEL_ID),
+# so the deploy pulls ~0.7 GB instead of the bundled 7B — cheap enough for a
 # per-PR Linux leg. This hook waits for the tiny model to be ready, then runs
 # the Go routing harness (internal/e2e/integration, -tags integration) which,
 # for each coding-agent leg (Claude proxy :9472 / OpenClaw no-token

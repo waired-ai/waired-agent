@@ -22,7 +22,7 @@
 #   is the no-human path). GPU not required.
 #
 # --integration (--local/native only; #496): implies --inference but PINS the
-#   tiny 0.5B as the bundled model (deploy pulls ~0.4 GB, not the 7B), then runs
+#   withheld 350M as the bundled model (deploy pulls ~0.7 GB, not the 7B), then runs
 #   the coding-agent routing sentinel (internal/e2e/integration, -tags
 #   integration) — each leg drives the gateway surface its tool config targets
 #   and asserts via the observability event ring that the completion was served
@@ -43,7 +43,7 @@
 #   bash scripts/dev/installtest-run.sh                 # Tier 1, container
 #   bash scripts/dev/installtest-run.sh --tier 2        # + headless enroll
 #   bash scripts/dev/installtest-run.sh --tier 2 --inference   # + Ollama/model/benchmark (CPU)
-#   bash scripts/dev/installtest-run.sh --tier 2 --integration --local  # + routing sentinel (0.5B)
+#   bash scripts/dev/installtest-run.sh --tier 2 --integration --local  # + routing sentinel (350M)
 #   bash scripts/dev/installtest-run.sh --tier 2 --daemon-engine  # + daemon-path executor engine install (waired#835)
 #   bash scripts/dev/installtest-run.sh --tier 3        # + data plane (2 VMs)
 #   bash scripts/dev/installtest-run.sh --keep          # don't delete the guest
@@ -83,9 +83,12 @@ done
 [ "$TIER" -ge 3 ] && USE_VM=1   # data plane needs a real kernel
 # Force-enable inference for the enrol step (read by lib/installtest-enroll.sh).
 [ "$INFER" = 1 ] && export IT_INFERENCE_ENABLED=true
-# The routing sentinel (#496) pins the tiny 0.5B as the bundled model so the
-# deploy pulls ~0.4 GB, not the 7B — cheap enough for a per-PR Linux leg.
-[ "$INTEG" = 1 ] && export IT_BUNDLED_MODEL_ID="${IT_BUNDLED_MODEL_ID:-qwen2.5-coder-0.5b-instruct}"
+# The routing sentinel (#496) pins the withheld 350M as the bundled model so
+# the deploy pulls ~0.7 GB, not the 7B — cheap enough for a per-PR Linux leg.
+# It is marked internal_only in the catalog (waired-ai/waired-agent#322): a real
+# catalog entry, so the daemon resolves the pin, but withheld from every picker
+# and catalog view so it is never offered to anyone.
+[ "$INTEG" = 1 ] && export IT_BUNDLED_MODEL_ID="${IT_BUNDLED_MODEL_ID:-granite4-350m}"
 
 # --daemon-engine (waired#835 §9/§11) is its own mode: unlike --inference it
 # keeps install.sh's --skip-ollama (engine ABSENT), so only the daemon-path
@@ -95,7 +98,7 @@ if [ "$DAEMON_ENGINE" = 1 ]; then
   { [ "$INFER" = 1 ] || [ "$INTEG" = 1 ]; } && it_die \
     "--daemon-engine is its own mode; do not combine it with --inference/--integration"
   [ "$TIER" -ge 2 ] || it_die "--daemon-engine needs --tier 2 (it enrols to reach the executor)"
-  export IT_BUNDLED_MODEL_ID="${IT_BUNDLED_MODEL_ID:-qwen2.5-coder-0.5b-instruct}"
+  export IT_BUNDLED_MODEL_ID="${IT_BUNDLED_MODEL_ID:-granite4-350m}"
 fi
 
 # --local installs waired ON THIS HOST as root (apt + systemd + a service

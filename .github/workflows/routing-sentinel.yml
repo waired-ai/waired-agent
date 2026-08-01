@@ -15,8 +15,10 @@
 # OS-agnostic Go, so a Linux leg on the cheap disposable ubuntu-24.04 runner
 # catches the regression class on EVERY gated PR without loading the
 # concurrency=1 self-hosted Windows/macOS pools. Full 3-OS routing coverage runs
-# nightly in installtest-inference.yml. `--integration` pins the tiny 0.5B as the
-# bundled model, so the deploy pulls ~0.4 GB (no 7B, no GPU) — cheap per PR.
+# nightly in installtest-inference.yml. `--integration` pins the withheld 350M as
+# the bundled model, so the deploy pulls ~0.7 GB (no 7B, no GPU) — cheap per PR.
+# That model is internal_only in the catalog (waired-ai/waired-agent#322): real
+# enough for the daemon to resolve the pin, withheld from everything a user sees.
 #
 # fail-open safety: a deliberately-bogus ANTHROPIC_AUTH_TOKEN + a hosts
 # blackhole of api.anthropic.com mean a regression that silently reaches real
@@ -74,7 +76,7 @@ defaults:
 
 jobs:
   routing-sentinel:
-    name: routing sentinel (linux, 0.5B)
+    name: routing sentinel (linux, 350M)
     # Same-repo only: fork PRs get a skipped check (not failed). The WIF
     # id-token + SA impersonation must not be reachable by fork code; GitHub
     # also withholds the id-token from fork PRs. A maintainer arms a reviewed
@@ -118,7 +120,7 @@ jobs:
       - name: blackhole api.anthropic.com (fail-open guard)
         run: echo "0.0.0.0 api.anthropic.com" | sudo tee -a /etc/hosts >/dev/null
 
-      # install → service → enroll (Tier 2) → inference engine with the tiny 0.5B
+      # install → service → enroll (Tier 2) → inference engine with the withheld 350M
       # pinned → routing sentinel. Mirrors installtest.yml's Linux leg + the
       # --integration tail.
       - name: routing sentinel (linux, tier 2 + integration)
