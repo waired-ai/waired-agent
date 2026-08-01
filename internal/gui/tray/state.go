@@ -111,12 +111,18 @@ type FallbackEntry struct {
 }
 
 // MaxCatalogEntries caps how many model rows the tray pre-allocates in
-// the Catalog submenu. Bundled manifests are 17 with the qwen3.5
-// lineup; 20 leaves headroom for a future "Other quantizations" /
-// external manifest before another pre-allocation bump is needed.
-// (Families render in manifest order — at 12 the alphabetical tail,
-// including qwen3.6-27b, silently fell off the menu.)
-const MaxCatalogEntries = 20
+// the Catalog submenu. Bundled manifests are 21 today; 32 leaves headroom
+// for a future "Other quantizations" / external manifest before another
+// pre-allocation bump is needed.
+//
+// Families render in manifest (alphabetical) order, so an undersized cap
+// silently amputates the tail — twice now: at 12 it took qwen3.6-27b, and
+// at 20 it took qwen3.6-35b-a3b off a host that was actively SERVING it
+// (waired-agent#319). Two things keep that from recurring:
+// TestCatalogCapCoversBundledManifests fails the build the moment the
+// bundled count catches up with this constant, and applyCatalog never
+// drops the active/preferred row even when a cap does bite.
+const MaxCatalogEntries = 32
 
 // MaxWorkerPinEntries caps the "Pin to peer" submenu pre-allocation.
 // Mirrors MaxPeerHardwareRows so the operator sees the same set of
@@ -1029,13 +1035,10 @@ func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 		m.CatalogActiveLabel = "Active: (none)"
 	}
 
-	n := len(c.Families)
-	if n > MaxCatalogEntries {
-		n = MaxCatalogEntries
-	}
-	entries := make([]CatalogEntryView, 0, n)
-	for i := 0; i < n; i++ {
-		entries = append(entries, formatCatalogEntry(c.Families[i], c.Engine))
+	retained := retainedFamilies(c.Families)
+	entries := make([]CatalogEntryView, 0, len(retained))
+	for _, f := range retained {
+		entries = append(entries, formatCatalogEntry(f, c.Engine))
 	}
 	m.CatalogEntries = entries
 
@@ -1311,6 +1314,52 @@ func pinPresent(pins []WorkerPinEntryView, deviceID string) bool {
 	return false
 }
 
+// retainedFamilies trims the served family list to what the pre-allocated
+// menu can render, keeping manifest order — but never at the cost of the
+// rows that describe the user's own machine. When the cap bites and the
+// active (or preferred) family sorts past it, that row displaces the last
+// retained one instead of vanishing.
+//
+// The bug this closes twice over: families render alphabetically, so an
+// undersized cap amputates the tail, and on a host serving qwen3.6-35b-a3b
+// the amputated row was the one with the "● Active" bullet — the menu
+// claimed the running model did not exist (waired-agent#319). The cap now
+// has headroom, so this path is dormant on bundled manifests; it exists so
+// a future external manifest source cannot resurrect the same class.
+func retainedFamilies(families []management.CatalogFamily) []management.CatalogFamily {
+	if len(families) <= MaxCatalogEntries {
+		return families
+	}
+	out := append([]management.CatalogFamily(nil), families[:MaxCatalogEntries]...)
+	// Each rescued row consumes one slot from the end, so an active AND a
+	// preferred family past the cap both survive rather than overwriting
+	// each other.
+	slot := len(out) - 1
+	for _, keep := range []func(management.CatalogFamily) bool{
+		func(f management.CatalogFamily) bool { return f.Active },
+		func(f management.CatalogFamily) bool { return f.Preferred },
+	} {
+		if slot < 0 || familyIndex(out, keep) >= 0 {
+			continue // no room left, or already inside the retained window
+		}
+		if i := familyIndex(families[MaxCatalogEntries:], keep); i >= 0 {
+			out[slot] = families[MaxCatalogEntries+i]
+			slot--
+		}
+	}
+	return out
+}
+
+// familyIndex returns the first index in families satisfying match, or -1.
+func familyIndex(families []management.CatalogFamily, match func(management.CatalogFamily) bool) int {
+	for i, f := range families {
+		if match(f) {
+			return i
+		}
+	}
+	return -1
+}
+
 func formatCatalogEntry(f management.CatalogFamily, engine string) CatalogEntryView {
 	name := f.DisplayName
 	if name == "" {
@@ -1392,14 +1441,25 @@ func catalogSpecTooltip(engine string, rec *management.CatalogSpec) string {
 }
 
 // recommendedSpecGB returns the engine-appropriate recommended memory in
-// whole GB: min VRAM (rounded) on vllm, min RAM on ollama. 0 when unknown.
+// whole GB: min VRAM on vllm, min RAM on ollama. 0 when unknown.
+//
+// VRAM rounds UP, matching `waired models ls --detail`
+// (formatRecommendedResource) and the deficit labels the same row can carry
+// (router.mbToGBCeil). This used to round to nearest here alone, so a
+// 24000 MB variant advertised "min 23 GB" in the tray while the CLI and the
+// deficit label both said 24 — one requirement, two numbers
+// (waired-agent#319).
+//
+// The remaining asymmetry is deliberate: a requirement rounds up and an
+// available budget rounds down (family_picker's "have N GB"), so neither
+// figure can flatter the host into a model that will not load.
 func recommendedSpecGB(engine string, rec *management.CatalogSpec) int {
 	if rec == nil {
 		return 0
 	}
 	if engine == engineVLLM {
 		if rec.MinVRAMMB > 0 {
-			return (rec.MinVRAMMB + 512) / 1024
+			return (rec.MinVRAMMB + 1023) / 1024
 		}
 		return 0
 	}

@@ -1,9 +1,11 @@
 package tray
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
@@ -143,20 +145,71 @@ func TestUpdate_CatalogNoActive_LabelDisplaysNone(t *testing.T) {
 	}
 }
 
-func TestUpdate_CatalogTrimsToMaxEntries(t *testing.T) {
-	families := make([]management.CatalogFamily, MaxCatalogEntries+5)
+// synthCatalogFamilies builds n placeholder rows in manifest order.
+func synthCatalogFamilies(n int) []management.CatalogFamily {
+	families := make([]management.CatalogFamily, n)
 	for i := range families {
+		id := fmt.Sprintf("model-%02d", i)
 		families[i] = management.CatalogFamily{
-			ModelID:     "model-" + string(rune('a'+i)),
-			DisplayName: "Model " + string(rune('a'+i)),
+			ModelID:     id,
+			DisplayName: "Model " + id,
 			Fits:        true,
 			Downloaded:  true,
 		}
 	}
-	c := &management.ModelCatalogResponse{Families: families}
+	return families
+}
+
+func TestUpdate_CatalogTrimsToMaxEntries(t *testing.T) {
+	c := &management.ModelCatalogResponse{Families: synthCatalogFamilies(MaxCatalogEntries + 5)}
 	got := Update(connectedSnapshotWithCatalog(c))
 	if len(got.CatalogEntries) != MaxCatalogEntries {
 		t.Errorf("entries: want %d (trimmed), got %d", MaxCatalogEntries, len(got.CatalogEntries))
+	}
+}
+
+// Product contract (waired-agent#319): the menu may run out of rows, but it
+// may never drop the row describing what this machine is running. Families
+// render alphabetically, so on a host serving the last-sorting family the
+// old tail-truncation hid the active model entirely — the submenu claimed a
+// running model did not exist.
+func TestUpdate_CatalogKeepsActiveAndPreferredPastTheCap(t *testing.T) {
+	families := synthCatalogFamilies(MaxCatalogEntries + 5)
+	active := len(families) - 1 // sorts last — the shape that broke
+	preferred := len(families) - 2
+	families[active].Active = true
+	families[preferred].Preferred = true
+
+	c := &management.ModelCatalogResponse{Families: families}
+	got := Update(connectedSnapshotWithCatalog(c))
+
+	if len(got.CatalogEntries) != MaxCatalogEntries {
+		t.Fatalf("entries: want %d, got %d", MaxCatalogEntries, len(got.CatalogEntries))
+	}
+	present := map[string]bool{}
+	for _, e := range got.CatalogEntries {
+		present[e.ModelID] = true
+	}
+	if !present[families[active].ModelID] {
+		t.Errorf("active family %q was dropped by the cap", families[active].ModelID)
+	}
+	if !present[families[preferred].ModelID] {
+		t.Errorf("preferred family %q was dropped by the cap", families[preferred].ModelID)
+	}
+}
+
+// The cap must always exceed what the agent can actually serve. This is the
+// guard that fails the build instead of the menu: the bundled catalog has
+// silently outgrown MaxCatalogEntries twice (at 12, and at 20 — #319).
+func TestCatalogCapCoversBundledManifests(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	if len(manifests) > MaxCatalogEntries {
+		t.Fatalf("bundled manifests (%d) exceed MaxCatalogEntries (%d): raise the cap, "+
+			"or the alphabetical tail silently falls off the Models submenu",
+			len(manifests), MaxCatalogEntries)
 	}
 }
 
@@ -206,6 +259,31 @@ func TestUpdate_CatalogRecommendedSpec_VLLMShowsVRAM(t *testing.T) {
 	}
 	if strings.Contains(row.Tooltip, "RAM") && !strings.Contains(row.Tooltip, "VRAM") {
 		t.Errorf("tooltip should not report RAM on vllm: %q", row.Tooltip)
+	}
+}
+
+// Product contract: one requirement, one number. A VRAM figure that is not a
+// whole GB rounds UP everywhere it is shown — the tray suffix, the tray
+// tooltip, `waired models ls --detail`, and the deficit label. 24000 MB used
+// to render "23 GB" here and "24 GB" in the other two (waired-agent#319).
+func TestUpdate_CatalogRecommendedSpec_VLLMRoundsUp(t *testing.T) {
+	c := &management.ModelCatalogResponse{
+		Engine: "vllm",
+		Families: []management.CatalogFamily{
+			{
+				ModelID: "qwen3.6-27b", DisplayName: "Qwen3.6 27B",
+				Fits: true, Downloaded: true,
+				Recommended: &management.CatalogSpec{MinVRAMMB: 24000, QualityTier: 72},
+			},
+		},
+	}
+	got := Update(connectedSnapshotWithCatalog(c))
+	row := got.CatalogEntries[0]
+	if row.Label != "Qwen3.6 27B · 24 GB" {
+		t.Errorf("24000 MB must round up to 24 GB, got label %q", row.Label)
+	}
+	if !strings.Contains(row.Tooltip, "min 24 GB VRAM") {
+		t.Errorf("tooltip must round up too: %q", row.Tooltip)
 	}
 }
 
