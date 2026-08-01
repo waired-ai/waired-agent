@@ -388,6 +388,15 @@ func (r *tokenRefresher) rotate(ctx context.Context, now time.Time) error {
 	if replayed {
 		r.logger.Info("replaying the rotation whose response was lost",
 			"age", now.Sub(r.pending.at).Round(time.Second).String())
+	} else if nonce != "" {
+		// Remember the attempt BEFORE making it. Anything from here to
+		// the in-memory publish below can leave the CP having rotated
+		// while we still hold the old credential — a lost response, but
+		// also a failed disk write — and in every one of those cases the
+		// recovery is to replay this same request rather than mint a new
+		// rotation the CP would read as theft. Cleared only once the new
+		// pair is durable and live.
+		r.pending = &pendingRotation{nonce: nonce, refreshToken: refresh, at: now}
 	}
 	res, err := controlclient.RefreshDeviceToken(ctx, controlclient.RefreshParams{
 		ControlURL:   r.controlURL,
@@ -400,14 +409,9 @@ func (r *tokenRefresher) rotate(ctx context.Context, now time.Time) error {
 	})
 	if err != nil {
 		if errors.Is(err, controlclient.ErrRefreshOutcomeUnknown) {
-			// Keep the original attempt's timestamp: the replay window
-			// is measured from when the CP may have committed, not from
-			// the latest retry. An empty nonce means controlclient
-			// generated its own, which we cannot reproduce — nothing to
-			// remember.
-			if !replayed && nonce != "" {
-				r.pending = &pendingRotation{nonce: nonce, refreshToken: refresh, at: now}
-			}
+			// Keep the pending attempt as recorded above — including its
+			// original timestamp, because the replay window runs from
+			// when the CP may have committed, not from the latest retry.
 			return err
 		}
 		// Any classified answer — even a rejection — means the CP spoke,
@@ -415,7 +419,6 @@ func (r *tokenRefresher) rotate(ctx context.Context, now time.Time) error {
 		r.pending = nil
 		return err
 	}
-	r.pending = nil
 
 	// Persist before publishing in-memory so a crash mid-rotation
 	// doesn't leave the new token live in RAM but lost on disk.
@@ -459,6 +462,9 @@ func (r *tokenRefresher) rotate(ctx context.Context, now time.Time) error {
 		accessExpiresAt:     res.DeviceAccessTokenExpiresAt,
 		deviceAuthExpiresAt: res.DeviceAuthExpiresAt,
 	})
+	// Durable and live: this rotation is finished, so there is no longer
+	// anything to replay.
+	r.pending = nil
 	r.logger.Info("access token refreshed",
 		"access_expires_at", res.DeviceAccessTokenExpiresAt.UTC().Format(time.RFC3339),
 		"device_auth_expires_at", res.DeviceAuthExpiresAt.UTC().Format(time.RFC3339),

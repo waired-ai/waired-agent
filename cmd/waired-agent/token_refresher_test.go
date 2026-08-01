@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -393,5 +395,63 @@ func TestTokenRefresherMarkReauthRequiredPersistsMeta(t *testing.T) {
 	}
 	if !got.AccessExpiresAt.Equal(access) || !got.DeviceAuthExpiresAt.Equal(auth) {
 		t.Fatalf("markReauthRequired must preserve existing expiries; got %+v", got)
+	}
+}
+
+// TestTokenRefresherReplaysWhenPersistFails pins the other way a
+// rotation can be lost: the Control Plane rotated and answered, but we
+// could not write the new pair to disk. The agent is then holding a
+// burned credential exactly as if the response had never arrived, so
+// the next attempt has to replay the same request rather than mint a
+// new rotation the CP would read as theft.
+func TestTokenRefresherReplaysWhenPersistFails(t *testing.T) {
+	probe := &refreshProbe{replies: []func(http.ResponseWriter){
+		replyRotated("waired_dat_1", "waired_drt_1", time.Now().Add(15*time.Minute)),
+		replyRotated("waired_dat_2", "waired_drt_2", time.Now().Add(15*time.Minute)),
+	}}
+	srv := httptest.NewServer(probe.handler(t))
+	defer srv.Close()
+
+	r := probeRefresher(t, srv.URL, tokenRefresherConfig{})
+	// Make the persist step fail. The state dir is created on demand, so
+	// point it *through* a regular file: every mkdir below it fails with
+	// ENOTDIR. The rotation itself still succeeds server-side, which is
+	// the situation under test.
+	blocked := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocked, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+	r.stateDir = filepath.Join(blocked, "state")
+
+	if err := r.refreshOnce(context.Background()); err == nil {
+		t.Fatal("expected the persist failure to surface")
+	}
+	if r.pending == nil {
+		t.Fatal("a rotation the CP committed but we could not store must stay replayable")
+	}
+	firstNonce := probe.seen()[0]
+	if r.pending.nonce != firstNonce {
+		t.Fatalf("pending nonce %q, want the one presented %q", r.pending.nonce, firstNonce)
+	}
+	// The stored refresh token must NOT have advanced — that is what
+	// makes the pending attempt still match on the retry.
+	if got := r.pending.refreshToken; got != "waired_drt_initial" {
+		t.Fatalf("pending refreshToken = %q, want the credential still held", got)
+	}
+
+	// Next attempt replays the same request.
+	r.stateDir = t.TempDir()
+	if err := r.refreshOnce(context.Background()); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	seen := probe.seen()
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 attempts, got %d", len(seen))
+	}
+	if seen[0] != seen[1] {
+		t.Fatalf("retry must replay the same nonce: %q vs %q", seen[0], seen[1])
+	}
+	if r.pending != nil {
+		t.Fatal("a completed rotation must clear the pending replay")
 	}
 }
