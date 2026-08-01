@@ -38,7 +38,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -64,8 +64,20 @@ const (
 // StandardOutPath / StandardErrorPath for a given home directory. The
 // tray is a per-user agent, so unlike the daemon its log paths are not
 // constants.
-func TrayOutPath(home string) string { return filepath.Join(home, "Library", "Logs", trayOutName) }
-func TrayErrPath(home string) string { return filepath.Join(home, "Library", "Logs", trayErrName) }
+//
+// Joined with a literal "/" rather than filepath.Join: these are macOS
+// paths whatever host builds or runs the code, and filepath.Join would
+// make them depend on the *running* OS's separator — a darwin path
+// spelled with backslashes when the same pure function is called from a
+// Windows build. That is the shape of divergence the cross-OS parity
+// rule exists to prevent, and it is why these functions are testable
+// identically on all three OSes.
+func TrayOutPath(home string) string { return trayLogPath(home, trayOutName) }
+func TrayErrPath(home string) string { return trayLogPath(home, trayErrName) }
+
+func trayLogPath(home, name string) string {
+	return strings.TrimSuffix(home, "/") + "/Library/Logs/" + name
+}
 
 // checkEvery is how often Manage re-examines each target's size.
 //
@@ -304,31 +316,38 @@ func removeIfExists(path string) error {
 // compress gzips src to dst and removes src. A failure part-way leaves
 // no half-written archive behind, so the next pass can retry from the
 // still-present src.
+//
+// Both handles are closed explicitly before src is removed rather than
+// on a defer. Unlinking a file that is still open is fine on Unix and an
+// error on Windows ("being used by another process"), and this function
+// is untagged: the per-OS bodies decide whether rotation runs, not which
+// file semantics this code may assume.
 func compress(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
-
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
+		in.Close()
 		return err
 	}
 	zw := gzip.NewWriter(out)
-	if _, err := io.Copy(zw, in); err != nil {
-		out.Close()
-		_ = os.Remove(dst)
-		return err
+	failure := func() error {
+		if _, err := io.Copy(zw, in); err != nil {
+			return err
+		}
+		return zw.Close()
+	}()
+	if err := out.Close(); err != nil && failure == nil {
+		failure = err
 	}
-	if err := zw.Close(); err != nil {
-		out.Close()
-		_ = os.Remove(dst)
-		return err
+	if err := in.Close(); err != nil && failure == nil {
+		failure = err
 	}
-	if err := out.Close(); err != nil {
+	if failure != nil {
 		_ = os.Remove(dst)
-		return err
+		return failure
 	}
 	return os.Remove(src)
 }

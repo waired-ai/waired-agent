@@ -49,8 +49,8 @@ func writeFD(t *testing.T, fd int, s string) {
 // the rename and the reopen is the one newsyslog used to lose forever,
 // and here it is preserved in the archive.
 //
-// Product contract. Runs on darwin only; CI's unit job is Linux, so this
-// is a local / macOS-leg test (see the PR body).
+// Product contract. Runs on darwin only — locally and on CI's
+// "unit tests (darwin)" leg.
 func TestRotate_RealOpsKeepTheDescriptorPointedAtTheLiveFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "waired-agent.err.log")
