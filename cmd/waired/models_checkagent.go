@@ -196,20 +196,10 @@ func checkAgentCaseLine(r agentgrade.Result) string {
 }
 
 func writeCheckAgentJSON(path string, rep agentgrade.Report) error {
-	rev, err := agentgrade.FixtureRevision()
-	if err != nil {
-		return fmt.Errorf("check-agent: fixture revision: %w", err)
-	}
-	// The revision travels with the result so a verdict recorded today
-	// can be told apart from one measured against a different request
-	// weight later. Without it two results that both say "pass" are
-	// indistinguishable even when they were not comparable.
-	out := struct {
-		agentgrade.Report
-		FixtureRevision string `json:"fixture_revision"`
-	}{Report: rep, FixtureRevision: rev}
-
-	b, err := json.MarshalIndent(out, "", "  ")
+	// rep already carries the fixture revision (Probe.Run sets it), so a
+	// result recorded today can be told apart from one measured against
+	// a different request weight later.
+	b, err := json.MarshalIndent(rep, "", "  ")
 	if err != nil {
 		return fmt.Errorf("check-agent: encode result: %w", err)
 	}

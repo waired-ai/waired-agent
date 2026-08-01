@@ -65,9 +65,17 @@ const (
 
 // Report is one model's probe run.
 type Report struct {
-	Model    string    `json:"model"`
-	Grade    Grade     `json:"grade"`
-	Results  []Result  `json:"results"`
+	Model   string   `json:"model"`
+	Grade   Grade    `json:"grade"`
+	Results []Result `json:"results"`
+
+	// FixtureRevision is the probe input this run was measured against.
+	// Set by Run so every writer carries it without having to remember:
+	// a report without it can be imported as current when it is not, and
+	// two runs at different weights are indistinguishable once both say
+	// "pass".
+	FixtureRevision string `json:"fixture_revision"`
+
 	Started  time.Time `json:"started"`
 	Duration string    `json:"duration"`
 	// Error carries why the run could not be graded, when Grade is
@@ -83,6 +91,11 @@ type Report struct {
 // find that out costs another model load.
 func (p Probe) Run(ctx context.Context, model string) (Report, error) {
 	rep := Report{Model: model, Started: time.Now()}
+	rev, err := FixtureRevision()
+	if err != nil {
+		return rep, err
+	}
+	rep.FixtureRevision = rev
 	names, err := ToolNames()
 	if err != nil {
 		return rep, err
