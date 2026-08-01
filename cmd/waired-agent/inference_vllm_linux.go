@@ -218,7 +218,12 @@ func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, manifest ca
 	}); err != nil {
 		return err
 	}
-	go p.runHFPullJob(ctx, manifest.ModelID, variant, puller, jobID, refresh)
+	// spawnPull, not a bare `go`: it releases the model's in-flight slot
+	// (#305b) and puts HF downloads under pullsWG, which they escaped —
+	// so waitForPulls() now joins them too (#377).
+	p.spawnPull(manifest.ModelID, func() {
+		p.runHFPullJob(ctx, manifest.ModelID, variant, puller, jobID, refresh)
+	})
 	return nil
 }
 
