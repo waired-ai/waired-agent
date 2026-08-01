@@ -1076,9 +1076,9 @@ type agentInferenceProvider struct {
 	// engineBootstrapOnce latches once the post-start bootstrap (bundled /
 	// preferred model, backend probe, tuning verify) has run. The engine
 	// START stays re-entrant — that is what adopts a late install — but the
-	// tail must not repeat: PullModel has no in-flight dedup yet (#305), so
-	// a second run on a still-downloading model dispatches a duplicate
-	// multi-GB pull. Once per process is exactly the pre-#304 behaviour.
+	// tail must not repeat: its backend probe and tuning verify both stop
+	// and restart the engine, which would fail any download in flight
+	// against it. Once per process is exactly the pre-#304 behaviour.
 	engineBootstrapOnce atomic.Bool
 	// vllmBootstrapOnce guards bootstrapVLLM, which is not idempotent: each
 	// call registers a fresh adapter over the previous one and spawns a
@@ -1979,14 +1979,15 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 
 	switch variant.Source.Type {
 	case catalog.SourceOllama:
-		// A refresh pull of a model that is already ready on disk must not
+		// A re-pull of a model that is already ready on disk must not
 		// downgrade it to queued: serving continues from the on-disk blobs
 		// while the pull runs, and a failed re-pull keeps it ready (#614).
-		// Only re-pull a non-ready model through the queued/downloading path.
-		refresh := false
+		// The job's own writes re-check the same condition inside the
+		// store's lock (recordPullState), so this is a fast path, not the
+		// guard — a flag captured here would go stale the moment another
+		// job moved the model (#305c).
 		if err := p.store.Update(func(s *catalog.State) {
 			if s.Models[manifest.ModelID].State == catalog.ModelStateReady {
-				refresh = true
 				return
 			}
 			s.Models[manifest.ModelID] = catalog.ModelState{
@@ -1999,7 +2000,7 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 			return management.PullJob{}, err
 		}
 		p.spawnPull(manifest.ModelID, func() {
-			p.runPullJob(jobCtx, manifest.ModelID, variant.VariantID, variant.Source.Tag, jobID, refresh)
+			p.runPullJob(jobCtx, manifest.ModelID, variant.VariantID, variant.Source.Tag, jobID)
 		})
 	case catalog.SourceHuggingFace:
 		// #557: vLLM safetensors. dispatchHFPull is defined per-OS — the
@@ -2092,6 +2093,31 @@ func (p *agentInferenceProvider) backgroundCtx() context.Context {
 	return context.Background()
 }
 
+// recordPullState moves modelID to next unless the model is currently
+// ready, and records errMsg when non-empty. Every state write a pull job
+// makes goes through it.
+//
+// It replaces a `refresh` flag computed at DISPATCH time (#614), which a
+// job then carried for its whole life: a pull dispatched while the model
+// was merely downloading held refresh=false and would overwrite a
+// sibling's completed `ready` with `failed` (#305c). The state read inside
+// the store's own lock is the only trustworthy input — a ready model is
+// serving from on-disk blobs, and nothing a later pull does may take that
+// down. The error text is still recorded either way, since it is the only
+// observability a failed refresh leaves behind.
+func (p *agentInferenceProvider) recordPullState(modelID, next, errMsg string) {
+	_ = p.store.Update(func(s *catalog.State) {
+		m := s.Models[modelID]
+		if m.State != catalog.ModelStateReady {
+			m.State = next
+		}
+		if errMsg != "" {
+			m.Error = errMsg
+		}
+		s.Models[modelID] = m
+	})
+}
+
 // runPullJob downloads one model. ctx MUST be the daemon's long-lived
 // context — PullModel dispatches on backgroundCtx(), never on a request
 // ctx (#305a: net/http cancels the handler's context the microsecond the
@@ -2102,17 +2128,8 @@ func (p *agentInferenceProvider) backgroundCtx() context.Context {
 // spawn `ollama serve` through exec.CommandContext(ctx, …), so a
 // self-cancelling ctx makes a finished pull kill the engine it just
 // started (#305/R0 — a regression from #304's EnsureRunning join).
-func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, variantID, tag, jobID string, refresh bool) {
-	// A refresh pull of an already-ready model keeps the model servable
-	// (state=ready) throughout: skip the downloading/verifying downgrades
-	// so a transient registry error can't take healthy serving down (#614).
-	if !refresh {
-		_ = p.store.Update(func(s *catalog.State) {
-			m := s.Models[modelID]
-			m.State = catalog.ModelStateDownloading
-			s.Models[modelID] = m
-		})
-	}
+func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, variantID, tag, jobID string) {
+	p.recordPullState(modelID, catalog.ModelStateDownloading, "")
 
 	// Forget live progress once the pull terminates (success or failure)
 	// so a finished/failed model never lingers as a stale "downloading".
@@ -2133,30 +2150,30 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	}
 	err := p.puller.Pull(ctx, tag, func(pr download.Progress) {
 		p.dlProgress.observe(modelID, pr)
-		if pr.State == download.StateVerifying && !refresh {
-			_ = p.store.Update(func(s *catalog.State) {
-				m := s.Models[modelID]
-				m.State = catalog.ModelStateVerifying
-				s.Models[modelID] = m
-			})
+		if pr.State == download.StateVerifying {
+			p.recordPullState(modelID, catalog.ModelStateVerifying, "")
 		}
 	})
 	if err != nil {
-		p.logger.Warn("ollama pull failed", "model", modelID, "tag", tag, "err", err, "refresh", refresh)
-		_ = p.store.Update(func(s *catalog.State) {
-			m := s.Models[modelID]
-			// A failed refresh pull keeps the model ready — the on-disk
-			// blobs still serve; record the error for observability only.
-			if !refresh {
-				m.State = catalog.ModelStateFailed
-			}
-			m.Error = err.Error()
-			s.Models[modelID] = m
-		})
+		p.logger.Warn("ollama pull failed", "model", modelID, "tag", tag, "err", err)
+		p.recordPullState(modelID, catalog.ModelStateFailed, err.Error())
 		return
 	}
 	_ = p.store.Update(func(s *catalog.State) {
 		m := s.Models[modelID]
+		// Record the variant this job actually fetched. The pre-flight
+		// write skips a model that was already ready, so without this a
+		// refresh pull that resolved a NEW variant downloaded the new
+		// blobs and left state pointing at the old tag — which is the tag
+		// the gateway puts on the wire and the mesh advertises (#305).
+		// Guarded on a change so a derived batch tag written mid-pull
+		// (#642) is not stomped by the base tag we were asked for.
+		if m.VariantID != variantID {
+			m.VariantID = variantID
+			m.OllamaTag = tag
+			// A derived model built from the OLD variant is void.
+			m.BaseOllamaTag = ""
+		}
 		m.State = catalog.ModelStateReady
 		m.Error = ""
 		m.PulledAt = time.Now().UTC()
@@ -2193,7 +2210,11 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	// set pendingSwapModel, so they don't trigger a spurious bounce.
 	if psm := p.pendingSwapModel.Load(); psm != nil && *psm == modelID {
 		p.pendingSwapModel.CompareAndSwap(psm, nil)
-		p.requestEngineReconcile(true)
+		// Record the intent; do not bounce here. `ollama pull` is a CLIENT
+		// of `ollama serve`, so stopping the engine makes a SIBLING model's
+		// download exit non-zero and records THAT model failed (#305d).
+		// endPull fires it once no pull is left in flight.
+		p.swapBounceDeferred.Store(true)
 	}
 }
 

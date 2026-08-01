@@ -97,9 +97,10 @@ func (p *agentInferenceProvider) runEngineBootstrap(ctx context.Context, reason 
 //     repeat is cheap and is what adopts a late install.
 //   - the BOOTSTRAP TAIL (bundled/preferred model, backend probe, tuning
 //     verify) runs at most once per process, latched by
-//     engineBootstrapOnce. PullModel has no in-flight dedup yet (#305),
-//     so re-running the tail on every trigger would dispatch duplicate
-//     multi-GB pulls. Once-per-process is exactly today's behaviour.
+//     engineBootstrapOnce. The pulls it dispatches are deduped now
+//     (#305), but the probe and the tuning verify both STOP AND RESTART
+//     the engine, so re-running the tail on every trigger would bounce a
+//     serving engine — and fail any download in flight against it.
 func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, reason string) error {
 	if p == nil || p.ollama == nil {
 		return errEngineNotInstalled
