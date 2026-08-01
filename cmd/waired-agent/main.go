@@ -58,12 +58,10 @@ import (
 
 const inferenceServicePort uint16 = 9474
 
-// restartRequestedExitCode is the agent's "restart me" exit status.
-// The packaged systemd unit pairs it with RestartForceExitStatus=17
-// (and SuccessExitStatus=17) so a preferred-model switch restart
-// works under Restart=on-failure while a plain exit 0 or
-// `systemctl stop` still stays down (issue #347).
-const restartRequestedExitCode = 17
+// restartRequestedExitCode is the agent's "restart me" exit status. The value
+// and the unit directives that honour it are owned by internal/platform/service,
+// which renders the unit; this alias keeps the exit sites readable (#347).
+const restartRequestedExitCode = service.RestartRequestedExitCode
 
 // bootRefreshTimeout bounds the pre-flight token refresh that activation
 // runs when the persisted access token is already stale

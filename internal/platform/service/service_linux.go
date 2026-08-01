@@ -192,6 +192,16 @@ func renderSystemdUnit(cfg Config, user string) string {
 	// Restart=always is required for the management API's "click →
 	// SIGTERM → restart with new config" flow. See
 	// build/waired-agent.service for the long-form explanation.
+	//
+	// Exit code 17 is the agent's "restart me" signal (a preferred-model
+	// switch via the management API, #347): counted as success so the unit
+	// never enters the failed state, but force-restarted so the new selection
+	// takes effect. The .deb's unit (packaging/systemd/waired-agent.service)
+	// has carried these two since #347 and claims in a comment to match this
+	// renderer; it did not. A host set up by `waired-agent install` rather
+	// than by the .deb got a unit that drops into failed on a model switch.
+	fmt.Fprintf(&b, "SuccessExitStatus=%d\n", RestartRequestedExitCode)
+	fmt.Fprintf(&b, "RestartForceExitStatus=%d\n", RestartRequestedExitCode)
 	fmt.Fprintln(&b, "User="+user)
 	fmt.Fprintln(&b, "Group="+user)
 	fmt.Fprintln(&b, "EnvironmentFile=-"+LinuxEnvFilePath)

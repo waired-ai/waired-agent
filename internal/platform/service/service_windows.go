@@ -143,6 +143,36 @@ func (h *svcHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, stat
 // windowsManager talks to the Service Control Manager.
 type windowsManager struct{}
 
+// applyRecoveryConfig tells the SCM to restart the agent when it dies: three
+// tries with backoff, counter reset after five minutes of uptime.
+//
+// The second call is the one that was missing. By default the SCM only runs
+// recovery actions when a service terminates *without* reporting
+// SERVICE_STOPPED — a hard crash. Our svc.Handler does the polite thing on a
+// fatal error: it reports Stopped and exits 1 (see Execute). The SCM classes
+// that as a clean, deliberate stop, so none of the three restarts above ever
+// fired for the failure mode most likely to happen in the field. Windows was
+// alone in this: systemd has Restart=always and launchd has
+// KeepAlive{SuccessfulExit=false}, both of which already cover a nonzero exit.
+//
+// Neither call is fatal — a service with no recovery policy still runs, and
+// still starts at boot. Errors go to stderr because install runs interactively.
+func applyRecoveryConfig(s *mgr.Service) {
+	if err := s.SetRecoveryActions(
+		[]mgr.RecoveryAction{
+			{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+			{Type: mgr.ServiceRestart, Delay: 15 * time.Second},
+			{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+		},
+		uint32((5 * time.Minute).Seconds()),
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: SetRecoveryActions: %v\n", err)
+	}
+	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: SetRecoveryActionsOnNonCrashFailures: %v\n", err)
+	}
+}
+
 func (m *windowsManager) Install(cfg Config) error {
 	svcArgs := []string{"-state-dir=" + cfg.StateDir}
 	if cfg.MgmtAddr != "" {
@@ -156,7 +186,15 @@ func (m *windowsManager) Install(cfg Config) error {
 	}
 	defer scm.Disconnect()
 
+	// An install over an existing service still reconciles the recovery
+	// configuration before refusing. Install is how every upgrade path
+	// re-runs (install.ps1 re-invokes it), and a machine that was set up
+	// before a recovery-policy change would otherwise keep the old policy
+	// forever — the service is only ever created once. Registration itself
+	// still requires an uninstall, since CreateService cannot rewrite the
+	// ImagePath of a running service.
 	if s, err := scm.OpenService(ServiceName); err == nil {
+		applyRecoveryConfig(s)
 		s.Close()
 		return fmt.Errorf("service %q is already installed; run `%s uninstall` first",
 			ServiceName, ServiceName)
@@ -175,19 +213,7 @@ func (m *windowsManager) Install(cfg Config) error {
 	}
 	defer s.Close()
 
-	// Recovery actions: 3 restarts with backoff. Counter resets after
-	// 5 minutes of uptime.
-	if err := s.SetRecoveryActions(
-		[]mgr.RecoveryAction{
-			{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
-			{Type: mgr.ServiceRestart, Delay: 15 * time.Second},
-			{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
-		},
-		uint32((5 * time.Minute).Seconds()),
-	); err != nil {
-		// Not fatal — the service can still be managed manually.
-		fmt.Fprintf(os.Stderr, "warning: SetRecoveryActions: %v\n", err)
-	}
+	applyRecoveryConfig(s)
 
 	// Register an Event Log source so writes from inside the SCM
 	// dispatcher (stderr is closed there) show up under "Windows Logs

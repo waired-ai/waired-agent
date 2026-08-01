@@ -161,6 +161,7 @@ $script:ContractBlocking = @{
     '754' = $true    # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts (FIXED)
     '755' = $true    # waired#755: the install path surfaces the tray (Start Menu group / autostart) (FIXED)
     '838' = $true    # waired#838: management writes travel over the local named pipe, not TCP (FIXED)
+    '315' = $true    # waired#315: SCM recovery actions also fire on a non-crash failure exit (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -389,6 +390,27 @@ function Assert-Inference {
     } else {
         ItBad "no init transcript captured ($InitLog)"
     }
+}
+
+# --- service recovery-policy assert (waired#315) -----------------------------
+# `waired-agent install` configures three restarts with backoff, but the SCM
+# only runs recovery actions for a service that dies WITHOUT reporting
+# SERVICE_STOPPED. Our svc.Handler reports Stopped and exits 1 on a fatal
+# error, so until SetRecoveryActionsOnNonCrashFailures(true) was added, none of
+# those restarts ever fired for the failure mode most likely in the field.
+#
+# sc.exe qfailureflag is the only place that bit is observable, and nothing
+# else in the suite would go red if the call were dropped again: the service
+# installs, starts, and serves exactly the same either way. Blocking from the
+# start ($ContractBlocking['315'] = $true) because the fix ships in the same
+# PR as this assert.
+function Assert-ServiceRecoveryFlag {
+    $out = & sc.exe qfailureflag $ServiceName 2>&1 | Out-String
+    ItLog "sc qfailureflag: $($out.Trim())"
+    # Localised Windows translates the label, so key off the value, not the
+    # phrase: the line reads "<label>: TRUE" / ": 1" depending on the build.
+    $set = $out -match '(?im):\s*(TRUE|1)\s*$'
+    ItSoft '315' $set "SCM restarts the agent after a non-crash failure exit (qfailureflag set)"
 }
 
 # --- management write pipe assert (waired#838/#80) --------------------------
@@ -1305,7 +1327,10 @@ if ($Tier -ge 2) {
         if ($enrolled) { ItOk "daemon read the enrolled state and reports an identity" }
         else { ItBad "daemon did not report enrolled" }
 
-        # Cheap and fast, so it runs before the minutes-long inference asserts.
+        # Cheap and fast, so they run before the minutes-long inference asserts.
+        ItStep "service recovery-policy assert (waired#315)"
+        Assert-ServiceRecoveryFlag
+
         ItStep "management write pipe asserts (waired#838)"
         Assert-MgmtPipe
 
