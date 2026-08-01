@@ -59,12 +59,28 @@ func SelectInstallModel(in PickInput, minTier int) (above []Pick, ok bool, err e
 			above = append(above, p)
 		}
 	}
-	// #624 must never turn a previously-working host into an under-spec
-	// one: when the context floor left nothing above the quality-tier
-	// floor (e.g. a 4 GB CPU host whose only tier-30+ fit is a 32k-window
-	// model), retry without the context floor. The picks carry
-	// ContextFloorSatisfied=false, so the install notes state the
-	// compromise instead of silently disabling inference.
+	// Neither quality gate may turn a previously-working host into an
+	// under-spec one, so when nothing clears the tier floor they are
+	// dropped in order of what they cost the user, cheapest first. The
+	// picks carry the status of whichever gate was given up, so the
+	// install notes state the compromise instead of silently disabling
+	// inference.
+	//
+	//  1. The recommendation gate (waired-ai/waired#988). Giving it up
+	//     restores a model that spills weights to system RAM: slower,
+	//     and exactly what the host used to be given. This one goes
+	//     first because it is NOT monotone in hardware — an 8 GB laptop
+	//     with a 4 GB card has nothing above tier 27 resident, while the
+	//     same laptop without the card installs qwen3.5-4b — and no
+	//     machine may lose local inference for owning a small GPU.
+	//  2. The #624 context floor. Giving this one up costs the ~200k
+	//     coding window itself (e.g. a 4 GB CPU host whose only tier-30+
+	//     fit is a 32k-window model), which is the more expensive
+	//     concession of the two.
+	if len(above) == 0 && !in.NoRecommendGate {
+		in.NoRecommendGate = true
+		return SelectInstallModel(in, minTier)
+	}
 	if len(above) == 0 && !in.NoContextFloor {
 		in.NoContextFloor = true
 		return SelectInstallModel(in, minTier)

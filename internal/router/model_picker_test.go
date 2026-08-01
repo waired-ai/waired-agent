@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // fixtureCatalog returns a small synthetic catalog that exercises the
@@ -1050,4 +1051,118 @@ func TestHostFitsIsMonotoneInHardware(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestRankModels_ResidentWeightsBeatASpilledFlagship is the
+// waired-ai/waired#986 host, and the router half of
+// waired-ai/waired#988.
+//
+// A 22.6 GB mixture of experts was being served on a 16 GB card with
+// 37.7 % of its weights in system RAM; a ~30k-token coding prompt
+// prefilled at 388 tok/s. The roofline cannot see that, because a MoE
+// reads only its ACTIVE weights per token and prefill touches all of
+// them — so the model cleared the decode floor, carried the highest
+// tier, and won.
+//
+// Product contract: on a discrete card the auto-selection is a model
+// whose WEIGHTS the card holds, and the one it passes over is reported
+// with a reason rather than hidden.
+func TestRankModels_ResidentWeightsBeatASpilledFlagship(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	hw := hardware.Profile{
+		OS: "windows", Arch: "x86_64", RAMTotalGB: 64,
+		GPUs: []hardware.GPU{{Vendor: "nvidia", Model: "RTX 5080", VRAMTotalMB: 16303}},
+	}
+	in := PickInput{Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama}
+
+	pick, err := PickModel(in)
+	if err != nil {
+		t.Fatalf("PickModel: %v", err)
+	}
+	if pick.Manifest.ModelID == "qwen3.6-35b-a3b" {
+		t.Fatal("a 16 GB card is still auto-selecting a 22.6 GB mixture of experts")
+	}
+	if !pick.Recommendation.Fits {
+		t.Errorf("the winner %s is itself not recommended (%+v); the gate fell through, "+
+			"so this host has no resident option at all", pick.Manifest.ModelID, pick.Recommendation)
+	}
+	if pick.Manifest.ModelID != "qwen3.5-9b" {
+		t.Errorf("auto-selection = %s, want qwen3.5-9b — the highest tier that both holds "+
+			"its weights in a 16 GB card and serves the ~200k coding window",
+			pick.Manifest.ModelID)
+	}
+
+	// Capacity still admits it — that is the layering, and hiding a
+	// model the host can run is the #229 bug.
+	if !hostFits(catalog.RuntimeOllama, manifestVariant(t, manifests, "qwen3.6-35b-a3b"), hw) {
+		t.Error("qwen3.6-35b-a3b no longer fits a 64 GB host with a 16 GB card; " +
+			"the recommendation gate has leaked into capacity")
+	}
+
+	// And the pass-over is explained rather than silent, which is the
+	// half of this the review actually hit. Both quality gates are stood
+	// down to enumerate: RankModels returns the NARROWED set, so a model
+	// dropped by the #624 context floor never reaches the caller either
+	// way.
+	ungated := in
+	ungated.NoRecommendGate = true
+	ungated.NoContextFloor = true
+	ranked, err := RankModels(ungated)
+	if err != nil {
+		t.Fatalf("RankModels (ungated): %v", err)
+	}
+	var seen bool
+	for _, p := range ranked {
+		if p.Manifest.ModelID != "qwen3.6-35b-a3b" {
+			continue
+		}
+		seen = true
+		if p.Recommendation.Fits {
+			t.Errorf("qwen3.6-35b-a3b reports itself recommendable on a 16 GB card (%+v)",
+				p.Recommendation)
+		}
+		if p.Recommendation.Reason != hostfit.ReasonWeightsSpill {
+			t.Errorf("Reason = %q, want %q", p.Recommendation.Reason, hostfit.ReasonWeightsSpill)
+		}
+		if p.Recommendation.NeedMB <= p.Recommendation.HaveMB {
+			t.Errorf("shortfall reads need=%d have=%d, which is not a shortfall",
+				p.Recommendation.NeedMB, p.Recommendation.HaveMB)
+		}
+		var explained bool
+		for _, r := range p.Reasons {
+			if strings.Contains(r, "not preselected here") {
+				explained = true
+			}
+			if strings.Contains(r, "cannot run") || strings.Contains(r, "does not fit") {
+				t.Errorf("reason claims the model does not run: %q", r)
+			}
+		}
+		if !explained {
+			t.Errorf("no reason line explains why it was passed over: %q", p.Reasons)
+		}
+	}
+	if !seen {
+		t.Error("qwen3.6-35b-a3b disappeared from the ranking entirely; capacity still admits it")
+	}
+}
+
+// manifestVariant returns the first ollama variant of modelID in the
+// bundled catalog, failing the test when the model is gone.
+func manifestVariant(t *testing.T, manifests []catalog.Manifest, modelID string) catalog.Variant {
+	t.Helper()
+	for _, m := range manifests {
+		if m.ModelID != modelID {
+			continue
+		}
+		for _, v := range m.Variants {
+			if engineSupports(v, catalog.RuntimeOllama) {
+				return v
+			}
+		}
+	}
+	t.Fatalf("%s is not in the bundled catalog with an ollama variant", modelID)
+	return catalog.Variant{}
 }

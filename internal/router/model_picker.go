@@ -46,6 +46,23 @@ type PickInput struct {
 	// SelectInstallModel retries with this set when the floor leaves
 	// nothing above the quality-tier floor.
 	NoContextFloor bool
+
+	// NoRecommendGate disables the hostfit.OllamaRecommend narrowing
+	// (candidates still carry their verdict on the Pick). The escape
+	// hatch exists for the same reason NoContextFloor does, and it is
+	// not optional: the recommendation gate is NOT monotone in hardware,
+	// and without a way out it turns adding a graphics card into a
+	// downgrade — the #229 failure mode, one layer up.
+	//
+	// Concretely: an 8 GB host with no GPU is pointed at qwen3.5-4b
+	// (tier 42). Fit a 4 GB card and nothing above tier 27 holds its
+	// weights there, so the pick drops BELOW InstallQualityFloorTier and
+	// the installer declares the machine under-spec — the identical
+	// laptop without the card installs and works. A lower-tier
+	// recommendation is the trade waired-ai/waired#988 accepted; losing
+	// local inference outright is not, so SelectInstallModel drops this
+	// gate before it concludes under-spec.
+	NoRecommendGate bool
 }
 
 // Pick is the model picker's verdict. Reasons traces the decision so
@@ -75,6 +92,20 @@ type Pick struct {
 	// make, because a dense 27B and a 3B-active mixture of experts of the
 	// same size decode seven times apart (#229).
 	DecodeEstimate hostfit.Estimate
+
+	// Recommendation is hostfit.OllamaRecommend's verdict: Fits reports
+	// whether this is a model the host should be POINTED AT by default,
+	// and Reason / NeedMB / HaveMB say why not when it is false.
+	//
+	// False is NOT "cannot run" — capacity already admitted this
+	// candidate, and a caller listing models must keep showing it, greyed
+	// or annotated. Hiding it is the #229 bug.
+	//
+	// Always Fits on non-ollama engines, which have no recommendation
+	// rule here. A preferred-override pick BYPASSES the gate but is still
+	// reported honestly: the user gets the model they asked for, and this
+	// says what the host thinks of it.
+	Recommendation hostfit.Verdict
 }
 
 // RankModels applies the Step 2.5 filter + sort and returns EVERY
@@ -138,6 +169,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 		floorOK     bool
 		spill       float64
 		est         hostfit.Estimate
+		rec         hostfit.Verdict
 	}
 	var fits []candidate
 	for i, m := range capable {
@@ -156,8 +188,11 @@ func RankModels(in PickInput) ([]Pick, error) {
 			}
 			// No speed claim by default — vLLM has no roofline model
 			// here, and hostfit spells "no claim" as a passing floor.
+			// The recommendation gate is likewise ollama-only, so vLLM
+			// candidates start recommendable and stay that way.
 			c := candidate{manifestIdx: i, manifest: m, variant: v,
-				est: hostfit.Estimate{MeetsSpeedFloor: true}}
+				est: hostfit.Estimate{MeetsSpeedFloor: true},
+				rec: hostfit.Verdict{Fits: true}}
 			// #624 coding-agent context floor: native window plus the
 			// per-engine host gate — bounded-spill on ollama, the
 			// utilization-budget window check on vllm (#675/#678; vLLM
@@ -168,6 +203,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 				c.spill = spill
 				c.floorOK = c.floorOK && hostOK
 				c.est = hostfit.EstimateOllamaDecode(v, in.Hardware.HostFit())
+				c.rec = hostfit.OllamaRecommend(v, in.Hardware.HostFit())
 			}
 			if in.Engine == catalog.RuntimeVLLM {
 				c.floorOK = c.floorOK && VLLMServesContextFloor(m, v, in.Hardware)
@@ -186,31 +222,43 @@ func RankModels(in PickInput) ([]Pick, error) {
 	//
 	//  1. #624 coding-agent context floor: native window plus the
 	//     per-engine host gate.
-	//  2. #229 decode floor: fast enough to be worth serving at all.
-	//     This pass is the counterweight to the capacity gate no longer
-	//     requiring GPU residency on discrete hosts — without it a host
-	//     would auto-select a model that spills most of its layers
-	//     whenever that model carried a higher quality tier.
+	//  2. hostfit.OllamaRecommend: worth serving at all. This pass is
+	//     the counterweight to the capacity gate no longer requiring GPU
+	//     residency on discrete hosts — without it a host would
+	//     auto-select a model that spills most of its layers whenever
+	//     that model carried a higher quality tier.
 	//
-	//     It applies ONLY where the estimate is an upper bound. Two
-	//     cases qualify. The spilled-discrete one: there the GPUs' own
-	//     reads are priced at zero, a margin no unknown hardware can
-	//     eat — and since #264 that share is computed against the POOL,
-	//     because pricing two cards as one manufactures the very spill
-	//     this pass then acts on. And, since #251, the unified-memory
-	//     one when the host published its part's peak: a peak is an
-	//     upper bound on THAT machine.
+	//     It used to be the #229 roofline directly, applied wherever the
+	//     estimate was an upper bound. The roofline stays, but it can no
+	//     longer decide this on a discrete card: a mixture of experts
+	//     reads only its ACTIVE weights per token, so a 35B/3.3B-active
+	//     model clears the decode floor at two-thirds spill and the
+	//     estimate cannot see what that spill does to PREFILL, which is
+	//     the whole of a coding agent's first turn. On the
+	//     waired-ai/waired#986 host that model was auto-selected onto a
+	//     16 GB card and prefilled at 388 tok/s.
 	//
-	//     A unified host with no published peak falls back to a
-	//     population constant that is neither bound — #270 checked, and
-	//     the M1/M2/M3 bases sit below it, so it is not the FLOOR this
-	//     comment used to claim. The CPU-only figure rests on a constant
-	//     meant as an upper bound but with no margin behind it, so a
-	//     host whose memory beats it would be excluded on the constant
-	//     alone. Both get an annotation rather than a smaller catalog
-	//     until per-device bandwidth lands (#252, #266).
-	//  3. Everything that fits, so neither floor can newly turn a
-	//     working host into an under-spec one.
+	//     So the discrete arm now asks for resident WEIGHTS, and the
+	//     rule lives in proto/hostfit because the control plane's wizard
+	//     was answering the same question with a different rule and
+	//     reaching a different model (waired-ai/waired#988). The
+	//     unified arm keeps the #251 published-peak bound — a pool large
+	//     enough to hold a model says nothing about how fast it is read
+	//     — and CPU-only hosts stay unconstrained here, since
+	//     BandwidthSystemRAMGBs has no margin behind it and a host whose
+	//     memory beats the constant would be excluded on the constant
+	//     alone (annotation, not a smaller catalog, until #252/#266).
+	//  3. #229 decode floor, unchanged, and it is NOT redundant behind
+	//     pass 2. Residency separates models by where they live, and
+	//     when NOTHING is resident it separates nothing and falls
+	//     through — which is precisely the case #229 was written for. On
+	//     a 24 GB card holding neither of two 81 GB models, only the
+	//     roofline knows that the 3.3B-active mixture of experts decodes
+	//     usefully and the 122B-active dense one cannot on any card. So
+	//     the roofline is not demoted to an annotation; it is the pass
+	//     that still discriminates once residency has nothing to say.
+	//  4. Everything that fits, so no gate can newly turn a working host
+	//     into an under-spec one.
 	narrow := func(keep func(candidate) bool) {
 		var pass []candidate
 		for _, c := range fits {
@@ -224,6 +272,9 @@ func RankModels(in PickInput) ([]Pick, error) {
 	}
 	if in.PreferredModelID == "" && !in.NoContextFloor {
 		narrow(func(c candidate) bool { return c.floorOK })
+	}
+	if in.PreferredModelID == "" && !in.NoRecommendGate {
+		narrow(func(c candidate) bool { return c.rec.Fits })
 	}
 	if in.PreferredModelID == "" {
 		narrow(func(c candidate) bool { return !c.est.UpperBound || c.est.MeetsSpeedFloor })
@@ -257,6 +308,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 			ContextFloorSatisfied: c.floorOK,
 			ExpectedSpillFraction: c.spill,
 			DecodeEstimate:        c.est,
+			Recommendation:        c.rec,
 		}
 		switch {
 		case c.floorOK && c.spill > 0:
@@ -268,9 +320,41 @@ func RankModels(in PickInput) ([]Pick, error) {
 				"below the ~200k coding-agent context floor (native window %d tokens); best-effort candidate",
 				c.manifest.ContextLength))
 		}
+		if !c.rec.Fits {
+			p.Reasons = append(p.Reasons, notRecommendedReason(c.rec))
+		}
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// notRecommendedReason turns a declined hostfit.OllamaRecommend verdict
+// into the picker's reason-trace line. It says "not preselected", never
+// "cannot run": the model reached this point because capacity admitted
+// it, and stating otherwise would re-create the #229 bug in prose.
+//
+// These strings are diagnostics for `waired runtimes status` and the
+// refresh prompts, not user-facing product copy; the wizard and the tray
+// get reason CODES and word them themselves (waired-ai/waired-agent#321).
+func notRecommendedReason(v hostfit.Verdict) string {
+	switch v.Reason {
+	case hostfit.ReasonWeightsSpill:
+		return fmt.Sprintf(
+			"not preselected here: the weights need ~%d MB GPU-resident and this host offers %d MB, "+
+				"so they would be re-read from system RAM on every prompt (runs, but slowly)",
+			v.NeedMB, v.HaveMB)
+	case hostfit.ReasonTooSlow:
+		return fmt.Sprintf(
+			"not preselected here: ~%.0f tok/s expected at this machine's published memory bandwidth, "+
+				"below the %.0f tok/s floor (runs, but slowly)",
+			v.Estimate.TokpsEstimate, hostfit.DecodeFloorTokps)
+	case hostfit.ReasonInsufficientVRAM:
+		return fmt.Sprintf(
+			"not preselected here: needs ~%d MB in the shared memory pool, which offers %d MB",
+			v.NeedMB, v.HaveMB)
+	default:
+		return "not preselected here"
+	}
 }
 
 // PickModel returns the single highest-ranked fitting variant — the head
@@ -345,6 +429,12 @@ func PickModel(in PickInput) (Pick, error) {
 	case !winner.ContextFloorSatisfied:
 		reasons = append(reasons,
 			"no model on this host can serve the ~200k coding-agent context; best-effort selection")
+	}
+	// A winner that is not recommended means either an explicit override
+	// or a host where nothing cleared the gate and pass 3 fell through.
+	// Both are working configurations; neither should be silent.
+	if !winner.Recommendation.Fits {
+		reasons = append(reasons, notRecommendedReason(winner.Recommendation))
 	}
 	winner.Reasons = reasons
 	return winner, nil
