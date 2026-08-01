@@ -25,6 +25,17 @@ type fakeProcess struct {
 	signals  []os.Signal
 	mu       sync.Mutex
 	killed   bool
+	// signalErr is what Signal returns after recording the signal.
+	// Set it to ErrSignalUnsupported to model Windows, where no signal
+	// can be delivered to an arbitrary process (#316).
+	signalErr error
+	// killErr, when set, makes Kill fail WITHOUT exiting the process —
+	// the "we could not free the memory" case the park latch must not
+	// paper over (#316).
+	killErr error
+	// killNoExit makes Kill report success while the process stays
+	// alive, modelling a child the OS refuses to reap (#316).
+	killNoExit bool
 }
 
 func newFakeProcess() *fakeProcess {
@@ -43,13 +54,22 @@ func (p *fakeProcess) Err() error {
 func (p *fakeProcess) Signal(sig os.Signal) error {
 	p.mu.Lock()
 	p.signals = append(p.signals, sig)
+	err := p.signalErr
 	p.mu.Unlock()
-	return nil
+	return err
 }
 func (p *fakeProcess) Kill() error {
 	p.mu.Lock()
 	p.killed = true
+	err := p.killErr
+	noExit := p.killNoExit
 	p.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if noExit {
+		return nil
+	}
 	p.exit(errors.New("killed"))
 	return nil
 }

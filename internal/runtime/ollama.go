@@ -1120,6 +1120,12 @@ func (a *OllamaAdapter) Stop(ctx context.Context) error {
 	return nil
 }
 
+// stopProcess terminates the running child. Once it has started, it
+// COMMITS TO THE KILL: no caller-side cancellation may return while the
+// process is still alive (#316). The engine power axis latches "stopped"
+// before the stop runs, so abandoning a live child mid-stop would make
+// status claim the memory was freed while the engine still pinned VRAM —
+// and the parked latch would then block EnsureRunning from reviving it.
 func (a *OllamaAdapter) stopProcess(ctx context.Context) error {
 	a.mu.Lock()
 	proc := a.proc
@@ -1130,23 +1136,47 @@ func (a *OllamaAdapter) stopProcess(ctx context.Context) error {
 	if proc == nil {
 		return nil
 	}
-	// Best-effort SIGTERM; if the receiver has already exited the
-	// signal call returns an error which we ignore.
-	_ = proc.Signal(syscall.SIGTERM)
+	// Best-effort SIGTERM. An ordinary error means the receiver already
+	// exited and is ignored; ErrSignalUnsupported means the platform
+	// cannot deliver signals at all (Windows), so waiting out StopTimeout
+	// for a graceful exit would be waiting for something nobody asked for.
+	if err := proc.Signal(syscall.SIGTERM); errors.Is(err, ErrSignalUnsupported) {
+		return a.killAndReap(proc)
+	}
 	select {
 	case <-proc.Done():
 		a.closeEngineLog()
 		return nil
 	case <-time.After(a.cfg.StopTimeout):
 		// Escalate.
-		if err := proc.Kill(); err != nil {
-			return fmt.Errorf("ollama: kill: %w", err)
-		}
-		<-proc.Done()
+		return a.killAndReap(proc)
+	case <-ctx.Done():
+		// The caller gave up waiting (a tray budget, a cancelled HTTP
+		// request). The child does not get to survive that: escalate now
+		// rather than leaving it alive behind a "stopped" power state.
+		slog.Warn("ollama: stop caller cancelled; killing the engine rather than abandoning it",
+			"pid", proc.PID(), "err", ctx.Err())
+		return a.killAndReap(proc)
+	}
+}
+
+// killAndReap force-kills proc and waits for it to be collected, closing
+// the engine log on every exit path. The reap wait is bounded by the same
+// StopTimeout budget the graceful phase uses: the pre-#316 code waited on
+// Done() forever, so a child the OS refused to collect hung the
+// management handler (and the tray behind it) for good.
+func (a *OllamaAdapter) killAndReap(proc RunningProcess) error {
+	if err := proc.Kill(); err != nil {
+		a.closeEngineLog()
+		return fmt.Errorf("ollama: kill: %w", err)
+	}
+	select {
+	case <-proc.Done():
 		a.closeEngineLog()
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-time.After(a.cfg.StopTimeout):
+		a.closeEngineLog()
+		return fmt.Errorf("ollama: process %d did not exit within %s of being killed", proc.PID(), a.cfg.StopTimeout)
 	}
 }
 
@@ -1321,7 +1351,16 @@ func (a *OllamaAdapter) Park(ctx context.Context) error {
 	a.mu.Unlock()
 	// Stop is a no-op when no process is running (e.g. parking before
 	// first start), so this is safe in every state.
-	return a.Stop(ctx)
+	if err := a.Stop(ctx); err != nil {
+		// The latch is what engine_power reports, and it was set before
+		// the stop ran. If the stop could not free the memory, drop it:
+		// claiming "stopped" for a process that may still be alive is the
+		// worst of both worlds — status lies AND EnsureRunning refuses to
+		// revive the engine for local and peer traffic alike (#316).
+		a.Unpark()
+		return err
+	}
+	return nil
 }
 
 // Unpark clears the parked latch so a subsequent EnsureRunning may spawn

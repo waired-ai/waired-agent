@@ -118,17 +118,23 @@ func (p *osProcess) PID() int              { return p.cmd.Process.Pid }
 func (p *osProcess) Done() <-chan struct{} { return p.done }
 func (p *osProcess) Err() error            { return p.errStore.Load() }
 
-// Signal on Windows has no SIGTERM-equivalent for arbitrary processes.
-// Returning nil keeps the adapter's Stop loop intact: the loop waits
-// `StopTimeout` for the child to exit on its own (it won't, absent a
-// graceful HTTP-shutdown probe driven by the adapter), then escalates
-// to Kill which closes the Job Object and reaps the tree.
+// Signal on Windows has no SIGTERM-equivalent for arbitrary processes, so
+// it reports ErrSignalUnsupported instead of pretending to have delivered
+// one. That distinction is load-bearing: returning nil (the pre-#316
+// behaviour) made the adapter wait out the full `StopTimeout` for an exit
+// that could never come, and the tray's shorter budget always won that
+// race — the stop was cancelled before it ever reached the Kill
+// escalation, so the engine kept its VRAM while status reported it
+// stopped. With the sentinel, Stop escalates immediately and Kill closes
+// the Job Object, reaping the whole tree.
 //
 // Engine-specific graceful shutdown (e.g. Ollama's POST /api/shutdown)
-// is the adapter's responsibility on Windows, not the spawner's.
-// Documented as a Phase W-1 trade-off in waired/docs/decisions/ (20260514).
+// remains the adapter's responsibility on Windows, not the spawner's; see
+// the Phase W-1 subprocess-management decision (Unix = pgid + SIGTERM,
+// Windows = Job Object) in the internal decision log, and
+// docs/decisions/20260801/*-engine-stop-commit-to-kill.md here.
 func (p *osProcess) Signal(_ os.Signal) error {
-	return nil
+	return ErrSignalUnsupported
 }
 
 // Kill terminates the entire job (child + every descendant) by closing
