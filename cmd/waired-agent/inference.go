@@ -2598,15 +2598,52 @@ func stateOrDefault(s, d string) string {
 	return s
 }
 
-// activeEngineTag resolves state.Active to the engine-side tag the
-// peer will see in the probe response (Ollama /api/tags name, or
-// vLLM /v1/models id). Returns ("", false) when no Active is set,
-// the active model is not present in state.Models, or the runtime
-// has no usable tag recorded.
+// advertisedEngineTag resolves state.Active to the engine-side name
+// this agent should publish to MESH PEERS, which is not always the
+// name its own engine loads.
+//
+// When ollama tuning forces a large generation ubatch the agent builds
+// a derived `<base>-wb<batch>` model (#642) and records it as
+// OllamaTag, keeping the pulled base tag in BaseOllamaTag. The derived
+// name is a local tuning artifact: consumers build their want sets
+// from `Variant.Source.Tag` / `Source.RepoID` only
+// (internal/router.variantWantSets), so a peer advertising
+// `...-wb2048` matches nothing and is permanently unroutable
+// (waired-agent#324).
+//
+// Advertising the BASE tag is safe end to end: the serving side
+// resolves an engine-native name back to its manifest
+// (router.lookupByEngineModel) and then names its own local tag via
+// router.engineModelFor, which returns ModelState.OllamaTag — the
+// derived one. The batch tuning survives the peer hop; only the wire
+// name changes.
+//
+// Returns ("", false) under the same conditions as activeEngineTag.
+func advertisedEngineTag(s catalog.State) (string, bool) {
+	tag, ok := activeEngineTag(s)
+	if !ok {
+		return "", false
+	}
+	if s.Active.Runtime != catalog.RuntimeOllama {
+		return tag, true
+	}
+	if ms, mok := s.Models[s.Active.ModelID]; mok && ms.BaseOllamaTag != "" {
+		return ms.BaseOllamaTag, true
+	}
+	return tag, true
+}
+
+// activeEngineTag resolves state.Active to the engine-side tag this
+// agent's own engine serves (Ollama /api/tags name, or vLLM
+// /v1/models id). Returns ("", false) when no Active is set, the
+// active model is not present in state.Models, or the runtime has no
+// usable tag recorded.
 //
 // Backs the "1 agent = 1 model" invariant: agent publishes only the
 // active variant's tag in InferenceState.Models even when extra
-// models happen to be pulled locally.
+// models happen to be pulled locally. For what goes on the WIRE, see
+// advertisedEngineTag — the two differ whenever a derived batch model
+// is in use.
 func activeEngineTag(s catalog.State) (string, bool) {
 	if s.Active == nil {
 		return "", false
@@ -3114,14 +3151,21 @@ func variantSHAForActive() string {
 	return ""
 }
 
-// activeEngineTagForActive is the main-side wrapper around
-// activeEngineTag — loads the catalog state from the default path and
-// resolves the engine tag for the agent's Active selection. Returns
-// "" when no Active is set or the runtime has no usable tag recorded.
-// Used by main.go to feed inferenceProbeDeps.ActiveTag so the probe
-// loop can enforce the "1 agent = 1 model" invariant.
-func activeEngineTagForActive() string {
+// activeEngineTagsForActive is the main-side wrapper around
+// advertisedEngineTag / activeEngineTag — loads the catalog state from
+// the default path and resolves both engine-side names for the agent's
+// Active selection. Both are "" when no Active is set or the runtime
+// has no usable tag recorded.
+//
+// advertise is what goes into InferenceState.Models (what peers may
+// ask this node for); serving is what this node's own engine loaded.
+// They differ only when a #642 derived batch model is in use. main.go
+// feeds both to the probe loop, which needs advertise to enforce the
+// "1 agent = 1 model" invariant on the wire and serving to recognise
+// the engine's own report of that tag.
+func activeEngineTagsForActive() (advertise, serving string) {
 	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
-	tag, _ := activeEngineTag(st)
-	return tag
+	advertise, _ = advertisedEngineTag(st)
+	serving, _ = activeEngineTag(st)
+	return advertise, serving
 }

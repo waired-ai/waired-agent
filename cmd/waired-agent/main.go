@@ -1089,20 +1089,25 @@ func run(ctx context.Context, args []string) error {
 				}
 			}
 
+			// The two names differ only when a #642 derived batch model is
+			// in use: peers are told the base tag (nothing else is
+			// matchable), the engine loads the derived one.
+			advertiseTag, servingTag := activeEngineTagsForActive()
 			deps := inferenceProbeDeps{
-				StateWriter: stateWriter,
-				Aggregator:  meshAgg,
-				PushClient:  infPushClient,
-				CPCtx:       cpCtx,
-				DeviceID:    id.DeviceID,
-				MachineKey:  mk.Private,
-				EngineKind:  engineKind,
-				EnginePort:  enginePort,
-				Disabled:    *disableInference,
-				Logger:      logger,
-				Hardware:    hwSummary,
-				Capacity:    capacity,
-				ActiveTag:   activeEngineTagForActive(),
+				StateWriter:  stateWriter,
+				Aggregator:   meshAgg,
+				PushClient:   infPushClient,
+				CPCtx:        cpCtx,
+				DeviceID:     id.DeviceID,
+				MachineKey:   mk.Private,
+				EngineKind:   engineKind,
+				EnginePort:   enginePort,
+				Disabled:     *disableInference,
+				Logger:       logger,
+				Hardware:     hwSummary,
+				Capacity:     capacity,
+				AdvertiseTag: advertiseTag,
+				ServingTag:   servingTag,
 			}
 			// Advertise the engine's VRAM-safe parallelism ceiling (advisory)
 			// so the admin Device detail page can show it and warn before an

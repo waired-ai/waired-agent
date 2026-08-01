@@ -577,7 +577,7 @@ func TestNarrowPublishedModels_NoActiveNoChange(t *testing.T) {
 	s := &signer.InferenceState{Models: []string{"qwen3:8b"}}
 	var sig string
 	logger, cap := newCaptureLogger()
-	narrowPublishedModels(s, "", &sig, logger)
+	narrowPublishedModels(s, "", "", &sig, logger)
 	if len(s.Models) != 1 || s.Models[0] != "qwen3:8b" {
 		t.Errorf("Models mutated unexpectedly: %v", s.Models)
 	}
@@ -590,7 +590,7 @@ func TestNarrowPublishedModels_MatchSilent(t *testing.T) {
 	s := &signer.InferenceState{Models: []string{"qwen3:8b"}}
 	var sig string
 	logger, cap := newCaptureLogger()
-	narrowPublishedModels(s, "qwen3:8b", &sig, logger)
+	narrowPublishedModels(s, "qwen3:8b", "qwen3:8b", &sig, logger)
 	if len(s.Models) != 1 || s.Models[0] != "qwen3:8b" {
 		t.Errorf("Models should remain [qwen3:8b]; got %v", s.Models)
 	}
@@ -603,7 +603,7 @@ func TestNarrowPublishedModels_SurplusWarnAndNarrow(t *testing.T) {
 	s := &signer.InferenceState{Models: []string{"qwen3:8b", "llama:13b", "phi3:14b"}}
 	var sig string
 	logger, cap := newCaptureLogger()
-	narrowPublishedModels(s, "qwen3:8b", &sig, logger)
+	narrowPublishedModels(s, "qwen3:8b", "qwen3:8b", &sig, logger)
 	if len(s.Models) != 1 || s.Models[0] != "qwen3:8b" {
 		t.Errorf("Models must be narrowed to [qwen3:8b]; got %v", s.Models)
 	}
@@ -615,13 +615,18 @@ func TestNarrowPublishedModels_SurplusWarnAndNarrow(t *testing.T) {
 	}
 }
 
-func TestNarrowPublishedModels_ActiveNotServedWarn(t *testing.T) {
+// TestNarrowPublishedModels_ActiveNotServedAdvertisesNothing pins a
+// PRODUCT CONTRACT (waired-agent#324): when the engine's report does
+// not contain the active model, this node is not a candidate for it
+// and must say so. It previously advertised the tag anyway, which
+// turned a diverged engine into a mesh peer that 404s every request.
+func TestNarrowPublishedModels_ActiveNotServedAdvertisesNothing(t *testing.T) {
 	s := &signer.InferenceState{Models: []string{"llama:13b"}}
 	var sig string
 	logger, cap := newCaptureLogger()
-	narrowPublishedModels(s, "qwen3:8b", &sig, logger)
-	if len(s.Models) != 1 || s.Models[0] != "qwen3:8b" {
-		t.Errorf("Models must be [qwen3:8b] even when engine reports a different tag; got %v", s.Models)
+	narrowPublishedModels(s, "qwen3:8b", "qwen3:8b", &sig, logger)
+	if len(s.Models) != 0 {
+		t.Errorf("Models must be empty when the engine does not serve the active model; got %v", s.Models)
 	}
 	if len(cap.records) != 1 || cap.records[0].level != slog.LevelWarn {
 		t.Fatalf("want one warn record; got %+v", cap.records)
@@ -631,19 +636,83 @@ func TestNarrowPublishedModels_ActiveNotServedWarn(t *testing.T) {
 	}
 }
 
-func TestNarrowPublishedModels_EmptyEngineInfoLog(t *testing.T) {
+// TestNarrowPublishedModels_EmptyEngineAdvertisesNothing pins the
+// other half of the same PRODUCT CONTRACT: an engine that has not
+// reported any tag yet (model still pulling, wedged setup) must not
+// be advertised as serving one. That optimistic window is what routed
+// consumers to a mid-setup peer and produced the rc7 review's 4xx
+// "model not found" class (waired-agent#324).
+func TestNarrowPublishedModels_EmptyEngineAdvertisesNothing(t *testing.T) {
 	s := &signer.InferenceState{Models: nil}
 	var sig string
 	logger, cap := newCaptureLogger()
-	narrowPublishedModels(s, "qwen3:8b", &sig, logger)
-	if len(s.Models) != 1 || s.Models[0] != "qwen3:8b" {
-		t.Errorf("Models must be optimistically set to [qwen3:8b]; got %v", s.Models)
+	narrowPublishedModels(s, "qwen3:8b", "qwen3:8b", &sig, logger)
+	if len(s.Models) != 0 {
+		t.Errorf("Models must stay empty while the engine reports nothing; got %v", s.Models)
 	}
 	if len(cap.records) != 1 || cap.records[0].level != slog.LevelInfo {
 		t.Fatalf("want one info record; got %+v", cap.records)
 	}
-	if !strings.Contains(cap.records[0].msg, "not yet reported") {
-		t.Errorf("info msg should mention 'not yet reported'; got %q", cap.records[0].msg)
+	if !strings.Contains(cap.records[0].msg, "has not reported") {
+		t.Errorf("info msg should say the engine has not reported yet; got %q", cap.records[0].msg)
+	}
+}
+
+// TestNarrowPublishedModels_DerivedTagAdvertisesBase pins the
+// waired-agent#324 defect-1 contract: a node serving a #642 derived
+// `<base>-wb<batch>` model advertises the BASE tag. Consumer want sets
+// are built from Variant.Source.Tag only, so a derived name matches
+// nothing and makes the peer permanently unroutable. PRODUCT CONTRACT.
+func TestNarrowPublishedModels_DerivedTagAdvertisesBase(t *testing.T) {
+	const (
+		base    = "qwen3.6:27b-mtp-q4_K_M"
+		derived = base + "-wb2048"
+	)
+	for _, tc := range []struct {
+		name     string
+		reported []string
+	}{
+		{"engine lists both", []string{base, derived}},
+		{"engine lists only the derived model", []string{derived}},
+		{"engine lists only the base", []string{base}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &signer.InferenceState{Models: append([]string(nil), tc.reported...)}
+			var sig string
+			logger, cap := newCaptureLogger()
+			narrowPublishedModels(s, base, derived, &sig, logger)
+			if len(s.Models) != 1 || s.Models[0] != base {
+				t.Fatalf("must advertise the base tag %q; got %v", base, s.Models)
+			}
+			// Neither name is surplus: one is what we advertise, the
+			// other is what the engine loaded.
+			if len(cap.records) != 0 {
+				t.Errorf("derived/base pair must not trip the surplus warning; got %+v", cap.records)
+			}
+		})
+	}
+}
+
+// TestNarrowPublishedModels_DerivedTagStillReportsSurplus confirms the
+// derived-tag exemption is scoped: an unrelated extra tag is still
+// surplus and still warns.
+func TestNarrowPublishedModels_DerivedTagStillReportsSurplus(t *testing.T) {
+	const (
+		base    = "qwen3.6:27b-mtp-q4_K_M"
+		derived = base + "-wb2048"
+	)
+	s := &signer.InferenceState{Models: []string{base, derived, "llama:13b"}}
+	var sig string
+	logger, cap := newCaptureLogger()
+	narrowPublishedModels(s, base, derived, &sig, logger)
+	if len(s.Models) != 1 || s.Models[0] != base {
+		t.Fatalf("must advertise the base tag; got %v", s.Models)
+	}
+	if len(cap.records) != 1 || cap.records[0].level != slog.LevelWarn {
+		t.Fatalf("want one surplus warn; got %+v", cap.records)
+	}
+	if !strings.Contains(cap.records[0].msg, "surplus") {
+		t.Errorf("warn msg should mention surplus; got %q", cap.records[0].msg)
 	}
 }
 
@@ -651,7 +720,7 @@ func TestNarrowPublishedModels_NoActiveResetsSig(t *testing.T) {
 	s := &signer.InferenceState{Models: []string{"qwen3:8b"}}
 	var sig string
 	logger, _ := newCaptureLogger()
-	narrowPublishedModels(s, "", &sig, logger)
+	narrowPublishedModels(s, "", "", &sig, logger)
 	if sig != "" {
 		t.Errorf("empty activeTag must reset sig; got %q", sig)
 	}
@@ -663,15 +732,15 @@ func TestNarrowPublishedModels_DedupAcrossTicks(t *testing.T) {
 
 	// Tick 1: surplus → warn.
 	s1 := &signer.InferenceState{Models: []string{"qwen3:8b", "llama:13b"}}
-	narrowPublishedModels(s1, "qwen3:8b", &sig, logger)
+	narrowPublishedModels(s1, "qwen3:8b", "qwen3:8b", &sig, logger)
 
 	// Tick 2: same surplus → no new warn.
 	s2 := &signer.InferenceState{Models: []string{"qwen3:8b", "llama:13b"}}
-	narrowPublishedModels(s2, "qwen3:8b", &sig, logger)
+	narrowPublishedModels(s2, "qwen3:8b", "qwen3:8b", &sig, logger)
 
 	// Tick 3: different surplus → new warn.
 	s3 := &signer.InferenceState{Models: []string{"qwen3:8b", "phi3:14b"}}
-	narrowPublishedModels(s3, "qwen3:8b", &sig, logger)
+	narrowPublishedModels(s3, "qwen3:8b", "qwen3:8b", &sig, logger)
 
 	// Expect exactly two warns: tick 1 and tick 3.
 	if len(cap.records) != 2 {
@@ -756,6 +825,82 @@ func TestActiveEngineTag(t *testing.T) {
 			got, ok := activeEngineTag(tc.state)
 			if got != tc.wantTag || ok != tc.wantOK {
 				t.Errorf("activeEngineTag = (%q, %v); want (%q, %v)", got, ok, tc.wantTag, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestAdvertisedEngineTag is the wire-name half of TestActiveEngineTag:
+// what this node tells PEERS it can serve, which diverges from what its
+// own engine loaded exactly when a #642 derived batch model is in use.
+// PRODUCT CONTRACT (waired-agent#324).
+func TestAdvertisedEngineTag(t *testing.T) {
+	tests := []struct {
+		name    string
+		state   catalog.State
+		wantTag string
+		wantOK  bool
+	}{
+		{
+			name:    "no active",
+			state:   catalog.State{},
+			wantTag: "",
+			wantOK:  false,
+		},
+		{
+			name: "no derived model: advertise what the engine serves",
+			state: catalog.State{
+				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "qwen3-8b", VariantID: "q4"},
+				Models: map[string]catalog.ModelState{
+					"qwen3-8b": {VariantID: "q4", OllamaTag: "qwen3:8b-q4_K_M"},
+				},
+			},
+			wantTag: "qwen3:8b-q4_K_M",
+			wantOK:  true,
+		},
+		{
+			name: "derived batch model: advertise the base tag it was built from",
+			state: catalog.State{
+				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "qwen3-27b", VariantID: "q4"},
+				Models: map[string]catalog.ModelState{
+					"qwen3-27b": {
+						VariantID:     "q4",
+						OllamaTag:     "qwen3.6:27b-mtp-q4_K_M-wb2048",
+						BaseOllamaTag: "qwen3.6:27b-mtp-q4_K_M",
+					},
+				},
+			},
+			wantTag: "qwen3.6:27b-mtp-q4_K_M",
+			wantOK:  true,
+		},
+		{
+			name: "vllm is unaffected: no derived-model concept",
+			state: catalog.State{
+				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeVLLM, ModelID: "qwen3-8b", VariantID: "fp16"},
+				Models: map[string]catalog.ModelState{
+					"qwen3-8b": {VariantID: "fp16", HFRepo: "Qwen/Qwen3-8B", BaseOllamaTag: "ignored"},
+				},
+			},
+			wantTag: "Qwen/Qwen3-8B",
+			wantOK:  true,
+		},
+		{
+			name: "variant id mismatch still yields no tag",
+			state: catalog.State{
+				Active: &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "qwen3-8b", VariantID: "q4"},
+				Models: map[string]catalog.ModelState{
+					"qwen3-8b": {VariantID: "q8", OllamaTag: "qwen3:8b-q8", BaseOllamaTag: "qwen3:8b"},
+				},
+			},
+			wantTag: "",
+			wantOK:  false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := advertisedEngineTag(tc.state)
+			if got != tc.wantTag || ok != tc.wantOK {
+				t.Errorf("advertisedEngineTag = (%q, %v); want (%q, %v)", got, ok, tc.wantTag, tc.wantOK)
 			}
 		})
 	}
