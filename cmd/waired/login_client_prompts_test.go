@@ -487,6 +487,51 @@ func TestRunInitViaDaemon_TakeoverRefusedAfterTheBrowserCommits(t *testing.T) {
 	}
 }
 
+// TestRunInitViaDaemon_LeftoverDesiredStateIsNotABrowserHandoff is the
+// rc7 symptom (#308): on a device that was set up once, a re-run printed
+//
+//	Setup has started in your browser — this window now runs the installation.
+//
+// instantly, with no browser wizard open at all — the control plane had
+// simply re-delivered the desired state it never clears. This run must
+// look exactly like a terminal-driven one.
+func TestRunInitViaDaemon_LeftoverDesiredStateIsNotABrowserHandoff(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	shrinkLoginTimers(t, 20*time.Millisecond)
+	owner, keys := scriptStdinPipe(t)
+	d := &promptsDaemon{
+		statusSeq: []management.InferenceStatus{readyStatus()},
+		// What a device that finished setup last week reports on its very
+		// first probe: a full instruction, marked as not a live wizard.
+		setupState: management.SetupStateResponse{
+			Active: true, DesiredStale: true,
+			EngineInstalled: true, DesiredEngine: "ollama",
+		},
+	}
+	d.onStatus = func(poll int32) {
+		if poll == 1 {
+			_, _ = keys.Write([]byte("n\n")) // the coding-agent answer
+		}
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
+
+	if strings.Contains(out, takeoverClosedLine) {
+		t.Errorf("announced a browser handoff for leftover desired state\n---\n%s", out)
+	}
+	if !strings.Contains(out, "No setup started in the browser") {
+		t.Errorf("the run did not fall back to the terminal\n---\n%s", out)
+	}
+	// Terminal-driven means the terminal asks its own questions again.
+	if !strings.Contains(out, "Coding-agent integration") {
+		t.Errorf("the terminal stayed silent for a browser that was not driving\n---\n%s", out)
+	}
+	if strings.Contains(out, setupTerminalDoneLine) {
+		t.Errorf("the run ended on the browser-driven tail\n---\n%s", out)
+	}
+}
+
 // #186: in terminal mode the coding-agent question must come after the
 // model wait, not interrupt it. #132: the browser-driven path must not
 // print the old reconciling "Press Enter to continue…" on its way out.
