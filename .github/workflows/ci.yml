@@ -43,6 +43,19 @@ jobs:
             exit 1
           fi
 
+      - name: no tracked file is also gitignored
+        # A 20MB compiled `waired` was tracked at the repo root for two
+        # weeks (#90) while .gitignore named it the whole time — gitignore
+        # does not apply to an already-tracked path, so the entry looked
+        # like protection and was none. Each root-level `go build` rewrote
+        # it and the next `git add -A` swept another 20MB blob into a
+        # public repo (#17, #56, #100). The contradiction is checkable even
+        # though .gitignore cannot check it for itself.
+        run: bash scripts/ci/tracked-ignored-guard.sh
+
+      - name: tracked-ignored guard self-test
+        run: bash scripts/ci/tracked-ignored-guard-test.sh
+
       # The base-ref guard's decision table (base branch + the
       # `stacked-on:` opt-out) runs entirely off two environment
       # variables, so it is exercised here rather than only in the PR
