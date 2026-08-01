@@ -69,8 +69,29 @@ const (
 	// VerdictUnknownTool instead).
 	VerdictUnpromptedToolCall Verdict = "warn_unprompted_tool_call"
 
+	// VerdictMalformedToolCall: the model emitted tool-call syntax the
+	// ENGINE could not parse, so the request failed upstream instead of
+	// returning a turn. Measured: qwen3.5:4b-q4_K_M produced
+	// `XML syntax error on line 14: element <function> closed by
+	// </parameter>` and ollama answered 500.
+	//
+	// This is a model-quality failure, not an infrastructure one, and
+	// getting that split right matters more than it looks: an engine
+	// error is recorded as "unmeasured", and a model recorded as
+	// unmeasured is a model that never gets retired. Emitting garbage
+	// the serving engine rejects would then be the one way to dodge the
+	// gate entirely.
+	//
+	// The attribution holds even if such a parse error were ever the
+	// engine's fault rather than the model's: the user's experience is
+	// that this model does not work on this engine, which is exactly
+	// what a verdict is for. The record stores the engine version, so
+	// an engine-side fix is re-measured rather than assumed.
+	VerdictMalformedToolCall Verdict = "fail_malformed_tool_call"
+
 	// VerdictError: the probe could not obtain an answer — transport
-	// failure, non-2xx, undecodable body. NOT a quality verdict.
+	// failure, an engine that is not running, a timeout, an undecodable
+	// body. NOT a quality verdict.
 	// waired-ai/waired-agent#203 records the cost of reporting an
 	// upstream failure as a measurement result: the grading policy must
 	// never turn a registry hiccup into a demoted model.
@@ -81,8 +102,39 @@ const (
 // not failures (see VerdictError) and warnings are not failures.
 func (v Verdict) IsFailure() bool {
 	switch v {
-	case VerdictUnstructuredToolCall, VerdictUnknownTool, VerdictNoToolCall:
+	case VerdictUnstructuredToolCall, VerdictUnknownTool, VerdictNoToolCall, VerdictMalformedToolCall:
 		return true
+	}
+	return false
+}
+
+// engineParseFailureMarkers are substrings that identify an upstream
+// error as "the engine could not parse the tool call the MODEL
+// emitted", as opposed to any other 5xx.
+//
+// Deliberately narrow. Every entry names a parse of generated content;
+// none of them can be produced by an engine that is merely down,
+// loading, out of memory, or missing the model — those must keep
+// classifying as VerdictError, or the split this list exists to make
+// collapses in the wrong direction.
+//
+// Add to this list only from an observed run, and say which model
+// produced it.
+var engineParseFailureMarkers = []string{
+	"XML syntax error",        // ollama, qwen3.5:4b-q4_K_M — measured 2026-08-01
+	"error parsing tool call", // ollama tool-call parser
+	"invalid tool call",
+	"failed to parse tool",
+	"unexpected end of JSON input", // truncated/instructured call in a tool arg
+}
+
+// IsEngineParseFailure reports whether an upstream error body shows the
+// engine rejecting the model's own tool-call output.
+func IsEngineParseFailure(body string) bool {
+	for _, m := range engineParseFailureMarkers {
+		if strings.Contains(body, m) {
+			return true
+		}
 	}
 	return false
 }

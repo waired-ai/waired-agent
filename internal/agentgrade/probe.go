@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -116,9 +117,43 @@ func (p Probe) one(ctx context.Context, model string, c Case, names map[string]b
 	}
 	resp, err := p.post(ctx, req)
 	if err != nil {
+		// An upstream failure is normally not a verdict. The exception
+		// is the engine refusing to parse what the model emitted: that
+		// is the model failing, and letting it fall through to
+		// VerdictError would let unparseable output escape grading
+		// entirely (see VerdictMalformedToolCall).
+		var ue *upstreamError
+		if errors.As(err, &ue) && IsEngineParseFailure(ue.Body) {
+			return Result{
+				Case:     c.Name,
+				Verdict:  VerdictMalformedToolCall,
+				Detail:   "the engine could not parse the tool call this model emitted",
+				Evidence: truncate(ue.Body),
+			}
+		}
 		return Result{Case: c.Name, Verdict: VerdictError, Detail: err.Error()}
 	}
 	return Classify(c, resp, names)
+}
+
+// upstreamError carries a non-2xx from the gateway with its body, so
+// the caller can tell an engine that is down from an engine rejecting
+// the model's output.
+type upstreamError struct {
+	Status   int
+	Body     string
+	Fallback string
+}
+
+func (e *upstreamError) Error() string {
+	if e.Fallback != "" {
+		// Without this marker, "the model answered badly" and "the
+		// request left local routing entirely" look identical from
+		// here, and that ambiguity cost a week once (waired-agent#29).
+		return fmt.Sprintf("HTTP %d (X-Waired-Fallback: %s — the request did not stay local): %s",
+			e.Status, e.Fallback, truncate(e.Body))
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.Status, truncate(e.Body))
 }
 
 func (p Probe) post(ctx context.Context, req gateway.AnthropicRequest) (gateway.AnthropicResponse, error) {
@@ -162,16 +197,11 @@ func (p Probe) post(ctx context.Context, req gateway.AnthropicRequest) (gateway.
 		return gateway.AnthropicResponse{}, fmt.Errorf("read response: %w", err)
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		// Surface the fail-open marker when it is present: without it,
-		// "the model answered badly" and "the request left local
-		// routing entirely" look identical from here, and that
-		// ambiguity cost a week once already (waired-agent#29).
-		if fb := httpResp.Header.Get("X-Waired-Fallback"); fb != "" {
-			return gateway.AnthropicResponse{}, fmt.Errorf(
-				"HTTP %d (X-Waired-Fallback: %s — the request did not stay local): %s",
-				httpResp.StatusCode, fb, truncate(string(raw)))
+		return gateway.AnthropicResponse{}, &upstreamError{
+			Status:   httpResp.StatusCode,
+			Body:     string(raw),
+			Fallback: httpResp.Header.Get("X-Waired-Fallback"),
 		}
-		return gateway.AnthropicResponse{}, fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, truncate(string(raw)))
 	}
 
 	var out gateway.AnthropicResponse
