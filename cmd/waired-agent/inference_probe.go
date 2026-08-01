@@ -81,7 +81,7 @@ type inferenceProbeDeps struct {
 	// it tracks a re-tune; 0 (or nil) omits the field from the push.
 	RecommendedMaxParallel func() int
 
-	// ActiveTag is the engine-side tag for the agent's Active variant
+	// AdvertiseTag is the engine-side name peers may ask this node for
 	// (Ollama /api/tags name, or vLLM /v1/models id). Empty when no
 	// Active selection is set (fresh agent, pre-model-pull). When
 	// non-empty, runLocalInferenceProbe enforces the "1 agent =
@@ -89,7 +89,15 @@ type inferenceProbeDeps struct {
 	// just this tag; surplus tags pulled locally are stripped from
 	// the network-map advertisement (the engine itself still serves
 	// them — this only affects what peers see).
-	ActiveTag string
+	AdvertiseTag string
+
+	// ServingTag is the tag this node's own engine actually loaded.
+	// Equal to AdvertiseTag except when a #642 derived batch model is
+	// in use, where the engine serves `<base>-wb<batch>` while peers
+	// are told the base tag (waired-agent#324). The probe needs it to
+	// recognise the engine's own report of the active model, and to
+	// keep the derived name out of the "surplus models" warning.
+	ServingTag string
 
 	Disabled bool
 	Logger   *slog.Logger
@@ -169,7 +177,7 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 				s.LastError = "engine model runner is not serving"
 			}
 		}
-		narrowPublishedModels(&s, deps.ActiveTag, &lastSurplusSig, deps.Logger)
+		narrowPublishedModels(&s, deps.AdvertiseTag, deps.ServingTag, &lastSurplusSig, deps.Logger)
 		// Phase 7: decorate the probe result with Hardware and Capacity.
 		// Both are baked in once at boot and omitempty on the wire so a
 		// zero-value agent (no hardware probe, no benchmark) still
@@ -380,14 +388,27 @@ func probeLocalVLLM(parent context.Context, baseURL string, timeout time.Duratio
 }
 
 // narrowPublishedModels enforces the "1 agent = 1 model" invariant on
-// the InferenceState the agent broadcasts to peers. When activeTag is
+// the InferenceState the agent broadcasts to peers. When advertise is
 // non-empty the published Models list is forced to a single-element
-// {activeTag} regardless of what the engine reported; this prevents
-// operator misconfiguration (extra `ollama pull` runs leaving surplus
-// tags around) from leaking into Selector's candidate set as variants
-// the agent isn't actually serving.
+// {advertise} — but ONLY once the engine is confirmed to be serving
+// it. This prevents operator misconfiguration (extra `ollama pull`
+// runs leaving surplus tags around) from leaking into Selector's
+// candidate set as variants the agent isn't actually serving.
 //
-// When activeTag is empty (fresh agent before any model pull) the
+// advertise vs serving: they differ when a #642 derived batch model is
+// in use, where the engine loads `<base>-wb<batch>` but peers must be
+// told the base tag — no consumer want set can ever contain a derived
+// name (waired-agent#324). Either name in the engine's report proves
+// the model is loaded, and neither counts as surplus.
+//
+// The agent used to publish {advertise} unconditionally, "optimistic
+// for the loading case". That advertised a model to the whole mesh
+// while it was still downloading, and consumers catching that window
+// routed there and got a 404 / model_not_ready back. Publishing
+// nothing until the engine confirms is the honest answer: an agent
+// with no models simply is not a candidate.
+//
+// When advertise is empty (fresh agent before any model pull) the
 // probe result passes through unmodified — the Selector falls back
 // to its pre-Phase-7 behaviour.
 //
@@ -397,11 +418,11 @@ func probeLocalVLLM(parent context.Context, baseURL string, timeout time.Duratio
 // probe ticks (every state.HeartbeatInterval, otherwise noisy).
 // Pass a fresh `var sig string` for tests; pass a closure-scoped one
 // from runLocalInferenceProbe for production.
-func narrowPublishedModels(s *signer.InferenceState, activeTag string, lastSurplusSig *string, logger *slog.Logger) {
+func narrowPublishedModels(s *signer.InferenceState, advertise, serving string, lastSurplusSig *string, logger *slog.Logger) {
 	if s == nil {
 		return
 	}
-	if activeTag == "" {
+	if advertise == "" {
 		// Nothing to enforce — let the probe result through unmodified.
 		// Reset the dedup so a subsequent transition back to "Active set"
 		// re-emits the first warn.
@@ -418,7 +439,10 @@ func narrowPublishedModels(s *signer.InferenceState, activeTag string, lastSurpl
 		switch m {
 		case "":
 			continue
-		case activeTag:
+		case advertise, serving:
+			// The engine is serving the active model. It reports the
+			// derived tag when one is in use and the base tag when the
+			// base is also pulled; either proves the model is loaded.
 			matched = true
 		default:
 			surplus = append(surplus, m)
@@ -426,12 +450,12 @@ func narrowPublishedModels(s *signer.InferenceState, activeTag string, lastSurpl
 	}
 	sort.Strings(surplus)
 
-	// Compose the dedup signature: surplus tags + whether activeTag was
-	// served + whether the engine reported anything at all. Three
-	// distinct misconfiguration shapes (surplus only, active-missing,
-	// engine-empty) should each emit their own warn/info, and the
-	// signature must differ from the zero value so the first tick
-	// actually fires.
+	// Compose the dedup signature: surplus tags + whether the active
+	// model was served + whether the engine reported anything at all.
+	// Three distinct misconfiguration shapes (surplus only,
+	// active-missing, engine-empty) should each emit their own
+	// warn/info, and the signature must differ from the zero value so
+	// the first tick actually fires.
 	sig := strings.Join(surplus, ",")
 	switch {
 	case !matched && len(reported) == 0:
@@ -449,25 +473,33 @@ func narrowPublishedModels(s *signer.InferenceState, activeTag string, lastSurpl
 		switch {
 		case len(surplus) > 0 && matched:
 			logger.Warn("agent has surplus locally-pulled models; design is 1 agent = 1 model",
-				"active_tag", activeTag,
+				"advertised_tag", advertise,
 				"surplus", surplus,
 				"hint", "remove the extras (e.g. 'ollama rm <tag>') so peers see a consistent advertisement")
 		case len(surplus) > 0 && !matched:
-			logger.Warn("active tag not served by engine; engine reports different tags",
-				"active_tag", activeTag,
+			logger.Warn("active model not served by engine; advertising nothing to peers",
+				"advertised_tag", advertise,
+				"serving_tag", serving,
 				"engine_reports", surplus,
 				"hint", "engine state has diverged from the agent's Active selection — restart or re-pull")
 		case len(reported) == 0:
-			logger.Info("engine has not yet reported active tag; publishing optimistically",
-				"active_tag", activeTag)
+			logger.Info("engine has not reported the active model yet; advertising nothing to peers",
+				"advertised_tag", advertise,
+				"serving_tag", serving)
 		}
 	}
 	if lastSurplusSig != nil {
 		*lastSurplusSig = sig
 	}
 
-	// Final invariant: publish only the active tag, regardless of what
-	// the engine returned. Optimistic for the loading case (engine
-	// reports nothing yet); defensive for the misconfigured case.
-	s.Models = []string{activeTag}
+	if !matched {
+		// Not loaded (still pulling, wedged setup, diverged engine
+		// state). Say so rather than inviting requests that will 404.
+		s.Models = nil
+		return
+	}
+	// Final invariant: publish exactly the advertised name, regardless
+	// of what else the engine returned. Defensive for the misconfigured
+	// case; canonical for the derived-batch-model case.
+	s.Models = []string{advertise}
 }
