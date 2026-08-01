@@ -297,9 +297,14 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 	- **On this path** (`--no-browser`, `--non-interactive`, or no reachable
 		browser) Waired hands the shell back after about ten minutes and says the
 		download will finish in the background.
+	- **When this terminal is driving setup** — you took it over, or no setup
+		was ever started in the browser — press <kbd>Enter</kbd> any time to stop
+		watching. The terminal says *“Continuing in the background — the agent
+		finishes the download on its own”* and carries on with the rest of setup.
 	- **When the browser is driving setup**, the terminal stays with the bar
 		until the download finishes, so the two halves never disagree about
-		whether setup is done.
+		whether setup is done. <kbd>Enter</kbd> does not leave in that case: this
+		window is the one doing the installation.
 
 	Either way the download belongs to the background service, not to this
 	command: <kbd>Ctrl</kbd>+<kbd>C</kbd> **does not cancel it**. Check on it any

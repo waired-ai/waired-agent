@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 4a18b797a600ce38
+sourceHash: c3198f879fd99ec1
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -290,9 +290,15 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 	- **この経路**（`--no-browser` / `--non-interactive`、またはブラウザに
 		到達できない場合）では、10 分ほどでシェルに戻り、ダウンロードは
 		バックグラウンドで続く旨が表示されます。
+	- **このターミナルが主導している場合**（自分で切り替えた場合、または
+		ブラウザで結局セットアップが始まらなかった場合）は、<kbd>Enter</kbd> を
+		押せばいつでも見張りをやめられます。*「Continuing in the background —
+		the agent finishes the download on its own」*と表示され、残りの
+		セットアップに進みます。
 	- **ブラウザが主導している場合**は、ダウンロードが終わるまでターミナルが
 		進捗表示のまま残ります。ターミナル側とブラウザ側で「終わったかどうか」の
-		認識がずれないようにするためです。
+		認識がずれないようにするためです。この場合 <kbd>Enter</kbd> では
+		抜けられません。インストールを実行しているのがこのウィンドウだからです。
 
 	いずれの場合も、ダウンロードを行っているのはバックグラウンドサービスであって
 	このコマンドではありません。<kbd>Ctrl</kbd>+<kbd>C</kbd> を押しても
