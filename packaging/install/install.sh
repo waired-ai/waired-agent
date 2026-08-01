@@ -1364,7 +1364,7 @@ darwin_install() {
     # to init as WAIRED_NO_OLLAMA (darwin_maybe_init).
     section 'Background service'
     darwin_register_agent "$state_dir"
-    darwin_install_log_rotation
+    darwin_retire_log_rotation
     darwin_write_control_url "$state_dir"
     darwin_maybe_init "$state_dir"
     darwin_next_steps "$state_dir"
@@ -1483,40 +1483,39 @@ darwin_register_recovery_hint() {
     common_warn "    sudo launchctl enable system/com.waired.agent"
 }
 
-# darwin_install_log_rotation drops a newsyslog(8) config so the agent's
-# LaunchDaemon logs (/Library/Logs/waired-agent.{out,err}.log) stay size-capped.
-# macOS has no journald, so without this they grow unbounded — unlike the Linux
-# systemd journal and the Windows Event Log, which are already bounded. /etc/
-# newsyslog.d exists on stock macOS. Idempotent (overwrites the drop-in).
-darwin_install_log_rotation() {
+# darwin_retire_log_rotation removes the newsyslog(8) drop-in this installer
+# used to write for /Library/Logs/waired-agent.{out,err}.log. The agent now
+# rotates those files itself (internal/platform/logrotate), at the same 1 MB /
+# 5-archive bound the drop-in configured.
+#
+# Why it had to go rather than stay as a backstop (#331): launchd owns the
+# descriptor the daemon writes through, so newsyslog's rename does not reach
+# it. The daemon kept writing into the renamed inode and lost every line after
+# the rotation — the drop-in's own comment assumed a restart would reattach the
+# descriptor "soon", which is false on precisely the wedged host whose logs
+# matter. Leaving it installed would also race the in-process rotation, with two
+# rotators renaming the same file.
+#
+# Called on both fresh install and update, so a host that only ever updates
+# converges too (same reason darwin_restart_agent re-registers a missing job).
+# Idempotent, and a no-op on a host that never had the drop-in.
+darwin_retire_log_rotation() {
     conf=/etc/newsyslog.d/waired-agent.conf
     if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would install newsyslog rotation at $conf"
+        common_log "  (dry-run) would remove the legacy newsyslog rotation at $conf (the agent rotates its own logs)"
         return 0
     fi
-    # Capability guard + non-fatal write, the same shape as linux_service_up's
-    # `[ -d /run/systemd/system ] || return 0` and `|| common_warn`. Under
-    # `set -eu` an unguarded tee here would abort the installer over log
-    # rotation — cosmetic next to the sign-in and next-steps blocks that come
-    # after it.
-    if [ ! -d /etc/newsyslog.d ]; then
-        common_warn "/etc/newsyslog.d not present — skipping log rotation; the daemon logs under /Library/Logs will grow unbounded."
-        return 0
-    fi
-    common_log "Installing log rotation ($conf)"
     # shellcheck disable=SC2086  # $SUDO is intentionally word-split (empty when root)
-    if ! $SUDO tee "$conf" >/dev/null <<'NEWSYSLOG'
-# waired-agent system LaunchDaemon stdout/stderr. macOS has no journald, so
-# bound these the way the Linux journal and the Windows Event Log are bounded:
-# rotate at 1 MB, keep 5 gzip'd archives (size-based only). Caveat: launchd
-# holds the log fd, so a rotation fully takes hold at the daemon's next
-# (re)start; the agent restarts on model-switch/update, so growth stays bounded.
-# logfilename                        [owner:group] mode count size when flags
-/Library/Logs/waired-agent.out.log   root:wheel    644  5     1024 *    ZN
-/Library/Logs/waired-agent.err.log   root:wheel    644  5     1024 *    ZN
-NEWSYSLOG
-    then
-        common_warn "could not write $conf — skipping log rotation; the daemon logs under /Library/Logs will grow unbounded."
+    if ! $SUDO test -e "$conf"; then
+        return 0
+    fi
+    common_log "Removing the legacy newsyslog rotation ($conf) — the agent rotates its own logs"
+    # Non-fatal, the same shape the write it replaces had: under `set -eu` an
+    # unguarded failure here would abort the installer over log rotation,
+    # cosmetic next to the sign-in and next-steps blocks that come after it.
+    # shellcheck disable=SC2086
+    if ! $SUDO rm -f "$conf"; then
+        common_warn "could not remove $conf — newsyslog will keep rotating the daemon logs alongside the agent; remove it by hand with: sudo rm -f $conf"
     fi
     return 0
 }
@@ -1730,13 +1729,13 @@ darwin_update() {
     # darwin_install_binaries).
     darwin_install_binaries update
     darwin_restart_agent
-    # Converge on the complete state rather than only swapping binaries: hosts
-    # installed before log rotation existed, and hosts whose fresh install was
-    # interrupted before it, would otherwise never get the drop-in however
-    # many times they updated. Idempotent (overwrites), and the analog of
-    # linux_apt_update re-running linux_service_up. darwin_restart_agent above
-    # covers the plist the same way, by re-registering when the job is absent.
-    darwin_install_log_rotation
+    # Converge on the complete state rather than only swapping binaries: a host
+    # installed before #331 still carries the newsyslog drop-in, and would
+    # otherwise keep a second rotator racing the agent's own however many times
+    # it updated. Idempotent, and the analog of linux_apt_update re-running
+    # linux_service_up. darwin_restart_agent above covers the plist the same
+    # way, by re-registering when the job is absent.
+    darwin_retire_log_rotation
     # Finish sign-in if this host was installed but never enrolled (no-op
     # when already enrolled). Persist any resolved CP first so a not-yet-
     # enrolled host picks it up, matching the fresh-install path.

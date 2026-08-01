@@ -14,6 +14,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"os/user"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/gui/tray"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/singleinstance"
 )
@@ -78,6 +81,14 @@ func run(args []string) error {
 		go followDaemonLogLevel(ctx, *mgmtURL, logLevelVar, *pollEvery)
 	}
 
+	// Bound the tray's own launchd log files (#331). The macOS
+	// LaunchAgent points stdout/stderr at ~/Library/Logs/waired-tray.*,
+	// and until now nothing rotated them at all — the retired newsyslog
+	// drop-in only ever covered the daemon's. No-op off darwin, where
+	// the desktop autostart does not capture the streams to files.
+	logrotate.Manage(ctx, logrotate.TrayTargets(runtime.GOOS, trayLogHome()),
+		logrotate.DefaultPolicy(), slog.Default())
+
 	tray.Run(ctx, tray.Options{
 		MgmtURL:    *mgmtURL,
 		ControlURL: *controlURL,
@@ -87,6 +98,23 @@ func run(args []string) error {
 		PollEvery:  *pollEvery,
 	})
 	return nil
+}
+
+// trayLogHome resolves the home directory the tray's log paths hang
+// off, with the same precedence internal/platform/autostart used when
+// it wrote those paths into the LaunchAgent plist ($HOME first, then the
+// passwd entry). Matching it is what keeps the rotator and the plist
+// pointed at the same files. An unresolvable home yields "", which
+// TrayTargets turns into "nothing to rotate" rather than a guess.
+func trayLogHome() string {
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return u.HomeDir
 }
 
 // defaultStateDir picks the canonical user-side state dir, except that

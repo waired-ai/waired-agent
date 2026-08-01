@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
 )
 
@@ -326,8 +327,12 @@ func renderLaunchDaemonPlist(cfg Config) ([]byte, error) {
 
 	writeKeyString(&b, "ProcessType", "Background")
 	writeKeyString(&b, "WorkingDirectory", cfg.StateDir)
-	writeKeyString(&b, "StandardOutPath", "/Library/Logs/waired-agent.out.log")
-	writeKeyString(&b, "StandardErrorPath", "/Library/Logs/waired-agent.err.log")
+	// The constants come from internal/platform/logrotate because the
+	// daemon rotates these two files itself (#331). One definition, so
+	// the rotator can never be left watching a path this plist stopped
+	// using.
+	writeKeyString(&b, "StandardOutPath", logrotate.AgentOutPath)
+	writeKeyString(&b, "StandardErrorPath", logrotate.AgentErrPath)
 
 	// #22: launchd (unlike systemd's User=, which derives $HOME from the
 	// service user's passwd entry) exports NO $HOME to a system daemon.

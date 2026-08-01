@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/network/netif"
 	"github.com/waired-ai/waired-agent/internal/network/wgnet"
 	"github.com/waired-ai/waired-agent/internal/observability"
+	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
 	"github.com/waired-ai/waired-agent/internal/platform/logsink"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
@@ -237,6 +239,14 @@ func run(ctx context.Context, args []string) error {
 	// survive stderr being closed (e.g. Windows SCM dispatcher).
 	logger := slog.New(logsink.New(primary, service.ServiceName))
 	slog.SetDefault(logger)
+
+	// Keep the launchd log files this process writes through bounded,
+	// from inside the process that holds their descriptors (#331). An
+	// external rotator renames the file out from under the descriptor
+	// launchd opened, and every line after that is lost until the daemon
+	// restarts — which on a wedged host never happens. No-op off darwin:
+	// journald and the Event Log bound their own streams.
+	logrotate.Manage(ctx, logrotate.AgentTargets(runtime.GOOS), logrotate.DefaultPolicy(), logger)
 
 	// Phase 9 telemetry composite. Owned at boot (not inside the
 	// session) so /metrics and /observability/* scrape the same

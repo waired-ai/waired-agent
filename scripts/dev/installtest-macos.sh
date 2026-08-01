@@ -66,6 +66,7 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
+INSTALLLOG="$WORK/install.log"  # install.sh transcript (asserts it reached its last step)
 
 # --- logging / counters -----------------------------------------------------
 PASS=0; FAIL=0; SKIP=0
@@ -478,10 +479,20 @@ else
   it_step "running install.sh (darwin, --no-init --skip-ollama)"
 fi
 install_rc=0
-env "${inst_env[@]}" bash "$ROOT/packaging/install/install.sh" "${inst_args[@]}" || install_rc=$?
+env "${inst_env[@]}" bash "$ROOT/packaging/install/install.sh" "${inst_args[@]}" 2>&1 | tee "$INSTALLLOG"
+install_rc=${PIPESTATUS[0]}
 
 it_step "Tier 1 asserts"
 [ "$install_rc" -eq 0 ]       && ok "install.sh exited 0"                        || bad "install.sh exited $install_rc"
+# The next-steps banner is the LAST thing a complete darwin run prints, so its
+# absence is the signature of an installer that stopped part-way — the #193
+# class of failure, where an unguarded `set -eu` abort in darwin_register_agent
+# silently skipped the rest of the run. This assert replaces the newsyslog
+# drop-in's role as the "did the run reach its end" sentinel (#331 retired the
+# drop-in), and it is a strictly later marker than that file ever was.
+grep -qF 'Waired is installed (macOS' "$INSTALLLOG" \
+  && ok "install.sh reached its final step (next-steps banner printed)" \
+  || bad "install.sh printed no next-steps banner — did it abort mid-run? (see $INSTALLLOG)"
 [ -x "$BINDIR/waired" ]       && ok "waired installed ($BINDIR/waired)"          || bad "waired missing in $BINDIR"
 [ -x "$BINDIR/waired-agent" ] && ok "waired-agent installed"                     || bad "waired-agent missing in $BINDIR"
 
@@ -500,14 +511,16 @@ fi
 sudo test -f "$PLIST"         && ok "system LaunchDaemon plist written ($LABEL)" || bad "LaunchDaemon plist missing ($PLIST)"
 sudo test -d "$STATE_DIR"     && ok "system state dir present"                   || bad "state dir missing ($STATE_DIR)"
 
-# Log rotation is installed immediately AFTER daemon registration, so its
-# absence is the signature of an installer that aborted mid-run — which is
-# exactly what an unguarded `set -eu` failure in darwin_register_agent used to
-# cause, silently skipping this, the control-URL write, init and next-steps.
-# Asserting the last step of the run is how that class of abort becomes a test
-# failure rather than a half-configured host.
-sudo test -f "$NEWSYSLOG_CONF" && ok "log rotation installed ($NEWSYSLOG_CONF)" \
-  || bad "newsyslog drop-in missing ($NEWSYSLOG_CONF) — did install.sh abort mid-run?"
+# #331 inverted this assert. It used to require the newsyslog drop-in to be
+# PRESENT; the drop-in is now retired, because launchd owns the descriptor the
+# daemon writes through and newsyslog's rename never reached it — the daemon
+# kept writing into the renamed inode and lost every line until a restart. The
+# agent rotates its own logs instead (internal/platform/logrotate), so the
+# converged state is the drop-in being gone, on fresh installs and on updated
+# hosts alike.
+sudo test -e "$NEWSYSLOG_CONF" \
+  && bad "legacy newsyslog drop-in still present ($NEWSYSLOG_CONF) — it races the agent's own rotation (#331)" \
+  || ok "legacy newsyslog rotation retired ($NEWSYSLOG_CONF absent)"
 owner="$(sudo stat -f '%Su' "$STATE_DIR" 2>/dev/null || true)"
 [ "$owner" = "root" ] && ok "state dir owned by root ($owner)" || bad "state dir owner = $owner (want root)"
 
@@ -686,6 +699,57 @@ if [ "$TIER" -ge 2 ]; then
   fi
 fi
 
+# --- #331: the daemon rotates its own launchd log, losing nothing -----------
+# Runs LAST because it deliberately grows and then rotates the live err.log;
+# every assert that reads that file (the inference benchmark grep, the failure
+# tails) has already had its look by here.
+#
+# The bug this pins: newsyslog renamed the file, launchd's descriptor stayed on
+# the renamed inode, and every line the daemon wrote afterwards went to a file
+# that was then gzipped and deleted. A host wedged for 12 hours logged nothing
+# at all. The daemon now rotates from inside the process holding the
+# descriptor, so the assert is not "did an archive appear" alone — it is "and
+# is the daemon's stderr now on the NEW file", which is the part that was
+# broken.
+it_step "#331 launchd log rotation"
+assert_log_rotation() {
+  local err="/Library/Logs/waired-agent.err.log" pid fd_ino live_ino
+
+  pid="$(sudo launchctl print "system/$LABEL" 2>/dev/null \
+    | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\).*/\1/p' | head -1)"
+  if [ -z "$pid" ]; then
+    bad "could not read the daemon pid from launchctl — cannot check log rotation (#331)"
+    return
+  fi
+
+  # Known archive state, then push the live file past the 1 MB cap the agent
+  # rotates at (internal/platform/logrotate.DefaultPolicy).
+  sudo rm -f "$err".* 2>/dev/null || true
+  yes 'waired installtest rotation filler' | head -c 1200000 | sudo tee -a "$err" >/dev/null
+
+  # The rotation ticker is 60s; give it a margin.
+  for _ in $(seq 1 90); do
+    sudo test -f "$err.0.gz" && break
+    sleep 1
+  done
+  if ! sudo test -f "$err.0.gz"; then
+    bad "the daemon did not rotate $err within 90s of it passing 1 MB (#331)"
+    return
+  fi
+  ok "the daemon rotated its own launchd log ($err.0.gz)"
+
+  # The fix itself. Comparing inodes rather than lsof's path string because a
+  # renamed-but-open file still reports a plausible-looking name.
+  fd_ino="$(sudo lsof -p "$pid" -a -d 2 -F i 2>/dev/null | sed -n 's/^i//p' | head -1)"
+  live_ino="$(sudo stat -f '%i' "$err" 2>/dev/null || true)"
+  if [ -n "$fd_ino" ] && [ "$fd_ino" = "$live_ino" ]; then
+    ok "the daemon's stderr descriptor followed the rotation (inode $fd_ino)"
+  else
+    bad "the daemon's stderr is still on the pre-rotation inode (fd=${fd_ino:-?}, live=${live_ino:-?}) — every line after a rotation is lost (#331)"
+  fi
+}
+assert_log_rotation
+
 echo
 it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 
@@ -693,10 +757,11 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # the rationale. Floors MEASURED from a green run of the leanest config:
 # tier 1 = the binaries / Gatekeeper / plist / state-dir / launchd asserts
 # plus the uninstall->reinstall round trip, tier 2 = those plus enrol and
-# the mgmt-socket set. Options only ever add asserts.
+# the mgmt-socket set. Options only ever add asserts. Raised by 3 in #331:
+# the next-steps banner assert and the two log-rotation asserts.
 case "$TIER" in
-  1) floor=21 ;;
-  *) floor=28 ;;
+  1) floor=24 ;;
+  *) floor=31 ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then

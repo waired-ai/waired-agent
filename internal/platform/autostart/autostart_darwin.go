@@ -12,6 +12,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+
+	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
 )
 
 // darwinManager registers the tray as a per-user LaunchAgent so it
@@ -147,8 +149,11 @@ func renderTrayPlist(label, programPath string, args []string) []byte {
 	writeKeyBool(&b, "KeepAlive", false)
 	writeKeyString(&b, "ProcessType", "Interactive")
 	if home, err := userHome(); err == nil {
-		writeKeyString(&b, "StandardOutPath", filepath.Join(home, "Library", "Logs", "waired-tray.out.log"))
-		writeKeyString(&b, "StandardErrorPath", filepath.Join(home, "Library", "Logs", "waired-tray.err.log"))
+		// From internal/platform/logrotate, which is what bounds these
+		// two files once the tray is running (#331) — one definition of
+		// the paths, so the plist and the rotator cannot drift apart.
+		writeKeyString(&b, "StandardOutPath", logrotate.TrayOutPath(home))
+		writeKeyString(&b, "StandardErrorPath", logrotate.TrayErrPath(home))
 	}
 
 	b.WriteString("</dict>\n</plist>\n")
