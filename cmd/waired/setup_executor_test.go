@@ -286,6 +286,72 @@ func TestAwaitSetupBudgetBareEnterKeepsBrowser(t *testing.T) {
 	}
 }
 
+// TestAwaitBrowserSetupBackgroundsAfterTheGrace is the #309 contract: the
+// grace expired with nothing driving, so this terminal IS the driver and
+// there is nothing left to take over. Enter must mean what it means
+// everywhere else a terminal owns a long download (waired#774) — put the
+// wait in the background — and the terminal must say so, because until
+// this line the same key meant "take setup back from the browser".
+func TestAwaitBrowserSetupBackgroundsAfterTheGrace(t *testing.T) {
+	shrinkSetupTimers(t)
+	setupAwaitGrace = 30 * time.Millisecond
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	t.Cleanup(s.Release)
+
+	// An open pipe: the operator types after the grace has expired, which
+	// is the whole point — before it, the offer on screen was a different
+	// one.
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	owner := newStdinReader(pr)
+
+	var out strings.Builder
+	budget, active, enter, _ := awaitBrowserSetup(s, owner, &out, false, false)
+	if active || budget != benchPollDeadline {
+		t.Fatalf("budget=%v active=%v, want the legacy path when nobody started setup", budget, active)
+	}
+	if !strings.Contains(out.String(), "press Enter anytime to continue in the background") {
+		t.Errorf("the terminal never said what Enter does now: %q", out.String())
+	}
+
+	// A bare Enter now backgrounds the wait, with no question in between
+	// and no note of its own — the wait narrates that.
+	_, _ = pw.Write([]byte("\n"))
+	took, note := pollWatch(t, enter)
+	if !took {
+		t.Fatal("Enter did not background the wait")
+	}
+	if note != "" {
+		t.Errorf("Enter was answered with %q; the wait owns that line", note)
+	}
+}
+
+// TestAwaitBrowserSetupKeepsAFiredTakeover: a takeover confirmed inside
+// the grace already claimed the driver (awaitSetupBudget calls TakeOver),
+// and runInitViaDaemon reads Fired() afterwards to keep the lease honest
+// (waired-agent#198). That watch must survive the #309 swap.
+func TestAwaitBrowserSetupKeepsAFiredTakeover(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	t.Cleanup(s.Release)
+
+	var out strings.Builder
+	_, active, enter, _ := awaitBrowserSetup(s, newStdinReader(strings.NewReader("\ny\n")), &out, false, false)
+	if active {
+		t.Fatal("a takeover left the run marked browser-driven")
+	}
+	if !enter.Fired() {
+		t.Error("the confirmed takeover was lost when the watch was swapped")
+	}
+	if strings.Contains(out.String(), "continue in the background") {
+		t.Errorf("the backgrounding offer was made to an operator who took the terminal: %q", out.String())
+	}
+}
+
 // TestAwaitBrowserSetupSkipsNonInteractive keeps --non-interactive and
 // --no-browser on the unchanged path: no lease-driven residency, no
 // prompt suppression, no Enter listener.

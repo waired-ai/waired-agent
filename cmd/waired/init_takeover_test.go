@@ -102,6 +102,48 @@ func TestTakeoverWatchEOFIsSilent(t *testing.T) {
 	}
 }
 
+// The other contract this type serves (waired#774): the operator asked
+// for this wait, so a bare Enter ends it. No question, and no note —
+// the caller narrates what happens to the download.
+func TestBackgroundWatchFirstLineActs(t *testing.T) {
+	w := newBackgroundWatch(newStdinReader(strings.NewReader("\n")))
+	took, note := pollWatch(t, w)
+	if !took {
+		t.Fatal("a bare Enter did not background the wait")
+	}
+	if note != "" {
+		t.Errorf("background watch said %q; the caller owns that line", note)
+	}
+	if !w.Fired() {
+		t.Error("Fired did not latch")
+	}
+	// Sticky and silent from here: the wait it served has ended.
+	if took, note := w.Poll(); !took || note != "" {
+		t.Errorf("later poll produced (%v, %q), want (true, \"\")", took, note)
+	}
+}
+
+// #309: once the browser has committed, backgrounding is no longer an
+// escape — this process is the executor, and letting init walk to its
+// tail would release the lease under a setup the wizard believes is
+// running. The withdrawal has to bind the backgrounding contract too,
+// not just the takeover one.
+func TestBackgroundWatchClosedStopsFiring(t *testing.T) {
+	var out strings.Builder
+	w := newBackgroundWatch(newStdinReader(strings.NewReader("\n")))
+	w.Close(&out)
+	if !strings.Contains(out.String(), takeoverClosedLine) {
+		t.Errorf("Close said %q, want the closed line", out.String())
+	}
+	took, note := pollWatch(t, w)
+	if took {
+		t.Error("Enter backgrounded the wait after the browser committed")
+	}
+	if note != takeoverAfterCommitLine {
+		t.Errorf("note = %q, want the after-commit line", note)
+	}
+}
+
 // Off a terminal there is no stdin owner, so the watch is inert and
 // callers need no nil check of their own.
 func TestTakeoverWatchInertWithoutOwner(t *testing.T) {
