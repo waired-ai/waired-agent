@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 9665f5461a99c25b
+sourceHash: 46848a059708627e
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -90,6 +90,7 @@ waired doctor --fix
 | **waired phase** | ルーティングが一時停止しているか、想定外の状態。 | `waired resume` → [しばらく使わないようにする](/ja/guides/pause/)。 |
 | **Local Gateway** | サービスは動いているが、AI 応答を担う部分が動いていない。`503` はたいていモデル未読み込み。 | ダウンロード完了を待つ（`waired models ls`）か、[モデルを見直す](/ja/guides/choose-a-model/)。 |
 | **コーディングツールの各行** | Claude Code / OpenClaw が Waired を使う設定になっていない。 | **f** を押す。 |
+| **AI engine app signature**（macOS） | macOS がインストール済みの AI ソフトの起動を拒否しており、起動しようとするたびに止められている。 | 原因が Waired の残したファイルなら **f** を押す（→ [「AI ソフトが壊れている」と言われる](/ja/troubleshooting/#macos-it-says-the-ai-software-is-damaged)）。それ以外の場合は、この項目が入れ直しのコマンドを表示します。 |
 
 ## 診断自体が全体を見られない場合
 

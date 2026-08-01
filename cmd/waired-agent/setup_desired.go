@@ -182,6 +182,15 @@ func executorErrorCode(st setupExecutorStep, classify func(string) string) strin
 type setupProvider interface {
 	// setupEngineState reports (installed, ready) for one engine kind.
 	setupEngineState(ctx context.Context, engine string) (installed, ready bool)
+	// setupEngineHealth reports whether this engine's failure is LATCHED —
+	// the daemon tried, backed off, retried its budget and gave up — plus the
+	// reason it recorded.
+	//
+	// Latched, not "the last probe failed", on purpose: an engine is briefly
+	// unhealthy during every model switch and every restart, and painting the
+	// wizard's engine row red for those would be worse than the bug this
+	// fixes. Only a give-up is a statement about the install itself (#330).
+	setupEngineHealth(ctx context.Context, engine string) (latchedFailure bool, lastError string)
 	// setupStateDir is the agent's state root, published to the executor
 	// so a bundled engine lands where this daemon will look for it.
 	setupStateDir() string
@@ -654,6 +663,12 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 
 	if d.engine != "" {
 		resp.EngineInstalled, resp.EngineReady = r.provider.setupEngineState(ctx, d.engine)
+		// Only meaningful alongside EngineInstalled: "the files are there but
+		// the thing will not run" is precisely the case the executor's
+		// presence gate used to swallow (#330).
+		if resp.EngineInstalled {
+			resp.EngineNeedsRepair, _ = r.provider.setupEngineHealth(ctx, d.engine)
+		}
 	}
 	// Published unconditionally. #115 served this only alongside a desired
 	// engine, reasoning that there is nothing to install otherwise — that
@@ -707,6 +722,13 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	}
 	if d.engine != "" {
 		installed, ready := r.provider.setupEngineState(ctx, d.engine)
+		var engineLatched bool
+		var engineLastErr string
+		if installed && !ready {
+			// Asked only when it can change the answer: a ready engine is
+			// already Done, and an absent one has nothing to latch about.
+			engineLatched, engineLastErr = r.provider.setupEngineHealth(ctx, d.engine)
+		}
 		// engine_download exists only when this host actually downloaded
 		// something. A machine that already had the engine, or one whose
 		// executor is older than the split, reports the single
@@ -734,6 +756,23 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = executorErrorCode(install, classifySetupFailure)
 			step.ErrorDetail = clampSetupDetail(execErr)
+		case installed && engineLatched:
+			// Installed, and the daemon has given up starting it. Ahead of
+			// `installed` because that arm asks only "are the files there",
+			// which a macOS bundle with a broken signature answers yes to
+			// while every exec of it is killed — so the wizard reported "OK"
+			// on every rerun over an engine that could never run (#330).
+			//
+			// Behind the executor's own failure: an executor that just tried
+			// has fresher, more specific evidence than a latch from an
+			// earlier attempt. Behind `ready` too — a serving engine is proof
+			// the latch is stale.
+			//
+			// engine_not_ready, not the catch-all: nothing here is a network
+			// or disk problem, and the engine's own last_error is the detail.
+			step.Status = signer.SetupStatusFailed
+			step.ErrorCode = signer.SetupErrorEngineNotReady
+			step.ErrorDetail = clampSetupDetail(engineLastErr)
 		case installed:
 			// This step is "install the engine", and the engine is
 			// installed. It used to complete only once the engine was
@@ -1212,6 +1251,33 @@ func (p *agentInferenceProvider) setupEngineState(_ context.Context, engine stri
 	}
 	r, _ := p.EngineReady()
 	return true, r
+}
+
+// setupEngineHealth reports a LATCHED engine failure and its reason.
+//
+// The truth was always one struct away from snapshot() — the very frame that
+// reported engine_installed=true also carried subsystem_state="engine_failed"
+// and the engine's own last_error — but the setup projection had no way to ask
+// for it, so the wizard's engine row said OK over a dead engine forever (#330).
+//
+// FailureLatched is set by onEngineUnhealthy only after the recovery budget is
+// spent (3 attempts inside a 5-minute stability window), which is exactly the
+// "this is about the install, not about this moment" signal the step arm needs.
+func (p *agentInferenceProvider) setupEngineHealth(ctx context.Context, engine string) (bool, string) {
+	// Only ollama runs under the adapter that latches; vLLM has no equivalent
+	// give-up state yet, and claiming one would be a lie.
+	if p.ollama == nil || engine != catalog.RuntimeOllama {
+		return false, ""
+	}
+	// Not the engine we are actually serving: whatever it is doing is not
+	// this step's business.
+	if p.servingEngine() != engine {
+		return false, ""
+	}
+	if !p.ollama.FailureLatched() {
+		return false, ""
+	}
+	return true, p.ollama.Health(ctx).LastErr
 }
 
 // setupStateDir is the agent's state root. The executor installs the

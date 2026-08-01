@@ -60,6 +60,11 @@ var setupDetectEngineNoExec = setup.DetectOllamaPathOnly
 // both outcomes without a real Ollama.app.
 var setupRepairDarwinBundle = setup.RepairDarwinBundleMarker
 
+// setupEngineSignatureBroken is the signature-probe seam. The real one shells
+// out to codesign/spctl on darwin and is a constant false elsewhere; a test
+// fake decides the answer without needing a signed app bundle.
+var setupEngineSignatureBroken = engineSignatureBroken
+
 // repairDarwinEngineBundle undoes #329 on a host that was installed before the
 // fix: waired used to write its "this install is ours" marker at the root of
 // the signed Ollama.app bundle, which invalidates the bundle's resource seal.
@@ -142,7 +147,11 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 	if st.Active && st.DesiredEngine == "ollama" && st.StateDir != "" {
 		repairDarwinEngineBundle(out, goos, st.StateDir)
 	}
-	if !st.Active || st.DesiredEngine == "" || st.EngineInstalled {
+	// EngineInstalled is file presence, so it is true on a host whose engine
+	// can never start — which is how the executor used to return here and let
+	// the wizard report OK forever. EngineNeedsRepair is the daemon saying
+	// "installed, but I have given up starting it": come in and look (#330).
+	if !st.Active || st.DesiredEngine == "" || (st.EngineInstalled && !st.EngineNeedsRepair) {
 		return nil
 	}
 	// Only the two engines the executor knows how to install. An unknown
@@ -309,6 +318,23 @@ func failEngineInstall(s *executorSession, engine, code, detail string) error {
 	return errors.New(detail)
 }
 
+// engineInstallErrorCode picks the code the daemon paints on the wizard's
+// engine row for a failed install.
+//
+// Most failures stay undeclared: the installer's text is the evidence, and the
+// daemon's disk-full/network reading of it is the best available. A signature
+// rejection is different — it is a verdict THIS process reached by asking
+// macOS, not a guess from prose. Left undeclared it falls through
+// classifySetupFailure's catch-all and gets painted "network_error", which
+// sends the user to check their internet about a bundle that downloaded fine
+// (#330).
+func engineInstallErrorCode(err error) string {
+	if isBundleSignatureError(err) {
+		return signer.SetupErrorEngineNotReady
+	}
+	return ""
+}
+
 // installEngineAsExecutor is the shared install core: claim the lease,
 // run the same decision the interactive path runs, install, hand the
 // state dir back, report the outcome. Both entry points reach it.
@@ -337,7 +363,8 @@ func installEngineAsExecutor(
 		goos, elevated, det,
 		agentconfig.OllamaSourceBundled, bundledPresent,
 		os.Getenv("WAIRED_NO_OLLAMA") != "",
-		engineIncomplete(goos, det, os.Getenv("ProgramFiles")))
+		engineIncomplete(goos, det, os.Getenv("ProgramFiles")),
+		setupEngineSignatureBroken(ctx, det))
 
 	switch action {
 	// Repair runs the same installer against bits an earlier attempt left
@@ -350,10 +377,7 @@ func installEngineAsExecutor(
 		// installer behaves exactly as it did.
 		if err := setupInstallEngine(true, stateDir, newExecutorProgressSink(s, engine)); err != nil {
 			writePromptf(out, "%s Engine install failed: %v\n", emo("⚠️", "!"), err)
-			// No declared code, for the same reason as the vLLM build
-			// above: the installer's text is the evidence, and the
-			// daemon's disk-full reading of it is the best available.
-			s.Failed(engine, "", err.Error())
+			s.Failed(engine, engineInstallErrorCode(err), err.Error())
 			return err
 		}
 		// The tarball was extracted as root; hand the state dir back or
@@ -404,9 +428,13 @@ func installEngineAsExecutor(
 // holds the install claim (someone else is installing), or the desired
 // engine is not in place. Anything else gets the ordinary grace back,
 // and a failed install skips the wait entirely at the caller.
+//
+// A host awaiting repair counts as "not in place": the engine on disk is one
+// macOS refuses to run, so the useful engine really has not arrived yet (#330).
 func engineArrivalPending(st management.SetupStateResponse) bool {
 	return setupDriving(st) &&
-		(st.DesiredEngine == "" || st.InstallClaimed != "" || !st.EngineInstalled)
+		(st.DesiredEngine == "" || st.InstallClaimed != "" ||
+			!st.EngineInstalled || st.EngineNeedsRepair)
 }
 
 // setupDriving reports whether st describes a browser setup that is
@@ -427,6 +455,10 @@ func setupDriving(st management.SetupStateResponse) bool {
 // setupEngineInstallWanted reports whether the daemon's state calls for
 // an executor-driven engine install. Split out so the caller can decide
 // without a second round trip's worth of duplicated conditions.
+// A host whose engine is installed but unusable wants one too: that is the
+// repair case, and it must agree with setupEngineInstall's own gate or the
+// caller decides not to call the thing that would fix it (#330).
 func setupEngineInstallWanted(st management.SetupStateResponse) bool {
-	return setupDriving(st) && st.DesiredEngine != "" && !st.EngineInstalled && st.InstallClaimed == ""
+	return setupDriving(st) && st.DesiredEngine != "" &&
+		(!st.EngineInstalled || st.EngineNeedsRepair) && st.InstallClaimed == ""
 }

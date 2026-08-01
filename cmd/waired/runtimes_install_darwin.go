@@ -49,21 +49,31 @@ var installOllamaApp = installOllamaAppImpl
 // used to have no view of (waired-agent#197). nil for every caller that
 // is not the setup executor.
 func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstallProgress)) error {
+	// A backstop, not the working bound: the download itself is bounded by
+	// download.Fetch's no-progress watchdog (#189).
+	budget := ollamaInstallTimeout(os.Getenv)
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+
 	if path, err := download.ResolveBinary(""); err == nil {
-		fmt.Printf("Ollama already present at %s — nothing to do.\n", path)
-		fmt.Println("Run `waired runtimes status` to confirm the agent sees it.")
-		return nil
+		// "Present" used to end the story, which is why a rerun on a broken
+		// host self-healed nothing: `waired init` skipped, the executor
+		// reported done, and the wizard went green over an engine macOS was
+		// killing on sight (#330). Presence only counts if the thing can
+		// actually run.
+		if !engineSignatureBroken(ctx, setup.OllamaDetection{Installed: true, Path: path}) {
+			fmt.Printf("Ollama already present at %s — nothing to do.\n", path)
+			fmt.Println("Run `waired runtimes status` to confirm the agent sees it.")
+			return nil
+		}
+		fmt.Printf("Ollama is present at %s but macOS will not run it (its code signature is not valid).\n", path)
+		fmt.Println("Reinstalling it...")
 	}
 
 	if !yes && !confirmTTY(fmt.Sprintf("Download and install the official Ollama.app into %s ?", ollamaAppDest)) {
 		return errors.New("aborted by user")
 	}
 
-	// A backstop, not the working bound: the download itself is bounded by
-	// download.Fetch's no-progress watchdog (#189).
-	budget := ollamaInstallTimeout(os.Getenv)
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	defer cancel()
 	fmt.Println("Installing Ollama.app (downloading the official release)...")
 	if err := installOllamaApp(ctx, stateDir, sink); err != nil {
 		if ctx.Err() != nil {
@@ -148,6 +158,15 @@ func installOllamaAppImpl(ctx context.Context, stateDir string, sink func(infrun
 			"one-liner installer which escalates via sudo: %w", ollamaAppDest, err)
 	}
 	clearQuarantine(ctx, dest)
+	// Validate before declaring success. "The files are on disk" was the only
+	// thing this function ever checked, which is how a bundle macOS would
+	// never launch kept reporting "Install the AI software OK" on every
+	// surface, forever (#330). codesign/spctl are static — they never exec the
+	// binary, so they cannot raise the Gatekeeper dialog.
+	progress(infruntime.OllamaInstallProgress{Stage: "verify", Message: dest})
+	if err := bundleSignatureVerdict(checkBundleSignature(ctx, dest)); err != nil {
+		return err
+	}
 	recordDarwinManaged(stateDir, dest, setup.DarwinManagedInstallerFresh)
 	return nil
 }
@@ -201,9 +220,22 @@ func downloadOllamaZip(ctx context.Context, url, dest string, progress func(infr
 }
 
 func runDarwinCmd(ctx context.Context, name string, args ...string) error {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	_, err := runDarwinCmdOutput(ctx, name, args...)
 	if err != nil {
-		return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+		return err
 	}
 	return nil
+}
+
+// runDarwinCmdOutput is runDarwinCmd for callers that need what the tool said,
+// not just whether it succeeded. codesign and spctl report the actual defect in
+// their output ("unsealed contents present in the bundle root"), and that text
+// is what makes the setup wizard's error row worth reading.
+func runDarwinCmdOutput(ctx context.Context, name string, args ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		return text, fmt.Errorf("%s: %w: %s", name, err, text)
+	}
+	return text, nil
 }

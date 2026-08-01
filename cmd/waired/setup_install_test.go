@@ -32,6 +32,11 @@ type fakeEngineInstaller struct {
 	// repairChanged / repairErr script setupRepairDarwinBundle's answer.
 	repairChanged bool
 	repairErr     error
+	// sigBroken scripts the codesign/spctl probe, and sigProbes records what
+	// it was asked about — a fake that dropped the detection could not express
+	// "we probed the wrong install".
+	sigBroken bool
+	sigProbes []setup.OllamaDetection
 }
 
 type repairCall struct {
@@ -46,6 +51,13 @@ func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 	t.Helper()
 	prevInstall, prevDetect, prevHand := setupInstallEngine, setupDetectEngine, setupHandState
 	prevNoExec, prevRepair := setupDetectEngineNoExec, setupRepairDarwinBundle
+	prevSig := setupEngineSignatureBroken
+	setupEngineSignatureBroken = func(_ context.Context, det setup.OllamaDetection) bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.sigProbes = append(f.sigProbes, det)
+		return f.sigBroken
+	}
 	setupInstallEngine = func(_ bool, stateDir string, _ func(infruntime.OllamaInstallProgress)) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -78,6 +90,7 @@ func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 	t.Cleanup(func() {
 		setupInstallEngine, setupDetectEngine, setupHandState = prevInstall, prevDetect, prevHand
 		setupDetectEngineNoExec, setupRepairDarwinBundle = prevNoExec, prevRepair
+		setupEngineSignatureBroken = prevSig
 	})
 	return f
 }
@@ -210,6 +223,113 @@ func TestSetupEngineInstall_NoRepairWhenNotNeeded(t *testing.T) {
 				t.Errorf("repair calls = %+v, want none", got)
 			}
 		})
+	}
+}
+
+// TestSetupEngineInstall_EngineNeedsRepairReopensThePresenceGate is the
+// reachability contract for #330's repair arm.
+//
+// EngineInstalled is pure file presence, and a host whose engine can never
+// start satisfies it — which is why the executor returned early, reported
+// nothing, and the wizard sat green over a dead engine on every rerun. The
+// daemon's EngineNeedsRepair is what reopens the gate; without it the repair
+// arm added to engineInstallDecision would be unreachable from both the
+// browser wizard and `waired init`.
+func TestSetupEngineInstall_EngineNeedsRepairReopensThePresenceGate(t *testing.T) {
+	shrinkSetupTimers(t)
+	f := &fakeEngineInstaller{
+		detected: setup.OllamaDetection{
+			Installed: true,
+			Path:      "/Applications/Ollama.app/Contents/Resources/ollama",
+		},
+		sigBroken: true,
+	}
+	f.install(t)
+
+	d := &fakeSetupDaemon{}
+	st := activeInstallState()
+	st.EngineInstalled = true   // the files are all there …
+	st.EngineNeedsRepair = true // … and the daemon has given up starting it
+	d.setState(st)
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	if err := setupEngineInstall(context.Background(), s, io.Discard, "darwin", true); err != nil {
+		t.Fatalf("setupEngineInstall = %v, want nil", err)
+	}
+
+	// It got past the gate, probed the install it was told about, and ran the
+	// installer (engineActionRepair shares the install arm).
+	if got := f.sigProbes; len(got) != 1 || got[0].Path == "" {
+		t.Fatalf("signature probes = %+v, want one probe carrying the detected path", got)
+	}
+	if got := f.installed(); len(got) != 1 || got[0] != "/var/lib/waired" {
+		t.Fatalf("installer calls = %v, want one repair call with the daemon's state dir", got)
+	}
+	if last := lastPhase(t, d); last.Phase != management.SetupExecutorPhaseDone {
+		t.Fatalf("final phase = %q, want done", last.Phase)
+	}
+}
+
+// The mirror: a healthy installed engine must still short-circuit. Reopening
+// the gate for every host would put an install attempt on the critical path of
+// every ordinary setup.
+func TestSetupEngineInstall_HealthyInstallStillSkips(t *testing.T) {
+	shrinkSetupTimers(t)
+	f := &fakeEngineInstaller{detected: setup.OllamaDetection{Installed: true}}
+	f.install(t)
+
+	d := &fakeSetupDaemon{}
+	st := activeInstallState()
+	st.EngineInstalled = true
+	d.setState(st)
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	if err := setupEngineInstall(context.Background(), s, io.Discard, "darwin", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.installed(); len(got) != 0 {
+		t.Errorf("installer calls = %v, want none for a healthy install", got)
+	}
+	if got := f.sigProbes; len(got) != 0 {
+		t.Errorf("signature probes = %+v, want none — the gate should close before any probe", got)
+	}
+}
+
+// TestSetupEngineInstall_SignatureFailureDeclaresItsCode: a codesign rejection
+// must reach the daemon as engine_not_ready, not as the network_error the
+// text-classification catch-all would assign.
+func TestSetupEngineInstall_SignatureFailureDeclaresItsCode(t *testing.T) {
+	shrinkSetupTimers(t)
+	sigErr := bundleSignatureVerdict(bundleSignatureReport{
+		Path: "/Applications/Ollama.app", Probed: true,
+		CodesignOut: realCodesignRejection, CodesignErr: errors.New("exit status 1"),
+	})
+	f := &fakeEngineInstaller{err: sigErr}
+	f.install(t)
+
+	d := &fakeSetupDaemon{}
+	d.setState(activeInstallState())
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	if err := setupEngineInstall(context.Background(), s, io.Discard, "darwin", true); err == nil {
+		t.Fatal("want the install failure to propagate")
+	}
+
+	last := lastPhase(t, d)
+	if last.Phase != management.SetupExecutorPhaseFailed {
+		t.Fatalf("phase = %q, want failed", last.Phase)
+	}
+	if last.ErrorCode != signer.SetupErrorEngineNotReady {
+		t.Errorf("error_code = %q, want %q", last.ErrorCode, signer.SetupErrorEngineNotReady)
+	}
+	if !strings.Contains(last.Error, "unsealed contents present in the bundle root") {
+		t.Errorf("error = %q, want codesign's own diagnosis carried through", last.Error)
 	}
 }
 

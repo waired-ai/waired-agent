@@ -404,6 +404,18 @@ codesign --verify --deep --strict /Applications/Ollama.app
 Silence means the app is intact again. Installing or updating Waired now keeps
 its bookkeeping outside the app, so this cannot happen again.
 
+If `waired doctor` reports the same check but points at
+`waired runtimes install ollama` instead, the app is unusable for some other
+reason and there is no file of ours to remove — reinstall it:
+
+```sh
+sudo waired runtimes install ollama
+```
+
+Setup checks this now: an AI engine macOS refuses to run is reported as a
+failed step with the reason, instead of a green “OK” over software that never
+starts.
+
 ## Windows: I get a 502 error
 
 The AI software is not installed on this computer — usually because it was
