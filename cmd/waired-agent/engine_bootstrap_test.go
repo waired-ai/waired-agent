@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,9 +26,33 @@ import (
 // startEngineAndBootstrap itself, so the subject really runs.
 func bootstrapProvider(t *testing.T) (p *agentInferenceProvider, sp *fakeSpawner, installed *bool) {
 	t.Helper()
+	p, sp, installed, _ = bootstrapProviderServingTags(t)
+	return p, sp, installed
+}
+
+// bootstrapProviderServingTags is bootstrapProvider with the engine's
+// /api/tags answer under the test's control, so a test can say "the
+// engine really is serving these weights" — what engineServesTag checks
+// before activating a model that is already on disk.
+func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *fakeSpawner, installed *bool, serveTags func(...string)) {
+	t.Helper()
+	var servedMu sync.Mutex
+	var served []string
+	serveTags = func(tags ...string) {
+		servedMu.Lock()
+		defer servedMu.Unlock()
+		served = tags
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		servedMu.Lock()
+		entries := make([]map[string]string, 0, len(served))
+		for _, tag := range served {
+			entries = append(entries, map[string]string{"name": tag})
+		}
+		servedMu.Unlock()
+		body, _ := json.Marshal(map[string]any{"models": entries})
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"models":[]}`))
+		_, _ = w.Write(body)
 	}))
 	t.Cleanup(srv.Close)
 	host, port := hostPort(t, srv.URL)
@@ -55,7 +81,7 @@ func bootstrapProvider(t *testing.T) (p *agentInferenceProvider, sp *fakeSpawner
 		agentCtx:     context.Background(),
 		ollamaUsable: func() bool { return present },
 	}
-	return p, sp, &present
+	return p, sp, &present, serveTags
 }
 
 // THE #304 REGRESSION BAR. PRODUCT CONTRACT: an engine installed after
@@ -93,8 +119,10 @@ func TestRunEngineBootstrap_AdoptsAnEngineInstalledAfterBoot(t *testing.T) {
 // PRODUCT CONTRACT: the bootstrap tail runs at most once per process.
 // The executor re-posts `engine_install: done` every 10 s and the
 // reconciler re-applies on every network-map frame, so the tail is
-// reachable many times over one setup. PullModel has no in-flight dedup
-// yet (#305), so a repeat would dispatch a duplicate multi-GB pull.
+// reachable many times over one setup. #305's registry now dedups a
+// repeated pull of the same model, but the tail also runs the backend
+// probe and the tuning verify, and both stop and restart the engine —
+// which fails any download in flight (#305d).
 func TestRunEngineBootstrap_TailRunsOnce(t *testing.T) {
 	p, sp, installed := bootstrapProvider(t)
 	*installed = true

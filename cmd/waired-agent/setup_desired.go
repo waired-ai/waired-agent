@@ -1104,13 +1104,23 @@ func classifyModelRejection(err error) string {
 // code enum. Anything unrecognised stays network_error, which is what
 // this code path reported unconditionally before.
 func classifySetupFailure(errText string) string {
+	if isDiskFullText(errText) {
+		return signer.SetupErrorDiskFull
+	}
+	return signer.SetupErrorNetworkError
+}
+
+// isDiskFullText reports whether a failure string names a full disk.
+// Shared with the pull retry (#306), which must not spend three multi-GB
+// attempts on a condition that cannot clear itself.
+func isDiskFullText(errText string) bool {
 	l := strings.ToLower(errText)
 	for _, m := range diskFullMarkers {
 		if strings.Contains(l, m) {
-			return signer.SetupErrorDiskFull
+			return true
 		}
 	}
-	return signer.SetupErrorNetworkError
+	return false
 }
 
 // progressKey canonicalizes a snapshot for change detection, ignoring

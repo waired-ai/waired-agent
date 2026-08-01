@@ -2124,6 +2124,19 @@ func (p *agentInferenceProvider) recordPullState(modelID, next, errMsg string) {
 	})
 }
 
+// modelPullAttempts / modelPullBackoff pace the download retry, matching
+// the engine-start retry's shape (engineEnsureAttempts). The retry lives
+// in the job rather than in any dispatcher because the job already owns
+// the model's in-flight slot, so a retry can never become a second
+// concurrent download — and because it is the one place every driver
+// (bundled, preferred, setup, `waired models pull`, pre-cache) passes
+// through. The reconciler could not host it: runPush's ticker returns
+// immediately without a control-plane client, and Apply only runs when a
+// network-map frame arrives. Backoff is a var so tests don't sleep.
+const modelPullAttempts = 3
+
+var modelPullBackoff = 15 * time.Second
+
 // runPullJob downloads one model. ctx MUST be the daemon's long-lived
 // context — PullModel dispatches on backgroundCtx(), never on a request
 // ctx (#305a: net/http cancels the handler's context the microsecond the
@@ -2140,26 +2153,47 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	// Forget live progress once the pull terminates (success or failure)
 	// so a finished/failed model never lingers as a stale "downloading".
 	defer p.dlProgress.forget(modelID)
-	// #304: `ollama pull` is a CLIENT of the serving engine. Setup
-	// admission keys off a stat of the binary, which flips true seconds
-	// before `ollama serve` is listening; the pull then dies on
-	// connection-refused, the model is recorded failed, and admission is
-	// once-per-desired-value so nothing retries. EnsureRunning is
-	// single-flight and returns immediately when already ready, so this
-	// JOINS whatever start is in flight rather than adding one. A parked
-	// or given-up engine returns its sentinel WITHOUT spawning: log it
-	// and let the pull report the real error, exactly as before.
-	if p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama {
-		if err := p.ollama.EnsureRunning(ctx); err != nil {
-			p.logger.Warn("engine not ready before pull", "model", modelID, "tag", tag, "err", err)
+	var err error
+	for attempt := 1; attempt <= modelPullAttempts; attempt++ {
+		// #304: `ollama pull` is a CLIENT of the serving engine. Setup
+		// admission keys off a stat of the binary, which flips true seconds
+		// before `ollama serve` is listening; the pull then dies on
+		// connection-refused. EnsureRunning is single-flight and returns
+		// immediately when already ready, so this JOINS whatever start is in
+		// flight rather than adding one. A parked or given-up engine returns
+		// its sentinel WITHOUT spawning: log it and let the pull report the
+		// real error, exactly as before. Inside the loop because retrying a
+		// download against an engine that has since died is pointless.
+		if p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama {
+			if ensureErr := p.ollama.EnsureRunning(ctx); ensureErr != nil {
+				p.logger.Warn("engine not ready before pull", "model", modelID, "tag", tag, "err", ensureErr)
+			}
+		}
+		err = p.puller.Pull(ctx, tag, func(pr download.Progress) {
+			p.dlProgress.observe(modelID, pr)
+			if pr.State == download.StateVerifying {
+				p.recordPullState(modelID, catalog.ModelStateVerifying, "")
+			}
+		})
+		// A full disk cannot clear itself; three more multi-GB attempts only
+		// delay the honest error the wizard needs to show.
+		if err == nil || attempt == modelPullAttempts || isDiskFullText(err.Error()) {
+			break
+		}
+		p.logger.Warn("ollama pull failed; retrying",
+			"model", modelID, "tag", tag, "attempt", attempt, "max", modelPullAttempts, "err", err)
+		select {
+		case <-time.After(time.Duration(attempt) * modelPullBackoff):
+		case <-ctx.Done():
+		}
+		// The single gate on starting another attempt. Shutdown ends the
+		// job rather than restarting it: agentCtx is cancelled on SIGTERM
+		// and session teardown, nothing is waiting for the result, and the
+		// failure the cancelled Pull returned is the one to record.
+		if ctx.Err() != nil {
+			break
 		}
 	}
-	err := p.puller.Pull(ctx, tag, func(pr download.Progress) {
-		p.dlProgress.observe(modelID, pr)
-		if pr.State == download.StateVerifying {
-			p.recordPullState(modelID, catalog.ModelStateVerifying, "")
-		}
-	})
 	if err != nil {
 		p.logger.Warn("ollama pull failed", "model", modelID, "tag", tag, "err", err)
 		p.recordPullState(modelID, catalog.ModelStateFailed, err.Error())
@@ -2224,25 +2258,54 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	}
 }
 
+// activateBundledIfReady commits the bundled model as Active when its
+// weights are already on disk AND the engine is really serving that tag,
+// reporting whether it did. A fresh install pre-pulls the bundled model
+// during `waired init` (setup.Deploy), so the agent can reach here with
+// the model Ready but no ActiveSelection — committing it is what lets the
+// subsystem leave "awaiting_model". See activateBundledIfUnset.
+//
+// Split out of bootstrapBundledModel because the two halves have
+// different owners now (#306): the pre-pull is skipped whenever the
+// operator's own model took responsibility, but this half must still run
+// — it is the only caller of activateBundledIfUnset on the boot path, and
+// skipping it would leave Active nil for the hours the chosen model
+// downloads, on a host with a perfectly good model already on disk.
+func (p *agentInferenceProvider) activateBundledIfReady(ctx context.Context) bool {
+	manifest, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests)
+	if !ok {
+		return false
+	}
+	cur := p.bundledModelState(manifest.ModelID)
+	if cur.State != catalog.ModelStateReady || !p.engineServesTag(ctx, cur.OllamaTag) {
+		return false
+	}
+	p.activateBundledIfUnset(manifest.ModelID, cur.VariantID)
+	return true
+}
+
+// bundledModelState is the stored catalog row for modelID, or the zero
+// value when the store is unreadable.
+func (p *agentInferenceProvider) bundledModelState(modelID string) catalog.ModelState {
+	state, _ := p.store.Load()
+	return state.Models[modelID]
+}
+
 // bootstrapBundledModel kicks off the agent-startup pre-pull described
 // in spec waired_inference_spec.md §11.1 (background download so that
 // inference requests can succeed without the user invoking
 // `waired models pull` explicitly).
+//
+// It is the FALLBACK driver since #306: bootstrapAfterEngineStart only
+// reaches it when the operator's own model did not take responsibility.
 func (p *agentInferenceProvider) bootstrapBundledModel(ctx context.Context) {
 	manifest, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests)
 	if !ok {
 		p.logger.Warn("bundled model not found in manifests; skipping pre-pull", "model", p.cfg.BundledModelID)
 		return
 	}
-	state, _ := p.store.Load()
-	if cur := state.Models[manifest.ModelID]; cur.State == catalog.ModelStateReady &&
-		p.engineServesTag(ctx, cur.OllamaTag) {
+	if p.activateBundledIfReady(ctx) {
 		p.logger.Info("bundled model already ready; skipping pre-pull", "model", manifest.ModelID)
-		// A fresh install pre-pulls the bundled model during `waired init`
-		// (setup.Deploy), so the agent reaches here with the model Ready but
-		// no ActiveSelection — commit it so the subsystem leaves
-		// "awaiting_model". See activateBundledIfUnset.
-		p.activateBundledIfUnset(manifest.ModelID, cur.VariantID)
 		return
 	}
 	if _, err := p.PullModel(ctx, manifest.ModelID); err != nil {
@@ -2389,23 +2452,34 @@ func (p *agentInferenceProvider) activatePreferredIfNeeded(modelID, variantID st
 // the restart it schedules: the POST kicks off a background pull, the
 // SIGTERM cancels it ("download: start ollama: context canceled" in
 // issue #347), and before this nothing re-pulled the chosen model on
-// the next boot. Runs after bootstrapBundledModel in the
-// engine-startup goroutine: re-pulls the preferred model when it is
-// missing, or commits it as Active when it is already on disk.
-func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) {
+// the next boot. It re-pulls the preferred model when it is missing, or
+// commits it as Active when it is already on disk.
+//
+// It runs FIRST in the engine-startup goroutine (it used to run after
+// bootstrapBundledModel) and reports whether it took the model on:
+// activated it, or dispatched its download. Only then is the bundled
+// pre-pull redundant — see bootstrapAfterEngineStart (#306).
+//
+// The answer is deliberately "did something happen", not "is a preference
+// set": a preference that merely RESOLVES in the catalog is no guarantee
+// the engine can serve it, and reporting true for one would leave the
+// host downloading nothing at all.
+func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) bool {
 	manifest, ok := p.preferredManifest()
 	if !ok {
-		return
+		return false
 	}
 	state, _ := p.store.Load()
 	if cur := state.Models[manifest.ModelID]; cur.State == catalog.ModelStateReady &&
 		p.engineServesTag(ctx, cur.OllamaTag) {
 		p.activatePreferredIfNeeded(manifest.ModelID, cur.VariantID)
-		return
+		return true
 	}
 	if _, err := p.PullModel(ctx, manifest.ModelID); err != nil {
 		p.logger.Warn("preferred model re-pull dispatch failed", "model", manifest.ModelID, "err", err)
+		return false
 	}
+	return true
 }
 
 // errSwapNeedsRestart signals that an in-process model switch is not possible
@@ -2907,6 +2981,17 @@ func availableUpdateFromPick(engine string, mp router.Pick, state catalog.State)
 // in the background. Idempotent: a candidate already on disk skips
 // straight through. Step 12 — keeps the next refresh fast.
 func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
+	// Pre-caching an UPDATE presupposes something to update.
+	// computeAvailableUpdate reports the picker's own output as "the
+	// update" when nothing is active — right for the /inference/status
+	// field it also feeds, wrong as a trigger to download: on a fresh
+	// install state.Active is nil, so this dispatched a third multi-GB
+	// pull alongside the operator's model and the bundled fallback (#306).
+	// The suppression is here rather than in computeAvailableUpdate so the
+	// status field keeps answering "what would this host run".
+	if st, err := p.store.Load(); err != nil || st.Active == nil {
+		return
+	}
 	upd := computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx))
 	if upd == nil {
 		return
