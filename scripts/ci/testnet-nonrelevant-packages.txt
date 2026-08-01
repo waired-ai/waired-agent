@@ -15,6 +15,7 @@
 # blank lines ignored; trailing same-line comments allowed.
 
 internal/agentconfig/       # inference-subsystem config resolution (defaults/JSON/env/flags)
+internal/agentgrade/        # coding-agent tool-format compliance probe; grades models, no mesh/enrollment surface
 internal/buildinfo/         # build metadata strings
 internal/catalog/           # model catalog data + scoring; drives model selection only
 internal/download/          # model/artifact download helper

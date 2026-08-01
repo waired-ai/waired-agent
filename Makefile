@@ -62,6 +62,8 @@ help:
 	@echo "  smoke-control        Build + boot waired-control against Spanner Emulator + curl key endpoints"
 	@echo "  e2e-inference        Real-Ollama inference e2e (gateway + router + runtime)"
 	@echo "                       Pulls qwen2.5:0.5b on first run; cached after."
+	@echo "  e2e-agentgrade       Grade one model's coding-agent tool-format compliance"
+	@echo "                       make e2e-agentgrade MODEL=<ollama tag>  (manual; GPU)"
 	@echo "  e2e-vllm             Real-vLLM inference e2e (GPU REQUIRED, ~30 min)"
 	@echo "                       REQUIRED before release on any GPU host."
 	@echo "                       Smoke test (~3 min): make e2e-vllm-quick"
@@ -407,6 +409,25 @@ docker-agent:
 .PHONY: e2e-inference
 e2e-inference:
 	go test -tags e2e -count=1 -v -timeout=15m -run TestInferenceGatewayE2E ./internal/e2e/inference/...
+
+# Agent-harness grade (#322): drive the coding-agent-shaped fixture at the
+# real gateway against one model and report whether it can emit structured
+# tool calls under that weight. This is the measurement behind the catalog's
+# agent-grade verdicts.
+#
+# Manual on purpose — never per-PR, never nightly. It needs a real model
+# resident and a GPU to be worth anything, and a scheduled run would let a
+# registry hiccup record itself as a model demotion (waired-ai/waired-agent#203
+# is the same mistake in the benchmark path). The verdict is a judgement about
+# a model, so a human asks for it.
+#
+#   make e2e-agentgrade MODEL=qwen3.6:27b-q4_K_M
+#   make e2e-agentgrade MODEL=<tag> JSON=/tmp/verdict.json
+.PHONY: e2e-agentgrade
+e2e-agentgrade:
+	@test -n "$(MODEL)" || { echo "usage: make e2e-agentgrade MODEL=<ollama tag> [JSON=<path>]"; exit 2; }
+	WAIRED_AGENTGRADE_MODEL="$(MODEL)" WAIRED_AGENTGRADE_JSON="$(JSON)" \
+	  go test -tags e2e -count=1 -v -timeout=40m -run TestAgentGrade ./internal/e2e/agentgrade/...
 
 # vLLM e2e (GPU REQUIRED): exercises the Step-2 multi-engine path —
 # venv install (uv-managed Python 3.12), HF download (huggingface-cli +
