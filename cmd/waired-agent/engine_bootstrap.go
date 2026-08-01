@@ -182,12 +182,34 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 		p.logger.Info("adopted orphan bundled ollama (exact pin match)",
 			"version", p.ollama.EngineVersion())
 	}
-	if cfg.PullOnStartup {
+	// The operator's model comes FIRST, and the hardware auto-select is
+	// only the fallback for a host with no operator model to serve (#306).
+	// Both used to be dispatched here back to back, and #305's registry is
+	// keyed by model_id alone, so two DIFFERENT ids never deduped: rc7
+	// downloaded a 9 GB model the daemon picked for itself alongside the
+	// 44 GB one chosen in the wizard, and on a 16 GB CI runner the pair
+	// reached the OOM killer and took the engine down.
+	//
+	// Ordering rather than a "does a preference exist?" gate, deliberately:
+	// three bundled manifests ship with no ollama-servable variant at all,
+	// so a preference that merely resolves in the catalog is not proof that
+	// anything will be downloaded — and engineBootstrapOnce latches this
+	// tail exactly once, so a wrongly suppressed fallback never re-arms.
+	// bootstrapPreferredModel reports whether it actually took the model on.
+	if p.bootstrapPreferredModel(ctx) {
+		// Its weights may still be on disk from an earlier run, and this is
+		// the only caller of activateBundledIfUnset on the boot path.
+		// Skipping it wholesale would leave Active nil for the hours the
+		// chosen model downloads — EngineReady() false, benchmarks 425ing,
+		// Status() reporting awaiting_model — on a host with a working
+		// model already on disk.
+		p.activateBundledIfReady(ctx)
+	} else if cfg.PullOnStartup {
+		// Finish a preferred-model switch interrupted by its own restart
+		// (issue #347) is bootstrapPreferredModel's job above; this is the
+		// fresh-install pre-pull of the hardware auto-select.
 		p.bootstrapBundledModel(ctx)
 	}
-	// Finish a preferred-model switch interrupted by its own restart
-	// (issue #347): re-pull or activate the chosen model.
-	p.bootstrapPreferredModel(ctx)
 	// #290: for hosts with a fallback backend (Strix Halo Linux: ROCm
 	// then Vulkan), verify the GPU actually engaged and switch to the
 	// next backend if it didn't, so the host never runs on CPU silently

@@ -2218,25 +2218,54 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	}
 }
 
+// activateBundledIfReady commits the bundled model as Active when its
+// weights are already on disk AND the engine is really serving that tag,
+// reporting whether it did. A fresh install pre-pulls the bundled model
+// during `waired init` (setup.Deploy), so the agent can reach here with
+// the model Ready but no ActiveSelection — committing it is what lets the
+// subsystem leave "awaiting_model". See activateBundledIfUnset.
+//
+// Split out of bootstrapBundledModel because the two halves have
+// different owners now (#306): the pre-pull is skipped whenever the
+// operator's own model took responsibility, but this half must still run
+// — it is the only caller of activateBundledIfUnset on the boot path, and
+// skipping it would leave Active nil for the hours the chosen model
+// downloads, on a host with a perfectly good model already on disk.
+func (p *agentInferenceProvider) activateBundledIfReady(ctx context.Context) bool {
+	manifest, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests)
+	if !ok {
+		return false
+	}
+	cur := p.bundledModelState(manifest.ModelID)
+	if cur.State != catalog.ModelStateReady || !p.engineServesTag(ctx, cur.OllamaTag) {
+		return false
+	}
+	p.activateBundledIfUnset(manifest.ModelID, cur.VariantID)
+	return true
+}
+
+// bundledModelState is the stored catalog row for modelID, or the zero
+// value when the store is unreadable.
+func (p *agentInferenceProvider) bundledModelState(modelID string) catalog.ModelState {
+	state, _ := p.store.Load()
+	return state.Models[modelID]
+}
+
 // bootstrapBundledModel kicks off the agent-startup pre-pull described
 // in spec waired_inference_spec.md §11.1 (background download so that
 // inference requests can succeed without the user invoking
 // `waired models pull` explicitly).
+//
+// It is the FALLBACK driver since #306: bootstrapAfterEngineStart only
+// reaches it when the operator's own model did not take responsibility.
 func (p *agentInferenceProvider) bootstrapBundledModel(ctx context.Context) {
 	manifest, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests)
 	if !ok {
 		p.logger.Warn("bundled model not found in manifests; skipping pre-pull", "model", p.cfg.BundledModelID)
 		return
 	}
-	state, _ := p.store.Load()
-	if cur := state.Models[manifest.ModelID]; cur.State == catalog.ModelStateReady &&
-		p.engineServesTag(ctx, cur.OllamaTag) {
+	if p.activateBundledIfReady(ctx) {
 		p.logger.Info("bundled model already ready; skipping pre-pull", "model", manifest.ModelID)
-		// A fresh install pre-pulls the bundled model during `waired init`
-		// (setup.Deploy), so the agent reaches here with the model Ready but
-		// no ActiveSelection — commit it so the subsystem leaves
-		// "awaiting_model". See activateBundledIfUnset.
-		p.activateBundledIfUnset(manifest.ModelID, cur.VariantID)
 		return
 	}
 	if _, err := p.PullModel(ctx, manifest.ModelID); err != nil {
@@ -2383,23 +2412,34 @@ func (p *agentInferenceProvider) activatePreferredIfNeeded(modelID, variantID st
 // the restart it schedules: the POST kicks off a background pull, the
 // SIGTERM cancels it ("download: start ollama: context canceled" in
 // issue #347), and before this nothing re-pulled the chosen model on
-// the next boot. Runs after bootstrapBundledModel in the
-// engine-startup goroutine: re-pulls the preferred model when it is
-// missing, or commits it as Active when it is already on disk.
-func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) {
+// the next boot. It re-pulls the preferred model when it is missing, or
+// commits it as Active when it is already on disk.
+//
+// It runs FIRST in the engine-startup goroutine (it used to run after
+// bootstrapBundledModel) and reports whether it took the model on:
+// activated it, or dispatched its download. Only then is the bundled
+// pre-pull redundant — see bootstrapAfterEngineStart (#306).
+//
+// The answer is deliberately "did something happen", not "is a preference
+// set": a preference that merely RESOLVES in the catalog is no guarantee
+// the engine can serve it, and reporting true for one would leave the
+// host downloading nothing at all.
+func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) bool {
 	manifest, ok := p.preferredManifest()
 	if !ok {
-		return
+		return false
 	}
 	state, _ := p.store.Load()
 	if cur := state.Models[manifest.ModelID]; cur.State == catalog.ModelStateReady &&
 		p.engineServesTag(ctx, cur.OllamaTag) {
 		p.activatePreferredIfNeeded(manifest.ModelID, cur.VariantID)
-		return
+		return true
 	}
 	if _, err := p.PullModel(ctx, manifest.ModelID); err != nil {
 		p.logger.Warn("preferred model re-pull dispatch failed", "model", manifest.ModelID, "err", err)
+		return false
 	}
+	return true
 }
 
 // errSwapNeedsRestart signals that an in-process model switch is not possible
