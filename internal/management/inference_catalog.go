@@ -174,13 +174,13 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 	}
 
 	hw := s.inference.Hardware(r.Context())
-	enginePick, err := router.PickEngine(router.EnginePickInput{Hardware: hw})
+	status := s.inference.Status(r.Context())
+	engine, err := catalogEngine(status, hw)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("engine_pick_failed", err.Error()))
 		return
 	}
 
-	status := s.inference.Status(r.Context())
 	models := s.inference.ListModels(r.Context())
 
 	pref, _, _ := agentconfig.LoadPreference(s.catalog.PreferencePath)
@@ -198,7 +198,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 
 	resp := ModelCatalogResponse{
 		PreferredModelID:        pref.ModelID,
-		Engine:                  enginePick.Engine,
+		Engine:                  engine,
 		Host:                    hostFromProfile(hw),
 		Families:                make([]CatalogFamily, 0, len(manifests)),
 		BenchmarkRecommendation: status.BenchmarkRecommendation,
@@ -220,7 +220,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 	// boot-time binary probe. Unknown ("") excludes floored variants
 	// (fail closed).
 	engineVersion := ""
-	if rt, ok := status.Runtimes[enginePick.Engine]; ok {
+	if rt, ok := status.Runtimes[engine]; ok {
 		engineVersion = rt.LiveVersion
 		if engineVersion == "" {
 			engineVersion = rt.Version
@@ -228,7 +228,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 	}
 
 	for _, m := range manifests {
-		fit := router.FamilyBestFit(m, enginePick.Engine, engineVersion, hw)
+		fit := router.FamilyBestFit(m, engine, engineVersion, hw)
 		f := CatalogFamily{
 			ModelID:     m.ModelID,
 			DisplayName: m.DisplayName,
@@ -261,6 +261,42 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// catalogEngine resolves the engine the catalog must judge families
+// against: the one this host actually SERVES, not the one its hardware
+// would justify buying.
+//
+// The endpoint used to recompute the engine from hardware alone
+// (router.PickEngine). On a host whose daemon serves ollama but whose
+// GPU votes vllm, that made every ollama-only family — including the
+// one currently serving — render as "no variant supports vllm"
+// (waired-agent#319).
+//
+// Resolution order:
+//
+//  1. status.Active.Runtime — the committed selection in state.json, i.e.
+//     the outcome of chooseEngine/engineViable. Authoritative, and the
+//     same source upgradeFromBench already prefers for the same reason.
+//  2. Nothing committed yet (fresh install, pre-bootstrap): fall back to
+//     the auto-picker, which since waired-agent#319 also refuses vllm on
+//     a non-Linux host. A vllm answer is additionally demoted when no
+//     venv is installed here — hardware.Profile.Engines resolves through
+//     the daemon's injected engineVersionOnHost, so it reports the same
+//     presence engineViable would, and a Linux host with a big NVIDIA card
+//     and no venv will serve ollama regardless of what the picker prefers.
+func catalogEngine(status InferenceStatus, hw hardware.Profile) (string, error) {
+	if status.Active != nil && status.Active.Runtime != "" {
+		return status.Active.Runtime, nil
+	}
+	pick, err := router.PickEngine(router.EnginePickInput{Hardware: hw})
+	if err != nil {
+		return "", err
+	}
+	if pick.Engine == catalog.RuntimeVLLM && !hw.Engines.VLLM.Installed {
+		return catalog.RuntimeOllama, nil
+	}
+	return pick.Engine, nil
 }
 
 func (s *Server) loadManifests() ([]catalog.Manifest, error) {

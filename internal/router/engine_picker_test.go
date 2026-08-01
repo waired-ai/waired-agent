@@ -61,10 +61,12 @@ func TestPickEngine_NVIDIASufficientVRAM_AutoOllamaWhenGatedOff(t *testing.T) {
 
 // Once vLLM serving is wired (VLLMAutoSelectable=true), the same large NVIDIA
 // host auto-picks vllm. This guards the branch that the #557 gate currently
-// short-circuits.
+// short-circuits. OS is set explicitly because vLLM serving is Linux-only
+// (VLLMSupportedOS) — an unset Profile.OS fails closed to ollama.
 func TestPickEngine_NVIDIASufficientVRAM_PicksVLLMWhenWired(t *testing.T) {
 	setVLLMAutoSelectable(t, true)
 	hw := hardware.Profile{
+		OS:         "linux",
 		RAMTotalGB: 64,
 		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24467}},
 	}
@@ -198,6 +200,7 @@ func TestPickEngine_NVIDIA_UnifiedMemoryDoesNotApply(t *testing.T) {
 	// NVIDIA discrete GPU on a host that (incorrectly) reports UMA
 	// must still consult GPUs[0].VRAMTotalMB rather than UsableVRAMMB.
 	hw := hardware.Profile{
+		OS:            "linux", // vllm is Linux-only; see VLLMSupportedOS
 		RAMTotalGB:    64,
 		UnifiedMemory: false, // discrete-GPU host
 		UsableVRAMMB:  0,
@@ -252,6 +255,136 @@ func TestPickEngine_InvalidPreference(t *testing.T) {
 	_, err := PickEngine(EnginePickInput{Hardware: hw, Preference: "tensorrt"})
 	if !errors.Is(err, ErrInvalidEnginePreference) {
 		t.Errorf("err = %v, want ErrInvalidEnginePreference", err)
+	}
+}
+
+// Product contract (waired-agent#319): vLLM serving exists on Linux only.
+// The Windows/darwin installers are stubs whose Active() always answers
+// "no install", so the auto-picker must never advertise vllm there — and an
+// unknown (empty) OS fails closed to the same answer.
+func TestVLLMSupportedOS(t *testing.T) {
+	cases := []struct {
+		goos string
+		want bool
+	}{
+		{"linux", true},
+		{"windows", false},
+		{"darwin", false},
+		{"", false}, // unpopulated Profile.OS must not unlock vllm
+	}
+	for _, tc := range cases {
+		t.Run(tc.goos, func(t *testing.T) {
+			if got := VLLMSupportedOS(tc.goos); got != tc.want {
+				t.Errorf("VLLMSupportedOS(%q) = %v, want %v", tc.goos, got, tc.want)
+			}
+		})
+	}
+}
+
+// VLLMAutoEligible is the one rule PickEngine and the CLI's recommendEngine
+// both answer through. Product contract: all four terms must hold — the #557
+// gate, an NVIDIA GPU, MinVLLMVRAMMB of VRAM, and a Linux host.
+func TestVLLMAutoEligible(t *testing.T) {
+	cases := []struct {
+		name       string
+		selectable bool
+		goos       string
+		vendor     string
+		vramMB     int
+		want       bool
+	}{
+		{"linux nvidia large", true, "linux", "nvidia", 24467, true},
+		{"linux nvidia mixed case vendor", true, "linux", "NVIDIA", 24467, true},
+		{"linux nvidia at threshold", true, "linux", "nvidia", MinVLLMVRAMMB, true},
+		{"linux nvidia below threshold", true, "linux", "nvidia", MinVLLMVRAMMB - 1, false},
+		{"windows nvidia large", true, "windows", "nvidia", 24467, false},
+		{"darwin nvidia large", true, "darwin", "nvidia", 24467, false},
+		{"unknown os nvidia large", true, "", "nvidia", 24467, false},
+		{"linux amd large", true, "linux", "amd", 64000, false},
+		{"linux apple large", true, "linux", "apple", 64000, false},
+		{"gated off", false, "linux", "nvidia", 24467, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setVLLMAutoSelectable(t, tc.selectable)
+			if got := VLLMAutoEligible(tc.goos, tc.vendor, tc.vramMB); got != tc.want {
+				t.Errorf("VLLMAutoEligible(%q, %q, %d) = %v, want %v",
+					tc.goos, tc.vendor, tc.vramMB, got, tc.want)
+			}
+		})
+	}
+}
+
+// The regression this fixes (waired-agent#319): a Windows host with a 16 GB
+// RTX 5080 auto-picked vllm, so every catalog surface judged families against
+// an engine the host cannot serve while the daemon actually ran ollama.
+// Product contract: the same hardware answers ollama on Windows and darwin,
+// vllm only on Linux, and the reason names the OS gate so the audit trail
+// explains itself.
+func TestPickEngine_NVIDIALargeVRAM_GatedByOS(t *testing.T) {
+	cases := []struct {
+		goos       string
+		wantEngine string
+	}{
+		{"linux", "vllm"},
+		{"windows", "ollama"},
+		{"darwin", "ollama"},
+		{"", "ollama"}, // unknown OS fails closed
+	}
+	for _, tc := range cases {
+		name := tc.goos
+		if name == "" {
+			name = "unknown"
+		}
+		t.Run(name, func(t *testing.T) {
+			setVLLMAutoSelectable(t, true)
+			hw := hardware.Profile{
+				OS:         tc.goos,
+				RAMTotalGB: 32,
+				GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 5080", VRAMTotalMB: 16303}},
+			}
+			pick, err := PickEngine(EnginePickInput{Hardware: hw})
+			if err != nil {
+				t.Fatalf("PickEngine: %v", err)
+			}
+			if pick.Engine != tc.wantEngine {
+				t.Fatalf("Engine = %q, want %q (os=%q)", pick.Engine, tc.wantEngine, tc.goos)
+			}
+			if tc.wantEngine != "ollama" {
+				return
+			}
+			found := false
+			for _, r := range pick.Reasons {
+				if strings.Contains(r, "linux-only") {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Reasons should name the linux-only vllm gate; got %v", pick.Reasons)
+			}
+		})
+	}
+}
+
+// The OS gate is an AUTO-picker rule only. An operator who asks for vllm on
+// Windows still gets it: `--prefer vllm` means "I have a reason", and the
+// serving path's engineViable is where that decision is actually enforced.
+func TestPickEngine_PreferenceForcesVLLM_OnNonLinux(t *testing.T) {
+	hw := hardware.Profile{
+		OS:         "windows",
+		RAMTotalGB: 32,
+		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 16303}},
+	}
+	pick, err := PickEngine(EnginePickInput{Hardware: hw, Preference: "vllm"})
+	if err != nil {
+		t.Fatalf("PickEngine: %v", err)
+	}
+	if pick.Engine != "vllm" {
+		t.Errorf("Engine = %q, want vllm (preference wins over the OS gate)", pick.Engine)
+	}
+	if pick.Source != EngineSourcePreference {
+		t.Errorf("Source = %q, want preference", pick.Source)
 	}
 }
 

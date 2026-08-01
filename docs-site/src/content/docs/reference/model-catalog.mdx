@@ -99,6 +99,9 @@ memory **and is fast enough to be worth using**. On shared-memory systems
 (Apple Silicon, AMD Strix Halo), MoE models with a small *active* parameter
 count are favored because decode speed tracks active params, not total size.
 
+Windows and macOS run on Ollama. vLLM serving needs Linux, so on those machines
+Waired picks from the Ollama list — a large NVIDIA card does not change that.
+
 Fitting in memory is not the same as running well: on a shared-memory Mac a
 large dense model can fit and still answer at single-digit words per second,
 while a mixture-of-experts model of similar size answers many times faster.

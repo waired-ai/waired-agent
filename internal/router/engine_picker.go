@@ -26,8 +26,10 @@ const MinVLLMVRAMMB = hostfit.MinVLLMVRAMMB
 // wired (#557 COMPLETED): the Linux adapter is registered
 // (cmd/waired-agent/inference_vllm_linux.go) and bootstrapVLLM serves against a
 // real venv, so a large NVIDIA host can actually run what the picker advertises.
-// A qualifying host (NVIDIA GPU, VRAM >= MinVLLMVRAMMB) auto-picks vLLM; smaller
-// GPUs, non-NVIDIA vendors, and non-Linux hosts still fall to ollama. The
+// A qualifying host (NVIDIA GPU, VRAM >= MinVLLMVRAMMB, Linux) auto-picks vLLM;
+// smaller GPUs, non-NVIDIA vendors, and non-Linux hosts still fall to ollama —
+// the OS half of that promise is enforced by VLLMSupportedOS below, which the
+// picker went without until waired-agent#319. The
 // picker only advertises vLLM — the agent's own serving path
 // (chooseEngine/engineViable) still declines it without an installed venv, so a
 // host that auto-picks vLLM without one keeps serving on ollama until the venv
@@ -36,6 +38,32 @@ const MinVLLMVRAMMB = hostfit.MinVLLMVRAMMB
 // A var, not a const, so an operator/build can still gate it off and tests can
 // exercise both states.
 var VLLMAutoSelectable = true
+
+// VLLMSupportedOS reports whether vLLM serving exists on goos at all.
+//
+// Linux only: the Windows and darwin installers are stubs whose Active()
+// always answers "no install" (internal/runtime/vllm_stub_windows.go), and
+// engineViable therefore declines vllm on those hosts however the picker
+// votes. An unknown/empty goos fails closed to false — an unpopulated
+// hardware.Profile.OS must never unlock an engine the host cannot run.
+func VLLMSupportedOS(goos string) bool { return goos == "linux" }
+
+// VLLMAutoEligible is the single rule behind auto-selecting vLLM: the #557
+// gate, an NVIDIA GPU carrying at least MinVLLMVRAMMB, and an OS that can
+// serve it.
+//
+// PickEngine and the CLI's recommendEngine both answer through it so the two
+// cannot drift again. They had: the CLI kept its own copy of the vendor/VRAM
+// test, and neither carried the OS term at all, so a Windows host with a large
+// NVIDIA card auto-picked an engine it can never run — every catalog surface
+// then judged models against vllm while the daemon served ollama
+// (waired-agent#319).
+func VLLMAutoEligible(goos, vendor string, vramMB int) bool {
+	return VLLMAutoSelectable &&
+		strings.EqualFold(vendor, "nvidia") &&
+		vramMB >= MinVLLMVRAMMB &&
+		VLLMSupportedOS(goos)
+}
 
 // EngineSource describes where the engine choice came from. Surfaces
 // in the decision trace so refresh prompts can say "preference" vs
@@ -75,8 +103,13 @@ type EnginePick struct {
 //
 //   - If Preference is "ollama" or "vllm", honour it.
 //   - Else if Hardware has at least one NVIDIA GPU with VRAMTotalMB
-//     ≥ MinVLLMVRAMMB, pick "vllm".
+//     ≥ MinVLLMVRAMMB AND Hardware.OS can serve vLLM
+//     (VLLMSupportedOS — Linux), pick "vllm".
 //   - Else pick "ollama".
+//
+// The OS term reads Hardware.OS rather than runtime.GOOS so the rule stays a
+// pure (facts) -> plan function that table-tests across all three OSes;
+// production profiles carry runtime.GOOS there (hardware.defaultOSArch).
 //
 // Returns ErrInvalidEnginePreference when Preference is set to an
 // unknown value.
@@ -127,6 +160,17 @@ func PickEngine(in EnginePickInput) (EnginePick, error) {
 				fmt.Sprintf("auto: ollama (VRAM %d MB ≥ %d MB, but vllm serving not yet wired (#557))", vramMB, MinVLLMVRAMMB))
 			return EnginePick{Engine: catalog.RuntimeOllama, Source: EngineSourceAuto, Reasons: reasons}, nil
 		}
+		if !VLLMSupportedOS(in.Hardware.OS) {
+			// vLLM serving is Linux-only. Advertising it anywhere else
+			// hands every consumer of this pick — the catalog endpoint,
+			// computeAvailableUpdate, install-time model selection — an
+			// engine the host will never run, so they judge models against
+			// vllm while the daemon serves ollama (waired-agent#319). An
+			// explicit `--prefer vllm` (Preference, above) is unaffected.
+			reasons = append(reasons,
+				fmt.Sprintf("auto: ollama (vllm serving is linux-only; host os=%s)", osLabel(in.Hardware.OS)))
+			return EnginePick{Engine: catalog.RuntimeOllama, Source: EngineSourceAuto, Reasons: reasons}, nil
+		}
 		reasons = append(reasons,
 			fmt.Sprintf("auto: vllm (VRAM %d MB ≥ threshold %d MB)", vramMB, MinVLLMVRAMMB))
 		return EnginePick{Engine: catalog.RuntimeVLLM, Source: EngineSourceAuto, Reasons: reasons}, nil
@@ -156,6 +200,15 @@ func PickEngine(in EnginePickInput) (EnginePick, error) {
 		reasons = append(reasons, "auto: ollama")
 		return EnginePick{Engine: catalog.RuntimeOllama, Source: EngineSourceAuto, Reasons: reasons}, nil
 	}
+}
+
+// osLabel renders a Profile.OS value for a reason string, naming the
+// empty case rather than leaving a blank in the audit trail.
+func osLabel(goos string) string {
+	if goos == "" {
+		return "unknown"
+	}
+	return goos
 }
 
 // primaryGPU returns a pointer to the first GPU on hw, or nil for

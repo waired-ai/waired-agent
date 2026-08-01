@@ -5,7 +5,7 @@ meta:
   audience: モデルを選ぶ人、何が動くか確認したい人
   needs: 何も要りません
   time: 自分のハードウェアの行を引く
-sourceHash: e039e6bb1d09d693
+sourceHash: c3f71cc344dc608a
 ---
 
 import ModelCatalogTable from '../../../../components/ModelCatalogTable.astro';
@@ -97,6 +97,10 @@ Auto-Selector は、お使いのマシンのメモリに収まり、**かつ実�
 最も高品質なモデルを選びます。共有メモリシステム（Apple Silicon、AMD Strix Halo）
 では、デコード速度が総サイズではなく*アクティブ*パラメータに連動するため、
 アクティブパラメータ数の少ない MoE モデルが優先されます。
+
+Windows と macOS では Ollama で動作します。vLLM でのサービングには Linux が必要な
+ため、これらのマシンでは大容量の NVIDIA カードを積んでいても Ollama 向けの一覧から
+選ばれます。
 
 メモリに収まることと、快適に動くことは別です。共有メモリの Mac では、大きな
 Dense モデルは収まっても毎秒数語しか返せないことがある一方、同程度のサイズの
