@@ -1,0 +1,315 @@
+// Package servicediag explains why the waired-agent service is not running.
+//
+// `waired doctor` could already tell you the daemon was unreachable. It could
+// not tell you why, and the why is where the useful part lives: during the
+// 0.0.2-rc7 review a Windows host came back from a reboot with the service
+// stopped, and the answer — Smart App Control had blocked the unsigned binary
+// at boot — was only available to someone who knew to correlate SCM event 7000
+// with CodeIntegrity 3033 in Event Viewer. Nobody diagnoses that from
+// "unreachable" (#315).
+//
+// Shape follows internal/platform/trayhost: a per-OS Collect gathers raw
+// evidence, and an untagged Explain turns it into a verdict. Explain takes the
+// GOOS rather than reading runtime.GOOS so every platform's interpretation is
+// table-tested on every CI leg (CLAUDE.md §Test discipline) — which matters
+// most here, because the Windows evidence this decodes cannot be produced on
+// the Linux leg at all.
+package servicediag
+
+import (
+	"fmt"
+	"strings"
+)
+
+// Status is the verdict.
+type Status int
+
+const (
+	// Unknown means we could not gather evidence — the log is unreadable, the
+	// tool is missing, or the OS has no service backend. Callers emit nothing:
+	// a doctor line that says "could not tell" is noise.
+	Unknown Status = iota
+	// Healthy means the service is running and nothing recent looks wrong.
+	Healthy
+	// Failed means the service is not running and we know why.
+	Failed
+	// Stopped means the service is not running and nothing failed — someone
+	// or something stopped it deliberately.
+	Stopped
+)
+
+// Event is one line of platform evidence: a Windows event-log record, a
+// systemd property, a journal entry, a launchd exit status.
+type Event struct {
+	// Source is the provider or subsystem ("Service Control Manager",
+	// "Microsoft-Windows-CodeIntegrity", "systemd", "launchd").
+	Source string
+	// ID is the numeric event ID where the platform has one (Windows), 0
+	// elsewhere.
+	ID int
+	// Message is the raw text, already trimmed.
+	Message string
+}
+
+// Result is what Explain decides.
+type Result struct {
+	Status Status
+	// Cause is a plain-language sentence naming what happened. Empty when
+	// Status is Unknown.
+	Cause string
+	// Hint is what to do about it, or "" when there is nothing to suggest.
+	Hint string
+	// Evidence is the raw line the verdict rests on, so `waired doctor` can
+	// show its work rather than asking to be trusted.
+	Evidence string
+}
+
+// Windows Service Control Manager event IDs. Deliberately not 7036 (the
+// generic "entered the running/stopped state" pair): the rc7 host's System log
+// contained no 7036 records at all for the day in question, so a decoder that
+// keys on it reports "nothing happened" on exactly the machine that failed.
+const (
+	winSCMStartFailed  = 7000 // service failed to start (carries the reason)
+	winSCMStartTimeout = 7009 // timed out connecting to the service
+	winSCMStartHung    = 7022 // service hung on starting
+	winSCMLoginFailed  = 7023 // service terminated with an error
+	winSCMTerminated   = 7031 // service terminated unexpectedly
+	winSCMActionTaken  = 7034 // service terminated unexpectedly, no recovery left
+)
+
+// Windows CodeIntegrity event IDs: a binary was refused for not meeting the
+// signing level. 3077 is the audit-mode twin of 3033.
+const (
+	winCodeIntegrityBlocked = 3033
+	winCodeIntegrityAudit   = 3077
+)
+
+// Explain turns collected evidence into a verdict.
+//
+// running is what the platform says about the service right now; the events
+// are the recent history. A running service still gets its history read,
+// because "it is up now but it was blocked at boot and only started when you
+// logged in and clicked" is a different — and more useful — answer than "OK".
+func Explain(goos string, running bool, events []Event) Result {
+	switch goos {
+	case "windows":
+		return explainWindows(running, events)
+	case "linux":
+		return explainLinux(running, events)
+	case "darwin":
+		return explainDarwin(running, events)
+	default:
+		return Result{}
+	}
+}
+
+func explainWindows(running bool, events []Event) Result {
+	blocked := findEvent(events, winCodeIntegrityBlocked, winCodeIntegrityAudit)
+	startFailed := findEvent(events, winSCMStartFailed)
+
+	// The rc7 case. SCM 7000 says the start failed; the CodeIntegrity record
+	// in the same second says why. Either alone is decodable — 7000's own
+	// message carries "An Application Control policy has blocked this file" —
+	// but the pair is unambiguous, so check it first.
+	policyBlocked := blocked != nil ||
+		(startFailed != nil && mentionsPolicyBlock(startFailed.Message))
+	if policyBlocked {
+		ev := startFailed
+		if ev == nil {
+			ev = blocked
+		}
+		return Result{
+			Status: statusFor(running, Failed),
+			Cause: "Windows blocked the Waired background service at startup because " +
+				"Waired's programs are not signed with a certificate Windows recognises " +
+				"(Smart App Control / an application-control policy).",
+			Hint: "Start it from the Waired menu, or with `" + startCommandWindows + "` " +
+				"from an administrator PowerShell. This can recur at boot until Waired ships signed programs.",
+			Evidence: ev.line(),
+		}
+	}
+
+	if startFailed != nil {
+		return Result{
+			Status:   statusFor(running, Failed),
+			Cause:    "The Waired background service failed to start.",
+			Hint:     "Start it from the Waired menu; if it fails again, the message below names the reason.",
+			Evidence: startFailed.line(),
+		}
+	}
+	if ev := findEvent(events, winSCMStartTimeout, winSCMStartHung); ev != nil {
+		return Result{
+			Status:   statusFor(running, Failed),
+			Cause:    "The Waired background service took too long to start and Windows gave up on it.",
+			Hint:     "Start it from the Waired menu. If it keeps timing out, run `waired logs` and report it.",
+			Evidence: ev.line(),
+		}
+	}
+	if ev := findEvent(events, winSCMTerminated, winSCMActionTaken, winSCMLoginFailed); ev != nil {
+		return Result{
+			Status:   statusFor(running, Failed),
+			Cause:    "The Waired background service stopped unexpectedly.",
+			Hint:     "Windows restarts it automatically; if it stays down, start it from the Waired menu.",
+			Evidence: ev.line(),
+		}
+	}
+	return quietResult(running)
+}
+
+func explainLinux(running bool, events []Event) Result {
+	// systemctl show gives the authoritative post-mortem; the journal lines
+	// are only there to quote back.
+	result := property(events, "Result")
+	switch result {
+	case "exit-code", "core-dump", "signal":
+		return Result{
+			Status: statusFor(running, Failed),
+			Cause: "The Waired background service exited with an error" +
+				restartSuffix(property(events, "NRestarts")) + ".",
+			Hint:     "Run `journalctl -u waired-agent -b` for the full log, or start it from the Waired menu.",
+			Evidence: evidenceOr(events, "systemd: Result="+result),
+		}
+	case "timeout":
+		return Result{
+			Status:   statusFor(running, Failed),
+			Cause:    "The Waired background service timed out while starting.",
+			Hint:     "Run `journalctl -u waired-agent -b` for the full log.",
+			Evidence: evidenceOr(events, "systemd: Result=timeout"),
+		}
+	}
+	if property(events, "ActiveState") == "inactive" && result == "success" {
+		return Result{
+			Status:   Stopped,
+			Cause:    "The Waired background service is stopped. Nothing failed — it was stopped deliberately.",
+			Hint:     "Start it from the Waired menu, or with `" + startCommandLinux + "`.",
+			Evidence: "systemd: ActiveState=inactive Result=success",
+		}
+	}
+	return quietResult(running)
+}
+
+func explainDarwin(running bool, events []Event) Result {
+	// launchd reports the previous run's exit status; anything nonzero is the
+	// daemon having died rather than been stopped.
+	if code := property(events, "last exit code"); code != "" && code != "0" {
+		return Result{
+			Status:   statusFor(running, Failed),
+			Cause:    "The Waired background service exited with an error (status " + code + ").",
+			Hint:     "Check /Library/Logs/waired-agent.err.log, or start it from the Waired menu.",
+			Evidence: evidenceOr(events, "launchd: last exit code = "+code),
+		}
+	}
+	if property(events, "state") == "not running" {
+		return Result{
+			Status:   Stopped,
+			Cause:    "The Waired background service is not running.",
+			Hint:     "Start it from the Waired menu, or with `" + startCommandDarwin + "`.",
+			Evidence: "launchd: state = not running",
+		}
+	}
+	return quietResult(running)
+}
+
+// The commands quoted in hints. Duplicated from service.StartHint rather than
+// imported so this package stays free of the service package's SCM/systemd
+// dependencies; the agreement is pinned by a test.
+const (
+	startCommandWindows = "Start-Service waired-agent"
+	startCommandLinux   = "sudo systemctl start waired-agent"
+	startCommandDarwin  = "sudo launchctl kickstart -k system/com.waired.agent"
+)
+
+// statusFor keeps a recovered service honest: the history explains something
+// that already got fixed, so report Healthy and let the caller decide whether
+// a past failure is worth mentioning.
+func statusFor(running bool, ifDown Status) Status {
+	if running {
+		return Healthy
+	}
+	return ifDown
+}
+
+func quietResult(running bool) Result {
+	if running {
+		return Result{Status: Healthy, Cause: "The Waired background service is running."}
+	}
+	// Down, with nothing in the evidence to explain it. Saying "I don't know"
+	// is worse than saying nothing: the caller already reports the daemon as
+	// unreachable.
+	return Result{}
+}
+
+func restartSuffix(nRestarts string) string {
+	if nRestarts == "" || nRestarts == "0" {
+		return ""
+	}
+	return fmt.Sprintf(" and has been restarted %s time(s)", nRestarts)
+}
+
+// findEvent returns the first event matching any of the given IDs.
+func findEvent(events []Event, ids ...int) *Event {
+	for i := range events {
+		for _, id := range ids {
+			if events[i].ID == id {
+				return &events[i]
+			}
+		}
+	}
+	return nil
+}
+
+// property reads a `key: value` or `key=value` event carrying no ID — how the
+// Unix collectors report systemctl / launchctl output. Matching is
+// case-insensitive because launchctl's key casing varies by release.
+func property(events []Event, key string) string {
+	want := strings.ToLower(key)
+	for _, e := range events {
+		if e.ID != 0 {
+			continue
+		}
+		for _, sep := range []string{"=", ":"} {
+			k, v, ok := strings.Cut(e.Message, sep)
+			if !ok {
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(k)) == want {
+				return strings.TrimSpace(v)
+			}
+		}
+	}
+	return ""
+}
+
+// evidenceOr quotes the first log line, falling back to a synthesised summary
+// when the collector produced only properties.
+func evidenceOr(events []Event, fallback string) string {
+	for _, e := range events {
+		if e.ID == 0 && strings.Contains(e.Message, "=") {
+			continue // a property, not a log line
+		}
+		if e.Message != "" {
+			return e.line()
+		}
+	}
+	return fallback
+}
+
+func (e Event) line() string {
+	switch {
+	case e.Source != "" && e.ID != 0:
+		return fmt.Sprintf("%s event %d: %s", e.Source, e.ID, e.Message)
+	case e.Source != "":
+		return e.Source + ": " + e.Message
+	default:
+		return e.Message
+	}
+}
+
+// mentionsPolicyBlock recognises the SCM 7000 reason text for an
+// application-control block, in the two shapes Windows renders it.
+func mentionsPolicyBlock(msg string) bool {
+	m := strings.ToLower(msg)
+	return strings.Contains(m, "application control policy") ||
+		strings.Contains(m, "blocked by policy") ||
+		strings.Contains(m, "code integrity")
+}

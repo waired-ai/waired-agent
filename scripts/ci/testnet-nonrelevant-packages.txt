@@ -38,6 +38,7 @@ internal/platform/proclist/     # local process-table read (runner -np/-c for tu
 internal/platform/pwsh/         # strips PSModulePath before spawning Windows PowerShell 5.1; pure env filtering, no mesh/enrollment surface
 internal/platform/sdsocket/     # systemd socket activation glue
 internal/platform/service/      # OS service install/uninstall glue; testnet VMs exec the agent via the units in build/, not this
+internal/platform/servicediag/  # reads the local service manager's post-mortem for `waired doctor`; the testnet VMs exercise the mesh, not why a service failed to start
 internal/platform/singleinstance/ # tray single-instance guard (named mutex / flock); local process guard, no mesh/enrollment surface
 internal/platform/sockpass/     # local socket handoff helper
 internal/platform/trayhost/     # tray process hosting

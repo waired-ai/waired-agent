@@ -74,6 +74,12 @@ var declared = []lookpath{
 	// systemctl means no systemd, which means no service to start — the
 	// handler says so instead of guessing (#315/#317).
 	{"internal/gui/tray/actions_linux.go", "systemctl", systemTool},
+	// `waired doctor`'s service post-mortem (#315). Absent systemctl means no
+	// systemd, hence no unit to explain — the collector returns "no evidence"
+	// rather than guessing, and journalctl is best-effort quoting on top of
+	// the systemctl properties that already decide the verdict.
+	{"internal/platform/servicediag/collect_linux.go", "systemctl", systemTool},
+	{"internal/platform/servicediag/collect_linux.go", "journalctl", systemTool},
 	{"internal/platform/service/service_linux.go", "useradd", systemTool},
 	{"internal/platform/service/service_linux.go", "getent", systemTool},
 	{"internal/platform/service/service_linux.go", "chown", systemTool},

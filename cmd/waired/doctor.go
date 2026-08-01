@@ -14,6 +14,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
+	"github.com/waired-ai/waired-agent/internal/platform/servicediag"
 	"github.com/waired-ai/waired-agent/internal/platform/trayhost"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/internal/setup"
@@ -64,7 +65,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	defer cancel()
 
 	tray := checkTray()
-	findings := collectDoctorFindings(ctx, homeDir, *stateDir, *gatewayBaseURL, *mgmtURL, tray)
+	findings := collectDoctorFindings(ctx, homeDir, *stateDir, *gatewayBaseURL, *mgmtURL, tray, checkService(ctx))
 	hasFail := false
 	for _, f := range findings {
 		fmt.Println(formatFinding(f))
@@ -177,7 +178,7 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out *os.F
 // rather than probed here so the session bus is queried exactly once per run,
 // and so tests can pass the zero value and stay independent of whatever desktop
 // the runner happens to have.
-func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor) []integration.AuditFinding {
+func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result) []integration.AuditFinding {
 	var out []integration.AuditFinding
 
 	// Token presence + permission check. PathsUnder computes the layout
@@ -237,6 +238,14 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	apply := integration.ApplyOptions{HomeDir: homeDir, StateDir: stateDir, GatewayBaseURL: gatewayURL}
 	if all, err := mgr.AuditAll(ctx, apply); err == nil {
 		out = append(out, all...)
+	}
+
+	// Why the agent is down, when it is (#315). Ordered before the live probes
+	// so the explanation precedes the "unreachable" line it explains, rather
+	// than trailing it. Emits nothing when the service is healthy or when the
+	// platform produced no evidence.
+	if f := serviceFindingFromResult(svc); f.Subject != "" {
+		out = append(out, f)
 	}
 
 	// Live probes.
