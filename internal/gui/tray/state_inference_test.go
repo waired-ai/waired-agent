@@ -23,7 +23,7 @@ func TestUpdate_InferenceEnabled_Connected(t *testing.T) {
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
 
-	if got.InferenceToggleAction != "Pause inference (model stays loaded)" {
+	if got.InferenceToggleAction != "Pause local inference" {
 		t.Errorf("InferenceToggleAction=%q, want the soft-gate pause label", got.InferenceToggleAction)
 	}
 	if got.InferenceStateLabel != "Engine: ready" {
@@ -44,7 +44,7 @@ func TestUpdate_InferenceDisabled_Connected(t *testing.T) {
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
 
-	if got.InferenceToggleAction != "Resume inference" {
+	if got.InferenceToggleAction != "Resume local inference" {
 		t.Errorf("InferenceToggleAction=%q, want the soft-gate resume label", got.InferenceToggleAction)
 	}
 	if got.InferenceStateLabel != "Engine: disabled" {

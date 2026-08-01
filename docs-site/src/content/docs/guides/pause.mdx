@@ -1,6 +1,6 @@
 ---
 title: Stop using your AI for a while
-description: Three different ways to take Waired out of the loop — pause routing, stop the engine to free memory, or disconnect — and which one you actually want.
+description: The different ways to take Waired out of the loop — pause routing, pause this computer's AI, stop the engine to free memory, stop sharing, or disconnect — and which one you actually want.
 meta:
   audience: Anyone who wants Waired to stop doing something, temporarily
   needs: The Waired app, or a terminal
@@ -10,12 +10,13 @@ meta:
 import { Aside, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
 import Expected from '../../../components/Expected.astro';
 
-"Turn it off for now" means four different things in practice, and they have
+"Turn it off for now" means five different things in practice, and they have
 different consequences. Find your row first.
 
 | What you actually want | Do this |
 |---|---|
 | My coding tools should use the cloud again for a bit | [Pause routing](#pause-routing) |
+| This computer should stop answering, but be instantly ready later | [Pause local inference](#pause-local-inference) |
 | I need this memory back for something else | [Stop the engine](#stop-the-engine) |
 | Stop my other computers using this one's AI | [Stop sharing](#stop-sharing) |
 | Take this computer off my network entirely | [Disconnect](#disconnect) |
@@ -49,6 +50,24 @@ The **waired phase** line reads `paused` rather than
 	chat app pointed at the local gateway get a "not available" response. If you
 	want your own AI to keep working and only want to stop *other computers*
 	using it, that is [stop sharing](#stop-sharing) instead.
+</Aside>
+
+## Pause local inference
+
+This computer stops answering AI requests, but the model **stays loaded in
+memory** — so resuming is instant. Requests from here go to one of your other
+computers instead, or to the cloud.
+
+Click the **Waired icon** → **Inference** → **Pause local inference**. The same
+item becomes **Resume local inference**.
+
+This one lives in the app only; there is no terminal equivalent. `waired init
+--inference-enabled=false` is the install-time version of the same switch.
+
+<Aside type="caution" title="This does not give the memory back">
+	Pausing is a gate, not a shutdown: the engine keeps running and the model
+	keeps its several gigabytes. If freeing memory is the point, use
+	[Stop the engine](#stop-the-engine) below.
 </Aside>
 
 ## Stop the engine
@@ -94,6 +113,13 @@ AI.
 
 This is the right setting for a workstation you do not want interrupted, while
 still using your own model yourself.
+
+<Aside type="note" title="Quitting the app pauses sharing on its own">
+	**Quit** on the Waired icon stops the engine and stops your other computers
+	being sent work here, for as long as the icon is closed. Starting the icon
+	again puts it back exactly as you had it — quitting never changes the
+	sharing setting itself.
+</Aside>
 
 <Aside type="tip" title="Sharing publicly is a separate thing again">
 	This controls **your own** other computers. Whether *other Waired users* may

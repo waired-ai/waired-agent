@@ -91,13 +91,19 @@ Full guidance — when to go bigger, when smaller — is on
 
 | Item | What it does |
 |---|---|
-| **Enable / Disable inference engine** | Whether this computer runs AI at all. Disabled, it can still use your *other* computers. |
+| **Pause / Resume local inference** | Whether this computer answers AI requests. Paused, it can still use your *other* computers — and the model **stays loaded**, so resuming is instant. |
 | **Start / Stop inference engine** | Stops the engine right now to free memory (several GB), without changing any setting. Starting it again reloads the model. |
 | **Install Ollama…** | Appears when the AI software is not installed yet. |
 | **Share engine to mesh** | Whether your **other computers** may use this one's AI. Off, you can still use it yourself. |
 | **Engine: ready / loading / disabled** | The engine's current state, and the model it has loaded. |
 | **Reachable** | How many of your other computers this one can currently talk to. |
 | **Inference worker** | Where *this* computer's requests go — see below. |
+
+<Aside type="note" title="Pause and Stop are not the same button">
+	**Pause local inference** stops answering; the model stays in memory so
+	resuming costs nothing. **Stop inference engine** is the one that gives the
+	memory back. If you came here to free several GB, you want Stop.
+</Aside>
 
 ### Where answers come from
 
@@ -192,8 +198,15 @@ being interrupted about it.
 
 ## Quit
 
-**Quit** closes the icon only. Waired keeps running in the background, your
-other computers can still reach this one, and your coding tools keep working.
+**Quit** closes the icon and winds this computer down: the AI engine is
+stopped, so its memory comes back, and your other computers stop being sent
+work here while nobody is at the keyboard. Waired itself keeps running in the
+background and your coding tools keep working — they use one of your other
+computers, or the cloud.
+
+Nothing is forgotten. Your sharing setting is untouched: start the icon again
+and this computer offers its AI exactly as before. If you had sharing turned
+off, it stays off.
 
 To bring the icon back, start Waired from your applications list, or sign out
 and back in to your computer (when **Start Waired on login** is ticked).

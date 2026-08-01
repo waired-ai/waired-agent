@@ -433,7 +433,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		// paint's (false,false) visibility diffs stay no-ops.
 		t.miInference = systray.AddMenuItem("Inference", "Local inference engine status and controls")
 		t.miInference.Hide()
-		t.miInferenceToggle = t.miInference.AddSubMenuItem("", "")
+		t.miInferenceToggle = t.miInference.AddSubMenuItem("", tipInferenceToggle)
 		t.miInferenceState = t.miInference.AddSubMenuItem("", "")
 		t.miInferenceState.Disable()
 		t.miEngineToggle = t.miInference.AddSubMenuItem("", "Hard-stop the engine to free memory, or restart it")

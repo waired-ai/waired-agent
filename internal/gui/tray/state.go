@@ -1590,10 +1590,17 @@ func applyOpenClaw(m *MenuModel, st *management.OpenClawIntegrationStatus) {
 // rc7 review found a tester who clicked the old "Disable inference
 // engine", was told it succeeded, and watched llama-server hold 15GB
 // anyway. Freeing memory is the power axis, which says "stop".
+//
+// "local" is load-bearing in the pause labels: `waired pause` is already
+// documented as pausing routing for the whole machine, so an unqualified
+// "Pause inference" would read as that much broader control.
 const (
 	// Soft gate: POST /inference/{enable,disable}. No process is touched.
-	labelPauseInference  = "Pause inference (model stays loaded)"
-	labelResumeInference = "Resume inference"
+	labelPauseInference  = "Pause local inference"
+	labelResumeInference = "Resume local inference"
+	// tipInferenceToggle spells out what the labels cannot: this axis
+	// does not give the memory back.
+	tipInferenceToggle = "Stops new requests on this computer. The model stays loaded in memory."
 	// Hard power axis (#186): stops/starts the engine process itself.
 	labelStopEngine  = "Stop inference engine"
 	labelStartEngine = "Start inference engine"

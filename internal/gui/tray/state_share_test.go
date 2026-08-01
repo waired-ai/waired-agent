@@ -62,7 +62,7 @@ func TestUpdate_ShareHiddenWhenDaemonDoesntSupportIt(t *testing.T) {
 		t.Errorf("ShareStateLabel=%q, want empty when daemon predates share API", got.ShareStateLabel)
 	}
 	// Engine toggle must still render.
-	if got.InferenceToggleAction != "Pause inference (model stays loaded)" {
+	if got.InferenceToggleAction != "Pause local inference" {
 		t.Errorf("inference toggle must still render: %q", got.InferenceToggleAction)
 	}
 }
@@ -102,7 +102,7 @@ func TestUpdate_ShareVisibleWhenInferenceDisabled(t *testing.T) {
 	if got.ShareToggleAction != "Stop sharing engine to mesh" {
 		t.Errorf("ShareToggleAction=%q, want Stop sharing engine to mesh", got.ShareToggleAction)
 	}
-	if got.InferenceToggleAction != "Resume inference" {
+	if got.InferenceToggleAction != "Resume local inference" {
 		t.Errorf("InferenceToggleAction=%q, want the soft-gate resume label", got.InferenceToggleAction)
 	}
 }
