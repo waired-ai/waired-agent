@@ -96,9 +96,18 @@ ask the installer for detailed logs from the start instead.
 	</TabItem>
 </Tabs>
 
-On Windows the installer also writes its own transcript to
-`%TEMP%\waired-install.log`. The administrator window closes when it finishes,
-so that file is often the only place the failure survives — attach it too.
+On Windows the installer also writes its own transcript, one file per run, to
+`%TEMP%\waired-install-<date>-<time>-<id>.log`. The administrator window closes
+when it finishes, so that file is often the only place the failure survives —
+attach it too. The installer prints the exact path before it starts, and again
+if anything goes wrong; to find the newest one yourself:
+
+```powershell
+Get-ChildItem $env:TEMP\waired-install-*.log | Sort-Object LastWriteTime | Select-Object -Last 1
+```
+
+The five most recent are kept, so a second attempt no longer overwrites the
+log of the attempt that actually failed.
 
 ## Start over from a clean slate
 
@@ -173,7 +182,7 @@ with).
 | `report.txt` | From the four steps at the top |
 | `waired version --json` | Exact build |
 | `waired doctor` output | What it found, even if it fixed it |
-| Windows install failures | `%TEMP%\waired-install.log` |
+| Windows install failures | the newest `%TEMP%\waired-install-*.log` |
 | What you expected | And what happened instead |
 
 File it at

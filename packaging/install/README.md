@@ -322,7 +322,10 @@ Both uninstallers show what they are about to remove and ask
 `-Yes` skips the prompt, and a non-interactive plain uninstall proceeds
 with a notice. On Windows the elevated window pauses on a final
 "Press Enter to close" (success or failure) and writes a transcript to
-`%TEMP%\waired-uninstall.log`, so the outcome is always readable.
+`%TEMP%\waired-uninstall-<stamp>-<pid>.log`, so the outcome is always
+readable. Both installers name their transcript per run and keep the five
+most recent, so a retry never overwrites the log of the run that failed
+(#314).
 
 Two tiers, matching apt's `remove` / `purge` split:
 
