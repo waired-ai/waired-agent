@@ -253,3 +253,78 @@ func TestAggregatorStalePeerKeepsPhase7Fields(t *testing.T) {
 		t.Errorf("stale peer's Phase 7 fields were dropped; want Capacity=4, got %+v", snap.Peers[0].InferenceState)
 	}
 }
+
+// TestAggregatorSnapshotPeersSortedStable pins a PRODUCT CONTRACT, not
+// today's behaviour: Snapshot().Peers is ordered by DeviceName (DeviceID
+// for unnamed peers), identically on every call.
+//
+// The tray fills fixed menu slots positionally from this slice, so when
+// the order came straight out of the peers map — Go randomises map
+// iteration per call — every 5 s poll rewrote the slot titles and node
+// names visibly jumped between rows (#326). Six peers make an accidental
+// pass vanishingly unlikely, and the insertion order below is
+// deliberately not the expected one.
+func TestAggregatorSnapshotPeersSortedStable(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	a := New("self-id", 15*time.Second, func() time.Time { return now })
+
+	a.Update(&signer.NetworkMap{
+		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
+		Peers: []signer.NetworkMapPeer{
+			{DeviceID: "dev_04", DeviceName: "windows-desktop", InferenceState: mkState(true, now)},
+			{DeviceID: "dev_02", DeviceName: "beta-node", InferenceState: mkState(true, now)},
+			{DeviceID: "dev_06", DeviceName: "", InferenceState: mkState(true, now)}, // unnamed → sorts by DeviceID
+			{DeviceID: "dev_01", DeviceName: "alpha-node", InferenceState: mkState(true, now)},
+			{DeviceID: "dev_05", DeviceName: "linux-gpu", InferenceState: mkState(true, now)},
+			{DeviceID: "dev_03", DeviceName: "mac-mini", InferenceState: mkState(true, now)},
+		},
+	})
+
+	want := []string{"alpha-node", "beta-node", "dev_06", "linux-gpu", "mac-mini", "windows-desktop"}
+	for i := 0; i < 20; i++ {
+		snap := a.Snapshot()
+		got := make([]string, 0, len(snap.Peers))
+		for _, p := range snap.Peers {
+			name := p.DeviceName
+			if name == "" {
+				name = p.DeviceID
+			}
+			got = append(got, name)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("call %d: got %d peers, want %d", i, len(got), len(want))
+		}
+		for j := range want {
+			if got[j] != want[j] {
+				t.Fatalf("call %d: peer order = %v, want %v", i, got, want)
+			}
+		}
+	}
+}
+
+// TestAggregatorSnapshotPeersSortedTieBreak covers two peers publishing
+// the same DeviceName (a real possibility — names are not unique): the
+// DeviceID breaks the tie so the pair does not swap between polls.
+func TestAggregatorSnapshotPeersSortedTieBreak(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	a := New("self-id", 15*time.Second, func() time.Time { return now })
+
+	a.Update(&signer.NetworkMap{
+		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
+		Peers: []signer.NetworkMapPeer{
+			{DeviceID: "dev_zz", DeviceName: "laptop", InferenceState: mkState(true, now)},
+			{DeviceID: "dev_aa", DeviceName: "laptop", InferenceState: mkState(true, now)},
+		},
+	})
+
+	for i := 0; i < 20; i++ {
+		snap := a.Snapshot()
+		if len(snap.Peers) != 2 {
+			t.Fatalf("call %d: got %d peers, want 2", i, len(snap.Peers))
+		}
+		if snap.Peers[0].DeviceID != "dev_aa" || snap.Peers[1].DeviceID != "dev_zz" {
+			t.Fatalf("call %d: tie-break order = %q,%q; want dev_aa,dev_zz",
+				i, snap.Peers[0].DeviceID, snap.Peers[1].DeviceID)
+		}
+	}
+}

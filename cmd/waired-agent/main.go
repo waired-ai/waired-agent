@@ -6,6 +6,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2323,8 +2325,30 @@ func (p *agentProvider) Status() management.Status {
 			}
 			st.Peers = append(st.Peers, out)
 		}
+		// reconciler.Snapshot() is a map, so the loop above produced a
+		// different order on every call — and the tray fills its fixed
+		// "Peers" menu slots positionally, which is how node names came
+		// to jump between rows on each 5 s poll (#326). Sorting by the
+		// operator-visible name (DeviceID for unnamed peers, and as the
+		// tie-break) is a product contract: it is what makes the rendered
+		// rows stable, and it matches inferencemesh.Aggregator.Snapshot().
+		slices.SortFunc(st.Peers, func(x, y management.PeerStatus) int {
+			return cmp.Or(
+				cmp.Compare(peerStatusSortName(x), peerStatusSortName(y)),
+				cmp.Compare(x.DeviceID, y.DeviceID),
+			)
+		})
 	}
 	return st
+}
+
+// peerStatusSortName is Status()'s primary peer sort key — the name the
+// tray renders for that row, falling back to the DeviceID.
+func peerStatusSortName(p management.PeerStatus) string {
+	if p.DeviceName != "" {
+		return p.DeviceName
+	}
+	return p.DeviceID
 }
 
 // fmtTime formats a time as RFC3339 if non-zero, empty otherwise. Used
