@@ -578,7 +578,7 @@ Claude Code はステータス行を 1 つしか使わず、プロジェクト�
 | | |
 |---|---|
 | Linux | `journalctl -u waired-agent -e` |
-| macOS | `/Library/Logs/waired-agent.err.log`、または `sudo log show --predicate 'process == "waired-agent"' --last 10m` |
+| macOS | `/Library/Logs/waired-agent.err.log`、または `sudo log show --predicate 'process == "waired-agent"' --last 10m`。このファイルは Waired が 1 MB で上限を掛け、直前の 5 世代を `waired-agent.err.log.0.gz`、`.1.gz` … として隣に残します。それより古いものはそちらを（`gzcat` で）確認してください。 |
 | Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
 | AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`）。自前の Ollama を使っている場合は `~/.ollama/logs/server.log`。 |
 

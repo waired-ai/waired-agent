@@ -369,8 +369,11 @@ waired logs --mask-pii               # redact home dir / username / hostname / e
 ```
 
 It gathers the background service's log (from the system log) and the AI
-engine's log. For the most useful report, turn on detail first, reproduce the
-problem, then collect it:
+engine's log. On macOS it also picks up the service's own log files under
+`/Library/Logs` — and the app's under `~/Library/Logs` — including the older,
+already-rotated copies, so a problem that started before the last rotation is
+still in the report. For the most useful report, turn on detail first,
+reproduce the problem, then collect it:
 
 ```sh
 waired config log-level debug
