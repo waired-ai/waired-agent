@@ -46,6 +46,13 @@ const (
 	ReasonInsufficientRAM  = "insufficient_ram"
 	ReasonInsufficientVRAM = "insufficient_vram"
 	ReasonNoGPU            = "no_gpu"
+
+	// The two below are RECOMMENDATION reasons, not capacity reasons:
+	// they name why a model that this host CAN run should not be the one
+	// it is pointed at by default. A consumer that hides a model on
+	// either of them has misread the contract — see OllamaRecommend.
+	ReasonWeightsSpill = "weights_spill"
+	ReasonTooSlow      = "too_slow"
 )
 
 // MinVLLMVRAMMB is the smallest VRAM size for which vLLM is worth
@@ -65,6 +72,27 @@ const MinVLLMVRAMMB = 8 * 1024
 // 30 == qwen2.5-coder-3b-instruct, the smallest usable coding model we
 // ship. qwen3.5-2b (tier 27) and qwen3.5-0.8b (tier 12) fall below it.
 const InstallQualityFloorTier = 30
+
+// NativeContextFloorTokens gates manifest membership in the
+// coding-agent auto-selection pool: the model's OWN advertised window,
+// before any host or serving consideration.
+//
+// Real coding-agent sessions peak at 75k–200k input tokens with 35–50k
+// of fixed overhead before any conversation (#624), so a model that
+// cannot hold ~200k truncates or compacts constantly. 200000 rather
+// than the 200704 serve-time window because this is a manifest
+// comparison and the two catalog classes sit far apart: exactly the
+// 262144-native manifests pass, and the 131072 class does not.
+//
+// It lives here, next to the fit rules, because BOTH recommendation
+// sites need it and only one of them had it. The agent's picker applied
+// it from internal/router while the control plane's wizard could not —
+// its doc comment said the #624 floor "would need the serve-time tuning
+// inputs", which is true of the host half and NOT of this one: the
+// manifest is all it takes, and the control plane holds the same
+// manifests. That asymmetry is how a 131072-window model becomes the
+// wizard's default on a host whose own agent would never serve it.
+const NativeContextFloorTokens = 200000
 
 // Inputs of the ollama VRAM-residency check.
 const (
@@ -714,10 +742,45 @@ func OllamaResidentMB(v catalog.Variant, unifiedMemory bool) int {
 	if v.EstimatedWeightGB <= 0 {
 		return 0
 	}
+	return OllamaWeightsResidentMB(v, unifiedMemory) +
+		v.KVBytesPerTokenFP16*OllamaKVBudgetTokens/(1<<20)
+}
+
+// OllamaWeightsResidentMB is OllamaResidentMB without the KV term: what
+// the WEIGHTS alone need in GPU-addressable memory, engine overhead
+// included. Returns 0 for a variant with no weight annotation, which no
+// caller may read as "it fits in nothing".
+//
+// The two differ by which spill the caller is asking about, and on a
+// discrete card those are different questions. KV that does not fit is
+// a window the serve tuning clamps (#621) or, past the clamp, pages
+// that cost bandwidth per token. WEIGHTS that do not fit are re-read
+// from system RAM on every prefill chunk and every decode step, and
+// that is the one the operator feels: on a 16 GB card holding a 22.6 GB
+// mixture of experts, 37.7 % of the weights landed in system RAM and a
+// ~30k-token coding prompt prefilled at 388 tok/s — a minute and a half
+// before the first output token.
+//
+// So this is the term the RECOMMENDATION gate compares, and
+// OllamaResidentMB stays the capacity term on unified memory where
+// there is nowhere to spill either of them to.
+func OllamaWeightsResidentMB(v catalog.Variant, unifiedMemory bool) int {
+	if v.EstimatedWeightGB <= 0 {
+		return 0
+	}
 	// Weights are annotated in decimal GB; the budget is binary MiB.
 	weightMiB := int(math.Ceil(v.EstimatedWeightGB * 1e9 / (1 << 20)))
-	kvMiB := v.KVBytesPerTokenFP16 * OllamaKVBudgetTokens / (1 << 20)
-	return weightMiB + kvMiB + OllamaVRAMOverheadMB(unifiedMemory, v.EstimatedWeightGB)
+	return weightMiB + OllamaVRAMOverheadMB(unifiedMemory, v.EstimatedWeightGB)
+}
+
+// MeetsNativeContextFloor reports whether the manifest's own advertised
+// window qualifies it for the coding-agent auto-selection pool. See
+// NativeContextFloorTokens for the number and for why it lives here.
+//
+// Auto-selection only. An explicit user choice bypasses it — with a
+// visible warning, which is the caller's to word.
+func MeetsNativeContextFloor(m catalog.Manifest) bool {
+	return m.ContextLength >= NativeContextFloorTokens
 }
 
 // OllamaResident is the GPU-residency half of the ollama fit: can this
@@ -807,6 +870,91 @@ func OllamaFit(v catalog.Variant, h Host) Verdict {
 		}
 	} else {
 		out = Verdict{Fits: true}
+	}
+	out.Estimate = EstimateOllamaDecode(v, h)
+	return out
+}
+
+// OllamaRecommend decides whether v should be the model this host is
+// POINTED AT by default. It is policy, and OllamaFit stays capacity:
+// a variant that fits but is not recommended must still be offered,
+// greyed or annotated, never hidden. Hiding it is what #229 exists to
+// undo.
+//
+// It exists because that question had two implementations, in the same
+// shape as the disagreement this package was created for. The agent's
+// picker ran the #624 coding-context gate — the model's native window,
+// then a bounded-spill check against the host — and the control plane's
+// wizard ran neither, because it holds no serve-time tuning inputs. So
+// the wizard judged on the roofline decode estimate alone, and the
+// roofline is structurally blind to the case that matters here: a
+// mixture of experts reads only its ACTIVE weights per token, so a 35B
+// MoE with 3.3B active is predicted at ~81 tok/s even with two thirds
+// of its weights in system RAM. It cleared the floor, carried the
+// highest quality tier, and became the default pick on a 16 GB card —
+// a model the machine's own agent would never have served.
+//
+// The rule the two now share is the one an operator can compute in
+// their head, which is why it was chosen over adding a spill cap to the
+// roofline (waired-ai/waired#988):
+//
+//	ClassCPUOnly   no recommendation constraint — the RAM gate is the
+//	               bound, and the roofline rests on a constant with no
+//	               margin behind it (see BandwidthSystemRAMGBs), so it
+//	               may annotate but never exclude here.
+//	ClassDiscrete  the WEIGHTS are resident: weights + overhead fit
+//	               OllamaVRAMBudgetMB. KV may spill — the serve tuning
+//	               clamps the window (#621) and a clamped window costs
+//	               tokens of context, while spilled weights cost every
+//	               token of every prompt.
+//	ClassUnified   the capacity rule already IS this rule plus KV, since
+//	               there is nowhere to spill to; it is kept, and the
+//	               #251 published-peak bound still excludes, because a
+//	               pool large enough to hold a model says nothing about
+//	               how fast that pool is read.
+//
+// On discrete hosts this can only ever shrink the recommended set: a
+// variant whose weights are resident got no speed claim from the
+// roofline either (EstimateOllamaDecode returns MeetsSpeedFloor for the
+// resident case), so nothing newly becomes recommendable. The accepted
+// regression is the other direction — a spilled MoE that really does
+// decode acceptably is no longer preselected on a card that cannot hold
+// it. The 24 GB anchor keeps its flagship; the 16 GB card no longer
+// gets one.
+//
+// The margin is OllamaVRAMOverheadMB, not a fresh constant, and that is
+// load-bearing rather than thrift: it is the SAME figure the #621
+// serve-time clamp subtracts, so "recommended here" and "serves without
+// spilling here" cannot drift apart into a model the wizard offers and
+// the tuner then warns about.
+//
+// Permissive on missing inputs, like every other rule in this package:
+// an unannotated weight or an unknown budget yields a recommendation
+// rather than a silent exclusion.
+func OllamaRecommend(v catalog.Variant, h Host) Verdict {
+	out := Verdict{Fits: true}
+	switch h.Class() {
+	case ClassCPUOnly:
+		// Nothing to require: there is no VRAM term to compare against.
+
+	case ClassUnified:
+		out = OllamaResident(v, h)
+		if out.Fits {
+			// A published peak is an upper bound on THIS machine, so
+			// "too slow even at peak" is a fact about the host (#251).
+			// The fallback population constant is neither bound and may
+			// only annotate, which is what UpperBound encodes.
+			if e := EstimateOllamaDecode(v, h); e.UpperBound && !e.MeetsSpeedFloor {
+				out = Verdict{Reason: ReasonTooSlow}
+			}
+		}
+
+	case ClassDiscrete:
+		need := OllamaWeightsResidentMB(v, false)
+		have := h.OllamaVRAMBudgetMB()
+		if need > 0 && have > 0 && need > have {
+			out = Verdict{Reason: ReasonWeightsSpill, NeedMB: need, HaveMB: have}
+		}
 	}
 	out.Estimate = EstimateOllamaDecode(v, h)
 	return out

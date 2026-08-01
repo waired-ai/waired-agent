@@ -54,6 +54,13 @@ const (
 		`{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,"compute_cap":"8.9","vendor":"nvidia"},` +
 		`{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,"compute_cap":"8.9","vendor":"nvidia"}],` +
 		`"ram_total_gb":128}`
+	// The waired-ai/waired#986 review host: a current 16 GB card with
+	// plenty of system RAM behind it. This is the shape the roofline
+	// could not defend — a 22.6 GB mixture of experts passed its decode
+	// floor here and became the wizard's default, spilling 37.7 % of its
+	// weights to system RAM.
+	wireRTX5080_16 = `{"gpus":[{"model":"NVIDIA GeForce RTX 5080","vram_total_mb":16303,` +
+		`"compute_cap":"12.0","vendor":"nvidia"}],"ram_total_gb":64}`
 	// A discrete NVIDIA card beside an AMD device. ml.ByLibrary puts
 	// them in different groups, so ollama can never pool them and the
 	// host must be judged exactly as the single card it can use.
@@ -1313,4 +1320,382 @@ func TestBundledCatalog_ChipTableFixesTheSmallMac(t *testing.T) {
 	t.Logf("24 GB Mac: unrecognised part picks %s (%.1f tok/s); identified as M4 picks %s (%.1f tok/s); "+
 		"48 GB M4 Max picks %s (%.1f tok/s)",
 		unknownID, unknownTokps, knownID, knownTokps, maxID, maxTokps)
+}
+
+// --- the recommendation gate (waired-ai/waired#988) --------------------
+//
+// Everything below pins a PRODUCT CONTRACT, not today's arithmetic: the
+// model a host is pointed at by default must be one whose weights that
+// host can hold. The figures are spelled out because they are the whole
+// argument — a rule an operator can compute in their head is what was
+// bought here, and a test that only asserted booleans would not show
+// whether the margin still lands where the review said it does.
+
+func TestOllamaWeightsResidentMB(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		weight  float64
+		kvPerTk int
+		unified bool
+		want    int
+	}{
+		// weights = ceil(GB x 1e9 / 2^20); margin = 1024 + 40 x GB.
+		{"35b-a3b mtp", 22.6, 20480, false, 21554 + 1928},
+		{"35b-a3b q4", 23.9, 20480, false, 22793 + 1980},
+		{"27b q4", 16.3, 65536, false, 15545 + 1676},
+		{"gpt-oss-20b", 14.0, 73728, false, 13352 + 1584},
+		{"9b", 6.6, 32768, false, 6295 + 1288},
+		// UMA carries the small flat overhead instead (#424).
+		{"9b on UMA", 6.6, 32768, true, 6295 + 1024},
+		// No weight annotation: nothing to compare, and no caller may
+		// read 0 as "it fits in nothing".
+		{"unannotated", 0, 32768, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := catalog.Variant{EstimatedWeightGB: tc.weight, KVBytesPerTokenFP16: tc.kvPerTk}
+			if got := hostfit.OllamaWeightsResidentMB(v, tc.unified); got != tc.want {
+				t.Errorf("OllamaWeightsResidentMB = %d, want %d", got, tc.want)
+			}
+			// The pair must differ by exactly the KV budget, or the
+			// recommendation gate and the capacity gate have started
+			// reserving different things.
+			full := hostfit.OllamaResidentMB(v, tc.unified)
+			if tc.weight <= 0 {
+				if full != 0 {
+					t.Errorf("OllamaResidentMB = %d, want 0 for an unannotated weight", full)
+				}
+				return
+			}
+			kv := tc.kvPerTk * hostfit.OllamaKVBudgetTokens / (1 << 20)
+			if full-tc.want != kv {
+				t.Errorf("OllamaResidentMB - OllamaWeightsResidentMB = %d, want the KV budget %d",
+					full-tc.want, kv)
+			}
+		})
+	}
+}
+
+// TestMeetsNativeContextFloor pins which catalog CLASS qualifies for
+// coding-agent auto-selection. The two classes we ship sit far apart —
+// 262144 and 131072/32768 — and the floor is placed between them on
+// purpose, so this is a contract about the catalog and not a threshold
+// to retune when a manifest moves.
+func TestMeetsNativeContextFloor(t *testing.T) {
+	for _, tc := range []struct {
+		ctx  int
+		want bool
+	}{
+		{262144, true},
+		{1048576, true},
+		{200000, true}, // the floor itself is inclusive
+		{199999, false},
+		{131072, false},
+		{32768, false},
+		{0, false}, // unknown window: not eligible for auto-selection
+	} {
+		if got := hostfit.MeetsNativeContextFloor(catalog.Manifest{ContextLength: tc.ctx}); got != tc.want {
+			t.Errorf("MeetsNativeContextFloor(%d) = %v, want %v", tc.ctx, got, tc.want)
+		}
+	}
+
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	var pass, fail int
+	for _, m := range manifests {
+		if hostfit.MeetsNativeContextFloor(m) {
+			pass++
+		} else {
+			fail++
+		}
+	}
+	if pass == 0 || fail == 0 {
+		t.Errorf("bundled catalog splits %d above / %d below the native context floor; "+
+			"a floor that separates nothing is not gating auto-selection", pass, fail)
+	}
+}
+
+// TestOllamaRecommend_DiscreteRequiresResidentWeights is the rule
+// itself, on the two cards the review and the #624 calibration were
+// measured on.
+func TestOllamaRecommend_DiscreteRequiresResidentWeights(t *testing.T) {
+	card16 := hostFromWire(t, wireRTX5080_16) // 16303 MiB
+	card24 := hostFromWire(t, wireRTX4090)    // 24564 MiB
+
+	for _, tc := range []struct {
+		name           string
+		weight         float64
+		need           int
+		want16, want24 bool
+	}{
+		{"qwen3.6-35b-a3b mtp", 22.6, 23482, false, true},
+		{"qwen3.6-27b q4", 16.3, 17221, false, true},
+		{"qwen3-coder-30b-a3b", 18.4, 19308, false, true},
+		{"gpt-oss-20b", 14.0, 14936, true, true},
+		{"qwen2.5-coder-14b", 9.0, 9968, true, true},
+		{"qwen3.5-9b", 6.6, 7583, true, true},
+		// The non-MTP tag of the same 35B is 1.3 GB heavier and falls
+		// off the 24 GB card. That is not a coincidence to be smoothed
+		// over: #624's bounded-spill gate reached the same verdict from
+		// the other direction ("the anchor's 11.5 % expected passes;
+		// the corrected non-MTP tag (23.9 GB, expected ~25 %) does
+		// not"), so the simplified rule reproduces the calibration it
+		// replaces on the host that calibration was measured on.
+		{"qwen3.6-35b-a3b q4", 23.9, 24773, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := catalog.Variant{EstimatedWeightGB: tc.weight, KVBytesPerTokenFP16: 20480}
+			if got := hostfit.OllamaWeightsResidentMB(v, false); got != tc.need {
+				t.Fatalf("need = %d MiB, want %d — the margin moved, so the rest of this table is stale", got, tc.need)
+			}
+			for _, h := range []struct {
+				label string
+				host  hostfit.Host
+				want  bool
+			}{{"16 GB", card16, tc.want16}, {"24 GB", card24, tc.want24}} {
+				got := hostfit.OllamaRecommend(v, h.host)
+				if got.Fits != h.want {
+					t.Errorf("%s card: Fits = %v, want %v (need %d MiB, have %d)",
+						h.label, got.Fits, h.want, tc.need, h.host.OllamaVRAMBudgetMB())
+				}
+				if h.want {
+					continue
+				}
+				if got.Reason != hostfit.ReasonWeightsSpill {
+					t.Errorf("%s card: Reason = %q, want %q", h.label, got.Reason, hostfit.ReasonWeightsSpill)
+				}
+				if got.NeedMB != tc.need || got.HaveMB != h.host.OllamaVRAMBudgetMB() {
+					t.Errorf("%s card: shortfall reported as need=%d have=%d, want need=%d have=%d",
+						h.label, got.NeedMB, got.HaveMB, tc.need, h.host.OllamaVRAMBudgetMB())
+				}
+			}
+		})
+	}
+}
+
+// TestOllamaRecommend_IsCapacityNeutral holds the layering: the
+// recommendation may never claim a model does not RUN. Capacity is
+// OllamaFit's answer and #229 made it deliberately permissive on
+// discrete hosts; a consumer that hides what this function declines has
+// re-created the bug that fix removed.
+func TestOllamaRecommend_IsCapacityNeutral(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	host := hostFromWire(t, wireRTX5080_16)
+	var declined int
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			if hostfit.OllamaRecommend(v, host).Fits {
+				continue
+			}
+			declined++
+			// Not recommended, but the 16 GB card still runs the ones
+			// its system RAM admits — that is what stays offerable.
+			if v.MinRAMGB > 0 && v.MinRAMGB <= host.RAMTotalGB && !hostfit.OllamaFit(v, host).Fits {
+				t.Errorf("%s/%s: declined by the recommendation AND reported unfittable; "+
+					"the recommendation gate has leaked into capacity", m.ModelID, v.VariantID)
+			}
+		}
+	}
+	if declined == 0 {
+		t.Fatal("nothing was declined on a 16 GB card, so this test proves nothing")
+	}
+}
+
+// TestOllamaRecommend_NeverWidensTheDiscreteSet is the safety property
+// that makes this change unable to introduce a "recommended but broken"
+// host: on a discrete card, resident weights got no speed claim from
+// the roofline either, so every variant the new rule admits was already
+// admitted by the old one. The set may only shrink.
+func TestOllamaRecommend_NeverWidensTheDiscreteSet(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	for _, wire := range []string{wireRTX5080_16, wireRTX4090, wireBigRAMSmallGPU, wireDual4090, wireMixedVendors} {
+		host := hostFromWire(t, wire)
+		var shrank bool
+		for _, m := range manifests {
+			for _, v := range m.Variants {
+				if !supports(v, catalog.RuntimeOllama) {
+					continue
+				}
+				fit := hostfit.OllamaFit(v, host)
+				oldOK := fit.Fits && (!fit.Estimate.UpperBound || fit.Estimate.MeetsSpeedFloor)
+				newOK := fit.Fits && hostfit.OllamaRecommend(v, host).Fits
+				if newOK && !oldOK {
+					t.Errorf("%s on %+v: newly recommendable under the residency rule but not under "+
+						"the roofline — the rule is supposed to be strictly stricter here", m.ModelID, host)
+				}
+				if oldOK && !newOK {
+					shrank = true
+				}
+			}
+		}
+		if !shrank {
+			t.Logf("host %+v: the two rules agree on every variant", host)
+		}
+	}
+}
+
+// TestOllamaRecommend_CPUOnlyIsUnconstrained records that the rule has
+// no VRAM term to apply here, so the RAM gate stays the only bound. The
+// roofline may still annotate ("may be slow") but must not exclude:
+// BandwidthSystemRAMGBs is meant as an upper bound with no structural
+// margin behind it, so a host whose memory beats the constant would be
+// refused a model it runs perfectly well.
+func TestOllamaRecommend_CPUOnlyIsUnconstrained(t *testing.T) {
+	host := hostFromWire(t, wireCPUOnly)
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) {
+				continue
+			}
+			if got := hostfit.OllamaRecommend(v, host); !got.Fits {
+				t.Errorf("%s/%s declined on a CPU-only host with reason %q; the recommendation "+
+					"rule has no VRAM term there and must defer to the RAM gate",
+					m.ModelID, v.VariantID, got.Reason)
+			}
+		}
+	}
+}
+
+// TestOllamaRecommend_UnifiedKeepsBothBounds pins the unified arm as a
+// deliberate NON-change: the capacity rule there already is "weights +
+// KV + margin fit the pool", because there is nowhere to spill to, and
+// the #251 published-peak exclusion still applies on top. A pool large
+// enough to hold a model says nothing about how fast that pool is read,
+// which is why residency alone would not be enough here.
+func TestOllamaRecommend_UnifiedKeepsBothBounds(t *testing.T) {
+	// Capacity: the same verdict OllamaFit gives, since OllamaFit IS
+	// OllamaResident on unified memory.
+	tooBig := catalog.Variant{EstimatedWeightGB: 62.0, KVBytesPerTokenFP16: 98304}
+	if got := hostfit.OllamaRecommend(tooBig, hostFromWire(t, wireMac16)); got.Fits {
+		t.Error("a 62 GB model was recommended on a 16 GB Mac; the unified arm dropped its capacity bound")
+	} else if got.Reason != hostfit.ReasonInsufficientVRAM {
+		t.Errorf("Reason = %q, want %q — on unified memory the shortfall IS a capacity shortfall",
+			got.Reason, hostfit.ReasonInsufficientVRAM)
+	}
+
+	// Speed: a dense 27B fits a 24 GB pool, and at the M4's published
+	// 120 GB/s peak it decodes at ~7 tok/s. The peak is an upper bound
+	// on THAT machine, so declining is a claim about the host.
+	dense27b := catalog.Variant{EstimatedWeightGB: 17.0, KVBytesPerTokenFP16: 65536,
+		ParamCount: 27_000_000_000}
+	known := hostFromWire(t, wireMac24M4)
+	if got := hostfit.OllamaRecommend(dense27b, known); got.Fits {
+		t.Error("a dense 27B was recommended on a 120 GB/s Mac; the #251 published-peak bound was lost")
+	} else if got.Reason != hostfit.ReasonTooSlow {
+		t.Errorf("Reason = %q, want %q", got.Reason, hostfit.ReasonTooSlow)
+	}
+
+	// The same pool with the part unrecognised publishes no peak, so
+	// the fallback constant may only annotate. Excluding here would
+	// withhold from an unknown Mac what a known one is offered.
+	unknown := hostFromWire(t, wireMac24UnknownChip)
+	if got := hostfit.OllamaRecommend(dense27b, unknown); !got.Fits {
+		t.Errorf("declined on a Mac that published no bandwidth (reason %q); a population constant "+
+			"is not an upper bound and may not exclude (#251)", got.Reason)
+	}
+}
+
+// TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE is the
+// waired-ai/waired#986 regression, end to end over the shipped catalog.
+//
+// What the review saw: NAVI preselected qwen3.6-35b-a3b (22.6 GB, tier
+// 90) on a 16 GB card, 37.7 % of its weights landed in system RAM, and
+// a ~30k-token coding prompt prefilled at 388 tok/s — 60-90 s to the
+// first output token. The machine's own agent would not have chosen it;
+// only the wizard's rule admitted it.
+func TestBundledCatalog_SixteenGBCardIsNotPointedAtASpilledMoE(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	host := hostFromWire(t, wireRTX5080_16)
+
+	// The counterfactual, so this test cannot rot into a vacuous pass:
+	// under the rule the control plane actually shipped — capacity plus
+	// the roofline — the 16 GB card really was pointed at the 22.6 GB
+	// model. If this ever stops holding, the fixture or the catalog has
+	// moved and the assertion below is no longer about the incident.
+	if was := bestByTier(t, manifests, host); was != "qwen3.6-35b-a3b" {
+		t.Fatalf("the roofline rule now picks %s on this host, not the 22.6 GB MoE the review "+
+			"found; this test no longer reproduces waired-ai/waired#986", was)
+	}
+
+	if got := bestRecommended(t, manifests, host); got == "qwen3.6-35b-a3b" {
+		t.Fatal("a 16 GB card is still pointed at a 22.6 GB mixture of experts")
+	} else if got != "qwen3.5-9b" {
+		t.Errorf("16 GB card is pointed at %s, want qwen3.5-9b — the highest tier that both "+
+			"holds its weights in the card and serves the ~200k coding window", got)
+	}
+	// It must still be OFFERED, and offered as runnable: the card's
+	// system RAM holds it, ollama spills the rest, and hiding it is the
+	// #229 bug.
+	assertFit(t, manifests, host, "qwen3.6-35b-a3b", true)
+
+	// The 24 GB anchor keeps its flagship — the rule costs the class of
+	// host it was calibrated on nothing.
+	if got := bestRecommended(t, manifests, hostFromWire(t, wireRTX4090)); got != "qwen3.6-35b-a3b" {
+		t.Errorf("24 GB card is pointed at %s, want qwen3.6-35b-a3b", got)
+	}
+}
+
+// bestRecommended is what a tier-ordered picker lands on once both
+// recommendation gates are applied — the shape router.RankModels uses
+// and the shape the control plane's recommendedModel is being moved to.
+//
+// The two gates narrow in sequence and each falls through when it would
+// leave nothing, so neither can newly turn a working host into one with
+// no default at all.
+func bestRecommended(t *testing.T, manifests []catalog.Manifest, host hostfit.Host) string {
+	t.Helper()
+	type cand struct {
+		modelID string
+		tier    int
+		native  bool
+		rec     bool
+	}
+	var all []cand
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			if !supports(v, catalog.RuntimeOllama) || !hostfit.OllamaFit(v, host).Fits {
+				continue
+			}
+			all = append(all, cand{m.ModelID, v.QualityTier,
+				hostfit.MeetsNativeContextFloor(m), hostfit.OllamaRecommend(v, host).Fits})
+		}
+	}
+	narrow := func(keep func(cand) bool) {
+		var pass []cand
+		for _, c := range all {
+			if keep(c) {
+				pass = append(pass, c)
+			}
+		}
+		if len(pass) > 0 {
+			all = pass
+		}
+	}
+	narrow(func(c cand) bool { return c.native })
+	narrow(func(c cand) bool { return c.rec })
+
+	best, bestTier := "", -1
+	for _, c := range all {
+		if c.tier > bestTier {
+			best, bestTier = c.modelID, c.tier
+		}
+	}
+	return best
 }
