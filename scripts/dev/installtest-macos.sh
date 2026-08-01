@@ -135,6 +135,68 @@ assert_launchd_healthy() {
 # tail of the journey ran (Tier-2 --inference). Paths are darwin-specific
 # (Ollama.app, the system state dir); config reads use sudo since init wrote the
 # state dir root-owned.
+# assert_ollama_bundle_integrity_macos: the engine's app bundle must still be a
+# valid, Gatekeeper-acceptable signed bundle after waired installed it (#329).
+#
+# These asserts INVERT the old "waired-managed marker present (Ollama.app)"
+# check. That assert positively required the file whose presence was the bug:
+# anything added to a signed bundle's root invalidates its v2 resource seal, so
+# codesign reports "unsealed contents present in the bundle root", spctl
+# rejects, and on Apple Silicon every exec of the engine is killed. Ownership is
+# now recorded in the state dir instead, which is what the last check below
+# looks for.
+#
+# Shared by the --inference and --daemon-engine legs: they install the engine by
+# different routes (init's own install vs the setup executor's) and only the
+# first had any bundle assert at all.
+assert_ollama_bundle_integrity_macos() {
+  local app=/Applications/Ollama.app
+  local record="$STATE_DIR/runtimes/ollama/darwin-managed.json"
+  local stray
+
+  if [ ! -d "$app" ]; then
+    # Homebrew / a bare CLI install has no bundle to check. Counted, so a leg
+    # that silently stops testing this is visible in the summary (#215).
+    skip "no $app on this host; bundle-integrity asserts not applicable"
+    return
+  fi
+
+  # 1. Nothing of ours anywhere inside the bundle. Checked as a search rather
+  #    than a single path so a future helper cannot reintroduce the class one
+  #    directory deeper.
+  stray="$(find "$app" -name '.waired-managed.json' 2>/dev/null | head -5)"
+  if [ -z "$stray" ]; then
+    ok "no waired file inside the Ollama.app bundle (signature seal intact)"
+  else
+    bad "waired wrote into the signed bundle — this breaks its signature (#329):"
+    printf '%s\n' "$stray" | sed 's/^/    /' >&2
+  fi
+
+  # 2. The seal itself. This is the assert that would have caught #329 on day
+  #    one: it fails on exactly the corruption the marker caused.
+  if codesign --verify --deep --strict "$app" 2>/dev/null; then
+    ok "codesign --verify --deep --strict passes on Ollama.app"
+  else
+    bad "Ollama.app fails codesign (macOS will refuse to run the engine):"
+    codesign --verify --deep --strict "$app" 2>&1 | sed 's/^/    /' >&2 || true
+  fi
+
+  # 3. Gatekeeper's own verdict on executing it.
+  if spctl --assess --type execute "$app" 2>/dev/null; then
+    ok "spctl accepts Ollama.app for execution"
+  else
+    bad "spctl rejects Ollama.app (Gatekeeper will block the engine):"
+    spctl --assess --type execute "$app" 2>&1 | sed 's/^/    /' >&2 || true
+  fi
+
+  # 4. Ownership is still recorded — outside the bundle, where it belongs.
+  if sudo test -f "$record"; then
+    ok "waired-managed record present outside the bundle ($record)"
+  else
+    bad "waired-managed record missing ($record) — waired will not recognise its own install"
+  fi
+}
+
 assert_inference_macos() {
   local ollama_bin="" cand tps
 
@@ -161,13 +223,7 @@ assert_inference_macos() {
   else
     bad "ollama engine not installed (waired init --inference-enabled=true should have installed Ollama.app)"
   fi
-  # init's install must drop the waired-managed marker at the bundle root so a
-  # later `waired init` never asks the bundled-vs-reuse question about it.
-  if [ -f /Applications/Ollama.app/.waired-managed.json ]; then
-    ok "waired-managed marker present (Ollama.app)"
-  else
-    bad "waired-managed marker missing (/Applications/Ollama.app/.waired-managed.json)"
-  fi
+  assert_ollama_bundle_integrity_macos
 
   # #567: the bundled engine is waired-owned on :9475 with its own store; the
   # agent (PATH-resolving the Ollama.app binary) pulls there, NOT into the
@@ -396,6 +452,9 @@ assert_daemon_engine_macos() {
   [ -n "$ollama_bin" ] \
     && ok "ollama engine installed by the daemon-path executor ($ollama_bin)" \
     || bad "no engine after a daemon-path first-run (executor install did not land — pre-N3 behaviour)"
+  # #329: this leg installs through the setup executor, the path the browser
+  # wizard uses, and had no bundle assert at all until now.
+  assert_ollama_bundle_integrity_macos
   out="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
   state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
   case "$state" in

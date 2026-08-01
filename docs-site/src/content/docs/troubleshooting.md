@@ -43,6 +43,7 @@ most problems on its own.
 - [The Waired icon says the agent is not running](#the-waired-icon-says-the-agent-is-not-running)
 - [A command says “waired-agent is not running”](#a-command-says-waired-agent-is-not-running)
 - [macOS: the background service never starts](#macos-the-background-service-never-starts)
+- [macOS: it says the AI software is damaged](#macos-it-says-the-ai-software-is-damaged)
 - [Windows: I get a 502 error](#windows-i-get-a-502-error)
 
 **Answers are wrong or slow**
@@ -373,6 +374,35 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.waired.agent.plist
 
 Installing or updating Waired now clears this for you, so you should only need
 these commands on a machine where the installer itself cannot be run.
+
+## macOS: it says the AI software is damaged
+
+You see a macOS dialog saying **“Ollama” is damaged and can’t be opened. You
+should move it to the Trash** — and it comes back every time you dismiss it.
+Setup never gets past “Preparing to download the model…”.
+
+Nothing is actually corrupted. A Waired version installed before this release
+wrote a small bookkeeping file inside the Ollama app, and macOS treats *any*
+addition to a signed app as tampering. It then refuses to launch it, so
+Waired’s attempts to start the AI engine are killed one after another.
+
+Removing that one file fixes it — nothing is re-downloaded:
+
+```sh
+sudo waired doctor --fix
+```
+
+`waired doctor` reports the problem as **AI engine app signature** and names the
+file it will remove. Signing in again (`sudo waired init`) repairs it too.
+
+To confirm afterwards:
+
+```sh
+codesign --verify --deep --strict /Applications/Ollama.app
+```
+
+Silence means the app is intact again. Installing or updating Waired now keeps
+its bookkeeping outside the app, so this cannot happen again.
 
 ## Windows: I get a 502 error
 

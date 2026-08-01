@@ -2,9 +2,7 @@ package setup
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"strings"
+	"runtime"
 
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -18,49 +16,19 @@ type OllamaDetection struct {
 	Path      string
 	Version   string // raw `ollama --version` token, e.g. "0.24.0"; "" if unknown
 	Supported bool   // Version >= OllamaSupportedMinVersion
-	// WairedManaged reports that this install was made BY waired (the
-	// installer helpers drop a marker file next to the binary / app
-	// bundle). The bundled-vs-reuse prompt skips itself for such installs:
-	// asking "reuse the existing Ollama?" about an Ollama waired itself put
-	// there confused every Windows/macOS first run (the installer used to
-	// pre-install the engine right before `waired init` re-detected it as
-	// "existing").
+	// WairedManaged reports that this install was made BY waired. Windows
+	// answers this with a marker file next to the binary; macOS with a
+	// record in the state dir (a marker inside the signed .app bundle
+	// breaks its signature — #329). It exists because a waired-made install
+	// and the user's own live at the exact same well-known paths
+	// (%ProgramFiles%\Ollama, /Applications/Ollama.app), so path alone
+	// cannot tell them apart.
 	WairedManaged bool
-}
-
-// WairedManagedMarkerName is the marker file the waired installer helpers
-// (scripts/install/ollama-windows.ps1, the macOS Ollama.app installer) write
-// next to an Ollama install they created. Its presence is the only reliable
-// way to tell a waired-made install from the user's own: both live at the
-// exact same well-known paths (%ProgramFiles%\Ollama, /Applications).
-const WairedManagedMarkerName = ".waired-managed.json"
-
-// wairedManagedMarker reports whether the install at binPath carries the
-// waired-managed marker. Pure path logic (no GOOS branches): the marker is
-// looked up in the binary's own directory and in every ancestor up to and
-// including a `*.app` bundle root — the macOS layout puts the binary at
-// Ollama.app/Contents/Resources/ollama while the marker sits at the bundle
-// root, and Windows/Linux land on the first (same-dir) probe.
-func wairedManagedMarker(binPath string) bool {
-	dir := filepath.Dir(binPath)
-	if _, err := os.Stat(filepath.Join(dir, WairedManagedMarkerName)); err == nil {
-		return true
-	}
-	// App-bundle layout: probe the nearest *.app ancestor (the marker sits
-	// at the bundle root, three levels above Contents/Resources/ollama).
-	// Plain directory installs never match an .app ancestor and fall
-	// through to false without extra stats.
-	for d := dir; ; {
-		parent := filepath.Dir(d)
-		if parent == d {
-			return false
-		}
-		d = parent
-		if strings.HasSuffix(strings.ToLower(d), ".app") {
-			_, err := os.Stat(filepath.Join(d, WairedManagedMarkerName))
-			return err == nil
-		}
-	}
+	// LegacyBundleMarkerPath is non-empty when this host still carries the
+	// pre-#329 marker inside the Ollama.app bundle root — i.e. this install
+	// is one waired broke, and this is the file to delete to fix it.
+	// RepairDarwinBundleMarker consumes it.
+	LegacyBundleMarkerPath string
 }
 
 // DetectOllama resolves a pre-existing ollama and (best-effort) its
@@ -76,18 +44,40 @@ func wairedManagedMarker(binPath string) bool {
 // (a LocalSystem service does not inherit a user PATH). A plain
 // exec.LookPath there falsely reports "ollama missing" and skips the
 // bundled-model pre-pull. (#268)
-func DetectOllama(ctx context.Context) OllamaDetection {
+//
+// stateDir is where macOS keeps its waired-managed record (#329); "" is
+// allowed and simply means "no record available", which downgrades
+// WairedManaged to what the on-disk markers alone can prove.
+func DetectOllama(ctx context.Context, stateDir string) OllamaDetection {
+	det := DetectOllamaPathOnly(stateDir)
+	if !det.Installed {
+		return det
+	}
+	det.Version = detectOllamaVersion(ctx, det.Path)
+	det.Supported = det.Version != "" &&
+		infruntime.OllamaVersionAtLeast(det.Version, infruntime.OllamaSupportedMinVersion)
+	return det
+}
+
+// DetectOllamaPathOnly is DetectOllama without the version probe — resolution
+// and marker inspection only, and therefore no exec of the engine binary.
+//
+// That distinction is load-bearing for the repair path (#329). On a host whose
+// Ollama.app has a broken signature seal, exec'ing the bundled binary is
+// SIGKILLed by Gatekeeper AND re-raises the "Ollama is damaged" dialog — so
+// the code whose whole job is to fix that must not run the version probe
+// first. Version/Supported are left zero.
+func DetectOllamaPathOnly(stateDir string) OllamaDetection {
 	path, err := download.ResolveBinary("")
 	if err != nil {
 		return OllamaDetection{}
 	}
-	ver := detectOllamaVersion(ctx, path)
+	facts, legacyMarker := gatherManagedFacts(stateDir, path)
 	return OllamaDetection{
-		Installed:     true,
-		Path:          path,
-		Version:       ver,
-		Supported:     ver != "" && infruntime.OllamaVersionAtLeast(ver, infruntime.OllamaSupportedMinVersion),
-		WairedManaged: wairedManagedMarker(path),
+		Installed:              true,
+		Path:                   path,
+		WairedManaged:          managedFrom(runtime.GOOS, facts),
+		LegacyBundleMarkerPath: legacyMarker,
 	}
 }
 

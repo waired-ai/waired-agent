@@ -3,9 +3,11 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,10 +18,11 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
 // withSeam swaps installOllamaApp for the duration of a test.
-func withSeam(t *testing.T, fn func(context.Context, func(infruntime.OllamaInstallProgress)) error) {
+func withSeam(t *testing.T, fn func(context.Context, string, func(infruntime.OllamaInstallProgress)) error) {
 	t.Helper()
 	prev := installOllamaApp
 	installOllamaApp = fn
@@ -36,7 +39,7 @@ func TestInstallOllama_SkipsWhenResolvable(t *testing.T) {
 	}
 	t.Setenv("WAIRED_OLLAMA_BINARY", stub)
 
-	withSeam(t, func(context.Context, func(infruntime.OllamaInstallProgress)) error {
+	withSeam(t, func(context.Context, string, func(infruntime.OllamaInstallProgress)) error {
 		t.Fatal("installOllamaApp must not run when ollama is already resolvable")
 		return nil
 	})
@@ -55,7 +58,7 @@ func TestInstallOllama_RunsWhenAbsent(t *testing.T) {
 	}
 
 	called := false
-	withSeam(t, func(context.Context, func(infruntime.OllamaInstallProgress)) error {
+	withSeam(t, func(context.Context, string, func(infruntime.OllamaInstallProgress)) error {
 		called = true
 		return nil
 	})
@@ -76,7 +79,7 @@ func TestInstallOllama_PropagatesError(t *testing.T) {
 	}
 
 	sentinel := errors.New("boom")
-	withSeam(t, func(context.Context, func(infruntime.OllamaInstallProgress)) error { return sentinel })
+	withSeam(t, func(context.Context, string, func(infruntime.OllamaInstallProgress)) error { return sentinel })
 	err := installOllama(true, t.TempDir(), nil)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err = %v, want wrapped %v", err, sentinel)
@@ -148,6 +151,102 @@ func TestDownloadOllamaZip_TooSmall(t *testing.T) {
 	err := downloadOllamaZip(context.Background(), srv.URL, dest, func(infruntime.OllamaInstallProgress) {})
 	if err == nil || !strings.Contains(err.Error(), "suspiciously small") {
 		t.Fatalf("err = %v, want the size-floor refusal", err)
+	}
+}
+
+// fakeOllamaZip builds a zip that has the real archive's shape — an
+// Ollama.app bundle with the CLI at Contents/Resources/ollama, which is the
+// first path download.ResolveBinary probes on macOS.
+func fakeOllamaZip(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, f := range []struct {
+		name, body string
+		mode       os.FileMode
+	}{
+		{"Ollama.app/Contents/Info.plist", "<plist/>\n", 0o644},
+		{"Ollama.app/Contents/Resources/ollama", "#!/bin/sh\necho \"ollama version is 9.9.9\"\n", 0o755},
+	} {
+		hdr := &zip.FileHeader{Name: f.name, Method: zip.Deflate}
+		hdr.SetMode(f.mode)
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(f.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestInstallOllamaAppImpl_LeavesTheBundleSealIntact is the regression test for
+// #329, and it runs the REAL installOllamaAppImpl — download, ditto extract,
+// ditto copy, quarantine strip, ownership record — against a temp
+// "/Applications". Every previous test stubbed installOllamaApp wholesale, so
+// the function that wrote a file into the signed bundle root was never
+// executed by anything (CLAUDE.md §Test discipline: "a fake placed at the
+// defect boundary means the subject never runs").
+//
+// PRODUCT CONTRACT: the installer writes NOTHING inside the app bundle.
+// Anything added to a signed bundle invalidates its resource seal, after which
+// macOS refuses to launch it and SIGKILLs every exec of the engine.
+func TestInstallOllamaAppImpl_LeavesTheBundleSealIntact(t *testing.T) {
+	lowerZipFloor(t, 4)
+	zipBody := fakeOllamaZip(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(zipBody)))
+		_, _ = w.Write(zipBody)
+	}))
+	defer srv.Close()
+	t.Setenv("WAIRED_OLLAMA_DARWIN_URL", srv.URL)
+
+	appsDir := t.TempDir()
+	prevDest := ollamaAppDest
+	ollamaAppDest = appsDir
+	t.Cleanup(func() { ollamaAppDest = prevDest })
+
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := installOllamaAppImpl(context.Background(), stateDir, nil); err != nil {
+		t.Fatalf("installOllamaAppImpl: %v", err)
+	}
+
+	bundle := filepath.Join(appsDir, "Ollama.app")
+	binary := filepath.Join(bundle, "Contents", "Resources", "ollama")
+	if fi, err := os.Stat(binary); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("engine binary not installed at %s (err=%v)", binary, err)
+	}
+
+	// The contract: not one waired file anywhere under the bundle.
+	if err := filepath.WalkDir(bundle, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.Contains(d.Name(), "waired") {
+			t.Errorf("installer wrote %s inside the signed bundle — this is exactly what breaks the seal (#329)", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ownership is recorded outside the bundle, and detection reads it back.
+	rec := setup.DarwinManagedRecordPath(stateDir)
+	if _, err := os.Stat(rec); err != nil {
+		t.Fatalf("no waired-managed record at %s: %v", rec, err)
+	}
+	t.Setenv("PATH", "")
+	t.Setenv("WAIRED_OLLAMA_BINARY", binary)
+	det := setup.DetectOllamaPathOnly(stateDir)
+	if !det.WairedManaged {
+		t.Error("WairedManaged = false; the install must still be recognisable as ours")
+	}
+	if det.LegacyBundleMarkerPath != "" {
+		t.Errorf("LegacyBundleMarkerPath = %q, want empty for a fresh install", det.LegacyBundleMarkerPath)
 	}
 }
 

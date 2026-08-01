@@ -65,7 +65,8 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	defer cancel()
 
 	tray := checkTray()
-	findings := collectDoctorFindings(ctx, homeDir, *stateDir, *gatewayBaseURL, *mgmtURL, tray, checkService(ctx))
+	engine := checkEngine(*stateDir)
+	findings := collectDoctorFindings(ctx, homeDir, *stateDir, *gatewayBaseURL, *mgmtURL, tray, checkService(ctx), engine)
 	hasFail := false
 	for _, f := range findings {
 		fmt.Println(formatFinding(f))
@@ -74,15 +75,24 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 		}
 	}
 
-	plan := planDoctorFix(hasFail, tray.Repair, *fix, *noInteractive, isTerminal(os.Stdin))
+	plan := planDoctorFix(hasFail, tray.Repair, engine.Repair, *fix, *noInteractive, isTerminal(os.Stdin))
 
 	if plan.Prompt {
 		fmt.Println()
 		if !pressedF(os.Stdin) {
-			plan.Integration, plan.Tray = false, false
+			plan.Integration, plan.Tray, plan.Engine = false, false, false
 		}
 	}
 
+	if plan.Engine {
+		if err := repairEngineBundle(engine, *stateDir, os.Stdout); err != nil {
+			// Same warn-only posture as the tray: the most common failure is
+			// "not running as root", which the message says, and the operator
+			// can retry with sudo. Failing the run here would also hide the
+			// other repairs.
+			fmt.Fprintf(os.Stderr, "warn: engine repair failed: %v\n", err)
+		}
+	}
 	if plan.Integration {
 		fmt.Println("Running repair (waired link all)...")
 		if err := repairWithUse(ctx, homeDir, *stateDir, *gatewayBaseURL); err != nil {
@@ -97,7 +107,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 			fmt.Fprintf(os.Stderr, "warn: tray host repair failed: %v\n", err)
 		}
 	}
-	if plan.Integration || plan.Tray {
+	if plan.Integration || plan.Tray || plan.Engine {
 		fmt.Println("Done. Re-run `waired doctor` to verify.")
 		return nil
 	}
@@ -120,6 +130,8 @@ type doctorFixPlan struct {
 	Integration bool
 	// Tray installs / enables the SNI host extension.
 	Tray bool
+	// Engine repairs the macOS engine app bundle (#329).
+	Engine bool
 }
 
 // planDoctorFix decides the fix flow. Pure, and split out of runDoctorBody so
@@ -134,18 +146,22 @@ type doctorFixPlan struct {
 //
 // What did NOT change: a tray warning still never makes `waired doctor` exit
 // non-zero (see trayFindingFromResult). Fixable is not the same as failing.
-func planDoctorFix(hasFail bool, tray trayhost.RepairAction, forced, noInteractive, tty bool) doctorFixPlan {
+// The engine arm (#329) rides along rather than adding a case: an engine that
+// needs repairing always produces a StatusFail finding, so hasFail is already
+// true whenever engine.Fixable() is — see engineFindingFrom.
+func planDoctorFix(hasFail bool, tray trayhost.RepairAction, engine engineRepairAction, forced, noInteractive, tty bool) doctorFixPlan {
 	fixable := tray.Fixable()
+	engineFixable := engine.Fixable()
 	switch {
 	case forced:
 		// --fix skips the prompt and repairs whatever is repairable. It runs
 		// the integration unconditionally (its historical behaviour: it is
 		// idempotent, and --fix predates there being anything else to fix).
-		return doctorFixPlan{Integration: true, Tray: fixable}
+		return doctorFixPlan{Integration: true, Tray: fixable, Engine: engineFixable}
 	case noInteractive, !tty:
 		return doctorFixPlan{}
 	case hasFail:
-		return doctorFixPlan{Prompt: true, Integration: true, Tray: fixable}
+		return doctorFixPlan{Prompt: true, Integration: true, Tray: fixable, Engine: engineFixable}
 	case fixable:
 		// Nothing failed, but the tray can be repaired — offer just that.
 		return doctorFixPlan{Prompt: true, Tray: true}
@@ -174,11 +190,12 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out *os.F
 	return nil
 }
 
-// collectDoctorFindings gathers every finding for one run. tray is passed in
-// rather than probed here so the session bus is queried exactly once per run,
-// and so tests can pass the zero value and stay independent of whatever desktop
-// the runner happens to have.
-func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result) []integration.AuditFinding {
+// collectDoctorFindings gathers every finding for one run. tray, svc and engine
+// are passed in rather than probed here so the session bus, the service manager
+// and the filesystem are each queried exactly once per run, and so tests can
+// pass the zero values and stay independent of whatever desktop, service state
+// — or Ollama install — the runner happens to have.
+func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result, engine engineDoctor) []integration.AuditFinding {
 	var out []integration.AuditFinding
 
 	// Token presence + permission check. PathsUnder computes the layout
@@ -266,6 +283,14 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	// the zero value tests pass — is skipped.
 	if tray.Finding.Subject != "" {
 		out = append(out, tray.Finding)
+	}
+
+	// macOS engine app bundle (#329): a pre-fix install left a waired file at
+	// the bundle root, which invalidates its code signature and makes macOS
+	// SIGKILL every exec of the engine. Same empty-Subject convention as the
+	// tray: nothing to say on a healthy host or off darwin.
+	if engine.Finding.Subject != "" {
+		out = append(out, engine.Finding)
 	}
 
 	return out
