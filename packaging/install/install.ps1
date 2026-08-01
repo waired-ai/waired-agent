@@ -267,6 +267,33 @@ function Write-InstallStatus {
     } catch { }
 }
 
+# Breadcrumbs: one machine token per milestone reached, appended beside the
+# state file -- the same parent-owned workdir the .status marker uses, and
+# readable back for the same reason (see Invoke-SelfElevate).
+#
+# The marker above only exists when the trap or Common-Die runs. Closing the
+# elevated console runs NEITHER (#314): the parent got a bare NTSTATUS and had
+# no way to tell a half-done install from a total failure, nor a finished one
+# from an abandoned one. These breadcrumbs are the signal that survives a kill,
+# because each AppendAllText is durable the moment it returns -- so a killed
+# console leaves an intact prefix rather than an empty or truncated file.
+# Append, never rewrite: a truncate-then-write has a window where a kill leaves
+# nothing at all, and ordering is the whole point.
+#
+# Tokens are machine-readable ASCII by construction -- no paths, no usernames --
+# so this file can never carry PII and the parent owns every word the user
+# sees. Readers must ignore tokens they do not know: Invoke-WairedUpdate shares
+# the elevation path with a different (swap-only) step list.
+# Best-effort by design: a diagnostic must never become the failure.
+function Write-InstallProgress {
+    param([string]$Token)
+    if (-not $StateFile) { return }
+    try {
+        [System.IO.File]::AppendAllText("$StateFile.progress", "$Token`n",
+            (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
+
 # Quote one token per the CommandLineToArgvW rules.
 # Start-Process -ArgumentList joins its elements with a single space and
 # quotes NOTHING (the claim that -Verb RunAs auto-quotes them was simply
@@ -553,7 +580,22 @@ $AgentStateDir = Join-Path $env:ProgramData 'waired'
 # (waired#748). The un-elevated parent resolves it under its own %TEMP% and
 # forwards -LogPath to the elevated child, so the file stays readable by the
 # invoking (non-admin) user afterwards.
-if (-not $LogPath) { $LogPath = Join-Path $env:TEMP 'waired-install.log' }
+#
+# One file PER RUN. The name used to be fixed, and Start-Transcript -Force
+# meant the next run destroyed the failed run's evidence -- on one reviewed
+# host that is exactly what happened, and the only surviving log was of a run
+# nobody cared about (#314). $PID disambiguates two runs that start inside the
+# same second: the loser of that race would otherwise hit a sharing violation
+# that the transcript's own `catch {}` swallows, leaving a silently log-less
+# run. It is the PARENT's pid, since the child inherits this path through the
+# state file, so both phases still write one file.
+# InvariantCulture, not Get-Date -Format: the current culture can supply a
+# non-Gregorian calendar, which changes the year and breaks the ordering the
+# prune below depends on.
+if (-not $LogPath) {
+    $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture)
+    $LogPath = Join-Path $env:TEMP "waired-install-$stamp-$PID.log"
+}
 
 # -------------------------------------------------------------------
 # common_* helpers (mirror install.sh naming)
@@ -643,6 +685,31 @@ public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 # transcript logging added for waired#748.
 function Stop-TranscriptQuietly {
     try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }
+}
+
+# Remove-OldRunLogs keeps the newest $Keep per-run transcripts (and their
+# .status siblings) in %TEMP% and deletes the rest -- the bound the single
+# fixed filename used to provide by clobbering, now that names are per-run.
+#
+# No locking, deliberately: Windows refuses to delete a file another process
+# still holds open, so a concurrent run's transcript survives this by itself.
+# Do not add a lockfile here.
+function Remove-OldRunLogs {
+    param([string]$Prefix, [int]$Keep = 5)
+    try {
+        # -LiteralPath plus -Filter, never -Path with a glob: %TEMP% lives
+        # under the user profile, and a username containing [ or ] turns a
+        # -Path wildcard into a character class that silently matches nothing.
+        # -Filter itself goes through FindFirstFileEx, which also matches 8.3
+        # short names, so the anchored -match is the real filter.
+        $logs = @(Get-ChildItem -LiteralPath $env:TEMP -Filter "$Prefix-*.log" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match "^$Prefix-\d{8}-\d{6}-\d+\.log$" } |
+            Sort-Object -Property Name -Descending)
+        foreach ($old in @($logs | Select-Object -Skip $Keep)) {
+            Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath "$($old.FullName).status" -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
 }
 
 function Common-Die  {
@@ -1158,6 +1225,167 @@ function Get-ElevateArgs {
     return @($argv | ForEach-Object { ConvertTo-NativeArg $_ })
 }
 
+# Get-ExitCodeReason turns a Windows process exit code into a plain cause, or
+# '' when it is not one we recognise -- the caller then prints the raw code.
+#
+# Kept pure (int -> string, no script state, no Common-* calls) so
+# installtest-windows.ps1 can lift it straight out of this file and table-test
+# it, the way it already does with ConvertTo-NativeArg.
+function Get-ExitCodeReason {
+    param([int]$Code)
+    # NTSTATUS values arrive as NEGATIVE Int32 -- Process.ExitCode is signed --
+    # so match the signed literal. The hex in each comment is what
+    # '{0:X8}' prints for it, because Int32 formats its two's-complement bit
+    # pattern. Do NOT reach for [uint32] to "normalise" these: that conversion
+    # is checked and throws on a negative value, on 5.1 and 7 alike.
+    switch ($Code) {
+        -1073741510 { return 'the Administrator window was closed, or Ctrl+C / Ctrl+Break was pressed, before setup finished' }  # 0xC000013A
+        -1073741502 { return 'the elevated PowerShell could not start (DLL initialization failed)' }                             # 0xC0000142
+        -1073741819 { return 'the elevated installer stopped with an access violation' }                                         # 0xC0000005
+        -1073741515 { return 'the elevated PowerShell could not start (a required DLL was missing)' }                            # 0xC0000135
+        -1073740791 { return 'the elevated installer was stopped by a security check (stack buffer overrun)' }                   # 0xC0000409
+        default     { return '' }
+    }
+}
+
+# Read-InstallProgress returns the breadcrumb tokens the elevated child left,
+# oldest first, or an empty array. Tolerant on purpose: the file may not exist,
+# the child can be killed mid-append and leave a torn final line, and the
+# update flow shares this elevation path with a different step list -- so
+# anything that is not a well-formed token is dropped rather than reported.
+function Read-InstallProgress {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    try {
+        $raw = @(Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop)
+    } catch {
+        return @()
+    }
+    return @($raw | Where-Object { $_ -match '^[a-z][a-z0-9-]*$' })
+}
+
+# Watch-ElevatedConsole mirrors the elevated child's transcript into THIS
+# console while the child runs.
+#
+# Before this, the parent blocked in Start-Process -Wait and printed nothing
+# for the entire elevated phase -- which on the reviewed hosts meant many
+# minutes of silence while sign-in and a multi-gigabyte engine download ran in
+# a window the parent never described (#314). A silent parent next to a
+# seemingly-stuck child is what got the child closed.
+function Watch-ElevatedConsole {
+    param($Process, [string]$Path)
+    $reader = $null
+    $seps   = 0
+    $shown  = $false
+    $exited = $false
+    try {
+        while ($true) {
+            if ($null -eq $reader -and (Test-Path -LiteralPath $Path)) {
+                try {
+                    # FileShare::ReadWrite is the load-bearing part: the child's
+                    # Start-Transcript holds this file open, and a reader that
+                    # asks for less sharing fails outright -- which is exactly
+                    # why File.ReadAllText (used elsewhere in this script for
+                    # the state file) must not be used on the transcript.
+                    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open,
+                        [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+                } catch { }
+            }
+            if ($reader) {
+                while ($null -ne ($line = $reader.ReadLine())) {
+                    if ($line -match '^\*{5,}$') { $seps++; continue }
+                    # PowerShell brackets the transcript header between the
+                    # first two separator lines and the footer between the last
+                    # two, so only $seps -eq 2 is the run's own output. That
+                    # header carries Username / RunAs User / Machine, and
+                    # mirroring it would leak the elevating account into this
+                    # console -- including an administrator OTHER than the
+                    # invoking user, whom Protect-PII cannot mask. Counting
+                    # separators rather than matching the field names is
+                    # deliberate: those labels are localized.
+                    if ($seps -ne 2) { continue }
+                    if (-not $shown) {
+                        Common-Log '--- live view of the Administrator window (type THERE, not here) ---'
+                        $shown = $true
+                    }
+                    Write-Host "  | $(Protect-PII $line)" -ForegroundColor DarkGray
+                }
+            }
+            # One full read pass AFTER the child exits, so the tail of the
+            # transcript is never dropped.
+            if ($exited) { break }
+            if ($Process.HasExited) { $exited = $true; continue }
+            # Deliberately no wall-clock timeout in this loop: sign-in plus a
+            # multi-gigabyte engine download legitimately runs for many
+            # minutes, and a timeout here would recreate the bug being fixed.
+            Start-Sleep -Milliseconds 250
+        }
+    } catch {
+        # Mirroring is a convenience; the child owns the install and the
+        # transcript on disk is the record. Never let it break the run.
+    } finally {
+        if ($reader) { $reader.Dispose() }
+        if ($shown) { Common-Log '--- end of live view ---' }
+    }
+}
+
+# Show-InterruptedInstall reports what is actually on the machine after the
+# elevated console went away part-way. The old code called any non-zero exit a
+# total failure, which was wrong in the common case: files extracted, service
+# installed and running, and only sign-in missing (#314).
+function Show-InterruptedInstall {
+    param([string[]]$Steps)
+    # Framed, not suppressed, under -DryRun: the probes below read the real
+    # host (Phase 1 already calls Get-InstalledVersion unconditionally, so
+    # this adds no side effect), but a dry run changed none of it -- and its
+    # child still emits init-ok, which would otherwise read as a real sign-in.
+    if ($DryRun) {
+        Common-Warn 'Dry run -- the state below is the machine as it already was, not the result of this run.'
+    }
+
+    # Normalise before anything indexes or counts: Set-StrictMode turns both a
+    # $null .Count and an out-of-range [-1] into terminating errors, and an
+    # unreached elevated child legitimately leaves no breadcrumbs at all.
+    if ($null -eq $Steps) { $Steps = @() }
+    $last = if ($Steps.Count) { $Steps[-1] } else { '' }
+    # The step AFTER the last one that completed is the one it stopped in.
+    $stopped = switch ($last) {
+        ''                  { 'the first step (installing files)' }
+        'files-ok'          { 'installing the background service' }
+        'service-installed' { 'starting the background service' }
+        'service-running'   { 'updating PATH' }
+        'path-ok'           { 'sign-in' }
+        'init-start'        { 'sign-in' }
+        default             { '' }
+    }
+    if ($stopped) { Common-Warn "It stopped during: $stopped" }
+
+    $version = Get-InstalledVersion
+    $files = if ($version) { "installed ($version)" } else { 'not installed' }
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    $service = if (-not $svc) { 'not registered' }
+               elseif ($svc.Status -eq 'Running') { 'registered and running' }
+               else { "registered, not running ($($svc.Status))" }
+    # Sign-in comes from the breadcrumbs, never from a filesystem probe. The
+    # state dir's DACL grants SYSTEM, Administrators and the SID of whoever
+    # elevated, so a Test-Path there succeeds when the user elevated their own
+    # filtered token and fails when an administrator typed credentials over
+    # their shoulder. A probe whose answer depends on which of those happened
+    # is worse than no probe -- do not "fix" this by adding one.
+    $signin = if ($Steps -contains 'init-ok') { 'completed' }
+              elseif ($Steps -contains 'init-failed') { 'did not complete' }
+              elseif ($Steps -contains 'init-start') { 'started, did not finish' }
+              elseif ($Steps -contains 'init-skipped') { 'skipped' }
+              else { 'not reached' }
+
+    Common-Log 'What is on this machine now:'
+    Common-Log "  Waired files:        $files"
+    Common-Log "  Background service:  $service"
+    Common-Log "  Sign in:             $signin"
+    Common-Log 'Re-run this installer to resume from where it stopped.'
+}
+
 function Invoke-SelfElevate {
     param([string]$ZipPath)
 
@@ -1205,22 +1433,82 @@ function Invoke-SelfElevate {
     $psArgs = Get-ElevateArgs -ScriptPath $scriptPath -ZipPath $ZipPath -StatePath $stateFile
 
     try {
-        $proc = Start-Process -FilePath 'powershell.exe' `
-            -ArgumentList $psArgs -Verb RunAs -PassThru -Wait
+        $proc = $null
+        try {
+            # NOT -Wait: the parent mirrors the child's transcript while it
+            # runs (Watch-ElevatedConsole), so it has to own the wait loop.
+            # -PassThru on its own still blocks here until the UAC dialog is
+            # answered, so a declined prompt is still reported below.
+            $proc = Start-Process -FilePath 'powershell.exe' `
+                -ArgumentList $psArgs -Verb RunAs -PassThru
+        } catch {
+            # ShellExecute failing is a TERMINATING error, so only try/catch
+            # sees it -- -ErrorAction does nothing here.
+            #
+            # We cannot name the cause more precisely than this, and the
+            # attempt is a trap: Start-Process catches the Win32Exception and
+            # rethrows a bare InvalidOperationException with NO InnerException,
+            # so ERROR_CANCELLED (1223) is gone before this catch runs, on
+            # Windows PowerShell 5.1 and pwsh 7 alike. Verified on both, not
+            # assumed. So do NOT "improve" this into `catch [Win32Exception]`
+            # or an InnerException/NativeErrorCode walk -- both compile, read
+            # correctly, and silently never fire. The OS message is localized
+            # too, so it cannot be matched on either; quote it verbatim and
+            # let the operator read it.
+            Common-Warn "The Administrator step did not start, so nothing was installed."
+            Common-Warn "Windows reported: $($_.Exception.Message)"
+            Common-Log  "The usual cause is choosing No on the Administrator (UAC) prompt."
+            Common-Die  "re-run and choose Yes, or open an Administrator PowerShell and run this installer there."
+        }
+        if ($null -eq $proc) {
+            Common-Die "Windows did not start the elevated installer and gave no reason. Try running this installer from an Administrator PowerShell."
+        }
+        # Pin the process handle NOW. Without -Wait, Start-Process returns a
+        # Process object whose ExitCode is only readable while that object
+        # still holds an open handle; touching .Handle caches it before the
+        # child can exit and its id be recycled.
+        $null = $proc.Handle
+        Watch-ElevatedConsole -Process $proc -Path $LogPath
+        $proc.WaitForExit()
+
+        # Read the breadcrumbs and the marker HERE: both live in the workdir,
+        # which the caller's finally deletes the moment this returns.
+        $steps  = Read-InstallProgress -Path "$stateFile.progress"
+        $marker = "$stateFile.status"
+
         if ($proc.ExitCode -ne 0) {
-            # A child that died before its transcript existed still leaves the
-            # trap's marker behind (#177).
-            $why = ''
-            $marker = "$stateFile.status"
-            if (Test-Path -LiteralPath $marker) {
-                $why = " -- $(((Get-Content -LiteralPath $marker -Raw) -split "`r?`n")[0])"
+            if ($steps -contains 'done') {
+                # Setup ran to the end and the operator closed the window
+                # rather than pressing Enter at the final pause. Windows
+                # reports that as STATUS_CONTROL_C_EXIT, and treating it as a
+                # failure -- which is what used to happen -- was the single
+                # most common false alarm in #314.
+                Common-Log "The Administrator window was closed before you pressed Enter, but setup had already finished."
+                return
             }
-            Common-Die "elevated installer exited code $($proc.ExitCode)$why. Full install log: $LogPath"
+            # A child that died before its transcript existed still leaves the
+            # trap's marker behind (#177); a closed console leaves neither the
+            # marker nor a transcript tail, which is what the decode is for.
+            $why = ''
+            if (Test-Path -LiteralPath $marker) {
+                $why = ((Get-Content -LiteralPath $marker -Raw) -split "`r?`n")[0]
+            }
+            if (-not $why) { $why = Get-ExitCodeReason -Code $proc.ExitCode }
+            $code = "$($proc.ExitCode) (0x$('{0:X8}' -f [int]$proc.ExitCode))"
+            if ($why) {
+                Common-Warn "The Administrator step stopped: $why"
+                Common-Warn "Windows exit code $code."
+            } else {
+                Common-Warn "The Administrator step stopped with Windows exit code $code."
+            }
+            Show-InterruptedInstall -Steps $steps
+            Common-Die "setup did not finish. Full install log: $LogPath"
         }
     } finally {
-        # -Wait guarantees the elevated child finished reading the staged
-        # script before we delete it. (PowerShell runs finally on exit, so
-        # Common-Die above still cleans up.)
+        # WaitForExit above guarantees the elevated child finished reading the
+        # staged script before we delete it -- the guarantee -Wait used to
+        # give. (PowerShell runs finally on exit, so Common-Die still cleans
+        # up.)
         if ($tempScript) {
             Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
         }
@@ -1869,9 +2157,14 @@ function Invoke-WairedInit {
     # this as a bare statement, so waired init's stdout (the actionable
     # "couldn't reach the Control Plane" hint, the deploy plan, and the
     # interactive OAuth prompts) reaches the real console untouched.
+    # Breadcrumbs at every exit, not just at the end: $script:InitRan is a
+    # single bool and cannot tell "skipped" from "failed", and the parent needs
+    # that distinction to say something true about sign-in after the elevated
+    # console was closed (#314).
     $script:InitRan = $false
     if ($SkipInit) {
         Common-Log "-SkipInit set; not running waired init."
+        Write-InstallProgress 'init-skipped'
         return
     }
     # No terminal -> skip sign-in, the same call install.sh has always made
@@ -1887,12 +2180,14 @@ function Invoke-WairedInit {
         Common-Log "  - run:  waired init"
         Common-Log "  - or open the tray app and pick `"Log in...`""
         Common-Log "  - or re-run the installer with -NonInteractive to attempt it anyway"
+        Write-InstallProgress 'init-skipped'
         return
     }
 
     $exe = Join-Path $InstallDir 'waired.exe'
     if (-not (Test-Path -LiteralPath $exe)) {
         Common-Warn "waired.exe not found at $exe; cannot run `waired init`."
+        Write-InstallProgress 'init-skipped'
         return
     }
 
@@ -1900,18 +2195,26 @@ function Invoke-WairedInit {
     $initArgs = Get-WairedInitArgs
 
     Common-Log "Running: $exe $($initArgs -join ' ')"
+    # Emitted BEFORE the call: this is the long interactive step (browser
+    # sign-in, then the engine download), so it is where an operator who
+    # thinks the installer has hung closes the window. "It stopped during
+    # sign-in" is only sayable if the breadcrumb precedes the wait.
+    Write-InstallProgress 'init-start'
     if ($DryRun) {
         Common-Run "& $exe $($initArgs -join ' ')" { }
         $script:InitRan = $true
+        Write-InstallProgress 'init-ok'
         return
     }
     & $exe @initArgs
     if ($LASTEXITCODE -ne 0) {
         Common-Warn "waired init exited with code $LASTEXITCODE -- enrolment did not complete."
         Common-Warn "Re-run manually: & `"$exe`" init --state-dir `"$stateForInit`""
+        Write-InstallProgress 'init-failed'
         return
     }
     $script:InitRan = $true
+    Write-InstallProgress 'init-ok'
 }
 
 function Show-NextSteps {
@@ -1970,8 +2273,10 @@ function Invoke-InstallSteps {
     Stop-ExistingService
     Extract-Zip -ZipPath $ZipPath
     Remove-TrayIfRequested
+    Write-InstallProgress 'files-ok'
     Section 'Background service'
     Invoke-AgentInstall
+    Write-InstallProgress 'service-installed'
     # Persist the resolved CP URL now that waired-agent install has created +
     # locked down the state dir, and BEFORE Invoke-WairedInit -- the same
     # ordering install.sh uses (darwin_register_agent -> darwin_write_control_url
@@ -1985,8 +2290,10 @@ function Invoke-InstallSteps {
     # identity-less and idles until login (#177); macOS starts its
     # LaunchDaemon (RunAtLoad) before init for the same reason.
     Ensure-AgentRunning
+    Write-InstallProgress 'service-running'
     Add-InstallDirToPath
     Set-InstallDirRegistry
+    Write-InstallProgress 'path-ok'
     Section 'Sign in and set up'
     # The Ollama engine is installed by `waired init` itself (after its
     # inference questions); we only resolve the knobs into env for it.
@@ -2367,6 +2674,11 @@ if ($env:WAIRED_ARGTEST) {
 # detection log line.
 if (-not $StagedZipPath) { Show-Banner }
 
+# Prune old per-run transcripts. Phase 1 only: the elevated child must never
+# sweep the invoking user's %TEMP%, and this sits after the -Help / banner /
+# ARGTEST returns so a read-only invocation touches nothing.
+if (-not $StagedZipPath) { Remove-OldRunLogs -Prefix 'waired-install' }
+
 Detect-Platform
 
 # Clean install: collect consent, then wipe via uninstall.ps1. Phase 1
@@ -2460,6 +2772,17 @@ if (-not $StagedZipPath) {
             }
         } else {
             Section 'Administrator step'
+            # Say where the work happens BEFORE the UAC dialog steals focus.
+            # The reviewed hosts closed the elevated window because nothing
+            # ever told them it was the one doing the work, or how long that
+            # work legitimately takes (#314). Lives here rather than inside
+            # Invoke-SelfElevate because the update path shares that function
+            # and its elevated step is a fast swap, not this.
+            Common-Log 'A new Administrator window is opening. The rest of setup runs THERE:'
+            Common-Log 'sign-in, the inference engine download, and the first model.'
+            Common-Log 'That can take several minutes. Do NOT close that window -- closing it'
+            Common-Log 'stops setup part-way. This window mirrors its output and waits.'
+            Common-Log "Install log: $LogPath"
             Invoke-SelfElevate -ZipPath $stagedZip
             # The elevated window paused for the operator and closed; leave a
             # recap in THIS (persistent) console too, so the outcome is
@@ -2499,6 +2822,8 @@ if ($Update) {
     # Elevated swap-only path (the parent already gated + downloaded).
     Invoke-WairedUpdateSwap -StagedZip $StagedZipPath
     Stop-TranscriptQuietly
+    # 'done' BEFORE the pause, for the same reason as the install path below.
+    Write-InstallProgress 'done'
     if (Test-InteractiveStdin) { Read-Host '[waired] Update complete. Press Enter to close this window' | Out-Null }
     return
 }
@@ -2513,6 +2838,16 @@ try {
 }
 
 Stop-TranscriptQuietly
+# The success sentinel, and it MUST be written before the pause below.
+#
+# This is the most common way #314 was actually hit, and the issue text does
+# not name it: the install succeeds, the window says "Install complete", and
+# the operator closes it instead of pressing Enter -- which is the natural
+# thing to do with a window that says it is done. Windows then reports
+# STATUS_CONTROL_C_EXIT, and the parent used to Common-Die on a run that had
+# completely succeeded. With the sentinel already on disk the parent can tell
+# "closed after finishing" (exit 0) from "closed part-way" (report + recap).
+Write-InstallProgress 'done'
 if (Test-InteractiveStdin) {
     Read-Host '[waired] Install complete. Press Enter to close this window' | Out-Null
 }

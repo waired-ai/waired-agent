@@ -113,7 +113,15 @@ $BaseUrl     = if ($env:WAIRED_INSTALL_BASE_URL) { $env:WAIRED_INSTALL_BASE_URL 
 # output survives the spawned console closing (mirror of install.ps1,
 # waired#748). Resolved in the un-elevated parent (its %TEMP% stays readable
 # without elevation) and forwarded via -LogPath.
-if (-not $LogPath) { $LogPath = Join-Path $env:TEMP 'waired-uninstall.log' }
+#
+# One file PER RUN, for the reason install.ps1 documents at its own default
+# (#314): a fixed name plus Start-Transcript -Force means the next run destroys
+# the failed run's evidence. $PID disambiguates two runs starting in the same
+# second; InvariantCulture keeps the stamp Gregorian and therefore sortable.
+if (-not $LogPath) {
+    $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss', [Globalization.CultureInfo]::InvariantCulture)
+    $LogPath = Join-Path $env:TEMP "waired-uninstall-$stamp-$PID.log"
+}
 
 # -------------------------------------------------------------------
 # common_* helpers (mirror install.ps1 naming)
@@ -318,6 +326,58 @@ function ConvertTo-NativeArg {
     return $sb.ToString()
 }
 
+# Shared verbatim with install.ps1, which documents the reasoning in
+# full. The two scripts are downloaded and run independently, so each has
+# to be self-contained; installtest-windows.ps1 asserts the copies stay
+# byte-identical, the same guard ConvertTo-NativeArg above already has.
+# Get-ExitCodeReason turns a Windows process exit code into a plain cause, or
+# '' when it is not one we recognise -- the caller then prints the raw code.
+#
+# Kept pure (int -> string, no script state, no Common-* calls) so
+# installtest-windows.ps1 can lift it straight out of this file and table-test
+# it, the way it already does with ConvertTo-NativeArg.
+function Get-ExitCodeReason {
+    param([int]$Code)
+    # NTSTATUS values arrive as NEGATIVE Int32 -- Process.ExitCode is signed --
+    # so match the signed literal. The hex in each comment is what
+    # '{0:X8}' prints for it, because Int32 formats its two's-complement bit
+    # pattern. Do NOT reach for [uint32] to "normalise" these: that conversion
+    # is checked and throws on a negative value, on 5.1 and 7 alike.
+    switch ($Code) {
+        -1073741510 { return 'the Administrator window was closed, or Ctrl+C / Ctrl+Break was pressed, before setup finished' }  # 0xC000013A
+        -1073741502 { return 'the elevated PowerShell could not start (DLL initialization failed)' }                             # 0xC0000142
+        -1073741819 { return 'the elevated installer stopped with an access violation' }                                         # 0xC0000005
+        -1073741515 { return 'the elevated PowerShell could not start (a required DLL was missing)' }                            # 0xC0000135
+        -1073740791 { return 'the elevated installer was stopped by a security check (stack buffer overrun)' }                   # 0xC0000409
+        default     { return '' }
+    }
+}
+
+# Remove-OldRunLogs keeps the newest $Keep per-run transcripts (and their
+# .status siblings) in %TEMP% and deletes the rest -- the bound the single
+# fixed filename used to provide by clobbering, now that names are per-run.
+#
+# No locking, deliberately: Windows refuses to delete a file another process
+# still holds open, so a concurrent run's transcript survives this by itself.
+# Do not add a lockfile here.
+function Remove-OldRunLogs {
+    param([string]$Prefix, [int]$Keep = 5)
+    try {
+        # -LiteralPath plus -Filter, never -Path with a glob: %TEMP% lives
+        # under the user profile, and a username containing [ or ] turns a
+        # -Path wildcard into a character class that silently matches nothing.
+        # -Filter itself goes through FindFirstFileEx, which also matches 8.3
+        # short names, so the anchored -match is the real filter.
+        $logs = @(Get-ChildItem -LiteralPath $env:TEMP -Filter "$Prefix-*.log" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match "^$Prefix-\d{8}-\d{6}-\d+\.log$" } |
+            Sort-Object -Property Name -Descending)
+        foreach ($old in @($logs | Select-Object -Skip $Keep)) {
+            Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath "$($old.FullName).status" -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+}
+
 function Show-Help {
 @"
 uninstall.ps1 - remove Waired on Windows.
@@ -427,10 +487,11 @@ function Invoke-SelfElevate {
     # rest, exactly as install.ps1 did before #177.
     $psArgs = @($psArgs | ForEach-Object { ConvertTo-NativeArg $_ })
 
-    # The marker path is fixed, not per-run, so a marker left by an earlier
-    # failed uninstall would otherwise be reported as this run's cause.
+    # The marker is derived from $LogPath, which is now per-run -- so a marker
+    # from an earlier failed uninstall can no longer be mistaken for this
+    # run's cause, and the explicit stale-marker delete this used to need is
+    # gone with it (#314).
     $marker = "$LogPath.status"
-    Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
 
     try {
         $proc = Start-Process -FilePath 'powershell.exe' `
@@ -441,9 +502,16 @@ function Invoke-SelfElevate {
             # so is itself the diagnosis.
             $why = ''
             if (Test-Path -LiteralPath $marker) {
-                $why = " -- $(((Get-Content -LiteralPath $marker -Raw) -split "`r?`n")[0])"
+                $why = ((Get-Content -LiteralPath $marker -Raw) -split "`r?`n")[0]
             }
-            Common-Die "elevated uninstaller exited code $($proc.ExitCode)$why. Full uninstall log: $LogPath"
+            # No marker means the console was closed or the child never got
+            # far enough to write one; decode what Windows reported instead of
+            # printing a bare NTSTATUS. Shared verbatim with install.ps1 --
+            # installtest-windows.ps1 asserts the two copies stay identical.
+            if (-not $why) { $why = Get-ExitCodeReason -Code $proc.ExitCode }
+            $code = "$($proc.ExitCode) (0x$('{0:X8}' -f [int]$proc.ExitCode))"
+            $tail = if ($why) { " -- $why" } else { '' }
+            Common-Die "elevated uninstaller exited code $code$tail. Full uninstall log: $LogPath"
         }
     } finally {
         # -Wait guarantees the elevated child finished reading the staged
@@ -719,6 +787,11 @@ function Show-Done {
 # -------------------------------------------------------------------
 
 if ($Help) { Show-Help; exit 0 }
+
+# Prune old per-run transcripts. Un-elevated parent only: the elevated child
+# must never sweep the invoking user's %TEMP%, and this sits after -Help so a
+# read-only invocation touches nothing. Mirrors install.ps1.
+if (-not $FromElevation) { Remove-OldRunLogs -Prefix 'waired-uninstall' }
 
 # The spawned elevated console closes the instant the script returns, taking
 # every message with it. Make it liveable: kill conhost QuickEdit (a stray
