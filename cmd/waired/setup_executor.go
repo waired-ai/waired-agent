@@ -513,7 +513,7 @@ func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, en
 	if !s.Supported() {
 		return benchPollDeadline, false
 	}
-	if st := s.State(); st.Active {
+	if st := s.State(); setupDriving(st) {
 		enter.Close(out)
 		return setupResidencyBudget, true
 	}
@@ -528,7 +528,7 @@ func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, en
 			return benchPollDeadline, false
 		}
 		time.Sleep(setupStatePollInterval)
-		if st := s.State(); st.Active {
+		if st := s.State(); setupDriving(st) {
 			// The point of no return (waired-agent#198): the operator has
 			// confirmed their choices in the browser and the desired state
 			// is written. Terminal takeover is no longer accepted, so the

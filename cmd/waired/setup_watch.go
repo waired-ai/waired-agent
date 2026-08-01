@@ -70,7 +70,7 @@ func (w *setupWatch) Poll() (started bool, budget time.Duration, engineComing bo
 	w.next = now.Add(w.every)
 
 	st := w.state()
-	if !st.Active {
+	if !setupDriving(st) {
 		return false, 0, false
 	}
 	w.started = true

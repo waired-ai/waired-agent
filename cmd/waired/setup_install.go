@@ -405,13 +405,28 @@ func installEngineAsExecutor(
 // engine is not in place. Anything else gets the ordinary grace back,
 // and a failed install skips the wait entirely at the caller.
 func engineArrivalPending(st management.SetupStateResponse) bool {
-	return st.Active &&
+	return setupDriving(st) &&
 		(st.DesiredEngine == "" || st.InstallClaimed != "" || !st.EngineInstalled)
+}
+
+// setupDriving reports whether st describes a browser setup that is
+// driving this host NOW, rather than an instruction left over from an
+// earlier run (waired-agent#308).
+//
+// Every place that used to read st.Active on its own asks this instead.
+// The control plane persists desired_engine / desired_model_id for the
+// life of the device, so `Active` answers "has this host ever been told
+// what to run" — which, on a second `waired init`, is the wrong question
+// and used to print "Setup has started in your browser" at a terminal
+// with no browser open. The daemon marks the difference; this is the
+// single place the CLI reads it.
+func setupDriving(st management.SetupStateResponse) bool {
+	return st.Active && !st.DesiredStale
 }
 
 // setupEngineInstallWanted reports whether the daemon's state calls for
 // an executor-driven engine install. Split out so the caller can decide
 // without a second round trip's worth of duplicated conditions.
 func setupEngineInstallWanted(st management.SetupStateResponse) bool {
-	return st.Active && st.DesiredEngine != "" && !st.EngineInstalled && st.InstallClaimed == ""
+	return setupDriving(st) && st.DesiredEngine != "" && !st.EngineInstalled && st.InstallClaimed == ""
 }

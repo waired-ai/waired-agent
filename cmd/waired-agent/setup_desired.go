@@ -68,6 +68,16 @@ const (
 	setupExecutorHeartbeat = 10 * time.Second
 )
 
+// setupDesiredFreshWindow is how long a watched desired-state write keeps
+// counting as "a wizard is driving this host" (#308).
+//
+// It matches the control plane's own setup-ticket TTL, which is what
+// bounds a wizard page's claim on a device there: past it, the page is
+// abandoned as far as the CP is concerned, and a `waired init` started
+// afterwards must be free to drive from the terminal rather than wait out
+// an eight-hour residency for a browser nobody is looking at.
+const setupDesiredFreshWindow = 60 * time.Minute
+
 // setupDesired is the (engine, model, benchmark-gen) triple the CP
 // serves on the device's own Self map entry (waired#835 §6). The zero
 // value means "no instruction" — the common case for every host that
@@ -238,10 +248,24 @@ type setupReconciler struct {
 	now        func() time.Time // test seam
 	interval   time.Duration    // push cadence; setupPushInterval outside tests
 
-	mu           sync.Mutex
-	desired      setupDesired
-	active       bool            // a desired instruction has been seen this session
-	modelApplied map[string]bool // one setupApplyModel call per desired model value
+	mu      sync.Mutex
+	desired setupDesired
+	active  bool // a desired instruction has been seen this session
+	// desiredSeen marks that at least one map frame has been folded here,
+	// carrying an instruction or not. It anchors the baseline below.
+	desiredSeen bool
+	// desiredChangedAt is when THIS daemon watched the instruction change,
+	// on its own clock (#308). The control plane never clears
+	// desired_engine / desired_model_id, so their mere presence says
+	// nothing about whether a wizard is driving: a device set up once
+	// carries them for the rest of its life. What does say so is having
+	// watched them change — which is why the first frame after boot is
+	// treated as a snapshot of whatever was already there, not as a write.
+	//
+	// Zero means "never watched one change", i.e. everything we know is
+	// leftovers.
+	desiredChangedAt time.Time
+	modelApplied     map[string]bool // one setupApplyModel call per desired model value
 	// modelRejected records why applying the desired model was refused
 	// (an unknown model, an engine that cannot serve it, a host whose
 	// pulls are turned off). It feeds the model step's failure rather
@@ -314,11 +338,23 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		integrations: flattenIntegrations(st.DesiredIntegrations),
 	}
 	r.mu.Lock()
+	// The baseline is the first frame folded here, whatever it carries —
+	// deliberately BEFORE the zero-value fast path below. A device that
+	// has never been set up spends its first frames in that fast path, so
+	// anchoring later would file the wizard's very first instruction as a
+	// leftover: browser-driven setup, reported as nothing happening.
+	baseline := !r.desiredSeen
+	r.desiredSeen = true
 	if d == (setupDesired{}) && !r.active {
 		r.mu.Unlock()
 		return
 	}
 	changed := d != r.desired
+	if changed && !baseline {
+		// Watched it change: something wrote this instruction while we
+		// were here (#308).
+		r.desiredChangedAt = r.now()
+	}
 	r.desired = d
 	r.active = true
 	applied := r.modelApplied[d.modelID]
@@ -451,6 +487,21 @@ func (r *setupReconciler) kickPush() {
 
 // leaseLiveLocked reports whether the executor lease is still fresh and,
 // when it is not, drops the lease-bound install claim. Callers hold mu.
+// desiredStaleLocked reports whether the instruction we hold is left over
+// from an earlier run rather than something a wizard is driving now
+// (#308). Caller holds r.mu.
+//
+// Two ways to be stale, and the first is the one that bites: never having
+// watched it change at all — the control plane persists desired state
+// forever, so a device set up weeks ago hands its daemon a full
+// instruction on the first frame after boot.
+func (r *setupReconciler) desiredStaleLocked() bool {
+	if r.desiredChangedAt.IsZero() {
+		return true
+	}
+	return r.now().Sub(r.desiredChangedAt) > setupDesiredFreshWindow
+}
+
 func (r *setupReconciler) leaseLiveLocked() bool {
 	if !r.executorAttached {
 		return false
@@ -582,6 +633,7 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 	d := r.desired
 	resp := management.SetupStateResponse{
 		Active:              r.active,
+		DesiredStale:        r.active && r.desiredStaleLocked(),
 		DesiredEngine:       d.engine,
 		DesiredModelID:      d.modelID,
 		DesiredBenchmarkGen: d.benchmarkGen,

@@ -259,6 +259,34 @@ func TestAwaitSetupBudgetFallsBackAfterGrace(t *testing.T) {
 	}
 }
 
+// TestAwaitSetupBudgetIgnoresLeftoverDesiredState is the #308 bar at this
+// layer: a device that was set up once keeps its desired state on the map
+// entry forever, so a later run reads Active on its very first probe.
+// Taking the residency fast path there announced a browser setup that was
+// not happening. The wait must instead sit out its grace and continue in
+// the terminal.
+func TestAwaitSetupBudgetIgnoresLeftoverDesiredState(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{state: management.SetupStateResponse{
+		Active: true, DesiredStale: true, DesiredEngine: "ollama", EngineInstalled: true,
+	}}
+	srv := d.server(t)
+	s := attachSetupExecutor(srv.URL, true)
+	t.Cleanup(s.Release)
+
+	var out strings.Builder
+	budget, active := awaitSetupBudget(s, 30*time.Millisecond, &out, nil)
+	if active || budget != benchPollDeadline {
+		t.Fatalf("budget=%v active=%v, want the legacy path for leftover desired state", budget, active)
+	}
+	if !strings.Contains(out.String(), "No setup started in the browser") {
+		t.Errorf("the wait did not fall back to the terminal: %q", out.String())
+	}
+	if strings.Contains(out.String(), takeoverClosedLine) {
+		t.Errorf("announced a browser handoff with no browser driving: %q", out.String())
+	}
+}
+
 // TestAwaitSetupBudgetTakenOver: confirming the takeover is how the
 // operator takes the terminal back, and it must not wait out the grace.
 func TestAwaitSetupBudgetTakenOver(t *testing.T) {

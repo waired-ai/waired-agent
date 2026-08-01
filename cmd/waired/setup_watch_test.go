@@ -109,6 +109,27 @@ func TestSetupWatchReportsEngineArrival(t *testing.T) {
 	}
 }
 
+// TestSetupWatchIgnoresLeftoverDesiredState: the watch exists to catch a
+// browser setup starting mid-wait, and desired state that was already on
+// the device before this run started is not one (#308). Without this the
+// #308 fix would just move the false handoff from the grace into the
+// model wait.
+func TestSetupWatchIgnoresLeftoverDesiredState(t *testing.T) {
+	stale := activeState()
+	stale.DesiredStale = true
+	s := &scriptedState{states: []management.SetupStateResponse{stale}}
+	w := newScriptedWatch(t, s)
+
+	for i := 0; i < 3; i++ {
+		if started, _, _ := w.Poll(); started {
+			t.Fatal("the watch reported leftover desired state as a browser setup starting")
+		}
+	}
+	if w.Started() {
+		t.Error("Started latched on leftover desired state")
+	}
+}
+
 // TestSetupWatchThrottlesTheDaemon: the wait it lives in ticks once a
 // second, and every read is a loopback HTTP round trip.
 func TestSetupWatchThrottlesTheDaemon(t *testing.T) {

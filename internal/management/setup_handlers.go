@@ -75,6 +75,20 @@ type SetupStateResponse struct {
 	// this device's own map entry, i.e. the operator has actually
 	// started setup in the browser.
 	Active bool `json:"active"`
+	// DesiredStale says that instruction is left over from an earlier run
+	// rather than something a wizard is driving now (waired-agent#308).
+	//
+	// It exists because Active cannot answer that on its own: the control
+	// plane never clears desired_engine / desired_model_id, so a device
+	// set up once carries them on its map entry for the rest of its life,
+	// and a later `waired init` used to announce "Setup has started in
+	// your browser" with no browser open. The daemon decides it, because
+	// only the daemon knows whether it WATCHED the instruction change.
+	//
+	// omitempty on purpose: a daemon too old to know about this answers
+	// without the field, which decodes to false — "not stale" — and keeps
+	// the pre-#308 behaviour for a new CLI against an old daemon.
+	DesiredStale bool `json:"desired_stale,omitempty"`
 	// The desired triple the control plane is currently serving.
 	DesiredEngine       string `json:"desired_engine,omitempty"`
 	DesiredModelID      string `json:"desired_model_id,omitempty"`

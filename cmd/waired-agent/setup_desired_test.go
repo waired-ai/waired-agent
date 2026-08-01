@@ -348,6 +348,98 @@ func TestSetupApplyIdempotent(t *testing.T) {
 	}
 }
 
+// TestSetupDesiredStaleOnLeftoverState is the #308 contract, and the rc7
+// symptom exactly: the control plane never clears desired_engine /
+// desired_model_id, so a device that ran a wizard once carries that
+// instruction on its map entry forever. A daemon whose FIRST frame
+// already carries it is looking at a snapshot of an old run, not at a
+// wizard that is driving now, and `waired init` must not report
+// "Setup has started in your browser" for it.
+func TestSetupDesiredStaleOnLeftoverState(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateReady}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 1))
+
+	st := r.SetupState(ctx)
+	if !st.Active {
+		t.Fatal("a desired instruction was not recorded at all")
+	}
+	if !st.DesiredStale {
+		t.Error("leftover desired state reported as a live wizard (#308)")
+	}
+}
+
+// TestSetupDesiredFreshWhenTheWizardWrites is the other half, and the
+// case that matters most: on a device that has never been set up the
+// first frames carry nothing, and the instruction arrives while this
+// daemon is watching. That IS a wizard driving, and must not be filed
+// as leftovers — which is why the baseline is anchored on the first
+// frame folded, not on the first frame that carries desired state.
+func TestSetupDesiredFreshWhenTheWizardWrites(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, &signer.InferenceState{}) // the fleet-at-rest frames
+	r.Apply(ctx, &signer.InferenceState{})
+	r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 1)) // the wizard writes
+
+	if st := r.SetupState(ctx); !st.Active || st.DesiredStale {
+		t.Errorf("a wizard writing while we watched read as leftovers: active=%v stale=%v",
+			st.Active, st.DesiredStale)
+	}
+}
+
+// A wizard that wrote and then went away stops counting as live: the
+// window matches the control plane's own setup-ticket TTL, so an
+// abandoned page cannot hold a later `waired init` in browser-driven
+// mode forever.
+func TestSetupDesiredGoesStaleAfterTheWindow(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
+	ctx := context.Background()
+
+	r.Apply(ctx, &signer.InferenceState{})
+	r.Apply(ctx, desiredFrame("ollama", "qwen3-8b-instruct", 1))
+	if st := r.SetupState(ctx); st.DesiredStale {
+		t.Fatal("fresh write already reported stale")
+	}
+
+	now = now.Add(setupDesiredFreshWindow - time.Minute)
+	if st := r.SetupState(ctx); st.DesiredStale {
+		t.Error("a write inside the window reported stale")
+	}
+	now = now.Add(2 * time.Minute) // past the window
+	if st := r.SetupState(ctx); !st.DesiredStale {
+		t.Error("an abandoned wizard still counts as driving")
+	}
+}
+
+// Re-sent frames are not writes. The map is re-delivered on every poll,
+// so treating repetition as a fresh instruction would keep any device
+// that ever ran a wizard permanently "live".
+func TestSetupDesiredRepeatIsNotAWrite(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
+	ctx := context.Background()
+
+	r.Apply(ctx, &signer.InferenceState{})
+	frame := desiredFrame("ollama", "qwen3-8b-instruct", 1)
+	r.Apply(ctx, frame)
+
+	now = now.Add(setupDesiredFreshWindow + time.Minute)
+	r.Apply(ctx, frame) // the same instruction, re-delivered
+	if st := r.SetupState(ctx); !st.DesiredStale {
+		t.Error("a re-delivered frame refreshed the instruction")
+	}
+}
+
 // TestSetupApplyZeroDesiredIsFree pins the fleet-at-rest guarantee: a
 // host that never ran a NAVI setup does no work and reports nothing.
 func TestSetupApplyZeroDesiredIsFree(t *testing.T) {
