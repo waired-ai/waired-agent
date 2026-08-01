@@ -108,8 +108,7 @@ discovery_e2e() {
   trap "kill ${stub_pid} 2>/dev/null || true; rm -rf '${work}'" RETURN
 
   # Wait (≤5s) for the stub to publish its port and answer.
-  local i
-  for i in $(seq 1 50); do
+  for _ in $(seq 1 50); do
     [[ -s "${portfile}" ]] && break
     sleep 0.1
   done

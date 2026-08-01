@@ -75,7 +75,7 @@ help:
 	@echo "End-user packaging (.deb via nfpm; requires nfpm in PATH):"
 	@echo "  deb-all              Build waired + waired-tray .deb for amd64 and arm64"
 	@echo "  deb-amd64 deb-arm64  Same, for one arch"
-	@echo "  install-script-lint  shellcheck install.sh + maintainer scripts"
+	@echo "  install-script-lint  shellcheck install.sh + .deb maintainer + CI scripts"
 	@echo "  ps-script-lint       PSScriptAnalyzer over the shipped .ps1 scripts"
 
 .PHONY: build-agent
@@ -529,31 +529,16 @@ deb-%: build-linux-%
 	@echo "==> built $* debs:"
 	@ls -la $(OUT_DIR)/waired_$(PKG_VERSION)_$*.deb $(OUT_DIR)/waired-tray_$(PKG_VERSION)_$*.deb
 
+# The target list deliberately lives in scripts/ci/install-script-lint.sh,
+# not here: this Makefile is listed whole in
+# scripts/ci/testnet-relevant-paths.txt (it builds the shipped binaries and
+# the testnet harness inputs) and the gate matches by plain path prefix, so
+# it cannot see which target a diff touched. Adding one script name to the
+# lint list here armed a ~25-minute real-NAT run on PRs that ship nothing
+# (#292). Add lint targets to that script; leave this entry point alone.
 .PHONY: install-script-lint
 install-script-lint:
-	@command -v shellcheck >/dev/null 2>&1 || { \
-	  echo "error: shellcheck not found in PATH" >&2; exit 1; }
-	shellcheck packaging/install/install.sh \
-	           packaging/install/uninstall.sh \
-	           build/install-desktop.sh
-	shellcheck packaging/debian/waired/postinst \
-	           packaging/debian/waired/prerm \
-	           packaging/debian/waired/postrm \
-	           packaging/debian/waired-tray/postinst \
-	           packaging/debian/waired-tray/postrm
-	shellcheck scripts/ci/autostart-exec-guard.sh \
-	           scripts/ci/base-ref-guard.sh \
-	           scripts/ci/base-ref-guard-test.sh \
-	           scripts/ci/docs-surface-guard.sh \
-	           scripts/ci/installer-mirror-guard.sh \
-	           scripts/ci/installer-mirror-guard-test.sh \
-	           scripts/ci/platform-test-floor-guard.sh \
-	           scripts/ci/platform-test-floor-guard-test.sh \
-	           scripts/ci/tray-darwin-paths-guard.sh \
-	           scripts/ci/tray-dialog-seam-guard.sh \
-	           scripts/ci/harness-failure-strings-guard.sh \
-	           scripts/ci/nightly-file-issue.sh \
-	           scripts/ci/nightly-file-issue-test.sh
+	bash scripts/ci/install-script-lint.sh
 
 # The PowerShell half of install-script-lint. Separate because the two have
 # different prerequisites -- shellcheck is a package, PSScriptAnalyzer is a

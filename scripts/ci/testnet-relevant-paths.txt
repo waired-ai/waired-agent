@@ -69,6 +69,12 @@ cmd/waired-agent/
 # --- module / build inputs that change the shipped binaries -------------
 go.mod
 go.sum
+# Makefile earns its place through the BUILD targets (dist-agent,
+# build-agent, dist-agent-testharness produce the binaries and harness
+# inputs testnet consumes). Because the match is whole-file, anything else
+# living in it arms a full run too: the shellcheck list used to, on PRs
+# that ship nothing (#292). Keep dev-only bodies in scripts/ci/ (see
+# scripts/ci/install-script-lint.sh) so this entry stays honest.
 Makefile
 build/cloudbuild-agent-images.yaml
 build/Dockerfile.waired-agent
