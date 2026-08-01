@@ -194,7 +194,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// below can act on a stale answer.
 			applyDaemonInitInference(mgmtURL, inf, os.Stdout)
 
-			budget, setupActive, enter := awaitBrowserSetup(sess, owner, os.Stdout, nonInteractive, noBrowser)
+			budget, setupActive, enter, watch := awaitBrowserSetup(sess, owner, os.Stdout, nonInteractive, noBrowser)
 
 			// §11: on this path init returned long before reaching the
 			// standalone engine block, so nothing here could ever install
@@ -213,6 +213,16 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// flip puts Linux and Windows here too. Condition is
 				// "does the host want inference", read from the daemon.
 				engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, os.Stdout)
+			}
+
+			// #308: the engine step above can run for minutes, so the
+			// browser setup may have started long after awaitSetupBudget's
+			// grace gave up on one. Read the edge here, where setupActive
+			// still decides what this terminal is allowed to say and ask.
+			engineComing := engineArrivalPending(sess.State())
+			if started, setupBudget, coming := watch.Poll(); started && !enter.Fired() {
+				enter.Close(os.Stdout)
+				setupActive, budget, engineComing = true, setupBudget, coming
 			}
 
 			if engineErr != nil {
@@ -240,7 +250,15 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					writePrompt(os.Stdout, setupKeepTerminalOpenLine)
 				}
 				waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
-					engineArrivalPending(sess.State()), enter)
+					engineComing, enter, watch)
+			}
+			// #308: a setup that started during the wait leaves this
+			// terminal as the browser's executor, so it must stop asking
+			// its own questions below (§4.2). Applied before the takeover
+			// check, which overrides it: an operator who did take the
+			// terminal back owns it regardless.
+			if watch.Started() {
+				setupActive = true
 			}
 			if enter.Fired() {
 				// The operator took the terminal back. The lease is

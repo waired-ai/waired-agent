@@ -126,12 +126,20 @@ func TestExecutorSessionOlderDaemonIsInert(t *testing.T) {
 		t.Fatalf("posted %d lease updates to an older daemon, want 0", got)
 	}
 
-	budget, active, enter := awaitBrowserSetup(s, nil, io.Discard, false, false)
+	budget, active, enter, watch := awaitBrowserSetup(s, nil, io.Discard, false, false)
 	if budget != benchPollDeadline || active {
 		t.Fatalf("budget=%v active=%v, want the legacy deadline and no setup", budget, active)
 	}
 	if took, note := enter.Poll(); took || note != "" {
 		t.Fatalf("inert watch produced (%v, %q)", took, note)
+	}
+	// #308: an older daemon has no setup state to watch, so the wait must
+	// not start asking it for one.
+	if started, _, _ := watch.Poll(); started || watch.Started() {
+		t.Fatal("setup watch reported a browser setup against a 404 daemon")
+	}
+	if got := len(d.noted()); got != 0 {
+		t.Fatalf("posted %d lease updates to an older daemon, want 0", got)
 	}
 }
 
@@ -292,13 +300,20 @@ func TestAwaitBrowserSetupSkipsNonInteractive(t *testing.T) {
 		{true, false},
 		{false, true},
 	} {
-		budget, active, enter := awaitBrowserSetup(s, nil, io.Discard, tc.nonInteractive, tc.noBrowser)
+		budget, active, enter, watch := awaitBrowserSetup(s, nil, io.Discard, tc.nonInteractive, tc.noBrowser)
 		if active || budget != benchPollDeadline {
 			t.Fatalf("nonInteractive=%v noBrowser=%v: budget=%v active=%v, want the legacy path",
 				tc.nonInteractive, tc.noBrowser, budget, active)
 		}
 		if took, note := enter.Poll(); took || note != "" {
 			t.Fatalf("inert watch produced (%v, %q)", took, note)
+		}
+		// #308: these paths never hand the terminal to a browser, so the
+		// setup watch stays inert too — this daemon reports Active, and a
+		// watch that polled it would flip the run into browser-driven mode.
+		if started, _, _ := watch.Poll(); started || watch.Started() {
+			t.Fatalf("nonInteractive=%v noBrowser=%v: setup watch reported a browser setup",
+				tc.nonInteractive, tc.noBrowser)
 		}
 	}
 }

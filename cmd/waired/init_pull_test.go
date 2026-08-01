@@ -71,7 +71,7 @@ func TestWaitForBundledModel_NoEngineThenDownloadThenReady(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil) {
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil, nil) {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
@@ -93,7 +93,7 @@ func TestWaitForBundledModel_PullFailed(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil) {
+	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil) {
 		t.Fatalf("pull_failed must return false")
 	}
 	if !strings.Contains(out.String(), "Model download failed") {
@@ -113,7 +113,7 @@ func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {
 	var ready bool
 	done := make(chan struct{})
 	go func() {
-		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil)
+		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil)
 		close(done)
 	}()
 	select {
@@ -153,11 +153,97 @@ func TestWaitForBundledModel_NoEngineGraceIgnoredDuringSetup(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, true /*engineComing*/, nil) {
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, true /*engineComing*/, nil, nil) {
 		t.Fatalf("engine-coming wait gave up on no_engine; out=%q", out.String())
 	}
 	if strings.Contains(out.String(), "AI engine still isn't up") {
 		t.Errorf("engine-coming wait printed the give-up notice: %q", out.String())
+	}
+}
+
+// #308: awaitSetupBudget's 3-minute grace is one window, and an operator
+// still reading the model picker when it closes drops the whole run into
+// terminal-driven mode on the short legacy budget. When the browser setup
+// finally starts, this wait must notice: withdraw the takeover offer, say
+// what the window is doing now, and switch to the residency budget.
+func TestWaitForBundledModel_BrowserStartExtendsTheBudget(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	const mb = 1 << 20
+	stub := &pullStub{seq: []management.InferenceStatus{
+		downloadingSnap("qwen", 1*mb, 4*mb),
+		downloadingSnap("qwen", 2*mb, 4*mb),
+		downloadingSnap("qwen", 3*mb, 4*mb),
+		{SubsystemState: "ready", Active: activeSel("qwen"), Models: management.ModelsSnapshot{Ready: []string{"qwen"}}},
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	// The browser setup is observed from inside the wait — the wait itself
+	// started in terminal-driven mode, on the legacy budget. (That the
+	// watch stays quiet until the setup really starts is pinned in
+	// setup_watch_test.go; here every look reports it.)
+	state := &scriptedState{states: []management.SetupStateResponse{activeState()}}
+	watch := newScriptedWatch(t, state)
+	enter := newTakeoverWatch(newStdinReader(strings.NewReader("")))
+
+	var out strings.Builder
+	// A budget the old code gave up on before the download could finish;
+	// the edge is read before the first deadline check, so this is a
+	// deterministic bar rather than a race with the tick.
+	if !waitForBundledModel(srv.URL, &out, false, time.Nanosecond, false, enter, watch) {
+		t.Fatalf("the wait gave up on a budget the browser setup should have replaced; out=%q", out.String())
+	}
+	s := out.String()
+	if strings.Contains(s, "Model still downloading") {
+		t.Errorf("the wait expired on the legacy budget: %q", s)
+	}
+	if got := strings.Count(s, takeoverClosedLine); got != 1 {
+		t.Errorf("takeover offer withdrawn %d times, want exactly 1: %q", got, s)
+	}
+	if !strings.Contains(s, setupKeepTerminalOpenLine) {
+		t.Errorf("the handoff did not say to keep this terminal open: %q", s)
+	}
+	if !enter.Closed() {
+		t.Error("the takeover offer is still standing after the browser committed")
+	}
+	if !watch.Started() {
+		t.Error("the watch did not latch the browser setup for the caller")
+	}
+}
+
+// The same edge must disarm the no_engine grace. The wait entered
+// terminal-driven, so the grace was already counting down on an engine
+// nobody was installing — and the wizard that just started is about to
+// install exactly that engine (the #188 grace, seen from the other side).
+func TestWaitForBundledModel_BrowserStartDisarmsTheNoEngineGrace(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 20*time.Millisecond, time.Minute)
+	const mb = 1 << 20
+	seq := []management.InferenceStatus{}
+	for i := 0; i < 60; i++ { // well past the 20 ms grace
+		seq = append(seq, management.InferenceStatus{SubsystemState: "no_engine"})
+	}
+	seq = append(seq,
+		downloadingSnap("qwen", 1*mb, 4*mb),
+		management.InferenceStatus{SubsystemState: "ready", Active: activeSel("qwen"),
+			Models: management.ModelsSnapshot{Ready: []string{"qwen"}}})
+	stub := &pullStub{seq: seq}
+	srv := stub.server()
+	defer srv.Close()
+
+	// Inactive for the first two looks, so the grace is armed before the
+	// browser setup arrives. The desired engine is not installed yet, so
+	// the edge reports engineComing.
+	state := &scriptedState{states: []management.SetupStateResponse{
+		{}, {}, {Active: true, DesiredEngine: "ollama"},
+	}}
+	watch := newScriptedWatch(t, state)
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false /*engineComing*/, nil, watch) {
+		t.Fatalf("the wait gave up on no_engine after the browser setup started; out=%q", out.String())
+	}
+	if strings.Contains(out.String(), "AI engine still isn't up") {
+		t.Errorf("the wait printed the give-up notice for an engine the wizard is installing: %q", out.String())
 	}
 }
 
@@ -173,7 +259,7 @@ func TestWaitForBundledModel_EndedByConfirmedTakeover(t *testing.T) {
 	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\ny\n")))
 
 	var out strings.Builder
-	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter) {
+	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter, nil) {
 		t.Fatal("a taken-over wait must return false")
 	}
 	s := out.String()
@@ -206,7 +292,7 @@ func TestWaitForBundledModel_BareEnterDoesNotTakeOver(t *testing.T) {
 	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\n\n")))
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter) {
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter, nil) {
 		t.Fatalf("a declined takeover ended the wait; out=%q", out.String())
 	}
 	if enter.Fired() {
@@ -238,7 +324,7 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil) {
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil, nil) {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()

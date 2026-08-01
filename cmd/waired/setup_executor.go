@@ -438,19 +438,20 @@ func (s *executorSession) watchSignals() {
 // terminal, and wait out the gap until they actually start setup there.
 //
 // Returns the model-wait budget, whether a browser setup is driving this
-// host, and the takeover watch (never nil, so callers can poll
-// unconditionally). Non-interactive / --no-browser / an older daemon all
-// return the legacy budget with an inert watch, which is what keeps
-// those paths byte-identical.
+// host, the takeover watch, and the setup watch that carries the same
+// question past this window (#308) — the two watches are never nil, so
+// callers can poll unconditionally. Non-interactive / --no-browser / an
+// older daemon all return the legacy budget with both watches inert,
+// which is what keeps those paths byte-identical.
 //
 // in is the process's stdin owner, or nil when init is not running on a
 // terminal. Two things follow from a nil owner: the offer line is not
 // printed (there is no keyboard to press it on), and the watch is inert
 // — a piped stdin belongs to the script driving init, and letting it
 // take the terminal over is how a scripted answer went missing (#185).
-func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonInteractive, noBrowser bool) (time.Duration, bool, *enterWatch) {
+func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonInteractive, noBrowser bool) (time.Duration, bool, *enterWatch, *setupWatch) {
 	if !s.Supported() || nonInteractive || noBrowser {
-		return benchPollDeadline, false, newTakeoverWatch(nil)
+		return benchPollDeadline, false, newTakeoverWatch(nil), newSetupWatch(nil, false)
 	}
 	writePrompt(out, "Setup is continuing in your browser…")
 	// waired#939: the persistence warning comes BEFORE the offer to switch.
@@ -468,7 +469,11 @@ func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonIn
 	in.Discard()
 	enter := newTakeoverWatch(in)
 	budget, active := awaitSetupBudget(s, setupAwaitGrace, out, enter)
-	return budget, active, enter
+	// #308: the grace above is one 3-minute window. When it expires with
+	// nothing started, the long waits downstream keep asking — the
+	// operator reading the model picker for four minutes is the ordinary
+	// case this window was too short for.
+	return budget, active, enter, newSetupWatch(s, active)
 }
 
 // awaitSetupBudget decides how long the CLI stays resident after login.
