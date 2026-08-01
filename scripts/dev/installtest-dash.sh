@@ -250,6 +250,31 @@ run_case zero "fresh init answers"  "$FRESH"                                 -- 
 run_case zero "fresh init answers (space form)" "$FRESH"                     -- --dry-run --skip-ollama --inference-enabled false --share-with-mesh true
 run_case zero "fresh enrolled arm"  "$FRESH IT_STUB_ENROLLED=1"              -- --dry-run --skip-ollama
 
+# 3a. The engine is NOT installed before consent (#138). linux_apt_install used
+#     to run `waired runtimes install ollama` in its own "AI engine (Ollama)"
+#     section, BEFORE linux_maybe_init — so a `curl | sh` had already pulled
+#     ~1.4 GB by the time the operator was asked whether this computer should
+#     run models at all. macOS and Windows dropped their pre-install in #55/#73
+#     and leave the decision AND the install to `waired init`; these two cases
+#     pin Linux to the same contract.
+#
+#     The two `!` patterns are the removal itself; the positive lines next to
+#     them are what stops those from passing vacuously — an installer that died
+#     before either section would satisfy the negatives on their own.
+run_case_asserts zero "fresh: engine deferred to sign-in (#138)" "$FRESH" \
+  "!AI engine \(Ollama\)
+!Installing waired's bundled Ollama
+Sign you in
+Install the Ollama AI engine during sign-in
+Ollama: +installed by sign-in" -- --dry-run
+# The opt-out arm keeps its own wording: --skip-ollama still reaches `waired
+# init` as WAIRED_NO_OLLAMA, so the banner must say "skipped", not "at sign-in".
+run_case_asserts zero "fresh --skip-ollama: banner still says skipped" "$FRESH" \
+  "!AI engine \(Ollama\)
+!Installing waired's bundled Ollama
+!Install the Ollama AI engine during sign-in
+Ollama: +skipped \(--skip-ollama" -- --dry-run --skip-ollama
+
 # 3b. The `waired init` hand-off (#165, #166). These assert OUTPUT, not just
 #     exit status, so they run under setsid: without a controlling terminal
 #     the terminal gate is live and deterministic whether this harness is run

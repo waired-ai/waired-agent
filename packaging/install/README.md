@@ -11,7 +11,13 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 ```
 
 Internally it adds the Waired apt repository and `apt install`s the
-`waired` (and, by default, `waired-tray`) packages.
+`waired` (and, by default, `waired-tray`) packages. Like the other two
+OSes, the **Ollama** engine is installed by `waired init` itself and only
+when the operator says this computer should run models — the installer
+pre-installed it here until `#138`, which is why a `curl | sh` used to
+spend ~1.4 GB before asking anything. A host that never reaches init
+(`--no-init`, no terminal, non-systemd) finishes with no engine until the
+first `sudo waired init`.
 
 ## macOS — `install.sh`
 
@@ -160,8 +166,10 @@ The architecture matrix is `amd64` and `arm64` on Linux and macOS,
 | `-h`/`--help`| Print usage and exit.                                |
 
 Both installers show a summary of what they are about to do (install
-location, background service, Ollama download, browser sign-in, the
-admin-rights prompt) right after the banner and ask **`Proceed? [Y/n]`**
+location, background service, sign-in, the Ollama download that sign-in
+may then ask for, the admin-rights prompt — in that order, because that
+is the order it happens in) right after the banner and ask
+**`Proceed? [Y/n]`**
 before anything runs. The uninstallers ask **`[y/N]`** (Enter aborts).
 `--yes` / `-Yes` skips the prompt; a non-interactive session (CI, piped
 without a terminal) proceeds with a notice — except `--clean`, which

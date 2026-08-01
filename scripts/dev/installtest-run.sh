@@ -14,11 +14,12 @@
 # Tier 3: + WireGuard data plane on a real kernel (LXD VM): two guests
 #   enroll through the full installer and ping over the overlay.
 #
-# --inference: exercise the full first-run journey on CPU — install.sh
-#   installs Ollama (no --skip-ollama), `waired init` force-enables
-#   inference so its deploy phase pulls the bundled model and runs the
-#   end-of-init benchmark. Pairs with Tier 2 (IT_ENROLL_MODE=authkey against
-#   the real app.dev.waired.net is the no-human path). GPU not required.
+# --inference: exercise the full first-run journey on CPU — `waired init`
+#   force-enables inference, so it installs the engine on the daemon path
+#   (#138: install.sh pre-installs nothing on any OS now) and its deploy
+#   phase pulls the bundled model and runs the end-of-init benchmark. Pairs
+#   with Tier 2 (IT_ENROLL_MODE=authkey against the real app.dev.waired.net
+#   is the no-human path). GPU not required.
 #
 # --integration (--local/native only; #496): implies --inference but PINS the
 #   tiny 0.5B as the bundled model (deploy pulls ~0.4 GB, not the 7B), then runs
@@ -29,7 +30,8 @@
 #
 # --daemon-engine (waired#835 §9/§11): drive the DAEMON-path first-run so the
 #   resident `waired init` executor installs the engine on an engine-less host
-#   (the path the standalone oidc/bypass enrol never reaches). install.sh keeps
+#   under a browser wizard — runSetupEngineInstall rather than --inference's
+#   wizard-less ensureDaemonPathEngine. install.sh keeps
 #   --skip-ollama (engine ABSENT), enrol completes the daemon's login session
 #   out-of-band via the OIDC grant (lib/installtest-daemon-engine.sh), and a
 #   tiny bundled model keeps the trailing pull cheap. Pairs with Tier 2; its
@@ -198,15 +200,20 @@ apply_agent_env_extra() {
 # Run the working-tree install.sh inside the guest, as root, against the
 # local apt repo. We exercise the canonical dogfood one-liner shape
 # (`--dev`, resolving to CONTROL_URL via WAIRED_DEV_CONTROL_URL). Tier 1
-# uses --no-init (enrol is a separate Tier-2 step). Ollama is skipped by
-# default; --inference drops --skip-ollama so the real engine installs and
-# a later `waired init --inference-enabled=true` can pull + benchmark (CPU).
+# uses --no-init (enrol is a separate Tier-2 step).
+#
+# --skip-ollama by default, dropped for --inference. Since #138 that flag no
+# longer decides whether install.sh downloads an engine — it never does — it
+# decides what install.sh would tell `waired init`, and with --no-init here
+# even that never leaves the script. It stays because the leg's own enrol step
+# runs init directly, and the flag's two arms (opt-out wording vs the
+# "installed at sign-in" banner) are still worth walking through as a pair.
 run_install() {
   local guest="$1"; shift
   local notray=WAIRED_NO_TRAY=1
   [ "$WITH_TRAY" = 1 ] && notray=
   local ollama_arg=--skip-ollama
-  [ "$INFER" = 1 ] && ollama_arg=   # install Ollama for the CPU-inference journey
+  [ "$INFER" = 1 ] && ollama_arg=   # the CPU-inference journey wants an engine
   it_log "running install.sh${IT_LOCAL:+ (local)} in $guest (--dev -> $CONTROL_URL${ollama_arg:+, }${ollama_arg:-, +ollama})"
   # The env knobs point install.sh at the harness-built signed apt repo; it
   # then runs its real `apt-get install waired` path (#328 update path on a

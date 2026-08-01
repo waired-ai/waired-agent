@@ -364,7 +364,9 @@ Options:
                    source, and Ollama + its models), then install fresh.
                    Destructive — asks to confirm unless --yes. Same as
                    WAIRED_CLEAN=1. Cannot be combined with --check/--update.
-  --skip-ollama    do not install Ollama (same as WAIRED_NO_OLLAMA=1)
+  --skip-ollama    tell \`waired init\` not to install the Ollama engine
+                   (same as WAIRED_NO_OLLAMA=1). Add it later with:
+                   sudo waired runtimes install ollama
   --no-init        do not auto-run \`waired init\` after install (the
                    default runs sign-in + setup when a terminal is present)
   --yes, -y        assume "yes" for prompts (pre-install confirmation,
@@ -406,8 +408,8 @@ Environment variables:
                            --edge; works on every OS). Unset/'latest' =
                            the newest stable release.
   WAIRED_NO_TRAY           if set, do not install waired-tray (Linux + macOS)
-  WAIRED_NO_OLLAMA         if set, do not install Ollama (same as
-                           --skip-ollama; Linux + macOS)
+  WAIRED_NO_OLLAMA         if set, \`waired init\` skips the Ollama engine
+                           install (same as --skip-ollama; Linux + macOS)
   WAIRED_NO_CLAUDE_PROXY   if set, leave Claude Code on the Anthropic API
                            (same as --skip-claude-proxy); forwarded to
                            \`waired init\`, the single decider of routing
@@ -634,6 +636,20 @@ already_installed() {
     esac
 }
 
+# signin_summary_how says how sign-in will actually reach this operator, so
+# the summary does not promise a browser that will never open. `waired init`
+# decides that from the same two variables (internal/platform/browser
+# browser_linux.go HasDisplay -> cmd/waired/login_gate.go resolveBrowserGate:
+# no display means gatePrintOnly, link + pairing code only). Linux is the
+# only OS with a headless shape here — a macOS install runs on the console.
+signin_summary_how() {
+    if [ "$OS_KIND" = linux ] && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        printf 'prints a sign-in link you can open on any device'
+    else
+        printf 'opens your web browser'
+    fi
+}
+
 # show_install_summary tells the operator what a fresh install is about to
 # do, BEFORE anything runs. Mirrors install.ps1's Show-InstallSummary.
 show_install_summary() {
@@ -653,11 +669,17 @@ show_install_summary() {
             printf '  * Register the waired-agent background service (starts at boot)\n'
             ;;
     esac
-    if ! ollama_skip_requested; then
-        printf '  * Install the Ollama AI engine (a few GB download)\n'
-    fi
+    # Sign-in comes BEFORE the engine, because that is the order the install
+    # runs in: `waired init` asks whether this computer should run models and
+    # only then installs an engine (#138). Promising the download first is how
+    # the Linux installer used to describe a pre-install that bypassed the
+    # question entirely.
     if [ "$FLAG_NO_INIT" != 1 ]; then
-        printf '  * Sign you in (opens your web browser)\n'
+        printf '  * Sign you in (%s)\n' "$(signin_summary_how)"
+    fi
+    if ! ollama_skip_requested; then
+        printf '  * Install the Ollama AI engine during sign-in, only if you\n'
+        printf '    choose to run models here (a few GB download)\n'
     fi
     if [ "$(id -u)" -ne 0 ]; then
         printf '  * Ask for administrator rights (a sudo password prompt may appear)\n'
@@ -798,15 +820,17 @@ detect_arch() {
 # (which needs the repo present to read apt's candidate version). Sets
 # $list_file as a side effect for callers' scoped apt-get invocations.
 linux_apt_ensure_repo() {
-    # zstd is required by upstream ollama.com/install.sh: it ships a
-    # .tar.zst and aborts ("requires zstd for extraction") instead of
-    # falling back to .tgz when zstd is absent. It is not in Ubuntu's
-    # minimal base, so install it here. (macOS/Windows extract with the
-    # built-in unzip / Expand-Archive and need nothing extra.)
-    common_log "Installing apt prerequisites (ca-certificates, curl, gnupg, zstd)..."
+    # zstd used to be installed here for upstream ollama.com/install.sh,
+    # which ships a .tar.zst and aborts ("requires zstd for extraction")
+    # without it. Nothing shells out to zstd any more: the engine tarball is
+    # fetched and decompressed IN-PROCESS by internal/runtime/ollama_install.go
+    # (extractTarZst, klauspost/compress), and that is the only zstd payload
+    # the installer's world touches — dpkg handles zstd-compressed .debs with
+    # its own linked libzstd. Dropped with the Linux engine pre-install (#138).
+    common_log "Installing apt prerequisites (ca-certificates, curl, gnupg)..."
     common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
     common_run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg zstd
+        ca-certificates curl gnupg
 
     keyring_dir=/etc/apt/keyrings
     keyring_file="$keyring_dir/waired-archive-keyring.gpg"
@@ -939,9 +963,9 @@ EOF
     if [ -n "$SHARE_WITH_MESH" ]; then
         set -- "$@" "--share-with-mesh=$SHARE_WITH_MESH"
     fi
-    # init has a root-time fallback that installs the bundled engine when the
-    # pre-install above failed; keep --skip-ollama honoured across the sudo
-    # env_reset by threading WAIRED_NO_OLLAMA through `env`. Same for the
+    # init is the ONLY thing that installs the engine now (#138), so
+    # --skip-ollama has to survive the sudo env_reset to reach it: thread it
+    # through `env` as WAIRED_NO_OLLAMA. Same for the
     # PII-masking and Claude-routing opt-out requests: init is the single
     # decider of routing, so --skip-claude-proxy / WAIRED_NO_CLAUDE_PROXY must
     # reach it (it defaults --skip-claude-route from WAIRED_NO_CLAUDE_PROXY).
@@ -1173,15 +1197,6 @@ linux_apt_install() {
     linux_apt_write_control_url
     linux_write_log_level_env
 
-    section 'AI engine (Ollama)'
-    if ollama_skip_requested; then
-        common_log "Ollama install skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
-        ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; bundled engine later: sudo waired runtimes install ollama — or bring your own and pick \"reuse\" at sign-in)"
-    else
-        linux_install_ollama
-        ollama_status="installed (local inference engine)"
-    fi
-
     # Start the daemon FIRST, then drive first-run sign-in: with the agent
     # already running, `waired init` attaches to it and takes the
     # daemon-driven onboarding path (waired#835 §11.2) rather than the
@@ -1195,9 +1210,22 @@ linux_apt_install() {
 
 # linux_done_banner prints the friendly "what just happened / you're ready"
 # summary after a fresh install. Branches on whether sign-in completed.
+#
+# The engine line is MEASURED here rather than set by an earlier step,
+# because since #138 the installer does not decide it: `waired init` installs
+# the bundled engine only when the operator said this computer should run
+# models, so the honest answer is whatever is on disk once init has returned.
+# Same three arms and the same strings as darwin_next_steps.
 linux_done_banner() {
     section 'Done'
     party="$(emo '🎉' '*')"
+    if ollama_skip_requested; then
+        ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; bundled engine later: sudo waired runtimes install ollama — or bring your own and pick \"reuse\" at sign-in)"
+    elif $SUDO test -x /var/lib/waired/runtimes/ollama/bin/ollama; then
+        ollama_status="installed (local AI engine)"
+    else
+        ollama_status="installed by sign-in when local inference is on (sudo waired init)"
+    fi
     if linux_enrolled; then
         ready="$(emo '✅' '[ok]') Enrolled — the agent service is running."
         nextline="Check it:     waired status        (try: waired infer \"hello, world!\")"
@@ -1278,36 +1306,22 @@ linux_write_log_level_env() {
     printf 'WAIRED_LOG_LEVEL=%s\n' "$LOG_LEVEL" | $SUDO tee -a "$env_file" >/dev/null
 }
 
-# Install waired's BUNDLED Ollama on Linux via `waired runtimes install
-# ollama` (the deb already put `waired` on PATH). It downloads the pinned
-# official release into <state-dir>/runtimes/ollama/bin/ollama and hands
-# the state dir back to the service user (#484), so waired-agent can
-# supervise it as a foreground child on the waired-owned port :9475 — no
-# system service, no systemctl. On Linux the agent's bundled resolver
-# STRICTLY requires that state-dir binary (it never falls back to a system
-# ollama on PATH), so the old `ollama.com/install.sh` system install left
-# :9475 unprovisioned: the agent stayed at no_engine and the bundled-model
-# pull never ran (#567). The model itself is pulled later by waired-agent
-# at boot. Set WAIRED_NO_OLLAMA / --skip-ollama to skip — that is also the
-# "reuse" path: bring your own Ollama and choose "reuse" at `waired init`.
-# A failure here is non-fatal: waired-agent retries once a usable engine
-# appears.
-linux_install_ollama() {
-    bundled_bin=/var/lib/waired/runtimes/ollama/bin/ollama
-    if [ -x "$bundled_bin" ]; then
-        common_log "Bundled Ollama already present at $bundled_bin — skipping install"
-        return 0
-    fi
-    common_log "Installing waired's bundled Ollama (waired runtimes install ollama)"
-    if [ "$DRY_RUN" = 1 ]; then
-        common_log "  (dry-run) would: $SUDO waired runtimes install ollama --yes --state-dir /var/lib/waired"
-        return 0
-    fi
-    # shellcheck disable=SC2086  # $SUDO is intentionally word-split (empty when root)
-    if ! $SUDO waired runtimes install ollama --yes --state-dir /var/lib/waired; then
-        common_warn "Bundled Ollama install failed; waired-agent will retry at boot. Install by hand later: sudo waired runtimes install ollama"
-    fi
-}
+# The Linux engine pre-install lived here (linux_install_ollama, #567) and
+# was removed in #138. It ran `waired runtimes install ollama` from inside
+# linux_apt_install — before the daemon was up and long before anyone was
+# asked whether this computer should run models — which meant a `curl | sh`
+# spent ~1.4 GB answering a question on the operator's behalf. macOS and
+# Windows dropped their pre-install in #55/#73 already; Linux kept it on the
+# assumption that init took the standalone path, which stopped being true
+# when #119 made the daemon path the default on all three OSes. `waired init`
+# now owns both the decision and the install on every OS: the wizard's engine
+# step (cmd/waired/setup_install.go runSetupEngineInstall) or, with no browser
+# driving, cmd/waired/init_daemon_inference.go ensureDaemonPathEngine — both
+# install into the daemon-declared state dir, which is the same
+# /var/lib/waired/runtimes/ollama/bin/ollama the strict bundled resolver
+# requires. Hosts that never reach init (--no-init, no terminal, non-systemd)
+# end with no engine until the first `sudo waired init`; that is the consent
+# gate working, and it matches Windows -SkipInit.
 
 # ---------------------------------------------------------------------
 # darwin_* — macOS handler
