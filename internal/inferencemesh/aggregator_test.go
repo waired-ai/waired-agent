@@ -423,7 +423,7 @@ func TestAggregatorStalePeerKeepsPhase7Fields(t *testing.T) {
 // deliberately not the expected one.
 func TestAggregatorSnapshotPeersSortedStable(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	a.Update(&signer.NetworkMap{
 		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
@@ -464,7 +464,7 @@ func TestAggregatorSnapshotPeersSortedStable(t *testing.T) {
 // DeviceID breaks the tie so the pair does not swap between polls.
 func TestAggregatorSnapshotPeersSortedTieBreak(t *testing.T) {
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	a.Update(&signer.NetworkMap{
 		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
