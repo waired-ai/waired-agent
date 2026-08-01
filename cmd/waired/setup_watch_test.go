@@ -26,12 +26,13 @@ func activeState() management.SetupStateResponse {
 }
 
 // newScriptedWatch arms a watch over the scripted states with the throttle
-// wound down, so a test drives ticks rather than seconds.
+// off, so a test drives reads rather than seconds. It must be off rather
+// than merely small: a sub-tick interval reads as "throttled" wherever the
+// clock's resolution exceeds it, which on Windows swallowed consecutive
+// polls and made the edge unobservable.
 func newScriptedWatch(t *testing.T, s *scriptedState) *setupWatch {
 	t.Helper()
-	w := &setupWatch{state: s.next}
-	w.every = time.Nanosecond
-	return w
+	return &setupWatch{state: s.next, every: 0}
 }
 
 // TestSetupWatchReportsTheEdgeOnce is the #308 contract: a browser setup

@@ -32,7 +32,9 @@ type setupWatch struct {
 	// — and so one built by hand cannot arm by accident.
 	alreadyActive bool
 	// every throttles the reads: each one is a loopback round trip, and
-	// the waits that poll this tick once a second.
+	// the waits that poll this tick once a second. Zero means every poll
+	// reads — for tests that drive reads rather than time, and the only
+	// setting that cannot be swallowed by a coarse clock.
 	every time.Duration
 	next  time.Time
 	// started latches the edge. Reported once — the caller narrates the
