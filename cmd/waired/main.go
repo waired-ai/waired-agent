@@ -351,6 +351,10 @@ func runStatusBody(mgmt, stateDir string, observability bool, output string) err
 	id, err := identity.Load(gf.StateDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
+			if notice, ok := unreadableSystemStateNotice(gf.StateDir, "waired status"); ok {
+				fmt.Println(notice)
+				return nil
+			}
 			return fmt.Errorf("permission denied reading state in %s — %s",
 				gf.StateDir, elevationHint("waired status"))
 		}

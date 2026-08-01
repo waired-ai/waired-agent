@@ -85,6 +85,10 @@ func runAuthStatusBody(stateDirVal string) error {
 	id, err := identity.Load(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
+			if notice, ok := unreadableSystemStateNotice(dir, "waired auth status"); ok {
+				fmt.Println(notice)
+				return nil
+			}
 			return fmt.Errorf("permission denied reading state in %s — %s",
 				dir, elevationHint("waired auth status"))
 		}
