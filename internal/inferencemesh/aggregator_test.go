@@ -18,7 +18,7 @@ func mkState(reachable bool, lastCheck time.Time) *signer.InferenceState {
 
 func TestAggregatorPeersOnlyAggregate(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	// Self has a reachable engine. Snapshot.Reachable must NOT pick this
 	// up — it's peers-only by design.
@@ -54,37 +54,60 @@ func TestAggregatorPeersOnlyAggregate(t *testing.T) {
 	}
 }
 
-func TestAggregatorStalenessThreshold(t *testing.T) {
-	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+// TestAggregatorAdvertisedLivenessAtReceipt pins a PRODUCT CONTRACT:
+// a peer's advertised last_check is judged once, against the instant
+// its frame arrived, and the verdict is then held until a newer frame
+// replaces it.
+//
+// This inverts the pre-waired-agent#323 test, which asserted the same
+// bound was re-applied against wall-clock forever after (14 s fresh /
+// 16 s stale at a 15 s threshold). That version encoded the defect:
+// the CP does not re-emit a frame when only last_check advances, so
+// every frame's verdict rotted 15 s after arrival.
+func TestAggregatorAdvertisedLivenessAtReceipt(t *testing.T) {
+	base := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	now := base
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
-	// Peer's last_check is 14 s ago — fresh.
+	// A live peer: its push reached the CP a few seconds before the
+	// frame was assembled, well inside DefaultAdvertisedLiveness.
 	a.Update(&signer.NetworkMap{
 		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
 		Peers: []signer.NetworkMapPeer{
-			{DeviceID: "peer-a", InferenceState: mkState(true, now.Add(-14*time.Second))},
+			{DeviceID: "peer-a", InferenceState: mkState(true, now.Add(-5*time.Second))},
 		},
 	})
 	if got := a.Snapshot(); !got.Reachable {
-		t.Fatalf("Reachable=false with fresh (14s) peer")
-	}
-	if got := a.Snapshot(); got.Peers[0].Stale {
-		t.Fatalf("peer with 14s last_check must not be Stale at 15s threshold")
+		t.Fatalf("Reachable=false with a peer whose last_check was 5s old at receipt")
 	}
 
-	// Same peer 16 s ago — stale, drop from aggregate.
+	// The bug: no new frame arrives, wall-clock advances past what used
+	// to be the 15 s deadline. The peer must stay usable — the CP would
+	// have re-emitted had anything actually changed.
+	now = base.Add(2 * time.Minute)
+	snap := a.Snapshot()
+	if snap.Peers[0].Stale {
+		t.Fatalf("peer went Stale without a new frame: the CP only re-emits on content change")
+	}
+	if !snap.Reachable {
+		t.Fatalf("Reachable=false 2min after a frame that is still the CP's latest word")
+	}
+
+	// A peer that stopped pushing: the CP's stored state is frozen, so
+	// the NEXT frame carries a last_check that is already too old.
+	now = base.Add(5 * time.Minute)
 	a.Update(&signer.NetworkMap{
 		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
 		Peers: []signer.NetworkMapPeer{
-			{DeviceID: "peer-a", InferenceState: mkState(true, now.Add(-16*time.Second))},
+			{DeviceID: "peer-a", InferenceState: mkState(true, now.Add(-4*time.Minute))},
 		},
 	})
-	snap := a.Snapshot()
+	snap = a.Snapshot()
 	if snap.Reachable {
-		t.Fatalf("Reachable=true with only stale peers")
+		t.Fatalf("Reachable=true for a peer whose advertisement was 4min old on arrival")
 	}
 	if !snap.Peers[0].Stale {
-		t.Fatalf("peer with 16s last_check must be Stale at 15s threshold")
+		t.Fatalf("peer whose last_check was already stale at receipt must be Stale")
 	}
 	// But the entry remains visible — consumers must still be able to
 	// render "this peer used to be reachable".
@@ -93,9 +116,140 @@ func TestAggregatorStalenessThreshold(t *testing.T) {
 	}
 }
 
+// TestAggregatorQuietMapWindowKeepsPeersRouteEligible is the assertion
+// waired-agent#323 asks for by name: across a quiet window far longer
+// than any per-peer probe cadence, a peer whose state genuinely has not
+// changed stays route-eligible as long as the CP keeps honouring its
+// backstop re-emit. PRODUCT CONTRACT.
+func TestAggregatorQuietMapWindowKeepsPeersRouteEligible(t *testing.T) {
+	base := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	now := base
+	a := New("self-id", Policy{}, func() time.Time { return now })
+
+	frame := func() {
+		a.Update(&signer.NetworkMap{
+			Self: signer.NetworkMapPeer{DeviceID: "self-id"},
+			Peers: []signer.NetworkMapPeer{
+				// The peer keeps pushing every 5 s; the CP re-emits only
+				// on its backstop because nothing about the peer changed.
+				{DeviceID: "peer-a", InferenceState: mkState(true, now.Add(-5*time.Second))},
+			},
+		})
+	}
+
+	// Backstop cadence is 5 min (MapPollMaxAge). Walk ten minutes in
+	// 30 s steps, delivering a frame only at the backstop boundaries.
+	frame()
+	for elapsed := 30 * time.Second; elapsed <= 10*time.Minute; elapsed += 30 * time.Second {
+		now = base.Add(elapsed)
+		if elapsed%(5*time.Minute) == 0 {
+			frame()
+		}
+		snap := a.Snapshot()
+		if snap.Peers[0].Stale {
+			t.Fatalf("peer went Stale at t+%s in a quiet window", elapsed)
+		}
+		if !snap.Reachable {
+			t.Fatalf("mesh reported unreachable at t+%s in a quiet window", elapsed)
+		}
+	}
+}
+
+// TestAggregatorMapStreamGoneMarksEveryPeerStale is the other half of
+// the receipt-based contract: trusting an unchanged frame is only
+// sound while frames still arrive. Past FrameStaleness the map stream
+// itself is the thing that failed, and nothing derived from it can be
+// trusted. PRODUCT CONTRACT.
+func TestAggregatorMapStreamGoneMarksEveryPeerStale(t *testing.T) {
+	base := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	now := base
+	a := New("self-id", Policy{}, func() time.Time { return now })
+
+	a.Update(&signer.NetworkMap{
+		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
+		Peers: []signer.NetworkMapPeer{
+			{DeviceID: "peer-a", InferenceState: mkState(true, now)},
+		},
+	})
+
+	now = base.Add(DefaultFrameStaleness - time.Second)
+	if a.Snapshot().Peers[0].Stale {
+		t.Fatalf("peer went Stale just inside FrameStaleness")
+	}
+
+	now = base.Add(DefaultFrameStaleness + time.Second)
+	snap := a.Snapshot()
+	if !snap.Peers[0].Stale {
+		t.Fatalf("peer must be Stale once the newest frame is older than FrameStaleness")
+	}
+	if snap.Reachable {
+		t.Fatalf("Reachable=true with a dead map stream")
+	}
+	if snap.MapAgeMS < (DefaultFrameStaleness).Milliseconds() {
+		t.Errorf("MapAgeMS = %d, want > FrameStaleness so an operator can see WHY", snap.MapAgeMS)
+	}
+}
+
+// TestAggregatorPeerLivenessExcludesSilentHosts pins the third axis:
+// receipt-based freshness alone would keep trusting a peer whose HOST
+// dropped off the wire until the CP's next backstop frame, so the
+// disco prober's recent-pong map gets a vote. Three-valued, matching
+// disco.Service.ReachableSnapshot. PRODUCT CONTRACT.
+func TestAggregatorPeerLivenessExcludesSilentHosts(t *testing.T) {
+	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	liveness := map[string]bool{}
+	a := New("self-id", Policy{
+		PeerLiveness: func() map[string]bool { return liveness },
+	}, func() time.Time { return now })
+
+	a.Update(&signer.NetworkMap{
+		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
+		Peers: []signer.NetworkMapPeer{
+			{DeviceID: "silent", InferenceState: mkState(true, now)},
+			{DeviceID: "pinging", InferenceState: mkState(true, now)},
+			{DeviceID: "unprobed", InferenceState: mkState(true, now)},
+		},
+	})
+
+	liveness = map[string]bool{"silent": false, "pinging": true}
+
+	byID := map[string]PeerView{}
+	for _, p := range a.Snapshot().Peers {
+		byID[p.DeviceID] = p
+	}
+	if !byID["silent"].Stale {
+		t.Errorf("present+false (once seen, now silent) must be excluded")
+	}
+	if byID["pinging"].Stale {
+		t.Errorf("present+true (recent pong) must not be excluded")
+	}
+	if byID["unprobed"].Stale {
+		t.Errorf("absent (never probed) must default to trust, not exclusion")
+	}
+}
+
+// TestAggregatorSelfStalenessStaysProbeCadenceBased pins that the
+// receipt-based rework did NOT touch the self axis: Self is fed by the
+// local probe loop, which really does tick every 5 s, so a wall-clock
+// deadline on its last_check is correct there. PRODUCT CONTRACT.
+func TestAggregatorSelfStalenessStaysProbeCadenceBased(t *testing.T) {
+	base := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	now := base
+	a := New("self-id", Policy{}, func() time.Time { return now })
+
+	a.UpdateLocal(mkState(true, base))
+	if a.Snapshot().Self.Stale {
+		t.Fatalf("self must be fresh immediately after a probe")
+	}
+	now = base.Add(DefaultSelfStaleness + time.Second)
+	if !a.Snapshot().Self.Stale {
+		t.Fatalf("self must go Stale once the local probe stops ticking")
+	}
+}
+
 func TestAggregatorEmptyLastCheckIsStale(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	bad := &signer.InferenceState{Reachable: true, Type: signer.InferenceTypeOllama, LastCheck: ""}
 	a.Update(&signer.NetworkMap{
@@ -115,7 +269,7 @@ func TestAggregatorEmptyLastCheckIsStale(t *testing.T) {
 
 func TestAggregatorRemovesPeersOnNetworkMapUpdate(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	a.Update(&signer.NetworkMap{
 		Self:  signer.NetworkMapPeer{DeviceID: "self-id"},
@@ -138,7 +292,7 @@ func TestAggregatorRemovesPeersOnNetworkMapUpdate(t *testing.T) {
 
 func TestAggregatorExcludesSelfFromPeers(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	// CP includes self in nm.Peers (it shouldn't, but be defensive) —
 	// the aggregator must filter to avoid self counting in the peers-only
@@ -161,7 +315,7 @@ func TestAggregatorExcludesSelfFromPeers(t *testing.T) {
 
 func TestAggregatorSelfPlaceholderTracksNetworkMap(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	a.Update(&signer.NetworkMap{
 		Self: signer.NetworkMapPeer{DeviceID: "self-id", DeviceName: "alice-mac", OverlayIP: "100.96.0.10"},
@@ -182,7 +336,7 @@ func TestAggregatorSelfPlaceholderTracksNetworkMap(t *testing.T) {
 // consumer-less; the Selector reads agent-local snapshots instead).
 func TestAggregatorPropagatesPhase7Fields(t *testing.T) {
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	peerState := &signer.InferenceState{
 		Reachable: true,
@@ -227,13 +381,16 @@ func TestAggregatorPropagatesPhase7Fields(t *testing.T) {
 // Selector uses Stale as the gate, not InferenceState=nil.
 func TestAggregatorStalePeerKeepsPhase7Fields(t *testing.T) {
 	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
-	a := New("self-id", 15*time.Second, func() time.Time { return now })
+	a := New("self-id", Policy{}, func() time.Time { return now })
 
 	stale := &signer.InferenceState{
 		Reachable: true,
 		Type:      signer.InferenceTypeOllama,
 		Endpoint:  "http://127.0.0.1:11434",
-		LastCheck: now.Add(-30 * time.Second).UTC().Format(time.RFC3339Nano), // > 15s
+		// Already older than DefaultAdvertisedLiveness when the frame
+		// carrying it arrives — the CP's stored state is frozen because
+		// this peer stopped pushing.
+		LastCheck: now.Add(-5 * time.Minute).UTC().Format(time.RFC3339Nano),
 		Capacity:  4,
 	}
 	a.Update(&signer.NetworkMap{

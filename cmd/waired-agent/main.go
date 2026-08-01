@@ -707,9 +707,13 @@ func run(ctx context.Context, args []string) error {
 		// (a) runLocalInferenceProbe → UpdateLocal on each tick
 		// (b) runNetworkMapLoop → Update on every frame
 		// Read by GET /waired/v1/inference/mesh on the management API.
-		// The 15 s staleness threshold matches the 5 s probe / push
-		// cadence × 3 — see waired/docs/decisions/.
-		meshAgg := inferencemesh.New(id.DeviceID, 15*time.Second, time.Now)
+		// Freshness is a three-axis policy, not one LastCheck deadline:
+		// the CP only re-emits a map frame on a CONTENT change (its gate
+		// ignores last_check) plus a 5-minute long-poll backstop, so a
+		// per-peer wall-clock deadline on LastCheck marked healthy peers
+		// unreachable for ~95% of steady-state time (waired-agent#323).
+		// SetPeerLiveness below restores the fast host-death signal.
+		meshAgg := inferencemesh.New(id.DeviceID, inferencemesh.Policy{}, time.Now)
 
 		// Phase 4 peer-overlay auth lookup. Fed alongside the aggregator
 		// from runNetworkMapLoop so the inference listener can resolve a
@@ -867,15 +871,24 @@ func run(ctx context.Context, args []string) error {
 		// Selector as a hard-exclusion signal so peers with no recent
 		// pong (NAT-asymmetry / WG-keepalive failure / ISP routing
 		// blackhole) drop out of the candidate set before the probe layer
-		// fans out. 5 s freshness matches roughly 3× the disco prober
-		// re-emit interval — that's enough margin to absorb a single
-		// missed pong without flipping the peer to "unreachable".
+		// fans out. The window comes from ReachableFreshness (3× the
+		// prober's own re-emit interval): pongs arrive no more often than
+		// we probe, so a hardcoded window shorter than the cadence — the
+		// 5 s this used to pass against a 15 s cadence — marked healthy
+		// peers silent for two thirds of every cycle (waired#729).
 		var reachableSnapshotFn func() map[string]bool
 		if discoSvc != nil {
 			reachableSnapshotFn = func() map[string]bool {
-				return discoSvc.ReachableSnapshot(time.Now(), 5*time.Second)
+				return discoSvc.ReachableSnapshot(time.Now(), discoSvc.ReachableFreshness())
 			}
 		}
+		// Same signal, second consumer: without it the aggregator's
+		// receipt-based freshness would not notice a peer whose HOST
+		// dropped off the wire until the CP's 5-minute map backstop,
+		// leaving the tray label and the peer adapter's health check
+		// disagreeing with the routing decision the Selector already
+		// makes from this exact map.
+		meshAgg.SetPeerLiveness(reachableSnapshotFn)
 
 		// publicGrantDemand carries the router's "wanted a public
 		// candidate, hold no grant" signal to the acquirer (waired#827).

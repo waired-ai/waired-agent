@@ -159,3 +159,74 @@ func TestRecordPongReceived_EmptyDeviceIDNoOp(t *testing.T) {
 		t.Error("empty deviceID created a lastPongAt entry; should be no-op")
 	}
 }
+
+// TestReachableFreshness_NeverShorterThanProbeCadence is a PRODUCT
+// CONTRACT pin, not a record of today's numbers: the freshness window
+// the Selector hard-excludes on must always be at least a few probe
+// rounds wide.
+//
+// The agent shipped a hardcoded 5 s window against a 15 s
+// ProbeReprobeActive, with a comment claiming the window was "roughly
+// 3× the disco prober re-emit interval" when it was 1/3 of it. Pongs
+// arrive no more often than we probe, so a healthy peer spent ~2/3 of
+// every cycle marked present+false and was hard-excluded from the
+// candidate set (waired#729). Deriving the window from the cadence is
+// what makes that inversion unrepresentable.
+func TestReachableFreshness_NeverShorterThanProbeCadence(t *testing.T) {
+	for _, reprobe := range []time.Duration{
+		0, // unset → defaultProbeReprobeActive
+		time.Second,
+		5 * time.Second,
+		defaultProbeReprobeActive,
+		time.Minute,
+	} {
+		cadence := reprobe
+		if cadence <= 0 {
+			cadence = defaultProbeReprobeActive
+		}
+		got := reachableFreshnessFor(reprobe)
+		if got < cadence {
+			t.Errorf("reachableFreshnessFor(%s) = %s, shorter than the probe cadence %s",
+				reprobe, got, cadence)
+		}
+		if want := reachableFreshnessProbeRounds * cadence; got != want {
+			t.Errorf("reachableFreshnessFor(%s) = %s, want %s (%d rounds)",
+				reprobe, got, want, reachableFreshnessProbeRounds)
+		}
+	}
+}
+
+// TestReachableFreshness_TracksServiceConfig confirms the Service
+// method reads the configured cadence rather than a package constant,
+// so a scenario or test fixture that speeds the prober up also
+// tightens the window it is judged by.
+func TestReachableFreshness_TracksServiceConfig(t *testing.T) {
+	s := &Service{cfg: Config{ProbeReprobeActive: 2 * time.Second}}
+	if got, want := s.ReachableFreshness(), 6*time.Second; got != want {
+		t.Errorf("ReachableFreshness() = %s, want %s", got, want)
+	}
+}
+
+// TestReachableSnapshot_SurvivesOneMissedProbeRound is the behavioural
+// half of the same contract: at the production cadence a peer that
+// misses a single probe round stays trusted, and only sustained
+// silence flips it. PRODUCT CONTRACT.
+func TestReachableSnapshot_SurvivesOneMissedProbeRound(t *testing.T) {
+	now := time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC)
+	s := &Service{
+		cfg: Config{ProbeReprobeActive: defaultProbeReprobeActive},
+		lastPongAt: map[string]time.Time{
+			// One round missed (last pong ~20 s ago at a 15 s cadence).
+			"blipped": now.Add(-20 * time.Second),
+			// Silent for several rounds.
+			"silent": now.Add(-50 * time.Second),
+		},
+	}
+	got := s.ReachableSnapshot(now, s.ReachableFreshness())
+	if !got["blipped"] {
+		t.Errorf("a peer that missed one probe round must stay trusted, got excluded")
+	}
+	if got["silent"] {
+		t.Errorf("a peer silent for several rounds must be excluded, got trusted")
+	}
+}
