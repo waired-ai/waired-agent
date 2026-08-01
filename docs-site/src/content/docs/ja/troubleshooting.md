@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: f71bdbabe96d104d
+sourceHash: 50ddf76f416fb9e0
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -46,6 +46,7 @@ waired doctor
 - [Waired のアイコンに「エージェントが起動していません」と出る](#the-waired-icon-says-the-agent-is-not-running)
 - [「waired-agent is not running」と出る](#a-command-says-waired-agent-is-not-running)
 - [macOS で常駐サービスが一度も起動しない](#macos-the-background-service-never-starts)
+- [macOS で「AI ソフトが壊れている」と言われる](#macos-it-says-the-ai-software-is-damaged)
 - [Windows で 502 エラーになる](#windows-i-get-a-502-error)
 
 **遅い・おかしい**
@@ -395,6 +396,37 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.waired.agent.plist
 
 現在は Waired のインストール／アップデート時に自動で解除されるので、これらのコマンドが
 必要なのはインストーラー自体を実行できないパソコンだけです。
+
+<a id="macos-it-says-the-ai-software-is-damaged"></a>
+
+## macOS で「AI ソフトが壊れている」と言われる
+
+**「Ollama」は壊れているため開けません。ゴミ箱に入れる必要があります** という
+macOS のダイアログが出て、閉じても何度も出てくる。セットアップも
+「Preparing to download the model…」から先に進まない。
+
+実際に壊れているわけではありません。今回のリリースより前の Waired が、Ollama アプリの
+中に小さな管理用ファイルを書き込んでいました。macOS は署名済みアプリへの追加を
+*すべて* 改ざんとみなすため、起動を拒否します。その結果、Waired が AI エンジンを
+起動しようとするたびに強制終了させられていました。
+
+そのファイルを 1 つ削除すれば直ります。再ダウンロードは発生しません:
+
+```sh
+sudo waired doctor --fix
+```
+
+`waired doctor` はこの問題を **AI engine app signature** として報告し、削除対象の
+ファイル名を表示します。サインインし直す（`sudo waired init`）方法でも修復されます。
+
+修復後の確認:
+
+```sh
+codesign --verify --deep --strict /Applications/Ollama.app
+```
+
+何も出力されなければアプリは元どおりです。現在は管理用の記録をアプリの外に
+保存するので、この問題は再発しません。
 
 <a id="windows-i-get-a-502-error"></a>
 
