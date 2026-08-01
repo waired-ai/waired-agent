@@ -588,6 +588,27 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		reasons = append(reasons, fmt.Sprintf("local state for %q is %q (routing=peer-preferred, no mesh candidate)",
 			manifest.ModelID, modelState.State))
 		// Fall through to the local-ready candidate construction below.
+	case state.RoutingModePeerOnly:
+		// Mesh only, fail closed. The mirror image of local-only: the
+		// operator asked for this machine NOT to serve, so a silent
+		// local run would defeat the choice exactly the way the Claude
+		// surface's silent fallback did (#325). A ready local model is
+		// therefore deliberately not consulted, and MeshSnapshotFn==nil
+		// (the overlay-side Selector, where this mode should never have
+		// been set) fails rather than degrading to local.
+		if s.in.MeshSnapshotFn == nil {
+			return nil, fmt.Errorf("%w: %q state=%q (routing=peer-only, no mesh snapshot)",
+				ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
+		}
+		cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
+		}
+		if len(cands) > 0 {
+			return cands, nil
+		}
+		return nil, fmt.Errorf("%w: %q state=%q (routing=peer-only, no mesh candidate)",
+			ErrModelNotReady, manifest.ModelID, modelStateOf(modelState, present))
 	case state.RoutingModePinned:
 		// Pin to a specific peer. tryMeshFallbackK handles the
 		// strict / soft semantics: pin-unreachable returns

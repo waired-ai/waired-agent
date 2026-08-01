@@ -24,6 +24,7 @@ func TestReadDesiredWorkerRoundTrip(t *testing.T) {
 		{Mode: RoutingModeAuto},
 		{Mode: RoutingModeLocalOnly},
 		{Mode: RoutingModePeerPreferred},
+		{Mode: RoutingModePeerOnly},
 		{Mode: RoutingModePinned, PinnedPeerDeviceID: "dev_abc123"},
 	}
 	for _, want := range cases {

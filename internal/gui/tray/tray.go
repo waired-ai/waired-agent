@@ -144,9 +144,9 @@ type tray struct {
 	miUpdateNotify   *systray.MenuItem // "✓ Notify me about updates"; under the banner, hidden when current (#294)
 	miToggle         *systray.MenuItem
 	// miInference is the "Inference ▸" submenu parent (waired#809). The
-	// engine/share/mesh/worker/recommend rows below are its children instead
-	// of top-level rows, so the top level stays short. Shown when
-	// ShowInferenceMenu is set.
+	// engine/share/recommend rows below are its children instead of
+	// top-level rows, so the top level stays short. Shown when
+	// ShowInferenceMenu is set. Routing lives under miRouting since #327.
 	miInference       *systray.MenuItem
 	miInferenceToggle *systray.MenuItem
 	miInferenceState  *systray.MenuItem
@@ -154,7 +154,6 @@ type tray struct {
 	miInstallEngine   *systray.MenuItem
 	miShareToggle     *systray.MenuItem
 	miShareState      *systray.MenuItem
-	miMeshReachable   *systray.MenuItem
 	miEngineWarning   *systray.MenuItem
 	miActiveModel     *systray.MenuItem
 	// miDeviceLabel is the "This device ▸" submenu parent (waired#809);
@@ -218,15 +217,24 @@ type tray struct {
 	lastRecommendation *management.BenchmarkRecommendation
 	lastRecPopupKey    string
 
-	// Inference-worker (manual routing) submenu — Tailscale-exit-node-
-	// style. miWorkerActive is the top-level "Worker: linux-gpu (pinned)"
-	// summary; miWorker is the parent of the "Inference worker" submenu.
-	// Mode rows are fixed slots (auto / local-only / peer-preferred);
-	// pin rows are MaxWorkerPinEntries dynamic slots driven by the mesh
-	// snapshot. miWorkerClearPin only shows when mode==pinned.
+	// "Inference routing ▸" submenu (#327) — Tailscale-exit-node-style
+	// manual routing, split off "Inference" so engine control and request
+	// routing stop sharing one list. miRouting is the top-level parent;
+	// miWorkerActive ("Worker: linux-gpu (pinned)") and miMeshReachable
+	// are its display-only first rows. miWorkerModesHeader /
+	// miWorkerPinsHeader are disabled section labels that separate the
+	// automatic modes from the concrete per-peer pins — the systray
+	// Windows backend renders no third nesting level, so labelled groups
+	// in one flat list are the available separation. Mode rows are fixed
+	// slots (auto / local-only / peer-preferred / peer-only); pin rows are
+	// MaxWorkerPinEntries dynamic slots driven by the mesh snapshot.
+	// miWorkerClearPin only shows when mode==pinned.
+	miRouting            *systray.MenuItem
 	miWorkerActive       *systray.MenuItem
-	miWorker             *systray.MenuItem
-	miWorkerModes        []*systray.MenuItem // 3 entries: auto / local-only / peer-preferred
+	miMeshReachable      *systray.MenuItem
+	miWorkerModesHeader  *systray.MenuItem
+	miWorkerPinsHeader   *systray.MenuItem
+	miWorkerModes        []*systray.MenuItem // workerModeSlots entries: auto / local-only / peer-preferred / peer-only
 	miWorkerPinEntries   []*systray.MenuItem
 	miWorkerClearPin     *systray.MenuItem
 	lastWorkerModes      []WorkerModeRow      // Mode lookup for click dispatch
@@ -425,12 +433,17 @@ func (t *tray) onReady(ctx context.Context) func() {
 			t.miCatalogEntries[i].Hide()
 		}
 
-		// --- Inference submenu (waired#809): the engine power / share / mesh
-		// status rows and the worker-routing submenu move off the top level
-		// into one "Inference" parent. Shown when ShowInferenceMenu is set
-		// (the daemon exposes the inference API); apply() fills the rows.
-		// Each row keeps its prior Disable()/Hide() baseline so the first
-		// paint's (false,false) visibility diffs stay no-ops.
+		// --- Inference submenu (waired#809): the engine power / share /
+		// model status rows for THIS computer. Shown when
+		// ShowInferenceMenu is set (the daemon exposes the inference
+		// API); apply() fills the rows. Each row keeps its prior
+		// Disable()/Hide() baseline so the first paint's (false,false)
+		// visibility diffs stay no-ops.
+		//
+		// Routing — "which computer answers my requests" — is NOT here
+		// since #327; it has its own top-level parent below. The review
+		// found the two indistinguishable when engine controls, status
+		// captions and routing radios shared one flat list.
 		t.miInference = systray.AddMenuItem("Inference", "Local inference engine status and controls")
 		t.miInference.Hide()
 		t.miInferenceToggle = t.miInference.AddSubMenuItem("", tipInferenceToggle)
@@ -444,9 +457,6 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miShareToggle = t.miInference.AddSubMenuItem("", "")
 		t.miShareState = t.miInference.AddSubMenuItem("", "")
 		t.miShareState.Disable()
-		t.miMeshReachable = t.miInference.AddSubMenuItem("", "")
-		t.miMeshReachable.Disable()
-		t.miMeshReachable.Hide()
 		t.miEngineWarning = t.miInference.AddSubMenuItem("", "Engine provenance warning (version mismatch / port conflict)")
 		t.miEngineWarning.Disable()
 		t.miEngineWarning.Hide()
@@ -455,29 +465,44 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miActiveModel.Hide()
 		t.miRecommend = t.miInference.AddSubMenuItem("", "This host benchmarks below the interactive floor; a lighter model is recommended")
 		t.miRecommend.Hide()
-		t.miWorkerActive = t.miInference.AddSubMenuItem("", "")
+
+		// --- Inference routing submenu (#327): a NEW top-level parent
+		// holding the answer to "where do my requests run" — the current
+		// worker, whether any peer engine is reachable, the automatic
+		// modes, and the concrete per-peer pins.
+		//
+		// All rows are FLAT level-2 children with disabled header rows
+		// marking the two groups, because fyne.io/systray's Windows
+		// backend does not render a third nesting level (same limit that
+		// flattened these rows under "Inference" in waired#809, and the
+		// reason the pins cannot live one submenu deeper as the review
+		// suggested). Click dispatch is unchanged — it keys off the item
+		// pointers, not the parent.
+		t.miRouting = systray.AddMenuItem("Inference routing", "Which computer answers this one's inference requests")
+		t.miRouting.Hide()
+		t.miWorkerActive = t.miRouting.AddSubMenuItem("", "")
 		t.miWorkerActive.Disable()
 		t.miWorkerActive.Hide()
-		// Worker routing rows are flattened directly under Inference (not a
-		// nested submenu): fyne.io/systray's Windows backend does not render
-		// items nested three levels deep, so miWorker is now just a disabled
-		// section label and the mode/pin/clear rows are siblings of the
-		// engine rows (waired#809). Click dispatch is unchanged — it keys off
-		// the item pointers.
-		t.miWorker = t.miInference.AddSubMenuItem("Inference worker", "Where outbound inference flows (Tailscale-exit-node style)")
-		t.miWorker.Disable()
-		t.miWorker.Hide()
-		t.miWorkerModes = make([]*systray.MenuItem, 3)
-		for i := 0; i < 3; i++ {
-			t.miWorkerModes[i] = t.miInference.AddSubMenuItem("", "Set the routing mode")
+		t.miMeshReachable = t.miRouting.AddSubMenuItem("", "")
+		t.miMeshReachable.Disable()
+		t.miMeshReachable.Hide()
+		t.miWorkerModesHeader = t.miRouting.AddSubMenuItem("", "Waired picks the computer for you, following this rule")
+		t.miWorkerModesHeader.Disable()
+		t.miWorkerModesHeader.Hide()
+		t.miWorkerModes = make([]*systray.MenuItem, workerModeSlots)
+		for i := 0; i < workerModeSlots; i++ {
+			t.miWorkerModes[i] = t.miRouting.AddSubMenuItem("", "Set the routing mode")
 			t.miWorkerModes[i].Hide()
 		}
+		t.miWorkerPinsHeader = t.miRouting.AddSubMenuItem("", "Always use one specific computer, instead of the rule above")
+		t.miWorkerPinsHeader.Disable()
+		t.miWorkerPinsHeader.Hide()
 		t.miWorkerPinEntries = make([]*systray.MenuItem, MaxWorkerPinEntries)
 		for i := 0; i < MaxWorkerPinEntries; i++ {
-			t.miWorkerPinEntries[i] = t.miInference.AddSubMenuItem("", "Pin outbound inference to this peer")
+			t.miWorkerPinEntries[i] = t.miRouting.AddSubMenuItem("", "Pin outbound inference to this peer")
 			t.miWorkerPinEntries[i].Hide()
 		}
-		t.miWorkerClearPin = t.miInference.AddSubMenuItem("(clear pin)", "Return to auto routing")
+		t.miWorkerClearPin = t.miRouting.AddSubMenuItem("(clear pin)", "Return to auto routing")
 		t.miWorkerClearPin.Hide()
 
 		// --- Public share submenu (waired#833): a NEW top-level "Public
@@ -2342,9 +2367,6 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setTitle(t.miShareToggle, prev.ShareToggleAction, m.ShareToggleAction)
 	t.setVisible(t.miShareState, prev.ShareStateLabel != "", m.ShareStateLabel != "")
 	t.setTitle(t.miShareState, prev.ShareStateLabel, m.ShareStateLabel)
-	// Mesh-reachable indicator (#212): display-only, like miShareState.
-	t.setVisible(t.miMeshReachable, prev.MeshReachableLabel != "", m.MeshReachableLabel != "")
-	t.setTitle(t.miMeshReachable, prev.MeshReachableLabel, m.MeshReachableLabel)
 	t.setVisible(t.miEngineWarning, prev.EngineWarningLabel != "", m.EngineWarningLabel != "")
 	t.setTitle(t.miEngineWarning, prev.EngineWarningLabel, m.EngineWarningLabel)
 	// miActiveModel ("Model: <model_id>") is suppressed when the catalog
@@ -2374,19 +2396,29 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setVisible(t.miRecommend, prev.ShowRecommend, m.ShowRecommend)
 	t.setTitle(t.miRecommend, prev.RecommendLabel, m.RecommendLabel)
 
-	// Worker (manual routing) group: "Worker: …" summary + "Inference
-	// worker" submenu parent. Visibility follows ShowWorker so old
-	// daemons render exactly the pre-feature menu; the leading separator
-	// auto-collapses when the group is hidden.
+	// "Inference routing" submenu (#327). The parent follows
+	// ShowRoutingMenu — true when either group below it has content — so
+	// a daemon predating the worker API but exposing the mesh still gets
+	// a parent worth opening, and one predating both renders none.
+	// Inside it: the "Worker: …" summary and the mesh-reachable row, then
+	// the two labelled groups (automatic modes, then per-peer pins).
+	t.setVisible(t.miRouting, prev.ShowRoutingMenu, m.ShowRoutingMenu)
+	routingParent := m.WorkerParentLabel
+	if routingParent == "" {
+		routingParent = "Inference routing"
+	}
+	t.setTitle(t.miRouting, prev.WorkerParentLabel, routingParent)
 	t.setVisible(t.miWorkerActive, prev.ShowWorker, m.ShowWorker)
 	t.setTitle(t.miWorkerActive, prev.WorkerActiveLabel, m.WorkerActiveLabel)
-	t.setVisible(t.miWorker, prev.ShowWorker, m.ShowWorker)
-	workerParent := m.WorkerParentLabel
-	if workerParent == "" {
-		workerParent = "Inference worker"
-	}
-	t.setTitle(t.miWorker, prev.WorkerParentLabel, workerParent)
+	// Mesh-reachable indicator (#212): display-only, moved here from the
+	// engine submenu because it answers "can routing use a peer at all?".
+	t.setVisible(t.miMeshReachable, prev.MeshReachableLabel != "", m.MeshReachableLabel != "")
+	t.setTitle(t.miMeshReachable, prev.MeshReachableLabel, m.MeshReachableLabel)
+	t.setVisible(t.miWorkerModesHeader, prev.WorkerModesHeader != "", m.WorkerModesHeader != "")
+	t.setTitle(t.miWorkerModesHeader, prev.WorkerModesHeader, m.WorkerModesHeader)
 	t.applyWorkerModes(prev.WorkerModes, m.WorkerModes)
+	t.setVisible(t.miWorkerPinsHeader, prev.WorkerPinsHeader != "", m.WorkerPinsHeader != "")
+	t.setTitle(t.miWorkerPinsHeader, prev.WorkerPinsHeader, m.WorkerPinsHeader)
 	t.applyWorkerPins(prev.WorkerPinEntries, m.WorkerPinEntries)
 	t.setVisible(t.miWorkerClearPin, prev.WorkerShowClearPin, m.WorkerShowClearPin)
 	t.mu.Lock()
@@ -2587,7 +2619,7 @@ func indentLabel(s string) string {
 }
 
 // applyWorkerModes diffs the worker mode rows (auto / local-only /
-// peer-preferred) against the pre-allocated submenu slots. Selected
+// peer-preferred / peer-only) against the pre-allocated submenu slots. Selected
 // rows get a "● " prefix so the operator sees the current mode at a
 // glance; unselected rows get "○ ". Mirrors applyCatalogEntries'
 // diff-only approach so DBus traffic stays minimal.

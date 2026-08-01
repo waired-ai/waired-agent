@@ -118,6 +118,29 @@ func TestWorkerHandler_PostSetModeLocalOnly(t *testing.T) {
 	}
 }
 
+func TestWorkerHandler_PostSetModePeerOnly(t *testing.T) {
+	ctl := &fakeWorkerCtl{}
+	s := newWorkerTestServer(t, ctl)
+
+	w := doWorker(t, s, http.MethodPost, `{"mode":"peer-only"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if ctl.lastSetMode != state.RoutingModePeerOnly {
+		t.Errorf("lastSetMode = %q, want peer-only", ctl.lastSetMode)
+	}
+}
+
+func TestWorkerHandler_PostPeerOnlyWithStrayPeerRejected(t *testing.T) {
+	ctl := &fakeWorkerCtl{}
+	s := newWorkerTestServer(t, ctl)
+
+	w := doWorker(t, s, http.MethodPost, `{"mode":"peer-only","pinned_peer_device_id":"dev_xyz"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for peer-only + pin, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestWorkerHandler_PostSetPin(t *testing.T) {
 	ctl := &fakeWorkerCtl{}
 	s := newWorkerTestServer(t, ctl)

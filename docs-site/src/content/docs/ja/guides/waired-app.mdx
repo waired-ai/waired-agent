@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 5de315f2cf2cea86
+sourceHash: 7c759d1308d1ba3c
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -86,6 +86,7 @@ import Expected from '../../../../components/Expected.astro';
 ## Inference — AI エンジンそのもの
 
 **Inference** には、**このパソコンで動く** AI の操作がまとまっています。
+リクエストの**行き先**は、ひとつ下の **Inference routing** です。
 
 | 項目 | 内容 |
 |---|---|
@@ -94,8 +95,6 @@ import Expected from '../../../../components/Expected.astro';
 | **Install Ollama…** | AI ソフトウェアが未導入のときに表示されます。 |
 | **Share engine to mesh** | **自分のほかのパソコン**にこのマシンの AI を使わせるかどうか。オフでも自分では使えます。 |
 | **Engine: ready / loading / disabled** | エンジンの状態と、読み込まれているモデル。 |
-| **Reachable** | いま通信できている自分のパソコンの台数。 |
-| **Inference worker** | このパソコンのリクエストの行き先（下記）。 |
 
 <Aside type="note" title="Pause と Stop は別のボタンです">
 	**Pause local inference** は応答を止めるだけで、モデルはメモリに載ったまま
@@ -103,16 +102,25 @@ import Expected from '../../../../components/Expected.astro';
 	数 GB を空けたくて来たなら Stop を選んでください。
 </Aside>
 
-### どのマシンが答えるか
+## Inference routing — どのマシンが答えるか
 
-**Inference worker** は、このパソコンで何か尋ねたときに**どのマシンが答えるか**を決めます。
+**Inference routing** は、このパソコンで何か尋ねたときに**どのマシンが答えるか**を
+決めます。メニューの先頭に、いまの答え（**Worker:**）と、ほかのパソコンにいま
+届くかどうかが出ます。
+
+**Choose automatically** の下では、選んだルールに従って Waired が自動で選びます。
 
 | 選択肢 | 意味 |
 |---|---|
-| **Auto (Waired-first)** | 自前の AI があればそれを使い、なければ自分のほかのパソコンへ。既定値です。 |
+| **Auto** | 自前の AI があればそれを使い、なければ自分のほかのパソコンへ。既定値です。 |
 | **Local only** | ほかのパソコンは決して使いません。 |
 | **Peer preferred** | 自分でも答えられる場合でも、ほかのパソコンを優先します。高速なデスクトップの隣にあるノートパソコンで有効です。 |
-| **Pin to peer** | 常に特定の 1 台を使います。一覧から選び、**(clear pin)** で解除します。 |
+| **Peer only** | ほかのパソコンだけを使います。どれも答えられないときは、黙ってここで動かさずにエラーになります。このマシンを空けておきたいときに選びます。 |
+
+**Pin to one peer** の下では、ルールを飛ばして常に特定の 1 台を使えます。一覧から
+選び、**(clear pin)** で **Auto** に戻ります。一覧にあっても電源が入っていない
+パソコンは *(unavailable)* と表示されます — 指定はそのまま残り、その 1 台が
+戻るまで応答できないだけです。
 
 <Aside type="tip" title="メモリが足りないときは「エンジンを止める」">
 	ほかの作業でメモリが苦しいときは **Stop inference engine** で即座に解放できます。

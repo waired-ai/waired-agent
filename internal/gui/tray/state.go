@@ -124,14 +124,24 @@ type FallbackEntry struct {
 // drops the active/preferred row even when a cap does bite.
 const MaxCatalogEntries = 32
 
-// MaxWorkerPinEntries caps the "Pin to peer" submenu pre-allocation.
-// Mirrors MaxPeerHardwareRows so the operator sees the same set of
-// peers in both submenus on hosts with more than 16 mesh members.
+// MaxWorkerPinEntries caps the pin group's pre-allocation in the
+// "Inference routing" submenu. Mirrors MaxPeerHardwareRows so the
+// operator sees the same set of peers in both submenus on hosts with
+// more than 16 mesh members.
 const MaxWorkerPinEntries = 16
 
-// WorkerModeRow is one row inside the "Inference worker" submenu's
-// mode group (auto / local-only / peer-preferred). The Selected flag
-// drives the leading "●" / "○" glyph in apply().
+// workerModeSlots is how many automatic-mode rows the routing submenu
+// pre-allocates: auto / local-only / peer-preferred / peer-only. The
+// rows are a fixed set, not a mesh-driven one, so this is the exact
+// count applyWorker emits — TestApplyWorkerModeSlotsMatchPreallocation
+// fails the build if the two ever disagree, since a mode past the
+// pre-allocation would be silently unclickable.
+const workerModeSlots = 4
+
+// WorkerModeRow is one row inside the "Inference routing" submenu's
+// automatic-selection group (auto / local-only / peer-preferred /
+// peer-only). The Selected flag drives the leading "●" / "○" glyph in
+// apply().
 type WorkerModeRow struct {
 	Mode     state.RoutingMode
 	Label    string
@@ -143,15 +153,15 @@ type WorkerModeRow struct {
 // subagent route (same/auto/waired/anthropic). Selected drives the
 // leading "●" / "○" glyph in apply(); Class is the value POSTed on
 // click. Node selection is deliberately NOT here — it lives in the
-// "Inference worker" submenu (#649: `waired worker`).
+// "Inference routing" submenu (#649: `waired worker`).
 type ClaudeRouteRow struct {
 	Class    state.ClaudeRouteClass
 	Label    string
 	Selected bool
 }
 
-// WorkerPinEntryView is one row inside the "Inference worker ▸ Pin to
-// peer" submenu. The label is the operator-visible name (with a model
+// WorkerPinEntryView is one row inside the "Inference routing"
+// submenu's pin group. The label is the operator-visible name (with a model
 // suffix when available); Available=false greys out the row so the
 // operator can see the peer but not pin to a transiently-inactive
 // host. Selected drives the "●" / "○" glyph in apply().
@@ -364,7 +374,7 @@ type MenuModel struct {
 	// selector nested under a "Claude Code" parent. Populated when the
 	// daemon exposes /waired/v1/integration/claude/route; ShowClaudeCode=
 	// false hides the whole submenu so older daemons render the pre-feature
-	// menu. Node selection is NOT here — that stays in the Inference worker
+	// menu. Node selection is NOT here — that stays in the Inference routing
 	// submenu. ClaudeFallbackNote is a disabled row surfaced only when the
 	// daemon reports a last fallback (no-silent-breakage). ClaudeEnableNote
 	// is a disabled row shown only when managed-settings is not yet routing
@@ -424,12 +434,24 @@ type MenuModel struct {
 	// Worker (Tailscale-exit-node-style manual routing) submenu —
 	// populated when the daemon exposes /waired/v1/worker (visible as
 	// Snapshot.Inference.Worker on the GET /v1/inference/status hot
-	// path). ShowWorker=false hides the entire section so old daemons
+	// path). ShowWorker=false hides the mode/pin rows so old daemons
 	// render exactly the pre-worker-pin menu.
+	//
+	// Since #327 these rows live under their OWN top-level parent
+	// ("Inference routing"), not inside "Inference": engine control and
+	// request routing are separate questions, and the review found them
+	// indistinguishable when both sat in one flat submenu.
+	// ShowRoutingMenu gates that parent — it is true when EITHER the
+	// worker rows or the mesh-reachable row has something to show, so a
+	// daemon that exposes only one of the two still renders a parent
+	// with content behind it.
+	ShowRoutingMenu    bool
 	ShowWorker         bool
-	WorkerActiveLabel  string               // "Worker: linux-gpu (pinned)" — top-level summary
-	WorkerParentLabel  string               // "Inference worker" — parent of the submenu
-	WorkerModes        []WorkerModeRow      // 3 fixed rows: auto / local-only / peer-preferred
+	WorkerActiveLabel  string               // "Worker: linux-gpu (pinned)" — first row of the routing submenu
+	WorkerParentLabel  string               // "Inference routing" — the top-level parent
+	WorkerModesHeader  string               // "Choose automatically" — disabled header above the mode rows
+	WorkerPinsHeader   string               // "Pin to one peer" — disabled header above the pin rows
+	WorkerModes        []WorkerModeRow      // 4 fixed rows: auto / local-only / peer-preferred / peer-only
 	WorkerPinEntries   []WorkerPinEntryView // ≤ MaxWorkerPinEntries peer rows
 	WorkerShowClearPin bool                 // true when mode==pinned so "(clear pin)" appears
 
@@ -748,6 +770,14 @@ func Update(snap Snapshot) MenuModel {
 	// degraded/error/disconnected state — which summariseAggregateHeader
 	// then narrates in the header — is never masked by the busy hue.
 	applyInferenceActivity(&m, snap)
+
+	// "Inference routing" is a parent with no state of its own: it shows
+	// when either of the two groups underneath it has something to say
+	// (#327). Computed here rather than inside applyWorker /
+	// applyMeshReachable because neither of those knows about the other,
+	// and a parent that opens onto an empty submenu is worse than no
+	// parent at all.
+	m.ShowRoutingMenu = m.ShowWorker || m.MeshReachableLabel != ""
 
 	// Aggregate the top-level status line last, once every subsystem has
 	// had its say (waired#809): a degraded connected state collapses to a
@@ -1168,17 +1198,29 @@ func publicUseModeRowLabel(r PublicUseModeRow) string {
 }
 
 // applyWorker projects the daemon's WorkerResponse + mesh snapshot
-// into the "Inference worker" submenu. Three groups:
+// into the "Inference routing" submenu — the top-level sibling of
+// "Inference", which holds only this computer's engine controls
+// (#327: engine settings and "where do my requests run" are different
+// questions and the review found them indistinguishable in one flat
+// list). Four groups:
 //
-//  1. Top-level summary: "Worker: <peer> (pinned)" / "Worker: auto" so
-//     the operator sees current state without expanding.
-//  2. Mode rows (auto / local-only / peer-preferred) — fixed slots,
-//     selected leading glyph follows w.Mode.
-//  3. Pin rows — one per inference-capable peer (Tailscale exit-node
-//     filter: peer must advertise an inference engine, even if
-//     transiently unavailable). Stale / unreachable peers render
-//     "(unavailable)" but stay selectable, matching Tailscale exit-
-//     node UX where the pin survives the down period.
+//  1. Summary: "Worker: <peer> (pinned)" / "Worker: auto" so the
+//     operator sees the current answer at the top of the submenu.
+//  2. A disabled section header naming what the mode rows are —
+//     automatic selection, as opposed to the pins below them.
+//  3. Mode rows (auto / local-only / peer-preferred / peer-only) —
+//     fixed slots, selected leading glyph follows w.Mode.
+//  4. A second header, then pin rows — one per inference-capable peer
+//     (Tailscale exit-node filter: peer must advertise an inference
+//     engine, even if transiently unavailable). Stale / unreachable
+//     peers render "(unavailable)" but stay selectable, matching
+//     Tailscale exit-node UX where the pin survives the down period.
+//
+// The two headers carry the separation the reviewer asked for: the
+// systray Windows backend does not render a third nesting level (see
+// tray.go's menu construction), so the pins cannot live one submenu
+// deeper — labelled groups inside one flat list are the available
+// shape.
 //
 // Always set ShowWorker=true since the daemon advertised the API by
 // populating w; the caller already gated on tunnel phase.
@@ -1187,19 +1229,21 @@ func applyWorker(m *MenuModel, w *management.WorkerResponse, mesh *inferencemesh
 		return
 	}
 	m.ShowWorker = true
-	m.WorkerParentLabel = "Inference worker"
+	m.WorkerParentLabel = "Inference routing"
 	m.WorkerActiveLabel = "Worker: " + workerSummaryLabel(*w)
+	m.WorkerModesHeader = "Choose automatically"
 	m.WorkerModes = []WorkerModeRow{
 		{Mode: state.RoutingModeAuto, Label: "Auto", Selected: w.Mode == state.RoutingModeAuto || w.Mode == ""},
 		{Mode: state.RoutingModeLocalOnly, Label: "Local only", Selected: w.Mode == state.RoutingModeLocalOnly},
 		{Mode: state.RoutingModePeerPreferred, Label: "Peer preferred", Selected: w.Mode == state.RoutingModePeerPreferred},
+		{Mode: state.RoutingModePeerOnly, Label: "Peer only", Selected: w.Mode == state.RoutingModePeerOnly},
 	}
 	m.WorkerShowClearPin = w.Mode == state.RoutingModePinned
 
 	// Pin entries — filter mesh to inference-capable peers
-	// (signer.InferenceState advertised and Type != "none"). Order
-	// mirrors the snapshot's insertion order so the menu stays stable
-	// poll-over-poll.
+	// (signer.InferenceState advertised and Type != "none"). The
+	// snapshot arrives sorted by device name (#326), which is what
+	// keeps a given peer on the same menu row poll-over-poll.
 	pins := make([]WorkerPinEntryView, 0, MaxWorkerPinEntries)
 	if mesh != nil {
 		for _, p := range mesh.Peers {
@@ -1235,6 +1279,12 @@ func applyWorker(m *MenuModel, w *management.WorkerResponse, mesh *inferencemesh
 		}
 	}
 	m.WorkerPinEntries = pins
+	// The pin header labels the group below it, so it only earns a row
+	// when there is a group: a mesh with no inference-capable peer would
+	// otherwise render "Pin to one peer" over nothing.
+	if len(pins) > 0 {
+		m.WorkerPinsHeader = "Pin to one peer"
+	}
 }
 
 func workerSummaryLabel(w management.WorkerResponse) string {
@@ -1245,6 +1295,8 @@ func workerSummaryLabel(w management.WorkerResponse) string {
 		return "local only"
 	case state.RoutingModePeerPreferred:
 		return "peer preferred"
+	case state.RoutingModePeerOnly:
+		return "peer only"
 	case state.RoutingModePinned:
 		name := w.PinnedPeerName
 		if name == "" {
@@ -1542,7 +1594,7 @@ func renderManagedSettingsLabel(ms management.ClaudeManagedSettingsView) string 
 // into the "Claude Code" submenu: a main-conversation route group
 // (auto/waired/anthropic) and a subagent group (same/auto/waired/anthropic),
 // each with the current selection flagged. Node selection is intentionally
-// absent — that lives in the Inference worker submenu. claude carries the
+// absent — that lives in the Inference routing submenu. claude carries the
 // managed-settings view (may be nil) so the submenu can note when routing is
 // not active yet with the OS-correct enable hint.
 func applyClaudeRouting(m *MenuModel, st *management.ClaudeRoutingState, claude *management.ClaudeIntegrationStatus) {

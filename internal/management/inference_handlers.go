@@ -156,7 +156,7 @@ type InferenceStatus struct {
 	// (Tailscale-exit-node-style). nil when the daemon has no
 	// WorkerController attached. Embedding the resolved state here
 	// (instead of forcing the tray into a separate GET /v1/worker
-	// poll) lets the tray refresh "Inference worker" submenu state
+	// poll) lets the tray refresh "Inference routing" submenu state
 	// in the same 5 s tick that already drives the rest of the
 	// menu. Set by Server.handleInferenceStatus.
 	Worker *WorkerResponse `json:"worker,omitempty"`

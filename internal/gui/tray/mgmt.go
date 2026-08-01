@@ -354,7 +354,7 @@ func (c *Client) DismissRecommendation(ctx context.Context, fromVariantID, toVar
 
 // ErrWorkerUnsupported is returned by Worker / SetWorker when the
 // daemon does not expose /waired/v1/worker. Tray hides the
-// "Inference worker" submenu in that case rather than surfacing the
+// "Inference routing" mode/pin rows in that case rather than surfacing the
 // 404 to the operator — same pattern as Catalog / Observability.
 var ErrWorkerUnsupported = errors.New("daemon does not expose /waired/v1/worker (pre-worker-pin agent)")
 

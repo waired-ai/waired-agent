@@ -222,6 +222,8 @@ func claudeWairedNodeLine(mgmt string) string {
 		return "this device only   (change with `waired worker`)"
 	case state.RoutingModePeerPreferred:
 		return "mesh (peer-preferred)   (change with `waired worker`)"
+	case state.RoutingModePeerOnly:
+		return "mesh only (peer-only)   (change with `waired worker`)"
 	default:
 		return "auto (this device or a mesh peer)   (change with `waired worker`)"
 	}

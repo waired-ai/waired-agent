@@ -27,6 +27,7 @@ func TestRoutingConfigAsPreference(t *testing.T) {
 		{"auto", RoutingConfig{Mode: state.RoutingModeAuto}, state.RoutingPreference{Mode: state.RoutingModeAuto}},
 		{"local-only", RoutingConfig{Mode: state.RoutingModeLocalOnly}, state.RoutingPreference{Mode: state.RoutingModeLocalOnly}},
 		{"peer-preferred", RoutingConfig{Mode: state.RoutingModePeerPreferred}, state.RoutingPreference{Mode: state.RoutingModePeerPreferred}},
+		{"peer-only", RoutingConfig{Mode: state.RoutingModePeerOnly}, state.RoutingPreference{Mode: state.RoutingModePeerOnly}},
 		{
 			"pinned-with-peer",
 			RoutingConfig{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "dev_abc"},

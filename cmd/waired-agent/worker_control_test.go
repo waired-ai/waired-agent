@@ -50,6 +50,22 @@ func TestWorkerController_SetModeTransitions(t *testing.T) {
 	if wc.Routing().Mode != state.RoutingModePeerPreferred {
 		t.Errorf("after SetMode(peer-preferred) live = %q", wc.Routing().Mode)
 	}
+
+	// peer-only (#327) is a non-pinned mode like the two above, so it
+	// must transition and persist the same way.
+	if err := wc.SetMode(context.Background(), state.RoutingModePeerOnly); err != nil {
+		t.Fatal(err)
+	}
+	if wc.Routing().Mode != state.RoutingModePeerOnly {
+		t.Errorf("after SetMode(peer-only) live = %q", wc.Routing().Mode)
+	}
+	persisted, err = state.ReadDesiredWorker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Mode != state.RoutingModePeerOnly {
+		t.Errorf("persisted = %q, want peer-only", persisted.Mode)
+	}
 }
 
 func TestWorkerController_SetPinFlipsToPinned(t *testing.T) {

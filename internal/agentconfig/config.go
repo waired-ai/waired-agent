@@ -618,7 +618,8 @@ func (c *Config) Validate() error {
 
 func validateRouting(r RoutingConfig) error {
 	switch r.Mode {
-	case "", state.RoutingModeAuto, state.RoutingModeLocalOnly, state.RoutingModePeerPreferred:
+	case "", state.RoutingModeAuto, state.RoutingModeLocalOnly,
+		state.RoutingModePeerPreferred, state.RoutingModePeerOnly:
 		if r.PinnedPeerDeviceID != "" {
 			return fmt.Errorf("agentconfig: routing.mode %q must not carry pinned_peer_device_id", r.Mode)
 		}
