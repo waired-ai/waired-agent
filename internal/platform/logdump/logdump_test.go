@@ -222,7 +222,7 @@ func TestAppendServiceLogFiles_OldestArchiveFirst(t *testing.T) {
 	older := strings.Index(out, "older archive")
 	newer := strings.Index(out, "newer archive")
 	live := strings.Index(out, "live line")
-	if !(older < newer && newer < live) {
+	if older >= newer || newer >= live {
 		t.Errorf("order is older=%d newer=%d live=%d, want ascending", older, newer, live)
 	}
 	if !strings.Contains(out, base+".1.gz") || !strings.Contains(out, base) {

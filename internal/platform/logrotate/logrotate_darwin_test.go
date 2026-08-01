@@ -3,11 +3,15 @@
 package logrotate
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // borrowFD opens path and returns a descriptor onto it that the test
@@ -146,4 +150,48 @@ func TestReopen_CreatesTheFileWhenMissing(t *testing.T) {
 	if got := readFile(t, path); got != "recreated\n" {
 		t.Errorf("live file = %q, want %q", got, "recreated\n")
 	}
+}
+
+// TestManage_RotatesThroughRealDescriptors exercises the entry point the
+// daemon and the tray actually call, with the real per-OS ops and a real
+// descriptor — the layer above rotate(), where a mis-wired Manage would
+// simply never rotate anything and no other test would notice.
+//
+// Manage's first sweep runs before the first tick, so a file that is
+// already over the cap rotates immediately rather than 60s later.
+//
+// Product contract.
+func TestManage_RotatesThroughRealDescriptors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "waired-agent.err.log")
+	fd := borrowFD(t, path)
+	writeFD(t, fd, strings.Repeat("before\n", 200))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	Manage(ctx, []Target{{Path: path, FD: fd}}, Policy{MaxBytes: 16, Keep: 5},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !exists(archiveName(path, 0)) {
+		if time.Now().After(deadline) {
+			t.Fatal("Manage did not rotate an over-cap file within 5s")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	writeFD(t, fd, "after\n")
+	if got := readFile(t, path); got != "after\n" {
+		t.Errorf("live file = %q, want only the post-rotation write", got)
+	}
+}
+
+// TestManage_NoTargetsIsANoOp: on a host with nothing to rotate (and on
+// every non-darwin build) Manage must return without starting a
+// goroutine or touching anything.
+func TestManage_NoTargetsIsANoOp(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	Manage(ctx, nil, DefaultPolicy(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	Manage(ctx, AgentTargets("linux"), DefaultPolicy(), nil)
 }

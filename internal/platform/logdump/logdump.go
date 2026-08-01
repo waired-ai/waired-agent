@@ -226,8 +226,14 @@ func appendLogFile(w io.Writer, path string, gzipped bool) {
 	if err != nil {
 		return // absent is the norm: no archives yet, no tray installed
 	}
-	fprintf(w, "\n----- %s (%d bytes, modified %s) -----\n",
-		path, fi.Size(), fi.ModTime().Format(time.RFC3339))
+	// "compressed" on archives so the byte count here is not read against
+	// the truncation note below it, which counts decompressed bytes.
+	unit := "bytes"
+	if gzipped {
+		unit = "bytes compressed"
+	}
+	fprintf(w, "\n----- %s (%d %s, modified %s) -----\n",
+		path, fi.Size(), unit, fi.ModTime().Format(time.RFC3339))
 
 	f, err := os.Open(path)
 	if err != nil {
