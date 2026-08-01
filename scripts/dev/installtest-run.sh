@@ -347,11 +347,13 @@ if [ "$TIER" -le 2 ]; then
       source "$ROOT/scripts/dev/lib/installtest-daemon-engine.sh"
       it_enroll_daemon_path "$GUEST"   # daemon-path enrol via out-of-band OIDC completion
       assert_tier2 "$GUEST"            # identity chain still applies (the daemon owns it)
+      assert_reinit_resumes "$GUEST"   # a second init resumes, it does not fail (waired-agent#313)
       assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
       assert_daemon_engine "$GUEST"    # the waired#835 §9/§11 executor engine install
     else
       it_enroll_guest "$GUEST"   # enrol (IT_ENROLL_MODE) against the Control Plane
       assert_tier2 "$GUEST"
+      assert_reinit_resumes "$GUEST"   # a second init resumes, it does not fail (waired-agent#313)
       assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
       [ "$INFER" = 1 ] && assert_inference "$GUEST"
       if [ "$INTEG" = 1 ]; then
@@ -396,7 +398,7 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # same commit and with the reason, if a leg legitimately becomes conditional.
 case "$TIER" in
   1) floor=10 ;;
-  *) floor=20 ;;
+  *) floor=23 ;;   # +3: assert_reinit_resumes (waired-agent#313)
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then
