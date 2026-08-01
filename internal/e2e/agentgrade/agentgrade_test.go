@@ -101,7 +101,14 @@ func TestAgentGrade(t *testing.T) {
 // format calls at all or merely over-calls on small talk.
 func reportTable(t *testing.T, rep agentgrade.Report) {
 	t.Helper()
-	t.Logf("=== agent-harness grade: %s → %s (%s)", rep.Model, rep.Grade, rep.Duration)
+	t.Logf("=== agent-harness grade: %s → %s (%d trials, %s)",
+		rep.Model, rep.Grade, rep.Trials, rep.Duration)
+	if len(rep.Flaky) > 0 {
+		// Say it loudly. A model whose verdict changes between runs is a
+		// different problem from one that is simply bad, and the whole
+		// reason trials exist is that this was invisible before.
+		t.Logf("  NOT REPRODUCIBLE across trials: %s", strings.Join(rep.Flaky, ", "))
+	}
 	for _, r := range rep.Results {
 		t.Logf("  %-18s %-32s %s", r.Case, r.Verdict, r.Detail)
 		if r.Evidence != "" {

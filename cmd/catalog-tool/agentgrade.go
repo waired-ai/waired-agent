@@ -128,12 +128,16 @@ type importOpts struct {
 
 // probeReport is the subset of the probe's JSON output the store keeps.
 type probeReport struct {
-	Model           string `json:"model"`
-	Grade           string `json:"grade"`
-	FixtureRevision string `json:"fixture_revision"`
+	Model           string   `json:"model"`
+	Grade           string   `json:"grade"`
+	FixtureRevision string   `json:"fixture_revision"`
+	Trials          int      `json:"trials"`
+	Flaky           []string `json:"flaky"`
 	Results         []struct {
-		Case    string `json:"case"`
-		Verdict string `json:"verdict"`
+		Case         string `json:"case"`
+		Verdict      string `json:"verdict"`
+		Trials       int    `json:"trials"`
+		FailedTrials int    `json:"failed_trials"`
 	} `json:"results"`
 }
 
@@ -169,6 +173,13 @@ func importAgentGrade(path string, o importOpts) error {
 		return fmt.Errorf("agentgrade: unknown grade %q in report", rep.Grade)
 	}
 
+	if rep.Trials < 2 {
+		return fmt.Errorf("agentgrade: report ran %d trial(s); a single run is not a "+
+			"measurement at the boundary (the first catalog sweep graded three models "+
+			"as failing and an immediate re-run passed all three) — re-measure with at "+
+			"least 2", rep.Trials)
+	}
+
 	// A report carrying a different fixture revision was measured
 	// against a different request weight. Importing it would file a
 	// verdict that looks current and is not.
@@ -195,13 +206,17 @@ func importAgentGrade(path string, o importOpts) error {
 		entry = catalog.ModelAgentGrade{Variants: map[string]catalog.VariantAgentGrade{}}
 	}
 
-	cases := make(map[string]string, len(rep.Results))
+	cases := make(map[string]catalog.CaseOutcome, len(rep.Results))
 	for _, r := range rep.Results {
-		cases[r.Case] = r.Verdict
+		cases[r.Case] = catalog.CaseOutcome{
+			Verdict: r.Verdict, Trials: r.Trials, Failed: r.FailedTrials,
+		}
 	}
 	entry.Variants[variantID] = catalog.VariantAgentGrade{
 		Verdict:         rep.Grade,
 		Cases:           cases,
+		Trials:          rep.Trials,
+		Flaky:           rep.Flaky,
 		Engine:          catalog.RuntimeOllama,
 		EngineVersion:   o.EngineVersion,
 		EngineTag:       rep.Model,

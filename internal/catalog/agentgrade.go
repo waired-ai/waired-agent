@@ -62,9 +62,21 @@ type VariantAgentGrade struct {
 	// (waired-ai/waired-agent#203).
 	Verdict string `json:"verdict"`
 
-	// Cases maps the probe case name to its verdict, so a reviewer can
-	// see WHICH way the model failed without re-running it.
-	Cases map[string]string `json:"cases,omitempty"`
+	// Cases maps the probe case name to its outcome, so a reviewer can
+	// see WHICH way the model failed, and HOW OFTEN, without re-running
+	// it.
+	Cases map[string]CaseOutcome `json:"cases,omitempty"`
+
+	// Trials is how many times the case set ran to produce this verdict.
+	// Recorded because a single-shot result is not a measurement at the
+	// boundary: the first catalog sweep graded three models as failing
+	// and an immediate re-run graded the same three as passing.
+	Trials int `json:"trials,omitempty"`
+
+	// Flaky names the cases that did not agree across trials. A model
+	// listed here is unstable rather than simply bad, which is a
+	// different decision — and one that a bare pass/fail hides.
+	Flaky []string `json:"flaky,omitempty"`
 
 	// Engine and EngineVersion identify the serving stack. Compliance
 	// depends on the engine's template rendering and tool-call parser,
@@ -103,6 +115,22 @@ type VariantAgentGrade struct {
 	Retrieved string `json:"retrieved"`
 
 	Notes string `json:"notes,omitempty"`
+}
+
+// CaseOutcome is one probe case's stored result.
+//
+// The ratio matters as much as the verdict. "Emitted the wrong syntax
+// on all three trials" and "hit one engine parse error in three" are
+// different models with different answers, and storing only the worst
+// verdict collapses them — which is exactly what made the first
+// single-shot sweep unusable. Keeping the counts means the grading
+// POLICY can be changed without re-measuring the catalog.
+type CaseOutcome struct {
+	// Verdict is the worst outcome seen across trials.
+	Verdict string `json:"verdict"`
+	// Trials and Failed are how often the case ran and failed.
+	Trials int `json:"trials,omitempty"`
+	Failed int `json:"failed,omitempty"`
 }
 
 // Verdict values stored in agentgrade.json.
@@ -189,11 +217,27 @@ func (s AgentGradeSet) CoverageGaps(manifests []Manifest, fixtureRevision string
 	return out
 }
 
-// Failures reports every ollama-servable variant recorded as failing.
+// Failures reports every ollama-servable variant that fails a probe
+// case on EVERY trial.
 //
-// It is the retirement worklist: under the decided policy the bundled
-// catalog holds only models that can drive a coding agent, so a failing
-// entry is one that should not be in it.
+// It is the retirement worklist, and the threshold is the whole design.
+// A recorded Verdict of "fail" means "something went wrong at least
+// once", which is the right signal for a user asking about their own
+// model — but it is the wrong criterion for deleting a catalog entry,
+// because the occasional single-trial failure is stochastic. Measured
+// on the same catalog, same fixture, minutes apart: qwen3.5-9b failed
+// one trial in one run and none in the next, and qwen3.5-35b-a3b did
+// the reverse. Retiring on "failed once" would delete a different set
+// of models every time the sweep runs.
+//
+// Failing every trial is a different claim, and the data separates
+// cleanly at that line. All four qwen2.5-coder entries failed EVERY
+// tool-requiring call on EVERY trial — the rc7 defect, deterministic —
+// while nothing else in the catalog exceeded one failure in three.
+//
+// Verdicts recorded before per-trial counts existed have Trials == 0;
+// those fall back to the stored verdict so an old record is not
+// silently treated as clean.
 func (s AgentGradeSet) Failures(manifests []Manifest) []AgentGradeGap {
 	var out []AgentGradeGap
 	for _, m := range manifests {
@@ -203,6 +247,9 @@ func (s AgentGradeSet) Failures(manifests []Manifest) []AgentGradeGap {
 			}
 			rec, ok := s.Lookup(m.ModelID, v.VariantID)
 			if !ok || rec.Verdict != AgentGradeFail {
+				continue
+			}
+			if !failsEveryTrial(rec) {
 				continue
 			}
 			reason := "recorded as failing"
@@ -221,12 +268,37 @@ func (s AgentGradeSet) Failures(manifests []Manifest) []AgentGradeGap {
 	return out
 }
 
-func failedCaseSummary(cases map[string]string) string {
-	names := make([]string, 0, len(cases))
-	for name, verdict := range cases {
-		if verdict != "pass" && verdict != "" {
-			names = append(names, name+"="+verdict)
+// failsEveryTrial reports whether some case failed on all of its
+// trials. A record with no per-trial counts (pre-dating them) answers
+// true from its verdict alone rather than being quietly excused.
+func failsEveryTrial(rec VariantAgentGrade) bool {
+	if len(rec.Cases) == 0 {
+		return true
+	}
+	counted := false
+	for _, o := range rec.Cases {
+		if o.Trials <= 0 {
+			continue
 		}
+		counted = true
+		if o.Failed >= o.Trials {
+			return true
+		}
+	}
+	return !counted
+}
+
+func failedCaseSummary(cases map[string]CaseOutcome) string {
+	names := make([]string, 0, len(cases))
+	for name, o := range cases {
+		if o.Verdict == "pass" || o.Verdict == "" {
+			continue
+		}
+		if o.Trials > 0 {
+			names = append(names, fmt.Sprintf("%s=%s [%d/%d]", name, o.Verdict, o.Failed, o.Trials))
+			continue
+		}
+		names = append(names, name+"="+o.Verdict)
 	}
 	if len(names) == 0 {
 		return "no failing case recorded"

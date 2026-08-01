@@ -157,6 +157,18 @@ type Result struct {
 	Text string `json:"text,omitempty"`
 	// StopReason is the turn's Anthropic stop_reason.
 	StopReason string `json:"stop_reason,omitempty"`
+
+	// Trials and FailedTrials count how often this case ran and how
+	// often it came back a failure.
+	//
+	// The ratio, not just the fact of disagreement, is what a retirement
+	// decision turns on: "emitted the wrong syntax on all three trials"
+	// and "hit one engine parse error in three" are different models
+	// with different answers, and a bare flaky flag collapses them.
+	// Recorded so the grading POLICY can change without re-measuring the
+	// catalog.
+	Trials       int `json:"trials,omitempty"`
+	FailedTrials int `json:"failed_trials,omitempty"`
 }
 
 // Case is one probe interaction: a prompt plus what a

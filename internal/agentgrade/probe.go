@@ -22,6 +22,23 @@ import (
 // correctness probe.
 const DefaultTimeout = 5 * time.Minute
 
+// DefaultTrials is how many times the case set runs before a verdict is
+// issued.
+//
+// Not a robustness flourish — a correction. The first full sweep of the
+// catalog graded qwen3.5 0.8b, 2b and 4b as failing; an immediate
+// re-run of the same models against the same fixture graded all three
+// as passing. Single-shot measurement reports a coin flip as a verdict
+// for anything near the boundary, and a store full of coin flips is no
+// better than the reputation-based judgement this package exists to
+// replace.
+//
+// Three is chosen against cost, not derived: the probe makes two
+// tool-requiring calls per trial, so three trials is six chances to
+// misformat, and models that are actually stable (qwen2.5-coder in one
+// direction, qwen3.6 in the other) agreed across every run.
+const DefaultTrials = 3
+
 // Probe drives the fixture at a gateway surface.
 type Probe struct {
 	// BaseURL is the Anthropic-shaped surface to drive. In production
@@ -43,6 +60,10 @@ type Probe struct {
 
 	// Timeout bounds each case. Zero means DefaultTimeout.
 	Timeout time.Duration
+
+	// Trials is how many times the case set runs. Zero means
+	// DefaultTrials. See DefaultTrials for why one is not enough.
+	Trials int
 }
 
 const defaultProbeAPIKey = "waired-agentgrade-probe-not-a-real-key"
@@ -65,9 +86,23 @@ const (
 
 // Report is one model's probe run.
 type Report struct {
-	Model   string   `json:"model"`
-	Grade   Grade    `json:"grade"`
+	Model string `json:"model"`
+	Grade Grade  `json:"grade"`
+
+	// Trials is how many times the case set ran.
+	Trials int `json:"trials"`
+
+	// Results carries, per case, the WORST verdict seen across trials.
+	// Worst rather than last or most common: a model that hands a coding
+	// agent unusable output one run in three is unusable, because a real
+	// session makes hundreds of tool calls where this makes two.
 	Results []Result `json:"results"`
+
+	// Flaky names the cases that did not return the same verdict in
+	// every trial. Reported rather than smoothed away: an unstable model
+	// is a different thing from a bad one, and hiding which is which is
+	// how a coin flip gets recorded as a measurement.
+	Flaky []string `json:"flaky,omitempty"`
 
 	// FixtureRevision is the probe input this run was measured against.
 	// Set by Run so every writer carries it without having to remember:
@@ -90,7 +125,11 @@ type Report struct {
 // calls at all or merely over-calls on small talk, and re-running to
 // find that out costs another model load.
 func (p Probe) Run(ctx context.Context, model string) (Report, error) {
-	rep := Report{Model: model, Started: time.Now()}
+	trials := p.Trials
+	if trials <= 0 {
+		trials = DefaultTrials
+	}
+	rep := Report{Model: model, Started: time.Now(), Trials: trials}
 	rev, err := FixtureRevision()
 	if err != nil {
 		return rep, err
@@ -101,26 +140,92 @@ func (p Probe) Run(ctx context.Context, model string) (Report, error) {
 		return rep, err
 	}
 
-	for _, c := range Cases {
-		res := p.one(ctx, model, c, names)
-		rep.Results = append(rep.Results, res)
+	// worst[case] keeps the most severe verdict seen; seen[case] tracks
+	// whether every trial agreed; ran/failed count the ratio.
+	worst := make(map[string]Result, len(Cases))
+	seen := make(map[string]map[Verdict]bool, len(Cases))
+	ran := make(map[string]int, len(Cases))
+	failed := make(map[string]int, len(Cases))
+
+	for t := 0; t < trials; t++ {
+		for _, c := range Cases {
+			res := p.one(ctx, model, c, names)
+			if seen[c.Name] == nil {
+				seen[c.Name] = map[Verdict]bool{}
+			}
+			seen[c.Name][res.Verdict] = true
+			ran[c.Name]++
+			if res.Verdict.IsFailure() {
+				failed[c.Name]++
+			}
+			if prev, ok := worst[c.Name]; !ok || severity(res.Verdict) > severity(prev.Verdict) {
+				worst[c.Name] = res
+			}
+			// An engine that cannot answer ends the run: further trials
+			// would measure the same outage, slowly.
+			if res.Verdict == VerdictError {
+				rep.Results = collect(worst, seen, ran, failed, &rep)
+				rep.Duration = time.Since(rep.Started).Round(time.Second).String()
+				rep.Grade = GradeUnknown
+				rep.Error = fmt.Sprintf("case %s: %s", res.Case, res.Detail)
+				return rep, nil
+			}
+		}
 	}
+
+	rep.Results = collect(worst, seen, ran, failed, &rep)
 	rep.Duration = time.Since(rep.Started).Round(time.Second).String()
 
 	rep.Grade = GradePass
 	for _, r := range rep.Results {
-		switch {
-		case r.Verdict == VerdictError:
-			rep.Grade = GradeUnknown
-			if rep.Error == "" {
-				rep.Error = fmt.Sprintf("case %s: %s", r.Case, r.Detail)
-			}
-			return rep, nil
-		case r.Verdict.IsFailure():
+		if r.Verdict.IsFailure() {
 			rep.Grade = GradeFail
 		}
 	}
 	return rep, nil
+}
+
+// collect flattens the per-case worst results into Cases order and
+// records which cases disagreed across trials.
+func collect(worst map[string]Result, seen map[string]map[Verdict]bool,
+	ran, failed map[string]int, rep *Report) []Result {
+	out := make([]Result, 0, len(Cases))
+	rep.Flaky = nil
+	for _, c := range Cases {
+		r, ok := worst[c.Name]
+		if !ok {
+			continue
+		}
+		r.Trials = ran[c.Name]
+		r.FailedTrials = failed[c.Name]
+		if len(seen[c.Name]) > 1 {
+			rep.Flaky = append(rep.Flaky, c.Name)
+			r.Detail = fmt.Sprintf("%s (%d of %d trials failed — not reproducible)",
+				r.Detail, r.FailedTrials, r.Trials)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// severity orders verdicts so the worst one across trials survives.
+// Error outranks everything because it means the run is not a
+// measurement at all.
+func severity(v Verdict) int {
+	switch v {
+	case VerdictError:
+		return 5
+	case VerdictMalformedToolCall, VerdictUnknownTool:
+		return 4
+	case VerdictUnstructuredToolCall:
+		return 3
+	case VerdictNoToolCall:
+		return 2
+	case VerdictUnpromptedToolCall:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (p Probe) one(ctx context.Context, model string, c Case, names map[string]bool) Result {

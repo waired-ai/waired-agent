@@ -186,6 +186,60 @@ func TestCoverageGaps(t *testing.T) {
 	})
 }
 
+// The retirement worklist must separate a model that fails EVERY trial
+// from one that blipped once. Measured minutes apart on the same
+// catalog, the single-trial failures moved between models — retiring on
+// those would delete a different set every sweep.
+func TestFailures_onlyDeterministicFailuresAreRetirable(t *testing.T) {
+	manifests := []Manifest{{
+		ModelID:  "always",
+		Variants: []Variant{{VariantID: "q4", RuntimeSupport: []string{RuntimeOllama}}},
+	}, {
+		ModelID:  "sometimes",
+		Variants: []Variant{{VariantID: "q4", RuntimeSupport: []string{RuntimeOllama}}},
+	}, {
+		ModelID:  "legacy-no-counts",
+		Variants: []Variant{{VariantID: "q4", RuntimeSupport: []string{RuntimeOllama}}},
+	}}
+	set := AgentGradeSet{Models: map[string]ModelAgentGrade{
+		"always": {Variants: map[string]VariantAgentGrade{"q4": {
+			Verdict: AgentGradeFail,
+			Cases: map[string]CaseOutcome{
+				"greeting":  {Verdict: "pass", Trials: 3},
+				"read-file": {Verdict: "fail_unstructured_tool_call", Trials: 3, Failed: 3},
+			},
+		}}},
+		"sometimes": {Variants: map[string]VariantAgentGrade{"q4": {
+			Verdict: AgentGradeFail,
+			Cases: map[string]CaseOutcome{
+				"greeting":  {Verdict: "pass", Trials: 3},
+				"read-file": {Verdict: "fail_no_tool_call", Trials: 3, Failed: 1},
+			},
+		}}},
+		// No per-trial counts: predates them. Must NOT be silently
+		// excused just because the ratio is unknown.
+		"legacy-no-counts": {Variants: map[string]VariantAgentGrade{"q4": {
+			Verdict: AgentGradeFail,
+			Cases:   map[string]CaseOutcome{"read-file": {Verdict: "fail_no_tool_call"}},
+		}}},
+	}}
+
+	got := set.Failures(manifests)
+	names := map[string]bool{}
+	for _, g := range got {
+		names[g.ModelID] = true
+	}
+	if !names["always"] {
+		t.Error("a model that fails every trial must be on the retirement worklist")
+	}
+	if names["sometimes"] {
+		t.Error("a model that failed 1 of 3 trials must NOT be retired — that failure moves between runs")
+	}
+	if !names["legacy-no-counts"] {
+		t.Error("a record with no per-trial counts must not be excused; its ratio is unknown, not clean")
+	}
+}
+
 func TestFailures(t *testing.T) {
 	manifests := []Manifest{{
 		ModelID:  "weak",
@@ -197,9 +251,9 @@ func TestFailures(t *testing.T) {
 	set := AgentGradeSet{Models: map[string]ModelAgentGrade{
 		"weak": {Variants: map[string]VariantAgentGrade{"q4": {
 			Verdict: AgentGradeFail,
-			Cases: map[string]string{
-				"greeting":  "pass",
-				"read-file": "fail_unstructured_tool_call",
+			Cases: map[string]CaseOutcome{
+				"greeting":  {Verdict: "pass", Trials: 3, Failed: 0},
+				"read-file": {Verdict: "fail_unstructured_tool_call", Trials: 3, Failed: 3},
 			},
 		}}},
 		"good": {Variants: map[string]VariantAgentGrade{"q4": {Verdict: AgentGradePass}}},
@@ -214,6 +268,11 @@ func TestFailures(t *testing.T) {
 	// keeping for non-agent use.
 	if !strings.Contains(got[0].Reason, "read-file=fail_unstructured_tool_call") {
 		t.Errorf("reason should name the failing case, got %q", got[0].Reason)
+	}
+	// The ratio has to survive into the worklist: "3/3" and "1/3" are
+	// different retirement decisions.
+	if !strings.Contains(got[0].Reason, "[3/3]") {
+		t.Errorf("reason should carry the failed/total ratio, got %q", got[0].Reason)
 	}
 	if strings.Contains(got[0].Reason, "greeting") {
 		t.Errorf("reason should not list passing cases, got %q", got[0].Reason)
