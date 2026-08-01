@@ -183,7 +183,7 @@ func integrationFrame(targets *[]string) *signer.InferenceState {
 // The three states, which is the whole reason this field is a pointer.
 func TestSetupIntegrationStepThreeStates(t *testing.T) {
 	none := []string{}
-	two := []string{signer.IntegrationOpenCode, signer.IntegrationClaudeCode}
+	two := []string{signer.IntegrationOpenClaw, signer.IntegrationClaudeCode}
 
 	t.Run("no instruction reports no row", func(t *testing.T) {
 		f := &fakeSetupProvider{}
@@ -219,7 +219,7 @@ func TestSetupIntegrationStepThreeStates(t *testing.T) {
 }
 
 func TestSetupIntegrationStepFollowsTheExecutor(t *testing.T) {
-	two := []string{signer.IntegrationOpenCode, signer.IntegrationClaudeCode}
+	two := []string{signer.IntegrationOpenClaw, signer.IntegrationClaudeCode}
 	f := &fakeSetupProvider{}
 	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
 	r.now = newFakeClock().now
@@ -249,7 +249,7 @@ func TestSetupIntegrationStepFollowsTheExecutor(t *testing.T) {
 // terminal phases must not release the engine's install claim, or a
 // second elevated executor could start installing on top of the first.
 func TestSetupIntegrationDoesNotTouchTheInstallClaim(t *testing.T) {
-	two := []string{signer.IntegrationOpenCode}
+	two := []string{signer.IntegrationOpenClaw}
 	f := &fakeSetupProvider{}
 	r, _ := leasedReconciler(t, f, "ollama", "")
 	r.Apply(context.Background(), integrationFrame(&two))
@@ -310,9 +310,9 @@ func TestFlattenIntegrations(t *testing.T) {
 			// the agent should react to.
 			name: "sorted and deduplicated",
 			in: &signer.DesiredIntegrations{Enabled: []string{
-				signer.IntegrationOpenCode, signer.IntegrationClaudeCode, signer.IntegrationOpenCode,
+				signer.IntegrationOpenClaw, signer.IntegrationClaudeCode, signer.IntegrationOpenClaw,
 			}},
-			want: "claude-code,opencode",
+			want: "claude-code,openclaw",
 		},
 		{
 			// A newer control plane naming a target this build has never
@@ -326,6 +326,29 @@ func TestFlattenIntegrations(t *testing.T) {
 			// instruction, and reads as "nothing this agent can write".
 			name: "only unknown targets collapse to the all-off answer",
 			in:   &signer.DesiredIntegrations{Enabled: []string{"cursor"}},
+			want: integrationsNone,
+		},
+		{
+			// A RETIRED target takes the same road as an unknown one, and
+			// that is the whole migration plan for waired-agent#333: rows
+			// written before the removal keep naming opencode, and this
+			// build must apply the rest of the instruction rather than
+			// choke on a target it no longer has an adapter for.
+			// Product contract, not a record of today's behaviour.
+			name: "retired targets are dropped like unknown ones",
+			in: &signer.DesiredIntegrations{Enabled: []string{
+				signer.IntegrationClaudeCode, signer.IntegrationOpenCode,
+			}},
+			want: "claude-code",
+		},
+		{
+			// The single-retired-target case is the one that decides
+			// whether setup can ever finish: it has to land on the all-off
+			// answer, which the snapshot reports as a `skipped` row. A row
+			// is what setup_complete waits for; "no row at all" is the
+			// waired#983 wedge.
+			name: "an instruction of only retired targets collapses to the all-off answer",
+			in:   &signer.DesiredIntegrations{Enabled: []string{signer.IntegrationOpenCode}},
 			want: integrationsNone,
 		},
 	}

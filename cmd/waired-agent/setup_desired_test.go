@@ -1499,7 +1499,7 @@ func TestSetupIntegrationTerminatesWhenNobodyCanWriteIt(t *testing.T) {
 	t.Run("a live lease has simply not got here yet", func(t *testing.T) {
 		f := &fakeSetupProvider{engineInstalled: true, engineReady: true, modelState: catalog.ModelStateReady}
 		r, _ := leasedReconciler(t, f, "ollama", "")
-		r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationOpenCode))
+		r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationOpenClaw))
 		r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
 		// The coding tools are the LAST thing the executor does, after the
 		// engine and the model: pending here is a wait, not a stall.
@@ -1511,7 +1511,7 @@ func TestSetupIntegrationTerminatesWhenNobodyCanWriteIt(t *testing.T) {
 	t.Run("the executor left before it got here", func(t *testing.T) {
 		f := &fakeSetupProvider{engineInstalled: true, engineReady: true, modelState: catalog.ModelStateReady}
 		r, clock := leasedReconciler(t, f, "ollama", "")
-		r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationOpenCode))
+		r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationOpenClaw))
 		r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
 		clock.advance(setupExecutorTTL + time.Second)
 
@@ -1567,7 +1567,7 @@ func TestSetupIntegrationStaysPendingWhileAnEngineRowIsRed(t *testing.T) {
 	ctx := context.Background()
 	f := &fakeSetupProvider{}
 	r, clock := leasedReconciler(t, f, "ollama", "")
-	r.Apply(ctx, integrationsFrame("ollama", "", signer.IntegrationOpenCode))
+	r.Apply(ctx, integrationsFrame("ollama", "", signer.IntegrationOpenClaw))
 	r.NoteExecutor(ctx, management.SetupExecutorRequest{
 		Attached: true, Elevated: true, Engine: "ollama",
 		Phase: management.SetupExecutorPhaseInstalling,
