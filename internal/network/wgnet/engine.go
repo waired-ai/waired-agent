@@ -24,8 +24,9 @@ import (
 
 const DefaultMTU = 1280
 
-// ErrBindFailed marks a NewEngine failure that happened while opening
-// the UDP socket, as opposed to anywhere else in device construction.
+// ErrBindFailed marks a NewEngine failure from the stage that applies
+// the requested listen port, as opposed to anywhere else in device
+// construction.
 //
 // Callers use it to decide whether retrying on a different port could
 // help (waired-agent#318): a port can be unavailable for reasons that
@@ -157,14 +158,23 @@ func NewEngine(cfg Config) (*Engine, error) {
 		dev.Close()
 		return nil, fmt.Errorf("build uapi: %w", err)
 	}
+	// IpcSet and Up are both "apply the requested listen port", and
+	// either of them can be the one that actually opens the socket —
+	// wireguard-go rebinds from IpcSet when the device is already up, so
+	// which stage reports `address already in use` is not something the
+	// caller can rely on. Everything above this point is port-independent
+	// (key material, netstack TUN, in-memory peer state), so tagging both
+	// is what makes "could a different port fix this?" answerable.
+	//
+	// An IpcSet failure that has nothing to do with the port is tagged
+	// too, and that is deliberate: the retry re-applies the same
+	// configuration on port 0 and fails identically, costing one attempt
+	// rather than a misclassification.
 	if err := dev.IpcSet(uapi); err != nil {
 		dev.Close()
-		return nil, fmt.Errorf("ipc set: %w", err)
+		return nil, fmt.Errorf("ipc set: %w: %w", ErrBindFailed, err)
 	}
 	if err := dev.Up(); err != nil {
-		// Up() is where the bind happens: everything above only builds
-		// state in memory. Tag it so the caller can retry on another
-		// port instead of giving up on the whole session.
 		dev.Close()
 		return nil, fmt.Errorf("device up: %w: %w", ErrBindFailed, err)
 	}
