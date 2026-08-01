@@ -43,6 +43,19 @@ const (
 	DarwinLabel = "com.waired.agent"
 )
 
+// RestartRequestedExitCode is the agent's "restart me" exit status: a
+// preferred-model switch via the management API SIGTERMs the daemon and wants
+// it back with the new selection (#347). The Linux unit pairs it with
+// SuccessExitStatus + RestartForceExitStatus, so the switch never leaves the
+// unit in the failed state while a plain exit 0 or a `systemctl stop` still
+// stays down.
+//
+// It lives here rather than in cmd/waired-agent because the unit that has to
+// agree with it is rendered here, and a constant defined in cmd/ is one this
+// package cannot import — which is how the rendered unit came to disagree
+// with the packaged one.
+const RestartRequestedExitCode = 17
+
 // Config bundles the install-time options accepted by every backend.
 // Backends ignore fields they cannot honour (e.g. User is a no-op on
 // Windows because the SCM uses ServiceStartName=LocalSystem).
