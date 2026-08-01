@@ -427,8 +427,38 @@ func (s *Service) recordPongReceived(deviceID string) {
 	s.lastPongAt[deviceID] = s.now()
 }
 
+// reachableFreshnessProbeRounds is how many probe rounds a peer may
+// miss before ReachableFreshness declares it silent. Three is the
+// smallest value that tolerates a lost probe and a lost pong in the
+// same window without flipping the verdict.
+const reachableFreshnessProbeRounds = 3
+
+// reachableFreshnessFor derives the pong-freshness window from the
+// prober's own re-emit interval. Split out from the method so a table
+// test can pin the window ≥ cadence relation across configurations.
+func reachableFreshnessFor(reprobe time.Duration) time.Duration {
+	if reprobe <= 0 {
+		reprobe = defaultProbeReprobeActive
+	}
+	return reachableFreshnessProbeRounds * reprobe
+}
+
+// ReachableFreshness is the window callers should pass to
+// ReachableSnapshot. It is DERIVED from ProbeReprobeActive rather than
+// hardcoded because the two must not drift apart: pongs only arrive as
+// often as we probe, so a window shorter than the probe cadence marks
+// healthy peers silent for most of every cycle. The agent shipped a
+// hardcoded 5 s window against a 15 s cadence for exactly that reason
+// — a comment claiming "3× the re-emit interval" while being 1/3 of it
+// (waired#729).
+func (s *Service) ReachableFreshness() time.Duration {
+	return reachableFreshnessFor(s.cfg.ProbeReprobeActive)
+}
+
 // ReachableSnapshot returns a deviceID → recent-pong-presence map for
 // the Phase 8 Selector to consult as a hard-exclusion signal.
+// Production callers pass ReachableFreshness() as the window; the
+// parameter stays explicit so tests can drive the boundaries.
 //
 //   - A deviceID present with value=true has produced a signed,
 //     nonce-matched pong within [now-freshness, now].

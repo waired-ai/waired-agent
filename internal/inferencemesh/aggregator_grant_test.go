@@ -13,7 +13,7 @@ import (
 // stay Grant-less.
 func TestAggregatorPropagatesGrant(t *testing.T) {
 	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
-	a := New("dev-self", 15*time.Second, func() time.Time { return now })
+	a := New("dev-self", Policy{}, func() time.Time { return now })
 	nm := &signer.NetworkMap{
 		Self: signer.NetworkMapPeer{DeviceID: "dev-self"},
 		Peers: []signer.NetworkMapPeer{

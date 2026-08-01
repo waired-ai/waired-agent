@@ -22,7 +22,10 @@ func TestInferenceMeshEndpointReturnsSnapshot(t *testing.T) {
 			GeneratedAt:          "2026-05-09T12:00:00Z",
 			SelfDeviceID:         "self-id",
 			Reachable:            true,
-			StalenessThresholdMS: 15000,
+			StalenessThresholdMS: inferencemesh.DefaultAdvertisedLiveness.Milliseconds(),
+			FrameStalenessMS:     inferencemesh.DefaultFrameStaleness.Milliseconds(),
+			MapReceivedAt:        "2026-05-09T11:59:58Z",
+			MapAgeMS:             2000,
 			Self: inferencemesh.PeerView{
 				DeviceID:   "self-id",
 				DeviceName: "alice-mac",
@@ -71,6 +74,17 @@ func TestInferenceMeshEndpointReturnsSnapshot(t *testing.T) {
 	}
 	if got.Self.InferenceState == nil || got.Self.InferenceState.Type != signer.InferenceTypeOllama {
 		t.Fatalf("self inference state did not round-trip: %+v", got.Self)
+	}
+	// The map-frame diagnostics are what let an operator reading this
+	// endpoint tell "the peer went quiet" apart from "our map stream
+	// went quiet" (waired-agent#323), so they have to survive the wire.
+	if got.MapReceivedAt != "2026-05-09T11:59:58Z" || got.MapAgeMS != 2000 {
+		t.Errorf("map frame diagnostics did not round-trip: received_at=%q age_ms=%d",
+			got.MapReceivedAt, got.MapAgeMS)
+	}
+	if got.FrameStalenessMS != inferencemesh.DefaultFrameStaleness.Milliseconds() {
+		t.Errorf("FrameStalenessMS = %d, want %d",
+			got.FrameStalenessMS, inferencemesh.DefaultFrameStaleness.Milliseconds())
 	}
 }
 

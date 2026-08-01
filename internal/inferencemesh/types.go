@@ -32,20 +32,37 @@ import "github.com/waired-ai/waired-agent/proto/signer"
 // gateway already routes to the local runtime — so self has its own
 // dedicated axis (InferenceReachableLocal).
 type Snapshot struct {
-	GeneratedAt          string     `json:"generated_at"`
-	SelfDeviceID         string     `json:"self_device_id"`
-	Reachable            bool       `json:"reachable"`
-	StalenessThresholdMS int64      `json:"staleness_threshold_ms"`
-	Self                 PeerView   `json:"self"`
-	Peers                []PeerView `json:"peers"`
+	GeneratedAt  string `json:"generated_at"`
+	SelfDeviceID string `json:"self_device_id"`
+	Reachable    bool   `json:"reachable"`
+	// StalenessThresholdMS is Policy.AdvertisedLiveness: how old a
+	// peer's advertised last_check may be **at the moment its network
+	// map frame arrives**. It is not a continuously-applied deadline —
+	// see Policy (waired-agent#323).
+	StalenessThresholdMS int64 `json:"staleness_threshold_ms"`
+	// FrameStalenessMS is Policy.FrameStaleness: how old the newest map
+	// frame may be before every peer entry derived from it is dropped.
+	FrameStalenessMS int64 `json:"frame_staleness_ms"`
+	// MapReceivedAt / MapAgeMS describe the newest network map frame
+	// (RFC3339Nano, and its age at compute time). Empty / zero before
+	// the first frame arrives. Diagnostic only: they exist so an
+	// operator reading `waired peers list --json` can tell "the peer
+	// went quiet" apart from "our map stream went quiet".
+	MapReceivedAt string     `json:"map_received_at,omitempty"`
+	MapAgeMS      int64      `json:"map_age_ms,omitempty"`
+	Self          PeerView   `json:"self"`
+	Peers         []PeerView `json:"peers"`
 }
 
 // PeerView is the per-device entry the snapshot exposes. State may be
 // nil for peers that have never pushed an inference status. Stale=true
-// means the peer's last_check exceeds the staleness threshold and the
-// aggregator treats them as unreachable for the purpose of Snapshot.Reachable
-// (but the entry still appears in Peers so consumers can render
-// "this peer used to be reachable, now it's stale").
+// means the aggregator treats the peer as unusable for the purpose of
+// Snapshot.Reachable (the entry still appears in Peers so consumers can
+// render "this peer used to be reachable, now it's stale"). A peer is
+// stale when ANY of: the newest map frame is older than
+// Policy.FrameStaleness, the peer's advertised last_check was already
+// older than Policy.AdvertisedLiveness when that frame arrived, or the
+// disco prober reports it as once-seen-now-silent.
 //
 // Phase 7 inputs (Capacity, Hardware) are accessed via InferenceState
 // directly — they are not re-hoisted to the PeerView level so the wire

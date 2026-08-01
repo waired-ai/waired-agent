@@ -192,7 +192,7 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	agg := inferencemesh.New("dev-self", 15*time.Second, time.Now)
+	agg := inferencemesh.New("dev-self", inferencemesh.Policy{}, time.Now)
 	cli := controlclient.New(cpSrv.URL, "tok")
 
 	// 50ms < HeartbeatInterval (5s), so the loop runs the immediate tick
@@ -256,7 +256,7 @@ func TestRunLocalInferenceProbe_SkipsPushWhenShareDenied(t *testing.T) {
 	if err := stWriter.Set(stWriter.Snapshot()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	agg := inferencemesh.New("dev-self", 15*time.Second, time.Now)
+	agg := inferencemesh.New("dev-self", inferencemesh.Policy{}, time.Now)
 	cli := controlclient.New(cpSrv.URL, "tok")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -310,7 +310,7 @@ func TestRunLocalInferenceProbe_IsSharedTrueAllowsPush(t *testing.T) {
 	if err := stWriter.Set(stWriter.Snapshot()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	agg := inferencemesh.New("dev-self", 15*time.Second, time.Now)
+	agg := inferencemesh.New("dev-self", inferencemesh.Policy{}, time.Now)
 	cli := controlclient.New(cpSrv.URL, "tok")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
