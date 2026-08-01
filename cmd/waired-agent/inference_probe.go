@@ -28,6 +28,13 @@ type inferenceProbeDeps struct {
 	PushClient  *controlclient.Client     // optional; nil = no CP push
 	DeviceID    string
 	MachineKey  ed25519.PrivateKey
+	// CPCtx scopes the Control-Plane push only. It is the session context
+	// minus "the CP still accepts us", so when auto-refresh gives up
+	// (waired-agent#318) the push stops dead while the local half of this
+	// loop — the state-file heartbeat and the mesh aggregator, which
+	// nothing about a dead CP credential invalidates — keeps running on
+	// the loop's own ctx. Nil falls back to that ctx.
+	CPCtx context.Context
 	// EngineDead, when non-nil and returning true, forces Reachable=false
 	// regardless of what the HTTP probe saw. See the call site in tick for
 	// why the probe alone is not enough, and why the predicate is
@@ -105,6 +112,16 @@ type inferenceProbeDeps struct {
 // the runtime/state flag to false and skip both aggregator updates
 // and CP pushes — the device is intentionally engine-less, so peers
 // see no entry rather than a misleading reachable=false ping.
+// cpCtx returns the context to use for Control-Plane pushes, falling
+// back to the loop's own context when the caller did not scope them
+// separately.
+func (d inferenceProbeDeps) cpCtx(fallback context.Context) context.Context {
+	if d.CPCtx != nil {
+		return d.CPCtx
+	}
+	return fallback
+}
+
 func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 	if deps.StateWriter == nil {
 		return
@@ -187,7 +204,7 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 					deps.Logger.Debug("inference status push skipped: share disabled")
 				}
 			} else {
-				pushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
 				_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, s, deps.MachineKey)
 				cancel()
 				if err != nil && deps.Logger != nil && !errors.Is(err, context.Canceled) {

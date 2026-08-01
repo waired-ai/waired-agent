@@ -167,10 +167,30 @@ type PauseController interface {
 	Phase() (current, desired state.Phase)
 }
 
+// Auth states reported by IdentityView.AuthState. Empty means the same
+// as AuthStateOK — a consumer that predates the field should read no
+// news as good news.
+const (
+	// AuthStateOK: the device can still renew its own credentials.
+	AuthStateOK = "ok"
+	// AuthStateReauthRequired: auto-refresh has given up for good and
+	// only `waired init` can restore the device's Control-Plane
+	// credentials. The daemon stops its CP push loops in this state, so
+	// consumers must not read the resulting silence as "offline".
+	AuthStateReauthRequired = "reauth_required"
+)
+
 // IdentityView is the tray-facing projection of the agent's enrollment
 // state. Mirrors the user-relevant fields from internal/identity.Identity
 // plus an Enrolled flag so a future not-yet-enrolled daemon mode can
 // surface "no signed-in account" without 404-ing the route.
+//
+// Enrolled and Active are deliberately separate (waired-agent#318).
+// Enrolled answers "is there a signed-in account on this device"; Active
+// answers "did the identity-dependent runtime actually come up". They
+// disagree whenever activation fails — a boot where the WireGuard socket
+// could not bind, say — and collapsing them is what made a signed-in
+// device read as logged out in the tray.
 type IdentityView struct {
 	Enrolled     bool   `json:"enrolled"`
 	AccountEmail string `json:"account_email,omitempty"`
@@ -180,6 +200,19 @@ type IdentityView struct {
 	DeviceName   string `json:"device_name,omitempty"`
 	OverlayIP    string `json:"overlay_ip,omitempty"`
 	ControlURL   string `json:"control_url,omitempty"`
+
+	// Active is whether a live session is published — the engine is up
+	// and the agent is talking to its network. False with Enrolled true
+	// means "signed in, but not connected".
+	Active bool `json:"active"`
+	// ActivationError is why Active is false, when the daemon knows.
+	// Empty while activation is still in flight or has never failed.
+	ActivationError string `json:"activation_error,omitempty"`
+
+	// AuthState is one of the AuthState* constants; empty reads as OK.
+	AuthState string `json:"auth_state,omitempty"`
+	// AuthDetail is the classified cause behind a non-OK AuthState.
+	AuthDetail string `json:"auth_detail,omitempty"`
 }
 
 type IdentityProvider interface {

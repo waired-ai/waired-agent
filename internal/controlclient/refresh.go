@@ -33,6 +33,14 @@ type RefreshParams struct {
 	// Key private bytes.
 	MachineKey *devicekeys.MachineKey
 
+	// ClientNonce pins the per-rotation nonce instead of generating a
+	// fresh one. Supplying the SAME nonce on a retry makes the request
+	// byte-identical to the attempt whose response was lost, which is
+	// what lets the CP tell "this client never heard my answer" apart
+	// from "someone replayed a token I already rotated away"
+	// (waired-agent#318). Empty → generated here, the one-shot default.
+	ClientNonce string
+
 	// HTTPClient is optional; same convention as RunInit — set this
 	// when an IAM gate occupies the Authorization header.
 	HTTPClient *http.Client
@@ -53,6 +61,11 @@ type RefreshResult struct {
 // reauth_required and back off"). ErrDeviceSuspended — and any
 // unrecognised error — is transient: the loop keeps retrying on its
 // backoff, so a suspended device recovers automatically once re-enabled.
+//
+// ErrRefreshOutcomeUnknown is its own axis, orthogonal to the list
+// below: it says the CP's verdict never reached us, so the rotation may
+// or may not have committed server-side. It is joined onto the
+// transport error rather than replacing it.
 var (
 	ErrRefreshInvalid       = errors.New("controlclient: refresh token invalid (server: invalid_refresh_token)")
 	ErrRefreshExpired       = errors.New("controlclient: refresh token expired (server: expired_refresh_token)")
@@ -61,6 +74,15 @@ var (
 	ErrDeviceNotApproved    = errors.New("controlclient: device not in approved state — reauth required")
 	ErrDeviceSuspended      = errors.New("controlclient: device suspended — retryable, recovers on enable")
 	ErrMachineSigInvalid    = errors.New("controlclient: machine signature did not verify")
+
+	// ErrRefreshOutcomeUnknown marks a rotation whose result the client
+	// never learned — the request was written but no usable response
+	// came back (connection reset, timeout awaiting headers, truncated
+	// body). The stored refresh token may already be burned server-side,
+	// so the caller must retry the SAME rotation (same ClientNonce)
+	// rather than start a fresh one: a fresh nonce is indistinguishable
+	// from token theft and trips reuse detection (waired-agent#318).
+	ErrRefreshOutcomeUnknown = errors.New("controlclient: refresh outcome unknown (no response from control plane)")
 )
 
 // RefreshDeviceToken posts a refresh request and returns the new
@@ -79,11 +101,14 @@ func RefreshDeviceToken(ctx context.Context, p RefreshParams) (*RefreshResult, e
 		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	nonceBytes := make([]byte, 16)
-	if _, err := readRandom(nonceBytes); err != nil {
-		return nil, err
+	nonce := p.ClientNonce
+	if nonce == "" {
+		nonceBytes := make([]byte, 16)
+		if _, err := readRandom(nonceBytes); err != nil {
+			return nil, err
+		}
+		nonce = base64.StdEncoding.EncodeToString(nonceBytes)
 	}
-	nonce := base64.StdEncoding.EncodeToString(nonceBytes)
 
 	tokenHash := sha256.Sum256([]byte(p.RefreshToken))
 	transcript := refreshTranscript(p.DeviceID, p.NetworkID, hex.EncodeToString(tokenHash[:]), nonce)
@@ -104,10 +129,23 @@ func RefreshDeviceToken(ctx context.Context, p RefreshParams) (*RefreshResult, e
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("refresh: %w", err)
+		// The request went out; we simply never got a verdict. Flag it
+		// so the refresher retries this exact rotation instead of
+		// minting a new one (waired-agent#318).
+		return nil, errors.Join(ErrRefreshOutcomeUnknown, fmt.Errorf("refresh: %w", err))
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if rerr != nil {
+		// Headers arrived but the body did not. On a 200 that means a
+		// rotation we cannot decode — same "outcome unknown" position
+		// as a transport failure. On an error status the status code
+		// alone is a verdict, so classify normally.
+		if resp.StatusCode == http.StatusOK {
+			return nil, errors.Join(ErrRefreshOutcomeUnknown, fmt.Errorf("refresh: read body: %w", rerr))
+		}
+		return nil, classifyRefreshError(resp.StatusCode, respBody)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, classifyRefreshError(resp.StatusCode, respBody)
@@ -122,7 +160,9 @@ func RefreshDeviceToken(ctx context.Context, p RefreshParams) (*RefreshResult, e
 		DeviceCertificate          json.RawMessage `json:"device_certificate"`
 	}
 	if err := json.Unmarshal(respBody, &rr); err != nil {
-		return nil, fmt.Errorf("decode refresh response: %w", err)
+		// A 200 we cannot decode means the CP rotated but we lost the
+		// new credentials — the same predicament as a lost response.
+		return nil, errors.Join(ErrRefreshOutcomeUnknown, fmt.Errorf("decode refresh response: %w", err))
 	}
 	atExp, _ := time.Parse(time.RFC3339, rr.DeviceAccessTokenExpiresAt)
 	authExp, _ := time.Parse(time.RFC3339, rr.DeviceAuthExpiresAt)

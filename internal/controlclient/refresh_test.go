@@ -175,6 +175,124 @@ func TestRefreshDeviceTokenClassifiesExpiredAndUnknown(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
+			// Product contract (waired-agent#318): a classified answer
+			// is a verdict, so it must NOT also read as "outcome
+			// unknown" — that is what tells the refresher to stop
+			// replaying and drop the pending rotation.
+			if errors.Is(err, ErrRefreshOutcomeUnknown) {
+				t.Fatalf("a classified 401 must not be outcome-unknown: %v", err)
+			}
+		})
+	}
+}
+
+// TestRefreshDeviceTokenClientNonceIsHonoured pins the retry contract
+// (waired-agent#318): supplying ClientNonce must make the request
+// byte-identical to the earlier attempt — same nonce AND same machine
+// signature — because that is the only thing letting the Control Plane
+// recognise a replay of a rotation whose response it lost, rather than
+// reading it as a stolen token.
+func TestRefreshDeviceTokenClientNonceIsHonoured(t *testing.T) {
+	mk, machinePub := fakeMachineKey(t)
+	const (
+		deviceID     = "dev_TEST"
+		networkID    = "wn_TEST"
+		refreshToken = "waired_drt_initial"
+		nonce        = "cGlubmVkLW5vbmNlLTAwMDA="
+	)
+	var gotNonce, gotSig string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			MachineSignature string `json:"machine_signature"`
+			ClientNonce      string `json:"client_nonce"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		gotNonce, gotSig = req.ClientNonce, req.MachineSignature
+		json.NewEncoder(w).Encode(map[string]any{
+			"device_access_token":  "waired_dat_new",
+			"device_refresh_token": "waired_drt_new",
+		})
+	}))
+	defer srv.Close()
+
+	for i := range 2 {
+		if _, err := RefreshDeviceToken(context.Background(), RefreshParams{
+			ControlURL:   srv.URL,
+			DeviceID:     deviceID,
+			NetworkID:    networkID,
+			RefreshToken: refreshToken,
+			MachineKey:   mk,
+			ClientNonce:  nonce,
+		}); err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+		if gotNonce != nonce {
+			t.Fatalf("attempt %d: client_nonce = %q, want the supplied %q", i, gotNonce, nonce)
+		}
+		tokenHash := sha256.Sum256([]byte(refreshToken))
+		transcript := refreshTranscript(deviceID, networkID, hex.EncodeToString(tokenHash[:]), nonce)
+		sig, err := base64.StdEncoding.DecodeString(gotSig)
+		if err != nil {
+			t.Fatalf("attempt %d: decode sig: %v", i, err)
+		}
+		if !ed25519.Verify(machinePub, transcript, sig) {
+			t.Fatalf("attempt %d: signature does not verify against the pinned transcript", i)
+		}
+	}
+}
+
+// TestRefreshDeviceTokenOutcomeUnknown pins the other half of that
+// contract: when no usable response comes back, the error must carry
+// ErrRefreshOutcomeUnknown so the refresher replays instead of minting a
+// fresh rotation the CP would read as theft.
+func TestRefreshDeviceTokenOutcomeUnknown(t *testing.T) {
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			// No response at all: the server hangs up mid-request.
+			name: "connection closed",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatal("ResponseWriter is not a Hijacker")
+				}
+				conn, _, err := hj.Hijack()
+				if err != nil {
+					t.Fatalf("hijack: %v", err)
+				}
+				conn.Close()
+			},
+		},
+		{
+			// 200 whose body we cannot decode: the CP rotated and we
+			// lost the new credentials — the same predicament.
+			name: "undecodable 200",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, "{not json")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mk, _ := fakeMachineKey(t)
+			srv := httptest.NewServer(tc.handler)
+			defer srv.Close()
+			_, err := RefreshDeviceToken(context.Background(), RefreshParams{
+				ControlURL:   srv.URL,
+				DeviceID:     "d",
+				NetworkID:    "n",
+				RefreshToken: "r",
+				MachineKey:   mk,
+			})
+			if !errors.Is(err, ErrRefreshOutcomeUnknown) {
+				t.Fatalf("got %v, want ErrRefreshOutcomeUnknown", err)
+			}
 		})
 	}
 }
