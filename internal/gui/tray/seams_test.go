@@ -123,6 +123,10 @@ func installSeamStubs() {
 		seams.add(&seams.elevations, "install-ollama")
 		return nil
 	}
+	startAgentViaElevation = func(context.Context) error {
+		seams.add(&seams.elevations, "start-agent")
+		return nil
+	}
 	updateViaElevation = func(context.Context) error {
 		seams.add(&seams.elevations, "update")
 		return nil
@@ -182,6 +186,7 @@ func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
 		func() error { return logoutViaElevation(ctx, "") },
 		func() error { return installOllamaViaElevation(ctx, "") },
 		func() error { return updateViaElevation(ctx) },
+		func() error { return startAgentViaElevation(ctx) },
 	} {
 		if err := call(); err != nil {
 			t.Fatalf("elevation stub returned %v", err)
@@ -202,8 +207,8 @@ func TestSeamStubsCoverEveryDeclaredSeam(t *testing.T) {
 			t.Errorf("%s not stubbed: recorded %v, want exactly one call", name, got)
 		}
 	}
-	if got := l.snapshot(&l.elevations); len(got) != 4 {
-		t.Errorf("elevation seams not all stubbed: recorded %v, want 4 calls", got)
+	if got := l.snapshot(&l.elevations); len(got) != 5 {
+		t.Errorf("elevation seams not all stubbed: recorded %v, want 5 calls", got)
 	}
 
 	// confirmWithLabels predates #152 and has its own stub shape (labelStub);

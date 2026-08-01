@@ -86,7 +86,7 @@ func bootoutAndSettle(target string) {
 const (
 	// darwinLabel is the launchd job label, used both as the plist's
 	// <key>Label</key> value and the suffix on `launchctl ... system/<label>`.
-	darwinLabel = "com.waired.agent"
+	darwinLabel = DarwinLabel
 )
 
 // runLaunchctlFn is overridden in tests so we can assert the argv that
@@ -107,13 +107,6 @@ func newManager() Manager { return darwinManager{} }
 func Installed() bool {
 	_, statErr := os.Stat(systemLaunchDaemonPath(darwinLabel))
 	return statErr == nil
-}
-
-// StartHint is the manual command shown when init cannot (or is told not
-// to) auto-start the agent. The system domain needs root, so the hint
-// carries sudo.
-func StartHint() string {
-	return "sudo launchctl kickstart -k system/" + darwinLabel
 }
 
 // FixStateOwnership is a no-op on macOS: the system LaunchDaemon runs as

@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/waired-ai/waired-agent/internal/platform/service"
 )
 
 // On macOS the agent is a system LaunchDaemon (root, /Library/LaunchDaemons,
@@ -44,7 +46,7 @@ import (
 // signature tray.go calls.
 func LoginViaElevation(_ context.Context, _, _ string) error {
 	return errors.New("sign-in needs the waired-agent daemon (it was not reachable). " +
-		"Start it with `sudo launchctl kickstart -k system/com.waired.agent`, " +
+		"Start it with `" + service.StartHint() + "`, " +
 		"or sign in from a terminal with `sudo waired init`")
 }
 
@@ -104,6 +106,26 @@ func UpdateViaElevation(ctx context.Context) error {
 	}
 	if err := runOsascriptAdmin(ctx, shellQuote(bin)+" update --yes"); err != nil {
 		return fmt.Errorf("update: %w", err)
+	}
+	return nil
+}
+
+// StartAgentServiceViaElevation kickstarts the waired-agent LaunchDaemon,
+// elevating with the native admin-auth dialog.
+//
+// launchctl, not `waired-agent start`: it is what darwinManager.Start runs
+// (service_darwin.go), it lives at a fixed absolute path — which
+// runOsascriptAdmin requires, since `do shell script` runs under a minimal
+// PATH — and it needs no locator for the agent binary. The system/ domain is
+// root-owned (#520), hence the admin prompt.
+//
+// -k restarts a running job rather than erroring, matching the documented
+// StartHint. The tray only offers this row while the daemon is unreachable, so
+// "restart" and "start" coincide in practice.
+func StartAgentServiceViaElevation(ctx context.Context) error {
+	cmd := "/bin/launchctl kickstart -k system/" + service.DarwinLabel
+	if err := runOsascriptAdmin(ctx, cmd); err != nil {
+		return fmt.Errorf("start the agent: %w", err)
 	}
 	return nil
 }

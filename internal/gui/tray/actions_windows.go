@@ -14,6 +14,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/waired-ai/waired-agent/internal/platform/service"
 )
 
 // LoginViaElevation / LogoutViaElevation spawn an elevated waired.exe
@@ -47,7 +49,7 @@ func LoginViaElevation(ctx context.Context, controlURL, stateDir string) error {
 		"--skip-deploy",
 		"--skip-integration",
 	}
-	return shellExecuteRunAs(ctx, exe, args)
+	return shellExecuteRunAs(ctx, "login", exe, args)
 }
 
 // LogoutViaElevation runs `waired logout --yes --state-dir <dir>`
@@ -59,7 +61,7 @@ func LogoutViaElevation(ctx context.Context, stateDir string) error {
 		return err
 	}
 	args := []string{"logout", "--yes", "--state-dir", stateDir}
-	return shellExecuteRunAs(ctx, exe, args)
+	return shellExecuteRunAs(ctx, "logout", exe, args)
 }
 
 // InstallOllamaViaElevation runs `waired runtimes install ollama -y`
@@ -78,7 +80,7 @@ func InstallOllamaViaElevation(ctx context.Context, stateDir string) error {
 	if stateDir != "" {
 		args = append(args, "--state-dir", stateDir)
 	}
-	return shellExecuteRunAs(ctx, exe, args)
+	return shellExecuteRunAs(ctx, "install Ollama", exe, args)
 }
 
 // UpdateViaElevation runs `waired update --yes` under UAC elevation. The
@@ -95,7 +97,44 @@ func UpdateViaElevation(ctx context.Context) error {
 		}
 		return nil
 	}
-	return shellExecuteRunAs(ctx, exe, []string{"update", "--yes"})
+	return shellExecuteRunAs(ctx, "update", exe, []string{"update", "--yes"})
+}
+
+// StartAgentServiceViaElevation starts the waired-agent service through the
+// SCM, elevating with UAC.
+//
+// It launches sc.exe rather than `waired-agent.exe start`, and that is the
+// whole point. #315's failure is Windows Smart App Control blocking the
+// *unsigned* waired-agent.exe when the SCM tries to start it at boot; asking
+// the user to elevate that same unsigned binary invites the same block, and
+// hands them a UAC dialog reading "Publisher: Unknown". sc.exe ships with
+// Windows and is Microsoft-signed, so SAC never questions the launcher and the
+// prompt names the Service Control Manager. The service binary is then started
+// by the SCM exactly as it is at boot — which is also the code path we want to
+// exercise, since that is the one that failed.
+//
+// Absolute path from the system directory, not a PATH lookup: the elevated
+// process gets a different PATH than the tray session, and "the thing named
+// sc.exe on some PATH" is not what we mean.
+func StartAgentServiceViaElevation(ctx context.Context) error {
+	sc, err := systemExe("sc.exe")
+	if err != nil {
+		return fmt.Errorf("start the agent: %w", err)
+	}
+	return shellExecuteRunAs(ctx, "start the agent", sc, []string{"start", service.ServiceName})
+}
+
+// systemExe resolves a Windows-supplied tool inside %SystemRoot%\System32.
+func systemExe(name string) (string, error) {
+	dir, err := windows.GetSystemDirectory()
+	if err != nil {
+		return "", fmt.Errorf("locate the Windows system directory: %w", err)
+	}
+	p := filepath.Join(dir, name)
+	if _, err := os.Stat(p); err != nil {
+		return "", fmt.Errorf("%s not found at %s: %w", name, p, err)
+	}
+	return p, nil
 }
 
 // locateWairedExe finds the absolute path to waired.exe to feed
@@ -139,10 +178,13 @@ func quoteArgsForShellExec(args []string) string {
 // shellExecuteRunAs invokes ShellExecuteW(0, "runas", exe, params,
 // NULL, SW_SHOWNORMAL). Returns nil on the UAC consent + spawn
 // success path; an error describing the user's "Cancel" or system
-// failure otherwise. We deliberately do not wait for the elevated
+// failure otherwise. action names the caller ("login", "update",
+// "start the agent") and prefixes those errors: the prefix used to be
+// hardcoded "login", so a failed service start reported itself as a
+// sign-in failure. We deliberately do not wait for the elevated
 // process to exit (parent → elevated stdout is not pipe-able); the
 // tray observes completion by polling /v1/identity.
-func shellExecuteRunAs(_ context.Context, exe string, args []string) error {
+func shellExecuteRunAs(_ context.Context, action, exe string, args []string) error {
 	verb, _ := windows.UTF16PtrFromString("runas")
 	exeW, _ := windows.UTF16PtrFromString(exe)
 	paramsW, _ := windows.UTF16PtrFromString(quoteArgsForShellExec(args))
@@ -163,15 +205,15 @@ func shellExecuteRunAs(_ context.Context, exe string, args []string) error {
 	switch r {
 	case 5, 0:
 		// 5: SE_ERR_ACCESSDENIED (UAC cancelled by user).
-		return errors.New("login: UAC consent declined")
+		return fmt.Errorf("%s: UAC consent declined", action)
 	case 2:
-		return fmt.Errorf("login: %s not found", exe)
+		return fmt.Errorf("%s: %s not found", action, exe)
 	case 3:
-		return errors.New("login: path not found")
+		return fmt.Errorf("%s: path not found", action)
 	case 8:
-		return errors.New("login: out of memory")
+		return fmt.Errorf("%s: out of memory", action)
 	default:
-		return fmt.Errorf("login: ShellExecuteW returned %d", r)
+		return fmt.Errorf("%s: ShellExecuteW returned %d", action, r)
 	}
 }
 

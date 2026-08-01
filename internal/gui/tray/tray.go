@@ -17,6 +17,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/platform/autostart"
 	"github.com/waired-ai/waired-agent/internal/platform/notification"
+	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
@@ -60,6 +61,8 @@ var (
 	logoutViaElevation        = LogoutViaElevation
 	installOllamaViaElevation = InstallOllamaViaElevation
 	updateViaElevation        = UpdateViaElevation
+	startAgentViaElevation    = StartAgentServiceViaElevation
+	serviceInstalled          = service.Installed
 )
 
 // iconConnected / iconDisconnected / iconError / iconDegraded are
@@ -94,6 +97,16 @@ func Run(ctx context.Context, opts Options) {
 		obsSupported:    true, // optimistic; first 404 flips this off
 		updateSupported: true, // optimistic; first 404 flips this off (#293)
 		autostartMgr:    autostart.New("waired-tray"),
+		// The tray autostarts at login; the agent service does not
+		// necessarily answer yet (Windows registers it delayed-auto-start).
+		// Until this lapses an unreachable daemon reads as "starting", not
+		// as a failure (#315).
+		startingUntil: time.Now().Add(startGraceFor(runtime.GOOS)),
+		// Sampled once: whether there is a registered service for the
+		// daemon-down menu's start row to act on. Install/uninstall during a
+		// tray session is rare enough to not be worth re-probing every poll,
+		// and the probe is a privileged-looking SCM/systemd call.
+		serviceRegistered: serviceInstalled(),
 	}
 	// Present as a menu-bar-only accessory (no Dock icon / Cmd-Tab
 	// entry). No-op off darwin; on darwin this is the analogue of the
@@ -120,12 +133,16 @@ type tray struct {
 	// adjacent once a neighbouring group is hidden. (They used to be
 	// empty-title menu items, which render as blank rows on every
 	// backend — see issue #281.)
-	miHeader       *systray.MenuItem
-	miEmail        *systray.MenuItem
-	miStatus       *systray.MenuItem // renders MenuModel.StatusMsg (daemon-down hint / login code / error); hidden when empty (waired#808)
-	miUpdate       *systray.MenuItem // "⚠ Update available — install vX"; hidden when current (#293)
-	miUpdateNotify *systray.MenuItem // "✓ Notify me about updates"; under the banner, hidden when current (#294)
-	miToggle       *systray.MenuItem
+	miHeader *systray.MenuItem
+	miEmail  *systray.MenuItem
+	miStatus *systray.MenuItem // renders MenuModel.StatusMsg (daemon-down explanation / login code / error); hidden when empty (waired#808)
+	// Daemon-down actions (#315/#317): elevate-and-start, and copy the
+	// command. Static titles, so no SetTitle ever reaches them.
+	miStartAgent     *systray.MenuItem
+	miStartAgentCopy *systray.MenuItem
+	miUpdate         *systray.MenuItem // "⚠ Update available — install vX"; hidden when current (#293)
+	miUpdateNotify   *systray.MenuItem // "✓ Notify me about updates"; under the banner, hidden when current (#294)
+	miToggle         *systray.MenuItem
 	// miInference is the "Inference ▸" submenu parent (waired#809). The
 	// engine/share/mesh/worker/recommend rows below are its children instead
 	// of top-level rows, so the top level stays short. Shown when
@@ -286,6 +303,21 @@ type tray struct {
 	lastOnline     MenuModel
 	switchingUntil time.Time
 
+	// Start grace (mu-protected, #315). The tray autostarts at login, but the
+	// agent service is registered delayed-auto-start, so for a couple of
+	// minutes after every boot the daemon is legitimately not up yet. Until
+	// startingUntil passes, an unreachable daemon renders as "starting…"
+	// rather than the red failure state. Seeded at tray start and cleared by
+	// the first successful poll.
+	startingUntil time.Time
+	// startInFlight guards the elevation prompt: one at a time.
+	startInFlight bool
+	// serviceRegistered is service.Installed() sampled at start: whether
+	// there is a service for the start row to act on at all. A raw-binary dev
+	// run has none, and offering a button that cannot work is worse than
+	// offering nothing.
+	serviceRegistered bool
+
 	// Observability poll state (mu-protected). recentFallbacks is the
 	// rolling buffer the projection's RecentFallbackWindow filters at
 	// render time. obsCursor is the next_since returned by the previous
@@ -347,6 +379,23 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miStatus = systray.AddMenuItem("", "")
 		t.miStatus.Disable()
 		t.miStatus.Hide()
+		// Agent-start rows (#315/#317). The daemon-down menu used to end at
+		// the status line above, which rendered a raw shell command into a
+		// disabled row — a command the user was expected to retype into an
+		// admin shell. These two do it for them: the first elevates and starts
+		// the service, the second copies the command for anyone who would
+		// rather run it themselves.
+		//
+		// Both carry their final title from creation and are never re-titled,
+		// which is what keeps them out of the SetTitle-on-hidden trap the row
+		// diff exists to police (rows.go). Position is load-bearing: systray
+		// cannot insert items at runtime, so creation order IS render order,
+		// and the start action belongs with the status it answers — above the
+		// update banner, not below Quit.
+		t.miStartAgent = systray.AddMenuItem(startAgentActionLabel, "Start the Waired background service (asks for administrator access)")
+		t.miStartAgent.Hide()
+		t.miStartAgentCopy = systray.AddMenuItem(startAgentCopyLabel, "Copy the command that starts the Waired background service")
+		t.miStartAgentCopy.Hide()
 		// Manual-update banner (#293). Prominent near the top, like
 		// Tailscale's "Update available". Hidden by default — the initial
 		// (false,false) visibility diff is a no-op, so an up-to-date host
@@ -815,6 +864,13 @@ func (t *tray) handleClicks(ctx context.Context) {
 			return
 		case <-t.miToggle.ClickedCh:
 			t.onToggle(ctx)
+		// Both start rows dispatch on a goroutine: every backend blocks while
+		// the OS consent UI is up (UAC dialog / polkit agent / macOS auth
+		// sheet), and blocking here would freeze every other menu click.
+		case <-t.miStartAgent.ClickedCh:
+			go t.onStartAgent(ctx)
+		case <-t.miStartAgentCopy.ClickedCh:
+			go t.onCopyStartCommand()
 		case <-t.miUpdate.ClickedCh:
 			go t.onUpdate(ctx)
 		case <-t.miUpdateNotify.ClickedCh:
@@ -1141,6 +1197,118 @@ func (t *tray) onInstallEngine(ctx context.Context) {
 // and the CLI re-runs the official installer. Long-running (download +
 // elevation dialog + service restart): callers must dispatch in a
 // goroutine so the click select stays responsive.
+// onStartAgent elevates and starts the agent service, then waits for the
+// daemon to actually answer before claiming anything.
+//
+// The wait is not optional and is the same on all three OSes for different
+// reasons: on Windows ShellExecuteW returns as soon as the elevated process is
+// spawned, so its nil says nothing about the service (and #315's failure mode
+// is precisely a start that the OS blocks); `systemctl start` returns when the
+// unit is active, which is before the management socket listens; `launchctl
+// kickstart` returns when launchd has spawned the job. Rather than encode
+// three timing models, converge on the one observable that matters — /status
+// answering.
+func (t *tray) onStartAgent(ctx context.Context) {
+	if !t.claimStartAgent() {
+		return
+	}
+	defer t.releaseStartAgent()
+
+	slog.Debug("tray: menu action", "action", "start-agent")
+	if err := startAgentViaElevation(ctx); err != nil {
+		t.offerStartCommand(fmt.Sprintf("Could not start the Waired agent: %v", err))
+		return
+	}
+	// Paint "starting…" immediately: the next poll is up to 5 s away, and the
+	// service takes a moment to open its socket.
+	t.mu.Lock()
+	t.startingUntil = time.Now().Add(startGraceAfterClick)
+	t.mu.Unlock()
+	t.pollOnce(ctx)
+
+	if !t.awaitDaemonUp(ctx, startWaitTimeout) {
+		notify("The Waired agent did not come up. Run `waired doctor` to see why.", notification.Warning)
+	}
+	t.pollOnce(ctx)
+}
+
+// claimStartAgent takes the single start slot, or reports that there is
+// nothing to do. Two guards, both re-read from the latched model rather than
+// trusted from the widget (the row may have been hidden between the click and
+// this goroutine being scheduled):
+//
+//   - the model has to still be offering the action, and
+//   - no other start may be in flight. A double-click would otherwise stack
+//     two UAC dialogs on Windows, or two polkit agents on Linux.
+func (t *tray) claimStartAgent() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.last.StartAgentAction == "" || t.startInFlight {
+		return false
+	}
+	t.startInFlight = true
+	return true
+}
+
+func (t *tray) releaseStartAgent() {
+	t.mu.Lock()
+	t.startInFlight = false
+	t.mu.Unlock()
+}
+
+// awaitDaemonUp polls /status until it answers or the deadline lapses.
+func (t *tray) awaitDaemonUp(ctx context.Context, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, err := t.cli.Status(probeCtx)
+		cancel()
+		if err == nil {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// onCopyStartCommand puts the start command on the clipboard for a user who
+// would rather run it themselves.
+func (t *tray) onCopyStartCommand() {
+	t.mu.Lock()
+	cmd := t.last.StartAgentCmd
+	t.mu.Unlock()
+	if cmd == "" {
+		return
+	}
+	slog.Debug("tray: menu action", "action", "copy-start-command")
+	if err := copyToClipboard(cmd); err != nil {
+		showError(fmt.Sprintf("Could not copy the command: %v", err))
+		return
+	}
+	notify("Copied: "+cmd, notification.Info)
+}
+
+// offerStartCommand reports a failed start and leaves the user something to
+// act on. The clipboard route matters most where the failure is "no consent
+// UI available at all" — a Linux session with no polkit agent, where a modal
+// error dialog may be just as unavailable as the prompt was.
+func (t *tray) offerStartCommand(msg string) {
+	t.mu.Lock()
+	cmd := t.last.StartAgentCmd
+	t.mu.Unlock()
+	if cmd != "" && copyToClipboard(cmd) == nil {
+		notify(msg+" The command is on your clipboard: "+cmd, notification.Warning)
+		return
+	}
+	showError(msg)
+}
+
 func (t *tray) onUpdate(ctx context.Context) {
 	t.mu.Lock()
 	show := t.last.ShowUpdate
@@ -1208,6 +1376,37 @@ func (t *tray) pollUpdate(ctx context.Context, snap *Snapshot) {
 // re-prompts. The first sighting of a version toasts immediately; the same
 // version then re-reminds at most once per interval (#294) — "appropriate
 // intervals", not every 5s poll and not a single fire-and-forget.
+const (
+	// startGraceAfterClick keeps the menu in "starting…" right after the user
+	// asked for a start, so the row does not flip back to the red failure
+	// state for the second or two the service needs to open its socket.
+	startGraceAfterClick = 30 * time.Second
+	// startWaitTimeout bounds awaitDaemonUp. Generous: an agent that has to
+	// re-read a large state dir, or a Windows service the SCM starts cold,
+	// can take a while — and reporting failure early is worse than waiting.
+	startWaitTimeout = 45 * time.Second
+)
+
+// startGraceFor is how long after tray start an unreachable daemon is treated
+// as "still coming up" rather than broken.
+//
+// Windows registers the service delayed-auto-start (service_windows.go), which
+// the SCM honours by waiting ~2 minutes after boot before it even attempts the
+// start — while the tray autostarts at logon and starts polling immediately.
+// The rc7 reviewer hit exactly this and read it as a failure (#315, root cause
+// 2). systemd (WantedBy=multi-user.target) and launchd (RunAtLoad) both start
+// the agent as part of boot, so their window is only as long as the daemon
+// takes to open its socket.
+//
+// Untagged and GOOS-taking so all three values are pinned by one table test on
+// every leg (CLAUDE.md §Test discipline).
+func startGraceFor(goos string) time.Duration {
+	if goos == "windows" {
+		return 3 * time.Minute
+	}
+	return 20 * time.Second
+}
+
 const updateRenotifyInterval = 24 * time.Hour
 
 // maybeNotifyUpdate pops the proactive "update available" toast subject to
@@ -1688,19 +1887,38 @@ func (t *tray) pollOnce(ctx context.Context) {
 		// (waired#808). Once the window lapses (a genuinely failed restart)
 		// offlineModel falls back to the daemon-down model.
 		t.mu.Lock()
-		switching := time.Now().Before(t.switchingUntil)
+		now := time.Now()
+		switching := now.Before(t.switchingUntil)
 		lastOnline := t.lastOnline
+		facts := daemonDownFacts{
+			ServiceInstalled: t.serviceRegistered,
+			Starting:         now.Before(t.startingUntil),
+			LastEmail:        lastOnline.AccountEmail,
+		}
 		t.mu.Unlock()
-		slog.Debug("tray: poll: daemon unreachable", "err", statusErr, "switching", switching)
-		t.apply(offlineModel(lastOnline, switching))
+		slog.Debug("tray: poll: daemon unreachable",
+			"err", statusErr, "switching", switching, "starting", facts.Starting)
+		t.apply(offlineModel(lastOnline, switching, facts))
 		return
 	}
 	snap.Health = HealthOnline
 	snap.Status = st
+	// The daemon answered, so whatever start grace was running is over.
+	t.mu.Lock()
+	t.startingUntil = time.Time{}
+	t.mu.Unlock()
 
 	id, idErr := t.cli.Identity(pollCtx)
 	if idErr == nil {
 		snap.Identity = id
+	} else {
+		// A real transport failure, not "the daemon says nobody is enrolled":
+		// Client.Identity folds 404 into {Enrolled:false} (mgmt.go). Rendering
+		// this as "not signed in" is what pushed a reviewer into a re-login
+		// that re-ran setup, on a device whose identity was sitting on disk
+		// with months of validity (#317 / #318).
+		snap.IdentityErr = true
+		slog.Debug("tray: poll: identity unavailable", "err", idErr)
 	}
 	// Fold in any in-flight daemon-driven login (opens the browser on the
 	// first login URL, surfaces progress/errors). No-op when no login is
@@ -2043,6 +2261,10 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	// MenuModel.StatusMsg but never rendered.
 	t.setVisible(t.miStatus, prev.StatusMsg != "", m.StatusMsg != "")
 	t.setTitle(t.miStatus, prev.StatusMsg, m.StatusMsg)
+	// Agent-start rows: visibility only. Their titles are static (set at
+	// creation), so nothing here can push a title at a hidden row.
+	t.setVisible(t.miStartAgent, prev.StartAgentAction != "", m.StartAgentAction != "")
+	t.setVisible(t.miStartAgentCopy, prev.StartAgentCopy != "", m.StartAgentCopy != "")
 
 	// Update banner (#293): visibility + title track ShowUpdate / UpdateLabel.
 	t.setVisible(t.miUpdate, prev.ShowUpdate, m.ShowUpdate)

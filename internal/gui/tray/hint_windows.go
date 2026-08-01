@@ -2,16 +2,10 @@
 
 package tray
 
-// startAgentHint is the one-line command shown in the "agent not
-// running" status row. PowerShell Start-Service is the lowest-
-// friction form for a user who has the Waired Agent SCM service
-// installed (cmd/waired-agent install). It works from a
-// non-elevated PowerShell as long as the user is in
-// Administrators; if not, "Run as Administrator" is the obvious
-// next step but the hint stays short on purpose.
-func startAgentHint() string {
-	return "Start-Service waired-agent"
-}
+// The agent-start command used to live here too, as a third per-OS copy of
+// what internal/platform/service already owned. When #520 moved macOS to a
+// system LaunchDaemon this copy kept naming the deleted per-user job; it is
+// now service.StartHintFor(goos), table-tested across all three OSes.
 
 // checkLogsHint is shown when the tunnel reports an error state and
 // the user should look at the daemon's log to diagnose. The
