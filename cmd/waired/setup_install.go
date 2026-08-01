@@ -52,6 +52,44 @@ var setupDetectNVIDIA = hardware.NVIDIADriverPresent
 // setupDetectEngine is the detection seam, for the same reason.
 var setupDetectEngine = setup.DetectOllama
 
+// setupDetectEngineNoExec is the exec-free detection seam used by the repair
+// path, which must not run the engine binary — see setup.DetectOllamaPathOnly.
+var setupDetectEngineNoExec = setup.DetectOllamaPathOnly
+
+// setupRepairDarwinBundle is the repair seam, so the executor test can drive
+// both outcomes without a real Ollama.app.
+var setupRepairDarwinBundle = setup.RepairDarwinBundleMarker
+
+// repairDarwinEngineBundle undoes #329 on a host that was installed before the
+// fix: waired used to write its "this install is ours" marker at the root of
+// the signed Ollama.app bundle, which invalidates the bundle's resource seal.
+// macOS then refuses to launch it ("Ollama is damaged") and SIGKILLs every
+// headless exec, so setup wedges at the model step forever. Deleting the file
+// restores the bundle; nothing has to be re-downloaded.
+//
+// Everything about it is safe to run unconditionally: it is a no-op off darwin,
+// a no-op when the marker is absent, and it never execs the engine.
+func repairDarwinEngineBundle(out io.Writer, goos, stateDir string) {
+	if goos != "darwin" {
+		return
+	}
+	det := setupDetectEngineNoExec(stateDir)
+	if det.LegacyBundleMarkerPath == "" {
+		return
+	}
+	changed, err := setupRepairDarwinBundle(goos, stateDir, det)
+	if changed {
+		writePromptf(out, "%s Repaired the AI engine's macOS app signature (removed a stray waired file from %s).\n",
+			emo("🔧", ">>"), filepath.Dir(det.LegacyBundleMarkerPath))
+	}
+	if err != nil {
+		// Not fatal to setup: either the bundle was already repaired and only
+		// the bookkeeping failed, or we lack the privileges to touch
+		// /Applications and the operator needs to know why.
+		writePromptf(out, "%s Could not fully repair the AI engine install: %v\n", emo("⚠️", "!"), err)
+	}
+}
+
 // setupHandState is the ownership-handoff seam. The real one shells out
 // to chown and self-guards on euid 0 + an installed service, which a
 // test running as root on a developer box would actually satisfy.
@@ -88,6 +126,14 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 		return nil
 	}
 	st := s.State()
+	// Before any early return: a host installed before #329 carries a marker
+	// inside the Ollama.app bundle that invalidates its signature, so macOS
+	// kills every exec of the engine. Deleting that one file repairs it. This
+	// has to run above the gates below because every one of them is satisfied
+	// on exactly the hosts that need repairing — the engine IS installed, the
+	// files ARE all present; they just cannot be executed. It is idempotent
+	// and touches only local files, so an unconditional call is right.
+	repairDarwinEngineBundle(out, goos, st.StateDir)
 	if !st.Active || st.DesiredEngine == "" || st.EngineInstalled {
 		return nil
 	}
@@ -278,7 +324,7 @@ func installEngineAsExecutor(
 	// no terminal question on this path, and we only get here when the
 	// daemon reports no engine installed at all — so there is nothing to
 	// reuse. A host that already has one never reaches this line.
-	det := setupDetectEngine(ctx)
+	det := setupDetectEngine(ctx, stateDir)
 	action := engineInstallDecision(
 		goos, elevated, det,
 		agentconfig.OllamaSourceBundled, bundledPresent,

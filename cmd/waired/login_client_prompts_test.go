@@ -645,9 +645,16 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 func stubEngineInstallFailure(t *testing.T) {
 	t.Helper()
 	origInstall, origDetect := setupInstallEngine, setupDetectEngine
+	origNoExec := setupDetectEngineNoExec
 	setupInstallEngine = func(bool, string, func(infruntime.OllamaInstallProgress)) error {
 		return errors.New("no space left on device")
 	}
-	setupDetectEngine = func(context.Context) setup.OllamaDetection { return setup.OllamaDetection{} }
-	t.Cleanup(func() { setupInstallEngine, setupDetectEngine = origInstall, origDetect })
+	setupDetectEngine = func(context.Context, string) setup.OllamaDetection { return setup.OllamaDetection{} }
+	// Also stubbed so the darwin repair probe cannot reach a developer box's
+	// real /Applications/Ollama.app.
+	setupDetectEngineNoExec = func(string) setup.OllamaDetection { return setup.OllamaDetection{} }
+	t.Cleanup(func() {
+		setupInstallEngine, setupDetectEngine = origInstall, origDetect
+		setupDetectEngineNoExec = origNoExec
+	})
 }

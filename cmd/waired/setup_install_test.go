@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -17,11 +18,26 @@ import (
 // fakeEngineInstaller records install attempts without downloading a
 // multi-GB engine.
 type fakeEngineInstaller struct {
-	mu       sync.Mutex
-	calls    []string // stateDir per call
-	handed   []string // stateDir passed to the ownership handoff
-	err      error
-	detected setup.OllamaDetection
+	mu     sync.Mutex
+	calls  []string // stateDir per call
+	handed []string // stateDir passed to the ownership handoff
+	// detectedIn / repairedIn record the stateDir each detection and repair
+	// was asked about. The repair path is only correct if it is handed the
+	// daemon's state dir, so a fake that dropped it would make the wrong-dir
+	// bug unwritable (CLAUDE.md §Test discipline).
+	detectedIn []string
+	repairedIn []repairCall
+	err        error
+	detected   setup.OllamaDetection
+	// repairChanged / repairErr script setupRepairDarwinBundle's answer.
+	repairChanged bool
+	repairErr     error
+}
+
+type repairCall struct {
+	GOOS     string
+	StateDir string
+	Det      setup.OllamaDetection
 }
 
 // install swaps in the seams for the duration of one test and returns
@@ -29,13 +45,31 @@ type fakeEngineInstaller struct {
 func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 	t.Helper()
 	prevInstall, prevDetect, prevHand := setupInstallEngine, setupDetectEngine, setupHandState
+	prevNoExec, prevRepair := setupDetectEngineNoExec, setupRepairDarwinBundle
 	setupInstallEngine = func(_ bool, stateDir string, _ func(infruntime.OllamaInstallProgress)) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.calls = append(f.calls, stateDir)
 		return f.err
 	}
-	setupDetectEngine = func(context.Context) setup.OllamaDetection { return f.detected }
+	setupDetectEngine = func(_ context.Context, stateDir string) setup.OllamaDetection {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.detectedIn = append(f.detectedIn, stateDir)
+		return f.detected
+	}
+	setupDetectEngineNoExec = func(stateDir string) setup.OllamaDetection {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.detectedIn = append(f.detectedIn, stateDir)
+		return f.detected
+	}
+	setupRepairDarwinBundle = func(goos, stateDir string, det setup.OllamaDetection) (bool, error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.repairedIn = append(f.repairedIn, repairCall{GOOS: goos, StateDir: stateDir, Det: det})
+		return f.repairChanged, f.repairErr
+	}
 	setupHandState = func(stateDir string) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -43,8 +77,15 @@ func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 	}
 	t.Cleanup(func() {
 		setupInstallEngine, setupDetectEngine, setupHandState = prevInstall, prevDetect, prevHand
+		setupDetectEngineNoExec, setupRepairDarwinBundle = prevNoExec, prevRepair
 	})
 	return f
+}
+
+func (f *fakeEngineInstaller) repairs() []repairCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]repairCall(nil), f.repairedIn...)
 }
 
 func (f *fakeEngineInstaller) installed() []string {
@@ -78,6 +119,98 @@ func lastPhase(t *testing.T, d *fakeSetupDaemon) management.SetupExecutorRequest
 		t.Fatal("executor sent no lease updates")
 	}
 	return reqs[len(reqs)-1]
+}
+
+// TestSetupEngineInstall_RepairsTheDarwinBundleBeforeEveryGate is the
+// reachability contract for #329's migration, and it is the whole reason the
+// repair sits where it does.
+//
+// A host broken by the old in-bundle marker satisfies EVERY early return in
+// setupEngineInstall: the engine is installed, all its files are present, the
+// daemon reports EngineInstalled=true. It just cannot be executed. So a repair
+// placed after those gates would never run on the hosts that need it — which
+// is exactly how the wizard kept reporting OK forever. It has to run first.
+func TestSetupEngineInstall_RepairsTheDarwinBundleBeforeEveryGate(t *testing.T) {
+	shrinkSetupTimers(t)
+	f := &fakeEngineInstaller{
+		detected: setup.OllamaDetection{
+			Installed:              true,
+			Path:                   "/Applications/Ollama.app/Contents/Resources/ollama",
+			LegacyBundleMarkerPath: "/Applications/Ollama.app/.waired-managed.json",
+		},
+		repairChanged: true,
+	}
+	f.install(t)
+
+	d := &fakeSetupDaemon{}
+	// EngineInstalled: the state a broken host actually serves — this is the
+	// gate that used to swallow the whole function.
+	st := activeInstallState()
+	st.EngineInstalled = true
+	d.setState(st)
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+
+	var out bytes.Buffer
+	if err := setupEngineInstall(context.Background(), s, &out, "darwin", true); err != nil {
+		t.Fatalf("setupEngineInstall = %v, want nil", err)
+	}
+
+	repairs := f.repairs()
+	if len(repairs) != 1 {
+		t.Fatalf("repair calls = %d, want exactly 1 despite EngineInstalled=true", len(repairs))
+	}
+	if repairs[0].GOOS != "darwin" || repairs[0].StateDir != "/var/lib/waired" {
+		t.Errorf("repair called with goos=%q stateDir=%q, want darwin + the daemon's state dir",
+			repairs[0].GOOS, repairs[0].StateDir)
+	}
+	if !strings.Contains(out.String(), "Repaired the AI engine") {
+		t.Errorf("output = %q, want the repair to be announced", out.String())
+	}
+	// Repairing is not installing: the engine is present, so nothing downloads.
+	if got := f.installed(); len(got) != 0 {
+		t.Errorf("installer calls = %v, want none", got)
+	}
+}
+
+// The repair must never fire on the two OSes that have no bundle to break,
+// and must not fire on a healthy Mac.
+func TestSetupEngineInstall_NoRepairWhenNotNeeded(t *testing.T) {
+	shrinkSetupTimers(t)
+	broken := setup.OllamaDetection{
+		Installed:              true,
+		LegacyBundleMarkerPath: "/Applications/Ollama.app/.waired-managed.json",
+	}
+	for _, tc := range []struct {
+		name     string
+		goos     string
+		detected setup.OllamaDetection
+	}{
+		{"linux", "linux", broken},
+		{"windows", "windows", broken},
+		{"healthy darwin", "darwin", setup.OllamaDetection{Installed: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeEngineInstaller{detected: tc.detected}
+			f.install(t)
+			d := &fakeSetupDaemon{}
+			st := activeInstallState()
+			st.EngineInstalled = true
+			d.setState(st)
+			srv := d.server(t)
+
+			s := attachSetupExecutor(srv.URL, true)
+			defer s.Release()
+			if err := setupEngineInstall(context.Background(), s, io.Discard, tc.goos, true); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.repairs(); len(got) != 0 {
+				t.Errorf("repair calls = %+v, want none", got)
+			}
+		})
+	}
 }
 
 // TestSetupEngineInstallHappyPath is the core of waired#835 §11: on the
