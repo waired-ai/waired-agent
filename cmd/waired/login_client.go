@@ -115,8 +115,12 @@ func runInitViaDaemon(o daemonInitOpts) error {
 	resuming := false
 	if st.SessionID == "" {
 		if st.Phase != management.LoginPhaseActive {
-			return fmt.Errorf("the background service did not start a sign-in (it reported %q).\n"+
-				"  Run `waired doctor` to check the service, then try again", st.Phase)
+			// No phase name in the copy: "unenrolled" / "logging_in" are
+			// this protocol's words, not the operator's, and the previous
+			// wording ("no login session id") is the whole reason #313
+			// read as a protocol bug rather than a working daemon.
+			return errors.New("the background service did not start a sign-in.\n" +
+				"  Run `waired init` again; if it keeps happening, `waired doctor` says what is wrong with the service")
 		}
 		// An agent too old to know about `reauth` ignores the field and
 		// answers with the same no-op. Saying "no session id" there would
