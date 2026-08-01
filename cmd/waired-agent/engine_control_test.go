@@ -48,6 +48,52 @@ func (s *fakeSpawner) Spawn(context.Context, string, []string, []string, io.Writ
 	return newFakeProc(), nil
 }
 
+// stubbornProc ignores signals and only ends on Kill — the shape of
+// ollama on Windows (no deliverable SIGTERM) and of any engine slow to
+// wind down. It records the signals it was sent so a test can prove the
+// graceful phase was actually attempted.
+type stubbornProc struct {
+	mu      sync.Mutex
+	signals []os.Signal
+	killed  bool
+	done    chan struct{}
+	once    sync.Once
+}
+
+func newStubbornProc() *stubbornProc          { return &stubbornProc{done: make(chan struct{})} }
+func (p *stubbornProc) PID() int              { return 4243 }
+func (p *stubbornProc) Done() <-chan struct{} { return p.done }
+func (p *stubbornProc) Err() error            { return nil }
+func (p *stubbornProc) Signal(s os.Signal) error {
+	p.mu.Lock()
+	p.signals = append(p.signals, s)
+	p.mu.Unlock()
+	return nil
+}
+func (p *stubbornProc) Kill() error {
+	p.mu.Lock()
+	p.killed = true
+	p.mu.Unlock()
+	p.once.Do(func() { close(p.done) })
+	return nil
+}
+func (p *stubbornProc) wasKilled() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.killed
+}
+func (p *stubbornProc) signalCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.signals)
+}
+
+type stubbornSpawner struct{ proc *stubbornProc }
+
+func (s *stubbornSpawner) Spawn(context.Context, string, []string, []string, io.Writer) (infruntime.RunningProcess, error) {
+	return s.proc, nil
+}
+
 func hostPort(t *testing.T, raw string) (string, int) {
 	t.Helper()
 	rest := strings.TrimPrefix(raw, "http://")
@@ -136,6 +182,59 @@ func TestEngineReady_ParkedIsNotReady(t *testing.T) {
 	p := &agentInferenceProvider{ollama: a}
 	if ready, _ := p.EngineReady(); ready {
 		t.Error("EngineReady = true while parked, want false")
+	}
+}
+
+// TestEngineController_StopEngine_SurvivesCancelledRequestContext pins
+// the PRODUCT CONTRACT introduced by #316: the management handler hands
+// StopEngine the HTTP request context, which the tray's own budget
+// cancels long before the stop can finish. That cancellation must bound
+// only how long the CALLER waits — it must not truncate the graceful
+// SIGTERM window, and it must never end with a live engine behind a
+// latched "stopped" power state.
+func TestEngineController_StopEngine_SurvivesCancelledRequestContext(t *testing.T) {
+	const stopTimeout = 80 * time.Millisecond
+	proc := newStubbornProc()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	defer srv.Close()
+	host, port := hostPort(t, srv.URL)
+	a := infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
+		Binary: "/fake/ollama", Host: host, Port: port,
+		Spawner: &stubbornSpawner{proc: proc}, HTTPClient: srv.Client(),
+		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 5,
+		StopTimeout: stopTimeout,
+	})
+	if err := a.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+
+	// The tray already gave up: its request context is dead on arrival.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ec := newEngineController(context.Background(), a, nil)
+	start := time.Now()
+	if err := ec.StopEngine(ctx); err != nil {
+		t.Fatalf("StopEngine with a cancelled request ctx = %v, want nil", err)
+	}
+	elapsed := time.Since(start)
+
+	if !proc.wasKilled() {
+		t.Fatal("the engine survived the stop; a cancelled caller must not abandon it alive")
+	}
+	if proc.signalCount() == 0 {
+		t.Error("no graceful signal attempted")
+	}
+	// The graceful window is StopTimeout. If the caller's cancellation had
+	// leaked into the adapter, the kill would have been immediate.
+	if elapsed < stopTimeout/2 {
+		t.Errorf("stop finished in %s (< StopTimeout %s): the caller's cancellation truncated the graceful window", elapsed, stopTimeout)
+	}
+	if power, _ := ec.EngineState(); power != management.EnginePowerStopped {
+		t.Errorf("engine_power = %q, want stopped", power)
 	}
 }
 

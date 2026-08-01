@@ -135,6 +135,14 @@ type InferenceStatus struct {
 	// orthogonal to the share concern.
 	ShareWithMesh string `json:"share_with_mesh,omitempty"`
 
+	// ShareSuspended reports the live-only session override (#316):
+	// sharing is withheld right now even though ShareWithMesh still
+	// records the operator's "shared" choice. The tray sets it on Quit
+	// and lifts it on its next start, so a user who quits the tray stops
+	// serving peers without losing the preference. Kept separate from
+	// ShareWithMesh so older clients keep reading a two-valued field.
+	ShareSuspended bool `json:"share_suspended,omitempty"`
+
 	// Worker is the operator's manual inference routing choice
 	// (Tailscale-exit-node-style). nil when the daemon has no
 	// WorkerController attached. Embedding the resolved state here
@@ -378,6 +386,7 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 	if s.shareControl != nil {
 		_, desired := s.shareControl.State()
 		body.ShareWithMesh = string(desired)
+		body.ShareSuspended = s.shareControl.IsSuspended()
 	}
 	if s.workerControl != nil {
 		_, desired := s.workerControl.State()

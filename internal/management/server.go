@@ -237,9 +237,16 @@ type InferenceController interface {
 // and the persisted desired-share file (so a subsequent restart
 // honours the operator's last choice). State has the same shape as
 // InferenceController.State.
+// Suspend/Unsuspend are the live-only session override (#316): the tray
+// suspends sharing when the operator quits it and lifts the suspension
+// on its next start. Nothing is persisted, so a daemon restart — or an
+// explicit Share/Unshare — returns to the operator's actual choice.
 type ShareController interface {
 	Share(ctx context.Context) error
 	Unshare(ctx context.Context) error
+	Suspend(ctx context.Context) error
+	Unsuspend(ctx context.Context) error
+	IsSuspended() bool
 	State() (current, desired state.ShareMeshState)
 }
 
@@ -508,6 +515,8 @@ func (s *Server) mux() *http.ServeMux {
 	}
 	mux.HandleFunc("/waired/v1/inference/share/enable", s.handleShareEnable)
 	mux.HandleFunc("/waired/v1/inference/share/disable", s.handleShareDisable)
+	mux.HandleFunc("/waired/v1/inference/share/suspend", s.handleShareSuspend)
+	mux.HandleFunc("/waired/v1/inference/share/unsuspend", s.handleShareUnsuspend)
 	if s.workerControl != nil {
 		mux.HandleFunc("/waired/v1/worker", s.handleWorker)
 	}
@@ -745,23 +754,39 @@ func (s *Server) handleEngineTransition(w http.ResponseWriter, r *http.Request, 
 }
 
 // ShareStateResponse is the body returned by
-// POST /waired/v1/inference/share/{enable,disable}. Mirrors
-// InferenceStateResponse so the CLI and tray can share a parser
-// pattern with the inference enable/disable endpoints.
+// POST /waired/v1/inference/share/{enable,disable,suspend,unsuspend}.
+// Mirrors InferenceStateResponse so the CLI and tray can share a parser
+// pattern with the inference enable/disable endpoints. Suspended reports
+// the live-only session override, which State cannot express on its own:
+// while suspended, State is ("not_shared", "shared").
 type ShareStateResponse struct {
 	State        string `json:"state"`
 	DesiredState string `json:"desired_state"`
+	Suspended    bool   `json:"suspended,omitempty"`
 }
 
 func (s *Server) handleShareEnable(w http.ResponseWriter, r *http.Request) {
-	s.handleShareTransition(w, r, true)
+	s.handleShareTransition(w, r, ShareController.Share)
 }
 
 func (s *Server) handleShareDisable(w http.ResponseWriter, r *http.Request) {
-	s.handleShareTransition(w, r, false)
+	s.handleShareTransition(w, r, ShareController.Unshare)
 }
 
-func (s *Server) handleShareTransition(w http.ResponseWriter, r *http.Request, enable bool) {
+// handleShareSuspend / handleShareUnsuspend drive the session override.
+// They are their own verbs rather than a reuse of disable/enable because
+// disable persists the operator's choice and this must not: the tray
+// suspends on Quit, and a persisted "not_shared" would silently outlive
+// the reason for it (#316).
+func (s *Server) handleShareSuspend(w http.ResponseWriter, r *http.Request) {
+	s.handleShareTransition(w, r, ShareController.Suspend)
+}
+
+func (s *Server) handleShareUnsuspend(w http.ResponseWriter, r *http.Request) {
+	s.handleShareTransition(w, r, ShareController.Unsuspend)
+}
+
+func (s *Server) handleShareTransition(w http.ResponseWriter, r *http.Request, apply func(ShareController, context.Context) error) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -770,13 +795,7 @@ func (s *Server) handleShareTransition(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, "share controller not configured", http.StatusNotFound)
 		return
 	}
-	var err error
-	if enable {
-		err = s.shareControl.Share(r.Context())
-	} else {
-		err = s.shareControl.Unshare(r.Context())
-	}
-	if err != nil {
+	if err := apply(s.shareControl, r.Context()); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -784,6 +803,7 @@ func (s *Server) handleShareTransition(w http.ResponseWriter, r *http.Request, e
 	writeJSON(w, http.StatusOK, ShareStateResponse{
 		State:        string(cur),
 		DesiredState: string(desired),
+		Suspended:    s.shareControl.IsSuspended(),
 	})
 }
 
