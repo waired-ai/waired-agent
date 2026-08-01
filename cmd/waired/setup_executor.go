@@ -469,10 +469,30 @@ func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonIn
 	in.Discard()
 	enter := newTakeoverWatch(in)
 	budget, active := awaitSetupBudget(s, setupAwaitGrace, out, enter)
+	if !active && !enter.Fired() && in != nil {
+		// #309: the grace expired with nothing driving, so this terminal
+		// is the driver and there is nothing left to take over. Keeping
+		// the confirm watch armed asked about a browser that was not
+		// there — and answered a second Enter with "Continuing in your
+		// browser — keep this terminal window open until setup finishes",
+		// which was simply untrue. From here Enter means what it means
+		// everywhere else a terminal owns a long download (waired#774):
+		// put the wait in the background.
+		//
+		// Not swapped when the takeover fired: awaitSetupBudget already
+		// claimed the driver for it, and runInitViaDaemon reads Fired()
+		// afterwards to keep the lease honest (waired-agent#198).
+		in.Discard() // typed at the offer that just ended (#184)
+		writePrompt(out, dim("(press Enter anytime to continue in the background)"))
+		enter = newBackgroundWatch(in)
+	}
 	// #308: the grace above is one 3-minute window. When it expires with
 	// nothing started, the long waits downstream keep asking — the
 	// operator reading the model picker for four minutes is the ordinary
-	// case this window was too short for.
+	// case this window was too short for. If one does start, the wait
+	// closes this watch, and a closed watch can no longer background
+	// either (init_takeover.go) — leaving would release the lease under a
+	// setup the wizard believes is running.
 	return budget, active, enter, newSetupWatch(s, active)
 }
 

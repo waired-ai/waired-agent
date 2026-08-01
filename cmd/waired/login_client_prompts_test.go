@@ -314,6 +314,65 @@ func TestRunInitViaDaemon_LateBrowserStartSuppressesTerminalQuestions(t *testing
 	}
 }
 
+// TestRunInitViaDaemon_TerminalDrivenEnterBackgroundsTheWait is the #309
+// bar: the grace expired with nothing driving, so this terminal is the
+// driver. Enter must background the download the way it does everywhere
+// else a terminal owns a long wait (waired#774) — not open a takeover
+// question about a browser that is not there, and never answer with
+// "Continuing in your browser", which was false on this path.
+func TestRunInitViaDaemon_TerminalDrivenEnterBackgroundsTheWait(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	shrinkLoginTimers(t, 20*time.Millisecond)
+	owner, keys := scriptStdinPipe(t)
+	d := &promptsDaemon{
+		statusSeq: downloadingRun(200),
+		// Nothing written by any browser: the grace expires with the
+		// terminal as the driver, and it stays that way.
+		setupState: management.SetupStateResponse{EngineInstalled: true, DesiredEngine: "ollama"},
+	}
+	d.onStatus = func(poll int32) {
+		if poll == 4 {
+			// Mid-download: the operator stops watching. The second line
+			// is the coding-agent answer, queued behind it — backgrounding
+			// ends the wait immediately, so there is no later poll to time
+			// it to, and the owner's queue is what keeps the two apart
+			// (#185).
+			_, _ = keys.Write([]byte("\nn\n"))
+		}
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
+
+	if !strings.Contains(out, "No setup started in the browser") {
+		t.Fatalf("the grace did not expire, so this is not the terminal-driven case\n---\n%s", out)
+	}
+	if !strings.Contains(out, "press Enter anytime to continue in the background") {
+		t.Errorf("the terminal never said what Enter does once it owns the run\n---\n%s", out)
+	}
+	// The keystroke backgrounded the wait...
+	if !strings.Contains(out, "Continuing in the background") {
+		t.Errorf("Enter did not background the wait\n---\n%s", out)
+	}
+	// ...without asking about, or claiming, a browser that is not driving.
+	for _, unwanted := range []string{
+		"Take over setup in this terminal?",
+		"Taking over — setup continues",
+		takeoverDeclinedLine,
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("terminal-driven run still speaks the takeover copy: found %q\n---\n%s", unwanted, out)
+		}
+	}
+	// ...and the terminal-driven tail still gets its own answer (#185).
+	if !strings.Contains(out, "Coding-agent integration") {
+		t.Errorf("the terminal stopped asking its own question after backgrounding\n---\n%s", out)
+	}
+	if !strings.Contains(out, "Skipped. Set up the per-user integration anytime") {
+		t.Errorf("the coding-agent question did not receive its own answer\n---\n%s", out)
+	}
+}
+
 // #184: on the print-only gate nothing reads stdin at the sign-in step,
 // so an Enter pressed there used to fall through to the next reader. It
 // must be answered where it was pressed instead.
