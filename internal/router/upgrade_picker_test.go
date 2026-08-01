@@ -193,13 +193,28 @@ func TestActiveWeightGB(t *testing.T) {
 // otherwise promise graphics-card speed for a model that reads most of
 // its weights over PCIe.
 //
-// Product contract, and it takes some setting up, because the cap is
-// the LAST guard rather than the first. The candidate is a mixture of
-// experts so its small active share carries it past the speed floor, and
-// both models are 131072-native so the #624 context floor finds nothing
-// to prefer and falls through — which is exactly the situation the
-// residency gate used to backstop. A dense candidate, or a 262144-native
-// one, is dropped an earlier gate and proves nothing about this one.
+// Product contract, and it now has TWO layers, because
+// waired-ai/waired#988 put a residency gate back in front of the cap —
+// this time as a recommendation rule rather than a capacity one. So the
+// test asserts both, in the order a request meets them:
+//
+//   - RankModels no longer returns the spilled candidate at all. That
+//     is the stronger guard and the one that fires in production.
+//   - With that gate stood down (NoRecommendGate, which
+//     SelectInstallModel sets before it will call a host under-spec),
+//     the cap is what remains, and it must still refuse.
+//
+// The second half is the assertion this test was written for. It used
+// to reach the cap through plain RankModels; that route is closed now,
+// and saying so is the point rather than an inconvenience — a fixture
+// quietly rewritten to keep the old path alive would be asserting a
+// world the product no longer has.
+//
+// The candidate is a mixture of experts so its small active share
+// carries it past the speed floor, and both models are 131072-native so
+// the #624 context floor finds nothing to prefer and falls through. A
+// dense candidate, or a 262144-native one, is dropped by an earlier
+// gate and proves nothing about this one.
 func TestUpgradeCandidate_SpillBoundCapsThePrediction(t *testing.T) {
 	// An 8 GB card with plenty of RAM behind it: the active model is
 	// resident and measured fast, the candidate is eight times larger.
@@ -244,18 +259,43 @@ func TestUpgradeCandidate_SpillBoundCapsThePrediction(t *testing.T) {
 		t.Fatalf("fixture no longer exercises the cap: the naive prediction %.1f is "+
 			"already below the bar", naive)
 	}
+	// Layer 1: the recommendation gate removes the candidate outright,
+	// because an 8 GB card cannot hold 24 GB of weights.
 	ranked, err := RankModels(in.Pick)
 	if err != nil {
 		t.Fatalf("RankModels: %v", err)
 	}
-	if len(ranked) == 0 || ranked[0].Manifest.ModelID != "candidate-big" {
-		t.Fatalf("fixture no longer exercises the cap: the candidate did not survive "+
-			"selection (ranked=%d)", len(ranked))
+	for _, p := range ranked {
+		if p.Manifest.ModelID == "candidate-big" {
+			t.Errorf("a 24 GB model survived selection on an 8 GB card; the "+
+				"waired-ai/waired#988 residency gate is not reaching the upgrade path "+
+				"(verdict %+v)", p.Recommendation)
+		}
 	}
 
-	if _, predicted, ok := UpgradeCandidate(in); ok {
+	// Layer 2: stand that gate down — SelectInstallModel does exactly
+	// this before it will declare a host under-spec — and the cap is the
+	// only thing left between a resident measurement and a promise of
+	// graphics-card speed for a model read over PCIe.
+	ungated := in
+	ungated.Pick.NoRecommendGate = true
+	ranked, err = RankModels(ungated.Pick)
+	if err != nil {
+		t.Fatalf("RankModels (ungated): %v", err)
+	}
+	if len(ranked) == 0 || ranked[0].Manifest.ModelID != "candidate-big" {
+		t.Fatalf("fixture no longer exercises the cap: the candidate did not survive "+
+			"selection even with the recommendation gate stood down (ranked=%d)", len(ranked))
+	}
+	if _, predicted, ok := UpgradeCandidate(ungated); ok {
 		t.Errorf("suggested an upgrade at %.1f tok/s; the candidate holds about a quarter "+
 			"of its weights on an 8 GB card and cannot reach the rate a resident "+
 			"measurement implies", predicted)
+	}
+
+	// And with the gate in place the answer is the same, by the earlier
+	// mechanism — no upgrade is suggested either way.
+	if _, predicted, ok := UpgradeCandidate(in); ok {
+		t.Errorf("suggested an upgrade at %.1f tok/s despite the residency gate", predicted)
 	}
 }

@@ -126,3 +126,70 @@ func TestSelectInstallModel_ErrorsSurface(t *testing.T) {
 		t.Fatalf("empty engine: want (ok=false, err!=nil), got ok=%v err=%v", ok, err)
 	}
 }
+
+// TestSelectInstallModel_ASmallCardMustNotMakeAHostUnderSpec is the
+// guard on the escape hatch waired-ai/waired#988's recommendation gate
+// needs.
+//
+// That gate is not monotone in hardware. It asks the WEIGHTS to fit the
+// card, and a small card holds less than the system RAM behind it, so
+// the best resident model can sit below InstallQualityFloorTier while
+// the very same host with no card at all installs something well above
+// it. Left alone that turns "owns a 4 GB GPU" into "no local
+// inference" — the #229 failure mode one layer up, and the one thing
+// this rule may not cost anyone.
+//
+// Product contract: adding a graphics card never removes local
+// inference. A LOWER pick is the accepted trade (waired-ai/waired#988
+// item 5); no pick is not.
+func TestSelectInstallModel_ASmallCardMustNotMakeAHostUnderSpec(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	pick := func(hw hardware.Profile) (string, int, bool) {
+		t.Helper()
+		above, ok, err := SelectInstallModel(PickInput{
+			Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama,
+		}, InstallQualityFloorTier)
+		if err != nil {
+			t.Fatalf("SelectInstallModel: %v", err)
+		}
+		if !ok {
+			return "", 0, false
+		}
+		return above[0].Manifest.ModelID, above[0].Variant.QualityTier, true
+	}
+
+	var exercised bool
+	for _, ramGB := range []int{8, 16, 32, 64, 128} {
+		bare := hardware.Profile{OS: "linux", Arch: "x86_64", RAMTotalGB: ramGB}
+		bareID, bareTier, bareOK := pick(bare)
+		if !bareOK {
+			continue // under-spec without a card too; nothing to protect
+		}
+		for _, vramMB := range []int{2048, 4096, 8192, 12288, 16303, 24564} {
+			carded := bare
+			carded.GPUs = []hardware.GPU{{Vendor: "nvidia", Model: "test", VRAMTotalMB: vramMB}}
+			id, tier, ok := pick(carded)
+			if !ok {
+				t.Errorf("RAM %d GB + %d MB card: under-spec, while the same host with no "+
+					"card installs %s (tier %d). Adding a graphics card must never remove "+
+					"local inference", ramGB, vramMB, bareID, bareTier)
+				continue
+			}
+			if tier < bareTier {
+				// Accepted, and worth logging: the card cannot hold the
+				// bigger model's weights, so the resident smaller one is
+				// the better machine even at a lower tier.
+				t.Logf("RAM %3d GB + %5d MB card: %s (tier %d) vs %s (tier %d) with no card",
+					ramGB, vramMB, id, tier, bareID, bareTier)
+				exercised = true
+			}
+		}
+	}
+	if !exercised {
+		t.Error("no host in the sweep took a lower-tier pick for owning a card, so this " +
+			"test never exercised the non-monotone case it exists to bound")
+	}
+}

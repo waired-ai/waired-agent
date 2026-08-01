@@ -34,6 +34,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 const (
@@ -79,7 +80,15 @@ const (
 	// codingAgentNativeContextMin gates manifest membership in the
 	// coding-agent auto-selection pool. 200000 (not 200704) so exactly
 	// the 262144-native manifests pass and the 131072 class does not.
-	codingAgentNativeContextMin = 200000
+	//
+	// It moved to proto/hostfit because the control plane needs the same
+	// gate and could not have it here. Its recommendation reasoned that
+	// the #624 floor "would need the serve-time tuning inputs" — true of
+	// the HOST half below, false of this one, which is a manifest
+	// comparison and nothing more. So the wizard offered 131072-window
+	// models as defaults for coding work while the agent on the same
+	// machine would not serve them (waired-ai/waired#988).
+	codingAgentNativeContextMin = hostfit.NativeContextFloorTokens
 
 	// ollamaSpillCalibration maps the byte-math spill prediction to
 	// ollama's own /api/ps accounting. Single-point calibration on the
