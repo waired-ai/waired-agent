@@ -34,7 +34,9 @@ type DesiredIntegrations struct {
 	Enabled []string `json:"enabled,omitempty"`
 }
 
-// Integration targets — accepted entries of DesiredIntegrations.Enabled.
+// Integration targets — the entries DesiredIntegrations.Enabled may
+// carry. Not all of them are still ACCEPTED: see IsValidIntegrationTarget
+// and IsRetiredIntegrationTarget below.
 //
 // The values match the agent's own adapter IDs
 // (internal/integration.AgentID). They are re-declared here rather than
@@ -45,19 +47,50 @@ type DesiredIntegrations struct {
 // Carrying enum IDs — and only enum IDs — is what keeps §17.1 intact:
 // a path or a command from the CP is unrepresentable on this channel,
 // so the desired-state wire cannot name where anything gets written.
+//
+// A retired id keeps its constant forever. The string stays reserved:
+// re-using "opencode" for anything else would make an agent that still
+// carries the old adapter apply the wrong thing to a real home
+// directory, and the wire has no version to disambiguate it by.
 const (
 	IntegrationClaudeCode = "claude-code"
-	IntegrationOpenCode   = "opencode"
-	IntegrationOpenClaw   = "openclaw"
+	// IntegrationOpenCode is RETIRED (waired-agent#333). The OpenCode
+	// integration was removed; the value is reserved, never reused, and
+	// no longer accepted as an instruction.
+	IntegrationOpenCode = "opencode"
+	IntegrationOpenClaw = "openclaw"
 )
 
-// IsValidIntegrationTarget reports whether t is a known integration
-// target. Used by the CP API validator; the agent applies known targets
-// and ignores the rest rather than failing the whole instruction.
+// IsValidIntegrationTarget reports whether t is a target the control
+// plane may still instruct. Used by the CP API validator; the agent
+// applies known targets and ignores the rest rather than failing the
+// whole instruction.
+//
+// A retired target is deliberately NOT valid. That is what makes the
+// removal safe for devices whose stored instruction still names it: the
+// agent's existing "unknown targets are ignored" rule (see the flattener
+// in cmd/waired-agent/setup_desired.go) drops it, so a stored
+// ["claude-code","opencode"] applies claude-code alone and a stored
+// ["opencode"] collapses to "asked, nothing selected" — which still
+// reports an integration step, so setup completes instead of waiting
+// forever for a row nobody will ever send (the waired#983 class).
 func IsValidIntegrationTarget(t string) bool {
 	switch t {
-	case IntegrationClaudeCode, IntegrationOpenCode, IntegrationOpenClaw:
+	case IntegrationClaudeCode, IntegrationOpenClaw:
 		return true
 	}
 	return false
+}
+
+// IsRetiredIntegrationTarget reports whether t names an integration that
+// Waired used to support and has since removed.
+//
+// It exists so the control plane can tell "a target this build has never
+// heard of" (a malformed or hostile request — reject it) from "a target
+// we ourselves shipped and then withdrew" (a stale browser tab, or a row
+// written before the removal — drop it and carry on). Rejecting the
+// second would fail the whole desired-state write over a value the
+// operator never typed.
+func IsRetiredIntegrationTarget(t string) bool {
+	return t == IntegrationOpenCode
 }
