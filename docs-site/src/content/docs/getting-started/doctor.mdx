@@ -90,6 +90,7 @@ waired doctor --fix
 | **waired phase** | Routing is paused, or in an unexpected state. | `waired resume` — see [Pause and resume](/guides/pause/). |
 | **Local Gateway** | The service is up, but the part that answers AI requests is not. A `503` usually means no model is loaded yet. | Wait for the download to finish (`waired models ls`), or [check your model](/guides/choose-a-model/). |
 | **coding-agent entries** | Claude Code or OpenClaw is not configured to use Waired. | Press **f**. |
+| **AI engine app signature** (macOS) | macOS will not run the installed AI software, so every attempt to start it is stopped. | Press **f** when the cause is a stray Waired file — see [it says the AI software is damaged](/troubleshooting/#macos-it-says-the-ai-software-is-damaged). Otherwise the check names the reinstall command. |
 
 ## When the check itself cannot see everything
 

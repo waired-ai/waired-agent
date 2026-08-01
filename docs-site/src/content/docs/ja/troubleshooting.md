@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 50ddf76f416fb9e0
+sourceHash: 8ff32465719768be
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -427,6 +427,17 @@ codesign --verify --deep --strict /Applications/Ollama.app
 
 何も出力されなければアプリは元どおりです。現在は管理用の記録をアプリの外に
 保存するので、この問題は再発しません。
+
+`waired doctor` が同じ項目で `waired runtimes install ollama` を案内した場合は、
+別の理由でアプリが使えなくなっており、削除すべき Waired のファイルはありません。
+入れ直してください:
+
+```sh
+sudo waired runtimes install ollama
+```
+
+セットアップもこれを確認するようになりました。macOS が起動を拒否する AI エンジンは、
+起動しないソフトに対して緑の「OK」を出す代わりに、理由付きの失敗として報告されます。
 
 <a id="windows-i-get-a-502-error"></a>
 

@@ -40,16 +40,25 @@ type fakeSetupProvider struct {
 	mu sync.Mutex
 	// engineStateCalls records every setupEngineState call in order.
 	engineStateCalls []engineStateCall
+	// engineHealthCalls records every setupEngineHealth call, for the same
+	// reason: the real implementation answers per engine kind and returns ""
+	// for one it is not serving, so a fake that dropped the engine could not
+	// express "the latch belongs to the other engine".
+	engineHealthCalls []engineStateCall
 	// perEngine overrides the default answer for one engine kind.
 	perEngine       map[string]engineState
 	engineInstalled bool
 	engineReady     bool
-	modelState      string
-	modelCompleted  int64
-	modelTotal      int64
-	modelErr        string
-	bench           management.BenchmarkStatusResponse
-	benchStarts     []int
+	// engineLatched / engineLastErr script setupEngineHealth: the daemon has
+	// given up restarting this engine, and the reason it recorded.
+	engineLatched  bool
+	engineLastErr  string
+	modelState     string
+	modelCompleted int64
+	modelTotal     int64
+	modelErr       string
+	bench          management.BenchmarkStatusResponse
+	benchStarts    []int
 	// engineStarts records the reason of every startSetupEngine call, in
 	// order. The reason is kept rather than a bare count so a test can
 	// tell the executor-done trigger from the engine-appeared one (#304).
@@ -93,6 +102,24 @@ func (f *fakeSetupProvider) setupEngineState(ctx context.Context, engine string)
 		return st.installed, st.ready
 	}
 	return f.engineInstalled, f.engineReady
+}
+
+func (f *fakeSetupProvider) setupEngineHealth(ctx context.Context, engine string) (bool, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.engineHealthCalls = append(f.engineHealthCalls, engineStateCall{Engine: engine, HadCtx: ctx != nil})
+	return f.engineLatched, f.engineLastErr
+}
+
+// healthAsked is the ordered list of engine kinds whose health was probed.
+func (f *fakeSetupProvider) healthAsked() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, c := range f.engineHealthCalls {
+		out = append(out, c.Engine)
+	}
+	return out
 }
 
 // enginesAsked is the ordered list of engine kinds the reconciler asked
@@ -987,6 +1014,7 @@ func TestSetupEngineStepMatrix(t *testing.T) {
 		name            string
 		installed       bool
 		ready           bool
+		latched         bool
 		phase           string
 		wantStatus      string
 		wantErrCode     string
@@ -1030,9 +1058,42 @@ func TestSetupEngineStepMatrix(t *testing.T) {
 			name: "failed with nothing installed", phase: management.SetupExecutorPhaseFailed,
 			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorDiskFull, wantErrorDetail: true,
 		},
+		// #330. THE regression bar for this issue: a macOS bundle with a
+		// broken signature is "installed" by every file-presence measure while
+		// every exec of it is killed, so this row used to report Done -- on
+		// every rerun, forever, while /inference/status carried
+		// subsystem_state=engine_failed on the same tick.
+		{
+			name: "installed but the daemon gave up starting it", installed: true, latched: true,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorEngineNotReady, wantErrorDetail: true,
+		},
+		{
+			// Loses to a serving engine: a latch that outlived a successful
+			// start is stale, and Done is the truth.
+			name: "ready despite a latched failure", installed: true, ready: true, latched: true,
+			wantStatus: signer.SetupStatusDone,
+		},
+		{
+			// Loses to the executor's own report: it just tried, so its
+			// evidence is fresher and more specific than an older latch.
+			name: "latched, but the executor reported its own failure", installed: true, latched: true,
+			phase:      management.SetupExecutorPhaseFailed,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorDiskFull, wantErrorDetail: true,
+		},
+		{
+			// The guard against the obvious over-correction: an engine that is
+			// merely not ready yet (every model download, every restart) must
+			// stay Done. Only a LATCHED give-up paints the row red.
+			name: "installed and unhealthy but not latched", installed: true, latched: false,
+			wantStatus: signer.SetupStatusDone,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &fakeSetupProvider{engineInstalled: tc.installed, engineReady: tc.ready}
+			f := &fakeSetupProvider{
+				engineInstalled: tc.installed, engineReady: tc.ready,
+				engineLatched: tc.latched,
+				engineLastErr: "ollama: process exited during startup: signal: killed",
+			}
 			r, _ := leasedReconciler(t, f, "ollama", "")
 			ctx := context.Background()
 			r.NoteExecutor(ctx, management.SetupExecutorRequest{
@@ -1049,6 +1110,26 @@ func TestSetupEngineStepMatrix(t *testing.T) {
 			}
 			if got := step.ErrorDetail != ""; got != tc.wantErrorDetail {
 				t.Errorf("has error_detail = %v, want %v (%q)", got, tc.wantErrorDetail, step.ErrorDetail)
+			}
+			// The health question must be asked about the engine this step is
+			// for. A latch belonging to a different engine kind says nothing
+			// about this row, and a probe that dropped the engine argument
+			// would make that confusion unwritable (CLAUDE.md §Test
+			// discipline).
+			//
+			// Asked at most when the engine is actually installed: "has the
+			// daemon given up restarting it" is meaningless for an engine that
+			// is not there, and asking would put a probe on the first-install
+			// path. Both the step arm and SetupStateResponse.EngineNeedsRepair
+			// consult it, so the count is not pinned — only the subject.
+			asked := f.healthAsked()
+			if got := len(asked) > 0; got != tc.installed {
+				t.Errorf("engine health probed = %v (%v), want %v", got, asked, tc.installed)
+			}
+			for _, e := range asked {
+				if e != "ollama" {
+					t.Errorf("health probed for engine %q, want ollama", e)
+				}
 			}
 		})
 	}

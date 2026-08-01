@@ -210,6 +210,12 @@ func TestInstallOllamaAppImpl_LeavesTheBundleSealIntact(t *testing.T) {
 	ollamaAppDest = appsDir
 	t.Cleanup(func() { ollamaAppDest = prevDest })
 
+	// The fake bundle carries no Developer ID, so the real validation added in
+	// #330 would (correctly) refuse it. Stub the probe here — this test is
+	// about what the installer WRITES; the validation itself gets its own
+	// test below, against real codesign.
+	acceptSignature(t)
+
 	stateDir := filepath.Join(t.TempDir(), "state")
 	if err := installOllamaAppImpl(context.Background(), stateDir, nil); err != nil {
 		t.Fatalf("installOllamaAppImpl: %v", err)
@@ -247,6 +253,62 @@ func TestInstallOllamaAppImpl_LeavesTheBundleSealIntact(t *testing.T) {
 	}
 	if det.LegacyBundleMarkerPath != "" {
 		t.Errorf("LegacyBundleMarkerPath = %q, want empty for a fresh install", det.LegacyBundleMarkerPath)
+	}
+}
+
+// acceptSignature stubs the codesign/spctl probe into accepting, for tests
+// whose fake bundle is (necessarily) unsigned.
+func acceptSignature(t *testing.T) {
+	t.Helper()
+	prev := checkBundleSignature
+	checkBundleSignature = func(_ context.Context, appPath string) bundleSignatureReport {
+		return bundleSignatureReport{Path: appPath, Probed: true, CodesignOut: "valid on disk"}
+	}
+	t.Cleanup(func() { checkBundleSignature = prev })
+}
+
+// TestInstallOllamaAppImpl_RefusesAnUnrunnableBundle is the #330 regression
+// test, and it runs the REAL codesign and spctl.
+//
+// "The files landed" was the only thing the installer ever checked, so a
+// bundle macOS would never launch was reported as "Install the AI software OK"
+// — on the first run and on every rerun after it. The fake bundle here is
+// unsigned, which is exactly the shape of the corruption class: something at
+// /Applications that cannot be executed.
+//
+// PRODUCT CONTRACT: an engine that cannot run is an install FAILURE, and waired
+// does not record ownership of one.
+func TestInstallOllamaAppImpl_RefusesAnUnrunnableBundle(t *testing.T) {
+	lowerZipFloor(t, 4)
+	zipBody := fakeOllamaZip(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(zipBody)
+	}))
+	defer srv.Close()
+	t.Setenv("WAIRED_OLLAMA_DARWIN_URL", srv.URL)
+
+	appsDir := t.TempDir()
+	prevDest := ollamaAppDest
+	ollamaAppDest = appsDir
+	t.Cleanup(func() { ollamaAppDest = prevDest })
+
+	stateDir := filepath.Join(t.TempDir(), "state")
+	err := installOllamaAppImpl(context.Background(), stateDir, nil)
+	if err == nil {
+		t.Fatal("installOllamaAppImpl returned nil for a bundle macOS will not run")
+	}
+	if !isBundleSignatureError(err) {
+		t.Errorf("err = %v, want an identifiable signature verdict", err)
+	}
+	// The tool's own words have to survive, because they become the wizard's
+	// engine-row detail.
+	if !strings.Contains(err.Error(), "codesign") {
+		t.Errorf("err = %v, want codesign's own diagnosis", err)
+	}
+	// And we must not claim a broken install as ours: doing so would tell a
+	// later run "this is waired-managed, nothing to see here".
+	if _, statErr := os.Stat(setup.DarwinManagedRecordPath(stateDir)); !os.IsNotExist(statErr) {
+		t.Error("a waired-managed record was written for an engine that cannot run")
 	}
 }
 

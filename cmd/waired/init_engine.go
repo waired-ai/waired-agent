@@ -39,9 +39,17 @@ const (
 // writes the root-owned state dir (needs root); macOS /Applications is
 // admin-group-writable, so the install is attempted and fails with a clear
 // message for non-admin users.
+//
+// incomplete and signatureBroken are the two "installed but unusable" facts,
+// and they are deliberately separate because their polarity is opposite.
+// Windows' incomplete means "no completion marker beside ollama.exe, so an
+// earlier attempt unpacked and stopped". macOS' signatureBroken means "macOS
+// will not execute this bundle" — and a broken bundle is usually one waired
+// itself installed, so it is marked as ours. Folding them into one predicate
+// would make each wrong on the other OS.
 func engineInstallDecision(
 	goos string, elevated bool, det setup.OllamaDetection,
-	source string, bundledPresent, optOut, incomplete bool,
+	source string, bundledPresent, optOut, incomplete, signatureBroken bool,
 ) engineInstallAction {
 	if optOut {
 		return engineActionSkipOptOut
@@ -70,6 +78,12 @@ func engineInstallDecision(
 		}
 		return engineActionInstall
 	default: // darwin
+		// A bundle macOS refuses to run is not "present" in any useful sense.
+		// Repair first: the cheap fix (drop the seal-breaking marker #329 left)
+		// usually makes it valid again without downloading 560 MB.
+		if det.Installed && signatureBroken {
+			return engineActionRepair
+		}
 		if det.Installed {
 			return engineActionSkipPresent
 		}

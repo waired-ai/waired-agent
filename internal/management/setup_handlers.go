@@ -114,6 +114,20 @@ type SetupStateResponse struct {
 	// host; both false when no engine is desired.
 	EngineInstalled bool `json:"engine_installed"`
 	EngineReady     bool `json:"engine_ready"`
+	// EngineNeedsRepair is true when the engine is installed but has failed
+	// to start often enough that the daemon gave up restarting it.
+	//
+	// It exists because EngineInstalled is pure file-presence, and every gate
+	// in the executor keys off it — so on a host whose engine can never start
+	// (a macOS bundle with a broken code signature, #329/#330) the executor
+	// returned early, reported done, and the wizard stayed green forever. The
+	// executor treats this as "installed, but come in anyway and look", which
+	// is what lets engineInstallDecision reach its repair arm.
+	//
+	// Distinct from EngineReady=false, which is the normal state during a
+	// model download and must NOT invite a reinstall. This is latched: it
+	// means the daemon stopped retrying, not that one probe failed.
+	EngineNeedsRepair bool `json:"engine_needs_repair,omitempty"`
 	// ExecutorAttached is true while a lease is live.
 	ExecutorAttached bool `json:"executor_attached"`
 	// ExecutorElevated echoes the live lease's self-asserted elevation.
