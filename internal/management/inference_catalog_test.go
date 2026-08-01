@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -141,13 +142,20 @@ func TestInferenceCatalog_GPUHost_ShortVRAM(t *testing.T) {
 	// vLLM-engine catalog rendering this test covers (vllm-only families and
 	// VRAM-based deficit labels). 8B/fp16 needs 18 GB → doesn't fit; 32B AWQ
 	// needs 24 GB → doesn't fit.
+	//
+	// Nothing is committed in state.json here, so the endpoint falls back to
+	// the auto-picker: the profile must therefore name a Linux host with a
+	// vLLM venv installed, the two facts that fallback now requires
+	// (waired-agent#319).
 	old := router.VLLMAutoSelectable
 	router.VLLMAutoSelectable = true
 	t.Cleanup(func() { router.VLLMAutoSelectable = old })
 	inf := &fakeInference{
 		hwProfile: hardware.Profile{
+			OS:         "linux",
 			RAMTotalGB: 32,
 			GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 3060", VRAMTotalMB: 12288}},
+			Engines:    hardware.InstalledEngines{VLLM: hardware.EngineInfo{Installed: true}},
 		},
 	}
 	s := newCatalogTestServer(t, inf, t.TempDir())
@@ -218,8 +226,10 @@ func TestInferenceCatalog_RecommendedSpecs(t *testing.T) {
 		router.VLLMAutoSelectable = true
 		t.Cleanup(func() { router.VLLMAutoSelectable = old })
 		inf := &fakeInference{hwProfile: hardware.Profile{
+			OS:         "linux",
 			RAMTotalGB: 32,
 			GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 3060", VRAMTotalMB: 12288}},
+			Engines:    hardware.InstalledEngines{VLLM: hardware.EngineInfo{Installed: true}},
 		}}
 		s := newCatalogTestServer(t, inf, t.TempDir())
 		_, got := doGet(t, s, "/waired/v1/inference/catalog")
@@ -316,4 +326,122 @@ func TestInferenceCatalog_MethodNotAllowed(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405 for POST, got %d", w.Code)
 	}
+}
+
+// The waired-agent#319 regression, reproduced end to end: a Windows host with
+// a 16 GB RTX 5080 whose daemon serves Ollama. The endpoint used to recompute
+// the engine from hardware alone and answered "vllm", so every ollama-only
+// family — including the one actually serving — rendered as
+// "no variant supports vllm".
+//
+// Product contract: the catalog is judged against the SERVING engine.
+func TestInferenceCatalog_WindowsNVIDIAHostServingOllama(t *testing.T) {
+	old := router.VLLMAutoSelectable
+	router.VLLMAutoSelectable = true
+	t.Cleanup(func() { router.VLLMAutoSelectable = old })
+	inf := &fakeInference{
+		hwProfile: hardware.Profile{
+			OS:         "windows",
+			RAMTotalGB: 64,
+			GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 5080", VRAMTotalMB: 16303}},
+		},
+		canned: InferenceStatus{Active: &ActiveSelection{
+			Runtime: catalog.RuntimeOllama,
+			ModelID: "qwen3-4b-instruct", VariantID: "q4-gguf",
+		}},
+	}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	w, got := doGet(t, s, "/waired/v1/inference/catalog")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got.Engine != catalog.RuntimeOllama {
+		t.Fatalf("engine: want ollama (the daemon serves it), got %q", got.Engine)
+	}
+	byID := map[string]CatalogFamily{}
+	for _, f := range got.Families {
+		byID[f.ModelID] = f
+	}
+	// The ollama-only families must be judged against ollama and fit a
+	// 64 GB host — not grayed out as unsupported.
+	for _, id := range []string{"qwen3-4b-instruct", "qwen3-8b-instruct"} {
+		if f := byID[id]; !f.Fits {
+			t.Errorf("%s should fit on an ollama host: %+v", id, f)
+		}
+	}
+	for _, f := range got.Families {
+		if strings.Contains(f.DeficitLabel, "vllm") {
+			t.Errorf("no row may be judged against vllm on this host: %s → %q",
+				f.ModelID, f.DeficitLabel)
+		}
+	}
+}
+
+// The mirror case: a Linux host actually serving vLLM keeps being judged
+// against vllm. Guards against "fix the Windows symptom by hardcoding ollama".
+func TestInferenceCatalog_LinuxHostServingVLLM(t *testing.T) {
+	inf := &fakeInference{
+		hwProfile: hardware.Profile{
+			OS:         "linux",
+			RAMTotalGB: 64,
+			GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 5090", VRAMTotalMB: 32607}},
+			Engines:    hardware.InstalledEngines{VLLM: hardware.EngineInfo{Installed: true}},
+		},
+		canned: InferenceStatus{Active: &ActiveSelection{
+			Runtime: catalog.RuntimeVLLM,
+			ModelID: "qwen3-32b-instruct", VariantID: "awq-int4",
+		}},
+	}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	_, got := doGet(t, s, "/waired/v1/inference/catalog")
+	if got.Engine != catalog.RuntimeVLLM {
+		t.Fatalf("engine: want vllm (the daemon serves it), got %q", got.Engine)
+	}
+	byID := map[string]CatalogFamily{}
+	for _, f := range got.Families {
+		byID[f.ModelID] = f
+	}
+	if !byID["qwen3-32b-instruct"].Fits {
+		t.Errorf("32B AWQ should fit a 24 GB vllm host: %+v", byID["qwen3-32b-instruct"])
+	}
+	if byID["qwen3-4b-instruct"].DeficitLabel != "no variant supports vllm" {
+		t.Errorf("ollama-only family on a vllm host: %q", byID["qwen3-4b-instruct"].DeficitLabel)
+	}
+}
+
+// Pre-commit fallback (nothing in state.json yet). Product contract: a Linux
+// host large enough for vLLM but WITHOUT a venv will serve ollama, so the
+// catalog must say ollama too — the picker's preference is demoted by the
+// same presence fact engineViable consults. This is the Linux half of #319,
+// which an OS gate alone would not cover.
+func TestInferenceCatalog_NoActiveYet_VLLMDemotedWithoutVenv(t *testing.T) {
+	old := router.VLLMAutoSelectable
+	router.VLLMAutoSelectable = true
+	t.Cleanup(func() { router.VLLMAutoSelectable = old })
+
+	hw := func(vllmInstalled bool) hardware.Profile {
+		return hardware.Profile{
+			OS:         "linux",
+			RAMTotalGB: 64,
+			GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4090", VRAMTotalMB: 24564}},
+			Engines:    hardware.InstalledEngines{VLLM: hardware.EngineInfo{Installed: vllmInstalled}},
+		}
+	}
+
+	t.Run("no venv", func(t *testing.T) {
+		s := newCatalogTestServer(t, &fakeInference{hwProfile: hw(false)}, t.TempDir())
+		_, got := doGet(t, s, "/waired/v1/inference/catalog")
+		if got.Engine != catalog.RuntimeOllama {
+			t.Errorf("engine: want ollama (no vllm venv on this host), got %q", got.Engine)
+		}
+	})
+	t.Run("venv installed", func(t *testing.T) {
+		s := newCatalogTestServer(t, &fakeInference{hwProfile: hw(true)}, t.TempDir())
+		_, got := doGet(t, s, "/waired/v1/inference/catalog")
+		if got.Engine != catalog.RuntimeVLLM {
+			t.Errorf("engine: want vllm (venv present, Linux, 24 GB), got %q", got.Engine)
+		}
+	})
 }
