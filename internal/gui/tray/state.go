@@ -296,12 +296,12 @@ type MenuModel struct {
 	// daemon exposes the inference API), so old daemons render no empty
 	// parent. The engine/share/mesh/worker/recommend rows live under it.
 	ShowInferenceMenu     bool
-	InferenceToggleAction string // "Disable inference engine" | "Enable inference engine" | ""
+	InferenceToggleAction string // labelPauseInference | labelResumeInference | ""
 	InferenceStateLabel   string // "Engine: ready" / "Engine: disabled" / "Engine: loading" / ...
 	// EngineToggleAction drives the hard engine power axis (#186):
-	// "Stop inference engine" (engine up → free VRAM/RAM) | "Start
-	// inference engine" (engine stopped → restart) | "" (hidden: daemon
-	// predates engine control, or the engine is reused/not managed).
+	// labelStopEngine (engine up → free VRAM/RAM) | labelStartEngine
+	// (engine stopped → restart) | "" (hidden: daemon predates engine
+	// control, or the engine is reused/not managed).
 	EngineToggleAction string
 	// EngineToggleEnabled is false when the item should render but be
 	// greyed out — currently only the reuse/not-managed case, which keeps
@@ -318,8 +318,8 @@ type MenuModel struct {
 	// to mesh peers without turning the engine off locally. Both
 	// fields are empty when the daemon predates the share API (= no
 	// share_with_mesh field on /inference/status).
-	ShareToggleAction string // "Stop sharing engine to mesh" | "Share engine to mesh" | ""
-	ShareStateLabel   string // "Sharing: enabled" | "Sharing: disabled" | ""
+	ShareToggleAction string // labelStopSharing | labelStartSharing | ""
+	ShareStateLabel   string // "Sharing: enabled" | "Sharing: disabled" | "Sharing: paused" | ""
 
 	// MeshReachableLabel is a one-line, display-only indicator of whether
 	// any mesh peer is advertising a reachable inference engine
@@ -1579,6 +1579,31 @@ func applyOpenClaw(m *MenuModel, st *management.OpenClawIntegrationStatus) {
 	}
 }
 
+// Menu action labels. These are the strings the user sees AND the keys
+// the click handlers switch on (tray.go), so they live in one place:
+// renaming a label in only one of the two silently turns the menu item
+// into a no-op.
+//
+// The two inference axes are deliberately worded apart (#316). The soft
+// gate merely stops accepting requests — the engine keeps running and the
+// model stays in VRAM — so it is "pause", not "disable the engine": the
+// rc7 review found a tester who clicked the old "Disable inference
+// engine", was told it succeeded, and watched llama-server hold 15GB
+// anyway. Freeing memory is the power axis, which says "stop".
+const (
+	// Soft gate: POST /inference/{enable,disable}. No process is touched.
+	labelPauseInference  = "Pause inference (model stays loaded)"
+	labelResumeInference = "Resume inference"
+	// Hard power axis (#186): stops/starts the engine process itself.
+	labelStopEngine  = "Stop inference engine"
+	labelStartEngine = "Start inference engine"
+	// Reuse mode (#188): the engine is the user's own process.
+	labelEngineNotManaged = "Engine reused — not managed"
+	// Mesh sharing.
+	labelStopSharing  = "Stop sharing engine to mesh"
+	labelStartSharing = "Share engine to mesh"
+)
+
 // applyInference fills the inference group fields. SubsystemState comes
 // from the agent (engine health) and is independent of DesiredState
 // (operator's enable/disable intent) — the agent reports SubsystemState=
@@ -1611,9 +1636,9 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 	if inf.SubsystemState != "no_engine" {
 		switch inf.DesiredState {
 		case "enabled":
-			m.InferenceToggleAction = "Disable inference engine"
+			m.InferenceToggleAction = labelPauseInference
 		case "disabled":
-			m.InferenceToggleAction = "Enable inference engine"
+			m.InferenceToggleAction = labelResumeInference
 		}
 	}
 
@@ -1631,12 +1656,20 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		m.InstallEngineAction = "Install Ollama…"
 		return
 	}
-	switch inf.ShareWithMesh {
-	case "shared":
-		m.ShareToggleAction = "Stop sharing engine to mesh"
+	switch {
+	case inf.ShareWithMesh == "shared" && inf.ShareSuspended:
+		// The session override is on: sharing is withheld right now even
+		// though the operator's choice is still "shared" (#316). Normally
+		// invisible — the tray lifts the suspension when it starts — so
+		// seeing this means the lift did not land. Offer the action that
+		// clears it rather than one that would appear to do nothing.
+		m.ShareToggleAction = labelStartSharing
+		m.ShareStateLabel = "Sharing: paused"
+	case inf.ShareWithMesh == "shared":
+		m.ShareToggleAction = labelStopSharing
 		m.ShareStateLabel = "Sharing: enabled"
-	case "not_shared":
-		m.ShareToggleAction = "Share engine to mesh"
+	case inf.ShareWithMesh == "not_shared":
+		m.ShareToggleAction = labelStartSharing
 		m.ShareStateLabel = "Sharing: disabled"
 	}
 
@@ -1650,13 +1683,13 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		// Reuse mode: the engine is the user's own process, so waired
 		// can't free it. Show the row disabled so the absence is
 		// explained rather than mysterious.
-		m.EngineToggleAction = "Engine reused — not managed"
+		m.EngineToggleAction = labelEngineNotManaged
 		m.EngineToggleEnabled = false
 	case inf.EnginePower == "stopped":
-		m.EngineToggleAction = "Start inference engine"
+		m.EngineToggleAction = labelStartEngine
 		m.EngineToggleEnabled = true
 	default: // running / starting
-		m.EngineToggleAction = "Stop inference engine"
+		m.EngineToggleAction = labelStopEngine
 		m.EngineToggleEnabled = true
 	}
 }

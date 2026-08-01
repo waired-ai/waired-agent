@@ -32,12 +32,29 @@ type Client struct {
 	// they are already covered by the #836 browser guard, and the shared
 	// observabilityclient is TCP-bound.
 	wc *http.Client
+	// wcEngine carries the engine power writes. They need their own,
+	// far longer budget: stopping the engine kills a process and waits
+	// for the memory to actually come back, which the daemon bounds at
+	// engineStopBudget. http.Client.Timeout is a hard wall-clock cap
+	// applied on top of the request context, so a caller CANNOT widen a
+	// 3s client by passing a longer ctx — the only way to give one
+	// endpoint more room is a second client (#316).
+	wcEngine *http.Client
 	// writeBase is the authority writes are addressed to. In production it
 	// is ipcclient.BaseURL, a dummy host the socket transport ignores;
 	// tests point it (with wc) at an httptest server to exercise endpoint
 	// semantics without a real socket.
 	writeBase string
 }
+
+// Budgets for the two write clients. writeTimeout suits the cheap
+// endpoints (a flag flip plus a small file write); engineWriteTimeout
+// must outlast the daemon's own engine-stop budget so the tray reports
+// what actually happened instead of a timeout it caused itself.
+const (
+	writeTimeout       = 3 * time.Second
+	engineWriteTimeout = 20 * time.Second
+)
 
 // NewClient builds a Client targeting baseURL (default
 // http://127.0.0.1:9476) for reads. Trailing slashes are tolerated.
@@ -53,7 +70,8 @@ func NewClient(baseURL string) *Client {
 		hc: &http.Client{
 			Timeout: 3 * time.Second,
 		},
-		wc:        ipcclient.NewHTTPClient(3 * time.Second),
+		wc:        ipcclient.NewHTTPClient(writeTimeout),
+		wcEngine:  ipcclient.NewHTTPClient(engineWriteTimeout),
 		writeBase: ipcclient.BaseURL,
 	}
 }
@@ -215,14 +233,20 @@ var ErrEngineControlUnsupported = errors.New("daemon does not expose engine powe
 // StopEngine sends POST /waired/v1/inference/engine/stop — hard-stops the
 // local engine to free memory (#186). 404 → ErrEngineControlUnsupported.
 // 409 (reuse mode) surfaces as an httpError the caller can recognise.
+//
+// Goes over the long-budget write client: the daemon answers only once
+// the process is gone, which the 3s default could never wait out — that
+// mismatch is what made the tray's Stop fail every single time (#316).
 func (c *Client) StopEngine(ctx context.Context) error {
-	return c.postWithUnsupported(ctx, "/waired/v1/inference/engine/stop", ErrEngineControlUnsupported)
+	return c.postVia(ctx, c.wcEngine, "/waired/v1/inference/engine/stop", ErrEngineControlUnsupported)
 }
 
 // StartEngine sends POST /waired/v1/inference/engine/start. 404 →
-// ErrEngineControlUnsupported.
+// ErrEngineControlUnsupported. Shares StopEngine's budget: the daemon
+// returns as soon as the restart is scheduled, but the two power verbs
+// having different ceilings would be a trap for the next reader.
 func (c *Client) StartEngine(ctx context.Context) error {
-	return c.postWithUnsupported(ctx, "/waired/v1/inference/engine/start", ErrEngineControlUnsupported)
+	return c.postVia(ctx, c.wcEngine, "/waired/v1/inference/engine/start", ErrEngineControlUnsupported)
 }
 
 // ErrShareUnsupported is returned by EnableShare / DisableShare when
@@ -241,6 +265,20 @@ func (c *Client) EnableShare(ctx context.Context) error {
 // ErrShareUnsupported.
 func (c *Client) DisableShare(ctx context.Context) error {
 	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/disable", ErrShareUnsupported)
+}
+
+// SuspendShare / ResumeShare drive the live-only session override
+// (#316). The tray suspends on Quit and resumes on its next start, so
+// closing the app stops serving peers WITHOUT rewriting the operator's
+// persisted sharing choice — which is exactly what DisableShare would do.
+// 404 → ErrShareUnsupported (a daemon that predates the override; the
+// tray simply skips it).
+func (c *Client) SuspendShare(ctx context.Context) error {
+	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/suspend", ErrShareUnsupported)
+}
+
+func (c *Client) ResumeShare(ctx context.Context) error {
+	return c.postWithUnsupported(ctx, "/waired/v1/inference/share/unsuspend", ErrShareUnsupported)
 }
 
 // OpenClawIntegration returns the on-disk drift report for the waired
@@ -540,6 +578,12 @@ func (c *Client) postJSON(ctx context.Context, path string, body, out any) error
 // sentinel on 404, so different endpoints can carry different "this
 // daemon doesn't support that" sentinels.
 func (c *Client) postWithUnsupported(ctx context.Context, path string, unsupported error) error {
+	return c.postVia(ctx, c.wc, path, unsupported)
+}
+
+// postVia is postWithUnsupported against an explicit client, so the
+// engine power endpoints can carry a budget the cheap endpoints must not.
+func (c *Client) postVia(ctx context.Context, hc *http.Client, path string, unsupported error) error {
 	// Writes go over the local IPC socket (waired#838).
 	u, err := url.Parse(c.writeBase + path)
 	if err != nil {
@@ -552,7 +596,7 @@ func (c *Client) postWithUnsupported(ctx context.Context, path string, unsupport
 	// The browser-hardened management API (waired#836) requires a JSON
 	// Content-Type on writes even when the body is empty.
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.wc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		slog.Debug("tray: mgmt write", "endpoint", path, "result", "dial_error", "err", err)
 		return ipcclient.WrapDialError(err)

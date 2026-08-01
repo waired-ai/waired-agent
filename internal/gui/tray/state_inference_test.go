@@ -6,6 +6,13 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 )
 
+// The soft-gate labels below are a PRODUCT CONTRACT, not a record of
+// today's wording: the menu must not promise that this toggle turns the
+// engine off. It only stops new requests — the process keeps running and
+// the model stays in VRAM — and the previous "Disable inference engine"
+// wording sent an rc7 tester looking for the memory it never freed
+// (#316). Freeing memory is the separate power axis ("Stop inference
+// engine"), asserted further down this file.
 func TestUpdate_InferenceEnabled_Connected(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
 	st := &management.Status{Phase: "active"}
@@ -16,8 +23,8 @@ func TestUpdate_InferenceEnabled_Connected(t *testing.T) {
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
 
-	if got.InferenceToggleAction != "Disable inference engine" {
-		t.Errorf("InferenceToggleAction=%q, want Disable inference engine", got.InferenceToggleAction)
+	if got.InferenceToggleAction != "Pause inference (model stays loaded)" {
+		t.Errorf("InferenceToggleAction=%q, want the soft-gate pause label", got.InferenceToggleAction)
 	}
 	if got.InferenceStateLabel != "Engine: ready" {
 		t.Errorf("InferenceStateLabel=%q, want Engine: ready", got.InferenceStateLabel)
@@ -37,8 +44,8 @@ func TestUpdate_InferenceDisabled_Connected(t *testing.T) {
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
 
-	if got.InferenceToggleAction != "Enable inference engine" {
-		t.Errorf("InferenceToggleAction=%q, want Enable inference engine", got.InferenceToggleAction)
+	if got.InferenceToggleAction != "Resume inference" {
+		t.Errorf("InferenceToggleAction=%q, want the soft-gate resume label", got.InferenceToggleAction)
 	}
 	if got.InferenceStateLabel != "Engine: disabled" {
 		t.Errorf("InferenceStateLabel=%q, want Engine: disabled", got.InferenceStateLabel)
