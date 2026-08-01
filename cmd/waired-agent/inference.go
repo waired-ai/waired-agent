@@ -1935,6 +1935,12 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 	}
 
 	jobID := newJobID()
+	// ctx bounds the synchronous admission above (alias lookup, the engine
+	// version probe): a client that hangs up should abort that. The
+	// download itself outlives the caller and runs on the daemon's ctx
+	// (#305a).
+	jobCtx := p.backgroundCtx()
+
 	switch variant.Source.Type {
 	case catalog.SourceOllama:
 		// A refresh pull of a model that is already ready on disk must not
@@ -1958,7 +1964,7 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 		p.pullsWG.Add(1)
 		go func() {
 			defer p.pullsWG.Done()
-			p.runPullJob(ctx, manifest.ModelID, variant.VariantID, variant.Source.Tag, jobID, refresh)
+			p.runPullJob(jobCtx, manifest.ModelID, variant.VariantID, variant.Source.Tag, jobID, refresh)
 		}()
 	case catalog.SourceHuggingFace:
 		// #557: vLLM safetensors. dispatchHFPull is defined per-OS — the
@@ -1966,7 +1972,7 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 		// <repo> and records LocalPath so the next boot's bootstrapVLLM
 		// spawns the engine against them; non-Linux returns an error
 		// (vLLM serving is Linux-only). It writes the queued state itself.
-		if err := p.dispatchHFPull(ctx, manifest, variant, jobID); err != nil {
+		if err := p.dispatchHFPull(jobCtx, manifest, variant, jobID); err != nil {
 			return management.PullJob{}, err
 		}
 	default:
@@ -1980,17 +1986,30 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 // before t.TempDir() cleanup (#377).
 func (p *agentInferenceProvider) waitForPulls() { p.pullsWG.Wait() }
 
-func (p *agentInferenceProvider) runPullJob(parent context.Context, modelID, variantID, tag, jobID string, refresh bool) {
-	// Decouple from the request context so a CLI disconnect doesn't
-	// abort the pull mid-flight. We still respect agent shutdown
-	// because the parent wraps it.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		<-parent.Done()
-		cancel()
-	}()
+// backgroundCtx is the context for work that must outlive whoever asked
+// for it. It is the daemon's own context — cancelled on SIGTERM and on
+// session teardown, and nothing else — so a multi-GB download is neither
+// orphaned at shutdown nor killed when an HTTP handler returns (#305a).
+// Falls back to context.Background() for the unit-test providers that
+// construct an agentInferenceProvider without one.
+func (p *agentInferenceProvider) backgroundCtx() context.Context {
+	if p.agentCtx != nil {
+		return p.agentCtx
+	}
+	return context.Background()
+}
 
+// runPullJob downloads one model. ctx MUST be the daemon's long-lived
+// context — PullModel dispatches on backgroundCtx(), never on a request
+// ctx (#305a: net/http cancels the handler's context the microsecond the
+// 202 is written, which killed every `waired models pull`).
+//
+// It must NOT be re-wrapped in a WithCancel this function cancels on
+// return. EnsureRunning below can win the single-flight leader race and
+// spawn `ollama serve` through exec.CommandContext(ctx, …), so a
+// self-cancelling ctx makes a finished pull kill the engine it just
+// started (#305/R0 — a regression from #304's EnsureRunning join).
+func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, variantID, tag, jobID string, refresh bool) {
 	// A refresh pull of an already-ready model keeps the model servable
 	// (state=ready) throughout: skip the downloading/verifying downgrades
 	// so a transient registry error can't take healthy serving down (#614).

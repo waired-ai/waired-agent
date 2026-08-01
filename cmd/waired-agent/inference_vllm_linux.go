@@ -222,17 +222,12 @@ func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, manifest ca
 	return nil
 }
 
-// runHFPullJob decouples from the request context (a CLI disconnect must not
-// abort the download), runs downloadHFWeights, and commits activation on
-// success — mirroring runPullJob for the ollama path.
-func (p *agentInferenceProvider) runHFPullJob(parent context.Context, modelID string, variant catalog.Variant, puller *download.HFPuller, jobID string, refresh bool) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() {
-		<-parent.Done()
-		cancel()
-	}()
-
+// runHFPullJob runs downloadHFWeights and commits activation on success —
+// mirroring runPullJob for the ollama path. ctx MUST be the daemon's
+// long-lived context: PullModel dispatches on backgroundCtx(), never on a
+// request ctx, which net/http cancels the moment the handler returns
+// (#305a). It is deliberately not re-wrapped in a self-cancelling ctx.
+func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, modelID string, variant catalog.Variant, puller *download.HFPuller, jobID string, refresh bool) {
 	if _, err := p.downloadHFWeights(ctx, modelID, variant, puller, refresh); err != nil {
 		return
 	}
