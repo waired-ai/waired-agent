@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: be388d250929d76b
+sourceHash: 0c7f8b5cc4a42e8a
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -50,7 +50,9 @@ import Expected from '../../../../components/Expected.astro';
 | **○ Not signed in** | インストール済みですが、アカウントが未設定。 | 下の **Log in…** を選びます。 |
 | **◐ Signing in… / ◐ Activating…** | 開始したサインインが進行中。 | 開いたブラウザで完了させます。 |
 | **○ Disconnected** | サインイン済みだが、いまネットワークに届いていない。 | **Connect** を選びます。直らなければ[うまくいかないとき](/ja/troubleshooting/)へ。 |
-| **⚠ Waired agent is not running** | 常駐サービスが停止しています。 | [Waired が動いていない](/ja/troubleshooting/#a-command-says-waired-agent-is-not-running)を参照。 |
+| **◐ Waired agent is starting…** | サインイン直後の正常な状態です。Windows では常駐サービスがアイコンより数分遅れて起動します。 | 待つか、**Start the Waired agent…** ですぐに起動できます。 |
+| **⚠ Waired agent is not running** | 起動しているはずの常駐サービスが起動していません。 | **Start the Waired agent…** を選びます（パソコンが管理者の確認を求めます）。[Waired のアイコンに「エージェントが起動していません」と出る](/ja/troubleshooting/#the-waired-icon-says-the-agent-is-not-running)も参照。 |
+| **◐ Reconnecting to the Waired agent…** | 常駐サービスは動いていますが、まだ応答がありません。サインインは保たれています。 | 待ってください。通常はすぐ戻ります。 |
 
 ## サインインと接続
 

@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/waired-ai/waired-agent/internal/platform/service"
 )
 
 // LoginViaElevation (Linux: pkexec) spawns `waired init --no-browser
@@ -67,6 +69,45 @@ func LoginViaElevation(ctx context.Context, controlURL, stateDir string) error {
 			}
 		}
 		return fmt.Errorf("login: %w", err)
+	}
+	return nil
+}
+
+// StartAgentServiceViaElevation starts the waired-agent systemd unit,
+// elevating with pkexec.
+//
+// It runs systemctl rather than `waired-agent start`, for two reasons: it is
+// exactly what linuxManager.Start does (service_linux.go), and it needs no
+// locator for the agent binary — whose install path differs between the .deb
+// (/usr/bin) and install.sh (/usr/local/bin). pkexec needs an absolute path
+// either way, since polkit matches its actions on the program path.
+//
+// There is no waired-specific polkit action for this, so polkit falls back to
+// org.freedesktop.policykit.exec and asks for an administrator password each
+// time. That is the intended behaviour for now; a dedicated action with a
+// softer allow_active is a security-posture decision that belongs with the
+// OS-consent design (waired#845), not here.
+func StartAgentServiceViaElevation(ctx context.Context) error {
+	if _, err := exec.LookPath("pkexec"); err != nil {
+		return fmt.Errorf("start the agent: pkexec is not installed; run `%s` in a terminal", service.StartHint())
+	}
+	systemctl, err := exec.LookPath("systemctl")
+	if err != nil {
+		return fmt.Errorf("start the agent: systemctl not found; run `%s` in a terminal", service.StartHint())
+	}
+	cmd := exec.CommandContext(ctx, "pkexec", systemctl, "start", service.ServiceName)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if ee := (&exec.ExitError{}); errors.As(err, &ee) {
+			switch ee.ExitCode() {
+			case 126:
+				return errors.New("start the agent: authentication cancelled")
+			case 127:
+				return errors.New("start the agent: not authorized to start the service")
+			}
+		}
+		return fmt.Errorf("start the agent: %w", err)
 	}
 	return nil
 }

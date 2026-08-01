@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
@@ -35,6 +36,11 @@ const (
 	ServiceName = "waired-agent"
 	DisplayName = "Waired Agent"
 	Description = "Waired private inference overlay agent (WireGuard + Ollama gateway)."
+
+	// DarwinLabel is the launchd job label of the macOS system LaunchDaemon
+	// (#520). Untagged so startHintFor can name it in a table test that runs
+	// on the Linux leg.
+	DarwinLabel = "com.waired.agent"
 )
 
 // Config bundles the install-time options accepted by every backend.
@@ -174,6 +180,37 @@ func installCommand(args []string) error {
 	}
 
 	return newManager().Install(cfg)
+}
+
+// StartHint is the command a human runs to start the installed service on
+// this OS. Printed by `waired init` when the daemon is down, and rendered by
+// the tray's daemon-down menu.
+func StartHint() string { return StartHintFor(runtime.GOOS) }
+
+// StartHintFor is untagged and takes the GOOS so all three strings are pinned
+// by one table test on the Linux leg — the only leg that runs tests
+// (CLAUDE.md §Test discipline). That is not hypothetical tidiness: this used
+// to be four per-OS definitions plus a fourth copy in the tray's hint_*.go,
+// and when #520 moved macOS from a per-user LaunchAgent to a system
+// LaunchDaemon the tray's copy kept telling users to kickstart
+// `gui/$(id -u)/com.waired.agent` — a job that no longer exists. Nothing could
+// have caught it: no test named the string, and no CI leg runs on macOS.
+//
+// The empty string is the honest answer for an OS with no service backend
+// (see service_stub.go); callers must handle it.
+func StartHintFor(goos string) string {
+	switch goos {
+	case "windows":
+		return "Start-Service " + ServiceName
+	case "linux":
+		return "sudo systemctl start " + ServiceName
+	case "darwin":
+		// System domain — needs root, hence sudo. Must stay in step with
+		// darwinManager.Start (service_darwin.go).
+		return "sudo launchctl kickstart -k system/" + DarwinLabel
+	default:
+		return ""
+	}
 }
 
 // Restart stops (best-effort) then starts the registered service. A general

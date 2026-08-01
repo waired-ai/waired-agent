@@ -75,10 +75,6 @@ func Installed() bool {
 	return false
 }
 
-// StartHint is the manual command shown when init cannot (or is told not
-// to) auto-start the agent.
-func StartHint() string { return "sudo systemctl start " + ServiceName }
-
 // FixStateOwnership chowns the state-dir tree to the systemd service user
 // so the unprivileged waired-agent daemon (User=waired) can read the
 // identity / secrets / agent.json that a root `sudo waired init` just
