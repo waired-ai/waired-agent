@@ -17,8 +17,17 @@ import (
 //
 // The reproducer here is a port already held by another socket. The real
 // trigger on Windows is different — a port inside a winnat/Hyper-V
-// excluded UDP range — but both surface at the same stage, which is
-// exactly why the classification is by stage and not by errno.
+// excluded UDP range — but both are the same question for the caller
+// ("would another port work?"), which is why the classification is by
+// stage rather than by errno.
+//
+// Product contract, and the reason this test exists: the tag must not
+// depend on WHICH stage reports it. wireguard-go surfaces the conflict
+// from `ipc set` or from `device up` depending on whether the device was
+// already up when the port was applied, and an earlier version of this
+// code tagged only `device up` — so the ephemeral-port fallback silently
+// did not fire on the `ipc set` path. CI caught it as a flake precisely
+// because the stage varies run to run.
 func TestNewEngineBindFailureIsTagged(t *testing.T) {
 	held, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
