@@ -126,14 +126,22 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 		return nil
 	}
 	st := s.State()
-	// Before any early return: a host installed before #329 carries a marker
-	// inside the Ollama.app bundle that invalidates its signature, so macOS
-	// kills every exec of the engine. Deleting that one file repairs it. This
-	// has to run above the gates below because every one of them is satisfied
-	// on exactly the hosts that need repairing — the engine IS installed, the
-	// files ARE all present; they just cannot be executed. It is idempotent
-	// and touches only local files, so an unconditional call is right.
-	repairDarwinEngineBundle(out, goos, st.StateDir)
+	// A host installed before #329 carries a marker inside the Ollama.app
+	// bundle that invalidates its signature, so macOS kills every exec of the
+	// engine. Deleting that one file repairs it.
+	//
+	// This runs ABOVE the presence gate below, because a broken host satisfies
+	// it: the engine IS installed and all of its files ARE present, they just
+	// cannot be executed. A repair placed after that gate would never run on
+	// the hosts that need it.
+	//
+	// It is scoped to an active ollama install with a known state dir. The
+	// scoping is not cosmetic — the repair probes the host, and running it for
+	// a vLLM request (or on a device that is not setting up at all) would put
+	// filesystem work on a path that has no app bundle to repair.
+	if st.Active && st.DesiredEngine == "ollama" && st.StateDir != "" {
+		repairDarwinEngineBundle(out, goos, st.StateDir)
+	}
 	if !st.Active || st.DesiredEngine == "" || st.EngineInstalled {
 		return nil
 	}
