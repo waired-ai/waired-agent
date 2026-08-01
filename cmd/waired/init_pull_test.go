@@ -230,11 +230,18 @@ func TestWaitForBundledModel_BrowserStartDisarmsTheNoEngineGrace(t *testing.T) {
 	srv := stub.server()
 	defer srv.Close()
 
-	// Inactive for the first two looks, so the grace is armed before the
-	// browser setup arrives. The desired engine is not installed yet, so
-	// the edge reports engineComing.
+	// The edge is read on the wait's FIRST tick, before the no_engine
+	// grace has anything to arm from — which is what makes this
+	// deterministic rather than a race between three 1 ms ticks and a
+	// 20 ms grace. It lost that race on Windows, where a 1 ms sleep is
+	// ~15 ms: the grace expired before the third look ever happened.
+	//
+	// The bar survives the change: without the fix engineComing stays
+	// false, the grace arms on this same tick and fires, and the wait
+	// prints the give-up notice. The desired engine is not installed yet,
+	// so the edge reports engineComing.
 	state := &scriptedState{states: []management.SetupStateResponse{
-		{}, {}, {Active: true, DesiredEngine: "ollama"},
+		{Active: true, DesiredEngine: "ollama"},
 	}}
 	watch := newScriptedWatch(t, state)
 
