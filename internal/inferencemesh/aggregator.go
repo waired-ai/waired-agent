@@ -1,6 +1,8 @@
 package inferencemesh
 
 import (
+	"cmp"
+	"slices"
 	"sync"
 	"time"
 
@@ -227,6 +229,15 @@ func (a *Aggregator) UpdateLocal(state *signer.InferenceState) {
 
 // Snapshot returns the current aggregated view. Reachable is the
 // peers-only OR (self deliberately excluded — see types.go).
+//
+// Peers come out sorted by DeviceName (DeviceID for unnamed peers,
+// and as the tie-break between duplicates). That order is a product
+// contract, not an implementation detail: the tray fills fixed menu
+// slots positionally from this slice, so a peer set delivered in a
+// different order on each 5 s poll makes node names jump between menu
+// rows — the visible "blinking" of #326. a.peers is a map, and Go
+// randomises map iteration per call, so the sort is what makes the
+// rendered menu stable poll-over-poll.
 func (a *Aggregator) Snapshot() Snapshot {
 	// Resolve the liveness oracle before taking the read lock: it
 	// reaches into the disco service's own mutex, and there is no
@@ -284,7 +295,24 @@ func (a *Aggregator) Snapshot() Snapshot {
 		}
 	}
 	out.Reachable = reachable
+	slices.SortFunc(out.Peers, func(x, y PeerView) int {
+		return cmp.Or(
+			cmp.Compare(peerSortName(x), peerSortName(y)),
+			cmp.Compare(x.DeviceID, y.DeviceID),
+		)
+	})
 	return out
+}
+
+// peerSortName is the primary sort key: the operator-visible name,
+// falling back to the DeviceID for a peer that has not published one
+// (which is also what the tray renders for it, so the menu order
+// matches the labels the user reads).
+func peerSortName(p PeerView) string {
+	if p.DeviceName != "" {
+		return p.DeviceName
+	}
+	return p.DeviceID
 }
 
 // isStale reports whether the supplied RFC3339(Nano) timestamp is
