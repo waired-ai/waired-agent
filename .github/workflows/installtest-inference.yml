@@ -50,6 +50,12 @@ on:
         default: 'off'
         type: choice
         options: ['off', quick, full]
+      agentgrade_model:
+        description: >-
+          Agent-harness grade: ollama tag to measure (e.g.
+          qwen2.5-coder:7b-instruct-q4_K_M). Empty = skip. Needs the L4 runner.
+        default: ''
+        type: string
 
 concurrency:
   group: installtest-inference
@@ -523,6 +529,90 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # Agent-harness grade (#322): does a model actually emit structured tool
+  # calls under a coding agent's load? The catalog had no axis for this — every
+  # bundled manifest advertises the same ["chat","tool_use","json_mode"], which
+  # says the chat TEMPLATE supports tools and nothing about whether the model
+  # complies — so qwen2.5-coder shipped as a normal recommendable entry while
+  # handing coding agents raw JSON as prose (waired-ai/waired#986).
+  #
+  # DISPATCH ONLY, deliberately, and this is a design decision rather than a
+  # cost saving:
+  #
+  #   - it needs a real model resident on a real GPU, so it is minutes per
+  #     model and gated on a download;
+  #   - on a schedule, a registry hiccup or a cold engine would record itself
+  #     as a model DEMOTION. waired-ai/waired-agent#203 is that exact mistake
+  #     in the boot-benchmark path — an upstream failure reported as a quality
+  #     verdict, de-rating a node indefinitely. The probe classifies an
+  #     unreachable engine as `error` rather than `fail` for the same reason,
+  #     but the cheapest way not to record a bad verdict is not to run
+  #     unattended at all.
+  #
+  # A verdict is a judgement about a model, so a human asks for it. The result
+  # is imported into internal/catalog/agentgrade.json via
+  # `catalog-tool agentgrade --import`, which refuses a report measured at a
+  # different fixture revision.
+  agentgrade:
+    name: agent-harness grade (${{ github.event.inputs.agentgrade_model }})
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+       && github.event.inputs.agentgrade_model != '' }}
+    runs-on: [self-hosted, linux, gpu, l4]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: nvidia-smi (fail fast if the runner lost its GPU)
+        run: nvidia-smi
+
+      - name: grade
+        env:
+          MODEL: ${{ github.event.inputs.agentgrade_model }}
+        run: |
+          set -euo pipefail
+          echo "grading $MODEL"
+          make e2e-agentgrade MODEL="$MODEL" JSON="$PWD/agentgrade-report.json" 2>&1 \
+            | tee agentgrade.log
+
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## agent-harness grade"
+            echo ""
+            echo "- model: \`${{ github.event.inputs.agentgrade_model }}\`"
+            echo "- result: **${{ job.status }}**"
+            echo ""
+            # The per-case table IS the deliverable: "fail" alone does not say
+            # whether the model cannot format calls or merely over-calls.
+            grep -E 'agent-harness grade:|^\s+(greeting|read-file|search-then-edit)' agentgrade.log 2>/dev/null \
+              | sed -E 's/\x1b\[[0-9;]*m//g; s/^\s*agentgrade_test\.go:[0-9]+: ?//; s/^/- /' | head -12 || true
+            echo ""
+            echo "Import with:"
+            echo '```'
+            echo "go run ./cmd/catalog-tool agentgrade --import agentgrade-report.json \\"
+            echo "  --engine-version <ollama version> --host nvidia-24gb-discrete \\"
+            echo "  --retrieved \$(date -u +%F) --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentgrade-${{ github.run_attempt }}
+          path: |
+            agentgrade-report.json
+            agentgrade.log
+          if-no-files-found: ignore
+          retention-days: 90
+
   # --- the signal (#215) -------------------------------------------------
   # A nightly is the one lane nobody is watching. This workflow ran red for
   # five consecutive working days while the failure it was reporting (#178)
@@ -547,6 +637,11 @@ jobs:
     # `legs` is in here too: if the matrix selector fails, every lane below
     # it is SKIPPED rather than failed, and without this the night would go
     # entirely unreported — the exact silence this job exists to end.
+    #
+    # `agentgrade` is deliberately NOT here. It is dispatch-only and never
+    # runs on a schedule, and its red means "this model cannot drive a coding
+    # agent" — a measurement result somebody asked for, not a broken night.
+    # Filing an issue for it would report a verdict as an outage.
     needs: [legs, installtest-inference, daemon-engine, routing, banner, vllm-install]
     if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-24.04

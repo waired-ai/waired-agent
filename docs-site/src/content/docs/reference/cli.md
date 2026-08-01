@@ -139,12 +139,38 @@ waired models ls --detail         # the whole catalog, with what fits this compu
 waired models pull <model-id>     # download one
 waired models rm <model-id>       # delete one, freeing several GB
 waired models refresh             # is there a better pick for this machine?
+waired models check-agent         # will this model work with a coding agent?
 ```
 
 `pull` waits until the model is ready and asks for confirmation if the model is
 bigger than this computer is rated for — `--yes` skips that prompt in a script.
 `rm` also confirms first. Model IDs come from the
 [model catalog](/reference/model-catalog/).
+
+`check-agent` asks a question the other commands do not: not "does this model
+fit" and not "is it fast enough", but "can a coding agent actually drive it?"
+
+Coding agents work by asking the model to call tools — read this file, search
+for that. Some models answer beautifully in a chat window and then, given a
+real tool list, describe the tool call in prose instead of making it, or ask
+for tools that were never offered. When that happens you see the agent print
+blocks of raw JSON at you, or announce it is about to do something and then do
+nothing. Nothing is broken on your machine; the model simply cannot follow the
+format.
+
+The check sends a few real requests through this computer and reports what came
+back:
+
+```sh
+waired models check-agent                  # the model this computer is serving
+waired models check-agent <model-id>       # a specific one
+waired models check-agent --json out.json  # full result, for a bug report
+```
+
+It takes about a minute and needs the model downloaded first. It exits non-zero
+when the model is unreliable, so it can gate a script. If the check cannot run
+at all — the model is not downloaded, the service is not running — it says so
+separately rather than blaming the model.
 
 ### `waired runtimes`
 

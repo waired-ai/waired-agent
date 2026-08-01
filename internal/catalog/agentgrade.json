@@ -1,0 +1,512 @@
+{
+  "schema": 1,
+  "notes": "Agent-harness verdicts (waired-ai/waired-agent#322): can this model actually drive a coding agent's tool-call format? Measured by internal/agentgrade against the real gateway, never asserted from reputation, generation, or context-window size — the model that started this (qwen2.5-coder-14b) advertised tool_use, shipped the standard Hermes template, and belonged to a well-regarded coder series. Every entry carries the engine and version it was measured on, the fixture revision it was measured at, and the date, because compliance is a property of (model, quantisation, engine, harness) and not of the weights alone. Verdicts from different fixture_revision values were measured against different request weights and are NOT comparable. Re-measure with: make e2e-agentgrade MODEL=\u003collama tag\u003e",
+  "models": {
+    "gpt-oss-20b": {
+      "variants": {
+        "mxfp4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "gpt-oss:20b",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen2.5-coder-0.5b-instruct": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "fail_no_tool_call",
+              "trials": 3,
+              "failed": 3
+            },
+            "search-then-edit": {
+              "verdict": "fail_unstructured_tool_call",
+              "trials": 3,
+              "failed": 3
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "search-then-edit"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen2.5-coder:0.5b-instruct-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen2.5-coder-14b-instruct": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "fail_unstructured_tool_call",
+              "trials": 3,
+              "failed": 1
+            },
+            "read-file": {
+              "verdict": "fail_unstructured_tool_call",
+              "trials": 3,
+              "failed": 3
+            },
+            "search-then-edit": {
+              "verdict": "fail_unstructured_tool_call",
+              "trials": 3,
+              "failed": 3
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "greeting",
+            "search-then-edit"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen2.5-coder:14b-instruct-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen2.5-coder-3b-instruct": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "fail_unstructured_tool_call",
+              "trials": 3,
+              "failed": 3
+            },
+            "search-then-edit": {
+              "verdict": "fail_unstructured_tool_call",
+              "trials": 3,
+              "failed": 3
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "read-file",
+            "search-then-edit"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen2.5-coder:3b-instruct-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen2.5-coder-7b-instruct": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "fail_unstructured_tool_call",
+              "trials": 3,
+              "failed": 3
+            },
+            "search-then-edit": {
+              "verdict": "fail_unstructured_tool_call",
+              "trials": 3,
+              "failed": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen2.5-coder:7b-instruct-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3-coder-30b-a3b-instruct": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "warn_unprompted_tool_call",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "fail_no_tool_call",
+              "trials": 3,
+              "failed": 1
+            },
+            "search-then-edit": {
+              "verdict": "fail_no_tool_call",
+              "trials": 3,
+              "failed": 1
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "greeting",
+            "read-file",
+            "search-then-edit"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3-coder:30b-a3b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.5-0.8b": {
+      "variants": {
+        "q8-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "fail_no_tool_call",
+              "trials": 3,
+              "failed": 1
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "greeting"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.5:0.8b-q8_0",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.5-27b": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.5:27b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.5-2b": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "fail_no_tool_call",
+              "trials": 3,
+              "failed": 1
+            },
+            "search-then-edit": {
+              "verdict": "fail_no_tool_call",
+              "trials": 3,
+              "failed": 1
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "read-file",
+            "search-then-edit"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.5:2b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.5-35b-a3b": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "fail_malformed_tool_call",
+              "trials": 3,
+              "failed": 1
+            }
+          },
+          "trials": 3,
+          "flaky": [
+            "search-then-edit"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.5:35b-a3b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.5-4b": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.5:4b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.5-9b": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.5:9b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.6-27b": {
+      "variants": {
+        "mtp-q4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.6:27b-mtp-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        },
+        "q4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.6:27b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.6-35b-a3b": {
+      "variants": {
+        "mtp-q4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.6:35b-a3b-mtp-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        },
+        "q4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 3
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 3
+            }
+          },
+          "trials": 3,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.6:35b-a3b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-01",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    }
+  },
+  "unmeasurable": {
+    "deepseek-v4-flash": "vLLM-only at 192 GB VRAM. No available runner.",
+    "glm-4.5-air-106b-a12b": "vLLM-only at 120 GB VRAM. No available runner.",
+    "glm-5.2": "vLLM-only at 465-755 GB VRAM (nvfp4 / fp8). No available runner.",
+    "gpt-oss-120b": "62 GB of weights against a 24 GB card on every lane we have; the ollama variant declares a 96 GB RAM floor. Measurable only as a near-total CPU spill, which grades the host rather than the model.",
+    "qwen3-coder-480b-a35b-instruct": "290 GB of weights / 320 GB min RAM (ollama) and 560 GB VRAM (vllm). No runner available to this project can host it, so no verdict can be produced either way.",
+    "qwen3-coder-next-80b-a3b-instruct": "48.5 GB of weights / 56 GB min RAM (ollama), 56 GB VRAM (vllm). Above the 24 GB lanes; would measure as a CPU-spilled host, not as the model.",
+    "qwen3.5-122b-a10b": "81 GB of weights / 128 GB min RAM. Above every available runner."
+  }
+}

@@ -169,6 +169,83 @@ if ! discovery_e2e; then
   fail=1
 fi
 
+# --- Part 3: agent-grade fixture weight (#322) --------------------------------
+# The agent-grade probe measures models against a fixture whose SHAPE is meant
+# to match what a real coding agent sends: many complex tool schemas plus a
+# large system prompt. That weight is the whole point — a model that emits
+# clean tool calls on a small request can still hand a coding agent raw JSON
+# under load, which is the defect the probe exists to catch.
+#
+# So the fixture's weight is a dependency on somebody else's client, and it can
+# drift out from under us silently: Claude Code adds tools, the real request
+# doubles, and the fixture keeps grading models against last year's load while
+# still reporting "pass".
+#
+# WARN, never FAIL. A heavier upstream request does not mean anything is broken
+# here — it means the fixture floors should be revisited and the catalog's
+# verdicts re-measured, which is a human decision. Same low-noise stance as the
+# discovery E2E above.
+agentgrade_fixture_drift() {
+  local measure="${here}/../dev/measure-agent-request.py"
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "WARN: python3 not available — skipping agent-grade fixture check" >&2
+    return 0
+  fi
+  if [[ ! -f "${measure}" ]]; then
+    echo "WARN: ${measure} missing — skipping agent-grade fixture check" >&2
+    return 0
+  fi
+
+  local shape work
+  work="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '${work}'" RETURN
+
+  if ! shape="$(python3 "${measure}" --timeout 120 -- "${bin}" -p hello 2>"${work}/err")"; then
+    echo "WARN: could not measure the real request shape — skipping" >&2
+    sed -e 's/^/      /' "${work}/err" >&2 || true
+    return 0
+  fi
+
+  local tools req_bytes
+  tools="$(printf '%s' "${shape}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tools"])' 2>/dev/null || echo 0)"
+  req_bytes="$(printf '%s' "${shape}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["whole_request_bytes"])' 2>/dev/null || echo 0)"
+  if [[ "${req_bytes}" -eq 0 ]]; then
+    echo "WARN: measured shape had no request size — skipping" >&2
+    return 0
+  fi
+
+  echo "measured real request: ${tools} tools, ${req_bytes} B"
+
+  # The fixture's own numbers, from the Go side, so this can never disagree
+  # with what the probe actually sends.
+  local fixture_bytes
+  fixture_bytes="$(cd "${here}/../.." && go run ./cmd/catalog-tool agentgrade --fixture-bytes 2>/dev/null || echo 0)"
+  if [[ "${fixture_bytes}" -eq 0 ]]; then
+    echo "WARN: could not read the fixture's own size — skipping comparison" >&2
+    return 0
+  fi
+  echo "agent-grade fixture:   ${fixture_bytes} B"
+
+  # 2x is the threshold, not equality: the fixture is deliberately lighter than
+  # the reference (see internal/agentgrade/fixture.go on why padding to match
+  # buys a number rather than pressure). Twice the weight is the point at which
+  # "lighter on purpose" stops being a fair description.
+  if (( req_bytes > fixture_bytes * 2 )); then
+    echo "WARN: the real coding-agent request is now ${req_bytes} B against a" >&2
+    echo "      ${fixture_bytes} B fixture — more than 2x. Models are being graded" >&2
+    echo "      against a materially easier request than they face in use." >&2
+    echo "      Revisit the fixtureMin* floors in internal/agentgrade/fixture.go," >&2
+    echo "      grow the fixture, and re-measure the catalog (the fixture revision" >&2
+    echo "      changes, so stale verdicts surface as coverage gaps)." >&2
+  else
+    echo "OK:   agent-grade fixture weight is within 2x of the real request"
+  fi
+  return 0
+}
+
+agentgrade_fixture_drift || true
+
 if [[ "${fail}" -ne 0 ]]; then
   echo "One or more Claude Code invariants waired depends on have changed." >&2
   echo "Re-verify the integration per waired#771 before the next release." >&2
