@@ -2118,6 +2118,19 @@ func (p *agentInferenceProvider) recordPullState(modelID, next, errMsg string) {
 	})
 }
 
+// modelPullAttempts / modelPullBackoff pace the download retry, matching
+// the engine-start retry's shape (engineEnsureAttempts). The retry lives
+// in the job rather than in any dispatcher because the job already owns
+// the model's in-flight slot, so a retry can never become a second
+// concurrent download — and because it is the one place every driver
+// (bundled, preferred, setup, `waired models pull`, pre-cache) passes
+// through. The reconciler could not host it: runPush's ticker returns
+// immediately without a control-plane client, and Apply only runs when a
+// network-map frame arrives. Backoff is a var so tests don't sleep.
+const modelPullAttempts = 3
+
+var modelPullBackoff = 15 * time.Second
+
 // runPullJob downloads one model. ctx MUST be the daemon's long-lived
 // context — PullModel dispatches on backgroundCtx(), never on a request
 // ctx (#305a: net/http cancels the handler's context the microsecond the
@@ -2134,26 +2147,47 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	// Forget live progress once the pull terminates (success or failure)
 	// so a finished/failed model never lingers as a stale "downloading".
 	defer p.dlProgress.forget(modelID)
-	// #304: `ollama pull` is a CLIENT of the serving engine. Setup
-	// admission keys off a stat of the binary, which flips true seconds
-	// before `ollama serve` is listening; the pull then dies on
-	// connection-refused, the model is recorded failed, and admission is
-	// once-per-desired-value so nothing retries. EnsureRunning is
-	// single-flight and returns immediately when already ready, so this
-	// JOINS whatever start is in flight rather than adding one. A parked
-	// or given-up engine returns its sentinel WITHOUT spawning: log it
-	// and let the pull report the real error, exactly as before.
-	if p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama {
-		if err := p.ollama.EnsureRunning(ctx); err != nil {
-			p.logger.Warn("engine not ready before pull", "model", modelID, "tag", tag, "err", err)
+	var err error
+	for attempt := 1; attempt <= modelPullAttempts; attempt++ {
+		// #304: `ollama pull` is a CLIENT of the serving engine. Setup
+		// admission keys off a stat of the binary, which flips true seconds
+		// before `ollama serve` is listening; the pull then dies on
+		// connection-refused. EnsureRunning is single-flight and returns
+		// immediately when already ready, so this JOINS whatever start is in
+		// flight rather than adding one. A parked or given-up engine returns
+		// its sentinel WITHOUT spawning: log it and let the pull report the
+		// real error, exactly as before. Inside the loop because retrying a
+		// download against an engine that has since died is pointless.
+		if p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama {
+			if ensureErr := p.ollama.EnsureRunning(ctx); ensureErr != nil {
+				p.logger.Warn("engine not ready before pull", "model", modelID, "tag", tag, "err", ensureErr)
+			}
+		}
+		err = p.puller.Pull(ctx, tag, func(pr download.Progress) {
+			p.dlProgress.observe(modelID, pr)
+			if pr.State == download.StateVerifying {
+				p.recordPullState(modelID, catalog.ModelStateVerifying, "")
+			}
+		})
+		// A full disk cannot clear itself; three more multi-GB attempts only
+		// delay the honest error the wizard needs to show.
+		if err == nil || attempt == modelPullAttempts || isDiskFullText(err.Error()) {
+			break
+		}
+		p.logger.Warn("ollama pull failed; retrying",
+			"model", modelID, "tag", tag, "attempt", attempt, "max", modelPullAttempts, "err", err)
+		select {
+		case <-time.After(time.Duration(attempt) * modelPullBackoff):
+		case <-ctx.Done():
+		}
+		// The single gate on starting another attempt. Shutdown ends the
+		// job rather than restarting it: agentCtx is cancelled on SIGTERM
+		// and session teardown, nothing is waiting for the result, and the
+		// failure the cancelled Pull returned is the one to record.
+		if ctx.Err() != nil {
+			break
 		}
 	}
-	err := p.puller.Pull(ctx, tag, func(pr download.Progress) {
-		p.dlProgress.observe(modelID, pr)
-		if pr.State == download.StateVerifying {
-			p.recordPullState(modelID, catalog.ModelStateVerifying, "")
-		}
-	})
 	if err != nil {
 		p.logger.Warn("ollama pull failed", "model", modelID, "tag", tag, "err", err)
 		p.recordPullState(modelID, catalog.ModelStateFailed, err.Error())

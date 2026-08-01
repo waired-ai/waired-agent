@@ -65,6 +65,10 @@ func pullGateProvider(t *testing.T, m catalog.Manifest) *agentInferenceProvider 
 
 func pullGateProviderWithRunner(t *testing.T, m catalog.Manifest, runner download.CommandRunner) *agentInferenceProvider {
 	t.Helper()
+	// Every provider built here can dispatch a pull, and a failing pull is
+	// retried on a 15 s/30 s production backoff (#306). Shrink it once,
+	// here, so no unit test pays for it.
+	shrinkPullRetry(t)
 	return &agentInferenceProvider{
 		store:     catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
 		cfg:       agentconfig.InferenceConfig{AllowPull: true},
