@@ -1617,11 +1617,11 @@ if ($script:Skip -gt 0) {
 # behind "the leg said ok while the reason sat in the same log".
 #
 # MEASURED from a green run of the configuration CI uses, not estimated:
-# -Tier 2 -Contract -ExeVariant executed 78, plus the 2 unconditional asserts
-# the #314 exit-code decode block adds (the install/uninstall drift check and
-# the decode table) = 80. Both new asserts sit in the same always-run Tier-1
-# section as the ConvertTo-NativeArg pair above them, so the delta is exact
-# rather than estimated; confirm 80 against the next green CI run. The floor
+# -Tier 2 -Contract -ExeVariant executed 78, and 80 once the #314 exit-code
+# decode block added its 2 unconditional asserts (the install/uninstall drift
+# check and the decode table). Both sit in the same always-run Tier-1 section
+# as the ConvertTo-NativeArg pair above them; 80 was confirmed against a green
+# run of this configuration, not derived and left unchecked. The floor
 # is set at the tier
 # level only, and every option (-Contract, -ExeVariant, -Inference) only ADDS
 # asserts, so a leaner invocation of the same tier still clears it.
