@@ -426,10 +426,15 @@ assert_reinit_resumes() {
   [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
 }
 
-# Bundled engine path on Linux: install.sh now provisions waired's BUNDLED
-# Ollama (`waired runtimes install ollama`, #567) under the state dir — it
-# is NOT a system ollama on PATH, and it serves on the waired-owned port
-# :9475, never the upstream default :11434.
+# Bundled engine path on Linux: waired's BUNDLED Ollama lives under the state
+# dir (#567) — it is NOT a system ollama on PATH, and it serves on the
+# waired-owned port :9475, never the upstream default :11434.
+#
+# Since #138 install.sh does not put it there: `waired init` does, through the
+# daemon path (cmd/waired/login_client.go -> ensureDaemonPathEngine, or
+# runSetupEngineInstall when a browser wizard is driving), into the state dir
+# the daemon itself declared. Same binary, same path — what changed is that
+# nothing downloads it before the operator has said this host runs models.
 IT_BUNDLED_OLLAMA_BIN=/var/lib/waired/runtimes/ollama/bin/ollama
 
 # Failure lines `waired init` prints when an engine install did not succeed.
@@ -481,10 +486,11 @@ _it_wait_inference_ready() {
 }
 
 # assert_inference — verify the install→...→model-download→benchmark tail of
-# the journey ran on CPU (Tier-2 --inference). install.sh provisioned the
-# bundled engine (no --skip-ollama), `waired init --inference-enabled=true`
-# started the agent and (via #519) foreground-waited while it pulled the
-# bundled model into the :9475 engine, then ran the end-of-init benchmark.
+# the journey ran on CPU (Tier-2 --inference). `waired init
+# --inference-enabled=true` installed the bundled engine through the daemon
+# path (#138 — install.sh no longer pre-installs one), then (via #519)
+# foreground-waited while the agent pulled the bundled model into the :9475
+# engine, and ran the end-of-init benchmark.
 # Proof points: bundled engine present, the model READY in the waired store
 # (mgmt API on :9476, NOT a bare `ollama list` on :11434 — #567), inference
 # enabled in persisted config, and a benchmark figure in the init transcript.
@@ -509,7 +515,7 @@ assert_inference() {
   # line saying `ok` was exactly the #178 false positive.
   gx "$guest" test -x "$IT_BUNDLED_OLLAMA_BIN" \
     && ok "bundled ollama binary present ($IT_BUNDLED_OLLAMA_BIN, CPU)" \
-    || bad "bundled ollama not installed at $IT_BUNDLED_OLLAMA_BIN (install.sh should have, without --skip-ollama)"
+    || bad "bundled ollama not installed at $IT_BUNDLED_OLLAMA_BIN (\`waired init --inference-enabled=true\` should have, via the daemon-path engine install)"
 
   # #567: the bundled engine is waired-owned on :9475 with its own store; the
   # agent pulls there, NOT into the upstream default :11434. Read readiness

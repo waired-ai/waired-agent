@@ -1591,11 +1591,17 @@ function Show-InstallSummary {
     Write-Host "  * Download Waired ($verLabel) and install it to:"
     Write-Host "      $InstallDir"
     Write-Host "  * Register the waired-agent background service (starts at boot)"
-    if (-not $SkipOllama) {
-        Write-Host "  * Install the Ollama AI engine (a few GB download)"
-    }
+    # Sign-in comes BEFORE the engine, because that is the order the install
+    # runs in: the engine install moved into `waired init` (Set-OllamaEnvForInit
+    # below), which asks whether this computer should run models first. Mirrors
+    # install.sh's show_install_summary, which said the same thing while Linux
+    # still pre-installed the engine behind the question's back (#138).
     if (-not $SkipInit) {
         Write-Host "  * Sign you in (opens your web browser)"
+    }
+    if (-not $SkipOllama) {
+        Write-Host "  * Install the Ollama AI engine during sign-in, only if you"
+        Write-Host "    choose to run models here (a few GB download)"
     }
     if (-not (Test-Admin)) {
         Write-Host "  * Ask for administrator rights (a Windows UAC prompt will appear)"
