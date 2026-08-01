@@ -129,7 +129,7 @@ func TestIntegration_NoRcFilesEdited(t *testing.T) {
 
 func TestIntegration_AdapterErrorsCollectedNotShortCircuited(t *testing.T) {
 	cc := &fakeAdapter{id: integration.AgentClaudeCode, detect: integration.Detection{Found: true}, applyErr: errors.New("boom")}
-	oc := &fakeAdapter{id: integration.AgentOpenCode, detect: integration.Detection{Found: true}}
+	oc := &fakeAdapter{id: integration.AgentOpenClaw, detect: integration.Detection{Found: true}}
 	opts := newOpts(t, cc, oc)
 
 	res, err := Integration(context.Background(), opts)

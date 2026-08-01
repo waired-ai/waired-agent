@@ -24,7 +24,7 @@ internal/gui/               # tray UI widgets/icons
 internal/hardware/          # hardware probing for model selection
 internal/inference/         # overlay-side inference HTTP service (serves over wgnet, no control/data-plane logic)
 internal/inferencemesh/     # inference request routing across the established overlay
-internal/integration/       # coding-agent integrations (claudecode/opencode/openclaw/vscode/...)
+internal/integration/       # coding-agent integrations (claudecode/openclaw/vscode/...)
 internal/management/        # localhost management API (:9476) + web-admin backing
 internal/observability/     # agent-side metrics/ring buffers for the management UI
 internal/platform/autostart/    # desktop login-item registration
@@ -43,6 +43,6 @@ internal/platform/sockpass/     # local socket handoff helper
 internal/platform/trayhost/     # tray process hosting
 internal/proxy/             # Claude request intercept + hosts/trust + legacy cleanup; node selection over the mesh, not mesh coordination
 internal/router/            # model-name -> node routing table for inference
-internal/runtime/           # inference engine runtimes (ollama/vllm/codeui) + local runtime state
+internal/runtime/           # inference engine runtimes (ollama/vllm) + local runtime state
 internal/update/            # self-update channel logic
 internal/version/           # version string

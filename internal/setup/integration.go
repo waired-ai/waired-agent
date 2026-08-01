@@ -8,13 +8,13 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
-	"github.com/waired-ai/waired-agent/internal/integration/opencode"
+	"github.com/waired-ai/waired-agent/internal/integration/retired"
 )
 
 // IntegrationOptions are the inputs phase 3 needs.
 //
 // The integration writes only per-user config: the Claude Code skills and
-// the OpenCode provider block (which carries the gateway URL + token). Claude
+// the OpenClaw plugin (which carries the gateway URL + token). Claude
 // request routing on Linux is handled by the transparent proxy, set up
 // separately as root; there is no shell alias or env file.
 type IntegrationOptions struct {
@@ -29,7 +29,7 @@ type IntegrationOptions struct {
 	WiredBinary string
 	// Adapters lets callers (tests, dry-run) inject a custom
 	// adapter set. Empty = the production default
-	// (claudecode + opencode + openclaw).
+	// (claudecode + openclaw).
 	Adapters []integration.Adapter
 	// Prompt + Logger are forwarded into ApplyOptions.
 	Prompt integration.Prompter
@@ -72,7 +72,7 @@ func Integration(ctx context.Context, opts IntegrationOptions) (*IntegrationResu
 
 	adapters := opts.Adapters
 	if len(adapters) == 0 {
-		adapters = []integration.Adapter{claudecode.New(), opencode.New(), openclaw.New()}
+		adapters = []integration.Adapter{claudecode.New(), openclaw.New()}
 	}
 	mgr := integration.NewManager(adapters...)
 
@@ -107,9 +107,16 @@ func IntegrationOne(ctx context.Context, agentID integration.AgentID, opts Integ
 	return Integration(ctx, opts)
 }
 
-// UninstallAll runs phase-3 cleanup: every adapter's Uninstall.
+// UninstallAll runs phase-3 cleanup: every adapter's Uninstall, plus the
+// sweeps for integrations Waired has withdrawn.
+//
+// The retired sweeps are what stops a removal from stranding files.
+// `waired unlink` — which the uninstall scripts call — walks the
+// REGISTERED adapters, so an integration deleted from that list would
+// leave its plugin in the user's home forever, including through a full
+// Waired uninstall. See internal/integration/retired.
 func UninstallAll(ctx context.Context, opts IntegrationOptions) error {
-	mgr := integration.NewManager(claudecode.New(), opencode.New(), openclaw.New())
+	mgr := integration.NewManager(claudecode.New(), openclaw.New())
 	for _, r := range mgr.UninstallAll(ctx, integration.ApplyOptions{
 		HomeDir:        opts.HomeDir,
 		StateDir:       opts.StateDir,
@@ -119,11 +126,22 @@ func UninstallAll(ctx context.Context, opts IntegrationOptions) error {
 			return fmt.Errorf("setup: uninstall %s: %w", r.Agent, r.Err)
 		}
 	}
+	if err := retired.SweepOpenCode(opts.HomeDir, opts.StateDir); err != nil {
+		return fmt.Errorf("setup: uninstall opencode (retired): %w", err)
+	}
 	return nil
 }
 
 // UninstallOne removes one agent's per-adapter artefacts.
+//
+// A withdrawn integration is still removable by name: `waired unlink
+// opencode` is the instruction of somebody who has the files and wants
+// them gone, and answering "no such agent" would be both unhelpful and
+// untrue of their disk.
 func UninstallOne(ctx context.Context, agentID integration.AgentID, opts IntegrationOptions) error {
+	if agentID == retired.OpenCodeAgentID {
+		return retired.SweepOpenCode(opts.HomeDir, opts.StateDir)
+	}
 	one, err := pickAdapter(agentID)
 	if err != nil {
 		return err
@@ -137,14 +155,22 @@ func UninstallOne(ctx context.Context, agentID integration.AgentID, opts Integra
 	return res.Err
 }
 
+// ErrAgentRetired is returned when the named coding agent is one Waired
+// used to integrate with and no longer does. Distinct from
+// ErrAgentNotFound so `waired link` can say which it is: "we removed
+// this" is a different answer from "no such thing", and a user who typed
+// a name that used to work deserves the first one.
+var ErrAgentRetired = errors.New("setup: integration with this coding agent was removed")
+
 func pickAdapter(id integration.AgentID) (integration.Adapter, error) {
 	switch id {
 	case integration.AgentClaudeCode:
 		return claudecode.New(), nil
-	case integration.AgentOpenCode:
-		return opencode.New(), nil
 	case integration.AgentOpenClaw:
 		return openclaw.New(), nil
+	case retired.OpenCodeAgentID:
+		return nil, fmt.Errorf("%w: %s (waired-agent#333; `waired unlink %s` still removes an existing one)",
+			ErrAgentRetired, id, id)
 	default:
 		return nil, fmt.Errorf("%w: %s", integration.ErrAgentNotFound, id)
 	}

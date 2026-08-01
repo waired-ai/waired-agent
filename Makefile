@@ -69,7 +69,6 @@ help:
 	@echo "  e2e-vllm-fp8         fp8 KV cache ≈2× pool on Ada+ (GPU REQUIRED, #676)"
 	@echo "  e2e-vllm-spec        ngram speculative decode boots+serves (GPU REQUIRED, #677)"
 	@echo "  integration-runtime  Real-Ollama lifecycle test (no model pull)"
-	@echo "  integration-codeui   Real-opencode serve lifecycle smoke (no model; #501)"
 	@echo "  catalog-docs         Regenerate the model table (docs/reference/models.md) from proto/catalog/bundled"
 	@echo "  verify-catalog-docs  Fail if that model table drifted from the bundled catalog"
 	@echo ""
@@ -453,15 +452,6 @@ e2e-vllm-spec:
 .PHONY: integration-runtime
 integration-runtime:
 	go test -tags integration -count=1 -v ./internal/runtime/...
-
-# Run only the codeui real-`opencode serve` lifecycle smoke (#501). Downloads
-# the real pinned opencode binary (or honours WAIRED_CODEUI_BINARY), verifies
-# its sha256, extracts, serves, asserts web-UI 200 + POST /session, then stops.
-# No model/GPU — inference is out of scope. This is the L2 leg that
-# .github/workflows/codeui-multios.yml runs on Linux/Windows/macOS.
-.PHONY: integration-codeui
-integration-codeui:
-	go test -tags integration -count=1 -v -timeout 10m ./internal/runtime/codeui/...
 
 # ---------------------------------------------------------------------
 # End-user .deb packaging via nfpm.

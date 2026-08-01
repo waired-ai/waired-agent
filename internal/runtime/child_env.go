@@ -4,8 +4,8 @@ import "strings"
 
 // ChildBaseEnv returns parent extended with the two launch-environment
 // guarantees every spawned engine child needs — the axis the #22 macOS
-// "$HOME is not defined" crash exposed, unified here so the ollama, vLLM,
-// and codeui spawn paths assemble their env one way instead of each
+// "$HOME is not defined" crash exposed, unified here so the ollama and
+// vLLM spawn paths assemble their env one way instead of each
 // hand-rolling it:
 //
 //   - HOME is present and non-empty. Set to homeFallback when the parent

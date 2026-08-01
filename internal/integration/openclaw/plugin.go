@@ -15,8 +15,8 @@ import (
 var pluginTemplates embed.FS
 
 // defaultDataPlanePort is the loopback port of the agent's no-token
-// data-plane gateway, shared with the OpenCode integration. It MUST match
-// agentconfig.Defaults().Inference.OpenCodeGatewayPort (9479). The plugin
+// data-plane gateway. It MUST match
+// agentconfig.Defaults().Inference.DataPlaneGatewayPort (9479). The plugin
 // points the provider baseURL here rather than at the main (token-gated)
 // gateway, because the desktop user cannot read the agent's 0600 token in
 // the system-service deployment.
@@ -39,7 +39,7 @@ func PluginPackageFile(home string) string { return filepath.Join(PluginDir(home
 // the main gateway base URL by swapping the port to the data-plane port,
 // e.g. "http://127.0.0.1:9473" -> "http://127.0.0.1:9479". A malformed or
 // empty input falls back to the loopback default. (A non-default
-// OpenCodeGatewayPort is not threaded here yet; see the work record.)
+// DataPlaneGatewayPort is not threaded here yet; see the work record.)
 func DataPlaneBaseURL(gatewayBaseURL string) string {
 	u, err := url.Parse(gatewayBaseURL)
 	if err != nil || u.Host == "" {

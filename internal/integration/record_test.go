@@ -36,11 +36,11 @@ func TestLedger_RoundTrip(t *testing.T) {
 		SkillFiles: []string{"/h/.claude/skills/waired-status/SKILL.md"},
 		SkillDirs:  []string{"/h/.claude/skills/waired-status"},
 	})
-	l.Set(AgentOpenCode, AgentRecord{
-		ConfigPath: "/h/.config/opencode/opencode.json",
+	l.Set(AgentOpenClaw, AgentRecord{
+		ConfigPath: "/h/.openclaw/openclaw.json",
 		OwnedFully: false,
 		AddedPaths: []string{"provider.waired", "model"},
-		BackupPath: "/h/.config/opencode/opencode.json.waired-bak-1",
+		BackupPath: "/h/.openclaw/openclaw.json.waired-bak-1",
 	})
 
 	if err := l.Save(path); err != nil {
@@ -61,15 +61,15 @@ func TestLedger_RoundTrip(t *testing.T) {
 	if len(cc.SkillFiles) != 1 || cc.SkillDirs[0] != "/h/.claude/skills/waired-status" {
 		t.Fatalf("claude-code record corrupt: %+v", cc)
 	}
-	oc, ok := got.Get(AgentOpenCode)
+	oc, ok := got.Get(AgentOpenClaw)
 	if !ok {
-		t.Fatal("opencode missing after reload")
+		t.Fatal("openclaw missing after reload")
 	}
-	if oc.ConfigPath != "/h/.config/opencode/opencode.json" || len(oc.AddedPaths) != 2 {
-		t.Fatalf("opencode record corrupt: %+v", oc)
+	if oc.ConfigPath != "/h/.openclaw/openclaw.json" || len(oc.AddedPaths) != 2 {
+		t.Fatalf("openclaw record corrupt: %+v", oc)
 	}
 
-	got.Delete(AgentOpenCode)
+	got.Delete(AgentOpenClaw)
 	if err := got.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +78,8 @@ func TestLedger_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := final.Get(AgentOpenCode); ok {
-		t.Fatal("opencode still present after Delete")
+	if _, ok := final.Get(AgentOpenClaw); ok {
+		t.Fatal("openclaw still present after Delete")
 	}
 }
 

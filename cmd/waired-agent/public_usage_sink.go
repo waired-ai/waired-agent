@@ -17,7 +17,7 @@ import (
 // callbacks.
 //
 // Returns the gateway.Deps.OnUsage callback, wired ONLY on the :9474
-// overlay HandlerSet: the loopback, Claude-intercept and OpenCode
+// overlay HandlerSet: the loopback, Claude-intercept and data-plane
 // surfaces serve this device's own operator, whose usage is nobody's to
 // report. Their token counts still reach local telemetry — that half is
 // unconditional in the gateway.

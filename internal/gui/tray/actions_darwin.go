@@ -152,10 +152,6 @@ func locateWairedBinary() (string, error) {
 	return p, nil
 }
 
-// wairedCLIPath finds the `waired` CLI binary the tray shells out to for
-// `waired codeui …`. Same resolution as the elevation helpers.
-func wairedCLIPath() (string, error) { return locateWairedBinary() }
-
 // CopyToClipboard pipes text to /usr/bin/pbcopy. Trailing CRLF is
 // trimmed to match Linux/Windows behaviour where Ctrl+V into a text
 // field should not paste a stray newline.

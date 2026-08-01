@@ -106,6 +106,17 @@ func applySetupIntegrations(ctx context.Context, targets []string, o setupIntegr
 
 	for _, target := range targets {
 		id := integration.AgentID(target)
+		// A withdrawn integration is skipped, never failed. The daemon
+		// already filters retired targets out of the instruction, so this
+		// only fires on version skew — a CLI newer than the daemon it is
+		// driving, which is the ordinary state for the seconds around an
+		// upgrade. Failing here would turn that into a red coding-tools
+		// row for a target the operator cannot act on, which is precisely
+		// the wedge waired-agent#333 retires the value to avoid.
+		if signer.IsRetiredIntegrationTarget(target) {
+			writePromptf(out, "%s Skipping %s — that integration was removed.\n", emo("ⓘ", "-"), target)
+			continue
+		}
 		// The claude-code toggle is the only one that changes the whole
 		// machine, and the wizard says so in as many words ("Changes where
 		// Claude Code sends its requests for everyone on this computer —

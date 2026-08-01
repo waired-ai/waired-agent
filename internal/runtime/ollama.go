@@ -693,7 +693,7 @@ func (a *OllamaAdapter) processEnv() []string {
 	a.mu.Unlock()
 
 	// Launch-environment guards come from the shared ChildBaseEnv so the
-	// ollama/vLLM/codeui spawn paths stay in parity on the axis the #22
+	// ollama/vLLM spawn paths stay in parity on the axis the #22
 	// crash exposed:
 	//   - HOME: macOS system LaunchDaemons start $HOME unset and `ollama
 	//     serve` aborts with "$HOME is not defined" (it resolves ~/.ollama

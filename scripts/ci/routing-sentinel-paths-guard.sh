@@ -7,10 +7,10 @@
 # locally-served response via the observability event ring. It is PATHS-GATED so
 # it only fires when its surface changes; that filter must cover the code the
 # harness (and the routing path it exercises) actually compiles, or a change to
-# an uncovered input would silently skip the gate (the rot deploy-dev / codeui /
+# an uncovered input would silently skip the gate (the rot deploy-dev / tray-darwin /
 # installtest guards all defend against for their workflows).
 #
-# Model: the codeui-multios guard (go-list-deps-derived). Every internal/<pkg>
+# Model: go-list-deps-derived (as the retired codeui-multios guard was). Every internal/<pkg>
 # the routing harness transitively compiles must be EITHER covered by a `**`
 # glob in the workflow OR listed in ALLOW below — a broad shared package with
 # its own coverage and no routing-specific surface. A NEW harness dependency
@@ -29,8 +29,8 @@ missing=()
 
 # 1) Fixed anchors the filter must always carry: the routing surface (the
 #    integration adapters, the proxy/gateway the requests flow through, the
-#    catalog + router + agentconfig that resolve/route the model, the codeui
-#    OpenCode leg, the harness itself), the daemon/CLI that host the surfaces,
+#    catalog + router + agentconfig that resolve/route the model, the
+#    harness itself), the daemon/CLI that host the surfaces,
 #    the installer surface the sentinel drives, the module files, and the
 #    workflow's own self-reference.
 for anchor in \
@@ -41,7 +41,6 @@ for anchor in \
   'internal/router/**' \
   'internal/catalog/**' \
   'proto/catalog/**' \
-  'internal/runtime/codeui/**' \
   'internal/e2e/integration/**' \
   'cmd/waired/**' \
   'cmd/waired-agent/**' \
@@ -71,7 +70,7 @@ ALLOW=(
   internal/platform/paths
   internal/platform/secrets
   internal/platform/securestore
-  internal/runtime               # engine supervision; shared, own tests (codeui watched via its **)
+  internal/runtime               # engine supervision; shared, own tests, no routing-specific surface
   internal/runtime/state
   internal/version
 )

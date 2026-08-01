@@ -35,7 +35,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
-	"github.com/waired-ai/waired-agent/internal/integration/opencode"
 	"github.com/waired-ai/waired-agent/internal/management"
 	disco "github.com/waired-ai/waired-agent/internal/network/disco"
 	"github.com/waired-ai/waired-agent/internal/network/netif"
@@ -367,12 +366,6 @@ func run(ctx context.Context, args []string) error {
 				RestartScheduler: supervisedRestart,
 			})
 	}
-	// The bundled OpenCode coding-agent web UI (#429/#486) now runs entirely
-	// on the user side (`waired codeui open` / the tray), AS the invoking user
-	// on their real project, behind an authenticating proxy. The daemon no
-	// longer vendors or supervises `opencode serve`; it keeps only the no-token
-	// :9479 data-plane gateway the user-side instance talks to.
-	//
 	// Integration endpoints are $HOME / state-dir based, not identity
 	// based, so they are wired at boot and stay available unenrolled.
 	homeDir, herr := os.UserHomeDir()
@@ -383,25 +376,10 @@ func run(ctx context.Context, args []string) error {
 			BinaryPath: resolveOwnBinaryPath(),
 		})
 		gatewayBaseURL := fmt.Sprintf("http://127.0.0.1:%d", cfgRoot.Inference.LocalGatewayPort)
-		// OpenCode's plugin points at the no-token data-plane gateway, a
-		// distinct port from LocalGatewayPort; derive it the same way the
-		// adapter does so detection and Apply agree.
-		expectedBaseURL := opencode.DataPlaneBaseURL(gatewayBaseURL) + "/v1"
-		mgmtSrv = mgmtSrv.WithOpenCodeIntegration(management.OpenCodeIntegrationConfig{
-			HomeDir:         homeDir,
-			ExpectedBaseURL: expectedBaseURL,
-			Reconfigure: func(rctx context.Context) error {
-				_, err := setup.IntegrationOne(rctx, integration.AgentOpenCode, setup.IntegrationOptions{
-					HomeDir:        homeDir,
-					StateDir:       *stateDir,
-					GatewayBaseURL: gatewayBaseURL,
-					NonInteractive: true,
-				})
-				return err
-			},
-		})
-		// OpenClaw's plugin points at the same no-token data-plane gateway as
-		// OpenCode (the loopback port shared by both integrations).
+		// OpenClaw's plugin points at the no-token data-plane gateway
+		// rather than the token-gated loopback one: the desktop user
+		// cannot read the agent's 0600 gateway token under the
+		// system-service deployment.
 		expectedOpenClawURL := openclaw.DataPlaneBaseURL(gatewayBaseURL) + "/v1"
 		mgmtSrv = mgmtSrv.WithOpenClawIntegration(management.OpenClawIntegrationConfig{
 			HomeDir:         homeDir,
@@ -417,7 +395,7 @@ func run(ctx context.Context, args []string) error {
 			},
 		})
 	} else {
-		logger.Warn("claude/opencode/openclaw integration endpoints disabled: cannot resolve $HOME", "err", herr)
+		logger.Warn("claude/openclaw integration endpoints disabled: cannot resolve $HOME", "err", herr)
 	}
 	// Claude Code routing is configured once at `waired init` / `waired claude
 	// enable` via system-wide managed settings (ANTHROPIC_BASE_URL -> the local
@@ -1213,7 +1191,7 @@ func run(ctx context.Context, args []string) error {
 			}
 			infSrv = inference.NewServerWithConfig(cfg)
 			// The owner-priority latch's local half (§8.2, waired#899):
-			// from here on, the loopback / Claude-intercept / OpenCode
+			// from here on, the loopback / Claude-intercept / data-plane
 			// surfaces count the engine work they dispatch locally
 			// against this server's admission counter.
 			localAdmit.Set(infSrv)

@@ -43,22 +43,22 @@ func (f *fakeAdapter) Uninstall(_ context.Context, _ ApplyOptions) error {
 
 func TestManager_AgentIDs_Sorted(t *testing.T) {
 	m := NewManager(
-		&fakeAdapter{id: AgentOpenCode},
+		&fakeAdapter{id: AgentOpenClaw},
 		&fakeAdapter{id: AgentClaudeCode},
 	)
 	got := m.AgentIDs()
 	if len(got) != 2 {
 		t.Fatalf("len = %d", len(got))
 	}
-	if got[0] != AgentClaudeCode || got[1] != AgentOpenCode {
-		// alphabetical: claude-code < opencode
+	if got[0] != AgentClaudeCode || got[1] != AgentOpenClaw {
+		// alphabetical: claude-code < openclaw
 		t.Fatalf("sort order: %v", got)
 	}
 }
 
 func TestManager_ApplyAll_DetectGate(t *testing.T) {
 	cc := &fakeAdapter{id: AgentClaudeCode, detect: Detection{Found: true}}
-	oc := &fakeAdapter{id: AgentOpenCode, detect: Detection{Found: false}}
+	oc := &fakeAdapter{id: AgentOpenClaw, detect: Detection{Found: false}}
 	m := NewManager(cc, oc)
 
 	results := m.ApplyAll(context.Background(), ApplyOptions{})
@@ -71,9 +71,9 @@ func TestManager_ApplyAll_DetectGate(t *testing.T) {
 			if !r.Applied || r.Skipped || r.Err != nil {
 				t.Fatalf("claude-code result %+v", r)
 			}
-		case AgentOpenCode:
+		case AgentOpenClaw:
 			if r.Applied || !r.Skipped || r.Err != nil {
-				t.Fatalf("opencode result %+v", r)
+				t.Fatalf("openclaw result %+v", r)
 			}
 		}
 	}
@@ -83,7 +83,7 @@ func TestManager_ApplyAll_DetectGate(t *testing.T) {
 }
 
 func TestManager_ApplyAll_ForceBypassesDetect(t *testing.T) {
-	oc := &fakeAdapter{id: AgentOpenCode, detect: Detection{Found: false}}
+	oc := &fakeAdapter{id: AgentOpenClaw, detect: Detection{Found: false}}
 	m := NewManager(oc)
 
 	results := m.ApplyAll(context.Background(), ApplyOptions{Force: true})
@@ -103,7 +103,7 @@ func TestManager_ApplyAll_ForceBypassesDetect(t *testing.T) {
 func TestManager_ApplyAll_PropagatesErrors(t *testing.T) {
 	boom := errors.New("boom")
 	cc := &fakeAdapter{id: AgentClaudeCode, detect: Detection{Found: true}, applyErr: boom}
-	oc := &fakeAdapter{id: AgentOpenCode, detect: Detection{Found: true}}
+	oc := &fakeAdapter{id: AgentOpenClaw, detect: Detection{Found: true}}
 	m := NewManager(cc, oc)
 
 	results := m.ApplyAll(context.Background(), ApplyOptions{})
@@ -115,8 +115,8 @@ func TestManager_ApplyAll_PropagatesErrors(t *testing.T) {
 		if r.Agent == AgentClaudeCode && !errors.Is(r.Err, boom) {
 			t.Fatalf("claude-code Err = %v, want %v", r.Err, boom)
 		}
-		if r.Agent == AgentOpenCode && !r.Applied {
-			t.Fatalf("opencode should still apply: %+v", r)
+		if r.Agent == AgentOpenClaw && !r.Applied {
+			t.Fatalf("openclaw should still apply: %+v", r)
 		}
 	}
 }
@@ -124,8 +124,8 @@ func TestManager_ApplyAll_PropagatesErrors(t *testing.T) {
 func TestManager_AuditAll_WrapsAdapterErrors(t *testing.T) {
 	boom := errors.New("audit boom")
 	cc := &fakeAdapter{id: AgentClaudeCode, auditErr: boom}
-	oc := &fakeAdapter{id: AgentOpenCode, auditOut: []AuditFinding{{
-		Status: StatusOK, Subject: "opencode skills",
+	oc := &fakeAdapter{id: AgentOpenClaw, auditOut: []AuditFinding{{
+		Status: StatusOK, Subject: "openclaw plugin",
 	}}}
 	m := NewManager(cc, oc)
 
@@ -141,7 +141,7 @@ func TestManager_AuditAll_WrapsAdapterErrors(t *testing.T) {
 		if f.Status == StatusFail && f.Subject == "claude-code audit" {
 			sawCC = true
 		}
-		if f.Status == StatusOK && f.Subject == "opencode skills" {
+		if f.Status == StatusOK && f.Subject == "openclaw plugin" {
 			sawOC = true
 		}
 	}
@@ -152,7 +152,7 @@ func TestManager_AuditAll_WrapsAdapterErrors(t *testing.T) {
 
 func TestManager_UninstallAll_CallsEverybody(t *testing.T) {
 	cc := &fakeAdapter{id: AgentClaudeCode}
-	oc := &fakeAdapter{id: AgentOpenCode}
+	oc := &fakeAdapter{id: AgentOpenClaw}
 	m := NewManager(cc, oc)
 	results := m.UninstallAll(context.Background(), ApplyOptions{})
 	if cc.uninstallCalls != 1 || oc.uninstallCalls != 1 {

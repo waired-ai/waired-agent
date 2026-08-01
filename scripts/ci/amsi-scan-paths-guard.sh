@@ -12,7 +12,7 @@
 # the exact class of regression (#552) the gate exists to catch.
 #
 # Same belt-and-braces pattern as installtest-paths-guard.sh /
-# codeui-multios-paths-guard.sh. Run from the repository root.
+# routing-sentinel-paths-guard.sh. Run from the repository root.
 set -euo pipefail
 
 wf=".github/workflows/amsi-scan.yml"

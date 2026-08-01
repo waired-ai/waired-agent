@@ -21,7 +21,7 @@
 //
 // No bearer token is enforced here: credential-less Claude presents its
 // subscription OAuth token, not waired's gateway token, so the loopback bind is
-// the trust boundary (same posture as the no-token OpenCode gateway). The
+// the trust boundary (same posture as the no-token data-plane gateway). The
 // LocalInference handler is therefore the BARE gateway HandlerSet, not the
 // token-gated loopback gateway.Server.
 package intercept

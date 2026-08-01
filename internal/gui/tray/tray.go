@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -176,14 +174,9 @@ type tray struct {
 	lastClaudeMainRoutes []ClaudeRouteRow // Class lookup for main-route click dispatch
 	lastClaudeSubRoutes  []ClaudeRouteRow // Class lookup for sub-route click dispatch
 
-	// OpenCode integration group — symmetric pre-allocation. The
+	// OpenClaw integration group — symmetric pre-allocation. The
 	// Reconfigure click is the only interactive item; the rest are
 	// status rows.
-	miOpenCodeHeader      *systray.MenuItem
-	miOpenCodeConfig      *systray.MenuItem
-	miOpenCodeReconfigure *systray.MenuItem
-
-	// OpenClaw integration group — same shape as the OpenCode group.
 	miOpenClawHeader      *systray.MenuItem
 	miOpenClawConfig      *systray.MenuItem
 	miOpenClawReconfigure *systray.MenuItem
@@ -239,10 +232,9 @@ type tray struct {
 	miPublicMore        *systray.MenuItem
 	lastPublicUseModes  []PublicUseModeRow
 
-	miCodeUI *systray.MenuItem
-	miAdmin  *systray.MenuItem
+	miAdmin *systray.MenuItem
 	// miSettings is the "Settings ▸" submenu parent (waired#809): the
-	// OpenCode/OpenClaw integration rows, Recent activity, autostart toggle,
+	// OpenClaw integration rows, Recent activity, autostart toggle,
 	// About, and Log out live under it instead of at the top level.
 	miSettings  *systray.MenuItem
 	miAbout     *systray.MenuItem
@@ -499,10 +491,6 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miClaudeEnableNote.Hide()
 
 		systray.AddSeparator()
-		// Bundled coding-agent stays a top-level primary action (#429).
-		t.miCodeUI = systray.AddMenuItem("Open Coding Agent…", "Open the bundled OpenCode coding agent in your browser")
-		t.miCodeUI.Hide()
-		systray.AddSeparator()
 
 		// --- This device submenu (waired#809): name / IP / network / peers
 		// move under one parent. Shown only when enrolled — apply() tracks
@@ -531,17 +519,12 @@ func (t *tray) onReady(ctx context.Context) func() {
 
 		t.miAdmin = systray.AddMenuItem("Open Admin Console…", "Open the Waired Control Plane admin UI")
 
-		// --- Settings submenu (waired#809): the OpenCode / OpenClaw
+		// --- Settings submenu (waired#809): the OpenClaw
 		// integration rows, Recent activity, the startup toggle, About, and
 		// Log out move off the top level. The parent is always visible (About
 		// and the startup toggle are always available); each row keeps its
 		// own Show/Hide.
 		t.miSettings = systray.AddMenuItem("Settings", "Integrations, startup, and account")
-		t.miOpenCodeHeader = t.miSettings.AddSubMenuItem("", "")
-		t.miOpenCodeHeader.Disable()
-		t.miOpenCodeConfig = t.miSettings.AddSubMenuItem("", "")
-		t.miOpenCodeConfig.Disable()
-		t.miOpenCodeReconfigure = t.miSettings.AddSubMenuItem("", "Re-apply `waired link opencode` after a confirmation prompt")
 		t.miOpenClawHeader = t.miSettings.AddSubMenuItem("", "")
 		t.miOpenClawHeader.Disable()
 		t.miOpenClawConfig = t.miSettings.AddSubMenuItem("", "")
@@ -852,12 +835,8 @@ func (t *tray) handleClicks(ctx context.Context) {
 			go t.onPublicMore()
 		case <-t.miOverlayIP.ClickedCh:
 			t.onCopyIP()
-		case <-t.miOpenCodeReconfigure.ClickedCh:
-			go t.onReconfigureOpenCode(ctx)
 		case <-t.miOpenClawReconfigure.ClickedCh:
 			go t.onReconfigureOpenClaw(ctx)
-		case <-t.miCodeUI.ClickedCh:
-			go t.onCodeUI(ctx)
 		case <-t.miAdmin.ClickedCh:
 			t.onAdmin()
 		case <-t.miAbout.ClickedCh:
@@ -1533,102 +1512,7 @@ func (t *tray) onAdmin() {
 	}
 }
 
-// onCodeUI opens the bundled OpenCode coding agent in the browser. Since #486
-// the agent runs USER-SIDE (as the tray's own user) via the `waired codeui`
-// CLI, not the daemon: it runs `opencode serve` on the real project behind an
-// authenticating proxy. If an instance is already running we reuse its URL
-// (whatever project it serves); otherwise we start one rooted at the user's
-// home (opencode's default landing — no folder picker). Long-running on first
-// run (a ~55 MB download), so callers dispatch this in a goroutine.
-func (t *tray) onCodeUI(ctx context.Context) {
-	slog.Debug("tray: menu action", "action", "code-ui")
-	bin, err := wairedCLIPath()
-	if err != nil {
-		showError("Coding agent: waired CLI not found (" + err.Error() + ")")
-		return
-	}
-	// Reuse a running instance rather than restarting it onto a new project.
-	if url := codeUIRunningURL(ctx, bin); url != "" {
-		if oerr := openBrowser(url); oerr != nil {
-			showError(oerr.Error())
-		}
-		return
-	}
-	notify("Starting the coding agent… (first run downloads it; this can take a minute)", notification.Info)
-	args := []string{"codeui", "open"}
-	if home, herr := os.UserHomeDir(); herr == nil && home != "" {
-		args = append(args, "--project", home)
-	}
-	// `codeui open` opens the browser itself (it inherits the tray's session
-	// env, so xdg-open/open works). Stream its output to the tray log.
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if rerr := cmd.Run(); rerr != nil {
-		notify("Coding agent failed to start: "+rerr.Error(), notification.Warning)
-		showError("Coding agent failed to start — see the tray log.")
-	}
-}
-
-// codeUIRunningURL returns the access URL of a running user-side coding agent,
-// or "" when none is running. It shells out to `waired codeui url`, which reads
-// the per-user runtime.json.
-func codeUIRunningURL(ctx context.Context, bin string) string {
-	out, err := exec.CommandContext(ctx, bin, "codeui", "url").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// onReconfigureOpenCode walks the user through the
-// "rewrite the waired OpenCode plugin" flow:
-//
-//  1. Pop a confirmation dialog (zenity / kdialog). The rewrite touches a
-//     file outside the waired state dir (~/.config/opencode/plugin/), so
-//     we pause for the user's consent first.
-//  2. On "yes", POST to /waired/v1/integration/opencode/reconfigure.
-//     Surface success / failure via desktop notification — the tray
-//     is already showing the live status so the user does not need a
-//     second source of truth.
-//  3. When no dialog backend is available (zenity + kdialog both
-//     missing), copy `waired link opencode` to the clipboard and
-//     notify the user instead. Better than silently doing nothing or
-//     silently rewriting the file without consent.
-//
-// Long-running (HTTP + dialog wait); callers must dispatch in a
-// goroutine — the systray click select must stay responsive.
-func (t *tray) onReconfigureOpenCode(ctx context.Context) {
-	const title = "Reconfigure OpenCode integration?"
-	const body = "This rewrites the waired OpenCode plugin " +
-		"(~/.config/opencode/plugin/waired.js) to point at the current " +
-		"waired gateway. Proceed?"
-
-	yes, ok := confirmYesNo(title, body)
-	if !ok {
-		// No desktop dialog available — fall back to clipboard.
-		if err := copyToClipboard("waired link opencode"); err != nil {
-			showError("Reconfigure: " + err.Error())
-			return
-		}
-		notify("Run `waired link opencode` in a terminal to reconfigure.", notification.Info)
-		return
-	}
-	if !yes {
-		return
-	}
-
-	slog.Debug("tray: menu action", "action", "reconfigure-opencode")
-	if err := t.cli.ReconfigureOpenCode(ctx); err != nil {
-		notify("OpenCode reconfigure failed: "+err.Error(), notification.Warning)
-		showError("OpenCode reconfigure: " + err.Error())
-		return
-	}
-	notify("OpenCode integration reconfigured.", notification.Info)
-	go t.pollOnce(ctx)
-}
-
-// onReconfigureOpenClaw mirrors onReconfigureOpenCode for the OpenClaw
+// onReconfigureOpenClaw walks the user through the OpenClaw
 // integration: confirm, then POST the reconfigure (which rewrites the plugin
 // under ~/.openclaw/plugins/waired/ and refreshes the openclaw.json keys).
 // Long-running; callers must dispatch in a goroutine.
@@ -1837,11 +1721,6 @@ func (t *tray) pollOnce(ctx context.Context) {
 	if cr, crErr := t.cli.ClaudeRouting(pollCtx); crErr == nil {
 		snap.ClaudeRouting = cr
 	}
-	// OpenCode integration: same shape — 404 on older daemons leaves
-	// snap.OpenCode nil and the tray hides the group.
-	if oc, ocErr := t.cli.OpenCodeIntegration(pollCtx); ocErr == nil {
-		snap.OpenCode = oc
-	}
 	// OpenClaw integration: same shape — 404 on older daemons leaves
 	// snap.OpenClaw nil and the tray hides the group.
 	if ow, owErr := t.cli.OpenClawIntegration(pollCtx); owErr == nil {
@@ -1891,7 +1770,6 @@ func (t *tray) pollOnce(ctx context.Context) {
 		"inference", snap.Inference != nil,
 		"claude", snap.Claude != nil,
 		"routing", snap.ClaudeRouting != nil,
-		"opencode", snap.OpenCode != nil,
 		"openclaw", snap.OpenClaw != nil,
 		"catalog", snap.Catalog != nil,
 		"mesh", snap.Mesh != nil,
@@ -1910,7 +1788,7 @@ func (t *tray) pollOnce(ctx context.Context) {
 // and rolling fallback buffer, and writes the projection inputs into
 // snap. All errors (other than 404 → ErrObservabilityUnsupported) are
 // swallowed silently — the tray treats observability as best-effort
-// the same way it treats inference / claude / opencode.
+// the same way it treats inference / claude / openclaw.
 //
 // Why a single call instead of two ad-hoc GETs inline:
 //   - cursor + buffer are tray-private state, so they don't belong in
@@ -2301,8 +2179,6 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.applyPeerHardwareEntries(prev.PeerHardwareEntries, m.PeerHardwareEntries)
 	t.applyPeerHardwareOverflow(prev.PeerHardwareOverflow, m.PeerHardwareOverflow)
 
-	t.setVisible(t.miCodeUI, prev.ShowCodeUI, m.ShowCodeUI)
-	t.setTitle(t.miCodeUI, prev.CodeUILabel, m.CodeUILabel)
 	t.setVisible(t.miAdmin, prev.AdminURL != "", m.AdminURL != "")
 	t.setVisible(t.miLogout, prev.AccountEmail != "", m.AccountEmail != "")
 
@@ -2344,18 +2220,10 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.lastClaudeSubRoutes = m.ClaudeSubRouteRows
 	t.mu.Unlock()
 
-	// OpenCode integration group — same lifecycle as Claude. Header +
-	// Config + Reconfigure share the ShowOpenCode flag; its leading
+	// OpenClaw integration group — same lifecycle as Claude. Header +
+	// Config + Reconfigure share the ShowOpenClaw flag; its leading
 	// separator auto-collapses if the group above is hidden, so two
 	// adjacent rules never render.
-	t.setVisible(t.miOpenCodeHeader, prev.ShowOpenCode, m.ShowOpenCode)
-	t.setTitle(t.miOpenCodeHeader, prev.OpenCodeHeader, m.OpenCodeHeader)
-	t.setVisible(t.miOpenCodeConfig, prev.OpenCodeConfigLabel != "", m.OpenCodeConfigLabel != "")
-	t.setTitle(t.miOpenCodeConfig, "  "+prev.OpenCodeConfigLabel, "  "+m.OpenCodeConfigLabel)
-	t.setVisible(t.miOpenCodeReconfigure, prev.OpenCodeReconfigureLabel != "", m.OpenCodeReconfigureLabel != "")
-	t.setTitle(t.miOpenCodeReconfigure, prev.OpenCodeReconfigureLabel, m.OpenCodeReconfigureLabel)
-
-	// OpenClaw integration group — same lifecycle as the OpenCode group.
 	t.setVisible(t.miOpenClawHeader, prev.ShowOpenClaw, m.ShowOpenClaw)
 	t.setTitle(t.miOpenClawHeader, prev.OpenClawHeader, m.OpenClawHeader)
 	t.setVisible(t.miOpenClawConfig, prev.OpenClawConfigLabel != "", m.OpenClawConfigLabel != "")

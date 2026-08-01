@@ -1,8 +1,8 @@
 # Self-hosted Renovate (dependency bot). Runs weekly + on demand and
 # opens dependency-update PRs. Self-hosted (not the Mend App) because
 # only self-hosted Renovate can run postUpgradeTasks — needed to
-# recompute the uv / opencode SHA pins in lockstep (see renovate.json;
-# monorepo #290/#429) — and it matches the monorepo's setup.
+# recompute the uv SHA pin in lockstep (see renovate.json;
+# monorepo #290) — and it matches the monorepo's setup.
 #
 # OPERATOR SETUP (one-time, outside CI): add a repo-scoped Personal
 # Access Token (or GitHub App installation token) with contents+PR write
@@ -78,7 +78,7 @@ jobs:
           # postUpgradeTasks). Only these SHA-recompute helpers may run;
           # any other command is silently skipped. Keep in lockstep with
           # the postUpgradeTasks wired per-package in renovate.json.
-          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^bash scripts/dev/update-uv-sha\\.sh ", "^bash scripts/dev/update-opencode-sha\\.sh "]'
+          RENOVATE_ALLOWED_POST_UPGRADE_COMMANDS: '["^bash scripts/dev/update-uv-sha\\.sh "]'
           LOG_LEVEL: ${{ github.event.inputs.logLevel || 'info' }}
           RENOVATE_DRY_RUN: ${{ github.event.inputs.dryRun == 'full' && 'full' || '' }}
         run: |

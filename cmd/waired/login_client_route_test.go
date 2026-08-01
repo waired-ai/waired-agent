@@ -213,10 +213,22 @@ func TestApplySetupIntegrations_OnlyClaudeCodeRoutes(t *testing.T) {
 		wantApplies     int
 	}{
 		{"claude-code on -> routes", []string{signer.IntegrationClaudeCode}, false, 1},
-		{"opencode only -> no routing", []string{signer.IntegrationOpenCode}, false, 0},
 		{"openclaw only -> no routing", []string{signer.IntegrationOpenClaw}, false, 0},
 		{
 			"claude-code alongside others -> routes once",
+			[]string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw}, false, 1,
+		},
+		{
+			// PRODUCT CONTRACT (waired-agent#333): a retired target is
+			// skipped, not failed. Only version skew delivers one — a CLI
+			// newer than the daemon driving it, the ordinary state around
+			// an upgrade — and erroring would turn that into a red
+			// coding-tools row nobody can clear.
+			"retired target only -> skipped, no routing, no error",
+			[]string{signer.IntegrationOpenCode}, false, 0,
+		},
+		{
+			"retired target alongside claude-code -> still routes once",
 			[]string{signer.IntegrationClaudeCode, signer.IntegrationOpenCode}, false, 1,
 		},
 		{

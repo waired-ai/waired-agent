@@ -44,7 +44,7 @@ type AgentRecord struct {
 	// remove them when empty after files are deleted).
 	SkillDirs []string `json:"skill_dirs,omitempty"`
 	// ConfigPath is the third-party artifact we fully own or surgically
-	// edited (e.g. the OpenCode plugin ~/.config/opencode/plugin/waired.js).
+	// edited (e.g. the OpenClaw plugin entry ~/.openclaw/plugins/waired/).
 	// Empty when not applicable.
 	ConfigPath string `json:"config_path,omitempty"`
 	// OwnedFully is true when Apply created the config file from

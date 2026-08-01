@@ -19,7 +19,7 @@
 # untouched and so CANNOT be a required status check;
 # scripts/ci/tray-darwin-paths-guard.sh (run in ci.yml's always-on lint job)
 # keeps the filter from rotting — the same belt-and-braces pattern as
-# codeui-multios-paths-guard.sh.
+# routing-sentinel-paths-guard.sh.
 name: tray-darwin
 
 on:
@@ -58,7 +58,7 @@ jobs:
     name: tray (darwin, CGO)
     # Same-repo only: fork PRs get a skipped check (not failed); a maintainer
     # arms a reviewed fork PR by pushing its branch to this repo. Mirrors
-    # installtest.yml / codeui-multios.yml (public-repo caution, CLAUDE.md).
+    # installtest.yml / routing-sentinel.yml (public-repo caution, CLAUDE.md).
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-14
     timeout-minutes: 20

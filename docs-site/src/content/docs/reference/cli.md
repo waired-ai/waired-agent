@@ -30,7 +30,6 @@ covers what the flags are *for*.
 | [`waired public`](#waired-public) | Lend and borrow spare computers with other Waired users |
 | [`waired link`](#waired-link--unlink) / [`unlink`](#waired-link--unlink) | Connect your coding tools |
 | [`waired claude`](#waired-claude) | Where Claude Code runs, and switching it live |
-| [`waired codeui`](#waired-codeui) | A coding agent in your browser |
 | [`waired pause`](#waired-pause--resume) / [`resume`](#waired-pause--resume) | Stop and restart routing |
 | [`waired update`](#waired-update) | Install a newer Waired |
 | [`waired config`](#waired-config) | Turn detailed logging on or off |
@@ -66,7 +65,7 @@ is running it is also what performs the steps the browser setup page asks for**
 | `--inference-enabled=true\|false` | Answers "run AI models on this computer?" without asking. |
 | `--share-with-mesh=true\|false` | Answers "let your other devices use this computer's AI?" without asking. |
 | `--skip-claude-route` | Finish setup but leave Claude Code talking to the Anthropic API. Skills and plugins still install; turn routing on later with `waired claude enable`. |
-| `--skip-integration` | Skip the coding-tool setup entirely (no Claude Code or OpenCode changes). |
+| `--skip-integration` | Skip the coding-tool setup entirely (no Claude Code or OpenClaw changes). |
 | `--device-name <name>` | Register this computer under a name you choose instead of its hostname. |
 | `--control <URL>` | Sign in against a specific control plane instead of the default. See [Advanced install options](/reference/install-options/). |
 | `--auth-key <key>` | Sign in with an auth key instead of a browser, for servers and containers. Also accepts `file:/path/to/key`, or reads `$WAIRED_AUTH_KEY` when the flag is omitted. Create one under **Settings → Auth keys** in the [web console](/guides/web-console/). See [Sign in and set up](/getting-started/first-run/#servers-and-containers-auth-keys). |
@@ -239,7 +238,7 @@ terminal that you have to read and accept.
 ```sh
 waired link                  # set up every coding tool found
 waired link claude-code
-waired link opencode
+waired link openclaw
 waired link openclaw
 waired unlink <agent>
 ```
@@ -283,23 +282,6 @@ waired claude statusline remove
 Manages the footer line showing the current route and, when your own hardware
 answered, the model that did. `enable` installs it already; `--wrap` wraps an
 existing status line rather than replacing it.
-
-### `waired codeui`
-
-A coding agent in your browser, on your real project, answered by your AI.
-Nothing to install.
-
-```sh
-waired codeui open
-waired codeui open --project DIR
-waired codeui open --no-browser     # print the address instead (SSH)
-waired codeui url
-waired codeui status
-waired codeui stop
-```
-
-It runs as you, and only you can use it — other users on the machine and other
-computers on the network are refused.
 
 ---
 

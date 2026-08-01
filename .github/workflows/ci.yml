@@ -140,9 +140,6 @@ jobs:
       # dependency is neither covered by a paths glob nor allowlisted — so a
       # paths-gated gate cannot silently drop coverage. installtest is now
       # always-on (no paths filter), so it deliberately has no guard.
-      - name: codeui-multios paths guard
-        run: bash scripts/ci/codeui-multios-paths-guard.sh
-
       - name: amsi-scan paths guard
         run: bash scripts/ci/amsi-scan-paths-guard.sh
 
@@ -311,7 +308,7 @@ jobs:
   # catch-basin for what genuinely cannot be untagged — real launchctl, SCM,
   # the registry, AF_UNIX. As that work lands, this job should matter less.
   #
-  # No same-repo `if:` guard, unlike installtest.yml / codeui-multios.yml.
+  # No same-repo `if:` guard, unlike installtest.yml / routing-sentinel.yml.
   # Those hold an OIDC identity or execute a downloaded third-party binary.
   # This runs the same `go test` the already-required, guard-free `unit` job
   # runs on fork PRs today; guarding it would mean a check that is skipped

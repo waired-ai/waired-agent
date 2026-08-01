@@ -8,6 +8,10 @@ import (
 )
 
 // writeOpenClawPlugin writes an index.mjs into the OpenClaw plugin dir.
+// expectedBaseURL is the no-token data-plane URL a fresh plugin should
+// point at (agentconfig DataPlaneGatewayPort + /v1).
+const expectedBaseURL = "http://127.0.0.1:9479/v1"
+
 func writeOpenClawPlugin(t *testing.T, home, body string) string {
 	t.Helper()
 	dir := filepath.Join(home, ".openclaw", "plugins", "waired")

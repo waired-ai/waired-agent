@@ -151,7 +151,7 @@ func (s *Server) InflightCount() int {
 //
 // The owner's local traffic never touches the overlay listener: it
 // arrives on the loopback gateway, the Claude intercept or the
-// OpenCode surface, none of which run peerAuthChain / capacityGate. So
+// data-plane surface, none of which run peerAuthChain / capacityGate. So
 // without this hook Config.Capacity described "concurrent requests
 // that arrived over the overlay" rather than "concurrent requests on
 // this machine", the engine could be oversubscribed by local + peer

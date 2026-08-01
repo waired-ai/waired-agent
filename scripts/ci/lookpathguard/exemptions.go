@@ -37,13 +37,10 @@ var declared = []lookpath{
 	// back gracefully when it is absent.
 	{"cmd/waired-agent/binary_path.go", "waired", ownCLI},
 	{"internal/gui/tray/actions_darwin.go", "waired", ownCLI},
-	{"internal/gui/tray/actions_linux.go", "waired", ownCLI},
 	{"internal/gui/tray/actions_windows.go", "waired.exe", ownCLI},
 
 	// Privilege-escalation helpers. Probing them is how the fallback
 	// chain picks one.
-	{"cmd/waired/codeui.go", "runuser", privHelper},
-	{"cmd/waired/codeui.go", "sudo", privHelper},
 	{"cmd/waired/init_integration.go", "runuser", privHelper},
 	{"cmd/waired/init_integration.go", "sudo", privHelper},
 	{"internal/platform/browser/browser_linux.go", "runuser", privHelper},
@@ -104,7 +101,7 @@ var declared = []lookpath{
 	{"internal/download/hf.go", "huggingface-cli", userTool},
 	{"internal/runtime/uv.go", "uv", userTool},
 	{"internal/integration/detect.go", "binary",
-		userTool + " (the coding-agent CLIs: claude, opencode, code, …)"},
+		userTool + " (the coding-agent CLIs: claude, openclaw, code, …)"},
 
 	// The one engine-adjacent site left. ollama.go is step 3 of a
 	// documented chain — $WAIRED_OLLAMA_BINARY, then PATH, then the

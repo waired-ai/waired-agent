@@ -44,7 +44,7 @@ const (
 // mockServer holds the current fake state and serves the subset of
 // /waired/v1/* endpoints the tray polls. Other endpoints return 404
 // so the tray's Err*Unsupported fall-throughs fire and the relevant
-// menu groups (Claude / OpenCode / inference catalog) hide.
+// menu groups (Claude / OpenClaw / inference catalog) hide.
 type mockServer struct {
 	mu sync.RWMutex
 	s  state

@@ -24,7 +24,7 @@ import (
 //   - Level is collapsed to a single style — `display notification`
 //     does not expose urgency/icon variants for unsigned scripts.
 //   - The system may rate-limit when many notifications fire in a
-//     short window. The tray's call sites (state transitions, opencode
+//     short window. The tray's call sites (state transitions, openclaw
 //     reconfigure) fire at human cadence so we never hit the limit.
 type darwinNotifier struct{}
 

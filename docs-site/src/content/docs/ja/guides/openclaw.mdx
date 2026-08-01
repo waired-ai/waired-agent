@@ -5,7 +5,7 @@ meta:
   audience: OpenClaw ユーザー
   needs: OpenClaw がインストール済みで、Waired がサインイン済みであること
   time: 2 分
-sourceHash: 10e4cbcda02a2a5f
+sourceHash: 3b4fa595ceea5c0d
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -39,7 +39,7 @@ OpenClaw を直接つなぎます。
 
 <Aside type="tip" title="コーディングツールを複数入れている場合">
 	名前を付けずに `waired link` を実行すると、見つかったすべて
-	（Claude Code・OpenCode・OpenClaw）を設定します。
+	（Claude Code・OpenClaw）を設定します。
 </Aside>
 
 ## 何が変わったか
@@ -71,6 +71,5 @@ Waired アプリからも確認・再適用できます（**Waired アイコン*
 
 <CardGrid>
 	<LinkCard title="Claude Code から使う" href="/ja/guides/claude-code/" description="セッション中の経路切り替えつき。" />
-	<LinkCard title="OpenCode から使う" href="/ja/guides/opencode/" description="Waired 同梱のブラウザ版も。" />
 	<LinkCard title="チャットアプリから使う" href="/ja/guides/chat-clients/" description="OpenAI 互換クライアント全般。" />
 </CardGrid>

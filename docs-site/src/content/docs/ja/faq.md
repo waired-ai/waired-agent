@@ -5,7 +5,7 @@ meta:
   audience: 導入を検討中の人、セットアップ直後の人
   needs: 何も要りません
   time: 斜め読み
-sourceHash: 68a34a9b959a5891
+sourceHash: ef71e4594ab090bd
 ---
 
 <!-- 機能別ではなく「その疑問が浮かぶ順」で分類。見出しは読者が検索窓に打つ形の
@@ -33,7 +33,7 @@ sourceHash: 68a34a9b959a5891
 
 ### どのツールで使えますか？
 
-Claude Code と OpenCode はそのまま使えます。OpenAI 互換・Anthropic 互換の
+Claude Code と OpenClaw はそのまま使えます。OpenAI 互換・Anthropic 互換の
 クライアントなら接続できます → [チャットアプリから使う](/ja/guides/chat-clients/)
 
 ### オープンソースですか？

@@ -14,20 +14,16 @@ import (
 // DefaultSpawner runs commands via os/exec in a separate process group
 // so signals sent to waired-agent's group don't leak into ollama
 // (and vice versa).
-type DefaultSpawner struct {
-	// Dir, when non-empty, is the child's working directory. Empty
-	// inherits the parent's cwd (the historical behaviour, kept for
-	// the engine adapters). The bundled OpenCode coding-agent sets it
-	// so `opencode serve` scopes its project to a dedicated scratch
-	// workspace instead of waired-agent's cwd (which can be `/`).
-	Dir string
-}
+//
+// The child inherits waired-agent's cwd. The working-directory override
+// went with the bundled coding agent (waired-agent#333); every engine
+// adapter always relied on the inherited cwd.
+type DefaultSpawner struct{}
 
 // Spawn implements Spawner.
 func (s DefaultSpawner) Spawn(ctx context.Context, binary string, args, env []string, logW io.Writer) (RunningProcess, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Env = env
-	cmd.Dir = s.Dir
 	if logW != nil {
 		cmd.Stdout = logW
 		cmd.Stderr = logW

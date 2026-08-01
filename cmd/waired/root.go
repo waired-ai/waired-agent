@@ -57,7 +57,7 @@ func commandGroups() []*cobra.Group {
 // groupFor maps a command name to its top-level group ID.
 var groupFor = map[string]string{
 	"init": "setup", "status": "setup", "doctor": "setup", "auth": "setup", "logout": "setup",
-	"link": "agents", "unlink": "agents", "claude": "agents", "codeui": "agents",
+	"link": "agents", "unlink": "agents", "claude": "agents",
 	"models": "inference", "runtimes": "inference", "infer": "inference",
 	"inference": "inference", "public": "inference", "worker": "inference", "peers": "inference", "ping": "inference",
 	"pause": "routing", "resume": "routing",
@@ -108,7 +108,6 @@ func newRootCmd() *cobra.Command {
 		newLinkCmd(),
 		newUnlinkCmd(),
 		newClaudeCmd(),
-		newCodeuiCmd(),
 		newRetiredProxyCmd(),
 		newModelsCmd(),
 		newRuntimesCmd(),
