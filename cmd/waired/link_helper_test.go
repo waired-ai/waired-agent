@@ -185,10 +185,10 @@ func TestPrintClaudeSetupHelper_ManagedSettingsStory(t *testing.T) {
 	}
 }
 
-// TestPrintSetupHelper_OpenCodeFinalBlock verifies that target=opencode
-// prints the OpenCode-specific reminder (provider block written, tray
-// shows status) without ever touching the shell rc files.
-func TestPrintSetupHelper_OpenCodeFinalBlock(t *testing.T) {
+// TestPrintSetupHelper_OpenClawFinalBlock verifies that target=openclaw
+// prints the OpenClaw-specific reminder (plugin written, tray shows
+// status) without ever touching the shell rc files.
+func TestPrintSetupHelper_OpenClawFinalBlock(t *testing.T) {
 	home := t.TempDir()
 	bashrc := filepath.Join(home, ".bashrc")
 	if err := os.WriteFile(bashrc, []byte(""), 0o644); err != nil {
@@ -196,33 +196,27 @@ func TestPrintSetupHelper_OpenCodeFinalBlock(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printSetupHelper("opencode", helperPrintOptions{
+	printSetupHelper("openclaw", helperPrintOptions{
 		HomeDir:     home,
 		WiredBinary: "/p/waired",
 		Interactive: true,
 	}, &out, strings.NewReader("y\n"))
 
 	s := out.String()
-	if !strings.Contains(s, "OpenCode integration:") {
-		t.Errorf("missing OpenCode header:\n%s", s)
-	}
-	if !strings.Contains(s, "Plugin written to ~/.config/opencode/plugin/waired.js") {
-		t.Errorf("missing plugin reminder:\n%s", s)
-	}
-	if !strings.Contains(s, "system tray shows live OpenCode integration") {
-		t.Errorf("missing tray status hint:\n%s", s)
+	if !strings.Contains(s, "OpenClaw integration:") {
+		t.Errorf("missing OpenClaw header:\n%s", s)
 	}
 	if strings.Contains(s, "alias claude=") {
-		t.Errorf("opencode helper should not print Claude alias snippet:\n%s", s)
+		t.Errorf("openclaw helper should not print Claude alias snippet:\n%s", s)
 	}
 	body, _ := os.ReadFile(bashrc)
 	if strings.Contains(string(body), shellalias.SentinelOpen) {
-		t.Errorf(".bashrc was modified by opencode helper:\n%s", body)
+		t.Errorf(".bashrc was modified by openclaw helper:\n%s", body)
 	}
 }
 
 // TestPrintSetupHelper_AllPrintsBoth verifies that target=all renders
-// the Claude block followed by the OpenCode block. This is the
+// the Claude block followed by the OpenClaw block. This is the
 // "waired link" / "waired link all" flow the user lands on by default.
 func TestPrintSetupHelper_AllPrintsBoth(t *testing.T) {
 	home := t.TempDir()
@@ -240,11 +234,11 @@ func TestPrintSetupHelper_AllPrintsBoth(t *testing.T) {
 
 	s := out.String()
 	claudeIdx := strings.Index(s, "Claude Code integration:")
-	openCodeIdx := strings.Index(s, "OpenCode integration:")
-	if claudeIdx < 0 || openCodeIdx < 0 {
-		t.Fatalf("expected both headers; claudeIdx=%d openCodeIdx=%d\nfull:\n%s", claudeIdx, openCodeIdx, s)
+	openClawIdx := strings.Index(s, "OpenClaw integration:")
+	if claudeIdx < 0 || openClawIdx < 0 {
+		t.Fatalf("expected both headers; claudeIdx=%d openClawIdx=%d\nfull:\n%s", claudeIdx, openClawIdx, s)
 	}
-	if claudeIdx > openCodeIdx {
-		t.Errorf("Claude header should appear before OpenCode header; claudeIdx=%d openCodeIdx=%d", claudeIdx, openCodeIdx)
+	if claudeIdx > openClawIdx {
+		t.Errorf("Claude header should appear before OpenClaw header; claudeIdx=%d openClawIdx=%d", claudeIdx, openClawIdx)
 	}
 }

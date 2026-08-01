@@ -46,7 +46,7 @@ func TestValidateURL(t *testing.T) {
 		wantErr bool
 	}{
 		{"https", "https://cp.example/login/abc", false},
-		{"loopback http (codeui)", "http://127.0.0.1:9480/?token=x", false},
+		{"loopback http (data plane)", "http://127.0.0.1:9479/?token=x", false},
 		{"empty", "", true},
 		{"leading dash would be parsed as a flag", "--version", true},
 	}

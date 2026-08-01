@@ -14,7 +14,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
-	"github.com/waired-ai/waired-agent/internal/integration/opencode"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
@@ -27,7 +26,7 @@ import (
 // the coding agent is installed. Detection results are shown as
 // informational context only. Non-interactive runs enable the
 // integration too (--skip-integration is the opt-out). The integration
-// writes only per-user config (Claude Code skills + OpenCode plugin); it
+// writes only per-user config (Claude Code skills + OpenClaw plugin); it
 // never edits shell rc files. Claude request routing is the Claude Code
 // managed settings (ANTHROPIC_BASE_URL), set up separately as root at init time.
 
@@ -43,7 +42,7 @@ type agentDetection struct {
 // against homeDir. Informational only — never gates the consent.
 func detectIntegrationAgents(ctx context.Context, homeDir string) []agentDetection {
 	var out []agentDetection
-	for _, a := range []integration.Adapter{claudecode.New(), opencode.New(), openclaw.New()} {
+	for _, a := range []integration.Adapter{claudecode.New(), openclaw.New()} {
 		d := agentDetection{ID: a.ID()}
 		if det, err := a.Detect(ctx, integration.ApplyOptions{HomeDir: homeDir}); err == nil {
 			d.Found = det.Found
@@ -94,18 +93,18 @@ func printAgentDetections(out io.Writer, dets []agentDetection) {
 // promptIntegrationConsent prints the per-agent detection status and
 // asks the single integration consent question (default Yes). The Yes
 // covers the per-user integration the link path writes — the Claude Code
-// skills, the OpenCode plugin, and the OpenClaw plugin — plus, when
-// ClaudeManaged is set, consent to write the system-wide Claude Code managed
+// skills and the OpenClaw plugin — plus, when ClaudeManaged is set,
+// consent to write the system-wide Claude Code managed
 // settings (ANTHROPIC_BASE_URL -> local gateway, no credential; #488).
 // Non-interactive resolves to Yes without reading stdin.
 //
 // Detection is informational only: a Yes force-applies every adapter even
 // when the agent is not installed yet (Detect()=false), so the integration
-// activates the moment the user later installs OpenCode / OpenClaw.
+// activates the moment the user later installs OpenClaw.
 func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConsentInput) bool {
-	writePromptf(out, "%s %s%s%s%s%s%s\n", inp.StepLabel,
+	writePromptf(out, "%s %s%s%s%s%s\n", inp.StepLabel,
 		bold("Coding-agent integration"), dim("  —  "),
-		product("Claude Code"), dim(" · "), product("OpenCode"), dim(" · ")+product("OpenClaw"))
+		product("Claude Code"), dim(" · "), product("OpenClaw"))
 
 	writePrompt(out)
 	writePrompt(out, "  "+dim("Detected on this machine:"))
@@ -120,7 +119,7 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 	b := emo("•", "-")
 	// item renders "<product> <kind>" then pads by DISPLAY width (ANSI-agnostic)
 	// so the paths line up under color too. The single space between name and
-	// kind keeps "Claude Code skills" / "OpenCode plugin" contiguous for the
+	// kind keeps "Claude Code skills" / "OpenClaw plugin" contiguous for the
 	// substring assertions; product() is plain text off-TTY.
 	item := func(name, kind, path string) {
 		label := product(name) + " " + kind
@@ -128,7 +127,6 @@ func promptIntegrationConsent(sc lineReader, out io.Writer, inp integrationConse
 		writePromptf(out, "    %s %s%s%s\n", b, label, strings.Repeat(" ", pad), dim(path))
 	}
 	item("Claude Code", "skills", "~/.claude/skills/")
-	item("OpenCode", "plugin", "~/.config/opencode/plugin/waired.js")
 	item("OpenClaw", "plugin", "~/.openclaw/plugins/waired/")
 
 	if inp.ClaudeManaged && inp.SkipClaudeRoute {
@@ -216,7 +214,7 @@ func sudoUserHome(username string) (string, error) {
 
 // linkAllChildArgs builds the argv for the per-user `waired link all`
 // child the sudo hop spawns. It applies only the non-routing per-user
-// integration (Claude skills + OpenCode plugin); Claude
+// integration (Claude skills + OpenClaw plugin); Claude
 // request routing is the Claude Code managed settings, set up separately as
 // root at init time.
 //

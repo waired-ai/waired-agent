@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: a5787e02b93a3169
+sourceHash: 3fc9cd71c715872e
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -30,7 +30,6 @@ sourceHash: a5787e02b93a3169
 | [`waired public`](#waired-public) | ほかの Waired ユーザーと空きマシンを貸し借りする |
 | [`waired link`](#waired-link--unlink) / [`unlink`](#waired-link--unlink) | コーディングツールをつなぐ |
 | [`waired claude`](#waired-claude) | Claude Code の実行先と、その場での切り替え |
-| [`waired codeui`](#waired-codeui) | ブラウザで動くコーディングエージェント |
 | [`waired pause`](#waired-pause--resume) / [`resume`](#waired-pause--resume) | ルーティングの停止と再開 |
 | [`waired update`](#waired-update) | 新しい Waired を入れる |
 | [`waired config`](#waired-config) | 詳細ログの ON / OFF |
@@ -66,7 +65,7 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 | `--inference-enabled=true\|false` | 「このパソコンで AI を動かすか」に、聞かれずに答えます。 |
 | `--share-with-mesh=true\|false` | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `--skip-claude-route` | セットアップは行いつつ、Claude Code は Anthropic API のままにします。スキルやプラグインは入ります。あとから `waired claude enable` で切り替えられます。 |
-| `--skip-integration` | コーディングツールの設定を丸ごと省きます（Claude Code も OpenCode も変更しません）。 |
+| `--skip-integration` | コーディングツールの設定を丸ごと省きます（Claude Code も OpenClaw も変更しません）。 |
 | `--device-name <name>` | ホスト名ではなく、指定した名前でこのパソコンを登録します。 |
 | `--control <URL>` | 既定ではなく指定したコントロールプレーンでサインインします。→ [インストールの詳細オプション](/ja/reference/install-options/) |
 | `--auth-key <key>` | ブラウザでのサインインの代わりに認証キーで参加します（サーバーやコンテナ向け）。`file:/path/to/key` も指定でき、フラグを省略すると `$WAIRED_AUTH_KEY` を読みます。キーは[管理コンソール](/ja/guides/web-console/)の **設定 → 認証キー** で作成します。→ [サインインとセットアップ](/ja/getting-started/first-run/#servers-and-containers-auth-keys) |
@@ -234,7 +233,7 @@ waired public use --main on|off --sub on|off
 ```sh
 waired link                  # 見つかったすべてのコーディングツールを設定
 waired link claude-code
-waired link opencode
+waired link openclaw
 waired link openclaw
 waired unlink <エージェント>
 ```
@@ -277,23 +276,6 @@ waired claude statusline remove
 現在の経路と、自分のハードウェアが応答した場合はそのモデル名を示すフッター行を管理します。
 `enable` が自動で入れるので通常は不要です。`--wrap` は既存のステータス行を
 置き換えずに包みます。
-
-### `waired codeui`
-
-コーディングエージェントをブラウザで、実際のプロジェクトを対象に、自分の AI で動かします。
-インストールは不要です。
-
-```sh
-waired codeui open
-waired codeui open --project DIR
-waired codeui open --no-browser     # ブラウザを開かずアドレスを表示（SSH）
-waired codeui url
-waired codeui status
-waired codeui stop
-```
-
-実行ユーザーは自分自身で、自分だけが使えます。
-同じマシンのほかのユーザーも、ネットワーク上のほかのパソコンも拒否されます。
 
 ---
 

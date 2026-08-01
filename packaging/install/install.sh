@@ -325,7 +325,7 @@ print_banner() {
         _banner_row 127 233 255 "  ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚══════╝╚═════╝ "
         _banner_row  72 105 140 "   ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄"
         _banner_row 150 160 175 "   Local-first AI gateway  ·  \$0 per token"
-        _banner_row 112 120 134 "   Claude Code · OpenCode · OpenClaw — your own machine"
+        _banner_row 112 120 134 "   Claude Code · OpenClaw — your own machine"
         printf '\n'
     else
         _banner_plain

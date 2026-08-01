@@ -43,21 +43,6 @@
       "ignoreUnstable": true
     },
     {
-      "description": "Bundled OpenCode coding-agent (monorepo #429) — own PR, inference-labelled, stable-only. The per-OS/arch sha256 set MUST be recomputed on every bump (no upstream checksum file); scripts/dev/update-opencode-sha.sh does it via postUpgradeTasks.",
-      "matchManagers": ["custom.regex"],
-      "matchDepNames": ["sst/opencode"],
-      "labels": ["dependencies", "inference", "actionable"],
-      "ignoreUnstable": true,
-      "postUpgradeTasks": {
-        "commands": ["bash scripts/dev/update-opencode-sha.sh {{{newVersion}}}"],
-        "fileFilters": ["internal/runtime/codeui/install.go"],
-        "executionMode": "update"
-      },
-      "prBodyNotes": [
-        ":warning: **opencode version bump**: the self-pinned `sha256` set (6 platforms) in `internal/runtime/codeui/install.go` (`artifacts` map) must match the new tag. `scripts/dev/update-opencode-sha.sh` recomputes all 6 via postUpgradeTasks when self-hosted Renovate has `allowedPostUpgradeCommands` enabled; otherwise run it by hand on this branch before merge."
-      ]
-    },
-    {
       "description": "uv bump also needs UVPinnedSHA256Linux64 recomputed; postUpgradeTasks does it when self-hosted Renovate is allowed to run commands, else this note + label tell the reviewer",
       "matchManagers": ["custom.regex"],
       "matchDepNames": ["astral-sh/uv"],
@@ -81,8 +66,7 @@
         "/^internal/runtime/uv\\.go$/",
         "/^internal/runtime/vllm_install\\.go$/",
         "/^internal/runtime/vllm_stub_windows\\.go$/",
-        "/^internal/runtime/vllm_stub_darwin\\.go$/",
-        "/^internal/runtime/codeui/install\\.go$/"
+        "/^internal/runtime/vllm_stub_darwin\\.go$/"
       ],
       "matchStrings": [
         "//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*const\\s+\\w+\\s*=\\s*\"(?<currentValue>[^\"]+)\""

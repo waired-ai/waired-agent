@@ -105,14 +105,31 @@ type InferenceConfig struct {
 	// compat API server (spec waired_product_spec.md §3.3, §12.1 ⇒ 9473).
 	LocalGatewayPort int `json:"local_gateway_port"`
 
-	// OpenCodeGatewayPort is the loopback port for the no-token OpenCode
-	// data-plane gateway. The waired-authored OpenCode plugin points its
-	// provider baseURL here. Unlike LocalGatewayPort it does NOT require a
-	// bearer token: the system-service deployment runs the agent as a
-	// dedicated user whose 0600 gateway token the desktop user's OpenCode
-	// cannot read, so loopback is the trust boundary (same posture as the
-	// Claude proxy's no-token overlay handler). 0 disables the listener.
-	OpenCodeGatewayPort int `json:"opencode_gateway_port"`
+	// DataPlaneGatewayPort is the loopback port for the no-token
+	// OpenAI-compatible data-plane gateway (9479). The waired-authored
+	// coding-agent plugins point their provider baseURL here. Unlike
+	// LocalGatewayPort it does NOT require a bearer token: the
+	// system-service deployment runs the agent as a dedicated user whose
+	// 0600 gateway token the desktop user's tools cannot read, so
+	// loopback is the trust boundary (same posture as the Claude proxy's
+	// no-token overlay handler). 0 disables the listener.
+	//
+	// Named for what it IS since waired-agent#333. It was
+	// OpenCodeGatewayPort, but the port was never OpenCode's alone —
+	// OpenClaw's plugin has always pointed at the same listener, so
+	// removing the OpenCode integration removed a consumer, not the
+	// surface. LegacyOpenCodeGatewayPort below keeps an existing
+	// config.json readable.
+	DataPlaneGatewayPort int `json:"data_plane_gateway_port"`
+
+	// LegacyOpenCodeGatewayPort accepts the pre-waired-agent#333 spelling
+	// of DataPlaneGatewayPort from an existing config.json. Folded in by
+	// Load when the new key is absent, and never written back.
+	//
+	// Retire one release after the rename ships: an operator who pinned a
+	// non-default port would otherwise silently fall back to 9479, and a
+	// silently-moved listener is the failure this field exists to avoid.
+	LegacyOpenCodeGatewayPort int `json:"opencode_gateway_port,omitempty"`
 
 	// ClaudeGatewayPort is the loopback port for the no-token Claude
 	// Anthropic data-plane listener (#488). Claude Code's managed-settings
@@ -138,16 +155,6 @@ type InferenceConfig struct {
 	// user as a hang). 0 disables the deadline for that class.
 	ClaudeTTFBBudgetMainMs int `json:"claude_ttfb_budget_main_ms"`
 	ClaudeTTFBBudgetSubMs  int `json:"claude_ttfb_budget_sub_ms"`
-
-	// CodeUIEnabled gates the bundled OpenCode coding-agent web UI (#429):
-	// a waired-vendored `opencode serve` instance wired to the no-token
-	// data-plane gateway, opened from the tray. Default true. It starts
-	// lazily on first "Open Coding Agent" and is loopback-only.
-	CodeUIEnabled bool `json:"codeui_enabled"`
-
-	// CodeUIPort is the loopback port the bundled coding-agent UI binds.
-	// 0 (the default) resolves to DefaultCodeUIPort via ResolvedCodeUIPort().
-	CodeUIPort int `json:"codeui_port"`
 
 	// OllamaPort is the loopback port of the Ollama engine. Leave at
 	// OllamaPortAuto (0) to resolve by OllamaSource: bundled spawns on
@@ -519,24 +526,6 @@ const (
 	DefaultOllamaBundledPort = 9475  // waired-owned spawn target
 )
 
-// DefaultCodeUIPort is the loopback port for the bundled OpenCode
-// coding-agent web UI (#429): 9480, the next free slot in waired's loopback
-// family (9473 gateway, 9474 overlay, 9475 ollama-bundled, 9476 management,
-// 9477 control plane, 9478 relay, 9479 opencode data-plane gateway). The
-// vendored `opencode serve` binds here; its provider points at 9479. Chosen
-// off the common chat/IDE defaults so it never collides with a user's own
-// `opencode serve` (the same anti-collision rule as bundled Ollama on 9475).
-const DefaultCodeUIPort = 9480
-
-// ResolvedCodeUIPort returns the port the bundled coding-agent UI binds:
-// CodeUIPort when set, else DefaultCodeUIPort.
-func (c InferenceConfig) ResolvedCodeUIPort() int {
-	if c.CodeUIPort > 0 {
-		return c.CodeUIPort
-	}
-	return DefaultCodeUIPort
-}
-
 // ResolvedOllamaPort returns the port the Ollama engine actually uses.
 // See the OllamaPort field comment for the legacy-11434 flip rule.
 func (c InferenceConfig) ResolvedOllamaPort() int {
@@ -563,11 +552,10 @@ func Defaults() Config {
 			AllowAnthropicAPI:        true,
 			AllowOpenAIAPI:           true,
 			LocalGatewayPort:         9473,
-			OpenCodeGatewayPort:      9479,
+			DataPlaneGatewayPort:     9479,
 			ClaudeGatewayPort:        9472,
 			ClaudeTTFBBudgetMainMs:   60000,
 			ClaudeTTFBBudgetSubMs:    20000,
-			CodeUIEnabled:            true,
 			OllamaPort:               OllamaPortAuto,
 			OllamaSource:             OllamaSourceBundled,
 			VLLMPort:                 8000,
@@ -693,7 +681,42 @@ func (c *Config) MergeJSON(path string) error {
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return fmt.Errorf("agentconfig: parse %s: %w", path, err)
 	}
+	if err := foldLegacyKeys(&tmp.Inference, data); err != nil {
+		return fmt.Errorf("agentconfig: parse %s: %w", path, err)
+	}
 	*c = tmp
+	return nil
+}
+
+// legacyKeyProbe reports which of a renamed pair the file actually
+// CARRIES. Presence, not value, is the question: the decode above lands
+// on a copy of the current config, so a field already holding its
+// default is indistinguishable from one the file set to that same
+// number. Pointers make "absent" observable.
+type legacyKeyProbe struct {
+	Inference struct {
+		DataPlaneGatewayPort *int `json:"data_plane_gateway_port"`
+		OpenCodeGatewayPort  *int `json:"opencode_gateway_port"`
+	} `json:"inference"`
+}
+
+// foldLegacyKeys promotes a renamed field's old JSON key onto its new
+// one, for a config.json written before the rename.
+//
+// The new key wins when both are present: an operator who wrote the
+// current spelling meant it, and letting the old one quietly override it
+// is how a rename turns into a silently-ignored setting.
+func foldLegacyKeys(inf *InferenceConfig, data []byte) error {
+	var probe legacyKeyProbe
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return err
+	}
+	if probe.Inference.DataPlaneGatewayPort == nil && probe.Inference.OpenCodeGatewayPort != nil {
+		inf.DataPlaneGatewayPort = *probe.Inference.OpenCodeGatewayPort
+	}
+	// Never echoed back on write — the file keeps whatever it had, but
+	// an in-memory Config only ever carries the current spelling.
+	inf.LegacyOpenCodeGatewayPort = 0
 	return nil
 }
 
@@ -774,12 +797,14 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.LocalGatewayPort = n
-	case "OPENCODE_GATEWAY_PORT":
+	// OPENCODE_GATEWAY_PORT is the pre-waired-agent#333 spelling; retire
+	// it with LegacyOpenCodeGatewayPort one release after the rename.
+	case "DATA_PLANE_GATEWAY_PORT", "OPENCODE_GATEWAY_PORT":
 		n, err := strconv.Atoi(val)
 		if err != nil {
 			return err
 		}
-		c.OpenCodeGatewayPort = n
+		c.DataPlaneGatewayPort = n
 	case "CLAUDE_GATEWAY_PORT":
 		n, err := strconv.Atoi(val)
 		if err != nil {

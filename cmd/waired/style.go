@@ -76,10 +76,10 @@ func green(s string) string  { return sgr(ansiGreen, s) }
 func yellow(s string) string { return sgr(ansiYellow, s) }
 func cyan(s string) string   { return sgr(ansiCyan, s) }
 
-// product highlights a coding-agent product name (Claude Code / OpenCode /
+// product highlights a coding-agent product name (Claude Code /
 // OpenClaw) so it stands out in the dense consent copy: bold + a stable
 // per-product color. Plain when color is off, so "Claude Code skills",
-// "OpenCode plugin", etc. stay contiguous for the substring assertions.
+// "OpenClaw plugin", etc. stay contiguous for the substring assertions.
 func product(name string) string {
 	if !useColor() {
 		return name

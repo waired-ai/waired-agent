@@ -115,7 +115,7 @@ page stops you.
 
 <a id="coding-agent"></a>
 **Coding agent**
-: Claude Code, OpenCode, and similar tools that write and edit code for you.
+: Claude Code, OpenClaw, and similar tools that write and edit code for you.
 
 <a id="routing"></a>
 **Routing**

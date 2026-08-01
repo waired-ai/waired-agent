@@ -36,7 +36,7 @@ func LoginViaElevation(ctx context.Context, controlURL, stateDir string) error {
 		"--state-dir", stateDir,
 		"--control", controlURL,
 		"--skip-deploy",      // tray does not need the LLM-deploy phase
-		"--skip-integration", // tray does not need shell-rc + Claude/OpenCode mutation
+		"--skip-integration", // tray does not need shell-rc + Claude/OpenClaw mutation
 	}
 	cmd := exec.CommandContext(ctx, "pkexec", args...)
 	stdout, err := cmd.StdoutPipe()
@@ -177,21 +177,6 @@ func UpdateViaElevation(ctx context.Context) error {
 		return fmt.Errorf("update: %w", err)
 	}
 	return nil
-}
-
-// wairedCLIPath finds the `waired` CLI binary (distinct from waired-tray) the
-// tray shells out to for `waired codeui …`. PATH first (the installer puts
-// waired in /usr/bin or /usr/local/bin), then the canonical install dirs.
-func wairedCLIPath() (string, error) {
-	if p, err := exec.LookPath("waired"); err == nil {
-		return p, nil
-	}
-	for _, c := range []string{"/usr/bin/waired", "/usr/local/bin/waired"} {
-		if _, err := os.Stat(c); err == nil {
-			return c, nil
-		}
-	}
-	return "", fmt.Errorf("waired CLI not found in PATH, /usr/bin, or /usr/local/bin")
 }
 
 // CopyToClipboard copies text into the clipboard, picking wl-copy on

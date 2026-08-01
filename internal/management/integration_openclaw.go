@@ -66,7 +66,7 @@ func (s *Server) handleOpenClawIntegration(w http.ResponseWriter, r *http.Reques
 }
 
 // handleOpenClawReconfigure runs the configured Reconfigure callback. The
-// HTTP shape mirrors the opencode/pause controls: empty body, 200 +
+// HTTP shape mirrors the pause/resume controls: empty body, 200 +
 // `{"applied": true}` on success, 5xx + JSON error on failure.
 func (s *Server) handleOpenClawReconfigure(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

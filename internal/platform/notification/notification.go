@@ -1,6 +1,6 @@
 // Package notification surfaces short, transient OS-level toast
 // notifications. Used by the tray to confirm state transitions
-// (connected → disconnected, OpenCode reconfigure success/failure)
+// (connected → disconnected, OpenClaw reconfigure success/failure)
 // without modal dialogs.
 //
 // Backends are best-effort: Linux uses `notify-send` (libnotify),

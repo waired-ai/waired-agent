@@ -218,9 +218,10 @@ type inferenceSubsystemDeps struct {
 // (or create) the per-install gateway token at <state>/secrets/gateway-token,
 // which the loopback gateway (LocalGatewayPort) enforces on every
 // Authorization: Bearer header. The integration exports the same token via
-// the user's env.sh for env-driven clients. OpenCode instead points at the
-// separate no-token data-plane listener (OpenCodeGatewayPort) and the Claude
-// proxy uses the no-token overlay handler, so neither presents this token.
+// the user's env.sh for env-driven clients. The plugin-based coding agents
+// instead point at the separate no-token data-plane listener
+// (DataPlaneGatewayPort) and the Claude proxy uses the no-token overlay
+// handler, so neither presents this token.
 func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, stateDir string, cfg agentconfig.InferenceConfig, deps inferenceSubsystemDeps) (*inferenceSubsystem, management.InferenceProvider, error) {
 	isPaused := deps.IsPaused
 	isInferenceDisabled := deps.IsInferenceDisabled
@@ -566,7 +567,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	}
 
 	// Core deps shared by all four gateway surfaces (loopback :9473,
-	// peer overlay :9474, Claude intercept :9472, OpenCode :9480). Each
+	// peer overlay :9474, Claude intercept :9472, data plane :9479). Each
 	// surface sets its policy-bearing fields (Allow*, auth, gates,
 	// selection, class handling) explicitly below so the intentional
 	// per-surface differences stay visible at the construction site —
@@ -607,7 +608,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	overlayDeps := baseGatewayDeps()
 	overlayDeps.Selector = overlaySelector
 	// Public Share usage reporting rides the overlay set alone: the
-	// loopback / intercept / OpenCode surfaces serve this device's own
+	// loopback / intercept / data-plane surfaces serve this device's own
 	// operator, whose usage is nobody's to report (spec §12).
 	overlayDeps.OnUsage = deps.OnPublicUsage
 	overlayDeps.AllowOpenAI = cfg.AllowOpenAIAPI
@@ -714,42 +715,43 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		}
 	}()
 
-	// OpenCode data plane: a no-token loopback gateway on a separate port.
-	// The waired-authored OpenCode plugin points its provider baseURL here.
-	// The bearer-token gate is dropped on purpose: the system-service
-	// deployment runs the agent as User=waired and the desktop user's
-	// OpenCode cannot read the 0600 gateway token, so loopback is the trust
-	// boundary (same posture as the Claude proxy's no-token overlay
-	// handler). loopbackOnly + pause + inference gates still apply. A zero
-	// port, or AllowOpenAIAPI being off, disables the listener; a bind
-	// failure is non-fatal (only the OpenCode integration is affected).
-	if cfg.AllowOpenAIAPI && cfg.OpenCodeGatewayPort > 0 {
-		ocGwLn, lerr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.OpenCodeGatewayPort))
+	// Coding-agent data plane: a no-token loopback gateway on a separate
+	// port. The waired-authored coding-agent plugins (OpenClaw today)
+	// point their provider baseURL here. The bearer-token gate is dropped
+	// on purpose: the system-service deployment runs the agent as
+	// User=waired and the desktop user's tools cannot read the 0600
+	// gateway token, so loopback is the trust boundary (same posture as
+	// the Claude proxy's no-token overlay handler). loopbackOnly + pause +
+	// inference gates still apply. A zero port, or AllowOpenAIAPI being
+	// off, disables the listener; a bind failure is non-fatal (only the
+	// plugin-based integrations are affected).
+	if cfg.AllowOpenAIAPI && cfg.DataPlaneGatewayPort > 0 {
+		dpGwLn, lerr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort))
 		if lerr != nil {
-			logger.Warn("opencode gateway listener disabled (bind failed)",
-				"port", cfg.OpenCodeGatewayPort, "err", lerr)
+			logger.Warn("data-plane gateway listener disabled (bind failed)",
+				"port", cfg.DataPlaneGatewayPort, "err", lerr)
 		} else {
-			ocDeps := baseGatewayDeps()
-			ocDeps.Selector = provider
-			ocDeps.AllowOpenAI = true
+			dpDeps := baseGatewayDeps()
+			dpDeps.Selector = provider
+			dpDeps.AllowOpenAI = true
 			// AllowAnthropic false, AuthToken empty (no token — see
 			// comment above).
-			ocDeps.IsPaused = isPaused
-			ocDeps.IsInferenceDisabled = isInferenceDisabled
-			ocDeps.PeerAdapterFactory = deps.PeerAdapterFactory
+			dpDeps.IsPaused = isPaused
+			dpDeps.IsInferenceDisabled = isInferenceDisabled
+			dpDeps.PeerAdapterFactory = deps.PeerAdapterFactory
 			// LOCAL surface: same admission accounting as :9473 / :9472.
-			ocDeps.LocalAdmission = deps.LocalAdmission
-			ocGw := gateway.NewServer(gateway.ServerConfig{
-				Addr: fmt.Sprintf("127.0.0.1:%d", cfg.OpenCodeGatewayPort),
-			}, ocDeps)
+			dpDeps.LocalAdmission = deps.LocalAdmission
+			dpGw := gateway.NewServer(gateway.ServerConfig{
+				Addr: fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort),
+			}, dpDeps)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := ocGw.Serve(ctx, ocGwLn); err != nil {
-					logger.Error("opencode gateway server stopped", "err", err)
+				if err := dpGw.Serve(ctx, dpGwLn); err != nil {
+					logger.Error("data-plane gateway server stopped", "err", err)
 				}
 			}()
-			logger.Info("opencode gateway listener started", "addr", ocGwLn.Addr().String())
+			logger.Info("data-plane gateway listener started", "addr", dpGwLn.Addr().String())
 		}
 	}
 
@@ -2821,7 +2823,7 @@ func activeFromCatalog(a *catalog.ActiveSelection) *management.ActiveSelection {
 // loadGatewayAuthToken loads (or creates) the per-install Local Gateway
 // token at <stateDir>/secrets/gateway-token, which the loopback gateway
 // (LocalGatewayPort) enforces. `waired link` exports the same value via
-// env.sh for env-driven clients; the OpenCode data-plane listener and the
+// env.sh for env-driven clients; the no-token data-plane listener and the
 // Claude proxy overlay handler are token-less. Both the agent and `waired
 // link` race-safely call LoadOrCreateGatewayToken; whichever runs first
 // creates the file, the other reads it.

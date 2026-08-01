@@ -60,8 +60,8 @@ type Deps struct {
 	// that prefer the loopback bind alone as the trust boundary.
 	// In production wiring (cmd/waired-agent), this is the same
 	// value as <state>/secrets/gateway-token, which the integration
-	// package writes into env.sh / opencode.json so Claude Code
-	// and OpenCode automatically present it.
+	// package writes into env.sh so env-driven clients automatically
+	// present it.
 	AuthToken string
 
 	// IsPaused, if non-nil and returning true, makes every gateway
@@ -108,7 +108,7 @@ type Deps struct {
 	// is its owner's.
 	//
 	// Wired on the LOCAL surfaces (loopback gateway, Claude intercept,
-	// OpenCode) in cmd/waired-agent. The overlay listener leaves it nil
+	// data plane) in cmd/waired-agent. The overlay listener leaves it nil
 	// — its requests are counted by the inference server's capacityGate
 	// before they ever reach these handlers.
 	//

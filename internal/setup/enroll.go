@@ -4,7 +4,7 @@
 //	Enroll       sign-in / device key generation / CP registration.
 //	             Called by the daemon's login controller (cmd/waired-agent),
 //	             which owns enrollment since #175.
-//	Integration  Claude Code / OpenCode / OpenClaw auto-config. Called by
+//	Integration  Claude Code / OpenClaw auto-config. Called by
 //	             `waired link`, `waired doctor`, and the post-login
 //	             integration step of a daemon-driven `waired init`.
 //	DetectOllama / SelectBundledModel

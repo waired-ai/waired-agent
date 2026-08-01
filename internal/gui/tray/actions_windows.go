@@ -120,10 +120,6 @@ func locateWairedExe() (string, error) {
 	return abs, nil
 }
 
-// wairedCLIPath finds the `waired` CLI binary the tray shells out to for
-// `waired codeui …`. Reuses the elevation-helper locator.
-func wairedCLIPath() (string, error) { return locateWairedExe() }
-
 // quoteArgsForShellExec joins args into a single command-line string
 // using Win32's standard "quote when the arg contains space/tab/quote"
 // convention. CreateProcess (which ShellExecute eventually calls)

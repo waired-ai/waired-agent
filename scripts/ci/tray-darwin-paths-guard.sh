@@ -7,7 +7,7 @@
 # its filter would silently skip that gate and let a darwin-only break reach
 # main, which is exactly the gap waired#901 I1 opened this workflow to close.
 #
-# The guard is deliberately narrower than codeui-multios-paths-guard.sh: this
+# The guard is deliberately narrower than routing-sentinel-paths-guard.sh: this
 # job builds the tray PACKAGES themselves, so what matters is that the two
 # directories holding darwin-tagged tray code (plus the module files and the
 # Makefile target it runs) are watched. Transitive deps are shared with the

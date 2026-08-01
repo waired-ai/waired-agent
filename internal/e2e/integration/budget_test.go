@@ -99,7 +99,7 @@ func TestWatchLegStopIsIdempotent(t *testing.T) {
 	stop()
 }
 
-// ciSegfaultBody is the verbatim body the OpenCode/OpenClaw legs received in
+// ciSegfaultBody is the verbatim body the OpenAI-compat legs received in
 // the waired-agent#29 failures (runs 30273349362 / 30278247061 / 30280425468).
 // The gateway forwards the engine's own error through unchanged, so this is
 // the only place the real reason reaches the wire.
@@ -242,7 +242,7 @@ func TestIncludedLeg(t *testing.T) {
 	if !includedLeg("claude", nil) {
 		t.Error("a nil filter must include every leg")
 	}
-	only := map[string]bool{"claude": true, "opencode": true}
+	only := map[string]bool{"claude": true}
 	if !includedLeg("claude", only) {
 		t.Error("claude must be included")
 	}

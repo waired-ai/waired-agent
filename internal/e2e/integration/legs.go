@@ -10,12 +10,11 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
-	"github.com/waired-ai/waired-agent/internal/integration/opencode"
 )
 
 // legs is the ordered leg table. Adding a coding agent = one entry here.
 func legs() []Leg {
-	return []Leg{claudeLeg(), claudeModelMapLeg(), openCodeLeg(), openClawLeg()}
+	return []Leg{claudeLeg(), claudeModelMapLeg(), openClawLeg()}
 }
 
 // claudeLeg drives the Claude managed-settings loopback proxy (:9472). No
@@ -43,31 +42,6 @@ func claudeModelMapLeg() Leg {
 		ExpectKind: "anthropic",
 		Drive: func(ctx context.Context, e Env) (driveResponse, error) {
 			return driveAnthropic(ctx, e.ClaudeURL, "claude-fable-5[1m]")
-		},
-	}
-}
-
-// openCodeLeg writes the real OpenCode provider plugin (proving the config
-// surface that the "Provider not found" / #481 class breaks) into an isolated
-// HOME, then drives the OpenAI-compatible request the plugin targets against
-// the no-token data-plane gateway (:9479).
-func openCodeLeg() Leg {
-	return Leg{
-		Name:       "opencode",
-		ExpectKind: "openai",
-		Configure: func(ctx context.Context, e Env) (func(), error) {
-			home, cleanup, err := writeAgentConfig(ctx, opencode.New(), e)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := os.Stat(opencode.PluginFile(home)); err != nil {
-				cleanup()
-				return nil, fmt.Errorf("opencode plugin not written: %w", err)
-			}
-			return cleanup, nil
-		},
-		Drive: func(ctx context.Context, e Env) (driveResponse, error) {
-			return driveOpenAI(ctx, e.DataPlaneURL, e.TinyAlias)
 		},
 	}
 }

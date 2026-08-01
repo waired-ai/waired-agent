@@ -14,7 +14,7 @@ Add an entry when this host:
 - has no GPU to run vLLM locally
 - can reach a colleague's GPU box at a stable URL
 - wants the waired gateway to transparently route `claude` /
-  `opencode` requests through that GPU's vLLM instead of falling
+  `openclaw` requests through that GPU's vLLM instead of falling
   back to api.anthropic.com
 
 ## Config
