@@ -462,8 +462,11 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	}
 
 	// `ollama pull` is a client of the serving engine — point it at the
-	// resolved port or pulls land on whatever answers 11434.
-	puller := download.NewPuller(binary, download.DefaultRunner{},
+	// resolved port or pulls land on whatever answers 11434. It resolves
+	// the binary through ollamaResolver on every pull rather than freezing
+	// the boot-time path: on a fresh install that path is empty, and the
+	// puller's own fallback cannot see a state-dir install (#304).
+	puller := download.NewResolvingPuller(ollamaResolver, download.DefaultRunner{},
 		fmt.Sprintf("OLLAMA_HOST=127.0.0.1:%d", cfg.ResolvedOllamaPort()))
 
 	// Phase 5: register operator-configured external OpenAI-compat
@@ -494,20 +497,28 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	}
 
 	provider := &agentInferenceProvider{
-		cfg:                 cfg,
-		logger:              logger,
-		agentCtx:            ctx,
-		manifests:           manifests,
-		store:               store,
-		profiler:            profiler,
-		registry:            registry,
-		ollama:              ollama,
-		puller:              puller,
-		stateDir:            stateDir,
-		preferencePath:      deps.PreferencePath,
-		engine:              decision.Engine,
-		dlProgress:          newDownloadProgress(),
-		ollamaUsable:        func() bool { _, e := ollamaResolver(); return e == nil },
+		cfg:            cfg,
+		logger:         logger,
+		agentCtx:       ctx,
+		manifests:      manifests,
+		store:          store,
+		profiler:       profiler,
+		registry:       registry,
+		ollama:         ollama,
+		puller:         puller,
+		stateDir:       stateDir,
+		preferencePath: deps.PreferencePath,
+		engine:         decision.Engine,
+		dlProgress:     newDownloadProgress(),
+		ollamaUsable:   func() bool { _, e := ollamaResolver(); return e == nil },
+		bootPlan: engineBootstrapPlan{
+			backend:      backendPlan,
+			tuned:        ollamaTuned,
+			tune:         ollamaTune,
+			tuneTag:      ollamaTuneTag,
+			tuneManifest: ollamaTuneManifest,
+			tuneVariant:  ollamaTuneVariant,
+		},
 		isInferenceDisabled: isInferenceDisabled,
 		inferenceState:      inferenceState,
 		meshSnapshotFn:      deps.MeshSnapshotFn,
@@ -754,92 +765,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// below because vLLM needs the weights on disk before it can
 		// start, whereas `ollama serve` starts model-agnostic.
 		if provider.servingEngine() == catalog.RuntimeVLLM {
-			provider.bootstrapVLLM(ctx)
+			provider.vllmBootstrapOnce.Do(func() { provider.bootstrapVLLM(ctx) })
 			return
 		}
-		if binary == "" || !cfg.AllowPull {
-			return
-		}
-		// EnsureRunning already waits a full cold-start budget
-		// (StartupReadyTimeout) per attempt; the retry is insurance
-		// against a transient spawn failure or a first start that
-		// exceeds even that budget, so local inference recovers on its
-		// own without an agent restart.
-		const maxAttempts = 3
-		var ensureErr error
-		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			if ensureErr = ollama.EnsureRunning(ctx); ensureErr == nil {
-				break
-			}
-			logger.Warn("ollama EnsureRunning failed",
-				"attempt", attempt, "max", maxAttempts, "err", ensureErr)
-			if attempt == maxAttempts {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Duration(attempt) * 10 * time.Second):
-			}
-		}
-		if ensureErr != nil {
-			logger.Error("ollama did not become ready after retries; local inference unavailable until restart",
-				"attempts", maxAttempts, "err", ensureErr)
-			return
-		}
-		if ollama.Mode() == infruntime.EngineModeAdopted {
-			logger.Info("adopted orphan bundled ollama (exact pin match)",
-				"version", ollama.EngineVersion())
-		}
-		if cfg.PullOnStartup {
-			provider.bootstrapBundledModel(ctx)
-		}
-		// Finish a preferred-model switch interrupted by its own
-		// restart (issue #347): re-pull or activate the chosen model.
-		provider.bootstrapPreferredModel(ctx)
-		// #290: for hosts with a fallback backend (Strix Halo Linux:
-		// ROCm then Vulkan), verify the GPU actually engaged and switch
-		// to the next backend if it didn't, so the host never runs on
-		// CPU silently while a working GPU path exists. Conservative:
-		// an inconclusive probe keeps the preferred backend.
-		if backendPlan.Probes() {
-			resolved := resolveBackendWithProbe(ctx, ollama, backendPlan, ollama.BaseURL(), &http.Client{}, logger)
-			ollama.SetResolvedBackend(resolved)
-		}
-		// #621: verify the exported serve tuning against the running
-		// engine and degrade once on positive evidence (silent f16
-		// fallback / spill). Ordered after the backend probe so the two
-		// never interleave restarts. Reuse mode is read-only — waired
-		// cannot restart a process it doesn't own — so a mismatch only
-		// records a user-visible warning.
-		if ollamaTuned {
-			if borrowedOllama {
-				verdict, detail := verifyOllamaTuning(ctx, &http.Client{}, ollama.BaseURL(), ollamaTune, ollamaTuneTag, hwProfile)
-				mt := infruntime.ModelTuning{
-					ModelID:   ollamaTune.ModelID,
-					VariantID: ollamaTune.VariantID,
-					Verified:  verdict != tuningInconclusive,
-				}
-				// #763: surface the reused engine's real request parallelism
-				// when its runner can be attributed to this model.
-				if verdict != tuningInconclusive {
-					if np, ok := observeRunnerParallel(ollamaTune, proclist.List); ok {
-						mt.ObservedNumParallel = np
-					}
-				}
-				if verdict != tuningInconclusive && (detail != "" || verdict != tuningOK) {
-					mt.Warning = "reused ollama is not tuned by waired (" + detail +
-						"); consider setting OLLAMA_CONTEXT_LENGTH / OLLAMA_KV_CACHE_TYPE on your ollama service"
-					logger.Warn("reused ollama tuning check", "detail", detail)
-				}
-				ollama.SetAppliedTuning(mt)
-			} else {
-				// #642 derived-batch-model creation + #621 post-spawn tuning
-				// verification, shared with the in-process reconcile (#812).
-				provider.finalizeOllamaServeTuning(ctx, ollamaTune,
-					ollamaTuneManifest, ollamaTuneVariant, ollamaTuneTag)
-			}
-		}
+		// The whole ollama start + bootstrap sequence lives on the
+		// provider so it can run again when an engine is installed after
+		// boot (#304). It re-checks for the binary itself — the boot-time
+		// `binary` snapshot is deliberately not consulted.
+		provider.runEngineBootstrap(ctx, "boot")
 	}()
 
 	// Step 12: pre-cache the better candidate (if any) in the
@@ -1107,6 +1040,33 @@ type agentInferenceProvider struct {
 	// switches (#812) — so overlapping requests never stack two
 	// Stop/EnsureRunning cycles on the one subprocess.
 	engineReconcileInFlight atomic.Bool
+	// engineOpMu serialises the two owners of an engine stop/start cycle:
+	// reconcileEngineServe (serve-env changes) and startEngineAndBootstrap
+	// (#304), whose backend probe and tuning verify both bounce the engine.
+	// Before #304 the latter ran only in the first seconds of process life,
+	// so the two could not realistically overlap; now a late engine install
+	// can start it at any moment, including mid-swap. Not folded into
+	// engineReconcileInFlight: that flag is a coalescer (drop if busy), and
+	// dropping an adopt would silently lose the fix.
+	engineOpMu sync.Mutex
+	// engineStartInFlight coalesces the goroutine that starts the engine and
+	// runs the boot bootstrap (#304), the way engineReconcileInFlight
+	// coalesces the serve-env reconcile.
+	engineStartInFlight atomic.Bool
+	// engineBootstrapOnce latches once the post-start bootstrap (bundled /
+	// preferred model, backend probe, tuning verify) has run. The engine
+	// START stays re-entrant — that is what adopts a late install — but the
+	// tail must not repeat: PullModel has no in-flight dedup yet (#305), so
+	// a second run on a still-downloading model dispatches a duplicate
+	// multi-GB pull. Once per process is exactly the pre-#304 behaviour.
+	engineBootstrapOnce atomic.Bool
+	// vllmBootstrapOnce guards bootstrapVLLM, which is not idempotent: each
+	// call registers a fresh adapter over the previous one and spawns a
+	// second subprocess on the same port.
+	vllmBootstrapOnce sync.Once
+	// bootPlan holds the boot-computed engine-start inputs the provider
+	// cannot re-derive. See engineBootstrapPlan.
+	bootPlan engineBootstrapPlan
 	// swapPending signals reconcileEngineServe that an in-process model
 	// switch is waiting: it forces a bounce (Option 2 — always stop-then-
 	// start on a switch) and resets KV to the q8_0 default for the new
@@ -1324,6 +1284,8 @@ func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
 // tuning without forcing a spawn. If the engine fails to come back after a
 // switch bounce (wedged), it self-heals via the supervised restart fallback —
 // the only restart #812 keeps.
+// Its stop/start span shares engineOpMu with startEngineAndBootstrap (#304),
+// the other owner of an engine restart.
 func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 	defer p.engineReconcileInFlight.Store(false)
 	if p.ollama == nil {
@@ -1396,37 +1358,48 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 			"model", tune.ModelID, "variant", tune.VariantID, "switch", swap,
 			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
 			"num_parallel", tune.NumParallel, "warning", tune.Warning)
-		if err := p.ollama.Stop(ctx); err != nil && !recover {
-			p.logger.Warn("stop for engine reconcile failed; keeping current engine", "err", err)
-			return
-		} else if err != nil {
-			// On the recovery path a failed Stop is expected — the child is
-			// usually already gone. Keep going: EnsureRunning reaps it.
-			p.logger.Debug("stop during engine recovery reported an error (child likely already exited)", "err", err)
-		}
-		if err := p.ollama.EnsureRunning(ctx); err != nil {
-			p.logger.Warn("restart for engine reconcile failed; engine down until retry", "err", err)
-			if swap && p.restartOnWedge != nil {
-				// Wedged after an in-process model switch: fall back to the
-				// supervised restart (preferred-model.json is saved, so the
-				// reboot serves the new model). The only restart #812 keeps.
-				p.logger.Warn("engine wedged after in-process model switch; falling back to supervised restart")
-				p.restartOnWedge()
+		// The bounce runs under engineOpMu so it cannot interleave with
+		// startEngineAndBootstrap's own restarts (#304). Taken inside the
+		// loop, not around it, so a long engine adopt does not pin this
+		// loop's re-read of desiredParallel / swapPending below.
+		if stop := func() bool {
+			p.engineOpMu.Lock()
+			defer p.engineOpMu.Unlock()
+			if err := p.ollama.Stop(ctx); err != nil && !recover {
+				p.logger.Warn("stop for engine reconcile failed; keeping current engine", "err", err)
+				return true
+			} else if err != nil {
+				// On the recovery path a failed Stop is expected — the child is
+				// usually already gone. Keep going: EnsureRunning reaps it.
+				p.logger.Debug("stop during engine recovery reported an error (child likely already exited)", "err", err)
 			}
+			if err := p.ollama.EnsureRunning(ctx); err != nil {
+				p.logger.Warn("restart for engine reconcile failed; engine down until retry", "err", err)
+				if swap && p.restartOnWedge != nil {
+					// Wedged after an in-process model switch: fall back to the
+					// supervised restart (preferred-model.json is saved, so the
+					// reboot serves the new model). The only restart #812 keeps.
+					p.logger.Warn("engine wedged after in-process model switch; falling back to supervised restart")
+					p.restartOnWedge()
+				}
+				return true
+			}
+			// Re-establish the post-spawn GPU-fit safety net for the (possibly new)
+			// model: create the #642 derived batch model if needed and verify the
+			// exported tuning, degrading KV once on spill evidence — the same
+			// finalize step a boot spawn runs.
+			tag := ""
+			if ms, found := st.Models[tm.ModelID]; found {
+				tag = ms.OllamaTag
+			}
+			if tag == "" && tv.Source.Type == catalog.SourceOllama {
+				tag = tv.Source.Tag
+			}
+			p.finalizeOllamaServeTuning(ctx, tune, tm, tv, tag)
+			return false
+		}(); stop {
 			return
 		}
-		// Re-establish the post-spawn GPU-fit safety net for the (possibly new)
-		// model: create the #642 derived batch model if needed and verify the
-		// exported tuning, degrading KV once on spill evidence — the same
-		// finalize step a boot spawn runs.
-		tag := ""
-		if ms, found := st.Models[tm.ModelID]; found {
-			tag = ms.OllamaTag
-		}
-		if tag == "" && tv.Source.Type == catalog.SourceOllama {
-			tag = tv.Source.Tag
-		}
-		p.finalizeOllamaServeTuning(ctx, tune, tm, tv, tag)
 		if int(p.desiredParallel.Load()) == want && !p.swapPending.Load() {
 			return // no newer target/switch arrived during the bounce
 		}
@@ -2030,6 +2003,20 @@ func (p *agentInferenceProvider) runPullJob(parent context.Context, modelID, var
 	// Forget live progress once the pull terminates (success or failure)
 	// so a finished/failed model never lingers as a stale "downloading".
 	defer p.dlProgress.forget(modelID)
+	// #304: `ollama pull` is a CLIENT of the serving engine. Setup
+	// admission keys off a stat of the binary, which flips true seconds
+	// before `ollama serve` is listening; the pull then dies on
+	// connection-refused, the model is recorded failed, and admission is
+	// once-per-desired-value so nothing retries. EnsureRunning is
+	// single-flight and returns immediately when already ready, so this
+	// JOINS whatever start is in flight rather than adding one. A parked
+	// or given-up engine returns its sentinel WITHOUT spawning: log it
+	// and let the pull report the real error, exactly as before.
+	if p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama {
+		if err := p.ollama.EnsureRunning(ctx); err != nil {
+			p.logger.Warn("engine not ready before pull", "model", modelID, "tag", tag, "err", err)
+		}
+	}
 	err := p.puller.Pull(ctx, tag, func(pr download.Progress) {
 		p.dlProgress.observe(modelID, pr)
 		if pr.State == download.StateVerifying && !refresh {
