@@ -179,6 +179,18 @@ jobs:
         # handler goes through the seam, and every seam has a TestMain stub.
         run: bash scripts/ci/tray-dialog-seam-guard.sh
 
+      - name: tray row mutations go through the guarded diff
+        # On fyne.io/systray's Windows backend, SetTitle/SetTooltip/Enable/
+        # Disable on a HIDDEN item re-insert it into the menu — mutating a
+        # hidden row is un-hiding it. That produced the blank rows and the
+        # empty "Models" / "Claude Code" parents in the daemon-down menu
+        # (#317), and no Linux test leg can see it. rows.go suppresses those
+        # mutations; this keeps the next handler from going around it.
+        run: bash scripts/ci/tray-row-mutation-guard.sh
+
+      - name: tray row mutation guard self-test
+        run: bash scripts/ci/tray-row-mutation-guard-test.sh
+
       - name: installtest failure strings still exist in the product
         # The three installtest harnesses fail a leg when `waired init`'s
         # transcript reports an engine-install failure (#215). That assert is

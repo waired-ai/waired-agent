@@ -274,6 +274,17 @@ type tray struct {
 	mu   sync.Mutex
 	last MenuModel
 
+	// Row-diff state (applyMu-protected). applyRows runs on the poll
+	// goroutine and on every click handler that calls pollOnce, so the pass
+	// is serialised: rowStates is a map, and concurrent writes panic.
+	// rowStates records what the last pass left on each pre-allocated item —
+	// the guarded setTitle / setTooltip / setEnabled consult it so a hidden
+	// row is never mutated (see rows.go). rowForce is set only by
+	// paintCreationBaseline.
+	applyMu   sync.Mutex
+	rowStates map[menuRow]rowState
+	rowForce  bool
+
 	// Model-switch grace state (mu-protected, waired#808). lastOnline is
 	// the most recent model rendered while the daemon was reachable;
 	// switchingUntil, when in the future, marks the window during which an
@@ -556,6 +567,13 @@ func (t *tray) onReady(ctx context.Context) func() {
 
 		systray.AddSeparator()
 		t.miQuit = systray.AddMenuItem("Quit", "Exit the Waired tray")
+
+		// Hide everything the zero MenuModel leaves out. This — not the
+		// per-item Hide() calls above — is what makes the creation state
+		// correct: see paintCreationBaseline. The per-item calls are kept
+		// because they document each row's intent where it is created, and
+		// this pass re-asserts them for the rows nobody remembered.
+		t.paintCreationBaseline()
 
 		// Catalog submenu items each have their own ClickedCh; spawning
 		// one goroutine per slot avoids inflating the main click select
@@ -2105,98 +2123,132 @@ func (t *tray) apply(m MenuModel) {
 	}
 	systray.SetTooltip(m.HeaderTitle)
 
-	setTitleIfChanged(t.miHeader, prev.HeaderTitle, m.HeaderTitle)
-	setVisibleIfChanged(t.miEmail, prev.AccountEmail != "", m.AccountEmail != "")
-	setTitleIfChanged(t.miEmail, prev.AccountEmail, m.AccountEmail)
+	t.applyRows(prev, m)
+}
+
+// paintCreationBaseline asserts the initial menu state, and is the reason no
+// item needs a hand-written Hide() at creation any more.
+//
+// systray creates every item visible, and apply() diffs model-to-model — so a
+// row whose zero-model visibility is false was never hidden by anything: the
+// first paint's (false,false) diff is a no-op and the row sat there blank,
+// forever. That was the two blank rows plus the stray "Log out…" /
+// "Open Admin Console…" in the daemon-down screenshot (#317), and the same
+// class waired#808 fixed one row at a time.
+//
+// Painting the zero model with the diff forced derives the creation state from
+// the same predicates apply() uses, so the two cannot drift.
+func (t *tray) paintCreationBaseline() {
+	t.applyMu.Lock()
+	defer t.applyMu.Unlock()
+	t.beginRowPass(true)
+	defer func() { t.rowForce = false }()
+	t.diffRows(MenuModel{}, MenuModel{})
+}
+
+// applyRows runs one guarded diff pass. Split out of apply() so the creation
+// baseline can reuse the predicates without also re-running the icon, tooltip,
+// transition log and debug dump that belong to a real state change.
+func (t *tray) applyRows(prev, m MenuModel) {
+	t.applyMu.Lock()
+	defer t.applyMu.Unlock()
+	t.beginRowPass(false)
+	t.diffRows(prev, m)
+}
+
+func (t *tray) diffRows(prev, m MenuModel) {
+	t.setTitle(t.miHeader, prev.HeaderTitle, m.HeaderTitle)
+	t.setVisible(t.miEmail, prev.AccountEmail != "", m.AccountEmail != "")
+	t.setTitle(t.miEmail, prev.AccountEmail, m.AccountEmail)
 	// Status/hint line (waired#808): the daemon-down "Start-Service…" hint,
 	// the login user-code, or an error reason. Previously computed into
 	// MenuModel.StatusMsg but never rendered.
-	setVisibleIfChanged(t.miStatus, prev.StatusMsg != "", m.StatusMsg != "")
-	setTitleIfChanged(t.miStatus, prev.StatusMsg, m.StatusMsg)
+	t.setVisible(t.miStatus, prev.StatusMsg != "", m.StatusMsg != "")
+	t.setTitle(t.miStatus, prev.StatusMsg, m.StatusMsg)
 
 	// Update banner (#293): visibility + title track ShowUpdate / UpdateLabel.
-	setVisibleIfChanged(t.miUpdate, prev.ShowUpdate, m.ShowUpdate)
-	setTitleIfChanged(t.miUpdate, prev.UpdateLabel, m.UpdateLabel)
-	setVisibleIfChanged(t.miUpdateNotify, prev.UpdateNotifyAction != "", m.UpdateNotifyAction != "")
-	setTitleIfChanged(t.miUpdateNotify, prev.UpdateNotifyAction, m.UpdateNotifyAction)
+	t.setVisible(t.miUpdate, prev.ShowUpdate, m.ShowUpdate)
+	t.setTitle(t.miUpdate, prev.UpdateLabel, m.UpdateLabel)
+	t.setVisible(t.miUpdateNotify, prev.UpdateNotifyAction != "", m.UpdateNotifyAction != "")
+	t.setTitle(t.miUpdateNotify, prev.UpdateNotifyAction, m.UpdateNotifyAction)
 
 	// Toggle item: title + visibility track ToggleAction.
-	setVisibleIfChanged(t.miToggle, prev.ToggleAction != "", m.ToggleAction != "")
-	setTitleIfChanged(t.miToggle, prev.ToggleAction, m.ToggleAction)
+	t.setVisible(t.miToggle, prev.ToggleAction != "", m.ToggleAction != "")
+	t.setTitle(t.miToggle, prev.ToggleAction, m.ToggleAction)
 
 	// Inference group: the "Inference" submenu parent plus its rows —
 	// toggle + engine state + share toggle + share state + active model +
 	// worker (waired#809). The parent shows when the daemon exposes the
 	// inference API (ShowInferenceMenu); each inner item still tracks its
 	// own field, so an empty row inside the open submenu stays hidden.
-	setVisibleIfChanged(t.miInference, prev.ShowInferenceMenu, m.ShowInferenceMenu)
-	setVisibleIfChanged(t.miInferenceToggle, prev.InferenceToggleAction != "", m.InferenceToggleAction != "")
-	setTitleIfChanged(t.miInferenceToggle, prev.InferenceToggleAction, m.InferenceToggleAction)
-	setVisibleIfChanged(t.miInferenceState, prev.InferenceStateLabel != "", m.InferenceStateLabel != "")
-	setTitleIfChanged(t.miInferenceState, prev.InferenceStateLabel, m.InferenceStateLabel)
+	t.setVisible(t.miInference, prev.ShowInferenceMenu, m.ShowInferenceMenu)
+	t.setVisible(t.miInferenceToggle, prev.InferenceToggleAction != "", m.InferenceToggleAction != "")
+	t.setTitle(t.miInferenceToggle, prev.InferenceToggleAction, m.InferenceToggleAction)
+	t.setVisible(t.miInferenceState, prev.InferenceStateLabel != "", m.InferenceStateLabel != "")
+	t.setTitle(t.miInferenceState, prev.InferenceStateLabel, m.InferenceStateLabel)
 	// Hard engine power toggle (#186): visibility + title track
 	// EngineToggleAction; enablement tracks EngineToggleEnabled (the
 	// reuse/not-managed case renders the row greyed out).
-	setVisibleIfChanged(t.miEngineToggle, prev.EngineToggleAction != "", m.EngineToggleAction != "")
-	setTitleIfChanged(t.miEngineToggle, prev.EngineToggleAction, m.EngineToggleAction)
-	setEnabledIfChanged(t.miEngineToggle, prev.EngineToggleEnabled, m.EngineToggleEnabled)
+	t.setVisible(t.miEngineToggle, prev.EngineToggleAction != "", m.EngineToggleAction != "")
+	t.setTitle(t.miEngineToggle, prev.EngineToggleAction, m.EngineToggleAction)
+	t.setEnabled(t.miEngineToggle, prev.EngineToggleEnabled, m.EngineToggleEnabled)
 	// "Install Ollama…" — shown only on no_engine (#188).
-	setVisibleIfChanged(t.miInstallEngine, prev.InstallEngineAction != "", m.InstallEngineAction != "")
-	setTitleIfChanged(t.miInstallEngine, prev.InstallEngineAction, m.InstallEngineAction)
+	t.setVisible(t.miInstallEngine, prev.InstallEngineAction != "", m.InstallEngineAction != "")
+	t.setTitle(t.miInstallEngine, prev.InstallEngineAction, m.InstallEngineAction)
 	// Share-with-mesh items (Phase 6). Pre-allocated regardless of
 	// daemon support; visibility tracks the MenuModel fields which
 	// applyInference leaves empty when the daemon predates the API.
-	setVisibleIfChanged(t.miShareToggle, prev.ShareToggleAction != "", m.ShareToggleAction != "")
-	setTitleIfChanged(t.miShareToggle, prev.ShareToggleAction, m.ShareToggleAction)
-	setVisibleIfChanged(t.miShareState, prev.ShareStateLabel != "", m.ShareStateLabel != "")
-	setTitleIfChanged(t.miShareState, prev.ShareStateLabel, m.ShareStateLabel)
+	t.setVisible(t.miShareToggle, prev.ShareToggleAction != "", m.ShareToggleAction != "")
+	t.setTitle(t.miShareToggle, prev.ShareToggleAction, m.ShareToggleAction)
+	t.setVisible(t.miShareState, prev.ShareStateLabel != "", m.ShareStateLabel != "")
+	t.setTitle(t.miShareState, prev.ShareStateLabel, m.ShareStateLabel)
 	// Mesh-reachable indicator (#212): display-only, like miShareState.
-	setVisibleIfChanged(t.miMeshReachable, prev.MeshReachableLabel != "", m.MeshReachableLabel != "")
-	setTitleIfChanged(t.miMeshReachable, prev.MeshReachableLabel, m.MeshReachableLabel)
-	setVisibleIfChanged(t.miEngineWarning, prev.EngineWarningLabel != "", m.EngineWarningLabel != "")
-	setTitleIfChanged(t.miEngineWarning, prev.EngineWarningLabel, m.EngineWarningLabel)
+	t.setVisible(t.miMeshReachable, prev.MeshReachableLabel != "", m.MeshReachableLabel != "")
+	t.setTitle(t.miMeshReachable, prev.MeshReachableLabel, m.MeshReachableLabel)
+	t.setVisible(t.miEngineWarning, prev.EngineWarningLabel != "", m.EngineWarningLabel != "")
+	t.setTitle(t.miEngineWarning, prev.EngineWarningLabel, m.EngineWarningLabel)
 	// miActiveModel ("Model: <model_id>") is suppressed when the catalog
 	// submenu is showing — CatalogActiveLabel renders the same intent
 	// with the friendlier display_name, and one row per concept is enough.
 	prevActiveModelVisible := prev.ActiveModelLabel != "" && !prev.ShowCatalog
 	activeModelVisible := m.ActiveModelLabel != "" && !m.ShowCatalog
-	setVisibleIfChanged(t.miActiveModel, prevActiveModelVisible, activeModelVisible)
-	setTitleIfChanged(t.miActiveModel, prev.ActiveModelLabel, m.ActiveModelLabel)
+	t.setVisible(t.miActiveModel, prevActiveModelVisible, activeModelVisible)
+	t.setTitle(t.miActiveModel, prev.ActiveModelLabel, m.ActiveModelLabel)
 
 	// Catalog group: "Active: …" top-level + "Models" submenu (the
 	// leading separator auto-collapses when ShowCatalog is false).
-	setVisibleIfChanged(t.miCatalogActive, prev.ShowCatalog, m.ShowCatalog)
-	setTitleIfChanged(t.miCatalogActive, prev.CatalogActiveLabel, m.CatalogActiveLabel)
-	setVisibleIfChanged(t.miCatalog, prev.ShowCatalog, m.ShowCatalog)
+	t.setVisible(t.miCatalogActive, prev.ShowCatalog, m.ShowCatalog)
+	t.setTitle(t.miCatalogActive, prev.CatalogActiveLabel, m.CatalogActiveLabel)
+	t.setVisible(t.miCatalog, prev.ShowCatalog, m.ShowCatalog)
 	parentLabel := m.CatalogParentLabel
 	if parentLabel == "" {
 		parentLabel = "Models"
 	}
-	setTitleIfChanged(t.miCatalog, prev.CatalogParentLabel, parentLabel)
+	t.setTitle(t.miCatalog, prev.CatalogParentLabel, parentLabel)
 	t.applyCatalogEntries(prev.CatalogEntries, m.CatalogEntries)
 	t.mu.Lock()
 	t.lastCatalogEntries = m.CatalogEntries
 	t.mu.Unlock()
 
 	// #133 step-down recommendation row.
-	setVisibleIfChanged(t.miRecommend, prev.ShowRecommend, m.ShowRecommend)
-	setTitleIfChanged(t.miRecommend, prev.RecommendLabel, m.RecommendLabel)
+	t.setVisible(t.miRecommend, prev.ShowRecommend, m.ShowRecommend)
+	t.setTitle(t.miRecommend, prev.RecommendLabel, m.RecommendLabel)
 
 	// Worker (manual routing) group: "Worker: …" summary + "Inference
 	// worker" submenu parent. Visibility follows ShowWorker so old
 	// daemons render exactly the pre-feature menu; the leading separator
 	// auto-collapses when the group is hidden.
-	setVisibleIfChanged(t.miWorkerActive, prev.ShowWorker, m.ShowWorker)
-	setTitleIfChanged(t.miWorkerActive, prev.WorkerActiveLabel, m.WorkerActiveLabel)
-	setVisibleIfChanged(t.miWorker, prev.ShowWorker, m.ShowWorker)
+	t.setVisible(t.miWorkerActive, prev.ShowWorker, m.ShowWorker)
+	t.setTitle(t.miWorkerActive, prev.WorkerActiveLabel, m.WorkerActiveLabel)
+	t.setVisible(t.miWorker, prev.ShowWorker, m.ShowWorker)
 	workerParent := m.WorkerParentLabel
 	if workerParent == "" {
 		workerParent = "Inference worker"
 	}
-	setTitleIfChanged(t.miWorker, prev.WorkerParentLabel, workerParent)
+	t.setTitle(t.miWorker, prev.WorkerParentLabel, workerParent)
 	t.applyWorkerModes(prev.WorkerModes, m.WorkerModes)
 	t.applyWorkerPins(prev.WorkerPinEntries, m.WorkerPinEntries)
-	setVisibleIfChanged(t.miWorkerClearPin, prev.WorkerShowClearPin, m.WorkerShowClearPin)
+	t.setVisible(t.miWorkerClearPin, prev.WorkerShowClearPin, m.WorkerShowClearPin)
 	t.mu.Lock()
 	t.lastWorkerModes = m.WorkerModes
 	t.lastWorkerPinEntries = m.WorkerPinEntries
@@ -2207,17 +2259,17 @@ func (t *tray) apply(m MenuModel) {
 	// rows track their own MenuModel fields, and the three mode rows diff
 	// via applyPublicUseModes. lastPublicUseModes is latched for the
 	// mode-row click dispatch, mirroring the worker rows above.
-	setVisibleIfChanged(t.miPublicShare, prev.ShowPublicShareMenu, m.ShowPublicShareMenu)
-	setVisibleIfChanged(t.miPublicShareToggle, prev.PublicShareToggleAction != "", m.PublicShareToggleAction != "")
-	setTitleIfChanged(t.miPublicShareToggle, prev.PublicShareToggleAction, m.PublicShareToggleAction)
-	setVisibleIfChanged(t.miPublicShareState, prev.PublicShareStateLabel != "", m.PublicShareStateLabel != "")
-	setTitleIfChanged(t.miPublicShareState, prev.PublicShareStateLabel, m.PublicShareStateLabel)
-	setVisibleIfChanged(t.miPublicShareNote, prev.PublicShareNote != "", m.PublicShareNote != "")
-	setTitleIfChanged(t.miPublicShareNote, prev.PublicShareNote, m.PublicShareNote)
-	setVisibleIfChanged(t.miPublicUseHeader, prev.PublicUseHeaderLabel != "", m.PublicUseHeaderLabel != "")
-	setTitleIfChanged(t.miPublicUseHeader, prev.PublicUseHeaderLabel, m.PublicUseHeaderLabel)
+	t.setVisible(t.miPublicShare, prev.ShowPublicShareMenu, m.ShowPublicShareMenu)
+	t.setVisible(t.miPublicShareToggle, prev.PublicShareToggleAction != "", m.PublicShareToggleAction != "")
+	t.setTitle(t.miPublicShareToggle, prev.PublicShareToggleAction, m.PublicShareToggleAction)
+	t.setVisible(t.miPublicShareState, prev.PublicShareStateLabel != "", m.PublicShareStateLabel != "")
+	t.setTitle(t.miPublicShareState, prev.PublicShareStateLabel, m.PublicShareStateLabel)
+	t.setVisible(t.miPublicShareNote, prev.PublicShareNote != "", m.PublicShareNote != "")
+	t.setTitle(t.miPublicShareNote, prev.PublicShareNote, m.PublicShareNote)
+	t.setVisible(t.miPublicUseHeader, prev.PublicUseHeaderLabel != "", m.PublicUseHeaderLabel != "")
+	t.setTitle(t.miPublicUseHeader, prev.PublicUseHeaderLabel, m.PublicUseHeaderLabel)
 	t.applyPublicUseModes(prev.PublicUseModes, m.PublicUseModes)
-	setVisibleIfChanged(t.miPublicMore, prev.PublicMoreURL != "", m.PublicMoreURL != "")
+	t.setVisible(t.miPublicMore, prev.PublicMoreURL != "", m.PublicMoreURL != "")
 	t.mu.Lock()
 	t.lastPublicUseModes = m.PublicUseModes
 	t.mu.Unlock()
@@ -2226,20 +2278,21 @@ func (t *tray) apply(m MenuModel) {
 	hasDevice := m.DeviceName != "" || m.OverlayIP != ""
 	prevHasDevice := prev.DeviceName != "" || prev.OverlayIP != ""
 	for _, mi := range []*systray.MenuItem{t.miDeviceLabel, t.miDeviceName, t.miOverlayIP, t.miNetwork} {
-		setVisibleIfChanged(mi, prevHasDevice, hasDevice)
+		t.setVisible(mi, prevHasDevice, hasDevice)
 	}
 	// Peers row (waired#808): gate on peer presence, not just enrollment.
 	// Sharing hasDevice's visibility left a blank "Peers" chevron row in
 	// the steady peerless state (miPeers is allocated with an empty title,
 	// and the first-paint "Peers: 0" == "Peers: 0" diff is a no-op).
-	setVisibleIfChanged(t.miPeers, peersRowVisible(prev), peersRowVisible(m))
-	setTitleIfChanged(t.miDeviceName, prev.DeviceName, "  "+m.DeviceName)
-	if m.OverlayIP != "" {
-		setTitleIfChanged(t.miOverlayIP, "  "+prev.OverlayIP, "  "+m.OverlayIP)
-	} else {
-		setTitleIfChanged(t.miOverlayIP, prev.OverlayIP, "")
-	}
-	setTitleIfChanged(t.miNetwork, prev.NetworkName, fmtNetwork(m.NetworkName))
+	t.setVisible(t.miPeers, peersRowVisible(prev), peersRowVisible(m))
+	// Both sides of these three diffs go through the same formatting. They
+	// used to compare a raw prev against a formatted next ("  "+name,
+	// fmtNetwork(name)), which never matched — so every poll pushed a SetTitle
+	// at rows the model had not changed, and (before the row guard above) at
+	// rows it had just hidden (#317).
+	t.setTitle(t.miDeviceName, indentLabel(prev.DeviceName), indentLabel(m.DeviceName))
+	t.setTitle(t.miOverlayIP, indentLabel(prev.OverlayIP), indentLabel(m.OverlayIP))
+	t.setTitle(t.miNetwork, fmtNetwork(prev.NetworkName), fmtNetwork(m.NetworkName))
 	// Phase 7 follow-up (C1b): when at least one peer has Hardware
 	// the "Peers" item gets the submenu form ("Peers (N)") and the
 	// child rows render the per-peer GPU labels; otherwise the
@@ -2248,10 +2301,10 @@ func (t *tray) apply(m MenuModel) {
 	t.applyPeerHardwareEntries(prev.PeerHardwareEntries, m.PeerHardwareEntries)
 	t.applyPeerHardwareOverflow(prev.PeerHardwareOverflow, m.PeerHardwareOverflow)
 
-	setVisibleIfChanged(t.miCodeUI, prev.ShowCodeUI, m.ShowCodeUI)
-	setTitleIfChanged(t.miCodeUI, prev.CodeUILabel, m.CodeUILabel)
-	setVisibleIfChanged(t.miAdmin, prev.AdminURL != "", m.AdminURL != "")
-	setVisibleIfChanged(t.miLogout, prev.AccountEmail != "", m.AccountEmail != "")
+	t.setVisible(t.miCodeUI, prev.ShowCodeUI, m.ShowCodeUI)
+	t.setTitle(t.miCodeUI, prev.CodeUILabel, m.CodeUILabel)
+	t.setVisible(t.miAdmin, prev.AdminURL != "", m.AdminURL != "")
+	t.setVisible(t.miLogout, prev.AccountEmail != "", m.AccountEmail != "")
 
 	// Claude Code submenu parent (waired#809): visible when the daemon
 	// exposes *either* the Claude status endpoint (ShowClaude) or the
@@ -2260,32 +2313,32 @@ func (t *tray) apply(m MenuModel) {
 	// daemons exposing neither render no "Claude Code" entry at all.
 	prevShowClaudeParent := prev.ShowClaude || prev.ShowClaudeCode
 	showClaudeParent := m.ShowClaude || m.ShowClaudeCode
-	setVisibleIfChanged(t.miClaudeCode, prevShowClaudeParent, showClaudeParent)
+	t.setVisible(t.miClaudeCode, prevShowClaudeParent, showClaudeParent)
 
 	// Claude status rows (now children of the parent above). The header
 	// reports live serving state; the proxy row reports the OS-level
 	// managed-settings status. ProxyLabel="" hides that row.
-	setVisibleIfChanged(t.miClaudeHeader, prev.ShowClaude, m.ShowClaude)
-	setTitleIfChanged(t.miClaudeHeader, prev.ClaudeHeader, m.ClaudeHeader)
-	setVisibleIfChanged(t.miClaudeProxy, prev.ClaudeProxyLabel != "", m.ClaudeProxyLabel != "")
-	setTitleIfChanged(t.miClaudeProxy, "  "+prev.ClaudeProxyLabel, "  "+m.ClaudeProxyLabel)
+	t.setVisible(t.miClaudeHeader, prev.ShowClaude, m.ShowClaude)
+	t.setTitle(t.miClaudeHeader, prev.ClaudeHeader, m.ClaudeHeader)
+	t.setVisible(t.miClaudeProxy, prev.ClaudeProxyLabel != "", m.ClaudeProxyLabel != "")
+	t.setTitle(t.miClaudeProxy, "  "+prev.ClaudeProxyLabel, "  "+m.ClaudeProxyLabel)
 
 	// Claude Code per-class routing rows (#649/#650): the two header rows
 	// follow ShowClaudeCode; the route slots + conditional notes diff via
-	// applyClaudeRoutes / setTitleIfChanged.
+	// applyClaudeRoutes / setTitle.
 	claudeCodeParent := m.ClaudeCodeParent
 	if claudeCodeParent == "" {
 		claudeCodeParent = "Claude Code"
 	}
-	setTitleIfChanged(t.miClaudeCode, prev.ClaudeCodeParent, claudeCodeParent)
-	setVisibleIfChanged(t.miClaudeMainHeader, prev.ShowClaudeCode, m.ShowClaudeCode)
-	setVisibleIfChanged(t.miClaudeSubHeader, prev.ShowClaudeCode, m.ShowClaudeCode)
+	t.setTitle(t.miClaudeCode, prev.ClaudeCodeParent, claudeCodeParent)
+	t.setVisible(t.miClaudeMainHeader, prev.ShowClaudeCode, m.ShowClaudeCode)
+	t.setVisible(t.miClaudeSubHeader, prev.ShowClaudeCode, m.ShowClaudeCode)
 	t.applyClaudeRoutes(t.miClaudeMainRoutes, prev.ClaudeMainRouteRows, m.ClaudeMainRouteRows)
 	t.applyClaudeRoutes(t.miClaudeSubRoutes, prev.ClaudeSubRouteRows, m.ClaudeSubRouteRows)
-	setVisibleIfChanged(t.miClaudeFallbackNote, prev.ClaudeFallbackNote != "", m.ClaudeFallbackNote != "")
-	setTitleIfChanged(t.miClaudeFallbackNote, "  "+prev.ClaudeFallbackNote, "  "+m.ClaudeFallbackNote)
-	setVisibleIfChanged(t.miClaudeEnableNote, prev.ClaudeEnableNote != "", m.ClaudeEnableNote != "")
-	setTitleIfChanged(t.miClaudeEnableNote, "  "+prev.ClaudeEnableNote, "  "+m.ClaudeEnableNote)
+	t.setVisible(t.miClaudeFallbackNote, prev.ClaudeFallbackNote != "", m.ClaudeFallbackNote != "")
+	t.setTitle(t.miClaudeFallbackNote, "  "+prev.ClaudeFallbackNote, "  "+m.ClaudeFallbackNote)
+	t.setVisible(t.miClaudeEnableNote, prev.ClaudeEnableNote != "", m.ClaudeEnableNote != "")
+	t.setTitle(t.miClaudeEnableNote, "  "+prev.ClaudeEnableNote, "  "+m.ClaudeEnableNote)
 	t.mu.Lock()
 	t.lastClaudeMainRoutes = m.ClaudeMainRouteRows
 	t.lastClaudeSubRoutes = m.ClaudeSubRouteRows
@@ -2295,26 +2348,26 @@ func (t *tray) apply(m MenuModel) {
 	// Config + Reconfigure share the ShowOpenCode flag; its leading
 	// separator auto-collapses if the group above is hidden, so two
 	// adjacent rules never render.
-	setVisibleIfChanged(t.miOpenCodeHeader, prev.ShowOpenCode, m.ShowOpenCode)
-	setTitleIfChanged(t.miOpenCodeHeader, prev.OpenCodeHeader, m.OpenCodeHeader)
-	setVisibleIfChanged(t.miOpenCodeConfig, prev.OpenCodeConfigLabel != "", m.OpenCodeConfigLabel != "")
-	setTitleIfChanged(t.miOpenCodeConfig, "  "+prev.OpenCodeConfigLabel, "  "+m.OpenCodeConfigLabel)
-	setVisibleIfChanged(t.miOpenCodeReconfigure, prev.OpenCodeReconfigureLabel != "", m.OpenCodeReconfigureLabel != "")
-	setTitleIfChanged(t.miOpenCodeReconfigure, prev.OpenCodeReconfigureLabel, m.OpenCodeReconfigureLabel)
+	t.setVisible(t.miOpenCodeHeader, prev.ShowOpenCode, m.ShowOpenCode)
+	t.setTitle(t.miOpenCodeHeader, prev.OpenCodeHeader, m.OpenCodeHeader)
+	t.setVisible(t.miOpenCodeConfig, prev.OpenCodeConfigLabel != "", m.OpenCodeConfigLabel != "")
+	t.setTitle(t.miOpenCodeConfig, "  "+prev.OpenCodeConfigLabel, "  "+m.OpenCodeConfigLabel)
+	t.setVisible(t.miOpenCodeReconfigure, prev.OpenCodeReconfigureLabel != "", m.OpenCodeReconfigureLabel != "")
+	t.setTitle(t.miOpenCodeReconfigure, prev.OpenCodeReconfigureLabel, m.OpenCodeReconfigureLabel)
 
 	// OpenClaw integration group — same lifecycle as the OpenCode group.
-	setVisibleIfChanged(t.miOpenClawHeader, prev.ShowOpenClaw, m.ShowOpenClaw)
-	setTitleIfChanged(t.miOpenClawHeader, prev.OpenClawHeader, m.OpenClawHeader)
-	setVisibleIfChanged(t.miOpenClawConfig, prev.OpenClawConfigLabel != "", m.OpenClawConfigLabel != "")
-	setTitleIfChanged(t.miOpenClawConfig, "  "+prev.OpenClawConfigLabel, "  "+m.OpenClawConfigLabel)
-	setVisibleIfChanged(t.miOpenClawReconfigure, prev.OpenClawReconfigureLabel != "", m.OpenClawReconfigureLabel != "")
-	setTitleIfChanged(t.miOpenClawReconfigure, prev.OpenClawReconfigureLabel, m.OpenClawReconfigureLabel)
+	t.setVisible(t.miOpenClawHeader, prev.ShowOpenClaw, m.ShowOpenClaw)
+	t.setTitle(t.miOpenClawHeader, prev.OpenClawHeader, m.OpenClawHeader)
+	t.setVisible(t.miOpenClawConfig, prev.OpenClawConfigLabel != "", m.OpenClawConfigLabel != "")
+	t.setTitle(t.miOpenClawConfig, "  "+prev.OpenClawConfigLabel, "  "+m.OpenClawConfigLabel)
+	t.setVisible(t.miOpenClawReconfigure, prev.OpenClawReconfigureLabel != "", m.OpenClawReconfigureLabel != "")
+	t.setTitle(t.miOpenClawReconfigure, prev.OpenClawReconfigureLabel, m.OpenClawReconfigureLabel)
 
 	// Recent activity submenu (Phase 9 observability). Hidden when no
 	// kind=fallback events landed in RecentFallbackWindow; its leading
 	// separator auto-collapses while the parent is hidden, so no stray
 	// rule is drawn.
-	setVisibleIfChanged(t.miRecent, prev.ShowRecentActivity, m.ShowRecentActivity)
+	t.setVisible(t.miRecent, prev.ShowRecentActivity, m.ShowRecentActivity)
 	t.applyRecentActivityEntries(prev.RecentActivityEntries, m.RecentActivityEntries)
 }
 
@@ -2334,8 +2387,8 @@ func (t *tray) applyRecentActivityEntries(prev, next []RecentActivityRow) {
 			nextHas = true
 			nextLabel = next[i].Label
 		}
-		setVisibleIfChanged(mi, prevHas, nextHas)
-		setTitleIfChanged(mi, prevLabel, nextLabel)
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
 	}
 }
 
@@ -2346,7 +2399,7 @@ func (t *tray) applyRecentActivityEntries(prev, next []RecentActivityRow) {
 func (t *tray) applyPeersLabel(prev, m MenuModel) {
 	prevLabel := peersLabel(prev)
 	nextLabel := peersLabel(m)
-	setTitleIfChanged(t.miPeers, prevLabel, nextLabel)
+	t.setTitle(t.miPeers, prevLabel, nextLabel)
 }
 
 func peersLabel(m MenuModel) string {
@@ -2371,17 +2424,17 @@ func (t *tray) applyPeerHardwareEntries(prev, next []PeerHardwareRow) {
 			nextHas = true
 			nextLabel = next[i].Label
 		}
-		setVisibleIfChanged(mi, prevHas, nextHas)
-		setTitleIfChanged(mi, prevLabel, nextLabel)
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
 	}
 }
 
 // applyPeerHardwareOverflow renders the "+N more" row when the mesh
 // has more peers than fit in the submenu. Hidden when n == 0.
 func (t *tray) applyPeerHardwareOverflow(prev, next int) {
-	setVisibleIfChanged(t.miPeerOverflow, prev > 0, next > 0)
+	t.setVisible(t.miPeerOverflow, prev > 0, next > 0)
 	if next > 0 {
-		setTitleIfChanged(t.miPeerOverflow,
+		t.setTitle(t.miPeerOverflow,
 			fmt.Sprintf("+%d more", prev),
 			fmt.Sprintf("+%d more", next))
 	}
@@ -2394,42 +2447,13 @@ func fmtNetwork(name string) string {
 	return "Network: " + name
 }
 
-// setTitleIfChanged avoids the systray DBus chatter that SetTitle on
-// every poll would otherwise produce.
-func setTitleIfChanged(mi *systray.MenuItem, prev, next string) {
-	if mi == nil || prev == next {
-		return
+// indentLabel renders a "This device" child row. Empty stays empty so the
+// hidden state's title is "" on both sides of the diff rather than two spaces.
+func indentLabel(s string) string {
+	if s == "" {
+		return ""
 	}
-	mi.SetTitle(next)
-}
-
-func setTooltipIfChanged(mi *systray.MenuItem, prev, next string) {
-	if mi == nil || prev == next {
-		return
-	}
-	mi.SetTooltip(next)
-}
-
-func setVisibleIfChanged(mi *systray.MenuItem, prev, next bool) {
-	if mi == nil || prev == next {
-		return
-	}
-	if next {
-		mi.Show()
-	} else {
-		mi.Hide()
-	}
-}
-
-func setEnabledIfChanged(mi *systray.MenuItem, prev, next bool) {
-	if mi == nil || prev == next {
-		return
-	}
-	if next {
-		mi.Enable()
-	} else {
-		mi.Disable()
-	}
+	return "  " + s
 }
 
 // applyWorkerModes diffs the worker mode rows (auto / local-only /
@@ -2449,8 +2473,8 @@ func (t *tray) applyWorkerModes(prev, next []WorkerModeRow) {
 			nextHas = true
 			nextLabel = workerModeRowLabel(next[i])
 		}
-		setVisibleIfChanged(mi, prevHas, nextHas)
-		setTitleIfChanged(mi, prevLabel, nextLabel)
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
 	}
 }
 
@@ -2478,8 +2502,8 @@ func (t *tray) applyPublicUseModes(prev, next []PublicUseModeRow) {
 			nextHas = true
 			nextLabel = publicUseModeRowLabel(next[i])
 		}
-		setVisibleIfChanged(mi, prevHas, nextHas)
-		setTitleIfChanged(mi, prevLabel, nextLabel)
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
 	}
 }
 
@@ -2498,8 +2522,8 @@ func (t *tray) applyClaudeRoutes(items []*systray.MenuItem, prev, next []ClaudeR
 			nextHas = true
 			nextLabel = claudeRouteRowLabel(next[i])
 		}
-		setVisibleIfChanged(mi, prevHas, nextHas)
-		setTitleIfChanged(mi, prevLabel, nextLabel)
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
 	}
 }
 
@@ -2531,15 +2555,9 @@ func (t *tray) applyWorkerPins(prev, next []WorkerPinEntryView) {
 			nextLabel = workerPinRowLabel(next[i])
 			nextDisabled = !next[i].Available
 		}
-		setVisibleIfChanged(mi, prevHas, nextHas)
-		setTitleIfChanged(mi, prevLabel, nextLabel)
-		if prevDisabled != nextDisabled {
-			if nextDisabled {
-				mi.Disable()
-			} else {
-				mi.Enable()
-			}
-		}
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
+		t.setEnabled(mi, !prevDisabled, !nextDisabled)
 	}
 }
 
@@ -2574,15 +2592,9 @@ func (t *tray) applyCatalogEntries(prev, next []CatalogEntryView) {
 			nextTooltip = next[i].Tooltip
 			nextDisabled = next[i].Disabled
 		}
-		setVisibleIfChanged(mi, prevHas, nextHas)
-		setTitleIfChanged(mi, prevLabel, nextLabel)
-		setTooltipIfChanged(mi, prevTooltip, nextTooltip)
-		if prevDisabled != nextDisabled {
-			if nextDisabled {
-				mi.Disable()
-			} else {
-				mi.Enable()
-			}
-		}
+		t.setVisible(mi, prevHas, nextHas)
+		t.setTitle(mi, prevLabel, nextLabel)
+		t.setTooltip(mi, prevTooltip, nextTooltip)
+		t.setEnabled(mi, !prevDisabled, !nextDisabled)
 	}
 }
