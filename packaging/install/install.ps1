@@ -1277,6 +1277,7 @@ function Watch-ElevatedConsole {
     $reader = $null
     $seps   = 0
     $shown  = $false
+    $hinted = $false
     $exited = $false
     try {
         while ($true) {
@@ -1311,6 +1312,18 @@ function Watch-ElevatedConsole {
                     }
                     Write-Host "  | $(Protect-PII $line)" -ForegroundColor DarkGray
                 }
+            }
+            # Phase 2 stops its transcript BEFORE its final "Press Enter to
+            # close this window" pause, so that prompt is never mirrored: the
+            # live view would simply stop dead while the elevated window waits
+            # for a keypress, leaving this console silent at the exact moment
+            # the operator has to act. That is the same failure as #314, just
+            # seconds long instead of minutes, so say it out loud once. The
+            # third separator is the transcript footer, i.e. "the child is
+            # done talking but has not exited".
+            if ($seps -ge 3 -and $shown -and -not $hinted -and -not $Process.HasExited) {
+                Common-Log 'The Administrator window is waiting for you -- press Enter THERE to close it (setup has finished).'
+                $hinted = $true
             }
             # One full read pass AFTER the child exits, so the tail of the
             # transcript is never dropped.
