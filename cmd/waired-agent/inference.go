@@ -2975,6 +2975,17 @@ func availableUpdateFromPick(engine string, mp router.Pick, state catalog.State)
 // in the background. Idempotent: a candidate already on disk skips
 // straight through. Step 12 — keeps the next refresh fast.
 func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
+	// Pre-caching an UPDATE presupposes something to update.
+	// computeAvailableUpdate reports the picker's own output as "the
+	// update" when nothing is active — right for the /inference/status
+	// field it also feeds, wrong as a trigger to download: on a fresh
+	// install state.Active is nil, so this dispatched a third multi-GB
+	// pull alongside the operator's model and the bundled fallback (#306).
+	// The suppression is here rather than in computeAvailableUpdate so the
+	// status field keeps answering "what would this host run".
+	if st, err := p.store.Load(); err != nil || st.Active == nil {
+		return
+	}
 	upd := computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx))
 	if upd == nil {
 		return
