@@ -25,7 +25,7 @@ func runValidate(args []string) error {
 		return fmt.Errorf("validate: one of --file or --all is required")
 	}
 
-	bundled, err := catalog.BundledManifests()
+	bundled, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return fmt.Errorf("validate: load bundled catalog: %w", err)
 	}
