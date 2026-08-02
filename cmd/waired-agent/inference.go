@@ -33,6 +33,7 @@ import (
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/openaicompat"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -1751,19 +1752,7 @@ func (p *agentInferenceProvider) ContextWindowFor(modelID string) int {
 	// Host-sustainable applied window, from whichever engine is serving
 	// this model. AppliedTuning is per-adapter (1-agent-1-model), so match
 	// on ModelID to avoid reading a stale tuning for a different model.
-	host := 0
-	if p.ollama != nil {
-		if t := p.ollama.AppliedTuning(); t.ContextLength > 0 && t.ModelID == m.ModelID {
-			host = t.ContextLength
-		}
-	}
-	if tuner, ok := p.vllm.(interface {
-		AppliedTuning() infruntime.ModelTuning
-	}); ok {
-		if t := tuner.AppliedTuning(); t.ContextLength > 0 && t.ModelID == m.ModelID {
-			host = t.ContextLength
-		}
-	}
+	host := p.appliedContextWindow(m)
 
 	native := m.ContextLength
 	switch {
@@ -1781,6 +1770,72 @@ func (p *agentInferenceProvider) ContextWindowFor(modelID string) int {
 	default:
 		return 0
 	}
+}
+
+// appliedContextWindow is the window the engine reports it is ACTUALLY
+// loaded with for m, or 0 when nothing has tuned yet. AppliedTuning is
+// per-adapter (1 agent = 1 model), so the ModelID match is what keeps a
+// stale tuning for a different model out of the answer.
+func (p *agentInferenceProvider) appliedContextWindow(m catalog.Manifest) int {
+	applied := 0
+	if p.ollama != nil {
+		if t := p.ollama.AppliedTuning(); t.ContextLength > 0 && t.ModelID == m.ModelID {
+			applied = t.ContextLength
+		}
+	}
+	if tuner, ok := p.vllm.(interface {
+		AppliedTuning() infruntime.ModelTuning
+	}); ok {
+		if t := tuner.AppliedTuning(); t.ContextLength > 0 && t.ModelID == m.ModelID {
+			applied = t.ContextLength
+		}
+	}
+	return applied
+}
+
+// DeclaredContextWindow reports the window this device is willing to
+// STAND BEHIND for its active model — signer.InferenceState.ContextWindow
+// (waired#1031). 0 means "declares nothing", and every consumer reads that
+// as unknown and falls open.
+//
+// It is deliberately NOT ContextWindowFor. That one exists to size a guard
+// and therefore answers optimistically for an untuned engine: no applied
+// tuning yet falls back to EffectiveContextFloor, the window the tuner AIMS
+// for. Aiming for a window is exactly what a declaration may not be built
+// on — a cold engine that later trims would have advertised a window it
+// never loaded, which is the class of lie this field exists to remove. So
+// the applied tuning is the only input, and its absence declares nothing.
+//
+// Below the smallest declarable window the answer is 0 rather than the real
+// (smaller) number. "I serve less than I said" and "I say nothing" are
+// different claims: a routing consumer can act safely on the second and
+// cannot act on the first without also having to decide what a 98k peer
+// means for a 200k session, which is the decision the two-window contract
+// exists to avoid. The engine keeps serving that window for this device's
+// own keyboard through the local /model directive — it just stops being a
+// mesh answer.
+func (p *agentInferenceProvider) DeclaredContextWindow() int {
+	active, ok := p.ActiveModelID()
+	if !ok {
+		return 0
+	}
+	m, ok := catalog.LookupByAlias(active, p.manifests)
+	if !ok {
+		return 0
+	}
+	win := p.appliedContextWindow(m)
+	if win <= 0 {
+		return 0
+	}
+	// Never claim past the model's own window, whatever the engine was
+	// told: a tuning above native is a misconfiguration, not a capability.
+	if m.ContextLength > 0 && win > m.ContextLength {
+		win = m.ContextLength
+	}
+	if win < hostfit.ServingWindow200k {
+		return 0
+	}
+	return win
 }
 
 func (p *agentInferenceProvider) Runtimes(ctx context.Context) []management.RuntimeStatus {

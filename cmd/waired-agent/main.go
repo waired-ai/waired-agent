@@ -1136,6 +1136,13 @@ func run(ctx context.Context, args []string) error {
 				AdvertiseTag: advertiseTag,
 				ServingTag:   servingTag,
 			}
+			// waired#1031: the window this node stands behind. Wired for
+			// every provider, not just the ollama one — a vLLM host is
+			// the only kind that can declare the 1M window at all.
+			if inferenceSub != nil && inferenceSub.provider != nil {
+				prov := inferenceSub.provider
+				deps.DeclaredContextWindow = prov.DeclaredContextWindow
+			}
 			// Advertise the engine's VRAM-safe parallelism ceiling (advisory)
 			// so the admin Device detail page can show it and warn before an
 			// operator raises the per-node concurrency past it.

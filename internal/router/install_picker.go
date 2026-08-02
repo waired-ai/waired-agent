@@ -59,30 +59,37 @@ func SelectInstallModel(in PickInput, minTier int) (above []Pick, ok bool, err e
 			above = append(above, p)
 		}
 	}
-	// Neither quality gate may turn a previously-working host into an
-	// under-spec one, so when nothing clears the tier floor they are
-	// dropped in order of what they cost the user, cheapest first. The
-	// picks carry the status of whichever gate was given up, so the
-	// install notes state the compromise instead of silently disabling
-	// inference.
+	// The RECOMMENDATION gate may not turn a previously-working host into
+	// an under-spec one, so it is stood down when nothing clears the tier
+	// floor: giving it up restores a model that spills weights to system
+	// RAM — slower, and exactly what the host used to be given. It is not
+	// monotone in hardware (an 8 GB laptop with a 4 GB card has nothing
+	// above tier 27 resident, while the same laptop without the card
+	// installs qwen3.5-4b), and no machine may lose local inference for
+	// owning a small GPU (waired-ai/waired#988).
 	//
-	//  1. The recommendation gate (waired-ai/waired#988). Giving it up
-	//     restores a model that spills weights to system RAM: slower,
-	//     and exactly what the host used to be given. This one goes
-	//     first because it is NOT monotone in hardware — an 8 GB laptop
-	//     with a 4 GB card has nothing above tier 27 resident, while the
-	//     same laptop without the card installs qwen3.5-4b — and no
-	//     machine may lose local inference for owning a small GPU.
-	//  2. The #624 context floor. Giving this one up costs the ~200k
-	//     coding window itself (e.g. a 4 GB CPU host whose only tier-30+
-	//     fit is a 32k-window model), which is the more expensive
-	//     concession of the two.
+	// The #624 CONTEXT FLOOR used to be stood down the same way, one step
+	// later, and no longer is (waired#1031). The window is now a contract
+	// a node either declares or does not: a host serving a 32k window
+	// cannot answer a coding-agent session, and the wire has no way to say
+	// "I serve 32k" that a requester could route on — Claude Code resolves
+	// a session window from the model id alone, in two steps. So the
+	// concession that fall-through bought is no longer available to buy.
+	// A host with no model above the tier floor that also reaches the
+	// window is under-spec, and takes the same path as a host where
+	// nothing fits at all: it enrols, routes to peers, and runs no local
+	// engine.
+	//
+	// The concession is smaller than the old comment's example suggests.
+	// The 262144-native class scales down to variants a laptop holds with
+	// a full 200k KV cache, so a host that used to land on a 32k-window
+	// model at a comparable tier now lands on a 200k-window one instead
+	// (hostfit's TestOllamaWindowResidentMB_SmallHostCanDeclare200k walks
+	// the shipped catalog for the smallest such variant). What is
+	// genuinely lost is the 131072-native class, which no host can serve
+	// a coding session on however large it is.
 	if len(above) == 0 && !in.NoRecommendGate {
 		in.NoRecommendGate = true
-		return SelectInstallModel(in, minTier)
-	}
-	if len(above) == 0 && !in.NoContextFloor {
-		in.NoContextFloor = true
 		return SelectInstallModel(in, minTier)
 	}
 	return above, len(above) > 0, nil

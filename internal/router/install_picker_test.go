@@ -46,13 +46,15 @@ func TestSelectInstallModel_RealCatalog(t *testing.T) {
 			wantOK: true, wantTop: "qwen3.5-4b",
 		},
 		{
-			// 4 GB CPU box: only 3b/2b/0.8b fit, and the sole tier-30+
-			// fit (coder-3b) is a 32k-window model. The #624 under-spec
-			// rescue re-ranks without the context floor rather than newly
-			// disabling inference — coder-3b stays the pick, flagged
-			// ContextFloorSatisfied=false.
-			name: "cpu-4gb-picks-3b-coder", hw: cpu(4), engine: catalog.RuntimeOllama,
-			wantOK: true, wantTop: "qwen2.5-coder-3b-instruct",
+			// 4 GB CPU box: only 3b/2b/0.8b fit, and the sole tier-30+ fit
+			// (coder-3b) is a 32k-window model. That used to be rescued by
+			// re-ranking without the context floor; waired#1031 removed the
+			// rescue, because the window is a contract now and a 32k node
+			// has no way to say so that a requester could route on. The
+			// host is under-spec: it enrols, routes to peers, and runs no
+			// local engine.
+			name: "cpu-4gb-under-spec", hw: cpu(4), engine: catalog.RuntimeOllama,
+			wantOK: false,
 		},
 		{
 			// 2 GB CPU box: only qwen3.5-0.8b (tier 12) fits — below the
