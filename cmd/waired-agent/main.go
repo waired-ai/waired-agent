@@ -1008,20 +1008,23 @@ func run(ctx context.Context, args []string) error {
 			defer wg.Done()
 			engineKind, enginePort := probeTargetForActive(cfgRoot.Inference)
 
-			// Phase 7: read the hardware profile once at boot. The
-			// summary is broadcast on every InferenceState push but
-			// never mutates over the agent's lifetime, so a single
-			// snapshot is enough; profiler.Profile caches internally
-			// anyway. The full profile is also retained (firstGPU below)
-			// so the boot benchmark cache can key on driver_version.
-			var hwSummary *signer.HardwareSummary
+			// Phase 7: the hardware profile the agent publishes. The
+			// profiler is KEPT (not sampled once and discarded) so the
+			// probe loop can re-read it: a host that gains a GPU or a
+			// driver mid-life used to report the boot-time answer until
+			// the daemon restarted (#387). Its TTL is what paces the
+			// re-detection, so no extra ticker is needed. The boot sample
+			// below is still taken eagerly, because firstGPU keys the boot
+			// benchmark cache on driver_version.
+			var hwProfiler *hardware.Profiler
 			var firstGPU hardware.GPU
 			if !*disableInference {
-				prof := hardware.NewProfiler("").Profile(ctx)
+				hwProfiler = hardware.NewProfiler("",
+					hardware.WithTTL(hardwareResampleInterval))
+				prof := hwProfiler.Profile(ctx)
 				if len(prof.GPUs) > 0 {
 					firstGPU = prof.GPUs[0]
 				}
-				hwSummary = hardwareSummaryFor(prof)
 			}
 
 			// Phase 7: run the boot-time token/s benchmark to derive
@@ -1121,7 +1124,7 @@ func run(ctx context.Context, args []string) error {
 				EnginePort:   enginePort,
 				Disabled:     *disableInference,
 				Logger:       logger,
-				Hardware:     hwSummary,
+				Hardware:     hardwareSummaryFn(ctx, hwProfiler),
 				Capacity:     capacity,
 				AdvertiseTag: advertiseTag,
 				ServingTag:   servingTag,

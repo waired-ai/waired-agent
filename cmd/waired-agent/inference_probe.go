@@ -62,11 +62,19 @@ type inferenceProbeDeps struct {
 
 	// --- Phase 7 routing inputs --------------------------------------
 	//
-	// Hardware is the static GPU/RAM summary the agent broadcasts so
-	// peers can render "peer X: RTX 4090, 64 GB" in the tray. Read
-	// once at boot; never mutates over the agent's lifetime. nil for
-	// pre-Phase-7 deployments (the field is omitempty on the wire).
-	Hardware *signer.HardwareSummary
+	// Hardware returns the host's GPU/RAM summary: what peers render as
+	// "peer X: RTX 4090, 64 GB" in the tray, and what the control plane
+	// scores the onboarding model catalog against. nil (or a nil return)
+	// means "this host has nothing to say about itself" and keeps the
+	// field off the wire — it is omitempty.
+	//
+	// A getter, read on every tick, rather than the boot-time pointer it
+	// replaced (#387): what a host IS changes when a GPU or a driver is
+	// installed, and the captured pointer kept reporting the pre-change
+	// answer until the daemon restarted. Re-detection is throttled by the
+	// profiler behind the getter (hardwareResampleInterval), so calling
+	// it per tick costs a cache read almost every time.
+	Hardware func() *signer.HardwareSummary
 
 	// Capacity is the concurrent-request admission cap the Phase 7
 	// Selector enforces against. Derived at boot from the local
@@ -140,6 +148,10 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		if deps.Aggregator != nil {
 			deps.Aggregator.UpdateLocal(nil)
 		}
+		// There is no engine to probe, but there is still a machine to
+		// describe — and until #387 nothing described it. Blocks on ctx
+		// like the probe loop below.
+		runHardwareOnlyReport(ctx, deps)
 		return
 	}
 
@@ -179,11 +191,14 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		}
 		narrowPublishedModels(&s, deps.AdvertiseTag, deps.ServingTag, &lastSurplusSig, deps.Logger)
 		// Phase 7: decorate the probe result with Hardware and Capacity.
-		// Both are baked in once at boot and omitempty on the wire so a
-		// zero-value agent (no hardware probe, no benchmark) still
-		// produces a compact push.
+		// Both are omitempty on the wire so a zero-value agent (no
+		// hardware probe, no benchmark) still produces a compact push.
+		// Hardware is re-read here rather than captured at boot — see the
+		// field's doc comment (#387).
 		if deps.Hardware != nil {
-			s.Hardware = deps.Hardware
+			if hw := deps.Hardware(); hw != nil {
+				s.Hardware = hw
+			}
 		}
 		if deps.Capacity != 0 {
 			s.Capacity = deps.Capacity
@@ -232,6 +247,87 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 			return
 		case <-t.C:
 			tick()
+		}
+	}
+}
+
+// hardwareOnlyPushInterval paces runHardwareOnlyReport. Deliberately
+// slower than state.HeartbeatInterval, which paces the probe: the content
+// is a description of the machine, so re-pushing it is a retry (for a CP
+// that was unreachable, or a device row that was recreated), not a
+// heartbeat. A permanently engine-less host therefore does not double its
+// push volume, and nothing downstream needs the freshness — the admin UI
+// resolves a type=none state before it ever consults last_check.
+const hardwareOnlyPushInterval = 60 * time.Second
+
+// runHardwareOnlyReport publishes the host profile from a device that has
+// no engine to probe (#387).
+//
+// Until this existed, HardwareSummary rode ONLY the probe result, and the
+// loop above returns before pushing anything when there is no engine —
+// so a host that had not decided on an engine, was still installing one,
+// or whose engine failed to start had no path at all to tell the control
+// plane what it is. That is exactly the window the browser setup wizard
+// operates in: with no hardware stored, the per-device catalog reports
+// every model runnable with unknown_hardware and recommends none.
+//
+// What is published is an honest description of that host — type=none,
+// reachable=false, no endpoint, no models — carrying only the hardware.
+// Peers read it as "no engine here", which is what the aggregator already
+// does with any non-reachable entry, and the admin UI renders it exactly
+// as it renders a device that has never pushed at all.
+//
+// Three cases stay silent, all preserving today's behaviour rather than
+// widening it:
+//
+//   - Disabled: --disable-inference means this host is not participating.
+//   - No profile: a host that cannot profile itself has nothing to say,
+//     the same rule hardwareSummaryFor applies by returning nil.
+//   - Share denied: the summary rides the served network map, so the
+//     IsShared gate is honoured exactly as the normal push honours it.
+//     Consequence: a share-disabled host stays unknown to the wizard —
+//     unchanged from before this fix, and a separate decision to make.
+func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
+	if deps.Disabled || deps.Hardware == nil || deps.PushClient == nil ||
+		deps.DeviceID == "" || len(deps.MachineKey) != ed25519.PrivateKeySize {
+		return
+	}
+
+	push := func() {
+		if deps.IsShared != nil && !deps.IsShared() {
+			if deps.Logger != nil {
+				deps.Logger.Debug("hardware profile push skipped: share disabled")
+			}
+			return
+		}
+		hw := deps.Hardware()
+		if hw == nil {
+			return
+		}
+		st := signer.InferenceState{
+			Type:      signer.InferenceTypeNone,
+			Reachable: false,
+			LastCheck: time.Now().UTC().Format(time.RFC3339Nano),
+			Hardware:  hw,
+		}
+		pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
+		_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, st, deps.MachineKey)
+		cancel()
+		if err != nil && deps.Logger != nil && !errors.Is(err, context.Canceled) {
+			deps.Logger.Warn("hardware profile push failed", "err", err)
+		}
+	}
+
+	push()
+
+	t := time.NewTicker(hardwareOnlyPushInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			push()
 		}
 	}
 }
