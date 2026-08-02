@@ -9,22 +9,21 @@
 # WHY A SEPARATE LEG (the coverage gap it closes)
 # ------------------------------------------------
 # The other installtest legs enroll hands-free with `waired init
-# --auth-key` (authkey), which settles the login inside the create call and
-# leaves the executor lease nothing to observe. It also used to FORCE the
-# local enroll path: they are two of the three explicit selectors for it
-# (with re-auth), and since #175 they are the ONLY way to reach it — an
-# unreachable daemon is now an error, not a silent downgrade. See
-# cmd/waired/init_route_daemon.go `chooseEnrollRoute`. On the local enroll
-# path the engine, when installed at all, is installed by
-# install.sh (--inference) or by the interactive `configureInference` hook —
-# never by the setup executor. So the waired#835 §9/§11 executor engine
-# install (`ensureDaemonPathEngine` / `runSetupEngineInstall`, the resident
-# `sudo waired init` attaching a lease and installing the engine the browser
-# wizard asked for) was covered only by unit tests, never end to end.
+# --auth-key` (authkey), which settles the login inside the create call: the
+# session is authorized before the resident executor can attach a lease, so
+# the executor's own engine install has nothing to observe. That leaves
+# `runSetupEngineInstall` — the executor installing the engine the browser
+# wizard asked for, waired#835 §9/§11 — covered by unit tests only. Its
+# sibling `ensureDaemonPathEngine` (same install, no wizard) is what the
+# --inference leg drives.
+#
+# Since #138 no installer pre-installs the engine on ANY OS: `waired init`
+# is the only thing that puts one on the host. So this leg is the only e2e
+# that reaches the wizard-driven half of that.
 #
 # Since #119 the installer starts the daemon BEFORE `waired init`, so a real
-# fresh first-run now takes the DAEMON path — the exact path the standalone
-# enroll here never exercises. This leg drives that real path hands-free.
+# fresh first-run takes the DAEMON path with a resident executor waiting on
+# it. This leg drives that real path hands-free.
 #
 # HOW IT DRIVES THE DAEMON PATH HANDS-FREE
 # ----------------------------------------
@@ -46,7 +45,12 @@
 #      (executor_attached) and claimed the ollama install (install_claimed) —
 #      proof the resident executor, not install.sh, drove the install.
 #
-# oidc mode only (mirrors installtest-macos.sh): the token is minted on the
+# Runs under IT_ENROLL_MODE=authkey like every other leg, but does NOT spend
+# the auth key: a key authorizes the session inside the create call, which is
+# the one thing this leg must not do. It keeps the RAW SA id_token that
+# authkey mode mints anyway and completes the login out-of-band with it —
+# exactly the shape installtest-macos.sh (daemon_path_enroll_macos) and
+# installtest-windows.ps1 (-DaemonEngine) use. The token is minted on the
 # HOST with gcloud and the completion POST is sent from the host to the public
 # CP; the guest only exposes the login session on its loopback mgmt API.
 
@@ -55,7 +59,7 @@
 # override set by the caller (installtest-run.sh).
 IT_DAEMON_ENGINE_MODEL="${IT_BUNDLED_MODEL_ID:-granite4-350m}"
 
-# _it_daemon_mint_token — mint the SA id_token on the host (oidc mode only).
+# _it_daemon_mint_token — mint the SA id_token on the host (authkey mode).
 # Echoes the token on stdout, empty (return 1) on failure. Precondition
 # checks (mode / SA / gcloud) live in the caller so their it_die fires in the
 # script — an it_die inside this $()-captured function would only exit the
@@ -137,12 +141,12 @@ it_enroll_daemon_path() {
   flag="$IT_LOGDIR/daemon-engine-$name.flag"
 
   it_log "daemon-path enrol for $guest (service left running; executor engine install)"
-  [ "$IT_ENROLL_MODE" = oidc ] || it_die \
-    "--daemon-engine supports IT_ENROLL_MODE=oidc only (got '$IT_ENROLL_MODE')"
+  [ "$IT_ENROLL_MODE" = authkey ] || it_die \
+    "--daemon-engine supports IT_ENROLL_MODE=authkey only (got '$IT_ENROLL_MODE')"
   [ -n "$IT_IMPERSONATE_SA" ] || it_die \
-    "IT_ENROLL_MODE=oidc needs IT_IMPERSONATE_SA (the #339 test SA)"
+    "IT_ENROLL_MODE=authkey needs IT_IMPERSONATE_SA (the #339 test SA)"
   command -v gcloud >/dev/null 2>&1 || it_die \
-    "oidc enrol mints the SA id_token on the host; gcloud not found on PATH."
+    "authkey enrol mints the SA id_token on the host; gcloud not found on PATH."
   # `|| true`: a mint failure must surface as the it_die below (empty token),
   # not as a set -e abort on the command substitution.
   tok="$(_it_daemon_mint_token || true)"

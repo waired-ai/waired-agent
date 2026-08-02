@@ -10,7 +10,7 @@
 # Tier 2: + headless enroll against a Control Plane, asserting the #335
 #   state-dir/ownership/daemon chain (identity under /var/lib/waired owned
 #   by waired, daemon serves its mgmt API). Enrol mode = IT_ENROLL_MODE
-#   (oidc|bypass|interactive); see lib/installtest-enroll.sh.
+#   (authkey|interactive); see lib/installtest-enroll.sh.
 # Tier 3: + WireGuard data plane on a real kernel (LXD VM): two guests
 #   enroll through the full installer and ping over the overlay.
 #
