@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 231b42618f011656
+sourceHash: ab540c8020b3db26
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -546,6 +546,17 @@ GPU 側が実際に扱えるメモリ量で判定します。単体のグラフ�
 要約して収めます。冒頭を黙って失うのではなく、セッションが生き延びているということです。
 
 一瞬「prompt is too long」と表示されても、Claude Code が自動で再試行します。
+
+**思ったより早く（または遅く）要約される場合。** 上限は Claude Code を接続した
+時点で伝えられるため、モデルを切り替えたあとは古いままになることがあります。
+
+```sh
+waired claude status
+```
+
+**local window** の行に、今のモデルが扱える上限と、Claude Code が起動時に渡された
+上限が並びます。食い違っていると表示されたら `sudo waired claude enable` を実行し
+直し（Windows は管理者プロンプトから）、Claude Code を再起動してください。
 
 しばらく大きなウィンドウを使いたい場合は `/waired-route anthropic` で本来の
 Anthropic API に送れば、次のメッセージから本来のウィンドウが適用されます。

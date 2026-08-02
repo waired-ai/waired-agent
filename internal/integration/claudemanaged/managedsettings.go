@@ -27,10 +27,32 @@
 // The model-route-directives feature (#52), when opted in, additionally writes
 // env.CLAUDE_CODE_MAX_CONTEXT_TOKENS. That override is honoured ONLY for model
 // ids not starting with "claude-", so it sizes the non-"claude-" directive ids
-// ("anthropic-waired-local" and "anthropic-waired-auto") to an honest ~256k
-// window while never touching real "claude-*" ids — categorically different
-// from the #771 auto-compact backstop that capped 1M Anthropic sessions. On by
-// default (opt-out via agentconfig); WriteWithOptions gates the actual write.
+// ("anthropic-waired-local" and "anthropic-waired-auto") while never touching
+// real "claude-*" ids — categorically different from the #771 auto-compact
+// backstop that capped 1M Anthropic sessions. On by default (opt-out via
+// agentconfig); WriteWithOptions gates the actual write.
+//
+// That value is the window this host can ACTUALLY serve, not a claim (#408):
+// the caller resolves it from the gateway (Deps.ContextWindowFor — min of the
+// manifest's native window and the tuning the engine really applied) and hands
+// it in as WriteOptions.LocalContextWindow. Before #408 it was a static
+// 250000, which promised ~256k on hosts serving 32k; once the agent started
+// writing the /model picker cache (#407) users could select that id and
+// believe the number. When the window cannot be resolved (agent down, no
+// active model) Write leaves whatever the file carries alone rather than
+// restating a figure it cannot stand behind.
+//
+// Refresh is deliberately NOT the daemon's: the writer is always the elevated
+// CLI (docs/decisions/20260728/1444-init-daemon-path-owns-claude-routing.md
+// §4, waired#935 — the daemon runs as a service account, Linux User=waired,
+// behind an unauthenticated local IPC socket, so writing this admin-owned file
+// would make it a privilege bridge). A serving-model change therefore leaves
+// the value stale until the next `waired claude enable` / init; `waired claude
+// status` shows the drift, the gateway's per-request overflow 400 keeps
+// guarding the real window, and waired#1031 removes the drift structurally by
+// fixing the window as an advertised contract. Note too that Claude Code
+// applies env only at process start — no writer, however privileged, can
+// correct a session already running.
 //
 // It also installs a Stop hook (hooks.Stop) that runs `waired claude
 // _fallback-hook` so a post-dispatch fallback to the real Anthropic API is
@@ -59,6 +81,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
@@ -114,17 +137,18 @@ const subagentModelKey = "CLAUDE_CODE_SUBAGENT_MODEL"
 // CLAUDE_CODE_AUTO_COMPACT_WINDOW backstop this package deliberately stopped
 // writing — it can never cap a genuine 1M Anthropic session. waired writes it
 // only for the model-route-directives feature (#52), to give the non-"claude-"
-// directive ids ("anthropic-waired-local" / "anthropic-waired-auto") an honest
-// ~256k window; like every managed env it is frozen at Claude Code process start.
+// directive ids ("anthropic-waired-local" / "anthropic-waired-auto") the real
+// local window; like every managed env it is frozen at Claude Code process start.
 const maxContextTokensKey = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 
-// directivesMaxContextTokensValue is the window waired advertises for the local
-// directive id (#52): a little under the ~256k local engine window so Claude
-// Code compacts proactively just before the gateway's per-request overflow 400
-// would fire. Treated as waired-owned: set when the feature is on, scrubbed
-// (only when it still carries this exact value, mirroring the auto-compact
-// backstop scrub) when it is off, so an operator's own override survives.
-const directivesMaxContextTokensValue = "250000"
+// legacyDirectivesMaxContextTokensValue is the static window pre-#408 waired
+// wrote for maxContextTokensKey — "a little under the ~256k local engine
+// window", chosen before anything measured the window a host actually serves.
+// Write now derives the value per host (WriteOptions.LocalContextWindow) and
+// keeps this constant for the two ownership questions it still answers:
+// replace it on upgrade, and recognise it as ours when the feature is toggled
+// off. Same shape as legacyAutoCompactWindowValue.
+const legacyDirectivesMaxContextTokensValue = "250000"
 
 // loopbackPrefix is the signature of a URL waired itself writes. Remove only
 // strips ANTHROPIC_BASE_URL when it carries this prefix, so an operator's own
@@ -152,10 +176,51 @@ type WriteOptions struct {
 	// ModelRouteDirectives mirrors agentconfig
 	// InferenceConfig.ClaudeModelRouteDirectives (#52). When true, Write sets
 	// CLAUDE_CODE_MAX_CONTEXT_TOKENS so the non-"claude-" local /model id gets
-	// an honest ~256k window; when false, Write scrubs the value waired wrote
+	// the real local window; when false, Write scrubs the value waired wrote
 	// (leaving an operator's own override alone), so toggling the feature off
 	// and re-running `waired claude enable` cleans up after itself.
 	ModelRouteDirectives bool
+
+	// LocalContextWindow is the effective input-token window local inference
+	// can actually serve on this host — the gateway's ContextWindowFor for the
+	// claude-route serving model, i.e. the same number /v1/models advertises as
+	// max_input_tokens for "anthropic-waired-local" (#408).
+	//
+	// 0 means "could not be determined" (agent not running, no active model,
+	// unknown sizing). With the feature ON that makes Write leave any existing
+	// value untouched — silence beats replacing one unverifiable number with
+	// another. Callers should resolve it even when ModelRouteDirectives is
+	// false: the feature-off scrub identifies waired's value by matching it,
+	// so it needs to know what this host would have written.
+	LocalContextWindow int
+}
+
+// RemoveOptions carries what Remove needs beyond the file itself.
+type RemoveOptions struct {
+	// LocalContextWindow has the same meaning and the same source as
+	// WriteOptions.LocalContextWindow; Remove uses it only to recognise a
+	// CLAUDE_CODE_MAX_CONTEXT_TOKENS value as waired-written. 0 (agent already
+	// stopped by the time disable runs, say) falls back to recognising the
+	// pre-#408 static constant, and a host-derived value then survives the
+	// disable — inert, because the loopback base URL that gave the
+	// non-"claude-" directive ids their meaning goes with it.
+	LocalContextWindow int
+}
+
+// wairedOwnedMaxContextTokens reports whether cur is a
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS value waired wrote, so a scrub leaves an
+// operator's own override in place. Two shapes qualify: the pre-#408 static
+// constant, and the window this host resolves right now.
+//
+// This cannot recognise a value written for a DIFFERENT serving model than the
+// one running at scrub time. The alternative — stamping an ownership marker
+// into a file operators and MDM also own — is worse than leaving one inert key
+// behind in that case.
+func wairedOwnedMaxContextTokens(cur string, window int) bool {
+	if cur == legacyDirectivesMaxContextTokensValue {
+		return true
+	}
+	return window > 0 && cur == strconv.Itoa(window)
 }
 
 // Write merges env.ANTHROPIC_BASE_URL=baseURL and the subagent traffic
@@ -204,14 +269,24 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	// intercept rewrites the id back to a real Anthropic model on
 	// passthrough legs. Unconditional overwrite, like the base URL.
 	env[subagentModelKey] = SubagentModelID
-	// #52: give the non-"claude-" local /model directive id an honest ~256k
-	// window via CLAUDE_CODE_MAX_CONTEXT_TOKENS when the feature is on; scrub
-	// our value when it is off (an operator's own override — any other value —
-	// survives). Harmless when the feature is off and the key was never set.
-	if opts.ModelRouteDirectives {
-		env[maxContextTokensKey] = directivesMaxContextTokensValue
-	} else if cur, ok := env[maxContextTokensKey].(string); ok && cur == directivesMaxContextTokensValue {
-		delete(env, maxContextTokensKey)
+	// #52/#408: size the non-"claude-" local /model directive id via
+	// CLAUDE_CODE_MAX_CONTEXT_TOKENS when the feature is on, from the window
+	// this host actually serves. Overwritten unconditionally like the base URL
+	// and the subagent label — the key exists because waired introduced it and
+	// means nothing without waired's directive ids. An unresolved window is the
+	// one case we do not write: a stale honest number beats a fresh guess, and
+	// `waired claude status` reports the gap. Scrub our value when the feature
+	// is off (an operator's own override survives; see
+	// wairedOwnedMaxContextTokens for what "ours" can and cannot recognise).
+	switch {
+	case opts.ModelRouteDirectives && opts.LocalContextWindow > 0:
+		env[maxContextTokensKey] = strconv.Itoa(opts.LocalContextWindow)
+	case opts.ModelRouteDirectives:
+		// Window unknown — leave whatever the file carries untouched.
+	default:
+		if cur, ok := env[maxContextTokensKey].(string); ok && wairedOwnedMaxContextTokens(cur, opts.LocalContextWindow) {
+			delete(env, maxContextTokensKey)
+		}
 	}
 	obj["env"] = env
 
@@ -230,12 +305,17 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	return path, nil
 }
 
-// Remove strips env.ANTHROPIC_BASE_URL (only when it points at waired's loopback
-// listener) from managed-settings.json, cleaning up an emptied env / object /
-// file. It is a no-op (removed=false) when the file is absent, unparseable, or
-// the key is missing or operator-owned. Best-effort: a pre-existing operator
-// file with other keys is left otherwise untouched.
-func Remove() (bool, error) {
+// Remove is RemoveWithOptions with no resolved local window — the caller
+// either has no agent to ask or does not care. See RemoveOptions for what that
+// costs.
+func Remove() (bool, error) { return RemoveWithOptions(RemoveOptions{}) }
+
+// RemoveWithOptions strips env.ANTHROPIC_BASE_URL (only when it points at
+// waired's loopback listener) from managed-settings.json, cleaning up an
+// emptied env / object / file. It is a no-op (removed=false) when the file is
+// absent, unparseable, or the key is missing or operator-owned. Best-effort: a
+// pre-existing operator file with other keys is left otherwise untouched.
+func RemoveWithOptions(opts RemoveOptions) (bool, error) {
 	path := resolvePath()
 	if path == "" {
 		return false, nil
@@ -266,9 +346,10 @@ func Remove() (bool, error) {
 			if cur, ok := env[autoCompactWindowKey].(string); ok && cur == legacyAutoCompactWindowValue {
 				delete(env, autoCompactWindowKey)
 			}
-			// #52: scrub our max-context-tokens value (an operator's own
-			// override — any other value — is preserved).
-			if cur, ok := env[maxContextTokensKey].(string); ok && cur == directivesMaxContextTokensValue {
+			// #52/#408: scrub our max-context-tokens value (an operator's own
+			// override — any other value — is preserved). Since the value is
+			// host-derived, "ours" now depends on opts.LocalContextWindow.
+			if cur, ok := env[maxContextTokensKey].(string); ok && wairedOwnedMaxContextTokens(cur, opts.LocalContextWindow) {
 				delete(env, maxContextTokensKey)
 			}
 			removed = true
@@ -347,7 +428,21 @@ func ViewAt(path string) (present bool, baseURL string) {
 // managed-settings file at path ("" when absent / unparseable / unset) —
 // the #646 counterpart to ViewAt's base-URL view, kept as a separate
 // helper so ViewAt's signature stays stable for its callers.
-func SubagentModelAt(path string) string {
+func SubagentModelAt(path string) string { return envStringAt(path, subagentModelKey) }
+
+// MaxContextTokensAt reports the CLAUDE_CODE_MAX_CONTEXT_TOKENS value in the
+// managed-settings file at path ("" when absent / unparseable / unset). It
+// exists so `waired claude status` can show the window Claude Code will be
+// started with next to the one local inference actually serves: since #408 the
+// two can disagree (a serving-model change after the last elevated write), and
+// a silent disagreement is exactly the failure #408 set out to end.
+func MaxContextTokensAt(path string) string { return envStringAt(path, maxContextTokensKey) }
+
+// envStringAt reads one env value out of the managed-settings file at path,
+// returning "" for every "not there" case (no path, unreadable, unparseable,
+// key absent, non-string value) — these accessors are display helpers and must
+// never turn a malformed operator file into an error.
+func envStringAt(path, key string) string {
 	if path == "" {
 		return ""
 	}
@@ -360,7 +455,7 @@ func SubagentModelAt(path string) string {
 		return ""
 	}
 	if env, ok := obj["env"].(map[string]any); ok {
-		if v, ok := env[subagentModelKey].(string); ok {
+		if v, ok := env[key].(string); ok {
 			return v
 		}
 	}

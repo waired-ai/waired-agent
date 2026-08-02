@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 5337c40cb1f55dd3
+sourceHash: b7e61979a5b742bb
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -125,8 +125,12 @@ waired claude route anthropic --subagents waired  # 本体はクラウド、サ�
 意味を持つのは、実際にクラウドへ送られたときだけです。
 
 **長いセッションは要約されます。** ローカルのモデルは一度に保持できる会話量が
-少ないため、Claude Code が古いターンを要約して収めます。これは失敗ではなく、
-セッションが生き延びているということです
+少ないため、Claude Code が古いターンを要約して収めます。Waired は今のモデルが
+実際に扱える上限を Claude Code に伝えるので、要約は適切なタイミングで起こります。
+あとで別のモデルに切り替えたときは、新しい上限を伝えるために
+`sudo waired claude enable` を実行し直してください（Windows は管理者プロンプトから）。
+`waired claude status` が両方の数値を表示し、食い違っていればそう伝えます。これは
+失敗ではなく、セッションが生き延びているということです
 （→ [長い Claude Code のセッションが要約される](/ja/troubleshooting/#long-claude-code-sessions-get-summarized)）。
 
 **失敗しても止まらず、クラウドに回ります。** 一時停止中・ダウンロード中・非対応の

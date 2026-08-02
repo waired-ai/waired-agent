@@ -521,6 +521,18 @@ losing its beginning.
 
 If you briefly see “prompt is too long”, Claude Code retries on its own.
 
+**Summarizing much earlier or later than you expect?** The limit is passed to
+Claude Code when you connect it, so it can fall behind after you switch models:
+
+```sh
+waired claude status
+```
+
+The **local window** line shows the limit your model handles now next to the one
+Claude Code was started with. If it says they disagree, re-run
+`sudo waired claude enable` (Windows: from an administrator prompt), then restart
+Claude Code.
+
 Want the larger window for a while? `/waired-route anthropic` sends the session
 to the real Anthropic API, and the full window applies from your next message.
 
