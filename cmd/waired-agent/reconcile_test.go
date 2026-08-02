@@ -808,30 +808,70 @@ func TestReconciler_RingDrivenOnlyByRoundFinalized(t *testing.T) {
 // TestReconciler_SafetyNetSilencedByRecentDirectEvidence: when probe-
 // driven IS active (RTT samples or misses arrive within FallbackAfter),
 // the safety net stays out of the way even if WG hasn't handshaken.
-// This prevents two-layer fighting.
+// This prevents two-layer fighting. Product contract, not a record of
+// today's behaviour — the silencing rule exists so the two layers do
+// not fight.
+//
+// Runs on a driven clock (#384). The rule under test is an upper bound
+// — now-lastDirectEvidenceAt < FallbackAfter — so the sleep-based
+// version was betting that a 35ms sleep would not overshoot by 15ms.
+// It held on an idle box and lost on a loaded CI runner (measured on
+// Windows under CPU contention: 11% of runs overshot 50ms, p95 54ms).
+// The other sleeps in this file are lower bounds ("wait PAST
+// FallbackAfter"), where overshoot only makes the condition truer, so
+// they are left alone.
 func TestReconciler_SafetyNetSilencedByRecentDirectEvidence(t *testing.T) {
-	pubA := mkPeerKey(t)
-	nm := nm1Peer(pubA, "udp4:198.51.100.10:51820")
+	// run drives one timeline and returns the endpoint the Tick left
+	// behind. withEvidence decides whether an RTT sample lands mid-way
+	// — the ONE difference between the two legs below.
+	run := func(t *testing.T, withEvidence bool) string {
+		t.Helper()
+		pubA := mkPeerKey(t)
+		nm := nm1Peer(pubA, "udp4:198.51.100.10:51820")
 
-	eng := &fakeEngine{}
-	prov := &agentProvider{}
-	rec := newReconciler(eng, prov, quietLogger(), nil, fastTestConfig())
-	if err := rec.Apply(nm); err != nil {
-		t.Fatalf("Apply: %v", err)
+		eng := &fakeEngine{}
+		prov := &agentProvider{}
+		rec := newReconciler(eng, prov, quietLogger(), nil, fastTestConfig())
+
+		base := time.Now()
+		clock := base
+		rec.now = func() time.Time { return clock }
+
+		// Apply anchors lastEvalAt and lastDirectEvidenceAt at base.
+		if err := rec.Apply(nm); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+
+		if withEvidence {
+			// An RTT sample mid-way moves lastDirectEvidenceAt forward;
+			// handleRTTSample stamps it from e.At, so no clock needed.
+			rec.OnDiscoEvent(disco.EventProbeRTTSampled{
+				PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+				Path: pathDirect, RTT: 80 * time.Millisecond,
+				At: base.Add(rec.cfg.FallbackAfter / 2),
+			})
+		}
+
+		// Tick past FallbackAfter from Apply, so the safety net IS
+		// eligible (now-lastEvalAt >= FallbackAfter) and no WG
+		// handshake has happened. Only the evidence gate can stop it.
+		clock = base.Add(rec.cfg.FallbackAfter + 10*time.Millisecond)
+		rec.Tick(context.Background())
+		return eng.lastEndpointFor(pubA)
 	}
 
-	// Wait past FallbackAfter, but inject an RTT sample mid-way so
-	// lastDirectEvidenceAt is recent. Safety net must NOT fire.
-	time.Sleep(rec.cfg.FallbackAfter / 2)
-	rec.OnDiscoEvent(disco.EventProbeRTTSampled{
-		PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
-		Path: pathDirect, RTT: 80 * time.Millisecond, At: time.Now(),
-	})
-	time.Sleep(rec.cfg.FallbackAfter/2 + 10*time.Millisecond)
-
-	rec.Tick(context.Background())
-	if got := eng.lastEndpointFor(pubA); !strings.HasPrefix(got, "udp4:") {
+	if got := run(t, true); !strings.HasPrefix(got, "udp4:") {
 		t.Fatalf("safety net fired despite recent disco evidence: got %q", got)
+	}
+
+	// Control leg. A driven clock can silence the safety net by
+	// accident — pick the wrong instant and the peer is skipped at the
+	// eligibility gate, leaving the test green without ever reaching
+	// the rule it claims to cover. Same timeline, no RTT sample: it
+	// must flip to relay.
+	if got := run(t, false); !strings.HasPrefix(got, "relay:") {
+		t.Fatalf("control leg: safety net did not fire without disco evidence, "+
+			"so the assertion above proves nothing: got %q", got)
 	}
 }
 
