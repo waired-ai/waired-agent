@@ -116,7 +116,16 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		// apart from "polled from a build predating capability intake" by
 		// whether the CSV is empty at all, so an empty declaration would
 		// have it report an out-of-date client instead.
-		caps := `"` + signer.CapabilityPublicShareV1 + `"`
+		//
+		// context-window-v1 is unconditional for the same reason: it
+		// declares that this BUILD understands
+		// InferenceState.ContextWindow on peer entries, which every build
+		// carrying this line does. There is nothing to be capable OF at
+		// runtime — unlike the onboarding set, whose applier only exists
+		// on some paths — and the gate protects signature verification,
+		// not the routing decision (waired#1031).
+		caps := `"` + signer.CapabilityContextWindowV1 +
+			`","` + signer.CapabilityPublicShareV1 + `"`
 		if c.OnboardingCapable {
 			// All three or none: the CP gates desired_integrations on v2
 			// and desired_model_gen on v3, with the rest on v1, so

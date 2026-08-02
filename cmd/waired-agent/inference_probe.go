@@ -99,6 +99,19 @@ type inferenceProbeDeps struct {
 	// it tracks a re-tune; 0 (or nil) omits the field from the push.
 	RecommendedMaxParallel func() int
 
+	// DeclaredContextWindow, when non-nil, returns the input-token window
+	// this node stands behind for its active model, or 0 for "declares
+	// nothing" (waired#1031). Read live each tick so a re-tune or a model
+	// switch moves it, exactly like RecommendedMaxParallel above.
+	//
+	// Unlike that one this is NOT advisory telemetry: the requesting side
+	// of the mesh routes on it, which is why the getter reports the
+	// APPLIED tuning only and reports 0 rather than a number below the
+	// smallest declarable window (see agentInferenceProvider.
+	// DeclaredContextWindow). Nil, or 0, keeps the field off the wire and
+	// leaves every consumer on its pre-#1031 behaviour.
+	DeclaredContextWindow func() int
+
 	// AdvertiseTag is the engine-side name peers may ask this node for
 	// (Ollama /api/tags name, or vLLM /v1/models id). Empty when no
 	// Active selection is set (fresh agent, pre-model-pull). When
@@ -216,6 +229,15 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		if deps.RecommendedMaxParallel != nil {
 			if n := deps.RecommendedMaxParallel(); n > 0 {
 				s.RecommendedMaxParallel = n
+			}
+		}
+		// waired#1031: the window this node stands behind. Set AFTER
+		// narrowPublishedModels, because the two have to agree — a node
+		// that just withdrew its model advertisement is not serving
+		// anything, so it may not be carrying a window for it either.
+		if deps.DeclaredContextWindow != nil && len(s.Models) > 0 {
+			if w := deps.DeclaredContextWindow(); w > 0 {
+				s.ContextWindow = w
 			}
 		}
 		// Set before the aggregator sees it, so the on-host diagnose view

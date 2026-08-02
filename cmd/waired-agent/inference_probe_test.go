@@ -1230,3 +1230,77 @@ func TestAdvertisedEngineTag(t *testing.T) {
 		})
 	}
 }
+
+// TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement pins
+// that the declared window (waired#1031) and the advertised model move
+// together. A window without a model would tell peers "I serve 200k" of
+// nothing; the requesting router matches on the model first and would
+// then route to a node that answers 404.
+func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"models":[{"name":"llama3.1:8b"}]}`)
+	}))
+	defer ollama.Close()
+	port, err := portFromURL(ollama.URL)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+	push := func(advertise string, window int) string {
+		t.Helper()
+		var mu sync.Mutex
+		var bodies []string
+		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer cpSrv.Close()
+
+		dir := t.TempDir()
+		stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+		if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		runLocalInferenceProbe(ctx, inferenceProbeDeps{
+			StateWriter:           stWriter,
+			PushClient:            controlclient.New(cpSrv.URL, "tok"),
+			DeviceID:              "dev-self",
+			MachineKey:            machinePriv,
+			EngineKind:            signer.InferenceTypeOllama,
+			EnginePort:            port,
+			AdvertiseTag:          advertise,
+			ServingTag:            advertise,
+			DeclaredContextWindow: func() int { return window },
+			Logger:                slog.Default(),
+		})
+		cancel()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) == 0 {
+			t.Fatal("no push")
+		}
+		return bodies[0]
+	}
+
+	if b := push("llama3.1:8b", 200704); !strings.Contains(b, `"context_window":200704`) {
+		t.Errorf("a serving node did not publish its window: %s", b)
+	}
+	// The engine reports llama3.1:8b; the agent's Active selection says
+	// something else, so narrowPublishedModels withdraws the advertisement.
+	// The window must go with it.
+	if b := push("qwen3.5-9b:q4_K_M", 200704); strings.Contains(b, "context_window") {
+		t.Errorf("published a window with no model to serve it: %s", b)
+	}
+	// A node that declares nothing keeps the field off the wire entirely,
+	// so its peer entry stays byte-identical for readers that predate it.
+	if b := push("llama3.1:8b", 0); strings.Contains(b, "context_window") {
+		t.Errorf("a node declaring nothing put the field on the wire: %s", b)
+	}
+}

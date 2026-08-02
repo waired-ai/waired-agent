@@ -34,6 +34,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 		{
 			name: "onboarding capable", capable: true,
 			want: []string{
+				signer.CapabilityContextWindowV1,
 				signer.CapabilityPublicShareV1,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
@@ -41,8 +42,14 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 			},
 		},
 		{
+			// context-window-v1 joins public-share-v1 in BOTH rows, and for
+			// the same reason those two differ from the onboarding set: they
+			// declare what this BUILD understands on the wire, not what this
+			// host is configured to do. A device with local AI off still
+			// consumes peer entries and still has to be able to read the
+			// window on them (waired#1031).
 			name: "local AI off", capable: false,
-			want: []string{signer.CapabilityPublicShareV1},
+			want: []string{signer.CapabilityContextWindowV1, signer.CapabilityPublicShareV1},
 			absent: []string{
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,

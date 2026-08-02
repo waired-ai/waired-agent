@@ -190,11 +190,10 @@ var producedInProto = []exemption{
 // `rate_bps` by #197, `driver` and the benchmark trial fields by
 // #198/#199, and the onboarding-v3 wire (#411) did the same for
 // `SetupProgress.ModelGen`, paid by #136. waired#1030's `NotShared` (#417)
-// took the debt on the same terms and #428 paid it.
-var producerPending = []exemption{
-	{reflect.TypeFor[signer.InferenceState](), "ContextWindow",
-		"declared serving window (waired#1031); the agent-side writer lands in #437"},
-}
+// took the debt on the same terms and #428 paid it. waired#1031's
+// `ContextWindow` (#439) was the most recent, and this PR pays it.
+// Empty again, and that is the point.
+var producerPending = []exemption{}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the

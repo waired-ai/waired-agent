@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // The anchor host for every #624 calibration: RTX PRO 4000 Blackwell
@@ -61,17 +62,77 @@ func TestOllamaServesContextFloor_AnchorBoundedSpill(t *testing.T) {
 	}
 }
 
-func TestOllamaServesContextFloor_HeavierVariantExcluded(t *testing.T) {
-	// The non-MTP tag's measured weight (23.9 GB): expected spill ≈ 25%
-	// exceeds the bound — matches the #625 judgment (mtp dominant).
+// TestOllamaServesContextFloor_HeavierVariantIsTheRecommendGatesToDrop
+// is the #625 judgment (mtp dominant on the 24 GB anchor) after
+// waired#1031 moved WHICH pass enforces it.
+//
+// The non-MTP tag's measured weight (23.9 GB) does not fit the anchor's
+// card even before any KV, so this gate now passes it: a card that
+// cannot hold the weights leaves the host no worse off than the same
+// host without it, and gating there made adding VRAM remove models. The
+// spill is still reported, and it is the RECOMMENDATION gate — the pass
+// that owns "worth serving at all" — that keeps the tag from being
+// auto-selected on this card.
+func TestOllamaServesContextFloor_HeavierVariantIsTheRecommendGatesToDrop(t *testing.T) {
 	m := floorManifest(262144)
 	v := catalog.Variant{EstimatedWeightGB: 23.9, KVBytesPerTokenFP16: 20480}
 	ok, spill := OllamaServesContextFloor(m, v, anchorHost())
-	if ok {
-		t.Fatalf("23.9 GB variant must fail the bounded-spill gate (expected spill %.3f)", spill)
+	if !ok {
+		t.Fatalf("the weights alone exceed the anchor's card, so this gate must pass "+
+			"permissively like the card-free host does (expected spill %.3f)", spill)
 	}
 	if spill <= OllamaMaxExpectedSpillFraction {
-		t.Errorf("expected spill fraction = %.4f, want > bound %.2f", spill, OllamaMaxExpectedSpillFraction)
+		t.Errorf("expected spill fraction = %.4f, want > bound %.2f — the honest cost "+
+			"must still be reported even though the gate no longer excludes on it",
+			spill, OllamaMaxExpectedSpillFraction)
+	}
+	rec := hostfit.OllamaRecommend(v, anchorHost().HostFit())
+	if rec.Fits {
+		t.Error("nothing now stops the 23.9 GB tag being auto-selected on the 24 GB anchor; " +
+			"the #625 judgment has no enforcing pass left")
+	}
+	if rec.Reason != hostfit.ReasonWeightsSpill {
+		t.Errorf("recommendation Reason = %q, want %q", rec.Reason, hostfit.ReasonWeightsSpill)
+	}
+	// And the anchor's actual pick is unchanged: the mtp tag holds its
+	// weights, so it is still the one the gate above admits AND the
+	// recommendation keeps.
+	mtp := catalog.Variant{EstimatedWeightGB: 22.62, KVBytesPerTokenFP16: 20480}
+	if r := hostfit.OllamaRecommend(mtp, anchorHost().HostFit()); !r.Fits {
+		t.Errorf("the anchor lost its flagship: mtp tag now %+v", r)
+	}
+}
+
+// TestOllamaServesContextFloor_MonotoneInVRAM is the invariant whose
+// absence waired#1031 exposed. The gate used to pass a CPU-only host
+// unconditionally and then apply a bounded-spill test the moment a card
+// appeared, so a 32 GB host with a 2 GB card kept a tier-90 model and
+// the SAME host with a 4 GB card dropped to tier 27 — RankModels narrows
+// on this gate and keeps any non-empty subset, so "almost everything
+// excluded" is obeyed while "everything excluded" is ignored.
+//
+// Adding VRAM may never turn a pass into a fail. The expected-spill
+// fraction is monotonically decreasing in the budget, so the only
+// discontinuity was the card-free special case, and this pins that it is
+// gone for a range of weights spanning laptop to workstation.
+func TestOllamaServesContextFloor_MonotoneInVRAM(t *testing.T) {
+	m := floorManifest(262144)
+	for _, weightGB := range []float64{1.9, 3.4, 6.6, 17.0, 22.62, 23.9} {
+		v := catalog.Variant{EstimatedWeightGB: weightGB, KVBytesPerTokenFP16: 20480}
+		prev := true // the card-free host, which always passes
+		for _, vramMB := range []int{2048, 4096, 8192, 12288, 16303, 24564, 49152} {
+			hw := hardware.Profile{
+				RAMTotalGB: 64,
+				GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "test", VRAMTotalMB: vramMB}},
+			}
+			ok, spill := OllamaServesContextFloor(m, v, hw)
+			if !ok && prev {
+				t.Errorf("%.2f GB weights: %d MB of VRAM fails the floor gate while less VRAM "+
+					"passed it (expected spill %.3f) — adding a card removed a model",
+					weightGB, vramMB, spill)
+			}
+			prev = ok
+		}
 	}
 }
 
@@ -91,9 +152,15 @@ func TestOllamaServesContextFloor_SecondCardAdmitsIt(t *testing.T) {
 	two := anchorHost()
 	two.GPUs = append(two.GPUs, hardware.GPU{Vendor: "nvidia", VRAMTotalMB: 24467})
 
-	if ok, _ := OllamaServesContextFloor(m, v, one); ok {
-		t.Fatal("the one-card case no longer excludes this variant, so this test " +
-			"proves nothing — re-pick the variant against the current constants")
+	// The boolean no longer discriminates here — one card that cannot hold
+	// the weights passes permissively (see
+	// TestOllamaServesContextFloor_MonotoneInVRAM) — so the #264 property
+	// is asserted on the number the gate reports instead. A pooled host
+	// that really does hold the weights predicts NO spill; an under-counted
+	// one predicts a large one, which is what the bug looked like.
+	if _, spill := OllamaServesContextFloor(m, v, one); spill <= OllamaMaxExpectedSpillFraction {
+		t.Fatalf("the one-card case predicts only %.3f spill, so this test proves "+
+			"nothing — re-pick the variant against the current constants", spill)
 	}
 	ok, spill := OllamaServesContextFloor(m, v, two)
 	if !ok {
@@ -262,24 +329,43 @@ func TestRankModels_PreferredBypassesFloor(t *testing.T) {
 	}
 }
 
+// TestRankModels_BestEffortFallbackWhenNothingServesFloor is the
+// best-effort path after waired#1031: it fires when no model's OWN window
+// reaches the floor, which is the only case left where no amount of
+// hardware helps.
+//
+// It used to be driven by an 8 GiB card instead, on the reasoning that
+// none of the fixture models "serves ~200k" there. That reasoning was
+// the non-monotone gate: the same host with no card at all serves the
+// flagship's 200k window out of system RAM, and a card can only add to
+// that. What the 8 GiB card actually changes is how FAST it runs, which
+// the recommendation gate says out loud and the case below asserts.
 func TestRankModels_BestEffortFallbackWhenNothingServesFloor(t *testing.T) {
-	// 8 GiB discrete card: none of the fixture models serves ~200k
-	// (small-pass needs ~9.9 GB incl. KV; the rest don't even fit) —
-	// selection falls back to every fitting candidate, flagged.
+	// A catalog with nothing above the native floor: no host can serve a
+	// coding-agent window from it, so every pick is best-effort.
+	subFloor := []catalog.Manifest{{
+		ModelID: "subfloor-champ", ContextLength: 131072,
+		Capabilities: []string{"chat", "tool_use"},
+		Variants: []catalog.Variant{{
+			VariantID: "q4", Format: "ollama-tag", RuntimeSupport: []string{catalog.RuntimeOllama},
+			EstimatedWeightGB: 16.3, KVBytesPerTokenFP16: 65536, QualityTier: 95, MinRAMGB: 24,
+			Source: catalog.VariantSource{Type: "ollama", Tag: "q4"},
+		}},
+	}}
 	hw := hardware.Profile{
 		RAMTotalGB: 32,
-		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 8192}},
+		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24564}},
 	}
-	ranked, err := RankModels(PickInput{Catalog: floorCatalog(), Hardware: hw, Engine: catalog.RuntimeOllama})
+	ranked, err := RankModels(PickInput{Catalog: subFloor, Hardware: hw, Engine: catalog.RuntimeOllama})
 	if err != nil {
 		t.Fatalf("RankModels: %v", err)
 	}
 	for _, p := range ranked {
 		if p.ContextFloorSatisfied {
-			t.Errorf("%s: no candidate should satisfy the floor on this host", p.Manifest.ModelID)
+			t.Errorf("%s: a 131072-native model can never satisfy the floor", p.Manifest.ModelID)
 		}
 	}
-	pick, err := PickModel(PickInput{Catalog: floorCatalog(), Hardware: hw, Engine: catalog.RuntimeOllama})
+	pick, err := PickModel(PickInput{Catalog: subFloor, Hardware: hw, Engine: catalog.RuntimeOllama})
 	if err != nil {
 		t.Fatalf("PickModel: %v", err)
 	}
@@ -291,6 +377,51 @@ func TestRankModels_BestEffortFallbackWhenNothingServesFloor(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("reasons lack the best-effort line: %v", pick.Reasons)
+	}
+}
+
+// TestRankModels_SmallCardCostsTierNotTheWindow is what a card too small
+// for the flagship's weights may and may not cost.
+//
+// It may cost quality: the recommendation gate prefers a smaller model
+// whose weights the card holds, and waired-ai/waired#988 accepted that
+// trade explicitly ("a LOWER pick is the accepted trade; no pick is
+// not"). It may NOT cost the window — under waired#1031 the pick is what
+// the node will declare, so a selection that lands on a sub-floor model
+// would take this host out of mesh serving entirely.
+func TestRankModels_SmallCardCostsTierNotTheWindow(t *testing.T) {
+	hw := hardware.Profile{
+		RAMTotalGB: 32,
+		GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 8192}},
+	}
+	pick, err := PickModel(PickInput{Catalog: floorCatalog(), Hardware: hw, Engine: catalog.RuntimeOllama})
+	if err != nil {
+		t.Fatalf("PickModel: %v", err)
+	}
+	if !pick.ContextFloorSatisfied {
+		t.Errorf("%s: the pick must be one this host can declare a window for",
+			pick.Manifest.ModelID)
+	}
+	if pick.Manifest.ContextLength < 262144 {
+		t.Errorf("%s has a %d-token native window; the card cost this host the window "+
+			"rather than a tier", pick.Manifest.ModelID, pick.Manifest.ContextLength)
+	}
+	// The flagship IS dropped on this card, and by the pass that should
+	// drop it: at 22.62 GB of weights against 8 GiB it decodes in the
+	// single digits, which is the #229 roofline's judgment, not the
+	// window's. This gate reports its cost and excludes nothing.
+	flagship := floorCatalog()[0].Variants[0]
+	ok, spill := OllamaServesContextFloor(floorCatalog()[0], flagship, hw)
+	if !ok {
+		t.Error("the window gate must not be what drops a spilling model — it has no " +
+			"speed term, and excluding on it is not monotone in VRAM")
+	}
+	if spill <= OllamaMaxExpectedSpillFraction {
+		t.Errorf("expected spill = %.3f; the cost must still be reported honestly", spill)
+	}
+	if rec := hostfit.OllamaRecommend(flagship, hw.HostFit()); rec.Fits ||
+		rec.Reason != hostfit.ReasonWeightsSpill {
+		t.Errorf("recommendation on an 8 GiB card = %+v, want a weights_spill refusal", rec)
 	}
 }
 
