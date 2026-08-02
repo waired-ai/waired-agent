@@ -69,7 +69,6 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 | `--device-name <name>` | ホスト名ではなく、指定した名前でこのパソコンを登録します。 |
 | `--control <URL>` | 既定ではなく指定したコントロールプレーンでサインインします。→ [インストールの詳細オプション](/ja/reference/install-options/) |
 | `--auth-key <key>` | ブラウザでのサインインの代わりに認証キーで参加します（サーバーやコンテナ向け）。`file:/path/to/key` も指定でき、フラグを省略すると `$WAIRED_AUTH_KEY` を読みます。キーは[管理コンソール](/ja/guides/web-console/)の **設定 → 認証キー** で作成します。→ [サインインとセットアップ](/ja/getting-started/first-run/#servers-and-containers-auth-keys) |
-
 | `--force-reauth` | すでにサインイン済みのパソコンで、あらためてサインインし直します。これを付けない場合、`waired init` はセットアップの続きから進み、既存のサインインはそのままにします（`--auth-key` を渡した場合も、そのキーは使われません）。 |
 
 正式な一覧は `waired init --help` です。ここに載せていない開発者向け・CI 専用の
