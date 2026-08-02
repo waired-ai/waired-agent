@@ -290,10 +290,14 @@ the console.
 The model then downloads in the foreground with a progress bar:
 
 ```
-Starting the inference engine…
+Starting the AI engine…
 Preparing to download qwen3-coder-30b-a3b-instruct…
 Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 ```
+
+The model named on those lines is the one **you** chose. When setup is
+running in the browser, that is the model you picked there — not whichever
+model the computer would have selected for itself.
 
 <Aside type="note" title="If the download is still running">
 	These files are tens of gigabytes, so on a slow connection this takes a
@@ -307,13 +311,24 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 		watching. The terminal says *“Continuing in the background — the agent
 		finishes the download on its own”* and carries on with the rest of setup.
 	- **When the browser is driving setup**, the terminal stays with the bar
-		until the download finishes, so the two halves never disagree about
-		whether setup is done. <kbd>Enter</kbd> does not leave in that case: this
-		window is the one doing the installation.
+		until the model you chose has finished downloading, so the two halves
+		never disagree about whether setup is done. <kbd>Enter</kbd> does not
+		leave in that case: this window is the one doing the installation.
 
 	Either way the download belongs to the background service, not to this
 	command: <kbd>Ctrl</kbd>+<kbd>C</kbd> **does not cancel it**. Check on it any
 	time with `waired status`.
+</Aside>
+
+<Aside type="caution" title="“Waired hasn't started downloading … yet”">
+	If the terminal says this, the model you chose in the browser has been
+	asked for but nothing has begun fetching it — most often because this
+	version cannot run that particular model on this computer. The terminal
+	hands the shell back rather than waiting; the background service keeps
+	trying.
+
+	Run `waired models ls` to see what state each model is in, and
+	`waired doctor` if it stays that way.
 </Aside>
 
 <Expected>
