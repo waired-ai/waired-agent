@@ -44,10 +44,12 @@ const (
 	// the Claude Code main loop / subagents. Emitted by the
 	// claudeNodeController on every successful SetTarget.
 	KindClaudeNodeChange Kind = "claude_node_change"
-	// KindClaudeNodeFallback is emitted when a Claude request whose
-	// class targets a pinned mesh node could not be served there and
-	// was non-destructively retried locally (#648) — the persisted
-	// policy stays pinned; routing resumes when the peer returns.
+	// KindClaudeNodeFallback is emitted when an anthropic-routed Claude
+	// request was served locally because the real Anthropic API was
+	// unreachable — the persisted policy stays put; routing resumes when
+	// the upstream returns. A pinned mesh node that cannot serve does NOT
+	// produce this event: since waired-agent#325 the pin is fail-closed on
+	// every surface and reports KindPinnedPeerUnreachable instead.
 	KindClaudeNodeFallback Kind = "claude_node_fallback"
 	// KindPublicShareNudge is the one-shot hint that enabling Public
 	// Share MIGHT give this device access to more capable nodes,
@@ -135,9 +137,12 @@ type ClaudeNodeChangeEvent struct {
 	PeerDeviceID string `json:"peer_device_id,omitempty"`
 }
 
-// ClaudeNodeFallbackEvent records one Claude request that could not be
-// served on its class's pinned node and fell back to local serving
-// (#648). Reason discriminates "unreachable" vs "model_not_ready".
+// ClaudeNodeFallbackEvent records one Claude request that could not reach
+// its route's upstream and fell back to local serving. The only producer
+// left is the intercept's anthropic-route degrade (reason
+// "anthropic_unreachable"), which has no peer, so PeerDeviceID stays empty;
+// the field is kept because the event shape is served over the management
+// API. Pinned-node failures fail closed instead (waired-agent#325).
 type ClaudeNodeFallbackEvent struct {
 	Class        string `json:"class"`
 	PeerDeviceID string `json:"peer_device_id"`

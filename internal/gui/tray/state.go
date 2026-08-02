@@ -1302,14 +1302,20 @@ func workerSummaryLabel(w management.WorkerResponse) string {
 		if name == "" {
 			name = w.PinnedPeerDeviceID
 		}
+		// A down pin says what it MEANS, not just that it is down
+		// (waired-agent#325): the pin is fail-closed, so nothing runs on
+		// this computer in its place. "not served here" is the accurate
+		// phrasing for every surface — general inference fails outright,
+		// while a Claude turn on the auto route leaves for the Anthropic
+		// API; neither is served by the pinned worker.
 		suffix := ""
 		switch w.PinnedPeerStatus {
 		case "ok":
 			// no suffix — the active row already conveys it
 		case "unavailable":
-			suffix = " (unavailable)"
+			suffix = " — unavailable, requests are not served here"
 		case "absent":
-			suffix = " (absent)"
+			suffix = " — absent, requests are not served here"
 		}
 		return name + " (pinned)" + suffix
 	default:
@@ -1641,16 +1647,19 @@ func applyClaudeRouting(m *MenuModel, st *management.ClaudeRoutingState, claude 
 
 // claudeFallbackNote renders the last-fallback disabled row. Direction
 // "anthropic" means an auto request was rescued by the real API (Waired
-// failed); "local" means an anthropic/peer request was served locally
-// instead (upstream/peer unavailable) — the two read very differently to a
-// user worried about where their prompts went.
+// failed); "local" means an anthropic-routed request was served locally
+// instead (upstream unavailable) — the two read very differently to a
+// user worried about where their prompts went. A pinned worker never
+// produces the "local" direction any more: the pin is fail-closed
+// (waired-agent#325), so the only remaining producer is the unreachable
+// Anthropic upstream.
 func claudeFallbackNote(ev *management.ClaudeRoutingFallbackEvent) string {
 	if ev == nil {
 		return ""
 	}
 	switch ev.Direction {
 	case "local":
-		return "⚠ last served locally (Anthropic/peer unavailable)"
+		return "⚠ last served locally (Anthropic unavailable)"
 	default: // "anthropic" (or unset legacy)
 		return "⚠ last fell back → Anthropic (Waired unavailable)"
 	}

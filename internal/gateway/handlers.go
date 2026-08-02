@@ -122,6 +122,33 @@ func (rr *requestRec) fail(status int, reason string) {
 	rr.ev.ErrorReason = reason
 }
 
+// failSelection records a failed Selector call. A pinned-peer failure also
+// names the peer: selection produced no Selection, so setSelection never
+// runs and ev.PeerID would otherwise stay empty in the WARN emit and the
+// event ring — leaving the operator with "a pin is down" and no way to tell
+// which one (waired-agent#325).
+func (rr *requestRec) failSelection(err error) {
+	if rr == nil {
+		return
+	}
+	rr.fail(selectionStatus(err), selectionErrorReason(err))
+	if peer := pinnedPeerOf(err); peer != "" {
+		rr.ev.PeerID = peer
+	}
+}
+
+// pinnedPeerOf extracts the display identifier of the peer a pinned-routing
+// failure names, or "" when err is not one. Display form only: a Public
+// Share peer's real device id must never reach a header, a log line or an
+// error body (spec §8.5) — the router resolves that at construction.
+func pinnedPeerOf(err error) string {
+	var pin *router.PinnedPeerUnreachableError
+	if errors.As(err, &pin) {
+		return pin.PeerDisplayID
+	}
+	return ""
+}
+
 func (rr *requestRec) succeed() {
 	if rr.ev.Status == 0 {
 		rr.ev.Status = http.StatusOK

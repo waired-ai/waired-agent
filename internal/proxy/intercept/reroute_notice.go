@@ -39,6 +39,15 @@ func buildRerouteNotice(class, localErr, peer, budgetMs string) string {
 	if class == classSub {
 		turn = "this subagent turn"
 	}
+	if localErr == localErrPinnedPeerUnreachable {
+		// waired-agent#325: the pin is fail-closed, so an unreachable pinned
+		// worker no longer quietly hands the turn to this machine's engine —
+		// on the auto route it leaves for the Anthropic API instead. Say which
+		// setting caused it; the peer is deliberately not named (an
+		// identifier means nothing to the person reading the transcript).
+		return fmt.Sprintf("\n\n---\n> ⚠️ waired: %s was rerouted to the Anthropic API because the worker "+
+			"you pinned is unavailable. Change routing with `waired worker`.", turn)
+	}
 	if localErr == localErrPeerTTFBTimeout && peer != "" {
 		within := ""
 		if b := budgetSeconds(budgetMs); b != "" {

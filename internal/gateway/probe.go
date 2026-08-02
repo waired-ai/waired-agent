@@ -57,6 +57,15 @@ const (
 	// mode reroutes the turn. The literal is duplicated in
 	// internal/proxy/intercept (stdlib-only package) — keep them in sync.
 	LocalErrorPeerTTFBTimeout = "peer_ttfb_timeout"
+	// LocalErrorPinnedPeerUnreachable is the HeaderLocalError value staged
+	// when the operator's pinned peer cannot serve the request. Like
+	// LocalErrorPeerTTFBTimeout it IS a normal fallback reason — nothing was
+	// committed — so the intercept's auto mode reroutes the turn to the real
+	// Anthropic API and names the pin in the reroute notice. On the "waired"
+	// route there is no fallback and the 503 reaches the client. The literal
+	// is duplicated in internal/proxy/intercept (stdlib-only package) — keep
+	// them in sync.
+	LocalErrorPinnedPeerUnreachable = "pinned_peer_unreachable"
 
 	// HeaderTTFBBudgetMs is a response header staged alongside
 	// LocalErrorPeerTTFBTimeout carrying the budget (milliseconds) that

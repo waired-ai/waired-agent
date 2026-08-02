@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/router"
@@ -23,15 +22,16 @@ import (
 // Code on this device), so dispatching to a peer here is one hop, and the
 // peer's own overlay stays local-only (loop prevention unchanged).
 //
-// When the worker preference pins a peer that cannot serve the request right
-// now, selection retries locally instead of failing the turn — the persisted
-// preference is NOT demoted (routing resumes when the peer returns) and the
-// fallback is recorded via onNodeFallback so it is never silent.
+// The worker pin is FAIL-CLOSED here, exactly as on every other surface
+// (waired-agent#325): when the pinned peer cannot serve the request the
+// selection error propagates. This surface used to retry locally instead,
+// which hid an explicit operator action — and, because the retry also
+// rewrote the request to the device-active model, it quietly served a
+// different model than the one the pin was chosen for. Whether the turn then
+// fails outright or reaches the real Anthropic API is the per-class route's
+// decision (`waired claude route`), taken above this layer.
 type claudeSelector struct {
 	p *agentInferenceProvider
-	// onNodeFallback records a pinned-node local fallback (class, peer
-	// device id, reason). nil disables recording (tests).
-	onNodeFallback func(class, peerDeviceID, reason string)
 }
 
 // classifyClaudeModel derives the traffic class from the ORIGINAL client
@@ -60,60 +60,15 @@ func (c *claudeSelector) workerPref() state.RoutingPreference {
 	return state.RoutingPreference{Mode: state.RoutingModeAuto}
 }
 
-// localFallbackRequest rewrites the request for the local retry leg: a pinned
-// peer's model is usually not on local disk, so the local leg asks for the
-// device-active model instead. The response body echoes the client's original
-// model id regardless (gateway contract), so the rewrite only affects
-// selection + telemetry.
-func (c *claudeSelector) localFallbackRequest(req router.Request) router.Request {
-	if id, ok := c.p.ActiveModelID(); ok {
-		req.Model = id
-	}
-	return req
-}
-
-// pinFellThrough reports whether a pinned-mode selection error is one of the
-// two "the pin cannot serve this right now" shapes that warrant the
-// non-destructive local retry. ErrAllPeersOverloaded is deliberately
-// excluded: the pin IS serving, it's at capacity — surface the 503 +
-// Retry-After (overflow policy is #651).
-func pinFellThrough(err error) (reason string, ok bool) {
-	switch {
-	case errors.Is(err, router.ErrPinnedPeerUnreachable):
-		return "unreachable", true
-	case errors.Is(err, router.ErrModelNotReady):
-		return "model_not_ready", true
-	default:
-		return "", false
-	}
-}
-
-func (c *claudeSelector) recordFallback(class, peer, reason string) {
-	if c.onNodeFallback != nil {
-		c.onNodeFallback(class, peer, reason)
-	}
-}
-
 // selectWithWorkerPref is the one implementation of the worker-preference
-// selection + non-destructive pin fallback shared by Select and SelectK, so
-// the fallback semantics cannot drift between the two entry points. run
-// executes one selection against a Selector built for the given preference.
+// selection shared by Select and SelectK, so node choice cannot drift between
+// the two entry points. run executes one selection against a Selector built
+// for the operator's live preference; its error — including a pinned peer
+// that cannot serve — is returned untouched.
 func selectWithWorkerPref[T any](ctx context.Context, c *claudeSelector, req router.Request,
 	run func(ctx context.Context, sel *router.Selector, req router.Request) (T, error),
 ) (T, error) {
-	pref := c.workerPref()
-	out, err := run(ctx, c.p.buildSelectorWith(ctx, pref), req)
-	if err == nil || pref.Mode != state.RoutingModePinned {
-		return out, err
-	}
-	reason, retry := pinFellThrough(err)
-	if !retry {
-		var zero T
-		return zero, err
-	}
-	c.recordFallback(req.Class, pref.PinnedPeerDeviceID, reason)
-	local := state.RoutingPreference{Mode: state.RoutingModeLocalOnly}
-	return run(ctx, c.p.buildSelectorWith(ctx, local), c.localFallbackRequest(req))
+	return run(ctx, c.p.buildSelectorWith(ctx, c.workerPref()), req)
 }
 
 func (c *claudeSelector) Select(ctx context.Context, req router.Request) (router.Selection, error) {

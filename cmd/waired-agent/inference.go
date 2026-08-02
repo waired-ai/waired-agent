@@ -202,11 +202,6 @@ type inferenceSubsystemDeps struct {
 	// it once per SelectK to read mode + pinned peer atomically. nil
 	// keeps the pre-feature behaviour (Mode=auto).
 	Routing func() state.RoutingPreference
-
-	// OnClaudeNodeFallback records a Claude request whose worker pin could
-	// not serve it, so the non-destructive local retry is never silent
-	// (#648). nil disables recording.
-	OnClaudeNodeFallback func(class, peerDeviceID, reason string)
 }
 
 // startInferenceSubsystem brings up the runtime registry, gateway,
@@ -646,10 +641,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// resolver maps unresolvable Anthropic ids to the class target
 	// node's model (#600 extended per-class).
 	claudeDeps := baseGatewayDeps()
-	claudeDeps.Selector = &claudeSelector{
-		p:              provider,
-		onNodeFallback: deps.OnClaudeNodeFallback,
-	}
+	claudeDeps.Selector = &claudeSelector{p: provider}
 	// AllowOpenAI stays false: the intercept surface speaks Anthropic
 	// shapes only.
 	claudeDeps.AllowAnthropic = cfg.AllowAnthropicAPI
@@ -686,7 +678,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// resolve an unresolvable Anthropic id to that peer's model so the
 		// pinned selection reports the precise pin state; otherwise (and on
 		// an unusable pin — down / stale / nothing servable) fall to the
-		// device-active model so the claudeSelector's local retry works.
+		// device-active model, which is what an unpinned request would have
+		// asked for anyway. This does NOT re-open a local escape hatch for a
+		// down pin: a pinned Selector only ever returns mesh candidates
+		// (endpoint_router.go, RoutingModePinned), so the request still
+		// fails closed — the resolved id only decides which model the error
+		// names.
 		if deps.Routing != nil && deps.MeshSnapshotFn != nil {
 			if pref := deps.Routing(); pref.Mode == state.RoutingModePinned && pref.PinnedPeerDeviceID != "" {
 				if m, ok := router.ResolveModelForPeer(manifests, deps.MeshSnapshotFn(), pref.PinnedPeerDeviceID); ok {

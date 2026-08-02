@@ -127,7 +127,7 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	}
 	if err != nil {
 		rr.ev.Model = routeReq.Model // the mapped id when mapping was applied
-		rr.fail(selectionStatus(err), selectionErrorReason(err))
+		rr.failSelection(err)
 		respondAnthropicSelectionError(w, err)
 		return
 	}
@@ -618,8 +618,12 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error) {
 		// condition is environmental, not a gateway bug, and clears when
 		// the peer returns. The staged HeaderLocalError turns the
 		// intercept's fallback reason into local_pinned_peer_unreachable
-		// so the operator sees *why* Claude traffic left the pin.
-		w.Header().Set(HeaderLocalError, "pinned_peer_unreachable")
+		// so the operator sees *why* Claude traffic left the pin, and the
+		// staged peer lets the reroute notice name it.
+		w.Header().Set(HeaderLocalError, LocalErrorPinnedPeerUnreachable)
+		if peer := pinnedPeerOf(err); peer != "" {
+			w.Header().Set(HeaderInferencePeer, peer)
+		}
 		w.Header().Set("Retry-After", "5")
 		writeAnthropicError(w, http.StatusServiceUnavailable, "waired_pinned_peer_unreachable", err.Error())
 	case errors.Is(err, router.ErrHardwareInsufficient):

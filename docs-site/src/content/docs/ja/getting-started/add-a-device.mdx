@@ -5,7 +5,7 @@ meta:
   audience: 2 台目のパソコンがある人
   needs: 1 台目と同じ Google アカウント
   time: 新しいパソコンで 10 分
-sourceHash: ed254f344ea11b9b
+sourceHash: d5b6720795b2142b
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -76,6 +76,15 @@ waired worker set --mode=peer-preferred
 waired peers list                    # 自分のパソコン一覧
 waired worker set --pin=<デバイス>    # このパソコンに固定
 ```
+
+<Aside type="caution" title="固定は「そこだけを使う」という指示です">
+	`--pin` は「このパソコンを使い、ほかは使わない」という意味です。固定した
+	パソコンがスリープ中・オフライン・共有オフのときは、こっそり別の場所で
+	動かすことはせず、エラーになります。
+	[パソコンを固定したらリクエストが通らなくなった](/ja/troubleshooting/#requests-stopped-working-after-i-pinned-a-computer)
+	を参照してください。ルールではなく「なるべくそこ」で良ければ
+	`--mode=peer-preferred` を使ってください。
+</Aside>
 
 <Aside type="note" title="ルーターの設定は不要です">
 	ネットワークが許せば端末どうしが直接つながり、ファイアウォールが邪魔する場合は

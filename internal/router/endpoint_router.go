@@ -341,6 +341,30 @@ var (
 	ErrPinnedPeerUnreachable = errors.New("router: pinned peer is unreachable")
 )
 
+// PinnedPeerUnreachableError is what the Selector actually returns for
+// ErrPinnedPeerUnreachable. It carries the pinned peer's identity so the
+// gateway can name the peer in telemetry, response headers and the
+// user-facing reroute notice without re-deriving it from the routing
+// preference (which the gateway does not see).
+//
+// PeerDisplayID follows the same rule as Selection.PeerDisplayID: the grant
+// pseudonym for a Public Share peer, the real DeviceID otherwise (spec
+// §8.5). It is the only identifier that may reach an error body, a header
+// or a log line.
+//
+// errors.Is(err, ErrPinnedPeerUnreachable) keeps working via Unwrap, so
+// every existing sentinel comparison is unaffected.
+type PinnedPeerUnreachableError struct {
+	PeerDisplayID string
+	ModelID       string
+}
+
+func (e *PinnedPeerUnreachableError) Error() string {
+	return fmt.Sprintf("%s: %q", ErrPinnedPeerUnreachable.Error(), e.PeerDisplayID)
+}
+
+func (e *PinnedPeerUnreachableError) Unwrap() error { return ErrPinnedPeerUnreachable }
+
 // Candidate is one option SelectK returns to the caller before any
 // admission slot is consumed. The Phase 8 gateway probes each
 // candidate's overlay /healthz endpoint in parallel (cheap, no GPU
@@ -826,10 +850,7 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 		// raw is empty only when no peer carries the model.
 		if s.in.RoutingMode == state.RoutingModePinned && s.in.PinnedPeerDeviceID != "" {
 			if !pinReachableInSnapshot(snap, s.in.PinnedPeerDeviceID) {
-				if s.in.Recorder != nil {
-					s.in.Recorder.RecordPinnedPeerUnreachable(s.in.PinnedPeerDeviceID, manifest.ModelID, "unreachable")
-				}
-				return nil, fmt.Errorf("%w: %q", ErrPinnedPeerUnreachable, s.in.PinnedPeerDeviceID)
+				return nil, s.pinUnreachable(snap, manifest.ModelID)
 			}
 		}
 		return nil, nil
@@ -872,10 +893,7 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 			// "pin is up but lacks the model" (soft fallback) from
 			// "pin is unreachable" (strict 503) using the full snapshot.
 			if !pinReachableInSnapshot(snap, s.in.PinnedPeerDeviceID) {
-				if s.in.Recorder != nil {
-					s.in.Recorder.RecordPinnedPeerUnreachable(s.in.PinnedPeerDeviceID, manifest.ModelID, "unreachable")
-				}
-				return nil, fmt.Errorf("%w: %q", ErrPinnedPeerUnreachable, s.in.PinnedPeerDeviceID)
+				return nil, s.pinUnreachable(snap, manifest.ModelID)
 			}
 			// Soft fallback: leave raw alone, let scoring decide. Emit
 			// a lacks_model event so the tray surfaces the silent miss.
@@ -1018,6 +1036,39 @@ func pinReachableInSnapshot(snap inferencemesh.Snapshot, pin string) bool {
 		return true
 	}
 	return false
+}
+
+// pinUnreachable emits the strict-pin event and builds the error for the
+// "operator pinned a peer that cannot serve right now" case. Both call
+// sites in tryMeshFallbackK go through it so the recorded event and the
+// returned error shape cannot drift apart.
+func (s *Selector) pinUnreachable(snap inferencemesh.Snapshot, modelID string) error {
+	if s.in.Recorder != nil {
+		s.in.Recorder.RecordPinnedPeerUnreachable(s.in.PinnedPeerDeviceID, modelID, "unreachable")
+	}
+	return &PinnedPeerUnreachableError{
+		PeerDisplayID: pinDisplayID(snap, s.in.PinnedPeerDeviceID),
+		ModelID:       modelID,
+	}
+}
+
+// pinDisplayID is the identifier that may be shown for the pinned peer.
+// A Public Share peer must be named by its grant pseudonym and never by
+// its real device id (spec §8.5). A pin that is absent from the snapshot
+// can only be named by the id the operator configured — we have nothing
+// else, and it is their own device id in every case a pin is settable
+// from the tray's own-network peer list.
+func pinDisplayID(snap inferencemesh.Snapshot, pin string) string {
+	for i := range snap.Peers {
+		if snap.Peers[i].DeviceID != pin {
+			continue
+		}
+		if ps, ok := publicDisplayID(snap.Peers[i].Grant); ok {
+			return ps
+		}
+		break
+	}
+	return pin
 }
 
 // applyStickyFirst hoists the sticky-bound peer to the head of the

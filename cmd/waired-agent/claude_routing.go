@@ -120,12 +120,15 @@ func (c *claudeRoutingController) RecordFallback(reason string) {
 	c.logger.Warn("claude routing: fallback to real Anthropic", "reason", reason)
 }
 
-// RecordNodeFallback is the intercept OnNodeFallback + claudeSelector hook: an
-// anthropic-routed request whose upstream was unreachable, or a pinned-peer
-// request whose peer was unavailable, was served locally instead. Records it
+// RecordNodeFallback is the intercept OnNodeFallback hook: an anthropic-routed
+// request whose upstream was unreachable was served locally instead. Records it
 // (direction=local); the persisted policy is NOT demoted — routing resumes
-// when the node returns — so this record is what keeps the degrade from being
-// silent (the "Claude integration must not silently break" principle).
+// when the upstream returns — so this record is what keeps the degrade from
+// being silent (the "Claude integration must not silently break" principle).
+//
+// A pinned peer that cannot serve no longer arrives here: since
+// waired-agent#325 the worker pin is fail-closed on every surface, so
+// peerDeviceID is always empty in practice.
 func (c *claudeRoutingController) RecordNodeFallback(class, peerDeviceID, reason string) {
 	c.recordFallbackEvent(class, peerDeviceID, reason, "local")
 	c.logger.Warn("claude routing: node unavailable, serving locally",
