@@ -2,9 +2,65 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
+
+// TestExitPlanFor pins the numbers themselves. PRODUCT CONTRACT: these are
+// a shell interface — install.sh and install.ps1 branch on them, and a
+// change here is a change to what those scripts tell the user.
+//
+// 3 rather than 1 because with only 0 and 1 an installer's two options are
+// both wrong: 0 is what let it print "🎉 Waired is installed." over a
+// device whose engine never came up, and 1 would have it report a sign-in
+// that plainly succeeded as "sign-in did not complete". 130 is the Ctrl-C
+// path's (setup_executor.go) and stays a real interruption.
+func TestExitPlanFor(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		want      int
+		wantPrint bool
+	}{
+		{name: "nothing went wrong", err: nil, want: 0},
+		{
+			// Non-zero AND silent, which is the unusual pair: the closing
+			// box is the user-facing account of this outcome, and a
+			// "waired: ..." line under it reads as a second problem.
+			name: "signed in, but local AI is down",
+			err:  errLocalAIDown, want: exitLocalAIDown, wantPrint: false,
+		},
+		{
+			// The caller returns the sentinel bare today, but an error that
+			// grew context on the way out must still land on the same code.
+			name: "the same outcome, wrapped",
+			err:  fmt.Errorf("finishing setup: %w", errLocalAIDown),
+			want: exitLocalAIDown, wantPrint: false,
+		},
+		{
+			name: "any other failure",
+			err:  errors.New("login timed out waiting for the daemon"),
+			want: 1, wantPrint: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, printErr := exitPlanFor(tc.err)
+			if got != tc.want {
+				t.Errorf("exitPlanFor(%v) code = %d, want %d", tc.err, got, tc.want)
+			}
+			if printErr != tc.wantPrint {
+				t.Errorf("exitPlanFor(%v) printErr = %v, want %v", tc.err, printErr, tc.wantPrint)
+			}
+		})
+	}
+	// The one thing a table of names cannot say: 3 must not collide with a
+	// code that already means something else on this command.
+	if exitLocalAIDown == 0 || exitLocalAIDown == 1 || exitLocalAIDown == 130 {
+		t.Errorf("exitLocalAIDown = %d, which already means something else", exitLocalAIDown)
+	}
+}
 
 // The closing box is the last thing `waired init` says, and until #310 it
 // was chosen by asking only whether the engine could be INSTALLED. On the
@@ -29,6 +85,11 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		summary daemonSummary
 		want    string
 		absent  []string
+		// wantExit is the process exit code the same outcome produces.
+		// Same table as the box on purpose: the two are derived from one
+		// struct by one rule, and splitting them across two tables is how
+		// they would drift into disagreeing about the same host (#310).
+		wantExit int
 	}{
 		{
 			name:    "everything landed",
@@ -37,19 +98,21 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			absent:  []string{needsInstall, notRunning},
 		},
 		{
-			name:    "the engine could not be installed (#188)",
-			summary: daemonSummary{engineErr: errors.New("download: 403")},
-			want:    needsInstall,
-			absent:  []string{celebration},
+			name:     "the engine could not be installed (#188)",
+			summary:  daemonSummary{engineErr: errors.New("download: 403")},
+			want:     needsInstall,
+			absent:   []string{celebration},
+			wantExit: exitLocalAIDown,
 		},
 		{
 			// #310, the case that had no box of its own. The install box
 			// would be wrong here: it points at the command that installs
 			// an engine, and this host already has one.
-			name:    "the engine installed and would not stay up (#310)",
-			summary: daemonSummary{engineFailure: "ollama: process exited during startup: signal: killed"},
-			want:    notRunning,
-			absent:  []string{celebration, needsInstall},
+			name:     "the engine installed and would not stay up (#310)",
+			summary:  daemonSummary{engineFailure: "ollama: process exited during startup: signal: killed"},
+			want:     notRunning,
+			absent:   []string{celebration, needsInstall},
+			wantExit: exitLocalAIDown,
 		},
 		{
 			// Both true: the install never produced an engine, so there is
@@ -59,8 +122,9 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 				engineErr:     errors.New("download: 403"),
 				engineFailure: "ollama: not reachable",
 			},
-			want:   needsInstall,
-			absent: []string{celebration, notRunning},
+			want:     needsInstall,
+			absent:   []string{celebration, notRunning},
+			wantExit: exitLocalAIDown,
 		},
 		{
 			// NEGATIVE CONTROL. A gateway-only host answers `disabled` and
@@ -87,6 +151,14 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 				if strings.Contains(got, a) {
 					t.Errorf("did not expect %q in the summary, got: %q", a, got)
 				}
+			}
+			// The exit code the installers branch on, from the same
+			// outcome. The zero rows are the load-bearing ones: a
+			// gateway-only host must keep exiting 0, or install.sh starts
+			// warning about machines that are doing exactly what they
+			// were configured to do.
+			if got, _ := exitPlanFor(tc.summary.exitErr()); got != tc.wantExit {
+				t.Errorf("exit code = %d, want %d", got, tc.wantExit)
 			}
 		})
 	}

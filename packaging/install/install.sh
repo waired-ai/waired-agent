@@ -139,6 +139,17 @@ if [ -n "${WAIRED_CLEAN:-}" ]; then FLAG_CLEAN=1; fi
 # so darwin_next_steps repeats the recovery at the end rather than letting the
 # user's last line of output be an unexplained warning from much earlier.
 DARWIN_REGISTER_FAILED=0
+# LOCAL_AI_DOWN: set when `waired init` exited WAIRED_INIT_LOCAL_AI_DOWN —
+# it signed this device in, and then found that local AI is not running
+# here (the engine could not be installed, or it installed and would not
+# stay up). Sign-in SUCCEEDED, so this is not the "sign-in did not
+# complete" case; the done banner adds a line rather than changing what
+# it says about the install.
+LOCAL_AI_DOWN=0
+# WAIRED_INIT_LOCAL_AI_DOWN mirrors exitLocalAIDown in cmd/waired/main.go.
+# Named rather than inline so the two `case` arms below cannot drift apart,
+# and so a reader can grep for the constant on both sides.
+WAIRED_INIT_LOCAL_AI_DOWN=3
 OS_KIND=""
 OS_FAMILY=""
 OS_NAME=""
@@ -985,8 +996,18 @@ EOF
         return 0
     fi
     common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
-    $SUDO "$@" <"$init_stdin" || \
-        common_warn "sign-in did not complete; finish later with: sudo waired init"
+    # Capture the code instead of collapsing every non-zero into one
+    # message: `waired init` distinguishes "signed in, but local AI is not
+    # running here" from a sign-in that really did not finish, and telling
+    # the user to re-run `waired init` would be wrong advice for the first
+    # (#310). `|| rc=$?` keeps this working under `set -e`.
+    init_rc=0
+    $SUDO "$@" <"$init_stdin" || init_rc=$?
+    case "$init_rc" in
+        0) ;;
+        "$WAIRED_INIT_LOCAL_AI_DOWN") LOCAL_AI_DOWN=1 ;;
+        *) common_warn "sign-in did not complete; finish later with: sudo waired init" ;;
+    esac
 }
 
 # linux_service_up makes sure the agent service is enabled at boot and
@@ -1212,12 +1233,38 @@ linux_apt_install() {
 # summary after a fresh install. Branches on whether sign-in completed.
 #
 # The engine line is MEASURED here rather than set by an earlier step,
+# set_local_ai_note fills $LOCAL_AI_NOTE with the warning block the done
+# banners carry when `waired init` reported that this device has no local
+# AI. Shared so the Linux and macOS banners cannot drift into saying
+# different things about the same outcome.
+#
+# The headline above it stays "Waired is installed", because it is: the
+# packages are on disk, the service is running, and the device is signed
+# in and on the network. Only local inference is missing, and saying
+# otherwise would send people hunting a broken install. It is also the
+# string all three installtest harnesses grep for as the "the run reached
+# its end" sentinel.
+#
+# A variable rather than a function that prints, because $(...) strips
+# trailing newlines and the block needs a blank line on BOTH sides. Empty
+# when nothing is wrong, which leaves the banner exactly as it was.
+set_local_ai_note() {
+    LOCAL_AI_NOTE=""
+    [ "$LOCAL_AI_DOWN" = 1 ] || return 0
+    LOCAL_AI_NOTE="
+$(emo '⚠️' '!')  Local AI is not running on this device.
+    Sign-in is finished; only local AI is missing.
+    Details:      waired doctor
+"
+}
+
 # because since #138 the installer does not decide it: `waired init` installs
 # the bundled engine only when the operator said this computer should run
 # models, so the honest answer is whatever is on disk once init has returned.
 # Same three arms and the same strings as darwin_next_steps.
 linux_done_banner() {
     section 'Done'
+    set_local_ai_note
     party="$(emo '🎉' '*')"
     if ollama_skip_requested; then
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; bundled engine later: sudo waired runtimes install ollama — or bring your own and pick \"reuse\" at sign-in)"
@@ -1237,7 +1284,7 @@ linux_done_banner() {
 
 $party Waired is installed.
 $ready
-
+$LOCAL_AI_NOTE
 $nextline
 Ollama:       $ollama_status
 Diagnostics:  waired doctor    (logs: journalctl -u waired-agent -e)
@@ -1649,8 +1696,18 @@ darwin_maybe_init() {
         return 0
     fi
     common_log "$(emo '🔑' '>>') Starting sign-in (waired init)…"
-    $SUDO "$@" <"$init_stdin" || \
-        common_warn "sign-in did not complete; finish later with: sudo waired init"
+    # Capture the code instead of collapsing every non-zero into one
+    # message: `waired init` distinguishes "signed in, but local AI is not
+    # running here" from a sign-in that really did not finish, and telling
+    # the user to re-run `waired init` would be wrong advice for the first
+    # (#310). `|| rc=$?` keeps this working under `set -e`.
+    init_rc=0
+    $SUDO "$@" <"$init_stdin" || init_rc=$?
+    case "$init_rc" in
+        0) ;;
+        "$WAIRED_INIT_LOCAL_AI_DOWN") LOCAL_AI_DOWN=1 ;;
+        *) common_warn "sign-in did not complete; finish later with: sudo waired init" ;;
+    esac
 }
 
 # darwin_detect_installed echoes the installed waired version (via
@@ -1762,6 +1819,7 @@ darwin_update() {
 darwin_next_steps() {
     state_dir="$1"
     section 'Done'
+    set_local_ai_note
     party="$(emo '🎉' '*')"
     if [ -e "$state_dir/identity.json" ]; then
         get_started="$(emo '✅' '[ok]') Enrolled — the agent is running.
@@ -1802,7 +1860,7 @@ LaunchDaemon: /Library/LaunchDaemons/com.waired.agent.plist (system, starts at b
 Ollama:      $ollama_status
 
 $get_started
-
+$LOCAL_AI_NOTE
 The agent runs as a system LaunchDaemon and starts at boot, independent of login.
 $tray_step
 Diagnostics:  waired doctor

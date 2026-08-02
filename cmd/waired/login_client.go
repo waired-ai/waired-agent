@@ -443,16 +443,26 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// hardware without an interactive prompt, so tell the user how to
 			// inspect and change it afterward.
 			printInferenceRoleGuidance(os.Stdout)
-			printDaemonSummaryBox(os.Stdout, daemonSummary{
+			summary := daemonSummary{
 				accountEmail:  st.AccountEmail,
 				engineErr:     engineErr,
 				engineFailure: modelWait.engineFailure,
 				bench:         outcomeFrom(resp),
 				claudeRouted:  claudeRouted,
-			})
-			// Sign-in succeeded either way, so init succeeds either way:
-			// the engine is a part of setup, not the point of it (#188).
-			return nil
+			}
+			printDaemonSummaryBox(os.Stdout, summary)
+			// Sign-in succeeded, so this is never a failed init: #188's rule
+			// stands, and errLocalAIDown is not an error in the "waired:
+			// something went wrong" sense — main.go gives it its own exit
+			// code and prints nothing, because the box above already said it
+			// in the words a person reads.
+			//
+			// What it buys is the one thing an installer could not otherwise
+			// learn: exit 0 meant "signed in", full stop, so install.sh had
+			// to choose between calling a successful sign-in a failure and
+			// printing 🎉 over a device with no local AI. It printed the 🎉
+			// (#310).
+			return summary.exitErr()
 		case management.LoginPhaseError:
 			if st.Error != "" {
 				return fmt.Errorf("login failed: %s", st.Error)
@@ -534,6 +544,26 @@ type daemonSummary struct {
 	claudeRouted  bool
 }
 
+// exitErr is what `waired init` returns for this outcome: errLocalAIDown
+// when sign-in worked but this device has no local AI — the engine could
+// not be installed (#188), or it installed and would not stay up (#310).
+//
+// One predicate for both, because outside this file they are one fact.
+// The two boxes differ only in which command to run next; an installer,
+// an exit code and an operator all care about the same thing.
+//
+// Deliberately NOT "the model wait returned not-ready": that is also the
+// honest answer on a gateway-only host with inference disabled, on a
+// takeover, and on a budget that simply elapsed. Only a STATED fault
+// counts, which is the same rule the box above is chosen by — and the
+// reason they are derived from one struct rather than decided twice.
+func (s daemonSummary) exitErr() error {
+	if s.engineErr != nil || s.engineFailure != "" {
+		return errLocalAIDown
+	}
+	return nil
+}
+
 // printDaemonSummaryBox renders the one box `waired init` ends on.
 //
 // Split out from the caller because this is a decision, not a print: it
@@ -556,6 +586,13 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted)
 	}
 }
+
+// errLocalAIDown makes the outcome above scriptable. main.go maps it to
+// exitLocalAIDown and prints nothing for it.
+//
+// A sentinel rather than a message: nothing reads this text — the boxes
+// are the user-facing account, and an installer branches on the number.
+var errLocalAIDown = errors.New("signed in, but local AI is not running on this device")
 
 // printDaemonEngineFailedBox is the summary for a run that signed the
 // device in but could not install the engine. Deliberately not the

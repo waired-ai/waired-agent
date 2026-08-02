@@ -183,9 +183,25 @@ it_enroll_guest() {
     *) it_die "unknown IT_ENROLL_MODE=$IT_ENROLL_MODE (want authkey|interactive)" ;;
   esac
 
-  if ! gx "$guest" env WAIRED_NO_EMOJI=1 "${initargs[@]}" 2>&1 | tee "$initlog"; then
-    it_die "waired init ($IT_ENROLL_MODE) failed in $guest — see $initlog"
-  fi
+  # `waired init` has three outcomes, not two (#310): 0 signed in, 3 signed
+  # in but this guest has no local AI, anything else failed. Collapsing 3
+  # into "failed" would fail a guest that enrolled perfectly — which is the
+  # DEFAULT here, since IT_INFERENCE_ENABLED is false unless a tier asks for
+  # inference. `set -o pipefail` is on, so this reads init's status, not tee's.
+  init_rc=0
+  gx "$guest" env WAIRED_NO_EMOJI=1 "${initargs[@]}" 2>&1 | tee "$initlog" || init_rc=$?
+  case "$init_rc" in
+    0) ;;
+    3)
+      # A tier that asked for local inference and did not get it IS a
+      # failure: that is the thing that tier exists to verify.
+      if [ "$IT_INFERENCE_ENABLED" = true ]; then
+        it_die "waired init enrolled $guest but local AI is not running, and this tier asked for it — see $initlog"
+      fi
+      it_log "waired init enrolled $guest; local AI is not running there (expected: IT_INFERENCE_ENABLED=$IT_INFERENCE_ENABLED)"
+      ;;
+    *) it_die "waired init ($IT_ENROLL_MODE) failed in $guest with exit $init_rc — see $initlog" ;;
+  esac
 
   # Restart the daemon on the freshly enrolled + chowned state: it enrolled
   # THROUGH the daemon, and the restart makes it re-read the state it just
