@@ -118,14 +118,15 @@ tests (waired#932 G7):
 
 ## Branching and concurrent development
 
-* Unless the user explicitly says to work on `main`, create a branch via
-  `git worktree` and make changes there:
+* Unless the user explicitly says to work on `main`, work in an
+  isolated worktree:
     ```sh
-    git worktree add .worktrees/<topic> -b <type>/<issue>-<short-description>
-    cd .worktrees/<topic>
+    git -C <repo-root> worktree add <abs-repo>/.claude/worktrees/<topic> \
+        -b <type>/<issue>-<short-description> origin/main
     ```
-  Clean up the worktree (`git worktree remove`) once the branch has been
-  merged or abandoned.
+  then `EnterWorktree(path: <abs path>)` to pin the session cwd there.
+  Remove with `git worktree remove` once merged or abandoned
+  (`ExitWorktree` only removes its own). `.worktrees/` is legacy.
 * **Branch naming** — `<type>/<issue>-<short-description>` (kebab-case,
   lowercase): `<type>` ∈ `feat` / `fix` / `docs` / `refactor` / `test` /
   `ci` / `build` / `chore` / `perf`; issue number right after the prefix

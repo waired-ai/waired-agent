@@ -27,5 +27,6 @@ go.work.sum
 .DS_Store
 *.swp
 
-# Local worktrees
+# Local worktrees (.claude/worktrees/ current, .worktrees/ legacy)
+/.claude/worktrees/
 /.worktrees/
