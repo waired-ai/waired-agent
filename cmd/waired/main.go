@@ -34,10 +34,51 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
+// exitLocalAIDown is `waired init`'s "signed in, but this device has no
+// local AI" — the engine could not be installed (#188), or it installed
+// and would not stay up (#310).
+//
+// Its own code because the two answers an installer could give with only
+// 0 and 1 are both wrong: 0 is what let install.sh print
+// "🎉 Waired is installed." over a device whose engine never came up,
+// and 1 would have it report a sign-in that plainly succeeded as
+// "sign-in did not complete".
+//
+// 1 stays every other failure. 130 is taken by the Ctrl-C path
+// (setup_executor.go), which is a real interruption and must keep saying
+// so. 2 is left alone: shells and getopt conventionally use it for usage
+// errors, and this is not one.
+const exitLocalAIDown = 3
+
+// exitPlanFor is everything main does about a command's error: the process
+// exit code, and whether to print the error at all.
+//
+// Both halves are split out of main because main calls os.Exit, so nothing
+// can observe either through it — and asserting on the sentinel instead
+// would pin the plumbing while leaving unpinned both the number the
+// installers branch on and the line the user sees.
+func exitPlanFor(err error) (code int, printErr bool) {
+	switch {
+	case err == nil:
+		return 0, false
+	case errors.Is(err, errLocalAIDown):
+		// The one failure that says nothing. The closing box has already
+		// said it in the words a person reads, and a "waired: ..." line
+		// after it would read as a second, separate problem.
+		return exitLocalAIDown, false
+	default:
+		return 1, true
+	}
+}
+
 func main() {
-	if err := newRootCmd().Execute(); err != nil {
+	err := newRootCmd().Execute()
+	code, printErr := exitPlanFor(err)
+	if printErr {
 		fmt.Fprintln(os.Stderr, "waired:", friendlyError(err))
-		os.Exit(1)
+	}
+	if code != 0 {
+		os.Exit(code)
 	}
 }
 

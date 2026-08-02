@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -158,6 +160,13 @@ type daemonInitScenario struct {
 	noBrowser       bool
 	nonInteractive  bool
 	skipIntegration bool
+	// wantExit is the process exit code the scenario expects, 0 unless
+	// stated. Declared per test rather than asserted once in the helper:
+	// this helper is shared by every scenario in three files, and a
+	// blanket "must succeed" would have to be loosened to "succeed, or
+	// else the one code we now also allow" — which stops catching the
+	// case where the wrong scenario starts returning it (#310).
+	wantExit int
 }
 
 // runDaemonInit runs the flow under a hard timeout — a regression that
@@ -196,10 +205,11 @@ func runDaemonInit(t *testing.T, url string, owner *stdinReader, o daemonInitSce
 	if timedOut {
 		t.Fatal("runInitViaDaemon hung")
 	}
-	// Sign-in succeeded in every scenario here, so init must succeed —
-	// including the failed-engine one (#188).
-	if runErr != nil {
-		t.Fatalf("runInitViaDaemon: %v\n---\n%s", runErr, out)
+	// Sign-in succeeded in every scenario here, so none of them is a
+	// FAILED init (#188) — the only non-zero code any of them may end on
+	// is the one that means "signed in, no local AI" (#310).
+	if got, _ := exitPlanFor(runErr); got != o.wantExit {
+		t.Fatalf("runInitViaDaemon exit = %d (err %v), want %d\n---\n%s", got, runErr, o.wantExit, out)
 	}
 	return out
 }
@@ -660,7 +670,12 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 		},
 	}
 
-	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{skipIntegration: true})
+	// #310: the run is a success as far as sign-in goes, and exit 3 is how
+	// it says "and this device has no local AI" without claiming the
+	// sign-in failed. Declared here rather than hidden in the helper —
+	// it is the whole point of this scenario.
+	out := runDaemonInit(t, d.server(t).URL, owner,
+		daemonInitScenario{skipIntegration: true, wantExit: exitLocalAIDown})
 
 	for _, want := range []string{
 		"The AI engine could not be installed on this device.",
@@ -679,6 +694,97 @@ func TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait(t *testing.T) {
 			t.Errorf("engine-failure run still printed %q\n---\n%s", unwanted, out)
 		}
 	}
+}
+
+// TestRunInitViaDaemon_EngineThatWillNotStartExitsLocalAIDown is the #310
+// half of the same contract, end to end: the engine INSTALLS here, and
+// then will not stay up. The install-failure test above cannot cover it —
+// its whole premise is that no engine exists.
+//
+// PRODUCT CONTRACT: exit 3, the ⚠️ box, and no celebration. install.sh
+// reads the number; the box is what the person reads.
+func TestRunInitViaDaemon_EngineThatWillNotStartExitsLocalAIDown(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 20*time.Millisecond, time.Minute)
+	shrinkSetupTimers(t)
+	owner := scriptStdin("")
+	stateDir := t.TempDir()
+	stubEngineAlreadyInstalled(t, stateDir)
+
+	d := &promptsDaemon{
+		// The rc7 host, as the daemon reported it: engine_failed with the
+		// engine's own account of why, held for as long as anyone waits.
+		statusSeq: []management.InferenceStatus{{
+			SubsystemState: "engine_failed",
+			Runtimes: map[string]management.RuntimeStatus{
+				"ollama": {State: "failed", LastError: "ollama: process exited during startup: signal: killed"},
+			},
+		}},
+		setupState: management.SetupStateResponse{
+			Active: true, DesiredEngine: "ollama", StateDir: stateDir,
+		},
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, owner,
+		daemonInitScenario{skipIntegration: true, wantExit: exitLocalAIDown})
+
+	for _, want := range []string{
+		"The AI engine failed to start",
+		"signal: killed", // the engine's own reason, verbatim
+		"local AI isn't running",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dead-engine run missing %q\n---\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"Waired is ready — everything completed successfully",
+		"local AI still needs installing", // the #188 box points at the wrong command here
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("dead-engine run still printed %q\n---\n%s", unwanted, out)
+		}
+	}
+}
+
+// stubEngineAlreadyInstalled is stubEngineInstallFailure's opposite: the
+// engine is present on every OS, so the install step skips and the run
+// reaches the model wait.
+//
+// That is the whole premise of the #310 host — the files are there, every
+// file-presence check says yes, and the thing still will not run. An
+// install failure takes a different branch and a different box, and on an
+// unelevated CI runner that is the branch a Linux run would take by
+// default.
+//
+// The bundled binary is written for real because engineInstallDecision
+// asks the FILESYSTEM on linux (bundledEnginePath) and the DETECTION on
+// windows/darwin; stubbing only one leaves the test passing on one OS and
+// taking the install branch on the others.
+func stubEngineAlreadyInstalled(t *testing.T, stateDir string) {
+	t.Helper()
+	bundled := filepath.Join(stateDir, "runtimes", "ollama", "bin", "ollama")
+	if err := os.MkdirAll(filepath.Dir(bundled), 0o755); err != nil {
+		t.Fatalf("mkdir bundled engine dir: %v", err)
+	}
+	if err := os.WriteFile(bundled, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write bundled engine: %v", err)
+	}
+	present := setup.OllamaDetection{
+		Installed: true, Supported: true, WairedManaged: true,
+		Path: bundled, Version: infruntime.OllamaPinnedVersion,
+	}
+	origInstall, origDetect := setupInstallEngine, setupDetectEngine
+	origNoExec, origBroken := setupDetectEngineNoExec, setupEngineSignatureBroken
+	setupInstallEngine = func(bool, string, func(infruntime.OllamaInstallProgress)) error { return nil }
+	setupDetectEngine = func(context.Context, string) setup.OllamaDetection { return present }
+	setupDetectEngineNoExec = func(string) setup.OllamaDetection { return present }
+	// macOS only: an unverifiable bundle would route to repair, i.e. back
+	// to the install branch. This host's engine is intact on disk.
+	setupEngineSignatureBroken = func(context.Context, setup.OllamaDetection) bool { return false }
+	t.Cleanup(func() {
+		setupInstallEngine, setupDetectEngine = origInstall, origDetect
+		setupDetectEngineNoExec, setupEngineSignatureBroken = origNoExec, origBroken
+	})
 }
 
 // stubEngineInstallFailure makes the executor's engine install fail on
