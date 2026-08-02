@@ -188,16 +188,10 @@ var producedInProto = []exemption{
 // the workspace rules require) with every agent-side producer still open,
 // and this table held the debt in the open until each one was paid —
 // `rate_bps` by #197, `driver` and the benchmark trial fields by
-// #198/#199. It emptied out, and each entry below is a debt taken on the
-// same terms.
+// #198/#199, and the onboarding-v3 wire (#411) did the same for
+// `SetupProgress.ModelGen`, paid by #136. Each entry below is a debt taken
+// on the same terms.
 var producerPending = []exemption{
-	// The onboarding-v3 wire (the model-generation retry lever) lands the
-	// same way: its own additive proto PR, with the agent-side applier
-	// still open. snapshot() writes this echo once #136 lands; delete
-	// this entry in that PR.
-	{reflect.TypeFor[signer.SetupProgress](), "ModelGen",
-		"echo of the acted-on DesiredModelGen; written by setupReconciler.snapshot once #136 lands"},
-
 	// waired-ai/waired#1030: the mesh-share toggle silences the admin
 	// telemetry channel as a side effect. The wire has to land first and
 	// separately (§Modules), and the control plane has to be deployed

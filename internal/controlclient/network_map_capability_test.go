@@ -37,6 +37,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				signer.CapabilityPublicShareV1,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
+				signer.CapabilityOnboardingV3,
 			},
 		},
 		{
@@ -45,6 +46,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 			absent: []string{
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
+				signer.CapabilityOnboardingV3,
 			},
 		},
 	} {

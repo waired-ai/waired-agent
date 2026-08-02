@@ -302,6 +302,14 @@ func desiredFrame(engine, model string, gen int) *signer.InferenceState {
 	}
 }
 
+// retryFrame is desiredFrame plus the model-download retry generation
+// (#136) — the CP's request that the pull be admitted again.
+func retryFrame(engine, model string, modelGen int) *signer.InferenceState {
+	st := desiredFrame(engine, model, 0)
+	st.DesiredModelGen = modelGen
+	return st
+}
+
 // TestSetupEngineStateIsAskedPerDesiredEngine pins that the reconciler
 // asks about the DESIRED engine kind, and that the answer for one engine
 // does not leak into another.
@@ -1262,6 +1270,139 @@ func TestSetupPullNotReadmittedWithoutEngineTransition(t *testing.T) {
 	}
 	if got := f.pullCount(); got != 1 {
 		t.Fatalf("pulls with a stable installed engine = %d, want 1", got)
+	}
+}
+
+// --- the model-download retry generation (#136) ---
+
+// TestSetupRetryGenReadmitsThePull is the whole point of the lever, and
+// its setup is the exact dead end from the rc7 review: an engine that was
+// ALREADY installed when the daemon started, and a download that failed
+// for a reason the operator then fixed.
+//
+// Product contract. Note what makes it a dead end without this: the only
+// other re-admission is the engine going absent→present, and
+// `engineObserved` is false on the first frame, so a host that already had
+// its engine never sees that transition for the rest of the process's
+// life. Only a daemon restart cleared it.
+func TestSetupRetryGenReadmitsThePull(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+	f.setModelState(catalog.ModelStateFailed, "no space left on device")
+
+	// Frames keep arriving with the same instruction; nothing re-queues.
+	for range 5 {
+		r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	}
+	if got := f.pullCount(); got != 1 {
+		t.Fatalf("pulls before the retry = %d, want 1", got)
+	}
+
+	// The operator frees space and presses the button.
+	r.Apply(ctx, retryFrame("ollama", "m-1", 1))
+	if got := f.pullCount(); got != 2 {
+		t.Fatalf("pulls after one retry = %d, want 2", got)
+	}
+}
+
+// TestSetupRetryGenIsIdempotent: the CP re-sends its instruction on every
+// map frame, so a condition on the generation's VALUE rather than on it
+// advancing would re-queue a multi-GB download forever. Product contract.
+func TestSetupRetryGenIsIdempotent(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+	f.setModelState(catalog.ModelStateFailed, "no space left on device")
+
+	for range 6 {
+		r.Apply(ctx, retryFrame("ollama", "m-1", 3))
+	}
+	if got := f.pullCount(); got != 2 {
+		t.Fatalf("pulls for one generation repeated 6 times = %d, want 2 (initial + one retry)", got)
+	}
+	// A further bump is a new request and must be honoured.
+	r.Apply(ctx, retryFrame("ollama", "m-1", 4))
+	if got := f.pullCount(); got != 3 {
+		t.Fatalf("pulls after a second generation = %d, want 3", got)
+	}
+}
+
+// TestSetupRetryGenWorksWithoutADesiredEngine: the clearing must not live
+// beside the engine-appeared block, which is skipped entirely when there
+// is no desired engine. A host set up earlier and now retrying a model
+// change has no engine instruction at all.
+func TestSetupRetryGenWorksWithoutADesiredEngine(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "", "m-1")
+	f.setModelState(catalog.ModelStateFailed, "connection reset")
+
+	before := f.pullCount()
+	r.Apply(ctx, retryFrame("", "m-1", 1))
+	if got := f.pullCount(); got != before+1 {
+		t.Fatalf("pulls after the retry = %d, want %d", got, before+1)
+	}
+}
+
+// TestSetupRetryGenClearsAStoredRejection: a refusal (unknown model, an
+// engine too old for it) is latched in modelRejected and reported as the
+// model step's failure. The retry has to clear it too, or the step stays
+// red with a reason that describes an attempt nobody is making any more.
+func TestSetupRetryGenClearsAStoredRejection(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	f.applyErr = errors.New(`unknown model "m-1"`)
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+
+	step := stepByID(t, r.snapshot(ctx), setupStepModelPull)
+	if step.Status != signer.SetupStatusFailed {
+		t.Fatalf("model step before the retry = %+v, want failed", step)
+	}
+	// The model is in the catalog now; the retry must let it through.
+	f.mu.Lock()
+	f.applyErr = nil
+	f.mu.Unlock()
+	r.Apply(ctx, retryFrame("ollama", "m-1", 1))
+	if step := stepByID(t, r.snapshot(ctx), setupStepModelPull); step.Status == signer.SetupStatusFailed {
+		t.Fatalf("model step after the retry = %+v, want the stored rejection cleared", step)
+	}
+}
+
+// TestSetupSnapshotEchoesTheActedGeneration is the other half of the
+// lever, and the reason SetupProgress.ModelGen exists at all: the wizard
+// cannot tell "not picked up yet" from "picked up and failed again"
+// without it, and those two want opposite things on screen (a spinner,
+// and the button back). Product contract.
+func TestSetupSnapshotEchoesTheActedGeneration(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+	if got := r.snapshot(ctx).ModelGen; got != 0 {
+		t.Fatalf("model_gen before any request = %d, want 0", got)
+	}
+	r.Apply(ctx, retryFrame("ollama", "m-1", 2))
+	if got := r.snapshot(ctx).ModelGen; got != 2 {
+		t.Fatalf("model_gen after acting on gen 2 = %d, want 2", got)
+	}
+}
+
+// TestSetupUntouchedWithoutARetryGeneration records that a host whose CP
+// never bumps is bit-for-bit unaffected: no echo on the wire, and the
+// one-shot admission still holds.
+func TestSetupUntouchedWithoutARetryGeneration(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+	f.setModelState(catalog.ModelStateFailed, "no space left on device")
+	for range 4 {
+		r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	}
+	if got := f.pullCount(); got != 1 {
+		t.Fatalf("pulls with no generation = %d, want 1", got)
+	}
+	if got := r.snapshot(ctx).ModelGen; got != 0 {
+		t.Fatalf("model_gen = %d, want 0 so it stays off the wire", got)
 	}
 }
 
