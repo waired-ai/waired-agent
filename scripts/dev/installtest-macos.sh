@@ -237,13 +237,13 @@ assert_inference_macos() {
   for _ in $(seq 1 60); do          # ~5 min; CPU model pull is minutes-scale
     out="$(curl -fsS --max-time 10 "$infurl" 2>/dev/null || true)"
     if printf '%s' "$out" | grep -qE '"subsystem_state"[[:space:]]*:[[:space:]]*"ready"'; then ready=1; break; fi
-    if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -qiE 'qwen|coder'; then ready=1; break; fi
+    if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[[:space:]]*"[^"]' >/dev/null; then ready=1; break; fi
     state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
     case "$state" in pull_failed|disabled|stopped) break ;; esac
     sleep 5
   done
   if [ "$ready" = 1 ]; then
-    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oiE '(qwen|coder)[^",]*' | head -1)"
+    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oE '"[^"]+"' | sed -n 2p | tr -d '"' || true)"
     ok "bundled model ready in waired store :9475 (${model:-ready}; via mgmt API)"
   else
     bad "bundled model not ready via mgmt API (deploy/pull failed?)"
@@ -362,7 +362,7 @@ assert_mgmt_socket_macos() {
 # any waiting session, internal/controlplane/api/oidc_grant.go), so the
 # in-flight window the executor works in actually exists. Then assert the
 # engine landed via the executor, not install.sh (which ran --skip-ollama).
-DAEMON_ENGINE_MODEL="qwen2.5-coder-0.5b-instruct"
+DAEMON_ENGINE_MODEL="granite4-350m"
 DAEMON_ENGINE_FLAG="$WORK/daemon-engine.flag"
 
 # _daemon_setup_watcher <token> — background half: scrape the login session id
@@ -681,10 +681,10 @@ if [ "$TIER" -ge 2 ]; then
     daemon_path_enroll_macos "$tok" "$device"
   else
   inf_flag="--inference-enabled=$([ "$INFER" = 1 ] && echo true || echo false)"
-  # Routing sentinel pins the tiny 0.5B so the deploy pulls ~0.4 GB (fits the
+  # Routing sentinel pins the withheld 350M so the deploy pulls ~0.7 GB (fits the
   # 4 GB macOS runner; dodges the #573 7B OOM). Zero args when not --integration.
   pin_flag=()
-  [ "$INTEG" = 1 ] && pin_flag=(--inference-bundled-model-id=qwen2.5-coder-0.5b-instruct)
+  [ "$INTEG" = 1 ] && pin_flag=(--inference-bundled-model-id=granite4-350m)
   # init runs as root: it writes identity to the system state dir and, since the
   # LaunchDaemon is already registered (Tier 1), (re)starts it in the system/
   # domain so the real daemon re-reads the freshly-enrolled state. With

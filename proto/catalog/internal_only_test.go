@@ -115,27 +115,3 @@ func TestTierResolutionSeesInternalModels(t *testing.T) {
 			"an internal model's usage would resolve to no tier", len(cached), len(all))
 	}
 }
-
-// This change ships the MECHANISM with nothing using it yet, so that it
-// can be reviewed, tagged and consumed by the control plane while
-// provably changing nothing. The flag goes on a manifest in the next
-// change, and this test is what makes "provably" true rather than
-// asserted.
-//
-// It is expected to be DELETED by that change, not weakened: once an
-// entry is internal the two sets legitimately differ, and a reviewer
-// seeing this test edited instead of removed should ask why.
-func TestNoManifestIsInternalYet(t *testing.T) {
-	all, err := BundledManifestsIncludingInternal()
-	if err != nil {
-		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
-	}
-	for _, m := range all {
-		if m.InternalOnly != "" {
-			t.Fatalf("%s is marked internal_only (%q). That is the NEXT change — "+
-				"delete this test as part of it, and add the coverage that proves "+
-				"the model stays out of the pickers and the under-spec fallback.",
-				m.ModelID, m.InternalOnly)
-		}
-	}
-}

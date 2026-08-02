@@ -58,9 +58,9 @@ func TestUnmeasurableEntriesCarryReasons(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentGrades: %v", err)
 	}
-	bundled, err := BundledManifests()
+	bundled, err := BundledManifestsIncludingInternal()
 	if err != nil {
-		t.Fatalf("BundledManifests: %v", err)
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
 	}
 	known := map[string]bool{}
 	for _, m := range bundled {
@@ -80,14 +80,20 @@ func TestUnmeasurableEntriesCarryReasons(t *testing.T) {
 // The store must not name a model or variant the catalog does not ship:
 // a verdict filed against a nonexistent key looks like coverage and is
 // not.
+//
+// SHIPPED, not offered — hence the complete accessor. A withheld model
+// is shipped, and measuring one is how it earned the job: the CI
+// fixture was picked precisely because its probe run came back clean.
+// Checking against the offered set would reject that verdict as
+// spurious, which is backwards.
 func TestAgentGradeKeysExistInCatalog(t *testing.T) {
 	set, err := AgentGrades()
 	if err != nil {
 		t.Fatalf("AgentGrades: %v", err)
 	}
-	bundled, err := BundledManifests()
+	bundled, err := BundledManifestsIncludingInternal()
 	if err != nil {
-		t.Fatalf("BundledManifests: %v", err)
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
 	}
 	variants := map[string]bool{}
 	for _, m := range bundled {

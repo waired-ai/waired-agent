@@ -42,7 +42,7 @@ bundled 済み: **21 ファミリ / 34 バリアント**。
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `qwen2.5-coder-0.5b-instruct` | Qwen2.5 Coder 0.5B Instruct | `waired/tiny` | 32,768 | chat, tool_use, json_mode | 0.5B | ollama | 1 |
+| `qwen2.5-coder-0.5b-instruct` | Qwen2.5 Coder 0.5B Instruct | — | 32,768 | chat, tool_use, json_mode | 0.5B | ollama | 1 |
 | `qwen2.5-coder-14b-instruct` | Qwen2.5 Coder 14B Instruct | `waired/medium` | 32,768 | chat, tool_use, json_mode | 14.7B | ollama | 2 |
 | `qwen2.5-coder-3b-instruct` | Qwen2.5 Coder 3B Instruct | `waired/small` | 32,768 | chat, tool_use, json_mode | 3.1B | ollama | 2 |
 | `qwen2.5-coder-7b-instruct` | Qwen2.5 Coder 7B Instruct | — | 32,768 | chat, tool_use, json_mode | 7.6B | ollama | 2 |

@@ -40,7 +40,10 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	manifests, err := s.loadManifests()
+	// Resolve against every shipped model, not just the offered ones:
+	// this endpoint answers "the operator named THIS model", which is
+	// exactly the case a withheld entry has to keep serving.
+	manifests, err := s.loadManifestsForResolve()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("manifest_load_failed", err.Error()))
 		return

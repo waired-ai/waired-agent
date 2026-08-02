@@ -140,8 +140,8 @@ it_enroll_guest() {
   guest="$1"
   name="$(_it_dev_name "$guest")"
   inf_flag="--inference-enabled=${IT_INFERENCE_ENABLED}"
-  # Optional bundled-model pin (routing sentinel pins the tiny 0.5B so the
-  # deploy pulls ~0.4 GB, not the hardware-selected 7B). Expands to zero args
+  # Optional bundled-model pin (routing sentinel pins the withheld 350M so the
+  # deploy pulls ~0.7 GB, not the hardware-selected 7B). Expands to zero args
   # when unset.
   local -a pin_flag=()
   [ -n "${IT_BUNDLED_MODEL_ID:-}" ] && pin_flag=("--inference-bundled-model-id=${IT_BUNDLED_MODEL_ID}")
@@ -470,7 +470,7 @@ _it_wait_inference_ready() {
       printf '%s' "$out"; return 0
     fi
     # models.ready lists a loaded qwen/coder model (the only json:"ready" key).
-    if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -qiE 'qwen|coder'; then
+    if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[[:space:]]*"[^"]' >/dev/null; then
       printf '%s' "$out"; return 0
     fi
     # Bail early on a terminal state instead of burning the whole budget.
@@ -522,7 +522,7 @@ assert_inference() {
   # from the mgmt API and poll until ready, never a bare `ollama list` (:11434,
   # always empty here, the original false negative).
   if out="$(_it_wait_inference_ready "$guest")"; then
-    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oiE '(qwen|coder)[^",]*' | head -1)"
+    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oE '"[^"]+"' | sed -n 2p | tr -d '"' || true)"
     ok "bundled model ready in waired store :9475 (${model:-ready}; via mgmt API)"
   else
     bad "bundled model not ready via mgmt API (deploy/pull failed?)"

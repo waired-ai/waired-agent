@@ -50,10 +50,10 @@
 # HOST with gcloud and the completion POST is sent from the host to the public
 # CP; the guest only exposes the login session on its loopback mgmt API.
 
-# The tiny bundled model this leg pins (~0.4 GB), so the model pull that
+# The withheld bundled model this leg pins (~0.7 GB), so the model pull that
 # follows the engine install stays cheap. Honours an IT_BUNDLED_MODEL_ID
 # override set by the caller (installtest-run.sh).
-IT_DAEMON_ENGINE_MODEL="${IT_BUNDLED_MODEL_ID:-qwen2.5-coder-0.5b-instruct}"
+IT_DAEMON_ENGINE_MODEL="${IT_BUNDLED_MODEL_ID:-granite4-350m}"
 
 # _it_daemon_mint_token — mint the SA id_token on the host (oidc mode only).
 # Echoes the token on stdout, empty (return 1) on failure. Precondition

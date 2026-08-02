@@ -294,8 +294,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # 3-OS coding-agent routing sentinel (#496). Rides the SAME enrolled-daemon
-  # harness with `--integration`, which pins the tiny 0.5B as the bundled
-  # model (deploy pulls ~0.4 GB), then runs the Go routing harness that
+  # harness with `--integration`, which pins the withheld 350M as the bundled
+  # model (deploy pulls ~0.7 GB), then runs the Go routing harness that
   # drives each leg at the gateway surface and asserts served-locally via the
   # observability event ring. (The old per-PR Linux routing-sentinel workflow
   # is not yet re-homed — #1.)
