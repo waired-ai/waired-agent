@@ -164,16 +164,25 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	// API would abandon local serving instead of compacting). The guard is
 	// active only where Deps.ContextWindowFor is wired (the Claude-intercept
 	// HandlerSet); a 0 window means "unknown" and fails open.
-	if h.deps.ContextWindowFor != nil {
-		if win := h.deps.ContextWindowFor(sel.ModelID); win > 0 {
-			if n := CountTokensApprox(req); n > win {
-				rr.fail(http.StatusBadRequest, "context_overflow")
-				slog.Debug("anthropic context overflow", "model", sel.ModelID, "tokens", n, "window", win)
-				w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
-				writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error",
-					fmt.Sprintf("prompt is too long: %d tokens > %d maximum", n, win))
-				return
-			}
+	//
+	// The window belongs to whoever ANSWERS. Deps.ContextWindowFor knows
+	// only this device — its manifests, its applied tuning — so on a mesh
+	// leg it used to guard the request against the wrong engine's window
+	// and let an over-window prompt through to be truncated at the head
+	// (waired-agent#436). Selection.ContextWindow is what the chosen peer
+	// says it serves and wins whenever it is set; a peer that declares
+	// nothing (0 — including every agent predating the field) falls back
+	// to the local computation, which is what this did before.
+	if win := effectiveContextWindow(h.deps, sel); win > 0 {
+		if n := CountTokensApprox(req); n > win {
+			rr.fail(http.StatusBadRequest, "context_overflow")
+			slog.Debug("anthropic context overflow",
+				"model", sel.ModelID, "tokens", n, "window", win,
+				"peer", peerDisplayID(sel), "declared", sel.ContextWindow > 0)
+			w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error",
+				fmt.Sprintf("prompt is too long: %d tokens > %d maximum", n, win))
+			return
 		}
 	}
 
@@ -264,6 +273,9 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		// Tell the adapter too: on this surface the Claude intercept
 		// discards the error before replaying upstream, so nobody else
 		// ever learns the engine died (waired-agent#29).
+		if relayPeerContextOverflow(w, resp, respBody, rr) {
+			return
+		}
 		reportEngineFailure(reporter, resp.StatusCode, respBody)
 		rr.fail(resp.StatusCode, "upstream_error")
 		writeAnthropicError(w, resp.StatusCode, "upstream_error", strings.TrimSpace(string(respBody)))
@@ -449,6 +461,9 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	slog.Debug("anthropic upstream stream", "status", resp.StatusCode, "ttfb_ms", time.Since(start).Milliseconds())
 	if resp.StatusCode/100 != 2 {
 		errBody, _ := io.ReadAll(resp.Body)
+		if relayPeerContextOverflow(w, resp, errBody, rr) {
+			return
+		}
 		// Same as the non-stream leg: tell the adapter, and record the real
 		// status (this leg recorded nothing at all before waired-agent#29).
 		reportEngineFailure(reporter, resp.StatusCode, errBody)
@@ -790,4 +805,47 @@ func hasMetadataFeature(raw json.RawMessage, key string) bool {
 	}
 	v, ok := m[key]
 	return ok && len(v) > 0 && string(v) != "null"
+}
+
+// relayPeerContextOverflow turns a serving peer's over-window refusal
+// into the Anthropic 400 the local client compacts on, and reports
+// whether it did.
+//
+// The peer answers OpenAI-shaped, so its 400 would otherwise arrive here
+// as an "upstream_error" — a fault, which Claude Code retries or
+// surfaces rather than compacting. HeaderLocalError is how the peer says
+// which kind of 400 it sent, and re-emitting the canonical envelope is
+// what makes a mesh leg behave like a local one (waired-agent#436).
+//
+// The staged header also marks it "surface, don't fall back" for the
+// intercept's auto mode: falling back to the real Anthropic API here
+// would abandon local serving for a turn that only needed compacting.
+func relayPeerContextOverflow(w http.ResponseWriter, resp *http.Response, body []byte, rr *requestRec) bool {
+	if resp.StatusCode != http.StatusBadRequest ||
+		resp.Header.Get(HeaderLocalError) != LocalErrorContextOverflow {
+		return false
+	}
+	rr.fail(http.StatusBadRequest, "context_overflow")
+	slog.Debug("peer refused an over-window prompt", "detail", strings.TrimSpace(string(body)))
+	w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+	writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error",
+		peerContextOverflowMessage(body))
+	return true
+}
+
+// peerContextOverflowMessage keeps the peer's own numbers when it sent
+// them in the shape this gateway writes, and falls back to a generic
+// line otherwise. Claude Code keys compaction off the status and the
+// error type, not this string, so an unparseable body is not a reason to
+// drop the signal.
+func peerContextOverflowMessage(body []byte) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil && strings.HasPrefix(e.Error.Message, "prompt is too long") {
+		return e.Error.Message
+	}
+	return "prompt is too long for the serving engine's context window"
 }

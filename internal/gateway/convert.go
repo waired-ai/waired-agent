@@ -547,3 +547,40 @@ func approxTokenCount(s string) int {
 	}
 	return n
 }
+
+// CountOpenAIPromptTokensApprox is CountTokensApprox for a raw
+// chat-completions body — the shape peer traffic arrives in on the
+// overlay listener, which never sees an Anthropic request.
+//
+// It counts the same way on purpose: 4 tokens of overhead per message
+// plus approxTokenCount of the content. The bodies it sees were
+// produced by AnthropicToOpenAI on some other node, so counting
+// differently would let a prompt that cleared the requester's guard
+// fail the server's, or the reverse.
+//
+// Content is taken as json.RawMessage because a chat-completions
+// message may carry either a string or an array of parts, and an
+// unparseable body counts as 0 — the guard above it fails open, the
+// same philosophy as every other unknown-sizing input here.
+func CountOpenAIPromptTokensApprox(body []byte) int {
+	var req struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return 0
+	}
+	const overheadPerMessage = 4
+	total := 0
+	for _, m := range req.Messages {
+		total += overheadPerMessage
+		var s string
+		if json.Unmarshal(m.Content, &s) == nil {
+			total += approxTokenCount(s)
+			continue
+		}
+		total += approxTokenCount(string(m.Content))
+	}
+	return total
+}
