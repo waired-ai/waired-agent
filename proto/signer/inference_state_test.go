@@ -324,6 +324,74 @@ func TestHardwareSummary_MemoryBandwidthSpec_CanonicalJSON(t *testing.T) {
 	}
 }
 
+// TestInferenceState_NotShared_CanonicalJSON is the byte-identity pin
+// required of every additive proto change
+// (docs/decisions/20260719/0000-concurrent-proto-development.md), for the
+// waired#1030 addition.
+//
+// Product contract, not a record of today: the DEFAULT is sharing ON
+// (agentconfig's ShareWithMesh defaults to true), so the overwhelming
+// majority of pushes must encode exactly as they did before the field
+// existed. Getting this wrong would not merely churn bytes — an operator
+// who never touched the toggle would start emitting a field older readers
+// drop on canonical re-marshal.
+func TestInferenceState_NotShared_CanonicalJSON(t *testing.T) {
+	// Sharing ON (the default): byte-for-byte the pre-addition encoding of
+	// a reachable ollama host.
+	shared := InferenceState{
+		Reachable: true,
+		Type:      InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		Models:    []string{"qwen3:8b-q4_K_M"},
+		LastCheck: "2026-08-02T12:00:00Z",
+	}
+	const wantShared = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z"}`
+	data, err := json.Marshal(&shared)
+	if err != nil {
+		t.Fatalf("marshal shared: %v", err)
+	}
+	if got := string(data); got != wantShared {
+		t.Errorf("the default (sharing on) changed the encoding:\n got %s\nwant %s", got, wantShared)
+	}
+
+	// Sharing OFF: exactly one key more, at the tail (struct-declaration
+	// order). The engine keeps reporting itself — the point of the field is
+	// that the push no longer stops.
+	notShared := shared
+	notShared.NotShared = true
+	const wantNotShared = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z","not_shared":true}`
+	data, err = json.Marshal(&notShared)
+	if err != nil {
+		t.Fatalf("marshal not-shared: %v", err)
+	}
+	if got := string(data); got != wantNotShared {
+		t.Errorf("not-shared encoding drifted:\n got %s\nwant %s", got, wantNotShared)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&notShared, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", notShared, out)
+	}
+
+	// The other rolling-upgrade direction: a pre-addition payload parses
+	// cleanly and leaves the field false, which the control plane must read
+	// as "this device is sharing" — the same answer it gave before the
+	// field existed, so an agent that predates it is never withheld from
+	// its peers.
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantShared), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.NotShared {
+		t.Errorf("NotShared = true on a pre-addition payload; a legacy agent must read as sharing")
+	}
+}
+
 func indexOf(haystack, needle string) int {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {
