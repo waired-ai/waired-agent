@@ -60,6 +60,13 @@ type AnthropicResponse struct {
 	Content    []AnthropicContentBlock `json:"content"`
 	StopReason string                  `json:"stop_reason,omitempty"`
 	Usage      AnthropicUsage          `json:"usage"`
+
+	// ToolRecovery names the dialect a tool call was recovered from when
+	// the engine left it in the assistant text (#409), or "" for the
+	// ordinary path. json:"-" because it is gateway bookkeeping for
+	// telemetry, not part of the Anthropic response the client sees —
+	// the recovered call is already a normal tool_use block in Content.
+	ToolRecovery string `json:"-"`
 }
 
 type AnthropicUsage struct {
@@ -374,7 +381,13 @@ func stringifyToolResultContent(raw json.RawMessage) (string, error) {
 // that in the response.model field so the caller doesn't see the
 // engine-specific identifier (Anthropic spec doesn't define what
 // `model` should look like, but client SDKs cache by it).
-func OpenAIToAnthropic(resp OpenAIResponse, originalModel string) AnthropicResponse {
+//
+// offered is the tool set the request carried. It is only consulted when
+// the engine returned NO structured tool_calls, to recover a call the
+// engine's own parser left in the assistant text (#409); pass nil to
+// disable that entirely. A recovered call is reported via the returned
+// response's ToolRecovery field.
+func OpenAIToAnthropic(resp OpenAIResponse, originalModel string, offered []AnthropicTool) AnthropicResponse {
 	out := AnthropicResponse{
 		ID:    "msg_" + resp.ID,
 		Type:  "message",
@@ -404,10 +417,23 @@ func OpenAIToAnthropic(resp OpenAIResponse, originalModel string) AnthropicRespo
 			Thinking: r,
 		})
 	}
-	if choice.Message.Content != "" {
+	// #409: when the engine produced no structured tool_calls, the text
+	// may be a tool call its parser failed to consume. Recover it before
+	// the text block is built, so the fragment does not also ship as
+	// prose. Guarded on len(ToolCalls)==0: an engine that parsed the
+	// call correctly is never second-guessed.
+	text := choice.Message.Content
+	var recovered recoveredCall
+	if len(choice.Message.ToolCalls) == 0 && text != "" {
+		if c, ok := recoverToolCall(text, newOfferedTools(offered)); ok {
+			recovered, out.ToolRecovery = c, c.Shape
+			text = stripFragment(text, c)
+		}
+	}
+	if text != "" {
 		out.Content = append(out.Content, AnthropicContentBlock{
 			Type: "text",
-			Text: choice.Message.Content,
+			Text: text,
 		})
 	}
 	for _, tc := range choice.Message.ToolCalls {
@@ -416,6 +442,14 @@ func OpenAIToAnthropic(resp OpenAIResponse, originalModel string) AnthropicRespo
 			ID:    tc.ID,
 			Name:  tc.Function.Name,
 			Input: json.RawMessage(tc.Function.Arguments),
+		})
+	}
+	if out.ToolRecovery != "" {
+		out.Content = append(out.Content, AnthropicContentBlock{
+			Type:  "tool_use",
+			ID:    recoveredToolUseID(resp.ID),
+			Name:  recovered.Name,
+			Input: recovered.Input,
 		})
 	}
 	// Safety net: if the model produced no visible block at all and the
@@ -430,7 +464,26 @@ func OpenAIToAnthropic(resp OpenAIResponse, originalModel string) AnthropicRespo
 		})
 	}
 	out.StopReason = mapFinishReason(choice.FinishReason)
+	if out.ToolRecovery != "" {
+		// The engine saw no tool call, so it reported finish_reason
+		// "stop", which maps to end_turn. Left alone, the client would
+		// treat a turn that IS a tool call as a finished answer and
+		// never run the tool.
+		out.StopReason = "tool_use"
+	}
 	return out
+}
+
+// recoveredToolUseID mints the id for a synthesised tool_use block.
+// Anthropic ids only have to be unique within the turn (the client pairs
+// tool_result to them there), and at most one call is recovered per
+// response, so deriving it from the engine's completion id is enough —
+// and makes the block's origin obvious in a transcript.
+func recoveredToolUseID(respID string) string {
+	if respID == "" {
+		return "toolu_waired_recovered"
+	}
+	return "toolu_waired_recovered_" + respID
 }
 
 // truncationNote is the visible text emitted when a response truncates

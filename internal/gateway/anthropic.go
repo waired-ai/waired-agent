@@ -207,11 +207,11 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	rr.succeed()
 	client := h.clientFor(adapter)
 	if req.Stream {
-		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w,
+		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w,
 			ttfbBudgetFor(h.deps, sel, r, class), rr, asFailureReporter(adapter))
 		return
 	}
-	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, w, rr, asFailureReporter(adapter))
+	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w, rr, asFailureReporter(adapter))
 }
 
 // handleAnthropicCountTokensImpl returns an approximate token count.
@@ -241,7 +241,7 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 
 // rr may be nil (direct calls from tests). The upstream response is
 // already decoded here, so metering costs one field read (waired#829).
-func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) {
+func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) {
 	start := time.Now()
 	resp, err := h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
 	if err != nil {
@@ -276,8 +276,90 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		return
 	}
 	rr.setUsage(int64(openaiResp.Usage.PromptTokens), int64(openaiResp.Usage.CompletionTokens))
-	out := OpenAIToAnthropic(openaiResp, originalModel)
+	out := OpenAIToAnthropic(openaiResp, originalModel, offered)
+	if out.ToolRecovery != "" {
+		rr.setToolRecovery(out.ToolRecovery)
+		logToolRecovery(out.ToolRecovery, recoveredToolName(out), originalModel, false)
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// recoveredToolName returns the name of the tool_use block the recovery
+// synthesised. Only called once ToolRecovery is set, and the block is
+// appended last, so the final tool_use is the recovered one.
+func recoveredToolName(resp AnthropicResponse) string {
+	for i := len(resp.Content) - 1; i >= 0; i-- {
+		if resp.Content[i].Type == "tool_use" {
+			return resp.Content[i].Name
+		}
+	}
+	return ""
+}
+
+// logToolRecovery records that the gateway put back a call the engine
+// dropped. The tool NAME and the dialect are logged; the fragment and
+// the surrounding assistant text are not, because they are message
+// content and no gateway log line may carry it (spec §8.5 / §15-10 —
+// the same rule that keeps peer base URLs and prompts out of these
+// lines).
+func logToolRecovery(shape, tool, model string, streaming bool) {
+	slog.Warn("gateway: recovered a tool call the engine left in the assistant text",
+		"shape", shape, "tool", tool, "model", model, "stream", streaming)
+}
+
+// partialTool accumulates one in-flight streamed tool call.
+type partialTool struct {
+	ID, Name string
+	Args     bytes.Buffer
+}
+
+// streamToolCallDelta is one tool_calls entry on the STREAMING surface.
+// It differs from OpenAIToolCall by carrying `index`, which identifies
+// which call in the turn the delta belongs to. A pointer so an engine
+// that omits the field is distinguishable from one that sent index 0.
+type streamToolCallDelta struct {
+	Index    *int   `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// toolDeltaKey decides which in-flight tool call a streamed delta
+// belongs to.
+//
+// This was previously `key := len(tools)`, which made EVERY delta after
+// the first start a new partial: a call whose arguments arrive split
+// across chunks — the normal case, since engines stream the argument
+// JSON token by token — was emitted as several tool_use blocks each
+// holding a fragment of the JSON. Nothing caught it because the
+// streaming tool-call path had no test at all (added in #409).
+//
+// `index` is authoritative when present; it is what the OpenAI streaming
+// schema defines the field for. Without it, an `id` identifies the call,
+// and a delta carrying neither is a continuation of the one in flight.
+func toolDeltaKey(index *int, id string, tools map[int]*partialTool, order []int, next *int) int {
+	if index != nil {
+		return *index
+	}
+	if id != "" {
+		for _, k := range order {
+			if tools[k].ID == id {
+				return k
+			}
+		}
+		key := *next
+		*next++
+		return key
+	}
+	if len(order) > 0 {
+		return order[len(order)-1]
+	}
+	key := *next
+	*next++
+	return key
 }
 
 // ttfbBudgetFor returns the pre-commit time-to-first-byte deadline to arm for
@@ -303,7 +385,7 @@ func ttfbBudgetFor(deps Deps, sel router.Selection, r *http.Request, class strin
 // accumulates the upstream's usage object; metering reuses it, so a
 // client that disconnects mid-stream still contributes whatever the
 // engine reported before the break (waired#829).
-func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, w http.ResponseWriter, ttfb time.Duration, rr *requestRec, reporter runtime.FailureReporter) {
+func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, ttfb time.Duration, rr *requestRec, reporter runtime.FailureReporter) {
 	// #757: bound only the PRE-first-byte window. reqCtx governs the peer
 	// request; a time.AfterFunc cancels it if the engine returns no headers
 	// within ttfb, so postToEngine errors BEFORE the stream commits and the
@@ -411,12 +493,45 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// Buffer for in-flight tool calls keyed by index. OpenAI streams
 	// tool_calls as partial deltas with `arguments` concatenated; we
 	// reassemble them and emit at finish time.
-	type partialTool struct {
-		ID, Name string
-		Args     bytes.Buffer
-	}
 	tools := map[int]*partialTool{}
 	toolOrder := []int{}
+	nextToolKey := 0
+
+	// #409: text deltas pass through the sieve, which releases prose
+	// immediately and withholds only a tail that could be the start of a
+	// tool call the engine failed to parse. Resolved at finish time,
+	// below — there is no SSE event that un-sends a text_delta, so
+	// anything emitted here is final.
+	sieve := newToolTextSieve(offered)
+	contentSeen := false
+
+	// writeText emits assistant text the sieve has released, opening the
+	// text block (and closing any thinking block) on first release
+	// rather than on first delta — a delta that is entirely withheld
+	// must not open a block the turn may never put anything in.
+	writeText := func(s string) {
+		if s == "" {
+			return
+		}
+		if thinkingOpen && !thinkingClosed {
+			emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+			thinkingClosed = true
+		}
+		if !textOpen {
+			if thinkingOpen {
+				textIdx = 1
+			}
+			emit("content_block_start", map[string]any{
+				"type": "content_block_start", "index": textIdx,
+				"content_block": map[string]any{"type": "text", "text": ""},
+			})
+			textOpen = true
+		}
+		emit("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": textIdx,
+			"delta": map[string]any{"type": "text_delta", "text": s},
+		})
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -433,10 +548,15 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 			Choices []struct {
 				Index int `json:"index"`
 				Delta struct {
-					Content          string           `json:"content,omitempty"`
-					Reasoning        string           `json:"reasoning,omitempty"`
-					ReasoningContent string           `json:"reasoning_content,omitempty"`
-					ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
+					Content          string `json:"content,omitempty"`
+					Reasoning        string `json:"reasoning,omitempty"`
+					ReasoningContent string `json:"reasoning_content,omitempty"`
+					// Not []OpenAIToolCall: the STREAMING shape carries
+					// an `index` the non-streaming one has no field
+					// for, and it is the only reliable way to tell a
+					// continuation of call N from the start of call
+					// N+1 (see toolDeltaKey).
+					ToolCalls []streamToolCallDelta `json:"tool_calls,omitempty"`
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason,omitempty"`
 			} `json:"choices"`
@@ -456,7 +576,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 			if reasoning == "" {
 				reasoning = ch.Delta.ReasoningContent
 			}
-			if reasoning != "" && !textOpen {
+			if reasoning != "" && !contentSeen {
 				if !thinkingOpen {
 					emit("content_block_start", map[string]any{
 						"type": "content_block_start", "index": 0,
@@ -470,32 +590,11 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 				})
 			}
 			if ch.Delta.Content != "" {
-				if thinkingOpen && !thinkingClosed {
-					emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-					thinkingClosed = true
-				}
-				if !textOpen {
-					if thinkingOpen {
-						textIdx = 1
-					}
-					emit("content_block_start", map[string]any{
-						"type": "content_block_start", "index": textIdx,
-						"content_block": map[string]any{"type": "text", "text": ""},
-					})
-					textOpen = true
-				}
-				emit("content_block_delta", map[string]any{
-					"type": "content_block_delta", "index": textIdx,
-					"delta": map[string]any{"type": "text_delta", "text": ch.Delta.Content},
-				})
+				contentSeen = true
+				writeText(sieve.Push(ch.Delta.Content))
 			}
 			for _, tc := range ch.Delta.ToolCalls {
-				idx := tc.Function.Name // index by name when OpenAI doesn't echo index field; fallback to ID
-				_ = idx
-				key := len(tools)
-				if existing, ok := tools[key]; ok && tc.Function.Name != "" && tc.Function.Name != existing.Name {
-					key = len(tools) // start a new partial
-				}
+				key := toolDeltaKey(tc.Index, tc.ID, tools, toolOrder, &nextToolKey)
 				p, ok := tools[key]
 				if !ok {
 					p = &partialTool{}
@@ -518,6 +617,24 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		}
 	}
 
+	// #409: settle the withheld tail. When the engine DID produce
+	// structured tool_calls its parser plainly worked, so the text is
+	// just text — release it untouched rather than hunting for a second
+	// call in the model's own prose.
+	var recovered recoveredCall
+	recoveredOK := false
+	if len(toolOrder) > 0 {
+		writeText(sieve.Flush())
+	} else {
+		tail, c, ok := sieve.Finish()
+		writeText(tail)
+		recovered, recoveredOK = c, ok
+	}
+	if recoveredOK {
+		rr.setToolRecovery(recovered.Shape)
+		logToolRecovery(recovered.Shape, recovered.Name, originalModel, true)
+	}
+
 	if thinkingOpen && !thinkingClosed {
 		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
 	}
@@ -536,7 +653,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// text, or tool block would otherwise stream an empty turn and stall
 	// the agentic loop. Emit one visible note so the client always gets
 	// an actionable turn (mirrors OpenAIToAnthropic's non-stream guard).
-	if !thinkingOpen && !textOpen && len(toolOrder) == 0 && finishReason == "length" {
+	if !thinkingOpen && !textOpen && len(toolOrder) == 0 && !recoveredOK && finishReason == "length" {
 		emit("content_block_start", map[string]any{
 			"type": "content_block_start", "index": 0,
 			"content_block": map[string]any{"type": "text", "text": ""},
@@ -561,12 +678,36 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": nextIdx})
 		nextIdx++
 	}
+	// The recovered call ships as an ordinary tool_use block, so the
+	// client cannot tell it from one the engine parsed itself.
+	stopReason := mapFinishReason(finishReason)
+	if recoveredOK {
+		emit("content_block_start", map[string]any{
+			"type": "content_block_start", "index": nextIdx,
+			"content_block": map[string]any{
+				"type": "tool_use", "id": recoveredToolUseID(msgID),
+				"name": recovered.Name, "input": map[string]any{},
+			},
+		})
+		emit("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": nextIdx,
+			"delta": map[string]any{"type": "input_json_delta", "partial_json": string(recovered.Input)},
+		})
+		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": nextIdx})
+		// nextIdx is deliberately not advanced: the recovered call is
+		// the last block of the turn, and at most one is ever recovered.
+		//
+		// The engine saw no tool call, so it reported "stop". Left
+		// alone, the client would end the turn instead of running the
+		// tool it was just handed.
+		stopReason = "tool_use"
+	}
 	// Meter from the accumulated usage object rather than the emitted
 	// map: the SSE shape the client sees is unchanged by this PR.
 	rr.setUsage(int64(usage.PromptTokens), int64(usage.CompletionTokens))
 	emit("message_delta", map[string]any{
 		"type":  "message_delta",
-		"delta": map[string]any{"stop_reason": mapFinishReason(finishReason), "stop_sequence": nil},
+		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
 		"usage": map[string]int{"output_tokens": usage.CompletionTokens},
 	})
 	emit("message_stop", map[string]any{"type": "message_stop"})

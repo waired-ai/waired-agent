@@ -226,7 +226,7 @@ func TestOpenAIToAnthropic_TextOnly(t *testing.T) {
 		}},
 		Usage: OpenAIUsage{PromptTokens: 12, CompletionTokens: 3},
 	}
-	out := OpenAIToAnthropic(in, "waired/default")
+	out := OpenAIToAnthropic(in, "waired/default", nil)
 	if out.Type != "message" || out.Role != "assistant" {
 		t.Errorf("envelope = %+v", out)
 	}
@@ -260,7 +260,7 @@ func TestOpenAIToAnthropic_ReasoningBecomesThinking(t *testing.T) {
 		}},
 		Usage: OpenAIUsage{PromptTokens: 20, CompletionTokens: 30},
 	}
-	out := OpenAIToAnthropic(in, "waired/default")
+	out := OpenAIToAnthropic(in, "waired/default", nil)
 	if len(out.Content) != 2 {
 		t.Fatalf("content = %+v, want [thinking, text]", out.Content)
 	}
@@ -289,7 +289,7 @@ func TestOpenAIToAnthropic_ReasoningContentAlias(t *testing.T) {
 			FinishReason: "stop",
 		}},
 	}
-	out := OpenAIToAnthropic(in, "waired/default")
+	out := OpenAIToAnthropic(in, "waired/default", nil)
 	if len(out.Content) != 2 || out.Content[0].Type != "thinking" || out.Content[0].Thinking != "let me think" {
 		t.Fatalf("content = %+v, want thinking(reasoning_content) then text", out.Content)
 	}
@@ -312,7 +312,7 @@ func TestOpenAIToAnthropic_ReasoningOnlyMaxTokens(t *testing.T) {
 		}},
 		Usage: OpenAIUsage{PromptTokens: 25, CompletionTokens: 300},
 	}
-	out := OpenAIToAnthropic(in, "waired/default")
+	out := OpenAIToAnthropic(in, "waired/default", nil)
 	if len(out.Content) != 1 || out.Content[0].Type != "thinking" {
 		t.Fatalf("content = %+v, want a single thinking block", out.Content)
 	}
@@ -339,7 +339,7 @@ func TestOpenAIToAnthropic_ToolCallsBecomeBlocks(t *testing.T) {
 			FinishReason: "tool_calls",
 		}},
 	}
-	out := OpenAIToAnthropic(in, "waired/default")
+	out := OpenAIToAnthropic(in, "waired/default", nil)
 	if out.StopReason != "tool_use" {
 		t.Errorf("stop_reason = %q", out.StopReason)
 	}
@@ -379,7 +379,7 @@ func TestOpenAIToAnthropic_EmptyContentIsNonNilArray(t *testing.T) {
 		}},
 		Usage: OpenAIUsage{PromptTokens: 5, CompletionTokens: 0},
 	}
-	out := OpenAIToAnthropic(in, "waired/default")
+	out := OpenAIToAnthropic(in, "waired/default", nil)
 	if out.Content == nil {
 		t.Fatalf("Content should be non-nil empty slice, got nil")
 	}
@@ -404,7 +404,7 @@ func TestOpenAIToAnthropic_EmptyLengthGetsTruncationNote(t *testing.T) {
 		}},
 		Usage: OpenAIUsage{PromptTokens: 5, CompletionTokens: 0},
 	}
-	out := OpenAIToAnthropic(in, "waired/default")
+	out := OpenAIToAnthropic(in, "waired/default", nil)
 	if len(out.Content) != 1 || out.Content[0].Type != "text" || out.Content[0].Text != truncationNote {
 		t.Fatalf("content = %+v, want a single truncation-note text block", out.Content)
 	}

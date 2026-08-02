@@ -176,6 +176,21 @@ type RequestEvent struct {
 	InputTokens  int64  `json:"input_tokens,omitempty"`
 	OutputTokens int64  `json:"output_tokens,omitempty"`
 	Class        string `json:"class,omitempty"`
+
+	// ToolRecovery names the dialect a tool call was recovered from when
+	// the engine left it in the assistant text instead of emitting a
+	// structured tool_call (waired-agent#409): "xml_function",
+	// "json_object", "delimited". Empty on every turn where the engine's
+	// own parser worked, which is the overwhelming majority — so this is
+	// additive and omitempty like the block above, and an event from a
+	// path that never recovered anything is byte-identical to before.
+	//
+	// It exists so the fix is measurable rather than a silent behaviour
+	// change: a rising count means an engine or model regressed its tool
+	// serialisation, which is otherwise invisible now that the gateway
+	// repairs it. Deliberately the SHAPE only — the recovered fragment
+	// is message content and never leaves the process.
+	ToolRecovery string `json:"tool_recovery,omitempty"`
 }
 
 // FallbackEvent is emitted in addition to RequestEvent whenever the
