@@ -141,7 +141,7 @@ func TestWaitForBundledModel_TransientEngineFailureDoesNotEndTheWait(t *testing.
 	const mb = 1 << 20
 	stub := &pullStub{seq: []management.InferenceStatus{
 		engineFailedSnap(killedDetail),
-		management.InferenceStatus{SubsystemState: "starting"},
+		{SubsystemState: "starting"},
 		downloadingSnap("qwen", 1*mb, 4*mb),
 		{SubsystemState: "ready", Active: activeSel("qwen"), Models: management.ModelsSnapshot{Ready: []string{"qwen"}}},
 	}}

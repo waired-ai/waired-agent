@@ -232,6 +232,15 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			// `starting` re-armed every other tick would never expire,
 			// which is the bug this arm exists to end.
 			//
+			// Mutation testing will report that clearing it in `default:`
+			// — beside the no_engine grace, which is cleared there —
+			// kills no test. That mutant is equivalent while the fold
+			// above holds: the restart states never reach `default:`
+			// once a failure has been seen, so the only route there is a
+			// genuine recovery, where re-granting the grace is a defensible
+			// behaviour rather than a bug. Left un-cleared for the simpler
+			// contract, not because the other reading is wrong.
+			//
 			// Not suppressed by engineComing, unlike no_engine: an engine
 			// still being installed reports no_engine, and engine_failed
 			// means the daemon OBSERVED a failure of one that is already
