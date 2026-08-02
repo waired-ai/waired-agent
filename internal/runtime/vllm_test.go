@@ -193,6 +193,32 @@ func TestVLLMCommandArgs(t *testing.T) {
 			t.Errorf("missing --speculative-config %s: %v", cfg.SpeculativeConfig, args)
 		}
 	})
+
+	// Product contract (#410), not a record of today's behaviour: vLLM
+	// rejects --enable-auto-tool-choice without --tool-call-parser, and
+	// ignores --tool-call-parser without it, so the pair is emitted
+	// together or not at all.
+	t.Run("ToolCallParser empty omits both tool-calling flags", func(t *testing.T) {
+		args := NewVLLMAdapter(base).commandArgs()
+		if sliceContains(args, "--tool-call-parser") {
+			t.Errorf("empty ToolCallParser must omit --tool-call-parser: %v", args)
+		}
+		if sliceContains(args, "--enable-auto-tool-choice") {
+			t.Errorf("empty ToolCallParser must omit --enable-auto-tool-choice: %v", args)
+		}
+	})
+
+	t.Run("ToolCallParser appends --enable-auto-tool-choice and the parser", func(t *testing.T) {
+		cfg := base
+		cfg.ToolCallParser = "qwen3_xml"
+		args := NewVLLMAdapter(cfg).commandArgs()
+		if !sliceContains(args, "--enable-auto-tool-choice") {
+			t.Errorf("missing --enable-auto-tool-choice: %v", args)
+		}
+		if !argPairPresent(args, "--tool-call-parser", "qwen3_xml") {
+			t.Errorf("missing --tool-call-parser qwen3_xml: %v", args)
+		}
+	})
 }
 
 // argPairPresent reports whether args contains flag immediately followed

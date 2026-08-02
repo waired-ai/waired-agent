@@ -211,6 +211,18 @@ type InferenceConfig struct {
 	// slow multi-stream serving, so it is opt-in until measured per host.
 	VLLMSpeculativeNgram bool `json:"vllm_speculative_ngram"`
 
+	// VLLMToolParser overrides vLLM's --tool-call-parser (#410). Empty
+	// (default) lets the agent pick from the served model's chat
+	// template; a non-empty value is passed through verbatim.
+	//
+	// The escape hatch exists for a parser vLLM registered after this
+	// binary was built, so it is deliberately NOT validated against a
+	// known-name list — which means a typo is not a config error but an
+	// engine that refuses to start ("invalid tool call parser"). Use
+	// `vllm serve --help` on the installed venv to see the accepted
+	// names for the pinned version.
+	VLLMToolParser string `json:"vllm_tool_parser"`
+
 	// PreferredEngine forces engine selection at install/refresh time.
 	// Empty string ("") means auto-pick (NVIDIA GPU + ≥8 GB VRAM ⇒ vllm,
 	// else ollama). Accepted values: "", "ollama", "vllm".
@@ -862,6 +874,8 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.VLLMSpeculativeNgram = b
+	case "VLLM_TOOL_PARSER":
+		c.VLLMToolParser = val
 	case "PREFERRED_ENGINE":
 		c.PreferredEngine = val
 	case "PREFERRED_MODEL_ID":
@@ -985,6 +999,9 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&c.Inference.VLLMSpeculativeNgram, "inference-vllm-speculative-ngram",
 		c.Inference.VLLMSpeculativeNgram,
 		"enable vLLM ngram speculative decoding (single-stream decode boost)")
+	fs.StringVar(&c.Inference.VLLMToolParser, "inference-vllm-tool-parser",
+		c.Inference.VLLMToolParser,
+		"override vLLM --tool-call-parser (\"\" picks from the served model)")
 	fs.StringVar(&c.Inference.PreferredEngine, "inference-preferred-engine",
 		c.Inference.PreferredEngine,
 		"force engine pick (\"\" auto, \"ollama\", or \"vllm\")")
