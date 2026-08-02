@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: b7e61979a5b742bb
+sourceHash: 70e86117d363c3cd
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -123,6 +123,14 @@ waired claude route anthropic --subagents waired  # 本体はクラウド、サ�
 これまでどおり選べます。Waired が処理する場合は、セッションで何が選ばれていても
 **そのデバイスで動いているローカルモデル**が応答します。Anthropic のモデル名が
 意味を持つのは、実際にクラウドへ送られたときだけです。
+
+**`/model` には Waired の項目も 3 つ出ます。** Anthropic のモデル名と並んで
+**Waired auto** / **Waired local** / **Waired cloud** が選べます。`/waired-route`
+と同じ 3 択を、いま開いているメニューからそのまま選べる、というものです。
+Claude Code を接続したあとに表示され、一度 Claude Code を再起動すると出てきます。
+出てこない場合は
+[/model に Waired の項目が出ない](/ja/troubleshooting/#the-waired-entries-are-missing-from-model)
+を参照してください。
 
 **長いセッションは要約されます。** ローカルのモデルは一度に保持できる会話量が
 少ないため、Claude Code が古いターンを要約して収めます。Waired は今のモデルが

@@ -59,7 +59,7 @@ func newClaudeCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newClaudeEnableCmd(), newClaudeDisableCmd(), newClaudeStatusCmd(),
 		newClaudeRouteCmd(), newClaudeNodeShimCmd(), newClaudeFallbackShimCmd(),
-		newClaudeRouteSkillCmd(),
+		newClaudeRouteSkillCmd(), newClaudeModelsCacheCmd(),
 		newClaudeStatuslineCmd(), newClaudeFallbackHookCmd())
 	return cmd
 }
@@ -116,14 +116,6 @@ func claudeBaseURL(stateDir string) (string, int) {
 	port := c.Inference.ClaudeGatewayPort
 	return fmt.Sprintf("http://127.0.0.1:%d", port), port
 }
-
-// wairedLocalDirectiveModel is the reserved /model directive id pinned to LOCAL
-// inference (#52) — the id whose window CLAUDE_CODE_MAX_CONTEXT_TOKENS sizes.
-// The literal is duplicated from gateway.ModelWairedLocal rather than imported
-// so the CLI binary does not link the gateway package for one string, the same
-// trade internal/proxy/intercept makes; TestLocalDirectiveIdInSyncWithGateway
-// pins the two together, as directive_sync_test.go does there.
-const wairedLocalDirectiveModel = "anthropic-waired-local"
 
 // claudeModelsTimeout bounds the /v1/models probe. Short on purpose: this runs
 // inside `waired claude enable` and `waired init`, where the agent is normally
@@ -187,7 +179,7 @@ func claudeLocalWindowFromModels(body []byte) int {
 		return 0
 	}
 	for _, m := range doc.Data {
-		if m.ID == wairedLocalDirectiveModel && m.MaxInputTokens > 0 {
+		if m.ID == claudecode.DirectiveModelLocal && m.MaxInputTokens > 0 {
 			return m.MaxInputTokens
 		}
 	}
@@ -277,6 +269,10 @@ func runClaudeDisable(stateDir string) error {
 	// claudemanaged.Remove above (when it had permission).
 	removeRouteSkillForInvoker()
 	removeStatuslineForInvoker()
+	// #407: drop the /model picker cache too. The reader only checks that its
+	// baseUrl matches the live one, so leaving it behind is a documented way to
+	// end up with a picker full of entries that route nowhere.
+	removeModelsCacheForInvoker()
 
 	switch {
 	case err != nil:

@@ -7,23 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waired-ai/waired-agent/internal/gateway"
+	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 )
-
-// TestLocalDirectiveIdInSyncWithGateway guards the hand-duplicated directive id
-// literal: the CLI reads the local id's max_input_tokens out of /v1/models, and
-// the gateway is what puts it there. The literal is duplicated — not imported —
-// so the CLI binary does not link the gateway package for one string (the same
-// trade internal/proxy/intercept makes), so nothing but this test stops the two
-// drifting. Drift would make claudeLocalContextWindow silently return 0 forever:
-// the window would never be written, and #408's whole point would quietly lapse
-// back to "no honest number" with every surface still reporting success.
-func TestLocalDirectiveIdInSyncWithGateway(t *testing.T) {
-	if wairedLocalDirectiveModel != gateway.ModelWairedLocal {
-		t.Errorf("local directive id drift: cmd/waired %q != gateway %q",
-			wairedLocalDirectiveModel, gateway.ModelWairedLocal)
-	}
-}
 
 // TestClaudeLocalWindowFromModels: every shape that is not "the local directive
 // id carries a positive max_input_tokens" must read as 0 = unknown. Product
@@ -32,7 +17,7 @@ func TestLocalDirectiveIdInSyncWithGateway(t *testing.T) {
 func TestClaudeLocalWindowFromModels(t *testing.T) {
 	const other = `{"type":"model","id":"claude-waired-cloud[1m]","max_input_tokens":1000000}`
 	local := func(tok string) string {
-		return fmt.Sprintf(`{"type":"model","id":%q,"max_input_tokens":%s}`, wairedLocalDirectiveModel, tok)
+		return fmt.Sprintf(`{"type":"model","id":%q,"max_input_tokens":%s}`, claudecode.DirectiveModelLocal, tok)
 	}
 	cases := []struct {
 		name string
@@ -47,7 +32,7 @@ func TestClaudeLocalWindowFromModels(t *testing.T) {
 		// The gateway omits max_input_tokens (0) when it cannot determine the
 		// window — ContextWindowFor's own "fail open" value. It must not become
 		// a window here either.
-		{"max_input_tokens omitted", `{"data":[{"type":"model","id":"` + wairedLocalDirectiveModel + `"}]}`, 0},
+		{"max_input_tokens omitted", `{"data":[{"type":"model","id":"` + claudecode.DirectiveModelLocal + `"}]}`, 0},
 		{"max_input_tokens zero", `{"data":[` + local("0") + `]}`, 0},
 		{"negative is not a window", `{"data":[` + local("-1") + `]}`, 0},
 		{"not json", `<html>404</html>`, 0},
@@ -67,7 +52,7 @@ func TestClaudeLocalWindowFromModels(t *testing.T) {
 // transport half (path, status handling, unreachable host) is exercised rather
 // than stubbed out below the behaviour under test.
 func TestClaudeLocalWindowAt(t *testing.T) {
-	okBody := fmt.Sprintf(`{"data":[{"type":"model","id":%q,"max_input_tokens":32768}]}`, wairedLocalDirectiveModel)
+	okBody := fmt.Sprintf(`{"data":[{"type":"model","id":%q,"max_input_tokens":32768}]}`, claudecode.DirectiveModelLocal)
 
 	t.Run("reads the window from /v1/models", func(t *testing.T) {
 		var gotPath string

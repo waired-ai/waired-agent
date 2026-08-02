@@ -149,15 +149,22 @@ func applyClaudeRoute(o claudeRouteApplyOpts) (string, error) {
 
 	// Write also installs the Stop hook (managed-settings hooks.Stop) so a
 	// post-dispatch fallback is visible in the Claude Code TUI (#580).
-	path, err := claudemanaged.WriteWithOptions(baseURL, claudeManagedWriteOptions(o.StateDir))
+	opts := claudeManagedWriteOptions(o.StateDir)
+	path, err := claudemanaged.WriteWithOptions(baseURL, opts)
 	if err != nil {
 		return "", err
 	}
 
-	// Both are best-effort: the managed-settings write above is the core
-	// of routing, and neither of these can undo it.
+	// All three are best-effort: the managed-settings write above is the core
+	// of routing, and none of these can undo it.
 	installRouteSkillForInvoker()
 	installStatuslineForInvoker(o.SkipStatusline, o.AllowPrompt, o.In)
+	// #407: seed Claude Code's /model picker cache. Discovery is
+	// credential-gated and waired holds no credential (#488), so on a
+	// subscription-OAuth host nothing else ever puts the directive ids there.
+	// baseURL is handed down as the exact string just written above — the
+	// reader compares it byte for byte against the live ANTHROPIC_BASE_URL.
+	installModelsCacheForInvoker(baseURL, opts.ModelRouteDirectives)
 	return path, nil
 }
 

@@ -127,6 +127,13 @@ the rest as always. When a request is served by Waired, your device's active
 local model answers it, whatever the session has selected. The Anthropic name
 only matters for requests that actually go to the cloud.
 
+**Three Waired entries also appear in `/model`.** Alongside the Anthropic names,
+`/model` offers **Waired auto**, **Waired local** and **Waired cloud** — the same
+three choices as `/waired-route`, picked from the menu you are already in. They
+show up after you connect Claude Code; restart Claude Code once to see them. If
+they are missing, see
+[The Waired entries are missing from /model](/troubleshooting/#the-waired-entries-are-missing-from-model).
+
 **Long sessions get summarized.** Local models hold less conversation at once,
 so Claude Code compacts older turns to fit. Waired tells Claude Code the limit
 your current model can really handle, so this happens at the right moment. If
