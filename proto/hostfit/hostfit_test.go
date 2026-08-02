@@ -548,6 +548,18 @@ func TestVLLMFit(t *testing.T) {
 			if got.Fits != tc.wantFits || got.Reason != tc.wantReason {
 				t.Errorf("VLLMFit() = %+v, want {Fits:%v Reason:%q}", got, tc.wantFits, tc.wantReason)
 			}
+			// PRODUCT CONTRACT (waired-agent#364): every branch states
+			// "no speed claim" the way the rest of the package does — a
+			// passing floor with no figure. The zero Estimate is NOT
+			// that: a consumer reading MeetsSpeedFloor alone reads it as
+			// "confirmed below the floor", which is how the control
+			// plane came to tag an H100 "may be slow".
+			if !got.Estimate.MeetsSpeedFloor {
+				t.Errorf("Estimate = %+v, want the no-claim value (MeetsSpeedFloor true)", got.Estimate)
+			}
+			if got.Estimate.TokpsEstimate != 0 || got.Estimate.UpperBound {
+				t.Errorf("Estimate = %+v, want no figure and no bound — vLLM has no roofline here", got.Estimate)
+			}
 		})
 	}
 
@@ -555,6 +567,42 @@ func TestVLLMFit(t *testing.T) {
 	// no figure to compare against, and 0 GB would read as a measurement.
 	if got := hostfit.VLLMFit(v, 0); got.NeedMB != 16000 || got.HaveMB != 0 {
 		t.Errorf("no-gpu verdict = %+v, want need 16000 / have unset", got)
+	}
+}
+
+// TestEstimateOllamaDecode_NeverReturnsTheZeroValue is the other half of
+// the #364 contract, and the only thing that makes "an all-zero Estimate"
+// safe to read as "nobody filled this in". EstimateOllamaDecode spells
+// every no-claim exit as {MeetsSpeedFloor: true}; if some branch ever
+// returned the zero value instead, an ollama verdict would become
+// indistinguishable from an unpopulated one.
+//
+// PRODUCT CONTRACT, not a record of today's behaviour.
+func TestEstimateOllamaDecode_NeverReturnsTheZeroValue(t *testing.T) {
+	// Deliberately includes the degenerate variants that drive the
+	// "nothing to reason from" exits: no weight, no param counts, no KV.
+	variants := []catalog.Variant{
+		{VariantID: "unannotated"},
+		{VariantID: "weight-only", EstimatedWeightGB: 22.6},
+		{VariantID: "dense-q4", EstimatedWeightGB: 16.3, ParamCount: 27e9, KVBytesPerTokenFP16: 98304},
+		{VariantID: "moe-mtp", EstimatedWeightGB: 22.6, ParamCount: 35e9, ActiveParams: 3.3e9, KVBytesPerTokenFP16: 73728},
+	}
+	hosts := map[string]hostfit.Host{
+		"cpu-only":         {RAMTotalGB: 32},
+		"discrete-16gb":    {RAMTotalGB: 64, GPUCount: 1, VRAM0MB: 16303},
+		"discrete-24gb":    {RAMTotalGB: 128, GPUCount: 1, VRAM0MB: 24564},
+		"unified-no-spec":  {RAMTotalGB: 64, UnifiedMemory: true, UsableVRAMMB: 49152},
+		"unified-with-bw":  {RAMTotalGB: 64, UnifiedMemory: true, UsableVRAMMB: 49152, MemoryBandwidthSpecGBs: 546},
+		"unified-slow-bw":  {RAMTotalGB: 24, UnifiedMemory: true, UsableVRAMMB: 16384, MemoryBandwidthSpecGBs: 68},
+		"gpu-unknown-vram": {RAMTotalGB: 64, GPUCount: 1},
+	}
+	for hn, h := range hosts {
+		for _, v := range variants {
+			if got := hostfit.EstimateOllamaDecode(v, h); got == (hostfit.Estimate{}) {
+				t.Errorf("EstimateOllamaDecode(%s, %s) returned the zero value; "+
+					"a no-claim exit must be spelled {MeetsSpeedFloor: true}", v.VariantID, hn)
+			}
+		}
 	}
 }
 

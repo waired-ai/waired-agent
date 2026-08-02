@@ -514,8 +514,12 @@ type Verdict struct {
 	HaveMB int
 
 	// Estimate is how fast this variant is expected to decode here, and
-	// how much of it the GPU holds. Zero value when the variant carries
-	// no sizing annotations to reason from.
+	// how much of it the GPU holds. Where there is nothing to reason
+	// from — an unannotated variant, or an engine/host pair this package
+	// declines to price — it carries the NO-CLAIM value
+	// ({MeetsSpeedFloor: true}, no figure), never the zero value: a
+	// consumer reading MeetsSpeedFloor alone would take a zero Estimate
+	// for a confirmed-slow verdict (waired-agent#364).
 	//
 	// json:"-" because Verdict is a decision, not a payload: nothing
 	// marshals it, and each consumer projects the parts it needs onto its
@@ -971,12 +975,26 @@ func OllamaRecommend(v catalog.Variant, h Host) Verdict {
 // vLLM does not run without a GPU, so "it fits" would be a worse answer
 // than "there is no card". HaveMB is left unset there — there is no
 // figure to compare against, and 0 GB would read as a measurement.
+//
+// Every branch carries the no-claim Estimate. vLLM serves only from a
+// discrete GPU, and that is precisely the case this package declines to
+// price: the card's own bandwidth decides the answer and nothing here
+// knows it (see EstimateOllamaDecode's discrete arm, and #266 for the
+// table that would). "No claim" is spelled the same way it is there —
+// a passing floor with no figure — because the zero value is NOT a
+// neutral absence: a consumer that reads MeetsSpeedFloor alone reads it
+// as "confirmed below the floor", which is how every vLLM entry came to
+// be annotated "may be slow" on an H100 (waired-agent#364).
 func VLLMFit(v catalog.Variant, budgetMB int) Verdict {
-	if budgetMB <= 0 {
-		return Verdict{Reason: ReasonNoGPU, NeedMB: v.MinVRAMMB}
+	var out Verdict
+	switch {
+	case budgetMB <= 0:
+		out = Verdict{Reason: ReasonNoGPU, NeedMB: v.MinVRAMMB}
+	case v.MinVRAMMB <= 0 || budgetMB >= v.MinVRAMMB:
+		out = Verdict{Fits: true}
+	default:
+		out = Verdict{Reason: ReasonInsufficientVRAM, NeedMB: v.MinVRAMMB, HaveMB: budgetMB}
 	}
-	if v.MinVRAMMB <= 0 || budgetMB >= v.MinVRAMMB {
-		return Verdict{Fits: true}
-	}
-	return Verdict{Reason: ReasonInsufficientVRAM, NeedMB: v.MinVRAMMB, HaveMB: budgetMB}
+	out.Estimate = Estimate{MeetsSpeedFloor: true}
+	return out
 }
