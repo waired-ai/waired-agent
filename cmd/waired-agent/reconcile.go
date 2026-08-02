@@ -178,6 +178,14 @@ type reconciler struct {
 	// unit tests that exercise reconciler logic only.
 	disco discoSubsystem
 
+	// now is the reconciler's clock — the ONLY wall-clock read in Apply
+	// and Tick (every other timestamp arrives on a disco.Event's At
+	// field, which tests already control). newReconciler sets it to
+	// time.Now; tests override it to drive the safety-net gates
+	// directly instead of sleeping past them (#384). Same test seam as
+	// updateController.now / setupReconciler.now.
+	now func() time.Time
+
 	mu    sync.Mutex
 	nm    *signer.NetworkMap
 	state map[string]*peerPathState // keyed by peer NodePublicKey (std-base64)
@@ -283,6 +291,7 @@ func newReconciler(engine peerEngine, provider *agentProvider, logger *slog.Logg
 		cfg:      cfg.withDefaults(),
 		id:       id,
 		state:    map[string]*peerPathState{},
+		now:      time.Now,
 	}
 }
 
@@ -644,7 +653,7 @@ func pongRingFull(st *peerPathState, capN int) bool {
 func (r *reconciler) Apply(nm *signer.NetworkMap) error {
 	r.mu.Lock()
 	r.nm = nm
-	now := time.Now()
+	now := r.now()
 	live := make(map[string]struct{}, len(nm.Peers))
 	r.logNames = make(map[string]string, len(nm.Peers))
 	added := 0
@@ -805,7 +814,7 @@ func (r *reconciler) Tick(ctx context.Context) {
 		r.mu.Unlock()
 		return
 	}
-	now := time.Now()
+	now := r.now()
 	changed := false
 	for _, p := range r.nm.Peers {
 		st := r.state[p.NodePublicKey]
