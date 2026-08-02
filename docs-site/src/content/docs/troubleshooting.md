@@ -565,8 +565,9 @@ spilling into system RAM is one you have to choose deliberately.
 
 ## The Waired entries are missing from /model
 
-`/model` should offer **Waired auto**, **Waired local** and **Waired cloud**
-below the Anthropic names. Three things hide them, in the order worth checking:
+`/model` should offer **Waired auto — 200k**, **Waired auto — 1M**,
+**Waired local** and **Waired cloud** below the Anthropic names. Three things
+hide them, in the order worth checking:
 
 1. **Claude Code has not been restarted.** The list is read once at startup. Quit
    Claude Code and start it again.
@@ -579,8 +580,7 @@ below the Anthropic names. Three things hide them, in the order worth checking:
 
 3. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set.** Any value hides the
    entries, even when everything else is correct. Unset it and restart Claude
-   Code, or use `/waired-route` instead — it works regardless and does the same
-   three things.
+   Code, or use `/waired-route` instead — it works regardless.
 
 Running Claude Code inside WSL2 while Waired is installed on Windows is a
 separate case: they are two different systems, so use the Windows-side Claude

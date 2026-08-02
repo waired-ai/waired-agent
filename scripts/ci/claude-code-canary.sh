@@ -123,8 +123,9 @@ stub="${here}/canary-models-stub.py"
 schema_probe="${here}/canary-cache-schema.py"
 # Directive ids that MUST survive Claude Code's ^(claude|anthropic) filter, and
 # the junk id that MUST be filtered out. Keep in sync with canary-models-stub.py
-# and internal/proxy/intercept (wired{Local,Cloud}Model).
-want_auto="anthropic-waired-auto"
+# and internal/proxy/intercept (wired{Auto,Auto1M,Local,Cloud}Model).
+want_auto="claude-waired-auto"
+want_auto_1m="claude-waired-auto[1m]"
 want_local="anthropic-waired-local"
 want_cloud="claude-waired-cloud[1m]"
 junk_id="waired-junk-should-be-filtered"
@@ -215,6 +216,13 @@ discovery_e2e() {
   if ! grep -qF -- "${want_auto}" "${cache}"; then
     echo "FAIL: E2E — \"${want_auto}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2
     e2e_fail=1
+  fi
+  # waired#1031: the 1M tier. Its id differs from want_auto only by the
+  # suffix, so a filter change that swallowed one and not the other would
+  # otherwise be invisible here.
+  if ! grep -qF -- "${want_auto_1m}" "${cache}"; then
+    echo "FAIL: E2E — \"${want_auto_1m}\" absent from picker cache (^(claude|anthropic) filter tightened, or the suffix broke discovery)" >&2
+    fails=$((fails + 1))
   fi
   if ! grep -qF -- "${want_local}" "${cache}"; then
     echo "FAIL: E2E — \"${want_local}\" absent from picker cache (^(claude|anthropic) filter tightened, or discovery dropped it)" >&2

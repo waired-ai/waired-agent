@@ -32,10 +32,14 @@ JUNK_ID = "waired-junk-should-be-filtered"
 
 MODELS = {
     "data": [
-        {"type": "model", "id": "anthropic-waired-auto",
-         "display_name": "Waired auto (local, fallback to Anthropic)", "max_input_tokens": 250000},
+        {"type": "model", "id": "claude-waired-auto",
+         "display_name": "Waired auto \u2014 200k (local, fallback to Anthropic)",
+         "max_input_tokens": 200704},
+        {"type": "model", "id": "claude-waired-auto[1m]",
+         "display_name": "Waired auto \u2014 1M (local, fallback to Anthropic)",
+         "max_input_tokens": 1048576},
         {"type": "model", "id": "anthropic-waired-local",
-         "display_name": "Waired local (this device)", "max_input_tokens": 250000},
+         "display_name": "Waired local (this device)", "max_input_tokens": 200704},
         {"type": "model", "id": "claude-waired-cloud[1m]",
          "display_name": "Waired cloud (Anthropic API)", "max_input_tokens": 1000000},
         {"type": "model", "id": "claude-sonnet-5",
@@ -43,7 +47,7 @@ MODELS = {
         {"type": "model", "id": JUNK_ID, "display_name": "junk"},
     ],
     "has_more": False,
-    "first_id": "anthropic-waired-auto",
+    "first_id": "claude-waired-auto",
     "last_id": JUNK_ID,
 }
 

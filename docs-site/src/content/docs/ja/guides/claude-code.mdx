@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 70e86117d363c3cd
+sourceHash: a3d42acaef6af18d
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -124,19 +124,33 @@ waired claude route anthropic --subagents waired  # 本体はクラウド、サ�
 **そのデバイスで動いているローカルモデル**が応答します。Anthropic のモデル名が
 意味を持つのは、実際にクラウドへ送られたときだけです。
 
-**`/model` には Waired の項目も 3 つ出ます。** Anthropic のモデル名と並んで
-**Waired auto** / **Waired local** / **Waired cloud** が選べます。`/waired-route`
-と同じ 3 択を、いま開いているメニューからそのまま選べる、というものです。
+**`/model` には Waired の項目も 4 つ出ます。** Anthropic のモデル名と並んで
+**Waired auto — 200k** / **Waired auto — 1M** / **Waired local** /
+**Waired cloud** が、いま開いているメニューからそのまま選べます。
 Claude Code を接続したあとに表示され、一度 Claude Code を再起動すると出てきます。
 出てこない場合は
 [/model に Waired の項目が出ない](/ja/troubleshooting/#the-waired-entries-are-missing-from-model)
 を参照してください。
 
-**長いセッションは要約されます。** ローカルのモデルは一度に保持できる会話量が
-少ないため、Claude Code が古いターンを要約して収めます。Waired は今のモデルが
-実際に扱える上限を Claude Code に伝えるので、要約は適切なタイミングで起こります。
-あとで別のモデルに切り替えたときは、新しい上限を伝えるために
-`sudo waired claude enable` を実行し直してください（Windows は管理者プロンプトから）。
+**auto** の 2 つは、セッションが一度に保持できる会話量だけが違います。どちらも
+使えるときは自分のコンピュータを、使えないときは Anthropic を使いますが、
+コンピュータが使われるのは、その量の会話を実際に収められるモデルを動かしている
+ときだけです。たいていのコンピュータは 200k を満たせます。1M はデスクトップ機の
+搭載メモリをはるかに超えるので、選んでもたいていは Anthropic が応答します。
+作業に合わせて選んでください — 普通のセッションは 200k、大きなコードベースを
+まるごと Claude Code に渡すときは 1M です。
+
+**Waired local** はそれを一切気にせず、このコンピュータが収められる量のまま、
+必ずこのコンピュータを使う項目です。何があっても手元のマシンに応答させたいときに
+選んでください。
+
+**長いセッションは要約されます。** モデルが一度に保持できる会話量はクラウドより
+少ないため、Claude Code が古いターンを要約して収めます。**auto** の 2 つはその
+上限をあらかじめ名乗っていて、実際にその量を収められるコンピュータだけが応答する
+ので、要約は想定どおりのタイミングで起こります。**Waired local** だけは例外で、
+このコンピュータが収められる量をそのまま使います。あとで別のモデルに切り替えた
+ときは、新しい上限を伝えるために `sudo waired claude enable` を実行し直して
+ください（Windows は管理者プロンプトから）。
 `waired claude status` が両方の数値を表示し、食い違っていればそう伝えます。これは
 失敗ではなく、セッションが生き延びているということです
 （→ [長い Claude Code のセッションが要約される](/ja/troubleshooting/#long-claude-code-sessions-get-summarized)）。

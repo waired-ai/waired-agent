@@ -101,6 +101,16 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	}
 	rr.ev.Class = class
 	routeReq := router.Request{Model: req.Model, StickyID: stickyID, Class: class}
+	// waired#1031: a /model tier obliges the serving endpoint to declare
+	// the window Claude Code already sized this session to. Derived from
+	// the client's ORIGINAL id — ResolveUnknownModel below rewrites the id
+	// to something servable, and the promise belongs to the id the user
+	// picked, not to whatever it resolved to. Gated on the same flag that
+	// advertises the ids at all, so a deployment with directives off never
+	// grows a filter it cannot have asked for.
+	if h.deps.ClaudeModelDirectives {
+		routeReq.MinContextWindow = RequiredWindowFor(req.Model)
+	}
 	probed, err := h.selectAndProbe(r.Context(), routeReq)
 	if errors.Is(err, router.ErrModelNotFound) && h.deps.ResolveUnknownModel != nil {
 		// Claude-intercept model mapping (#600): the Anthropic ids Claude

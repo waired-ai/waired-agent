@@ -2891,6 +2891,12 @@ func (p *agentInferenceProvider) baseRouterInputs(ctx context.Context) router.In
 func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref state.RoutingPreference) *router.Selector {
 	in := p.baseRouterInputs(ctx)
 	in.MeshSnapshotFn = p.meshSnapshotFn
+	// waired#1031: the local half of the /model tier filter. Loopback
+	// only — localOnlySelector leaves it unset, because a request that
+	// arrived FROM a peer was already filtered by that peer's router and
+	// re-applying the rule here would let a serving node veto work it had
+	// just been asked to do.
+	in.LocalContextWindow = p.DeclaredContextWindow
 	// Phase 5: the loopback Selector may fall back through
 	// registered openai-compat adapters before consulting the
 	// mesh. localOnlySelector pins this false for overlay traffic.

@@ -32,15 +32,23 @@ type DirectiveModel struct {
 	DisplayName string
 }
 
-// Directive ids. Duplicated from gateway.ModelWaired{Auto,Local,Cloud} — see
-// the file comment.
+// Directive ids. Duplicated from gateway.ModelWaired{Auto,Auto1M,Local,Cloud}
+// — see the file comment.
 const (
-	// DirectiveModelAuto routes Waired-first with an Anthropic fallback. Does
-	// not start with "claude-", so CLAUDE_CODE_MAX_CONTEXT_TOKENS sizes it.
-	DirectiveModelAuto = "anthropic-waired-auto"
+	// DirectiveModelAuto and DirectiveModelAuto1M route Waired-first with an
+	// Anthropic fallback, at the 200k and 1M tiers. Both start with
+	// "claude-", so Claude Code sizes them from the id alone — the bare id
+	// takes its 200k default, the "[1m]" suffix takes 1M — and neither
+	// consults CLAUDE_CODE_MAX_CONTEXT_TOKENS. Waired serves the turn only
+	// when a node declares that window; otherwise it goes to Anthropic
+	// (waired#1031).
+	DirectiveModelAuto   = "claude-waired-auto"
+	DirectiveModelAuto1M = "claude-waired-auto[1m]"
 	// DirectiveModelLocal pins the conversation to this device's inference.
-	// Also non-"claude-", and the id whose real window that env var carries
-	// (#408).
+	// The one deliberately non-"claude-" id, and so the only one whose
+	// window comes from CLAUDE_CODE_MAX_CONTEXT_TOKENS (#408) — which is
+	// what lets it report a window that is neither 200k nor 1M. Pinning is
+	// how you reach a device that declares no tier at all.
 	DirectiveModelLocal = "anthropic-waired-local"
 	// DirectiveModelCloud pins to the real Anthropic API. The "[1m]" suffix is
 	// what gives it Claude Code's 1M window, and outranks the env var above.
@@ -51,7 +59,8 @@ const (
 // advertises them, which is the order they appear in /model.
 func DirectiveModels() []DirectiveModel {
 	return []DirectiveModel{
-		{ID: DirectiveModelAuto, DisplayName: "Waired auto (local, fallback to Anthropic)"},
+		{ID: DirectiveModelAuto, DisplayName: "Waired auto — 200k (local, fallback to Anthropic)"},
+		{ID: DirectiveModelAuto1M, DisplayName: "Waired auto — 1M (local, fallback to Anthropic)"},
 		{ID: DirectiveModelLocal, DisplayName: "Waired local (this device)"},
 		{ID: DirectiveModelCloud, DisplayName: "Waired cloud (Anthropic API)"},
 	}

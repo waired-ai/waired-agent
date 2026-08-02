@@ -127,17 +127,31 @@ the rest as always. When a request is served by Waired, your device's active
 local model answers it, whatever the session has selected. The Anthropic name
 only matters for requests that actually go to the cloud.
 
-**Three Waired entries also appear in `/model`.** Alongside the Anthropic names,
-`/model` offers **Waired auto**, **Waired local** and **Waired cloud** — the same
-three choices as `/waired-route`, picked from the menu you are already in. They
-show up after you connect Claude Code; restart Claude Code once to see them. If
-they are missing, see
+**Four Waired entries also appear in `/model`.** Alongside the Anthropic names,
+`/model` offers **Waired auto — 200k**, **Waired auto — 1M**, **Waired local**
+and **Waired cloud**, picked from the menu you are already in. They show up after
+you connect Claude Code; restart Claude Code once to see them. If they are
+missing, see
 [The Waired entries are missing from /model](/troubleshooting/#the-waired-entries-are-missing-from-model).
 
-**Long sessions get summarized.** Local models hold less conversation at once,
-so Claude Code compacts older turns to fit. Waired tells Claude Code the limit
-your current model can really handle, so this happens at the right moment. If
-you switch to a different model later, run `sudo waired claude enable` again
+The two **auto** entries differ only in how much conversation the session holds.
+Both use your own computers when they can and Anthropic when they cannot — but a
+computer is only used for one of them if it is actually running a model with room
+for that much conversation. Most computers can do 200k; 1M needs far more memory
+than a desktop has, so choosing it will usually mean Anthropic answers. Pick the
+one that matches the work: 200k for ordinary sessions, 1M when you are handing
+Claude Code an entire large codebase at once.
+
+**Waired local** is the entry that ignores all of that and always uses this
+computer, whatever it can hold. It is the one to pick when you want your own
+machine to answer no matter what.
+
+**Long sessions get summarized.** Models hold less conversation at once than the
+cloud does, so Claude Code compacts older turns to fit. The two **auto** entries
+each state their limit up front, and a computer only answers for one of them if
+it really has that much room, so the summarizing happens where you expect.
+**Waired local** is the exception: it uses whatever this computer can hold, so
+if you switch to a different model later, run `sudo waired claude enable` again
 (Windows: from an administrator prompt) so the new limit is passed on —
 `waired claude status` shows both numbers and says when they disagree. That is
 the session surviving, not failing — see

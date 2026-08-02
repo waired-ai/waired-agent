@@ -35,8 +35,21 @@ const defaultPassthroughModel = "claude-sonnet-5"
 // keep this fail-open package stdlib-only — keep both sides in sync.
 const (
 	wairedLocalModel = "anthropic-waired-local"
-	wairedAutoModel  = "anthropic-waired-auto"
-	wairedCloudModel = "claude-waired-cloud[1m]"
+	wairedAutoModel  = "claude-waired-auto"
+	// wairedAuto1MModel is the 1M tier of the same auto route. The route
+	// it forces is identical; what differs is the window Claude Code
+	// sized the session to from the "[1m]" suffix, and the window the
+	// gateway therefore demands of a serving endpoint. When none declares
+	// it, selection fails and the auto fallback carries the turn to the
+	// real Anthropic API — which is the tier's contract, not a fault.
+	wairedAuto1MModel = "claude-waired-auto[1m]"
+	// wairedAutoLegacyModel is the pre-waired#1031 spelling of the auto
+	// id. It is no longer advertised and is still routed: a Claude Code
+	// that selected it keeps it in its own settings across an upgrade,
+	// and the picker cache has no TTL, so a whole session can arrive
+	// under the old name.
+	wairedAutoLegacyModel = "anthropic-waired-auto"
+	wairedCloudModel      = "claude-waired-cloud[1m]"
 )
 
 // directiveRoute maps a reserved directive model id to the route it forces,
@@ -46,7 +59,7 @@ func directiveRoute(model string) (route string, ok bool) {
 	switch model {
 	case wairedLocalModel:
 		return routeWaired, true
-	case wairedAutoModel:
+	case wairedAutoModel, wairedAuto1MModel, wairedAutoLegacyModel:
 		return routeAuto, true
 	case wairedCloudModel:
 		return routeAnthropic, true
