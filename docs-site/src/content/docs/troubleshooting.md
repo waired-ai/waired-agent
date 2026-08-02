@@ -504,10 +504,12 @@ the shortfall (`needs 32 GB RAM (have 31 GB)`) and asks you to confirm.
 - **Genuinely too big** — the engine fails to load it and reports a clear error.
   Switch back down: [Choose which AI model runs](/guides/choose-a-model/).
 
-The recommended figures carry a safety margin, and on Apple Silicon and AMD
-Strix Halo the fit is judged against the memory the graphics side can actually
-address. `waired models ls --detail` shows the verdict for every model on this
-machine.
+The recommended figures carry a safety margin. On Apple Silicon and AMD Strix
+Halo the fit is judged against the memory the graphics side can actually
+address; on a computer with a separate graphics card, what Waired picks *for*
+you is judged against the card's own memory — so a model that only fits by
+spilling into system RAM is one you have to choose deliberately.
+`waired models ls --detail` shows the verdict for every model on this machine.
 
 ## Long Claude Code sessions get summarized
 

@@ -54,9 +54,11 @@ can actually run. You can switch at any time:
 ### How does Waired choose a model for me?
 
 It looks at your processor, memory and graphics card, and picks the highest
-quality model that fits with room to spare — then measures the real speed and
-offers a lighter one if this machine cannot keep up. It will not fill your disk:
-if space is short it steps down rather than failing halfway.
+quality model that fits with room to spare — on a computer with a separate
+graphics card, that means fitting **on the card**, not spilling over into system
+RAM — then measures the real speed and offers a lighter one if this machine
+cannot keep up. It will not fill your disk: if space is short it steps down
+rather than failing halfway.
 
 ### Can I run a model that is bigger than recommended?
 

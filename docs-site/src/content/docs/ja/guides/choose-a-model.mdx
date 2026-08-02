@@ -5,13 +5,16 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: cda326e4fafcbe2a
+sourceHash: 09ca6a80709070a9
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 サインインしたときに、Waired が**このパソコンで実際に動かせる中でいちばん良いモデル**を
-自動で選んでいます。変更したいときだけこのページを読んでください。
+自動で選んでいます。単体のグラフィックボードを搭載したパソコンでは、カードに収まる
+モデルの中から選ぶため、自動選択の結果は総メモリ量から想像するより小さくなることが
+あります（[理由](/ja/reference/model-catalog/#waired-によるモデル選択の仕組み)）。
+変更したいときだけこのページを読んでください。
 
 ## そもそも変えるべき？
 
