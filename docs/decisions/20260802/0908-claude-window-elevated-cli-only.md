@@ -58,6 +58,18 @@ managed settings の `CLAUDE_CODE_MAX_CONTEXT_TOKENS` は、`claude-` で始ま�
    追随する値そのものが無くなる。期限付きの問題のために恒久的な権限姿勢の変更は
    払わない。
 
+   **訂正（20260802、waired#1031 着地後）**: 理由 4 は**半分しか当たっていな
+   かった**。#1031 は auto ディレクティブについては期待どおり env を不要にした
+   — `claude-waired-auto` / `claude-waired-auto[1m]` は `claude-` 接頭辞と
+   `[1m]` サフィックスで窓が決まり、`CLAUDE_CODE_MAX_CONTEXT_TOKENS` を一切
+   参照しない（#438 / #445）。しかし `anthropic-waired-local` は**意図的に**
+   非 `claude-` のまま残した。200k / 1M のどちらでもない窓を報告できる唯一の
+   id であり、契約を名乗れないノードにピンする逃げ道だからである。つまりこの
+   env は消えず、書き手が昇格 CLI である以上、下の Consequences が言う
+   「次の enable まで古いまま」も消えない。`waired claude status` の
+   `local window:` STALE 行は**恒久的に必要**であって、#1031 で削除できる
+   ものとして数えてはならない。
+
 ## Consequences
 
 - serving model や適用 tuning が変わると、次に `sudo waired claude enable` /
@@ -83,5 +95,6 @@ managed settings の `CLAUDE_CODE_MAX_CONTEXT_TOKENS` は、`claude-` で始ま�
 - docs/decisions/20260728/1444-init-daemon-path-owns-claude-routing.md（本決定が
   依拠する制約。supersede ではなく、その §4 を別の書き込み対象に適用したもの）
 - docs/knowledges/20260714/0241-claude-code-context-window-internals.md
-- waired-ai/waired#1031（窓の契約化。これが入れば refresh 問題自体が消える）
+- waired-ai/waired#1031（窓の契約化。auto については refresh 問題を消したが、
+  local ピンについては消えない — 上の訂正を参照）
 - waired-ai/waired#935 / waired-ai/waired#1002
