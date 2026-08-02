@@ -137,6 +137,12 @@ paused, still downloading, an unsupported request shape — Claude Code uses the
 real Anthropic API so your turn completes. Choose the `waired` route if you
 would rather see the error than have it redirected.
 
+**A pinned computer is never substituted.** If you pinned one of your machines
+with `waired worker` and it is unavailable, Waired does not answer from this
+computer instead. On the `auto` route the turn goes to the real Anthropic API,
+with a note in the conversation saying why; on the `waired` route it fails. See
+[Requests stopped working after I pinned a computer](/troubleshooting/#requests-stopped-working-after-i-pinned-a-computer).
+
 ## Sharing one machine with your other devices
 
 In the [web console](https://app.waired.ai/), a machine's page decides how the

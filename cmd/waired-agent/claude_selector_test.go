@@ -120,22 +120,11 @@ func withRouting(p *agentInferenceProvider, pref state.RoutingPreference) *agent
 	return p
 }
 
-type fallbackRecord struct {
-	class, peer, reason string
-	count               int
-}
-
-func (f *fallbackRecord) hook(class, peer, reason string) {
-	f.class, f.peer, f.reason = class, peer, reason
-	f.count++
-}
-
 func TestClaudeSelector_WorkerPinnedServesRemote(t *testing.T) {
 	snap := peerSnapshot("big:32b")
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-X"})
-	var rec fallbackRecord
-	sel := &claudeSelector{p: p, onNodeFallback: rec.hook}
+	sel := &claudeSelector{p: p}
 
 	// The gateway resolves the claude-* id via the resolver first; here we
 	// hand the selector the peer-resolved model directly.
@@ -146,28 +135,58 @@ func TestClaudeSelector_WorkerPinnedServesRemote(t *testing.T) {
 	if len(cands) == 0 || cands[0].ExecutionMode != "remote" || cands[0].PeerID != "peer-X" {
 		t.Fatalf("candidate = %+v, want remote on peer-X", cands)
 	}
-	if rec.count != 0 {
-		t.Fatalf("no fallback expected, got %+v", rec)
+}
+
+// TestClaudeSelector_PinnedPeerGoneFailsClosed pins the PRODUCT CONTRACT
+// #325 settled: a pinned worker that is not in the mesh must surface
+// ErrPinnedPeerUnreachable on the Claude surface exactly as it does on the
+// general gateway. It INVERTS the former
+// TestClaudeSelector_PinnedPeerGoneFallsBackLocal, which asserted the
+// opposite (a silent local retry against the device-active model) — that
+// retry is what made a pinned worker look dead while this machine's GPU
+// quietly answered every turn.
+func TestClaudeSelector_PinnedPeerGoneFailsClosed(t *testing.T) {
+	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return inferencemesh.Snapshot{} }),
+		state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-X"})
+	sel := &claudeSelector{p: p}
+
+	// small-local IS ready on this device, so a local retry would have
+	// succeeded — the test is only meaningful because of that.
+	cands, err := sel.SelectK(t.Context(), router.Request{Model: "big-peer", Class: state.ClaudeClassMain}, 1)
+	if err == nil {
+		t.Fatalf("pinned peer absent must fail, got candidates %+v", cands)
+	}
+	if !errors.Is(err, router.ErrPinnedPeerUnreachable) {
+		t.Fatalf("error = %v, want ErrPinnedPeerUnreachable", err)
+	}
+	if len(cands) != 0 {
+		t.Fatalf("candidates = %+v, want none", cands)
+	}
+	// The error must name the pin so the gateway can report which worker
+	// is down (the WARN emit used to log an empty peer_id).
+	var pin *router.PinnedPeerUnreachableError
+	if !errors.As(err, &pin) || pin.PeerDisplayID != "peer-X" {
+		t.Fatalf("error does not name the pinned peer: %v", err)
 	}
 }
 
-func TestClaudeSelector_PinnedPeerGoneFallsBackLocal(t *testing.T) {
-	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return inferencemesh.Snapshot{} }),
+// TestClaudeSelector_PinnedPeerLacksModelFailsClosed is the second half of
+// the same contract: the former retry also caught ErrModelNotReady, so a
+// reachable pin with nothing servable fell back locally too. Both shapes
+// now propagate.
+func TestClaudeSelector_PinnedPeerLacksModelFailsClosed(t *testing.T) {
+	// The pin is up and reachable but serves neither catalog model.
+	snap := peerSnapshot("unrelated:7b")
+	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return snap }),
 		state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "peer-X"})
-	var rec fallbackRecord
-	sel := &claudeSelector{p: p, onNodeFallback: rec.hook}
+	sel := &claudeSelector{p: p}
 
-	// The peer-resolved model isn't on local disk; the local retry must
-	// re-target the device-active model rather than 503 the turn.
-	cands, err := sel.SelectK(t.Context(), router.Request{Model: "big-peer", Class: state.ClaudeClassMain}, 1)
-	if err != nil {
-		t.Fatalf("SelectK after fallback: %v", err)
+	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
+	if err == nil {
+		t.Fatalf("pinned peer without the model must fail, got candidates %+v", cands)
 	}
-	if len(cands) == 0 || cands[0].ExecutionMode != "local" || cands[0].ModelID != "small-local" {
-		t.Fatalf("candidate = %+v, want local small-local", cands)
-	}
-	if rec.count != 1 || rec.class != state.ClaudeClassMain || rec.peer != "peer-X" || rec.reason != "unreachable" {
-		t.Fatalf("fallback record = %+v", rec)
+	if !errors.Is(err, router.ErrModelNotReady) {
+		t.Fatalf("error = %v, want ErrModelNotReady", err)
 	}
 }
 
@@ -221,17 +240,14 @@ func TestClaudeSelector_NilRoutingDefaultsLocal(t *testing.T) {
 
 // TestClaudeSelector_PeerOnlyDoesNotFallBackLocal pins the PRODUCT
 // CONTRACT that makes peer-only worth having on the Claude surface too
-// (#327): the non-destructive local retry in selectWithWorkerPref is
-// gated on pinned mode, so peer-only must surface the error instead of
-// quietly running the turn on this machine. That silent-local-fallback
-// shape is exactly what #325 is unifying away for pins; peer-only must
-// not reintroduce it.
+// (#327): peer-only must surface the error instead of quietly running the
+// turn on this machine. #325 removed the last silent-local retry from this
+// selector, so no mode may reintroduce one.
 func TestClaudeSelector_PeerOnlyDoesNotFallBackLocal(t *testing.T) {
 	// Empty mesh, and the local engine IS ready to serve small-local.
 	p := withRouting(newClaudeSelectorProvider(t, func() inferencemesh.Snapshot { return inferencemesh.Snapshot{} }),
 		state.RoutingPreference{Mode: state.RoutingModePeerOnly})
-	var rec fallbackRecord
-	sel := &claudeSelector{p: p, onNodeFallback: rec.hook}
+	sel := &claudeSelector{p: p}
 
 	cands, err := sel.SelectK(t.Context(), router.Request{Model: "small-local", Class: state.ClaudeClassMain}, 1)
 	if err == nil {
@@ -239,9 +255,6 @@ func TestClaudeSelector_PeerOnlyDoesNotFallBackLocal(t *testing.T) {
 	}
 	if !errors.Is(err, router.ErrModelNotReady) {
 		t.Fatalf("error = %v, want ErrModelNotReady", err)
-	}
-	if rec.count != 0 {
-		t.Fatalf("peer-only must not record a local fallback, got %+v", rec)
 	}
 }
 

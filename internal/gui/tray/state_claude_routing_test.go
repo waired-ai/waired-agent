@@ -94,7 +94,10 @@ func TestUpdate_ClaudeRouting_FallbackNote(t *testing.T) {
 		wantSub   string
 	}{
 		{"anthropic", "anthropic", "fell back → Anthropic"},
-		{"local", "local", "served locally"},
+		// A pinned worker never produces direction=local any more
+		// (waired-agent#325 made the pin fail-closed), so the note names
+		// only the remaining cause.
+		{"local", "local", "served locally (Anthropic unavailable)"},
 		{"legacy-unset", "", "fell back → Anthropic"},
 	}
 	for _, tc := range cases {

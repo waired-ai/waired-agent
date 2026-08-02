@@ -76,6 +76,13 @@ waired peers list                    # see your other computers
 waired worker set --pin=<device>     # always use this one
 ```
 
+<Aside type="caution" title="A pin is a firm instruction">
+	`--pin` means "use that computer, and no other". If it is asleep, offline or
+	not sharing, requests fail rather than quietly running somewhere else — see
+	[Requests stopped working after I pinned a computer](/troubleshooting/#requests-stopped-working-after-i-pinned-a-computer).
+	Use `--mode=peer-preferred` when you want a preference rather than a rule.
+</Aside>
+
 <Aside type="note" title="Nothing to open on your router">
 	Your computers connect directly when the network allows it, and fall back to
 	an encrypted relay when a firewall gets in the way. Both are automatic — no

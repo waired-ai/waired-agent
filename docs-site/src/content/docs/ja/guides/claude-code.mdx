@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: 252f5e3190e5a8b0
+sourceHash: 5337c40cb1f55dd3
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -133,6 +133,12 @@ waired claude route anthropic --subagents waired  # 本体はクラウド、サ�
 リクエスト形式などで応答できないとき、Claude Code は本来の Anthropic API を使って
 ターンを完了させます。転送されるくらいならエラーを見たい場合は、`waired` ルートを
 選んでください。
+
+**固定したパソコンが別のパソコンで代替されることはありません。** `waired worker`
+でどれかのパソコンに固定していて、それが使えないとき、Waired はこのパソコンで
+代わりに答えたりしません。`auto` ルートなら本来の Anthropic API に回り、その理由が
+会話に 1 行表示されます。`waired` ルートならエラーになります
+（→ [パソコンを固定したらリクエストが通らなくなった](/ja/troubleshooting/#requests-stopped-working-after-i-pinned-a-computer)）。
 
 ## 1 台をほかの端末と共有する
 

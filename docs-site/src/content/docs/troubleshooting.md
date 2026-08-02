@@ -56,6 +56,7 @@ most problems on its own.
 **Other computers**
 
 - [My other computer cannot reach the AI](#my-other-computer-cannot-reach-the-ai)
+- [Requests stopped working after I pinned a computer](#requests-stopped-working-after-i-pinned-a-computer)
 
 **The app itself**
 
@@ -544,6 +545,35 @@ If it is reachable but never `ready`, it has no model loaded — work through
 You should not need to open ports or configure a VPN. Your computers connect
 directly when the network allows it, and fall back to an encrypted [relay](/reference/glossary/#relay) when a
 firewall gets in the way, automatically.
+
+## Requests stopped working after I pinned a computer
+
+```sh
+waired worker get
+```
+
+Pinning is a firm instruction: **use that computer, and no other**. So when the
+pinned computer is asleep, offline or not sharing, Waired does not quietly run
+the work somewhere else — you get an error instead. That is deliberate. Silently
+answering from a different machine would mean a request you sent to your big GPU
+box was really handled by the laptop in front of you, with no sign of it.
+
+The Waired icon says the same thing: **Worker: `<name>` (pinned) — unavailable,
+requests are not served here**.
+
+Claude Code is the one exception, and only on the `auto` route: rather than
+failing the turn, it finishes it with the real Anthropic API and adds a note to
+the conversation saying so. Switch that class to the `waired` route if you would
+rather see the error — see [Claude Code](/guides/claude-code/).
+
+To fix it, either wake the pinned computer (check it with `waired peers list`
+and `waired doctor` on that machine — see
+[My other computer cannot reach the AI](#my-other-computer-cannot-reach-the-ai)),
+or stop pinning:
+
+```sh
+waired worker set --mode=auto
+```
 
 ## The Waired icon is missing (Linux)
 

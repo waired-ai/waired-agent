@@ -270,6 +270,79 @@ func TestWorkerRouting_Pinned_PeerStaleErrors(t *testing.T) {
 	}
 }
 
+// TestWorkerRouting_Pinned_ErrorNamesThePeer pins the PRODUCT CONTRACT that
+// a strict-pin failure carries the peer's identity: the gateway has no view
+// of the routing preference, so without this the operator gets a 503 and an
+// empty peer_id and cannot tell which worker is down (waired-agent#325).
+func TestWorkerRouting_Pinned_ErrorNamesThePeer(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{mkPeer("peer-A", "qwen3:8b-q4_K_M", true, false)},
+	}
+	s := NewSelector(Inputs{
+		Manifests:          []catalog.Manifest{qwen()},
+		LocalState:         emptyState(),
+		Hardware:           goodHardware(),
+		Runtimes:           registryWithOllama(),
+		MeshSnapshotFn:     func() inferencemesh.Snapshot { return snap },
+		RoutingMode:        state.RoutingModePinned,
+		PinnedPeerDeviceID: "peer-missing",
+	})
+	_, err := s.Select(t.Context(), Request{Model: "waired/default"})
+	var pin *PinnedPeerUnreachableError
+	if !errors.As(err, &pin) {
+		t.Fatalf("error = %v, want a *PinnedPeerUnreachableError", err)
+	}
+	if pin.PeerDisplayID != "peer-missing" {
+		t.Errorf("PeerDisplayID = %q, want %q", pin.PeerDisplayID, "peer-missing")
+	}
+	// The resolved catalog id, not the alias the client asked for.
+	if pin.ModelID != "qwen3-8b-instruct" {
+		t.Errorf("ModelID = %q, want the resolved catalog id", pin.ModelID)
+	}
+	// The sentinel must keep matching — every gateway mapping uses it.
+	if !errors.Is(err, ErrPinnedPeerUnreachable) {
+		t.Errorf("errors.Is(err, ErrPinnedPeerUnreachable) = false for %v", err)
+	}
+}
+
+// TestWorkerRouting_Pinned_PublicPeerNamedByPseudonym pins the §8.5 rule on
+// the new error: the identifier it exposes reaches a header, a log line and
+// the 503 body, so a Public Share peer must appear as its grant pseudonym
+// and never as its real device id.
+func TestWorkerRouting_Pinned_PublicPeerNamedByPseudonym(t *testing.T) {
+	// The pin is present but stale, so it fails the strict check while
+	// still being in the snapshot — the only case where the grant is
+	// visible to the error builder.
+	pub := mkPublicPeer("peer-foreign", "quiet-otter", "qwen3:8b-q4_K_M")
+	pub.Stale = true
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{
+			mkPeer("peer-A", "qwen3:8b-q4_K_M", true, false),
+			pub,
+		},
+	}
+	s := NewSelector(Inputs{
+		Manifests:          []catalog.Manifest{qwen()},
+		LocalState:         emptyState(),
+		Hardware:           goodHardware(),
+		Runtimes:           registryWithOllama(),
+		MeshSnapshotFn:     func() inferencemesh.Snapshot { return snap },
+		RoutingMode:        state.RoutingModePinned,
+		PinnedPeerDeviceID: "peer-foreign",
+	})
+	_, err := s.Select(t.Context(), Request{Model: "waired/default"})
+	var pin *PinnedPeerUnreachableError
+	if !errors.As(err, &pin) {
+		t.Fatalf("error = %v, want a *PinnedPeerUnreachableError", err)
+	}
+	if pin.PeerDisplayID != "quiet-otter" {
+		t.Errorf("PeerDisplayID = %q, want the grant pseudonym", pin.PeerDisplayID)
+	}
+	if strings.Contains(err.Error(), "peer-foreign") {
+		t.Errorf("error body leaks the real device id: %v", err)
+	}
+}
+
 func TestWorkerRouting_Pinned_PeerLacksModelSoftFallback(t *testing.T) {
 	// Pin reachable, but serves a different model. Per user-confirmed
 	// spec decision, this is a SOFT fallback: route to another peer that

@@ -32,6 +32,20 @@ func ttfbTimeoutLocalHandler() http.Handler {
 	})
 }
 
+// pinnedUnreachableLocalHandler emulates the gateway's strict-pin 503: the
+// pin cannot serve, nothing was committed, so dispatchAuto treats it as
+// fallback-eligible. Since waired-agent#325 this is the shape a down pin
+// actually produces — before it, the Claude selector swallowed the error and
+// served locally, so this leg never ran.
+func pinnedUnreachableLocalHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(localErrorHeader, localErrPinnedPeerUnreachable)
+		w.Header().Set(inferencePeerHeader, "linux-gpu")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"type":"error"}`)
+	})
+}
+
 func sseUpstream(sse string) http.RoundTripper {
 	return rtFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -148,6 +162,68 @@ func TestRerouteNotice_InjectedOnAutoFallback(t *testing.T) {
 	}
 	if !strings.Contains(out, "event: message_stop") {
 		t.Errorf("terminal events lost:\n%s", out)
+	}
+}
+
+// TestRerouteNotice_PinnedPeerUnreachableNamesTheSetting pins the
+// user-visible half of waired-agent#325: on the auto route a down pin no
+// longer quietly runs the turn on this machine, it leaves for the Anthropic
+// API — so the transcript has to say WHY, and point at the setting that
+// caused it. The peer is deliberately not named: a device identifier means
+// nothing to the person reading the conversation.
+func TestRerouteNotice_PinnedPeerUnreachableNamesTheSetting(t *testing.T) {
+	sse := sseMessageStart + textBlock(0, "answer") + sseMessageTail
+	s := newServerAnnotate(t, true, Deps{
+		LocalInference:       pinnedUnreachableLocalHandler(),
+		Degraded:             func() bool { return false },
+		ClassRoute:           classRouteFunc(routeAuto),
+		PassthroughTransport: sseUpstream(sse),
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postMessages(t, srv.URL, false)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	out := string(body)
+
+	if !strings.Contains(out, "the worker you pinned is unavailable") {
+		t.Errorf("pinned reroute notice not injected:\n%s", out)
+	}
+	if !strings.Contains(out, "`waired worker`") {
+		t.Errorf("notice must point at the setting that caused it:\n%s", out)
+	}
+	if strings.Contains(out, "linux-gpu") {
+		t.Errorf("notice must not name the peer:\n%s", out)
+	}
+	if strings.Index(out, "the worker you pinned") > strings.Index(out, "event: message_delta") {
+		t.Errorf("notice injected after message_delta:\n%s", out)
+	}
+}
+
+// TestPinnedPeerUnreachable_WairedRouteFailsTheTurn is the other half of the
+// #325 contract: on the "waired" route there is no Anthropic escape hatch, so
+// the 503 must reach Claude Code and the turn visibly fails. Silently serving
+// it from this machine's engine is what the issue removed.
+func TestPinnedPeerUnreachable_WairedRouteFailsTheTurn(t *testing.T) {
+	s := newServer(t, Deps{
+		LocalInference:       pinnedUnreachableLocalHandler(),
+		Degraded:             func() bool { return false },
+		ClassRoute:           classRouteFunc(routeWaired),
+		PassthroughTransport: fakeUpstream(nil),
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	resp := postMessages(t, srv.URL, false)
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", resp.StatusCode, string(body))
+	}
+	if h := resp.Header.Get(fallbackHeader); h != "" {
+		t.Errorf("%s = %q, want no fallback on the waired route", fallbackHeader, h)
 	}
 }
 

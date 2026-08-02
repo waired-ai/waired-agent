@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
@@ -114,6 +115,50 @@ func TestApplyWorker_PinnedActiveLabel(t *testing.T) {
 	}
 	if pe.Label != "linux-gpu (qwen3:8b-q4_K_M)" {
 		t.Errorf("label = %q", pe.Label)
+	}
+}
+
+// TestWorkerSummaryLabel_DownPinStatesTheConsequence pins the PRODUCT
+// CONTRACT from waired-agent#325: the root row must say what a down pin
+// MEANS, not just that it is down. The old " (unavailable)" suffix was
+// technically true and actively misleading — the operator saw it while this
+// machine's GPU quietly answered every Claude turn. "not served here" is the
+// phrasing that holds on every surface: general inference 503s, and a Claude
+// turn on the auto route leaves for the Anthropic API. Neither runs on the
+// pinned worker.
+func TestWorkerSummaryLabel_DownPinStatesTheConsequence(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   string
+	}{
+		{"ok", "linux-gpu (pinned)"},
+		{"unavailable", "linux-gpu (pinned) — unavailable, requests are not served here"},
+		{"absent", "linux-gpu (pinned) — absent, requests are not served here"},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			got := workerSummaryLabel(management.WorkerResponse{
+				Mode:               state.RoutingModePinned,
+				PinnedPeerDeviceID: "dev_lin",
+				PinnedPeerName:     "linux-gpu",
+				PinnedPeerStatus:   tc.status,
+			})
+			if got != tc.want {
+				t.Errorf("workerSummaryLabel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A pin with no friendly name still has to render — the device id is all the
+// tray has.
+func TestWorkerSummaryLabel_FallsBackToDeviceID(t *testing.T) {
+	got := workerSummaryLabel(management.WorkerResponse{
+		Mode:               state.RoutingModePinned,
+		PinnedPeerDeviceID: "dev_lin",
+		PinnedPeerStatus:   "unavailable",
+	})
+	if !strings.HasPrefix(got, "dev_lin (pinned)") {
+		t.Errorf("workerSummaryLabel = %q, want it to start with the device id", got)
 	}
 }
 

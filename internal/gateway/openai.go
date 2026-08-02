@@ -106,7 +106,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	probed, err := h.selectAndProbe(r.Context(), router.Request{Model: model, StickyID: stickyID})
 	if err != nil {
 		rr.ev.Model = model
-		rr.fail(selectionStatus(err), selectionErrorReason(err))
+		rr.failSelection(err)
 		respondSelectionError(w, err)
 		return
 	}
@@ -380,7 +380,11 @@ func respondSelectionError(w http.ResponseWriter, err error) {
 	case errors.Is(err, router.ErrPinnedPeerUnreachable):
 		// An operator-pinned peer is absent / stale / disco-unreachable:
 		// environmental, clears when the peer returns — 503, not the
-		// default:'s 500.
+		// default:'s 500. Naming the peer keeps the general surface's
+		// diagnosis as good as the Claude one's.
+		if peer := pinnedPeerOf(err); peer != "" {
+			w.Header().Set(HeaderInferencePeer, peer)
+		}
 		w.Header().Set("Retry-After", "5")
 		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "waired_pinned_peer_unreachable", err.Error())
 	case errors.Is(err, router.ErrHardwareInsufficient):

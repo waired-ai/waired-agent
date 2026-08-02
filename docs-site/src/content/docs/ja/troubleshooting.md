@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 8cea4551e480838f
+sourceHash: 231b42618f011656
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -59,6 +59,7 @@ waired doctor
 **ほかのパソコン**
 
 - [ほかのパソコンから AI に届かない](#my-other-computer-cannot-reach-the-ai)
+- [パソコンを固定したらリクエストが通らなくなった](#requests-stopped-working-after-i-pinned-a-computer)
 
 **アプリ本体**
 
@@ -571,6 +572,37 @@ waired status --observability
 
 ポート開放や VPN の設定は不要です。ネットワークが許せば直接つながり、ファイアウォールが
 邪魔する場合は暗号化された中継に自動で切り替わります。
+
+<a id="requests-stopped-working-after-i-pinned-a-computer"></a>
+
+## パソコンを固定したらリクエストが通らなくなった
+
+```sh
+waired worker get
+```
+
+固定は「このパソコンを使い、ほかは使わない」という強い指示です。固定した
+パソコンがスリープ中・オフライン・共有オフのとき、Waired はこっそり別の場所で
+処理したりせず、エラーを返します。これは意図した動作です。黙って別のマシンが
+答えてしまうと、大きな GPU マシンに送ったつもりのリクエストが、実は目の前の
+ノート PC で処理されていた、ということが起きてしまうからです。
+
+Waired のアイコンにも同じことが出ます。**Worker: `<名前>` (pinned) —
+unavailable, requests are not served here**。
+
+例外は Claude Code の `auto` ルートだけです。ターンを失敗させる代わりに本来の
+Anthropic API で完了させ、その旨を会話に 1 行追加します。エラーを見たい場合は
+そのクラスを `waired` ルートに切り替えてください
+（→ [Claude Code](/ja/guides/claude-code/)）。
+
+直すには、固定したパソコンを起こす（`waired peers list` と、そのマシンでの
+`waired doctor` で確認 →
+[ほかのパソコンから AI に届かない](#my-other-computer-cannot-reach-the-ai)）か、
+固定をやめます。
+
+```sh
+waired worker set --mode=auto
+```
 
 <a id="the-waired-icon-is-missing-linux"></a>
 

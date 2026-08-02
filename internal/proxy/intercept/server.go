@@ -140,6 +140,13 @@ const ttfbBudgetHeader = "X-Waired-TTFB-Budget-Ms"
 // abort is pre-commit). Duplicated here (stdlib-only) — keep in sync.
 const localErrPeerTTFBTimeout = "peer_ttfb_timeout"
 
+// localErrPinnedPeerUnreachable mirrors gateway.LocalErrorPinnedPeerUnreachable:
+// the localErrorHeader value the gateway stages when the operator's pinned
+// worker cannot serve the request (waired-agent#325). It IS a normal fallback
+// reason — nothing was committed — so auto mode reroutes the turn and names
+// the pin in the notice. Duplicated here (stdlib-only) — keep in sync.
+const localErrPinnedPeerUnreachable = "pinned_peer_unreachable"
+
 // Config controls the listener and passthrough behaviour.
 type Config struct {
 	// Addr is the listen address. Production uses
