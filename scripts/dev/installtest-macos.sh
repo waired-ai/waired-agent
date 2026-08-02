@@ -237,13 +237,13 @@ assert_inference_macos() {
   for _ in $(seq 1 60); do          # ~5 min; CPU model pull is minutes-scale
     out="$(curl -fsS --max-time 10 "$infurl" 2>/dev/null || true)"
     if printf '%s' "$out" | grep -qE '"subsystem_state"[[:space:]]*:[[:space:]]*"ready"'; then ready=1; break; fi
-    if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -qiE 'qwen|coder'; then ready=1; break; fi
+    if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[[:space:]]*"[^"]' >/dev/null; then ready=1; break; fi
     state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
     case "$state" in pull_failed|disabled|stopped) break ;; esac
     sleep 5
   done
   if [ "$ready" = 1 ]; then
-    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oiE '(qwen|coder)[^",]*' | head -1)"
+    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oE '"[^"]+"' | sed -n 2p | tr -d '"' || true)"
     ok "bundled model ready in waired store :9475 (${model:-ready}; via mgmt API)"
   else
     bad "bundled model not ready via mgmt API (deploy/pull failed?)"

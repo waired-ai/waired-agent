@@ -347,7 +347,11 @@ function Assert-Inference {
             $st = Invoke-RestMethod -Uri $inferStatusUrl -TimeoutSec 10
             $subState    = [string]$st.subsystem_state
             $modelsReady = @($st.models.ready)
-            if (($subState -eq 'ready') -or ($modelsReady -match '(?i)qwen|coder')) { $modelReady = $true; break }
+            # Any entry in models.ready means a model is ready. Matching a
+            # vendor name here would have to be edited every time the pinned
+            # fixture changes, and silently reads "not ready" until somebody
+            # does (waired-ai/waired-agent#322).
+            if (($subState -eq 'ready') -or ($modelsReady.Count -gt 0)) { $modelReady = $true; break }
             if ($subState -in @('pull_failed','disabled','stopped')) { break }
         } catch { }
         Start-Sleep -Seconds 10
