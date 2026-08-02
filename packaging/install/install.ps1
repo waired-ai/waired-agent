@@ -539,6 +539,16 @@ $DevControlUrl = if ($env:WAIRED_DEV_CONTROL_URL) { $env:WAIRED_DEV_CONTROL_URL 
                  else { 'https://app.dev.waired.net' }
 $ControlUrl    = ''   # resolved by Resolve-ControlUrl after param parsing.
 $InitRan       = $false  # set by Invoke-WairedInit; read by Show-NextSteps.
+# $LocalAIDown: `waired init` signed this device in and then reported that
+# local AI is not running here -- the engine could not be installed, or it
+# installed and would not stay up. Sign-in SUCCEEDED, so this is not the
+# "enrolment did not complete" case: $InitRan stays true and the done
+# banner adds a line rather than changing what it says (#310).
+$LocalAIDown   = $false
+# Mirrors exitLocalAIDown in cmd/waired/main.go, and install.sh's
+# $WAIRED_INIT_LOCAL_AI_DOWN. Named on both sides so a reader can grep the
+# constant across the three files that have to agree on it.
+$WairedInitLocalAIDown = 3
 $OllamaStatus  = ''      # set by Set-OllamaEnvForInit; read by Show-NextSteps
                          # (Windows analog of install.sh's $ollama_status line).
 # True only inside the spawned elevated Phase-2 console (set in Phase 2). Gates
@@ -1387,6 +1397,7 @@ function Show-InterruptedInstall {
     # their shoulder. A probe whose answer depends on which of those happened
     # is worse than no probe -- do not "fix" this by adding one.
     $signin = if ($Steps -contains 'init-ok') { 'completed' }
+              elseif ($Steps -contains 'init-no-ai') { 'completed, but local AI is not running' }
               elseif ($Steps -contains 'init-failed') { 'did not complete' }
               elseif ($Steps -contains 'init-start') { 'started, did not finish' }
               elseif ($Steps -contains 'init-skipped') { 'skipped' }
@@ -2226,6 +2237,15 @@ function Invoke-WairedInit {
         return
     }
     & $exe @initArgs
+    if ($LASTEXITCODE -eq $WairedInitLocalAIDown) {
+        # Enrolment DID complete. Telling the operator to re-run `waired
+        # init` here would be wrong advice -- it would sign in a device
+        # that is already signed in, and change nothing about the engine.
+        $script:InitRan     = $true
+        $script:LocalAIDown = $true
+        Write-InstallProgress 'init-no-ai'
+        return
+    }
     if ($LASTEXITCODE -ne 0) {
         Common-Warn "waired init exited with code $LASTEXITCODE -- enrolment did not complete."
         Common-Warn "Re-run manually: & `"$exe`" init --state-dir `"$stateForInit`""
@@ -2251,6 +2271,16 @@ function Show-NextSteps {
     if ($InitRan) {
         Write-Host "$(Emo (Glyph 0x2705) '[ok]') Enrolled - the agent service is running." -ForegroundColor Green
         Write-Host "  Check it:  & `"$InstallDir\waired.exe`" status   (try: & `"$InstallDir\waired.exe`" infer `"hello, world!`")"
+        # Mirrors install.sh's set_local_ai_note, same wording. The headline
+        # above stays "Waired is installed", because it is: the files are on
+        # disk, the service is running, and the device is signed in. Only
+        # local inference is missing (#310).
+        if ($script:LocalAIDown) {
+            Write-Host ''
+            Write-Host "$(Emo (Glyph 0x26A0) '!')  Local AI is not running on this device." -ForegroundColor Yellow
+            Write-Host '    Sign-in is finished; only local AI is missing.'
+            Write-Host '    Details:      waired doctor'
+        }
     } else {
         Write-Host "$(Emo (Glyph 0x1F527) '*') The agent service is running - ready for sign-in."
         Write-Host "  Sign in:   & `"$InstallDir\waired.exe`" init"

@@ -179,6 +179,31 @@ everything except local AI works; the summary at the end says so rather than
 reporting success. Waired keeps trying in the background, so the download can
 still start on its own once the engine runs.
 
+If you got here from the one-line installer, it says the same thing under its
+closing message — the install itself worked, so it still reports that:
+
+```
+🎉 Waired is installed.
+✅ Enrolled — the agent service is running.
+
+⚠️  Local AI is not running on this device.
+    Sign-in is finished; only local AI is missing.
+    Details:      waired doctor
+```
+
+`waired init` also finishes with **exit code 3** for this, so a script can tell
+it apart from a sign-in that really did not happen:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Signed in, and local AI is running (or was never asked for). |
+| `3` | Signed in, but local AI is not running on this device. |
+| `1` | Setup did not finish — sign-in itself failed. |
+| `130` | You interrupted it with Ctrl-C. |
+
+Code `3` is deliberately not `1`: the device really is signed in and usable, and
+re-running sign-in would not change anything about the engine.
+
 Common causes:
 
 - **macOS**: the engine app fails its signature check — see

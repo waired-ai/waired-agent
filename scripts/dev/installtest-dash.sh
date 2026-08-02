@@ -274,6 +274,19 @@ run_case_asserts zero "fresh --skip-ollama: banner still says skipped" "$FRESH" 
 !Installing waired's bundled Ollama
 !Install the Ollama AI engine during sign-in
 Ollama: +skipped \(--skip-ollama" -- --dry-run --skip-ollama
+# NEGATIVE CONTROL for #310's local-AI warning. A run where `waired init` was
+# never even called must not carry it, and the banner around it must be
+# byte-for-byte what it always was — the note is spliced INTO the heredoc, so
+# a mistake there shows up as a stray blank line on every healthy install.
+#
+# The set side cannot be reached here: every case in this file is --dry-run,
+# which returns before the sign-in call, and turning that off would make the
+# first host-mutating case in the matrix. It is covered on real hosts instead
+# (rc8 checklist).
+run_case_asserts zero "fresh: no local-AI warning when init never ran" "$FRESH" \
+  "!Local AI is not running on this device
+!Sign-in is finished; only local AI is missing
+Waired is installed" -- --dry-run
 
 # 3b. The `waired init` hand-off (#165, #166). These assert OUTPUT, not just
 #     exit status, so they run under setsid: without a controlling terminal

@@ -556,6 +556,15 @@ Invoke-Case -Label '#314 recap distinguishes a failed sign-in from an unreached 
     -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-running,path-ok,init-start,init-failed' } `
     -Assert @('Sign in:\s+did not complete')
 
+#     #310 -- and a sign-in that COMPLETED on a device with no local AI is a
+#     third answer again. `waired init` exits 3 for it, so calling it "did not
+#     complete" would send the operator to re-run a sign-in that already
+#     worked, while calling it "completed" would hide the only thing that did
+#     go wrong.
+Invoke-Case -Label '#310 recap separates a completed sign-in with no local AI' -Params $fresh -Expect nonzero `
+    -Env @{ IT_ELEVATE_EXIT = '-1073741510'; IT_ELEVATE_PROGRESS = 'files-ok,service-running,path-ok,init-start,init-no-ai' } `
+    -Assert @('Sign in:\s+completed, but local AI is not running', '!did not complete')
+
 #     A declined UAC prompt never returns a process at all -- Start-Process
 #     raises a terminating error. It used to reach the trap and print only the
 #     localized OS string.

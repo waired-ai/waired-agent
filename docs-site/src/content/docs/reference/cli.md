@@ -79,6 +79,18 @@ setup rather than signing in from scratch, so you can run it as many times as
 you like. Waired signs in again by itself only when the existing sign-in has
 expired beyond repair.
 
+**Exit codes**, for scripts:
+
+| Code | Meaning |
+|---|---|
+| `0` | Signed in, and local AI is running (or was never asked for). |
+| `3` | Signed in, but local AI is not running on this computer — the AI engine could not be installed, or it would not stay up. The sign-in itself is finished; see [Setup says the AI engine failed to start](/troubleshooting/#setup-says-the-ai-engine-failed-to-start). |
+| `1` | Setup did not finish — sign-in itself failed. |
+| `130` | Interrupted with Ctrl-C. |
+
+`3` is deliberately separate from `1`: the computer really is signed in and on
+your network, and re-running sign-in would not change anything about the engine.
+
 ### `waired status`
 
 The quick "is it working" check.
