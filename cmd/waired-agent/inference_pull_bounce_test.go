@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +36,32 @@ func awaitModelState(t *testing.T, p *agentInferenceProvider, modelID, want stri
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("model %s never reached %q (last %q)", modelID, want, modelStateOf(t, p, modelID).State)
+}
+
+// awaitFlag blocks until an atomic the pull job sets goes true, or fails.
+//
+// It exists because ModelStateReady is NOT the last thing runPullJob
+// writes, which the two tests below assumed. Ready is written first —
+// deliberately, so resolveTuningTarget can read the real variant — and the
+// deferral bookkeeping (retuneDeferred, swapBounceDeferred) follows it. So
+// awaitModelState returning says nothing about that bookkeeping having
+// run, and asserting on it immediately afterwards is a race: it went red on
+// CI while passing 30 consecutive local runs.
+//
+// A bounded wait keeps the assertion's teeth. The failure this guards is
+// the intent being DROPPED rather than deferred, and a dropped intent never
+// becomes true, so it still fails — just at the deadline instead of
+// instantly.
+func awaitFlag(t *testing.T, flag *atomic.Bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if flag.Load() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal(what)
 }
 
 // bounceProvider leaves p.ollama nil on purpose. reconcileEngineServe
@@ -78,16 +105,18 @@ func TestRunPullJob_DefersTheSwapBounceWhileAnotherPullIsInFlight(t *testing.T) 
 	ra.awaitStarted(t)
 	ra.releaseAll()
 
-	// Wait for A's job to finish by observing the state it writes last.
-	// waitForPulls() cannot be used here — B is still deliberately blocked.
+	// Wait for A's job to reach its deferral bookkeeping. waitForPulls()
+	// cannot be used here — B is still deliberately blocked — and Ready is
+	// not the last thing the job writes, so awaiting the state alone would
+	// read both flags before they are set. The negative assertion below is
+	// the reason the order matters most: read too early it passes for the
+	// wrong reason, which is a false green rather than a flake.
 	awaitModelState(t, p, "model-a", catalog.ModelStateReady)
+	awaitFlag(t, &p.swapBounceDeferred, "the swap bounce was dropped instead of deferred")
 
 	if p.swapPending.Load() {
 		t.Fatal("the engine was bounced while another model was still downloading; " +
 			"stopping the engine fails the sibling pull")
-	}
-	if !p.swapBounceDeferred.Load() {
-		t.Fatal("the swap bounce was dropped instead of deferred")
 	}
 
 	r.releaseAll()
@@ -208,11 +237,8 @@ func TestRunPullJob_DefersTheRetuneWhileAnotherPullIsInFlight(t *testing.T) {
 	ra.awaitStarted(t)
 	ra.releaseAll()
 	awaitModelState(t, p, "model-a", catalog.ModelStateReady)
-
-	if !p.retuneDeferred.Load() {
-		t.Fatal("model-a completed while model-b was still downloading, but the " +
-			"retune intent was dropped instead of deferred")
-	}
+	awaitFlag(t, &p.retuneDeferred, "model-a completed while model-b was still "+
+		"downloading, but the retune intent was dropped instead of deferred")
 
 	r.releaseAll()
 	p.waitForPulls()
