@@ -123,6 +123,8 @@ var receiveOnly = []exemption{
 		"CP-injected Public Share budget for the Self entry; the agent reads it"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredIntegrations",
 		"CP-injected onboarding target (which coding agents to configure); the agent reads it"},
+	{reflect.TypeFor[signer.InferenceState](), "DesiredModelGen",
+		"CP-injected retry generation for the model download; the agent reads it to re-admit the pull"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
@@ -162,7 +164,14 @@ var producedInProto = []exemption{
 // `rate_bps` by #197, `driver` and the benchmark trial fields by
 // #198/#199.
 // Empty again, and that is the point.
-var producerPending = []exemption{}
+var producerPending = []exemption{
+	// The onboarding-v3 wire (the model-generation retry lever) lands the
+	// same way: its own additive proto PR, with the agent-side applier
+	// still open. snapshot() writes this echo once #136 lands; delete
+	// this entry in that PR.
+	{reflect.TypeFor[signer.SetupProgress](), "ModelGen",
+		"echo of the acted-on DesiredModelGen; written by setupReconciler.snapshot once #136 lands"},
+}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the

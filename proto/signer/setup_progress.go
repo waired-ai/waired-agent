@@ -26,6 +26,22 @@ type SetupProgress struct {
 	// they asked for.
 	Benchmark *SetupBenchmark `json:"benchmark,omitempty"`
 
+	// ModelGen echoes the InferenceState.DesiredModelGen this report was
+	// produced under — the highest generation the agent has actually
+	// acted on (waired-agent#136). It is to the model download what
+	// Benchmark.Gen is to the measurement.
+	//
+	// A retry button needs it. The wizard bumps the desired generation
+	// and the step is still `failed` for as long as it takes the next
+	// map frame to arrive and the download to restart; without the echo,
+	// "the computer has not seen the request yet" and "it saw it, tried
+	// again, and failed again" are the same two facts on screen. One
+	// wants a spinner and the other wants the button back.
+	//
+	// 0 / omitted from an agent that has never acted on a generation,
+	// which includes every agent predating CapabilityOnboardingV3.
+	ModelGen int `json:"model_gen,omitempty"`
+
 	// LastCheck is the agent's wall-clock time at the snapshot,
 	// formatted as RFC3339Nano. The UI ignores states older than its
 	// staleness threshold so a crashed agent ages out of the display.

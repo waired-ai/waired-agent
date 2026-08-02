@@ -166,6 +166,30 @@ type InferenceState struct {
 	// See DesiredIntegrations for the nil / empty / populated semantics.
 	DesiredIntegrations *DesiredIntegrations `json:"desired_integrations,omitempty"`
 
+	// DesiredModelGen is the fifth CP-injected onboarding target: a
+	// generation counter whose bump re-admits the desired model's
+	// download. Same shape as DesiredBenchmarkGen — declarative,
+	// idempotent, re-bumping always safe, 0 meaning "never asked" — and
+	// the same Self-entry-only injection as the four fields above.
+	//
+	// It exists because admitting the pull once per desired model VALUE
+	// leaves a failed download with no way back (waired-agent#136). The
+	// only re-admission the agent had was the engine going absent→present,
+	// and that transition cannot fire on a host whose engine was already
+	// installed when the daemon started — which is every host after its
+	// first setup. So a download that failed for a reason the operator
+	// then FIXED (a full disk, an unplugged cable) stayed red until the
+	// daemon restarted. Bumping this is the operator saying "try it
+	// again", and it is deliberately the only thing that says so: an
+	// agent-side timer would re-download tens of gigabytes on a metered
+	// link with nobody asking.
+	//
+	// Gated on CapabilityOnboardingV3, not V2. The distinction is the
+	// same one V2 draws against V1 and it is not cosmetic: this rides
+	// the SIGNED map, so an agent that does not know the field drops it
+	// on canonical re-marshal and fails verification outright.
+	DesiredModelGen int `json:"desired_model_gen,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page
