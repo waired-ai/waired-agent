@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: ab540c8020b3db26
+sourceHash: 8e6f331ed9f5d0d3
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -54,6 +54,7 @@ waired doctor
 - [応答がとても遅い](#answers-are-very-slow)
 - [グラフィックボードが使われていない](#my-graphics-card-is-not-being-used)
 - [ハードウェアより大きいモデルを選んでしまった](#i-chose-a-model-bigger-than-my-hardware)
+- [/model に Waired の項目が出ない](#the-waired-entries-are-missing-from-model)
 - [長い Claude Code のセッションが要約される](#long-claude-code-sessions-get-summarized)
 
 **ほかのパソコン**
@@ -536,6 +537,33 @@ GPU 側が実際に扱えるメモリ量で判定します。単体のグラフ�
 パソコンでは、Waired が**自動で選ぶ**対象はカード自身のメモリを基準に判定されます
 — システム RAM にはみ出して初めて収まるモデルは、ご自身で意識して選ぶものです。
 `waired models ls --detail` で、このマシンにおける全モデルの判定を確認できます。
+
+<a id="the-waired-entries-are-missing-from-model"></a>
+
+## /model に Waired の項目が出ない
+
+`/model` には Anthropic のモデル名の下に **Waired auto** / **Waired local** /
+**Waired cloud** が出るはずです。出ない原因は 3 つで、確認する価値のある順に:
+
+1. **Claude Code を再起動していない。** 一覧は起動時に一度だけ読まれます。
+   Claude Code を終了して起動し直してください。
+2. **このパソコンでルーティングが有効になっていない。** `waired claude status`
+   で確認できます。Claude Code が Waired に向いて初めてこの項目が出ます。
+
+   ```sh
+   sudo waired claude enable    # Windows は管理者プロンプトから
+   ```
+
+3. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` が設定されている。** 値が何であれ
+   この項目は隠れます。ほかがすべて正しくても同じです。設定を外して Claude Code を
+   再起動するか、`/waired-route` を使ってください。こちらは設定に関係なく動き、
+   同じ 3 択ができます。
+
+WSL2 の中で Claude Code を動かし、Waired は Windows 側に入れている場合は別の話です。
+別々のシステムなので、Windows 側の Claude Code を使ってください。
+
+なお、ルーティング自体はこれらの影響を受けません。どの AI が答えたかはステータス行に
+出ますし、`/waired-route` での切り替えも従来どおり動きます。
 
 <a id="long-claude-code-sessions-get-summarized"></a>
 

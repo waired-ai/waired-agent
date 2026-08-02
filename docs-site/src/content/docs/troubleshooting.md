@@ -51,6 +51,7 @@ most problems on its own.
 - [Answers are very slow](#answers-are-very-slow)
 - [My graphics card is not being used](#my-graphics-card-is-not-being-used)
 - [I chose a model bigger than my hardware](#i-chose-a-model-bigger-than-my-hardware)
+- [The Waired entries are missing from /model](#the-waired-entries-are-missing-from-model)
 - [Long Claude Code sessions get summarized](#long-claude-code-sessions-get-summarized)
 
 **Other computers**
@@ -511,6 +512,32 @@ address; on a computer with a separate graphics card, what Waired picks *for*
 you is judged against the card's own memory — so a model that only fits by
 spilling into system RAM is one you have to choose deliberately.
 `waired models ls --detail` shows the verdict for every model on this machine.
+
+## The Waired entries are missing from /model
+
+`/model` should offer **Waired auto**, **Waired local** and **Waired cloud**
+below the Anthropic names. Three things hide them, in the order worth checking:
+
+1. **Claude Code has not been restarted.** The list is read once at startup. Quit
+   Claude Code and start it again.
+2. **Routing is not on for this computer.** Check with `waired claude status`; the
+   entries are only offered once Claude Code is pointed at Waired.
+
+   ```sh
+   sudo waired claude enable    # Windows: from an administrator prompt
+   ```
+
+3. **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set.** Any value hides the
+   entries, even when everything else is correct. Unset it and restart Claude
+   Code, or use `/waired-route` instead — it works regardless and does the same
+   three things.
+
+Running Claude Code inside WSL2 while Waired is installed on Windows is a
+separate case: they are two different systems, so use the Windows-side Claude
+Code.
+
+Routing itself is unaffected by any of this — the status line still shows which
+AI answered, and `/waired-route` still switches where requests go.
 
 ## Long Claude Code sessions get summarized
 
