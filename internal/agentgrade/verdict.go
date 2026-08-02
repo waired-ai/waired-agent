@@ -25,6 +25,8 @@ package agentgrade
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -68,6 +70,29 @@ const (
 	// unless the tool was also unknown (which classifies as
 	// VerdictUnknownTool instead).
 	VerdictUnpromptedToolCall Verdict = "warn_unprompted_tool_call"
+
+	// VerdictInvalidToolArguments: the model emitted a structured call
+	// to a tool that WAS offered, carrying arguments the schema it was
+	// shown does not admit — a required property missing, a value of the
+	// wrong JSON type, an undeclared property where the schema closed
+	// the object.
+	//
+	// This exists because until it did, Classify read only the tool
+	// NAME: a call to Grep with no `pattern` was graded a pass. The
+	// question the package asks is whether a coding agent can DRIVE the
+	// model, and a call the agent cannot execute answers that as
+	// squarely as one it cannot parse.
+	//
+	// A warning rather than a failure, deliberately and provisionally.
+	// Every stored catalog verdict was measured before this check
+	// existed, so promoting it straight to a failure would re-grade the
+	// file against a rule it never saw. Its measured rate at
+	// introduction is zero — 144 turns of qwen3.5:9b-q4_K_M over both
+	// transports — which means this closes a blind spot rather than
+	// repairing an observed defect, and the rate that would justify
+	// promoting it is not yet known. Promote from #322, once a sweep has
+	// run with the check in place.
+	VerdictInvalidToolArguments Verdict = "warn_invalid_tool_arguments"
 
 	// VerdictMalformedToolCall: the model emitted tool-call syntax the
 	// ENGINE could not parse, so the request failed upstream instead of
@@ -191,18 +216,22 @@ type Case struct {
 const evidenceMax = 400
 
 // Classify turns one response into a verdict against the case's
-// expectation. known is the set of tool names the request actually
-// offered; a call to anything outside it is a hallucination.
-func Classify(c Case, resp gateway.AnthropicResponse, known map[string]bool) Result {
+// expectation. offered maps each tool name the request actually carried
+// to the input_schema it carried: a call to a name outside the map is a
+// hallucination, and a call whose arguments the mapped schema rejects is
+// one the coding agent cannot execute.
+func Classify(c Case, resp gateway.AnthropicResponse, offered map[string]json.RawMessage) Result {
 	r := Result{Case: c.Name, StopReason: resp.StopReason}
 
 	var text strings.Builder
+	var calls []gateway.AnthropicContentBlock
 	for _, b := range resp.Content {
 		switch b.Type {
 		case "text":
 			text.WriteString(b.Text)
 		case "tool_use":
 			r.ToolsCalled = append(r.ToolsCalled, b.Name)
+			calls = append(calls, b)
 		}
 	}
 	r.Text = truncate(text.String())
@@ -211,10 +240,10 @@ func Classify(c Case, resp gateway.AnthropicResponse, known map[string]bool) Res
 	// not misformat a real call, it made one up. Checked before the
 	// expectation split because it is wrong in both directions.
 	for _, name := range r.ToolsCalled {
-		if !known[name] {
+		if _, ok := offered[name]; !ok {
 			r.Verdict = VerdictUnknownTool
 			r.Evidence = name
-			r.Detail = fmt.Sprintf("called %q, which was not among the %d tools in the request", name, len(known))
+			r.Detail = fmt.Sprintf("called %q, which was not among the %d tools in the request", name, len(offered))
 			return r
 		}
 	}
@@ -227,7 +256,7 @@ func Classify(c Case, resp gateway.AnthropicResponse, known map[string]bool) Res
 		r.Verdict = VerdictUnstructuredToolCall
 		r.Evidence = truncate(frag)
 		switch {
-		case name != "" && !known[name]:
+		case name != "" && !offeredHas(offered, name):
 			r.Detail = fmt.Sprintf("serialised a call to %q (not a tool in the request) as assistant text instead of a structured tool call", name)
 		case name != "":
 			r.Detail = fmt.Sprintf("serialised a call to %q as assistant text instead of a structured tool call", name)
@@ -242,6 +271,17 @@ func Classify(c Case, resp gateway.AnthropicResponse, known map[string]bool) Res
 			r.Verdict = VerdictNoToolCall
 			r.Detail = "answered without attempting a tool call, so it cannot drive an agentic loop"
 			return r
+		}
+		// The call exists and names a real tool. Whether the agent can
+		// RUN it is a separate question, and one the name alone does not
+		// answer.
+		for _, b := range calls {
+			if why := checkToolArguments(b.Name, b.Input, offered[b.Name]); why != "" {
+				r.Verdict = VerdictInvalidToolArguments
+				r.Evidence = truncate(string(b.Input))
+				r.Detail = "emitted a structured tool_use the schema does not admit: " + why
+				return r
+			}
 		}
 		r.Verdict = VerdictPass
 		r.Detail = fmt.Sprintf("emitted a structured tool_use for %s", strings.Join(r.ToolsCalled, ", "))
@@ -262,6 +302,142 @@ func Classify(c Case, resp gateway.AnthropicResponse, known map[string]bool) Res
 	r.Verdict = VerdictPass
 	r.Detail = "answered as plain text, with no tool syntax in the body"
 	return r
+}
+
+func offeredHas(offered map[string]json.RawMessage, name string) bool {
+	_, ok := offered[name]
+	return ok
+}
+
+// checkToolArguments reports how input fails the schema the tool was
+// offered with, or "" when it satisfies it.
+//
+// Deliberately shallow — required properties, the declared type of each
+// present property, and undeclared properties only where the schema
+// itself set additionalProperties:false. It does not recurse into nested
+// objects, because the failures worth grading are at the top level (a
+// missing `pattern`, a string where an array of strings belongs) and a
+// deep validator would put this package in the business of implementing
+// JSON Schema.
+//
+// Every check follows something the schema DECLARES. Nothing here
+// invents a stricter contract than the model was shown: an undeclared
+// property is a defect when the schema closed the object and permitted
+// otherwise, which is the same rule the tool on the other end applies.
+//
+// An empty or undecodable schema returns "" rather than a violation.
+// The schema is ours; a broken one is our defect, and reporting it
+// against the model would be the exact mis-attribution the malformed /
+// error split exists to prevent.
+func checkToolArguments(name string, input, schema json.RawMessage) string {
+	if len(schema) == 0 {
+		return ""
+	}
+	var s struct {
+		Properties           map[string]struct{ Type json.RawMessage } `json:"properties"`
+		Required             []string                                  `json:"required"`
+		AdditionalProperties *bool                                     `json:"additionalProperties"`
+	}
+	if json.Unmarshal(schema, &s) != nil {
+		return ""
+	}
+
+	args := map[string]json.RawMessage{}
+	if len(input) > 0 {
+		if json.Unmarshal(input, &args) != nil {
+			return fmt.Sprintf("%s: arguments are not a JSON object", name)
+		}
+	}
+	for _, req := range s.Required {
+		if _, ok := args[req]; !ok {
+			return fmt.Sprintf("%s: required argument %q is missing", name, req)
+		}
+	}
+	// Sorted so the reported violation does not depend on map order: a
+	// verdict that changes between identical runs is not a measurement.
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		p, declared := s.Properties[k]
+		if !declared {
+			if s.AdditionalProperties != nil && !*s.AdditionalProperties {
+				return fmt.Sprintf("%s: argument %q is not declared and the schema forbids extras", name, k)
+			}
+			continue
+		}
+		got := jsonTypeOf(args[k])
+		if want := declaredTypes(p.Type); len(want) > 0 && got != "" && !typeAdmits(want, got) {
+			return fmt.Sprintf("%s: argument %q is %s, the schema declares %s",
+				name, k, got, strings.Join(want, " or "))
+		}
+	}
+	return ""
+}
+
+// typeAdmits reports whether the observed JSON type satisfies any type
+// the schema declared.
+//
+// An integral number satisfies "number" as well as "integer": JSON has
+// a single numeric type, so a model that writes 3 where the schema says
+// number is indistinguishable on the wire from one that writes 3.0, and
+// failing it would report a correct call as broken.
+func typeAdmits(want []string, got string) bool {
+	for _, w := range want {
+		if w == got || (w == "number" && got == "integer") {
+			return true
+		}
+	}
+	return false
+}
+
+// declaredTypes reads a schema's `type`, which JSON Schema allows to be
+// either one name or a list of them.
+func declaredTypes(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var one string
+	if json.Unmarshal(raw, &one) == nil {
+		return []string{one}
+	}
+	var many []string
+	if json.Unmarshal(raw, &many) == nil {
+		return many
+	}
+	return nil
+}
+
+// jsonTypeOf names the JSON type of an encoded value, in the vocabulary
+// a schema's `type` uses. An integral number reports as both "integer"
+// and "number" via typeAdmits; here it reports the wire type.
+func jsonTypeOf(raw json.RawMessage) string {
+	t := strings.TrimSpace(string(raw))
+	if t == "" {
+		return ""
+	}
+	switch t[0] {
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	case '"':
+		return "string"
+	case 't', 'f':
+		return "boolean"
+	case 'n':
+		return "null"
+	}
+	var f float64
+	if json.Unmarshal(raw, &f) != nil {
+		return ""
+	}
+	if f == math.Trunc(f) {
+		return "integer"
+	}
+	return "number"
 }
 
 // toolCallArgKeys are the argument-object keys a serialised tool call

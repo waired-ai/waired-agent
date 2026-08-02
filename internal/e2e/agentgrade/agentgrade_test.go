@@ -97,7 +97,28 @@ func trials(t *testing.T) int {
 // wrong transport, and a strict parser that rejected "yes" would just
 // move that failure to the shell.
 func stream() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("WAIRED_AGENTGRADE_STREAM"))) {
+	return envOn("WAIRED_AGENTGRADE_STREAM")
+}
+
+// noPull skips the `ollama pull`, for a model that exists only on this
+// host: `ollama pull` resolves against the registry and answers
+// "pull model manifest: file does not exist" for anything created
+// locally with `ollama create`.
+//
+// That is not an exotic case. Deriving a variant of a catalog model —
+// same weights, one field of its config changed — is how a question
+// about the ENGINE gets separated from a question about the model, and
+// the derived model is by construction unpullable (#426).
+func noPull() bool {
+	return envOn("WAIRED_AGENTGRADE_NO_PULL")
+}
+
+// envOn reads a boolean knob. Any value other than the empty string,
+// "0" or "false" turns it on: the failure these guard against is a run
+// that silently measured the wrong thing, and a strict parser that
+// rejected "yes" would just move that failure to the shell.
+func envOn(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
 	case "", "0", "false":
 		return false
 	default:
@@ -216,14 +237,18 @@ func startStack(t *testing.T, ctx context.Context, bin, tag string) string {
 	t.Logf("ollama listening on %s", adapter.BaseURL())
 
 	t.Setenv("OLLAMA_HOST", fmt.Sprintf("127.0.0.1:%d", port))
-	puller := download.NewPuller(bin, download.DefaultRunner{})
-	t.Logf("ensuring %s is pulled", tag)
-	if err := puller.Pull(ctx, tag, func(p download.Progress) {
-		if p.State == download.StatePulling && p.Percent%25 == 0 && p.Percent > 0 {
-			t.Logf("  pull: %s %d%%", p.State, p.Percent)
+	if noPull() {
+		t.Logf("WAIRED_AGENTGRADE_NO_PULL is set; assuming %s is already present", tag)
+	} else {
+		puller := download.NewPuller(bin, download.DefaultRunner{})
+		t.Logf("ensuring %s is pulled", tag)
+		if err := puller.Pull(ctx, tag, func(p download.Progress) {
+			if p.State == download.StatePulling && p.Percent%25 == 0 && p.Percent > 0 {
+				t.Logf("  pull: %s %d%%", p.State, p.Percent)
+			}
+		}); err != nil {
+			t.Fatalf("pull %s: %v", tag, err)
 		}
-	}); err != nil {
-		t.Fatalf("pull %s: %v", tag, err)
 	}
 
 	// The fixture's session context alone is ~30 KB, so a 4k window

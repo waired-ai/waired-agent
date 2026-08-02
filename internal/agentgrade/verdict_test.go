@@ -8,12 +8,22 @@ import (
 	"github.com/waired-ai/waired-agent/internal/gateway"
 )
 
-func known(names ...string) map[string]bool {
-	m := make(map[string]bool, len(names))
+// known offers the named tools with no schema attached, so Classify's
+// argument-conformance check has nothing to assert and these cases stay
+// about the tool NAME and the call's syntax. Cases that are about the
+// arguments use offering().
+func known(names ...string) map[string]json.RawMessage {
+	m := make(map[string]json.RawMessage, len(names))
 	for _, n := range names {
-		m[n] = true
+		m[n] = nil
 	}
 	return m
+}
+
+// offering builds a one-tool offer whose schema is written inline, so a
+// conformance case reads as the pair it is: this schema, that call.
+func offering(name, schema string) map[string]json.RawMessage {
+	return map[string]json.RawMessage{name: json.RawMessage(schema)}
 }
 
 func textResp(s string) gateway.AnthropicResponse {
@@ -302,5 +312,151 @@ func TestVerdictIsFailure(t *testing.T) {
 		if !v.IsFailure() {
 			t.Errorf("%q must count as a failure", v)
 		}
+	}
+}
+
+// A structured call to a real tool is only half the question: the coding
+// agent still has to be able to RUN it. Before
+// VerdictInvalidToolArguments, Classify read the tool NAME and nothing
+// else, so a Grep with no pattern graded a pass.
+//
+// Every case here pairs a schema with a call, because the verdict is a
+// statement about the pair — the same arguments are correct or broken
+// depending on what the model was shown.
+func TestClassifyArgumentConformance(t *testing.T) {
+	needsTool := Case{Name: "read-file", Prompt: "read /etc/hostname", WantToolCall: true}
+
+	// The shape fixtureTools() emits: a closed object with required
+	// properties, which is what the model is actually offered.
+	const grepSchema = `{
+		"type": "object",
+		"properties": {
+			"pattern": {"type": "string"},
+			"path":    {"type": "string"},
+			"lines":   {"type": "number"},
+			"globs":   {"type": "array"}
+		},
+		"required": ["pattern"],
+		"additionalProperties": false
+	}`
+
+	tests := []struct {
+		name    string
+		schema  string
+		args    string
+		want    Verdict
+		wantWhy string // substring of Detail, so the message stays useful
+	}{
+		{
+			name:   "arguments satisfying the schema pass",
+			schema: grepSchema,
+			args:   `{"pattern":"quality_tier","path":"internal/router"}`,
+			want:   VerdictPass,
+		},
+		{
+			name:    "a missing required argument is not executable",
+			schema:  grepSchema,
+			args:    `{"path":"internal/router"}`,
+			want:    VerdictInvalidToolArguments,
+			wantWhy: `required argument "pattern" is missing`,
+		},
+		{
+			name:    "no arguments at all still misses the required one",
+			schema:  grepSchema,
+			args:    ``,
+			want:    VerdictInvalidToolArguments,
+			wantWhy: `required argument "pattern" is missing`,
+		},
+		{
+			name:    "a string where the schema declares an array",
+			schema:  grepSchema,
+			args:    `{"pattern":"x","globs":"*.go"}`,
+			want:    VerdictInvalidToolArguments,
+			wantWhy: `"globs" is string, the schema declares array`,
+		},
+		{
+			// The fixture's obj() sets additionalProperties:false, so an
+			// undeclared key is a violation the SCHEMA declares — not a
+			// stricter contract invented here.
+			name:    "an undeclared argument where the schema closed the object",
+			schema:  grepSchema,
+			args:    `{"pattern":"x","recursive":true}`,
+			want:    VerdictInvalidToolArguments,
+			wantWhy: `"recursive" is not declared`,
+		},
+		{
+			name:   "an undeclared argument where the schema permits extras",
+			schema: `{"type":"object","properties":{"pattern":{"type":"string"}},"required":["pattern"]}`,
+			args:   `{"pattern":"x","recursive":true}`,
+			want:   VerdictPass,
+		},
+		{
+			// JSON has one numeric type: 3 and 3.0 are the same bytes, so
+			// rejecting 3 for a "number" would fail a correct call.
+			name:   "an integral number satisfies a number property",
+			schema: grepSchema,
+			args:   `{"pattern":"x","lines":3}`,
+			want:   VerdictPass,
+		},
+		{
+			name:   "a union type admits either member",
+			schema: `{"type":"object","properties":{"path":{"type":["string","null"]}}}`,
+			args:   `{"path":null}`,
+			want:   VerdictPass,
+		},
+		{
+			// The schema is ours. A broken one is our defect, and charging
+			// it to the model is the mis-attribution the malformed/error
+			// split exists to prevent.
+			name:   "an unusable schema is not the model's failure",
+			schema: `{{ not json`,
+			args:   `{"anything":1}`,
+			want:   VerdictPass,
+		},
+		{
+			name:    "arguments that are not an object at all",
+			schema:  grepSchema,
+			args:    `["quality_tier"]`,
+			want:    VerdictInvalidToolArguments,
+			wantWhy: "arguments are not a JSON object",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Classify(needsTool, toolResp("Grep", tt.args), offering("Grep", tt.schema))
+			if got.Verdict != tt.want {
+				t.Fatalf("verdict = %s, want %s (detail: %s)", got.Verdict, tt.want, got.Detail)
+			}
+			if tt.wantWhy != "" && !strings.Contains(got.Detail, tt.wantWhy) {
+				t.Errorf("detail = %q, want it to name %q", got.Detail, tt.wantWhy)
+			}
+		})
+	}
+}
+
+// The check must not turn a warning into a grade change: every stored
+// catalog verdict was measured before it existed, and a warn that failed
+// the grade would re-rate the file against a rule it never saw.
+func TestInvalidToolArgumentsIsNotAFailure(t *testing.T) {
+	if VerdictInvalidToolArguments.IsFailure() {
+		t.Error("warn_invalid_tool_arguments counts as a failure, so it would flip stored grades")
+	}
+	if severity(VerdictInvalidToolArguments) >= severity(VerdictNoToolCall) {
+		t.Error("a warning outranks a failure in the severity ladder")
+	}
+	if severity(VerdictInvalidToolArguments) <= severity(VerdictUnpromptedToolCall) {
+		t.Error("an unexecutable call should outrank a merely unnecessary one")
+	}
+}
+
+// A hallucinated name outranks bad arguments: no parser and no schema
+// repairs a tool that does not exist, and reporting the arguments would
+// bury the larger defect.
+func TestUnknownToolOutranksInvalidArguments(t *testing.T) {
+	needsTool := Case{Name: "read-file", Prompt: "read /etc/hostname", WantToolCall: true}
+	got := Classify(needsTool, toolResp("Systemctl", `{}`), offering("Grep", `{"required":["pattern"]}`))
+	if got.Verdict != VerdictUnknownTool {
+		t.Errorf("verdict = %s, want %s", got.Verdict, VerdictUnknownTool)
 	}
 }

@@ -181,16 +181,22 @@ func fixtureMessages(c Case) ([]gateway.AnthropicMessage, error) {
 	}, nil
 }
 
-// ToolNames is the set of tools the fixture offers, for Classify's
-// hallucination check.
-func ToolNames() (map[string]bool, error) {
+// OfferedTools maps each tool the fixture offers to the input_schema it
+// was offered with.
+//
+// Membership answers Classify's hallucination check; the schema answers
+// its argument-conformance check. One map rather than two because they
+// are the same question asked twice — "was the model shown this, and in
+// what shape" — and separate arguments invite a caller that passes the
+// names of one tool set and the schemas of another.
+func OfferedTools() (map[string]json.RawMessage, error) {
 	tools, err := fixtureTools()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]bool, len(tools))
+	out := make(map[string]json.RawMessage, len(tools))
 	for _, t := range tools {
-		out[t.Name] = true
+		out[t.Name] = t.InputSchema
 	}
 	return out, nil
 }

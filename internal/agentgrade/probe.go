@@ -169,7 +169,7 @@ func (p Probe) Run(ctx context.Context, model string) (Report, error) {
 		return rep, err
 	}
 	rep.FixtureRevision = rev
-	names, err := ToolNames()
+	offered, err := OfferedTools()
 	if err != nil {
 		return rep, err
 	}
@@ -183,7 +183,7 @@ func (p Probe) Run(ctx context.Context, model string) (Report, error) {
 
 	for t := 0; t < trials; t++ {
 		for _, c := range Cases {
-			res := p.one(ctx, model, c, names)
+			res := p.one(ctx, model, c, offered)
 			if seen[c.Name] == nil {
 				seen[c.Name] = map[Verdict]bool{}
 			}
@@ -266,12 +266,17 @@ func Worse(a, b Verdict) Verdict {
 func severity(v Verdict) int {
 	switch v {
 	case VerdictError:
-		return 5
+		return 6
 	case VerdictMalformedToolCall, VerdictUnknownTool:
-		return 4
+		return 5
 	case VerdictUnstructuredToolCall:
-		return 3
+		return 4
 	case VerdictNoToolCall:
+		return 3
+	case VerdictInvalidToolArguments:
+		// Above the other warning and below every failure: a call the
+		// agent cannot execute is worse than one it did not need, and
+		// still not the model-quality failure a fail_ verdict asserts.
 		return 2
 	case VerdictUnpromptedToolCall:
 		return 1
@@ -280,7 +285,7 @@ func severity(v Verdict) int {
 	}
 }
 
-func (p Probe) one(ctx context.Context, model string, c Case, names map[string]bool) Result {
+func (p Probe) one(ctx context.Context, model string, c Case, offered map[string]json.RawMessage) Result {
 	req, err := BuildRequest(model, c)
 	if err != nil {
 		return Result{Case: c.Name, Verdict: VerdictError, Detail: "build request: " + err.Error()}
@@ -308,7 +313,7 @@ func (p Probe) one(ctx context.Context, model string, c Case, names map[string]b
 		}
 		return Result{Case: c.Name, Verdict: VerdictError, Detail: err.Error()}
 	}
-	return Classify(c, resp, names)
+	return Classify(c, resp, offered)
 }
 
 // upstreamError carries a non-2xx from the gateway with its body, so

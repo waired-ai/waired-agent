@@ -70,9 +70,9 @@ var transportReplies = []engineReply{
 }
 
 func TestProbeTransportsAgree(t *testing.T) {
-	names, err := ToolNames()
+	names, err := OfferedTools()
 	if err != nil {
-		t.Fatalf("ToolNames: %v", err)
+		t.Fatalf("OfferedTools: %v", err)
 	}
 	for _, reply := range transportReplies {
 		t.Run(reply.name, func(t *testing.T) {
@@ -147,11 +147,11 @@ func TestProbeReportsTransport(t *testing.T) {
 // runCases drives every case once and returns the classified results in
 // Cases order. One trial, because the engine is canned: the answer is
 // deterministic and repeating it would only measure the fake.
-func runCases(t *testing.T, p Probe, names map[string]bool) []Result {
+func runCases(t *testing.T, p Probe, offered map[string]json.RawMessage) []Result {
 	t.Helper()
 	out := make([]Result, 0, len(Cases))
 	for _, c := range Cases {
-		res := p.one(context.Background(), "waired/test", c, names)
+		res := p.one(context.Background(), "waired/test", c, offered)
 		if res.Verdict == VerdictError {
 			t.Fatalf("case %s (stream=%t) could not be measured: %s", c.Name, p.Stream, res.Detail)
 		}
