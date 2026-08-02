@@ -392,6 +392,66 @@ func TestInferenceState_NotShared_CanonicalJSON(t *testing.T) {
 	}
 }
 
+// TestInferenceState_ContextWindow_CanonicalJSON pins the byte-identity
+// that lets an undeclared window ride the SIGNED map unchanged.
+//
+// This field differs from the fields above in where it appears: it is
+// agent-reported and travels on PEER entries, not only on the poller's
+// own Self. So the encoding of a device that declares nothing has to be
+// exactly what it was before the field existed, or every peer entry in
+// every map changes shape at once.
+func TestInferenceState_ContextWindow_CanonicalJSON(t *testing.T) {
+	undeclared := InferenceState{
+		Reachable: true,
+		Type:      InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		Models:    []string{"qwen3:8b-q4_K_M"},
+		LastCheck: "2026-08-02T12:00:00Z",
+	}
+	const wantUndeclared = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z"}`
+	data, err := json.Marshal(&undeclared)
+	if err != nil {
+		t.Fatalf("marshal undeclared: %v", err)
+	}
+	if got := string(data); got != wantUndeclared {
+		t.Errorf("a device declaring no window changed the encoding:\n got %s\nwant %s",
+			got, wantUndeclared)
+	}
+
+	declared := undeclared
+	declared.ContextWindow = 200704
+	const wantDeclared = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z","context_window":200704}`
+	data, err = json.Marshal(&declared)
+	if err != nil {
+		t.Fatalf("marshal declared: %v", err)
+	}
+	if got := string(data); got != wantDeclared {
+		t.Errorf("declared-window encoding drifted:\n got %s\nwant %s", got, wantDeclared)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&declared, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", declared, out)
+	}
+
+	// The rolling-upgrade direction that matters: a payload from an agent
+	// that predates the field leaves it 0, and 0 must mean "declares
+	// nothing" — never "serves a zero-token window", which would black-hole
+	// every legacy peer the moment a requester started filtering on it.
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantUndeclared), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.ContextWindow != 0 {
+		t.Errorf("ContextWindow = %d on a pre-addition payload, want 0", pre.ContextWindow)
+	}
+}
+
 func indexOf(haystack, needle string) int {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {

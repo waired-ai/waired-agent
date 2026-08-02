@@ -787,6 +787,125 @@ func MeetsNativeContextFloor(m catalog.Manifest) bool {
 	return m.ContextLength >= NativeContextFloorTokens
 }
 
+// The two windows a node may declare it serves (waired#1031).
+//
+// There are two and not three because Claude Code resolves a session's
+// window from the model id string alone: a "[1m]" suffix means 1M, a
+// "claude-" prefix takes the 200k default, and only a non-"claude-" id
+// consults CLAUDE_CODE_MAX_CONTEXT_TOKENS — which is a single global
+// value shared by every such id. There is no way to express a third
+// step, so a device that serves 140k cannot be routed traffic sized to
+// it; it declares nothing and is reached by pinning instead.
+//
+// The catalog agrees with that shape rather than merely tolerating it.
+// Manifest windows come in four classes — 32768, 131072, 262144 and
+// 1048576 — and NOTHING sits between 262145 and 1048575, so an
+// intermediate step would admit no model that 200k does not already
+// admit. 262144 as a step would admit strictly FEWER hosts than 200704
+// does, since the KV cache grows with the window while the model set
+// stays identical.
+const (
+	// ServingWindow200k is the coding-agent window: the same 200704 the
+	// serve tuning already aims for (router.CodingAgentContextFloorTokens),
+	// pre-aligned to 1024. Reachable across the whole 262144-native class,
+	// down to variants small enough for a laptop.
+	ServingWindow200k = 200704
+
+	// ServingWindow1M is the long-context window. Only the 1048576-native
+	// class can declare it, and holding a 1M KV cache alongside those
+	// models' weights is a datacenter-scale ask — this is a window for a
+	// node that has one, not a target for a workstation.
+	ServingWindow1M = 1048576
+)
+
+// ReasonWindowTooSmall is a fit reason code: the model's OWN advertised
+// window cannot reach the serving window being asked about, so no
+// hardware makes it servable. Distinct from ReasonInsufficientVRAM,
+// which says the same model would fit a bigger machine — an operator
+// can act on that one and cannot act on this one.
+const ReasonWindowTooSmall = "window_too_small"
+
+// servingKVCacheDivisor converts the manifest's fp16 KV annotation to
+// the cache the serve tuning actually exports. Both engines' coding
+// path runs an 8-bit KV cache — ollama's OLLAMA_KV_CACHE_TYPE=q8_0 and
+// vLLM's --kv-cache-dtype fp8 are 1 byte per element against fp16's 2 —
+// so the annotated figure halves. q4_0 would quarter it and is
+// deliberately not offered here: it degrades long-context recall, which
+// is the entire thing a declared window is promising.
+const servingKVCacheDivisor = 2
+
+// MeetsServingWindow reports whether the manifest's own advertised
+// window reaches the serving window. This is the manifest half of the
+// question and the only half that can live here: whether a given HOST
+// can hold the resulting KV cache depends on serve-time tuning inputs
+// and a spill calibration that only the agent has, exactly as
+// NativeContextFloorTokens' doc describes. Consumers without those
+// inputs — the control-plane wizard — get this half, which is the half
+// that was missing (waired-ai/waired#988).
+func MeetsServingWindow(m catalog.Manifest, window int) bool {
+	if window <= 0 {
+		return true
+	}
+	return m.ContextLength >= window
+}
+
+// DeclarableNativeWindow is the largest serving window this MODEL could
+// ever be declared at, ignoring hardware: ServingWindow1M,
+// ServingWindow200k, or 0 for a model whose own window reaches neither.
+//
+// The 131072 class returns 0 and that is the intended answer, not an
+// oversight: those models cannot hold a coding-agent session no matter
+// how large the machine is.
+func DeclarableNativeWindow(m catalog.Manifest) int {
+	switch {
+	case m.ContextLength >= ServingWindow1M:
+		return ServingWindow1M
+	case m.ContextLength >= ServingWindow200k:
+		return ServingWindow200k
+	default:
+		return 0
+	}
+}
+
+// ServingWindowKVMB is the KV-cache footprint of window input tokens
+// for the variant, in binary MiB, at the 8-bit cache the serve tuning
+// exports. Returns 0 when the variant carries no KV annotation, which
+// no caller may read as "it costs nothing".
+//
+// The arithmetic runs in int64: a 196608 B/token variant at 1M tokens
+// is 2.06e11 bytes, which overflows a 32-bit int.
+func ServingWindowKVMB(v catalog.Variant, window int) int {
+	if v.KVBytesPerTokenFP16 <= 0 || window <= 0 {
+		return 0
+	}
+	b := int64(v.KVBytesPerTokenFP16) * int64(window) / servingKVCacheDivisor
+	return int(b / (1 << 20))
+}
+
+// OllamaWindowResidentMB is what a variant must hold in GPU-addressable
+// memory to serve `window` input tokens without spilling: weights,
+// engine overhead, and the KV cache for that whole window. Returns 0
+// for a variant with no weight annotation, matching OllamaResidentMB.
+//
+// It is NOT OllamaResidentMB with a bigger number. That one reserves a
+// fixed OllamaKVBudgetTokens at fp16 — a small conservative floor for
+// the question "can this host run the model at all". This one prices
+// the window the node is proposing to STAND BEHIND, at the cache the
+// tuner exports for it. Different questions, deliberately different
+// arithmetic.
+//
+// Whether a shortfall is disqualifying is the caller's call, and on a
+// discrete card it is not a plain comparison: the serve tuning accepts
+// a bounded expected spill because a spilled flagship still beats the
+// resident tier below it. That calibration lives in the agent, so this
+// function returns the requirement and takes no verdict.
+func OllamaWindowResidentMB(v catalog.Variant, window int, unifiedMemory bool) int {
+	if v.EstimatedWeightGB <= 0 {
+		return 0
+	}
+	return OllamaWeightsResidentMB(v, unifiedMemory) + ServingWindowKVMB(v, window)
+}
+
 // OllamaResident is the GPU-residency half of the ollama fit: can this
 // host hold the variant without spilling layers to the CPU?
 //

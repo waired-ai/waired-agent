@@ -229,6 +229,40 @@ type InferenceState struct {
 	// it silently on intake, so an agent carrying it must not reach a fleet
 	// whose control plane has not been updated first.
 	NotShared bool `json:"not_shared,omitempty"`
+
+	// ContextWindow is the input-token window this device's engine is
+	// actually loaded with for the model in Models — not the model's
+	// native window, and not what the host could theoretically hold. The
+	// agent publishes it only when the serve tuning reached the window it
+	// meant to serve; a trimmed window publishes 0 rather than a smaller
+	// number, because "I serve less than I said" and "I say nothing" are
+	// different claims and only the second one is safe to route on.
+	//
+	// Models is exactly one tag by the time it reaches the wire
+	// (narrowPublishedModels: "design is 1 agent = 1 model"), so a single
+	// value is unambiguous.
+	//
+	// It exists because a requesting node had no way to ask. Its gateway
+	// sized the #623 overflow guard from its OWN manifests and its OWN
+	// applied tuning even when dispatching to a peer, and the receiving
+	// peer's overlay HandlerSet applies no window guard at all — so a
+	// prompt that overran the SERVING engine reached it and was truncated
+	// at the head instead of being compacted (waired-agent#436).
+	//
+	// 0 means the device declares no window: either an agent that
+	// predates the field, or one whose engine is not serving a window it
+	// is willing to stand behind. Consumers must treat 0 as "unknown" and
+	// fail open to whatever they did before, so the fleet can upgrade in
+	// any order.
+	//
+	// Unlike RecommendedMaxParallel / NotShared this DOES ride the served
+	// NetworkMap — routing is the whole point — so it is gated on
+	// CapabilityContextWindowV1. An agent that does not know the field
+	// drops it on canonical re-marshal and fails verification, and unlike
+	// the CP-injected fields this one appears on PEER entries, not only
+	// on Self: the gate has to cover the whole map, not one entry.
+	// `omitempty` keeps the undeclared case byte-identical.
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // HardwareSummary is the subset of the agent's hardware profile that
