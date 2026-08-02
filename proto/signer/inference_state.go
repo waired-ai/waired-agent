@@ -202,6 +202,33 @@ type InferenceState struct {
 	// would break the byte-identical signed-map contract older agents rely on.
 	// `omitempty` keeps 0 (unknown/unsizable) off the push.
 	RecommendedMaxParallel int `json:"recommended_max_parallel,omitempty"`
+
+	// NotShared is the agent's report that the operator has taken this device
+	// out of MESH SERVING — `waired inference share off`, the tray toggle, or
+	// a tray-Quit suspension. The engine keeps running for the machine's own
+	// keyboard; it just stops answering for anyone else.
+	//
+	// Push-only, exactly like RecommendedMaxParallel: it travels agent → CP
+	// push → Spanner inference_state JSON → the management API, and
+	// effectiveInferenceState MUST zero it out of the served NetworkMap.
+	// What the CP does with it is withhold this device's WHOLE InferenceState
+	// from other peers' maps — the device's own Self entry keeps its state, so
+	// the NAVI desired-state channel that rides Self stays alive while sharing
+	// is off (waired#1030). Before this field existed the agent expressed the
+	// same intent by not pushing at all, which also froze the admin's view of
+	// the device at whatever it last said.
+	//
+	// Negative sense + `omitempty` so the default (sharing ON —
+	// agentconfig's ShareWithMesh defaults to true) never reaches the wire and
+	// the common case stays byte-identical for older readers. Same shape, and
+	// the same reason, as ExcludeMain / ExcludeSub.
+	//
+	// A reader that predates the field sees false, i.e. "sharing" — the answer
+	// it gave before, so a legacy agent is never wrongly withheld. The reverse
+	// direction is the one that needs care: a CP that predates the field drops
+	// it silently on intake, so an agent carrying it must not reach a fleet
+	// whose control plane has not been updated first.
+	NotShared bool `json:"not_shared,omitempty"`
 }
 
 // HardwareSummary is the subset of the agent's hardware profile that
