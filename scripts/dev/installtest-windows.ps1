@@ -1200,8 +1200,8 @@ if ($Tier -ge 2) {
         $initLog = Join-Path $Work 'init.log'
         if ($DaemonEngine) {
             # Daemon-path enrol: complete the login out-of-band so the resident
-            # executor installs the engine (waired#835 §9/§11). No
-            # a credential flag (an auth key would collapse the window); the running
+            # executor installs the engine (waired#835 §9/§11). No credential
+            # flag (an auth key would collapse the window); the running
             # service makes init take the daemon path. A background job rejoins
             # the in-flight session (POST /login/start is single-flight →
             # init's session), completes it via the OIDC grant (the CP flips any
@@ -1305,7 +1305,7 @@ if ($Tier -ge 2) {
         & $waired @initArgs 2>&1 | Tee-Object -FilePath $initLog
         $initExit = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
-        if ($initExit -ne 0) { ItBad "waired init (oidc) exited $initExit" }
+        if ($initExit -ne 0) { ItBad "waired init (authkey) exited $initExit" }
         }
 
         # Safety net: init already started the agent (--start-agent default);

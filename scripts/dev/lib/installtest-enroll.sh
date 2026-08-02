@@ -405,8 +405,9 @@ assert_reinit_resumes() {
 
   local -a args=(waired init --control "$IT_CONTROL_URL" --device-name "$name"
     --non-interactive --skip-integration)
-  # Keyed on the key itself, not the mode: the daemon-path leg (oidc)
-  # never mints one, and an empty --auth-key is not the same argv.
+  # Keyed on the key itself, not the mode: the daemon-path leg
+  # (--daemon-engine) runs under authkey too but deliberately never mints
+  # one, and an empty --auth-key is not the same argv.
   [ -n "${IT_AUTH_KEY:-}" ] && args+=(--auth-key "$IT_AUTH_KEY")
 
   it_log "re-running waired init in $guest with no --state-dir (waired-agent#313)"
