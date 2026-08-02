@@ -55,6 +55,17 @@ type recoveredCall struct {
 // this package and not the reverse.
 var toolArgKeys = []string{"arguments", "parameters", "input"}
 
+// toolNameKeys are the keys that carry the tool's NAME. "name" is what
+// every template documents; "function" is OpenAI's own field name and
+// qwen2.5-coder:14b emits it — measured, `{"function":"Grep",
+// "arguments":{…}}`, which a name-only scan reads as ordinary JSON and
+// leaves in the text.
+//
+// Only a STRING value counts. OpenAI's structured form nests an object
+// under "function", and that shape has never been observed leaking into
+// text; treating it as a name would be guessing.
+var toolNameKeys = []string{"name", "function"}
+
 // toolWrapperOpen / toolWrapperClose are the template delimiters that
 // surround a leaked call. They are not parsed for content — they are
 // stripped, so removing the call does not leave scaffolding behind as
@@ -244,8 +255,18 @@ func findJSONObjectCall(text string, offered offeredTools) (recoveredCall, bool)
 			continue
 		}
 		var name string
-		raw, ok := m["name"]
-		if !ok || json.Unmarshal(raw, &name) != nil || name == "" {
+		for _, nk := range toolNameKeys {
+			raw, ok := m[nk]
+			if !ok {
+				continue
+			}
+			var s string
+			if json.Unmarshal(raw, &s) == nil && s != "" {
+				name = s
+				break
+			}
+		}
+		if name == "" {
 			continue
 		}
 		for _, k := range toolArgKeys {

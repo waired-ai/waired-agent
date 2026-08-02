@@ -46,7 +46,7 @@ var toolSieveSentinels = []string{
 //
 // Both orderings are covered: every measured transcript put "name"
 // first, but nothing in the format requires it.
-var toolSieveJSONKeys = []string{`"name"`, `"arguments"`, `"parameters"`}
+var toolSieveJSONKeys = []string{`"name"`, `"function"`, `"arguments"`, `"parameters"`}
 
 // toolSieveMaxHold bounds how much text is withheld before the sieve
 // gives up and releases it. A tool call CAN legitimately be this large

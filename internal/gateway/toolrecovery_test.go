@@ -50,6 +50,10 @@ func readTools() []AnthropicTool {
 			Name:        "Bash",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"description":{"type":"string"},"timeout":{"type":"number"}}}`),
 		},
+		{
+			Name:        "Grep",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"}}}`),
+		},
 	}
 }
 
@@ -97,6 +101,19 @@ func TestRecoverToolCall_measuredDialects(t *testing.T) {
 			wantShape: toolRecoveryXML,
 			wantArgs:  map[string]any{"command": "ls"},
 			wantText:  "",
+		},
+		{
+			// Measured: qwen2.5-coder:14b-instruct-q4_K_M, the one case
+			// still failing after the first cut of this change. OpenAI's
+			// own field name for the tool, so a name-only scan reads it
+			// as ordinary JSON and leaves the call in the text.
+			name: "fenced JSON naming the tool under \"function\"",
+			text: "I'll search for that.\n\n```json\n" +
+				`{"function": "Grep", "arguments": {"pattern": "quality_tier"}}` + "\n```",
+			wantTool:  "Grep",
+			wantShape: toolRecoveryJSON,
+			wantArgs:  map[string]any{"pattern": "quality_tier"},
+			wantText:  "I'll search for that.",
 		},
 		{
 			name:      "bare JSON using the parameters key",
