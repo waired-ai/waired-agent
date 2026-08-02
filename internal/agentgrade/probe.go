@@ -242,6 +242,24 @@ func collect(worst map[string]Result, seen map[string]map[Verdict]bool,
 	return out
 }
 
+// Worse returns whichever of two verdicts the probe would have kept
+// across trials.
+//
+// Exported so a caller pooling several runs of the same (model, engine,
+// gateway) reaches the same answer the probe itself would have. #426
+// drives every model over both transports, and those two runs are two
+// samples of one thing rather than two things: the gateway's agreement
+// between the paths is deterministic and pinned by
+// TestProbeTransportsAgree, so what differs between the runs is
+// sampling. Re-deriving the severity order at the call site is how a
+// pooled verdict would quietly stop matching a measured one.
+func Worse(a, b Verdict) Verdict {
+	if severity(a) >= severity(b) {
+		return a
+	}
+	return b
+}
+
 // severity orders verdicts so the worst one across trials survives.
 // Error outranks everything because it means the run is not a
 // measurement at all.
