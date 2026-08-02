@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 8ff32465719768be
+sourceHash: 8cea4551e480838f
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -531,8 +531,10 @@ Waired は警告しますが、禁止はしません。超過分（`needs 32 GB 
   小さいモデルに戻してください → [使う AI モデルを選ぶ](/ja/guides/choose-a-model/)。
 
 推奨値には安全マージンが含まれています。Apple Silicon と AMD Strix Halo では、
-GPU 側が実際に扱えるメモリ量で判定します。`waired models ls --detail` で、
-このマシンにおける全モデルの判定を確認できます。
+GPU 側が実際に扱えるメモリ量で判定します。単体のグラフィックボードを搭載した
+パソコンでは、Waired が**自動で選ぶ**対象はカード自身のメモリを基準に判定されます
+— システム RAM にはみ出して初めて収まるモデルは、ご自身で意識して選ぶものです。
+`waired models ls --detail` で、このマシンにおける全モデルの判定を確認できます。
 
 <a id="long-claude-code-sessions-get-summarized"></a>
 

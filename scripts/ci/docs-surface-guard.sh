@@ -54,7 +54,17 @@ base=$(git merge-base FETCH_HEAD "${head_sha}")
 #                                    printed wording, `waired doctor`
 #   packaging/install/               the install / uninstall scripts
 #                                    users run from the README
-SURFACES='^(internal/gui/|cmd/waired-tray/|cmd/waired/|packaging/install/)'
+#   internal/router/                 which model the Auto-Selector picks
+#   proto/hostfit/                   the rule deciding whether a model
+#                                    suits this machine at all
+#
+# The last two print no text of their own, which is exactly why they were
+# missing and why the rule change in waired-ai/waired#988 shipped against
+# a docs page that still described the old one. What a user receives by
+# DEFAULT is a surface: a machine that used to be handed a 22.6 GB model
+# and is now handed a smaller one saw a change no printed string
+# announced.
+SURFACES='^(internal/gui/|cmd/waired-tray/|cmd/waired/|packaging/install/|internal/router/|proto/hostfit/)'
 
 changed=$(git diff --name-only "${base}" "${head_sha}")
 touched=$(printf '%s\n' "${changed}" | grep -E "${SURFACES}" || true)

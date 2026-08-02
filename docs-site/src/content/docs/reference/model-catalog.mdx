@@ -99,6 +99,15 @@ memory **and is fast enough to be worth using**. On shared-memory systems
 (Apple Silicon, AMD Strix Halo), MoE models with a small *active* parameter
 count are favored because decode speed tracks active params, not total size.
 
+If your computer has a separate graphics card, "fits" means the model itself
+fits in **the card's own memory**, with a little headroom left for the engine.
+A larger model still runs — the part that does not fit stays in system RAM and
+is fetched back over a much slower connection — but every reply pays for that,
+and a long coding prompt pays for it the most. So Waired will not choose such a
+model *for* you, even where the total-memory arithmetic says it would run: the
+automatic pick can be smaller than your machine's total memory suggests. You can
+still choose it yourself.
+
 Windows and macOS run on Ollama. vLLM serving needs Linux, so on those machines
 Waired picks from the Ollama list — a large NVIDIA card does not change that.
 
