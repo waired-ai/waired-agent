@@ -55,14 +55,26 @@ type Snapshot struct {
 }
 
 // PeerView is the per-device entry the snapshot exposes. State may be
-// nil for peers that have never pushed an inference status. Stale=true
-// means the aggregator treats the peer as unusable for the purpose of
-// Snapshot.Reachable (the entry still appears in Peers so consumers can
-// render "this peer used to be reachable, now it's stale"). A peer is
-// stale when ANY of: the newest map frame is older than
-// Policy.FrameStaleness, the peer's advertised last_check was already
-// older than Policy.AdvertisedLiveness when that frame arrived, or the
-// disco prober reports it as once-seen-now-silent.
+// nil for peers that have never pushed an inference status.
+//
+// Two independent freshness verdicts ride along, and they mean
+// different things:
+//
+//   - Stale=true — the peer is unusable, and Snapshot.Reachable
+//     ignores it. Set when the newest map frame is older than
+//     Policy.FrameStaleness, or the peer's advertised last_check was
+//     already older than Policy.AdvertisedLiveness when that frame
+//     arrived. Both say the peer's own reporting chain is broken.
+//   - Silent=true — the disco prober saw this peer pong once and has
+//     heard nothing within its freshness window. ADVISORY only
+//     (waired#729): a disco pong rides raw UDP or the relay's WSS
+//     control session, never the WireGuard data plane an inference
+//     request uses, so silence predicts unusability without proving
+//     it. The Selector demotes silent peers in its ordering and lets
+//     the /healthz probe decide; it must never drop them.
+//
+// The entry appears in Peers either way, so consumers can render
+// "this peer used to be reachable, now it's stale".
 //
 // Phase 7 inputs (Capacity, Hardware) are accessed via InferenceState
 // directly — they are not re-hoisted to the PeerView level so the wire
@@ -74,6 +86,7 @@ type PeerView struct {
 	DeviceName     string                 `json:"device_name"`
 	OverlayIP      string                 `json:"overlay_ip"`
 	Stale          bool                   `json:"stale"`
+	Silent         bool                   `json:"silent"`
 	InferenceState *signer.InferenceState `json:"inference_state,omitempty"`
 	// Grant is set for foreign peers injected into the map under a
 	// Public Share grant (nil for own-network peers). The router uses

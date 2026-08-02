@@ -27,6 +27,16 @@ type captureRecorder struct {
 		outcome   string
 		latencyMs uint32
 	}
+	pinFailures []pinFailure
+}
+
+// pinFailure records a RecordPinnedPeerUnreachable emit with every
+// argument intact, so a test can assert the gateway named the right
+// peer and model and not merely that "something was emitted".
+type pinFailure struct {
+	peerID string
+	model  string
+	reason string
 }
 
 func (c *captureRecorder) RecordRequest(ev observability.RequestEvent) {
@@ -54,6 +64,18 @@ func (c *captureRecorder) RecordProbe(outcome string, latencyMs uint32) {
 		outcome   string
 		latencyMs uint32
 	}{outcome, latencyMs})
+}
+
+func (c *captureRecorder) RecordPinnedPeerUnreachable(peerID, model, reason string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pinFailures = append(c.pinFailures, pinFailure{peerID, model, reason})
+}
+
+func (c *captureRecorder) pinFailuresSnapshot() []pinFailure {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]pinFailure(nil), c.pinFailures...)
 }
 
 func (c *captureRecorder) requestsSnapshot() []observability.RequestEvent {

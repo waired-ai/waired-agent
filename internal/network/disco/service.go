@@ -204,12 +204,13 @@ type Service struct {
 	// recordPongReceived, called inside handlePong's mu region only
 	// when the pong matched an outstanding probe nonce (i.e. genuine
 	// two-way reachability, not a replay). Exposed as a freshness map
-	// via ReachableSnapshot — the Phase 8 Selector hard-excludes peers
-	// whose entry is stale relative to the configured window.
+	// via ReachableSnapshot — the inferencemesh aggregator marks peers
+	// whose entry is stale relative to the configured window as
+	// Silent, an advisory routing penalty.
 	//
 	// Peers we have NEVER received a pong from are absent. The
 	// snapshot consumer treats absence as "unknown, default trust" so
-	// freshly enrolled peers aren't excluded before their first probe
+	// freshly enrolled peers aren't penalised before their first probe
 	// round completes.
 	lastPongAt map[string]time.Time
 
@@ -455,24 +456,30 @@ func (s *Service) ReachableFreshness() time.Duration {
 	return reachableFreshnessFor(s.cfg.ProbeReprobeActive)
 }
 
-// ReachableSnapshot returns a deviceID → recent-pong-presence map for
-// the Phase 8 Selector to consult as a hard-exclusion signal.
-// Production callers pass ReachableFreshness() as the window; the
-// parameter stays explicit so tests can drive the boundaries.
+// ReachableSnapshot returns a deviceID → recent-pong-presence map.
+// Its consumer is the inferencemesh aggregator's PeerLiveness axis,
+// which turns it into the advisory PeerView.Silent flag. Production
+// callers pass ReachableFreshness() as the window; the parameter stays
+// explicit so tests can drive the boundaries.
 //
 //   - A deviceID present with value=true has produced a signed,
 //     nonce-matched pong within [now-freshness, now].
 //   - A deviceID present with value=false has pong'd at some point in
 //     the past but its most recent observation is older than the
-//     window — the Selector treats this as a hard exclusion (peer is
-//     no longer reachable over the WG/relay path we last saw).
+//     window — the peer has gone quiet on the paths disco probes.
 //   - A deviceID we have NEVER received a pong from is absent from
-//     the result. The Selector treats absence as "unknown, default
-//     trust" so freshly enrolled peers aren't excluded before their
-//     first probe round completes.
+//     the result. Consumers treat absence as "unknown, default trust"
+//     so freshly enrolled peers aren't penalised before their first
+//     probe round completes.
+//
+// A false here is NOT proof the peer is unusable, and must not be
+// treated as one: disco probes raw UDP and the relay's WSS control
+// session, neither of which is the WireGuard data plane an inference
+// request rides. The Selector hard-excluded on this map until
+// waired#729 and black-holed peers whose data plane was fine.
 //
 // Returns nil when no peer has ever pong'd, so a freshly started
-// agent's Selector sees zero exclusions (= legacy behaviour).
+// agent draws no verdicts at all (= legacy behaviour).
 //
 // Allocates a fresh map; safe to read without further locking.
 func (s *Service) ReachableSnapshot(now time.Time, freshness time.Duration) map[string]bool {

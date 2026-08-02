@@ -313,3 +313,113 @@ func buildPhase8Gateway(t *testing.T, sel SelectorIface, probeRTs map[string]htt
 	}
 	return NewHandlerSet(deps)
 }
+
+// phase8PinnedCandidate is phase8RemoteCandidate marked as the
+// operator's pin, which is what tells the gateway to name the peer
+// when its probe fails instead of blaming the whole mesh.
+func phase8PinnedCandidate(peerID string) router.Candidate {
+	c := phase8RemoteCandidate(peerID)
+	c.Pinned = true
+	c.PeerDisplayID = peerID
+	return c
+}
+
+// TestSelectAndProbe_PinnedProbeFailureSurfacesPinnedPeerUnreachable
+// pins the second half of waired#729. PRODUCT CONTRACT.
+//
+// Demoting disco silence from a veto to an ordering penalty means a
+// pin whose host has gone quiet is no longer filtered out of the
+// snapshot — it reaches the probe layer. The Selector used to produce
+// the named ErrPinnedPeerUnreachable from that filter, so without a
+// mapping at the probe layer the same operator-visible failure would
+// silently degrade to waired_all_peers_overloaded and lose the peer's
+// name, the intercept staging header and the #391 events.
+func TestSelectAndProbe_PinnedProbeFailureSurfacesPinnedPeerUnreachable(t *testing.T) {
+	rtPin := &stubRT{dialErr: errors.New("connect refused")}
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("upstream must not be reached when the pin is unreachable")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(upstreamSrv.Close)
+
+	sel := &phase8MultiSelector{cands: []router.Candidate{phase8PinnedCandidate("peer-pin")}}
+	rec := &captureRecorder{}
+	h := buildPhase8Gateway(t, sel, map[string]http.RoundTripper{"peer-pin": rtPin}, upstreamSrv.URL)
+	h.deps.Recorder = rec
+
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"model":"qwen3-8b-instruct","messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &env)
+	if env.Error.Code != "waired_pinned_peer_unreachable" {
+		t.Errorf("error.code = %q, want waired_pinned_peer_unreachable (body=%s)", env.Error.Code, raw)
+	}
+	if peer := resp.Header.Get(HeaderInferencePeer); peer != "peer-pin" {
+		t.Errorf("%s = %q, want peer-pin — the operator must learn WHICH pin failed", HeaderInferencePeer, peer)
+	}
+	got := rec.pinFailuresSnapshot()
+	if len(got) != 1 {
+		t.Fatalf("RecordPinnedPeerUnreachable emits = %d, want 1 (got=%+v)", len(got), got)
+	}
+	if got[0].peerID != "peer-pin" || got[0].reason != "probe_failed" {
+		t.Errorf("emit = %+v, want peerID=peer-pin reason=probe_failed", got[0])
+	}
+}
+
+// TestSelectAndProbe_PinnedCommitRaceStaysOverloaded is the boundary
+// on the mapping above: a pin that probed READY and merely lost the
+// admission race is genuinely overloaded, and must keep saying so. If
+// this ever flipped, an operator whose pinned box is simply busy would
+// be told it is unreachable and go looking for a network fault.
+// PRODUCT CONTRACT.
+func TestSelectAndProbe_PinnedCommitRaceStaysOverloaded(t *testing.T) {
+	rtPin := &stubRT{status: 200, body: readyBody(4, 4)} // ready shape, capacity full
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(upstreamSrv.Close)
+
+	sel := &phase8MultiSelector{cands: []router.Candidate{phase8PinnedCandidate("peer-pin")}}
+	rec := &captureRecorder{}
+	h := buildPhase8Gateway(t, sel, map[string]http.RoundTripper{"peer-pin": rtPin}, upstreamSrv.URL)
+	h.deps.Recorder = rec
+
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"model":"qwen3-8b-instruct","messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &env)
+	if env.Error.Code != "waired_all_peers_overloaded" {
+		t.Errorf("error.code = %q, want waired_all_peers_overloaded — a busy pin is not an unreachable one (body=%s)",
+			env.Error.Code, raw)
+	}
+	if got := rec.pinFailuresSnapshot(); len(got) != 0 {
+		t.Errorf("a capacity-full pin must not emit a pin-unreachable event; got %+v", got)
+	}
+}

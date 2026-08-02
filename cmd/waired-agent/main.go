@@ -753,6 +753,12 @@ func run(ctx context.Context, args []string) error {
 							if pp.DeviceID != peerDeviceID {
 								continue
 							}
+							// PeerView.Silent is deliberately absent here:
+							// the Selector routes to silent peers now, so
+							// failing them at dispatch would re-introduce
+							// waired#729 one layer down — the request would
+							// die on a signal that never touched the data
+							// plane it is about to use.
 							if pp.InferenceState == nil || !pp.InferenceState.Reachable || pp.Stale {
 								return infruntime.Health{State: infruntime.StateFailed, LastErr: "peer engine unreachable or stale"}
 							}
@@ -869,27 +875,29 @@ func run(ctx context.Context, args []string) error {
 		if discoSvc != nil {
 			rttSnapshotFn = discoSvc.RTTSnapshot
 		}
-		// Phase 8: disco-based reachability snapshot, used by the
-		// Selector as a hard-exclusion signal so peers with no recent
-		// pong (NAT-asymmetry / WG-keepalive failure / ISP routing
-		// blackhole) drop out of the candidate set before the probe layer
-		// fans out. The window comes from ReachableFreshness (3× the
-		// prober's own re-emit interval): pongs arrive no more often than
-		// we probe, so a hardcoded window shorter than the cadence — the
-		// 5 s this used to pass against a 15 s cadence — marked healthy
-		// peers silent for two thirds of every cycle (waired#729).
+		// Phase 8: disco-based reachability snapshot. Without it the
+		// aggregator's receipt-based freshness would not notice a peer
+		// whose HOST dropped off the wire until the CP's 5-minute map
+		// backstop. The window comes from ReachableFreshness (3× the
+		// prober's own re-emit interval): pongs arrive no more often
+		// than we probe, so a hardcoded window shorter than the cadence
+		// — the 5 s this used to pass against a 15 s cadence — marked
+		// healthy peers silent for two thirds of every cycle
+		// (waired#729).
+		//
+		// The aggregator is the ONLY consumer: it lands the verdict on
+		// PeerView.Silent, which the Selector treats as an ordering
+		// penalty. The Selector used to take this same map directly and
+		// hard-exclude on it, which vetoed peers whose WireGuard data
+		// plane was demonstrably carrying traffic over relay — a disco
+		// pong travels raw UDP or the relay's WSS control session, never
+		// the data plane itself (waired#729).
 		var reachableSnapshotFn func() map[string]bool
 		if discoSvc != nil {
 			reachableSnapshotFn = func() map[string]bool {
 				return discoSvc.ReachableSnapshot(time.Now(), discoSvc.ReachableFreshness())
 			}
 		}
-		// Same signal, second consumer: without it the aggregator's
-		// receipt-based freshness would not notice a peer whose HOST
-		// dropped off the wire until the CP's 5-minute map backstop,
-		// leaving the tray label and the peer adapter's health check
-		// disagreeing with the routing decision the Selector already
-		// makes from this exact map.
 		meshAgg.SetPeerLiveness(reachableSnapshotFn)
 
 		// publicGrantDemand carries the router's "wanted a public
@@ -946,7 +954,6 @@ func run(ctx context.Context, args []string) error {
 				LocalInFlight:       inFlightTracker,
 				LocalRTT:            rttSnapshotFn,
 				LocalErrors:         errorWindow.Snapshot,
-				LocalReachable:      reachableSnapshotFn,
 				Recorder:            obsRecorder,
 				Routing:             workerCtl.Routing,
 				PublicPolicy:        publicUseCtl.Policy,
@@ -2126,7 +2133,14 @@ func (o *observabilityState) ObservabilityState() management.ObservabilityState 
 		var enrolled, reachable, ready int
 		for _, p := range snap.Peers {
 			enrolled++
-			if !p.Stale {
+			// Silent counts against "reachable" even though it no
+			// longer blocks routing (waired#729). docs-site defines
+			// this number as "how many this computer can currently
+			// talk to", and a host that stopped answering disco is
+			// exactly what stops being talkable-to — 45 s after it
+			// goes, rather than the 90 s the advertised-liveness axis
+			// would take on its own.
+			if !p.Stale && !p.Silent {
 				reachable++
 				if p.InferenceState != nil && p.InferenceState.Reachable {
 					ready++
@@ -2202,7 +2216,9 @@ func runObservabilityPoller(ctx context.Context, rec *observability.Recorder, st
 			var enrolled, reachable, ready int
 			for _, p := range snap.Peers {
 				enrolled++
-				if !p.Stale {
+				// Same "can currently talk to" definition as the
+				// observabilityState copy above (waired#729).
+				if !p.Stale && !p.Silent {
 					reachable++
 					if p.InferenceState != nil && p.InferenceState.Reachable {
 						ready++
