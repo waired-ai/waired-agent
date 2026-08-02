@@ -23,6 +23,12 @@
 # decision (waired/docs/decisions/). docs-site moves to the public `waired-agent`
 # repo later (#184), so keeping zero long-lived secrets matters.
 #
+# This workflow only CREATES preview channels; deleting them belongs to
+# docs-preview-reap.yml (#429). Firebase caps a site at 50 channels, and a
+# create-only workflow parked this one at the ceiling until every docs PR's
+# preview 429'd. Do not raise `PREVIEW_TTL` without reading that workflow's
+# header first.
+#
 # The build job ALWAYS runs (it is the docs validation gate, incl. fork PRs).
 # The deploy steps are gated on `vars.FIREBASE_PROJECT_ID` being set, so this
 # workflow is merge-safe before the operator provisions Firebase + WIF: until
@@ -59,6 +65,12 @@ env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: safe.directory
   GIT_CONFIG_VALUE_0: "*"
+  # How long an untouched preview channel survives. Defined once because the
+  # deploy flag and the PR comment quoting it used to drift apart. Since
+  # docs-preview-reap.yml deletes the channel when the PR closes, this is only
+  # a backstop for the cases it misses — short enough that a missed reap cannot
+  # hold a quota slot for a week (#429).
+  PREVIEW_TTL: "3d"
 
 # Force bash; ARC k8s mode defaults run steps to `sh -e`.
 defaults:
@@ -177,7 +189,7 @@ jobs:
           # the in-container $GITHUB_WORKSPACE path).
           export NODE_OPTIONS="--require=${GITHUB_WORKSPACE}/.github/scripts/disable-keepalive.cjs"
           out="$(firebase hosting:channel:deploy "pr-${PR_NUMBER}" \
-            --project "${FIREBASE_PROJECT_ID}" --expires 7d --json)"; rc=$?
+            --project "${FIREBASE_PROJECT_ID}" --expires "${PREVIEW_TTL}" --json)"; rc=$?
           echo "${out}"
           if [ "${rc}" -ne 0 ]; then
             # firebase-tools always writes firebase-debug.log; surface it so a
@@ -201,8 +213,9 @@ jobs:
         with:
           script: |
             const url = process.env.PREVIEW_URL;
+            const ttl = process.env.PREVIEW_TTL;
             const marker = '<!-- docs-preview -->';
-            const body = `${marker}\n📘 **Docs preview** for this PR: ${url}\n\n_Rebuilt on each push; the preview channel auto-expires in 7 days._`;
+            const body = `${marker}\n📘 **Docs preview** for this PR: ${url}\n\n_Rebuilt on each push. The preview channel is deleted when this PR closes, and expires ${ttl} after the last push._`;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });

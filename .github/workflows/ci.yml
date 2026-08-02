@@ -63,6 +63,13 @@ jobs:
       - name: base-ref guard self-test
         run: bash scripts/ci/base-ref-guard-test.sh
 
+      # docs-preview-reap.yml DELETES Firebase Hosting channels from the
+      # project that also serves docs.waired.ai. The rule deciding which ones
+      # is a pure stdin/stdout selector precisely so its blast radius can be
+      # pinned here, offline, instead of only in the workflow that runs it.
+      - name: docs preview channel selector self-test
+        run: bash scripts/ci/docs-preview-select-test.sh
+
       - name: go vet (root + proto)
         run: |
           set -euo pipefail

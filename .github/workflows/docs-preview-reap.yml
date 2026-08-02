@@ -1,0 +1,166 @@
+# Give the docs preview channels created by deploy-docs.yml a way to die (#429).
+#
+# deploy-docs.yml creates one `pr-<N>` Firebase Hosting preview channel per
+# docs-touching PR. Firebase caps a site at 50 channels, and until this
+# workflow existed nothing ever deleted one — a channel outlived its PR by the
+# whole `--expires` window, so at this repo's PR rate the site sat permanently
+# at the ceiling and every docs PR's preview deploy died with:
+#
+#   HTTP Error: 429, Couldn't create channel on `.../sites/waired-docs`:
+#   channel quota reached.
+#
+# The build half of that job still passed, so it never blocked a merge — which
+# is exactly what made it corrosive. A non-required check that is permanently
+# red for an infrastructure reason is one nobody reads when it goes red for a
+# real one, and meanwhile docs changes were reviewed without a rendered page.
+#
+# Three triggers, one job:
+#   * pull_request [closed] — reap this PR's channel. This is the half that was
+#     missing; with it the channel population tracks OPEN PRs instead of
+#     accumulating, and `--expires` in deploy-docs.yml is just a backstop.
+#   * schedule — nightly sweep of anything the close event missed (a PR whose
+#     docs-site/ diff vanished before it closed, a close-event run that failed,
+#     a channel Firebase has not lazily reaped after expiry). Self-healing, so
+#     one miss cannot silently refill the quota.
+#   * workflow_dispatch — the same sweep on demand, for when a human needs the
+#     slots back now.
+#
+# PREVIEW CHANNELS ONLY. Previews live in the `dev-waired` sandbox (site
+# `waired-docs`, *.web.app); the LIVE docs.waired.ai channel is a different
+# Firebase site in a different GCP project (`waired-docs-prod` / prod-waired,
+# see deploy-docs.yml #453) and this workflow deliberately carries no
+# `environment:`, so it only ever authenticates against the dev vars. On top of
+# that, scripts/ci/docs-preview-channels.mjs will only ever name a channel
+# matching `pr-<digits>` — `live` is unreachable from here by construction, and
+# scripts/ci/docs-preview-select-test.sh pins that.
+#
+# Auth is WIF/OIDC + firebase-tools via ADC, same as deploy-docs.yml — no
+# long-lived service-account secret. The WIF binding is repository-scoped with
+# no ref or event condition, so schedule/dispatch runs authenticate the same
+# way a pull_request run does.
+name: docs-preview-reap
+
+on:
+  pull_request:
+    types: [closed]
+    # Same filter as deploy-docs.yml: only a PR that could have created a
+    # channel is worth a reap run. Anything this misses is the sweep's job.
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/deploy-docs.yml"
+  schedule:
+    # 04:17 UTC daily. Off the hour to avoid the Actions scheduling peak, and
+    # off base-ref-sweep.yml's slot.
+    - cron: "17 4 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  # Per-PR for reaps; one shared lane for sweeps. Never cancel: a half-run
+  # sweep is not harmful, but a cancelled delete loop wastes the run.
+  group: docs-preview-reap-${{ github.event.pull_request.number || 'sweep' }}
+  cancel-in-progress: false
+
+# Inline-inject `safe.directory=*` into every git invocation — see the matching
+# comment in ci.yml (checkout-owned workspace trips git's "dubious ownership"
+# check inside ARC k8s containers).
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+# Force bash; ARC k8s mode defaults run steps to `sh -e`.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  reap:
+    name: reap docs preview channels
+    # Skip when Firebase is not provisioned (deploy-docs.yml's own gate), and
+    # for fork PRs — they receive no OIDC token, so deploy-docs.yml never
+    # created a channel for them in the first place.
+    if: >-
+      vars.FIREBASE_PROJECT_ID != '' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # No `environment:` — repo-level dev vars, i.e. the sandbox project that
+    # owns the preview channels. See the header.
+    container:
+      image: node:22-trixie
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The default branch, never the PR's own tree. Two reasons: this job
+          # holds WIF credentials, so it must not run a script version a PR
+          # author controls; and on a merged PR the `refs/pull/N/merge` ref
+          # checkout would otherwise resolve can already be gone.
+          ref: ${{ github.event.repository.default_branch || github.ref }}
+
+      # Same Node pin as deploy-docs.yml: firebase-tools authenticates the WIF
+      # (external_account) credential via a node-fetch STS POST that fails with
+      # a false "Premature close" on recent Node (nodejs/node#63989).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.12.0
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v3
+        # IPv4-first egress: hosted runners have no IPv6 route; Node's AAAA-first
+        # + Happy-Eyeballs can abandon a slow IPv4 STS connect (~250ms) and race
+        # the routeless IPv6 → transient "failed to generate federated token".
+        # Same fix as deploy-docs.yml / renovate.yml. #542 / #466.
+        env:
+          NODE_OPTIONS: --dns-result-order=ipv4first --no-network-family-autoselection
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Install firebase-tools
+        run: npm i -g firebase-tools@13
+
+      - name: Reap
+        env:
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          # WIF (external_account) ADC carries no quota project; without this
+          # the Firebase Management API call 403s. See deploy-docs.yml.
+          GOOGLE_CLOUD_QUOTA_PROJECT: ${{ vars.FIREBASE_PROJECT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          # Empty on schedule/dispatch → the script sweeps instead.
+          PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.number || '' }}
+        run: |
+          set -euo pipefail
+          # Keep-alive workaround, as in deploy-docs.yml. Set here rather than
+          # as step `env:` or via $GITHUB_ENV — the former resolves
+          # github.workspace to the host path, wrong inside the ARC container;
+          # the latter is blocklisted. $GITHUB_WORKSPACE is the in-container path.
+          export NODE_OPTIONS="--require=${GITHUB_WORKSPACE}/.github/scripts/disable-keepalive.cjs"
+          if [ -n "${PR_NUMBER}" ]; then
+            scripts/ci/docs-preview-sweep.sh --pr "${PR_NUMBER}"
+          else
+            scripts/ci/docs-preview-sweep.sh
+          fi
+
+      # The preview URL comment deploy-docs.yml left behind now 404s. Rewrite it
+      # in place rather than leaving a dead link on the merged PR. Gated on the
+      # reap succeeding — if the delete failed the channel is still there, and
+      # the comment would be lying.
+      - name: Retire the preview comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const marker = '<!-- docs-preview -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (!existing) return;
+            const body = `${marker}\n📘 **Docs preview** — the preview channel for this PR has been deleted now that it is closed.`;
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
