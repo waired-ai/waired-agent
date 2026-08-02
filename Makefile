@@ -423,10 +423,12 @@ e2e-inference:
 #
 #   make e2e-agentgrade MODEL=qwen3.6:27b-q4_K_M
 #   make e2e-agentgrade MODEL=<tag> JSON=/tmp/verdict.json
+#   make e2e-agentgrade MODEL=<tag> TRIALS=12   # re-measure a 1/3 blip
 .PHONY: e2e-agentgrade
 e2e-agentgrade:
 	@test -n "$(MODEL)" || { echo "usage: make e2e-agentgrade MODEL=<ollama tag> [JSON=<path>]"; exit 2; }
 	WAIRED_AGENTGRADE_MODEL="$(MODEL)" WAIRED_AGENTGRADE_JSON="$(JSON)" \
+	WAIRED_AGENTGRADE_TRIALS="$(TRIALS)" \
 	  go test -tags e2e -count=1 -v -timeout=40m -run TestAgentGrade ./internal/e2e/agentgrade/...
 
 # vLLM e2e (GPU REQUIRED): exercises the Step-2 multi-engine path —
