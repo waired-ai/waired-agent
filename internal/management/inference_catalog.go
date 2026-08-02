@@ -9,6 +9,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // CatalogConfig wires the dependencies for the model-catalog endpoints
@@ -125,7 +126,45 @@ type CatalogFamily struct {
 	Preferred        bool   `json:"preferred,omitempty"`
 	Downloaded       bool   `json:"downloaded,omitempty"`
 	Downloading      bool   `json:"downloading,omitempty"`
-	DeficitLabel     string `json:"deficit_label,omitempty"`
+
+	// DeficitLabel is English prose composed HERE, which is what
+	// waired-agent#321 is unwinding: the control plane emits machine
+	// codes and lets the UI own every word, and the tray's wire did the
+	// opposite, so one catalog looked like two depending on which picker
+	// you opened.
+	//
+	// Kept beside Fit rather than removed. It is additive-only discipline
+	// for a tray that predates Fit, and it is still the ONLY answer for
+	// the engine-version floor — hostfit does not model that, so Fit has
+	// no code for it. A renderer reads Fit.Reason first and falls back
+	// here.
+	DeficitLabel string `json:"deficit_label,omitempty"`
+
+	// Fit is the shared projection (proto/hostfit.Presentation) — the
+	// same shape and the same JSON names the control plane's onboarding
+	// catalog emits. It carries what this wire could not say: a machine
+	// reason code, the honest required-VRAM figure for a row that RUNS,
+	// the quality tier, and the "runs but is not the right choice here"
+	// demotion (waired-ai/waired#988) that had no way to reach a user at
+	// all.
+	//
+	// A pointer so an older consumer sees the field absent rather than a
+	// zero value it would read as "nothing fits".
+	Fit *hostfit.Presentation `json:"fit,omitempty"`
+
+	// RecommendedPick marks the one family this host would choose for
+	// ITSELF. It is router.SelectInstallModel's answer — the same
+	// function the installer commits to — so the badge cannot drift from
+	// the machine's own pick.
+	//
+	// At most one row carries it. Absent on every row only when nothing
+	// fits this host at all.
+	//
+	// Not spelled `recommended`: that name is taken below by the
+	// recommended-SPECS projection, which shipped tray and CLI builds
+	// already decode. Two meanings of one word is worse than a longer
+	// name for the newer one.
+	RecommendedPick bool `json:"recommended_pick,omitempty"`
 
 	// Recommended carries the recommended specs of the family's
 	// representative variant on this host — the best-fit variant when
@@ -227,16 +266,29 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// The host's own pick, resolved ONCE for the whole catalog: it is a
+	// property of the list, not of a row, and asking per family would
+	// re-rank the catalog for every manifest in it.
+	recommendedID := router.RecommendedFamily(router.PickInput{
+		Catalog:       manifests,
+		Hardware:      hw,
+		Engine:        engine,
+		EngineVersion: engineVersion,
+	})
+
 	for _, m := range manifests {
 		fit := router.FamilyBestFit(m, engine, engineVersion, hw)
+		presentation := fit.Fit
 		f := CatalogFamily{
-			ModelID:     m.ModelID,
-			DisplayName: m.DisplayName,
-			Fits:        fit.Fits,
-			Active:      m.ModelID == activeModelID,
-			Preferred:   pref.ModelID != "" && m.ModelID == pref.ModelID,
-			Downloaded:  downloaded[m.ModelID],
-			Downloading: downloading[m.ModelID],
+			ModelID:         m.ModelID,
+			DisplayName:     m.DisplayName,
+			Fits:            fit.Fits,
+			Active:          m.ModelID == activeModelID,
+			Preferred:       pref.ModelID != "" && m.ModelID == pref.ModelID,
+			Downloaded:      downloaded[m.ModelID],
+			Downloading:     downloading[m.ModelID],
+			Fit:             &presentation,
+			RecommendedPick: recommendedID != "" && m.ModelID == recommendedID,
 		}
 		if fit.Fits {
 			f.BestFitVariantID = fit.Variant.VariantID

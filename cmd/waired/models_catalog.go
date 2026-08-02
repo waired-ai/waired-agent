@@ -35,6 +35,27 @@ type catalogDetailFamily struct {
 	Downloading  bool               `json:"downloading"`
 	DeficitLabel string             `json:"deficit_label"`
 	Recommended  *catalogDetailSpec `json:"recommended"`
+
+	// Fit is the shared projection (proto/hostfit.Presentation) the
+	// agent, the tray and the setup wizard all render from
+	// (waired-agent#321). Mirrored rather than imported, like every other
+	// decode struct in cmd/waired.
+	Fit *catalogDetailFit `json:"fit"`
+
+	// RecommendedPick marks the family this host would choose for itself.
+	// Absent on every row only when nothing fits.
+	RecommendedPick bool `json:"recommended_pick"`
+}
+
+// catalogDetailFit is the subset of hostfit.Presentation this view
+// renders.
+type catalogDetailFit struct {
+	Runnable             bool   `json:"runnable"`
+	Reason               string `json:"reason"`
+	RequiredResidentMB   int    `json:"required_resident_mb"`
+	QualityTier          int    `json:"quality_tier"`
+	NotRecommended       bool   `json:"not_recommended"`
+	NotRecommendedReason string `json:"not_recommended_reason"`
 }
 
 type catalogDetailSpec struct {
@@ -48,7 +69,7 @@ type catalogDetailSpec struct {
 }
 
 // runModelsCatalog renders `waired models ls --detail`: the host's
-// hardware, then each bundled family with its recommended specs, fit
+// hardware, then each bundled family with what it needs, its fit
 // verdict, and download/selection state. Reads /inference/catalog so it
 // shares the agent's fit logic and recommended-spec source of truth with
 // the tray and docs page.
@@ -80,7 +101,7 @@ func runModelsCatalog(mgmt string) error {
 }
 
 // formatCatalogDetail is the pure renderer (unit-tested without a live
-// agent). engine drives whether the RECOMMENDED column reports RAM
+// agent). engine drives whether the NEEDS fallback column reports RAM
 // (ollama) or VRAM (vllm) — the host serves one engine at a time.
 func formatCatalogDetail(c catalogDetailResp) string {
 	var b strings.Builder
@@ -104,29 +125,21 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	// Writes target a strings.Builder-backed tabwriter, so they never
 	// error; ignore the returns to satisfy errcheck.
-	_, _ = fmt.Fprintln(tw, "  MODEL\tPARAMS\tTIER\tRECOMMENDED\tFIT")
+	_, _ = fmt.Fprintln(tw, "  MODEL\tPARAMS\tTIER\tNEEDS\tFIT")
 	for _, f := range c.Families {
-		params, tier, rec := "-", "-", "-"
+		params := "-"
 		if f.Recommended != nil {
 			params = formatParamCount(f.Recommended.ParamCount, f.Recommended.ActiveParams)
-			if f.Recommended.QualityTier > 0 {
-				tier = fmt.Sprintf("%d", f.Recommended.QualityTier)
-			}
-			rec = formatRecommendedResource(c.Engine, f.Recommended)
-		}
-		fit := "✓ fits"
-		if !f.Fits {
-			fit = "✗"
-			if f.DeficitLabel != "" {
-				fit = "✗ " + f.DeficitLabel
-			}
 		}
 		_, _ = fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\t%s\n",
-			catalogStateMarker(f), f.ModelID, params, tier, rec, fit)
+			catalogStateMarker(f), f.ModelID, params,
+			catalogTierColumn(f), catalogNeedsColumn(c.Engine, f), catalogFitColumn(f))
 	}
 	_ = tw.Flush()
 
 	b.WriteString("\nLegend: ● active  → preferred (switching)  ↓ downloaded  ⋯ downloading\n")
+	b.WriteString("NEEDS is the memory the model must hold on the graphics card to serve\n" +
+		"without spilling; on a host with no graphics card it is the system-RAM minimum.\n")
 	b.WriteString("The Auto-Selector serves the highest quality-tier model that fits this host.\n")
 	b.WriteString("Why the current pick: `waired infer --explain`.\n")
 	b.WriteString("Full hardware-fit reference: https://docs.waired.ai/reference/model-catalog/\n")
@@ -148,6 +161,82 @@ func catalogStateMarker(f catalogDetailFamily) string {
 		return " "
 	}
 }
+
+// catalogTierColumn is the raw catalog quality ranking. Preferred from
+// the shared projection — it describes the variant the verdict is about,
+// which the recommended-spec projection cannot on a row with no fitting
+// variant.
+func catalogTierColumn(f catalogDetailFamily) string {
+	tier := 0
+	switch {
+	case f.Fit != nil && f.Fit.QualityTier > 0:
+		tier = f.Fit.QualityTier
+	case f.Recommended != nil:
+		tier = f.Recommended.QualityTier
+	}
+	if tier <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", tier)
+}
+
+// catalogNeedsColumn is what the model must hold in GPU-addressable
+// memory — weights, the reserved KV budget and the engine's own overhead
+// (proto/hostfit.OllamaResidentMB), the figure the fit rule actually
+// compares.
+//
+// The column used to be RECOMMENDED and print min_ram_gb: a threshold
+// authored for a host that loads into system RAM, printed on a machine
+// whose graphics card has to hold the thing. On a host with no
+// GPU-addressable memory the projection reports no resident requirement,
+// and min_ram_gb is then the right answer — so it stays as the fallback
+// rather than being replaced.
+func catalogNeedsColumn(engine string, f catalogDetailFamily) string {
+	if f.Fit != nil && f.Fit.RequiredResidentMB > 0 {
+		return fmt.Sprintf("%d GB VRAM", (f.Fit.RequiredResidentMB+1023)/1024)
+	}
+	if f.Recommended == nil {
+		return "-"
+	}
+	return formatRecommendedResource(engine, f.Recommended)
+}
+
+// catalogFitColumn says whether the host can serve this model and, when
+// it can, whether Waired would CHOOSE it here.
+//
+// The second half is the gap waired-agent#321 closes on this surface:
+// waired-ai/waired#988 shipped the rule that keeps a weights-spilling
+// model out of the automatic pick, and this column printed a bare
+// "✓ fits" for exactly those models — the rule was real and no surface
+// showed it.
+func catalogFitColumn(f catalogDetailFamily) string {
+	if !f.Fits {
+		if f.Fit != nil && f.Fit.Reason == reasonNoVariantForEngine {
+			return "✗ not available on this computer"
+		}
+		if f.DeficitLabel != "" {
+			return "✗ " + f.DeficitLabel
+		}
+		return "✗"
+	}
+	switch {
+	case f.RecommendedPick:
+		return "✓ fits · recommended"
+	case f.Fit != nil && f.Fit.NotRecommended:
+		if f.Fit.NotRecommendedReason != "" {
+			return "✓ fits · not recommended (" +
+				strings.ReplaceAll(f.Fit.NotRecommendedReason, "_", " ") + ")"
+		}
+		return "✓ fits · not recommended"
+	}
+	return "✓ fits"
+}
+
+// reasonNoVariantForEngine mirrors hostfit.ReasonNoVariantForEngine.
+// cmd/waired decodes the management API with its own structs and string
+// literals rather than importing the server-side packages; this keeps
+// that convention while naming the value once.
+const reasonNoVariantForEngine = "no_variant_for_engine"
 
 // formatRecommendedResource picks the engine-appropriate recommended
 // memory figure: min VRAM for vllm, min RAM for ollama (the default).

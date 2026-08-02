@@ -5,6 +5,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // hostFamilyFixture returns synthetic manifests covering the family
@@ -223,5 +224,113 @@ func TestFamilyBestFit_OllamaUnknownRAMTreatedAsFit(t *testing.T) {
 	got := FamilyBestFit(o, catalog.RuntimeOllama, "", hw)
 	if !got.Fits {
 		t.Fatalf("expected fit when RAM detection unavailable, got %+v", got)
+	}
+}
+
+// Product contract (waired-agent#321): Fit.Runnable and Fits are the same
+// answer, on every shape the catalog endpoint can produce. They are two
+// fields because two generations of consumer read them; a renderer that
+// greyed one while the other said "fits" would be the split-brain this
+// projection exists to end.
+func TestFamilyBestFit_FitAndFitsNeverDisagree(t *testing.T) {
+	o, v, d := hostFamilyFixture()
+	gpu := hardware.Profile{RAMTotalGB: 64, GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 40960}}}
+	for _, tc := range []struct {
+		name   string
+		m      catalog.Manifest
+		engine string
+		hw     hardware.Profile
+	}{
+		{"ollama fits", o, catalog.RuntimeOllama, hardware.Profile{RAMTotalGB: 32}},
+		{"ollama short on RAM", o, catalog.RuntimeOllama, hardware.Profile{RAMTotalGB: 4}},
+		{"vllm fits", v, catalog.RuntimeVLLM, gpu},
+		{"vllm short on VRAM", v, catalog.RuntimeVLLM,
+			hardware.Profile{RAMTotalGB: 64, GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 8192}}}},
+		{"vllm with no GPU", v, catalog.RuntimeVLLM, hardware.Profile{RAMTotalGB: 64}},
+		{"engine the family has no variant for", o, catalog.RuntimeVLLM, gpu},
+		{"dual-engine family", d, catalog.RuntimeVLLM, gpu},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FamilyBestFit(tc.m, tc.engine, "", tc.hw)
+			if got.Fit.Runnable != got.Fits {
+				t.Errorf("Fit.Runnable = %v but Fits = %v (%+v)", got.Fit.Runnable, got.Fits, got)
+			}
+		})
+	}
+}
+
+// Product contract: a family this engine cannot serve carries the machine
+// code AND its quality tier. The tier is what lets a picker put the row in
+// its place at the bottom of the list rather than dropping it — the F36
+// half of #321, where the setup wizard hid such models and the tray greyed
+// them.
+func TestFamilyBestFit_NoVariantForEngineIsRenderable(t *testing.T) {
+	o, _, _ := hostFamilyFixture()
+	hw := hardware.Profile{RAMTotalGB: 64, GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 40960}}}
+	got := FamilyBestFit(o, catalog.RuntimeVLLM, "", hw)
+	if got.Fit.Reason != hostfit.ReasonNoVariantForEngine {
+		t.Errorf("Fit.Reason = %q, want %q", got.Fit.Reason, hostfit.ReasonNoVariantForEngine)
+	}
+	if got.Fit.QualityTier != 35 {
+		t.Errorf("Fit.QualityTier = %d, want 35 — the tier ranks the model, not its fit",
+			got.Fit.QualityTier)
+	}
+}
+
+// Product contract: the size figure a picker prints is the resident
+// requirement, and it comes from the shared rule rather than from
+// min_ram_gb. Asserted against hostfit directly so a change to the
+// overhead model moves both together or fails here.
+func TestFamilyBestFit_CarriesTheResidentRequirement(t *testing.T) {
+	m := catalog.Manifest{
+		ModelID: "qwen3.6-27b",
+		Variants: []catalog.Variant{{
+			VariantID: "q4-gguf", RuntimeSupport: []string{catalog.RuntimeOllama},
+			MinRAMGB: 32, QualityTier: 62, EstimatedWeightGB: 16.0, KVBytesPerTokenFP16: 20480,
+		}},
+	}
+	hw := hardware.Profile{RAMTotalGB: 64, GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 40960}}}
+	got := FamilyBestFit(m, catalog.RuntimeOllama, "", hw)
+	if !got.Fits {
+		t.Fatalf("expected fit, got %+v", got)
+	}
+	want := hostfit.OllamaResidentMB(m.Variants[0], false)
+	if got.Fit.RequiredResidentMB != want {
+		t.Errorf("RequiredResidentMB = %d, want %d", got.Fit.RequiredResidentMB, want)
+	}
+	if got.Fit.QualityTier != 62 {
+		t.Errorf("QualityTier = %d, want 62", got.Fit.QualityTier)
+	}
+}
+
+// Product contract: the badge and the installer name the same model. This
+// is the whole reason RecommendedFamily wraps SelectInstallModel instead
+// of ranking again — a second policy is how the fit rules came to
+// disagree in the first place (waired-ai/waired#942).
+func TestRecommendedFamily_IsSelectInstallModelsAnswer(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	in := PickInput{
+		Catalog:  manifests,
+		Hardware: hardware.Profile{RAMTotalGB: 64, GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24564}}},
+		Engine:   catalog.RuntimeOllama,
+	}
+	above, ok, err := SelectInstallModel(in, InstallQualityFloorTier)
+	if err != nil || !ok || len(above) == 0 {
+		t.Fatalf("fixture host must have an install pick: ok=%v err=%v", ok, err)
+	}
+	if got := RecommendedFamily(in); got != above[0].Manifest.ModelID {
+		t.Errorf("RecommendedFamily() = %q, want SelectInstallModel's %q", got, above[0].Manifest.ModelID)
+	}
+}
+
+// A record of today's behaviour, not a contract: with no engine there is
+// nothing to rank against, and the caller gets no mark rather than an
+// arbitrary one.
+func TestRecommendedFamily_EmptyWithoutAnEngine(t *testing.T) {
+	if got := RecommendedFamily(PickInput{Hardware: hardware.Profile{RAMTotalGB: 64}}); got != "" {
+		t.Errorf("RecommendedFamily(no engine) = %q, want empty", got)
 	}
 }

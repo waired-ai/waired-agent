@@ -25,8 +25,24 @@ import (
 // pick without --yes); the caller surfaces it verbatim.
 func confirmModelFitsForPull(mgmt, model string, assumeYes bool, out io.Writer, in io.Reader) (bool, error) {
 	fam, ok := lookupCatalogFamily(mgmt, model)
-	if !ok || fam.Fits {
-		return true, nil // unknown fit, or it fits → no gate
+	if !ok {
+		return true, nil // unknown fit → no gate
+	}
+	if fam.Fits {
+		// It runs. It may still be the wrong choice for this machine
+		// (waired-ai/waired#988), and until waired-agent#321 nothing said
+		// so on any surface. Said, never gated: capacity is what earns a
+		// confirmation prompt, and turning a demotion into one would fail
+		// non-interactive pulls that work today.
+		if fam.Fit != nil && fam.Fit.NotRecommended {
+			name := fam.DisplayName
+			if name == "" {
+				name = model
+			}
+			writePromptf(out, "\n%s %s runs on this computer, but Waired would not choose it here%s.\n",
+				emo("ℹ", "i"), name, notRecommendedBecause(fam.Fit.NotRecommendedReason))
+		}
+		return true, nil
 	}
 
 	name := fam.DisplayName
@@ -48,6 +64,20 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes bool, out io.Writer, 
 		return false, fmt.Errorf("%s exceeds this host's recommended spec (%s); re-run with --yes to pull it anyway", model, deficit)
 	}
 	return ynPrompt(out, bufio.NewScanner(in), "Pull it anyway?", false), nil
+}
+
+// notRecommendedBecause turns the demotion code into the clause that
+// completes "Waired would not choose it here…". Unknown codes yield no
+// clause rather than a guess — the sentence is already true without one,
+// and the vocabulary is allowed to grow.
+func notRecommendedBecause(reason string) string {
+	switch reason {
+	case "weights_spill":
+		return ": it does not fit entirely on the graphics card, and every reply pays for that"
+	case "too_slow":
+		return ": replies would be slow"
+	}
+	return ""
 }
 
 // lookupCatalogFamily fetches /inference/catalog and returns the family

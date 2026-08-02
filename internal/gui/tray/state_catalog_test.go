@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 func connectedSnapshotWithCatalog(c *management.ModelCatalogResponse) Snapshot {
@@ -226,10 +227,14 @@ func TestUpdate_CatalogRecommendedSpec_OllamaShowsRAM(t *testing.T) {
 	}
 	got := Update(connectedSnapshotWithCatalog(c))
 	row := got.CatalogEntries[0]
-	if row.Label != "Qwen3 8B Instruct · 8 GB" {
+	// The unit is spelled out and the tier joins the label
+	// (waired-agent#321): the review that asked for one presentation across
+	// the pickers asked for a quality value on each of them, and a bare
+	// "· 8 GB" left the operator to infer which memory it meant.
+	if row.Label != "Qwen3 8B Instruct · 8 GB RAM · tier 50" {
 		t.Errorf("ollama spec label: %q", row.Label)
 	}
-	for _, want := range []string{"min 8 GB RAM", "quality tier 50", "7.6B params"} {
+	for _, want := range []string{"needs 8 GB RAM", "quality tier 50", "7.6B params"} {
 		if !strings.Contains(row.Tooltip, want) {
 			t.Errorf("tooltip %q missing %q", row.Tooltip, want)
 		}
@@ -251,10 +256,10 @@ func TestUpdate_CatalogRecommendedSpec_VLLMShowsVRAM(t *testing.T) {
 	got := Update(connectedSnapshotWithCatalog(c))
 	row := got.CatalogEntries[0]
 	// 8000 MB rounds to 8 GB; active row keeps its bullet plus the suffix.
-	if row.Label != "● Qwen3 8B Instruct · 8 GB" {
+	if row.Label != "● Qwen3 8B Instruct · 8 GB VRAM · tier 60" {
 		t.Errorf("vllm active spec label: %q", row.Label)
 	}
-	if !strings.Contains(row.Tooltip, "min 8 GB VRAM") {
+	if !strings.Contains(row.Tooltip, "needs 8 GB VRAM") {
 		t.Errorf("tooltip should report VRAM on vllm: %q", row.Tooltip)
 	}
 	if strings.Contains(row.Tooltip, "RAM") && !strings.Contains(row.Tooltip, "VRAM") {
@@ -279,10 +284,10 @@ func TestUpdate_CatalogRecommendedSpec_VLLMRoundsUp(t *testing.T) {
 	}
 	got := Update(connectedSnapshotWithCatalog(c))
 	row := got.CatalogEntries[0]
-	if row.Label != "Qwen3.6 27B · 24 GB" {
+	if row.Label != "Qwen3.6 27B · 24 GB VRAM · tier 72" {
 		t.Errorf("24000 MB must round up to 24 GB, got label %q", row.Label)
 	}
-	if !strings.Contains(row.Tooltip, "min 24 GB VRAM") {
+	if !strings.Contains(row.Tooltip, "needs 24 GB VRAM") {
 		t.Errorf("tooltip must round up too: %q", row.Tooltip)
 	}
 }
@@ -336,5 +341,116 @@ func TestUpdate_CatalogDisplayNameFallsBackToModelID(t *testing.T) {
 	got := Update(connectedSnapshotWithCatalog(c))
 	if got.CatalogEntries[0].Label != "qwen3-30b-a3b-instruct" {
 		t.Errorf("fallback label: %q", got.CatalogEntries[0].Label)
+	}
+}
+
+// Product contract (waired-agent#321): the figure a picker prints is the
+// RESIDENT requirement — weights + the reserved KV budget + engine
+// overhead, which is what the fit rule compares — not min_ram_gb, a
+// threshold authored for a host that loads into system RAM. The two
+// differ here on purpose so a regression to the old field is visible.
+func TestUpdate_CatalogPrefersTheResidentRequirement(t *testing.T) {
+	c := &management.ModelCatalogResponse{
+		Engine: "ollama",
+		Families: []management.CatalogFamily{
+			{
+				ModelID: "qwen3.6-27b", DisplayName: "Qwen3.6 27B", Fits: true, Downloaded: true,
+				Recommended: &management.CatalogSpec{MinRAMGB: 32, QualityTier: 62},
+				Fit:         &hostfit.Presentation{Runnable: true, RequiredResidentMB: 18 * 1024, QualityTier: 62},
+			},
+		},
+	}
+	row := Update(connectedSnapshotWithCatalog(c)).CatalogEntries[0]
+	if row.Label != "Qwen3.6 27B · 18 GB VRAM · tier 62" {
+		t.Errorf("label should carry the resident figure in graphics memory: %q", row.Label)
+	}
+}
+
+// Product contract: exactly one row is marked as this computer's own
+// pick, and the mark is short — the full sentence lives in the tooltip
+// because a menu the operator scans has room for a mark, not a paragraph.
+func TestUpdate_CatalogRecommendedPickIsMarked(t *testing.T) {
+	c := &management.ModelCatalogResponse{
+		Engine: "ollama",
+		Families: []management.CatalogFamily{
+			{
+				ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B", Fits: true, Downloaded: true,
+				RecommendedPick: true,
+				Fit:             &hostfit.Presentation{Runnable: true, RequiredResidentMB: 9 * 1024, QualityTier: 55},
+			},
+			{
+				ModelID: "qwen3.5-2b", DisplayName: "Qwen3.5 2B", Fits: true, Downloaded: true,
+				Fit: &hostfit.Presentation{Runnable: true, RequiredResidentMB: 3 * 1024, QualityTier: 27},
+			},
+		},
+	}
+	rows := Update(connectedSnapshotWithCatalog(c)).CatalogEntries
+	if rows[0].Label != "Qwen3.5 9B · 9 GB VRAM · tier 55 — recommended" {
+		t.Errorf("recommended label: %q", rows[0].Label)
+	}
+	if !strings.Contains(rows[0].Tooltip, "Chosen from this computer’s memory and graphics card.") {
+		t.Errorf("recommended tooltip: %q", rows[0].Tooltip)
+	}
+	if strings.Contains(rows[1].Label, "recommended") {
+		t.Errorf("only the host's own pick may be marked, got %q", rows[1].Label)
+	}
+}
+
+// Product contract, and the one waired-agent#229 exists for: a model that
+// RUNS but is not the right choice here stays SELECTABLE. It is annotated,
+// never hidden and never disabled — hiding it is the bug #229 removed, and
+// until now nothing on this surface said anything at all (waired#988
+// shipped the rule and the tray drew such a row as ordinary).
+func TestUpdate_CatalogNotRecommendedIsOfferedNotHidden(t *testing.T) {
+	c := &management.ModelCatalogResponse{
+		Engine: "ollama",
+		Families: []management.CatalogFamily{
+			{
+				ModelID: "qwen3.6-35b-a3b", DisplayName: "Qwen3.6 35B A3B", Fits: true, Downloaded: true,
+				Fit: &hostfit.Presentation{
+					Runnable: true, RequiredResidentMB: 24 * 1024, QualityTier: 65,
+					NotRecommended: true, NotRecommendedReason: hostfit.ReasonWeightsSpill,
+				},
+			},
+		},
+	}
+	row := Update(connectedSnapshotWithCatalog(c)).CatalogEntries[0]
+	if row.Disabled {
+		t.Error("a runnable model must stay selectable however strongly it is discouraged")
+	}
+	if row.Label != "Qwen3.6 35B A3B · 24 GB VRAM · tier 65 — not recommended here" {
+		t.Errorf("not-recommended label: %q", row.Label)
+	}
+	if !strings.Contains(row.Tooltip, "not entirely on the graphics card") {
+		t.Errorf("the tooltip has to say WHY, not just that: %q", row.Tooltip)
+	}
+}
+
+// Product contract: the blocked reason is written for a person who has
+// never heard of an engine or a variant. The wire's own sentence for this
+// case is "no variant supports vllm" — two words of ours and an engine
+// name — which is why this row is the one the machine code overrides.
+func TestUpdate_CatalogNoVariantForEngineSaysSoInPlainWords(t *testing.T) {
+	c := &management.ModelCatalogResponse{
+		Engine: "ollama",
+		Families: []management.CatalogFamily{
+			{
+				ModelID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Fits: false,
+				DeficitLabel: "no variant supports ollama",
+				Fit:          &hostfit.Presentation{Reason: hostfit.ReasonNoVariantForEngine, QualityTier: 80},
+			},
+		},
+	}
+	row := Update(connectedSnapshotWithCatalog(c)).CatalogEntries[0]
+	if !row.Disabled {
+		t.Error("a model this engine cannot serve must be greyed")
+	}
+	if row.Label != "DeepSeek V4 Flash — not available on this computer" {
+		t.Errorf("blocked label: %q", row.Label)
+	}
+	for _, leak := range []string{"variant", "ollama", "vllm"} {
+		if strings.Contains(strings.ToLower(row.Label), leak) {
+			t.Errorf("label leaks internal vocabulary %q: %q", leak, row.Label)
+		}
 	}
 }

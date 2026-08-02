@@ -41,10 +41,22 @@ Windows and Linux → **Inference**. The active model is listed there.
 
 ```sh
 waired models ls              # what is downloaded, and what is active
-waired models ls --detail     # every model in the catalog, with what fits this computer
+waired models ls --detail     # every model, what it needs, and what fits this computer
 ```
 
 </details>
+
+## What the list tells you
+
+Every model in the list shows the memory it needs on the graphics card and its
+quality number — a bigger number means better answers.
+
+- The model Waired would choose for this computer is marked **recommended**.
+- A model that runs here but is not a good match for this computer is marked
+  too, with the reason. It stays selectable: it is a real choice with a real
+  cost, not a mistake.
+- A model this computer cannot run is shown greyed out with what it would
+  need, rather than left out of the list. Nothing is hidden from you.
 
 ## Switch models
 

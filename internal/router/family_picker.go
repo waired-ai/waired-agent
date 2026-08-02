@@ -7,6 +7,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/version"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // FamilyFit is the per-manifest verdict the catalog UI consumes:
@@ -31,7 +32,25 @@ type FamilyFit struct {
 	// this host, suitable for tray display
 	// (e.g. "needs 24 GB VRAM (have 8 GB)" or "no variant supports vllm").
 	// Empty when Fits=true.
+	//
+	// Superseded by Fit for everything Fit can express, and kept for the
+	// one thing it cannot: the engine-VERSION floor. hostfit deliberately
+	// does not model that (it is serving-time policy the control plane has
+	// no inputs for), so there is no code for it and this sentence stays
+	// the only answer. A renderer therefore reads Fit.Reason first and
+	// falls back here — see the tray's formatCatalogEntry.
 	DeficitLabel string
+
+	// Fit is the shared projection of this verdict
+	// (proto/hostfit.Presentation): the same shape the control plane's
+	// onboarding catalog emits, so the tray, the CLI and the setup wizard
+	// render one contract instead of three similar ones
+	// (waired-agent#321).
+	//
+	// Fit.Runnable is the same answer as Fits. Both are kept because they
+	// are read by different generations of consumer, and neither may
+	// disagree with the other — asserted in the tests.
+	Fit hostfit.Presentation
 }
 
 // FamilyBestFit picks the best variant from one manifest given the
@@ -53,7 +72,13 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		}
 	}
 	if len(supported) == 0 {
-		return FamilyFit{DeficitLabel: fmt.Sprintf("no variant supports %s", engine)}
+		// The tier still ranks the MODEL, not its fit, so it rides along:
+		// the pickers sort by it, and this row is greyed at the bottom of a
+		// list rather than dropped (waired-agent#321 F36).
+		return FamilyFit{
+			DeficitLabel: fmt.Sprintf("no variant supports %s", engine),
+			Fit:          hostfit.NoVariantForEngine(bestQualityTier(m.Variants)),
+		}
 	}
 
 	loadable := make([]catalog.Variant, 0, len(supported))
@@ -68,6 +93,16 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		if have == "" {
 			have = "unknown version"
 		}
+		// Fit is left at its zero value — not runnable, and no code. The
+		// wall here is the engine's VERSION, which hostfit deliberately
+		// does not model (it is serving-time policy the control plane has
+		// no inputs for), so there is nothing true for Reason to carry.
+		// Projecting the variant and then forcing Runnable=false would be
+		// worse in two ways: it would print size figures beside a row the
+		// memory has nothing to do with, and it would make this package the
+		// second writer of a shape that is deliberately built in exactly
+		// one place. DeficitLabel is the answer for this branch, and the
+		// renderers fall back to it.
 		return FamilyFit{
 			Variant:      minResourceVariant(supported, engine),
 			DeficitLabel: fmt.Sprintf("needs %s ≥ %s (running %s)", engine, lowestEngineFloor(supported), have),
@@ -82,13 +117,78 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 	}
 	if len(fits) > 0 {
 		sortVariantsByTier(fits, engine)
-		return FamilyFit{Variant: fits[0], Fits: true}
+		return FamilyFit{
+			Variant: fits[0],
+			Fits:    true,
+			Fit:     familyPresentation(fits[0], engine, hw),
+		}
 	}
 
 	// No fit: report the gap against the least-demanding variant the
 	// engine could run.
 	smallest := minResourceVariant(loadable, engine)
-	return FamilyFit{Variant: smallest, DeficitLabel: deficitLabelFor(smallest, engine, hw)}
+	return FamilyFit{
+		Variant:      smallest,
+		DeficitLabel: deficitLabelFor(smallest, engine, hw),
+		Fit:          familyPresentation(smallest, engine, hw),
+	}
+}
+
+// RecommendedFamily is the model this host would choose for ITSELF on
+// this engine — the model_id a catalog UI marks "recommended".
+//
+// It is SelectInstallModel, not a second policy: the badge a person sees
+// and the model the installer would commit to have to be the same
+// answer, and the way to guarantee that is to ask the same function.
+// That also inherits its escape ladder, which matters here — the
+// recommendation gate is not monotone in hardware, so a small graphics
+// card can leave nothing above the quality floor on a host that installs
+// fine without one (see PickInput.NoRecommendGate).
+//
+// Under-spec hosts still get a mark. When nothing clears the floor even
+// after the ladder, the best-fitting model is named anyway, mirroring
+// the control plane's below_quality_floor basis: a picker with no mark
+// at all tells the operator nothing, and "the best this machine can do"
+// is still true. Empty only when nothing fits at all, or the input is
+// misconfigured — there is genuinely nothing to point at then.
+func RecommendedFamily(in PickInput) string {
+	if above, ok, err := SelectInstallModel(in, InstallQualityFloorTier); err == nil && ok && len(above) > 0 {
+		return above[0].Manifest.ModelID
+	}
+	ranked, err := RankModels(in)
+	if err != nil || len(ranked) == 0 {
+		return ""
+	}
+	return ranked[0].Manifest.ModelID
+}
+
+// familyPresentation projects one variant onto the shared shape, choosing
+// the engine-aware budget the same way hostFits does: the
+// tensor-parallel aggregate for vLLM (#678), the pool that
+// Host.OllamaVRAMBudgetMB computes internally for ollama.
+//
+// It exists so the budget argument is chosen in exactly one place. The
+// vLLM figure is the agent's own aggregate and is NOT what the control
+// plane passes — it holds only the broadcast summary — which is
+// precisely why hostfit.Project takes it rather than deriving it.
+func familyPresentation(v catalog.Variant, engine string, hw hardware.Profile) hostfit.Presentation {
+	return hostfit.Project(v, engine, hw.HostFit(), VLLMVRAMBudgetMB(hw))
+}
+
+// bestQualityTier is the ranking of the strongest variant in a set.
+//
+// Used where there is no variant to pick BY — a family this engine
+// cannot serve at all — so the row keeps the place in the list it would
+// hold on a machine that could run it, rather than sorting to the very
+// bottom for owning no tier.
+func bestQualityTier(vs []catalog.Variant) int {
+	best := 0
+	for _, v := range vs {
+		if v.QualityTier > best {
+			best = v.QualityTier
+		}
+	}
+	return best
 }
 
 // lowestEngineFloor returns the smallest MinEngineVersion among vs —

@@ -14,6 +14,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // Health is the daemon-reachability axis — separate from the tunnel
@@ -1424,10 +1425,11 @@ func formatCatalogEntry(f management.CatalogFamily, engine string) CatalogEntryV
 		name = f.ModelID
 	}
 	e := CatalogEntryView{ModelID: f.ModelID}
-	// Compact recommended-memory hint appended to fitting/downloadable
-	// rows. Over-capacity rows already spell out the requirement in their
-	// deficit label, so the suffix would be redundant there.
-	suffix := catalogSpecSuffix(engine, f.Recommended)
+	// Compact size + tier hint appended to fitting/downloadable rows,
+	// then the pick note. Over-capacity rows already spell out the
+	// requirement in their blocked text, so the suffix would be redundant
+	// there.
+	suffix := catalogSpecSuffix(engine, f) + catalogPickNote(f)
 	switch {
 	case f.Active:
 		e.Label = "● " + name + suffix
@@ -1440,19 +1442,55 @@ func formatCatalogEntry(f management.CatalogFamily, engine string) CatalogEntryV
 	case f.Downloading:
 		e.Label = name + " (downloading…)" + suffix
 	case !f.Fits:
-		if f.DeficitLabel != "" {
-			e.Label = name + " — " + f.DeficitLabel
-		} else {
-			e.Label = name + " — incompatible"
-		}
+		e.Label = name + " — " + catalogBlockedText(f)
 		e.Disabled = true
 	case !f.Downloaded:
 		e.Label = name + " (downloads on select)" + suffix
 	default:
 		e.Label = name + suffix
 	}
-	e.Tooltip = catalogSpecTooltip(engine, f.Recommended)
+	e.Tooltip = catalogSpecTooltip(engine, f)
 	return e
+}
+
+// catalogPickNote marks the row this computer would choose for itself,
+// and the rows it would not — the half of the catalog that had no way to
+// reach a user at all (waired-ai/waired#988 shipped the rule; nothing
+// rendered it, so `waired models ls` printed "fits" for a model whose
+// weights spill and the tray drew it as an ordinary row).
+//
+// Deliberately short. The full sentence lives in the tooltip: a menu the
+// operator scans has room for a mark, not for a paragraph, and the two
+// notes have to stay distinguishable at a glance.
+func catalogPickNote(f management.CatalogFamily) string {
+	switch {
+	case f.RecommendedPick:
+		return " — recommended"
+	case f.Fit != nil && f.Fit.NotRecommended:
+		return " — not recommended here"
+	}
+	return ""
+}
+
+// catalogBlockedText is the reason a row is greyed.
+//
+// Resolved from the machine code first and from DeficitLabel second. The
+// fallback is not a transition state: DeficitLabel is composed by the
+// same binary and already reads in the operator's terms ("needs 24 GB
+// VRAM (have 8 GB)"), so re-deriving those sentences from codes here
+// would be two implementations of one string inside one process. The
+// codes earn their place where they say something the label cannot —
+// no_variant_for_engine, whose label is "no variant supports vllm": two
+// words of ours and an engine name, for a person who has never heard of
+// either.
+func catalogBlockedText(f management.CatalogFamily) string {
+	if f.Fit != nil && f.Fit.Reason == hostfit.ReasonNoVariantForEngine {
+		return "not available on this computer"
+	}
+	if f.DeficitLabel != "" {
+		return f.DeficitLabel
+	}
+	return "incompatible"
 }
 
 // engineVLLM mirrors catalog.RuntimeVLLM — the value the management
@@ -1460,42 +1498,115 @@ func formatCatalogEntry(f management.CatalogFamily, engine string) CatalogEntryV
 // local literal so the tray view-model layer needs no catalog import.
 const engineVLLM = "vllm"
 
-// catalogSpecSuffix returns a compact "· N GB" recommended-memory hint
-// for menu labels — RAM on ollama, VRAM on vllm (the host serves one
-// engine at a time, so the unit is implied). Empty when no recommended
-// spec is available.
-func catalogSpecSuffix(engine string, rec *management.CatalogSpec) string {
-	if gb := recommendedSpecGB(engine, rec); gb > 0 {
-		return fmt.Sprintf(" · %d GB", gb)
+// catalogSpecSuffix returns the compact "· N GB VRAM · tier T" hint for
+// menu labels.
+//
+// The size is the RESIDENT requirement where the shared projection has
+// one — weights, the reserved KV budget and the engine's own overhead,
+// which is what the fit rule actually compares. It used to be
+// min_ram_gb: a threshold authored for a host that loads into system
+// RAM, printed beside a graphics card that has to hold the thing
+// (waired-agent#321). The old figure is still the fallback, and it is
+// the RIGHT answer on a computer with no graphics memory at all, where
+// the resident figure is not merely unknown but meaningless.
+//
+// The tier rides along because the review that asked for this asked for
+// a quality value on every picker, and it is the raw catalog number
+// rather than a coarse scale — a re-bucketing would have to be kept in
+// step with the catalog forever.
+func catalogSpecSuffix(engine string, f management.CatalogFamily) string {
+	gb, unit := catalogSizeGB(engine, f)
+	var out string
+	if gb > 0 {
+		out = fmt.Sprintf(" · %d GB %s", gb, unit)
 	}
-	return ""
+	if tier := catalogTier(f); tier > 0 {
+		out += fmt.Sprintf(" · tier %d", tier)
+	}
+	return out
 }
 
-// catalogSpecTooltip is the fuller per-row hint: min RAM/VRAM, quality
-// tier, and parameter counts. Best-effort — some Linux indicators drop
-// menu-item tooltips. Empty when no spec is available.
-func catalogSpecTooltip(engine string, rec *management.CatalogSpec) string {
-	if rec == nil {
-		return ""
+// catalogSizeGB is the memory figure to print and the noun for it.
+//
+// Resident-first, min-RAM/VRAM as the fallback. The unit is not
+// cosmetic: calling a system-RAM threshold "VRAM" on a machine with no
+// card would send the operator shopping for hardware the number has
+// nothing to do with.
+func catalogSizeGB(engine string, f management.CatalogFamily) (int, string) {
+	if f.Fit != nil && f.Fit.RequiredResidentMB > 0 {
+		return (f.Fit.RequiredResidentMB + 1023) / 1024, "VRAM"
 	}
+	gb := recommendedSpecGB(engine, f.Recommended)
+	if engine == engineVLLM {
+		return gb, "VRAM"
+	}
+	return gb, "RAM"
+}
+
+// catalogTier prefers the projection's tier — it describes the variant
+// the verdict is about, including on a row with no fitting variant at
+// all — and falls back to the recommended-spec projection.
+func catalogTier(f management.CatalogFamily) int {
+	if f.Fit != nil && f.Fit.QualityTier > 0 {
+		return f.Fit.QualityTier
+	}
+	if f.Recommended != nil {
+		return f.Recommended.QualityTier
+	}
+	return 0
+}
+
+// catalogSpecTooltip is the fuller per-row hint: the memory figure,
+// quality tier, parameter counts, and the sentence behind whichever pick
+// note the label carries. Best-effort — some Linux indicators drop menu
+// item tooltips. Empty when there is nothing to say.
+func catalogSpecTooltip(engine string, f management.CatalogFamily) string {
 	var parts []string
-	if gb := recommendedSpecGB(engine, rec); gb > 0 {
-		unit := "RAM"
-		if engine == engineVLLM {
-			unit = "VRAM"
+	if gb, unit := catalogSizeGB(engine, f); gb > 0 {
+		parts = append(parts, fmt.Sprintf("needs %d GB %s", gb, unit))
+	}
+	if tier := catalogTier(f); tier > 0 {
+		parts = append(parts, fmt.Sprintf("quality tier %d", tier))
+	}
+	if rec := f.Recommended; rec != nil {
+		if p := formatTrayParams(rec.ParamCount, rec.ActiveParams); p != "" {
+			parts = append(parts, p+" params")
 		}
-		parts = append(parts, fmt.Sprintf("min %d GB %s", gb, unit))
-	}
-	if rec.QualityTier > 0 {
-		parts = append(parts, fmt.Sprintf("quality tier %d", rec.QualityTier))
-	}
-	if p := formatTrayParams(rec.ParamCount, rec.ActiveParams); p != "" {
-		parts = append(parts, p+" params")
 	}
 	if len(parts) == 0 {
-		return ""
+		return catalogPickTooltip(f)
 	}
-	return "Recommended: " + strings.Join(parts, " · ")
+	out := strings.Join(parts, " · ")
+	if note := catalogPickTooltip(f); note != "" {
+		out += ". " + note
+	}
+	return out
+}
+
+// catalogPickTooltip is the full sentence the label's short mark stands
+// in for. The wording of the demotion is the same one the public docs
+// use for the same rule, so a person who read the docs meets the same
+// explanation here (docs-site reference/model-catalog).
+func catalogPickTooltip(f management.CatalogFamily) string {
+	switch {
+	case f.RecommendedPick:
+		// Word for word the sentence the setup wizard puts under its own
+		// Recommended badge (web/admin EnginePicker). One rule, one
+		// explanation, whichever surface the operator meets it on.
+		return "Chosen from this computer’s memory and graphics card."
+	case f.Fit != nil && f.Fit.NotRecommended:
+		switch f.Fit.NotRecommendedReason {
+		case hostfit.ReasonWeightsSpill:
+			return "It runs, but not entirely on the graphics card — every reply pays for that. " +
+				"Waired would not choose this one for this computer."
+		case hostfit.ReasonTooSlow:
+			return "It runs, but this computer would be slow with it. " +
+				"Waired would not choose this one for this computer."
+		default:
+			return "Waired would not choose this one for this computer."
+		}
+	}
+	return ""
 }
 
 // recommendedSpecGB returns the engine-appropriate recommended memory in
