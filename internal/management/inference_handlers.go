@@ -76,6 +76,10 @@ type InferenceProvider interface {
 //	                   up. Previously any of these read as "ready" whenever
 //	                   the active model happened to be on disk
 //	                   (waired-agent#29).
+//
+// This axis says WHAT is wrong, never whether it will fix itself: a crash
+// loop alternates between "starting" and "engine_failed" for as long as the
+// budget lasts. Read runtimes[...].failure_latched for that (#310).
 type InferenceStatus struct {
 	SubsystemState  string                   `json:"subsystem_state"`
 	Runtimes        map[string]RuntimeStatus `json:"runtimes"`
@@ -365,8 +369,23 @@ type RuntimeStatus struct {
 	TuningWarning string `json:"tuning_warning,omitempty"`
 	// LastError carries the engine's failure detail when State is
 	// "failed" (e.g. the port-conflict refusal naming the foreign
-	// engine's version and the remediation).
+	// engine's version and the remediation). Also set, whatever State
+	// says, once FailureLatched is true: the latch outlives the Health
+	// snapshot a Stop overwrites, and a give-up with no reason on it is
+	// not worth publishing (#310).
 	LastError string `json:"last_error,omitempty"`
+	// FailureLatched reports that waired has STOPPED restarting this
+	// engine automatically — the recovery budget is spent, and nothing
+	// will change until an explicit `waired inference engine start` (or a
+	// model switch) clears it.
+	//
+	// Distinct from State "failed", which is a reading of this instant: an
+	// engine in a crash-restart cycle is failed on some ticks and starting
+	// on others, and only this field separates "down, recovering" from
+	// "down, and waiting will not help" (#310). False on agents that
+	// predate it, which read as the recovering case — the safe default,
+	// since it is the one where waiting is still the right advice.
+	FailureLatched bool `json:"failure_latched,omitempty"`
 }
 
 type ActiveEndpoint struct {

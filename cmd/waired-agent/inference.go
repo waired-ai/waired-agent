@@ -534,6 +534,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// provider method and the provider is built from the adapter.
 	if ollama != nil {
 		ollama.SetOnUnhealthy(provider.onEngineUnhealthy)
+		ollama.SetOnStartFailed(provider.onEngineStartFailed)
 	}
 
 	// Engine switch (#557): an explicit preferred_engine that differs from
@@ -1106,7 +1107,10 @@ type agentInferenceProvider struct {
 	engineRecoverPending atomic.Bool
 	// crashMu guards the crash bookkeeping below.
 	crashMu sync.Mutex
-	// crashStrikes counts engine deaths inside engineRecoveryStableFor.
+	// crashStrikes counts engine deaths inside engineRecoveryStableFor. A
+	// start that never came up counts too (#310): both mean "the engine is
+	// not staying up", and one budget is what lets a host that alternates
+	// between the two still reach a verdict.
 	crashStrikes int
 	// lastEngineCrash is when the last death was observed; a run that stays
 	// up for engineRecoveryStableFor resets the strike count, so one crash a
@@ -1243,26 +1247,11 @@ func engineRecoveryBackoff(attempt int) time.Duration {
 // stayed latched Ready, every request 500'd forever, and `waired status` kept
 // saying the engine was fine.
 func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
-	if p.ollama == nil || p.ollama.Borrowed() ||
-		p.ollama.Mode() == infruntime.EngineModeAdopted || p.ollama.IsParked() {
-		// Nothing waired owns to restart. The StateFailed the adapter just
-		// recorded IS the whole answer: an adopted orphan has no handle to
-		// signal, and a reused engine belongs to the operator.
+	if !p.engineIsWairedsToGiveUpOn() {
 		return
 	}
 
-	nowFn := p.now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-	p.crashMu.Lock()
-	if !p.lastEngineCrash.IsZero() && nowFn().Sub(p.lastEngineCrash) > engineRecoveryStableFor {
-		p.crashStrikes = 0
-	}
-	p.crashStrikes++
-	n := p.crashStrikes
-	p.lastEngineCrash = nowFn()
-	p.crashMu.Unlock()
+	n := p.recordEngineStrike()
 
 	if n > engineRecoveryMaxAttempts {
 		p.logger.Error("ollama engine crashed repeatedly; automatic restart disabled",
@@ -1292,6 +1281,79 @@ func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
 		p.engineRecoverPending.Store(true)
 		p.requestEngineReconcile(false)
 	}()
+}
+
+// engineIsWairedsToGiveUpOn reports whether this host's engine is one waired
+// owns — and may therefore restart, and eventually stop restarting.
+//
+// Nothing waired owns to restart. The StateFailed the adapter recorded IS the
+// whole answer: an adopted orphan has no handle to signal, and a reused engine
+// belongs to the operator. A parked one was stopped on purpose.
+func (p *agentInferenceProvider) engineIsWairedsToGiveUpOn() bool {
+	return p.ollama != nil && !p.ollama.Borrowed() &&
+		p.ollama.Mode() != infruntime.EngineModeAdopted && !p.ollama.IsParked()
+}
+
+// recordEngineStrike charges one failure to the recovery budget and returns
+// the running count.
+//
+// ONE budget for both failure shapes (#310). A host whose engine dies during
+// startup, gets restarted, dies again mid-serve, and so on would otherwise
+// keep two counters that each stay under the limit forever — while the engine
+// is plainly not staying up.
+func (p *agentInferenceProvider) recordEngineStrike() int {
+	nowFn := p.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	p.crashMu.Lock()
+	defer p.crashMu.Unlock()
+	if !p.lastEngineCrash.IsZero() && nowFn().Sub(p.lastEngineCrash) > engineRecoveryStableFor {
+		p.crashStrikes = 0
+	}
+	p.crashStrikes++
+	p.lastEngineCrash = nowFn()
+	return p.crashStrikes
+}
+
+// onEngineStartFailed is the OllamaConfig.OnStartFailed handler: a start
+// attempt ended without the engine serving.
+//
+// This is the hole #310 fell through. The engine that will not launch — a
+// macOS bundle whose signature no longer verifies, so every exec of it is
+// killed — never reaches StateReady, so markUnhealthy returns early, no
+// strike is charged, FailureLatched() stays false, and the wizard's engine
+// row keeps reporting Done over a device with no local AI. Meanwhile every
+// gateway request tries to spawn it again.
+//
+// Deliberately does NOT schedule a restart, unlike its sibling above. The
+// caller has already retried on its own budget (startEngineAndBootstrap makes
+// engineEnsureAttempts tries with backoff, and the gateway re-enters on the
+// next request), so throwing another restart at it from here is how the macOS
+// respawn storm gets built — the thing engine_bootstrap.go refuses to do by
+// clearing the latch. All this owes the system is a verdict.
+func (p *agentInferenceProvider) onEngineStartFailed(detail string) {
+	if !p.engineIsWairedsToGiveUpOn() {
+		return
+	}
+
+	n := p.recordEngineStrike()
+	if n <= engineRecoveryMaxAttempts {
+		if p.logger != nil {
+			p.logger.Warn("ollama engine did not start; leaving the retry to the caller",
+				"attempt", n, "max", engineRecoveryMaxAttempts)
+		}
+		return
+	}
+
+	if p.logger != nil {
+		p.logger.Error("ollama engine repeatedly failed to start; automatic restart disabled",
+			"attempts", n, "window", engineRecoveryStableFor)
+	}
+	p.ollama.LatchFailed(fmt.Sprintf(
+		"engine failed to start %d times within %s; automatic restart disabled — see the engine log, "+
+			"then `waired inference engine start` (or switch model) to retry\n%s",
+		n, engineRecoveryStableFor, detail))
 }
 
 // reconcileEngineServe recomputes the ollama serve env for the currently
@@ -1568,6 +1630,18 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		// so any of those fell straight through to "ready" whenever the
 		// active model happened to be on disk (waired-agent#29).
 		subState = "engine_failed"
+	case p.ollama != nil && p.ollama.FailureLatched():
+		// Latched, but Health() no longer says so. LatchFailed writes
+		// StateFailed, and then Stop() overwrites a.state with no giveUp
+		// guard — a model switch, a reconcile bounce — so an engine waired
+		// has permanently stopped restarting could fall through to
+		// "ready" the moment its active model happened to be on disk
+		// (#310). The latch outlives a.state, so it decides here too.
+		//
+		// After the StateFailed arm rather than folded into it: that arm
+		// is the live reading and the more specific one, and it carries
+		// the same answer whenever both apply.
+		subState = "engine_failed"
 	case state.Active == nil:
 		subState = "awaiting_model"
 	default:
@@ -1810,6 +1884,17 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 			entry.Version = hwProfile.Engines.Ollama.Version
 		}
 		if p.ollama != nil {
+			// #310: say whether waired has STOPPED restarting this engine.
+			// Without it a client watching subsystem_state cannot tell
+			// "down, recovering" from "down, and nothing will change until
+			// you act" — `waired init` had to guess from how long the
+			// state had held. The reason comes with it, because Stop()
+			// clobbers the copy in Health() while the latch stands.
+			latched, reason := p.ollama.FailureLatchedReason()
+			entry.FailureLatched = latched
+			if latched && entry.LastError == "" {
+				entry.LastError = reason
+			}
 			// #290: surface the resolved GPU backend so a silent CPU
 			// fallback (GPU present but not engaged) is visible.
 			entry.Backend = string(p.ollama.ResolvedBackend())

@@ -1576,10 +1576,16 @@ func (p *agentInferenceProvider) setupEngineState(_ context.Context, engine stri
 // and the engine's own last_error — but the setup projection had no way to ask
 // for it, so the wizard's engine row said OK over a dead engine forever (#330).
 //
-// FailureLatched is set by onEngineUnhealthy only after the recovery budget is
-// spent (3 attempts inside a 5-minute stability window), which is exactly the
-// "this is about the install, not about this moment" signal the step arm needs.
-func (p *agentInferenceProvider) setupEngineHealth(ctx context.Context, engine string) (bool, string) {
+// The latch is set only after the recovery budget is spent (3 attempts inside
+// a 5-minute stability window) — by onEngineUnhealthy for an engine that died
+// while serving, and by onEngineStartFailed for one that never came up at all,
+// which is the macOS case #330's arm was written for and could not reach
+// (#310).
+//
+// The reason comes from FailureLatchedReason, not Health(): those two have
+// different lifetimes, and reading the wrong one is how this returned
+// (true, "") — a red row with nothing on it — after any Stop in between.
+func (p *agentInferenceProvider) setupEngineHealth(_ context.Context, engine string) (bool, string) {
 	// Only ollama runs under the adapter that latches; vLLM has no equivalent
 	// give-up state yet, and claiming one would be a lie.
 	if p.ollama == nil || engine != catalog.RuntimeOllama {
@@ -1590,10 +1596,11 @@ func (p *agentInferenceProvider) setupEngineHealth(ctx context.Context, engine s
 	if p.servingEngine() != engine {
 		return false, ""
 	}
-	if !p.ollama.FailureLatched() {
+	latched, reason := p.ollama.FailureLatchedReason()
+	if !latched {
 		return false, ""
 	}
-	return true, p.ollama.Health(ctx).LastErr
+	return true, reason
 }
 
 // setupStateDir is the agent's state root. The executor installs the
