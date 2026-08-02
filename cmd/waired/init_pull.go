@@ -199,9 +199,30 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			failedStreak++
 			if want == "" || failedStreak >= switchFailedStreak {
 				endProgressLine(out, tty, &line)
-				writePromptf(out, "Model download failed; the agent will keep retrying. "+
-					"Run `waired models pull %s` to retry, or `waired runtimes benchmark` later.\n",
-					waitModelName(st, want))
+				// Both halves of this line were wrong (waired-agent#328).
+				//
+				// "the agent will keep retrying" — it does not. #306 gave
+				// runPullJob a bounded retry, and this line prints only
+				// once that budget is spent; a full disk is deliberately
+				// not retried at all. Promising a retry that is not coming
+				// is how a wizard-less host sat waiting for nothing.
+				//
+				// "or `waired runtimes benchmark` later" — that command
+				// refuses on exactly this state, by name: its pull_failed
+				// arm prints "Model download failed; skipping…". So the
+				// failure line recommended the one command guaranteed to
+				// bounce. It stays on the TIMEOUT branch below, where the
+				// download may yet finish in the background and the
+				// recommendation is coherent.
+				//
+				// engineFailure stays unset: this is the MODEL's failure,
+				// and #310's fault channel is for an engine that could not
+				// come up. A pull that failed on a healthy engine is a soft
+				// skip, which is what the zero value means.
+				writePromptf(out, "Model download failed.%s\n",
+					reasonSuffix(waitFailureReason(st, want)))
+				writePromptf(out, "Retry with `waired models pull %s`; `waired status` and "+
+					"`waired doctor` show more.\n", waitModelName(st, want))
 				return modelWaitResult{}
 			}
 		case st.SubsystemState == "engine_failed" ||
@@ -406,8 +427,12 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 			failedStreak++
 			if failedStreak >= switchFailedStreak {
 				endProgressLine(out, tty, &line)
-				writePromptf(out, "Download failed. Check `waired models ls`; retry with `waired models pull %s` "+
-					"or re-run `waired runtimes benchmark`.\n", modelID)
+				// The benchmark mention stays here, unlike the setup-wait
+				// line above: this branch is reached FROM `waired runtimes
+				// benchmark`, and re-running it re-offers the switch.
+				writePromptf(out, "Download failed.%s\nCheck `waired models ls`; retry with "+
+					"`waired models pull %s` or re-run `waired runtimes benchmark`.\n",
+					reasonSuffix(waitFailureReason(st, modelID)), modelID)
 				return false
 			}
 		case st.SubsystemState == "engine_failed" ||
@@ -697,6 +722,39 @@ func waitModelName(st management.InferenceStatus, want string) string {
 		return activeModelName(st)
 	}
 	return want
+}
+
+// reasonSuffix renders a stored failure reason as a sentence tail, or ""
+// when there is none. Callers concatenate unconditionally, so a daemon
+// that recorded nothing degrades to the bare line it printed before
+// rather than to a dangling colon.
+func reasonSuffix(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return " " + reason
+}
+
+// waitFailureReason is the daemon's stored reason for the model being
+// waited on, or "" when it did not record one (an older daemon, or a
+// failure written before the reason was kept).
+//
+// Same want=="" / want!="" split as waitModelFailed, for the same reason:
+// with no wizard-chosen target the active model is the one that failed.
+func waitFailureReason(st management.InferenceStatus, want string) string {
+	target := want
+	if target == "" {
+		if st.Active == nil {
+			return ""
+		}
+		target = st.Active.ModelID
+	}
+	for _, f := range st.Models.Failures {
+		if f.Model == target {
+			return f.Error
+		}
+	}
+	return ""
 }
 
 // waitDownload is the in-flight transfer to render.

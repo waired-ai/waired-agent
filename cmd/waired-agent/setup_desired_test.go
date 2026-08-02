@@ -1409,19 +1409,45 @@ func TestSetupUntouchedWithoutARetryGeneration(t *testing.T) {
 // TestSetupPullFailureClassification: an out-of-disk failure is the most
 // likely way a multi-GB download dies, and telling the operator to check
 // their internet connection sends them nowhere.
+//
+// Product contract. The two `internal` rows at the bottom INVERT what
+// this test asserted before waired-agent#328: everything unrecognised
+// used to come back network_error, which is how the rc7 host was told to
+// check a connection that was fine while the daemon's journal held
+// `exit status 1` and `download: start ollama: context canceled`.
 func TestSetupPullFailureClassification(t *testing.T) {
 	for _, tc := range []struct {
+		name    string
 		errText string
 		want    string
 	}{
-		{"write /var/lib/waired/blob: no space left on device", signer.SetupErrorDiskFull},
-		{"ERROR: There is not enough space on the disk.", signer.SetupErrorDiskFull},
-		{"insufficient disk space for model", signer.SetupErrorDiskFull},
-		{"dial tcp: connection reset by peer", signer.SetupErrorNetworkError},
-		{"", signer.SetupErrorNetworkError},
+		{"unix enospc", "write /var/lib/waired/blob: no space left on device", signer.SetupErrorDiskFull},
+		{"windows disk", "ERROR: There is not enough space on the disk.", signer.SetupErrorDiskFull},
+		{"installer prose", "insufficient disk space for model", signer.SetupErrorDiskFull},
+
+		{"genuine network", "dial tcp: connection reset by peer", signer.SetupErrorNetworkError},
+		{"dns", "Get \"https://registry.example\": dial tcp: lookup registry.example: no such host",
+			signer.SetupErrorNetworkError},
+		{"remote refusal", "dial tcp 203.0.113.7:443: connect: connection refused",
+			signer.SetupErrorNetworkError},
+
+		{"deadline", "context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+			signer.SetupErrorTimeout},
+		{"io timeout", "read tcp 10.0.0.2:52344->203.0.113.7:443: i/o timeout", signer.SetupErrorTimeout},
+
+		// The rc7 pair, verbatim from the failing host's journal.
+		{"self-inflicted kill", "download: start ollama: context canceled", signer.SetupErrorInternal},
+		{"opaque exit", "exit status 1", signer.SetupErrorInternal},
+		// A refusal naming THIS machine is the engine not being up, not
+		// the internet being down — the same text with a routable address
+		// three rows above stays network_error.
+		{"local refusal", "probe: dial tcp 127.0.0.1:11434: connect: connection refused",
+			signer.SetupErrorInternal},
+		{"killed child", "signal: killed", signer.SetupErrorInternal},
+		{"nothing said", "", signer.SetupErrorInternal},
 	} {
 		if got := classifySetupFailure(tc.errText); got != tc.want {
-			t.Errorf("classifySetupFailure(%q) = %q, want %q", tc.errText, got, tc.want)
+			t.Errorf("%s: classifySetupFailure(%q) = %q, want %q", tc.name, tc.errText, got, tc.want)
 		}
 	}
 }
@@ -1478,7 +1504,14 @@ func TestClassifyModelPullFailure(t *testing.T) {
 			"dial tcp: connection reset by peer",
 			signer.SetupErrorNetworkError,
 		},
-		{"nothing recorded", "", signer.SetupErrorNetworkError},
+		{
+			// INVERTED by waired-agent#328. A failure that said nothing
+			// used to come back network_error because that was the
+			// catch-all; "something went wrong on this computer" is the
+			// true statement about it, and the operator's next step is the
+			// detail underneath rather than their router.
+			"nothing recorded", "", signer.SetupErrorInternal,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := classifyModelPullFailure(tc.errText); got != tc.want {
@@ -1532,9 +1565,13 @@ func TestSetupModelRowDefersToABusyEngineRow(t *testing.T) {
 			// grey row: a failed engine download pins engine_install at
 			// `pending` for good, so "pending means busy" alone would never
 			// let this model row report anything again.
+			// wantErrCode INVERTED by waired-agent#328: `exit status 1` is
+			// the shape of a failure with nothing to say, and it now reads
+			// as internal rather than as an internet problem. The subject
+			// of this row is the STATUS, which is unchanged.
 			name: "a failed engine download does not pin the model row", engine: "ollama", executor: execDownFailed,
 			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
-			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorInternal,
 		},
 		{
 			// A full disk is not fixed by the engine arriving, and this
@@ -1561,14 +1598,14 @@ func TestSetupModelRowDefersToABusyEngineRow(t *testing.T) {
 			// gate exists.
 			name: "no executor at all: the engine row is failed, not busy", engine: "ollama", executor: execNone,
 			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
-			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorInternal,
 		},
 		{
 			// NEGATIVE CONTROL — likewise vacuous against a removed gate.
 			// It pins that an empty step list is not "busy".
 			name: "no desired engine: there are no engine rows to wait on", engine: "", executor: execNone,
 			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
-			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorInternal,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1915,10 +1952,15 @@ func TestSetupMovingOffFailedClearsTheReason(t *testing.T) {
 // kind classifySetupFailure would have called a network error.
 func TestSetupExecutorDeclaredCodeBeatsTextClassification(t *testing.T) {
 	const detail = "engine installs are turned off on this device (WAIRED_NO_OLLAMA)"
-	// The pin that makes this test meaningful: this text really does
-	// classify as network_error without a declared code.
-	if got := classifySetupFailure(detail); got != signer.SetupErrorNetworkError {
-		t.Fatalf("precondition: classifySetupFailure(opt-out text) = %q, want network_error", got)
+	// The pin that makes this test meaningful: this text carries nothing
+	// the classifier can read, so without a declared code it lands on the
+	// generic arm. (It was network_error until waired-agent#328 stopped
+	// the classifier guessing "internet" for unrecognised prose; the
+	// point of the test — a DECLARED code beats text classification —
+	// holds either way, and holds harder now that the fallback is honest
+	// enough to be plausible.)
+	if got := classifySetupFailure(detail); got != signer.SetupErrorInternal {
+		t.Fatalf("precondition: classifySetupFailure(opt-out text) = %q, want internal", got)
 	}
 	f := &fakeSetupProvider{}
 	r, _ := leasedReconciler(t, f, "ollama", "")
@@ -2031,10 +2073,15 @@ func TestClassifyModelRejection(t *testing.T) {
 			signer.SetupErrorInternal,
 		},
 		{
+			// Inverted by waired-agent#328, and the inversion is the fix:
+			// a state.json write that failed is this computer's problem,
+			// and calling it a network error was the classifier's old
+			// habit of blaming the internet for anything it could not
+			// read.
 			"dispatch failed with nothing more specific",
 			fmt.Errorf("start the download for m: %w: %w",
 				errors.New("write state.json: boom"), management.ErrModelSwitchUnavailable),
-			signer.SetupErrorNetworkError,
+			signer.SetupErrorInternal,
 		},
 		{
 			"dispatch failed on a full disk",

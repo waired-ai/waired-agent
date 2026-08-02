@@ -284,6 +284,28 @@ type ModelsSnapshot struct {
 	// it. A model can be in Downloading without a Downloads entry (queued
 	// before the first progress line, or progress unknown).
 	Downloads []ModelDownload `json:"downloads,omitempty"`
+
+	// Failures carries WHY each model named in Failed stopped. Optional
+	// in the same way Downloads is: old clients read Failed (names only)
+	// and ignore this.
+	//
+	// The daemon has had the reason all along — runPullJob writes it into
+	// the model's stored state — and this snapshot was the wall it did not
+	// cross, so `waired models pull` could only print "failed" and the
+	// speed check could only refuse with one fixed sentence
+	// (waired-agent#328). A model can be in Failed without an entry here:
+	// the failure predates the field, or nothing was recorded.
+	Failures []ModelFailure `json:"failures,omitempty"`
+}
+
+// ModelFailure is one failed model's stored reason, verbatim. Not
+// classified into an enum here: this is the local management API, whose
+// readers are the CLI and the tray, and both want the text a human can
+// act on. The §7 error-code mapping happens where the setup wire needs
+// it (classifySetupFailure), from this same text.
+type ModelFailure struct {
+	Model string `json:"model"`
+	Error string `json:"error"`
 }
 
 // ModelDownload is one in-flight model download's aggregate byte progress

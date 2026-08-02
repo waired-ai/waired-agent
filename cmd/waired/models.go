@@ -229,12 +229,23 @@ func waitForModelReady(mgmt, modelID string, timeout time.Duration) error {
 // parseModelLifecycle extracts a single-line status of the requested
 // model from /waired/v1/inference/status. done==true means the
 // caller should stop polling (ready or failed).
+//
+// A failure carries its reason on both the printed line and the returned
+// error (waired-agent#328). Before that this said "failed" and "pull
+// failed" and nothing else, on either — so an operator watching a
+// download die had to go and read the daemon's journal to learn whether
+// their disk was full or their engine had never started. The daemon knew
+// the whole time; `failures` is that reason arriving.
 func parseModelLifecycle(body []byte, modelID string) (line string, done bool, err error) {
 	var resp struct {
 		Models struct {
 			Ready       []string `json:"ready"`
 			Downloading []string `json:"downloading"`
 			Failed      []string `json:"failed"`
+			Failures    []struct {
+				Model string `json:"model"`
+				Error string `json:"error"`
+			} `json:"failures"`
 		} `json:"models"`
 	}
 	if jerr := json.Unmarshal(body, &resp); jerr != nil {
@@ -247,6 +258,18 @@ func parseModelLifecycle(body []byte, modelID string) (line string, done bool, e
 		return modelID + ": downloading…", false, nil
 	}
 	if contains(resp.Models.Failed, modelID) || aliasMatches(resp.Models.Failed, modelID) {
+		// An older daemon, or a failure recorded before the reason was
+		// stored, still reports the name alone. Degrade to what this
+		// printed before rather than inventing a cause.
+		for _, f := range resp.Models.Failures {
+			if f.Model == modelID || strings.EqualFold(f.Model, modelID) {
+				if f.Error != "" {
+					return modelID + ": failed — " + f.Error, true,
+						fmt.Errorf("pull failed: %s", f.Error)
+				}
+				break
+			}
+		}
 		return modelID + ": failed", true, errors.New("pull failed")
 	}
 	return "", false, nil

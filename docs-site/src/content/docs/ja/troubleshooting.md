@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 9f178c50603dc52a
+sourceHash: 61c71b0a10469c69
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -145,12 +145,28 @@ Waired's background service is installed but isn't responding, so sign-in can't 
 | The setup command on … was closed before this finished. Your progress was saved. | セットアップを実行していたターミナルが閉じられた。管理者権限が必要な工程は、そのウィンドウだけが担当している。 | `sudo waired init`（Windows は管理者プロンプトで `waired init`）をもう一度実行。続きから再開し、進捗は失われません。 |
 | Setup on … needs administrator access to continue. | 管理者権限なしで開始された。 | 管理者のターミナルから開始し直してください（[サインインとセットアップ](/ja/getting-started/first-run/)）。 |
 | … has run out of disk space. | モデルが入りきらなかった。 | 空き容量を作るか、[カタログ](/ja/reference/model-catalog/)から小さいモデルを選びます。 |
-| … could not finish downloading. Check its internet connection. | ダウンロードが中断された。 | 再試行してください。最初からではなく途中から再開します。 |
-| The AI software on … has not started yet. | エンジンがまだ起動中。 | 1 分ほど待って再試行。続く場合は[応答が返ってこない](#no-answer-comes-back)へ。 |
+| … could not finish downloading. Check its internet connection. | ネットワーク起因でダウンロードが失敗した（名前解決できない、接続が切れた、証明書を検証できないなど）。 | 再試行してください。最初からではなく途中から再開します。 |
+| The AI software on … is an older version than this AI model needs. | そのモデルには、このパソコンに入っている AI ソフトより新しいバージョンが必要。 | そのパソコンで `waired update` を実行するか、[カタログ](/ja/reference/model-catalog/)から別のモデルを選びます。 |
 | This took too long on … and was stopped. | ある工程が制限時間を超えた。 | 再試行してください。同じ工程で 2 回起きる場合、そのモデルにはこのマシンが遅すぎる可能性が高いです。 |
+| Something went wrong on …. | 何が起きたのかを Waired が特定できなかった。ダウンロードが中断された、あるいはダウンロード先の AI ソフトを起動できなかった、といったケース。 | 再試行してください。繰り返す場合は、そのパソコンで `waired doctor` を実行するか、ログを見てください（[さらに詳しく](#going-deeper-logs)）。 |
+
+「インターネット接続を確認してください」と出るのは、**本当にネットワークらしい
+失敗のときだけ**です。判別できなかったものは、当て推量をせずそのまま「特定できな
+かった」と表示します。中断されたダウンロードと、つながらないレジストリは別の問題
+であり、ルータを見て直るのは片方だけだからです。
 
 なお**モデルのダウンロードだけは例外**で、ブラウザのタブを閉じても続きます。
 [app.waired.ai](https://app.waired.ai) でそのデバイスを開けば途中経過を確認できます。
+
+ターミナルで見ている場合は、`waired init` と `waired models pull` が失敗を報告する
+行に理由を出すようになりました。
+
+```text
+qwen3-8b-instruct: failed — no space left on device
+```
+
+古いバージョンの常駐サービスでは、理由が付かず `failed` だけになることがあります。
+その場合は `waired doctor` とログに残っています。
 
 <a id="setup-says-the-ai-engine-failed-to-start"></a>
 

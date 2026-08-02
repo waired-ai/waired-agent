@@ -249,7 +249,12 @@ func TestRunPullJob_AHealthyEngineIsNotBlamedForAFailedPull(t *testing.T) {
 	if strings.Contains(ms.Error, engineNotRunningMarker) {
 		t.Errorf("recorded error = %q, want the engine NOT blamed — it was running", ms.Error)
 	}
-	if got := classifyModelPullFailure(ms.Error); got != signer.SetupErrorNetworkError {
-		t.Errorf("classifyModelPullFailure(%q) = %q, want %q", ms.Error, got, signer.SetupErrorNetworkError)
+	// The subject is the ATTRIBUTION, not the code: a healthy engine must
+	// not be blamed. waired-agent#328 changed what an unrecognised text
+	// classifies as (network_error was the catch-all, internal is the
+	// honest answer), so assert the thing this test is about — anything
+	// but engine_not_ready.
+	if got := classifyModelPullFailure(ms.Error); got == signer.SetupErrorEngineNotReady {
+		t.Errorf("classifyModelPullFailure(%q) = %q, want the engine NOT blamed", ms.Error, got)
 	}
 }

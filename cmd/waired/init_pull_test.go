@@ -101,6 +101,85 @@ func TestWaitForBundledModel_PullFailed(t *testing.T) {
 	}
 }
 
+// TestWaitForBundledModel_PullFailedSaysWhyAndDropsTheDeadEnd is
+// waired-agent#328 on the terminal's side. Product contract, and it
+// inverts what the old line said on both counts:
+//
+//   - "the agent will keep retrying" was false. #306's bounded retry
+//     lives inside runPullJob and this line prints only once it is spent;
+//     a full disk is not retried at all.
+//   - "`waired runtimes benchmark` later" pointed at the one command
+//     guaranteed to refuse in this exact state — its pull_failed arm
+//     exists to say "Model download failed; skipping…".
+func TestWaitForBundledModel_PullFailedSaysWhyAndDropsTheDeadEnd(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	const reason = "no space left on device"
+	stub := &pullStub{seq: []management.InferenceStatus{{
+		SubsystemState: "pull_failed", Active: activeSel("qwen"),
+		Models: management.ModelsSnapshot{
+			Failed:   []string{"qwen"},
+			Failures: []management.ModelFailure{{Model: "qwen", Error: reason}},
+		},
+	}}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	res := waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil)
+	if res.ready {
+		t.Fatalf("pull_failed must return false")
+	}
+	// engineFailure is #310's channel for an engine that could not come up.
+	// A pull that failed on a healthy engine is a soft skip, not that fault.
+	if res.engineFailure != "" {
+		t.Errorf("engineFailure = %q, want none — the ENGINE did not fail here", res.engineFailure)
+	}
+	s := out.String()
+	if !strings.Contains(s, reason) {
+		t.Errorf("failure notice does not say why: %q", s)
+	}
+	if strings.Contains(s, "keep retrying") {
+		t.Errorf("still promises a retry that is not coming: %q", s)
+	}
+	if strings.Contains(s, "runtimes benchmark") {
+		t.Errorf("still points at the command that refuses in this state: %q", s)
+	}
+	if !strings.Contains(s, "waired models pull qwen") {
+		t.Errorf("dropped the retry command that does work: %q", s)
+	}
+}
+
+// TestWaitFailureReasonPicksTheRightModel: two concurrent pulls are
+// ordinary, and quoting one model's cause under another's name would be
+// worse than quoting none. Product contract.
+func TestWaitFailureReasonPicksTheRightModel(t *testing.T) {
+	st := management.InferenceStatus{
+		Active: activeSel("bundled-model"),
+		Models: management.ModelsSnapshot{
+			Failed: []string{"bundled-model", "chosen-model"},
+			Failures: []management.ModelFailure{
+				{Model: "bundled-model", Error: "start ollama: context canceled"},
+				{Model: "chosen-model", Error: "no space left on device"},
+			},
+		},
+	}
+	// want=="" is the bundled path: the active model is the subject.
+	if got := waitFailureReason(st, ""); got != "start ollama: context canceled" {
+		t.Errorf("waitFailureReason(active) = %q", got)
+	}
+	// want!="" is the wizard-chosen path.
+	if got := waitFailureReason(st, "chosen-model"); got != "no space left on device" {
+		t.Errorf("waitFailureReason(chosen) = %q", got)
+	}
+	// Nothing recorded: the caller must degrade, not invent.
+	if got := waitFailureReason(st, "third-model"); got != "" {
+		t.Errorf("waitFailureReason(unknown) = %q, want empty", got)
+	}
+	if got := waitFailureReason(management.InferenceStatus{}, ""); got != "" {
+		t.Errorf("waitFailureReason(no active) = %q, want empty", got)
+	}
+}
+
 // A no_engine that never resolves gives up after the grace (not the full
 // deadline) and must not hang.
 func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {

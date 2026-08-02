@@ -160,6 +160,51 @@ func TestParseModelLifecycle(t *testing.T) {
 	}
 }
 
+// TestParseModelLifecycleCarriesTheFailureReason is waired-agent#328's
+// regression bar. Product contract: when the daemon recorded WHY a pull
+// stopped, both the printed line and the returned error say so.
+//
+// The rc7 review is the reason it exists — `waired models pull` printed
+// "failed" and exited with "pull failed", and the operator had to read
+// the daemon's journal to learn that the download had been killed rather
+// than refused by a registry.
+func TestParseModelLifecycleCarriesTheFailureReason(t *testing.T) {
+	const reason = "download: start ollama: context canceled"
+	body := []byte(`{"models":{"failed":["qwen3-8b-instruct"],` +
+		`"failures":[{"model":"qwen3-8b-instruct","error":"` + reason + `"}]}}`)
+	line, done, err := parseModelLifecycle(body, "qwen3-8b-instruct")
+	if !done {
+		t.Fatalf("failed must be done, got %v", done)
+	}
+	if !strings.Contains(line, reason) {
+		t.Errorf("line = %q, want the reason in it", line)
+	}
+	if err == nil || !strings.Contains(err.Error(), reason) {
+		t.Errorf("err = %v, want the reason in it", err)
+	}
+
+	// A failures entry for a DIFFERENT model must not be borrowed: two
+	// concurrent pulls are ordinary, and quoting one model's cause under
+	// another's name is worse than quoting none.
+	body = []byte(`{"models":{"failed":["qwen3-8b-instruct"],` +
+		`"failures":[{"model":"other-model","error":"no space left on device"}]}}`)
+	line, _, err = parseModelLifecycle(body, "qwen3-8b-instruct")
+	if strings.Contains(line, "no space") || (err != nil && strings.Contains(err.Error(), "no space")) {
+		t.Errorf("borrowed another model's reason: line=%q err=%v", line, err)
+	}
+
+	// An older daemon sends no failures array at all. Degrade to the bare
+	// line rather than to a dangling separator.
+	body = []byte(`{"models":{"failed":["qwen3-8b-instruct"]}}`)
+	line, _, err = parseModelLifecycle(body, "qwen3-8b-instruct")
+	if line != "qwen3-8b-instruct: failed" {
+		t.Errorf("line = %q, want the pre-#328 bare line", line)
+	}
+	if err == nil || err.Error() != "pull failed" {
+		t.Errorf("err = %v, want the pre-#328 bare error", err)
+	}
+}
+
 // captureStdout swaps os.Stdout for a pipe, runs fn, and returns the
 // captured output. Tests use this rather than instrumenting the
 // streaming path to avoid leaking io.Writer plumbing into the
