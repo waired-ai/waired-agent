@@ -149,6 +149,44 @@ func fastTestConfig() reconcilerConfig {
 	}
 }
 
+// useFakeClock installs c (the same fakeClock the setup-executor tests
+// use, setup_desired_test.go) as the peer reconciler's clock. Call it
+// before the first Apply so every timestamp the reconciler stamps comes
+// from c.
+//
+// The reconciler reaches for the wall clock in exactly two places —
+// Apply and Tick — and every disco-driven decision is already stamped
+// from the event's own At, so this covers the whole surface and lets the
+// timing tests below state elapsed time exactly instead of approximating
+// it with sleeps.
+//
+// This is a fix, not extra margin (#357/#384). The safety-net silencing
+// test used to inject evidence 35 ms before a Tick and require less than
+// FallbackAfter (50 ms) to have passed — 15 ms of slack, under Windows'
+// ~15.6 ms timer granularity, where time.Sleep rounds up to the next
+// tick. It failed there about as often as it passed while staying green
+// on Linux's ~1 ms timers. Widening the window would only have moved the
+// coin toss; taking the clock away removes it.
+func useFakeClock(rec *reconciler, c *fakeClock) {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	rec.now = c.now
+}
+
+// TestNewReconcilerHasAClock pins the production wiring: newReconciler
+// must leave a usable clock behind. A future constructor path that
+// forgets it would not fail a timing test — the tests that care install
+// their own — it would nil-panic in Apply on a real agent.
+func TestNewReconcilerHasAClock(t *testing.T) {
+	rec := newReconciler(&fakeEngine{}, &agentProvider{}, quietLogger(), nil, fastTestConfig())
+	if rec.now == nil {
+		t.Fatal("newReconciler left now nil; Apply/Tick would panic in production")
+	}
+	if got := rec.now(); got.IsZero() {
+		t.Errorf("default clock returned the zero time (%v), want the wall clock", got)
+	}
+}
+
 // --- LEGACY behaviour, repurposed for the new model ---
 
 // TestReconciler_SafetyNetFiresWhenProbesSilent: when no disco events
@@ -164,6 +202,8 @@ func TestReconciler_SafetyNetFiresWhenProbesSilent(t *testing.T) {
 	eng := &fakeEngine{}
 	prov := &agentProvider{}
 	rec := newReconciler(eng, prov, quietLogger(), nil, fastTestConfig())
+	clk := newFakeClock()
+	useFakeClock(rec, clk)
 
 	if err := rec.Apply(nm); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -178,10 +218,10 @@ func TestReconciler_SafetyNetFiresWhenProbesSilent(t *testing.T) {
 		t.Fatalf("expected direct still after early Tick, got %q", got)
 	}
 
-	// Wait past fallback-after AND past last-direct-evidence (= Apply
+	// Move past fallback-after AND past last-direct-evidence (= Apply
 	// time). No disco events ever arrived (probes silent), no WG
 	// handshake completed → safety net fires.
-	time.Sleep(rec.cfg.FallbackAfter + 25*time.Millisecond)
+	clk.advance(rec.cfg.FallbackAfter + 25*time.Millisecond)
 	rec.Tick(context.Background())
 	if got := eng.lastEndpointFor(pubA); !strings.HasPrefix(got, "relay:") {
 		t.Fatalf("expected relay endpoint after safety-net fallback, got %q", got)
@@ -200,17 +240,20 @@ func TestReconciler_StaysDirectIfHandshakeSucceeds(t *testing.T) {
 	eng := &fakeEngine{}
 	prov := &agentProvider{}
 	rec := newReconciler(eng, prov, quietLogger(), nil, fastTestConfig())
+	clk := newFakeClock()
+	useFakeClock(rec, clk)
 
 	if err := rec.Apply(nm); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// Simulate a successful handshake observed mid-window.
-	time.Sleep(rec.cfg.FallbackAfter / 2)
-	eng.setHandshake(pubA, time.Now())
+	// Simulate a successful handshake observed mid-window. It must land
+	// after Apply's lastEvalAt — that ordering is the gate under test.
+	clk.advance(rec.cfg.FallbackAfter / 2)
+	eng.setHandshake(pubA, clk.now())
 
-	// Wait past fallback-after and Tick; should stay direct.
-	time.Sleep(rec.cfg.FallbackAfter)
+	// Move past fallback-after and Tick; should stay direct.
+	clk.advance(rec.cfg.FallbackAfter)
 	rec.Tick(context.Background())
 	if got := eng.lastEndpointFor(pubA); !strings.HasPrefix(got, "udp4:") {
 		t.Fatalf("expected direct UDP after successful handshake, got %q", got)
@@ -721,11 +764,14 @@ func TestReconciler_NoFlapWithinDwellTime(t *testing.T) {
 		t.Fatalf("dwell suppression broken: expected relay still, got %q", got)
 	}
 
-	// Wait past dwell, then a fresh sample should let the upgrade fire.
-	time.Sleep(cfg.MinDwellTime + 25*time.Millisecond)
+	// Past dwell, a fresh sample should let the upgrade fire. The dwell
+	// window is measured against lastSwitchAt, which the downgrade above
+	// stamped from its event's At — so saying "later than that" with a
+	// timestamp is exact, where a sleep only approximated it.
 	rec.OnDiscoEvent(disco.EventProbeRTTSampled{
 		PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
-		Path: pathDirect, RTT: 5 * time.Millisecond, At: time.Now(),
+		Path: pathDirect, RTT: 5 * time.Millisecond,
+		At: now.Add(cfg.MinDwellTime + time.Millisecond),
 	})
 	if got := eng.lastEndpointFor(pubA); !strings.HasPrefix(got, "udp4:") {
 		t.Fatalf("expected upgrade after dwell elapsed, got %q", got)
@@ -816,18 +862,23 @@ func TestReconciler_SafetyNetSilencedByRecentDirectEvidence(t *testing.T) {
 	eng := &fakeEngine{}
 	prov := &agentProvider{}
 	rec := newReconciler(eng, prov, quietLogger(), nil, fastTestConfig())
+	clk := newFakeClock()
+	useFakeClock(rec, clk)
 	if err := rec.Apply(nm); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// Wait past FallbackAfter, but inject an RTT sample mid-way so
-	// lastDirectEvidenceAt is recent. Safety net must NOT fire.
-	time.Sleep(rec.cfg.FallbackAfter / 2)
+	// Move past FallbackAfter so the lastEvalAt gate opens, but inject an
+	// RTT sample mid-way so lastDirectEvidenceAt stays recent. At the Tick
+	// below, exactly FallbackAfter+10ms has passed since Apply (gate open)
+	// and exactly FallbackAfter/2+10ms since the evidence (still inside
+	// the silencing window). Safety net must NOT fire.
+	clk.advance(rec.cfg.FallbackAfter / 2)
 	rec.OnDiscoEvent(disco.EventProbeRTTSampled{
 		PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
-		Path: pathDirect, RTT: 80 * time.Millisecond, At: time.Now(),
+		Path: pathDirect, RTT: 80 * time.Millisecond, At: clk.now(),
 	})
-	time.Sleep(rec.cfg.FallbackAfter/2 + 10*time.Millisecond)
+	clk.advance(rec.cfg.FallbackAfter/2 + 10*time.Millisecond)
 
 	rec.Tick(context.Background())
 	if got := eng.lastEndpointFor(pubA); !strings.HasPrefix(got, "udp4:") {
@@ -845,11 +896,13 @@ func TestReconciler_ColdStartUsesSafetyNet(t *testing.T) {
 	eng := &fakeEngine{}
 	prov := &agentProvider{}
 	rec := newReconciler(eng, prov, quietLogger(), nil, fastTestConfig())
+	clk := newFakeClock()
+	useFakeClock(rec, clk)
 	if err := rec.Apply(nm); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	time.Sleep(rec.cfg.FallbackAfter + 25*time.Millisecond)
+	clk.advance(rec.cfg.FallbackAfter + 25*time.Millisecond)
 	rec.Tick(context.Background())
 	if got := eng.lastEndpointFor(pubA); !strings.HasPrefix(got, "relay:") {
 		t.Fatalf("expected relay after cold-start safety net, got %q", got)

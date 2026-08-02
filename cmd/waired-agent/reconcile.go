@@ -178,6 +178,16 @@ type reconciler struct {
 	// unit tests that exercise reconciler logic only.
 	disco discoSubsystem
 
+	// now is the reconciler's clock, read by Apply and Tick — the only
+	// two places that reach for the wall clock (every disco-driven
+	// decision is stamped from the event's own At instead). Production
+	// leaves it at time.Now; tests replace it so an assertion about a
+	// duration cannot be decided by how long a sleep actually took. See
+	// #357/#384: the safety-net silencing test allowed 15 ms of slack
+	// against Windows' ~15.6 ms timer tick, so one tick of sleep
+	// overshoot flipped it — on Windows it was a coin toss, not a test.
+	now func() time.Time
+
 	mu    sync.Mutex
 	nm    *signer.NetworkMap
 	state map[string]*peerPathState // keyed by peer NodePublicKey (std-base64)
@@ -282,6 +292,7 @@ func newReconciler(engine peerEngine, provider *agentProvider, logger *slog.Logg
 		logger:   logger,
 		cfg:      cfg.withDefaults(),
 		id:       id,
+		now:      time.Now,
 		state:    map[string]*peerPathState{},
 	}
 }
@@ -644,7 +655,7 @@ func pongRingFull(st *peerPathState, capN int) bool {
 func (r *reconciler) Apply(nm *signer.NetworkMap) error {
 	r.mu.Lock()
 	r.nm = nm
-	now := time.Now()
+	now := r.now()
 	live := make(map[string]struct{}, len(nm.Peers))
 	r.logNames = make(map[string]string, len(nm.Peers))
 	added := 0
@@ -805,7 +816,7 @@ func (r *reconciler) Tick(ctx context.Context) {
 		r.mu.Unlock()
 		return
 	}
-	now := time.Now()
+	now := r.now()
 	changed := false
 	for _, p := range r.nm.Peers {
 		st := r.state[p.NodePublicKey]
