@@ -591,6 +591,39 @@ func TestResolveTuningTarget(t *testing.T) {
 		}
 	})
 
+	// THE #320 DRIFT, stated as a transition. PRODUCT CONTRACT: the same
+	// inputs resolve a DIFFERENT variant before and after the model lands
+	// on disk, so a tuning computed pre-Ready is stale by construction and
+	// something must recompute it. The reconcile fired from endPull is
+	// that something; this pins why it has to exist.
+	t.Run("the resolved variant changes on the ready transition", func(t *testing.T) {
+		cfg := agentconfig.InferenceConfig{PreferredModelID: "test-moe-35b"}
+
+		// Before the download: nothing on disk, so the guess is whatever
+		// the manifest offers first for the pinned engine version.
+		_, before, ok := resolveTuningTarget(cfg, manifests, catalog.State{})
+		if !ok {
+			t.Fatal("no target resolved before the download")
+		}
+
+		// After: the pull recorded the variant it actually fetched, which
+		// need not be the guess — variant choice depends on the engine
+		// version the pull saw, and fails closed before one is known.
+		ready := catalog.State{Models: map[string]catalog.ModelState{
+			"test-moe-35b": {VariantID: "q4", State: catalog.ModelStateReady},
+		}}
+		_, after, ok := resolveTuningTarget(cfg, manifests, ready)
+		if !ok {
+			t.Fatal("no target resolved after the download")
+		}
+
+		if before.VariantID != "mtp-q4" || after.VariantID != "q4" {
+			t.Fatalf("before=%q after=%q, want mtp-q4 then q4 — if these ever "+
+				"agree this subtest no longer demonstrates the drift it guards",
+				before.VariantID, after.VariantID)
+		}
+	})
+
 	t.Run("vllm-active-ignored", func(t *testing.T) {
 		cfg := agentconfig.InferenceConfig{BundledModelID: "bundled-default"}
 		state := catalog.State{

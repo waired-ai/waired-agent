@@ -1270,6 +1270,71 @@ func TestOllamaAdapter_AppliedTuning_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestModelTuning_ServeInputsEqual is the #320 regression bar for the
+// engine-bounce predicate. PRODUCT CONTRACT, both ways:
+//
+//   - every field that decides the spawn env must make it UNEQUAL, or a
+//     reconcile that resolved a different model returns without exporting
+//     anything and the engine keeps serving the old one;
+//   - every field written AFTER the spawn must leave it EQUAL, or the
+//     predicate fires on the applied tuning's own verification result and
+//     bounces the engine on each reconcile.
+//
+// The second half is the reason this is not `a == b`.
+func TestModelTuning_ServeInputsEqual(t *testing.T) {
+	base := ModelTuning{
+		ModelID: "qwen3.6-35b-a3b", VariantID: "mtp-q4-gguf",
+		ContextLength: 131072, NumParallel: 2, NumBatch: 1024,
+		KVCacheType: "q8_0", FlashAttention: true,
+	}
+	// Each mutation names a spawn INPUT: it must break equality.
+	inputs := map[string]func(*ModelTuning){
+		"model":           func(t *ModelTuning) { t.ModelID = "qwen3.5-9b" },
+		"variant":         func(t *ModelTuning) { t.VariantID = "q4-gguf" },
+		"context length":  func(t *ModelTuning) { t.ContextLength = 32768 },
+		"num parallel":    func(t *ModelTuning) { t.NumParallel = 1 },
+		"num batch":       func(t *ModelTuning) { t.NumBatch = 512 },
+		"kv cache type":   func(t *ModelTuning) { t.KVCacheType = "f16" },
+		"flash attention": func(t *ModelTuning) { t.FlashAttention = false },
+	}
+	for name, mutate := range inputs {
+		t.Run("differs on "+name, func(t *testing.T) {
+			other := base
+			mutate(&other)
+			if base.ServeInputsEqual(other) {
+				t.Errorf("%s changed but ServeInputsEqual said equal; the engine "+
+					"would keep serving the previous tuning", name)
+			}
+			if other.ServeInputsEqual(base) {
+				t.Error("not symmetric")
+			}
+		})
+	}
+	// Each mutation names an OUTCOME the applied record accretes after the
+	// spawn: it must NOT break equality.
+	outcomes := map[string]func(*ModelTuning){
+		"verified":                 func(t *ModelTuning) { t.Verified = true },
+		"warning":                  func(t *ModelTuning) { t.Warning = "spill detected" },
+		"observed num parallel":    func(t *ModelTuning) { t.ObservedNumParallel = 1 },
+		"recommended max parallel": func(t *ModelTuning) { t.RecommendedMaxParallel = 4 },
+	}
+	for name, mutate := range outcomes {
+		t.Run("ignores "+name, func(t *testing.T) {
+			other := base
+			mutate(&other)
+			if !base.ServeInputsEqual(other) {
+				t.Errorf("%s is a post-spawn outcome, not a spawn input, but it "+
+					"broke equality; every reconcile would bounce the engine", name)
+			}
+		})
+	}
+	t.Run("a tuning equals itself", func(t *testing.T) {
+		if !base.ServeInputsEqual(base) {
+			t.Error("ServeInputsEqual is not reflexive")
+		}
+	})
+}
+
 // #624: a model-env provider is consulted at spawn time when no
 // explicit tuning env was exported — the fix for engines that become
 // viable only after the boot-time engine decision (fresh installs

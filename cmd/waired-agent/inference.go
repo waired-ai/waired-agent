@@ -960,6 +960,23 @@ type agentInferenceProvider struct {
 	// is in flight: `ollama pull` is a client of `ollama serve`, so
 	// stopping the engine fails a SIBLING model's download (#305d).
 	swapBounceDeferred atomic.Bool
+	// retuneDeferred records that a pull finished, so the serve tuning
+	// should be RE-RESOLVED. Held to the same point as the swap bounce,
+	// for the same #305d reason.
+	//
+	// Set unconditionally on a successful pull, and it means only "look
+	// again" — never "bounce". resolveTuningTarget can only read the
+	// on-disk variant once the model is Ready, so before that it sizes
+	// from a guess; nothing re-ran it afterwards, so a fresh install
+	// served the whole session tuned for a model it had not downloaded
+	// yet (waired-agent#320). Whether anything actually changed is
+	// reconcileEngineServe's ServeInputsEqual test, which is why setting
+	// this on an unrelated pull is free.
+	retuneDeferred atomic.Bool
+	// warmInFlight single-flights the warm-up load (#320). The load is
+	// minutes on a cold multi-GB model and the engine serves one at a
+	// time, so a second trigger arriving mid-load must drop, not queue.
+	warmInFlight atomic.Bool
 
 	// benchMu guards lastBench. The boot benchmark runs on the probe
 	// goroutine (main.go) and calls SetLastBench; Status() and
@@ -1314,6 +1331,13 @@ func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
 // the other owner of an engine restart.
 func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 	defer p.engineReconcileInFlight.Store(false)
+	// Warm on every exit, not just the bouncing one (#320). A reconcile
+	// that decides nothing moved is the common steady-state case, and the
+	// engine may still hold no weights at all — that is exactly the state
+	// this exists to fix. warmServingModel decides for itself whether the
+	// moment is right (parked, borrowed, mid-pull, already resident), so
+	// asking on every path costs an /api/ps probe.
+	defer p.warmServingModel()
 	if p.ollama == nil {
 		return
 	}
@@ -1358,11 +1382,20 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		}
 		tune := computeOllamaTuningOpts(tm, tv, p.profiler.Profile(ctx), kvType, true, want)
 		// Bounce predicate: an operator switch always bounces (Option 2) so the
-		// new model's per-model spawn env applies; a concurrency-only change
-		// bounces iff the resolved engine parallelism actually moved (the exact
-		// pre-#812 retuneParallelLoop behaviour).
-		if !swap && !recover && tune.NumParallel == cur.NumParallel {
-			return // already at the resolved parallelism
+		// new model's per-model spawn env applies; otherwise bounce iff any
+		// input to the engine's spawn env actually moved.
+		//
+		// This used to compare NumParallel alone, inherited from the pre-#812
+		// retuneParallelLoop, whose only caller was a concurrency change. Once
+		// a finished pull could also land here that was too narrow: the first
+		// pull of a fresh install resolves a DIFFERENT MODEL at the same
+		// parallelism, so the predicate returned before SetModelEnv and the
+		// engine kept serving the pre-download guess for the life of the
+		// process (waired-agent#320). ServeInputsEqual compares the spawn
+		// inputs and ignores the verification outcome — see its doc for why
+		// a whole-struct comparison would instead bounce on every call.
+		if !swap && !recover && tune.ServeInputsEqual(cur) {
+			return // the running engine already serves this exact tuning
 		}
 		// Only a live, owned, un-parked ollama process can bounce. Borrowed
 		// (reuse mode): we own no process to restart or configure — the Active
@@ -2051,19 +2084,32 @@ func (p *agentInferenceProvider) beginPull(j *pullJob) (running *pullJob, joined
 	return j, false
 }
 
-// endPull releases the slot and, when it was the last one, fires a swap
-// bounce a finished pull asked for. Removal, the emptiness test and the
-// fire decision share one critical section, so the bounce can be neither
-// lost (a job that arrives in the window makes `last` false and fires it
-// on its own way out) nor doubled (the CAS consumes the intent). The
-// reconcile itself runs off-lock.
+// endPull releases the slot and, when it was the last one, fires the
+// reconcile a finished pull asked for. Removal, the emptiness test and
+// the fire decision share one critical section, so the request can be
+// neither lost (a job that arrives in the window makes `last` false and
+// fires it on its own way out) nor doubled (the CAS consumes the
+// intent). The reconcile itself runs off-lock.
+//
+// Two independent intents, consumed separately and collapsed into one
+// reconcile. swap keeps its exact meaning — an operator switch, which
+// always bounces and re-decides the KV cache type from scratch. A plain
+// retune passes swap=false and leaves the decision to the reconcile's
+// own ServeInputsEqual test, so an unrelated pull costs a resolve and
+// nothing else. Both are consumed even when only one fires the call:
+// a swap subsumes the retune.
 func (p *agentInferenceProvider) endPull(modelID string) {
 	p.pullMu.Lock()
 	delete(p.pullsInFlight, modelID)
 	last := len(p.pullsInFlight) == 0
 	p.pullMu.Unlock()
-	if last && p.swapBounceDeferred.CompareAndSwap(true, false) {
-		p.requestEngineReconcile(true)
+	if !last {
+		return
+	}
+	swap := p.swapBounceDeferred.CompareAndSwap(true, false)
+	retune := p.retuneDeferred.CompareAndSwap(true, false)
+	if swap || retune {
+		p.requestEngineReconcile(swap)
 	}
 }
 
@@ -2242,6 +2288,18 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	// switch never landed — nothing wrote Active after the restart, so
 	// the agent came back up serving the old model (issue #347).
 	p.activatePreferredIfNeeded(modelID, variantID)
+	// #320: the serve tuning was sized before this model existed on disk.
+	// resolveTuningTarget only reads the real variant once the model is
+	// Ready, so until this point the engine has been running on a guess —
+	// on a fresh install, one made against a model that had not been
+	// downloaded yet. Ask for a re-resolve now that Ready is written.
+	//
+	// Unconditional, and deliberately not conditioned on "is this the
+	// serving model": that question is resolveTuningTarget's, and asking
+	// it here would duplicate its precedence rules (preferred, then
+	// Active, then bundled) at a second site that could drift from it.
+	// The reconcile's ServeInputsEqual test makes a wrong guess here free.
+	p.retuneDeferred.Store(true)
 	// #812: if this pull completed an operator's in-process model switch
 	// (SwapPreferredModel recorded pendingSwapModel while the weights
 	// downloaded), bounce the engine now so the new model's per-model serve

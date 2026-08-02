@@ -962,6 +962,9 @@ func run(ctx context.Context, args []string) error {
 			}
 			infProvider = ip
 			engCtl = newEngineController(ctx, sub.ollama, logger)
+			// #320: an operator restart comes back with an empty engine, so
+			// warm it rather than making the next request pay the cold load.
+			engCtl.onEngineUp = sub.provider.warmServingModel
 			swapCtl = newModelSwapController(ctx, sub.provider, logger)
 			// Wedged-engine self-heal for the #812 in-process switch: if the
 			// engine won't come back after a switch bounce, the reconcile falls

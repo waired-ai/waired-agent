@@ -158,12 +158,18 @@ const (
 	EngineModeAdopted EngineMode = "adopted"
 )
 
-// ollamaKeepAlive is the idle time a loaded model stays in (V)RAM
+// OllamaKeepAlive is the idle time a loaded model stays in (V)RAM
 // (exported as OLLAMA_KEEP_ALIVE). 60m rather than ollama's 5m default:
 // coding-agent sessions routinely pause longer than 5 minutes between
 // requests, and an unload there costs a ~20 GB model reload on the next
 // turn. Truly idle hosts still release VRAM after the hour.
-const ollamaKeepAlive = "60m"
+//
+// Exported so the warm-up load can send the same value per-request
+// (waired-agent#320): an ADOPTED engine was spawned by a previous run
+// and its environment is not ours to set, so a warm that relied on the
+// serve-level variable would be undone minutes later on exactly the
+// hosts that cannot be bounced to fix it.
+const OllamaKeepAlive = "60m"
 
 // OllamaAdapter is a single-subprocess Ollama engine.
 type OllamaAdapter struct {
@@ -750,7 +756,7 @@ func (a *OllamaAdapter) processEnv() []string {
 	out = append(out,
 		fmt.Sprintf("OLLAMA_HOST=%s:%d", a.cfg.Host, a.cfg.Port),
 		"OLLAMA_NO_CLOUD=1",
-		"OLLAMA_KEEP_ALIVE="+ollamaKeepAlive,
+		"OLLAMA_KEEP_ALIVE="+OllamaKeepAlive,
 	)
 	if a.cfg.ModelsDir != "" {
 		out = append(out, "OLLAMA_MODELS="+a.cfg.ModelsDir)
@@ -888,6 +894,34 @@ type ModelTuning struct {
 	// Warning is a user-visible note (context floored, f16 fallback,
 	// spill detected, reused engine ignores tuning); "" when healthy.
 	Warning string
+}
+
+// ServeInputsEqual reports whether t and o would produce the same engine
+// process: same model, same window, same cache, same parallelism, same
+// batch. It compares the INPUTS only — ModelID, VariantID,
+// ContextLength, NumParallel, NumBatch, KVCacheType, FlashAttention.
+//
+// The fields it deliberately ignores are the ones this struct accretes
+// AFTER the spawn, describing the outcome rather than the intent:
+// Verified and Warning are written by the post-load verification,
+// ObservedNumParallel by reading the runner's command line, and
+// RecommendedMaxParallel is advisory telemetry. A freshly computed
+// tuning has none of them, so a whole-struct `==` against the applied
+// value would differ on every single call — and a bounce predicate built
+// on that would restart the engine each time anything asked for a
+// reconcile.
+//
+// This exists because the predicate it replaces compared NumParallel
+// alone, so a reconcile that resolved a DIFFERENT MODEL at the same
+// parallelism returned without exporting anything (waired-agent#320).
+func (t ModelTuning) ServeInputsEqual(o ModelTuning) bool {
+	return t.ModelID == o.ModelID &&
+		t.VariantID == o.VariantID &&
+		t.ContextLength == o.ContextLength &&
+		t.NumParallel == o.NumParallel &&
+		t.NumBatch == o.NumBatch &&
+		t.KVCacheType == o.KVCacheType &&
+		t.FlashAttention == o.FlashAttention
 }
 
 // SetAppliedTuning records the tuning exported to the engine and (after
