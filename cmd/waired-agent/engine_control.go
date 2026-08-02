@@ -27,6 +27,12 @@ type engineController struct {
 	// management handler returns.
 	agentCtx context.Context
 	logger   *slog.Logger
+	// onEngineUp, when set, is called after an operator start brings the
+	// engine back. It exists for the #320 warm-up: an unpark returns to a
+	// process holding no weights, and nothing else on this path asks for
+	// them. Set after construction (like restartOnWedge) so the several
+	// test call sites need no new argument. nil is a no-op.
+	onEngineUp func()
 }
 
 func newEngineController(ctx context.Context, ollama *infruntime.OllamaAdapter, logger *slog.Logger) *engineController {
@@ -87,6 +93,9 @@ func (e *engineController) StartEngine(_ context.Context) error {
 		if e.logger != nil && e.ollama.Mode() == infruntime.EngineModeAdopted {
 			e.logger.Info("engine controller: adopted orphan bundled ollama (exact pin match)",
 				"version", e.ollama.EngineVersion())
+		}
+		if e.onEngineUp != nil {
+			e.onEngineUp()
 		}
 	}()
 	return nil

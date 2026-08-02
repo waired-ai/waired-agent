@@ -93,7 +93,7 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 				return tuningInconclusive, "no model available to verify tuning"
 			}
 		}
-		if err := loadOllamaModel(ctx, client, baseURL, target); err != nil {
+		if err := loadOllamaModel(ctx, client, baseURL, target, ""); err != nil {
 			return tuningInconclusive, fmt.Sprintf("verify model load failed: %v", err)
 		}
 		if err := getJSON(ctx, client, baseURL+"/api/ps", probeHTTPTimeout, &ps); err != nil || len(ps.Models) == 0 {

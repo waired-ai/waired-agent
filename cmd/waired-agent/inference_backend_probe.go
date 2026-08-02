@@ -111,7 +111,7 @@ func ollamaEngagement(ctx context.Context, client *http.Client, baseURL string) 
 	if err != nil || tag == "" {
 		return gpuEngagement{Detail: "no model available to probe GPU engagement"}
 	}
-	if err := loadOllamaModel(ctx, client, baseURL, tag); err != nil {
+	if err := loadOllamaModel(ctx, client, baseURL, tag, ""); err != nil {
 		return gpuEngagement{Detail: fmt.Sprintf("probe model load failed: %v", err)}
 	}
 	if eng, ok := psEngagement(ctx, client, baseURL); ok {
@@ -176,8 +176,17 @@ func firstOllamaTag(ctx context.Context, client *http.Client, baseURL string) (s
 // generating output (POST /api/generate with just "model"). Ollama
 // resolves the placement (GPU vs CPU) during this load, which is what
 // makes the subsequent /api/ps inspection meaningful.
-func loadOllamaModel(ctx context.Context, client *http.Client, baseURL, tag string) error {
-	body, _ := json.Marshal(map[string]any{"model": tag, "stream": false})
+//
+// keepAlive, when non-empty, is sent as the request's keep_alive so the
+// load does not depend on the serve-level OLLAMA_KEEP_ALIVE. The probe
+// callers pass "" — they want the engine's own policy, whatever it is,
+// because they are measuring the engine rather than configuring it.
+func loadOllamaModel(ctx context.Context, client *http.Client, baseURL, tag, keepAlive string) error {
+	payload := map[string]any{"model": tag, "stream": false}
+	if keepAlive != "" {
+		payload["keep_alive"] = keepAlive
+	}
+	body, _ := json.Marshal(payload)
 	cctx, cancel := context.WithTimeout(ctx, probeLoadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, baseURL+"/api/generate", bytes.NewReader(body))

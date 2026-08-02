@@ -74,9 +74,15 @@ func bootstrapProviderServingTags(t *testing.T) (p *agentInferenceProvider, sp *
 		StopTimeout: 50 * time.Millisecond,
 	})
 	p = &agentInferenceProvider{
-		ollama:       a,
-		store:        catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
-		cfg:          agentconfig.InferenceConfig{AllowPull: true},
+		ollama: a,
+		store:  catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		cfg:    agentconfig.InferenceConfig{AllowPull: true},
+		// Both production constructors always set a profiler, and
+		// reconcileEngineServe sizes the tuning from it unconditionally.
+		// Leaving it nil here made this fixture the one shape that cannot
+		// reconcile — which stayed invisible only while nothing on the
+		// bootstrap path asked for one (waired-agent#320).
+		profiler:     cpuSwapProfiler(t),
 		logger:       slog.New(slog.DiscardHandler),
 		agentCtx:     context.Background(),
 		ollamaUsable: func() bool { return present },

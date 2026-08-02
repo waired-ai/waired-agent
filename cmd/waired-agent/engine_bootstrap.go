@@ -177,6 +177,14 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 // bootstrapAfterEngineStart is everything the boot goroutine did once the
 // engine was serving. Runs at most once per process, under engineOpMu.
 func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) {
+	// #320: load the serving model so the first request does not. Deferred
+	// so it covers every exit — including the two that return before
+	// finalizeOllamaServeTuning, whose /api/ps side effect was the only
+	// thing warming anything: an untuned boot plan (`!p.bootPlan.tuned`,
+	// i.e. the fresh-install case) and a borrowed engine. When this boot
+	// dispatched a pull instead, the model is not on disk yet and the warm
+	// declines; endPull's reconcile picks it up when the download lands.
+	defer p.warmServingModel()
 	cfg := p.effectiveCfg()
 	if p.ollama.Mode() == infruntime.EngineModeAdopted && p.logger != nil {
 		p.logger.Info("adopted orphan bundled ollama (exact pin match)",
