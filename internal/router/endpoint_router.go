@@ -53,6 +53,22 @@ type Selection struct {
 	// grant pseudonym for Public Share peers whose real identifier must
 	// never be shown (spec §8.5). Empty for local / external selections.
 	PeerDisplayID string `json:"peer_display_id,omitempty"`
+
+	// ContextWindow is the input-token window the SELECTED endpoint says
+	// it serves — signer.InferenceState.ContextWindow as the chosen peer
+	// advertised it (waired#1031). 0 for local and external selections,
+	// and for a peer running an agent that predates the field.
+	//
+	// It exists because the #623 overflow guard had no way to ask. The
+	// guard sized itself from the requesting device's own manifests and
+	// own applied tuning even when dispatching to a peer, so a prompt
+	// that overran the SERVING engine passed it and was truncated at the
+	// head instead of compacted (waired-agent#436). A window is a
+	// property of the endpoint that answers, not of the one that asks.
+	//
+	// 0 means "unknown" and callers must fall back to whatever they did
+	// before rather than treating it as a zero-token window.
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // Decision is the human-readable trace of why this Selection won.
@@ -767,6 +783,11 @@ type meshCandidate struct {
 	variant catalog.Variant
 	runtime string // catalog.RuntimeOllama or catalog.RuntimeVLLM
 	tag     string
+	// contextWindow is the window this peer says its engine is loaded
+	// with for tag (InferenceState.ContextWindow). 0 = the peer declares
+	// nothing, which is also what every agent predating the field sends,
+	// so it must read as "unknown" and never as "serves nothing".
+	contextWindow int
 	// priority is the admin routing preference the CP folded into the peer's
 	// InferenceState: High(1) / Middle(0) / Low(-1). It is the dominant sort
 	// key (sortMeshCandidates), so among peers that can serve the request the
@@ -1010,6 +1031,7 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 				EngineModel:   c.tag,
 				ExecutionMode: "remote",
 				PeerDisplayID: c.displayID,
+				ContextWindow: c.contextWindow,
 				Decision:      decision,
 				Release:       release,
 			}, true
@@ -1219,17 +1241,18 @@ func (s *Selector) buildMeshCandidates(
 				continue
 			}
 			c := meshCandidate{
-				deviceID:  p.DeviceID,
-				displayID: displayID,
-				public:    isPublic,
-				variant:   v,
-				runtime:   kind,
-				tag:       m,
-				priority:  p.InferenceState.Priority,
-				silent:    p.Silent,
-				capacity:  p.InferenceState.Capacity,
-				score:     int64(v.ParamCount) * int64(v.QuantizationTier),
-				rttMS:     noRTT,
+				deviceID:      p.DeviceID,
+				displayID:     displayID,
+				public:        isPublic,
+				variant:       v,
+				runtime:       kind,
+				tag:           m,
+				contextWindow: p.InferenceState.ContextWindow,
+				priority:      p.InferenceState.Priority,
+				silent:        p.Silent,
+				capacity:      p.InferenceState.Capacity,
+				score:         int64(v.ParamCount) * int64(v.QuantizationTier),
+				rttMS:         noRTT,
 			}
 			// isPublic is only ever set inside the p.Grant != nil branch
 			// above, so the grant is present here; carry its ID so Commit

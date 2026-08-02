@@ -538,3 +538,28 @@ func adapterErrorForClient(sel router.Selection, err error) string {
 	}
 	return fmt.Sprintf("runtime %q: %s", displayRuntime(sel), err.Error())
 }
+
+// effectiveContextWindow is the input-token window the #623 guard must
+// hold a request to: the window the endpoint that will ANSWER says it
+// serves, falling back to this device's own computation when the
+// endpoint declares nothing.
+//
+// The order is the whole point. Deps.ContextWindowFor is built from this
+// device's manifests and this device's applied tuning, so on a mesh leg
+// it describes the wrong engine — which is how a prompt sized for a
+// 200k requester reached a peer tuned to 98k and was truncated at the
+// head rather than compacted (waired-agent#436).
+//
+// 0 out of both means unknown, and the guard fails open exactly as it
+// did before the field existed. That is what lets a fleet upgrade in any
+// order: a peer running an older agent sends no window, and the caller
+// gets today's behaviour rather than a black hole.
+func effectiveContextWindow(deps Deps, sel router.Selection) int {
+	if sel.ContextWindow > 0 {
+		return sel.ContextWindow
+	}
+	if deps.ContextWindowFor == nil {
+		return 0
+	}
+	return deps.ContextWindowFor(sel.ModelID)
+}

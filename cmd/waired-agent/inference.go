@@ -611,6 +611,19 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// claudeHandlerSet below (#601), and peer traffic on :9474 is
 	// OpenAI-shaped with an already-resolved EngineModel — exact
 	// catalog semantics are correct for it, like :9473 and :9479.
+	// #623 on the SERVING side (waired-agent#436): reject a prompt that
+	// overruns the window this engine is loaded with, instead of handing
+	// it to ollama to truncate at the head. The requesting node runs the
+	// same check against the window we advertised, but an advertisement
+	// is a snapshot — a re-tune between the push and the request leaves
+	// its copy guarding a window we no longer serve. Only this side knows
+	// the current one.
+	//
+	// This is the one HandlerSet whose traffic is not the owner's own, so
+	// it is also the one where the client cannot be trusted to have
+	// checked. The Claude-intercept set below wires the same dep for the
+	// requesting half.
+	overlayDeps.ContextWindowFor = provider.ContextWindowFor
 	// AuthToken intentionally empty: the inference.Server applies
 	// peer auth via verifyPeerSignature; loopback bearer doesn't
 	// apply to overlay traffic.
