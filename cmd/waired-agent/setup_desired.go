@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -1067,10 +1068,25 @@ func engineDownloadStep(st setupExecutorStep, enginePresent, leaseLive bool) sig
 const setupDetailMax = 512
 
 func clampSetupDetail(s string) string {
-	if len(s) <= setupDetailMax {
+	return clampUTF8(s, setupDetailMax)
+}
+
+// clampUTF8 truncates s to at most max BYTES without splitting a rune.
+//
+// The budget is in bytes because the control plane's clamp is, but the
+// cut has to land on a boundary: since #307 this text routinely carries
+// the engine's own stderr, which means block-drawing progress glyphs and
+// non-ASCII usernames out of Windows paths. A mid-rune cut is not an
+// error anywhere — encoding/json substitutes U+FFFD — so it would have
+// shown up only as mojibake in the wizard.
+func clampUTF8(s string, max int) string {
+	if len(s) <= max {
 		return s
 	}
-	return s[:setupDetailMax]
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 // diskFullMarkers are the substrings that mean "out of disk" across the

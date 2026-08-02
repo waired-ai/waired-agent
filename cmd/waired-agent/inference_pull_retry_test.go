@@ -157,6 +157,38 @@ func TestRunPullJob_DoesNotRetryADiskFullFailure(t *testing.T) {
 	}
 }
 
+// TestRunPullJob_DoesNotRetryADiskFullFailureReportedOnStderr is the
+// version of the test above that a REAL pull can produce, and it is the
+// reason the one above stayed green while the field behaviour was three
+// multi-GB retries onto a full disk.
+//
+// scriptedRunner puts the ENOSPC marker in the RETURNED error. `ollama
+// pull` never does that: it prints the diagnosis to stderr and exits with
+// a bare status, so the short-circuit's isDiskFullText("exit status 1")
+// was dead code for every real download (#307).
+//
+// PRODUCT CONTRACT.
+func TestRunPullJob_DoesNotRetryADiskFullFailureReportedOnStderr(t *testing.T) {
+	r := &diagRunner{
+		lines:   [][]string{{"Error: write /var/lib/waired/blobs/sha256-abc: no space left on device"}},
+		results: []error{exitStatus1()},
+	}
+	p := retryProvider(t, r)
+
+	if _, err := p.PullModel(context.Background(), "model-a"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	if got := r.attempts(); got != 1 {
+		t.Fatalf("pull attempts on a full disk = %d, want 1", got)
+	}
+	ms := modelStateOf(t, p, "model-a")
+	if ms.State != catalog.ModelStateFailed {
+		t.Fatalf("model state = %q, want %q", ms.State, catalog.ModelStateFailed)
+	}
+}
+
 // PRODUCT CONTRACT: shutdown ends the job, it does not restart it.
 // agentCtx is cancelled on SIGTERM, and retrying there would hold the
 // daemon open re-attempting a download nobody is waiting for. Keeps

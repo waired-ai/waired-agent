@@ -2205,6 +2205,75 @@ const modelPullAttempts = 3
 
 var modelPullBackoff = 15 * time.Second
 
+// pullDiagnosticMax bounds one captured line. The scanner behind
+// `ollama pull` admits a 1 MiB token, and a pull can run for hours, so
+// the capture is clamped where it happens rather than where it is read.
+// Same budget as clampSetupDetail, because that is where this text ends
+// up on the wire.
+const pullDiagnosticMax = setupDetailMax
+
+// pullDiagnostic captures the line `ollama pull` printed to explain
+// itself.
+//
+// The engine reports its real diagnosis on stderr and then exits with a
+// bare status, so Pull returns cmd.Wait()'s *exec.ExitError — literally
+// "exit status 1" — and everything downstream was classifying that.
+// The explanation was already reaching this process (parseProgressLine
+// hands it over as a StateUnknown Progress with the raw line in
+// Message); dlProgress.observe drops it, correctly, because it carries
+// no layer digest. This keeps a copy (#307).
+//
+// Only lines that ANNOUNCE an error are kept, not every line the parser
+// left unrecognised. Ollama renders its progress bar by overwriting one
+// line, and a redraw that arrives with its cursor-control prefix intact
+// no longer starts with "pulling" — so "the last unrecognised line"
+// would routinely be a progress fragment masking the real cause. Every
+// byte kept here is also a byte published to the control plane.
+//
+// The prefix is the whole test, with no State check beside it: a line
+// beginning "error" matches none of parseProgressLine's positive arms,
+// so it is always StateUnknown, and a second condition that cannot vary
+// is a branch no test can hold.
+//
+// The mutex is not decoration. DefaultRunner scans stdout and stderr on
+// two goroutines and calls onLine from both.
+type pullDiagnostic struct {
+	mu   sync.Mutex
+	last string
+}
+
+func (d *pullDiagnostic) observe(pr download.Progress) {
+	line := strings.TrimSpace(pr.Message)
+	if !strings.HasPrefix(strings.ToLower(line), "error") {
+		return
+	}
+	d.mu.Lock()
+	d.last = clampUTF8(line, pullDiagnosticMax)
+	d.mu.Unlock()
+}
+
+func (d *pullDiagnostic) text() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.last
+}
+
+// pullFailureText builds the failure a model row records.
+//
+// The pull's own error is always kept — it is the only thing that is
+// certainly about this attempt — and the engine's explanation is
+// appended when there is one. Order is oldest-to-newest cause so the
+// sentence reads as a chain.
+func pullFailureText(err error, diag string) string {
+	if err == nil {
+		return ""
+	}
+	if diag == "" {
+		return err.Error()
+	}
+	return err.Error() + "; " + diag
+}
+
 // runPullJob downloads one model. ctx MUST be the daemon's long-lived
 // context — PullModel dispatches on backgroundCtx(), never on a request
 // ctx (#305a: net/http cancels the handler's context the microsecond the
@@ -2222,6 +2291,10 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	// so a finished/failed model never lingers as a stale "downloading".
 	defer p.dlProgress.forget(modelID)
 	var err error
+	// failure is what the model row records, which is NOT err.Error():
+	// see pullFailureText. Assigned every attempt so the text describes
+	// the attempt that produced it.
+	var failure string
 	for attempt := 1; attempt <= modelPullAttempts; attempt++ {
 		// #304: `ollama pull` is a CLIENT of the serving engine. Setup
 		// admission keys off a stat of the binary, which flips true seconds
@@ -2237,19 +2310,28 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 				p.logger.Warn("engine not ready before pull", "model", modelID, "tag", tag, "err", ensureErr)
 			}
 		}
+		// Fresh per attempt: attempt 1's transient must never be reported
+		// as attempt 3's cause.
+		var diag pullDiagnostic
 		err = p.puller.Pull(ctx, tag, func(pr download.Progress) {
 			p.dlProgress.observe(modelID, pr)
 			if pr.State == download.StateVerifying {
 				p.recordPullState(modelID, catalog.ModelStateVerifying, "")
 			}
+			diag.observe(pr)
 		})
+		failure = pullFailureText(err, diag.text())
 		// A full disk cannot clear itself; three more multi-GB attempts only
 		// delay the honest error the wizard needs to show.
-		if err == nil || attempt == modelPullAttempts || isDiskFullText(err.Error()) {
+		//
+		// Read from `failure`, not from err.Error(): the marker is on the
+		// engine's stderr and never in the exit status, so keying this on
+		// the returned error alone made it dead code for every real pull.
+		if err == nil || attempt == modelPullAttempts || isDiskFullText(failure) {
 			break
 		}
 		p.logger.Warn("ollama pull failed; retrying",
-			"model", modelID, "tag", tag, "attempt", attempt, "max", modelPullAttempts, "err", err)
+			"model", modelID, "tag", tag, "attempt", attempt, "max", modelPullAttempts, "err", failure)
 		select {
 		case <-time.After(time.Duration(attempt) * modelPullBackoff):
 		case <-ctx.Done():
@@ -2263,8 +2345,8 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 		}
 	}
 	if err != nil {
-		p.logger.Warn("ollama pull failed", "model", modelID, "tag", tag, "err", err)
-		p.recordPullState(modelID, catalog.ModelStateFailed, err.Error())
+		p.logger.Warn("ollama pull failed", "model", modelID, "tag", tag, "err", failure)
+		p.recordPullState(modelID, catalog.ModelStateFailed, failure)
 		return
 	}
 	_ = p.store.Update(func(s *catalog.State) {
