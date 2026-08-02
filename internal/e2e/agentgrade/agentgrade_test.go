@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,30 @@ func modelTag() string {
 	return defaultModelTag
 }
 
+// trials raises the sample for one run without moving DefaultTrials,
+// which is the count every stored verdict was measured at and must stay
+// put for them to remain comparable.
+//
+// It exists because three trials answers "is this model stable" but not
+// "how often does an unstable one fail", and the models sitting at 1/3
+// are exactly the ones that second question is about. Re-measuring one
+// of them at a higher count is a deliberate, occasional act — hence an
+// env knob rather than a new default.
+//
+// Zero or unparseable means DefaultTrials: a typo'd count silently
+// halving the sample would be worse than ignoring it.
+func trials(t *testing.T) int {
+	v := strings.TrimSpace(os.Getenv("WAIRED_AGENTGRADE_TRIALS"))
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		t.Fatalf("WAIRED_AGENTGRADE_TRIALS=%q is not a positive integer", v)
+	}
+	return n
+}
+
 func TestAgentGrade(t *testing.T) {
 	bin, err := exec.LookPath("ollama")
 	if err != nil {
@@ -75,7 +100,7 @@ func TestAgentGrade(t *testing.T) {
 
 	base := startStack(t, ctx, bin, tag)
 
-	probe := agentgrade.Probe{BaseURL: base}
+	probe := agentgrade.Probe{BaseURL: base, Trials: trials(t)}
 	rep, err := probe.Run(ctx, "waired/test")
 	if err != nil {
 		t.Fatalf("probe: %v", err)

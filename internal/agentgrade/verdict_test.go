@@ -23,6 +23,19 @@ func textResp(s string) gateway.AnthropicResponse {
 	}
 }
 
+// toolAndTextResp is a turn that carries BOTH a structured tool call and
+// visible text — the shape an engine produces when it parsed part of
+// what the model emitted and passed the rest through.
+func toolAndTextResp(name, args, text string) gateway.AnthropicResponse {
+	return gateway.AnthropicResponse{
+		Content: []gateway.AnthropicContentBlock{
+			{Type: "text", Text: text},
+			{Type: "tool_use", ID: "toolu_1", Name: name, Input: json.RawMessage(args)},
+		},
+		StopReason: "tool_use",
+	}
+}
+
 func toolResp(name, args string) gateway.AnthropicResponse {
 	return gateway.AnthropicResponse{
 		Content: []gateway.AnthropicContentBlock{
@@ -47,6 +60,39 @@ const rc7Transcript = `{
       "message": "Hello! How can I assist you today?"
     }
   }`
+
+// The qwen3-coder transcript, verbatim from a 12-trial run against the
+// real gateway (ollama 0.31.1, qwen3-coder:30b-a3b-q4_K_M, 2026-08-02).
+//
+// Kept alongside rc7Transcript because it is the second measured way a
+// model fails this probe, and the two look nothing alike: rc7 emitted a
+// bare JSON object, this one emits a template's XML with the opener
+// already eaten by the engine's parser.
+const qwen3CoderXMLTranscript = "I'll check the contents of `/etc/hostname` using a shell command.\n\n" +
+	"<function=Bash>\n" +
+	"<parameter=command>\n" +
+	"cat /etc/hostname\n" +
+	"</parameter>\n" +
+	"<parameter=description>\n" +
+	"Read the hostname file\n" +
+	"</parameter>\n" +
+	"</function>\n" +
+	"</tool_call>"
+
+func TestClassify_qwen3CoderXMLTranscript(t *testing.T) {
+	needsTool := Case{Name: "read-file", Prompt: "read /etc/hostname", WantToolCall: true}
+	got := Classify(needsTool, textResp(qwen3CoderXMLTranscript), known("Read", "Write", "Bash", "Glob", "Grep"))
+
+	if got.Verdict != VerdictUnstructuredToolCall {
+		t.Fatalf("verdict = %q, want %q (detail=%q)", got.Verdict, VerdictUnstructuredToolCall, got.Detail)
+	}
+	// The evidence has to carry the call itself. A maintainer reading
+	// the report decides "can this model drive an agent" from this
+	// string, and prose alone would not answer it.
+	if !strings.Contains(got.Evidence, "<function=Bash>") {
+		t.Errorf("evidence should carry the leaked call, got %q", got.Evidence)
+	}
+}
 
 func TestClassify_rc7GreetingTranscript(t *testing.T) {
 	greeting := Case{Name: "greeting", Prompt: "hello", WantToolCall: false}
@@ -119,6 +165,33 @@ func TestClassify(t *testing.T) {
 			resp: textResp("Hello! Is there anything specific you'd like help with today?\n\n" +
 				"# Task: Select the largest bundled model that fits the host.\n\n" +
 				"<tools>iface {{}} => {\"main\": true} </tools>"),
+			want: VerdictUnstructuredToolCall,
+		},
+		{
+			// Measured: qwen3-coder:30b-a3b, 2 trials in 12. The engine
+			// recognised and consumed the opening "<tool_call>" and then
+			// failed on the body, so the reply carries the model's own
+			// XML dialect and an orphaned closer. Looking only for
+			// OPENING delimiters graded this "no tool call attempted" —
+			// the opposite of what happened.
+			name: "qwen3-coder XML call dialect leaking as text",
+			c:    needsTool,
+			resp: textResp(qwen3CoderXMLTranscript),
+			want: VerdictUnstructuredToolCall,
+		},
+		{
+			// The pass-flip this closes. A structured call is present and
+			// correct, so every other check would pass the turn — but a
+			// closer in the visible text means the engine parsed only
+			// part of what the model emitted, and a coding agent gets the
+			// rest as prose. Pins a product contract, not today's
+			// behaviour: leaked delimiters are a failure even when a
+			// well-formed call sits beside them (same rule as the
+			// qwen2.5:0.5b case above).
+			name: "orphaned closer beside a valid structured call is not a pass",
+			c:    needsTool,
+			resp: toolAndTextResp("Read", `{"file_path":"/etc/hostname"}`,
+				"I'll read that for you.\n</tool_call>"),
 			want: VerdictUnstructuredToolCall,
 		},
 		{

@@ -283,10 +283,16 @@ var toolCallArgKeys = []string{"arguments", "parameters", "input"}
 // JSON shape graded it a pass — which is how a visibly broken model
 // would have been recorded as compliant. Add a marker here whenever a
 // run turns one up.
+// orphanFragmentBytes bounds the evidence kept for a close delimiter
+// that has no opener. Enough to carry the leaked call and the prose
+// around it, short enough that the report stays a table.
+const orphanFragmentBytes = 400
+
 var toolSyntaxMarkers = []struct{ open, close string }{
 	{"<tool_call>", "</tool_call>"},
 	{"<tools>", "</tools>"},
 	{"<function_call>", "</function_call>"},
+	{"<function=", "</function>"}, // measured: qwen3-coder:30b-a3b
 	{"<|tool_call|>", ""},
 	{"[TOOL_CALLS]", ""},
 	{"<|python_tag|>", ""},
@@ -321,6 +327,39 @@ func findUnstructuredToolCall(text string) (fragment, name string, found bool) {
 		n, _ := toolCallName(frag)
 		return frag, n, true
 	}
+
+	// The same defect seen from the other side: a CLOSE delimiter with
+	// no opener. The engine's parser recognised the opening marker and
+	// consumed it, then failed on the body and passed the remainder
+	// through as visible text — so the one delimiter left in the reply
+	// is the closer. qwen3-coder:30b-a3b does exactly this (ollama eats
+	// the "<tool_call>" and emits "<function=Bash>…</function>
+	// </tool_call>"), and looking only for openers grades it as "no tool
+	// call attempted", which is the opposite of what happened.
+	//
+	// This also closes the pass-flip: a model that returns a valid
+	// structured call AND leaks a stray closer is not compliant, and
+	// before this it read as one.
+	for _, m := range toolSyntaxMarkers {
+		if m.close == "" {
+			continue
+		}
+		j := strings.Index(text, m.close)
+		if j < 0 {
+			continue
+		}
+		frag := text[:j+len(m.close)]
+		// Keep the tail, not the head: without an opener the fragment
+		// starts at the beginning of the reply, and the report truncates
+		// evidence from the front — so an unbounded fragment would show
+		// prose and hide the delimiter that is the whole finding.
+		if len(frag) > orphanFragmentBytes {
+			frag = "…" + frag[len(frag)-orphanFragmentBytes:]
+		}
+		n, _ := toolCallName(frag)
+		return frag, n, true
+	}
+
 	for _, obj := range jsonObjects(text) {
 		if n, ok := toolCallName(obj); ok {
 			return obj, n, true
