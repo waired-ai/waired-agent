@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: c3f11e83fe19d212
+sourceHash: a98f0c4bc91cfe5d
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -143,6 +143,7 @@ Waired's background service is installed but isn't responding, so sign-in can't 
 | 表示 | 意味 | 対処 |
 |---|---|---|
 | The setup command on … was closed before this finished. Your progress was saved. | セットアップを実行していたターミナルが閉じられた。管理者権限が必要な工程は、そのウィンドウだけが担当している。 | `sudo waired init`（Windows は管理者プロンプトで `waired init`）をもう一度実行。続きから再開し、進捗は失われません。 |
+| Setup has not been run on … yet, so its coding tools are not connected. | そのパソコンでセットアップコマンドがまだ実行されていない。コーディングツールをつなげられるのはこのコマンドだけです（Web ページからホームフォルダに書き込んだり、マシン全体の設定を変えたりはできません）。 | そのパソコンで `sudo waired init`（Windows は管理者プロンプトで `waired init`）を実行します。ほかの工程はブラウザから設定できますが、ここだけはできません。 |
 | Setup on … needs administrator access to continue. | 管理者権限なしで開始された。 | 管理者のターミナルから開始し直してください（[サインインとセットアップ](/ja/getting-started/first-run/)）。 |
 | … has run out of disk space. | モデルが入りきらなかった。 | 空き容量を作るか、[カタログ](/ja/reference/model-catalog/)から小さいモデルを選びます。 |
 | … could not finish downloading. Check its internet connection. | ネットワーク起因でダウンロードが失敗した（名前解決できない、接続が切れた、証明書を検証できないなど）。 | 再試行してください。最初からではなく途中から再開します。 |

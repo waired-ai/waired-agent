@@ -252,12 +252,38 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				setupActive, budget, engineComing = true, setupBudget, coming
 			}
 
+			integOpts := setupIntegrationOpts{
+				GatewayBaseURL:  gatewayBaseURL,
+				StateDir:        o.StateDir,
+				SkipClaudeRoute: o.SkipClaudeRoute,
+			}
+			// waired-agent#311: the coding tools go HERE, between the
+			// engine install and the model download, not after both.
+			//
+			// This is the one step that still needs a human and their
+			// administrator rights, and it used to sit behind the longest
+			// unattended wait in the flow — tens of gigabytes, sometimes
+			// hours. People walked away during the download and came back
+			// to a wizard blocked on coding tools, on a machine that was
+			// otherwise finished. Front-loading it makes the transfer the
+			// tail, which is the part nobody has to watch.
+			//
+			// Deliberately ahead of the engineErr branch below: these are
+			// files in a home directory, and a host whose engine install
+			// failed can still have its coding tools connected.
+			integrationsRan := runWizardIntegrations(sess, setupActive, integOpts)
+
 			// modelWait carries WHY the wait ended, so the summary below
 			// can tell "signed in, local AI is running" apart from
 			// "signed in, the engine on this device is dead" (#310). It
 			// stays zero when the install already failed — that outcome
 			// has its own box, and no wait ran to have an opinion.
 			var modelWait modelWaitResult
+			// terminalDoneSaid stops the "nothing more is needed from this
+			// terminal" line being printed twice: it is now said as soon as
+			// the executor's work is over, which on the ordinary path is
+			// before the download rather than after it.
+			terminalDoneSaid := false
 			if engineErr != nil {
 				// #188: the install failed, so there is nothing for the
 				// model wait to wait for and nothing for the benchmark to
@@ -274,13 +300,27 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// the daemon reports inference disabled / stopped / no engine, so
 				// this never hangs an under-spec or gateway-only host.
 				//
-				// waired#939: say it once more before the longest wait of
-				// the flow. The engine install above can take minutes, so
-				// the warning printed at the handoff has scrolled away by
-				// then — and this is the stretch where a terminal that looks
-				// idle invites closing it.
+				// waired#939 asks for one line here, before the longest
+				// wait of the flow: the engine install above can take
+				// minutes, so the warning printed at the handoff has
+				// scrolled away, and this is the stretch where a terminal
+				// that looks idle invites closing it.
+				//
+				// WHICH line depends on whether this process still owes the
+				// setup anything (waired-agent#311). Once the coding tools
+				// are written above, it does not — the download belongs to
+				// the background service — so "keep this open" would be an
+				// instruction with nothing behind it, which is exactly the
+				// restatement #939 asks to degrade. Closing the terminal
+				// here is safe because the finished row survives the lease:
+				// waired-agent#312 persists it.
 				if setupActive && !enter.Fired() {
-					writePrompt(os.Stdout, setupKeepTerminalOpenLine)
+					if integrationsRan {
+						writePrompt(os.Stdout, setupTerminalDoneLine)
+						terminalDoneSaid = true
+					} else {
+						writePrompt(os.Stdout, setupKeepTerminalOpenLine)
+					}
 				}
 				// #306: report on the model the WIZARD chose. Deliberately
 				// not gated on setupActive — that is a snapshot taken
@@ -318,11 +358,14 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// — a second writer racing desired_model_id, and a recommendation
 			// §20.6 says v1 must not make.
 			//
-			// #186: this block used to sit ABOVE the engine install, so in
-			// terminal mode it interrupted a multi-GB download to ask about
-			// coding tools, and a terminal that took over late was never
-			// asked at all. Asking here fixes both — setupActive is settled
-			// by now, and the download is done.
+			// #186: the TERMINAL's own questions used to sit ABOVE the
+			// engine install, so in terminal mode they interrupted a
+			// multi-GB download to ask about coding tools, and a terminal
+			// that took over late was never asked at all. Asking here fixes
+			// both — setupActive is settled by now, and the download is
+			// done. That reasoning is about a prompt someone has to answer,
+			// so it still holds; the wizard's own instruction needs nobody
+			// and was applied before the download (waired-agent#311).
 			// claudeManaged: can this process write the machine-wide
 			// Claude Code managed settings at all? Elevation is the real
 			// gate (the installers run init elevated); an OS with no
@@ -333,23 +376,21 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// the wizard's coding-tool toggles, or the terminal question.
 			integConsent := false
 			if setupActive {
-				// waired#935: the browser asks which coding tools to
-				// connect, and this process is the only one that can write
-				// them — the daemon runs as a service account with no
-				// business in a user's home, and Claude Code's settings are
-				// root-owned. Warn-only, like every other integration path:
-				// sign-in already succeeded, and the step reports its own
-				// failure to the wizard.
-				if err := runSetupIntegrations(sess, os.Stdout, os.Stderr, setupIntegrationOpts{
-					GatewayBaseURL:  gatewayBaseURL,
-					StateDir:        o.StateDir,
-					SkipClaudeRoute: o.SkipClaudeRoute,
-				}); err != nil {
-					fmt.Fprintf(os.Stderr,
-						"warn: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
-				} else if sess.State().Integrations == nil {
-					// No instruction at all — an older control plane, or a
-					// wizard that has not asked yet.
+				// The last chance to apply the wizard's instruction. The
+				// call before the download is the ordinary one; this catches
+				// the two cases it cannot:
+				//
+				//   - a browser setup that only committed DURING the wait,
+				//     so setupActive was false up there (#308);
+				//   - a wizard that wrote its engine and model first and its
+				//     coding-tool answer a moment later, so the instruction
+				//     was not on the wire yet.
+				//
+				// runWizardIntegrations is a no-op once it has run, so the
+				// tools are never written twice.
+				if !integrationsRan && !runWizardIntegrations(sess, setupActive, integOpts) {
+					// No instruction at all, even now — an older control
+					// plane, or a wizard that never asked.
 					fmt.Println("You can set up your coding tools later from this terminal with `waired link all`.")
 				}
 				// The wizard's own claude-code toggle is the consent, and
@@ -386,7 +427,16 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// keep-open instruction no longer applies — saying it here
 				// would leave the operator guarding a terminal for nothing,
 				// and the wizard would be telling them the opposite.
-				fmt.Println(setupTerminalDoneLine)
+				//
+				// Skipped when it was already said before the download, which
+				// is the ordinary path now that the coding tools run there
+				// (waired-agent#311). This branch is for the run that only
+				// finished its share down here: a browser setup that
+				// committed during the wait, or an instruction that arrived
+				// late.
+				if !terminalDoneSaid {
+					fmt.Println(setupTerminalDoneLine)
+				}
 			case engineErr != nil:
 				// Nothing to measure: there is no engine.
 			case modelWait.engineFailure != "":

@@ -73,6 +73,37 @@ func runSetupIntegrations(s *executorSession, out, errOut io.Writer, o setupInte
 	return nil
 }
 
+// runWizardIntegrations applies the browser's coding-tool instruction and
+// reports whether there WAS one to apply.
+//
+// It exists because waired-agent#311 gave the apply two call sites. The
+// ordinary one is between the engine install and the model download, which
+// is the whole point of the reorder: the last step needing a human stops
+// sitting behind the longest unattended wait of the flow. But two things
+// can put the instruction out of reach at that moment — a browser setup
+// that only commits during the download (#308), and a wizard that writes
+// its engine and model a beat before its coding-tool answer — so the old
+// site, after the wait, stays as the catch-up.
+//
+// The return value is what makes the pair safe: `false` means nothing was
+// asked for, so the second call is still allowed to try; `true` means this
+// run has applied the instruction and the second call must not repeat it.
+// A failed apply still returns true — it happened, it reported itself to
+// the wizard, and doing it twice would not make it work.
+//
+// Warn-only, like every other integration path: sign-in already succeeded,
+// and the step reports its own failure to the wizard (waired#935).
+func runWizardIntegrations(s *executorSession, setupActive bool, o setupIntegrationOpts) bool {
+	if !setupActive || s.State().Integrations == nil {
+		return false
+	}
+	if err := runSetupIntegrations(s, os.Stdout, os.Stderr, o); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"warn: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
+	}
+	return true
+}
+
 // setupIntegrationOpts is what the wizard's apply needs beyond the target
 // list itself.
 type setupIntegrationOpts struct {

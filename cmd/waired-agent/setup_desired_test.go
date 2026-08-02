@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -11,7 +12,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +24,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -2177,8 +2181,9 @@ func TestSetupIntegrationTerminatesWhenNobodyCanWriteIt(t *testing.T) {
 		r, _ := leasedReconciler(t, f, "ollama", "")
 		r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationOpenClaw))
 		r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
-		// The coding tools are the LAST thing the executor does, after the
-		// engine and the model: pending here is a wait, not a stall.
+		// The executor reaches the coding tools right after the engine and
+		// before the model download (waired-agent#311): pending here is a
+		// wait, not a stall.
 		if step := stepByID(t, r.snapshot(ctx), setupStepIntegration); step.Status != signer.SetupStatusPending {
 			t.Fatalf("step = %+v, want pending while an executor is attached", step)
 		}
@@ -2206,6 +2211,14 @@ func TestSetupIntegrationTerminatesWhenNobodyCanWriteIt(t *testing.T) {
 		// The browser-only host waired#935 left undecided: the engine is
 		// already installed, so nothing sends the operator to a terminal —
 		// and the toggles they just confirmed have no author at all.
+		//
+		// Product contract, and this assertion was INVERTED by
+		// waired-agent#312: the code used to be permission_denied, which
+		// NAVI answers with "needs administrator access to continue". That
+		// is the wrong fact — nobody has run the setup command here, which
+		// is not a privilege problem — and it collided with the same code's
+		// other producer on this row (a real refusal, see
+		// classifyIntegrationFailure).
 		f := &fakeSetupProvider{engineInstalled: true, engineReady: true, modelState: catalog.ModelStateReady}
 		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
 		r.now = newFakeClock().now
@@ -2213,8 +2226,8 @@ func TestSetupIntegrationTerminatesWhenNobodyCanWriteIt(t *testing.T) {
 
 		snap := r.snapshot(ctx)
 		step := stepByID(t, snap, setupStepIntegration)
-		if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorPermissionDenied {
-			t.Fatalf("step = %+v, want failed/permission_denied", step)
+		if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorSetupCommandNotRun {
+			t.Fatalf("step = %+v, want failed/setup_command_not_run", step)
 		}
 		if eng := stepByID(t, snap, setupStepEngineInstall); eng.Status != signer.SetupStatusDone {
 			t.Fatalf("engine step = %+v, want done — this host needed no executor for the engine", eng)
@@ -2232,6 +2245,220 @@ func TestSetupIntegrationTerminatesWhenNobodyCanWriteIt(t *testing.T) {
 			t.Fatalf("step = %+v, want skipped", step)
 		}
 	})
+}
+
+// --- #312: the coding-tools row survives a restart ---------------------
+//
+// The engine and model rows are re-derived from the disk and the engine on
+// every snapshot, so a restarted daemon reports the same truth. The
+// integration row was projected purely from in-memory lease state, so every
+// service restart walked a finished device back to the "nobody ever
+// attached" arm — a red row, an admin-access sentence, and setup_complete
+// false, on a machine whose coding tools were configured the day before.
+// All of these are product contracts.
+
+// TestSetupIntegrationSurvivesADaemonRestart is the whole issue in one
+// test: report done, throw the process away, and ask a fresh reconciler
+// over the same state dir.
+func TestSetupIntegrationSurvivesADaemonRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	frame := integrationsFrame("ollama", "", signer.IntegrationClaudeCode, signer.IntegrationOpenClaw)
+
+	f := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	r.Apply(ctx, frame)
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step: setupStepIntegration, Phase: management.SetupExecutorPhaseDone,
+	})
+	if step := stepByID(t, r.snapshot(ctx), setupStepIntegration); step.Status != signer.SetupStatusDone {
+		t.Fatalf("step before the restart = %+v, want done", step)
+	}
+
+	// A new process, same host. Nothing is attached and nothing ever will
+	// be: the browser is the only surface left.
+	f2 := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+	r2 := newSetupReconciler(f2, nil, "dev-1", nil, quietLogger())
+	r2.now = newFakeClock().now
+	r2.Apply(ctx, frame)
+	if step := stepByID(t, r2.snapshot(ctx), setupStepIntegration); step.Status != signer.SetupStatusDone {
+		t.Fatalf("step after the restart = %+v, want done", step)
+	}
+}
+
+// TestSetupIntegrationRecordCoversTheCurrentInstruction pins WHICH
+// instructions a stored record answers for. A record is evidence about the
+// tools it names, not a blanket "this row is finished".
+func TestSetupIntegrationRecordCoversTheCurrentInstruction(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		written []string
+		now     []string
+		want    string
+	}{
+		{"same instruction", []string{signer.IntegrationClaudeCode}, []string{signer.IntegrationClaudeCode},
+			signer.SetupStatusDone},
+		// Shrunk: the operator unticked one and re-ran setup. What is still
+		// asked for is still written, so the row is honestly done — undoing
+		// the other is `waired unlink`'s job, not this row's.
+		{"instruction shrank",
+			[]string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
+			[]string{signer.IntegrationClaudeCode},
+			signer.SetupStatusDone},
+		// Grew: a tool nobody has written yet is named, so this needs the
+		// setup command again and must say so rather than ride the old
+		// record to green.
+		{"instruction grew",
+			[]string{signer.IntegrationClaudeCode},
+			[]string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
+			signer.SetupStatusFailed},
+		{"different tool entirely",
+			[]string{signer.IntegrationClaudeCode}, []string{signer.IntegrationOpenClaw},
+			signer.SetupStatusFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			f := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+			r, _ := leasedReconciler(t, f, "ollama", "")
+			r.Apply(ctx, integrationsFrame("ollama", "", tc.written...))
+			r.NoteExecutor(ctx, management.SetupExecutorRequest{
+				Attached: true, Elevated: true,
+				Step: setupStepIntegration, Phase: management.SetupExecutorPhaseDone,
+			})
+
+			f2 := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+			r2 := newSetupReconciler(f2, nil, "dev-1", nil, quietLogger())
+			r2.now = newFakeClock().now
+			r2.Apply(ctx, integrationsFrame("ollama", "", tc.now...))
+			if step := stepByID(t, r2.snapshot(ctx), setupStepIntegration); step.Status != tc.want {
+				t.Fatalf("step = %+v, want %s", step, tc.want)
+			}
+		})
+	}
+}
+
+// TestSetupIntegrationRecordsOnlyOnDone: a failed or in-flight run leaves
+// no record. Persisting a failure would keep the row red across restarts
+// on a host somebody has since fixed with `waired link` — and the recovery
+// for a genuine failure is re-running the command, which writes the record
+// itself.
+func TestSetupIntegrationRecordsOnlyOnDone(t *testing.T) {
+	ctx := context.Background()
+	for _, phase := range []string{
+		management.SetupExecutorPhaseInstalling,
+		management.SetupExecutorPhaseFailed,
+	} {
+		t.Run(phase, func(t *testing.T) {
+			dir := t.TempDir()
+			f := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+			r, _ := leasedReconciler(t, f, "ollama", "")
+			r.Apply(ctx, integrationsFrame("ollama", "", signer.IntegrationClaudeCode))
+			r.NoteExecutor(ctx, management.SetupExecutorRequest{
+				Attached: true, Elevated: true, Error: "nope",
+				Step: setupStepIntegration, Phase: phase,
+			})
+			if _, err := os.Stat(state.SetupIntegrationsPath(dir)); !os.IsNotExist(err) {
+				t.Fatalf("a %s report must leave no record, stat err = %v", phase, err)
+			}
+		})
+	}
+}
+
+// TestSetupIntegrationAllOffRecordsNothing: "asked, and every toggle was
+// off" writes no files, so there is nothing to record. That row is served
+// as `skipped` from the instruction itself on every boot, with or without
+// an executor, so a record would be a second source of truth for an answer
+// that already survives restarts.
+func TestSetupIntegrationAllOffRecordsNothing(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	f := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	r.Apply(ctx, integrationsFrame("ollama", ""))
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step: setupStepIntegration, Phase: management.SetupExecutorPhaseDone,
+	})
+	if _, err := os.Stat(state.SetupIntegrationsPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("an all-off instruction must leave no record, stat err = %v", err)
+	}
+	if step := stepByID(t, r.snapshot(ctx), setupStepIntegration); step.Status != signer.SetupStatusSkipped {
+		t.Fatalf("step = %+v, want skipped", step)
+	}
+}
+
+// TestSetupIntegrationRecordIsWrittenOnce pins the edge. The executor
+// re-posts its terminal phase on every 10 s heartbeat for as long as it
+// stays attached, so a level trigger here would rewrite the file for the
+// whole of the model download.
+func TestSetupIntegrationRecordIsWrittenOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	f := &fakeSetupProvider{engineInstalled: true, engineReady: true, stateDir: dir}
+	r, clock := leasedReconciler(t, f, "ollama", "")
+	r.Apply(ctx, integrationsFrame("ollama", "", signer.IntegrationClaudeCode))
+
+	done := management.SetupExecutorRequest{
+		Attached: true, Elevated: true,
+		Step: setupStepIntegration, Phase: management.SetupExecutorPhaseDone,
+	}
+	r.NoteExecutor(ctx, done)
+	first, err := os.ReadFile(state.SetupIntegrationsPath(dir))
+	if err != nil {
+		t.Fatalf("read record: %v", err)
+	}
+	// A heartbeat later, with the clock moved on: a second write would show
+	// up as a different written_at.
+	clock.advance(setupExecutorHeartbeat)
+	r.NoteExecutor(ctx, done)
+	again, err := os.ReadFile(state.SetupIntegrationsPath(dir))
+	if err != nil {
+		t.Fatalf("re-read record: %v", err)
+	}
+	if !bytes.Equal(first, again) {
+		t.Fatalf("record rewritten by a repeated report:\nfirst %s\nagain %s", first, again)
+	}
+}
+
+// TestSetupStepOrderPutsCodingToolsBeforeTheDownload is waired-agent#311.
+// The wire order IS the order NAVI renders (it maps the reported array),
+// so this projection is where the flow order lives.
+func TestSetupStepOrderPutsCodingToolsBeforeTheDownload(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeSetupProvider{
+		engineInstalled: true, engineReady: true,
+		modelState: catalog.ModelStateDownloading,
+		bench:      management.BenchmarkStatusResponse{State: management.BenchmarkStateRunning},
+	}
+	r, _ := leasedReconciler(t, f, "ollama", "")
+	f.stateDir = t.TempDir()
+	frame := integrationsFrame("ollama", "m-1", signer.IntegrationClaudeCode)
+	frame.DesiredBenchmarkGen = 1
+	r.Apply(ctx, frame)
+	// An engine_download row only exists once a lease has reported bytes
+	// against it, so report some — the full five-row set is what pins the
+	// order.
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Step: setupStepEngineDownload,
+		Phase: management.SetupExecutorPhaseDone, CompletedBytes: 10, TotalBytes: 10,
+	})
+
+	var got []string
+	for _, s := range r.snapshot(ctx).Steps {
+		got = append(got, s.ID)
+	}
+	want := []string{
+		setupStepEngineDownload,
+		setupStepEngineInstall,
+		setupStepIntegration,
+		setupStepModelPull,
+		setupStepBenchmark,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("step order = %v, want %v", got, want)
+	}
 }
 
 // TestSetupIntegrationStaysPendingWhileAnEngineRowIsRed is the

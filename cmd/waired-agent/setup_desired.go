@@ -17,6 +17,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -303,6 +304,20 @@ type setupReconciler struct {
 	// waired#935 adds the integration — a single field would let the
 	// install's phase erase the finished download's.
 	executorSteps map[string]setupExecutorStep
+	// integrationsWritten is the coding-tool instruction an executor has
+	// reported DONE on this device, read from the daemon state dir at
+	// construction and re-written on every accepted `done`
+	// (waired-agent#312).
+	//
+	// It is the only part of the §7 projection that cannot be re-derived
+	// by looking at the machine: the engine and model rows stat the disk
+	// and probe the engine, but the files this step writes live in the
+	// invoking user's home and in root-owned managed settings, and the
+	// daemon deliberately has no business reading either. Persisting the
+	// executor's report is the nearest observable thing there is — and
+	// without it every service restart walked a finished device back to
+	// "nobody has run the setup command here".
+	integrationsWritten state.SetupIntegrations
 	// executorDriver is the surface a live lease claims to be driving
 	// (waired-agent#198) — in practice only ever "terminal". Bound to the
 	// lease exactly like installClaimed below: a claim that outlived its
@@ -332,10 +347,15 @@ type setupReconciler struct {
 	// replace), so persisting it would buy nothing and could suppress a
 	// re-admission the operator asked for before the crash.
 	modelGenActed int
+
+	// stateDir is where the integration record lives. Captured at
+	// construction rather than asked of the provider per write, so the
+	// file path never depends on when the question is asked.
+	stateDir string
 }
 
 func newSetupReconciler(provider setupProvider, push *controlclient.Client, deviceID string, machineKey ed25519.PrivateKey, logger *slog.Logger) *setupReconciler {
-	return &setupReconciler{
+	r := &setupReconciler{
 		provider:      provider,
 		push:          push,
 		deviceID:      deviceID,
@@ -347,7 +367,29 @@ func newSetupReconciler(provider setupProvider, push *controlclient.Client, devi
 		modelRejected: map[string]setupModelRejection{},
 		executorSteps: map[string]setupExecutorStep{},
 		kick:          make(chan struct{}, 1),
+		stateDir:      provider.setupStateDir(),
 	}
+	if r.stateDir == "" {
+		// Nowhere to keep the record. The daemon always has a state dir
+		// (--state-dir has a per-OS default), so this is not a state any
+		// deployment reaches — but resolving it to a RELATIVE path would
+		// scatter the file across whatever directory the process happened
+		// to start in, which is worse than not having it.
+		return r
+	}
+	// Read once, here, rather than per snapshot: this process is the only
+	// writer, so the cache cannot go stale, and snapshot() runs on the
+	// push loop every couple of seconds.
+	written, err := state.ReadSetupIntegrations(r.stateDir)
+	if err != nil && logger != nil {
+		// Not fatal. A record we cannot parse is indistinguishable from no
+		// record for every purpose but this log line: the row falls back to
+		// the arms it used before the record existed, which is the honest
+		// answer when the evidence is unreadable.
+		logger.Warn("setup: cannot read the coding-tools record", "err", err)
+	}
+	r.integrationsWritten = written
+	return r
 }
 
 // Apply reconciles toward the desired state on the device's Self map
@@ -665,12 +707,66 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 	startEngine := stepID == setupStepEngineInstall &&
 		phase == management.SetupExecutorPhaseDone &&
 		prevPhase != management.SetupExecutorPhaseDone
+	// waired-agent#312: the coding tools are written, so record WHAT was
+	// written before the lease — and with it the only evidence this row
+	// has — goes away. The same edge discipline as startEngine above, for
+	// the same reason: the heartbeat re-posts a terminal phase every 10 s.
+	//
+	// The targets come from the instruction as the daemon currently holds
+	// it, not from the report: the executor applies what SetupState served
+	// it, and that is this value. There is no field on the wire for it to
+	// echo back, and inventing one would only let the two disagree.
+	var recordIntegrations []string
+	if stepID == setupStepIntegration &&
+		phase == management.SetupExecutorPhaseDone &&
+		prevPhase != management.SetupExecutorPhaseDone {
+		// "Asked, and every toggle was off" writes nothing and needs no
+		// record: that row is served as `skipped` from the instruction
+		// itself, on every boot, without an executor.
+		recordIntegrations = integrationTargets(r.desired.integrations)
+	}
 	r.mu.Unlock()
 	if startEngine {
 		r.provider.startSetupEngine("setup: executor reported the engine install done")
 	}
+	if len(recordIntegrations) > 0 {
+		r.recordIntegrationsWritten(recordIntegrations)
+	}
 	r.kickPush()
 	return r.SetupState(ctx)
+}
+
+// recordIntegrationsWritten persists the coding-tool outcome and caches it
+// for the projection (waired-agent#312). Called off the lock: this is a
+// file write, and NoteExecutor runs on every 10 s heartbeat of every lease.
+//
+// A write that fails is logged and dropped, never propagated. The step it
+// describes already succeeded, the caller is an executor heartbeat with no
+// use for the error, and the in-memory phase still reports `done` for the
+// life of this process — the only thing lost is the answer after a restart,
+// which is the state every build before this one shipped with.
+func (r *setupReconciler) recordIntegrationsWritten(targets []string) {
+	if r.stateDir == "" {
+		return // see newSetupReconciler
+	}
+	rec := state.SetupIntegrations{
+		Targets:   targets,
+		WrittenAt: r.now().UTC().Format(time.RFC3339),
+	}
+	if err := state.WriteSetupIntegrations(r.stateDir, rec); err != nil {
+		if r.logger != nil {
+			r.logger.Warn("setup: cannot record the coding-tools outcome",
+				"targets", targets, "err", err)
+		}
+		return
+	}
+	r.mu.Lock()
+	r.integrationsWritten = rec
+	r.mu.Unlock()
+	if r.logger != nil {
+		r.logger.Info("setup: recorded the coding tools this device has connected",
+			"targets", targets)
+	}
 }
 
 // SetupState projects what a setup executor needs in order to decide
@@ -735,6 +831,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	download, downloadSeen := r.executorSteps[setupStepEngineDownload]
 	install := r.executorSteps[setupStepEngineInstall]
 	integ := r.executorSteps[setupStepIntegration]
+	integWritten := r.integrationsWritten
 	phase := install.phase
 	execErr := install.errText
 	// leaseLiveLocked above already dropped the driver if the lease died,
@@ -885,6 +982,27 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		}
 		p.Steps = append(p.Steps, step)
 	}
+	// The coding tools sit between the engine and the model download
+	// (waired-agent#311). The wire order IS the order NAVI renders, and
+	// this is the order the executor now works in: everything that needs
+	// the operator's terminal — and their administrator rights — is done
+	// before the multi-gigabyte transfer nobody has to watch.
+	//
+	// It used to be last, which put the one interactive step behind the
+	// longest unattended wait of the whole flow: people walked away during
+	// the download and came back to a wizard blocked on coding tools.
+	if d.integrations != "" {
+		p.Steps = append(p.Steps, integrationStep(d.integrations, integ, integrationWriter{
+			leaseLive: leaseLive,
+			everSeen:  everSeen,
+			// Read from the rows already projected above, not from the raw
+			// phases they came from: engine_download terminates itself on a
+			// dead lease (#256) without its stored phase ever changing, and
+			// the row on screen is what "already reported" has to mean.
+			engineFailed: engineRowFailed(p.Steps),
+			written:      integWritten,
+		}))
+	}
 	if d.modelID != "" {
 		step := signer.SetupStep{ID: setupStepModelPull}
 		state, completed, total, errText := r.provider.setupModelState(d.modelID)
@@ -961,17 +1079,6 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.Status = signer.SetupStatusPending
 		}
 		p.Steps = append(p.Steps, step)
-	}
-	if d.integrations != "" {
-		p.Steps = append(p.Steps, integrationStep(d.integrations, integ, integrationWriter{
-			leaseLive: leaseLive,
-			everSeen:  everSeen,
-			// Read from the rows already projected above, not from the raw
-			// phases they came from: engine_download terminates itself on a
-			// dead lease (#256) without its stored phase ever changing, and
-			// the row on screen is what "already reported" has to mean.
-			engineFailed: engineRowFailed(p.Steps),
-		}))
 	}
 	return p
 }
@@ -1068,6 +1175,11 @@ type integrationWriter struct {
 	leaseLive    bool // one is attached right now
 	everSeen     bool // one was attached at some point this session
 	engineFailed bool // an engine row already reports a failure
+	// written is the instruction a past executor recorded as done, from
+	// the daemon state dir (waired-agent#312). It outlives the lease, the
+	// process and the reboot, which is the whole point: everything else
+	// in this struct is a fact about THIS process's memory.
+	written state.SetupIntegrations
 }
 
 // integrationStep projects the coding-agent instruction onto its §7 row
@@ -1102,11 +1214,21 @@ func integrationStep(flat string, st setupExecutorStep, w integrationWriter) sig
 	// never become true (waired-agent#258).
 	default:
 		switch {
+		case w.written.Covers(integrationTargets(flat)):
+			// An executor wrote these, on some earlier run, and said so
+			// (waired-agent#312). FIRST, ahead of every liveness arm below,
+			// because none of them is asking the right question: they ask
+			// who is attached to this daemon right now, and the coding
+			// tools are files on a disk that outlive every lease. Without
+			// this arm a completed device fell through to the last one on
+			// every service restart and reported its finished row failed.
+			step.Status = signer.SetupStatusDone
 		case w.leaseLive:
 			// An executor is here and has not reached this row yet. The
-			// coding tools are the LAST thing it does — after the engine
-			// install and after the model download (login_client.go) — so
-			// pending is a wait, not a stall.
+			// coding tools now come BEFORE the model download — they are
+			// the last thing needing this terminal, and waired-agent#311
+			// front-loaded them so the long unattended transfer is the tail
+			// — so pending is a wait, and a short one, not a stall.
 			step.Status = signer.SetupStatusPending
 		case w.engineFailed:
 			// The failure is already on screen, on the row it happened on.
@@ -1121,14 +1243,22 @@ func integrationStep(flat string, st setupExecutorStep, w integrationWriter) sig
 			step.ErrorCode = signer.SetupErrorExecutorGone
 			step.ErrorDetail = "the setup command on this device exited before the coding tools were set up"
 		default:
-			// Never attached at all — the browser-only host waired#935
-			// left undecided. The daemon must not become a privilege
-			// bridge into a user's home, so nothing here can write these
-			// files: this is a permissions problem, not a liveness one,
-			// and its code is the one NAVI answers with the command to
-			// run.
+			// Never attached at all, and no record of a past one — the
+			// browser-only host waired#935 left undecided. The daemon must
+			// not become a privilege bridge into a user's home, so nothing
+			// here can write these files; the setup command is the only
+			// party that can, and it has not run.
+			//
+			// The code says exactly that (waired-agent#312). It used to be
+			// permission_denied, which NAVI answers with "needs
+			// administrator access to continue" — the wrong fact about a
+			// device whose only omission was that nobody had run the
+			// command, and the wrong one to leave on a row that ALSO
+			// reports permission_denied when an executor really was
+			// refused (see classifyIntegrationFailure). The recovery is the
+			// same elevated command either way; the sentence is not.
 			step.Status = signer.SetupStatusFailed
-			step.ErrorCode = signer.SetupErrorPermissionDenied
+			step.ErrorCode = signer.SetupErrorSetupCommandNotRun
 			step.ErrorDetail = "the coding tools on this device can only be set up by the setup command, and it has not run"
 		}
 	}

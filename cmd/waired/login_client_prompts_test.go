@@ -612,6 +612,60 @@ func TestRunInitViaDaemon_BrowserDrivenSaysKeepThisTerminalOpen(t *testing.T) {
 	}
 }
 
+// waired-agent#311: once the coding tools have been handled — which now
+// happens between the engine install and the model download — this process
+// owes the setup nothing, so the line before the long wait must be the
+// wrap-up and not "keep this open". Saying "keep this open" there would
+// park the operator in front of a terminal with no work left in it, which
+// is the restatement waired#939 asks to degrade rather than repeat.
+//
+// Closing it at that point is safe because waired-agent#312 persists the
+// finished coding-tools row: the lease dies with the terminal, and the row
+// stays green.
+//
+// The instruction here is "asked, and every toggle was off". It is a real
+// answer — the daemon serves that row as `skipped` — and it settles the
+// question without this test having to write anything into a home
+// directory.
+func TestRunInitViaDaemon_CodingToolsBeforeTheDownloadWithdrawsKeepOpen(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	owner := scriptStdin("") // the operator never touches the terminal
+	none := []string{}
+	d := &promptsDaemon{
+		statusSeq: []management.InferenceStatus{readyStatus()},
+		setupState: management.SetupStateResponse{
+			Active: true, EngineInstalled: true, DesiredEngine: "ollama",
+			Integrations: &none,
+		},
+	}
+
+	out := runDaemonInit(t, d.server(t).URL, owner, daemonInitScenario{})
+
+	done := strings.Index(out, setupTerminalDoneLine)
+	if done < 0 {
+		t.Fatalf("browser-driven run never withdrew the keep-open instruction\n---\n%s", out)
+	}
+	if n := strings.Count(out, setupTerminalDoneLine); n != 1 {
+		t.Errorf("wrap-up line printed %d times, want exactly 1\n---\n%s", n, out)
+	}
+	// The handoff warning is still said once, at the handoff itself — that
+	// is where the engine install is still ahead. What must NOT happen is
+	// the second one, immediately before a wait this process no longer has
+	// a part in.
+	if last := strings.LastIndex(out, setupKeepTerminalOpenLine); last > done {
+		t.Errorf("keep-open said again after the wrap-up\n---\n%s", out)
+	}
+	if n := strings.Count(out, setupKeepTerminalOpenLine); n > 1 {
+		t.Errorf("keep-open printed %d times with nothing left to keep open for\n---\n%s", n, out)
+	}
+	// The instruction was settled, so the "do it yourself later" fallback
+	// must not appear.
+	if strings.Contains(out, "You can set up your coding tools later") {
+		t.Errorf("offered the manual fallback for an instruction that was answered\n---\n%s", out)
+	}
+}
+
 // The regression bar for the paths §18-12 requires to stay unchanged: with
 // no browser driving, nothing about keeping a terminal open is printed —
 // there is no browser to keep it open for.
