@@ -65,6 +65,7 @@ help:
 	@echo "  e2e-agentgrade       Grade one model's coding-agent tool-format compliance"
 	@echo "                       make e2e-agentgrade MODEL=<ollama tag>  (manual; GPU)"
 	@echo "                       TRIALS=<n> raises the sample; STREAM=1 drives SSE"
+	@echo "                       NO_PULL=1 for a model only \`ollama create\` knows"
 	@echo "  e2e-vllm             Real-vLLM inference e2e (GPU REQUIRED, ~30 min)"
 	@echo "                       REQUIRED before release on any GPU host."
 	@echo "                       Smoke test (~3 min): make e2e-vllm-quick"
@@ -426,6 +427,7 @@ e2e-inference:
 #   make e2e-agentgrade MODEL=<tag> JSON=/tmp/verdict.json
 #   make e2e-agentgrade MODEL=<tag> TRIALS=12   # re-measure a 1/3 blip
 #   make e2e-agentgrade MODEL=<tag> STREAM=1    # the path a coding agent takes
+#   make e2e-agentgrade MODEL=<tag> NO_PULL=1   # a locally derived model, not in the registry
 #
 # The target — not a bare `go test` — is what stamps the commit the probe ran
 # from into the report. FixtureRevision covers the fixture and nothing else, so
@@ -452,6 +454,7 @@ e2e-agentgrade:
 	 echo "probe revision: $$rev"; \
 	 WAIRED_AGENTGRADE_MODEL="$(MODEL)" WAIRED_AGENTGRADE_JSON="$(JSON)" \
 	 WAIRED_AGENTGRADE_TRIALS="$(TRIALS)" WAIRED_AGENTGRADE_STREAM="$(STREAM)" \
+	 WAIRED_AGENTGRADE_NO_PULL="$(NO_PULL)" \
 	   go test -tags e2e -count=1 -v -timeout=40m \
 	     -ldflags "-X github.com/waired-ai/waired-agent/internal/agentgrade.agentRevision=$$rev" \
 	     -run TestAgentGrade ./internal/e2e/agentgrade/...

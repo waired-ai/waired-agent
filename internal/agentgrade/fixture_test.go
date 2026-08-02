@@ -95,9 +95,9 @@ func TestFixtureMatchesRealShape(t *testing.T) {
 // hallucination check in Classify silently forgiving for that name, and
 // engines reject duplicate function names outright.
 func TestFixtureToolNamesUnique(t *testing.T) {
-	names, err := ToolNames()
+	names, err := OfferedTools()
 	if err != nil {
-		t.Fatalf("ToolNames: %v", err)
+		t.Fatalf("OfferedTools: %v", err)
 	}
 	tools, err := fixtureTools()
 	if err != nil {
