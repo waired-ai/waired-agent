@@ -60,6 +60,16 @@ func (rr *requestRec) setUsage(in, out int64) {
 	rr.ev.InputTokens, rr.ev.OutputTokens = in, out
 }
 
+// setToolRecovery records that the gateway put back a tool call the
+// engine had dropped into the assistant text (#409). shape is the
+// dialect it was recovered from, never the text itself.
+func (rr *requestRec) setToolRecovery(shape string) {
+	if rr == nil {
+		return
+	}
+	rr.ev.ToolRecovery = shape
+}
+
 func (rr *requestRec) finish() {
 	if rr == nil || rr.ev.Model == "" {
 		return
