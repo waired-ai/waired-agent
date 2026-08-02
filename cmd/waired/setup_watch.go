@@ -170,14 +170,17 @@ func (t *modelTarget) Poll() string {
 		// flap the wait between keyed and unkeyed on most of its ticks.
 		return t.want
 	}
+	if st := t.state(); setupDriving(st) && st.DesiredModelID != "" {
+		t.want = canonicalBundledModelID(st.DesiredModelID)
+	}
+	// Scheduled from the state this read just established, not the one
+	// before it, so the read that latches a target is already the one that
+	// backs off. Until then the reads stay prompt: the wait cannot report
+	// the right model until it has been told which one that is.
 	every := t.every
 	if t.want != "" {
 		every *= targetLatchedBackoff
 	}
 	t.next = now.Add(every)
-
-	if st := t.state(); setupDriving(st) && st.DesiredModelID != "" {
-		t.want = canonicalBundledModelID(st.DesiredModelID)
-	}
 	return t.want
 }

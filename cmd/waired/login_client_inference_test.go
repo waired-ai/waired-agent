@@ -26,10 +26,23 @@ type inferenceDaemon struct {
 	benchOK     bool
 	benchTokps  float64
 	loginPolls  int32
+	// setupState, when set, adds the executor routes so the run reaches
+	// init the way a browser-driven install does. Without it the routes
+	// 404, the session is unsupported, and every watch built from it —
+	// including the model target — is inert.
+	setupState *management.SetupStateResponse
 }
 
 func (d *inferenceDaemon) server() *httptest.Server {
 	mux := http.NewServeMux()
+	if d.setupState != nil {
+		mux.HandleFunc("/waired/v1/setup/state", func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(*d.setupState)
+		})
+		mux.HandleFunc("/waired/v1/setup/executor", func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(*d.setupState)
+		})
+	}
 	mux.HandleFunc("/waired/v1/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
@@ -173,5 +186,61 @@ func TestRunInitViaDaemon_DisabledInferenceDoesNotBlock(t *testing.T) {
 	}
 	if !strings.Contains(out, "Waired is ready") {
 		t.Errorf("init must still complete on a disabled host\n---\n%s", out)
+	}
+}
+
+// TestRunInitViaDaemon_ReportsTheWizardsModel carries #306 end to end, over
+// the real wire and through the real call site: a browser setup is driving,
+// the control plane has named a model, and the agent is meanwhile serving
+// the one it picked for itself. The terminal must report the operator's
+// choice.
+//
+// It is the only test that pins the production wiring — that
+// runInitViaDaemon builds a target from its session and hands it to the
+// wait at all. The unit tests below it would all still pass if that
+// argument were nil.
+func TestRunInitViaDaemon_ReportsTheWizardsModel(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	const chosen = "qwen2.5-coder-14b-instruct" // what the wizard asked for
+
+	// A live wizard whose engine is already in place, so nothing here tries
+	// to install one.
+	setupState := activeState()
+	setupState.DesiredModelID = chosen
+
+	// The agent is serving its own pick and reports "ready" for it the
+	// whole time — the state that made the terminal announce the wrong
+	// model and return.
+	racing := management.InferenceStatus{
+		SubsystemState: "ready",
+		Active:         &management.ActiveSelection{ModelID: bundledModel},
+		Models: management.ModelsSnapshot{
+			Ready:       []string{bundledModel},
+			Downloading: []string{chosen},
+			Downloads:   []management.ModelDownload{{Model: chosen, CompletedBytes: 1 << 30, TotalBytes: 4 << 30}},
+		},
+	}
+	landed := racing
+	landed.Models.Ready = []string{bundledModel, chosen}
+	landed.Models.Downloading = nil
+	landed.Models.Downloads = nil
+
+	d := &inferenceDaemon{
+		setupState: &setupState,
+		benchOK:    true, // let the run finish instead of polling out its deadline
+		benchTokps: 42,
+		statusSeq:  []management.InferenceStatus{racing, racing, landed},
+	}
+	srv := d.server()
+	defer srv.Close()
+
+	out := runViaDaemonGuarded(t, srv.URL)
+
+	if !strings.Contains(out, chosen+" ready") {
+		t.Errorf("the terminal did not report the model the wizard chose\n---\n%s", out)
+	}
+	if strings.Contains(out, bundledModel+" ready") {
+		t.Errorf("the terminal reported the model the AGENT picked, which is #306\n---\n%s", out)
 	}
 }

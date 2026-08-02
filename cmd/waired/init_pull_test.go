@@ -354,3 +354,360 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 		t.Errorf("awaiting_model step should print once, printed %d times: %q", n, s)
 	}
 }
+
+// The fixtures below reproduce the rc7 Windows host of #306: the agent is
+// serving the model it picked for itself while the operator's browser
+// choice is still downloading. Getting this shape right is the whole
+// difference between a test that pins the fix and one that passes without
+// it — Active must stay on the AGENT's model for the length of the
+// download, because the daemon only commits Active once weights are Ready.
+// Reusing downloadingSnap for the wizard's model would set Active AND
+// Downloads to the same id, and then both the label and the progress
+// lookup pass unfixed.
+const (
+	wizardModel = "wizard-35b"  // what the operator chose in the browser
+	agentModel  = "bundled-14b" // what the agent auto-selected for itself
+	testGB      = 1_000_000_000 // download.HumanBytes is 1000-based
+)
+
+// racingSnap: both models are in flight, the agent's own listed first so
+// the Downloads[0] fallback would pick the wrong one.
+func racingSnap(sub string) management.InferenceStatus {
+	return management.InferenceStatus{
+		SubsystemState: sub,
+		Active:         activeSel(agentModel),
+		Models: management.ModelsSnapshot{
+			Ready:       []string{agentModel},
+			Downloading: []string{agentModel, wizardModel},
+			Downloads: []management.ModelDownload{
+				// 22% and 11%. The wizard's is deliberately in the same
+				// 10% bucket as the pre-handoff bar in the retarget test
+				// below, because that bucket is what drawDownloadLine
+				// dedups on off a TTY.
+				{Model: agentModel, CompletedBytes: 2 * testGB, TotalBytes: 9 * testGB},
+				{Model: wizardModel, CompletedBytes: 5 * testGB, TotalBytes: 44 * testGB},
+			},
+		},
+	}
+}
+
+// bothReady: the wizard's model has landed. Active is still the agent's
+// own — activation is a separate step the terminal must not wait on.
+func bothReady() management.InferenceStatus {
+	return management.InferenceStatus{
+		SubsystemState: "ready",
+		Active:         activeSel(agentModel),
+		Models:         management.ModelsSnapshot{Ready: []string{agentModel, wizardModel}},
+	}
+}
+
+func fixedTarget(t *testing.T, model string) *modelTarget {
+	t.Helper()
+	return newScriptedTarget(t, &scriptedState{
+		states: []management.SetupStateResponse{wizardState(model)},
+	})
+}
+
+// The #306 bar. subsystem_state is "ready" and the agent's own model is in
+// models.ready from the first tick, so the pre-fix wait announced
+// "bundled-14b ready" and returned while the operator's 44 GB choice was
+// still coming down.
+func TestWaitForBundledModel_WaitsForTheWizardsModelNotTheActiveOne(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	stub := &pullStub{seq: []management.InferenceStatus{
+		racingSnap("ready"), racingSnap("ready"), bothReady(),
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
+		fixedTarget(t, wizardModel)) {
+		t.Fatalf("the wait never saw the wizard's model land; out=%q", out.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, wizardModel+" ready") {
+		t.Errorf("expected the wizard's model announced ready, got: %q", s)
+	}
+	if strings.Contains(s, agentModel) {
+		t.Errorf("the terminal named the model the AGENT picked, which is #306: %q", s)
+	}
+	// The wait must have WATCHED the download, not just ended up with the
+	// right label. Both racing snapshots report subsystem_state "ready" —
+	// true of the agent's own model — so a wait that still consults it
+	// returns on the first tick, before the operator's model exists
+	// anywhere, and this bar is the proof that it did not.
+	if !strings.Contains(s, "Downloading "+wizardModel) {
+		t.Errorf("the wait declared ready without ever watching the download: %q", s)
+	}
+	// The handoff note exists to explain a bar that restarts under a
+	// different model. Here the target was known before anything was
+	// printed, so there is nothing to explain and it must stay quiet.
+	if strings.Contains(s, "Now waiting for the model chosen in your browser") {
+		t.Errorf("narrated a handoff that never happened: %q", s)
+	}
+}
+
+// The other half of the same root cause: activeDownload falls back to
+// Downloads[0] when nothing matches Active, so with two pulls in flight the
+// bar counted the wrong model's bytes. Here Active matches exactly, so the
+// pre-fix code renders 2.0/9.0 GB — a plausible-looking, wrong bar.
+func TestWaitForBundledModel_RendersTheWizardsDownloadNotTheBundledOne(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	stub := &pullStub{seq: []management.InferenceStatus{
+		racingSnap("loading"), racingSnap("loading"), racingSnap("loading"), bothReady(),
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
+		fixedTarget(t, wizardModel)) {
+		t.Fatalf("expected ready=true; out=%q", out.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "44.0 GB") {
+		t.Errorf("expected the wizard's 44 GB transfer on the bar, got: %q", s)
+	}
+	if strings.Contains(s, "9.0 GB") {
+		t.Errorf("the bar counted the agent's own download instead: %q", s)
+	}
+}
+
+// subsystem_state "pull_failed" answers for the ACTIVE model. The agent's
+// own pull failing says nothing about the operator's, and must not end a
+// wait keyed to it.
+func TestWaitForBundledModel_ActiveModelPullFailureDoesNotEndTheWizardsWait(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	failed := racingSnap("pull_failed")
+	failed.Models.Ready = nil
+	failed.Models.Failed = []string{agentModel}
+	// Repeated past switchFailedStreak on purpose: a wait that still reads
+	// the subsystem state would otherwise have its streak absorb the whole
+	// sequence and reach the happy ending anyway.
+	stub := &pullStub{seq: []management.InferenceStatus{
+		failed, failed, failed, failed, bothReady(),
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
+		fixedTarget(t, wizardModel)) {
+		t.Fatalf("the agent's own failed pull ended a wait for a different model; out=%q", out.String())
+	}
+	if strings.Contains(out.String(), "Model download failed") {
+		t.Errorf("reported a failure for a model this wait was not watching: %q", out.String())
+	}
+}
+
+// A terminal failure of the wizard's own model does end the wait, and the
+// retry hint has to name that model — the id goes inside a copy-pasteable
+// `waired models pull <id>`.
+func TestWaitForBundledModel_TerminalWizardFailureNamesTheWizardsModel(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, 2*time.Second)
+	failed := racingSnap("ready")
+	failed.Models.Downloading = []string{agentModel}
+	failed.Models.Failed = []string{wizardModel}
+	stub := &pullStub{seq: []management.InferenceStatus{failed}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
+		fixedTarget(t, wizardModel)) {
+		t.Fatalf("a terminally failed target must return false; out=%q", out.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "waired models pull "+wizardModel) {
+		t.Errorf("expected a retry command naming the wizard's model, got: %q", s)
+	}
+	if strings.Contains(s, "Model still downloading") {
+		t.Errorf("the wait ran to its deadline instead of reading the failure: %q", s)
+	}
+}
+
+// One Failed observation is not terminal for a wizard-chosen model: the
+// agent records that for an in-flight pull as it shuts down, and the
+// post-restart bootstrap picks the same model straight back up.
+func TestWaitForBundledModel_TransientWizardFailureIsToleratedByTheStreak(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	failed := racingSnap("ready")
+	failed.Models.Downloading = []string{agentModel}
+	failed.Models.Failed = []string{wizardModel}
+	stub := &pullStub{seq: []management.InferenceStatus{failed, failed, bothReady()}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
+		fixedTarget(t, wizardModel)) {
+		t.Fatalf("a transient failed record ended the wait; out=%q", out.String())
+	}
+	if strings.Contains(out.String(), "Model download failed") {
+		t.Errorf("gave up on the first Failed observation: %q", out.String())
+	}
+}
+
+// Every phase note that names a model names the ACTIVE one, so with a
+// target they all name the wrong model. The phases that describe the
+// ENGINE keep their wording. The dedup also has to survive several states
+// collapsing onto one sentence.
+func TestWaitForBundledModel_NarratesTheWizardsModelThroughThePhases(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	waiting := management.InferenceStatus{
+		Active: activeSel(agentModel),
+		Models: management.ModelsSnapshot{Ready: []string{agentModel}, Downloading: []string{wizardModel}},
+	}
+	awaiting, loading := waiting, waiting
+	awaiting.SubsystemState = "awaiting_model"
+	loading.SubsystemState = "loading"
+	stub := &pullStub{seq: []management.InferenceStatus{
+		{SubsystemState: "initializing"}, awaiting, loading, awaiting, bothReady(),
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
+		fixedTarget(t, wizardModel)) {
+		t.Fatalf("expected ready=true; out=%q", out.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "Starting the AI engine…") {
+		t.Errorf("the engine phase lost its own wording: %q", s)
+	}
+	if n := strings.Count(s, "Preparing to download "+wizardModel+"…"); n != 1 {
+		t.Errorf("the prepare note named the wizard's model %d times, want exactly 1: %q", n, s)
+	}
+	if strings.Contains(s, agentModel) {
+		t.Errorf("a phase note named the model the agent picked: %q", s)
+	}
+}
+
+// #308 x #306: the browser commits partway into a wait that started
+// terminal-driven, so the target arrives with a bar for the agent's own
+// model already on screen. The two percentages are deliberately in the same
+// 10% bucket, which is what drawDownloadLine dedups on off a TTY — without
+// resetting the line state the new model's bar is swallowed whole.
+func TestWaitForBundledModel_RetargetsWhenTheWizardCommitsMidWait(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	stub := &pullStub{seq: []management.InferenceStatus{
+		downloadingSnap(agentModel, 1*testGB, 9*testGB), // 11%
+		downloadingSnap(agentModel, 1*testGB, 9*testGB),
+		racingSnap("loading"), // the wizard's is 11% too
+		bothReady(),
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	target := newScriptedTarget(t, &scriptedState{states: []management.SetupStateResponse{
+		{}, {}, wizardState(wizardModel),
+	}})
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, target) {
+		t.Fatalf("expected ready=true; out=%q", out.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "Downloading "+agentModel) {
+		t.Errorf("the pre-handoff bar is missing: %q", s)
+	}
+	if !strings.Contains(s, "Downloading "+wizardModel) {
+		t.Errorf("the wizard's bar never appeared after the handoff: %q", s)
+	}
+	if n := strings.Count(s, "Now waiting for the model chosen in your browser"); n != 1 {
+		t.Errorf("narrated the handoff %d times, want exactly 1: %q", n, s)
+	}
+	if !strings.Contains(s, wizardModel+" ready") {
+		t.Errorf("expected the wizard's model announced ready, got: %q", s)
+	}
+}
+
+// A model the daemon never starts on must not park the terminal. The
+// daemon can refuse a desired model permanently and cannot say so on any
+// local endpoint, and under a browser setup this wait runs an eight-hour
+// budget — so without the grace this is a hang, not a wrong answer.
+func TestWaitForBundledModel_GivesUpOnAModelTheDaemonNeverPulls(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkTargetPullGrace(t, 20*time.Millisecond)
+	// The agent is happily serving its own model; the wizard's is on none
+	// of the daemon's books at all.
+	stub := &pullStub{seq: []management.InferenceStatus{{
+		SubsystemState: "ready",
+		Active:         activeSel(agentModel),
+		Models:         management.ModelsSnapshot{Ready: []string{agentModel}},
+	}}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	var ready bool
+	done := make(chan struct{})
+	go func() {
+		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
+			fixedTarget(t, "never-pulled"))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait parked on a model the daemon was never going to pull")
+	}
+	if ready {
+		t.Error("a model that never appeared must not be reported ready")
+	}
+	if !strings.Contains(out.String(), "hasn't started downloading") {
+		t.Errorf("expected the wait to say nothing had started, got: %q", out.String())
+	}
+	if strings.Contains(out.String(), agentModel+" ready") {
+		t.Errorf("fell back to reporting the agent's own model: %q", out.String())
+	}
+}
+
+// The grace must not keep counting across an engine that goes away.
+// Applying a desired model is gated on an engine being present, so while
+// there is none the model being on no list says nothing — and the engine
+// install a wizard drives is exactly what takes it away and brings it
+// back. A grace armed before the engine went would otherwise be long
+// expired by the time it returns, and fire on the first frame after,
+// before the reconciler has had one pass to dispatch the pull.
+func TestWaitForBundledModel_TargetGraceDoesNotCountAcrossAnEngineRestart(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkTargetPullGrace(t, 50*time.Millisecond)
+	// The engine is up and the wizard's model is on none of its lists, so
+	// the grace arms here.
+	invisible := management.InferenceStatus{
+		SubsystemState: "ready",
+		Active:         activeSel(agentModel),
+		Models:         management.ModelsSnapshot{Ready: []string{agentModel}},
+	}
+	seq := []management.InferenceStatus{invisible, invisible}
+	// The engine goes down for longer than the grace.
+	for i := 0; i < 200; i++ {
+		seq = append(seq, management.InferenceStatus{SubsystemState: "no_engine"})
+	}
+	// It comes back, and the reconciler has not dispatched the pull yet.
+	seq = append(seq, invisible, racingSnap("loading"), bothReady())
+	stub := &pullStub{seq: seq}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true /*engineComing*/, nil, nil,
+		fixedTarget(t, wizardModel)) {
+		t.Fatalf("the grace carried across the engine restart; out=%q", out.String())
+	}
+	if strings.Contains(out.String(), "hasn't started downloading") {
+		t.Errorf("gave up on a model the engine had only just come back to pull: %q", out.String())
+	}
+}
+
+// shrinkTargetPullGrace shrinks the invisible-target grace for a test.
+// setBenchTiming does not cover it: it is not one of the benchmark timings.
+func shrinkTargetPullGrace(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := targetPullGrace
+	targetPullGrace = d
+	t.Cleanup(func() { targetPullGrace = old })
+}
