@@ -45,4 +45,21 @@ const (
 	// claimed this run yet", and would have to treat a legitimate empty
 	// value as a fault. One capability answers both questions.
 	CapabilityOnboardingV2 = "onboarding-v2"
+
+	// CapabilityOnboardingV3 declares that this agent understands the
+	// model-generation retry lever (waired-agent#136): the signed-map
+	// field InferenceState.DesiredModelGen, and the setup-progress echo
+	// SetupProgress.ModelGen that answers it.
+	//
+	// Only DesiredModelGen needs the gate, for the same reason
+	// DesiredIntegrations did: it rides the signed map, so an agent that
+	// does not know the field drops it on canonical re-marshal and fails
+	// verification. The echo travels the unsigned telemetry push.
+	//
+	// The echo is nonetheless covered by this constant because the
+	// READER needs it to be. A wizard that cannot tell "this agent does
+	// not publish a generation" from "it has not picked up the retry
+	// yet" would leave its retry button spinning forever on every older
+	// agent. One capability answers both questions.
+	CapabilityOnboardingV3 = "onboarding-v3"
 )

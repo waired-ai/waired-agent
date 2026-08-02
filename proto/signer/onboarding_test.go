@@ -29,7 +29,7 @@ func TestNetworkMapWithoutDesiredState_NoNewFieldsInCanonical(t *testing.T) {
 		t.Fatalf("canonical: %v", err)
 	}
 	for _, key := range []string{"desired_engine", "desired_model_id", "desired_benchmark_gen",
-		"desired_integrations"} {
+		"desired_integrations", "desired_model_gen"} {
 		if bytes.Contains(canonical, []byte(`"`+key+`"`)) {
 			t.Fatalf("canonical JSON unexpectedly contains %q:\n%s", key, canonical)
 		}
@@ -58,6 +58,7 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		DesiredIntegrations: &signer.DesiredIntegrations{
 			Enabled: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
 		},
+		DesiredModelGen: 2,
 	}
 	signed, err := k.SignNetworkMap(nm)
 	if err != nil {
@@ -82,6 +83,10 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 				Enabled: []string{signer.IntegrationClaudeCode},
 			}
 		}},
+		// An on-path attacker bumping this one costs the operator a
+		// re-download rather than a wrong model, which is why it is a
+		// counter and not a command — but it is signed all the same.
+		{"DesiredModelGen", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredModelGen = 9 }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -118,6 +123,7 @@ func TestSetupProgress_RoundTrip(t *testing.T) {
 		},
 		LastCheck: "2026-07-19T00:00:00Z",
 		Driver:    signer.SetupDriverBrowser,
+		ModelGen:  2,
 	}
 	raw, err := json.Marshal(progress)
 	if err != nil {
@@ -126,7 +132,7 @@ func TestSetupProgress_RoundTrip(t *testing.T) {
 	for _, key := range []string{"steps", "id", "status", "completed_bytes",
 		"total_bytes", "rate_bps", "error_code", "error_detail", "benchmark", "gen",
 		"measured_tokps", "trial", "trials", "sample_tokps", "median_tokps",
-		"spread_pct", "method", "last_check", "driver"} {
+		"spread_pct", "method", "last_check", "driver", "model_gen"} {
 		if !bytes.Contains(raw, []byte(`"`+key+`"`)) {
 			t.Fatalf("marshalled progress missing %q:\n%s", key, raw)
 		}
@@ -153,7 +159,7 @@ func TestSetupProgress_OmitemptyKeepsHealthyPushSmall(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	for _, key := range []string{"completed_bytes", "total_bytes", "rate_bps",
-		"error_code", "error_detail", "benchmark", "driver"} {
+		"error_code", "error_detail", "benchmark", "driver", "model_gen"} {
 		if bytes.Contains(raw, []byte(`"`+key+`"`)) {
 			t.Fatalf("marshalled progress unexpectedly contains %q:\n%s", key, raw)
 		}
@@ -317,5 +323,21 @@ func TestCapabilityOnboardingV2_WireValue(t *testing.T) {
 	}
 	if signer.CapabilityOnboardingV2 == signer.CapabilityOnboardingV1 {
 		t.Fatal("onboarding v1 and v2 capabilities must stay distinct")
+	}
+}
+
+// TestCapabilityOnboardingV3_WireValue does the same for the v3 gate,
+// which the CP compares before emitting DesiredModelGen. All three must
+// stay distinct for the same reason v1 and v2 do — a v2 agent has no
+// applier for the model generation and would drop the field on
+// canonical re-marshal, failing verification.
+func TestCapabilityOnboardingV3_WireValue(t *testing.T) {
+	if signer.CapabilityOnboardingV3 != "onboarding-v3" {
+		t.Fatalf("CapabilityOnboardingV3 = %q, want %q",
+			signer.CapabilityOnboardingV3, "onboarding-v3")
+	}
+	if signer.CapabilityOnboardingV3 == signer.CapabilityOnboardingV1 ||
+		signer.CapabilityOnboardingV3 == signer.CapabilityOnboardingV2 {
+		t.Fatal("onboarding v1, v2 and v3 capabilities must stay distinct")
 	}
 }
