@@ -1239,10 +1239,17 @@ func run(ctx context.Context, args []string) error {
 				// Kill switch (§8.3 step 1): turning Public Share OFF
 				// terminates in-flight public streams immediately.
 				publicShareCtl.SetOnDisable(infSrv.AbortPublicInFlight)
-				// Public ON requires in-account mesh share ON: eligibility
-				// depends on fresh inference-state reports, which only flow
-				// while mesh share is on (spec §4.1). A mesh enable failure
-				// aborts the public enable.
+				// Public ON requires in-account mesh share ON (spec §4.1):
+				// serving strangers while refusing your own machines is not
+				// a state the toggles should be able to reach. A mesh enable
+				// failure aborts the public enable.
+				//
+				// The original reason given here — "eligibility depends on
+				// fresh inference-state reports, which only flow while mesh
+				// share is on" — stopped being true with waired#1030: the
+				// reports now flow either way and carry NotShared, which the
+				// control plane reads as ineligible. The coupling stands on
+				// the policy above instead.
 				if shareCtl != nil {
 					publicShareCtl.SetMeshAutoEnable(func(ctx context.Context) (bool, error) {
 						if shareCtl.IsShared() {

@@ -52,12 +52,22 @@ type inferenceProbeDeps struct {
 	// cfg.Inference.VLLMPort at wiring time. 0 disables the probe.
 	EnginePort int
 
-	// IsShared, when non-nil and returning false, skips the
-	// PushInferenceStatus call so mesh peers stop seeing this engine
-	// in their inference-mesh snapshot. Local probe / state writer /
-	// aggregator updates continue unchanged so the on-host diagnose
-	// view and the wrapper's local reachability axis still reflect
-	// reality. Nil means "always push" (Phase 4 default).
+	// IsShared, when non-nil and returning false, means the operator has
+	// taken this host out of mesh serving. The push then carries
+	// InferenceState.NotShared rather than being suppressed (waired#1030):
+	// the control plane is what withholds the engine from other peers'
+	// maps, and it can do that without also going blind to the device.
+	//
+	// Suppressing the push was the old implementation, and it did stop
+	// peers — but the stored state does not clear, it freezes, so a device
+	// whose operator ran `waired inference share off` showed the admin its
+	// last report forever, then read as stale. A device that never shared
+	// looked like it had no engine and the setup wizard scored its catalog
+	// blind. Refusing peers' actual requests is unaffected and stays where
+	// it always was: the overlay listener's shareGate, 503
+	// waired_inference_not_shared.
+	//
+	// Nil means "sharing" (the Phase 4 default, and agentconfig's).
 	IsShared func() bool
 
 	// --- Phase 7 routing inputs --------------------------------------
@@ -208,6 +218,10 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 				s.RecommendedMaxParallel = n
 			}
 		}
+		// Set before the aggregator sees it, so the on-host diagnose view
+		// describes the same node the control plane is told about
+		// (waired#1030). omitempty keeps a sharing host's push byte-identical.
+		s.NotShared = deps.IsShared != nil && !deps.IsShared()
 		if err := deps.StateWriter.SetInferenceReachableLocal(s.Reachable); err != nil && deps.Logger != nil {
 			deps.Logger.Warn("inference reachability write failed", "err", err)
 		}
@@ -222,17 +236,11 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 			}
 		}
 		if deps.PushClient != nil && deps.DeviceID != "" && len(deps.MachineKey) == ed25519.PrivateKeySize {
-			if deps.IsShared != nil && !deps.IsShared() {
-				if deps.Logger != nil {
-					deps.Logger.Debug("inference status push skipped: share disabled")
-				}
-			} else {
-				pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
-				_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, s, deps.MachineKey)
-				cancel()
-				if err != nil && deps.Logger != nil && !errors.Is(err, context.Canceled) {
-					deps.Logger.Warn("inference status push failed", "err", err)
-				}
+			pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
+			_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, s, deps.MachineKey)
+			cancel()
+			if err != nil && deps.Logger != nil && !errors.Is(err, context.Canceled) {
+				deps.Logger.Warn("inference status push failed", "err", err)
 			}
 		}
 	}
@@ -277,16 +285,18 @@ const hardwareOnlyPushInterval = 60 * time.Second
 // does with any non-reachable entry, and the admin UI renders it exactly
 // as it renders a device that has never pushed at all.
 //
-// Three cases stay silent, all preserving today's behaviour rather than
-// widening it:
+// Two cases stay silent:
 //
 //   - Disabled: --disable-inference means this host is not participating.
 //   - No profile: a host that cannot profile itself has nothing to say,
 //     the same rule hardwareSummaryFor applies by returning nil.
-//   - Share denied: the summary rides the served network map, so the
-//     IsShared gate is honoured exactly as the normal push honours it.
-//     Consequence: a share-disabled host stays unknown to the wizard —
-//     unchanged from before this fix, and a separate decision to make.
+//
+// Mesh sharing is NOT one of them any more (waired#1030): a host that is
+// not sharing says so on the state and reports anyway. The summary no
+// longer rides the served map for such a device — the control plane
+// withholds its whole InferenceState from peers — so reporting widens
+// nothing, and withholding it left exactly the hosts the setup wizard
+// needs to score invisible to it.
 func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
 	if deps.Disabled || deps.Hardware == nil || deps.PushClient == nil ||
 		deps.DeviceID == "" || len(deps.MachineKey) != ed25519.PrivateKeySize {
@@ -294,12 +304,6 @@ func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
 	}
 
 	push := func() {
-		if deps.IsShared != nil && !deps.IsShared() {
-			if deps.Logger != nil {
-				deps.Logger.Debug("hardware profile push skipped: share disabled")
-			}
-			return
-		}
 		hw := deps.Hardware()
 		if hw == nil {
 			return
@@ -309,6 +313,7 @@ func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
 			Reachable: false,
 			LastCheck: time.Now().UTC().Format(time.RFC3339Nano),
 			Hardware:  hw,
+			NotShared: deps.IsShared != nil && !deps.IsShared(),
 		}
 		pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
 		_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, st, deps.MachineKey)
