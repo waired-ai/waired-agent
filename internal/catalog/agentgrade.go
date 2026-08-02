@@ -100,8 +100,10 @@ type VariantAgentGrade struct {
 	FixtureRevision string `json:"fixture_revision"`
 
 	// AgentRevision is the waired-agent commit the probe ran from, and
-	// Transport is the HTTP shape it drove ("unary", "stream", or
-	// "unary+stream" when both were run and agreed).
+	// Transport is the HTTP shape it drove — "unary", "stream", or
+	// "stream+unary" when the verdict pools runs over both. Derived from
+	// the reports actually imported, never typed: a value an operator
+	// supplied could claim a path nobody drove.
 	//
 	// They record the HARNESS generation, which FixtureRevision does not
 	// cover: it hashes the fixture, and the fixture is only half of what

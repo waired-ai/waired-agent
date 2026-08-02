@@ -36,9 +36,10 @@ streaming する**。#409 の作業量の大半は streaming 側にあり、そ�
 **2. 分類器は分岐させない。** SSE は `readAnthropicStream` で非 streaming
 と同じブロック列に畳み直してから `Classify` に渡す。分類器が経路ごとに
 分かれた瞬間、「モデルの性質」と「こちらのコードの性質」が混ざる。
-両経路が食い違ったら、それは **gateway の欠陥であってモデルの性質ではない**
-—— `TestProbeTransportsAgree` が実 gateway と実 SSE エンコーダを通して
-これをビルド失敗にする。
+**同一の応答**に対して両経路が食い違ったら、それは gateway の欠陥であって
+モデルの性質ではない —— `TestProbeTransportsAgree` が実 gateway と実 SSE
+エンコーダを通してこれをビルド失敗にする（実モデルでの食い違いについては
+下記 4）。
 
 **3. ハーネス世代を、手で立てるフラグではなくビルドが打つ刻印で記録する。**
 `agent_revision`（`-ldflags -X` で埋めた commit）と `transport` を report と
@@ -48,8 +49,22 @@ store の両方に持たせる。#426 は `gateway_tool_recovery: true` を提�
 
 `--import` は刻印のない report と `-dirty` の report を**拒否**する。
 再現できない木の上で測った verdict は、後から判断をやり直す材料にならない。
-`--transport unary+stream` だけは operator が渡す —— 「両方測って一致した」は
-1 回の実行では知りえない事実だからで、それ以外の値は受け付けない。
+
+**4. 両経路の結果は「比較」せず「プールする」。**
+当初は `--transport unary+stream` を operator が渡す設計にしたが、これは誤り
+だった。実測を始めてすぐ gpt-oss:20b の greeting が unary 1/12・stream 0/12 と
+なり、比較設計ならここで「食い違い」を報告することになる。**モデルは確率的**で、
+p=1/12 なら 12 試行で 0 回になる確率は約 35% —— これは単なる別サンプルであって
+何の発見でもない。実モデルの 1 回ずつの実行から gateway の欠陥を読み取ることは
+できない。
+
+決定論的な一致は `TestProbeTransportsAgree` が **同一の canned 応答**を両経路に
+通して CI で担保している。したがって実測の 2 本は「別物 2 つ」ではなく
+**同一の (モデル, gateway) の 2 標本**であり、`--import` を繰り返し渡して
+合算する。試行数は 24 に、ケースごとの verdict は severity の重いほうに、
+`transport` は実際に import された report から**導出**する（operator が
+打たない）。合算を拒否するのは model / fixture_revision / agent_revision が
+食い違うときだけ —— それらは「同じものの標本」ではないから。
 
 ## Consequences
 
