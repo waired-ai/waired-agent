@@ -128,8 +128,12 @@ local model answers it, whatever the session has selected. The Anthropic name
 only matters for requests that actually go to the cloud.
 
 **Long sessions get summarized.** Local models hold less conversation at once,
-so Claude Code compacts older turns to fit. That is the session surviving, not
-failing — see
+so Claude Code compacts older turns to fit. Waired tells Claude Code the limit
+your current model can really handle, so this happens at the right moment. If
+you switch to a different model later, run `sudo waired claude enable` again
+(Windows: from an administrator prompt) so the new limit is passed on —
+`waired claude status` shows both numbers and says when they disagree. That is
+the session surviving, not failing — see
 [Long Claude Code sessions get summarized](/troubleshooting/#long-claude-code-sessions-get-summarized).
 
 **Failures fall back rather than break.** If your model cannot serve a request —

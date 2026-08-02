@@ -8,8 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -114,13 +117,98 @@ func claudeBaseURL(stateDir string) (string, int) {
 	return fmt.Sprintf("http://127.0.0.1:%d", port), port
 }
 
+// wairedLocalDirectiveModel is the reserved /model directive id pinned to LOCAL
+// inference (#52) — the id whose window CLAUDE_CODE_MAX_CONTEXT_TOKENS sizes.
+// The literal is duplicated from gateway.ModelWairedLocal rather than imported
+// so the CLI binary does not link the gateway package for one string, the same
+// trade internal/proxy/intercept makes; TestLocalDirectiveIdInSyncWithGateway
+// pins the two together, as directive_sync_test.go does there.
+const wairedLocalDirectiveModel = "anthropic-waired-local"
+
+// claudeModelsTimeout bounds the /v1/models probe. Short on purpose: this runs
+// inside `waired claude enable` and `waired init`, where the agent is normally
+// up and answering in milliseconds — and where a down agent must cost a beat,
+// not a stall. A miss is not fatal (see claudeLocalContextWindow).
+const claudeModelsTimeout = 2 * time.Second
+
+// claudeLocalContextWindow reports the input-token window local inference can
+// actually serve on this host, for WriteOptions.LocalContextWindow (#408).
+//
+// The number lives in the daemon (gateway Deps.ContextWindowFor = min of the
+// manifest's native window and the tuning the engine really applied), and the
+// gateway already publishes it: /v1/models stamps it as max_input_tokens on
+// every entry, including the local directive id. So the elevated CLI asks the
+// one surface that already answers this instead of growing a management route
+// for it. 0 means unknown — agent down, no active model, unknown sizing — and
+// the caller must then leave the managed-settings value alone.
+func claudeLocalContextWindow(stateDir string) int {
+	baseURL, _ := claudeBaseURL(stateDir)
+	return claudeLocalWindowAt(baseURL)
+}
+
+// claudeLocalWindowAt is claudeLocalContextWindow against an explicit base URL,
+// so the fetch itself is testable against an httptest server rather than behind
+// a function seam that would leave the real implementation unexercised
+// (CLAUDE.md §Test discipline).
+func claudeLocalWindowAt(baseURL string) int {
+	cl := &http.Client{Timeout: claudeModelsTimeout}
+	resp, err := cl.Get(strings.TrimRight(baseURL, "/") + "/v1/models")
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, claudeModelsMaxBody))
+	if err != nil {
+		return 0
+	}
+	return claudeLocalWindowFromModels(body)
+}
+
+// claudeModelsMaxBody caps the /v1/models read. The real response is a few KB;
+// the cap only stops a wedged or hostile listener on the port from being read
+// without bound into an elevated process.
+const claudeModelsMaxBody = 1 << 20
+
+// claudeLocalWindowFromModels picks the local directive id's max_input_tokens
+// out of an Anthropic /v1/models body. Every malformed, missing or zero case
+// collapses to 0 = unknown: this decides what an elevated process tells Claude
+// Code about a window, so guessing is worse than declining.
+func claudeLocalWindowFromModels(body []byte) int {
+	var doc struct {
+		Data []struct {
+			ID             string `json:"id"`
+			MaxInputTokens int    `json:"max_input_tokens"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return 0
+	}
+	for _, m := range doc.Data {
+		if m.ID == wairedLocalDirectiveModel && m.MaxInputTokens > 0 {
+			return m.MaxInputTokens
+		}
+	}
+	return 0
+}
+
 // claudeManagedWriteOptions resolves the managed-settings write options from
-// agent.json — currently the model-route-directives opt-in (#52), which adds
-// CLAUDE_CODE_MAX_CONTEXT_TOKENS for the local /model directive id's window.
+// agent.json — the model-route-directives opt-in (#52) — plus the window local
+// inference actually serves (#408), which sizes CLAUDE_CODE_MAX_CONTEXT_TOKENS
+// for the local /model directive id.
+//
+// The window is probed even when directives are OFF: the feature-off scrub
+// recognises waired's value by matching it, so it has to know what this host
+// would have written.
 func claudeManagedWriteOptions(stateDir string) claudemanaged.WriteOptions {
 	c := agentconfig.Defaults()
 	_ = c.MergeJSON(agentconfig.JSONPathFor(stateDir))
-	return claudemanaged.WriteOptions{ModelRouteDirectives: c.Inference.ClaudeModelRouteDirectives}
+	return claudemanaged.WriteOptions{
+		ModelRouteDirectives: c.Inference.ClaudeModelRouteDirectives,
+		LocalContextWindow:   claudeLocalContextWindow(stateDir),
+	}
 }
 
 func runClaudeEnable(stateDir string, noStatusline bool) error {
@@ -165,7 +253,13 @@ func managedRemoveIsFatal(err error) bool {
 }
 
 func runClaudeDisable(stateDir string) error {
-	removed, err := claudemanaged.Remove()
+	// The window lets the scrub recognise a host-derived
+	// CLAUDE_CODE_MAX_CONTEXT_TOKENS as ours (#408). Best-effort by design:
+	// disable frequently runs with the agent already stopped, and a 0 here
+	// only means one inert key may survive — see RemoveOptions.
+	removed, err := claudemanaged.RemoveWithOptions(claudemanaged.RemoveOptions{
+		LocalContextWindow: claudeLocalContextWindow(stateDir),
+	})
 	if managedRemoveIsFatal(err) {
 		return fmt.Errorf("waired claude disable: %w", err)
 	}
@@ -195,6 +289,40 @@ func runClaudeDisable(stateDir string) error {
 	return nil
 }
 
+// claudeWindowStatusLine renders the `waired claude status` line comparing the
+// context window Claude Code will be STARTED with (the managed-settings
+// CLAUDE_CODE_MAX_CONTEXT_TOKENS, frozen at its process start) against the one
+// local inference actually serves right now.
+//
+// The two can legitimately disagree: only an elevated process may write managed
+// settings (docs/decisions/20260728/1444-…, waired#935), so changing the serving
+// model leaves the value behind until the next `waired claude enable` / init.
+// Before #408 the value was a static 250000 and the disagreement was permanent
+// AND invisible. It stays visible here until waired#1031 fixes the window as an
+// advertised contract and the drift stops existing.
+//
+// Returns "" when neither number is known — an un-routed host has nothing to
+// say here, and a status command should not manufacture a line to fill.
+func claudeWindowStatusLine(goos, managed string, live int) string {
+	const label = "local window:      "
+	fix := fmt.Sprintf("re-run `%s`", elevatedCmdline(goos, "waired claude enable"))
+	switch {
+	case live <= 0 && managed == "":
+		return ""
+	case live <= 0:
+		// Can't verify: report what Claude Code will use and say why we cannot
+		// vouch for it, rather than implying agreement.
+		return fmt.Sprintf("%s unknown (agent not answering)  (managed settings: %s)", label, managed)
+	case managed == "":
+		return fmt.Sprintf("%s %d  (managed settings: not set)", label, live)
+	case managed == strconv.Itoa(live):
+		return fmt.Sprintf("%s %d  (managed settings: %s)", label, live, managed)
+	default:
+		return fmt.Sprintf("%s %d  (managed settings: %s — STALE, Claude Code is being told the wrong window; %s)",
+			label, live, managed, fix)
+	}
+}
+
 func runClaudeStatus(stateDir string) error {
 	baseURL, port := claudeBaseURL(stateDir)
 	path, present, current := claudemanaged.View()
@@ -209,6 +337,10 @@ func runClaudeStatus(stateDir string) error {
 	}
 	fmt.Printf("expected base URL:  %s\n", baseURL)
 	fmt.Printf("gateway listener:   127.0.0.1:%d (%s)\n", port, listenerLabel(port))
+	if line := claudeWindowStatusLine(runtime.GOOS,
+		claudemanaged.MaxContextTokensAt(path), claudeLocalContextWindow(stateDir)); line != "" {
+		fmt.Println(line)
+	}
 	fmt.Printf("fallback hook:      %s\n", installedLabel(claudemanaged.StopHookInstalled()))
 	if legacycleanup.Present(stateDir) {
 		// Retired MITM proxy artifacts still on disk (a stale api.anthropic.com
