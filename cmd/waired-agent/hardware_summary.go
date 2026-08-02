@@ -1,15 +1,55 @@
 package main
 
 import (
+	"context"
+	"time"
+
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
-// hardwareSummaryFor translates the boot hardware profile into the
-// subset broadcast on every InferenceState push. Returns nil when there
-// is nothing worth saying (no GPU and no RAM figure), so a host that
+// hardwareResampleInterval is how long a published host profile may go
+// without being re-detected (#387).
+//
+// The summary used to be sampled once at boot and captured as a pointer,
+// so a host that gained a GPU or installed a driver kept reporting the
+// old answer until the daemon restarted — and the control plane's
+// onboarding host-fit kept scoring against it. Re-detection is paced by
+// the Profiler's own TTL rather than a ticker of ours, so the probe loop
+// can read the getter every tick and pay a real probe only this often.
+//
+// Five minutes is well inside the existing envelope: the management API
+// drives the same detectors through a 30 s-TTL profiler on ordinary
+// request paths, so an open admin page already re-detects ten times more
+// often than this.
+const hardwareResampleInterval = 5 * time.Minute
+
+// hardwareSummaryFn returns the getter the inference probe loop reads to
+// decorate each push, or nil when there is no profiler to read (which is
+// how --disable-inference stays completely silent — see
+// runHardwareOnlyReport).
+//
+// A getter rather than a value: what a host IS can change while the
+// daemon runs, and the pointer this replaced could only ever carry what
+// was true at boot.
+func hardwareSummaryFn(ctx context.Context, p *hardware.Profiler) func() *signer.HardwareSummary {
+	if p == nil {
+		return nil
+	}
+	return func() *signer.HardwareSummary { return hardwareSummaryFor(p.Profile(ctx)) }
+}
+
+// hardwareSummaryFor translates a hardware profile into the subset
+// broadcast on the InferenceState push. Returns nil when there is
+// nothing worth saying (no GPU and no RAM figure), so a host that
 // cannot profile itself keeps the field off the wire entirely rather
 // than publishing a zero-valued object.
+//
+// Since #387 this is published by an engine-LESS host too, not only as a
+// rider on a successful engine probe: the browser setup wizard scores
+// its catalog against what the control plane knows about the machine,
+// and the window in which it runs is precisely the window in which there
+// is no engine to probe.
 //
 // Beyond the peer-display fields (model / VRAM / compute cap) the
 // summary carries the three host-fit facts the control plane needs to

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
@@ -88,6 +90,69 @@ func TestHardwareSummaryFor(t *testing.T) {
 				t.Errorf("hardwareSummaryFor()\n got %+v\nwant %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestHardwareSummaryFn_ResamplesAfterTheTTL is the second half of #387
+// (product contract): the summary used to be sampled once at boot and
+// captured as a pointer, so a host that gained a GPU or a driver kept
+// reporting the old answer until the daemon restarted.
+//
+// The getter now re-derives from a live Profiler, whose own TTL paces the
+// re-detection — no extra ticker, and a detection cost of one probe per
+// hardwareResampleInterval rather than one per probe tick. The seam is
+// the Profiler's clock, so this runs in microseconds instead of waiting
+// out a real interval.
+func TestHardwareSummaryFn_ResamplesAfterTheTTL(t *testing.T) {
+	now := time.Now()
+	gpus := []hardware.GPU{}
+	p := hardware.NewProfiler("",
+		hardware.WithTTL(hardwareResampleInterval),
+		hardware.WithNow(func() time.Time { return now }),
+		hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
+			return gpus, hardware.Accelerators{}, nil
+		}),
+		hardware.WithRAM(func(context.Context) (int, int, error) { return 64, 32, nil }),
+		hardware.WithStorage(func(context.Context, string) (int64, error) { return 1 << 40, nil }),
+		hardware.WithEngineVersion(func(context.Context, string) (bool, string) { return false, "" }),
+		hardware.WithUMA(func(context.Context, *hardware.Profile) {}),
+	)
+	get := hardwareSummaryFn(context.Background(), p)
+	if get == nil {
+		t.Fatal("hardwareSummaryFn returned nil for a real profiler")
+	}
+
+	if got := get(); got == nil || len(got.GPUs) != 0 {
+		t.Fatalf("first sample = %+v, want a GPU-less host", got)
+	}
+
+	// The driver lands. Inside the TTL the answer must not change — that
+	// is the cache doing its job, and it is what keeps the per-tick call
+	// cheap.
+	gpus = []hardware.GPU{{Vendor: "nvidia", Model: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24564}}
+	now = now.Add(hardwareResampleInterval - time.Second)
+	if got := get(); got == nil || len(got.GPUs) != 0 {
+		t.Errorf("re-detected inside the TTL: %+v", got)
+	}
+
+	// Past it, the host republishes what it now is — without a restart.
+	now = now.Add(2 * time.Second)
+	got := get()
+	if got == nil || len(got.GPUs) != 1 {
+		t.Fatalf("after the TTL = %+v, want the new GPU", got)
+	}
+	if got.GPUs[0].Vendor != "nvidia" || got.GPUs[0].VRAMTotalMB != 24564 {
+		t.Errorf("resampled GPU = %+v, want the RTX 4090", got.GPUs[0])
+	}
+}
+
+// TestHardwareSummaryFn_NilProfiler: --disable-inference builds no
+// profiler, and the probe loop reads "no getter" as "this host has
+// nothing to say" (product contract — it is what keeps a disabled host
+// completely silent).
+func TestHardwareSummaryFn_NilProfiler(t *testing.T) {
+	if got := hardwareSummaryFn(context.Background(), nil); got != nil {
+		t.Errorf("hardwareSummaryFn(nil) = non-nil, want nil")
 	}
 }
 

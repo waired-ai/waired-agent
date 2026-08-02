@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -513,6 +515,11 @@ func TestRunLocalInferenceProbe_DispatchesByEngineKind(t *testing.T) {
 // empty / "none", the loop must short-circuit identically to
 // Disabled=true. Without this, an engine-less host would push spurious
 // "reachable=false, type=ollama" entries to its peers.
+//
+// Product contract. It carries no Hardware, which is what makes it the
+// regression anchor for #387: the hardware-only report added there must
+// stay silent for a host that has nothing to say about itself, so this
+// test asserts the same "no push at all" it always did, unchanged.
 func TestRunLocalInferenceProbe_NoneKindPinsFalse(t *testing.T) {
 	cpSrv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		t.Error("CP push must not fire when EngineKind is none")
@@ -545,6 +552,236 @@ func TestRunLocalInferenceProbe_NoneKindPinsFalse(t *testing.T) {
 	}
 	if got.InferenceReachableLocal {
 		t.Error("EngineKind=none must pin InferenceReachableLocal to false")
+	}
+}
+
+// --- #387: the host profile on an engine-less host ---------------------
+//
+// Until #387 the summary rode ONLY the probe result, and the probe loop
+// returns before it pushes anything when there is no engine to probe. So
+// a host that has not decided on an engine — the exact state the browser
+// setup wizard operates in — had no path at all to tell the control
+// plane what it is, and the wizard scored its catalog blind.
+
+// hardwareOnlyCP is the CP mock the engine-less tests share: it counts
+// pushes and keeps the last state body. Returns the server plus accessors
+// so each test states its own expectation.
+func hardwareOnlyCP(t *testing.T) (*httptest.Server, func() int32, func() signer.InferenceState) {
+	t.Helper()
+	var count int32
+	var mu sync.Mutex
+	var last signer.InferenceState
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&count, 1)
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			State signer.InferenceState `json:"state"`
+		}
+		_ = json.Unmarshal(body, &req)
+		mu.Lock()
+		last = req.State
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","content_changed":true}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() int32 { return atomic.LoadInt32(&count) },
+		func() signer.InferenceState {
+			mu.Lock()
+			defer mu.Unlock()
+			return last
+		}
+}
+
+// testHardwareSummary is the profile the engine-less tests publish. A
+// discrete NVIDIA host, so every field the control plane's host-fit reads
+// is non-zero and a dropped one shows up as a diff rather than a zero
+// that could have come from anywhere.
+func testHardwareSummary() *signer.HardwareSummary {
+	return &signer.HardwareSummary{
+		RAMTotalGB: 64,
+		GPUs: []signer.HardwareGPUSummary{{
+			Model: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24564,
+			ComputeCap: "8.9", Vendor: "nvidia",
+		}},
+	}
+}
+
+// engineLessDeps is the fresh-host shape: inference enabled, but no
+// engine decided yet, so there is no port and no kind to probe.
+func engineLessDeps(t *testing.T, cpURL string) inferenceProbeDeps {
+	t.Helper()
+	dir := t.TempDir()
+	w := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+	if err := w.Set(w.Snapshot()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+	return inferenceProbeDeps{
+		StateWriter: w,
+		PushClient:  controlclient.New(cpURL, "tok"),
+		DeviceID:    "dev-self",
+		MachineKey:  machinePriv,
+		EngineKind:  signer.InferenceTypeNone,
+		EnginePort:  0,
+		Hardware:    func() *signer.HardwareSummary { return testHardwareSummary() },
+		Logger:      slog.Default(),
+	}
+}
+
+// TestRunLocalInferenceProbe_EngineLessPublishesHardware is the #387
+// product contract: a host with no engine still tells the control plane
+// what it is, on the existing inference-status channel.
+//
+// The pushed state must be an honest description of that host —
+// type=none, reachable=false, no endpoint, no models — carrying only the
+// hardware. Anything else would have peers reading it as a broken engine.
+func TestRunLocalInferenceProbe_EngineLessPublishesHardware(t *testing.T) {
+	cp, pushes, lastState := hardwareOnlyCP(t)
+
+	// 500 ms is one immediate report and no ticker fire
+	// (hardwareOnlyPushInterval is 60 s), so the count below is exact.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	runLocalInferenceProbe(ctx, engineLessDeps(t, cp.URL))
+
+	if got := pushes(); got != 1 {
+		t.Fatalf("push count = %d, want exactly 1", got)
+	}
+	st := lastState()
+	if st.Type != signer.InferenceTypeNone {
+		t.Errorf("pushed type = %q, want %q", st.Type, signer.InferenceTypeNone)
+	}
+	if st.Reachable {
+		t.Error("pushed reachable=true for a host with no engine")
+	}
+	if st.Endpoint != "" || len(st.Models) != 0 {
+		t.Errorf("pushed endpoint=%q models=%v, want both empty", st.Endpoint, st.Models)
+	}
+	if st.LastCheck == "" {
+		t.Error("pushed last_check is empty (the CP validator rejects that)")
+	} else if _, err := time.Parse(time.RFC3339Nano, st.LastCheck); err != nil {
+		t.Errorf("pushed last_check %q does not parse as RFC3339Nano: %v", st.LastCheck, err)
+	}
+	if !reflect.DeepEqual(st.Hardware, testHardwareSummary()) {
+		t.Errorf("pushed hardware\n got %+v\nwant %+v", st.Hardware, testHardwareSummary())
+	}
+}
+
+// TestRunLocalInferenceProbe_EngineLessRespectsDisabled pins the
+// --disable-inference contract (product contract): an operator who turned
+// inference off is not participating, and #387 must not make that host
+// start talking about its GPU.
+func TestRunLocalInferenceProbe_EngineLessRespectsDisabled(t *testing.T) {
+	cp, pushes, _ := hardwareOnlyCP(t)
+
+	deps := engineLessDeps(t, cp.URL)
+	deps.Disabled = true
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	runLocalInferenceProbe(ctx, deps)
+
+	if got := pushes(); got != 0 {
+		t.Errorf("push count = %d, want 0 when inference is disabled", got)
+	}
+}
+
+// TestRunLocalInferenceProbe_EngineLessRespectsShareDenied: the
+// hardware-only report goes through the SAME IsShared gate as the normal
+// push (product contract). The summary rides the served network map, so
+// publishing it for a host whose operator turned sharing off would widen
+// what that switch exposes — a decision this fix deliberately does not
+// make. Consequence: a share-disabled host stays blind to the wizard,
+// exactly as it is today.
+func TestRunLocalInferenceProbe_EngineLessRespectsShareDenied(t *testing.T) {
+	cp, pushes, _ := hardwareOnlyCP(t)
+
+	deps := engineLessDeps(t, cp.URL)
+	deps.IsShared = func() bool { return false }
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	runLocalInferenceProbe(ctx, deps)
+
+	if got := pushes(); got != 0 {
+		t.Errorf("push count = %d, want 0 when share is denied", got)
+	}
+}
+
+// TestRunLocalInferenceProbe_EngineLessSkipsUnknownProfile: a host that
+// cannot profile itself keeps the field off the wire entirely rather than
+// pushing a state with nothing in it (product contract — the same rule
+// hardwareSummaryFor already applies by returning nil).
+func TestRunLocalInferenceProbe_EngineLessSkipsUnknownProfile(t *testing.T) {
+	cp, pushes, _ := hardwareOnlyCP(t)
+
+	deps := engineLessDeps(t, cp.URL)
+	deps.Hardware = func() *signer.HardwareSummary { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	runLocalInferenceProbe(ctx, deps)
+
+	if got := pushes(); got != 0 {
+		t.Errorf("push count = %d, want 0 when the host profile is unknown", got)
+	}
+}
+
+// TestRunLocalInferenceProbe_ReadsHardwareEachTick covers the second half
+// of #387 on the ENGINE-FUL path: the summary used to be a pointer
+// captured at boot, so a host that gained a GPU or a driver kept
+// reporting the old answer until the daemon restarted. It is now read
+// through a getter, per tick.
+//
+// Product contract. The assertion is that what lands on the wire is what
+// the getter returned at push time, not a value snapshotted when the deps
+// were built — which is what a re-read makes possible and a captured
+// pointer cannot.
+func TestRunLocalInferenceProbe_ReadsHardwareEachTick(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"models":[{"name":"llama3.1:8b"}]}`)
+	}))
+	defer ollama.Close()
+	port, err := portFromURL(ollama.URL)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+	cp, pushes, lastState := hardwareOnlyCP(t)
+
+	// The driver landed after the deps were constructed: the getter's
+	// first answer is the post-change one.
+	var calls int32
+	upgraded := &signer.HardwareSummary{
+		RAMTotalGB: 64,
+		GPUs: []signer.HardwareGPUSummary{{
+			Model: "NVIDIA GeForce RTX 4090", VRAMTotalMB: 24564,
+			ComputeCap: "8.9", Vendor: "nvidia",
+		}},
+	}
+
+	deps := engineLessDeps(t, cp.URL)
+	deps.EngineKind = signer.InferenceTypeOllama
+	deps.EnginePort = port
+	deps.Hardware = func() *signer.HardwareSummary {
+		atomic.AddInt32(&calls, 1)
+		return upgraded
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	runLocalInferenceProbe(ctx, deps)
+
+	if got := atomic.LoadInt32(&calls); got < 1 {
+		t.Fatalf("hardware getter called %d times, want ≥ 1 — the probe is not re-reading it", got)
+	}
+	if got := pushes(); got < 1 {
+		t.Fatalf("push count = %d, want ≥ 1", got)
+	}
+	st := lastState()
+	if st.Type != signer.InferenceTypeOllama || !st.Reachable {
+		t.Errorf("engine-ful push changed shape: type=%q reachable=%v", st.Type, st.Reachable)
+	}
+	if !reflect.DeepEqual(st.Hardware, upgraded) {
+		t.Errorf("pushed hardware\n got %+v\nwant %+v", st.Hardware, upgraded)
 	}
 }
 
