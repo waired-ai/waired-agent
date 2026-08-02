@@ -62,4 +62,24 @@ const (
 	// yet" would leave its retry button spinning forever on every older
 	// agent. One capability answers both questions.
 	CapabilityOnboardingV3 = "onboarding-v3"
+
+	// CapabilityContextWindowV1 declares that this agent understands
+	// InferenceState.ContextWindow — the window a device says its engine
+	// is loaded with, which the requesting router uses to decide whether
+	// a peer may serve a given traffic window at all.
+	//
+	// It needs the gate for the reason DesiredIntegrations and
+	// DesiredModelGen did: the field rides the signed map, so an agent
+	// that does not know it drops it on canonical re-marshal and fails
+	// verification. This one differs from those two in WHERE it appears —
+	// they are CP-injected onto the poller's own Self entry, this one is
+	// agent-reported and travels on every PEER entry — so the CP has to
+	// strip it across the whole map for an undeclared poller, not just
+	// from Self.
+	//
+	// A reader that predates the field sees 0, which every consumer must
+	// already treat as "declares nothing" and fail open on. So the gate
+	// protects signature verification, not correctness of the routing
+	// decision: an old agent simply routes the way it does today.
+	CapabilityContextWindowV1 = "context-window-v1"
 )
