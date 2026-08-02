@@ -3,11 +3,28 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"maps"
 	"slices"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
 )
+
+// modelWaitResult is why the model wait ended.
+//
+// ready is the bool this used to return. engineFailure is the engine's
+// own account of why it is down, and is non-empty ONLY when the wait
+// stopped because the engine would not stay up (#310).
+//
+// Deliberately not "the wait returned false": false is also the honest
+// answer on a gateway-only host with inference disabled, on a takeover,
+// and when the budget simply ran out. A caller that treated every false
+// as a fault would put a warning in front of operators whose machines
+// are doing exactly what they were configured to do.
+type modelWaitResult struct {
+	ready         bool
+	engineFailure string
+}
 
 // waitForBundledModel blocks until the agent's active (bundled) model has
 // finished downloading and the engine is serving it, rendering a percentage
@@ -19,13 +36,14 @@ import (
 // byte-level Models.Downloads — keeps the agent the single owner of the
 // engine/pull; init only watches and renders.
 //
-// It returns true once the model is ready, so the post-init benchmark (and the
-// issue #133 auto-fallback) can then run immediately. It returns false —
-// without holding init hostage — when readiness can't be confirmed (daemon
+// It returns ready once the model is ready, so the post-init benchmark (and
+// the issue #133 auto-fallback) can then run immediately. It returns not-ready
+// — without holding init hostage — when readiness can't be confirmed (daemon
 // unreachable, terminal pull failure, inference disabled/parked, the engine
-// never coming up within benchNoEngineGrace, or benchPollDeadline elapsing).
-// The agent keeps pulling in the background regardless, so callers treat false
-// as a soft skip and continue.
+// never coming up within benchNoEngineGrace or never staying up, or
+// benchPollDeadline elapsing). The agent keeps pulling in the background
+// regardless, so callers treat not-ready as a soft skip and continue —
+// except that engineFailure, when set, is a fault worth reporting (#310).
 //
 // budget bounds the wait; callers outside the NAVI onboarding path pass
 // benchPollDeadline, which keeps their behaviour byte-identical.
@@ -47,11 +65,11 @@ import (
 // printed "qwen2.5-coder-14b-instruct ready" and returned while the
 // operator's 44 GB choice was still downloading, because subsystem_state
 // answers for the ACTIVE model and the agent had picked its own.
-func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *enterWatch, setup *setupWatch, target *modelTarget) bool {
+func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *enterWatch, setup *setupWatch, target *modelTarget) modelWaitResult {
 	if !waitDaemonReachable(mgmtURL, 15*time.Second) {
 		// The caller already prints a "start the agent, then …" hint; stay
 		// quiet here so we don't double up.
-		return false
+		return modelWaitResult{}
 	}
 	deadline := time.Now().Add(budget)
 	var noEngineDeadline time.Time // armed on no_engine, disarmed once engine is up
@@ -60,7 +78,8 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 	dlHinted := false // one-time "this is a multi-GB transfer" hint before the bar
 	want := ""        // the wizard's model, once it has named one (#306)
 	failedStreak := 0
-	var unseenDeadline time.Time // armed while the wizard's model is on none of the daemon's books
+	var unseenDeadline time.Time    // armed while the wizard's model is on none of the daemon's books
+	var engineFailedSince time.Time // armed on the first engine_failed, never disarmed (#310)
 
 	// lastNote dedups the per-phase step lines: each distinct transitional
 	// phase prints one concise note as it is entered, so the user watches
@@ -125,7 +144,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			}
 			if took {
 				writePrompt(out, "Continuing in the background — the agent finishes the download on its own.")
-				return false
+				return modelWaitResult{}
 			}
 			lastNote = "" // re-announce the current phase after the interruption
 		}
@@ -167,7 +186,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 		case waitModelReady(st, want):
 			endProgressLine(out, tty, &line)
 			writePromptf(out, "%s  %s ready\n", emo("✅", "[ok]"), waitModelName(st, want))
-			return true
+			return modelWaitResult{ready: true}
 		case waitModelFailed(st, want):
 			// One observation is terminal for the agent's own model — that
 			// is the pre-#306 behaviour, and what this line's copy promises.
@@ -183,11 +202,74 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				writePromptf(out, "Model download failed; the agent will keep retrying. "+
 					"Run `waired models pull %s` to retry, or `waired runtimes benchmark` later.\n",
 					waitModelName(st, want))
-				return false
+				return modelWaitResult{}
 			}
+		case st.SubsystemState == "engine_failed" ||
+			(!engineFailedSince.IsZero() && engineRestarting(st.SubsystemState)):
+			// #310: the engine is down — a crashed model runner, an
+			// exhausted recovery budget, or a boot that never came up.
+			// This state had NO arm at all, so it fell through to
+			// `default:` and rendered as "Preparing the model…" for the
+			// rest of the budget, while the daemon's crash-recovery cycle
+			// flapped to "starting" and back and printed "Engine
+			// starting…" in between. Two sentences, alternating, neither
+			// of them true, on a host where nothing was ever going to
+			// download.
+			//
+			// `starting` is folded in ONCE a failure has been seen,
+			// because the daemon reports `starting` for any restart in
+			// flight — its arm sits ahead of the engine_failed one — and
+			// the recovery cycle spends its life between the two.
+			// Suppressing it before a failure has been seen would take
+			// "Engine starting…" away from every ordinary first run.
+			//
+			// One observation is not terminal: the daemon restarts the
+			// engine on a bounded budget and routinely recovers. So this
+			// is bounded the way no_engine is bounded, and by the same
+			// grace, for the same reason — one restart cycle. The clock
+			// is wall time since the FIRST failure, not a streak, and is
+			// deliberately never disarmed: a grace that the flap back to
+			// `starting` re-armed every other tick would never expire,
+			// which is the bug this arm exists to end.
+			//
+			// Mutation testing will report that clearing it in `default:`
+			// — beside the no_engine grace, which is cleared there —
+			// kills no test. That mutant is equivalent while the fold
+			// above holds: the restart states never reach `default:`
+			// once a failure has been seen, so the only route there is a
+			// genuine recovery, where re-granting the grace is a defensible
+			// behaviour rather than a bug. Left un-cleared for the simpler
+			// contract, not because the other reading is wrong.
+			//
+			// Not suppressed by engineComing, unlike no_engine: an engine
+			// still being installed reports no_engine, and engine_failed
+			// means the daemon OBSERVED a failure of one that is already
+			// there.
+			if engineFailedSince.IsZero() {
+				engineFailedSince = time.Now()
+			}
+			if time.Since(engineFailedSince) > benchNoEngineGrace {
+				endProgressLine(out, tty, &line)
+				writePromptf(out, "The AI engine failed to start, so %s can't download.\n",
+					waitModelName(st, want))
+				detail := engineFailureDetail(st)
+				if detail != "" {
+					writePrompt(out, detail)
+				}
+				writePrompt(out, "Run `waired doctor` for details; `waired status` shows the current state.")
+				// Never empty on this path, even when the daemon recorded
+				// no reason: engineFailure is what tells the caller a
+				// fault happened at all, so letting it fall to "" would
+				// hand the quietest hosts back the success box.
+				if detail == "" {
+					detail = "the AI engine on this device failed to start"
+				}
+				return modelWaitResult{engineFailure: detail}
+			}
+			announce("The AI engine won't start; Waired is retrying…")
 		case st.SubsystemState == "disabled" || st.SubsystemState == "stopped":
 			// Inference won't become ready while disabled / parked — don't block.
-			return false
+			return modelWaitResult{}
 		case st.SubsystemState == "no_engine":
 			// Engine still being brought up on a fresh bundled install
 			// (issue #489): wait it out within the grace, then conclude it
@@ -207,7 +289,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				endProgressLine(out, tty, &line)
 				writePrompt(out, "The AI engine still isn't up; Waired keeps bringing it up in the background.")
 				writePrompt(out, "Check progress with `waired status`; if it persists, see `waired doctor` or `journalctl -u waired-agent -e`.")
-				return false
+				return modelWaitResult{}
 			}
 			// Nothing is pulled before an engine exists — applying a desired
 			// model is itself gated on one being present — so the target
@@ -248,7 +330,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 						writePromptf(out, "Waired hasn't started downloading %s yet; "+
 							"it keeps trying in the background.\n", want)
 						writePrompt(out, "Check with `waired models ls`, or `waired doctor` if it stays this way.")
-						return false
+						return modelWaitResult{}
 					}
 				} else {
 					unseenDeadline = time.Time{}
@@ -261,7 +343,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			endProgressLine(out, tty, &line)
 			writePrompt(out, "Model still downloading; it will finish in the background. "+
 				"Run `waired status` to watch progress, or `waired runtimes benchmark` later to check performance.")
-			return false
+			return modelWaitResult{}
 		}
 		time.Sleep(pullPollInterval)
 	}
@@ -291,6 +373,7 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 	label := bundledModelLabelDefault(modelID)
 	failedStreak := 0
 	dlHinted := false
+	var engineFailedSince time.Time // see waitForBundledModel's arm (#310)
 
 	lastStep := ""
 	announce := func(step, msg string) {
@@ -327,6 +410,32 @@ func waitForModelSwitch(mgmtURL, modelID string, out io.Writer, tty bool, enter 
 					"or re-run `waired runtimes benchmark`.\n", modelID)
 				return false
 			}
+		case st.SubsystemState == "engine_failed" ||
+			(!engineFailedSince.IsZero() && engineRestarting(st.SubsystemState)):
+			// #310. This function reads no subsystem state at all today,
+			// so a dead engine costs it the full benchPollDeadline saying
+			// "Preparing to download …" — ten minutes for a download that
+			// has nothing to run on. Same shape and same grace as
+			// waitForBundledModel's arm; see it for why `starting` folds
+			// in only after a failure and why the clock is never disarmed.
+			//
+			// `disabled` / `stopped` deliberately stay unhandled here: the
+			// accept this wait follows schedules an agent restart, so the
+			// states either side of that window need a judgement this
+			// change does not have to make.
+			if engineFailedSince.IsZero() {
+				engineFailedSince = time.Now()
+			}
+			if time.Since(engineFailedSince) > benchNoEngineGrace {
+				endProgressLine(out, tty, &line)
+				writePromptf(out, "The AI engine failed to start, so %s can't download.\n", label)
+				if detail := engineFailureDetail(st); detail != "" {
+					writePrompt(out, detail)
+				}
+				writePrompt(out, "Run `waired doctor` for details; `waired status` shows the current state.")
+				return false
+			}
+			announce("engine_failed", "The AI engine won't start; Waired is retrying…")
 		default:
 			failedStreak = 0
 			if dl, found := downloadFor(st, modelID); found && dl.TotalBytes > 0 {
@@ -480,6 +589,42 @@ func modelReady(st management.InferenceStatus) bool {
 // modelFailed reports whether the active model's most recent download failed.
 func modelFailed(st management.InferenceStatus) bool {
 	return st.Active != nil && slices.Contains(st.Models.Failed, st.Active.ModelID)
+}
+
+// engineRestarting names the states the daemon reports while it is
+// bringing the engine back up. Only ever consulted after a failure has
+// been seen (#310): before that they are an ordinary engine start and
+// keep their own narration.
+//
+// Both are here because the daemon's own derivation puts `starting`
+// ahead of `engine_failed` — any EnsureRunning in flight reports
+// `starting` — so a crashing engine spends most of its ticks in one of
+// these two rather than in the failure state itself.
+func engineRestarting(state string) bool {
+	return state == "starting" || state == "initializing"
+}
+
+// engineFailureDetail is the engine's own account of why it is down, in
+// the shape `waired status` and the tray already print it: "<name>:
+// <reason>". "" when no runtime recorded one — an older daemon, or a
+// failure the adapter could not describe — so callers must not print a
+// bare "ollama: " for it.
+//
+// The daemon folds the engine's stderr tail into that reason as it
+// happens, so this is routinely multi-line and can run to kilobytes. It
+// is printed whole: this is the one moment the operator is looking at
+// the terminal, and the alternative on the host that prompted #310 was
+// no information at all.
+//
+// Sorted rather than ranged: the line an operator reads must not depend
+// on Go's map iteration order.
+func engineFailureDetail(st management.InferenceStatus) string {
+	for _, name := range slices.Sorted(maps.Keys(st.Runtimes)) {
+		if r := st.Runtimes[name]; r.State == "failed" && r.LastError != "" {
+			return name + ": " + r.LastError
+		}
+	}
+	return ""
 }
 
 // activeModelName is the active model id, or a generic label before one is set.

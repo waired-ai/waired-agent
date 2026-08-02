@@ -30,6 +30,7 @@ most problems on its own.
 - [No browser opened at sign-in, or the wrong one did](#no-browser-opened-at-sign-in)
 - [Sign-in stops because the background service is not responding](#sign-in-stops-because-the-background-service-is-not-responding)
 - [Setup stopped partway](#setup-stopped-partway)
+- [Setup says the AI engine failed to start](#setup-says-the-ai-engine-failed-to-start)
 - [It says I have reached the device limit](#it-says-i-have-reached-the-device-limit)
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
 - [It said my machine can only run a very small model](#it-said-my-machine-can-only-run-a-very-small-model)
@@ -141,6 +142,39 @@ The setup page names what happened. Each message means something specific:
 The model download is the exception to all of the above: it keeps running even
 if you close the browser tab. Reopen the device at
 [app.waired.ai](https://app.waired.ai) to see where it got to.
+
+## Setup says the AI engine failed to start
+
+In the terminal, setup stops waiting for the model and tells you the engine is
+what went wrong:
+
+```
+The AI engine failed to start, so qwen3.5-4b can't download.
+ollama: process exited during startup: signal: killed
+Run `waired doctor` for details; `waired status` shows the current state.
+```
+
+The second line is the engine's own account of what happened, printed exactly as
+it was recorded — often with the last lines of the engine's log after it. That
+is the part worth reading first.
+
+Sign-in itself is **finished** at this point. The device is on your network and
+everything except local AI works; the summary at the end says so rather than
+reporting success. Waired keeps trying in the background, so the download can
+still start on its own once the engine runs.
+
+Common causes:
+
+- **macOS**: the engine app fails its signature check — see
+  [macOS: it says the AI software is damaged](#macos-it-says-the-ai-software-is-damaged).
+  `sudo waired doctor --fix` repairs it.
+- **Another Ollama is already using the port.** `waired runtimes status` names the
+  version it found. Quit it, or let Waired use it.
+- **The engine keeps crashing.** After a few crashes Waired stops restarting it
+  automatically and says so; `waired inference engine start` retries once you have
+  dealt with the cause.
+
+`waired doctor` checks all of these in one pass.
 
 ## It says I have reached the device limit
 

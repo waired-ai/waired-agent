@@ -71,7 +71,7 @@ func TestWaitForBundledModel_NoEngineThenDownloadThenReady(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil, nil, nil) {
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil, nil, nil).ready {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
@@ -93,7 +93,7 @@ func TestWaitForBundledModel_PullFailed(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil) {
+	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil).ready {
 		t.Fatalf("pull_failed must return false")
 	}
 	if !strings.Contains(out.String(), "Model download failed") {
@@ -113,7 +113,7 @@ func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {
 	var ready bool
 	done := make(chan struct{})
 	go func() {
-		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil)
+		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil).ready
 		close(done)
 	}()
 	select {
@@ -153,7 +153,7 @@ func TestWaitForBundledModel_NoEngineGraceIgnoredDuringSetup(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, true /*engineComing*/, nil, nil, nil) {
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, true /*engineComing*/, nil, nil, nil).ready {
 		t.Fatalf("engine-coming wait gave up on no_engine; out=%q", out.String())
 	}
 	if strings.Contains(out.String(), "AI engine still isn't up") {
@@ -190,7 +190,7 @@ func TestWaitForBundledModel_BrowserStartExtendsTheBudget(t *testing.T) {
 	// A budget the old code gave up on before the download could finish;
 	// the edge is read before the first deadline check, so this is a
 	// deterministic bar rather than a race with the tick.
-	if !waitForBundledModel(srv.URL, &out, false, time.Nanosecond, false, enter, watch, nil) {
+	if !waitForBundledModel(srv.URL, &out, false, time.Nanosecond, false, enter, watch, nil).ready {
 		t.Fatalf("the wait gave up on a budget the browser setup should have replaced; out=%q", out.String())
 	}
 	s := out.String()
@@ -246,7 +246,7 @@ func TestWaitForBundledModel_BrowserStartDisarmsTheNoEngineGrace(t *testing.T) {
 	watch := newScriptedWatch(t, state)
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false /*engineComing*/, nil, watch, nil) {
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false /*engineComing*/, nil, watch, nil).ready {
 		t.Fatalf("the wait gave up on no_engine after the browser setup started; out=%q", out.String())
 	}
 	if strings.Contains(out.String(), "AI engine still isn't up") {
@@ -266,7 +266,7 @@ func TestWaitForBundledModel_EndedByConfirmedTakeover(t *testing.T) {
 	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\ny\n")))
 
 	var out strings.Builder
-	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter, nil, nil) {
+	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter, nil, nil).ready {
 		t.Fatal("a taken-over wait must return false")
 	}
 	s := out.String()
@@ -299,7 +299,7 @@ func TestWaitForBundledModel_BareEnterDoesNotTakeOver(t *testing.T) {
 	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\n\n")))
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter, nil, nil) {
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter, nil, nil).ready {
 		t.Fatalf("a declined takeover ended the wait; out=%q", out.String())
 	}
 	if enter.Fired() {
@@ -331,7 +331,7 @@ func TestWaitForBundledModel_StepsThroughPhases(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil, nil, nil) {
+	if !waitForBundledModel(srv.URL, &out, false /*tty*/, benchPollDeadline, false, nil, nil, nil).ready {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
@@ -422,7 +422,7 @@ func TestWaitForBundledModel_WaitsForTheWizardsModelNotTheActiveOne(t *testing.T
 
 	var out strings.Builder
 	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
-		fixedTarget(t, wizardModel)) {
+		fixedTarget(t, wizardModel)).ready {
 		t.Fatalf("the wait never saw the wizard's model land; out=%q", out.String())
 	}
 	s := out.String()
@@ -462,7 +462,7 @@ func TestWaitForBundledModel_RendersTheWizardsDownloadNotTheBundledOne(t *testin
 
 	var out strings.Builder
 	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
-		fixedTarget(t, wizardModel)) {
+		fixedTarget(t, wizardModel)).ready {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
@@ -493,7 +493,7 @@ func TestWaitForBundledModel_ActiveModelPullFailureDoesNotEndTheWizardsWait(t *t
 
 	var out strings.Builder
 	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
-		fixedTarget(t, wizardModel)) {
+		fixedTarget(t, wizardModel)).ready {
 		t.Fatalf("the agent's own failed pull ended a wait for a different model; out=%q", out.String())
 	}
 	if strings.Contains(out.String(), "Model download failed") {
@@ -515,7 +515,7 @@ func TestWaitForBundledModel_TerminalWizardFailureNamesTheWizardsModel(t *testin
 
 	var out strings.Builder
 	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
-		fixedTarget(t, wizardModel)) {
+		fixedTarget(t, wizardModel)).ready {
 		t.Fatalf("a terminally failed target must return false; out=%q", out.String())
 	}
 	s := out.String()
@@ -541,7 +541,7 @@ func TestWaitForBundledModel_TransientWizardFailureIsToleratedByTheStreak(t *tes
 
 	var out strings.Builder
 	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
-		fixedTarget(t, wizardModel)) {
+		fixedTarget(t, wizardModel)).ready {
 		t.Fatalf("a transient failed record ended the wait; out=%q", out.String())
 	}
 	if strings.Contains(out.String(), "Model download failed") {
@@ -570,7 +570,7 @@ func TestWaitForBundledModel_NarratesTheWizardsModelThroughThePhases(t *testing.
 
 	var out strings.Builder
 	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
-		fixedTarget(t, wizardModel)) {
+		fixedTarget(t, wizardModel)).ready {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
@@ -606,7 +606,7 @@ func TestWaitForBundledModel_RetargetsWhenTheWizardCommitsMidWait(t *testing.T) 
 	}})
 
 	var out strings.Builder
-	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, target) {
+	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, target).ready {
 		t.Fatalf("expected ready=true; out=%q", out.String())
 	}
 	s := out.String()
@@ -646,7 +646,7 @@ func TestWaitForBundledModel_GivesUpOnAModelTheDaemonNeverPulls(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil,
-			fixedTarget(t, "never-pulled"))
+			fixedTarget(t, "never-pulled")).ready
 		close(done)
 	}()
 	select {
@@ -695,7 +695,7 @@ func TestWaitForBundledModel_TargetGraceDoesNotCountAcrossAnEngineRestart(t *tes
 
 	var out strings.Builder
 	if !waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true /*engineComing*/, nil, nil,
-		fixedTarget(t, wizardModel)) {
+		fixedTarget(t, wizardModel)).ready {
 		t.Fatalf("the grace carried across the engine restart; out=%q", out.String())
 	}
 	if strings.Contains(out.String(), "hasn't started downloading") {

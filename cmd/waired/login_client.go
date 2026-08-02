@@ -252,6 +252,12 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				setupActive, budget, engineComing = true, setupBudget, coming
 			}
 
+			// modelWait carries WHY the wait ended, so the summary below
+			// can tell "signed in, local AI is running" apart from
+			// "signed in, the engine on this device is dead" (#310). It
+			// stays zero when the install already failed — that outcome
+			// has its own box, and no wait ran to have an opinion.
+			var modelWait modelWaitResult
 			if engineErr != nil {
 				// #188: the install failed, so there is nothing for the
 				// model wait to wait for and nothing for the benchmark to
@@ -281,7 +287,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// before this wait, and the whole point of the watch above
 				// is that a browser setup can commit minutes into it. The
 				// target self-gates on setupDriving per read instead.
-				waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
+				modelWait = waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
 					engineComing, enter, watch, newModelTarget(sess))
 			}
 			// #308: a setup that started during the wait leaves this
@@ -383,6 +389,11 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				fmt.Println(setupTerminalDoneLine)
 			case engineErr != nil:
 				// Nothing to measure: there is no engine.
+			case modelWait.engineFailure != "":
+				// Nothing to measure for the same reason one layer along:
+				// the engine is installed but will not stay up, so the
+				// benchmark would only add its own refusal to a failure
+				// the wait has already explained (#310).
 			default:
 				// #133: once the daemon has the model ready, benchmark it and
 				// offer a lighter model if this host can't sustain the pick.
@@ -432,11 +443,13 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// hardware without an interactive prompt, so tell the user how to
 			// inspect and change it afterward.
 			printInferenceRoleGuidance(os.Stdout)
-			if engineErr != nil {
-				printDaemonEngineFailedBox(st.AccountEmail)
-			} else {
-				printDaemonSuccessBox(st.AccountEmail, outcomeFrom(resp), claudeRouted)
-			}
+			printDaemonSummaryBox(os.Stdout, daemonSummary{
+				accountEmail:  st.AccountEmail,
+				engineErr:     engineErr,
+				engineFailure: modelWait.engineFailure,
+				bench:         outcomeFrom(resp),
+				claudeRouted:  claudeRouted,
+			})
 			// Sign-in succeeded either way, so init succeeds either way:
 			// the engine is a part of setup, not the point of it (#188).
 			return nil
@@ -507,19 +520,74 @@ func printEngineInstallFailure(out io.Writer, err error, setupActive bool) {
 	writePrompt(out)
 }
 
+// daemonSummary is everything the closing box is chosen from.
+type daemonSummary struct {
+	accountEmail string
+	// engineErr is the engine INSTALL failing (#188).
+	engineErr error
+	// engineFailure is the installed engine refusing to stay up (#310),
+	// as reported by the model wait. Empty on every other outcome,
+	// including the ones where the wait ended not-ready for a reason
+	// that is not a fault.
+	engineFailure string
+	bench         benchmarkOutcome
+	claudeRouted  bool
+}
+
+// printDaemonSummaryBox renders the one box `waired init` ends on.
+//
+// Split out from the caller because this is a decision, not a print: it
+// used to be `if engineErr != nil`, which asks only whether the engine
+// could be INSTALLED. An engine that installed and then died left the
+// condition false, so a device whose local AI never came up ended its
+// setup on "everything completed successfully!" (#310).
+//
+// Order is a contract. The install failing is the more specific answer —
+// there is no engine to be down — and its box names the command that
+// finishes the install, which would be the wrong instruction on a host
+// where the files are already there.
+func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
+	switch {
+	case s.engineErr != nil:
+		printDaemonEngineFailedBox(out, s.accountEmail)
+	case s.engineFailure != "":
+		printDaemonEngineDownBox(out, s.accountEmail)
+	default:
+		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted)
+	}
+}
+
 // printDaemonEngineFailedBox is the summary for a run that signed the
 // device in but could not install the engine. Deliberately not the
 // success box: "everything completed successfully" over a failed engine
 // install is how an operator ends up not realising local AI never
 // arrived (#188).
-func printDaemonEngineFailedBox(accountEmail string) {
+func printDaemonEngineFailedBox(out io.Writer, accountEmail string) {
 	var lines []string
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
 	}
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
 	lines = append(lines, dim("Local AI is not installed yet; the command above finishes it."))
-	boxWarn(os.Stdout, emo("⚠️", "!"), "Waired is signed in — local AI still needs installing", lines)
+	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI still needs installing", lines)
+}
+
+// printDaemonEngineDownBox is the summary for a run that signed the
+// device in over an engine that IS installed and would not stay up
+// (#310) — the case #188's box cannot describe, because nothing needs
+// installing and the command it points at would find its work done.
+//
+// The engine's own reason is deliberately not repeated here: the wait
+// printed it in full moments ago, and it is routinely a multi-line
+// stderr tail that a single-line box frame cannot hold.
+func printDaemonEngineDownBox(out io.Writer, accountEmail string) {
+	var lines []string
+	if accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
+	}
+	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	lines = append(lines, dim("The AI engine on this device isn't starting; `waired doctor` says why."))
+	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI isn't running", lines)
 }
 
 // printDaemonSuccessBox renders the final "Waired is ready" summary for the
@@ -531,7 +599,7 @@ func printDaemonEngineFailedBox(accountEmail string) {
 // of a first install for a Claude Code user, and a box that stays silent
 // when routing did not happen is how an operator walks away believing it
 // did.
-func printDaemonSuccessBox(accountEmail string, bench benchmarkOutcome, claudeRouted bool) {
+func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOutcome, claudeRouted bool) {
 	var lines []string
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
@@ -546,5 +614,5 @@ func printDaemonSuccessBox(accountEmail string, bench benchmarkOutcome, claudeRo
 	}
 	lines = append(lines, dim("Local inference is live via the waired-agent daemon."))
 	lines = append(lines, dim("Point your coding agent at Waired and start building."))
-	box(os.Stdout, emo("🎉", "*"), "Waired is ready — everything completed successfully!", lines)
+	box(out, emo("🎉", "*"), "Waired is ready — everything completed successfully!", lines)
 }

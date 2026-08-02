@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 8e6f331ed9f5d0d3
+sourceHash: 9f178c50603dc52a
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -33,6 +33,7 @@ waired doctor
 - [サインインでブラウザが開かない／別のブラウザが開く](#no-browser-opened-at-sign-in)
 - [常駐サービスが応答せずサインインが止まる](#sign-in-stops-because-the-background-service-is-not-responding)
 - [セットアップが途中で止まった](#setup-stopped-partway)
+- [セットアップで「AI エンジンが起動しなかった」と出た](#setup-says-the-ai-engine-failed-to-start)
 - [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
 - [「非常に小さいモデルしか動かせない」と言われた](#it-said-my-machine-can-only-run-a-very-small-model)
@@ -150,6 +151,37 @@ Waired's background service is installed but isn't responding, so sign-in can't 
 
 なお**モデルのダウンロードだけは例外**で、ブラウザのタブを閉じても続きます。
 [app.waired.ai](https://app.waired.ai) でそのデバイスを開けば途中経過を確認できます。
+
+<a id="setup-says-the-ai-engine-failed-to-start"></a>
+
+## セットアップで「AI エンジンが起動しなかった」と出た
+
+ターミナル側で、モデルの待機を打ち切って「悪いのはエンジンだ」と表示されます。
+
+```
+The AI engine failed to start, so qwen3.5-4b can't download.
+ollama: process exited during startup: signal: killed
+Run `waired doctor` for details; `waired status` shows the current state.
+```
+
+2 行目はエンジン自身が記録した理由をそのまま出したものです。多くの場合、
+そのうしろにエンジンのログの末尾が続きます。まず読むべきはこの部分です。
+
+**サインインはこの時点で完了しています。** デバイスはネットワークに参加していて、
+ローカル AI 以外はすべて動きます。最後のまとめも成功ではなくその旨を表示します。
+Waired は背後で再試行を続けるので、エンジンが動き出せばダウンロードも自然に始まります。
+
+よくある原因:
+
+- **macOS**: エンジンのアプリが署名チェックに失敗している →
+  [macOS で「AI ソフトが壊れている」と言われる](#macos-it-says-the-ai-software-is-damaged)。
+  `sudo waired doctor --fix` で直ります。
+- **別の Ollama がポートを使っている。** `waired runtimes status` が見つけたバージョンを
+  表示します。終了させるか、そのまま Waired に使わせてください。
+- **エンジンがクラッシュを繰り返している。** 数回続くと Waired は自動再起動をやめ、
+  その旨を表示します。原因に対処してから `waired inference engine start` で再開できます。
+
+`waired doctor` はこれらをまとめて確認します。
 
 <a id="it-says-i-have-reached-the-device-limit"></a>
 
