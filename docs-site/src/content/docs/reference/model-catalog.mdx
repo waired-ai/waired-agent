@@ -108,6 +108,13 @@ model *for* you, even where the total-memory arithmetic says it would run: the
 automatic pick can be smaller than your machine's total memory suggests. You can
 still choose it yourself.
 
+Where you choose, Waired says which is which. In the Waired app's **Models**
+list and in `waired models ls --detail`, the model Waired would choose for this
+computer is marked *recommended*, and a model that runs here but is not a good
+match for it is marked as well — with the reason, and still selectable. Models
+this computer cannot run are greyed out with what they would need, rather than
+left out of the list.
+
 Windows and macOS run on Ollama. vLLM serving needs Linux, so on those machines
 Waired picks from the Ollama list — a large NVIDIA card does not change that.
 
@@ -135,9 +142,10 @@ To preview a routing decision without changing anything:
 waired infer --explain "say hi"
 ```
 
-Run `waired models ls --detail` to see this same fit + recommended-spec view for
-**your** hardware, `waired models ls` for disk usage, and `waired runtimes status`
-for the VRAM a loaded model is actually using.
+Run `waired models ls --detail` to see this same view for **your** hardware —
+each model's quality number, the memory it needs on the graphics card, whether
+it fits, and which one Waired would choose. `waired models ls` shows disk usage,
+and `waired runtimes status` the VRAM a loaded model is actually using.
 
 If you run an integrated GPU (Strix Halo, Intel) and a model won't load on
 Ollama, see [Troubleshooting → integrated GPUs](/troubleshooting/#my-graphics-card-is-not-being-used).

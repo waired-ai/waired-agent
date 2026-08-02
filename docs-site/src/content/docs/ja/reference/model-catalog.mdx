@@ -5,7 +5,7 @@ meta:
   audience: モデルを選ぶ人、何が動くか確認したい人
   needs: 何も要りません
   time: 自分のハードウェアの行を引く
-sourceHash: 01e148d332b053d9
+sourceHash: 7147cbccb783e8a3
 ---
 
 import ModelCatalogTable from '../../../../components/ModelCatalogTable.astro';
@@ -107,6 +107,13 @@ Auto-Selector は、お使いのマシンのメモリに収まり、**かつ実�
 マシンの総メモリ量から想像するより小さくなることがあります。ご自身で選ぶことは
 引き続き可能です。
 
+選ぶ場所では、どれがどれなのかが分かるようになっています。Waired アプリの
+**Models** 一覧と `waired models ls --detail` では、Waired がこのパソコンに対して
+選ぶモデルに *recommended* の印が付き、動きはするもののこのパソコンには
+向いていないモデルにも理由付きで印が付きます — 印が付いていても選択は可能です。
+このパソコンでは動かせないモデルは、一覧から消えるのではなく、必要なものを
+添えてグレー表示になります。
+
 Windows と macOS では Ollama で動作します。vLLM でのサービングには Linux が必要な
 ため、これらのマシンでは大容量の NVIDIA カードを積んでいても Ollama 向けの一覧から
 選ばれます。
@@ -136,9 +143,10 @@ NVIDIA のグラフィックスカードを複数搭載したマシンでは、W
 waired infer --explain "say hi"
 ```
 
-`waired models ls --detail` を実行すると **お使いの** ハードウェアに対する同じ適合状況と
-推奨スペックを、`waired models ls` でディスク使用量を、`waired runtimes status` で
-ロード済みモデルが実際に使用している VRAM を確認できます。
+`waired models ls --detail` を実行すると **お使いの** ハードウェアに対する同じ内容 —
+各モデルの品質値、グラフィックボード上で必要になるメモリ、収まるかどうか、そして
+Waired ならどれを選ぶか — を確認できます。`waired models ls` ではディスク使用量を、
+`waired runtimes status` ではロード済みモデルが実際に使用している VRAM を確認できます。
 
 統合 GPU（Strix Halo、Intel）を使用していてモデルが Ollama でロードできない場合は、
 [トラブルシューティング → 統合 GPU](/ja/troubleshooting/#my-graphics-card-is-not-being-used) を参照してください。

@@ -93,3 +93,74 @@ func TestHumanizeParams(t *testing.T) {
 		}
 	}
 }
+
+// Product contract (waired-agent#321): NEEDS is the RESIDENT requirement
+// — weights + the reserved KV budget + engine overhead, what the fit rule
+// actually compares — not min_ram_gb. The two differ here on purpose so a
+// regression to the old field is visible in the assertion.
+func TestFormatCatalogDetail_NeedsColumnIsTheResidentFigure(t *testing.T) {
+	c := catalogDetailResp{Engine: "ollama"}
+	c.Host.RAMTotalGB = 64
+	c.Host.VRAMTotalMB = 16303
+	c.Host.GPUModel = "RTX 5080"
+	c.Families = []catalogDetailFamily{
+		{
+			ModelID: "qwen3.6-27b", Fits: true, Downloaded: true,
+			Recommended: &catalogDetailSpec{MinRAMGB: 32, QualityTier: 62},
+			Fit:         &catalogDetailFit{Runnable: true, RequiredResidentMB: 18 * 1024, QualityTier: 62},
+		},
+	}
+	out := formatCatalogDetail(c)
+	if !strings.Contains(out, "18 GB VRAM") {
+		t.Errorf("NEEDS must be the resident figure, got:\n%s", out)
+	}
+	if strings.Contains(out, "32 GB RAM") {
+		t.Errorf("NEEDS must not fall back to min_ram_gb when a resident figure exists:\n%s", out)
+	}
+}
+
+// Product contract, and the visibility gap #321 closes on this surface:
+// waired-ai/waired#988 shipped the rule that keeps a weights-spilling
+// model out of the automatic pick, and this view printed a bare "✓ fits"
+// for exactly those models. The row stays RUNNABLE — annotated, never
+// hidden and never marked unusable, which is what waired-agent#229
+// removed.
+func TestFormatCatalogDetail_MarksTheHostsOwnPickAndItsDemotions(t *testing.T) {
+	c := catalogDetailResp{Engine: "ollama"}
+	c.Host.RAMTotalGB = 64
+	c.Host.VRAMTotalMB = 16303
+	c.Host.GPUModel = "RTX 5080"
+	c.Families = []catalogDetailFamily{
+		{
+			ModelID: "qwen3.5-9b", Fits: true, Downloaded: true, RecommendedPick: true,
+			Fit: &catalogDetailFit{Runnable: true, RequiredResidentMB: 9 * 1024, QualityTier: 55},
+		},
+		{
+			ModelID: "qwen3.6-35b-a3b", Fits: true,
+			Fit: &catalogDetailFit{
+				Runnable: true, RequiredResidentMB: 24 * 1024, QualityTier: 65,
+				NotRecommended: true, NotRecommendedReason: "weights_spill",
+			},
+		},
+		{
+			ModelID: "deepseek-v4-flash", Fits: false, DeficitLabel: "no variant supports ollama",
+			Fit: &catalogDetailFit{Reason: "no_variant_for_engine", QualityTier: 80},
+		},
+	}
+	out := formatCatalogDetail(c)
+	for _, want := range []string{
+		"✓ fits · recommended",
+		"✓ fits · not recommended (weights spill)",
+		"✗ not available on this computer",
+		"tier", // the raw quality number now has a column of its own
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n---\n%s", want, out)
+		}
+	}
+	// The blocked row must not print the wire's own sentence, which names
+	// an engine and a "variant" to somebody who has heard of neither.
+	if strings.Contains(out, "no variant supports") {
+		t.Errorf("blocked row leaked internal vocabulary:\n%s", out)
+	}
+}

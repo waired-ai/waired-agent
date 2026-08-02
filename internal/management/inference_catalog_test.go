@@ -12,6 +12,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 func catalogFixture() []catalog.Manifest {
@@ -444,4 +445,72 @@ func TestInferenceCatalog_NoActiveYet_VLLMDemotedWithoutVenv(t *testing.T) {
 			t.Errorf("engine: want vllm (venv present, Linux, 24 GB), got %q", got.Engine)
 		}
 	})
+}
+
+// Product contract (waired-agent#321): every row carries the shared
+// projection, and the projection agrees with the legacy Fits bit. The
+// tray, `waired models ls --detail` and the setup wizard all render this
+// one shape; a row without it would silently degrade to the pre-#321
+// display on whichever surface reached it first.
+func TestInferenceCatalog_EveryRowCarriesTheSharedProjection(t *testing.T) {
+	inf := &fakeInference{
+		hwProfile: hardware.Profile{RAMTotalGB: 32},
+		canned:    InferenceStatus{Active: &ActiveSelection{ModelID: "qwen3-4b-instruct", VariantID: "q4-gguf"}},
+	}
+	_, got := doGet(t, newCatalogTestServer(t, inf, t.TempDir()), "/waired/v1/inference/catalog")
+	if len(got.Families) == 0 {
+		t.Fatal("no families")
+	}
+	for _, f := range got.Families {
+		if f.Fit == nil {
+			t.Fatalf("%s carries no fit projection", f.ModelID)
+		}
+		if f.Fit.Runnable != f.Fits {
+			t.Errorf("%s: fit.runnable=%v but fits=%v", f.ModelID, f.Fit.Runnable, f.Fits)
+		}
+		if f.Fit.QualityTier == 0 {
+			t.Errorf("%s: quality tier is 0 — it ranks the model, so it is true even for a row that cannot run",
+				f.ModelID)
+		}
+	}
+	// The vllm-only family on an ollama host is the F36 row: present,
+	// not runnable, and carrying a code a UI can word for itself rather
+	// than the wire's "no variant supports ollama".
+	for _, f := range got.Families {
+		if f.ModelID == "qwen3-32b-instruct" {
+			if f.Fit.Reason != hostfit.ReasonNoVariantForEngine {
+				t.Errorf("32B fit reason: %q, want %q", f.Fit.Reason, hostfit.ReasonNoVariantForEngine)
+			}
+		}
+	}
+}
+
+// Product contract: at most one row is the host's own pick, and it is one
+// that actually runs. A badge on an unrunnable row would be a suggestion
+// the operator cannot take.
+func TestInferenceCatalog_MarksExactlyOneRecommendedPick(t *testing.T) {
+	inf := &fakeInference{hwProfile: hardware.Profile{RAMTotalGB: 32}}
+	_, got := doGet(t, newCatalogTestServer(t, inf, t.TempDir()), "/waired/v1/inference/catalog")
+
+	var marked []string
+	for _, f := range got.Families {
+		if f.RecommendedPick {
+			marked = append(marked, f.ModelID)
+			if !f.Fits {
+				t.Errorf("%s is marked recommended but does not run here", f.ModelID)
+			}
+		}
+	}
+	if len(marked) != 1 {
+		t.Fatalf("recommended rows: %v, want exactly 1", marked)
+	}
+	// The 8B is the higher tier of the two ollama families that fit 32 GB.
+	if marked[0] != "qwen3-8b-instruct" {
+		t.Errorf("recommended = %q, want qwen3-8b-instruct (highest tier that fits)", marked[0])
+	}
+	if want := router.RecommendedFamily(router.PickInput{
+		Catalog: catalogFixture(), Hardware: inf.hwProfile, Engine: catalog.RuntimeOllama,
+	}); marked[0] != want {
+		t.Errorf("endpoint marked %q, router would pick %q — two policies", marked[0], want)
+	}
 }
