@@ -124,6 +124,25 @@ type OllamaConfig struct {
 	// because the adapter has no view of the model, the operator, or the
 	// other engines. Invoked on its own goroutine, so it may call back in.
 	OnUnhealthy func(detail string)
+	// OnStartFailed, when set, is called once per start ATTEMPT that ended
+	// without the engine serving.
+	//
+	// Distinct from OnUnhealthy on purpose. That one means "it WAS serving
+	// and died", and its handler answers by scheduling a restart. This one
+	// means "it never came up", and by the time it fires the caller has
+	// already retried on its own budget — so its handler counts strikes
+	// and gives up, it does not respawn.
+	//
+	// Without it an engine that is killed at exec — the macOS bundle whose
+	// signature no longer verifies — recorded nothing at all: markUnhealthy
+	// demotes only out of StateReady, which such an engine never reaches,
+	// so no strike was counted, no latch was set, and every surface went on
+	// reporting an engine that was merely "not ready yet" (#310).
+	//
+	// Invoked on its own goroutine, so it may call back in. Only the caller
+	// that won the single-flight gate fires it: a burst of gateway requests
+	// joining one failing start is one attempt, not one per request.
+	OnStartFailed func(detail string)
 }
 
 // ErrEngineParked is returned by EnsureRunning when the engine has been
@@ -403,9 +422,25 @@ func (a *OllamaAdapter) ClearFailure() {
 
 // FailureLatched reports whether automatic recovery has given up.
 func (a *OllamaAdapter) FailureLatched() bool {
+	latched, _ := a.FailureLatchedReason()
+	return latched
+}
+
+// FailureLatchedReason reports the latch AND the reason it latched with,
+// under one lock so the pair cannot tear.
+//
+// Health().LastErr is the wrong source for that reason even though
+// LatchFailed writes it there too. a.state has a different lifetime:
+// Stop() overwrites it with no giveUp guard, so a model switch, a
+// reconcile bounce or a park leaves a latched engine reporting
+// giveUp=true with LastErr="" — a red setup row with nothing on it, and
+// a runtime whose last_error vanished off the wire. giveUpErr is cleared
+// only by ClearFailure, which is exactly the lifetime of the latch it
+// explains (#310).
+func (a *OllamaAdapter) FailureLatchedReason() (bool, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.giveUp
+	return a.giveUp, a.giveUpErr
 }
 
 // NewOllamaAdapter constructs an adapter with sensible defaults.
@@ -539,11 +574,43 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 		a.mu.Lock()
 		a.ensureErr = err
 		a.ensuring = nil
+		// Read the park latch here, not in the handler: Park may have
+		// landed during the slow readiness wait, and the teardown it
+		// causes is not a start failure.
+		parked := a.parked
+		cb := a.cfg.OnStartFailed
 		a.mu.Unlock()
 		close(done)
+		// The single funnel for a start that did not end with the engine
+		// serving: every failure exit of ensureRunningLeader passes
+		// through this deferred block, and only the leader reaches it
+		// (the giveUp/parked/ready/joiner returns above all come before
+		// `done` exists). Off-lock and on its own goroutine, like
+		// markUnhealthy: the handler calls back into Health()/IsParked().
+		if cb != nil && startFailureIsEvidence(err, parked) {
+			go cb(err.Error())
+		}
 	}()
 	err = a.ensureRunningLeader(ctx, borrowed)
 	return err
+}
+
+// startFailureIsEvidence reports whether a finished start attempt says
+// anything about the engine's health.
+//
+// A pure decision rather than an inline condition, because the interesting
+// case is one the integration tests can only reach by racing: Park landing
+// DURING a slow readiness wait tears the child down, and the teardown error
+// that comes back is the operator's own hard stop working — charging it as a
+// strike would let `waired inference engine stop` help spend the recovery
+// budget. Same reasoning as markUnhealthy's parked check, and now testable
+// without a timing window.
+//
+// Both parked signals matter: the re-check inside the leader returns
+// ErrEngineParked, while a Park that instead killed the child mid-wait
+// surfaces as an ordinary startup error with only the flag to go on.
+func startFailureIsEvidence(err error, parked bool) bool {
+	return err != nil && !parked && !errors.Is(err, ErrEngineParked)
 }
 
 // ensureRunningLeader is EnsureRunning's body, run by whichever caller won
@@ -802,6 +869,14 @@ func (a *OllamaAdapter) SetModelEnvProvider(fn func() ([]string, ModelTuning, bo
 func (a *OllamaAdapter) SetOnUnhealthy(fn func(detail string)) {
 	a.mu.Lock()
 	a.cfg.OnUnhealthy = fn
+	a.mu.Unlock()
+}
+
+// SetOnStartFailed installs the failed-start handler after construction, for
+// the same reason as SetOnUnhealthy above (#310).
+func (a *OllamaAdapter) SetOnStartFailed(fn func(detail string)) {
+	a.mu.Lock()
+	a.cfg.OnStartFailed = fn
 	a.mu.Unlock()
 }
 
