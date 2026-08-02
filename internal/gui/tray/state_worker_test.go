@@ -209,6 +209,42 @@ func TestApplyWorker_StalePeerShownAsUnavailable(t *testing.T) {
 	}
 }
 
+// TestApplyWorker_SilentPeerStaysSelectable pins the display half of
+// waired#729. PRODUCT CONTRACT.
+//
+// docs-site defines "(unavailable)" as "your pin survives, it just
+// cannot serve until that machine ..." — so the label may only appear
+// when the peer genuinely cannot serve. A disco-silent peer CAN: the
+// Selector routes to it and the /healthz probe decides. Marking it
+// unavailable would tell the user their working machine is unusable
+// and grey out the row that works, which is the exact complaint #729
+// opened with, moved up into the UI.
+func TestApplyWorker_SilentPeerStaysSelectable(t *testing.T) {
+	mesh := &inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{{
+			DeviceID:   "dev_silent",
+			DeviceName: "peer-silent",
+			Silent:     true,
+			InferenceState: &signer.InferenceState{
+				Reachable: true,
+				Type:      signer.InferenceTypeOllama,
+				Models:    []string{"qwen3:8b"},
+			},
+		}},
+	}
+	m := Update(baseSnapshotWithWorker(&management.WorkerResponse{Mode: state.RoutingModeAuto}, mesh))
+	if len(m.WorkerPinEntries) != 1 {
+		t.Fatalf("silent peer should appear, got %d entries", len(m.WorkerPinEntries))
+	}
+	pe := m.WorkerPinEntries[0]
+	if !pe.Available {
+		t.Errorf("silent peer must stay Available — routing will use it: %+v", pe)
+	}
+	if strings.Contains(pe.Label, "unavailable") {
+		t.Errorf("silent label = %q, must not carry the (unavailable) suffix", pe.Label)
+	}
+}
+
 func TestApplyWorker_PinAbsentAppendsAbsentRow(t *testing.T) {
 	// Pin set but peer fell out of the mesh snapshot.
 	w := &management.WorkerResponse{

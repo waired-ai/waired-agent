@@ -36,4 +36,14 @@ type Recorder interface {
 	// returns for local / external candidates). outcome is the
 	// router.ProbeOutcome.String() tag.
 	RecordProbe(outcome string, latencyMs uint32)
+
+	// RecordPinnedPeerUnreachable is emitted when the operator's
+	// pinned peer was probed and did not come back ready. The
+	// Selector emits the same event for the failures it can see from
+	// the snapshot alone ("unreachable" / "lacks_model"); this path
+	// covers the one only the probe can see, so `waired diagnose` and
+	// the Prometheus counter stay complete now that disco silence no
+	// longer pre-filters a quiet pin (waired#729). reason is always
+	// "probe_failed" here.
+	RecordPinnedPeerUnreachable(peerID, model, reason string)
 }

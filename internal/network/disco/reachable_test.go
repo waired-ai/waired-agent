@@ -6,10 +6,10 @@ import (
 )
 
 // TestReachableSnapshot_EmptyWhenNoSamples confirms that a Service
-// which has never received a pong returns nil. Phase 8 wires this
-// into the Selector's LocalReachable input where nil/empty means
-// "no exclusions" — a freshly started agent must not accidentally
-// exclude every mesh peer.
+// which has never received a pong returns nil. The map feeds the
+// inferencemesh aggregator's PeerLiveness axis, where nil/empty means
+// "no verdict" — a freshly started agent must not mark every mesh
+// peer silent.
 func TestReachableSnapshot_EmptyWhenNoSamples(t *testing.T) {
 	s := &Service{lastPongAt: map[string]time.Time{}}
 	if got := s.ReachableSnapshot(time.Now(), 5*time.Second); got != nil {
@@ -18,8 +18,8 @@ func TestReachableSnapshot_EmptyWhenNoSamples(t *testing.T) {
 }
 
 // TestReachableSnapshot_FreshIsTrue confirms peers stamped within the
-// freshness window appear as true. That's the positive Selector
-// signal — "we've validated bidirectional reachability recently".
+// freshness window appear as true — "we've validated bidirectional
+// reachability recently".
 func TestReachableSnapshot_FreshIsTrue(t *testing.T) {
 	now := time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC)
 	s := &Service{lastPongAt: map[string]time.Time{
@@ -36,9 +36,9 @@ func TestReachableSnapshot_FreshIsTrue(t *testing.T) {
 }
 
 // TestReachableSnapshot_StaleIsFalse confirms peers whose last pong is
-// older than the freshness window appear as false. This is the hard-
-// exclusion signal the Phase 8 Selector uses to drop NAT-asymmetry /
-// WG-keepalive-failed peers before they consume a probe slot.
+// older than the freshness window appear as false. That is the signal
+// the aggregator turns into PeerView.Silent, ordering NAT-asymmetry /
+// WG-keepalive-failed peers behind the ones answering.
 func TestReachableSnapshot_StaleIsFalse(t *testing.T) {
 	now := time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC)
 	s := &Service{lastPongAt: map[string]time.Time{
@@ -54,9 +54,9 @@ func TestReachableSnapshot_StaleIsFalse(t *testing.T) {
 }
 
 // TestReachableSnapshot_MixedFreshAndStale exercises the common case
-// of a Selector reading a snapshot during steady-state: some peers
+// of a consumer reading a snapshot during steady-state: some peers
 // just pong'd, others haven't in a while. Both must be representable
-// in one snapshot — the Selector's hard-exclusion check distinguishes
+// in one snapshot — the aggregator's liveness check distinguishes
 // them by the bool value.
 func TestReachableSnapshot_MixedFreshAndStale(t *testing.T) {
 	now := time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC)
@@ -85,9 +85,9 @@ func TestReachableSnapshot_MixedFreshAndStale(t *testing.T) {
 
 // TestReachableSnapshot_NeverObservedPeerIsAbsent confirms that a peer
 // the Service has never received a pong from does NOT appear in the
-// snapshot. That matters because the Phase 8 Selector treats absence
-// as "no signal, default trust" — excluding fresh-enrolled peers
-// before the first probe round completes would break the system.
+// snapshot. That matters because consumers treat absence as "no
+// signal, default trust" — penalising fresh-enrolled peers before the
+// first probe round completes would break the system.
 func TestReachableSnapshot_NeverObservedPeerIsAbsent(t *testing.T) {
 	now := time.Date(2026, 5, 15, 10, 0, 0, 0, time.UTC)
 	s := &Service{lastPongAt: map[string]time.Time{
@@ -162,16 +162,17 @@ func TestRecordPongReceived_EmptyDeviceIDNoOp(t *testing.T) {
 
 // TestReachableFreshness_NeverShorterThanProbeCadence is a PRODUCT
 // CONTRACT pin, not a record of today's numbers: the freshness window
-// the Selector hard-excludes on must always be at least a few probe
+// a peer is judged silent against must always be at least a few probe
 // rounds wide.
 //
 // The agent shipped a hardcoded 5 s window against a 15 s
 // ProbeReprobeActive, with a comment claiming the window was "roughly
 // 3× the disco prober re-emit interval" when it was 1/3 of it. Pongs
 // arrive no more often than we probe, so a healthy peer spent ~2/3 of
-// every cycle marked present+false and was hard-excluded from the
-// candidate set (waired#729). Deriving the window from the cadence is
-// what makes that inversion unrepresentable.
+// every cycle marked present+false — which back then hard-excluded it
+// from the candidate set outright (waired#729; the verdict is advisory
+// now). Deriving the window from the cadence is what makes that
+// inversion unrepresentable.
 func TestReachableFreshness_NeverShorterThanProbeCadence(t *testing.T) {
 	for _, reprobe := range []time.Duration{
 		0, // unset → defaultProbeReprobeActive

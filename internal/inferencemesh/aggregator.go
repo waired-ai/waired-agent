@@ -74,13 +74,17 @@ type Policy struct {
 	// PeerLiveness, when non-nil, returns the disco prober's
 	// deviceID → recent-pong map. Three-valued exactly as
 	// disco.Service.ReachableSnapshot defines it: present+true = a
-	// recent pong, present+false = once seen, now silent (exclude),
-	// absent = never probed (trust). It restores the fast
-	// host-death signal that receipt-based freshness alone would
-	// stretch out to the CP backstop interval; the router already
-	// hard-excludes on this same map, so wiring it here only makes
-	// the tray label and the peer adapter's health check agree with
-	// the routing decision.
+	// recent pong, present+false = once seen, now silent, absent =
+	// never probed (trust). It restores the fast host-death signal
+	// that receipt-based freshness alone would stretch out to the CP
+	// backstop interval.
+	//
+	// The verdict lands on PeerView.Silent and is ADVISORY: it
+	// demotes a peer in the Selector's ordering, it does not remove
+	// it, and it does not fold into Stale or Reachable. A disco pong
+	// never traverses the WireGuard data plane an inference request
+	// rides, so treating its absence as a veto black-holed peers
+	// whose data plane was demonstrably fine (waired#729).
 	PeerLiveness func() map[string]bool
 }
 
@@ -281,11 +285,14 @@ func (a *Aggregator) Snapshot() Snapshot {
 		pv := pe.view
 		stale := false
 		if pv.InferenceState != nil {
+			stale = mapDead || !pe.freshAtReceipt
 			// present+false is the disco prober saying "this peer used
 			// to answer and has now gone silent"; absent means we have
-			// no signal and default to trust.
+			// no signal and default to trust. Advisory, deliberately
+			// kept OUT of stale and out of Reachable — see PeerView
+			// and waired#729.
 			live, known := liveness[pv.DeviceID]
-			stale = mapDead || !pe.freshAtReceipt || (known && !live)
+			pv.Silent = known && !live
 		}
 		pv.Stale = stale
 		out.Peers = append(out.Peers, pv)

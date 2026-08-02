@@ -7,6 +7,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // TestSelectK_LocalReadyReturnsOneCandidate exercises the local-fast-
@@ -140,59 +141,59 @@ func TestSelectK_StickyBoundPeerLeadsCandidates(t *testing.T) {
 	}
 }
 
-// TestSelectK_LocalReachableHardExcludes verifies the Phase 8
-// disco-based hard-exclusion. peer-B is explicitly marked unreachable
-// → it must NOT appear in the candidate list, even though the mesh
-// aggregator reports it as a healthy model holder.
-func TestSelectK_LocalReachableHardExcludes(t *testing.T) {
+// TestSelectK_SilentPeerDemotedNotExcluded inverts the original Phase 8
+// contract (this test used to be TestSelectK_LocalReachableHardExcludes
+// and asserted the opposite). PRODUCT CONTRACT, waired#729.
+//
+// A disco pong travels raw UDP or the relay's WSS control session; an
+// inference request travels the WireGuard data plane. Silence on the
+// former does not prove the latter is down, and the cost of being
+// wrong is asymmetric: a wrong exclusion fails the request with no
+// in-request recovery, a wrong inclusion costs one ~50 ms /healthz
+// probe that runs in parallel and spins no GPU. So silence orders the
+// candidate last; the probe layer is what decides.
+func TestSelectK_SilentPeerDemotedNotExcluded(t *testing.T) {
 	snap := inferencemesh.Snapshot{
 		Peers: []inferencemesh.PeerView{
+			mkSilentPeer("peer-B", "qwen3:8b-q4_K_M"), // disco heard nothing recently
 			mkPeer("peer-A", "qwen3:8b-q4_K_M", true, false),
-			mkPeer("peer-B", "qwen3:8b-q4_K_M", true, false),
 			mkPeer("peer-C", "qwen3:8b-q4_K_M", true, false),
 		},
 	}
-	reachable := func() map[string]bool {
-		return map[string]bool{
-			"peer-A": true,
-			"peer-B": false, // disco says peer-B isn't responding
-			// peer-C absent → unknown, default trust
-		}
-	}
 	s := NewSelector(Inputs{
 		Manifests:      []catalog.Manifest{qwen()},
 		LocalState:     emptyState(),
 		Hardware:       goodHardware(),
 		Runtimes:       registryWithOllama(),
 		MeshSnapshotFn: func() inferencemesh.Snapshot { return snap },
-		LocalReachable: reachable,
 	})
 	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 5)
 	if err != nil {
 		t.Fatalf("SelectK: %v", err)
 	}
-	for _, c := range cands {
-		if c.PeerID == "peer-B" {
-			t.Errorf("LocalReachable said peer-B is false but it appeared in cands: %+v", c)
-		}
+	if !containsPeer(cands, "peer-B") {
+		t.Errorf("silent peer-B was dropped from cands; it must be demoted, not excluded: %+v", cands)
 	}
-	// peer-A (true) and peer-C (absent, default-trust) must both appear.
-	if !containsPeer(cands, "peer-A") {
-		t.Errorf("peer-A (reachable=true) missing from cands: %+v", cands)
+	if !containsPeer(cands, "peer-A") || !containsPeer(cands, "peer-C") {
+		t.Errorf("healthy peers missing from cands: %+v", cands)
 	}
-	if !containsPeer(cands, "peer-C") {
-		t.Errorf("peer-C (absent → trust) missing from cands: %+v", cands)
+	if got := cands[len(cands)-1].PeerID; got != "peer-B" {
+		t.Errorf("last candidate = %q, want peer-B (silence sorts last)", got)
 	}
 }
 
-// TestSelectK_NilLocalReachableDegradesToPhase7Behaviour confirms
-// Phase 7 fixtures stay green: nil LocalReachable means no exclusions,
-// every reachable+non-stale peer remains a candidate.
-func TestSelectK_NilLocalReachableDegradesToPhase7Behaviour(t *testing.T) {
+// TestSelectK_AllSilentStillReturnsCandidates is the behavioural core
+// of waired#729: the reported topology had exactly one peer, reachable
+// over relay, and disco silence made it invisible — worker --pin and
+// the Claude per-class pin both came back "routing=pinned, no mesh
+// candidate" (ErrModelNotReady) against a data plane that was carrying
+// traffic fine. With silence advisory there is nothing left to veto
+// the whole mesh. PRODUCT CONTRACT.
+func TestSelectK_AllSilentStillReturnsCandidates(t *testing.T) {
 	snap := inferencemesh.Snapshot{
 		Peers: []inferencemesh.PeerView{
-			mkPeer("peer-A", "qwen3:8b-q4_K_M", true, false),
-			mkPeer("peer-B", "qwen3:8b-q4_K_M", true, false),
+			mkSilentPeer("peer-A", "qwen3:8b-q4_K_M"),
+			mkSilentPeer("peer-B", "qwen3:8b-q4_K_M"),
 		},
 	}
 	s := NewSelector(Inputs{
@@ -201,14 +202,100 @@ func TestSelectK_NilLocalReachableDegradesToPhase7Behaviour(t *testing.T) {
 		Hardware:       goodHardware(),
 		Runtimes:       registryWithOllama(),
 		MeshSnapshotFn: func() inferencemesh.Snapshot { return snap },
-		// LocalReachable explicitly omitted → Phase 7 fixture
 	})
 	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 5)
 	if err != nil {
-		t.Fatalf("SelectK: %v", err)
+		t.Fatalf("SelectK with an all-silent mesh: %v", err)
 	}
 	if len(cands) != 2 {
-		t.Errorf("nil LocalReachable should leave both peers eligible; got %d", len(cands))
+		t.Errorf("an all-silent mesh must still yield candidates; got %d", len(cands))
+	}
+}
+
+// TestSelectK_SilentPinStillHoistedAndReturned pins the operator-pin
+// half of waired#729. A pin is an explicit "use this machine"; disco
+// silence is a guess. The pin still reaches the head of the candidate
+// list so the probe layer gets to try it, and if the probe fails the
+// gateway surfaces the named PinnedPeerUnreachableError rather than a
+// generic "no mesh candidate". PRODUCT CONTRACT.
+func TestSelectK_SilentPinStillHoistedAndReturned(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{
+			mkPeer("peer-A", "qwen3:8b-q4_K_M", true, false),
+			mkSilentPeer("peer-pin", "qwen3:8b-q4_K_M"),
+		},
+	}
+	s := NewSelector(Inputs{
+		Manifests:          []catalog.Manifest{qwen()},
+		LocalState:         emptyState(),
+		Hardware:           goodHardware(),
+		Runtimes:           registryWithOllama(),
+		MeshSnapshotFn:     func() inferencemesh.Snapshot { return snap },
+		RoutingMode:        state.RoutingModePinned,
+		PinnedPeerDeviceID: "peer-pin",
+	})
+	cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 5)
+	if err != nil {
+		t.Fatalf("SelectK with a silent pin: %v", err)
+	}
+	if len(cands) == 0 || cands[0].PeerID != "peer-pin" {
+		t.Fatalf("cands[0].PeerID = %q, want peer-pin (pin hoist beats the silence demotion)", first(cands))
+	}
+	if !cands[0].Pinned {
+		t.Errorf("cands[0].Pinned = false; the gateway needs this flag to name the peer when its probe fails")
+	}
+}
+
+// TestSortMeshCandidates_SilentOrdering pins where the advisory key
+// sits in the comparison chain. PRODUCT CONTRACT.
+//
+// Above priority: silence predicts probe failure, and there are only
+// probeFanoutK slots — spending one on a silent High-priority peer
+// instead of a healthy Middle one lowers the expected first-round hit
+// rate for nothing.
+//
+// Below the public/grant tier: a silent OWN peer must still outrank a
+// healthy PUBLIC one, or a 45-second gap in pongs would route the
+// owner's traffic onto a stranger's machine.
+func TestSortMeshCandidates_SilentOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cands []meshCandidate
+		want  []string
+	}{
+		{
+			name: "healthy beats silent within a tier",
+			cands: []meshCandidate{
+				{deviceID: "silent", silent: true},
+				{deviceID: "healthy"},
+			},
+			want: []string{"healthy", "silent"},
+		},
+		{
+			name: "silence outranks admin priority",
+			cands: []meshCandidate{
+				{deviceID: "silent-high", silent: true, priority: 2},
+				{deviceID: "healthy-mid", priority: 1},
+			},
+			want: []string{"healthy-mid", "silent-high"},
+		},
+		{
+			name: "own-but-silent still beats healthy-public",
+			cands: []meshCandidate{
+				{deviceID: "public-healthy", public: true},
+				{deviceID: "own-silent", silent: true},
+			},
+			want: []string{"own-silent", "public-healthy"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sortMeshCandidates(tc.cands)
+			for i, want := range tc.want {
+				if tc.cands[i].deviceID != want {
+					t.Errorf("cands[%d] = %q, want %q (full order: %+v)", i, tc.cands[i].deviceID, want, tc.cands)
+				}
+			}
+		})
 	}
 }
 

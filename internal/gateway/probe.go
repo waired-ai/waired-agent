@@ -17,6 +17,12 @@ import (
 // Phase 8 tuning constants. The Phase 8 work record documents the
 // reasoning behind each (probe is GPU-free so a 50ms budget is cheap;
 // 250ms brief queue covers in-flight churn from completing requests).
+// probeReasonCapacityFull is router.ProbeResult.FailureReason()'s tag
+// for "the peer answered, it is just full". Named here because
+// pinnedProbeFailure has to treat it as overloaded rather than
+// unreachable.
+const probeReasonCapacityFull = "capacity_full"
+
 const (
 	probeFanoutK    = 3
 	probeBudget     = 50 * time.Millisecond
@@ -102,6 +108,55 @@ type probedSelection struct {
 	// uniform typed error like ErrPeerRoutingDisabled directly
 	// instead of degenerating to ErrAllPeersOverloaded).
 	probeResults []router.ProbeResult
+	// cands is the candidate slice probeResults indexes into, also
+	// only on the not-ok paths. Needed to tell a failed OPERATOR PIN
+	// apart from a busy mesh — see pinnedProbeFailure.
+	cands []router.Candidate
+}
+
+// pinnedProbeFailure returns the error for "the operator's pinned peer
+// was in the candidate set and its own probe did not come back ready".
+// nil when no pin was probed, or when the pin probed ready.
+//
+// Before waired#729 a pin whose host had gone quiet on disco was
+// filtered out of the snapshot, and tryMeshFallbackK produced the
+// named ErrPinnedPeerUnreachable from that. Now that disco silence is
+// only advisory the pin reaches the probe layer instead, so without
+// this the same failure would collapse into
+// waired_all_peers_overloaded and lose the peer's name, the
+// X-Waired-Local-Error staging and the #391 observability events.
+//
+// Deliberately scans by the Pinned flag rather than assuming index 0:
+// partitionOwnFirst can move a public pin out of the head slot.
+//
+// "capacity_full" is deliberately NOT an unreachable verdict, and
+// neither is a pin that probed ready and lost the admission race: a
+// busy box is exactly what ErrAllPeersOverloaded means, and telling
+// its operator it is unreachable would send them hunting a network
+// fault that isn't there. That split also keeps this path behaviour-
+// identical to the pre-waired#729 one, where a capacity-full pin
+// passed the snapshot check and fell through to overloaded.
+func (h *HandlerSet) pinnedProbeFailure(g probedSelection) error {
+	for i, c := range g.cands {
+		if !c.Pinned || i >= len(g.probeResults) {
+			continue
+		}
+		r := g.probeResults[i]
+		if r.IsReady() || r.FailureReason() == probeReasonCapacityFull {
+			return nil
+		}
+		if h.deps.Recorder != nil {
+			h.deps.Recorder.RecordPinnedPeerUnreachable(c.PeerID, c.ModelID, "probe_failed")
+		}
+		// c.ModelID, not the request alias: this mirrors the
+		// manifest.ModelID the Selector's own pinUnreachable reports,
+		// so both paths name the same thing.
+		return &router.PinnedPeerUnreachableError{
+			PeerDisplayID: candidateDisplayID(c),
+			ModelID:       c.ModelID,
+		}
+	}
+	return nil
 }
 
 // uniformProbeErr scans probe results for a typed error every probe
@@ -150,6 +205,13 @@ func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request) (pr
 	if e := uniformProbeErr(got.probeResults, ErrPeerRoutingDisabled); e != nil {
 		return probedSelection{}, e
 	}
+	// An operator pin that failed its own probe is a different
+	// operator problem from "the mesh is busy", and it must not be
+	// retried into silence: the brief queue exists to catch a peer
+	// finishing a request, not to wait out an unreachable one.
+	if e := h.pinnedProbeFailure(got); e != nil {
+		return probedSelection{}, e
+	}
 	// Brief queue: short sleep that often coincides with another
 	// request completing on a peer (in-flight count drops below
 	// capacity). Cheaper than asking the client to retry.
@@ -171,6 +233,9 @@ func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request) (pr
 			h.deps.Recorder.RecordBriefQueueRetry("failed")
 		}
 		if e := uniformProbeErr(got.probeResults, ErrPeerRoutingDisabled); e != nil {
+			return probedSelection{}, e
+		}
+		if e := h.pinnedProbeFailure(got); e != nil {
 			return probedSelection{}, e
 		}
 		return probedSelection{}, router.ErrAllPeersOverloaded
@@ -211,7 +276,7 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 		}
 	}
 	if winnerIdx < 0 {
-		return probedSelection{probeResults: results}, false, nil
+		return probedSelection{probeResults: results, cands: cands}, false, nil
 	}
 	// Try the winner first, then walk forward through the remaining
 	// ready candidates if commit fails (capacity hit between probe
@@ -237,7 +302,7 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 		}
 		return got, true, nil
 	}
-	return probedSelection{probeResults: results}, false, nil
+	return probedSelection{probeResults: results, cands: cands}, false, nil
 }
 
 // firstFailureReason scans the probe results and returns the first

@@ -36,6 +36,15 @@ func mkPeer(deviceID, tag string, reachable, stale bool) inferencemesh.PeerView 
 	}
 }
 
+// mkSilentPeer is mkPeer plus the advisory disco-silence flag
+// (waired#729). Split from mkPeer rather than added as a parameter so
+// the ~20 existing mkPeer call sites keep reading as "healthy peer".
+func mkSilentPeer(deviceID, tag string) inferencemesh.PeerView {
+	p := mkPeer(deviceID, tag, true, false)
+	p.Silent = true
+	return p
+}
+
 func TestSelector_MeshFallback_HappyPath(t *testing.T) {
 	snap := inferencemesh.Snapshot{
 		Peers: []inferencemesh.PeerView{

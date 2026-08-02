@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
@@ -49,6 +50,18 @@ func TestInferenceMeshEndpointReturnsSnapshot(t *testing.T) {
 						LastCheck: "2026-05-09T12:00:00Z",
 					},
 				},
+				{
+					DeviceID:   "peer-quiet",
+					DeviceName: "quiet-mac",
+					OverlayIP:  "100.96.0.12",
+					Silent:     true,
+					InferenceState: &signer.InferenceState{
+						Reachable: true,
+						Type:      signer.InferenceTypeOllama,
+						Endpoint:  "http://127.0.0.1:11434",
+						LastCheck: "2026-05-09T12:00:00Z",
+					},
+				},
 			},
 		},
 	}
@@ -69,7 +82,7 @@ func TestInferenceMeshEndpointReturnsSnapshot(t *testing.T) {
 	if got.SelfDeviceID != "self-id" || !got.Reachable {
 		t.Fatalf("snapshot did not round-trip: %+v", got)
 	}
-	if len(got.Peers) != 1 || got.Peers[0].DeviceID != "peer-bob" {
+	if len(got.Peers) != 2 || got.Peers[0].DeviceID != "peer-bob" {
 		t.Fatalf("peers did not round-trip: %+v", got.Peers)
 	}
 	if got.Self.InferenceState == nil || got.Self.InferenceState.Type != signer.InferenceTypeOllama {
@@ -85,6 +98,19 @@ func TestInferenceMeshEndpointReturnsSnapshot(t *testing.T) {
 	if got.FrameStalenessMS != inferencemesh.DefaultFrameStaleness.Milliseconds() {
 		t.Errorf("FrameStalenessMS = %d, want %d",
 			got.FrameStalenessMS, inferencemesh.DefaultFrameStaleness.Milliseconds())
+	}
+	// `silent` is the advisory disco verdict (waired#729). It rides the
+	// wire separately from `stale` precisely because it does NOT mean
+	// unusable — an operator reading this endpoint needs to see "quiet
+	// on disco but still being routed to" as its own state.
+	if got.Peers[1].DeviceID != "peer-quiet" || !got.Peers[1].Silent {
+		t.Errorf("silent flag did not round-trip: %+v", got.Peers[1])
+	}
+	if got.Peers[1].Stale {
+		t.Errorf("silent peer must not arrive Stale — they are independent axes: %+v", got.Peers[1])
+	}
+	if !strings.Contains(rec.Body.String(), `"silent":true`) {
+		t.Errorf("wire body is missing the silent field: %s", rec.Body.String())
 	}
 }
 

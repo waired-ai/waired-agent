@@ -190,12 +190,19 @@ func TestAggregatorMapStreamGoneMarksEveryPeerStale(t *testing.T) {
 	}
 }
 
-// TestAggregatorPeerLivenessExcludesSilentHosts pins the third axis:
+// TestAggregatorPeerLivenessMarksSilentAdvisory pins the third axis:
 // receipt-based freshness alone would keep trusting a peer whose HOST
 // dropped off the wire until the CP's next backstop frame, so the
 // disco prober's recent-pong map gets a vote. Three-valued, matching
-// disco.Service.ReachableSnapshot. PRODUCT CONTRACT.
-func TestAggregatorPeerLivenessExcludesSilentHosts(t *testing.T) {
+// disco.Service.ReachableSnapshot.
+//
+// The vote lands on Silent, NOT on Stale (waired#729). A disco pong
+// travels raw UDP or the relay's WSS control session — never the WG
+// data plane the inference request rides — so its absence predicts
+// unusability, it does not prove it. Stale is the verdict that
+// removes a peer from routing; Silent only demotes it, and the
+// /healthz probe decides. PRODUCT CONTRACT.
+func TestAggregatorPeerLivenessMarksSilentAdvisory(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
 	liveness := map[string]bool{}
 	a := New("self-id", Policy{
@@ -217,14 +224,93 @@ func TestAggregatorPeerLivenessExcludesSilentHosts(t *testing.T) {
 	for _, p := range a.Snapshot().Peers {
 		byID[p.DeviceID] = p
 	}
-	if !byID["silent"].Stale {
-		t.Errorf("present+false (once seen, now silent) must be excluded")
+	if !byID["silent"].Silent {
+		t.Errorf("present+false (once seen, now silent) must be marked Silent")
 	}
-	if byID["pinging"].Stale {
-		t.Errorf("present+true (recent pong) must not be excluded")
+	if byID["silent"].Stale {
+		t.Errorf("disco silence must not set Stale — it is advisory, not a veto (waired#729)")
 	}
-	if byID["unprobed"].Stale {
-		t.Errorf("absent (never probed) must default to trust, not exclusion")
+	if byID["pinging"].Silent || byID["pinging"].Stale {
+		t.Errorf("present+true (recent pong) must be neither Silent nor Stale")
+	}
+	if byID["unprobed"].Silent || byID["unprobed"].Stale {
+		t.Errorf("absent (never probed) must default to trust")
+	}
+}
+
+// TestAggregatorSnapshotReachableCountsSilentPeers pins that a
+// disco-silent peer still counts toward Snapshot.Reachable.
+//
+// Reachable is not just a tray label: it flows through
+// SetInferenceReachableInMesh into the transparent proxy's degraded
+// gate. If silence folded it down, a mesh whose only peer missed one
+// pong round would flip the proxy to degraded and send every Claude
+// turn straight upstream WITHOUT ever running the probe that would
+// have found the peer healthy — waired#729's false veto, reproduced
+// one layer up. PRODUCT CONTRACT.
+func TestAggregatorSnapshotReachableCountsSilentPeers(t *testing.T) {
+	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	a := New("self-id", Policy{
+		PeerLiveness: func() map[string]bool { return map[string]bool{"only": false} },
+	}, func() time.Time { return now })
+
+	a.Update(&signer.NetworkMap{
+		Self: signer.NetworkMapPeer{DeviceID: "self-id"},
+		Peers: []signer.NetworkMapPeer{
+			{DeviceID: "only", InferenceState: mkState(true, now)},
+		},
+	})
+
+	snap := a.Snapshot()
+	if !snap.Peers[0].Silent {
+		t.Fatalf("test setup: the sole peer should be Silent")
+	}
+	if !snap.Reachable {
+		t.Errorf("Reachable=false with a silent-but-otherwise-healthy sole peer: " +
+			"this degrades the proxy without ever probing (waired#729)")
+	}
+}
+
+// TestAggregatorSilentIndependentOfStale walks the two axes as a
+// matrix. They answer different questions — "did the map stream or the
+// peer's CP push die?" vs "has the peer's host gone quiet on disco?" —
+// so neither may imply the other. PRODUCT CONTRACT.
+func TestAggregatorSilentIndependentOfStale(t *testing.T) {
+	base := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name       string
+		mapAge     time.Duration
+		live       map[string]bool
+		wantStale  bool
+		wantSilent bool
+	}{
+		{"fresh frame, fresh pong", 0, map[string]bool{"p": true}, false, false},
+		{"fresh frame, silent", 0, map[string]bool{"p": false}, false, true},
+		{"dead frame, fresh pong", DefaultFrameStaleness + time.Minute, map[string]bool{"p": true}, true, false},
+		{"dead frame, silent", DefaultFrameStaleness + time.Minute, map[string]bool{"p": false}, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := base
+			live := tc.live
+			a := New("self-id", Policy{
+				PeerLiveness: func() map[string]bool { return live },
+			}, func() time.Time { return now })
+
+			a.Update(&signer.NetworkMap{
+				Self:  signer.NetworkMapPeer{DeviceID: "self-id"},
+				Peers: []signer.NetworkMapPeer{{DeviceID: "p", InferenceState: mkState(true, base)}},
+			})
+			now = base.Add(tc.mapAge)
+
+			got := a.Snapshot().Peers[0]
+			if got.Stale != tc.wantStale {
+				t.Errorf("Stale = %v, want %v", got.Stale, tc.wantStale)
+			}
+			if got.Silent != tc.wantSilent {
+				t.Errorf("Silent = %v, want %v", got.Silent, tc.wantSilent)
+			}
+		})
 	}
 }
 

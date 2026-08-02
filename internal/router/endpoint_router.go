@@ -186,23 +186,6 @@ type Inputs struct {
 	// window. Used as the first tie-break after the catalog score.
 	LocalErrors func() map[string]float32
 
-	// LocalReachable, when non-nil, returns a per-peer reachability
-	// signal sourced from disco prober pongs (Phase 8). The signal is
-	// a hard-exclusion: peers present in the map with value=false are
-	// dropped from the candidate set entirely, before scoring runs.
-	//
-	// Three-valued semantics (matching disco.Service.ReachableSnapshot):
-	//   - present, value=true:  recent pong within the freshness window
-	//   - present, value=false: stale — disco saw no pong recently
-	//   - absent: never observed — Selector default-trusts the peer so
-	//     freshly enrolled peers aren't excluded before their first
-	//     probe round.
-	//
-	// nil disables the disco-based exclusion entirely (= Phase 7
-	// fixture behaviour). The Phase 7 inferencemesh staleness flag
-	// (PeerView.Stale) still filters independently.
-	LocalReachable func() map[string]bool
-
 	// Recorder receives a RecordSelection emit each time SelectK
 	// returns a non-empty candidate slice. nil disables the emit;
 	// every other Selector behaviour is unchanged.
@@ -391,6 +374,16 @@ type Candidate struct {
 	// identifier a display surface may render.
 	PeerDisplayID string   `json:"peer_display_id,omitempty"`
 	Decision      Decision `json:"decision"`
+
+	// Pinned marks this candidate as the operator's manually pinned
+	// peer. The gateway uses it to tell "the pin itself failed its
+	// /healthz probe" (→ ErrPinnedPeerUnreachable, naming the peer)
+	// apart from "everything was busy" (→ ErrAllPeersOverloaded).
+	// Before waired#729 the Selector filtered a silent pin out before
+	// the probe layer ever saw it, so the distinction was made from
+	// the snapshot alone; now the probe is what decides, and this flag
+	// is how its verdict keeps the peer's name attached.
+	Pinned bool `json:"pinned,omitempty"`
 
 	// commit performs the InFlightTracker Acquire and sticky Touch
 	// for this candidate. Captured at SelectK time so the call site
@@ -780,7 +773,17 @@ type meshCandidate struct {
 	// higher-priority ones are chosen first; overloaded high-priority peers
 	// still drop out via the capacity admission filter, falling back to the
 	// next tier. 0 (Middle) for agents/devices that predate or don't set it.
-	priority  int
+	priority int
+	// silent is the disco prober's advisory "this peer pong'd once and
+	// has gone quiet since" verdict (inferencemesh.PeerView.Silent). It
+	// is a SORT key, never a filter (waired#729): the pong rides raw UDP
+	// or the relay's WSS control session, not the WireGuard data plane
+	// an inference request uses, so it cannot veto a peer whose data
+	// plane is demonstrably carrying traffic. Ordering silent peers last
+	// keeps the probeFanoutK slots pointed at the peers most likely to
+	// answer while still letting a silent peer win when it is all we
+	// have.
+	silent    bool
 	capacity  int     // 0 == unlimited
 	score     int64   // ParamCount × QuantizationTier; 0 when catalog inputs unset
 	errorRate float32 // 0 when LocalErrors snapshot missing this peer
@@ -807,10 +810,10 @@ type meshCandidate struct {
 // The Phase 8 routing chain:
 //
 //  1. Filter — peers in the snapshot that (a) advertise a model
-//     matching one of the manifest's variants, (b) are non-stale and
-//     reachable per the snapshot, AND (c) are not explicitly marked
-//     stale by the local disco prober (LocalReachable).
-//  2. Sort — score → error rate → RTT → deviceID (Phase 7 ordering).
+//     matching one of the manifest's variants and (b) are non-stale
+//     and reachable per the snapshot.
+//  2. Sort — silence → score → error rate → RTT → deviceID (Phase 7
+//     ordering, with the waired#729 advisory key in front).
 //  3. Sticky-first — if a StickyID resolves to a peer in the filtered
 //     set, hoist it to position 0 so the gateway probes / commits it
 //     first.
@@ -953,8 +956,8 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 	}
 	candReasons := append(append([]string{}, reasons...),
 		fmt.Sprintf("local state for %q is not ready", manifest.ModelID),
-		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%d, in_flight=%d, cap=%d, load=%.2f)",
-			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, c.rttMS, c.inFlight, c.capacity, c.loadFraction),
+		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%d, in_flight=%d, cap=%d, load=%.2f, silent=%v)",
+			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, c.rttMS, c.inFlight, c.capacity, c.loadFraction, c.silent),
 	)
 	decision := Decision{
 		Reason:   candReasons,
@@ -982,6 +985,9 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 		PeerID:        c.deviceID,
 		PeerDisplayID: c.displayID,
 		Decision:      decision,
+		Pinned: s.in.RoutingMode == state.RoutingModePinned &&
+			s.in.PinnedPeerDeviceID != "" &&
+			c.deviceID == s.in.PinnedPeerDeviceID,
 		commit: func() (Selection, bool) {
 			release, ok := s.acquireSlot(c)
 			if !ok {
@@ -1013,12 +1019,19 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 
 // pinReachableInSnapshot reports whether the pinned peer is present
 // in the mesh snapshot AND its inferencemesh aggregator flags
-// (Reachable, !Stale) plus the disco-prober signal (when wired) all
-// agree the peer is currently usable. The "reachable but lacks our
-// requested model" case is intentionally NOT detected here — that
-// case is the soft-fallback path callers want, and is determined by
-// the model-match filter in buildMeshCandidates rather than by this
-// function.
+// (Reachable, !Stale) agree the peer is currently usable.
+//
+// PeerView.Silent is deliberately NOT consulted: disco silence must
+// never strict-503 a pin (waired#729). An operator pin is an explicit
+// "use this machine"; silence is an inference drawn from a channel the
+// request does not even travel. A silent pin therefore stays reachable
+// here, gets hoisted, and is probed — and if that probe fails, the
+// gateway names it via ErrPinnedPeerUnreachable.
+//
+// The "reachable but lacks our requested model" case is intentionally
+// NOT detected here — that case is the soft-fallback path callers
+// want, and is determined by the model-match filter in
+// buildMeshCandidates rather than by this function.
 func pinReachableInSnapshot(snap inferencemesh.Snapshot, pin string) bool {
 	if pin == "" {
 		return false
@@ -1100,18 +1113,18 @@ func applyStickyFirst(req Request, store *StickyStore, cands []meshCandidate) []
 }
 
 // buildMeshCandidates filters the snapshot to peers that (a) carry
-// a model matching one of manifest's variants, (b) are reachable
-// and non-stale per the inferencemesh aggregator, and (c) — Phase 8 —
-// have not been explicitly marked unreachable by the disco prober's
-// recent-pong tracker.
+// a model matching one of manifest's variants and (b) are reachable
+// and non-stale per the inferencemesh aggregator.
 //
-// The LocalReachable map is three-valued: present+true means a recent
-// pong was observed, present+false means the peer was once observed
-// but has gone silent, and absent means we have no signal at all
-// (freshly enrolled peer before its first probe round). Only the
-// explicit "false" case excludes a candidate; absent peers default
-// to trust so a new peer isn't blocked from receiving its first
-// inference request.
+// The disco prober's recent-pong verdict (PeerView.Silent) is NOT a
+// filter here. It used to be — Phase 8 hard-excluded on it — and that
+// black-holed peers whose WireGuard data plane was demonstrably
+// carrying traffic over relay, because a disco pong travels raw UDP or
+// the relay's WSS control session and never the data plane itself
+// (waired#729). It rides along on the candidate as an advisory sort
+// key instead, and /healthz — which does traverse the data plane, in
+// parallel, on a 50 ms budget, spinning no GPU — is what actually
+// decides.
 //
 // class is the request's Claude traffic class ("main"/"sub", or "" for
 // general non-Claude inference). A peer the admin marked ineligible for
@@ -1125,19 +1138,15 @@ func (s *Selector) buildMeshCandidates(
 	gate *publicGate,
 ) []meshCandidate {
 	var (
-		rtts      map[string]uint32
-		errors    map[string]float32
-		reachable map[string]bool
-		inflight  map[string]int32
+		rtts     map[string]uint32
+		errors   map[string]float32
+		inflight map[string]int32
 	)
 	if s.in.LocalRTT != nil {
 		rtts = s.in.LocalRTT()
 	}
 	if s.in.LocalErrors != nil {
 		errors = s.in.LocalErrors()
-	}
-	if s.in.LocalReachable != nil {
-		reachable = s.in.LocalReachable()
 	}
 	if s.in.LocalInFlight != nil {
 		inflight = s.in.LocalInFlight.Snapshot()
@@ -1191,13 +1200,6 @@ func (s *Selector) buildMeshCandidates(
 				continue
 			}
 		}
-		// Phase 8: disco-based hard exclusion. Present + false in the
-		// snapshot means the prober saw the peer pong at some point
-		// but not within the freshness window — likely WG path failure
-		// the inferencemesh aggregator hasn't caught up to yet.
-		if reach, present := reachable[p.DeviceID]; present && !reach {
-			continue
-		}
 		kind := p.InferenceState.Type
 		if kind == "" {
 			kind = catalog.RuntimeOllama
@@ -1224,6 +1226,7 @@ func (s *Selector) buildMeshCandidates(
 				runtime:   kind,
 				tag:       m,
 				priority:  p.InferenceState.Priority,
+				silent:    p.Silent,
 				capacity:  p.InferenceState.Capacity,
 				score:     int64(v.ParamCount) * int64(v.QuantizationTier),
 				rttMS:     noRTT,
@@ -1301,8 +1304,9 @@ func effectiveCapacity(capacity int) int {
 }
 
 // sortMeshCandidates orders candidates by:
-// priority desc → score desc → error asc → RTT-band asc → load-fraction asc
-// → deviceID asc. The admin routing priority is the dominant key: among peers
+// silence asc → priority desc → score desc → error asc → RTT-band asc →
+// load-fraction asc → deviceID asc. The admin routing priority is the
+// dominant key among peers we have no reason to doubt: among peers
 // that can serve the request, a High device is always preferred over Middle,
 // and Middle over Low (an overloaded high-priority peer drops out via the
 // capacity admission filter first, so traffic falls back to the next tier).
@@ -1320,6 +1324,21 @@ func sortMeshCandidates(cands []meshCandidate) {
 		// at all, not where it ranks.
 		if cands[i].public != cands[j].public {
 			return !cands[i].public
+		}
+		// Disco silence, second only to the grant tier (waired#729).
+		//
+		// Above priority: silence predicts a failed probe, and there
+		// are only probeFanoutK slots — spending one on a silent
+		// High-priority peer instead of a healthy Middle one lowers the
+		// expected first-round hit rate and buys nothing, since the
+		// silent peer can still win on arrival order if it is fine.
+		//
+		// Below public: a silent OWN peer must outrank a healthy PUBLIC
+		// one, or a 45-second gap in pongs would push the owner's
+		// traffic onto a stranger's machine — and partitionOwnFirst
+		// would only have to undo it.
+		if cands[i].silent != cands[j].silent {
+			return !cands[i].silent
 		}
 		if cands[i].priority != cands[j].priority {
 			return cands[i].priority > cands[j].priority

@@ -147,13 +147,6 @@ type inferenceSubsystemDeps struct {
 	LocalRTT      func() map[string]uint32
 	LocalErrors   func() map[string]float32
 
-	// LocalReachable returns the disco prober's per-peer reachability
-	// snapshot (Phase 8 hard-exclusion signal). Wired from main.go's
-	// disco service when enabled; nil disables the hard-exclusion
-	// (= Phase 7 behaviour: every reachable+non-stale snapshot peer
-	// is eligible).
-	LocalReachable func() map[string]bool
-
 	// Recorder is the Phase 9 composite telemetry sink threaded into
 	// the loopback Selector (router.Inputs.Recorder), the loopback
 	// gateway (gateway.Deps.Recorder), and the overlay inference
@@ -528,7 +521,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		localInFlight:       deps.LocalInFlight,
 		localRTT:            deps.LocalRTT,
 		localErrors:         deps.LocalErrors,
-		localReachable:      deps.LocalReachable,
 		publicPolicy:        deps.PublicPolicy,
 		onPublicGrantDemand: deps.OnPublicGrantDemand,
 		onPublicGrantUsed:   deps.OnPublicGrantUsed,
@@ -1023,12 +1015,6 @@ type agentInferenceProvider struct {
 	localInFlight *router.InFlightTracker
 	localRTT      func() map[string]uint32
 	localErrors   func() map[string]float32
-
-	// Phase 8: disco-prober reachability snapshot. nil keeps the
-	// pre-Phase-8 behaviour (no hard exclusions); main.go wires it
-	// to disco.Service.ReachableSnapshot once the disco subsystem
-	// is up.
-	localReachable func() map[string]bool
 
 	// Phase 9: telemetry composite. Threaded into the loopback
 	// Selector and gateway so the agent emits Phase 9 events from
@@ -2685,10 +2671,6 @@ func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref sta
 	in.LocalInFlight = p.localInFlight
 	in.LocalRTT = p.localRTT
 	in.LocalErrors = p.localErrors
-	// Phase 8: disco-prober-based hard exclusion. nil keeps the
-	// pre-Phase-8 behaviour (no exclusions) — main.go wires this
-	// once the disco service is up.
-	in.LocalReachable = p.localReachable
 	// Phase 9 telemetry: emit RecordSelection on every SelectK
 	// return. nil disables emission. The composite Recorder is
 	// supplied via inferenceSubsystemDeps from main.go.
