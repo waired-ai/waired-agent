@@ -147,6 +147,32 @@ var producedInProto = []exemption{
 		"the roofline decode prediction, computed inside hostfit"},
 	{reflect.TypeFor[hostfit.Estimate](), "UpperBound",
 		"the roofline decode prediction, computed inside hostfit"},
+	// hostfit.Presentation is built ONLY by hostfit.Project /
+	// NoVariantForEngine — deliberately, so there is one producer of the
+	// shape the tray, the CLI and the setup wizard all render
+	// (waired-agent#321). A consumer that assembled one field by field
+	// would be the second implementation this package exists to prevent.
+	//
+	// Reason and QualityTier are absent from this list on purpose: the
+	// guard matches producers by field NAME, and both names are written
+	// by same-named fields on local structs elsewhere in the repo. Adding
+	// them here would fail as "a field that has since gained a writer".
+	{reflect.TypeFor[hostfit.Presentation](), "Runnable",
+		"the shared fit projection, built by hostfit.Project"},
+	{reflect.TypeFor[hostfit.Presentation](), "NeedMB",
+		"the shared fit projection, built by hostfit.Project"},
+	{reflect.TypeFor[hostfit.Presentation](), "HaveMB",
+		"the shared fit projection, built by hostfit.Project"},
+	{reflect.TypeFor[hostfit.Presentation](), "RequiredResidentMB",
+		"the shared fit projection, built by hostfit.Project"},
+	{reflect.TypeFor[hostfit.Presentation](), "NotRecommended",
+		"the shared fit projection, built by hostfit.Project"},
+	{reflect.TypeFor[hostfit.Presentation](), "NotRecommendedReason",
+		"the shared fit projection, built by hostfit.Project"},
+	{reflect.TypeFor[hostfit.Presentation](), "Speed",
+		"the shared fit projection, built by hostfit.Project"},
+	{reflect.TypeFor[hostfit.Presentation](), "EstimatedTokps",
+		"the shared fit projection, built by hostfit.Project"},
 	{reflect.TypeFor[disco.Frame](), "Ed25519Sig",
 		"the peer↔peer signature; disco.Decode fills it on receipt"},
 	{reflect.TypeFor[disco.SealedHeader](), "Vers",
