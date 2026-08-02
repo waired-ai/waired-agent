@@ -249,10 +249,24 @@ func (s AgentGradeSet) CoverageGaps(manifests []Manifest, fixtureRevision string
 // the reverse. Retiring on "failed once" would delete a different set
 // of models every time the sweep runs.
 //
-// Failing every trial is a different claim, and the data separates
-// cleanly at that line. All four qwen2.5-coder entries failed EVERY
-// tool-requiring call on EVERY trial — the rc7 defect, deterministic —
-// while nothing else in the catalog exceeded one failure in three.
+// Failing every trial is a different claim, and the data still separates
+// cleanly at that line — but the line has MOVED, which is the best
+// evidence that the threshold was the right one to pick.
+//
+// It was chosen when all four qwen2.5-coder entries failed every
+// tool-requiring call on every trial and nothing else in the catalog
+// exceeded one failure in three. #409 then taught the gateway to recover
+// a tool call the engine had left in the assistant text, and the
+// re-measurement at 24 trials (#426) left exactly ONE entry above this
+// line: qwen2.5-coder-0.5b. The other three were choosing the right tool
+// with the right arguments and only serialising it wrongly, and 7b — the
+// compiled-in BundledModelID — now fails nothing in 24 trials.
+//
+// 0.5b is a different defect and no parser reaches it: its "tool calls"
+// name a daemon and a file path rather than any offered tool, so the
+// gateway correctly leaves them as text. A worklist keyed on the stored
+// verdict rather than on this threshold would have proposed deleting the
+// model a fresh install serves by default.
 //
 // Verdicts recorded before per-trial counts existed have Trials == 0;
 // those fall back to the stored verdict so an old record is not
