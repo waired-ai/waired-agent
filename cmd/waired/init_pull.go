@@ -41,7 +41,13 @@ import (
 // during the wait — the case awaitSetupBudget's 3-minute grace gave up on
 // (#308). This is the longest wait in the flow, so it is where a slow
 // operator's browser setup actually lands.
-func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *enterWatch, setup *setupWatch) bool {
+// target (nil = no wizard; key off the active model as before) names the
+// model a browser wizard chose (#306). It decides WHICH model this wait
+// reports on and changes nothing else: on the host in #306 the terminal
+// printed "qwen2.5-coder-14b-instruct ready" and returned while the
+// operator's 44 GB choice was still downloading, because subsystem_state
+// answers for the ACTIVE model and the agent had picked its own.
+func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Duration, engineComing bool, enter *enterWatch, setup *setupWatch, target *modelTarget) bool {
 	if !waitDaemonReachable(mgmtURL, 15*time.Second) {
 		// The caller already prints a "start the agent, then …" hint; stay
 		// quiet here so we don't double up.
@@ -52,19 +58,29 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 	line := downloadLineState{lastPct: -1}
 	var rate rateWindow
 	dlHinted := false // one-time "this is a multi-GB transfer" hint before the bar
+	want := ""        // the wizard's model, once it has named one (#306)
+	failedStreak := 0
 
-	// lastStep dedups the per-phase step lines: each distinct transitional
-	// subsystem_state prints one concise note as it is entered, so the user
-	// watches the engine move through its phases (start → prepare → download
-	// → load → ready) instead of staring at a single silent line. The live
-	// download bar uses the stepDownloading sentinel so a following step line
+	// lastNote dedups the per-phase step lines: each distinct transitional
+	// phase prints one concise note as it is entered, so the user watches
+	// the engine move through its phases (start → prepare → download → load
+	// → ready) instead of staring at a single silent line. The live download
+	// bar uses the stepDownloading sentinel so a following step line
 	// terminates the in-place bar exactly once.
-	lastStep := ""
-	announce := func(step, msg string) {
-		if step == lastStep {
+	//
+	// The key is the rendered SENTENCE rather than the subsystem_state it
+	// came from. Once the wait can be keyed to a model the agent is not
+	// serving, several states render the same sentence — "awaiting_model"
+	// and "loading" both become "Preparing to download <the wizard's
+	// model>…" — and a state key would reprint it every time the daemon
+	// flapped between them. The question the key answers is "have we said
+	// this already?", so the sentence is what it should be.
+	lastNote := ""
+	announce := func(msg string) {
+		if msg == lastNote {
 			return
 		}
-		lastStep = step
+		lastNote = msg
 		endProgressLine(out, tty, &line)
 		writePrompt(out, msg)
 	}
@@ -97,7 +113,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			// about to install, so a grace already counting down would
 			// otherwise end the wait for it (#188 in reverse).
 			noEngineDeadline = time.Time{}
-			lastStep = "" // re-announce the current phase after the interruption
+			lastNote = "" // re-announce the current phase after the interruption
 		}
 
 		// The takeover exchange (init_takeover.go).
@@ -110,22 +126,63 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				writePrompt(out, "Continuing in the background — the agent finishes the download on its own.")
 				return false
 			}
-			lastStep = "" // re-announce the current phase after the interruption
+			lastNote = "" // re-announce the current phase after the interruption
+		}
+
+		// #306: the model the browser wizard chose, which is not
+		// necessarily the one the agent decided to serve. Read before the
+		// status below, so a new target and the first status keyed to it
+		// land on the same tick.
+		if got := target.Poll(); got != want {
+			endBar()
+			if lastNote != "" {
+				// Something has already been narrated for the previous
+				// keying — in the #308 sequence, a whole progress bar for
+				// the agent's own model. The bar is about to restart at a
+				// different model's percentage, which unexplained reads as
+				// the download going backwards. On the ordinary path this
+				// is the first tick, nothing has been said, and the phase
+				// note below names the model on its own.
+				writePromptf(out, "Now waiting for the model chosen in your browser: %s.\n", got)
+			}
+			want = got
+			// Every piece of render state below describes the model we just
+			// stopped waiting for. line most of all: off a TTY
+			// drawDownloadLine suppresses a redraw inside the same 10%
+			// bucket, so a stale lastPct can swallow the new model's first
+			// bar entirely.
+			line = downloadLineState{lastPct: -1}
+			rate = rateWindow{}
+			dlHinted, failedStreak, lastNote = false, 0, ""
+			// noEngineDeadline deliberately survives: engine health is not
+			// a property of which model is being waited for.
 		}
 
 		st, ok := fetchInferenceStatus(mgmtURL)
 		switch {
 		case !ok:
 			// /status unreachable this tick — keep waiting, re-read next tick.
-		case modelReady(st):
+		case waitModelReady(st, want):
 			endProgressLine(out, tty, &line)
-			writePromptf(out, "%s  %s ready\n", emo("✅", "[ok]"), activeModelName(st))
+			writePromptf(out, "%s  %s ready\n", emo("✅", "[ok]"), waitModelName(st, want))
 			return true
-		case st.SubsystemState == "pull_failed" || modelFailed(st):
-			endProgressLine(out, tty, &line)
-			writePromptf(out, "Model download failed; the agent will keep retrying. "+
-				"Run `waired models pull %s` to retry, or `waired runtimes benchmark` later.\n", activeModelName(st))
-			return false
+		case waitModelFailed(st, want):
+			// One observation is terminal for the agent's own model — that
+			// is the pre-#306 behaviour, and what this line's copy promises.
+			// It is not terminal for a wizard-chosen one: the agent records
+			// `failed` for an in-flight pull as it shuts down, and the
+			// post-restart bootstrap picks the same model straight back up
+			// (the engine install a wizard is driving is exactly what
+			// restarts it). Note this is NOT waitForModelSwitch's reason —
+			// applying a desired model never schedules a restart of its own.
+			failedStreak++
+			if want == "" || failedStreak >= switchFailedStreak {
+				endProgressLine(out, tty, &line)
+				writePromptf(out, "Model download failed; the agent will keep retrying. "+
+					"Run `waired models pull %s` to retry, or `waired runtimes benchmark` later.\n",
+					waitModelName(st, want))
+				return false
+			}
 		case st.SubsystemState == "disabled" || st.SubsystemState == "stopped":
 			// Inference won't become ready while disabled / parked — don't block.
 			return false
@@ -150,23 +207,24 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				writePrompt(out, "Check progress with `waired status`; if it persists, see `waired doctor` or `journalctl -u waired-agent -e`.")
 				return false
 			}
-			announce("no_engine", "Waiting for the AI engine to start… "+
+			announce("Waiting for the AI engine to start… " +
 				dim("(first run installs the engine — this can take a few minutes)"))
 		default:
 			// Engine is up; a download may be in flight. Disarm the no_engine
 			// grace so a later blip re-arms a fresh window instead of expiring.
 			noEngineDeadline = time.Time{}
-			if dl, found := activeDownload(st); found && dl.TotalBytes > 0 {
+			failedStreak = 0
+			if dl, found := waitDownload(st, want); found && dl.TotalBytes > 0 {
 				speed := rate.observe(time.Now(), dl.CompletedBytes)
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
 					dlHinted = true
-					announce("download_hint", dim("Downloading the AI model (several GB — this can take a while)."))
+					announce(dim("Downloading the AI model (several GB — this can take a while)."))
 				}
-				lastStep = stepDownloading // the bar owns the line; let a later step end it
-				drawDownloadLine(out, tty, &line, activeModelName(st), pct, dl.CompletedBytes, dl.TotalBytes, speed)
+				lastNote = stepDownloading // the bar owns the line; let a later step end it
+				drawDownloadLine(out, tty, &line, waitModelName(st, want), pct, dl.CompletedBytes, dl.TotalBytes, speed)
 			} else {
-				announce(st.SubsystemState, prepMessage(st))
+				announce(waitPrepMessage(st, want))
 			}
 		}
 
@@ -418,4 +476,77 @@ func activeDownload(st management.InferenceStatus) (management.ModelDownload, bo
 		return st.Models.Downloads[0], true
 	}
 	return management.ModelDownload{}, false
+}
+
+// The wait* helpers below are the whole of #306 inside this file. Given
+// want == "" they delegate to the functions above, so every non-wizard
+// path stays byte-identical; given a want they key on the model the
+// BROWSER WIZARD chose rather than on st.Active.
+//
+// The split exists because subsystem_state describes the active model and
+// nothing else: the daemon derives it entirely from state.Active, and
+// state.Active is only committed once a model's weights are Ready. So for
+// the whole of a download the operator's choice is invisible to it, while
+// "ready" and "pull_failed" answer for a model they did not pick. On the
+// host in #306 both were true of a 9 GB model the agent had chosen for
+// itself, and the terminal announced it as ready and returned while the
+// operator's 44 GB choice was still coming down.
+
+// waitModelReady reports whether the model this wait is keyed to is on
+// disk and being served.
+func waitModelReady(st management.InferenceStatus, want string) bool {
+	if want == "" {
+		return modelReady(st)
+	}
+	// Deliberately not st.SubsystemState == "ready": that is the active
+	// model's answer, and the point is that a different model is active.
+	return slices.Contains(st.Models.Ready, want)
+}
+
+// waitModelFailed reports whether that model's most recent download failed.
+func waitModelFailed(st management.InferenceStatus, want string) bool {
+	if want == "" {
+		return st.SubsystemState == "pull_failed" || modelFailed(st)
+	}
+	// Again not the subsystem state: "pull_failed" is the active model's
+	// download failing, which says nothing about the one being waited on.
+	return slices.Contains(st.Models.Failed, want)
+}
+
+// waitModelName is the name to print for the model being waited on. It is
+// the raw catalog id on both paths, which is what `waired models ls` shows
+// and — load-bearing — what the failure line interpolates into a
+// copy-pasteable `waired models pull <id>`. A display label there would
+// split into two shell arguments, neither of them an alias of anything.
+func waitModelName(st management.InferenceStatus, want string) string {
+	if want == "" {
+		return activeModelName(st)
+	}
+	return want
+}
+
+// waitDownload is the in-flight transfer to render.
+func waitDownload(st management.InferenceStatus, want string) (management.ModelDownload, bool) {
+	if want == "" {
+		return activeDownload(st)
+	}
+	// Exact match, never activeDownload's Downloads[0] fallback: that
+	// fallback picks an arbitrary one of two concurrent pulls, which is how
+	// the bar came to count one model's bytes under another's name.
+	return downloadFor(st, want)
+}
+
+// waitPrepMessage is prepMessage with the model-naming arms retargeted:
+// keep the arms that describe the ENGINE, replace the ones that name a
+// model, since every one of those interpolates the active model.
+func waitPrepMessage(st management.InferenceStatus, want string) string {
+	if want == "" {
+		return prepMessage(st)
+	}
+	switch st.SubsystemState {
+	case "initializing", "starting":
+		return prepMessage(st)
+	default:
+		return "Preparing to download " + want + "…"
+	}
 }
