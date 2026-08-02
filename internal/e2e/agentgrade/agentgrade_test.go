@@ -88,6 +88,23 @@ func trials(t *testing.T) int {
 	return n
 }
 
+// stream selects the SSE path. Off by default because that is what every
+// stored verdict was measured on; on is what a coding agent actually
+// does, so a re-measurement drives both and compares (#426).
+//
+// Any value other than the empty string, "0" or "false" turns it on:
+// the failure this guards against is a run that silently measured the
+// wrong transport, and a strict parser that rejected "yes" would just
+// move that failure to the shell.
+func stream() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("WAIRED_AGENTGRADE_STREAM"))) {
+	case "", "0", "false":
+		return false
+	default:
+		return true
+	}
+}
+
 func TestAgentGrade(t *testing.T) {
 	bin, err := exec.LookPath("ollama")
 	if err != nil {
@@ -100,7 +117,7 @@ func TestAgentGrade(t *testing.T) {
 
 	base := startStack(t, ctx, bin, tag)
 
-	probe := agentgrade.Probe{BaseURL: base, Trials: trials(t)}
+	probe := agentgrade.Probe{BaseURL: base, Trials: trials(t), Stream: stream()}
 	rep, err := probe.Run(ctx, "waired/test")
 	if err != nil {
 		t.Fatalf("probe: %v", err)
@@ -131,8 +148,8 @@ func TestAgentGrade(t *testing.T) {
 // format calls at all or merely over-calls on small talk.
 func reportTable(t *testing.T, rep agentgrade.Report) {
 	t.Helper()
-	t.Logf("=== agent-harness grade: %s → %s (%d trials, %s)",
-		rep.Model, rep.Grade, rep.Trials, rep.Duration)
+	t.Logf("=== agent-harness grade: %s → %s (%d trials, %s transport, %s)",
+		rep.Model, rep.Grade, rep.Trials, rep.Transport, rep.Duration)
 	if len(rep.Flaky) > 0 {
 		// Say it loudly. A model whose verdict changes between runs is a
 		// different problem from one that is simply bad, and the whole

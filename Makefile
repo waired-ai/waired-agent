@@ -64,6 +64,7 @@ help:
 	@echo "                       Pulls qwen2.5:0.5b on first run; cached after."
 	@echo "  e2e-agentgrade       Grade one model's coding-agent tool-format compliance"
 	@echo "                       make e2e-agentgrade MODEL=<ollama tag>  (manual; GPU)"
+	@echo "                       TRIALS=<n> raises the sample; STREAM=1 drives SSE"
 	@echo "  e2e-vllm             Real-vLLM inference e2e (GPU REQUIRED, ~30 min)"
 	@echo "                       REQUIRED before release on any GPU host."
 	@echo "                       Smoke test (~3 min): make e2e-vllm-quick"
@@ -424,12 +425,26 @@ e2e-inference:
 #   make e2e-agentgrade MODEL=qwen3.6:27b-q4_K_M
 #   make e2e-agentgrade MODEL=<tag> JSON=/tmp/verdict.json
 #   make e2e-agentgrade MODEL=<tag> TRIALS=12   # re-measure a 1/3 blip
+#   make e2e-agentgrade MODEL=<tag> STREAM=1    # the path a coding agent takes
+#
+# The target — not a bare `go test` — is what stamps the commit the probe ran
+# from into the report. FixtureRevision covers the fixture and nothing else, so
+# without this a verdict cannot say WHICH gateway produced it; #409 changed the
+# answer for four models without moving the fixture by a byte. `catalog-tool
+# agentgrade --import` refuses a report that is unstamped or built from a dirty
+# tree, which is why measuring is a make target and not a habit.
 .PHONY: e2e-agentgrade
 e2e-agentgrade:
 	@test -n "$(MODEL)" || { echo "usage: make e2e-agentgrade MODEL=<ollama tag> [JSON=<path>]"; exit 2; }
-	WAIRED_AGENTGRADE_MODEL="$(MODEL)" WAIRED_AGENTGRADE_JSON="$(JSON)" \
-	WAIRED_AGENTGRADE_TRIALS="$(TRIALS)" \
-	  go test -tags e2e -count=1 -v -timeout=40m -run TestAgentGrade ./internal/e2e/agentgrade/...
+	@rev="$$(git rev-parse --short=12 HEAD 2>/dev/null)"; \
+	 test -n "$$rev" || { echo "e2e-agentgrade: not a git checkout — cannot stamp the probe revision"; exit 2; }; \
+	 test -z "$$(git status --porcelain 2>/dev/null)" || rev="$$rev-dirty"; \
+	 echo "probe revision: $$rev"; \
+	 WAIRED_AGENTGRADE_MODEL="$(MODEL)" WAIRED_AGENTGRADE_JSON="$(JSON)" \
+	 WAIRED_AGENTGRADE_TRIALS="$(TRIALS)" WAIRED_AGENTGRADE_STREAM="$(STREAM)" \
+	   go test -tags e2e -count=1 -v -timeout=40m \
+	     -ldflags "-X github.com/waired-ai/waired-agent/internal/agentgrade.agentRevision=$$rev" \
+	     -run TestAgentGrade ./internal/e2e/agentgrade/...
 
 # vLLM e2e (GPU REQUIRED): exercises the Step-2 multi-engine path —
 # venv install (uv-managed Python 3.12), HF download (huggingface-cli +
