@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -138,8 +140,52 @@ func TestFetchRouteAndHealthUnreachable(t *testing.T) {
 	}
 }
 
+// sealUserCache points the per-session fallback marker at a directory
+// unique to this test, so the hook's own writes cannot decide the next
+// run's verdict.
+//
+// These tests used to set only XDG_CACHE_HOME, which os.UserCacheDir
+// ignores on darwin (it reads HOME) and on Windows (LocalAppData). The
+// marker therefore landed in the developer's real
+// ~/Library/Caches/waired/claude-fallback, where
+// TestRunFallbackHookEmitsOnNewFallback's own `writeFallbackCount` made
+// `fb.Count <= prev` true forever after: the test passed exactly once per
+// machine and then failed until pruneFallbackCache aged the file out a
+// week later (#386). All three variables are set so the same hole cannot
+// reopen on a different OS.
+//
+// seams_test.go's TestMain seals the same three package-wide; this narrows
+// it to one directory per test, which is what makes `go test -count=2`
+// meaningful here.
+func sealUserCache(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "Library", "Caches"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
+}
+
+// TestFallbackCacheDirIsSealed is the direct pin on the above: if the seal
+// stops working, this fails loudly instead of the five hook tests failing
+// obscurely, one machine at a time.
+func TestFallbackCacheDirIsSealed(t *testing.T) {
+	sealUserCache(t)
+	dir, err := fallbackCacheDir()
+	if err != nil {
+		t.Fatalf("fallbackCacheDir: %v", err)
+	}
+	home := os.Getenv("HOME")
+	if home == "" || !strings.HasPrefix(dir, home) {
+		t.Errorf("fallbackCacheDir() = %q, want it under the sealed home %q — "+
+			"the hook would be writing to the developer's real cache", dir, home)
+	}
+}
+
 func TestRunFallbackHookEmitsOnNewFallback(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	sealUserCache(t)
 	st := routing(state.ClaudeRouteAuto, withFallback(fallbackAt(time.Now(), 1, "local_status_503", "anthropic")))
 	srv := routeStub(t, st, "ready")
 	stdin := strings.NewReader(`{"session_id":"sess-A","hook_event_name":"Stop"}`)
@@ -167,7 +213,7 @@ func TestRunFallbackHookEmitsOnNewFallback(t *testing.T) {
 }
 
 func TestRunFallbackHookSuppressesStale(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	sealUserCache(t)
 	st := routing(state.ClaudeRouteAuto, withFallback(fallbackAt(time.Now().Add(-10*time.Minute), 5, "local_status_400", "anthropic")))
 	srv := routeStub(t, st, "ready")
 	var out bytes.Buffer
@@ -180,7 +226,7 @@ func TestRunFallbackHookSuppressesStale(t *testing.T) {
 }
 
 func TestRunFallbackHookSuppressesLocalDirection(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	sealUserCache(t)
 	// A local-degrade (anthropic route → local) is not a "reply came from
 	// Anthropic" notice.
 	st := routing(state.ClaudeRouteAnthropic, withFallback(fallbackAt(time.Now(), 1, "anthropic_unreachable", "local")))
@@ -195,7 +241,7 @@ func TestRunFallbackHookSuppressesLocalDirection(t *testing.T) {
 }
 
 func TestRunFallbackHookSilentWhenNoFallback(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	sealUserCache(t)
 	srv := routeStub(t, routing(state.ClaudeRouteAuto), "ready")
 	var out bytes.Buffer
 	if err := runFallbackHook(srv.URL, strings.NewReader(`{"session_id":"sess-C"}`), &out); err != nil {
@@ -207,7 +253,7 @@ func TestRunFallbackHookSilentWhenNoFallback(t *testing.T) {
 }
 
 func TestRunFallbackHookSilentWhenUnreachable(t *testing.T) {
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	sealUserCache(t)
 	srv := routeStub(t, management.ClaudeRoutingState{}, "ready")
 	url := srv.URL
 	srv.Close()

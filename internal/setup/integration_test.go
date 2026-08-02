@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
+	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
 // fakeAdapter is the same shape as the unit-test fake in
@@ -40,8 +41,19 @@ func (f *fakeAdapter) Uninstall(_ context.Context, _ integration.ApplyOptions) e
 	return f.uninstErr
 }
 
+// newOpts builds an isolated environment for one Integration() call: a
+// fresh home, a fresh state dir — and a fresh Keychain.
+//
+// The Keychain matters as much as the directories and is easier to miss.
+// Every gateway token lives under one machine-global (account, service)
+// item, and LoadOrCreateGatewayToken returns early on a hit without
+// writing the token file. So a store carried over from a previous test —
+// or, before seams_test.go, the developer's real Keychain — makes
+// "Integration creates the token" silently untestable: the call succeeds
+// and the file simply is not there (#386).
 func newOpts(t *testing.T, fakes ...integration.Adapter) IntegrationOptions {
 	t.Helper()
+	t.Cleanup(securestore.SwapStoreForTest(securestore.NewMemStore()))
 	home := t.TempDir()
 	state := t.TempDir()
 	return IntegrationOptions{

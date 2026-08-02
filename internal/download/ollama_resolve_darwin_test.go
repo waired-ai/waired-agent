@@ -4,30 +4,15 @@ package download
 
 import (
 	"os"
+	"runtime"
 	"testing"
 )
 
-// TestPlatformOllamaCandidatesDarwin locks the macOS candidate set that
-// ResolveBinary stats when ollama is not on $PATH. waired init's
-// DetectOllama relies on this list to find the Ollama.app GUI install
-// (which is NOT on $PATH unless the user runs "Install command line")
-// and Homebrew installs under /opt/homebrew/bin. (#268)
-func TestPlatformOllamaCandidatesDarwin(t *testing.T) {
-	got := platformOllamaCandidates()
-	want := []string{
-		"/Applications/Ollama.app/Contents/Resources/ollama",
-		"/usr/local/bin/ollama",
-		"/opt/homebrew/bin/ollama",
-	}
-	if len(got) != len(want) {
-		t.Fatalf("candidates = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("candidate[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
+// The darwin candidate list itself is pinned by TestOllamaCandidates in
+// ollama_candidates_test.go, alongside the linux and windows lists, so
+// all three run on all three runners (#386). What is left here is the
+// one thing only a real Mac can show: that ResolveBinary actually finds
+// a binary sitting at one of those paths.
 
 // TestResolveBinaryCandidatePathRealHost proves ResolveBinary discovers
 // an ollama that lives at a well-known macOS install path but is NOT on
@@ -45,7 +30,7 @@ func TestResolveBinaryCandidatePathRealHost(t *testing.T) {
 	// Pick the first writable candidate directory and confirm nothing
 	// real is already there (never shadow a genuine install).
 	var target string
-	for _, cand := range platformOllamaCandidates() {
+	for _, cand := range ollamaCandidates(runtime.GOOS, os.Getenv) {
 		if _, err := os.Stat(cand); err == nil {
 			t.Skipf("real ollama already present at %q; skipping to avoid shadowing", cand)
 		}

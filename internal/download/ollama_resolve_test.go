@@ -66,12 +66,15 @@ func TestResolveBinary_PathLookup(t *testing.T) {
 func TestResolveBinary_NotFound(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WAIRED_OLLAMA_BINARY", "")
-	// If the host has a real install at an OS well-known candidate path
-	// this legitimately resolves; only assert the error shape when it
-	// truly cannot be found.
+	// The fourth source is the host filesystem, so it needs the seam too.
+	// This used to t.Skip when the host had a real install, which made
+	// the assertion unreachable on every developer machine that has
+	// Ollama — exactly where it is most likely to be needed (#386).
+	t.Cleanup(SwapCandidatesForTest(nil))
+
 	got, err := ResolveBinary("")
 	if err == nil {
-		t.Skipf("host has a resolvable ollama at %q; cannot exercise not-found", got)
+		t.Fatalf("ResolveBinary resolved %q with every source sealed, want ErrNotInstalled", got)
 	}
 	if !errors.Is(err, ErrNotInstalled) {
 		t.Errorf("err = %v, want ErrNotInstalled", err)

@@ -50,11 +50,15 @@ func TestInstallOllama_SkipsWhenResolvable(t *testing.T) {
 
 // TestInstallOllama_RunsWhenAbsent: with nothing resolvable, the seam is
 // invoked (yes=true skips the TTY confirm).
+//
+// The well-known paths are sealed for the package in seams_test.go, so
+// this runs on a Mac that has Ollama installed instead of skipping —
+// which is the machine most likely to be editing this file (#386).
 func TestInstallOllama_RunsWhenAbsent(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WAIRED_OLLAMA_BINARY", "")
-	if _, err := download.ResolveBinary(""); err == nil {
-		t.Skip("host has a resolvable ollama at a well-known path; cannot exercise the install branch")
+	if got, err := download.ResolveBinary(""); err == nil {
+		t.Fatalf("ResolveBinary resolved %q with every source sealed", got)
 	}
 
 	called := false
@@ -74,8 +78,8 @@ func TestInstallOllama_RunsWhenAbsent(t *testing.T) {
 func TestInstallOllama_PropagatesError(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WAIRED_OLLAMA_BINARY", "")
-	if _, err := download.ResolveBinary(""); err == nil {
-		t.Skip("host has a resolvable ollama; cannot exercise the install branch")
+	if got, err := download.ResolveBinary(""); err == nil {
+		t.Fatalf("ResolveBinary resolved %q with every source sealed", got)
 	}
 
 	sentinel := errors.New("boom")

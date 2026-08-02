@@ -336,12 +336,16 @@ var ErrNotInstalled = errors.New("download: ollama binary not found")
 //  2. `WAIRED_OLLAMA_BINARY` environment variable
 //  3. exec.LookPath("ollama") — works on Linux/macOS and on Windows
 //     for users whose PATH includes the Ollama installer
-//  4. OS-specific well-known install paths (Windows: %ProgramFiles%,
-//     %LOCALAPPDATA%\Programs; see ResolveBinary_windows for details)
+//  4. OS-specific well-known install paths (ollamaCandidates; Windows:
+//     %ProgramFiles%, %LOCALAPPDATA%\Programs)
 //
 // The third + fourth steps matter for Windows Service mode: when
 // waired-agent runs as LocalSystem, the user's PATH is not inherited,
 // so a plain LookPath misses Ollama even though it is installed.
+//
+// Step 4 reads the host filesystem, so a test that needs "nothing is
+// installed" must close it with SwapCandidatesForTest — the first three
+// steps alone do not make this hermetic (#386).
 func ResolveBinary(override string) (string, error) {
 	if override != "" {
 		return override, nil
@@ -352,7 +356,7 @@ func ResolveBinary(override string) (string, error) {
 	if path, err := exec.LookPath(ollamaCmdName); err == nil {
 		return path, nil
 	}
-	for _, candidate := range platformOllamaCandidates() {
+	for _, candidate := range currentCandidates() {
 		if candidate == "" {
 			continue
 		}
