@@ -125,8 +125,14 @@ func TestWaitForBundledModel_PullFailedSaysWhyAndDropsTheDeadEnd(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil) {
+	res := waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil)
+	if res.ready {
 		t.Fatalf("pull_failed must return false")
+	}
+	// engineFailure is #310's channel for an engine that could not come up.
+	// A pull that failed on a healthy engine is a soft skip, not that fault.
+	if res.engineFailure != "" {
+		t.Errorf("engineFailure = %q, want none — the ENGINE did not fail here", res.engineFailure)
 	}
 	s := out.String()
 	if !strings.Contains(s, reason) {
