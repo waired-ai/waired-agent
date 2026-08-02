@@ -180,7 +180,8 @@ func TestSetupEnums(t *testing.T) {
 	for _, c := range []string{"", signer.SetupErrorEngineNotReady, signer.SetupErrorDiskFull,
 		signer.SetupErrorModelNotFound, signer.SetupErrorNetworkError,
 		signer.SetupErrorPermissionDenied, signer.SetupErrorExecutorGone,
-		signer.SetupErrorTimeout, signer.SetupErrorInternal} {
+		signer.SetupErrorSetupCommandNotRun, signer.SetupErrorTimeout,
+		signer.SetupErrorInternal} {
 		if !signer.IsValidSetupErrorCode(c) {
 			t.Fatalf("IsValidSetupErrorCode(%q) = false, want true", c)
 		}
@@ -225,6 +226,48 @@ func TestSetupEnums(t *testing.T) {
 	for _, target := range []string{"", "emacs", signer.IntegrationOpenCode} {
 		if signer.IsValidIntegrationTarget(target) {
 			t.Fatalf("IsValidIntegrationTarget(%q) = true, want false", target)
+		}
+	}
+}
+
+// TestSetupErrorCodes_WireValues pins the literals NAVI keys its copy and
+// recovery affordances off. A reword here is a wire break, not a rename:
+// the control plane validator rejects an unknown code outright, and the
+// wizard falls back to a generic failure for one it does not know.
+//
+// The three "this step has no author" codes are pinned together and
+// asserted distinct because that is exactly what waired-agent#312 found
+// collapsed. They answer three different questions:
+//
+//   - setup_command_not_run — it never ran here
+//   - executor_gone — it ran and exited before reaching this row
+//   - permission_denied — it ran and the write itself was refused
+//
+// The first two send the operator to the same command and the third does
+// not, so folding any pair of them puts wrong copy on the wizard.
+func TestSetupErrorCodes_WireValues(t *testing.T) {
+	for _, c := range []struct{ got, want string }{
+		{signer.SetupErrorEngineNotReady, "engine_not_ready"},
+		{signer.SetupErrorDiskFull, "disk_full"},
+		{signer.SetupErrorModelNotFound, "model_not_found"},
+		{signer.SetupErrorNetworkError, "network_error"},
+		{signer.SetupErrorPermissionDenied, "permission_denied"},
+		{signer.SetupErrorExecutorGone, "executor_gone"},
+		{signer.SetupErrorSetupCommandNotRun, "setup_command_not_run"},
+		{signer.SetupErrorTimeout, "timeout"},
+		{signer.SetupErrorInternal, "internal"},
+	} {
+		if c.got != c.want {
+			t.Fatalf("setup error code = %q, want %q", c.got, c.want)
+		}
+	}
+	for _, c := range []struct{ a, b string }{
+		{signer.SetupErrorSetupCommandNotRun, signer.SetupErrorExecutorGone},
+		{signer.SetupErrorSetupCommandNotRun, signer.SetupErrorPermissionDenied},
+		{signer.SetupErrorExecutorGone, signer.SetupErrorPermissionDenied},
+	} {
+		if c.a == c.b {
+			t.Fatalf("setup error codes %q and %q must stay distinct", c.a, c.b)
 		}
 	}
 }
