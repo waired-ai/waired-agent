@@ -1037,14 +1037,25 @@ func engineRowBusy(steps []signer.SetupStep) bool {
 // being installed is a plausible cause of a model failure with this
 // code — i.e. whether finishing the install might make it go away.
 //
-// Only the two engine-shaped answers qualify. A full disk and a model id
-// that does not exist are not fixed by the engine arriving, and the
-// window this gate covers — a multi-gigabyte model landing alongside a
-// 1.4 GB engine — is the single most likely moment for a disk to fill.
-// Hiding that for the length of the install, then showing it, would cost
-// the operator the one thing they could have acted on.
+// Three answers qualify, and `internal` is here because waired-agent#328
+// moved the unattributable bucket into it. The text this gate was built
+// for is `exit status 1` — a pull that died with nothing to say — which
+// reached network_error only because that used to be the catch-all. Now
+// that the classifier says "something went wrong" instead of blaming the
+// internet, the same failure arrives as `internal`, and leaving it out
+// would silently un-fix #307: the model row would go red again while the
+// engine's own progress bar is still moving.
+//
+// A full disk, a model id that does not exist, and a timeout are NOT
+// fixed by the engine arriving. The disk in particular: the window this
+// gate covers — a multi-gigabyte model landing alongside a 1.4 GB engine
+// — is the single most likely moment for one to fill, and hiding that
+// for the length of the install would cost the operator the one thing
+// they could have acted on.
 func engineInstallCouldExplain(code string) bool {
-	return code == signer.SetupErrorNetworkError || code == signer.SetupErrorEngineNotReady
+	return code == signer.SetupErrorNetworkError ||
+		code == signer.SetupErrorEngineNotReady ||
+		code == signer.SetupErrorInternal
 }
 
 // integrationWriter is what snapshot() knows about the only party that
@@ -1256,6 +1267,14 @@ var networkMarkers = []string{
 	"temporary failure in name resolution",
 	"name resolution",
 	"connection refused",
+	// The Windows phrasing of the same thing, and it has to be here
+	// explicitly: it contains none of the other markers, so without it an
+	// engine download refused by a CDN or proxy would fall through to the
+	// generic arm on the one OS whose error strings are prose. Same list
+	// engineUnreachableMarkers keys on, read for the opposite purpose —
+	// there it means the LOCAL engine, on the one row that can safely
+	// assume that (#307).
+	"actively refused it",
 	"connection reset",
 	"network is unreachable",
 	"no route to host",

@@ -1504,7 +1504,14 @@ func TestClassifyModelPullFailure(t *testing.T) {
 			"dial tcp: connection reset by peer",
 			signer.SetupErrorNetworkError,
 		},
-		{"nothing recorded", "", signer.SetupErrorNetworkError},
+		{
+			// INVERTED by waired-agent#328. A failure that said nothing
+			// used to come back network_error because that was the
+			// catch-all; "something went wrong on this computer" is the
+			// true statement about it, and the operator's next step is the
+			// detail underneath rather than their router.
+			"nothing recorded", "", signer.SetupErrorInternal,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := classifyModelPullFailure(tc.errText); got != tc.want {
@@ -1558,9 +1565,13 @@ func TestSetupModelRowDefersToABusyEngineRow(t *testing.T) {
 			// grey row: a failed engine download pins engine_install at
 			// `pending` for good, so "pending means busy" alone would never
 			// let this model row report anything again.
+			// wantErrCode INVERTED by waired-agent#328: `exit status 1` is
+			// the shape of a failure with nothing to say, and it now reads
+			// as internal rather than as an internet problem. The subject
+			// of this row is the STATUS, which is unchanged.
 			name: "a failed engine download does not pin the model row", engine: "ollama", executor: execDownFailed,
 			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
-			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorInternal,
 		},
 		{
 			// A full disk is not fixed by the engine arriving, and this
@@ -1587,14 +1598,14 @@ func TestSetupModelRowDefersToABusyEngineRow(t *testing.T) {
 			// gate exists.
 			name: "no executor at all: the engine row is failed, not busy", engine: "ollama", executor: execNone,
 			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
-			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorInternal,
 		},
 		{
 			// NEGATIVE CONTROL — likewise vacuous against a removed gate.
 			// It pins that an empty step list is not "busy".
 			name: "no desired engine: there are no engine rows to wait on", engine: "", executor: execNone,
 			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
-			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorInternal,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
