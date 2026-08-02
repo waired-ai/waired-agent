@@ -266,6 +266,36 @@ func TestRecoverToolCall_numericLookingStringStaysAString(t *testing.T) {
 	}
 }
 
+// Product contract: stripping the call must not damage the prose around
+// it. A code block the model wrote EARLIER keeps its closing fence — an
+// earlier cut expanded over any adjacent ``` and left the user looking
+// at an unterminated block.
+func TestRecoverToolCall_precedingCodeBlockSurvives(t *testing.T) {
+	text := "Here is the code:\n\n```go\nx := 1\n```\n\n" +
+		`{"name":"Read","arguments":{"file_path":"/etc/hostname"}}`
+	c, ok := recoverToolCall(text, newOfferedTools(readTools()))
+	if !ok {
+		t.Fatal("no call recovered")
+	}
+	got := stripFragment(text, c)
+	if want := "Here is the code:\n\n```go\nx := 1\n```"; got != want {
+		t.Errorf("remaining text = %q, want %q", got, want)
+	}
+}
+
+// Product contract: the fence AROUND the call is still removed, because
+// both sides of it are there. This is the measured qwen2.5-coder shape,
+// and the reason the fence handling exists at all.
+func TestRecoverToolCall_ownFenceIsStripped(t *testing.T) {
+	c, ok := recoverToolCall(fencedJSONTranscript, newOfferedTools(readTools()))
+	if !ok {
+		t.Fatal("no call recovered")
+	}
+	if got := stripFragment(fencedJSONTranscript, c); strings.Contains(got, "```") {
+		t.Errorf("remaining text still carries a fence: %q", got)
+	}
+}
+
 // Product contract: block order stays thinking → text → tool_use when a
 // call is recovered, and the recovered block is a normal tool_use the
 // client cannot distinguish from one the engine parsed.

@@ -74,12 +74,22 @@ var (
 	toolWrapperOpen = []string{
 		"<tool_call>", "<function_call>", "<tools>",
 		"<|tool_call|>", "[TOOL_CALLS]", "<|python_tag|>",
-		"```json", "```JSON", "```",
 	}
 	toolWrapperClose = []string{
-		"</tool_call>", "</function_call>", "</tools>", "```",
+		"</tool_call>", "</function_call>", "</tools>",
 	}
 )
+
+// Code fences are stripped only as a MATCHED PAIR, unlike the delimiters
+// above. A lone tool-call delimiter is itself the defect — the measured
+// qwen3-coder transcript has a `</tool_call>` whose opener the engine
+// already ate — so expanding over one side is right there. A lone ``` is
+// the opposite: it usually belongs to a code block the model wrote
+// earlier, and swallowing it leaves that block unterminated in the
+// user's view.
+var toolFenceOpen = []string{"```json", "```JSON", "```"}
+
+const toolFenceClose = "```"
 
 // toolNameDelimiters are the markers after which a model writes a bare
 // tool name instead of putting it inside the JSON — granite4's
@@ -428,15 +438,39 @@ func schemaPropertyTypes(schema json.RawMessage) map[string]string {
 // walks outward until neither side matches, because the dialects nest
 // (a fenced JSON object inside a <tool_call> wrapper).
 func expandOverWrappers(text string, start, end int) (int, int) {
-	for range len(toolWrapperOpen) + len(toolWrapperClose) {
+	for range len(toolWrapperOpen) + len(toolWrapperClose) + 1 {
 		newStart, grewLeft := expandLeft(text, start)
 		newEnd, grewRight := expandRight(text, end)
 		start, end = newStart, newEnd
+		if s, e, grew := expandOverFence(text, start, end); grew {
+			start, end = s, e
+			continue
+		}
 		if !grewLeft && !grewRight {
 			break
 		}
 	}
 	return start, end
+}
+
+// expandOverFence grows the bounds over a code fence only when BOTH
+// sides are there, so a fenced call loses its fence and a call that
+// merely follows somebody else's code block does not steal its closer.
+func expandOverFence(text string, start, end int) (int, int, bool) {
+	head := strings.TrimRight(text[:start], " \t\r\n")
+	tail := text[end:]
+	trimmedTail := strings.TrimLeft(tail, " \t\r\n")
+	if !strings.HasPrefix(trimmedTail, toolFenceClose) {
+		return start, end, false
+	}
+	for _, open := range toolFenceOpen {
+		if strings.HasSuffix(head, open) {
+			return len(head) - len(open),
+				end + (len(tail) - len(trimmedTail)) + len(toolFenceClose),
+				true
+		}
+	}
+	return start, end, false
 }
 
 func expandLeft(text string, start int) (int, bool) {
