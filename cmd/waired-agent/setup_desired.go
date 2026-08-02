@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -852,9 +853,24 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.Status = signer.SetupStatusRunning
 			step.CompletedBytes = completed
 			step.TotalBytes = total
+		case state == catalog.ModelStateFailed && engineRowBusy(p.Steps) &&
+			engineInstallCouldExplain(classifyModelPullFailure(errText)):
+			// #307: the engine is still being installed, so a failure this
+			// row could not have avoided is not yet news. The rc7 hosts
+			// carried a `failed` record from a pull attempted before the
+			// engine existed, and projecting it turned the wizard's
+			// "Download the AI model" row red — with "check its internet
+			// connection" — while the engine's own progress bar was still
+			// moving. Same rule the engine_install row already applies to
+			// itself while a download is in flight: exactly one row is
+			// allowed to be the live one.
+			//
+			// Read from the rows already projected above, for the reason
+			// the integration row does.
+			step.Status = signer.SetupStatusPending
 		case state == catalog.ModelStateFailed:
 			step.Status = signer.SetupStatusFailed
-			step.ErrorCode = classifySetupFailure(errText)
+			step.ErrorCode = classifyModelPullFailure(errText)
 			step.ErrorDetail = clampSetupDetail(errText)
 		default: // not_present / evicted / unknown — pull not admitted yet
 			step.Status = signer.SetupStatusPending
@@ -932,6 +948,57 @@ func engineRowFailed(steps []signer.SetupStep) bool {
 		}
 	}
 	return false
+}
+
+// engineRowBusy reports whether an engine row is still working — the
+// window in which a model failure cannot yet be the model's own fault.
+//
+// A FAILED engine row is deliberately not busy, and the exclusion is
+// load-bearing rather than tidy. When the executor's engine download
+// fails, engine_download goes red and engine_install is pinned at
+// `pending` FOREVER by design (one event gets one red row). A bare
+// pending-or-running test would therefore leave the model row grey for
+// the rest of the process's life and setup_complete permanently out of
+// reach — the never-resolving progress §9-4 exists to prevent, traded
+// for the wrong-answer bug this is fixing.
+//
+// The test is "has not reached a terminal status", stated as the pair of
+// non-terminal ones. Neither half is independently reachable today and
+// that is fine, because the rule is what has to survive the arms above
+// moving, not the current census: engine_download only ever projects
+// done/failed/running, and every arm that leaves engine_install at
+// `pending` requires a download row that is itself already running (busy
+// by the other half) or failed (excluded by the check above). Mutation
+// testing will call each half redundant; they are redundant with each
+// other, not with nothing.
+func engineRowBusy(steps []signer.SetupStep) bool {
+	if engineRowFailed(steps) {
+		return false
+	}
+	for _, s := range steps {
+		switch s.ID {
+		case setupStepEngineDownload, setupStepEngineInstall:
+			switch s.Status {
+			case signer.SetupStatusPending, signer.SetupStatusRunning:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// engineInstallCouldExplain reports whether an engine that is still
+// being installed is a plausible cause of a model failure with this
+// code — i.e. whether finishing the install might make it go away.
+//
+// Only the two engine-shaped answers qualify. A full disk and a model id
+// that does not exist are not fixed by the engine arriving, and the
+// window this gate covers — a multi-gigabyte model landing alongside a
+// 1.4 GB engine — is the single most likely moment for a disk to fill.
+// Hiding that for the length of the install, then showing it, would cost
+// the operator the one thing they could have acted on.
+func engineInstallCouldExplain(code string) bool {
+	return code == signer.SetupErrorNetworkError || code == signer.SetupErrorEngineNotReady
 }
 
 // integrationWriter is what snapshot() knows about the only party that
@@ -1067,10 +1134,25 @@ func engineDownloadStep(st setupExecutorStep, enginePresent, leaseLive bool) sig
 const setupDetailMax = 512
 
 func clampSetupDetail(s string) string {
-	if len(s) <= setupDetailMax {
+	return clampUTF8(s, setupDetailMax)
+}
+
+// clampUTF8 truncates s to at most max BYTES without splitting a rune.
+//
+// The budget is in bytes because the control plane's clamp is, but the
+// cut has to land on a boundary: since #307 this text routinely carries
+// the engine's own stderr, which means block-drawing progress glyphs and
+// non-ASCII usernames out of Windows paths. A mid-rune cut is not an
+// error anywhere — encoding/json substitutes U+FFFD — so it would have
+// shown up only as mojibake in the wizard.
+func clampUTF8(s string, max int) string {
+	if len(s) <= max {
 		return s
 	}
-	return s[:setupDetailMax]
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 // diskFullMarkers are the substrings that mean "out of disk" across the
@@ -1115,11 +1197,13 @@ type setupModelRejection struct {
 // what this path reported for everything before.
 func classifyModelRejection(err error) string {
 	switch {
-	case errors.Is(err, errEngineTooOld):
-		// The model exists and this host simply cannot load it yet.
-		// Telling the operator to choose another model is not wrong, but
-		// it is not the fix either — this is the enum's engine-side code,
-		// and this is its first producer anywhere in the repo.
+	case errors.Is(err, errEngineTooOld), errors.Is(err, errEngineNotInstalled):
+		// The model exists and this host simply cannot load it yet —
+		// either the engine is too old for it, or (#307) there is no
+		// engine binary at all. Telling the operator to choose another
+		// model is not wrong, but it is not the fix either: this is the
+		// enum's engine-side code, and the engine row already carries the
+		// action that resolves both.
 		return signer.SetupErrorEngineNotReady
 	case errors.Is(err, errPullsDisabled), errors.Is(err, errUnsupportedSource):
 		// Configuration and host-shape refusals. Nothing about the model
@@ -1147,6 +1231,62 @@ func classifySetupFailure(errText string) string {
 		return signer.SetupErrorDiskFull
 	}
 	return signer.SetupErrorNetworkError
+}
+
+// classifyModelPullFailure classifies a recorded MODEL PULL failure.
+//
+// Separate from classifySetupFailure, which it falls through to, and the
+// separation is the point: that one is shared with both engine rows via
+// executorErrorCode, so teaching it to read connect-refused wording
+// would relabel a genuine engine DOWNLOAD failure — a CDN or proxy that
+// refused the connection — as engine_not_ready, inverting this fix on
+// the row next door. Only the model row can safely read a refused
+// connection as "the local engine is not there": it is the only step
+// whose work is done by a client of that engine.
+//
+// Order is a contract. A full disk wins over everything, because both
+// markers genuinely co-occur — a pull that could not reach the engine
+// and could not have written the bytes anyway — and of the two, only the
+// disk is a thing the operator must act on.
+func classifyModelPullFailure(errText string) string {
+	if isDiskFullText(errText) {
+		return signer.SetupErrorDiskFull
+	}
+	if isEngineUnreachableText(errText) {
+		return signer.SetupErrorEngineNotReady
+	}
+	return classifySetupFailure(errText)
+}
+
+// engineUnreachableMarkers name a LOCAL engine that could not be reached,
+// never a remote transfer that failed.
+//
+// The first entry is ours, written by runPullJob when EnsureRunning fails
+// on the attempt that then failed; it is the only one that carries a
+// reason with it. The rest are what surfaces when the engine dies between
+// the readiness check and the download, so nothing on our side saw it —
+// the ollama CLI's own wording, and the two shapes a refused TCP connect
+// takes. "actively refused it" is the Windows phrasing, matching the list
+// cmd/waired/main.go's isConnectionRefused already keys on.
+//
+// Deliberately NOT "connection reset by peer" or a bare "connection":
+// a reset is a transfer that started and died, which is the network's
+// problem and is already classified as one.
+var engineUnreachableMarkers = []string{
+	engineNotRunningMarker,
+	"could not connect to ollama",
+	"connection refused",
+	"actively refused it",
+}
+
+func isEngineUnreachableText(errText string) bool {
+	l := strings.ToLower(errText)
+	for _, m := range engineUnreachableMarkers {
+		if strings.Contains(l, strings.ToLower(m)) {
+			return true
+		}
+	}
+	return false
 }
 
 // isDiskFullText reports whether a failure string names a full disk.

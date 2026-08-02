@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // pullEngineProvider is pullGateProvider with a real, initially-stopped
@@ -20,6 +22,19 @@ import (
 // pull brings the serving engine up.
 func pullEngineProvider(t *testing.T) (*agentInferenceProvider, *fakeSpawner) {
 	t.Helper()
+	return pullEngineProviderWithRunner(t, noopRunner{})
+}
+
+// pullEngineProviderWithRunner is pullEngineProvider with the pull's
+// outcome scriptable, for the tests that need the DOWNLOAD to fail while
+// the engine is in a known state.
+//
+// It shrinks the retry backoff, which pullEngineProvider never needed:
+// every test using it pulls successfully on the first attempt, so nobody
+// noticed that a failing runner here costs 45 s of wall clock.
+func pullEngineProviderWithRunner(t *testing.T, runner download.CommandRunner) (*agentInferenceProvider, *fakeSpawner) {
+	t.Helper()
+	shrinkPullRetry(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"models":[]}`))
@@ -38,7 +53,7 @@ func pullEngineProvider(t *testing.T) (*agentInferenceProvider, *fakeSpawner) {
 		store:      catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
 		cfg:        agentconfig.InferenceConfig{AllowPull: true},
 		manifests:  []catalog.Manifest{pullGateManifest(false)},
-		puller:     download.NewPuller("ollama-fake", noopRunner{}),
+		puller:     download.NewPuller("ollama-fake", runner),
 		dlProgress: newDownloadProgress(),
 		logger:     slog.New(slog.DiscardHandler),
 		agentCtx:   context.Background(),
@@ -148,5 +163,93 @@ func TestRunPullJob_DoesNotKillTheEngineItStarted(t *testing.T) {
 	}
 	if st := p.ollama.Health(ctx).State; st != infruntime.StateReady {
 		t.Fatalf("engine state after the pull = %s, want %s", st, infruntime.StateReady)
+	}
+}
+
+// --- the engine as a named cause of a failed download (#307) ---
+
+// PRODUCT CONTRACT: when the engine could not be brought up for the
+// attempt that failed, the recorded failure NAMES the engine.
+//
+// Before this, EnsureRunning's error was logged and dropped, the pull
+// went ahead against a server that was not there, and all that survived
+// was "exit status 1" — which classifySetupFailure could only read as
+// network_error. That is how "Check its internet connection" ended up on
+// the wizard while the real problem was an engine that never started.
+func TestRunPullJob_AParkedEngineIsNamedAsTheCauseOfAFailedPull(t *testing.T) {
+	p, _ := pullEngineProviderWithRunner(t, failingRunner{})
+	ctx := context.Background()
+	if err := p.ollama.Park(ctx); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+
+	if _, err := p.PullModel(ctx, "dense-mtp"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	got := modelStateOf(t, p, "dense-mtp").Error
+	if !strings.Contains(got, engineNotRunningMarker) {
+		t.Errorf("recorded error = %q, want it to name the engine", got)
+	}
+	// The engine's own reason survives — "parked" is a different fix from
+	// "crashed", and only this text distinguishes them.
+	if !strings.Contains(got, "engine parked") {
+		t.Errorf("recorded error = %q, want EnsureRunning's own reason kept", got)
+	}
+	// And so does the pull's error: if the attribution is ever wrong, the
+	// operator has still lost nothing.
+	if !strings.Contains(got, "simulated registry throttle") {
+		t.Errorf("recorded error = %q, want the pull's own error kept", got)
+	}
+}
+
+// TestRunPullJob_EngineFailureClassifiesAsEngineNotReady is the join:
+// real provider -> real recorded text -> real classifier. It is the only
+// test that walks the whole #307 chain, and the only thing that catches
+// the producer's marker drifting from the consumer's.
+//
+// PRODUCT CONTRACT.
+func TestRunPullJob_EngineFailureClassifiesAsEngineNotReady(t *testing.T) {
+	p, _ := pullEngineProviderWithRunner(t, failingRunner{})
+	ctx := context.Background()
+	if err := p.ollama.Park(ctx); err != nil {
+		t.Fatalf("Park: %v", err)
+	}
+
+	if _, err := p.PullModel(ctx, "dense-mtp"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	ms := modelStateOf(t, p, "dense-mtp")
+	if got := classifyModelPullFailure(ms.Error); got != signer.SetupErrorEngineNotReady {
+		t.Fatalf("classifyModelPullFailure(%q) = %q, want %q", ms.Error, got, signer.SetupErrorEngineNotReady)
+	}
+}
+
+// TestRunPullJob_AHealthyEngineIsNotBlamedForAFailedPull is the negative
+// control, and it is the only thing standing between this change and
+// blaming the engine for every failed download. A running engine plus a
+// failing pull is a network problem, and must still say so.
+//
+// PRODUCT CONTRACT.
+func TestRunPullJob_AHealthyEngineIsNotBlamedForAFailedPull(t *testing.T) {
+	p, sp := pullEngineProviderWithRunner(t, failingRunner{})
+
+	if _, err := p.PullModel(context.Background(), "dense-mtp"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	if got := sp.count(); got == 0 {
+		t.Fatal("the engine never started; this fixture cannot tell a healthy engine from a missing one")
+	}
+	ms := modelStateOf(t, p, "dense-mtp")
+	if strings.Contains(ms.Error, engineNotRunningMarker) {
+		t.Errorf("recorded error = %q, want the engine NOT blamed — it was running", ms.Error)
+	}
+	if got := classifyModelPullFailure(ms.Error); got != signer.SetupErrorNetworkError {
+		t.Errorf("classifyModelPullFailure(%q) = %q, want %q", ms.Error, got, signer.SetupErrorNetworkError)
 	}
 }
