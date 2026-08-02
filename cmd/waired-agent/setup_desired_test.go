@@ -1347,6 +1347,165 @@ func TestClassifyModelPullFailure(t *testing.T) {
 	}
 }
 
+// TestSetupModelRowDefersToABusyEngineRow covers the step-ordering half
+// of #307.
+//
+// A `failed` model record while the engine is still being installed is
+// not an artificial fixture: setupModelState reads the shared catalog,
+// which the boot-time bundled pre-pull, `waired models pull` and the
+// tray's model switch all write too. On the rc7 hosts one of those left
+// a failed row behind, and projecting it turned the wizard's "Download
+// the AI model" step red — "check its internet connection" — while the
+// engine's own download bar was still moving (waired#986 F11).
+//
+// PRODUCT CONTRACT for every row.
+func TestSetupModelRowDefersToABusyEngineRow(t *testing.T) {
+	const (
+		execNone       = "none"       // no executor has spoken
+		execInstalling = "installing" // engine_install is running
+		execDownload   = "download"   // engine_download is running
+		execDownFailed = "downfailed" // engine_download failed -> install pinned pending
+	)
+	for _, tc := range []struct {
+		name        string
+		engine      string // desired engine ("" = no engine rows at all)
+		executor    string
+		modelState  string
+		modelErr    string
+		wantStatus  string
+		wantErrCode string
+	}{
+		{
+			// THE #307 BAR.
+			name: "a failed model while the install is running", engine: "ollama", executor: execInstalling,
+			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
+			wantStatus: signer.SetupStatusPending,
+		},
+		{
+			name: "a failed model while the download is running", engine: "ollama", executor: execDownload,
+			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
+			wantStatus: signer.SetupStatusPending,
+		},
+		{
+			// The exclusion that keeps the gate from becoming a permanent
+			// grey row: a failed engine download pins engine_install at
+			// `pending` for good, so "pending means busy" alone would never
+			// let this model row report anything again.
+			name: "a failed engine download does not pin the model row", engine: "ollama", executor: execDownFailed,
+			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+		},
+		{
+			// A full disk is not fixed by the engine arriving, and this
+			// window — a multi-GB model beside a 1.4 GB engine — is when a
+			// disk is most likely to fill.
+			name: "a full disk is reported even while the engine installs", engine: "ollama", executor: execInstalling,
+			modelState: catalog.ModelStateFailed, modelErr: "write /blobs: no space left on device",
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorDiskFull,
+		},
+		{
+			name: "weights already on disk still read done", engine: "ollama", executor: execInstalling,
+			modelState: catalog.ModelStateReady,
+			wantStatus: signer.SetupStatusDone,
+		},
+		{
+			name: "a download genuinely moving still reads running", engine: "ollama", executor: execInstalling,
+			modelState: catalog.ModelStateDownloading,
+			wantStatus: signer.SetupStatusRunning,
+		},
+		{
+			// NEGATIVE CONTROL — passes identically with the gate removed.
+			// It pins that the gate does not over-reach into a failed
+			// engine row, nothing more; do not read it as evidence the
+			// gate exists.
+			name: "no executor at all: the engine row is failed, not busy", engine: "ollama", executor: execNone,
+			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+		},
+		{
+			// NEGATIVE CONTROL — likewise vacuous against a removed gate.
+			// It pins that an empty step list is not "busy".
+			name: "no desired engine: there are no engine rows to wait on", engine: "", executor: execNone,
+			modelState: catalog.ModelStateFailed, modelErr: "exit status 1",
+			wantStatus: signer.SetupStatusFailed, wantErrCode: signer.SetupErrorNetworkError,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+			if tc.modelState == catalog.ModelStateDownloading {
+				f.modelCompleted, f.modelTotal = 512, 4096
+			}
+			r, _ := leasedReconciler(t, f, tc.engine, "m-1")
+			switch tc.executor {
+			case execInstalling:
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{
+					Attached: true, Elevated: true, Engine: "ollama",
+					Phase: management.SetupExecutorPhaseInstalling,
+				})
+			case execDownload:
+				attachDownload(t, r, 120<<20, 1400<<20, 8<<20)
+			case execDownFailed:
+				attachDownload(t, r, 120<<20, 1400<<20, 8<<20)
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{
+					Attached: true, Elevated: true, Engine: "ollama",
+					Step: setupStepEngineDownload, Phase: management.SetupExecutorPhaseFailed,
+					Error: "transfer aborted",
+				})
+			}
+			// Set the model's outcome AFTER admission: the fake's apply
+			// moves the row to queued, as a real dispatch does.
+			f.setModelState(tc.modelState, tc.modelErr)
+
+			step := stepByID(t, r.snapshot(ctx), setupStepModelPull)
+			if step.Status != tc.wantStatus {
+				t.Fatalf("model step = %+v, want status %q", step, tc.wantStatus)
+			}
+			if step.ErrorCode != tc.wantErrCode {
+				t.Errorf("model step error_code = %q, want %q", step.ErrorCode, tc.wantErrCode)
+			}
+			if tc.wantStatus == signer.SetupStatusPending && step.ErrorDetail != "" {
+				t.Errorf("model step detail = %q, want none — a deferred row must carry no failure",
+					step.ErrorDetail)
+			}
+			if tc.wantStatus == signer.SetupStatusRunning && step.CompletedBytes != 512 {
+				t.Errorf("model step = %+v, want the live byte progress kept", step)
+			}
+		})
+	}
+}
+
+// TestSetupRejectedModelIsNotDeferredToTheEngineRow: a refusal recorded
+// at admission outlives the engine that was installed when it happened —
+// a reinstall, or a profiler cache that briefly reports the binary
+// missing, puts a latched rejection next to a busy engine row. It must
+// still be reported: "that model id does not exist" is not something
+// finishing the engine install will fix.
+//
+// PRODUCT CONTRACT. Note there is deliberately no Apply after the engine
+// is taken away — one would fire the engine-appeared path and clear the
+// rejection.
+func TestSetupRejectedModelIsNotDeferredToTheEngineRow(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeSetupProvider{
+		engineInstalled: true,
+		modelState:      catalog.ModelStateNotPresent,
+		applyErr:        errors.New("unknown model \"m-1\""),
+	}
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+
+	f.setEngine(false, false)
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{
+		Attached: true, Elevated: true, Engine: "ollama",
+		Phase: management.SetupExecutorPhaseInstalling,
+	})
+
+	step := stepByID(t, r.snapshot(ctx), setupStepModelPull)
+	if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorModelNotFound {
+		t.Fatalf("model step = %+v, want failed/model_not_found", step)
+	}
+}
+
 // TestSetupEngineRowsKeepReadingARefusedConnectAsNetwork is the guard on
 // the OTHER side of #307, and the reason classifyModelPullFailure is a
 // separate function instead of new arms inside classifySetupFailure.

@@ -853,6 +853,21 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.Status = signer.SetupStatusRunning
 			step.CompletedBytes = completed
 			step.TotalBytes = total
+		case state == catalog.ModelStateFailed && engineRowBusy(p.Steps) &&
+			engineInstallCouldExplain(classifyModelPullFailure(errText)):
+			// #307: the engine is still being installed, so a failure this
+			// row could not have avoided is not yet news. The rc7 hosts
+			// carried a `failed` record from a pull attempted before the
+			// engine existed, and projecting it turned the wizard's
+			// "Download the AI model" row red — with "check its internet
+			// connection" — while the engine's own progress bar was still
+			// moving. Same rule the engine_install row already applies to
+			// itself while a download is in flight: exactly one row is
+			// allowed to be the live one.
+			//
+			// Read from the rows already projected above, for the reason
+			// the integration row does.
+			step.Status = signer.SetupStatusPending
 		case state == catalog.ModelStateFailed:
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = classifyModelPullFailure(errText)
@@ -933,6 +948,57 @@ func engineRowFailed(steps []signer.SetupStep) bool {
 		}
 	}
 	return false
+}
+
+// engineRowBusy reports whether an engine row is still working — the
+// window in which a model failure cannot yet be the model's own fault.
+//
+// A FAILED engine row is deliberately not busy, and the exclusion is
+// load-bearing rather than tidy. When the executor's engine download
+// fails, engine_download goes red and engine_install is pinned at
+// `pending` FOREVER by design (one event gets one red row). A bare
+// pending-or-running test would therefore leave the model row grey for
+// the rest of the process's life and setup_complete permanently out of
+// reach — the never-resolving progress §9-4 exists to prevent, traded
+// for the wrong-answer bug this is fixing.
+//
+// The test is "has not reached a terminal status", stated as the pair of
+// non-terminal ones. Neither half is independently reachable today and
+// that is fine, because the rule is what has to survive the arms above
+// moving, not the current census: engine_download only ever projects
+// done/failed/running, and every arm that leaves engine_install at
+// `pending` requires a download row that is itself already running (busy
+// by the other half) or failed (excluded by the check above). Mutation
+// testing will call each half redundant; they are redundant with each
+// other, not with nothing.
+func engineRowBusy(steps []signer.SetupStep) bool {
+	if engineRowFailed(steps) {
+		return false
+	}
+	for _, s := range steps {
+		switch s.ID {
+		case setupStepEngineDownload, setupStepEngineInstall:
+			switch s.Status {
+			case signer.SetupStatusPending, signer.SetupStatusRunning:
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// engineInstallCouldExplain reports whether an engine that is still
+// being installed is a plausible cause of a model failure with this
+// code — i.e. whether finishing the install might make it go away.
+//
+// Only the two engine-shaped answers qualify. A full disk and a model id
+// that does not exist are not fixed by the engine arriving, and the
+// window this gate covers — a multi-gigabyte model landing alongside a
+// 1.4 GB engine — is the single most likely moment for a disk to fill.
+// Hiding that for the length of the install, then showing it, would cost
+// the operator the one thing they could have acted on.
+func engineInstallCouldExplain(code string) bool {
+	return code == signer.SetupErrorNetworkError || code == signer.SetupErrorEngineNotReady
 }
 
 // integrationWriter is what snapshot() knows about the only party that
