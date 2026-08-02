@@ -299,11 +299,33 @@ func catalogEngine(status InferenceStatus, hw hardware.Profile) (string, error) 
 	return pick.Engine, nil
 }
 
+// loadManifests returns the models this device may OFFER — the list the
+// tray renders and a person browses. Withheld entries are absent.
 func (s *Server) loadManifests() ([]catalog.Manifest, error) {
 	if s.catalog != nil && s.catalog.ManifestsFn != nil {
 		return s.catalog.ManifestsFn()
 	}
 	return catalog.BundledManifests()
+}
+
+// loadManifestsForResolve returns every shipped model, including
+// withheld ones.
+//
+// Listing and naming are different questions. A browsable catalog must
+// not show a model nobody should be given; resolving a model_id somebody
+// has explicitly asked for must still find it, or an operator who pins
+// one gets "no bundled manifest with that model_id" for a model this
+// build ships. That is not hypothetical — it is how the routing
+// sentinel's pin reaches the daemon, through `waired init`'s
+// select-model step.
+//
+// The ManifestsFn seam is honoured either way: a caller that injects its
+// own list has already decided what this server may see.
+func (s *Server) loadManifestsForResolve() ([]catalog.Manifest, error) {
+	if s.catalog != nil && s.catalog.ManifestsFn != nil {
+		return s.catalog.ManifestsFn()
+	}
+	return catalog.BundledManifestsIncludingInternal()
 }
 
 func hostFromProfile(hw hardware.Profile) CatalogHost {

@@ -18,10 +18,21 @@ func bundledModelLabel(manifests []catalog.Manifest, modelID string) string {
 	return modelID
 }
 
+// The helpers below all take a model id somebody already has and look
+// it up, so they resolve against EVERY shipped manifest rather than the
+// offered subset. A withheld model is one an operator can still pin,
+// and a lookup that cannot find it degrades quietly: the wrong label
+// printed, no quality tier, no below-floor warning — for a model this
+// build ships.
+//
+// The rule across the tree: taking a model id as input and looking it
+// up is RESOLUTION and takes the complete set; enumerating models to
+// show or to choose among is OFFERING and takes the filtered default.
+
 // bundledModelLabelDefault is bundledModelLabel over the embedded catalog,
 // falling back to the raw id when the catalog is unreadable.
 func bundledModelLabelDefault(modelID string) string {
-	manifests, err := catalog.BundledManifests()
+	manifests, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return modelID
 	}
@@ -34,7 +45,7 @@ func bundledModelLabelDefault(modelID string) string {
 // local catalog build doesn't carry). ok is false when the embedded catalog
 // is unreadable or modelID is unknown.
 func bundledVariantQuality(modelID, variantID string) (int, bool) {
-	manifests, err := catalog.BundledManifests()
+	manifests, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return 0, false
 	}
@@ -74,7 +85,7 @@ func modelWithQuality(modelID, variantID string) string {
 // "very low quality, not recommended for local use" tier (today the 0.5B).
 // Best-effort: false when the catalog is unreadable or the id is unknown.
 func isBundledModelBelowFloor(modelID string) bool {
-	manifests, err := catalog.BundledManifests()
+	manifests, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return false
 	}
