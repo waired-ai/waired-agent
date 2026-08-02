@@ -123,15 +123,40 @@ func activeInstallState() management.SetupStateResponse {
 	}
 }
 
-// lastPhase returns the phase of the final lease update, which is what
-// the daemon's snapshot reads.
+// lastPhase is what the DAEMON would conclude from the lease updates, not
+// literally the last POST.
+//
+// The two differ by design. The heartbeat repeats the current phase every
+// setupExecutorHeartbeatInterval carrying no error text at all
+// (`s.post(true, s.currentPhase(), s.currentEngine(), "")`), so a terminal
+// failure is followed — within 5 ms under shrinkSetupTimers — by an identical
+// phase whose Error is "". The daemon survives that: keeping a stored detail
+// through a text-less repeat is exactly what waired-agent#131 fixed, and
+// TestSetupFailureDetailSurvivesHeartbeatAndRelease pins it. A test reading
+// `reqs[len(reqs)-1]` did not, so it asserted against a snapshot the product
+// never acts on, and lost a race nobody had declared.
+//
+// It went red first on the slowest CI leg (darwin, seeded host) while passing
+// everywhere else, which is what a latent race looks like — the window is real
+// on every runner and only scheduling decides who hits it.
+//
+// Folding on equal phase AND step is what keeps this from hiding a defect: a
+// failure genuinely reported without detail still folds to no detail, and a
+// detail posted under a different phase is never carried onto this one.
 func lastPhase(t *testing.T, d *fakeSetupDaemon) management.SetupExecutorRequest {
 	t.Helper()
 	reqs := d.noted()
 	if len(reqs) == 0 {
 		t.Fatal("executor sent no lease updates")
 	}
-	return reqs[len(reqs)-1]
+	folded := reqs[0]
+	for _, next := range reqs[1:] {
+		if next.Phase == folded.Phase && next.Step == folded.Step && next.Error == "" {
+			next.Error, next.ErrorCode = folded.Error, folded.ErrorCode
+		}
+		folded = next
+	}
+	return folded
 }
 
 // TestSetupEngineInstall_RepairsTheDarwinBundleBeforeEveryGate is the
