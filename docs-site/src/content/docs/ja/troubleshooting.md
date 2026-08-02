@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 61c71b0a10469c69
+sourceHash: 5f357d57d129a9a1
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -590,7 +590,8 @@ GPU 側が実際に扱えるメモリ量で判定します。単体のグラフ�
 
 ## /model に Waired の項目が出ない
 
-`/model` には Anthropic のモデル名の下に **Waired auto** / **Waired local** /
+`/model` には Anthropic のモデル名の下に **Waired auto — 200k** /
+**Waired auto — 1M** / **Waired local** /
 **Waired cloud** が出るはずです。出ない原因は 3 つで、確認する価値のある順に:
 
 1. **Claude Code を再起動していない。** 一覧は起動時に一度だけ読まれます。

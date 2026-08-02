@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // anthropicModel is the Anthropic Models API object, extended with
@@ -41,14 +42,36 @@ const (
 	// value to it (that env is honoured only for non-"claude-" ids) — the
 	// honest ~256k local window instead of Claude Code's 200k default.
 	ModelWairedLocal = "anthropic-waired-local"
-	// ModelWairedAuto pins the conversation to AUTO routing (the intercept forces
-	// route=auto): Waired inference first, falling back to the real Anthropic API
-	// when local/mesh serving is unavailable. Like the local id it does NOT start
-	// with "claude-", so it takes the CLAUDE_CODE_MAX_CONTEXT_TOKENS window — the
-	// conservative choice, since most turns serve locally and a fallback leg must
-	// not be sized to a window larger than the local engine's. On a fallback leg
-	// the intercept rewrites this id to a real model (same as the cloud id).
-	ModelWairedAuto = "anthropic-waired-auto"
+	// ModelWairedAuto and ModelWairedAuto1M pin the conversation to AUTO
+	// routing (the intercept forces route=auto): Waired inference first,
+	// falling back to the real Anthropic API when no node serves the tier.
+	// On a fallback leg the intercept rewrites either id to a real model
+	// (same as the cloud id).
+	//
+	// Both start with "claude-", so Claude Code sizes them from the id
+	// string alone and never from CLAUDE_CODE_MAX_CONTEXT_TOKENS: the
+	// bare id takes the 200k default, the "[1m]" suffix takes 1M. That
+	// is the whole reason for the prefix (waired#1031). The env var is a
+	// single global shared by EVERY non-"claude-" id, so while auto lived
+	// there it could not carry a window different from the local pin's —
+	// and after #408 pointed that value at this device's real window,
+	// auto's Anthropic fallback leg ran in a session sized to whatever
+	// engine happened to be installed here.
+	//
+	// A tier is a promise about the SERVING node, so the router only
+	// selects an endpoint that declares it (RequiredWindowFor); when none
+	// does, selection fails and auto's fallback carries the turn to
+	// Anthropic, which is the honest answer rather than a local engine
+	// pretending to a window it does not hold.
+	ModelWairedAuto   = "claude-waired-auto"
+	ModelWairedAuto1M = "claude-waired-auto[1m]"
+
+	// ModelWairedAutoLegacy is the pre-waired#1031 spelling of
+	// ModelWairedAuto. It is no longer advertised, and the intercept still
+	// routes it: a Claude Code that selected it before an upgrade keeps
+	// the id in its own settings until the operator picks again, and a
+	// stale picker cache can hand it back for a whole session.
+	ModelWairedAutoLegacy = "anthropic-waired-auto"
 	// ModelWairedCloud pins the conversation to the real Anthropic API (the
 	// intercept forces route=anthropic and rewrites this id to a real model on
 	// passthrough). The "[1m]" suffix gives it Claude Code's 1M window.
@@ -123,7 +146,8 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 	// Claude Code sizes the window from the id string, not this field); the
 	// honest local window comes from CLAUDE_CODE_MAX_CONTEXT_TOKENS instead.
 	if h.deps.ClaudeModelDirectives {
-		add(ModelWairedAuto, "Waired auto (local, fallback to Anthropic)")
+		add(ModelWairedAuto, "Waired auto — 200k (local, fallback to Anthropic)")
+		add(ModelWairedAuto1M, "Waired auto — 1M (local, fallback to Anthropic)")
 		add(ModelWairedLocal, "Waired local (this device)")
 		add(ModelWairedCloud, "Waired cloud (Anthropic API)")
 	}
@@ -137,4 +161,29 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 		}
 	}
 	return out
+}
+
+// RequiredWindowFor is the input-token window a request for modelID
+// obliges the serving endpoint to hold, or 0 when the id makes no such
+// promise (waired#1031).
+//
+// Only the two auto tiers do. The local id routes to this device
+// whatever its window is — that is what pinning means, and it is the
+// only way to reach a device that declares no window at all. The cloud
+// id never touches a Waired endpoint.
+//
+// The legacy auto spelling deliberately returns 0 rather than the 200k
+// tier: it is a non-"claude-" id, so a client that still holds it is in
+// a session sized by CLAUDE_CODE_MAX_CONTEXT_TOKENS, and holding its
+// endpoint to a window its own session was never sized for would refuse
+// turns that used to work.
+func RequiredWindowFor(modelID string) int {
+	switch modelID {
+	case ModelWairedAuto:
+		return hostfit.ServingWindow200k
+	case ModelWairedAuto1M:
+		return hostfit.ServingWindow1M
+	default:
+		return 0
+	}
 }

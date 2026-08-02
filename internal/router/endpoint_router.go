@@ -120,6 +120,23 @@ type Request struct {
 	// Selector wrappers (the agent's Claude-intercept selector) use it
 	// to pick a per-class routing preference before delegating here.
 	Class string `json:"class,omitempty"`
+
+	// MinContextWindow is the input-token window the chosen endpoint must
+	// declare it serves (waired#1031). Set by the gateway from the
+	// /model tier the turn selected; 0 means the request makes no such
+	// demand, which is every non-tier request.
+	//
+	// It is a hard filter and not a preference. A tier is a promise about
+	// the SERVING node — Claude Code sized the session from the id before
+	// this request existed — so an endpoint that cannot hold the window
+	// is not a worse answer, it is a wrong one. When nothing qualifies
+	// the selection fails with ErrNoEndpointForWindow, and the Claude
+	// intercept's auto mode carries the turn to the real Anthropic API.
+	//
+	// An endpoint that declares NOTHING (0) passes: that is every agent
+	// predating the field, and treating silence as failure would empty
+	// the mesh the moment one node upgraded.
+	MinContextWindow int `json:"min_context_window,omitempty"`
 }
 
 // Inputs bundles the world the selector reasons over: the known
@@ -139,6 +156,18 @@ type Inputs struct {
 	// Empty falls back to static ModelAliases lookup, so callers that
 	// never set it keep the historical behavior.
 	DefaultModelID string
+
+	// LocalContextWindow, when non-nil, reports the input-token window
+	// THIS device declares it serves for its active model — the same
+	// figure the agent publishes as InferenceState.ContextWindow, and 0
+	// when it declares none (waired#1031).
+	//
+	// The Selector reads it only to answer Request.MinContextWindow: a
+	// local candidate is dropped when the device declares a window and
+	// that window falls short. nil, or 0, keeps the local candidate,
+	// matching how an undeclared PEER is treated — a device that says
+	// nothing is not a device that said no.
+	LocalContextWindow func() int
 
 	// MeshSnapshotFn, when non-nil, is called once per Select to
 	// retrieve the current inferencemesh aggregator snapshot. The
@@ -320,6 +349,14 @@ var (
 	ErrModelNotReady        = errors.New("router: model is not in ready state on disk")
 	ErrHardwareInsufficient = errors.New("router: hardware does not meet variant requirements")
 	ErrRuntimeNotInstalled  = errors.New("router: required runtime is not registered")
+	// ErrNoEndpointForWindow is returned when Request.MinContextWindow is
+	// set and no endpoint — local or mesh — declares a window that reaches
+	// it (waired#1031). Distinct from ErrModelNotReady ("nobody has the
+	// model") because the operator's remedy is different: the model is
+	// there, the window is not, and the fix is a model or a machine that
+	// can hold one. The Claude intercept's auto mode turns it into a
+	// fallback to the real Anthropic API, which is the tier's contract.
+	ErrNoEndpointForWindow = errors.New("router: no endpoint declares the required context window")
 	// ErrAllPeersOverloaded is returned when at least one mesh peer
 	// matched the request's model/runtime requirements but every
 	// such peer's in-flight count was already at its advertised
@@ -738,6 +775,17 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			ErrRuntimeNotInstalled, engine, variant.VariantID)
 	}
 
+	// waired#1031: the tier filter, local half. Same rule as the mesh
+	// half in buildMeshCandidates — a device that declares a window and
+	// falls short is not an answer to a tiered request; one that declares
+	// nothing is left alone.
+	if req.MinContextWindow > 0 && s.in.LocalContextWindow != nil {
+		if w := s.in.LocalContextWindow(); w > 0 && w < req.MinContextWindow {
+			return nil, fmt.Errorf("%w: this device serves %d, request needs %d",
+				ErrNoEndpointForWindow, w, req.MinContextWindow)
+		}
+	}
+
 	localSel := Selection{
 		EndpointID:    computeEndpointID("local", engine, manifest.ModelID),
 		ModelID:       manifest.ModelID,
@@ -862,7 +910,7 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 	// buildMeshCandidates, only if a grant-tagged peer actually appears.
 	gate := s.publicGateFor(req.Class)
 
-	raw := s.buildMeshCandidates(snap, req.Class, wantOllama, wantVLLM, &gate)
+	raw := s.buildMeshCandidates(snap, req.Class, req.MinContextWindow, wantOllama, wantVLLM, &gate)
 	if len(raw) == 0 {
 		short.record(snap, gate, NudgeReasonNoCandidate)
 		// Manual pin needs a separate strict check: when the operator
@@ -1156,6 +1204,7 @@ func applyStickyFirst(req Request, store *StickyStore, cands []meshCandidate) []
 func (s *Selector) buildMeshCandidates(
 	snap inferencemesh.Snapshot,
 	class string,
+	minWindow int,
 	wantOllama, wantVLLM map[string]catalog.Variant,
 	gate *publicGate,
 ) []meshCandidate {
@@ -1233,6 +1282,15 @@ func (s *Selector) buildMeshCandidates(
 		case catalog.RuntimeVLLM:
 			want = wantVLLM
 		default:
+			continue
+		}
+		// waired#1031: a tier is a promise about the serving node. Drop a
+		// peer whose DECLARED window falls short of what this request
+		// demands. A peer declaring nothing (0) stays — that is every
+		// agent predating the field, and reading silence as refusal would
+		// empty the mesh the moment one node upgraded.
+		if minWindow > 0 && p.InferenceState.ContextWindow > 0 &&
+			p.InferenceState.ContextWindow < minWindow {
 			continue
 		}
 		for _, m := range p.InferenceState.Models {
