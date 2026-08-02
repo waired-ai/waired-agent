@@ -13,6 +13,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // noopRunner satisfies download.CommandRunner without spawning anything
@@ -168,6 +169,72 @@ func TestPullModel_FailedFreshPullMarksFailed(t *testing.T) {
 	st, _ := p.store.Load()
 	if ms := st.Models[m.ModelID]; ms.State != catalog.ModelStateFailed {
 		t.Errorf("state = %q after failed fresh pull, want failed", ms.State)
+	}
+}
+
+// TestPullModel_RefusesWhenNoEngineIsInstalled pins the #307 contract:
+// with no engine binary on the host, a pull is refused at the door and
+// NOTHING is written to the catalog.
+//
+// The "nothing is written" half is the point. `ollama pull` is a client
+// of a server that cannot exist without a binary, so the attempt could
+// only fail — and a `failed` row is what snapshot() projects onto the
+// wizard's "Download the AI model" step, with a text ("download: ollama
+// binary not found") no classifier can read, so it rendered as "check its
+// internet connection" for the whole engine install (waired#986 F11).
+//
+// Product contract, not a record of today's behaviour.
+func TestPullModel_RefusesWhenNoEngineIsInstalled(t *testing.T) {
+	m := pullGateManifest(false)
+	p := pullGateProviderWithRunner(t, m, failingRunner{})
+	p.ollamaUsable = func() bool { return false }
+
+	_, err := p.PullModel(context.Background(), "dense-mtp")
+	if !errors.Is(err, errEngineNotInstalled) {
+		t.Fatalf("PullModel error = %v, want errEngineNotInstalled", err)
+	}
+	// The refusal must reach the wizard as the engine's problem, not as
+	// "that model does not exist" — classifyModelRejection is the only
+	// reader of this error value.
+	if got := classifyModelRejection(err); got != signer.SetupErrorEngineNotReady {
+		t.Errorf("classifyModelRejection = %q, want %q", got, signer.SetupErrorEngineNotReady)
+	}
+	st, _ := p.store.Load()
+	if ms, ok := st.Models[m.ModelID]; ok {
+		t.Fatalf("catalog row = %+v, want none written — a refused pull must leave no failure for the wizard to render", ms)
+	}
+}
+
+// TestPullModel_DispatchesWhenTheEngineIsInstalled is the negative control
+// for the gate above: the same fixture with a usable engine still reaches
+// the pull. Without it, `return errEngineNotInstalled` unconditionally
+// passes the test above.
+//
+// It also pins the nil-resolver fail-open that every other test in this
+// file relies on implicitly: leave ollamaUsable nil and the pull runs.
+func TestPullModel_DispatchesWhenTheEngineIsInstalled(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		usable func() bool
+	}{
+		{"resolver says installed", func() bool { return true }},
+		{"no resolver wired", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := pullGateManifest(false)
+			p := pullGateProviderWithRunner(t, m, noopRunner{})
+			p.ollamaUsable = tc.usable
+
+			if _, err := p.PullModel(context.Background(), "dense-mtp"); err != nil {
+				t.Fatalf("PullModel: %v", err)
+			}
+			p.waitForPulls()
+
+			st, _ := p.store.Load()
+			if ms := st.Models[m.ModelID]; ms.State != catalog.ModelStateReady {
+				t.Fatalf("state = %q, want ready — the gate must not block an installed engine", ms.State)
+			}
+		})
 	}
 }
 

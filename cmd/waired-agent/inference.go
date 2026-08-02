@@ -1967,6 +1967,31 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 	// engine pulls the plain variant instead of an mtp tag its registry
 	// would refuse server-side with no useful error.
 	engine := p.servingEngine()
+	// #307: `ollama pull` is a CLIENT of a server that cannot exist
+	// without a binary, so a pull dispatched onto an engine-less host is
+	// doomed before it starts. Refusing HERE rather than letting it fail
+	// is what keeps it from writing a `failed` row into the catalog:
+	// snapshot() projects that row onto the wizard's "Download the AI
+	// model" step, and the text it fails with ("download: ollama binary
+	// not found", or a bare "exit status 1") carries nothing a classifier
+	// can read, so it rendered as "check its internet connection" for the
+	// whole multi-minute engine install (waired#986 F11).
+	//
+	// The setup reconciler already gates its own dispatch on the same
+	// answer (setup_desired.go, enginePresent). This covers the paths that
+	// do not: SwapPreferredModel from the tray, `waired models use`,
+	// `waired models pull`, and applyDaemonInitInference, which runs
+	// BEFORE the engine install in `waired init`.
+	//
+	// Live, not a boot-time snapshot: ollamaUsable is the state-dir-aware
+	// resolver, so a host whose engine appears mid-run pulls on the next
+	// attempt with no restart (#188). nil means "no resolver wired" (the
+	// unit fixtures) — fail open there, exactly as startEngineAndBootstrap
+	// does.
+	if engine == catalog.RuntimeOllama && p.ollamaUsable != nil && !p.ollamaUsable() {
+		return management.PullJob{}, fmt.Errorf(
+			"cannot download %s yet: %w", manifest.ModelID, errEngineNotInstalled)
+	}
 	engineVersion := p.engineVersionFor(ctx, engine)
 	variant, pullable := router.FirstPullableVariant(manifest, engine, engineVersion)
 	if !pullable {

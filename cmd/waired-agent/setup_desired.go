@@ -1115,11 +1115,13 @@ type setupModelRejection struct {
 // what this path reported for everything before.
 func classifyModelRejection(err error) string {
 	switch {
-	case errors.Is(err, errEngineTooOld):
-		// The model exists and this host simply cannot load it yet.
-		// Telling the operator to choose another model is not wrong, but
-		// it is not the fix either — this is the enum's engine-side code,
-		// and this is its first producer anywhere in the repo.
+	case errors.Is(err, errEngineTooOld), errors.Is(err, errEngineNotInstalled):
+		// The model exists and this host simply cannot load it yet —
+		// either the engine is too old for it, or (#307) there is no
+		// engine binary at all. Telling the operator to choose another
+		// model is not wrong, but it is not the fix either: this is the
+		// enum's engine-side code, and the engine row already carries the
+		// action that resolves both.
 		return signer.SetupErrorEngineNotReady
 	case errors.Is(err, errPullsDisabled), errors.Is(err, errUnsupportedSource):
 		// Configuration and host-shape refusals. Nothing about the model
