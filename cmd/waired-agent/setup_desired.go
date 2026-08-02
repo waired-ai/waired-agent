@@ -87,6 +87,10 @@ type setupDesired struct {
 	engine       string
 	modelID      string
 	benchmarkGen int
+	// modelGen is the retry generation for the model download (#136).
+	// Same contract as benchmarkGen — declarative, idempotent, and a
+	// bump is the operator saying "try that download again".
+	modelGen int
 	// integrations is the coding-agent instruction (waired#935), flattened
 	// so this struct stays comparable — change detection here is a plain
 	// `!=`, and a slice field would not compile.
@@ -316,6 +320,18 @@ type setupReconciler struct {
 	// only because there was no engine to pull with.
 	engineInstalled bool
 	engineObserved  bool
+
+	// modelGenActed is the highest desired_model_gen this process has
+	// acted on (#136). It is the answer to the CP's request, the same
+	// way the persisted benchmark generation answers desired_benchmark_gen
+	// — and it is echoed in every snapshot so the wizard can tell "not
+	// picked up yet" from "picked up and failed again".
+	//
+	// In memory only, like modelApplied itself: a restart re-admits the
+	// pull anyway (that is the ONLY recovery this issue exists to
+	// replace), so persisting it would buy nothing and could suppress a
+	// re-admission the operator asked for before the crash.
+	modelGenActed int
 }
 
 func newSetupReconciler(provider setupProvider, push *controlclient.Client, deviceID string, machineKey ed25519.PrivateKey, logger *slog.Logger) *setupReconciler {
@@ -345,6 +361,7 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		engine:       st.DesiredEngine,
 		modelID:      st.DesiredModelID,
 		benchmarkGen: st.DesiredBenchmarkGen,
+		modelGen:     st.DesiredModelGen,
 		integrations: flattenIntegrations(st.DesiredIntegrations),
 	}
 	r.mu.Lock()
@@ -367,8 +384,31 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	}
 	r.desired = d
 	r.active = true
+	// Retry (#136): a generation ahead of the one we last acted on is the
+	// operator asking for the download again, and the answer is the same
+	// clearing the engine-appeared transition does below — drop the
+	// one-shot admission for this model so the pull is re-queued once.
+	//
+	// It has to happen HERE, not beside `appeared`, because that block is
+	// skipped entirely when there is no desired engine, and a retry has to
+	// work on a host that never needed one. Recording modelGenActed in the
+	// same critical section is what makes a re-bump of the SAME generation
+	// a no-op: the CP re-sends its instruction on every map frame, so a
+	// condition on the value alone would re-queue forever.
+	retried := d.modelGen > r.modelGenActed
+	if retried {
+		r.modelGenActed = d.modelGen
+		if d.modelID != "" {
+			delete(r.modelApplied, d.modelID)
+			delete(r.modelRejected, d.modelID)
+		}
+	}
 	applied := r.modelApplied[d.modelID]
 	r.mu.Unlock()
+	if retried && r.logger != nil {
+		r.logger.Info("setup: retry requested; re-admitting the desired model",
+			"gen", d.modelGen, "model", d.modelID)
+	}
 
 	// Benchmark (§12): the served generation counter is the request;
 	// the persisted last-completed generation is the answer. A run that
@@ -687,6 +727,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	r.mu.Lock()
 	d := r.desired
 	active := r.active
+	modelGenActed := r.modelGenActed
 	rejected := r.modelRejected[d.modelID]
 	leaseLive := r.leaseLiveLocked()
 	everSeen := r.executorEverSeen
@@ -720,6 +761,11 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	p := &signer.SetupProgress{
 		LastCheck: r.now().UTC().Format(time.RFC3339Nano),
 		Driver:    driver,
+		// The generation this report answers (#136). Without it a wizard
+		// that has just bumped cannot tell "not picked up yet" from
+		// "picked up, tried again, failed again" — the step is `failed`
+		// in both, and those two want opposite things on screen.
+		ModelGen: modelGenActed,
 	}
 	if d.engine != "" {
 		installed, ready := r.provider.setupEngineState(ctx, d.engine)

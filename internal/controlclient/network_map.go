@@ -118,10 +118,16 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		// have it report an out-of-date client instead.
 		caps := `"` + signer.CapabilityPublicShareV1 + `"`
 		if c.OnboardingCapable {
-			// Both or neither: the CP gates desired_integrations on v2 and
-			// the rest on v1, so declaring v2 alone would invite an
-			// instruction with no engine or model to go with it.
-			caps += `,"` + signer.CapabilityOnboardingV1 + `","` + signer.CapabilityOnboardingV2 + `"`
+			// All three or none: the CP gates desired_integrations on v2
+			// and desired_model_gen on v3, with the rest on v1, so
+			// declaring a later one alone would invite an instruction with
+			// no engine or model to go with it. onboarding-v3 is the
+			// model-download retry generation (waired-agent#136) — the
+			// applier for it is setupReconciler.Apply, which is
+			// constructed on exactly this condition.
+			caps += `,"` + signer.CapabilityOnboardingV1 +
+				`","` + signer.CapabilityOnboardingV2 +
+				`","` + signer.CapabilityOnboardingV3 + `"`
 		}
 		body := bytes.NewBufferString(`{"capabilities":[` + caps + `]}`)
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/network-map/poll", body)
