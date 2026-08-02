@@ -303,6 +303,15 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	// #677: ngram speculative decoding accelerates single-stream decode
 	// (coding agents) with no draft weights, when the operator enables it.
 	specConfig := vllmSpeculativeConfigJSON(p.cfg.VLLMSpeculativeNgram)
+	// #410: without a parser vLLM never populates tool_calls, so a coding
+	// agent gets the model's call as prose. Resolved from the served
+	// model, overridable per host.
+	toolParser := resolveVLLMToolParser(manifest, p.cfg.VLLMToolParser)
+	if toolParser == "" {
+		p.logger.Warn("vllm tool calling disabled: no --tool-call-parser is known for this model; "+
+			"the model's tool calls will arrive as text (set inference.vllm_tool_parser to override)",
+			"model", manifest.ModelID)
+	}
 	logDir := filepath.Join(p.stateDir, "runtimes", "vllm", "logs")
 	adapter := infruntime.NewVLLMAdapter(infruntime.VLLMConfig{
 		Python:               python,
@@ -316,6 +325,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		TensorParallelSize:   tp,
 		KVCacheDType:         kvCacheDType,
 		SpeculativeConfig:    specConfig,
+		ToolCallParser:       toolParser,
 		LogDir:               logDir,
 		Spawner:              infruntime.DefaultSpawner{},
 	})
@@ -355,7 +365,8 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 		"model", manifest.ModelID, "variant", variant.VariantID,
 		"served_as", variant.Source.RepoID, "endpoint", adapter.BaseURL(),
 		"tensor_parallel_size", tp, "max_model_len", maxLen,
-		"kv_cache_dtype", kvCacheDType, "speculative_ngram", specConfig != "")
+		"kv_cache_dtype", kvCacheDType, "speculative_ngram", specConfig != "",
+		"tool_call_parser", toolParser)
 
 	// Commit the ActiveSelection (Runtime is derived from servingEngine(),
 	// == vllm here). activateBundledIfUnset fills a fresh install's empty

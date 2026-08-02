@@ -85,6 +85,26 @@ type VLLMConfig struct {
 	// for coding agents (#677); empty omits the flag.
 	SpeculativeConfig string
 
+	// ToolCallParser selects vLLM's --tool-call-parser, the parser that
+	// turns the model's own tool-call syntax into structured
+	// `tool_calls` on the OpenAI-compat response. Empty omits it AND
+	// --enable-auto-tool-choice, which is what shipped before #410 and
+	// means the server never populates tool_calls for any model — the
+	// call stays in `content` as prose and a coding agent stalls.
+	//
+	// The right value is a property of the MODEL's chat template
+	// (hermes for Qwen2.5's <tool_call>{json}</tool_call>, qwen3_xml for
+	// Qwen3-Coder's <function=…> dialect, …), so the caller resolves it
+	// per model — see resolveVLLMToolParser in cmd/waired-agent.
+	//
+	// It must be a name vLLM actually registers: an unknown value is
+	// rejected at start-up (vLLM 0.24 cli_args.py validate / api_server
+	// "invalid tool call parser"), so a typo here costs the whole engine
+	// rather than just tool calling. The resolver therefore emits only
+	// verified names and falls back to "" — no tool calls, but a
+	// daemon that still serves.
+	ToolCallParser string
+
 	// ExtraEnv augments the env passed to the subprocess.
 	ExtraEnv []string
 
@@ -282,6 +302,14 @@ func (a *VLLMAdapter) commandArgs() []string {
 	}
 	if a.cfg.SpeculativeConfig != "" {
 		args = append(args, "--speculative-config", a.cfg.SpeculativeConfig)
+	}
+	// Both flags or neither (#410). vLLM rejects --enable-auto-tool-choice
+	// without --tool-call-parser outright, and --tool-call-parser alone is
+	// inert: the server keeps `"tool_choice": "auto"` unimplemented and
+	// never populates tool_calls. Emitting only one is therefore either a
+	// start-up failure or a silent no-op, never the thing we want.
+	if a.cfg.ToolCallParser != "" {
+		args = append(args, "--enable-auto-tool-choice", "--tool-call-parser", a.cfg.ToolCallParser)
 	}
 	return args
 }
