@@ -89,6 +89,20 @@ tests (waired#932 G7):
 * **Declare pins.** A test that pins behaviour states in a comment
   whether it is a product contract or a record of today's behaviour. A PR
   that inverts an existing test says so in the PR body first.
+* **Seal machine-global state in `TestMain`, not per test** (#386). A
+  clean CI runner hides every dependency on the developer's machine: the
+  macOS Keychain (`securestore.SwapStoreForTest(securestore.NewMemStore())`),
+  the OS well-known binary paths (`download.SwapCandidatesForTest(nil)`),
+  and `$HOME` — `os.UserCacheDir` reads `HOME` on darwin, `LocalAppData`
+  on Windows and `XDG_CACHE_HOME` elsewhere, so sealing one of the three
+  seals nothing on the other two. Put the swap in a package
+  `seams_test.go` `TestMain`; an opt-in helper only protects the tests
+  that remember to call it. Where a shared item would leak between tests
+  — every gateway token is one `(account, service)` — also take a fresh
+  store per test. Never dodge host state with
+  `if err == nil { t.Skip("host has …") }`: that cannot tell a
+  contaminated host from a subject that wrongly succeeded, and it
+  disables the assertion precisely on the machine editing the code.
 
 ## Tags / releases
 

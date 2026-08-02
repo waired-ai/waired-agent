@@ -34,10 +34,15 @@ func fakeBundledOllama(t *testing.T, stateDir string) string {
 
 // sealPATH removes every way resolveOllamaBinary could find an engine
 // other than the state dir, so a positive result can only have come
-// from the state-dir stat. A host with a real ollama at an OS
-// well-known candidate path (macOS's Ollama.app, Windows's
-// %ProgramFiles%) would still resolve, which is why the not-found
-// assertions below skip rather than fail in that case.
+// from the state-dir stat.
+//
+// This covers two of download.ResolveBinary's three discovery sources.
+// The third — the OS well-known candidate paths (macOS's Ollama.app,
+// Windows's %ProgramFiles%) — is a filesystem stat with no env in front
+// of it, and is closed for the whole package by TestMain in
+// seams_test.go. Both halves have to hold: without the TestMain, the
+// not-found assertions below silently resolve the developer's own
+// Ollama install (#386).
 func sealPATH(t *testing.T) {
 	t.Helper()
 	t.Setenv("PATH", "")
@@ -133,9 +138,15 @@ func TestResolveOllamaBinary_NonLinuxKeepsFallback(t *testing.T) {
 	for _, goos := range []string{"darwin", "windows"} {
 		t.Run(goos, func(t *testing.T) {
 			stateDir := t.TempDir() // deliberately empty: no bundled engine
-			_, err := resolveOllamaBinary(goos, stateDir, false)
+			got, err := resolveOllamaBinary(goos, stateDir, false)
 			if err == nil {
-				t.Skip("host has an ollama at an OS well-known path; cannot exercise not-found")
+				// Used to t.Skip here, on the grounds that the host might
+				// have a real Ollama. That condition cannot tell a
+				// contaminated host from a subject that wrongly succeeded,
+				// and it fired on every Mac with Ollama installed. The
+				// candidate paths are sealed in TestMain now (#386).
+				t.Fatalf("resolveOllamaBinary(%q, bundled) = %q with every source sealed, "+
+					"want download.ErrNotInstalled", goos, got)
 			}
 			if !errors.Is(err, download.ErrNotInstalled) {
 				t.Errorf("resolveOllamaBinary(%q, bundled) err = %v, want download.ErrNotInstalled "+

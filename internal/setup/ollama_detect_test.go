@@ -45,11 +45,15 @@ func TestDetectOllama_ResolvesViaEnvOverride(t *testing.T) {
 
 // TestDetectOllama_NotInstalled checks the zero-value path when no
 // ollama is resolvable through any of ResolveBinary's sources.
+//
+// The well-known-path source is closed by this package's TestMain, so
+// this no longer skips on a machine that has Ollama installed — which is
+// where the assertion was most worth running (#386).
 func TestDetectOllama_NotInstalled(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WAIRED_OLLAMA_BINARY", "")
-	if _, err := download.ResolveBinary(""); err == nil {
-		t.Skip("environment still has a resolvable ollama; cannot test not-found path")
+	if got, err := download.ResolveBinary(""); err == nil {
+		t.Fatalf("ResolveBinary resolved %q with every source sealed", got)
 	}
 	det := DetectOllama(context.Background(), t.TempDir())
 	if det.Installed {
