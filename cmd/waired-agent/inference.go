@@ -1483,6 +1483,46 @@ func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, 
 		&http.Client{}, proclist.List, p.logger)
 }
 
+// modelsSnapshot projects the stored model lifecycle onto the management
+// snapshot the CLI and tray read. Pure, and separated from Status so it
+// can be tested without an engine, a profiler or a registry: everything
+// interesting here is a mapping decision, and everything around it in
+// Status is plumbing that would have to be faked to reach it.
+//
+// progress is the in-flight byte aggregator, taken as a function for the
+// same reason.
+func modelsSnapshot(models map[string]catalog.ModelState,
+	progress func(string) (int64, int64, bool)) management.ModelsSnapshot {
+	snap := management.ModelsSnapshot{}
+	for id, m := range models {
+		switch m.State {
+		case catalog.ModelStateReady:
+			snap.Ready = append(snap.Ready, id)
+		case catalog.ModelStateDownloading, catalog.ModelStateQueued, catalog.ModelStateVerifying:
+			snap.Downloading = append(snap.Downloading, id)
+			if completed, total, ok := progress(id); ok {
+				snap.Downloads = append(snap.Downloads, management.ModelDownload{
+					Model: id, CompletedBytes: completed, TotalBytes: total,
+				})
+			}
+		case catalog.ModelStateFailed:
+			snap.Failed = append(snap.Failed, id)
+			if m.Error != "" {
+				// runPullJob has stored the real cause all along; this
+				// snapshot was the wall it never crossed, which is why
+				// `waired models pull` could only say "failed"
+				// (waired-agent#328). Omitted rather than faked when
+				// nothing was recorded — an older failure, or one written
+				// before the field existed.
+				snap.Failures = append(snap.Failures, management.ModelFailure{
+					Model: id, Error: m.Error,
+				})
+			}
+		}
+	}
+	return snap
+}
+
 func (p *agentInferenceProvider) Status(ctx context.Context) management.InferenceStatus {
 	state, _ := p.store.Load()
 	hwProfile := p.profiler.Profile(ctx)
@@ -1490,22 +1530,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	for _, name := range p.registry.Names() {
 		rs[name] = p.runtimeStatusFor(ctx, name, hwProfile)
 	}
-	models := management.ModelsSnapshot{}
-	for id, m := range state.Models {
-		switch m.State {
-		case catalog.ModelStateReady:
-			models.Ready = append(models.Ready, id)
-		case catalog.ModelStateDownloading, catalog.ModelStateQueued, catalog.ModelStateVerifying:
-			models.Downloading = append(models.Downloading, id)
-			if completed, total, ok := p.dlProgress.aggregate(id); ok {
-				models.Downloads = append(models.Downloads, management.ModelDownload{
-					Model: id, CompletedBytes: completed, TotalBytes: total,
-				})
-			}
-		case catalog.ModelStateFailed:
-			models.Failed = append(models.Failed, id)
-		}
-	}
+	models := modelsSnapshot(state.Models, p.dlProgress.aggregate)
 	endpoints := []management.ActiveEndpoint{}
 	for id, e := range state.Endpoints {
 		endpoints = append(endpoints, management.ActiveEndpoint{

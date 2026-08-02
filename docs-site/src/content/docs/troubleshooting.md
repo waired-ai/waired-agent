@@ -135,13 +135,29 @@ The setup page names what happened. Each message means something specific:
 | “The setup command on … was closed before this finished. Your progress was saved.” | The terminal window running setup was closed. Some steps need administrator rights and only that window has them. | Run `sudo waired init` again (Windows: `waired init` from an administrator prompt). It resumes; nothing is lost. |
 | “Setup on … needs administrator access to continue.” | Setup was started without administrator rights. | Start it again from an administrator terminal — see [Sign in and set up](/getting-started/first-run/). |
 | “… has run out of disk space.” | The model did not fit. | Free some space, or pick a smaller model from the [catalog](/reference/model-catalog/). |
-| “… could not finish downloading. Check its internet connection.” | The download was interrupted. | Retry. Downloads resume rather than start over. |
-| “The AI software on … has not started yet.” | The engine is still coming up. | Wait a minute and retry. If it persists, see [No answer comes back](#no-answer-comes-back). |
+| “… could not finish downloading. Check its internet connection.” | The download failed for a network reason — a name that would not resolve, a connection that dropped, a certificate that would not verify. | Retry. Downloads resume rather than start over. |
+| “The AI software on … is an older version than this AI model needs.” | The model needs a newer engine than this computer has. | Update Waired on that computer (`waired update`), or pick another model from the [catalog](/reference/model-catalog/). |
 | “This took too long on … and was stopped.” | A step exceeded its time limit. | Retry. Twice on the same step usually means this machine is too slow for that model. |
+| “Something went wrong on ….” | Waired could not put a name to what happened — the download was interrupted, or the AI software could not be started for it to talk to. | Retry. If it keeps happening, run `waired doctor` on that computer, or read the logs (see [Going deeper](#going-deeper-logs)). |
+
+Waired says “check its internet connection” only when the failure really looks
+like the network. Anything it cannot recognise says so plainly instead of
+guessing — an interrupted download and an unreachable registry are different
+problems, and only one of them is fixed by looking at your router.
 
 The model download is the exception to all of the above: it keeps running even
 if you close the browser tab. Reopen the device at
 [app.waired.ai](https://app.waired.ai) to see where it got to.
+
+If you are watching from the terminal instead, `waired init` and
+`waired models pull` now print the reason on the line that reports the failure:
+
+```text
+qwen3-8b-instruct: failed — no space left on device
+```
+
+An older background service may still report the bare `failed` with no reason.
+`waired doctor` and the logs have it in that case.
 
 ## Setup says the AI engine failed to start
 

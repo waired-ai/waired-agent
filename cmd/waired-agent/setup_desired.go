@@ -1217,6 +1217,66 @@ var diskFullMarkers = []string{
 	"there is not enough space on the disk",
 }
 
+// interruptedMarkers name a failure THIS machine caused: a cancelled
+// context, a killed child, an engine that could not be started for the
+// download to talk to. None of them is a statement about the internet,
+// and the pull-pipeline races (#305) produced them by the dozen — which
+// is how the rc7 host ended up being told to check a working connection.
+//
+// `start ollama:` is the daemon's own wrapper around "there was no engine
+// to pull with", so it is a marker rather than a substring accident.
+var interruptedMarkers = []string{
+	"context canceled",
+	"context cancelled",
+	"signal: killed",
+	"signal: terminated",
+	"signal: interrupt",
+	"start ollama:",
+	"start engine:",
+}
+
+// timeoutMarkers name a failure that ran out of time rather than out of
+// connectivity. Kept separate from the network set because the enum
+// already carries the distinction and the copy differs: "this took too
+// long and was stopped" is actionable on a slow link, "check your
+// internet connection" is not.
+var timeoutMarkers = []string{
+	"context deadline exceeded",
+	"i/o timeout",
+	"timed out",
+	"timeout",
+}
+
+// networkMarkers are what a GENUINE network failure looks like. This set
+// is now the only way to reach network_error from text — everything
+// unrecognised is `internal`, so this list has to name the real ones
+// rather than catch the leftovers.
+var networkMarkers = []string{
+	"no such host",
+	"temporary failure in name resolution",
+	"name resolution",
+	"connection refused",
+	"connection reset",
+	"network is unreachable",
+	"no route to host",
+	"broken pipe",
+	"unexpected eof",
+	"tls",
+	"certificate",
+	"proxy",
+	"dial tcp",
+	"dial udp",
+	"bad gateway",
+	"service unavailable",
+}
+
+// loopbackMarkers name this machine in a dialled address.
+var loopbackMarkers = []string{
+	"127.0.0.1",
+	"localhost",
+	"[::1]",
+}
+
 // setupModelRejection is why applying the desired model was refused: the
 // §7 code and the text the operator sees under it.
 //
@@ -1270,13 +1330,46 @@ func classifyModelRejection(err error) string {
 }
 
 // classifySetupFailure maps a free-form failure string to the §7 error
-// code enum. Anything unrecognised stays network_error, which is what
-// this code path reported unconditionally before.
+// code enum.
+//
+// The default is `internal`, and that is the whole of #328. It used to be
+// network_error, so a download killed by this machine — `exit status 1`,
+// `download: start ollama: context canceled` — reached the wizard as
+// "could not finish downloading. Check its internet connection." In the
+// rc7 review that sent the operator to look at a connection that was
+// fine, while the daemon's journal held the real cause the whole time.
+//
+// Guessing from text is unavoidable here: the failure crosses a process
+// boundary as prose (which is exactly why the executor's DECLARED code
+// wins where there is one — see executorErrorCode). What is avoidable is
+// guessing CONFIDENTLY. "Something went wrong on this computer", with the
+// reason underneath it, is a true statement about an unrecognised
+// failure; blaming the network is a specific claim that is usually wrong.
+//
+// Order matters and is pinned by tests:
+//
+//   - disk first: it is the most likely way a multi-GB download dies and
+//     the one whose wrong answer wastes the most of the operator's time.
+//   - interrupted before everything: a `connection refused` to this
+//     machine's own engine is not a network problem, and the text says
+//     so only by naming a loopback address.
+//   - timeout before network: `i/o timeout` is both, and "this took too
+//     long" is the more actionable half.
 func classifySetupFailure(errText string) string {
 	if isDiskFullText(errText) {
 		return signer.SetupErrorDiskFull
 	}
-	return signer.SetupErrorNetworkError
+	l := strings.ToLower(errText)
+	if isLocalRefusalText(l) || containsAnyMarker(l, interruptedMarkers) {
+		return signer.SetupErrorInternal
+	}
+	if containsAnyMarker(l, timeoutMarkers) {
+		return signer.SetupErrorTimeout
+	}
+	if containsAnyMarker(l, networkMarkers) {
+		return signer.SetupErrorNetworkError
+	}
+	return signer.SetupErrorInternal
 }
 
 // classifyModelPullFailure classifies a recorded MODEL PULL failure.
@@ -1339,9 +1432,27 @@ func isEngineUnreachableText(errText string) bool {
 // Shared with the pull retry (#306), which must not spend three multi-GB
 // attempts on a condition that cannot clear itself.
 func isDiskFullText(errText string) bool {
-	l := strings.ToLower(errText)
-	for _, m := range diskFullMarkers {
-		if strings.Contains(l, m) {
+	return containsAnyMarker(strings.ToLower(errText), diskFullMarkers)
+}
+
+// isLocalRefusalText reports whether a refused connection names THIS
+// machine. l is already lowercased.
+//
+// Both halves are required. "connection refused" alone is an ordinary
+// network failure when the peer is a registry; a loopback address alone
+// appears in plenty of messages that are not refusals. Together they mean
+// the engine on this host was not listening — a self-inflicted state with
+// its own recovery, and never an internet problem.
+func isLocalRefusalText(l string) bool {
+	if !strings.Contains(l, "connection refused") {
+		return false
+	}
+	return containsAnyMarker(l, loopbackMarkers)
+}
+
+func containsAnyMarker(lowered string, markers []string) bool {
+	for _, m := range markers {
+		if strings.Contains(lowered, m) {
 			return true
 		}
 	}

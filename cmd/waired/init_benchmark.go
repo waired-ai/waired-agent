@@ -296,10 +296,15 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 			// Engine / model not ready yet. Consult /status to distinguish
 			// "still loading" from a terminal failure so we don't spin for
 			// the full deadline on a host that will never come up.
-			state := inferenceSubsystemState(mgmtURL)
+			state, failureReason := inferenceSubsystemState(mgmtURL)
 			switch state {
 			case "pull_failed":
-				writePrompt(out, "Model download failed; skipping the interactive-performance check.")
+				// The reason rides along (waired-agent#328). This refusal
+				// used to be the whole of what a failed pull got told —
+				// one fixed sentence, on the command the pull-failure hint
+				// itself recommended.
+				writePromptf(out, "Model download failed.%s Skipping the interactive-performance check.\n",
+					reasonSuffix(failureReason))
 				return nil, false
 			case "disabled", "stopped":
 				// Terminal, the same way waitForBundledModel already treats
@@ -380,13 +385,19 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 }
 
 // inferenceSubsystemState GETs /inference/status and returns the
-// subsystem_state, or "" on any error.
-func inferenceSubsystemState(mgmtURL string) string {
+// subsystem_state plus, when that state is a failed download, the reason
+// the daemon recorded for it (waired-agent#328). Both are "" on any
+// error.
+//
+// One fetch rather than two: the caller decides what to say from the
+// state and then has to say WHY, and a second round trip could answer
+// from a different tick.
+func inferenceSubsystemState(mgmtURL string) (state, failureReason string) {
 	st, ok := fetchInferenceStatus(mgmtURL)
 	if !ok {
-		return ""
+		return "", ""
 	}
-	return st.SubsystemState
+	return st.SubsystemState, waitFailureReason(st, "")
 }
 
 // activeModelForDisplay resolves the just-benchmarked (active) model from
