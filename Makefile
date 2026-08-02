@@ -433,12 +433,22 @@ e2e-inference:
 # answer for four models without moving the fixture by a byte. `catalog-tool
 # agentgrade --import` refuses a report that is unstamped or built from a dirty
 # tree, which is why measuring is a make target and not a habit.
+#
+# "Dirty" means a change to the code under measurement: any modification to a
+# TRACKED file, or an untracked *.go (which compiles into its package all the
+# same). Other untracked files are excluded deliberately — the CI grade job runs
+# `make e2e-agentgrade ... | tee agentgrade.log`, and the shell creates that log
+# in the repo root before make starts, so a strict check marked every dispatched
+# measurement `-dirty` and made its own report unimportable.
 .PHONY: e2e-agentgrade
 e2e-agentgrade:
 	@test -n "$(MODEL)" || { echo "usage: make e2e-agentgrade MODEL=<ollama tag> [JSON=<path>]"; exit 2; }
 	@rev="$$(git rev-parse --short=12 HEAD 2>/dev/null)"; \
 	 test -n "$$rev" || { echo "e2e-agentgrade: not a git checkout — cannot stamp the probe revision"; exit 2; }; \
-	 test -z "$$(git status --porcelain 2>/dev/null)" || rev="$$rev-dirty"; \
+	 if [ -n "$$(git status --porcelain --untracked-files=no 2>/dev/null)" ] \
+	    || [ -n "$$(git ls-files --others --exclude-standard -- '*.go' 2>/dev/null)" ]; then \
+	   rev="$$rev-dirty"; \
+	 fi; \
 	 echo "probe revision: $$rev"; \
 	 WAIRED_AGENTGRADE_MODEL="$(MODEL)" WAIRED_AGENTGRADE_JSON="$(JSON)" \
 	 WAIRED_AGENTGRADE_TRIALS="$(TRIALS)" WAIRED_AGENTGRADE_STREAM="$(STREAM)" \
