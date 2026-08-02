@@ -60,6 +60,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 	dlHinted := false // one-time "this is a multi-GB transfer" hint before the bar
 	want := ""        // the wizard's model, once it has named one (#306)
 	failedStreak := 0
+	var unseenDeadline time.Time // armed while the wizard's model is on none of the daemon's books
 
 	// lastNote dedups the per-phase step lines: each distinct transitional
 	// phase prints one concise note as it is entered, so the user watches
@@ -154,6 +155,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			line = downloadLineState{lastPct: -1}
 			rate = rateWindow{}
 			dlHinted, failedStreak, lastNote = false, 0, ""
+			unseenDeadline = time.Time{}
 			// noEngineDeadline deliberately survives: engine health is not
 			// a property of which model is being waited for.
 		}
@@ -207,6 +209,12 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				writePrompt(out, "Check progress with `waired status`; if it persists, see `waired doctor` or `journalctl -u waired-agent -e`.")
 				return false
 			}
+			// Nothing is pulled before an engine exists — applying a desired
+			// model is itself gated on one being present — so the target
+			// being on none of the daemon's books says nothing yet. Keeping
+			// this cleared is what stops the grace below eating an engine
+			// install, which is minutes long.
+			unseenDeadline = time.Time{}
 			announce("Waiting for the AI engine to start… " +
 				dim("(first run installs the engine — this can take a few minutes)"))
 		default:
@@ -221,9 +229,30 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 					dlHinted = true
 					announce(dim("Downloading the AI model (several GB — this can take a while)."))
 				}
+				unseenDeadline = time.Time{}
 				lastNote = stepDownloading // the bar owns the line; let a later step end it
 				drawDownloadLine(out, tty, &line, waitModelName(st, want), pct, dl.CompletedBytes, dl.TotalBytes, speed)
 			} else {
+				if want != "" && !targetVisible(st, want) {
+					// The engine is up and the daemon has this model in no
+					// bucket at all — see targetVisible and targetPullGrace.
+					// Bounded, then a soft skip: the caller carries on and
+					// the agent keeps the work. Never a keystroke, because
+					// a browser-driven wait has already withdrawn the
+					// takeover offer and there is nothing left to press.
+					if unseenDeadline.IsZero() {
+						unseenDeadline = time.Now().Add(targetPullGrace)
+					}
+					if time.Now().After(unseenDeadline) {
+						endProgressLine(out, tty, &line)
+						writePromptf(out, "Waired hasn't started downloading %s yet; "+
+							"it keeps trying in the background.\n", want)
+						writePrompt(out, "Check with `waired models ls`, or `waired doctor` if it stays this way.")
+						return false
+					}
+				} else {
+					unseenDeadline = time.Time{}
+				}
 				announce(waitPrepMessage(st, want))
 			}
 		}
@@ -550,3 +579,40 @@ func waitPrepMessage(st management.InferenceStatus, want string) string {
 		return "Preparing to download " + want + "…"
 	}
 }
+
+// targetVisible reports whether the daemon has the wait's model on its
+// books at all.
+//
+// "In none of the buckets" is a real state rather than a gap in the
+// snapshot: Status() sorts models into ready / downloading / failed and
+// has no arm for anything else, and a model that was never dispatched has
+// no entry to sort. So this is the only observation available for "nothing
+// has started, and nothing is going to".
+func targetVisible(st management.InferenceStatus, want string) bool {
+	if slices.Contains(st.Models.Ready, want) ||
+		slices.Contains(st.Models.Downloading, want) ||
+		slices.Contains(st.Models.Failed, want) {
+		return true
+	}
+	_, ok := downloadFor(st, want)
+	return ok
+}
+
+// targetPullGrace bounds how long the wait tolerates a wizard-chosen model
+// the daemon has not started working on.
+//
+// It exists because the daemon can refuse a desired model permanently and
+// has no way to say so here. Admission is once per desired value and the
+// applied flag is set BEFORE the attempt, so a refusal — an id this build
+// cannot serve, an engine that cannot run it, pulls turned off — is never
+// retried; and the refusal is recorded for the control plane only, while
+// /setup/state carries no model state at all. Without this the wait would
+// sit out a wizard's eight-hour residency budget saying "Preparing to
+// download…" for a download nobody is going to start, which is a worse
+// answer than the wrong-model report this change removes.
+//
+// It doubles as the bound on the two other ways a target can name
+// something that never arrives: an id the embedded catalog cannot resolve,
+// and a leftover instruction read as live by a daemon too old to send
+// desired_stale. A var so tests can shrink it.
+var targetPullGrace = 5 * time.Minute
