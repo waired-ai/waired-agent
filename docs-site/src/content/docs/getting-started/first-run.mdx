@@ -105,11 +105,13 @@ live:
 |---|---|---|
 | **Download the AI software** | Fetching the program that loads and runs models — around 1.5 GB for the standard option, around 4 GB for the high-performance one. The page shows how far it has got and how fast it is going, the same figures the terminal shows. | A few minutes |
 | **Install the AI software** | Unpacking and setting it up. This is the part that needs administrator rights — which is why the terminal window has to stay open. | A minute or two; up to 15 for the high-performance option |
+| **Connect your coding tools** | Pointing the coding tools you ticked at Waired. Also administrator work, so it is the terminal that does it — and it is done before the long download rather than after, so nothing is waiting on you later. | Seconds |
 | **Download the AI model** | The AI itself, several gigabytes. | 5–30 minutes |
 | **Check the speed** | A short measurement, so Waired knows whether this machine keeps up. | Up to 5 minutes |
 
 The download step only appears when there is something to download: a computer
-that already has the AI software goes straight to the next step.
+that already has the AI software goes straight to the next step. The
+coding-tools step only appears when the page asked you about them.
 
 <Expected>
 	Every step ticked, and **“Everything's ready — this computer can now run AI
@@ -128,8 +130,8 @@ browser can't.
 ```
 
 Ticking **Claude Code** there does what the page says it does: it points
-Claude Code at Waired for everyone who uses this computer. The other two
-tools only drop a file in your own home folder. This is the same routing the
+Claude Code at Waired for everyone who uses this computer. The other tool
+only drops a file in your own home folder. This is the same routing the
 terminal asks about after a non-browser install, decided in the browser
 instead — and `--skip-claude-proxy` at install time still overrides it.
 
@@ -137,10 +139,17 @@ On an older setup page, which does not ask, it tells you how to do it yourself
 instead: *“You can set up your coding tools later from this terminal with
 `waired link all`.”*
 
-The setup page says the same thing while it works. When the terminal has
-finished its share it says so — *“Setup is continuing in your browser — nothing
-more is needed from this terminal”* — and you can close it from then on. The
-model download and the speed check do not need it.
+That happens **before** the model download, which is deliberate: it is the last
+thing on this computer that needs administrator rights, and putting it behind a
+download that can take an hour meant coming back to a setup that had been
+waiting for you. So the terminal is finished with its share by the time the
+download starts, and says so — *“Setup is continuing in your browser — nothing
+more is needed from this terminal”*. You can close it from then on. The model
+download and the speed check do not need it, and the coding tools stay
+connected whether the window is open or not.
+
+If you leave it open, it keeps showing the download's progress. That is the
+only reason to.
 
 <Aside type="note" title="The setup page is in English">
 	The web console is English-only for now. Translations are planned.

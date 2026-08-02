@@ -133,6 +133,7 @@ The setup page names what happened. Each message means something specific:
 | What you see | What it means | What to do |
 |---|---|---|
 | “The setup command on … was closed before this finished. Your progress was saved.” | The terminal window running setup was closed. Some steps need administrator rights and only that window has them. | Run `sudo waired init` again (Windows: `waired init` from an administrator prompt). It resumes; nothing is lost. |
+| “Setup has not been run on … yet, so its coding tools are not connected.” | Nobody has run the setup command on that computer. It is the only thing that can connect coding tools — a web page cannot write into your home folder or change a machine-wide setting. | Run `sudo waired init` there (Windows: `waired init` from an administrator prompt). Everything else on that computer can be set up from the browser; this one step cannot. |
 | “Setup on … needs administrator access to continue.” | Setup was started without administrator rights. | Start it again from an administrator terminal — see [Sign in and set up](/getting-started/first-run/). |
 | “… has run out of disk space.” | The model did not fit. | Free some space, or pick a smaller model from the [catalog](/reference/model-catalog/). |
 | “… could not finish downloading. Check its internet connection.” | The download failed for a network reason — a name that would not resolve, a connection that dropped, a certificate that would not verify. | Retry. Downloads resume rather than start over. |

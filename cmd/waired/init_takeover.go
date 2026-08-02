@@ -34,9 +34,17 @@ const (
 		"it does the parts the browser can't."
 
 	// setupTerminalDoneLine replaces it once this process has finished its
-	// share: the executor's work is done and the lease is about to drop, so
-	// repeating "keep it open" would be an instruction that no longer
-	// applies (waired#939 asks for the degraded wording, not the same one).
+	// share: the executor's work is done, so repeating "keep it open" would
+	// be an instruction that no longer applies (waired#939 asks for the
+	// degraded wording, not the same one).
+	//
+	// That moment is now BEFORE the model download rather than after it
+	// (waired-agent#311): the coding tools were the last thing needing this
+	// terminal, and they were front-loaded so the long unattended transfer
+	// is the tail. The lease outlives the line by the length of that wait,
+	// and closing the terminal there costs nothing — the finished
+	// coding-tools row is persisted, not held in the lease
+	// (waired-agent#312).
 	setupTerminalDoneLine = "Setup is continuing in your browser — nothing more is needed from this terminal."
 
 	// takeoverClosedLine withdraws the offer once the browser has written

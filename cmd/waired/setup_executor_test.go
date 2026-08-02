@@ -694,6 +694,59 @@ func TestLinkOneChildArgs(t *testing.T) {
 	}
 }
 
+// TestRunWizardIntegrationsReportsWhetherThereWasAnInstruction pins the
+// return value, which is what makes waired-agent#311's two call sites safe.
+//
+// The coding tools now run between the engine install and the model
+// download, but two things can put the instruction out of reach at that
+// moment — a browser setup that only commits during the download, and a
+// wizard that writes its engine and model a beat before its coding-tool
+// answer — so the old site after the wait stays as the catch-up. `false`
+// means "nothing was asked for, the later site may still try"; `true` means
+// "this run has handled it, do not repeat it".
+//
+// Product contract. Getting it backwards either writes the tools twice or
+// leaves a confirmed instruction unapplied for the whole run.
+func TestRunWizardIntegrationsReportsWhetherThereWasAnInstruction(t *testing.T) {
+	shrinkSetupTimers(t)
+	none := []string{}
+	for _, tc := range []struct {
+		name        string
+		setupActive bool
+		targets     *[]string
+		want        bool
+	}{
+		// No browser driving: this is a terminal run, and the terminal asks
+		// its own question later in the flow.
+		{"no wizard driving", false, &[]string{"claude-code"}, false},
+		// An older control plane, or a wizard that has not asked yet. The
+		// later site gets another go.
+		{"no instruction yet", true, nil, false},
+		// "Asked, and every toggle was off" IS an answer. Nothing is
+		// written, but the question is settled and must not be re-asked.
+		{"asked, all toggles off", true, &none, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &fakeSetupDaemon{}
+			d.setState(management.SetupStateResponse{Active: true, Integrations: tc.targets})
+			srv := d.server(t)
+			s := attachSetupExecutor(srv.URL, true)
+			defer s.Release()
+
+			if got := runWizardIntegrations(s, tc.setupActive, setupIntegrationOpts{
+				GatewayBaseURL: "http://127.0.0.1:9473",
+			}); got != tc.want {
+				t.Fatalf("runWizardIntegrations = %v, want %v", got, tc.want)
+			}
+			for _, r := range d.noted() {
+				if r.Step == management.SetupStepIntegration {
+					t.Fatalf("an integration outcome was reported with nothing to write: %+v", r)
+				}
+			}
+		})
+	}
+}
+
 // Nothing to write must stay nothing to write. Both "no instruction" and
 // "asked, every toggle off" leave the machine untouched — the difference
 // between them is reported by the daemon, not acted on here.
