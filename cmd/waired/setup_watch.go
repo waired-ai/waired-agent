@@ -82,3 +82,102 @@ func (w *setupWatch) Poll() (started bool, budget time.Duration, engineComing bo
 // it the §4.2 rule that a terminal must not ask its own questions while the
 // browser is driving.
 func (w *setupWatch) Started() bool { return w != nil && w.started }
+
+// modelTarget names the model the browser wizard chose, so the model wait
+// can report on THAT model instead of on whatever the agent happens to be
+// serving (#306).
+//
+// A sibling of setupWatch over the same seam, and deliberately not the
+// same type: the two have opposite lifetimes and opposite arming rules.
+// setupWatch reports the false->true EDGE once and then leaves the daemon
+// alone, and newSetupWatch makes it inert when a setup was ALREADY
+// driving — which is exactly the case #306 is about, since the wizard is
+// usually on screen before the model wait begins. This is a LEVEL that
+// has to stay readable for the whole wait. Folding them together would
+// mean weakening both of setupWatch's #308 contracts.
+type modelTarget struct {
+	// state reads the daemon's setup view. nil = inert: no wizard can be
+	// driving here, so nothing is polled and no request is made.
+	state func() management.SetupStateResponse
+	// every throttles the reads, as in setupWatch. Zero means every poll
+	// reads — for tests that drive reads rather than time.
+	every time.Duration
+	next  time.Time
+	// want is the last model a LIVE wizard asked for, resolved to the
+	// catalog id. Once set it is only ever replaced, never cleared — see
+	// Poll.
+	want string
+}
+
+// targetLatchedBackoff slows the reads once a target is latched. From
+// there the only thing left to notice is an operator going back to change
+// their mind, which is a human action; at the unlatched cadence a wizard's
+// 8-hour residency budget would be ~14k loopback GETs, each one
+// synchronous inside a render loop that ticks once a second.
+const targetLatchedBackoff = 15 // 2s -> 30s
+
+// newModelTarget arms the target for one model wait. An unsupported
+// session (a daemon older than the executor routes) yields an inert
+// target, which keeps every path that is byte-identical today
+// byte-identical, at zero extra requests.
+//
+// There is no alreadyActive parameter, unlike newSetupWatch: a wizard that
+// was already driving when the wait began is the case this exists for, not
+// the case it opts out of. It is likewise not gated on the caller's
+// nonInteractive/noBrowser flags: a `-Yes` install still has a browser
+// driving it, and the bounded grace in init_pull.go is what keeps being
+// wrong about that cheap.
+func newModelTarget(s *executorSession) *modelTarget {
+	if !s.Supported() {
+		return &modelTarget{}
+	}
+	return &modelTarget{state: s.State, every: setupStatePollInterval}
+}
+
+// Poll returns the model id the wait should key on, or "" while no browser
+// wizard has named one.
+//
+// Two rules, both learned from the daemon's side of #308:
+//
+//   - Only a LIVE instruction sets it. setupDriving is the single CLI
+//     predicate for that; the control plane never clears desired_model_id,
+//     so a device set up once carries an instruction naming a model THIS
+//     run was never asked to wait for.
+//   - The answer is never cleared. All three ways setupDriving can go
+//     false mid-wait mean something other than "the wizard left": the
+//     daemon's freshness window is 60 minutes while this wait may run an
+//     8-hour residency budget; a daemon that RESTARTS reports stale for
+//     the rest of its life, because it marks an instruction fresh only by
+//     watching it CHANGE and the first frame after boot is the baseline;
+//     and a momentarily unreachable daemon answers with the zero value.
+//     Clearing on any of those drops the target mid-download and sends the
+//     wait back to reporting the agent's own model, which is the bug.
+//
+// A later live instruction naming a different model DOES replace it: the
+// contract is "the model the wizard chose", present tense. An operator who
+// went back and picked another one must not be shown a bar for the one
+// they abandoned — the daemon has already stopped fetching it.
+func (t *modelTarget) Poll() string {
+	if t == nil {
+		return ""
+	}
+	if t.state == nil {
+		return t.want
+	}
+	now := time.Now()
+	if now.Before(t.next) {
+		// The latched answer, not "": returning "" between reads would
+		// flap the wait between keyed and unkeyed on most of its ticks.
+		return t.want
+	}
+	every := t.every
+	if t.want != "" {
+		every *= targetLatchedBackoff
+	}
+	t.next = now.Add(every)
+
+	if st := t.state(); setupDriving(st) && st.DesiredModelID != "" {
+		t.want = canonicalBundledModelID(st.DesiredModelID)
+	}
+	return t.want
+}

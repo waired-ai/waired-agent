@@ -39,6 +39,33 @@ func bundledModelLabelDefault(modelID string) string {
 	return bundledModelLabel(manifests, modelID)
 }
 
+// canonicalBundledModelID resolves an id OR alias to the catalog id the
+// agent keys its own model state by, so a name from outside this process
+// can be compared against /inference/status.
+//
+// It matters because the two ends of that comparison are resolved
+// differently today. PullModel runs the same LookupByAlias and then writes
+// state.Models under manifest.ModelID, which is what models.ready reports;
+// but desired_model_id arrives from the control plane and is folded into
+// the setup state without ever being resolved. A raw compare would
+// therefore miss for an alias — and the catalog does ship aliases that
+// differ from the id (qwen3.6-35b-a3b.json declares "qwen3.6-35b" among
+// others). A miss here is not a cosmetic wrong label; it is a wait for a
+// string that never appears.
+//
+// An unknown name is returned unchanged, which degrades to exactly the
+// compare the caller would have done anyway.
+func canonicalBundledModelID(modelID string) string {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		return modelID
+	}
+	if m, ok := catalog.LookupByAlias(modelID, manifests); ok && m.ModelID != "" {
+		return m.ModelID
+	}
+	return modelID
+}
+
 // bundledVariantQuality resolves the catalog quality tier (1–100) for
 // modelID's variantID, falling back to the model's best variant when
 // variantID is empty or not found (the recommendation may name a variant the
