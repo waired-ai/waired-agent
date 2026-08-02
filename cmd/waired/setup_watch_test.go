@@ -177,3 +177,196 @@ func TestSetupWatchInertShapes(t *testing.T) {
 		t.Error("an unsupported session reported a setup start")
 	}
 }
+
+// newScriptedTarget arms a target over the scripted states with the
+// throttle off, so a test drives reads rather than seconds — the same
+// reasoning as newScriptedWatch, and the same trap avoided: setBenchTiming
+// does not shrink setupStatePollInterval, so a target built by
+// newModelTarget would read once in a millisecond-paced test and never
+// again.
+func newScriptedTarget(t *testing.T, s *scriptedState) *modelTarget {
+	t.Helper()
+	return &modelTarget{state: s.next, every: 0}
+}
+
+// wizardState is a live browser setup that has named a model.
+func wizardState(model string) management.SetupStateResponse {
+	st := activeState()
+	st.DesiredModelID = model
+	return st
+}
+
+// TestModelTargetIgnoresLeftoverDesiredState is the #308 half of the
+// contract: the control plane never clears desired_model_id, so a device
+// set up once carries an instruction for the rest of its life. Keying a
+// wait on that would make a second `waired init` wait for a model chosen
+// weeks ago.
+func TestModelTargetIgnoresLeftoverDesiredState(t *testing.T) {
+	s := &scriptedState{states: []management.SetupStateResponse{
+		{Active: true, DesiredStale: true, DesiredModelID: "chosen-last-month"},
+	}}
+	target := newScriptedTarget(t, s)
+	for i := 0; i < 3; i++ {
+		if got := target.Poll(); got != "" {
+			t.Fatalf("read %d: target = %q for a leftover instruction, want none", i, got)
+		}
+	}
+}
+
+// TestModelTargetKeepsTheTargetOnceLatched is the rule that keeps the fix
+// working for the length of a real download. Every way setupDriving can go
+// false mid-wait means something other than "the wizard left": the daemon's
+// freshness window is 60 minutes against an 8-hour residency budget, a
+// daemon that restarts reports stale permanently, and an unreachable one
+// answers with the zero value. Clearing on any of those would silently
+// revert the wait to reporting the agent's own model — the bug.
+func TestModelTargetKeepsTheTargetOnceLatched(t *testing.T) {
+	stale := wizardState("wizard-35b")
+	stale.DesiredStale = true
+	s := &scriptedState{states: []management.SetupStateResponse{
+		wizardState("wizard-35b"),
+		stale,                              // the freshness window elapsed, or the daemon restarted
+		{},                                 // one unreachable read
+		{Active: true, DesiredModelID: ""}, // driving again, but between instructions
+	}}
+	target := newScriptedTarget(t, s)
+	for i := 0; i < 4; i++ {
+		if got := target.Poll(); got != "wizard-35b" {
+			t.Fatalf("read %d: target = %q, want it held at wizard-35b", i, got)
+		}
+	}
+}
+
+// TestModelTargetFollowsAChangedChoice pins the present tense: an operator
+// who went back in the wizard and picked another model must not be shown a
+// bar for the one they abandoned, because the daemon has already stopped
+// fetching it.
+func TestModelTargetFollowsAChangedChoice(t *testing.T) {
+	s := &scriptedState{states: []management.SetupStateResponse{
+		wizardState("first-choice"),
+		wizardState("second-choice"),
+	}}
+	target := newScriptedTarget(t, s)
+	if got := target.Poll(); got != "first-choice" {
+		t.Fatalf("target = %q, want first-choice", got)
+	}
+	if got := target.Poll(); got != "second-choice" {
+		t.Fatalf("target = %q after the operator changed their mind, want second-choice", got)
+	}
+}
+
+// TestModelTargetThrottlesTheDaemon pins both halves of the throttle: it
+// reads at most once per window, AND it keeps answering with the latched
+// target in between. Returning "" between reads would flap the wait
+// between keyed and unkeyed on most of its ticks.
+func TestModelTargetThrottlesTheDaemon(t *testing.T) {
+	s := &scriptedState{states: []management.SetupStateResponse{wizardState("wizard-35b")}}
+	target := &modelTarget{state: s.next, every: time.Hour}
+	for i := 0; i < 10; i++ {
+		if got := target.Poll(); got != "wizard-35b" {
+			t.Fatalf("poll %d: target = %q, want wizard-35b on every tick", i, got)
+		}
+	}
+	if s.reads != 1 {
+		t.Errorf("target read the daemon %d times in one throttle window, want 1", s.reads)
+	}
+}
+
+// TestModelTargetBacksOffOnceLatched: before a target exists the read has
+// to be prompt, because the wait cannot report the right model until it
+// has one. Afterwards the only thing left to notice is an operator
+// changing their mind, so the reads back off — at the unlatched cadence a
+// wizard's 8-hour budget would be ~14k loopback GETs, each one synchronous
+// inside a loop that ticks once a second.
+func TestModelTargetBacksOffOnceLatched(t *testing.T) {
+	s := &scriptedState{states: []management.SetupStateResponse{{}, wizardState("wizard-35b")}}
+	target := &modelTarget{state: s.next, every: time.Minute}
+
+	before := time.Now()
+	target.Poll() // nothing named yet
+	if gap := target.next.Sub(before); gap > 2*time.Minute {
+		t.Errorf("unlatched read scheduled %v out; it must stay prompt until a target exists", gap)
+	}
+
+	target.next = time.Time{} // let the second read through
+	before = time.Now()
+	if got := target.Poll(); got != "wizard-35b" {
+		t.Fatalf("target = %q, want wizard-35b", got)
+	}
+	if gap := target.next.Sub(before); gap < time.Duration(targetLatchedBackoff)*time.Minute {
+		t.Errorf("latched read scheduled only %v out, want the backed-off interval", gap)
+	}
+}
+
+// TestModelTargetInertShapes pins that every path which is byte-identical
+// today stays byte-identical and issues no /setup/state request: a nil
+// target, and an older daemon (unsupported session).
+func TestModelTargetInertShapes(t *testing.T) {
+	var nilTarget *modelTarget
+	if got := nilTarget.Poll(); got != "" {
+		t.Errorf("a nil target returned %q", got)
+	}
+
+	if target := newModelTarget(nil); target.state != nil {
+		t.Error("newModelTarget armed a target over an unsupported session")
+	}
+	s := &scriptedState{states: []management.SetupStateResponse{wizardState("wizard-35b")}}
+	inert := &modelTarget{}
+	if got := inert.Poll(); got != "" {
+		t.Errorf("an inert target returned %q", got)
+	}
+	if s.reads != 0 {
+		t.Errorf("an inert target polled the daemon %d times", s.reads)
+	}
+}
+
+// TestModelTargetResolvesAnAliasToTheCatalogID pins the id-space bridge.
+// The two ends of the comparison the wait makes are resolved differently:
+// PullModel keys the daemon's model state by manifest.ModelID after a
+// LookupByAlias, while desired_model_id reaches the CLI without ever being
+// resolved. An unresolved alias would never appear in models.ready, so the
+// wait would run to its grace on a host that is downloading perfectly.
+//
+// Product contract, using a real shipped alias so a catalog change that
+// dropped alias support would fail here rather than silently.
+func TestModelTargetResolvesAnAliasToTheCatalogID(t *testing.T) {
+	const alias, canonical = "waired/medium", "qwen2.5-coder-14b-instruct"
+	s := &scriptedState{states: []management.SetupStateResponse{wizardState(alias)}}
+	if got := newScriptedTarget(t, s).Poll(); got != canonical {
+		t.Errorf("target = %q for alias %q, want the catalog id %q", got, alias, canonical)
+	}
+}
+
+// TestModelTargetPassesThroughAnUnknownID: an id the embedded catalog
+// cannot resolve is kept rather than dropped. The CLI and the daemon ship
+// the same catalog, so an id this build cannot resolve is one it cannot
+// pull either — the honest answer is the wait's bounded grace saying so,
+// not silently reverting to reporting the agent's own model.
+func TestModelTargetPassesThroughAnUnknownID(t *testing.T) {
+	s := &scriptedState{states: []management.SetupStateResponse{wizardState("model-from-a-newer-catalog")}}
+	if got := newScriptedTarget(t, s).Poll(); got != "model-from-a-newer-catalog" {
+		t.Errorf("target = %q, want the unknown id kept verbatim", got)
+	}
+}
+
+// TestNewModelTargetReadsTheSessionsDesiredModel is the only test that
+// carries desired_model_id over the real wire: through the daemon's
+// /setup/state handler, an actual executorSession, and newModelTarget.
+// Before this change `git grep DesiredModelID -- cmd/waired/` was empty, so
+// nothing else covers the field being read at all.
+func TestNewModelTargetReadsTheSessionsDesiredModel(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{}
+	d.setState(wizardState("wizard-35b"))
+	srv := d.server(t)
+	defer srv.Close()
+
+	sess := attachSetupExecutor(srv.URL, false)
+	defer sess.Release()
+	if !sess.Supported() {
+		t.Fatal("the fake daemon speaks the executor routes; the session should be supported")
+	}
+	if got := newModelTarget(sess).Poll(); got != "wizard-35b" {
+		t.Errorf("target = %q over the real wire, want wizard-35b", got)
+	}
+}

@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: db5cc01140e1a662
+sourceHash: 911d11d14fd60e4b
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -283,10 +283,14 @@ Waired がインストール済みで、バックグラウンドサービスが�
 そのあとモデルが進捗表示付きでダウンロードされます。
 
 ```
-Starting the inference engine…
+Starting the AI engine…
 Preparing to download qwen3-coder-30b-a3b-instruct…
 Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 ```
+
+ここに表示されるモデル名は**あなたが選んだモデル**です。ブラウザで
+セットアップを進めている場合は、そこで選んだモデルが表示されます。
+コンピューターが自動で選んだであろうモデルではありません。
 
 <Aside type="note" title="ダウンロードが終わらないうちは">
 	ファイルは数十 GB あるため、回線が遅い環境では時間がかかります。
@@ -300,14 +304,25 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 		押せばいつでも見張りをやめられます。*「Continuing in the background —
 		the agent finishes the download on its own」*と表示され、残りの
 		セットアップに進みます。
-	- **ブラウザが主導している場合**は、ダウンロードが終わるまでターミナルが
-		進捗表示のまま残ります。ターミナル側とブラウザ側で「終わったかどうか」の
-		認識がずれないようにするためです。この場合 <kbd>Enter</kbd> では
-		抜けられません。インストールを実行しているのがこのウィンドウだからです。
+	- **ブラウザが主導している場合**は、**選んだモデルの**ダウンロードが
+		終わるまでターミナルが進捗表示のまま残ります。ターミナル側とブラウザ側で
+		「終わったかどうか」の認識がずれないようにするためです。この場合
+		<kbd>Enter</kbd> では抜けられません。インストールを実行しているのが
+		このウィンドウだからです。
 
 	いずれの場合も、ダウンロードを行っているのはバックグラウンドサービスであって
 	このコマンドではありません。<kbd>Ctrl</kbd>+<kbd>C</kbd> を押しても
 	**中止されません**。状況は `waired status` でいつでも確認できます。
+</Aside>
+
+<Aside type="caution" title="「Waired hasn't started downloading …」と表示されたら">
+	ブラウザで選んだモデルは要求されているものの、ダウンロードがまだ
+	始まっていない状態です。多くの場合、このバージョンではそのモデルを
+	このコンピューターで動かせないことが原因です。ターミナルは待ち続けずに
+	シェルを返し、バックグラウンドサービスが試行を続けます。
+
+	各モデルの状態は `waired models ls` で確認できます。状況が変わらない
+	場合は `waired doctor` を実行してください。
 </Aside>
 
 <Expected>

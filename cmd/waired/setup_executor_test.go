@@ -534,6 +534,17 @@ func TestExecutorSessionProgressIsThrottled(t *testing.T) {
 	prev := executorProgressInterval
 	executorProgressInterval = time.Hour
 	t.Cleanup(func() { executorProgressInterval = prev })
+	// The heartbeat has to be held off for the same reason, and it is not
+	// optional: post() carries the CURRENT step, so once the first
+	// Progress call sets one, every heartbeat tick files another report
+	// for it and progressReports counts them. shrinkSetupTimers puts that
+	// ticker at 5 ms, so the assertion below was really asking whether 50
+	// iterations plus an HTTP round trip fit inside 5 ms — true on an idle
+	// machine, a coin flip on a loaded CI runner. Neutralised, the test
+	// measures the throttle it is named for instead of the clock.
+	prevBeat := setupExecutorHeartbeatInterval
+	setupExecutorHeartbeatInterval = time.Hour
+	t.Cleanup(func() { setupExecutorHeartbeatInterval = prevBeat })
 
 	d := &fakeSetupDaemon{}
 	srv := d.server(t)

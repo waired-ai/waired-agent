@@ -276,8 +276,13 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				if setupActive && !enter.Fired() {
 					writePrompt(os.Stdout, setupKeepTerminalOpenLine)
 				}
+				// #306: report on the model the WIZARD chose. Deliberately
+				// not gated on setupActive — that is a snapshot taken
+				// before this wait, and the whole point of the watch above
+				// is that a browser setup can commit minutes into it. The
+				// target self-gates on setupDriving per read instead.
 				waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
-					engineComing, enter, watch)
+					engineComing, enter, watch, newModelTarget(sess))
 			}
 			// #308: a setup that started during the wait leaves this
 			// terminal as the browser's executor, so it must stop asking
