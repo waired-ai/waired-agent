@@ -99,6 +99,23 @@ type VariantAgentGrade struct {
 	// different weights and are not comparable.
 	FixtureRevision string `json:"fixture_revision"`
 
+	// AgentRevision is the waired-agent commit the probe ran from, and
+	// Transport is the HTTP shape it drove ("unary", "stream", or
+	// "unary+stream" when both were run and agreed).
+	//
+	// They record the HARNESS generation, which FixtureRevision does not
+	// cover: it hashes the fixture, and the fixture is only half of what
+	// a verdict depends on. #409 taught this the expensive way — the
+	// gateway started recovering tool calls the engine had left in the
+	// assistant text, four models went from failing every call to
+	// passing, and every stored verdict still looked current because the
+	// fixture had not moved. Deliberately NOT a staleness gate: unlike a
+	// fixture change, an unrelated commit does not invalidate a
+	// measurement, and treating it as one would put the whole file in
+	// CoverageGaps on every merge.
+	AgentRevision string `json:"agent_revision,omitempty"`
+	Transport     string `json:"transport,omitempty"`
+
 	// Host is a hardware CLASS, never an identifier — this repository is
 	// public. "nvidia-24gb-discrete", "apple-unified-64gb". It matters
 	// because a model that spills most of its layers may answer

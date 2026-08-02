@@ -64,6 +64,22 @@ type Probe struct {
 	// Trials is how many times the case set runs. Zero means
 	// DefaultTrials. See DefaultTrials for why one is not enough.
 	Trials int
+
+	// Stream drives the SSE path instead of the whole-body one.
+	//
+	// It is a knob rather than the default because the two answer
+	// different questions and both are worth asking. A coding agent
+	// always streams, so this is the path a real session takes; the
+	// whole-body path is the one #322's history was measured on, and is
+	// still what a non-streaming client gets. Since #409 they no longer
+	// share an implementation of tool-call recovery, so agreement
+	// between them is a fact to be checked rather than assumed — and a
+	// disagreement is a gateway defect, not a property of the model.
+	//
+	// The response is folded back into the non-streaming shape before
+	// classification (readAnthropicStream), so Classify cannot tell
+	// which one ran.
+	Stream bool
 }
 
 const defaultProbeAPIKey = "waired-agentgrade-probe-not-a-real-key"
@@ -111,6 +127,15 @@ type Report struct {
 	// "pass".
 	FixtureRevision string `json:"fixture_revision"`
 
+	// AgentRevision is the waired-agent commit the probe ran from, and
+	// Transport is the HTTP shape it drove. Together they identify the
+	// HARNESS generation, which FixtureRevision deliberately does not
+	// cover: #409 changed the gateway's answer for the same model at the
+	// same fixture revision, and without these two a reader cannot tell
+	// a pre-fix verdict from a post-fix one. See provenance.go.
+	AgentRevision string `json:"agent_revision,omitempty"`
+	Transport     string `json:"transport"`
+
 	Started  time.Time `json:"started"`
 	Duration string    `json:"duration"`
 	// Error carries why the run could not be graded, when Grade is
@@ -129,7 +154,16 @@ func (p Probe) Run(ctx context.Context, model string) (Report, error) {
 	if trials <= 0 {
 		trials = DefaultTrials
 	}
-	rep := Report{Model: model, Started: time.Now(), Trials: trials}
+	rep := Report{
+		Model:         model,
+		Started:       time.Now(),
+		Trials:        trials,
+		AgentRevision: AgentRevision(),
+		Transport:     TransportUnary,
+	}
+	if p.Stream {
+		rep.Transport = TransportStream
+	}
 	rev, err := FixtureRevision()
 	if err != nil {
 		return rep, err
@@ -233,6 +267,11 @@ func (p Probe) one(ctx context.Context, model string, c Case, names map[string]b
 	if err != nil {
 		return Result{Case: c.Name, Verdict: VerdictError, Detail: "build request: " + err.Error()}
 	}
+	// Set here rather than inside BuildRequest: the fixture defines the
+	// request's CONTENT — the weight FixtureRevision hashes and the
+	// canary compares against the real client — and transport is not
+	// part of that. Building it in would also move RequestBytes.
+	req.Stream = p.Stream
 	resp, err := p.post(ctx, req)
 	if err != nil {
 		// An upstream failure is normally not a verdict. The exception
@@ -320,6 +359,16 @@ func (p Probe) post(ctx context.Context, req gateway.AnthropicRequest) (gateway.
 			Body:     string(raw),
 			Fallback: httpResp.Header.Get("X-Waired-Fallback"),
 		}
+	}
+
+	// Read fully either way, then parse. The whole turn is bounded by
+	// MaxTokens and the probe does not measure TTFB, so streaming the
+	// parse would buy nothing — and reading first keeps the non-2xx path
+	// above byte-identical across transports, which is what lets an
+	// engine that refuses to parse the model's own tool call
+	// (VerdictMalformedToolCall) still be detected on the SSE path.
+	if p.Stream {
+		return readAnthropicStream(bytes.NewReader(raw))
 	}
 
 	var out gateway.AnthropicResponse

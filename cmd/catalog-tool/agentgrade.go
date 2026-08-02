@@ -35,6 +35,9 @@ func runAgentGrade(args []string) error {
 	host := fs.String("host", "", "hardware CLASS the report was measured on, never an identifier, e.g. nvidia-24gb-discrete (with --import)")
 	runURL := fs.String("run-url", "", "CI run URL, when the report came from one (with --import)")
 	retrieved := fs.String("retrieved", "", "measurement date YYYY-MM-DD (with --import; required)")
+	transport := fs.String("transport", "",
+		"record \"unary+stream\" when the same model was measured on BOTH transports and they "+
+			"agreed (with --import; defaults to the transport the report itself names)")
 	notes := fs.String("notes", "", "free-text note to store with the verdict (with --import)")
 	fixtureBytes := fs.Bool("fixture-bytes", false,
 		"print the probe fixture's whole-request size in bytes and exit "+
@@ -82,6 +85,7 @@ func runAgentGrade(args []string) error {
 			RunURL:        *runURL,
 			Retrieved:     *retrieved,
 			Notes:         *notes,
+			Transport:     *transport,
 			Revision:      rev,
 			Bundled:       all,
 		})
@@ -133,8 +137,33 @@ type importOpts struct {
 	RunURL        string
 	Retrieved     string
 	Notes         string
+	Transport     string
 	Revision      string
 	Bundled       []catalog.Manifest
+}
+
+// transportBoth records that a model was measured on both transports and
+// they agreed. The probe cannot know this — it drives one of them — so it
+// is the one provenance value an operator supplies, and the only value
+// they may supply: anything else would let the file claim a path that was
+// never driven.
+const transportBoth = agentgrade.TransportUnary + "+" + agentgrade.TransportStream
+
+// resolveTransport decides what goes in the record.
+func resolveTransport(reported, override string) (string, error) {
+	if override == "" {
+		return reported, nil
+	}
+	if override == reported {
+		return reported, nil
+	}
+	if override == transportBoth &&
+		(reported == agentgrade.TransportUnary || reported == agentgrade.TransportStream) {
+		return transportBoth, nil
+	}
+	return "", fmt.Errorf("agentgrade: --transport %q is not usable for a report measured on %q — "+
+		"pass %q only when the SAME model was measured on both transports and they agreed, "+
+		"and otherwise leave it unset", override, reported, transportBoth)
 }
 
 // probeReport is the subset of the probe's JSON output the store keeps.
@@ -142,6 +171,8 @@ type probeReport struct {
 	Model           string   `json:"model"`
 	Grade           string   `json:"grade"`
 	FixtureRevision string   `json:"fixture_revision"`
+	AgentRevision   string   `json:"agent_revision"`
+	Transport       string   `json:"transport"`
 	Trials          int      `json:"trials"`
 	Flaky           []string `json:"flaky"`
 	Results         []struct {
@@ -200,6 +231,28 @@ func importAgentGrade(path string, o importOpts) error {
 			rep.FixtureRevision, o.Revision)
 	}
 
+	// The harness generation is as load-bearing as the fixture revision
+	// and has no default that could be right. #409 changed the gateway's
+	// answer for the same model at the same fixture revision, so a
+	// verdict that cannot name the code it was measured against is a
+	// verdict nobody can re-take a decision on later.
+	if rep.AgentRevision == "" || rep.Transport == "" {
+		return fmt.Errorf("agentgrade: report carries agent_revision=%q transport=%q — "+
+			"measure through `make e2e-agentgrade`, which stamps both; a bare `go test` "+
+			"produces a report whose harness cannot be identified afterwards",
+			rep.AgentRevision, rep.Transport)
+	}
+	if strings.HasSuffix(rep.AgentRevision, "-dirty") {
+		return fmt.Errorf("agentgrade: report was measured at %s — a verdict taken on an "+
+			"uncommitted tree cannot be reproduced from anything in the repository; "+
+			"commit (or stash) and re-measure", rep.AgentRevision)
+	}
+
+	recordedTransport, err := resolveTransport(rep.Transport, o.Transport)
+	if err != nil {
+		return err
+	}
+
 	modelID, variantID, err := resolveTag(rep.Model, o.Bundled)
 	if err != nil {
 		return err
@@ -232,6 +285,8 @@ func importAgentGrade(path string, o importOpts) error {
 		EngineVersion:   o.EngineVersion,
 		EngineTag:       rep.Model,
 		FixtureRevision: o.Revision,
+		AgentRevision:   rep.AgentRevision,
+		Transport:       recordedTransport,
 		Host:            o.Host,
 		RunURL:          o.RunURL,
 		Retrieved:       o.Retrieved,
@@ -242,7 +297,8 @@ func importAgentGrade(path string, o importOpts) error {
 	if err := writeAgentGrades(set); err != nil {
 		return err
 	}
-	fmt.Printf("imported: %s / %s = %s (tag %s)\n", modelID, variantID, rep.Grade, rep.Model)
+	fmt.Printf("imported: %s / %s = %s (tag %s, %s, agent %s)\n",
+		modelID, variantID, rep.Grade, rep.Model, recordedTransport, rep.AgentRevision)
 	return nil
 }
 
