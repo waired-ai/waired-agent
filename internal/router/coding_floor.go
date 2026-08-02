@@ -171,18 +171,46 @@ func OllamaExpectedSpillFraction(weightGB float64, kvBytesPerTokFP16 int, kvFact
 
 // OllamaServesContextFloor is the #624 host gate for the ollama path:
 // can this (manifest, variant) serve its effective floor window with
-// q8_0 KV on this host? Passes when the window fits fully GPU-resident,
-// or — discrete GPUs only — when the expected spill stays under
-// OllamaMaxExpectedSpillFraction (returned so callers can surface it).
-// Unknown sizing inputs and CPU-only hosts pass permissively: the #621
-// serve tuning and its post-load verify probe are the backstop, same
-// philosophy as ollamaFitsVRAM.
+// q8_0 KV on this host? It returns the verdict and the expected /api/ps
+// spill fraction of doing so, which callers surface either way.
 //
-// The budget is Profile.OllamaVRAMBudgetMB, not EffectiveVRAMMB. This
-// gate runs BEFORE the #229 speed pass in RankModels and does not fall
-// through while any smaller model still passes, so on a multi-GPU host
-// it, not the estimate, is what actually drops a large model — pricing
-// two cards as one here would have made #264's fix invisible.
+// Where there is somewhere to spill TO — CPU-only and discrete-GPU
+// hosts — the verdict is yes, and the spill fraction is the cost. On
+// UNIFIED memory it is a real gate: one pool means "spill to system RAM"
+// has no meaning, and oversubscribing the carve-out stalls the whole
+// host, so a window that does not fit is a window that must not be
+// promised.
+//
+// It used to exclude on discrete cards too, when the expected spill
+// exceeded OllamaMaxExpectedSpillFraction, and that was NOT monotone in
+// hardware. The spill fraction falls as VRAM rises, but the CPU-only arm
+// passed unconditionally at the very bottom of that range, so the middle
+// failed while both ends passed: a 32 GB host with a 2 GB card kept a
+// tier-90 model and the SAME host with a 4 GB card dropped to tier 27.
+// RankModels narrows on this gate and keeps any non-empty subset, so
+// "almost everything excluded" is obeyed while "everything excluded" is
+// ignored — which is what made the 4 GB step so much worse than the 2 GB
+// one. A capacity-shaped rule has to be monotone in hardware, and this
+// is the same correction hostfit.OllamaFit already applied to the
+// capacity gate for #229.
+//
+// It was survivable while SelectInstallModel stood the whole floor down
+// as its last resort. waired#1031 removed that fall-through — the window
+// is a contract now, not a preference — so the non-monotonicity became
+// load-bearing and had to go.
+//
+// Nothing is lost by it. Whether a spilling model is worth SERVING is a
+// speed question, and the two passes that own speed still answer it:
+// hostfit.OllamaRecommend refuses to preselect a model whose weights do
+// not fit the card (ReasonWeightsSpill — waired-ai/waired#986's 16 GB
+// card, and #625's judgment that the mtp tag dominates the 23.9 GB one
+// on the 24 GB anchor), and the #229 roofline still bounds decode. Both
+// improve with VRAM, so both are monotone.
+//
+// The budget is Profile.OllamaVRAMBudgetMB, not EffectiveVRAMMB, so a
+// multi-GPU host is priced on the pool it actually spreads layers over
+// (#264) — that shows up in the returned fraction now rather than in the
+// boolean.
 func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.Profile) (bool, float64) {
 	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 {
 		return true, 0
@@ -202,12 +230,9 @@ func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware
 	}
 	expected := OllamaExpectedSpillFraction(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, scoring.KVFactorQ8_0, floorCtx, hw)
 	if hw.UnifiedMemory {
-		// One memory pool: "spill to system RAM" has no meaning, and
-		// oversubscribing the carve-out stalls the whole host. No
-		// bounded-spill allowance on UMA.
 		return false, expected
 	}
-	return expected <= OllamaMaxExpectedSpillFraction, expected
+	return true, expected
 }
 
 // VLLMServesContextFloor is the #624 host gate for the vllm path: can

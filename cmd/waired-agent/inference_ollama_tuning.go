@@ -459,9 +459,13 @@ func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t
 			"%s serves the ~200k coding window fully GPU-resident (ctx %d)",
 			m.ModelID, t.ContextLength))
 	case t.ContextLength > 0:
-		reasons = append(reasons, fmt.Sprintf(
-			"%s serves a %d-token window on this host (below the ~200k coding target, no spill)",
-			m.ModelID, t.ContextLength))
+		extraWarning = fmt.Sprintf(
+			"%s serves a %d-token window on this host, below the ~200k coding target — "+
+				"this device advertises no serving window to the mesh, so Claude Code's "+
+				"Waired entries will not route work here (it still serves this machine's "+
+				"own requests)",
+			m.ModelID, t.ContextLength)
+		reasons = append(reasons, extraWarning)
 	}
 	return reasons, extraWarning
 }

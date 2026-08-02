@@ -7,6 +7,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/router"
 )
 
 func cpuProfile(ramGB int) hardware.Profile {
@@ -210,20 +211,39 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 		t.Fatalf("BundledManifests: %v", err)
 	}
 
-	t.Run("best-effort-note-on-floor-fallback", func(t *testing.T) {
-		// 4 GB CPU host: the under-spec rescue keeps coder-3b (32k
-		// native) — the note must say the pick is below the floor.
+	t.Run("under-spec-when-only-a-subfloor-model-would-fit", func(t *testing.T) {
+		// 4 GB CPU host: the only tier-30+ fit is a 32k-window coder.
+		// That used to be rescued by re-ranking without the context floor;
+		// waired#1031 removed the rescue, because the window is a contract
+		// a node either declares or does not, and 32k is not one of the two
+		// windows it can declare.
 		in := baseInputs(cpuProfile(4), manifests)
 		in.FreeDiskBytes = fixedDisk(500)
 		sel, err := SelectBundledModel(in)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		if !sel.EnableInference {
-			t.Fatal("floor fallback must not disable inference")
+		if sel.EnableInference {
+			t.Fatalf("a host that can declare no window must not auto-enable local "+
+				"inference (picked %q)", sel.ModelID)
 		}
-		if !containsNote(sel.Notes, "below the ~200k coding-agent context floor") {
-			t.Errorf("notes lack the best-effort floor line: %v", sel.Notes)
+		if !sel.UnderSpec {
+			t.Error("UnderSpec must be set so the caller can explain the outcome")
+		}
+		// The opt-in offer is still made, and what it offers now clears the
+		// window even though it does not clear the quality floor — which is
+		// the whole trade waired#1031 makes: tier flexes, the window does not.
+		if sel.BelowFloorModelID == "" {
+			t.Fatal("no below-floor opt-in offered; a 4 GB host can still run something")
+		}
+		m, found := catalog.LookupByAlias(sel.BelowFloorModelID, manifests)
+		if !found {
+			t.Fatalf("BelowFloorModelID %q is not in the catalog", sel.BelowFloorModelID)
+		}
+		if !router.MeetsNativeContextFloor(m) {
+			t.Errorf("the opt-in offers %s (%d-token window); offering a model that cannot "+
+				"declare a window puts the host back where the rescue left it",
+				sel.BelowFloorModelID, m.ContextLength)
 		}
 	})
 
