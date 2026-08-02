@@ -230,8 +230,26 @@ const (
 	SetupErrorNetworkError     = "network_error"
 	SetupErrorPermissionDenied = "permission_denied"
 	SetupErrorExecutorGone     = "executor_gone"
-	SetupErrorTimeout          = "timeout"
-	SetupErrorInternal         = "internal"
+	// SetupErrorSetupCommandNotRun says the elevated setup command has
+	// never run on this device, so a step only that command can write has
+	// no author at all (waired-agent#312).
+	//
+	// It exists because the three ways a step can end up unwritten are
+	// three different things to tell the operator, and until now two of
+	// them shared a code:
+	//
+	//   - this one — nobody has run the command here yet;
+	//   - SetupErrorExecutorGone — it ran and exited before this row;
+	//   - SetupErrorPermissionDenied — it ran, and the write was refused.
+	//
+	// The coding-tools row reported the third for the first, so a device
+	// whose only omission was that nobody had run the command was told it
+	// needed administrator access. Both the first two send the operator to
+	// the same command, but only one of them can honestly say "your
+	// progress was saved", and only the third is about privileges.
+	SetupErrorSetupCommandNotRun = "setup_command_not_run"
+	SetupErrorTimeout            = "timeout"
+	SetupErrorInternal           = "internal"
 )
 
 // IsValidSetupErrorCode reports whether c is one of the accepted
@@ -241,7 +259,8 @@ func IsValidSetupErrorCode(c string) bool {
 	case "", SetupErrorEngineNotReady, SetupErrorDiskFull,
 		SetupErrorModelNotFound, SetupErrorNetworkError,
 		SetupErrorPermissionDenied, SetupErrorExecutorGone,
-		SetupErrorTimeout, SetupErrorInternal:
+		SetupErrorSetupCommandNotRun, SetupErrorTimeout,
+		SetupErrorInternal:
 		return true
 	}
 	return false
