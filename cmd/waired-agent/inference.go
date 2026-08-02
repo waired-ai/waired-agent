@@ -2258,20 +2258,45 @@ func (d *pullDiagnostic) text() string {
 	return d.last
 }
 
+// engineNotRunningMarker leads the failure text when the engine could
+// not be brought up for the attempt that failed.
+//
+// An agent-owned phrase, not a scrape of somebody else's prose: it is
+// what classifyModelPullFailure keys on to answer engine_not_ready, so
+// the two sides must move together or the wizard silently falls back to
+// "check its internet connection". The wizard also shows this string, so
+// it names the engine the way every other user-facing surface does.
+const engineNotRunningMarker = "the AI engine on this device was not running"
+
 // pullFailureText builds the failure a model row records.
 //
 // The pull's own error is always kept — it is the only thing that is
-// certainly about this attempt — and the engine's explanation is
-// appended when there is one. Order is oldest-to-newest cause so the
-// sentence reads as a chain.
-func pullFailureText(err error, diag string) string {
+// certainly about this attempt — and the two explanations are added when
+// there are any: the engine's inability to start, then whatever the CLI
+// printed on its way out.
+//
+// engineErr leads because it is the earliest cause in the chain, and it
+// is only ever set when EnsureRunning failed on THIS attempt. The
+// conjunction is deliberate: EnsureRunning failing does not by itself
+// mean the pull is doomed — a borrowed Ollama busy loading a 40 GB model
+// fails the readiness probe while still serving downloads perfectly
+// well, and a foreign engine holding the port answers pulls too. Only
+// when both halves of the same attempt failed is the engine named, and
+// even then the other two clauses stay so nothing is lost if the
+// attribution is wrong.
+func pullFailureText(err error, diag, engineErr string) string {
 	if err == nil {
 		return ""
 	}
-	if diag == "" {
-		return err.Error()
+	parts := make([]string, 0, 3)
+	if engineErr != "" {
+		parts = append(parts, engineNotRunningMarker+": "+engineErr)
 	}
-	return err.Error() + "; " + diag
+	parts = append(parts, err.Error())
+	if diag != "" {
+		parts = append(parts, diag)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // runPullJob downloads one model. ctx MUST be the daemon's long-lived
@@ -2305,9 +2330,17 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 		// its sentinel WITHOUT spawning: log it and let the pull report the
 		// real error, exactly as before. Inside the loop because retrying a
 		// download against an engine that has since died is pointless.
+		//
+		// engineErr is remembered rather than only logged (#307): when
+		// this attempt then fails, it is the most specific thing anyone
+		// knows about why, and the pull's own "exit status 1" cannot say
+		// it. Scoped to the attempt — a cold start that timed out once
+		// must not be blamed for a network failure two attempts later.
+		var engineErr string
 		if p.ollama != nil && p.servingEngine() == catalog.RuntimeOllama {
 			if ensureErr := p.ollama.EnsureRunning(ctx); ensureErr != nil {
 				p.logger.Warn("engine not ready before pull", "model", modelID, "tag", tag, "err", ensureErr)
+				engineErr = ensureErr.Error()
 			}
 		}
 		// Fresh per attempt: attempt 1's transient must never be reported
@@ -2320,7 +2353,7 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 			}
 			diag.observe(pr)
 		})
-		failure = pullFailureText(err, diag.text())
+		failure = pullFailureText(err, diag.text(), engineErr)
 		// A full disk cannot clear itself; three more multi-GB attempts only
 		// delay the honest error the wizard needs to show.
 		//

@@ -855,7 +855,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.TotalBytes = total
 		case state == catalog.ModelStateFailed:
 			step.Status = signer.SetupStatusFailed
-			step.ErrorCode = classifySetupFailure(errText)
+			step.ErrorCode = classifyModelPullFailure(errText)
 			step.ErrorDetail = clampSetupDetail(errText)
 		default: // not_present / evicted / unknown — pull not admitted yet
 			step.Status = signer.SetupStatusPending
@@ -1165,6 +1165,62 @@ func classifySetupFailure(errText string) string {
 		return signer.SetupErrorDiskFull
 	}
 	return signer.SetupErrorNetworkError
+}
+
+// classifyModelPullFailure classifies a recorded MODEL PULL failure.
+//
+// Separate from classifySetupFailure, which it falls through to, and the
+// separation is the point: that one is shared with both engine rows via
+// executorErrorCode, so teaching it to read connect-refused wording
+// would relabel a genuine engine DOWNLOAD failure — a CDN or proxy that
+// refused the connection — as engine_not_ready, inverting this fix on
+// the row next door. Only the model row can safely read a refused
+// connection as "the local engine is not there": it is the only step
+// whose work is done by a client of that engine.
+//
+// Order is a contract. A full disk wins over everything, because both
+// markers genuinely co-occur — a pull that could not reach the engine
+// and could not have written the bytes anyway — and of the two, only the
+// disk is a thing the operator must act on.
+func classifyModelPullFailure(errText string) string {
+	if isDiskFullText(errText) {
+		return signer.SetupErrorDiskFull
+	}
+	if isEngineUnreachableText(errText) {
+		return signer.SetupErrorEngineNotReady
+	}
+	return classifySetupFailure(errText)
+}
+
+// engineUnreachableMarkers name a LOCAL engine that could not be reached,
+// never a remote transfer that failed.
+//
+// The first entry is ours, written by runPullJob when EnsureRunning fails
+// on the attempt that then failed; it is the only one that carries a
+// reason with it. The rest are what surfaces when the engine dies between
+// the readiness check and the download, so nothing on our side saw it —
+// the ollama CLI's own wording, and the two shapes a refused TCP connect
+// takes. "actively refused it" is the Windows phrasing, matching the list
+// cmd/waired/main.go's isConnectionRefused already keys on.
+//
+// Deliberately NOT "connection reset by peer" or a bare "connection":
+// a reset is a transfer that started and died, which is the network's
+// problem and is already classified as one.
+var engineUnreachableMarkers = []string{
+	engineNotRunningMarker,
+	"could not connect to ollama",
+	"connection refused",
+	"actively refused it",
+}
+
+func isEngineUnreachableText(errText string) bool {
+	l := strings.ToLower(errText)
+	for _, m := range engineUnreachableMarkers {
+		if strings.Contains(l, strings.ToLower(m)) {
+			return true
+		}
+	}
+	return false
 }
 
 // isDiskFullText reports whether a failure string names a full disk.

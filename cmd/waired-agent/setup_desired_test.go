@@ -1285,6 +1285,146 @@ func TestSetupPullFailureClassification(t *testing.T) {
 	}
 }
 
+// TestClassifyModelPullFailure covers the model row's own classifier
+// (#307). classifySetupFailure above stays as it is on purpose: it is
+// shared with both engine rows through executorErrorCode, so it must
+// keep reading a refused connection as a network problem — for an engine
+// DOWNLOAD that is exactly what it is.
+//
+// PRODUCT CONTRACT for the codes; the marker strings are a record of what
+// this agent writes and what the ollama CLI prints today.
+func TestClassifyModelPullFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		errText string
+		want    string
+	}{
+		{
+			"our own marker, with the engine's reason",
+			engineNotRunningMarker + ": ollama: engine parked (stopped by operator); exit status 1",
+			signer.SetupErrorEngineNotReady,
+		},
+		{
+			"the ollama CLI's own wording",
+			"exit status 1; Error: could not connect to ollama app, is it running?",
+			signer.SetupErrorEngineNotReady,
+		},
+		{
+			"a refused connect to the local engine port",
+			"dial tcp 127.0.0.1:9475: connect: connection refused",
+			signer.SetupErrorEngineNotReady,
+		},
+		{
+			// The Windows phrasing for the same thing; matching only the
+			// POSIX wording would have made this fix Linux/macOS-only.
+			"the Windows phrasing for a refused connect",
+			"No connection could be made because the target machine actively refused it.",
+			signer.SetupErrorEngineNotReady,
+		},
+		{
+			// Both markers genuinely co-occur: a pull that could not reach
+			// the engine could not have written the bytes either. Only one
+			// of the two is something the operator must act on.
+			"a full disk outranks an unreachable engine",
+			"exit status 1; Error: write /blobs: no space left on device, could not connect to ollama",
+			signer.SetupErrorDiskFull,
+		},
+		{
+			// LOAD-BEARING, not left over: a reset is a transfer that
+			// started and died, which is the network's problem. It is what
+			// separates this classifier from a sloppy Contains(l, "connection").
+			"a reset mid-transfer is still the network",
+			"dial tcp: connection reset by peer",
+			signer.SetupErrorNetworkError,
+		},
+		{"nothing recorded", "", signer.SetupErrorNetworkError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyModelPullFailure(tc.errText); got != tc.want {
+				t.Errorf("classifyModelPullFailure(%q) = %q, want %q", tc.errText, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSetupEngineRowsKeepReadingARefusedConnectAsNetwork is the guard on
+// the OTHER side of #307, and the reason classifyModelPullFailure is a
+// separate function instead of new arms inside classifySetupFailure.
+//
+// classifySetupFailure is reached from BOTH engine rows through
+// executorErrorCode. Those rows describe an executor fetching the engine
+// installer over the internet, so for them a refused connection is
+// exactly what the catch-all says it is. Teaching the shared classifier
+// to read it as engine_not_ready would tell an operator whose proxy
+// blocked the download to go fix an engine that was never the problem —
+// inverting this fix on the row next door.
+//
+// PRODUCT CONTRACT. The executor sends no error_code here on purpose:
+// its own classification wins when it has one (executorErrorCode), so
+// the fall-through is the only path this can be observed on.
+func TestSetupEngineRowsKeepReadingARefusedConnectAsNetwork(t *testing.T) {
+	for _, errText := range []string{
+		`Get "https://ollama.com/download/ollama-linux-amd64": dial tcp 10.0.0.1:443: connect: connection refused`,
+		"No connection could be made because the target machine actively refused it.",
+	} {
+		t.Run(errText[:min(len(errText), 32)], func(t *testing.T) {
+			f := &fakeSetupProvider{}
+			r, _ := leasedReconciler(t, f, "ollama", "")
+			ctx := context.Background()
+			// Both engine rows reach the shared classifier, by different
+			// routes, so both are asserted: engine_download through
+			// engineDownloadStep, engine_install through snapshot's own arm.
+			r.NoteExecutor(ctx, management.SetupExecutorRequest{
+				Attached: true, Elevated: true, Engine: "ollama",
+				Step: setupStepEngineDownload, Phase: management.SetupExecutorPhaseFailed, Error: errText,
+			})
+			r.NoteExecutor(ctx, management.SetupExecutorRequest{
+				Attached: true, Elevated: true, Engine: "ollama",
+				Phase: management.SetupExecutorPhaseFailed, Error: errText,
+			})
+
+			snap := r.snapshot(ctx)
+			for _, id := range []string{setupStepEngineDownload, setupStepEngineInstall} {
+				step := stepByID(t, snap, id)
+				if step.Status == signer.SetupStatusFailed && step.ErrorCode != signer.SetupErrorNetworkError {
+					t.Fatalf("%s = %+v, want %q — an engine download failing to connect is a network problem",
+						id, step, signer.SetupErrorNetworkError)
+				}
+			}
+		})
+	}
+}
+
+// TestSetupInstalledButUnstartableEngineFailsTheModelRowAsEngineNotReady
+// is the payoff shape for #307, and the reason the classifier had to
+// reach the model row rather than only the engine row.
+//
+// The binary IS installed, so engine_install is green and has nothing
+// more to say. An engine that then refuses to start shows up in exactly
+// one place the operator can see: the model that could not be
+// downloaded. Reporting that as "check its internet connection" is the
+// rc7 screenshot (waired#986 F11).
+func TestSetupInstalledButUnstartableEngineFailsTheModelRowAsEngineNotReady(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	r, _ := leasedReconciler(t, f, "ollama", "m-1")
+	// The pull is dispatched first and fails afterwards — the fake's apply
+	// moves the row to queued, exactly as a real dispatch does.
+	f.setModelState(catalog.ModelStateFailed, engineNotRunningMarker+
+		": ollama: engine repeatedly crashed; not retrying (see last_error); exit status 1")
+	snap := r.snapshot(context.Background())
+
+	if got := stepByID(t, snap, setupStepEngineInstall); got.Status != signer.SetupStatusDone {
+		t.Fatalf("engine step = %+v, want done — the binary is installed, so the gate must NOT arm here", got)
+	}
+	step := stepByID(t, snap, setupStepModelPull)
+	if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorEngineNotReady {
+		t.Fatalf("model step = %+v, want failed/engine_not_ready", step)
+	}
+	if !strings.Contains(step.ErrorDetail, "repeatedly crashed") {
+		t.Fatalf("model step detail = %q, want the engine's own reason carried through", step.ErrorDetail)
+	}
+}
+
 // TestSetupDetailIsClamped keeps a long installer log from costing a
 // whole push (the CP clamps at the same size).
 func TestSetupDetailIsClamped(t *testing.T) {
