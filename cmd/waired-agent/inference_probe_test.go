@@ -229,11 +229,23 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 	}
 }
 
-// Phase 6: when IsShared returns false the probe must update the
-// state writer + aggregator locally (so the wrapper and tray still
-// see the engine) but skip the CP push (so mesh peers stop seeing
-// this engine within the 15 s staleness window).
-func TestRunLocalInferenceProbe_SkipsPushWhenShareDenied(t *testing.T) {
+// TestRunLocalInferenceProbe_ReportsShareDenied is the waired#1030
+// product contract, and it INVERTS the Phase 6 pin it replaces
+// (SkipsPushWhenShareDenied, which required zero pushes).
+//
+// Suppressing the push did stop peers from seeing the engine, but it also
+// stopped the control plane from hearing anything at all — and the stored
+// state does not clear, it freezes, so the admin view of a device whose
+// operator ran `waired inference share off` stayed frozen at its last
+// report forever, showing as STALE two minutes later. A device that never
+// shared read as having no engine, and the setup wizard scored its model
+// catalog blind.
+//
+// The agent now keeps reporting and states the fact instead; withholding
+// the engine from peers moves to the control plane, which can do it
+// without lying to the operator. Refusing the request is still the
+// agent's job and still lives in the overlay listener's shareGate.
+func TestRunLocalInferenceProbe_ReportsShareDenied(t *testing.T) {
 	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{"models":[{"name":"llama3.1:8b"}]}`)
@@ -245,13 +257,7 @@ func TestRunLocalInferenceProbe_SkipsPushWhenShareDenied(t *testing.T) {
 	}
 
 	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
-	var pushCount int32
-	cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&pushCount, 1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	}))
-	defer cpSrv.Close()
+	cpSrv, pushes, lastState := capturingCP(t)
 
 	dir := t.TempDir()
 	stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
@@ -275,13 +281,85 @@ func TestRunLocalInferenceProbe_SkipsPushWhenShareDenied(t *testing.T) {
 		Logger:      slog.Default(),
 	})
 
-	if got := atomic.LoadInt32(&pushCount); got != 0 {
-		t.Errorf("CP push count = %d, want 0 when share denied", got)
+	if got := pushes(); got == 0 {
+		t.Fatal("no CP push while sharing is off; the admin view goes stale again")
+	}
+	st := lastState()
+	if !st.NotShared {
+		t.Errorf("pushed not_shared=false while sharing is off: %+v", st)
+	}
+	// The report is otherwise the truth about a healthy engine — that is
+	// the point. Reporting it as unreachable would trade one lie for another.
+	if !st.Reachable || st.Type != signer.InferenceTypeOllama {
+		t.Errorf("pushed state misdescribes a healthy engine: %+v", st)
 	}
 	// Local-side wiring must still update.
 	snap := agg.Snapshot()
 	if snap.Self.InferenceState == nil || !snap.Self.InferenceState.Reachable {
 		t.Errorf("aggregator Self.InferenceState should still be populated when share denied: %+v", snap.Self)
+	}
+}
+
+// TestRunLocalInferenceProbe_SharingOmitsTheField is the byte-form half:
+// the default (sharing on) must not put not_shared on the wire at all.
+// Product contract — the field is negative-sense + omitempty precisely so
+// every unmodified host keeps encoding exactly as it did before it existed.
+func TestRunLocalInferenceProbe_SharingOmitsTheField(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"models":[{"name":"llama3.1:8b"}]}`)
+	}))
+	defer ollama.Close()
+	port, err := portFromURL(ollama.URL)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+	var mu sync.Mutex
+	var bodies []string
+	cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer cpSrv.Close()
+
+	dir := t.TempDir()
+	stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+	if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// A fresh deadline per configuration — one shared context would expire
+	// during the first run and make the second a no-op.
+	for _, shared := range []func() bool{nil, func() bool { return true }} {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		runLocalInferenceProbe(ctx, inferenceProbeDeps{
+			StateWriter: stWriter,
+			PushClient:  controlclient.New(cpSrv.URL, "tok"),
+			DeviceID:    "dev-self",
+			MachineKey:  machinePriv,
+			EngineKind:  signer.InferenceTypeOllama,
+			EnginePort:  port,
+			IsShared:    shared,
+			Logger:      slog.Default(),
+		})
+		cancel()
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) < 2 {
+		t.Fatalf("expected a push from each configuration, got %d", len(bodies))
+	}
+	for i, b := range bodies {
+		if strings.Contains(b, "not_shared") {
+			t.Errorf("push %d put not_shared on the wire while sharing: %s", i, b)
+		}
 	}
 }
 
@@ -563,10 +641,10 @@ func TestRunLocalInferenceProbe_NoneKindPinsFalse(t *testing.T) {
 // setup wizard operates in — had no path at all to tell the control
 // plane what it is, and the wizard scored its catalog blind.
 
-// hardwareOnlyCP is the CP mock the engine-less tests share: it counts
+// capturingCP is the CP mock the push-observing tests share: it counts
 // pushes and keeps the last state body. Returns the server plus accessors
 // so each test states its own expectation.
-func hardwareOnlyCP(t *testing.T) (*httptest.Server, func() int32, func() signer.InferenceState) {
+func capturingCP(t *testing.T) (*httptest.Server, func() int32, func() signer.InferenceState) {
 	t.Helper()
 	var count int32
 	var mu sync.Mutex
@@ -637,7 +715,7 @@ func engineLessDeps(t *testing.T, cpURL string) inferenceProbeDeps {
 // type=none, reachable=false, no endpoint, no models — carrying only the
 // hardware. Anything else would have peers reading it as a broken engine.
 func TestRunLocalInferenceProbe_EngineLessPublishesHardware(t *testing.T) {
-	cp, pushes, lastState := hardwareOnlyCP(t)
+	cp, pushes, lastState := capturingCP(t)
 
 	// 500 ms is one immediate report and no ticker fire
 	// (hardwareOnlyPushInterval is 60 s), so the count below is exact.
@@ -673,7 +751,7 @@ func TestRunLocalInferenceProbe_EngineLessPublishesHardware(t *testing.T) {
 // inference off is not participating, and #387 must not make that host
 // start talking about its GPU.
 func TestRunLocalInferenceProbe_EngineLessRespectsDisabled(t *testing.T) {
-	cp, pushes, _ := hardwareOnlyCP(t)
+	cp, pushes, _ := capturingCP(t)
 
 	deps := engineLessDeps(t, cp.URL)
 	deps.Disabled = true
@@ -686,15 +764,18 @@ func TestRunLocalInferenceProbe_EngineLessRespectsDisabled(t *testing.T) {
 	}
 }
 
-// TestRunLocalInferenceProbe_EngineLessRespectsShareDenied: the
-// hardware-only report goes through the SAME IsShared gate as the normal
-// push (product contract). The summary rides the served network map, so
-// publishing it for a host whose operator turned sharing off would widen
-// what that switch exposes — a decision this fix deliberately does not
-// make. Consequence: a share-disabled host stays blind to the wizard,
-// exactly as it is today.
-func TestRunLocalInferenceProbe_EngineLessRespectsShareDenied(t *testing.T) {
-	cp, pushes, _ := hardwareOnlyCP(t)
+// TestRunLocalInferenceProbe_EngineLessReportsShareDenied: the
+// hardware-only report follows the SAME rule as the normal push
+// (product contract), and it INVERTS the #387 pin it replaces
+// (EngineLessRespectsShareDenied, which required zero pushes and named
+// the resulting blind spot as a separate decision to make).
+//
+// waired#1030 made it: the summary no longer rides the served map for a
+// device that is not sharing — the control plane withholds the whole
+// state from peers — so publishing it widens nothing, and withholding it
+// left exactly the hosts the setup wizard needs to score invisible to it.
+func TestRunLocalInferenceProbe_EngineLessReportsShareDenied(t *testing.T) {
+	cp, pushes, lastState := capturingCP(t)
 
 	deps := engineLessDeps(t, cp.URL)
 	deps.IsShared = func() bool { return false }
@@ -702,8 +783,15 @@ func TestRunLocalInferenceProbe_EngineLessRespectsShareDenied(t *testing.T) {
 	defer cancel()
 	runLocalInferenceProbe(ctx, deps)
 
-	if got := pushes(); got != 0 {
-		t.Errorf("push count = %d, want 0 when share is denied", got)
+	if got := pushes(); got != 1 {
+		t.Fatalf("push count = %d, want exactly 1 (sharing off is not silence)", got)
+	}
+	st := lastState()
+	if !st.NotShared {
+		t.Errorf("pushed not_shared=false while sharing is off: %+v", st)
+	}
+	if !reflect.DeepEqual(st.Hardware, testHardwareSummary()) {
+		t.Errorf("pushed hardware\n got %+v\nwant %+v", st.Hardware, testHardwareSummary())
 	}
 }
 
@@ -712,7 +800,7 @@ func TestRunLocalInferenceProbe_EngineLessRespectsShareDenied(t *testing.T) {
 // pushing a state with nothing in it (product contract — the same rule
 // hardwareSummaryFor already applies by returning nil).
 func TestRunLocalInferenceProbe_EngineLessSkipsUnknownProfile(t *testing.T) {
-	cp, pushes, _ := hardwareOnlyCP(t)
+	cp, pushes, _ := capturingCP(t)
 
 	deps := engineLessDeps(t, cp.URL)
 	deps.Hardware = func() *signer.HardwareSummary { return nil }
@@ -745,7 +833,7 @@ func TestRunLocalInferenceProbe_ReadsHardwareEachTick(t *testing.T) {
 	if err != nil {
 		t.Fatalf("port: %v", err)
 	}
-	cp, pushes, lastState := hardwareOnlyCP(t)
+	cp, pushes, lastState := capturingCP(t)
 
 	// The driver landed after the deps were constructed: the getter's
 	// first answer is the post-change one.

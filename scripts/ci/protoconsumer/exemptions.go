@@ -189,18 +189,10 @@ var producedInProto = []exemption{
 // and this table held the debt in the open until each one was paid —
 // `rate_bps` by #197, `driver` and the benchmark trial fields by
 // #198/#199, and the onboarding-v3 wire (#411) did the same for
-// `SetupProgress.ModelGen`, paid by #136. Each entry below is a debt taken
-// on the same terms.
-var producerPending = []exemption{
-	// waired-ai/waired#1030: the mesh-share toggle silences the admin
-	// telemetry channel as a side effect. The wire has to land first and
-	// separately (§Modules), and the control plane has to be deployed
-	// before the agent may start setting it — otherwise a not-sharing host
-	// is advertised to peers as serving. The probe-loop producer is the
-	// third PR of that sequence; delete this entry there.
-	{reflect.TypeFor[signer.InferenceState](), "NotShared",
-		"waired-ai/waired#1030 — the inference probe sets it once the control plane honours it"},
-}
+// `SetupProgress.ModelGen`, paid by #136. waired#1030's `NotShared` (#417)
+// took the debt on the same terms and this PR pays it.
+// Empty again, and that is the point.
+var producerPending = []exemption{}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the
