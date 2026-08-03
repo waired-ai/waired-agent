@@ -1,6 +1,6 @@
 ---
 title: Privacy
-description: What stays on your machines by default, what each opt-in sharing tier means, and why Waired never silently sends your data anywhere.
+description: What stays on your machines by default, what each opt-in sharing step means, and why Waired never silently sends your data anywhere.
 meta:
   audience: Anyone who wants to know what leaves their computer
   needs: Nothing
@@ -47,10 +47,10 @@ explicit opt-in with its own consent step — and an immediate off switch.
 
 Waired deliberately avoids "quietly send your data somewhere else" behavior.
 The one place a cloud fallback exists — the
-[Claude Code integration](/guides/claude-code/) — is **fail-open and
-visible**: if your local serving is down, Claude Code falls back to the real
-Anthropic API so it keeps working, and you can see the routing state at any
-time with `waired claude status` or `waired doctor`. Public and team routing
+[Claude Code integration](/guides/claude-code/) — **keeps working instead
+of failing, and always tells you**: if your local model is down, Claude Code
+falls back to the real Anthropic API, and you can see the routing state at
+any time with `waired claude status` or `waired doctor`. Public and team routing
 never happens silently either: it exists only after you explicitly opted in
 and accepted the consent message, and you can see the current state at any
 time with `waired public status`. You stay in control of when your own model
@@ -64,8 +64,9 @@ own devices. Privacy-wise this sits **between** all-local and all-Anthropic, and
 it only happens because you set it: the bulk file reading subagents do stays on
 Waired, but whatever the main conversation itself reads or discusses — including
 the summaries subagents report back — goes to Anthropic, exactly as it would
-without Waired. To keep a class strictly on your own hardware, choose the
-`waired` route for it (`--subagents waired` above keeps subagents local even
+without Waired. To keep the main conversation or the subagents strictly on
+your own hardware, choose the `waired` route for that part
+(`--subagents waired` above keeps subagents local even
 while the main conversation uses Anthropic). The default remains
 everything on Waired.
 
