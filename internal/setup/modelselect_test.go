@@ -163,6 +163,47 @@ func TestSelectBundledModel(t *testing.T) {
 		}
 	})
 
+	// Forcing inference on says WHETHER it runs, not WHICH model runs, so
+	// a forced under-spec host still needs an id — and with no compiled-in
+	// default there is nothing to fall back to but the below-floor fit.
+	// Without this the daemon would boot inference on and pre-pull nothing.
+	t.Run("under-spec-forced-with-nothing-configured-takes-the-below-floor-fit", func(t *testing.T) {
+		in := baseInputs(cpuProfile(2), manifests)
+		in.Forced = true
+		in.Inference.BundledModelID = "" // agentconfig.Defaults()
+		sel, err := SelectBundledModel(in)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if !sel.EnableInference {
+			t.Errorf("forced inference must stay enabled even under-spec")
+		}
+		if sel.BelowFloorModelID == "" {
+			t.Fatal("a 2 GB host should still have a below-floor fit")
+		}
+		if sel.ModelID != sel.BelowFloorModelID {
+			t.Errorf("ModelID = %q, want the below-floor fit %q", sel.ModelID, sel.BelowFloorModelID)
+		}
+	})
+
+	t.Run("nothing-fits-forced-leaves-the-model-unset", func(t *testing.T) {
+		// 1 GB: nothing fits at any tier, so there is no honest id to
+		// invent. Forced keeps inference on; the model stays unchosen.
+		in := baseInputs(cpuProfile(1), manifests)
+		in.Forced = true
+		in.Inference.BundledModelID = ""
+		sel, err := SelectBundledModel(in)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if !sel.EnableInference {
+			t.Errorf("forced inference must stay enabled")
+		}
+		if sel.ModelID != "" {
+			t.Errorf("ModelID = %q, want empty — nothing fits this host", sel.ModelID)
+		}
+	})
+
 	t.Run("pinned-skips-autoselection", func(t *testing.T) {
 		in := baseInputs(cpuProfile(32), manifests) // capable host
 		in.Pinned = true

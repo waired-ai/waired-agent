@@ -237,7 +237,7 @@ func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, modelID strin
 		return
 	}
 	p.logger.Info("hf pull job completed", "model", modelID, "job", jobID)
-	if modelID == p.cfg.BundledModelID {
+	if p.isBundledModel(modelID) {
 		p.activateBundledIfUnset(modelID, variant.VariantID)
 	}
 	p.activatePreferredIfNeeded(modelID, variant.VariantID)
@@ -256,7 +256,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	manifest, variant, ok := p.vllmTarget()
 	if !ok {
 		p.logger.Error("vllm bootstrap: no vLLM-capable model selected — set a preferred model that ships a vllm/safetensors variant (e.g. gpt-oss-20b)",
-			"bundled", p.cfg.BundledModelID)
+			"bundled", p.bundledModelID())
 		return
 	}
 

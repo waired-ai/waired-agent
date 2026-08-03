@@ -75,6 +75,17 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 type InferenceConfig struct {
 	// BundledModelID is the manifest model_id auto-pulled at agent
 	// startup when PullOnStartup is true.
+	//
+	// It has NO compiled-in default, deliberately. The value is the
+	// output of hardware-aware selection (setup.SelectBundledModel,
+	// #517) or an operator's explicit pin — both of which know things a
+	// constant cannot. The constant that used to sit here named
+	// qwen2.5-coder-7b-instruct, a 32k-window model that
+	// router.SelectInstallModel excludes on every host, because the
+	// #624 coding-agent context floor rejects the window: a default that
+	// was not merely stale but unreachable by the picker that is
+	// supposed to produce it. Empty means "not chosen yet"; the pre-pull
+	// and the vLLM target both skip rather than guess.
 	BundledModelID string `json:"bundled_model_id"`
 
 	// PullOnStartup enables a background `ollama pull` of the bundled
@@ -556,7 +567,7 @@ func (c InferenceConfig) ResolvedOllamaPort() int {
 func Defaults() Config {
 	return Config{
 		Inference: InferenceConfig{
-			BundledModelID:           "qwen2.5-coder-7b-instruct",
+			// BundledModelID is deliberately absent — see its field doc.
 			PullOnStartup:            true,
 			IdleTimeout:              Duration(10 * time.Minute),
 			MaxCacheGB:               100,

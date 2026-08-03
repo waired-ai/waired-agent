@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -34,24 +35,18 @@ import (
 // verdict (EnableInference=false) correctly forces the --disable-inference path.
 func maybeSelectBundledModelForFreshInstall(cfg *agentconfig.Config, disableInference bool, agentJSONPath, stateDir string, fs *flag.FlagSet) {
 	prefPath := filepath.Join(stateDir, "inference", agentconfig.PreferenceFileName)
-	if !shouldAutoSelectBundledModel(
-		disableInference,
-		fileExists(agentJSONPath),
-		fileExists(prefPath),
-		anyInferenceFlagSet(fs),
-		os.Environ(),
-	) {
+	intent := resolveInferenceIntent(disableInference, fs, os.Environ())
+	if !shouldAutoSelectBundledModel(fileExists(agentJSONPath), fileExists(prefPath), intent) {
 		return
 	}
 
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warn: bundled catalog unavailable (%v); keeping default model %s\n",
-			err, cfg.Inference.BundledModelID)
+		fmt.Fprintf(os.Stderr, "warn: bundled catalog unavailable (%v); %s\n",
+			err, describeUnselectedModel(cfg.Inference.BundledModelID))
 		return
 	}
 
-	// Fresh install with no operator preference ⇒ neither pinned nor forced.
 	prof := hardware.NewProfiler("").Profile(context.Background())
 	sel, err := setup.SelectBundledModel(setup.BundledModelInputs{
 		Hardware:      prof,
@@ -60,10 +55,12 @@ func maybeSelectBundledModelForFreshInstall(cfg *agentconfig.Config, disableInfe
 		StateDir:      stateDir,
 		FloorTier:     router.InstallQualityFloorTier,
 		FreeDiskBytes: hardware.FreeDiskBytes,
+		Pinned:        intent.Pinned,
+		Forced:        intent.Forced,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warn: bundled model selection failed (%v); keeping %s\n",
-			err, cfg.Inference.BundledModelID)
+		fmt.Fprintf(os.Stderr, "warn: bundled model selection failed (%v); %s\n",
+			err, describeUnselectedModel(cfg.Inference.BundledModelID))
 		return
 	}
 
@@ -94,35 +91,107 @@ func applyBundledSelection(cfg *agentconfig.Config, sel setup.BundledModelSelect
 	}
 }
 
-// shouldAutoSelectBundledModel reports whether the daemon should run the
-// install-time hardware-aware bundled-model selection. It fires only on a
-// pristine fresh install: no persisted agent.json, no persisted model
-// preference, and no operator inference preference expressed via a
-// --disable-inference / --inference-* flag or a WAIRED_INFERENCE_* env var. Any
-// such signal means the operator has already chosen, so the daemon defers to
-// them. Pure (every probe is passed in) so the decision is table-testable.
-func shouldAutoSelectBundledModel(disableInference, agentJSONExists, preferenceExists, inferenceFlagSet bool, environ []string) bool {
-	if disableInference || agentJSONExists || preferenceExists || inferenceFlagSet {
-		return false
-	}
-	for _, e := range environ {
-		if strings.HasPrefix(e, "WAIRED_INFERENCE_") {
-			return false
-		}
-	}
-	return true
+// inferenceIntent is what the operator said about the MODEL, as opposed to
+// how the engine is wired. Ports, cache sizes, TTFB budgets and vLLM knobs
+// configure an engine; they cannot say which model belongs on a machine, and
+// treating them as if they could is how a fresh install ends up pre-pulling a
+// model its host cannot serve.
+//
+// Skip dominates: when it is set the other two are moot.
+type inferenceIntent struct {
+	// Skip means auto-selection must not run at all — inference is off,
+	// or the operator's own preferred model owns the serving path (#306).
+	Skip bool
+	// Pinned means a bundled model id was named, so selection honours it
+	// verbatim instead of ranking the catalog.
+	Pinned bool
+	// Forced means inference was explicitly turned on, so an under-spec
+	// host is warned rather than silently disabled.
+	Forced bool
 }
 
-// anyInferenceFlagSet reports whether any inference-controlling flag was
-// explicitly set on the command line (--disable-inference or any --inference-*).
-func anyInferenceFlagSet(fs *flag.FlagSet) bool {
-	set := false
+// resolveInferenceIntent reads the operator's model-level intent off the boot
+// flags and environment. Pure (every input is passed in) so the decision is
+// table-testable, per the (facts) -> plan seam style.
+//
+// Env is read first and flags second because that is the config precedence
+// the rest of the daemon uses (defaults < agent.json < env < flags), so a
+// flag must win over an env var on the same axis.
+func resolveInferenceIntent(disableInference bool, fs *flag.FlagSet, environ []string) inferenceIntent {
+	var (
+		in inferenceIntent
+		// nil until the operator says something about whether inference
+		// runs at all; that is a different state from "said off".
+		enabled *bool
+	)
+
+	for _, e := range environ {
+		key, val, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "WAIRED_INFERENCE_ENABLED":
+			enabled = parseEnablement(val)
+		case "WAIRED_INFERENCE_BUNDLED_MODEL_ID":
+			in.Pinned = true
+		case "WAIRED_INFERENCE_PREFERRED_MODEL_ID":
+			in.Skip = true
+		}
+	}
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "disable-inference" || strings.HasPrefix(f.Name, "inference-") {
-			set = true
+		switch f.Name {
+		case "inference-enabled":
+			enabled = parseEnablement(f.Value.String())
+		case "inference-bundled-model-id":
+			in.Pinned = true
+		case "inference-preferred-model-id":
+			in.Skip = true
 		}
 	})
-	return set
+
+	// --disable-inference is the flag main.go forces on when the config
+	// says inference is off, so it outranks a contradictory enablement.
+	in.Skip = in.Skip || disableInference || (enabled != nil && !*enabled)
+	in.Forced = !in.Skip && enabled != nil && *enabled
+	return in
+}
+
+// parseEnablement reads an enablement value into "on" / "off". An unreadable
+// value resolves to off: the operator did say something about whether
+// inference runs, and deferring is safer than guessing they meant on —
+// agentconfig.MergeEnv rejects the same value a moment later anyway.
+func parseEnablement(val string) *bool {
+	on, err := strconv.ParseBool(val)
+	if err != nil {
+		on = false
+	}
+	return &on
+}
+
+// shouldAutoSelectBundledModel reports whether the daemon should run the
+// install-time hardware-aware bundled-model selection. It fires only on a
+// pristine fresh install — no persisted agent.json, no persisted model
+// preference — that the operator has not opted out of.
+//
+// A pin or a force does NOT stop selection: those are inputs to it
+// (BundledModelInputs.Pinned / .Forced), and skipping the selector would
+// throw away the hardware profile the operator never asked to discard.
+// Pure (every probe is passed in) so the decision is table-testable.
+func shouldAutoSelectBundledModel(agentJSONExists, preferenceExists bool, intent inferenceIntent) bool {
+	return !agentJSONExists && !preferenceExists && !intent.Skip
+}
+
+// describeUnselectedModel is the tail of the two "selection did not happen"
+// warnings. There is no compiled-in default any more, so on a fresh install
+// the id is empty and the honest report is that nothing was chosen — not
+// that some named model is being "kept".
+func describeUnselectedModel(modelID string) string {
+	if modelID == "" {
+		return "no bundled model selected; local inference starts without one " +
+			"(choose one with `waired models pull`)"
+	}
+	return fmt.Sprintf("keeping the configured model %s", modelID)
 }
 
 // fileExists reports whether path resolves to an existing filesystem entry.
