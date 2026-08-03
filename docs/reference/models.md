@@ -107,7 +107,7 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `qwen3.5-0.8b` | `q8-gguf` | ollama-tag | Q8_0 | ollama | 12 | 6 | 1.0 | 2 | — | 0.8B | hybrid_mamba | 12,288 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:0.8b-q8_0 | — |
 | `qwen3.5-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 69 | 4 | 17.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:27b-q4_K_M | — |
 | `qwen3.5-2b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 27 | 4 | 1.9 | 4 | — | 2B | hybrid_mamba | 12,288 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:2b-q4_K_M | — |
-| `qwen3.5-4b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 42 | 4 | 3.4 | 8 | — | 4B | hybrid_mamba | 12,288 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:4b-q4_K_M | — |
+| `qwen3.5-4b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 42 | 4 | 3.4 | 8 | — | 4B | hybrid_mamba | 32,768 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:4b-q4_K_M | — |
 | `qwen3.5-9b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 52 | 4 | 6.6 | 12 | — | 9B | hybrid_mamba | 32,768 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.5:9b-q4_K_M | — |
 | `qwen3.6-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 71 | 4 | 18.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-mtp-q4_K_M | 0.30.0 |
 | `qwen3.6-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 70 | 4 | 16.3 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-q4_K_M | — |

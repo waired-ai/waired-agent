@@ -80,14 +80,21 @@ func SelectInstallModel(in PickInput, minTier int) (above []Pick, ok bool, err e
 	// nothing fits at all: it enrols, routes to peers, and runs no local
 	// engine.
 	//
-	// The concession is smaller than the old comment's example suggests.
-	// The 262144-native class scales down to variants a laptop holds with
-	// a full 200k KV cache, so a host that used to land on a 32k-window
-	// model at a comparable tier now lands on a 200k-window one instead
-	// (hostfit's TestOllamaWindowResidentMB_SmallHostCanDeclare200k walks
-	// the shipped catalog for the smallest such variant). What is
-	// genuinely lost is the 131072-native class, which no host can serve
-	// a coding session on however large it is.
+	// The concession is smaller than the old comment's example suggests,
+	// but it is NOT nil, and this comment used to say it was. The
+	// 262144-native class scales down to variants an 8 GB CARD holds with
+	// a full 200k KV cache — qwen3.5-4b at 7539 MiB, which hostfit's
+	// TestOllamaWindowResidentMB_SmallHostCanDeclare200k finds by walking
+	// the shipped catalog. It does NOT scale down to an 8 GB unified-
+	// memory host: the same variant on a 6144 MiB carve-out holds ~120k,
+	// so an 8 GB Mac has nothing above the tier floor that also reaches
+	// the window, and this function calls it under-spec. That case was
+	// obscured until waired-agent#448 corrected qwen3.5-4b's KV
+	// annotation from its 2b sibling's value; the model was never holding
+	// 200k there, the manifest just said it was.
+	//
+	// What is genuinely lost regardless is the 131072-native class, which
+	// no host can serve a coding session on however large it is.
 	if len(above) == 0 && !in.NoRecommendGate {
 		in.NoRecommendGate = true
 		return SelectInstallModel(in, minTier)

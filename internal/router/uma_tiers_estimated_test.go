@@ -45,8 +45,27 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		wantQuality int
 		note        string
 	}{
-		{8, "qwen3.5-4b", "q4-gguf", 42,
-			"#624: coder-7b (q45, 32k-native) is below the context floor; the 3.4 GB qwen3.5-4b serves the full ~200k on the 6144 MB budget (its KV is tiny). #424's coder-7b-fits finding still holds for explicit picks"},
+		// RECORD OF TODAY'S BEHAVIOUR, not a contract — and it is a
+		// DEMOTION from qwen3.5-4b (q42), taken deliberately in #448.
+		//
+		// The 4b's KV was annotated at 12288 B/token, the value of its 2b
+		// sibling; its architecture derives 32768 (8 full-attention layers
+		// x 4 KV heads x 256 head_dim x 2 x 2 bytes) and a real engine load
+		// measures exactly that. On the 6144 MB budget the honest figure
+		// leaves the 4b holding ~120k, not the ~200k the old number
+		// claimed — so the row above did not describe a machine that could
+		// serve the floor window, it described an under-stated input.
+		//
+		// The consequence is NOT contained here: q27 is below
+		// InstallQualityFloorTier (30), so an 8 GB Mac now reports
+		// under-spec and installs no local engine at all. That is the
+		// install path converting a quality judgement into a hard
+		// outcome, which is a separate defect — waired-ai/waired#1056.
+		// This row is the sentinel for it: when #1056 lands, an 8 GB Mac
+		// should be OFFERED this pick rather than dropped, and this
+		// expectation is where that shows up first.
+		{8, "qwen3.5-2b", "q4-gguf", 27,
+			"#448: the 4b's real KV (32768) leaves ~120k on the 6144 MB budget, below the ~200k floor — 2b is the best floor-passing fit. Below InstallQualityFloorTier, so SelectInstallModel calls this host under-spec (waired-ai/waired#1056)"},
 		{12, "qwen3.5-4b", "q4-gguf", 42,
 			"#624: the 6.6 GB 9b fits by residency but its no-spill window on the 9216 MB budget is ~121k < floor (UMA gets no spill allowance) — 4b keeps the full window"},
 		{16, "qwen3.5-9b", "q4-gguf", 52, "confirmed on real Apple M4 (16 GB); 9b's no-spill window ~318k clears the floor here"},
@@ -122,26 +141,54 @@ func TestUMA8GBFitsMidModelsOnMetal(t *testing.T) {
 
 // TestUMABudgetGovernsNotRAM verifies the residency budget (UsableVRAMMB),
 // not RAMTotalGB, is authoritative on UMA hosts: a 64 GB Mac whose operator
-// capped iogpu.wired_limit_mb to 6144 MB picks the same model as an 8 GB Mac
-// (qwen3.5-4b under the #624 context floor), not a model sized to its 64 GB
-// of RAM. This guards the UMA fit path the issue cares about.
+// capped iogpu.wired_limit_mb to 6144 MB picks what an 8 GB Mac picks, not a
+// model sized to its 64 GB of RAM. This guards the UMA fit path the issue
+// cares about.
+//
+// Asserted as an EQUALITY against the 8 GB Mac's own pick rather than
+// against a model id. The property is "the budget governs"; naming the
+// model made this test restate the tier table above, so a catalog change
+// that moved both picks identically still had to be edited in two places
+// (#448 was such a change). Only a divergence between the two hosts can
+// fail it now, which is the thing that would actually mean RAM had crept
+// back into the decision.
 func TestUMABudgetGovernsNotRAM(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
-	hw := syntheticAppleUMA(64, 6144) // 64 GB RAM but only 6 GB GPU-addressable
-	pick, err := PickModel(PickInput{
-		Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama,
-		EngineVersion: runtime.OllamaPinnedVersion,
-	})
-	if err != nil {
-		t.Fatalf("PickModel: %v", err)
+	pick := func(hw hardware.Profile) Pick {
+		t.Helper()
+		p, err := PickModel(PickInput{
+			Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama,
+			EngineVersion: runtime.OllamaPinnedVersion,
+		})
+		if err != nil {
+			t.Fatalf("PickModel: %v", err)
+		}
+		return p
 	}
-	t.Logf("64 GB RAM / 6144 MB UMA budget: pick=%s/%s q%d",
-		pick.Manifest.ModelID, pick.Variant.VariantID, pick.Variant.QualityTier)
-	if pick.Manifest.ModelID != "qwen3.5-4b" {
-		t.Errorf("budget-capped pick = %s, want qwen3.5-4b (UMA budget, not 64 GB RAM, must govern; #624 floor excludes the 32k coder-7b)", pick.Manifest.ModelID)
+	capped := pick(syntheticAppleUMA(64, 6144)) // 64 GB RAM, 6 GB GPU-addressable
+	small := pick(syntheticAppleUMA(8, 0))      // 8 GB RAM, same 6144 MB budget
+	uncapped := pick(syntheticAppleUMA(64, 0))  // what 64 GB of RAM would reach
+
+	t.Logf("64 GB RAM / 6144 MB budget: %s/%s q%d | 8 GB Mac: %s/%s q%d | uncapped 64 GB: %s/%s q%d",
+		capped.Manifest.ModelID, capped.Variant.VariantID, capped.Variant.QualityTier,
+		small.Manifest.ModelID, small.Variant.VariantID, small.Variant.QualityTier,
+		uncapped.Manifest.ModelID, uncapped.Variant.VariantID, uncapped.Variant.QualityTier)
+
+	if capped.Manifest.ModelID != small.Manifest.ModelID ||
+		capped.Variant.VariantID != small.Variant.VariantID {
+		t.Errorf("budget-capped 64 GB Mac picked %s/%s but an 8 GB Mac on the same 6144 MB "+
+			"budget picked %s/%s — the UMA budget, not RAMTotalGB, must govern",
+			capped.Manifest.ModelID, capped.Variant.VariantID,
+			small.Manifest.ModelID, small.Variant.VariantID)
+	}
+	// Without this the equality above would also hold if the budget were
+	// ignored entirely and every Mac picked the same model.
+	if uncapped.Manifest.ModelID == capped.Manifest.ModelID {
+		t.Errorf("an uncapped 64 GB Mac picked %s too, so this test cannot tell a governing "+
+			"budget from a catalog with only one viable model", uncapped.Manifest.ModelID)
 	}
 }
 
