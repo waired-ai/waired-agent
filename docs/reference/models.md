@@ -1,18 +1,18 @@
 # モデルカタログ（提供モデル一覧）
 
-Waired が bundled で提供するローカル LLM の一覧。固定エイリアス、ファミリ概要、全バリアントの数値（量子化・VRAM/RAM 下限・品質ティア・vendor support）を `internal/catalog/bundled` から機械生成する。
+Waired が同梱するローカル LLM の一覧。エイリアス、ファミリ概要、全バリアントの数値（量子化・VRAM/RAM 下限・品質スコア・vendor support）を `proto/catalog/bundled` から自動生成する。
 
 このページは Waired のエージェントが**標準で扱えるモデル**の一覧である。「どのモデルが用意されているか」「`waired/default` が実際にどのモデルへ解決されるか」を一望できる。
 
-- 一覧の正本は `internal/catalog/bundled/*.json`（バイナリに `//go:embed` される）。型は `internal/catalog/manifest.go` の `Manifest` / `Variant`。
-- 下表は `catalog-tool docs`（`cmd/catalog-tool/docs.go`）が bundled manifest から**機械生成**する。`<!-- BEGIN GENERATED ... -->` / `<!-- END GENERATED ... -->` の間だけが生成対象で、その外側の本文は手書き。
-- 鮮度保証: bundled JSON を変更したのに本ページを再生成し忘れると CI（`catalog-tool docs --check`）が落ちる。週次の catalog-radar（monorepo #413、.github/workflows/catalog-radar.yml）が出す draft PR も同じ経路で本ページを更新する。手で表を編集しないこと。
+- 一覧の単一の情報源（source of truth）は `proto/catalog/bundled/*.json`（バイナリに `//go:embed` される）。型は `internal/catalog/manifest.go` の `Manifest` / `Variant`。
+- 下表は `catalog-tool docs`（`cmd/catalog-tool/docs.go`）が bundled manifest から**自動生成**する。`<!-- BEGIN GENERATED ... -->` / `<!-- END GENERATED ... -->` の間だけが生成対象で、その外側の本文は手書き。
+- 生成物の同期チェック: bundled JSON を変更したのに本ページを再生成し忘れると CI（`catalog-tool docs --check`）が落ちる。週次の catalog-radar（monorepo #413、.github/workflows/catalog-radar.yml）が出す draft PR も同じ手順で本ページを更新する。手で表を編集しないこと。
 
-コーディングエージェントが提示する固定別名は `waired/default`（コーディング既定）・`waired/coding`・`waired/small` の 3 つ。**旧 `waired/auto` は #422/#478 で `waired/default` に改称済み**で、現行のプラグイン / 同梱 UI はすべて `waired/default` を emit する。
+コーディングエージェントが提示するエイリアスは `waired/default`（コーディング既定）・`waired/coding`・`waired/small` の 3 つ。**旧 `waired/auto` は #422/#478 で `waired/default` に改称済み**で、現行のプラグイン / 同梱 UI はすべて `waired/default` を出力する。
 
-**表の構成**: 「ファミリ概要」「全バリアント（数値）」はいずれも **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。エンジン（`runtime_support`）はバリアント単位なので、両エンジン向けのビルドを持つファミリは Ollama 節と vLLM 節の両方に再掲される（自分のハードに対応する節だけ読めばよい）。Dense / MoE はファミリ単位（`active_params`）で、Dense=全パラメータが毎トークン計算で計算 / VRAM に余裕がある環境向き、MoE=総サイズは大きいがアクティブ少でメモリリッチな Unified メモリ機（Apple Silicon・Strix Halo）向き。エンジン自動判定の規則は dev-docs の「推論層 → engine picker」を参照。
+**表の構成**: 「ファミリ概要」「全バリアント（数値）」はいずれも **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。エンジン（`runtime_support`）はバリアント単位なので、両エンジン向けのビルドを持つファミリは Ollama 節と vLLM 節の両方に再掲される（自分のハードに対応する節だけ読めばよい）。Dense / MoE はファミリ単位（`active_params`）で、Dense=毎トークン全パラメータを計算するため計算 / VRAM に余裕がある環境向き、MoE=総サイズは大きいがアクティブパラメータが少なく、大容量のユニファイドメモリを積んだマシン（Apple Silicon・Strix Halo）向き。エンジン自動判定の規則は dev-docs の「推論層 → engine picker」を参照。
 
-モデルの**選び方**（hardware 適合・auto 選択・ピア間フォールバック・品質ティアの算出）は dev-docs の「推論層」を、コーディングエージェントから別名で叩く仕組みは「コーディングエージェント連携」を参照。
+モデルの**選び方**（ハードウェア要件との適合判定・自動選択・ピア間フォールバック・品質スコアの算出）は dev-docs の「推論層」を、コーディングエージェントから別名で叩く仕組みは「コーディングエージェント連携」を参照。
 
 ## bundled カタログ
 
@@ -157,11 +157,11 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 
 新しいモデルを bundled に加える流れ（詳細は monorepo dev-docs の「CI/CD & リリース」catalog-radar 節）:
 
-1. `catalog-tool radar` が HuggingFace を走査して候補を surface（週次 `catalog-radar.yml`、#413）。
-2. `catalog-tool compute` / `tier` / `draft` が VRAM/KV/FLOPs と `quality_tier` を**決定論的に**算出し、`internal/catalog/bundled/<id>.json` の manifest を組み立てる。
+1. `catalog-tool radar` が HuggingFace を走査して候補を洗い出す（週次 `catalog-radar.yml`、#413）。
+2. `catalog-tool compute` / `tier` / `draft` が VRAM/KV/FLOPs と `quality_tier` を**決定論的に**算出し、`proto/catalog/bundled/<id>.json` の manifest を組み立てる。
 3. `catalog-tool validate --all` が manifest 妥当性 + catalog 全体での `quality_tier` 一意性を検査。
 4. `catalog-tool docs`（= `make catalog-docs`）が本ページの生成ブロックを更新。
-5. bot は **draft PR** を開くだけで自動マージはしない。GPU レーンの検証 + 人手レビューを経てマージ。
+5. bot は **draft PR** を開くだけで自動マージはしない。GPU を使う CI ジョブでの検証 + 人手レビューを経てマージ。
 
 数値は手計算せず常に `catalog-tool` が再導出する設計のため、本ページの表もコミットに含めれば実装と乖離しない。
 
