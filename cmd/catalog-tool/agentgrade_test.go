@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,10 +101,16 @@ func caseList(t *testing.T, cs ...caseResult) []any {
 	t.Helper()
 	out := make([]any, 0, len(cs))
 	for _, c := range cs {
-		out = append(out, map[string]any{
+		m := map[string]any{
 			"case": c.Case, "verdict": c.Verdict,
 			"trials": c.Trials, "failed_trials": c.FailedTrials,
-		})
+		}
+		// Omitted when absent, so a case built without a tally round-trips
+		// as a pre-counter report rather than as an empty one.
+		if c.Verdicts != nil {
+			m["verdicts"] = c.Verdicts
+		}
+		out = append(out, m)
 	}
 	return out
 }
@@ -130,11 +137,11 @@ func reportWith(t *testing.T, transport string, cs ...caseResult) probeReport {
 // halve the evidence a retirement decision reads.
 func TestPool_SumsTrialsAndKeepsTheWorstVerdict(t *testing.T) {
 	u := reportWith(t, agentgrade.TransportUnary,
-		caseResult{"greeting", "fail_malformed_tool_call", 12, 1},
-		caseResult{"read-file", "pass", 12, 0})
+		caseResult{Case: "greeting", Verdict: "fail_malformed_tool_call", Trials: 12, FailedTrials: 1},
+		caseResult{Case: "read-file", Verdict: "pass", Trials: 12, FailedTrials: 0})
 	s := reportWith(t, agentgrade.TransportStream,
-		caseResult{"greeting", "warn_unprompted_tool_call", 12, 0},
-		caseResult{"read-file", "pass", 12, 0})
+		caseResult{Case: "greeting", Verdict: "warn_unprompted_tool_call", Trials: 12, FailedTrials: 0},
+		caseResult{Case: "read-file", Verdict: "pass", Trials: 12, FailedTrials: 0})
 
 	got, err := pool([]probeReport{u, s})
 	if err != nil {
@@ -163,7 +170,7 @@ func TestPool_SumsTrialsAndKeepsTheWorstVerdict(t *testing.T) {
 // A pass on both stays a pass — the pooling must not manufacture failure
 // out of two clean runs.
 func TestPool_TwoCleanRunsStayClean(t *testing.T) {
-	c := caseResult{"read-file", "pass", 12, 0}
+	c := caseResult{Case: "read-file", Verdict: "pass", Trials: 12, FailedTrials: 0}
 	got, err := pool([]probeReport{
 		reportWith(t, agentgrade.TransportUnary, c),
 		reportWith(t, agentgrade.TransportStream, c),
@@ -179,7 +186,7 @@ func TestPool_TwoCleanRunsStayClean(t *testing.T) {
 // Pooling across a different model, fixture or harness would produce a
 // verdict spanning two things — the silent mixing #426 exists to end.
 func TestPool_RefusesIncomparableRuns(t *testing.T) {
-	base := reportWith(t, agentgrade.TransportUnary, caseResult{"read-file", "pass", 12, 0})
+	base := reportWith(t, agentgrade.TransportUnary, caseResult{Case: "read-file", Verdict: "pass", Trials: 12, FailedTrials: 0})
 	for _, tc := range []struct {
 		name   string
 		mutate func(*probeReport)
@@ -190,7 +197,7 @@ func TestPool_RefusesIncomparableRuns(t *testing.T) {
 		{"different harness", func(r *probeReport) { r.AgentRevision = "ffffffffffff" }, "agent_revision"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			other := reportWith(t, agentgrade.TransportStream, caseResult{"read-file", "pass", 12, 0})
+			other := reportWith(t, agentgrade.TransportStream, caseResult{Case: "read-file", Verdict: "pass", Trials: 12, FailedTrials: 0})
 			tc.mutate(&other)
 			_, err := pool([]probeReport{base, other})
 			if err == nil {
@@ -205,12 +212,138 @@ func TestPool_RefusesIncomparableRuns(t *testing.T) {
 
 // A single report still pools, and reports its own transport verbatim.
 func TestPool_SingleReportIsUnchanged(t *testing.T) {
-	r := reportWith(t, agentgrade.TransportStream, caseResult{"read-file", "pass", 12, 0})
+	r := reportWith(t, agentgrade.TransportStream, caseResult{Case: "read-file", Verdict: "pass", Trials: 12, FailedTrials: 0})
 	got, err := pool([]probeReport{r})
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}
 	if got.Transport != agentgrade.TransportStream || got.Trials != 12 {
 		t.Errorf("transport=%q trials=%d", got.Transport, got.Trials)
+	}
+}
+
+// Pooling two runs adds their per-class tallies, the same way it adds
+// their trial counts. Anything less and a stored tally would describe
+// one transport while the ratio beside it describes both.
+func TestPool_SumsVerdictClasses(t *testing.T) {
+	u := reportWith(t, agentgrade.TransportUnary, caseResult{
+		Case: "read-file", Verdict: "fail_no_tool_call", Trials: 12, FailedTrials: 1,
+		Verdicts: map[string]int{"pass": 9, "warn_invalid_tool_arguments": 2, "fail_no_tool_call": 1},
+	})
+	s := reportWith(t, agentgrade.TransportStream, caseResult{
+		Case: "read-file", Verdict: "warn_invalid_tool_arguments", Trials: 12, FailedTrials: 0,
+		Verdicts: map[string]int{"pass": 8, "warn_invalid_tool_arguments": 4},
+	})
+
+	got, err := pool([]probeReport{u, s})
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	want := map[string]int{"pass": 17, "warn_invalid_tool_arguments": 6, "fail_no_tool_call": 1}
+	if !maps.Equal(got.Results[0].Verdicts, want) {
+		t.Errorf("verdicts = %v, want %v", got.Results[0].Verdicts, want)
+	}
+	// The tally has to keep agreeing with the totals beside it.
+	sum := 0
+	for _, n := range got.Results[0].Verdicts {
+		sum += n
+	}
+	if sum != got.Results[0].Trials {
+		t.Errorf("tally sums to %d but trials = %d", sum, got.Results[0].Trials)
+	}
+}
+
+// pool must not write through into the reports it was handed. The
+// unpooled report is what scripts/dev/agentgrade-pool.py prints for the
+// side-by-side view, and --import is given the same file twice often
+// enough (a re-run of one transport) that an aliased map would show up as
+// doubled counts rather than as a crash.
+func TestPool_DoesNotMutateItsInput(t *testing.T) {
+	c := caseResult{
+		Case: "read-file", Verdict: "pass", Trials: 12,
+		Verdicts: map[string]int{"pass": 12},
+	}
+	u := reportWith(t, agentgrade.TransportUnary, c)
+	s := reportWith(t, agentgrade.TransportStream, c)
+
+	if _, err := pool([]probeReport{u, s}); err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	if got := u.Results[0].Verdicts["pass"]; got != 12 {
+		t.Errorf("pool wrote through into its input: pass = %d, want 12", got)
+	}
+}
+
+// A run measured before the probe tallied classes cannot contribute one,
+// so pooling it with a run that can must drop the tally rather than
+// report a partial one.
+//
+// A tally summing to 12 next to trials=24 does not read as "one run
+// predates the counter"; it reads as "12 trials produced no verdict",
+// which is not a thing that can happen. Unknown is the honest answer, and
+// it is the same answer Trials == 0 gives for the ratio.
+func TestPool_RefusesToTallyAcrossAPreCounterRun(t *testing.T) {
+	old := reportWith(t, agentgrade.TransportUnary, caseResult{
+		Case: "read-file", Verdict: "pass", Trials: 12,
+	})
+	fresh := reportWith(t, agentgrade.TransportStream, caseResult{
+		Case: "read-file", Verdict: "pass", Trials: 12,
+		Verdicts: map[string]int{"pass": 12},
+	})
+
+	for _, tc := range []struct {
+		name string
+		reps []probeReport
+	}{
+		{"old first", []probeReport{old, fresh}},
+		{"new first", []probeReport{fresh, old}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := pool(tc.reps)
+			if err != nil {
+				t.Fatalf("pool: %v", err)
+			}
+			if got.Results[0].Verdicts != nil {
+				t.Errorf("verdicts = %v, want none — one run cannot report classes",
+					got.Results[0].Verdicts)
+			}
+			if got.Results[0].Trials != 24 {
+				t.Errorf("trials = %d, want 24 — the ratio still pools", got.Results[0].Trials)
+			}
+		})
+	}
+}
+
+// The rate table's class column, which is the whole reason the counts are
+// stored where a reader can see them.
+func TestDescribeClasses(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		counts map[string]int
+		want   string
+	}{
+		{
+			// Not "" and not "pass×0": a record that predates the counter
+			// knows nothing about classes, which is a different statement
+			// from "only one class occurred".
+			name: "a record with no tally says so",
+			want: "(not counted)",
+		},
+		{
+			name:   "worst class first, not alphabetical",
+			counts: map[string]int{"pass": 20, "fail_no_tool_call": 1, "warn_invalid_tool_arguments": 3},
+			want:   "fail_no_tool_call×1 warn_invalid_tool_arguments×3 pass×20",
+		},
+		{
+			name:   "one class",
+			counts: map[string]int{"pass": 24},
+			want:   "pass×24",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := describeClasses(tc.counts); got != tc.want {
+				t.Errorf("describeClasses(%v) = %q, want %q", tc.counts, got, tc.want)
+			}
+		})
 	}
 }

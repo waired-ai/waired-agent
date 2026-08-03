@@ -174,31 +174,29 @@ func (p Probe) Run(ctx context.Context, model string) (Report, error) {
 		return rep, err
 	}
 
-	// worst[case] keeps the most severe verdict seen; seen[case] tracks
-	// whether every trial agreed; ran/failed count the ratio.
+	// worst[case] keeps the most severe verdict seen; counts[case] is
+	// every trial's verdict tallied by class. The trial total, the
+	// failure count and the flaky flag are all derived from counts —
+	// three parallel maps was three places for the same fact to
+	// disagree, and the one thing none of them recorded was how often a
+	// class that is not the worst occurred.
 	worst := make(map[string]Result, len(Cases))
-	seen := make(map[string]map[Verdict]bool, len(Cases))
-	ran := make(map[string]int, len(Cases))
-	failed := make(map[string]int, len(Cases))
+	counts := make(map[string]map[Verdict]int, len(Cases))
 
 	for t := 0; t < trials; t++ {
 		for _, c := range Cases {
 			res := p.one(ctx, model, c, offered)
-			if seen[c.Name] == nil {
-				seen[c.Name] = map[Verdict]bool{}
+			if counts[c.Name] == nil {
+				counts[c.Name] = map[Verdict]int{}
 			}
-			seen[c.Name][res.Verdict] = true
-			ran[c.Name]++
-			if res.Verdict.IsFailure() {
-				failed[c.Name]++
-			}
-			if prev, ok := worst[c.Name]; !ok || severity(res.Verdict) > severity(prev.Verdict) {
+			counts[c.Name][res.Verdict]++
+			if prev, ok := worst[c.Name]; !ok || Severity(res.Verdict) > Severity(prev.Verdict) {
 				worst[c.Name] = res
 			}
 			// An engine that cannot answer ends the run: further trials
 			// would measure the same outage, slowly.
 			if res.Verdict == VerdictError {
-				rep.Results = collect(worst, seen, ran, failed, &rep)
+				rep.Results = collect(worst, counts, &rep)
 				rep.Duration = time.Since(rep.Started).Round(time.Second).String()
 				rep.Grade = GradeUnknown
 				rep.Error = fmt.Sprintf("case %s: %s", res.Case, res.Detail)
@@ -207,7 +205,7 @@ func (p Probe) Run(ctx context.Context, model string) (Report, error) {
 		}
 	}
 
-	rep.Results = collect(worst, seen, ran, failed, &rep)
+	rep.Results = collect(worst, counts, &rep)
 	rep.Duration = time.Since(rep.Started).Round(time.Second).String()
 
 	rep.Grade = GradePass
@@ -221,8 +219,11 @@ func (p Probe) Run(ctx context.Context, model string) (Report, error) {
 
 // collect flattens the per-case worst results into Cases order and
 // records which cases disagreed across trials.
-func collect(worst map[string]Result, seen map[string]map[Verdict]bool,
-	ran, failed map[string]int, rep *Report) []Result {
+//
+// Everything but the worst verdict comes out of the per-class counts, so
+// the ratio a retirement decision reads and the tally a policy change
+// reads can never describe different runs.
+func collect(worst map[string]Result, counts map[string]map[Verdict]int, rep *Report) []Result {
 	out := make([]Result, 0, len(Cases))
 	rep.Flaky = nil
 	for _, c := range Cases {
@@ -230,9 +231,10 @@ func collect(worst map[string]Result, seen map[string]map[Verdict]bool,
 		if !ok {
 			continue
 		}
-		r.Trials = ran[c.Name]
-		r.FailedTrials = failed[c.Name]
-		if len(seen[c.Name]) > 1 {
+		r.Verdicts, r.Trials, r.FailedTrials = tally(counts[c.Name])
+		// More than one class across the trials means the model did not
+		// answer the same case the same way twice.
+		if len(counts[c.Name]) > 1 {
 			rep.Flaky = append(rep.Flaky, c.Name)
 			r.Detail = fmt.Sprintf("%s (%d of %d trials failed — not reproducible)",
 				r.Detail, r.FailedTrials, r.Trials)
@@ -240,6 +242,27 @@ func collect(worst map[string]Result, seen map[string]map[Verdict]bool,
 		out = append(out, r)
 	}
 	return out
+}
+
+// tally copies the per-class counts and derives the two totals from them.
+//
+// Copied rather than aliased: the caller's map is the live accumulator,
+// and a Result that shares it would keep changing after it was collected
+// — which matters because collect runs mid-run on the VerdictError path.
+func tally(counts map[Verdict]int) (map[Verdict]int, int, int) {
+	if len(counts) == 0 {
+		return nil, 0, 0
+	}
+	out := make(map[Verdict]int, len(counts))
+	var trials, failed int
+	for v, n := range counts {
+		out[v] = n
+		trials += n
+		if v.IsFailure() {
+			failed += n
+		}
+	}
+	return out, trials, failed
 }
 
 // Worse returns whichever of two verdicts the probe would have kept
@@ -254,16 +277,22 @@ func collect(worst map[string]Result, seen map[string]map[Verdict]bool,
 // sampling. Re-deriving the severity order at the call site is how a
 // pooled verdict would quietly stop matching a measured one.
 func Worse(a, b Verdict) Verdict {
-	if severity(a) >= severity(b) {
+	if Severity(a) >= Severity(b) {
 		return a
 	}
 	return b
 }
 
-// severity orders verdicts so the worst one across trials survives.
+// Severity orders verdicts so the worst one across trials survives.
 // Error outranks everything because it means the run is not a
 // measurement at all.
-func severity(v Verdict) int {
+//
+// Exported for the same reason Worse is: a caller that displays or pools
+// verdicts has to agree with the probe about which is worse, and the way
+// that agreement breaks is someone re-deriving the order at the call
+// site. The per-class tally (Result.Verdicts) is a map, so anything
+// rendering it needs this to put the worst class first.
+func Severity(v Verdict) int {
 	switch v {
 	case VerdictError:
 		return 6

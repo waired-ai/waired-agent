@@ -151,6 +151,20 @@ type CaseOutcome struct {
 	// Trials and Failed are how often the case ran and failed.
 	Trials int `json:"trials,omitempty"`
 	Failed int `json:"failed,omitempty"`
+
+	// Verdicts counts the trials by verdict class.
+	//
+	// Verdict names only the worst class and Failed pools every failing
+	// one, so between them the record cannot answer "how often did THIS
+	// happen" for anything else that occurred. That is not a
+	// completeness quibble: a class the grading policy might promote to a
+	// failure — warn_invalid_tool_arguments is the open case, #455 — can
+	// only be evaluated against a count taken before the promotion, and
+	// Failed was computed under the rule the promotion would replace.
+	//
+	// Absent on records measured before the probe counted classes. Absent
+	// means UNKNOWN, not zero, exactly as Trials == 0 does.
+	Verdicts map[string]int `json:"verdicts,omitempty"`
 }
 
 // Verdict values stored in agentgrade.json.

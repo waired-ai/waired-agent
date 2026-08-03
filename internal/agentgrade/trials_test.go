@@ -163,14 +163,14 @@ func TestSeverityOrdering(t *testing.T) {
 	// ordering has to put every failure above pass and errors on top —
 	// an error is not a measurement and must not be masked by a later
 	// passing trial.
-	if severity(VerdictError) <= severity(VerdictMalformedToolCall) {
+	if Severity(VerdictError) <= Severity(VerdictMalformedToolCall) {
 		t.Error("error must outrank every quality verdict")
 	}
 	for _, v := range []Verdict{
 		VerdictMalformedToolCall, VerdictUnknownTool,
 		VerdictUnstructuredToolCall, VerdictNoToolCall, VerdictUnpromptedToolCall,
 	} {
-		if severity(v) <= severity(VerdictPass) {
+		if Severity(v) <= Severity(VerdictPass) {
 			t.Errorf("%q must outrank pass", v)
 		}
 	}

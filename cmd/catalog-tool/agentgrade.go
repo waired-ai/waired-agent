@@ -44,6 +44,9 @@ func runAgentGrade(args []string) error {
 	fixtureBytes := fs.Bool("fixture-bytes", false,
 		"print the probe fixture's whole-request size in bytes and exit "+
 			"(the drift canary compares it against the real client's)")
+	sweepTargets := fs.Bool("sweep-targets", false,
+		"print `<model_id> <variant_id> <engine tag>` for every variant a "+
+			"catalog sweep should measure, and exit (scripts/dev/agentgrade-sweep.sh)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -99,6 +102,11 @@ func runAgentGrade(args []string) error {
 		return err
 	}
 
+	if *sweepTargets {
+		printSweepTargets(set, all)
+		return nil
+	}
+
 	gaps := set.CoverageGaps(bundled, rev)
 	failures := set.Failures(bundled)
 
@@ -137,6 +145,38 @@ func runAgentGrade(args []string) error {
 	return nil
 }
 
+// printSweepTargets prints what a whole-catalog re-measurement has to
+// cover, one `model_id variant_id tag` per line.
+//
+// Derived, never typed. A sweep is 17 variants over two transports, and
+// the way one gets missed is a hand-maintained list that a new manifest
+// does not reach — the same failure the coverage guard exists to catch,
+// arriving through the back door. The rule is the same one --check
+// applies: every ollama-servable bundled variant that is not declared
+// unmeasurable.
+//
+// The COMPLETE set, including internal_only. A withheld model is still
+// shipped, and its verdict is the record justifying the withholding
+// (qwen2.5-coder-0.5b, #475) or the reason it was chosen as the CI
+// fixture (granite4-350m) — letting either go stale is how the
+// justification quietly stops being true.
+func printSweepTargets(set catalog.AgentGradeSet, all []catalog.Manifest) {
+	for _, m := range all {
+		if _, ok := set.Unmeasurable[m.ModelID]; ok {
+			continue
+		}
+		for _, v := range m.Variants {
+			if !slices.Contains(v.RuntimeSupport, catalog.RuntimeOllama) {
+				continue
+			}
+			if v.Source.Type != catalog.SourceOllama || v.Source.Tag == "" {
+				continue
+			}
+			fmt.Printf("%s %s %s\n", m.ModelID, v.VariantID, v.Source.Tag)
+		}
+	}
+}
+
 // printFailureRates lists every recorded variant by its worst case's
 // measured failure rate, worst first.
 //
@@ -151,6 +191,7 @@ func printFailureRates(set catalog.AgentGradeSet, manifests []catalog.Manifest) 
 	type row struct {
 		model, variant string
 		worst          catalog.CaseFailureRate
+		classes        map[string]int
 	}
 	var rows []row
 	for _, m := range manifests {
@@ -160,7 +201,8 @@ func printFailureRates(set catalog.AgentGradeSet, manifests []catalog.Manifest) 
 				continue
 			}
 			if worst, counted := rec.WorstCase(); counted {
-				rows = append(rows, row{m.ModelID, v.VariantID, worst})
+				rows = append(rows, row{m.ModelID, v.VariantID, worst,
+					rec.Cases[worst.Case].Verdicts})
 			}
 		}
 	}
@@ -181,10 +223,40 @@ func printFailureRates(set catalog.AgentGradeSet, manifests []catalog.Manifest) 
 		if r.worst.LowerBound > catalog.RetireFailureRate {
 			mark = "→ "
 		}
-		fmt.Printf("  %s%-30s %-14s %-17s %3d/%-3d  >= %3.0f%%\n",
+		fmt.Printf("  %s%-30s %-14s %-17s %3d/%-3d  >= %3.0f%%   %s\n",
 			mark, r.model, r.variant, r.worst.Case,
-			r.worst.Failed, r.worst.Trials, r.worst.LowerBound*100)
+			r.worst.Failed, r.worst.Trials, r.worst.LowerBound*100,
+			describeClasses(r.classes))
 	}
+}
+
+// describeClasses renders one case's per-class tally, worst class first.
+//
+// The ratio column pools every failing class into one number and names
+// only the worst, so two variants reading 3/24 can be three engine parse
+// errors or three different defects — and a variant reading 0/24 can
+// still have produced warnings that a policy change would turn into
+// failures. This is the column that answers those without opening the
+// JSON.
+//
+// "(not counted)" rather than an empty cell: a record measured before
+// the probe tallied classes knows nothing about them, which is different
+// from a case that produced exactly one.
+func describeClasses(counts map[string]int) string {
+	if len(counts) == 0 {
+		return "(not counted)"
+	}
+	classes := slices.SortedFunc(maps.Keys(counts), func(a, b string) int {
+		if d := agentgrade.Severity(agentgrade.Verdict(b)) - agentgrade.Severity(agentgrade.Verdict(a)); d != 0 {
+			return d
+		}
+		return strings.Compare(a, b)
+	})
+	parts := make([]string, 0, len(classes))
+	for _, c := range classes {
+		parts = append(parts, fmt.Sprintf("%s×%d", c, counts[c]))
+	}
+	return strings.Join(parts, " ")
 }
 
 // printWithheldPendingRetirement lists the models held out of the offered
@@ -263,6 +335,11 @@ type caseResult struct {
 	Verdict      string `json:"verdict"`
 	Trials       int    `json:"trials"`
 	FailedTrials int    `json:"failed_trials"`
+	// Verdicts is the per-class tally. Absent from reports written
+	// before the probe counted classes, which is why it is carried
+	// alongside FailedTrials rather than replacing it here: an old report
+	// must still import, and it can only supply the pooled number.
+	Verdicts map[string]int `json:"verdicts,omitempty"`
 }
 
 // pool merges several runs of the same model into one verdict.
@@ -284,6 +361,14 @@ type caseResult struct {
 func pool(reps []probeReport) (probeReport, error) {
 	out := reps[0]
 	out.Results = append([]caseResult(nil), reps[0].Results...)
+	for i := range out.Results {
+		// The slice copy above is shallow, so every Verdicts map is still
+		// the input report's. Summing into it would edit the caller's data
+		// — and --import is given the same report twice often enough
+		// (a re-run of one transport) that this would show up as doubled
+		// counts rather than as a crash.
+		out.Results[i].Verdicts = maps.Clone(out.Results[i].Verdicts)
+	}
 	out.Flaky = append([]string(nil), reps[0].Flaky...)
 	transports := map[string]bool{reps[0].Transport: true}
 
@@ -309,6 +394,17 @@ func pool(reps []probeReport) (probeReport, error) {
 			}
 			out.Results[i].Trials += rc.Trials
 			out.Results[i].FailedTrials += rc.FailedTrials
+			// Class counts pool only when BOTH runs carry them. One old
+			// report in the set would otherwise produce a tally that sums
+			// to fewer trials than Trials says, which reads as "some trials
+			// were unclassified" instead of "one run predates the counter".
+			if len(out.Results[i].Verdicts) > 0 && len(rc.Verdicts) > 0 {
+				for v, n := range rc.Verdicts {
+					out.Results[i].Verdicts[v] += n
+				}
+			} else {
+				out.Results[i].Verdicts = nil
+			}
 			out.Results[i].Verdict = string(agentgrade.Worse(
 				agentgrade.Verdict(out.Results[i].Verdict), agentgrade.Verdict(rc.Verdict)))
 		}
@@ -397,6 +493,7 @@ func importAgentGrade(paths []string, o importOpts) error {
 	for _, r := range rep.Results {
 		cases[r.Case] = catalog.CaseOutcome{
 			Verdict: r.Verdict, Trials: r.Trials, Failed: r.FailedTrials,
+			Verdicts: r.Verdicts,
 		}
 	}
 	entry.Variants[variantID] = catalog.VariantAgentGrade{
