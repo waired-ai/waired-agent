@@ -160,16 +160,28 @@ jobs:
         # it handed coding agents raw JSON as prose, because the only
         # capability signal was a string every manifest carried.
         #
-        # Coverage only — NOT --require-pass. Failing entries are currently
-        # IN the catalog, and the guard's job here is to stop a new model
-        # arriving unmeasured, not to turn today's known state red.
-        # --require-pass is the end state and gets wired up with the
-        # retirement.
+        # Two assertions, both about the OFFERED catalog:
+        #
+        #   --check        every offered variant has a current verdict
+        #   --require-pass none of them is above the retirement line
+        #
+        # --require-pass is not a flake detector. The line is a Wilson 95%
+        # lower bound on the per-call failure rate against
+        # catalog.RetireFailureRate (0.5), so at 24 trials it needs 17 of
+        # 24 to trip; the worst entry in the catalog today sits at 9 of 24
+        # (a 23% bound) and is nowhere near it. What it asserts is the one
+        # thing worth asserting: no model we offer can be shown, at 95%
+        # confidence, to fail more often than it works (#475).
+        #
+        # Turning it on cost exactly one entry — qwen2.5-coder-0.5b, which
+        # failed 24 of 24 on both tool-requiring cases and is now withheld
+        # pending retirement (#200). Do NOT re-enable a model past this
+        # line to make a red go away: withhold it, or retire it.
         #
         # A model no runner can host is declared in agentgrade.json's
         # "unmeasurable" map with a reason, so the escape hatch is a stated
         # decision rather than silence.
-        run: go run ./cmd/catalog-tool agentgrade --check
+        run: go run ./cmd/catalog-tool agentgrade --check --require-pass
 
       # Keep the paths-gated client gates' filters honest (re-homed from the
       # monorepo at #1). Each guard fails lint if its workflow's paths lose a

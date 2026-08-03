@@ -378,10 +378,21 @@ func TestFailuresReadsTheCountsNotTheVerdict(t *testing.T) {
 	}
 }
 
-// A golden on the shipped file. Replacing the rule moved no row, and
-// that claim is worth more as a test than as a sentence in a PR body:
-// the next person to move the threshold finds out here which models
-// they just proposed deleting.
+// A golden on the shipped file: the next person to move the threshold
+// finds out here which models they just proposed deleting.
+//
+// The offered list is empty, and #475 made that load-bearing —
+// `catalog-tool agentgrade --require-pass` runs in ci.yml and reads
+// exactly this. Before #475 the one entry here was
+// qwen2.5-coder-0.5b-instruct/q4-gguf, which failed 24 of 24 on both
+// tool-requiring cases; it is withheld rather than deleted, because
+// deleting it answers a pinned user with ErrModelNotFound until #200's
+// retired->successor map exists.
+//
+// Empty is therefore two different facts — "nothing is above the line"
+// and "everything above the line is withheld" — and only the second is
+// true today. The withheld half below keeps the distinction visible, so
+// an entry cannot be quietly parked in internal_only and forgotten.
 func TestFailuresOnTheShippedCatalog(t *testing.T) {
 	set, err := AgentGrades()
 	if err != nil {
@@ -391,17 +402,95 @@ func TestFailuresOnTheShippedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
-	got := set.Failures(bundled)
-	var names []string
-	for _, f := range got {
-		names = append(names, f.ModelID+"/"+f.VariantID)
+	if got := worklistNames(set.Failures(bundled)); len(got) != 0 {
+		t.Errorf("offered retirement worklist = %v, want none — ci.yml's "+
+			"`agentgrade --require-pass` fails while this is non-empty", got)
 	}
+
+	all, err := BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
+	}
+	var withheld []Manifest
+	for _, m := range all {
+		if m.InternalOnly != "" {
+			withheld = append(withheld, m)
+		}
+	}
+	got := set.Failures(withheld)
 	want := []string{"qwen2.5-coder-0.5b-instruct/q4-gguf"}
-	if !slices.Equal(names, want) {
-		t.Errorf("retirement worklist = %v, want %v", names, want)
+	if names := worklistNames(got); !slices.Equal(names, want) {
+		t.Errorf("withheld-and-above-the-line = %v, want %v", names, want)
 	}
-	if len(got) == 1 && !strings.Contains(got[0].Reason, "95% confidence") {
-		t.Errorf("the worklist must show the evidence behind the claim, got %q", got[0].Reason)
+	if len(got) == 1 {
+		if !strings.Contains(got[0].Reason, "95% confidence") {
+			t.Errorf("the worklist must show the evidence behind the claim, got %q", got[0].Reason)
+		}
+		m, ok := LookupByAlias(got[0].ModelID, withheld)
+		if !ok {
+			t.Fatalf("%s is not in the withheld set", got[0].ModelID)
+		}
+		// The reason string is the only record of WHY the entry is out of
+		// the offered catalog, and of the fact that this is a stop on the
+		// way to deletion rather than the destination.
+		for _, want := range []string{"RETIREMENT", "#200"} {
+			if !strings.Contains(m.InternalOnly, want) {
+				t.Errorf("internal_only reason for %s does not mention %q: %q",
+					got[0].ModelID, want, m.InternalOnly)
+			}
+		}
+	}
+}
+
+func worklistNames(gaps []AgentGradeGap) []string {
+	var names []string
+	for _, g := range gaps {
+		names = append(names, g.ModelID+"/"+g.VariantID)
+	}
+	return names
+}
+
+// The three rates RetireFailureRate's doc comment cites as the reason the
+// line sits at half, read back off the shipped store.
+//
+// A record of today's measurement, not a product contract: if a sweep
+// moves one of these, the number here moves with it. The point is that it
+// cannot move SILENTLY. #467 re-measured the whole catalog and left that
+// paragraph quoting the previous sweep — 3b at 17%, granite4-350m at 11%,
+// qwen3.5-9b at 30% — so the justification for the threshold described a
+// catalog that no longer existed. This is the cheapest thing that turns
+// that into a failing test instead of a stale sentence.
+func TestRatesCitedByRetireFailureRate(t *testing.T) {
+	set, err := AgentGrades()
+	if err != nil {
+		t.Fatalf("AgentGrades: %v", err)
+	}
+	cited := []struct {
+		model, variant string
+		wantPct        int
+	}{
+		{"qwen2.5-coder-3b-instruct", "q4-gguf", 23}, // defines the install quality floor
+		{"granite4-350m", "bf16-gguf", 14},           // the CI fixture
+		{"qwen3.5-9b", "q4-gguf", 5},                 // ollama/ollama#16383, retried since #458
+	}
+	for _, c := range cited {
+		rec, ok := set.Lookup(c.model, c.variant)
+		if !ok {
+			t.Errorf("%s/%s: no verdict, but RetireFailureRate's doc cites its rate",
+				c.model, c.variant)
+			continue
+		}
+		worst, counted := rec.WorstCase()
+		if !counted {
+			t.Errorf("%s/%s: no per-trial counts, but RetireFailureRate's doc cites its rate",
+				c.model, c.variant)
+			continue
+		}
+		if got := int(math.Round(worst.LowerBound * 100)); got != c.wantPct {
+			t.Errorf("%s/%s: worst case %s at %d of %d is %d%%, but RetireFailureRate's "+
+				"doc comment says %d%% — update the comment (and this table) to match the data",
+				c.model, c.variant, worst.Case, worst.Failed, worst.Trials, got, c.wantPct)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@
     "Qwen/Qwen2.5-Coder-0.5B-Instruct"
   ],
   "license": "apache-2.0",
+  "internal_only": "WITHHELD PENDING RETIREMENT (waired-ai/waired-agent#475, retirement tracked by #200) — not a permanent exemption like granite4-350m's. It cannot call a tool: measured 24 of 24 failures on BOTH tool-requiring probe cases (read-file and search-then-edit, both fail_unstructured_tool_call), a true per-call failure rate of at least 90% at 95% confidence, at fixture 2004661dc908 / agent 225364f4f522 on nvidia-24gb-discrete. It serialises its tool calls as assistant text naming a daemon and a file path rather than any offered tool, so no gateway-side recovery reaches it (#409). Withholding costs no host: it is 32k-native and the #624 context floor excludes it from auto-selection at every RAM size from 2 to 24 GB, 2-3 GB hosts take qwen3.5-0.8b as the below-floor pick (tier 12 > 10), and no waired/* alias points here. It stays resolvable by id or alias, so an existing pin still pulls and serves. DELETE IT once #200's retired->successor map and the control plane's catalog-membership validation exist; until then removing the entry would answer a pinned user with ErrModelNotFound instead of a migration.",
   "context_length": 32768,
   "capabilities": ["chat", "tool_use", "json_mode"],
   "runtime": {"preferred": "ollama", "fallback": []},

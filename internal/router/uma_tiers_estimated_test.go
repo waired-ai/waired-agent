@@ -203,9 +203,11 @@ func TestUMANothingFitsTinyBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
-	// Budget below the smallest resident. The catalog floor is now the
-	// qwen2.5-coder-0.5b tiny model (~1.7 GB resident at its 32k context),
-	// so a 1 GB budget still fits nothing.
+	// Budget below the smallest resident named above. It used to say
+	// qwen2.5-coder-0.5b (~1.7 GB resident at 32k) — already contradicting
+	// the doc comment four lines up, and wrong outright since #475
+	// withheld that entry from the offered catalog this reads. 1 GB is
+	// under either number, so the assertion never noticed.
 	hw := syntheticAppleUMA(8, 1024)
 	_, err = PickModel(PickInput{
 		Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama,
