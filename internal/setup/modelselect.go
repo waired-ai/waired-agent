@@ -176,6 +176,15 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 			sel.BelowFloorModelID = below[0].Manifest.ModelID
 		}
 		if in.Forced {
+			// Forcing inference on answers WHETHER local inference runs,
+			// not WHICH model runs it. There is no compiled-in bundled
+			// model to inherit any more, so on a fresh forced install the
+			// configured id is empty and the below-floor fit is the only
+			// honest answer — the one model this host can actually load.
+			// Leaving it empty would boot inference with nothing to serve.
+			if sel.ModelID == "" {
+				sel.ModelID = sel.BelowFloorModelID
+			}
 			sel.Notes = append(sel.Notes, fmt.Sprintf(
 				"hardware is under-spec for a usable coding model, but inference was forced on — %q may fail to load (%s)",
 				sel.ModelID, describeHardwareFit(in.Hardware, engine)))

@@ -2581,7 +2581,7 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 	// no ActiveSelection). Guarded to the bundled model so an unrelated
 	// `waired models pull` can't hijack the active slot. See
 	// activateBundledIfUnset.
-	if modelID == p.cfg.BundledModelID {
+	if p.isBundledModel(modelID) {
 		p.activateBundledIfUnset(modelID, variantID)
 	}
 	// Preferred-model switch: when the model that just became ready is
@@ -2631,16 +2631,46 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 // skipping it would leave Active nil for the hours the chosen model
 // downloads, on a host with a perfectly good model already on disk.
 func (p *agentInferenceProvider) activateBundledIfReady(ctx context.Context) bool {
-	manifest, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests)
-	if !ok {
+	modelID := p.bundledModelID()
+	if modelID == "" {
 		return false
 	}
-	cur := p.bundledModelState(manifest.ModelID)
+	cur := p.bundledModelState(modelID)
 	if cur.State != catalog.ModelStateReady || !p.engineServesTag(ctx, cur.OllamaTag) {
 		return false
 	}
-	p.activateBundledIfUnset(manifest.ModelID, cur.VariantID)
+	p.activateBundledIfUnset(modelID, cur.VariantID)
 	return true
+}
+
+// bundledModelID is the CANONICAL catalog id cfg.BundledModelID names.
+//
+// The configured value accepts any catalog alias — `waired/medium`,
+// `Qwen/Qwen2.5-Coder-14B-Instruct` — while every id the pull path writes
+// (state.Models keys, models.ready, the PullModel argument) is the
+// canonical manifest.ModelID. Resolving once, here, is what keeps the two
+// ends of that comparison the same kind of string (#380).
+//
+// An unresolvable value is returned unchanged, which degrades to exactly
+// the comparison the caller would have made anyway; "" means no bundled
+// model is configured, which is a real state now that there is no
+// compiled-in default.
+func (p *agentInferenceProvider) bundledModelID() string {
+	if p.cfg.BundledModelID == "" {
+		return ""
+	}
+	if m, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests); ok && m.ModelID != "" {
+		return m.ModelID
+	}
+	return p.cfg.BundledModelID
+}
+
+// isBundledModel reports whether modelID — a canonical id, as written by
+// the pull path — is the model cfg.BundledModelID names. False when
+// nothing is configured, so an unset default cannot claim a pull.
+func (p *agentInferenceProvider) isBundledModel(modelID string) bool {
+	bundled := p.bundledModelID()
+	return bundled != "" && modelID == bundled
 }
 
 // bundledModelState is the stored catalog row for modelID, or the zero
@@ -2658,6 +2688,14 @@ func (p *agentInferenceProvider) bundledModelState(modelID string) catalog.Model
 // It is the FALLBACK driver since #306: bootstrapAfterEngineStart only
 // reaches it when the operator's own model did not take responsibility.
 func (p *agentInferenceProvider) bootstrapBundledModel(ctx context.Context) {
+	if p.cfg.BundledModelID == "" {
+		// Not an error: there is no compiled-in default, so "unset" is
+		// what a host whose selection has not run — or one that had
+		// nothing to select — legitimately looks like. Info, not Warn:
+		// nothing is broken and nothing needs a model invented for it.
+		p.logger.Info("no bundled model configured; skipping pre-pull")
+		return
+	}
 	manifest, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests)
 	if !ok {
 		p.logger.Warn("bundled model not found in manifests; skipping pre-pull", "model", p.cfg.BundledModelID)

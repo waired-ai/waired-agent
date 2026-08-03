@@ -11,8 +11,16 @@ import (
 func TestDefaults(t *testing.T) {
 	cfg := Defaults()
 
-	if cfg.Inference.BundledModelID != "qwen2.5-coder-7b-instruct" {
-		t.Errorf("BundledModelID default = %q, want qwen2.5-coder-7b-instruct", cfg.Inference.BundledModelID)
+	// PRODUCT CONTRACT, not a record of today's value: there is no
+	// compiled-in bundled model. The id is the OUTPUT of hardware-aware
+	// selection (setup.SelectBundledModel), and a constant chosen before
+	// the host is known cannot be right — the last one named a 32k-window
+	// model that the same binary's picker excludes on every host it can
+	// run on. A non-empty default here would be pulled verbatim on the
+	// paths that skip selection.
+	if cfg.Inference.BundledModelID != "" {
+		t.Errorf("BundledModelID default = %q, want empty (chosen from the host, not compiled in)",
+			cfg.Inference.BundledModelID)
 	}
 	if !cfg.Inference.PullOnStartup {
 		t.Errorf("PullOnStartup default = false, want true")
@@ -85,9 +93,11 @@ func TestMergeJSON_FileNotFound(t *testing.T) {
 	if err := cfg.MergeJSON(missing); err != nil {
 		t.Fatalf("MergeJSON for missing file should succeed (use defaults), got %v", err)
 	}
-	// defaults preserved
-	if cfg.Inference.BundledModelID != "qwen2.5-coder-7b-instruct" {
-		t.Errorf("MergeJSON corrupted defaults: %q", cfg.Inference.BundledModelID)
+	// defaults preserved. MaxCacheGB rather than BundledModelID: the
+	// latter's default is the zero value now, so it could not tell a
+	// preserved default from a wiped struct.
+	if cfg.Inference.MaxCacheGB != 100 {
+		t.Errorf("MergeJSON corrupted defaults: MaxCacheGB = %d", cfg.Inference.MaxCacheGB)
 	}
 }
 
