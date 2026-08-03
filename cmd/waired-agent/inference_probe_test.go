@@ -1304,3 +1304,99 @@ func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T
 		t.Errorf("a node declaring nothing put the field on the wire: %s", b)
 	}
 }
+
+// waired#1064: the two fields a peer's picker reads. The shape mirrors the
+// window test above, and the point of it is the ONE place they differ —
+// these must survive narrowPublishedModels withdrawing the advertisement,
+// because the withdrawn node is exactly the one a peer needs explained.
+func TestRunLocalInferenceProbe_ActiveModelAndStateExplainAWithdrawnNode(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"models":[{"name":"llama3.1:8b"}]}`)
+	}))
+	defer ollama.Close()
+	port, err := portFromURL(ollama.URL)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+	push := func(advertise, model, subState string) string {
+		t.Helper()
+		var mu sync.Mutex
+		var bodies []string
+		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer cpSrv.Close()
+
+		dir := t.TempDir()
+		stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+		if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		runLocalInferenceProbe(ctx, inferenceProbeDeps{
+			StateWriter:    stWriter,
+			PushClient:     controlclient.New(cpSrv.URL, "tok"),
+			DeviceID:       "dev-self",
+			MachineKey:     machinePriv,
+			EngineKind:     signer.InferenceTypeOllama,
+			EnginePort:     port,
+			AdvertiseTag:   advertise,
+			ServingTag:     advertise,
+			ActiveModel:    func() string { return model },
+			SubsystemState: func() string { return subState },
+			Logger:         slog.Default(),
+		})
+		cancel()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) == 0 {
+			t.Fatal("no push")
+		}
+		return bodies[0]
+	}
+
+	// Serving: both ride, alongside the engine tag they are NOT.
+	b := push("llama3.1:8b", "llama3-1-8b-instruct", signer.SubsystemStateReady)
+	if !strings.Contains(b, `"active_model":"llama3-1-8b-instruct"`) {
+		t.Errorf("a serving node did not publish its model: %s", b)
+	}
+	if !strings.Contains(b, `"subsystem_state":"ready"`) {
+		t.Errorf("a serving node did not publish its state: %s", b)
+	}
+	if !strings.Contains(b, `"models":["llama3.1:8b"]`) {
+		t.Errorf("the engine tag stopped riding alongside it: %s", b)
+	}
+
+	// PRODUCT CONTRACT (waired#1064): the engine reports llama3.1:8b while
+	// the Active selection says something else, so narrowPublishedModels
+	// withdraws the advertisement — mid-pull, mid-switch, or a diverged
+	// engine. ContextWindow goes with it; these two must NOT, because a
+	// peer with no model tag and no explanation is exactly the node this
+	// issue exists to stop rendering as a bare "unavailable".
+	b = push("qwen3.5-9b:q4_K_M", "qwen3-5-9b-instruct", signer.SubsystemStateLoading)
+	if strings.Contains(b, `"models"`) {
+		t.Fatalf("precondition: the advertisement should have been withdrawn: %s", b)
+	}
+	if !strings.Contains(b, `"active_model":"qwen3-5-9b-instruct"`) {
+		t.Errorf("a withdrawn node stopped naming its model: %s", b)
+	}
+	if !strings.Contains(b, `"subsystem_state":"loading"`) {
+		t.Errorf("a withdrawn node stopped explaining itself: %s", b)
+	}
+
+	// A node with no committed selection declares neither, and both stay
+	// off the wire entirely so its peer entry is byte-identical for a
+	// reader that predates them.
+	b = push("llama3.1:8b", "", "")
+	if strings.Contains(b, "active_model") || strings.Contains(b, "subsystem_state") {
+		t.Errorf("a node declaring nothing put the fields on the wire: %s", b)
+	}
+}

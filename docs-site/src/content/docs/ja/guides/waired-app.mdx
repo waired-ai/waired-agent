@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 2420fe91bfab31f3
+sourceHash: 5ba9c169759d1c5d
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -118,8 +118,13 @@ import Expected from '../../../../components/Expected.astro';
 | **Peer only** | ほかのパソコンだけを使います。どれも答えられないときは、黙ってここで動かさずにエラーになります。このマシンを空けておきたいときに選びます。 |
 
 **Pin to one peer** の下では、ルールを飛ばして常に特定の 1 台を使えます。一覧から
-選び、**(clear pin)** で **Auto** に戻ります。一覧にあっても電源が入っていない
-パソコンは *(unavailable)* と表示されます — 指定はそのまま残り、その 1 台が
+選び、**(clear pin)** で **Auto** に戻ります。各項目にはパソコン名と、そこで動いて
+いるモデルが並びます。どちらからでも選べます。
+
+いま応答できないパソコンは、モデル名の横に理由が出ます — モデルを取得中なら
+*(loading)*、ダウンロードに失敗したなら *(pull failed)*、AI ソフトウェアが落ちて
+いるなら *(engine failed)*。理由を答えられないパソコンや、しばらく連絡が取れて
+いないパソコンは *(unavailable)* です。いずれの場合も指定はそのまま残り、その 1 台が
 戻るまで応答できないだけです。
 
 <Aside type="tip" title="メモリが足りないときは「エンジンを止める」">

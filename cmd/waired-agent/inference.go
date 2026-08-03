@@ -1613,62 +1613,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 			EndpointID: id, Runtime: e.Runtime, ModelID: e.ModelID, State: e.State,
 		})
 	}
-	// Step 2 subsystem_state derivation:
-	//   operator-disabled (soft pause) → disabled (overrides engine health)
-	//   operator-stopped (hard, #186)  → stopped
-	//   no usable engine               → no_engine
-	//   engine restart in flight       → starting
-	//   active.model_id missing        → awaiting_model
-	//   active model failed download   → pull_failed
-	//   active model not yet ready     → loading
-	//   bootstrap fell back            → degraded
-	//   else                           → ready
-	subState := "ready"
-	switch {
-	case p.isInferenceDisabled != nil && p.isInferenceDisabled():
-		subState = "disabled"
-	case p.ollama != nil && p.ollama.IsParked():
-		// Hard engine power axis (#186): operator stopped the engine to
-		// free memory. Distinct from no_engine (binary missing) — here a
-		// usable engine exists but is intentionally down.
-		subState = "stopped"
-	case !hasUsableEngine(p.registry, hwProfile, p.ollamaUsable):
-		subState = "no_engine"
-	case p.ollama != nil && p.ollama.Health(ctx).State == infruntime.StateStarting:
-		// Engine restart in flight (e.g. just after a start request);
-		// it isn't serving yet even if the active model is on disk.
-		subState = "starting"
-	case p.ollama != nil && p.ollama.Health(ctx).State == infruntime.StateFailed:
-		// The engine is down: a crashed model runner, an exhausted recovery
-		// budget, or a boot that never came up. This case used to be absent,
-		// so any of those fell straight through to "ready" whenever the
-		// active model happened to be on disk (waired-agent#29).
-		subState = "engine_failed"
-	case p.ollama != nil && p.ollama.FailureLatched():
-		// Latched, but Health() no longer says so. LatchFailed writes
-		// StateFailed, and then Stop() overwrites a.state with no giveUp
-		// guard — a model switch, a reconcile bounce — so an engine waired
-		// has permanently stopped restarting could fall through to
-		// "ready" the moment its active model happened to be on disk
-		// (#310). The latch outlives a.state, so it decides here too.
-		//
-		// After the StateFailed arm rather than folded into it: that arm
-		// is the live reading and the more specific one, and it carries
-		// the same answer whenever both apply.
-		subState = "engine_failed"
-	case state.Active == nil:
-		subState = "awaiting_model"
-	default:
-		ms, ok := state.Models[state.Active.ModelID]
-		switch {
-		case !ok:
-			subState = "awaiting_model"
-		case ms.State == catalog.ModelStateFailed:
-			subState = "pull_failed"
-		case ms.State != catalog.ModelStateReady:
-			subState = "loading"
-		}
-	}
+	subState := subsystemState(p.subsystemFacts(ctx, hwProfile, state))
 	desiredStateStr := ""
 	if p.inferenceState != nil {
 		_, desired := p.inferenceState()
@@ -1721,6 +1666,113 @@ func longContextBenchFor(d *DepthBenchResult) *management.LongContextBench {
 // openai-compat adapters need no local install and are always treated as
 // usable. When nothing is usable the caller reports SubsystemState
 // "no_engine", which the tray / CLI surface as an "Install Ollama" prompt.
+// inferenceSubsystemFacts is everything the subsystem_state answer
+// depends on, read once so the decision itself is a pure function of
+// them. Split out for waired#1064: the same answer now has two readers —
+// the local management API, and the mesh push that tells peers why this
+// node is or is not serving — and two derivations would drift into two
+// different stories about one machine.
+//
+// The engine axis collapses to EngineState / FailureLatched: both are
+// only asked of an ollama adapter, so a host without one (a vLLM host,
+// or a bare provider in a test) leaves EngineState empty, which reaches
+// neither engine arm — the behaviour the `p.ollama != nil` guards used
+// to spell out at each case.
+type inferenceSubsystemFacts struct {
+	// Disabled is the operator's soft pause; Parked is the hard engine
+	// stop that frees memory (#186). Distinct: parked means a usable
+	// engine exists and is intentionally down.
+	Disabled bool
+	Parked   bool
+	// UsableEngine is hasUsableEngine — is there an engine at all.
+	UsableEngine bool
+	// EngineState is an infruntime.State* reading, empty when there is
+	// no ollama adapter to ask.
+	EngineState    string
+	FailureLatched bool
+	// HasActive is "a model has been chosen"; ModelKnown is "and the
+	// catalog has a row for it". ModelState is that row's lifecycle
+	// state, meaningless unless ModelKnown.
+	HasActive  bool
+	ModelKnown bool
+	ModelState string
+}
+
+// subsystemState answers WHAT is wrong, never whether it will fix
+// itself: a crash loop alternates between starting and engine_failed for
+// as long as its recovery budget lasts. Order is load-bearing — the
+// first matching arm wins, and the arms are ordered most-decisive first.
+func subsystemState(f inferenceSubsystemFacts) string {
+	switch {
+	case f.Disabled:
+		// The operator's pause overrides engine health: reporting a
+		// crashed engine on a machine that was told not to serve would
+		// send someone looking for a fault that is a setting.
+		return signer.SubsystemStateDisabled
+	case f.Parked:
+		return signer.SubsystemStateStopped
+	case !f.UsableEngine:
+		return signer.SubsystemStateNoEngine
+	case f.EngineState == infruntime.StateStarting:
+		// Restart in flight (e.g. just after a start request); not
+		// serving yet even if the active model is on disk.
+		return signer.SubsystemStateStarting
+	case f.EngineState == infruntime.StateFailed:
+		// A crashed model runner, an exhausted recovery budget, or a boot
+		// that never came up. This arm used to be absent, so any of those
+		// fell through to ready whenever the active model happened to be
+		// on disk (waired-agent#29).
+		return signer.SubsystemStateEngineFailed
+	case f.FailureLatched:
+		// Latched, but the live reading no longer says so: LatchFailed
+		// writes StateFailed and a later Stop() overwrites it with no
+		// giveUp guard — a model switch, a reconcile bounce — so an
+		// engine that has permanently stopped restarting could fall
+		// through to ready (#310). The latch outlives the state, so it
+		// decides here too. After the StateFailed arm rather than folded
+		// into it: that one is the live, more specific reading, and both
+		// carry the same answer whenever both apply.
+		return signer.SubsystemStateEngineFailed
+	case !f.HasActive, !f.ModelKnown:
+		return signer.SubsystemStateAwaitingModel
+	case f.ModelState == catalog.ModelStateFailed:
+		return signer.SubsystemStatePullFailed
+	case f.ModelState != catalog.ModelStateReady:
+		return signer.SubsystemStateLoading
+	}
+	return signer.SubsystemStateReady
+}
+
+// subsystemFacts reads the facts above. hw is passed in rather than
+// sampled here so a caller that already has a profile does not resample;
+// the profiler is TTL-cached (hardwareResampleInterval) either way.
+func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware.Profile, st catalog.State) inferenceSubsystemFacts {
+	f := inferenceSubsystemFacts{
+		Disabled:     p.isInferenceDisabled != nil && p.isInferenceDisabled(),
+		UsableEngine: hasUsableEngine(p.registry, hw, p.ollamaUsable),
+	}
+	if p.ollama != nil {
+		f.Parked = p.ollama.IsParked()
+		f.EngineState = p.ollama.Health(ctx).State
+		f.FailureLatched = p.ollama.FailureLatched()
+	}
+	if st.Active != nil {
+		f.HasActive = true
+		ms, ok := st.Models[st.Active.ModelID]
+		f.ModelKnown = ok
+		f.ModelState = ms.State
+	}
+	return f
+}
+
+// SubsystemState is the mesh-facing reader of the same answer
+// (waired#1064). Cheap enough for the 5 s probe tick: one catalog load,
+// one TTL-cached hardware profile, and in-memory adapter reads.
+func (p *agentInferenceProvider) SubsystemState(ctx context.Context) string {
+	st, _ := p.store.Load()
+	return subsystemState(p.subsystemFacts(ctx, p.profiler.Profile(ctx), st))
+}
+
 func hasUsableEngine(reg *infruntime.Registry, hw hardware.Profile, ollamaUsable func() bool) bool {
 	for _, name := range reg.Names() {
 		switch name {

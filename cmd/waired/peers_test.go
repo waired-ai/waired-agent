@@ -31,9 +31,28 @@ func TestPeersList_TableIncludesPeerColumns(t *testing.T) {
 					Reachable: true,
 					Type:      signer.InferenceTypeOllama,
 					Models:    []string{"qwen3:8b-q4_K_M"},
+					// waired#1064: the MODEL column is the catalog id and
+					// MODELS keeps the engine tag, because only the first
+					// is comparable across a mixed fleet and only the
+					// second is what a request is matched against.
+					ActiveModel:    "qwen3-8b-instruct",
+					SubsystemState: signer.SubsystemStateReady,
 					Hardware: &signer.HardwareSummary{
 						GPUs: []signer.HardwareGPUSummary{{Model: "RTX 4090", VRAMTotalMB: 24576}},
 					},
+				},
+			},
+			// A peer mid-download: its engine tag is withdrawn, so before
+			// waired#1064 the row read exactly like a dead engine's.
+			{
+				DeviceID:   "dev_busy",
+				DeviceName: "mac-studio",
+				OverlayIP:  "10.42.0.3",
+				InferenceState: &signer.InferenceState{
+					Reachable:      true,
+					Type:           signer.InferenceTypeOllama,
+					ActiveModel:    "qwen3-coder-next-80b-a3b-instruct",
+					SubsystemState: signer.SubsystemStateLoading,
 				},
 			},
 		},
@@ -46,8 +65,12 @@ func TestPeersList_TableIncludesPeerColumns(t *testing.T) {
 		}
 	})
 	for _, want := range []string{
-		"NAME", "DEVICE-ID", "OVERLAY-IP", "ENGINE", "GPU", "VRAM", "MODELS", "WORKER-CAPABLE",
+		"NAME", "DEVICE-ID", "OVERLAY-IP", "ENGINE", "MODEL", "GPU", "VRAM", "MODELS", "WORKER-CAPABLE",
 		"linux-gpu", "dev_linux", "10.42.0.2", "ollama", "RTX 4090", "qwen3:8b-q4_K_M", "yes",
+		"qwen3-8b-instruct",
+		// The downloading peer names its model and says why it cannot
+		// serve, where it used to read "no (no model)".
+		"mac-studio", "qwen3-coder-next-80b-a3b-instruct", "no (loading)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n%s", want, out)

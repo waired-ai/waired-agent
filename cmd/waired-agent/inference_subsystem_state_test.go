@@ -1,0 +1,145 @@
+package main
+
+import (
+	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/catalog"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/signer"
+)
+
+// subsystemState was inline in Status() until waired#1064 gave it a second
+// reader (the mesh push that tells peers why a node is or is not serving).
+// The rows below are a record of today's behaviour — the answers Status()
+// already produced — not new policy; they exist so the extraction cannot
+// quietly change one of them, and so the ORDER of the arms stays pinned.
+func TestSubsystemState(t *testing.T) {
+	// serving is a machine with nothing wrong; each case perturbs one fact.
+	serving := inferenceSubsystemFacts{
+		UsableEngine: true,
+		EngineState:  infruntime.StateReady,
+		HasActive:    true,
+		ModelKnown:   true,
+		ModelState:   catalog.ModelStateReady,
+	}
+	with := func(mut func(*inferenceSubsystemFacts)) inferenceSubsystemFacts {
+		f := serving
+		mut(&f)
+		return f
+	}
+
+	tests := []struct {
+		name  string
+		facts inferenceSubsystemFacts
+		want  string
+	}{
+		{"serving", serving, signer.SubsystemStateReady},
+
+		{"operator paused", with(func(f *inferenceSubsystemFacts) {
+			f.Disabled = true
+		}), signer.SubsystemStateDisabled},
+		{"engine parked to free memory", with(func(f *inferenceSubsystemFacts) {
+			f.Parked = true
+		}), signer.SubsystemStateStopped},
+		{"no engine at all", with(func(f *inferenceSubsystemFacts) {
+			f.UsableEngine = false
+		}), signer.SubsystemStateNoEngine},
+		{"engine restarting", with(func(f *inferenceSubsystemFacts) {
+			f.EngineState = infruntime.StateStarting
+		}), signer.SubsystemStateStarting},
+		{"engine down", with(func(f *inferenceSubsystemFacts) {
+			f.EngineState = infruntime.StateFailed
+		}), signer.SubsystemStateEngineFailed},
+
+		// #310: the latch outlives the live reading, so a Stop() that
+		// overwrote StateFailed must not let a permanently-dead engine read
+		// as ready just because its model is on disk.
+		{"failure latched but live reading recovered", with(func(f *inferenceSubsystemFacts) {
+			f.FailureLatched = true
+		}), signer.SubsystemStateEngineFailed},
+
+		{"no model chosen", with(func(f *inferenceSubsystemFacts) {
+			f.HasActive = false
+			f.ModelKnown = false
+			f.ModelState = ""
+		}), signer.SubsystemStateAwaitingModel},
+		{"model chosen but no catalog row", with(func(f *inferenceSubsystemFacts) {
+			f.ModelKnown = false
+			f.ModelState = ""
+		}), signer.SubsystemStateAwaitingModel},
+		{"download failed", with(func(f *inferenceSubsystemFacts) {
+			f.ModelState = catalog.ModelStateFailed
+		}), signer.SubsystemStatePullFailed},
+		{"downloading", with(func(f *inferenceSubsystemFacts) {
+			f.ModelState = catalog.ModelStateDownloading
+		}), signer.SubsystemStateLoading},
+		{"queued", with(func(f *inferenceSubsystemFacts) {
+			f.ModelState = catalog.ModelStateQueued
+		}), signer.SubsystemStateLoading},
+		{"verifying", with(func(f *inferenceSubsystemFacts) {
+			f.ModelState = catalog.ModelStateVerifying
+		}), signer.SubsystemStateLoading},
+
+		// A host with no ollama adapter — a vLLM host, or a provider built
+		// without one — asks neither engine question. Before the extraction
+		// this was the `p.ollama != nil` guard on each arm; it has to keep
+		// falling through to the model axis rather than reading as a fault.
+		{"no ollama adapter to ask", with(func(f *inferenceSubsystemFacts) {
+			f.EngineState = ""
+		}), signer.SubsystemStateReady},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := subsystemState(tc.facts); got != tc.want {
+				t.Errorf("subsystemState() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The arms are ordered most-decisive first, and two of those orderings are
+// deliberate rather than incidental. Pinning them here because a reorder
+// compiles, passes every single-fact case above, and changes what an
+// operator is told about a machine.
+func TestSubsystemState_ArmOrder(t *testing.T) {
+	// The operator's pause wins over a crashed engine: someone who turned
+	// inference off should not be sent looking for a fault.
+	if got := subsystemState(inferenceSubsystemFacts{
+		Disabled: true, UsableEngine: true, EngineState: infruntime.StateFailed,
+	}); got != signer.SubsystemStateDisabled {
+		t.Errorf("paused + crashed engine = %q, want %q", got, signer.SubsystemStateDisabled)
+	}
+
+	// The engine axis wins over the model axis: a node whose engine is down
+	// is not "downloading", even when it also happens to be mid-pull.
+	if got := subsystemState(inferenceSubsystemFacts{
+		UsableEngine: true, EngineState: infruntime.StateFailed,
+		HasActive: true, ModelKnown: true, ModelState: catalog.ModelStateDownloading,
+	}); got != signer.SubsystemStateEngineFailed {
+		t.Errorf("crashed engine + mid-pull = %q, want %q", got, signer.SubsystemStateEngineFailed)
+	}
+}
+
+// Everything subsystemState can return has to survive the control plane's
+// intake, which validates against signer.IsValidSubsystemState. A value
+// that fails there would 400 the whole inference push, not just the field,
+// and the device would go stale in every peer's mesh.
+func TestSubsystemState_AllOutputsAreValidOnTheWire(t *testing.T) {
+	all := []inferenceSubsystemFacts{
+		{UsableEngine: true, EngineState: infruntime.StateReady, HasActive: true, ModelKnown: true, ModelState: catalog.ModelStateReady},
+		{Disabled: true},
+		{Parked: true, UsableEngine: true},
+		{},
+		{UsableEngine: true, EngineState: infruntime.StateStarting},
+		{UsableEngine: true, EngineState: infruntime.StateFailed},
+		{UsableEngine: true, FailureLatched: true},
+		{UsableEngine: true, HasActive: true, ModelKnown: true, ModelState: catalog.ModelStateFailed},
+		{UsableEngine: true, HasActive: true, ModelKnown: true, ModelState: catalog.ModelStateDownloading},
+	}
+	for _, f := range all {
+		got := subsystemState(f)
+		if !signer.IsValidSubsystemState(got) {
+			t.Errorf("subsystemState(%+v) = %q, which the CP validator rejects", f, got)
+		}
+	}
+}

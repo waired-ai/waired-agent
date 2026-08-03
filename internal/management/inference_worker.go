@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
@@ -40,6 +41,21 @@ type WorkerResponse struct {
 	//   "absent"      — peer not in current mesh snapshot at all
 	// Empty when mode != pinned.
 	PinnedPeerStatus string `json:"pinned_peer_status,omitempty"`
+
+	// PinnedPeerModel is the model that peer is committed to serving,
+	// and PinnedPeerCondition is why it is or is not serving it
+	// (waired#1064). Both derived here rather than by each client for
+	// the reason PinnedPeerName is: the tray already reads this body,
+	// and a second derivation is how the three peer-health predicates
+	// this package used to hold drifted apart.
+	//
+	// PinnedPeerStatus stays as it was — three values a client can
+	// branch on. PinnedPeerCondition is the finer answer underneath it:
+	// where the status says "unavailable", this says whether the model
+	// is downloading, its pull failed, or the engine is down. Empty
+	// when mode != pinned, or when the peer is absent.
+	PinnedPeerModel     string `json:"pinned_peer_model,omitempty"`
+	PinnedPeerCondition string `json:"pinned_peer_condition,omitempty"`
 }
 
 func (s *Server) handleWorker(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +80,9 @@ func (s *Server) writeWorkerState(w http.ResponseWriter, r *http.Request) {
 		PinnedPeerDeviceID: desired.PinnedPeerDeviceID,
 	}
 	if desired.Mode == state.RoutingModePinned && desired.PinnedPeerDeviceID != "" {
-		resp.PinnedPeerName, resp.PinnedPeerStatus = s.resolvePinStatus(r, desired.PinnedPeerDeviceID)
+		v := s.resolvePinStatus(r, desired.PinnedPeerDeviceID)
+		resp.PinnedPeerName, resp.PinnedPeerStatus = v.Name, v.Status
+		resp.PinnedPeerModel, resp.PinnedPeerCondition = v.Model, v.Condition
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -136,33 +154,41 @@ func (s *Server) applyWorkerRequest(w http.ResponseWriter, r *http.Request) {
 	s.writeWorkerState(w, r)
 }
 
-// resolvePinStatus derives (name, status) from the inferencemesh
+// resolvePinStatus derives the pinned peer's view from the inferencemesh
 // aggregator. Returns ("", "absent") when infMesh is not wired or the
 // peer is missing from the snapshot; ("", "absent") rather than "" so
 // the tray can distinguish "not configured" (mode != pinned) from
 // "peer gone".
-func (s *Server) resolvePinStatus(r *http.Request, deviceID string) (name, status string) {
+func (s *Server) resolvePinStatus(r *http.Request, deviceID string) pinView {
 	_ = r
 	if s.infMesh == nil {
-		return "", "absent"
+		return pinView{Status: "absent"}
 	}
 	snap := s.infMesh.Snapshot()
 	for _, p := range snap.Peers {
 		if p.DeviceID != deviceID {
 			continue
 		}
-		name = p.DeviceName
-		switch {
-		case p.Stale:
-			status = "unavailable"
-		case p.InferenceState == nil || !p.InferenceState.Reachable:
-			status = "unavailable"
-		case len(p.InferenceState.Models) == 0:
-			status = "unavailable"
-		default:
-			status = "ok"
+		v := pinView{
+			Name:      p.DeviceName,
+			Model:     inferencemesh.PeerModel(p),
+			Condition: inferencemesh.PeerCondition(p),
+			Status:    "unavailable",
 		}
-		return name, status
+		if inferencemesh.PeerServing(p) {
+			v.Status = "ok"
+		}
+		return v
 	}
-	return "", "absent"
+	return pinView{Status: "absent"}
+}
+
+// pinView is what resolvePinStatus found. A struct rather than four
+// same-typed string returns: the two call sites below assign every one
+// of them, and a transposed pair would compile and render.
+type pinView struct {
+	Name      string
+	Model     string
+	Condition string
+	Status    string
 }

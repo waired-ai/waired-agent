@@ -122,9 +122,15 @@ select:
 
 Under **Pin to one peer**, you can skip the rule entirely and always use one
 specific computer. Pick it from the list; **(clear pin)** returns you to
-**Auto**. A computer that is listed but currently off shows as
-*(unavailable)* — your pin survives, it just cannot serve until that machine
-comes back.
+**Auto**. Each entry names the computer and the model it runs, so you can
+choose by either.
+
+A computer that cannot answer right now says why next to its model —
+*(loading)* while it is still fetching that model, *(pull failed)* when the
+download gave up, *(engine failed)* when its AI software is down. One that
+cannot tell you why, or that has not been heard from lately, shows as
+*(unavailable)*. In every case your pin survives; that machine just cannot
+serve until it comes back.
 
 <Aside type="tip" title="Stopping the engine is the memory fix">
 	If your computer feels short of memory while you are doing something else,

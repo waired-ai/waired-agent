@@ -1142,6 +1142,19 @@ func run(ctx context.Context, args []string) error {
 			if inferenceSub != nil && inferenceSub.provider != nil {
 				prov := inferenceSub.provider
 				deps.DeclaredContextWindow = prov.DeclaredContextWindow
+				// waired#1064: what this node runs and why it is or is
+				// not serving it. Wired for every provider, like the
+				// window above and unlike the ollama-only getters below:
+				// both read the catalog and the registry, so a Linux vLLM
+				// host answers them exactly as an ollama host does — which
+				// is the point, since the engine's own tag does not.
+				deps.ActiveModel = func() string {
+					id, _ := prov.ActiveModelID()
+					return id
+				}
+				deps.SubsystemState = func() string {
+					return prov.SubsystemState(ctx)
+				}
 			}
 			// Advertise the engine's VRAM-safe parallelism ceiling (advisory)
 			// so the admin Device detail page can show it and warn before an

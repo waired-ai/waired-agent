@@ -245,6 +245,15 @@ waired peers list
 Your other computers, with each one's address, engine, graphics card and model
 — which is how you find a name to pass to `worker set --pin`.
 
+**MODEL** is the model that computer runs. **MODELS** next to it is the same
+model under the name its AI software uses, which differs between Ollama and
+vLLM. **WORKER-CAPABLE** says whether it can answer right now, and when it
+cannot, why — for example `no (loading)` while it is still fetching its model.
+
+`waired worker get` reports the same two things for the computer you pinned:
+a `model:` line, and a `status:` line that spells out the reason when it is
+not serving.
+
 ### `waired ping`
 
 ```sh
