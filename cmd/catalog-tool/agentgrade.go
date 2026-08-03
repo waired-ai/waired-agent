@@ -60,10 +60,20 @@ func runAgentGrade(args []string) error {
 		return nil
 	}
 
-	// Offered-only for the report: coverage and the retirement worklist
-	// are questions about what we hand people, and a withheld model is
-	// neither required to be agent-grade nor retirable for failing.
+	// Offered-only for coverage and the gate: both are questions about
+	// what we hand people, and a withheld model is neither required to
+	// be agent-grade nor blocking on it. The REPORT still shows the
+	// withheld ones (printWithheldPendingRetirement) — silence is how a
+	// withheld entry becomes a permanent one.
 	bundled, err := catalog.BundledManifests()
+	if err != nil {
+		return fmt.Errorf("agentgrade: load bundled catalog: %w", err)
+	}
+	// The COMPLETE set: a withheld model is shipped, and measuring one is
+	// how it earned the job. Import resolves its engine tag against this
+	// set — the offered set would reject the very verdict that justified
+	// withholding it — and the report reads it for the withheld section.
+	all, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return fmt.Errorf("agentgrade: load bundled catalog: %w", err)
 	}
@@ -73,14 +83,6 @@ func runAgentGrade(args []string) error {
 	}
 
 	if len(importPaths) > 0 {
-		// The COMPLETE set for import: a withheld model is shipped, and
-		// measuring one is how it earned the job. Resolving its tag
-		// against the offered set would reject the verdict that
-		// justified withholding it.
-		all, err := catalog.BundledManifestsIncludingInternal()
-		if err != nil {
-			return fmt.Errorf("agentgrade: load bundled catalog: %w", err)
-		}
 		return importAgentGrade(importPaths, importOpts{
 			EngineVersion: *engineVersion,
 			Host:          *host,
@@ -105,6 +107,7 @@ func runAgentGrade(args []string) error {
 		len(bundled), len(set.Models), len(set.Unmeasurable))
 
 	printFailureRates(set, bundled)
+	printWithheldPendingRetirement(set, all)
 
 	if len(failures) > 0 {
 		fmt.Printf("\nrecorded as FAILING (%d) — cannot drive a coding agent:\n", len(failures))
@@ -181,6 +184,49 @@ func printFailureRates(set catalog.AgentGradeSet, manifests []catalog.Manifest) 
 		fmt.Printf("  %s%-30s %-14s %-17s %3d/%-3d  >= %3.0f%%\n",
 			mark, r.model, r.variant, r.worst.Case,
 			r.worst.Failed, r.worst.Trials, r.worst.LowerBound*100)
+	}
+}
+
+// printWithheldPendingRetirement lists the models held out of the offered
+// catalog that are ALSO above the retirement line.
+//
+// Withholding a failing model removes it from every offered-only view at
+// once — the rate table above, the worklist, the docs table, `models ls`.
+// That is the point, and it is also how such an entry stops being
+// revisited: the next reader sees a clean report and no reason to think
+// anything is queued. The exemption pattern this repo uses elsewhere
+// (agentgrade.json's "unmeasurable", InternalOnly itself) is "an
+// exemption nobody has to justify is an exemption nobody revisits", and
+// a reason string only satisfies that while someone is reading the file.
+// So the report says it out loud, with the rate and the reason — which
+// carries the tracking issue — on every run.
+//
+// Reported, never gated: `--require-pass` stays offered-only. A gate here
+// would be a red that no PR can clear (deleting the entry needs #200's
+// retired->successor map), and a permanent red is ignored, which is the
+// outcome this section exists to prevent.
+//
+// Reuses Failures rather than re-deriving the rate: one rule, two
+// audiences. What differs is the consequence, not the threshold.
+func printWithheldPendingRetirement(set catalog.AgentGradeSet, all []catalog.Manifest) {
+	withheld := make([]catalog.Manifest, 0, len(all))
+	reason := make(map[string]string, len(all))
+	for _, m := range all {
+		if m.InternalOnly == "" {
+			continue
+		}
+		withheld = append(withheld, m)
+		reason[m.ModelID] = m.InternalOnly
+	}
+	rows := set.Failures(withheld)
+	if len(rows) == 0 {
+		return
+	}
+	fmt.Printf("\nWITHHELD, PENDING RETIREMENT (%d) — above the retirement line and "+
+		"held out of the offered catalog, so nothing above lists them:\n", len(rows))
+	for _, r := range rows {
+		fmt.Printf("  %-34s %-18s %s\n", r.ModelID, r.VariantID, r.Reason)
+		fmt.Printf("    withheld because: %s\n", reason[r.ModelID])
 	}
 }
 

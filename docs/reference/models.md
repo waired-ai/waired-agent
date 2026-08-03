@@ -20,7 +20,7 @@ Waired が bundled で提供するローカル LLM の一覧。固定エイリ�
 
 > この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が機械生成する。**手で編集しない** — モデルを追加・更新したら `make catalog-docs`（または `catalog-tool docs`）で再生成してコミットする。catalog-radar（#413）の自動更新も同じ経路を使う。空欄は `—`。
 
-bundled 済み: **21 ファミリ / 34 バリアント**。
+bundled 済み: **20 ファミリ / 33 バリアント**。
 
 ファミリ概要・全バリアント表は **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。エンジンはバリアント単位（`runtime_support`）なので、両エンジン向けにビルドを持つファミリは両節に再掲される。Dense=全パラメータが毎トークン計算（計算 / VRAM 余裕がある環境向き）、MoE=総サイズ大だがアクティブ少（メモリリッチな Unified メモリ機向き・デコード高速）。
 
@@ -42,7 +42,6 @@ bundled 済み: **21 ファミリ / 34 バリアント**。
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `qwen2.5-coder-0.5b-instruct` | Qwen2.5 Coder 0.5B Instruct | — | 32,768 | chat, tool_use, json_mode | 0.5B | ollama | 1 |
 | `qwen2.5-coder-14b-instruct` | Qwen2.5 Coder 14B Instruct | `waired/medium` | 32,768 | chat, tool_use, json_mode | 14.7B | ollama | 2 |
 | `qwen2.5-coder-3b-instruct` | Qwen2.5 Coder 3B Instruct | `waired/small` | 32,768 | chat, tool_use, json_mode | 3.1B | ollama | 2 |
 | `qwen2.5-coder-7b-instruct` | Qwen2.5 Coder 7B Instruct | — | 32,768 | chat, tool_use, json_mode | 7.6B | ollama | 2 |
@@ -100,7 +99,6 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 
 | model_id | variant | format | quant | runtime | 品質 | 量子 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/活性） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `qwen2.5-coder-0.5b-instruct` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 10 | 4 | 0.4 | 2 | — | 0.5B | gqa | 12,288 | nv:ollama=S · amd:ollama=S · mac:ollama=S | ollama:qwen2.5-coder:0.5b-instruct-q4_K_M | — |
 | `qwen2.5-coder-14b-instruct` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 55 | 4 | 9.0 | 16 | — | 14.7B | gqa | 196,608 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen2.5-coder:14b-instruct-q4_K_M | — |
 | `qwen2.5-coder-3b-instruct` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 30 | 4 | 2.0 | 4 | — | 3.1B | gqa | 36,864 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen2.5-coder:3b-instruct-q4_K_M | — |
 | `qwen2.5-coder-7b-instruct` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 45 | 4 | 4.7 | 8 | — | 7.6B | gqa | 28,672 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen2.5-coder:7b-instruct-q4_K_M | — |
