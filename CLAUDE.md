@@ -87,7 +87,10 @@ tests (waired#932 G7):
   a `var xFn = realFn` seam needs a table test on `realFn`, or the real
   one is never called by any test.
 * **Declare pins.** A test that pins behaviour states in a comment
-  whether it is a product contract or a record of today's behaviour. A PR
+  whether it is a product contract or a record of today's behaviour —
+  and a product contract cites its ratifying source (issue,
+  decision-log entry, or owner comment; §Vocabulary and provenance).
+  Without one it is a record of today's behaviour. A PR
   that inverts an existing test says so in the PR body first.
 * **Seal machine-global state in `TestMain`, not per test** (#386). A
   clean CI runner hides every dependency on the developer's machine: the
@@ -103,6 +106,20 @@ tests (waired#932 G7):
   `if err == nil { t.Skip("host has …") }`: that cannot tell a
   contaminated host from a subject that wrongly succeeded, and it
   disables the assertion precisely on the machine editing the code.
+
+## Vocabulary and provenance
+
+Agent-coined terms have propagated through docs and issues until they
+read as ratified policy (waired#1056). Two rules, in docs, issues,
+comments, code, and chat:
+
+* Use established engineering terms. Do not coin new ones (product
+  proper nouns excepted). If a concept truly needs a name, prefer a
+  plain-word phrase and define it at first use.
+* Normative wording ("contract", "must never", policy claims) requires
+  its ratifying source — an issue, decision-log entry, or owner
+  comment — cited inline. No citable source → write it as a record of
+  today's behaviour, not a rule.
 
 ## Tags / releases
 
