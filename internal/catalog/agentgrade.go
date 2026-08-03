@@ -257,17 +257,18 @@ func (s AgentGradeSet) CoverageGaps(manifests []Manifest, fixtureRevision string
 // Half. Deleting a catalog entry is a claim that the model fails more
 // often than it works, which is a sentence someone can defend in a
 // review. Every lower line the measured catalog offers would sweep in a
-// model there is a reason to keep: qwen2.5-coder-3b defines the install
-// quality floor and sits at 23%, granite4-350m is the CI fixture at 14%,
-// and qwen3.5-9b's 5% is the residue of an upstream engine parser bug
-// (ollama/ollama#16383) that #458 taught the gateway to retry, not the
-// weights.
+// model there is a reason to keep: granite4-350m is the CI fixture at
+// 17%, qwen2.5-coder-3b defines the install quality floor at 14%, and
+// qwen3.5-35b-a3b is a current recommendation at 5%.
 //
 // Those three rates are the whole justification for the line, so
 // TestRatesCitedByRetireFailureRate reads them back off the shipped
-// store. They have gone stale once already: #467 re-measured the catalog
-// and left this paragraph quoting the previous sweep (3b at 17%,
-// granite4-350m at 11%, qwen3.5-9b at 30%).
+// store. That guard was added in #475 because this paragraph had gone
+// stale — #467 re-measured the catalog and left it quoting the previous
+// sweep — and it earned its place one PR later: the #479 sweep moved
+// every one of the three numbers it then cited (3b 23% -> 14%,
+// granite4-350m 14% -> 17%, qwen3.5-9b 5% -> 1%), and said so instead of
+// letting the sentence rot a second time.
 const RetireFailureRate = 0.5
 
 // Failures reports every ollama-servable variant whose measured failure
@@ -296,21 +297,24 @@ const RetireFailureRate = 0.5
 //
 // The measured store puts exactly ONE variant above the line:
 // qwen2.5-coder-0.5b, at a bound of 90%, against a next-worst of
-// qwen2.5-coder-3b at 23%. Nearly four times the margin the line needs,
-// and the widest gap in the file. That entry is now withheld (#475), so
-// on the OFFERED catalog this returns nothing and `catalog-tool
-// agentgrade --require-pass` gates CI; the record itself still says 90%,
-// and the report's withheld section keeps saying so until #200's
-// retirement machinery can delete it.
+// granite4-350m at 17%. Five times the margin the line needs, and the
+// widest gap in the file — two independent sweeps apart (#467, #479),
+// which is the property a deletion criterion needs and "failed every
+// trial" did not have. That entry is now withheld (#475), so on the
+// OFFERED catalog this returns nothing and `catalog-tool agentgrade
+// --require-pass` gates CI; the record itself still says 90%, and the
+// report's withheld section keeps saying so until #200's retirement
+// machinery can delete it.
 //
-// 0.5b is a different defect and no parser reaches it: its "tool calls"
-// name a daemon and a file path rather than any offered tool, so the
-// gateway correctly leaves them as text. #409 taught the gateway to
-// recover a call the engine had left in the assistant text, and three of
-// the four qwen2.5-coder sizes came back — 7b went from failing every
-// tool call to 1 of 24 on each of the two tool-requiring cases. A
-// worklist keyed on the stored verdict rather than on this threshold
-// would have proposed deleting all four.
+// 0.5b is a different defect from the rest of its family, and the two
+// sweeps caught it wearing two different faces at the same rate: first
+// tool calls serialised as text that no parser could recover, then no
+// tool syntax at all and a fabricated answer in its place. #409 taught
+// the gateway to recover a call the engine had left in the assistant
+// text, and the other three qwen2.5-coder sizes came back — 7b, which
+// once failed every tool call, now fails none in 24. A worklist keyed on
+// the stored verdict rather than on this threshold would have proposed
+// deleting all four.
 //
 // Verdicts recorded before per-trial counts existed have Trials == 0;
 // those fall back to the stored verdict so an old record is not
