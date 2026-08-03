@@ -257,3 +257,105 @@ func collectThinkingDeltas(t *testing.T, sse string) string {
 	}
 	return out.String()
 }
+
+// parseFailingEngine answers with the 500 ollama returns when its own
+// tool parser rejects what the model emitted, for the first `failures`
+// attempts.
+func parseFailingEngine(t *testing.T, failures int, reply string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var attempts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		if int(attempts.Add(1)) <= failures {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"XML syntax error on line 8: ` +
+				`element <function> closed by </parameter>","type":"api_error"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		msg, _ := json.Marshal(map[string]any{
+			"id": "chatcmpl-442",
+			"choices": []any{map[string]any{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": reply},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]int{"prompt_tokens": 7, "completion_tokens": 11},
+		})
+		_, _ = w.Write(msg)
+	})
+	return httptest.NewServer(mux), &attempts
+}
+
+// The non-streaming path retries the same condition as the streaming
+// one. It is not merely symmetry for its own sake: the probe drives both
+// transports and #440 pools them as two samples of one thing, so a retry
+// on only one would quietly make that untrue.
+func TestAnthropicNonStream_RetriesAnEngineParseFailure(t *testing.T) {
+	upstream, attempts := parseFailingEngine(t, 1, xmlFunctionTranscript)
+	defer upstream.Close()
+	rec := &captureRecorder{}
+	gw := recoveryGateway(t, upstream.URL, rec)
+
+	body := serveRecovery(t, gw, recoveryRequestBody(t, false)).Body.String()
+
+	if got := attempts.Load(); got != 2 {
+		t.Errorf("engine saw %d attempts, want 2", got)
+	}
+	if !strings.Contains(body, `"type":"tool_use"`) {
+		t.Errorf("the retry's tool call never reached the client:\n%s", body)
+	}
+	if events := rec.requestsSnapshot(); len(events) != 1 || events[0].ErrorReason != "" {
+		t.Error("a turn that succeeded on retry was recorded as a failure")
+	}
+}
+
+// Retries stop at the bound, and the client still gets the engine's own
+// message — the non-streaming path never hid anything, and this must not
+// start hiding it.
+func TestAnthropicNonStream_GivesUpAndStillReportsTheError(t *testing.T) {
+	upstream, attempts := parseFailingEngine(t, 99, "")
+	defer upstream.Close()
+	gw := recoveryGateway(t, upstream.URL, &captureRecorder{})
+
+	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages",
+		strings.NewReader(recoveryRequestBody(t, false)))
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	gw.Handler().ServeHTTP(w, r)
+
+	if got, want := attempts.Load(), int32(maxStreamRetries+1); got != want {
+		t.Errorf("engine saw %d attempts, want %d", got, want)
+	}
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want the engine's own 500", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "XML syntax error") {
+		t.Errorf("the engine's message was swallowed:\n%s", w.Body.String())
+	}
+}
+
+// An engine that is simply down must not be hammered: the retry exists
+// for a bad draw from the model, and an outage is not one.
+func TestAnthropicNonStream_DoesNotRetryAnOutage(t *testing.T) {
+	var attempts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"model requires more system memory than is available"}}`))
+	})
+	upstream := httptest.NewServer(mux)
+	defer upstream.Close()
+	gw := recoveryGateway(t, upstream.URL, &captureRecorder{})
+
+	r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages",
+		strings.NewReader(recoveryRequestBody(t, false)))
+	r.RemoteAddr = "127.0.0.1:1"
+	gw.Handler().ServeHTTP(httptest.NewRecorder(), r)
+
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("engine saw %d attempts, want 1 — an outage is not a bad draw", got)
+	}
+}

@@ -262,21 +262,44 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 // already decoded here, so metering costs one field read (waired#829).
 func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) {
 	start := time.Now()
-	resp, err := h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
-	if err != nil {
-		rr.fail(http.StatusBadGateway, "engine_request_failed")
-		slog.Debug("anthropic upstream unreachable", "latency_ms", time.Since(start).Milliseconds())
-		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		return
+	var (
+		resp     *http.Response
+		respBody []byte
+	)
+	// Retried on the same condition as the streaming path, for the same
+	// reason: the engine rejecting the model's own tool syntax is a bad
+	// draw, and the next draw is independent (#442). Nothing has been
+	// sent yet on this path, so there is no commitment to reason about —
+	// the whole turn is still in hand.
+	//
+	// Kept in step with the streaming path deliberately. The probe drives
+	// both and #440 pools the results as two samples of one thing; a
+	// retry on only one transport would quietly make that untrue.
+	for attempt := 1; ; attempt++ {
+		var err error
+		resp, err = h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
+		if err != nil {
+			rr.fail(http.StatusBadGateway, "engine_request_failed")
+			slog.Debug("anthropic upstream unreachable", "latency_ms", time.Since(start).Milliseconds())
+			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			return
+		}
+		respBody, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			rr.fail(http.StatusBadGateway, "engine_read_failed")
+			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			return
+		}
+		if resp.StatusCode/100 == 2 || attempt > maxStreamRetries ||
+			!IsEngineParseFailure(string(respBody)) {
+			break
+		}
+		slog.Warn("gateway: engine could not parse the tool call the model emitted; retrying",
+			"model", recordedModel(rr), "attempt", attempt,
+			"max_attempts", maxStreamRetries+1, "status", resp.StatusCode)
 	}
-	defer resp.Body.Close()
 	slog.Debug("anthropic upstream response", "status", resp.StatusCode, "latency_ms", time.Since(start).Milliseconds())
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		rr.fail(http.StatusBadGateway, "engine_read_failed")
-		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		return
-	}
 	if resp.StatusCode/100 != 2 {
 		// Pass through upstream's error verbatim, wrapping it in our
 		// envelope so clients still see Anthropic-shaped errors.
