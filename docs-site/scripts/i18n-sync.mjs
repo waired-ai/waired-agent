@@ -162,6 +162,8 @@ function runCheck({ quiet = false } = {}) {
 	}
 	console.error('  To resolve: update the Japanese page, then record it as current:');
 	console.error('    npm run i18n:accept -- <path>       (or --all)');
+	console.error('  Keep the pinned terminology in docs-site/TRANSLATION.md — never');
+	console.error('  re-derive those term choices while retranslating.');
 	console.error('  An English-only edit that needs no translation is accepted the');
 	console.error('  same way — the hash records "this pair was looked at".\n');
 	return 1;
