@@ -2,6 +2,8 @@ package catalog
 
 import (
 	"encoding/json"
+	"math"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -282,6 +284,124 @@ func TestFailures(t *testing.T) {
 	}
 	if strings.Contains(got[0].Reason, "greeting") {
 		t.Errorf("reason should not list passing cases, got %q", got[0].Reason)
+	}
+}
+
+// The bound is the rule, so it is pinned against hand-computed values
+// rather than against itself. Wilson score interval, one-sided 95%
+// (z = 1.645).
+func TestFailureRateLowerBound(t *testing.T) {
+	cases := []struct {
+		failed, trials int
+		want           float64
+	}{
+		{0, 24, 0},
+		{1, 24, 0.009350},
+		{2, 24, 0.027968},
+		{3, 24, 0.051076},
+		{7, 24, 0.166559},
+		{11, 24, 0.303894},
+		{23, 24, 0.833134},
+		{24, 24, 0.898674},
+		{1, 3, 0.078257},
+		{3, 3, 0.525760},
+		{2, 2, 0.424987},
+		{12, 12, 0.815992},
+		// Degenerate inputs answer 0 rather than NaN: a bound derived
+		// from nothing must not read as evidence of everything.
+		{0, 0, 0},
+		{5, 0, 0},
+		{-1, 24, 0},
+		// More failures than trials cannot happen, but a rule that
+		// panics on it is worse than one that clamps.
+		{5, 3, 0.525760},
+	}
+	for _, c := range cases {
+		if got := failureRateLowerBound(c.failed, c.trials); math.Abs(got-c.want) > 1e-6 {
+			t.Errorf("failureRateLowerBound(%d, %d) = %.6f, want %.6f", c.failed, c.trials, got, c.want)
+		}
+	}
+}
+
+// The line replaced "failed on EVERY trial". At the trial count every
+// stored verdict was taken with, it must answer the same — otherwise
+// this is a data change wearing a rule change's clothes.
+func TestRetirementLineReproducesFailsEveryTrial(t *testing.T) {
+	for n := 3; n <= 96; n++ {
+		if got := failureRateLowerBound(n, n); got <= RetireFailureRate {
+			t.Fatalf("%d of %d must stay retirable: bound %.4f is not above %.2f",
+				n, n, got, RetireFailureRate)
+		}
+	}
+	// Two trials is where it is STRICTER, and deliberately: DefaultTrials
+	// is 3 because a smaller sample records a coin flip as a verdict, and
+	// the importer already refuses a report below 2.
+	if got := failureRateLowerBound(2, 2); got > RetireFailureRate {
+		t.Errorf("2 of 2 is not enough evidence to delete a catalog entry: bound %.4f", got)
+	}
+}
+
+// And where it is stricter than the old rule: one lucky draw used to
+// take a hopeless model off the worklist entirely.
+func TestRetirementLineCatchesNearTotalFailure(t *testing.T) {
+	if got := failureRateLowerBound(23, 24); got <= RetireFailureRate {
+		t.Errorf("23 of 24 must be retirable; the old rule excused it for one draw (bound %.4f)", got)
+	}
+	// The worst entry that is NOT retirable today, so the margin below
+	// the line is pinned too. qwen3.5-9b's failures are an upstream
+	// engine parser bug (ollama/ollama#16383), not the weights.
+	if got := failureRateLowerBound(11, 24); got > RetireFailureRate {
+		t.Errorf("11 of 24 must NOT be retirable (bound %.4f)", got)
+	}
+}
+
+// The counts are the claim. A record whose stored verdict disagrees with
+// its own numbers must be judged on the numbers: the verdict is the
+// worst outcome across trials and therefore a function of the trial
+// count, which is the whole reason this rule reads the ratio.
+func TestFailuresReadsTheCountsNotTheVerdict(t *testing.T) {
+	manifests := []Manifest{{
+		ModelID:  "mislabelled",
+		Variants: []Variant{{VariantID: "q4", RuntimeSupport: []string{RuntimeOllama}}},
+	}}
+	set := AgentGradeSet{Models: map[string]ModelAgentGrade{
+		"mislabelled": {Variants: map[string]VariantAgentGrade{"q4": {
+			Verdict: AgentGradePass,
+			Cases: map[string]CaseOutcome{
+				"greeting":  {Verdict: "pass", Trials: 24},
+				"read-file": {Verdict: "fail_no_tool_call", Trials: 24, Failed: 24},
+			},
+		}}},
+	}}
+	if got := set.Failures(manifests); len(got) != 1 {
+		t.Fatalf("a variant failing 24 of 24 belongs on the worklist whatever its verdict says, got %+v", got)
+	}
+}
+
+// A golden on the shipped file. Replacing the rule moved no row, and
+// that claim is worth more as a test than as a sentence in a PR body:
+// the next person to move the threshold finds out here which models
+// they just proposed deleting.
+func TestFailuresOnTheShippedCatalog(t *testing.T) {
+	set, err := AgentGrades()
+	if err != nil {
+		t.Fatalf("AgentGrades: %v", err)
+	}
+	bundled, err := BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+	got := set.Failures(bundled)
+	var names []string
+	for _, f := range got {
+		names = append(names, f.ModelID+"/"+f.VariantID)
+	}
+	want := []string{"qwen2.5-coder-0.5b-instruct/q4-gguf"}
+	if !slices.Equal(names, want) {
+		t.Errorf("retirement worklist = %v, want %v", names, want)
+	}
+	if len(got) == 1 && !strings.Contains(got[0].Reason, "95% confidence") {
+		t.Errorf("the worklist must show the evidence behind the claim, got %q", got[0].Reason)
 	}
 }
 
