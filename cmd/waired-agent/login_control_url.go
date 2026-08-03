@@ -6,7 +6,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 )
 
-// resolveDaemonControlURL picks the Control Plane the app's "Log in…"
+// resolveDaemonControlURL picks the Control Plane the app's "Sign in…"
 // enrolls against when the login request itself carries no control_url,
 // applying the same three tiers as `waired init`: an explicit --control /
 // $WAIRED_CONTROL_URL, then the installer-recorded agent.env, then the

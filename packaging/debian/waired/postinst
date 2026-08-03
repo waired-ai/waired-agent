@@ -83,7 +83,7 @@ case "$1" in
   Verify:   waired status
 
 The agent boots without an identity and idles until you sign in, so a
-non-root desktop user can also finish via the tray ("Log in…"). See
+non-root desktop user can also finish via the tray ("Sign in…"). See
 `waired init --help` for options.
 
 EOF

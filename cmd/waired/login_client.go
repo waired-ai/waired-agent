@@ -202,7 +202,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 		case management.LoginPhaseActive:
 			fmt.Printf("\n%s %s\n", emo("✅", "*"), bold("Device signed in"))
 			if st.AccountEmail != "" {
-				fmt.Printf("Logged in as: %s\n", st.AccountEmail)
+				fmt.Printf("Signed in as: %s\n", st.AccountEmail)
 			}
 			fmt.Println("Waired is signed in and running in the background.")
 

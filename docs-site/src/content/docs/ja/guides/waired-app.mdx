@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 7c759d1308d1ba3c
+sourceHash: 2420fe91bfab31f3
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -47,7 +47,7 @@ import Expected from '../../../../components/Expected.astro';
 |---|---|---|
 | **● Connected** | サインイン済みで、到達できる状態。 | 何もしなくて大丈夫です。 |
 | **◐ Connecting…** | 接続中。サインイン直後やスリープ復帰直後に出ます。 | 数秒待ちます。 |
-| **○ Not signed in** | インストール済みですが、アカウントが未設定。 | 下の **Log in…** を選びます。 |
+| **○ Not signed in** | インストール済みですが、アカウントが未設定。 | 下の **Sign in…** を選びます。 |
 | **◐ Signing in… / ◐ Activating…** | 開始したサインインが進行中。 | 開いたブラウザで完了させます。 |
 | **○ Disconnected** | サインイン済みだが、いまネットワークに届いていない。 | **Connect** を選びます。直らなければ[うまくいかないとき](/ja/troubleshooting/)へ。 |
 | **◐ Waired agent is starting…** | サインイン直後の正常な状態です。Windows では常駐サービスがアイコンより数分遅れて起動します。 | 待つか、**Start the Waired agent…** ですぐに起動できます。 |
@@ -58,7 +58,7 @@ import Expected from '../../../../components/Expected.astro';
 
 状態表示のすぐ下の項目は、状況に応じて変わります。
 
-- **Log in…** — サインインを開始します。Google アカウント選択のためブラウザが開きます。
+- **Sign in…** — サインインを開始します。Google アカウント選択のためブラウザが開きます。
 - **Disconnect** — サインアウトせずに、このパソコンをプライベートネットワークから
   外します。ルーティングが止まるので、しばらくクラウドに戻したいときに使えます。
 - **Connect** — 戻します。
@@ -178,10 +178,10 @@ import Expected from '../../../../components/Expected.astro';
 | **Recent activity** | 直近 10 分のうち、指定どおりに応答できず別のところが答えた回数。空なのが正常です。 |
 | **About Waired** | バージョン情報。 |
 | **Start Waired on login** | パソコンにサインインしたときアイコンを表示するかどうか。チェックが入っていれば表示します。オフにしても常駐サービスは止まりません。 |
-| **Log out…** | このパソコンをサインアウトし、識別情報を削除します。ネットワークから外れ、次に使うときは最初からサインインし直しになります。 |
+| **Sign out…** | このパソコンをサインアウトし、識別情報を削除します。ネットワークから外れ、次に使うときは最初からサインインし直しになります。 |
 
-<Aside type="caution" title="Log out… と Disconnect は別物です">
-	**Disconnect** は一時的で、ワンクリックで戻せます。**Log out…** は識別情報の削除で、
+<Aside type="caution" title="Sign out… と Disconnect は別物です">
+	**Disconnect** は一時的で、ワンクリックで戻せます。**Sign out…** は識別情報の削除で、
 	次にサインインすると**新しい端末として登録**されます。しばらく自分の AI を使わないだけなら
 	**Disconnect** か、[ルーティングの一時停止](/ja/guides/pause/)を使ってください。
 </Aside>

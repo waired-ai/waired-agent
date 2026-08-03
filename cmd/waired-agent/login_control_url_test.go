@@ -6,7 +6,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 )
 
-// TestResolveDaemonControlURL pins the precedence the app's "Log in…"
+// TestResolveDaemonControlURL pins the precedence the app's "Sign in…"
 // depends on. Product contract: it must match `waired init`'s
 // (cmd/waired/main.go), because a device enrolled from the app and one
 // enrolled from the CLI have to land on the same Control Plane.

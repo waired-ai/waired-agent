@@ -181,7 +181,7 @@ func TestLoginResolvesEndpointPortBeforeEnroll(t *testing.T) {
 // install has no --control and no $WAIRED_CONTROL_URL in the daemon's
 // environment — launchd and the Windows SCM cannot supply one, and Linux's
 // EnvironmentFile only carries a URL when install.sh was given
-// --control/--dev — so the app's "Log in…" used to fail outright with
+// --control/--dev — so the app's "Sign in…" used to fail outright with
 // "login: no control URL". With main.go resolving through
 // resolveDaemonControlURL, that same daemon reaches enroll against the
 // production Control Plane. Product contract.

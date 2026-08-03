@@ -73,7 +73,7 @@ var (
 
 // Options configures the tray. ControlURL is optional; when empty the
 // tray reads it from /v1/identity once enrolled, but a first-time
-// "Log in..." action requires either ControlURL or
+// "Sign in..." action requires either ControlURL or
 // $WAIRED_CONTROL_URL to be set.
 type Options struct {
 	MgmtURL    string
@@ -620,7 +620,7 @@ func (t *tray) onReady(ctx context.Context) func() {
 		t.miAutostart = t.miSettings.AddSubMenuItem("Start Waired on login", "Toggle launching the tray when you sign in")
 		t.refreshAutostartLabel()
 		t.ensureAutostartOnFirstLaunch()
-		t.miLogout = t.miSettings.AddSubMenuItem("Log out…", "Sign this device out and remove its identity")
+		t.miLogout = t.miSettings.AddSubMenuItem("Sign out…", "Sign this device out and remove its identity")
 
 		systray.AddSeparator()
 		t.miQuit = systray.AddMenuItem("Quit", "Exit the Waired tray")
@@ -2293,7 +2293,7 @@ func (t *tray) apply(m MenuModel) {
 // systray creates every item visible, and apply() diffs model-to-model — so a
 // row whose zero-model visibility is false was never hidden by anything: the
 // first paint's (false,false) diff is a no-op and the row sat there blank,
-// forever. That was the two blank rows plus the stray "Log out…" /
+// forever. That was the two blank rows plus the stray "Sign out…" /
 // "Open Admin Console…" in the daemon-down screenshot (#317), and the same
 // class waired#808 fixed one row at a time.
 //

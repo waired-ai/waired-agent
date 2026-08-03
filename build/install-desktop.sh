@@ -22,7 +22,7 @@
 # After the script runs, the operator must:
 #   - export WAIRED_CONTROL_URL=<your-cp-url> (or write to /etc/waired/agent.env)
 #   - systemctl start waired-agent
-#   - log out & back in (so the autostart fires) and complete `Log in...` from the tray.
+#   - log out & back in (so the autostart fires) and complete `Sign in...` from the tray.
 set -eu
 
 [ "$(id -u)" -eq 0 ] || { echo "install-desktop.sh: must run as root" >&2; exit 1; }
@@ -58,5 +58,5 @@ Next steps:
   1. echo "WAIRED_CONTROL_URL=https://your-cp.example.com" >> /etc/waired/agent.env
   2. sudo systemctl start waired-agent      (the service is already enabled)
   3. Log out and back in to start waired-tray (or run 'waired-tray &' from your desktop session).
-  4. Right-click the tray icon and pick "Log in..." to enroll this device.
+  4. Right-click the tray icon and pick "Sign in..." to enroll this device.
 EOF

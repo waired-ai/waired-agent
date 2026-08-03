@@ -4,7 +4,7 @@
 // Both binaries need the same answer and used to disagree. `waired init`
 // (cmd/waired) had a three-tier resolution — explicit flag/env, the
 // installer-recorded agent.env, a baked production default — while the
-// daemon's login controller (cmd/waired-agent, the app's "Log in…" ->
+// daemon's login controller (cmd/waired-agent, the app's "Sign in…" ->
 // POST /waired/v1/login/start) had only the process environment, which
 // launchd and the Windows SCM cannot supply at all. A stock install that
 // was not enrolled at install time therefore failed sign-in from the app

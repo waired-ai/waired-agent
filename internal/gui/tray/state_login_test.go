@@ -59,8 +59,8 @@ func TestUpdate_LoginError(t *testing.T) {
 		t.Errorf("Kind=%d, want MenuNotSignedIn", got.Kind)
 	}
 	// Retry must remain possible: the login item stays visible on error.
-	if got.ToggleAction != "Log in..." {
-		t.Errorf("ToggleAction=%q, want %q on error", got.ToggleAction, "Log in...")
+	if got.ToggleAction != "Sign in..." {
+		t.Errorf("ToggleAction=%q, want %q on error", got.ToggleAction, "Sign in...")
 	}
 	if !strings.Contains(got.StatusMsg, "control plane denied") {
 		t.Errorf("StatusMsg=%q, want the error reason", got.StatusMsg)
@@ -73,7 +73,7 @@ func TestUpdate_NotSignedIn_NoLogin(t *testing.T) {
 		Health:   HealthOnline,
 		Identity: &management.IdentityView{Enrolled: false},
 	})
-	if got.ToggleAction != "Log in..." || got.HeaderTitle != "○ Not signed in" {
+	if got.ToggleAction != "Sign in..." || got.HeaderTitle != "○ Not signed in" {
 		t.Errorf("unexpected resting not-signed-in model: %+v", got)
 	}
 }

@@ -950,7 +950,7 @@ linux_maybe_init() {
 
 $(emo '💡' 'Note:') No terminal detected — sign-in skipped. To finish setup:
   - run:  sudo waired init
-  - or open the tray app and pick "Log in…"
+  - or open the tray app and pick "Sign in…"
   - or re-run the installer with --non-interactive to attempt it anyway
 EOF
             return 0
@@ -1278,7 +1278,7 @@ linux_done_banner() {
         nextline="Check it:     waired status        (try: waired infer \"hello, world!\")"
     else
         ready="$(emo '🔧' '[*]') The agent service is running — ready for sign-in."
-        nextline="Sign in:      sudo waired init     (or open the tray app → \"Log in…\")"
+        nextline="Sign in:      sudo waired init     (or open the tray app → \"Sign in…\")"
     fi
     cat <<EOF
 
@@ -1826,7 +1826,7 @@ darwin_next_steps() {
   Check it:  waired status   (try: waired infer \"hello, world!\")"
     else
         get_started="Get started:
-  1. Sign in: sudo waired init  (or open the tray app → \"Log in…\")
+  1. Sign in: sudo waired init  (or open the tray app → \"Sign in…\")
   2. Verify:  waired status     (then: waired infer \"hello, world!\")"
     fi
     if ollama_skip_requested; then
