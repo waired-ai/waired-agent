@@ -30,3 +30,6 @@ go.work.sum
 # Local worktrees (.claude/worktrees/ current, .worktrees/ legacy)
 /.claude/worktrees/
 /.worktrees/
+
+# Byte-cache from running the scripts/dev/*.py helpers
+__pycache__/
