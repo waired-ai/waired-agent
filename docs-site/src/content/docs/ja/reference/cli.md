@@ -128,7 +128,7 @@ waired doctor --fix              # 確認なしで修復（スクリプト・SSH
 
 ### `waired logout`
 
-このパソコンの識別情報と秘密を削除し、次の `waired init` が
+このパソコンの識別情報と秘密情報を削除し、次の `waired init` が
 新しい端末としてきれいに登録できるようにします。一時的な措置ではありません。
 しばらく使わないだけなら [`pause`](#waired-pause--resume) を見てください。
 
@@ -211,7 +211,7 @@ waired inference share off
 waired inference share status
 ```
 
-`engine stop` はメモリ逼迫時の避難口、`share off` は自分の利用を保ったまま
+`engine stop` はメモリ逼迫時の緊急手段、`share off` は自分の利用を保ったまま
 ほかのマシンからの利用だけを閉じる設定です。
 → [しばらく使わないようにする](/ja/guides/pause/)
 
@@ -290,7 +290,7 @@ waired unlink <エージェント>
 
 `link` は、ほかのツールが必要とする鍵も作成します
 （→ [チャットアプリから使う](/ja/guides/chat-clients/)）。
-`unlink` は正確で、`link` が追加したものだけを取り消します。
+`unlink` は `link` が追加したものだけを取り消し、それ以外には触れません。
 
 ### `waired claude`
 
@@ -425,7 +425,7 @@ WireGuard の鍵ペアを生成します。`init` が自動で行うので、
 |---|---|
 | `--mgmt <url>` | 常駐サービスの待ち受け先（既定 `http://127.0.0.1:9476`）。 |
 | `--gateway <url>` | `waired infer` 用の、自分の AI が応答するアドレス（既定 `http://127.0.0.1:9479`。鍵の要らないループバック）。 |
-| `--state-dir <dir>` | 識別情報と秘密の保存先。環境変数 `WAIRED_STATE_DIR` でも指定できます。 |
+| `--state-dir <dir>` | 識別情報と秘密情報の保存先。環境変数 `WAIRED_STATE_DIR` でも指定できます。 |
 
 <a id="sharing-vs-pausing"></a>
 

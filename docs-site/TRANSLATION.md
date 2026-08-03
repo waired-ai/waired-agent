@@ -57,3 +57,10 @@ provenance rules (#468).
 | private by design | 既定でプライベート | 設計からプライベートとしない | #473 §4 |
 | declares (its limit) | 明示する / 宣言する | 「名乗る」としない | #473 §4 |
 | sized / estimated | 見積もる | 「サイジングされています」としない | #473 §4 |
+| introduces (machines) to each other | 互いを見つけられるようにする | 「引き合わせる」としない | #473 §4 |
+| gets out of the way | 以後は通信に関与しない | 「脇に退く」としない | #473 §4 |
+| beyond their own keyboard | そのパソコン以外からも使えるようにする | 「キーボードの外へ」と直訳しない | #473 §4 |
+| each step outward | 外へ広げる段階ごとに | 「外側への一歩一歩」としない | #473 §4 |
+| the same switch (install-time) | 同じ設定を指定する | 「スイッチを倒す」としない | #473 §4 |
+| becomes a helper machine | 補助マシンとして使える | 「補助機に仕立てる」としない | #473 §4 |
+| active params (MoE) | アクティブパラメータ | 「アクティブ少」等、「アクティブ」を単独の名詞にしない | #473 §4 |
