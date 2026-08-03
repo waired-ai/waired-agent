@@ -18,25 +18,25 @@ Waired が bundled で提供するローカル LLM の一覧。固定エイリ�
 
 <!-- BEGIN GENERATED: catalog-tool docs -->
 
-> この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が機械生成する。**手で編集しない** — モデルを追加・更新したら `make catalog-docs`（または `catalog-tool docs`）で再生成してコミットする。catalog-radar（#413）の自動更新も同じ経路を使う。空欄は `—`。
+> この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が自動生成する。**手で編集しない** — モデルを追加・更新したら `make catalog-docs`（または `catalog-tool docs`）で再生成してコミットする。catalog-radar（#413）の自動更新も同じ手順で再生成する。空欄は `—`。
 
-bundled 済み: **20 ファミリ / 33 バリアント**。
+同梱: **20 ファミリ / 33 バリアント**。
 
-ファミリ概要・全バリアント表は **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。エンジンはバリアント単位（`runtime_support`）なので、両エンジン向けにビルドを持つファミリは両節に再掲される。Dense=全パラメータが毎トークン計算（計算 / VRAM 余裕がある環境向き）、MoE=総サイズ大だがアクティブ少（メモリリッチな Unified メモリ機向き・デコード高速）。
+ファミリ概要・全バリアント表は **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。エンジンはバリアント単位（`runtime_support`）なので、両エンジン向けにビルドを持つファミリは両節に再掲される。Dense=全パラメータが毎トークン計算（計算 / VRAM 余裕がある環境向き）、MoE=総サイズは大きいがアクティブパラメータが少ない（大容量のユニファイドメモリを積んだマシン向き・デコード高速）。
 
-### 固定エイリアス
+### エイリアス
 
-コーディングエージェント連携が提示する 3 つの固定別名と、それが解決する bundled モデル。
+コーディングエージェント連携が提示する 3 つのエイリアスと、それが解決する bundled モデル。
 
 | エイリアス | 解決先 model_id | 表示名 |
 | --- | --- | --- |
-| `waired/default` | 動的: このホストの既定コーディングモデル（preferred > active > bundled） |  |
+| `waired/default` | 動的: このホストの既定コーディングモデル（ユーザー指定 > 起動中のモデル > 同梱既定 の順で解決） |  |
 | `waired/coding` | 動的: waired/default と同じ解決 |  |
 | `waired/small` | `qwen2.5-coder-3b-instruct` | Qwen2.5 Coder 3B Instruct |
 
 ### ファミリ概要
 
-#### Ollama 経路（Mac / Windows / CPU / 内蔵・低VRAM GPU）
+#### Ollama で動かす場合（Mac / Windows / CPU / 内蔵・低VRAM GPU）
 
 **Dense**
 
@@ -52,7 +52,7 @@ bundled 済み: **20 ファミリ / 33 バリアント**。
 | `qwen3.5-9b` | Qwen3.5 9B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 9B | ollama | 1 |
 | `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | `waired/dense-large` | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
 
-**MoE（総 / 活性）**
+**MoE（総 / アクティブ）**
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -65,7 +65,7 @@ bundled 済み: **20 ファミリ / 33 バリアント**。
 | `qwen3.5-35b-a3b` | Qwen3.5 35B-A3B (MoE) (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 1 |
 | `qwen3.6-35b-a3b` | Qwen3.6 35B-A3B (MoE, Hybrid Linear+Full Attention) | `waired/moe-coding` | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 2 |
 
-#### vLLM 経路（NVIDIA / AMD GPU サーバ）
+#### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）
 
 **Dense**
 
@@ -76,7 +76,7 @@ bundled 済み: **20 ファミリ / 33 バリアント**。
 | `qwen2.5-coder-7b-instruct` | Qwen2.5 Coder 7B Instruct | — | 32,768 | chat, tool_use, json_mode | 7.6B | ollama | 2 |
 | `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | `waired/dense-large` | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
 
-**MoE（総 / 活性）**
+**MoE（総 / アクティブ）**
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -91,13 +91,13 @@ bundled 済み: **20 ファミリ / 33 バリアント**。
 
 ### 全バリアント（数値）
 
-vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / `×`=unsupported。weight GB は概算（`estimated_weight_gb`）、min VRAM は vLLM 経路、min RAM は ollama 経路の下限。数値の導出根拠は dev-docs の「推論層」と `internal/catalog/scoring/` を参照。
+vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / `×`=unsupported。weight GB は概算（`estimated_weight_gb`）、min VRAM は vLLM で動かす場合、min RAM は ollama で動かす場合の下限。数値の導出根拠は dev-docs の「推論層」と `internal/catalog/scoring/` を参照。
 
-#### Ollama 経路（Mac / Windows / CPU / 内蔵・低VRAM GPU）
+#### Ollama で動かす場合（Mac / Windows / CPU / 内蔵・低VRAM GPU）
 
 **Dense**
 
-| model_id | variant | format | quant | runtime | 品質 | 量子 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/活性） | attn | KV B/tok | vendor_support | source | min engine |
+| model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `qwen2.5-coder-14b-instruct` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 55 | 4 | 9.0 | 16 | — | 14.7B | gqa | 196,608 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen2.5-coder:14b-instruct-q4_K_M | — |
 | `qwen2.5-coder-3b-instruct` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 30 | 4 | 2.0 | 4 | — | 3.1B | gqa | 36,864 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen2.5-coder:3b-instruct-q4_K_M | — |
@@ -110,9 +110,9 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `qwen3.6-27b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 71 | 4 | 18.0 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-mtp-q4_K_M | 0.30.0 |
 | `qwen3.6-27b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 70 | 4 | 16.3 | 24 | — | 27B | hybrid_mamba | 65,536 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:27b-q4_K_M | — |
 
-**MoE（総 / 活性）**
+**MoE（総 / アクティブ）**
 
-| model_id | variant | format | quant | runtime | 品質 | 量子 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/活性） | attn | KV B/tok | vendor_support | source | min engine |
+| model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `gpt-oss-120b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 85 | 4 | 62.0 | 96 | — | 116.8B / A5.1B | sliding_window | 98,304 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=E | ollama:gpt-oss:120b | — |
 | `gpt-oss-20b` | `mxfp4-gguf` | ollama-tag | MXFP4 | ollama | 60 | 4 | 14.0 | 16 | — | 20.9B / A3.6B | sliding_window | 73,728 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:gpt-oss:20b | — |
@@ -124,20 +124,20 @@ vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / 
 | `qwen3.6-35b-a3b` | `mtp-q4-gguf` | ollama-tag | Q4_K_M | ollama | 90 | 4 | 22.6 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-mtp-q4_K_M | 0.30.0 |
 | `qwen3.6-35b-a3b` | `q4-gguf` | ollama-tag | Q4_K_M | ollama | 89 | 4 | 23.9 | 32 | — | 35B / A3.3B | hybrid_mamba | 20,480 | nv:ollama=S,vllm=S · amd:ollama=S,vllm=E · mac:ollama=S,mlx=S | ollama:qwen3.6:35b-a3b-q4_K_M | — |
 
-#### vLLM 経路（NVIDIA / AMD GPU サーバ）
+#### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）
 
 **Dense**
 
-| model_id | variant | format | quant | runtime | 品質 | 量子 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/活性） | attn | KV B/tok | vendor_support | source | min engine |
+| model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `qwen2.5-coder-14b-instruct` | `awq-int4` | safetensors | AWQ-int4 | vllm | 58 | 4 | 10.0 | — | 16,000 | 14.7B | gqa | 196,608 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen2.5-Coder-14B-Instruct-AWQ | — |
 | `qwen2.5-coder-3b-instruct` | `awq-int4` | safetensors | AWQ-int4 | vllm | 31 | 4 | 2.2 | — | 4,096 | 3.1B | gqa | 36,864 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen2.5-Coder-3B-Instruct-AWQ | — |
 | `qwen2.5-coder-7b-instruct` | `awq-int4` | safetensors | AWQ-int4 | vllm | 50 | 4 | 5.5 | — | 8,000 | 7.6B | gqa | 28,672 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen2.5-Coder-7B-Instruct-AWQ | — |
 | `qwen3.6-27b` | `awq-int4` | safetensors | AWQ-int4 | vllm | 72 | 4 | 17.0 | — | 24,000 | 27B | hybrid_mamba | 65,536 | nv:vllm=S · amd:vllm=E · mac:mlx=× | hf:Qwen/Qwen3.6-27B-AWQ | — |
 
-**MoE（総 / 活性）**
+**MoE（総 / アクティブ）**
 
-| model_id | variant | format | quant | runtime | 品質 | 量子 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/活性） | attn | KV B/tok | vendor_support | source | min engine |
+| model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `deepseek-v4-flash` | `fp8-safetensors` | safetensors | FP8 | vllm | 93 | 8 | 160.0 | — | 196,608 | 284B / A13B | mla | 124,928 | nv:vllm=S · amd:vllm=E · mac:ollama=×,mlx=× | hf:deepseek-ai/DeepSeek-V4-Flash | — |
 | `glm-4.5-air-106b-a12b` | `fp8-safetensors` | safetensors | FP8 | vllm | 75 | 4 | 108.0 | — | 120,000 | 106B / A12B | standard | 188,416 | nv:vllm=S · amd:vllm=E · mac:ollama=×,mlx=× | hf:zai-org/GLM-4.5-Air | — |
