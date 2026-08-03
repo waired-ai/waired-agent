@@ -81,7 +81,7 @@ waired doctor --fix
 
 | 検査項目 | 失敗した場合の意味 | 通常の対処 |
 |---|---|---|
-| **state directory** | 識別情報・秘密・記録を保持する Waired 自身のフォルダが無いか、読めない。 | `sudo` を付けて実行（Windows は管理者）。本当に無い場合は[サインインし直し](/ja/getting-started/first-run/)。 |
+| **state directory** | 識別情報・秘密情報・記録を保持する Waired 自身のフォルダが無いか、読めない。 | `sudo` を付けて実行（Windows は管理者）。本当に無い場合は[サインインし直し](/ja/getting-started/first-run/)。 |
 | **gateway token** | コーディングツールが自分の AI に届くための鍵が無いか、読めない。 | `waired link`、または **f**。 |
 | **device sign-in** | このパソコンのサインインが無効になっている。ローカルの AI は動き続けるが、アカウント上にこのパソコンが現れず、他の端末からも届かない。 | `waired init` → [サインインしたのに「サインインしていない」と出る](/ja/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out)を参照。 |
 | **network connection** | サインインは有効だが、このパソコンがまだ接続できていない。Waired が自動で再試行し続けます。 | 1 分ほど待ってもう一度実行。 |
