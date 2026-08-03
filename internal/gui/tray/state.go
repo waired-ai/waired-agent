@@ -1309,12 +1309,26 @@ func workerSummaryLabel(w management.WorkerResponse) string {
 		// phrasing for every surface — general inference fails outright,
 		// while a Claude turn on the auto route leaves for the Anthropic
 		// API; neither is served by the pinned worker.
+		//
+		// waired#1064 keeps that phrasing and makes the first half
+		// specific: "loading" or "pull failed" is what an operator can
+		// act on, where "unavailable" only says it is down. A peer that
+		// gave no reason still reads exactly as it did before.
 		suffix := ""
 		switch w.PinnedPeerStatus {
 		case "ok":
-			// no suffix — the active row already conveys it
+			// The consequence needs no stating — it is working. Name
+			// the model instead, so the summary row answers the same
+			// question the pin rows below it do.
+			if w.PinnedPeerModel != "" {
+				suffix = " — " + w.PinnedPeerModel
+			}
 		case "unavailable":
-			suffix = " — unavailable, requests are not served here"
+			why := inferencemesh.ConditionLabel(w.PinnedPeerCondition)
+			if why == "" {
+				why = inferencemesh.ConditionUnavailable
+			}
+			suffix = " — " + why + ", requests are not served here"
 		case "absent":
 			suffix = " — absent, requests are not served here"
 		}
@@ -1339,29 +1353,44 @@ func peerIsInferenceCandidate(p inferencemesh.PeerView) bool {
 
 // peerIsServing reports whether the candidate is currently usable
 // (active engine + reachable + serving at least one model). Used to
-// drive the "(unavailable)" label and the row's enabled state.
+// drive the row's enabled state. Delegates so the tray, the management
+// API and `waired peers list` cannot drift on the answer.
 func peerIsServing(p inferencemesh.PeerView) bool {
-	if p.Stale {
-		return false
-	}
-	if p.InferenceState == nil || !p.InferenceState.Reachable {
-		return false
-	}
-	return len(p.InferenceState.Models) > 0
+	return inferencemesh.PeerServing(p)
 }
 
-// pinEntryLabel builds "<name> (<model>)" when serving, or "<name>
-// (unavailable)" when the peer is an inference candidate but not
-// currently active. Falls back to DeviceID when the name is empty.
+// pinEntryLabel builds the pin row: "<name> (<model>)" for a peer that
+// is serving, "<name> (<model> — <why not>)" for one that named a model
+// but is not, and "<name> (<why not>)" for one that named none. Falls
+// back to DeviceID when the name is empty.
+//
+// The model is the catalog id where the peer reports one, so the same
+// model reads the same on every row regardless of which engine — and
+// therefore which OS — the peer runs (waired#1064). The reason is on the
+// row rather than in a tooltip because some Linux indicators do not
+// render menu-item tooltips, and inline rather than in a nested item
+// because the systray Windows backend renders no third level (see the
+// comment above WorkerPinsHeader).
 func pinEntryLabel(p inferencemesh.PeerView) string {
 	name := p.DeviceName
 	if name == "" {
 		name = p.DeviceID
 	}
-	if !peerIsServing(p) {
-		return name + " (unavailable)"
+	model := inferencemesh.PeerModel(p)
+	if peerIsServing(p) {
+		// Serving is the ordinary state and the model alone says it; a
+		// reason appears only when there is one worth giving.
+		if model == "" {
+			return name
+		}
+		return name + " (" + model + ")"
 	}
-	return name + " (" + p.InferenceState.Models[0] + ")"
+	cond := inferencemesh.PeerCondition(p)
+	why := inferencemesh.ConditionLabel(cond)
+	if model == "" || !inferencemesh.ConditionHasFreshModel(cond) {
+		return name + " (" + why + ")"
+	}
+	return name + " (" + model + " — " + why + ")"
 }
 
 func pinPresent(pins []WorkerPinEntryView, deviceID string) bool {
@@ -1936,19 +1965,15 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 // humanInferenceState maps the wire SubsystemState (snake_case) to a
 // short label suitable for menu rendering.
 func humanInferenceState(s string) string {
-	switch s {
-	case "no_engine":
-		return "no engine"
-	case "awaiting_model":
-		return "awaiting model"
-	case "pull_failed":
-		return "pull failed"
-	case "stopped":
+	// One mapping, shared with the peer rows so this machine reads the
+	// same locally as it does from someone else's menu (waired#1064).
+	// The one local-only word is "stopped": on its own line here, "you
+	// stopped the engine to free memory" is worth spelling out, but as a
+	// suffix inside a peer row's parentheses it would nest a second pair.
+	if s == "stopped" {
 		return "stopped (memory freed)"
-	case "engine_failed":
-		return "engine failed"
 	}
-	return s // ready / loading / starting / disabled / degraded / initializing
+	return inferencemesh.ConditionLabel(s)
 }
 
 // identityDeviceName returns the user-facing device name. We currently

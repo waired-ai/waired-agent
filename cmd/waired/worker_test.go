@@ -316,3 +316,56 @@ func TestPrintWorkerResponse_AllModes(t *testing.T) {
 		}
 	})
 }
+
+// waired#1064: `waired worker get` names the model the pin resolves to,
+// and says why it is not serving when it is not. Before this the command
+// answered neither, so an operator had to cross-reference `peers list`.
+func TestPrintWorkerResponse_PinnedNamesTheModelAndTheReason(t *testing.T) {
+	render := func(resp management.WorkerResponse) string {
+		t.Helper()
+		return captureStdout(t, func() { printWorkerResponse(os.Stdout, resp) })
+	}
+
+	out := render(management.WorkerResponse{
+		Mode:                state.RoutingModePinned,
+		PinnedPeerDeviceID:  "dev_abc",
+		PinnedPeerName:      "linux-gpu",
+		PinnedPeerStatus:    "ok",
+		PinnedPeerModel:     "qwen3-8b-instruct",
+		PinnedPeerCondition: signer.SubsystemStateReady,
+	})
+	// The hand-padded label column is 13 wide; a new row that does not
+	// line up with mode:/worker:/status: is the visible defect here.
+	if !strings.Contains(out, "model:       qwen3-8b-instruct\n") {
+		t.Errorf("model row missing or misaligned: %q", out)
+	}
+	if !strings.Contains(out, "status:      ok (peer reachable, serving)") {
+		t.Errorf("ok status changed: %q", out)
+	}
+
+	out = render(management.WorkerResponse{
+		Mode:                state.RoutingModePinned,
+		PinnedPeerDeviceID:  "dev_abc",
+		PinnedPeerName:      "linux-gpu",
+		PinnedPeerStatus:    "unavailable",
+		PinnedPeerModel:     "qwen3-8b-instruct",
+		PinnedPeerCondition: signer.SubsystemStatePullFailed,
+	})
+	if !strings.Contains(out, "status:      unavailable (its model download failed)") {
+		t.Errorf("condition not spelled out: %q", out)
+	}
+
+	// A peer that gave no reason keeps the wording it had before, and a
+	// peer that named no model says so rather than printing a blank.
+	out = render(management.WorkerResponse{
+		Mode:               state.RoutingModePinned,
+		PinnedPeerDeviceID: "dev_abc",
+		PinnedPeerStatus:   "unavailable",
+	})
+	if !strings.Contains(out, "status:      unavailable (peer present but not serving)") {
+		t.Errorf("older-peer status changed: %q", out)
+	}
+	if !strings.Contains(out, "model:       unknown") {
+		t.Errorf("unnamed model rendered blank: %q", out)
+	}
+}

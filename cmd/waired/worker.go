@@ -13,6 +13,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // runWorker dispatches `waired worker <get|set>`. Tailscale-exit-node-
@@ -221,7 +222,11 @@ func printWorkerResponse(w *os.File, resp management.WorkerResponse) {
 	if resp.Mode == state.RoutingModePinned {
 		fmt.Fprintf(out, "worker:      %s", displayPin(resp))
 		fmt.Fprintln(out)
-		fmt.Fprintf(out, "status:      %s\n", displayPinStatus(resp.PinnedPeerStatus))
+		// Which model, then whether it works — the order someone reads
+		// when deciding whether this is still the node they wanted
+		// (waired#1064). The label column is hand-padded to 13.
+		fmt.Fprintf(out, "model:       %s\n", displayPinModel(resp.PinnedPeerModel))
+		fmt.Fprintf(out, "status:      %s\n", displayPinStatus(resp.PinnedPeerStatus, resp.PinnedPeerCondition))
 	}
 	_, _ = w.Write(out.Bytes())
 }
@@ -240,11 +245,30 @@ func displayPin(resp management.WorkerResponse) string {
 	return resp.PinnedPeerDeviceID
 }
 
-func displayPinStatus(s string) string {
+// displayPinModel names the model the pinned peer is committed to.
+// "unknown" rather than blank when the peer named none: an agent that
+// predates waired#1064, or a peer that has dropped out of the snapshot,
+// and both are "we cannot tell" rather than "it runs nothing".
+func displayPinModel(model string) string {
+	if model == "" {
+		return "unknown"
+	}
+	return model
+}
+
+// displayPinStatus keeps the three statuses a caller branches on and
+// uses the condition, when the peer gave one, for the parenthetical.
+// "unavailable (peer present but not serving)" only ever restated the
+// status; "unavailable (downloading its model)" is the thing an
+// operator can act on (waired#1064).
+func displayPinStatus(s, condition string) string {
 	switch s {
 	case "ok":
 		return "ok (peer reachable, serving)"
 	case "unavailable":
+		if why := pinConditionDetail(condition); why != "" {
+			return "unavailable (" + why + ")"
+		}
 		return "unavailable (peer present but not serving)"
 	case "absent":
 		return "absent (peer not in current mesh snapshot)"
@@ -253,4 +277,29 @@ func displayPinStatus(s string) string {
 	default:
 		return s
 	}
+}
+
+// pinConditionDetail spells out the peer-reported conditions as the
+// phrase that fits inside "unavailable (...)". Returns "" for the
+// conditions that carry no reason, leaving the original wording.
+func pinConditionDetail(c string) string {
+	switch c {
+	case signer.SubsystemStateLoading:
+		return "downloading or loading its model"
+	case signer.SubsystemStatePullFailed:
+		return "its model download failed"
+	case signer.SubsystemStateEngineFailed:
+		return "its engine is down"
+	case signer.SubsystemStateStarting:
+		return "its engine is starting"
+	case signer.SubsystemStateStopped:
+		return "its engine was stopped to free memory"
+	case signer.SubsystemStateAwaitingModel:
+		return "no model chosen on that peer"
+	case signer.SubsystemStateNoEngine:
+		return "no engine on that peer"
+	case signer.SubsystemStateDisabled:
+		return "inference paused on that peer"
+	}
+	return ""
 }

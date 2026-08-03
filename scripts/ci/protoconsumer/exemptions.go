@@ -191,21 +191,17 @@ var producedInProto = []exemption{
 // #198/#199, and the onboarding-v3 wire (#411) did the same for
 // `SetupProgress.ModelGen`, paid by #136. waired#1030's `NotShared` (#417)
 // took the debt on the same terms and #428 paid it. waired#1031's
-// `ContextWindow` (#439) was the most recent, and #440 paid it. waired#1064
-// takes the debt on the same terms: the wire lands here, the probe-side
-// writers land next, and the table goes empty again — which is the point.
+// `ContextWindow` (#439) was the most recent, and #440 paid it.
+// waired#1064's `ActiveModel` (#469) took the debt on the same terms and
+// this PR pays it. Empty again, and that is the point.
 //
-// waired#1064's sibling field, InferenceState.SubsystemState, is absent
-// here on purpose and for the same reason Presentation.Reason is above:
+// (waired#1064's sibling field, InferenceState.SubsystemState, never
+// appeared here, for the reason Presentation.Reason is absent above:
 // management.InferenceStatus already has a field of that name, and the
-// guard matches producers by field NAME, so it reads the local write as
-// this one's producer. Listing it fails as "a field that has since gained
-// a writer". Its debt is therefore invisible to this tool and is tracked
-// on the issue alone.
-var producerPending = []exemption{
-	{reflect.TypeFor[signer.InferenceState](), "ActiveModel",
-		"waired#1064: the probe-side writer lands once the CP accepts the field"},
-}
+// guard matches producers by field NAME, so it read the local write as
+// this one's producer. Listing it would have failed as "a field that has
+// since gained a writer" before its writer existed.)
+var producerPending = []exemption{}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the

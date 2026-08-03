@@ -112,6 +112,24 @@ type inferenceProbeDeps struct {
 	// leaves every consumer on its pre-#1031 behaviour.
 	DeclaredContextWindow func() int
 
+	// ActiveModel and SubsystemState, when non-nil, answer the two
+	// questions a peer's picker asks about this node (waired#1064):
+	// which model it is committed to, in the catalog's namespace, and
+	// why it is or is not serving it. Read live each tick, like the
+	// getters above, so a model switch or a pull failure moves them.
+	//
+	// Unlike DeclaredContextWindow these are NOT gated on Models being
+	// non-empty. narrowPublishedModels empties Models for a node mid-pull
+	// or one whose engine has diverged, and describing exactly that case
+	// is why these two exist — gating them would blank them precisely
+	// when they carry the only information a peer has.
+	//
+	// Nil, or an empty return, keeps the field off the wire and leaves
+	// consumers on their pre-#1064 behaviour (they fall back to the
+	// engine tag in Models).
+	ActiveModel    func() string
+	SubsystemState func() string
+
 	// AdvertiseTag is the engine-side name peers may ask this node for
 	// (Ollama /api/tags name, or vLLM /v1/models id). Empty when no
 	// Active selection is set (fresh agent, pre-model-pull). When
@@ -240,6 +258,19 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 				s.ContextWindow = w
 			}
 		}
+		// waired#1064: what this node runs and why it is or is not
+		// serving it. Deliberately NOT behind the len(s.Models) > 0 gate
+		// above — narrowPublishedModels just emptied Models for the node
+		// that is mid-pull, mid-switch or wedged, and explaining that node
+		// is the entire reason these two are on the wire. Before them, a
+		// peer's picker could only render every one of those as a bare
+		// "unavailable".
+		if deps.ActiveModel != nil {
+			s.ActiveModel = deps.ActiveModel()
+		}
+		if deps.SubsystemState != nil {
+			s.SubsystemState = deps.SubsystemState()
+		}
 		// Set before the aggregator sees it, so the on-host diagnose view
 		// describes the same node the control plane is told about
 		// (waired#1030). omitempty keeps a sharing host's push byte-identical.
@@ -336,6 +367,13 @@ func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
 			LastCheck: time.Now().UTC().Format(time.RFC3339Nano),
 			Hardware:  hw,
 			NotShared: deps.IsShared != nil && !deps.IsShared(),
+		}
+		// The engine-less host has an answer for this too, and it is the
+		// one worth having: no_engine says why, where Type=none only says
+		// what. It never reaches a peer picker (Type=none is filtered out
+		// as a candidate), but the admin Device page reads the same field.
+		if deps.SubsystemState != nil {
+			st.SubsystemState = deps.SubsystemState()
 		}
 		pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
 		_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, st, deps.MachineKey)

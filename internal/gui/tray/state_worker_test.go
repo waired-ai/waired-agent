@@ -219,6 +219,143 @@ func TestApplyWorker_StalePeerShownAsUnavailable(t *testing.T) {
 // unavailable would tell the user their working machine is unusable
 // and grey out the row that works, which is the exact complaint #729
 // opened with, moved up into the UI.
+// waired#1064: the pin row names the model in the catalog's namespace,
+// so the same model reads the same on every row regardless of the peer's
+// engine — and therefore its OS. PRODUCT CONTRACT.
+func TestApplyWorker_PinRowNamesTheCatalogModel(t *testing.T) {
+	mesh := &inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{{
+			DeviceID:   "dev_mac",
+			DeviceName: "mac-studio",
+			InferenceState: &signer.InferenceState{
+				Reachable:      true,
+				Type:           signer.InferenceTypeOllama,
+				Models:         []string{"hf.co/unsloth/Qwen3-Coder-Next-GGUF:Q4_K_M"},
+				ActiveModel:    "qwen3-coder-next-80b-a3b-instruct",
+				SubsystemState: signer.SubsystemStateReady,
+			},
+		}},
+	}
+	m := Update(baseSnapshotWithWorker(&management.WorkerResponse{Mode: state.RoutingModeAuto}, mesh))
+	if len(m.WorkerPinEntries) != 1 {
+		t.Fatalf("got %d entries", len(m.WorkerPinEntries))
+	}
+	if got := m.WorkerPinEntries[0].Label; got != "mac-studio (qwen3-coder-next-80b-a3b-instruct)" {
+		t.Errorf("pin label = %q", got)
+	}
+}
+
+// The case waired#1064 exists for: narrowPublishedModels withdrew the
+// engine tag because the model is still downloading, so before this the
+// row could only say "(unavailable)" — the same thing it says for a dead
+// engine. PRODUCT CONTRACT.
+func TestApplyWorker_PinRowSaysWhyAPeerIsNotServing(t *testing.T) {
+	row := func(subState string) string {
+		t.Helper()
+		mesh := &inferencemesh.Snapshot{
+			Peers: []inferencemesh.PeerView{{
+				DeviceID:   "dev_busy",
+				DeviceName: "win-desktop",
+				InferenceState: &signer.InferenceState{
+					Reachable:      true,
+					Type:           signer.InferenceTypeOllama,
+					ActiveModel:    "qwen3-8b-instruct",
+					SubsystemState: subState,
+				},
+			}},
+		}
+		m := Update(baseSnapshotWithWorker(&management.WorkerResponse{Mode: state.RoutingModeAuto}, mesh))
+		if len(m.WorkerPinEntries) != 1 {
+			t.Fatalf("got %d entries", len(m.WorkerPinEntries))
+		}
+		if m.WorkerPinEntries[0].Available {
+			t.Error("a peer with no advertised tag must not be Available")
+		}
+		return m.WorkerPinEntries[0].Label
+	}
+	if got := row(signer.SubsystemStateLoading); got != "win-desktop (qwen3-8b-instruct — loading)" {
+		t.Errorf("downloading row = %q", got)
+	}
+	if got := row(signer.SubsystemStatePullFailed); got != "win-desktop (qwen3-8b-instruct — pull failed)" {
+		t.Errorf("failed-download row = %q", got)
+	}
+	if got := row(signer.SubsystemStateEngineFailed); got != "win-desktop (qwen3-8b-instruct — engine failed)" {
+		t.Errorf("dead-engine row = %q", got)
+	}
+}
+
+// A peer running an agent that predates the fields renders exactly as it
+// did before: the engine tag, and the published "(unavailable)" for every
+// reason it cannot give. PRODUCT CONTRACT — a mixed fleet must not
+// regress while it upgrades.
+func TestApplyWorker_PinRowUnchangedForAnOlderPeer(t *testing.T) {
+	mesh := &inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{
+			{
+				DeviceID:   "dev_old_ok",
+				DeviceName: "old-serving",
+				InferenceState: &signer.InferenceState{
+					Reachable: true,
+					Type:      signer.InferenceTypeOllama,
+					Models:    []string{"qwen3:8b-q4_K_M"},
+				},
+			},
+			{
+				DeviceID:   "dev_old_down",
+				DeviceName: "old-down",
+				InferenceState: &signer.InferenceState{
+					Reachable: false,
+					Type:      signer.InferenceTypeOllama,
+				},
+			},
+		},
+	}
+	m := Update(baseSnapshotWithWorker(&management.WorkerResponse{Mode: state.RoutingModeAuto}, mesh))
+	if len(m.WorkerPinEntries) != 2 {
+		t.Fatalf("got %d entries", len(m.WorkerPinEntries))
+	}
+	if got := m.WorkerPinEntries[0].Label; got != "old-serving (qwen3:8b-q4_K_M)" {
+		t.Errorf("serving row = %q", got)
+	}
+	if got := m.WorkerPinEntries[1].Label; got != "old-down (unavailable)" {
+		t.Errorf("down row = %q", got)
+	}
+}
+
+// waired#1064: the summary row answers the same question the pin rows do.
+func TestWorkerSummaryLabel_NamesTheModelAndTheReason(t *testing.T) {
+	ok := workerSummaryLabel(management.WorkerResponse{
+		Mode:             state.RoutingModePinned,
+		PinnedPeerName:   "linux-gpu",
+		PinnedPeerStatus: "ok",
+		PinnedPeerModel:  "qwen3-8b-instruct",
+	})
+	if ok != "linux-gpu (pinned) — qwen3-8b-instruct" {
+		t.Errorf("ok summary = %q", ok)
+	}
+	down := workerSummaryLabel(management.WorkerResponse{
+		Mode:                state.RoutingModePinned,
+		PinnedPeerName:      "linux-gpu",
+		PinnedPeerStatus:    "unavailable",
+		PinnedPeerModel:     "qwen3-8b-instruct",
+		PinnedPeerCondition: signer.SubsystemStateLoading,
+	})
+	// waired-agent#325's consequence clause survives verbatim; only the
+	// reason in front of it got specific.
+	if down != "linux-gpu (pinned) — loading, requests are not served here" {
+		t.Errorf("down summary = %q", down)
+	}
+	// A peer that gave no reason keeps the published wording exactly.
+	older := workerSummaryLabel(management.WorkerResponse{
+		Mode:             state.RoutingModePinned,
+		PinnedPeerName:   "linux-gpu",
+		PinnedPeerStatus: "unavailable",
+	})
+	if older != "linux-gpu (pinned) — unavailable, requests are not served here" {
+		t.Errorf("older-peer summary = %q", older)
+	}
+}
+
 func TestApplyWorker_SilentPeerStaysSelectable(t *testing.T) {
 	mesh := &inferencemesh.Snapshot{
 		Peers: []inferencemesh.PeerView{{

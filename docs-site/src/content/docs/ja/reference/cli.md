@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 3e1d9d23938a0a53
+sourceHash: 4c0c0eb496bddf80
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -236,6 +236,14 @@ waired peers list
 
 自分のほかのパソコンと、それぞれのアドレス・エンジン・グラフィックボード・モデル。
 `worker set --pin` に渡す名前はここで調べます。
+
+**MODEL** はそのパソコンで動いているモデル。隣の **MODELS** は同じモデルを AI
+ソフトウェア側の名前で表したもので、Ollama と vLLM では異なります。
+**WORKER-CAPABLE** はいま応答できるかどうかで、できない場合はその理由も出ます
+(モデルを取得中なら `no (loading)` など)。
+
+`waired worker get` は、指定したパソコンについて同じ 2 つを報告します。`model:`
+行と、応答できないときに理由を書く `status:` 行です。
 
 ### `waired ping`
 

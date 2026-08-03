@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // fakeWorkerCtl is the test double for management.WorkerController.
@@ -89,6 +91,91 @@ func TestWorkerHandler_GetReturnsState(t *testing.T) {
 	// No InferenceMeshProvider wired → status reports absent.
 	if got.PinnedPeerStatus != "absent" {
 		t.Errorf("PinnedPeerStatus = %q, want absent (no mesh provider)", got.PinnedPeerStatus)
+	}
+}
+
+// waired#1064: the pinned peer's model and the reason it is or is not
+// serving are derived HERE, once, so the tray (which reads this body)
+// and `waired worker get` cannot disagree about one machine.
+func TestWorkerHandler_GetReportsPinnedPeerModelAndCondition(t *testing.T) {
+	get := func(peers []inferencemesh.PeerView) WorkerResponse {
+		t.Helper()
+		ctl := &fakeWorkerCtl{
+			current: state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "dev_abc"},
+			desired: state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: "dev_abc"},
+		}
+		s := New(stubStatus{}, stubPinger{}).WithWorkerControl(ctl).
+			WithInferenceMesh(&fakeMeshProvider{snapshot: inferencemesh.Snapshot{Peers: peers}})
+		w := doWorker(t, s, http.MethodGet, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+		}
+		var got WorkerResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got
+	}
+
+	serving := get([]inferencemesh.PeerView{{
+		DeviceID:   "dev_abc",
+		DeviceName: "linux-gpu",
+		InferenceState: &signer.InferenceState{
+			Reachable: true, Type: signer.InferenceTypeOllama,
+			Models:         []string{"qwen3:8b-q4_K_M"},
+			ActiveModel:    "qwen3-8b-instruct",
+			SubsystemState: signer.SubsystemStateReady,
+		},
+	}})
+	if serving.PinnedPeerStatus != "ok" {
+		t.Errorf("status = %q, want ok", serving.PinnedPeerStatus)
+	}
+	if serving.PinnedPeerModel != "qwen3-8b-instruct" {
+		t.Errorf("model = %q, want the catalog id", serving.PinnedPeerModel)
+	}
+	if serving.PinnedPeerCondition != signer.SubsystemStateReady {
+		t.Errorf("condition = %q", serving.PinnedPeerCondition)
+	}
+
+	// Mid-download: the engine tag is withdrawn, so the coarse status is
+	// still "unavailable" — and the condition is what says why.
+	pulling := get([]inferencemesh.PeerView{{
+		DeviceID:   "dev_abc",
+		DeviceName: "linux-gpu",
+		InferenceState: &signer.InferenceState{
+			Reachable: true, Type: signer.InferenceTypeOllama,
+			ActiveModel:    "qwen3-8b-instruct",
+			SubsystemState: signer.SubsystemStateLoading,
+		},
+	}})
+	if pulling.PinnedPeerStatus != "unavailable" {
+		t.Errorf("status = %q, want unavailable", pulling.PinnedPeerStatus)
+	}
+	if pulling.PinnedPeerCondition != signer.SubsystemStateLoading {
+		t.Errorf("condition = %q, want loading", pulling.PinnedPeerCondition)
+	}
+	if pulling.PinnedPeerModel != "qwen3-8b-instruct" {
+		t.Errorf("model = %q; a downloading peer still names its model", pulling.PinnedPeerModel)
+	}
+
+	// An older peer names its engine tag and gives no reason; the body
+	// carries exactly what it did before the fields existed.
+	older := get([]inferencemesh.PeerView{{
+		DeviceID:   "dev_abc",
+		DeviceName: "linux-gpu",
+		InferenceState: &signer.InferenceState{
+			Reachable: true, Type: signer.InferenceTypeOllama,
+			Models: []string{"qwen3:8b-q4_K_M"},
+		},
+	}})
+	if older.PinnedPeerModel != "qwen3:8b-q4_K_M" {
+		t.Errorf("model = %q, want the engine tag fallback", older.PinnedPeerModel)
+	}
+
+	// A peer that dropped out of the snapshot reports neither.
+	absent := get(nil)
+	if absent.PinnedPeerStatus != "absent" || absent.PinnedPeerModel != "" || absent.PinnedPeerCondition != "" {
+		t.Errorf("absent peer: %+v", absent)
 	}
 }
 

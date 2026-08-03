@@ -445,7 +445,9 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 			PinnedPeerDeviceID: desired.PinnedPeerDeviceID,
 		}
 		if desired.Mode == state.RoutingModePinned && desired.PinnedPeerDeviceID != "" {
-			wr.PinnedPeerName, wr.PinnedPeerStatus = s.resolvePinStatus(r, desired.PinnedPeerDeviceID)
+			v := s.resolvePinStatus(r, desired.PinnedPeerDeviceID)
+			wr.PinnedPeerName, wr.PinnedPeerStatus = v.Name, v.Status
+			wr.PinnedPeerModel, wr.PinnedPeerCondition = v.Model, v.Condition
 		}
 		body.Worker = wr
 	}

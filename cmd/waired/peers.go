@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // runPeers dispatches `waired peers <subcommand>`. Only `list` for
@@ -68,7 +69,7 @@ func writePeersTable(w io.Writer, m *inferencemesh.Snapshot) {
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAME\tDEVICE-ID\tOVERLAY-IP\tENGINE\tGPU\tVRAM\tMODELS\tWORKER-CAPABLE")
+	_, _ = fmt.Fprintln(tw, "NAME\tDEVICE-ID\tOVERLAY-IP\tENGINE\tMODEL\tGPU\tVRAM\tMODELS\tWORKER-CAPABLE")
 	for _, p := range m.Peers {
 		_, _ = fmt.Fprintln(tw, peerRow(p))
 	}
@@ -102,21 +103,44 @@ func peerRow(p inferencemesh.PeerView) string {
 			models = strings.Join(p.InferenceState.Models, ",")
 		}
 	}
-	var capable string
-	switch {
-	case p.InferenceState == nil:
-		capable = "no (no engine)"
-	case p.Stale:
-		capable = "stale"
-	case !p.InferenceState.Reachable:
-		capable = "unreachable"
-	case len(p.InferenceState.Models) == 0:
-		capable = "no (no model)"
-	default:
-		capable = "yes"
+	// MODEL is the catalog model_id where the peer reports one, so the
+	// column is comparable across a mixed fleet; MODELS keeps the engine
+	// tags, which are what a request is matched against and therefore
+	// what to check when routing surprises you (waired#1064).
+	model := "-"
+	if m := inferencemesh.PeerModel(p); m != "" {
+		model = m
 	}
-	return fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
-		name, peerDisplayID(p), overlay, engine, gpu, vram, models, capable)
+	capable := "yes"
+	if !inferencemesh.PeerServing(p) {
+		capable = "no (" + capableReason(inferencemesh.PeerCondition(p)) + ")"
+	}
+	return fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+		name, peerDisplayID(p), overlay, engine, model, gpu, vram, models, capable)
+}
+
+// capableReason phrases a peer condition for the WORKER-CAPABLE column.
+//
+// The classification is shared (inferencemesh.PeerCondition) — a fourth
+// copy of that predicate is what waired#1064 removed. Only the WORDING
+// is local, and only for the three conditions that mean "cannot serve,
+// no reason given": a diagnostic table keeps them apart, where a menu
+// row collapses them into the one published word ("unavailable") because
+// they read the same to a person. These four strings are what this
+// column has always printed; everything else is new specificity the peer
+// volunteered, phrased the same way the menus phrase it.
+func capableReason(c string) string {
+	switch c {
+	case inferencemesh.ConditionStale:
+		return "stale"
+	case inferencemesh.ConditionUnreachable:
+		return "unreachable"
+	case inferencemesh.ConditionUnavailable:
+		return "no model"
+	case signer.SubsystemStateNoEngine:
+		return "no engine"
+	}
+	return inferencemesh.ConditionLabel(c)
 }
 
 // peerDisplayID is the identifier this listing may show for a peer.
