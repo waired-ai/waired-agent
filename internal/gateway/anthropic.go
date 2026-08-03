@@ -704,16 +704,23 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 			}
 		}
 
-		// The stream ended. If the engine never said HOW, this is not an
-		// empty turn — it is a failed one wearing an empty turn's clothes.
+		// Whether the engine said HOW it ended is worth recording — a
+		// stream that just stops is a different fault from one reporting
+		// a clean finish — but it is NOT the retry condition. Measuring
+		// found the same answerless turn arriving under both headings.
 		truncated = scanner.Err() != nil || (!sawDone && finishReason == "")
-		committed := contentSeen || len(toolOrder) > 0
-		if !truncated || committed || attempts > maxStreamRetries {
+		// Redrawable: this attempt produced nothing the client can act
+		// on, and nothing irrevocable has been sent. max_tokens is
+		// excluded — the model did produce, the budget ran out, and
+		// re-drawing would only spend it again.
+		redrawable := !contentSeen && len(toolOrder) == 0 && finishReason != "length"
+		if !redrawable || attempts > maxStreamRetries {
 			break
 		}
-		slog.Warn("gateway: engine ended the stream without a finish reason; retrying",
+		slog.Warn("gateway: engine produced no usable turn; retrying",
 			"model", recordedModel(rr), "attempt", attempts,
-			"max_attempts", maxStreamRetries+1, "scan_err", scanner.Err())
+			"max_attempts", maxStreamRetries+1, "truncated", truncated,
+			"finish_reason", finishReason, "scan_err", scanner.Err())
 		next, nerr := h.postToEngine(reqCtx, client, baseURL, "/v1/chat/completions", body)
 		if nerr != nil {
 			slog.Warn("gateway: retrying a truncated stream failed", "err", nerr)
@@ -769,52 +776,50 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	if textOpen {
 		nextIdx++
 	}
-	// Safety net: a max_tokens truncation that produced no thinking,
-	// text, or tool block would otherwise stream an empty turn and stall
-	// the agentic loop. Emit one visible note so the client always gets
-	// an actionable turn (mirrors OpenAIToAnthropic's non-stream guard).
-	if !thinkingOpen && !textOpen && len(toolOrder) == 0 && !recoveredOK && finishReason == "length" {
-		emit("content_block_start", map[string]any{
-			"type": "content_block_start", "index": 0,
-			"content_block": map[string]any{"type": "text", "text": ""},
-		})
-		emit("content_block_delta", map[string]any{
-			"type": "content_block_delta", "index": 0,
-			"delta": map[string]any{"type": "text_delta", "text": truncationNote},
-		})
-		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-		nextIdx = 1
-	}
-	// #442: every attempt ended without the engine saying how, and none
-	// produced an answer. Note the shape this guards against is NOT an
-	// empty turn — a thinking block is usually present, opened and closed
-	// correctly, ending on the model deciding which tool to call. Keying
-	// on emptiness would let all of these through, which is how a model
-	// losing half its tool calls produced a completely clean log.
+	// #442. What a client can act on is visible text, a tool call, or a
+	// recovered one. Thinking is none of them: an agent handed a turn
+	// that is only reasoning simply stalls, and keying this guard on
+	// emptiness is exactly what let the defect through — the thinking
+	// block is present, opened and closed correctly, ending on the model
+	// deciding which tool to call, and it is all there is.
 	//
-	// stop_reason stays end_turn. There is no Anthropic value for "the
-	// engine gave up", and inventing one risks a client state machine
-	// that has never seen it; the visible text carries the truth instead.
-	// Partial text counts as no answer for this purpose: a reply cut off
-	// mid-sentence and labelled end_turn is the same lie in a longer
-	// coat. It gets its own text block after whatever did arrive.
-	if truncated && len(toolOrder) == 0 && !recoveredOK {
+	// A truncated turn is unusable even when some text did arrive: a
+	// reply cut off mid-sentence and labelled end_turn is the same lie
+	// in a longer coat. It gets its own block after whatever landed.
+	//
+	// stop_reason stays end_turn throughout. There is no Anthropic value
+	// for "the engine gave up", and inventing one risks a client state
+	// machine that has never seen it; the visible text carries the truth
+	// instead.
+	usable := textOpen || len(toolOrder) > 0 || recoveredOK
+	if !usable || (truncated && len(toolOrder) == 0 && !recoveredOK) {
+		note, reason := streamFailureNote(recordedModel(rr), attempts), "engine_truncated_stream"
+		if !usable && finishReason == "length" {
+			// A different cause with a fix the reader can apply, and the
+			// one case here that is nobody's failure to record: the
+			// engine did exactly what the request asked for.
+			note, reason = truncationNote, ""
+		}
 		emit("content_block_start", map[string]any{
 			"type": "content_block_start", "index": nextIdx,
 			"content_block": map[string]any{"type": "text", "text": ""},
 		})
 		emit("content_block_delta", map[string]any{
 			"type": "content_block_delta", "index": nextIdx,
-			"delta": map[string]any{"type": "text_delta", "text": streamFailureNote(recordedModel(rr), attempts)},
+			"delta": map[string]any{"type": "text_delta", "text": note},
 		})
 		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": nextIdx})
 		nextIdx++
-		// Recorded as a failure even though the client was sent a 200:
-		// the status went out before anything was known, and a request
-		// metered as a success is one nobody ever investigates.
-		rr.fail(http.StatusBadGateway, "engine_truncated_stream")
-		slog.Warn("gateway: engine produced no usable turn; every attempt ended without a finish reason",
-			"model", recordedModel(rr), "attempts", attempts, "thinking", thinkingOpen)
+		if reason != "" {
+			// Recorded as a failure even though the client was sent a
+			// 200: the status went out before anything was known, and a
+			// request metered as a success is one nobody investigates.
+			rr.fail(http.StatusBadGateway, reason)
+			slog.Warn("gateway: no usable turn after every attempt",
+				"model", recordedModel(rr), "attempts", attempts,
+				"truncated", truncated, "finish_reason", finishReason,
+				"thinking_only", thinkingOpen && !textOpen)
+		}
 	}
 	for _, k := range toolOrder {
 		p := tools[k]

@@ -359,3 +359,119 @@ func TestAnthropicNonStream_DoesNotRetryAnOutage(t *testing.T) {
 		t.Errorf("engine saw %d attempts, want 1 — an outage is not a bad draw", got)
 	}
 }
+
+// silentEngine reports a clean finish and delivers reasoning only. Not a
+// truncation — the engine says the turn ended normally — but from the
+// client's seat it is the same stall, so it is the same failed draw.
+//
+// Measured: 24 engine-direct draws of qwen3.5:9b on the fixture produced
+// 17 clean tool calls and 7 truncations and NOT ONE turn where the model
+// reasoned and then chose silence. This shape is not the model declining
+// to answer; it is another lost call wearing a clean finish.
+func silentEngine(t *testing.T, failures int, reply, finish string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var attempts atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		f, _ := w.(http.Flusher)
+		send := func(payload map[string]any) {
+			b, _ := json.Marshal(payload)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+			if f != nil {
+				f.Flush()
+			}
+		}
+		for _, chunk := range chopForStreaming("The user wants /etc/hostname, so I should call Read.") {
+			send(map[string]any{"choices": []any{map[string]any{
+				"index": 0, "delta": map[string]any{"reasoning": chunk},
+			}}})
+		}
+		if int(n) > failures {
+			for _, chunk := range chopForStreaming(reply) {
+				send(map[string]any{"choices": []any{map[string]any{
+					"index": 0, "delta": map[string]any{"content": chunk},
+				}}})
+			}
+		}
+		send(map[string]any{"choices": []any{map[string]any{
+			"index": 0, "delta": map[string]any{}, "finish_reason": finish,
+		}}})
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if f != nil {
+			f.Flush()
+		}
+	})
+	return httptest.NewServer(mux), &attempts
+}
+
+// A turn carrying only reasoning is re-drawn even though the engine
+// declared a normal end. The retry condition is "produced no answer",
+// not "the stream broke" — the first version keyed on the break and this
+// case walked straight through it.
+func TestAnthropicStream_RetriesAnAnswerlessCleanFinish(t *testing.T) {
+	upstream, attempts := silentEngine(t, 1, xmlFunctionTranscript, "stop")
+	defer upstream.Close()
+	gw := recoveryGateway(t, upstream.URL, &captureRecorder{})
+
+	sse := serveRecovery(t, gw, recoveryRequestBody(t, true)).Body.String()
+
+	if got := attempts.Load(); got != 2 {
+		t.Errorf("engine saw %d attempts, want 2", got)
+	}
+	if !strings.Contains(sse, `"type":"tool_use"`) {
+		t.Errorf("the retry's tool call never reached the client:\n%s", sse)
+	}
+}
+
+func TestAnthropicStream_NotesAnAnswerlessCleanFinish(t *testing.T) {
+	upstream, attempts := silentEngine(t, 99, "", "stop")
+	defer upstream.Close()
+	rec := &captureRecorder{}
+	gw := recoveryGateway(t, upstream.URL, rec)
+
+	sse := serveRecovery(t, gw, recoveryRequestBody(t, true)).Body.String()
+
+	if got, want := attempts.Load(), int32(maxStreamRetries+1); got != want {
+		t.Errorf("engine saw %d attempts, want %d", got, want)
+	}
+	if !strings.Contains(collectTextDeltas(t, sse), "could not deliver a usable reply") {
+		t.Errorf("a thinking-only turn was passed off as an answer:\n%s", sse)
+	}
+	if events := rec.requestsSnapshot(); len(events) != 1 || events[0].ErrorReason != "engine_truncated_stream" {
+		t.Error("a thinking-only turn was metered as a success")
+	}
+}
+
+// max_tokens is the one answerless turn that is nobody's failure: the
+// engine did what the request asked. It must not be re-drawn — that
+// would spend the same budget again — and it keeps its own note, which
+// unlike the other one names something the reader can change.
+//
+// The old guard also required NO thinking block, so a model that spent
+// its whole budget reasoning fell through it. Same bug class as #442:
+// a guard keyed on emptiness that a thinking block defeats.
+func TestAnthropicStream_MaxTokensIsNotRetriedAndKeepsItsOwnNote(t *testing.T) {
+	upstream, attempts := silentEngine(t, 99, "", "length")
+	defer upstream.Close()
+	rec := &captureRecorder{}
+	gw := recoveryGateway(t, upstream.URL, rec)
+
+	sse := serveRecovery(t, gw, recoveryRequestBody(t, true)).Body.String()
+
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("engine saw %d attempts, want 1 — a spent budget is not a bad draw", got)
+	}
+	text := collectTextDeltas(t, sse)
+	if !strings.Contains(text, "max_tokens") {
+		t.Errorf("a budget exhaustion was not reported as one:\n%q", text)
+	}
+	if strings.Contains(text, "Switching to a different model") {
+		t.Errorf("the wrong note: this one is fixed by raising max_tokens:\n%q", text)
+	}
+	if events := rec.requestsSnapshot(); len(events) != 1 || events[0].ErrorReason != "" {
+		t.Error("max_tokens was recorded as a gateway failure")
+	}
+}
