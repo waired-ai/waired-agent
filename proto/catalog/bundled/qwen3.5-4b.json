@@ -31,7 +31,7 @@
       "active_params": 0,
       "quantization_tier": 4,
       "attention_arch": "hybrid_mamba",
-      "kv_bytes_per_token_fp16": 12288,
+      "kv_bytes_per_token_fp16": 32768,
       "vendor_support": {
         "nvidia": {
           "ollama": "stable",
