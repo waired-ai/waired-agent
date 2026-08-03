@@ -127,6 +127,11 @@ tests (waired#932 G7):
   then `EnterWorktree(path: <abs path>)` to pin the session cwd there.
   Remove with `git worktree remove` once merged or abandoned
   (`ExitWorktree` only removes its own). `.worktrees/` is legacy.
+* **Never squash onto a branch name** — `git reset --soft origin/main`
+  re-bases on wherever that ref points *now*, staging a concurrent
+  session's merge as a revert of its files. Squash against the recorded
+  base (`git merge-base HEAD origin/main` → `git reset --mixed <sha>`),
+  stage by name, and rebase as a separate step.
 * **Branch naming** — `<type>/<issue>-<short-description>` (kebab-case,
   lowercase): `<type>` ∈ `feat` / `fix` / `docs` / `refactor` / `test` /
   `ci` / `build` / `chore` / `perf`; issue number right after the prefix
