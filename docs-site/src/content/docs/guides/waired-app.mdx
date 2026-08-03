@@ -46,7 +46,7 @@ The first line tells you the state of everything else. If it is not
 |---|---|---|
 | **● Connected** | Signed in and reachable. | Nothing. |
 | **◐ Connecting…** | Working on it, just after you sign in or wake the computer. | Wait a few seconds. |
-| **○ Not signed in** | Waired is installed but has no account yet. | Choose **Log in…** below it. |
+| **○ Not signed in** | Waired is installed but has no account yet. | Choose **Sign in…** below it. |
 | **◐ Signing in…** / **◐ Activating…** | A sign-in you started is in progress. | Finish it in the browser window that opened. |
 | **○ Disconnected** | Signed in, but not reaching the network right now. | Choose **Connect**. If that does not help, see [Troubleshooting](/troubleshooting/). |
 | **◐ Waired agent is starting…** | Normal just after you sign in: on Windows the background service starts a couple of minutes later than the icon. | Wait, or choose **Start the Waired agent…** to start it now. |
@@ -57,7 +57,7 @@ The first line tells you the state of everything else. If it is not
 
 The item under the status line changes with the state:
 
-- **Log in…** — starts sign-in. Your browser opens for a Google account.
+- **Sign in…** — starts sign-in. Your browser opens for a Google account.
 - **Disconnect** — takes this computer off your private network, without
   signing out. Requests stop being routed. Use it when you want your tools to
   go back to the cloud for a while.
@@ -186,10 +186,10 @@ public-share settings and account, from any browser.
 | **Recent activity** | Times in the last 10 minutes when a request could not be served the way you asked and something else answered. Empty is normal and good. |
 | **About Waired** | Version information. |
 | **Start Waired on login** | Whether the icon appears when you sign in to your computer. A tick means yes. Turning it off does not stop the background service. |
-| **Log out…** | Signs this computer out and removes its identity. It leaves your network. To use it again you sign in from scratch. |
+| **Sign out…** | Signs this computer out and removes its identity. It leaves your network. To use it again you sign in from scratch. |
 
-<Aside type="caution" title="Log out… is not the same as Disconnect">
-	**Disconnect** is temporary and reversible in one click. **Log out…** removes
+<Aside type="caution" title="Sign out… is not the same as Disconnect">
+	**Disconnect** is temporary and reversible in one click. **Sign out…** removes
 	this computer's identity — the next sign-in enrolls it as a new device. If
 	you only want to stop using your own AI for a while, use **Disconnect**, or
 	[pause routing](/guides/pause/).

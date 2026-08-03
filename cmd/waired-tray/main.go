@@ -40,7 +40,7 @@ func run(args []string) error {
 	mgmtURL := fs.String("mgmt", "http://"+management.DefaultListen,
 		"Local Management API base URL")
 	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
-		"Control Plane URL used by the Log in… action (defaults to $WAIRED_CONTROL_URL)")
+		"Control Plane URL used by the Sign in… action (defaults to $WAIRED_CONTROL_URL)")
 	stateDir := fs.String("state-dir", defaultStateDir(),
 		"directory holding identity.json (passed to `waired init` / `waired logout` via pkexec)")
 	pollEvery := fs.Duration("poll-every", 5*time.Second,

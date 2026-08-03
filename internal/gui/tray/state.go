@@ -270,7 +270,7 @@ type MenuModel struct {
 	AdminURL       string // "" hides the Open Admin Console... item
 	StatusMsg      string // body for daemon-down / error states
 	// ToggleAction is the label the connect-toggle menu item should render:
-	// "Disconnect" | "Connect" | "Log in..." | "" (hidden).
+	// "Disconnect" | "Connect" | "Sign in..." | "" (hidden).
 	ToggleAction string
 
 	// Daemon-down actions (#315/#317). StartAgentAction and StartAgentCopy
@@ -618,12 +618,12 @@ func Update(snap Snapshot) MenuModel {
 			Kind:         MenuNotSignedIn,
 			Icon:         IconDisconnected,
 			HeaderTitle:  "○ Not signed in",
-			ToggleAction: "Log in...",
+			ToggleAction: "Sign in...",
 		}
 		// Reflect an in-flight daemon-driven login. While OAuth /
 		// activation is pending the login menu item is hidden (empty
 		// ToggleAction) so a second click cannot start a second session;
-		// an error keeps "Log in..." visible so the operator can retry.
+		// an error keeps "Sign in..." visible so the operator can retry.
 		if snap.Login != nil {
 			switch snap.Login.Phase {
 			case management.LoginPhaseLoggingIn:

@@ -27,8 +27,8 @@ func TestUpdate_NotSignedIn_NilIdentity(t *testing.T) {
 	if got.Kind != MenuNotSignedIn {
 		t.Errorf("Kind=%d, want MenuNotSignedIn", got.Kind)
 	}
-	if got.ToggleAction != "Log in..." {
-		t.Errorf("ToggleAction=%q, want %q", got.ToggleAction, "Log in...")
+	if got.ToggleAction != "Sign in..." {
+		t.Errorf("ToggleAction=%q, want %q", got.ToggleAction, "Sign in...")
 	}
 }
 
@@ -40,8 +40,8 @@ func TestUpdate_NotSignedIn_EnrolledFalse(t *testing.T) {
 	if got.Kind != MenuNotSignedIn {
 		t.Errorf("Kind=%d, want MenuNotSignedIn", got.Kind)
 	}
-	if got.ToggleAction != "Log in..." {
-		t.Errorf("ToggleAction=%q, want Log in...", got.ToggleAction)
+	if got.ToggleAction != "Sign in..." {
+		t.Errorf("ToggleAction=%q, want Sign in...", got.ToggleAction)
 	}
 }
 

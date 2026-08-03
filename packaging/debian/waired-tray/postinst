@@ -11,7 +11,7 @@ waired-tray installed. To start using it:
   - Log out and back in to your desktop session, OR
   - Run `waired-tray &` from a terminal in your desktop session.
 
-Then right-click the tray icon and pick "Log in..." to enroll this
+Then right-click the tray icon and pick "Sign in..." to enroll this
 device against your Control Plane.
 
 EOF

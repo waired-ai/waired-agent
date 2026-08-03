@@ -2208,7 +2208,7 @@ function Invoke-WairedInit {
     if (-not $NonInteractive -and -not (Test-InteractiveStdin)) {
         Common-Log "No terminal detected -- sign-in skipped. To finish setup:"
         Common-Log "  - run:  waired init"
-        Common-Log "  - or open the tray app and pick `"Log in...`""
+        Common-Log "  - or open the tray app and pick `"Sign in...`""
         Common-Log "  - or re-run the installer with -NonInteractive to attempt it anyway"
         Write-InstallProgress 'init-skipped'
         return
@@ -2284,7 +2284,7 @@ function Show-NextSteps {
     } else {
         Write-Host "$(Emo (Glyph 0x1F527) '*') The agent service is running - ready for sign-in."
         Write-Host "  Sign in:   & `"$InstallDir\waired.exe`" init"
-        Write-Host '             (or right-click the waired-tray icon and pick "Log in...")'
+        Write-Host '             (or right-click the waired-tray icon and pick "Sign in...")'
         Write-Host "  Verify:    & `"$InstallDir\waired.exe`" status"
     }
     Write-Host ''

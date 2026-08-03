@@ -101,7 +101,7 @@ Notes / escape hatches:
 - **No terminal? (CI, Docker build):** sign-in is skipped on **every OS**,
   but the service is still enabled + started. It boots without an identity
   and idles until login, so a **non-root desktop user can finish via the
-  tray** ("Log in…"), or you can run `sudo waired init` later. Windows
+  tray** ("Sign in…"), or you can run `sudo waired init` later. Windows
   used to attempt sign-in here regardless; both scripts now make the same
   call, and `--non-interactive` / `-NonInteractive` is the explicit opt-in
   that runs it anyway (init reads stdin from `/dev/null`, since `/dev/tty`
@@ -130,7 +130,7 @@ Notes / escape hatches:
   having the URL in its environment, which only Linux's systemd
   `EnvironmentFile` could provide.
 - With nothing configured, enrollment falls back to the production Control
-  Plane — from `waired init` and from the app's **Log in…** alike.
+  Plane — from `waired init` and from the app's **Sign in…** alike.
 - A scheme-less Control Plane host (`--control dev.waired.net`) is accepted
   and normalised — `https://` for remote hosts, `http://` for loopback.
 - The full set of enrollment flags (`--control`, `--non-interactive`,
