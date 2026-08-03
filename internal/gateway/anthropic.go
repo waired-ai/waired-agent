@@ -262,21 +262,44 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 // already decoded here, so metering costs one field read (waired#829).
 func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) {
 	start := time.Now()
-	resp, err := h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
-	if err != nil {
-		rr.fail(http.StatusBadGateway, "engine_request_failed")
-		slog.Debug("anthropic upstream unreachable", "latency_ms", time.Since(start).Milliseconds())
-		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		return
+	var (
+		resp     *http.Response
+		respBody []byte
+	)
+	// Retried on the same condition as the streaming path, for the same
+	// reason: the engine rejecting the model's own tool syntax is a bad
+	// draw, and the next draw is independent (#442). Nothing has been
+	// sent yet on this path, so there is no commitment to reason about —
+	// the whole turn is still in hand.
+	//
+	// Kept in step with the streaming path deliberately. The probe drives
+	// both and #440 pools the results as two samples of one thing; a
+	// retry on only one transport would quietly make that untrue.
+	for attempt := 1; ; attempt++ {
+		var err error
+		resp, err = h.postToEngine(ctx, client, baseURL, "/v1/chat/completions", body)
+		if err != nil {
+			rr.fail(http.StatusBadGateway, "engine_request_failed")
+			slog.Debug("anthropic upstream unreachable", "latency_ms", time.Since(start).Milliseconds())
+			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			return
+		}
+		respBody, err = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			rr.fail(http.StatusBadGateway, "engine_read_failed")
+			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			return
+		}
+		if resp.StatusCode/100 == 2 || attempt > maxStreamRetries ||
+			!IsEngineParseFailure(string(respBody)) {
+			break
+		}
+		slog.Warn("gateway: engine could not parse the tool call the model emitted; retrying",
+			"model", recordedModel(rr), "attempt", attempt,
+			"max_attempts", maxStreamRetries+1, "status", resp.StatusCode)
 	}
-	defer resp.Body.Close()
 	slog.Debug("anthropic upstream response", "status", resp.StatusCode, "latency_ms", time.Since(start).Milliseconds())
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		rr.fail(http.StatusBadGateway, "engine_read_failed")
-		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
-		return
-	}
 	if resp.StatusCode/100 != 2 {
 		// Pass through upstream's error verbatim, wrapping it in our
 		// envelope so clients still see Anthropic-shaped errors.
@@ -467,7 +490,10 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
-	defer resp.Body.Close()
+	// A closure, not `defer resp.Body.Close()`: resp is reassigned when a
+	// truncated stream is retried below, and the plain form would bind to
+	// the first body and leak every later one.
+	defer func() { _ = resp.Body.Close() }()
 	slog.Debug("anthropic upstream stream", "status", resp.StatusCode, "ttfb_ms", time.Since(start).Milliseconds())
 	if resp.StatusCode/100 != 2 {
 		errBody, _ := io.ReadAll(resp.Body)
@@ -558,88 +584,164 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		})
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
+	// spent accumulates the usage of ABANDONED attempts. The wire keeps
+	// reporting the surviving turn's own output_tokens, but metering has
+	// to see the work a retry really cost or this failure mode looks free.
+	var spent OpenAIUsage
+
+	// #442: an engine that fails mid-stream does not say so. Measured on
+	// ollama 0.31.1 with qwen3.5:9b, 7 of 12 turns: no error frame, no
+	// [DONE], finish_reason never set, and a body that closes cleanly. So
+	// neither an `error` field on the chunk nor scanner.Err() can see it
+	// — the only signature is the stream ending without the engine ever
+	// saying HOW it ended.
+	//
+	// Retrying is worth it because each attempt is a fresh draw (~50% on
+	// that model, so ~12% after two retries) and it needs no new parsing
+	// of anything. It is only safe while nothing irrevocable has reached
+	// the client: there is no SSE event that un-sends a text_delta or a
+	// tool_use. Thinking does not count — it is the model's reasoning,
+	// not its answer — but a retry's own reasoning is suppressed, so the
+	// client is never shown two traces for one turn.
+	truncated := false
+	attempts := 0
+	for {
+		attempts++
+		finishReason = ""
+		sawDone := false
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			payload := strings.TrimPrefix(line, "data: ")
+			if payload == "[DONE]" {
+				sawDone = true
+				break
+			}
+			var chunk struct {
+				Choices []struct {
+					Index int `json:"index"`
+					Delta struct {
+						Content          string `json:"content,omitempty"`
+						Reasoning        string `json:"reasoning,omitempty"`
+						ReasoningContent string `json:"reasoning_content,omitempty"`
+						// Not []OpenAIToolCall: the STREAMING shape carries
+						// an `index` the non-streaming one has no field
+						// for, and it is the only reliable way to tell a
+						// continuation of call N from the start of call
+						// N+1 (see toolDeltaKey).
+						ToolCalls []streamToolCallDelta `json:"tool_calls,omitempty"`
+					} `json:"delta"`
+					FinishReason string `json:"finish_reason,omitempty"`
+				} `json:"choices"`
+				Usage *OpenAIUsage `json:"usage,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+				continue
+			}
+			if chunk.Usage != nil {
+				usage = *chunk.Usage
+			}
+			for _, ch := range chunk.Choices {
+				// Reasoning arrives before content; stream it as a thinking
+				// block at index 0. Ignore any stray reasoning once text has
+				// started (thinking is closed at that point).
+				reasoning := ch.Delta.Reasoning
+				if reasoning == "" {
+					reasoning = ch.Delta.ReasoningContent
+				}
+				// attempts == 1 keeps a retry's reasoning off the wire. The
+				// first attempt's trace is already streamed and cannot be
+				// withdrawn, and one turn carrying two chains of thought
+				// reads as a malfunction. What a retry is asked for is the
+				// ANSWER; its reasoning is a second opinion nobody
+				// requested. Worth saying out loud: the trace the client
+				// keeps then belongs to the abandoned attempt. Same prompt
+				// and same model make the two near-identical in practice,
+				// and "near" is exactly why this is a comment and not a
+				// silent condition.
+				if reasoning != "" && !contentSeen && attempts == 1 {
+					if !thinkingOpen {
+						emit("content_block_start", map[string]any{
+							"type": "content_block_start", "index": 0,
+							"content_block": map[string]any{"type": "thinking", "thinking": ""},
+						})
+						thinkingOpen = true
+					}
+					emit("content_block_delta", map[string]any{
+						"type": "content_block_delta", "index": 0,
+						"delta": map[string]any{"type": "thinking_delta", "thinking": reasoning},
+					})
+				}
+				if ch.Delta.Content != "" {
+					contentSeen = true
+					writeText(sieve.Push(ch.Delta.Content))
+				}
+				for _, tc := range ch.Delta.ToolCalls {
+					key := toolDeltaKey(tc.Index, tc.ID, tools, toolOrder, &nextToolKey)
+					p, ok := tools[key]
+					if !ok {
+						p = &partialTool{}
+						tools[key] = p
+						toolOrder = append(toolOrder, key)
+					}
+					if tc.ID != "" {
+						p.ID = tc.ID
+					}
+					if tc.Function.Name != "" {
+						p.Name = tc.Function.Name
+					}
+					if tc.Function.Arguments != "" {
+						p.Args.WriteString(tc.Function.Arguments)
+					}
+				}
+				if ch.FinishReason != "" {
+					finishReason = ch.FinishReason
+				}
+			}
 		}
-		payload := strings.TrimPrefix(line, "data: ")
-		if payload == "[DONE]" {
+
+		// Whether the engine said HOW it ended is worth recording — a
+		// stream that just stops is a different fault from one reporting
+		// a clean finish — but it is NOT the retry condition. Measuring
+		// found the same answerless turn arriving under both headings.
+		truncated = scanner.Err() != nil || (!sawDone && finishReason == "")
+		// Redrawable: this attempt produced nothing the client can act
+		// on, and nothing irrevocable has been sent. max_tokens is
+		// excluded — the model did produce, the budget ran out, and
+		// re-drawing would only spend it again.
+		redrawable := !contentSeen && len(toolOrder) == 0 && finishReason != "length"
+		if !redrawable || attempts > maxStreamRetries {
 			break
 		}
-		var chunk struct {
-			Choices []struct {
-				Index int `json:"index"`
-				Delta struct {
-					Content          string `json:"content,omitempty"`
-					Reasoning        string `json:"reasoning,omitempty"`
-					ReasoningContent string `json:"reasoning_content,omitempty"`
-					// Not []OpenAIToolCall: the STREAMING shape carries
-					// an `index` the non-streaming one has no field
-					// for, and it is the only reliable way to tell a
-					// continuation of call N from the start of call
-					// N+1 (see toolDeltaKey).
-					ToolCalls []streamToolCallDelta `json:"tool_calls,omitempty"`
-				} `json:"delta"`
-				FinishReason string `json:"finish_reason,omitempty"`
-			} `json:"choices"`
-			Usage *OpenAIUsage `json:"usage,omitempty"`
+		slog.Warn("gateway: engine produced no usable turn; retrying",
+			"model", recordedModel(rr), "attempt", attempts,
+			"max_attempts", maxStreamRetries+1, "truncated", truncated,
+			"finish_reason", finishReason, "scan_err", scanner.Err())
+		next, nerr := h.postToEngine(reqCtx, client, baseURL, "/v1/chat/completions", body)
+		if nerr != nil {
+			slog.Warn("gateway: retrying a truncated stream failed", "err", nerr)
+			break
 		}
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			continue
+		if next.StatusCode/100 != 2 {
+			// The retry met a genuinely broken engine rather than another
+			// bad draw. Tell the adapter and stop: further attempts would
+			// measure the outage, not the model.
+			errBody, _ := io.ReadAll(next.Body)
+			_ = next.Body.Close()
+			reportEngineFailure(reporter, next.StatusCode, errBody)
+			break
 		}
-		if chunk.Usage != nil {
-			usage = *chunk.Usage
-		}
-		for _, ch := range chunk.Choices {
-			// Reasoning arrives before content; stream it as a thinking
-			// block at index 0. Ignore any stray reasoning once text has
-			// started (thinking is closed at that point).
-			reasoning := ch.Delta.Reasoning
-			if reasoning == "" {
-				reasoning = ch.Delta.ReasoningContent
-			}
-			if reasoning != "" && !contentSeen {
-				if !thinkingOpen {
-					emit("content_block_start", map[string]any{
-						"type": "content_block_start", "index": 0,
-						"content_block": map[string]any{"type": "thinking", "thinking": ""},
-					})
-					thinkingOpen = true
-				}
-				emit("content_block_delta", map[string]any{
-					"type": "content_block_delta", "index": 0,
-					"delta": map[string]any{"type": "thinking_delta", "thinking": reasoning},
-				})
-			}
-			if ch.Delta.Content != "" {
-				contentSeen = true
-				writeText(sieve.Push(ch.Delta.Content))
-			}
-			for _, tc := range ch.Delta.ToolCalls {
-				key := toolDeltaKey(tc.Index, tc.ID, tools, toolOrder, &nextToolKey)
-				p, ok := tools[key]
-				if !ok {
-					p = &partialTool{}
-					tools[key] = p
-					toolOrder = append(toolOrder, key)
-				}
-				if tc.ID != "" {
-					p.ID = tc.ID
-				}
-				if tc.Function.Name != "" {
-					p.Name = tc.Function.Name
-				}
-				if tc.Function.Arguments != "" {
-					p.Args.WriteString(tc.Function.Arguments)
-				}
-			}
-			if ch.FinishReason != "" {
-				finishReason = ch.FinishReason
-			}
-		}
+		// Close the abandoned attempt only now that it has a replacement,
+		// so every body is closed exactly once (the last by the defer).
+		_ = resp.Body.Close()
+		spent.PromptTokens += usage.PromptTokens
+		spent.CompletionTokens += usage.CompletionTokens
+		usage = OpenAIUsage{}
+		resp = next
 	}
 
 	// #409: settle the withheld tail. When the engine DID produce
@@ -674,21 +776,50 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	if textOpen {
 		nextIdx++
 	}
-	// Safety net: a max_tokens truncation that produced no thinking,
-	// text, or tool block would otherwise stream an empty turn and stall
-	// the agentic loop. Emit one visible note so the client always gets
-	// an actionable turn (mirrors OpenAIToAnthropic's non-stream guard).
-	if !thinkingOpen && !textOpen && len(toolOrder) == 0 && !recoveredOK && finishReason == "length" {
+	// #442. What a client can act on is visible text, a tool call, or a
+	// recovered one. Thinking is none of them: an agent handed a turn
+	// that is only reasoning simply stalls, and keying this guard on
+	// emptiness is exactly what let the defect through — the thinking
+	// block is present, opened and closed correctly, ending on the model
+	// deciding which tool to call, and it is all there is.
+	//
+	// A truncated turn is unusable even when some text did arrive: a
+	// reply cut off mid-sentence and labelled end_turn is the same lie
+	// in a longer coat. It gets its own block after whatever landed.
+	//
+	// stop_reason stays end_turn throughout. There is no Anthropic value
+	// for "the engine gave up", and inventing one risks a client state
+	// machine that has never seen it; the visible text carries the truth
+	// instead.
+	usable := textOpen || len(toolOrder) > 0 || recoveredOK
+	if !usable || (truncated && len(toolOrder) == 0 && !recoveredOK) {
+		note, reason := streamFailureNote(recordedModel(rr), attempts), "engine_truncated_stream"
+		if !usable && finishReason == "length" {
+			// A different cause with a fix the reader can apply, and the
+			// one case here that is nobody's failure to record: the
+			// engine did exactly what the request asked for.
+			note, reason = truncationNote, ""
+		}
 		emit("content_block_start", map[string]any{
-			"type": "content_block_start", "index": 0,
+			"type": "content_block_start", "index": nextIdx,
 			"content_block": map[string]any{"type": "text", "text": ""},
 		})
 		emit("content_block_delta", map[string]any{
-			"type": "content_block_delta", "index": 0,
-			"delta": map[string]any{"type": "text_delta", "text": truncationNote},
+			"type": "content_block_delta", "index": nextIdx,
+			"delta": map[string]any{"type": "text_delta", "text": note},
 		})
-		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-		nextIdx = 1
+		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": nextIdx})
+		nextIdx++
+		if reason != "" {
+			// Recorded as a failure even though the client was sent a
+			// 200: the status went out before anything was known, and a
+			// request metered as a success is one nobody investigates.
+			rr.fail(http.StatusBadGateway, reason)
+			slog.Warn("gateway: no usable turn after every attempt",
+				"model", recordedModel(rr), "attempts", attempts,
+				"truncated", truncated, "finish_reason", finishReason,
+				"thinking_only", thinkingOpen && !textOpen)
+		}
 	}
 	for _, k := range toolOrder {
 		p := tools[k]
@@ -729,7 +860,11 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	}
 	// Meter from the accumulated usage object rather than the emitted
 	// map: the SSE shape the client sees is unchanged by this PR.
-	rr.setUsage(int64(usage.PromptTokens), int64(usage.CompletionTokens))
+	// Metered with the abandoned attempts folded in: the engine really
+	// did that work, and leaving it out would make a model that needs
+	// three tries look as cheap as one that needs none.
+	rr.setUsage(int64(spent.PromptTokens+usage.PromptTokens),
+		int64(spent.CompletionTokens+usage.CompletionTokens))
 	emit("message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},

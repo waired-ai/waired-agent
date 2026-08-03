@@ -490,6 +490,85 @@ func recoveredToolUseID(respID string) string {
 // at max_tokens without producing any content, thinking, or tool call.
 const truncationNote = "[waired: the model reached max_tokens before producing any output. Increase max_tokens to get a response.]"
 
+// engineParseFailureMarkers are substrings that identify an upstream
+// error as "the engine could not parse the tool call the MODEL emitted",
+// as opposed to any other 5xx.
+//
+// Deliberately narrow. Every entry names a parse of generated content;
+// none of them can be produced by an engine that is merely down,
+// loading, out of memory, or missing the model. Widening it would make
+// the gateway retry an outage, and would make agentgrade record an
+// infrastructure failure as a model's verdict — the split this list
+// exists to make, collapsing in the wrong direction.
+//
+// Add to this list only from an observed run, and say which model
+// produced it.
+var engineParseFailureMarkers = []string{
+	"XML syntax error",        // ollama, qwen3.5:4b-q4_K_M — measured 2026-08-01
+	"error parsing tool call", // ollama tool-call parser
+	"invalid tool call",
+	"failed to parse tool",
+	"unexpected end of JSON input", // truncated/instructured call in a tool arg
+}
+
+// IsEngineParseFailure reports whether an upstream error body shows the
+// engine rejecting the model's own tool-call output — a bad draw from
+// the model, not a sick engine, and therefore worth another attempt.
+func IsEngineParseFailure(body string) bool {
+	for _, m := range engineParseFailureMarkers {
+		if strings.Contains(body, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxStreamRetries bounds how many times a truncated stream is re-drawn
+// before the turn is given up on (#442).
+//
+// Two, so three attempts in all. Each attempt is an independent draw, so
+// the ~50% per-turn failure measured on qwen3.5:9b becomes ~12%: the
+// step from two attempts to three is still worth a few seconds of
+// prefill, and the one after it is not.
+const maxStreamRetries = 2
+
+// streamFailureNote is what a person reads when the engine gave up
+// part-way through and every retry did too.
+//
+// It names the model twice over — "this model" and then the id — because
+// either alone can miss: a reader who never chose the model by name will
+// not connect an id to it, and a reader running several will not know
+// which one this was. It says how many attempts were made, so that the
+// obvious next move ("just send it again") is not the one they make. And
+// it names the fix rather than the fault, because the fault is upstream
+// and there is nothing in it for them to act on.
+//
+// No waired vocabulary: not "engine", not "upstream", not "the parser".
+// Someone reading their agent transcript did not opt into any of it.
+func streamFailureNote(model string, attempts int) string {
+	subject := "this model"
+	if model != "" {
+		subject = fmt.Sprintf("this model (%s)", model)
+	}
+	tries := fmt.Sprintf("%d attempts", attempts)
+	if attempts == 1 {
+		tries = "1 attempt"
+	}
+	return fmt.Sprintf("[waired: %s could not deliver a usable reply after %s. "+
+		"Some models write their tool calls in a form that cannot be read back. "+
+		"Switching to a different model usually fixes it.]", subject, tries)
+}
+
+// recordedModel is the catalog id the request resolved to, for text a
+// person reads. Deliberately not the model the CLIENT asked for: Claude
+// Code sends a claude-* alias, which names nothing the user chose.
+func recordedModel(rr *requestRec) string {
+	if rr == nil {
+		return ""
+	}
+	return rr.ev.Model
+}
+
 func mapFinishReason(openai string) string {
 	switch openai {
 	case "stop", "":

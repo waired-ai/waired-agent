@@ -133,35 +133,16 @@ func (v Verdict) IsFailure() bool {
 	return false
 }
 
-// engineParseFailureMarkers are substrings that identify an upstream
-// error as "the engine could not parse the tool call the MODEL
-// emitted", as opposed to any other 5xx.
-//
-// Deliberately narrow. Every entry names a parse of generated content;
-// none of them can be produced by an engine that is merely down,
-// loading, out of memory, or missing the model — those must keep
-// classifying as VerdictError, or the split this list exists to make
-// collapses in the wrong direction.
-//
-// Add to this list only from an observed run, and say which model
-// produced it.
-var engineParseFailureMarkers = []string{
-	"XML syntax error",        // ollama, qwen3.5:4b-q4_K_M — measured 2026-08-01
-	"error parsing tool call", // ollama tool-call parser
-	"invalid tool call",
-	"failed to parse tool",
-	"unexpected end of JSON input", // truncated/instructured call in a tool arg
-}
-
 // IsEngineParseFailure reports whether an upstream error body shows the
 // engine rejecting the model's own tool-call output.
+//
+// The list behind it lives in internal/gateway now: the gateway retries
+// on this condition (#442), so it has to recognise it, and one list read
+// by both keeps the probe from grading a failure the product silently
+// repaired. The dependency only points this way — agentgrade already
+// imports gateway, and gateway must not import a measurement package.
 func IsEngineParseFailure(body string) bool {
-	for _, m := range engineParseFailureMarkers {
-		if strings.Contains(body, m) {
-			return true
-		}
-	}
-	return false
+	return gateway.IsEngineParseFailure(body)
 }
 
 // Result is one case's classified outcome plus the evidence behind it,
