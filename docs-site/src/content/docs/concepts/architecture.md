@@ -18,7 +18,7 @@ directly, peer-to-peer, over an encrypted link.
 | `waired` (CLI) | What you run: `init`, `status`, `infer`, `link`, and the rest. |
 | `waired-agent` | The background service (systemd / launchd / Windows service). It talks to the control plane and runs a userspace WireGuard data plane. |
 | `waired-control` (Control Plane) | A hosted service. It handles Google sign-in, device enrollment, and streams a signed **Network Map**. You don't run it. |
-| `waired-relay` | A DERP-style relay that forwards encrypted WireGuard packets between agents that can't reach each other directly. |
+| `waired-relay` | A relay that forwards encrypted WireGuard packets between agents that can't reach each other directly (the same approach as Tailscale's DERP relays). |
 
 ## How a request flows
 
@@ -41,7 +41,7 @@ directly, peer-to-peer, over an encrypted link.
 
 1. **Enroll.** `waired init` signs you in with Google and registers the device
    with the control plane.
-2. **Discover.** The control plane streams each agent a CP-signed Network Map —
+2. **Discover.** The control plane streams each agent a Network Map signed by the control plane —
    the public keys, endpoints, and [relay](/reference/glossary/#relay) URLs of the other devices on your
    network.
 3. **Connect directly.** Agents open a direct WireGuard UDP link to each other.

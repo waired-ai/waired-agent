@@ -376,7 +376,7 @@ sudo waired claude enable     # Windows: from an administrator prompt
 
 - `local_no_model` — no model is active on this device yet. See
   [No answer comes back](#no-answer-comes-back).
-- `local_status_<code>` — your local serving returned that error just before
+- `local_status_<code>` — your local model returned that error just before
   falling back. `waired status --observability` has the detail.
 
 Falling back to the cloud is deliberate: Waired would rather keep you working
@@ -678,8 +678,8 @@ requests are not served here**.
 
 Claude Code is the one exception, and only on the `auto` route: rather than
 failing the turn, it finishes it with the real Anthropic API and adds a note to
-the conversation saying so. Switch that class to the `waired` route if you would
-rather see the error — see [Claude Code](/guides/claude-code/).
+the conversation saying so. Switch the main conversation to the `waired` route
+if you would rather see the error — see [Claude Code](/guides/claude-code/).
 
 To fix it, either wake the pinned computer (check it with `waired peers list`
 and `waired doctor` on that machine — see

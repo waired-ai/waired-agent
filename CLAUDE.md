@@ -246,7 +246,9 @@ message**, not in repo files.
   flow, **the Waired app** (`internal/gui/` — menus, icon states,
   dialogs, status text), the model catalog, troubleshooting. GUI-only is
   not an exemption: on a desktop the app is what the user calls Waired.
-  English canonical, `ja/` mirror (`npm run i18n:check` gates it).
+  English canonical, `ja/` mirror (`npm run i18n:check` gates it). ja
+  terminology is pinned in `docs-site/TRANSLATION.md` — follow it,
+  never re-derive a term choice while (re)translating a page.
   Internal architecture depth stays in the monorepo's dev-docs-site.
 * `docs-guard.yml` enforces the above: touching those surfaces without
   `docs-site/` fails unless the PR body carries a

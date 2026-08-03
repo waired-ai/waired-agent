@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: a98f0c4bc91cfe5d
+sourceHash: b96df2afc4bb19ad
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -706,7 +706,7 @@ unavailable, requests are not served here**。
 
 例外は Claude Code の `auto` ルートだけです。ターンを失敗させる代わりに本来の
 Anthropic API で完了させ、その旨を会話に 1 行追加します。エラーを見たい場合は
-そのクラスを `waired` ルートに切り替えてください
+メイン会話を `waired` ルートに切り替えてください
 （→ [Claude Code](/ja/guides/claude-code/)）。
 
 直すには、固定したパソコンを起こす（`waired peers list` と、そのマシンでの

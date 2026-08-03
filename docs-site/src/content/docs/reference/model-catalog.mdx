@@ -36,13 +36,13 @@ to **your** machine:
      per token, so decode stays fast. Best on **memory-rich unified-memory**
      machines (Apple Silicon, AMD Strix Halo) that can hold a large model in RAM.
 
-**Quality tier** is a 1–100 ranking (higher is better); the Auto-Selector serves
-the highest tier that fits your machine **and can hold a large coding context
-(~200k tokens)** — coding agents routinely fill 100k+ tokens of context, so a
-model that would truncate it loses to a slightly smaller one with the full
-window. On hardware where no model can serve that window, Waired picks the
-best fit anyway and says so in `waired status`. Whatever wins, clients can
-address it by the stable handle `waired/default` (see
+**Quality score** is a 1–100 ranking (higher is better); Waired picks the
+highest-scoring model that fits your machine **and can hold a large coding
+context (~200k tokens)** — coding agents routinely fill 100k+ tokens of
+context, so a model that would truncate it loses to a slightly smaller one
+with the full window. On hardware where no model can hold that window, Waired
+picks the best fit anyway and says so in `waired status`. Whatever wins,
+clients can address it by the fixed model name `waired/default` (see
 [Chat clients](/guides/chat-clients/)).
 
 The tables below are generated at build time from each model's bundled manifest
@@ -94,7 +94,7 @@ Big total size with a small active footprint — pairs well with multi-GPU serve
 
 ## How Waired picks for you
 
-The Auto-Selector chooses the highest-quality model that fits your machine's
+Waired chooses the highest-quality model that fits your machine's
 memory **and is fast enough to be worth using**. On shared-memory systems
 (Apple Silicon, AMD Strix Halo), MoE models with a small *active* parameter
 count are favored because decode speed tracks active params, not total size.
@@ -143,7 +143,7 @@ waired infer --explain "say hi"
 ```
 
 Run `waired models ls --detail` to see this same view for **your** hardware —
-each model's quality number, the memory it needs on the graphics card, whether
+each model's quality score, the memory it needs on the graphics card, whether
 it fits, and which one Waired would choose. `waired models ls` shows disk usage,
 and `waired runtimes status` the VRAM a loaded model is actually using.
 
