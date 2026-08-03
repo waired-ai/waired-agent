@@ -40,7 +40,7 @@ var fixedAliases = []string{"waired/default", "waired/coding", "waired/small"}
 // dynamicAliasNote is the rendered target for aliases no manifest owns
 // because the router resolves them dynamically (#632).
 var dynamicAliasNote = map[string]string{
-	"waired/default": "動的: このホストの既定コーディングモデル（preferred > active > bundled）",
+	"waired/default": "動的: このホストの既定コーディングモデル（ユーザー指定 > 起動中のモデル > 同梱既定 の順で解決）",
 	"waired/coding":  "動的: waired/default と同じ解決",
 }
 
@@ -125,8 +125,8 @@ var engineSections = []struct {
 	id   string // runtime_support token: catalog.RuntimeOllama | catalog.RuntimeVLLM
 	head string
 }{
-	{catalog.RuntimeOllama, "Ollama 経路（Mac / Windows / CPU / 内蔵・低VRAM GPU）"},
-	{catalog.RuntimeVLLM, "vLLM 経路（NVIDIA / AMD GPU サーバ）"},
+	{catalog.RuntimeOllama, "Ollama で動かす場合（Mac / Windows / CPU / 内蔵・低VRAM GPU）"},
+	{catalog.RuntimeVLLM, "vLLM で動かす場合（NVIDIA / AMD GPU サーバ）"},
 }
 
 // renderCatalogBlock builds the markdown body (no surrounding markers, no
@@ -141,18 +141,18 @@ func renderCatalogBlock(manifests []catalog.Manifest) string {
 		variantCount += len(m.Variants)
 	}
 
-	b.WriteString("> この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が機械生成する。")
+	b.WriteString("> この節は `proto/catalog/bundled/*.json` から `catalog-tool docs` が自動生成する。")
 	b.WriteString("**手で編集しない** — モデルを追加・更新したら `make catalog-docs`（または `catalog-tool docs`）で再生成してコミットする。")
-	b.WriteString("catalog-radar（#413）の自動更新も同じ経路を使う。空欄は `—`。\n\n")
-	fmt.Fprintf(&b, "bundled 済み: **%d ファミリ / %d バリアント**。\n\n", len(manifests), variantCount)
+	b.WriteString("catalog-radar（#413）の自動更新も同じ手順で再生成する。空欄は `—`。\n\n")
+	fmt.Fprintf(&b, "同梱: **%d ファミリ / %d バリアント**。\n\n", len(manifests), variantCount)
 	b.WriteString("ファミリ概要・全バリアント表は **エンジン（Ollama / vLLM）→ アーキテクチャ（Dense → MoE）** で分割する。")
 	b.WriteString("エンジンはバリアント単位（`runtime_support`）なので、両エンジン向けにビルドを持つファミリは両節に再掲される。")
 	b.WriteString("Dense=全パラメータが毎トークン計算（計算 / VRAM 余裕がある環境向き）、")
-	b.WriteString("MoE=総サイズ大だがアクティブ少（メモリリッチな Unified メモリ機向き・デコード高速）。\n\n")
+	b.WriteString("MoE=総サイズは大きいがアクティブパラメータが少ない（大容量のユニファイドメモリを積んだマシン向き・デコード高速）。\n\n")
 
 	// --- Fixed aliases -----------------------------------------------------
-	b.WriteString("### 固定エイリアス\n\n")
-	b.WriteString("コーディングエージェント連携が提示する 3 つの固定別名と、それが解決する bundled モデル。\n\n")
+	b.WriteString("### エイリアス\n\n")
+	b.WriteString("コーディングエージェント連携が提示する 3 つのエイリアスと、それが解決する bundled モデル。\n\n")
 	b.WriteString("| エイリアス | 解決先 model_id | 表示名 |\n")
 	b.WriteString("| --- | --- | --- |\n")
 	for _, alias := range fixedAliases {
@@ -174,20 +174,20 @@ func renderCatalogBlock(manifests []catalog.Manifest) string {
 		fmt.Fprintf(&b, "#### %s\n\n", es.head)
 		b.WriteString("**Dense**\n\n")
 		writeFamilyTable(&b, filterFamilies(manifests, es.id, false))
-		b.WriteString("**MoE（総 / 活性）**\n\n")
+		b.WriteString("**MoE（総 / アクティブ）**\n\n")
 		writeFamilyTable(&b, filterFamilies(manifests, es.id, true))
 	}
 
 	// --- Full per-variant table (engine → Dense/MoE) ----------------------
 	b.WriteString("### 全バリアント（数値）\n\n")
 	b.WriteString("vendor_support の状態略号: `S`=stable / `E`=experimental / `C`=community / `×`=unsupported。")
-	b.WriteString("weight GB は概算（`estimated_weight_gb`）、min VRAM は vLLM 経路、min RAM は ollama 経路の下限。")
+	b.WriteString("weight GB は概算（`estimated_weight_gb`）、min VRAM は vLLM で動かす場合、min RAM は ollama で動かす場合の下限。")
 	b.WriteString("数値の導出根拠は dev-docs の「推論層」と `internal/catalog/scoring/` を参照。\n\n")
 	for _, es := range engineSections {
 		fmt.Fprintf(&b, "#### %s\n\n", es.head)
 		b.WriteString("**Dense**\n\n")
 		writeVariantTable(&b, filterVariants(manifests, es.id, false))
-		b.WriteString("**MoE（総 / 活性）**\n\n")
+		b.WriteString("**MoE（総 / アクティブ）**\n\n")
 		writeVariantTable(&b, filterVariants(manifests, es.id, true))
 	}
 
@@ -286,7 +286,7 @@ func writeVariantTable(b *strings.Builder, rows []variantRow) {
 		b.WriteString("*(該当なし)*\n\n")
 		return
 	}
-	b.WriteString("| model_id | variant | format | quant | runtime | 品質 | 量子 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/活性） | attn | KV B/tok | vendor_support | source | min engine |\n")
+	b.WriteString("| model_id | variant | format | quant | runtime | 品質 | 量子化 | weight GB | min RAM GB | min VRAM MB | パラメータ（総/アクティブ） | attn | KV B/tok | vendor_support | source | min engine |\n")
 	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, r := range rows {
 		v := r.v

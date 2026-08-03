@@ -34,13 +34,13 @@ func TestRenderCatalogBlock_Deterministic(t *testing.T) {
 	for _, want := range []string{
 		"qwen2.5-coder-7b-instruct", // a known bundled model
 		"waired/default",            // the renamed default alias (#422/#478)
-		"### 固定エイリアス",
+		"### エイリアス",
 		"### ファミリ概要",
 		"### 全バリアント（数値）",
-		"#### Ollama 経路（Mac / Windows / CPU / 内蔵・低VRAM GPU）",
-		"#### vLLM 経路（NVIDIA / AMD GPU サーバ）",
+		"#### Ollama で動かす場合（Mac / Windows / CPU / 内蔵・低VRAM GPU）",
+		"#### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）",
 		"**Dense**",
-		"**MoE（総 / 活性）**",
+		"**MoE（総 / アクティブ）**",
 		"glm-4.5-air-106b-a12b", // a vLLM-only family
 		"qwen3.5-9b",            // an Ollama-only family
 	} {
@@ -62,8 +62,8 @@ func TestRenderCatalogBlock_EngineArchSplit(t *testing.T) {
 	block := renderCatalogBlock(loadManifestsT(t))
 
 	famOverview := between(t, block, "### ファミリ概要", "### 全バリアント（数値）")
-	ollama := between(t, famOverview, "#### Ollama 経路", "#### vLLM 経路")
-	vllm := famOverview[strings.Index(famOverview, "#### vLLM 経路"):]
+	ollama := between(t, famOverview, "#### Ollama で動かす場合", "#### vLLM で動かす場合")
+	vllm := famOverview[strings.Index(famOverview, "#### vLLM で動かす場合"):]
 
 	// Dense is listed before MoE within an engine section.
 	if i, j := strings.Index(ollama, "**Dense**"), strings.Index(ollama, "**MoE"); i < 0 || j < 0 || i > j {

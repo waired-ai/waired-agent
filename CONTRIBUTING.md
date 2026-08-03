@@ -46,8 +46,8 @@ make verify-cross
 ```
 
 `make verify-cross` matters because CI's test jobs run on Linux only:
-it cross-vets the tree for Windows and macOS so single-OS breakage is
-caught before push. When you change OS-specific behavior (paths,
+it runs `go vet` for the Windows and macOS targets so single-OS
+breakage is caught before push. When you change OS-specific behavior (paths,
 services, registry, installers), keep all three OSes in sync — see
 CLAUDE.md §"Cross-OS parity".
 
@@ -61,7 +61,9 @@ secret scan (config: `.gitleaks.toml`).
 `proto/` is a separate Go module — the wire-protocol contract imported
 by the private control plane. Its dependency allowlist (stdlib +
 `golang.org/x/crypto` + `golang.org/x/sys`) is enforced by CI, and
-changes to it follow the public-first flow described in the README.
+changes to it follow the public-repo-first release order described in
+the README (change `proto/` here, tag `proto/vX.Y.Z`, then bump the
+module in the private control-plane repo).
 Never break verify/sign compatibility within a published `proto/vX.Y.Z`
 version.
 
@@ -86,14 +88,16 @@ change really alters nothing a user reads, add a line to the PR body:
 docs-not-needed: internal refactor, no change to any printed or shown text
 ```
 
-PRs touching mesh / enrollment / `proto/` paths normally also run a
-real-NAT testnet gate (`testnet-pr.yml`), but it is skipped for fork
-PRs — the cross-repo dispatch credential is not available to forks. A
-maintainer runs it after review (by pushing your branch to this repo or
-dispatching the private harness manually); you don't need to do
-anything.
+PRs touching mesh / enrollment / `proto/` paths normally also run the
+testnet gate (`testnet-pr.yml`): an integration test that exercises
+NAT traversal against real NATs, hosted in a private repository. It is
+skipped for fork PRs — the cross-repo dispatch credential is not
+available to forks. A maintainer runs it after review (by pushing your
+branch to this repo or dispatching the test in the private repository
+manually); you don't need to do anything.
 
 The same applies to the 3-OS install test (`installtest.yml`): it runs
-on every same-repo PR but is skipped for fork PRs (it needs the cloud
-enroll identity, which is withheld from forks). A maintainer arms it
-the same way after review.
+on every same-repo PR but is skipped for fork PRs (it needs the
+enrollment credential — a repository secret used to register a test
+device — which is withheld from forks). A maintainer triggers it the
+same way after review.

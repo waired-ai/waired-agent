@@ -1,8 +1,11 @@
 # Waired one-liner installers
 
-End-user-facing entry points. Hosted on the `waired-ai/waired-agent`
-GitHub Releases (or `https://pkgs.waired.dev/…` once that DNS lands)
-and run via a single copy-pasteable command.
+End-user-facing entry points, run via a single copy-pasteable command.
+The scripts and OS binaries are hosted on `waired-ai/waired-agent`
+GitHub Releases; the Linux `.deb` packages live in an Artifact Registry
+apt repository (`asia-northeast1-apt.pkg.dev/projects/dev-waired`). A
+`pkgs.waired.dev` CNAME in front of both is planned but its DNS does
+not exist yet.
 
 ## Linux — `install.sh`
 
@@ -13,9 +16,9 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 Internally it adds the Waired apt repository and `apt install`s the
 `waired` (and, by default, `waired-tray`) packages. Like the other two
 OSes, the **Ollama** engine is installed by `waired init` itself and only
-when the operator says this computer should run models — the installer
+when the user says this computer should run models — the installer
 pre-installed it here until `#138`, which is why a `curl | sh` used to
-spend ~1.4 GB before asking anything. A host that never reaches init
+download ~1.4 GB before asking anything. A host that never reaches init
 (`--no-init`, no terminal, non-systemd) finishes with no engine until the
 first `sudo waired init`.
 
@@ -69,9 +72,10 @@ on `%ProgramData%\waired\`).
 Users who prefer a GUI can instead double-click
 `WairedSetup-<version>-x64.exe` (Inno Setup) from the same release.
 The CLI one-liner is the recommended path while Authenticode signing
-is not yet in place — see `waired/docs/decisions/`.
+is not yet in place — see the decision log in the private `waired`
+repository.
 
-## After install — it just runs
+## After install — first-run is automatic
 
 The installer now drives first-run setup for you. On a normal interactive
 run (a terminal is available, even via `curl | sh`):
@@ -85,7 +89,7 @@ run (a terminal is available, even via `curl | sh`):
 
 The service is started **before** `waired init` so sign-in attaches to the
 running agent (which drives the browser-based first-run setup) rather than
-the older terminal-only enrolment.
+the older terminal-only enrollment.
 
 Re-running the one-liner on an already-installed host detects it and
 interactively offers to **update**; if the host was installed but never
@@ -134,7 +138,7 @@ Notes / escape hatches:
 - A scheme-less Control Plane host (`--control dev.waired.net`) is accepted
   and normalised — `https://` for remote hosts, `http://` for loopback.
 - The full set of enrollment flags (`--control`, `--non-interactive`,
-  `--non-interactive`, `--skip-integration`, …) lives in **`waired init --help`**.
+  `--skip-integration`, …) lives in **`waired init --help`**.
 
 ## Supported targets
 
@@ -192,7 +196,7 @@ Shared between `install.sh` and `install.ps1`:
 | `WAIRED_NO_TRAY`          | If non-empty, skip `waired-tray` (Linux + macOS; Windows uses `-NoTray`). Use on headless servers. |
 | `WAIRED_INSTALL_BASE_URL` | Override the URL hosting `install.sh` / `install.ps1` + the OS binaries (tests / mirrors). |
 | `WAIRED_INSTALL_REPO`     | Override the GitHub repo whose Releases API resolves `latest` during `--check` / `--update` on macOS + Windows (Linux uses the apt candidate). Default `waired-ai/waired-agent`. |
-| `WAIRED_CLEAN`            | If non-empty, same as `--clean` / `-Clean` (full wipe, then a fresh install). The env form is how the piped Windows `iwr \| iex` one-liner opts in — `iex` strips switches. |
+| `WAIRED_CLEAN`            | If non-empty, same as `--clean` / `-Clean` (full wipe, then a fresh install). The env form is how the piped Windows `iwr \| iex` one-liner opts in — the pipeline cannot pass named parameters. |
 | `WAIRED_NO_OLLAMA`        | If non-empty, `waired init` skips the Ollama engine install (same as `--skip-ollama` / `-SkipOllama`). The installers no longer install the engine themselves — init owns the decision and the install, right after its "run local inference?" questions. |
 
 macOS-only:
@@ -206,7 +210,7 @@ Linux-only (apt repo metadata):
 
 | Variable                  | Effect                                                                            |
 |---------------------------|-----------------------------------------------------------------------------------|
-| `WAIRED_APT_BASE_URL`     | Override the apt repo base URL. Default points at the AR project endpoint.        |
+| `WAIRED_APT_BASE_URL`     | Override the apt repo base URL. Default points at the Artifact Registry (AR) project endpoint. |
 | `WAIRED_APT_SUITE`        | Override the apt suite. Defaults to `waired-dev-apt` (= the AR repository id).    |
 | `WAIRED_APT_COMPONENT`    | Override the apt component. Defaults to `main`. AR APT format uses `main` today.  |
 | `WAIRED_APT_KEY_URL`      | Override the AR signing-key URL (region-scoped Google-managed key).               |
@@ -227,7 +231,7 @@ than via a component flip.
 ## Updating
 
 The installer detects an existing install and updates it in place;
-enrolment, identity, and on-disk state are preserved across the update.
+enrollment, identity, and on-disk state are preserved across the update.
 
 * **Check only** (read-only — no download, no privilege prompt):
   `install.sh --check`, or `install.ps1 -Check`.
@@ -268,8 +272,8 @@ Version resolution:
 
 ### In-product `waired update` + tray (#293)
 
-On an installed host the simplest path is the in-product surface, which
-reuses this installer flow under the hood:
+On an installed host the simplest path is the in-product update
+commands, which reuse this installer flow under the hood:
 
 * `waired update` — checks via the local daemon, then applies if a newer
   release exists by re-running the installer above under elevation
@@ -294,15 +298,15 @@ tray to poll cheaply. The *apply* is always client-driven under
 elevation — the daemon never installs. Dev/edge builds
 (`0.0.0-<sha>` and the `<core>-edge.<ts>+<sha>` / `<core>~edge.<ts>+<sha>`
 edge versions) are never *proactively* flagged (the dotted-version compare
-can't rank timestamped edge builds, so the tray never nags an edge host).
+can't rank timestamped edge builds, so the tray never prompts an edge host).
 A manual `waired update` on an edge host still proceeds to the installer,
 which stays on the edge channel and lets apt decide whether a newer edge
 build exists.
 
 The background auto-check + popup + opt-in toggle (#294) drives this same
-surface on a timer: the daemon re-runs the check every 6h (Linux reads the
+flow on a timer: the daemon re-runs the check every 6h (Linux reads the
 local apt cache — no GitHub API; macOS/Windows query the Releases API ~4×/day)
-so a release published after boot surfaces without a client POST, and even
+so a release published after boot is detected without a client POST, and even
 headless agents detect it (logged as `waired update available`). The prompt
 preference persists at `<state-dir>/runtime/desired-update-notify` (default
 on) via `POST /waired/v1/update/settings`. The apply stays client-driven —
@@ -355,8 +359,8 @@ To wipe **and reinstall** in one step, run the *installer* with
 
 The scripts don't re-implement removal: they prefer the binaries' own
 `waired-agent uninstall` (SCM / launchd / systemd + Event Log) and
-`waired proxy uninstall`, plus the `.deb` maintainer scripts, then clean
-up only the residue the installer itself scattered (apt source, Ollama,
+`waired proxy uninstall`, plus the `.deb` maintainer scripts, then
+remove only what the installer itself added (apt source, Ollama,
 per-user autostart).
 
 On Windows, if `waired-agent.exe` cannot be launched — e.g. an
@@ -380,7 +384,7 @@ The script is a single POSIX `sh` file by design: piping a multi-file
 installer through `curl | sh` makes the trust boundary subtle (the
 second download has to be re-verified) and forces an extra network
 round-trip. Bundling everything into one stream is what Tailscale,
-Docker, and friends all do.
+Docker, and other installers do.
 
 "Extensibility" is therefore expressed by a **function-name
 convention** rather than by file layout:
@@ -399,9 +403,9 @@ convention** rather than by file layout:
 A separate `install.ps1` ships alongside, with the same env-var contract
 (`WAIRED_VERSION`, `WAIRED_NO_TRAY`, `WAIRED_INSTALL_BASE_URL`) but
 PowerShell-shaped helpers (`Common-Log`, `Common-Run`, `Detect-Platform`,
-…). The two scripts share a docs surface and a release-publishing
+…). The two scripts share the same documentation and release-publishing
 pipeline but no source code — multiplexing sh and PowerShell into one
-stream was rejected as a maintenance trap.
+stream was rejected as unmaintainable.
 
 ## Hosting
 
@@ -490,7 +494,7 @@ Defender-enabled box with `scripts/dev/amsi-scan.ps1` — it calls the same
 `AmsiScanString` verdict path `iex` consults (app name `PowerShell`, so
 Defender's PowerShell-script signatures are in scope) without executing the
 installer, and guards the result with Microsoft's AMSI test sample as a
-positive control so a box with the AMSI provider off can't report a false-green:
+positive control so a box with the AMSI provider off can't report a false pass:
 
 ```powershell
 # Scans packaging/install/install.ps1 + scripts/install/ollama-windows.ps1.
@@ -502,7 +506,7 @@ pwsh -File scripts/dev/amsi-scan.ps1 -Strict
 This is the same tool CI runs: the Defender-live canary step in
 `.github/workflows/installtest.yml` (soft-fail, on the self-hosted
 Windows guest) — see waired#553. The old standalone Gate A workflow
-(`amsi-scan.yml`) has not been re-homed since the monorepo split (#1).
+(`amsi-scan.yml`) has not been ported over since the monorepo split (#1).
 
 For pinpointing *which* line trips a detection, the community tools
 **AMSITrigger** / **ThreatCheck** / **DefenderCheck** bisect the file
@@ -515,6 +519,7 @@ context, so it can miss execution-context-only verdicts.
 version** and **cloud-delivered protection**, so a clean local scan
 reduces risk but does not *guarantee* every end-user machine passes, and
 a later definitions update can re-flag a script that passed before. The
-durable guarantee is **Authenticode signing** (deferred — see
-`waired/docs/decisions/`). CI coverage is the two gates above (`#553`); both stay
-advisory / soft-fail for the same non-determinism reason.
+durable guarantee is **Authenticode signing** (deferred — see the
+decision log in the private `waired` repository). CI coverage is the two
+gates above (`#553`); both stay advisory / soft-fail for the same
+non-determinism reason.

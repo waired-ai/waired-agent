@@ -97,9 +97,9 @@ script to disk first and run it with the flag.
 | `install.sh` | `install.ps1` | Environment variable | What it does |
 |---|---|---|---|
 | `--no-init` | `-SkipInit` | | Do **not** run `waired init` after installing. Without this, installing signs you in and sets you up in one pass. |
-| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the AI software. Use it when you already run your own Ollama. |
-| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of your own AI. |
-| `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | Start the agent at this log detail: `debug`, `info` (default), `warn` or `error`. Change it later without reinstalling via `waired config log-level`. |
+| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the bundled inference engine (Ollama). Use it when you already run your own Ollama. |
+| `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of your local model served by Waired. |
+| `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | Start the agent at this log level: `debug`, `info` (default), `warn` or `error`. Change it later without reinstalling via `waired config log-level`. |
 | `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, machine name and account email in the output, for screenshots and bug reports. Best-effort. |
 | `--dry-run` | `-DryRun` | | Print every privileged command without running any of them. |
 | `--yes`, `-y` | `-Yes` | | Assume yes at every prompt, including the pre-install summary. |
@@ -131,7 +131,7 @@ cmd/waired-agent   agent daemon
 cmd/waired-tray    desktop tray
 cmd/catalog-tool   model-catalog tooling
 internal/          agent implementation (not importable cross-module)
-proto/             shared protocol Go module (imported by the CP)
+proto/             shared protocol Go module (imported by the control plane)
 packaging/         install.sh / install.ps1, nfpm, systemd, Inno Setup
 scripts/           install helpers, CI guards, dev install-test harnesses
 docs-site/         public user documentation (docs.waired.ai)
