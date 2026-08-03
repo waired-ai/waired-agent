@@ -78,7 +78,7 @@ connection is impossible, forwards sealed data it cannot read. Full detail:
 
 ### What if my model is down — does my data go to the cloud?
 
-Only for Claude Code, only when your own serving cannot answer, and never
+Only for Claude Code, only when your own model cannot answer, and never
 silently: Claude Code falls back to the real Anthropic API so your turn
 completes, and Waired tells you it happened. If you would rather see the error,
 choose the `waired` route — see

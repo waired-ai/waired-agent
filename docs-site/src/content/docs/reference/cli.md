@@ -205,7 +205,7 @@ waired runtimes benchmark         # measure this computer's real speed
 
 `benchmark` is the interesting one: it measures actual throughput and, if a
 different model would suit this machine better, offers the swap and names both
-models with their quality tier so you can weigh speed against quality.
+models with their quality score so you can weigh speed against quality.
 
 ### `waired inference`
 
@@ -276,7 +276,7 @@ waired public use                      # show your current settings
 waired public use --auto               # use others' machines when they beat your own
 waired public use --explicit           # only when you specifically ask
 waired public use --off
-waired public use --min-tier N         # only machines at or above this quality tier
+waired public use --min-tier N         # only machines at or above this quality score
 waired public use --main on|off --sub on|off
 ```
 

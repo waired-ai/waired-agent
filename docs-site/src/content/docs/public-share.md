@@ -46,7 +46,7 @@ the owner's own work.
 
 **This version does not verify that a public node ran the model faithfully**,
 or that it returned honest, full-quality output. Your controls: set a minimum
-quality tier (`--min-tier`), use explicit mode so public nodes are only used
+quality score (`--min-tier`), use explicit mode so public nodes are only used
 when you say so, and judge results yourself.
 
 ### Your nickname is stable, so patterns can be linked
@@ -95,8 +95,8 @@ shared computer qualifies your whole account.
 | Tray menu | The **Public share** menu. |
 
 - **Stopping is immediate — a kill switch.** Turning sharing off cuts off any
-  guest requests running at that moment and cancels every guest pass for that
-  computer. You can turn it back on at any time.
+  guest requests running at that moment and cancels every guest's access for
+  that computer. You can turn it back on at any time.
 - **Max guests** is how many guests may use the computer at once. `0` means
   automatic, which keeps one slot free for you by default. You can raise it up
   to the computer's full capacity — and whatever you set, **your own work
@@ -113,10 +113,12 @@ your requests may go to public nodes:
 - **off** (the default) — public nodes are never used.
 - **auto** — a public node is used only when its model is better than the best
   your own computers offer.
-- **explicit** — public nodes are allowed whenever they are eligible.
+- **explicit** — public nodes are allowed whenever the filters below allow
+  them.
 
-Extra controls (CLI): `--min-tier N` sets a quality floor; `--main on|off` and
-`--sub on|off` allow or deny public nodes per agent class — for example, keep
+Extra controls (CLI): `--min-tier N` sets a minimum quality score;
+`--main on|off` and `--sub on|off` allow or deny public nodes for the main
+conversation and sub-agents separately — for example, keep
 your main assistant off public nodes while sub-agents may use them.
 
 Your own computers — and, if you are on a team, your teammates' — are always
