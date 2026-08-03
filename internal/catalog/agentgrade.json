@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "notes": "Agent-harness verdicts (waired-ai/waired-agent#322): can this model actually drive a coding agent's tool-call format? Measured by internal/agentgrade against the real gateway, never asserted from reputation, generation, or context-window size — the model that started this (qwen2.5-coder-14b) advertised tool_use, shipped the standard Hermes template, and belonged to a well-regarded coder series.\n\nREAD THE RATIO, NOT THE VERDICT. `verdict` is the WORST outcome across every trial, so it is a function of the trial count: any model with a nonzero per-call failure rate converges to \"fail\" as trials grow, and a \"pass\" only means no draw went wrong. What distinguishes a model is cases[].failed / cases[].trials. Several entries here read \"fail\" on one bad trial in 24 and sit beside entries that failed 24 of 24; treating those as the same finding is the mistake this field exists to prevent.\n\nEvery entry carries the engine and version it was measured on, the fixture revision, the waired-agent commit whose GATEWAY produced the answers, the transport(s) driven, and the date — because compliance is a property of (model, quantisation, engine, harness) and not of the weights alone. Verdicts from different fixture_revision values were measured against different request weights and are NOT comparable; verdicts from different agent_revision values may have been measured before a gateway change that altered the answer (#409 moved four models from failing every tool call to passing without the fixture moving a byte).\n\nRe-measure with: make e2e-agentgrade MODEL=\u003collama tag\u003e TRIALS=12 [STREAM=1], then `catalog-tool agentgrade --import unary.json --import stream.json` to pool both runs.",
+  "notes": "Agent-harness verdicts (waired-ai/waired-agent#322): can this model actually drive a coding agent's tool-call format? Measured by internal/agentgrade against the real gateway, never asserted from reputation, generation, or context-window size — the model that started this (qwen2.5-coder-14b) advertised tool_use, shipped the standard Hermes template, and belonged to a well-regarded coder series.\n\nREAD THE RATIO, NOT THE VERDICT. `verdict` is the WORST outcome across every trial, so it is a function of the trial count: any model with a nonzero per-call failure rate converges to \"fail\" as trials grow, and a \"pass\" only means no draw went wrong. What distinguishes a model is cases[].failed / cases[].trials. Several entries here read \"fail\" on one bad trial in 24 and sit beside entries that failed 24 of 24; treating those as the same finding is the mistake this field exists to prevent.\n\nEvery entry carries the engine and version it was measured on, the fixture revision, the waired-agent commit whose GATEWAY produced the answers, the transport(s) driven, and the date — because compliance is a property of (model, quantisation, engine, harness) and not of the weights alone. Verdicts from different fixture_revision values were measured against different request weights and are NOT comparable; verdicts from different agent_revision values may have been measured before a gateway change that altered the answer (#409 moved four models from failing every tool call to passing without the fixture moving a byte; #458 then taught the gateway to retry a turn the engine could not deliver, and qwen3.5-9b went from 11 failures in 72 case-trials to 3 — the same weights, the same engine, a different answer).\n\nThe retirement worklist does not read `verdict` at all: it asks whether a case's failure rate is above catalog.RetireFailureRate at 95% confidence, which on this data selects qwen2.5-coder-0.5b and nothing else.\n\nRe-measure with: make e2e-agentgrade MODEL=\u003collama tag\u003e TRIALS=12 [STREAM=1], then `catalog-tool agentgrade --import unary.json --import stream.json` to pool both runs.",
   "models": {
     "gpt-oss-20b": {
       "variants": {
@@ -8,32 +8,35 @@
           "verdict": "fail",
           "cases": {
             "greeting": {
-              "verdict": "fail_malformed_tool_call",
+              "verdict": "fail_unknown_tool",
               "trials": 24,
               "failed": 1
             },
             "read-file": {
-              "verdict": "pass",
+              "verdict": "warn_invalid_tool_arguments",
               "trials": 24
             },
             "search-then-edit": {
-              "verdict": "pass",
-              "trials": 24
+              "verdict": "fail_no_tool_call",
+              "trials": 24,
+              "failed": 1
             }
           },
           "trials": 24,
           "flaky": [
-            "greeting"
+            "greeting",
+            "read-file",
+            "search-then-edit"
           ],
           "engine": "ollama",
           "engine_version": "0.31.1",
           "engine_tag": "gpt-oss:20b",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -49,7 +52,7 @@
             "read-file": {
               "verdict": "fail_no_tool_call",
               "trials": 24,
-              "failed": 3
+              "failed": 6
             },
             "search-then-edit": {
               "verdict": "fail_no_tool_call",
@@ -66,11 +69,11 @@
           "engine_version": "0.31.1",
           "engine_tag": "granite4:350m",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -103,11 +106,11 @@
           "engine_version": "0.31.1",
           "engine_tag": "qwen2.5-coder:0.5b-instruct-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -117,32 +120,34 @@
           "verdict": "fail",
           "cases": {
             "greeting": {
-              "verdict": "pass",
+              "verdict": "warn_unprompted_tool_call",
               "trials": 24
             },
             "read-file": {
               "verdict": "fail_no_tool_call",
               "trials": 24,
-              "failed": 2
+              "failed": 1
             },
             "search-then-edit": {
-              "verdict": "pass",
+              "verdict": "warn_invalid_tool_arguments",
               "trials": 24
             }
           },
           "trials": 24,
           "flaky": [
-            "read-file"
+            "greeting",
+            "read-file",
+            "search-then-edit"
           ],
           "engine": "ollama",
           "engine_version": "0.31.1",
           "engine_tag": "qwen2.5-coder:14b-instruct-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -156,59 +161,67 @@
               "trials": 24
             },
             "read-file": {
-              "verdict": "pass",
-              "trials": 24
+              "verdict": "fail_no_tool_call",
+              "trials": 24,
+              "failed": 3
             },
             "search-then-edit": {
               "verdict": "fail_unstructured_tool_call",
               "trials": 24,
-              "failed": 7
+              "failed": 9
             }
           },
           "trials": 24,
           "flaky": [
+            "read-file",
             "search-then-edit"
           ],
           "engine": "ollama",
           "engine_version": "0.31.1",
           "engine_tag": "qwen2.5-coder:3b-instruct-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
     "qwen2.5-coder-7b-instruct": {
       "variants": {
         "q4-gguf": {
-          "verdict": "pass",
+          "verdict": "fail",
           "cases": {
             "greeting": {
               "verdict": "pass",
               "trials": 24
             },
             "read-file": {
-              "verdict": "pass",
-              "trials": 24
+              "verdict": "fail_no_tool_call",
+              "trials": 24,
+              "failed": 1
             },
             "search-then-edit": {
-              "verdict": "pass",
-              "trials": 24
+              "verdict": "fail_no_tool_call",
+              "trials": 24,
+              "failed": 1
             }
           },
           "trials": 24,
+          "flaky": [
+            "read-file",
+            "search-then-edit"
+          ],
           "engine": "ollama",
           "engine_version": "0.31.1",
           "engine_tag": "qwen2.5-coder:7b-instruct-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -238,11 +251,11 @@
           "engine_version": "0.31.1",
           "engine_tag": "qwen3-coder:30b-a3b-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -252,87 +265,18 @@
           "verdict": "fail",
           "cases": {
             "greeting": {
-              "verdict": "pass",
-              "trials": 24
+              "verdict": "fail_no_tool_call",
+              "trials": 24,
+              "failed": 1
             },
             "read-file": {
-              "verdict": "pass",
+              "verdict": "warn_invalid_tool_arguments",
               "trials": 24
             },
             "search-then-edit": {
               "verdict": "fail_unknown_tool",
               "trials": 24,
-              "failed": 1
-            }
-          },
-          "trials": 24,
-          "flaky": [
-            "search-then-edit"
-          ],
-          "engine": "ollama",
-          "engine_version": "0.31.1",
-          "engine_tag": "qwen3.5:0.8b-q8_0",
-          "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
-          "transport": "stream+unary",
-          "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
-        }
-      }
-    },
-    "qwen3.5-27b": {
-      "variants": {
-        "q4-gguf": {
-          "verdict": "pass",
-          "cases": {
-            "greeting": {
-              "verdict": "warn_unprompted_tool_call",
-              "trials": 24
-            },
-            "read-file": {
-              "verdict": "pass",
-              "trials": 24
-            },
-            "search-then-edit": {
-              "verdict": "pass",
-              "trials": 24
-            }
-          },
-          "trials": 24,
-          "flaky": [
-            "greeting"
-          ],
-          "engine": "ollama",
-          "engine_version": "0.31.1",
-          "engine_tag": "qwen3.5:27b-q4_K_M",
-          "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
-          "transport": "stream+unary",
-          "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
-        }
-      }
-    },
-    "qwen3.5-2b": {
-      "variants": {
-        "q4-gguf": {
-          "verdict": "fail",
-          "cases": {
-            "greeting": {
-              "verdict": "warn_unprompted_tool_call",
-              "trials": 24
-            },
-            "read-file": {
-              "verdict": "fail_no_tool_call",
-              "trials": 24,
               "failed": 2
-            },
-            "search-then-edit": {
-              "verdict": "fail_malformed_tool_call",
-              "trials": 24,
-              "failed": 3
             }
           },
           "trials": 24,
@@ -343,13 +287,81 @@
           ],
           "engine": "ollama",
           "engine_version": "0.31.1",
-          "engine_tag": "qwen3.5:2b-q4_K_M",
+          "engine_tag": "qwen3.5:0.8b-q8_0",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.5-27b": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "pass",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 24
+            },
+            "read-file": {
+              "verdict": "pass",
+              "trials": 24
+            },
+            "search-then-edit": {
+              "verdict": "pass",
+              "trials": 24
+            }
+          },
+          "trials": 24,
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.5:27b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "agent_revision": "225364f4f522",
+          "transport": "stream+unary",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
+        }
+      }
+    },
+    "qwen3.5-2b": {
+      "variants": {
+        "q4-gguf": {
+          "verdict": "fail",
+          "cases": {
+            "greeting": {
+              "verdict": "pass",
+              "trials": 24
+            },
+            "read-file": {
+              "verdict": "fail_unknown_tool",
+              "trials": 24,
+              "failed": 2
+            },
+            "search-then-edit": {
+              "verdict": "fail_no_tool_call",
+              "trials": 24,
+              "failed": 2
+            }
+          },
+          "trials": 24,
+          "flaky": [
+            "read-file",
+            "search-then-edit"
+          ],
+          "engine": "ollama",
+          "engine_version": "0.31.1",
+          "engine_tag": "qwen3.5:2b-q4_K_M",
+          "fixture_revision": "2004661dc908",
+          "agent_revision": "225364f4f522",
+          "transport": "stream+unary",
+          "host": "nvidia-24gb-discrete",
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -365,12 +377,12 @@
             "read-file": {
               "verdict": "fail_no_tool_call",
               "trials": 24,
-              "failed": 2
+              "failed": 1
             },
             "search-then-edit": {
-              "verdict": "fail_malformed_tool_call",
+              "verdict": "fail_no_tool_call",
               "trials": 24,
-              "failed": 3
+              "failed": 1
             }
           },
           "trials": 24,
@@ -382,11 +394,11 @@
           "engine_version": "0.31.1",
           "engine_tag": "qwen3.5:35b-a3b-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -400,30 +412,28 @@
               "trials": 24
             },
             "read-file": {
-              "verdict": "fail_no_tool_call",
-              "trials": 24,
-              "failed": 3
+              "verdict": "pass",
+              "trials": 24
             },
             "search-then-edit": {
-              "verdict": "fail_malformed_tool_call",
+              "verdict": "fail_no_tool_call",
               "trials": 24,
-              "failed": 3
+              "failed": 1
             }
           },
           "trials": 24,
           "flaky": [
-            "read-file",
             "search-then-edit"
           ],
           "engine": "ollama",
           "engine_version": "0.31.1",
           "engine_tag": "qwen3.5:4b-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -443,7 +453,7 @@
             "search-then-edit": {
               "verdict": "fail_malformed_tool_call",
               "trials": 24,
-              "failed": 11
+              "failed": 3
             }
           },
           "trials": 24,
@@ -454,11 +464,11 @@
           "engine_version": "0.31.1",
           "engine_tag": "qwen3.5:9b-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -485,17 +495,17 @@
           "engine_version": "0.31.1",
           "engine_tag": "qwen3.6:27b-mtp-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         },
         "q4-gguf": {
           "verdict": "pass",
           "cases": {
             "greeting": {
-              "verdict": "pass",
+              "verdict": "warn_unprompted_tool_call",
               "trials": 24
             },
             "read-file": {
@@ -508,15 +518,18 @@
             }
           },
           "trials": 24,
+          "flaky": [
+            "greeting"
+          ],
           "engine": "ollama",
           "engine_version": "0.31.1",
           "engine_tag": "qwen3.6:27b-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     },
@@ -543,17 +556,17 @@
           "engine_version": "0.31.1",
           "engine_tag": "qwen3.6:35b-a3b-mtp-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         },
         "q4-gguf": {
           "verdict": "pass",
           "cases": {
             "greeting": {
-              "verdict": "pass",
+              "verdict": "warn_unprompted_tool_call",
               "trials": 24
             },
             "read-file": {
@@ -566,15 +579,18 @@
             }
           },
           "trials": 24,
+          "flaky": [
+            "greeting"
+          ],
           "engine": "ollama",
           "engine_version": "0.31.1",
           "engine_tag": "qwen3.6:35b-a3b-q4_K_M",
           "fixture_revision": "2004661dc908",
-          "agent_revision": "9200fbeb2d90",
+          "agent_revision": "225364f4f522",
           "transport": "stream+unary",
           "host": "nvidia-24gb-discrete",
-          "retrieved": "2026-08-02",
-          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact. Measured after waired-ai/waired-agent#409, 12 trials on each transport and pooled. The verdict is worst-across-trials and therefore a function of the trial count: read cases[].failed/trials, not the verdict alone."
+          "retrieved": "2026-08-03",
+          "notes": "local measurement on a 24 GB discrete NVIDIA host; no CI artifact"
         }
       }
     }
