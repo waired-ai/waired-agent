@@ -452,6 +452,110 @@ func TestInferenceState_ContextWindow_CanonicalJSON(t *testing.T) {
 	}
 }
 
+// waired#1064 added two fields for the peer picker: the model a device is
+// committed to, in the one namespace every host agrees on, and why it is or
+// is not serving it. Both ride the SIGNED map on peer entries, so the same
+// byte-identity rule ContextWindow documents applies — a device that
+// declares neither has to encode exactly as it did before they existed.
+func TestInferenceState_ActiveModelAndSubsystemState_CanonicalJSON(t *testing.T) {
+	undeclared := InferenceState{
+		Reachable: true,
+		Type:      InferenceTypeOllama,
+		Endpoint:  "http://127.0.0.1:11434",
+		Models:    []string{"qwen3:8b-q4_K_M"},
+		LastCheck: "2026-08-02T12:00:00Z",
+	}
+	const wantUndeclared = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z"}`
+	data, err := json.Marshal(&undeclared)
+	if err != nil {
+		t.Fatalf("marshal undeclared: %v", err)
+	}
+	if got := string(data); got != wantUndeclared {
+		t.Errorf("a device declaring neither field changed the encoding:\n got %s\nwant %s",
+			got, wantUndeclared)
+	}
+
+	declared := undeclared
+	declared.ActiveModel = "qwen3-8b-instruct"
+	declared.SubsystemState = SubsystemStateReady
+	const wantDeclared = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z",` +
+		`"active_model":"qwen3-8b-instruct","subsystem_state":"ready"}`
+	data, err = json.Marshal(&declared)
+	if err != nil {
+		t.Fatalf("marshal declared: %v", err)
+	}
+	if got := string(data); got != wantDeclared {
+		t.Errorf("declared encoding drifted:\n got %s\nwant %s", got, wantDeclared)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&declared, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", declared, out)
+	}
+
+	// PRODUCT CONTRACT (waired#1064): the state is reported INDEPENDENTLY of
+	// Models, which is the opposite of ContextWindow. A device mid-pull has
+	// withdrawn its advertisement — that is exactly the case the field was
+	// added to explain, so an empty Models must not suppress it.
+	pulling := InferenceState{
+		Reachable:      true,
+		Type:           InferenceTypeOllama,
+		Endpoint:       "http://127.0.0.1:11434",
+		LastCheck:      "2026-08-02T12:00:00Z",
+		ActiveModel:    "qwen3-8b-instruct",
+		SubsystemState: SubsystemStateLoading,
+	}
+	const wantPulling = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"last_check":"2026-08-02T12:00:00Z","active_model":"qwen3-8b-instruct",` +
+		`"subsystem_state":"loading"}`
+	data, err = json.Marshal(&pulling)
+	if err != nil {
+		t.Fatalf("marshal pulling: %v", err)
+	}
+	if got := string(data); got != wantPulling {
+		t.Errorf("mid-pull encoding drifted:\n got %s\nwant %s", got, wantPulling)
+	}
+
+	// The rolling-upgrade direction: a payload from an agent that predates
+	// the fields leaves both empty, and empty must mean "declares nothing"
+	// — never "runs no model" or "is in a state named by the empty string".
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantUndeclared), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.ActiveModel != "" || pre.SubsystemState != "" {
+		t.Errorf("pre-addition payload decoded to ActiveModel=%q SubsystemState=%q, want both empty",
+			pre.ActiveModel, pre.SubsystemState)
+	}
+}
+
+// The accepted set is a wire contract: the control plane validates pushes
+// against it, so a value the agent can produce and this rejects would drop
+// the device's whole inference push, not just the field.
+func TestIsValidSubsystemState(t *testing.T) {
+	valid := []string{
+		"initializing", "ready", "awaiting_model", "loading", "pull_failed",
+		"degraded", "no_engine", "stopped", "starting", "engine_failed", "disabled",
+	}
+	for _, s := range valid {
+		if !IsValidSubsystemState(s) {
+			t.Errorf("IsValidSubsystemState(%q) = false, want true", s)
+		}
+	}
+	// Empty is "declares nothing", handled by the consumer, not by this
+	// predicate — see the doc comment.
+	for _, s := range []string{"", "Ready", "READY", "unknown", "ok", "serving"} {
+		if IsValidSubsystemState(s) {
+			t.Errorf("IsValidSubsystemState(%q) = true, want false", s)
+		}
+	}
+}
+
 func indexOf(haystack, needle string) int {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {
