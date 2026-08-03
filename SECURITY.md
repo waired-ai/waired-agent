@@ -32,5 +32,5 @@ requiring physical access to an already-compromised device.
 
 ## Rewards
 
-This is an individually operated project; there is currently no bug bounty
-program. We will credit reporters in release notes on request.
+This project is run by a single maintainer; there is currently no bug
+bounty program. We will credit reporters in release notes on request.
