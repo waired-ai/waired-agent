@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -236,8 +237,20 @@ func (s AgentGradeSet) CoverageGaps(manifests []Manifest, fixtureRevision string
 	return out
 }
 
-// Failures reports every ollama-servable variant that fails a probe
-// case on EVERY trial.
+// RetireFailureRate is the per-call failure rate a variant must be shown
+// to EXCEED before it lands on the retirement worklist.
+//
+// Half. Deleting a catalog entry is a claim that the model fails more
+// often than it works, which is a sentence someone can defend in a
+// review. Every lower line the measured catalog offered would have swept
+// in a model there was a reason to keep: qwen2.5-coder-3b defines the
+// install quality floor and sits at 17%, granite4-350m is the CI fixture
+// at 11%, and qwen3.5-9b's 30% is an upstream engine parser bug
+// (ollama/ollama#16383) rather than the weights.
+const RetireFailureRate = 0.5
+
+// Failures reports every ollama-servable variant whose measured failure
+// rate is high enough to justify deleting it from the catalog.
 //
 // It is the retirement worklist, and the threshold is the whole design.
 // A recorded Verdict of "fail" means "something went wrong at least
@@ -249,24 +262,31 @@ func (s AgentGradeSet) CoverageGaps(manifests []Manifest, fixtureRevision string
 // the reverse. Retiring on "failed once" would delete a different set
 // of models every time the sweep runs.
 //
-// Failing every trial is a different claim, and the data still separates
-// cleanly at that line — but the line has MOVED, which is the best
-// evidence that the threshold was the right one to pick.
+// The line is a CONFIDENCE BOUND on the rate rather than the rate
+// itself: a case is retirable when failureRateLowerBound exceeds
+// RetireFailureRate. That distinction is a correction this line has
+// already needed once. Its first form was "failed on EVERY trial",
+// which reads like a rate and is not one — 2 of 2 and 24 of 24 are both
+// 100%, and only one of them is evidence — and it drew the line between
+// 24 of 24 and 23 of 24, where nothing separates. The bound is stricter
+// than the old rule at two trials, identical from three (where
+// DefaultTrials sits), and catches the near-total failure the old rule
+// excused for one lucky draw.
 //
-// It was chosen when all four qwen2.5-coder entries failed every
-// tool-requiring call on every trial and nothing else in the catalog
-// exceeded one failure in three. #409 then taught the gateway to recover
-// a tool call the engine had left in the assistant text, and the
-// re-measurement at 24 trials (#426) left exactly ONE entry above this
-// line: qwen2.5-coder-0.5b. The other three were choosing the right tool
-// with the right arguments and only serialising it wrongly, and 7b — the
-// compiled-in BundledModelID — now fails nothing in 24 trials.
+// Replacing the old rule moved no row. The re-measurement at 24 trials
+// (#426) leaves exactly ONE entry above the line: qwen2.5-coder-0.5b, at
+// a bound of 90%. The next-worst entry in the catalog is qwen3.5-9b at
+// 30%, so the line has three times the margin it needs — the widest gap
+// in the file.
 //
 // 0.5b is a different defect and no parser reaches it: its "tool calls"
 // name a daemon and a file path rather than any offered tool, so the
-// gateway correctly leaves them as text. A worklist keyed on the stored
-// verdict rather than on this threshold would have proposed deleting the
-// model a fresh install serves by default.
+// gateway correctly leaves them as text. #409 taught the gateway to
+// recover a call the engine had left in the assistant text, and three of
+// the four qwen2.5-coder sizes came back — 7b, the compiled-in
+// BundledModelID, now fails nothing in 24 trials. A worklist keyed on
+// the stored verdict rather than on this threshold would have proposed
+// deleting the model a fresh install serves by default.
 //
 // Verdicts recorded before per-trial counts existed have Trials == 0;
 // those fall back to the stored verdict so an old record is not
@@ -279,17 +299,27 @@ func (s AgentGradeSet) Failures(manifests []Manifest) []AgentGradeGap {
 				continue
 			}
 			rec, ok := s.Lookup(m.ModelID, v.VariantID)
-			if !ok || rec.Verdict != AgentGradeFail {
+			if !ok {
 				continue
 			}
-			if !failsEveryTrial(rec) {
+			worst, counted := rec.WorstCase()
+			if !counted {
+				// No per-trial counts to reason from. The ratio is
+				// unknown, not clean, so the stored verdict still
+				// stands on its own.
+				if rec.Verdict == AgentGradeFail {
+					out = append(out, AgentGradeGap{m.ModelID, v.VariantID,
+						legacyFailureReason(rec)})
+				}
 				continue
 			}
-			reason := "recorded as failing"
-			if len(rec.Cases) > 0 {
-				reason += " (" + failedCaseSummary(rec.Cases) + ")"
+			if worst.LowerBound <= RetireFailureRate {
+				continue
 			}
-			out = append(out, AgentGradeGap{m.ModelID, v.VariantID, reason})
+			out = append(out, AgentGradeGap{m.ModelID, v.VariantID,
+				fmt.Sprintf("%s — %s failed %d of %d, so its true rate is at least %.0f%% (95%% confidence)",
+					failedCaseSummary(rec.Cases), worst.Case, worst.Failed, worst.Trials,
+					worst.LowerBound*100)})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -301,24 +331,83 @@ func (s AgentGradeSet) Failures(manifests []Manifest) []AgentGradeGap {
 	return out
 }
 
-// failsEveryTrial reports whether some case failed on all of its
-// trials. A record with no per-trial counts (pre-dating them) answers
-// true from its verdict alone rather than being quietly excused.
-func failsEveryTrial(rec VariantAgentGrade) bool {
+func legacyFailureReason(rec VariantAgentGrade) string {
+	const tail = "recorded as failing before per-trial counts existed; the ratio is unknown"
 	if len(rec.Cases) == 0 {
-		return true
+		return tail
 	}
-	counted := false
-	for _, o := range rec.Cases {
+	return failedCaseSummary(rec.Cases) + " — " + tail
+}
+
+// CaseFailureRate is one probe case's measured failure rate together
+// with the sample it was measured from.
+type CaseFailureRate struct {
+	Case           string
+	Failed, Trials int
+
+	// LowerBound is the one-sided 95% Wilson lower bound on the true
+	// per-call failure rate behind Failed/Trials.
+	LowerBound float64
+}
+
+// WorstCase returns the probe case whose failure rate has the highest
+// lower bound. ok is false for a record predating per-trial counts,
+// where no rate can be derived at all.
+//
+// Per case, never pooled across cases: the three differ in difficulty by
+// design, and averaging them hides the finding. qwen2.5-coder-0.5b is
+// 48 of 72 pooled but 24 of 24 on both tool-requiring cases — "cannot
+// call a tool at all", which the pooled number reads as two thirds.
+func (r VariantAgentGrade) WorstCase() (worst CaseFailureRate, ok bool) {
+	names := make([]string, 0, len(r.Cases))
+	for n := range r.Cases {
+		names = append(names, n)
+	}
+	sort.Strings(names) // ties resolve the same way on every run
+	for _, n := range names {
+		o := r.Cases[n]
 		if o.Trials <= 0 {
 			continue
 		}
-		counted = true
-		if o.Failed >= o.Trials {
-			return true
+		c := CaseFailureRate{
+			Case: n, Failed: o.Failed, Trials: o.Trials,
+			LowerBound: failureRateLowerBound(o.Failed, o.Trials),
 		}
+		if !ok || c.LowerBound > worst.LowerBound {
+			worst = c
+		}
+		ok = true
 	}
-	return !counted
+	return worst, ok
+}
+
+// failureRateLowerBound returns the one-sided 95% Wilson lower bound on
+// the true per-call failure rate behind failed-out-of-trials.
+//
+// A bound rather than the ratio, because the ratio alone does not say
+// how hard anyone looked. The finding this whole store exists to record
+// is that a verdict taken at three trials means "no draw went wrong",
+// not "this model is clean" — and a threshold written against
+// failed/trials repeats that mistake one level up. Wilson puts the
+// sample size inside the rule instead of in a comment beside it, which
+// is why raising WAIRED_AGENTGRADE_TRIALS can only ever move an entry
+// ONTO the worklist, never off it by measuring less.
+func failureRateLowerBound(failed, trials int) float64 {
+	if trials <= 0 || failed <= 0 {
+		return 0
+	}
+	if failed > trials {
+		failed = trials
+	}
+	// z for a one-sided 95% bound. Two-sided 95% (1.96) would be the
+	// reflex and is the wrong test: nobody retires a model for failing
+	// too little.
+	const z = 1.645
+	n, k := float64(trials), float64(failed)
+	den := n + z*z
+	centre := (k + z*z/2) / den
+	half := z / den * math.Sqrt(k*(n-k)/n+z*z/4)
+	return math.Max(0, centre-half)
 }
 
 func failedCaseSummary(cases map[string]CaseOutcome) string {

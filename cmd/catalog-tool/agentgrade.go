@@ -104,6 +104,8 @@ func runAgentGrade(args []string) error {
 	fmt.Printf("%d bundled manifests; %d with a recorded verdict; %d declared unmeasurable\n",
 		len(bundled), len(set.Models), len(set.Unmeasurable))
 
+	printFailureRates(set, bundled)
+
 	if len(failures) > 0 {
 		fmt.Printf("\nrecorded as FAILING (%d) — cannot drive a coding agent:\n", len(failures))
 		for _, f := range failures {
@@ -130,6 +132,56 @@ func runAgentGrade(args []string) error {
 			"the catalog is meant to hold only models that can drive a coding agent", len(failures))
 	}
 	return nil
+}
+
+// printFailureRates lists every recorded variant by its worst case's
+// measured failure rate, worst first.
+//
+// The store's own notes field has to shout "READ THE RATIO, NOT THE
+// VERDICT" because the verdict is the worst outcome across every trial
+// and therefore a function of the trial count: entries reading "fail" on
+// one bad trial in 24 sit beside entries that failed 24 of 24. Telling a
+// reader that in prose and then printing only the worklist leaves them
+// to open the JSON to find out which they are looking at. This prints
+// the ratio, so the instruction is unnecessary.
+func printFailureRates(set catalog.AgentGradeSet, manifests []catalog.Manifest) {
+	type row struct {
+		model, variant string
+		worst          catalog.CaseFailureRate
+	}
+	var rows []row
+	for _, m := range manifests {
+		for _, v := range m.Variants {
+			rec, ok := set.Lookup(m.ModelID, v.VariantID)
+			if !ok {
+				continue
+			}
+			if worst, counted := rec.WorstCase(); counted {
+				rows = append(rows, row{m.ModelID, v.VariantID, worst})
+			}
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].worst.LowerBound != rows[j].worst.LowerBound {
+			return rows[i].worst.LowerBound > rows[j].worst.LowerBound
+		}
+		return rows[i].model < rows[j].model
+	})
+
+	fmt.Printf("\nmeasured failure rate, worst case per variant "+
+		"(retirement line: lower bound above %.0f%%):\n", catalog.RetireFailureRate*100)
+	for _, r := range rows {
+		mark := "  "
+		if r.worst.LowerBound > catalog.RetireFailureRate {
+			mark = "→ "
+		}
+		fmt.Printf("  %s%-30s %-14s %-17s %3d/%-3d  >= %3.0f%%\n",
+			mark, r.model, r.variant, r.worst.Case,
+			r.worst.Failed, r.worst.Trials, r.worst.LowerBound*100)
+	}
 }
 
 type importOpts struct {
