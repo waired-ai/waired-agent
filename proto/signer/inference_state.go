@@ -263,6 +263,68 @@ type InferenceState struct {
 	// on Self: the gate has to cover the whole map, not one entry.
 	// `omitempty` keeps the undeclared case byte-identical.
 	ContextWindow int `json:"context_window,omitempty"`
+
+	// ActiveModel is the catalog model_id of the selection this device is
+	// committed to serving — `qwen3-8b-instruct`, never the engine-side tag
+	// (`qwen3:8b-q4_K_M`, `hf.co/unsloth/Qwen3-Coder-Next-GGUF:Q4_K_M`,
+	// `Qwen/Qwen3-Next-80B-A3B-Instruct`). It is the same identifier
+	// DesiredModelID carries in the other direction, so a reader can compare
+	// what the CP asked for against what the device settled on.
+	//
+	// Models already names a model, so the reason for a second field is the
+	// namespace, not the fact: an engine tag says the same model differently
+	// depending on which engine loaded it, and vLLM is a Linux-only path, so
+	// that difference tracks the PEER'S OS. A picker listing candidates from
+	// a mixed fleet renders one model under three spellings and the operator
+	// cannot tell they are the same weights (waired#1064). model_id is the
+	// string every host agrees on, and it is the one the tray already shows
+	// for the local machine, so local and peer rows finally read alike.
+	//
+	// Display only. Peer selection matches on the engine tags in Models
+	// (buildMeshCandidates) — routing on this field would change which peers
+	// answer, and that is not what it was added for.
+	//
+	// "" means the device names no model: an agent that predates the field,
+	// or one with no committed selection at all. Consumers must fail open to
+	// Models as before rather than reading it as "runs nothing".
+	//
+	// This field and SubsystemState below ride the served NetworkMap on PEER
+	// entries — the tray's peer picker is the surface they exist for — but,
+	// unlike ContextWindow, they carry NO capability gate. That is a product
+	// decision recorded on waired#1064: nothing has shipped yet, so there is
+	// no older fleet to keep verifying. The consequence is the one the
+	// Priority comment above describes — an agent built before these fields
+	// drops them on canonical re-marshal and rejects the whole map — so every
+	// agent on a network has to be upgraded together until a gate exists. A
+	// gate can be added later; CapabilityContextWindowV1 is the shape.
+	ActiveModel string `json:"active_model,omitempty"`
+
+	// SubsystemState is why this device is or is not serving right now, on
+	// the axis the local management API already publishes under the same
+	// name (`GET /waired/v1/inference/status`). Values are the SubsystemState
+	// constants below; IsValidSubsystemState is the accepted set.
+	//
+	// It exists because the fields above cannot say it. Models empties the
+	// moment the engine stops confirming the advertised tag — mid-pull, a
+	// failed pull, a model switch, an engine restart all look the same — and
+	// LastError is contractually empty while Reachable is true, so it cannot
+	// carry the explanation either. Everything interesting therefore
+	// collapsed into one wire state, and every peer-facing surface had no
+	// choice but to render it as a bare "unavailable" (waired#1064).
+	//
+	// Deliberately NOT gated on Models being non-empty, which is the
+	// opposite of ContextWindow above: describing the case where Models is
+	// empty is the entire point. The two claims do not conflict — Models
+	// says what may be routed to, this says what is going on.
+	//
+	// Byte progress deliberately does not ride here. It advances every few
+	// seconds, and any content change re-fans the signed map to every peer
+	// in the mesh; a state word changes a handful of times per model.
+	//
+	// Display only, same as ActiveModel. "" means the device declares
+	// nothing — an agent that predates the field — and consumers must fail
+	// open to whatever they decided before.
+	SubsystemState string `json:"subsystem_state,omitempty"`
 }
 
 // HardwareSummary is the subset of the agent's hardware profile that
@@ -373,6 +435,66 @@ const (
 func IsValidInferenceType(t string) bool {
 	switch t {
 	case InferenceTypeOllama, InferenceTypeVLLM, InferenceTypeNone:
+		return true
+	}
+	return false
+}
+
+// Accepted values for InferenceState.SubsystemState.
+//
+// The vocabulary is not new here: these are the strings the agent's local
+// management API has published under `subsystem_state` since Step 2, named
+// as constants now that they cross the wire and a validator has to check
+// them. The axis says WHAT is wrong, never whether it will fix itself — a
+// crash loop alternates between starting and engine_failed for as long as
+// its recovery budget lasts.
+const (
+	// SubsystemStateInitializing is the brief boot sequence.
+	SubsystemStateInitializing = "initializing"
+	// SubsystemStateReady is an active engine serving the active model.
+	SubsystemStateReady = "ready"
+	// SubsystemStateAwaitingModel means a model is chosen but not on disk.
+	SubsystemStateAwaitingModel = "awaiting_model"
+	// SubsystemStateLoading means the model is arriving or the engine is
+	// still bringing it up — a pull in flight, or a restart around it.
+	SubsystemStateLoading = "loading"
+	// SubsystemStatePullFailed means the last download errored and nothing
+	// retries it on its own.
+	SubsystemStatePullFailed = "pull_failed"
+	// SubsystemStateDegraded means a fallback engine is in use.
+	SubsystemStateDegraded = "degraded"
+	// SubsystemStateNoEngine means no engine is alive to serve anything.
+	SubsystemStateNoEngine = "no_engine"
+	// SubsystemStateStopped means the operator hard-stopped the engine to
+	// free memory — a usable engine exists and is intentionally down.
+	SubsystemStateStopped = "stopped"
+	// SubsystemStateStarting means an engine restart is in flight.
+	SubsystemStateStarting = "starting"
+	// SubsystemStateEngineFailed means the engine is down: a crashed model
+	// runner, an exhausted recovery budget, or a boot that never came up.
+	SubsystemStateEngineFailed = "engine_failed"
+	// SubsystemStateDisabled means the operator paused inference.
+	SubsystemStateDisabled = "disabled"
+)
+
+// IsValidSubsystemState reports whether s is one of the accepted
+// InferenceState.SubsystemState values. The empty string is NOT accepted
+// here: it means "declares nothing", which every consumer must already
+// handle, so a validator checks it separately rather than folding the two
+// answers together.
+func IsValidSubsystemState(s string) bool {
+	switch s {
+	case SubsystemStateInitializing,
+		SubsystemStateReady,
+		SubsystemStateAwaitingModel,
+		SubsystemStateLoading,
+		SubsystemStatePullFailed,
+		SubsystemStateDegraded,
+		SubsystemStateNoEngine,
+		SubsystemStateStopped,
+		SubsystemStateStarting,
+		SubsystemStateEngineFailed,
+		SubsystemStateDisabled:
 		return true
 	}
 	return false
