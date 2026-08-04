@@ -442,10 +442,10 @@ func TestInvalidToolArgumentsIsNotAFailure(t *testing.T) {
 	if VerdictInvalidToolArguments.IsFailure() {
 		t.Error("warn_invalid_tool_arguments counts as a failure, so it would flip stored grades")
 	}
-	if severity(VerdictInvalidToolArguments) >= severity(VerdictNoToolCall) {
+	if Severity(VerdictInvalidToolArguments) >= Severity(VerdictNoToolCall) {
 		t.Error("a warning outranks a failure in the severity ladder")
 	}
-	if severity(VerdictInvalidToolArguments) <= severity(VerdictUnpromptedToolCall) {
+	if Severity(VerdictInvalidToolArguments) <= Severity(VerdictUnpromptedToolCall) {
 		t.Error("an unexecutable call should outrank a merely unnecessary one")
 	}
 }

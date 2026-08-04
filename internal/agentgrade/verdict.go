@@ -175,6 +175,30 @@ type Result struct {
 	// catalog.
 	Trials       int `json:"trials,omitempty"`
 	FailedTrials int `json:"failed_trials,omitempty"`
+
+	// Verdicts counts how many trials produced each verdict.
+	//
+	// Trials and FailedTrials are both derived from it, and that is the
+	// point: FailedTrials pools every failing class into one number, so a
+	// case reading 3 of 24 could be three engine-parse errors or three
+	// different defects, and a case reading 0 of 24 could still have
+	// produced 23 warnings nobody can see. Verdict itself only names the
+	// WORST class, which answers neither question.
+	//
+	// The gap this closes is a concrete one. warn_invalid_tool_arguments
+	// (#455) is a warning "deliberately and provisionally", to be
+	// promoted from #322 once a sweep has run with the check in place.
+	// The sweep ran (#467) — and the promotion still could not be decided,
+	// because the store could not say whether a warning happened once or
+	// twenty-four times. Promotion changes IsFailure, so it also changes
+	// FailedTrials, so it cannot be evaluated against numbers recorded
+	// under the old rule. Counting every class means the next such policy
+	// question is answered from the file instead of from another sweep.
+	//
+	// Omitted by reports written before this existed; a reader must treat
+	// its absence as unknown rather than as zero, the same way Trials == 0
+	// means "no counts" rather than "never ran".
+	Verdicts map[Verdict]int `json:"verdicts,omitempty"`
 }
 
 // Case is one probe interaction: a prompt plus what a
