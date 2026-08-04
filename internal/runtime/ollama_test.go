@@ -274,7 +274,7 @@ func TestOllamaAdapter_EnsureRunning_AdoptsExactPinOrphan(t *testing.T) {
 // reporting any other version is a foreign engine (e.g. a system
 // ollama.service that wandered onto our port). Silent adoption is the
 // incident class this design removes — the adapter must fail with an
-// error naming the port, both versions, and the reuse remediation.
+// error naming the port, both versions, and the remediation.
 func TestOllamaAdapter_EnsureRunning_RefusesVersionMismatch(t *testing.T) {
 	srv, host, port := survivorServer(t, "0.24.0")
 	defer srv.Close()
@@ -284,7 +284,7 @@ func TestOllamaAdapter_EnsureRunning_RefusesVersionMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("EnsureRunning should refuse a version-mismatched survivor")
 	}
-	for _, want := range []string{fmt.Sprintf("port %d", port), "0.24.0", "0.30.7", "reuse"} {
+	for _, want := range []string{fmt.Sprintf("port %d", port), "0.24.0", "0.30.7", "inference.ollama_port"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q should contain %q", err.Error(), want)
 		}
@@ -331,9 +331,9 @@ func TestOllamaAdapter_EnsureRunning_NoSurvivorKeepsOriginalError(t *testing.T) 
 	}
 }
 
-// TestOllamaAdapter_EngineVersion_CachedAfterReady covers the spawned
-// and borrowed happy paths: once ready, the adapter caches the live
-// /api/version answer and reports the matching mode.
+// TestOllamaAdapter_EngineVersion_CachedAfterReady: once ready, the
+// adapter caches the live /api/version answer and reports the matching
+// mode.
 func TestOllamaAdapter_EngineVersion_CachedAfterReady(t *testing.T) {
 	srv, host, port := survivorServer(t, "0.30.7")
 	defer srv.Close()
@@ -353,24 +353,6 @@ func TestOllamaAdapter_EngineVersion_CachedAfterReady(t *testing.T) {
 		}
 		if got := a.Mode(); got != EngineModeSpawned {
 			t.Errorf("Mode() = %s, want %s", got, EngineModeSpawned)
-		}
-	})
-
-	t.Run("borrowed", func(t *testing.T) {
-		a := NewOllamaAdapter(OllamaConfig{
-			Borrowed: true, Host: host, Port: port,
-			HTTPClient:     srv.Client(),
-			HealthInterval: 5 * time.Millisecond, HealthSuccess: 2,
-			HealthMaxFails: 5, StopTimeout: 100 * time.Millisecond,
-		})
-		if err := a.EnsureRunning(context.Background()); err != nil {
-			t.Fatalf("EnsureRunning: %v", err)
-		}
-		if got := a.EngineVersion(); got != "0.30.7" {
-			t.Errorf("EngineVersion() = %q, want 0.30.7", got)
-		}
-		if got := a.Mode(); got != EngineModeBorrowed {
-			t.Errorf("Mode() = %s, want %s", got, EngineModeBorrowed)
 		}
 	})
 }
@@ -460,55 +442,6 @@ func TestOllamaAdapter_EnsureRunning_ResolverError(t *testing.T) {
 	}
 	if h := a.Health(context.Background()); h.State != StateFailed {
 		t.Errorf("state = %s, want %s", h.State, StateFailed)
-	}
-}
-
-// TestOllamaAdapter_Borrowed_NoSpawn verifies reuse mode (#188): the
-// adapter probes an already-running ollama and reports Ready WITHOUT
-// spawning, and Stop is a no-op so we never kill the user's engine.
-func TestOllamaAdapter_Borrowed_NoSpawn(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"models":[]}`))
-	}))
-	defer srv.Close()
-	host, port := splitHostPort(t, srv.URL)
-	spawner := &fakeSpawner{}
-	a := NewOllamaAdapter(OllamaConfig{
-		Borrowed: true, Host: host, Port: port,
-		Spawner: spawner, HTTPClient: srv.Client(),
-		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 3,
-		StopTimeout: 100 * time.Millisecond,
-	})
-	if err := a.EnsureRunning(context.Background()); err != nil {
-		t.Fatalf("EnsureRunning (borrowed): %v", err)
-	}
-	if spawner.calls != 0 {
-		t.Errorf("borrowed mode spawned %d times, want 0", spawner.calls)
-	}
-	if a.Health(context.Background()).State != StateReady {
-		t.Errorf("state = %s, want ready", a.Health(context.Background()).State)
-	}
-	if err := a.Stop(context.Background()); err != nil {
-		t.Errorf("Stop (borrowed) returned %v, want nil no-op", err)
-	}
-}
-
-// TestOllamaAdapter_Borrowed_Unreachable: reuse mode with nothing
-// listening fails (rather than silently spawning our own).
-func TestOllamaAdapter_Borrowed_Unreachable(t *testing.T) {
-	spawner := &fakeSpawner{}
-	a := NewOllamaAdapter(OllamaConfig{
-		Borrowed: true, Host: "127.0.0.1", Port: 1, // nothing listens on :1
-		Spawner: spawner, HTTPClient: &http.Client{Timeout: 50 * time.Millisecond},
-		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 2,
-		StopTimeout: 100 * time.Millisecond,
-	})
-	if err := a.EnsureRunning(context.Background()); err == nil {
-		t.Fatal("expected error when borrowed engine is unreachable")
-	}
-	if spawner.calls != 0 {
-		t.Errorf("borrowed mode must never spawn; got %d calls", spawner.calls)
 	}
 }
 
@@ -1026,32 +959,6 @@ func TestOllamaAdapter_Park_BeforeStart(t *testing.T) {
 	}
 }
 
-// TestOllamaAdapter_Park_Borrowed verifies reuse mode refuses the power
-// axis: Park returns ErrEngineBorrowed, does not latch parked, and never
-// signals the user's process.
-func TestOllamaAdapter_Park_Borrowed(t *testing.T) {
-	srv := readyHealthServer(t)
-	defer srv.Close()
-	host, port := splitHostPort(t, srv.URL)
-	a := NewOllamaAdapter(OllamaConfig{
-		Borrowed: true, Host: host, Port: port,
-		Spawner: &fakeSpawner{}, HTTPClient: srv.Client(),
-		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 5,
-	})
-	if err := a.EnsureRunning(context.Background()); err != nil {
-		t.Fatalf("EnsureRunning (borrowed probe): %v", err)
-	}
-	if err := a.Park(context.Background()); !errors.Is(err, ErrEngineBorrowed) {
-		t.Errorf("Park (borrowed) = %v, want ErrEngineBorrowed", err)
-	}
-	if a.IsParked() {
-		t.Error("IsParked = true for borrowed engine, want false (power axis n/a)")
-	}
-	if !a.Borrowed() {
-		t.Error("Borrowed() = false, want true")
-	}
-}
-
 // TestOllamaAdapter_Park_DuringStartup verifies that parking while the
 // readiness probe is still in flight tears the spawned process down rather
 // than leaving a live engine with parked==true.
@@ -1193,8 +1100,8 @@ func TestOllamaAdapter_ProcessEnv_OmittedTuningKeyStillDropsInherited(t *testing
 		t.Errorf("the computed KV type must win over the inherited one: %v", env)
 	}
 
-	// With NO computed tuning the operator's own values are left alone —
-	// reuse/borrowed mode must stay configurable from the environment.
+	// With NO computed tuning the operator's own values are left alone:
+	// the serve env must stay configurable from the environment.
 	b := NewOllamaAdapter(OllamaConfig{
 		Binary: "/fake/ollama", Host: "127.0.0.1", Port: 9475,
 	})

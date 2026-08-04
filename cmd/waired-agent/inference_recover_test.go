@@ -12,7 +12,7 @@ import (
 )
 
 // recoverProvider builds the minimum provider onEngineUnhealthy needs: a real
-// adapter (so Borrowed/Mode/IsParked/LatchFailed behave) and an injectable
+// adapter (so Mode/IsParked/LatchFailed behave) and an injectable
 // clock for the stability window.
 func recoverProvider(t *testing.T, a *infruntime.OllamaAdapter, now func() time.Time) *agentInferenceProvider {
 	t.Helper()
