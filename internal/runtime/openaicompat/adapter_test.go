@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -278,6 +279,205 @@ func TestProbeModels_RejectsNon2xx(t *testing.T) {
 	_, err := probeModels(context.Background(), srv.Client(), srv.URL, time.Second, "")
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("probeModels err = %v, want HTTP 401", err)
+	}
+}
+
+// flipServer is a /v1/models endpoint whose health the test can flip
+// atomically, with a request counter for loop-leak assertions.
+type flipServer struct {
+	srv   *httptest.Server
+	ok    atomic.Bool
+	calls atomic.Int32
+}
+
+func newFlipServer(t *testing.T) *flipServer {
+	t.Helper()
+	f := &flipServer{}
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		f.calls.Add(1)
+		if !f.ok.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, okModelsBody)
+	}))
+	return f
+}
+
+// waitForState polls Health() until it reports want, mirroring the
+// waitFor helper in internal/runtime's tests (no clock injection in
+// this package either).
+func waitForState(t *testing.T, a *Adapter, d time.Duration, want string) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if a.Health(context.Background()).State == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out after %s waiting for state %q (now %q)",
+		d, want, a.Health(context.Background()).State)
+}
+
+// TestAdapter_EnsureRunning_ConcurrentCallersAllSucceed is the PRODUCT
+// CONTRACT that replaces the old "EnsureRunning called while already
+// starting" hard error (#280): callers that arrive while the probe loop
+// is still deciding wait for its verdict instead of erroring. The old
+// error became a 503 runtime_unhealthy for every concurrent request.
+// Ratified shape: TestOllamaAdapter_EnsureRunning_ConcurrentCallersJoin
+// (#279) — here there is no join latch because waitReady already lets
+// every caller wait independently under its own ctx.
+func TestAdapter_EnsureRunning_ConcurrentCallersAllSucceed(t *testing.T) {
+	f := newFlipServer(t)
+	defer f.srv.Close()
+	f.ok.Store(true)
+
+	a, err := NewAdapter(Config{
+		URL: f.srv.URL,
+		ID:  "concurrent",
+		// Two consecutive OKs one interval apart widen the Starting
+		// window the callers race into.
+		ProbeInterval: 40 * time.Millisecond,
+		ProbeTimeout:  500 * time.Millisecond,
+		ReadySuccess:  2,
+	})
+	if err != nil {
+		t.Fatalf("NewAdapter: %v", err)
+	}
+
+	const n = 12
+	var wg sync.WaitGroup
+	var failures atomic.Int32
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := a.EnsureRunning(ctx); err != nil {
+				failures.Add(1)
+				t.Errorf("concurrent EnsureRunning returned %v, want nil", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if fails := failures.Load(); fails != 0 {
+		t.Errorf("%d of %d concurrent callers failed", fails, n)
+	}
+
+	// The concurrent entries must not have started a second probe loop.
+	// Stop cancels the one recorded loop and drains it; a leaked twin
+	// would keep hitting the endpoint on its own ticker.
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	quiesced := f.calls.Load()
+	time.Sleep(200 * time.Millisecond) // 5 probe intervals
+	if got := f.calls.Load(); got != quiesced {
+		t.Errorf("probe requests kept arriving after Stop (%d → %d) — a duplicate probe loop leaked", quiesced, got)
+	}
+}
+
+// TestAdapter_EnsureRunning_AfterFailedReportsProbeErrorAndRecovers pins
+// the second defect found under #280: the old guard keyed on a.cancel,
+// which stays non-nil for the probe loop's whole life, so after a
+// Ready→Failed demotion every later EnsureRunning hard-errored forever
+// (only Stop could reset it). It must instead report the probe verdict,
+// and once the loop self-recovers, succeed again — with no Stop in
+// between.
+func TestAdapter_EnsureRunning_AfterFailedReportsProbeErrorAndRecovers(t *testing.T) {
+	f := newFlipServer(t)
+	defer f.srv.Close()
+	f.ok.Store(true)
+
+	a, err := NewAdapter(Config{
+		URL:           f.srv.URL,
+		ID:            "refail",
+		ProbeInterval: 20 * time.Millisecond,
+		ProbeTimeout:  500 * time.Millisecond,
+		ReadySuccess:  1,
+		FailedFails:   3,
+	})
+	if err != nil {
+		t.Fatalf("NewAdapter: %v", err)
+	}
+	t.Cleanup(func() { _ = a.Stop(context.Background()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := a.EnsureRunning(ctx); err != nil {
+		t.Fatalf("initial EnsureRunning: %v", err)
+	}
+
+	f.ok.Store(false)
+	waitForState(t, a, 2*time.Second, runtime.StateFailed)
+
+	err = a.EnsureRunning(ctx)
+	if err == nil {
+		t.Fatal("EnsureRunning during StateFailed = nil, want the probe verdict")
+	}
+	if !strings.Contains(err.Error(), "probe failed") {
+		t.Errorf("EnsureRunning during StateFailed = %v, want the probe verdict", err)
+	}
+	if strings.Contains(err.Error(), "already starting") {
+		t.Errorf("EnsureRunning returned the removed concurrent-entry error: %v", err)
+	}
+
+	f.ok.Store(true)
+	waitForState(t, a, 2*time.Second, runtime.StateReady)
+	if err := a.EnsureRunning(ctx); err != nil {
+		t.Errorf("EnsureRunning after self-recovery = %v, want nil (recovery must not require Stop)", err)
+	}
+}
+
+// TestAdapter_Stop_ReleasesWaitingCallers: a caller waiting out the
+// Starting window must get a prompt verdict when Stop lands, not spin
+// until its own ctx expires — gateway request ctxs can be deadline-less
+// (#280).
+func TestAdapter_Stop_ReleasesWaitingCallers(t *testing.T) {
+	f := newFlipServer(t)
+	defer f.srv.Close()
+	f.ok.Store(true)
+
+	a, err := NewAdapter(Config{
+		URL:           f.srv.URL,
+		ID:            "stopwait",
+		ProbeInterval: 20 * time.Millisecond,
+		ProbeTimeout:  500 * time.Millisecond,
+		// Unreachably high: the caller is pinned in StateStarting.
+		ReadySuccess: 1000,
+	})
+	if err != nil {
+		t.Fatalf("NewAdapter: %v", err)
+	}
+	t.Cleanup(func() { _ = a.Stop(context.Background()) })
+
+	errCh := make(chan error, 1)
+	go func() {
+		// Deliberately deadline-less: a prompt return can only come
+		// from Stop's verdict, which is the thing under test.
+		errCh <- a.EnsureRunning(context.Background())
+	}()
+
+	waitForState(t, a, 2*time.Second, runtime.StateStarting)
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil || !strings.Contains(err.Error(), "stopped") {
+			t.Errorf("EnsureRunning released by Stop = %v, want a stopped error", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("EnsureRunning still waiting 1s after Stop — waiters were not released")
 	}
 }
 

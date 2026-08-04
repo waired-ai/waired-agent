@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -416,6 +417,96 @@ func TestVLLMAdapter_Idempotent(t *testing.T) {
 	}
 	if spawner.calls != 1 {
 		t.Errorf("spawner.calls = %d, want 1 (second call should be no-op)", spawner.calls)
+	}
+}
+
+// TestVLLMAdapter_EnsureRunning_ConcurrentCallersJoin is the PRODUCT
+// CONTRACT that replaces the old "EnsureRunning called while already
+// starting" hard error (#280): a caller that arrives during a start joins
+// it instead of erroring. The old error became a 503 runtime_unhealthy for
+// every request that arrived while the engine was starting — and a restart
+// is precisely what makes arrival concurrent. Ratified shape:
+// TestOllamaAdapter_EnsureRunning_ConcurrentCallersJoin (#279).
+func TestVLLMAdapter_EnsureRunning_ConcurrentCallersJoin(t *testing.T) {
+	server := newVLLMFakeServer("x")
+	defer server.srv.Close()
+	server.healthy.Store(true)
+	host, port := server.hostPort(t)
+
+	spawner := &fakeSpawner{}
+	a := NewVLLMAdapter(VLLMConfig{
+		Python: "/venv/bin/python", Host: host, Port: port,
+		Model: "/m", ServedModelName: "x",
+		Spawner: spawner, HTTPClient: vllmHTTPClient(),
+		// A slow readiness wait widens the window callers race into.
+		HealthInterval: 20 * time.Millisecond, HealthSuccess: 3, HealthMaxFails: 5,
+		StopTimeout: 50 * time.Millisecond,
+	})
+	defer func() { _ = a.Stop(context.Background()) }()
+
+	const n = 12
+	var wg sync.WaitGroup
+	var failures atomic.Int32
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := a.EnsureRunning(context.Background()); err != nil {
+				failures.Add(1)
+				t.Errorf("concurrent EnsureRunning returned %v, want nil", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if f := failures.Load(); f != 0 {
+		t.Errorf("%d of %d concurrent callers failed", f, n)
+	}
+	spawner.mu.Lock()
+	calls := spawner.calls
+	spawner.mu.Unlock()
+	if calls != 1 {
+		t.Errorf("spawner.calls = %d, want 1 — the joiners must not each spawn an engine", calls)
+	}
+}
+
+// TestVLLMAdapter_EnsureRunning_RetriesAfterFailed pins that the join gate
+// is per-attempt: a failed start clears it, so a later call becomes a fresh
+// leader and respawns. The daemon's bounded start-retry loop depends on
+// this — a gate that latched failure would turn one bad start into a
+// permanent error (#280).
+func TestVLLMAdapter_EnsureRunning_RetriesAfterFailed(t *testing.T) {
+	server := newVLLMFakeServer("x")
+	defer server.srv.Close()
+	// stays unhealthy: the first start must fail
+	host, port := server.hostPort(t)
+
+	spawner := &fakeSpawner{}
+	a := NewVLLMAdapter(VLLMConfig{
+		Python: "/venv/bin/python", Host: host, Port: port,
+		Model: "/m", ServedModelName: "x",
+		Spawner: spawner, HTTPClient: vllmHTTPClient(),
+		HealthInterval: 10 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 3,
+		StopTimeout: 50 * time.Millisecond,
+	})
+	defer func() { _ = a.Stop(context.Background()) }()
+
+	if err := a.EnsureRunning(context.Background()); err == nil {
+		t.Fatal("first EnsureRunning succeeded against an unhealthy server, want error")
+	}
+	if st := a.Health(context.Background()).State; st != StateFailed {
+		t.Fatalf("state after failed start = %v, want StateFailed", st)
+	}
+
+	server.healthy.Store(true)
+	if err := a.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("second EnsureRunning after recovery: %v", err)
+	}
+	spawner.mu.Lock()
+	calls := spawner.calls
+	spawner.mu.Unlock()
+	if calls != 2 {
+		t.Errorf("spawner.calls = %d, want 2 — a failed start must not latch the gate", calls)
 	}
 }
 
