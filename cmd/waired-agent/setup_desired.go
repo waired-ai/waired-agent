@@ -1706,7 +1706,7 @@ func (r *setupReconciler) runPush(ctx context.Context) {
 // The context parameter is kept for the setupProvider interface (a fake
 // implements it too) but is no longer needed: nothing here profiles.
 func (p *agentInferenceProvider) setupEngineState(_ context.Context, engine string) (installed, ready bool) {
-	if !engineInstalledOnHost(runtime.GOOS, p.stateDir, p.cfg, engine) {
+	if !engineInstalledOnHost(runtime.GOOS, p.stateDir, engine) {
 		return false, false
 	}
 	if p.servingEngine() != engine {

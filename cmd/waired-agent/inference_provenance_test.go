@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -16,24 +13,24 @@ import (
 func TestOllamaVersionWarning(t *testing.T) {
 	pin := infruntime.OllamaPinnedVersion
 	cases := []struct {
-		name     string
-		borrowed bool
-		live     string
-		warn     bool
+		name string
+		live string
+		warn bool
 	}{
-		{"bundled live matches pin", false, pin, false},
-		{"bundled live differs", false, "0.24.0", true},
-		{"bundled unknown live", false, "", false},
-		{"reuse above floor", true, "0.24.0", false},
-		{"reuse below floor", true, "0.5.0", true},
-		{"reuse unknown live", true, "", false},
+		{"live matches pin", pin, false},
+		{"live differs", "0.24.0", true},
+		// Since #489 the serving engine is always waired's own, so a
+		// version below the old reuse floor is a mismatch like any other
+		// — there is no "the user's engine is merely old" case left.
+		{"live far below the pin", "0.5.0", true},
+		{"unknown live", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ollamaVersionWarning(tc.borrowed, tc.live)
+			got := ollamaVersionWarning(tc.live)
 			if (got != "") != tc.warn {
-				t.Errorf("ollamaVersionWarning(borrowed=%v, live=%q) = %q, want warning=%v",
-					tc.borrowed, tc.live, got, tc.warn)
+				t.Errorf("ollamaVersionWarning(live=%q) = %q, want warning=%v",
+					tc.live, got, tc.warn)
 			}
 		})
 	}
@@ -53,29 +50,7 @@ func (deadSpawner) Spawn(context.Context, string, []string, []string, io.Writer)
 // process handle, so the power axis must report it unmanaged and
 // refuse to park it.
 func TestEngineController_AdoptedNotManaged(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		if r.URL.Path == "/api/version" {
-			_, _ = w.Write([]byte(`{"version":"9.9.9"}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"models":[]}`))
-	}))
-	t.Cleanup(srv.Close)
-	host, port := hostPort(t, srv.URL)
-	a := infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
-		Binary: "/fake/ollama", Host: host, Port: port,
-		Spawner: deadSpawner{}, HTTPClient: srv.Client(),
-		ExpectedVersion: "9.9.9",
-		HealthInterval:  5 * time.Millisecond, HealthSuccess: 2, HealthMaxFails: 50,
-		StopTimeout: 50 * time.Millisecond,
-	})
-	if err := a.EnsureRunning(context.Background()); err != nil {
-		t.Fatalf("EnsureRunning should adopt the exact-pin orphan: %v", err)
-	}
-	if got := a.Mode(); got != infruntime.EngineModeAdopted {
-		t.Fatalf("Mode() = %s, want adopted", got)
-	}
+	a := newAdoptedTestAdapter(t)
 
 	ec := newEngineController(context.Background(), a, nil)
 	power, managed := ec.EngineState()

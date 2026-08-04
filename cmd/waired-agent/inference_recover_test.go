@@ -31,7 +31,7 @@ func recoverProvider(t *testing.T, a *infruntime.OllamaAdapter, now func() time.
 // a reconcile immediately. PRODUCT CONTRACT: the first attempt has no backoff
 // because a human is typically waiting at a coding-agent prompt.
 func TestOnEngineUnhealthy_SchedulesRecovery(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestOnEngineUnhealthy_SchedulesRecovery(t *testing.T) {
 //
 // PRODUCT CONTRACT.
 func TestOnEngineUnhealthy_GivesUpAfterBudget(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestOnEngineUnhealthy_GivesUpAfterBudget(t *testing.T) {
 // day never accumulates into a give-up: a run that stays up for
 // engineRecoveryStableFor resets the strike count.
 func TestOnEngineUnhealthy_ForgivesAfterStableWindow(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -111,26 +111,23 @@ func TestOnEngineUnhealthy_ForgivesAfterStableWindow(t *testing.T) {
 // TestOnEngineUnhealthy_SkipsEnginesWaiedDoesNotOwn pins that recovery only
 // touches an engine waired spawned.
 //
-// PRODUCT CONTRACT: a borrowed (reuse-mode) engine belongs to the operator,
-// and a parked one was stopped on purpose. Restarting either would undo a
-// deliberate decision, so the StateFailed the adapter already recorded is the
-// whole answer for them.
+// PRODUCT CONTRACT: an adopted orphan has no process handle to signal, and a
+// parked one was stopped on purpose. Restarting either would undo a deliberate
+// decision (or pretend to a handle waired does not hold), so the StateFailed
+// the adapter already recorded is the whole answer for them.
 func TestOnEngineUnhealthy_SkipsEnginesWairedDoesNotOwn(t *testing.T) {
-	t.Run("borrowed", func(t *testing.T) {
-		a := newTestAdapter(t, true) // borrowed
-		if err := a.EnsureRunning(context.Background()); err != nil {
-			t.Fatalf("EnsureRunning: %v", err)
-		}
+	t.Run("adopted", func(t *testing.T) {
+		a := newAdoptedTestAdapter(t)
 		p := recoverProvider(t, a, nil)
 		p.onEngineUnhealthy("crash")
 		time.Sleep(30 * time.Millisecond)
 		if p.engineRecoverPending.Load() {
-			t.Error("a borrowed engine must not be scheduled for recovery")
+			t.Error("an adopted engine must not be scheduled for recovery")
 		}
 	})
 
 	t.Run("parked", func(t *testing.T) {
-		a := newTestAdapter(t, false)
+		a := newTestAdapter(t)
 		if err := a.EnsureRunning(context.Background()); err != nil {
 			t.Fatalf("EnsureRunning: %v", err)
 		}
@@ -157,7 +154,7 @@ func TestEngineRecoveryBackoff(t *testing.T) {
 // TestStartEngine_ClearsFailureLatch pins the documented way back from a
 // give-up: `waired inference engine start`. No new endpoint or CLI verb.
 func TestStartEngine_ClearsFailureLatch(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}

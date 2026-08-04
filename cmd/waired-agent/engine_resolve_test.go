@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -64,109 +63,120 @@ func TestEngineInstalledOnHost_StateDirEngineWithEmptyPATH(t *testing.T) {
 
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		t.Run(goos, func(t *testing.T) {
-			for _, source := range []string{agentconfig.OllamaSourceBundled, agentconfig.OllamaSourceReuse, ""} {
-				cfg := agentconfig.InferenceConfig{OllamaSource: source}
-				if !engineInstalledOnHost(goos, stateDir, cfg, catalog.RuntimeOllama) {
-					t.Errorf("engineInstalledOnHost(%q, source=%q) = false, want true "+
-						"(engine present under the state dir)", goos, source)
-				}
+			if !engineInstalledOnHost(goos, stateDir, catalog.RuntimeOllama) {
+				t.Errorf("engineInstalledOnHost(%q) = false, want true "+
+					"(engine present under the state dir)", goos)
 			}
 		})
 	}
 }
 
-// The Linux bundled-mode strictness, and the two ways out of it. This
-// is the branch that makes the resolver disagree with a plain PATH
-// probe in the OTHER direction: a system ollama on $PATH is NOT the
-// engine this daemon would spawn, so it must not count as installed.
-func TestResolveOllamaBinary_LinuxBundledIsStrict(t *testing.T) {
+// The Linux strictness, and the one way out of it. This is the branch
+// that makes the resolver disagree with a plain PATH probe in the OTHER
+// direction: a system ollama on $PATH is NOT the engine this daemon
+// would spawn, so it must not count as installed.
+//
+// Since #489 there is no second way out: reuse mode used to hand the
+// PATH walk back, because there the binary was only ever a pull client.
+func TestResolveOllamaBinary_LinuxIsStrict(t *testing.T) {
 	sealPATH(t)
 	dir := t.TempDir()
 	// The stub carries the RUNNING OS's binary name, as the sibling test
 	// below explains: download.ResolveBinary looks for the name fixed by the
 	// build tag of the host, not by the goos argument. On Windows an
 	// extensionless "ollama" is invisible to exec.LookPath, which consults
-	// PATHEXT — so without the suffix this reads as "no engine on PATH" and
-	// the reuse way-out below cannot be exercised at all (#216).
-	stubName := "ollama"
-	if runtime.GOOS == "windows" {
-		stubName = "ollama.exe"
-	}
-	stub := filepath.Join(dir, stubName)
+	// PATHEXT (#216).
+	stub := filepath.Join(dir, hostOllamaBinName())
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
 
-	// Bundled + linux: only the state-dir binary qualifies.
+	// Linux: only the state-dir binary qualifies, PATH stub or not.
 	stateDir := t.TempDir()
-	if got, err := resolveOllamaBinary("linux", stateDir, false); err == nil {
-		t.Fatalf("resolveOllamaBinary(linux, bundled) = %q, want an error "+
-			"(a system ollama on PATH is not the bundled engine)", got)
+	if got, err := resolveOllamaBinary("linux", stateDir); err == nil {
+		t.Fatalf("resolveOllamaBinary(linux) = %q, want an error "+
+			"(a system ollama on PATH is not the waired-managed engine)", got)
 	}
 
-	// Way out 1: reuse mode borrows the user's engine, so PATH is back.
-	got, err := resolveOllamaBinary("linux", stateDir, true)
-	if err != nil {
-		t.Fatalf("resolveOllamaBinary(linux, reuse): %v, want the PATH stub", err)
-	}
-	if filepath.Base(got) != stubName {
-		t.Errorf("reuse resolved %q, want the PATH stub %q", got, stubName)
-	}
-
-	// Way out 2: install the bundled engine. It wins over PATH.
+	// The way out: install the waired-managed engine. It wins over PATH.
 	want := fakeBundledOllama(t, stateDir)
-	if got, err := resolveOllamaBinary("linux", stateDir, false); err != nil || got != want {
-		t.Errorf("resolveOllamaBinary(linux, bundled) = (%q, %v), want (%q, nil)", got, err, want)
+	if got, err := resolveOllamaBinary("linux", stateDir); err != nil || got != want {
+		t.Errorf("resolveOllamaBinary(linux) = (%q, %v), want (%q, nil)", got, err, want)
 	}
+}
+
+// hostOllamaBinName is the binary name download.ResolveBinary looks for
+// on the RUNNING OS — fixed by the build tag, not by a goos argument.
+func hostOllamaBinName() string {
+	if runtime.GOOS == "windows" {
+		return "ollama.exe"
+	}
+	return "ollama"
 }
 
 // Windows and macOS keep the PATH / well-known-paths fallback: their
 // "bundled" installs land outside the state dir, so refusing to look
 // there would report every GUI-installed Ollama as missing.
 //
-// Asserted on the error IDENTITY rather than on a stub being found,
-// because download.ResolveBinary's binary name ("ollama" vs
-// "ollama.exe") is fixed by the build tag of the RUNNING OS, not by the
-// goos argument. Reaching download.ErrNotInstalled proves the fallback
-// ran; the Linux strict branch returns its own error and never gets
-// there. The fallback actually resolving is covered by the reuse case
-// in TestResolveOllamaBinary_LinuxBundledIsStrict, which can use the
-// running OS's real binary name.
+// The absent case is asserted on the error IDENTITY rather than on a
+// stub being found, because download.ResolveBinary's binary name
+// ("ollama" vs "ollama.exe") is fixed by the build tag of the RUNNING
+// OS, not by the goos argument. Reaching download.ErrNotInstalled
+// proves the fallback ran; the Linux strict branch returns its own
+// error and never gets there. The present case uses the running OS's
+// real binary name, so it can assert the fallback actually resolves —
+// coverage the deleted reuse way-out used to carry (#489).
 func TestResolveOllamaBinary_NonLinuxKeepsFallback(t *testing.T) {
 	sealPATH(t)
 	for _, goos := range []string{"darwin", "windows"} {
 		t.Run(goos, func(t *testing.T) {
 			stateDir := t.TempDir() // deliberately empty: no bundled engine
-			got, err := resolveOllamaBinary(goos, stateDir, false)
+			got, err := resolveOllamaBinary(goos, stateDir)
 			if err == nil {
 				// Used to t.Skip here, on the grounds that the host might
 				// have a real Ollama. That condition cannot tell a
 				// contaminated host from a subject that wrongly succeeded,
 				// and it fired on every Mac with Ollama installed. The
 				// candidate paths are sealed in TestMain now (#386).
-				t.Fatalf("resolveOllamaBinary(%q, bundled) = %q with every source sealed, "+
+				t.Fatalf("resolveOllamaBinary(%q) = %q with every source sealed, "+
 					"want download.ErrNotInstalled", goos, got)
 			}
 			if !errors.Is(err, download.ErrNotInstalled) {
-				t.Errorf("resolveOllamaBinary(%q, bundled) err = %v, want download.ErrNotInstalled "+
+				t.Errorf("resolveOllamaBinary(%q) err = %v, want download.ErrNotInstalled "+
 					"(the Linux-strict fast-fail must not apply off Linux)", goos, err)
+			}
+		})
+
+		t.Run(goos+"/PATH stub resolves", func(t *testing.T) {
+			dir := t.TempDir()
+			stub := filepath.Join(dir, hostOllamaBinName())
+			if err := os.WriteFile(stub, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir)
+			got, err := resolveOllamaBinary(goos, t.TempDir())
+			if err != nil {
+				t.Fatalf("resolveOllamaBinary(%q) with a PATH engine: %v, want the stub", goos, err)
+			}
+			if got != stub {
+				t.Errorf("resolveOllamaBinary(%q) = %q, want the PATH stub %q", goos, got, stub)
 			}
 		})
 	}
 
-	// The contrast that makes the above meaningful: same inputs, Linux,
-	// bundled — a different error, raised before the fallback runs.
+	// The contrast that makes the above meaningful: same inputs, Linux —
+	// a different error, raised before the fallback runs.
 	stateDir := t.TempDir()
-	_, err := resolveOllamaBinary("linux", stateDir, false)
+	_, err := resolveOllamaBinary("linux", stateDir)
 	if err == nil {
-		t.Fatal("resolveOllamaBinary(linux, bundled) with an empty state dir succeeded, want the strict error")
+		t.Fatal("resolveOllamaBinary(linux) with an empty state dir succeeded, want the strict error")
 	}
 	if errors.Is(err, download.ErrNotInstalled) {
-		t.Errorf("linux bundled err = %v, want the strict bundled-path error, not the fallback's", err)
+		t.Errorf("linux err = %v, want the strict state-dir-path error, not the fallback's", err)
 	}
 	if !strings.Contains(err.Error(), bundledOllamaBinPath(stateDir)) {
-		t.Errorf("linux bundled err = %v, want it to name the expected install path", err)
+		t.Errorf("linux err = %v, want it to name the expected install path", err)
 	}
 }
 
@@ -228,13 +238,6 @@ func (r *recordingRun) run(_ context.Context, engine, path string) (bool, string
 	return true, r.version
 }
 
-func sourceLabel(source string) string {
-	if source == "" {
-		return "unset"
-	}
-	return source
-}
-
 // THE #238 REGRESSION BAR. Product contract: the engine VERSION is
 // probed on the binary the daemon resolved — state dir first — not on
 // whatever `ollama` happens to name on $PATH. The old probe was
@@ -245,38 +248,34 @@ func sourceLabel(source string) string {
 //
 // Runs across all three GOOS values because the state-dir branch is the
 // first thing resolveOllamaBinary tries, before any OS-specific
-// fallback, and across all three ollama_source values because the
-// version question is the same in bundled and reuse mode.
+// fallback.
 func TestEngineVersionOnHost_StateDirEngineWithEmptyPATH(t *testing.T) {
 	sealPATH(t)
 	stateDir := t.TempDir()
 	want := fakeBundledOllama(t, stateDir)
 
 	for _, goos := range []string{"linux", "darwin", "windows"} {
-		for _, source := range []string{agentconfig.OllamaSourceBundled, agentconfig.OllamaSourceReuse, ""} {
-			t.Run(goos+"/"+sourceLabel(source), func(t *testing.T) {
-				rec := &recordingRun{version: "0.31.1"}
-				fn := engineVersionOnHost(goos, stateDir,
-					agentconfig.InferenceConfig{OllamaSource: source}, rec.run)
+		t.Run(goos, func(t *testing.T) {
+			rec := &recordingRun{version: "0.31.1"}
+			fn := engineVersionOnHost(goos, stateDir, rec.run)
 
-				installed, ver := fn(context.Background(), catalog.RuntimeOllama)
-				if !installed || ver != "0.31.1" {
-					t.Errorf("engineVersionOnHost(%q, source=%q)(ollama) = (%v, %q), want (true, %q)",
-						goos, source, installed, ver, "0.31.1")
-				}
-				if rec.calls != 1 {
-					t.Fatalf("version runner called %d times, want 1", rec.calls)
-				}
-				if rec.engine != catalog.RuntimeOllama {
-					t.Errorf("version runner engine = %q, want %q (the parse keys off the kind, "+
-						"not the path)", rec.engine, catalog.RuntimeOllama)
-				}
-				if rec.path != want {
-					t.Errorf("version runner path = %q, want %q (the state-dir binary — this is #238)",
-						rec.path, want)
-				}
-			})
-		}
+			installed, ver := fn(context.Background(), catalog.RuntimeOllama)
+			if !installed || ver != "0.31.1" {
+				t.Errorf("engineVersionOnHost(%q)(ollama) = (%v, %q), want (true, %q)",
+					goos, installed, ver, "0.31.1")
+			}
+			if rec.calls != 1 {
+				t.Fatalf("version runner called %d times, want 1", rec.calls)
+			}
+			if rec.engine != catalog.RuntimeOllama {
+				t.Errorf("version runner engine = %q, want %q (the parse keys off the kind, "+
+					"not the path)", rec.engine, catalog.RuntimeOllama)
+			}
+			if rec.path != want {
+				t.Errorf("version runner path = %q, want %q (the state-dir binary — this is #238)",
+					rec.path, want)
+			}
+		})
 	}
 }
 
@@ -312,8 +311,7 @@ func TestEngineVersionOnHost_RealRunnerExecutesTheStateDirBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fn := engineVersionOnHost(runtime.GOOS, stateDir,
-		agentconfig.InferenceConfig{}, hardware.EngineVersionAt)
+	fn := engineVersionOnHost(runtime.GOOS, stateDir, hardware.EngineVersionAt)
 	installed, ver := fn(context.Background(), catalog.RuntimeOllama)
 	if !installed || ver != "0.31.1" {
 		t.Errorf("engineVersionOnHost with the production runner = (%v, %q), want (true, %q) "+
@@ -330,7 +328,7 @@ func TestEngineVersionOnHost_NoEngineRunsNothing(t *testing.T) {
 	sealPATH(t)
 	stateDir := t.TempDir() // deliberately empty: no bundled engine
 	rec := &recordingRun{version: "0.31.1"}
-	fn := engineVersionOnHost("linux", stateDir, agentconfig.InferenceConfig{}, rec.run)
+	fn := engineVersionOnHost("linux", stateDir, rec.run)
 
 	if installed, ver := fn(context.Background(), catalog.RuntimeOllama); installed || ver != "" {
 		t.Errorf("engineVersionOnHost(linux, empty state dir)(ollama) = (%v, %q), want (false, \"\")",
@@ -351,7 +349,7 @@ func TestEngineVersionOnHost_VLLMAndUnknownExecuteNothing(t *testing.T) {
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		t.Run(goos, func(t *testing.T) {
 			rec := &recordingRun{version: "0.31.1"}
-			fn := engineVersionOnHost(goos, stateDir, agentconfig.InferenceConfig{}, rec.run)
+			fn := engineVersionOnHost(goos, stateDir, rec.run)
 
 			if installed, ver := fn(context.Background(), catalog.RuntimeVLLM); installed || ver != "" {
 				t.Errorf("engineVersionOnHost(%q)(vllm) = (%v, %q) with no venv, want (false, \"\")",
@@ -375,12 +373,11 @@ func TestEngineVersionOnHost_VLLMAndUnknownExecuteNothing(t *testing.T) {
 func TestEngineInstalledOnHost_UnknownAndAbsentVLLM(t *testing.T) {
 	sealPATH(t)
 	stateDir := t.TempDir()
-	cfg := agentconfig.InferenceConfig{}
 	for _, goos := range []string{"linux", "darwin", "windows"} {
-		if engineInstalledOnHost(goos, stateDir, cfg, catalog.RuntimeVLLM) {
+		if engineInstalledOnHost(goos, stateDir, catalog.RuntimeVLLM) {
 			t.Errorf("engineInstalledOnHost(%q, vllm) = true with no venv", goos)
 		}
-		if engineInstalledOnHost(goos, stateDir, cfg, "tensorrt") {
+		if engineInstalledOnHost(goos, stateDir, "tensorrt") {
 			t.Errorf("engineInstalledOnHost(%q, tensorrt) = true for an unknown engine", goos)
 		}
 	}
@@ -406,7 +403,7 @@ func TestOllamaResolverFeedsThePuller(t *testing.T) {
 		t.Run(goos, func(t *testing.T) {
 			r := &recordingRunner{}
 			puller := download.NewResolvingPuller(func() (string, error) {
-				return resolveOllamaBinary(goos, stateDir, false)
+				return resolveOllamaBinary(goos, stateDir)
 			}, r)
 			if err := puller.Pull(context.Background(), "m:q4", nil); err != nil {
 				t.Fatalf("Pull: %v", err)
@@ -421,7 +418,7 @@ func TestOllamaResolverFeedsThePuller(t *testing.T) {
 		empty := t.TempDir()
 		r := &recordingRunner{}
 		puller := download.NewResolvingPuller(func() (string, error) {
-			return resolveOllamaBinary("linux", empty, false)
+			return resolveOllamaBinary("linux", empty)
 		}, r)
 		err := puller.Pull(context.Background(), "m:q4", nil)
 		if err == nil {

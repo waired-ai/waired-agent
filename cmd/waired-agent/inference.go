@@ -87,7 +87,7 @@ func (s *inferenceSubsystem) EngineReady() (bool, string) {
 // live version it answers with, and the agent-computed version warning
 // (see RuntimeStatus.Mode / LiveVersion / VersionWarning). Read by the
 // observability state so `waired doctor` can flag mismatches.
-// Mode/version stay ollama-only (vLLM has no borrowed/adopted modes),
+// Mode/version stay ollama-only (vLLM has no adopted mode),
 // but when the serving engine is vllm the tuning warning comes from
 // its adapter so a clamped context window reaches `waired doctor`
 // (#675).
@@ -108,7 +108,7 @@ func (s *inferenceSubsystem) EngineProvenance() (mode, version, warning, tuningW
 		tuningWarning = s.ollama.AppliedTuning().Warning
 	}
 	return string(s.ollama.Mode()), version,
-		ollamaVersionWarning(s.ollama.Borrowed(), version), tuningWarning
+		ollamaVersionWarning(version), tuningWarning
 }
 
 // inferenceSubsystemDeps bundles the per-agent hooks
@@ -253,15 +253,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// the one it spawns (state dir first), not from $PATH — waired's own
 	// engine is deliberately off $PATH, so the stock PATH probe reported
 	// no version on exactly the hosts waired provisioned (#238).
-	// cfg.OllamaSource is boot-fixed (effectiveCfg only overrides the
-	// preferred model), so capturing it by value here is the same
-	// assumption borrowedOllama makes below.
 	//
 	// Held as a value rather than passed inline: the provider takes the
 	// SAME resolver (below), so it can measure the version when it needs
 	// one instead of only through this profiler's 30 s snapshot — which
 	// on a fresh install predates the engine install entirely (#361).
-	engineVersionProbe := engineVersionOnHost(runtime.GOOS, stateDir, cfg, hardware.EngineVersionAt)
+	engineVersionProbe := engineVersionOnHost(runtime.GOOS, stateDir, hardware.EngineVersionAt)
 	profiler := hardware.NewProfiler(cachePath, hardware.WithEngineVersion(engineVersionProbe))
 
 	// Step 5 migration runs inside Load; warm it once now so the
@@ -291,10 +288,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 
 	registry := infruntime.NewRegistry()
 
-	// Ollama source (#188): "reuse" borrows a user-run ollama (no spawn);
-	// anything else (incl. "" for pre-#188 configs) is the bundled model
-	// where waired downloads + supervises its own binary under state-dir.
-	borrowedOllama := cfg.OllamaSource == agentconfig.OllamaSourceReuse
 	bundledOllamaModels := filepath.Join(stateDir, "runtimes", "ollama", "models")
 	// ollamaResolver resolves the engine binary lazily (re-run on each
 	// EnsureRunning so a freshly installed ollama is picked up without
@@ -302,17 +295,17 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// everything that asks "is the engine here" gets the SAME answer —
 	// see engineInstalledOnHost.
 	ollamaResolver := func() (string, error) {
-		return resolveOllamaBinary(runtime.GOOS, stateDir, borrowedOllama)
+		return resolveOllamaBinary(runtime.GOOS, stateDir)
 	}
 
 	binary, err := ollamaResolver()
 	if err != nil {
 		// Ollama isn't installed yet — log and proceed. Pull / ensure
-		// will fail until the engine is installed (bundled via
-		// `waired runtimes install ollama`, or user-provided for reuse).
+		// will fail until the engine is installed
+		// (`waired runtimes install ollama`).
 		binary = ""
 		logger.Warn("ollama binary not found; inference subsystem will be inert until installed",
-			"err", err, "source", cfg.OllamaSource)
+			"err", err)
 	}
 
 	// #290: pick the GPU-backend env for `ollama serve` from the host
@@ -354,26 +347,22 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		// exists (the closure needs it), just below.
 		// #290: GPU-backend env (e.g. OLLAMA_VULKAN / HSA override).
 		BackendEnv: backendPlan.Preferred().Env,
-		// reuse: probe the user's running ollama, never spawn/stop it.
-		Borrowed: borrowedOllama,
-	}
-	if !borrowedOllama {
-		// Bundled: blobs live in the waired-owned store, and only an
-		// exact-pin orphan of a previous run may be adopted on a port
-		// conflict (any other survivor fails loudly).
-		ollamaCfg.ModelsDir = bundledOllamaModels
-		ollamaCfg.ExpectedVersion = infruntime.OllamaPinnedVersion
+		// Blobs live in the waired-owned store, and only an exact-pin
+		// orphan of a previous run may be adopted on a port conflict
+		// (any other survivor fails loudly).
+		ModelsDir:       bundledOllamaModels,
+		ExpectedVersion: infruntime.OllamaPinnedVersion,
 		// Capture `ollama serve`'s stdout/stderr so a cold-start failure
 		// leaves a trail (the agent's slog only sees "not ready").
-		ollamaCfg.LogDir = filepath.Join(stateDir, "runtimes", "ollama", "logs")
+		LogDir: filepath.Join(stateDir, "runtimes", "ollama", "logs"),
 		// #22: macOS system LaunchDaemons run with $HOME unset, so `ollama
 		// serve` dies at startup ("$HOME is not defined") before it can even
 		// bind the port. Give it a writable, agent-owned HOME under the
 		// runtime dir (ollama creates ~/.ollama there for its key/config);
 		// harmless where the launcher already sets HOME (Linux systemd).
-		ollamaCfg.StateHome = filepath.Join(stateDir, "runtimes", "ollama")
-		migrateLegacyOllamaModels(logger, bundledOllamaModels, "")
+		StateHome: filepath.Join(stateDir, "runtimes", "ollama"),
 	}
+	migrateLegacyOllamaModels(logger, bundledOllamaModels, "")
 	ollama := infruntime.NewOllamaAdapter(ollamaCfg)
 	registry.Register(ollama)
 	// Record the chosen backend up front so the doctor / inference status
@@ -385,8 +374,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// to the spawn env — without it every model silently loads at the
 	// engine-default 32k window regardless of the manifest. Computed here
 	// (before the bootstrap goroutine's first EnsureRunning) so the very
-	// first spawn carries it. Reuse mode owns no process to configure;
-	// the post-load verification below still runs read-only and warns.
+	// first spawn carries it.
 	var (
 		ollamaTune         ollamaTuning
 		ollamaTuned        bool
@@ -406,21 +394,19 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			} else if tv.Source.Type == catalog.SourceOllama {
 				ollamaTuneTag = tv.Source.Tag
 			}
-			if !borrowedOllama {
-				reasons, extraWarn := modelDecisionReasons(cfg, tm, ollamaTune)
-				if extraWarn != "" {
-					ollamaTune.Warning = joinTuningWarn(ollamaTune.Warning, extraWarn)
-				}
-				ollama.SetModelEnv(ollamaTune.Env())
-				ollama.SetAppliedTuning(ollamaTune.ModelTuning)
-				for _, r := range reasons {
-					logger.Info("model decision", "reason", r)
-				}
-				logger.Info("ollama serve tuning computed",
-					"model", ollamaTune.ModelID, "variant", ollamaTune.VariantID,
-					"ctx", ollamaTune.ContextLength, "kv", ollamaTune.KVCacheType,
-					"parallel", ollamaTune.NumParallel, "warning", ollamaTune.Warning)
+			reasons, extraWarn := modelDecisionReasons(cfg, tm, ollamaTune)
+			if extraWarn != "" {
+				ollamaTune.Warning = joinTuningWarn(ollamaTune.Warning, extraWarn)
 			}
+			ollama.SetModelEnv(ollamaTune.Env())
+			ollama.SetAppliedTuning(ollamaTune.ModelTuning)
+			for _, r := range reasons {
+				logger.Info("model decision", "reason", r)
+			}
+			logger.Info("ollama serve tuning computed",
+				"model", ollamaTune.ModelID, "variant", ollamaTune.VariantID,
+				"ctx", ollamaTune.ContextLength, "kv", ollamaTune.KVCacheType,
+				"parallel", ollamaTune.NumParallel, "warning", ollamaTune.Warning)
 		} else {
 			logger.Warn("no tuning target resolvable; ollama serve keeps engine-default context")
 		}
@@ -433,33 +419,31 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// provider recomputes the tuning at each spawn that has no explicit
 	// env yet, so late-viable engines come up tuned too. Explicit
 	// SetModelEnv (above, and the verify-degrade restart) stays
-	// authoritative. Reuse mode owns no process to configure.
-	if !borrowedOllama {
-		ollama.SetModelEnvProvider(func() ([]string, infruntime.ModelTuning, bool) {
-			tuneState, serr := store.Load()
-			if serr != nil {
-				logger.Warn("spawn-time tuning: state.json unreadable; keeping engine-default context", "err", serr)
-				return nil, infruntime.ModelTuning{}, false
-			}
-			tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState)
-			if !ok {
-				return nil, infruntime.ModelTuning{}, false
-			}
-			tune := computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest())
-			reasons, extraWarn := modelDecisionReasons(cfg, tm, tune)
-			if extraWarn != "" {
-				tune.Warning = joinTuningWarn(tune.Warning, extraWarn)
-			}
-			for _, r := range reasons {
-				logger.Info("model decision", "reason", r)
-			}
-			logger.Info("ollama serve tuning computed at spawn",
-				"model", tune.ModelID, "variant", tune.VariantID,
-				"ctx", tune.ContextLength, "kv", tune.KVCacheType,
-				"parallel", tune.NumParallel, "warning", tune.Warning)
-			return tune.Env(), tune.ModelTuning, true
-		})
-	}
+	// authoritative.
+	ollama.SetModelEnvProvider(func() ([]string, infruntime.ModelTuning, bool) {
+		tuneState, serr := store.Load()
+		if serr != nil {
+			logger.Warn("spawn-time tuning: state.json unreadable; keeping engine-default context", "err", serr)
+			return nil, infruntime.ModelTuning{}, false
+		}
+		tm, tv, ok := resolveTuningTarget(cfg, manifests, tuneState)
+		if !ok {
+			return nil, infruntime.ModelTuning{}, false
+		}
+		tune := computeOllamaTuning(tm, tv, hwProfile, ollamaKVRequest())
+		reasons, extraWarn := modelDecisionReasons(cfg, tm, tune)
+		if extraWarn != "" {
+			tune.Warning = joinTuningWarn(tune.Warning, extraWarn)
+		}
+		for _, r := range reasons {
+			logger.Info("model decision", "reason", r)
+		}
+		logger.Info("ollama serve tuning computed at spawn",
+			"model", tune.ModelID, "variant", tune.VariantID,
+			"ctx", tune.ContextLength, "kv", tune.KVCacheType,
+			"parallel", tune.NumParallel, "warning", tune.Warning)
+		return tune.Env(), tune.ModelTuning, true
+	})
 
 	// `ollama pull` is a client of the serving engine — point it at the
 	// resolved port or pulls land on whatever answers 11434. It resolves
@@ -1023,10 +1007,10 @@ type agentInferenceProvider struct {
 	lastDepthBench *DepthBenchResult
 
 	// ollamaUsable reports whether the ollama engine is actually usable
-	// on this host: a binary is resolvable (bundled under state-dir or on
-	// PATH) for the bundled source, or — for the reuse source — the
-	// user's ollama binary is present. Drives the no_engine derivation so
-	// a bundled binary outside PATH isn't mistaken for "no engine" (#188).
+	// on this host: the waired-managed binary is resolvable (under the
+	// state dir, or on PATH where the install still lives outside it).
+	// Drives the no_engine derivation so a bundled binary outside PATH
+	// isn't mistaken for "no engine" (#188).
 	// nil is treated as "not usable".
 	ollamaUsable func() bool
 
@@ -1208,8 +1192,7 @@ func (p *agentInferenceProvider) effectiveCfg() agentconfig.InferenceConfig {
 // goroutine (never blocking the network-map loop) so the change takes effect
 // promptly. target <= 0 clears the override (automatic VRAM sizing).
 //
-// No-op when the target is unchanged, when serving vLLM, or when the ollama
-// process is borrowed/reused (not ours to restart). If a target arrives before
+// No-op when the target is unchanged or when serving vLLM. If a target arrives before
 // the engine is up the restart is skipped; it applies on the next CP change or
 // agent restart. The admission cap (Server.SetCapacity) is applied separately by
 // the caller and is non-disruptive; this method drives only engine parallelism.
@@ -1223,8 +1206,8 @@ func (p *agentInferenceProvider) ApplyConcurrency(ctx context.Context, target in
 	if int(p.desiredParallel.Swap(int64(target))) == target {
 		return // unchanged since the last frame
 	}
-	if p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama || p.ollama.Borrowed() {
-		return // recorded; nothing we own to restart (vLLM / reuse / no engine)
+	if p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama {
+		return // recorded; nothing we own to restart (vLLM / no engine)
 	}
 	p.requestEngineReconcile(false)
 }
@@ -1326,10 +1309,10 @@ func (p *agentInferenceProvider) onEngineUnhealthy(detail string) {
 // owns — and may therefore restart, and eventually stop restarting.
 //
 // Nothing waired owns to restart. The StateFailed the adapter recorded IS the
-// whole answer: an adopted orphan has no handle to signal, and a reused engine
-// belongs to the operator. A parked one was stopped on purpose.
+// whole answer: an adopted orphan has no handle to signal. A parked one was
+// stopped on purpose.
 func (p *agentInferenceProvider) engineIsWairedsToGiveUpOn() bool {
-	return p.ollama != nil && !p.ollama.Borrowed() &&
+	return p.ollama != nil &&
 		p.ollama.Mode() != infruntime.EngineModeAdopted && !p.ollama.IsParked()
 }
 
@@ -1406,9 +1389,8 @@ func (p *agentInferenceProvider) onEngineStartFailed(detail string) {
 // degrade is kept). An in-process model switch (swapPending, #812) always
 // bounces, commits the new model as Active once it is Ready, and resets KV to
 // the q8_0 default (the old model's degrade does not carry over). On a
-// borrowed/parked/down engine the serve env is staged (or, for reuse mode,
-// only the Active flip applies) so the eventual (re)start serves the new
-// tuning without forcing a spawn. If the engine fails to come back after a
+// parked/down engine the serve env is staged so the eventual (re)start serves
+// the new tuning without forcing a spawn. If the engine fails to come back after a
 // switch bounce (wedged), it self-heals via the supervised restart fallback —
 // the only restart #812 keeps.
 // Its stop/start span shares engineOpMu with startEngineAndBootstrap (#304),
@@ -1419,7 +1401,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 	// that decides nothing moved is the common steady-state case, and the
 	// engine may still hold no weights at all — that is exactly the state
 	// this exists to fix. warmServingModel decides for itself whether the
-	// moment is right (parked, borrowed, mid-pull, already resident), so
+	// moment is right (parked, mid-pull, already resident), so
 	// asking on every path costs an /api/ps probe.
 	defer p.warmServingModel()
 	if p.ollama == nil {
@@ -1481,12 +1463,10 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if !swap && !recover && tune.ServeInputsEqual(cur) {
 			return // the running engine already serves this exact tuning
 		}
-		// Only a live, owned, un-parked ollama process can bounce. Borrowed
-		// (reuse mode): we own no process to restart or configure — the Active
-		// flip above is the whole switch. Owned but parked/not-yet-ready:
-		// stage the serve env so the eventual (re)start serves the new tuning,
-		// but don't force a spawn here.
-		if p.servingEngine() != catalog.RuntimeOllama || p.ollama.Borrowed() {
+		// Only a live, un-parked ollama process can bounce. Parked or
+		// not-yet-ready: stage the serve env so the eventual (re)start serves
+		// the new tuning, but don't force a spawn here.
+		if p.servingEngine() != catalog.RuntimeOllama {
 			return
 		}
 		p.ollama.SetModelEnv(tune.Env())
@@ -1556,7 +1536,6 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 // tuning forces a large generation ubatch, then verify the exported tuning
 // against the running engine and degrade KV once on spill/f16 evidence. tag is
 // the model's serving tag (state OllamaTag, else the variant's source tag).
-// Owned (non-borrowed) ollama only — the caller guards borrowed/reuse mode.
 func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, tune ollamaTuning, m catalog.Manifest, v catalog.Variant, tag string) {
 	verifyTag := tag
 	if tune.NumBatch >= ollamaLargeBatch && v.Source.Type == catalog.SourceOllama {
@@ -2068,10 +2047,8 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 			entry.Backend = string(p.ollama.ResolvedBackend())
 			entry.Mode = string(p.ollama.Mode())
 			entry.LiveVersion = p.ollama.EngineVersion()
-			if !p.ollama.Borrowed() {
-				entry.PinnedVersion = infruntime.OllamaPinnedVersion
-			}
-			entry.VersionWarning = ollamaVersionWarning(p.ollama.Borrowed(), entry.LiveVersion)
+			entry.PinnedVersion = infruntime.OllamaPinnedVersion
+			entry.VersionWarning = ollamaVersionWarning(entry.LiveVersion)
 			// #621: surface the exported serve tuning + its verification
 			// outcome so a floored window / f16 fallback / spill is
 			// never silent. Zero value (tuning never computed) leaves
@@ -2174,21 +2151,12 @@ func (p *agentInferenceProvider) probedOllamaVersion(ctx context.Context) string
 	return v
 }
 
-// ollamaVersionWarning derives the agent-side version warning. Bundled
-// engines must serve exactly the pin (anything else means waired is
-// not in control of what answers requests); reuse engines are the
-// user's own and only warned below the supported floor. An unknown
-// live version ("") yields no warning — absence of data, not evidence
-// of mismatch.
-func ollamaVersionWarning(borrowed bool, live string) string {
+// ollamaVersionWarning derives the agent-side version warning. The
+// serving engine must be exactly the pin — anything else means waired
+// is not in control of what answers requests. An unknown live version
+// ("") yields no warning — absence of data, not evidence of mismatch.
+func ollamaVersionWarning(live string) string {
 	if live == "" {
-		return ""
-	}
-	if borrowed {
-		if !infruntime.OllamaVersionAtLeast(live, infruntime.OllamaSupportedMinVersion) {
-			return fmt.Sprintf("engine version %s is below waired's supported minimum %s",
-				live, infruntime.OllamaSupportedMinVersion)
-		}
 		return ""
 	}
 	if live != infruntime.OllamaPinnedVersion {
@@ -2603,9 +2571,9 @@ const engineNotRunningMarker = "the AI engine on this device was not running"
 // engineErr leads because it is the earliest cause in the chain, and it
 // is only ever set when EnsureRunning failed on THIS attempt. The
 // conjunction is deliberate: EnsureRunning failing does not by itself
-// mean the pull is doomed — a borrowed Ollama busy loading a 40 GB model
-// fails the readiness probe while still serving downloads perfectly
-// well, and a foreign engine holding the port answers pulls too. Only
+// mean the pull is doomed — an Ollama busy loading a 40 GB model fails
+// the readiness probe while still serving downloads perfectly well,
+// and a foreign engine holding the port answers pulls too. Only
 // when both halves of the same attempt failed is the engine named, and
 // even then the other two clauses stay so nothing is lost if the
 // attribution is wrong.
@@ -2636,12 +2604,12 @@ func pullFailureText(err error, diag, engineErr string) string {
 // Every "leave it alone" case below is therefore a return, not an error
 // — including the one that should be unreachable.
 //
-// Known limitation: a borrowed engine (`ollama_source=reuse`) whose
-// listening server is a different build from the binary on disk is not
-// covered, because a version measured from that binary makes the choice
-// non-blind and this is skipped. Reaching it needs the borrowed server
-// to be unreachable at dispatch AND the on-disk binary to be a
-// different version; the live /api/version wins whenever it exists.
+// Known limitation: an engine whose listening server is a different
+// build from the binary on disk is not covered, because a version
+// measured from that binary makes the choice non-blind and this is
+// skipped. Reaching it needs the server to be unreachable at dispatch
+// AND the on-disk binary to be a different version; the live
+// /api/version wins whenever it exists.
 func (p *agentInferenceProvider) upgradeBlindVariant(
 	ctx context.Context, manifest catalog.Manifest, jobID, current string,
 ) (catalog.Variant, bool) {
@@ -3468,7 +3436,7 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 	// (router.VLLMAutoSelectable=true), so a preference is now an override,
 	// not the only route onto vLLM.
 	if pref := cfg.PreferredEngine; pref != "" {
-		if engineViable(pref, hw, cfg, stateDir) {
+		if engineViable(pref, hw, stateDir) {
 			return engineDecision{
 				Engine:          pref,
 				Source:          "preference",
@@ -3492,7 +3460,7 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 	}
 
 	if state.Active != nil {
-		if engineViable(state.Active.Runtime, hw, cfg, stateDir) {
+		if engineViable(state.Active.Runtime, hw, stateDir) {
 			return engineDecision{
 				Engine:          state.Active.Runtime,
 				Source:          "persisted",
@@ -3532,7 +3500,7 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 	walked := []string{}
 	for _, e := range chain {
 		walked = append(walked, e)
-		if engineViable(e, hw, cfg, stateDir) {
+		if engineViable(e, hw, stateDir) {
 			d := engineDecision{
 				Engine:          e,
 				Source:          sourceForChainHop(state.Active != nil, e),
@@ -3577,15 +3545,15 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 //
 // Doesn't actually start the engine; the bootstrap's EnsureRunning
 // still has to succeed.
-func engineViable(name string, hw hardware.Profile, cfg agentconfig.InferenceConfig, stateDir string) bool {
+func engineViable(name string, hw hardware.Profile, stateDir string) bool {
 	switch name {
 	case catalog.RuntimeVLLM:
 		if !hw.Accelerators.CUDA {
 			return false
 		}
-		return engineInstalledOnHost(runtime.GOOS, stateDir, cfg, name)
+		return engineInstalledOnHost(runtime.GOOS, stateDir, name)
 	case catalog.RuntimeOllama:
-		return engineInstalledOnHost(runtime.GOOS, stateDir, cfg, name)
+		return engineInstalledOnHost(runtime.GOOS, stateDir, name)
 	default:
 		return false
 	}

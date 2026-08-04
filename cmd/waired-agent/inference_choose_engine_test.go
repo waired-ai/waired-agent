@@ -180,11 +180,12 @@ func TestChooseEngine_StateDirOllamaWithEmptyPATH(t *testing.T) {
 	}
 }
 
-// The other direction, and the reason the Linux rule is strict: bundled
-// mode must not adopt a system ollama that happens to be on $PATH. That
+// The other direction, and the reason the Linux rule is strict: waired
+// must not adopt a system ollama that happens to be on $PATH. That
 // binary is not the pinned engine the daemon would spawn, so calling the
-// host viable would leave the bootstrap resolving nothing.
-func TestChooseEngine_BundledLinuxIgnoresSystemOllamaOnPATH(t *testing.T) {
+// host viable would leave the bootstrap resolving nothing. Since #489
+// there is no mode in which it counts.
+func TestChooseEngine_LinuxIgnoresSystemOllamaOnPATH(t *testing.T) {
 	t.Setenv("WAIRED_OLLAMA_BINARY", "")
 	pathDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(pathDir, "ollama"), []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -195,24 +196,14 @@ func TestChooseEngine_BundledLinuxIgnoresSystemOllamaOnPATH(t *testing.T) {
 	stateDir := t.TempDir() // no bundled engine
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
 	prof := chooseEngineProfiler(t, false)
-	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true} // OllamaSource "" == bundled
+	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
 
 	d, err := chooseEngine(context.Background(), store, prof, cfg, stateDir)
 	if err != nil {
 		t.Fatalf("chooseEngine: %v", err)
 	}
 	if !d.NoEngine {
-		t.Fatalf("got engine=%q source=%q, want no-engine (a system ollama is not the bundled engine)",
+		t.Fatalf("got engine=%q source=%q, want no-engine (a system ollama is not the waired-managed engine)",
 			d.Engine, d.Source)
-	}
-
-	// Reuse mode is the supported way to borrow it, and there it counts.
-	cfg.OllamaSource = agentconfig.OllamaSourceReuse
-	d, err = chooseEngine(context.Background(), store, prof, cfg, stateDir)
-	if err != nil {
-		t.Fatalf("chooseEngine (reuse): %v", err)
-	}
-	if d.Engine != catalog.RuntimeOllama {
-		t.Fatalf("got engine=%q, want ollama (reuse mode borrows the PATH engine)", d.Engine)
 	}
 }
