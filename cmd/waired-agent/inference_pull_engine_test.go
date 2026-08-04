@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,9 +36,26 @@ func pullEngineProvider(t *testing.T) (*agentInferenceProvider, *fakeSpawner) {
 // noticed that a failing runner here costs 45 s of wall clock.
 func pullEngineProviderWithRunner(t *testing.T, runner download.CommandRunner) (*agentInferenceProvider, *fakeSpawner) {
 	t.Helper()
+	return pullEngineProviderReporting(t, runner, "")
+}
+
+// pullEngineProviderReporting is pullEngineProviderWithRunner whose fake
+// engine answers GET /api/version with engineVersion, so a test can put
+// the version out of reach at dispatch and within reach after the join.
+// "" keeps the historical fixture — a server that reports no version at
+// all — which is what leaves the unknown-version path reachable for the
+// tests that pin it.
+func pullEngineProviderReporting(
+	t *testing.T, runner download.CommandRunner, engineVersion string,
+) (*agentInferenceProvider, *fakeSpawner) {
+	t.Helper()
 	shrinkPullRetry(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == "/api/version" && engineVersion != "" {
+			_, _ = fmt.Fprintf(w, `{"version":%q}`, engineVersion)
+			return
+		}
 		_, _ = w.Write([]byte(`{"models":[]}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -256,5 +275,111 @@ func TestRunPullJob_AHealthyEngineIsNotBlamedForAFailedPull(t *testing.T) {
 	// but engine_not_ready.
 	if got := classifyModelPullFailure(ms.Error); got == signer.SetupErrorEngineNotReady {
 		t.Errorf("classifyModelPullFailure(%q) = %q, want the engine NOT blamed", ms.Error, got)
+	}
+}
+
+// --- the variant is chosen against a version the engine can report (#361) ---
+
+// tagRecordingRunner succeeds like noopRunner but remembers which tag it
+// was asked to fetch. The state row alone cannot tell "downloaded the
+// right weights" from "downloaded the wrong ones and relabelled them".
+type tagRecordingRunner struct {
+	mu   sync.Mutex
+	tags []string
+}
+
+func (r *tagRecordingRunner) Run(_ context.Context, _ string, args, _ []string, onLine func(string)) error {
+	tag := ""
+	if len(args) > 1 {
+		tag = args[1]
+	}
+	r.mu.Lock()
+	r.tags = append(r.tags, tag)
+	r.mu.Unlock()
+	onLine("success")
+	return nil
+}
+
+func (r *tagRecordingRunner) recorded() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.tags...)
+}
+
+// PRODUCT CONTRACT (#361): a pull downloads the best variant the engine
+// can actually load — including when nothing could say what the engine
+// was at the moment the pull was dispatched.
+//
+// The version gate fails closed, so an unknown version excludes every
+// variant carrying a MinEngineVersion floor. On a fresh install the
+// version IS unknown for a window (the adapter has never been ready and
+// the profiler's snapshot predates the engine install), so the pull
+// dropped to the unfloored variant — and #305's dedup then made that
+// first, lower choice win any later dispatch. #304's EnsureRunning join
+// is what makes this recoverable: by the time bytes move, the engine is
+// serving and its version is knowable.
+func TestRunPullJob_UpgradesTheVariantOnceTheEngineReportsItsVersion(t *testing.T) {
+	r := &tagRecordingRunner{}
+	p, _ := pullEngineProviderReporting(t, r, "0.31.1")
+	ctx := context.Background()
+
+	// The premise: at dispatch time nothing on this provider can name the
+	// engine version. Without this the test would pass on the pre-#361
+	// code for the wrong reason.
+	if v := p.ollamaEngineVersion(ctx); v != "" {
+		t.Fatalf("engine version before the engine ever started = %q, want unknown", v)
+	}
+
+	if _, err := p.PullModel(ctx, "dense-mtp"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	if got := r.recorded(); len(got) != 1 || got[0] != "dense:mtp-q4" {
+		t.Fatalf("tags fetched = %v, want exactly [dense:mtp-q4] — the engine reports 0.31.1, "+
+			"which clears the mtp variant's 0.30.0 floor", got)
+	}
+	ms := modelStateOf(t, p, "dense-mtp")
+	if ms.VariantID != "mtp-q4" || ms.OllamaTag != "dense:mtp-q4" {
+		t.Errorf("recorded variant/tag = %q/%q, want mtp-q4/dense:mtp-q4 — this row is what "+
+			"the gateway puts on the wire and the mesh advertises", ms.VariantID, ms.OllamaTag)
+	}
+}
+
+// The other half of the same contract: the upgrade is driven by what the
+// engine reports, not by optimism. An engine that answers with a version
+// BELOW the floor keeps the unfloored variant — the qwen3.6 mtp incident
+// is what the floor exists for.
+func TestRunPullJob_KeepsTheUnflooredVariantWhenTheEngineIsBelowTheFloor(t *testing.T) {
+	r := &tagRecordingRunner{}
+	p, _ := pullEngineProviderReporting(t, r, "0.24.0")
+
+	if _, err := p.PullModel(context.Background(), "dense-mtp"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	if got := r.recorded(); len(got) != 1 || got[0] != "dense:q4" {
+		t.Fatalf("tags fetched = %v, want exactly [dense:q4] — 0.24.0 is below the mtp floor", got)
+	}
+}
+
+// And the case that must stay untouched: an engine that reports nothing
+// leaves the blind choice in place. "Unknown" is not evidence that the
+// floored variant would load.
+//
+// Records today's behaviour — the fixture's server answers no version at
+// all, which is what the historical helper already provided.
+func TestRunPullJob_AnEngineThatReportsNoVersionKeepsTheBlindChoice(t *testing.T) {
+	r := &tagRecordingRunner{}
+	p, _ := pullEngineProviderReporting(t, r, "")
+
+	if _, err := p.PullModel(context.Background(), "dense-mtp"); err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	if got := r.recorded(); len(got) != 1 || got[0] != "dense:q4" {
+		t.Fatalf("tags fetched = %v, want exactly [dense:q4]", got)
 	}
 }
