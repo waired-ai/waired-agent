@@ -157,13 +157,20 @@ type CaseOutcome struct {
 	// Verdict names only the worst class and Failed pools every failing
 	// one, so between them the record cannot answer "how often did THIS
 	// happen" for anything else that occurred. That is not a
-	// completeness quibble: a class the grading policy might promote to a
-	// failure — warn_invalid_tool_arguments is the open case, #455 — can
-	// only be evaluated against a count taken before the promotion, and
-	// Failed was computed under the rule the promotion would replace.
+	// completeness quibble, and #455 is the worked example: it asked for
+	// a class to be promoted to a failure, which can only be evaluated
+	// against a count taken BEFORE the promotion, and Failed was computed
+	// under the rule the promotion would replace. It sat undecided
+	// through two catalog sweeps for want of this field, and #483 settled
+	// it from the tally with no measurement at all.
+	//
+	// So this is the primary record and Failed is a derivation of it:
+	// `catalog-tool agentgrade --recompute` re-reads it under the current
+	// rules, which is how a policy change now reaches the catalog.
 	//
 	// Absent on records measured before the probe counted classes. Absent
-	// means UNKNOWN, not zero, exactly as Trials == 0 does.
+	// means UNKNOWN, not zero, exactly as Trials == 0 does — and such a
+	// case is left as measured rather than re-graded.
 	Verdicts map[string]int `json:"verdicts,omitempty"`
 }
 
@@ -258,17 +265,23 @@ func (s AgentGradeSet) CoverageGaps(manifests []Manifest, fixtureRevision string
 // often than it works, which is a sentence someone can defend in a
 // review. Every lower line the measured catalog offers would sweep in a
 // model there is a reason to keep: granite4-350m is the CI fixture at
-// 17%, qwen2.5-coder-3b defines the install quality floor at 14%, and
-// qwen3.5-35b-a3b is a current recommendation at 5%.
+// 38%, qwen2.5-coder-3b defines the install quality floor at 23%, and
+// qwen3.5-35b-a3b is a current recommendation at 8%.
 //
 // Those three rates are the whole justification for the line, so
 // TestRatesCitedByRetireFailureRate reads them back off the shipped
-// store. That guard was added in #475 because this paragraph had gone
+// store. The guard was added in #475 because this paragraph had gone
 // stale — #467 re-measured the catalog and left it quoting the previous
-// sweep — and it earned its place one PR later: the #479 sweep moved
-// every one of the three numbers it then cited (3b 23% -> 14%,
-// granite4-350m 14% -> 17%, qwen3.5-9b 5% -> 1%), and said so instead of
-// letting the sentence rot a second time.
+// sweep — and it has now caught two changes in two PRs: the #479 sweep
+// (3b 23% -> 14%, granite4-350m 14% -> 17%, qwen3.5-9b 5% -> 1%) and
+// #483's promotion of the invalid-arguments class, which moved all three
+// again WITHOUT a measurement, because a policy change re-reads the same
+// tally.
+//
+// The margin narrowed with that promotion and the line did not move.
+// 38% is the closest anything has come, and it is the CI fixture — a
+// 352M model kept for being small and prompt, not for being good.
+// Nothing OFFERED is above 23%.
 const RetireFailureRate = 0.5
 
 // Failures reports every ollama-servable variant whose measured failure

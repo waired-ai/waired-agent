@@ -33,6 +33,9 @@ from collections import defaultdict
 SEVERITY = {
     "pass": 0,
     "warn_unprompted_tool_call": 1,
+    "fail_invalid_tool_arguments": 2,
+    # Pre-#483 spelling, kept so an old report still ranks as the failure
+    # it is rather than at the pass end of the ladder.
     "warn_invalid_tool_arguments": 2,
     "fail_no_tool_call": 3,
     "fail_unstructured_tool_call": 4,

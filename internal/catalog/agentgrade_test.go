@@ -469,9 +469,9 @@ func TestRatesCitedByRetireFailureRate(t *testing.T) {
 		model, variant string
 		wantPct        int
 	}{
-		{"granite4-350m", "bf16-gguf", 17},           // the CI fixture
-		{"qwen2.5-coder-3b-instruct", "q4-gguf", 14}, // defines the install quality floor
-		{"qwen3.5-35b-a3b", "q4-gguf", 5},            // a current recommendation
+		{"granite4-350m", "bf16-gguf", 38},           // the CI fixture
+		{"qwen2.5-coder-3b-instruct", "q4-gguf", 23}, // defines the install quality floor
+		{"qwen3.5-35b-a3b", "q4-gguf", 8},            // a current recommendation
 	}
 	for _, c := range cited {
 		rec, ok := set.Lookup(c.model, c.variant)

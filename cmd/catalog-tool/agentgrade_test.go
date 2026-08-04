@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentgrade"
+	"github.com/waired-ai/waired-agent/internal/catalog"
 )
 
 // writeReport spills a probe report to a temp file and returns its path.
@@ -331,8 +332,18 @@ func TestDescribeClasses(t *testing.T) {
 		},
 		{
 			name:   "worst class first, not alphabetical",
-			counts: map[string]int{"pass": 20, "fail_no_tool_call": 1, "warn_invalid_tool_arguments": 3},
-			want:   "fail_no_tool_call×1 warn_invalid_tool_arguments×3 pass×20",
+			counts: map[string]int{"pass": 20, "fail_no_tool_call": 1, "fail_invalid_tool_arguments": 3},
+			want:   "fail_no_tool_call×1 fail_invalid_tool_arguments×3 pass×20",
+		},
+		{
+			// A store that has not been through --recompute still holds
+			// the pre-#483 spelling. Ranked as the class it names, it
+			// prints among the failures; ranked as the unknown string it
+			// literally is, Severity returns the pass rank and it would
+			// print last, beside the clean trials.
+			name:   "a pre-rename spelling still ranks as the failure it is",
+			counts: map[string]int{"pass": 20, "warn_invalid_tool_arguments": 4},
+			want:   "warn_invalid_tool_arguments×4 pass×20",
 		},
 		{
 			name:   "one class",
@@ -345,5 +356,91 @@ func TestDescribeClasses(t *testing.T) {
 				t.Errorf("describeClasses(%v) = %q, want %q", tc.counts, got, tc.want)
 			}
 		})
+	}
+}
+
+// --recompute is the operation that makes the stored tally load-bearing:
+// a grading-policy change reaches the catalog through it instead of
+// through a GPU sweep.
+func TestRecomputeAgentGrades(t *testing.T) {
+	// A record written before #483: the class is spelled warn_, and
+	// `failed` counts only the class that was failing at the time.
+	set := catalog.AgentGradeSet{Models: map[string]catalog.ModelAgentGrade{
+		"subject": {Variants: map[string]catalog.VariantAgentGrade{"q4": {
+			Verdict: catalog.AgentGradePass,
+			Cases: map[string]catalog.CaseOutcome{
+				"greeting": {Verdict: "pass", Trials: 24,
+					Verdicts: map[string]int{"pass": 24}},
+				"read-file": {Verdict: "warn_invalid_tool_arguments", Trials: 24, Failed: 0,
+					Verdicts: map[string]int{"pass": 21, "warn_invalid_tool_arguments": 3}},
+			},
+		}}},
+	}}
+
+	changed, skipped := recomputeAgentGrades(set)
+	if changed != 1 || skipped != 0 {
+		t.Fatalf("changed=%d skipped=%d, want 1/0", changed, skipped)
+	}
+	got := set.Models["subject"].Variants["q4"]
+	if got.Verdict != catalog.AgentGradeFail {
+		t.Errorf("grade = %q, want %q — the case now holds a failing class",
+			got.Verdict, catalog.AgentGradeFail)
+	}
+	rf := got.Cases["read-file"]
+	if rf.Verdict != string(agentgrade.VerdictInvalidToolArguments) {
+		t.Errorf("case verdict = %q, want the renamed class %q",
+			rf.Verdict, agentgrade.VerdictInvalidToolArguments)
+	}
+	if rf.Failed != 3 {
+		t.Errorf("failed = %d, want 3 — recounted under the current rule", rf.Failed)
+	}
+	if n := rf.Verdicts["warn_invalid_tool_arguments"]; n != 0 {
+		t.Errorf("the old spelling survived in the tally: %v", rf.Verdicts)
+	}
+	if n := rf.Verdicts[string(agentgrade.VerdictInvalidToolArguments)]; n != 3 {
+		t.Errorf("tally = %v, want the 3 trials under the canonical name", rf.Verdicts)
+	}
+	// Trials is the one thing recompute must not touch: it is a
+	// measurement, not a derivation.
+	if rf.Trials != 24 {
+		t.Errorf("trials = %d, want 24 untouched", rf.Trials)
+	}
+	// A clean case stays clean and is not rewritten into existence.
+	if g := set.Models["subject"].Variants["q4"].Cases["greeting"]; g.Failed != 0 || g.Verdict != "pass" {
+		t.Errorf("greeting = %+v, want an untouched pass", g)
+	}
+
+	// Idempotent, and it has to be: the command rewrites a tracked file,
+	// so a second run reporting work would leave a reviewer unable to tell
+	// "the policy moved" from "the tool is unstable".
+	if again, _ := recomputeAgentGrades(set); again != 0 {
+		t.Errorf("a second recompute rewrote %d variant(s); it must be a no-op", again)
+	}
+}
+
+// A case measured before the counter existed has no tally to re-read, so
+// its stored numbers are the only evidence it has. Zeroing them would
+// silently re-grade it as clean; recompute leaves it alone and says how
+// many it left.
+func TestRecomputeLeavesUncountedCasesAlone(t *testing.T) {
+	set := catalog.AgentGradeSet{Models: map[string]catalog.ModelAgentGrade{
+		"subject": {Variants: map[string]catalog.VariantAgentGrade{"q4": {
+			Verdict: catalog.AgentGradeFail,
+			Cases: map[string]catalog.CaseOutcome{
+				"read-file": {Verdict: "fail_no_tool_call", Trials: 24, Failed: 9},
+			},
+		}}},
+	}}
+
+	_, skipped := recomputeAgentGrades(set)
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1", skipped)
+	}
+	got := set.Models["subject"].Variants["q4"]
+	if c := got.Cases["read-file"]; c.Failed != 9 || c.Verdict != "fail_no_tool_call" {
+		t.Errorf("an uncounted case was rewritten: %+v", c)
+	}
+	if got.Verdict != catalog.AgentGradeFail {
+		t.Errorf("grade = %q, want fail — an uncounted failing case still fails", got.Verdict)
 	}
 }
