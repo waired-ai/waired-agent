@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -460,6 +461,13 @@ func worklistNames(gaps []AgentGradeGap) []string {
 // qwen3.5-9b at 30% — so the justification for the threshold described a
 // catalog that no longer existed. This is the cheapest thing that turns
 // that into a failing test instead of a stale sentence.
+//
+// It pins the STORE against this table, not the prose against the store,
+// so a rate cited a SECOND time elsewhere is still on its own: Failures'
+// doc went on calling granite4-350m "the next-worst at 17%" through
+// #483, which had moved it to 38%. When a number here changes, grep the
+// file for the old one. TestWithheldReasonsQuoteTheStore covers the
+// same rot in the manifests.
 func TestRatesCitedByRetireFailureRate(t *testing.T) {
 	set, err := AgentGrades()
 	if err != nil {
@@ -491,6 +499,75 @@ func TestRatesCitedByRetireFailureRate(t *testing.T) {
 				"doc comment says %d%% — update the comment (and this table) to match the data",
 				c.model, c.variant, worst.Case, worst.Failed, worst.Trials, got, c.wantPct)
 		}
+	}
+}
+
+// Every withheld model's reason string, held against the store it
+// describes.
+//
+// TestRatesCitedByRetireFailureRate covers the same rot one file over,
+// and covering only that file is how this one was missed: granite4-350m's
+// internal_only said it "emits real structured tool calls, clean on
+// greeting and search" — true of the three trials that had been run when
+// it was written, and false by 13 of 24 on search-then-edit once the
+// catalog was swept at 24 (#479) and the invalid-arguments class was
+// promoted (#483). Nothing read it, so nothing said so. It is a
+// load-bearing sentence: it was the argument that a future CI leg could
+// drive a real tool call on this model.
+//
+// Two properties, both cheap:
+//
+//   - the reason quotes the variant's CURRENT worst-case bound, so a
+//     sweep that moves the rate cannot leave the prose behind;
+//   - it says which KIND of withholding this is. The report prints
+//     permanent exemptions (granite4-350m, the CI fixture) beside
+//     transitional ones (qwen2.5-coder-0.5b, awaiting #200) and the
+//     reason string is the only thing that distinguishes them.
+//
+// A record of today's behaviour, not a product contract: when the store
+// moves, the expected number moves with it — visibly, in a diff someone
+// signs off on.
+func TestWithheldReasonsQuoteTheStore(t *testing.T) {
+	set, err := AgentGrades()
+	if err != nil {
+		t.Fatalf("AgentGrades: %v", err)
+	}
+	all, err := BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
+	}
+	withheld := 0
+	for _, m := range all {
+		if m.InternalOnly == "" {
+			continue
+		}
+		withheld++
+		lower := strings.ToLower(m.InternalOnly)
+		if !strings.Contains(lower, "permanent") && !strings.Contains(lower, "pending retirement") {
+			t.Errorf("internal_only for %s says neither \"permanent\" nor \"pending retirement\"; "+
+				"the report cannot tell a standing exemption from a stop on the way to deletion, "+
+				"and an unlabelled one defaults to permanent by never being revisited", m.ModelID)
+		}
+		for _, v := range m.Variants {
+			rec, ok := set.Lookup(m.ModelID, v.VariantID)
+			if !ok {
+				continue
+			}
+			worst, counted := rec.WorstCase()
+			if !counted {
+				continue
+			}
+			want := fmt.Sprintf("%.0f%%", worst.LowerBound*100)
+			if !strings.Contains(m.InternalOnly, want) {
+				t.Errorf("%s/%s is measured at a %s lower bound (%s failed %d of %d) but its "+
+					"internal_only reason never says %s — re-measure or rewrite the reason, "+
+					"whichever is out of date",
+					m.ModelID, v.VariantID, want, worst.Case, worst.Failed, worst.Trials, want)
+			}
+		}
+	}
+	if withheld == 0 {
+		t.Fatal("no withheld models in the bundled catalog — this guard is checking nothing")
 	}
 }
 

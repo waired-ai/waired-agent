@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -442,5 +443,121 @@ func TestRecomputeLeavesUncountedCasesAlone(t *testing.T) {
 	}
 	if got.Verdict != catalog.AgentGradeFail {
 		t.Errorf("grade = %q, want fail — an uncounted failing case still fails", got.Verdict)
+	}
+}
+
+// The gap #484 names, asserted structurally: a variant with a usable
+// verdict is in the ranked table whether or not it is offered.
+//
+// The old report built that table from BundledManifests() and listed
+// withheld entries only in a second section filtered at the retirement
+// line, so a withheld variant BELOW the line fell between the two and
+// was printed nowhere. granite4-350m spent a sweep and a policy change
+// climbing from 17% to 38% — the closest anything in the store has come
+// to the line — with nothing printing it.
+//
+// This asserts the property, not the fix. A later change is free to
+// reshape the table; it is not free to reintroduce a variant the report
+// has no row for.
+func TestFailureRateRowsCoverWithheldVariants(t *testing.T) {
+	set, err := catalog.AgentGrades()
+	if err != nil {
+		t.Fatalf("AgentGrades: %v", err)
+	}
+	all, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
+	}
+	rows := failureRateRows(set, all)
+	printed := make(map[string]rateRow, len(rows))
+	for _, r := range rows {
+		printed[r.model+"/"+r.variant] = r
+	}
+
+	withheldSeen := 0
+	for _, m := range all {
+		for _, v := range m.Variants {
+			rec, ok := set.Lookup(m.ModelID, v.VariantID)
+			if !ok {
+				continue
+			}
+			if _, counted := rec.WorstCase(); !counted {
+				continue
+			}
+			key := m.ModelID + "/" + v.VariantID
+			row, ok := printed[key]
+			if !ok {
+				t.Errorf("%s has a usable verdict and no row in the rate table — "+
+					"the report is the only place a rate is read, so this is a rate nobody sees", key)
+				continue
+			}
+			if want := m.InternalOnly != ""; row.withheld != want {
+				t.Errorf("%s: row withheld = %v, want %v", key, row.withheld, want)
+			}
+			if m.InternalOnly != "" {
+				withheldSeen++
+			}
+		}
+	}
+	if withheldSeen == 0 {
+		t.Fatal("no measured withheld variant in the shipped catalog — this guard is checking nothing")
+	}
+	if !sort.SliceIsSorted(rows, func(i, j int) bool {
+		return rows[i].worst.LowerBound > rows[j].worst.LowerBound
+	}) {
+		t.Error("rows are not ranked worst-first; the ranking is what makes a climb visible")
+	}
+}
+
+// A withheld model nobody has measured is the same defect one step
+// earlier, so the withheld section prints it rather than skipping the
+// row it cannot fill.
+func TestPrintWithheldNamesAnUnmeasuredEntry(t *testing.T) {
+	all := []catalog.Manifest{{
+		ModelID:      "example-unmeasured",
+		InternalOnly: "permanent: a fixture nobody has probed",
+		Variants: []catalog.Variant{{
+			VariantID:      "q4-gguf",
+			RuntimeSupport: []string{catalog.RuntimeOllama},
+		}},
+	}}
+	var buf strings.Builder
+	printWithheld(&buf, catalog.AgentGradeSet{}, all)
+	got := buf.String()
+	for _, want := range []string{"example-unmeasured", "NO VERDICT", "a fixture nobody has probed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("withheld section does not mention %q:\n%s", want, got)
+		}
+	}
+}
+
+// The report distinguishes the two kinds of withholding, and the
+// distinction is carried entirely by the reason string, so print it.
+func TestPrintWithheldMarksTheRetirementLine(t *testing.T) {
+	set, err := catalog.AgentGrades()
+	if err != nil {
+		t.Fatalf("AgentGrades: %v", err)
+	}
+	all, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
+	}
+	var buf strings.Builder
+	printWithheld(&buf, set, all)
+	got := buf.String()
+	for _, want := range []string{
+		"qwen2.5-coder-0.5b-instruct", "ABOVE THE RETIREMENT LINE",
+		"granite4-350m", "withheld because:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("withheld section does not mention %q:\n%s", want, got)
+		}
+	}
+	// granite4-350m is withheld and BELOW the line — the case that used
+	// to be printed nowhere. It must not be labelled as retirable.
+	granite := got[strings.Index(got, "granite4-350m"):]
+	if i := strings.Index(granite, "withheld because:"); i > 0 &&
+		strings.Contains(granite[:i], "ABOVE THE RETIREMENT LINE") {
+		t.Errorf("granite4-350m is below the line but is marked retirable:\n%s", granite[:i])
 	}
 }
