@@ -310,11 +310,12 @@ const RetireFailureRate = 0.5
 //
 // The measured store puts exactly ONE variant above the line:
 // qwen2.5-coder-0.5b, at a bound of 90%, against a next-worst of
-// granite4-350m at 17%. Five times the margin the line needs, and the
-// widest gap in the file — two independent sweeps apart (#467, #479),
-// which is the property a deletion criterion needs and "failed every
-// trial" did not have. That entry is now withheld (#475), so on the
-// OFFERED catalog this returns nothing and `catalog-tool agentgrade
+// granite4-350m at 38%. Still the widest gap in the file by a factor of
+// three, and held across two independent sweeps (#467, #479) — the
+// property a deletion criterion needs and "failed every trial" did not
+// have. The next-worst has moved 17% -> 38% since, which is a thing
+// nothing printed until #484. That entry is now withheld (#475), so on
+// the OFFERED catalog this returns nothing and `catalog-tool agentgrade
 // --require-pass` gates CI; the record itself still says 90%, and the
 // report's withheld section keeps saying so until #200's retirement
 // machinery can delete it.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
@@ -69,8 +70,8 @@ func runAgentGrade(args []string) error {
 
 	// Offered-only for coverage and the gate: both are questions about
 	// what we hand people, and a withheld model is neither required to
-	// be agent-grade nor blocking on it. The REPORT still shows the
-	// withheld ones (printWithheldPendingRetirement) — silence is how a
+	// be agent-grade nor blocking on it. The REPORT ranks the withheld
+	// ones alongside everything else (failureRateRows) — silence is how a
 	// withheld entry becomes a permanent one.
 	bundled, err := catalog.BundledManifests()
 	if err != nil {
@@ -79,7 +80,7 @@ func runAgentGrade(args []string) error {
 	// The COMPLETE set: a withheld model is shipped, and measuring one is
 	// how it earned the job. Import resolves its engine tag against this
 	// set — the offered set would reject the very verdict that justified
-	// withholding it — and the report reads it for the withheld section.
+	// withholding it — and the report ranks and explains from it.
 	all, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return fmt.Errorf("agentgrade: load bundled catalog: %w", err)
@@ -131,8 +132,8 @@ func runAgentGrade(args []string) error {
 	fmt.Printf("%d bundled manifests; %d with a recorded verdict; %d declared unmeasurable\n",
 		len(bundled), len(set.Models), len(set.Unmeasurable))
 
-	printFailureRates(set, bundled)
-	printWithheldPendingRetirement(set, all)
+	printFailureRates(os.Stdout, set, all)
+	printWithheld(os.Stdout, set, all)
 
 	if len(failures) > 0 {
 		fmt.Printf("\nrecorded as FAILING (%d) — cannot drive a coding agent:\n", len(failures))
@@ -194,8 +195,70 @@ func printSweepTargets(set catalog.AgentGradeSet, all []catalog.Manifest) {
 	}
 }
 
-// printFailureRates lists every recorded variant by its worst case's
-// measured failure rate, worst first.
+// reportf writes one report line.
+//
+// The destination is stdout or a test buffer; neither has a write error
+// worth branching on, and errcheck does not exempt Fprintf the way it
+// exempts Printf.
+func reportf(w io.Writer, format string, a ...any) {
+	_, _ = fmt.Fprintf(w, format, a...)
+}
+
+// rateRow is one measured variant's line in the ranked table.
+type rateRow struct {
+	model, variant string
+	withheld       bool
+	worst          catalog.CaseFailureRate
+	classes        map[string]int
+}
+
+// failureRateRows ranks every variant carrying a usable verdict by its
+// worst case's measured failure rate, worst first.
+//
+// Over the COMPLETE catalog, withheld included, which is the fix for
+// #484. The rate used to be printed from the OFFERED manifests and the
+// withheld ones only from a second section listing those above the
+// retirement line, so a withheld entry below the line was printed
+// nowhere at all: granite4-350m went from a 17% bound to 38% — the
+// closest anything in the store has come to the line — invisibly.
+//
+// One ranked list rather than a filter widened to close that particular
+// gap, because the gap was structural. Two lists with different
+// membership rules can be made to agree today and drift apart on the
+// next change to either; one list over everything measured cannot
+// reopen. `withheld` is a column here, not an exclusion — the reader who
+// sees 38% needs to know in the same glance that nobody is offered it.
+//
+// The gate does NOT read this. --require-pass stays offered-only
+// (Failures over BundledManifests); a red no PR can clear is a red that
+// gets ignored, and deleting a withheld entry is blocked on #200.
+func failureRateRows(set catalog.AgentGradeSet, all []catalog.Manifest) []rateRow {
+	var rows []rateRow
+	for _, m := range all {
+		for _, v := range m.Variants {
+			rec, ok := set.Lookup(m.ModelID, v.VariantID)
+			if !ok {
+				continue
+			}
+			if worst, counted := rec.WorstCase(); counted {
+				rows = append(rows, rateRow{m.ModelID, v.VariantID, m.InternalOnly != "",
+					worst, rec.Cases[worst.Case].Verdicts})
+			}
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].worst.LowerBound != rows[j].worst.LowerBound {
+			return rows[i].worst.LowerBound > rows[j].worst.LowerBound
+		}
+		if rows[i].model != rows[j].model {
+			return rows[i].model < rows[j].model
+		}
+		return rows[i].variant < rows[j].variant
+	})
+	return rows
+}
+
+// printFailureRates renders the ranked table.
 //
 // The store's own notes field has to shout "READ THE RATIO, NOT THE
 // VERDICT" because the verdict is the worst outcome across every trial
@@ -204,44 +267,25 @@ func printSweepTargets(set catalog.AgentGradeSet, all []catalog.Manifest) {
 // reader that in prose and then printing only the worklist leaves them
 // to open the JSON to find out which they are looking at. This prints
 // the ratio, so the instruction is unnecessary.
-func printFailureRates(set catalog.AgentGradeSet, manifests []catalog.Manifest) {
-	type row struct {
-		model, variant string
-		worst          catalog.CaseFailureRate
-		classes        map[string]int
-	}
-	var rows []row
-	for _, m := range manifests {
-		for _, v := range m.Variants {
-			rec, ok := set.Lookup(m.ModelID, v.VariantID)
-			if !ok {
-				continue
-			}
-			if worst, counted := rec.WorstCase(); counted {
-				rows = append(rows, row{m.ModelID, v.VariantID, worst,
-					rec.Cases[worst.Case].Verdicts})
-			}
-		}
-	}
+func printFailureRates(w io.Writer, set catalog.AgentGradeSet, all []catalog.Manifest) {
+	rows := failureRateRows(set, all)
 	if len(rows) == 0 {
 		return
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].worst.LowerBound != rows[j].worst.LowerBound {
-			return rows[i].worst.LowerBound > rows[j].worst.LowerBound
-		}
-		return rows[i].model < rows[j].model
-	})
-
-	fmt.Printf("\nmeasured failure rate, worst case per variant "+
-		"(retirement line: lower bound above %.0f%%):\n", catalog.RetireFailureRate*100)
+	reportf(w, "\nmeasured failure rate, worst case per variant — every recorded "+
+		"variant, offered or withheld (retirement line: lower bound above %.0f%%):\n",
+		catalog.RetireFailureRate*100)
 	for _, r := range rows {
 		mark := "  "
 		if r.worst.LowerBound > catalog.RetireFailureRate {
 			mark = "→ "
 		}
-		fmt.Printf("  %s%-30s %-14s %-17s %3d/%-3d  >= %3.0f%%   %s\n",
-			mark, r.model, r.variant, r.worst.Case,
+		held := ""
+		if r.withheld {
+			held = "withheld"
+		}
+		reportf(w, "  %s%-30s %-14s %-8s %-17s %3d/%-3d  >= %3.0f%%   %s\n",
+			mark, r.model, r.variant, held, r.worst.Case,
 			r.worst.Failed, r.worst.Trials, r.worst.LowerBound*100,
 			describeClasses(r.classes))
 	}
@@ -284,46 +328,86 @@ func describeClasses(counts map[string]int) string {
 	return strings.Join(parts, " ")
 }
 
-// printWithheldPendingRetirement lists the models held out of the offered
-// catalog that are ALSO above the retirement line.
+// printWithheld lists EVERY model held out of the offered catalog, with
+// the reason it is out and whether it is above the retirement line.
 //
-// Withholding a failing model removes it from every offered-only view at
-// once — the rate table above, the worklist, the docs table, `models ls`.
-// That is the point, and it is also how such an entry stops being
-// revisited: the next reader sees a clean report and no reason to think
-// anything is queued. The exemption pattern this repo uses elsewhere
-// (agentgrade.json's "unmeasurable", InternalOnly itself) is "an
-// exemption nobody has to justify is an exemption nobody revisits", and
-// a reason string only satisfies that while someone is reading the file.
-// So the report says it out loud, with the rate and the reason — which
-// carries the tracking issue — on every run.
+// Withholding a model removes it from every offered-only view at once —
+// the worklist, the docs table, `models ls`. That is the point, and it
+// is also how such an entry stops being revisited: the next reader sees
+// a clean report and no reason to think anything is queued. The
+// exemption pattern this repo uses elsewhere (agentgrade.json's
+// "unmeasurable", InternalOnly itself) is "an exemption nobody has to
+// justify is an exemption nobody revisits", and a reason string only
+// satisfies that while someone is reading the file. So the report says
+// it out loud on every run.
 //
-// Reported, never gated: `--require-pass` stays offered-only. A gate here
-// would be a red that no PR can clear (deleting the entry needs #200's
-// retired->successor map), and a permanent red is ignored, which is the
-// outcome this section exists to prevent.
+// Every withheld entry, not only the ones above the line (#484). The
+// line answers "should this be deleted"; this section answers "is
+// anyone still standing behind holding it back", and those have
+// different memberships. granite4-350m is at 38% and permanent by
+// design; qwen2.5-coder-0.5b is at 90% and transitional. Printing only
+// the second taught a reader that withheld-and-listed means
+// pending-deletion, which is a claim the field does not make.
 //
-// Reuses Failures rather than re-deriving the rate: one rule, two
-// audiences. What differs is the consequence, not the threshold.
-func printWithheldPendingRetirement(set catalog.AgentGradeSet, all []catalog.Manifest) {
-	withheld := make([]catalog.Manifest, 0, len(all))
-	reason := make(map[string]string, len(all))
+// A withheld entry with no verdict at all is listed too. It has no row
+// in the table above by construction, so this is the only place it
+// appears — and "nobody has measured what we are holding back" is the
+// same defect one step earlier.
+//
+// Reported, never gated: `--require-pass` stays offered-only. A gate
+// here would be a red that no PR can clear (deleting the entry needs
+// #200's retired->successor map), and a permanent red is ignored, which
+// is the outcome this section exists to prevent.
+func printWithheld(w io.Writer, set catalog.AgentGradeSet, all []catalog.Manifest) {
+	type held struct {
+		model, variant, reason string
+		rate                   catalog.CaseFailureRate
+		measured               bool
+	}
+	var rows []held
 	for _, m := range all {
 		if m.InternalOnly == "" {
 			continue
 		}
-		withheld = append(withheld, m)
-		reason[m.ModelID] = m.InternalOnly
+		for _, v := range m.Variants {
+			if !slices.Contains(v.RuntimeSupport, catalog.RuntimeOllama) {
+				continue
+			}
+			row := held{model: m.ModelID, variant: v.VariantID, reason: m.InternalOnly}
+			if rec, ok := set.Lookup(m.ModelID, v.VariantID); ok {
+				row.rate, row.measured = rec.WorstCase()
+			}
+			rows = append(rows, row)
+		}
 	}
-	rows := set.Failures(withheld)
 	if len(rows) == 0 {
 		return
 	}
-	fmt.Printf("\nWITHHELD, PENDING RETIREMENT (%d) — above the retirement line and "+
-		"held out of the offered catalog, so nothing above lists them:\n", len(rows))
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].rate.LowerBound != rows[j].rate.LowerBound {
+			return rows[i].rate.LowerBound > rows[j].rate.LowerBound
+		}
+		if rows[i].model != rows[j].model {
+			return rows[i].model < rows[j].model
+		}
+		return rows[i].variant < rows[j].variant
+	})
+
+	reportf(w, "\nWITHHELD (%d) — marked `withheld` in the table above and absent from "+
+		"every offered view; the reason is the only record of whether that is transitional:\n", len(rows))
 	for _, r := range rows {
-		fmt.Printf("  %-34s %-18s %s\n", r.ModelID, r.VariantID, r.Reason)
-		fmt.Printf("    withheld because: %s\n", reason[r.ModelID])
+		switch {
+		case !r.measured:
+			reportf(w, "  %-30s %-14s   NO VERDICT — nothing has measured what is being held back\n",
+				r.model, r.variant)
+		case r.rate.LowerBound > catalog.RetireFailureRate:
+			reportf(w, "→ %-30s %-14s   %s %d/%d, >= %.0f%% — ABOVE THE RETIREMENT LINE\n",
+				r.model, r.variant, r.rate.Case, r.rate.Failed, r.rate.Trials, r.rate.LowerBound*100)
+		default:
+			reportf(w, "  %-30s %-14s   %s %d/%d, >= %.0f%%\n",
+				r.model, r.variant, r.rate.Case, r.rate.Failed, r.rate.Trials, r.rate.LowerBound*100)
+		}
+		reportf(w, "    withheld because: %s\n", r.reason)
 	}
 }
 
