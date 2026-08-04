@@ -10,11 +10,10 @@ meta:
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 Waired picks a model for you when you sign in — the best one this computer can
-actually run. On a computer with a separate graphics card it keeps to models
-that fit on the card, so the automatic pick can be smaller than your total
-memory suggests
-([why](/reference/model-catalog/#how-waired-picks-for-you)). You only need this
-page if you want to change it.
+serve a full coding session on. Other models still fit and stay selectable, so
+the automatic pick can be smaller than your total memory suggests
+([why](/reference/model-catalog/#picked-can-it-hold-a-whole-coding-session-here)).
+You only need this page if you want to change it.
 
 ## Should you change it?
 
@@ -48,13 +47,16 @@ waired models ls --detail     # every model, what it needs, and what fits this c
 
 ## What the list tells you
 
-Every model in the list shows the memory it needs on the graphics card and its
-quality score — a bigger score means better answers.
+Every model in the list shows the memory it needs and its quality score — a
+bigger score means better answers.
 
-- The model Waired would choose for this computer is marked **recommended**.
-- A model that runs here but is not a good match for this computer is marked
-  too, with the reason. It stays selectable: it is a real choice with a real
-  cost, not a mistake.
+- **The memory figure** is what the model takes to serve a full coding
+  session: its weights, the AI engine's working memory, and the context
+  cache. Your system RAM and graphics memory count together toward it.
+- The model Waired would choose for this computer is marked **recommended** —
+  the best one this computer can hold a whole coding session on.
+- A model that runs here but is not that one is marked too, with the reason.
+  It stays selectable: it is a real choice with a real cost, not a mistake.
 - A model this computer cannot run is shown greyed out with what it would
   need, rather than left out of the list. Nothing is hidden from you.
 
@@ -138,10 +140,11 @@ If it says `not ready`, the model is probably still downloading —
 `waired models ls` shows how far along it is. If it stays `not ready` after the
 download finishes, the model does not fit this computer: switch back down.
 
-<Aside type="tip" title="Waired will let you pick a model that's too big">
-	It warns and asks you to confirm, showing the shortfall
-	(e.g. `needs 32 GB RAM (have 31 GB)`) — it does not block you. Marginal
-	over-spec usually works and is just slower.
+<Aside type="tip" title="Waired will let you pick a model it would not choose">
+	A model that runs here but is not the recommended one takes a warning and a
+	confirmation, not a refusal — it is a real choice with a real cost. The one
+	thing Waired does refuse is a model your computer does not have the memory
+	for at all, and it shows the shortfall when it does.
 </Aside>
 
 ## Free up disk space
@@ -156,5 +159,5 @@ You will be asked to confirm first.
 
 <CardGrid>
 	<LinkCard title="Model catalog" href="/reference/model-catalog/" description="Every bundled model, with the memory it needs and how good it is." />
-	<LinkCard title="How Waired picks for you" href="/reference/model-catalog/#how-waired-picks-for-you" description="The rule behind the automatic choice." />
+	<LinkCard title="Which models you are offered, and which one Waired picks" href="/reference/model-catalog/#which-models-you-are-offered-and-which-one-waired-picks" description="The two rules behind the list and the automatic choice." />
 </CardGrid>

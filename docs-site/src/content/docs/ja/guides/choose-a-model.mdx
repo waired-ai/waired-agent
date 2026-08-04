@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: ea650a88f2991412
+sourceHash: 3abeceb211bbd9cb
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -13,7 +13,7 @@ import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starli
 サインインしたときに、Waired が**このパソコンで実際に動かせる中でいちばん良いモデル**を
 自動で選んでいます。単体のグラフィックボードを搭載したパソコンでは、カードに収まる
 モデルの中から選ぶため、自動選択の結果は総メモリ量から想像するより小さくなることが
-あります（[理由](/ja/reference/model-catalog/#waired-によるモデル選択の仕組み)）。
+あります（[理由](/ja/reference/model-catalog/#選択-このパソコンでコーディング-1-セッション分を保持できるか)）。
 変更したいときだけこのページを読んでください。
 
 ## そもそも変えるべき？
@@ -149,5 +149,5 @@ waired models rm <モデルID>
 
 <CardGrid>
 	<LinkCard title="モデルカタログ" href="/ja/reference/model-catalog/" description="同梱モデルの一覧と、必要なメモリ・品質。" />
-	<LinkCard title="自動選択の仕組み" href="/ja/reference/model-catalog/#waired-によるモデル選択の仕組み" description="Waired がモデルを選ぶときの基準。" />
+	<LinkCard title="提示されるモデルと、Waired が選ぶモデル" href="/ja/reference/model-catalog/#提示されるモデルとwaired-が選ぶモデル" description="一覧に出る基準と、自動選択の基準。" />
 </CardGrid>

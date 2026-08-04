@@ -92,46 +92,70 @@ Big total size with a small active footprint — pairs well with multi-GPU serve
 
 <ModelCatalogTable engine="vllm" arch="moe" lang="en" />
 
-## How Waired picks for you
+## Which models you are offered, and which one Waired picks
 
-Waired chooses the highest-quality model that fits your machine's
-memory **and is fast enough to be worth using**. On shared-memory systems
-(Apple Silicon, AMD Strix Halo), MoE models with a small *active* parameter
-count are favored because decode speed tracks active params, not total size.
+These are two different questions, and Waired answers them separately.
 
-If your computer has a separate graphics card, "fits" means the model itself
-fits in **the card's own memory**, with a little headroom left for the engine.
-A larger model still runs — the part that does not fit stays in system RAM and
-is fetched back over a much slower connection — but every reply pays for that,
-and a long coding prompt pays for it the most. So Waired will not choose such a
-model *for* you, even where the total-memory arithmetic says it would run: the
-automatic pick can be smaller than your machine's total memory suggests. You can
-still choose it yourself.
+### Offered: does it fit at all?
 
-Where you choose, Waired says which is which. In the Waired app's **Models**
-list and in `waired models ls --detail`, the model Waired would choose for this
-computer is marked *recommended*, and a model that runs here but is not a good
-match for it is marked as well — with the reason, and still selectable. Models
-this computer cannot run are greyed out with what they would need, rather than
-left out of the list.
+A model is offered whenever your computer has enough memory to hold it —
+its weights, the AI engine's own working memory, and the context cache for
+a full coding session. **System RAM and graphics memory count together**,
+because the engine puts what does not fit on the card into system RAM and
+runs it from there.
 
-Windows and macOS run on Ollama. vLLM serving needs Linux, so on those machines
-Waired picks from the Ollama list — a large NVIDIA card does not change that.
+That total is what the **NEEDS** column reports in `waired models ls --detail`
+and in the Waired app's **Models** list. Only a model that genuinely does not
+fit is greyed out, with what it would need.
 
-Fitting in memory is not the same as running well: on a shared-memory Mac a
+Apple Silicon is the one machine where the two figures are not added: its
+"graphics memory" is a slice of the same RAM rather than separate memory, so
+the RAM total is the whole of it.
+
+### Picked: can it hold a whole coding session here?
+
+Of the models that fit, Waired recommends the highest-quality one your
+computer can serve a **full ~200,000-token coding session** on, keeping the
+model's weights on the graphics card.
+
+A model that fits but cannot do that is still offered and still selectable —
+it is simply not the one Waired chooses for you. Two things commonly put a
+model in that group:
+
+- **Its weights do not fit the graphics card.** They are re-read from system
+  RAM for every word of every reply, and a long coding prompt pays for it
+  most. Adding a bigger card is what fixes it.
+- **The context cache does not fit alongside them.** The model runs and
+  answers well; it just cannot hold a long session, so it is not what Waired
+  points a coding agent at.
+
+Where you choose, Waired says which is which. The model Waired would choose
+for this computer is marked *recommended*, and a model that runs here but is
+not that one is marked with the reason and stays selectable.
+
+Fitting in memory is not the same as running fast: on a shared-memory Mac a
 large dense model can fit and still answer at single-digit words per second,
 while a mixture-of-experts model of similar size answers many times faster.
-Where Waired recognises your exact chip it takes that chip's memory speed into
-account and skips a model that would be too slow on it, instead of recommending
-it and warning you afterwards. A faster chip keeps what a slower one skips — an
-M4 Max is not held to what an M4 base can do. On a chip Waired does not
-recognise yet nothing is skipped, and you may simply see a "may be slow" note.
+Waired shows that estimate beside each model, and after your first model is
+installed it **measures** the real speed on your machine and tells you if a
+lighter model would serve you better. Speed is something Waired reports and
+measures — it is not a reason a model is withheld from you.
+
+### Adding hardware never costs you a model
+
+Fitting a graphics card, or a bigger one, can only improve what this computer
+is offered and what it is recommended. That holds even for a small card: the
+engine still has all your system RAM behind it, so a machine with a card is
+never given a shorter session or a lesser model than the same machine without
+one.
 
 If your machine has more than one NVIDIA graphics card, Waired counts them
 together. A model too large for either card alone can still be a good pick when
-it fits across both, and Waired no longer passes it over as though the extra
-cards were not there. Cards from different makers are not combined, because the
+it fits across both. Cards from different makers are not combined, because the
 engine cannot spread one model across them.
+
+Windows and macOS run on Ollama. vLLM serving needs Linux, so on those machines
+Waired picks from the Ollama list — a large NVIDIA card does not change that.
 
 This only affects what Waired picks *for* you. You can still choose any model
 that fits — see [Choose which AI model runs](/guides/choose-a-model/).
