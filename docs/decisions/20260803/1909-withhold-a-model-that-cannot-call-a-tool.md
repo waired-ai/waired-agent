@@ -1,11 +1,21 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260804/1943-retire-a-catalog-entry-with-a-successor-map.md
 ---
 
 # ツールを呼べないモデルは提供から外す（退役までの暫定）(20260803 19:09)
 
 ## Status
-Accepted
+
+Accepted。ただし**「削除ではなく withhold にする」半分は 20260804 に
+superseded**（`docs/decisions/20260804/1943-retire-a-catalog-entry-with-a-successor-map.md`）。
+下に書いた exit condition —「#200 の機構が入ったら 0.5b を消す」— はそのとおり
+果たされ、qwen2.5-coder-0.5b はカタログから削除された。その名前は
+`catalog.Retirements()` 経由で qwen3.5-0.8b に解決する。
+
+`--require-pass` を ci.yml で有効にする判断と、その根拠（Wilson 95% 下限を
+`RetireFailureRate` と比べ、24 試行なら 17/24 で初めて鳴る）は引き続き有効。
 
 ## Context
 

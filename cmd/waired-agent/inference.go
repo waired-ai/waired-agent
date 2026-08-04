@@ -989,6 +989,12 @@ type agentInferenceProvider struct {
 	// time, so a second trigger arriving mid-load must drop, not queue.
 	warmInFlight atomic.Bool
 
+	// bundledRetirementLogged keeps the "your pin was retired" line to one
+	// per process (#200). bundledModelID() is called on every pull,
+	// activation and status read, so an unguarded log there is one line
+	// per request for the lifetime of a host that never edits its config.
+	bundledRetirementLogged sync.Once
+
 	// benchMu guards lastBench. The boot benchmark runs on the probe
 	// goroutine (main.go) and calls SetLastBench; Status() and
 	// RunBenchmark read it back to derive the #133 lighter-model
@@ -2267,9 +2273,16 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 	if !p.cfg.AllowPull {
 		return management.PullJob{}, fmt.Errorf("pulls are disabled by config (allow_pull=false): %w", errPullsDisabled)
 	}
-	manifest, ok := catalog.LookupByAlias(modelOrAlias, p.manifests)
+	// A retired name pulls its successor (#200). `waired models pull
+	// <retired>` is a person typing a name they last saw in our own docs,
+	// and "unknown model" would be a wrong answer: we shipped it.
+	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.manifests)
 	if !ok {
 		return management.PullJob{}, fmt.Errorf("unknown model %q", modelOrAlias)
+	}
+	if retired.SuccessorModelID != "" {
+		p.logger.Info("pull target was retired; pulling its successor",
+			"requested", modelOrAlias, "model", manifest.ModelID)
 	}
 	if len(manifest.Variants) == 0 {
 		return management.PullJob{}, fmt.Errorf("manifest %s has no variants", manifest.ModelID)
@@ -2899,6 +2912,12 @@ func (p *agentInferenceProvider) activateBundledIfReady(ctx context.Context) boo
 // canonical manifest.ModelID. Resolving once, here, is what keeps the two
 // ends of that comparison the same kind of string (#380).
 //
+// A RETIRED name resolves to its successor (#200): the value came out of
+// a config file written before the entry went away, and the alternative
+// is a host that pre-pulls nothing and reports a model this build no
+// longer ships. Logged once, because this is the pin the operator chose
+// and they should be able to find out it moved.
+//
 // An unresolvable value is returned unchanged, which degrades to exactly
 // the comparison the caller would have made anyway; "" means no bundled
 // model is configured, which is a real state now that there is no
@@ -2907,10 +2926,26 @@ func (p *agentInferenceProvider) bundledModelID() string {
 	if p.cfg.BundledModelID == "" {
 		return ""
 	}
-	if m, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests); ok && m.ModelID != "" {
-		return m.ModelID
+	m, retired, ok := catalog.ResolveModel(p.cfg.BundledModelID, p.manifests)
+	if !ok || m.ModelID == "" {
+		return p.cfg.BundledModelID
 	}
-	return p.cfg.BundledModelID
+	if retired.SuccessorModelID != "" {
+		p.logBundledRetirementOnce(retired)
+	}
+	return m.ModelID
+}
+
+// logBundledRetirementOnce reports the bundled pin's migration the first
+// time it is resolved. bundledModelID is called on every pull, activation
+// and status read, so an unguarded line here would be one per request.
+func (p *agentInferenceProvider) logBundledRetirementOnce(r catalog.Retirement) {
+	p.bundledRetirementLogged.Do(func() {
+		p.logger.Info("configured bundled model was retired; using its successor",
+			"configured", p.cfg.BundledModelID,
+			"model", r.SuccessorModelID,
+			"reason", r.Reason)
+	})
 }
 
 // isBundledModel reports whether modelID — a canonical id, as written by
@@ -2944,17 +2979,21 @@ func (p *agentInferenceProvider) bootstrapBundledModel(ctx context.Context) {
 		p.logger.Info("no bundled model configured; skipping pre-pull")
 		return
 	}
-	manifest, ok := catalog.LookupByAlias(p.cfg.BundledModelID, p.manifests)
-	if !ok {
+	// Through bundledModelID, not a second LookupByAlias: the pre-pull and
+	// everything that later asks "is this the bundled model" have to
+	// resolve the configured value identically, and only one of the two
+	// used to know about retirements.
+	modelID := p.bundledModelID()
+	if _, ok := catalog.LookupByAlias(modelID, p.manifests); !ok {
 		p.logger.Warn("bundled model not found in manifests; skipping pre-pull", "model", p.cfg.BundledModelID)
 		return
 	}
 	if p.activateBundledIfReady(ctx) {
-		p.logger.Info("bundled model already ready; skipping pre-pull", "model", manifest.ModelID)
+		p.logger.Info("bundled model already ready; skipping pre-pull", "model", modelID)
 		return
 	}
-	if _, err := p.PullModel(ctx, manifest.ModelID); err != nil {
-		p.logger.Warn("bundled model pre-pull dispatch failed", "model", manifest.ModelID, "err", err)
+	if _, err := p.PullModel(ctx, modelID); err != nil {
+		p.logger.Warn("bundled model pre-pull dispatch failed", "model", modelID, "err", err)
 	}
 }
 
@@ -3045,12 +3084,18 @@ func (p *agentInferenceProvider) activateBundledIfUnset(modelID, variantID strin
 // preferred-model.json, or any catalog alias when set via flag/env)
 // against the bundled manifests. ok=false when no preference is set
 // or it names nothing in the catalog.
+//
+// A retired name resolves to its successor (#200). preferred-model.json
+// is written once and read on every boot thereafter, so the file long
+// outlives the catalog it was written against; leaving the miss here
+// would strand the operator's own choice with no path back.
 func (p *agentInferenceProvider) preferredManifest() (catalog.Manifest, bool) {
 	pref := p.effectivePreferredModelID()
 	if pref == "" {
 		return catalog.Manifest{}, false
 	}
-	return catalog.LookupByAlias(pref, p.manifests)
+	m, _, ok := catalog.ResolveModel(pref, p.manifests)
+	return m, ok
 }
 
 // activatePreferredIfNeeded commits the operator's preferred model as
@@ -3146,10 +3191,21 @@ var errSwapNeedsRestart = errors.New("waired-agent: model switch needs restart (
 // errSwapNeedsRestart for a cross-engine target so the caller restart-falls-back,
 // and management.ErrModelSwitchUnavailable when the weights cannot be fetched at
 // all, which no restart would fix.
+//
+// A retired name switches to its successor (#200). This is the
+// convergence keystone: the id published here is what
+// setupPreferredModelID() reports, and the setup reconciler compares that
+// against the control plane's desired_model_id — so both ends have to
+// canonicalise the same way or the wizard waits for a string that never
+// appears (see setupCanonicalModelID).
 func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOrAlias string) (downloading bool, err error) {
-	manifest, ok := catalog.LookupByAlias(modelOrAlias, p.manifests)
+	manifest, retired, ok := catalog.ResolveModel(modelOrAlias, p.manifests)
 	if !ok {
 		return false, fmt.Errorf("swap preferred model: unknown model %q", modelOrAlias)
+	}
+	if retired.SuccessorModelID != "" {
+		p.logger.Info("model switch target was retired; switching to its successor",
+			"requested", modelOrAlias, "model", manifest.ModelID)
 	}
 	// Same-engine only (v1): the in-process bounce restarts `ollama serve`; a
 	// cross-engine switch (ollama↔vLLM) needs adapter re-registration + a

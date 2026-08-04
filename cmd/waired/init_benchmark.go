@@ -93,10 +93,10 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 	}
 
 	if rec := resp.Recommendation; rec != nil && !rec.Dismissed {
-		// Special case: the only lighter step-down is the tiny, below-floor
-		// 0.5B. There's nothing lighter to fall back to, so instead of the
-		// neutral "switch to a lighter model" flow, confirm whether to keep
-		// local inference at all (drop to the 0.5B) or turn it off. Default No.
+		// Special case: the only lighter step-down is below the install
+		// quality floor. There's nothing lighter to fall back to, so instead
+		// of the neutral "switch to a lighter model" flow, confirm whether to
+		// keep local inference at all (drop to it) or turn it off. Default No.
 		if isBundledModelBelowFloor(rec.ToModelID) {
 			return tinyBenchmarkDisableFlow(mgmtURL, nonInteractive, out, sc, tty, rec, resp)
 		}
@@ -211,8 +211,8 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader,
 
 // tinyBenchmarkDisableFlow is the benchmark-time counterpart of the install
 // spec-check dialog: the active model benchmarked below the interactive floor
-// and the ONLY lighter step-down is the tiny, below-floor 0.5B. Rather than the
-// neutral "switch to a lighter model" flow, it confirms whether to keep local
+// and the ONLY lighter step-down sits below the install quality floor. Rather
+// than the neutral "switch to a lighter model" flow, it confirms whether to keep local
 // inference by dropping to that very-low-quality model, or turn it off. Default
 // No → disable local inference; the node keeps working as a gateway/relay.
 func tinyBenchmarkDisableFlow(

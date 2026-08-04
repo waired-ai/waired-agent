@@ -308,17 +308,20 @@ const RetireFailureRate = 0.5
 // DefaultTrials sits), and catches the near-total failure the old rule
 // excused for one lucky draw.
 //
-// The measured store puts exactly ONE variant above the line:
-// qwen2.5-coder-0.5b, at a bound of 90%, against a next-worst of
-// granite4-350m at 38%. Still the widest gap in the file by a factor of
-// three, and held across two independent sweeps (#467, #479) — the
+// The line has selected exactly one variant so far, and that selection
+// ran its full course: qwen2.5-coder-0.5b at a bound of 90%, against a
+// next-worst of granite4-350m at 38%. The widest gap in the file by a
+// factor of three, held across two independent sweeps (#467, #479) — the
 // property a deletion criterion needs and "failed every trial" did not
-// have. The next-worst has moved 17% -> 38% since, which is a thing
-// nothing printed until #484. That entry is now withheld (#475), so on
-// the OFFERED catalog this returns nothing and `catalog-tool agentgrade
-// --require-pass` gates CI; the record itself still says 90%, and the
-// report's withheld section keeps saying so until #200's retirement
-// machinery can delete it.
+// have. It was withheld at #475 and DELETED at #200, so its names now
+// resolve to qwen3.5-0.8b through catalog.Retirements() and its verdict
+// stays in the store as the evidence.
+//
+// So on today's catalog, offered or complete, this returns nothing, and
+// `catalog-tool agentgrade --require-pass` gates CI on that staying true.
+// The next-worst had moved 17% -> 38% before the deletion, which is a
+// thing nothing printed until #484 — when a rate here changes, grep the
+// file for the old one.
 //
 // 0.5b is a different defect from the rest of its family, and the two
 // sweeps caught it wearing two different faces at the same rate: first
@@ -399,7 +402,9 @@ type CaseFailureRate struct {
 // Per case, never pooled across cases: the three differ in difficulty by
 // design, and averaging them hides the finding. qwen2.5-coder-0.5b is
 // 48 of 72 pooled but 24 of 24 on both tool-requiring cases — "cannot
-// call a tool at all", which the pooled number reads as two thirds.
+// call a tool at all", which the pooled number reads as two thirds. (Its
+// manifest was retired at #200; the record is still in the store, which
+// is where that example can still be checked.)
 func (r VariantAgentGrade) WorstCase() (worst CaseFailureRate, ok bool) {
 	names := make([]string, 0, len(r.Cases))
 	for n := range r.Cases {

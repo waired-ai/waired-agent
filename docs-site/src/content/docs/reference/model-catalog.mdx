@@ -149,3 +149,30 @@ and `waired runtimes status` the VRAM a loaded model is actually using.
 
 If you run an integrated GPU (Strix Halo, Intel) and a model won't load on
 Ollama, see [Troubleshooting → integrated GPUs](/troubleshooting/#my-graphics-card-is-not-being-used).
+
+## Retired models
+
+The catalog changes between releases. When a model is dropped, Waired keeps its
+name working and points it at a replacement, so a name you saved in a config
+file, a script, or a coding-agent setting keeps answering instead of failing.
+
+You will see a line like this when it happens:
+
+```
+"qwen2.5-coder-0.5b" was retired; using "qwen3.5-0.8b" instead
+```
+
+Requests, downloads and model switches all follow the replacement. Nothing on
+your machine is deleted: a model you already downloaded stays where it is and
+keeps running until you switch away from it.
+
+Choosing a retired model as a **new** setting is the one case that does not
+follow the replacement — Waired declines and names the replacement, so you pick
+deliberately rather than finding out later that you are running something you
+did not choose.
+
+Retired so far:
+
+| Retired | Use instead | Why |
+|---|---|---|
+| `qwen2.5-coder-0.5b-instruct` | `qwen3.5-0.8b` | It could not reliably use tools, which coding agents depend on. |

@@ -50,11 +50,18 @@ import (
 // plumbing on the same model the routing sentinel pulls on every PR
 // rather than on a tag nothing else uses.
 //
-// It emits real structured tool calls — that is why it was chosen over
-// the smaller qwen2.5-coder-0.5b, which cannot — but a 352M model
-// produces nothing worth offering, so it is internal_only in the
-// catalog. Expect a grade of "fail": one under-claim on read-file in
-// three trials. That is the plumbing working, not a regression.
+// It was chosen for being small and for STOPPING (2 tokens in 1.6s on a
+// one-word prompt, where qwen3.5-0.8b ran to 17,787 and timed the boot
+// benchmark out) — not for its agent grade. This comment used to claim
+// the opposite, on the strength of three trials; #484 retracted that in
+// the manifest's own reason string and the same sentence survived here.
+// At 24 trials it is greeting 0/24, read-file 3/24, search-then-edit
+// 13/24.
+//
+// So expect a grade of "fail", and expect tool-call failures in a
+// minority of runs. That is the plumbing working, not a regression. A
+// 352M model produces nothing worth offering either way, which is why it
+// is internal_only.
 const defaultModelTag = "granite4:350m"
 
 func modelTag() string {

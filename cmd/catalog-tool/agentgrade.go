@@ -174,10 +174,9 @@ func runAgentGrade(args []string) error {
 // unmeasurable.
 //
 // The COMPLETE set, including internal_only. A withheld model is still
-// shipped, and its verdict is the record justifying the withholding
-// (qwen2.5-coder-0.5b, #475) or the reason it was chosen as the CI
-// fixture (granite4-350m) — letting either go stale is how the
-// justification quietly stops being true.
+// shipped, and its verdict is the record justifying the withholding — or,
+// for granite4-350m, the reason it was chosen as the CI fixture. Letting
+// either go stale is how the justification quietly stops being true.
 func printSweepTargets(set catalog.AgentGradeSet, all []catalog.Manifest) {
 	for _, m := range all {
 		if _, ok := set.Unmeasurable[m.ModelID]; ok {
@@ -344,20 +343,26 @@ func describeClasses(counts map[string]int) string {
 // Every withheld entry, not only the ones above the line (#484). The
 // line answers "should this be deleted"; this section answers "is
 // anyone still standing behind holding it back", and those have
-// different memberships. granite4-350m is at 38% and permanent by
-// design; qwen2.5-coder-0.5b is at 90% and transitional. Printing only
-// the second taught a reader that withheld-and-listed means
-// pending-deletion, which is a claim the field does not make.
+// different memberships. When #484 was written the file held one of
+// each: granite4-350m at 38%, permanent by design, and
+// qwen2.5-coder-0.5b at 90%, transitional. Printing only the second
+// taught a reader that withheld-and-listed means pending-deletion, which
+// is a claim the field does not make. #200 has since retired the
+// transitional one out of the catalog, so today only the permanent kind
+// is left — which is the state this section is supposed to be able to
+// show, not a reason to stop showing it.
 //
 // A withheld entry with no verdict at all is listed too. It has no row
 // in the table above by construction, so this is the only place it
 // appears — and "nobody has measured what we are holding back" is the
 // same defect one step earlier.
 //
-// Reported, never gated: `--require-pass` stays offered-only. A gate
-// here would be a red that no PR can clear (deleting the entry needs
-// #200's retired->successor map), and a permanent red is ignored, which
-// is the outcome this section exists to prevent.
+// Reported, never gated: `--require-pass` stays offered-only. #200 made
+// the old reason ("a red no PR can clear, because deleting the entry
+// needs a retired->successor map") false — the map exists and an entry
+// can now leave. Widening the gate is nonetheless its own decision: it
+// would make every withheld entry, including a permanent CI fixture,
+// have to pass a bar it was never held to. Tracked separately.
 func printWithheld(w io.Writer, set catalog.AgentGradeSet, all []catalog.Manifest) {
 	type held struct {
 		model, variant, reason string

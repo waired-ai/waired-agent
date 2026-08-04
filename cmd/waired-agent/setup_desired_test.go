@@ -71,6 +71,15 @@ type fakeSetupProvider struct {
 	pullErr      error
 	stateDir     string
 
+	// manifests is the catalog setupCanonicalModelID resolves against.
+	// Empty in most tests, where every desired value is already a
+	// canonical id and resolution is a no-op.
+	manifests []catalog.Manifest
+	// canonicalCalls records every name handed to setupCanonicalModelID,
+	// so a test can prove the reconciler canonicalised BEFORE keying its
+	// maps on the value rather than somewhere further down.
+	canonicalCalls []string
+
 	// applies records every model the reconciler asked to APPLY, in
 	// order. Separate from pulls because the two are different
 	// operations: applying makes the device serve the model, pulling only
@@ -195,6 +204,22 @@ func (f *fakeSetupProvider) setupPreferredModelID() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.preferred
+}
+
+// setupCanonicalModelID runs the daemon's own resolution over the
+// manifests the test supplied, rather than returning its argument. An
+// identity stub here would make the convergence defect #200 fixes
+// impossible to write a failing test for: every name would already agree
+// with every other.
+//
+// With no manifests set, an unresolvable name comes back unchanged —
+// which is the real behaviour for a name nothing ships, so the tests that
+// do not care about resolution keep their old meaning exactly.
+func (f *fakeSetupProvider) setupCanonicalModelID(name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.canonicalCalls = append(f.canonicalCalls, name)
+	return canonicalSetupModelID(name, f.manifests)
 }
 
 // setupApplyModel mirrors the real adapter's observable contract: it

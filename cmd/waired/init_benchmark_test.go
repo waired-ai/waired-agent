@@ -110,13 +110,19 @@ func (b *benchStub) server() *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-// tinyRec is a below-floor recommendation: the only lighter step-down is the
-// tiny 0.5B, which triggers the disable-or-proceed dialog instead of the
-// neutral lighter-model switch.
+// tinyRec is a below-floor recommendation: the only lighter step-down is
+// below the install quality floor, which triggers the disable-or-proceed
+// dialog instead of the neutral lighter-model switch.
+//
+// The target is qwen3.5-0.8b (tier 12 < InstallQualityFloorTier 30) since
+// #200 retired qwen2.5-coder-0.5b-instruct out of the catalog. Not
+// cosmetic: isBundledModelBelowFloor is what selects the branch under
+// test, and a target the catalog cannot resolve takes the OTHER one.
+// Record of today's below-floor model.
 func tinyRec() *management.BenchmarkRecommendation {
 	return &management.BenchmarkRecommendation{
 		FromModelID: "qwen2.5-coder-3b-instruct", FromVariantID: "q4-gguf",
-		ToModelID: "qwen2.5-coder-0.5b-instruct", ToVariantID: "q4-gguf",
+		ToModelID: "qwen3.5-0.8b", ToVariantID: "q8-gguf",
 		MeasuredTokps: 8, FloorTokps: 30,
 	}
 }
@@ -423,8 +429,8 @@ func TestPromptBenchmark_TinyAcceptSwitches(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	if stub.acceptCount != 1 || stub.acceptedID != "qwen2.5-coder-0.5b-instruct" {
-		t.Errorf("accept = %d id=%q, want 1 / qwen2.5-coder-0.5b-instruct", stub.acceptCount, stub.acceptedID)
+	if stub.acceptCount != 1 || stub.acceptedID != "qwen3.5-0.8b" {
+		t.Errorf("accept = %d id=%q, want 1 / qwen3.5-0.8b", stub.acceptCount, stub.acceptedID)
 	}
 	if stub.disableCount != 0 {
 		t.Errorf("accepting must not disable inference, got %d", stub.disableCount)

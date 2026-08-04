@@ -308,9 +308,9 @@ var DynamicCodingAliases = []string{"waired/default", "waired/coding"}
 
 // resolveModel maps a requested model name to a manifest: dynamic
 // coding aliases go to DefaultModelID when it resolves, then the static
-// LookupByAlias path, and finally the engine-native fallback for names
-// that only the mesh puts on the wire. Appends the resolution reason on
-// success.
+// LookupByAlias path, then the engine-native fallback for names that
+// only the mesh puts on the wire, and finally the retirement table.
+// Appends the resolution reason on success.
 func (s *Selector) resolveModel(name string, reasons *[]string) (catalog.Manifest, bool) {
 	if s.in.DefaultModelID != "" && slices.Contains(DynamicCodingAliases, name) {
 		if m, ok := catalog.LookupByAlias(s.in.DefaultModelID, s.in.Manifests); ok {
@@ -337,6 +337,21 @@ func (s *Selector) resolveModel(name string, reasons *[]string) (catalog.Manifes
 	if m, ok := lookupByEngineModel(name, s.in.Manifests); ok {
 		*reasons = append(*reasons, fmt.Sprintf(
 			"engine-native model %q resolved to model_id %q", name, m.ModelID))
+		return m, true
+	}
+	// Retired names (#200). LAST, for the same reason the engine-native
+	// fallback is: running after every live path means this can only add
+	// resolutions, never redirect one. A name the catalog still answers is
+	// answered by the catalog.
+	//
+	// Serving the successor rather than 404ing is the whole point of the
+	// retirement map: the request came from a config file, a coding-agent
+	// setting or a script written before the entry went away, and its
+	// author is not present to fix it. The substitution is not silent —
+	// the gateway rewrites the proxied body's `model` to the successor's
+	// engine tag, so the response names what actually answered.
+	if m, r, ok := catalog.ResolveModel(name, s.in.Manifests); ok && r.SuccessorModelID != "" {
+		*reasons = append(*reasons, catalog.RetirementNotice(name, r))
 		return m, true
 	}
 	return catalog.Manifest{}, false

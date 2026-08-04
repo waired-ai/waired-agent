@@ -401,17 +401,26 @@ func (t ollamaTuning) Env() []string {
 // pull; otherwise the one the pinned engine would pull first. ok=false
 // (no resolvable model or variant) means "export no tuning env" — we
 // never size for a guessed model.
+//
+// Two of the three legs take a retired name to its successor (#200) and
+// the middle one deliberately does not. The config legs are INSTRUCTIONS
+// — "size the engine for the model I asked for" — and a name that outran
+// the catalog should still size for something. state.Active is an
+// OBSERVATION of what this host actually downloaded and is serving; a
+// host running the old weights must be tuned for the old weights, and
+// substituting there would size the engine for a model that is not on
+// disk.
 func resolveTuningTarget(cfg agentconfig.InferenceConfig, manifests []catalog.Manifest, state catalog.State) (catalog.Manifest, catalog.Variant, bool) {
 	var m catalog.Manifest
 	ok := false
 	if cfg.PreferredModelID != "" {
-		m, ok = catalog.LookupByAlias(cfg.PreferredModelID, manifests)
+		m, _, ok = catalog.ResolveModel(cfg.PreferredModelID, manifests)
 	}
 	if !ok && state.Active != nil && state.Active.Runtime == catalog.RuntimeOllama {
 		m, ok = catalog.LookupByAlias(state.Active.ModelID, manifests)
 	}
 	if !ok && cfg.BundledModelID != "" {
-		m, ok = catalog.LookupByAlias(cfg.BundledModelID, manifests)
+		m, _, ok = catalog.ResolveModel(cfg.BundledModelID, manifests)
 	}
 	if !ok {
 		return catalog.Manifest{}, catalog.Variant{}, false

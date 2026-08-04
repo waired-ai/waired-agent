@@ -215,6 +215,26 @@ type setupProvider interface {
 	// flag, and re-applying an already-applied choice would bounce the
 	// engine on every boot of a host that is already set up.
 	setupPreferredModelID() string
+	// setupCanonicalModelID turns a model name from OUTSIDE this process —
+	// the control plane's desired_model_id — into the id this device keys
+	// its own state by: an alias becomes its manifest's model_id, and a
+	// retired entry becomes its successor (#200). An unresolvable name
+	// (and "") is returned unchanged, degrading to exactly the compare the
+	// caller would have made anyway.
+	//
+	// It exists because the convergence test in Apply is a raw string
+	// compare against setupPreferredModelID(), which reports the id the
+	// switch actually PUBLISHED. Any name the two ends spell differently
+	// is not a cosmetic mismatch: setupModelState looks the name up in
+	// state.Models, which the pull path keys by canonical model_id, so a
+	// non-canonical desired value can never read Ready. The wizard's
+	// "Download the AI model" row then sits at pending forever, and
+	// because modelApplied is in-memory, a restart re-applies the choice
+	// and bounces the engine on every boot of a host that is already done.
+	//
+	// The CLI-side twin is cmd/waired/init_modelselect.go's
+	// canonicalBundledModelID.
+	setupCanonicalModelID(name string) string
 	// setupApplyModel makes modelID the model this device serves — the
 	// same operation the operator's own model switch performs (#347/#812),
 	// not merely a download. downloading reports whether the weights still
@@ -400,8 +420,12 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		return
 	}
 	d := setupDesired{
-		engine:       st.DesiredEngine,
-		modelID:      st.DesiredModelID,
+		engine: st.DesiredEngine,
+		// Canonicalised ONCE, here, so everything downstream speaks one id:
+		// the modelApplied / modelRejected keys, setupModelState, the
+		// convergence compare, setupApplyModel, and the SetupState echo the
+		// CLI watcher reads back. See setupCanonicalModelID.
+		modelID:      r.provider.setupCanonicalModelID(st.DesiredModelID),
 		benchmarkGen: st.DesiredBenchmarkGen,
 		modelGen:     st.DesiredModelGen,
 		integrations: flattenIntegrations(st.DesiredIntegrations),
@@ -1790,6 +1814,35 @@ func (p *agentInferenceProvider) startSetupEngine(reason string) {
 // reconciler does not re-apply it on the next frame.
 func (p *agentInferenceProvider) setupPreferredModelID() string {
 	return p.effectivePreferredModelID()
+}
+
+// setupCanonicalModelID resolves a control-plane model name to the id
+// this device keys its own state by. See the interface for why the
+// convergence compare depends on it.
+//
+// It resolves against p.manifests, which is the COMPLETE set — this is
+// resolution, not offering, and the control plane may legitimately desire
+// a withheld model (the routing sentinel pins one).
+func (p *agentInferenceProvider) setupCanonicalModelID(name string) string {
+	return canonicalSetupModelID(name, p.manifests)
+}
+
+// canonicalSetupModelID is setupCanonicalModelID's whole body, as a free
+// function over an injected catalog.
+//
+// Separate so the reconciler's fake provider runs the SAME resolution the
+// daemon does instead of an identity stub: a fake that returned its
+// argument unchanged would make the convergence bug this fixes
+// unwritable as a test, which is the shape CLAUDE.md §Test discipline
+// calls a defective fake.
+func canonicalSetupModelID(name string, manifests []catalog.Manifest) string {
+	if name == "" {
+		return ""
+	}
+	if m, _, ok := catalog.ResolveModel(name, manifests); ok && m.ModelID != "" {
+		return m.ModelID
+	}
+	return name
 }
 
 // setupApplyModel makes modelID the model this device serves. It is the

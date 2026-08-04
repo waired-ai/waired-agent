@@ -531,9 +531,51 @@ func TestPrintWithheldNamesAnUnmeasuredEntry(t *testing.T) {
 	}
 }
 
-// The report distinguishes the two kinds of withholding, and the
-// distinction is carried entirely by the reason string, so print it.
+// A withheld entry measured above the retirement line is the loudest
+// thing this section can say: it is parked out of sight AND deletable,
+// which is how one becomes permanent by inattention.
+//
+// Synthetic since #200. The shipped store had exactly one such entry,
+// qwen2.5-coder-0.5b-instruct at a 90% bound, and #200 took it out of the
+// catalog through the retirement map — so the real store no longer
+// exercises this branch, and it would rot unwatched between now and the
+// next entry that lands on it.
 func TestPrintWithheldMarksTheRetirementLine(t *testing.T) {
+	const model, variant = "example-above-the-line", "q4-gguf"
+	all := []catalog.Manifest{{
+		ModelID:      model,
+		InternalOnly: "transitional: pending retirement, tracked by an issue",
+		Variants: []catalog.Variant{{
+			VariantID:      variant,
+			RuntimeSupport: []string{catalog.RuntimeOllama},
+		}},
+	}}
+	// 24 of 24 puts the 95% lower bound at ~0.86, well past the 0.5 line.
+	set := catalog.AgentGradeSet{Models: map[string]catalog.ModelAgentGrade{
+		model: {Variants: map[string]catalog.VariantAgentGrade{
+			variant: {
+				Verdict: catalog.AgentGradeFail,
+				Cases: map[string]catalog.CaseOutcome{
+					"read-file": {Verdict: "fail_no_tool_call", Trials: 24, Failed: 24},
+				},
+			},
+		}},
+	}}
+
+	var buf strings.Builder
+	printWithheld(&buf, set, all)
+	got := buf.String()
+	for _, want := range []string{model, "ABOVE THE RETIREMENT LINE", "withheld because:", "pending retirement"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("withheld section does not mention %q:\n%s", want, got)
+		}
+	}
+}
+
+// The other half, on the SHIPPED store: a withheld entry below the line
+// is printed with its rate and its reason — the case that used to be
+// printed nowhere (#484) — and is not labelled retirable.
+func TestPrintWithheldPrintsABelowTheLineEntry(t *testing.T) {
 	set, err := catalog.AgentGrades()
 	if err != nil {
 		t.Fatalf("AgentGrades: %v", err)
@@ -545,16 +587,11 @@ func TestPrintWithheldMarksTheRetirementLine(t *testing.T) {
 	var buf strings.Builder
 	printWithheld(&buf, set, all)
 	got := buf.String()
-	for _, want := range []string{
-		"qwen2.5-coder-0.5b-instruct", "ABOVE THE RETIREMENT LINE",
-		"granite4-350m", "withheld because:",
-	} {
+	for _, want := range []string{"granite4-350m", "withheld because:"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("withheld section does not mention %q:\n%s", want, got)
 		}
 	}
-	// granite4-350m is withheld and BELOW the line — the case that used
-	// to be printed nowhere. It must not be labelled as retirable.
 	granite := got[strings.Index(got, "granite4-350m"):]
 	if i := strings.Index(granite, "withheld because:"); i > 0 &&
 		strings.Contains(granite[:i], "ABOVE THE RETIREMENT LINE") {
