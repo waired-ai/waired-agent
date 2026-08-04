@@ -2601,3 +2601,100 @@ func TestSetupEngineAppearedStartsTheEngine(t *testing.T) {
 		t.Fatalf("engine starts after repeated frames = %d, want 1", got)
 	}
 }
+
+// TestSetupStateCarriesTheModelRefusal is waired-agent#404's regression
+// bar. Product contract (#404): a refused desired model is readable on
+// GET /waired/v1/setup/state, not only in the snapshot pushed to the
+// control plane.
+//
+// The code is the §7 one classified where the error value still existed,
+// so a local caller gets the same answer the wizard does rather than
+// re-deriving one from prose.
+func TestSetupStateCarriesTheModelRefusal(t *testing.T) {
+	f := &fakeSetupProvider{
+		modelState: catalog.ModelStateNotPresent,
+		applyErr:   errEngineTooOld,
+	}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("", "m-1", 0))
+
+	st := r.SetupState(ctx)
+	if st.ModelErrorCode != signer.SetupErrorEngineNotReady {
+		t.Fatalf("ModelErrorCode = %q, want %q", st.ModelErrorCode, signer.SetupErrorEngineNotReady)
+	}
+	if st.ModelErrorDetail != errEngineTooOld.Error() {
+		t.Errorf("ModelErrorDetail = %q, want the daemon's own words", st.ModelErrorDetail)
+	}
+	// The lifecycle rides along, and on its own says "not started yet" —
+	// which is exactly why the code above has to be there.
+	if st.ModelState != catalog.ModelStateNotPresent {
+		t.Errorf("ModelState = %q, want %q", st.ModelState, catalog.ModelStateNotPresent)
+	}
+}
+
+// A model that was accepted and is downloading reports its lifecycle and
+// no error. Records that ModelErrorCode means "refused", not "not ready
+// yet": a caller keying off it must not stop waiting on a healthy pull.
+func TestSetupStateProjectsTheModelLifecycle(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("", "m-1", 0))
+	f.setModelState(catalog.ModelStateDownloading, "") // the pull the apply started
+
+	st := r.SetupState(ctx)
+	if st.ModelState != catalog.ModelStateDownloading {
+		t.Fatalf("ModelState = %q, want %q", st.ModelState, catalog.ModelStateDownloading)
+	}
+	if st.ModelErrorCode != "" || st.ModelErrorDetail != "" {
+		t.Errorf("a healthy download reported an error: code=%q detail=%q",
+			st.ModelErrorCode, st.ModelErrorDetail)
+	}
+}
+
+// With no desired model there is nothing to report, and the fields stay
+// empty rather than claiming `not_present` for a model nobody asked for.
+func TestSetupStateSaysNothingWithoutADesiredModel(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("ollama", "", 0))
+
+	st := r.SetupState(ctx)
+	if st.ModelState != "" || st.ModelErrorCode != "" || st.ModelErrorDetail != "" {
+		t.Fatalf("model fields set with no desired model: %+v", st)
+	}
+}
+
+// The refusal is not a latch: the engine going from absent to present
+// re-admits the model, and /setup/state must stop reporting a refusal the
+// reconciler has already dropped. Without this a terminal that keyed off
+// the code would give up on a download the daemon had just re-queued.
+func TestSetupStateDropsTheRefusalWhenTheEngineReappears(t *testing.T) {
+	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
+	f.applyErr = errEngineTooOld
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	if r.SetupState(ctx).ModelErrorCode == "" {
+		t.Fatal("the refusal was not recorded at all")
+	}
+
+	// The engine goes away and comes back — a reinstall, or the upgrade
+	// this particular refusal is asking for.
+	f.setEngine(false, false)
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+	f.applyErr = nil
+	f.setEngine(true, true)
+	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
+
+	if st := r.SetupState(ctx); st.ModelErrorCode != "" || st.ModelErrorDetail != "" {
+		t.Fatalf("a re-admitted model still reported refused: code=%q detail=%q",
+			st.ModelErrorCode, st.ModelErrorDetail)
+	}
+}

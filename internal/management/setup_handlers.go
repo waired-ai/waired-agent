@@ -154,6 +154,41 @@ type SetupStateResponse struct {
 	// is a daemon's own value returned to a co-local process that could
 	// already compute it.
 	StateDir string `json:"state_dir,omitempty"`
+
+	// ModelState / ModelErrorCode / ModelErrorDetail describe what became
+	// of DesiredModelID on this host. All three are empty when no model is
+	// desired, and ModelState alone is empty on a daemon too old to answer.
+	//
+	// They exist because the reconciler's account of the desired model went
+	// ONLY to the control plane, in the pushed setup snapshot
+	// (waired-agent#404). A co-local caller could therefore not tell "the
+	// instruction has not been applied yet" from "it was applied, refused,
+	// and will not be retried" — and those two want opposite things said
+	// about them. `waired init` had to bound the difference with a blind
+	// five-minute grace and then guess, because the second case is real:
+	// admission is once per desired value, re-armed only when the engine
+	// goes from absent to present or the wizard bumps the retry generation.
+	//
+	// A projection of state the reconciler already keeps, not a second
+	// source of truth (waired#835 §6): the same rejection record and the
+	// same lifecycle read that build the pushed snapshot.
+	//
+	// ModelState is a catalog lifecycle value — not_present | queued |
+	// downloading | verifying | ready | failed.
+	ModelState string `json:"model_state,omitempty"`
+	// ModelErrorCode is non-empty exactly when the reconciler TRIED to
+	// apply the desired model and was refused; it is one of the
+	// signer.SetupError* values, classified where the error value still
+	// existed. That is the whole signal a caller needs to stop waiting.
+	//
+	// Not a synonym for ModelState == "failed": a failed download is the
+	// pull dying on its own, which the daemon retries and reports through
+	// /inference/status. This is the instruction never being accepted.
+	ModelErrorCode string `json:"model_error_code,omitempty"`
+	// ModelErrorDetail is the refusal in the daemon's own words, clamped
+	// to the same budget as the wizard's copy. Empty when a refusal was
+	// recorded without one.
+	ModelErrorDetail string `json:"model_error_detail,omitempty"`
 }
 
 // SetupExecutorRequest is the body of POST /waired/v1/setup/executor:

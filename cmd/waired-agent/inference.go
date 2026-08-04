@@ -1592,7 +1592,13 @@ func (p *agentInferenceProvider) finalizeOllamaServeTuning(ctx context.Context, 
 //
 // progress is the in-flight byte aggregator, taken as a function for the
 // same reason.
-func modelsSnapshot(models map[string]catalog.ModelState,
+//
+// manifests is the catalog this daemon serves from, and it is here
+// because `models` cannot answer for a model nothing has started on:
+// it is the state CACHE, so an untouched model has no entry to sort at
+// all (waired-agent#403). Enumerating the catalog is what ListModels
+// already does to answer the same question on GET /waired/v1/models.
+func modelsSnapshot(models map[string]catalog.ModelState, manifests []catalog.Manifest,
 	progress func(string) (int64, int64, bool)) management.ModelsSnapshot {
 	snap := management.ModelsSnapshot{}
 	for id, m := range models {
@@ -1621,6 +1627,23 @@ func modelsSnapshot(models map[string]catalog.ModelState,
 			}
 		}
 	}
+	// The models the switch above claimed nothing for: no state row, or a
+	// row in a state none of the three lanes takes (not_present, evicted,
+	// and anything a future state adds). Walking the manifests rather than
+	// the state map is the whole point — the interesting case is the model
+	// with no row at all.
+	//
+	// Manifest order, so the list a caller diffs between two polls does not
+	// reshuffle. The three lanes above keep their map order; changing that
+	// is not this projection's job.
+	for _, m := range manifests {
+		switch models[m.ModelID].State {
+		case catalog.ModelStateReady, catalog.ModelStateDownloading, catalog.ModelStateQueued,
+			catalog.ModelStateVerifying, catalog.ModelStateFailed:
+		default:
+			snap.NotPresent = append(snap.NotPresent, m.ModelID)
+		}
+	}
 	return snap
 }
 
@@ -1631,7 +1654,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 	for _, name := range p.registry.Names() {
 		rs[name] = p.runtimeStatusFor(ctx, name, hwProfile)
 	}
-	models := modelsSnapshot(state.Models, p.dlProgress.aggregate)
+	models := modelsSnapshot(state.Models, p.manifests, p.dlProgress.aggregate)
 	endpoints := []management.ActiveEndpoint{}
 	for id, e := range state.Endpoints {
 		endpoints = append(endpoints, management.ActiveEndpoint{
