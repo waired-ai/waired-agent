@@ -298,12 +298,20 @@ type OllamaWindowPlan struct {
 //
 // Rule 3 is discrete-only for the same reason rule 2 is.
 func OllamaPlannedWindow(m catalog.Manifest, v catalog.Variant, h Host, kvFactor float64, allowSpill bool) OllamaWindowPlan {
-	budgetGB := OllamaSizingBudgetGB(h, v.EstimatedWeightGB)
-	maxCtx := MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, budgetGB)
-	if maxCtx <= 0 && !(budgetGB > 0 && v.EstimatedWeightGB > 0 && v.KVBytesPerTokenFP16 > 0) {
-		// Unknown sizing: we cannot prove any window, so claim none.
+	// "Unknown sizing" means we know NOTHING to size from — an
+	// unannotated variant, or a machine that reports no memory at all. It
+	// is not the same as a budget that came out zero: a 2 GB card whose
+	// engine overhead exceeds it leaves nothing to hold weights in, but
+	// the host still has whatever system RAM sits behind it, and rule 3
+	// below can prove a window out of that. Reading the second as the
+	// first is how fitting a small card took a window away from a 128 GB
+	// machine.
+	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 ||
+		(OllamaSizingBudgetGB(h, v.EstimatedWeightGB) <= 0 && OllamaSystemRAMBudgetGB(h) <= 0) {
 		return OllamaWindowPlan{}
 	}
+	budgetGB := OllamaSizingBudgetGB(h, v.EstimatedWeightGB)
+	maxCtx := MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, budgetGB)
 
 	capNative := func(ctx int) int {
 		if m.ContextLength > 0 && ctx > m.ContextLength {
@@ -384,11 +392,18 @@ func OllamaDeclaresWindow(m catalog.Manifest, v catalog.Variant, h Host, window 
 		return false
 	}
 	plan := OllamaPlannedWindow(m, v, h, OllamaKVFactorQ8_0, true)
-	if plan.ContextLength <= 0 {
-		// Unknown sizing inputs. Permissive, like every other rule here:
-		// an unannotated variant is not evidence against the host.
-		return true
-	}
+	// A window of 0 means the sizing could not be proved — an unannotated
+	// variant, or a host whose accelerator budget the engine overhead
+	// consumes entirely. Every OTHER rule in this package is permissive
+	// there, and this one is deliberately not.
+	//
+	// The asymmetry is the difference between refusing and promising.
+	// Being permissive about a refusal costs a user nothing: the model is
+	// offered and either works or does not. Being permissive about a
+	// DECLARATION publishes a window this node never loaded — the tuner
+	// exports nothing in that case and the engine keeps its own 32k
+	// default — and a requester routes a 200k session to it. That is the
+	// failure waired-ai/waired#1031's window contract exists to remove.
 	return plan.ContextLength >= window
 }
 

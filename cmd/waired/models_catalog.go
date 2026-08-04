@@ -50,12 +50,13 @@ type catalogDetailFamily struct {
 // catalogDetailFit is the subset of hostfit.Presentation this view
 // renders.
 type catalogDetailFit struct {
-	Runnable             bool   `json:"runnable"`
-	Reason               string `json:"reason"`
-	RequiredResidentMB   int    `json:"required_resident_mb"`
-	QualityTier          int    `json:"quality_tier"`
-	NotRecommended       bool   `json:"not_recommended"`
-	NotRecommendedReason string `json:"not_recommended_reason"`
+	Runnable                 bool   `json:"runnable"`
+	Reason                   string `json:"reason"`
+	RequiredResidentMB       int    `json:"required_resident_mb"`
+	RequiredWindowResidentMB int    `json:"required_window_resident_mb"`
+	QualityTier              int    `json:"quality_tier"`
+	NotRecommended           bool   `json:"not_recommended"`
+	NotRecommendedReason     string `json:"not_recommended_reason"`
 }
 
 type catalogDetailSpec struct {
@@ -138,9 +139,11 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	_ = tw.Flush()
 
 	b.WriteString("\nLegend: ● active  → preferred (switching)  ↓ downloaded  ⋯ downloading\n")
-	b.WriteString("NEEDS is the memory the model must hold on the graphics card to serve\n" +
-		"without spilling; on a host with no graphics card it is the system-RAM minimum.\n")
-	b.WriteString("The Auto-Selector serves the highest quality-tier model that fits this host.\n")
+	b.WriteString("NEEDS is the memory the model takes to serve a full ~200k-token coding\n" +
+		"session: its weights, the engine's overhead, and the context cache.\n")
+	b.WriteString("A model is offered whenever this computer has that much memory in total,\n" +
+		"counting system RAM and graphics memory together. Waired recommends the\n" +
+		"highest quality-tier model that can hold a whole coding session here.\n")
 	b.WriteString("Why the current pick: `waired infer --explain`.\n")
 	b.WriteString("Full hardware-fit reference: https://docs.waired.ai/reference/model-catalog/\n")
 	return b.String()
@@ -180,18 +183,27 @@ func catalogTierColumn(f catalogDetailFamily) string {
 	return fmt.Sprintf("%d", tier)
 }
 
-// catalogNeedsColumn is what the model must hold in GPU-addressable
-// memory — weights, the reserved KV budget and the engine's own overhead
-// (proto/hostfit.OllamaResidentMB), the figure the fit rule actually
-// compares.
+// catalogNeedsColumn is what the model needs to do coding work here:
+// weights, the engine's own overhead, and the KV cache for the whole
+// ~200k window (proto/hostfit.Presentation.RequiredWindowResidentMB).
 //
-// The column used to be RECOMMENDED and print min_ram_gb: a threshold
-// authored for a host that loads into system RAM, printed on a machine
-// whose graphics card has to hold the thing. On a host with no
-// GPU-addressable memory the projection reports no resident requirement,
-// and min_ram_gb is then the right answer — so it stays as the fallback
-// rather than being replaced.
+// The window figure, not the fit-time one. RequiredResidentMB reserves a
+// fixed 16,384 tokens of KV — a floor for "can this run at all" — and
+// the two differ by ~2.6 GB on qwen3.5-4b (4,915 MiB vs 7,539 MiB). A
+// user reading this column is asking what the model costs them in
+// practice, and printing the smaller number is how a host used to be
+// shown "needs about 5 GB", pull the model, and then be unable to hold a
+// coding session in it (waired-ai/waired#1056 defect 2).
+//
+// It is memory, not graphics memory: the sum this is compared against is
+// RAM plus dedicated VRAM, so labelling it "VRAM" would name the wrong
+// pool on every host that spills. RequiredResidentMB stays as the
+// fallback for a row the window figure cannot price, and min_ram_gb
+// below that.
 func catalogNeedsColumn(engine string, f catalogDetailFamily) string {
+	if f.Fit != nil && f.Fit.RequiredWindowResidentMB > 0 {
+		return fmt.Sprintf("%d GB", (f.Fit.RequiredWindowResidentMB+1023)/1024)
+	}
 	if f.Fit != nil && f.Fit.RequiredResidentMB > 0 {
 		return fmt.Sprintf("%d GB VRAM", (f.Fit.RequiredResidentMB+1023)/1024)
 	}
