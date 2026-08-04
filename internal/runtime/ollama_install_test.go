@@ -215,26 +215,6 @@ func TestOllamaInstaller_HTTPGetUnknownLength(t *testing.T) {
 	}
 }
 
-func TestOllamaVersionAtLeast(t *testing.T) {
-	cases := []struct {
-		v, min string
-		want   bool
-	}{
-		{"0.24.0", "0.6.0", true},
-		{"ollama version is 0.24.0", "0.6.0", true},
-		{"0.6.0", "0.6.0", true},
-		{"0.5.9", "0.6.0", false},
-		{"v0.7.1-rc1", "0.6.0", true},
-		{"0.6.3.post1", "0.6.0", true},
-		{"garbage", "0.6.0", false},
-	}
-	for _, c := range cases {
-		if got := OllamaVersionAtLeast(c.v, c.min); got != c.want {
-			t.Errorf("ollamaVersionAtLeast(%q,%q)=%v want %v", c.v, c.min, got, c.want)
-		}
-	}
-}
-
 func mustArch(t *testing.T) string {
 	t.Helper()
 	a, err := ollamaLinuxArch()

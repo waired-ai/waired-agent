@@ -6,7 +6,6 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/hardware"
-	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // OllamaDetection summarises an ollama install already on this host.
@@ -16,7 +15,6 @@ type OllamaDetection struct {
 	Installed bool
 	Path      string
 	Version   string // raw `ollama --version` token, e.g. "0.24.0"; "" if unknown
-	Supported bool   // Version >= OllamaSupportedMinVersion
 	// WairedManaged reports that this install was made BY waired. Windows
 	// answers this with a marker file next to the binary; macOS with a
 	// record in the state dir (a marker inside the signed .app bundle
@@ -55,8 +53,6 @@ func DetectOllama(ctx context.Context, stateDir string) OllamaDetection {
 		return det
 	}
 	det.Version = detectOllamaVersion(ctx, det.Path)
-	det.Supported = det.Version != "" &&
-		infruntime.OllamaVersionAtLeast(det.Version, infruntime.OllamaSupportedMinVersion)
 	return det
 }
 

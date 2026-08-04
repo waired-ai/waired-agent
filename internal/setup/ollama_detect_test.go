@@ -38,9 +38,6 @@ func TestDetectOllama_ResolvesViaEnvOverride(t *testing.T) {
 	if det.Version != "9.9.9" {
 		t.Errorf("Version = %q, want 9.9.9", det.Version)
 	}
-	if !det.Supported {
-		t.Errorf("Supported = false, want true for version 9.9.9")
-	}
 }
 
 // TestDetectOllama_NotInstalled checks the zero-value path when no

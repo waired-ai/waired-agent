@@ -1,13 +1,11 @@
 // Package version provides dependency-free comparison of dotted-numeric
 // version strings (X.Y.Z). It tolerates a leading "v", a leading
 // "ollama version is " style prefix, and trailing suffixes like "-rc1"
-// or ".post1" — enough for comparing waired's own build version and a
-// reused Ollama's reported version without pulling in a full semver
-// library.
+// or ".post1" — enough for comparing waired's own build version and an
+// engine's reported version without pulling in a full semver library.
 //
 // It is the shared primitive behind:
-//   - the bundled-Ollama floor check (internal/runtime/ollama_version.go,
-//     a thin back-compat shim over AtLeast)
+//   - the catalog's MinEngineVersion floors (manifest validation)
 //   - the installer-driven update check (#292) and, later, the
 //     `waired update` resolver (#293) and background auto-check (#294),
 //     which compare the installed build against the latest release.
@@ -31,9 +29,9 @@ func Valid(s string) bool {
 // false (treated as "not known-good").
 //
 // Note: a shorter v is considered older than a longer min once their
-// shared prefix matches — AtLeast("1.2", "1.2.0") == false. This matches
-// the historical OllamaVersionAtLeast behaviour and is intentionally
-// preserved; use Compare for zero-padded equality semantics.
+// shared prefix matches — AtLeast("1.2", "1.2.0") == false. This is
+// intentional (it is the historical engine-floor behaviour); use
+// Compare for zero-padded equality semantics.
 func AtLeast(v, min string) bool {
 	av, ok1 := parseDotted(v)
 	mv, ok2 := parseDotted(min)
