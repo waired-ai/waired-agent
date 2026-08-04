@@ -1,7 +1,7 @@
 ---
 title: 高度なインストールオプション
 description: デフォルト以外のコントロールプレーン指定、バージョン固定、開発ビルド向けのインストーラーフラグ。通常のインストールでは不要です。
-sourceHash: 71959e30f4fc790b
+sourceHash: f1621ff7a0b48e5d
 ---
 
 import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
@@ -125,7 +125,7 @@ Linux と macOS は `install.sh`、Windows は同じオプションの PowerShel
 | `--dry-run` | `-DryRun` | | 特権が必要なコマンドをすべて表示するだけで、実行しません。 |
 | `--yes`, `-y` | `-Yes` | | インストール前の確認を含め、すべての質問に「はい」と答えます。 |
 | `--no-init` | `-SkipInit` | | インストール後に `waired init` を**実行しません**。付けない場合、インストールでサインインとセットアップまで一気に進みます。 |
-| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | AI ソフトウェアをインストールしません。自前の Ollama を使う場合に。 |
+| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | AI ソフトウェアをインストールしません。このパソコンでモデルを動かさない場合（ヘッドレス、ディスク容量が少ないなど）に使います。 |
 | `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Claude Code を自分の AI ではなく Anthropic API のままにします。 |
 | `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | 出力中のホームフォルダ・ユーザー名・マシン名・アカウントのメールアドレスを伏せます（スクリーンショットやバグ報告向け、ベストエフォート）。 |
 | `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | エージェントをこのログ詳細度で起動します。`debug` / `info`（既定）/ `warn` / `error`。リリース前のデバッグには `debug` を使います。あとから再インストールせずに変更するには [`waired config log-level`](/ja/reference/cli/#waired-config) を使います。 |

@@ -36,7 +36,8 @@ var installOllamaApp = installOllamaAppImpl
 
 // installOllama (macOS) installs the official Ollama.app into
 // /Applications. If an ollama is already resolvable (PATH or a
-// well-known install path) it is reused and nothing is downloaded.
+// well-known install path) it is kept and nothing is downloaded — the
+// macOS install still lives outside the state dir, which #492 changes.
 //
 // This is the manual `waired runtimes install` equivalent of what the
 // one-liner installer (packaging/install/install.sh) does for fresh

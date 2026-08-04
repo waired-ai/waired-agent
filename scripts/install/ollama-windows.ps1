@@ -678,8 +678,8 @@ function Add-ToMachinePath {
 
 # Write-WairedManagedMarker drops the marker file `waired init` uses to
 # recognise this Ollama as waired's own install (internal/setup DetectOllama
-# -> WairedManaged), so init never asks the bundled-vs-reuse question about
-# an Ollama waired itself put here.
+# -> WairedManaged), so an Ollama waired itself put here is never mistaken
+# for a foreign one.
 #
 # It is also the install's COMPLETION RECEIPT: the caller writes it only
 # after PATH, models dir, GPU env and Test-Install have all succeeded, and

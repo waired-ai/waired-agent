@@ -212,7 +212,8 @@ Common causes:
   [macOS: it says the AI software is damaged](#macos-it-says-the-ai-software-is-damaged).
   `sudo waired doctor --fix` repairs it.
 - **Another Ollama is already using the port.** `waired runtimes status` names the
-  version it found. Quit it, or let Waired use it.
+  version it found. Quit it, or set `inference.ollama_port` in `agent.json` to a
+  free port.
 - **The engine keeps crashing.** After a few crashes Waired stops restarting it
   automatically and says so; `waired inference engine start` retries once you have
   dealt with the cause.
@@ -603,9 +604,6 @@ Then restart the service (see
 and run `waired models ls --detail` again. On Windows a full reboot is the
 surest way to make the service pick up a new machine-wide variable.
 
-If you run your own Ollama outside Waired, set `OLLAMA_IGPU_ENABLE=1` yourself
-and restart it.
-
 Also confirm the model actually fits — memory requirements are in the
 [model catalog](/reference/model-catalog/).
 
@@ -777,7 +775,7 @@ Only after `waired doctor`:
 | Linux | `journalctl -u waired-agent -e` |
 | macOS | `/Library/Logs/waired-agent.err.log`, or `sudo log show --predicate 'process == "waired-agent"' --last 10m`. Waired caps that file at 1 MB and keeps the five previous ones beside it as `waired-agent.err.log.0.gz`, `.1.gz` and so on — look there for anything older (`gzcat`). |
 | Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
-| The AI engine | `…/runtimes/ollama/logs/engine.log` under Waired's state folder — `/var/lib/waired/…` on Linux, `/Library/Application Support/waired/…` on macOS. If you brought your own Ollama: `~/.ollama/logs/server.log`. |
+| The AI engine | `…/runtimes/ollama/logs/engine.log` under Waired's state folder — `/var/lib/waired/…` on Linux, `/Library/Application Support/waired/…` on macOS. |
 
 ## Reporting a problem
 

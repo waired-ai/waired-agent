@@ -498,7 +498,7 @@ func printInferenceSummary(body []byte) {
 			continue
 		}
 		// Prefer the live (serving) version over the binary probe; in
-		// borrowed/adopted modes only the former tells the truth.
+		// adopted mode only the former tells the truth.
 		version := r.Version
 		if r.LiveVersion != "" {
 			version = r.LiveVersion

@@ -69,7 +69,7 @@ func seedActiveReadyModel(t *testing.T, p *agentInferenceProvider) {
 // "installed but the daemon gave up" wizard arm unreachable on exactly the
 // macOS hosts it was written for.
 func TestOnEngineStartFailed_GivesUpAfterBudget(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	frozen := time.Now()
 	p := startFailProvider(t, a, func() time.Time { return frozen })
 
@@ -110,7 +110,7 @@ func TestOnEngineStartFailed_DoesNotScheduleARestart(t *testing.T) {
 	// Separate providers, because the two halves share a recovery budget and
 	// the second strike would carry a 15s backoff.
 	t.Run("a crash schedules one", func(t *testing.T) {
-		p := startFailProvider(t, newTestAdapter(t, false), nil)
+		p := startFailProvider(t, newTestAdapter(t), nil)
 		p.engineReconcileInFlight.Store(true)
 
 		p.onEngineUnhealthy("engine returned HTTP 500: llama-server process has terminated")
@@ -119,7 +119,7 @@ func TestOnEngineStartFailed_DoesNotScheduleARestart(t *testing.T) {
 	})
 
 	t.Run("a failed start does not", func(t *testing.T) {
-		p := startFailProvider(t, newTestAdapter(t, false), nil)
+		p := startFailProvider(t, newTestAdapter(t), nil)
 		p.engineReconcileInFlight.Store(true)
 
 		p.onEngineStartFailed("ollama: process exited during startup: signal: killed")
@@ -150,7 +150,7 @@ func waitForTrue(t *testing.T, d time.Duration, what string, cond func() bool) {
 // must never accumulate into a give-up. Only a run of failures inside one
 // stability window is evidence about the install.
 func TestOnEngineStartFailed_ForgivesAfterStableWindow(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	clock := time.Now()
 	p := startFailProvider(t, a, func() time.Time { return clock })
 
@@ -168,7 +168,7 @@ func TestOnEngineStartFailed_ForgivesAfterStableWindow(t *testing.T) {
 // mid-serve, and so on would otherwise keep two counters that each stay under
 // the limit forever while the engine is plainly not staying up.
 func TestOnEngineStartFailed_SharesTheBudgetWithCrashes(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -189,23 +189,23 @@ func TestOnEngineStartFailed_SharesTheBudgetWithCrashes(t *testing.T) {
 }
 
 // TestOnEngineStartFailed_SkipsEnginesWairedDoesNotOwn mirrors the same guard
-// on the crash path. PRODUCT CONTRACT: a borrowed engine belongs to the
-// operator and a parked one was stopped on purpose — latching either would
-// have waired refuse to serve an engine it never had the right to judge.
+// on the crash path. PRODUCT CONTRACT: an adopted orphan has no handle waired
+// can restart and a parked one was stopped on purpose — latching either would
+// have waired refuse to serve an engine whose failures are not its own.
 func TestOnEngineStartFailed_SkipsEnginesWairedDoesNotOwn(t *testing.T) {
-	t.Run("borrowed", func(t *testing.T) {
-		a := newTestAdapter(t, true)
+	t.Run("adopted", func(t *testing.T) {
+		a := newAdoptedTestAdapter(t)
 		p := startFailProvider(t, a, nil)
 		for range engineRecoveryMaxAttempts * 2 {
 			p.onEngineStartFailed("not reachable")
 		}
 		if a.FailureLatched() {
-			t.Error("a borrowed engine must never be latched by waired")
+			t.Error("an adopted engine must never be latched by waired")
 		}
 	})
 
 	t.Run("parked", func(t *testing.T) {
-		a := newTestAdapter(t, false)
+		a := newTestAdapter(t)
 		if err := a.EnsureRunning(context.Background()); err != nil {
 			t.Fatalf("EnsureRunning: %v", err)
 		}
@@ -231,7 +231,7 @@ func TestOnEngineStartFailed_SkipsEnginesWairedDoesNotOwn(t *testing.T) {
 // — a model switch, a reconcile bounce — after which the derivation used to
 // fall straight through to "ready" as soon as the active model was on disk.
 func TestStatus_LatchedEngineStaysEngineFailedThroughAStop(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestStatus_LatchedEngineStaysEngineFailedThroughAStop(t *testing.T) {
 // machine where both are true, and only "stopped" tells them the memory was
 // freed on purpose (#186).
 func TestStatus_ParkedOutranksALatch(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestStatus_ParkedOutranksALatch(t *testing.T) {
 // `waired init` previously had to infer from how long a flapping state had
 // held. Also pins omitempty: a healthy runtime must not start carrying it.
 func TestStatus_FailureLatchedReachesTheWire(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestStatus_FailureLatchedReachesTheWire(t *testing.T) {
 // through it the (true, "") case is structurally unwritable — the seam has to
 // sit below the behaviour under test.
 func TestSetupEngineHealth_ReasonSurvivesAStop(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestSetupEngineHealth_ReasonSurvivesAStop(t *testing.T) {
 // every ordinary restart and model download leaves the engine not-ready for a
 // while, and none of them may paint the row red.
 func TestSetupEngineHealth_QuietWhenNothingIsLatched(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}

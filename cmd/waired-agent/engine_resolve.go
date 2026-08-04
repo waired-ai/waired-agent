@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
@@ -46,25 +45,23 @@ func bundledOllamaBinPath(stateDir string) string {
 // download.ResolveBinary's $WAIRED_OLLAMA_BINARY → $PATH → well-known
 // paths walk.
 //
-// Bundled mode on Linux is STRICT: only the waired-managed binary
-// qualifies. Falling back to PATH used to spawn whatever system ollama
-// was installed (unpinned version) on our port. Windows/macOS keep the
-// fallback because their "bundled" installs live outside the state dir;
-// reuse mode keeps it too, since there the binary is only ever used as
-// a pull client, never spawned.
+// Linux is STRICT: only the waired-managed binary qualifies. Falling
+// back to PATH used to spawn whatever system ollama was installed
+// (unpinned version) on our port. Windows/macOS keep the fallback
+// because their waired-managed installs still live outside the state
+// dir (#492, #493 relocate them; #494 then removes the fallback).
 //
 // goos is a parameter, not runtime.GOOS, so the Linux-strict branch is
 // table-testable from any runner (repo rule: route GOOS-varying
 // decisions through a function taking runtime.GOOS).
-func resolveOllamaBinary(goos, stateDir string, borrowed bool) (string, error) {
+func resolveOllamaBinary(goos, stateDir string) (string, error) {
 	bundled := bundledOllamaBinPath(stateDir)
 	if fi, err := os.Stat(bundled); err == nil && fi.Mode().IsRegular() {
 		return bundled, nil
 	}
-	if !borrowed && goos == "linux" {
+	if goos == "linux" {
 		return "", fmt.Errorf(
-			"bundled ollama not installed (expected at %s): run `sudo waired runtimes install ollama`, "+
-				"or switch ollama_source to \"reuse\" in agent.json / re-run `sudo waired init`",
+			"bundled ollama not installed (expected at %s): run `sudo waired runtimes install ollama`",
 			bundled)
 	}
 	return download.ResolveBinary("")
@@ -103,10 +100,10 @@ func vllmVenvActive(stateDir string) bool {
 // could not tolerate (#179). The profile keeps it for what it is
 // genuinely good at: reporting an engine's VERSION, which needs the
 // binary executed either way.
-func engineInstalledOnHost(goos, stateDir string, cfg agentconfig.InferenceConfig, engine string) bool {
+func engineInstalledOnHost(goos, stateDir, engine string) bool {
 	switch engine {
 	case catalog.RuntimeOllama:
-		_, err := resolveOllamaBinary(goos, stateDir, cfg.OllamaSource == agentconfig.OllamaSourceReuse)
+		_, err := resolveOllamaBinary(goos, stateDir)
 		return err == nil
 	case catalog.RuntimeVLLM:
 		return vllmVenvActive(stateDir)
@@ -132,13 +129,12 @@ func engineInstalledOnHost(goos, stateDir string, cfg agentconfig.InferenceConfi
 // production passes hardware.EngineVersionAt.
 func engineVersionOnHost(
 	goos, stateDir string,
-	cfg agentconfig.InferenceConfig,
 	run func(ctx context.Context, engine, path string) (bool, string),
 ) func(context.Context, string) (bool, string) {
 	return func(ctx context.Context, engine string) (bool, string) {
 		switch engine {
 		case catalog.RuntimeOllama:
-			bin, err := resolveOllamaBinary(goos, stateDir, cfg.OllamaSource == agentconfig.OllamaSourceReuse)
+			bin, err := resolveOllamaBinary(goos, stateDir)
 			if err != nil {
 				return false, ""
 			}

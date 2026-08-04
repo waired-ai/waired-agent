@@ -232,7 +232,7 @@ var ErrEngineControlUnsupported = errors.New("daemon does not expose engine powe
 
 // StopEngine sends POST /waired/v1/inference/engine/stop — hard-stops the
 // local engine to free memory (#186). 404 → ErrEngineControlUnsupported.
-// 409 (reuse mode) surfaces as an httpError the caller can recognise.
+// 409 (engine not managed) surfaces as an httpError the caller can recognise.
 //
 // Goes over the long-budget write client: the daemon answers only once
 // the process is gone, which the 3s default could never wait out — that

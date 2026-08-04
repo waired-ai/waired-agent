@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/download"
 )
 
@@ -20,16 +19,6 @@ func writePrompt(out io.Writer, args ...any) {
 
 func writePromptf(out io.Writer, format string, args ...any) {
 	_, _ = fmt.Fprintf(out, format, args...)
-}
-
-// effectiveOllamaSource maps an empty ollama_source (pre-#188 agent.json) to the
-// bundled default the agent actually uses, so renew comparisons and operator
-// messages don't surface a spurious "" source.
-func effectiveOllamaSource(s string) string {
-	if s == "" {
-		return agentconfig.OllamaSourceBundled
-	}
-	return s
 }
 
 // ynPrompt reads one [Y/n] / [y/N] answer. Empty input returns def.

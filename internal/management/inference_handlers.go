@@ -172,10 +172,11 @@ type InferenceStatus struct {
 	// soft DesiredState toggle. Set by Server.handleInferenceStatus.
 	EnginePower string `json:"engine_power,omitempty"`
 
-	// EngineManaged is false in reuse mode (#188), where the engine is
-	// the user's own `ollama serve` and the power axis does not apply.
-	// Only meaningful alongside a non-empty EnginePower. The tray renders
-	// the Stop/Start control disabled ("reused — not managed") when false.
+	// EngineManaged is false when the serving engine was ADOPTED (#336):
+	// an exact-pin orphan of a previous waired run, held with no process
+	// handle, so the power axis does not apply. Only meaningful alongside
+	// a non-empty EnginePower. The tray renders the Stop/Start control
+	// disabled ("Engine not managed") when false.
 	EngineManaged bool `json:"engine_managed,omitempty"`
 }
 
@@ -356,19 +357,18 @@ type RuntimeStatus struct {
 	// clients). Empty when the agent predates them.
 	//
 	// Mode is who owns the serving process: "spawned" (waired's own
-	// child) / "borrowed" (reuse mode, the user's engine) / "adopted"
-	// (exact-pin orphan of a previous run; not stoppable by waired).
+	// child) / "adopted" (exact-pin orphan of a previous run; not
+	// stoppable by waired). "borrowed" was reuse mode, removed in #489.
 	Mode string `json:"mode,omitempty"`
 	// LiveVersion is the serving engine's GET /api/version answer —
 	// the version actually handling requests, which differs from
-	// Version in borrowed/adopted modes. "" until the engine has been
-	// ready once.
+	// Version in adopted mode. "" until the engine has been ready once.
 	LiveVersion string `json:"live_version,omitempty"`
-	// PinnedVersion is the release waired bundles (bundled mode only).
+	// PinnedVersion is the release waired bundles.
 	PinnedVersion string `json:"pinned_version,omitempty"`
-	// VersionWarning is the agent-computed mismatch warning: bundled
-	// live != pin, or a reuse engine below the supported floor. ""
-	// when versions agree (or are unknown).
+	// VersionWarning is the agent-computed mismatch warning: the live
+	// engine version is not the pin. "" when versions agree (or are
+	// unknown).
 	VersionWarning string `json:"version_warning,omitempty"`
 	// Serve tuning the agent exported to the engine (#621): the
 	// effective context window, KV cache quantization, and request
@@ -383,8 +383,8 @@ type RuntimeStatus struct {
 	NumBatch int `json:"num_batch,omitempty"`
 	// TuningWarning is the user-visible tuning outcome when something
 	// is off: context floored below the manifest window, a silent f16
-	// KV fallback, a spill to system RAM, or a reuse engine waired
-	// cannot tune. "" when the tuning applied cleanly.
+	// KV fallback, or a spill to system RAM. "" when the tuning applied
+	// cleanly.
 	TuningWarning string `json:"tuning_warning,omitempty"`
 	// LastError carries the engine's failure detail when State is
 	// "failed" (e.g. the port-conflict refusal naming the foreign

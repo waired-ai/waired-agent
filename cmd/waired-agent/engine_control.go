@@ -102,11 +102,10 @@ func (e *engineController) StartEngine(_ context.Context) error {
 }
 
 // EngineState reports the live power state plus whether the engine is
-// waired-managed (false in reuse mode and for adopted orphans — in
-// both cases there is no process handle, so the power axis cannot
-// actually free memory).
+// waired-managed (false for adopted orphans — there is no process
+// handle, so the power axis cannot actually free memory).
 func (e *engineController) EngineState() (management.EnginePowerState, bool) {
-	managed := !e.ollama.Borrowed() && e.ollama.Mode() != infruntime.EngineModeAdopted
+	managed := e.ollama.Mode() != infruntime.EngineModeAdopted
 	switch {
 	case e.ollama.IsParked():
 		return management.EnginePowerStopped, managed

@@ -15,8 +15,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 )
 
 // OllamaConfig wires an OllamaAdapter. All time-related fields fall
@@ -35,28 +33,21 @@ type OllamaConfig struct {
 	// be set" behaviour for tests.
 	BinaryResolver func() (string, error)
 
-	// Borrowed selects "reuse" mode (#188): the agent does NOT spawn or
-	// own an ollama process — it expects one already listening at
-	// Host:Port (a user's `ollama serve` or system service) and merely
-	// probes it. EnsureRunning never spawns and Stop is a no-op (we must
-	// not kill an engine we didn't start). Used when the operator chose
-	// to reuse their existing Ollama instead of waired's bundled one.
-	Borrowed bool
 	// Host is the loopback address the engine binds to (always
 	// 127.0.0.1 in production; unit tests point at httptest).
 	Host string
-	// Port is the engine's listening port. Bundled mode binds the
-	// waired-owned port (agentconfig.DefaultOllamaBundledPort) so it
-	// never contends with a user's system ollama on 11434.
+	// Port is the engine's listening port: the waired-owned port
+	// (agentconfig.DefaultOllamaBundledPort), so it never contends with
+	// a user's system ollama on 11434.
 	Port int
 	// ModelsDir, when non-empty, is exported as OLLAMA_MODELS to the
 	// spawned engine so blobs live in a waired-owned directory
-	// (<state-dir>/runtimes/ollama/models, bundled mode). Empty keeps
-	// the engine's own default (borrowed mode / tests).
+	// (<state-dir>/runtimes/ollama/models). Empty keeps the engine's own
+	// default (tests).
 	ModelsDir string
 	// ExpectedVersion is the exact version (GET /api/version) an
 	// EADDRINUSE survivor on our port must report to be adopted as an
-	// orphan of a previous waired run. Bundled mode wires the pinned
+	// orphan of a previous waired run. Production wires the pinned
 	// version; empty disables adoption entirely. Any other survivor is
 	// a foreign engine and EnsureRunning fails loudly instead of
 	// silently serving from an unpinned engine.
@@ -85,8 +76,8 @@ type OllamaConfig struct {
 	// required to declare ready (default 3).
 	HealthSuccess int
 	// HealthMaxFails is the number of consecutive failed probes
-	// before declaring failed (default 3). It bounds BORROWED-mode and
-	// steady-state probing only — for a SPAWNED engine the adapter owns
+	// before declaring failed (default 3). It bounds steady-state
+	// probing only — for a SPAWNED engine the adapter owns
 	// the child and supervises its liveness directly (see
 	// StartupReadyTimeout), so a slow cold start is not mistaken for a
 	// crash and the not-yet-ready child is not killed prematurely.
@@ -103,9 +94,9 @@ type OllamaConfig struct {
 	StartupReadyTimeout time.Duration
 	// LogDir, when non-empty, is where the spawned engine's merged
 	// stdout+stderr is captured (<LogDir>/engine.log, truncated per
-	// spawn, size-capped). Empty discards the output (borrowed mode /
-	// tests). Without it a failed `ollama serve` leaves no trail and
-	// "not ready" is undiagnosable in the field.
+	// spawn, size-capped). Empty discards the output (tests). Without it
+	// a failed `ollama serve` leaves no trail and "not ready" is
+	// undiagnosable in the field.
 	LogDir string
 	// StateHome is a writable, agent-owned directory used as $HOME for the
 	// spawned `ollama serve` when the agent's own environment has none.
@@ -151,11 +142,6 @@ type OllamaConfig struct {
 // engine the operator explicitly stopped to free memory.
 var ErrEngineParked = errors.New("ollama: engine parked (stopped by operator)")
 
-// ErrEngineBorrowed is returned by Park when the adapter is in reuse mode
-// (#188): the agent does not own the process, so it cannot free the user's
-// memory and must not signal their `ollama serve`.
-var ErrEngineBorrowed = errors.New("ollama: engine is reused, not managed by waired")
-
 // ErrEngineNotOwned is returned by Park when the engine was adopted as
 // an orphan of a previous run: there is no process handle to signal, so
 // waired cannot free its memory.
@@ -166,11 +152,8 @@ type EngineMode string
 
 const (
 	// EngineModeSpawned: the engine is waired's own supervised child
-	// (the normal bundled outcome).
+	// (the normal outcome).
 	EngineModeSpawned EngineMode = "spawned"
-	// EngineModeBorrowed: reuse mode (#188) — the user's engine,
-	// probed but never spawned/stopped.
-	EngineModeBorrowed EngineMode = "borrowed"
 	// EngineModeAdopted: an exact-pin orphan from a previous waired
 	// run answered on our port; serving from it, but with no process
 	// handle (Stop/Park cannot signal it).
@@ -244,8 +227,8 @@ type OllamaAdapter struct {
 	// fetched best-effort after each successful readiness wait. ""
 	// until first ready (or when the probe failed). Unlike the binary
 	// `--version` the hardware profiler reports, this is the version
-	// actually answering requests — the two differ in borrowed/adopted
-	// modes. Guarded by mu.
+	// actually answering requests — the two differ in adopted mode.
+	// Guarded by mu.
 	liveVersion string
 	// logFile is the open <LogDir>/engine.log handle for the current
 	// spawned child (nil when LogDir is unset or the engine is not
@@ -549,7 +532,6 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 	done := make(chan struct{})
 	a.ensuring = done
 	a.state = Health{State: StateStarting}
-	borrowed := a.cfg.Borrowed
 	needReap := a.proc != nil
 	if needReap {
 		// Bump the generation BEFORE the stop so superviseChild treats the
@@ -591,7 +573,7 @@ func (a *OllamaAdapter) EnsureRunning(ctx context.Context) error {
 			go cb(err.Error())
 		}
 	}()
-	err = a.ensureRunningLeader(ctx, borrowed)
+	err = a.ensureRunningLeader(ctx)
 	return err
 }
 
@@ -616,21 +598,7 @@ func startFailureIsEvidence(err error, parked bool) bool {
 // ensureRunningLeader is EnsureRunning's body, run by whichever caller won
 // the single-flight gate. Split out only so the gate's bookkeeping can live
 // in one deferred block regardless of which of the many exits below is taken.
-func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context, borrowed bool) error {
-
-	// Reuse mode: an ollama is expected to be running already. Probe it,
-	// never spawn (a.proc stays nil so Stop is a no-op). No supervised
-	// process here, so the snappy HealthMaxFails give-up is correct.
-	if borrowed {
-		if err := a.waitReady(ctx, false); err != nil {
-			a.setState(Health{State: StateFailed, LastErr: err.Error()})
-			return fmt.Errorf("ollama: borrowed engine not reachable at %s: %w", a.baseURL, err)
-		}
-		a.cacheVersion(ctx)
-		a.setState(Health{State: StateReady, LastOK: time.Now()})
-		return nil
-	}
-
+func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context) error {
 	binary, err := a.resolveBinary()
 	if err != nil {
 		a.setState(Health{State: StateFailed, LastErr: err.Error()})
@@ -708,10 +676,9 @@ func (a *OllamaAdapter) ensureRunningLeader(ctx context.Context, borrowed bool) 
 			}
 			msg := fmt.Sprintf(
 				"ollama: port %d is already in use by another ollama (version %s, expected %s); "+
-					"refusing to adopt it. Stop that process or change inference.ollama_port in "+
-					"agent.json; if you meant to use your own ollama, set ollama_source to "+
-					"\"reuse\" (or %s)",
-				a.cfg.Port, ver, a.cfg.ExpectedVersion, elevation.Hint("waired init"))
+					"refusing to adopt it. Stop that process, or set inference.ollama_port in "+
+					"agent.json to a free port",
+				a.cfg.Port, ver, a.cfg.ExpectedVersion)
 			a.setState(Health{State: StateFailed, LastErr: msg})
 			return errors.New(msg)
 		}
@@ -806,7 +773,7 @@ func (a *OllamaAdapter) processEnv() []string {
 		// stopped always exporting OLLAMA_FLASH_ATTENTION (waired-agent#29), a
 		// stray value in /etc/waired/agent.env or a developer shell would
 		// otherwise re-arm exactly the combination this host opted out of.
-		// With no computed tuning (reuse/borrowed mode, or no resolvable
+		// With no computed tuning (no resolvable
 		// target) the operator's own values are left alone.
 		for _, k := range ollamaTuningKeys {
 			drop[k] = true
@@ -1045,10 +1012,12 @@ func envKey(kv string) string {
 // HealthSuccess consecutive 2xx responses. The poll exits early if the
 // process exits or the context is cancelled.
 //
-// supervised selects the failure policy:
-//   - false (borrowed / steady-state, no owned child): give up after
-//     HealthMaxFails consecutive failures — there is no process to watch,
-//     so a quick failure is the only signal and the right one.
+// supervised selects the failure policy. Since #489 every production
+// start spawns a child, so the false arm is the policy the true one is
+// defined against rather than a path production takes:
+//   - false (no owned child): give up after HealthMaxFails consecutive
+//     failures — there is no process to watch, so a quick failure is the
+//     only signal and the right one.
 //   - true (spawned child): do NOT give up on consecutive failures while
 //     the child is alive. A real crash fires the process-exit channel
 //     (fail-fast); a child that simply hasn't bound its port yet is still
@@ -1107,8 +1076,8 @@ func (a *OllamaAdapter) waitReady(ctx context.Context, supervised bool) error {
 			}
 		}
 
-		// In borrowed mode there is no child process; procDone stays nil
-		// (a nil channel never fires) so we rely on the probe + ctx only.
+		// With no child process procDone stays nil (a nil channel never
+		// fires) so we rely on the probe + ctx only.
 		var procDone <-chan struct{}
 		a.mu.Lock()
 		proc := a.proc
@@ -1188,15 +1157,13 @@ func (a *OllamaAdapter) EngineVersion() string {
 	return a.liveVersion
 }
 
-// Mode reports who owns the serving engine process. Borrowed is a
-// config-time fact; adopted is discovered at EnsureRunning time; the
-// default (including before first start) is spawned.
+// Mode reports who owns the serving engine process. Adopted is
+// discovered at EnsureRunning time; the default (including before first
+// start) is spawned.
 func (a *OllamaAdapter) Mode() EngineMode {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch {
-	case a.cfg.Borrowed:
-		return EngineModeBorrowed
 	case a.adopted:
 		return EngineModeAdopted
 	default:
@@ -1208,13 +1175,6 @@ func (a *OllamaAdapter) Mode() EngineMode {
 // SIGKILL after StopTimeout).
 func (a *OllamaAdapter) Stop(ctx context.Context) error {
 	a.mu.Lock()
-	// Borrowed (reuse) engines are not ours to stop — leave the user's
-	// ollama running. Just mark our view stopped.
-	if a.cfg.Borrowed {
-		a.state = Health{State: StateStopped}
-		a.mu.Unlock()
-		return nil
-	}
 	if a.proc == nil {
 		a.state = Health{State: StateStopped}
 		a.mu.Unlock()
@@ -1440,16 +1400,12 @@ func (c *cappedWriter) Write(p []byte) (int, error) {
 
 // Park hard-stops the engine and latches the parked flag so request
 // traffic (the per-request EnsureRunning) cannot revive it until Unpark.
-// This is the operator-driven "free my VRAM/RAM" action (#186). In reuse
-// mode it returns ErrEngineBorrowed without touching the user's process —
-// there is nothing waired may stop, and pretending otherwise would lie
-// about the memory being freed.
+// This is the operator-driven "free my VRAM/RAM" action (#186). On an
+// adopted orphan it returns ErrEngineNotOwned without touching the
+// process — there is no handle waired may signal, and pretending
+// otherwise would lie about the memory being freed.
 func (a *OllamaAdapter) Park(ctx context.Context) error {
 	a.mu.Lock()
-	if a.cfg.Borrowed {
-		a.mu.Unlock()
-		return ErrEngineBorrowed
-	}
 	if a.adopted {
 		// An adopted orphan has no process handle — we cannot free its
 		// memory, and pretending otherwise would lie to the operator.
@@ -1487,10 +1443,6 @@ func (a *OllamaAdapter) IsParked() bool {
 	defer a.mu.Unlock()
 	return a.parked
 }
-
-// Borrowed reports reuse mode (#188): the engine is the user's own
-// `ollama serve`, not managed by waired, so the power axis can't free it.
-func (a *OllamaAdapter) Borrowed() bool { return a.cfg.Borrowed }
 
 func (a *OllamaAdapter) setState(h Health) {
 	a.mu.Lock()

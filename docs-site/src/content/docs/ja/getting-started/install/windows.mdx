@@ -5,7 +5,7 @@ meta:
   audience: Windows 11 の人
   needs: 管理者ターミナル
   time: 5 分
-sourceHash: 6101eeddf6b08556
+sourceHash: e30f4baf957b65e4
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -68,7 +68,7 @@ notepad $env:TEMP\install.ps1
 
 モデルを動かすプログラム（[Ollama](https://ollama.com)）は、セットアップ時に、
 モデルを動かすパソコンにだけ導入されます。まったく入れたくない場合
-（ディスクの少ないマシン、自前の Ollama がある場合など）:
+（ヘッドレス、ディスク容量が少ないなど）:
 
 ```powershell
 $env:WAIRED_NO_OLLAMA = '1'

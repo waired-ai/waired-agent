@@ -133,7 +133,7 @@ func TestUpdate_EnginePower_StoppedShowsStart(t *testing.T) {
 	}
 }
 
-func TestUpdate_EnginePower_ReusedDisabledRow(t *testing.T) {
+func TestUpdate_EnginePower_UnmanagedDisabledRow(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
 	st := &management.Status{Phase: "active"}
 	inf := &management.InferenceStatus{
@@ -142,11 +142,11 @@ func TestUpdate_EnginePower_ReusedDisabledRow(t *testing.T) {
 		EnginePower: "running", EngineManaged: false,
 	}
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
-	if got.EngineToggleAction != "Engine reused — not managed" {
-		t.Errorf("EngineToggleAction=%q, want reused-not-managed label", got.EngineToggleAction)
+	if got.EngineToggleAction != "Engine not managed" {
+		t.Errorf("EngineToggleAction=%q, want the not-managed label", got.EngineToggleAction)
 	}
 	if got.EngineToggleEnabled {
-		t.Error("EngineToggleEnabled=true for reused engine, want false (greyed out)")
+		t.Error("EngineToggleEnabled=true for an unmanaged engine, want false (greyed out)")
 	}
 }
 
@@ -222,17 +222,17 @@ func TestUpdate_InferenceEngineProvenance(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
 	st := &management.Status{Phase: "active"}
 
-	t.Run("borrowed mode suffixes the state label", func(t *testing.T) {
+	t.Run("adopted mode suffixes the state label", func(t *testing.T) {
 		inf := &management.InferenceStatus{
 			SubsystemState: "ready",
 			DesiredState:   "enabled",
 			Runtimes: map[string]management.RuntimeStatus{
-				"ollama": {Name: "ollama", Installed: true, Mode: "borrowed", LiveVersion: "0.24.0"},
+				"ollama": {Name: "ollama", Installed: true, Mode: "adopted", LiveVersion: "0.24.0"},
 			},
 		}
 		got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
-		if got.InferenceStateLabel != "Engine: ready (borrowed)" {
-			t.Errorf("InferenceStateLabel=%q, want Engine: ready (borrowed)", got.InferenceStateLabel)
+		if got.InferenceStateLabel != "Engine: ready (adopted)" {
+			t.Errorf("InferenceStateLabel=%q, want Engine: ready (adopted)", got.InferenceStateLabel)
 		}
 		if got.EngineWarningLabel != "" {
 			t.Errorf("EngineWarningLabel=%q, want empty (no warning)", got.EngineWarningLabel)

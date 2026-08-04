@@ -127,7 +127,7 @@ func runRuntimesLsBody(mgmt string) error {
 			installed = "yes"
 		}
 		// The live (serving) version beats the binary probe; in
-		// borrowed/adopted modes only the former tells the truth.
+		// adopted mode only the former tells the truth.
 		version := r.Version
 		if r.LiveVersion != "" {
 			version = r.LiveVersion

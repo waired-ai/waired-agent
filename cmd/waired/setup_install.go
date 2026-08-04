@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
@@ -108,8 +107,8 @@ var setupHandState = handStateToServiceUser
 // main.go's runInitViaDaemon branch and never reaches the standalone
 // engine block, so without this the wizard's first step could only ever
 // report permission_denied. The decision itself goes through the SAME
-// engineInstallDecision as interactive init, so opt-out, already-present,
-// reuse and not-elevated all resolve identically (§11.1).
+// engineInstallDecision as interactive init, so opt-out, already-present
+// and not-elevated all resolve identically (§11.1).
 //
 // A failure here must not fail login (like ensureBundledEngine), and the
 // outcome is reported to the daemon either way — that is what NAVI
@@ -198,9 +197,9 @@ const (
 )
 
 // vllmInstallAction is what the executor should do for a vLLM setup request
-// on one concrete host. vLLM has no "reuse your own" or bundled tarball (it
-// is always a fresh uv/pip venv) and requires an NVIDIA GPU on Linux, so its
-// decision is its own rather than engineInstallDecision's.
+// on one concrete host. vLLM has no bundled tarball (it is always a fresh
+// uv/pip venv) and requires an NVIDIA GPU on Linux, so its decision is its
+// own rather than engineInstallDecision's.
 type vllmInstallAction int
 
 const (
@@ -354,14 +353,9 @@ func installEngineAsExecutor(
 			bundledPresent = true
 		}
 	}
-	// OllamaSourceBundled, not the interactive prompt's answer: there is
-	// no terminal question on this path, and we only get here when the
-	// daemon reports no engine installed at all — so there is nothing to
-	// reuse. A host that already has one never reaches this line.
 	det := setupDetectEngine(ctx, stateDir)
 	action := engineInstallDecision(
-		goos, elevated, det,
-		agentconfig.OllamaSourceBundled, bundledPresent,
+		goos, elevated, det, bundledPresent,
 		os.Getenv("WAIRED_NO_OLLAMA") != "",
 		engineIncomplete(goos, det, os.Getenv("ProgramFiles")),
 		setupEngineSignatureBroken(ctx, det))
@@ -387,7 +381,7 @@ func installEngineAsExecutor(
 		writePromptf(out, "%s AI engine installed.\n", emo("✅", "*"))
 		s.Done(engine)
 
-	case engineActionSkipPresent, engineActionSkipReuse:
+	case engineActionSkipPresent:
 		// Nothing to install. Report done so the wizard advances instead
 		// of waiting on the daemon's next profile refresh.
 		s.Done(engine)

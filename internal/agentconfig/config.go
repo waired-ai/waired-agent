@@ -168,23 +168,12 @@ type InferenceConfig struct {
 	ClaudeTTFBBudgetSubMs  int `json:"claude_ttfb_budget_sub_ms"`
 
 	// OllamaPort is the loopback port of the Ollama engine. Leave at
-	// OllamaPortAuto (0) to resolve by OllamaSource: bundled spawns on
-	// DefaultOllamaBundledPort (9475, waired-owned), reuse probes the
-	// user's engine on DefaultOllamaReusePort (11434, upstream default).
-	// Read it through ResolvedOllamaPort(), never directly: a literal
-	// 11434 under bundled is treated as the legacy serialized default
-	// and flips to 9475 (every pre-cutover agent.json wrote 11434
-	// explicitly, so it cannot be distinguished from "unset").
+	// OllamaPortAuto (0) to spawn on DefaultOllamaBundledPort (9475,
+	// waired-owned). Read it through ResolvedOllamaPort(), never
+	// directly: a literal 11434 is treated as the legacy serialized
+	// default and flips to 9475 (every pre-cutover agent.json wrote
+	// 11434 explicitly, so it cannot be distinguished from "unset").
 	OllamaPort int `json:"ollama_port"`
-
-	// OllamaSource selects how the Ollama engine is provided (#188):
-	//   "bundled" (default): waired downloads + supervises its own pinned
-	//                        Ollama as a foreground child (no service).
-	//   "reuse":             borrow an Ollama the user already runs at
-	//                        Host:OllamaPort — the agent probes it and
-	//                        never spawns/stops it.
-	// Chosen at `waired init`; default is always "bundled".
-	OllamaSource string `json:"ollama_source"`
 
 	// VLLMPort is the loopback port the vLLM subprocess binds to. Used
 	// by the gateway proxy when the active runtime is vllm.
@@ -530,34 +519,24 @@ func ResolveLogLevel(cfgLevel, flagVal string, getenv func(string) string) slog.
 // Defaults returns the Config that ships when no file / env / flag is
 // supplied. Update spec §19-6 (and bump Phase A docs) whenever these
 // change.
-// Ollama engine source values for InferenceConfig.OllamaSource (#188).
+// Ollama port resolution. The engine used to bind the upstream default
+// 11434 and silently adopt whatever system ollama already owned it —
+// which broke the version pin invisibly (a 0.30.7-pinned node was
+// actually served by a system 0.24.0). The waired-managed engine now
+// owns 9475, the free slot in waired's loopback family (9473 gateway,
+// 9474 overlay, 9476 management, 9477 control plane, 9478 relay), so it
+// never contends with a user's ollama.
 const (
-	OllamaSourceBundled = "bundled" // waired downloads + supervises its own ollama
-	OllamaSourceReuse   = "reuse"   // borrow a user-run ollama at Host:OllamaPort
-)
-
-// Ollama port resolution. The bundled engine used to bind the upstream
-// default 11434 and silently adopt whatever system ollama already owned
-// it — which broke the version pin invisibly (a 0.30.7-pinned node was
-// actually served by a system 0.24.0). The bundled engine now owns
-// 9475, the free slot in waired's loopback family (9473 gateway, 9474
-// overlay, 9476 management, 9477 control plane, 9478 relay), so it
-// never contends with a user's ollama; reuse mode keeps 11434.
-const (
-	OllamaPortAuto           = 0     // resolve by OllamaSource
-	DefaultOllamaReusePort   = 11434 // probe the user's engine (upstream default)
+	OllamaPortAuto           = 0     // resolve to the waired-owned port
 	DefaultOllamaBundledPort = 9475  // waired-owned spawn target
+	legacyOllamaDefaultPort  = 11434 // upstream default; pre-cutover files wrote it explicitly
 )
 
 // ResolvedOllamaPort returns the port the Ollama engine actually uses.
 // See the OllamaPort field comment for the legacy-11434 flip rule.
 func (c InferenceConfig) ResolvedOllamaPort() int {
-	reuse := c.OllamaSource == OllamaSourceReuse
 	switch c.OllamaPort {
-	case OllamaPortAuto, DefaultOllamaReusePort:
-		if reuse {
-			return DefaultOllamaReusePort
-		}
+	case OllamaPortAuto, legacyOllamaDefaultPort:
 		return DefaultOllamaBundledPort
 	default:
 		return c.OllamaPort
@@ -580,7 +559,6 @@ func Defaults() Config {
 			ClaudeTTFBBudgetMainMs:   60000,
 			ClaudeTTFBBudgetSubMs:    20000,
 			OllamaPort:               OllamaPortAuto,
-			OllamaSource:             OllamaSourceBundled,
 			VLLMPort:                 8000,
 			VLLMGPUMemoryUtilization: 0.85,
 			VLLMTensorParallel:       0,
@@ -616,13 +594,6 @@ func (c *Config) Validate() error {
 	case "", "ollama", "vllm":
 	default:
 		return fmt.Errorf("agentconfig: preferred_engine must be \"\", \"ollama\", or \"vllm\", got %q", c.Inference.PreferredEngine)
-	}
-	switch c.Inference.OllamaSource {
-	case "", OllamaSourceBundled, OllamaSourceReuse:
-		// "" is accepted for backward compatibility (pre-#188 agent.json)
-		// and treated as bundled by the agent.
-	default:
-		return fmt.Errorf("agentconfig: ollama_source must be %q or %q, got %q", OllamaSourceBundled, OllamaSourceReuse, c.Inference.OllamaSource)
 	}
 	if p := c.Inference.OllamaPort; p < 0 || p > 65535 {
 		return fmt.Errorf("agentconfig: ollama_port must be in [0, 65535] (0 = auto), got %d", p)
@@ -853,8 +824,6 @@ func setInferenceField(c *InferenceConfig, envName, val string) error {
 			return err
 		}
 		c.OllamaPort = n
-	case "OLLAMA_SOURCE":
-		c.OllamaSource = val
 	case "VLLM_PORT":
 		n, err := strconv.Atoi(val)
 		if err != nil {
@@ -991,10 +960,7 @@ func (c *Config) RegisterInferenceFlags(fs *flag.FlagSet) {
 		"pre-first-byte deadline (ms) for a SUBAGENT Claude request on a mesh peer before auto-rerouting to Anthropic (0=off)")
 	fs.IntVar(&c.Inference.OllamaPort, "inference-ollama-port",
 		c.Inference.OllamaPort,
-		"loopback port for the Ollama engine (0 = auto: bundled 9475, reuse 11434)")
-	fs.StringVar(&c.Inference.OllamaSource, "inference-ollama-source",
-		c.Inference.OllamaSource,
-		"how Ollama is provided: \"bundled\" (waired-managed) or \"reuse\" (borrow a user-run ollama)")
+		"loopback port for the Ollama engine (0 = auto: 9475)")
 	fs.IntVar(&c.Inference.VLLMPort, "inference-vllm-port",
 		c.Inference.VLLMPort,
 		"loopback port for the vLLM subprocess to listen on")

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -181,7 +180,7 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 	// so it covers every exit — including the two that return before
 	// finalizeOllamaServeTuning, whose /api/ps side effect was the only
 	// thing warming anything: an untuned boot plan (`!p.bootPlan.tuned`,
-	// i.e. the fresh-install case) and a borrowed engine. When this boot
+	// i.e. the fresh-install case). When this boot
 	// dispatched a pull instead, the model is not on disk yet and the warm
 	// declines; endPull's reconcile picks it up when the download lands.
 	defer p.warmServingModel()
@@ -230,38 +229,12 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 	// #621: verify the exported serve tuning against the running engine
 	// and degrade once on positive evidence (silent f16 fallback /
 	// spill). Ordered after the backend probe so the two never interleave
-	// restarts. Reuse mode is read-only — waired cannot restart a process
-	// it doesn't own — so a mismatch only records a user-visible warning.
+	// restarts.
 	if !p.bootPlan.tuned {
 		return
 	}
-	if !p.ollama.Borrowed() {
-		// #642 derived-batch-model creation + #621 post-spawn tuning
-		// verification, shared with the in-process reconcile (#812).
-		p.finalizeOllamaServeTuning(ctx, p.bootPlan.tune,
-			p.bootPlan.tuneManifest, p.bootPlan.tuneVariant, p.bootPlan.tuneTag)
-		return
-	}
-	hwProfile := p.profiler.Profile(ctx)
-	verdict, detail := verifyOllamaTuning(ctx, &http.Client{}, p.ollama.BaseURL(), p.bootPlan.tune, p.bootPlan.tuneTag, hwProfile)
-	mt := infruntime.ModelTuning{
-		ModelID:   p.bootPlan.tune.ModelID,
-		VariantID: p.bootPlan.tune.VariantID,
-		Verified:  verdict != tuningInconclusive,
-	}
-	// #763: surface the reused engine's real request parallelism when its
-	// runner can be attributed to this model.
-	if verdict != tuningInconclusive {
-		if np, ok := observeRunnerParallel(p.bootPlan.tune, proclist.List); ok {
-			mt.ObservedNumParallel = np
-		}
-	}
-	if verdict != tuningInconclusive && (detail != "" || verdict != tuningOK) {
-		mt.Warning = "reused ollama is not tuned by waired (" + detail +
-			"); consider setting OLLAMA_CONTEXT_LENGTH / OLLAMA_KV_CACHE_TYPE on your ollama service"
-		if p.logger != nil {
-			p.logger.Warn("reused ollama tuning check", "detail", detail)
-		}
-	}
-	p.ollama.SetAppliedTuning(mt)
+	// #642 derived-batch-model creation + #621 post-spawn tuning
+	// verification, shared with the in-process reconcile (#812).
+	p.finalizeOllamaServeTuning(ctx, p.bootPlan.tune,
+		p.bootPlan.tuneManifest, p.bootPlan.tuneVariant, p.bootPlan.tuneTag)
 }

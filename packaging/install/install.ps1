@@ -1062,7 +1062,7 @@ Switches:
                     the active channel (WAIRED_VERSION): stops the
                     service, swaps the binaries in place, restarts. The
                     SCM registration and the state/identity under
-                    %ProgramData%\waired are preserved; a reused Ollama is
+                    %ProgramData%\waired are preserved; the AI engine is
                     not touched. Re-running install.ps1 on a host that
                     already has waired offers this automatically.
   -Yes              Assume "yes" to every prompt: the pre-install
@@ -2117,12 +2117,12 @@ function Test-InteractiveStdin {
 # (it asks "run local inference?" first, then installs via the embedded
 # ollama-windows.ps1 when the answer calls for one) -- installing here,
 # before init, made init re-detect waired's own install as a "foreign"
-# Ollama and ask a confusing reuse question about it. The outcome line for
+# Ollama and treat it as foreign. The outcome line for
 # Show-NextSteps is set here too (mirror of install.sh's $ollama_status).
 function Set-OllamaEnvForInit {
     if ($SkipOllama) {
         $env:WAIRED_NO_OLLAMA = '1'
-        $script:OllamaStatus = 'skipped (-SkipOllama / WAIRED_NO_OLLAMA; bundled engine later from an elevated prompt: waired runtimes install ollama -- or bring your own and pick "reuse" at sign-in)'
+        $script:OllamaStatus = 'skipped (-SkipOllama / WAIRED_NO_OLLAMA; install the engine later from an elevated prompt: waired runtimes install ollama)'
         return
     }
     if ($OllamaGpuMode -and $OllamaGpuMode -ne 'auto') { $env:WAIRED_OLLAMA_GPU_MODE = $OllamaGpuMode }
@@ -2541,7 +2541,7 @@ function Show-UpdateResult {
             Write-Host "Service:  $ServiceName is not registered; run `"$InstallDir\waired-agent.exe`" install."
         }
     }
-    Write-Host 'Ollama:   managed separately; not modified by update (update a reused engine yourself).'
+    Write-Host 'Ollama:   managed separately; not modified by update (waired runtimes install ollama).'
     Write-Host "State:    $(Get-AgentStateDir) (identity/config preserved)."
     Write-Host ''
 }

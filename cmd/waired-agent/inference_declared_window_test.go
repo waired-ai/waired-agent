@@ -21,7 +21,7 @@ func TestDeclaredContextWindow(t *testing.T) {
 	}
 	newProv := func(t *testing.T, tuning infruntime.ModelTuning, active string) *agentInferenceProvider {
 		t.Helper()
-		a := newTestAdapter(t, false)
+		a := newTestAdapter(t)
 		if tuning != (infruntime.ModelTuning{}) {
 			a.SetAppliedTuning(tuning)
 		}

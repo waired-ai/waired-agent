@@ -954,7 +954,7 @@ const quitBudget = 5 * time.Second
 // The daemon itself keeps running; the next tray start resumes sharing
 // and a later Start brings the engine back.
 //
-// Both calls are best-effort — an old daemon (404), reuse mode (409), or
+// Both calls are best-effort — an old daemon (404), an unmanaged engine (409), or
 // a daemon already down are all expected on the way out. Unlike the
 // pre-#316 version, abandoning the stop mid-flight is now safe rather
 // than merely hoped-for: the daemon runs the kill to completion under its
@@ -1216,7 +1216,7 @@ func (t *tray) onInferenceToggle(ctx context.Context) {
 // VRAM/RAM, start restarts the engine. Mirrors onInferenceToggle — reads
 // the last-rendered action and relies on the post-click pollOnce to
 // refresh labels. The action is empty (item hidden) when the engine is
-// reused (not managed) or the daemon predates engine control.
+// not managed by waired, or the daemon predates engine control.
 func (t *tray) onEngineToggle(ctx context.Context) {
 	t.mu.Lock()
 	action := t.last.EngineToggleAction
@@ -2353,7 +2353,7 @@ func (t *tray) diffRows(prev, m MenuModel) {
 	t.setTitle(t.miInferenceState, prev.InferenceStateLabel, m.InferenceStateLabel)
 	// Hard engine power toggle (#186): visibility + title track
 	// EngineToggleAction; enablement tracks EngineToggleEnabled (the
-	// reuse/not-managed case renders the row greyed out).
+	// not-managed case renders the row greyed out).
 	t.setVisible(t.miEngineToggle, prev.EngineToggleAction != "", m.EngineToggleAction != "")
 	t.setTitle(t.miEngineToggle, prev.EngineToggleAction, m.EngineToggleAction)
 	t.setEnabled(t.miEngineToggle, prev.EngineToggleEnabled, m.EngineToggleEnabled)

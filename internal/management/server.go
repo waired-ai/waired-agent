@@ -325,7 +325,7 @@ const (
 // and latches it stopped (so request traffic doesn't revive it);
 // StartEngine clears the latch and restarts asynchronously. EngineState
 // reports the live power state plus whether the engine is waired-managed
-// (false in reuse mode, where power control does not apply). Unlike the
+// (false for an adopted orphan, where power control does not apply). Unlike the
 // soft toggle this state is NOT persisted — a daemon restart returns to
 // config-driven startup.
 type EngineController interface {
@@ -704,7 +704,7 @@ func (s *Server) handleInferenceTransition(w http.ResponseWriter, r *http.Reques
 
 // EngineStateResponse is the body returned by
 // POST /waired/v1/inference/engine/{stop,start} — the live engine power
-// state plus whether the engine is waired-managed (false in reuse mode).
+// state plus whether the engine is waired-managed (false when adopted).
 type EngineStateResponse struct {
 	Power   string `json:"power"`
 	Managed bool   `json:"managed"`
@@ -727,12 +727,12 @@ func (s *Server) handleEngineTransition(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "engine controller not configured", http.StatusNotFound)
 		return
 	}
-	// Reuse mode: there is no waired-owned process to stop/start, so the
-	// power axis does not apply. 409 lets the CLI/tray render a clear
-	// "engine reused — not managed" message instead of a generic error.
+	// No waired-owned process to stop/start (an adopted orphan, #489), so
+	// the power axis does not apply. 409 lets the CLI/tray render a clear
+	// "engine not managed" message instead of a generic error.
 	if _, managed := s.engineControl.EngineState(); !managed {
 		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "engine is reused (not managed by waired); power control unavailable",
+			"error": "engine is not managed by waired; power control unavailable",
 		})
 		return
 	}

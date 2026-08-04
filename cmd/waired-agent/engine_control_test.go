@@ -159,7 +159,7 @@ func hostPort(t *testing.T, raw string) (string, int) {
 	return host, p
 }
 
-func newTestAdapter(t *testing.T, borrowed bool) *infruntime.OllamaAdapter {
+func newTestAdapter(t *testing.T) *infruntime.OllamaAdapter {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -169,14 +169,49 @@ func newTestAdapter(t *testing.T, borrowed bool) *infruntime.OllamaAdapter {
 	host, port := hostPort(t, srv.URL)
 	return infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
 		Binary: "/fake/ollama", Host: host, Port: port,
-		Borrowed: borrowed, Spawner: &fakeSpawner{}, HTTPClient: srv.Client(),
+		Spawner: &fakeSpawner{}, HTTPClient: srv.Client(),
 		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 5,
 		StopTimeout: 50 * time.Millisecond,
 	})
 }
 
+// newAdoptedTestAdapter returns an adapter serving through an ADOPTED
+// orphan: the spawn dies immediately (as `ollama serve` does when the
+// port is already bound) and whatever already answers on the port
+// reports exactly the version the adapter expects. That is the one
+// remaining shape where waired serves with no process handle (#489
+// removed the other, reuse mode), so it is what the "not ours to
+// stop / restart / latch" guards must be tested against.
+func newAdoptedTestAdapter(t *testing.T) *infruntime.OllamaAdapter {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == "/api/version" {
+			_, _ = w.Write([]byte(`{"version":"9.9.9"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	host, port := hostPort(t, srv.URL)
+	a := infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
+		Binary: "/fake/ollama", Host: host, Port: port,
+		Spawner: deadSpawner{}, HTTPClient: srv.Client(),
+		ExpectedVersion: "9.9.9",
+		HealthInterval:  5 * time.Millisecond, HealthSuccess: 2, HealthMaxFails: 50,
+		StopTimeout: 50 * time.Millisecond,
+	})
+	if err := a.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("EnsureRunning should adopt the exact-pin orphan: %v", err)
+	}
+	if got := a.Mode(); got != infruntime.EngineModeAdopted {
+		t.Fatalf("Mode() = %s, want adopted", got)
+	}
+	return a
+}
+
 func TestEngineController_StopThenStart(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.EnsureRunning(context.Background()); err != nil {
 		t.Fatalf("EnsureRunning: %v", err)
 	}
@@ -226,7 +261,7 @@ func TestEngineController_StopThenStart(t *testing.T) {
 // doesn't advertise capacity that would 503. The parked check short-
 // circuits before the store load, so no store fixture is needed.
 func TestEngineReady_ParkedIsNotReady(t *testing.T) {
-	a := newTestAdapter(t, false)
+	a := newTestAdapter(t)
 	if err := a.Park(context.Background()); err != nil {
 		t.Fatalf("Park: %v", err)
 	}
@@ -286,19 +321,5 @@ func TestEngineController_StopEngine_SurvivesCancelledRequestContext(t *testing.
 	}
 	if power, _ := ec.EngineState(); power != management.EnginePowerStopped {
 		t.Errorf("engine_power = %q, want stopped", power)
-	}
-}
-
-func TestEngineController_BorrowedNotManaged(t *testing.T) {
-	a := newTestAdapter(t, true)
-	ec := newEngineController(context.Background(), a, nil)
-	if _, managed := ec.EngineState(); managed {
-		t.Error("EngineState managed = true for borrowed engine, want false")
-	}
-	if err := ec.StopEngine(context.Background()); err != infruntime.ErrEngineBorrowed {
-		t.Errorf("StopEngine (borrowed) = %v, want ErrEngineBorrowed", err)
-	}
-	if a.IsParked() {
-		t.Error("borrowed engine parked; power axis must be a no-op")
 	}
 }

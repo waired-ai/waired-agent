@@ -824,7 +824,7 @@ func stubEngineAlreadyInstalled(t *testing.T, stateDir string) {
 		t.Fatalf("write bundled engine: %v", err)
 	}
 	present := setup.OllamaDetection{
-		Installed: true, Supported: true, WairedManaged: true,
+		Installed: true, WairedManaged: true,
 		Path: bundled, Version: infruntime.OllamaPinnedVersion,
 	}
 	origInstall, origDetect := setupInstallEngine, setupDetectEngine
