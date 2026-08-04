@@ -246,6 +246,7 @@ func parseModelLifecycle(body []byte, modelID string) (line string, done bool, e
 				Model string `json:"model"`
 				Error string `json:"error"`
 			} `json:"failures"`
+			NotPresent []string `json:"not_present"`
 		} `json:"models"`
 	}
 	if jerr := json.Unmarshal(body, &resp); jerr != nil {
@@ -271,6 +272,14 @@ func parseModelLifecycle(body []byte, modelID string) (line string, done bool, e
 			}
 		}
 		return modelID + ": failed", true, errors.New("pull failed")
+	}
+	// Nothing has started on it (waired-agent#403). Not terminal — the
+	// pull this wait follows was just accepted, so the state row it writes
+	// is moments away — but it has to SAY so: the daemon could not express
+	// this state before, and the caller printed nothing at all until the
+	// timeout, on a command whose whole job is to report progress.
+	if contains(resp.Models.NotPresent, modelID) || aliasMatches(resp.Models.NotPresent, modelID) {
+		return modelID + ": not started yet", false, nil
 	}
 	return "", false, nil
 }

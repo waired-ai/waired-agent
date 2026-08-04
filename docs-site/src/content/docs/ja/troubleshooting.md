@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: b96df2afc4bb19ad
+sourceHash: 816682860050ee95
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -34,6 +34,7 @@ waired doctor
 - [常駐サービスが応答せずサインインが止まる](#sign-in-stops-because-the-background-service-is-not-responding)
 - [セットアップが途中で止まった](#setup-stopped-partway)
 - [セットアップで「AI エンジンが起動しなかった」と出た](#setup-says-the-ai-engine-failed-to-start)
+- [セットアップで「選んだモデルをダウンロードできない」と出た](#setup-says-it-cannot-download-the-model-you-chose)
 - [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
 - [「非常に小さいモデルしか動かせない」と言われた](#it-said-my-machine-can-only-run-a-very-small-model)
@@ -224,6 +225,41 @@ Waired は背後で再試行を続けるので、エンジンが動き出せば�
   その旨を表示します。原因に対処してから `waired inference engine start` で再開できます。
 
 `waired doctor` はこれらをまとめて確認します。
+
+<a id="setup-says-it-cannot-download-the-model-you-chose"></a>
+
+## セットアップで「選んだモデルをダウンロードできない」と出た
+
+モデルによっては動かせないパソコンがあります。常駐サービスがその選択を断った場合、
+ダウンロードが始まるかどうかを待たずに、ターミナルがその場でその旨を表示します。
+
+```
+Waired can't download qwen3.6-35b-a3b on this computer.
+the engine on this device is too old for this model
+Update Waired here (`waired update`), or pick a different model in your browser.
+```
+
+2 行目は常駐サービスが記録した理由をそのまま出したものです。3 行目はその理由によって
+変わり、2 通りあります。
+
+- **AI ソフトがモデルの要求より古い。** そのパソコンで `waired update` を実行すると、
+  ダウンロードはそのあと自動的に始まります。更新で直るのはこの理由だけです。
+- **それ以外** — そのパソコンではそのモデルを実行できないか、ダウンロードが無効に
+  なっています。ブラウザで別のモデルを選ぶか、`waired models ls --detail` で
+  このマシンに合うモデルを確認してください。
+
+いずれの場合もサインインは完了しています。セットアップ画面のモデルの行にも同じ理由が
+出るので、ターミナルに戻らずそちらで選び直せます。
+
+よく似た行に、意味の違うものがあります。
+
+```
+Waired hasn't started downloading qwen3.6-35b-a3b yet; it keeps trying in the background.
+```
+
+こちらは拒否ではありません。Waired が把握している異常は何もなく、ターミナルが監視を
+やめた時点でダウンロードがまだ始まっていなかっただけです。処理は背後で続きます。
+`waired status` で現在地を確認できます。
 
 <a id="it-says-i-have-reached-the-device-limit"></a>
 

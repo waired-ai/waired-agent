@@ -282,6 +282,25 @@ type ModelsSnapshot struct {
 	Ready       []string `json:"ready"`
 	Downloading []string `json:"downloading"`
 	Failed      []string `json:"failed,omitempty"`
+	// NotPresent names the catalog models this daemon has nothing under
+	// way for: no weights on disk and no download running. It covers a
+	// model nothing has ever touched, one that was deleted, and one that
+	// was evicted — three histories, one answer to the question a caller
+	// is actually asking.
+	//
+	// Before it, "absent from ready / downloading / failed" was the only
+	// observation available, and it could not be told apart from an id
+	// this build has never heard of (waired-agent#403). The daemon can
+	// refuse a chosen model permanently, so those two want opposite
+	// things said about them, and `waired init` had to bound the
+	// difference with a blind five-minute grace.
+	//
+	// NOT omitempty, unlike the lists above: a reader has to be able to
+	// tell "this daemon says nothing is pending on any model" from "this
+	// daemon is too old to answer", and an omitted empty list reads as
+	// both. Callers key off the list being non-empty before drawing any
+	// conclusion from a model's absence from it.
+	NotPresent []string `json:"not_present"`
 	// Downloads carries byte-level progress for the in-flight downloads
 	// named in Downloading. Optional: old clients read Downloading (names
 	// only) and ignore this; new clients render a percentage + size from

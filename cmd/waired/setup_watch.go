@@ -107,6 +107,13 @@ type modelTarget struct {
 	// catalog id. Once set it is only ever replaced, never cleared — see
 	// Poll.
 	want string
+	// refusedCode / refusedDetail are the daemon's account of REFUSING to
+	// apply want (waired-agent#404), latched from the same read Poll
+	// already makes. Empty until one is reported, and dropped whenever
+	// want is replaced: a refusal belongs to one desired model, and the
+	// daemon drops it on the same event.
+	refusedCode   string
+	refusedDetail string
 }
 
 // targetLatchedBackoff slows the reads once a target is latched. From
@@ -172,6 +179,11 @@ func (t *modelTarget) Poll() string {
 	}
 	if st := t.state(); setupDriving(st) && st.DesiredModelID != "" {
 		t.want = canonicalBundledModelID(st.DesiredModelID)
+		// Taken from the SAME read that named the model, so a refusal
+		// can never be attributed to a model it was not about — and an
+		// operator who picks again drops the old answer with the same
+		// assignment, because the daemon keys it on the desired model too.
+		t.refusedCode, t.refusedDetail = st.ModelErrorCode, st.ModelErrorDetail
 	}
 	// Scheduled from the state this read just established, not the one
 	// before it, so the read that latches a target is already the one that
@@ -183,4 +195,20 @@ func (t *modelTarget) Poll() string {
 	}
 	t.next = now.Add(every)
 	return t.want
+}
+
+// Refused reports the daemon's refusal to apply the model this target
+// names, if it has recorded one (waired-agent#404). ok is false on a
+// daemon too old to say — every caller must then fall back to the
+// behaviour it had before, not to an assumption.
+//
+// A refusal is not a fresh observation: the reads back off to
+// targetLatchedBackoff once a target is latched, so this can be up to
+// half a minute behind. That is the same trade the target itself makes,
+// and it replaces a five-minute blind grace.
+func (t *modelTarget) Refused() (code, detail string, ok bool) {
+	if t == nil || t.refusedCode == "" {
+		return "", "", false
+	}
+	return t.refusedCode, t.refusedDetail, true
 }

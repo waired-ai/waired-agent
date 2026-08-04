@@ -45,3 +45,28 @@ func TestModelWithQuality(t *testing.T) {
 		}
 	})
 }
+
+// TestCanonicalBundledModelIDResolvesAnInternalModel: resolution takes
+// the COMPLETE catalog, per the rule stated in init_modelselect.go — the
+// agent keys its model state off the including-internal set, so an id
+// resolved against the offered subset cannot be compared against
+// /inference/status.
+//
+// It matters because a withheld model stays pinnable and resolvable by
+// id or alias (see granite4-350m's internal_only note): an operator or
+// the routing sentinel can pin `waired/tiny`, and the unresolved alias
+// would then be waited for as a string that never appears — the exact
+// failure canonicalBundledModelID's own comment says it prevents.
+func TestCanonicalBundledModelIDResolvesAnInternalModel(t *testing.T) {
+	const alias, canonical = "waired/tiny", "granite4-350m"
+	if got := canonicalBundledModelID(alias); got != canonical {
+		t.Errorf("canonicalBundledModelID(%q) = %q, want %q", alias, got, canonical)
+	}
+	// The offered set still resolves, and an unknown name is still kept.
+	if got := canonicalBundledModelID("waired/medium"); got != "qwen2.5-coder-14b-instruct" {
+		t.Errorf("canonicalBundledModelID(waired/medium) = %q", got)
+	}
+	if got := canonicalBundledModelID("model-from-a-newer-catalog"); got != "model-from-a-newer-catalog" {
+		t.Errorf("canonicalBundledModelID kept nothing for an unknown id: %q", got)
+	}
+}

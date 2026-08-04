@@ -225,3 +225,31 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = old
 	return <-done
 }
+
+// TestParseModelLifecycleReportsAModelNothingHasStartedOn is #403's
+// consumer-side bar. `waired models pull --wait` printed NOTHING for a
+// model in none of the three lists and spun to its timeout with no
+// explanation, because that was the only observation available. It is
+// not terminal — the pull was just accepted, so a state row is moments
+// away — but the loop has to say what it is looking at.
+func TestParseModelLifecycleReportsAModelNothingHasStartedOn(t *testing.T) {
+	body := []byte(`{"models":{"ready":[],"downloading":[],"not_present":["qwen3-8b-instruct"]}}`)
+	line, done, err := parseModelLifecycle(body, "qwen3-8b-instruct")
+	if done || err != nil {
+		t.Fatalf("not_present must keep polling, got done=%v err=%v", done, err)
+	}
+	if !strings.Contains(line, "not started yet") {
+		t.Errorf("line = %q, want it to say nothing has started", line)
+	}
+}
+
+// An older daemon sends no not_present list, and the loop keeps its
+// pre-#403 silence rather than inventing a state for a model it cannot
+// see.
+func TestParseModelLifecycleStaysQuietWithoutTheList(t *testing.T) {
+	body := []byte(`{"models":{"ready":["another-model"],"downloading":[]}}`)
+	line, done, err := parseModelLifecycle(body, "qwen3-8b-instruct")
+	if line != "" || done || err != nil {
+		t.Fatalf("parseModelLifecycle = (%q, %v, %v), want the unchanged silent answer", line, done, err)
+	}
+}

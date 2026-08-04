@@ -789,6 +789,10 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 		resp.ExecutorElevated = r.executorElevated
 	}
 	resp.InstallClaimed = r.installClaimed
+	// The refusal, read under the same lock and from the same map the
+	// pushed snapshot reads (#404). Keyed on the CURRENT desired model, so
+	// an operator who picks another one is not shown the last one's answer.
+	rejected := r.modelRejected[d.modelID]
 	if d.integrations != "" {
 		targets := integrationTargets(d.integrations)
 		if targets == nil {
@@ -813,6 +817,19 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 	// the engine whenever the host wants inference, wizard or not, and it
 	// needs the destination in exactly that case (waired#835 §11).
 	resp.StateDir = r.provider.setupStateDir()
+	if d.modelID != "" {
+		// Deliberately NOT the model_pull ROW the snapshot projects: that
+		// row carries presentation rules this caller must not inherit —
+		// #307 shows a failure the engine install can explain as `pending`
+		// so exactly one row on the wizard is the live one. A local caller
+		// wants the facts, and the one rule worth keeping is the
+		// precedence: a recorded refusal outranks the lifecycle, because
+		// the lifecycle for a model that was never admitted is
+		// `not_present`, which on its own reads as "not started yet".
+		resp.ModelState, _, _, _ = r.provider.setupModelState(d.modelID)
+		resp.ModelErrorCode = rejected.code
+		resp.ModelErrorDetail = clampSetupDetail(rejected.detail)
+	}
 	return resp
 }
 
