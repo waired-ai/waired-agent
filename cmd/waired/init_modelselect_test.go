@@ -19,15 +19,30 @@ func TestBundledVariantQuality(t *testing.T) {
 			t.Errorf("quality = %d ok=%v, want best-variant 31 true", q, ok)
 		}
 	})
+	// A WITHHELD model, deliberately: this case's real subject is that
+	// resolution takes the complete set, so a model an operator can still
+	// pin does not silently lose its tier. It used to name
+	// qwen2.5-coder-0.5b-instruct, which #200 retired out of the catalog.
 	t.Run("empty-variant-falls-back-to-best", func(t *testing.T) {
-		q, ok := bundledVariantQuality("qwen2.5-coder-0.5b-instruct", "")
-		if !ok || q != 10 {
-			t.Errorf("quality = %d ok=%v, want 10 true", q, ok)
+		q, ok := bundledVariantQuality("granite4-350m", "")
+		if !ok || q != 11 {
+			t.Errorf("quality = %d ok=%v, want 11 true", q, ok)
 		}
 	})
 	t.Run("unknown-model", func(t *testing.T) {
 		if _, ok := bundledVariantQuality("no-such-model", "q4"); ok {
 			t.Errorf("unknown model must not resolve a quality tier")
+		}
+	})
+	// A RETIRED name has no tier of its own, and must not borrow the
+	// successor's (#200): a tier is a claim about weights, and attributing
+	// qwen3.5-0.8b's quality to the model somebody is actually running
+	// would misreport exactly the thing this number exists to report.
+	// Record of today's behaviour, and the observation half of the
+	// instruction/observation rule in internal/catalog/retired.go.
+	t.Run("retired-model-has-no-tier", func(t *testing.T) {
+		if q, ok := bundledVariantQuality("qwen2.5-coder-0.5b-instruct", ""); ok {
+			t.Errorf("retired model resolved a quality tier of %d", q)
 		}
 	})
 }

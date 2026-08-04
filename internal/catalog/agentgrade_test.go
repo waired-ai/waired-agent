@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -89,6 +88,14 @@ func TestUnmeasurableEntriesCarryReasons(t *testing.T) {
 // fixture was picked precisely because its probe run came back clean.
 // Checking against the offered set would reject that verdict as
 // spurious, which is backwards.
+//
+// SHIPPED OR RETIRED (#200). A retired entry's record is not stale data
+// left behind — it is the evidence the retirement was carried out on,
+// and qwen2.5-coder-0.5b's 24-of-24 is the only place the 90% bound that
+// justified deleting it is written down. Deleting the record with the
+// manifest would leave the retirement's own reason string citing numbers
+// nothing in the tree still holds. A typo is still caught: a name that is
+// neither shipped nor in the retirement table fails exactly as before.
 func TestAgentGradeKeysExistInCatalog(t *testing.T) {
 	set, err := AgentGrades()
 	if err != nil {
@@ -104,13 +111,24 @@ func TestAgentGradeKeysExistInCatalog(t *testing.T) {
 			variants[m.ModelID+"/"+v.VariantID] = true
 		}
 	}
+	retired := 0
 	for modelID, m := range set.Models {
+		if _, gone := LookupRetirement(modelID); gone {
+			retired++
+			continue
+		}
 		for variantID := range m.Variants {
 			if !variants[modelID+"/"+variantID] {
-				t.Errorf("verdict recorded for %s/%s, which the bundled catalog does not ship",
-					modelID, variantID)
+				t.Errorf("verdict recorded for %s/%s, which the bundled catalog neither "+
+					"ships nor records as retired", modelID, variantID)
 			}
 		}
+	}
+	// The exemption above is only worth its complexity while something
+	// uses it; if the last retired record ever goes, take the branch out
+	// rather than leaving a door nobody walks through.
+	if retired == 0 && len(Retirements()) > 0 {
+		t.Log("no retired model has a retained verdict; the retirement branch above is unused")
 	}
 }
 
@@ -382,18 +400,21 @@ func TestFailuresReadsTheCountsNotTheVerdict(t *testing.T) {
 // A golden on the shipped file: the next person to move the threshold
 // finds out here which models they just proposed deleting.
 //
-// The offered list is empty, and #475 made that load-bearing —
-// `catalog-tool agentgrade --require-pass` runs in ci.yml and reads
-// exactly this. Before #475 the one entry here was
-// qwen2.5-coder-0.5b-instruct/q4-gguf, which failed 24 of 24 on both
-// tool-requiring cases; it is withheld rather than deleted, because
-// deleting it answers a pinned user with ErrModelNotFound until #200's
-// retired->successor map exists.
+// Both lists are empty now, and each is empty for a different reason.
 //
-// Empty is therefore two different facts — "nothing is above the line"
-// and "everything above the line is withheld" — and only the second is
-// true today. The withheld half below keeps the distinction visible, so
-// an entry cannot be quietly parked in internal_only and forgotten.
+// The OFFERED list is load-bearing: `catalog-tool agentgrade
+// --require-pass` runs in ci.yml and reads exactly this (#475). The
+// WITHHELD list used to hold qwen2.5-coder-0.5b-instruct/q4-gguf, which
+// failed 24 of 24 on both tool-requiring cases. #475 withheld it rather
+// than deleting it, because deleting it answered a pinned user with
+// ErrModelNotFound; #200 built the retired->successor map and deleted it,
+// so it is now out of the catalog entirely.
+//
+// That means "withheld and above the line" is empty for the RIGHT reason
+// — the entry left through the exit the withhold was holding open, not
+// because somebody quietly relaxed the line. The successor half below is
+// what says so, and it is the assertion that goes red if a future entry
+// is parked in internal_only and forgotten instead.
 func TestFailuresOnTheShippedCatalog(t *testing.T) {
 	set, err := AgentGrades()
 	if err != nil {
@@ -418,27 +439,30 @@ func TestFailuresOnTheShippedCatalog(t *testing.T) {
 			withheld = append(withheld, m)
 		}
 	}
-	got := set.Failures(withheld)
-	want := []string{"qwen2.5-coder-0.5b-instruct/q4-gguf"}
-	if names := worklistNames(got); !slices.Equal(names, want) {
-		t.Errorf("withheld-and-above-the-line = %v, want %v", names, want)
+	if names := worklistNames(set.Failures(withheld)); len(names) != 0 {
+		t.Errorf("withheld-and-above-the-line = %v, want none: an entry above the "+
+			"retirement line is either offered and failing (impossible, checked above) "+
+			"or on its way out through catalog.Retirements()", names)
 	}
-	if len(got) == 1 {
-		if !strings.Contains(got[0].Reason, "95% confidence") {
-			t.Errorf("the worklist must show the evidence behind the claim, got %q", got[0].Reason)
+
+	// The entry that WAS on this list left through the retirement map, and
+	// its evidence has to survive the manifest that carried it. Everything
+	// retired keeps a resolvable successor and a record of what it did.
+	if len(Retirements()) == 0 {
+		t.Fatal("nothing has ever been retired — this half is asserting nothing")
+	}
+	for _, r := range Retirements() {
+		if _, ok := LookupByAlias(r.SuccessorModelID, all); !ok {
+			t.Errorf("retired %v points at successor %q, which the catalog does not ship",
+				r.Names, r.SuccessorModelID)
 		}
-		m, ok := LookupByAlias(got[0].ModelID, withheld)
-		if !ok {
-			t.Fatalf("%s is not in the withheld set", got[0].ModelID)
+		if !strings.Contains(r.Reason, "95% confidence") {
+			t.Errorf("retirement of %v must keep the evidence behind the claim, got %q",
+				r.Names, r.Reason)
 		}
-		// The reason string is the only record of WHY the entry is out of
-		// the offered catalog, and of the fact that this is a stop on the
-		// way to deletion rather than the destination.
-		for _, want := range []string{"RETIREMENT", "#200"} {
-			if !strings.Contains(m.InternalOnly, want) {
-				t.Errorf("internal_only reason for %s does not mention %q: %q",
-					got[0].ModelID, want, m.InternalOnly)
-			}
+		if !strings.Contains(r.Reason, "#200") {
+			t.Errorf("retirement of %v does not cite where it was decided: %q",
+				r.Names, r.Reason)
 		}
 	}
 }

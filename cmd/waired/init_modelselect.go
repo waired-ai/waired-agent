@@ -53,6 +53,11 @@ func bundledModelLabelDefault(modelID string) string {
 // others). A miss here is not a cosmetic wrong label; it is a wait for a
 // string that never appears.
 //
+// A RETIRED name resolves to its successor (#200), for the same reason:
+// the daemon's own switch publishes the successor's id, so a compare
+// against the raw name would be the same wait for a string that never
+// appears. The daemon-side twin is setupCanonicalModelID.
+//
 // An unknown name is returned unchanged, which degrades to exactly the
 // compare the caller would have done anyway.
 //
@@ -67,7 +72,7 @@ func canonicalBundledModelID(modelID string) string {
 	if err != nil {
 		return modelID
 	}
-	if m, ok := catalog.LookupByAlias(modelID, manifests); ok && m.ModelID != "" {
+	if m, _, ok := catalog.ResolveModel(modelID, manifests); ok && m.ModelID != "" {
 		return m.ModelID
 	}
 	return modelID
@@ -116,8 +121,12 @@ func modelWithQuality(modelID, variantID string) string {
 
 // isBundledModelBelowFloor reports whether modelID (id or alias) resolves to a
 // bundled model whose best variant sits below the install quality floor — the
-// "very low quality, not recommended for local use" tier (today the 0.5B).
-// Best-effort: false when the catalog is unreadable or the id is unknown.
+// "very low quality, not recommended for local use" tier.
+//
+// Which model that is moves with the catalog, so this does not name one:
+// it was qwen2.5-coder-0.5b (tier 10) until #200 retired it, and the
+// smallest offered entry is qwen3.5-0.8b (tier 12) today. Best-effort:
+// false when the catalog is unreadable or the id is unknown.
 func isBundledModelBelowFloor(modelID string) bool {
 	manifests, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {

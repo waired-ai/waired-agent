@@ -42,10 +42,16 @@ func discrete24GB() hardware.Profile {
 	}
 }
 
-// tinyCoderManifest is the bundled qwen2.5-coder-0.5b-instruct's real numbers
-// (proto/catalog/bundled/qwen2.5-coder-0.5b-instruct.json) — the model the
-// routing sentinel pins, and the one whose llama-server segfaulted under
-// q8_0 + flash attention on a CPU-only runner (waired-agent#29).
+// tinyCoderManifest carries qwen2.5-coder-0.5b-instruct's measured
+// numbers: the model whose llama-server segfaulted under q8_0 + flash
+// attention on a CPU-only runner (waired-agent#29), which is what these
+// cases are about.
+//
+// A FROZEN RECORD, not a catalog reference. That manifest was retired at
+// #200 and the routing sentinel has pinned granite4-350m since #381; the
+// numbers stay because they are the ones #29 was measured against, and
+// re-basing them onto another model would quietly change what every
+// assertion below is testing.
 func tinyCoderManifest() catalog.Manifest {
 	return catalog.Manifest{
 		ModelID:       "qwen2.5-coder-0.5b-instruct",

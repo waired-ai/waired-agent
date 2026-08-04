@@ -64,3 +64,5 @@ provenance rules (#468).
 | the same switch (install-time) | 同じ設定を指定する | 「スイッチを倒す」としない | #473 §4 |
 | becomes a helper machine | 補助マシンとして使える | 「補助機に仕立てる」としない | #473 §4 |
 | active params (MoE) | アクティブパラメータ | 「アクティブ少」等、「アクティブ」を単独の名詞にしない | #473 §4 |
+| retired (a catalog model) | 退役 | 「廃止」はサポート終了、「削除」はユーザーのデータが消える印象になる。名前は解決し続ける | #200 |
+| successor / replacement (model) | 後継モデル | 「代替」としない（品質が劣る含意） | #200 |

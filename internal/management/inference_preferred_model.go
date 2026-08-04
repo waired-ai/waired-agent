@@ -3,6 +3,7 @@ package management
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -50,6 +51,25 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 	}
 	manifest, ok := findManifest(manifests, req.ModelID)
 	if !ok {
+		// A name we WITHDREW gets a named answer, not "never heard of it"
+		// (#200). This is the one place the retirement map deliberately
+		// does NOT substitute: the handler echoes model_id back and
+		// SavePreference persists it, so substituting would write a pin the
+		// operator never chose and report an id they never asked for. The
+		// tray builds its menu from the offered catalog and so cannot reach
+		// this branch at all — what does is a stale tab, a script, or an
+		// `init` replaying an old value, and each of those wants to be told.
+		//
+		// 409, not 404: the request is well-formed and names something real,
+		// it is the state of the world that has moved. Same fork as
+		// signer.IsRetiredIntegrationTarget, whose other half — a stored
+		// control-plane row — is migrated rather than refused, by
+		// setupCanonicalModelID.
+		if ret, retired := catalog.LookupRetirement(req.ModelID); retired {
+			writeJSON(w, http.StatusConflict, errorBody("model_retired",
+				fmt.Sprintf("%q was retired; use %q instead", req.ModelID, ret.SuccessorModelID)))
+			return
+		}
 		writeJSON(w, http.StatusNotFound, errorBody("model_not_found", "no bundled manifest with that model_id"))
 		return
 	}

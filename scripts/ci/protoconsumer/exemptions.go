@@ -179,6 +179,19 @@ var producedInProto = []exemption{
 		"plaintext prefix of a received sealed frame, filled by ParseSealedHeader"},
 	{reflect.TypeFor[disco.SealedHeader](), "SrcNodeKey",
 		"plaintext prefix of a received sealed frame, filled by ParseSealedHeader"},
+	// catalog.Retirement is a table of compiled-in facts, not a wire
+	// message: proto/catalog/retired.go is the only writer, by design.
+	// The agent reads it to migrate a name and the control plane reads it
+	// to refuse one; a consumer that assembled a row itself would be
+	// asserting a retirement nobody recorded.
+	//
+	// Reason is absent here for the same cause as Presentation.Reason
+	// above — the guard matches producers by field NAME, and other
+	// structs in this repo write one.
+	{reflect.TypeFor[catalog.Retirement](), "Names",
+		"the retirement table, written only by proto/catalog/retired.go"},
+	{reflect.TypeFor[catalog.Retirement](), "SuccessorModelID",
+		"the retirement table, written only by proto/catalog/retired.go"},
 }
 
 // producerPending: this repo owes the writer. Each entry names the issue

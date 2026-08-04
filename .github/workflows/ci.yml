@@ -174,9 +174,11 @@ jobs:
         # confidence, to fail more often than it works (#475).
         #
         # Turning it on cost exactly one entry — qwen2.5-coder-0.5b, which
-        # failed 24 of 24 on both tool-requiring cases and is now withheld
-        # pending retirement (#200). Do NOT re-enable a model past this
-        # line to make a red go away: withhold it, or retire it.
+        # failed 24 of 24 on both tool-requiring cases. #475 withheld it,
+        # #200 built the retired->successor map and deleted it, so it is
+        # out of the catalog entirely and its names now resolve to
+        # qwen3.5-0.8b. Do NOT re-enable a model past this line to make a
+        # red go away: withhold it, or retire it.
         #
         # A model no runner can host is declared in agentgrade.json's
         # "unmeasurable" map with a reason, so the escape hatch is a stated

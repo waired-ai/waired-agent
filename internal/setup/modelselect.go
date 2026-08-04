@@ -115,6 +115,16 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 	// auto-selection and the under-spec disable. The deploy-time defensive
 	// disk check still guards a mid-download "disk full".
 	if in.Pinned {
+		// A pin naming a retired entry moves to the successor (#200) — an
+		// installer flag or a preseeded config is written once and reused
+		// across releases, so it outlives the catalog it was written
+		// against. Said out loud in Notes, which is this function's channel
+		// for "we did something you did not literally ask for".
+		requested := sel.ModelID
+		if m, retired, found := catalog.ResolveModel(requested, in.Manifests); found && retired.SuccessorModelID != "" {
+			sel.ModelID = m.ModelID
+			sel.Notes = append(sel.Notes, catalog.RetirementNotice(requested, retired))
+		}
 		sel.Notes = append(sel.Notes, fmt.Sprintf(
 			"using pinned bundled model %q (hardware auto-selection skipped)", sel.ModelID))
 		if m, found := catalog.LookupByAlias(sel.ModelID, in.Manifests); found && !router.MeetsNativeContextFloor(m) {

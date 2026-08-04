@@ -245,6 +245,71 @@ func TestPreferredModel_UnknownModelReturns404(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-ai/waired-agent#200): a name we WITHDREW gets
+// a named answer, not "never heard of it". 409, not 404 — the request is
+// well-formed and names something real; the world moved.
+//
+// This is the one place the retirement map does NOT substitute. The
+// handler echoes model_id back and persists it, so substituting would
+// write a pin the operator never chose. The asymmetry is deliberate and
+// mirrors signer.IsRetiredIntegrationTarget: a NEW instruction naming a
+// withdrawn value is refused, a STORED one is migrated.
+//
+// All three names the deleted manifest answered to, because findManifest
+// matches model_id exactly and the aliases died with the file.
+func TestPreferredModel_RetiredModelReturns409NamingTheSuccessor(t *testing.T) {
+	for _, name := range []string{
+		"qwen2.5-coder-0.5b-instruct",
+		"qwen2.5-coder-0.5b",
+		"Qwen/Qwen2.5-Coder-0.5B-Instruct",
+	} {
+		t.Run(name, func(t *testing.T) {
+			prefDir := t.TempDir()
+			var restarts int32
+			inf := &fakeInference{}
+			s := newPreferredModelTestServer(t, inf, prefDir, &restarts)
+			var swaps int32
+			s.catalog.ApplyModelSwitch = func(context.Context, string) (bool, error) {
+				atomic.AddInt32(&swaps, 1)
+				return false, nil
+			}
+
+			w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+				PreferredModelRequest{ModelID: name})
+			if w.Code != http.StatusConflict {
+				t.Fatalf("want 409, got %d body=%s", w.Code, w.Body.String())
+			}
+			// The message has to carry the way forward: the operator cannot
+			// read the retirement table, and "model_retired" alone leaves
+			// them guessing at a replacement.
+			var body struct {
+				ErrorCode string `json:"error_code"`
+				Message   string `json:"message"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v (%s)", err, w.Body.String())
+			}
+			if body.ErrorCode != "model_retired" {
+				t.Errorf("error_code = %q, want model_retired", body.ErrorCode)
+			}
+			if !bytes.Contains(w.Body.Bytes(), []byte("qwen3.5-0.8b")) {
+				t.Errorf("message does not name the successor: %s", body.Message)
+			}
+
+			// Nothing may happen as a side effect of a refusal.
+			if _, ok, _ := agentconfig.LoadPreference(filepath.Join(prefDir, "preferred-model.json")); ok {
+				t.Error("a retired model must not persist a preference")
+			}
+			if n := atomic.LoadInt32(&swaps); n != 0 {
+				t.Errorf("ApplyModelSwitch called %d times for a refused request", n)
+			}
+			if atomic.LoadInt32(&restarts) != 0 {
+				t.Error("a retired model must not trigger a restart")
+			}
+		})
+	}
+}
+
 func TestPreferredModel_UndownloadedReportsDownloadingWithoutPull(t *testing.T) {
 	prefDir := t.TempDir()
 	var restarts int32
