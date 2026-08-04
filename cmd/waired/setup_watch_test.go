@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // scriptedState is the seam the setup watch is built on: the states the
@@ -368,5 +369,72 @@ func TestNewModelTargetReadsTheSessionsDesiredModel(t *testing.T) {
 	}
 	if got := newModelTarget(sess).Poll(); got != "wizard-35b" {
 		t.Errorf("target = %q over the real wire, want wizard-35b", got)
+	}
+}
+
+// refusedState is a live wizard whose chosen model the daemon has
+// refused to apply (waired-agent#404).
+func refusedState(model, code, detail string) management.SetupStateResponse {
+	st := wizardState(model)
+	st.ModelState = "not_present"
+	st.ModelErrorCode = code
+	st.ModelErrorDetail = detail
+	return st
+}
+
+// TestModelTargetReportsARefusal is #404's CLI-side bar. The refusal
+// rides the read that already names the model, so learning about it costs
+// no extra request.
+func TestModelTargetReportsARefusal(t *testing.T) {
+	s := &scriptedState{states: []management.SetupStateResponse{
+		refusedState("wizard-35b", signer.SetupErrorEngineNotReady, "engine 0.24.0 is too old"),
+	}}
+	target := newScriptedTarget(t, s)
+	if got := target.Poll(); got != "wizard-35b" {
+		t.Fatalf("target = %q, want wizard-35b", got)
+	}
+	code, detail, ok := target.Refused()
+	if !ok {
+		t.Fatal("a recorded refusal was not reported")
+	}
+	if code != signer.SetupErrorEngineNotReady || detail != "engine 0.24.0 is too old" {
+		t.Errorf("Refused() = (%q, %q), want the daemon's code and words", code, detail)
+	}
+}
+
+// A daemon that reports no refusal — including one too old to carry the
+// field at all — must leave the caller on its previous behaviour rather
+// than on an assumption.
+func TestModelTargetReportsNoRefusalWhenThereIsNone(t *testing.T) {
+	s := &scriptedState{states: []management.SetupStateResponse{wizardState("wizard-35b")}}
+	target := newScriptedTarget(t, s)
+	target.Poll()
+	if _, _, ok := target.Refused(); ok {
+		t.Error("a healthy instruction reported a refusal")
+	}
+	var nilTarget *modelTarget
+	if _, _, ok := nilTarget.Refused(); ok {
+		t.Error("a nil target reported a refusal")
+	}
+}
+
+// The refusal belongs to one desired model. An operator who picks again
+// must not be shown the abandoned model's answer — the daemon drops its
+// own record on the same event, and this latch has to follow.
+func TestModelTargetDropsARefusalWhenTheChoiceChanges(t *testing.T) {
+	s := &scriptedState{states: []management.SetupStateResponse{
+		refusedState("first-choice", signer.SetupErrorEngineNotReady, "engine 0.24.0 is too old"),
+		wizardState("second-choice"),
+	}}
+	target := newScriptedTarget(t, s)
+	target.Poll()
+	if _, _, ok := target.Refused(); !ok {
+		t.Fatal("the first choice's refusal was not latched")
+	}
+	if got := target.Poll(); got != "second-choice" {
+		t.Fatalf("target = %q, want second-choice", got)
+	}
+	if code, _, ok := target.Refused(); ok {
+		t.Errorf("the abandoned model's refusal survived the new choice: %q", code)
 	}
 }

@@ -55,8 +55,15 @@ func bundledModelLabelDefault(modelID string) string {
 //
 // An unknown name is returned unchanged, which degrades to exactly the
 // compare the caller would have done anyway.
+//
+// The COMPLETE set, per the resolution/offering rule above: the agent
+// keys its model state off catalog.BundledManifestsIncludingInternal
+// (cmd/waired-agent/inference.go), so resolving against the offered
+// subset left an internal model's alias unresolved — a wait for a string
+// that never appears, which is the exact failure this function exists to
+// prevent.
 func canonicalBundledModelID(modelID string) string {
-	manifests, err := catalog.BundledManifests()
+	manifests, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return modelID
 	}

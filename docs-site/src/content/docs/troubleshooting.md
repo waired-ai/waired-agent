@@ -31,6 +31,7 @@ most problems on its own.
 - [Sign-in stops because the background service is not responding](#sign-in-stops-because-the-background-service-is-not-responding)
 - [Setup stopped partway](#setup-stopped-partway)
 - [Setup says the AI engine failed to start](#setup-says-the-ai-engine-failed-to-start)
+- [Setup says it cannot download the model you chose](#setup-says-it-cannot-download-the-model-you-chose)
 - [It says I have reached the device limit](#it-says-i-have-reached-the-device-limit)
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
 - [It said my machine can only run a very small model](#it-said-my-machine-can-only-run-a-very-small-model)
@@ -217,6 +218,41 @@ Common causes:
   dealt with the cause.
 
 `waired doctor` checks all of these in one pass.
+
+## Setup says it cannot download the model you chose
+
+Some models will not run on some computers. When the background service turns the
+choice down, the terminal says so straight away instead of waiting to see whether
+a download starts:
+
+```
+Waired can't download qwen3.6-35b-a3b on this computer.
+the engine on this device is too old for this model
+Update Waired here (`waired update`), or pick a different model in your browser.
+```
+
+The middle line is the reason as the background service recorded it. The last
+line depends on that reason, and there are two of them:
+
+- **The AI software is older than the model needs.** Run `waired update` on that
+  computer; the download starts on its own afterwards. This is the only reason an
+  update fixes.
+- **Anything else** — that computer cannot serve the model at all, or downloads
+  are turned off on it. Pick another model in the browser, or run
+  `waired models ls --detail` to see which ones fit this machine.
+
+Sign-in is finished either way, and the setup page shows the same reason on the
+model row, so you can pick again there without returning to the terminal.
+
+A similar-looking line means something different:
+
+```
+Waired hasn't started downloading qwen3.6-35b-a3b yet; it keeps trying in the background.
+```
+
+That one is not a refusal. Nothing has gone wrong that Waired knows about — the
+download simply had not begun by the time the terminal stopped watching, and it
+carries on in the background. `waired status` shows where it got to.
 
 ## It says I have reached the device limit
 

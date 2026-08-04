@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // pullStub serves /waired/v1/status (reachability) and a scripted sequence of
@@ -789,4 +790,132 @@ func shrinkTargetPullGrace(t *testing.T, d time.Duration) {
 	old := targetPullGrace
 	targetPullGrace = d
 	t.Cleanup(func() { targetPullGrace = old })
+}
+
+// refusingTarget names a model the daemon has already refused to apply.
+func refusingTarget(t *testing.T, model, code, detail string) *modelTarget {
+	t.Helper()
+	return newScriptedTarget(t, &scriptedState{
+		states: []management.SetupStateResponse{refusedState(model, code, detail)},
+	})
+}
+
+// invisibleSnap is the daemon serving its own model with the wizard's on
+// none of its working lists. notPresent is what the daemon says it COULD
+// still start on — empty for a daemon too old to answer (#403).
+func invisibleSnap(notPresent ...string) management.InferenceStatus {
+	return management.InferenceStatus{
+		SubsystemState: "ready",
+		Active:         activeSel(agentModel),
+		Models: management.ModelsSnapshot{
+			Ready:      []string{agentModel},
+			NotPresent: notPresent,
+		},
+	}
+}
+
+// runInvisibleWait drives waitForBundledModel against a daemon that will
+// never start on the target, with a hard cap so a wait that parks fails
+// loudly instead of hanging the package.
+func runInvisibleWait(t *testing.T, st management.InferenceStatus, target *modelTarget) (string, bool) {
+	t.Helper()
+	stub := &pullStub{seq: []management.InferenceStatus{st}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	var ready bool
+	done := make(chan struct{})
+	go func() {
+		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, target).ready
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the wait parked; out=%q", out.String())
+	}
+	return out.String(), ready
+}
+
+// TestWaitForBundledModel_StopsOnARefusedModel is waired-agent#404's
+// terminal-side bar. Product contract (#404): a refusal the daemon has
+// recorded is reported here, immediately, instead of being waited out.
+//
+// targetPullGrace is left at its real five minutes on purpose: the point
+// is that the wait no longer reaches it, and a shrunk grace could not
+// tell that from the grace expiring.
+func TestWaitForBundledModel_StopsOnARefusedModel(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	out, ready := runInvisibleWait(t, invisibleSnap(agentModel, wizardModel),
+		refusingTarget(t, wizardModel, signer.SetupErrorInternal, "model downloads are turned off on this device"))
+
+	if ready {
+		t.Error("a refused model was reported ready")
+	}
+	if !strings.Contains(out, "Waired can't download "+wizardModel) {
+		t.Errorf("expected the refusal to be named, got: %q", out)
+	}
+	if !strings.Contains(out, "model downloads are turned off on this device") {
+		t.Errorf("expected the daemon's own reason, got: %q", out)
+	}
+	if !strings.Contains(out, "Pick a different model in your browser") {
+		t.Errorf("expected the recovery line, got: %q", out)
+	}
+	if strings.Contains(out, "hasn't started downloading") {
+		t.Errorf("fell through to the blind grace: %q", out)
+	}
+}
+
+// The engine-side code is the one refusal an update can fix, and it is
+// what the wizard advises for the same code — so the terminal says the
+// same thing rather than sending the operator to pick another model.
+func TestWaitForBundledModel_ARefusalTheEngineCanFixSaysSo(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	out, _ := runInvisibleWait(t, invisibleSnap(agentModel, wizardModel),
+		refusingTarget(t, wizardModel, signer.SetupErrorEngineNotReady,
+			"the engine on this device is too old for this model"))
+
+	if !strings.Contains(out, "waired update") {
+		t.Errorf("expected the update route for engine_not_ready, got: %q", out)
+	}
+}
+
+// An id the daemon's catalog does not carry is answered, not waited out:
+// no download is coming, and #403's not_present list is what makes the
+// difference between "nothing started yet" and "no such model" visible.
+func TestWaitForBundledModel_SaysSoWhenTheDaemonHasNoSuchModel(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	out, ready := runInvisibleWait(t, invisibleSnap(agentModel, wizardModel),
+		fixedTarget(t, "model-from-a-newer-catalog"))
+
+	if ready {
+		t.Error("a model the daemon does not have was reported ready")
+	}
+	if !strings.Contains(out, "doesn't have a model called model-from-a-newer-catalog") {
+		t.Errorf("expected the unknown-id line, got: %q", out)
+	}
+	if strings.Contains(out, "hasn't started downloading") {
+		t.Errorf("fell through to the blind grace: %q", out)
+	}
+}
+
+// A daemon that does not answer the not_present question keeps the
+// pre-#403 behaviour exactly: the wait must not read an absent list as
+// "this model does not exist". Records that the new branch is gated on
+// the daemon having spoken.
+func TestWaitForBundledModel_AnOlderDaemonKeepsTheGrace(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkTargetPullGrace(t, 20*time.Millisecond)
+	out, ready := runInvisibleWait(t, invisibleSnap(), fixedTarget(t, wizardModel))
+
+	if ready {
+		t.Error("a model that never appeared must not be reported ready")
+	}
+	if !strings.Contains(out, "hasn't started downloading") {
+		t.Errorf("expected the bounded grace, got: %q", out)
+	}
+	if strings.Contains(out, "doesn't have a model called") {
+		t.Errorf("an absent not_present list was read as a missing model: %q", out)
+	}
 }

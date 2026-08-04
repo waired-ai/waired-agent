@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // modelWaitResult is why the model wait ended.
@@ -338,11 +339,37 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			} else {
 				if want != "" && !targetVisible(st, want) {
 					// The engine is up and the daemon has this model in no
-					// bucket at all — see targetVisible and targetPullGrace.
-					// Bounded, then a soft skip: the caller carries on and
-					// the agent keeps the work. Never a keystroke, because
-					// a browser-driven wait has already withdrawn the
-					// takeover offer and there is nothing left to press.
+					// bucket at all. Two of the three ways that happens are
+					// now answerable, and only the third needs the grace.
+					//
+					// A refusal (#404): the reconciler tried to apply the
+					// wizard's choice and was told no. That is not going to
+					// change by waiting — admission is once per desired
+					// value — so say what happened and stop. The daemon has
+					// already reported the same refusal to the wizard, so
+					// the two surfaces agree.
+					if code, detail, ok := target.Refused(); ok {
+						endProgressLine(out, tty, &line)
+						writeModelRefusal(out, want, code, detail)
+						return modelWaitResult{}
+					}
+					// An id this daemon's catalog does not carry (#403):
+					// nothing is coming, and no download will start. Only
+					// concluded from a daemon that ANSWERS the question —
+					// an empty list is what an older one sends.
+					if len(st.Models.NotPresent) > 0 && !slices.Contains(st.Models.NotPresent, want) {
+						endProgressLine(out, tty, &line)
+						writePromptf(out, "Waired doesn't have a model called %s on this computer.\n", want)
+						writePrompt(out, "Run `waired models ls` to see what it does have, "+
+							"or pick another model in your browser.")
+						return modelWaitResult{}
+					}
+					// What is left is a pull that has not been dispatched
+					// yet — see targetPullGrace. Bounded, then a soft skip:
+					// the caller carries on and the agent keeps the work.
+					// Never a keystroke, because a browser-driven wait has
+					// already withdrawn the takeover offer and there is
+					// nothing left to press.
 					if unseenDeadline.IsZero() {
 						unseenDeadline = time.Now().Add(targetPullGrace)
 					}
@@ -368,6 +395,32 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 		}
 		time.Sleep(pullPollInterval)
 	}
+}
+
+// writeModelRefusal says the daemon will not run the model the wizard
+// chose, and what to do instead (waired-agent#404).
+//
+// The middle line is the daemon's own words for why, printed as recorded
+// — the same treatment engineFailureDetail gets, and for the same reason:
+// this is the moment the operator is looking at the terminal, and the
+// alternative here was a five-minute wait ending in "hasn't started
+// downloading yet", which was true of nothing.
+//
+// The action line is keyed off the §7 code rather than the prose. Only
+// engine_not_ready has a second way out — the model needs a newer engine
+// than this computer has, which an update supplies — and that is the
+// same advice the wizard gives for the same code.
+func writeModelRefusal(out io.Writer, model, code, detail string) {
+	writePromptf(out, "Waired can't download %s on this computer.\n", model)
+	if detail != "" {
+		writePrompt(out, detail)
+	}
+	if code == signer.SetupErrorEngineNotReady {
+		writePrompt(out, "Update Waired here (`waired update`), or pick a different model in your browser.")
+		return
+	}
+	writePrompt(out, "Pick a different model in your browser, or run "+
+		"`waired models ls --detail` to see what fits here.")
 }
 
 // switchFailedStreak is how many consecutive Failed observations of the
@@ -783,14 +836,14 @@ func waitPrepMessage(st management.InferenceStatus, want string) string {
 	}
 }
 
-// targetVisible reports whether the daemon has the wait's model on its
-// books at all.
+// targetVisible reports whether the daemon has WORK under way for the
+// wait's model — on disk, coming down, or failed trying.
 //
-// "In none of the buckets" is a real state rather than a gap in the
-// snapshot: Status() sorts models into ready / downloading / failed and
-// has no arm for anything else, and a model that was never dispatched has
-// no entry to sort. So this is the only observation available for "nothing
-// has started, and nothing is going to".
+// It is deliberately not "the daemon knows this model": since #403 the
+// snapshot answers that separately in Models.NotPresent, and the two
+// questions have different callers. This one decides whether there is
+// anything to render; that one tells an id nothing has started on apart
+// from an id this build has never heard of.
 func targetVisible(st management.InferenceStatus, want string) bool {
 	if slices.Contains(st.Models.Ready, want) ||
 		slices.Contains(st.Models.Downloading, want) ||
@@ -804,18 +857,18 @@ func targetVisible(st management.InferenceStatus, want string) bool {
 // targetPullGrace bounds how long the wait tolerates a wizard-chosen model
 // the daemon has not started working on.
 //
-// It exists because the daemon can refuse a desired model permanently and
-// has no way to say so here. Admission is once per desired value and the
-// applied flag is set BEFORE the attempt, so a refusal — an id this build
-// cannot serve, an engine that cannot run it, pulls turned off — is never
-// retried; and the refusal is recorded for the control plane only, while
-// /setup/state carries no model state at all. Without this the wait would
-// sit out a wizard's eight-hour residency budget saying "Preparing to
-// download…" for a download nobody is going to start, which is a worse
-// answer than the wrong-model report this change removes.
+// It exists because the daemon could refuse a desired model permanently
+// with no way to say so here: admission is once per desired value and the
+// applied flag is set BEFORE the attempt, so a refusal was never retried
+// and was recorded for the control plane only. Without this the wait
+// would sit out a wizard's eight-hour residency budget saying "Preparing
+// to download…" for a download nobody was going to start.
 //
-// It doubles as the bound on the two other ways a target can name
-// something that never arrives: an id the embedded catalog cannot resolve,
-// and a leftover instruction read as live by a daemon too old to send
-// desired_stale. A var so tests can shrink it.
+// Both of those refusals are now reported — /setup/state carries the code
+// (#404) and the snapshot names the models nothing has started on (#403)
+// — and the wait answers them before it reaches this grace. What is left
+// for the grace is the honest transient: the reconciler has accepted the
+// instruction and not dispatched the pull yet, and a leftover instruction
+// read as live by a daemon too old to send desired_stale. A var so tests
+// can shrink it.
 var targetPullGrace = 5 * time.Minute
