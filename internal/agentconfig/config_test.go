@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -802,32 +803,63 @@ func TestPhase6Fields_Flags(t *testing.T) {
 
 func TestResolvedOllamaPort(t *testing.T) {
 	cases := []struct {
-		name   string
-		port   int
-		source string
-		want   int
+		name string
+		port int
+		want int
 	}{
-		{"auto bundled", OllamaPortAuto, OllamaSourceBundled, DefaultOllamaBundledPort},
-		{"auto empty source is bundled", OllamaPortAuto, "", DefaultOllamaBundledPort},
-		{"auto reuse", OllamaPortAuto, OllamaSourceReuse, DefaultOllamaReusePort},
+		{"auto", OllamaPortAuto, DefaultOllamaBundledPort},
 		// Every pre-existing agent.json serialized the old shared default
-		// (11434) explicitly, so a literal 11434 under bundled is
-		// indistinguishable from "never chose a port" — it flips to the
-		// waired-owned port. "Bundled on 11434" is no longer expressible.
-		{"legacy 11434 bundled flips", 11434, OllamaSourceBundled, DefaultOllamaBundledPort},
-		{"legacy 11434 empty source flips", 11434, "", DefaultOllamaBundledPort},
-		{"11434 reuse kept", 11434, OllamaSourceReuse, DefaultOllamaReusePort},
-		{"explicit custom bundled kept", 8434, OllamaSourceBundled, 8434},
-		{"explicit custom reuse kept", 21434, OllamaSourceReuse, 21434},
+		// (11434) explicitly, so a literal 11434 is indistinguishable from
+		// "never chose a port" — it flips to the waired-owned port.
+		// "The engine on 11434" is no longer expressible, which is what
+		// keeps a pre-#489 file off a user's own ollama.
+		{"legacy 11434 flips", 11434, DefaultOllamaBundledPort},
+		{"explicit custom kept", 8434, 8434},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := InferenceConfig{OllamaPort: tc.port, OllamaSource: tc.source}
+			c := InferenceConfig{OllamaPort: tc.port}
 			if got := c.ResolvedOllamaPort(); got != tc.want {
-				t.Errorf("ResolvedOllamaPort(port=%d, source=%q) = %d, want %d",
-					tc.port, tc.source, got, tc.want)
+				t.Errorf("ResolvedOllamaPort(port=%d) = %d, want %d", tc.port, got, tc.want)
 			}
 		})
+	}
+}
+
+// A pre-#489 agent.json carrying ollama_source: "reuse" must still LOAD —
+// the daemon may never fail to boot on a key that no longer exists — and
+// must resolve to the waired-managed engine on the waired-owned port.
+// The key itself disappears from the file on the next Save.
+func TestMergeJSON_RetiredOllamaSourceIsIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.json")
+	body := `{"inference":{"ollama_source":"reuse","ollama_port":11434}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Defaults()
+	if err := cfg.MergeJSON(path); err != nil {
+		t.Fatalf("MergeJSON with a retired ollama_source must not fail: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate after loading a retired ollama_source: %v", err)
+	}
+	if got := cfg.Inference.ResolvedOllamaPort(); got != DefaultOllamaBundledPort {
+		t.Errorf("ResolvedOllamaPort = %d, want %d (the waired-owned port, not the user's 11434)",
+			got, DefaultOllamaBundledPort)
+	}
+
+	out := filepath.Join(dir, "written.json")
+	if err := cfg.Save(out); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	written, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(written), "ollama_source") {
+		t.Errorf("Save re-emitted the retired key:\n%s", written)
 	}
 }
 
