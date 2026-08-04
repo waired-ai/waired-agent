@@ -120,6 +120,12 @@ comments, code, and chat:
   its ratifying source — an issue, decision-log entry, or owner
   comment — cited inline. No citable source → write it as a record of
   today's behaviour, not a rule.
+* A term ruling is done only when recorded where the next writer
+  looks — here, `docs-site/TRANSLATION.md` (ja mirror terms; private
+  monorepo terms go in its dev-docs glossary's deprecated-vocabulary
+  table). Dated records stay frozen — the table maps old → current.
+* Docs quote product output verbatim — a wording fix changes the
+  product string (and its docs together), never the quote alone.
 
 ## Tags / releases
 
