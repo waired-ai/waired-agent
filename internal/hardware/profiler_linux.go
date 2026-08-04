@@ -79,5 +79,9 @@ func defaultUMA(_ context.Context, p *Profile) {
 		return
 	}
 	p.UnifiedMemory = true
-	p.UsableVRAMMB = strixHaloUsableVRAMMB(amdVRAMMB, p.RAMTotalGB)
+	// Linux only gets here with a real sysfs reading, so the carve-out is
+	// always the non-zero one — but it comes from the shared helper
+	// anyway, so this file and the Windows one cannot disagree about
+	// which branch produced the budget.
+	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(amdVRAMMB, p.RAMTotalGB)
 }

@@ -387,6 +387,33 @@ type HardwareSummary struct {
 	// adds no map churn, and omitempty keeps it off the wire entirely for
 	// a host whose part is not in the table and for a pre-addition agent.
 	MemoryBandwidthSpecGBs float64 `json:"memory_bandwidth_spec_gbs,omitempty"`
+
+	// CarveOutVRAMMB is GPU memory reserved at the firmware level that
+	// RAMTotalGB above EXCLUDES. It exists so a consumer can add the two
+	// memory figures without double-counting on a host where both are
+	// reads of one physical pool — the capacity gate is now that sum
+	// (hostfit.TotalMemoryMB / hostfit.OllamaCapacityFit).
+	//
+	// Only a real reading sets it: sysfs mem_info_vram_total on Linux,
+	// the AMD driver's qwMemorySize on Windows. It is 0 wherever
+	// UsableVRAMMB is SYNTHESIZED from RAM instead of read — Apple
+	// Silicon always (iogpu.wired_limit_mb, or 75 % of RAM), and the
+	// Windows Strix Halo path when the registry value is unreadable and
+	// the same 75 % heuristic stands in. That is why this is a published
+	// quantity rather than something a consumer infers from
+	// UnifiedMemory: the synthesized case is a provenance, not a
+	// platform, and one of the two platforms producing it is not Apple.
+	//
+	// 0 therefore means "no separate pool", never "unknown, so guess" —
+	// a consumer must not fall back to adding UsableVRAMMB. A
+	// pre-addition agent sends 0 and is treated as having no carve-out,
+	// which under-counts a Strix Halo's pool and over-counts nothing.
+	//
+	// Like UnifiedMemory / UsableVRAMMB this rides the served NetworkMap:
+	// it is fixed for the life of the host (sampled once at boot), so it
+	// adds no map churn, and omitempty keeps it off the wire for every
+	// host that has no carve-out.
+	CarveOutVRAMMB int `json:"carve_out_vram_mb,omitempty"`
 }
 
 // HardwareGPUSummary identifies one GPU. Fields mirror

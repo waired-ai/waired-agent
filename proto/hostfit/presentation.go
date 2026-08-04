@@ -117,6 +117,25 @@ type Presentation struct {
 	// call this one "graphics memory".
 	RequiredResidentMB int `json:"required_resident_mb,omitempty"`
 
+	// RequiredWindowResidentMB is what the model needs to serve the
+	// coding-agent window: weights, engine overhead, and the KV cache for
+	// the whole window at the cache the tuning exports
+	// (OllamaWindowResidentMB at min(ServingWindow200k, the model's own
+	// window)).
+	//
+	// It exists because RequiredResidentMB answers a different and much
+	// smaller question — it reserves a fixed OllamaKVBudgetTokens of KV,
+	// 16,384 tokens, which is a floor for "can this run at all" and not
+	// what a coding session costs. The two differ by ~2.6 GB on
+	// qwen3.5-4b (4,915 MiB vs 7,539 MiB), and that gap is exactly how a
+	// host used to be shown "needs about 5 GB", pull the model, and then
+	// be unable to declare a window at all. This is the figure a surface
+	// must print when it tells a user what a model needs.
+	//
+	// Zero for a variant with no weight annotation, and on the vLLM path,
+	// which prices its window differently and has no equivalent yet.
+	RequiredWindowResidentMB int `json:"required_window_resident_mb,omitempty"`
+
 	// QualityTier is the maintainers' ranking of the variant this
 	// verdict describes. Higher is better; it is what the pickers order
 	// by, and it is deliberately a raw number rather than a coarse
@@ -195,6 +214,63 @@ func Project(v catalog.Variant, engine string, h Host, budgetMB int) Presentatio
 	out.EstimatedTokps = got.Estimate.TokpsEstimate
 	if out.Runnable && engine == catalog.RuntimeOllama {
 		if rec := OllamaRecommend(v, h); !rec.Fits {
+			out.NotRecommended = true
+			out.NotRecommendedReason = rec.Reason
+		}
+	}
+	return out
+}
+
+// ProjectModel is Project with the model's manifest in hand, which is
+// what the current rules need and Project's signature cannot carry
+// (proto is additive-only across published tags, so the parameter had to
+// arrive as a new entry point rather than a fourth argument).
+//
+// Two things change, and both need the manifest:
+//
+//   - Capacity is priced at the window the model would actually be given,
+//     min(ServingWindow200k, its own window), rather than assuming the
+//     coding window for a model that can never serve it.
+//   - The recommendation is "can this host declare the coding window with
+//     this model" (OllamaRecommendModel), which is a question about the
+//     pair and not about the variant alone.
+//
+// Project remains for callers that hold only a variant. It answers the
+// same shape with the pre-2026-08-03 recommendation rule, so a surface
+// still on it shows a different demotion than the machine's own picker —
+// which is the drift this package exists to prevent, and the reason
+// every in-tree caller moves to this one.
+func ProjectModel(m catalog.Manifest, v catalog.Variant, engine string, h Host, budgetMB int) Presentation {
+	out := Presentation{QualityTier: v.QualityTier}
+	var got Verdict
+	switch engine {
+	case catalog.RuntimeOllama:
+		got = OllamaCapacityFit(m, v, h)
+		// Always the CODING window, even where capacity was priced at a
+		// smaller one the host would actually serve: this is the figure a
+		// user reads as "what would this need here", and answering it with
+		// a truncated window would understate it exactly on the hosts that
+		// most need to know.
+		out.RequiredWindowResidentMB = OllamaWindowResidentMB(
+			v, OllamaEffectiveContextFloor(m), h.UnifiedMemory)
+		// Meaningless without GPU-addressable memory — see the field doc.
+		if h.HasGPU() {
+			out.RequiredResidentMB = OllamaResidentMB(v, h.UnifiedMemory)
+		}
+	case catalog.RuntimeVLLM:
+		got = VLLMFit(v, budgetMB)
+		out.RequiredResidentMB = v.MinVRAMMB
+	default:
+		return out
+	}
+	out.Runnable = got.Fits
+	out.Reason = got.Reason
+	out.NeedMB = got.NeedMB
+	out.HaveMB = got.HaveMB
+	out.Speed = SpeedCode(got.Estimate)
+	out.EstimatedTokps = got.Estimate.TokpsEstimate
+	if out.Runnable && engine == catalog.RuntimeOllama {
+		if rec := OllamaRecommendModel(m, v, h); !rec.Fits {
 			out.NotRecommended = true
 			out.NotRecommendedReason = rec.Reason
 		}

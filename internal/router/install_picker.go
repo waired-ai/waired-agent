@@ -59,42 +59,30 @@ func SelectInstallModel(in PickInput, minTier int) (above []Pick, ok bool, err e
 			above = append(above, p)
 		}
 	}
-	// The RECOMMENDATION gate may not turn a previously-working host into
-	// an under-spec one, so it is stood down when nothing clears the tier
-	// floor: giving it up restores a model that spills weights to system
-	// RAM — slower, and exactly what the host used to be given. It is not
-	// monotone in hardware (an 8 GB laptop with a 4 GB card has nothing
-	// above tier 27 resident, while the same laptop without the card
-	// installs qwen3.5-4b), and no machine may lose local inference for
-	// owning a small GPU (waired-ai/waired#988).
+	// The RECOMMENDATION gate may not turn a working host into one with no
+	// local inference, so it is stood down when nothing clears the tier
+	// floor. Since 2026-08-03 that gate asks "would this host declare the
+	// ~200k coding window with this model" (waired-ai/waired#1056
+	// decision 3), and plenty of real machines answer no for every model
+	// they can hold: an 8 GB Mac holds ~120k of qwen3.5-4b's window, an
+	// 8 GB card holds the full 200k, and the difference between those two
+	// is not the difference between having a coding assistant and having
+	// none.
 	//
-	// The #624 CONTEXT FLOOR used to be stood down the same way, one step
-	// later, and no longer is (waired#1031). The window is now a contract
-	// a node either declares or does not: a host serving a 32k window
-	// cannot answer a coding-agent session, and the wire has no way to say
-	// "I serve 32k" that a requester could route on — Claude Code resolves
-	// a session window from the model id alone, in two steps. So the
-	// concession that fall-through bought is no longer available to buy.
-	// A host with no model above the tier floor that also reaches the
-	// window is under-spec, and takes the same path as a host where
-	// nothing fits at all: it enrols, routes to peers, and runs no local
-	// engine.
+	// Standing it down is what the owner decision requires rather than
+	// what it tolerates: refusal is reserved for certain OOM
+	// (hostfit.OllamaCapacityFit), and everything softer warns and then
+	// honours the choice. The host still learns what it gave up — the
+	// verdict rides on every Pick, and #465 owns the surfaces that say so.
 	//
-	// The concession is smaller than the old comment's example suggests,
-	// but it is NOT nil, and this comment used to say it was. The
-	// 262144-native class scales down to variants an 8 GB CARD holds with
-	// a full 200k KV cache — qwen3.5-4b at 7539 MiB, which hostfit's
-	// TestOllamaWindowResidentMB_SmallHostCanDeclare200k finds by walking
-	// the shipped catalog. It does NOT scale down to an 8 GB unified-
-	// memory host: the same variant on a 6144 MiB carve-out holds ~120k,
-	// so an 8 GB Mac has nothing above the tier floor that also reaches
-	// the window, and this function calls it under-spec. That case was
-	// obscured until waired-agent#448 corrected qwen3.5-4b's KV
-	// annotation from its 2b sibling's value; the model was never holding
-	// 200k there, the manifest just said it was.
-	//
-	// What is genuinely lost regardless is the 131072-native class, which
-	// no host can serve a coding session on however large it is.
+	// The #624 floor's NATIVE half is not stood down here and must not be
+	// (waired#1031): a 32k-window model cannot answer a coding-agent
+	// session on any hardware, and the wire has no way to say "I serve
+	// 32k" that a requester could route on — Claude Code resolves a
+	// session window from the model id alone, in two steps. That half is
+	// a manifest comparison, so no machine is refused anything by it; the
+	// 131072-native class is what it costs, and that class was never
+	// servable for this workload.
 	if len(above) == 0 && !in.NoRecommendGate {
 		in.NoRecommendGate = true
 		return SelectInstallModel(in, minTier)

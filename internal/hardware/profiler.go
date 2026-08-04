@@ -63,6 +63,19 @@ type Profile struct {
 	// min(75 % of RAMTotalGB, 96 GB) per BIOS UMA / Vulkan caps).
 	UsableVRAMMB int `json:"usable_vram_mb,omitempty"`
 
+	// CarveOutVRAMMB is GPU memory reserved at the firmware level that
+	// RAMTotalGB above EXCLUDES, so a capacity rule can add the two
+	// without counting the same bytes twice (hostfit.TotalMemoryMB).
+	//
+	// Set only where UsableVRAMMB was READ rather than derived: sysfs
+	// mem_info_vram_total on Linux, the AMD driver's qwMemorySize on
+	// Windows. It stays 0 on Apple Silicon, whose figure is synthesized
+	// from RAM by the iogpu.wired_limit_mb sysctl or a 75 % fallback,
+	// and on the Windows Strix Halo path when the registry value is
+	// unreadable and that same 75 % heuristic stands in. Both of those
+	// are views INTO system RAM, and adding them would double-count.
+	CarveOutVRAMMB int `json:"carve_out_vram_mb,omitempty"`
+
 	// MemoryBandwidthSpecGBs is the published PEAK read bandwidth of the
 	// unified pool in GB/s, looked up from the chip name by
 	// UnifiedMemoryBandwidthGBs. 0 on discrete and CPU-only hosts, and on
@@ -93,6 +106,7 @@ func (p Profile) HostFit() hostfit.Host {
 		UnifiedMemory:          p.UnifiedMemory,
 		UsableVRAMMB:           p.UsableVRAMMB,
 		MemoryBandwidthSpecGBs: p.MemoryBandwidthSpecGBs,
+		CarveOutVRAMMB:         p.CarveOutVRAMMB,
 	}
 	if len(p.GPUs) > 0 {
 		h.VRAM0MB = p.GPUs[0].VRAMTotalMB

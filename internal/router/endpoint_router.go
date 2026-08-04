@@ -774,10 +774,11 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	// hard-block here: a tight fit should serve and let the engine surface a
 	// genuine OOM rather than a pre-emptive 422 (the old naive
 	// RAMTotalGB < MinRAMGB gate returned ErrHardwareInsufficient here).
-	// hostFits is UMA-aware: on unified-memory hosts it ignores the
-	// system-RAM gate and judges GPU residency, so the reason no longer
-	// mislabels Mac / Strix Halo as RAM-short.
-	if hostFits(engine, variant, s.in.Hardware) {
+	// hostFits prices the model against the machine's TOTAL memory at the
+	// window it would be given, so the reason no longer mislabels
+	// Mac / Strix Halo as RAM-short, and no longer refuses a host for a
+	// hand-authored min_ram_gb it clears in practice.
+	if hostFits(engine, manifest, variant, s.in.Hardware) {
 		reasons = append(reasons, fmt.Sprintf("hardware ok (variant min_ram=%d, host total_ram=%d)",
 			variant.MinRAMGB, s.in.Hardware.RAMTotalGB))
 	} else {

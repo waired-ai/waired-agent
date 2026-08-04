@@ -97,12 +97,19 @@ func TestSelectBundledModel(t *testing.T) {
 	})
 
 	t.Run("under-spec-tiny-fits-defers-to-caller", func(t *testing.T) {
-		// 2 GB RAM: nothing above the coding-quality floor fits, but a tiny
-		// below-floor model (min 2 GB) does. Local inference is disabled by
-		// default and UnderSpec/BelowFloorModelID are set so the caller can
-		// offer the tiny model as an opt-in; SelectBundledModel emits no
-		// generic under-spec note in this case (messaging is the caller's).
-		in := baseInputs(cpuProfile(2), manifests)
+		// 4 GB RAM: nothing above the coding-quality floor fits, but a tiny
+		// below-floor model does. Local inference is disabled by default
+		// and UnderSpec/BelowFloorModelID are set so the caller can offer
+		// the tiny model as an opt-in; SelectBundledModel emits no generic
+		// under-spec note in this case (messaging is the caller's).
+		//
+		// This case sat at 2 GB while capacity was the hand-authored
+		// min_ram_gb. It is a computation now — weights, the window's KV
+		// cache and engine overhead against RAM less the OS allowance
+		// (waired-ai/waired#1056 decision 1) — and a 2 GB machine has
+		// nothing left for a model once the OS is served, so the tiny
+		// fit lives at 4 GB. Record of today's arithmetic, not a rule.
+		in := baseInputs(cpuProfile(4), manifests)
 		in.FreeDiskBytes = fixedDisk(500)
 		sel, err := SelectBundledModel(in)
 		if err != nil {
@@ -123,9 +130,10 @@ func TestSelectBundledModel(t *testing.T) {
 	})
 
 	t.Run("nothing-fits-emits-generic-note", func(t *testing.T) {
-		// 1 GB RAM: not even the smallest tiny model (min 2 GB) fits → disable
-		// with the generic under-spec guidance emitted here.
-		in := baseInputs(cpuProfile(1), manifests)
+		// 2 GB RAM: the OS allowance leaves nothing, so not even the
+		// smallest tiny model fits → disable with the generic under-spec
+		// guidance emitted here.
+		in := baseInputs(cpuProfile(2), manifests)
 		sel, err := SelectBundledModel(in)
 		if err != nil {
 			t.Fatalf("err: %v", err)
@@ -134,7 +142,7 @@ func TestSelectBundledModel(t *testing.T) {
 			t.Errorf("under-spec host should disable local inference")
 		}
 		if sel.BelowFloorModelID != "" {
-			t.Errorf("nothing should fit a 1 GB host, got %q", sel.BelowFloorModelID)
+			t.Errorf("nothing should fit a 2 GB host, got %q", sel.BelowFloorModelID)
 		}
 		if !containsNote(sel.Notes, "gateway/relay") {
 			t.Errorf("warning should explain the node still works as gateway/relay; got %v", sel.Notes)
@@ -145,7 +153,7 @@ func TestSelectBundledModel(t *testing.T) {
 	})
 
 	t.Run("under-spec-forced-keeps-enabled", func(t *testing.T) {
-		in := baseInputs(cpuProfile(2), manifests)
+		in := baseInputs(cpuProfile(4), manifests)
 		in.Forced = true
 		sel, err := SelectBundledModel(in)
 		if err != nil {
@@ -167,7 +175,7 @@ func TestSelectBundledModel(t *testing.T) {
 	// default there is nothing to fall back to but the below-floor fit.
 	// Without this the daemon would boot inference on and pre-pull nothing.
 	t.Run("under-spec-forced-with-nothing-configured-takes-the-below-floor-fit", func(t *testing.T) {
-		in := baseInputs(cpuProfile(2), manifests)
+		in := baseInputs(cpuProfile(4), manifests)
 		in.Forced = true
 		in.Inference.BundledModelID = "" // agentconfig.Defaults()
 		sel, err := SelectBundledModel(in)
@@ -178,7 +186,7 @@ func TestSelectBundledModel(t *testing.T) {
 			t.Errorf("forced inference must stay enabled even under-spec")
 		}
 		if sel.BelowFloorModelID == "" {
-			t.Fatal("a 2 GB host should still have a below-floor fit")
+			t.Fatal("a 4 GB host should still have a below-floor fit")
 		}
 		if sel.ModelID != sel.BelowFloorModelID {
 			t.Errorf("ModelID = %q, want the below-floor fit %q", sel.ModelID, sel.BelowFloorModelID)
@@ -186,9 +194,9 @@ func TestSelectBundledModel(t *testing.T) {
 	})
 
 	t.Run("nothing-fits-forced-leaves-the-model-unset", func(t *testing.T) {
-		// 1 GB: nothing fits at any tier, so there is no honest id to
+		// 2 GB: nothing fits at any tier, so there is no honest id to
 		// invent. Forced keeps inference on; the model stays unchosen.
-		in := baseInputs(cpuProfile(1), manifests)
+		in := baseInputs(cpuProfile(2), manifests)
 		in.Forced = true
 		in.Inference.BundledModelID = ""
 		sel, err := SelectBundledModel(in)

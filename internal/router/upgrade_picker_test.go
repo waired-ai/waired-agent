@@ -235,10 +235,16 @@ func TestUpgradeCandidate_SpillBoundCapsThePrediction(t *testing.T) {
 		KVBytesPerTokenFP16: 16384,
 		Source:              catalog.VariantSource{Type: "ollama", Tag: "big:32b-a3b"},
 	}
+	// 262144 rather than the 131072 this fixture once declared: the
+	// recommendation gate now asks whether the host can declare the ~200k
+	// coding window, which a 131072-native model cannot on any hardware.
+	// With the old figure BOTH candidates were unrecommended for the same
+	// reason and the pass fell through without discriminating, which is
+	// not the layer this test is about.
 	cat := []catalog.Manifest{
-		{ModelID: "active-small", ContextLength: 131072, Capabilities: []string{"chat"},
+		{ModelID: "active-small", ContextLength: 262144, Capabilities: []string{"chat"},
 			Variants: []catalog.Variant{active}},
-		{ModelID: "candidate-big", ContextLength: 131072, Capabilities: []string{"chat"},
+		{ModelID: "candidate-big", ContextLength: 262144, Capabilities: []string{"chat"},
 			Variants: []catalog.Variant{candidate}},
 	}
 

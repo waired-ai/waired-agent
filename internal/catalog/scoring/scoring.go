@@ -1,6 +1,10 @@
 package scoring
 
-import "math"
+import (
+	"math"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
+)
 
 // weightOverhead is the +15% activation/buffer/framework-state allowance the
 // scoring report §2.4 adds on top of raw weight to estimate live VRAM.
@@ -122,14 +126,11 @@ const (
 // 1024 so the exported engine setting stays tidy and slightly conservative.
 // Returns 0 when the weights alone don't fit or any input is unknown
 // (non-positive). Callers cap the result at the manifest context_length.
+//
+// The formula moved to proto/hostfit when the window sizing became a
+// shared decision: the control plane has to reach the same answer about a
+// host as the host does (waired-ai/waired#1056 decision 3). This stays as
+// the catalog-scoring spelling of it.
 func MaxContextTokens(weightGB float64, kvBytesPerTokFP16 int, kvFactor, budgetGB float64) int {
-	if weightGB <= 0 || kvBytesPerTokFP16 <= 0 || kvFactor <= 0 || budgetGB <= 0 {
-		return 0
-	}
-	leftoverGB := budgetGB - weightGB
-	if leftoverGB <= 0 {
-		return 0
-	}
-	tokens := leftoverGB * 1e9 / (float64(kvBytesPerTokFP16) * kvFactor)
-	return int(tokens/1024) * 1024
+	return hostfit.MaxContextTokens(weightGB, kvBytesPerTokFP16, kvFactor, budgetGB)
 }

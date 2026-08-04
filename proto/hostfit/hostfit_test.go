@@ -396,16 +396,21 @@ func TestOllamaFit(t *testing.T) {
 			big, hostFromWire(t, wireCPUOnly), true, hostfit.ReasonOK,
 		},
 		{
-			"the ram gate reports first when both would fail",
-			big, hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 4096}, false, hostfit.ReasonInsufficientRAM,
+			// One gate now, on the sum of both pools, so there is one
+			// code to report: 8 GB of RAM behind a 4 GB card is 12 GB,
+			// and a 62 GB model does not fit 12 GB by any accounting.
+			"too small on both counts is one memory shortfall",
+			big, hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 4096}, false, hostfit.ReasonInsufficientMemory,
 		},
 		{"small fits a 16 GB mac", small, hostFromWire(t, wireMac16), true, hostfit.ReasonOK},
 		{
-			// UMA rejects on residency, never on the RAM gate: 16 GB of
-			// shared RAM clears MinRAMGB=96 only because the gate is
-			// skipped, and the 12 GB usable budget is the real wall.
-			"a 16 GB mac rejects the big model on residency",
-			big, hostFromWire(t, wireMac16), false, hostfit.ReasonInsufficientVRAM,
+			// A 16 GB Mac is 16 GB, and its "VRAM" figure is synthesized
+			// from that same memory rather than withheld from it, so the
+			// pool alone is the ceiling — not the 12 GB wired limit the
+			// old rule compared against (waired-ai/waired#1056 decision 1).
+			// A 62 GB model is out of reach of the pool either way.
+			"a 16 GB mac is out of memory for the big model",
+			big, hostFromWire(t, wireMac16), false, hostfit.ReasonInsufficientMemory,
 		},
 		{
 			"a variant with no declared minimum and no weight fits anything",
@@ -419,8 +424,17 @@ func TestOllamaFit(t *testing.T) {
 		},
 		{
 			// Detection failure, not a 0 GB machine.
-			"an unknown ram figure skips the ram gate",
+			"an unknown ram figure skips the gate",
 			big, hostfit.Host{GPUCount: 0}, true, hostfit.ReasonOK,
+		},
+		{
+			// A machine with 2 GB of RAM and no accelerator has nothing
+			// left once the OS is served, and that is NOT the same
+			// situation as the row above however identical the zero looks
+			// downstream.
+			"a machine too small for the OS allowance is out of memory, not unknown",
+			catalog.Variant{EstimatedWeightGB: 1.0, KVBytesPerTokenFP16: 12288},
+			hostfit.Host{RAMTotalGB: 2}, false, hostfit.ReasonInsufficientMemory,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -441,20 +455,24 @@ func TestOllamaFit(t *testing.T) {
 }
 
 // TestOllamaResident_IgnoresTheRAMGate: the residency half must answer
-// only the GPU question. A caller explaining a rejection needs to know
-// which gate bound — naming the RAM figure when the card was the wall
-// sends the operator to buy the wrong hardware.
+// only the GPU question. A caller explaining WHY a model was passed over
+// needs to know which memory bound — naming the RAM figure when the card
+// was the wall sends the operator to buy the wrong hardware.
+//
+// Capacity is the sum of both now, so a hand-authored min_ram_gb of 96
+// no longer refuses a 4.7 GB model on a 24 GB card with 8 GB of RAM
+// behind it: that machine holds it, and it holds it on the card. The
+// residency answer is unchanged and is what the deficit labels read.
 func TestOllamaResident_IgnoresTheRAMGate(t *testing.T) {
-	// Fails the RAM gate outright (needs 96, host has 8) but is small
-	// enough to live in the card.
 	v := catalog.Variant{MinRAMGB: 96, EstimatedWeightGB: 4.7, KVBytesPerTokenFP16: 28672}
 	host := hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 24564}
 
 	if got := hostfit.OllamaResident(v, host); !got.Fits {
 		t.Errorf("OllamaResident() = %+v, want a fitting verdict — the RAM gate is not its question", got)
 	}
-	if got := hostfit.OllamaFit(v, host); got.Fits || got.Reason != hostfit.ReasonInsufficientRAM {
-		t.Errorf("OllamaFit() = %+v, want the RAM shortfall", got)
+	if got := hostfit.OllamaFit(v, host); !got.Fits {
+		t.Errorf("OllamaFit() = %+v, want a fitting verdict: 6 GB of RAM plus a 24 GB card "+
+			"holds a 4.7 GB model, whatever min_ram_gb was authored at", got)
 	}
 }
 
@@ -472,17 +490,28 @@ func TestOllamaFit_ShortfallNumbers(t *testing.T) {
 		t.Errorf("vram shortfall = need %d have %d, want %d / 24564", vram.NeedMB, vram.HaveMB, want)
 	}
 
-	ram := hostfit.OllamaFit(big, hostfit.Host{RAMTotalGB: 64})
-	if ram.NeedMB != 96*1024 || ram.HaveMB != 64*1024 {
-		t.Errorf("ram shortfall = need %d have %d, want %d / %d",
-			ram.NeedMB, ram.HaveMB, 96*1024, 64*1024)
+	// The capacity shortfall is the computed requirement against the
+	// machine's total memory, NOT the hand-authored min_ram_gb against
+	// raw RAM. Those differ by more than a label: a 64 GB host is told it
+	// is 8 GB short of what this model actually needs at the window it
+	// would serve, rather than 32 GB short of a threshold somebody typed.
+	cpu := hostfit.Host{RAMTotalGB: 64}
+	ram := hostfit.OllamaFit(big, cpu)
+	if want := hostfit.OllamaWindowResidentMB(big, hostfit.ServingWindow200k, false); ram.NeedMB != want {
+		t.Errorf("capacity shortfall = need %d, want %d (the window-inclusive requirement)",
+			ram.NeedMB, want)
+	}
+	if want := cpu.TotalMemoryMB(); ram.HaveMB != want {
+		t.Errorf("capacity shortfall = have %d, want %d (total memory, net of the OS allowance)",
+			ram.HaveMB, want)
 	}
 
-	// Unified memory still rejects on residency — one pool has nowhere to
-	// spill to — so there the shortfall IS the capacity verdict.
+	// Unified memory takes the same gate against the same sum — the Mac
+	// exception is that its synthesized VRAM figure is NOT added, not
+	// that it is judged by a different rule.
 	uma := hostfit.OllamaFit(big, hostFromWire(t, wireMac16))
-	if uma.Fits || uma.Reason != hostfit.ReasonInsufficientVRAM || uma.NeedMB <= 0 {
-		t.Errorf("uma verdict = %+v, want an insufficient_vram shortfall", uma)
+	if uma.Fits || uma.Reason != hostfit.ReasonInsufficientMemory || uma.NeedMB <= 0 {
+		t.Errorf("uma verdict = %+v, want an insufficient_memory shortfall", uma)
 	}
 }
 
@@ -1212,65 +1241,36 @@ func TestBundledCatalog_TwoCardsAdmitWhatOneRefuses(t *testing.T) {
 	t.Logf("two 24 GB cards keep %d variant(s) one card excludes: %v", len(rescued), rescued)
 }
 
-// TestBundledCatalog_SmallMacPrefersSpeed is the concrete outcome the
-// estimate buys, measured against the real catalog: on a 24 GB Mac the
-// highest-tier model that FITS decodes at a fraction of the speed of a
-// lower-tier one that also fits. Capacity alone picks the slow one, and
-// that is what ships today.
-func TestBundledCatalog_SmallMacPrefersSpeed(t *testing.T) {
+// TestBundledCatalog_SmallMacIsPointedAtAWorkableModel is what the two
+// tests it replaces were reaching for, asserted against the rule that now
+// decides it.
+//
+// Those two (SmallMacPrefersSpeed and ChipTableFixesTheSmallMac) pinned
+// the #251 outcome: a 24 GB Mac's highest-tier FITTING model decodes at
+// single digits, and excluding on the part's published peak is what
+// finally moved the recommendation off it. Both halves of that have been
+// withdrawn by the 2026-08-03 owner decision — capacity is no longer
+// residency on a unified host, and NOTHING is excluded on a speed
+// estimate in stage 1 (waired-ai/waired#1056 decisions 1 and 2; speed
+// returns measured, waired-ai/waired-agent#466).
+//
+// The 24 GB Mac still ends up somewhere sensible, by a different route:
+// the recommendation asks which models this host can declare the coding
+// window with, and the slow dense 27B cannot hold 200k on an 18 GB
+// carve-out. So the answer is a model that is BOTH declarable and fast,
+// which is a stronger result than the speed exclusion produced.
+//
+// The chip table is not idle. It still decides whether a slow verdict is
+// a fact about this machine (SpeedSlow) or a guess from a population
+// constant (SpeedMayBeSlow), which is what every surface renders and what
+// #466 will rank on.
+func TestBundledCatalog_SmallMacIsPointedAtAWorkableModel(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
-	mac := hostfit.Host{RAMTotalGB: 24, UnifiedMemory: true, UsableVRAMMB: 18432, VRAM0MB: 24576}
+	mac := hostFromWire(t, wireMac24M4)
 
-	type cand struct {
-		id    string
-		tier  int
-		tokps float64
-	}
-	var byCapacity, bySpeed *cand
-	for _, m := range manifests {
-		for _, v := range m.Variants {
-			if !supports(v, catalog.RuntimeOllama) {
-				continue
-			}
-			got := hostfit.OllamaFit(v, mac)
-			if !got.Fits {
-				continue
-			}
-			c := &cand{m.ModelID, v.QualityTier, got.Estimate.TokpsEstimate}
-			if byCapacity == nil || c.tier > byCapacity.tier {
-				byCapacity = c
-			}
-			if got.Estimate.MeetsSpeedFloor && (bySpeed == nil || c.tier > bySpeed.tier) {
-				bySpeed = c
-			}
-		}
-	}
-	if byCapacity == nil || bySpeed == nil {
-		t.Fatal("a 24 GB Mac fits nothing at all; the rule is rejecting everything")
-	}
-	if byCapacity.id == bySpeed.id {
-		t.Fatalf("capacity and speed agree on %s here, so this fixture no longer "+
-			"demonstrates the problem — re-check the catalog", byCapacity.id)
-	}
-	if byCapacity.tokps >= bySpeed.tokps {
-		t.Fatalf("the capacity pick (%s, %.1f tok/s) is not slower than the speed pick (%s, %.1f tok/s)",
-			byCapacity.id, byCapacity.tokps, bySpeed.id, bySpeed.tokps)
-	}
-	t.Logf("24 GB Mac: capacity picks %s (tier %d, %.1f tok/s); speed picks %s (tier %d, %.1f tok/s)",
-		byCapacity.id, byCapacity.tier, byCapacity.tokps, bySpeed.id, bySpeed.tier, bySpeed.tokps)
-}
-
-// pickForUnifiedHost reproduces what the agent's RankModels lands on: the
-// highest quality_tier that fits, minus anything an UPPER-BOUND estimate
-// puts below the decode floor. It is the two-line core of
-// router.RankModels' narrow(), restated here because the outcome of #251
-// is a claim about that pipeline's ANSWER, and proto cannot import the
-// agent's router.
-func pickForUnifiedHost(t *testing.T, manifests []catalog.Manifest, h hostfit.Host) (string, float64) {
-	t.Helper()
 	var id string
 	var tokps float64
 	best := -1
@@ -1279,95 +1279,95 @@ func pickForUnifiedHost(t *testing.T, manifests []catalog.Manifest, h hostfit.Ho
 			if !supports(v, catalog.RuntimeOllama) {
 				continue
 			}
-			got := hostfit.OllamaFit(v, h)
-			if !got.Fits {
+			if !hostfit.OllamaCapacityFit(m, v, mac).Fits {
 				continue
 			}
-			if got.Estimate.UpperBound && !got.Estimate.MeetsSpeedFloor {
-				continue // the only exclusion the router performs on speed
+			if !hostfit.OllamaRecommendModel(m, v, mac).Fits {
+				continue
 			}
 			if v.QualityTier > best {
-				best, id, tokps = v.QualityTier, m.ModelID, got.Estimate.TokpsEstimate
+				best = v.QualityTier
+				id = m.ModelID
+				tokps = hostfit.EstimateOllamaDecode(v, mac).TokpsEstimate
 			}
 		}
 	}
-	return id, tokps
+	if id == "" {
+		t.Fatal("a 24 GB Mac is recommended nothing at all; the window predicate is " +
+			"rejecting the whole catalog on a machine that runs plenty of it")
+	}
+	if !hostfit.OllamaDeclaresWindow(manifestOf(t, manifests, id),
+		variantOf(t, manifests, id), mac, hostfit.ServingWindow200k) {
+		t.Errorf("the 24 GB Mac is pointed at %s, which it cannot declare the coding "+
+			"window with — that is the whole of what the recommendation asserts", id)
+	}
+	// The single-digit dense models are gone, which is what the speed
+	// exclusion was really buying: qwen3.6-27b reads 16.3 GB per token
+	// here and holds ~59k of window, so it fails the predicate outright.
+	if id == "qwen3.6-27b" || id == "qwen3.5-27b" {
+		t.Errorf("the 24 GB Mac is pointed at the dense 27B (%s), which decodes at "+
+			"single digits on a 120 GB/s part", id)
+	}
+	// It is NOT the fastest fitting model, and that is the accepted trade
+	// rather than an oversight: gpt-oss-20b decodes ~2.7× faster here and
+	// is 131072-native, so it truncates a coding session on any hardware
+	// (waired-ai/waired#1031, and decision 5 of waired-ai/waired#1056
+	// keeps that class out of the recommendation). Speed becomes a
+	// ranking input again when it is measured — waired-ai/waired-agent#466.
+	t.Logf("24 GB M4 Mac is recommended %s (tier %d, %.1f tok/s against a %.0f tok/s floor)",
+		id, best, tokps, hostfit.DecodeFloorTokps)
+
+	// The chip table's remaining job: an identified part makes a slow
+	// verdict a fact about the machine rather than a note.
+	dense := variantOf(t, manifests, "qwen3.6-27b")
+	unknown := hostfit.SpeedCode(hostfit.EstimateOllamaDecode(dense, hostFromWire(t, wireMac24UnknownChip)))
+	known := hostfit.SpeedCode(hostfit.EstimateOllamaDecode(dense, mac))
+	if unknown != hostfit.SpeedMayBeSlow {
+		t.Errorf("unrecognised part reports speed %q, want %q — a population constant "+
+			"bounds nothing and may only annotate", unknown, hostfit.SpeedMayBeSlow)
+	}
+	if known != hostfit.SpeedSlow {
+		t.Errorf("identified M4 reports speed %q, want %q — a published peak is an upper "+
+			"bound on THIS machine", known, hostfit.SpeedSlow)
+	}
+
+	// And the over-exclusion the per-chip table exists to prevent: a
+	// larger part is not called slow for the same model.
+	maxHost := hostFromWire(t, wireMac48M4Max)
+	if got := hostfit.SpeedCode(hostfit.EstimateOllamaDecode(dense, maxHost)); got != "" {
+		t.Errorf("the dense 27B reports speed %q on a 546 GB/s M4 Max, which runs it at "+
+			"~33 tok/s; the host's own peak is not reaching the estimate", got)
+	}
 }
 
-// TestBundledCatalog_ChipTableFixesTheSmallMac is the outcome
-// waired-ai/waired-agent#251 was opened for, asserted against the real
-// bundled catalog rather than a fixture.
-//
-// #229 gave the 24 GB Mac's mis-recommendation a "may be slow" note and
-// left the recommendation in place, because the estimate rested on a
-// population constant that could not bound any particular machine. The
-// chip table replaces that constant with the part's published peak, and
-// the peak — being an upper bound on THIS host — is what licenses the
-// exclusion that finally changes the answer.
-//
-// The three rows are one claim each, and the third is the one that makes
-// the table load-bearing rather than a retuned constant: excluding on the
-// 120 GB/s fallback alone would have taken the dense 27B away from an M4
-// Max that runs it at ~33 tok/s.
-func TestBundledCatalog_ChipTableFixesTheSmallMac(t *testing.T) {
-	manifests, err := catalog.BundledManifests()
-	if err != nil {
-		t.Fatalf("BundledManifests: %v", err)
-	}
-
-	unknownID, unknownTokps := pickForUnifiedHost(t, manifests, hostFromWire(t, wireMac24UnknownChip))
-	knownID, knownTokps := pickForUnifiedHost(t, manifests, hostFromWire(t, wireMac24M4))
-	maxID, maxTokps := pickForUnifiedHost(t, manifests, hostFromWire(t, wireMac48M4Max))
-
-	// 1. Before: capacity wins and the machine is pointed at a model it
-	//    decodes at single digits. This is the shipped behaviour, retained
-	//    for any part the table does not recognise.
-	if unknownTokps >= hostfit.DecodeFloorTokps {
-		t.Errorf("the unrecognised-part 24 GB Mac picked %s at %.1f tok/s, at or above the "+
-			"%.0f floor — the fixture no longer demonstrates the problem #251 exists for",
-			unknownID, unknownTokps, hostfit.DecodeFloorTokps)
-	}
-
-	// 2. After: the same machine, now identified, is pointed at something
-	//    it can actually work in.
-	if knownTokps < hostfit.DecodeFloorTokps {
-		t.Errorf("the identified 24 GB Mac still picked %s at %.1f tok/s, below the %.0f floor",
-			knownID, knownTokps, hostfit.DecodeFloorTokps)
-	}
-	if knownID == unknownID {
-		t.Errorf("publishing the part's peak did not change the 24 GB Mac's pick (%s both ways); "+
-			"the exclusion is not reaching the recommendation", knownID)
-	}
-
-	// 3. The reason it has to be the part's figure and not a promoted
-	//    constant: a larger part keeps what the constant would refuse.
-	if maxTokps < hostfit.DecodeFloorTokps {
-		t.Errorf("the 48 GB M4 Max picked %s at %.1f tok/s, below the floor", maxID, maxTokps)
-	}
-	dense27bSurvives := false
+// manifestOf returns the bundled manifest for modelID.
+func manifestOf(t *testing.T, manifests []catalog.Manifest, modelID string) catalog.Manifest {
+	t.Helper()
 	for _, m := range manifests {
-		if m.ModelID != "qwen3.6-27b" {
+		if m.ModelID == modelID {
+			return m
+		}
+	}
+	t.Fatalf("%s is not in the bundled catalog", modelID)
+	return catalog.Manifest{}
+}
+
+// variantOf returns the first ollama variant of modelID in the bundled
+// catalog.
+func variantOf(t *testing.T, manifests []catalog.Manifest, modelID string) catalog.Variant {
+	t.Helper()
+	for _, m := range manifests {
+		if m.ModelID != modelID {
 			continue
 		}
 		for _, v := range m.Variants {
-			if !supports(v, catalog.RuntimeOllama) {
-				continue
-			}
-			e := hostfit.EstimateOllamaDecode(v, hostFromWire(t, wireMac48M4Max))
-			if e.MeetsSpeedFloor {
-				dense27bSurvives = true
+			if supports(v, catalog.RuntimeOllama) {
+				return v
 			}
 		}
 	}
-	if !dense27bSurvives {
-		t.Error("the dense 27B was excluded on a 546 GB/s M4 Max, which runs it at ~33 tok/s. " +
-			"That is the over-exclusion the per-chip table exists to prevent — check that the " +
-			"host's own peak, not BandwidthUnifiedGBs, is reaching the estimate")
-	}
-
-	t.Logf("24 GB Mac: unrecognised part picks %s (%.1f tok/s); identified as M4 picks %s (%.1f tok/s); "+
-		"48 GB M4 Max picks %s (%.1f tok/s)",
-		unknownID, unknownTokps, knownID, knownTokps, maxID, maxTokps)
+	t.Fatalf("%s is not in the bundled catalog with an ollama variant", modelID)
+	return catalog.Variant{}
 }
 
 // --- the recommendation gate (waired-ai/waired#988) --------------------

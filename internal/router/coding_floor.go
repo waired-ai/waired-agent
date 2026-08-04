@@ -10,18 +10,18 @@
 //   - Native floor (engine-independent): the manifest's own
 //     context_length must reach codingAgentNativeContextMin. Applied
 //     to auto-selection only; an explicit PreferredModelID bypasses it
-//     with a visible warning.
-//   - Host gate (ollama path): the host must serve the floor window
-//     with q8_0 KV either fully GPU-resident, or — on discrete GPUs
-//     only — within a bounded expected spill
-//     (OllamaMaxExpectedSpillFraction). A bounded-spill flagship still
-//     dominates the no-spill mid-tier fallback on both quality and
-//     speed (24 GB anchor: tier-90 spilled at 85–104 tok/s vs the
-//     tier-69 dense that fits un-spilled at ~32 tok/s), so selection
-//     keeps a generous bound; the serve tuning separately caps the
-//     spill it CREATES at OllamaIntentionalSpillCapExpected so decode
-//     stays at the coding-agent selection floor (#670/#765 — at the
-//     60 true-decode floor the cap clamps to the selection bound).
+//     with a visible warning. This is the half RankModels still narrows
+//     on, and the half a caller may not stand down.
+//   - Host gate (ollama path): whether this host would actually SERVE
+//     the floor window here. Since the 2026-08-03 owner decision that
+//     question has one answer and one implementation,
+//     hostfit.OllamaPlannedWindow — the same sizing the serve tuning
+//     exports — so "the picker says it serves 200k" and "the engine was
+//     started at 200k" cannot disagree (waired-ai/waired#1056 decision 3).
+//     It is reported on the Pick and narrowed on by the RECOMMENDATION
+//     pass, which a caller may stand down; it is no longer part of the
+//     non-standable native floor, because a host that cannot hold the
+//     window is not thereby a host that should be left without a model.
 //   - Host gate (vllm path, #675/#678): the floor window's KV (fp8 on
 //     Ada+ per #676, else fp16) plus activation-padded weights must fit
 //     the default gpu-memory-utilization budget at the auto
@@ -32,7 +32,6 @@ package router
 
 import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/catalog/scoring"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
@@ -90,41 +89,31 @@ const (
 	// machine would not serve them (waired-ai/waired#988).
 	codingAgentNativeContextMin = hostfit.NativeContextFloorTokens
 
-	// ollamaSpillCalibration maps the byte-math spill prediction to
-	// ollama's own /api/ps accounting. Single-point calibration on the
-	// anchor host: predicted 3.9% ↔ measured 13.5% (#625 report).
-	ollamaSpillCalibration = 3.0
+	// OllamaMaxExpectedSpillFraction bounds the *expected measured* spill
+	// the window sizing will deliberately create to reach the coding
+	// window: within this bound a spilled high-tier model still dominates
+	// the no-spill lower-tier alternative on both quality and speed
+	// (24 GB anchor: qwen3.6-35b-a3b mtp at 11.5 % expected decodes
+	// 85–104 tok/s vs the no-spill tier-69 dense at ~32). The anchor's
+	// 11.5 % expected passes; the corrected non-MTP tag (23.9 GB,
+	// expected ≈ 25 %) does not.
+	//
+	// The value and its derivation live in proto/hostfit now, because the
+	// control plane's wizard has to reach the same conclusion about a
+	// host as the host does (waired-ai/waired#1056 decision 3). This name
+	// stays as the agent-facing spelling.
+	OllamaMaxExpectedSpillFraction = hostfit.OllamaMaxExpectedSpillFraction
 
-	// OllamaMaxExpectedSpillFraction bounds the *expected measured*
-	// spill the SELECTION gate accepts for a variant's floor-window
-	// serviceability: within this bound a spilled high-tier model still
-	// dominates the no-spill lower-tier alternative on both quality
-	// and speed (24 GB anchor: qwen3.6-35b-a3b mtp at 11.5% expected
-	// decodes 85–104 tok/s vs the no-spill tier-69 dense at ~32), so
-	// excluding it from RankModels would produce strictly worse picks.
-	// The anchor's 11.5% expected passes; the corrected non-MTP tag
-	// (23.9 GB, expected ≈ 25%) does not.
-	OllamaMaxExpectedSpillFraction = 0.20
-
-	// OllamaIntentionalSpillCapExpected bounds the expected spill the
-	// serve tuning deliberately CREATES when widening the window toward
-	// the coding floor. Derived from the #664 A/B on the anchor host,
-	// where the spilled fraction executes on a single CPU thread:
-	// no-spill decode 158.6 tok/s, 13.4% measured spill → ~85 tok/s.
-	// Modeling 1/rate = (1-s)/158.6 + s/21.25 (the second term is the
-	// fitted effective rate of the CPU-executed share), decode stays at
-	// or above the 60 tok/s selection floor (#765) while measured spill
-	// s ≤ ~0.25, i.e. expected ≤ ~0.22 at the anchor's expected↔
-	// measured ratio (11.5% ↔ 13.4%). That exceeds the selection gate's
-	// outer bound, so the cap clamps to OllamaMaxExpectedSpillFraction:
-	// every variant the gate admits now serves its full floor window,
-	// and the tuner's trim only protects preferred-override models that
-	// bypass the gate. (At the previous 100 floor the same model gave
-	// ~0.075 and the 24 GB anchor traded window for decode.) Re-run
-	// this derivation whenever the floor or the #664 numbers change
-	// (an engine fix parallelizing the spilled phase raises the derived
-	// bound further above the clamp).
-	OllamaIntentionalSpillCapExpected = 0.20
+	// OllamaIntentionalSpillCapExpected is the same number under the name
+	// the serve tuning's warning strings use. It was derived separately —
+	// from the #664 A/B on the anchor host, where the spilled fraction
+	// executes on a single CPU thread: no-spill decode 158.6 tok/s,
+	// 13.4 % measured spill → ~85 tok/s; modelling
+	// 1/rate = (1-s)/158.6 + s/21.25 keeps decode at or above the 60
+	// tok/s selection floor while measured spill s ≤ ~0.25, i.e. expected
+	// ≤ ~0.22 — and clamps to the selection bound above. Re-run that
+	// derivation whenever the floor or the #664 numbers change.
+	OllamaIntentionalSpillCapExpected = hostfit.OllamaMaxExpectedSpillFraction
 )
 
 // MeetsNativeContextFloor reports whether the manifest's native window
@@ -138,10 +127,7 @@ func MeetsNativeContextFloor(m catalog.Manifest) bool {
 // manifest's own native window for sub-floor models reached via the
 // preferred-override bypass. Unknown manifest windows get the floor.
 func EffectiveContextFloor(m catalog.Manifest) int {
-	if m.ContextLength > 0 && m.ContextLength < CodingAgentContextFloorTokens {
-		return m.ContextLength
-	}
-	return CodingAgentContextFloorTokens
+	return hostfit.OllamaEffectiveContextFloor(m)
 }
 
 // OllamaExpectedSpillFraction predicts the /api/ps-visible spill
@@ -149,90 +135,45 @@ func EffectiveContextFloor(m catalog.Manifest) int {
 // byte-math overshoot of (weights + KV + engine overhead) over the
 // GPU budget, scaled by the measured calibration factor. 0 = no spill
 // expected; results are clamped to [0, 1].
-func OllamaExpectedSpillFraction(weightGB float64, kvBytesPerTokFP16 int, kvFactor float64, ctxTokens int, hw hardware.Profile) float64 {
-	eff := hw.OllamaVRAMBudgetMB()
-	if weightGB <= 0 || kvBytesPerTokFP16 <= 0 || kvFactor <= 0 || ctxTokens <= 0 || eff <= 0 {
-		return 0
-	}
-	const mib = float64(1 << 20)
-	budgetGB := float64(eff) * mib / 1e9
-	requiredGB := weightGB +
-		float64(kvBytesPerTokFP16)*kvFactor*float64(ctxTokens)/1e9 +
-		float64(OllamaVRAMOverheadMB(hw, weightGB))*mib/1e9
-	if requiredGB <= budgetGB {
-		return 0
-	}
-	expected := ollamaSpillCalibration * (requiredGB - budgetGB) / requiredGB
-	if expected > 1 {
-		return 1
-	}
-	return expected
+//
+// The arithmetic is hostfit's; this is the hardware.Profile-shaped door
+// into it, like every other function in this file.
+func OllamaExpectedSpillFraction(v catalog.Variant, hw hardware.Profile, kvFactor float64, ctxTokens int) float64 {
+	return hostfit.OllamaExpectedSpillFraction(v, hw.HostFit(), kvFactor, ctxTokens)
 }
 
 // OllamaServesContextFloor is the #624 host gate for the ollama path:
-// can this (manifest, variant) serve its effective floor window with
-// q8_0 KV on this host? It returns the verdict and the expected /api/ps
-// spill fraction of doing so, which callers surface either way.
+// would this host actually SERVE (m, v) at its effective floor window?
+// It returns the verdict and the expected /api/ps spill fraction of
+// doing so, which callers surface either way.
 //
-// Where there is somewhere to spill TO — CPU-only and discrete-GPU
-// hosts — the verdict is yes, and the spill fraction is the cost. On
-// UNIFIED memory it is a real gate: one pool means "spill to system RAM"
-// has no meaning, and oversubscribing the carve-out stalls the whole
-// host, so a window that does not fit is a window that must not be
-// promised.
+// It is now exactly "what would the serve tuning size here, and does it
+// reach the floor" — hostfit.OllamaPlannedWindow, the same function the
+// tuner exports from. Before, this was a second implementation of the
+// same byte math with a looser rule bolted on (discrete hosts passed
+// whatever the spill, UMA hosts were gated), and the looseness was doing
+// the work an escape hatch should do: it let a host that could not hold
+// the window still be given a model, by pretending it could.
 //
-// It used to exclude on discrete cards too, when the expected spill
-// exceeded OllamaMaxExpectedSpillFraction, and that was NOT monotone in
-// hardware. The spill fraction falls as VRAM rises, but the CPU-only arm
-// passed unconditionally at the very bottom of that range, so the middle
-// failed while both ends passed: a 32 GB host with a 2 GB card kept a
-// tier-90 model and the SAME host with a 4 GB card dropped to tier 27.
-// RankModels narrows on this gate and keeps any non-empty subset, so
-// "almost everything excluded" is obeyed while "everything excluded" is
-// ignored — which is what made the 4 GB step so much worse than the 2 GB
-// one. A capacity-shaped rule has to be monotone in hardware, and this
-// is the same correction hostfit.OllamaFit already applied to the
-// capacity gate for #229.
+// Which is why the gate MOVED rather than tightened. RankModels no
+// longer narrows the non-standable native-floor pass on this answer; it
+// narrows the RECOMMENDATION pass, which SelectInstallModel may stand
+// down before concluding a host is under-spec (waired-ai/waired#1056
+// decision 1: refusal is reserved for certain OOM). A host that cannot
+// hold 200k is now told so and given the best model it can hold, instead
+// of being told nothing and given none.
 //
-// It was survivable while SelectInstallModel stood the whole floor down
-// as its last resort. waired#1031 removed that fall-through — the window
-// is a contract now, not a preference — so the non-monotonicity became
-// load-bearing and had to go.
-//
-// Nothing is lost by it. Whether a spilling model is worth SERVING is a
-// speed question, and the two passes that own speed still answer it:
-// hostfit.OllamaRecommend refuses to preselect a model whose weights do
-// not fit the card (ReasonWeightsSpill — waired-ai/waired#986's 16 GB
-// card, and #625's judgment that the mtp tag dominates the 23.9 GB one
-// on the 24 GB anchor), and the #229 roofline still bounds decode. Both
-// improve with VRAM, so both are monotone.
+// Permissive on unknown sizing inputs, like the rest of this package.
 //
 // The budget is Profile.OllamaVRAMBudgetMB, not EffectiveVRAMMB, so a
 // multi-GPU host is priced on the pool it actually spreads layers over
-// (#264) — that shows up in the returned fraction now rather than in the
-// boolean.
+// (#264).
 func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.Profile) (bool, float64) {
-	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 {
+	plan := hostfit.OllamaPlannedWindow(m, v, hw.HostFit(), hostfit.OllamaKVFactorQ8_0, true)
+	if plan.ContextLength <= 0 {
 		return true, 0
 	}
-	if len(hw.GPUs) == 0 && !hw.UnifiedMemory {
-		return true, 0 // CPU-only: spilling to RAM is the design.
-	}
-	eff := hw.OllamaVRAMBudgetMB()
-	if eff <= 0 {
-		return true, 0
-	}
-	floorCtx := EffectiveContextFloor(m)
-	budgetMiB := eff - OllamaVRAMOverheadMB(hw, v.EstimatedWeightGB)
-	budgetGB := float64(budgetMiB) * float64(1<<20) / 1e9
-	if scoring.MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, scoring.KVFactorQ8_0, budgetGB) >= floorCtx {
-		return true, 0
-	}
-	expected := OllamaExpectedSpillFraction(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, scoring.KVFactorQ8_0, floorCtx, hw)
-	if hw.UnifiedMemory {
-		return false, expected
-	}
-	return true, expected
+	return plan.ContextLength >= EffectiveContextFloor(m), plan.ExpectedSpillFraction
 }
 
 // VLLMServesContextFloor is the #624 host gate for the vllm path: can
@@ -265,27 +206,12 @@ func VLLMServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.P
 
 // OllamaMaxContextAtSpill inverts OllamaExpectedSpillFraction: the
 // largest context window (rounded down to a multiple of 1024) whose
-// expected spill stays at or under maxExpected on this host. Used by
-// the serve tuning to size the intentional spill so decode holds the
-// selection floor when the full coding floor would spill past
-// OllamaIntentionalSpillCapExpected. Returns 0 when the inputs are
-// unknown or even a zero-token window would exceed the bound (weights
-// alone spill too far).
-func OllamaMaxContextAtSpill(weightGB float64, kvBytesPerTokFP16 int, kvFactor, maxExpected float64, hw hardware.Profile) int {
-	eff := hw.OllamaVRAMBudgetMB()
-	if weightGB <= 0 || kvBytesPerTokFP16 <= 0 || kvFactor <= 0 || eff <= 0 || maxExpected <= 0 || maxExpected >= ollamaSpillCalibration {
-		return 0
-	}
-	const mib = float64(1 << 20)
-	budgetGB := float64(eff) * mib / 1e9
-	overheadGB := float64(OllamaVRAMOverheadMB(hw, weightGB)) * mib / 1e9
-	// expected = cal × (required − budget) / required  ⇒
-	// required_max = budget / (1 − maxExpected/cal)
-	requiredMax := budgetGB / (1 - maxExpected/ollamaSpillCalibration)
-	kvGB := requiredMax - weightGB - overheadGB
-	if kvGB <= 0 {
-		return 0
-	}
-	tokens := kvGB * 1e9 / (float64(kvBytesPerTokFP16) * kvFactor)
-	return int(tokens/1024) * 1024
+// expected spill stays at or under maxExpected on this host. Returns 0
+// when the inputs are unknown or even a zero-token window would exceed
+// the bound (weights alone spill too far).
+//
+// The arithmetic is hostfit's; this is the hardware.Profile-shaped door
+// into it.
+func OllamaMaxContextAtSpill(v catalog.Variant, hw hardware.Profile, kvFactor, maxExpected float64) int {
+	return hostfit.OllamaMaxContextAtSpill(v, hw.HostFit(), kvFactor, maxExpected)
 }

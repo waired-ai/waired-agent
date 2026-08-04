@@ -192,29 +192,44 @@ func TestUMABudgetGovernsNotRAM(t *testing.T) {
 	}
 }
 
-// TestUMANothingFitsTinyBudget documents that a sufficiently small UMA budget
-// rejects the WHOLE catalog (ErrHardwareInsufficient), the genuine "nothing
-// fits" case — distinct from the 8 GB case, which does fit. The threshold
-// dropped with #424's smaller UMA overhead: the smallest resident is now
-// qwen3.5-0.8b at ~2170 MB (954 weight + 192 KV + 1024 overhead), so the
-// budget must be below that to reject everything.
-func TestUMANothingFitsTinyBudget(t *testing.T) {
+// TestUMANothingFitsTinyPool documents that a sufficiently small unified
+// host rejects the WHOLE catalog (ErrHardwareInsufficient), the genuine
+// "nothing fits" case — distinct from the 8 GB Mac, which does fit.
+//
+// It is the POOL that decides this now, not the carve-out. Capacity is a
+// certain-OOM question against total memory (waired-ai/waired#1056
+// decision 1), and on Apple Silicon the "VRAM" figure is synthesized FROM
+// that memory rather than withheld from it — so a machine with 8 GB of
+// RAM and a 1 GB wired limit is a machine with 8 GB, running a model the
+// OS pages rather than one it cannot load. This test used to assert the
+// opposite (8 GB RAM, 1 GB budget → nothing fits), which is the
+// carve-out-as-capacity rule that decision replaced.
+//
+// 2 GB of RAM leaves nothing once the OS allowance is served, so the
+// whole catalog is genuinely out of reach.
+func TestUMANothingFitsTinyPool(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
-	// Budget below the smallest resident named above. It used to say
-	// qwen2.5-coder-0.5b (~1.7 GB resident at 32k) — already contradicting
-	// the doc comment four lines up, and wrong outright since #475
-	// withheld that entry from the offered catalog this reads. 1 GB is
-	// under either number, so the assertion never noticed.
-	hw := syntheticAppleUMA(8, 1024)
+	hw := syntheticAppleUMA(2, 0)
 	_, err = PickModel(PickInput{
 		Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama,
 		EngineVersion: runtime.OllamaPinnedVersion,
 	})
 	if !errors.Is(err, ErrHardwareInsufficient) {
-		t.Errorf("1 GB budget: err = %v, want ErrHardwareInsufficient", err)
+		t.Errorf("2 GB pool: err = %v, want ErrHardwareInsufficient", err)
+	}
+
+	// And the inversion this replaces, asserted the right way round: a
+	// tight wired limit on a roomy pool is a slow configuration, not an
+	// impossible one.
+	if _, err := PickModel(PickInput{
+		Catalog: manifests, Hardware: syntheticAppleUMA(8, 1024),
+		Engine: catalog.RuntimeOllama, EngineVersion: runtime.OllamaPinnedVersion,
+	}); err != nil {
+		t.Errorf("8 GB pool with a 1 GB wired limit: err = %v, want a pick — "+
+			"the pool is the capacity ceiling on Apple Silicon", err)
 	}
 }
 

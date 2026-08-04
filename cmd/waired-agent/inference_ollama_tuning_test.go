@@ -169,9 +169,19 @@ func TestComputeOllamaTuning(t *testing.T) {
 		// 0.20 cap. (At the pre-#765 0.075 cap a 23 GB fixture spilling
 		// ≈ 14.7% exercised this branch; gate-passing variants now
 		// serve the full floor, so only heavier overshoots trim.)
+		//
+		// 28 GB of RAM rather than the 64 this used to carry. The cap is
+		// no longer the last word: hostfit.OllamaPlannedWindow's rule 3
+		// will not size a window below what the same machine would reach
+		// with the card removed, and 60 GB of system RAM reaches the full
+		// floor outright. Only a host whose RAM cannot reach it either
+		// still exercises the trim, which is the case this test is for —
+		// see the sibling below for what a roomy host does now.
 		v := m.Variants[0]
 		v.EstimatedWeightGB = 23.7
-		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0")
+		hw := discrete24GB()
+		hw.RAMTotalGB = 28
+		got := computeOllamaTuning(m, v, hw, "q8_0")
 		if got.ContextLength >= 200704 || got.ContextLength <= ollamaContextFloor {
 			t.Errorf("ContextLength = %d, want a speed-capped window between %d and the floor",
 				got.ContextLength, ollamaContextFloor)
@@ -193,9 +203,18 @@ func TestComputeOllamaTuning(t *testing.T) {
 
 	t.Run("discrete-16gb-weights-exceed-budget-floors", func(t *testing.T) {
 		// mtp variant: 22 GB weights over a (16384 − 1904) MiB ≈ 15.2 GB
-		// budget — even the floor spills, so keep the floor and warn.
+		// budget — even the floor spills, so keep the engine floor and
+		// warn.
+		//
+		// 24 GB of RAM rather than 64, for the reason the sibling above
+		// gives: with 60 GB of RAM behind the card the machine would
+		// serve the full coding window from system memory with the card
+		// removed, so rule 3 has it serve that window WITH the card too.
+		// This branch is now the genuinely-cornered host — too little of
+		// either kind of memory — which is what it always meant to
+		// describe.
 		hw := hardware.Profile{
-			RAMTotalGB: 64,
+			RAMTotalGB: 24,
 			GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 16384}},
 		}
 		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
@@ -207,6 +226,52 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 		if got.NumParallel != 1 {
 			t.Errorf("NumParallel = %d, want 1", got.NumParallel)
+		}
+	})
+
+	t.Run("a-card-never-shrinks-the-window-below-the-card-less-host", func(t *testing.T) {
+		// The same 16 GB card, on a machine with enough RAM that removing
+		// the card entirely would still serve the full coding window.
+		// hostfit.OllamaPlannedWindow's rule 3: fitting a card may not
+		// cost the machine a window it would otherwise have had.
+		//
+		// It costs spill, and the figure is reported rather than hidden —
+		// the verify pass widens its tolerance to twice the planned
+		// fraction, so a plan that under-reported here would be restarted
+		// straight back down to a smaller window.
+		//
+		// Ratifying source: owner statement on waired-ai/waired#1056
+		// (2026-08-03 review, and the 2026-08-04 follow-up) that a host
+		// with a GPU must not be offered less than the same host without
+		// one, because GPU inference is the faster of the two.
+		hw := hardware.Profile{
+			RAMTotalGB: 64,
+			GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 16384}},
+		}
+		cardless := hardware.Profile{RAMTotalGB: 64}
+
+		bare := computeOllamaTuning(m, m.Variants[0], cardless, "q8_0")
+		carded := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
+		if bare.ContextLength < router.CodingAgentContextFloorTokens {
+			t.Fatalf("fixture: the card-less host serves %d, so it does not exercise "+
+				"the floor this test is about", bare.ContextLength)
+		}
+		// The coding window, not the card-less window. Rule 3 stops there
+		// on purpose: 200,704 and the card-less host's 262,144 are the
+		// same DECLARED window (hostfit.ServingWindow200k is what a
+		// requester routes on), so the extra 61k would buy local context
+		// nothing routes on at the price of more of the model sitting in
+		// system RAM. Without the card this host would answer a coding
+		// session; with it, it still must.
+		if carded.ContextLength < router.CodingAgentContextFloorTokens {
+			t.Errorf("with a 16 GB card the window is %d; with no card at all it is %d, "+
+				"which clears the ~%d coding window. Fitting a card must not cost the "+
+				"machine that window",
+				carded.ContextLength, bare.ContextLength, router.CodingAgentContextFloorTokens)
+		}
+		if carded.ExpectedSpillFraction <= 0 {
+			t.Error("the widened window is held partly in system RAM; the plan must say " +
+				"so, or the verify pass will read the measured spill as a failure")
 		}
 	})
 

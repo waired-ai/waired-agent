@@ -111,7 +111,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 
 	fits := make([]catalog.Variant, 0, len(loadable))
 	for _, v := range loadable {
-		if hostFits(engine, v, hw) {
+		if hostFits(engine, m, v, hw) {
 			fits = append(fits, v)
 		}
 	}

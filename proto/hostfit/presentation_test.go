@@ -158,14 +158,16 @@ func TestProjectOllama(t *testing.T) {
 		{
 			// Unified memory: residency IS the capacity rule, so this one
 			// does not run at all. The shortfall figures are the ones the
-			// gate compared, not the RAM threshold it skipped.
+			// gate compared: the window-inclusive requirement against the
+			// machine's total memory, not a residency comparison against
+			// the wired limit (waired-ai/waired#1056 decision 1).
 			"a 16 GB Mac cannot hold the dense 62B",
 			presDense, hostFromWire(t, wireMac16),
 			hostfit.Presentation{
 				Runnable:           false,
-				Reason:             hostfit.ReasonInsufficientVRAM,
-				NeedMB:             hostfit.OllamaResidentMB(presDense, true),
-				HaveMB:             12288,
+				Reason:             hostfit.ReasonInsufficientMemory,
+				NeedMB:             hostfit.OllamaWindowResidentMB(presDense, hostfit.ServingWindow200k, true),
+				HaveMB:             hostFromWire(t, wireMac16).TotalMemoryMB(),
 				QualityTier:        70,
 				RequiredResidentMB: hostfit.OllamaResidentMB(presDense, true),
 				Speed:              hostfit.SpeedMayBeSlow,

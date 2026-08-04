@@ -73,8 +73,8 @@ func minNonZero(values ...int) int {
 // allow larger GPU-side allocations.
 const strixHaloUMACapMB = 96 * 1024
 
-// strixHaloUsableVRAMMB computes the GPU-addressable memory budget for a
-// Strix Halo UMA host, shared by the Linux and Windows profilers.
+// strixHaloUMA computes the GPU-addressable memory budget for a Strix
+// Halo UMA host, shared by the Linux and Windows profilers.
 //
 // When the driver/sysfs reports the BIOS carve-out size (amdVRAMMB > 0)
 // that value — clamped to the BIOS UMA ceiling — is authoritative. This
@@ -89,10 +89,20 @@ const strixHaloUMACapMB = 96 * 1024
 // truly-unified host where ramTotalGB reports the whole shared pool
 // (e.g. a registry walk that failed to surface qwMemorySize). Both
 // branches are clamped to the ceiling.
-func strixHaloUsableVRAMMB(amdVRAMMB, ramTotalGB int) int {
+//
+// It returns BOTH figures because the branch it took is itself a fact
+// downstream needs. carveOutMB is non-zero only on the reading branch,
+// where the budget is memory the OS excluded from ramTotalGB and the
+// capacity gate may therefore add the two (hostfit.TotalMemoryMB). On
+// the heuristic branch the budget is a slice OF ramTotalGB, so the
+// carve-out is 0 and adding it would count the same bytes twice. One
+// function returns the pair so the two profilers cannot each decide
+// half of it and disagree.
+func strixHaloUMA(amdVRAMMB, ramTotalGB int) (usableVRAMMB, carveOutMB int) {
 	if amdVRAMMB > 0 {
-		return minNonZero(amdVRAMMB, strixHaloUMACapMB)
+		c := minNonZero(amdVRAMMB, strixHaloUMACapMB)
+		return c, c
 	}
 	heuristicMB := int(float64(ramTotalGB) * 0.75 * 1024)
-	return minNonZero(heuristicMB, strixHaloUMACapMB)
+	return minNonZero(heuristicMB, strixHaloUMACapMB), 0
 }

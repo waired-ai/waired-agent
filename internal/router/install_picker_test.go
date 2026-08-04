@@ -129,26 +129,46 @@ func TestSelectInstallModel_ErrorsSurface(t *testing.T) {
 	}
 }
 
-// TestSelectInstallModel_ASmallCardMustNotMakeAHostUnderSpec is the
-// guard on the escape hatch waired-ai/waired#988's recommendation gate
-// needs.
+// TestSelectInstallModel_ASmallCardMustNotMakeAHostUnderSpec asserts
+// that fitting a graphics card never leaves a host with no local model.
 //
-// That gate is not monotone in hardware. It asks the WEIGHTS to fit the
-// card, and a small card holds less than the system RAM behind it, so
-// the best resident model can sit below InstallQualityFloorTier while
-// the very same host with no card at all installs something well above
-// it. Left alone that turns "owns a 4 GB GPU" into "no local
-// inference" — the #229 failure mode one layer up, and the one thing
-// this rule may not cost anyone.
+// Ratifying source: the owner decision of 2026-08-03 on
+// waired-ai/waired#1056 — 「dGPU を挿して採用モデルが下がるべきではない
+// (CPU/iGPU 環境は概して遅いのだから)」— and its decision 1, which
+// reserves refusal for certain OOM. The reasoning is about hardware, not
+// fairness: GPU inference is generally faster than CPU inference, so a
+// machine that has one should be offered at least as good a model as the
+// same machine without it. waired#988 item 5's "a LOWER pick is the
+// accepted trade" is explicitly NOT permanent policy (same decision).
 //
-// Product contract: adding a graphics card never removes local
-// inference. A LOWER pick is the accepted trade (waired-ai/waired#988
-// item 5); no pick is not.
+// Two mechanisms keep it true, and both are needed:
 //
-// THE CONTRACT IS CURRENTLY BREACHED on the hosts listed in
-// knownSmallCardBreach, and this test now fences that breach instead of
-// asserting it away. See that map for what broke and why the fence is
-// shaped this way.
+//   - hostfit.OllamaPlannedWindow's rule 3 — a host's window is never
+//     sized below what it would be with the accelerator removed. Without
+//     it, an 8 GB card shrinks the sizing budget from tens of GB of
+//     system RAM to 8 GB, the carded host declares a smaller window than
+//     the card-less one, and the pick drops with it.
+//   - SelectInstallModel standing the recommendation gate down before it
+//     concludes a host has no local model.
+//
+// The test used to carry a knownSmallCardBreach fence for two hosts
+// (8 GB and 16 GB RAM with a 2 GB card) that the #229 decode floor
+// excluded at 19.96 tok/s while admitting the card-less host at 17.65 —
+// the faster machine being the one refused. That pass no longer excludes
+// (waired-ai/waired-agent#464), so the fence is gone and the sweep is
+// asserted for every host again.
+//
+// A LOWER pick is still possible and is logged, not failed. The
+// recommendation requires the weights to be GPU-resident, and a host with
+// no accelerator has nothing to be resident in and is exempt — so a
+// 32 GB machine with no card is offered a 22.6 GB mixture of experts and
+// the same machine with a 16 GB card is offered a 6.6 GB model whose
+// weights actually fit the card. Both configurations work; the second is
+// faster per token and lower tier. Closing that gap means giving the
+// CPU-only arm a real speed bound instead of the population constant it
+// rests on now, which needs a measurement (waired-ai/waired-agent#466 and
+// the install-time probe it depends on). Record of today's behaviour, not
+// a rule.
 func TestSelectInstallModel_ASmallCardMustNotMakeAHostUnderSpec(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -169,83 +189,33 @@ func TestSelectInstallModel_ASmallCardMustNotMakeAHostUnderSpec(t *testing.T) {
 	}
 
 	var exercised bool
-	breached := map[[2]int]bool{}
 	for _, ramGB := range []int{8, 16, 32, 64, 128} {
 		bare := hardware.Profile{OS: "linux", Arch: "x86_64", RAMTotalGB: ramGB}
 		bareID, bareTier, bareOK := pick(bare)
 		if !bareOK {
-			continue // under-spec without a card too; nothing to protect
+			continue // no local model without a card either; nothing to protect
 		}
 		for _, vramMB := range []int{2048, 4096, 8192, 12288, 16303, 24564} {
 			carded := bare
 			carded.GPUs = []hardware.GPU{{Vendor: "nvidia", Model: "test", VRAMTotalMB: vramMB}}
 			id, tier, ok := pick(carded)
 			if !ok {
-				host := [2]int{ramGB, vramMB}
-				if _, known := knownSmallCardBreach[host]; !known {
-					t.Errorf("RAM %d GB + %d MB card: under-spec, while the same host with no "+
-						"card installs %s (tier %d). Adding a graphics card must never remove "+
-						"local inference", ramGB, vramMB, bareID, bareTier)
-					continue
-				}
-				breached[host] = true
-				t.Logf("RAM %3d GB + %5d MB card: KNOWN BREACH — under-spec, no card installs %s "+
-					"(tier %d). Tracked in waired-ai/waired#1056", ramGB, vramMB, bareID, bareTier)
+				t.Errorf("RAM %d GB + %d MB card: no local model, while the same host with no "+
+					"card installs %s (tier %d). Adding a graphics card must never remove "+
+					"local inference", ramGB, vramMB, bareID, bareTier)
 				continue
 			}
 			if tier < bareTier {
-				// Accepted, and worth logging: the card cannot hold the
-				// bigger model's weights, so the resident smaller one is
-				// the better machine even at a lower tier.
-				t.Logf("RAM %3d GB + %5d MB card: %s (tier %d) vs %s (tier %d) with no card",
+				t.Logf("RAM %3d GB + %5d MB card: %s (tier %d) vs %s (tier %d) with no card — "+
+					"the card holds the smaller model's weights, the card-less host is exempt "+
+					"from residency (waired-ai/waired-agent#466)",
 					ramGB, vramMB, id, tier, bareID, bareTier)
 				exercised = true
 			}
-		}
-	}
-	for host, why := range knownSmallCardBreach {
-		if !breached[host] {
-			t.Errorf("RAM %d GB + %d MB card is listed in knownSmallCardBreach (%s) but now "+
-				"keeps local inference. The breach closed — delete the entry so the contract "+
-				"is asserted again for this host", host[0], host[1], why)
 		}
 	}
 	if !exercised {
 		t.Error("no host in the sweep took a lower-tier pick for owning a card, so this " +
 			"test never exercised the non-monotone case it exists to bound")
 	}
-}
-
-// knownSmallCardBreach enumerates the hosts where the contract above is
-// currently NOT honoured. Tracked in waired-ai/waired#1056.
-//
-// waired-agent#448 corrected qwen3.5-4b's kv_bytes_per_token_fp16 from
-// 12288 (its 2b sibling's value) to the 32768 its architecture derives
-// and a real engine load measures. That widened the fit-time KV
-// reservation by 320 MiB, which on a 2 GB card drops the model's
-// resident share from 0.215 to 0.116 — and the spilled-decode estimate
-// from 22.47 tok/s to 19.96 against a DecodeFloorTokps of 20.
-//
-// So the contract was never actually being honoured on these hosts. It
-// was satisfied by an under-stated input, and correcting the input made
-// that visible. Restoring the assertion by reverting the number would
-// re-hide a real defect behind a wrong manifest, which is why the fence
-// is here rather than in the catalog.
-//
-// The defect it fences is the exclusion's DIRECTION. RankModels' third
-// pass has no escape hatch, unlike the two above it, and it excludes on
-// an estimate whose bandwidth term is BandwidthSystemRAMGBs — the same
-// constant ClassCPUOnly is exempt from, because (per its own doc, and
-// #251) it is not an upper bound for a large part of the population.
-// The card-less host that keeps qwen3.5-4b here is estimated at 17.65
-// tok/s. The 2 GB-card host that loses it is estimated at 19.96. The
-// faster machine is the one excluded.
-//
-// Shaped as a fence rather than a skip so it decays on its own: a host
-// outside this map still fails, and a host inside it that starts
-// passing ALSO fails, which is what forces the entry to be deleted when
-// #1056 lands rather than left as permanent scar tissue.
-var knownSmallCardBreach = map[[2]int]string{
-	{8, 2048}:  "no card: qwen3.5-4b tier 42; with the card nothing above tier 12 survives the decode floor",
-	{16, 2048}: "no card: qwen3.5-9b tier 52; same 2 GB card, same decode-floor exclusion",
 }
