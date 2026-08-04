@@ -155,6 +155,15 @@ type VLLMAdapter struct {
 	// mirroring OllamaAdapter so the status/doctor surfaces treat both
 	// engines uniformly.
 	appliedTuning ModelTuning
+	// ensuring is non-nil while one EnsureRunning is in flight; later
+	// callers join it instead of erroring (#280) — the old hard error
+	// became a 503 runtime_unhealthy for every request that arrived
+	// during a start (ollama analogue: waired-agent#29 / #279).
+	// Guarded by mu.
+	ensuring chan struct{}
+	// ensureErr is the in-flight EnsureRunning's result, published to
+	// joiners when ensuring closes. Guarded by mu.
+	ensureErr error
 }
 
 // SetAppliedTuning records the sizing exported to the engine and (after
@@ -225,19 +234,41 @@ func (a *VLLMAdapter) Health(_ context.Context) Health {
 
 // EnsureRunning starts the vLLM subprocess (if not already running)
 // and blocks until either the engine is StateReady or the readiness
-// probe gives up.
-func (a *VLLMAdapter) EnsureRunning(ctx context.Context) error {
+// probe gives up. Already-ready returns immediately; a call that
+// arrives while another is starting joins it and returns its result.
+func (a *VLLMAdapter) EnsureRunning(ctx context.Context) (err error) {
 	a.mu.Lock()
 	if a.state.State == StateReady {
 		a.mu.Unlock()
 		return nil
 	}
-	if a.state.State == StateStarting {
+	if ch := a.ensuring; ch != nil {
+		// Join the in-flight start rather than erroring (#280). This
+		// used to be a hard error that the gateway mapped to 503
+		// runtime_unhealthy for every concurrent request (the ollama
+		// analogue was fixed the same way, waired-agent#29 / #279).
 		a.mu.Unlock()
-		return errors.New("vllm: EnsureRunning called while already starting")
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err() // the joiner's own deadline still applies
+		}
+		a.mu.Lock()
+		jerr := a.ensureErr
+		a.mu.Unlock()
+		return jerr
 	}
+	done := make(chan struct{})
+	a.ensuring = done
 	a.state = Health{State: StateStarting}
 	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.ensureErr = err
+		a.ensuring = nil
+		a.mu.Unlock()
+		close(done) // off-lock, so a woken joiner never contends with the closer
+	}()
 
 	args := a.commandArgs()
 	env := a.processEnv()
@@ -252,7 +283,7 @@ func (a *VLLMAdapter) EnsureRunning(ctx context.Context) error {
 	a.proc = proc
 	a.mu.Unlock()
 
-	if err := a.waitReady(ctx); err != nil {
+	if err := a.waitReady(ctx, proc); err != nil {
 		_ = a.stopProcess(context.Background())
 		if p := a.engineLogPath(); p != "" {
 			err = fmt.Errorf("%w (see %s)", err, p)
@@ -338,8 +369,11 @@ func (a *VLLMAdapter) processEnv() []string {
 // confirm the served-model-name is what we asked for; only then does
 // it transition to ready. The model-name check protects against the
 // rare bug where vLLM serves something other than what was requested
-// (e.g. wrong --served-model-name flag).
-func (a *VLLMAdapter) waitReady(ctx context.Context) error {
+// (e.g. wrong --served-model-name flag). The child is passed in rather
+// than read from a.proc so the leader-only access is structural — only
+// the EnsureRunning leader ever waits, and it waits on the process it
+// just spawned.
+func (a *VLLMAdapter) waitReady(ctx context.Context, proc RunningProcess) error {
 	healthURL := a.baseURL + "/health"
 	consecOK, consecFail := 0, 0
 	tick := time.NewTicker(a.cfg.HealthInterval)
@@ -365,8 +399,8 @@ func (a *VLLMAdapter) waitReady(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-a.proc.Done():
-			return startupExitError("vllm", a.engineLogPath(), a.proc.Err())
+		case <-proc.Done():
+			return startupExitError("vllm", a.engineLogPath(), proc.Err())
 		case <-tick.C:
 		}
 	}
