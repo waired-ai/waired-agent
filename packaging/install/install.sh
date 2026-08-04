@@ -1267,7 +1267,7 @@ linux_done_banner() {
     set_local_ai_note
     party="$(emo '🎉' '*')"
     if ollama_skip_requested; then
-        ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; bundled engine later: sudo waired runtimes install ollama — or bring your own and pick \"reuse\" at sign-in)"
+        ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; install the engine later: sudo waired runtimes install ollama)"
     elif $SUDO test -x /var/lib/waired/runtimes/ollama/bin/ollama; then
         ollama_status="installed (local AI engine)"
     else
@@ -1420,8 +1420,8 @@ darwin_install() {
     # The Ollama engine is NOT pre-installed here any more: `waired init`
     # owns both the decision (its "run local inference?" answers) and the
     # install (the official Ollama.app, with a live progress bar). Installing
-    # it here made init re-detect waired's own install as a "foreign" Ollama
-    # and ask a confusing reuse question about it. --skip-ollama is forwarded
+    # it here made init re-detect waired's own install as a "foreign"
+    # Ollama. --skip-ollama is forwarded
     # to init as WAIRED_NO_OLLAMA (darwin_maybe_init).
     section 'Background service'
     darwin_register_agent "$state_dir"

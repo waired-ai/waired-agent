@@ -36,9 +36,8 @@ copy), and registers a **per-user launchd LaunchAgent** via
 `waired-agent install` (no root — the agent runs in your `gui/<uid>`
 session with state under `~/Library/Application Support/waired`).
 The **Ollama** engine is installed by `waired init` itself (after you
-answer its "run local inference?" questions): a genuinely pre-existing
-Ollama can be reused, otherwise init downloads the official `Ollama.app`
-into `/Applications` — no Homebrew required.
+answer its "run local inference?" questions): it downloads the official
+`Ollama.app` into `/Applications` — no Homebrew required.
 
 The tray (`waired-tray`) is now bundled in the tarball, matching the
 Windows zip and Linux `.deb`. Set `WAIRED_NO_TRAY=1` to skip it on
@@ -267,8 +266,8 @@ Version resolution:
   compare degrades to "always offer"); `WAIRED_VERSION=vX.Y.Z` pins a
   tag. A future `latest.json` feed (#294) can replace the API source
   without changing the CLI surface.
-* **Ollama** is managed separately: an update never touches the bundled
-  engine, and a reused system Ollama is left alone.
+* **Ollama** is managed separately: an update never touches the engine
+  (`waired runtimes install ollama` does).
 
 ### In-product `waired update` + tray (#293)
 

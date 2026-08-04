@@ -130,7 +130,7 @@ script to disk.
 | `--dry-run` | `-DryRun` | | Print every privileged command without running any of them. |
 | `--yes`, `-y` | `-Yes` | | Assume yes at every prompt, including the pre-install summary. |
 | `--no-init` | `-SkipInit` | | Do **not** run `waired init` after installing. Without this, installing signs you in and sets you up in one pass. |
-| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the AI software. Use it when you already run your own Ollama. |
+| `--skip-ollama` | `-SkipOllama` | `WAIRED_NO_OLLAMA=1` | Do not install the AI software. Use it on a computer that will not run models itself — a headless or low-disk host. |
 | `--skip-claude-proxy` | `-SkipClaudeProxy` | `WAIRED_NO_CLAUDE_PROXY=1` | Leave Claude Code pointed at the Anthropic API instead of your own AI. |
 | `--mask-pii` | `-MaskPII` | `WAIRED_PII_MASK=1` | Hide your home folder, username, machine name and account email in the output, for screenshots and bug reports. Best-effort. |
 | `--log-level <level>` | `-LogLevel <level>` | `WAIRED_LOG_LEVEL` | Start the agent at this log detail: `debug`, `info` (default), `warn` or `error`. Use `debug` for pre-release debugging. Change it later without reinstalling via [`waired config log-level`](/reference/cli/#waired-config). |

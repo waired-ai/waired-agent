@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 816682860050ee95
+sourceHash: 6e0dccc5d7a18070
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -220,7 +220,8 @@ Waired は背後で再試行を続けるので、エンジンが動き出せば�
   [macOS で「AI ソフトが壊れている」と言われる](#macos-it-says-the-ai-software-is-damaged)。
   `sudo waired doctor --fix` で直ります。
 - **別の Ollama がポートを使っている。** `waired runtimes status` が見つけたバージョンを
-  表示します。終了させるか、そのまま Waired に使わせてください。
+  表示します。そのプロセスを終了するか、`agent.json` の `inference.ollama_port` を
+  空いているポートに変更します。
 - **エンジンがクラッシュを繰り返している。** 数回続くと Waired は自動再起動をやめ、
   その旨を表示します。原因に対処してから `waired inference engine start` で再開できます。
 
@@ -625,9 +626,6 @@ Windows では管理者権限の PowerShell で次を実行します。
 もう一度 `waired models ls --detail` を実行します。Windows では、マシン全体の環境変数を
 サービスに確実に反映させるには再起動が最も確実です。
 
-Waired の外で自前の Ollama を動かしている場合は、自分で `OLLAMA_IGPU_ENABLE=1` を
-設定して再起動してください。
-
 モデルが本当に収まっているかも確認してください
 （要件は[モデルカタログ](/ja/reference/model-catalog/)）。
 
@@ -807,7 +805,7 @@ Claude Code はステータス行を 1 つしか使わず、プロジェクト�
 | Linux | `journalctl -u waired-agent -e` |
 | macOS | `/Library/Logs/waired-agent.err.log`、または `sudo log show --predicate 'process == "waired-agent"' --last 10m`。このファイルは Waired が 1 MB で上限を掛け、直前の 5 世代を `waired-agent.err.log.0.gz`、`.1.gz` … として隣に残します。それより古いものはそちらを（`gzcat` で）確認してください。 |
 | Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
-| AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`）。自前の Ollama を使っている場合は `~/.ollama/logs/server.log`。 |
+| AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`）。 |
 
 ## 不具合を報告する
 
