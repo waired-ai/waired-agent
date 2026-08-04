@@ -306,11 +306,11 @@ func OllamaPlannedWindow(m catalog.Manifest, v catalog.Variant, h Host, kvFactor
 	// below can prove a window out of that. Reading the second as the
 	// first is how fitting a small card took a window away from a 128 GB
 	// machine.
-	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 ||
-		(OllamaSizingBudgetGB(h, v.EstimatedWeightGB) <= 0 && OllamaSystemRAMBudgetGB(h) <= 0) {
+	budgetGB := OllamaSizingBudgetGB(h, v.EstimatedWeightGB)
+	ramGB := OllamaSystemRAMBudgetGB(h)
+	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 || (budgetGB <= 0 && ramGB <= 0) {
 		return OllamaWindowPlan{}
 	}
-	budgetGB := OllamaSizingBudgetGB(h, v.EstimatedWeightGB)
 	maxCtx := MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, budgetGB)
 
 	capNative := func(ctx int) int {
@@ -356,7 +356,7 @@ func OllamaPlannedWindow(m catalog.Manifest, v catalog.Variant, h Host, kvFactor
 	// same sizing it just rejected and the engine is never restarted.
 	if allowSpill && discrete && plan.ContextLength < floorCtx {
 		cardless := MaxContextTokens(
-			v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, OllamaSystemRAMBudgetGB(h))
+			v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, ramGB)
 		if cardless > floorCtx {
 			cardless = floorCtx
 		}
