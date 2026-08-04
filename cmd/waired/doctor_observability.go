@@ -68,9 +68,8 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 			Detail:  "not ready — local inference is offline; mesh peers and api.anthropic.com fallback will be used",
 		}
 	}
-	// A ready engine with a version warning (bundled live != pin, or a
-	// reuse engine below the supported floor) is still a warn: waired
-	// is not in control of what answers requests.
+	// A ready engine with a version warning (live != pin) is still a
+	// warn: waired is not in control of what answers requests.
 	if a.EngineVersionWarning != "" {
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
@@ -79,8 +78,8 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 		}
 	}
 	// A ready engine whose serve tuning degraded (floored context
-	// window, f16 KV fallback, spill, untunable reuse engine) still
-	// serves — but slower or with less context than sized (#621).
+	// window, f16 KV fallback, spill) still serves — but slower or
+	// with less context than sized (#621).
 	if a.EngineTuningWarning != "" {
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,

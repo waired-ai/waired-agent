@@ -3,7 +3,6 @@ package main
 import (
 	"testing"
 
-	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
@@ -15,64 +14,53 @@ func TestEngineInstallDecision(t *testing.T) {
 		goos           string
 		elevated       bool
 		det            setup.OllamaDetection
-		source         string
 		bundledPresent bool
 		optOut         bool
 		incomplete     bool
 		sigBroken      bool
 		want           engineInstallAction
 	}{
-		// Opt-out and reuse win on every OS.
-		{"linux opt-out", "linux", true, none, agentconfig.OllamaSourceBundled, false, true, false, false, engineActionSkipOptOut},
-		{"windows opt-out", "windows", true, none, agentconfig.OllamaSourceBundled, false, true, false, false, engineActionSkipOptOut},
-		{"darwin opt-out", "darwin", false, none, agentconfig.OllamaSourceBundled, false, true, false, false, engineActionSkipOptOut},
-		{"linux reuse", "linux", true, detected, agentconfig.OllamaSourceReuse, false, false, false, false, engineActionSkipReuse},
-		{"windows reuse", "windows", true, detected, agentconfig.OllamaSourceReuse, false, false, false, false, engineActionSkipReuse},
-		{"darwin reuse", "darwin", true, detected, agentconfig.OllamaSourceReuse, false, false, false, false, engineActionSkipReuse},
-		// Even a half-installed engine is left alone once the operator has
-		// said "reuse my own": reuse is answered before we ever look at it.
-		{"windows reuse beats incomplete", "windows", true, detected, agentconfig.OllamaSourceReuse, false, false, true, false, engineActionSkipReuse},
+		// Opt-out wins on every OS.
+		{"linux opt-out", "linux", true, none, false, true, false, false, engineActionSkipOptOut},
+		{"windows opt-out", "windows", true, none, false, true, false, false, engineActionSkipOptOut},
+		{"darwin opt-out", "darwin", false, none, false, true, false, false, engineActionSkipOptOut},
 
 		// Linux: strict bundled presence; a PATH ollama does NOT count.
-		{"linux bundled present", "linux", true, none, agentconfig.OllamaSourceBundled, true, false, false, false, engineActionSkipPresent},
-		{"linux PATH ollama does not count", "linux", true, detected, agentconfig.OllamaSourceBundled, false, false, false, false, engineActionInstall},
-		{"linux missing, root", "linux", true, none, agentconfig.OllamaSourceBundled, false, false, false, false, engineActionInstall},
-		{"linux missing, not root", "linux", false, none, agentconfig.OllamaSourceBundled, false, false, false, false, engineActionSkipNotElevated},
+		{"linux bundled present", "linux", true, none, true, false, false, false, engineActionSkipPresent},
+		{"linux PATH ollama does not count", "linux", true, detected, false, false, false, false, engineActionInstall},
+		{"linux missing, root", "linux", true, none, false, false, false, false, engineActionInstall},
+		{"linux missing, not root", "linux", false, none, false, false, false, false, engineActionSkipNotElevated},
 
 		// Windows: any detected install counts; needs an elevated token.
-		{"windows detected", "windows", true, detected, agentconfig.OllamaSourceBundled, false, false, false, false, engineActionSkipPresent},
-		{"windows missing, elevated", "windows", true, none, agentconfig.OllamaSourceBundled, false, false, false, false, engineActionInstall},
-		{"windows missing, not elevated", "windows", false, none, agentconfig.OllamaSourceBundled, false, false, false, false, engineActionSkipNotElevated},
+		{"windows detected", "windows", true, detected, false, false, false, false, engineActionSkipPresent},
+		{"windows missing, elevated", "windows", true, none, false, false, false, false, engineActionInstall},
+		{"windows missing, not elevated", "windows", false, none, false, false, false, false, engineActionSkipNotElevated},
 		// #190: bits with no completion receipt are repaired, not skipped.
-		{"windows incomplete, elevated", "windows", true, detected, agentconfig.OllamaSourceBundled, false, false, true, false, engineActionRepair},
-		{"windows incomplete, not elevated", "windows", false, detected, agentconfig.OllamaSourceBundled, false, false, true, false, engineActionSkipNotElevated},
+		{"windows incomplete, elevated", "windows", true, detected, false, false, true, false, engineActionRepair},
+		{"windows incomplete, not elevated", "windows", false, detected, false, false, true, false, engineActionSkipNotElevated},
 
 		// macOS: any detected install counts; no elevation gate.
-		{"darwin detected", "darwin", false, detected, agentconfig.OllamaSourceBundled, false, false, false, false, engineActionSkipPresent},
-		{"darwin missing", "darwin", false, none, agentconfig.OllamaSourceBundled, false, false, false, false, engineActionInstall},
+		{"darwin detected", "darwin", false, detected, false, false, false, false, engineActionSkipPresent},
+		{"darwin missing", "darwin", false, none, false, false, false, false, engineActionInstall},
 		// #330: a bundle macOS refuses to run is not "present" in any useful
 		// sense. Repair (which tries the cheap #329 fix before re-downloading)
 		// rather than skip -- skipping is what let the wizard report OK forever
 		// over an engine that could never start.
-		{"darwin signature broken", "darwin", false, detected, agentconfig.OllamaSourceBundled, false, false, false, true, engineActionRepair},
+		{"darwin signature broken", "darwin", false, detected, false, false, false, true, engineActionRepair},
 		// Unelevated too: /Applications is admin-group-writable, so macOS has
 		// no elevation gate on any of its arms and repair must not invent one.
-		{"darwin signature broken, unelevated", "darwin", false, detected, agentconfig.OllamaSourceBundled, false, false, false, true, engineActionRepair},
-		{"darwin reuse beats a broken signature", "darwin", false, detected, agentconfig.OllamaSourceReuse, false, false, false, true, engineActionSkipReuse},
-		{"darwin opt-out beats a broken signature", "darwin", false, detected, agentconfig.OllamaSourceBundled, false, true, false, true, engineActionSkipOptOut},
+		{"darwin signature broken, unelevated", "darwin", false, detected, false, false, false, true, engineActionRepair},
+		{"darwin opt-out beats a broken signature", "darwin", false, detected, false, true, false, true, engineActionSkipOptOut},
 		// The fact is darwin-only (engineSignatureBroken is a constant false
 		// off darwin), but pin that the DECISION ignores it too, so a future
 		// caller cannot make Linux/Windows reinstall on a stray true.
-		{"linux ignores the signature fact", "linux", true, none, agentconfig.OllamaSourceBundled, true, false, false, true, engineActionSkipPresent},
-		{"windows ignores the signature fact", "windows", true, detected, agentconfig.OllamaSourceBundled, false, false, false, true, engineActionSkipPresent},
-
-		// Empty source (pre-#188 configs) behaves as bundled.
-		{"empty source is bundled", "windows", true, none, "", false, false, false, false, engineActionInstall},
+		{"linux ignores the signature fact", "linux", true, none, true, false, false, true, engineActionSkipPresent},
+		{"windows ignores the signature fact", "windows", true, detected, false, false, false, true, engineActionSkipPresent},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := engineInstallDecision(
-				tc.goos, tc.elevated, tc.det, tc.source,
+				tc.goos, tc.elevated, tc.det,
 				tc.bundledPresent, tc.optOut, tc.incomplete, tc.sigBroken)
 			if got != tc.want {
 				t.Errorf("engineInstallDecision(%s) = %v, want %v", tc.name, got, tc.want)

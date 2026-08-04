@@ -22,8 +22,7 @@ var installOllamaBundled = installOllamaBundledImpl
 // pinned official release tarball into <state-dir>/runtimes/ollama and
 // let waired-agent supervise it as a foreground child. No system
 // service, no systemctl — that is the whole point of the bundle model
-// (#188). Reuse of an existing/user-run Ollama is selected at
-// `waired init` instead, not here.
+// (#188). It is the only Ollama the agent will serve with (#489).
 //
 // sink, when non-nil, receives the same progress events the terminal
 // renderer draws — that is how the browser wizard gets the download it

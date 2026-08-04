@@ -318,10 +318,10 @@ type MenuModel struct {
 	// EngineToggleAction drives the hard engine power axis (#186):
 	// labelStopEngine (engine up → free VRAM/RAM) | labelStartEngine
 	// (engine stopped → restart) | "" (hidden: daemon predates engine
-	// control, or the engine is reused/not managed).
+	// control, or the engine is not managed).
 	EngineToggleAction string
 	// EngineToggleEnabled is false when the item should render but be
-	// greyed out — currently only the reuse/not-managed case, which keeps
+	// greyed out — currently only the not-managed case, which keeps
 	// the row visible (so the user understands why) instead of hiding it.
 	EngineToggleEnabled bool
 	ActiveModelLabel    string // "Model: <model_id>" or ""
@@ -1865,8 +1865,9 @@ const (
 	// Hard power axis (#186): stops/starts the engine process itself.
 	labelStopEngine  = "Stop inference engine"
 	labelStartEngine = "Start inference engine"
-	// Reuse mode (#188): the engine is the user's own process.
-	labelEngineNotManaged = "Engine reused — not managed"
+	// The engine is one waired serves through but holds no process
+	// handle for — an adopted orphan of a previous run (#489).
+	labelEngineNotManaged = "Engine not managed"
 	// Mesh sharing.
 	labelStopSharing  = "Stop sharing engine to mesh"
 	labelStartSharing = "Share engine to mesh"
@@ -1948,9 +1949,9 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 	case inf.EnginePower == "":
 		// hidden
 	case !inf.EngineManaged:
-		// Reuse mode: the engine is the user's own process, so waired
-		// can't free it. Show the row disabled so the absence is
-		// explained rather than mysterious.
+		// Adopted (#489): waired serves through the engine but holds no
+		// process handle, so it can't free its memory. Show the row
+		// disabled so the absence is explained rather than mysterious.
 		m.EngineToggleAction = labelEngineNotManaged
 		m.EngineToggleEnabled = false
 	case inf.EnginePower == "stopped":

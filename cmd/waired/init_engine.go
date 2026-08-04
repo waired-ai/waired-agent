@@ -4,16 +4,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
 // The installers used to pre-install Ollama BEFORE `waired init` ran, so
 // init's DetectOllama re-detected waired's own install as a "foreign"
-// Ollama and asked the confusing bundled-vs-reuse question about it — and
-// the ~GB engine download happened before the operator had answered "run
-// AI models here?" at all. Now the engine decision AND the install both
-// live here, inside init, right after the inference answers.
+// Ollama — and the ~GB engine download happened before the operator had
+// answered "run AI models here?" at all. Now the engine decision AND the
+// install both live here, inside init, right after the inference answers.
 
 // engineInstallAction is what ensureBundledEngine should do for one
 // concrete host state. Factored out of ensureBundledEngine so the
@@ -23,7 +21,6 @@ type engineInstallAction int
 const (
 	engineActionInstall         engineInstallAction = iota
 	engineActionSkipPresent                         // a usable engine is already there
-	engineActionSkipReuse                           // operator chose to reuse their own Ollama
 	engineActionSkipOptOut                          // WAIRED_NO_OLLAMA / --skip-ollama opt-out
 	engineActionSkipNotElevated                     // install needs admin/root and we have neither
 	engineActionRepair                              // our own bits are there but unconfigured
@@ -49,13 +46,10 @@ const (
 // would make each wrong on the other OS.
 func engineInstallDecision(
 	goos string, elevated bool, det setup.OllamaDetection,
-	source string, bundledPresent, optOut, incomplete, signatureBroken bool,
+	bundledPresent, optOut, incomplete, signatureBroken bool,
 ) engineInstallAction {
 	if optOut {
 		return engineActionSkipOptOut
-	}
-	if source == agentconfig.OllamaSourceReuse {
-		return engineActionSkipReuse
 	}
 	switch goos {
 	case "linux":
@@ -104,8 +98,7 @@ func engineInstallDecision(
 //
 // Only waired's own directory counts. A user's own Ollama — the per-user
 // OllamaSetup.exe layout under %LOCALAPPDATA%, or anything on PATH — is
-// never called incomplete, and an operator who explicitly chose to reuse
-// their own engine short-circuits above this anyway.
+// never called incomplete.
 //
 // Windows-only, and pure so the table test runs on every OS: it compares
 // Windows paths textually rather than through filepath, whose separator

@@ -9,8 +9,9 @@ import (
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
-// OllamaDetection summarises a pre-existing ollama install. Used by the
-// `waired init` bundled-vs-reuse prompt (#188) and by Deploy.
+// OllamaDetection summarises an ollama install already on this host.
+// Used by the install decision (`waired init` / the setup executor), by
+// `waired doctor`, and by Deploy.
 type OllamaDetection struct {
 	Installed bool
 	Path      string

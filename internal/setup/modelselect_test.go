@@ -25,7 +25,6 @@ func baseInputs(hw hardware.Profile, manifests []catalog.Manifest) BundledModelI
 		Manifests: manifests,
 		Inference: agentconfig.InferenceConfig{
 			BundledModelID: "qwen2.5-coder-7b-instruct",
-			OllamaSource:   agentconfig.OllamaSourceBundled,
 		},
 		StateDir:  "/var/lib/waired",
 		FloorTier: 30, // mirror router.InstallQualityFloorTier

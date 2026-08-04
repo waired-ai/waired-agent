@@ -65,7 +65,6 @@ func TestSelectBundledModel_neverOffersAnInternalModel(t *testing.T) {
 			Manifests: manifests,
 			Inference: agentconfig.InferenceConfig{
 				BundledModelID: "qwen3.5-4b",
-				OllamaSource:   agentconfig.OllamaSourceBundled,
 			},
 			StateDir:      "/var/lib/waired",
 			FloorTier:     router.InstallQualityFloorTier,
@@ -103,7 +102,6 @@ func TestSelectBundledModel_pinStillHonoursAnInternalModel(t *testing.T) {
 		Manifests: realCatalog(t),
 		Inference: agentconfig.InferenceConfig{
 			BundledModelID: internal[0],
-			OllamaSource:   agentconfig.OllamaSourceBundled,
 		},
 		StateDir:  "/var/lib/waired",
 		FloorTier: router.InstallQualityFloorTier,

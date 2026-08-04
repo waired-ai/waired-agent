@@ -2,7 +2,6 @@ package setup
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 
@@ -60,24 +59,18 @@ type BundledModelSelection struct {
 }
 
 // BundledModelInputs is the world SelectBundledModel reasons over. Every
-// side-effecting probe (hardware profile, free disk, the detected reuse
-// engine version) is passed in, so the selection itself is a pure,
-// table-testable function — matching the seam style of Deploy.
+// side-effecting probe (hardware profile, free disk) is passed in, so the
+// selection itself is a pure, table-testable function — matching the seam
+// style of Deploy.
 type BundledModelInputs struct {
 	Hardware  hardware.Profile
 	Manifests []catalog.Manifest
 
-	// Inference supplies OllamaSource, PreferredEngine, and the configured
+	// Inference supplies PreferredEngine and the configured
 	// BundledModelID used as the pin / fallback id.
 	Inference agentconfig.InferenceConfig
 
 	StateDir string
-	HomeDir  string // reuse-mode default models dir lives under ~/.ollama
-
-	// ReuseOllamaVer is the detected version of a user-provided ollama
-	// (OllamaSource=reuse); "" when unknown. Ignored in bundled mode,
-	// where the pinned bundled version is authoritative.
-	ReuseOllamaVer string
 
 	FloorTier int
 
@@ -144,9 +137,6 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 	engineVer := ""
 	if engine == catalog.RuntimeOllama {
 		engineVer = infruntime.OllamaPinnedVersion
-		if in.Inference.OllamaSource == agentconfig.OllamaSourceReuse {
-			engineVer = in.ReuseOllamaVer
-		}
 	}
 
 	above, ok, err := router.SelectInstallModel(router.PickInput{
@@ -270,27 +260,11 @@ func diskRequiredBytes(v catalog.Variant) int64 {
 }
 
 // bundledModelsDir resolves the directory the selected model would be
-// pulled into, so the disk pre-flight checks the right filesystem.
+// pulled into, so the disk pre-flight checks the right filesystem. The
+// waired-managed engine keeps its blobs under the state dir and nowhere
+// else (#489).
 func bundledModelsDir(in BundledModelInputs) string {
-	return ollamaModelsDir(in.Inference.OllamaSource, in.StateDir, in.HomeDir)
-}
-
-// ollamaModelsDir resolves where the Ollama engine stores blobs, by
-// engine source. Bundled mode: <state-dir>/runtimes/ollama/models. Reuse
-// mode: $OLLAMA_MODELS, else <home>/.ollama/models (the current user's
-// home when homeDir is empty). Shared by the install-time selector and
-// Deploy's defensive pre-pull check.
-func ollamaModelsDir(source, stateDir, homeDir string) string {
-	if source == agentconfig.OllamaSourceReuse {
-		if v := os.Getenv("OLLAMA_MODELS"); v != "" {
-			return v
-		}
-		if homeDir == "" {
-			homeDir, _ = os.UserHomeDir()
-		}
-		return filepath.Join(homeDir, ".ollama", "models")
-	}
-	return filepath.Join(stateDir, "runtimes", "ollama", "models")
+	return filepath.Join(in.StateDir, "runtimes", "ollama", "models")
 }
 
 // selectionNote renders the one-line "selected X for your hardware" note,

@@ -42,8 +42,8 @@ type AgentState struct {
 	EngineVersion        string `json:"engine_version,omitempty"`
 	EngineVersionWarning string `json:"engine_version_warning,omitempty"`
 	// EngineTuningWarning mirrors RuntimeStatus.TuningWarning (#621):
-	// a floored context window, silent f16 KV fallback, spill to
-	// system RAM, or an untunable reuse engine. Empty when the serve
+	// a floored context window, silent f16 KV fallback, or a spill to
+	// system RAM. Empty when the serve
 	// tuning applied cleanly (or on agents predating it).
 	EngineTuningWarning string `json:"engine_tuning_warning,omitempty"`
 }

@@ -238,7 +238,7 @@ func runEngineStatus(mgmt string) error {
 	case s.EnginePower == "":
 		fmt.Println("Engine power: unsupported (daemon has no engine controller)")
 	case !s.EngineManaged:
-		fmt.Printf("Engine power: %s (reused — not managed by waired; stop/start unavailable)\n", s.EnginePower)
+		fmt.Printf("Engine power: %s (not managed by waired; stop/start unavailable)\n", s.EnginePower)
 	default:
 		fmt.Printf("Engine power: %s\n", s.EnginePower)
 	}

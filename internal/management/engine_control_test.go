@@ -92,15 +92,18 @@ func TestEngineControlStopStart(t *testing.T) {
 	}
 }
 
-func TestEngineControlBorrowedIs409(t *testing.T) {
+// An engine waired holds no process handle for — since #489 that means
+// an adopted orphan — must refuse the power axis rather than pretend to
+// free memory it cannot free.
+func TestEngineControlUnmanagedIs409(t *testing.T) {
 	ec := &fakeEngineCtl{power: EnginePowerRunning, managed: false}
 	srv := New(fakeStatus{}, fakePinger{}).WithEngineControl(ec)
 	rec := postEngine(t, srv, "/waired/v1/inference/engine/stop")
 	if rec.Code != http.StatusConflict {
-		t.Fatalf("expected 409 for reuse mode, got %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 409 for an unmanaged engine, got %d body=%s", rec.Code, rec.Body.String())
 	}
 	if ec.stops != 0 {
-		t.Errorf("StopEngine should not be called in reuse mode, got %d", ec.stops)
+		t.Errorf("StopEngine should not be called for an unmanaged engine, got %d", ec.stops)
 	}
 }
 
