@@ -176,8 +176,17 @@ func (a *Adapter) EnsureRunning(parent context.Context) error {
 		return nil
 	}
 	if a.cancel != nil {
+		// The probe loop is already running and owns every state
+		// transition (including Failed→Ready self-recovery), so there
+		// is no start work to repeat and nothing to single-flight:
+		// wait for its verdict under this caller's own ctx. This used
+		// to be a hard error the gateway mapped to 503
+		// runtime_unhealthy — for every concurrent request during the
+		// Starting window, and, because cancel stays non-nil for the
+		// loop's whole life, for every request after a Ready→Failed
+		// demotion too (#280; ollama analogue waired-agent#29 / #279).
 		a.mu.Unlock()
-		return errors.New("openaicompat: EnsureRunning called while already starting")
+		return a.waitReady(parent)
 	}
 	a.state = runtime.Health{State: runtime.StateStarting}
 	probeCtx, cancel := context.WithCancel(context.Background())
@@ -297,6 +306,13 @@ func (a *Adapter) waitReady(parent context.Context) error {
 			return true, nil
 		case runtime.StateFailed:
 			return true, fmt.Errorf("openaicompat: probe failed: %s", st.LastErr)
+		case runtime.StateStopped, runtime.StateNotStarted:
+			// Stop landed while this caller was waiting; without a
+			// terminal case it would poll until its own ctx expired,
+			// and gateway request ctxs can be deadline-less (#280).
+			// NotStarted is unreachable mid-wait today (nothing resets
+			// to it) but is included so no non-Starting state can spin.
+			return true, errors.New("openaicompat: adapter stopped while waiting for readiness")
 		default:
 			return false, nil
 		}
