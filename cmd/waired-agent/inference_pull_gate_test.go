@@ -82,8 +82,17 @@ func pullGateProviderWithRunner(t *testing.T, m catalog.Manifest, runner downloa
 }
 
 // TestPullModel_SkipsGatedVariantOnUnknownEngine: with the engine
-// version unknown, the pull must land on the unfloored variant instead
-// of the mtp tag the engine may not be able to load.
+// version unknown AND unmeasurable — no live engine, no profile, no
+// binary probe wired — the pull must land on the unfloored variant
+// instead of the mtp tag the engine may not be able to load.
+//
+// Since #361 "unknown" is a much narrower state than it was: the version
+// is measured from the installed binary when nothing else knows it (see
+// TestPullModel_ProbedEngineVersionUnlocksTheFlooredVariant), and a
+// dispatch made blind anyway is revisited once the engine serves
+// (TestRunPullJob_UpgradesTheVariantOnceTheEngineReportsItsVersion).
+// What stays true is this: an unknown version never admits a floored
+// variant.
 func TestPullModel_SkipsGatedVariantOnUnknownEngine(t *testing.T) {
 	p := pullGateProvider(t, pullGateManifest(false))
 	job, err := p.PullModel(context.Background(), "dense-mtp")
@@ -100,6 +109,35 @@ func TestPullModel_SkipsGatedVariantOnUnknownEngine(t *testing.T) {
 	ms := st.Models[job.ModelID]
 	if ms.VariantID != "q4" || ms.OllamaTag != "dense:q4" {
 		t.Errorf("queued variant = %s tag=%s, want q4 / dense:q4", ms.VariantID, ms.OllamaTag)
+	}
+}
+
+// PRODUCT CONTRACT (#361): when the engine's version can be MEASURED
+// from the installed binary, the floored variant is admitted at dispatch
+// — no engine has to be serving first.
+//
+// This is the fresh-install case the issue is about, and the smaller
+// half of the fix: engineVersionOnHost (#238) has been able to answer
+// this since it stopped probing $PATH, but ollamaEngineVersion only read
+// it through the profiler's 30 s snapshot, which on a fresh install was
+// taken before the engine was installed at all.
+func TestPullModel_ProbedEngineVersionUnlocksTheFlooredVariant(t *testing.T) {
+	p := pullGateProvider(t, pullGateManifest(false))
+	p.engineVersionProbe = func(_ context.Context, engine string) (bool, string) {
+		return engine == catalog.RuntimeOllama, "0.31.1"
+	}
+
+	job, err := p.PullModel(context.Background(), "dense-mtp")
+	if err != nil {
+		t.Fatalf("PullModel: %v", err)
+	}
+	p.waitForPulls()
+
+	st, _ := p.store.Load()
+	ms := st.Models[job.ModelID]
+	if ms.VariantID != "mtp-q4" || ms.OllamaTag != "dense:mtp-q4" {
+		t.Errorf("variant = %s tag = %s, want mtp-q4 / dense:mtp-q4 — the measured 0.31.1 "+
+			"clears the 0.30.0 floor", ms.VariantID, ms.OllamaTag)
 	}
 }
 

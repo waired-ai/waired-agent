@@ -256,9 +256,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// cfg.OllamaSource is boot-fixed (effectiveCfg only overrides the
 	// preferred model), so capturing it by value here is the same
 	// assumption borrowedOllama makes below.
-	profiler := hardware.NewProfiler(cachePath,
-		hardware.WithEngineVersion(
-			engineVersionOnHost(runtime.GOOS, stateDir, cfg, hardware.EngineVersionAt)))
+	//
+	// Held as a value rather than passed inline: the provider takes the
+	// SAME resolver (below), so it can measure the version when it needs
+	// one instead of only through this profiler's 30 s snapshot — which
+	// on a fresh install predates the engine install entirely (#361).
+	engineVersionProbe := engineVersionOnHost(runtime.GOOS, stateDir, cfg, hardware.EngineVersionAt)
+	profiler := hardware.NewProfiler(cachePath, hardware.WithEngineVersion(engineVersionProbe))
 
 	// Step 5 migration runs inside Load; warm it once now so the
 	// bootstrap log records what happened.
@@ -507,6 +511,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		engine:         decision.Engine,
 		dlProgress:     newDownloadProgress(),
 		ollamaUsable:   func() bool { _, e := ollamaResolver(); return e == nil },
+		// The same measurement the profiler is built with, reachable
+		// without its cache (#361).
+		engineVersionProbe: engineVersionProbe,
 		bootPlan: engineBootstrapPlan{
 			backend:      backendPlan,
 			tuned:        ollamaTuned,
@@ -1022,6 +1029,24 @@ type agentInferenceProvider struct {
 	// a bundled binary outside PATH isn't mistaken for "no engine" (#188).
 	// nil is treated as "not usable".
 	ollamaUsable func() bool
+
+	// engineVersionProbe MEASURES an installed engine's version by
+	// executing it — the same engineVersionOnHost closure the profiler
+	// is built with (#238), held here so the answer can be taken when it
+	// is needed rather than only through the profiler's 30 s snapshot.
+	//
+	// That snapshot is what #361 was: on a fresh install it is taken
+	// BEFORE the engine is installed, so for up to 30 s afterwards the
+	// version reads unknown — and an unknown version excludes every
+	// variant carrying a MinEngineVersion floor, which is how a host
+	// that should have pulled the mtp tag pulled the plain one instead.
+	// nil (every unit fixture) degrades to the pre-#361 answer.
+	engineVersionProbe func(ctx context.Context, engine string) (bool, string)
+	// engineVerMu guards the memo below. Leaf: never held across a
+	// store.Update or an engine call — only across the probe exec.
+	engineVerMu  sync.Mutex
+	engineVerAt  time.Time
+	engineVerVal string
 
 	// Phase 7 routing signals threaded into the loopback Selector.
 	// All optional; nil keeps the pre-Phase-7 mesh-fallback
@@ -2062,20 +2087,68 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 }
 
 // ollamaEngineVersion is the serving-engine version used against
-// per-variant MinEngineVersion floors: the adapter's live
-// /api/version when the engine has been ready once, else the
-// boot-time binary probe. "" when neither is known (floored variants
-// then fail closed).
+// per-variant MinEngineVersion floors, from the cheapest authoritative
+// source available:
+//
+//  1. the adapter's live /api/version, once the engine has been ready
+//     once — this is the process that will actually load the weights;
+//  2. the profiler's snapshot, which holds the same measurement the
+//     probe below makes, already paid for;
+//  3. a fresh measurement of the installed binary.
+//
+// Step 3 exists because step 2 is a 30 s cache and a fresh install
+// takes its first snapshot BEFORE the engine is installed: for up to
+// 30 s after the binary lands the version read unknown, and unknown
+// excludes every floored variant, so the pull silently dropped to the
+// lower one and #305's dedup then pinned it there (#361).
+//
+// "" still means genuinely unknown — no live engine, no snapshot, and
+// a binary that could not be executed or did not parse. Floored
+// variants keep failing closed on it, which is the behaviour the
+// qwen3.6 mtp incident asked for.
 func (p *agentInferenceProvider) ollamaEngineVersion(ctx context.Context) string {
 	if p.ollama != nil {
 		if v := p.ollama.EngineVersion(); v != "" {
 			return v
 		}
 	}
-	if p.profiler == nil {
-		return ""
+	if p.profiler != nil {
+		if v := p.profiler.Profile(ctx).Engines.Ollama.Version; v != "" {
+			return v
+		}
 	}
-	return p.profiler.Profile(ctx).Engines.Ollama.Version
+	return p.probedOllamaVersion(ctx)
+}
+
+// engineVersionMemoTTL bounds how long a MEASURED engine version is
+// reused. Same 30 s the profiler caches its whole snapshot for: the
+// value changes only when the binary is replaced, and re-measuring is
+// an exec with a 5 s timeout.
+const engineVersionMemoTTL = 30 * time.Second
+
+// probedOllamaVersion measures the installed ollama binary, memoized.
+//
+// The lock is held ACROSS the exec on purpose: the callers that reach
+// here (Status' AvailableUpdate on every poll, the recommendation
+// surfaces, PullModel) can arrive together, and one serialized probe is
+// cheaper than a herd of concurrent ones. A negative result is memoized
+// too — a host that cannot report a version must not pay an exec per
+// caller to learn that again.
+func (p *agentInferenceProvider) probedOllamaVersion(ctx context.Context) string {
+	if p.engineVersionProbe == nil {
+		return "" // no resolver wired (unit fixtures): the pre-#361 answer
+	}
+	p.engineVerMu.Lock()
+	defer p.engineVerMu.Unlock()
+	if !p.engineVerAt.IsZero() && time.Since(p.engineVerAt) < engineVersionMemoTTL {
+		return p.engineVerVal
+	}
+	installed, v := p.engineVersionProbe(ctx, catalog.RuntimeOllama)
+	if !installed {
+		v = ""
+	}
+	p.engineVerVal, p.engineVerAt = v, time.Now()
+	return v
 }
 
 // ollamaVersionWarning derives the agent-side version warning. Bundled
@@ -2240,7 +2313,14 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 	// below — that write is precisely what a second dispatcher must not
 	// perform, since it resets a downloading model to queued and swaps the
 	// tag out from under the job already fetching it (#305b).
-	job := &pullJob{jobID: jobID, modelID: manifest.ModelID, variantID: variant.VariantID, tag: variant.Source.Tag}
+	job := &pullJob{
+		jobID: jobID, modelID: manifest.ModelID,
+		variantID: variant.VariantID, tag: variant.Source.Tag,
+		// Whether the choice above was made without knowing what the
+		// engine can load. runPullJob revisits it after the engine is
+		// serving, where the answer is always known (#361).
+		resolvedBlind: engineVersion == "",
+	}
 	if running, joined := p.beginPull(job); joined {
 		if running.tag != variant.Source.Tag {
 			// The one line that would have made the rc7 double download
@@ -2277,7 +2357,7 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 			return management.PullJob{}, err
 		}
 		p.spawnPull(manifest.ModelID, func() {
-			p.runPullJob(jobCtx, manifest.ModelID, variant.VariantID, variant.Source.Tag, jobID)
+			p.runPullJob(jobCtx, *job, manifest)
 		})
 	case catalog.SourceHuggingFace:
 		// #557: vLLM safetensors. dispatchHFPull is defined per-OS — the
@@ -2303,6 +2383,12 @@ type pullJob struct {
 	modelID   string
 	variantID string
 	tag       string
+	// resolvedBlind records that variantID/tag were chosen while the
+	// engine version was unknown, so every floored variant was excluded
+	// on no evidence. runPullJob re-resolves once the engine is serving
+	// and replaces the registry entry with a new job value; the struct
+	// itself stays immutable (#361).
+	resolvedBlind bool
 }
 
 // beginPull claims the in-flight slot for j.modelID. It returns the job
@@ -2515,6 +2601,74 @@ func pullFailureText(err error, diag, engineErr string) string {
 	return strings.Join(parts, "; ")
 }
 
+// upgradeBlindVariant re-runs variant selection for a job whose variant
+// was chosen while the engine version was unknown, and reports the
+// better variant when there is one.
+//
+// It CANNOT fail the job, and that is why the refusal path above stays
+// synchronous. An unfloored variant satisfies the gate at any version,
+// so the set of variants a KNOWN version admits is always a superset of
+// the set an unknown one admits: re-resolving can only move the choice
+// earlier in manifest order (the author's preference), never to nothing.
+// Every "leave it alone" case below is therefore a return, not an error
+// — including the one that should be unreachable.
+//
+// Known limitation: a borrowed engine (`ollama_source=reuse`) whose
+// listening server is a different build from the binary on disk is not
+// covered, because a version measured from that binary makes the choice
+// non-blind and this is skipped. Reaching it needs the borrowed server
+// to be unreachable at dispatch AND the on-disk binary to be a
+// different version; the live /api/version wins whenever it exists.
+func (p *agentInferenceProvider) upgradeBlindVariant(
+	ctx context.Context, manifest catalog.Manifest, jobID, current string,
+) (catalog.Variant, bool) {
+	engine := p.servingEngine()
+	engineVersion := p.engineVersionFor(ctx, engine)
+	if engineVersion == "" {
+		return catalog.Variant{}, false // still unknown: keep the blind choice
+	}
+	variant, pullable := router.FirstPullableVariant(manifest, engine, engineVersion)
+	if !pullable || variant.VariantID == current {
+		return catalog.Variant{}, false
+	}
+	p.logger.Info("pull upgraded the variant once the engine reported its version",
+		"model", manifest.ModelID, "was", current, "now", variant.VariantID,
+		"engine", engine, "engine_version", engineVersion, "job", jobID)
+
+	// Correct the row PullModel stamped with the blind choice, so nothing
+	// reads a tag this job is no longer fetching. Same #614 rule as that
+	// pre-flight write: a model that is Ready is serving from its on-disk
+	// blobs and must not be moved by a pull that has not finished. The
+	// variant test also drops out of a race with a concurrent mover.
+	if err := p.store.Update(func(s *catalog.State) {
+		m := s.Models[manifest.ModelID]
+		if m.State == catalog.ModelStateReady || m.VariantID != current {
+			return
+		}
+		m.VariantID = variant.VariantID
+		m.OllamaTag = variant.Source.Tag
+		m.BaseOllamaTag = "" // a derived model built from the old variant is void
+		s.Models[manifest.ModelID] = m
+	}); err != nil {
+		p.logger.Warn("recording the upgraded variant failed; the download proceeds on the new tag",
+			"model", manifest.ModelID, "err", err)
+	}
+
+	// Republish the in-flight entry so a joining dispatcher compares
+	// against the tag actually being fetched. A REPLACEMENT rather than a
+	// write-through: pullJob is immutable once published precisely so
+	// joiners can read it without holding pullMu.
+	p.pullMu.Lock()
+	if cur, ok := p.pullsInFlight[manifest.ModelID]; ok && cur != nil && cur.jobID == jobID {
+		p.pullsInFlight[manifest.ModelID] = &pullJob{
+			jobID: cur.jobID, modelID: cur.modelID,
+			variantID: variant.VariantID, tag: variant.Source.Tag,
+		}
+	}
+	p.pullMu.Unlock()
+	return variant, true
+}
+
 // runPullJob downloads one model. ctx MUST be the daemon's long-lived
 // context — PullModel dispatches on backgroundCtx(), never on a request
 // ctx (#305a: net/http cancels the handler's context the microsecond the
@@ -2525,7 +2679,15 @@ func pullFailureText(err error, diag, engineErr string) string {
 // spawn `ollama serve` through exec.CommandContext(ctx, …), so a
 // self-cancelling ctx makes a finished pull kill the engine it just
 // started (#305/R0 — a regression from #304's EnsureRunning join).
-func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, variantID, tag, jobID string) {
+//
+// job is a VALUE: the pointer PullModel published under pullMu stays
+// immutable for joining callers, and this function's own upgrade of a
+// blindly-resolved variant (#361) republishes a replacement rather than
+// writing through. manifest is carried so that upgrade can re-run the
+// selection without a second alias lookup.
+func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, manifest catalog.Manifest) {
+	modelID, jobID := job.modelID, job.jobID
+	variantID, tag := job.variantID, job.tag
 	p.recordPullState(modelID, catalog.ModelStateDownloading, "")
 
 	// Forget live progress once the pull terminates (success or failure)
@@ -2557,6 +2719,17 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, modelID, varian
 			if ensureErr := p.ollama.EnsureRunning(ctx); ensureErr != nil {
 				p.logger.Warn("engine not ready before pull", "model", modelID, "tag", tag, "err", ensureErr)
 				engineErr = ensureErr.Error()
+			}
+		}
+		// #361: the join above is the first moment the engine's version is
+		// knowable from the engine itself, and PullModel had to choose a
+		// variant before it. If that choice was made blind, take it again
+		// now — before a single byte is fetched, so the correction is free.
+		// Once per job: a later attempt's engine is the same engine.
+		if job.resolvedBlind && engineErr == "" {
+			job.resolvedBlind = false
+			if v, ok := p.upgradeBlindVariant(ctx, manifest, jobID, variantID); ok {
+				variantID, tag = v.VariantID, v.Source.Tag
 			}
 		}
 		// Fresh per attempt: attempt 1's transient must never be reported
@@ -3444,8 +3617,22 @@ func computeAvailableUpdate(ctx context.Context, store *catalog.Store, profiler 
 }
 
 func availableUpdateFromPick(engine string, mp router.Pick, state catalog.State) *management.AvailableUpdate {
+	// PreCached is about the VARIANT, not the model: computeAvailableUpdate
+	// reports an update when Active differs from the pick in EITHER, and a
+	// variant-only difference is a whole set of weights that is not on this
+	// disk. Reading only the model id made every such update claim to be
+	// already cached — so maybePreCache returned early and never fetched
+	// it, and ExpectedSwapSeconds promised 5 seconds for a multi-GB
+	// download. That is why a host which resolved its variant blind stayed
+	// on the lower one with nothing to move it (#361).
+	//
+	// A Ready row with no VariantID recorded is pre-#305 state (or a
+	// carried-over migration): treated as not cached, which costs a pull
+	// that `ollama pull` completes as a fast no-op over the existing blobs
+	// and which fills the missing field in on the way through.
 	precached := false
-	if ms, ok := state.Models[mp.Manifest.ModelID]; ok && ms.State == catalog.ModelStateReady {
+	if ms, ok := state.Models[mp.Manifest.ModelID]; ok &&
+		ms.State == catalog.ModelStateReady && ms.VariantID == mp.Variant.VariantID {
 		precached = true
 	}
 	swap := 60
