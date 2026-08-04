@@ -27,7 +27,7 @@ const (
 		`[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/etc/hostname"}}],` +
 		`"stop_reason":"tool_use"}`
 	// A structured call to an offered tool, missing the one property its
-	// schema marks required -> warn_invalid_tool_arguments.
+	// schema marks required -> fail_invalid_tool_arguments.
 	answerReadNoPath = `{"type":"message","role":"assistant","content":` +
 		`[{"type":"tool_use","id":"t1","name":"Read","input":{}}],` +
 		`"stop_reason":"tool_use"}`
@@ -75,14 +75,17 @@ func (s *classScript) handler() http.HandlerFunc {
 // FailedTrials.
 //
 // Four trials of read-file: two clean, one call the agent cannot execute
-// (warn_invalid_tool_arguments), one answer in prose (fail_no_tool_call).
-// The stored shape before per-class counts was
-// {verdict: fail_no_tool_call, trials: 4, failed: 1} — from which the
-// warning is indistinguishable from a second clean trial. That is why
-// #455 could not decide whether to promote the warning to a failure even
-// after a full catalog sweep ran with the check in place: promotion moves
-// a trial from the pass column to the failed one, and nothing recorded
-// how many trials would move.
+// (fail_invalid_tool_arguments), one answer in prose (fail_no_tool_call).
+// Everything but the tally collapses those two failures into one number:
+// the record reads {verdict: fail_no_tool_call, trials: 4, failed: 2},
+// which does not say that half the failures were a DIFFERENT defect.
+//
+// The numbers here moved with #483. Until it, the middle trial was a
+// warning, so the same run recorded failed: 1 and the class left no trace
+// at all — and that is precisely why #455 could not decide whether to
+// promote it: promotion moves trials from the pass column to the failed
+// one, and nothing recorded how many would move. The tally is what made
+// the decision possible, and it keeps the composition legible afterwards.
 func TestRun_countsEveryVerdictClassNotJustTheWorst(t *testing.T) {
 	eng := &classScript{answers: []string{
 		answerValidRead, answerReadNoPath, answerValidRead, answerProse,
@@ -105,12 +108,14 @@ func TestRun_countsEveryVerdictClassNotJustTheWorst(t *testing.T) {
 		t.Fatalf("no read-file result in %+v", rep.Results)
 	}
 
-	// The pre-existing fields still say what they always said.
+	// The pre-existing fields still say what they always said — and what
+	// they say is exactly the thing the tally has to supplement: two
+	// failures, of which they name one.
 	if got.Verdict != VerdictNoToolCall {
 		t.Errorf("verdict = %q, want %q (the worst class must still win)", got.Verdict, VerdictNoToolCall)
 	}
-	if got.Trials != 4 || got.FailedTrials != 1 {
-		t.Errorf("%d of %d failed, want 1 of 4", got.FailedTrials, got.Trials)
+	if got.Trials != 4 || got.FailedTrials != 2 {
+		t.Errorf("%d of %d failed, want 2 of 4", got.FailedTrials, got.Trials)
 	}
 
 	want := map[Verdict]int{
@@ -149,11 +154,16 @@ func TestRun_totalsAreDerivedFromTheTally(t *testing.T) {
 			wantClasses: 1,
 		},
 		{
-			name:        "two classes, neither a failure",
+			// Was "neither a failure" until #483 promoted the
+			// invalid-arguments class. The tally is unchanged by that —
+			// it counts classes, not verdicts about them — and
+			// FailedTrials follows the policy, which is the split the
+			// derivation exists to keep honest.
+			name:        "two classes, one of them a failure",
 			answers:     []string{answerValidRead, answerReadNoPath},
 			trials:      2,
 			wantFlaky:   true,
-			wantFailed:  0, // a warning is not a failure — #455, deliberately
+			wantFailed:  1,
 			wantClasses: 2,
 		},
 		{

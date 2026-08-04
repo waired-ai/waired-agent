@@ -47,6 +47,10 @@ func runAgentGrade(args []string) error {
 	sweepTargets := fs.Bool("sweep-targets", false,
 		"print `<model_id> <variant_id> <engine tag>` for every variant a "+
 			"catalog sweep should measure, and exit (scripts/dev/agentgrade-sweep.sh)")
+	recompute := fs.Bool("recompute", false,
+		"re-derive every stored grade from the per-class tallies under the "+
+			"CURRENT rules, and exit — how a change to Verdict.IsFailure or the "+
+			"severity ladder reaches the catalog without a GPU sweep")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -104,6 +108,19 @@ func runAgentGrade(args []string) error {
 
 	if *sweepTargets {
 		printSweepTargets(set, all)
+		return nil
+	}
+
+	if *recompute {
+		changed, skipped := recomputeAgentGrades(set)
+		if err := writeAgentGrades(set); err != nil {
+			return err
+		}
+		fmt.Printf("recomputed %s: %d variant(s) rewritten\n", agentGradePath, changed)
+		if skipped > 0 {
+			fmt.Printf("%d case(s) have no per-class tally and were left as measured — "+
+				"they predate the counter and cannot be re-graded without a sweep\n", skipped)
+		}
 		return nil
 	}
 
@@ -246,8 +263,16 @@ func describeClasses(counts map[string]int) string {
 	if len(counts) == 0 {
 		return "(not counted)"
 	}
+	// Rank by the CANONICAL class. A store that has not been through
+	// --recompute still holds pre-rename spellings, and an unknown class
+	// ranks at the pass end of the ladder — so a renamed failure would
+	// print last, beside the clean trials, exactly where a reader is
+	// least likely to look at it.
+	rank := func(s string) int {
+		return agentgrade.Severity(agentgrade.CanonicalVerdict(agentgrade.Verdict(s)))
+	}
 	classes := slices.SortedFunc(maps.Keys(counts), func(a, b string) int {
-		if d := agentgrade.Severity(agentgrade.Verdict(b)) - agentgrade.Severity(agentgrade.Verdict(a)); d != 0 {
+		if d := rank(b) - rank(a); d != 0 {
 			return d
 		}
 		return strings.Compare(a, b)
@@ -596,6 +621,85 @@ func resolveTag(tag string, bundled []catalog.Manifest) (string, string, error) 
 			"cannot decide which one the verdict belongs to",
 			tag, len(matches), strings.Join(matches, ", "))
 	}
+}
+
+// recomputeAgentGrades re-reads the stored per-class tallies under the
+// CURRENT grading rules and rewrites everything derived from them.
+//
+// This is what makes the tally load-bearing rather than decorative.
+// `failed`, a case's `verdict` and a variant's grade are all outputs of
+// a policy — Verdict.IsFailure and the severity ladder — that is
+// expected to change; before the tally existed the only way to apply a
+// change was to re-measure the catalog on a GPU, which meant a policy
+// question could sit undecided for as long as the hardware was busy.
+// #455 sat that way for two sweeps. Now a policy change is a code change
+// plus this command.
+//
+// It also canonicalises renamed classes. A verdict string is stored, so
+// a rename leaves old spellings behind, and an unknown class is silently
+// the most harmless thing in the package (IsFailure says no, Severity
+// returns the pass rank) — a renamed failure would stop counting with no
+// error anywhere.
+//
+// Records with no tally are left ALONE, not zeroed: they predate the
+// counter, so their `failed` is the only evidence they have, taken under
+// whatever rule was in force. Reporting how many were skipped is the
+// point — a silent partial recompute would leave the file half under one
+// policy and half under another.
+func recomputeAgentGrades(set catalog.AgentGradeSet) (changed, skipped int) {
+	for modelID, m := range set.Models {
+		for variantID, rec := range m.Variants {
+			anyFailure, touched := false, false
+			for name, c := range rec.Cases {
+				if len(c.Verdicts) == 0 {
+					skipped++
+					// Still consult the stored verdict for the grade: an
+					// uncounted case that was recorded as failing has not
+					// stopped failing just because it cannot be recounted.
+					anyFailure = anyFailure || agentgrade.Verdict(c.Verdict).IsFailure()
+					continue
+				}
+				tally := make(map[string]int, len(c.Verdicts))
+				failed, worst := 0, agentgrade.VerdictPass
+				for class, n := range c.Verdicts {
+					v := agentgrade.CanonicalVerdict(agentgrade.Verdict(class))
+					tally[string(v)] += n
+					if v.IsFailure() {
+						failed += n
+						anyFailure = true
+					}
+					if agentgrade.Severity(v) > agentgrade.Severity(worst) {
+						worst = v
+					}
+				}
+				next := catalog.CaseOutcome{
+					Verdict: string(worst), Trials: c.Trials, Failed: failed, Verdicts: tally,
+				}
+				if !sameOutcome(c, next) {
+					touched = true
+				}
+				rec.Cases[name] = next
+			}
+			grade := catalog.AgentGradePass
+			if anyFailure {
+				grade = catalog.AgentGradeFail
+			}
+			if rec.Verdict != grade {
+				rec.Verdict, touched = grade, true
+			}
+			if touched {
+				changed++
+			}
+			m.Variants[variantID] = rec
+		}
+		set.Models[modelID] = m
+	}
+	return changed, skipped
+}
+
+func sameOutcome(a, b catalog.CaseOutcome) bool {
+	return a.Verdict == b.Verdict && a.Trials == b.Trials && a.Failed == b.Failed &&
+		maps.Equal(a.Verdicts, b.Verdicts)
 }
 
 func writeAgentGrades(set catalog.AgentGradeSet) error {

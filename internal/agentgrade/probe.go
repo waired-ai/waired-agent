@@ -303,9 +303,13 @@ func Severity(v Verdict) int {
 	case VerdictNoToolCall:
 		return 3
 	case VerdictInvalidToolArguments:
-		// Above the other warning and below every failure: a call the
-		// agent cannot execute is worse than one it did not need, and
-		// still not the model-quality failure a fail_ verdict asserts.
+		// Unmoved by #483's promotion, because severity and IsFailure
+		// answer different questions: this is now a failure, and it is
+		// still the mildest one. A call with an argument the schema
+		// rejects at least tells the agent which tool the model reached
+		// for; no call at all does not. Ranking it above the remaining
+		// warning and below every other failure is what the ladder is
+		// for.
 		return 2
 	case VerdictUnpromptedToolCall:
 		return 1

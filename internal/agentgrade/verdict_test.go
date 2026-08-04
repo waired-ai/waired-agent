@@ -435,18 +435,59 @@ func TestClassifyArgumentConformance(t *testing.T) {
 	}
 }
 
-// The check must not turn a warning into a grade change: every stored
-// catalog verdict was measured before it existed, and a warn that failed
-// the grade would re-rate the file against a rule it never saw.
-func TestInvalidToolArgumentsIsNotAFailure(t *testing.T) {
-	if VerdictInvalidToolArguments.IsFailure() {
-		t.Error("warn_invalid_tool_arguments counts as a failure, so it would flip stored grades")
+// INVERTED by #483. This test previously asserted the opposite — that
+// the class must NOT be a failure — because every stored verdict predated
+// the check and a promotion would have re-graded the file against a rule
+// it never saw. #479 re-measured the catalog with the check in place and
+// counted every class, which removed both halves of that objection: the
+// records were taken under the rule, and the tally says what promoting it
+// costs (nobody reaches the retirement line).
+//
+// The severity assertions are unchanged, and that is the point of keeping
+// them here: promotion moved IsFailure and deliberately did not move the
+// ladder. A failure it is; the mildest one it remains.
+func TestInvalidToolArgumentsIsAFailure(t *testing.T) {
+	if !VerdictInvalidToolArguments.IsFailure() {
+		t.Error("a call the agent cannot execute must count as a failure (#483)")
+	}
+	if !strings.HasPrefix(string(VerdictInvalidToolArguments), "fail_") {
+		t.Errorf("a failing class must be spelled fail_*, got %q — the string is stored, "+
+			"and a record reading warn_* with a nonzero failed count cannot be read",
+			VerdictInvalidToolArguments)
 	}
 	if Severity(VerdictInvalidToolArguments) >= Severity(VerdictNoToolCall) {
-		t.Error("a warning outranks a failure in the severity ladder")
+		t.Error("bad arguments should rank below no call at all: the model at least reached " +
+			"for the right tool")
 	}
 	if Severity(VerdictInvalidToolArguments) <= Severity(VerdictUnpromptedToolCall) {
 		t.Error("an unexecutable call should outrank a merely unnecessary one")
+	}
+}
+
+// A stored verdict written before the #483 rename still has to load as
+// the class it names. An unknown class is silently the most harmless
+// thing in the package — IsFailure says no, Severity returns the pass
+// rank — so a renamed failure that is not mapped stops counting without
+// any error.
+func TestCanonicalVerdictMapsTheOldSpelling(t *testing.T) {
+	got := CanonicalVerdict("warn_invalid_tool_arguments")
+	if got != VerdictInvalidToolArguments {
+		t.Fatalf("CanonicalVerdict(old) = %q, want %q", got, VerdictInvalidToolArguments)
+	}
+	if !got.IsFailure() || Severity(got) == Severity(VerdictPass) {
+		t.Errorf("the mapped verdict did not survive as a failure: IsFailure=%v severity=%d",
+			got.IsFailure(), Severity(got))
+	}
+	// Everything current passes through untouched, including the class
+	// that is still a warning.
+	for _, v := range []Verdict{
+		VerdictPass, VerdictUnpromptedToolCall, VerdictInvalidToolArguments,
+		VerdictNoToolCall, VerdictUnknownTool, VerdictUnstructuredToolCall,
+		VerdictMalformedToolCall, VerdictError,
+	} {
+		if CanonicalVerdict(v) != v {
+			t.Errorf("CanonicalVerdict(%q) = %q, want it unchanged", v, CanonicalVerdict(v))
+		}
 	}
 }
 

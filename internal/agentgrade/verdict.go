@@ -83,16 +83,30 @@ const (
 	// model, and a call the agent cannot execute answers that as
 	// squarely as one it cannot parse.
 	//
-	// A warning rather than a failure, deliberately and provisionally.
-	// Every stored catalog verdict was measured before this check
-	// existed, so promoting it straight to a failure would re-grade the
-	// file against a rule it never saw. Its measured rate at
-	// introduction is zero — 144 turns of qwen3.5:9b-q4_K_M over both
-	// transports — which means this closes a blind spot rather than
-	// repairing an observed defect, and the rate that would justify
-	// promoting it is not yet known. Promote from #322, once a sweep has
-	// run with the check in place.
-	VerdictInvalidToolArguments Verdict = "warn_invalid_tool_arguments"
+	// A FAILURE since #483, after two conditions were met that #455 could
+	// not meet at introduction. It shipped as a warning because every
+	// stored verdict predated the check, so promoting it then would have
+	// re-graded the file against a rule it never saw; and because its
+	// measured rate at introduction was zero, so nothing said what
+	// promoting it would cost.
+	//
+	// The #479 sweep measured the whole catalog with the check in place
+	// and counted every class, which answered both. The class occurs in
+	// 13 of 51 (variant, case) pairs — real, not the zero seen at
+	// introduction — and promoting it moves NOBODY onto the retirement
+	// worklist: the worst promoted bound is granite4-350m at 38% against
+	// a line at 50%, and the worst offered one is qwen2.5-coder-3b at
+	// 23%. What it does change is the pass/fail grade, which is the point:
+	// a model that hands a coding agent a call the agent cannot execute
+	// has failed the question this package asks, and saying "pass" to the
+	// user running `waired models check-agent` was the wrong answer.
+	//
+	// Named fail_ rather than warn_ for the same reason. The string is
+	// STORED, and a record reading {"verdict": "warn_...", "failed": 13}
+	// cannot be read correctly by anyone. CanonicalVerdict maps the old
+	// spelling so a report or store written before the rename still loads
+	// as this class rather than as an unknown one.
+	VerdictInvalidToolArguments Verdict = "fail_invalid_tool_arguments"
 
 	// VerdictMalformedToolCall: the model emitted tool-call syntax the
 	// ENGINE could not parse, so the request failed upstream instead of
@@ -125,12 +139,43 @@ const (
 
 // IsFailure reports whether v is a model-quality failure. Errors are
 // not failures (see VerdictError) and warnings are not failures.
+//
+// This is the grading POLICY, and it is expected to change: it is the
+// reason CaseOutcome stores a per-class tally rather than a failure
+// count, so a change here can be applied to the catalog with
+// `catalog-tool agentgrade --recompute` instead of a GPU sweep. What
+// cannot be recovered that way is a class nobody counted, which is why
+// the tally records every class rather than the ones that currently
+// matter.
 func (v Verdict) IsFailure() bool {
 	switch v {
-	case VerdictUnstructuredToolCall, VerdictUnknownTool, VerdictNoToolCall, VerdictMalformedToolCall:
+	case VerdictUnstructuredToolCall, VerdictUnknownTool, VerdictNoToolCall,
+		VerdictMalformedToolCall, VerdictInvalidToolArguments:
 		return true
 	}
 	return false
+}
+
+// CanonicalVerdict maps a verdict spelling that has been renamed onto the
+// constant it is now called.
+//
+// Verdict strings are stored — in agentgrade.json and in every probe
+// report artifact — so a rename leaves old spellings in files that must
+// still load. Without this they would decode as an unknown class, and an
+// unknown class is silently the most harmless thing in the package:
+// IsFailure says no and Severity returns the pass rank. A renamed
+// failure would quietly stop counting.
+//
+// Applied wherever a stored verdict re-enters the system (import,
+// recompute), never at classification time — Classify only ever produces
+// current spellings.
+func CanonicalVerdict(v Verdict) Verdict {
+	switch v {
+	case "warn_invalid_tool_arguments":
+		// #483 promoted it to a failure and renamed it to match.
+		return VerdictInvalidToolArguments
+	}
+	return v
 }
 
 // IsEngineParseFailure reports whether an upstream error body shows the
