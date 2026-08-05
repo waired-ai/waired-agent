@@ -5,7 +5,7 @@ meta:
   audience: macOS 13 以降の人
   needs: ターミナルと Mac のパスワード
   time: 5 分
-sourceHash: a46efcb812e54b4c
+sourceHash: bc81c692e89109f7
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -66,6 +66,8 @@ macOS 13（Ventura）以降に対応します。この Mac で AI を動かす�
 curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
 ```
 
+あとから `sudo waired runtimes install ollama` で追加できます。
+
 ## インストールされるもの
 
 | | |
@@ -73,6 +75,11 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 | コマンド | `/usr/local/bin/waired`、`/usr/local/bin/waired-agent` |
 | 常駐サービス | システムの `launchd` デーモン（起動時から動作） |
 | 設定と状態 | `/Library/Application Support/waired` |
+| AI ソフトとモデル | `/Library/Application Support/waired` の中（モデルを動かすパソコンのみ） |
+
+Waired は AI ソフトを自分の設定と同じ場所に持ちます。アプリケーションフォルダには
+何も追加しません。この Mac にすでに Ollama が入っている場合、Waired はそれに触れず、
+使いもしません。
 
 <CardGrid>
 	<LinkCard title="サインインとセットアップ" href="/ja/getting-started/first-run/" description="次のステップ。" />
