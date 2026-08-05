@@ -31,7 +31,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
-	"github.com/waired-ai/waired-agent/internal/runtime/openaicompat"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -453,33 +452,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	puller := download.NewResolvingPuller(ollamaResolver, download.DefaultRunner{},
 		fmt.Sprintf("OLLAMA_HOST=127.0.0.1:%d", cfg.ResolvedOllamaPort()))
 
-	// Phase 5: register operator-configured external OpenAI-compat
-	// adapters. Each one becomes a separately-named entry in the
-	// registry so the router's tryExternalFallback can pick whichever
-	// matches the requested model. The probe loops are kicked off in
-	// the background — EnsureRunning blocks until first Ready, but a
-	// transiently-down endpoint must not gate agent boot, so the
-	// goroutine just logs and lets later Selector queries observe
-	// the Failed state.
-	externalAdapters := buildExternalAdapters(cfg.ExternalEndpoints, logger)
-	for _, ext := range externalAdapters {
-		registry.Register(ext)
-		// The probe loop is started lazily by EnsureRunning. Spawn
-		// one goroutine per adapter so the agent main loop doesn't
-		// block on a slow / unreachable LAN endpoint.
-		wg.Add(1)
-		go func(a *openaicompat.Adapter) {
-			defer wg.Done()
-			if err := a.EnsureRunning(ctx); err != nil {
-				logger.Warn("external openai-compat adapter not ready",
-					"name", a.Name(), "url", a.BaseURL(), "err", err)
-			} else {
-				logger.Info("external openai-compat adapter ready",
-					"name", a.Name(), "url", a.BaseURL())
-			}
-		}(ext)
-	}
-
 	provider := &agentInferenceProvider{
 		cfg:            cfg,
 		logger:         logger,
@@ -799,8 +771,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	}
 
 	// Stop the engine on shutdown so we don't leave a stray
-	// `ollama serve` process, and cancel any external adapter probe
-	// loops in parallel so their goroutines exit before the WG drain.
+	// `ollama serve` process behind.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -815,12 +786,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		if provider.vllm != nil {
 			if err := provider.vllm.Stop(stopCtx); err != nil {
 				logger.Warn("vllm stop returned error", "err", err)
-			}
-		}
-		for _, ext := range externalAdapters {
-			if err := ext.Stop(stopCtx); err != nil {
-				logger.Warn("external adapter stop returned error",
-					"name", ext.Name(), "err", err)
 			}
 		}
 	}()
@@ -869,11 +834,6 @@ func (l *localOnlySelector) buildSelector(ctx context.Context) *router.Selector 
 	// Only the shared base Inputs, nothing layered on top:
 	//   - MeshSnapshotFn stays nil — no recursion to mesh peers
 	//     (Phase 4 loop prevention);
-	//   - AllowExternal stays false — even though the registry may
-	//     contain openai-compat adapters for the loopback gateway's
-	//     use, the overlay-side Selector must NOT proxy WG-arriving
-	//     peer requests through them; that would leak the operator's
-	//     LAN endpoint and Bearer token to the mesh (Phase 5);
 	//   - the Phase 7/8/9 routing signals and the manual routing
 	//     override stay unset — an overlay-arriving peer request must
 	//     not affect this agent's in-flight bookkeeping, sticky
@@ -1692,12 +1652,11 @@ func longContextBenchFor(d *DepthBenchResult) *management.LongContextBench {
 }
 
 // hasUsableEngine reports whether at least one registered runtime can
-// actually serve. A local engine (ollama / vllm) is usable only when its
-// binary is installed — the adapter is registered unconditionally at boot
-// (see the OllamaAdapter wiring in setupInference) even when the binary is
-// missing, so "registered" alone does not imply "usable". External
-// openai-compat adapters need no local install and are always treated as
-// usable. When nothing is usable the caller reports SubsystemState
+// actually serve. Only the waired-managed engines count (ollama / vllm),
+// and only when the binary is installed — the adapter is registered
+// unconditionally at boot (see the OllamaAdapter wiring in setupInference)
+// even when the binary is missing, so "registered" alone does not imply
+// "usable". When nothing is usable the caller reports SubsystemState
 // "no_engine", which the tray / CLI surface as an "Install Ollama" prompt.
 // inferenceSubsystemFacts is everything the subsystem_state answer
 // depends on, read once so the decision itself is a pure function of
@@ -1825,10 +1784,6 @@ func hasUsableEngine(reg *infruntime.Registry, hw hardware.Profile, ollamaUsable
 			if hw.Engines.VLLM.Installed {
 				return true
 			}
-		default:
-			// External (e.g. operator-configured openai-compat) adapter:
-			// no local binary to install, so its mere registration counts.
-			return true
 		}
 	}
 	return false
@@ -3292,10 +3247,6 @@ func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref sta
 	// re-applying the rule here would let a serving node veto work it had
 	// just been asked to do.
 	in.LocalContextWindow = p.DeclaredContextWindow
-	// Phase 5: the loopback Selector may fall back through
-	// registered openai-compat adapters before consulting the
-	// mesh. localOnlySelector pins this false for overlay traffic.
-	in.AllowExternal = true
 	// Phase 7 routing signals — all four are nil-safe inside
 	// the Selector. localOnlySelector deliberately leaves them
 	// unset so an overlay-arriving peer request never affects
@@ -3793,39 +3744,6 @@ func loadGatewayAuthToken(stateDir string, logger *slog.Logger) (string, error) 
 		return "", nil
 	}
 	return tok, nil
-}
-
-// buildExternalAdapters turns each non-disabled
-// agentconfig.ExternalEndpoint into an openaicompat.Adapter and
-// returns them in input order. Adapters that fail to construct
-// (parse error / missing URL) are skipped with a warning; agentconfig
-// validation rules out most of these at boot, but we tolerate runtime
-// surprises so a single typo does not prevent the agent from coming
-// up with its remaining endpoints.
-func buildExternalAdapters(eps []agentconfig.ExternalEndpoint, logger *slog.Logger) []*openaicompat.Adapter {
-	if len(eps) == 0 {
-		return nil
-	}
-	out := make([]*openaicompat.Adapter, 0, len(eps))
-	for _, ep := range eps {
-		if ep.Disable {
-			logger.Info("external openai-compat endpoint skipped (disabled)",
-				"id", ep.ID, "url", ep.URL)
-			continue
-		}
-		a, err := openaicompat.NewAdapter(openaicompat.Config{
-			ID:         ep.ID,
-			URL:        ep.URL,
-			AuthEnvVar: ep.AuthEnvVar,
-		})
-		if err != nil {
-			logger.Warn("external openai-compat endpoint configured but adapter not built",
-				"id", ep.ID, "url", ep.URL, "err", err)
-			continue
-		}
-		out = append(out, a)
-	}
-	return out
 }
 
 // probeTargetForActive consults the persisted catalog state to find

@@ -187,9 +187,8 @@ const benchPrompt = "Briefly describe what a Linux process is, in one short para
 type BenchDeps struct {
 	// EngineKind is the runtime's wire kind (signer.InferenceTypeOllama
 	// / signer.InferenceTypeVLLM / signer.InferenceTypeNone). The
-	// benchmark skips entirely for "none" or anything else — external
-	// openai-compat is also skipped so we don't burn the operator's
-	// token budget.
+	// benchmark skips entirely for "none" or anything else, so a kind
+	// this build does not know how to drive costs no tokens.
 	EngineKind string
 
 	// EnginePort is the loopback port the engine listens on. 0
@@ -252,8 +251,7 @@ type BenchDeps struct {
 // Skipped paths return Capacity=0 ("unlimited") with Failed=false:
 //
 //   - EngineKind == "none" / ""        — no engine to bench
-//   - EngineKind == "openai-compat"    — external endpoint, the
-//     upstream does its own rate limit
+//   - any other EngineKind             — not a kind this build drives
 //   - EnginePort == 0                  — engine intentionally off
 //
 // The Capacity=0 backward-compat value is the right encoding for
@@ -270,7 +268,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 	if deps.HTTPClient == nil {
 		deps.HTTPClient = http.DefaultClient
 	}
-	// Skip paths: no engine, external endpoint, or engine off.
+	// Skip paths: no engine, or engine off.
 	if deps.EnginePort == 0 ||
 		deps.EngineKind == "" ||
 		deps.EngineKind == signer.InferenceTypeNone {
@@ -285,7 +283,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 	case signer.InferenceTypeOllama, signer.InferenceTypeVLLM:
 		// supported
 	default:
-		// openai-compat or any unknown kind: skip.
+		// Any unknown kind: skip.
 		return BenchResult{Capacity: 0, VariantID: deps.VariantID}
 	}
 

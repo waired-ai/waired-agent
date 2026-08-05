@@ -18,12 +18,12 @@ func (f fakeAdapter) Health(context.Context) infruntime.Health { return infrunti
 func (f fakeAdapter) Stop(context.Context) error               { return nil }
 func (f fakeAdapter) BaseURL() string                          { return "" }
 
-// TestHasUsableEngine pins the no_engine derivation: a local engine
-// (ollama / vllm) only counts when its binary is actually installed
-// (the adapter is registered unconditionally at boot), while an external
-// openai-compat adapter is always usable. This is the fix for #188 —
-// before it, a registered-but-uninstalled ollama suppressed no_engine,
-// so the tray never offered the "Install Ollama" prompt.
+// TestHasUsableEngine pins the no_engine derivation: a waired-managed
+// engine (ollama / vllm) only counts when its binary is actually
+// installed (the adapter is registered unconditionally at boot), and
+// nothing else counts at all. This is the fix for #188 — before it, a
+// registered-but-uninstalled ollama suppressed no_engine, so the tray
+// never offered the "Install Ollama" prompt.
 func TestHasUsableEngine(t *testing.T) {
 	ollamaInstalled := hardware.Profile{}
 	ollamaInstalled.Engines.Ollama = hardware.EngineInfo{Installed: true, Version: "0.24.0"}
@@ -60,8 +60,10 @@ func TestHasUsableEngine(t *testing.T) {
 		{"nil resolver, profiler not installed", regWith("ollama"), none, nil, false},
 		{"vllm registered and installed", regWith("vllm"), vllmInstalled, no, true},
 		{"vllm registered but not installed", regWith("vllm"), none, no, false},
-		{"external adapter always usable", regWith("lan-gpu"), none, no, true},
-		{"ollama unusable + external usable", regWith("ollama", "lan-gpu"), none, no, true},
+		// #490: an adapter waired did not install and does not manage
+		// cannot make the host usable, whatever it is named.
+		{"unmanaged adapter does not count", regWith("lan-gpu"), none, no, false},
+		{"ollama unusable + unmanaged adapter", regWith("ollama", "lan-gpu"), none, no, false},
 		{"empty registry", regWith(), none, no, false},
 	}
 	for _, tc := range cases {
