@@ -1641,6 +1641,14 @@ func catalogPickTooltip(f management.CatalogFamily) string {
 		case hostfit.ReasonTooSlow:
 			return "It runs, but this computer would be slow with it. " +
 				"Waired would not choose this one for this computer."
+		case hostfit.ReasonWindowTooSmall:
+			// The one reason that is not about this computer: no machine
+			// makes this model hold a coding session (#465 item 5).
+			return "It runs, but it cannot hold a long coding session — a coding agent " +
+				"has to compact much earlier with it. Waired would not choose this one."
+		case hostfit.ReasonWindowExceedsMemory:
+			return "It runs and answers well, but this computer cannot hold a long " +
+				"coding session with it. Waired would not choose this one for this computer."
 		default:
 			return "Waired would not choose this one for this computer."
 		}
