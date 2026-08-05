@@ -142,10 +142,11 @@ type inferenceSubsystemDeps struct {
 	// (the existing pre-Phase-7 mesh fallback tests rely on this).
 	// The overlay-side Selector (localOnlySelector below) does NOT
 	// receive these — loop prevention is maintained.
-	Sticky        *router.StickyStore
-	LocalInFlight *router.InFlightTracker
-	LocalRTT      func() map[string]uint32
-	LocalErrors   func() map[string]float32
+	Sticky         *router.StickyStore
+	LocalInFlight  *router.InFlightTracker
+	StickyInFlight *router.StickyInFlight
+	LocalRTT       func() map[string]uint32
+	LocalErrors    func() map[string]float32
 
 	// Recorder is the Phase 9 composite telemetry sink threaded into
 	// the loopback Selector (router.Inputs.Recorder), the loopback
@@ -513,6 +514,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		meshSnapshotFn:      deps.MeshSnapshotFn,
 		sticky:              deps.Sticky,
 		localInFlight:       deps.LocalInFlight,
+		stickyInFlight:      deps.StickyInFlight,
 		localRTT:            deps.LocalRTT,
 		localErrors:         deps.LocalErrors,
 		publicPolicy:        deps.PublicPolicy,
@@ -1114,10 +1116,11 @@ type agentInferenceProvider struct {
 	// Phase 7 routing signals threaded into the loopback Selector.
 	// All optional; nil keeps the pre-Phase-7 mesh-fallback
 	// deterministic-pick behaviour.
-	sticky        *router.StickyStore
-	localInFlight *router.InFlightTracker
-	localRTT      func() map[string]uint32
-	localErrors   func() map[string]float32
+	sticky         *router.StickyStore
+	localInFlight  *router.InFlightTracker
+	stickyInFlight *router.StickyInFlight
+	localRTT       func() map[string]uint32
+	localErrors    func() map[string]float32
 
 	// Phase 9: telemetry composite. Threaded into the loopback
 	// Selector and gateway so the agent emits Phase 9 events from
@@ -3566,13 +3569,14 @@ func (p *agentInferenceProvider) buildSelectorWith(ctx context.Context, pref sta
 	// re-applying the rule here would let a serving node veto work it had
 	// just been asked to do.
 	in.LocalContextWindow = p.DeclaredContextWindow
-	// Phase 7 routing signals — all four are nil-safe inside
+	// Phase 7 routing signals — all five are nil-safe inside
 	// the Selector. localOnlySelector deliberately leaves them
 	// unset so an overlay-arriving peer request never affects
 	// in-flight bookkeeping or sticky bindings for the local
 	// agent's outbound traffic.
 	in.Sticky = p.sticky
 	in.LocalInFlight = p.localInFlight
+	in.StickyInFlight = p.stickyInFlight
 	in.LocalRTT = p.localRTT
 	in.LocalErrors = p.localErrors
 	// Phase 9 telemetry: emit RecordSelection on every SelectK

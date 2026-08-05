@@ -280,7 +280,9 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 	}
 	// Try the winner first, then walk forward through the remaining
 	// ready candidates if commit fails (capacity hit between probe
-	// and commit).
+	// and commit). Walking forward is walking down the Selector's
+	// ranking, because winnerIdx is the best-ranked ready candidate:
+	// every index before it already answered, and answered not-ready.
 	for i := winnerIdx; i < len(cands); i++ {
 		if i != winnerIdx && !results[i].IsReady() {
 			continue
@@ -382,9 +384,25 @@ type ProbeOutcome struct {
 	Result router.ProbeResult
 }
 
-// ParallelProbe fans probes out to up to N candidates and returns the
-// index of the first one whose probe completed with IsReady() ==
-// true, plus the full slice of per-candidate results.
+// ParallelProbe fans probes out to up to N candidates in parallel and
+// returns the index of the BEST-RANKED one whose probe completed with
+// IsReady() == true — the lowest index, not the first arrival — plus
+// the full slice of per-candidate results.
+//
+// It used to return the first arrival, which quietly discarded the
+// Selector's ranking: every candidate is probed at once, so on a mesh
+// of probeFanoutK peers or fewer the winner was simply whoever answered
+// /healthz first. Admin routing priority, the catalog score, the
+// per-peer failure window and the sticky binding all sort candidates
+// (sortMeshCandidates) and none of them could change the outcome. See
+// docs/decisions/20260805/1703-probe-honours-the-selector-ranking.md.
+//
+// Deciding on rank costs at most the budget and usually far less: index
+// i wins as soon as every candidate ahead of it has resolved as
+// not-ready, so a failed or refusing peer releases the decision
+// immediately rather than at the deadline. A peer that hangs holds the
+// decision only until the budget expires, which is what the budget is
+// for.
 //
 // Fast path: when candidates[0] has ExecutionMode != "remote" (local
 // or external), no probing happens — the coordinator returns
@@ -392,11 +410,11 @@ type ProbeOutcome struct {
 // pattern is meaningful only for the mesh path.
 //
 // Cancellation: derives a child context with the given budget and
-// cancels it as soon as the first ready probe arrives so the losers
-// drop their RoundTrip immediately. If no candidate becomes ready
-// within the budget, returns winnerIdx=-1 with all the
-// not-ready / failed results populated; the coordinator caller
-// (gateway/openai or anthropic) then runs the brief-queue retry.
+// cancels it as soon as the winner is settled so the losers drop their
+// RoundTrip immediately. If no candidate becomes ready within the
+// budget, returns winnerIdx=-1 with all the not-ready / failed results
+// populated; the coordinator caller (gateway/openai or anthropic) then
+// runs the brief-queue retry.
 //
 // The returned slice has len(cands) entries, one per input candidate,
 // in original order. Slots for candidates that never ran (e.g. if
@@ -407,6 +425,10 @@ func ParallelProbe(ctx context.Context, cands []router.Candidate, lookup PeerPro
 		return -1, nil
 	}
 	results = make([]router.ProbeResult, n)
+	// settled[i] means results[i] is final — either a probe answered
+	// for it or it never had one to run. Ranking needs to know the
+	// difference between "not ready" and "not answered yet".
+	settled := make([]bool, n)
 
 	// Fast path: SelectK returned a local / external candidate. No
 	// probing needed; the candidate commits immediately.
@@ -437,6 +459,7 @@ func ParallelProbe(ctx context.Context, cands []router.Candidate, lookup PeerPro
 			results[i] = router.ProbeResult{Outcome: router.ProbeOK, Status: router.HealthStatus{
 				EngineReady: true, ShareEnabled: true,
 			}}
+			settled[i] = true
 			continue
 		}
 		if lookup == nil {
@@ -444,6 +467,7 @@ func ParallelProbe(ctx context.Context, cands []router.Candidate, lookup PeerPro
 				Outcome: router.ProbeTransportError,
 				Err:     errors.New("gateway: probe lookup nil"),
 			}
+			settled[i] = true
 			continue
 		}
 		wg.Add(1)
@@ -465,17 +489,49 @@ func ParallelProbe(ctx context.Context, cands []router.Candidate, lookup PeerPro
 	}()
 
 	winnerIdx = -1
+	// Covers the batch where no goroutine ran at all (nil lookup, or a
+	// batch of pre-filled slots): the drain loop below sees a closed
+	// channel and never gets to ask.
+	if idx, decided := bestSettledReady(results, settled); decided {
+		winnerIdx = idx
+	}
+	// Keep draining after the decision: the remaining results still
+	// reach the caller's per-probe telemetry and its fallback-reason
+	// scan, and the loop is what waits for the probe goroutines.
 	for sig := range sigs {
 		results[sig.idx] = sig.r
-		if winnerIdx < 0 && sig.r.IsReady() {
-			winnerIdx = sig.idx
-			// Cancel the other in-flight probes; their results may
-			// still arrive (we'll record them) but they won't wait
-			// for the full budget.
+		settled[sig.idx] = true
+		if winnerIdx >= 0 {
+			continue
+		}
+		if idx, decided := bestSettledReady(results, settled); decided {
+			winnerIdx = idx
+			// Cancel the probes that can no longer change the answer;
+			// their results may still arrive (we'll record them) but
+			// they won't wait for the full budget.
 			cancel()
 		}
 	}
 	return winnerIdx, results
+}
+
+// bestSettledReady reports the winning candidate index once the ranking
+// can no longer change: the first ready candidate whose every
+// better-ranked peer has already settled as not-ready. decided is false
+// while an unsettled candidate still outranks every ready one — the
+// answer is not knowable yet. It is true with idx == -1 when every
+// candidate settled and none was ready, which is the brief-queue
+// trigger.
+func bestSettledReady(results []router.ProbeResult, settled []bool) (idx int, decided bool) {
+	for i := range results {
+		if !settled[i] {
+			return -1, false
+		}
+		if results[i].IsReady() {
+			return i, true
+		}
+	}
+	return -1, true
 }
 
 // peerDisplayID is the peer identifier every display surface must use

@@ -102,3 +102,94 @@ func (t *InFlightTracker) InFlight(deviceID string) int32 {
 	}
 	return 0
 }
+
+// stickyPeer is StickyInFlight's composite key. stickyID is whatever
+// the gateway put in Request.StickyID — on the Claude surface that
+// already carries the ":<class>" suffix (internal/gateway/anthropic.go),
+// so the main and subagent legs of one conversation count separately
+// without this type knowing what a class is.
+type stickyPeer struct{ stickyID, deviceID string }
+
+// StickyInFlight counts the requests this agent currently has
+// outstanding to each peer FOR ONE STICKY KEY. InFlightTracker answers
+// "is this peer full"; this answers "is this peer already busy with
+// this conversation", which is what the concurrent-sub spread needs
+// (waired-ai/waired#828): when a conversation's sticky-bound peer is
+// already serving one of its requests and another candidate could take
+// the next, the Selector demotes the bound peer instead of piling the
+// whole sub-agent fan-out onto it.
+//
+// It does NOT mirror InFlightTracker's sync.Map. That type is keyed by
+// deviceID, so its key space is bounded by the mesh and a permanent
+// entry per peer costs nothing. This one is keyed by conversation,
+// which is unbounded, so an entry is deleted the moment its count
+// returns to zero — a map that only ever grows would need the periodic
+// sweep StickyStore needed (#531), and the count is the only thing
+// worth keeping.
+type StickyInFlight struct {
+	mu sync.Mutex
+	m  map[stickyPeer]int
+}
+
+// NewStickyInFlight returns an empty tracker. Safe for concurrent use
+// immediately.
+func NewStickyInFlight() *StickyInFlight {
+	return &StickyInFlight{m: map[stickyPeer]int{}}
+}
+
+// Acquire counts one outstanding request for (stickyID, deviceID) and
+// returns the closure that gives it back. Unlike InFlightTracker.Acquire
+// it never refuses: this is a routing signal, not an admission gate —
+// admission stays with the peer's advertised Capacity.
+//
+// An empty stickyID or deviceID counts nothing and returns a no-op
+// release, so a request with no affinity hint (Request.StickyID empty,
+// the whole non-coding-agent case) never allocates a key.
+//
+// The release closure is idempotent. InFlightTracker's is not, but this
+// one is composed with it into the single Selection.Release the gateway
+// defers, and a double release there would corrupt a map rather than
+// just a counter.
+func (t *StickyInFlight) Acquire(stickyID, deviceID string) (release func()) {
+	if stickyID == "" || deviceID == "" {
+		return func() {}
+	}
+	k := stickyPeer{stickyID: stickyID, deviceID: deviceID}
+	t.mu.Lock()
+	t.m[k]++
+	t.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			if n := t.m[k]; n > 1 {
+				t.m[k] = n - 1
+				return
+			}
+			delete(t.m, k)
+		})
+	}
+}
+
+// InFlight reports how many requests for stickyID are outstanding to
+// deviceID right now. 0 for any pair that has never been acquired, and
+// for empty ids.
+func (t *StickyInFlight) InFlight(stickyID, deviceID string) int {
+	if stickyID == "" || deviceID == "" {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.m[stickyPeer{stickyID: stickyID, deviceID: deviceID}]
+}
+
+// Size reports the number of (sticky key, peer) pairs with at least one
+// request outstanding. Exposed for tests — it is what pins the
+// delete-at-zero behaviour — and for a future metrics surface, matching
+// StickyStore.Size.
+func (t *StickyInFlight) Size() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.m)
+}

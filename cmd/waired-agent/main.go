@@ -889,6 +889,11 @@ func run(ctx context.Context, args []string) error {
 		// stickyStore's expired bindings (runStickyGC).
 		stickyStore := router.NewStickyStore(0, nil) // 0 → DefaultStickyTTL
 		inFlightTracker := router.NewInFlightTracker()
+		// Per-(conversation, peer) counts behind the concurrent-sub
+		// spread (waired-ai/waired#828). Self-trimming — an entry is
+		// dropped when its last request finishes — so unlike
+		// stickyStore it needs no sweeper.
+		stickyInFlight := router.NewStickyInFlight()
 		errorWindow := router.NewErrorWindow(nil)
 		var rttSnapshotFn func() map[string]uint32
 		if discoSvc != nil {
@@ -971,6 +976,7 @@ func run(ctx context.Context, args []string) error {
 				PeerAdapterFactory:  peerAdapterFactory,
 				Sticky:              stickyStore,
 				LocalInFlight:       inFlightTracker,
+				StickyInFlight:      stickyInFlight,
 				LocalRTT:            rttSnapshotFn,
 				LocalErrors:         errorWindow.Snapshot,
 				Recorder:            obsRecorder,
