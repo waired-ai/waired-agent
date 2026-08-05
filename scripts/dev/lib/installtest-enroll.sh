@@ -521,6 +521,27 @@ _it_wait_inference_ready() {
   printf '%s' "$out"; return 1
 }
 
+# it_prepull_evidence — the daemon's own account of a model that never
+# arrived (#540), for the not-ready arm of the benchmark assert.
+#
+# `waired logs` rather than a per-OS log command: it is the one surface that
+# reads the service log AND the bundled engine logs on all three OSes, so the
+# three harnesses ask this question the same way — and the Windows leg, which
+# had no engine-log dump at all, gets one for free.
+#
+# The pattern is the three facts that settle where the time went: the boot
+# pre-pull's hold says what it is waiting for and what released it, and
+# `POST /api/pull` carries the download's real duration. `grep .` is what
+# makes an empty result say so — a bare grep would print nothing and read as
+# "the dump did not run".
+it_prepull_evidence() {
+  local guest="$1"
+  gx "$guest" sh -c 'waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-logs.txt >/dev/null 2>&1
+    grep -iE "boot pre-pull|bundled model|api/pull" /tmp/it-logs.txt 2>/dev/null | tail -20 |
+      grep . || echo "(no pre-pull or pull lines in the daemon log)"' 2>&1 |
+    sed 's/^/    agent| /' || true
+}
+
 # assert_inference — verify the install→...→model-download→benchmark tail of
 # the journey ran on CPU (Tier-2 --inference). `waired init
 # --inference-enabled=true` installed the bundled engine through the daemon
@@ -638,6 +659,7 @@ assert_inference() {
     # failures read as an engine problem.
     gx "$guest" sh -c "OLLAMA_HOST=127.0.0.1:9475 '$IT_BUNDLED_OLLAMA_BIN' list" 2>&1 | sed 's/^/    :9475 /' || true
     gx "$guest" sh -c 'curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"' 2>&1 | sed 's/^/    status| /' || true
+    it_prepull_evidence "$guest"
   else
     bad "no benchmark THROUGHPUT figure in init transcript ($initlog)"
     grep -iE 'benchmark|inference|engine' "$initlog" 2>/dev/null | tail -20 | sed 's/^/    init| /' || true

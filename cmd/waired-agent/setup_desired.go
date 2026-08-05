@@ -463,16 +463,17 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	baseline := !r.desiredSeen
 	r.desiredSeen = true
 	if d == (setupDesired{}) && !r.active {
-		// A wizard can be driving before the control plane has written a
-		// single desired value — the elevated executor heartbeats through
-		// the whole engine install — so the lease is read even here (#379).
-		driving := r.leaseLiveLocked()
 		r.mu.Unlock()
+		// Nobody is driving. This read the executor lease until #540, on the
+		// reasoning that a wizard can be driving before the control plane has
+		// written a single desired value (#379) — see the comment on driving
+		// below for why the lease does not answer that question.
+		//
 		// Reported rather than returned silently: this frame is the one
 		// that says "the control plane answered and nobody is driving",
 		// which is the only evidence that releases the boot pre-pull hold
 		// on a host that will never be set up from a browser.
-		r.provider.setupNoteDesired("", driving)
+		r.provider.setupNoteDesired("", false)
 		return
 	}
 	changed := d != r.desired
@@ -503,11 +504,29 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		}
 	}
 	applied := r.modelApplied[d.modelID]
-	// #379: r.active is true by now, so "a wizard is driving" is the lease
-	// plus the freshness test #308 already uses — an instruction we watched
-	// change is someone writing it while we were here, and one we only ever
-	// read back is the control plane replaying a device set up weeks ago.
-	driving := r.leaseLiveLocked() || !r.desiredStaleLocked()
+	// #379: r.active is true by now, so "a wizard is driving" is the
+	// freshness test #308 already uses — an instruction we watched change is
+	// someone writing it while we were here, and one we only ever read back
+	// is the control plane replaying a device set up weeks ago.
+	//
+	// The executor lease used to be OR'd in here, and read on its own in the
+	// fast path above. It is not evidence of a wizard (#540). `waired init`
+	// is the only thing that takes it (attachSetupExecutor) and the only
+	// thing that installs an engine, and it keeps the lease through the model
+	// wait it does AFTER the install — so the boot pre-pull's hold waited for
+	// the process that was waiting for the hold, twenty minutes at a time, on
+	// every non-interactive install. Nor is the lease needed for the case it
+	// was added for: the browser cannot reach an engine install without
+	// desired state, because setupEngineInstallWanted gates the executor on
+	// setupDriving, which reads st.Active. Serving only waired-managed
+	// engines (#488) is what settled that; before it, a foreign engine
+	// already on disk could put a host here with nothing written.
+	//
+	// leaseLiveLocked also expires a dead lease as a side effect. Dropping
+	// the call does not defer that: snapshot() runs it on the push loop every
+	// setupPushInterval — started beside this reconciler, so it runs wherever
+	// Apply does — and SetupState runs it on every executor poll.
+	driving := !r.desiredStaleLocked()
 	r.mu.Unlock()
 	r.provider.setupNoteDesired(d.modelID, driving)
 	if retried && r.logger != nil {

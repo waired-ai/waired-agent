@@ -130,6 +130,13 @@ func (p *agentInferenceProvider) awaitPrePullRelease(ctx context.Context) bool {
 	if holdMax <= 0 {
 		holdMax = prePullHoldMax
 	}
+	// Said on the way IN, not only on the way out. Until #540 the hold was
+	// silent for as long as it held and logged only its release, so a host
+	// sitting on an undispatched download for ten minutes had nothing in the
+	// daemon log to read — the state had to be inferred from which release
+	// line eventually appeared, and from when.
+	p.logger.Info("boot pre-pull is holding until setup has had its say",
+		"frame_grace", frameGrace, "hold_max", holdMax)
 	firstFrame := time.NewTimer(frameGrace)
 	defer firstFrame.Stop()
 	ceiling := time.NewTimer(holdMax)
@@ -142,6 +149,10 @@ func (p *agentInferenceProvider) awaitPrePullRelease(ctx context.Context) bool {
 				"model", named)
 			return false
 		case seen && !driving:
+			// The ordinary release, and the only one that used to happen
+			// silently — which is how #540 stayed unreadable: this is the arm
+			// that fires, and the log said nothing about it either way.
+			p.logger.Info("boot pre-pull proceeding: the control plane answered and nobody is driving")
 			return true
 		}
 		select {

@@ -434,6 +434,21 @@ function Assert-Inference {
                 $st = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 10
                 Write-Host "    status| $($st | ConvertTo-Json -Depth 6 -Compress)"
             } catch { Write-Host "    status| (unreachable)" }
+            # The daemon's own account of a model that never arrived (#540).
+            # Mirrors lib/installtest-enroll.sh's it_prepull_evidence and the
+            # macOS block: `waired logs` is the one surface that reads the
+            # service log and the bundled engine log on every OS, which is how
+            # this leg gets an engine log at all -- it had none, so a Windows
+            # occurrence could not be diagnosed without a re-run.
+            $bundle = Join-Path $env:TEMP 'it-logs.txt'
+            & (Join-Path $InstallDir 'waired.exe') logs --since 30m --state-dir $StateDir -o $bundle *> $null
+            $agentLines = @()
+            if (Test-Path -LiteralPath $bundle) {
+                $agentLines = @(Select-String -LiteralPath $bundle -Pattern 'boot pre-pull|bundled model|api/pull' |
+                    Select-Object -Last 20 | ForEach-Object { "    agent| $($_.Line)" })
+            }
+            if ($agentLines.Count -gt 0) { $agentLines | Write-Host }
+            else { Write-Host "    agent| (no pre-pull or pull lines in the daemon log)" }
         } else {
             ItBad "no benchmark THROUGHPUT figure in init transcript ($InitLog)"
             ($txt -split "`n" | Select-String -Pattern 'benchmark|inference|engine' |

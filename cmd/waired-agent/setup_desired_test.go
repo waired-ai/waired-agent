@@ -2888,11 +2888,26 @@ func TestApplyReportsTheCanonicalModelAndWhoIsDriving(t *testing.T) {
 	}
 }
 
-// The executor lease is the other half of "somebody is driving": the
-// elevated CLI heartbeats through the whole engine install, which happens
-// BEFORE the control plane has a desired model to write. A host that
-// restarts mid-install folds empty frames the entire time.
-func TestApplyReportsDrivingFromTheExecutorLeaseAlone(t *testing.T) {
+// PRODUCT CONTRACT (#540, docs/decisions/20260805/1721-executor-lease-is-not-a-wizard.md):
+// an executor lease on its own does not mean a wizard is driving. It means
+// `waired init` is running, which is a different thing — and reading the two
+// as one is what made `waired init` wait twenty minutes for a download its
+// own presence was holding back.
+//
+// This arm used to answer true, on the reasoning that the elevated CLI
+// heartbeats through the engine install and the control plane has nothing
+// written yet. Serving only waired-managed engines (#488) took that apart:
+//
+//   - The browser cannot reach an engine install without desired state.
+//     setupEngineInstallWanted (cmd/waired/setup_install.go) gates the
+//     executor's install on setupDriving, which reads st.Active — so by the
+//     time a wizard has anything installed for it, the frames carry an
+//     instruction and desiredStaleLocked answers this on its own.
+//   - `waired init` is the only holder of the lease (attachSetupExecutor,
+//     cmd/waired/login_client.go) and the only installer of an engine. A
+//     lease with nothing else behind it is the terminal — waiting for the
+//     very model the hold was withholding from it.
+func TestApplyDoesNotCallAnExecutorLeaseAloneAWizard(t *testing.T) {
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
 	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
@@ -2904,8 +2919,41 @@ func TestApplyReportsDrivingFromTheExecutorLeaseAlone(t *testing.T) {
 	if len(notes) != 1 {
 		t.Fatalf("notes = %+v, want exactly one", notes)
 	}
-	if !notes[0].driving {
-		t.Fatal("driving = false while an elevated executor is attached — the wizard is " +
-			"installing the engine, and the model step is the next thing it does")
+	if notes[0].driving {
+		t.Fatal("driving = true from an executor lease and nothing else — that is " +
+			"`waired init` running, and the model it is waiting for is the one the " +
+			"boot pre-pull would then refuse to start (#540)")
+	}
+}
+
+// PRODUCT CONTRACT: the window the hold actually exists for survives — a
+// wizard that has written its ENGINE choice and not yet its model (#379).
+//
+// This is what the lease arm above was reaching for and could not express:
+// the instruction changed while the reconciler watched, so somebody is
+// writing it right now, and the model step is the next thing they do. The
+// bundled fallback must not start a second multi-GB download into that.
+func TestApplyReportsDrivingWhileTheWizardHasNamedOnlyAnEngine(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	// The baseline frame, then the wizard's engine choice landing on top of
+	// it — #308's "watched it change" test, which is what marks the
+	// instruction live rather than a replay of a device set up weeks ago.
+	r.Apply(ctx, &signer.InferenceState{})
+	r.Apply(ctx, desiredFrame("ollama", "", 0))
+
+	notes := f.notes()
+	if len(notes) != 2 {
+		t.Fatalf("notes = %+v, want one per frame", notes)
+	}
+	last := notes[len(notes)-1]
+	if last.modelID != "" {
+		t.Fatalf("note model = %q, want empty — the wizard has not chosen one yet", last.modelID)
+	}
+	if !last.driving {
+		t.Fatal("driving = false while a wizard is mid-setup with its engine written and " +
+			"its model still to come — that is exactly the double download #379 is about")
 	}
 }

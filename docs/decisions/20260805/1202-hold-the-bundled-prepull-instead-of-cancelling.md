@@ -1,5 +1,7 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260805/1721-executor-lease-is-not-a-wizard.md
 ---
 
 # ブート時の bundled pre-pull は、キャンセルではなく setup の発話まで保留する (20260805 12:02)
@@ -7,6 +9,11 @@ status: accepted
 ## Status
 
 Accepted。#379 が提案した supersede（in-flight pull のキャンセル）は**採らない**。
+
+§2 の `driving` のうち **`leaseLiveLocked()` の項だけ**が 20260805 1721 で外れた
+（#540: そのリースは `waired init` のもので、保留はそれを待たせている当のプロセスを
+待っていた）。保留の設計そのもの — キャンセルを採らないこと、sticky な stand-down、
+決定は同期でディスパッチだけ非同期 — はこの記録のまま有効。
 
 ## Context
 
