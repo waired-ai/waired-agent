@@ -13,22 +13,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/runtime"
 )
 
-// namedFakeAdapter is fakeAdapter with a caller-chosen registry name,
-// so a test can register an external openai-compat endpoint alongside
-// the local engine.
-type namedFakeAdapter struct {
-	name    string
-	baseURL string
-}
-
-func (f namedFakeAdapter) Name() string                          { return f.name }
-func (f namedFakeAdapter) EnsureRunning(_ context.Context) error { return nil }
-func (f namedFakeAdapter) Health(_ context.Context) runtime.Health {
-	return runtime.Health{State: runtime.StateReady}
-}
-func (f namedFakeAdapter) Stop(_ context.Context) error { return nil }
-func (f namedFakeAdapter) BaseURL() string              { return f.baseURL }
-
 // admissionSpy records the calls a listener makes into the shared
 // admission counter, plus whether a slot was held at the moment the
 // engine was actually reached.
@@ -45,12 +29,11 @@ func (a *admissionSpy) hook(_ context.Context) func() {
 func (a *admissionSpy) held() int32 { return a.admits.Load() - a.releases.Load() }
 
 // newAdmissionGateway builds a loopback-style listener (local engine +
-// one external endpoint + peer routing enabled) wired to spy.
+// peer routing enabled) wired to spy.
 func newAdmissionGateway(t *testing.T, sel SelectorIface, spy *admissionSpy, engineURL string) *Server {
 	t.Helper()
 	reg := runtime.NewRegistry()
 	reg.Register(fakeAdapter{baseURL: engineURL})
-	reg.Register(namedFakeAdapter{name: "openai-compat:cloud", baseURL: engineURL})
 	return NewServer(ServerConfig{Addr: "127.0.0.1:0"}, Deps{
 		Selector:       sel,
 		Runtimes:       reg,
@@ -125,25 +108,6 @@ func TestLocalAdmission_RemoteDispatchIsNotCounted(t *testing.T) {
 	}
 	if got := spy.admits.Load(); got != 0 {
 		t.Fatalf("admits = %d, want 0 for a peer-served request", got)
-	}
-}
-
-// TestLocalAdmission_ExternalEndpointIsNotCounted: same reasoning for
-// an external openai-compat endpoint — the upstream provider runs the
-// model, not this machine.
-func TestLocalAdmission_ExternalEndpointIsNotCounted(t *testing.T) {
-	spy := &admissionSpy{}
-	upstream := fakeOllama(t, nil)
-	defer upstream.Close()
-
-	sel := &fakeSelector{sel: router.Selection{Runtime: "openai-compat:cloud", EngineModel: "gpt-x"}}
-	gw := newAdmissionGateway(t, sel, spy, upstream.URL)
-
-	if code := postChat(t, gw).Code; code != http.StatusOK {
-		t.Fatalf("status = %d", code)
-	}
-	if got := spy.admits.Load(); got != 0 {
-		t.Fatalf("admits = %d, want 0 for an external endpoint", got)
 	}
 }
 

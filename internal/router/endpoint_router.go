@@ -184,15 +184,6 @@ type Inputs struct {
 	// peer.
 	MeshSnapshotFn func() inferencemesh.Snapshot
 
-	// AllowExternal, when true, lets the Selector pick an
-	// "openai-compat:<id>" adapter from the registry as a fallback
-	// before consulting the mesh. The loopback-side Selector sets
-	// this true; the overlay-side Selector sets it false so that a
-	// peer's WG-proxied request can never end up funnelled out
-	// through the receiving agent's external endpoint (which would
-	// leak the operator's Bearer token's network reach to the mesh).
-	AllowExternal bool
-
 	// --- Phase 7 routing inputs --------------------------------------
 	//
 	// All four fields are optional. When nil/empty, the Selector
@@ -425,8 +416,8 @@ func (e *PinnedPeerUnreachableError) Unwrap() error { return ErrPinnedPeerUnreac
 // be stale, without burning an inference attempt to find out.
 //
 // PeerID is the underlying mesh peer's DeviceID for "remote" mode.
-// Empty for "local" and "external" execution modes (no probing
-// needed; those candidates commit directly).
+// Empty for the "local" execution mode (no probing needed; those
+// candidates commit directly).
 //
 // Decision mirrors Selection.Decision and is identical between
 // candidate and the Selection that Commit produces.
@@ -517,9 +508,9 @@ func NewLocalCandidate(sel Selection) Candidate {
 type Selector struct{ in Inputs }
 
 // noopRelease is the placeholder Release closure for Selections where
-// no admission slot was consumed (local routes, external fallback,
-// or mesh-route with LocalInFlight unset). Cheaper than returning a
-// nil closure callers have to nil-check.
+// no admission slot was consumed (local routes, or a mesh route with
+// LocalInFlight unset). Cheaper than returning a nil closure callers
+// have to nil-check.
 func noopRelease() {}
 
 // NewSelector binds a Selector to a snapshot of inputs. Inputs are
@@ -558,10 +549,9 @@ func (s *Selector) Select(ctx context.Context, req Request) (Selection, error) {
 // calls Commit on the winning Candidate to atomically Acquire the
 // admission slot.
 //
-// Returns 1 candidate (ExecutionMode = "local" or "external") when
-// no probing is necessary — the local engine and external openai-
-// compat endpoints don't carry the cross-peer race the probe is
-// designed to handle.
+// Returns 1 candidate (ExecutionMode = "local") when no probing is
+// necessary — the local engine doesn't carry the cross-peer race the
+// probe is designed to handle.
 //
 // For mesh fallback (ExecutionMode = "remote") returns up to k
 // candidates ordered by:
@@ -654,9 +644,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		// Fall through to the local-ready candidate construction below.
 	case state.RoutingModePeerPreferred:
 		// Mesh first; fall back to local engine only if no mesh peer
-		// can serve the request. AllowExternal is intentionally NOT
-		// consulted here — peer-preferred says "use the mesh", and
-		// an openai-compat adapter is local-only by definition.
+		// can serve the request.
 		if s.in.MeshSnapshotFn != nil {
 			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 			if err != nil {
@@ -732,16 +720,6 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 	default:
 		// RoutingModeAuto or empty: historical pre-feature behaviour.
 		if !localReady {
-			// Phase 5: prefer an agent-local external OpenAI-compat
-			// adapter before falling through to mesh-routed peers.
-			// AllowExternal=false on the overlay-side Selector blocks
-			// this branch so peers cannot reach a given agent's external
-			// endpoints via WG.
-			if s.in.AllowExternal {
-				if ext, ok := s.tryExternalCandidate(manifest, reasons); ok {
-					return []Candidate{ext}, nil
-				}
-			}
 			if s.in.MeshSnapshotFn != nil {
 				cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 				if err != nil {
@@ -1498,138 +1476,6 @@ func variantWantSets(manifest catalog.Manifest) (ollama, vllm map[string]catalog
 		}
 	}
 	return ollama, vllm
-}
-
-// tryExternalFallback scans the runtime registry for adapters
-// registered under the "openai-compat:" prefix, asks each for its
-// current /v1/models snapshot via the runtime.ModelLister interface,
-// and picks the deterministically-first adapter that serves a name
-// matching the manifest's ModelID, any of its ModelAliases, or any
-// variant's Source.RepoID. Adapters without a Ready Health are
-// skipped so a transiently-down endpoint does not poison the
-// fallback chain.
-//
-// Returns ok=false when no eligible adapter matches; the caller
-// then falls through to mesh fallback. Loop prevention: this branch
-// is gated on s.in.AllowExternal upstream — the overlay-side
-// Selector never reaches here.
-func (s *Selector) tryExternalFallback(manifest catalog.Manifest, reasons []string) (Selection, bool) {
-	if s.in.Runtimes == nil {
-		return Selection{}, false
-	}
-	// Build the set of model identifiers we'd accept from any
-	// external endpoint. ModelID + ModelAliases handle the "operator
-	// pasted an HF ID" path; Source.RepoID handles variants exposing
-	// a more specific name. Source.Tag (ollama tag form) is
-	// excluded — external endpoints don't speak ollama-tag.
-	wants := map[string]string{} // model-name → "alias" / "model_id" / "variant:<id>"
-	if manifest.ModelID != "" {
-		wants[manifest.ModelID] = "model_id"
-	}
-	for _, a := range manifest.ModelAliases {
-		if a == "" {
-			continue
-		}
-		if _, ok := wants[a]; !ok {
-			wants[a] = "alias"
-		}
-	}
-	for _, v := range manifest.Variants {
-		if v.Source.RepoID != "" {
-			wants[v.Source.RepoID] = "variant:" + v.VariantID
-		}
-	}
-	if len(wants) == 0 {
-		return Selection{}, false
-	}
-
-	type cand struct {
-		name        string
-		variant     catalog.Variant
-		matchedName string
-		reason      string
-	}
-	var cands []cand
-
-	names := s.in.Runtimes.Names()
-	sort.Strings(names) // deterministic iteration
-
-	for _, n := range names {
-		if !strings.HasPrefix(n, "openai-compat:") {
-			continue
-		}
-		ad, ok := s.in.Runtimes.Lookup(n)
-		if !ok {
-			continue
-		}
-		// Must be Ready for the gateway proxy to succeed in a moment.
-		if h := ad.Health(context.Background()); h.State != runtime.StateReady {
-			continue
-		}
-		lister, ok := ad.(runtime.ModelLister)
-		if !ok {
-			continue
-		}
-		for _, m := range lister.ListModels() {
-			if reason, hit := wants[m]; hit {
-				// Pick a variant to record on the Selection. Prefer
-				// the variant whose Source.RepoID matches m; fall
-				// back to the first variant in the manifest so the
-				// router's VariantID field stays populated.
-				v := manifest.Variants[0]
-				for _, cand := range manifest.Variants {
-					if cand.Source.RepoID == m {
-						v = cand
-						break
-					}
-				}
-				cands = append(cands, cand{name: n, variant: v, matchedName: m, reason: reason})
-				break
-			}
-		}
-		if len(cands) > 0 {
-			break // first matching adapter wins (deterministic by Names sort)
-		}
-	}
-	if len(cands) == 0 {
-		return Selection{}, false
-	}
-	chosen := cands[0]
-	reasons = append(reasons,
-		fmt.Sprintf("local state for %q is not ready", manifest.ModelID),
-		fmt.Sprintf("external fallback: adapter %q serves %q (via %s)", chosen.name, chosen.matchedName, chosen.reason),
-	)
-	return Selection{
-		EndpointID:    computeEndpointID("external-"+chosen.name, "openai-compat", manifest.ModelID),
-		ModelID:       manifest.ModelID,
-		VariantID:     chosen.variant.VariantID,
-		Runtime:       chosen.name,
-		EngineModel:   chosen.matchedName,
-		ExecutionMode: "external",
-		Decision:      Decision{Reason: reasons, Fallback: nil},
-		Release:       noopRelease,
-	}, true
-}
-
-// tryExternalCandidate is the Phase 8 SelectK wrapper around the
-// Phase 5 tryExternalFallback. External adapters don't need probing
-// (they run on the same host as the agent, so the WG-overlay race
-// doesn't apply) so Commit just returns the pre-built Selection.
-func (s *Selector) tryExternalCandidate(manifest catalog.Manifest, reasons []string) (Candidate, bool) {
-	sel, ok := s.tryExternalFallback(manifest, reasons)
-	if !ok {
-		return Candidate{}, false
-	}
-	return Candidate{
-		EndpointID:    sel.EndpointID,
-		ModelID:       sel.ModelID,
-		VariantID:     sel.VariantID,
-		Runtime:       sel.Runtime,
-		EngineModel:   sel.EngineModel,
-		ExecutionMode: "external",
-		Decision:      sel.Decision,
-		commit:        func() (Selection, bool) { return sel, true },
-	}, true
 }
 
 // engineModelFor returns the engine-specific identifier the gateway

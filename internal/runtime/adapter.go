@@ -73,22 +73,6 @@ type Transporter interface {
 	Transport() http.RoundTripper
 }
 
-// ModelLister is an OPTIONAL interface adapters implement when their
-// model inventory is discovered at runtime (via the engine's API)
-// rather than driven by the agent's catalog/state. External
-// OpenAI-compatible endpoints are the prime example — the agent
-// never pulled their weights, so catalog.State has no record of
-// them; the adapter's own probe loop is the source of truth.
-//
-// Adapters that do not implement this (the Ollama and vLLM
-// subprocess adapters) signal "ask catalog.State for my model
-// list" by failing a type assertion. The router consults this
-// interface only when scanning registered adapters for external
-// fallback eligibility.
-type ModelLister interface {
-	ListModels() []string
-}
-
 // Spawner is the seam where unit tests inject a fake subprocess.
 type Spawner interface {
 	// Spawn starts binary with args and env. When logW is non-nil the

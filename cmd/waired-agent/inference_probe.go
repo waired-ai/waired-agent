@@ -88,8 +88,8 @@ type inferenceProbeDeps struct {
 
 	// Capacity is the concurrent-request admission cap the Phase 7
 	// Selector enforces against. Derived at boot from the local
-	// token/s benchmark. 0 means "unlimited" (= explicit semantics for
-	// external openai-compat endpoints + backward compat).
+	// token/s benchmark. 0 means "unlimited" (the backward-compat
+	// value, and what a skipped benchmark reports).
 	Capacity int
 
 	// RecommendedMaxParallel, when non-nil, returns the engine's current

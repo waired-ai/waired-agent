@@ -133,7 +133,7 @@ func signedReq(t *testing.T, target string, body []byte, deviceID string, priv e
 // is unset (= 0), the capacity gate admits unbounded requests. The gate is
 // still wired (so the CP can retune the cap live via SetCapacity), but at
 // cap 0 Acquire short-circuits and never rejects — the backward-compat path
-// pre-Phase-7 agents and external openai-compat endpoints rely on.
+// pre-Phase-7 agents rely on.
 func TestOverlayServer_CapacityZeroIsUnlimited(t *testing.T) {
 	pub, priv := mustKey(t)
 	peer := PeerIdentity{DeviceID: "peer-A", MachineKey: pub}

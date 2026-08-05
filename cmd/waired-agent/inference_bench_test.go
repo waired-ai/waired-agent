@@ -97,7 +97,7 @@ func TestRunBootBenchmark_NoEngineSkips(t *testing.T) {
 		{"engine_kind_none", BenchDeps{EngineKind: signer.InferenceTypeNone, EnginePort: 11434}},
 		{"engine_kind_empty", BenchDeps{EngineKind: "", EnginePort: 11434}},
 		{"port_zero", BenchDeps{EngineKind: signer.InferenceTypeOllama, EnginePort: 0}},
-		{"openai_compat", BenchDeps{EngineKind: "openai-compat", EnginePort: 11434}},
+		{"unknown_kind", BenchDeps{EngineKind: "some-future-engine", EnginePort: 11434}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := RunBootBenchmark(context.Background(), c.deps)

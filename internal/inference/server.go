@@ -435,10 +435,8 @@ type Config struct {
 	// requests this agent will admit before returning 503
 	// waired_inference_overloaded. Read once at server construction
 	// from the boot token/s benchmark (see Phase 7 plan §5). 0 means
-	// "unlimited", which is both the backward-compat default for
-	// agents that predate the field and the explicit semantics for
-	// external (openai-compat) endpoints — the upstream provider
-	// already does its own rate limiting in that path.
+	// "unlimited": the backward-compat default for agents that predate
+	// the field, and what a skipped benchmark reports.
 	Capacity int
 
 	// PublicCapacity bounds concurrent PUBLIC-consumer requests

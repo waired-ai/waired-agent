@@ -112,8 +112,8 @@ type Deps struct {
 	// — its requests are counted by the inference server's capacityGate
 	// before they ever reach these handlers.
 	//
-	// Never consulted for remote: / openai-compat: selections; those
-	// run on a peer or an upstream provider, not here.
+	// Never consulted for remote: selections; those run on a peer,
+	// not here.
 	LocalAdmission func(ctx context.Context) (release func())
 
 	// OnUsage, when non-nil, receives one UsageSample per request that

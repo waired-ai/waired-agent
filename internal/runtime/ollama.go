@@ -270,8 +270,8 @@ type OllamaAdapter struct {
 // non-2xx from the selected adapter; the adapter — which knows its own
 // engine's error vocabulary — decides whether that means "dead".
 //
-// Peer adapters and openai-compat adapters deliberately do NOT implement
-// it, so a remote peer's 500 can never demote THIS host's engine.
+// Peer adapters deliberately do NOT implement it, so a remote peer's 500
+// can never demote THIS host's engine.
 type FailureReporter interface {
 	ReportUpstreamFailure(status int, body []byte)
 }

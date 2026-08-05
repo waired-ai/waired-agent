@@ -108,9 +108,9 @@ func TestProxyToEngine_Upstream500_ReportsAndRecords(t *testing.T) {
 }
 
 // TestProxyToEngine_NilReporter pins that an adapter which does not implement
-// FailureReporter is simply skipped. PRODUCT CONTRACT: peer and
-// openai-compat adapters deliberately do not implement it, so a REMOTE peer's
-// 500 can never demote this host's engine.
+// FailureReporter is simply skipped. PRODUCT CONTRACT: peer adapters
+// deliberately do not implement it, so a REMOTE peer's 500 can never demote
+// this host's engine.
 func TestProxyToEngine_NilReporter(t *testing.T) {
 	srv := engineReturning(t, http.StatusInternalServerError, `{"error":"peer exploded"}`)
 	rr := &requestRec{}
