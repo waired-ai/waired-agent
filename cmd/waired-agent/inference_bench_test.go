@@ -60,6 +60,16 @@ type fakeOllamaEngine struct {
 	evalDurationsNS []int64
 	generateCalls   atomic.Int64
 	chatMaxTokens   []int
+	// generateNumPredict records the completion length each /api/generate
+	// call actually asked for. Recorded rather than dropped because the
+	// sizing fix (#203) IS that number — a fake that discards it makes the
+	// failing case unwritable (CLAUDE.md §Test discipline).
+	generateNumPredict []int
+	// maxServableNumPredict, when > 0, makes the engine refuse anything
+	// longer. It stands in for the real failure: a host too slow to decode
+	// that many tokens inside the request deadline, which arrives at the
+	// caller as an error rather than as a short answer.
+	maxServableNumPredict int
 }
 
 func (f *fakeOllamaEngine) handler() http.HandlerFunc {
@@ -67,6 +77,17 @@ func (f *fakeOllamaEngine) handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/api/generate":
+			var greq struct {
+				Options struct {
+					NumPredict int `json:"num_predict"`
+				} `json:"options"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&greq)
+			f.generateNumPredict = append(f.generateNumPredict, greq.Options.NumPredict)
+			if f.maxServableNumPredict > 0 && greq.Options.NumPredict > f.maxServableNumPredict {
+				http.Error(w, "too slow for that many tokens", http.StatusGatewayTimeout)
+				return
+			}
 			n := int(f.generateCalls.Add(1)) - 1
 			dur := f.evalDurationsNS[len(f.evalDurationsNS)-1]
 			if n < len(f.evalDurationsNS) {

@@ -475,8 +475,13 @@ func measureDecodeRate(ctx context.Context, deps BenchDeps) (float64, float64, i
 // returns the pure decode rate from eval_count/eval_duration — the
 // same counters (and endpoint) the depth benchmark reads, so the #133
 // shallow-vs-depth floor comparison shares one measurement basis.
-func ollamaGenerateOnce(ctx context.Context, deps BenchDeps, numPredict int) (float64, error) {
-	rctx, cancel := context.WithTimeout(ctx, benchTimeout)
+// timeout is passed rather than read from benchTimeout so the caller can
+// size it to the completion it just asked for — a 200-token request under
+// a 30 s cap is unsatisfiable below ~7 tok/s, which is how a working
+// engine came to report a benchmark failure (#203). Taking it as an
+// argument is also what makes that case writable in a test.
+func ollamaGenerateOnce(ctx context.Context, deps BenchDeps, numPredict int, timeout time.Duration) (float64, error) {
+	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	body, err := json.Marshal(map[string]any{
 		"model":  deps.EngineModel,
@@ -527,10 +532,32 @@ func ollamaGenerateOnce(ctx context.Context, deps BenchDeps, numPredict int) (fl
 // samples and reduces them to (median, spread, count). An error after
 // at least one valid sample truncates the loop instead of discarding
 // it — the shared measurement budget is the usual cause.
+// Each sample is sized from what the previous ones measured
+// (planBenchSizing): the first is a short probe, and the rest grow to
+// benchPromptCompletionTokens only on a host fast enough to decode that
+// many inside its share of the shared budget. Before that, every sample
+// asked for 200 tokens under a fixed 30 s cap, so a host below ~7 tok/s
+// failed at i=0 with nothing to salvage and the benchmark reported a
+// working engine as broken (#203).
 func measureOllamaNative(ctx context.Context, deps BenchDeps) (float64, float64, int, error) {
 	var rates []float64
+	// The budget is tracked here as well as read off the context: a caller
+	// without a deadline (a direct measureOllamaNative, a test) would
+	// otherwise see the full budget before every sample and keep sizing as
+	// if nothing had been spent.
+	started := time.Now()
+	deadline, hasDeadline := ctx.Deadline()
 	for i := 0; i < benchSampleCount; i++ {
-		r, err := ollamaGenerateOnce(ctx, deps, benchPromptCompletionTokens)
+		remaining := benchMeasureBudget - time.Since(started)
+		if hasDeadline {
+			remaining = min(remaining, time.Until(deadline))
+		}
+		plan := planBenchSizing(benchSizingFacts{
+			ObservedTokps: medianFloat(rates),
+			Remaining:     remaining,
+			SamplesLeft:   benchSampleCount - i,
+		})
+		r, err := ollamaGenerateOnce(ctx, deps, plan.CompletionTokens, plan.RequestTimeout)
 		if err != nil {
 			if len(rates) > 0 {
 				deps.Logger.Warn("inference boot benchmark: sample failed; using completed samples",
