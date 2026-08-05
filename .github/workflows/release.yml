@@ -178,7 +178,6 @@ jobs:
             packaging/install/install.ps1
             packaging/install/uninstall.sh
             packaging/install/uninstall.ps1
-            scripts/install/ollama-windows.ps1
             LICENSE
             dist/THIRD_PARTY_LICENSES
             dist/waired-windows-amd64.zip

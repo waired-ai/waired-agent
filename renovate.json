@@ -43,6 +43,15 @@
       "ignoreUnstable": true
     },
     {
+      "description": "An ollama bump needs no checksum recomputed (the installer verifies against the release's own sha256sum.txt) but DOES need that file, and the asset names, to still be there — this note tells the reviewer what to run",
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["ollama/ollama"],
+      "labels": ["dependencies", "inference", "actionable"],
+      "prBodyNotes": [
+        ":mag: **ollama version bump**: no hash to update here — unlike uv, the installer fetches the release's own `sha256sum.txt` and verifies every archive against it (see `OllamaPinnedVersion`'s doc). What that assumes, and what this bump has to confirm, is that the new release still publishes that file and still names its assets the same way — `0.30.x` renamed the Linux archive from `.tgz` to `.tar.zst`, which 404s exactly one OS. Run `make integration-runtime` (or `go test -tags integration -run TestPinnedReleasePublishesEveryAssetChecksum ./internal/runtime/`) on this branch: it checks all four (goos, goarch) pairs we ship against the real release."
+      ]
+    },
+    {
       "description": "uv bump also needs UVPinnedSHA256Linux64 recomputed; postUpgradeTasks does it when self-hosted Renovate is allowed to run commands, else this note + label tell the reviewer",
       "matchManagers": ["custom.regex"],
       "matchDepNames": ["astral-sh/uv"],

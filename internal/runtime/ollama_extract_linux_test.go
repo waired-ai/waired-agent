@@ -63,7 +63,7 @@ func TestExtractOllamaArchive(t *testing.T) {
 	}
 
 	dest := t.TempDir()
-	if err := extractOllamaArchive(stageArchive(t, zstBuf.Bytes()), dest); err != nil {
+	if err := extractOllamaArchive(stageArchive(t, zstBuf.Bytes()), dest, true); err != nil {
 		t.Fatalf("extractOllamaArchive: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dest, "bin", "ollama"))
@@ -82,14 +82,14 @@ func TestExtractOllamaArchive(t *testing.T) {
 // .tgz fetched by mistake, or an HTML error page) must fail loudly instead
 // of feeding garbage to tar.
 func TestExtractOllamaArchive_NotZstd(t *testing.T) {
-	if err := extractOllamaArchive(stageArchive(t, []byte("<html>not a release</html>")), t.TempDir()); err == nil {
+	if err := extractOllamaArchive(stageArchive(t, []byte("<html>not a release</html>")), t.TempDir(), true); err == nil {
 		t.Fatal("expected an error for non-zstd input")
 	}
 }
 
 // A missing archive is an error from the extractor, not a panic.
 func TestExtractOllamaArchive_Missing(t *testing.T) {
-	if err := extractOllamaArchive(filepath.Join(t.TempDir(), "absent.tar.zst"), t.TempDir()); err == nil {
+	if err := extractOllamaArchive(filepath.Join(t.TempDir(), "absent.tar.zst"), t.TempDir(), true); err == nil {
 		t.Fatal("expected an error for a missing archive")
 	}
 }

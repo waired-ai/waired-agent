@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
-	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
 // These are the regression tests for the four "who owns stdin" issues
@@ -812,9 +810,8 @@ func TestRunInitViaDaemon_EngineThatWillNotStartExitsLocalAIDown(t *testing.T) {
 // default.
 //
 // The bundled binary is written for real because engineInstallDecision asks
-// the FILESYSTEM on linux and darwin (bundledEnginePath) and the DETECTION on
-// windows; stubbing only one leaves the test passing on one OS and taking the
-// install branch on the others.
+// the FILESYSTEM, on every OS since #493 — there is no detection seam left to
+// stub instead.
 func stubEngineAlreadyInstalled(t *testing.T, stateDir string) {
 	t.Helper()
 	bundled := infruntime.BundledOllamaBinaryPath(runtime.GOOS, stateDir)
@@ -824,16 +821,9 @@ func stubEngineAlreadyInstalled(t *testing.T, stateDir string) {
 	if err := os.WriteFile(bundled, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatalf("write bundled engine: %v", err)
 	}
-	present := setup.OllamaDetection{
-		Installed: true, WairedManaged: true,
-		Path: bundled, Version: infruntime.OllamaPinnedVersion,
-	}
-	origInstall, origDetect := setupInstallEngine, setupDetectEngine
+	origInstall := setupInstallEngine
 	setupInstallEngine = func(bool, string, func(infruntime.OllamaInstallProgress)) error { return nil }
-	setupDetectEngine = func(context.Context, string) setup.OllamaDetection { return present }
-	t.Cleanup(func() {
-		setupInstallEngine, setupDetectEngine = origInstall, origDetect
-	})
+	t.Cleanup(func() { setupInstallEngine = origInstall })
 }
 
 // stubEngineInstallFailure makes the executor's engine install fail on
@@ -844,12 +834,9 @@ func stubEngineAlreadyInstalled(t *testing.T, stateDir string) {
 // to have ollama does not take the "already present" branch.
 func stubEngineInstallFailure(t *testing.T) {
 	t.Helper()
-	origInstall, origDetect := setupInstallEngine, setupDetectEngine
+	origInstall := setupInstallEngine
 	setupInstallEngine = func(bool, string, func(infruntime.OllamaInstallProgress)) error {
 		return errors.New("no space left on device")
 	}
-	setupDetectEngine = func(context.Context, string) setup.OllamaDetection { return setup.OllamaDetection{} }
-	t.Cleanup(func() {
-		setupInstallEngine, setupDetectEngine = origInstall, origDetect
-	})
+	t.Cleanup(func() { setupInstallEngine = origInstall })
 }

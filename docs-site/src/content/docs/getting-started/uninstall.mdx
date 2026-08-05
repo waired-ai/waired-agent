@@ -100,11 +100,19 @@ with every model you downloaded. It cannot be undone.
 	</TabItem>
 </Tabs>
 
-<Aside type="note" title="An Ollama app you installed yourself stays">
-	Waired only removes the copy of the AI software it installed for itself.
-	Anything you installed separately is left alone — on a Mac, that means an
-	**Ollama** in your Applications folder is not touched. Drag it to the Trash
-	if you want it gone, and delete `~/.ollama` for the models it downloaded.
+<Aside type="note" title="What happens to an Ollama you installed yourself">
+	Waired keeps its own copy of the AI software inside its own folder, so
+	removing Waired removes that copy. A separate Ollama you installed yourself
+	is treated differently on each system, and the difference is worth knowing
+	before you run the command above:
+
+	- **macOS**: an **Ollama** in your Applications folder is never touched.
+	  Drag it to the Trash if you want it gone, and delete `~/.ollama` for the
+	  models it downloaded.
+	- **Windows**: "remove everything, including models" means exactly that —
+	  an Ollama in `Program Files` or in your user folder is removed too, along
+	  with its models. Use the plain uninstall above if you want to keep it.
+	- **Linux**: same as Windows — an Ollama installed system-wide is removed.
 </Aside>
 
 ## After you uninstall

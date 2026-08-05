@@ -8,8 +8,8 @@
 # paths-gated job produces no check run when the surface is untouched, it CANNOT
 # be a required status check; this guard (run in ci.yml's always-on lint job)
 # fails if the filter loses one of those anchors, which would silently drop the
-# AMSI gate for a change to install.ps1 / ollama-windows.ps1 / the scanner —
-# the exact class of regression (#552) the gate exists to catch.
+# AMSI gate for a change to install.ps1 / uninstall.ps1 / the scanner — the
+# exact class of regression (#552) the gate exists to catch.
 #
 # Same belt-and-braces pattern as installtest-paths-guard.sh /
 # routing-sentinel-paths-guard.sh. Run from the repository root.
@@ -20,12 +20,16 @@ wf=".github/workflows/amsi-scan.yml"
 
 missing=()
 
-# The AMSI surface the gate must always cover: the two scripts that reach the
-# AMSI path in the user's hands (install.ps1 via `iwr | iex`, ollama-windows.ps1
-# fetched + run), the scanner itself, and the workflow's own self-reference.
+# The AMSI surface the gate must always cover: the scripts that reach the AMSI
+# path in the user's hands (install.ps1 and uninstall.ps1, both fetched and run
+# through `iwr`), the scanner itself, and the workflow's own self-reference.
+#
+# ollama-windows.ps1 was the third until #493 folded the Windows engine install
+# into the Go installer. waired no longer ships any PowerShell that downloads
+# and executes an engine, which is the surface AMSI flagged in #552.
 for anchor in \
   'packaging/install/install.ps1' \
-  'scripts/install/ollama-windows.ps1' \
+  'packaging/install/uninstall.ps1' \
   'scripts/dev/amsi-scan.ps1' \
   '.github/workflows/amsi-scan.yml'; do
   grep -qF "${anchor}" "${wf}" || missing+=("${anchor}")
@@ -38,4 +42,4 @@ if (( ${#missing[@]} )); then
   exit 1
 fi
 
-echo "OK: ${wf} paths carry the AMSI-scan-surface anchors (install.ps1, ollama-windows.ps1, the scanner)."
+echo "OK: ${wf} paths carry the AMSI-scan-surface anchors (install.ps1, uninstall.ps1, the scanner)."

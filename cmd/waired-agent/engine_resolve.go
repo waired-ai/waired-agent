@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -28,43 +27,38 @@ import (
 // machine.
 
 // resolveOllamaBinary is the daemon's rule for locating ollama: the
-// waired-managed binary under the state dir, or nothing.
+// waired-managed binary under the state dir, or nothing. On every OS,
+// since #493 brought Windows onto the same layout.
 //
-// Linux and macOS are STRICT. Falling back to PATH used to spawn
-// whatever system ollama happened to be installed — an unpinned version,
-// software waired never tested against — on our port. macOS joined the
-// strict side with #492, which moved its bundled install off
-// /Applications and under the state dir; until then the fallback was
-// load-bearing, because the waired-managed install genuinely lived
-// outside the state dir there.
+// The PATH / well-known-paths fallback this used to end in is gone. It
+// spawned whatever system ollama happened to be installed — an unpinned
+// version, software waired never tested against — on our port, and it
+// was the mechanism behind the #139 false GREEN: a leg could pass, and a
+// host could serve, through an engine waired had never installed. It was
+// load-bearing only while the managed install genuinely lived outside the
+// state dir, which was true on macOS until #492 and on Windows until
+// #493. It is true nowhere now.
 //
-// Windows still keeps the fallback for one more change (#493 relocates
-// its install; the fallback goes with it), which is why this takes a
-// goos at all.
-//
-// goos is a parameter, not runtime.GOOS, so the branch is table-testable
-// from any runner (repo rule: route GOOS-varying decisions through a
-// function taking runtime.GOOS).
+// goos is a parameter, not runtime.GOOS, so the binary name (.exe on
+// Windows) is table-testable from any runner (repo rule: route
+// GOOS-varying decisions through a function taking runtime.GOOS).
 func resolveOllamaBinary(goos, stateDir string) (string, error) {
 	bundled := infruntime.BundledOllamaBinaryPath(goos, stateDir)
 	if fi, err := os.Stat(bundled); err == nil && fi.Mode().IsRegular() {
 		return bundled, nil
 	}
-	if goos != "windows" {
-		return "", fmt.Errorf(
-			"bundled ollama not installed (expected at %s): run `%s`",
-			bundled, elevatedInstallHint(goos))
-	}
-	return download.ResolveBinary("")
+	return "", fmt.Errorf(
+		"bundled ollama not installed (expected at %s): run `%s`",
+		bundled, elevatedInstallHint(goos))
 }
 
 // elevatedInstallHint spells the install command the way the operator has
-// to invoke it. The state dir is root-owned on both strict OSes, so both
-// need sudo — but only after #492 on macOS, where the install used to go
-// to the admin-writable /Applications and needed none.
+// to invoke it. Every OS now writes a directory an ordinary user does not
+// own; Windows says it in its own idiom rather than with a sudo it has no
+// command for.
 func elevatedInstallHint(goos string) string {
 	if goos == "windows" {
-		return "waired runtimes install ollama"
+		return "waired runtimes install ollama (from an elevated prompt)"
 	}
 	return "sudo waired runtimes install ollama"
 }

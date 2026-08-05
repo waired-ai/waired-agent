@@ -6,7 +6,7 @@
   would get `iwr ... | iex` blocked on stock Windows (#552 / #553).
 
 .DESCRIPTION
-  install.ps1 and ollama-windows.ps1 ship to users via `iwr | iex` / fetch+run.
+  install.ps1 and uninstall.ps1 ship to users via `iwr | iex` / fetch+run.
   When the body is handed to Invoke-Expression, PowerShell passes the WHOLE
   script text to AMSI; a contiguous download-decode-execute cradle in the body
   can get the entire script blocked ("This script contains malicious content").
@@ -98,7 +98,7 @@ if (-not $Path -or $Path.Count -eq 0) {
     $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)  # scripts/dev -> repo root
     $Path = @(
         (Join-Path $repoRoot 'packaging/install/install.ps1'),
-        (Join-Path $repoRoot 'scripts/install/ollama-windows.ps1')
+        (Join-Path $repoRoot 'packaging/install/uninstall.ps1')
     )
 }
 

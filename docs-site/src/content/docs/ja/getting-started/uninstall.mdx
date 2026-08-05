@@ -5,7 +5,7 @@ meta:
   audience: Waired を削除する人
   needs: 管理者権限
   time: 1 分以内
-sourceHash: c0b9c25afaf55896
+sourceHash: 38cd1f885f97bb64
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -98,11 +98,17 @@ Waired の削除は約 10 秒で終わり、バックグラウンドに何も残
 	</TabItem>
 </Tabs>
 
-<Aside type="note" title="自分で入れた Ollama アプリは残ります">
-	Waired が消すのは、Waired が自分用に入れた AI ソフトだけ。別途インストールした
-	ものはそのまま残ります。Mac の場合、アプリケーションフォルダの **Ollama** には
-	触れません。不要ならゴミ箱へ移動し、ダウンロード済みモデルは `~/.ollama` を
-	削除。
+<Aside type="note" title="自分で入れた Ollama の扱い">
+	Waired は AI ソフトを自分のフォルダの中に持つため、Waired を削除するとその
+	コピーも消えます。自分で別途インストールした Ollama の扱いは OS ごとに異なり、
+	上のコマンドを実行する前に知っておく価値があります。
+
+	- **macOS**: アプリケーションフォルダの **Ollama** には触れません。不要なら
+	  ゴミ箱へ移動し、ダウンロード済みモデルは `~/.ollama` を削除。
+	- **Windows**: 「モデルも含めてすべて削除」は文字どおり。`Program Files` や
+	  ユーザーフォルダの Ollama も、そのモデルごと削除されます。残したい場合は
+	  上の通常のアンインストールを使用。
+	- **Linux**: Windows と同じ。システム全体に入れた Ollama も削除されます。
 </Aside>
 
 ## 削除したあとは

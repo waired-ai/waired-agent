@@ -74,18 +74,19 @@ type Puller struct {
 // "OLLAMA_HOST=127.0.0.1:<port>" whenever the engine is not on the
 // upstream default 11434 (the waired-owned bundled port 9475 is not),
 // or the pull lands on whatever answers 11434 instead.
+//
+// Production builds a NewResolvingPuller instead; this constructor is for
+// callers that already hold the path.
 func NewPuller(binary string, runner CommandRunner, env ...string) *Puller {
 	return &Puller{binary: binary, runner: runner, env: env}
 }
 
 // NewResolvingPuller is NewPuller for a caller whose ollama binary may
-// not exist yet AND may not land anywhere ResolveBinary looks. waired's
-// own Linux install lives under the agent state dir, deliberately off
-// $PATH (see cmd/waired-agent/engine_resolve.go), so Pull's $PATH /
-// well-known-paths fallback answers "not installed" on exactly the hosts
-// waired provisioned (#304). resolve is consulted on every Pull, so an
-// engine installed — or re-installed — after boot is picked up without
-// an agent restart.
+// not exist yet. waired's own install lives under the agent state dir,
+// deliberately off $PATH (see cmd/waired-agent/engine_resolve.go), and
+// resolving it is the daemon's rule, not this package's. resolve is
+// consulted on every Pull, so an engine installed — or re-installed —
+// after boot is picked up without an agent restart (#304).
 func NewResolvingPuller(resolve func() (string, error), runner CommandRunner, env ...string) *Puller {
 	return &Puller{resolve: resolve, runner: runner, env: env}
 }
@@ -100,20 +101,19 @@ func (p *Puller) Pull(ctx context.Context, tag string, onProgress func(Progress)
 	}
 	// Lazily resolve the binary when it was empty at construction time:
 	// an agent that booted before ollama was installed can pull as soon
-	// as the binary appears, without a restart (#188). Prefer the
-	// caller's resolver when it has one — ResolveBinary alone cannot see
-	// a state-dir install (#304). Nothing is cached back into p.binary:
-	// Puller has no mutex and Pull runs on many goroutines.
+	// as the binary appears, without a restart (#188). Nothing is cached
+	// back into p.binary: Puller has no mutex and Pull runs on many
+	// goroutines.
+	//
+	// There is no fallback below this. Until #493 an unresolved binary
+	// fell through to a $PATH / well-known-paths walk, which is how a pull
+	// could land on an engine waired never installed (#139).
 	binary := p.binary
-	if binary == "" && p.resolve != nil {
-		resolved, err := p.resolve()
-		if err != nil {
-			return err
-		}
-		binary = resolved
-	}
 	if binary == "" {
-		resolved, err := ResolveBinary("")
+		if p.resolve == nil {
+			return errors.New("download: no ollama binary and no resolver")
+		}
+		resolved, err := p.resolve()
 		if err != nil {
 			return err
 		}
@@ -326,43 +326,4 @@ func HumanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTP"[exp])
-}
-
-// ErrNotInstalled is returned by helper helpers when ollama is missing.
-var ErrNotInstalled = errors.New("download: ollama binary not found")
-
-// ResolveBinary returns the absolute path to ollama, in this order:
-//  1. `override` (e.g. a bundled path or OllamaConfig.Binary)
-//  2. `WAIRED_OLLAMA_BINARY` environment variable
-//  3. exec.LookPath("ollama") — works on Linux/macOS and on Windows
-//     for users whose PATH includes the Ollama installer
-//  4. OS-specific well-known install paths (ollamaCandidates; Windows:
-//     %ProgramFiles%, %LOCALAPPDATA%\Programs)
-//
-// The third + fourth steps matter for Windows Service mode: when
-// waired-agent runs as LocalSystem, the user's PATH is not inherited,
-// so a plain LookPath misses Ollama even though it is installed.
-//
-// Step 4 reads the host filesystem, so a test that needs "nothing is
-// installed" must close it with SwapCandidatesForTest — the first three
-// steps alone do not make this hermetic (#386).
-func ResolveBinary(override string) (string, error) {
-	if override != "" {
-		return override, nil
-	}
-	if env := os.Getenv("WAIRED_OLLAMA_BINARY"); env != "" {
-		return env, nil
-	}
-	if path, err := exec.LookPath(ollamaCmdName); err == nil {
-		return path, nil
-	}
-	for _, candidate := range currentCandidates() {
-		if candidate == "" {
-			continue
-		}
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	return "", ErrNotInstalled
 }

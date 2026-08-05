@@ -21,7 +21,6 @@ $Settings = Join-Path $PSScriptRoot 'PSScriptAnalyzerSettings.psd1'
 $Targets = @(
     'packaging/install/install.ps1'
     'packaging/install/uninstall.ps1'
-    'scripts/install/ollama-windows.ps1'
     'scripts/install/waired-agent-windows.ps1'
     'scripts/dev/installtest-pwsh.ps1'
     'scripts/ci/ps-script-lint.ps1'

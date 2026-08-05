@@ -12,7 +12,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
-	"github.com/waired-ai/waired-agent/internal/setup"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -47,9 +46,6 @@ var setupVLLMActive = func(stateDir string) bool {
 // PATH-only probe there refuses vLLM on a perfectly capable card — the
 // same defect as #67, one gate along.
 var setupDetectNVIDIA = hardware.NVIDIADriverPresent
-
-// setupDetectEngine is the detection seam, for the same reason.
-var setupDetectEngine = setup.DetectOllama
 
 // setupHandState is the ownership-handoff seam. The real one shells out
 // to chown and self-guards on euid 0 + an installed service, which a
@@ -272,21 +268,14 @@ func installEngineAsExecutor(
 	}
 
 	bundledPresent := false
-	if p := bundledEnginePath(goos, stateDir); p != "" {
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
-			bundledPresent = true
-		}
+	if fi, err := os.Stat(bundledEnginePath(goos, stateDir)); err == nil && fi.Mode().IsRegular() {
+		bundledPresent = true
 	}
-	det := setupDetectEngine(ctx, stateDir)
-	action := engineInstallDecision(
-		goos, elevated, det, bundledPresent,
-		os.Getenv("WAIRED_NO_OLLAMA") != "",
-		engineIncomplete(goos, det, os.Getenv("ProgramFiles")))
+	action := engineInstallDecision(goos, elevated, bundledPresent,
+		os.Getenv("WAIRED_NO_OLLAMA") != "")
 
 	switch action {
-	// Repair runs the same installer against bits an earlier attempt left
-	// unconfigured (#190); it skips the base download, so it is cheap.
-	case engineActionInstall, engineActionRepair:
+	case engineActionInstall:
 		writePromptf(out, "%s %s\n", emo("📦", ">>"), narration)
 		// The sink is what turns this install into two live rows in the
 		// browser (waired-agent#197). It is bound to THIS lease, so a

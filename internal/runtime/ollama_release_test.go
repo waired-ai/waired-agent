@@ -22,8 +22,11 @@ func TestOllamaReleaseFor(t *testing.T) {
 	}{
 		{"linux amd64", "linux", "amd64",
 			"ollama-linux-amd64.tar.zst", "ollama-linux-amd64-rocm.tar.zst", ""},
-		{"linux arm64", "linux", "arm64",
-			"ollama-linux-arm64.tar.zst", "ollama-linux-arm64-rocm.tar.zst", ""},
+		// arm64 has no ROCm overlay upstream — see ollamaReleaseFor. The
+		// integration sibling checks that against the real release; this
+		// row is what stops a "just derive it from goarch" edit.
+		{"linux arm64 has no ROCm overlay", "linux", "arm64",
+			"ollama-linux-arm64.tar.zst", "", ""},
 		{"darwin arm64", "darwin", "arm64",
 			"ollama-darwin.tgz", "", "bin"},
 		{"darwin amd64 gets the same universal asset", "darwin", "amd64",
