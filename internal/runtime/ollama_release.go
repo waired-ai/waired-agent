@@ -80,15 +80,22 @@ func ollamaReleaseFor(goos, goarch string) (ollamaRelease, error) {
 	switch goos {
 	case "linux":
 		switch goarch {
-		case "amd64", "arm64":
+		case "amd64":
+			return ollamaRelease{
+				Base: "ollama-linux-amd64.tar.zst",
+				ROCm: "ollama-linux-amd64-rocm.tar.zst",
+			}, nil
+		case "arm64":
+			// No ROCm overlay: upstream publishes none for linux/arm64, and
+			// what it ships instead (the jetpack variants) is NVIDIA Jetson.
+			// Deriving the name from goarch, as this used to, produced
+			// ollama-linux-arm64-rocm.tar.zst — an asset that has never
+			// existed, fetched on any arm64 host whose GPU reports as AMD.
+			return ollamaRelease{Base: "ollama-linux-arm64.tar.zst"}, nil
 		default:
 			return ollamaRelease{}, fmt.Errorf(
 				"ollama install: unsupported GOARCH %q (linux amd64/arm64 only)", goarch)
 		}
-		return ollamaRelease{
-			Base: "ollama-linux-" + goarch + ".tar.zst",
-			ROCm: "ollama-linux-" + goarch + "-rocm.tar.zst",
-		}, nil
 	case "darwin":
 		// One asset for both slices: the Mach-O inside is universal
 		// (FAT_MAGIC, x86_64 + arm64), so there is no arch token to map.
