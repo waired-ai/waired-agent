@@ -194,3 +194,55 @@ func TestTTFBBudgetFor(t *testing.T) {
 		})
 	}
 }
+
+// TestProxyAnthropicStream_TTFBTimeoutIsRecorded and its transport-error
+// sibling below complement the two tests above, which pass a nil
+// requestRec — and that nil is why these two exits recorded nothing.
+// handleAnthropicMessagesImpl calls rr.succeed() before dispatch, so an
+// exit that writes a 502 without recording leaves 200 in the event ring,
+// and the request reads as a finished turn to the tray, the metrics, and
+// the per-peer error window (waired-agent#281).
+func TestProxyAnthropicStream_TTFBTimeoutIsRecorded(t *testing.T) {
+	engine := slowFirstByteEngine(500 * time.Millisecond)
+	defer engine.Close()
+	h := NewHandlerSet(Deps{HTTPClient: http.DefaultClient})
+	w := httptest.NewRecorder()
+	rr := &requestRec{}
+	rr.succeed() // as the handler does, before it knows anything
+
+	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
+		[]byte(ttfbStreamBody), "waired/default", nil, w, 50*time.Millisecond, rr, nil)
+
+	if rr.ev.Status != http.StatusBadGateway {
+		t.Errorf("recorded status = %d, want %d (the client was sent 502)", rr.ev.Status, http.StatusBadGateway)
+	}
+	if rr.ev.ErrorReason != LocalErrorPeerTTFBTimeout {
+		t.Errorf("recorded error_reason = %q, want %q", rr.ev.ErrorReason, LocalErrorPeerTTFBTimeout)
+	}
+}
+
+func TestProxyAnthropicStream_TransportErrorIsRecorded(t *testing.T) {
+	dead := httptest.NewServer(http.NewServeMux())
+	deadURL := dead.URL
+	dead.Close() // nothing is listening on that port now
+
+	h := NewHandlerSet(Deps{HTTPClient: http.DefaultClient})
+	w := httptest.NewRecorder()
+	rr := &requestRec{}
+	rr.succeed()
+
+	h.proxyAnthropicStream(context.Background(), http.DefaultClient, deadURL,
+		[]byte(ttfbStreamBody), "waired/default", nil, w, 0, rr, nil)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", w.Code)
+	}
+	if rr.ev.Status != http.StatusBadGateway {
+		t.Errorf("recorded status = %d, want %d", rr.ev.Status, http.StatusBadGateway)
+	}
+	// The reason the non-streaming leg has always used for this: one
+	// failure must not be described two ways by two transports.
+	if rr.ev.ErrorReason != "engine_request_failed" {
+		t.Errorf("recorded error_reason = %q, want %q", rr.ev.ErrorReason, "engine_request_failed")
+	}
+}

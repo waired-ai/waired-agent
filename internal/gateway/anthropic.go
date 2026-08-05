@@ -478,6 +478,11 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
+		// Recorded, not just written: rr.succeed() runs before dispatch
+		// (handleAnthropicMessagesImpl), so without this the event ring
+		// keeps the pre-dispatch 200 and a leg that produced nothing
+		// reads as a finished turn.
+		rr.fail(http.StatusBadGateway, LocalErrorPeerTTFBTimeout)
 		w.Header().Set(HeaderLocalError, LocalErrorPeerTTFBTimeout)
 		w.Header().Set(HeaderTTFBBudgetMs, fmt.Sprintf("%d", ttfb.Milliseconds()))
 		slog.Warn("gateway: peer produced no first byte within TTFB budget; failing pre-commit for fallback",
@@ -490,6 +495,10 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		return
 	}
 	if err != nil {
+		// Same status and reason as the non-streaming twin, which has
+		// recorded this since it was written: the two transports must not
+		// describe one failure differently.
+		rr.fail(http.StatusBadGateway, "engine_request_failed")
 		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
