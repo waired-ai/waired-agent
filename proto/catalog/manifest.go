@@ -44,7 +44,7 @@ type Manifest struct {
 
 	// InternalOnly, when non-empty, keeps this model out of everything a
 	// person sees or is given: auto-selection, the install picker
-	// (including its below-the-floor fallback for hosts below the recommended spec), the
+	// (including its below-the-floor fallback for under-spec hosts), the
 	// tray catalog, the control plane's device catalog, `models ls
 	// --detail`, and the generated docs tables. The value is the REASON
 	// it is withheld.
@@ -230,7 +230,7 @@ const (
 //
 // "Offered" is the default on purpose. Every surface that shows a model
 // to a person or picks one on their behalf — auto-selection, the
-// install picker and its below-recommended-spec fallback, the tray catalog, the
+// install picker and its under-spec fallback, the tray catalog, the
 // control plane's device catalog, `models ls --detail`, the generated
 // docs table — reaches the catalog through this one function. Filtering
 // HERE means a surface that forgets the distinction shows too little

@@ -79,7 +79,7 @@ const MinVLLMVRAMMB = 8 * 1024
 // model auto-selection (#517): the installer picks the largest catalog
 // model that fits the host AND clears this quality_tier. When even the
 // best-fitting model is below it — only sub-coding tiny models fit —
-// the host is treated as below the recommended spec and local inference is skipped (the
+// the host is treated as under-spec and local inference is skipped (the
 // node still enrolls and routes to peers).
 //
 // 30 == qwen2.5-coder-3b-instruct, the smallest usable coding model we
