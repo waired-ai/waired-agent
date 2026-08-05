@@ -235,7 +235,7 @@ func TestRuntimeStatusFor_VLLMCarriesTuning(t *testing.T) {
 		Warning:       "context window clamped to 59392 tokens (model native 131072) so the KV cache fits GPU memory at gpu-memory-utilization=0.85, TP=1",
 	})
 	p.registry.Register(adapter)
-	p.vllm = adapter
+	p.setVLLM(adapter)
 
 	entry := p.runtimeStatusFor(context.Background(), "vllm", hardware.Profile{})
 	if entry.ContextLength != 59392 {
