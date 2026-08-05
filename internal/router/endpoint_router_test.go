@@ -27,7 +27,7 @@ func (s stubAdapter) BaseURL() string            { return "http://stub" }
 func qwen() catalog.Manifest {
 	return catalog.Manifest{
 		ModelID:       "qwen3-8b-instruct",
-		ModelAliases:  []string{"waired/default", "waired/coding"},
+		ModelAliases:  []string{"waired/default"},
 		ContextLength: 8192,
 		Capabilities:  []string{"chat", "json_mode"},
 		Runtime:       catalog.RuntimePolicy{Preferred: catalog.RuntimeOllama},
@@ -265,7 +265,7 @@ func TestSelector_DynamicDefaultAlias(t *testing.T) {
 		Runtimes:       registryWithOllama(),
 		DefaultModelID: "qwen3-35b-moe",
 	})
-	for _, alias := range []string{"waired/default", "waired/coding"} {
+	for _, alias := range []string{"waired/default"} {
 		out, err := s.Select(context.Background(), Request{Model: alias})
 		if err != nil {
 			t.Fatalf("Select(%q): %v", alias, err)

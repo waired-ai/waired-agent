@@ -187,7 +187,7 @@ func TestAnthropicModelsList(t *testing.T) {
 	for _, m := range got.Data {
 		byID[m.ID] = m
 	}
-	for _, id := range []string{"qwen3-8b-instruct", "waired/default", "waired/coding"} {
+	for _, id := range []string{"qwen3-8b-instruct", "waired/default"} {
 		m, ok := byID[id]
 		if !ok {
 			t.Errorf("model id %q missing from /anthropic/v1/models", id)

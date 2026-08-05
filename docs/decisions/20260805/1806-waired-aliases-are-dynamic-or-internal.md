@@ -2,7 +2,7 @@
 status: accepted
 ---
 
-# 静的な `waired/*` 別名は退役し、残るのは動的解決か internal_only だけ (20260805 18:06)
+# `waired/*` 別名は `waired/default` 1 つに畳む (20260805 18:06)
 
 ## Status
 Accepted
@@ -25,7 +25,9 @@ bundled マニフェストは 13 個の静的な `waired/*` 別名を宣言し�
 | `waired/moe-large` | qwen3-coder-480b-a35b-instruct | なし |
 | `waired/moe-dual-gpu` | deepseek-v4-flash | なし |
 | `waired/moe-frontier` | glm-5.2 | なし |
-| `waired/small` | qwen2.5-coder-3b-instruct | openclaw `modelRefs()`、docs-site |
+| `waired/small` | qwen2.5-coder-3b-instruct | openclaw allowlist、docs-site |
+| `waired/coding` | （動的、#632） | openclaw allowlist、docs-site |
+| `waired/default` | （動的、#632） | `cmd/waired/infer.go:38` の既定値、`models_checkagent.go:92`、`internal/agentgrade/fixture.go:91`、`docs-site/src/data/model-catalog.ts:37`、`cmd/waired/link_helper.go:70`、openclaw allowlist、docs-site |
 | `waired/tiny` | granite4-350m (`internal_only`) | e2e ハーネス `WAIRED_TINY_ALIAS`、`installtest-macos.sh` |
 
 11 個が現れるのは 3 か所だけ — 宣言している manifest 自身、その宣言が解決することだけを
@@ -41,12 +43,29 @@ opencode 統合は `e8918b8`（#333 / #355）で削除され、残る openclaw �
 
 ## Decision
 
-**静的な `waired/*` 別名は `internal_only` なモデルにのみ残す。** それ以外は退役させ、
-製品が使い続ける名前はルーターがリクエスト時に解決する。
+**`waired/*` は `waired/default` 1 つに畳む。** 静的な別名が残るのは `internal_only` な
+モデルの場合だけ。
 
 * 11 個の装飾別名を `model_aliases` から削除する
-* `waired/small` を動的別名にする（`waired/default` / `waired/coding` と同じ機構、#632）
+* **`waired/coding` と `waired/small` も退役させる**（`legacyModelRefs()` 経由で
+  openclaw のユーザー設定から削除。`waired/auto` を退役させたのと同じ経路）
+* `waired/default` は動的解決のまま残す
 * `waired/tiny` は静的のまま残す
+
+この名前空間は、**モデル名すら見せずに済ませることを目指した初期の構想の名残**である
+（オーナー判断、20260805）。想定利用者が LLM のモデル名を当たり前に知っている層に
+変わった今、抽象化そのものに需要がない。
+
+ただし `waired/default` が残る理由は「やさしさ」ではない。**モデルを切り替えても
+クライアント設定を書き換えずに済む間接参照**であり、`waired infer` の既定値・
+agentgrade ハーネス・docs-site のカタログ表の `(default)` 印・openclaw プラグインが
+実際に依存している。symlink が残るのと同じ理由で残る。
+
+対して `waired/coding` は `waired/default` と**完全に同一の解決**をしていた
+（`DynamicCodingAliases` に両方が入り、分岐は 1 本、どちらも `DefaultModelID` へ）。
+生成ドキュメントも「動的: waired/default と同じ解決」とそのまま出力していた。
+つまりピッカーが同じモデルを 2 つの名前で並べていただけで、間接参照としての
+価値を何も足していない。
 
 ### なぜ付け替えではなく退役なのか
 
@@ -69,21 +88,28 @@ tier 上位の候補は deepseek-v4-flash が 192 GB、qwen3-coder-480b が 560 
 manifest が `license` / `min_vram_mb` / `param_count` として既に構造化データで持つ事実を
 名前に二重符号化したもの。カタログが動けば名前だけが古くなる。
 
-### `waired/small` が動的になる理由と、その定義
+### `waired/small` を役割名に作り替えず退役させた理由
 
-`waired/small` は唯一実消費者を持つサイズ名であり、同時に**次に壊れる名前**でもあった。
-指している qwen2.5-coder-3b は #522 で退役する。openclaw が全ユーザーの設定に書き込むため、
-消すことも、退役するモデルを指し続けることもできない。
+検討の途中では `waired/small` を「このホストが持っている中で最も小さいモデル」という
+役割名に作り替える案を実装していた。退役に切り替えた理由は 2 つ。
 
-役割名に変える。**このホストが既に持っている中で最も小さいモデル**、無ければコーディング既定
-（`waired/default` と同じ解決）へフォールバックする。
+1. **需要の根拠がない。** 消費者は openclaw の allowlist だけで、製品コードから
+   読む場所は 1 つも無い。「軽い方が欲しい」を名前で表現する必要があるのは、
+   モデル名を知らない利用者を想定していた頃の前提である
+2. **ほとんどのホストで `waired/default` と同じ答えになる。** 差が出るのは
+   モデルを 2 つ以上ダウンロードしているホストだけで、ピッカーに 2 行目を
+   増やす価値がその差に見合わない
 
-「収まる中で最も小さいモデル」ではない点が意図的である。**ダウンロードされていないモデルは
-速い応答ではなく、数 GB の待ち時間**であり、そこへ解決させると「軽い選択肢」が「遅い選択肢」に
-なる。モデルを 1 つしか持たないホストではフォールバック先と同じ答えになる。
+軽いモデルが欲しい場合は `waired models ls` に出る model_id を直接指名する。
+その経路は全モデルについて残っている。
 
-`manual_only` なモデルは候補から除く。これは製品がユーザーの代わりに答える経路であり、
-指名ではないため（#521）。
+### 退役の経路
+
+`legacyModelRefs()`（`internal/integration/openclaw/openclawjson.go`）に移す。
+`mergeConfig` が re-link 時に、`removeManagedKeys` が uninstall 時にユーザーの
+`openclaw.json` から該当キーを削除する。**`waired/auto` を `waired/default` へ
+改称した #422/#478 と同じ経路**であり、そのときと同様、ルーターは退役した名前を
+解決しない（生かしておくと誰も設定から消さないため）。
 
 ### `waired/tiny` が残る理由
 
@@ -93,9 +119,12 @@ installtest が名前で pin する**テスト用ハンドル**であって、�
 
 ## Consequences
 
-* **退役した 11 個は解決しなくなる。** 消費者はゼロだが、`waired/flagship` は private の
-  quickstart に記載があるため、そちらを `gpt-oss-120b` 直指名に直す follow-up が要る。
-  明示的に `ErrModelNotFound` で失敗する方が、巨大モデルへ黙って redirect されるより良い
+* **退役した 13 個は解決しなくなる。** 装飾 11 個の消費者はゼロ。`waired/coding` と
+  `waired/small` は openclaw のユーザー設定に残るが、re-link で削除される。
+  `waired/flagship` は private の quickstart に記載があるため、そちらを
+  `gpt-oss-120b` 直指名に直す follow-up が要る。明示的に `ErrModelNotFound` で
+  失敗する方が、巨大モデルへ黙って redirect されるより良い
+* **openclaw のピッカーは 1 行になる。** `modelRefs()` が返すのは `waired/default` のみ
 * **`model_id` とベンダー形式別名は全て残る。** `openai/gpt-oss-120b` / `Qwen/Qwen3.6-27B` /
   `zai-org/GLM-5.2` など、人が指名する経路は失われない
 * **`proto/catalog/retired.go` には何も入らない。** あの表はモデルの退役用で、同ファイルの
@@ -113,7 +142,13 @@ installtest が名前で pin する**テスト用ハンドル**であって、�
   2 つの `waired/*` 名を持つ唯一の manifest になる
 * **`waired/flagship` を gpt-oss-120b に据え置く** — 既存のピンは動き続けるが、「我々の最上位」
   という名前が「推薦しないモデル」に付いたまま出荷される
-* **`waired/small` も退役させる** — openclaw が全ユーザーの設定に書いているため、
-  再 link されるまで壊れたままの参照が残る
+* **`waired/small` を「このホストが持つ中で最小」という役割名に作り替える** — 実装まで
+  したうえで退役に切り替えた。上記のとおり需要の根拠が無く、ほとんどのホストで
+  `waired/default` と同じ答えになる
 * **`waired/small` を「収まる中で最小」にする** — 未ダウンロードのモデルに解決しうるので、
   軽い選択肢を求めた要求が最も遅い応答になる
+* **`waired/coding` を残す** — `waired/default` と同一解決なので、ピッカーに同じモデルが
+  2 行並ぶ状態が続くだけ
+* **`waired/default` も退役させる** — 間接参照としての機能は実在し、`waired infer` の
+  既定値と docs-site のクライアント案内がこれに依存している。消すと
+  「モデルを切り替えたらクライアント設定も書き換える」が常態になる

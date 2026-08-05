@@ -256,7 +256,7 @@ func TestApply_PreservesUserConfig(t *testing.T) {
 		t.Error("peer plugin entry removed by uninstall")
 	}
 	models := navModels(cfg)
-	if _, ok := models["waired/coding"]; ok {
+	if _, ok := models["waired/default"]; ok {
 		t.Error("waired model allowlist survived uninstall")
 	}
 	if _, ok := models["openai/gpt-5.5"]; !ok {

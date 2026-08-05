@@ -855,8 +855,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	}, provider, nil
 }
 
-// defaultCodingModelID resolves what the dynamic coding aliases
-// (waired/default, waired/coding) serve on this host: the explicit
+// defaultCodingModelID resolves what the dynamic coding alias
+// (waired/default) serves on this host: the explicit
 // preferred model, else the persisted active selection, else the
 // bundled default — the same order resolveTuningTarget sizes the
 // engine for (#632). Empty means "no dynamic default"; the router

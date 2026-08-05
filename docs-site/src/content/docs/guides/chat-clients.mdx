@@ -28,14 +28,9 @@ up for you and need none of this page.
 	| OpenAI | `http://127.0.0.1:9473/v1` |
 	| Anthropic | `http://127.0.0.1:9473/anthropic` |
 
-2. **Model** — use a Waired name rather than a specific model, so your settings
-	do not change when you switch models:
-
-	| Name | What it gives you |
-	|---|---|
-	| `waired/default` | The default model |
-	| `waired/coding` | The coding model |
-	| `waired/small` | The smallest model you have installed |
+2. **Model** — use `waired/default` rather than a specific model, and your
+	settings keep working when you switch models. To pin one instead, use the
+	model's own name from `waired models ls`.
 
 3. **API key** — your tool will insist on one. Waired uses a key that lives on
 	your own computer:

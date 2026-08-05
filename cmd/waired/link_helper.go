@@ -67,7 +67,7 @@ func printOpenClawSetupHelper(_ helperPrintOptions, out io.Writer) {
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, bold("OpenClaw integration:"))
 	_, _ = fmt.Fprintln(out, "  - Plugin written to ~/.openclaw/plugins/waired/ and registered+enabled")
-	_, _ = fmt.Fprintln(out, "    in ~/.openclaw/openclaw.json (provider 'waired', models waired/default|coding|small).")
+	_, _ = fmt.Fprintln(out, "    in ~/.openclaw/openclaw.json (provider 'waired', model waired/default).")
 	_, _ = fmt.Fprintln(out, "    Your default model is untouched; restart openclaw to pick it up.")
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "  Tip: the system tray shows live OpenClaw integration status under")
