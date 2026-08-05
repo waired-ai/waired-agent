@@ -1,30 +1,33 @@
-//go:build linux
-
 package runtime
 
-// Bundled Ollama installer (Linux). waired's "out of the box" stance is
-// to package Ollama itself: download a pinned official release tarball
-// into a waired-owned directory and supervise the binary as a foreground
-// child (the existing OllamaAdapter spawn model) — no system service, no
-// systemctl. This mirrors the Windows ZIP approach in
-// scripts/install/ollama-windows.ps1 and the download/extract pattern in
-// uv.go, and replaces the earlier install.sh + `systemctl disable ollama`
-// path (which fought the very service it created). See #188.
+// Bundled Ollama installer. waired's "out of the box" stance is to
+// package Ollama itself: download a pinned official release archive into a
+// waired-owned directory and supervise the binary as a foreground child
+// (the existing OllamaAdapter spawn model) — no system service, no
+// systemctl, no /Applications, no %ProgramFiles%. See #188 for the model
+// and #488 for the rule that made it the only one: every engine instance
+// the agent serves with is one waired installed and manages.
+//
+// Linux got here first (#188). #492 and #493 brought macOS and Windows
+// onto the same path, which is why this file lost its `//go:build linux`
+// tag: the orchestration below is identical everywhere, and the three real
+// differences — which asset, where its payload lands, and how the archive
+// is unpacked — are isolated in ollama_release.go and ollama_extract_*.go.
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/klauspost/compress/zstd"
 
 	"github.com/waired-ai/waired-agent/internal/download"
 )
@@ -33,33 +36,39 @@ import (
 // point it at a local httptest server.
 var OllamaDownloadURLBase = "https://github.com/ollama/ollama/releases/download"
 
-// ollamaTarballMinBytes is a sanity floor: the real linux tarball is
-// hundreds of MB. A response far below this is an error page / partial
-// download, not a release, so we refuse to extract it. (Mirrors the
-// size-floor guard in ollama-windows.ps1; combined with HTTPS this is
-// the v1 integrity posture — a per-version SHA pin is a future
-// hardening, but unlike uv we do not want to chase Ollama's frequent
-// releases with a hardcoded hash.)
-var ollamaTarballMinBytes = 50 << 20 // 50 MiB (var so tests can lower it)
+// ollamaArchiveMinBytes is a sanity floor: every real engine archive is
+// hundreds of MB. It is not the integrity check — that is the SHA-256
+// comparison below — but it is the one that produces a readable message,
+// because a captive portal's login page fails this before it fails as a
+// hash mismatch.
+var ollamaArchiveMinBytes int64 = 50 << 20 // 50 MiB (var so tests can lower it)
+
+// ollamaStageDirName is where archives are staged, inside BaseDir so the
+// download lands on the same volume it will be extracted onto. Swept at
+// the start of every install: a killed install cannot clean up after
+// itself, and nothing else ever swept the ~1.4 GB it leaves behind (#191).
+const ollamaStageDirName = ".stage"
 
 // OllamaInstaller downloads + extracts a pinned Ollama release into
 // BaseDir (typically <state-dir>/runtimes/ollama). The binary lands at
-// BaseDir/bin/ollama, which OllamaAdapter is pointed at.
+// BaseDir/bin/ollama[.exe], which OllamaAdapter is pointed at.
 type OllamaInstaller struct {
 	BaseDir    string
 	HTTPClient *http.Client
 	Now        func() time.Time
 
 	// GPUVendor, when "amd", makes Install overlay the ROCm runtime on
-	// top of the base tarball. Set by the caller from hardware detection;
-	// "" (the default) installs the CUDA+CPU base only.
+	// top of the base archive, on the OSes that have one. Set by the
+	// caller from hardware detection; "" (the default) installs the base
+	// only.
 	GPUVendor string
 
 	// Seams (defaulted by NewOllamaInstaller) so tests exercise the
 	// orchestration without network or tar. onProgress (nil-ok) receives
 	// throttled byte updates while the body streams down.
-	downloadFn func(ctx context.Context, url string, onProgress func(completed, total, bytesPerSec int64)) ([]byte, error)
-	extractFn  func(archive []byte, destDir string) error
+	downloadFn  func(ctx context.Context, url, destPath string, onProgress func(completed, total, bytesPerSec int64)) (int64, error)
+	extractFn   func(archivePath, destDir string) error
+	checksumsFn func(ctx context.Context) (map[string]string, error)
 }
 
 // NewOllamaInstaller wires defaults rooted at baseDir.
@@ -69,12 +78,13 @@ func NewOllamaInstaller(baseDir string) *OllamaInstaller {
 		HTTPClient: newOllamaDownloadClient(),
 		Now:        time.Now,
 	}
-	i.downloadFn = i.httpGet
-	i.extractFn = extractTarZst
+	i.downloadFn = i.fetchToFile
+	i.extractFn = extractOllamaArchive
+	i.checksumsFn = i.fetchChecksums
 	return i
 }
 
-// newOllamaDownloadClient builds the HTTP client for the ~700 MB tarball.
+// newOllamaDownloadClient builds the HTTP client for the ~1.4 GB archive.
 //
 // Deliberately NO http.Client.Timeout: that is a whole-request cap, so it
 // counts body streaming and fails deterministically below roughly 2.5 MB/s
@@ -99,7 +109,7 @@ func newOllamaDownloadClient() *http.Client {
 
 // BinaryPath is the absolute path to the bundled ollama binary.
 func (i *OllamaInstaller) BinaryPath() string {
-	return filepath.Join(i.BaseDir, "bin", "ollama")
+	return filepath.Join(i.BaseDir, "bin", OllamaBinaryName(runtime.GOOS))
 }
 
 // ModelsDir is where the bundled engine stores blobs (kept under the
@@ -114,99 +124,180 @@ func (i *OllamaInstaller) Active() bool {
 	return assertExecutable(i.BinaryPath()) == nil
 }
 
-// Install downloads the pinned tarball (+ ROCm overlay on AMD), extracts
-// it into BaseDir, and returns once BaseDir/bin/ollama is executable.
-// progress may be nil.
+// Install downloads the pinned archive (+ ROCm overlay on AMD, where one
+// exists), extracts it under BaseDir, and returns once the binary is
+// executable. progress may be nil.
 func (i *OllamaInstaller) Install(ctx context.Context, progress func(OllamaInstallProgress)) error {
 	if progress == nil {
 		progress = func(OllamaInstallProgress) {}
 	}
-	arch, err := ollamaLinuxArch()
+	rel, err := ollamaReleaseFor(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(i.BaseDir, 0o755); err != nil {
-		return fmt.Errorf("ollama install: mkdir %s: %w", i.BaseDir, err)
+	destDir := i.BaseDir
+	if rel.ExtractSub != "" {
+		destDir = filepath.Join(i.BaseDir, rel.ExtractSub)
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("ollama install: mkdir %s: %w", destDir, err)
 	}
 
-	baseURL := fmt.Sprintf("%s/v%s/ollama-linux-%s.tar.zst", OllamaDownloadURLBase, OllamaPinnedVersion, arch)
-	progress(OllamaInstallProgress{Stage: "download", Message: baseURL})
-	body, err := i.downloadFn(ctx, baseURL, ByteProgress(progress, "download"))
+	stageDir := filepath.Join(i.BaseDir, ollamaStageDirName)
+	_ = os.RemoveAll(stageDir)
+	if err := os.MkdirAll(stageDir, 0o700); err != nil {
+		return fmt.Errorf("ollama install: mkdir %s: %w", stageDir, err)
+	}
+	defer func() { _ = os.RemoveAll(stageDir) }()
+
+	// The checksums come first and their absence is fatal, deliberately.
+	// The version is pinned, so whether this release publishes the file is
+	// something a version bump verifies once — not something every install
+	// on every host rediscovers, and certainly not something that should
+	// silently downgrade to "HTTPS and a size floor" in the field.
+	sums, err := i.checksumsFn(ctx)
 	if err != nil {
-		return fmt.Errorf("ollama install: download base: %w", err)
+		return fmt.Errorf("ollama install: %w", err)
 	}
-	if len(body) < ollamaTarballMinBytes {
-		return fmt.Errorf("ollama install: base tarball suspiciously small (%d bytes); refusing to extract", len(body))
+
+	archive, err := i.fetchVerified(ctx, rel.Base, sums, stageDir, "download", progress)
+	if err != nil {
+		return fmt.Errorf("ollama install: base: %w", err)
 	}
-	progress(OllamaInstallProgress{Stage: "extract", Message: i.BaseDir})
-	if err := i.extractFn(body, i.BaseDir); err != nil {
+	progress(OllamaInstallProgress{Stage: "extract", Message: destDir})
+	if err := i.extractFn(archive, destDir); err != nil {
 		return fmt.Errorf("ollama install: extract base: %w", err)
 	}
+	// Free the archive before the overlay so peak disk stays one archive
+	// wide rather than two.
+	_ = os.Remove(archive)
 
-	// AMD: overlay the ROCm runtime ZIP/tgz on top of the base install
-	// (the base bundles CUDA + CPU only). Best-effort — a failure here
+	// AMD: overlay the ROCm runtime on top of the base install (the base
+	// bundles CUDA/Vulkan + CPU only). Best-effort — a failure here
 	// degrades to CPU/Vulkan rather than aborting the whole install.
-	if i.GPUVendor == "amd" {
-		rocmURL := fmt.Sprintf("%s/v%s/ollama-linux-%s-rocm.tar.zst", OllamaDownloadURLBase, OllamaPinnedVersion, arch)
-		progress(OllamaInstallProgress{Stage: "download-rocm", Message: rocmURL})
-		if rocm, derr := i.downloadFn(ctx, rocmURL, ByteProgress(progress, "download-rocm")); derr == nil && len(rocm) >= ollamaTarballMinBytes {
-			if eerr := i.extractFn(rocm, i.BaseDir); eerr != nil {
-				progress(OllamaInstallProgress{Stage: "download-rocm", Message: "ROCm overlay extract failed; continuing without it: " + eerr.Error()})
-			}
-		} else {
-			progress(OllamaInstallProgress{Stage: "download-rocm", Message: "ROCm overlay unavailable; continuing without it"})
+	if i.GPUVendor == "amd" && rel.ROCm != "" {
+		overlay, derr := i.fetchVerified(ctx, rel.ROCm, sums, stageDir, "download-rocm", progress)
+		if derr != nil {
+			progress(OllamaInstallProgress{Stage: "download-rocm", Message: "ROCm overlay unavailable; continuing without it: " + derr.Error()})
+		} else if eerr := i.extractFn(overlay, destDir); eerr != nil {
+			progress(OllamaInstallProgress{Stage: "download-rocm", Message: "ROCm overlay extract failed; continuing without it: " + eerr.Error()})
 		}
 	}
 
 	progress(OllamaInstallProgress{Stage: "activate", Message: i.BinaryPath()})
 	if err := assertExecutable(i.BinaryPath()); err != nil {
-		return fmt.Errorf("ollama install: %s not executable after extract: %w", i.BinaryPath(), err)
+		return fmt.Errorf("ollama install: %s not usable after extract: %w", i.BinaryPath(), err)
 	}
 	return nil
 }
 
-// httpGet buffers download.Fetch (the shared progress-streaming HTTP
-// download — progressReader lives there since #615 extracted it for the
-// darwin Ollama.app flow) into memory, preserving downloadFn's []byte
-// contract.
-func (i *OllamaInstaller) httpGet(ctx context.Context, url string, onProgress func(completed, total, bytesPerSec int64)) ([]byte, error) {
-	var buf bytes.Buffer
-	if _, err := download.Fetch(ctx, i.HTTPClient, url, &buf, i.Now, onProgress); err != nil {
-		return nil, err
+// fetchVerified downloads one release asset into stageDir and returns its
+// path, having proven it is byte-for-byte the asset upstream published.
+func (i *OllamaInstaller) fetchVerified(
+	ctx context.Context, asset string, sums map[string]string,
+	stageDir, stage string, progress func(OllamaInstallProgress),
+) (string, error) {
+	want, ok := sums[asset]
+	if !ok {
+		return "", fmt.Errorf("the release checksum list has no entry for %s", asset)
 	}
-	return buf.Bytes(), nil
-}
-
-// extractTarZst unpacks a zstd-compressed tar (the ollama-linux 0.30+
-// release layout has bin/ollama + lib/ollama/...) into destDir. The
-// zstd layer is decompressed IN-PROCESS (klauspost/compress — no zstd
-// binary required on the host) and streamed into the system tar via
-// stdin, so symlink/permission semantics stay identical to the old
-// `tar -xzf` path and the multi-GB decompressed stream never lands in
-// memory or on disk as a whole.
-func extractTarZst(body []byte, destDir string) error {
-	zr, err := zstd.NewReader(bytes.NewReader(body))
+	url := fmt.Sprintf("%s/v%s/%s", OllamaDownloadURLBase, OllamaPinnedVersion, asset)
+	dest := filepath.Join(stageDir, asset)
+	progress(OllamaInstallProgress{Stage: stage, Message: url})
+	n, err := i.downloadFn(ctx, url, dest, ByteProgress(progress, stage))
 	if err != nil {
-		return fmt.Errorf("zstd: %w", err)
+		return "", fmt.Errorf("download %s: %w", asset, err)
 	}
-	defer zr.Close()
-	cmd := exec.Command("tar", "-xf", "-", "-C", destDir)
-	cmd.Stdin = zr
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("tar: %w: %s", err, strings.TrimSpace(string(out)))
+	if n < ollamaArchiveMinBytes {
+		return "", fmt.Errorf("%s is suspiciously small (%d bytes); refusing to extract", asset, n)
 	}
-	return nil
+	got, err := sha256File(dest)
+	if err != nil {
+		return "", fmt.Errorf("checksum %s: %w", asset, err)
+	}
+	if !strings.EqualFold(got, want) {
+		return "", fmt.Errorf(
+			"%s does not match the checksum upstream published (got %s, want %s); refusing to extract",
+			asset, got, want)
+	}
+	return dest, nil
 }
 
-// ollamaLinuxArch maps GOARCH to the ollama release arch token.
-func ollamaLinuxArch() (string, error) {
-	switch runtime.GOARCH {
-	case "amd64":
-		return "amd64", nil
-	case "arm64":
-		return "arm64", nil
-	default:
-		return "", fmt.Errorf("ollama install: unsupported GOARCH %q (linux amd64/arm64 only)", runtime.GOARCH)
+// fetchChecksums reads the release's own sha256sum.txt. It is a couple of
+// kilobytes, so it streams straight into memory with no progress
+// reporting.
+func (i *OllamaInstaller) fetchChecksums(ctx context.Context) (map[string]string, error) {
+	url := fmt.Sprintf("%s/v%s/sha256sum.txt", OllamaDownloadURLBase, OllamaPinnedVersion)
+	var buf bytes.Buffer
+	if _, err := download.Fetch(ctx, i.HTTPClient, url, &buf, i.Now, nil); err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", url, err)
 	}
+	sums := parseSHA256Sums(buf.Bytes())
+	if len(sums) == 0 {
+		return nil, fmt.Errorf("%s carried no checksums", url)
+	}
+	return sums, nil
+}
+
+// parseSHA256Sums reads the `sha256sum` output format upstream publishes:
+// one "<64 hex>  <name>" line per asset, where the name is written
+// "./ollama-darwin.tgz". Unparseable lines are skipped rather than fatal —
+// the caller's real check is whether the asset it wants is in the map.
+func parseSHA256Sums(body []byte) map[string]string {
+	sums := map[string]string{}
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) != 2 || len(fields[0]) != sha256.Size*2 {
+			continue
+		}
+		name := strings.TrimPrefix(strings.TrimPrefix(fields[1], "*"), "./")
+		if name == "" {
+			continue
+		}
+		sums[name] = strings.ToLower(fields[0])
+	}
+	return sums
+}
+
+// sha256File hashes a staged archive. Hashing after the download rather
+// than through a tee keeps downloadFn a plain "bytes to a path" seam that
+// a test double can satisfy, and the second pass comes off the page cache.
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// fetchToFile streams url into destPath, reporting byte progress, and
+// returns the number of bytes written.
+//
+// The archive is staged on disk rather than buffered in memory (which is
+// what the Linux path did until #492). Windows needs it — archive/zip
+// requires random access — and it also takes ~1.4 GB of resident memory
+// off a host that is about to spend it on a model instead.
+func (i *OllamaInstaller) fetchToFile(
+	ctx context.Context, url, destPath string,
+	onProgress func(completed, total, bytesPerSec int64),
+) (int64, error) {
+	f, err := os.Create(destPath)
+	if err != nil {
+		return 0, err
+	}
+	n, err := download.Fetch(ctx, i.HTTPClient, url, f, i.Now, onProgress)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(destPath)
+		return n, err
+	}
+	return n, nil
 }
