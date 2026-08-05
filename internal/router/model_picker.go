@@ -39,29 +39,30 @@ type PickInput struct {
 	// of their own capabilities; the picker doesn't enforce a baseline).
 	RequireCapability []string
 
-	// NoContextFloor disables the #624 coding-agent context-floor
-	// gating (candidates still carry their floor status on the Pick).
-	// Escape hatch for callers whose own constraints would otherwise
-	// turn a previously-working host into an under-spec one — e.g.
-	// SelectInstallModel retries with this set when the floor leaves
-	// nothing above the quality-tier floor.
+	// NoContextFloor disables the #624 NATIVE coding-agent context-floor
+	// gating — the manifest's own advertised window (candidates still
+	// carry their floor status on the Pick).
+	//
+	// It is a manifest comparison and nothing more. The HOST half of the
+	// #624 floor — whether this machine would actually serve that window
+	// — moved to the recommendation pass below when the two became the
+	// same question (waired-ai/waired#1056 decision 3), which is also
+	// what made it standable: a host that cannot hold 200k is told so and
+	// given the best model it can hold, rather than given none.
 	NoContextFloor bool
 
-	// NoRecommendGate disables the hostfit.OllamaRecommend narrowing
-	// (candidates still carry their verdict on the Pick). The escape
-	// hatch exists for the same reason NoContextFloor does, and it is
-	// not optional: the recommendation gate is NOT monotone in hardware,
-	// and without a way out it turns adding a graphics card into a
-	// downgrade — the #229 failure mode, one layer up.
+	// NoRecommendGate disables the hostfit.OllamaRecommendModel
+	// narrowing (candidates still carry their verdict on the Pick). The
+	// escape hatch is not optional: the gate answers "would this host
+	// declare the coding window with this model", and on a host where
+	// nothing does, narrowing on it would leave the installer with
+	// nothing above the quality floor and the machine with no local
+	// inference at all.
 	//
-	// Concretely: an 8 GB host with no GPU is pointed at qwen3.5-4b
-	// (tier 42). Fit a 4 GB card and nothing above tier 27 holds its
-	// weights there, so the pick drops BELOW InstallQualityFloorTier and
-	// the installer declares the machine under-spec — the identical
-	// laptop without the card installs and works. A lower-tier
-	// recommendation is the trade waired-ai/waired#988 accepted; losing
-	// local inference outright is not, so SelectInstallModel drops this
-	// gate before it concludes under-spec.
+	// Refusal is reserved for certain OOM (hostfit.OllamaCapacityFit);
+	// everything else warns and honours the choice, so this gate may
+	// demote a model but may never cost a host its engine
+	// (waired-ai/waired#1056 decision 1, 2026-08-03).
 	NoRecommendGate bool
 }
 
@@ -73,11 +74,15 @@ type Pick struct {
 	Variant  catalog.Variant
 	Reasons  []string
 
-	// ContextFloorSatisfied reports whether this candidate passed the
-	// #624 coding-agent context floor (native window ≥ ~200k AND, on
-	// the ollama path, the host serves the floor window within the
-	// bounded-spill gate). False on best-effort fallback picks and on
-	// preferred-override picks of sub-floor models.
+	// ContextFloorSatisfied reports whether this candidate meets the #624
+	// coding-agent context floor on this host: the model's own window
+	// reaches ~200k AND, on the ollama path, the serve tuning would
+	// actually size that window here. False on best-effort fallback picks
+	// and on preferred-override picks of sub-floor models.
+	//
+	// It is reported, not enforced as one gate: the manifest half is what
+	// RankModels narrows on unconditionally, and the host half is part of
+	// the recommendation, which a caller may stand down.
 	ContextFloorSatisfied bool
 
 	// ExpectedSpillFraction is the predicted /api/ps spill fraction of
@@ -93,16 +98,19 @@ type Pick struct {
 	// same size decode seven times apart (#229).
 	DecodeEstimate hostfit.Estimate
 
-	// Recommendation is hostfit.OllamaRecommend's verdict: Fits reports
-	// whether this is a model the host should be POINTED AT by default,
-	// and Reason / NeedMB / HaveMB say why not when it is false.
+	// Recommendation is hostfit.OllamaRecommendModel's verdict: Fits
+	// reports whether this is a model the host should be POINTED AT by
+	// default — since 2026-08-03 that means "this host can declare the
+	// ~200k coding window with it" — and Reason / NeedMB / HaveMB say why
+	// not when it is false.
 	//
 	// False is NOT "cannot run" — capacity already admitted this
 	// candidate, and a caller listing models must keep showing it, greyed
 	// or annotated. Hiding it is the #229 bug.
 	//
-	// Always Fits on non-ollama engines, which have no recommendation
-	// rule here. A preferred-override pick BYPASSES the gate but is still
+	// On the vLLM path it carries VLLMServesContextFloor's answer to the
+	// same question, since that engine has no separate residency or spill
+	// story. A preferred-override pick BYPASSES the gate but is still
 	// reported honestly: the user gets the model they asked for, and this
 	// says what the host thinks of it.
 	Recommendation hostfit.Verdict
@@ -166,7 +174,8 @@ func RankModels(in PickInput) ([]Pick, error) {
 		manifestIdx int
 		manifest    catalog.Manifest
 		variant     catalog.Variant
-		floorOK     bool
+		floorOK     bool // reported: native window AND this host serves it
+		gateOK      bool // narrowed on by pass 1
 		spill       float64
 		est         hostfit.Estimate
 		rec         hostfit.Verdict
@@ -183,30 +192,41 @@ func RankModels(in PickInput) ([]Pick, error) {
 			if !variantSupportedByVendor(v, in.Engine, in.Hardware) {
 				continue
 			}
-			if !hostFits(in.Engine, v, in.Hardware) {
+			if !hostFits(in.Engine, m, v, in.Hardware) {
 				continue
 			}
 			// No speed claim by default — vLLM has no roofline model
 			// here, and hostfit spells "no claim" as a passing floor.
-			// The recommendation gate is likewise ollama-only, so vLLM
-			// candidates start recommendable and stay that way.
+			// Both engines start recommendable; each fills in its own
+			// answer below.
 			c := candidate{manifestIdx: i, manifest: m, variant: v,
 				est: hostfit.Estimate{MeetsSpeedFloor: true},
 				rec: hostfit.Verdict{Fits: true}}
-			// #624 coding-agent context floor: native window plus the
-			// per-engine host gate — bounded-spill on ollama, the
-			// utilization-budget window check on vllm (#675/#678; vLLM
-			// clamps instead of spilling, so no spill fraction there).
+			// #624 coding-agent context floor, REPORTED here: the native
+			// window plus the per-engine host gate — the serve tuning's
+			// own sizing on ollama, the utilization-budget window check
+			// on vllm (#675/#678; vLLM clamps instead of spilling, so no
+			// spill fraction there). Which half each narrowing pass below
+			// acts on is a separate question — see the passes.
 			c.floorOK = MeetsNativeContextFloor(m)
 			if in.Engine == catalog.RuntimeOllama {
 				hostOK, spill := OllamaServesContextFloor(m, v, in.Hardware)
 				c.spill = spill
 				c.floorOK = c.floorOK && hostOK
 				c.est = hostfit.EstimateOllamaDecode(v, in.Hardware.HostFit())
-				c.rec = hostfit.OllamaRecommend(v, in.Hardware.HostFit())
+				c.rec = hostfit.OllamaRecommendModel(m, v, in.Hardware.HostFit())
 			}
 			if in.Engine == catalog.RuntimeVLLM {
 				c.floorOK = c.floorOK && VLLMServesContextFloor(m, v, in.Hardware)
+			}
+			// What pass 1 narrows on. On ollama the host half moved to the
+			// recommendation, which a caller may stand down; on vLLM it
+			// stays here, because that engine has no residency or spill
+			// story for the recommendation to be about and nothing in the
+			// 2026-08-03 decision asks it to change.
+			c.gateOK = c.floorOK
+			if in.Engine == catalog.RuntimeOllama {
+				c.gateOK = MeetsNativeContextFloor(m)
 			}
 			fits = append(fits, c)
 		}
@@ -215,50 +235,44 @@ func RankModels(in PickInput) ([]Pick, error) {
 		return nil, fmt.Errorf("%w: no variant fits hardware (engine=%s)", ErrHardwareInsufficient, in.Engine)
 	}
 
-	// Three-pass quality gating, best bar first, each falling through
-	// only when it would leave nothing. An explicit PreferredModelID
-	// bypasses all of it — the user asked for that model — with the
-	// status still reported on the Pick.
+	// Two-pass quality gating, best bar first, each falling through only
+	// when it would leave nothing. An explicit PreferredModelID bypasses
+	// all of it — the user asked for that model — with the status still
+	// reported on the Pick.
 	//
-	//  1. #624 coding-agent context floor: native window plus the
-	//     per-engine host gate.
-	//  2. hostfit.OllamaRecommend: worth serving at all. This pass is
-	//     the counterweight to the capacity gate no longer requiring GPU
-	//     residency on discrete hosts — without it a host would
-	//     auto-select a model that spills most of its layers whenever
-	//     that model carried a higher quality tier.
+	//  1. #624 NATIVE coding-agent context floor: the model's own
+	//     advertised window reaches ~200k. A manifest comparison, so it
+	//     says nothing about this machine and no hardware changes it.
+	//  2. hostfit.OllamaRecommendModel: would this host actually declare
+	//     the ~200k coding window with this model? That is what
+	//     "recommended" means since the 2026-08-03 owner decision
+	//     (waired-ai/waired#1056 decision 3), and it is the same sizing
+	//     the serve tuning exports, so the pick and the running engine
+	//     agree by construction rather than by two matching comments.
 	//
-	//     It used to be the #229 roofline directly, applied wherever the
-	//     estimate was an upper bound. The roofline stays, but it can no
-	//     longer decide this on a discrete card: a mixture of experts
-	//     reads only its ACTIVE weights per token, so a 35B/3.3B-active
-	//     model clears the decode floor at two-thirds spill and the
-	//     estimate cannot see what that spill does to PREFILL, which is
-	//     the whole of a coding agent's first turn. On the
-	//     waired-ai/waired#986 host that model was auto-selected onto a
-	//     16 GB card and prefilled at 388 tok/s.
+	//     It replaces a three-armed rule that asked a different question
+	//     per class — CPU-only exempt, unified judged on published-peak
+	//     decode, discrete on resident weights — which is how "no GPU"
+	//     became the most permissive configuration a host could be in.
+	//     waired-ai/waired#986's failure (a 22.6 GB mixture of experts
+	//     auto-selected onto a 16 GB card, prefilling at 388 tok/s) is
+	//     still caught: that host cannot hold the window either.
 	//
-	//     So the discrete arm now asks for resident WEIGHTS, and the
-	//     rule lives in proto/hostfit because the control plane's wizard
-	//     was answering the same question with a different rule and
-	//     reaching a different model (waired-ai/waired#988). The
-	//     unified arm keeps the #251 published-peak bound — a pool large
-	//     enough to hold a model says nothing about how fast it is read
-	//     — and CPU-only hosts stay unconstrained here, since
-	//     BandwidthSystemRAMGBs has no margin behind it and a host whose
-	//     memory beats the constant would be excluded on the constant
-	//     alone (annotation, not a smaller catalog, until #252/#266).
-	//  3. #229 decode floor, unchanged, and it is NOT redundant behind
-	//     pass 2. Residency separates models by where they live, and
-	//     when NOTHING is resident it separates nothing and falls
-	//     through — which is precisely the case #229 was written for. On
-	//     a 24 GB card holding neither of two 81 GB models, only the
-	//     roofline knows that the 3.3B-active mixture of experts decodes
-	//     usefully and the 122B-active dense one cannot on any card. So
-	//     the roofline is not demoted to an annotation; it is the pass
-	//     that still discriminates once residency has nothing to say.
-	//  4. Everything that fits, so no gate can newly turn a working host
+	//  3. Everything that fits, so no gate can newly turn a working host
 	//     into an under-spec one.
+	//
+	// There is no longer a speed pass. The #229 roofline is still
+	// computed and still reported — it is what separates a dense 27B from
+	// a 3B-active mixture of experts of the same size — but it no longer
+	// EXCLUDES, on any class. It rests on population bandwidth constants
+	// (BandwidthSystemRAMGBs = 60) that ClassCPUOnly is exempt from and
+	// ClassDiscrete-spilled was not, so the same number excluded a 19.96
+	// tok/s host while admitting a 17.65 tok/s one — the faster machine
+	// being the one refused. And it prices decode only, while a coding
+	// agent's work is ~21:1 prefill-heavy. Speed becomes a recommendation
+	// input again when it is MEASURED rather than assumed
+	// (waired-ai/waired-agent#466); the boot benchmark already measures
+	// the real rate once a model is on disk.
 	narrow := func(keep func(candidate) bool) {
 		var pass []candidate
 		for _, c := range fits {
@@ -271,13 +285,10 @@ func RankModels(in PickInput) ([]Pick, error) {
 		}
 	}
 	if in.PreferredModelID == "" && !in.NoContextFloor {
-		narrow(func(c candidate) bool { return c.floorOK })
+		narrow(func(c candidate) bool { return c.gateOK })
 	}
 	if in.PreferredModelID == "" && !in.NoRecommendGate {
 		narrow(func(c candidate) bool { return c.rec.Fits })
-	}
-	if in.PreferredModelID == "" {
-		narrow(func(c candidate) bool { return !c.est.UpperBound || c.est.MeetsSpeedFloor })
 	}
 
 	// Step 5: sort by tier desc, then MinVRAM/MinRAM asc, then manifest order.
@@ -524,7 +535,12 @@ func FirstPullableVariant(m catalog.Manifest, engine, engineVersion string) (cat
 // The older claim here — "ollama is never aggregated, it does not
 // shard" — conflated sharding with pooling and was wrong about the
 // engine.
-func hostFits(engine string, v catalog.Variant, hw hardware.Profile) bool {
+//
+// The manifest is a parameter because the ollama capacity rule prices
+// the window the model would actually be given: min(the coding window,
+// the model's own). Pricing a 131072-native model's KV cache at 200k
+// would refuse it for a window no caller would ever ask it to serve.
+func hostFits(engine string, m catalog.Manifest, v catalog.Variant, hw hardware.Profile) bool {
 	switch engine {
 	case catalog.RuntimeVLLM:
 		// Pre-hostfit this branch answered "fits" for a variant with no
@@ -535,7 +551,7 @@ func hostFits(engine string, v catalog.Variant, hw hardware.Profile) bool {
 		// answer of the two.
 		return hostfit.VLLMFit(v, VLLMVRAMBudgetMB(hw)).Fits
 	case catalog.RuntimeOllama:
-		return hostfit.OllamaFit(v, hw.HostFit()).Fits
+		return hostfit.OllamaCapacityFit(m, v, hw.HostFit()).Fits
 	default:
 		// Unknown engine: be conservative.
 		return false

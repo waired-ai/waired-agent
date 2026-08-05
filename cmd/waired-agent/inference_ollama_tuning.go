@@ -33,6 +33,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // ollamaContextFloor is the smallest OLLAMA_CONTEXT_LENGTH we ever export:
@@ -52,12 +53,6 @@ const ollamaContextFloor = 32768
 // the spilled hosts this overrides. Delivered via a derived model
 // (inference_ollama_derived.go), not an env var.
 const ollamaLargeBatch = 2048
-
-// ollamaCPUOnlyRAMHeadroomGB is the system headroom subtracted from total
-// RAM when sizing the context budget on CPU-only hosts (consistent with
-// scoring.SuggestMinRAMGB's 2 GB OS allowance plus margin for the agent
-// itself).
-const ollamaCPUOnlyRAMHeadroomGB = 4
 
 // ollamaMaxAutoParallel is the most request slots the sizing ever grants
 // itself (see the NumParallel branch below). planOllamaKV uses the same
@@ -180,18 +175,12 @@ func kvFactorFor(kvType string) float64 {
 // across two cards would otherwise be given a context window sized for
 // one, which is the selection↔serving drift #621's post-load verify
 // probe then has to discover the hard way (#264).
+//
+// The arithmetic is hostfit's, so the budget this file sizes a KV cache
+// against and the budget the recommendation is decided on are the same
+// number by construction rather than by two matching comments.
 func ollamaTuningBudgetGB(hw hardware.Profile, weightGB float64) float64 {
-	if eff := hw.OllamaVRAMBudgetMB(); eff > 0 {
-		mib := eff - router.OllamaVRAMOverheadMB(hw, weightGB)
-		if mib <= 0 {
-			return 0
-		}
-		return float64(mib) * (1 << 20) / 1e9
-	}
-	if hw.RAMTotalGB > ollamaCPUOnlyRAMHeadroomGB {
-		return float64(hw.RAMTotalGB - ollamaCPUOnlyRAMHeadroomGB)
-	}
-	return 0
+	return hostfit.OllamaSizingBudgetGB(hw.HostFit(), weightGB)
 }
 
 // computeOllamaTuning sizes the serve tuning for the given model/variant
@@ -270,91 +259,55 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 		kvBytesPerTokFP16: v.KVBytesPerTokenFP16,
 	}
 
-	budgetGB := ollamaTuningBudgetGB(hw, v.EstimatedWeightGB)
-	maxCtx := scoring.MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, t.KVFactor, budgetGB)
-	if maxCtx <= 0 {
-		if budgetGB > 0 && v.EstimatedWeightGB > 0 && v.KVBytesPerTokenFP16 > 0 {
-			// Inputs were known and the weights alone exceed the budget:
-			// the floor applies (spill is already certain, a truncated
-			// window on top would break the model twice).
-			maxCtx = 0
-		} else {
-			// Unknown sizing: recommend a single slot (we cannot prove more fit).
-			t.RecommendedMaxParallel = 1
-			return t // unknown sizing inputs: leave ContextLength 0
-		}
+	// The sizing itself lives in proto/hostfit, because the control
+	// plane's wizard and the agent's picker have to reach the same answer
+	// about this host as the engine is actually started with — that is
+	// what "recommended = declares the coding window here" means
+	// (waired-ai/waired#1056 decision 3). This function's job is the
+	// engine-facing consequences: which ubatch, how many slots, and what
+	// to tell the user.
+	plan := hostfit.OllamaPlannedWindow(m, v, hw.HostFit(), t.KVFactor, allowIntentionalSpill)
+	if plan.ContextLength <= 0 {
+		// Unknown sizing: recommend a single slot (we cannot prove more fit).
+		t.RecommendedMaxParallel = 1
+		return t // unknown sizing inputs: leave ContextLength 0
 	}
-
-	ctx := maxCtx
-	if m.ContextLength > 0 && ctx > m.ContextLength {
-		ctx = m.ContextLength
-	}
-	// #624 intentional spill (discrete GPUs only): when the no-spill
-	// window can't reach the coding floor, widen it anyway — but only
-	// as far as decode stays at the coding-agent selection floor. The
-	// spilled fraction executes on a single CPU thread in the bundled
-	// engine (#664: 158.6 tok/s no-spill vs ~85 at 13.4% measured), so
-	// spill past OllamaIntentionalSpillCapExpected costs more decode
-	// than the extra window is worth under the 60 tok/s true-decode
-	// floor (#670/#765; at that floor the cap clamps to the selection
-	// gate's 0.20, so the anchor host serves the full 200704 floor at
-	// ~85 tok/s instead of trimming to ~165k as it did under the 100
-	// floor). When the full floor would still exceed the cap, serve
-	// the largest window that holds it instead. UMA is excluded (one
-	// memory pool, no spill semantics); the tone is informational —
-	// every branch is a working configuration, not an error.
-	if floorCtx := router.EffectiveContextFloor(m); allowIntentionalSpill && ctx < floorCtx && !hw.UnifiedMemory && len(hw.GPUs) > 0 {
-		target := floorCtx
-		expected := router.OllamaExpectedSpillFraction(
-			v.EstimatedWeightGB, v.KVBytesPerTokenFP16, t.KVFactor, target, hw)
-		if expected > router.OllamaIntentionalSpillCapExpected {
-			// Full floor spills past the speed cap: fall back to the
-			// biggest window the cap affords (< floorCtx here, since
-			// the floor itself just exceeded the cap).
-			target = router.OllamaMaxContextAtSpill(
-				v.EstimatedWeightGB, v.KVBytesPerTokenFP16, t.KVFactor,
-				router.OllamaIntentionalSpillCapExpected, hw)
-			expected = router.OllamaExpectedSpillFraction(
-				v.EstimatedWeightGB, v.KVBytesPerTokenFP16, t.KVFactor, target, hw)
-		}
-		if target > ctx && expected > 0 && expected <= router.OllamaIntentionalSpillCapExpected {
-			ctx = target
-			t.ExpectedSpillFraction = expected
-			t.ContextLength = ctx
-			// #642: this is the spilled discrete-GPU config where Ollama's
-			// automatic batch sizing falls back to 512; force the larger
-			// ubatch (delivered via a derived model) for the prefill win.
-			// The verify pass widens its spill tolerance for the compute
-			// buffer this adds (inference_ollama_verify.go).
-			t.NumBatch = ollamaLargeBatch
-			if ctx >= floorCtx {
-				t.Warning = fmt.Sprintf(
-					"context window set to %d tokens for coding-agent workloads; about %.0f%% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
-					ctx, expected*100)
-			} else {
-				t.Warning = fmt.Sprintf(
-					"context window set to %d tokens (below the ~200k coding target: widening further would spill past ~%.1f%% of the model to system RAM and drop decode below the %.0f tok/s floor)",
-					ctx, router.OllamaIntentionalSpillCapExpected*100, router.CodingAgentSelectionFloorTokps)
-			}
-			// Already spilling to reach the window: a single slot only (adding
-			// parallel slots would multiply the spill).
-			t.RecommendedMaxParallel = 1
-			return t
-		}
-	}
-	if ctx < ollamaContextFloor {
-		floored := ollamaContextFloor
-		if m.ContextLength > 0 && m.ContextLength < floored {
-			floored = m.ContextLength
-		}
-		ctx = floored
-		if maxCtx < ctx {
-			t.Warning = fmt.Sprintf(
-				"context window kept at %d though host memory fits ~%d tokens un-spilled; the model may spill to system RAM and slow down",
-				ctx, maxCtx)
-		}
-	}
+	maxCtx, ctx := plan.NoSpillCapacityTokens, plan.ContextLength
 	t.ContextLength = ctx
+	t.ExpectedSpillFraction = plan.ExpectedSpillFraction
+
+	if plan.ExpectedSpillFraction > 0 {
+		// The window is being held partly in system RAM. #642: this is the
+		// spilled discrete-GPU config where Ollama's automatic batch sizing
+		// falls back to 512; force the larger ubatch (delivered via a
+		// derived model) for the prefill win. The verify pass widens its
+		// spill tolerance for the compute buffer this adds
+		// (inference_ollama_verify.go).
+		t.NumBatch = ollamaLargeBatch
+		floorCtx := router.EffectiveContextFloor(m)
+		switch {
+		case ctx >= floorCtx:
+			t.Warning = fmt.Sprintf(
+				"context window set to %d tokens for coding-agent workloads; about %.0f%% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
+				ctx, plan.ExpectedSpillFraction*100)
+		default:
+			t.Warning = fmt.Sprintf(
+				"context window set to %d tokens (below the ~200k coding target: widening further would spill past ~%.1f%% of the model to system RAM and drop decode below the %.0f tok/s floor)",
+				ctx, router.OllamaIntentionalSpillCapExpected*100, router.CodingAgentSelectionFloorTokps)
+		}
+		// Already spilling to reach the window: a single slot only (adding
+		// parallel slots would multiply the spill).
+		t.RecommendedMaxParallel = 1
+		return t
+	}
+	if maxCtx < ctx {
+		// The engine's own default floor is being kept though the budget
+		// does not hold it un-spilled — a truncated-context model is broken
+		// silently, a spilling one is slow visibly.
+		t.Warning = fmt.Sprintf(
+			"context window kept at %d though host memory fits ~%d tokens un-spilled; the model may spill to system RAM and slow down",
+			ctx, maxCtx)
+	}
 
 	// Parallelism never costs context: only serve >1 request slot when
 	// the full manifest window is already granted AND doubling the KV

@@ -52,9 +52,9 @@ func hardwareSummaryFn(ctx context.Context, p *hardware.Profiler) func() *signer
 // is no engine to probe.
 //
 // Beyond the peer-display fields (model / VRAM / compute cap) the
-// summary carries the three host-fit facts the control plane needs to
-// decide which serving engines and catalog models a device may be
-// offered during onboarding:
+// summary carries the host-fit facts the control plane needs to decide
+// which serving engines and catalog models a device may be offered
+// during onboarding:
 //
 //   - UnifiedMemory + UsableVRAMMB reproduce Profile.EffectiveVRAMMB().
 //     On Apple Silicon and Strix Halo the raw VRAMTotalMB overstates
@@ -70,6 +70,11 @@ func hardwareSummaryFn(ctx context.Context, p *hardware.Profiler) func() *signer
 //     even at peak" is a claim about this host (#251). Publishing the
 //     number rather than the chip name is also what keeps the "do not
 //     parse Model" rule intact for consumers.
+//   - CarveOutVRAMMB, so the capacity gate can add RAM and VRAM without
+//     counting one physical pool twice (hostfit.TotalMemoryMB). It is
+//     the quantity, not a flag, because the question it answers —
+//     "was that VRAM figure read, or derived from RAM" — has to be
+//     answered by the side that produced the figure.
 //
 // All are omitempty, so a non-UMA host with an undetected vendor still
 // serializes byte-identically to the pre-addition wire — as does a
@@ -84,6 +89,7 @@ func hardwareSummaryFor(prof hardware.Profile) *signer.HardwareSummary {
 		UnifiedMemory:          prof.UnifiedMemory,
 		UsableVRAMMB:           prof.UsableVRAMMB,
 		MemoryBandwidthSpecGBs: prof.MemoryBandwidthSpecGBs,
+		CarveOutVRAMMB:         prof.CarveOutVRAMMB,
 	}
 	for _, g := range gpus {
 		summary.GPUs = append(summary.GPUs, signer.HardwareGPUSummary{

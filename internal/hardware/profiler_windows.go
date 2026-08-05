@@ -140,5 +140,11 @@ func defaultUMA(_ context.Context, p *Profile) {
 		}
 	}
 	p.UnifiedMemory = true
-	p.UsableVRAMMB = strixHaloUsableVRAMMB(amdVRAMMB, p.RAMTotalGB)
+	// Both branches are reachable here, unlike on Linux: this hook flips
+	// UnifiedMemory off the CPU model alone, so an unreadable registry
+	// value lands on the 75 %-of-RAM heuristic and the carve-out comes
+	// back 0. That 0 is load-bearing — hostfit.TotalMemoryMB adds the
+	// carve-out to RAM, and a synthesized figure is a slice of the RAM it
+	// would be added to.
+	p.UsableVRAMMB, p.CarveOutVRAMMB = strixHaloUMA(amdVRAMMB, p.RAMTotalGB)
 }

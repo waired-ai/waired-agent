@@ -1530,14 +1530,12 @@ const engineVLLM = "vllm"
 // catalogSpecSuffix returns the compact "· N GB VRAM · tier T" hint for
 // menu labels.
 //
-// The size is the RESIDENT requirement where the shared projection has
-// one — weights, the reserved KV budget and the engine's own overhead,
-// which is what the fit rule actually compares. It used to be
-// min_ram_gb: a threshold authored for a host that loads into system
-// RAM, printed beside a graphics card that has to hold the thing
-// (waired-agent#321). The old figure is still the fallback, and it is
-// the RIGHT answer on a computer with no graphics memory at all, where
-// the resident figure is not merely unknown but meaningless.
+// The size is what the model needs to serve the ~200k coding window
+// here — see catalogSizeGB. It used to be min_ram_gb: a threshold
+// authored for a host that loads into system RAM, printed beside a
+// graphics card that has to hold the thing (waired-agent#321). That
+// figure is still the last fallback, and it is the RIGHT answer on a
+// computer the projection cannot price.
 //
 // The tier rides along because the review that asked for this asked for
 // a quality value on every picker, and it is the raw catalog number
@@ -1557,11 +1555,23 @@ func catalogSpecSuffix(engine string, f management.CatalogFamily) string {
 
 // catalogSizeGB is the memory figure to print and the noun for it.
 //
-// Resident-first, min-RAM/VRAM as the fallback. The unit is not
-// cosmetic: calling a system-RAM threshold "VRAM" on a machine with no
+// The window-inclusive requirement first: weights, engine overhead and
+// the KV cache for the whole ~200k coding window. It is what a person
+// reading a size beside a model is actually asking about, and it is
+// ~2.6 GB larger than the fit-time figure on qwen3.5-4b — the gap that
+// let a host be shown "5 GB", pull the model, and then be unable to hold
+// a coding session in it (waired-ai/waired#1056 defect 2).
+//
+// Its noun is plain "memory", because the sum it is compared against is
+// RAM plus dedicated VRAM. The resident figure below it keeps "VRAM":
+// that one really is a graphics-memory question. The unit is not
+// cosmetic — calling a system-RAM threshold "VRAM" on a machine with no
 // card would send the operator shopping for hardware the number has
 // nothing to do with.
 func catalogSizeGB(engine string, f management.CatalogFamily) (int, string) {
+	if f.Fit != nil && f.Fit.RequiredWindowResidentMB > 0 {
+		return (f.Fit.RequiredWindowResidentMB + 1023) / 1024, "memory"
+	}
 	if f.Fit != nil && f.Fit.RequiredResidentMB > 0 {
 		return (f.Fit.RequiredResidentMB + 1023) / 1024, "VRAM"
 	}

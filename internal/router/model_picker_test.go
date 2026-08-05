@@ -862,14 +862,27 @@ func TestOllamaFitsVRAM(t *testing.T) {
 	}
 }
 
-// TestPickModel_GPUHostBigRAM_ollama: the RAM-only gate used to let a
-// 62 GB-weight model "fit" a 120 GB-RAM host with a 24 GB GPU; ollama
-// then spilled most layers to the CPU and decode collapsed. The picker
-// must choose the highest tier that stays GPU-resident instead.
+// TestPickModel_GPUHostBigRAM_ollama: a 62 GB-weight model on a 120 GB
+// host with a 24 GB GPU runs — ollama spills most layers to the CPU —
+// but must not be what the host is POINTED AT, because those weights are
+// re-read from system RAM on every token. The picker takes the highest
+// tier whose weights stay resident instead.
+//
+// Capacity admits it, and that is the layering: 62 GB fits 120 GB of RAM
+// plus 24 GB of VRAM, so refusing it would be refusing something the
+// machine can do (waired-ai/waired#1056 decision 1). The recommendation
+// is what declines it.
+//
+// Both manifests declare 262144 rather than 131072 as they once did: the
+// recommendation now asks whether the host can declare the ~200k coding
+// window, and a 131072-native model answers no on any hardware, so with
+// the old fixture BOTH candidates were unrecommended and the pass fell
+// through without discriminating. The window class is not what this test
+// is about.
 func TestPickModel_GPUHostBigRAM_ollama(t *testing.T) {
 	cat := []catalog.Manifest{
 		{
-			ModelID: "huge-moe-ollama", ContextLength: 131072,
+			ModelID: "huge-moe-ollama", ContextLength: 262144,
 			Capabilities: []string{"chat", "tool_use"},
 			Variants: []catalog.Variant{{
 				VariantID: "gguf", Format: "ollama-tag",
@@ -880,7 +893,7 @@ func TestPickModel_GPUHostBigRAM_ollama(t *testing.T) {
 			}},
 		},
 		{
-			ModelID: "dense-27b-ollama", ContextLength: 131072,
+			ModelID: "dense-27b-ollama", ContextLength: 262144,
 			Capabilities: []string{"chat", "tool_use"},
 			Variants: []catalog.Variant{{
 				VariantID: "q4-gguf", Format: "ollama-tag",
@@ -933,21 +946,33 @@ func TestOllamaVRAMOverheadMB(t *testing.T) {
 	}
 }
 
-// TestRankModels_SpeedFloorGuardsTheRelaxedCapacityGate is the router
-// half of #229, and it only makes sense as a pair with the capacity
-// change it accompanies.
+// TestRankModels_SpilledFlagshipsAreNotPreselected is the router half of
+// #229, re-based on the rule that replaced the speed pass.
 //
-// hostFits stopped requiring GPU residency on discrete hosts, because
-// requiring it meant adding a graphics card REMOVED models. That leaves
-// the ranking exposed: a model with a higher quality tier now survives
-// the filter even when the card holds almost none of it, and tier-desc
-// sorting would hand it the auto-selection. The speed pass is what stops
-// that, and it may only exclude on an upper bound — the card's own reads
-// priced at zero — so the exclusion holds for a card of any speed.
+// hostFits does not require GPU residency, because requiring it as
+// CAPACITY meant adding a graphics card removed models. That leaves the
+// ranking exposed: a model with a higher quality tier survives the filter
+// even when the card holds almost none of it, and tier-desc sorting would
+// hand it the auto-selection.
 //
-// Product contract. The two candidates below are built to differ ONLY in
-// active parameters: same weight, same tier order, same host.
-func TestRankModels_SpeedFloorGuardsTheRelaxedCapacityGate(t *testing.T) {
+// The speed pass used to stop that. It no longer exists: it excluded on
+// an estimate over BandwidthSystemRAMGBs, the same population constant
+// ClassCPUOnly is exempt from, so it refused a 19.96 tok/s host while
+// admitting a 17.65 tok/s one — and it prices decode only, while a coding
+// agent's load is roughly 21:1 prefill. Speed returns as a recommendation
+// input when it is measured (waired-ai/waired-agent#466).
+//
+// What stops it now is the recommendation's residency clause: weights and
+// overhead must fit GPU-addressable memory. Neither 81 GB model does on a
+// 24 GB card, so NEITHER is preselected and the pass falls through to
+// tier order — which is the honest answer, because the thing that would
+// separate them is a speed claim this stage no longer makes.
+//
+// Record of today's behaviour, not a rule: the ratifying decision
+// (waired-ai/waired#1056, 2026-08-03) settles that speed is soft and
+// measured, not that tier order is the right tie-break among models a
+// host cannot hold.
+func TestRankModels_SpilledFlagshipsAreNotPreselected(t *testing.T) {
 	// 128 GB of RAM behind a 24 GB card: both models clear the RAM gate,
 	// neither is resident, so capacity alone cannot separate them.
 	hw := hardware.Profile{
@@ -979,31 +1004,44 @@ func TestRankModels_SpeedFloorGuardsTheRelaxedCapacityGate(t *testing.T) {
 
 	// Both fit: the capacity gate is the RAM gate on a discrete host now.
 	for _, m := range []catalog.Manifest{dense, moe} {
-		if !hostFits(catalog.RuntimeOllama, m.Variants[0], hw) {
+		if !hostFits(catalog.RuntimeOllama, m, m.Variants[0], hw) {
 			t.Fatalf("%s does not fit; the capacity gate is still requiring residency", m.ModelID)
 		}
 	}
 
-	// The higher tier reads 122B parameters per token through a spill and
-	// cannot clear the floor on any card. The lower tier reads 3.3B and
-	// does. Auto-selection must take the one that works.
-	pick, err := PickModel(PickInput{
+	// Neither is preselected: a 24 GB card holds neither 81 GB of weights.
+	ranked, err := RankModels(PickInput{
 		Catalog: []catalog.Manifest{dense, moe}, Hardware: hw, Engine: catalog.RuntimeOllama,
 	})
 	if err != nil {
-		t.Fatalf("PickModel: %v", err)
+		t.Fatalf("RankModels: %v", err)
 	}
-	if pick.Manifest.ModelID != "spilled-moe" {
-		t.Errorf("ModelID = %q, want spilled-moe — tier 95 spilled at 122B active "+
-			"per token is not a usable auto-selection", pick.Manifest.ModelID)
-	}
-	if !pick.DecodeEstimate.MeetsSpeedFloor {
-		t.Errorf("the chosen pick reports %+v; auto-selection must not land below the floor",
-			pick.DecodeEstimate)
+	for _, p := range ranked {
+		if p.Recommendation.Fits {
+			t.Errorf("%s is preselected on a 24 GB card holding none of its 81 GB of "+
+				"weights; the residency clause is not reaching the picker", p.Manifest.ModelID)
+		}
+		if p.Recommendation.Reason != hostfit.ReasonWeightsSpill {
+			t.Errorf("%s: not-preselected reason = %q, want %q — the operator has to be "+
+				"told it is the weights, not the window",
+				p.Manifest.ModelID, p.Recommendation.Reason, hostfit.ReasonWeightsSpill)
+		}
 	}
 
-	// The user may still ASK for it: an explicit preference bypasses the
-	// pass, exactly as it bypasses the #624 context floor.
+	// The roofline still SAYS which of the two the machine would read
+	// seven times faster, on every surface. It just does not decide.
+	byID := map[string]hostfit.Estimate{}
+	for _, p := range ranked {
+		byID[p.Manifest.ModelID] = p.DecodeEstimate
+	}
+	if byID["spilled-moe"].TokpsEstimate <= byID["spilled-dense"].TokpsEstimate {
+		t.Errorf("the 3.3B-active mixture of experts is estimated at %.2f tok/s and the "+
+			"122B-active dense one at %.2f; the estimate has stopped discriminating",
+			byID["spilled-moe"].TokpsEstimate, byID["spilled-dense"].TokpsEstimate)
+	}
+
+	// The user may still ASK for either: an explicit preference bypasses
+	// every pass, exactly as it bypasses the #624 context floor.
 	pinned, err := PickModel(PickInput{
 		Catalog: []catalog.Manifest{dense, moe}, Hardware: hw,
 		Engine: catalog.RuntimeOllama, PreferredModelID: "spilled-dense",
@@ -1013,7 +1051,7 @@ func TestRankModels_SpeedFloorGuardsTheRelaxedCapacityGate(t *testing.T) {
 	}
 	if pinned.Manifest.ModelID != "spilled-dense" {
 		t.Errorf("pinned ModelID = %q, want spilled-dense — a preference must survive "+
-			"the speed pass the way it survives the context floor", pinned.Manifest.ModelID)
+			"the recommendation pass the way it survives the context floor", pinned.Manifest.ModelID)
 	}
 }
 
@@ -1040,10 +1078,10 @@ func TestHostFitsIsMonotoneInHardware(t *testing.T) {
 					if !engineSupports(v, catalog.RuntimeOllama) {
 						continue
 					}
-					if !hostFits(catalog.RuntimeOllama, v, bare) {
+					if !hostFits(catalog.RuntimeOllama, m, v, bare) {
 						continue
 					}
-					if !hostFits(catalog.RuntimeOllama, v, carded) {
+					if !hostFits(catalog.RuntimeOllama, m, v, carded) {
 						t.Fatalf("%s/%s: %d GB of RAM serves it, but the same host with a "+
 							"%d MB card does not", m.ModelID, v.VariantID, ram, vram)
 					}
@@ -1097,7 +1135,8 @@ func TestRankModels_ResidentWeightsBeatASpilledFlagship(t *testing.T) {
 
 	// Capacity still admits it — that is the layering, and hiding a
 	// model the host can run is the #229 bug.
-	if !hostFits(catalog.RuntimeOllama, manifestVariant(t, manifests, "qwen3.6-35b-a3b"), hw) {
+	if !hostFits(catalog.RuntimeOllama, manifestByID(t, manifests, "qwen3.6-35b-a3b"),
+		manifestVariant(t, manifests, "qwen3.6-35b-a3b"), hw) {
 		t.Error("qwen3.6-35b-a3b no longer fits a 64 GB host with a 16 GB card; " +
 			"the recommendation gate has leaked into capacity")
 	}
@@ -1165,4 +1204,18 @@ func manifestVariant(t *testing.T, manifests []catalog.Manifest, modelID string)
 	}
 	t.Fatalf("%s is not in the bundled catalog with an ollama variant", modelID)
 	return catalog.Variant{}
+}
+
+// manifestByID returns the bundled manifest for modelID, failing the
+// test when the model is gone. The capacity rule prices the window a
+// model would actually be given, so its manifest is an input.
+func manifestByID(t *testing.T, manifests []catalog.Manifest, modelID string) catalog.Manifest {
+	t.Helper()
+	for _, m := range manifests {
+		if m.ModelID == modelID {
+			return m
+		}
+	}
+	t.Fatalf("%s is not in the bundled catalog", modelID)
+	return catalog.Manifest{}
 }

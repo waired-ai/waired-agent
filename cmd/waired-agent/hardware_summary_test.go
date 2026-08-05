@@ -213,6 +213,12 @@ func TestHardwareSummaryFor_PublishesEveryWireField(t *testing.T) {
 		UnifiedMemory:          true,
 		UsableVRAMMB:           49152,
 		MemoryBandwidthSpecGBs: 400, // Apple M3 Max, matching the GPU below
+		// No real Apple host reports a carve-out either — its usable
+		// figure is synthesized from RAM, which is exactly why the field
+		// exists. Populated here for the same reason as the compute
+		// capability above: this fixture is every fact the profile CAN
+		// carry, so a zero in the output is the producer dropping it.
+		CarveOutVRAMMB: 49152,
 		GPUs: []hardware.GPU{{
 			Vendor:        "apple",
 			Model:         "Apple M3 Max",

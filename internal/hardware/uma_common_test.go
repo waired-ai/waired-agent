@@ -76,56 +76,63 @@ func TestMinNonZero(t *testing.T) {
 	}
 }
 
-// TestStrixHaloUsableVRAMMB pins the carve-out-vs-heuristic logic shared
-// by the Linux and Windows UMA detectors. The key invariant: when a
-// carve-out reading (amdVRAMMB) is present it is authoritative (clamped
-// to the BIOS ceiling) and the 75 %-of-RAM heuristic is NOT consulted —
-// that is the bug fix for BIOS carve-out machines whose OS-visible RAM
-// is only the leftover after the GPU allocation.
-func TestStrixHaloUsableVRAMMB(t *testing.T) {
+// TestStrixHaloUMA pins the carve-out-vs-heuristic logic shared by the
+// Linux and Windows UMA detectors. The key invariant: when a carve-out
+// reading (amdVRAMMB) is present it is authoritative (clamped to the
+// BIOS ceiling) and the 75 %-of-RAM heuristic is NOT consulted — that is
+// the bug fix for BIOS carve-out machines whose OS-visible RAM is only
+// the leftover after the GPU allocation.
+//
+// The second return is the same value on the reading branch and 0 on the
+// heuristic branch, and that zero is what stops hostfit.TotalMemoryMB
+// adding a slice of RAM to the RAM it was sliced from. A case here that
+// reported a carve-out on the heuristic branch would inflate a Windows
+// Strix Halo host's capacity by 75 %.
+func TestStrixHaloUMA(t *testing.T) {
 	const capMB = 96 * 1024
 	cases := []struct {
-		name       string
-		amdVRAMMB  int
-		ramTotalGB int
-		want       int
+		name         string
+		amdVRAMMB    int
+		ramTotalGB   int
+		want         int
+		wantCarveOut int
 	}{
 		{
 			// The real Ryzen AI Max+ 395 carve-out: 96 GB to the iGPU,
 			// only ~31 GB left to the OS. Old code: min(96, 23, 96)=23.
 			name:      "carve-out present, leftover RAM small → carve-out wins",
-			amdVRAMMB: 96 * 1024, ramTotalGB: 31, want: capMB,
+			amdVRAMMB: 96 * 1024, ramTotalGB: 31, want: capMB, wantCarveOut: capMB,
 		},
 		{
 			name:      "carve-out present below cap → carve-out value",
-			amdVRAMMB: 64 * 1024, ramTotalGB: 128, want: 64 * 1024,
+			amdVRAMMB: 64 * 1024, ramTotalGB: 128, want: 64 * 1024, wantCarveOut: 64 * 1024,
 		},
 		{
 			name:      "carve-out present above cap → clamped to cap",
-			amdVRAMMB: 200 * 1024, ramTotalGB: 256, want: capMB,
+			amdVRAMMB: 200 * 1024, ramTotalGB: 256, want: capMB, wantCarveOut: capMB,
 		},
 		{
-			name:      "no carve-out, truly-unified host → 75% heuristic",
-			amdVRAMMB: 0, ramTotalGB: 32, want: 24 * 1024,
+			name:      "no carve-out, truly-unified host → 75% heuristic, nothing to add",
+			amdVRAMMB: 0, ramTotalGB: 32, want: 24 * 1024, wantCarveOut: 0,
 		},
 		{
-			name:      "no carve-out, large RAM → heuristic clamped to cap",
-			amdVRAMMB: 0, ramTotalGB: 256, want: capMB,
+			name:      "no carve-out, large RAM → heuristic clamped to cap, nothing to add",
+			amdVRAMMB: 0, ramTotalGB: 256, want: capMB, wantCarveOut: 0,
 		},
 		{
 			// Everything failed (no GPU reading, no RAM): preserve the
 			// prior behaviour of returning the ceiling as a last resort
 			// rather than 0 (which would read as "CPU only").
-			name:      "no carve-out, no RAM → cap fallback",
-			amdVRAMMB: 0, ramTotalGB: 0, want: capMB,
+			name:      "no carve-out, no RAM → cap fallback, nothing to add",
+			amdVRAMMB: 0, ramTotalGB: 0, want: capMB, wantCarveOut: 0,
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := strixHaloUsableVRAMMB(c.amdVRAMMB, c.ramTotalGB)
-			if got != c.want {
-				t.Errorf("strixHaloUsableVRAMMB(%d, %d) = %d, want %d",
-					c.amdVRAMMB, c.ramTotalGB, got, c.want)
+			got, carveOut := strixHaloUMA(c.amdVRAMMB, c.ramTotalGB)
+			if got != c.want || carveOut != c.wantCarveOut {
+				t.Errorf("strixHaloUMA(%d, %d) = (%d, %d), want (%d, %d)",
+					c.amdVRAMMB, c.ramTotalGB, got, carveOut, c.want, c.wantCarveOut)
 			}
 		})
 	}

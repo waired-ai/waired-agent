@@ -194,10 +194,8 @@ func TestOllamaBudgetSitesAgreeOnTheSameHost(t *testing.T) {
 	// and OllamaMaxContextAtSpill are built on; if it reads the pool,
 	// they do too.
 	v := catalog.Variant{EstimatedWeightGB: 23.9, KVBytesPerTokenFP16: 20480}
-	oneCard := OllamaExpectedSpillFraction(v.EstimatedWeightGB, v.KVBytesPerTokenFP16,
-		1.0, 262144, anchorHost())
-	pooled := OllamaExpectedSpillFraction(v.EstimatedWeightGB, v.KVBytesPerTokenFP16,
-		1.0, 262144, two)
+	oneCard := OllamaExpectedSpillFraction(v, anchorHost(), 1.0, 262144)
+	pooled := OllamaExpectedSpillFraction(v, two, 1.0, 262144)
 	if !(pooled < oneCard) {
 		t.Errorf("expected spill %.4f on two cards is not below %.4f on one — "+
 			"the spill model is still pricing the host at one device", pooled, oneCard)

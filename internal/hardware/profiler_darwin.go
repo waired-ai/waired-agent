@@ -178,6 +178,14 @@ func defaultStorage(_ context.Context, path string) (int64, error) {
 // decides") we fall back to 75 % of total RAM — matches Apple's own
 // documented default split between wired GPU memory and reclaimable
 // system memory.
+//
+// Profile.CarveOutVRAMMB stays 0 here, on BOTH branches and deliberately.
+// Neither figure is memory the OS withheld from RAMTotalGB: the wired
+// limit is a cap on how much of the one pool the GPU may pin, and the
+// 75 % fallback is arithmetic on the RAM total itself. Adding either to
+// RAM would count the same bytes twice, which is the one platform the
+// capacity computation had to be told about (waired-ai/waired#1056
+// decision 1: "Mac のみ合成 VRAM を加算せずプールサイズ").
 func defaultUMA(ctx context.Context, p *Profile) {
 	if runtime.GOARCH != "arm64" {
 		return

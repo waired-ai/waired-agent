@@ -47,6 +47,19 @@ const (
 	ReasonInsufficientVRAM = "insufficient_vram"
 	ReasonNoGPU            = "no_gpu"
 
+	// ReasonInsufficientMemory is the capacity refusal: the model does not
+	// fit the machine's TOTAL memory, so loading it would run out. It
+	// replaces the two above for the ollama path, where the gate is now a
+	// computation over RAM + dedicated VRAM rather than a comparison
+	// against one of them (owner decision 2026-08-03, waired-ai/waired#1056).
+	//
+	// A separate code rather than a reuse, because the two it replaces
+	// name which of two pools fell short and this one names their sum.
+	// Telling an operator "not enough RAM" when the sum was the wall
+	// sends them to buy the wrong hardware, which is the same argument
+	// Verdict's NeedMB/HaveMB doc makes one level down.
+	ReasonInsufficientMemory = "insufficient_memory"
+
 	// The two below are RECOMMENDATION reasons, not capacity reasons:
 	// they name why a model that this host CAN run should not be the one
 	// it is pointed at by default. A consumer that hides a model on
@@ -295,6 +308,30 @@ type Host struct {
 	// say so explicitly; the neighbouring fields predate the guard's view
 	// of this struct and cannot be retagged now.
 	MemoryBandwidthSpecGBs float64 `json:"-"`
+
+	// CarveOutVRAMMB is GPU memory reserved at the firmware level that the
+	// OS-reported RAM total EXCLUDES. It exists so TotalMemoryMB can add
+	// the two figures without double-counting, on a host where they are
+	// reads of one physical pool.
+	//
+	// Only a real reading sets it — sysfs mem_info_vram_total on Linux,
+	// the AMD driver's qwMemorySize on Windows. Apple Silicon sets 0
+	// because its "VRAM" figure is SYNTHESIZED from RAM (the
+	// iogpu.wired_limit_mb sysctl, or 75 % of RAM), and so does the
+	// Windows Strix Halo path when the registry value is unreadable and
+	// the same 75 % heuristic stands in. Those two are the whole reason
+	// this is a published quantity rather than a check for "is it a Mac":
+	// the synthesized case is not a platform, it is a provenance, and one
+	// of the two platforms that can produce it is not Apple.
+	//
+	// 0 therefore means "no separate pool", never "unknown, so guess".
+	// The sum only ever grows on a host that proved its carve-out, which
+	// is the direction a capacity gate can afford to be wrong in.
+	//
+	// json:"-" for the reason MemoryBandwidthSpecGBs carries it: Host is
+	// an INPUT to a decision, not a payload, and the additive-only guard
+	// asks a field added to a published struct to say so explicitly.
+	CarveOutVRAMMB int `json:"-"`
 }
 
 // Device is the per-device facts the pool rule reads. Like Host it is
@@ -392,6 +429,7 @@ func FromHardwareSummary(hw *signer.HardwareSummary) Host {
 		UnifiedMemory:          hw.UnifiedMemory,
 		UsableVRAMMB:           hw.UsableVRAMMB,
 		MemoryBandwidthSpecGBs: hw.MemoryBandwidthSpecGBs,
+		CarveOutVRAMMB:         hw.CarveOutVRAMMB,
 	}
 	if len(hw.GPUs) > 0 {
 		h.VRAM0MB = hw.GPUs[0].VRAMTotalMB
@@ -458,6 +496,55 @@ func (h Host) OllamaVRAMBudgetMB() int {
 // enumerated.
 func (h Host) HasGPU() bool {
 	return h.GPUCount > 0 || h.UnifiedMemory
+}
+
+// TotalMemoryMB is every byte a model may occupy on this machine: system
+// RAM plus dedicated VRAM, counted once. It is the denominator of the
+// capacity gate, and capacity is now the ONLY thing allowed to refuse a
+// model (owner decision 2026-08-03, waired-ai/waired#1056 — the ratifying
+// source; `waired` docs/decisions/20260803/1332-hard-vs-soft-model-limits.md).
+//
+// The three classes differ only in what "dedicated VRAM" is worth here:
+//
+//   - ClassCPUOnly — there is none. RAM is the whole answer.
+//   - ClassDiscrete — the card's memory is its own silicon, so the two
+//     figures are disjoint and the sum is the machine. The pooled budget
+//     is used rather than the single device's, because ollama spreads
+//     layers across a group (see OllamaVRAMBudgetMB).
+//   - ClassUnified — one physical pool, read twice by the OS. Adding
+//     UsableVRAMMB would count the same bytes in both terms, so only a
+//     PROVEN firmware carve-out is added: see CarveOutVRAMMB for why the
+//     discriminator is the figure's provenance rather than the platform.
+//
+// The system-RAM term is net of OSMemoryAllowanceGB. A gate that reports
+// "it fits" for a load that leaves the operating system nothing is not a
+// capacity gate, and the hand-authored min_ram_gb this replaces had that
+// allowance built into it (scoring.SuggestMinRAMGB: "VRAM at context plus
+// a 2 GB OS/runtime headroom"). Dedicated VRAM takes no such deduction —
+// the OS does not live there.
+//
+// It returns 0 for two different situations, and a caller must not treat
+// them alike: RAMTotalGB == 0 is a FAILED PROBE (an OS whose detector we
+// do not have) and means "skip the gate", while a machine with 2 GB of
+// RAM and no accelerator genuinely has nothing left for a model once the
+// OS is served. Read h.RAMTotalGB to tell them apart — a gate that reads
+// the second as the first hands a 1 GB host the 290 GB flagship.
+func (h Host) TotalMemoryMB() int {
+	if h.RAMTotalGB <= 0 {
+		return 0
+	}
+	ram := max((h.RAMTotalGB-OSMemoryAllowanceGB)*1024, 0)
+	switch h.Class() {
+	case ClassDiscrete:
+		if b := h.OllamaVRAMBudgetMB(); b > 0 {
+			return ram + b
+		}
+	case ClassUnified:
+		if h.CarveOutVRAMMB > 0 {
+			return ram + h.CarveOutVRAMMB
+		}
+	}
+	return ram
 }
 
 // Class is the kind of machine a fit decision is about. The three
@@ -825,6 +912,16 @@ const (
 // can act on that one and cannot act on this one.
 const ReasonWindowTooSmall = "window_too_small"
 
+// ReasonWindowExceedsMemory is a RECOMMENDATION reason: the model runs
+// here, but this host cannot hold the coding-agent window with it, so it
+// is not what the host should be pointed at by default. NeedMB is the
+// window-inclusive requirement and HaveMB the host's total memory.
+//
+// Distinct from ReasonWindowTooSmall, which says no hardware would help,
+// and from ReasonInsufficientMemory, which is a refusal. A consumer that
+// hides a model on this one has misread it — see OllamaRecommendModel.
+const ReasonWindowExceedsMemory = "window_exceeds_memory"
+
 // servingKVCacheDivisor converts the manifest's fp16 KV annotation to
 // the cache the serve tuning actually exports. Both engines' coding
 // path runs an 8-bit KV cache — ollama's OLLAMA_KV_CACHE_TYPE=q8_0 and
@@ -948,54 +1045,109 @@ func OllamaResident(v catalog.Variant, h Host) Verdict {
 	return Verdict{Reason: ReasonInsufficientVRAM, NeedMB: need, HaveMB: have}
 }
 
-// OllamaFit decides whether ollama can serve v on this host: the system
-// RAM gate, then GPU residency, with the decode estimate attached.
+// OllamaCapacityFit decides whether ollama can serve v on this host at
+// all: does the model, holding the window it is being asked about, fit
+// the machine's total memory?
 //
-// The order decides which shortfall gets reported when both would fail,
-// and RAM comes first because it is the one the operator can read off
-// their own machine. The gate is skipped on unified-memory hosts: on a
-// UMA carve-out box RAMTotalGB reports only what the OS keeps after the
-// iGPU allocation (~31 GB of a 128 GB machine), so a MinRAMGB threshold
-// authored for a host that loads into system RAM would wrongly reject
-// every large MoE there — residency is the honest bound on UMA.
+//	weights + KV(window) + engine overhead  <=  RAM + dedicated VRAM
 //
-// Residency is required only where there is nowhere to spill TO:
+// This is the ONLY rule permitted to refuse a model, grey it out, or
+// exclude it from auto-selection. Everything else — quality tier, decode
+// speed, whether the host can hold a 200k window — is a recommendation
+// that warns and then honours an explicit choice (owner decision
+// 2026-08-03, waired-ai/waired#1056; `waired`
+// docs/decisions/20260803/1332-hard-vs-soft-model-limits.md).
 //
-//	ClassCPUOnly   system RAM >= min_ram_gb
-//	ClassDiscrete  system RAM >= min_ram_gb  (residency NOT required)
-//	ClassUnified   the weights fit the usable pool (min_ram_gb ignored)
+// The window it is priced at is the one this host would actually SERVE
+// it at (OllamaPlannedWindow), and that is load-bearing rather than a
+// detail. Refusal is reserved for certain OOM, and a machine that would
+// run a 1 GB model at the engine's 32k default is not out of memory just
+// because a 200k KV cache would not fit beside it. Pricing every host at
+// the coding window would refuse small hosts a model they can load,
+// which is the opposite of what this gate is for.
 //
-// The discrete row is the correction waired-ai/waired-agent#229 exists
-// for. Requiring full residency there made adding a graphics card REMOVE
-// models: a 128 GB host served a 62 GB model, and the same host with a
-// 24 GB card did not — even though ollama offloads what fits and runs
-// the remainder from the same system RAM the card-less host was using,
-// which is strictly faster. A capacity rule has to be monotone in
-// hardware, and this one now is by construction: the discrete gate IS
-// the CPU-only gate, and Estimate's spill bound is >= the CPU-only rate
-// for every resident share.
+// The window-inclusive figure a surface SHOWS is a different quantity —
+// Presentation.RequiredWindowResidentMB, always priced at the coding
+// window, because "what would this need to do coding work here" is the
+// question a user is asking when they read it.
+//
+// It replaces two rules that answered a different question. The old
+// discrete/CPU-only arm compared RAMTotalGB against the hand-authored
+// min_ram_gb — an opinion with ~2.3x of headroom baked into it
+// (qwen3.5-4b declares 8 GB for 3.4 GB of weights) that never consulted
+// the GPU at all; the old unified arm compared against the carve-out
+// reading alone. Neither answered "does it fit". min_ram_gb survives as
+// catalog data and as a sort key; it no longer gates.
+//
+// Two consequences worth stating, both intended:
+//
+//   - It is strictly more permissive on discrete hosts. A 6 GB-RAM host
+//     with an 8 GB card stops being refused a 3.4 GB model, because the
+//     hard gate exists only for certain OOM.
+//   - It counts the WINDOW's KV cache, not the fixed OllamaKVBudgetTokens
+//     reservation. Those differ by ~2.6 GB on qwen3.5-4b (4,915 MiB vs
+//     7,539 MiB), which is how a host used to pass the gate, pull the
+//     model, and then be unable to declare a window.
+//
+// min_ram_gb survives as the FALLBACK, for the case the computation
+// cannot answer at all: a variant with no weight annotation. There the
+// hand-authored threshold is the only figure there is, and keeping it is
+// strictly better than admitting everything. It is no longer consulted
+// for a variant the arithmetic can price, which is every variant the
+// bundled catalog ships.
+//
+// Permissive on missing inputs otherwise, like every other rule here: a
+// failed RAM probe yields a fitting verdict rather than a silent
+// exclusion of the whole catalog.
 //
 // Fits is capacity only. Whether the result would be fast enough to want
 // rides on Verdict.Estimate, so a caller can offer a slow-but-working
-// model with a warning rather than silently withholding it — which is
-// what withholding the 62 GB model above amounted to.
-func OllamaFit(v catalog.Variant, h Host) Verdict {
-	var out Verdict
-	if h.Class() == ClassUnified {
-		out = OllamaResident(v, h)
-	} else if v.MinRAMGB > 0 && h.RAMTotalGB > 0 && h.RAMTotalGB < v.MinRAMGB {
-		// RAMTotalGB == 0 means detection failed (e.g. an OS whose probe
-		// we do not have); skip the gate rather than reject everything.
+// model with a warning rather than silently withholding it.
+func OllamaCapacityFit(m catalog.Manifest, v catalog.Variant, h Host) Verdict {
+	plan := OllamaPlannedWindow(m, v, h, OllamaKVFactorQ8_0, true)
+	return ollamaCapacityAtWindow(v, h, plan.ContextLength)
+}
+
+// ollamaCapacityAtWindow is OllamaCapacityFit's arithmetic against an
+// explicit window, so the manifest-aware entry point and the legacy
+// variant-only one share it.
+func ollamaCapacityAtWindow(v catalog.Variant, h Host, window int) Verdict {
+	out := Verdict{Fits: true}
+	if h.RAMTotalGB <= 0 {
+		// Failed probe. Skip the gate rather than reject the catalog —
+		// and note this is NOT the same as TotalMemoryMB returning 0,
+		// which a real machine with 2 GB of RAM also does.
+		out.Estimate = EstimateOllamaDecode(v, h)
+		return out
+	}
+	have := h.TotalMemoryMB()
+	switch need := OllamaWindowResidentMB(v, window, h.UnifiedMemory); {
+	case need > 0:
+		if need > have {
+			out = Verdict{Reason: ReasonInsufficientMemory, NeedMB: need, HaveMB: have}
+		}
+	case v.MinRAMGB > 0 && h.RAMTotalGB > 0 && h.RAMTotalGB < v.MinRAMGB:
 		out = Verdict{
 			Reason: ReasonInsufficientRAM,
 			NeedMB: v.MinRAMGB * 1024,
 			HaveMB: h.RAMTotalGB * 1024,
 		}
-	} else {
-		out = Verdict{Fits: true}
 	}
 	out.Estimate = EstimateOllamaDecode(v, h)
 	return out
+}
+
+// OllamaFit is the capacity gate for a caller that holds a variant and
+// not its manifest, priced at the coding window.
+//
+// The signature is what forces the split: proto is additive-only across
+// published tags, so the manifest could not be added here, and a variant
+// alone says neither what window its model could serve nor what window
+// this host would give it. Callers that have the manifest should use
+// OllamaCapacityFit — this one over-prices a small host's KV cache and
+// can refuse a model it would in fact load.
+func OllamaFit(v catalog.Variant, h Host) Verdict {
+	return ollamaCapacityAtWindow(v, h, ServingWindow200k)
 }
 
 // OllamaRecommend decides whether v should be the model this host is

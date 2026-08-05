@@ -111,7 +111,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 
 	fits := make([]catalog.Variant, 0, len(loadable))
 	for _, v := range loadable {
-		if hostFits(engine, v, hw) {
+		if hostFits(engine, m, v, hw) {
 			fits = append(fits, v)
 		}
 	}
@@ -120,7 +120,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		return FamilyFit{
 			Variant: fits[0],
 			Fits:    true,
-			Fit:     familyPresentation(fits[0], engine, hw),
+			Fit:     familyPresentation(m, fits[0], engine, hw),
 		}
 	}
 
@@ -130,7 +130,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 	return FamilyFit{
 		Variant:      smallest,
 		DeficitLabel: deficitLabelFor(smallest, engine, hw),
-		Fit:          familyPresentation(smallest, engine, hw),
+		Fit:          familyPresentation(m, smallest, engine, hw),
 	}
 }
 
@@ -170,9 +170,15 @@ func RecommendedFamily(in PickInput) string {
 // It exists so the budget argument is chosen in exactly one place. The
 // vLLM figure is the agent's own aggregate and is NOT what the control
 // plane passes — it holds only the broadcast summary — which is
-// precisely why hostfit.Project takes it rather than deriving it.
-func familyPresentation(v catalog.Variant, engine string, hw hardware.Profile) hostfit.Presentation {
-	return hostfit.Project(v, engine, hw.HostFit(), VLLMVRAMBudgetMB(hw))
+// precisely why the projection takes it rather than deriving it.
+//
+// ProjectModel rather than Project: the manifest is what prices capacity
+// at the window this host would serve and what makes the recommendation
+// the window question (waired-ai/waired#1056 decision 3). It is also
+// what populates RequiredWindowResidentMB, the figure every surface
+// prints when it says what a model needs.
+func familyPresentation(m catalog.Manifest, v catalog.Variant, engine string, hw hardware.Profile) hostfit.Presentation {
+	return hostfit.ProjectModel(m, v, engine, hw.HostFit(), VLLMVRAMBudgetMB(hw))
 }
 
 // bestQualityTier is the ranking of the strongest variant in a set.

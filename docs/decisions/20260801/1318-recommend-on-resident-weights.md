@@ -1,11 +1,19 @@
 ---
-status: accepted
+status: superseded
+superseded_by:
+  - docs/decisions/20260804/1937-capacity-computation-and-window-recommendation.md
 ---
 
 # 推奨モデルは「重みが VRAM に載る」で決める (20260801 13:18)
 
 ## Status
-Accepted
+Superseded — 2026-08-03 のオーナー決定 (waired-ai/waired#1056) により、推奨は
+「このホストでコーディングウィンドウを宣言できるか」に一本化された。
+本記録の 3 クラス別ルールのうち残ったのは discrete の「重み常駐」だけで、
+unified の公称ピーク速度による除外と CPU-only の無制約は窓の判定に畳まれた。
+容量ゲート (`OllamaFit`) も「変更しない」としていたが、総メモリの計算式に
+置き換わった。差し替え先:
+`docs/decisions/20260804/1937-capacity-computation-and-window-recommendation.md`。
 
 ## Context
 
