@@ -93,13 +93,22 @@ else
   require_env ANTHROPIC_API_KEY
   have_cmd claude || die "claude CLI not found (npm i -g @anthropic-ai/claude-code)"
   log "research: invoking claude (${CLAUDE_MODEL}, max-turns ${CLAUDE_MAX_TURNS})"
+  # The accepted-source list is DERIVED from the store, never typed into the
+  # prompt: pinning a new leaderboard is then a one-file edit and the prompt
+  # cannot drift from what `catalog-tool propose` will actually accept.
+  jq -c '.accepted_sources' "${REPO_ROOT}/internal/catalog/benchmarks.json" \
+    > "${OUT_DIR}/accepted-sources.json" \
+    || die "could not read accepted_sources from internal/catalog/benchmarks.json"
+
   prompt_text="$(cat "${HERE}/prompt.md")
 
 CANDIDATES_JSON file: ${OUT_DIR}/candidates-capped.json
+ACCEPTED_SOURCES_JSON file: ${OUT_DIR}/accepted-sources.json
 RESEARCH_OUT file: ${OUT_DIR}/research.json
 
-Read CANDIDATES_JSON, research each candidate per the rules above, and Write the
-resulting JSON array to RESEARCH_OUT. Output nothing else."
+Read ACCEPTED_SOURCES_JSON and CANDIDATES_JSON, research each candidate per the
+rules above, and Write the resulting JSON array to RESEARCH_OUT. Output nothing
+else."
   claude -p "${prompt_text}" \
     --model "${CLAUDE_MODEL}" \
     --max-turns "${CLAUDE_MAX_TURNS}" \
@@ -118,7 +127,8 @@ log "propose: validating research and rendering"
 "${CATALOG_TOOL}" propose \
   --research "${OUT_DIR}/research.json" \
   --issue-out "${OUT_DIR}/issue-body.md" \
-  --spec-dir "${OUT_DIR}/specs" > "${OUT_DIR}/summary.json"
+  --spec-dir "${OUT_DIR}/specs" \
+  --bench-dir "${OUT_DIR}/bench" > "${OUT_DIR}/summary.json"
 
 # 4) For each escalated candidate: draft -> tier -> validate (deterministic).
 escalated="$(jq -r '.escalated[]?' "${OUT_DIR}/summary.json")"

@@ -34,17 +34,18 @@ AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
 git config --global user.name "waired-catalog-bot" 2>/dev/null || true
 git config --global user.email "catalog-bot@users.noreply.github.com" 2>/dev/null || true
 
+# The row itself is rendered by `catalog-tool propose --bench-dir`, so the
+# store's Go type is the only place its shape lives. This used to be assembled
+# here in jq, and nothing in PR CI ever runs this file -- selftest.sh is
+# weekly-cron and dispatch only -- so a shape change would have gone unnoticed
+# until the next scheduled run.
 merge_benchmarks() {
-  local model_id="$1" repo_id="$2" f="${REPO_ROOT}/internal/catalog/benchmarks.json" tmp
+  local model_id="$1" f="${REPO_ROOT}/internal/catalog/benchmarks.json" tmp entry_file
+  entry_file="${OUT_DIR}/bench/${model_id}.bench.json"
+  [ -s "${entry_file}" ] || die "no benchmark entry for ${model_id} (propose --bench-dir)"
   tmp="$(mktemp)"
-  local entry
-  entry="$(jq --arg repo "${repo_id}" '
-    (map(select(.repo_id == $repo))[0]) as $r
-    | ({swe_bench_verified: $r.swe_bench_verified, sources: $r.sources,
-        cross_checked: (($r.sources | length) >= 2), confidence: $r.confidence}
-       + (if $r.secondary then {secondary: $r.secondary} else {} end))
-  ' "${OUT_DIR}/research.json")"
-  jq --arg mid "${model_id}" --argjson e "${entry}" '.models[$mid] = $e' "${f}" > "${tmp}" && mv "${tmp}" "${f}"
+  jq --arg mid "${model_id}" --slurpfile e "${entry_file}" \
+    '.models[$mid] = $e[0]' "${f}" > "${tmp}" && mv "${tmp}" "${f}"
 }
 
 flag_seen() {
@@ -59,22 +60,30 @@ pr_body() {
   local model_id="$1" repo_id="$2" manifest="$3"
   local sources
   sources="$(jq -r --arg repo "${repo_id}" '
-    (map(select(.repo_id == $repo))[0].sources // [])[] | "  - " + .url + " (" + .retrieved + ")"
+    (map(select(.repo_id == $repo))[0].scores // {}) | to_entries[]
+    | "  - " + .key + " = " + (.value.value | tostring)
+      + (if .value.source then " [" + .value.source + "]" else " [no accepted source]" end)
+      + " — " + .value.url + " (" + .value.retrieved + ")"
   ' "${OUT_DIR}/research.json")"
-  local swe
-  swe="$(jq -r --arg repo "${repo_id}" 'map(select(.repo_id == $repo))[0].swe_bench_verified' "${OUT_DIR}/research.json")"
+  local headline
+  headline="$(jq -r --arg repo "${repo_id}" '
+    (map(select(.repo_id == $repo))[0].scores // {}) | to_entries
+    | map(select(.value.source != null and .value.source != ""))
+    | sort_by(-.value.value) | .[0]
+    | if . == null then "no accepted-source score" else .key + " = " + (.value.value | tostring) + " (" + .value.source + ")" end
+  ' "${OUT_DIR}/research.json")"
 
   cat <<EOF
 Auto-drafted by **catalog-radar** (#413). **Draft — do not merge without the GPU lane.**
 
-Adds \`${model_id}\` (\`${repo_id}\`) to the bundled catalog. SWE-bench Verified: **${swe}**.
+Adds \`${model_id}\` (\`${repo_id}\`) to the bundled catalog. Best accepted-source score: **${headline}**.
 
 All footprint numbers (VRAM/KV/weight) were computed by \`catalog-tool\`, not hand-typed;
 \`quality_tier\` was freeze-assigned across the catalog. Benchmark scores are LLM-researched
 and **must be verified** against the cited sources below before merge.
 
 ## Maintainer checklist
-- [ ] Verify the benchmark numbers against the cited sources (below).
+- [ ] Verify the benchmark numbers against the cited sources (below), and that each one marked with a source really came from that leaderboard rather than the model card.
 - [ ] **\`make e2e-vllm\` on a GPU host** — mandatory for any \`internal/catalog\` change (CLAUDE.md).
 - [ ] \`go test ./... -timeout 10m\` and \`make verify-cross\`.
 - [ ] \`gofmt -l .\`, \`go vet ./...\`, \`golangci-lint run\`.
@@ -111,7 +120,7 @@ for model_id in ${escalated}; do
 
   git -C "${REPO_ROOT}" checkout -B "${branch}" origin/main --quiet
   cp "${manifest}" "${REPO_ROOT}/proto/catalog/bundled/${model_id}.json"
-  merge_benchmarks "${model_id}" "${repo_id}"
+  merge_benchmarks "${model_id}"
   flag_seen "${repo_id}"
 
   # Regenerate the model-catalog table from the just-added manifest so
