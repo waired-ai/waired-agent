@@ -191,17 +191,58 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 // engine was serving. Runs at most once per process, under engineOpMu.
 func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) {
 	// #320: load the serving model so the first request does not. Deferred
-	// so it covers every exit — including the two that return before
-	// finalizeOllamaServeTuning, whose /api/ps side effect was the only
-	// thing warming anything: an untuned boot plan (`!p.bootPlan.tuned`,
-	// i.e. the fresh-install case). When this boot
-	// dispatched a pull instead, the model is not on disk yet and the warm
-	// declines; endPull's reconcile picks it up when the download lands.
+	// rather than called at the end so it survives an early return being
+	// added back — the case it was written for was an untuned boot plan
+	// (`!p.bootPlan.tuned`, i.e. the fresh install), which used to return
+	// before finalizeOllamaServeTuning, whose /api/ps side effect was the
+	// only thing warming anything. When this boot dispatched a pull
+	// instead, the model is not on disk yet and the warm declines;
+	// endPull's reconcile picks it up when the download lands.
 	defer p.warmServingModel()
 	cfg := p.effectiveCfg()
 	if p.ollama.Mode() == infruntime.EngineModeAdopted && p.logger != nil {
 		p.logger.Info("adopted orphan bundled ollama (exact pin match)",
 			"version", p.ollama.EngineVersion())
+	}
+	// EVERY restart this tail performs happens FIRST, before a single byte
+	// is asked for (#359). `ollama pull` is a client of `ollama serve`, so
+	// the two steps below — which stop and restart the engine — used to
+	// kill the downloads this same function had just dispatched, and the
+	// job recorded the model `failed` for a reason that had nothing to do
+	// with it. Two restarts are possible (a backend fallback and a tuning
+	// degrade), so the boot tail could burn two of the job's three attempts
+	// on its own; and the harm latched, because engineBootstrapOnce runs
+	// this tail exactly once per process.
+	//
+	// Neither step depends on the dispatch: the probe reads /api/ps and
+	// falls back to the first tag /api/tags already serves, and the verify
+	// reads p.bootPlan, frozen at startInferenceSubsystem time. A pull
+	// dispatched a few lines earlier had not finished either, so what they
+	// observe is unchanged — only the order is.
+	//
+	// #290: for hosts with a fallback backend (Strix Halo Linux: ROCm
+	// then Vulkan), verify the GPU actually engaged and switch to the
+	// next backend if it didn't, so the host never runs on CPU silently
+	// while a working GPU path exists. Conservative: an inconclusive
+	// probe keeps the preferred backend.
+	if p.bootPlan.backend.Probes() {
+		resolved := resolveBackendWithProbe(ctx, p.ollama, p.bootPlan.backend, p.ollama.BaseURL(), &http.Client{}, p.logger)
+		p.ollama.SetResolvedBackend(resolved)
+	}
+	// #621: verify the exported serve tuning against the running engine
+	// and degrade once on positive evidence (silent f16 fallback /
+	// spill). Ordered after the backend probe so the two never interleave
+	// restarts. An untuned boot plan (`!p.bootPlan.tuned`) is the
+	// fresh-install case and has nothing to verify.
+	//
+	// A CONDITION, not the early return it used to be: the model dispatch
+	// moved below it, and a `return` here would skip the download this
+	// whole function exists to start.
+	if p.bootPlan.tuned {
+		// #642 derived-batch-model creation + #621 post-spawn tuning
+		// verification, shared with the in-process reconcile (#812).
+		p.finalizeOllamaServeTuning(ctx, p.bootPlan.tune,
+			p.bootPlan.tuneManifest, p.bootPlan.tuneVariant, p.bootPlan.tuneTag)
 	}
 	// The operator's model comes FIRST, and the hardware auto-select is
 	// only the fallback for a host with no operator model to serve (#306).
@@ -239,24 +280,4 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 			p.holdBundledPrePull(ctx, modelID)
 		}
 	}
-	// #290: for hosts with a fallback backend (Strix Halo Linux: ROCm
-	// then Vulkan), verify the GPU actually engaged and switch to the
-	// next backend if it didn't, so the host never runs on CPU silently
-	// while a working GPU path exists. Conservative: an inconclusive
-	// probe keeps the preferred backend.
-	if p.bootPlan.backend.Probes() {
-		resolved := resolveBackendWithProbe(ctx, p.ollama, p.bootPlan.backend, p.ollama.BaseURL(), &http.Client{}, p.logger)
-		p.ollama.SetResolvedBackend(resolved)
-	}
-	// #621: verify the exported serve tuning against the running engine
-	// and degrade once on positive evidence (silent f16 fallback /
-	// spill). Ordered after the backend probe so the two never interleave
-	// restarts.
-	if !p.bootPlan.tuned {
-		return
-	}
-	// #642 derived-batch-model creation + #621 post-spawn tuning
-	// verification, shared with the in-process reconcile (#812).
-	p.finalizeOllamaServeTuning(ctx, p.bootPlan.tune,
-		p.bootPlan.tuneManifest, p.bootPlan.tuneVariant, p.bootPlan.tuneTag)
 }

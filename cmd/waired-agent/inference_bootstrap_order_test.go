@@ -2,10 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
 // orderProvider drives the REAL bootstrapAfterEngineStart: bootstrapProvider
@@ -72,6 +81,130 @@ func noOllamaVariantManifest(id string) catalog.Manifest {
 			RuntimeSupport: []string{catalog.RuntimeVLLM},
 			Source:         catalog.VariantSource{Type: catalog.SourceHuggingFace, RepoID: id},
 		}},
+	}
+}
+
+// probeOrderProvider builds a boot fixture whose engine reports a
+// CPU-RESIDENT model, so the two-step Strix Halo backend plan finds no GPU
+// and restarts the engine on its fallback backend — the boot tail's own
+// engine restart, reproduced.
+//
+// It returns the downloads that had been admitted at each /api/ps the
+// probe made. That is the ordering fact, and it is read at a point where
+// there is no race to lose: the probe's HTTP call and PullModel's
+// state write both happen synchronously on the boot goroutine, so the
+// count is decided by the order of the calls and not by when a pull
+// goroutine happens to be scheduled.
+func probeOrderProvider(t *testing.T, r download.CommandRunner) (*agentInferenceProvider, *fakeSpawner, *bool, func() []int) {
+	t.Helper()
+	var p *agentInferenceProvider
+	var mu sync.Mutex
+	var admitted []int
+
+	countAdmitted := func() int {
+		st, err := p.store.Load()
+		if err != nil {
+			return -1
+		}
+		n := 0
+		for _, m := range st.Models {
+			switch m.State {
+			case catalog.ModelStateQueued, catalog.ModelStateDownloading, catalog.ModelStateVerifying:
+				n++
+			}
+		}
+		return n
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/api/ps" {
+			mu.Lock()
+			admitted = append(admitted, countAdmitted())
+			mu.Unlock()
+			// One model loaded, size_vram absent: the CPU-resident shape
+			// the probe treats as positive evidence to fall back on.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"models":[{"name":"a:q4","size":1,"size_vram":0}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"models":[{"name":"a:q4"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	host, port := hostPort(t, srv.URL)
+
+	present := false
+	sp := &fakeSpawner{}
+	a := infruntime.NewOllamaAdapter(infruntime.OllamaConfig{
+		Binary: "",
+		BinaryResolver: func() (string, error) {
+			if !present {
+				return "", errors.New("ollama binary not found")
+			}
+			return "/fake/ollama", nil
+		},
+		Host: host, Port: port,
+		Spawner: sp, HTTPClient: srv.Client(),
+		HealthInterval: 5 * time.Millisecond, HealthSuccess: 1, HealthMaxFails: 5,
+		StopTimeout: 50 * time.Millisecond,
+	})
+	p = &agentInferenceProvider{
+		ollama:       a,
+		store:        catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		cfg:          agentconfig.InferenceConfig{AllowPull: true},
+		manifests:    bounceTestManifests(),
+		puller:       download.NewPuller("ollama-fake", r),
+		profiler:     cpuSwapProfiler(t),
+		logger:       slog.New(slog.DiscardHandler),
+		agentCtx:     context.Background(),
+		ollamaUsable: func() bool { return present },
+	}
+	// Strix Halo Linux: ROCm then Vulkan, the only shape that probes.
+	p.bootPlan.backend = strixHaloPlan()
+	return p, sp, &present, func() []int {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]int(nil), admitted...)
+	}
+}
+
+// THE #359 BAR for the boot path. PRODUCT CONTRACT: every engine restart
+// the boot tail performs happens before it asks for a single byte.
+//
+// bootstrapAfterEngineStart dispatched the model pulls and THEN ran the
+// backend probe and the tuning verify, both of which stop and restart the
+// engine. `ollama pull` is a client of `ollama serve`, so the tail killed
+// the very downloads it had just started — its own, uniquely: no other
+// path in #359 attacks a pull it dispatched itself. Two restarts are
+// reachable in one boot (a backend fallback and a tuning degrade), so the
+// tail could spend two of the job's three attempts before the network was
+// ever at fault, and the harm latched: engineBootstrapOnce runs this tail
+// exactly once per process.
+//
+// Driven through the PREFERRED model (the #347 resume), not the bundled
+// fallback: #379's hold already parks the fallback's dispatch behind the
+// control plane, so it is no longer the exposed one. bootstrapPreferredModel
+// still calls PullModel inline, on the boot goroutine, exactly as before.
+func TestBootstrap_TheEngineSettlesBeforeAnyDownloadStarts(t *testing.T) {
+	r := newBlockingRunner(t)
+	p, sp, installed, admittedAtProbe := probeOrderProvider(t, r)
+	p.cfg.PreferredModelID = "model-b"
+	*installed = true
+
+	p.runEngineBootstrap(context.Background(), "boot")
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := sp.count(); got < 2 {
+		t.Fatalf("engine spawns = %d, want at least 2 — the probe was expected to "+
+			"fall back and restart, which is what this test is about", got)
+	}
+	admitted := admittedAtProbe()
+	if len(admitted) == 0 {
+		t.Fatal("the probe never inspected the engine; the ordering has nothing to read")
+	}
+	if admitted[0] != 0 {
+		t.Fatalf("%d download(s) already admitted when the boot tail probed the engine, want 0 — "+
+			"the restart it is about to perform kills them", admitted[0])
 	}
 }
 
