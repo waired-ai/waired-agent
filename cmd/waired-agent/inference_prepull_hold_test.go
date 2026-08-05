@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 // prePullHoldProvider is the host #379 is about: the engine is already
@@ -194,6 +197,54 @@ func TestPrePullHold_AnOperatorSwitchWhileItWaited_StandsDown(t *testing.T) {
 	if got := r.pulledTags(); len(got) != 0 {
 		t.Fatalf("tags pulled = %v, want none — the operator switched to model-b while "+
 			"the hold waited, so the bundled fallback is no longer what this host wants", got)
+	}
+}
+
+// PRODUCT CONTRACT (#540, docs/decisions/20260805/1721-executor-lease-is-not-a-wizard.md):
+// `waired init` must not be the reason its own model download does not start.
+//
+// Every other test in this file calls setupNoteDesired directly, which is the
+// reconciler's ANSWER — so the question behind it, "does an executor lease
+// mean a wizard is driving", was never under test at all. It does not: the
+// lease is `waired init`'s, and `waired init` holds it for the whole of the
+// model wait it does after installing the engine. The hold waited for the
+// process that was waiting for the hold, for twenty minutes, on every
+// non-interactive install. The real reconciler is wired up here so both
+// halves are one test.
+func TestPrePullHold_AnExecutorLeaseIsNotAWizard(t *testing.T) {
+	r := newBlockingRunner(t)
+	p, installed := orderProvider(t, bounceTestManifests(), r)
+	p.cfg.BundledModelID = "model-a"
+	// Only a folded frame may release this hold. With the ordinary short
+	// grace the fallback would dispatch on the timer and the test would pass
+	// having proved nothing about the lease.
+	p.prePullFrameGrace = time.Hour
+	p.prePullHoldMax = time.Hour
+	rec := newSetupReconciler(p, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	// attachSetupExecutor runs before the engine install and the lease is
+	// released on the way out of `waired init` — so this is the state the
+	// daemon is in for the whole of the model wait, not just the install.
+	rec.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
+	rec.Apply(ctx, &signer.InferenceState{})
+
+	// Bounded rather than a bare waitForPulls(): a hold that never releases
+	// leaves a goroutine on pullsWG forever, which would turn this regression
+	// into a package-wide timeout instead of one failing test.
+	select {
+	case <-r.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no pull was dispatched — the boot pre-pull is still held, and the only " +
+			"thing holding it is the `waired init` that is waiting for its result (#540)")
+	}
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 1 || got[0] != "a:q4" {
+		t.Fatalf("tags pulled = %v, want exactly [a:q4]", got)
 	}
 }
 

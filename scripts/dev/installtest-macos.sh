@@ -307,6 +307,16 @@ assert_inference_macos() {
     # status is sed's — so an unreachable daemon would leave no line at all.
     { curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"; } 2>&1 |
       sed 's/^/    status| /' >&2 || true
+    # The daemon's own account of a model that never arrived (#540). Mirrors
+    # lib/installtest-enroll.sh's it_prepull_evidence: `waired logs` is the one
+    # surface that reads the service log and the engine log on every OS, and
+    # the pattern is the three facts that settle where the time went — what the
+    # boot pre-pull's hold was waiting for, what released it, and `POST
+    # /api/pull` with the download's real duration.
+    sudo "$BINDIR/waired" logs --since 30m --state-dir "$STATE_DIR" -o /tmp/it-logs.txt >/dev/null 2>&1 || true
+    { grep -iE 'boot pre-pull|bundled model|api/pull' /tmp/it-logs.txt 2>/dev/null | tail -20 |
+      grep . || echo "(no pre-pull or pull lines in the daemon log)"; } 2>&1 |
+      sed 's/^/    agent| /' >&2 || true
   else
     bad "no benchmark THROUGHPUT figure in init transcript ($INITLOG)"
     grep -iE 'benchmark|inference|engine' "$INITLOG" 2>/dev/null | tail -20 | sed 's/^/    init| /' >&2 || true
