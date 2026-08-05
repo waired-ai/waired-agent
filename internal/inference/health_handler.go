@@ -24,7 +24,7 @@ import (
 // the pre-Phase-8 deviceID-asc behaviour.
 type HealthSnapshot struct {
 	// EngineReady reports whether the local inference engine (Ollama /
-	// vLLM / external openai-compat) currently accepts requests. False
+	// vLLM) currently accepts requests. False
 	// during boot before the engine is up, after a `waired inference
 	// stop`, or while the engine is restarting after a crash.
 	EngineReady bool `json:"engine_ready"`
