@@ -71,9 +71,9 @@ func TestResolveInferenceIntent(t *testing.T) {
 			environ: []string{"WAIRED_INFERENCE_ENABLED=yes-please"}, want: inferenceIntent{Skip: true}},
 
 		{name: "--inference-bundled-model-id pins, it does not skip",
-			args: []string{"-inference-bundled-model-id", "waired/medium"}, want: inferenceIntent{Pinned: true}},
+			args: []string{"-inference-bundled-model-id", "qwen2.5-coder-14b"}, want: inferenceIntent{Pinned: true}},
 		{name: "WAIRED_INFERENCE_BUNDLED_MODEL_ID pins",
-			environ: []string{"WAIRED_INFERENCE_BUNDLED_MODEL_ID=waired/medium"}, want: inferenceIntent{Pinned: true}},
+			environ: []string{"WAIRED_INFERENCE_BUNDLED_MODEL_ID=qwen2.5-coder-14b"}, want: inferenceIntent{Pinned: true}},
 
 		// #306: the operator's own preferred model takes responsibility
 		// for the serving path, and the bundled pre-pull stands down.
@@ -83,10 +83,10 @@ func TestResolveInferenceIntent(t *testing.T) {
 			environ: []string{"WAIRED_INFERENCE_PREFERRED_MODEL_ID=qwen3.5-9b"}, want: inferenceIntent{Skip: true}},
 
 		{name: "pin and force compose",
-			args: []string{"-inference-bundled-model-id", "waired/medium", "-inference-enabled=true"},
+			args: []string{"-inference-bundled-model-id", "qwen2.5-coder-14b", "-inference-enabled=true"},
 			want: inferenceIntent{Pinned: true, Forced: true}},
 		{name: "--disable-inference beats a pin",
-			disableInference: true, args: []string{"-inference-bundled-model-id", "waired/medium"},
+			disableInference: true, args: []string{"-inference-bundled-model-id", "qwen2.5-coder-14b"},
 			want: inferenceIntent{Skip: true, Pinned: true}},
 		// Config precedence is defaults < JSON < env < flags, so the flag
 		// wins on the enablement axis.

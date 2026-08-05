@@ -857,8 +857,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	}, provider, nil
 }
 
-// defaultCodingModelID resolves what the dynamic coding aliases
-// (waired/default, waired/coding) serve on this host: the explicit
+// defaultCodingModelID resolves what the dynamic coding alias
+// (waired/default) serves on this host: the explicit
 // preferred model, else the persisted active selection, else the
 // bundled default — the same order resolveTuningTarget sizes the
 // engine for (#632). Empty means "no dynamic default"; the router
@@ -3089,7 +3089,7 @@ func (p *agentInferenceProvider) activateBundledIfReady(ctx context.Context) boo
 
 // bundledModelID is the CANONICAL catalog id cfg.BundledModelID names.
 //
-// The configured value accepts any catalog alias — `waired/medium`,
+// The configured value accepts any catalog alias — `qwen2.5-coder-14b`,
 // `Qwen/Qwen2.5-Coder-14B-Instruct` — while every id the pull path writes
 // (state.Models keys, models.ready, the PullModel argument) is the
 // canonical manifest.ModelID. Resolving once, here, is what keeps the two

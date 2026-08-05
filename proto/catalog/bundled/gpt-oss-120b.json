@@ -2,11 +2,11 @@
   "model_id": "gpt-oss-120b",
   "display_name": "OpenAI gpt-oss 120B (MXFP4)",
   "model_aliases": [
-    "waired/flagship",
     "gpt-oss-120b",
     "openai/gpt-oss-120b"
   ],
   "license": "apache-2.0",
+  "manual_only": "Offered but never recommended (#518). gpt-oss sits between the mid and high bands, and placing it against either would be a cross-family quality claim the ladder now requires an accepted-source measurement for. It is popular enough to keep carrying, so it stays listed, resolvable, pullable and servable — and because nothing automatic will choose it, no such measurement is needed. A person who wants it asks for it by name.",
   "context_length": 131072,
   "capabilities": ["chat", "tool_use", "json_mode"],
   "runtime": {"preferred": "vllm", "fallback": ["ollama"]},

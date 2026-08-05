@@ -17,7 +17,7 @@ import (
 func qwenScored(paramCount int64, quantTier int) catalog.Manifest {
 	return catalog.Manifest{
 		ModelID:       "qwen3-8b-instruct",
-		ModelAliases:  []string{"waired/default", "waired/coding"},
+		ModelAliases:  []string{"waired/default"},
 		ContextLength: 8192,
 		Capabilities:  []string{"chat", "json_mode"},
 		Runtime:       catalog.RuntimePolicy{Preferred: catalog.RuntimeOllama},

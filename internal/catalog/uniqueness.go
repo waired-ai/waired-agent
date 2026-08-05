@@ -42,3 +42,42 @@ func CheckTierUniqueness(manifests []Manifest) error {
 	}
 	return nil
 }
+
+// CheckNameUniqueness verifies that no model_id or alias is claimed by
+// two manifests.
+//
+// LookupByAlias is a first-match scan over the manifests in
+// bundledFS.ReadDir order — alphabetical by filename — and checks
+// ModelID before ModelAliases. A name claimed twice therefore resolves
+// to whichever file sorts first, silently, with no diagnostic anywhere:
+// the loser is simply unreachable by that name while still appearing in
+// every catalog listing. That is the same shape of order-dependent
+// mis-selection CheckTierUniqueness exists to prevent, and until #521
+// moved a dozen aliases at once nothing checked for it.
+//
+// Like the tier check this is a CATALOG-LEVEL invariant that
+// Manifest.Validate cannot see, and it is shared by the bundled-catalog
+// test and `catalog-tool validate`.
+func CheckNameUniqueness(manifests []Manifest) error {
+	type claim struct{ name, by string }
+	seen := map[string]string{}
+	var dupes []claim
+	for _, m := range manifests {
+		for _, name := range append([]string{m.ModelID}, m.ModelAliases...) {
+			// A manifest repeating its own id in model_aliases is a
+			// self-claim, not a collision — most of the bundled set
+			// does it, and LookupByAlias checks ModelID first anyway.
+			if prev, ok := seen[name]; ok && prev != m.ModelID {
+				dupes = append(dupes, claim{name: name, by: fmt.Sprintf("%s and %s", prev, m.ModelID)})
+				continue
+			}
+			seen[name] = m.ModelID
+		}
+	}
+	if len(dupes) > 0 {
+		sort.Slice(dupes, func(i, j int) bool { return dupes[i].name < dupes[j].name })
+		return fmt.Errorf("catalog: %q is claimed by two manifests (%s); "+
+			"LookupByAlias would answer with whichever file sorts first", dupes[0].name, dupes[0].by)
+	}
+	return nil
+}

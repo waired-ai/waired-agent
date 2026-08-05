@@ -150,7 +150,7 @@ type Inputs struct {
 	Runtimes   *runtime.Registry
 
 	// DefaultModelID, when non-empty, is the model the dynamic coding
-	// aliases (DynamicCodingAliases: waired/default, waired/coding)
+	// alias (DynamicCodingAliases: waired/default)
 	// resolve to — "whatever this host actually serves", computed by
 	// the caller as preferred > persisted active > bundled (#632).
 	// Empty falls back to static ModelAliases lookup, so callers that
@@ -310,9 +310,21 @@ type Inputs struct {
 // instead of a static ModelAliases entry. They used to be pinned in
 // qwen2.5-coder-7b-instruct.json, which broke the out-of-the-box
 // `waired infer` on every host whose selected bundled model differs
-// (#632). Size aliases like waired/small stay static — explicitly
-// naming a size is a real request for that model.
-var DynamicCodingAliases = []string{"waired/default", "waired/coding"}
+// (#632).
+//
+// One name, because one name is what the indirection is for: a client
+// config, a script or a coding-agent setting written once keeps working
+// after the model behind it changes. waired/coding and waired/small
+// were retired in #521 — with the rest of the waired/* namespace, and
+// for the same reason. They came from an early aim of abstracting the
+// model name away entirely, for an audience that has since turned out
+// to know model names perfectly well; waired/coding resolved
+// identically to waired/default, so the pair only ever offered the same
+// model under two names.
+//
+// A model that is not the default is named directly. Every model_id and
+// vendor-form alias still resolves, so nothing is unreachable.
+var DynamicCodingAliases = []string{"waired/default"}
 
 // resolveModel maps a requested model name to a manifest: dynamic
 // coding aliases go to DefaultModelID when it resolves, then the static

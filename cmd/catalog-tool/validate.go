@@ -39,7 +39,10 @@ func runValidate(args []string) error {
 		if err := catalog.CheckTierUniqueness(bundled); err != nil {
 			return err
 		}
-		fmt.Printf("ok: %d bundled manifests valid, quality_tier unique catalog-wide\n", len(bundled))
+		if err := catalog.CheckNameUniqueness(bundled); err != nil {
+			return err
+		}
+		fmt.Printf("ok: %d bundled manifests valid, quality_tier and names unique catalog-wide\n", len(bundled))
 		return nil
 	}
 
@@ -68,7 +71,10 @@ func runValidate(args []string) error {
 		if err := catalog.CheckTierUniqueness(merged); err != nil {
 			return fmt.Errorf("validate: %s would collide with the bundled catalog: %w", m.ModelID, err)
 		}
-		fmt.Printf("ok: %s valid; quality_tier unique against bundled catalog\n", m.ModelID)
+		if err := catalog.CheckNameUniqueness(merged); err != nil {
+			return fmt.Errorf("validate: %s would collide with the bundled catalog: %w", m.ModelID, err)
+		}
+		fmt.Printf("ok: %s valid; quality_tier and names unique against bundled catalog\n", m.ModelID)
 		return nil
 	}
 	fmt.Printf("ok: %s valid\n", m.ModelID)

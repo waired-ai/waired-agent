@@ -5,7 +5,7 @@ meta:
   audience: OpenAI / Anthropic の API を話せるツールを使っている人
   needs: Waired がサインイン済みで、モデルが読み込まれていること
   time: 5 分
-sourceHash: ef3e581b0afd8fcf
+sourceHash: 0b015a4adb992941
 ---
 
 import { Aside, Steps, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -30,13 +30,8 @@ Waired は自分のパソコン上で、OpenAI や Anthropic の API と同じ�
 	| Anthropic | `http://127.0.0.1:9473/anthropic` |
 
 2. **モデル** — 具体的なモデル名ではなく Waired の名前を使ってください。
-	モデルを切り替えても設定を変えずに済みます。
-
-	| 名前 | 内容 |
-	|---|---|
-	| `waired/default` | 既定のモデル |
-	| `waired/coding` | コーディング向けモデル |
-	| `waired/small` | 速く短い応答 |
+	モデルを切り替えても設定を変えずに済みます。特定のモデルに固定したい場合は、
+	`waired models ls` に出るモデル名をそのまま書きます。
 
 3. **API キー** — ツール側が必ず要求してきます。Waired が使う鍵は
 	自分のパソコンの中にあります。

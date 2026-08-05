@@ -2872,7 +2872,7 @@ func TestApplyReportsTheCanonicalModelAndWhoIsDriving(t *testing.T) {
 	// First frame: the CP's persisted state, replayed at boot.
 	r.Apply(ctx, desiredFrame("", "", 0))
 	// Then the wizard writes a choice, by one of its aliases.
-	r.Apply(ctx, desiredFrame("", "waired/medium", 0))
+	r.Apply(ctx, desiredFrame("", "qwen2.5-coder-14b", 0))
 
 	notes := f.notes()
 	if len(notes) != 2 {
@@ -2880,7 +2880,7 @@ func TestApplyReportsTheCanonicalModelAndWhoIsDriving(t *testing.T) {
 	}
 	last := notes[len(notes)-1]
 	if last.modelID != "qwen2.5-coder-14b-instruct" {
-		t.Fatalf("note model = %q, want the canonical id for waired/medium", last.modelID)
+		t.Fatalf("note model = %q, want the canonical id for qwen2.5-coder-14b", last.modelID)
 	}
 	if !last.driving {
 		t.Fatal("driving = false for an instruction that changed while the reconciler " +

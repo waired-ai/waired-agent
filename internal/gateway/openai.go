@@ -32,7 +32,7 @@ type openAIErrorEnvelope struct {
 
 // handleOpenAIModels returns the catalog mapped to OpenAI's
 // `{data:[{id,object,owned_by,...}]}` shape. The dynamic coding
-// aliases (waired/default, waired/coding — resolved by the router to
+// alias (waired/default — resolved by the router to
 // the host's current default, #632), every manifest's model_id, and
 // its static aliases are all listed so client SDKs that pre-validate
 // the model field accept any spelling.

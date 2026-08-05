@@ -159,6 +159,22 @@ That is a starting point, not a verdict:
 [Troubleshooting → my machine can only run a very small model](/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model)
 has the longer version.
 
+### A few models are never the automatic choice
+
+Everything above is about your computer. One last thing is not.
+
+A small number of models are carried because people come looking for them,
+but are never what Waired picks for somebody who has not asked. That is the
+same on every machine, and it is not a verdict on the model. Waired only
+recommends a model when it can say why *that* one rather than another of
+similar size, and for these it cannot.
+
+Today that is OpenAI's **gpt-oss 20B** and **gpt-oss 120B**. They are listed,
+you can select either, and everything downstream works exactly as it does for
+any other model — they download, they run, and they are reported the same way.
+What does not happen is Waired choosing one during install, marking one
+*recommended*, or naming one when it suggests you switch.
+
 ### Adding hardware never costs you a model
 
 Fitting a graphics card, or a bigger one, can only improve what this computer

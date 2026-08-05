@@ -14,7 +14,7 @@ func TestRenderEntry_BaseURLAndHooks(t *testing.T) {
 	for _, want := range []string{
 		`const BASE_URL = "http://127.0.0.1:9479/v1";`,
 		`SYNTHETIC_KEY = "waired-local"`,
-		`["default", "coding", "small"]`,
+		`["default"]`,
 		"resolveDynamicModel",
 		"resolveSyntheticAuth",
 		"registerProvider",

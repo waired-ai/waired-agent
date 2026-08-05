@@ -2,7 +2,6 @@
   "model_id": "qwen2.5-coder-3b-instruct",
   "display_name": "Qwen2.5 Coder 3B Instruct",
   "model_aliases": [
-    "waired/small",
     "qwen2.5-coder-3b",
     "Qwen/Qwen2.5-Coder-3B-Instruct"
   ],

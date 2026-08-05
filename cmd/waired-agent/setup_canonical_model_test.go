@@ -24,7 +24,7 @@ import (
 // retirement table points at.
 func canonicalTestManifests() []catalog.Manifest {
 	return []catalog.Manifest{
-		{ModelID: "qwen2.5-coder-14b-instruct", ModelAliases: []string{"waired/medium", "qwen2.5-coder-14b"}},
+		{ModelID: "qwen2.5-coder-14b-instruct", ModelAliases: []string{"qwen2.5-coder-14b"}},
 		{ModelID: "qwen3.5-0.8b"},
 		{ModelID: "granite4-350m", ModelAliases: []string{"waired/tiny"}, InternalOnly: "CI fixture"},
 	}
@@ -43,7 +43,7 @@ func TestCanonicalSetupModelID(t *testing.T) {
 		name, in, want string
 	}{
 		{"canonical id is itself", "qwen2.5-coder-14b-instruct", "qwen2.5-coder-14b-instruct"},
-		{"alias becomes the id", "waired/medium", "qwen2.5-coder-14b-instruct"},
+		{"alias becomes the id", "qwen2.5-coder-14b", "qwen2.5-coder-14b-instruct"},
 		{"short alias becomes the id", "qwen2.5-coder-14b", "qwen2.5-coder-14b-instruct"},
 		// Resolution takes the COMPLETE set: the control plane can
 		// legitimately desire a withheld model, and the routing sentinel
@@ -80,7 +80,7 @@ func TestSetupConvergesOnANameTheControlPlaneSpellsDifferently(t *testing.T) {
 		desired string
 		serving string // what the device reports it is set to serve
 	}{
-		{"alias", "waired/medium", "qwen2.5-coder-14b-instruct"},
+		{"alias", "qwen2.5-coder-14b", "qwen2.5-coder-14b-instruct"},
 		{"retired id", "qwen2.5-coder-0.5b-instruct", "qwen3.5-0.8b"},
 		{"retired alias", "qwen2.5-coder-0.5b", "qwen3.5-0.8b"},
 	} {

@@ -5,7 +5,7 @@ meta:
   audience: OpenClaw ユーザー
   needs: OpenClaw がインストール済みで、Waired がサインイン済みであること
   time: 2 分
-sourceHash: 3b4fa595ceea5c0d
+sourceHash: 99cbe9abcc944392
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -20,13 +20,11 @@ waired link openclaw
 これだけです。あとはいつもどおり OpenClaw を起動し、Waired のモデルを選びます。
 
 <Expected>
-	OpenClaw のモデル選択に、次の 3 つが追加されます。
+	OpenClaw のモデル選択に、次の 1 つが追加されます。
 
 	| モデル | 用途 |
 	|---|---|
-	| `waired/auto` | 汎用の既定。Waired に選ばせる |
-	| `waired/coding` | コード |
-	| `waired/small` | 速く短い応答 |
+	| `waired/default` | このパソコンで Waired が動かしているモデル |
 </Expected>
 
 API キーも環境変数も使いません。Waired が、自分のマシンで動いている AI へ

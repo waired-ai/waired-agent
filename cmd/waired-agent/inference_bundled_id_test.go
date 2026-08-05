@@ -10,7 +10,7 @@ import (
 // aliasedManifest returns a shipped manifest together with one alias that
 // differs from its model_id. Derived from the catalog rather than written
 // down, because the alias→id mapping is data other work repoints (#200
-// re-points `waired/medium`), and a test that pinned one would fail for a
+// re-points an alias), and a test that pinned one would fail for a
 // reason that has nothing to do with resolution.
 func aliasedManifest(t *testing.T) (alias, modelID string) {
 	t.Helper()

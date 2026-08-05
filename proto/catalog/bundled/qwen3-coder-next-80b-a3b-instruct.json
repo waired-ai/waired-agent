@@ -2,7 +2,6 @@
   "model_id": "qwen3-coder-next-80b-a3b-instruct",
   "display_name": "Qwen3 Coder Next 80B-A3B Instruct (Hybrid Mamba)",
   "model_aliases": [
-    "waired/moe-mid",
     "qwen3-coder-next-80b-a3b",
     "Qwen/Qwen3-Next-80B-A3B-Instruct"
   ],

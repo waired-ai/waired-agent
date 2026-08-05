@@ -45,21 +45,29 @@ func configHasForeignKeys(home string) bool {
 	return !isEffectivelyEmpty(m)
 }
 
-// modelRefs are the three picker references the adapter allowlists in
-// agents.defaults.models so the waired models surface in `models list` and
-// the model picker. They match the plugin's resolveDynamicModel keys and
-// the gateway catalog aliases.
+// modelRefs is the picker reference the adapter allowlists in
+// agents.defaults.models so the waired model surfaces in `models list` and
+// the model picker. It matches the plugin's resolveDynamicModel key and the
+// gateway catalog alias.
+//
+// One entry since #521. waired/coding resolved to the same model
+// waired/default did, so the picker was offering one model under two names,
+// and waired/small pointed at a model generation the catalog is retiring.
+// Both came from an early aim of hiding model names altogether; a model that
+// is not the default is now named directly, and every model_id still
+// resolves.
 func modelRefs() []string {
-	return []string{"waired/default", "waired/coding", "waired/small"}
+	return []string{"waired/default"}
 }
 
 // legacyModelRefs are model picker references this integration used to add
-// under agents.defaults.models but no longer owns (waired/auto was renamed to
-// waired/default). mergeConfig deletes them on re-apply and removeManagedKeys
-// deletes them on uninstall, so a re-link after upgrade fully overwrites a
-// stale entry rather than leaving it orphaned in the user's config.
+// under agents.defaults.models but no longer owns: waired/auto was renamed to
+// waired/default (#422/#478), and waired/coding + waired/small were retired
+// (#521). mergeConfig deletes them on re-apply and removeManagedKeys deletes
+// them on uninstall, so a re-link after upgrade fully overwrites a stale
+// entry rather than leaving it orphaned in the user's config.
 func legacyModelRefs() []string {
-	return []string{"waired/auto"}
+	return []string{"waired/auto", "waired/coding", "waired/small"}
 }
 
 // managedAddedPaths is the fixed, human-readable list of dotted openclaw.json
