@@ -538,6 +538,16 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			Runtimes:      registry,
 			ListManifests: func() []catalog.Manifest { return manifests },
 			Recorder:      deps.Recorder,
+			// #623 over-window guard, on EVERY surface that forwards a
+			// prompt to an engine. It rode the intercept and the overlay
+			// only, which left the two OpenAI-speaking loopback surfaces
+			// (:9473, :9479) handing an over-long prompt to ollama to
+			// truncate at the head — the failure the guard exists to
+			// prevent, reached by a different door. A surface-by-surface
+			// opt-in is the wrong shape for it: the reason to guard is
+			// that a prompt is about to reach an engine, which is true of
+			// all four. 0 means "unknown" and fails open.
+			ContextWindowFor: provider.ContextWindowFor,
 		}
 	}
 
@@ -575,19 +585,14 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// claudeHandlerSet below (#601), and peer traffic on :9474 is
 	// OpenAI-shaped with an already-resolved EngineModel — exact
 	// catalog semantics are correct for it, like :9473 and :9479.
-	// #623 on the SERVING side (waired-agent#436): reject a prompt that
-	// overruns the window this engine is loaded with, instead of handing
-	// it to ollama to truncate at the head. The requesting node runs the
-	// same check against the window we advertised, but an advertisement
-	// is a snapshot — a re-tune between the push and the request leaves
-	// its copy guarding a window we no longer serve. Only this side knows
-	// the current one.
+	// The base deps carry ContextWindowFor. It matters most here
+	// (waired-agent#436): this is the SERVING side of a mesh leg, the one
+	// HandlerSet whose traffic is not the owner's own, and the requesting
+	// node's copy of the check is sized from an advertisement — a
+	// snapshot that a re-tune between the push and the request leaves
+	// stale. Only this side knows the window the engine is loaded with
+	// right now.
 	//
-	// This is the one HandlerSet whose traffic is not the owner's own, so
-	// it is also the one where the client cannot be trusted to have
-	// checked. The Claude-intercept set below wires the same dep for the
-	// requesting half.
-	overlayDeps.ContextWindowFor = provider.ContextWindowFor
 	// AuthToken intentionally empty: the inference.Server applies
 	// peer auth via verifyPeerSignature; loopback bearer doesn't
 	// apply to overlay traffic.
@@ -615,13 +620,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// AllowOpenAI stays false: the intercept surface speaks Anthropic
 	// shapes only.
 	claudeDeps.AllowAnthropic = cfg.AllowAnthropicAPI
-	// #623: advertise the served model's real context window (via the
-	// intercept's /anthropic/v1/models) and hard-reject over-window
-	// prompts with an Anthropic-shaped 400 so Claude Code compacts
-	// instead of overrunning the model. Rides with the intercept
-	// surface — it moved here from the overlay set along with the
-	// unknown-model resolver (#601).
-	claudeDeps.ContextWindowFor = provider.ContextWindowFor
+	// The base deps' ContextWindowFor also feeds this surface's
+	// /anthropic/v1/models advertisement of the served model's real
+	// window (#623), alongside the over-window 400 that makes Claude Code
+	// compact instead of overrunning the model.
 	claudeDeps.ClassifyModel = classifyClaudeModel
 	// #52 (opt-in): advertise the reserved route-directive ids in /v1/models
 	// discovery so they appear in Claude Code's /model picker. The intercept

@@ -588,30 +588,35 @@ func mapFinishReason(openai string) string {
 // 1-token-per-4-bytes heuristic plus a per-message overhead. The
 // response includes a Warning header (set by the handler) so clients
 // know it's not exact; Phase B will use the model's real tokenizer.
+//
+// It counts the CONVERTED request — the bytes this gateway would send
+// to the engine — rather than walking the Anthropic shape itself. The
+// walk it used to do missed two of the three things a coding-agent
+// request is mostly made of: the tool schemas (never counted on either
+// side) and the tool_result payloads that carry file reads and command
+// output (counted by the server, not by the requester). Both omissions
+// pushed the estimate down, which is the direction that lets an
+// over-window prompt through to be truncated at the head.
+//
+// Counting the converted form also removes the drift risk the two
+// hand-written walks carried: the requester and the peer now count the
+// same bytes, so neither can refuse a prompt the other passed
+// (waired-agent#436).
 func CountTokensApprox(req AnthropicRequest) int {
-	const overheadPerMessage = 4
-	total := 0
-	if s, err := anthropicSystemToString(req.System); err == nil {
-		total += approxTokenCount(s)
-	}
-	for _, m := range req.Messages {
-		total += overheadPerMessage
-		var s string
-		if err := json.Unmarshal(m.Content, &s); err == nil {
-			total += approxTokenCount(s)
-			continue
-		}
-		var blocks []AnthropicContentBlock
-		if err := json.Unmarshal(m.Content, &blocks); err == nil {
-			for _, b := range blocks {
-				total += approxTokenCount(b.Text)
-				if len(b.Input) > 0 {
-					total += approxTokenCount(string(b.Input))
-				}
-			}
+	if oai, err := AnthropicToOpenAI(req); err == nil {
+		if encoded, err := json.Marshal(oai); err == nil {
+			return CountOpenAIPromptTokensApprox(encoded)
 		}
 	}
-	return total
+	// A request this gateway cannot convert (an image block, an unknown
+	// block type) never reaches the over-window guard — the handler
+	// rejects it at conversion. Only /count_tokens gets here, so answer
+	// from the request's own bytes rather than keeping a second walk
+	// alive that nothing else exercises.
+	if encoded, err := json.Marshal(req); err == nil {
+		return approxTokenCount(string(encoded))
+	}
+	return 0
 }
 
 func approxTokenCount(s string) int {
@@ -627,15 +632,21 @@ func approxTokenCount(s string) int {
 	return n
 }
 
-// CountOpenAIPromptTokensApprox is CountTokensApprox for a raw
-// chat-completions body — the shape peer traffic arrives in on the
-// overlay listener, which never sees an Anthropic request.
+// CountOpenAIPromptTokensApprox estimates the prompt size of a raw
+// chat-completions body: 4 tokens of overhead per message, plus
+// approxTokenCount of the content, the tool schemas and the tool-call
+// arguments.
 //
-// It counts the same way on purpose: 4 tokens of overhead per message
-// plus approxTokenCount of the content. The bodies it sees were
-// produced by AnthropicToOpenAI on some other node, so counting
-// differently would let a prompt that cleared the requester's guard
-// fail the server's, or the reverse.
+// This is the ONE counter. Both over-window guards read it — the
+// requesting side via CountTokensApprox on the request it is about to
+// forward, the serving side on the body it received — so the two cannot
+// disagree about the same conversation (waired-agent#436).
+//
+// The three payload kinds are counted because they are what a
+// coding-agent request is mostly made of, and every one of them was
+// missing from one side or the other: tool schemas from both,
+// tool-call arguments from this one, tool_result payloads from the
+// Anthropic walk this replaced.
 //
 // Content is taken as json.RawMessage because a chat-completions
 // message may carry either a string or an array of parts, and an
@@ -644,22 +655,33 @@ func approxTokenCount(s string) int {
 func CountOpenAIPromptTokensApprox(body []byte) int {
 	var req struct {
 		Messages []struct {
-			Content json.RawMessage `json:"content"`
+			Content   json.RawMessage  `json:"content"`
+			ToolCalls []OpenAIToolCall `json:"tool_calls"`
 		} `json:"messages"`
+		Tools []OpenAITool `json:"tools"`
 	}
 	if json.Unmarshal(body, &req) != nil {
 		return 0
 	}
 	const overheadPerMessage = 4
 	total := 0
+	for _, t := range req.Tools {
+		total += approxTokenCount(t.Function.Name)
+		total += approxTokenCount(t.Function.Description)
+		total += approxTokenCount(string(t.Function.Parameters))
+	}
 	for _, m := range req.Messages {
 		total += overheadPerMessage
 		var s string
 		if json.Unmarshal(m.Content, &s) == nil {
 			total += approxTokenCount(s)
-			continue
+		} else {
+			total += approxTokenCount(string(m.Content))
 		}
-		total += approxTokenCount(string(m.Content))
+		for _, tc := range m.ToolCalls {
+			total += approxTokenCount(tc.Function.Name)
+			total += approxTokenCount(tc.Function.Arguments)
+		}
 	}
 	return total
 }

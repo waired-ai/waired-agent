@@ -168,9 +168,12 @@ type Deps struct {
 	// guard both read it so Claude Code compacts against the real local
 	// window instead of silently overrunning it (Ollama would then
 	// truncate the prompt head). A return of 0 means "unknown" and both
-	// callers fail open (no advertisement / no 400). Wired only on the
-	// Claude-intercept HandlerSet, alongside ResolveUnknownModel; nil on
-	// every other listener disables the behaviour.
+	// callers fail open (no advertisement / no 400).
+	//
+	// The agent wires it on every gateway surface, because the reason to
+	// guard is that a prompt is about to reach an engine and that is true
+	// of all of them. nil disables the behaviour, which is what a test
+	// fixture and an embedder that cannot size a window get.
 	ContextWindowFor func(modelID string) int
 
 	// ClaudeModelDirectives, when true, makes the Anthropic /v1/models

@@ -183,8 +183,18 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	// says it serves and wins whenever it is set; a peer that declares
 	// nothing (0 — including every agent predating the field) falls back
 	// to the local computation, which is what this did before.
+	// Encoded here rather than after the engine checks below: the guard
+	// counts the bytes it is about to forward, which is the same body
+	// the serving side counts on a mesh leg, and an unencodable request
+	// must not start an engine either.
+	encoded, err := json.Marshal(openaiReq)
+	if err != nil {
+		rr.fail(http.StatusInternalServerError, "encode_failed")
+		writeAnthropicError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
 	if win := effectiveContextWindow(h.deps, sel); win > 0 {
-		if n := CountTokensApprox(req); n > win {
+		if n := CountOpenAIPromptTokensApprox(encoded); n > win {
 			rr.fail(http.StatusBadRequest, "context_overflow")
 			slog.Debug("anthropic context overflow",
 				"model", sel.ModelID, "tokens", n, "window", win,
@@ -213,13 +223,6 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		rr.fail(http.StatusServiceUnavailable, "runtime_unhealthy")
 		slog.Debug("anthropic engine not running", "runtime", displayRuntime(sel))
 		writeAnthropicError(w, http.StatusServiceUnavailable, "runtime_unhealthy", err.Error())
-		return
-	}
-
-	encoded, err := json.Marshal(openaiReq)
-	if err != nil {
-		rr.fail(http.StatusInternalServerError, "encode_failed")
-		writeAnthropicError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
 

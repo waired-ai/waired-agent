@@ -5,7 +5,7 @@ meta:
   audience: OpenAI / Anthropic の API を話せるツールを使っている人
   needs: Waired がサインイン済みで、モデルが読み込まれていること
   time: 5 分
-sourceHash: cce7284bead400e6
+sourceHash: ef3e581b0afd8fcf
 ---
 
 import { Aside, Steps, Tabs, TabItem, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -121,6 +121,25 @@ curl http://127.0.0.1:9473/v1/chat/completions \
 	鍵のコピーは自分で行う必要があります。アドレスとモデル名は安定しているので、
 	いま設定したものはそのまま使い続けられます。
 </Aside>
+
+## モデルに収まらない長さの会話はエラーになります
+
+どのモデルにも、一度に保持できる会話の量に上限があります。ここで動いている
+モデルが保持できる量をリクエストが超えた場合、Waired はそのまま渡さずに
+エラーを返します。そのまま渡すと、推論エンジンは会話の古い部分を黙って捨てて
+残りだけで応答します。これは上限に達したようには見えず、モデルが指示を忘れた
+ように見えます。
+
+返るのはこの状況の標準的なエラーです。会話を短くする機能を持つクライアントなら、
+自分で短縮して再試行します。
+
+```json
+{"error":{"message":"prompt is too long: 214000 tokens > 200704 maximum","type":"invalid_request_error","code":"context_length_exceeded"}}
+```
+
+この上限にはメッセージだけでなく、ツールの説明とツールの出力も数えます。
+コーディング作業ではこの 2 つが大半を占めます。Claude Code は会話の短縮を
+自動で行います — [Claude Code](/ja/guides/claude-code/) を参照してください。
 
 ## エンドポイント一覧
 

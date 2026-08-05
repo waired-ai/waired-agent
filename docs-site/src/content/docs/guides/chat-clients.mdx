@@ -123,6 +123,25 @@ connect privately, and the chat app then talks to `127.0.0.1` on that machine.
 	working.
 </Aside>
 
+## A conversation too long for the model gets an error, not a shorter answer
+
+Every model holds only so much of a conversation at once. When a request is
+larger than the model running here can hold, Waired replies with an error
+instead of passing it on. Left to itself the AI engine would quietly drop the
+oldest part of the conversation and answer from what was left — which reads as
+the model forgetting your instructions rather than as a limit being reached.
+
+The reply is the standard error for this case, so a client that knows how to
+shorten a conversation does so and retries by itself:
+
+```json
+{"error":{"message":"prompt is too long: 214000 tokens > 200704 maximum","type":"invalid_request_error","code":"context_length_exceeded"}}
+```
+
+Tool descriptions and tool output count toward that limit alongside the
+messages — in a coding session they are usually most of it. Claude Code
+shortens conversations for you; see [Claude Code](/guides/claude-code/).
+
 ## The full endpoint list
 
 | API | Endpoint |
