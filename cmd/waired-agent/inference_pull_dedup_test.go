@@ -149,29 +149,11 @@ func TestPullModel_DispatchErrorReleasesTheInFlightEntry(t *testing.T) {
 	}
 }
 
-// The duplicate that happens on every affected boot, not a corner case.
-// bootstrapAfterEngineStart runs bootstrapBundledModel and then
-// bootstrapPreferredModel on the same goroutine; when the operator's
-// preference names the bundled model, the first writes `queued` and
-// dispatches, and the second sees "not ready" and dispatches again for the
-// same model id. Both pulls then fight over one state row, and whichever
-// finishes first wipes the survivor's byte progress.
-func TestBootstrap_PreferredEqualsBundledDispatchesOnePull(t *testing.T) {
-	r := newBlockingRunner(t)
-	p := pullGateProviderWithRunner(t, pullGateManifest(false), r)
-	p.cfg.BundledModelID = "dense-mtp"
-	p.cfg.PreferredModelID = "dense-mtp"
-	p.cfg.PullOnStartup = true
-
-	ctx := context.Background()
-	p.bootstrapBundledModel(ctx)
-	r.awaitStarted(t)
-	p.bootstrapPreferredModel(ctx)
-
-	r.releaseAll()
-	p.waitForPulls()
-
-	if got := r.calls(); got != 1 {
-		t.Fatalf("pulls executed across both bootstraps = %d (%v), want 1", got, r.pulledTags())
-	}
-}
+// The boot-level restatement of the bar above lives in
+// inference_bootstrap_order_test.go now, as
+// TestBootstrap_PreferredEqualsBundledDownloadsItOnce (#542). The version
+// that stood here called bootstrapBundledModel and bootstrapPreferredModel
+// back to back — the pre-#306 order, through a driver the product stopped
+// calling at #379 — so it drove a sequence no boot produces. The
+// assertion it was making about the registry is the one at the top of this
+// file, at the seam that owns it.

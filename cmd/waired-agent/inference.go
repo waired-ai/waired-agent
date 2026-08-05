@@ -3065,7 +3065,7 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 // the model Ready but no ActiveSelection — committing it is what lets the
 // subsystem leave "awaiting_model". See activateBundledIfUnset.
 //
-// Split out of bootstrapBundledModel because the two halves have
+// Split off from the startup pre-pull because the two halves have
 // different owners now (#306): the pre-pull is skipped whenever the
 // operator's own model took responsibility, but this half must still run
 // — it is the only caller of activateBundledIfUnset on the boot path, and
@@ -3143,20 +3143,13 @@ func (p *agentInferenceProvider) bundledModelState(modelID string) catalog.Model
 	return state.Models[modelID]
 }
 
-// bootstrapBundledModel kicks off the agent-startup pre-pull described
-// in spec waired_inference_spec.md §11.1 (background download so that
-// inference requests can succeed without the user invoking
-// `waired models pull` explicitly).
-//
-// It is the FALLBACK driver since #306: bootstrapAfterEngineStart only
-// reaches it when the operator's own model did not take responsibility.
-func (p *agentInferenceProvider) bootstrapBundledModel(ctx context.Context) {
-	modelID, ok := p.bundledPrePullTarget(ctx)
-	if !ok {
-		return
-	}
-	p.dispatchBundledPrePull(ctx, modelID)
-}
+// The agent-startup pre-pull of spec waired_inference_spec.md §11.1 (a
+// background download, so inference requests succeed without the user
+// invoking `waired models pull`) is the next two functions. It used to be
+// one — bootstrapBundledModel — until #379 put the setup hold between the
+// decision and the download; bootstrapAfterEngineStart has driven the two
+// halves directly ever since, and the old driver was removed once nothing
+// but a test was left calling it (#542).
 
 // bundledPrePullTarget answers which model the startup pre-pull would
 // download, and false when there is nothing to download. Everything it
@@ -3214,10 +3207,9 @@ func (p *agentInferenceProvider) bundledPrePullTarget(ctx context.Context) (stri
 	// off on the install-time selector's disk-short verdict.
 	//
 	// Every caller of this function is the startup pre-pull the setting
-	// is named for — the boot fallback arm, bootstrapBundledModel, and
-	// prePullStillWanted re-taking the decision when the #379 hold
-	// releases — so there is no caller for which reading it here is
-	// wrong.
+	// is named for — the boot fallback arm, and prePullStillWanted
+	// re-taking the decision when the #379 hold releases — so there is no
+	// caller for which reading it here is wrong.
 	if !p.cfg.PullOnStartup {
 		p.logger.Info("startup pull is disabled (pull_on_startup=false); skipping the bundled pre-pull",
 			"model", modelID)
@@ -3384,7 +3376,7 @@ func (p *agentInferenceProvider) activatePreferredIfNeeded(modelID, variantID st
 // commits it as Active when it is already on disk.
 //
 // It runs FIRST in the engine-startup goroutine (it used to run after
-// bootstrapBundledModel) and reports whether it took the model on:
+// the bundled pre-pull) and reports whether it took the model on:
 // activated it, or dispatched its download. Only then is the bundled
 // pre-pull redundant — see bootstrapAfterEngineStart (#306).
 //
