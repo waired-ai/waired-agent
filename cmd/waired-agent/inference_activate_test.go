@@ -203,8 +203,11 @@ func TestActivatePreferredIfNeeded(t *testing.T) {
 
 // TestBootstrapPreferredModel covers the boot-time half of the #347
 // reconcile: a Ready preferred model is committed without a pull, and
-// a missing one attempts a re-pull (here blocked by allow_pull=false —
-// the dispatch path must not panic or touch Active).
+// a missing one attempts a re-pull (here blocked by a manifest with no
+// variant at all — the dispatch path must not panic or touch Active).
+// allow_pull=false used to be the cheap way to block it; since #338 it
+// refuses before the dispatch, which would leave the subtest asserting
+// something its name does not describe.
 func TestBootstrapPreferredModel(t *testing.T) {
 	manifests := []catalog.Manifest{{ModelID: "pref-model"}}
 
@@ -234,7 +237,7 @@ func TestBootstrapPreferredModel(t *testing.T) {
 		store := catalog.NewStore(filepath.Join(t.TempDir(), "state.json"))
 		p := &agentInferenceProvider{
 			store:     store,
-			cfg:       agentconfig.InferenceConfig{PreferredModelID: "pref-model", AllowPull: false},
+			cfg:       agentconfig.InferenceConfig{PreferredModelID: "pref-model", AllowPull: true},
 			manifests: manifests,
 			logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		}

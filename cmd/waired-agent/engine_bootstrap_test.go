@@ -208,18 +208,40 @@ func TestRunEngineBootstrap_RespectsParkAndGiveUp(t *testing.T) {
 	})
 }
 
-// Records today's behaviour: pulls disabled by config still gate the
-// whole engine-start sequence, exactly as the pre-#304 boot goroutine's
-// `binary == "" || !cfg.AllowPull` did. (That it gates engine START and
-// not just pulls is arguably wrong, but changing it is not this fix.)
-func TestRunEngineBootstrap_PullsDisabledStillGates(t *testing.T) {
+// THE #338 BAR. PRODUCT CONTRACT (issue #338): allow_pull=false stops
+// DOWNLOADS. It does not stop the engine.
+//
+// This INVERTS TestRunEngineBootstrap_PullsDisabledStillGates, which
+// recorded the opposite and said in its own comment that it was arguably
+// wrong. The pre-#304 boot goroutine's `binary == "" || !cfg.AllowPull`
+// survived the #304 rewrite verbatim, so a host holding its weights on
+// disk with pulls turned off never started `ollama serve` at all — and
+// nothing said so: hasUsableEngine reads the BINARY, not the process, so
+// subsystemState reported a usable engine and fell through to
+// awaiting_model rather than to anything an operator could act on. The
+// switches that DO stop an engine are inference.enabled=false and
+// `waired inference engine stop`.
+//
+// engineBootstrapOnce is asserted because the old gate returned BEFORE
+// the latch: such a host re-ran the refusal on every setup trigger and
+// the bootstrap tail never ran once.
+func TestRunEngineBootstrap_PullsDisabledStillStartTheEngine(t *testing.T) {
 	p, sp, installed := bootstrapProvider(t)
 	*installed = true
 	p.cfg = agentconfig.InferenceConfig{AllowPull: false}
+	ctx := context.Background()
 
-	p.runEngineBootstrap(context.Background(), "boot")
-	if got := sp.count(); got != 0 {
-		t.Fatalf("spawns with AllowPull=false = %d, want 0", got)
+	p.runEngineBootstrap(ctx, "boot")
+
+	if got := sp.count(); got != 1 {
+		t.Fatalf("spawns with AllowPull=false = %d, want 1 — pulls being off must not "+
+			"keep `ollama serve` down on a host whose weights are already there", got)
+	}
+	if st := p.ollama.Health(ctx).State; st != infruntime.StateReady {
+		t.Fatalf("engine state = %s, want %s", st, infruntime.StateReady)
+	}
+	if !p.engineBootstrapOnce.Load() {
+		t.Fatal("bootstrap did not latch; the tail would re-run on every later trigger")
 	}
 }
 
