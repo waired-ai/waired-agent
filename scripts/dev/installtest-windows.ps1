@@ -133,6 +133,12 @@ $Mirror       = Join-Path $Work 'mirror'
 # a grep for wording the product stopped printing is green forever.
 $InstallFailureRe = 'Engine install failed:|vLLM install failed:'
 
+# Lines `waired init` prints when the benchmark did not run because the MODEL
+# was not ready -- not because anything is broken (#382). Mirror of
+# lib/installtest-enroll.sh's IT_BENCH_NOT_READY_RE; see the comment there for
+# which Go file prints each branch. Same guard checks the three copies agree.
+$BenchNotReadyRe = 'Model not ready in time|Model download failed|Model still downloading'
+
 # --- logging / assert counters ----------------------------------------------
 # All three declared together, above the helpers: ItDie prints the tally, so
 # every counter it reads must exist before any function can be called.
@@ -407,11 +413,28 @@ function Assert-Inference {
     #    same line, so the assert passed while the engine was dead
     #    (waired-agent#29). A current daemon 503s a failed run and the CLI
     #    then prints no success line at all.
+    #
+    #    Three arms, not two (#382): a benchmark that RAN and produced nothing
+    #    is an engine problem, a benchmark that NEVER RAN because the model was
+    #    not ready in time is a download one. Both stay red -- the distinction
+    #    is what the red says, not whether it is red.
     if (Test-Path -LiteralPath $InitLog) {
         $txt = Get-Content -LiteralPath $InitLog -Raw
         $m = [regex]::Match($txt, '(?i)[0-9]+(\.[0-9]+)?\s*(tok|tokens)/s')
+        $nr = [regex]::Match($txt, $BenchNotReadyRe)
         if ($m.Success) {
             ItOk "benchmark ran during init ($($m.Value))"
+        } elseif ($nr.Success) {
+            ItBad "the model was not ready inside init's benchmark window, so nothing was measured -- the download, not the engine (`"$($nr.Value)`"; $InitLog)"
+            # Pull-side evidence only; the engine-side grep stays on the arm
+            # below, because printing it here is what made every one of these
+            # failures read as an engine problem.
+            ($txt -split "`n" | Select-String -Pattern 'download|model|pull' |
+                Select-Object -Last 20 | ForEach-Object { "    init| $_" }) | Write-Host
+            try {
+                $st = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 10
+                Write-Host "    status| $($st | ConvertTo-Json -Depth 6 -Compress)"
+            } catch { Write-Host "    status| (unreachable)" }
         } else {
             ItBad "no benchmark THROUGHPUT figure in init transcript ($InitLog)"
             ($txt -split "`n" | Select-String -Pattern 'benchmark|inference|engine' |

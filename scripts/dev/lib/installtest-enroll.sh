@@ -467,6 +467,25 @@ IT_BUNDLED_OLLAMA_BIN=/var/lib/waired/runtimes/ollama/bin/ollama
 # installtest-macos.sh and installtest-windows.ps1.
 IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 
+# Lines `waired init` prints when the benchmark did not run because the MODEL
+# was not ready — not because anything is broken (#382). The benchmark assert
+# below distinguishes these from a benchmark that ran and produced nothing, so
+# the red names the download instead of sending every investigation to the
+# engine.
+#
+# Each branch and where the product prints it:
+#   Model not ready in time   cmd/waired/init_benchmark.go — the benchmark wait
+#                             gave up while the pull was still in flight
+#   Model download failed     cmd/waired/init_benchmark.go (pull_failed arm) and
+#                             cmd/waired/init_pull.go (terminal pull failure)
+#   Model still downloading   cmd/waired/init_pull.go — the foreground pull wait
+#                             ran out of budget with the download progressing
+#
+# Same alternation-per-harness shape as IT_INSTALL_FAILURE_RE above, and
+# checked by the same guard: mirror any change in installtest-macos.sh and
+# installtest-windows.ps1.
+IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading'
+
 # _it_wait_inference_ready — poll the agent mgmt API's inference status
 # until the bundled model is ready in the waired-owned engine, proving the
 # install -> enroll -> engine-spawn -> model-pull tail ran. Mirrors
@@ -512,7 +531,7 @@ _it_wait_inference_ready() {
 # (mgmt API on :9476, NOT a bare `ollama list` on :11434 — #567), inference
 # enabled in persisted config, and a benchmark figure in the init transcript.
 assert_inference() {
-  local guest="$1" name initlog tps out model
+  local guest="$1" name initlog tps notready out model
 
   name="$(_it_dev_name "$guest")"
   initlog="$IT_LOGDIR/init-$name.log"
@@ -581,12 +600,44 @@ assert_inference() {
   # achievable: with at least one valid sample inside the measurement budget
   # the median is always a number, and total failure is a 503.
   #
+  # That paragraph describes a TWO-state model — a number, or a 503 — and
+  # there is a third (#382): the benchmark is never attempted at all, because
+  # the model is not ready, and `waired init` prints its ordinary success
+  # epilogue anyway. So three arms:
+  #
+  #   the benchmark RAN and produced nothing — a 503, an engine that never came
+  #   up, an unreachable daemon. The engine is the thing to look at, and the
+  #   diagnostics below say so.
+  #
+  #   the benchmark NEVER RAN because the model was not ready in time. Nothing
+  #   is broken in the engine; the download did not finish inside init's
+  #   window. This was 6 of the last 9 routing-sentinel failures, three of them
+  #   on plain `main` pushes, and every one of them reported as a missing
+  #   throughput figure — which sent the investigation to the engine, where
+  #   there was nothing to find.
+  #
+  # Both stay RED. The distinction is what the red SAYS, not whether it is red:
+  # a leg that could not measure did not test what it was asked to test, and a
+  # model-registry that is too slow to make the deadline is a condition this
+  # suite should keep reporting. What it must not do is blame the engine for it.
+  #
   # `|| true`: a no-match grep exits 1 and would trip `set -e` in the sourcing
   # driver; head-closing a multi-match grep (SIGPIPE 141) would too.
-  tps=""
-  [ -f "$initlog" ] && tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1 || true)"
+  tps=""; notready=""
+  if [ -f "$initlog" ]; then
+    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$initlog" | head -1 || true)"
+    notready="$(grep -oE "$IT_BENCH_NOT_READY_RE" "$initlog" | head -1 || true)"
+  fi
   if [ -n "$tps" ]; then
     ok "benchmark ran during init ($tps)"
+  elif [ -n "$notready" ]; then
+    bad "the model was not ready inside init's benchmark window, so nothing was measured — the download, not the engine (\"$notready\"; $initlog)"
+    grep -iE 'download|model|pull' "$initlog" 2>/dev/null | tail -20 | sed 's/^/    init| /' || true
+    # Pull-side evidence only. engine.log and the boot-benchmark slog stay on
+    # the arm below: printing them HERE is exactly what made every one of these
+    # failures read as an engine problem.
+    gx "$guest" sh -c "OLLAMA_HOST=127.0.0.1:9475 '$IT_BUNDLED_OLLAMA_BIN' list" 2>&1 | sed 's/^/    :9475 /' || true
+    gx "$guest" sh -c 'curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"' 2>&1 | sed 's/^/    status| /' || true
   else
     bad "no benchmark THROUGHPUT figure in init transcript ($initlog)"
     grep -iE 'benchmark|inference|engine' "$initlog" 2>/dev/null | tail -20 | sed 's/^/    init| /' || true
