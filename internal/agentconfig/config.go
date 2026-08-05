@@ -90,6 +90,13 @@ type InferenceConfig struct {
 
 	// PullOnStartup enables a background `ollama pull` of the bundled
 	// model when waired-agent boots.
+	//
+	// The DOWNLOAD only. Weights already on disk are still committed as
+	// the active selection at boot, so a host that turns this off still
+	// serves what it has (#526) — which matters because the install-time
+	// selector turns it off itself when disk is short
+	// (setup.SelectBundledModel: keep the model configured, don't fetch
+	// it now), i.e. on the hosts most likely to be reusing weights.
 	PullOnStartup bool `json:"pull_on_startup"`
 
 	// IdleTimeout is how long an Ollama subprocess may stay idle before

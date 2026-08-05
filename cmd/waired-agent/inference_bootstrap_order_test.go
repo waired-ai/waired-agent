@@ -320,9 +320,17 @@ func TestBootstrap_SuppressedBundledStillActivatesWeightsOnDisk(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (issue #526): PullOnStartup=false suppresses the
+// DOWNLOAD, and this is the test that exercises the refusal.
+//
 // PullOnStartup=false is the disk-short verdict from the install-time
 // selector (setup.SelectBundledModel: keep the model configured, don't
 // pull it now). It must stay off even when nothing else took the model on.
+//
+// The gate it guards lives in bundledPrePullTarget since #526, one call
+// below the caller that used to hold it — with no weights seeded,
+// activateBundledIfReady declines and the refusal there is what answers
+// false. The sibling below is the other half of that move.
 func TestBootstrap_PullOnStartupFalseSuppressesTheFallback(t *testing.T) {
 	r := newBlockingRunner(t)
 	p, installed := orderProvider(t, bounceTestManifests(), r)
@@ -331,5 +339,56 @@ func TestBootstrap_PullOnStartupFalseSuppressesTheFallback(t *testing.T) {
 
 	if got := bootstrapPulledTags(t, p, r, installed); len(got) != 0 {
 		t.Fatalf("tags pulled = %v, want none", got)
+	}
+}
+
+// PRODUCT CONTRACT (issue #526): suppressing the startup PULL must not
+// suppress the ACTIVATION either.
+//
+// Same separation as TestBootstrap_SuppressedBundledStillActivatesWeightsOnDisk
+// above, for the OTHER suppressor on the same arm. The activation lives
+// inside bundledPrePullTarget, and until #526 the whole call sat under
+// `else if cfg.PullOnStartup` — so a host that had been told not to
+// download never committed the weights it already held either: Active
+// nil, EngineReady() false, /inference/benchmark 425ing, Status()
+// reporting awaiting_model.
+//
+// Not a hypothetical config: applyBundledSelection (bundled_model_select.go)
+// sets PullOnStartup=false itself on the selector's disk-short verdict —
+// precisely the host that ought to be reusing weights rather than
+// fetching more.
+//
+// serveTags is what makes the weights real to the engine as well as to
+// state.json: activateBundledIfReady asks engineServesTag first.
+func TestBootstrap_PullOnStartupFalseStillActivatesWeightsOnDisk(t *testing.T) {
+	r := newBlockingRunner(t)
+	p, installed, serveTags := orderProviderServingTags(t, bounceTestManifests(), r)
+	p.cfg.BundledModelID = "model-a"
+	p.cfg.PullOnStartup = false // the fixture defaults it true
+	seedReady(t, p, "model-a", "q4", "a:q4")
+	serveTags("a:q4") // the engine really is holding those weights
+
+	// No hold can be parked here in either direction — the ready weights
+	// make bundledPrePullTarget answer false, and a regression skips the
+	// arm entirely — so waitForPulls returns and the assertion below is
+	// what reports the failure.
+	*installed = true
+	p.runEngineBootstrap(context.Background(), "boot")
+	p.waitForPulls()
+
+	st, err := p.store.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	switch {
+	case st.Active == nil:
+		t.Fatal("Active is nil with the weights right there on disk — being told " +
+			"not to DOWNLOAD also stopped the host committing what it already had")
+	case st.Active.ModelID != "model-a":
+		t.Fatalf("Active.ModelID = %q, want model-a", st.Active.ModelID)
+	}
+	if got := r.calls(); got != 0 {
+		t.Fatalf("pulls executed = %d, want 0 — the download really is still "+
+			"suppressed; only the activation was freed", got)
 	}
 }

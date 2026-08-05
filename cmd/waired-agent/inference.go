@@ -3206,6 +3206,23 @@ func (p *agentInferenceProvider) bundledPrePullTarget(ctx context.Context) (stri
 			"model", modelID)
 		return "", false
 	}
+	// The second reason not to download, in the same place as the first
+	// and for the same reason (#526). It used to sit at the boot caller,
+	// wrapped around the whole call — so it suppressed the activation
+	// above as well as the download, on exactly the hosts that had
+	// weights to activate: applyBundledSelection turns pull_on_startup
+	// off on the install-time selector's disk-short verdict.
+	//
+	// Every caller of this function is the startup pre-pull the setting
+	// is named for — the boot fallback arm, bootstrapBundledModel, and
+	// prePullStillWanted re-taking the decision when the #379 hold
+	// releases — so there is no caller for which reading it here is
+	// wrong.
+	if !p.cfg.PullOnStartup {
+		p.logger.Info("startup pull is disabled (pull_on_startup=false); skipping the bundled pre-pull",
+			"model", modelID)
+		return "", false
+	}
 	return modelID, true
 }
 
