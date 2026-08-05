@@ -1336,10 +1336,17 @@ if ($Tier -ge 2) {
             3 {
                 # A tier that asked for local inference and did not get it IS a
                 # failure: that is the thing that tier exists to verify.
+                #
+                # The other arm is ItOk, not ItLog: it IS an assertion -- that
+                # init honours #310's exit-code contract on a host that never
+                # asked for an engine. Counting it also keeps the assert-count
+                # floor stable, since ItLog moves no counter and would leave
+                # the -Contract leg one short of its 80 the day init starts
+                # exiting 3 there.
                 if ($WithInference) {
                     ItBad "waired init (authkey) enrolled but local AI is not running, and this tier asked for it -- see $initLog"
                 } else {
-                    ItLog "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
+                    ItOk "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
                 }
             }
             default { ItBad "waired init (authkey) exited $initExit -- see $initLog" }

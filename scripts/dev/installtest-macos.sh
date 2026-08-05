@@ -736,10 +736,15 @@ if [ "$TIER" -ge 2 ]; then
     3)
       # A tier that asked for local inference and did not get it IS a
       # failure: that is the thing that tier exists to verify.
+      #
+      # The other arm is `ok`, not `it_log`: it IS an assertion — that init
+      # honours #310's exit-code contract on a host that never asked for an
+      # engine. Counting it also keeps the assert-count floor stable, since
+      # it_log moves no counter.
       if [ "$INFER" = 1 ]; then
         bad "waired init (authkey) enrolled but local AI is not running, and this tier asked for it — see $INITLOG"
       else
-        it_log "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
+        ok "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
       fi
       ;;
     *) bad "waired init (authkey) failed with exit $init_rc — see $INITLOG" ;;
