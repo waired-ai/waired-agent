@@ -19,7 +19,7 @@
 #   linux_apt_*   Debian / Ubuntu installer
 #   linux_dnf_*   Fedora / RHEL                  (future)
 #   linux_apk_*   Alpine                          (future)
-#   darwin_*      macOS: download tarball + Ollama.app, register LaunchDaemon
+#   darwin_*      macOS: download tarball, register LaunchDaemon
 #   windows_*     handled by a separate .ps1
 
 set -eu
@@ -61,21 +61,14 @@ WAIRED_APT_KEY_URL="${WAIRED_APT_KEY_URL:-https://asia-northeast1-apt.pkg.dev/do
 # staging/prd binary hashes identical, so the URL stays in the wrapper).
 WAIRED_DEV_CONTROL_URL="${WAIRED_DEV_CONTROL_URL:-https://app.dev.waired.net}"
 
-# macOS only: the official Ollama.app download (universal binary, both
-# arches). The engine install itself happens inside `waired init` (which
-# asks "run local inference?" first); this URL is forwarded to it through
-# the sudo env_reset (darwin_maybe_init) so a pinned version / internal
-# mirror override still works. The app lands in /Applications so waired's
-# ResolveBinary finds the CLI at Ollama.app/Contents/Resources/ollama.
-WAIRED_OLLAMA_DARWIN_URL="${WAIRED_OLLAMA_DARWIN_URL:-https://github.com/ollama/ollama/releases/latest/download/Ollama-darwin.zip}"
-
-# Linux installs waired's BUNDLED Ollama (pinned official release into
-# <state-dir>/runtimes/ollama/, supervised by waired-agent on :9475) via
-# `waired runtimes install ollama`, NOT a system `ollama.com/install.sh`
-# (#567). The download URL is pinned inside the Go installer
-# (internal/runtime/ollama_install.go), so there is no Linux URL override
-# knob — the former WAIRED_OLLAMA_LINUX_URL is retired. macOS keeps
-# WAIRED_OLLAMA_DARWIN_URL (Ollama.app, PATH-resolved).
+# Both Unixes install waired's BUNDLED Ollama (a pinned official release
+# into <state-dir>/runtimes/ollama/, supervised by waired-agent on :9475)
+# via `waired runtimes install ollama`, NOT a system `ollama.com/install.sh`
+# (#567) and not an Ollama.app in /Applications (#492). The download URL
+# and its checksum are pinned inside the Go installer
+# (internal/runtime/ollama_install.go), so there is no URL override knob on
+# either — WAIRED_OLLAMA_LINUX_URL and WAIRED_OLLAMA_DARWIN_URL are both
+# retired.
 
 DRY_RUN=0
 SUDO=""
@@ -443,8 +436,6 @@ Environment variables:
                            path too under --clean.
   WAIRED_INSTALL_BASE_URL  override URL for install.sh itself
                            (default: github.com/waired-ai/waired-agent releases)
-  WAIRED_OLLAMA_DARWIN_URL macOS only: override the Ollama.app download URL
-                           (default: ollama/ollama latest Ollama-darwin.zip)
   WAIRED_APT_BASE_URL      override the apt repository base URL
                            (default: asia-northeast1-apt.pkg.dev/projects/dev-waired)
   WAIRED_APT_SUITE         override the apt suite (= AR repository id)
@@ -1663,9 +1654,8 @@ darwin_maybe_init() {
     # reader covers later bare re-runs.
     #
     # init installs the Ollama engine itself when its answers call for one,
-    # so the Ollama knobs must survive the sudo env_reset: run through
-    # `env` with WAIRED_OLLAMA_DARWIN_URL (mirror override) and, on
-    # --skip-ollama, WAIRED_NO_OLLAMA=1.
+    # so --skip-ollama must survive the sudo env_reset: thread it through
+    # `env` as WAIRED_NO_OLLAMA=1.
     set -- "$WAIRED_DARWIN_BINDIR/waired" init --state-dir "$state_dir"
     [ -n "$CONTROL_URL" ] && set -- "$@" --control "$CONTROL_URL"
     if [ "$FLAG_YES" = 1 ] || [ "$FLAG_NON_INTERACTIVE" = 1 ]; then
@@ -1678,7 +1668,6 @@ darwin_maybe_init() {
     if [ -n "$SHARE_WITH_MESH" ]; then
         set -- "$@" "--share-with-mesh=$SHARE_WITH_MESH"
     fi
-    set -- env "WAIRED_OLLAMA_DARWIN_URL=$WAIRED_OLLAMA_DARWIN_URL" "$@"
     if ollama_skip_requested; then
         set -- env WAIRED_NO_OLLAMA=1 "$@"
     fi
@@ -1831,7 +1820,7 @@ darwin_next_steps() {
     fi
     if ollama_skip_requested; then
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
-    elif [ -x /Applications/Ollama.app/Contents/Resources/ollama ] || command -v ollama >/dev/null 2>&1; then
+    elif $SUDO test -x "/Library/Application Support/waired/runtimes/ollama/bin/ollama"; then
         ollama_status="installed (local AI engine)"
     else
         ollama_status="installed by sign-in when local inference is on (sudo waired init)"

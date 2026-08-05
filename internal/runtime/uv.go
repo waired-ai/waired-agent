@@ -228,22 +228,6 @@ func defaultUVBinDir() string {
 	return filepath.Join(os.Getenv("HOME"), ".local", "share", "waired", "bin")
 }
 
-// assertExecutable reports nil iff path exists, is a regular file,
-// and has at least one execute bit set.
-func assertExecutable(path string) error {
-	st, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !st.Mode().IsRegular() {
-		return fmt.Errorf("not a regular file: %s", path)
-	}
-	if st.Mode().Perm()&0o111 == 0 {
-		return fmt.Errorf("not executable: %s", path)
-	}
-	return nil
-}
-
 // isPlaceholderSHA returns true iff s is the all-zero placeholder
 // sentinel. Used to refuse downloads before the pin has been
 // verified by an operator.

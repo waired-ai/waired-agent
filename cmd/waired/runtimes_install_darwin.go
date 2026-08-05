@@ -9,74 +9,49 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
-	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
-	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
-// ollamaDarwinDefaultURL is the official universal (amd64+arm64)
-// Ollama.app download. macOS Ollama ships as a signed .app inside this
-// zip rather than a bare CLI tarball (the Linux model), so we install
-// the whole app bundle into /Applications; its CLI then lives at
-// /Applications/Ollama.app/Contents/Resources/ollama — the first path
-// download.ResolveBinary probes. Override via WAIRED_OLLAMA_DARWIN_URL
-// to pin a version or point at a mirror (matches install.sh).
-const ollamaDarwinDefaultURL = "https://github.com/ollama/ollama/releases/latest/download/Ollama-darwin.zip"
+// installOllamaBundled is a seam so tests exercise installOllama's
+// confirm/orchestration without downloading a real release.
+var installOllamaBundled = installOllamaBundledImpl
 
-// ollamaAppDest is where the app bundle lands. A var, not a const, so the
-// installer's own test can point it at a temp dir and run installOllamaAppImpl
-// for real instead of stubbing the function that holds the behaviour.
-var ollamaAppDest = "/Applications"
-
-// installOllamaApp is a seam so tests exercise installOllama's
-// resolve/confirm/orchestration logic without downloading ~160MB.
-var installOllamaApp = installOllamaAppImpl
-
-// installOllama (macOS) installs the official Ollama.app into
-// /Applications. If an ollama is already resolvable (PATH or a
-// well-known install path) it is kept and nothing is downloaded — the
-// macOS install still lives outside the state dir, which #492 changes.
+// installOllama (macOS) installs waired's bundled Ollama: download the
+// pinned official release into <state-dir>/runtimes/ollama and let
+// waired-agent supervise it as a foreground child. It is the only Ollama
+// the agent will serve with (#489, #492).
 //
-// This is the manual `waired runtimes install` equivalent of what the
-// one-liner installer (packaging/install/install.sh) does for fresh
-// hosts. Unlike Linux's bundled-tarball model the app itself is global,
-// not per-state-dir; stateDir is where we record that the global app is
-// ours (#329), since the bundle cannot carry that marker itself.
+// Until #492 this installed the official Ollama.app into /Applications
+// instead. That location was never really waired's: it collides with the
+// user's own install, it is a Gatekeeper-sealed bundle (writing waired's
+// ownership marker into it is what made macOS refuse to run the engine at
+// all — #329/#330), it self-updates away from whatever version we tested
+// against, and it was not pinned in the first place — the download URL
+// said `releases/latest`. Under the state dir there is no bundle to seal,
+// no shared location to collide over, and one pinned version.
+//
+// An Ollama.app a previous waired left in /Applications is deliberately
+// NOT touched: it cannot be reliably attributed to us (the in-bundle
+// marker had to go with #329), so removing it is the user's call. The
+// uninstall page says how.
 //
 // sink, when non-nil, receives the same progress events the terminal
 // renderer draws — that is how the browser wizard gets the download it
 // used to have no view of (waired-agent#197). nil for every caller that
 // is not the setup executor.
 func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstallProgress)) error {
+	baseDir := infruntime.BundledOllamaDir(stateDir)
+	if !yes && !confirmTTY(fmt.Sprintf("Install waired's bundled Ollama %s into %s ?", infruntime.OllamaPinnedVersion, baseDir)) {
+		return errors.New("aborted by user")
+	}
 	// A backstop, not the working bound: the download itself is bounded by
 	// download.Fetch's no-progress watchdog (#189).
 	budget := ollamaInstallTimeout(os.Getenv)
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-
-	if path, err := download.ResolveBinary(""); err == nil {
-		// "Present" used to end the story, which is why a rerun on a broken
-		// host self-healed nothing: `waired init` skipped, the executor
-		// reported done, and the wizard went green over an engine macOS was
-		// killing on sight (#330). Presence only counts if the thing can
-		// actually run.
-		if !engineSignatureBroken(ctx, setup.OllamaDetection{Installed: true, Path: path}) {
-			fmt.Printf("Ollama already present at %s — nothing to do.\n", path)
-			fmt.Println("Run `waired runtimes status` to confirm the agent sees it.")
-			return nil
-		}
-		fmt.Printf("Ollama is present at %s but macOS will not run it (its code signature is not valid).\n", path)
-		fmt.Println("Reinstalling it...")
-	}
-
-	if !yes && !confirmTTY(fmt.Sprintf("Download and install the official Ollama.app into %s ?", ollamaAppDest)) {
-		return errors.New("aborted by user")
-	}
-
-	fmt.Println("Installing Ollama.app (downloading the official release)...")
-	if err := installOllamaApp(ctx, stateDir, sink); err != nil {
+	fmt.Printf("Installing bundled Ollama %s (downloading the official release)...\n", infruntime.OllamaPinnedVersion)
+	if err := installOllamaBundled(ctx, baseDir, sink); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf(
 				"ollama install: timed out after %s (raise it with %s, e.g. %s=3h): %w",
@@ -84,159 +59,43 @@ func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstall
 		}
 		return fmt.Errorf("ollama install: %w", err)
 	}
-	fmt.Println("Ollama installed. Launch it once so the 127.0.0.1:11434 server starts:")
-	fmt.Println("  open -a Ollama")
-	fmt.Println("waired-agent will adopt it on the next engine start.")
+	fmt.Println("Ollama installed. waired-agent will adopt it on the next engine start.")
 	return nil
 }
 
-func ollamaDarwinURL() string {
-	if u := os.Getenv("WAIRED_OLLAMA_DARWIN_URL"); u != "" {
-		return u
-	}
-	return ollamaDarwinDefaultURL
-}
-
-// ollamaZipMinBytes is a sanity floor: the real Ollama-darwin.zip is
-// hundreds of MB. A response far below this is an error page / partial
-// download, not a release, so we refuse to unzip it. (Mirrors
-// ollamaTarballMinBytes in the Linux installer; combined with HTTPS this
-// is the v1 integrity posture.)
-var ollamaZipMinBytes int64 = 50 << 20 // 50 MiB (var so tests can lower it)
-
-// installOllamaAppImpl downloads Ollama-darwin.zip to a temp dir,
-// extracts it, and copies Ollama.app into /Applications. /Applications is
-// group-writable by admins, so the copy succeeds for the typical
-// single-admin Mac without sudo; non-admin users get a clear error
-// pointing at the one-liner installer (which escalates via sudo).
-//
-// The download runs in Go (download.Fetch) so the multi-hundred-MB
-// transfer draws the same live progress bar + please-wait hint as the
-// Linux tarball install, instead of the former buffered `curl -fsSL`
-// silence (#615). Extraction and copy stay as shelled-out steps, but as
-// `ditto` rather than unzip/cp: ditto is Apple's own bundle-aware copier
-// and preserves the metadata a signed .app's seal is computed over. It is
-// the same reason we no longer write a marker into the bundle (#329) —
-// everything about a signed bundle has to arrive and stay byte-exact.
-//
-// Nothing is written inside the bundle. Ownership is recorded in the state
-// dir instead; see setup.WriteDarwinManagedRecord.
-func installOllamaAppImpl(ctx context.Context, stateDir string, sink func(infruntime.OllamaInstallProgress)) error {
-	// The terminal bar and the daemon sink are peers: teeOllamaProgress
+func installOllamaBundledImpl(ctx context.Context, baseDir string, sink func(infruntime.OllamaInstallProgress)) error {
+	// No GPUVendor: macOS has no ROCm overlay to fetch. Metal and the MLX
+	// backend ship inside the release binary.
+	inst := infruntime.NewOllamaInstaller(baseDir)
+	// Renderer shared with the Linux flow: runtimes_install_render.go.
+	// The terminal bar and the daemon sink are peers — teeOllamaProgress
 	// keeps the former even when the latter is absent.
-	progress := teeOllamaProgress(
-		newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama.app"),
+	if err := inst.Install(ctx, teeOllamaProgress(
+		newOllamaInstallRenderer(os.Stdout, isTerminal(os.Stdout), "Ollama "+infruntime.OllamaPinnedVersion),
 		sink,
-	)
-
-	tmp, err := os.MkdirTemp("", "waired-ollama-*")
-	if err != nil {
+	)); err != nil {
 		return err
 	}
-	defer func() { _ = os.RemoveAll(tmp) }()
-
-	url := ollamaDarwinURL()
-	zipPath := filepath.Join(tmp, "Ollama-darwin.zip")
-	progress(infruntime.OllamaInstallProgress{Stage: "download", Message: url})
-	if err := downloadOllamaZip(ctx, url, zipPath, progress); err != nil {
-		return fmt.Errorf("download: %w", err)
-	}
-	extracted := filepath.Join(tmp, "extracted")
-	progress(infruntime.OllamaInstallProgress{Stage: "unzip", Message: extracted})
-	if err := runDarwinCmd(ctx, "ditto", "-x", "-k", zipPath, extracted); err != nil {
-		return fmt.Errorf("extract: %w", err)
-	}
-	app := filepath.Join(extracted, "Ollama.app")
-	if _, err := os.Stat(app); err != nil {
-		return fmt.Errorf("archive did not contain Ollama.app (layout changed?): %w", err)
-	}
-	dest := filepath.Join(ollamaAppDest, "Ollama.app")
-	progress(infruntime.OllamaInstallProgress{Stage: "install", Message: ollamaAppDest})
-	// ditto src dst (no trailing-slash subtlety, unlike cp -R): dst names the
-	// bundle itself and is replaced wholesale if it already exists.
-	if err := runDarwinCmd(ctx, "ditto", app, dest); err != nil {
-		return fmt.Errorf("copy into %s — move Ollama.app there manually, or use the waired "+
-			"one-liner installer which escalates via sudo: %w", ollamaAppDest, err)
-	}
-	clearQuarantine(ctx, dest)
-	// Validate before declaring success. "The files are on disk" was the only
-	// thing this function ever checked, which is how a bundle macOS would
-	// never launch kept reporting "Install the AI software OK" on every
-	// surface, forever (#330). codesign/spctl are static — they never exec the
-	// binary, so they cannot raise the Gatekeeper dialog.
-	progress(infruntime.OllamaInstallProgress{Stage: "verify", Message: dest})
-	if err := bundleSignatureVerdict(checkBundleSignature(ctx, dest)); err != nil {
-		return err
-	}
-	recordDarwinManaged(stateDir, dest, setup.DarwinManagedInstallerFresh)
+	clearQuarantine(ctx, filepath.Join(baseDir, "bin"))
 	return nil
 }
 
-// clearQuarantine strips com.apple.quarantine from the freshly installed
-// bundle. Belt and braces: a Go download sets no quarantine xattr today (it is
-// LaunchServices, not the kernel, that applies one), so this is a no-op on the
-// current path — it exists so a future change of download route cannot
-// reintroduce the "Ollama is damaged" class through a different door.
-// Best-effort by design: failing to remove an xattr that is probably not there
-// must never fail an otherwise good install.
-func clearQuarantine(ctx context.Context, appPath string) {
-	if err := runDarwinCmd(ctx, "xattr", "-dr", "com.apple.quarantine", appPath); err != nil {
-		fmt.Fprintf(os.Stderr, "warn: could not clear the quarantine xattr on %s: %v\n", appPath, err)
+// clearQuarantine strips com.apple.quarantine from the freshly extracted
+// engine. Belt and braces: the attribute is applied by LaunchServices, not
+// by the kernel, so neither a Go HTTP download nor tar sets one and this is
+// a no-op on the current path — it exists so a future change of download
+// route cannot reintroduce the "Ollama is damaged" class through a
+// different door. Best-effort by design: failing to remove an xattr that is
+// probably not there must never fail an otherwise good install.
+func clearQuarantine(ctx context.Context, dir string) {
+	if err := runDarwinCmd(ctx, "xattr", "-dr", "com.apple.quarantine", dir); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: could not clear the quarantine xattr on %s: %v\n", dir, err)
 	}
-}
-
-// recordDarwinManaged records, OUTSIDE the bundle, that waired installed this
-// Ollama.app. It used to be a file at the bundle root, which invalidated the
-// bundle's code-signature seal and made macOS kill every exec of the engine
-// (#329). Best-effort: losing the record only costs recognition later, whereas
-// writing it into the bundle cost the whole install.
-func recordDarwinManaged(stateDir, appPath, installer string) {
-	if stateDir == "" {
-		return
-	}
-	if err := setup.WriteDarwinManagedRecord(stateDir, appPath, installer); err != nil {
-		fmt.Fprintf(os.Stderr, "warn: could not record the waired-managed engine: %v\n", err)
-	}
-}
-
-// downloadOllamaZip streams url into dest, emitting byte-level progress
-// as "download"-stage events, and refuses bodies below the size sanity
-// floor.
-func downloadOllamaZip(ctx context.Context, url, dest string, progress func(infruntime.OllamaInstallProgress)) error {
-	f, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	n, err := download.Fetch(ctx, nil, url, f, nil, infruntime.ByteProgress(progress, "download"))
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return err
-	}
-	if n < ollamaZipMinBytes {
-		return fmt.Errorf("release zip suspiciously small (%d bytes); refusing to unzip", n)
-	}
-	return nil
 }
 
 func runDarwinCmd(ctx context.Context, name string, args ...string) error {
-	_, err := runDarwinCmdOutput(ctx, name, args...)
-	if err != nil {
-		return err
+	if out, err := exec.CommandContext(ctx, name, args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w: %s", name, err, out)
 	}
 	return nil
-}
-
-// runDarwinCmdOutput is runDarwinCmd for callers that need what the tool said,
-// not just whether it succeeded. codesign and spctl report the actual defect in
-// their output ("unsealed contents present in the bundle root"), and that text
-// is what makes the setup wizard's error row worth reading.
-func runDarwinCmdOutput(ctx context.Context, name string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
-	text := strings.TrimSpace(string(out))
-	if err != nil {
-		return text, fmt.Errorf("%s: %w: %s", name, err, text)
-	}
-	return text, nil
 }

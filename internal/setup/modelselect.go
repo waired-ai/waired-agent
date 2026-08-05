@@ -286,7 +286,7 @@ func diskRequiredBytes(v catalog.Variant) int64 {
 // waired-managed engine keeps its blobs under the state dir and nowhere
 // else (#489).
 func bundledModelsDir(in BundledModelInputs) string {
-	return filepath.Join(in.StateDir, "runtimes", "ollama", "models")
+	return filepath.Join(infruntime.BundledOllamaDir(in.StateDir), "models")
 }
 
 // selectionNote renders the one-line "selected X for your hardware" note,

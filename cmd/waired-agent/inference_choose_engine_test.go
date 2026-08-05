@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
@@ -104,7 +105,7 @@ func TestChooseEngine_AutoSelectGatedOff_StaysOllama(t *testing.T) {
 
 	stateDir := t.TempDir()
 	fakeVLLMVenv(t, stateDir)
-	fakeBundledOllama(t, stateDir)
+	fakeBundledOllama(t, runtime.GOOS, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
 	prof := chooseEngineProfiler(t, true)
 	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
@@ -123,7 +124,7 @@ func TestChooseEngine_AutoSelectGatedOff_StaysOllama(t *testing.T) {
 // through to Ollama. A capable host is only switched once the venv exists.
 func TestChooseEngine_AutoPickVLLM_NoVenv_StaysOllama(t *testing.T) {
 	stateDir := t.TempDir() // capable hardware below, but no venv laid down
-	fakeBundledOllama(t, stateDir)
+	fakeBundledOllama(t, runtime.GOOS, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
 	prof := chooseEngineProfiler(t, true)
 	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}
@@ -141,7 +142,7 @@ func TestChooseEngine_AutoPickVLLM_NoVenv_StaysOllama(t *testing.T) {
 // viable Ollama when AllowAutoFallback is set, rather than failing boot.
 func TestChooseEngine_PreferredVLLM_NotViable_FallsBack(t *testing.T) {
 	stateDir := t.TempDir() // no venv laid down
-	fakeBundledOllama(t, stateDir)
+	fakeBundledOllama(t, runtime.GOOS, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
 	prof := chooseEngineProfiler(t, false) // no CUDA
 	cfg := agentconfig.InferenceConfig{PreferredEngine: catalog.RuntimeVLLM, AllowAutoFallback: true}
@@ -165,7 +166,7 @@ func TestChooseEngine_StateDirOllamaWithEmptyPATH(t *testing.T) {
 	t.Setenv("PATH", "")
 	t.Setenv("WAIRED_OLLAMA_BINARY", "")
 	stateDir := t.TempDir()
-	fakeBundledOllama(t, stateDir)
+	fakeBundledOllama(t, runtime.GOOS, stateDir)
 	store := catalog.NewStore(filepath.Join(stateDir, "state.json"))
 	prof := chooseEngineProfiler(t, false) // no GPU, so vLLM is out of the chain
 	cfg := agentconfig.InferenceConfig{AllowAutoFallback: true}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -21,28 +20,13 @@ type fakeEngineInstaller struct {
 	mu     sync.Mutex
 	calls  []string // stateDir per call
 	handed []string // stateDir passed to the ownership handoff
-	// detectedIn / repairedIn record the stateDir each detection and repair
-	// was asked about. The repair path is only correct if it is handed the
-	// daemon's state dir, so a fake that dropped it would make the wrong-dir
-	// bug unwritable (CLAUDE.md §Test discipline).
+	// detectedIn records the stateDir each detection was asked about: the
+	// executor is only correct if it is handed the DAEMON's state dir, so a
+	// fake that dropped it would make the wrong-dir bug unwritable
+	// (CLAUDE.md §Test discipline).
 	detectedIn []string
-	repairedIn []repairCall
 	err        error
 	detected   setup.OllamaDetection
-	// repairChanged / repairErr script setupRepairDarwinBundle's answer.
-	repairChanged bool
-	repairErr     error
-	// sigBroken scripts the codesign/spctl probe, and sigProbes records what
-	// it was asked about — a fake that dropped the detection could not express
-	// "we probed the wrong install".
-	sigBroken bool
-	sigProbes []setup.OllamaDetection
-}
-
-type repairCall struct {
-	GOOS     string
-	StateDir string
-	Det      setup.OllamaDetection
 }
 
 // install swaps in the seams for the duration of one test and returns
@@ -50,14 +34,6 @@ type repairCall struct {
 func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 	t.Helper()
 	prevInstall, prevDetect, prevHand := setupInstallEngine, setupDetectEngine, setupHandState
-	prevNoExec, prevRepair := setupDetectEngineNoExec, setupRepairDarwinBundle
-	prevSig := setupEngineSignatureBroken
-	setupEngineSignatureBroken = func(_ context.Context, det setup.OllamaDetection) bool {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.sigProbes = append(f.sigProbes, det)
-		return f.sigBroken
-	}
 	setupInstallEngine = func(_ bool, stateDir string, _ func(infruntime.OllamaInstallProgress)) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -70,18 +46,6 @@ func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 		f.detectedIn = append(f.detectedIn, stateDir)
 		return f.detected
 	}
-	setupDetectEngineNoExec = func(stateDir string) setup.OllamaDetection {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.detectedIn = append(f.detectedIn, stateDir)
-		return f.detected
-	}
-	setupRepairDarwinBundle = func(goos, stateDir string, det setup.OllamaDetection) (bool, error) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.repairedIn = append(f.repairedIn, repairCall{GOOS: goos, StateDir: stateDir, Det: det})
-		return f.repairChanged, f.repairErr
-	}
 	setupHandState = func(stateDir string) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -89,16 +53,8 @@ func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 	}
 	t.Cleanup(func() {
 		setupInstallEngine, setupDetectEngine, setupHandState = prevInstall, prevDetect, prevHand
-		setupDetectEngineNoExec, setupRepairDarwinBundle = prevNoExec, prevRepair
-		setupEngineSignatureBroken = prevSig
 	})
 	return f
-}
-
-func (f *fakeEngineInstaller) repairs() []repairCall {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]repairCall(nil), f.repairedIn...)
 }
 
 func (f *fakeEngineInstaller) installed() []string {
@@ -111,6 +67,14 @@ func (f *fakeEngineInstaller) handedOff() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.handed...)
+}
+
+// detections reports the state dirs the executor asked about. A run that
+// short-circuits at the presence gate must not have probed the host at all.
+func (f *fakeEngineInstaller) detections() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.detectedIn...)
 }
 
 // activeInstallState is the state a daemon serves when the wizard has
@@ -159,115 +123,22 @@ func lastPhase(t *testing.T, d *fakeSetupDaemon) management.SetupExecutorRequest
 	return folded
 }
 
-// TestSetupEngineInstall_RepairsTheDarwinBundleBeforeEveryGate is the
-// reachability contract for #329's migration, and it is the whole reason the
-// repair sits where it does.
-//
-// A host broken by the old in-bundle marker satisfies EVERY early return in
-// setupEngineInstall: the engine is installed, all its files are present, the
-// daemon reports EngineInstalled=true. It just cannot be executed. So a repair
-// placed after those gates would never run on the hosts that need it — which
-// is exactly how the wizard kept reporting OK forever. It has to run first.
-func TestSetupEngineInstall_RepairsTheDarwinBundleBeforeEveryGate(t *testing.T) {
-	shrinkSetupTimers(t)
-	f := &fakeEngineInstaller{
-		detected: setup.OllamaDetection{
-			Installed:              true,
-			Path:                   "/Applications/Ollama.app/Contents/Resources/ollama",
-			LegacyBundleMarkerPath: "/Applications/Ollama.app/.waired-managed.json",
-		},
-		repairChanged: true,
-	}
-	f.install(t)
-
-	d := &fakeSetupDaemon{}
-	// EngineInstalled: the state a broken host actually serves — this is the
-	// gate that used to swallow the whole function.
-	st := activeInstallState()
-	st.EngineInstalled = true
-	d.setState(st)
-	srv := d.server(t)
-
-	s := attachSetupExecutor(srv.URL, true)
-	defer s.Release()
-
-	var out bytes.Buffer
-	if err := setupEngineInstall(context.Background(), s, &out, "darwin", true); err != nil {
-		t.Fatalf("setupEngineInstall = %v, want nil", err)
-	}
-
-	repairs := f.repairs()
-	if len(repairs) != 1 {
-		t.Fatalf("repair calls = %d, want exactly 1 despite EngineInstalled=true", len(repairs))
-	}
-	if repairs[0].GOOS != "darwin" || repairs[0].StateDir != "/var/lib/waired" {
-		t.Errorf("repair called with goos=%q stateDir=%q, want darwin + the daemon's state dir",
-			repairs[0].GOOS, repairs[0].StateDir)
-	}
-	if !strings.Contains(out.String(), "Repaired the AI engine") {
-		t.Errorf("output = %q, want the repair to be announced", out.String())
-	}
-	// Repairing is not installing: the engine is present, so nothing downloads.
-	if got := f.installed(); len(got) != 0 {
-		t.Errorf("installer calls = %v, want none", got)
-	}
-}
-
-// The repair must never fire on the two OSes that have no bundle to break,
-// and must not fire on a healthy Mac.
-func TestSetupEngineInstall_NoRepairWhenNotNeeded(t *testing.T) {
-	shrinkSetupTimers(t)
-	broken := setup.OllamaDetection{
-		Installed:              true,
-		LegacyBundleMarkerPath: "/Applications/Ollama.app/.waired-managed.json",
-	}
-	for _, tc := range []struct {
-		name     string
-		goos     string
-		detected setup.OllamaDetection
-	}{
-		{"linux", "linux", broken},
-		{"windows", "windows", broken},
-		{"healthy darwin", "darwin", setup.OllamaDetection{Installed: true}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := &fakeEngineInstaller{detected: tc.detected}
-			f.install(t)
-			d := &fakeSetupDaemon{}
-			st := activeInstallState()
-			st.EngineInstalled = true
-			d.setState(st)
-			srv := d.server(t)
-
-			s := attachSetupExecutor(srv.URL, true)
-			defer s.Release()
-			if err := setupEngineInstall(context.Background(), s, io.Discard, tc.goos, true); err != nil {
-				t.Fatal(err)
-			}
-			if got := f.repairs(); len(got) != 0 {
-				t.Errorf("repair calls = %+v, want none", got)
-			}
-		})
-	}
-}
-
 // TestSetupEngineInstall_EngineNeedsRepairReopensThePresenceGate is the
 // reachability contract for #330's repair arm.
 //
 // EngineInstalled is pure file presence, and a host whose engine can never
 // start satisfies it — which is why the executor returned early, reported
 // nothing, and the wizard sat green over a dead engine on every rerun. The
-// daemon's EngineNeedsRepair is what reopens the gate; without it the repair
-// arm added to engineInstallDecision would be unreachable from both the
-// browser wizard and `waired init`.
+// daemon's EngineNeedsRepair is what reopens the gate; without it a host that
+// needs reinstalling is unreachable from both the browser wizard and
+// `waired init`.
 func TestSetupEngineInstall_EngineNeedsRepairReopensThePresenceGate(t *testing.T) {
 	shrinkSetupTimers(t)
 	f := &fakeEngineInstaller{
 		detected: setup.OllamaDetection{
 			Installed: true,
-			Path:      "/Applications/Ollama.app/Contents/Resources/ollama",
+			Path:      "/somewhere/else/ollama",
 		},
-		sigBroken: true,
 	}
 	f.install(t)
 
@@ -284,13 +155,11 @@ func TestSetupEngineInstall_EngineNeedsRepairReopensThePresenceGate(t *testing.T
 		t.Fatalf("setupEngineInstall = %v, want nil", err)
 	}
 
-	// It got past the gate, probed the install it was told about, and ran the
-	// installer (engineActionRepair shares the install arm).
-	if got := f.sigProbes; len(got) != 1 || got[0].Path == "" {
-		t.Fatalf("signature probes = %+v, want one probe carrying the detected path", got)
-	}
+	// It got past the gate and ran the installer against the daemon's state
+	// dir. On darwin since #492 the foreign install detected above cannot
+	// stand in for the bundled one, so this is a real reinstall.
 	if got := f.installed(); len(got) != 1 || got[0] != "/var/lib/waired" {
-		t.Fatalf("installer calls = %v, want one repair call with the daemon's state dir", got)
+		t.Fatalf("installer calls = %v, want one install call with the daemon's state dir", got)
 	}
 	if last := lastPhase(t, d); last.Phase != management.SetupExecutorPhaseDone {
 		t.Fatalf("final phase = %q, want done", last.Phase)
@@ -319,42 +188,8 @@ func TestSetupEngineInstall_HealthyInstallStillSkips(t *testing.T) {
 	if got := f.installed(); len(got) != 0 {
 		t.Errorf("installer calls = %v, want none for a healthy install", got)
 	}
-	if got := f.sigProbes; len(got) != 0 {
-		t.Errorf("signature probes = %+v, want none — the gate should close before any probe", got)
-	}
-}
-
-// TestSetupEngineInstall_SignatureFailureDeclaresItsCode: a codesign rejection
-// must reach the daemon as engine_not_ready, not as the network_error the
-// text-classification catch-all would assign.
-func TestSetupEngineInstall_SignatureFailureDeclaresItsCode(t *testing.T) {
-	shrinkSetupTimers(t)
-	sigErr := bundleSignatureVerdict(bundleSignatureReport{
-		Path: "/Applications/Ollama.app", Probed: true,
-		CodesignOut: realCodesignRejection, CodesignErr: errors.New("exit status 1"),
-	})
-	f := &fakeEngineInstaller{err: sigErr}
-	f.install(t)
-
-	d := &fakeSetupDaemon{}
-	d.setState(activeInstallState())
-	srv := d.server(t)
-
-	s := attachSetupExecutor(srv.URL, true)
-	defer s.Release()
-	if err := setupEngineInstall(context.Background(), s, io.Discard, "darwin", true); err == nil {
-		t.Fatal("want the install failure to propagate")
-	}
-
-	last := lastPhase(t, d)
-	if last.Phase != management.SetupExecutorPhaseFailed {
-		t.Fatalf("phase = %q, want failed", last.Phase)
-	}
-	if last.ErrorCode != signer.SetupErrorEngineNotReady {
-		t.Errorf("error_code = %q, want %q", last.ErrorCode, signer.SetupErrorEngineNotReady)
-	}
-	if !strings.Contains(last.Error, "unsealed contents present in the bundle root") {
-		t.Errorf("error = %q, want codesign's own diagnosis carried through", last.Error)
+	if got := f.detections(); len(got) != 0 {
+		t.Errorf("detections = %+v, want none — the gate should close before any probe", got)
 	}
 }
 
@@ -545,15 +380,25 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 			wantCode: signer.SetupErrorPermissionDenied,
 		},
 		{
-			// /Applications is admin-group-writable, so macOS attempts
-			// the install and lets it fail with a real message.
-			name: "darwin installs unelevated", goos: "darwin",
+			name: "darwin elevated installs", goos: "darwin", elevated: true,
 			wantInstall: true, wantPhase: management.SetupExecutorPhaseDone,
 		},
 		{
-			name: "darwin with its own engine is already done", goos: "darwin",
-			detected:  setup.OllamaDetection{Installed: true, Path: "/Applications/Ollama.app"},
-			wantPhase: management.SetupExecutorPhaseDone,
+			// Before #492 macOS had no elevation gate at all, because it
+			// installed into the admin-group-writable /Applications. The engine
+			// now lands under the root-owned state dir, so it needs root like
+			// the other two — and saying so beats failing mid-download.
+			name: "darwin unelevated reports permission", goos: "darwin",
+			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "administrator privileges",
+			wantCode: signer.SetupErrorPermissionDenied,
+		},
+		{
+			// #488: an Ollama waired did not install cannot satisfy the
+			// wizard's engine step. This used to report done and leave the
+			// daemon serving through software of an unknown version (#139).
+			name: "darwin foreign engine does not count", goos: "darwin", elevated: true,
+			detected:    setup.OllamaDetection{Installed: true, Path: "/Applications/Ollama.app/Contents/Resources/ollama"},
+			wantInstall: true, wantPhase: management.SetupExecutorPhaseDone,
 		},
 		{
 			name: "opt-out refuses and says why", goos: "linux", elevated: true, optOut: true,

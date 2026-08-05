@@ -15,19 +15,13 @@ type OllamaDetection struct {
 	Installed bool
 	Path      string
 	Version   string // raw `ollama --version` token, e.g. "0.24.0"; "" if unknown
-	// WairedManaged reports that this install was made BY waired. Windows
-	// answers this with a marker file next to the binary; macOS with a
-	// record in the state dir (a marker inside the signed .app bundle
-	// breaks its signature — #329). It exists because a waired-made install
-	// and the user's own live at the exact same well-known paths
-	// (%ProgramFiles%\Ollama, /Applications/Ollama.app), so path alone
-	// cannot tell them apart.
+	// WairedManaged reports that this install was made BY waired. Only
+	// Windows can still answer yes, via a marker file next to the binary:
+	// there a waired-made install and the user's own live at the exact same
+	// well-known path (%ProgramFiles%\Ollama), so path alone cannot tell
+	// them apart. Linux and macOS install under the state dir, where the
+	// path IS the answer (#492).
 	WairedManaged bool
-	// LegacyBundleMarkerPath is non-empty when this host still carries the
-	// pre-#329 marker inside the Ollama.app bundle root — i.e. this install
-	// is one waired broke, and this is the file to delete to fix it.
-	// RepairDarwinBundleMarker consumes it.
-	LegacyBundleMarkerPath string
 }
 
 // DetectOllama resolves a pre-existing ollama and (best-effort) its
@@ -58,23 +52,21 @@ func DetectOllama(ctx context.Context, stateDir string) OllamaDetection {
 
 // DetectOllamaPathOnly is DetectOllama without the version probe — resolution
 // and marker inspection only, and therefore no exec of the engine binary.
+// Version is left zero.
 //
-// That distinction is load-bearing for the repair path (#329). On a host whose
-// Ollama.app has a broken signature seal, exec'ing the bundled binary is
-// SIGKILLed by Gatekeeper AND re-raises the "Ollama is damaged" dialog — so
-// the code whose whole job is to fix that must not run the version probe
-// first. Version/Supported are left zero.
+// stateDir is unused since #492 (macOS recorded its ownership there while the
+// engine was an app bundle at /Applications) and is kept so the two detection
+// entry points still read alike from a call site.
 func DetectOllamaPathOnly(stateDir string) OllamaDetection {
+	_ = stateDir
 	path, err := download.ResolveBinary("")
 	if err != nil {
 		return OllamaDetection{}
 	}
-	facts, legacyMarker := gatherManagedFacts(stateDir, path)
 	return OllamaDetection{
-		Installed:              true,
-		Path:                   path,
-		WairedManaged:          managedFrom(runtime.GOOS, facts),
-		LegacyBundleMarkerPath: legacyMarker,
+		Installed:     true,
+		Path:          path,
+		WairedManaged: managedFrom(runtime.GOOS, gatherManagedFacts(path)),
 	}
 }
 

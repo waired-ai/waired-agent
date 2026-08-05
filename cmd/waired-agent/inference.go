@@ -298,7 +298,7 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 
 	registry := infruntime.NewRegistry()
 
-	bundledOllamaModels := filepath.Join(stateDir, "runtimes", "ollama", "models")
+	bundledOllamaModels := filepath.Join(infruntime.BundledOllamaDir(stateDir), "models")
 	// ollamaResolver resolves the engine binary lazily (re-run on each
 	// EnsureRunning so a freshly installed ollama is picked up without
 	// an agent restart). The rule itself lives in resolveOllamaBinary so
@@ -364,13 +364,13 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		ExpectedVersion: infruntime.OllamaPinnedVersion,
 		// Capture `ollama serve`'s stdout/stderr so a cold-start failure
 		// leaves a trail (the agent's slog only sees "not ready").
-		LogDir: filepath.Join(stateDir, "runtimes", "ollama", "logs"),
+		LogDir: filepath.Join(infruntime.BundledOllamaDir(stateDir), "logs"),
 		// #22: macOS system LaunchDaemons run with $HOME unset, so `ollama
 		// serve` dies at startup ("$HOME is not defined") before it can even
 		// bind the port. Give it a writable, agent-owned HOME under the
 		// runtime dir (ollama creates ~/.ollama there for its key/config);
 		// harmless where the launcher already sets HOME (Linux systemd).
-		StateHome: filepath.Join(stateDir, "runtimes", "ollama"),
+		StateHome: infruntime.BundledOllamaDir(stateDir),
 	}
 	migrateLegacyOllamaModels(logger, bundledOllamaModels, "")
 	ollama := infruntime.NewOllamaAdapter(ollamaCfg)

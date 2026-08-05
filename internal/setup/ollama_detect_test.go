@@ -58,25 +58,27 @@ func TestDetectOllama_NotInstalled(t *testing.T) {
 	}
 }
 
-// TestDetectOllama_SurfacesTheLegacyBundleMarker closes the gap that let #329
-// ship: nothing used to assert that DetectOllama populates the managed fields
-// at all, so the marker contract was only ever tested one level down. The
-// detection must hand the repair path the exact file to delete.
-func TestDetectOllama_SurfacesTheLegacyBundleMarker(t *testing.T) {
+// TestDetectOllama_SurfacesTheManagedMarker: nothing used to assert that
+// DetectOllama populates the managed field at all, so the marker contract was
+// only ever tested one level down — which is how #329 shipped.
+//
+// It is a Windows-only signal since #492: on Linux and macOS the engine lives
+// under the state dir, so an install found anywhere else is by definition not
+// waired's, marker or no marker.
+func TestDetectOllama_SurfacesTheManagedMarker(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stub setup not implemented for windows")
 	}
 	root := t.TempDir()
-	app := filepath.Join(root, "Applications", "Ollama.app")
-	stub := filepath.Join(app, "Contents", "Resources", "ollama")
-	if err := os.MkdirAll(filepath.Dir(stub), 0o755); err != nil {
+	dir := filepath.Join(root, "Ollama")
+	stub := filepath.Join(dir, "ollama")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"ollama version is 9.9.9\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(app, WairedManagedMarkerName)
-	if err := os.WriteFile(marker, []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, WairedManagedMarkerName), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", "")
@@ -86,12 +88,7 @@ func TestDetectOllama_SurfacesTheLegacyBundleMarker(t *testing.T) {
 	if !det.Installed {
 		t.Fatalf("Installed = false, want true")
 	}
-	if det.LegacyBundleMarkerPath != marker {
-		t.Errorf("LegacyBundleMarkerPath = %q, want %q", det.LegacyBundleMarkerPath, marker)
-	}
-	// Only macOS treats the in-bundle marker as proof of ownership; the other
-	// two answer with the same-dir marker, which this layout does not have.
-	if want := runtime.GOOS == "darwin"; det.WairedManaged != want {
+	if want := runtime.GOOS == "windows"; det.WairedManaged != want {
 		t.Errorf("WairedManaged = %v on %s, want %v", det.WairedManaged, runtime.GOOS, want)
 	}
 }

@@ -65,6 +65,8 @@ never installed:
 curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/install.sh | sh -s -- --skip-ollama
 ```
 
+You can add it later with `sudo waired runtimes install ollama`.
+
 ## What gets installed
 
 | | |
@@ -72,6 +74,12 @@ curl -fsSL https://github.com/waired-ai/waired-agent/releases/latest/download/in
 | Commands | `/usr/local/bin/waired`, `/usr/local/bin/waired-agent` |
 | Background service | A system `launchd` daemon, starts at boot |
 | Settings and state | `/Library/Application Support/waired` |
+| AI software and models | Inside `/Library/Application Support/waired`, only on a computer that runs models |
+
+Waired keeps its own copy of the AI software, alongside its settings, rather
+than installing an app into your Applications folder. Nothing outside these
+locations is touched — if you already have Ollama on this Mac, Waired leaves it
+exactly as it is and does not use it.
 
 <CardGrid>
 	<LinkCard title="Sign in and set up" href="/getting-started/first-run/" description="The next step." />
