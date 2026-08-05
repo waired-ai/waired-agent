@@ -23,14 +23,27 @@
 # installer-surface changes, so it left the per-PR critical path (~2 min)
 # and runs here nightly instead.
 #
-# Runners: Linux on a GH-hosted disposable VM; Windows/macOS DELIBERATELY
-# stay on the self-hosted ephemeral-VM pools even though the rest of CI is
-# GH-hosted (public repo, free minutes): the inference tail needs hardware
-# representative of real user machines — hosted macOS runners are
-# virtualized with no GPU/Metal and little RAM (waired#573 showed even a
-# 4 GB tart VM can't boot the Metal engine) — and the banner render check
-# needs a real interactive console, which hosted runners (service session)
-# never have.
+# Runners: the three install/inference legs run on GH-hosted disposable VMs,
+# the same images the per-PR installtest.yml already uses for all three OSes.
+# On a PUBLIC repository the standard runners are free and unlimited, and
+# carry ubuntu-24.04 4 vCPU / 16 GB, windows-latest 4 vCPU / 16 GB, macos-14
+# 3 vCPU (M1) / 7 GB —
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+#
+# Windows and macOS used to sit on the self-hosted ephemeral-VM pools. That
+# started as an Actions-cost measure while the client lived in the private
+# monorepo (see waired#516 for the analysis), and was then justified as
+# needing hardware representative of real user machines. Neither holds now:
+# this repo is public, and both pools reported 4 GB RAM to hostfit
+# — LESS memory than the hosted runners — which is why the macOS bundled
+# Ollama could not boot its Metal engine there at all (waired#573). Being
+# reused slots they also could not take the egress blackhole guard below, and
+# an engine a previous leg installed could stand in for the one the
+# daemon-engine leg exists to prove (#139).
+#
+# Still self-hosted, for reasons that do hold: the banner render check needs
+# a real interactive console (hosted runners get a service session), and the
+# vLLM / agent-harness lanes need a real GPU.
 name: installtest-inference
 
 on:
@@ -72,7 +85,7 @@ defaults:
 jobs:
   # Resolve which OS legs to run from the dispatch input (default = all three;
   # a schedule has no input → all three). A dynamic matrix keeps a single-OS
-  # dry-run from spinning up the self-hosted Windows / macOS runners.
+  # dry-run from claiming Windows / macOS runners it will not use.
   legs:
     name: select legs
     runs-on: ubuntu-24.04
@@ -85,9 +98,15 @@ jobs:
           SEL: ${{ github.event.inputs.os || 'all' }}
         run: |
           set -euo pipefail
+          # Same images as installtest.yml's three legs, deliberately: these
+          # are the SAME harness scripts, so a per-PR green there is only
+          # evidence for here if the image matches. windows-latest runs the
+          # job elevated (install.ps1's real SCM path); macos-14 is the
+          # pinned Apple-Silicon image with passwordless sudo for the
+          # LaunchDaemon install.
           linux='{"os":"linux","runs-on":"ubuntu-24.04","timeout":35}'
-          windows='{"os":"windows","runs-on":["self-hosted","windows","x64","build"],"timeout":45}'
-          macos='{"os":"macos","runs-on":["self-hosted","macos","arm64","build"],"timeout":45}'
+          windows='{"os":"windows","runs-on":"windows-latest","timeout":45}'
+          macos='{"os":"macos","runs-on":"macos-14","timeout":45}'
           case "$SEL" in
             linux)   legs="[$linux]" ;;
             windows) legs="[$windows]" ;;
@@ -114,29 +133,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # Self-hosted images bake the Go toolchain + caches locally; only
-          # Linux keeps GitHub's remote cache (mirrors installtest.yml).
-          cache: ${{ matrix.os == 'linux' }}
-
-      # gcloud needs Python ≥3.10 — same shim as installtest.yml.
-      - name: point gcloud at the image's Python ≥3.10 (self-hosted macOS)
-        if: matrix.os == 'macos'
-        run: |
-          set -euo pipefail
-          py="$(/opt/homebrew/bin/brew --prefix python@3.14)/bin/python3.14"
-          test -x "$py"
-          echo "CLOUDSDK_PYTHON=$py" >> "$GITHUB_ENV"
 
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
-      # Windows skips the SDK install — the image bakes gcloud (mirrors
-      # installtest.yml).
+      # gcloud uses the WIF credential to mint the SA id_token in the harness.
       - uses: google-github-actions/setup-gcloud@v3
-        with:
-          skip_install: ${{ matrix.os == 'windows' }}
 
       # Linux: in-place install (systemd is PID 1 on the disposable runner) +
       # --inference → install.sh installs Ollama, `waired init
@@ -180,7 +184,7 @@ jobs:
       # #22: on a macOS failure the ollama engine's own stdout+stderr — the
       # real "exit status 1" reason — lives in a root-owned engine.log the
       # transcript never shows. Stage it (+ the tee'd it-inf.log) so a
-      # nightly failure is diagnosable without a live self-hosted runner.
+      # nightly failure is diagnosable after the runner is gone.
       - name: collect ollama diagnostics (macos)
         if: failure() && matrix.os == 'macos'
         run: |
@@ -243,24 +247,14 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: ${{ matrix.os == 'linux' }}
-
-      - name: point gcloud at the image's Python ≥3.10 (self-hosted macOS)
-        if: matrix.os == 'macos'
-        run: |
-          set -euo pipefail
-          py="$(/opt/homebrew/bin/brew --prefix python@3.14)/bin/python3.14"
-          test -x "$py"
-          echo "CLOUDSDK_PYTHON=$py" >> "$GITHUB_ENV"
 
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
+      # gcloud uses the WIF credential to mint the SA id_token in the harness.
       - uses: google-github-actions/setup-gcloud@v3
-        with:
-          skip_install: ${{ matrix.os == 'windows' }}
 
       # Linux: in-place install (systemd is PID 1 on the disposable runner),
       # engine ABSENT (--skip-ollama), then daemon-path init → executor install.
@@ -320,28 +314,22 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          cache: ${{ matrix.os == 'linux' }}
-
-      - name: point gcloud at the image's Python ≥3.10 (self-hosted macOS)
-        if: matrix.os == 'macos'
-        run: |
-          set -euo pipefail
-          py="$(/opt/homebrew/bin/brew --prefix python@3.14)/bin/python3.14"
-          test -x "$py"
-          echo "CLOUDSDK_PYTHON=$py" >> "$GITHUB_ENV"
 
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
 
+      # gcloud uses the WIF credential to mint the SA id_token in the harness.
       - uses: google-github-actions/setup-gcloud@v3
-        with:
-          skip_install: ${{ matrix.os == 'windows' }}
 
-      # Linux-only belt-and-braces egress blackhole (disposable runner). The
-      # self-hosted Windows/macOS pools rely on dummy-token + sentinel only —
-      # no egress edits on a reused slot.
+      # Linux-only belt-and-braces egress blackhole. It used to be Linux-only
+      # because the Windows/macOS pools were reused slots; now that all three
+      # legs are disposable VMs, the remaining blocker is the harness — only
+      # scripts/dev/lib/installtest-integration.sh reads IT_ANTHROPIC_BLACKHOLED
+      # and passes it through as WAIRED_ANTHROPIC_BLACKHOLED, and the macOS /
+      # Windows harnesses have no equivalent. Until they do, those two legs
+      # rely on dummy-token + sentinel only.
       - name: blackhole api.anthropic.com (fail-open guard, linux)
         if: matrix.os == 'linux'
         run: echo "0.0.0.0 api.anthropic.com" | sudo tee -a /etc/hosts >/dev/null
@@ -480,8 +468,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # The L4 image bakes the Go toolchain + caches locally (mirrors the
-          # other self-hosted legs).
+          # The L4 image bakes the Go toolchain + caches locally, so GitHub's
+          # remote cache buys nothing here.
           cache: false
 
       - name: nvidia-smi (fail fast if the runner lost its GPU)
@@ -628,10 +616,10 @@ jobs:
   # Schedule only. A workflow_dispatch is someone watching the run already;
   # filing an issue at them is noise.
   #
-  # NOT required-check instead: these lanes install a real engine, pull a
-  # multi-GB model from an external registry and run on self-hosted
-  # hardware — exactly the externally-flaky shape that stays out of the
-  # ruleset, the same call already made for the testnet gate.
+  # NOT required-check instead: these lanes install a real engine and pull a
+  # multi-GB model from an external registry — exactly the externally-flaky
+  # shape that stays out of the ruleset, the same call already made for the
+  # testnet gate.
   report:
     name: report a red nightly
     # `legs` is in here too: if the matrix selector fails, every lane below
