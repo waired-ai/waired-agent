@@ -42,8 +42,21 @@ IT_LOGDIR="${IT_LOGDIR:-$IT_WORKDIR/logs}"
 
 it_log()  { printf '\033[1;36m[installtest]\033[0m %s\n' "$*"; }
 it_warn() { printf '\033[1;33m[installtest]\033[0m %s\n' "$*" >&2; }
-it_die()  { printf '\033[1;31m[installtest]\033[0m %s\n' "$*" >&2; exit 1; }
 it_step() { printf '\033[1;32m[installtest]\033[0m ==> %s\n' "$*"; }
+
+# it_die_hook lets a driver that keeps an assert tally record the die as a
+# failure and print its own summary before the process ends. Default no-op, so
+# a lib sourced by a driver with no tally still works.
+#
+# Without it, a die was invisible to everything that reads a leg's output: it
+# printed one uncoloured line, then `exit 1` straight past the summary and the
+# assert-count floor. A leg that died mid-enrol and a leg that failed an assert
+# produced the same red job with none of the same evidence — which is how #505
+# spent a week being bisected against runs whose logs could not distinguish
+# them. FAIL-prefixing the line puts a die in the same grep as every other
+# failure.
+it_die_hook() { :; }
+it_die()  { printf '\033[1;31m[installtest] FAIL\033[0m %s\n' "$*" >&2; it_die_hook; exit 1; }
 
 it_require() {
   local c

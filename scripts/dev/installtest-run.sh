@@ -136,6 +136,21 @@ bad()  { printf '\033[1;31m[installtest] FAIL\033[0m %s\n' "$*" >&2; FAIL=$((FAI
 # summary: a skip nobody can see is how a leg quietly stops testing anything
 # (#215).
 skip() { printf '\033[1;33m[installtest] SKIP\033[0m %s\n' "$*"; SKIP=$((SKIP+1)); }
+# it_die_hook (declared in lib/installtest-common.sh) — count the die as a
+# failure and print the tally, so a leg that dies mid-run still reports what it
+# got through. Deliberately does NOT run the assert-count floor: the floor's
+# question ("did a block stop executing without saying so?") is already
+# answered by the die's own reason, and a second FAIL line would bury it.
+#
+# Defined here, not earlier, because it reads the counters above. The argument
+# and preflight it_die calls further up therefore keep the library's no-op
+# hook — correctly: no assert has run at that point, so there is no tally to
+# print, and the FAIL prefix they inherit is the whole of what they need.
+it_die_hook() {
+  FAIL=$((FAIL+1))
+  echo >&2
+  it_step "Tier ${TIER:-?} summary (died before finishing): $PASS passed, $FAIL failed, $SKIP skipped"
+}
 # gx <guest> <cmd...> — run a privileged command in the test environment.
 # LXD: `lxc exec` (root in the guest). --local: `sudo` on this host (the LXD
 # guest's root maps to host root). The <guest> arg is ignored in --local.

@@ -134,18 +134,33 @@ $Mirror       = Join-Path $Work 'mirror'
 $InstallFailureRe = 'Engine install failed:|vLLM install failed:'
 
 # --- logging / assert counters ----------------------------------------------
+# All three declared together, above the helpers: ItDie prints the tally, so
+# every counter it reads must exist before any function can be called.
 $script:Pass = 0
 $script:Fail = 0
+$script:Skip = 0
 function ItStep { param([string]$m) Write-Host "[installtest] ==> $m" -ForegroundColor Green }
 function ItLog  { param([string]$m) Write-Host "[installtest] $m" -ForegroundColor Cyan }
 function ItOk   { param([string]$m) Write-Host "[installtest]  ok  $m" -ForegroundColor Green; $script:Pass++ }
 function ItBad  { param([string]$m) Write-Host "[installtest] FAIL $m" -ForegroundColor Red; $script:Fail++ }
-function ItDie  { param([string]$m) Write-Host "[installtest] $m" -ForegroundColor Red; exit 1 }
+# A die counts as a failure and prints the tally before exiting. Without that
+# it printed one line and exited straight past the summary, so a leg that died
+# mid-run and a leg that failed an assert produced the same red job with none
+# of the same evidence (#505). FAIL-prefixed so a die lands in the same grep as
+# every other failure. The assert-count floor is deliberately NOT run here: its
+# question is already answered by the die's own reason.
+function ItDie  {
+    param([string]$m)
+    Write-Host "[installtest] FAIL $m" -ForegroundColor Red
+    $script:Fail++
+    Write-Host ""
+    Write-Host ("[installtest] ==> Tier {0} summary (died before finishing): {1} passed, {2} failed, {3} skipped" -f $Tier, $script:Pass, $script:Fail, $script:Skip) -ForegroundColor Green
+    exit 1
+}
 # ItSkip -- an assert deliberately not run, WITH its reason. Counted and
 # printed in the summary. The SYSTEM branch below used to take this path
 # through ItLog, which moves no counter at all: the two asserts it covers
 # simply stopped existing and the leg still reported success (#215).
-$script:Skip = 0
 $script:SkipLines = @()
 function ItSkip { param([string]$m)
     Write-Host "[installtest] SKIP $m" -ForegroundColor Yellow
@@ -352,7 +367,13 @@ function Assert-Inference {
             # fixture changes, and silently reads "not ready" until somebody
             # does (waired-ai/waired-agent#322).
             if (($subState -eq 'ready') -or ($modelsReady.Count -gt 0)) { $modelReady = $true; break }
-            if ($subState -in @('pull_failed','disabled','stopped')) { break }
+            # engine_failed is terminal too (waired-agent#29): the engine
+            # crashed and automatic recovery either is mid-flight (which shows
+            # as "starting") or has given up. Either way, polling for "ready"
+            # will not fix it — this list had drifted from the Linux one in
+            # lib/installtest-enroll.sh, so a crashed engine burned the whole
+            # 5-minute budget here.
+            if ($subState -in @('pull_failed','disabled','stopped','engine_failed')) { break }
         } catch { }
         Start-Sleep -Seconds 10
     }
@@ -1305,7 +1326,31 @@ if ($Tier -ge 2) {
         & $waired @initArgs 2>&1 | Tee-Object -FilePath $initLog
         $initExit = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
-        if ($initExit -ne 0) { ItBad "waired init (authkey) exited $initExit" }
+        # Three outcomes, not two (#310): 0 signed in, 3 signed in but this
+        # host has no local AI, anything else failed. Only
+        # lib/installtest-enroll.sh learned that; this leg kept reading 3 as an
+        # outright failure, which would fail a host that enrolled perfectly on
+        # every non-inference tier (#505).
+        switch ($initExit) {
+            0 { }
+            3 {
+                # A tier that asked for local inference and did not get it IS a
+                # failure: that is the thing that tier exists to verify.
+                #
+                # The other arm is ItOk, not ItLog: it IS an assertion -- that
+                # init honours #310's exit-code contract on a host that never
+                # asked for an engine. Counting it also keeps the assert-count
+                # floor stable, since ItLog moves no counter and would leave
+                # the -Contract leg one short of its 80 the day init starts
+                # exiting 3 there.
+                if ($WithInference) {
+                    ItBad "waired init (authkey) enrolled but local AI is not running, and this tier asked for it -- see $initLog"
+                } else {
+                    ItOk "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
+                }
+            }
+            default { ItBad "waired init (authkey) exited $initExit -- see $initLog" }
+        }
         }
 
         # Safety net: init already started the agent (--start-agent default);
@@ -1686,26 +1731,43 @@ if ($script:Skip -gt 0) {
 # without ever printing FAIL, and the leg reports success. That is the shape
 # behind "the leg said ok while the reason sat in the same log".
 #
-# MEASURED from a green run of the configuration CI uses, not estimated:
-# -Tier 2 -Contract -ExeVariant executed 78, and 80 once the #314 exit-code
-# decode block added its 2 unconditional asserts (the install/uninstall drift
-# check and the decode table). Both sit in the same always-run Tier-1 section
-# as the ConvertTo-NativeArg pair above them; 80 was confirmed against a green
-# run of this configuration, not derived and left unchecked. The floor
-# is set at the tier
-# level only, and every option (-Contract, -ExeVariant, -Inference) only ADDS
-# asserts, so a leaner invocation of the same tier still clears it.
+# The floor is PER CONFIGURATION, not per tier. That distinction was missing
+# and it made every nightly Windows leg red (#505): 80 was measured from
+# `-Tier 2 -Contract -ExeVariant`, which is what installtest.yml runs, and was
+# then applied to every `$Tier -ge 2` run on the reasoning that "-Contract /
+# -ExeVariant only ADD asserts, so a leaner invocation still clears it". The
+# two halves of that contradict each other -- if 80 already counts what those
+# switches add, a run without them executes fewer. installtest-inference.yml's
+# three legs pass none of them, and in run 30998191050 they executed 67
+# (-WithInference), 68 (-DaemonEngine) and 68 (-WithIntegration). All three
+# reported "only N asserts ran at tier 2; at least 80 must" on top of whatever
+# else was wrong with them.
+#
+# -Contract: 80, unchanged and still MEASURED from a green run of that exact
+# configuration -- 78, then 80 once the #314 exit-code decode block added its
+# 2 unconditional asserts (the install/uninstall drift check and the decode
+# table), both in the same always-run Tier-1 section as the
+# ConvertTo-NativeArg pair above them.
+#
+# Everything else at tier 2: 65, and this one is NOT a measured green floor --
+# no Windows nightly leg has been green since the floor was introduced, so
+# there is no green run to take a number from. It is the lower bound the three
+# RED legs above already clear, which is enough to keep catching "a whole
+# block stopped executing" while being unable to fire spuriously on any run at
+# least as complete as those. Replace it with the real figure in the first PR
+# that has a green `gh workflow run installtest-inference.yml -f os=windows`
+# to read it from.
 #
 # Tier 1 deliberately has NO floor: CI only ever runs -Tier 2, so there is no
 # green tier-1 run to take a number from, and a guessed floor is either
 # useless (too low) or a spurious red (too high). Measure one and add it
 # rather than estimating.
 #
-# Raise this when you add an assert that always runs; lower it, in the same
+# Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = 80
+    $floor = if ($Contract) { 80 } else { 65 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

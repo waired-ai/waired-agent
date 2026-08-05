@@ -78,7 +78,20 @@ bad()  { printf '\033[1;31m[installtest] FAIL\033[0m %s\n' "$*" >&2; FAIL=$((FAI
 # Counted, and printed in the summary: a skip nobody can see is how a leg
 # quietly stops testing anything (#215).
 skip() { printf '\033[1;33m[installtest] SKIP\033[0m %s\n' "$*"; SKIP=$((SKIP+1)); }
-it_die() { printf '\033[1;31m[installtest]\033[0m %s\n' "$*" >&2; cleanup; exit 1; }
+# A die counts as a failure and prints the tally before tearing down. Without
+# that it printed one uncoloured line and exited straight past the summary, so
+# a leg that died mid-run and a leg that failed an assert produced the same red
+# job with none of the same evidence (#505). FAIL-prefixed so a die lands in
+# the same grep as every other failure. The assert-count floor is deliberately
+# NOT run here: its question is already answered by the die's own reason.
+it_die() {
+  printf '\033[1;31m[installtest] FAIL\033[0m %s\n' "$*" >&2
+  FAIL=$((FAIL+1))
+  echo >&2
+  it_step "Tier $TIER summary (died before finishing): $PASS passed, $FAIL failed, $SKIP skipped"
+  cleanup
+  exit 1
+}
 
 cleanup() {
   # Best-effort teardown: deauth, then unregister the system LaunchDaemon.
@@ -203,7 +216,12 @@ assert_inference_macos() {
   # PRIMARY: init's own transcript. See IT_INSTALL_FAILURE_RE's comment in
   # lib/installtest-enroll.sh — the installer's verdict outranks anything
   # still findable on disk (#215/#178). First, so the reason leads.
-  if [ -f "$INITLOG" ] && grep -qE "$IT_INSTALL_FAILURE_RE" "$INITLOG"; then
+  #
+  # Three arms: a missing transcript is its own failure, not a pass. See the
+  # Linux twin in lib/installtest-enroll.sh for why (#505).
+  if [ ! -f "$INITLOG" ]; then
+    bad "no init transcript to check for install failures ($INITLOG)"
+  elif grep -qE "$IT_INSTALL_FAILURE_RE" "$INITLOG"; then
     bad "init transcript reports an engine install failure ($INITLOG)"
     grep -nE "$IT_INSTALL_FAILURE_RE" "$INITLOG" | sed 's/^/    /' >&2 || true
   else
@@ -239,7 +257,12 @@ assert_inference_macos() {
     if printf '%s' "$out" | grep -qE '"subsystem_state"[[:space:]]*:[[:space:]]*"ready"'; then ready=1; break; fi
     if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[[:space:]]*"[^"]' >/dev/null; then ready=1; break; fi
     state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
-    case "$state" in pull_failed|disabled|stopped) break ;; esac
+    # engine_failed is terminal too (waired-agent#29): the engine crashed and
+    # automatic recovery either is mid-flight (which shows as "starting") or
+    # has given up. Either way, polling for "ready" will not fix it — this list
+    # had drifted from the Linux one in lib/installtest-enroll.sh, so a crashed
+    # engine burned the whole ~5 min budget here.
+    case "$state" in pull_failed|disabled|stopped|engine_failed) break ;; esac
     sleep 5
   done
   if [ "$ready" = 1 ]; then
@@ -690,15 +713,42 @@ if [ "$TIER" -ge 2 ]; then
   # domain so the real daemon re-reads the freshly-enrolled state. With
   # --inference the deploy phase foreground-pulls the bundled model and runs the
   # end-of-init benchmark (#519); tee the transcript for assert_inference_macos.
-  # pipefail (set -o, line ~22) makes the `if !` see init's exit, not tee's.
   # ${pin_flag[@]+...} is the unset-safe expansion: an empty array must expand
   # to zero args even under `set -u` on macOS's system bash 3.2.
-  if ! sudo env WAIRED_NO_EMOJI=1 "$BINDIR/waired" init --control "$IT_CONTROL_URL" \
+  #
+  # Three outcomes, not two (#310): 0 signed in, 3 signed in but this host has
+  # no local AI, anything else failed. Only lib/installtest-enroll.sh learned
+  # that; this leg kept reading 3 as an outright failure, which would fail a
+  # host that enrolled perfectly on every non-inference tier (#505). The exit
+  # code has to come from PIPESTATUS[0] rather than the `if` — pipefail (set
+  # -o, line ~22) collapses the pipeline to a single non-zero, which cannot
+  # tell 3 from anything else. Same idiom as daemon_path_enroll_macos.
+  if sudo env WAIRED_NO_EMOJI=1 "$BINDIR/waired" init --control "$IT_CONTROL_URL" \
         --auth-key "$authkey" \
         --device-name "$device" --non-interactive "$inf_flag" ${pin_flag[@]+"${pin_flag[@]}"} \
         --skip-integration --state-dir "$STATE_DIR" 2>&1 | tee "$INITLOG"; then
-    bad "waired init (authkey) failed"
+    init_rc=0
+  else
+    init_rc="${PIPESTATUS[0]}"
   fi
+  case "$init_rc" in
+    0) ;;
+    3)
+      # A tier that asked for local inference and did not get it IS a
+      # failure: that is the thing that tier exists to verify.
+      #
+      # The other arm is `ok`, not `it_log`: it IS an assertion — that init
+      # honours #310's exit-code contract on a host that never asked for an
+      # engine. Counting it also keeps the assert-count floor stable, since
+      # it_log moves no counter.
+      if [ "$INFER" = 1 ]; then
+        bad "waired init (authkey) enrolled but local AI is not running, and this tier asked for it — see $INITLOG"
+      else
+        ok "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
+      fi
+      ;;
+    *) bad "waired init (authkey) failed with exit $init_rc — see $INITLOG" ;;
+  esac
   fi
 
   it_step "Tier 2 asserts"

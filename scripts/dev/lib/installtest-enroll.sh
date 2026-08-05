@@ -520,7 +520,15 @@ assert_inference() {
   # PRIMARY: init's own transcript. If it says the engine install failed, the
   # leg failed — no amount of on-disk evidence overrides the installer's own
   # verdict (#215/#178). Runs first so the reason is the first thing printed.
-  if [ -f "$initlog" ] && grep -qE "$IT_INSTALL_FAILURE_RE" "$initlog"; then
+  #
+  # Three arms, not two. `[ -f ] && grep -q` collapses "no failure line" and
+  # "no transcript at all" into the same `ok`, so a leg where init produced no
+  # output reported the installer's verdict as clean (#505). Windows has always
+  # had the third arm (Assert-Inference in installtest-windows.ps1); this is
+  # the Linux twin of it, worded the same.
+  if [ ! -f "$initlog" ]; then
+    bad "no init transcript to check for install failures ($initlog)"
+  elif grep -qE "$IT_INSTALL_FAILURE_RE" "$initlog"; then
     bad "init transcript reports an engine install failure ($initlog)"
     grep -nE "$IT_INSTALL_FAILURE_RE" "$initlog" | sed 's/^/    /' >&2 || true
   else
