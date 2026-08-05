@@ -200,8 +200,10 @@ type Inputs struct {
 	// Sticky maps a conversation ID to its previously-routed peer.
 	// Phase 7 Selector consults it first; on a hit that's still
 	// reachable and under Capacity, the same peer wins (KV cache
-	// affinity). Touch is the gateway's responsibility (post-request),
-	// not the Selector's — the Selector only Lookups.
+	// affinity). Touch happens in the candidate's commit closure, so a
+	// candidate the gateway probed and dropped never rebinds the
+	// conversation. Expiry is lazy on Lookup; cmd/waired-agent sweeps
+	// what Lookup never revisits (runStickyGC).
 	Sticky *StickyStore
 
 	// LocalInFlight tracks outstanding overlay requests this agent

@@ -27,10 +27,20 @@ type requestRec struct {
 	// that actually reached an engine. nil on every surface that does
 	// not meter (waired#829).
 	onUsage usageSink
-	// ctx is the request context, captured at handler entry so finish()
-	// can hand it to onUsage. Used for value lookup only — the sink
-	// reads the peer identity the auth middleware stamped there — so its
-	// cancellation state at emit time is irrelevant.
+	// onPeerOutcome is Deps.OnPeerOutcome, invoked once at finish() for
+	// requests this listener dispatched to a mesh peer. nil on the
+	// overlay listener, which cannot dispatch to one (waired-agent#281).
+	onPeerOutcome func(deviceID string, ok bool)
+	// peerDeviceID is the real mesh DeviceID of the peer this request
+	// was dispatched to, or "" for a local / external selection. Kept
+	// apart from ev.PeerID, which is the display identifier and is a
+	// grant pseudonym for a Public Share peer (spec §8.5): this one is
+	// the routing key and never reaches a log line or the wire.
+	peerDeviceID string
+	// ctx is the request context, captured at handler entry. onUsage
+	// reads the peer identity the auth middleware stamped on it, and
+	// emitPeerOutcome reads its cancellation state to tell a peer that
+	// failed apart from an operator who pressed Ctrl-C.
 	ctx context.Context
 	// engineModel is the engine-native identifier the request ran
 	// against, kept separate from ev.Model (the catalog id) because the
@@ -40,10 +50,11 @@ type requestRec struct {
 
 func (h *HandlerSet) startRequest(r *http.Request, kind string) *requestRec {
 	rr := &requestRec{
-		rec:     h.deps.Recorder,
-		start:   time.Now(),
-		ev:      observability.RequestEvent{Kind: kind},
-		onUsage: h.deps.OnUsage,
+		rec:           h.deps.Recorder,
+		start:         time.Now(),
+		ev:            observability.RequestEvent{Kind: kind},
+		onUsage:       h.deps.OnUsage,
+		onPeerOutcome: h.deps.OnPeerOutcome,
 	}
 	if r != nil {
 		rr.ctx = r.Context()
@@ -71,7 +82,15 @@ func (rr *requestRec) setToolRecovery(shape string) {
 }
 
 func (rr *requestRec) finish() {
-	if rr == nil || rr.ev.Model == "" {
+	if rr == nil {
+		return
+	}
+	// Ahead of the Model guard, and not subject to it. That guard drops
+	// telemetry for failures with no inference involvement; a request
+	// that named a peer is never one of those, and a routing signal that
+	// depended on the model id being set would be a silent coupling.
+	rr.emitPeerOutcome()
+	if rr.ev.Model == "" {
 		return
 	}
 	rr.ev.LatencyMs = uint32(time.Since(rr.start).Milliseconds())
@@ -109,6 +128,76 @@ func (rr *requestRec) emitUsage() {
 	})
 }
 
+// notPeerFault names the error_reason values a request that WAS
+// dispatched to a peer can carry which say nothing about that peer.
+//
+// A denylist rather than an allowlist: a reason added later then
+// defaults to "the peer failed", which over-counts and ages out of the
+// 60 s window on its own. An allowlist would default to silence, and
+// silence is the defect waired-agent#281 records.
+var notPeerFault = map[string]struct{}{
+	// The prompt overran the window. Either this gateway's own #623
+	// guard refused it before dispatch, or the peer returned the 400 it
+	// meant to return and relayPeerContextOverflow relayed it
+	// (waired-agent#436). A peer that correctly refuses an oversized
+	// prompt is working; charging it would rank it below one that
+	// silently truncates the head.
+	LocalErrorContextOverflow: {},
+	// This gateway could not rewrite the request body. Ours, not theirs.
+	"rewrite_failed": {},
+}
+
+// peerVerdict reads the finished record as evidence about the peer that
+// served this request.
+//
+// charge=false means "this request says nothing about that peer", and
+// records nothing at all — deliberately distinct from ok=false, because
+// ErrorWindow reports failures over total observations, so a wrong
+// success dilutes the rate exactly as much as a wrong failure inflates
+// it.
+func (rr *requestRec) peerVerdict() (ok, charge bool) {
+	if rr.ev.Status <= 0 {
+		return false, false
+	}
+	if _, skip := notPeerFault[rr.ev.ErrorReason]; skip {
+		return false, false
+	}
+	// The operator pressed Ctrl-C. The client's disconnect cancels this
+	// context, the upstream read then fails, and the stream loop lands
+	// on engine_truncated_stream (anthropic) or mid_stream_truncate
+	// (openai) — so without this guard every interrupted turn would
+	// demote whichever peer the operator interrupts most.
+	//
+	// It is the REQUEST context: proxyAnthropicStream's TTFB timer
+	// cancels a child of it, and cancelling a child never propagates
+	// upwards, so a real TTFB timeout is still charged.
+	if rr.ctx != nil && errors.Is(rr.ctx.Err(), context.Canceled) {
+		return false, false
+	}
+	// The same two fields observability.Recorder reads to label a
+	// request success or error, so one request cannot be an error in the
+	// metrics and a success in the routing signal.
+	return rr.ev.Status < 400 && rr.ev.ErrorReason == "", true
+}
+
+// emitPeerOutcome folds this request into the caller-side per-peer error
+// window (router.ErrorWindow), which the mesh Selector reads back as a
+// same-score tie-break. Only a remote dispatch produces a sample: a
+// local leg says nothing about any peer, and a failure before selection
+// never named one — setSelection is what sets peerDeviceID.
+//
+// Deliberately unlogged. peerDeviceID is a real device id, and for a
+// Public Share peer no log line, header or response body may carry one
+// (spec §8.5); display sites use peerDisplayID(sel) as they do today.
+func (rr *requestRec) emitPeerOutcome() {
+	if rr.onPeerOutcome == nil || rr.peerDeviceID == "" {
+		return
+	}
+	if ok, charge := rr.peerVerdict(); charge {
+		rr.onPeerOutcome(rr.peerDeviceID, ok)
+	}
+}
+
 func (rr *requestRec) setSelection(sel router.Selection, fallbackFrom, fallbackReason string) {
 	rr.ev.Decision = sel.ExecutionMode
 	rr.ev.Model = sel.ModelID
@@ -117,6 +206,15 @@ func (rr *requestRec) setSelection(sel router.Selection, fallbackFrom, fallbackR
 	// management API and rendered by the tray, so a Public Share peer
 	// appears as its grant pseudonym (spec §8.5).
 	rr.ev.PeerID = peerDisplayID(sel)
+	// The functional identifier, alongside the display one. Selection
+	// carries no DeviceID field; Runtime is what keeps the real id
+	// attached, and endpoint_router.go's newRemoteCandidate says why it
+	// stays keyed on it. The Selector reads its error window back by the
+	// same key, so peerDisplayID here would open a second, permanently
+	// empty entry for every Public Share peer.
+	if strings.HasPrefix(sel.Runtime, remoteRuntimePrefix) {
+		rr.peerDeviceID = strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix)
+	}
 	rr.ev.FallbackFrom = fallbackFrom
 	rr.ev.FallbackReason = fallbackReason
 }

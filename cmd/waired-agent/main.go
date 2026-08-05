@@ -882,6 +882,11 @@ func run(ctx context.Context, args []string) error {
 		// disco service is enabled; the LocalRTT closure stays nil
 		// otherwise, which the Selector treats as "no RTT data" and
 		// falls back to deviceID tie-break.
+		//
+		// Two of them are also written from outside the Selector, and
+		// both halves are wired below: the gateway reports each peer
+		// dispatch into errorWindow (OnPeerOutcome), and a ticker sweeps
+		// stickyStore's expired bindings (runStickyGC).
 		stickyStore := router.NewStickyStore(0, nil) // 0 → DefaultStickyTTL
 		inFlightTracker := router.NewInFlightTracker()
 		errorWindow := router.NewErrorWindow(nil)
@@ -976,6 +981,7 @@ func run(ctx context.Context, args []string) error {
 				OnPublicNudge:       publicUseCtl.Nudge,
 				OnPublicUsage:       publicUsageSink(publicUsageBatch),
 				LocalAdmission:      localAdmit.Admit,
+				OnPeerOutcome:       errorWindow.Record,
 			})
 			if err != nil {
 				return fmt.Errorf("inference subsystem: %w", err)
@@ -1367,6 +1373,11 @@ func run(ctx context.Context, args []string) error {
 		go func() {
 			defer wg.Done()
 			runObservabilityPoller(ctx, obsRecorder, obsStateProvider, 5*time.Second)
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			runStickyGC(ctx, stickyStore, stickyGCInterval)
 		}()
 
 		go func() {

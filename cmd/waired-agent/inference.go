@@ -190,6 +190,17 @@ type inferenceSubsystemDeps struct {
 	// nil disables the accounting (unit tests, pre-session boot).
 	LocalAdmission func(context.Context) func()
 
+	// OnPeerOutcome folds each request this device dispatched to a mesh
+	// peer into main()'s router.ErrorWindow, whose Snapshot is already
+	// threaded back the other way as LocalErrors above. It goes onto the
+	// same LOCAL gateway surfaces as LocalAdmission — the ones that can
+	// send work to a peer — and the overlay surface leaves it unset,
+	// having no peer to observe.
+	//
+	// nil disables the accounting (unit tests, pre-session boot), which
+	// leaves the Selector's error-rate tie-break reading zeros.
+	OnPeerOutcome func(deviceID string, ok bool)
+
 	// Routing returns the operator's currently-live RoutingPreference
 	// (Tailscale-exit-node-style manual routing). The Selector calls
 	// it once per SelectK to read mode + pinned peer atomically. nil
@@ -585,6 +596,9 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// LOCAL surface: the owner's own engine work counts against the
 	// machine's shared admission counter (§8.2, waired#899).
 	gwDeps.LocalAdmission = deps.LocalAdmission
+	// LOCAL surface: it can dispatch to a peer, so it can observe how
+	// that peer answered (waired-agent#281).
+	gwDeps.OnPeerOutcome = deps.OnPeerOutcome
 	gw := gateway.NewServer(gateway.ServerConfig{
 		Addr: fmt.Sprintf("127.0.0.1:%d", cfg.LocalGatewayPort),
 	}, gwDeps)
@@ -626,6 +640,11 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// the inference server's capacityGate, which already counted them
 	// (§8.2). This is the one surface that is not the owner's own
 	// traffic.
+	// OnPeerOutcome stays nil for the same reason PeerAdapterFactory
+	// does: this listener cannot dispatch to a peer, so it has no peer
+	// outcome to report. Setting it here — or moving it into
+	// baseGatewayDeps for symmetry — would hand the serving side a write
+	// handle to the requesting side's error window.
 	overlayHandlerSet := gateway.NewHandlerSet(overlayDeps)
 
 	// Claude-intercept HandlerSet (#601/#647): the third HandlerSet,
@@ -695,6 +714,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// the owner's coding agent lands. Only the legs this device's own
 	// engine serves are counted; a remote leg loads the peer, not us.
 	claudeDeps.LocalAdmission = deps.LocalAdmission
+	// The remote legs the line above does NOT count are exactly the ones
+	// this observes: the busiest surface is also the one whose auto
+	// fallback depends most on knowing which peers are answering.
+	claudeDeps.OnPeerOutcome = deps.OnPeerOutcome
 	// AuthToken empty: Claude Code presents its own subscription
 	// credentials, not waired's gateway token; loopback is the
 	// trust boundary (same posture as :9479).
@@ -737,8 +760,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			dpDeps.IsPaused = isPaused
 			dpDeps.IsInferenceDisabled = isInferenceDisabled
 			dpDeps.PeerAdapterFactory = deps.PeerAdapterFactory
-			// LOCAL surface: same admission accounting as :9473 / :9472.
+			// LOCAL surface: same admission accounting as :9473 / :9472,
+			// and the same peer-outcome accounting.
 			dpDeps.LocalAdmission = deps.LocalAdmission
+			dpDeps.OnPeerOutcome = deps.OnPeerOutcome
 			dpGw := gateway.NewServer(gateway.ServerConfig{
 				Addr: fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort),
 			}, dpDeps)
