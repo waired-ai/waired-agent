@@ -163,8 +163,8 @@ func (r *Recorder) RecordProbe(outcome string, latencyMs uint32) {
 
 // RecordSelection is called once per SelectK return when at least
 // one candidate was produced. decision is the candidate's execution
-// mode ("local" / "remote" / "external"); peerID is the underlying
-// mesh peer (empty for local/external); model is the resolved model
+// mode ("local" / "remote"); peerID is the underlying
+// mesh peer (empty for local); model is the resolved model
 // id. The router emits this before probe-then-commit so the counter
 // reflects the selector's intent, independent of whether probe
 // later forced a fallback within the same decision class.

@@ -205,7 +205,7 @@ func engineNamesOf(v catalog.Variant) []string {
 // TestSelectK_ServingLegAcceptsEngineModel drives the full serving-side
 // entry point the way a peer hop does: SelectK with the exact string
 // makeMeshCandidate would have put in Selection.EngineModel, against a
-// local-only Selector (MeshSnapshotFn nil, AllowExternal false) — the
+// local-only Selector (MeshSnapshotFn nil) — the
 // overlay posture from cmd/waired-agent's overlayDeps.
 func TestSelectK_ServingLegAcceptsEngineModel(t *testing.T) {
 	consumer := NewSelector(Inputs{
@@ -229,7 +229,6 @@ func TestSelectK_ServingLegAcceptsEngineModel(t *testing.T) {
 		Runtimes:   registryWithOllama(),
 		// Overlay posture: no mesh recursion, no external fallback.
 		MeshSnapshotFn: nil,
-		AllowExternal:  false,
 	})
 	cands, err := serving.SelectK(context.Background(), Request{Model: sent.EngineModel}, 1)
 	if err != nil {
@@ -275,7 +274,6 @@ func TestSelectK_DerivedBatchModelServesTheBaseTag(t *testing.T) {
 		Runtimes:   registryWithOllama(),
 		// Overlay posture: no mesh recursion, no external fallback.
 		MeshSnapshotFn: nil,
-		AllowExternal:  false,
 	})
 
 	cands, err := serving.SelectK(context.Background(), Request{Model: baseTag}, 1)

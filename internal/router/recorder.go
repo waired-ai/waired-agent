@@ -10,7 +10,7 @@ package router
 type Recorder interface {
 	// RecordSelection is called once per successful SelectK return.
 	// decision is the resolved candidate's ExecutionMode
-	// ("local" / "remote" / "external"); peerID is the underlying
+	// ("local" / "remote"); peerID is the underlying
 	// mesh peer DeviceID for remote selections (empty otherwise);
 	// model is the resolved model id (post-alias).
 	//

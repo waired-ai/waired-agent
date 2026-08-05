@@ -149,7 +149,6 @@ func TestSelectK_RetiredNameIsServedByTheSuccessor(t *testing.T) {
 		Hardware:       goodHardware(),
 		Runtimes:       registryWithOllama(),
 		MeshSnapshotFn: nil,
-		AllowExternal:  false,
 	})
 
 	cands, err := sel.SelectK(context.Background(), Request{Model: "qwen2.5-coder-0.5b-instruct"}, 1)

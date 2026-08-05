@@ -26,9 +26,8 @@ import (
 
 // newServingLegGateway builds a HandlerSet in the same posture as
 // cmd/waired-agent's overlayDeps: a local-only Selector (nil
-// MeshSnapshotFn and AllowExternal=false, so a peer request can never
-// recurse to a third node) over the real catalog and a ready local
-// model.
+// MeshSnapshotFn, so a peer request can never recurse to a third
+// node) over the real catalog and a ready local model.
 func newServingLegGateway(t *testing.T, upstreamURL string) *HandlerSet {
 	t.Helper()
 
@@ -61,7 +60,6 @@ func newServingLegGateway(t *testing.T, upstreamURL string) *HandlerSet {
 		Runtimes: reg,
 		// Overlay posture — loop prevention.
 		MeshSnapshotFn: nil,
-		AllowExternal:  false,
 	})
 
 	return NewHandlerSet(Deps{
