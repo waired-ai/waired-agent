@@ -245,6 +245,150 @@ func TestRunEngineBootstrap_PullsDisabledStillStartTheEngine(t *testing.T) {
 	}
 }
 
+// THE #339 REGRESSION BAR. PRODUCT CONTRACT: a vLLM venv installed after
+// the daemon booted is adopted in-process, the way #304 made an ollama
+// binary be.
+//
+// Two boot-time snapshots stood between this host and a working engine,
+// and #304 only removed the first. The binary was re-resolved live, but
+// the ENGINE KIND was still whatever chooseEngine decided at
+// construction — and engineViable("vllm") requires the venv to already
+// exist, so a host that booted without one was pinned to ollama for the
+// life of the process. The setup executor installs the venv (it really
+// does: cmd/waired/setup_install.go), fires the same trigger #304 added,
+// and every one of them reached only the ollama half. The wizard's engine
+// row then read installed=true / ready=false until a service restart.
+//
+// engineChoice is the seam — the live re-run of the boot rule — because
+// the real answer needs a CUDA host with a verified venv on disk. Below
+// it, the subject really runs: bootstrapVLLM is called for real and
+// declines on the absent venv, which is why no engine comes up here.
+func TestRunEngineBootstrap_AdoptsAVLLMVenvInstalledAfterBoot(t *testing.T) {
+	p, sp, installed := bootstrapProvider(t)
+	p.stateDir = t.TempDir()
+	*installed = true
+	ctx := context.Background()
+
+	// The host as it booted: no venv, so the live rule says ollama and the
+	// ollama arm runs exactly as before.
+	venv := false
+	p.engineChoice = func(context.Context) (string, bool) {
+		if venv {
+			return catalog.RuntimeVLLM, true
+		}
+		return catalog.RuntimeOllama, true
+	}
+	p.runEngineBootstrap(ctx, "boot")
+	if got := sp.count(); got != 1 {
+		t.Fatalf("ollama spawns at boot = %d, want 1", got)
+	}
+	if got := p.servingEngine(); got != catalog.RuntimeOllama {
+		t.Fatalf("serving engine at boot = %q, want %q", got, catalog.RuntimeOllama)
+	}
+
+	// A live engine is never switched out from under itself, whatever the
+	// venv does. That is the guard that keeps this from disturbing a host
+	// that is already answering requests.
+	venv = true
+	p.runEngineBootstrap(ctx, "setup: executor reported the engine install done")
+	if got := p.servingEngine(); got != catalog.RuntimeOllama {
+		t.Fatalf("serving engine while ollama is up = %q, want %q (a serving engine is not swapped)",
+			got, catalog.RuntimeOllama)
+	}
+
+	// The reported host: nothing ever came up, and the venv appears.
+	p2, sp2, installed2 := bootstrapProvider(t)
+	p2.stateDir = t.TempDir()
+	*installed2 = false // no ollama binary either; the boot was inert
+	p2.engineChoice = func(context.Context) (string, bool) { return catalog.RuntimeVLLM, true }
+
+	p2.runEngineBootstrap(ctx, "setup: executor reported the engine install done")
+
+	if got := p2.servingEngine(); got != catalog.RuntimeVLLM {
+		t.Fatalf("serving engine after the venv appeared = %q, want %q — the venv is still unadopted",
+			got, catalog.RuntimeVLLM)
+	}
+	if got := sp2.count(); got != 0 {
+		t.Fatalf("ollama spawns on a vLLM host = %d, want 0", got)
+	}
+	if p2.engineBootstrapOnce.Load() {
+		t.Fatal("the ollama bootstrap tail latched on a vLLM host")
+	}
+}
+
+// The vLLM half of the #338 bar above: allow_pull=false stops downloads,
+// not the engine, on this engine too. vLLM never had the gate —
+// bootstrapVLLM refuses only the weights DOWNLOAD — so the two engines
+// have to agree, and routing vLLM through a pull gate on the start path
+// would take that away from a host whose safetensors are already on disk.
+//
+// This also pins the ORDER: the engine decision is taken before anything
+// ollama-specific, so a vLLM host reaches its own arm rather than being
+// measured against the other engine's preconditions.
+func TestRunEngineBootstrap_PullsDisabledStillAdoptsVLLM(t *testing.T) {
+	p, sp, installed := bootstrapProvider(t)
+	p.stateDir = t.TempDir()
+	*installed = true
+	p.cfg = agentconfig.InferenceConfig{AllowPull: false}
+	p.engineChoice = func(context.Context) (string, bool) { return catalog.RuntimeVLLM, true }
+
+	p.runEngineBootstrap(context.Background(), "boot")
+
+	if got := p.servingEngine(); got != catalog.RuntimeVLLM {
+		t.Fatalf("serving engine with allow_pull=false = %q, want %q "+
+			"(allow_pull governs downloads, not whether vLLM may start)", got, catalog.RuntimeVLLM)
+	}
+	if got := sp.count(); got != 0 {
+		t.Fatalf("ollama spawns = %d, want 0", got)
+	}
+}
+
+// Adopting a different engine drops the previous engine's ActiveSelection,
+// mirroring the boot-time engine switch in startInferenceSubsystem: the
+// old engine's model is not something the new one can serve, and
+// activateBundledIfUnset only fills an EMPTY slot — so leaving it recorded
+// would leave the new engine with nothing to activate.
+func TestRunEngineBootstrap_AdoptClearsThePreviousEnginesActive(t *testing.T) {
+	p, _, installed := bootstrapProvider(t)
+	p.stateDir = t.TempDir()
+	*installed = false
+	if err := p.store.Update(func(s *catalog.State) {
+		s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "qwen3.6-35b-a3b"}
+	}); err != nil {
+		t.Fatalf("seed active: %v", err)
+	}
+	p.engineChoice = func(context.Context) (string, bool) { return catalog.RuntimeVLLM, true }
+
+	p.runEngineBootstrap(context.Background(), "setup: executor reported the engine install done")
+
+	st, err := p.store.Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if st.Active != nil {
+		t.Fatalf("active selection after adopting vLLM = %+v, want nil "+
+			"(the ollama model is not servable by the new engine)", st.Active)
+	}
+}
+
+// A provider with no engineChoice wired — every unit fixture that predates
+// #339 — keeps its boot engine and reaches the ollama arm unchanged. The
+// live rule being unavailable must not read as "no engine viable".
+func TestRunEngineBootstrap_NoLiveChoiceKeepsTheBootEngine(t *testing.T) {
+	p, sp, installed := bootstrapProvider(t)
+	*installed = true
+	p.engineChoice = nil
+
+	p.runEngineBootstrap(context.Background(), "boot")
+
+	if got := sp.count(); got != 1 {
+		t.Fatalf("ollama spawns with no live engine rule = %d, want 1", got)
+	}
+	if got := p.servingEngine(); got != catalog.RuntimeOllama {
+		t.Fatalf("serving engine = %q, want %q", got, catalog.RuntimeOllama)
+	}
+}
+
 // TestRunEngineBootstrap_StandsDownWhileLocalInferenceIsOff is what
 // makes the #465 latch removal safe to ship. The inference subsystem is
 // now built on a host below the recommended spec — that is the point,

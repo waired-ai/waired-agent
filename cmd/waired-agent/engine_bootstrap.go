@@ -74,6 +74,75 @@ func (p *agentInferenceProvider) requestEngineStart(reason string) {
 	go p.runEngineBootstrap(ctx, reason)
 }
 
+// decideEngineStartNow resolves decideEngineStart's inputs against this
+// host, right now, and returns the answer. The rule itself lives in an
+// untagged file so it stays table-testable; this is only the gathering.
+func (p *agentInferenceProvider) decideEngineStartNow(ctx context.Context) string {
+	current := p.servingEngine()
+	reChosen, reChoiceOK := "", false
+	if p.engineChoice != nil {
+		reChosen, reChoiceOK = p.engineChoice(ctx)
+	}
+	return decideEngineStart(current, reChosen, reChoiceOK, p.engineIsUp(ctx))
+}
+
+// engineIsUp reports whether the engine this process is currently set to
+// serve has a process up. StateStarting counts alongside StateReady for
+// the same reason decideVLLMBootstrap counts it: an engine mid-startup
+// already owns its port, and a vLLM load is minutes on a multi-GB model.
+func (p *agentInferenceProvider) engineIsUp(ctx context.Context) bool {
+	var a infruntime.Adapter
+	if p.servingEngine() == catalog.RuntimeVLLM {
+		a = p.vllmAdapter()
+	} else if p.ollama != nil {
+		// Assigned inside the nil check, not around it: a nil
+		// *OllamaAdapter stored in the interface would compare non-nil.
+		a = p.ollama
+	}
+	if a == nil {
+		return false
+	}
+	switch a.Health(ctx).State {
+	case infruntime.StateReady, infruntime.StateStarting:
+		return true
+	}
+	return false
+}
+
+// adoptEngine records a change of serving engine. A no-op when the answer
+// is the engine already set, which is every call on a converged host.
+//
+// The stale-ActiveSelection clear mirrors the boot-time engine switch in
+// startInferenceSubsystem: the previous engine's model is not something
+// the new engine can serve, and leaving it recorded would have the
+// bootstrap try. Clearing it lets activateBundledIfUnset — which only
+// fills an EMPTY slot — commit the new engine's model instead.
+//
+// Only reachable with nothing serving: decideEngineStart returns the
+// current engine whenever one is up, and chooseEngine answers "persisted"
+// (i.e. no change) whenever the recorded Active is still viable. So this
+// never discards a selection something is running on.
+func (p *agentInferenceProvider) adoptEngine(engine, reason string) {
+	if engine == "" || engine == p.servingEngine() {
+		return
+	}
+	was := p.servingEngine()
+	p.setServingEngine(engine)
+	if p.logger != nil {
+		p.logger.Info("adopting a different serving engine", "was", was, "now", engine, "reason", reason)
+	}
+	if p.store == nil {
+		return
+	}
+	if err := p.store.Update(func(s *catalog.State) {
+		if s.Active != nil && s.Active.Runtime == was {
+			s.Active = nil
+		}
+	}); err != nil && p.logger != nil {
+		p.logger.Warn("engine adopt: clearing the previous engine's active selection failed", "err", err)
+	}
+}
+
 // runEngineBootstrap is the guarded entry point. It owns the in-flight
 // CAS; startEngineAndBootstrap owns the work.
 func (p *agentInferenceProvider) runEngineBootstrap(ctx context.Context, reason string) {
@@ -90,12 +159,17 @@ func (p *agentInferenceProvider) runEngineBootstrap(ctx context.Context, reason 
 	}
 }
 
-// startEngineAndBootstrap brings the ollama engine up and runs the
+// startEngineAndBootstrap brings the serving engine up and runs the
 // post-start bootstrap. It is the former boot goroutine body, made
 // re-entrant so an engine installed after boot is adopted without a
-// service restart (#304).
+// service restart (#304 for the ollama binary, #339 for a vLLM venv).
 //
-// Two latches, on purpose:
+// Both engines enter here since #339. They then diverge completely — vLLM
+// needs the weights on disk before it can start and has no post-start tail
+// at all, whereas `ollama serve` starts model-agnostic and pays the tail
+// below — so the vLLM arm returns rather than falling through.
+//
+// Two latches on the ollama arm, on purpose:
 //
 //   - the engine START may run again on any later trigger. EnsureRunning
 //     is single-flight and re-resolves the binary on every call, so a
@@ -107,7 +181,7 @@ func (p *agentInferenceProvider) runEngineBootstrap(ctx context.Context, reason 
 //     the engine, so re-running the tail on every trigger would bounce a
 //     serving engine — and fail any download in flight against it.
 func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, reason string) error {
-	if p == nil || p.ollama == nil {
+	if p == nil {
 		return errEngineNotInstalled
 	}
 	// Local inference turned off is a runtime state now, not an unbuilt
@@ -115,8 +189,45 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 	// and the tray's inference group all have to survive it, so the
 	// engine is where "off" has to bite. Checked before the latch below,
 	// so turning it back on still runs the tail.
+	//
+	// It now covers vLLM too. The old boot goroutine forked to
+	// bootstrapVLLM before reaching any of this, so a device with local
+	// inference off still spawned a multi-gigabyte engine — the one thing
+	// #465/#507 turning it off is supposed to prevent.
 	if p.isInferenceDisabled != nil && p.isInferenceDisabled() {
 		return errInferenceOff
+	}
+
+	// Which engine, asked live rather than read off the boot decision
+	// (#339). FIRST, before anything ollama-specific: the checks below
+	// are that engine's preconditions, and a vLLM host has to reach its
+	// own arm without being measured against them.
+	switch action := p.decideEngineStartNow(ctx); action {
+	case engineStartVLLM:
+		p.adoptEngine(catalog.RuntimeVLLM, reason)
+		// The same mutex the ollama arm takes: bootstrapVLLM stops and
+		// spawns a subprocess, and nothing else may be bouncing an engine
+		// while it does.
+		p.engineOpMu.Lock()
+		defer p.engineOpMu.Unlock()
+		// Safe to call repeatedly (#337/#510): a live engine is left
+		// alone, a dead one is stopped before this call spawns over it.
+		// That idempotency is what allows this path to be re-entrant at
+		// all, which is the whole of #339.
+		p.bootstrapVLLM(ctx)
+		return nil
+	case engineStartOllama:
+		p.adoptEngine(catalog.RuntimeOllama, reason)
+	default:
+		// engineStartNone, and any engine kind added later that reaches
+		// here without an arm of its own. Refusing is the safe answer for
+		// both, and it is not a failure: the caller's latch stays open so
+		// the next trigger asks again.
+		return errEngineNotInstalled
+	}
+
+	if p.ollama == nil {
+		return errEngineNotInstalled
 	}
 	// AllowPull is deliberately NOT consulted here (#338). It means "do
 	// not download model weights", and gating the START on it — the
@@ -130,6 +241,10 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 	// bundledPrePullTarget, maybePreCache), with PullModel refusing every
 	// caller as the backstop. The switch that stops an engine is the one
 	// directly above (#465); `waired inference engine stop` is the other.
+	//
+	// vLLM never had the gate at all — bootstrapVLLM refuses only the
+	// weights DOWNLOAD (inference_vllm_linux.go) — so #338 made the two
+	// engines agree rather than giving vLLM something new.
 	//
 	// The live resolver, not a boot-time snapshot: this is the check that
 	// lets a binary installed after boot be seen at all (#304).

@@ -28,6 +28,10 @@ func (a tuningAdapter) AppliedTuning() infruntime.ModelTuning { return a.tuning 
 // words — so a torn read hands a reader one adapter's type descriptor with
 // another's data pointer (#337).
 //
+// The serving-engine field is now written from the same goroutine and read by
+// the same handlers, for the same reason: #339 made it a live decision rather
+// than a boot-time constant, so it is exercised here alongside the adapter.
+//
 // This drives all four real read shapes against a concurrent write. It is a
 // regression bar for the accessors, and it only FAILS under `-race`: nothing
 // here asserts a value, because the defect is not a wrong answer. That is why
@@ -43,9 +47,9 @@ func TestVLLMAdapterConcurrentBootAndReads(t *testing.T) {
 
 	p := &agentInferenceProvider{
 		logger:   discardLogger(),
-		engine:   catalog.RuntimeVLLM,
 		registry: infruntime.NewRegistry(),
 	}
+	p.setServingEngine(catalog.RuntimeVLLM)
 	// runtimeStatusFor looks the adapter up in the registry before it reads
 	// the field, and calls Health on whatever it finds.
 	p.registry.Register(tuningAdapter{fakeAdapter: fakeAdapter{name: "vllm"}})
@@ -84,6 +88,17 @@ func TestVLLMAdapterConcurrentBootAndReads(t *testing.T) {
 		defer wg.Done()
 		for range iterations {
 			p.setVLLM(newAdapter())
+		}
+	}()
+	// adoptEngine's write, without the store update: every reader above
+	// reaches servingEngine(), which is what decides whether they look at
+	// the vLLM adapter at all. Re-storing the same value still races a
+	// plain string field, so this bar does not need the engine to change.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range iterations {
+			p.setServingEngine(catalog.RuntimeVLLM)
 		}
 	}()
 	for _, read := range readers {
