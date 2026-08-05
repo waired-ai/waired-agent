@@ -989,6 +989,13 @@ func run(ctx context.Context, args []string) error {
 			// on the daemon's context, and leaves a parked or
 			// crash-latched engine alone.
 			infCtl.onEnable = func() { sub.provider.requestEngineStart("local inference turned on") }
+			// The reverse direction: the browser wizard's desired state is
+			// a person asking this device to serve, so applying it turns
+			// local inference on. Without it the wizard would reach a host
+			// below the recommended spec — which is what #465 fixed — and
+			// then stall at the engine step, because off means the engine
+			// stands down.
+			sub.provider.enableInference = func() error { return infCtl.Enable(ctx) }
 			engCtl = newEngineController(ctx, sub.ollama, logger)
 			// #320: an operator restart comes back with an empty engine, so
 			// warm it rather than making the next request pay the cold load.
