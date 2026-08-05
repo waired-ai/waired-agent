@@ -34,7 +34,27 @@ type BenchResult struct {
 	SpreadPct float64
 	Failed    bool
 	Err       string
+	// Outcome says WHY there is or is not a number, so an absent engine
+	// stops reading as a slow host (#203). Failed stays the "do not treat
+	// this as a measurement" flag every consumer already gates on --
+	// buildRecommendation would otherwise compare a zero rate against the
+	// interactive floor and recommend a lighter model for a host nobody
+	// measured. Outcome is the finer-grained reason on top of it.
+	//
+	// benchOutcome* below. Empty on a result built before this field
+	// existed (a cache entry, a test literal), which reads as "unknown".
+	Outcome string
 }
+
+// benchOutcome* are the values BenchResult.Outcome takes. "engine_not_ready"
+// is the term the management layer already uses for the same condition
+// (internal/management/inference_recommendation.go maps it to 425).
+const (
+	benchOutcomeMeasured       = "measured"
+	benchOutcomeSkipped        = "skipped"
+	benchOutcomeEngineNotReady = "engine_not_ready"
+	benchOutcomeFailed         = "failed"
+)
 
 // BenchProgress is one report from a measurement in flight
 // (waired-agent#199).
@@ -232,6 +252,21 @@ type BenchDeps struct {
 	// Called from the measuring goroutine, synchronously; keep it cheap.
 	Progress func(BenchProgress)
 
+	// EngineReady, when non-nil, is the provider's own readiness answer
+	// (agentInferenceProvider.EngineReady) — the same predicate
+	// /inference/benchmark gates on before it returns 425. The boot
+	// benchmark consults it so an engine that is not up yet stops being
+	// reported as a performance verdict (#203): on a fresh install the
+	// benchmark used to fire the instant enrollment succeeded, while
+	// `waired init` was still installing the engine, and logged
+	// "boot benchmark failed ... connection refused" — which sent every
+	// investigation at the benchmark instead of the engine (#382).
+	//
+	// nil means "assume ready", so every existing caller and test keeps
+	// today's straight-to-warm-up behaviour. A listening engine that
+	// errors is NOT this case and still de-rates.
+	EngineReady func() (bool, string)
+
 	// Now defaults to time.Now if nil. Test injection.
 	Now func() time.Time
 
@@ -272,7 +307,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 	if deps.EnginePort == 0 ||
 		deps.EngineKind == "" ||
 		deps.EngineKind == signer.InferenceTypeNone {
-		return BenchResult{Capacity: 0}
+		return BenchResult{Capacity: 0, Outcome: benchOutcomeSkipped}
 	}
 	// Ollama and vLLM both expose an OpenAI-compatible
 	// /v1/chat/completions surface; the benchmark talks to it
@@ -284,7 +319,36 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		// supported
 	default:
 		// Any unknown kind: skip.
-		return BenchResult{Capacity: 0, VariantID: deps.VariantID}
+		return BenchResult{Capacity: 0, VariantID: deps.VariantID, Outcome: benchOutcomeSkipped}
+	}
+
+	// An engine that is not up yet is not a slow one. Checked here rather
+	// than left to the warm-up's dial error, because the two are
+	// indistinguishable once they reach failBench and only one of them is
+	// a statement about this host's performance (#203).
+	//
+	// Capacity stays 1, not 0: on the wire 0 means UNLIMITED
+	// (proto/signer/inference_state.go), and the probe loop only
+	// overwrites s.Capacity when non-zero — so returning 0 here would
+	// advertise a host with no working engine as accepting unbounded
+	// concurrency. 1 is the fail-safe, and it is no longer permanent:
+	// inferenceProbeDeps.Capacity now re-reads the provider each tick, so
+	// the first successful /inference/benchmark lifts it without a restart.
+	if deps.EngineReady != nil {
+		if ready, model := deps.EngineReady(); !ready {
+			deps.Logger.Warn("inference boot benchmark not run: engine not ready",
+				"reason", benchOutcomeEngineNotReady,
+				"model", model,
+				"engine", deps.EngineKind,
+				"port", deps.EnginePort)
+			return BenchResult{
+				Capacity:  1,
+				VariantID: deps.VariantID,
+				Failed:    true,
+				Err:       "engine not ready",
+				Outcome:   benchOutcomeEngineNotReady,
+			}
+		}
 	}
 
 	// Phase 7 follow-up (C2): consult the on-disk cache before
@@ -353,6 +417,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		VariantID:    deps.VariantID,
 		Method:       method,
 		SpreadPct:    spread,
+		Outcome:      benchOutcomeMeasured,
 	}
 	// Phase 7 follow-up (C2): persist only successful measurements.
 	// failBench paths return above without reaching this point so
@@ -718,6 +783,7 @@ func failBench(deps BenchDeps, reason string, err error) BenchResult {
 		VariantID: deps.VariantID,
 		Failed:    true,
 		Err:       err.Error(),
+		Outcome:   benchOutcomeFailed,
 	}
 }
 
