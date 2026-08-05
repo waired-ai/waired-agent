@@ -1171,6 +1171,29 @@ func (a *OllamaAdapter) Mode() EngineMode {
 	}
 }
 
+// ProcessGeneration returns the engine's current process generation. It
+// moves whenever this adapter retires a child or spawns one — a Stop, a
+// Park, a reconcile bounce, a backend fallback, a tuning-degrade restart,
+// the reap of a dead child before a respawn — so a caller that samples it
+// around a long operation can tell that the engine it was talking to is
+// not the engine running now.
+//
+// It does NOT move on a crash. That is deliberate and is the same
+// property superviseChild depends on: an exit with an unchanged
+// generation is a crash, and one with a changed generation is ours.
+//
+// Counting our own stops is what lets `ollama pull` — a CLIENT of
+// `ollama serve` — tell "waired restarted the engine under me" from a
+// genuine download failure, without classifying the error text
+// (waired-agent#359). Note the ordering an accurate reading needs: sample
+// AFTER the caller's own EnsureRunning, since that reaps and respawns a
+// dead child and would otherwise look like an interruption.
+func (a *OllamaAdapter) ProcessGeneration() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.procGen
+}
+
 // Stop terminates the Ollama subprocess gracefully (SIGTERM, then
 // SIGKILL after StopTimeout).
 func (a *OllamaAdapter) Stop(ctx context.Context) error {

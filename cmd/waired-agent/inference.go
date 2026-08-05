@@ -917,9 +917,14 @@ type agentInferenceProvider struct {
 	// is in flight: `ollama pull` is a client of `ollama serve`, so
 	// stopping the engine fails a SIBLING model's download (#305d).
 	swapBounceDeferred atomic.Bool
-	// retuneDeferred records that a pull finished, so the serve tuning
-	// should be RE-RESOLVED. Held to the same point as the swap bounce,
-	// for the same #305d reason.
+	// retuneDeferred records that a serve-tuning RE-RESOLVE is owed. Held
+	// to the same point as the swap bounce, for the same #305d reason.
+	//
+	// Two writers. runPullJob sets it when a pull finishes, because the
+	// tuning was sized before those weights existed. ApplyConcurrency sets
+	// it INSTEAD of reconciling when a download is in flight, because the
+	// bounce a capacity change fires would kill that download (#359) — see
+	// deferRetuneWhilePulling.
 	//
 	// Set unconditionally on a successful pull, and it means only "look
 	// again" — never "bounce". resolveTuningTarget can only read the
@@ -1197,6 +1202,8 @@ func (p *agentInferenceProvider) effectiveCfg() agentconfig.InferenceConfig {
 // the engine is up the restart is skipped; it applies on the next CP change or
 // agent restart. The admission cap (Server.SetCapacity) is applied separately by
 // the caller and is non-disruptive; this method drives only engine parallelism.
+// A target that arrives while a model is downloading is recorded and applied
+// when the download finishes, rather than bounced into (#359).
 func (p *agentInferenceProvider) ApplyConcurrency(ctx context.Context, target int) {
 	if p == nil {
 		return
@@ -1210,7 +1217,51 @@ func (p *agentInferenceProvider) ApplyConcurrency(ctx context.Context, target in
 	if p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama {
 		return // recorded; nothing we own to restart (vLLM / no engine)
 	}
+	// A capacity frame arriving while a model downloads is routine — the
+	// control plane sends one within seconds of the agent joining the map,
+	// which is exactly when a fresh install is fetching its first multi-GB
+	// model — and the bounce this would fire kills that download, because
+	// `ollama pull` is a client of `ollama serve` (#359).
+	//
+	// Nothing is lost by waiting. desiredParallel already holds the target
+	// and the deferred reconcile re-reads it, so what eventually applies is
+	// the LATEST value, not this frame's. The admission cap the same frame
+	// carries is applied separately by the caller (Server.SetCapacity) and
+	// is non-disruptive, so the capacity decision itself is not deferred —
+	// only the engine's OLLAMA_NUM_PARALLEL retune is.
+	if p.deferRetuneWhilePulling() {
+		return
+	}
 	p.requestEngineReconcile(false)
+}
+
+// deferRetuneWhilePulling records the re-resolve instead of firing a
+// reconcile when a download is in flight, and reports whether it did.
+// endPull fires what it recorded once the last pull leaves.
+//
+// The emptiness test and the flag write share pullMu with endPull's
+// removal, which is what makes the intent neither lost nor doubled — the
+// same critical-section argument endPull documents for its own side. A
+// check outside the lock would race the last endPull: it could observe a
+// non-empty registry, be overtaken by the removal that consumes both
+// flags, and then set a flag nothing is left to fire.
+//
+// Only the capacity retune calls it, deliberately, and there is no swap
+// equivalent. The two other bounces this function looks like it could
+// serve must NOT be held: crash recovery, because the engine is already
+// dead and the download is dying either way, so deferring the restart is
+// strictly worse; and an operator's model switch, because a person is
+// waiting on it and the download they are waiting behind is one they did
+// not ask about. Both survive the bounce through the engine-generation
+// grace in runPullJob instead.
+func (p *agentInferenceProvider) deferRetuneWhilePulling() bool {
+	p.pullMu.Lock()
+	defer p.pullMu.Unlock()
+	if len(p.pullsInFlight) == 0 {
+		return false
+	}
+	p.retuneDeferred.Store(true)
+	return true
 }
 
 // requestEngineReconcile kicks the single background goroutine that owns every
@@ -2499,7 +2550,32 @@ func (p *agentInferenceProvider) recordPullState(modelID, next, errMsg string) {
 // network-map frame arrives. Backoff is a var so tests don't sleep.
 const modelPullAttempts = 3
 
+// enginePullBounceGrace bounds the extra attempts a job may take because
+// the ENGINE was restarted under it rather than because the download
+// failed (#359). It is a separate budget from modelPullAttempts on
+// purpose: that one exists for the registry, the network and the disk,
+// and spending it on our own restarts is how a perfectly healthy download
+// reached `failed` — the wizard's model row then went red for a reason
+// that had nothing to do with the model.
+//
+// Two, because two is the worst case the daemon can inflict in one go: a
+// backend fallback restart and a tuning-degrade restart, one each. A
+// bound rather than an unbounded free pass, so an engine that restarts
+// forever still reaches an honest verdict instead of retrying forever.
+const enginePullBounceGrace = 2
+
 var modelPullBackoff = 15 * time.Second
+
+// engineProcessGen reads the ollama adapter's process generation, nil
+// safely. The unit fixtures that construct a provider without an adapter
+// get a constant 0, so the generation never appears to move and their
+// pulls are charged exactly as they were before #359.
+func (p *agentInferenceProvider) engineProcessGen() uint64 {
+	if p.ollama == nil {
+		return 0
+	}
+	return p.ollama.ProcessGeneration()
+}
 
 // pullDiagnosticMax bounds one captured line. The scanner behind
 // `ollama pull` admits a 1 MiB token, and a pull can run for hours, so
@@ -2692,7 +2768,12 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 	// see pullFailureText. Assigned every attempt so the text describes
 	// the attempt that produced it.
 	var failure string
-	for attempt := 1; attempt <= modelPullAttempts; attempt++ {
+	// charged counts the attempts this DOWNLOAD is answerable for. An
+	// attempt the engine was restarted out from under is not one of them,
+	// and gets a free retry off bounceGrace instead (#359).
+	charged := 0
+	bounceGrace := enginePullBounceGrace
+	for {
 		// #304: `ollama pull` is a CLIENT of the serving engine. Setup
 		// admission keys off a stat of the binary, which flips true seconds
 		// before `ollama serve` is listening; the pull then dies on
@@ -2726,6 +2807,10 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 				variantID, tag = v.VariantID, v.Source.Tag
 			}
 		}
+		// Sampled AFTER EnsureRunning on purpose: that call reaps a dead
+		// child and respawns it, which moves the generation for a reason
+		// this download did not cause and has already waited out.
+		gen := p.engineProcessGen()
 		// Fresh per attempt: attempt 1's transient must never be reported
 		// as attempt 3's cause.
 		var diag pullDiagnostic
@@ -2736,6 +2821,31 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 			}
 			diag.observe(pr)
 		})
+		// WE stopped the engine this pull was talking to (#359). Four
+		// paths do it — a CP capacity retune, crash recovery, an operator's
+		// model switch whose weights were already on disk, and the boot
+		// tail's backend probe / tuning verify — and a download that dies
+		// to one of them owes nothing: it is not charged an attempt, its
+		// error text is not recorded, and no backoff is served, because the
+		// wait that belongs here is the next iteration's EnsureRunning
+		// joining the restart.
+		//
+		// Counting our own stops rather than classifying the error is what
+		// makes this hold for a bounce added later: every one of them goes
+		// through the adapter. `ollama pull` surfaces a killed engine as a
+		// bare non-zero exit, so there is no error text to key on anyway.
+		if err != nil && bounceGrace > 0 && p.engineProcessGen() != gen {
+			bounceGrace--
+			p.logger.Info("model download interrupted by an engine restart; retrying without charging the attempt",
+				"model", modelID, "tag", tag, "grace_left", bounceGrace)
+			// Shutdown still ends the job — see the same gate below.
+			if ctx.Err() != nil {
+				failure = pullFailureText(err, diag.text(), engineErr)
+				break
+			}
+			continue
+		}
+		charged++
 		failure = pullFailureText(err, diag.text(), engineErr)
 		// A full disk cannot clear itself; three more multi-GB attempts only
 		// delay the honest error the wizard needs to show.
@@ -2743,13 +2853,13 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 		// Read from `failure`, not from err.Error(): the marker is on the
 		// engine's stderr and never in the exit status, so keying this on
 		// the returned error alone made it dead code for every real pull.
-		if err == nil || attempt == modelPullAttempts || isDiskFullText(failure) {
+		if err == nil || charged >= modelPullAttempts || isDiskFullText(failure) {
 			break
 		}
 		p.logger.Warn("ollama pull failed; retrying",
-			"model", modelID, "tag", tag, "attempt", attempt, "max", modelPullAttempts, "err", failure)
+			"model", modelID, "tag", tag, "attempt", charged, "max", modelPullAttempts, "err", failure)
 		select {
-		case <-time.After(time.Duration(attempt) * modelPullBackoff):
+		case <-time.After(time.Duration(charged) * modelPullBackoff):
 		case <-ctx.Done():
 		}
 		// The single gate on starting another attempt. Shutdown ends the

@@ -119,6 +119,51 @@ func TestOllamaAdapter_IntentionalStop_DoesNotReportUnhealthy(t *testing.T) {
 	}
 }
 
+// TestOllamaAdapter_ProcessGenerationMovesOnOurRestartsOnly is the other
+// half of the procGen guard above, read from the outside.
+//
+// PRODUCT CONTRACT (waired-agent#359): the generation answers "is the
+// engine you were talking to the engine running now?", and it answers it
+// for OUR restarts only. `ollama pull` is a client of `ollama serve`, so a
+// download that dies while the generation moved died to a restart waired
+// performed — and must not be charged as the model's own failure. A crash
+// leaves it alone, which is the same property superviseChild relies on.
+func TestOllamaAdapter_ProcessGenerationMovesOnOurRestartsOnly(t *testing.T) {
+	a, spawner, _ := livenessAdapter(t, t.TempDir())
+	ctx := context.Background()
+	defer func() { _ = a.Stop(ctx) }()
+
+	start := a.ProcessGeneration()
+
+	// A crash: the child exits on its own. Nothing waired did retired it,
+	// so a pull that failed here failed for its own reasons.
+	spawner.process.exit(errors.New("signal: segmentation fault (core dumped)"))
+	waitFor(t, 2*time.Second, "the adapter to notice the crash", func() bool {
+		return a.Health(ctx).State == StateFailed
+	})
+	if got := a.ProcessGeneration(); got != start {
+		t.Fatalf("generation after a CRASH = %d, want %d (unchanged) — moving it "+
+			"here would excuse a download that failed on its own", got, start)
+	}
+
+	// A restart we performed: the reap of the dead child and the respawn.
+	if err := a.EnsureRunning(ctx); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	afterRestart := a.ProcessGeneration()
+	if afterRestart <= start {
+		t.Fatalf("generation after our restart = %d, want > %d", afterRestart, start)
+	}
+
+	// A deliberate stop.
+	if err := a.Stop(ctx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got := a.ProcessGeneration(); got <= afterRestart {
+		t.Fatalf("generation after Stop = %d, want > %d", got, afterRestart)
+	}
+}
+
 // TestOllamaAdapter_ReportUpstreamFailure pins the classifier.
 //
 // PRODUCT CONTRACT: only a body naming a dead runner demotes the engine. A
