@@ -1,10 +1,10 @@
 # catalog-radar — weekly model-catalog refresh bot (issue #413).
 #
 # Discovers newly-released open coding models on HuggingFace, has a headless
-# Claude research their SWE-bench Verified scores (with cited sources), and:
+# Claude research their published coding-benchmark scores (with cited sources), and:
 #   - upserts a single rolling "Model radar" tracking Issue (label: model-radar);
 #   - opens a DRAFT PR per strong candidate with a fully-drafted, validated
-#     manifest (footprint numbers from catalog-tool, quality_tier from #133).
+#     manifest (footprint numbers from catalog-tool, quality_tier (waired-ai/waired#133)).
 # It NEVER auto-merges: every catalog change still needs the mandatory
 # `make e2e-vllm` GPU lane (CLAUDE.md) and human review of the cited scores.
 #

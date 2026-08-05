@@ -25,21 +25,25 @@ cat > "${WORK}/candidates.json" <<'JSON'
 ]}
 JSON
 
-# Mock research: recommended, high confidence, 2 sources, model spec using a
-# LOCAL config_path so the draft step is hermetic.
+# Mock research. Two candidates, differing only in whether their headline score
+# cites an accepted source: the first escalates, the second is reported and
+# never auto-drafted. That pair is the shell-level A/B for the rule that a
+# vendor's own number cannot propose a model. Both use a LOCAL config_path so
+# the draft step is hermetic.
 cat > "${WORK}/research.json" <<JSON
 [
   {
     "repo_id": "NewOrg/Fresh-Coder-32B",
-    "swe_bench_verified": 74.5,
-    "sources": [
-      {"url": "https://www.swebench.com/", "retrieved": "2026-06-18", "value": 74.5},
-      {"url": "https://newvendor.example/blog", "retrieved": "2026-06-18", "value": 74.0}
-    ],
+    "scores": {
+      "livebench_2026_06_25_code_generation": {"value": 74.5, "source": "livebench",
+        "url": "https://livebench.ai/table_2026_06_25.csv", "retrieved": "2026-06-18"},
+      "vendor_card_humaneval": {"value": 88.0,
+        "url": "https://newvendor.example/blog", "retrieved": "2026-06-18"}
+    },
     "confidence": "high",
     "license": "apache-2.0",
     "recommended": true,
-    "rationale": "Beats the 30B MoE on SWE-bench Verified at a 24GB footprint.",
+    "rationale": "Ahead of the 27B we carry on the accepted coding table, at a 24GB footprint.",
     "model": {
       "model_id": "fresh-coder-32b",
       "display_name": "Fresh Coder 32B",
@@ -55,6 +59,33 @@ cat > "${WORK}/research.json" <<JSON
          "total_params": 32000000000, "config_path": "${WORK}/config.json", "measured_weight_gb": 19.0}
       ]
     }
+  },
+  {
+    "repo_id": "NewOrg/Vendor-Only-30B",
+    "scores": {
+      "vendor_card_swe_bench": {"value": 79.0,
+        "url": "https://newvendor.example/paper", "retrieved": "2026-06-18"},
+      "vendor_card_humaneval": {"value": 92.0,
+        "url": "https://newvendor.example/paper", "retrieved": "2026-06-18"}
+    },
+    "confidence": "high",
+    "license": "apache-2.0",
+    "recommended": true,
+    "rationale": "Higher numbers than the first candidate, but every one is the vendor's own.",
+    "model": {
+      "model_id": "vendor-only-30b",
+      "display_name": "Vendor Only 30B",
+      "license": "apache-2.0",
+      "context_length": 131072,
+      "capabilities": ["chat", "tool_use"],
+      "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
+      "security": {"trust_remote_code_required": false, "allow_persistent_kv_cache": true},
+      "variants": [
+        {"variant_id": "q4-gguf", "format": "ollama-tag", "quantization": "Q4_K_M",
+         "runtime_support": ["ollama"], "source": {"type": "ollama", "tag": "vendor-only:30b-q4_K_M"},
+         "total_params": 30000000000, "config_path": "${WORK}/config.json", "measured_weight_gb": 18.0}
+      ]
+    }
   }
 ]
 JSON
@@ -68,6 +99,20 @@ out="${WORK}/out"
 [ -f "${out}/issue-body.md" ] || fail "issue-body.md not produced"
 grep -q "NewOrg/Fresh-Coder-32B" "${out}/issue-body.md" || fail "issue body missing candidate"
 grep -q "74.5" "${out}/issue-body.md" || fail "issue body missing benchmark"
+grep -q "NewOrg/Vendor-Only-30B" "${out}/issue-body.md" || fail "issue body missing the vendor-only candidate"
+
+# The A/B: identical shape, different provenance, opposite outcomes.
+jq -e '.escalated == ["fresh-coder-32b"]' "${out}/summary.json" >/dev/null \
+  || fail "only the accepted-source candidate should escalate: $(cat "${out}/summary.json")"
+jq -e '.reported | index("NewOrg/Vendor-Only-30B")' "${out}/summary.json" >/dev/null \
+  || fail "a vendor-only candidate must be reported, not escalated"
+[ -f "${out}/bench/fresh-coder-32b.bench.json" ] \
+  || fail "propose --bench-dir did not emit the benchmarks.json entry"
+jq -e '.scores.livebench_2026_06_25_code_generation.source == "livebench"' \
+  "${out}/bench/fresh-coder-32b.bench.json" >/dev/null \
+  || fail "the bench entry lost its provenance"
+[ -f "${out}/bench/vendor-only-30b.bench.json" ] \
+  && fail "a reported-only candidate must not get a benchmarks.json entry"
 
 jq -e '.escalated | index("fresh-coder-32b")' "${out}/summary.json" >/dev/null \
   || fail "candidate not escalated"
