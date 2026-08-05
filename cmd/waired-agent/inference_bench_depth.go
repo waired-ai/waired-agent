@@ -19,9 +19,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -140,10 +138,16 @@ var depthPromptWords = []string{
 
 // depthBenchPrompt builds a ~targetTokens synthetic prompt of numbered
 // filler lines. The nonce leads every line so runs never share a prefix.
-func depthBenchPrompt(targetTokens int, nonce string) string {
+//
+// tokensPerLine is the caller's calibration, not a constant, because the
+// line above tokenizes differently per model family: the #625 figure
+// (depthPromptTokensPerLine) is 35, while the #496 cutoff's probe model
+// measures 19.2 on the same text. Baking one in silently produced a
+// prompt at 55 % of the requested depth.
+func depthBenchPrompt(targetTokens, tokensPerLine int, nonce string) string {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "session %s log begin\n", nonce)
-	for n, i := 0, 0; n < targetTokens; n, i = n+depthPromptTokensPerLine, i+1 {
+	for n, i := 0, 0; n < targetTokens; n, i = n+tokensPerLine, i+1 {
 		fmt.Fprintf(&b, "entry %s-%06d: subsystem %s reported state %d with latency %d ms and checksum %d\n",
 			nonce, i, depthPromptWords[i%len(depthPromptWords)], i%7, (i*13)%997, (i*31+7)%65521)
 	}
@@ -222,9 +226,9 @@ func runDepthStage(ctx context.Context, deps DepthBenchDeps, baseURL string, dep
 	sctx, cancel := context.WithTimeout(ctx, depthStageTimeout)
 	defer cancel()
 
-	body, err := json.Marshal(map[string]any{
+	counters, err := postOllamaGenerate(sctx, deps.HTTPClient, baseURL, map[string]any{
 		"model":  deps.EngineModel,
-		"prompt": depthBenchPrompt(depth, deps.Nonce),
+		"prompt": depthBenchPrompt(depth, depthPromptTokensPerLine, deps.Nonce),
 		"stream": false,
 		"options": map[string]any{
 			"num_predict": depthStageCompletionTokens,
@@ -235,43 +239,13 @@ func runDepthStage(ctx context.Context, deps DepthBenchDeps, baseURL string, dep
 		st.Failed, st.Err = true, err.Error()
 		return st, err
 	}
-	req, err := http.NewRequestWithContext(sctx, http.MethodPost, baseURL+"/api/generate", bytes.NewReader(body))
+	prefill, decode, err := counters.rates()
 	if err != nil {
 		st.Failed, st.Err = true, err.Error()
 		return st, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := deps.HTTPClient.Do(req)
-	if err != nil {
-		st.Failed, st.Err = true, err.Error()
-		return st, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		err := fmt.Errorf("engine returned %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
-		st.Failed, st.Err = true, err.Error()
-		return st, err
-	}
-	var gen struct {
-		PromptEvalCount    int   `json:"prompt_eval_count"`
-		PromptEvalDuration int64 `json:"prompt_eval_duration"` // ns
-		EvalCount          int   `json:"eval_count"`
-		EvalDuration       int64 `json:"eval_duration"` // ns
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&gen); err != nil {
-		st.Failed, st.Err = true, err.Error()
-		return st, err
-	}
-	if gen.PromptEvalDuration <= 0 || gen.EvalDuration <= 0 || gen.EvalCount <= 0 {
-		err := fmt.Errorf("engine returned no timing counters (prompt_eval_duration=%d eval_duration=%d)",
-			gen.PromptEvalDuration, gen.EvalDuration)
-		st.Failed, st.Err = true, err.Error()
-		return st, err
-	}
-	st.PromptTokens = gen.PromptEvalCount
-	st.PrefillTokps = float64(gen.PromptEvalCount) / (float64(gen.PromptEvalDuration) / 1e9)
-	st.DecodeTokps = float64(gen.EvalCount) / (float64(gen.EvalDuration) / 1e9)
+	st.PromptTokens = counters.PromptEvalCount
+	st.PrefillTokps, st.DecodeTokps = prefill, decode
 	return st, nil
 }
 

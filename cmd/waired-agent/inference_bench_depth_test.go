@@ -43,8 +43,8 @@ func TestDepthStagePlan(t *testing.T) {
 }
 
 func TestDepthBenchPrompt(t *testing.T) {
-	p1 := depthBenchPrompt(65536, "nonce-a")
-	p2 := depthBenchPrompt(65536, "nonce-b")
+	p1 := depthBenchPrompt(65536, depthPromptTokensPerLine, "nonce-a")
+	p2 := depthBenchPrompt(65536, depthPromptTokensPerLine, "nonce-b")
 	// The #625 calibration for this line shape is ~2.5 chars/token
 	// (dense digits tokenize short); the estimate only needs the right
 	// ballpark — the real depth is read back from prompt_eval_count.

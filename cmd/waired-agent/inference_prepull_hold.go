@@ -97,6 +97,14 @@ func (p *agentInferenceProvider) holdBundledPrePull(ctx context.Context, modelID
 		// way. bundledPrePullTarget also re-reads the config's model id,
 		// so a retirement resolved since boot is honoured.
 		if id, ok := p.prePullStillWanted(ctx, modelID); ok {
+			// #496: the last point before 20-45 GB lands, and the first
+			// point at which the question can be measured — an engine is
+			// up and this host chose its own model, so nobody has said
+			// they want to serve here. Undecided leaves the download
+			// exactly as it was.
+			if !p.applyHostCutoff(ctx) {
+				return
+			}
 			p.dispatchBundledPrePull(ctx, id)
 		}
 	}()

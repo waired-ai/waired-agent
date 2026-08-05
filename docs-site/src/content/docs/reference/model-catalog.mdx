@@ -138,23 +138,39 @@ large dense model can fit and still answer at single-digit words per second,
 while a mixture-of-experts model of similar size answers many times faster.
 Waired shows that estimate beside each model, and after your first model is
 installed it **measures** the real speed on your machine and tells you if a
-lighter model would serve you better. Speed is something Waired reports and
-measures — it is not a reason a model is withheld from you.
+lighter model would serve you better. No model is ever withheld from you for
+being slow: speed decides which one Waired *suggests*, never which ones you can
+choose from.
 
 ### And if none of them is good enough here?
 
-Some computers cannot serve a coding model usefully whichever one you pick.
-When the best model yours can hold is still below the quality Waired treats as
-usable for coding work, it starts with **local AI off** rather than downloading
-something that will disappoint you.
+Some computers cannot serve a coding model usefully whichever one you pick —
+and on those, choosing a smaller model does not rescue you. A computer with no
+graphics card can take several minutes to answer one coding question, and it
+takes nearly as long on the smallest model in the catalog as on the largest one
+it can hold. That is the machine talking, not the model.
 
-That is a starting point, not a verdict:
+So Waired finds out by trying it. Before downloading a full-size model — tens of
+gigabytes — it downloads a small one, about a gigabyte, and times a single
+realistic coding question end to end on your computer: a long question, a
+full-length answer. That takes well under a minute even on a slow machine, and a
+few seconds on a fast one. If one such answer would take longer than **45
+seconds**, Waired starts with **local AI off** rather than downloading something
+that will disappoint you.
+
+The same thing happens for a different reason when the best model your computer
+can hold is below the quality Waired treats as usable for coding work.
+
+Either way it is a starting point, not a verdict:
 
 - The computer still joins your network, and can use the AI running on your
   other computers.
 - You can turn local AI on whenever you want — `waired inference on` in a
   terminal, or **Run AI models on this computer** in the Waired app. Waired
-  then installs the engine and the small model that does fit.
+  then installs the engine and the small model that does fit — and the small
+  model it timed is already on the machine.
+- Once you have made that choice, Waired keeps it. The timing runs to pick a
+  starting point, and never again to overrule you.
 
 [Troubleshooting → my machine can only run a very small model](/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model)
 has the longer version.
