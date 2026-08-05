@@ -919,3 +919,133 @@ func TestWaitForBundledModel_AnOlderDaemonKeepsTheGrace(t *testing.T) {
 		t.Errorf("an absent not_present list was read as a missing model: %q", out)
 	}
 }
+
+// shrinkPullProgressTiming shrinks the two #382 download tunables. Not part of
+// setBenchTiming: those are the benchmark's timings, and a test that wants a
+// tiny budget usually wants the ordinary graces left alone.
+func shrinkPullProgressTiming(t *testing.T, stall, extension time.Duration) {
+	t.Helper()
+	os, oe := pullStallGrace, pullProgressExtension
+	pullStallGrace, pullProgressExtension = stall, extension
+	t.Cleanup(func() { pullStallGrace, pullProgressExtension = os, oe })
+}
+
+// runProgressWait drives waitForBundledModel over a scripted status sequence
+// with a budget that is already spent by the second poll, and reports what it
+// printed plus whether it saw the model become ready.
+func runProgressWait(t *testing.T, budget time.Duration, seq []management.InferenceStatus) (string, bool) {
+	t.Helper()
+	stub := &pullStub{seq: seq}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	var ready bool
+	done := make(chan struct{})
+	go func() {
+		ready = waitForBundledModel(srv.URL, &out, false /*tty*/, budget, false, nil, nil, nil).ready
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("waitForBundledModel hung")
+	}
+	return out.String(), ready
+}
+
+// #382: a download whose byte count keeps advancing must outlive the wait's
+// budget. The budget was a fixed wall-clock bet against model-registry
+// throughput, which varies ~7x within a day — so the wait gave up on transfers
+// that were visibly working, and `waired init` skipped the benchmark on a host
+// where nothing was wrong.
+//
+// The budget here (1 ms) is spent before the first poll returns, so every
+// remaining tick is one the old code would not have taken.
+func TestWaitForBundledModel_ProgressOutlivesTheBudget(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkPullProgressTiming(t, 2*time.Second, time.Minute)
+	const mb = 1 << 20
+	out, ready := runProgressWait(t, time.Millisecond, []management.InferenceStatus{
+		downloadingSnap("qwen", 1*mb, 8*mb),
+		downloadingSnap("qwen", 2*mb, 8*mb),
+		downloadingSnap("qwen", 4*mb, 8*mb),
+		downloadingSnap("qwen", 7*mb, 8*mb),
+		{SubsystemState: "ready", Active: activeSel("qwen"), Models: management.ModelsSnapshot{Ready: []string{"qwen"}}},
+	})
+
+	if !ready {
+		t.Fatalf("a still-advancing download was abandoned at the budget; out=%q", out)
+	}
+	if strings.Contains(out, "Model still downloading") {
+		t.Errorf("gave up on a progressing download: %q", out)
+	}
+}
+
+// The other half of the same rule: bytes that stop moving end the wait after
+// pullStallGrace. Without this, "progress extends the wait" would be an
+// unbounded wait on any host whose first byte arrived.
+//
+// Note this is FASTER than the old behaviour, not slower — a pull that dies at
+// 1 MB used to hold the terminal for the whole remaining budget.
+func TestWaitForBundledModel_StalledDownloadEndsTheWait(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkPullProgressTiming(t, 30*time.Millisecond, time.Minute)
+	const mb = 1 << 20
+	// Advances once, then the same byte count forever (pullStub repeats its
+	// last entry).
+	out, ready := runProgressWait(t, time.Millisecond, []management.InferenceStatus{
+		downloadingSnap("qwen", 1*mb, 8*mb),
+		downloadingSnap("qwen", 2*mb, 8*mb),
+	})
+
+	if ready {
+		t.Error("a stalled download must not be reported ready")
+	}
+	if !strings.Contains(out, "Model still downloading") {
+		t.Errorf("expected the give-up line after the stall grace, got: %q", out)
+	}
+}
+
+// pullProgressExtension is the backstop: a download that advances forever must
+// still end the wait, or a slow link would hold `waired init` open with no
+// upper bound — and in CI, past the job's own timeout, which is how the
+// nightly Linux leg failed without reaching a single assert.
+func TestWaitForBundledModel_ProgressCannotOutrunTheCap(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	// Stall grace far larger than the cap, so only the cap can end this.
+	shrinkPullProgressTiming(t, time.Minute, 40*time.Millisecond)
+	const mb = 1 << 20
+	seq := make([]management.InferenceStatus, 0, 4096)
+	for i := 1; i <= 4096; i++ { // always one more byte; never ready
+		seq = append(seq, downloadingSnap("qwen", int64(i)*mb, 1<<40))
+	}
+	out, ready := runProgressWait(t, time.Millisecond, seq)
+
+	if ready {
+		t.Error("a never-finishing download must not be reported ready")
+	}
+	if !strings.Contains(out, "Model still downloading") {
+		t.Errorf("expected the cap to end the wait, got: %q", out)
+	}
+}
+
+// A wait that never sees a download is bounded exactly as it was before #382:
+// the stall deadline is armed by the first advancing byte, so with no download
+// at all the caller's budget is still the only clock.
+func TestWaitForBundledModel_NoDownloadStillEndsAtTheBudget(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	// Both new tunables set far beyond the test's patience: if either one
+	// could extend a wait that saw no bytes, this would hang instead of fail.
+	shrinkPullProgressTiming(t, time.Hour, time.Hour)
+	out, ready := runProgressWait(t, 20*time.Millisecond, []management.InferenceStatus{
+		{SubsystemState: "loading", Active: activeSel("qwen")},
+	})
+
+	if ready {
+		t.Error("no model ever became ready")
+	}
+	if !strings.Contains(out, "Model still downloading") {
+		t.Errorf("expected the budget to end the wait unchanged, got: %q", out)
+	}
+}

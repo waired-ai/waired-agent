@@ -35,6 +35,26 @@ var benchPollInterval = 3 * time.Second
 // comfortably inside this; a var so tests can shrink it.
 var benchNoEngineGrace = 3 * time.Minute
 
+// benchAfterPullDeadline is the benchmark wait's budget on the ONE path that
+// has already waited the download out: `waired init`'s daemon flow, where
+// waitForBundledModel (init_pull.go) ran immediately before and settled the
+// pull — ready, failed, or stalled past its own budget.
+//
+// It exists because that path used to spend benchPollDeadline twice on the
+// same download (#382). waitForBundledModel gave up at 10 minutes with the
+// pull still in flight, then this wait inherited the rest of that download
+// inside a window meant for benchmarking and gave up too — the
+// "Model still downloading" → "Waiting for the model…" → "Model not ready in
+// time" sequence, ten minutes apart each, that put the nightly Linux leg past
+// its job timeout before it reached a single assert. Under a browser wizard
+// the first wait carries the whole setup budget, so the second always
+// returned promptly and the doubling only ever showed up in CI.
+//
+// Sized for what is actually left after that wait: engine warm-up and the
+// model load, not a download. `waired runtimes benchmark` keeps
+// benchPollDeadline — nothing has waited for anything on that path.
+var benchAfterPullDeadline = 3 * time.Minute
+
 // benchHTTP is the status-aware client used by the benchmark prompt.
 // The /benchmark POST blocks while the daemon warms the model up (up
 // to 180 s for a cold multi-GB load) plus the 30 s measurement, so the
@@ -56,7 +76,10 @@ var benchHTTP = &http.Client{Timeout: 240 * time.Second}
 // Enter escape without a second reader (#223); every other caller passes
 // its own scanner.
 func promptBenchmarkRecommendation(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) error {
-	_, err := benchmarkWithScanner(mgmtURL, nonInteractive, out, sc, tty)
+	// benchPollDeadline, not benchAfterPullDeadline: this is the entry point
+	// for `waired runtimes benchmark`, where nothing has waited for the model
+	// first, so the wait still owns the whole download window (#382).
+	_, err := benchmarkWithScanner(mgmtURL, nonInteractive, out, sc, tty, benchPollDeadline)
 	return err
 }
 
@@ -86,8 +109,8 @@ func outcomeFrom(resp *management.BenchmarkRunResponse) benchmarkOutcome {
 // obtained) so the caller can surface the throughput in the final success
 // summary; the error is always nil today (every give-up path is
 // best-effort) but kept for future use.
-func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) (*management.BenchmarkRunResponse, error) {
-	resp, ok := waitForBenchmark(mgmtURL, out)
+func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool, budget time.Duration) (*management.BenchmarkRunResponse, error) {
+	resp, ok := waitForBenchmark(mgmtURL, out, budget)
 	if !ok {
 		return nil, nil // already explained inside waitForBenchmark
 	}
@@ -260,8 +283,14 @@ func disableLocalInference(mgmtURL string) error {
 // "could not obtain a result" (daemon too old, model never readied
 // within the deadline, terminal pull failure) — the caller should
 // treat that as a non-error skip.
-func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.BenchmarkRunResponse, ok bool) {
-	deadline := time.Now().Add(benchPollDeadline)
+//
+// budget bounds the wait. It is a parameter rather than benchPollDeadline
+// because the two callers arrive here having waited very different amounts
+// already: `waired init` has just run waitForBundledModel and needs only
+// warm-up + load (benchAfterPullDeadline), while `waired runtimes benchmark`
+// has waited for nothing and keeps the full benchPollDeadline (#382).
+func waitForBenchmark(mgmtURL string, out io.Writer, budget time.Duration) (resp *management.BenchmarkRunResponse, ok bool) {
+	deadline := time.Now().Add(budget)
 	announcedWait := false
 	announcedEngine := false
 	// noEngineDeadline is armed lazily on the first `no_engine` observation

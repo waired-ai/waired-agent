@@ -797,3 +797,67 @@ func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
 		t.Errorf("expected the wait to reach ready, got:\n%s", out.String())
 	}
 }
+
+// #382: waitForBenchmark's budget is a parameter, and it must actually bound
+// the wait. Both callers reach the same 425 loop; what differs is how long
+// they are entitled to sit in it, so this measures the loop directly rather
+// than the wall clock.
+func TestWaitForBenchmark_HonoursItsBudget(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, time.Minute, time.Minute)
+	// state="loading": an ordinary "engine up, model not ready yet" tick, so
+	// the wait polls rather than taking one of the terminal arms.
+	polls := func(budget time.Duration) int {
+		stub := &benchStub{ready: false, state: "loading"}
+		srv := stub.server()
+		defer srv.Close()
+		var out strings.Builder
+		if _, ok := waitForBenchmark(srv.URL, &out, budget); ok {
+			t.Fatalf("a never-ready daemon must not produce a result")
+		}
+		stub.mu.Lock()
+		defer stub.mu.Unlock()
+		return stub.benchCalls
+	}
+
+	short, long := polls(10*time.Millisecond), polls(400*time.Millisecond)
+	if short < 1 || long < 1 {
+		t.Fatalf("expected both waits to poll at least once (short=%d long=%d)", short, long)
+	}
+	// A 40x budget ratio; assert a conservative 3x so this cannot flake on a
+	// loaded runner while still failing outright if the budget is ignored.
+	if long < short*3 {
+		t.Errorf("budget is not bounding the wait: %d polls in 10ms vs %d in 400ms", short, long)
+	}
+}
+
+// PRODUCT CONTRACT (#382, docs/decisions/20260805/1527-benchmark-assert-stays-blocking.md
+// and the issue's "not done independently"): `waired runtimes benchmark` waits
+// for nothing before it gets here, so it keeps the FULL download window.
+// benchAfterPullDeadline exists for `waired init`, which has already run
+// waitForBundledModel — applying it here would make a user who typed the
+// command give up on a download that init never started.
+func TestPromptBenchmark_RuntimesPathKeepsTheFullWindow(t *testing.T) {
+	// benchPollDeadline generous, benchAfterPullDeadline tiny: if this entry
+	// point ever picks up the short one, the poll count collapses.
+	setBenchTiming(t, time.Millisecond, time.Minute, 400*time.Millisecond)
+	oldAfter := benchAfterPullDeadline
+	benchAfterPullDeadline = 10 * time.Millisecond
+	t.Cleanup(func() { benchAfterPullDeadline = oldAfter })
+
+	stub := &benchStub{ready: false, state: "loading"}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	stub.mu.Lock()
+	calls := stub.benchCalls
+	stub.mu.Unlock()
+	// 400ms / 1ms interval leaves a wide margin over anything the 10ms budget
+	// could reach.
+	if calls < 30 {
+		t.Errorf("`runtimes benchmark` polled only %d times — it appears to have taken benchAfterPullDeadline, not benchPollDeadline", calls)
+	}
+}

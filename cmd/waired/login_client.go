@@ -447,7 +447,15 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			default:
 				// #133: once the daemon has the model ready, benchmark it and
 				// offer a lighter model if this host can't sustain the pick.
-				resp, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout))
+				//
+				// benchAfterPullDeadline, not benchPollDeadline: waitForBundledModel
+				// ran above and settled the download — ready, failed, or given up on
+				// past its own budget. Handing this wait the full download window
+				// again made it re-wait the SAME pull, which is how one transcript
+				// grew two ten-minute walls (#382). What is left for it here is
+				// warm-up and the model load.
+				resp, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout),
+					benchAfterPullDeadline)
 			}
 			// Claude Code request routing (#294). The installers deleted
 			// their own post-init `waired claude enable` and forward the

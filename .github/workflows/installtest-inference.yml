@@ -104,7 +104,13 @@ jobs:
           # job elevated (install.ps1's real SCM path); macos-14 is the
           # pinned Apple-Silicon image with passwordless sudo for the
           # LaunchDaemon install.
-          linux='{"os":"linux","runs-on":"ubuntu-24.04","timeout":35}'
+          # All three at 45: the leg's long pole is the bundled model pull,
+          # which is the same multi-GB transfer over the same registry on
+          # every OS, so a shorter linux budget was not a property of the
+          # linux leg. It cost a run — on a slow-registry day the linux leg
+          # hit 35 minutes still inside the model wait and never reached an
+          # assert, while macOS finished the same work in 23 (#382).
+          linux='{"os":"linux","runs-on":"ubuntu-24.04","timeout":45}'
           windows='{"os":"windows","runs-on":"windows-latest","timeout":45}'
           macos='{"os":"macos","runs-on":"macos-14","timeout":45}'
           case "$SEL" in

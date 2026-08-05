@@ -41,13 +41,18 @@ type modelWaitResult struct {
 // the issue #133 auto-fallback) can then run immediately. It returns not-ready
 // — without holding init hostage — when readiness can't be confirmed (daemon
 // unreachable, terminal pull failure, inference disabled/parked, the engine
-// never coming up within benchNoEngineGrace or never staying up, or
-// benchPollDeadline elapsing). The agent keeps pulling in the background
+// never coming up within benchNoEngineGrace or never staying up, or the wait
+// running out of time). The agent keeps pulling in the background
 // regardless, so callers treat not-ready as a soft skip and continue —
 // except that engineFailure, when set, is a fault worth reporting (#310).
 //
 // budget bounds the wait; callers outside the NAVI onboarding path pass
-// benchPollDeadline, which keeps their behaviour byte-identical.
+// benchPollDeadline. It is a floor rather than the whole story since #382: a
+// download whose byte count is still advancing when the budget runs out keeps
+// the wait alive, until it goes pullStallGrace without moving or reaches
+// budget + pullProgressExtension. A wait that never sees a download — the
+// engine never came up, the pull never dispatched — is bounded by budget
+// alone, exactly as before.
 // engineComing says an engine can still plausibly appear on this host
 // (engineArrivalPending, setup_install.go), which changes exactly one thing:
 // the no_engine grace no longer ends the wait, because the executor is about
@@ -73,6 +78,17 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 		return modelWaitResult{}
 	}
 	deadline := time.Now().Add(budget)
+	// hardDeadline caps what observed progress may add to `deadline` below.
+	// Re-derived whenever `deadline` moves, so it is always "the caller's
+	// window plus at most pullProgressExtension" and can never shorten a wait
+	// (#382).
+	hardDeadline := deadline.Add(pullProgressExtension)
+	// stallDeadline is armed the first time the download advances and pushed
+	// forward on every advance after that. Zero means "no progress observed
+	// yet", which leaves `deadline` in sole charge — a host that never starts
+	// downloading is bounded exactly as it was before.
+	var stallDeadline time.Time
+	lastBytes := int64(-1)         // -1 so a legitimate 0-byte first observation is not progress
 	var noEngineDeadline time.Time // armed on no_engine, disarmed once engine is up
 	line := downloadLineState{lastPct: -1}
 	var rate rateWindow
@@ -129,6 +145,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			enter.Close(out)
 			writePrompt(out, setupKeepTerminalOpenLine)
 			deadline = time.Now().Add(setupBudget)
+			hardDeadline = deadline.Add(pullProgressExtension) // keep the cap above the new window
 			engineComing = coming
 			// The engine the grace gave up on is the one the wizard is
 			// about to install, so a grace already counting down would
@@ -327,6 +344,25 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			noEngineDeadline = time.Time{}
 			failedStreak = 0
 			if dl, found := waitDownload(st, want); found && dl.TotalBytes > 0 {
+				// #382: a download that is MOVING earns more time. The fixed
+				// budget was a wall-clock bet against an external variable —
+				// model-registry throughput varies ~7x within a single day, and
+				// the same 6.6 GB model that arrives in under three minutes on
+				// one run has not finished at +20m on the next. Waiting a fixed
+				// ten minutes gives up on a transfer that is visibly working,
+				// while still waiting the full ten on one that died at the first
+				// byte. Keying on bytes answers both: progress extends the wait,
+				// and a stall ends it in pullStallGrace instead of the budget.
+				//
+				// Bounded twice over — pullStallGrace from the last advance, and
+				// hardDeadline overall — so this can lengthen a wait that is
+				// getting somewhere and nothing else.
+				if dl.CompletedBytes > lastBytes {
+					lastBytes = dl.CompletedBytes
+					if s := time.Now().Add(pullStallGrace); s.After(stallDeadline) {
+						stallDeadline = s
+					}
+				}
 				speed := rate.observe(time.Now(), dl.CompletedBytes)
 				pct := int(dl.CompletedBytes * 100 / dl.TotalBytes)
 				if !dlHinted {
@@ -387,7 +423,18 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			}
 		}
 
-		if time.Now().After(deadline) {
+		// The budget is spent — but a download that is still moving keeps the
+		// wait alive until it stalls or hits the cap (#382). stallDeadline is
+		// zero until the first byte advances, so a wait that never saw a
+		// download ends exactly where it always did.
+		//
+		// The copy is the same either way, and correctly so: it describes what
+		// INIT is doing (it has stopped waiting), not what the transfer is
+		// doing. The agent keeps pulling in the background whether the last
+		// bytes moved a second ago or three minutes ago, so "it will finish in
+		// the background" stays the honest half of the sentence.
+		now := time.Now()
+		if now.After(deadline) && (stallDeadline.IsZero() || now.After(stallDeadline) || now.After(hardDeadline)) {
 			endProgressLine(out, tty, &line)
 			writePrompt(out, "Model still downloading; it will finish in the background. "+
 				"Run `waired status` to watch progress, or `waired runtimes benchmark` later to check performance.")
@@ -565,6 +612,27 @@ func downloadFor(st management.InferenceStatus, modelID string) (management.Mode
 // line sat visually unchanged long enough to read as frozen (the byte
 // counts only tick every 0.1 GB). A var so tests can shrink it.
 var pullPollInterval = 1 * time.Second
+
+// pullStallGrace is how long the download may report no new bytes before the
+// wait gives up on it, once the wait's own budget is already spent (#382).
+//
+// Three minutes rather than something tighter because the daemon's own retry
+// of a dropped connection has to fit inside it: a transfer that reconnects and
+// carries on is progress, and ending the wait during that gap would be the
+// fixed-budget mistake in miniature. A var so tests can shrink it.
+var pullStallGrace = 3 * time.Minute
+
+// pullProgressExtension caps how much observed progress can add to the wait's
+// budget — the wait never runs longer than budget + this, however well the
+// download is going.
+//
+// Twenty minutes is sized from the slow end of what the model registry
+// actually does (6.6 GB at ~5 MB/s is ~22 minutes, against ~2m48s for the same
+// model on a good run) and from what the CI legs can hold: with the benchmark
+// wait no longer re-waiting the same download, one 10-minute budget plus this
+// fits inside the install+inference job timeouts with room for the engine
+// install and the asserts. A var so tests can shrink it.
+var pullProgressExtension = 20 * time.Minute
 
 // rateWindowSpan is how far back rateWindow smooths the download rate.
 const rateWindowSpan = 5 * time.Second
