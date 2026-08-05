@@ -19,7 +19,12 @@ import (
 // so symlink and permission semantics stay identical to the old
 // `tar -xzf` path and the multi-GB decompressed stream never lands in
 // memory or on disk as a whole.
-func extractOllamaArchive(archivePath, destDir string) error {
+//
+// fresh is ignored. destDir here is the install's base directory, which
+// also holds the model store and the engine's logs, so "replace the target
+// wholesale" is not an option this extractor has — and tar overwriting in
+// place is what it has always done.
+func extractOllamaArchive(archivePath, destDir string, _ bool) error {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return err

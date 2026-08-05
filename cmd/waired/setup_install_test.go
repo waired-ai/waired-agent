@@ -10,7 +10,6 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/management"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
-	"github.com/waired-ai/waired-agent/internal/setup"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -20,31 +19,19 @@ type fakeEngineInstaller struct {
 	mu     sync.Mutex
 	calls  []string // stateDir per call
 	handed []string // stateDir passed to the ownership handoff
-	// detectedIn records the stateDir each detection was asked about: the
-	// executor is only correct if it is handed the DAEMON's state dir, so a
-	// fake that dropped it would make the wrong-dir bug unwritable
-	// (CLAUDE.md §Test discipline).
-	detectedIn []string
-	err        error
-	detected   setup.OllamaDetection
+	err    error
 }
 
 // install swaps in the seams for the duration of one test and returns
 // the recorder.
 func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 	t.Helper()
-	prevInstall, prevDetect, prevHand := setupInstallEngine, setupDetectEngine, setupHandState
+	prevInstall, prevHand := setupInstallEngine, setupHandState
 	setupInstallEngine = func(_ bool, stateDir string, _ func(infruntime.OllamaInstallProgress)) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.calls = append(f.calls, stateDir)
 		return f.err
-	}
-	setupDetectEngine = func(_ context.Context, stateDir string) setup.OllamaDetection {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.detectedIn = append(f.detectedIn, stateDir)
-		return f.detected
 	}
 	setupHandState = func(stateDir string) {
 		f.mu.Lock()
@@ -52,7 +39,7 @@ func (f *fakeEngineInstaller) install(t *testing.T) *fakeEngineInstaller {
 		f.handed = append(f.handed, stateDir)
 	}
 	t.Cleanup(func() {
-		setupInstallEngine, setupDetectEngine, setupHandState = prevInstall, prevDetect, prevHand
+		setupInstallEngine, setupHandState = prevInstall, prevHand
 	})
 	return f
 }
@@ -67,14 +54,6 @@ func (f *fakeEngineInstaller) handedOff() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.handed...)
-}
-
-// detections reports the state dirs the executor asked about. A run that
-// short-circuits at the presence gate must not have probed the host at all.
-func (f *fakeEngineInstaller) detections() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.detectedIn...)
 }
 
 // activeInstallState is the state a daemon serves when the wizard has
@@ -134,13 +113,7 @@ func lastPhase(t *testing.T, d *fakeSetupDaemon) management.SetupExecutorRequest
 // `waired init`.
 func TestSetupEngineInstall_EngineNeedsRepairReopensThePresenceGate(t *testing.T) {
 	shrinkSetupTimers(t)
-	f := &fakeEngineInstaller{
-		detected: setup.OllamaDetection{
-			Installed: true,
-			Path:      "/somewhere/else/ollama",
-		},
-	}
-	f.install(t)
+	f := (&fakeEngineInstaller{}).install(t)
 
 	d := &fakeSetupDaemon{}
 	st := activeInstallState()
@@ -156,8 +129,7 @@ func TestSetupEngineInstall_EngineNeedsRepairReopensThePresenceGate(t *testing.T
 	}
 
 	// It got past the gate and ran the installer against the daemon's state
-	// dir. On darwin since #492 the foreign install detected above cannot
-	// stand in for the bundled one, so this is a real reinstall.
+	// dir.
 	if got := f.installed(); len(got) != 1 || got[0] != "/var/lib/waired" {
 		t.Fatalf("installer calls = %v, want one install call with the daemon's state dir", got)
 	}
@@ -171,8 +143,7 @@ func TestSetupEngineInstall_EngineNeedsRepairReopensThePresenceGate(t *testing.T
 // every ordinary setup.
 func TestSetupEngineInstall_HealthyInstallStillSkips(t *testing.T) {
 	shrinkSetupTimers(t)
-	f := &fakeEngineInstaller{detected: setup.OllamaDetection{Installed: true}}
-	f.install(t)
+	f := (&fakeEngineInstaller{}).install(t)
 
 	d := &fakeSetupDaemon{}
 	st := activeInstallState()
@@ -187,9 +158,6 @@ func TestSetupEngineInstall_HealthyInstallStillSkips(t *testing.T) {
 	}
 	if got := f.installed(); len(got) != 0 {
 		t.Errorf("installer calls = %v, want none for a healthy install", got)
-	}
-	if got := f.detections(); len(got) != 0 {
-		t.Errorf("detections = %+v, want none — the gate should close before any probe", got)
 	}
 }
 
@@ -355,7 +323,6 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 		goos        string
 		elevated    bool
 		optOut      bool
-		detected    setup.OllamaDetection
 		wantInstall bool
 		wantPhase   string
 		wantDetail  string
@@ -392,14 +359,7 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "administrator privileges",
 			wantCode: signer.SetupErrorPermissionDenied,
 		},
-		{
-			// #488: an Ollama waired did not install cannot satisfy the
-			// wizard's engine step. This used to report done and leave the
-			// daemon serving through software of an unknown version (#139).
-			name: "darwin foreign engine does not count", goos: "darwin", elevated: true,
-			detected:    setup.OllamaDetection{Installed: true, Path: "/Applications/Ollama.app/Contents/Resources/ollama"},
-			wantInstall: true, wantPhase: management.SetupExecutorPhaseDone,
-		},
+
 		{
 			name: "opt-out refuses and says why", goos: "linux", elevated: true, optOut: true,
 			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "WAIRED_NO_OLLAMA",
@@ -412,7 +372,7 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 			if tc.optOut {
 				t.Setenv("WAIRED_NO_OLLAMA", "1")
 			}
-			f := (&fakeEngineInstaller{detected: tc.detected}).install(t)
+			f := (&fakeEngineInstaller{}).install(t)
 			d := &fakeSetupDaemon{}
 			d.setState(activeInstallState())
 			srv := d.server(t)

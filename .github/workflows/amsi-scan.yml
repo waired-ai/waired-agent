@@ -2,14 +2,17 @@
 # installer scripts that would get the `iwr | iex` one-liner blocked by Windows
 # Defender's AMSI on stock Windows before it reaches a release.
 #
-# Why this exists: install.ps1 ships via `iwr | iex` and ollama-windows.ps1 is
-# fetched + run; when the body reaches Invoke-Expression, PowerShell hands the
-# WHOLE script text to AMSI, so a contiguous download-decode-execute cradle in
-# the body can get the entire script blocked ("This script contains malicious
-# content"). That happened (#552). installtest.yml does NOT exercise the AMSI
-# path — it runs a call-operator on the on-disk file, elevated, with
-# WAIRED_NO_OLLAMA=1, so `iex` / Invoke-SelfElevate / the Ollama
-# ScriptBlock::Create are never hit. This is the dedicated AMSI gate.
+# Why this exists: install.ps1 and uninstall.ps1 ship via `iwr`; when the body
+# reaches Invoke-Expression, PowerShell hands the WHOLE script text to AMSI, so
+# a contiguous download-decode-execute cradle in the body can get the entire
+# script blocked ("This script contains malicious content"). That happened
+# (#552). installtest.yml does NOT exercise the AMSI path — it runs a
+# call-operator on the on-disk file, elevated, with WAIRED_NO_OLLAMA=1, so
+# `iex` / Invoke-SelfElevate are never hit. This is the dedicated AMSI gate.
+#
+# ollama-windows.ps1 was the second scanned script until #493 moved the Windows
+# engine install into Go. Retiring it removed the download-decode-execute shape
+# from the surface rather than working around it.
 #
 # Gate A is the CHEAP EARLY SIGNAL: scripts/dev/amsi-scan.ps1 calls AmsiScanString
 # (the same verdict path `iex` consults) on the file content, guarded by
@@ -34,7 +37,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths: &amsi_paths
       - packaging/install/install.ps1
-      - scripts/install/ollama-windows.ps1
+      - packaging/install/uninstall.ps1
       - scripts/dev/amsi-scan.ps1
       - .github/workflows/amsi-scan.yml
   push:

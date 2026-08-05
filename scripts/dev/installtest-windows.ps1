@@ -203,32 +203,58 @@ function ItSoft {
     }
 }
 
-# --- engine-install completeness assert (#190) -------------------------------
-# An install that failed after extraction used to leave binaries on disk with
-# no PATH entry, no GPU env and no marker -- and every later run treated that
-# as "installed" and skipped the repair, so repeated clean reinstalls
-# reproduced the identical failure. ollama-windows.ps1 now writes the marker
-# LAST, as a completion receipt, so these two are the observable difference
-# between a finished install and a stranded one.
+# --- bundled-engine assert (#493) --------------------------------------------
+# The engine is the one waired installed, at the one path the daemon will
+# serve from.
 #
-# Deliberately NOT asserted here: OLLAMA_VULKAN / OLLAMA_IGPU_ENABLE. They are
-# set only when GPU-mode resolution picks 'vulkan', and CI runners have no
-# such GPU -- which is why the teardown block below seeds them by hand before
-# exercising uninstall's clear. The script's own Test-Install asserts them on
-# a host where the vulkan path actually runs.
-function Assert-EngineComplete {
+# This replaces Assert-EngineComplete, which asserted the two side effects the
+# old %ProgramFiles%\Ollama layout needed to be complete: a .waired-managed.json
+# marker (the completion receipt #190 added, and the only way to tell waired's
+# install from the user's own at a shared path) and a machine PATH entry. Both
+# went with the layout. Under the state dir the path IS the identity, and the
+# agent spawns the engine by absolute path, so there is nothing to put on PATH.
+#
+# What is asserted instead is stronger: an engine ANYWHERE ELSE is now a
+# failure, not a pass. That is the #139 bar — a pre-installed Ollama could turn
+# this leg green while the daemon served through software waired never
+# installed.
+function Assert-BundledEngine {
     param([string]$Context)
 
-    $ollamaDir = Join-Path $env:ProgramFiles 'Ollama'
-    $marker    = Join-Path $ollamaDir '.waired-managed.json'
-    if (Test-Path -LiteralPath $marker) { ItOk "waired-managed marker present ($Context): $marker" }
-    else { ItBad "waired-managed marker missing ($Context): $marker -- install did not run to completion" }
-
-    $machinePath = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
-    if ((($machinePath -split ';') | Where-Object { $_ -eq $ollamaDir }).Count -gt 0) {
-        ItOk "ollama install dir on the machine PATH ($Context)"
+    $bin = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
+    if (Test-Path -LiteralPath $bin) {
+        ItOk "bundled ollama installed under the state dir ($Context): $bin"
     } else {
-        ItBad "ollama install dir NOT on the machine PATH ($Context): $ollamaDir"
+        ItBad "no bundled ollama at $bin ($Context) -- the install did not land where the daemon looks"
+        Get-ChildItem -LiteralPath (Join-Path $StateDir 'runtimes') -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+            Select-Object -First 20 | ForEach-Object { Write-Host "    $($_.FullName)" }
+        return
+    }
+
+    # The runners came out of the archive with it. The Windows release keeps
+    # them in lib\ollama\ beside ollama.exe, so an extract that placed the
+    # binary but scattered the rest would still look installed here and fail at
+    # the first inference instead.
+    $server = Join-Path $StateDir 'runtimes\ollama\bin\lib\ollama\llama-server.exe'
+    if (Test-Path -LiteralPath $server) {
+        ItOk "the engine's runner is beside it ($Context): lib\ollama\llama-server.exe"
+    } else {
+        ItBad "llama-server.exe missing under $bin's lib\ollama -- the archive did not extract intact"
+    }
+
+    # Nothing installed into %ProgramFiles%\Ollama, and nothing left on the
+    # machine PATH. On a disposable runner both can only be this run's doing.
+    $legacyDir = Join-Path $env:ProgramFiles 'Ollama'
+    if (-not (Test-Path -LiteralPath $legacyDir)) {
+        ItOk "no %ProgramFiles%\Ollama ($Context) -- waired installs nothing there since #493"
+    } else {
+        ItBad "%ProgramFiles%\Ollama exists on a fresh runner ($Context) -- something still installs there"
+    }
+    $machinePath = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+    if ((($machinePath -split ';') | Where-Object { $_ -eq $legacyDir }).Count -eq 0) {
+        ItOk "machine PATH untouched ($Context) -- the agent spawns the engine by absolute path"
+    } else {
+        ItBad "machine PATH still carries $legacyDir ($Context)"
     }
 }
 
@@ -252,23 +278,10 @@ function Assert-DaemonEngine {
     if ($flagText -match '(?m)^install_claimed=ollama') { ItOk "executor claimed the ollama install (install_claimed=ollama)" }
     else { ItLog "did not catch install_claimed=ollama in the 2s poll -- non-fatal" }
 
-    # The regression bar: an engine is present (mirror Assert-Inference's lookup).
-    $ollama = $null
-    foreach ($p in @(
-            (Join-Path $env:ProgramFiles 'Ollama\ollama.exe'),
-            (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'))) {
-        if (Test-Path -LiteralPath $p) { $ollama = $p; break }
-    }
-    if (-not $ollama) { $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue; if ($cmd) { $ollama = $cmd.Source } }
-    if ($ollama) { ItOk "ollama engine installed by the daemon-path executor ($ollama)" }
-    else { ItBad "no engine after a daemon-path first-run (executor install did not land -- pre-N3 behaviour)" }
-
-    # (#190) The marker is the install's completion receipt, not just a
-    # provenance stamp: ollama-windows.ps1 writes it last, after PATH, models
-    # dir, GPU env and the post-install check. Bits without it mean an
-    # install that died half-way, which the next run now repairs -- so an
-    # exe alone is no longer evidence that this leg succeeded.
-    Assert-EngineComplete -Context 'daemon-path executor'
+    # THE REGRESSION BAR: install.ps1 ran engine-absent, so only the resident
+    # executor could have put an engine here -- and since #493 "here" is one
+    # path, not "anywhere internal/download can see" (#139).
+    Assert-BundledEngine -Context 'daemon-path executor'
 
     $state = ''
     try { $state = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).subsystem_state } catch { }
@@ -337,24 +350,10 @@ function Assert-Inference {
         ItBad "no init transcript to check for install failures ($InitLog)"
     }
 
-    # 1) ollama.exe discoverable (mirror internal/download's Windows order).
+    # 1) The engine is waired's own, under the state dir.
     #    SECONDARY, and worded as presence rather than success -- see (0).
-    $ollama = $null
-    foreach ($p in @(
-            (Join-Path $env:ProgramFiles 'Ollama\ollama.exe'),
-            (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'))) {
-        if (Test-Path -LiteralPath $p) { $ollama = $p; break }
-    }
-    if (-not $ollama) {
-        $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue
-        if ($cmd) { $ollama = $cmd.Source }
-    }
-    if ($ollama) { ItOk "ollama binary present ($ollama)" }
-    else { ItBad "ollama engine not installed (waired init --inference-enabled=true should have installed it)" }
-
-    # 1b) the waired-managed marker and the machine PATH entry: see
-    #     Assert-EngineComplete.
-    Assert-EngineComplete -Context 'waired init'
+    $ollama = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
+    Assert-BundledEngine -Context 'waired init'
 
     # 2) bundled model READY in the waired-owned store (:9475), via the agent
     #    mgmt API. init (#519) foreground-waits for the pull, so it is normally

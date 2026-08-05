@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -116,15 +115,17 @@ func TestInstallOllamaDarwin_Error(t *testing.T) {
 // Ollama.app and a Homebrew CLI — so `waired runtimes install ollama`
 // could complete having installed nothing, and the daemon then served
 // through software of an unknown version.
+//
+// The fixture is a $PATH ollama rather than the old $WAIRED_OLLAMA_BINARY
+// one: #493 deleted the resolver that read that variable, and a fixture
+// nothing could possibly find would make this assertion vacuous.
 func TestInstallOllamaDarwin_IgnoresAForeignOllama(t *testing.T) {
-	foreign := filepath.Join(t.TempDir(), "ollama")
+	dir := t.TempDir()
+	foreign := filepath.Join(dir, "ollama")
 	if err := os.WriteFile(foreign, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("WAIRED_OLLAMA_BINARY", foreign)
-	if got, err := download.ResolveBinary(""); err != nil || got != foreign {
-		t.Fatalf("ResolveBinary = %q, %v; the fixture must be resolvable for this test to mean anything", got, err)
-	}
+	t.Setenv("PATH", dir)
 
 	orig := installOllamaBundled
 	t.Cleanup(func() { installOllamaBundled = orig })

@@ -57,17 +57,18 @@ type OllamaInstaller struct {
 	HTTPClient *http.Client
 	Now        func() time.Time
 
-	// GPUVendor, when "amd", makes Install overlay the ROCm runtime on
-	// top of the base archive, on the OSes that have one. Set by the
-	// caller from hardware detection; "" (the default) installs the base
-	// only.
-	GPUVendor string
+	// WantROCmOverlay makes Install fetch the AMD ROCm runtime on top of
+	// the base archive, on the OSes that publish one. Set by the caller
+	// from hardware detection; false (the default) installs the base only,
+	// which is the right answer for NVIDIA, Intel, Apple and for the AMD
+	// GPUs Ollama's ROCm build does not cover.
+	WantROCmOverlay bool
 
 	// Seams (defaulted by NewOllamaInstaller) so tests exercise the
 	// orchestration without network or tar. onProgress (nil-ok) receives
 	// throttled byte updates while the body streams down.
 	downloadFn  func(ctx context.Context, url, destPath string, onProgress func(completed, total, bytesPerSec int64)) (int64, error)
-	extractFn   func(archivePath, destDir string) error
+	extractFn   func(archivePath, destDir string, fresh bool) error
 	checksumsFn func(ctx context.Context) (map[string]string, error)
 }
 
@@ -166,7 +167,10 @@ func (i *OllamaInstaller) Install(ctx context.Context, progress func(OllamaInsta
 		return fmt.Errorf("ollama install: base: %w", err)
 	}
 	progress(OllamaInstallProgress{Stage: "extract", Message: destDir})
-	if err := i.extractFn(archive, destDir); err != nil {
+	// fresh: this archive IS the install, so an extractor that has to worry
+	// about what a previous version left behind may replace the target
+	// wholesale. The overlay below is additive and must not.
+	if err := i.extractFn(archive, destDir, true); err != nil {
 		return fmt.Errorf("ollama install: extract base: %w", err)
 	}
 	// Free the archive before the overlay so peak disk stays one archive
@@ -176,11 +180,11 @@ func (i *OllamaInstaller) Install(ctx context.Context, progress func(OllamaInsta
 	// AMD: overlay the ROCm runtime on top of the base install (the base
 	// bundles CUDA/Vulkan + CPU only). Best-effort — a failure here
 	// degrades to CPU/Vulkan rather than aborting the whole install.
-	if i.GPUVendor == "amd" && rel.ROCm != "" {
+	if i.WantROCmOverlay && rel.ROCm != "" {
 		overlay, derr := i.fetchVerified(ctx, rel.ROCm, sums, stageDir, "download-rocm", progress)
 		if derr != nil {
 			progress(OllamaInstallProgress{Stage: "download-rocm", Message: "ROCm overlay unavailable; continuing without it: " + derr.Error()})
-		} else if eerr := i.extractFn(overlay, destDir); eerr != nil {
+		} else if eerr := i.extractFn(overlay, destDir, false); eerr != nil {
 			progress(OllamaInstallProgress{Stage: "download-rocm", Message: "ROCm overlay extract failed; continuing without it: " + eerr.Error()})
 		}
 	}

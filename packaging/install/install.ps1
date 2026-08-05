@@ -159,13 +159,11 @@ param(
     # preservation that otherwise keeps an edge host on edge. The counterpart
     # to -Edge; resolved into $Version below.
     [switch]$Stable,
-    # GPU mode forwarded to ollama-windows.ps1 -GpuMode. See that
-    # script's docs for the full enum (auto / rocm / vulkan / cuda-only
-    # / cpu-only).
+    # GPU mode for the engine install `waired init` performs: auto / rocm /
+    # vulkan / cuda-only / cpu-only. It decides whether the ~300 MB AMD ROCm
+    # overlay is fetched; the base archive already carries CUDA, Vulkan and
+    # CPU. Forwarded as WAIRED_OLLAMA_GPU_MODE.
     [string]$OllamaGpuMode    = 'auto',
-    # Optional models directory forwarded to ollama-windows.ps1
-    # -ModelsDir. Empty = ollama's built-in default.
-    [string]$OllamaModelsDir  = $env:WAIRED_OLLAMA_MODELS_DIR,
     # Install location. Resolution order: this param > WAIRED_INSTALL_DIR env
     # > the HKLM registry value a previous install recorded (so -Update and
     # re-runs find a relocated install) > an interactive prompt on a fresh
@@ -350,7 +348,6 @@ function Export-InstallState {
             WAIRED_PII_MASK          = $env:WAIRED_PII_MASK
             WAIRED_NO_OLLAMA         = $env:WAIRED_NO_OLLAMA
             WAIRED_NO_CLAUDE_PROXY   = $env:WAIRED_NO_CLAUDE_PROXY
-            WAIRED_OLLAMA_MODELS_DIR = $env:WAIRED_OLLAMA_MODELS_DIR
         }
         params = [ordered]@{
             # $InstallDirExplicit and $ControlUrl are not carried: the
@@ -361,7 +358,6 @@ function Export-InstallState {
             LogLevel           = [string]$LogLevel
             Control            = [string]$Control
             OllamaGpuMode      = [string]$OllamaGpuMode
-            OllamaModelsDir    = [string]$OllamaModelsDir
             InferenceEnabled   = [string]$InferenceEnabled
             ShareWithMesh      = [string]$ShareWithMesh
             Dev                = [bool]$Dev
@@ -383,9 +379,9 @@ function Export-InstallState {
 
 # Rehydrate the child from the state file. Runs before the Configuration
 # block, so restoring the environment is enough for everything derived
-# there -- except the two parameters whose defaults were already evaluated
-# at BIND time (-LogLevel :$env:WAIRED_LOG_LEVEL and -OllamaModelsDir),
-# which is why every param is assigned explicitly below.
+# there -- except a parameter whose default was already evaluated at BIND
+# time (-LogLevel :$env:WAIRED_LOG_LEVEL), which is why every param is
+# assigned explicitly below.
 # Common-Die does not exist yet, so failures throw and the trap picks them
 # up.
 function Import-InstallState {
@@ -425,7 +421,6 @@ function Import-InstallState {
     $script:LogLevel           = [string]$p.LogLevel
     $script:Control            = [string]$p.Control
     $script:OllamaGpuMode      = [string]$p.OllamaGpuMode
-    $script:OllamaModelsDir    = [string]$p.OllamaModelsDir
     $script:InferenceEnabled   = [string]$p.InferenceEnabled
     $script:ShareWithMesh      = [string]$p.ShareWithMesh
     $script:Dev                = [bool]$p.Dev
@@ -1090,8 +1085,8 @@ Parameters:
   -OllamaGpuMode <mode>      auto | rocm | vulkan | cuda-only | cpu-only
                              (default: auto). Forwarded to the engine install
                              that `waired init` performs (WAIRED_OLLAMA_GPU_MODE).
-  -OllamaModelsDir <path>    Models directory for the init-time engine install
-                             (WAIRED_OLLAMA_MODELS_DIR).
+                             It selects the GPU runtime; it does not change
+                             where the engine is installed.
   -InferenceEnabled <bool>   true | false to force `waired init
                              --inference-enabled`. Empty = prompt. Same as
                              install.sh's --inference-enabled.
@@ -1119,12 +1114,12 @@ Environment variables:
                            fallback for per-org installer wrappers).
   WAIRED_DEV_CONTROL_URL   Override the URL -Dev resolves to.
                            Default: https://app.dev.waired.net.
-  WAIRED_OLLAMA_MODELS_DIR -OllamaModelsDir fallback.
   WAIRED_INSTALL_BASE_URL  Override the mirror base URL (tests / staging).
-                           Hosts the waired binaries only. (The retired
-                           WAIRED_OLLAMA_WINDOWS_URL is gone: the engine
-                           installer is embedded in the waired binary and run
-                           by `waired init` / `waired runtimes install ollama`.)
+                           Hosts the waired binaries only. (WAIRED_OLLAMA_WINDOWS_URL
+                           and -OllamaModelsDir are both retired: the engine is
+                           downloaded by `waired init` / `waired runtimes install
+                           ollama` from a pinned URL, into waired's own folder
+                           under %ProgramData%\waired.)
 
 Diagnostics:
   Get-Service waired-agent
@@ -2113,12 +2108,11 @@ function Test-InteractiveStdin {
 }
 
 # Set-OllamaEnvForInit resolves the Ollama knobs into the environment the
-# `waired init` child inherits. The engine install itself moved INTO init
-# (it asks "run local inference?" first, then installs via the embedded
-# ollama-windows.ps1 when the answer calls for one) -- installing here,
-# before init, made init re-detect waired's own install as a "foreign"
-# Ollama and treat it as foreign. The outcome line for
-# Show-NextSteps is set here too (mirror of install.sh's $ollama_status).
+# `waired init` child inherits. The engine install itself lives INSIDE init
+# (it asks "run local inference?" first, then installs when the answer calls
+# for one) -- installing here, before init, made init re-detect waired's own
+# install as a "foreign" Ollama. The outcome line for Show-NextSteps is set
+# here too (mirror of install.sh's $ollama_status).
 function Set-OllamaEnvForInit {
     if ($SkipOllama) {
         $env:WAIRED_NO_OLLAMA = '1'
@@ -2126,7 +2120,6 @@ function Set-OllamaEnvForInit {
         return
     }
     if ($OllamaGpuMode -and $OllamaGpuMode -ne 'auto') { $env:WAIRED_OLLAMA_GPU_MODE = $OllamaGpuMode }
-    if ($OllamaModelsDir) { $env:WAIRED_OLLAMA_MODELS_DIR = $OllamaModelsDir }
     $script:OllamaStatus = if ($SkipInit) {
         'not installed yet (installed during sign-in: waired init)'
     } else {

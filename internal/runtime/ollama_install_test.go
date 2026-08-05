@@ -24,9 +24,9 @@ import (
 // fakeExtract is an extractFn double. It materialises the engine binary
 // where the real archive for this OS would have put it, and records the
 // directory it was handed so a caller can check the extract root.
-func fakeExtract(t *testing.T, inst *OllamaInstaller, gotDest *string) func(string, string) error {
+func fakeExtract(t *testing.T, inst *OllamaInstaller, gotDest *string) func(string, string, bool) error {
 	t.Helper()
-	return func(_, destDir string) error {
+	return func(_, destDir string, _ bool) error {
 		*gotDest = destDir
 		bin := inst.BinaryPath()
 		if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
@@ -140,7 +140,7 @@ func TestOllamaInstaller_Install_AMDOverlay(t *testing.T) {
 	lowerFloor(t)
 
 	inst := NewOllamaInstaller(t.TempDir())
-	inst.GPUVendor = "amd"
+	inst.WantROCmOverlay = true
 	urls := stubRelease(t, inst, []byte("BIGENOUGH"))
 	var dest string
 	inst.extractFn = fakeExtract(t, inst, &dest)
@@ -170,7 +170,7 @@ func TestOllamaInstaller_Install_TooSmall(t *testing.T) {
 	inst := NewOllamaInstaller(t.TempDir())
 	stubRelease(t, inst, []byte("tiny"))
 	extracted := false
-	inst.extractFn = func(string, string) error { extracted = true; return nil }
+	inst.extractFn = func(string, string, bool) error { extracted = true; return nil }
 	err := inst.Install(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected an error for a suspiciously small archive")
@@ -189,7 +189,7 @@ func TestOllamaInstaller_Install_DownloadError(t *testing.T) {
 	inst.downloadFn = func(context.Context, string, string, func(int64, int64, int64)) (int64, error) {
 		return 0, errors.New("offline")
 	}
-	inst.extractFn = func(string, string) error { return nil }
+	inst.extractFn = func(string, string, bool) error { return nil }
 	if err := inst.Install(context.Background(), nil); err == nil {
 		t.Fatal("expected the download error to propagate")
 	}
@@ -206,7 +206,7 @@ func TestOllamaInstaller_Install_ChecksumMismatch(t *testing.T) {
 	other := sha256.Sum256([]byte("something else entirely"))
 	stubChecksums(t, inst, hex.EncodeToString(other[:]))
 	extracted := false
-	inst.extractFn = func(string, string) error { extracted = true; return nil }
+	inst.extractFn = func(string, string, bool) error { extracted = true; return nil }
 
 	err := inst.Install(context.Background(), nil)
 	if err == nil {
@@ -231,7 +231,7 @@ func TestOllamaInstaller_Install_ChecksumEntryMissing(t *testing.T) {
 		return map[string]string{"some-other-asset.zip": strings.Repeat("b", 64)}, nil
 	}
 	extracted := false
-	inst.extractFn = func(string, string) error { extracted = true; return nil }
+	inst.extractFn = func(string, string, bool) error { extracted = true; return nil }
 
 	if err := inst.Install(context.Background(), nil); err == nil {
 		t.Fatal("expected a missing checksum entry to fail the install")
@@ -254,7 +254,7 @@ func TestOllamaInstaller_Install_ChecksumFetchFatal(t *testing.T) {
 		downloaded = true
 		return 0, nil
 	}
-	inst.extractFn = func(string, string) error { return nil }
+	inst.extractFn = func(string, string, bool) error { return nil }
 
 	if err := inst.Install(context.Background(), nil); err == nil {
 		t.Fatal("expected an unreachable checksum list to fail the install")

@@ -6,12 +6,8 @@
 // truth.
 package installscripts
 
-import _ "embed"
-
-// OllamaWindowsPS1 is the verbatim contents of ollama-windows.ps1, the
-// Windows Ollama installer (downloads the official ZIP + optional ROCm
-// overlay into %ProgramFiles%\Ollama). Consumed by the Windows build of
-// `waired runtimes install ollama`.
-//
-//go:embed ollama-windows.ps1
-var OllamaWindowsPS1 []byte
+// Nothing is embedded here today. ollama-windows.ps1 was, until #493 moved
+// the Windows engine install into the shared Go installer alongside Linux
+// and macOS; the package stays because encoding_test.go's mirror check is
+// what keeps waired-agent-windows.ps1 and its install.ps1 twin from
+// drifting apart in code-page handling.

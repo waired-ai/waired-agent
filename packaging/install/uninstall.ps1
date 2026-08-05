@@ -700,10 +700,15 @@ function Remove-State {
     }
 }
 
-# -Clean only: remove an Ollama installed by ollama-windows.ps1 (or the
-# official Windows installer), its machine-PATH entry, the OLLAMA_MODELS /
-# OLLAMA_VULKAN / OLLAMA_IGPU_ENABLE machine env vars and the model stores.
-# Best-effort + existence-gated throughout.
+# -Clean only: remove an Ollama at the pre-#493 locations, its machine-PATH
+# entry, the OLLAMA_MODELS / OLLAMA_VULKAN / OLLAMA_IGPU_ENABLE machine env
+# vars and the model stores. Best-effort + existence-gated throughout.
+#
+# waired's own engine is not here any more: it lives inside %ProgramData%\waired
+# and goes with the state dir, which -Clean already wipes. What remains is
+# migration cleanup for hosts installed before #493, plus the user's own
+# per-user Ollama, which -Clean has always removed because -Clean means
+# "including models".
 function Remove-Ollama {
     Common-Log "Removing Ollama (binary, models, PATH, env)"
     Common-Run "Stop-Process ollama*" {
@@ -735,9 +740,10 @@ function Remove-Ollama {
     Common-Run "clear OLLAMA_MODELS (machine env)" {
         [Environment]::SetEnvironmentVariable('OLLAMA_MODELS', $null, 'Machine')
     }
-    # GPU-backend flags ollama-windows.ps1's Set-MachineVulkanFlag wrote at
-    # Machine scope (OLLAMA_VULKAN=1 + OLLAMA_IGPU_ENABLE=1). Clear them too, or
-    # a "clean" uninstall silently re-tunes any later/other Ollama on this host.
+    # GPU-backend flags the pre-#493 PowerShell installer wrote at Machine
+    # scope (OLLAMA_VULKAN=1 + OLLAMA_IGPU_ENABLE=1). Clear them too, or a
+    # "clean" uninstall silently re-tunes any later/other Ollama on this host.
+    # The agent supplies these at spawn now and never writes them.
     Common-Run "clear OLLAMA_VULKAN (machine env)" {
         [Environment]::SetEnvironmentVariable('OLLAMA_VULKAN', $null, 'Machine')
     }
@@ -761,6 +767,10 @@ function Remove-Ollama {
     # so the disk stayed occupied after every trace of Ollama was gone. Both
     # temp roots: the elevated user's, and LocalSystem's, since the
     # daemon-path setup executor can run the installer as SYSTEM.
+    #
+    # Migration cleanup since #493: the Go installer stages inside the state
+    # dir, on the volume it is about to extract onto, and sweeps its own
+    # leftovers at the start of every run.
     $tempRoots = @($env:TEMP, (Join-Path $env:SystemRoot 'Temp')) |
         Where-Object { $_ } | Select-Object -Unique
     foreach ($t in $tempRoots) {

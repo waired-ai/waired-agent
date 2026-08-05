@@ -27,7 +27,11 @@ import (
 // the archive. The gzip layer is left to tar as well (-z) — unlike Linux,
 // where zstd has to be decoded in-process because the host tar may not
 // know the format.
-func extractOllamaArchive(archivePath, destDir string) error {
+//
+// fresh is ignored: tar overwrites in place, and macOS has neither the
+// mandatory file locking nor the antivirus directory handles that make the
+// Windows extractor stage and swap.
+func extractOllamaArchive(archivePath, destDir string, _ bool) error {
 	cmd := exec.Command("tar", "-xzf", archivePath, "-C", destDir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("tar: %w: %s", err, strings.TrimSpace(string(out)))

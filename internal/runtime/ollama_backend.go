@@ -101,6 +101,28 @@ type BackendPlan struct {
 // Preferred returns the first (best-guess) backend step.
 func (p BackendPlan) Preferred() BackendStep { return p.Steps[0] }
 
+// WantsROCm reports whether any step in the plan asks for the ROCm
+// backend, which is the installer's question: on Windows the base archive
+// ships CUDA, Vulkan and CPU only, and ROCm arrives as a separate ~300 MB
+// overlay.
+//
+// Asking the PLAN rather than re-deriving "is this AMD card supported"
+// is what keeps the two in step. The installer used to answer it in
+// PowerShell (Resolve-GpuMode / Test-AMDRocmSupported) against a second
+// copy of the supported-SKU list, with a maintenance banner in each file
+// telling the next person to update both. Now there is one list, and the
+// overlay is fetched exactly when the agent will go on to request the
+// backend that needs it.
+
+func (p BackendPlan) WantsROCm() bool {
+	for _, s := range p.Steps {
+		if s.Backend == BackendROCm {
+			return true
+		}
+	}
+	return false
+}
+
 // Probes reports whether the plan has a fallback step that the caller
 // should activate when the preferred backend does not engage the GPU.
 func (p BackendPlan) Probes() bool { return len(p.Steps) > 1 }

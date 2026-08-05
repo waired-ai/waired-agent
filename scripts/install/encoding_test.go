@@ -19,8 +19,12 @@ import (
 var mirroredPS1 = []string{
 	"packaging/install/install.ps1",
 	"packaging/install/uninstall.ps1",
-	"scripts/install/ollama-windows.ps1",
 }
+
+// scripts/install/waired-agent-windows.ps1 is deliberately absent: it is
+// shipped inside the MSI-less install, not fetched through `iwr | iex`, so
+// it never crosses the code page this guard is about. ollama-windows.ps1
+// was here until #493 folded the Windows engine install into Go.
 
 // repoRoot resolves the module root from this test file's compile-time path
 // (<root>/scripts/install/encoding_test.go), independent of the test's CWD.
