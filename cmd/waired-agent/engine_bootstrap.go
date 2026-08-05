@@ -323,7 +323,6 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 	// instead, the model is not on disk yet and the warm declines;
 	// endPull's reconcile picks it up when the download lands.
 	defer p.warmServingModel()
-	cfg := p.effectiveCfg()
 	if p.ollama.Mode() == infruntime.EngineModeAdopted && p.logger != nil {
 		p.logger.Info("adopted orphan bundled ollama (exact pin match)",
 			"version", p.ollama.EngineVersion())
@@ -390,7 +389,7 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 		// Status() reporting awaiting_model — on a host with a working
 		// model already on disk.
 		p.activateBundledIfReady(ctx)
-	} else if cfg.PullOnStartup {
+	} else {
 		// Finish a preferred-model switch interrupted by its own restart
 		// (issue #347) is bootstrapPreferredModel's job above; this is the
 		// fresh-install pre-pull of the hardware auto-select.
@@ -400,6 +399,17 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 		// until setup has had its say, so a host being set up from a browser
 		// does not fetch the fallback alongside the model the operator is in
 		// the middle of choosing (#379).
+		//
+		// UNCONDITIONAL, where this used to read `else if cfg.PullOnStartup`
+		// (#526). Committing weights is the target's first job and the
+		// download only its second, so that gate suppressed both: a host the
+		// install-time selector had told not to download — which is what
+		// applyBundledSelection writes on the disk-short verdict, i.e. the
+		// host most likely to be reusing weights it already has — never
+		// committed the ones sitting right there. The pull_on_startup
+		// refusal moved down beside allow_pull's, inside the target and
+		// below the activation, where both read as what they are: reasons
+		// not to DOWNLOAD.
 		if modelID, ok := p.bundledPrePullTarget(ctx); ok {
 			p.holdBundledPrePull(ctx, modelID)
 		}
