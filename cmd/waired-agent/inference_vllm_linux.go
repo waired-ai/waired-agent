@@ -247,7 +247,30 @@ func (p *agentInferenceProvider) runHFPullJob(ctx context.Context, modelID strin
 // the venv, ensure the target model's safetensors are on disk (downloading if
 // needed), then spawn the vLLM subprocess bound to that model, register the
 // adapter, and activate. Runs in the engine-startup goroutine.
+//
+// Safe to call more than once (#339): a previous call's engine is left alone
+// while it is up, and stopped before this one spawns over it otherwise. That
+// is decided by decideVLLMBootstrap so the rule is table-testable off this
+// Linux-only path.
 func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
+	existing := p.vllmAdapter()
+	existingState := ""
+	if existing != nil {
+		existingState = existing.Health(ctx).State
+	}
+	switch decideVLLMBootstrap(existing, existingState) {
+	case vllmBootstrapSkip:
+		p.logger.Info("vllm bootstrap: an engine is already running; leaving it alone",
+			"state", existingState, "endpoint", existing.BaseURL())
+		return
+	case vllmBootstrapStopFirst:
+		p.logger.Warn("vllm bootstrap: stopping the previous engine before spawning a new one",
+			"state", existingState, "endpoint", existing.BaseURL())
+		if err := existing.Stop(ctx); err != nil {
+			p.logger.Warn("vllm bootstrap: stopping the previous engine returned error", "err", err)
+		}
+	}
+
 	puller, python, err := p.vllmServingDeps()
 	if err != nil {
 		p.logger.Error("vllm bootstrap: venv not ready; local inference unavailable", "err", err)
@@ -331,7 +354,7 @@ func (p *agentInferenceProvider) bootstrapVLLM(ctx context.Context) {
 	})
 	adapter.SetAppliedTuning(tuning)
 	p.registry.Register(adapter)
-	p.vllm = adapter
+	p.setVLLM(adapter)
 
 	const maxAttempts = 3
 	var ensureErr error

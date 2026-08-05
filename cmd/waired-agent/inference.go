@@ -95,7 +95,7 @@ func (s *inferenceSubsystem) EngineProvenance() (mode, version, warning, tuningW
 		return "", "", "", ""
 	}
 	if s.provider != nil && s.provider.servingEngine() == catalog.RuntimeVLLM {
-		if tuner, ok := s.provider.vllm.(interface{ AppliedTuning() infruntime.ModelTuning }); ok {
+		if tuner, ok := s.provider.vllmAdapter().(interface{ AppliedTuning() infruntime.ModelTuning }); ok {
 			tuningWarning = tuner.AppliedTuning().Warning
 		}
 	}
@@ -785,8 +785,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		}
 		// #557: stop the vLLM subprocess (if we spawned one) so a
 		// restart doesn't leave an orphan holding the GPU / the port.
-		if provider.vllm != nil {
-			if err := provider.vllm.Stop(stopCtx); err != nil {
+		if vllm := provider.vllmAdapter(); vllm != nil {
+			if err := vllm.Stop(stopCtx); err != nil {
 				logger.Warn("vllm stop returned error", "err", err)
 			}
 		}
@@ -876,12 +876,19 @@ type agentInferenceProvider struct {
 	// ollama by servingEngine(). vllm is the running vLLM adapter, set by
 	// bootstrapVLLM (Linux only) and held via the cross-platform Adapter
 	// interface so this shared struct never names the Linux-only concrete
-	// type; nil unless engine == vllm and the engine started. The HF
+	// type; unset unless engine == vllm and the engine started. The HF
 	// puller and venv paths are resolved on demand inside the Linux-only
 	// vLLM code (inference_vllm_linux.go), not stored here.
+	//
+	// vllm is atomic, not a plain field (#337): bootstrapVLLM writes it on
+	// the engine-startup goroutine while the management handlers
+	// (EngineProvenance, runtimeStatusFor, appliedContextWindow) and the
+	// shutdown goroutine read it. Reach it through setVLLM / vllmAdapter,
+	// never the pointer directly. The interface indirection is the same
+	// shape as proxy.go's atomic.Pointer[http.Handler].
 	stateDir string
 	engine   string
-	vllm     infruntime.Adapter
+	vllm     atomic.Pointer[infruntime.Adapter]
 
 	// preferencePath is preferred-model.json — the same file the loopback
 	// management API's preferred-model handler writes. The setup
@@ -1111,9 +1118,14 @@ type agentInferenceProvider struct {
 	// and restart the engine, which would fail any download in flight
 	// against it. Once per process is exactly the pre-#304 behaviour.
 	engineBootstrapOnce atomic.Bool
-	// vllmBootstrapOnce guards bootstrapVLLM, which is not idempotent: each
-	// call registers a fresh adapter over the previous one and spawns a
-	// second subprocess on the same port.
+	// vllmBootstrapOnce holds the boot goroutine to a single bootstrapVLLM
+	// attempt. It was added (#304) because bootstrapVLLM was not idempotent:
+	// each call registered a fresh adapter over the previous one and spawned
+	// a second subprocess on the same port. The function now decides that for
+	// itself (decideVLLMBootstrap, #337/#339), so this is no longer the only
+	// thing standing between the daemon and a double spawn — it stays because
+	// nothing yet re-triggers a vLLM bootstrap, and the trigger that will
+	// (#339's adopt-a-late-venv path) is where re-entry gets designed.
 	vllmBootstrapOnce sync.Once
 	// bootPlan holds the boot-computed engine-start inputs the provider
 	// cannot re-derive. See engineBootstrapPlan.
@@ -1158,6 +1170,23 @@ type agentInferenceProvider struct {
 	// bounce (a wedged engine). Wired from main.go to the same scheduler the
 	// management RestartScheduler uses. nil in unit tests.
 	restartOnWedge func()
+}
+
+// setVLLM records the running vLLM adapter. Called from bootstrapVLLM on the
+// engine-startup goroutine; every reader is on another one (#337).
+func (p *agentInferenceProvider) setVLLM(a infruntime.Adapter) {
+	p.vllm.Store(&a)
+}
+
+// vllmAdapter returns the running vLLM adapter, or nil when none has been
+// started. Callers type-assert it for the optional interfaces (AppliedTuning);
+// an assertion on a nil interface yields ok == false, which is the same answer
+// the plain field gave before #337.
+func (p *agentInferenceProvider) vllmAdapter() infruntime.Adapter {
+	if a := p.vllm.Load(); a != nil {
+		return *a
+	}
+	return nil
 }
 
 // effectivePreferredModelID returns the operator's currently-effective
@@ -1945,7 +1974,7 @@ func (p *agentInferenceProvider) appliedContextWindow(m catalog.Manifest) int {
 			applied = t.ContextLength
 		}
 	}
-	if tuner, ok := p.vllm.(interface {
+	if tuner, ok := p.vllmAdapter().(interface {
 		AppliedTuning() infruntime.ModelTuning
 	}); ok {
 		if t := tuner.AppliedTuning(); t.ContextLength > 0 && t.ModelID == m.ModelID {
@@ -2072,7 +2101,7 @@ func (p *agentInferenceProvider) runtimeStatusFor(ctx context.Context, name stri
 		// VLLMAdapter behind the Adapter interface, so reach the
 		// tuning through an assertion this untagged file can compile
 		// on every platform.
-		if tuner, ok := p.vllm.(interface{ AppliedTuning() infruntime.ModelTuning }); ok {
+		if tuner, ok := p.vllmAdapter().(interface{ AppliedTuning() infruntime.ModelTuning }); ok {
 			if tune := tuner.AppliedTuning(); tune != (infruntime.ModelTuning{}) {
 				entry.ContextLength = tune.ContextLength
 				entry.TuningWarning = tune.Warning
