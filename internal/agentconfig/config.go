@@ -261,16 +261,6 @@ type InferenceConfig struct {
 	// candidate downloads. Disable if disk/bandwidth are constrained.
 	PreCacheUpdateCandidate bool `json:"pre_cache_update_candidate"`
 
-	// ExternalEndpoints lists OpenAI-compatible HTTP endpoints the
-	// agent's loopback gateway may fall back to when no local engine
-	// has the requested model. Each entry becomes a registered
-	// runtime.Adapter under the name "openai-compat:<id>".
-	//
-	// Phase 5 scope: agent-local only. These endpoints are NEVER
-	// surfaced in signer.InferenceState, so mesh peers never see them
-	// and cannot proxy through this agent to reach them.
-	ExternalEndpoints []ExternalEndpoint `json:"external_endpoints,omitempty"`
-
 	// Enabled is the install-time choice for whether this node runs a
 	// local inference engine at all. Default true preserves Phase 4
 	// behaviour: a fresh agent.json (or no file at all) keeps the
@@ -322,33 +312,6 @@ type InferenceConfig struct {
 	// default. Read at boot by the agent (intercept + gateway) and at
 	// enable-time by the CLI (managed-settings write).
 	ClaudeModelRouteDirectives bool `json:"claude_model_route_directives"`
-}
-
-// ExternalEndpoint configures one entry in InferenceConfig.ExternalEndpoints.
-// See internal/runtime/openaicompat for the adapter and the bearer-auth
-// round-tripper that consumes AuthEnvVar.
-type ExternalEndpoint struct {
-	// ID is the registry suffix (Adapter.Name() returns
-	// "openai-compat:<ID>"). Must be unique within ExternalEndpoints.
-	// Empty falls back to a host:port-derived identifier inside the
-	// adapter at construction time.
-	ID string `json:"id,omitempty"`
-
-	// URL is the OpenAI-compat base. Both "http://host:8000" and
-	// "http://host:8000/v1" forms are accepted; the adapter normalises
-	// by trimming a trailing /v1.
-	URL string `json:"url"`
-
-	// AuthEnvVar names the environment variable holding the Bearer
-	// token. Empty string disables auth-header injection. The value
-	// is captured once at adapter construction; mid-run env changes
-	// require an agent restart.
-	AuthEnvVar string `json:"auth_env_var,omitempty"`
-
-	// Disable, when true, leaves the entry in the file (so the
-	// history of what was once configured stays visible) but skips
-	// registry registration on this boot.
-	Disable bool `json:"disable,omitempty"`
 }
 
 // RoutingConfig is the install-time default for the inference routing
@@ -598,9 +561,6 @@ func (c *Config) Validate() error {
 	if p := c.Inference.OllamaPort; p < 0 || p > 65535 {
 		return fmt.Errorf("agentconfig: ollama_port must be in [0, 65535] (0 = auto), got %d", p)
 	}
-	if err := validateExternalEndpoints(c.Inference.ExternalEndpoints); err != nil {
-		return err
-	}
 	if err := validateRouting(c.Routing); err != nil {
 		return err
 	}
@@ -626,38 +586,6 @@ func validateRouting(r RoutingConfig) error {
 	default:
 		return fmt.Errorf("agentconfig: unknown routing.mode %q", r.Mode)
 	}
-}
-
-// validateExternalEndpoints enforces uniqueness of IDs (so the runtime
-// registry does not collide) and basic URL well-formedness. Disabled
-// entries are still checked because flipping Disable=false should not
-// require an additional validation round-trip.
-func validateExternalEndpoints(eps []ExternalEndpoint) error {
-	seen := make(map[string]int, len(eps))
-	for i, ep := range eps {
-		if ep.URL == "" {
-			return fmt.Errorf("agentconfig: external_endpoints[%d]: url required", i)
-		}
-		// Light URL well-formedness check; the adapter parses and
-		// normalises authoritatively at NewAdapter time.
-		switch {
-		case strings.HasPrefix(ep.URL, "http://"), strings.HasPrefix(ep.URL, "https://"):
-		default:
-			return fmt.Errorf("agentconfig: external_endpoints[%d].url %q must start with http:// or https://", i, ep.URL)
-		}
-		key := ep.ID
-		if key == "" {
-			// Two empty IDs would collide post-normalisation, so
-			// require operators to disambiguate explicitly when there
-			// is more than one endpoint without an ID.
-			key = "<empty>"
-		}
-		if prev, ok := seen[key]; ok {
-			return fmt.Errorf("agentconfig: external_endpoints[%d].id %q duplicates external_endpoints[%d]", i, ep.ID, prev)
-		}
-		seen[key] = i
-	}
-	return nil
 }
 
 // MergeJSON overlays values from a JSON config file. A missing file is

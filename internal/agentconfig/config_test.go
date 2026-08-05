@@ -637,84 +637,6 @@ func TestConfig_Save_MergeJSONRoundtrip(t *testing.T) {
 	}
 }
 
-func TestExternalEndpoints_JSONParse(t *testing.T) {
-	dir := t.TempDir()
-	path := dir + "/agent.json"
-	body := `{
-        "inference": {
-            "external_endpoints": [
-                {"id":"lan-vllm","url":"http://192.168.1.10:8000/v1","auth_env_var":"LAN_VLLM_KEY"},
-                {"id":"openai","url":"https://api.openai.com/v1","auth_env_var":"OPENAI_API_KEY"},
-                {"id":"future","url":"http://x:8000","disable":true}
-            ]
-        }
-    }`
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	cfg := Defaults()
-	if err := cfg.MergeJSON(path); err != nil {
-		t.Fatalf("MergeJSON: %v", err)
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	if got := cfg.Inference.ExternalEndpoints; len(got) != 3 {
-		t.Fatalf("ExternalEndpoints len = %d, want 3", len(got))
-	}
-	if cfg.Inference.ExternalEndpoints[1].URL != "https://api.openai.com/v1" {
-		t.Errorf("ExternalEndpoints[1].URL wrong: %+v", cfg.Inference.ExternalEndpoints[1])
-	}
-	if !cfg.Inference.ExternalEndpoints[2].Disable {
-		t.Error("ExternalEndpoints[2] should be disabled")
-	}
-}
-
-func TestExternalEndpoints_ValidateRejectsBadURL(t *testing.T) {
-	cfg := Defaults()
-	cfg.Inference.ExternalEndpoints = []ExternalEndpoint{{ID: "a", URL: "192.168.1.10:8000"}}
-	if err := cfg.Validate(); err == nil {
-		t.Error("bare host URL should be rejected (missing http://)")
-	}
-}
-
-func TestExternalEndpoints_ValidateRejectsEmptyURL(t *testing.T) {
-	cfg := Defaults()
-	cfg.Inference.ExternalEndpoints = []ExternalEndpoint{{ID: "a"}}
-	if err := cfg.Validate(); err == nil {
-		t.Error("missing URL must be rejected")
-	}
-}
-
-func TestExternalEndpoints_ValidateRejectsDuplicateIDs(t *testing.T) {
-	cfg := Defaults()
-	cfg.Inference.ExternalEndpoints = []ExternalEndpoint{
-		{ID: "dupe", URL: "http://x:8000"},
-		{ID: "dupe", URL: "http://y:8000"},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Error("duplicate IDs must be rejected")
-	}
-}
-
-func TestExternalEndpoints_ValidateRejectsTwoUnnamed(t *testing.T) {
-	cfg := Defaults()
-	cfg.Inference.ExternalEndpoints = []ExternalEndpoint{
-		{URL: "http://a:8000"},
-		{URL: "http://b:8000"},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Error("two empty IDs must be rejected (would collide after host-default)")
-	}
-}
-
-func TestExternalEndpoints_DefaultEmpty(t *testing.T) {
-	cfg := Defaults()
-	if len(cfg.Inference.ExternalEndpoints) != 0 {
-		t.Errorf("Defaults must not seed ExternalEndpoints, got %v", cfg.Inference.ExternalEndpoints)
-	}
-}
-
 // Phase 6 — Enabled + ShareWithMesh coverage across all four merge layers.
 
 func TestPhase6Fields_JSON(t *testing.T) {
@@ -859,6 +781,40 @@ func TestMergeJSON_RetiredOllamaSourceIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(written), "ollama_source") {
+		t.Errorf("Save re-emitted the retired key:\n%s", written)
+	}
+}
+
+// Same contract for the other key #488 retired: a hand-edited
+// agent.json carrying inference.external_endpoints must LOAD, must
+// validate, and must lose the key on the next Save. Nothing in the
+// agent acts on it any more — the entries are simply not there.
+func TestMergeJSON_RetiredExternalEndpointsIsIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.json")
+	body := `{"inference":{"external_endpoints":[` +
+		`{"id":"lan","url":"http://192.168.1.10:8000/v1","auth_env_var":"LAN_KEY"}]}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Defaults()
+	if err := cfg.MergeJSON(path); err != nil {
+		t.Fatalf("MergeJSON with retired external_endpoints must not fail: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate after loading retired external_endpoints: %v", err)
+	}
+
+	out := filepath.Join(dir, "written.json")
+	if err := cfg.Save(out); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	written, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(written), "external_endpoints") {
 		t.Errorf("Save re-emitted the retired key:\n%s", written)
 	}
 }
