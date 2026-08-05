@@ -116,6 +116,36 @@ type Deps struct {
 	// not here.
 	LocalAdmission func(ctx context.Context) (release func())
 
+	// OnPeerOutcome, when non-nil, receives one verdict per request this
+	// listener dispatched to a MESH PEER: which peer, and whether it
+	// served the request. It is the write half of the per-peer error
+	// window whose Snapshot the Selector already reads back as a
+	// same-score tie-break — a window that, until waired-agent#281, was
+	// consulted on every mesh selection and fed by nothing.
+	//
+	// deviceID is the real mesh DeviceID, peeled off Selection.Runtime,
+	// because that is the key the Selector matches its snapshot against.
+	// It is NOT the display identifier, which is a grant pseudonym for a
+	// Public Share peer (spec §8.5) and would key a second, permanently
+	// empty entry. Being a real identifier, it is an in-process routing
+	// signal only: it must never be logged, returned or serialised.
+	//
+	// A local or external selection produces no call — it says nothing
+	// about any peer — and neither does a failure that never chose one.
+	//
+	// Wired on the LOCAL surfaces (loopback gateway, Claude intercept,
+	// data plane) in cmd/waired-agent, the same set as LocalAdmission and
+	// for the same reason: those are the listeners that can send work to
+	// a peer. The overlay listener leaves it nil — it holds no mesh
+	// snapshot and no PeerAdapterFactory, so it cannot dispatch to a peer
+	// at all. nil leaves the tie-break reading zeros, which is the
+	// behaviour before waired-agent#281.
+	//
+	// Called synchronously at the terminal point of the handler, so an
+	// implementation must not block: the production sink takes one mutex
+	// for a handful of counter increments.
+	OnPeerOutcome func(deviceID string, ok bool)
+
 	// OnUsage, when non-nil, receives one UsageSample per request that
 	// reached an engine (waired#829). The gateway captures token counts
 	// on every surface for local telemetry regardless; this hook is what
