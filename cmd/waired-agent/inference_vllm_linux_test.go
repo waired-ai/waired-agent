@@ -55,15 +55,16 @@ func mixedVLLMManifest() catalog.Manifest {
 
 func vllmTestProvider(t *testing.T) *agentInferenceProvider {
 	t.Helper()
-	return &agentInferenceProvider{
+	p := &agentInferenceProvider{
 		store:      catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
 		stateDir:   t.TempDir(), // no venv → engineVersionFor(vllm) == ""
-		engine:     catalog.RuntimeVLLM,
 		cfg:        agentconfig.InferenceConfig{AllowPull: true, BundledModelID: "gpt-oss-20b", VLLMPort: 8000},
 		manifests:  []catalog.Manifest{mixedVLLMManifest()},
 		dlProgress: newDownloadProgress(),
 		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
+	p.setServingEngine(catalog.RuntimeVLLM)
+	return p
 }
 
 // resolveVLLMTensorParallel: auto follows the identical-GPU rule; an

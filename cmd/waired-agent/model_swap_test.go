@@ -110,8 +110,8 @@ func TestSwapPreferredModel_CrossEngineNeedsRestart(t *testing.T) {
 		manifests: recTestManifests(),
 		store:     catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		engine:    catalog.RuntimeVLLM, // serving vLLM → no in-process ollama swap
 	}
+	p.setServingEngine(catalog.RuntimeVLLM) // serving vLLM → no in-process ollama swap
 	if _, err := p.SwapPreferredModel(t.Context(), "heavy"); !errors.Is(err, errSwapNeedsRestart) {
 		t.Errorf("cross-engine SwapPreferredModel err = %v, want errSwapNeedsRestart", err)
 	}

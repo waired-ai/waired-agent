@@ -464,9 +464,28 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		puller:         puller,
 		stateDir:       stateDir,
 		preferencePath: deps.PreferencePath,
-		engine:         decision.Engine,
 		dlProgress:     newDownloadProgress(),
 		ollamaUsable:   func() bool { _, e := ollamaResolver(); return e == nil },
+		// engineChoice re-runs THIS boot's decision against the live host,
+		// so an adopt trigger asks the same rule rather than a snapshot
+		// taken before the engine existed (#339, the shape #304 gave the
+		// ollama binary). A field rather than a direct chooseEngine call so
+		// the adopt path is testable without a CUDA host and a real venv.
+		engineChoice: func(c context.Context) (string, bool) {
+			d, err := chooseEngine(c, store, profiler, cfg, stateDir)
+			if err != nil {
+				// Strict mode refusing to fall back. At boot that exits the
+				// process; here the daemon is already running, so keep the
+				// engine it has and say why at Debug — this runs per adopt
+				// trigger, not once.
+				logger.Debug("live engine re-choice declined", "err", err)
+				return "", false
+			}
+			for _, r := range d.Reasons {
+				logger.Debug("live engine re-choice", "reason", r)
+			}
+			return d.Engine, true
+		},
 		// The same measurement the profiler is built with, reachable
 		// without its cache (#361).
 		engineVersionProbe: engineVersionProbe,
@@ -492,6 +511,10 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		recorder:            deps.Recorder,
 		routing:             deps.Routing,
 	}
+	// Not in the literal above: the field is an atomic.Pointer now (#339),
+	// because the adopt trigger may take on a vLLM venv installed after
+	// this process started.
+	provider.setServingEngine(decision.Engine)
 
 	// waired-agent#29: hand the adapter a way to report its engine's death.
 	// Installed here rather than in OllamaConfig because the handler is a
@@ -736,19 +759,19 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		// #557 vLLM serving path: download the safetensors, spawn the
-		// vLLM subprocess bound to that on-disk model, register the
-		// adapter, and activate. Kept separate from the ollama path
-		// below because vLLM needs the weights on disk before it can
-		// start, whereas `ollama serve` starts model-agnostic.
-		if provider.servingEngine() == catalog.RuntimeVLLM {
-			provider.vllmBootstrapOnce.Do(func() { provider.bootstrapVLLM(ctx) })
-			return
-		}
-		// The whole ollama start + bootstrap sequence lives on the
-		// provider so it can run again when an engine is installed after
-		// boot (#304). It re-checks for the binary itself — the boot-time
-		// `binary` snapshot is deliberately not consulted.
+		// ONE entry point for both engines since #339. It used to fork
+		// here — a `vllmBootstrapOnce.Do(bootstrapVLLM)` arm that returned,
+		// and the ollama arm below — which is what made vLLM the engine
+		// with no adopt path: every later trigger reached only the ollama
+		// half, so a venv installed after boot was never taken on.
+		//
+		// The whole start + bootstrap sequence lives on the provider so it
+		// can run again when an engine is installed after boot (#304). It
+		// re-checks for the engine itself — the boot-time `binary` snapshot
+		// and, now, the boot-time engine decision are deliberately not
+		// consulted. The two engines' orderings still differ (vLLM needs
+		// the weights on disk before it can start, `ollama serve` starts
+		// model-agnostic); that difference lives inside each arm.
 		provider.runEngineBootstrap(ctx, "boot")
 	}()
 
@@ -880,14 +903,20 @@ type agentInferenceProvider struct {
 	// puller and venv paths are resolved on demand inside the Linux-only
 	// vLLM code (inference_vllm_linux.go), not stored here.
 	//
-	// vllm is atomic, not a plain field (#337): bootstrapVLLM writes it on
+	// BOTH are atomic, and for the same reason (#337): they are written on
 	// the engine-startup goroutine while the management handlers
 	// (EngineProvenance, runtimeStatusFor, appliedContextWindow) and the
-	// shutdown goroutine read it. Reach it through setVLLM / vllmAdapter,
-	// never the pointer directly. The interface indirection is the same
-	// shape as proxy.go's atomic.Pointer[http.Handler].
+	// shutdown goroutine read them. Reach them through setVLLM /
+	// vllmAdapter and setServingEngine / servingEngine, never the pointers
+	// directly. The interface indirection is the same shape as proxy.go's
+	// atomic.Pointer[http.Handler].
+	//
+	// engine stopped being write-once at construction with #339: the adopt
+	// trigger re-runs the boot rule against the live host and may take on a
+	// vLLM venv installed after this process started, which no restart-free
+	// path could reach while the boot decision was frozen.
 	stateDir string
-	engine   string
+	engine   atomic.Pointer[string]
 	vllm     atomic.Pointer[infruntime.Adapter]
 
 	// preferencePath is preferred-model.json — the same file the loopback
@@ -1027,6 +1056,18 @@ type agentInferenceProvider struct {
 	// nil is treated as "not usable".
 	ollamaUsable func() bool
 
+	// engineChoice answers "which engine would this host choose right now",
+	// by re-running the boot rule (chooseEngine) against the live state dir
+	// and hardware profile. ok=false means it could not answer — a strict
+	// mode refusal, an unreadable state file — and the caller then keeps the
+	// engine this process already has.
+	//
+	// Injected for the same reason ollamaUsable is: the adopt path has to be
+	// testable, and the real answer needs a CUDA host with a verified vLLM
+	// venv on disk. nil (every unit fixture that does not set it) also reads
+	// as "cannot answer", which pins those fixtures to their boot engine.
+	engineChoice func(ctx context.Context) (string, bool)
+
 	// engineVersionProbe MEASURES an installed engine's version by
 	// executing it — the same engineVersionOnHost closure the profiler
 	// is built with (#238), held here so the answer can be taken when it
@@ -1128,16 +1169,18 @@ type agentInferenceProvider struct {
 	// tail must not repeat: its backend probe and tuning verify both stop
 	// and restart the engine, which would fail any download in flight
 	// against it. Once per process is exactly the pre-#304 behaviour.
+	//
+	// There is no vLLM equivalent, and deliberately so. `vllmBootstrapOnce`
+	// held the boot goroutine to one bootstrapVLLM attempt because the
+	// function was not idempotent — each call registered a fresh adapter
+	// over the previous one and spawned a second process on the same port.
+	// #337/#510 moved that decision into the function itself
+	// (decideVLLMBootstrap), and #339 needs the retry the latch forbade: a
+	// venv that appears after boot, and a bootstrap whose weight download
+	// or EnsureRunning failed, both have to be reachable again. Re-entry is
+	// owned by engineStartInFlight (coalescing) and decideVLLMBootstrap
+	// (idempotency) instead.
 	engineBootstrapOnce atomic.Bool
-	// vllmBootstrapOnce holds the boot goroutine to a single bootstrapVLLM
-	// attempt. It was added (#304) because bootstrapVLLM was not idempotent:
-	// each call registered a fresh adapter over the previous one and spawned
-	// a second subprocess on the same port. The function now decides that for
-	// itself (decideVLLMBootstrap, #337/#339), so this is no longer the only
-	// thing standing between the daemon and a double spawn — it stays because
-	// nothing yet re-triggers a vLLM bootstrap, and the trigger that will
-	// (#339's adopt-a-late-venv path) is where re-entry gets designed.
-	vllmBootstrapOnce sync.Once
 	// bootPlan holds the boot-computed engine-start inputs the provider
 	// cannot re-derive. See engineBootstrapPlan.
 	bootPlan engineBootstrapPlan
@@ -2269,14 +2312,23 @@ func (p *agentInferenceProvider) ListModels(_ context.Context) []management.Mode
 }
 
 // servingEngine is the engine the agent actually serves from. The empty
-// string — the zero value in unit tests and pre-#557 code paths — means
-// ollama, preserving the historical default so existing behaviour is
-// unchanged for hosts that never opt into vLLM.
+// string — the unset pointer in unit tests and pre-#557 code paths —
+// means ollama, preserving the historical default so existing behaviour
+// is unchanged for hosts that never opt into vLLM.
 func (p *agentInferenceProvider) servingEngine() string {
-	if p.engine == "" {
+	e := p.engine.Load()
+	if e == nil || *e == "" {
 		return catalog.RuntimeOllama
 	}
-	return p.engine
+	return *e
+}
+
+// setServingEngine records which engine this process serves from. Written
+// once at construction, and again by the adopt trigger when the boot rule
+// re-run against the live host names a different engine (#339) — see
+// adoptEngine, which is the only caller that changes it after boot.
+func (p *agentInferenceProvider) setServingEngine(engine string) {
+	p.engine.Store(&engine)
 }
 
 // engineVersionFor returns the installed version of the given serving
