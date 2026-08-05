@@ -148,73 +148,63 @@ assert_launchd_healthy() {
 
 # assert_inference_macos — macOS analog of lib/installtest-enroll.sh's
 # assert_inference: prove the Ollama-install -> bundled-model-pull -> benchmark
-# tail of the journey ran (Tier-2 --inference). Paths are darwin-specific
-# (Ollama.app, the system state dir); config reads use sudo since init wrote the
-# state dir root-owned.
-# assert_ollama_bundle_integrity_macos: the engine's app bundle must still be a
-# valid, Gatekeeper-acceptable signed bundle after waired installed it (#329).
+# tail of the journey ran (Tier-2 --inference). Config reads use sudo since init
+# wrote the state dir root-owned.
 #
-# These asserts INVERT the old "waired-managed marker present (Ollama.app)"
-# check. That assert positively required the file whose presence was the bug:
-# anything added to a signed bundle's root invalidates its v2 resource seal, so
-# codesign reports "unsealed contents present in the bundle root", spctl
-# rejects, and on Apple Silicon every exec of the engine is killed. Ownership is
-# now recorded in the state dir instead, which is what the last check below
-# looks for.
+# assert_bundled_ollama_macos: the engine is the one waired installed, at the
+# one path the daemon will serve from.
+#
+# This replaces the bundle-integrity block that guarded the /Applications
+# layout — codesign/spctl on Ollama.app, a search for stray waired files inside
+# it, and the state-dir ownership record that stood in for the seal-breaking
+# in-bundle marker (#329). #492 moved the engine under the state dir, so there
+# is no bundle, no seal, and nothing to record: the path IS the ownership
+# claim, and asserting it is what catches an install that quietly resolved to
+# somebody else's Ollama (#139).
 #
 # Shared by the --inference and --daemon-engine legs: they install the engine by
-# different routes (init's own install vs the setup executor's) and only the
-# first had any bundle assert at all.
-assert_ollama_bundle_integrity_macos() {
-  local app=/Applications/Ollama.app
-  local record="$STATE_DIR/runtimes/ollama/darwin-managed.json"
-  local stray
+# different routes (init's own install vs the setup executor's).
+assert_bundled_ollama_macos() {
+  local bin="$STATE_DIR/runtimes/ollama/bin/ollama"
 
-  if [ ! -d "$app" ]; then
-    # Homebrew / a bare CLI install has no bundle to check. Counted, so a leg
-    # that silently stops testing this is visible in the summary (#215).
-    skip "no $app on this host; bundle-integrity asserts not applicable"
+  # 1. The engine waired installed is where waired installs it. Quoted
+  #    everywhere because this path has a space in it — /Library/Application
+  #    Support/waired — which the Linux twin never had to think about.
+  if sudo test -x "$bin"; then
+    ok "bundled ollama installed under the state dir ($bin)"
+  else
+    bad "no bundled ollama at $bin (init --inference-enabled=true should have installed one)"
+    sudo ls -la "$STATE_DIR/runtimes/ollama" 2>&1 | sed 's/^/    /' >&2 || true
     return
   fi
 
-  # 1. Nothing of ours anywhere inside the bundle. Checked as a search rather
-  #    than a single path so a future helper cannot reintroduce the class one
-  #    directory deeper.
-  stray="$(find "$app" -name '.waired-managed.json' 2>/dev/null | head -5)"
-  if [ -z "$stray" ]; then
-    ok "no waired file inside the Ollama.app bundle (signature seal intact)"
+  # 2. Its runners came out of the archive beside it. The macOS release is a
+  #    FLAT tarball — ollama, llama-server, the dylibs and mlx_metal_v*/ are
+  #    all siblings — so an extract that put the binary in the right place but
+  #    scattered the rest would still fail to serve, and would do it at first
+  #    inference rather than here.
+  if sudo test -x "$STATE_DIR/runtimes/ollama/bin/llama-server"; then
+    ok "the engine's runner is beside it (flat darwin archive extracted intact)"
   else
-    bad "waired wrote into the signed bundle — this breaks its signature (#329):"
-    printf '%s\n' "$stray" | sed 's/^/    /' >&2
+    bad "llama-server missing beside the engine — the darwin archive did not extract into bin/"
+    sudo ls "$STATE_DIR/runtimes/ollama/bin" 2>&1 | head -20 | sed 's/^/    /' >&2 || true
   fi
 
-  # 2. The seal itself. This is the assert that would have caught #329 on day
-  #    one: it fails on exactly the corruption the marker caused.
-  if codesign --verify --deep --strict "$app" 2>/dev/null; then
-    ok "codesign --verify --deep --strict passes on Ollama.app"
+  # 3. Nothing was installed into /Applications. Not a style point: that
+  #    location is shared with the user's own Ollama, and putting ours there is
+  #    what made #329 and #139 possible.
+  if [ ! -d /Applications/Ollama.app ]; then
+    ok "no Ollama.app in /Applications (waired installs nothing there since #492)"
   else
-    bad "Ollama.app fails codesign (macOS will refuse to run the engine):"
-    codesign --verify --deep --strict "$app" 2>&1 | sed 's/^/    /' >&2 || true
-  fi
-
-  # 3. Gatekeeper's own verdict on executing it.
-  if spctl --assess --type execute "$app" 2>/dev/null; then
-    ok "spctl accepts Ollama.app for execution"
-  else
-    bad "spctl rejects Ollama.app (Gatekeeper will block the engine):"
-    spctl --assess --type execute "$app" 2>&1 | sed 's/^/    /' >&2 || true
-  fi
-
-  # 4. Ownership is still recorded — outside the bundle, where it belongs.
-  if sudo test -f "$record"; then
-    ok "waired-managed record present outside the bundle ($record)"
-  else
-    bad "waired-managed record missing ($record) — waired will not recognise its own install"
+    # A pre-existing app is the user's and must survive untouched; only a
+    # freshly created one would mean waired put it there. The runner is a
+    # disposable VM, so anything here was created by this run.
+    bad "/Applications/Ollama.app exists on a fresh runner — something still installs there"
   fi
 }
 
 assert_inference_macos() {
-  local ollama_bin="" cand tps notready
+  local ollama_bin="$STATE_DIR/runtimes/ollama/bin/ollama" tps notready
 
   # PRIMARY: init's own transcript. See IT_INSTALL_FAILURE_RE's comment in
   # lib/installtest-enroll.sh — the installer's verdict outranks anything
@@ -231,23 +221,10 @@ assert_inference_macos() {
     ok "init transcript reports no engine install failure"
   fi
 
-  for cand in \
-      "$(command -v ollama 2>/dev/null || true)" \
-      /Applications/Ollama.app/Contents/Resources/ollama \
-      /usr/local/bin/ollama /opt/homebrew/bin/ollama; do
-    if [ -n "$cand" ] && [ -x "$cand" ]; then ollama_bin="$cand"; break; fi
-  done
-  # SECONDARY, and worded as presence rather than success: a half-finished
-  # install leaves an unpacked binary behind (#178).
-  if [ -n "$ollama_bin" ]; then
-    ok "ollama binary present ($ollama_bin)"
-  else
-    bad "ollama engine not installed (waired init --inference-enabled=true should have installed Ollama.app)"
-  fi
-  assert_ollama_bundle_integrity_macos
+  assert_bundled_ollama_macos
 
   # #567: the bundled engine is waired-owned on :9475 with its own store; the
-  # agent (PATH-resolving the Ollama.app binary) pulls there, NOT into the
+  # agent (spawning the state-dir binary) pulls there, NOT into the
   # upstream default :11434. `waired init --inference-enabled=true` started the
   # LaunchDaemon and #519-foreground-waited for the pull, so readiness is read
   # from the mgmt API on :9476 — the same source init polls — never a bare
@@ -274,8 +251,9 @@ assert_inference_macos() {
   else
     bad "bundled model not ready via mgmt API (deploy/pull failed?)"
     printf '%s\n' "$out" | sed 's/^/    /' >&2
-    # Diagnostics from the RIGHT store (:9475), using the resolved binary.
-    [ -n "$ollama_bin" ] && OLLAMA_HOST=127.0.0.1:9475 "$ollama_bin" list 2>&1 | sed 's/^/    :9475 /' || true
+    # Diagnostics from the RIGHT store (:9475), using the bundled binary.
+    sudo test -x "$ollama_bin" \
+      && sudo env OLLAMA_HOST=127.0.0.1:9475 "$ollama_bin" list 2>&1 | sed 's/^/    :9475 /' || true
     # #22: the agent captures `ollama serve`'s own stdout+stderr here, so a
     # startup crash (state="failed", last_error="...exit status 1") leaves
     # its REAL reason in this log — but nothing else surfaces it. State dir
@@ -476,7 +454,7 @@ daemon_path_enroll_macos() {
 # engine-less daemon-path first-run ends up WITH an engine (pre-N3 it stayed
 # engine-less and engine_install was red forever).
 assert_daemon_engine_macos() {
-  local out state setup_state desired_engine installed claim ollama_bin="" cand
+  local out state setup_state desired_engine installed claim
   grep -q "signing in via the daemon" "$INITLOG" 2>/dev/null \
     && ok "init took the daemon path (setup-executor-capable first-run)" \
     || bad "init did NOT take the daemon path (executor engine install not exercised)"
@@ -489,18 +467,10 @@ assert_daemon_engine_macos() {
   grep -q '^install_claimed=ollama' "$DAEMON_ENGINE_FLAG" 2>/dev/null \
     && ok "executor claimed the ollama install (install_claimed=ollama)" \
     || it_warn "did not catch install_claimed=ollama in the 2 s poll — non-fatal"
-  for cand in \
-      "$(command -v ollama 2>/dev/null || true)" \
-      /Applications/Ollama.app/Contents/Resources/ollama \
-      /usr/local/bin/ollama /opt/homebrew/bin/ollama; do
-    if [ -n "$cand" ] && [ -x "$cand" ]; then ollama_bin="$cand"; break; fi
-  done
-  [ -n "$ollama_bin" ] \
-    && ok "ollama engine installed by the daemon-path executor ($ollama_bin)" \
-    || bad "no engine after a daemon-path first-run (executor install did not land — pre-N3 behaviour)"
-  # #329: this leg installs through the setup executor, the path the browser
-  # wizard uses, and had no bundle assert at all until now.
-  assert_ollama_bundle_integrity_macos
+  # THE REGRESSION BAR: install.sh ran with --skip-ollama, so only the
+  # executor could have put an engine here — and since #492 "here" is one
+  # path, not "anywhere download.ResolveBinary can see" (#139).
+  assert_bundled_ollama_macos
   out="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
   state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
   case "$state" in
@@ -572,7 +542,8 @@ tar czf "$DIST/$tarball" -C "$WORK/stage" waired waired-agent VERSION \
 # --- Tier 1: run install.sh's darwin path + assert --------------------------
 # Ollama: install.sh no longer pre-installs the engine — `waired init` owns
 # the decision + install, so the Tier-2 `--inference-enabled=true` init below
-# downloads Ollama.app itself (#514 journey preserved, ordering fixed). The
+# downloads the bundled engine itself (#514 journey preserved, ordering
+# fixed; #492 moved it under the state dir). The
 # default path opts out explicitly (--skip-ollama -> WAIRED_NO_OLLAMA for
 # init) — Tier 1/2 only need the installer + enroll.
 inst_args=(--no-init)

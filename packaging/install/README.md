@@ -202,8 +202,13 @@ macOS-only:
 
 | Variable                   | Effect                                                                           |
 |----------------------------|----------------------------------------------------------------------------------|
-| `WAIRED_OLLAMA_DARWIN_URL` | Override the `Ollama.app` download URL used by init's engine install (pin a version / point at a mirror). |
 | `WAIRED_DARWIN_BINDIR`     | Override where `waired` / `waired-agent` are installed. Default `/usr/local/bin`. |
+
+`WAIRED_OLLAMA_DARWIN_URL` is retired (#492). macOS used to install the
+`Ollama.app` from `releases/latest`, so a mirror/pin override was the only way
+to control which engine landed; it now installs the same pinned, checksum-
+verified archive Linux does, from the URL baked into
+`internal/runtime/ollama_install.go`.
 
 Linux-only (apt repo metadata):
 

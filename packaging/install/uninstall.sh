@@ -12,9 +12,10 @@
 #               config and state (identity, keys, settings).  Linux:
 #               `apt-get remove`.
 #   --clean   — also delete config + state, the apt source install.sh added,
-#               the legacy Claude-proxy trust, and Ollama (app + downloaded
-#               models).  Linux: `apt-get purge` + repo cleanup.  Destructive
-#               and irreversible — guarded by a confirmation (see --yes).
+#               the legacy Claude-proxy trust, and the bundled Ollama with
+#               its downloaded models (it lives inside the state dir).
+#               Linux: `apt-get purge` + repo cleanup.  Destructive and
+#               irreversible — guarded by a confirmation (see --yes).
 #
 # Both tiers also best-effort DEREGISTER this device from the Control Plane
 # (it's revoked — removed from the account's device list and dropped from
@@ -192,9 +193,9 @@ device list). Pass --clean for a full local wipe.
 
 Options:
   --clean          also delete config + state, the apt source install.sh
-                   added, the legacy Claude-proxy trust, and Ollama (app +
-                   downloaded models). Destructive — asks to confirm unless
-                   --yes is given.
+                   added, the legacy Claude-proxy trust, and the bundled
+                   Ollama with its downloaded models. Destructive — asks to
+                   confirm unless --yes is given.
   --yes, -y        assume "yes" to the pre-uninstall confirmation (--clean
                    requires it on a non-interactive / piped shell)
   --dry-run        show every privileged command without running it
@@ -493,9 +494,13 @@ darwin_uninstall() {
             "$home/Library/Logs/waired-tray.err.log" \
             "$home/Library/Logs/waired-tray.out.log."* \
             "$home/Library/Logs/waired-tray.err.log."*
-        common_log "Removing Ollama.app"
-        # shellcheck disable=SC2086
-        common_run $SUDO rm -rf /Applications/Ollama.app
+        # /Applications/Ollama.app is NOT removed. Since #492 waired never
+        # installs one, and an Ollama.app on this host cannot be attributed
+        # to us — the in-bundle ownership marker had to go, because writing
+        # it is what broke the bundle's code signature (#329). Deleting a
+        # user's own install on the way out would be the worse mistake. The
+        # engine waired DID install went with the state dir above; the
+        # uninstall page says how to remove a leftover app by hand.
     fi
 }
 
