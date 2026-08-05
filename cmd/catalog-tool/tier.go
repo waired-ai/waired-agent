@@ -99,20 +99,16 @@ func printTierReport(res catalog.TierResult) {
 	}
 	changed := res.Changes()
 	fmt.Printf("quality_tier assignment (%s): %d variants, %d changed\n\n", mode, len(res.Assignments), len(changed))
-	fmt.Printf("%-5s %-5s %-6s %-7s %-46s %s\n", "TIER", "OLD", "Δ", "SWE", "MODEL/VARIANT", "CONF")
+	fmt.Printf("%-5s %-5s %-3s %-9s %-46s %s\n", "TIER", "OLD", "Δ", "COMPOSITE", "MODEL/VARIANT", "PLACED BY")
 	for _, a := range res.Assignments {
 		delta := ""
 		if a.Changed() {
 			delta = "*"
 		}
-		swe := ""
-		if a.SWEBench > 0 {
-			swe = fmt.Sprintf("%.1f", a.SWEBench)
-		}
-		conf := a.Confidence
+		placed := "composite"
 		if a.Overridden {
-			conf = "override"
+			placed = "override: " + a.OverrideReason
 		}
-		fmt.Printf("%-5d %-5d %-6s %-7s %-46s %s\n", a.NewTier, a.OldTier, delta, swe, a.Key(), conf)
+		fmt.Printf("%-5d %-5d %-3s %-9.2f %-46s %s\n", a.NewTier, a.OldTier, delta, a.Composite, a.Key(), placed)
 	}
 }

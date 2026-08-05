@@ -10,14 +10,18 @@ import (
 // VariantTier is one variant's tier assignment plus the inputs behind it, so a
 // reviewer can see WHY a tier landed where it did.
 type VariantTier struct {
-	ModelID    string  `json:"model_id"`
-	VariantID  string  `json:"variant_id"`
-	OldTier    int     `json:"old_tier"`
-	NewTier    int     `json:"new_tier"`
-	Composite  float64 `json:"composite"`
-	SWEBench   float64 `json:"swe_bench_verified"`
-	Confidence string  `json:"confidence,omitempty"`
-	Overridden bool    `json:"overridden,omitempty"`
+	ModelID   string  `json:"model_id"`
+	VariantID string  `json:"variant_id"`
+	OldTier   int     `json:"old_tier"`
+	NewTier   int     `json:"new_tier"`
+	Composite float64 `json:"composite"`
+
+	// Overridden records that a maintainer pinned this tier rather than
+	// letting the composite place it, and why. The reason is carried here so
+	// a reviewer reading the report does not have to open benchmarks.json to
+	// see that a judgment was made.
+	Overridden     bool   `json:"overridden,omitempty"`
+	OverrideReason string `json:"override_reason,omitempty"`
 }
 
 // Key is the "model_id/variant_id" identifier.
@@ -68,9 +72,10 @@ type scored struct {
 	isNew     bool
 }
 
-// AssignTiers derives quality_tier for every variant across the catalog from
-// benchmark data (#133). The composite is
-// scoring.CompositeScore(total_params, swe_bench_verified, footprint).
+// AssignTiers derives quality_tier for every variant across the catalog. The
+// composite is scoring.CompositeScore(total_params, footprint) — no benchmark
+// term, see that function's doc and
+// docs/decisions/20260805/1427-quality-tier-is-a-curated-ladder.md.
 //
 // Modes:
 //   - freeze (rerank=false, the default): variants that already carry a tier
@@ -81,7 +86,11 @@ type scored struct {
 //   - rerank (rerank=true): every non-pinned variant is re-ranked by composite
 //     and mapped onto spaced unique integers in [1,100]. Larger diff; opt-in.
 //
-// tier_override in benchmarks.json pins a variant's tier in both modes.
+// tier_override in benchmarks.json pins a variant's tier in both modes. It is
+// how a maintainer places a model the composite cannot order — a different
+// family or generation, where total parameter count says nothing useful. Every
+// override carries a reason and cites an accepted source; BenchmarkSet.
+// CheckEvidence enforces that, and the bundled-catalog test runs it.
 func AssignTiers(manifests []Manifest, bench BenchmarkSet, rerank bool) (TierResult, error) {
 	items := buildScored(manifests, bench)
 	if len(items) == 0 {
@@ -125,29 +134,32 @@ func AssignTiers(manifests []Manifest, bench BenchmarkSet, rerank bool) (TierRes
 func buildScored(manifests []Manifest, bench BenchmarkSet) []scored {
 	var items []scored
 	for _, m := range manifests {
+		// The lookup is by EXACT ModelID, the same key CheckEvidence
+		// validates rows against. An alias-keyed row would be silently
+		// invisible here.
 		mb, hasBench := bench.Models[m.ModelID]
 		for _, v := range m.Variants {
-			swe := 0.0
-			conf := ""
 			override := 0
+			reason := ""
 			if hasBench {
-				swe = mb.SWEBenchVerified
-				conf = mb.Confidence
 				if vb, ok := mb.Variants[v.VariantID]; ok {
 					override = vb.TierOverride
+					reason = vb.Reason
 				}
 			}
-			comp := scoring.CompositeScore(v.ParamCount, swe, variantFootprintMB(v))
+			comp := scoring.CompositeScore(v.ParamCount, variantFootprintMB(v))
 			items = append(items, scored{
 				vt: VariantTier{
 					ModelID: m.ModelID, VariantID: v.VariantID,
 					OldTier: v.QualityTier, Composite: comp,
-					SWEBench: swe, Confidence: conf,
 				},
 				composite: comp,
 				override:  override,
 				isNew:     v.QualityTier == 0,
 			})
+			if override > 0 {
+				items[len(items)-1].vt.OverrideReason = reason
+			}
 		}
 	}
 	return items
