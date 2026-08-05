@@ -1147,7 +1147,13 @@ type agentInferenceProvider struct {
 	// on and the operator's kill switch is not a control-plane
 	// instruction's to override (#465).
 	enableInference func() error
-	inferenceState  func() (current, desired state.InferenceState)
+	// disableInference turns local inference off, persisting the choice —
+	// the same act as `waired inference off`, reached from the #496 host
+	// cutoff rather than from a person. Wired alongside enableInference
+	// and nil in the same places, and for the same reason: a daemon
+	// started with --disable-inference has nothing to turn off.
+	disableInference func() error
+	inferenceState   func() (current, desired state.InferenceState)
 
 	// meshSnapshotFn, when non-nil, threads the inferencemesh
 	// aggregator into Select so a request whose model isn't local-
