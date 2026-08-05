@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
@@ -21,10 +20,9 @@ import (
 //     the developer's real items on darwin. (On Linux/CI the keychain
 //     stub returns ErrUnsupported and this is a no-op.)
 //
-//   - The OS well-known ollama paths. download.ResolveBinary stats
-//     /Applications/Ollama.app/... with no env in front of it, so
-//     runtimes_install_darwin_test.go could not exercise its install
-//     branch on a Mac that has Ollama.
+//   - (The OS well-known ollama paths used to be sealed here too. Since
+//     #493 nothing in the tree looks for an ollama outside the state dir,
+//     so there is no host install left to leak in.)
 //
 //   - The user cache / home directory. os.UserCacheDir reads HOME on
 //     darwin, LocalAppData on Windows and XDG_CACHE_HOME elsewhere. The
@@ -50,9 +48,6 @@ func TestMain(m *testing.M) {
 func runTests(m *testing.M) int {
 	restoreStore := securestore.SwapStoreForTest(securestore.NewMemStore())
 	defer restoreStore()
-	restoreCands := download.SwapCandidatesForTest(nil)
-	defer restoreCands()
-
 	home, err := os.MkdirTemp("", "waired-cmd-test-home")
 	if err != nil {
 		panic("seal home: " + err.Error())
