@@ -232,6 +232,36 @@ func TestBootstrap_PreferredDiffersFromBundledPullsOnlyThePreferred(t *testing.T
 	}
 }
 
+// PRODUCT CONTRACT (issue #542): the EQUAL case of the bar above — when the
+// operator's choice IS the hardware auto-select, that model is downloaded
+// once.
+//
+// What provides that today is the ordering (#306): bootstrapPreferredModel
+// takes the model on, so the bundled arm never runs and there is no second
+// dispatch to dedup. #305's in-flight registry is the backstop underneath —
+// it is what caught this when the two ran back to back — and it keeps its
+// own pin at its own seam, TestPullModel_SecondDispatchJoinsTheInFlightJob.
+//
+// Driven through runEngineBootstrap rather than by calling the two
+// bootstraps directly. The version this replaces called them in the
+// pre-#306 order, through bootstrapBundledModel — a function the product
+// stopped calling at #379 — so it exercised a sequence no boot produces
+// while keeping that function compilable.
+func TestBootstrap_PreferredEqualsBundledDownloadsItOnce(t *testing.T) {
+	r := newBlockingRunner(t)
+	p, installed := orderProvider(t, bounceTestManifests(), r)
+	p.cfg.BundledModelID = "model-a"   // what the daemon picked from hardware
+	p.cfg.PreferredModelID = "model-a" // and what the operator chose too
+
+	got := bootstrapPulledTags(t, p, r, installed)
+
+	if len(got) != 1 || got[0] != "a:q4" {
+		t.Fatalf("tags pulled = %v, want exactly [a:q4] — one model, one "+
+			"download; two dispatches for the same id fight over one state "+
+			"row and whichever lands first wipes the other's byte progress", got)
+	}
+}
+
 // PRODUCT CONTRACT on the SHAPE of the gate: the bundled pre-pull is the
 // fallback for a host with nothing else to serve, so it is skipped only
 // when the operator's model was actually taken on — never merely because a
@@ -277,9 +307,9 @@ func TestBootstrap_PreferenceOutsideTheCatalogStillPullsTheBundled(t *testing.T)
 // PRODUCT CONTRACT: suppressing the bundled PRE-PULL must not suppress
 // the bundled ACTIVATION.
 //
-// bootstrapBundledModel is not only a download — its already-ready arm is
-// the only caller of activateBundledIfUnset on the boot path. Gating the
-// whole function on "someone else took the model on" would leave
+// bundledPrePullTarget is not only a download decision — its already-ready
+// arm is the only caller of activateBundledIfUnset on the boot path.
+// Gating the whole call on "someone else took the model on" would leave
 // state.Active nil for the hours the chosen model downloads, on a host
 // whose bundled weights are sitting on disk: EngineReady() false,
 // engineModelForActive() empty, the boot benchmark 400ing,
