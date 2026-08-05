@@ -134,30 +134,38 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	// served by peer-A (fallback from peer-B, reason=capacity_full)".
 	setSelectionHeaders(w, sel, probed.FallbackFrom, probed.Reason, h.deps.Recorder)
 
-	// #623 context-window guard, on the SERVING side (waired-agent#436).
-	// The requesting node already holds its own copy of this check, sized
-	// from the window this peer advertised — but an advertisement is a
-	// snapshot, and a re-tune between the push and the request leaves the
-	// requester guarding against a window this engine no longer serves.
-	// Without a check here that prompt reaches ollama and loses its head
-	// silently, which is the failure #623 exists to prevent.
+	// #623 context-window guard. On the overlay listener this is the
+	// SERVING side (waired-agent#436): the requesting node holds its own
+	// copy of the check, sized from the window this peer advertised, but
+	// an advertisement is a snapshot and a re-tune between the push and
+	// the request leaves the requester guarding against a window this
+	// engine no longer serves. Without a check here that prompt reaches
+	// ollama and loses its head silently, which is the failure #623
+	// exists to prevent.
 	//
-	// Deps.ContextWindowFor is the right input rather than the DECLARED
-	// window: it reports what this engine is actually sized for right now,
-	// which is the quantity a truncation depends on. 0 fails open.
-	if h.deps.ContextWindowFor != nil {
-		if win := h.deps.ContextWindowFor(sel.ModelID); win > 0 {
-			if n := CountOpenAIPromptTokensApprox(body); n > win {
-				rr.fail(http.StatusBadRequest, "context_overflow")
-				slog.Debug("openai context overflow", "model", sel.ModelID, "tokens", n, "window", win)
-				// The header is what lets a requesting waired node turn this
-				// into the Anthropic 400 its client compacts on; a plain
-				// OpenAI error would reach Claude Code as an upstream fault.
-				w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
-				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "context_length_exceeded",
-					fmt.Sprintf("prompt is too long: %d tokens > %d maximum", n, win))
-				return
-			}
+	// effectiveContextWindow rather than Deps.ContextWindowFor directly:
+	// the loopback and data-plane surfaces can dispatch to a peer, and
+	// ContextWindowFor knows only this device — its manifests, its
+	// applied tuning. Guarding a peer-bound request against the local
+	// window refuses prompts the peer could serve when this device holds
+	// the smaller model, and passes prompts the peer cannot when it holds
+	// the larger. Selection.ContextWindow is what the chosen peer says it
+	// serves and wins whenever it is set. The overlay's selection is
+	// local by construction, so it reads 0 there and this falls back to
+	// what this engine is actually sized for right now — the quantity a
+	// truncation depends on, and the right one for the serving half.
+	// 0 means "unknown" and fails open.
+	if win := effectiveContextWindow(h.deps, sel); win > 0 {
+		if n := CountOpenAIPromptTokensApprox(body); n > win {
+			rr.fail(http.StatusBadRequest, "context_overflow")
+			slog.Debug("openai context overflow", "model", sel.ModelID, "tokens", n, "window", win)
+			// The header is what lets a requesting waired node turn this
+			// into the Anthropic 400 its client compacts on; a plain
+			// OpenAI error would reach Claude Code as an upstream fault.
+			w.Header().Set(HeaderLocalError, LocalErrorContextOverflow)
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "context_length_exceeded",
+				fmt.Sprintf("prompt is too long: %d tokens > %d maximum", n, win))
+			return
 		}
 	}
 
