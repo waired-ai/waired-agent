@@ -98,7 +98,7 @@ func TestParallelProbe_LocalCandidateFastPath(t *testing.T) {
 // among three remote candidates, the one whose probe returns ready
 // first is the winner. The other two get their results recorded but
 // don't influence the winner.
-func TestParallelProbe_FirstReadyWins(t *testing.T) {
+func TestParallelProbe_BestRankedReadyWins(t *testing.T) {
 	rtA := &stubRT{status: 200, body: readyBody(0, 4), delay: 5 * time.Millisecond}
 	rtB := &stubRT{status: 200, body: readyBody(4, 4), delay: 5 * time.Millisecond}
 	rtC := &stubRT{status: 200, body: readyBody(2, 4), delay: 5 * time.Millisecond}
@@ -112,8 +112,10 @@ func TestParallelProbe_FirstReadyWins(t *testing.T) {
 	}
 	cands := []router.Candidate{candFor("peer-A"), candFor("peer-B"), candFor("peer-C")}
 	winner, all := ParallelProbe(context.Background(), cands, lookup, 100*time.Millisecond)
-	if winner != 0 && winner != 2 {
-		t.Errorf("winner = %d, want 0 (peer-A) or 2 (peer-C) — both ready", winner)
+	// peer-A and peer-C are both ready. peer-A is ranked higher, so it
+	// wins regardless of which probe answered first.
+	if winner != 0 {
+		t.Errorf("winner = %d, want 0 (peer-A, the best-ranked ready candidate)", winner)
 	}
 	// peer-B is capacity_full → must be in results as not-ready.
 	if all[1].IsReady() {
@@ -122,9 +124,15 @@ func TestParallelProbe_FirstReadyWins(t *testing.T) {
 }
 
 // TestParallelProbe_StickyOrderingRespected makes the position-0
-// promise concrete: when candidate[0] is ready, it wins even if other
-// candidates would also be ready. Sticky-bound peer at position 0
-// (via Selector) keeps KV cache affinity.
+// promise concrete: when candidate[0] is ready, it wins even if another
+// candidate answers its probe sooner. The sticky-bound peer that the
+// Selector hoisted to position 0 keeps the conversation's KV cache.
+//
+// This is the case that used to go the other way. The winner was the
+// first arrival, so on a mesh of probeFanoutK peers or fewer — every
+// candidate probed at once — the Selector's whole ranking was decided
+// by /healthz latency instead. See
+// docs/decisions/20260805/1703-probe-honours-the-selector-ranking.md.
 func TestParallelProbe_StickyOrderingRespected(t *testing.T) {
 	// Both ready, but peer-Z is the sticky-bound candidate at index 0.
 	rtZ := &stubRT{status: 200, body: readyBody(0, 4)}
@@ -139,16 +147,60 @@ func TestParallelProbe_StickyOrderingRespected(t *testing.T) {
 		return nil, "", fmt.Errorf("no stub for %q", peerID)
 	}
 	cands := []router.Candidate{candFor("peer-Z"), candFor("peer-A")}
-	// Add a small delay to make sure peer-Z's probe completes after
-	// peer-A's would have — without sticky-first, peer-A would win.
+	// peer-Z answers a full 10 ms after peer-A. Under the old
+	// first-arrival rule peer-A won this every time.
 	rtZ.delay = 10 * time.Millisecond
+	winner, _ := ParallelProbe(context.Background(), cands, lookup, 500*time.Millisecond)
+	if winner != 0 {
+		t.Errorf("winner = %d, want 0 (peer-Z, the sticky-bound head)", winner)
+	}
+}
+
+// TestParallelProbe_FallsPastAHeadThatIsNotReady is the other half of
+// the ranking rule: honouring the order must not mean waiting for a
+// peer that already said no. peer-A refuses, so peer-B wins — and
+// because a refusal settles the ranking immediately, without waiting
+// out the budget.
+func TestParallelProbe_FallsPastAHeadThatIsNotReady(t *testing.T) {
+	rtA := &stubRT{status: 200, body: readyBody(4, 4)} // capacity full
+	rtB := &stubRT{status: 200, body: readyBody(0, 4)}
+	rtC := &stubRT{status: 200, body: readyBody(0, 4)}
+	lookup := func(peerID string) (http.RoundTripper, string, error) {
+		return map[string]*stubRT{"peer-A": rtA, "peer-B": rtB, "peer-C": rtC}[peerID],
+			"http://" + peerID + ":55000", nil
+	}
+	cands := []router.Candidate{candFor("peer-A"), candFor("peer-B"), candFor("peer-C")}
+	start := time.Now()
+	winner, _ := ParallelProbe(context.Background(), cands, lookup, 2*time.Second)
+	elapsed := time.Since(start)
+	if winner != 1 {
+		t.Errorf("winner = %d, want 1 (peer-B, best-ranked ready)", winner)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("took %v; a settled not-ready head must release the decision at once, not at the budget", elapsed)
+	}
+}
+
+// TestParallelProbe_HeadThatHangsCostsOnlyTheBudget bounds what
+// honouring the ranking can cost. A head that never answers holds the
+// decision, but only until the budget expires — which is what the
+// budget is for. The lower-ranked ready peer then wins.
+func TestParallelProbe_HeadThatHangsCostsOnlyTheBudget(t *testing.T) {
+	rtA := &stubRT{status: 200, body: readyBody(0, 4), delay: 2 * time.Second}
+	rtB := &stubRT{status: 200, body: readyBody(0, 4)}
+	lookup := func(peerID string) (http.RoundTripper, string, error) {
+		return map[string]*stubRT{"peer-A": rtA, "peer-B": rtB}[peerID],
+			"http://" + peerID + ":55000", nil
+	}
+	cands := []router.Candidate{candFor("peer-A"), candFor("peer-B")}
+	start := time.Now()
 	winner, _ := ParallelProbe(context.Background(), cands, lookup, 50*time.Millisecond)
-	// Both can win; the contract is "first ready", and both candidates
-	// race to ready. The Selector's ordering doesn't dictate who wins
-	// the race, just who appears at position 0 in the input slice.
-	// Verifies that ParallelProbe doesn't introduce ordering bias.
-	if winner != 0 && winner != 1 {
-		t.Errorf("winner = %d, want 0 or 1", winner)
+	elapsed := time.Since(start)
+	if winner != 1 {
+		t.Errorf("winner = %d, want 1 (peer-B, after the head timed out)", winner)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("took %v, want the 50 ms budget to bound it", elapsed)
 	}
 }
 
@@ -187,10 +239,12 @@ func TestParallelProbe_AllFailReturnsMinusOne(t *testing.T) {
 }
 
 // TestParallelProbe_CancelsLosersOnFirstReady confirms the cancel
-// propagates to in-flight probes. peer-A returns ready immediately;
-// peer-B is delayed 200 ms; ParallelProbe should return before peer-B
-// completes, and peer-B's RoundTrip must observe context cancellation.
-func TestParallelProbe_CancelsLosersOnFirstReady(t *testing.T) {
+// propagates to in-flight probes. peer-A is the best-ranked candidate
+// and returns ready immediately; peer-B is delayed 200 ms. Nothing
+// slower can change the answer once the head is ready, so ParallelProbe
+// must return before peer-B completes and peer-B's RoundTrip must
+// observe context cancellation.
+func TestParallelProbe_CancelsLosersOnceTheWinnerIsSettled(t *testing.T) {
 	rtA := &stubRT{status: 200, body: readyBody(0, 4)}
 	rtB := &stubRT{status: 200, body: readyBody(0, 4), delay: 200 * time.Millisecond}
 	lookup := func(peerID string) (http.RoundTripper, string, error) {

@@ -186,11 +186,12 @@ type Inputs struct {
 
 	// --- Phase 7 routing inputs --------------------------------------
 	//
-	// All four fields are optional. When nil/empty, the Selector
+	// All five fields are optional. When nil/empty, the Selector
 	// degrades gracefully:
 	//
 	//   - Sticky nil          → no affinity lookup, score-based pick wins
 	//   - LocalInFlight nil   → no admission (all candidates eligible)
+	//   - StickyInFlight nil  → no concurrent-sub spread, sticky-first as before
 	//   - LocalRTT nil        → RTT tie-break skipped
 	//   - LocalErrors nil     → error-rate tie-break skipped
 	//
@@ -212,6 +213,20 @@ type Inputs struct {
 	// and Acquires the slot on the winner; the returned release is
 	// embedded into Selection.Release for the gateway to defer.
 	LocalInFlight *InFlightTracker
+
+	// StickyInFlight counts those same outstanding requests per
+	// (sticky key, peer) rather than per peer, which is what tells a
+	// conversation's second CONCURRENT request apart from its next
+	// sequential one. When the bound peer is already serving one,
+	// demoteBusySticky moves it below the other candidates so the
+	// sub-agent fan-out spreads instead of queueing on one machine
+	// (waired-ai/waired#828); when it is idle the binding is honoured
+	// unchanged and the KV prefix is reused. Acquired in the same
+	// commit closure as LocalInFlight and released with it.
+	//
+	// nil disables the spread entirely: every request then takes the
+	// plain sticky-first path, which is the pre-#828 behaviour.
+	StickyInFlight *StickyInFlight
 
 	// LocalRTT returns deviceID → recent observed overlay RTT (ms).
 	// Used as the second tie-break after error rate. Closure shape so
@@ -999,12 +1014,18 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 		return nil, ErrAllPeersOverloaded
 	}
 
+	// Concurrent-sub spread (waired-ai/waired#828). Runs last, on the
+	// final ordering: the tier partition and the capacity filter have
+	// both already had their say, so "the slot after this one" means
+	// what it says.
+	eligible, spreadFrom := s.demoteBusySticky(req, eligible, k)
+
 	if k > len(eligible) {
 		k = len(eligible)
 	}
 	out := make([]Candidate, 0, k)
 	for i := 0; i < k; i++ {
-		out = append(out, s.makeMeshCandidate(req, manifest, reasons, eligible[i], eligible))
+		out = append(out, s.makeMeshCandidate(req, manifest, reasons, eligible[i], eligible, spreadFrom))
 	}
 	return out, nil
 }
@@ -1014,7 +1035,12 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 // performs the actual InFlightTracker Acquire and sticky Touch, so
 // SelectK never modifies global state — only the gateway's call to
 // Commit does.
-func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, reasons []string, c meshCandidate, all []meshCandidate) Candidate {
+//
+// spreadFrom names the peer demoteBusySticky moved out of the way, or
+// "" when the sticky binding was left alone. It is what tells the
+// commit closure that landing somewhere else is deliberate rather than
+// a new preference.
+func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, reasons []string, c meshCandidate, all []meshCandidate, spreadFrom string) Candidate {
 	kindLabel := "mesh fallback"
 	if c.public {
 		kindLabel = "public share fallback"
@@ -1024,6 +1050,15 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%d, in_flight=%d, cap=%d, load=%.2f, silent=%v)",
 			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, c.rttMS, c.inFlight, c.capacity, c.loadFraction, c.silent),
 	)
+	if spreadFrom != "" {
+		// Named on every candidate of the round, not just the demoted
+		// one, because `waired infer --explain` prints the reasons of
+		// the peer that WON and "why am I not on my usual node" is the
+		// question being answered.
+		candReasons = append(candReasons,
+			fmt.Sprintf("conversation is already being served by its sticky-bound peer; demoted it for this request (%d concurrent)",
+				s.in.StickyInFlight.InFlight(req.StickyID, spreadFrom)))
+	}
 	decision := Decision{
 		Reason:   candReasons,
 		Fallback: fallbackTrace(all, c.deviceID),
@@ -1058,13 +1093,26 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 			if !ok {
 				return Selection{}, false
 			}
+			// Counted from the same point and given back with the same
+			// closure as the admission slot, so the two can never
+			// disagree about whether this request is outstanding.
+			release = chainRelease(s.acquireStickySlot(req.StickyID, c.deviceID), release)
 			// A public grant is "used" exactly when a request is committed
 			// to its provider — after admission succeeds, so a candidate we
 			// probed but dropped for capacity is not counted (waired#898).
 			if c.public && c.grantID != "" {
 				s.notifyPublicGrantUsed(c.grantID)
 			}
-			if s.in.Sticky != nil && req.StickyID != "" {
+			// A request that was spread off its bound peer does NOT
+			// rebind the conversation (waired-ai/waired#828). The
+			// binding describes where this conversation's prefix lives;
+			// a sub-agent sent elsewhere because that peer was busy is a
+			// deliberate one-request detour, and letting it move the
+			// binding would walk the whole conversation onto whichever
+			// peer happened to take the last overlapping sub. The bound
+			// peer winning as the last resort still refreshes the TTL.
+			spread := spreadFrom != "" && c.deviceID != spreadFrom
+			if s.in.Sticky != nil && req.StickyID != "" && !spread {
 				s.in.Sticky.Touch(req.StickyID, c.deviceID)
 			}
 			return Selection{
@@ -1176,6 +1224,80 @@ func applyStickyFirst(req Request, store *StickyStore, cands []meshCandidate) []
 		return out
 	}
 	return cands
+}
+
+// demoteBusySticky is the concurrent-sub spread (waired-ai/waired#828).
+// applyStickyFirst put the conversation's bound peer at the head; if
+// that peer is ALREADY serving a request for the same sticky key, this
+// moves it back down so the next-ranked candidate leads instead, and
+// reports which peer the request was spread away from ("" when nothing
+// moved). A coding agent that fans a turn out to several sub-agents
+// otherwise queues all of them on one machine while the rest of the
+// mesh idles.
+//
+// The rule that keeps affinity intact is the in-flight count itself:
+// sequential requests of one conversation never overlap, so the count
+// is 0 when the next one arrives and the binding is honoured unchanged.
+// Spreading them too would rebuild the KV prefix on a new peer every
+// turn, which is the cost sticky routing exists to avoid.
+//
+// Two orderings are deliberately NOT overridden:
+//
+//   - An operator's manual pin. "Use this machine" outranks a
+//     balancing preference, so a pinned bound peer stays put.
+//   - The own > public partition (waired#827). The peer is demoted
+//     within its own grant tier only: spreading an owner's traffic onto
+//     a stranger's machine because two of their own sub-agents
+//     overlapped would be a much bigger decision than this one.
+//
+// It also stays inside the probe window (the first k candidates the
+// gateway actually probes). Demoting past it would silently drop a
+// healthy peer from the round, and a round where every probed peer
+// failed would then 503 with the bound peer sitting there able to serve
+// — the point is to prefer another peer, not to refuse this one.
+func (s *Selector) demoteBusySticky(req Request, cands []meshCandidate, k int) ([]meshCandidate, string) {
+	if s.in.Sticky == nil || s.in.StickyInFlight == nil || req.StickyID == "" {
+		return cands, ""
+	}
+	stuckTo, ok := s.in.Sticky.Lookup(req.StickyID)
+	if !ok {
+		return cands, ""
+	}
+	if s.in.RoutingMode == state.RoutingModePinned && s.in.PinnedPeerDeviceID == stuckTo {
+		return cands, ""
+	}
+	if s.in.StickyInFlight.InFlight(req.StickyID, stuckTo) == 0 {
+		return cands, ""
+	}
+	idx := -1
+	for i, c := range cands {
+		if c.deviceID == stuckTo {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return cands, ""
+	}
+	// Last slot inside the probe window that belongs to the same grant
+	// tier. j == idx means the bound peer is the only candidate this
+	// request may be spread to, so there is nothing to demote it below.
+	window := min(k, len(cands))
+	j := -1
+	for i := 0; i < window; i++ {
+		if cands[i].public == cands[idx].public {
+			j = i
+		}
+	}
+	if j <= idx {
+		return cands, ""
+	}
+	out := make([]meshCandidate, 0, len(cands))
+	out = append(out, cands[:idx]...)
+	out = append(out, cands[idx+1:j+1]...)
+	out = append(out, cands[idx])
+	out = append(out, cands[j+1:]...)
+	return out, stuckTo
 }
 
 // buildMeshCandidates filters the snapshot to peers that (a) carry
@@ -1345,6 +1467,29 @@ func (s *Selector) acquireSlot(c meshCandidate) (func(), bool) {
 	return s.in.LocalInFlight.Acquire(c.deviceID, c.capacity)
 }
 
+// acquireStickySlot counts this request against (sticky key, peer) so
+// the NEXT request of the same conversation can see that this one is
+// still running. Unlike acquireSlot it cannot refuse — it is a
+// balancing signal, not admission. Returns noopRelease when the tracker
+// is unwired or the request carries no affinity hint.
+func (s *Selector) acquireStickySlot(stickyID, deviceID string) func() {
+	if s.in.StickyInFlight == nil || stickyID == "" {
+		return noopRelease
+	}
+	return s.in.StickyInFlight.Acquire(stickyID, deviceID)
+}
+
+// chainRelease folds two release closures into the single one that
+// reaches Selection.Release, so the gateway keeps its one `defer
+// sel.Release()` and neither counter can be given back without the
+// other.
+func chainRelease(first, second func()) func() {
+	return func() {
+		first()
+		second()
+	}
+}
+
 // rttBucketMS is the width of the coarse RTT band the sort quantises
 // observed RTT into before the load-fraction axis runs. The intent
 // (matching disco.Service's "RTT is a coarse signal where path
@@ -1407,8 +1552,11 @@ func sortMeshCandidates(cands []meshCandidate) {
 		// Above priority: silence predicts a failed probe, and there
 		// are only probeFanoutK slots — spending one on a silent
 		// High-priority peer instead of a healthy Middle one lowers the
-		// expected first-round hit rate and buys nothing, since the
-		// silent peer can still win on arrival order if it is fine.
+		// expected first-round hit rate and buys nothing. A silent peer
+		// is still probed and still serves the request when every peer
+		// ranked above it fails its probe, which is what keeps #729's
+		// rule — silence must not black-hole a peer — intact: it is a
+		// last resort, not an exclusion.
 		//
 		// Below public: a silent OWN peer must outrank a healthy PUBLIC
 		// one, or a 45-second gap in pongs would push the owner's
