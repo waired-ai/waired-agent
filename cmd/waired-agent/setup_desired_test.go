@@ -67,6 +67,10 @@ type fakeSetupProvider struct {
 	// order. The reason is kept rather than a bare count so a test can
 	// tell the executor-done trigger from the engine-appeared one (#304).
 	engineStarts []string
+	// desiredNotes records every setupNoteDesired call, in order. The
+	// boot pre-pull's hold reads nothing else (#379), so what the
+	// reconciler reports here IS the interface between the two.
+	desiredNotes []desiredNote
 	pulls        []string
 	pullErr      error
 	stateDir     string
@@ -106,6 +110,14 @@ type engineStateCall struct {
 }
 
 type engineState struct{ installed, ready bool }
+
+// desiredNote is one setupNoteDesired call: the canonical desired model
+// id the frame carried ("" when it carried none), and whether a wizard
+// was driving the host when it was folded.
+type desiredNote struct {
+	modelID string
+	driving bool
+}
 
 func (f *fakeSetupProvider) setupEngineState(ctx context.Context, engine string) (bool, bool) {
 	f.mu.Lock()
@@ -282,6 +294,18 @@ func (f *fakeSetupProvider) engineStartCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.engineStarts)
+}
+
+func (f *fakeSetupProvider) setupNoteDesired(modelID string, driving bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.desiredNotes = append(f.desiredNotes, desiredNote{modelID: modelID, driving: driving})
+}
+
+func (f *fakeSetupProvider) notes() []desiredNote {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]desiredNote(nil), f.desiredNotes...)
 }
 
 // fakeClock drives the reconciler's `now` seam so lease expiry is tested
@@ -2721,5 +2745,82 @@ func TestSetupStateDropsTheRefusalWhenTheEngineReappears(t *testing.T) {
 	if st := r.SetupState(ctx); st.ModelErrorCode != "" || st.ModelErrorDetail != "" {
 		t.Fatalf("a re-admitted model still reported refused: code=%q detail=%q",
 			st.ModelErrorCode, st.ModelErrorDetail)
+	}
+}
+
+// PRODUCT CONTRACT: every folded frame is reported to the provider,
+// INCLUDING the empty one that takes the never-set-up fast path.
+//
+// That frame is the only evidence a host has that the control plane
+// answered and nobody is driving it, and the boot pre-pull's hold releases
+// on nothing else (#379). Returning silently there is what would leave an
+// ordinary restart holding its fallback download for the whole grace.
+func TestApplyReportsAnEmptyFrameOnAHostNobodyIsDriving(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+
+	r.Apply(context.Background(), &signer.InferenceState{})
+
+	notes := f.notes()
+	if len(notes) != 1 {
+		t.Fatalf("notes = %+v, want exactly one — the empty frame is still an answer", notes)
+	}
+	if notes[0].modelID != "" || notes[0].driving {
+		t.Fatalf("note = %+v, want {modelID:\"\" driving:false}", notes[0])
+	}
+}
+
+// The reported id is the CANONICAL one, for the same reason every other
+// consumer in Apply gets it: the hold compares nothing, but it stands down
+// permanently on the strength of this value, and an alias would file the
+// stand-down under a name no other surface uses.
+//
+// Driving follows #308's own freshness test: an instruction that arrives
+// unchanged on the first frame after boot is the control plane replaying a
+// device set up weeks ago, while one that changes while we are watching is
+// somebody writing it right now.
+func TestApplyReportsTheCanonicalModelAndWhoIsDriving(t *testing.T) {
+	f := &fakeSetupProvider{manifests: canonicalTestManifests(), modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	// First frame: the CP's persisted state, replayed at boot.
+	r.Apply(ctx, desiredFrame("", "", 0))
+	// Then the wizard writes a choice, by one of its aliases.
+	r.Apply(ctx, desiredFrame("", "waired/medium", 0))
+
+	notes := f.notes()
+	if len(notes) != 2 {
+		t.Fatalf("notes = %+v, want one per frame", notes)
+	}
+	last := notes[len(notes)-1]
+	if last.modelID != "qwen2.5-coder-14b-instruct" {
+		t.Fatalf("note model = %q, want the canonical id for waired/medium", last.modelID)
+	}
+	if !last.driving {
+		t.Fatal("driving = false for an instruction that changed while the reconciler " +
+			"watched — that is the wizard, and the boot pre-pull must hold for it")
+	}
+}
+
+// The executor lease is the other half of "somebody is driving": the
+// elevated CLI heartbeats through the whole engine install, which happens
+// BEFORE the control plane has a desired model to write. A host that
+// restarts mid-install folds empty frames the entire time.
+func TestApplyReportsDrivingFromTheExecutorLeaseAlone(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	ctx := context.Background()
+
+	r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
+	r.Apply(ctx, &signer.InferenceState{})
+
+	notes := f.notes()
+	if len(notes) != 1 {
+		t.Fatalf("notes = %+v, want exactly one", notes)
+	}
+	if !notes[0].driving {
+		t.Fatal("driving = false while an elevated executor is attached — the wizard is " +
+			"installing the engine, and the model step is the next thing it does")
 	}
 }

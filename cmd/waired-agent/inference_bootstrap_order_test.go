@@ -48,6 +48,13 @@ func bootstrapPulledTags(t *testing.T, p *agentInferenceProvider, r *blockingRun
 	t.Helper()
 	*installed = true
 	p.runEngineBootstrap(context.Background(), "boot")
+	// The control plane answers, and nobody is driving this host — which is
+	// what every fixture in this file describes. Without it the bundled
+	// fallback's dispatch sits out prePullFrameGrace waiting for a frame
+	// that a unit test never sends (#379). Ordering is not a race: the
+	// note is sticky state, not a wakeup, so the waiter reads it whether it
+	// has parked yet or not.
+	p.setupNoteDesired("", false)
 	r.releaseAll()
 	p.waitForPulls()
 	return r.pulledTags()

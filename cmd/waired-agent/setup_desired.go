@@ -261,6 +261,17 @@ type setupProvider interface {
 	// HTTP request handler, a network-map frame) die long before a cold
 	// start finishes. reason is for the daemon log.
 	startSetupEngine(reason string)
+	// setupNoteDesired reports what the control plane's latest frame said
+	// about this host — the canonical desired model id ("" when the frame
+	// named none) and whether a wizard is driving the host right now — so
+	// the boot pre-pull can stand down instead of racing the choice the
+	// operator is about to make (#379).
+	//
+	// Called on EVERY frame, including the ones that carry no instruction
+	// at all: "a frame arrived and nobody is driving" is the evidence that
+	// releases the hold, and it is only observable from the empty frame.
+	// Fire-and-forget, like startSetupEngine.
+	setupNoteDesired(modelID string, driving bool)
 }
 
 // setupReconciler applies the CP-served desired state (waired#835 §6)
@@ -439,7 +450,16 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	baseline := !r.desiredSeen
 	r.desiredSeen = true
 	if d == (setupDesired{}) && !r.active {
+		// A wizard can be driving before the control plane has written a
+		// single desired value — the elevated executor heartbeats through
+		// the whole engine install — so the lease is read even here (#379).
+		driving := r.leaseLiveLocked()
 		r.mu.Unlock()
+		// Reported rather than returned silently: this frame is the one
+		// that says "the control plane answered and nobody is driving",
+		// which is the only evidence that releases the boot pre-pull hold
+		// on a host that will never be set up from a browser.
+		r.provider.setupNoteDesired("", driving)
 		return
 	}
 	changed := d != r.desired
@@ -470,7 +490,13 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		}
 	}
 	applied := r.modelApplied[d.modelID]
+	// #379: r.active is true by now, so "a wizard is driving" is the lease
+	// plus the freshness test #308 already uses — an instruction we watched
+	// change is someone writing it while we were here, and one we only ever
+	// read back is the control plane replaying a device set up weeks ago.
+	driving := r.leaseLiveLocked() || !r.desiredStaleLocked()
 	r.mu.Unlock()
+	r.provider.setupNoteDesired(d.modelID, driving)
 	if retried && r.logger != nil {
 		r.logger.Info("setup: retry requested; re-admitting the desired model",
 			"gen", d.modelGen, "model", d.modelID)

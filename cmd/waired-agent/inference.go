@@ -973,6 +973,39 @@ type agentInferenceProvider struct {
 	// time, so a second trigger arriving mid-load must drop, not queue.
 	warmInFlight atomic.Bool
 
+	// setupFrameMu guards the four fields below: what the last folded
+	// control-plane frame said about this host. Written by the setup
+	// reconciler (setupNoteDesired), read by the boot pre-pull's hold
+	// (#379). A leaf lock like pullMu — nothing is called while it is held
+	// except the channel swap.
+	setupFrameMu sync.Mutex
+	// setupFrameCh is closed and replaced on every note, so a waiter parks
+	// on one read of it and wakes on the next frame without polling. Lazily
+	// built: several unit-test providers construct this struct literally.
+	setupFrameCh chan struct{}
+	// setupNamedModel is the first desired model id setup ever named, and
+	// it is STICKY. Once the control plane has said which model this host
+	// is for, the boot pre-pull of the bundled fallback is wrong forever —
+	// a later frame that carries no model (the CP replaying an empty
+	// instruction, a wizard page closed mid-flight) must not re-arm it.
+	setupNamedModel string
+	// setupFrameSeen records that at least one frame was folded. "No frame
+	// yet" and "a frame that named nothing" are different answers: the
+	// first is a host that may still be enrolling, the second is proof the
+	// control plane has spoken.
+	setupFrameSeen bool
+	// setupDriving is whether a wizard was driving this host as of the last
+	// frame. Not sticky, deliberately: the hold ends when the wizard goes
+	// away, and both of the predicates behind it self-expire.
+	setupDriving bool
+	// prePullFrameGrace bounds the wait for the FIRST frame, after which an
+	// unenrolled or offline host pre-pulls exactly as it always did.
+	// prePullHoldMax is the ceiling on holding for a wizard that is driving
+	// but never names a model. Fields rather than constants so tests do not
+	// wait out real time; zero means the package default.
+	prePullFrameGrace time.Duration
+	prePullHoldMax    time.Duration
+
 	// bundledRetirementLogged keeps the "your pin was retired" line to one
 	// per process (#200). bundledModelID() is called on every pull,
 	// activation and status read, so an unguarded log there is one line
@@ -2939,13 +2972,29 @@ func (p *agentInferenceProvider) bundledModelState(modelID string) catalog.Model
 // It is the FALLBACK driver since #306: bootstrapAfterEngineStart only
 // reaches it when the operator's own model did not take responsibility.
 func (p *agentInferenceProvider) bootstrapBundledModel(ctx context.Context) {
+	modelID, ok := p.bundledPrePullTarget(ctx)
+	if !ok {
+		return
+	}
+	p.dispatchBundledPrePull(ctx, modelID)
+}
+
+// bundledPrePullTarget answers which model the startup pre-pull would
+// download, and false when there is nothing to download. Everything it
+// does is local and cheap, and the boot path runs it SYNCHRONOUSLY even
+// when the dispatch itself is held back (#379): its already-ready arm
+// commits the Active selection, and deferring that would leave a host
+// whose weights are right there on disk with Active nil — EngineReady()
+// false, benchmarks 425ing, Status() reporting awaiting_model — for as
+// long as the hold lasts.
+func (p *agentInferenceProvider) bundledPrePullTarget(ctx context.Context) (string, bool) {
 	if p.cfg.BundledModelID == "" {
 		// Not an error: there is no compiled-in default, so "unset" is
 		// what a host whose selection has not run — or one that had
 		// nothing to select — legitimately looks like. Info, not Warn:
 		// nothing is broken and nothing needs a model invented for it.
 		p.logger.Info("no bundled model configured; skipping pre-pull")
-		return
+		return "", false
 	}
 	// Through bundledModelID, not a second LookupByAlias: the pre-pull and
 	// everything that later asks "is this the bundled model" have to
@@ -2954,12 +3003,19 @@ func (p *agentInferenceProvider) bootstrapBundledModel(ctx context.Context) {
 	modelID := p.bundledModelID()
 	if _, ok := catalog.LookupByAlias(modelID, p.manifests); !ok {
 		p.logger.Warn("bundled model not found in manifests; skipping pre-pull", "model", p.cfg.BundledModelID)
-		return
+		return "", false
 	}
 	if p.activateBundledIfReady(ctx) {
 		p.logger.Info("bundled model already ready; skipping pre-pull", "model", modelID)
-		return
+		return "", false
 	}
+	return modelID, true
+}
+
+// dispatchBundledPrePull starts the fallback download. Separate from the
+// decision above so the hold in inference_prepull_hold.go can re-take the
+// decision when it releases, minutes after the boot that made it.
+func (p *agentInferenceProvider) dispatchBundledPrePull(ctx context.Context, modelID string) {
 	if _, err := p.PullModel(ctx, modelID); err != nil {
 		p.logger.Warn("bundled model pre-pull dispatch failed", "model", modelID, "err", err)
 	}
