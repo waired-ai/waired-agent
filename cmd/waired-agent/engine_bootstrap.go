@@ -118,10 +118,19 @@ func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, re
 	if p.isInferenceDisabled != nil && p.isInferenceDisabled() {
 		return errInferenceOff
 	}
-	cfg := p.effectiveCfg()
-	if !cfg.AllowPull {
-		return errPullsDisabled
-	}
+	// AllowPull is deliberately NOT consulted here (#338). It means "do
+	// not download model weights", and gating the START on it — the
+	// pre-#304 boot goroutine's `binary == "" || !cfg.AllowPull`, carried
+	// over verbatim by the #304 rewrite — left a host whose weights were
+	// already on disk unable to serve them at all. Nothing reported it
+	// either: hasUsableEngine reads the BINARY, not the process, so
+	// subsystemState saw a usable engine and fell through to
+	// awaiting_model while `ollama serve` was not running. The refusal
+	// lives on the pull dispatchers instead (bootstrapPreferredModel,
+	// bundledPrePullTarget, maybePreCache), with PullModel refusing every
+	// caller as the backstop. The switch that stops an engine is the one
+	// directly above (#465); `waired inference engine stop` is the other.
+	//
 	// The live resolver, not a boot-time snapshot: this is the check that
 	// lets a binary installed after boot be seen at all (#304).
 	if p.ollamaUsable == nil || !p.ollamaUsable() {

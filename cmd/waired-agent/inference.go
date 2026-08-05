@@ -3111,6 +3111,24 @@ func (p *agentInferenceProvider) bundledPrePullTarget(ctx context.Context) (stri
 		p.logger.Info("bundled model already ready; skipping pre-pull", "model", modelID)
 		return "", false
 	}
+	// #338 moved the allow_pull refusal off the engine start and onto the
+	// dispatchers. BELOW the activation above, on purpose: a host that
+	// downloads nothing still has to commit weights that are already
+	// there, which is the whole point of the move — and the comment on
+	// this function says what deferring that costs.
+	//
+	// PullModel refuses again on its own, so this is not what makes the
+	// download not happen. Answering false here is what keeps the boot
+	// from registering a hold on pullsWG and parking it for prePullHoldMax
+	// only to be refused, and from logging a dispatch failure every boot
+	// for a setting that is doing exactly what it was asked to. Re-taken
+	// at hold release through prePullStillWanted, so a config that changed
+	// meanwhile is honoured there too.
+	if !p.cfg.AllowPull {
+		p.logger.Info("pulls are disabled (allow_pull=false); skipping the bundled pre-pull",
+			"model", modelID)
+		return "", false
+	}
 	return modelID, true
 }
 
@@ -3290,6 +3308,18 @@ func (p *agentInferenceProvider) bootstrapPreferredModel(ctx context.Context) bo
 		p.engineServesTag(ctx, cur.OllamaTag) {
 		p.activatePreferredIfNeeded(manifest.ModelID, cur.VariantID)
 		return true
+	}
+	// #338, the same refusal as bundledPrePullTarget's at the other
+	// dispatcher. false is the honest answer and the load-bearing one: it
+	// did NOT take the model on, so bootstrapAfterEngineStart falls to the
+	// bundled arm, which is where activateBundledIfReady commits weights
+	// that are already there. PullModel would refuse this anyway; what
+	// changes is that a host configured to download nothing stops
+	// reporting a failure for doing so.
+	if !p.cfg.AllowPull {
+		p.logger.Info("preferred model is not on disk and pulls are disabled (allow_pull=false)",
+			"model", manifest.ModelID)
+		return false
 	}
 	if _, err := p.PullModel(ctx, manifest.ModelID); err != nil {
 		p.logger.Warn("preferred model re-pull dispatch failed", "model", manifest.ModelID, "err", err)
@@ -3857,6 +3887,15 @@ func availableUpdateFromPick(engine string, mp router.Pick, state catalog.State)
 // in the background. Idempotent: a candidate already on disk skips
 // straight through. Step 12 — keeps the next refresh fast.
 func (p *agentInferenceProvider) maybePreCache(ctx context.Context) {
+	// The third dispatcher #338 moved the refusal onto. Reachable on a
+	// pulls-off host only BECAUSE of #338: the Active check below was
+	// always nil while the engine never started, so this returned before
+	// it could dispatch. Now that Active can be committed, without this
+	// the fix would introduce a pre-cache dispatch failure per boot on a
+	// host doing exactly what it was configured to do.
+	if !p.cfg.AllowPull {
+		return
+	}
 	// Pre-caching an UPDATE presupposes something to update.
 	// computeAvailableUpdate reports the picker's own output as "the
 	// update" when nothing is active — right for the /inference/status

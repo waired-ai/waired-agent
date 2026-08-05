@@ -133,6 +133,13 @@ func TestMergeJSON_Override(t *testing.T) {
 	if cfg.Inference.PullOnStartup {
 		t.Errorf("PullOnStartup should be false after JSON override")
 	}
+	// The body has carried allow_pull since this test was written and
+	// nothing asserted it. #338 narrowed the field to "download weights"
+	// alone, which leaves this merge as the only thing standing between a
+	// boot and a multi-GB download.
+	if cfg.Inference.AllowPull {
+		t.Errorf("AllowPull should be false after JSON override")
+	}
 	if cfg.Inference.IdleTimeout.Duration() != 30*time.Minute {
 		t.Errorf("IdleTimeout = %v", cfg.Inference.IdleTimeout.Duration())
 	}
@@ -457,6 +464,12 @@ func TestMergeEnv(t *testing.T) {
 	}
 	if cfg.Inference.PullOnStartup {
 		t.Errorf("PullOnStartup should be false")
+	}
+	// Same gap as TestMergeJSON_Override's: the env var was in the fixture
+	// with no assertion behind it, so setInferenceField's ALLOW_PULL case
+	// was uncovered (#338).
+	if cfg.Inference.AllowPull {
+		t.Errorf("AllowPull should be false after env override")
 	}
 	if cfg.Inference.IdleTimeout.Duration() != 15*time.Minute {
 		t.Errorf("IdleTimeout = %v", cfg.Inference.IdleTimeout.Duration())

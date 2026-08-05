@@ -100,8 +100,16 @@ type InferenceConfig struct {
 	// limit enforced by the download manager.
 	MaxCacheGB int `json:"max_cache_gb"`
 
-	// AllowPull controls whether `waired models pull` and the startup
-	// pre-pull are permitted at all.
+	// AllowPull controls whether this host DOWNLOADS model weights:
+	// `waired models pull`, the startup pre-pull, the boot-time re-pull of
+	// the preferred model, and the update pre-cache.
+	//
+	// It does NOT stop the engine. `ollama serve` starts either way, so a
+	// host whose weights are already on disk serves them (#338) — the
+	// earlier wording ("permitted at all") is what made a gate on the
+	// engine-start path look defensible. Enabled is the switch that turns
+	// local inference off; `waired inference engine stop` is the one that
+	// gives the memory back.
 	AllowPull bool `json:"allow_pull"`
 
 	// AllowAnthropicAPI exposes /anthropic/v1/messages on the Local
