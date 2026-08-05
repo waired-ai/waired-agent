@@ -215,7 +215,15 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 		// Finish a preferred-model switch interrupted by its own restart
 		// (issue #347) is bootstrapPreferredModel's job above; this is the
 		// fresh-install pre-pull of the hardware auto-select.
-		p.bootstrapBundledModel(ctx)
+		//
+		// The decision is taken here and now — including committing weights
+		// that are already on disk as Active — but the DOWNLOAD is held
+		// until setup has had its say, so a host being set up from a browser
+		// does not fetch the fallback alongside the model the operator is in
+		// the middle of choosing (#379).
+		if modelID, ok := p.bundledPrePullTarget(ctx); ok {
+			p.holdBundledPrePull(ctx, modelID)
+		}
 	}
 	// #290: for hosts with a fallback backend (Strix Halo Linux: ROCm
 	// then Vulkan), verify the GPU actually engaged and switch to the
