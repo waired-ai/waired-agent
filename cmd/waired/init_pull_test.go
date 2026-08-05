@@ -1030,6 +1030,75 @@ func TestWaitForBundledModel_ProgressCannotOutrunTheCap(t *testing.T) {
 	}
 }
 
+// #382 x #306: when a browser wizard retargets the wait to a different model,
+// the byte counter must reset with the rest of the per-model render state.
+//
+// The wizard's model starts its download near zero while the agent's own was
+// already most of the way through, so a lastBytes carried across the handoff
+// reads EVERY tick of the new download as "no progress" — the extension stops
+// working exactly on the multi-GB choice that needs it most, and the stale
+// stall deadline from the old model runs out underneath it.
+//
+// Note the direction: the existing retarget test has the wizard's model
+// FURTHER along than the agent's, which cannot expose this. The counts here
+// are deliberately the other way round.
+func TestWaitForBundledModel_RetargetResetsTheByteCounter(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	// Stall grace short enough that the deadline armed by the agent's own
+	// download expires during the wizard's, so only ticks the wait actually
+	// counts as progress can keep it alive.
+	shrinkPullProgressTiming(t, 30*time.Millisecond, time.Minute)
+
+	const mb = 1 << 20
+	seq := []management.InferenceStatus{
+		// The agent's own model, nearly done — this is what sets lastBytes high.
+		downloadingSnap(agentModel, 8*testGB, 9*testGB),
+		downloadingSnap(agentModel, 8*testGB+mb, 9*testGB),
+	}
+	// The wizard's model, downloading from near zero. Active stays the agent's
+	// (the daemon only commits Active once weights are ready), so the wait has
+	// to read the wizard's row out of Downloads.
+	for i := 1; i <= 400; i++ {
+		seq = append(seq, management.InferenceStatus{
+			SubsystemState: "loading",
+			Active:         activeSel(agentModel),
+			Models: management.ModelsSnapshot{
+				Ready:       []string{agentModel},
+				Downloading: []string{wizardModel},
+				Downloads: []management.ModelDownload{
+					{Model: wizardModel, CompletedBytes: int64(i) * mb, TotalBytes: 44 * testGB},
+				},
+			},
+		})
+	}
+	seq = append(seq, bothReady())
+
+	stub := &pullStub{seq: seq}
+	srv := stub.server()
+	defer srv.Close()
+	target := newScriptedTarget(t, &scriptedState{states: []management.SetupStateResponse{
+		{}, {}, wizardState(wizardModel),
+	}})
+
+	var out strings.Builder
+	var ready bool
+	done := make(chan struct{})
+	go func() {
+		// Budget spent immediately: only the progress extension can reach ready.
+		ready = waitForBundledModel(srv.URL, &out, false, time.Millisecond, false, nil, nil, target).ready
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("waitForBundledModel hung")
+	}
+
+	if !ready {
+		t.Fatalf("the wizard's download did not extend the wait — the byte counter appears to have survived the retarget; out=%q", out.String())
+	}
+}
+
 // A wait that never sees a download is bounded exactly as it was before #382:
 // the stall deadline is armed by the first advancing byte, so with no download
 // at all the caller's budget is still the only clock.

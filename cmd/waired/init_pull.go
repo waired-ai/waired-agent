@@ -193,6 +193,15 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			rate = rateWindow{}
 			dlHinted, failedStreak, lastNote = false, 0, ""
 			unseenDeadline = time.Time{}
+			// Same reason as `rate` and `line` above, and the same failure if
+			// omitted: the new model's download starts near zero, so a
+			// lastBytes still holding the previous model's count would read
+			// every tick of it as "no progress" — the wait would stop
+			// extending exactly when a wizard-chosen model needs it most
+			// (#382/#306). Clearing stallDeadline with it hands the new
+			// download back to the caller's budget until its first advance,
+			// which is where a download nobody has seen bytes from belongs.
+			lastBytes, stallDeadline = -1, time.Time{}
 			// noEngineDeadline deliberately survives: engine health is not
 			// a property of which model is being waited for.
 		}
