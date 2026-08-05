@@ -261,6 +261,19 @@ type setupProvider interface {
 	// HTTP request handler, a network-map frame) die long before a cold
 	// start finishes. reason is for the daemon log.
 	startSetupEngine(reason string)
+	// setupEnableLocalInference turns local inference on because someone
+	// asked this device to serve (#465). A no-op when it is already on.
+	//
+	// A host below the recommended spec starts with local inference off
+	// (waired-ai/waired#1056 decision 4), and since #507 "off" means the
+	// engine stands down — so without this the wizard's engine step would
+	// be refused on exactly the machines removing the latch finally let
+	// the wizard reach. The control plane writes a desired engine or
+	// model only when a person chose one, so applying it IS the
+	// browser-side half of the opt-in.
+	//
+	// Fire-and-forget for the same reason startSetupEngine is.
+	setupEnableLocalInference(reason string)
 	// setupNoteDesired reports what the control plane's latest frame said
 	// about this host — the canonical desired model id ("" when the frame
 	// named none) and whether a wizard is driving the host right now — so
@@ -500,6 +513,16 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	if retried && r.logger != nil {
 		r.logger.Info("setup: retry requested; re-admitting the desired model",
 			"gen", d.modelGen, "model", d.modelID)
+	}
+
+	// Someone asked this device to serve (#465). Gated on `changed` — not
+	// on the current toggle state — because Apply runs on every frame and
+	// the control plane never clears a desired value: re-asserting on
+	// every frame would undo a `waired inference off` seconds after the
+	// user made it. A benchmark generation alone is deliberately not an
+	// ask; it tells a device that already serves to measure itself.
+	if changed && (d.engine != "" || d.modelID != "") {
+		r.provider.setupEnableLocalInference("setup: the wizard asked this device to serve")
 	}
 
 	// Benchmark (§12): the served generation counter is the request;
@@ -1829,6 +1852,29 @@ func (p *agentInferenceProvider) startSetupBenchmark(gen int) {
 // startSetupEngine adopts an engine installed after this daemon booted
 // (#304). Coalesced and dispatched on the daemon's own context by
 // requestEngineStart; a parked or crash-latched engine is left alone.
+// setupEnableLocalInference turns local inference on when the wizard's
+// desired state arrives on a device that had it off (#465). A no-op when
+// it is already on, so the per-frame reconcile costs nothing and the
+// desired-inference file is not rewritten on a cadence.
+//
+// enableInference is nil on a daemon started with --disable-inference:
+// there is no subsystem to turn on, and the operator's kill switch is
+// not something a control-plane instruction may override.
+func (p *agentInferenceProvider) setupEnableLocalInference(reason string) {
+	if p == nil || p.enableInference == nil {
+		return
+	}
+	if p.isInferenceDisabled == nil || !p.isInferenceDisabled() {
+		return
+	}
+	if p.logger != nil {
+		p.logger.Info("turning local inference on", "reason", reason)
+	}
+	if err := p.enableInference(); err != nil && p.logger != nil {
+		p.logger.Warn("could not turn local inference on", "reason", reason, "err", err)
+	}
+}
+
 func (p *agentInferenceProvider) startSetupEngine(reason string) {
 	p.requestEngineStart(reason)
 }

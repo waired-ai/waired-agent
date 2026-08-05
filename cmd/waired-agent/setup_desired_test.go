@@ -67,6 +67,11 @@ type fakeSetupProvider struct {
 	// order. The reason is kept rather than a bare count so a test can
 	// tell the executor-done trigger from the engine-appeared one (#304).
 	engineStarts []string
+	// localInferenceEnables records every setupEnableLocalInference call.
+	// The real implementation is a no-op when it is already on, so a
+	// count here is "how often the reconciler ASKED", which is what the
+	// per-frame idempotence assertions are about (#465).
+	localInferenceEnables []string
 	// desiredNotes records every setupNoteDesired call, in order. The
 	// boot pre-pull's hold reads nothing else (#379), so what the
 	// reconciler reports here IS the interface between the two.
@@ -290,6 +295,18 @@ func (f *fakeSetupProvider) startSetupEngine(reason string) {
 	f.engineStarts = append(f.engineStarts, reason)
 }
 
+func (f *fakeSetupProvider) setupEnableLocalInference(reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.localInferenceEnables = append(f.localInferenceEnables, reason)
+}
+
+func (f *fakeSetupProvider) localInferenceEnableCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.localInferenceEnables)
+}
+
 func (f *fakeSetupProvider) engineStartCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -434,6 +451,74 @@ func TestSetupApplyIdempotent(t *testing.T) {
 	if len(f.pulls) != 1 || f.pulls[0] != "qwen3-8b-instruct" {
 		t.Fatalf("pulls = %v, want exactly one pull", f.pulls)
 	}
+}
+
+// TestSetupApplyTurnsLocalInferenceOn is the BROWSER half of #465's
+// opt-in, and it closes a hole #507 opened.
+//
+// #507 made "local inference off" mean the engine stands down rather
+// than the subsystem being unbuilt — which is what let the wizard reach
+// a host below the recommended spec at all. But the wizard's desired
+// state is applied through startSetupEngine, so on exactly those hosts
+// the engine step would be refused and the browser would wait forever
+// on a machine that had decided not to serve.
+//
+// A CP-served desired engine or model is not a background default: the
+// control plane writes it when a person chose it in the wizard, so
+// applying one IS the opt-in. Product contract, per waired-ai/waired#1056
+// decision 4 ("推奨要件未満 は…警告つきオプトイン可") — the opt-in has
+// to exist on BOTH surfaces, and this is the browser's.
+func TestSetupApplyTurnsLocalInferenceOn(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a desired engine asks", func(t *testing.T) {
+		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, desiredFrame("ollama", "", 0))
+		if got := f.localInferenceEnableCount(); got != 1 {
+			t.Fatalf("enable calls = %d, want 1 — the wizard's engine step "+
+				"would be refused on a host that starts with local inference off", got)
+		}
+	})
+
+	t.Run("a desired model asks", func(t *testing.T) {
+		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, desiredFrame("", "qwen3-8b-instruct", 0))
+		if got := f.localInferenceEnableCount(); got != 1 {
+			t.Fatalf("enable calls = %d, want 1", got)
+		}
+	})
+
+	t.Run("asked once per instruction, not once per frame", func(t *testing.T) {
+		// Apply runs on EVERY network-map frame. The real implementation
+		// is a no-op while it is already on, but the reconciler must not
+		// lean on that: a desired value the CP replays forever would
+		// otherwise re-assert a choice the user has since reversed from
+		// the tray.
+		f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+		frame := desiredFrame("ollama", "qwen3-8b-instruct", 0)
+		for i := 0; i < 3; i++ {
+			r.Apply(ctx, frame)
+		}
+		if got := f.localInferenceEnableCount(); got != 1 {
+			t.Fatalf("enable calls = %d over 3 identical frames, want 1", got)
+		}
+	})
+
+	t.Run("nothing desired asks nothing", func(t *testing.T) {
+		f := &fakeSetupProvider{}
+		r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+		r.Apply(ctx, nil)
+		r.Apply(ctx, &signer.InferenceState{})
+		// A benchmark generation alone is not a request to serve: it is
+		// asking a device that already serves to measure itself.
+		r.Apply(ctx, desiredFrame("", "", 3))
+		if got := f.localInferenceEnableCount(); got != 0 {
+			t.Fatalf("enable calls = %d, want 0 — nobody asked this device to serve", got)
+		}
+	})
 }
 
 // TestSetupDesiredStaleOnLeftoverState is the #308 contract, and the rc7

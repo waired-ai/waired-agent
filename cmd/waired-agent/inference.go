@@ -1060,7 +1060,13 @@ type agentInferenceProvider struct {
 	// when an inferenceController is attached; nil in unit tests that
 	// only exercise this provider directly.
 	isInferenceDisabled func() bool
-	inferenceState      func() (current, desired state.InferenceState)
+	// enableInference turns local inference on, persisting the choice.
+	// Set by run() from the inference controller; nil on a daemon
+	// started with --disable-inference, where there is nothing to turn
+	// on and the operator's kill switch is not a control-plane
+	// instruction's to override (#465).
+	enableInference func() error
+	inferenceState  func() (current, desired state.InferenceState)
 
 	// meshSnapshotFn, when non-nil, threads the inferencemesh
 	// aggregator into Select so a request whose model isn't local-
