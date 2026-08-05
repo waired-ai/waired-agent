@@ -1,96 +1,166 @@
 {
-  "schema": 1,
-  "notes": "Benchmark provenance for quality_tier auto-derivation (#133). swe_bench_verified (0-100) is the primary signal; secondary benchmarks are recorded for cross-check. Every score MUST carry >=1 source URL and a retrieved date. confidence is high|medium|low; low-confidence scores are reported but never auto-escalated to a draft PR. The catalog-radar pipeline (#413) appends entries here when it researches a new model. Seeded 2026-06-18 from docs/reports/20260516-coding-model-family-survey.md (which transcribed the May-2026 public leaderboards it cites).",
+  "schema": 2,
+  "notes": "Evidence behind quality_tier placements, NOT an input to the composite. quality_tier is the parameter ordering of the generations we carry; the only maintainer judgment in it is where a model from another family or generation sits, and this file is where such a judgment cites its source (docs/decisions/20260805/1427-quality-tier-is-a-curated-ladder.md). A number here ranks nothing, so rows may carry different benchmarks from one another. Scores whose \"source\" is empty are recorded but may not back a tier_override.",
+  "accepted_sources": [
+    {
+      "id": "livebench",
+      "name": "LiveBench (current table)",
+      "url": "https://livebench.ai/",
+      "last_updated": "2026-06-25",
+      "notes": "Independent single-harness runs, questions refreshed to resist contamination; results published as an unauthenticated CSV (table_YYYY_MM_DD.csv). Caveat when reading coverage: the roster resets with each question refresh, and open-weight models are what falls off — the 2026-06-25 table is 38 models, 34 of them frontier API models."
+    },
+    {
+      "id": "swe_rebench",
+      "name": "SWE-rebench",
+      "url": "https://swe-rebench.com/leaderboard",
+      "last_updated": "2026-07-01",
+      "notes": "Independent runs against GitHub issues collected fresh each window, which is the closest published proxy for the agentic-coding work this product does. Window 2026-05-15..2026-07-01 is 111 problems across 65 repositories; a single window is thin evidence on its own."
+    }
+  ],
   "models": {
     "glm-5.2": {
-      "swe_bench_verified": 0,
-      "secondary": {
-        "swe_bench_pro": 62.1,
-        "terminal_bench": 81.0,
-        "livebench_coding": 79.65,
-        "livebench_agentic_coding": 73.33
+      "scores": {
+        "livebench_2026_06_25_code_completion": {
+          "value": 80.435,
+          "source": "livebench",
+          "url": "https://livebench.ai/table_2026_06_25.csv",
+          "retrieved": "2026-08-05"
+        },
+        "livebench_2026_06_25_code_generation": {
+          "value": 78.873,
+          "source": "livebench",
+          "url": "https://livebench.ai/table_2026_06_25.csv",
+          "retrieved": "2026-08-05"
+        },
+        "swe_rebench_2026_05_15_to_07_01": {
+          "value": 62.9,
+          "source": "swe_rebench",
+          "url": "https://swe-rebench.com/leaderboard",
+          "retrieved": "2026-08-05",
+          "notes": "Highest of any open-weight model in that window; everything above it is a hosted frontier system."
+        }
       },
-      "sources": [
-        {"url": "https://huggingface.co/zai-org/GLM-5.2", "retrieved": "2026-07-05", "value": 62.1},
-        {"url": "https://openrouter.ai/blog/insights/the-open-weight-models-that-matter-june-2026/", "retrieved": "2026-07-05", "value": 62.1},
-        {"url": "https://livebench.ai/", "retrieved": "2026-07-05", "value": 79.65}
-      ],
-      "cross_checked": true,
-      "confidence": "medium",
       "variants": {
-        "fp8-safetensors": {"tier_override": 97},
-        "nvfp4-safetensors": {"tier_override": 96}
+        "fp8-safetensors": {
+          "tier_override": 97,
+          "reason": "Tops the catalog. Both accepted sources put it ahead of every other model we carry, so the composite's params-and-footprint ordering is not what should decide the top of the ladder here.",
+          "evidence": [
+            "livebench_2026_06_25_code_generation",
+            "swe_rebench_2026_05_15_to_07_01"
+          ]
+        },
+        "nvfp4-safetensors": {
+          "tier_override": 96,
+          "reason": "Same weights as fp8-safetensors, one rung below it because the quantisation is more aggressive. Placement of the pair against the rest of the catalog rests on the same evidence.",
+          "evidence": [
+            "livebench_2026_06_25_code_generation",
+            "swe_rebench_2026_05_15_to_07_01"
+          ]
+        }
       }
     },
     "deepseek-v4-flash": {
-      "swe_bench_verified": 79.0,
-      "secondary": {},
-      "sources": [
-        {"url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash", "retrieved": "2026-07-05", "value": 79.0},
-        {"url": "https://openrouter.ai/blog/insights/the-open-weight-models-that-matter-june-2026/", "retrieved": "2026-07-05", "value": 79.0}
-      ],
-      "cross_checked": false,
-      "confidence": "medium",
+      "scores": {
+        "livebench_2026_06_25_code_completion": {
+          "value": 65.217,
+          "source": "livebench",
+          "url": "https://livebench.ai/table_2026_06_25.csv",
+          "retrieved": "2026-08-05"
+        },
+        "livebench_2026_06_25_code_generation": {
+          "value": 73.239,
+          "source": "livebench",
+          "url": "https://livebench.ai/table_2026_06_25.csv",
+          "retrieved": "2026-08-05",
+          "notes": "The same table carries a deepseek-v4-flash-0731 row at 76.056 (code_completion 73.913). We ship the base checkpoint, so the base row is the one recorded here."
+        },
+        "swe_bench_verified": {
+          "value": 79.0,
+          "url": "https://www.swebench.com/",
+          "retrieved": "2026-05-16",
+          "notes": "Recorded only. Kept because it is the number this file was built around before 2026-08-05; deleting it would hide that the placement predates the accepted-source rule."
+        }
+      },
       "variants": {
-        "fp8-safetensors": {"tier_override": 93}
+        "fp8-safetensors": {
+          "tier_override": 93,
+          "reason": "Sits above the dense and MoE Qwen entries on the strength of an accepted source rather than on total parameter count, which is the case tier_override exists for.",
+          "evidence": [
+            "livebench_2026_06_25_code_generation"
+          ]
+        }
       }
     },
     "qwen3.6-27b": {
-      "swe_bench_verified": 77.2,
-      "secondary": {
-        "swe_bench_pro": 53.5,
-        "terminal_bench": 59.3,
-        "skills_bench": 48.2
+      "scores": {
+        "livebench_2026_06_25_code_completion": {
+          "value": 71.739,
+          "source": "livebench",
+          "url": "https://livebench.ai/table_2026_06_25.csv",
+          "retrieved": "2026-08-05"
+        },
+        "livebench_2026_06_25_code_generation": {
+          "value": 71.831,
+          "source": "livebench",
+          "url": "https://livebench.ai/table_2026_06_25.csv",
+          "retrieved": "2026-08-05"
+        },
+        "swe_rebench_2026_05_15_to_07_01": {
+          "value": 31.2,
+          "source": "swe_rebench",
+          "url": "https://swe-rebench.com/leaderboard",
+          "retrieved": "2026-08-05",
+          "notes": "Above qwen3.6-35b-a3b (24.7) even though the ladder places the 35B-A3B higher. Recorded rather than acted on — see that model's notes."
+        },
+        "swe_bench_verified": {
+          "value": 77.2,
+          "url": "https://www.swebench.com/",
+          "retrieved": "2026-05-16",
+          "notes": "Recorded only."
+        }
+      }
+    },
+    "qwen3.6-35b-a3b": {
+      "scores": {
+        "swe_rebench_2026_05_15_to_07_01": {
+          "value": 24.7,
+          "source": "swe_rebench",
+          "url": "https://swe-rebench.com/leaderboard",
+          "retrieved": "2026-08-05"
+        }
       },
-      "sources": [
-        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 77.2},
-        {"url": "https://www.swebench.com/", "retrieved": "2026-05-16", "value": 77.2}
-      ],
-      "cross_checked": true,
-      "confidence": "high"
+      "notes": "This model sits above qwen3.6-27b in the ladder (89/90 vs 70/72) while the one accepted source covering both puts it 6.5 points below. Left as it is, deliberately (owner decision, 2026-08-05): one window of 111 problems is thin, LiveBench's current table carries no 35B-A3B so nothing cross-checks it, and the MoE's speed is a real axis quality_tier does not encode — it activates 3.3B of 35B per token against the 27B dense model's 27B. Revisit when a second accepted source covers the pair. The current order is not a measurement either: the composite uses TOTAL parameters by design, which structurally places a MoE above a dense model of similar size."
+    },
+    "qwen3.5-35b-a3b": {
+      "scores": {
+        "swe_rebench_2026_05_15_to_07_01": {
+          "value": 17.1,
+          "source": "swe_rebench",
+          "url": "https://swe-rebench.com/leaderboard",
+          "retrieved": "2026-08-05",
+          "notes": "Below its qwen3.6 counterpart (24.7), which is the direction the ladder already has them in."
+        }
+      }
     },
     "qwen3-coder-next-80b-a3b-instruct": {
-      "swe_bench_verified": 70.6,
-      "secondary": {
-        "swe_bench_pro": 44.3
-      },
-      "sources": [
-        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 70.6},
-        {"url": "https://www.swebench.com/", "retrieved": "2026-05-16", "value": 70.6}
-      ],
-      "cross_checked": true,
-      "confidence": "high"
+      "scores": {
+        "swe_bench_verified": {
+          "value": 70.6,
+          "url": "https://www.swebench.com/",
+          "retrieved": "2026-05-16",
+          "notes": "Recorded only. No accepted source carries this model."
+        }
+      }
     },
     "gpt-oss-120b": {
-      "swe_bench_verified": 62.4,
-      "sources": [
-        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 62.4},
-        {"url": "https://www.swebench.com/", "retrieved": "2026-05-16", "value": 62.4}
-      ],
-      "cross_checked": true,
-      "confidence": "high"
-    },
-    "qwen2.5-coder-7b-instruct": {
-      "swe_bench_verified": 0,
-      "secondary": {
-        "humaneval_plus": 88.0
-      },
-      "sources": [
-        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 88.0}
-      ],
-      "cross_checked": false,
-      "confidence": "medium"
-    },
-    "qwen2.5-coder-14b-instruct": {
-      "swe_bench_verified": 0,
-      "secondary": {
-        "humaneval_plus": 89.0
-      },
-      "sources": [
-        {"url": "docs/reports/20260516-coding-model-family-survey.md", "retrieved": "2026-05-16", "value": 89.0}
-      ],
-      "cross_checked": false,
-      "confidence": "medium"
+      "scores": {
+        "swe_bench_verified": {
+          "value": 62.4,
+          "url": "https://www.swebench.com/",
+          "retrieved": "2026-05-16",
+          "notes": "Recorded only. No accepted source carries this model."
+        }
+      }
     }
   }
 }
