@@ -38,6 +38,12 @@ type engineBootstrapPlan struct {
 // the binary appear) retries.
 var errEngineNotInstalled = errors.New("inference: no engine binary installed yet")
 
+// errInferenceOff means local inference is turned off on this device.
+// Like errEngineNotInstalled it is not a failure and leaves the latch
+// open: the state is a setting, and the setting can change without a
+// restart (#465).
+var errInferenceOff = errors.New("inference: local inference is turned off on this device")
+
 // engineEnsureAttempts / engineEnsureBackoff pace the start retry.
 // EnsureRunning already waits a full cold-start budget
 // (StartupReadyTimeout) per attempt; the retry is insurance against a
@@ -103,6 +109,14 @@ func (p *agentInferenceProvider) runEngineBootstrap(ctx context.Context, reason 
 func (p *agentInferenceProvider) startEngineAndBootstrap(ctx context.Context, reason string) error {
 	if p == nil || p.ollama == nil {
 		return errEngineNotInstalled
+	}
+	// Local inference turned off is a runtime state now, not an unbuilt
+	// subsystem (#465): the management routes, the onboarding capability
+	// and the tray's inference group all have to survive it, so the
+	// engine is where "off" has to bite. Checked before the latch below,
+	// so turning it back on still runs the tail.
+	if p.isInferenceDisabled != nil && p.isInferenceDisabled() {
+		return errInferenceOff
 	}
 	cfg := p.effectiveCfg()
 	if !cfg.AllowPull {

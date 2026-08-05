@@ -1204,9 +1204,12 @@ func (t *tray) onInferenceToggle(ctx context.Context) {
 		if err := t.cli.DisableInference(ctx); err != nil {
 			showError(fmt.Sprintf("Pause inference failed: %v", err))
 		}
-	case labelResumeInference:
+	case labelResumeInference, labelEnableInference:
+		// Same call for both: the two labels differ only in whether this
+		// computer has ever run models here (#465). The daemon starts
+		// the engine and fetches a model if they are not there yet.
 		if err := t.cli.EnableInference(ctx); err != nil {
-			showError(fmt.Sprintf("Resume inference failed: %v", err))
+			showError(fmt.Sprintf("Turning on local inference failed: %v", err))
 		}
 	}
 	go t.pollOnce(ctx)

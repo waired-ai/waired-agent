@@ -96,14 +96,19 @@ func TestSelectBundledModel(t *testing.T) {
 		}
 	})
 
-	t.Run("under-spec-tiny-fits-defers-to-caller", func(t *testing.T) {
+	t.Run("below-recommended-spec-tiny-fits-explains-the-opt-in", func(t *testing.T) {
 		// 4 GB RAM: nothing above the coding-quality floor fits, but a tiny
-		// below-floor model does. Local inference is disabled by default
-		// and UnderSpec/BelowFloorModelID are set so the caller can offer
-		// the tiny model as an opt-in; SelectBundledModel emits no generic
-		// under-spec note in this case (messaging is the caller's).
+		// below-floor model does. Local inference starts off, and
+		// BelowRecommendedSpec / BelowFloorModelID are set so the caller
+		// can offer the tiny model as an opt-in.
 		//
-		// This case sat at 2 GB while capacity was the hand-authored
+		// This case used to assert the OPPOSITE of the note check below:
+		// no notes at all, "messaging is the caller's". The caller it
+		// deferred to — an interactive opt-in dialog — was never built, so
+		// the host that could run SOMETHING got less explanation than the
+		// host that could run nothing (#465, waired-ai/waired#1056).
+		//
+		// The 4 GB figure sat at 2 GB while capacity was the hand-authored
 		// min_ram_gb. It is a computation now — weights, the window's KV
 		// cache and engine overhead against RAM less the OS allowance
 		// (waired-ai/waired#1056 decision 1) — and a 2 GB machine has
@@ -116,16 +121,19 @@ func TestSelectBundledModel(t *testing.T) {
 			t.Fatalf("err: %v", err)
 		}
 		if sel.EnableInference {
-			t.Errorf("under-spec host should disable local inference by default")
+			t.Errorf("a host below the recommended spec should start with local inference off")
 		}
-		if !sel.UnderSpec {
-			t.Errorf("expected UnderSpec=true")
+		if !sel.BelowRecommendedSpec {
+			t.Errorf("expected BelowRecommendedSpec=true")
 		}
 		if sel.BelowFloorModelID == "" {
-			t.Errorf("expected a below-floor model to be offered on a 2 GB host")
+			t.Errorf("expected a below-floor model to be offered on a 4 GB host")
 		}
-		if len(sel.Notes) != 0 {
-			t.Errorf("caller owns the tiny opt-in messaging; expected no notes, got %v", sel.Notes)
+		if !containsNote(sel.Notes, sel.BelowFloorModelID) {
+			t.Errorf("the notes must name the model this host CAN run; got %v", sel.Notes)
+		}
+		if !containsNote(sel.Notes, "waired inference on") {
+			t.Errorf("the notes must name the way to turn it on; got %v", sel.Notes)
 		}
 	})
 
@@ -275,7 +283,7 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 			t.Fatalf("a host that can declare no window must not auto-enable local "+
 				"inference (picked %q)", sel.ModelID)
 		}
-		if !sel.UnderSpec {
+		if !sel.BelowRecommendedSpec {
 			t.Error("UnderSpec must be set so the caller can explain the outcome")
 		}
 		// The opt-in offer is still made, and what it offers now clears the

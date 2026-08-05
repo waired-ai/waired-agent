@@ -259,7 +259,7 @@ func RankModels(in PickInput) ([]Pick, error) {
 	//     still caught: that host cannot hold the window either.
 	//
 	//  3. Everything that fits, so no gate can newly turn a working host
-	//     into an under-spec one.
+	//     into one below the recommended spec.
 	//
 	// There is no longer a speed pass. The #229 roofline is still
 	// computed and still reported — it is what separates a dense 27B from

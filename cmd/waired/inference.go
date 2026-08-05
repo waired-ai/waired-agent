@@ -15,6 +15,9 @@ import (
 // at the top level for backward compatibility.
 const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
 
+  waired inference <on|off|status>   Run AI models on this computer, or stop.
+      Persisted across daemon restarts. Turning it on installs the engine and
+      downloads the chosen model if they are not there yet.
   waired inference share <on|off|status>   Expose (or stop exposing) this
       agent's local engine to mesh peers. Persisted across daemon restarts.
   waired inference engine <stop|start|status>   Hard-stop the local engine to
@@ -23,11 +26,57 @@ const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
 func newInferenceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inference",
-		Short: "Toggle inference subsystem behaviour (share / engine).",
+		Short: "Turn local AI on or off, and toggle share / engine behaviour.",
 		Long:  inferenceLong,
 		RunE:  namespaceRunE,
 	}
-	cmd.AddCommand(newInferenceShareCmd(), newInferenceEngineCmd())
+	cmd.AddCommand(
+		newInferenceTransitionCmd("on", state.InferenceEnabled),
+		newInferenceTransitionCmd("off", state.InferenceDisabled),
+		newInferenceStatusCmd(),
+		newInferenceShareCmd(),
+		newInferenceEngineCmd(),
+	)
+	return cmd
+}
+
+// newInferenceTransitionCmd builds `waired inference on|off` — whether
+// this computer runs AI models itself.
+//
+// It is the CLI half of #465's opt-in (waired-ai/waired#1056): a host
+// below the recommended spec starts with this off, and until now nothing
+// in the product could turn it back on. Two remediation strings already
+// named this command; they were the only reference to it anywhere.
+func newInferenceTransitionCmd(verb string, target state.InferenceState) *cobra.Command {
+	var mgmt, stateDir string
+	short := "Run AI models on this computer."
+	if target == state.InferenceDisabled {
+		short = "Stop running AI models on this computer."
+	}
+	cmd := &cobra.Command{
+		Use:   verb,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runInferenceTransition(mgmt, stateDir, target, verb)
+		},
+	}
+	addMgmtFlag(cmd, &mgmt)
+	addStateDirFlag(cmd, &stateDir, "where to persist the choice when the daemon is unreachable")
+	return cmd
+}
+
+func newInferenceStatusCmd() *cobra.Command {
+	var mgmt string
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show whether this computer runs AI models itself.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runInferenceStatus(mgmt)
+		},
+	}
+	addMgmtFlag(cmd, &mgmt)
 	return cmd
 }
 
@@ -118,6 +167,80 @@ func newEngineStatusCmd() *cobra.Command {
 	}
 	addMgmtFlag(cmd, &mgmt)
 	return cmd
+}
+
+// runInferenceTransition implements `waired inference on|off`. Same
+// dual-path shape as share: try the daemon, and persist the choice when
+// it is not answering so the next start picks it up.
+//
+// The fallback carries more weight here than it does for share. The
+// machine this command is aimed at is one that is not running AI models,
+// and "the daemon is not answering" is a plausible part of why — so a
+// version that only worked against a live daemon would be unavailable
+// exactly when it is wanted.
+func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, verb string) error {
+	gf := globalFlags{Mgmt: mgmt, StateDir: stateDir}
+
+	endpoint := "/waired/v1/inference/enable"
+	if target == state.InferenceDisabled {
+		endpoint = "/waired/v1/inference/disable"
+	}
+
+	body, err := httpPost(gf.Mgmt+endpoint, nil)
+	if err == nil {
+		if target == state.InferenceEnabled {
+			fmt.Println("Local inference on. If the engine or the model are not on this " +
+				"computer yet, Waired starts fetching them now — watch `waired status`.")
+		} else {
+			fmt.Println("Local inference off. Waired keeps working: requests go to your " +
+				"other computers, or to the cloud.")
+		}
+		return prettyPrint(body)
+	}
+
+	if !isConnectionRefused(err) {
+		return fmt.Errorf("waired inference %s: daemon returned: %w", verb, err)
+	}
+	if writeErr := state.WriteDesiredInferenceState(gf.StateDir, target); writeErr != nil {
+		return fmt.Errorf("waired inference %s: daemon unreachable AND could not write desired-inference: %w", verb, writeErr)
+	}
+	fmt.Printf("waired-agent not running — local inference %s saved; it applies on the next start.\n", verb)
+	return nil
+}
+
+// inferenceStatusResponse mirrors the subset of management.InferenceStatus
+// this command renders.
+type inferenceStatusResponse struct {
+	SubsystemState string `json:"subsystem_state"`
+	DesiredState   string `json:"desired_state"`
+}
+
+func runInferenceStatus(mgmt string) error {
+	gf := globalFlags{Mgmt: mgmt}
+	body, err := httpGet(gf.Mgmt + "/waired/v1/inference/status")
+	if err != nil {
+		return fmt.Errorf("waired inference status: %w", err)
+	}
+	var s inferenceStatusResponse
+	if err := json.Unmarshal(body, &s); err != nil {
+		return fmt.Errorf("waired inference status: parse: %w", err)
+	}
+	switch s.DesiredState {
+	case string(state.InferenceEnabled):
+		fmt.Println("Local inference: on")
+	case string(state.InferenceDisabled):
+		fmt.Println("Local inference: off")
+		fmt.Println("  Turn it on with `waired inference on`.")
+	default:
+		// Nothing to report is not the same as off, and telling someone
+		// their AI is off when the daemon simply did not say would send
+		// them looking for a setting to change.
+		fmt.Println("Local inference: unknown (this daemon does not report it — `waired update`)")
+	}
+	if s.SubsystemState != "" {
+		fmt.Printf("Inference engine: %s\n", s.SubsystemState)
+	}
+	return nil
 }
 
 // runShareTransition implements `waired inference share on|off`. Try the

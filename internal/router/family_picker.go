@@ -145,7 +145,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 // card can leave nothing above the quality floor on a host that installs
 // fine without one (see PickInput.NoRecommendGate).
 //
-// Under-spec hosts still get a mark. When nothing clears the floor even
+// Hosts below the recommended spec still get a mark. When nothing clears the floor even
 // after the ladder, the best-fitting model is named anyway, mirroring
 // the control plane's below_quality_floor basis: a picker with no mark
 // at all tells the operator nothing, and "the best this machine can do"

@@ -211,23 +211,12 @@ func run(ctx context.Context, args []string) error {
 
 	// waired#756: on a fresh daemon-mediated install the local init path's
 	// hardware-aware bundled-model selection never ran (setup.Enroll has no
-	// ConfigureInference hook), so an under-spec host would boot inference
-	// enabled and pull the full default model. Run it here — gated to a
-	// pristine fresh install with no operator inference preference — and
-	// persist the verdict to agent.json. Must precede the Inference.Enabled
-	// gate below so an under-spec disable feeds it.
+	// ConfigureInference hook), so a host below the recommended spec would
+	// boot inference enabled and pull the full default model. Run it here —
+	// gated to a pristine fresh install with no operator inference
+	// preference — and persist the verdict to agent.json, where it is the
+	// install-time DEFAULT planInitialInference reads at boot.
 	maybeSelectBundledModelForFreshInstall(&cfgRoot, *disableInference, agentJSONPath, filepath.Dir(agentJSONPath), fs)
-
-	// Phase 6: Inference.Enabled is the install-time choice for whether
-	// this node runs a local engine at all. When false, force the
-	// --disable-inference path so chooseEngine bails, the probe loop
-	// short-circuits, and the overlay listener serves only the ping
-	// endpoint. The flag wins if explicitly set on the command line
-	// (operator override for diagnostics); otherwise the config field
-	// drives the boot decision.
-	if !cfgRoot.Inference.Enabled && !*disableInference {
-		*disableInference = true
-	}
 
 	// Log level is a slog.LevelVar (not a fixed level) so the management
 	// API can live-toggle verbosity — e.g. flip to debug for pre-release
@@ -357,10 +346,19 @@ func run(ctx context.Context, args []string) error {
 	// enrollment (or with --disable-inference) the delegate answers with
 	// the zero state, which reads as "no setup started".
 	mgmtSrv = mgmtSrv.WithSetupExecutor(sbSetupExecutor{sb})
-	// Inference routes are gated on the install-time --disable-inference
-	// choice (a boot decision, not a session one), mirroring the old
-	// inline wiring: an inference-disabled agent leaves these routes
-	// unregistered so the tray hides the inference group on 404.
+	// Inference routes are gated on --disable-inference alone: the
+	// operator's kill switch says there is no subsystem to talk to, and
+	// the tray reads the resulting 404 as "this daemon has no inference
+	// control" and hides the group.
+	//
+	// It is deliberately NOT gated on whether local inference is turned
+	// on. It used to be, transitively — Inference.Enabled forced
+	// --disable-inference — which unregistered `/waired/v1/models/pull`,
+	// `/inference/status` and the catalog on exactly the hosts that
+	// needed to opt in, so the CLI answered `404 page not found`, the
+	// tray hid the group, and the wizard's model picker had nothing to
+	// call. The routes are how a host below the recommended spec turns
+	// local inference on (#465, waired-ai/waired#1056).
 	if !*disableInference {
 		mgmtSrv = mgmtSrv.WithInference(sbInfProvider{sb}).
 			WithShareControl(sbShareControl{sb}).
@@ -640,24 +638,40 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 
-		// Inference soft-toggle: orthogonal to pause/resume. The on-disk
+		// Local-inference toggle: orthogonal to pause/resume. The on-disk
 		// desired-inference file persists across daemon restarts so an
-		// explicit Disable from the tray survives a crash.
-		infInitial, err := state.ReadDesiredInferenceState(*stateDir)
+		// explicit Disable from the tray survives a crash;
+		// agentconfig.Inference.Enabled is the install-time default it
+		// falls back to, exactly as Inference.ShareWithMesh backs
+		// desired-share below.
+		infPersisted, err := state.ReadDesiredInferenceState(*stateDir)
 		if err != nil {
 			return fmt.Errorf("read desired-inference: %w", err)
 		}
-		infCtl := newInferenceController(*stateDir, infInitial, logger)
+		infPlan := planInitialInference(cfgRoot.Inference.Enabled, infPersisted,
+			resolveInferenceIntent(*disableInference, fs, os.Environ()).Enablement)
+		if infPlan.Persist {
+			if err := state.WriteDesiredInferenceState(*stateDir, infPlan.State); err != nil {
+				return fmt.Errorf("persist desired-inference: %w", err)
+			}
+		}
+		infCtl := newInferenceController(*stateDir, infPlan.State, logger)
 
 		// Phase 6: mesh-share toggle. agentconfig.ShareWithMesh is the
 		// install-time default; the persisted desired-share file (set by
 		// the CLI/tray runtime toggle) overrides it on boot. Empty
 		// desired-share file = "operator has never touched the toggle, use
-		// the agentconfig default". The controller is **only** wired when
-		// inference is enabled: an agent booted with Inference.Enabled=false
-		// has no engine to share, so a share controller would only confuse
-		// the tray (the management API surface and the user-visible toggle
-		// stay omitempty in that case).
+		// the agentconfig default" — the same shape planInitialInference
+		// now uses for the inference axis itself.
+		//
+		// The controller is **only** wired when the subsystem was built:
+		// a daemon started with --disable-inference has no engine to
+		// share, so a share controller would only confuse the tray (the
+		// management API surface and the user-visible toggle stay
+		// omitempty in that case). A host that merely has local
+		// inference turned OFF does get one — that state is a setting
+		// now, and the surfaces that can change it have to stay
+		// reachable (#465).
 		var shareCtl *shareController
 		if !*disableInference {
 			shareInitial := state.ShareMeshShared
@@ -967,6 +981,14 @@ func run(ctx context.Context, args []string) error {
 				return fmt.Errorf("inference subsystem: %w", err)
 			}
 			infProvider = ip
+			// Turning local inference on has to actually start
+			// something: the engine and the model pre-pull stand down
+			// while it is off (#465), so the opt-in — from the CLI, the
+			// tray, the browser wizard, or the management API — asks for
+			// them here. requestEngineStart is coalesced and dispatched
+			// on the daemon's context, and leaves a parked or
+			// crash-latched engine alone.
+			infCtl.onEnable = func() { sub.provider.requestEngineStart("local inference turned on") }
 			engCtl = newEngineController(ctx, sub.ollama, logger)
 			// #320: an operator restart comes back with an empty engine, so
 			// warm it rather than making the next request pay the cold load.
@@ -1044,8 +1066,16 @@ func run(ctx context.Context, args []string) error {
 			// subsequent boots return the previous result instantly
 			// (typical save: 5-30 s per boot). The cache file lives at
 			// ~/.cache/waired/bench.json; empty path = caching disabled.
+			//
+			// Also gated on the runtime toggle (#465): the benchmark
+			// loads a model to time it, which is the one thing a device
+			// told not to serve locally must not do. The hardware
+			// profile above is NOT gated the same way — the control
+			// plane needs it to show the model list and the opt-in on a
+			// host below the recommended spec, and reading it costs
+			// nothing at rest.
 			capacity := 0
-			if !*disableInference {
+			if !*disableInference && !infCtl.IsDisabled() {
 				var cache *benchCache
 				if cachePath := defaultWairedCachePath(); cachePath != "" {
 					cache = newBenchCache(cachePath, logger)
@@ -1306,6 +1336,7 @@ func run(ctx context.Context, args []string) error {
 			id:           id,
 			isPaused:     pm.IsPaused,
 			isShareDeny:  shareDenyFn(shareCtl),
+			localInfOff:  infCtl.IsDisabled,
 			engineReady:  engineReadyAccessor(inferenceSub),
 			engineInfo:   engineInfoAccessor(inferenceSub),
 			inflight:     infSrv.InflightCount,
@@ -2118,6 +2149,7 @@ type observabilityState struct {
 	id           *identity.Identity
 	isPaused     func() bool
 	isShareDeny  func() bool
+	localInfOff  func() bool
 	engineReady  func() (bool, string)
 	engineInfo   func() (mode, version, warning, tuningWarning string)
 	inflight     func() int
@@ -2141,6 +2173,12 @@ func (o *observabilityState) ObservabilityState() management.ObservabilityState 
 	}
 	if o.isShareDeny != nil {
 		st.Agent.ShareEnabled = !o.isShareDeny()
+	}
+	if o.localInfOff != nil {
+		st.Agent.LocalInferenceState = string(state.InferenceEnabled)
+		if o.localInfOff() {
+			st.Agent.LocalInferenceState = string(state.InferenceDisabled)
+		}
 	}
 	if o.engineReady != nil {
 		ready, model := o.engineReady()

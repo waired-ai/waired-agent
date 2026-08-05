@@ -77,7 +77,7 @@ func TestSelectBundledModel_neverOffersAnInternalModel(t *testing.T) {
 		if withheld[sel.ModelID] {
 			t.Errorf("%d GB host: selected the withheld model %q", ramGB, sel.ModelID)
 		}
-		// The under-spec fallback is the dangerous one: its whole job is
+		// The below-recommended-spec fallback is the dangerous one: its whole job is
 		// to reach past the quality floor for a host that has nothing
 		// else, and a withheld model is exactly the shape of thing it
 		// would find there.

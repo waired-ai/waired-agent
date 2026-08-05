@@ -222,3 +222,35 @@ func TestRunEngineBootstrap_PullsDisabledStillGates(t *testing.T) {
 		t.Fatalf("spawns with AllowPull=false = %d, want 0", got)
 	}
 }
+
+// TestRunEngineBootstrap_StandsDownWhileLocalInferenceIsOff is what
+// makes the #465 latch removal safe to ship. The inference subsystem is
+// now built on a host below the recommended spec — that is the point,
+// since the management routes, the onboarding capability and the tray's
+// menu group all hang off it — so "off" has to mean something at the
+// engine instead. Without this a machine that was told not to serve
+// would still start ollama and download weights.
+//
+// The second half is the half that is easy to get wrong: the bootstrap
+// must not LATCH while off, or turning local inference on would find
+// engineBootstrapOnce already set and never run the tail.
+func TestRunEngineBootstrap_StandsDownWhileLocalInferenceIsOff(t *testing.T) {
+	p, sp, installed := bootstrapProvider(t)
+	*installed = true
+	off := true
+	p.isInferenceDisabled = func() bool { return off }
+
+	p.runEngineBootstrap(context.Background(), "boot")
+	if got := sp.count(); got != 0 {
+		t.Fatalf("spawns while local inference is off = %d, want 0", got)
+	}
+	if p.engineBootstrapOnce.Load() {
+		t.Fatal("bootstrap latched while off; the opt-in would never run the tail")
+	}
+
+	off = false
+	p.runEngineBootstrap(context.Background(), "inference enabled")
+	if got := sp.count(); got == 0 {
+		t.Fatal("turning local inference on started no engine; the opt-in does nothing")
+	}
+}

@@ -26,6 +26,7 @@ provenance rules (#468).
 
 | EN | ja | Rationale | Ruling |
 |---|---|---|---|
+| below recommended spec (旧 under-spec) | 推奨要件未満 | 最小要件/推奨要件 が PC スペックの定着語。「未満」は境界を含まない=「満たさない」。旧 under-spec は造語で使用禁止 | #465 裁定(20260804) |
 | completions (LLM output) | 応答 / 生成結果 | 補完 = 入力補完の意で誤読される | #473 §1 |
 | mesh | 初出「Waired メッシュ」→ 以降「メッシュ」 | 一般語のため初出は修飾 | #473 §3 |
 | overlay (network) | 初出「オーバーレイネットワーク」 | 〃 | #473 §3 |

@@ -11,7 +11,7 @@ import (
 // installer auto-selects the largest catalog model that fits the host
 // (via the runtime fit machinery) AND clears this quality_tier floor.
 // When even the best-fitting model is below it — i.e. only sub-coding
-// tiny models fit — the host is treated as under-spec and local
+// tiny models fit — the host is treated as below the recommended spec and local
 // inference is skipped (the node still enrolls and runs as a
 // gateway/relay; it can route inference to peers).
 //
@@ -35,16 +35,16 @@ const InstallQualityFloorTier = hostfit.InstallQualityFloorTier
 // to a smaller-but-still-above-floor model without re-ranking. ok is true
 // when at least one fitting candidate clears the floor.
 //
-// ok=false with a nil error means "under-spec": either nothing fits the
+// ok=false with a nil error means "below the recommended spec": either nothing fits the
 // host at all (RankModels returned ErrHardwareInsufficient) or the
 // best-fitting model is below the coding-quality floor. A non-nil error
 // is a real misconfiguration (empty Engine, an unknown PreferredModelID,
 // an unmet RequireCapability) that the caller should surface rather than
-// silently treat as under-spec.
+// silently treat as below the recommended spec.
 func SelectInstallModel(in PickInput, minTier int) (above []Pick, ok bool, err error) {
 	ranked, err := RankModels(in)
 	if err != nil {
-		// "Nothing fits this host" is the under-spec signal, not a fault:
+		// "Nothing fits this host" is the below-recommended-spec signal, not a fault:
 		// the caller skips local inference with a warning. Every other
 		// error is a genuine misconfiguration worth surfacing.
 		if errors.Is(err, ErrHardwareInsufficient) {

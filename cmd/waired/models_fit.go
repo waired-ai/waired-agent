@@ -10,60 +10,74 @@ import (
 	"time"
 )
 
-// confirmModelFitsForPull gates `waired models pull` on the host meeting
-// the model's recommended spec (#61). Waired's policy is warn-but-allow:
-// an over-spec pick is never silently blocked, but the user must
-// explicitly confirm it — interactively (default No) or, in a
-// non-interactive context, by passing --yes. The fit verdict comes from
-// the agent's /inference/catalog endpoint (the same UMA-aware fit logic
-// the tray and `models ls --detail` use), so the CLI never re-derives it.
+// confirmModelFitsForPull gates `waired models pull` (#61). Two
+// different things, and the difference is the whole point:
+//
+//   - fits=false means this computer does not have the memory — weights
+//     plus the window's KV cache plus engine overhead exceed RAM and
+//     graphics memory together. Loading it is a certain OOM, so the pull
+//     is REFUSED with the shortfall. This is the only gate the ratified
+//     policy allows to refuse anything (waired-ai/waired#1056,
+//     2026-08-03 owner decision; the arithmetic is #464's).
+//   - not_recommended means it runs here and Waired would pick something
+//     else. Warned, then honoured — interactively (default No) or with
+//     --yes in a non-interactive context.
+//
+// The two used to be one gate that --yes could clear, so the CLI pulled
+// models the browser hard-disabled and docs-site said were refused
+// (#465 item 4).
+//
+// The fit verdict comes from the agent's /inference/catalog endpoint (the
+// same fit logic the tray and `models ls --detail` use), so the CLI never
+// re-derives it.
 //
 // Returns (proceed, err). Fail-open: if the catalog can't be fetched or
-// the model can't be matched to a family, proceed is true — a
-// confirmation gate must never turn an infra hiccup into a hard failure.
-// A non-nil err means the pull must be aborted (non-interactive over-spec
-// pick without --yes); the caller surfaces it verbatim.
+// the model can't be matched to a family, proceed is true — a gate must
+// never turn an infra hiccup into a hard failure. A non-nil err means the
+// pull must be aborted; the caller surfaces it verbatim.
 func confirmModelFitsForPull(mgmt, model string, assumeYes bool, out io.Writer, in io.Reader) (bool, error) {
 	fam, ok := lookupCatalogFamily(mgmt, model)
 	if !ok {
 		return true, nil // unknown fit → no gate
 	}
-	if fam.Fits {
-		// It runs. It may still be the wrong choice for this machine
-		// (waired-ai/waired#988), and until waired-agent#321 nothing said
-		// so on any surface. Said, never gated: capacity is what earns a
-		// confirmation prompt, and turning a demotion into one would fail
-		// non-interactive pulls that work today.
-		if fam.Fit != nil && fam.Fit.NotRecommended {
-			name := fam.DisplayName
-			if name == "" {
-				name = model
-			}
-			writePromptf(out, "\n%s %s runs on this computer, but Waired would not choose it here%s.\n",
-				emo("ℹ", "i"), name, notRecommendedBecause(fam.Fit.NotRecommendedReason))
-		}
-		return true, nil
-	}
-
 	name := fam.DisplayName
 	if name == "" {
 		name = model
 	}
-	deficit := fam.DeficitLabel
-	if deficit == "" {
-		deficit = "exceeds this host's recommended spec"
-	}
-	writePromptf(out, "\n%s %s exceeds this host's recommended spec: %s.\n", emo("⚠", "!"), name, deficit)
-	writePrompt(out, "  It will still be pulled and can run, but may be slow or fail to load.")
 
+	if !fam.Fits {
+		deficit := fam.DeficitLabel
+		if deficit == "" {
+			deficit = "there is not enough memory on this computer"
+		}
+		writePromptf(out, "\n%s %s does not fit in this computer's memory: %s.\n",
+			emo("⚠", "!"), name, deficit)
+		writePrompt(out, "  Run `waired models ls --detail` to see what does fit.")
+		// No --yes escape on purpose: the flag skips a confirmation, and
+		// this is not one. Nothing downstream can recover from weights
+		// that do not fit, so "pull it anyway" would only spend the
+		// download and fail at load.
+		return false, fmt.Errorf("%s does not fit in this computer's memory (%s)", model, deficit)
+	}
+
+	// It runs. It may still be the wrong choice for this machine
+	// (waired-ai/waired#988), and until waired-agent#321 nothing said so
+	// on any surface. Warned, then honoured.
+	if fam.Fit == nil || !fam.Fit.NotRecommended {
+		return true, nil
+	}
+	writePromptf(out, "\n%s %s runs on this computer, but Waired would not choose it here%s.\n",
+		emo("ℹ", "i"), name, notRecommendedBecause(fam.Fit.NotRecommendedReason))
 	if assumeYes {
-		writePrompt(out, "  Proceeding (--yes).")
 		return true, nil
 	}
 	if !stdinIsInteractive() {
-		return false, fmt.Errorf("%s exceeds this host's recommended spec (%s); re-run with --yes to pull it anyway", model, deficit)
+		// Non-interactive stays permissive: this is a demotion, and
+		// failing a scripted pull over one would break setups that work
+		// today for a reason the operator can neither see nor answer.
+		return true, nil
 	}
-	return ynPrompt(out, bufio.NewScanner(in), "Pull it anyway?", false), nil
+	return ynPrompt(out, bufio.NewScanner(in), "Use it anyway?", false), nil
 }
 
 // notRecommendedBecause turns the demotion code into the clause that

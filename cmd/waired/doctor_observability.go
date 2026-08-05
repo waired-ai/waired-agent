@@ -17,6 +17,13 @@ import (
 // sync with the tray's RecentFallbackWindow for consistency.
 const recentFallbackWindow = 10 * time.Minute
 
+// localInferenceDisabled is AgentState.LocalInferenceState's "off"
+// value. Spelled here rather than imported from internal/runtime/state
+// so the CLI keeps reading the daemon's JSON as JSON — an older daemon
+// sends an empty string, which matches nothing and leaves the
+// pre-#465 behaviour exactly as it was.
+const localInferenceDisabled = "disabled"
+
 // probeObservability augments the doctor output with three findings
 // derived from /waired/v1/observability/{state,events}. It deliberately
 // emits no StatusFail — Phase 9 observability is operational signal,
@@ -59,6 +66,19 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 			Status:  integration.StatusWarn,
 			Subject: "inference engine",
 			Detail:  "paused — `waired resume` to restore overlay routing",
+		}
+	}
+	// A setting is not a fault. Before this, a computer that was told not
+	// to run AI models itself — the default on a host below the
+	// recommended spec — read exactly like one whose engine had crashed,
+	// and `waired doctor` was the command the failure copy pointed at
+	// (#465). Ordered above EngineReady because it EXPLAINS the false
+	// EngineReady rather than competing with it.
+	if a.LocalInferenceState == localInferenceDisabled {
+		return integration.AuditFinding{
+			Status:  integration.StatusOK,
+			Subject: "inference engine",
+			Detail:  "off on this computer — requests go to your other computers or the cloud. `waired inference on` to run models here",
 		}
 	}
 	if !a.EngineReady {

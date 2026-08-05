@@ -7,14 +7,22 @@ import (
 	"testing"
 )
 
-func TestReadDesiredInferenceStateMissingDefaultsToEnabled(t *testing.T) {
+// TestReadDesiredInferenceStateMissingIsUnset inverts what this file
+// used to pin ("missing defaults to enabled"). That default made this
+// reader the only one of the four desired-* readers that could not say
+// "the user has never touched this toggle", so the boot path had no way
+// to fall back to the agentconfig default the way desired-share does —
+// and agentconfig.Inference.Enabled ended up gating the subsystem
+// instead (waired-ai/waired#1056, #465). It is a record of today's
+// behaviour, matching ReadDesiredShareMesh / ReadDesiredPublicShare.
+func TestReadDesiredInferenceStateMissingIsUnset(t *testing.T) {
 	dir := t.TempDir()
 	got, err := ReadDesiredInferenceState(dir)
 	if err != nil {
 		t.Fatalf("ReadDesiredInferenceState: %v", err)
 	}
-	if got != InferenceEnabled {
-		t.Errorf("missing file should default to %q, got %q", InferenceEnabled, got)
+	if got != "" {
+		t.Errorf("missing file should read as unset, got %q", got)
 	}
 }
 
@@ -60,7 +68,7 @@ func TestReadDesiredInferenceStateTolerantOfWhitespace(t *testing.T) {
 	}
 }
 
-func TestReadDesiredInferenceStateEmptyMeansEnabled(t *testing.T) {
+func TestReadDesiredInferenceStateEmptyIsUnset(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Dir(DesiredInferencePath(dir)), 0o755); err != nil {
 		t.Fatal(err)
@@ -72,8 +80,8 @@ func TestReadDesiredInferenceStateEmptyMeansEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDesiredInferenceState: %v", err)
 	}
-	if got != InferenceEnabled {
-		t.Errorf("got %q, want %q (empty file should mean enabled)", got, InferenceEnabled)
+	if got != "" {
+		t.Errorf("got %q, want unset (a truncated file is not a choice)", got)
 	}
 }
 

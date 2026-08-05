@@ -22,17 +22,19 @@ import (
 // the verdict to agent.json.
 //
 // The daemon-mediated `waired init` (waired#756) enrolls via setup.Enroll,
-// which — unlike the local init's setup.Init — never runs the ConfigureInference
-// hook, so the local path's hardware model sizing / under-spec disable never
-// happened. Without this the daemon boots inference-enabled with the fixed
-// default model and pulls it in full even on a host too small to serve it.
-// Persisting to agent.json makes the choice stable and inspectable, and makes
-// this a one-shot: a written agent.json makes every later boot skip it.
+// which — unlike the local init's setup.Init — never runs the
+// ConfigureInference hook, so the local path's hardware model sizing and its
+// below-recommended-spec default never happened. Without this the daemon boots
+// inference-enabled with the fixed default model and pulls it in full even on
+// a host too small to serve it. Persisting to agent.json makes the choice
+// stable and inspectable, and makes this a one-shot: a written agent.json
+// makes every later boot skip it.
 //
 // Best-effort and non-interactive by construction (the daemon has no TTY): any
 // failure keeps the pristine defaults and warns on stderr, never aborting boot.
-// It MUST run before the Inference.Enabled gate in run() so an under-spec
-// verdict (EnableInference=false) correctly forces the --disable-inference path.
+// It MUST run before planInitialInference in run(), which reads the
+// Inference.Enabled this writes as the install-time default for the local
+// inference toggle.
 func maybeSelectBundledModelForFreshInstall(cfg *agentconfig.Config, disableInference bool, agentJSONPath, stateDir string, fs *flag.FlagSet) {
 	prefPath := filepath.Join(stateDir, "inference", agentconfig.PreferenceFileName)
 	intent := resolveInferenceIntent(disableInference, fs, os.Environ())
@@ -70,8 +72,9 @@ func maybeSelectBundledModelForFreshInstall(cfg *agentconfig.Config, disableInfe
 	}
 	if !sel.EnableInference {
 		fmt.Fprintf(os.Stderr,
-			"waired-agent: host under-spec for local inference — running as gateway/relay. "+
-				"Re-run `waired init` interactively (or pass --inference-enabled=true) to override.\n")
+			"waired-agent: this host is below the recommended spec for local inference, "+
+				"so it starts with local inference off and runs as a gateway/relay. "+
+				"Turn it on with `waired inference on`.\n")
 	}
 
 	if err := cfg.Save(agentJSONPath); err != nil {
@@ -80,7 +83,7 @@ func maybeSelectBundledModelForFreshInstall(cfg *agentconfig.Config, disableInfe
 }
 
 // applyBundledSelection folds SelectBundledModel's verdict into cfg.Inference:
-// the chosen model id, whether local inference runs at all (under-spec ⇒ off),
+// the chosen model id, whether local inference runs at all (below the recommended spec ⇒ off),
 // and — when disk is short — turning off the startup pull. Pure; the caller
 // persists cfg afterward.
 func applyBundledSelection(cfg *agentconfig.Config, sel setup.BundledModelSelection) {
@@ -108,6 +111,12 @@ type inferenceIntent struct {
 	// Forced means inference was explicitly turned on, so an under-spec
 	// host is warned rather than silently disabled.
 	Forced bool
+	// Enablement is what the operator said about whether local inference
+	// runs at all, or nil when they said nothing. Skip cannot answer
+	// that: it also covers --disable-inference (a transient kill switch)
+	// and an operator's own preferred model, neither of which is a
+	// durable statement about this axis. planInitialInference reads this.
+	Enablement *bool
 }
 
 // resolveInferenceIntent reads the operator's model-level intent off the boot
@@ -150,8 +159,11 @@ func resolveInferenceIntent(disableInference bool, fs *flag.FlagSet, environ []s
 		}
 	})
 
-	// --disable-inference is the flag main.go forces on when the config
-	// says inference is off, so it outranks a contradictory enablement.
+	// --disable-inference is the operator's transient kill switch, so it
+	// outranks a contradictory enablement for THIS boot. It deliberately
+	// does not reach in.Enablement: a flag that is not persisted anywhere
+	// must not be recorded as a durable choice.
+	in.Enablement = enabled
 	in.Skip = in.Skip || disableInference || (enabled != nil && !*enabled)
 	in.Forced = !in.Skip && enabled != nil && *enabled
 	return in

@@ -24,24 +24,27 @@ const InstallDiskHeadroomGB = 3.0
 // host, whether the weight pull should be skipped now (disk-short), plus
 // operator-facing notes explaining the decision.
 type BundledModelSelection struct {
-	// ModelID is the manifest model_id to configure for pre-pull. On an
-	// under-spec host (EnableInference=false) it is left as the caller's
-	// configured id (unused while inference is off).
+	// ModelID is the manifest model_id to configure for pre-pull. On a
+	// host below the recommended spec (EnableInference=false) it is left
+	// as the caller's configured id (unused while inference is off).
 	ModelID string
 
-	// EnableInference is false when the host is under-spec — below the
-	// coding-quality floor — and the operator did not force inference on.
-	// The caller disables LOCAL inference only; the node still enrolls and
-	// runs as a gateway/relay and can route inference to peers.
+	// EnableInference is false when the host is below the recommended
+	// spec — nothing clears the coding-quality floor — and the operator
+	// did not force inference on. It is the install-time DEFAULT for the
+	// local-inference toggle, not a decision the user is stuck with: the
+	// node enrolls, runs as a gateway/relay, routes inference to peers,
+	// and can turn local inference on at any time (#465).
 	EnableInference bool
 
-	// UnderSpec is true when no model above the coding-quality floor fits the
-	// host (the branch that sets EnableInference=false unless forced/pinned).
-	UnderSpec bool
+	// BelowRecommendedSpec is true when no model above the coding-quality
+	// floor fits the host (the branch that sets EnableInference=false
+	// unless forced/pinned).
+	BelowRecommendedSpec bool
 
 	// BelowFloorModelID is the best-fitting model BELOW the coding-quality
-	// floor (today the tiny 0.5B) when the host is under-spec but can still
-	// run *something*; "" when even the smallest catalog model won't fit. The
+	// floor when the host is below the recommended spec but can still run
+	// *something*; "" when even the smallest catalog model won't fit. The
 	// caller uses it to offer local inference on the tiny model as a
 	// deliberate, low-quality opt-in rather than silently disabling.
 	BelowFloorModelID string
@@ -54,7 +57,7 @@ type BundledModelSelection struct {
 	SkipPull bool
 
 	// Notes are operator-facing lines (the selection summary, an
-	// under-spec / disk warning, the retry hint).
+	// below-recommended-spec / disk warning, the retry hint).
 	Notes []string
 }
 
@@ -75,13 +78,13 @@ type BundledModelInputs struct {
 	FloorTier int
 
 	// Forced is set when the operator forced inference on
-	// (--inference-enabled=true): honour the choice even on an under-spec
-	// host rather than auto-disabling.
+	// (--inference-enabled=true): honour the choice even on a host below
+	// the recommended spec rather than defaulting it off.
 	Forced bool
 
 	// Pinned is set when the operator pinned a model id
 	// (--inference-bundled-model-id): skip auto-selection and the
-	// under-spec disable, treating the pin as a deliberate choice.
+	// below-recommended-spec default, treating the pin as a deliberate choice.
 	Pinned bool
 
 	// FreeDiskBytes is the disk-probe seam. Production wires
@@ -99,7 +102,7 @@ type BundledModelInputs struct {
 //  3. pre-flights free disk at the download target and steps down to a
 //     smaller-but-still-above-floor model when the best fit won't fit
 //     disk (or skips the pull when even the smallest won't);
-//  4. on an under-spec host (nothing above the floor fits) reports
+//  4. on a host below the recommended spec (nothing above the floor fits) reports
 //     EnableInference=false with an actionable warning — unless the
 //     operator pinned a model or forced inference on.
 //
@@ -112,7 +115,7 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 	}
 
 	// Operator pinned a specific model: honour it verbatim, skip
-	// auto-selection and the under-spec disable. The deploy-time defensive
+	// auto-selection and the below-recommended-spec default. The deploy-time defensive
 	// disk check still guards a mid-download "disk full".
 	if in.Pinned {
 		// A pin naming a retired entry moves to the successor (#200) — an
@@ -160,8 +163,8 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 	}
 
 	if !ok {
-		// Under-spec: no model above the coding-quality floor fits.
-		sel.UnderSpec = true
+		// Below the recommended spec: no model above the coding-quality floor fits.
+		sel.BelowRecommendedSpec = true
 		// Does anything fit at all, below the floor? On a 2–4 GB host the tiny
 		// 0.5B may still run; expose it so the caller can offer local inference
 		// on it as a deliberate low-quality opt-in rather than silently
@@ -186,21 +189,30 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 				sel.ModelID = sel.BelowFloorModelID
 			}
 			sel.Notes = append(sel.Notes, fmt.Sprintf(
-				"hardware is under-spec for a usable coding model, but inference was forced on — %q may fail to load (%s)",
+				"hardware is below the recommended spec for a usable coding model, but inference was forced on — %q may fail to load (%s)",
 				sel.ModelID, describeHardwareFit(in.Hardware, engine)))
 			return sel, nil
 		}
 		sel.EnableInference = false
-		if sel.BelowFloorModelID == "" {
-			// Nothing fits at all — emit the generic under-spec guidance. When a
-			// below-floor model DOES fit, messaging is left to the caller (the
-			// interactive opt-in dialog, or a non-interactive "left disabled" note).
+		// Both branches speak. This used to say nothing at all when a
+		// below-floor model DID fit, deferring to "the interactive
+		// opt-in dialog, or a non-interactive left-disabled note" —
+		// neither of which was ever built. The result was that the host
+		// that could run SOMETHING got less explanation than the host
+		// that could run nothing (#465).
+		sel.Notes = append(sel.Notes,
+			"local inference starts off: this host is below the recommended spec for a usable coding model "+
+				belowRecommendedSpecNeed(in.Manifests, engine, in.FloorTier, in.Hardware)+".")
+		if sel.BelowFloorModelID != "" {
+			sel.Notes = append(sel.Notes, fmt.Sprintf(
+				"%s does fit and can be run here — its coding quality is very low, "+
+					"but it is a real choice. Turn local inference on with `waired inference on`.",
+				sel.BelowFloorModelID))
+		} else {
 			sel.Notes = append(sel.Notes,
-				"local inference disabled: this host is under-spec for a usable coding model "+
-					underSpecNeed(in.Manifests, engine, in.FloorTier, in.Hardware)+".",
 				"This node still enrolls and runs as a gateway/relay — it can route inference to "+
-					"mesh peers. Enable local inference later with a capable engine via "+
-					"`waired runtimes install`, then `waired init`.")
+					"mesh peers. To run models here, install a capable engine with "+
+					"`waired runtimes install`, then `waired inference on`.")
 		}
 		return sel, nil
 	}
@@ -296,9 +308,9 @@ func selectionNote(p router.Pick, hw hardware.Profile, engine string) string {
 }
 
 // underSpecNeed renders the actionable "what's needed" tail of the
-// under-spec warning, derived from the least-demanding above-floor
+// below-recommended-spec warning, derived from the least-demanding above-floor
 // variant the engine could run.
-func underSpecNeed(manifests []catalog.Manifest, engine string, floor int, hw hardware.Profile) string {
+func belowRecommendedSpecNeed(manifests []catalog.Manifest, engine string, floor int, hw hardware.Profile) string {
 	minRAM, minVRAM := smallestAboveFloorReq(manifests, engine, floor)
 	switch engine {
 	case catalog.RuntimeVLLM:

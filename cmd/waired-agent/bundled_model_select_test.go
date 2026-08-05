@@ -32,7 +32,7 @@ func bootFlagSet(t *testing.T) *flag.FlagSet {
 //
 // The rule it replaced treated any `--inference-*` flag as "the operator
 // already chose", so `--inference-ollama-port 11500` on a fresh 4 GB host
-// skipped hardware-aware selection AND the under-spec disable, and the
+// skipped hardware-aware selection AND the below-recommended-spec default, and the
 // daemon pre-pulled the compiled default instead. A port number cannot
 // say which model belongs on a machine, and the cases below are the line
 // between the two kinds of flag.
@@ -100,7 +100,13 @@ func TestResolveInferenceIntent(t *testing.T) {
 			if err := fs.Parse(tc.args); err != nil {
 				t.Fatalf("parse %v: %v", tc.args, err)
 			}
+			// The three DECISION fields only. Enablement is the raw
+			// signal they are derived from, and it has its own table in
+			// inference_startup_test.go — repeating it in every row here
+			// would say nothing about the model/engine split this test
+			// is about.
 			got := resolveInferenceIntent(tc.disableInference, fs, tc.environ)
+			got.Enablement = nil
 			if got != tc.want {
 				t.Fatalf("resolveInferenceIntent = %+v, want %+v", got, tc.want)
 			}
@@ -154,9 +160,9 @@ func TestApplyBundledSelection(t *testing.T) {
 	})
 	t.Run("under-spec host: inference disabled", func(t *testing.T) {
 		cfg := agentconfig.Defaults()
-		applyBundledSelection(&cfg, setup.BundledModelSelection{ModelID: cfg.Inference.BundledModelID, EnableInference: false, UnderSpec: true})
+		applyBundledSelection(&cfg, setup.BundledModelSelection{ModelID: cfg.Inference.BundledModelID, EnableInference: false, BelowRecommendedSpec: true})
 		if cfg.Inference.Enabled {
-			t.Error("Enabled must be false on an under-spec host")
+			t.Error("Enabled must be false on a host below the recommended spec")
 		}
 	})
 	t.Run("disk-short host: pull skipped", func(t *testing.T) {

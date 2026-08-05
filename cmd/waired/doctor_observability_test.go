@@ -94,6 +94,50 @@ func TestProbeObservability_EngineNotReady(t *testing.T) {
 	assertFindingStatus(t, got[0], "inference engine", integration.StatusWarn, "not ready")
 }
 
+// TestProbeObservability_LocalInferenceOffIsNotAFault: a computer told
+// not to run AI models itself reports EngineReady=false, exactly like
+// one whose engine crashed. Doctor used to warn identically for both and
+// name no way forward — on the very hosts whose failure copy points at
+// `waired doctor` (#465, waired-ai/waired#1056).
+func TestProbeObservability_LocalInferenceOffIsNotAFault(t *testing.T) {
+	srv := newObservabilityServer(t, &observabilityMux{
+		state: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+				Agent: management.AgentState{EngineReady: false, LocalInferenceState: "disabled"},
+			})
+		},
+		events: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
+		},
+	})
+	got := probeObservability(context.Background(), srv.URL)
+	if len(got) != 3 {
+		t.Fatalf("got %d findings, want 3: %+v", len(got), got)
+	}
+	assertFindingStatus(t, got[0], "inference engine", integration.StatusOK, "off on this computer")
+	if !strings.Contains(got[0].Detail, "waired inference on") {
+		t.Errorf("detail %q does not name the way to turn it on", got[0].Detail)
+	}
+}
+
+// An older daemon sends no local_inference_state, and must keep the
+// pre-#465 reading: EngineReady=false is the only signal available, so
+// it stays a warning rather than being reinterpreted as a setting.
+func TestProbeObservability_OlderDaemonKeepsTheEngineWarning(t *testing.T) {
+	srv := newObservabilityServer(t, &observabilityMux{
+		state: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+				Agent: management.AgentState{EngineReady: false},
+			})
+		},
+		events: func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
+		},
+	})
+	got := probeObservability(context.Background(), srv.URL)
+	assertFindingStatus(t, got[0], "inference engine", integration.StatusWarn, "not ready")
+}
+
 func TestProbeObservability_PausedAgentReportsPaused(t *testing.T) {
 	srv := newObservabilityServer(t, &observabilityMux{
 		state: func(w http.ResponseWriter, _ *http.Request) {
