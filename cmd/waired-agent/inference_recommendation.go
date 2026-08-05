@@ -23,6 +23,25 @@ func (p *agentInferenceProvider) SetLastBench(b BenchResult) {
 	p.lastBench = &bc
 }
 
+// AdvertisedCapacity is the admission cap the probe loop publishes, read
+// per tick like Hardware / RecommendedMaxParallel / DeclaredContextWindow
+// (#387). 0 = nothing measured yet, which the probe treats as "leave the
+// field off the push".
+//
+// Reading it live is what lets a later successful /inference/benchmark
+// raise a boot-time de-rating without a daemon restart (#203): a fresh
+// install benchmarks before `waired init` has finished installing the
+// engine, so the boot result is Capacity=1 on a host that may be far
+// faster than that.
+func (p *agentInferenceProvider) AdvertisedCapacity() int {
+	p.benchMu.Lock()
+	defer p.benchMu.Unlock()
+	if p.lastBench == nil {
+		return 0
+	}
+	return p.lastBench.Capacity
+}
+
 // SetLastDepthBench records the most recent depth-aware long-context
 // sweep (#624). Called from the background depth goroutine in main.go;
 // read by Status() and the recommendation derivation.
@@ -333,8 +352,13 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 			firstGPU = hw.GPUs[0]
 		}
 		bench = RunBootBenchmark(ctx, BenchDeps{
-			EngineKind:    engineKind,
-			EnginePort:    enginePort,
+			EngineKind: engineKind,
+			EnginePort: enginePort,
+			// RunBenchmark above already gates on EngineReady and answers
+			// 425, but startSetupBenchmark -> startBenchmarkJob does not:
+			// a control-plane-requested benchmark on a not-ready engine
+			// used to de-rate the node exactly the way #203 describes.
+			EngineReady:   p.EngineReady,
 			EngineModel:   engineModelForActive(p.cfg),
 			VariantID:     variantIDForActive(),
 			GPUModel:      firstGPU.Model,

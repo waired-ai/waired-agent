@@ -87,10 +87,22 @@ type inferenceProbeDeps struct {
 	Hardware func() *signer.HardwareSummary
 
 	// Capacity is the concurrent-request admission cap the Phase 7
-	// Selector enforces against. Derived at boot from the local
-	// token/s benchmark. 0 means "unlimited" (the backward-compat
-	// value, and what a skipped benchmark reports).
-	Capacity int
+	// Selector enforces against. Derived from the local token/s
+	// benchmark. 0 means "unlimited" (the backward-compat value, and
+	// what a skipped benchmark reports), and the tick below only
+	// overwrites the pushed field when non-zero.
+	//
+	// A getter, read on every tick, for the same reason as Hardware
+	// above (#387): it was captured at boot, so a benchmark that failed
+	// because the engine had not finished installing yet de-rated the
+	// node to Capacity=1 for the life of the process — and #203's own
+	// "the de-rating is indefinite" complaint was exactly that. Every
+	// later measurement already lands in SetLastBench (the boot path in
+	// main.go, and RunBenchmark for a CLI- or control-plane-triggered
+	// run), so reading it live is all the lift needs.
+	//
+	// nil is allowed and reads as 0.
+	Capacity func() int
 
 	// RecommendedMaxParallel, when non-nil, returns the engine's current
 	// VRAM-safe parallelism ceiling (from the applied ollama tuning). Reported
@@ -179,6 +191,23 @@ func (d inferenceProbeDeps) cpCtx(fallback context.Context) context.Context {
 	return fallback
 }
 
+// capacityFn is the inferenceProbeDeps.Capacity getter. It prefers the
+// provider's live answer so a benchmark that runs after boot lifts the
+// advertised cap; boot is the fallback for the paths that have no provider
+// (--disable-inference, an unenrolled daemon), where it is 0 anyway.
+func capacityFn(boot int, sub *inferenceSubsystem) func() int {
+	if sub != nil && sub.provider != nil {
+		prov := sub.provider
+		return func() int {
+			if c := prov.AdvertisedCapacity(); c != 0 {
+				return c
+			}
+			return boot
+		}
+	}
+	return func() int { return boot }
+}
+
 func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 	if deps.StateWriter == nil {
 		return
@@ -241,8 +270,10 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 				s.Hardware = hw
 			}
 		}
-		if deps.Capacity != 0 {
-			s.Capacity = deps.Capacity
+		if deps.Capacity != nil {
+			if c := deps.Capacity(); c != 0 {
+				s.Capacity = c
+			}
 		}
 		if deps.RecommendedMaxParallel != nil {
 			if n := deps.RecommendedMaxParallel(); n > 0 {

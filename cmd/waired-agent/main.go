@@ -1094,9 +1094,19 @@ func run(ctx context.Context, args []string) error {
 						}
 					}
 				}
+				// #203: an engine that has not finished installing is not a
+				// slow one. Without this the benchmark fires the instant
+				// enrollment succeeds — while `waired init` is still
+				// installing the engine and pulling the model — and reports
+				// the resulting dial failure as a performance verdict.
+				var engineReady func() (bool, string)
+				if inferenceSub != nil && inferenceSub.provider != nil {
+					engineReady = inferenceSub.provider.EngineReady
+				}
 				bench := RunBootBenchmark(ctx, BenchDeps{
 					EngineKind:    engineKind,
 					EnginePort:    enginePort,
+					EngineReady:   engineReady,
 					EngineModel:   engineModelForActive(cfgRoot.Inference),
 					VariantID:     variantIDForActive(),
 					GPUModel:      firstGPU.Model,
@@ -1169,7 +1179,7 @@ func run(ctx context.Context, args []string) error {
 				Disabled:     *disableInference,
 				Logger:       logger,
 				Hardware:     hardwareSummaryFn(ctx, hwProfiler),
-				Capacity:     capacity,
+				Capacity:     capacityFn(capacity, inferenceSub),
 				AdvertiseTag: advertiseTag,
 				ServingTag:   servingTag,
 			}
