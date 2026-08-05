@@ -24,7 +24,7 @@ covers what the flags are *for*.
 | [`waired infer`](#waired-infer) | Ask your AI something, right now |
 | [`waired models`](#waired-models) | What is downloaded, download more, delete some |
 | [`waired runtimes`](#waired-runtimes) | The AI software itself, and a speed test |
-| [`waired inference`](#waired-inference) | Start / stop the engine; share it with your other computers |
+| [`waired inference`](#waired-inference) | Run AI models here or not; start / stop the engine; share it with your other computers |
 | [`waired worker`](#waired-worker) | Which computer answers your requests |
 | [`waired peers`](#waired-peers) / [`ping`](#waired-ping) | Your other computers |
 | [`waired public`](#waired-public) | Lend and borrow spare computers with other Waired users |
@@ -160,9 +160,11 @@ waired models refresh             # is there a better pick for this machine?
 waired models check-agent         # will this model work with a coding agent?
 ```
 
-`pull` waits until the model is ready and asks for confirmation if the model is
-bigger than this computer is rated for — `--yes` skips that prompt in a script.
-`rm` also confirms first. Model IDs come from the
+`pull` waits until the model is ready. A model that runs here but is not the one
+Waired would choose takes a confirmation — `--yes` skips that prompt in a
+script. A model this computer does not have the memory for is **refused**, with
+the shortfall; there is no flag for it, because nothing downstream could
+recover. `rm` also confirms first. Model IDs come from the
 [model catalog](/reference/model-catalog/).
 
 `check-agent` asks a question the other commands do not: not "does this model
@@ -210,6 +212,10 @@ models with their quality score so you can weigh speed against quality.
 ### `waired inference`
 
 ```sh
+waired inference on               # run AI models on this computer
+waired inference off
+waired inference status
+
 waired inference engine start     # load the model
 waired inference engine stop      # free the memory it is holding
 waired inference engine status
@@ -218,6 +224,17 @@ waired inference share on         # let your other computers use this one's AI
 waired inference share off
 waired inference share status
 ```
+
+`on` / `off` is the whole question of whether this computer runs models at all.
+Turning it **on** installs the AI engine and downloads the chosen model if they
+are not here yet, so the first `on` can take a while; turning it **off** leaves
+everything on disk and stops answering locally. It survives restarts, and it
+works even when the background service is not answering — the choice is saved
+and applied at the next start.
+
+Machines that would only manage a very small model start with this **off**; see
+[It said my machine can only run a very small
+model](/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model).
 
 `engine stop` is the memory-pressure escape hatch; `share off` keeps your own
 use working while closing it to your other machines. See
@@ -447,6 +464,8 @@ it by hand when building something unusual.
 
 - **`pause` / `resume`** stops *everything* — mesh routing and your own local
   AI both stop answering. Use it to take the computer out of the loop.
+- **`inference on` / `off`** decides whether this computer runs AI models at
+  all. Off, it still uses the AI on your other computers.
 - **`inference share on` / `off`** controls only whether your *other computers*
   can use this one's AI. With sharing off, `waired infer` still works here.
 

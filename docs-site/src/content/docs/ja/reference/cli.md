@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 3f6f3a83b997ec87
+sourceHash: cd0c4322a18d930a
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -24,7 +24,7 @@ sourceHash: 3f6f3a83b997ec87
 | [`waired infer`](#waired-infer) | いますぐ自分の AI に尋ねる |
 | [`waired models`](#waired-models) | 何が入っているか、追加、削除 |
 | [`waired runtimes`](#waired-runtimes) | AI ソフトウェア本体と、速度テスト |
-| [`waired inference`](#waired-inference) | エンジンの起動・停止、自分のほかのパソコンへの提供 |
+| [`waired inference`](#waired-inference) | ここで AI モデルを動かすかどうか、エンジンの起動・停止、自分のほかのパソコンへの提供 |
 | [`waired worker`](#waired-worker) | どのパソコンが答えるか |
 | [`waired peers`](#waired-peers) / [`ping`](#waired-ping) | 自分のほかのパソコン |
 | [`waired public`](#waired-public) | ほかの Waired ユーザーと空きマシンを貸し借りする |
@@ -156,8 +156,10 @@ waired models refresh             # このマシンにもっと合うモデル�
 waired models check-agent         # コーディングエージェントで使えるモデルか
 ```
 
-`pull` はモデルが使える状態になるまで待ち、このパソコンの推奨スペックを超える場合は
-確認を求めます（スクリプトでは `--yes` で省略）。`rm` も実行前に確認します。
+`pull` はモデルが使える状態になるまで待ちます。ここで動きはするが Waired が
+選ばないモデルは確認を求めます（スクリプトでは `--yes` で省略）。このパソコンの
+メモリに載らないモデルは**拒否**し、不足量を表示します。これを通すフラグは
+ありません — 通しても後段で回復できないためです。`rm` も実行前に確認します。
 モデル ID は[モデルカタログ](/ja/reference/model-catalog/)にあります。
 
 `check-agent` は他のコマンドとは別の問いに答えます。「このパソコンで動くか」でも
@@ -202,6 +204,10 @@ waired runtimes benchmark         # このパソコンの実際の速度を測�
 ### `waired inference`
 
 ```sh
+waired inference on               # このパソコンで AI モデルを動かす
+waired inference off
+waired inference status
+
 waired inference engine start     # モデルを読み込む
 waired inference engine stop      # 確保しているメモリを解放する
 waired inference engine status
@@ -210,6 +216,15 @@ waired inference share on         # 自分のほかのパソコンに、この�
 waired inference share off
 waired inference share status
 ```
+
+`on` / `off` は、このパソコンでモデルを動かすかどうかそのものです。**オン**に
+すると、AI エンジンと選ばれたモデルがまだ無ければあわせて導入するため、最初の
+`on` には時間がかかることがあります。**オフ**にしてもディスク上のものはそのまま
+残り、ローカルでの応答だけを止めます。設定は再起動をまたいで保持され、
+バックグラウンドサービスが応答しない状態でも保存され、次回起動時に適用されます。
+
+非常に小さいモデルしか動かせないマシンは、この設定が**オフ**の状態から始まります。
+→ [「非常に小さいモデルしか動かせない」と言われた](/ja/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model)
 
 `engine stop` はメモリ逼迫時の緊急手段、`share off` は自分の利用を保ったまま
 ほかのマシンからの利用だけを閉じる設定です。
@@ -433,6 +448,8 @@ WireGuard の鍵ペアを生成します。`init` が自動で行うので、
 
 - **`pause` / `resume`** は*すべて*を止めます。メッシュのルーティングも、
   ローカルの AI も応答しなくなります。このパソコンを完全に外したいときに使います。
+- **`inference on` / `off`** は、このパソコンで AI モデルを動かすかどうかを決めます。
+  オフでも、ほかのパソコンの AI は使えます。
 - **`inference share on` / `off`** は、*自分のほかのパソコン*がこのマシンの AI を
   使えるかどうかだけを制御します。共有オフでも、ここでは `waired infer` が動きます。
 

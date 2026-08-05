@@ -285,11 +285,26 @@ this machine really has not been set up yet — see
 ## It said my machine can only run a very small model
 
 Believe it. At that size a coding model produces broken output more often than
-useful output, which is why the default answer is **No**.
+useful output, which is why Waired starts with **local AI off** on machines
+like this one.
 
-The machine is still worth having in your network — it can use the AI running on
-your other computers. To install a model anyway, set up again with
-`--inference-enabled=true`.
+Off is a starting point, not a verdict. The machine is worth having in your
+network as it is — it can use the AI running on your other computers — and you
+can turn local AI on whenever you want to:
+
+```sh
+waired inference on
+```
+
+That installs the AI engine and downloads the small model if they are not on
+this computer yet. In the Waired app the same choice is **Run AI models on this
+computer**. To go back:
+
+```sh
+waired inference off
+```
+
+`waired inference status` says which way it is set right now.
 
 ## Setup said it could not complete a test generation
 
