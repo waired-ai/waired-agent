@@ -50,9 +50,25 @@ var benchNoEngineGrace = 3 * time.Minute
 // the first wait carries the whole setup budget, so the second always
 // returned promptly and the doubling only ever showed up in CI.
 //
-// Sized for what is actually left after that wait: engine warm-up and the
-// model load, not a download. `waired runtimes benchmark` keeps
-// benchPollDeadline — nothing has waited for anything on that path.
+// Three minutes is sized from what this budget actually bounds, which is
+// narrower than it looks: only the 425 loop. The 425 comes from
+// agentInferenceProvider.EngineReady (cmd/waired-agent/inference.go) — engine
+// not disabled, not parked, adapter Health() == Ready, active model
+// ModelStateReady — which is the same condition waitForBundledModel returns
+// ready on. So on the ordinary path the first POST here already gets a 200.
+// The expensive parts sit INSIDE that POST and are bounded elsewhere: warm-up
+// at 180 s and the measurement at 120 s server-side (benchJobTimeout), 240 s
+// client-side (benchHTTP). Nothing about a cold multi-GB load is being cut
+// short by this number.
+//
+// What is left for it to cover is the residue — an engine bouncing between the
+// two waits (#359), or a pull that the wait above gave up on still landing.
+// Deliberately the same magnitude as benchNoEngineGrace, which bounds the
+// no_engine arm of this very loop: a budget shorter than that grace would make
+// the grace unreachable.
+//
+// `waired runtimes benchmark` keeps benchPollDeadline — nothing has waited for
+// anything on that path, so its loop still owns the whole download window.
 var benchAfterPullDeadline = 3 * time.Minute
 
 // benchHTTP is the status-aware client used by the benchmark prompt.
