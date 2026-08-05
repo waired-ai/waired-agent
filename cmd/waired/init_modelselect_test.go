@@ -78,8 +78,8 @@ func TestCanonicalBundledModelIDResolvesAnInternalModel(t *testing.T) {
 		t.Errorf("canonicalBundledModelID(%q) = %q, want %q", alias, got, canonical)
 	}
 	// The offered set still resolves, and an unknown name is still kept.
-	if got := canonicalBundledModelID("waired/medium"); got != "qwen2.5-coder-14b-instruct" {
-		t.Errorf("canonicalBundledModelID(waired/medium) = %q", got)
+	if got := canonicalBundledModelID("qwen2.5-coder-14b"); got != "qwen2.5-coder-14b-instruct" {
+		t.Errorf("canonicalBundledModelID(qwen2.5-coder-14b) = %q", got)
 	}
 	if got := canonicalBundledModelID("model-from-a-newer-catalog"); got != "model-from-a-newer-catalog" {
 		t.Errorf("canonicalBundledModelID kept nothing for an unknown id: %q", got)

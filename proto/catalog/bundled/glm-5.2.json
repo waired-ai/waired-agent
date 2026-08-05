@@ -2,7 +2,6 @@
   "model_id": "glm-5.2",
   "display_name": "GLM-5.2 744B-A40B (MoE, MIT, 1M context)",
   "model_aliases": [
-    "waired/moe-frontier",
     "glm-5.2",
     "zai-org/GLM-5.2"
   ],

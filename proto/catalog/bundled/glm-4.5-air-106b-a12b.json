@@ -2,7 +2,6 @@
   "model_id": "glm-4.5-air-106b-a12b",
   "display_name": "GLM-4.5-Air 106B-A12B (MoE, MIT)",
   "model_aliases": [
-    "waired/moe-mit",
     "glm-4.5-air",
     "zai-org/GLM-4.5-Air"
   ],

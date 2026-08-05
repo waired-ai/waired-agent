@@ -2,7 +2,6 @@
   "model_id": "gpt-oss-20b",
   "display_name": "OpenAI gpt-oss 20B (MXFP4)",
   "model_aliases": [
-    "waired/oss-small",
     "gpt-oss-20b",
     "openai/gpt-oss-20b"
   ],

@@ -2,7 +2,6 @@
   "model_id": "qwen3.6-27b",
   "display_name": "Qwen3.6 27B (Dense, Hybrid Linear+Full Attention)",
   "model_aliases": [
-    "waired/dense-large",
     "qwen3.6-27b",
     "Qwen/Qwen3.6-27B"
   ],

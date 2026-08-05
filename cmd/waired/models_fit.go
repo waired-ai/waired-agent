@@ -108,7 +108,7 @@ func notRecommendedBecause(reason string) string {
 // matching model (by model_id, else by trailing path segment for short
 // forms). ok=false on any fetch/decode error or no match — callers treat
 // that as "fit unknown" and fail open. Alias forms the catalog response
-// does not carry (e.g. waired/moe-coding) fall through to ok=false rather
+// does not carry (e.g. a name from a newer catalog) fall through to ok=false rather
 // than risk matching the wrong family.
 func lookupCatalogFamily(mgmt, model string) (catalogDetailFamily, bool) {
 	client := &http.Client{Timeout: 5 * time.Second}

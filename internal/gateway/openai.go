@@ -51,7 +51,7 @@ func (h *HandlerSet) handleOpenAIModels(w http.ResponseWriter, r *http.Request) 
 	created := time.Now().Unix()
 	out := []model{}
 	seen := map[string]struct{}{}
-	for _, id := range router.DynamicCodingAliases {
+	for _, id := range router.DynamicAliases() {
 		seen[id] = struct{}{}
 		out = append(out, model{ID: id, Object: "model", Created: created, OwnedBy: "waired"})
 	}

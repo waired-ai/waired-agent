@@ -151,7 +151,7 @@ func (h *HandlerSet) anthropicModelList() []anthropicModel {
 		add(ModelWairedLocal, "Waired local (this device)")
 		add(ModelWairedCloud, "Waired cloud (Anthropic API)")
 	}
-	for _, id := range router.DynamicCodingAliases {
+	for _, id := range router.DynamicAliases() {
 		add(id, "")
 	}
 	for _, mf := range h.deps.ListManifests() {

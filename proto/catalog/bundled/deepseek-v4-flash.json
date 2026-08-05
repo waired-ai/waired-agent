@@ -2,7 +2,6 @@
   "model_id": "deepseek-v4-flash",
   "display_name": "DeepSeek-V4-Flash 284B-A13B (MoE, MIT, 1M context)",
   "model_aliases": [
-    "waired/moe-dual-gpu",
     "deepseek-v4-flash",
     "deepseek-ai/DeepSeek-V4-Flash"
   ],

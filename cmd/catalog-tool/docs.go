@@ -30,18 +30,18 @@ const (
 )
 
 // fixedAliases are the product-fixed catalog aliases the coding-agent
-// integrations present. waired/default and waired/coding are dynamic since
-// #632 — the router resolves them at request time to the host's current
-// coding default (preferred > active > bundled), so no manifest owns them;
-// only the size aliases (waired/small) remain static ModelAliases entries.
-// Listed here so the generated alias table is deterministic and ordered.
+// integrations present. All three are dynamic — the router resolves them
+// at request time and no manifest owns any of them (#632 for the coding
+// pair, #521 for waired/small). Listed here so the generated alias table
+// is deterministic and ordered.
 var fixedAliases = []string{"waired/default", "waired/coding", "waired/small"}
 
 // dynamicAliasNote is the rendered target for aliases no manifest owns
-// because the router resolves them dynamically (#632).
+// because the router resolves them dynamically (#632, #521).
 var dynamicAliasNote = map[string]string{
 	"waired/default": "動的: このホストの既定コーディングモデル（ユーザー指定 > 起動中のモデル > 同梱既定 の順で解決）",
 	"waired/coding":  "動的: waired/default と同じ解決",
+	"waired/small":   "動的: このホストが持っている中で最小のモデル（無ければ waired/default と同じ解決）",
 }
 
 func init() {

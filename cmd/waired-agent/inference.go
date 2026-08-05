@@ -3086,7 +3086,7 @@ func (p *agentInferenceProvider) activateBundledIfReady(ctx context.Context) boo
 
 // bundledModelID is the CANONICAL catalog id cfg.BundledModelID names.
 //
-// The configured value accepts any catalog alias — `waired/medium`,
+// The configured value accepts any catalog alias — `qwen2.5-coder-14b`,
 // `Qwen/Qwen2.5-Coder-14B-Instruct` — while every id the pull path writes
 // (state.Models keys, models.ready, the PullModel argument) is the
 // canonical manifest.ModelID. Resolving once, here, is what keeps the two

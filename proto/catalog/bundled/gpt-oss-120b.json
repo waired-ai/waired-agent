@@ -2,7 +2,6 @@
   "model_id": "gpt-oss-120b",
   "display_name": "OpenAI gpt-oss 120B (MXFP4)",
   "model_aliases": [
-    "waired/flagship",
     "gpt-oss-120b",
     "openai/gpt-oss-120b"
   ],

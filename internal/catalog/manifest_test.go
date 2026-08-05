@@ -25,14 +25,31 @@ func TestBundledManifests_Loads(t *testing.T) {
 			t.Errorf("qwen3.5 lineup manifest %q missing from bundled catalog", id)
 		}
 	}
-	// waired/default and waired/coding are dynamic aliases since #632:
-	// the router resolves them to the host's current coding default
-	// (preferred > active > bundled). No manifest may own them — a
-	// static entry would shadow the dynamic resolution for hosts that
-	// never pulled that manifest and re-break the default flow.
-	for _, alias := range []string{"waired/default", "waired/coding"} {
+	// The three product-fixed names are resolved by the router at
+	// request time, not owned by a manifest: waired/default and
+	// waired/coding to this host's coding default since #632, and
+	// waired/small to the smallest model this host has since #521. No
+	// manifest may own any of them — a static entry would shadow the
+	// dynamic resolution for hosts that never pulled that manifest and
+	// re-break the default flow.
+	for _, alias := range []string{"waired/default", "waired/coding", "waired/small"} {
 		if m, ok := LookupByAlias(alias, ms); ok {
-			t.Errorf("alias %q is statically owned by manifest %q; it must stay dynamic (#632)", alias, m.ModelID)
+			t.Errorf("alias %q is statically owned by manifest %q; it must stay dynamic (#632, #521)", alias, m.ModelID)
+		}
+	}
+	// And no OTHER waired/* name may come back. The decorative
+	// namespace (waired/flagship, waired/moe-*, waired/dense-large,
+	// waired/small's old size siblings) was retired in #521: names that
+	// rank models across families made a quality claim the ladder now
+	// requires evidence for, and names that encoded shape or licence
+	// duplicated fields the manifest already carries. waired/tiny
+	// survives on an internal_only entry, which BundledManifests does
+	// not return, so this loop should never see one.
+	for _, m := range ms {
+		for _, alias := range m.ModelAliases {
+			if strings.HasPrefix(alias, "waired/") {
+				t.Errorf("manifest %q declares %q; the static waired/* namespace was retired (#521)", m.ModelID, alias)
+			}
 		}
 	}
 }
@@ -564,19 +581,15 @@ func TestBundledManifests_HFAliasesResolve(t *testing.T) {
 		alias       string
 		wantModelID string
 	}{
-		// waired/* aliases (operator-facing default tiers).
-		// waired/default and waired/coding are router-resolved dynamic
-		// aliases since #632 and deliberately absent here.
-		{"waired/small", "qwen2.5-coder-3b-instruct"},
-		{"waired/medium", "qwen2.5-coder-14b-instruct"},
-		{"waired/flagship", "gpt-oss-120b"},
-		{"waired/dense-large", "qwen3.6-27b"},
-		{"waired/moe-small", "qwen3-coder-30b-a3b-instruct"},
-		{"waired/moe-mid", "qwen3-coder-next-80b-a3b-instruct"},
-		{"waired/moe-large", "qwen3-coder-480b-a35b-instruct"},
-		{"waired/moe-mit", "glm-4.5-air-106b-a12b"},
-		{"waired/moe-coding", "qwen3.6-35b-a3b"},
-		{"waired/oss-small", "gpt-oss-20b"},
+		// No waired/* rows. The static waired/* namespace was retired
+		// in #521: every offered manifest is reached by model_id or by
+		// its vendor-form alias, and the three names the product still
+		// uses (waired/default, waired/coding, waired/small) are
+		// resolved by the router at request time rather than owned by
+		// a manifest — TestBundledManifests_QwenLineup asserts no
+		// manifest may claim them. The one static survivor,
+		// waired/tiny, belongs to an internal_only entry and so is
+		// absent from BundledManifests by construction.
 		// HF-style aliases (Phase 5 OpenAI-compat reverse lookup).
 		{"Qwen/Qwen2.5-Coder-7B-Instruct", "qwen2.5-coder-7b-instruct"},
 		{"Qwen/Qwen3-Coder-30B-A3B-Instruct", "qwen3-coder-30b-a3b-instruct"},

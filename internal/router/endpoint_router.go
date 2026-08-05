@@ -295,9 +295,65 @@ type Inputs struct {
 // instead of a static ModelAliases entry. They used to be pinned in
 // qwen2.5-coder-7b-instruct.json, which broke the out-of-the-box
 // `waired infer` on every host whose selected bundled model differs
-// (#632). Size aliases like waired/small stay static — explicitly
-// naming a size is a real request for that model.
+// (#632).
 var DynamicCodingAliases = []string{"waired/default", "waired/coding"}
+
+// DynamicSizeAliases resolve to a size-relative answer for THIS host
+// rather than to its coding default.
+//
+// waired/small used to be a static ModelAliases entry, and the rule
+// here used to say size aliases should stay that way because naming a
+// size is a real request for that model. #521 retired that rule along
+// with the rest of the static waired/* namespace: a fixed name for a
+// moving catalog dates the moment the model behind it is retired, and
+// waired/small has meant "the 3B" since a generation the catalog no
+// longer carries. The name is kept because openclaw writes it into
+// every user's config (internal/integration/openclaw); what changed is
+// that it now names a role instead of a model.
+//
+// The role is "the smallest model this host already has". Deliberately
+// not "the smallest model that would fit": a model that is not
+// downloaded is not a fast answer, it is a multi-gigabyte wait, and
+// resolving a request to one would turn the lighter choice into the
+// slower one. On a host with a single model it is the coding default,
+// which is also the fail-soft below.
+var DynamicSizeAliases = []string{"waired/small"}
+
+// DynamicAliases is every name the router answers at request time
+// rather than out of a manifest. It is what an endpoint advertising a
+// model list has to add to the catalog's own ids, since no manifest
+// declares these (internal/gateway).
+func DynamicAliases() []string {
+	out := make([]string, 0, len(DynamicCodingAliases)+len(DynamicSizeAliases))
+	out = append(out, DynamicCodingAliases...)
+	out = append(out, DynamicSizeAliases...)
+	return out
+}
+
+// smallestLocalModelID returns the model_id of the READY local model
+// with the smallest download, or "" when the host has none to choose
+// between. manual_only entries are skipped for the same reason the
+// pickers skip them (#521): this is the product answering on the
+// user's behalf, not the user naming a model.
+//
+// Ties break on model_id so two hosts with the same bytes on disk
+// resolve the same way.
+func (s *Selector) smallestLocalModelID() string {
+	best, bestSize := "", int64(0)
+	for id, ms := range s.in.LocalState.Models {
+		if ms.State != catalog.ModelStateReady || ms.SizeBytes <= 0 {
+			continue
+		}
+		m, ok := catalog.LookupByAlias(id, s.in.Manifests)
+		if !ok || m.ManualOnly != "" {
+			continue
+		}
+		if best == "" || ms.SizeBytes < bestSize || (ms.SizeBytes == bestSize && id < best) {
+			best, bestSize = id, ms.SizeBytes
+		}
+	}
+	return best
+}
 
 // resolveModel maps a requested model name to a manifest: dynamic
 // coding aliases go to DefaultModelID when it resolves, then the static
@@ -310,6 +366,26 @@ func (s *Selector) resolveModel(name string, reasons *[]string) (catalog.Manifes
 			*reasons = append(*reasons, fmt.Sprintf(
 				"alias %q resolved dynamically to this host's coding default %q", name, m.ModelID))
 			return m, true
+		}
+	}
+	if slices.Contains(DynamicSizeAliases, name) {
+		// Fail SOFT to the coding default. openclaw allowlists this
+		// name in every user's config, so a host that has nothing to
+		// choose between must still answer the request rather than
+		// 404 a model the config says is there.
+		if id := s.smallestLocalModelID(); id != "" {
+			if m, ok := catalog.LookupByAlias(id, s.in.Manifests); ok {
+				*reasons = append(*reasons, fmt.Sprintf(
+					"alias %q resolved dynamically to this host's smallest local model %q", name, m.ModelID))
+				return m, true
+			}
+		}
+		if s.in.DefaultModelID != "" {
+			if m, ok := catalog.LookupByAlias(s.in.DefaultModelID, s.in.Manifests); ok {
+				*reasons = append(*reasons, fmt.Sprintf(
+					"alias %q has nothing smaller here; resolved to this host's coding default %q", name, m.ModelID))
+				return m, true
+			}
 		}
 	}
 	if m, ok := catalog.LookupByAlias(name, s.in.Manifests); ok {

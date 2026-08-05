@@ -32,7 +32,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 | --- | --- | --- |
 | `waired/default` | 動的: このホストの既定コーディングモデル（ユーザー指定 > 起動中のモデル > 同梱既定 の順で解決） |  |
 | `waired/coding` | 動的: waired/default と同じ解決 |  |
-| `waired/small` | `qwen2.5-coder-3b-instruct` | Qwen2.5 Coder 3B Instruct |
+| `waired/small` | 動的: このホストが持っている中で最小のモデル（無ければ waired/default と同じ解決） |  |
 
 ### ファミリ概要
 
@@ -42,28 +42,28 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `qwen2.5-coder-14b-instruct` | Qwen2.5 Coder 14B Instruct | `waired/medium` | 32,768 | chat, tool_use, json_mode | 14.7B | ollama | 2 |
-| `qwen2.5-coder-3b-instruct` | Qwen2.5 Coder 3B Instruct | `waired/small` | 32,768 | chat, tool_use, json_mode | 3.1B | ollama | 2 |
+| `qwen2.5-coder-14b-instruct` | Qwen2.5 Coder 14B Instruct | — | 32,768 | chat, tool_use, json_mode | 14.7B | ollama | 2 |
+| `qwen2.5-coder-3b-instruct` | Qwen2.5 Coder 3B Instruct | — | 32,768 | chat, tool_use, json_mode | 3.1B | ollama | 2 |
 | `qwen2.5-coder-7b-instruct` | Qwen2.5 Coder 7B Instruct | — | 32,768 | chat, tool_use, json_mode | 7.6B | ollama | 2 |
 | `qwen3.5-0.8b` | Qwen3.5 0.8B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 0.8B | ollama | 1 |
 | `qwen3.5-27b` | Qwen3.5 27B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 1 |
 | `qwen3.5-2b` | Qwen3.5 2B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 2B | ollama | 1 |
 | `qwen3.5-4b` | Qwen3.5 4B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 4B | ollama | 1 |
 | `qwen3.5-9b` | Qwen3.5 9B (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 9B | ollama | 1 |
-| `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | `waired/dense-large` | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
+| `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
 
 **MoE（総 / アクティブ）**
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `gpt-oss-120b` | OpenAI gpt-oss 120B (MXFP4) | `waired/flagship` | 131,072 | chat, tool_use, json_mode | 116.8B / A5.1B | vllm | 2 |
-| `gpt-oss-20b` | OpenAI gpt-oss 20B (MXFP4) | `waired/oss-small` | 131,072 | chat, tool_use, json_mode | 20.9B / A3.6B | ollama | 2 |
-| `qwen3-coder-30b-a3b-instruct` | Qwen3 Coder 30B-A3B Instruct (MoE) | `waired/moe-small` | 262,144 | chat, tool_use, json_mode | 30.5B / A3.3B | ollama | 2 |
-| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B-A35B Instruct (MoE) | `waired/moe-large` | 262,144 | chat, tool_use, json_mode | 480B / A35B | ollama | 2 |
-| `qwen3-coder-next-80b-a3b-instruct` | Qwen3 Coder Next 80B-A3B Instruct (Hybrid Mamba) | `waired/moe-mid` | 262,144 | chat, tool_use, json_mode | 80.1B / A3.3B | vllm | 3 |
+| `gpt-oss-120b` | OpenAI gpt-oss 120B (MXFP4) | — | 131,072 | chat, tool_use, json_mode | 116.8B / A5.1B | vllm | 2 |
+| `gpt-oss-20b` | OpenAI gpt-oss 20B (MXFP4) | — | 131,072 | chat, tool_use, json_mode | 20.9B / A3.6B | ollama | 2 |
+| `qwen3-coder-30b-a3b-instruct` | Qwen3 Coder 30B-A3B Instruct (MoE) | — | 262,144 | chat, tool_use, json_mode | 30.5B / A3.3B | ollama | 2 |
+| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B-A35B Instruct (MoE) | — | 262,144 | chat, tool_use, json_mode | 480B / A35B | ollama | 2 |
+| `qwen3-coder-next-80b-a3b-instruct` | Qwen3 Coder Next 80B-A3B Instruct (Hybrid Mamba) | — | 262,144 | chat, tool_use, json_mode | 80.1B / A3.3B | vllm | 3 |
 | `qwen3.5-122b-a10b` | Qwen3.5 122B-A10B (MoE) (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 122B / A10B | ollama | 1 |
 | `qwen3.5-35b-a3b` | Qwen3.5 35B-A3B (MoE) (Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 1 |
-| `qwen3.6-35b-a3b` | Qwen3.6 35B-A3B (MoE, Hybrid Linear+Full Attention) | `waired/moe-coding` | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 2 |
+| `qwen3.6-35b-a3b` | Qwen3.6 35B-A3B (MoE, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 35B / A3.3B | ollama | 2 |
 
 #### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）
 
@@ -71,23 +71,23 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `qwen2.5-coder-14b-instruct` | Qwen2.5 Coder 14B Instruct | `waired/medium` | 32,768 | chat, tool_use, json_mode | 14.7B | ollama | 2 |
-| `qwen2.5-coder-3b-instruct` | Qwen2.5 Coder 3B Instruct | `waired/small` | 32,768 | chat, tool_use, json_mode | 3.1B | ollama | 2 |
+| `qwen2.5-coder-14b-instruct` | Qwen2.5 Coder 14B Instruct | — | 32,768 | chat, tool_use, json_mode | 14.7B | ollama | 2 |
+| `qwen2.5-coder-3b-instruct` | Qwen2.5 Coder 3B Instruct | — | 32,768 | chat, tool_use, json_mode | 3.1B | ollama | 2 |
 | `qwen2.5-coder-7b-instruct` | Qwen2.5 Coder 7B Instruct | — | 32,768 | chat, tool_use, json_mode | 7.6B | ollama | 2 |
-| `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | `waired/dense-large` | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
+| `qwen3.6-27b` | Qwen3.6 27B (Dense, Hybrid Linear+Full Attention) | — | 262,144 | chat, tool_use, json_mode | 27B | ollama | 3 |
 
 **MoE（総 / アクティブ）**
 
 | model_id | 表示名 | waired 別名 | context | capabilities | パラメータ | preferred | variants |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `deepseek-v4-flash` | DeepSeek-V4-Flash 284B-A13B (MoE, MIT, 1M context) | `waired/moe-dual-gpu` | 1,048,576 | chat, tool_use, json_mode | 284B / A13B | vllm | 1 |
-| `glm-4.5-air-106b-a12b` | GLM-4.5-Air 106B-A12B (MoE, MIT) | `waired/moe-mit` | 131,072 | chat, tool_use, json_mode | 106B / A12B | vllm | 1 |
-| `glm-5.2` | GLM-5.2 744B-A40B (MoE, MIT, 1M context) | `waired/moe-frontier` | 1,048,576 | chat, tool_use, json_mode | 744B / A40B | vllm | 2 |
-| `gpt-oss-120b` | OpenAI gpt-oss 120B (MXFP4) | `waired/flagship` | 131,072 | chat, tool_use, json_mode | 116.8B / A5.1B | vllm | 2 |
-| `gpt-oss-20b` | OpenAI gpt-oss 20B (MXFP4) | `waired/oss-small` | 131,072 | chat, tool_use, json_mode | 20.9B / A3.6B | ollama | 2 |
-| `qwen3-coder-30b-a3b-instruct` | Qwen3 Coder 30B-A3B Instruct (MoE) | `waired/moe-small` | 262,144 | chat, tool_use, json_mode | 30.5B / A3.3B | ollama | 2 |
-| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B-A35B Instruct (MoE) | `waired/moe-large` | 262,144 | chat, tool_use, json_mode | 480B / A35B | ollama | 2 |
-| `qwen3-coder-next-80b-a3b-instruct` | Qwen3 Coder Next 80B-A3B Instruct (Hybrid Mamba) | `waired/moe-mid` | 262,144 | chat, tool_use, json_mode | 80.1B / A3.3B | vllm | 3 |
+| `deepseek-v4-flash` | DeepSeek-V4-Flash 284B-A13B (MoE, MIT, 1M context) | — | 1,048,576 | chat, tool_use, json_mode | 284B / A13B | vllm | 1 |
+| `glm-4.5-air-106b-a12b` | GLM-4.5-Air 106B-A12B (MoE, MIT) | — | 131,072 | chat, tool_use, json_mode | 106B / A12B | vllm | 1 |
+| `glm-5.2` | GLM-5.2 744B-A40B (MoE, MIT, 1M context) | — | 1,048,576 | chat, tool_use, json_mode | 744B / A40B | vllm | 2 |
+| `gpt-oss-120b` | OpenAI gpt-oss 120B (MXFP4) | — | 131,072 | chat, tool_use, json_mode | 116.8B / A5.1B | vllm | 2 |
+| `gpt-oss-20b` | OpenAI gpt-oss 20B (MXFP4) | — | 131,072 | chat, tool_use, json_mode | 20.9B / A3.6B | ollama | 2 |
+| `qwen3-coder-30b-a3b-instruct` | Qwen3 Coder 30B-A3B Instruct (MoE) | — | 262,144 | chat, tool_use, json_mode | 30.5B / A3.3B | ollama | 2 |
+| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B-A35B Instruct (MoE) | — | 262,144 | chat, tool_use, json_mode | 480B / A35B | ollama | 2 |
+| `qwen3-coder-next-80b-a3b-instruct` | Qwen3 Coder Next 80B-A3B Instruct (Hybrid Mamba) | — | 262,144 | chat, tool_use, json_mode | 80.1B / A3.3B | vllm | 3 |
 
 ### 全バリアント（数値）
 
