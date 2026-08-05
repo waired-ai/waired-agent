@@ -65,6 +65,36 @@ type Manifest struct {
 	// quality floor answer "is this good enough to recommend"; this
 	// answers "is this ours to offer at all".
 	InternalOnly string `json:"internal_only,omitempty"`
+
+	// ManualOnly, when non-empty, keeps this model out of every
+	// AUTOMATIC choice — the install pick, the auto-picker's ranking,
+	// the recommended-family badge, the upgrade step — while leaving it
+	// in the catalog a person browses and can select for themselves.
+	// The value is the REASON, same as InternalOnly. Empty means the
+	// model participates normally.
+	//
+	// InternalOnly answers "is this ours to offer at all"; this answers
+	// "would we ever choose it for someone". A model can be popular and
+	// worth carrying without being what we put in front of somebody who
+	// has not asked for it, and before this field there was no way to
+	// say so: withholding removed the entry from the catalog entirely,
+	// so a person could not pick what they could no longer see.
+	//
+	// The two compose and InternalOnly wins — a model we do not offer at
+	// all is not one we could have chosen. BundledManifests therefore
+	// still filters on InternalOnly alone; a manual-only entry stays in
+	// its result, and the pickers are what skip it.
+	//
+	// Like InternalOnly this does NOT affect resolution: a manual-only
+	// entry resolves by model id and by alias, pulls, and serves. That
+	// is what makes "the person picked it themselves" work, and it is
+	// what keeps an explicit pin somebody already wrote — in agent.json,
+	// in preferred-model.json, or as a control-plane desired model —
+	// working after the model stops being recommended.
+	//
+	// Ratifying source: docs/decisions/20260805/1427-quality-tier-is-a-
+	// curated-ladder.md and issue #520.
+	ManualOnly string `json:"manual_only,omitempty"`
 }
 
 // RuntimePolicy expresses the manifest author's runtime preference.
