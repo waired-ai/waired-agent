@@ -63,6 +63,9 @@ MGMT="http://127.0.0.1:9476/waired/v1/status"
 # there. scripts/ci/harness-failure-strings-guard.sh checks the three copies
 # agree and that every branch still exists in the product source.
 IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
+# Mirror of lib/installtest-enroll.sh's IT_BENCH_NOT_READY_RE — see the comment
+# there (#382). Same guard checks these three copies agree.
+IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
@@ -211,7 +214,7 @@ assert_ollama_bundle_integrity_macos() {
 }
 
 assert_inference_macos() {
-  local ollama_bin="" cand tps
+  local ollama_bin="" cand tps notready
 
   # PRIMARY: init's own transcript. See IT_INSTALL_FAILURE_RE's comment in
   # lib/installtest-enroll.sh — the installer's verdict outranks anything
@@ -302,10 +305,30 @@ assert_inference_macos() {
   #
   # `|| true`: a no-match / multi-match(SIGPIPE) grep must not trip a `set -e`
   # driver even though this script itself runs set -uo only.
-  tps=""
-  [ -f "$INITLOG" ] && tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$INITLOG" | head -1 || true)"
+  #
+  # Three arms, not two (#382): a benchmark that RAN and produced nothing is an
+  # engine problem, a benchmark that NEVER RAN because the model was not ready
+  # in time is a download one. Both stay red — the distinction is what the red
+  # says. Mirrors lib/installtest-enroll.sh; this leg is structurally MORE
+  # exposed than the sentinel, because it pulls the real multi-GB bundled model
+  # rather than a 350M fixture.
+  tps=""; notready=""
+  if [ -f "$INITLOG" ]; then
+    tps="$(grep -ioE '[0-9]+(\.[0-9]+)? *(tok|tokens)/s' "$INITLOG" | head -1 || true)"
+    notready="$(grep -oE "$IT_BENCH_NOT_READY_RE" "$INITLOG" | head -1 || true)"
+  fi
   if [ -n "$tps" ]; then
     ok "benchmark ran during init ($tps)"
+  elif [ -n "$notready" ]; then
+    bad "the model was not ready inside init's benchmark window, so nothing was measured — the download, not the engine (\"$notready\"; $INITLOG)"
+    grep -iE 'download|model|pull' "$INITLOG" 2>/dev/null | tail -20 | sed 's/^/    init| /' >&2 || true
+    # Pull-side evidence only; engine.log stays on the arm below (#382).
+    [ -n "$ollama_bin" ] && OLLAMA_HOST=127.0.0.1:9475 "$ollama_bin" list 2>&1 | sed 's/^/    :9475 /' >&2 || true
+    # The `|| echo` is inside the pipe on purpose: a failed `curl -fsS` prints
+    # nothing, and a trailing `|| true` would never fire because the pipeline's
+    # status is sed's — so an unreachable daemon would leave no line at all.
+    { curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"; } 2>&1 |
+      sed 's/^/    status| /' >&2 || true
   else
     bad "no benchmark THROUGHPUT figure in init transcript ($INITLOG)"
     grep -iE 'benchmark|inference|engine' "$INITLOG" 2>/dev/null | tail -20 | sed 's/^/    init| /' >&2 || true
