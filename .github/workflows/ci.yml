@@ -335,6 +335,45 @@ jobs:
       - name: go test (root)
         run: go test ./... -timeout 10m
 
+      # `go test -race` is the only thing that finds a data race, and nothing
+      # here ran it (#506). The daemon is the wrong program to leave uncovered:
+      # it is long-lived and heavily concurrent (setup reconciler, background
+      # pulls, engine bounces, management handlers reading provider state), and
+      # a race there is not a wrong answer — it is `fatal error: concurrent map
+      # read and map write`, which no recover() catches, on a user's machine.
+      #
+      # A STEP inside `unit tests`, not a new job: `unit tests` is a required
+      # status check (see the comment above unit-multios, which is a separate
+      # job for exactly this reason), so a step keeps the context name — no
+      # ruleset edit, and no open PR waiting on a context that never reports.
+      # A new context would be advisory-only, and an advisory race lane is one
+      # nobody looks at.
+      #
+      # The plain run above STAYS, and is not redundant: release binaries are
+      # built without cgo and `-race` forces CGO_ENABLED=1, so the plain run is
+      # the one that exercises the build that actually ships.
+      #
+      # Linux only. unit-multios (darwin) already sets cgo: "1" but doubling a
+      # 25-minute macOS job is not worth it, and its windows leg deliberately
+      # runs at Go's cgo default. Root module only: proto/ is embedded catalog
+      # data and codegen with no goroutines.
+      #
+      # Cost measured 2026-08-05 over 81 packages at GOMAXPROCS=4 with a cold
+      # build cache: 37.2s plain vs 57.7s race. This suite's time is spent
+      # waiting (timeouts, sleeps) and the detector taxes CPU-bound work, so
+      # expect +30-45s on the slower hosted runner against a 15-minute job
+      # timeout and a PR critical path set by the ~24-minute testnet gate.
+      #
+      # A red here is a defect, not a flake: `-race` reports only accesses that
+      # actually happened and never fires on correctly synchronised code. It is
+      # non-deterministic in the other direction only — a race can go
+      # unreported on a run that did not interleave, so a green re-run of a red
+      # is not an answer. Equally, green here is a regression bar, not a claim
+      # that the daemon is race-free: the detector only sees code paths the
+      # tests actually execute concurrently.
+      - name: go test (root, race detector)
+        run: go test -race ./... -timeout 15m
+
       - name: go test (proto)
         run: cd proto && go test ./... -timeout 5m
 
