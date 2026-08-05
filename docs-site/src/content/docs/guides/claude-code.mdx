@@ -157,6 +157,21 @@ if you switch to a different model later, run `sudo waired claude enable` again
 the session surviving, not failing — see
 [Long Claude Code sessions get summarized](/troubleshooting/#long-claude-code-sessions-get-summarized).
 
+**Some models hold much less than others.** A few in the catalog — the
+`gpt-oss` pair and `glm-4.5-air` — top out around 131,000 tokens instead of
+200,000. Waired never picks one for you and marks them in the model list, but
+they are yours to choose. If you do, Claude Code will hit the limit sooner than
+it expects to; it recovers by summarizing and carrying on, but summarizing under
+pressure loses more than summarizing early does. Have it start earlier:
+
+```sh
+export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=55
+```
+
+55–60 is the useful range with a 131k model. This is a Claude Code setting, not
+a Waired one — it may change with their releases, and it does nothing on a model
+that already holds a full session.
+
 **Failures fall back rather than break.** If your model cannot serve a request —
 paused, still downloading, an unsupported request shape — Claude Code uses the
 real Anthropic API so your turn completes. Choose the `waired` route if you

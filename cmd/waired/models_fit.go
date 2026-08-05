@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // confirmModelFitsForPull gates `waired models pull` (#61). Two
@@ -86,10 +88,18 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes bool, out io.Writer, 
 // and the vocabulary is allowed to grow.
 func notRecommendedBecause(reason string) string {
 	switch reason {
-	case "weights_spill":
+	case hostfit.ReasonWeightsSpill:
 		return ": it does not fit entirely on the graphics card, and every reply pays for that"
-	case "too_slow":
+	case hostfit.ReasonTooSlow:
 		return ": replies would be slow"
+	case hostfit.ReasonWindowTooSmall:
+		// The only one that is not about this computer. No machine makes
+		// this model hold a coding session, so naming hardware would send
+		// someone shopping for something that cannot help.
+		return ": it cannot hold a long coding session — a coding agent has to compact " +
+			"much earlier with it, and will lose the start of the work if it does not"
+	case hostfit.ReasonWindowExceedsMemory:
+		return ": this computer cannot hold a long coding session with it, though it answers well otherwise"
 	}
 	return ""
 }
