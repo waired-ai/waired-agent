@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -29,7 +28,7 @@ var installOllamaBundled = installOllamaBundledImpl
 // used to have no view of (waired-agent#197). nil for every caller that
 // is not the setup executor.
 func installOllama(yes bool, stateDir string, sink func(infruntime.OllamaInstallProgress)) error {
-	baseDir := filepath.Join(stateDir, "runtimes", "ollama")
+	baseDir := infruntime.BundledOllamaDir(stateDir)
 	if !yes && !confirmTTY(fmt.Sprintf("Install waired's bundled Ollama %s into %s ?", infruntime.OllamaPinnedVersion, baseDir)) {
 		return errors.New("aborted by user")
 	}

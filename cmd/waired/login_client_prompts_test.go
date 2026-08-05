@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -810,13 +811,13 @@ func TestRunInitViaDaemon_EngineThatWillNotStartExitsLocalAIDown(t *testing.T) {
 // unelevated CI runner that is the branch a Linux run would take by
 // default.
 //
-// The bundled binary is written for real because engineInstallDecision
-// asks the FILESYSTEM on linux (bundledEnginePath) and the DETECTION on
-// windows/darwin; stubbing only one leaves the test passing on one OS and
-// taking the install branch on the others.
+// The bundled binary is written for real because engineInstallDecision asks
+// the FILESYSTEM on linux and darwin (bundledEnginePath) and the DETECTION on
+// windows; stubbing only one leaves the test passing on one OS and taking the
+// install branch on the others.
 func stubEngineAlreadyInstalled(t *testing.T, stateDir string) {
 	t.Helper()
-	bundled := filepath.Join(stateDir, "runtimes", "ollama", "bin", "ollama")
+	bundled := infruntime.BundledOllamaBinaryPath(runtime.GOOS, stateDir)
 	if err := os.MkdirAll(filepath.Dir(bundled), 0o755); err != nil {
 		t.Fatalf("mkdir bundled engine dir: %v", err)
 	}
@@ -828,16 +829,10 @@ func stubEngineAlreadyInstalled(t *testing.T, stateDir string) {
 		Path: bundled, Version: infruntime.OllamaPinnedVersion,
 	}
 	origInstall, origDetect := setupInstallEngine, setupDetectEngine
-	origNoExec, origBroken := setupDetectEngineNoExec, setupEngineSignatureBroken
 	setupInstallEngine = func(bool, string, func(infruntime.OllamaInstallProgress)) error { return nil }
 	setupDetectEngine = func(context.Context, string) setup.OllamaDetection { return present }
-	setupDetectEngineNoExec = func(string) setup.OllamaDetection { return present }
-	// macOS only: an unverifiable bundle would route to repair, i.e. back
-	// to the install branch. This host's engine is intact on disk.
-	setupEngineSignatureBroken = func(context.Context, setup.OllamaDetection) bool { return false }
 	t.Cleanup(func() {
 		setupInstallEngine, setupDetectEngine = origInstall, origDetect
-		setupDetectEngineNoExec, setupEngineSignatureBroken = origNoExec, origBroken
 	})
 }
 
@@ -850,16 +845,11 @@ func stubEngineAlreadyInstalled(t *testing.T, stateDir string) {
 func stubEngineInstallFailure(t *testing.T) {
 	t.Helper()
 	origInstall, origDetect := setupInstallEngine, setupDetectEngine
-	origNoExec := setupDetectEngineNoExec
 	setupInstallEngine = func(bool, string, func(infruntime.OllamaInstallProgress)) error {
 		return errors.New("no space left on device")
 	}
 	setupDetectEngine = func(context.Context, string) setup.OllamaDetection { return setup.OllamaDetection{} }
-	// Also stubbed so the darwin repair probe cannot reach a developer box's
-	// real /Applications/Ollama.app.
-	setupDetectEngineNoExec = func(string) setup.OllamaDetection { return setup.OllamaDetection{} }
 	t.Cleanup(func() {
 		setupInstallEngine, setupDetectEngine = origInstall, origDetect
-		setupDetectEngineNoExec = origNoExec
 	})
 }

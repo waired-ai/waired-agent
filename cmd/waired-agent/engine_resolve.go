@@ -27,44 +27,46 @@ import (
 // binary by stat — disagrees with it at the same instant on the same
 // machine.
 
-// bundledOllamaBinPath is where waired's own ollama install lands,
-// relative to the agent state dir. The executor is told the state dir
-// (SetupStateResponse.StateDir) and joins the same path, so the two
-// agree by construction rather than by coincidence.
-//
-// No ".exe" on Windows on purpose: the Windows / macOS "bundled"
-// installs land at global well-known locations outside the state dir,
-// which download.ResolveBinary covers instead. Only Linux installs
-// here (cmd/waired/runtimes_install_linux.go).
-func bundledOllamaBinPath(stateDir string) string {
-	return filepath.Join(stateDir, "runtimes", "ollama", "bin", "ollama")
-}
-
 // resolveOllamaBinary is the daemon's rule for locating ollama: the
-// waired-managed binary under the state dir first, then
-// download.ResolveBinary's $WAIRED_OLLAMA_BINARY → $PATH → well-known
-// paths walk.
+// waired-managed binary under the state dir, or nothing.
 //
-// Linux is STRICT: only the waired-managed binary qualifies. Falling
-// back to PATH used to spawn whatever system ollama was installed
-// (unpinned version) on our port. Windows/macOS keep the fallback
-// because their waired-managed installs still live outside the state
-// dir (#492, #493 relocate them; #494 then removes the fallback).
+// Linux and macOS are STRICT. Falling back to PATH used to spawn
+// whatever system ollama happened to be installed — an unpinned version,
+// software waired never tested against — on our port. macOS joined the
+// strict side with #492, which moved its bundled install off
+// /Applications and under the state dir; until then the fallback was
+// load-bearing, because the waired-managed install genuinely lived
+// outside the state dir there.
 //
-// goos is a parameter, not runtime.GOOS, so the Linux-strict branch is
-// table-testable from any runner (repo rule: route GOOS-varying
-// decisions through a function taking runtime.GOOS).
+// Windows still keeps the fallback for one more change (#493 relocates
+// its install; the fallback goes with it), which is why this takes a
+// goos at all.
+//
+// goos is a parameter, not runtime.GOOS, so the branch is table-testable
+// from any runner (repo rule: route GOOS-varying decisions through a
+// function taking runtime.GOOS).
 func resolveOllamaBinary(goos, stateDir string) (string, error) {
-	bundled := bundledOllamaBinPath(stateDir)
+	bundled := infruntime.BundledOllamaBinaryPath(goos, stateDir)
 	if fi, err := os.Stat(bundled); err == nil && fi.Mode().IsRegular() {
 		return bundled, nil
 	}
-	if goos == "linux" {
+	if goos != "windows" {
 		return "", fmt.Errorf(
-			"bundled ollama not installed (expected at %s): run `sudo waired runtimes install ollama`",
-			bundled)
+			"bundled ollama not installed (expected at %s): run `%s`",
+			bundled, elevatedInstallHint(goos))
 	}
 	return download.ResolveBinary("")
+}
+
+// elevatedInstallHint spells the install command the way the operator has
+// to invoke it. The state dir is root-owned on both strict OSes, so both
+// need sudo — but only after #492 on macOS, where the install used to go
+// to the admin-writable /Applications and needed none.
+func elevatedInstallHint(goos string) string {
+	if goos == "windows" {
+		return "waired runtimes install ollama"
+	}
+	return "sudo waired runtimes install ollama"
 }
 
 // vllmActiveVersion returns the version recorded by the verified vLLM

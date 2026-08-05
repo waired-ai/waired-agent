@@ -20,7 +20,6 @@ func TestPlanDoctorFix(t *testing.T) {
 		name          string
 		hasFail       bool
 		tray          trayhost.RepairAction
-		engine        engineRepairAction
 		forced        bool
 		noInteractive bool
 		tty           bool
@@ -83,38 +82,14 @@ func TestPlanDoctorFix(t *testing.T) {
 			hasFail: true, tty: false, tray: trayhost.RepairEnableOnly,
 			want: doctorFixPlan{},
 		},
-		// #329. A broken macOS engine bundle always produces a StatusFail
-		// finding, so hasFail is true in every row below by construction —
-		// engineFindingFrom is what guarantees that pairing.
-		{
-			name:    "a repairable engine bundle is fixed alongside the integration",
-			hasFail: true, tty: true, tray: trayhost.RepairNone, engine: engineRepairBundleMarker,
-			want: doctorFixPlan{Prompt: true, Integration: true, Engine: true},
-		},
-		{
-			name:   "--fix repairs the engine bundle without a prompt",
-			forced: true, tray: trayhost.RepairNone, engine: engineRepairBundleMarker,
-			want: doctorFixPlan{Integration: true, Engine: true},
-		},
-		{
-			name:    "an unrepairable engine adds nothing",
-			hasFail: true, tty: true, tray: trayhost.RepairNone, engine: engineRepairNone,
-			want: doctorFixPlan{Prompt: true, Integration: true},
-		},
-		{
-			name:          "--no-interactive never repairs the engine either",
-			hasFail:       true,
-			noInteractive: true, tty: true, tray: trayhost.RepairNone, engine: engineRepairBundleMarker,
-			want: doctorFixPlan{},
-		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := planDoctorFix(tc.hasFail, tc.tray, tc.engine, tc.forced, tc.noInteractive, tc.tty)
+			got := planDoctorFix(tc.hasFail, tc.tray, tc.forced, tc.noInteractive, tc.tty)
 			if got != tc.want {
-				t.Errorf("planDoctorFix(hasFail=%v, tray=%v, engine=%v, forced=%v, noInteractive=%v, tty=%v)\n got %+v\nwant %+v",
-					tc.hasFail, tc.tray, tc.engine, tc.forced, tc.noInteractive, tc.tty, got, tc.want)
+				t.Errorf("planDoctorFix(hasFail=%v, tray=%v, forced=%v, noInteractive=%v, tty=%v)\n got %+v\nwant %+v",
+					tc.hasFail, tc.tray, tc.forced, tc.noInteractive, tc.tty, got, tc.want)
 			}
 		})
 	}
@@ -136,7 +111,7 @@ func TestPlanDoctorFix_TrayNeverAffectsExitCode(t *testing.T) {
 			for _, noInteractive := range []bool{false, true} {
 				// forced is excluded: --fix is an explicit request to run the
 				// integration repair, independent of any finding.
-				got := planDoctorFix(false, a, engineRepairNone, false, noInteractive, tty)
+				got := planDoctorFix(false, a, false, noInteractive, tty)
 				if got.Integration {
 					t.Errorf("planDoctorFix(hasFail=false, tray=%v, noInteractive=%v, tty=%v) = %+v — a tray-only run must not trigger the integration repair",
 						a, noInteractive, tty, got)

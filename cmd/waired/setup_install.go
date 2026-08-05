@@ -51,49 +51,6 @@ var setupDetectNVIDIA = hardware.NVIDIADriverPresent
 // setupDetectEngine is the detection seam, for the same reason.
 var setupDetectEngine = setup.DetectOllama
 
-// setupDetectEngineNoExec is the exec-free detection seam used by the repair
-// path, which must not run the engine binary — see setup.DetectOllamaPathOnly.
-var setupDetectEngineNoExec = setup.DetectOllamaPathOnly
-
-// setupRepairDarwinBundle is the repair seam, so the executor test can drive
-// both outcomes without a real Ollama.app.
-var setupRepairDarwinBundle = setup.RepairDarwinBundleMarker
-
-// setupEngineSignatureBroken is the signature-probe seam. The real one shells
-// out to codesign/spctl on darwin and is a constant false elsewhere; a test
-// fake decides the answer without needing a signed app bundle.
-var setupEngineSignatureBroken = engineSignatureBroken
-
-// repairDarwinEngineBundle undoes #329 on a host that was installed before the
-// fix: waired used to write its "this install is ours" marker at the root of
-// the signed Ollama.app bundle, which invalidates the bundle's resource seal.
-// macOS then refuses to launch it ("Ollama is damaged") and SIGKILLs every
-// headless exec, so setup wedges at the model step forever. Deleting the file
-// restores the bundle; nothing has to be re-downloaded.
-//
-// Everything about it is safe to run unconditionally: it is a no-op off darwin,
-// a no-op when the marker is absent, and it never execs the engine.
-func repairDarwinEngineBundle(out io.Writer, goos, stateDir string) {
-	if goos != "darwin" {
-		return
-	}
-	det := setupDetectEngineNoExec(stateDir)
-	if det.LegacyBundleMarkerPath == "" {
-		return
-	}
-	changed, err := setupRepairDarwinBundle(goos, stateDir, det)
-	if changed {
-		writePromptf(out, "%s Repaired the AI engine's macOS app signature (removed a stray waired file from %s).\n",
-			emo("🔧", ">>"), filepath.Dir(det.LegacyBundleMarkerPath))
-	}
-	if err != nil {
-		// Not fatal to setup: either the bundle was already repaired and only
-		// the bookkeeping failed, or we lack the privileges to touch
-		// /Applications and the operator needs to know why.
-		writePromptf(out, "%s Could not fully repair the AI engine install: %v\n", emo("⚠️", "!"), err)
-	}
-}
-
 // setupHandState is the ownership-handoff seam. The real one shells out
 // to chown and self-guards on euid 0 + an installed service, which a
 // test running as root on a developer box would actually satisfy.
@@ -130,22 +87,6 @@ func setupEngineInstall(ctx context.Context, s *executorSession, out io.Writer, 
 		return nil
 	}
 	st := s.State()
-	// A host installed before #329 carries a marker inside the Ollama.app
-	// bundle that invalidates its signature, so macOS kills every exec of the
-	// engine. Deleting that one file repairs it.
-	//
-	// This runs ABOVE the presence gate below, because a broken host satisfies
-	// it: the engine IS installed and all of its files ARE present, they just
-	// cannot be executed. A repair placed after that gate would never run on
-	// the hosts that need it.
-	//
-	// It is scoped to an active ollama install with a known state dir. The
-	// scoping is not cosmetic — the repair probes the host, and running it for
-	// a vLLM request (or on a device that is not setting up at all) would put
-	// filesystem work on a path that has no app bundle to repair.
-	if st.Active && st.DesiredEngine == "ollama" && st.StateDir != "" {
-		repairDarwinEngineBundle(out, goos, st.StateDir)
-	}
 	// EngineInstalled is file presence, so it is true on a host whose engine
 	// can never start — which is how the executor used to return here and let
 	// the wizard report OK forever. EngineNeedsRepair is the daemon saying
@@ -317,23 +258,6 @@ func failEngineInstall(s *executorSession, engine, code, detail string) error {
 	return errors.New(detail)
 }
 
-// engineInstallErrorCode picks the code the daemon paints on the wizard's
-// engine row for a failed install.
-//
-// Most failures stay undeclared: the installer's text is the evidence, and the
-// daemon's disk-full/network reading of it is the best available. A signature
-// rejection is different — it is a verdict THIS process reached by asking
-// macOS, not a guess from prose. Left undeclared it falls through
-// classifySetupFailure's catch-all and gets painted "network_error", which
-// sends the user to check their internet about a bundle that downloaded fine
-// (#330).
-func engineInstallErrorCode(err error) string {
-	if isBundleSignatureError(err) {
-		return signer.SetupErrorEngineNotReady
-	}
-	return ""
-}
-
 // installEngineAsExecutor is the shared install core: claim the lease,
 // run the same decision the interactive path runs, install, hand the
 // state dir back, report the outcome. Both entry points reach it.
@@ -357,8 +281,7 @@ func installEngineAsExecutor(
 	action := engineInstallDecision(
 		goos, elevated, det, bundledPresent,
 		os.Getenv("WAIRED_NO_OLLAMA") != "",
-		engineIncomplete(goos, det, os.Getenv("ProgramFiles")),
-		setupEngineSignatureBroken(ctx, det))
+		engineIncomplete(goos, det, os.Getenv("ProgramFiles")))
 
 	switch action {
 	// Repair runs the same installer against bits an earlier attempt left
@@ -371,7 +294,10 @@ func installEngineAsExecutor(
 		// installer behaves exactly as it did.
 		if err := setupInstallEngine(true, stateDir, newExecutorProgressSink(s, engine)); err != nil {
 			writePromptf(out, "%s Engine install failed: %v\n", emo("⚠️", "!"), err)
-			s.Failed(engine, engineInstallErrorCode(err), err.Error())
+			// Undeclared: the installer's own text is the evidence, and the
+			// daemon's disk-full / network reading of it is the best
+			// available.
+			s.Failed(engine, "", err.Error())
 			return err
 		}
 		// The tarball was extracted as root; hand the state dir back or

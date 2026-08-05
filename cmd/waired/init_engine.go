@@ -1,9 +1,9 @@
 package main
 
 import (
-	"path/filepath"
 	"strings"
 
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
@@ -29,37 +29,30 @@ const (
 // engineInstallDecision decides whether init should install the bundled
 // engine. Callers gate on "inference enabled" before calling.
 //
-// Per-OS "present" semantics: Linux's bundled resolver is STRICT (only the
-// state-dir binary counts — bundledPresent), while Windows/macOS bundled
-// installs live at global well-known paths, so any DetectOllama hit counts.
-// Elevation: Windows writes %ProgramFiles% (needs an elevated token), Linux
-// writes the root-owned state dir (needs root); macOS /Applications is
-// admin-group-writable, so the install is attempted and fails with a clear
-// message for non-admin users.
+// Per-OS "present" semantics: Linux and macOS are STRICT — only the
+// state-dir binary counts (bundledPresent), because that is the only engine
+// the daemon will serve with (#488). Windows still counts any DetectOllama
+// hit, because its bundled install still lives at a global well-known path
+// until #493 relocates it.
 //
-// incomplete and signatureBroken are the two "installed but unusable" facts,
-// and they are deliberately separate because their polarity is opposite.
-// Windows' incomplete means "no completion marker beside ollama.exe, so an
-// earlier attempt unpacked and stopped". macOS' signatureBroken means "macOS
-// will not execute this bundle" — and a broken bundle is usually one waired
-// itself installed, so it is marked as ours. Folding them into one predicate
-// would make each wrong on the other OS.
+// Elevation: all three write a directory an ordinary user does not own —
+// the root-owned state dir on Linux and macOS, %ProgramFiles% on Windows.
+// macOS needed no elevation while it installed into the admin-group-writable
+// /Applications; #492 moved it under /Library/Application Support/waired, so
+// it needs root like the others.
+//
+// incomplete is Windows' "installed but unusable" fact: no completion marker
+// beside ollama.exe, so an earlier attempt unpacked and stopped. macOS used
+// to have a second one — a bundle whose code signature macOS would not
+// execute — which went with the app bundle itself in #492.
 func engineInstallDecision(
 	goos string, elevated bool, det setup.OllamaDetection,
-	bundledPresent, optOut, incomplete, signatureBroken bool,
+	bundledPresent, optOut, incomplete bool,
 ) engineInstallAction {
 	if optOut {
 		return engineActionSkipOptOut
 	}
 	switch goos {
-	case "linux":
-		if bundledPresent {
-			return engineActionSkipPresent
-		}
-		if !elevated {
-			return engineActionSkipNotElevated
-		}
-		return engineActionInstall
 	case "windows":
 		if det.Installed && !incomplete {
 			return engineActionSkipPresent
@@ -71,15 +64,12 @@ func engineInstallDecision(
 			return engineActionRepair
 		}
 		return engineActionInstall
-	default: // darwin
-		// A bundle macOS refuses to run is not "present" in any useful sense.
-		// Repair first: the cheap fix (drop the seal-breaking marker #329 left)
-		// usually makes it valid again without downloading 560 MB.
-		if det.Installed && signatureBroken {
-			return engineActionRepair
-		}
-		if det.Installed {
+	default: // linux, darwin
+		if bundledPresent {
 			return engineActionSkipPresent
+		}
+		if !elevated {
+			return engineActionSkipNotElevated
 		}
 		return engineActionInstall
 	}
@@ -118,13 +108,16 @@ func normalizeWindowsPath(p string) string {
 	return strings.ToLower(strings.ReplaceAll(p, `/`, `\`))
 }
 
-// bundledEnginePath is where Linux's strict bundled resolver expects the
-// engine binary (cmd/waired-agent inference.go mirrors this join). Empty on
-// Windows/macOS, whose "bundled" installs live at global well-known paths
-// covered by DetectOllama instead.
+// bundledEnginePath is where the strict bundled resolver expects the engine
+// binary. It is the same join the daemon makes, because it IS the daemon's
+// join — one exported helper rather than three copies that can drift.
+//
+// Windows is the last OS whose "bundled" install lives somewhere else
+// (%ProgramFiles%, covered by DetectOllama); #493 relocates it and this
+// stops being a per-OS answer at all.
 func bundledEnginePath(goos, stateDir string) string {
-	if goos != "linux" {
+	if goos == "windows" {
 		return ""
 	}
-	return filepath.Join(stateDir, "runtimes", "ollama", "bin", "ollama")
+	return infruntime.BundledOllamaBinaryPath(goos, stateDir)
 }
