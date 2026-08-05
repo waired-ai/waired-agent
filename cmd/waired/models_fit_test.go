@@ -33,35 +33,48 @@ func TestConfirmModelFitsForPull(t *testing.T) {
 	overSpec := `[{"model_id":"qwen3.6-35b-a3b","display_name":"Qwen3.6 35B","fits":false,"deficit_label":"needs 32 GB RAM (have 31 GB)"}]`
 	fitsFine := `[{"model_id":"qwen3.5-9b","display_name":"Qwen3.5 9B","fits":true}]`
 
-	t.Run("over-spec with --yes proceeds", func(t *testing.T) {
-		srv := catalogStub(t, http.StatusOK, overSpec)
-		var out bytes.Buffer
-		proceed, err := confirmModelFitsForPull(srv.URL, "qwen3.6-35b-a3b", true, &out, strings.NewReader(""))
-		if err != nil {
-			t.Fatalf("err = %v, want nil", err)
-		}
-		if !proceed {
-			t.Error("proceed = false, want true (--yes)")
-		}
-		if !strings.Contains(out.String(), "recommended spec") {
-			t.Errorf("warning not shown: %q", out.String())
+	// This pair inverts what it used to assert: --yes let a pull past
+	// fits=false, on the reading that the flag skipped a confirmation.
+	// Since waired-ai/waired#1056 (2026-08-03) and #464, fits=false means
+	// one thing only — this computer does not have the memory, and
+	// loading it is a certain OOM. That is the ONE gate the ratified
+	// policy allows to refuse, the browser has always hard-disabled the
+	// radio for it, and docs-site's choose-a-model.mdx already told users
+	// Waired refuses it. #465 item 4 is the parity fix; --yes goes back
+	// to its real job, the not-recommended confirmation below.
+	t.Run("no memory for it is refused, --yes or not", func(t *testing.T) {
+		for _, assumeYes := range []bool{false, true} {
+			srv := catalogStub(t, http.StatusOK, overSpec)
+			var out bytes.Buffer
+			proceed, err := confirmModelFitsForPull(srv.URL, "qwen3.6-35b-a3b", assumeYes, &out, strings.NewReader(""))
+			if err == nil {
+				t.Fatalf("--yes=%v: err = nil, want a refusal", assumeYes)
+			}
+			if proceed {
+				t.Errorf("--yes=%v: proceed = true, want false", assumeYes)
+			}
+			// The shortfall is what makes the refusal actionable.
+			if !strings.Contains(err.Error(), "needs 32 GB RAM") {
+				t.Errorf("--yes=%v: err = %q, want the shortfall named", assumeYes, err.Error())
+			}
+			if strings.Contains(err.Error(), "--yes") {
+				t.Errorf("--yes=%v: err = %q must not offer an escape that does not exist",
+					assumeYes, err.Error())
+			}
 		}
 	})
 
-	t.Run("over-spec non-interactive without --yes aborts", func(t *testing.T) {
-		srv := catalogStub(t, http.StatusOK, overSpec)
+	t.Run("not recommended is a confirmation, not a refusal", func(t *testing.T) {
+		notRec := `[{"model_id":"qwen3.6-27b","display_name":"Qwen3.6 27B","fits":true,` +
+			`"fit":{"runnable":true,"not_recommended":true,"not_recommended_reason":"weights_spill"}}]`
+		srv := catalogStub(t, http.StatusOK, notRec)
 		var out bytes.Buffer
-		// go test runs with a non-TTY stdin, so the interactive prompt is
-		// skipped and the gate demands --yes.
-		proceed, err := confirmModelFitsForPull(srv.URL, "qwen3.6-35b-a3b", false, &out, strings.NewReader(""))
-		if err == nil {
-			t.Fatal("err = nil, want a 'use --yes' abort error")
+		proceed, err := confirmModelFitsForPull(srv.URL, "qwen3.6-27b", false, &out, strings.NewReader(""))
+		if err != nil || !proceed {
+			t.Fatalf("proceed=%v err=%v, want true/nil — it runs, it is just not the pick", proceed, err)
 		}
-		if proceed {
-			t.Error("proceed = true, want false")
-		}
-		if !strings.Contains(err.Error(), "--yes") {
-			t.Errorf("err = %q, want it to mention --yes", err.Error())
+		if !strings.Contains(out.String(), "would not choose it here") {
+			t.Errorf("the demotion was not explained: %q", out.String())
 		}
 	})
 

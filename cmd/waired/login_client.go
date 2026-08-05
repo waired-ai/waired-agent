@@ -298,7 +298,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// same percentage progress bar the local path shows (main.go), then
 				// benchmark the ready model. waitForBundledModel returns fast when
 				// the daemon reports inference disabled / stopped / no engine, so
-				// this never hangs an under-spec or gateway-only host.
+				// this never hangs a gateway-only host, or one below the recommended spec,.
 				//
 				// waired#939 asks for one line here, before the longest
 				// wait of the flow: the engine install above can take

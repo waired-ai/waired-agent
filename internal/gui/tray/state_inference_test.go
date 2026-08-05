@@ -55,6 +55,30 @@ func TestUpdate_InferenceDisabled_Connected(t *testing.T) {
 	}
 }
 
+// TestUpdate_InferenceOffWithNoEngineOffersTheWayIn is the app half of
+// #465. A computer below the recommended spec starts with local
+// inference off AND no engine installed — and the no_engine arm hid the
+// toggle for every DesiredState, so the one surface a desktop user
+// actually looks at offered no way to turn it on at all.
+//
+// The label is not "Resume": nothing ran here to resume.
+func TestUpdate_InferenceOffWithNoEngineOffersTheWayIn(t *testing.T) {
+	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
+	st := &management.Status{Phase: "active"}
+	inf := &management.InferenceStatus{
+		SubsystemState: "no_engine",
+		DesiredState:   "disabled",
+	}
+	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
+
+	if got.InferenceToggleAction != "Run AI models on this computer" {
+		t.Errorf("InferenceToggleAction=%q, want the never-set-up label", got.InferenceToggleAction)
+	}
+}
+
+// The other no_engine case is unchanged: local inference is already on,
+// so there is nothing for the toggle to do and the row would bait a
+// click. Record of today's behaviour.
 func TestUpdate_InferenceNoEngine(t *testing.T) {
 	id := &management.IdentityView{Enrolled: true, AccountEmail: "a@b"}
 	st := &management.Status{Phase: "active"}
@@ -65,7 +89,7 @@ func TestUpdate_InferenceNoEngine(t *testing.T) {
 	got := Update(Snapshot{Health: HealthOnline, Identity: id, Status: st, Inference: inf})
 
 	if got.InferenceToggleAction != "" {
-		t.Errorf("InferenceToggleAction=%q, want empty (no engine = no toggle)", got.InferenceToggleAction)
+		t.Errorf("InferenceToggleAction=%q, want empty (already on, no engine to pause)", got.InferenceToggleAction)
 	}
 	if got.InferenceStateLabel != "Engine: no engine" {
 		t.Errorf("InferenceStateLabel=%q, want Engine: no engine", got.InferenceStateLabel)

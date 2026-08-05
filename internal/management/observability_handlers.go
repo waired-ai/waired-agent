@@ -46,6 +46,16 @@ type AgentState struct {
 	// system RAM. Empty when the serve
 	// tuning applied cleanly (or on agents predating it).
 	EngineTuningWarning string `json:"engine_tuning_warning,omitempty"`
+
+	// LocalInferenceState is the runtime local-inference toggle:
+	// "enabled" or "disabled" (empty on agents predating #465).
+	//
+	// EngineReady cannot stand in for it. A device that was told not to
+	// serve locally and a device whose engine crashed both report
+	// EngineReady=false, so `waired doctor` reported a deliberate setting
+	// as a fault and sent people looking for something to repair — on
+	// exactly the hosts that start this way (below the recommended spec).
+	LocalInferenceState string `json:"local_inference_state,omitempty"`
 }
 
 // MeshState reports the mesh-peer counts by lifecycle state.

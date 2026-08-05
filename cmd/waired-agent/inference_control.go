@@ -23,6 +23,14 @@ type inferenceController struct {
 	// disabled holds the current live state (true = disabled). atomic.Bool
 	// keeps the gateway hot-path lock-free.
 	disabled atomic.Bool
+
+	// onEnable, when set, is called after a transition to enabled has
+	// been persisted. It is what makes the opt-in do something: the
+	// engine and the model pre-pull stand down while inference is off
+	// (#465), so turning it on has to ask for them. Set by run() once
+	// the inference subsystem exists — nil before that, and on a daemon
+	// started with --disable-inference, where there is nothing to ask.
+	onEnable func()
 }
 
 func newInferenceController(stateDir string, initial state.InferenceState, logger *slog.Logger) *inferenceController {
@@ -52,8 +60,11 @@ func (ic *inferenceController) State() (current, desired state.InferenceState) {
 	} else {
 		current = state.InferenceEnabled
 	}
+	// An unset desired-inference file means nobody has moved this
+	// toggle, so the live state IS the desired one — there is no
+	// separate intent on disk to report.
 	desired = current
-	if d, err := state.ReadDesiredInferenceState(ic.stateDir); err == nil {
+	if d, err := state.ReadDesiredInferenceState(ic.stateDir); err == nil && d != "" {
 		desired = d
 	}
 	return
@@ -70,6 +81,9 @@ func (ic *inferenceController) transition(target state.InferenceState) error {
 	ic.disabled.Store(target == state.InferenceDisabled)
 	if ic.logger != nil {
 		ic.logger.Info("inference controller state change", "state", string(target))
+	}
+	if target == state.InferenceEnabled && ic.onEnable != nil {
+		ic.onEnable()
 	}
 	return nil
 }

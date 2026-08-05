@@ -158,7 +158,7 @@ func OllamaExpectedSpillFraction(v catalog.Variant, hw hardware.Profile, kvFacto
 // Which is why the gate MOVED rather than tightened. RankModels no
 // longer narrows the non-standable native-floor pass on this answer; it
 // narrows the RECOMMENDATION pass, which SelectInstallModel may stand
-// down before concluding a host is under-spec (waired-ai/waired#1056
+// down before concluding a host is below the recommended spec (waired-ai/waired#1056
 // decision 1: refusal is reserved for certain OOM). A host that cannot
 // hold 200k is now told so and given the best model it can hold, instead
 // of being told nothing and given none.

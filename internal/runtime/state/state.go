@@ -498,19 +498,30 @@ func WriteDesiredPhase(stateDir string, p Phase) error {
 }
 
 // ReadDesiredInferenceState parses <state-dir>/runtime/desired-inference.
-// Missing or empty means the operator has not asked for a disable, so
-// the agent starts with the inference subsystem enabled.
+// A missing or empty file returns the empty string so callers can fall
+// back to the agentconfig default (Inference.Enabled) instead of being
+// forced into a binary choice — the same shape as ReadDesiredShareMesh
+// and ReadDesiredPublicShare, for the same reason: "never touched the
+// toggle" and "explicitly chose on" are different facts.
+//
+// It used to answer InferenceEnabled for a missing file, which left the
+// boot path no way to consult the install-time default — so
+// agentconfig.Inference.Enabled gated the whole subsystem instead, and a
+// host it turned off had no product-side way back (#465,
+// waired-ai/waired#1056).
 func ReadDesiredInferenceState(stateDir string) (InferenceState, error) {
 	body, err := os.ReadFile(DesiredInferencePath(stateDir))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return InferenceEnabled, nil
+			return "", nil
 		}
 		return "", err
 	}
 	v := strings.TrimSpace(string(body))
 	switch InferenceState(v) {
-	case InferenceEnabled, "":
+	case "":
+		return "", nil
+	case InferenceEnabled:
 		return InferenceEnabled, nil
 	case InferenceDisabled:
 		return InferenceDisabled, nil

@@ -51,7 +51,7 @@ func TestSelectInstallModel_RealCatalog(t *testing.T) {
 			// re-ranking without the context floor; waired#1031 removed the
 			// rescue, because the window is a contract now and a 32k node
 			// has no way to say so that a requester could route on. The
-			// host is under-spec: it enrols, routes to peers, and runs no
+			// host is below the recommended spec: it enrols, routes to peers, and runs no
 			// local engine.
 			name: "cpu-4gb-under-spec", hw: cpu(4), engine: catalog.RuntimeOllama,
 			wantOK: false,

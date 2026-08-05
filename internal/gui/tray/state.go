@@ -1869,6 +1869,11 @@ const (
 	// Soft gate: POST /inference/{enable,disable}. No process is touched.
 	labelPauseInference  = "Pause local inference"
 	labelResumeInference = "Resume local inference"
+	// labelEnableInference is the same action as Resume, worded for a
+	// computer that has never run models here: no engine installed, and
+	// local inference off by default because the machine is below the
+	// recommended spec (#465).
+	labelEnableInference = "Run AI models on this computer"
 	// tipInferenceToggle spells out what the labels cannot: this axis
 	// does not give the memory back.
 	tipInferenceToggle = "Stops new requests on this computer. The model stays loaded in memory."
@@ -1910,14 +1915,27 @@ func applyInference(m *MenuModel, inf *management.InferenceStatus) {
 		m.ActiveModelLabel = "Model: " + inf.Active.ModelID
 	}
 	// Toggle action mirrors DesiredState (= what the operator most
-	// recently asked for). When no engine is registered there's no
-	// engine to toggle — hide the action so we don't bait clicks.
-	if inf.SubsystemState != "no_engine" {
-		switch inf.DesiredState {
-		case "enabled":
+	// recently asked for).
+	//
+	// no_engine hides the action only while local inference is already
+	// ON: there is no engine to pause, so the row would bait a click
+	// that does nothing. When it is OFF, no_engine is the state of a
+	// computer that has never set local inference up — a host below the
+	// recommended spec starts exactly here — and turning it on is what
+	// installs the engine and fetches a model. Hiding the row there left
+	// the app with no way in at all, which is #465's dead end surviving
+	// in the one surface a desktop user actually looks at.
+	switch inf.DesiredState {
+	case "enabled":
+		if inf.SubsystemState != "no_engine" {
 			m.InferenceToggleAction = labelPauseInference
-		case "disabled":
-			m.InferenceToggleAction = labelResumeInference
+		}
+	case "disabled":
+		// "Resume" would claim it ran here before. On a computer with no
+		// engine it never did.
+		m.InferenceToggleAction = labelResumeInference
+		if inf.SubsystemState == "no_engine" {
+			m.InferenceToggleAction = labelEnableInference
 		}
 	}
 
