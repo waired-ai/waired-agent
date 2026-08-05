@@ -120,14 +120,16 @@ type Pick struct {
 // fitting (manifest, variant) candidate in the picker's canonical order:
 //
 //  1. Restrict to manifests honouring PreferredModelID (if any).
-//  2. Discard manifests missing any RequireCapability entry.
-//  3. For each manifest, expand to the variants that name Engine in
+//  2. Drop manual_only manifests, unless step 1 already narrowed to one
+//     the caller named.
+//  3. Discard manifests missing any RequireCapability entry.
+//  4. For each manifest, expand to the variants that name Engine in
 //     runtime_support and are vendor-supported.
-//  4. Drop variants that don't fit the host (vllm: VLLMVRAMBudgetMB ≥
+//  5. Drop variants that don't fit the host (vllm: VLLMVRAMBudgetMB ≥
 //     MinVRAMMB — TP-aggregated on identical multi-NVIDIA hosts, #678;
 //     ollama: RAMTotalGB ≥ MinRAMGB, plus — on discrete-GPU hosts — the
 //     weights + KV budget must fit GPU-resident, see ollamaFitsVRAM).
-//  5. Sort by (quality_tier desc, MinVRAMMB asc, MinRAMGB asc, manifest
+//  6. Sort by (quality_tier desc, MinVRAMMB asc, MinRAMGB asc, manifest
 //     position asc).
 //
 // PickModel is RankModels(in)[0] with a richer reason trace. Returns the
@@ -157,6 +159,44 @@ func RankModels(in PickInput) ([]Pick, error) {
 		manifests = filtered
 	}
 
+	// Step 1.5: manual_only (#521). This is THE place the field is
+	// honoured — every automatic choice in the product reaches a model
+	// through here (the install pick and its below-floor fallback, the
+	// recommended-family badge and ITS below-floor fallback, the
+	// serving-time rank, the upgrade proposal, the lighter-model
+	// proposal), so one skip covers all of them and none of them can
+	// forget it.
+	//
+	// It belongs at the manifest level, before variants are expanded,
+	// for a reason a later filter could not give: a withheld model must
+	// not consume a candidate slot and must not turn up in the reason
+	// strings as something that was considered and rejected. It was
+	// never in the running.
+	//
+	// PreferredModelID bypasses it because that is what the field means
+	// (proto/catalog/manifest.go): withholding a model from automatic
+	// choice must not break an explicit pin somebody already wrote into
+	// agent.json, preferred-model.json, or a control-plane desired
+	// model. Step 1 has already narrowed to that one manifest, so the
+	// guard is what keeps it alive.
+	//
+	// Deliberately NOT written as a narrow() pass below: narrow falls
+	// through when a pass would empty the set, which would resurrect a
+	// manual-only model on exactly the host where it is the only
+	// candidate — the case this exists for.
+	withheldAll := false
+	if in.PreferredModelID == "" {
+		chooseable := make([]catalog.Manifest, 0, len(manifests))
+		for _, m := range manifests {
+			if m.ManualOnly != "" {
+				continue
+			}
+			chooseable = append(chooseable, m)
+		}
+		withheldAll = len(manifests) > 0 && len(chooseable) == 0
+		manifests = chooseable
+	}
+
 	// Step 2: capability filter (manifest-level).
 	var capable []catalog.Manifest
 	for _, m := range manifests {
@@ -166,6 +206,14 @@ func RankModels(in PickInput) ([]Pick, error) {
 		capable = append(capable, m)
 	}
 	if len(capable) == 0 {
+		// A catalog that offers this host nothing it may choose on its
+		// own is a hardware-shaped answer, not a misconfiguration:
+		// SelectInstallModel turns ErrHardwareInsufficient into "no
+		// pick" and anything else into a failed install
+		// (internal/setup/modelselect.go). Keep them apart.
+		if withheldAll {
+			return nil, fmt.Errorf("%w: every candidate is manual_only (engine=%s)", ErrHardwareInsufficient, in.Engine)
+		}
 		return nil, fmt.Errorf("%w: required %v", ErrCapabilityNotMet, in.RequireCapability)
 	}
 

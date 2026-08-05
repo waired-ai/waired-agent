@@ -7,6 +7,7 @@
     "openai/gpt-oss-20b"
   ],
   "license": "apache-2.0",
+  "manual_only": "Offered but never recommended (#518), the same call as gpt-oss-120b. At quality_tier 60/62 the 20B lands in the middle of the qwen3.5 generation this catalog pins its low and mid bands to, so choosing it over a qwen3.5 of similar size is precisely the cross-family placement the ladder now requires evidence for. It stays listed, resolvable, pullable and servable; asking for it by name still works.",
   "context_length": 131072,
   "capabilities": ["chat", "tool_use", "json_mode"],
   "runtime": {"preferred": "ollama", "fallback": ["vllm"]},
