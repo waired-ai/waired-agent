@@ -47,10 +47,11 @@ function Start-Sleep { param([int]$Seconds) }
 $script:Clock = [datetime]'2026-01-01T00:00:00Z'
 function Get-Date { $script:Clock = $script:Clock.AddSeconds(30); $script:Clock }
 
-$script:Version = $null     # $null = the port refuses
-$script:Status  = $null     # $null = the mgmt API refuses
-$script:Conn    = $null     # $null = no listener could be identified
-$script:ExePath = $null
+$script:Version   = $null   # $null = the port refuses
+$script:Status    = $null   # $null = the mgmt API refuses
+$script:Conn      = $null   # $null = no listener could be identified
+$script:ExePath   = $null
+$script:Installed = $true   # is there an engine at $bin at all
 
 function Invoke-RestMethod {
     param([string]$Uri, [int]$TimeoutSec)
@@ -72,7 +73,13 @@ function Get-CimInstance {
     return [pscustomobject]@{ ExecutablePath = $script:ExePath }
 }
 function Get-Content { param([string]$LiteralPath, [int]$Tail, [string]$ErrorAction) @() }
-function Test-Path   { param([string]$LiteralPath) $false }
+# The engine binary answers $script:Installed; engine.log is always absent, so
+# the not-answering scenario does not try to tail a file that is not there.
+function Test-Path {
+    param([string]$LiteralPath)
+    if ($LiteralPath -like '*ollama.exe') { return $script:Installed }
+    $false
+}
 
 function New-Status {
     param([string]$Mode, [string]$Pinned)
@@ -117,3 +124,6 @@ Invoke-Scenario 'listener-unidentifiable'
 $script:Conn = [pscustomobject]@{ OwningProcess = 4242 }
 $script:Version = $null
 Invoke-Scenario 'engine-not-answering'
+
+$script:Installed = $false
+Invoke-Scenario 'engine-not-installed'

@@ -281,6 +281,16 @@ function Assert-ServingEngine {
 
     $bin = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
 
+    # No engine on disk means nothing can be serving -- see the Linux twin
+    # (lib/installtest-enroll.sh) for why this comes before the poll. This is
+    # the leg it was found on: the executor never attached (#505), no engine
+    # was ever installed, and the poll spent 180 s to report "installed but
+    # not answering" one line under an assert saying it was not installed.
+    if (-not (Test-Path -LiteralPath $bin)) {
+        ItBad "nothing can be serving on :9475 ($Context): no engine at $bin"
+        return
+    }
+
     # The engine is normally up already -- the -WithInference leg is past
     # init's foreground model wait (#519). The daemon-engine leg can arrive mid
     # cold start, so give the port a bounded window rather than racing it.

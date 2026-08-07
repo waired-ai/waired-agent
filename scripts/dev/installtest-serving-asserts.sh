@@ -13,7 +13,7 @@
 # That is the exact shape #178/#215/#505 already cost this repo, in these same
 # files.
 #
-# So: drive each copy through the same seven scenarios with its host commands
+# So: drive each copy through the same eight scenarios with its host commands
 # stubbed, normalize away the three things that legitimately differ per OS, and
 # require the three transcripts to be byte-identical AND to match the expected
 # transcript below. A wrong verdict, a mixed-up message, a branch that stopped
@@ -69,6 +69,8 @@ ok   the serving engine is the pinned release (ctx; /api/version = 0.31.1)
 ok   waired spawned the serving engine (ctx; mode=spawned)
 # engine-not-answering
 FAIL nothing is serving on :9475 after 180 s (ctx) -- the engine is installed but not answering
+# engine-not-installed
+FAIL nothing can be serving on :9475 (ctx): no engine at <BIN>
 EOF
 
 WORK="$(mktemp -d)"
@@ -109,10 +111,11 @@ linux_transcript() {
     it_log()  { :; }
     sleep()   { :; }        # the not-answering scenario must not take 180 s
 
-    VERSION_BODY='' STATUS_BODY='' LISTENER_PID='' LISTENER_EXE=''
+    VERSION_BODY='' STATUS_BODY='' LISTENER_PID='' LISTENER_EXE='' INSTALLED=1
     gx() {
       shift                 # the guest name
       case "$1" in
+        test)     [ "$INSTALLED" = 1 ] ;;   # `test -x <bin>` — is one installed at all
         curl)
           case "$*" in
             *9475/api/version*) [ -n "$VERSION_BODY" ] && printf '%s' "$VERSION_BODY" || return 1 ;;
@@ -140,6 +143,7 @@ linux_transcript() {
     STATUS_BODY='';                                run daemon-silent
     STATUS_BODY="$GOOD_STATUS"; LISTENER_PID='';   run listener-unidentifiable
     LISTENER_PID=4242; VERSION_BODY='';            run engine-not-answering
+    INSTALLED=0;                                   run engine-not-installed
   ) 2>/dev/null | normalize /var/lib/waired/runtimes/ollama/bin/ollama /usr/local/bin/ollama ss
 }
 
@@ -155,7 +159,7 @@ macos_transcript() {
     bad()   { LINES+=("FAIL $*"); }
     sleep() { :; }
 
-    VERSION_BODY='' STATUS_BODY='' LISTENER_PID='' LISTENER_EXE=''
+    VERSION_BODY='' STATUS_BODY='' LISTENER_PID='' LISTENER_EXE='' INSTALLED=1
     curl() {
       case "$*" in
         *9475/api/version*) [ -n "$VERSION_BODY" ] && printf '%s' "$VERSION_BODY" || return 1 ;;
@@ -164,6 +168,7 @@ macos_transcript() {
     }
     sudo() {
       case "$1" in
+        test) [ "$INSTALLED" = 1 ] ;;   # `sudo test -x <bin>` — is one installed at all
         lsof) printf '%s\n' "$LISTENER_PID" ;;
         ps)   [ -n "$LISTENER_EXE" ] && printf '%s\n' "$LISTENER_EXE" || return 1 ;;
         *)    : ;;
@@ -190,6 +195,7 @@ macos_transcript() {
     STATUS_BODY='';                              run daemon-silent
     STATUS_BODY="$GOOD_STATUS"; LISTENER_PID=''; run listener-unidentifiable
     LISTENER_PID=4242; VERSION_BODY='';          run engine-not-answering
+    INSTALLED=0;                                 run engine-not-installed
   ) 2>/dev/null | normalize '/Library/Application Support/waired/runtimes/ollama/bin/ollama' /opt/homebrew/bin/ollama lsof
 }
 

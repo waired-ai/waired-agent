@@ -573,6 +573,16 @@ it_prepull_evidence() {
 assert_serving_ollama() {
   local guest="$1" ctx="$2" _ body live st pinned mode pid exe
 
+  # No engine on disk means nothing can be serving, and the 180 s poll below
+  # would spend three minutes arriving at "installed but not answering" — a
+  # sentence that is FALSE in that case and points the reader at the engine
+  # instead of at the install. Observed on the Windows daemon-path leg, where
+  # the executor never attached (#505) and no engine was ever installed.
+  if ! gx "$guest" test -x "$IT_BUNDLED_OLLAMA_BIN"; then
+    bad "nothing can be serving on :9475 ($ctx): no engine at $IT_BUNDLED_OLLAMA_BIN"
+    return
+  fi
+
   # The engine is normally up by the time we get here — the --inference leg is
   # past init's foreground model wait (#519). The daemon-engine leg can arrive
   # mid cold start, so give the port a bounded window rather than racing it.

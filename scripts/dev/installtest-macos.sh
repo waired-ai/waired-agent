@@ -221,6 +221,13 @@ assert_serving_ollama_macos() {
   local ctx="$1" _ body live st pinned mode pid exe
   local bin="$STATE_DIR/runtimes/ollama/bin/ollama"
 
+  # No engine on disk means nothing can be serving — see the Linux twin for
+  # why this comes before the poll rather than after it.
+  if ! sudo test -x "$bin"; then
+    bad "nothing can be serving on :9475 ($ctx): no engine at $bin"
+    return
+  fi
+
   # The gate is a PARSED version, and 180 s outlasts the agent's own
   # first-readiness budget — see the Linux twin for both.
   for _ in $(seq 1 60); do            # ~180 s; the daemon-engine leg can arrive mid cold start
