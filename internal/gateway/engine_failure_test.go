@@ -52,7 +52,7 @@ func engineReturning(t *testing.T, status int, body string) *httptest.Server {
 //   - the adapter is told, with the verbatim body (only it can classify);
 //   - the event ring records the REAL status, not 200 (this path used to fall
 //     through to the caller's rr.succeed(), so a wire-500 logged as 200);
-//   - no usage sample is emitted, so a failed request is not billed.
+//   - no usage sample is emitted, so a failed request is not metered.
 func TestProxyToEngine_Upstream500_ReportsAndRecords(t *testing.T) {
 	const body = `{"error":{"message":"llama-server process has terminated: signal: segmentation fault (core dumped)","type":"api_error"}}`
 	srv := engineReturning(t, http.StatusInternalServerError, body)
@@ -64,10 +64,15 @@ func TestProxyToEngine_Upstream500_ReportsAndRecords(t *testing.T) {
 	rr.ev.Model = "m"
 	w := httptest.NewRecorder()
 
-	err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, rr, rep)
+	started, err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
+		http.Header{}, []byte(`{}`), w, localSel, rr, rep)
 	if err != nil {
 		t.Fatalf("proxyToEngine returned %v; a forwarded upstream error is not a transport failure", err)
+	}
+	// The engine's status went out, so this exit is past the point where
+	// the caller could restate it.
+	if !started {
+		t.Errorf("responseStarted = false after forwarding the engine's status")
 	}
 
 	status, got, calls := rep.snapshot()
@@ -107,6 +112,82 @@ func TestProxyToEngine_Upstream500_ReportsAndRecords(t *testing.T) {
 	}
 }
 
+// TestProxyToEngine_TransportFailureRecordsWhatTheClientGot is the detection
+// point for waired-agent#538, the branch waired-agent#29's sweep left behind.
+//
+// PRODUCT CONTRACT: nothing has been written when client.Do fails, so
+// proxyToEngine owns the failure — it writes the 502 the client receives and
+// records that same 502, which is what keeps the request out of emitUsage.
+// The caller learns it must not restate the outcome from responseStarted;
+// there is no truncation to describe when no response ever started.
+func TestProxyToEngine_TransportFailureRecordsWhatTheClientGot(t *testing.T) {
+	dead := engineReturning(t, http.StatusOK, `{}`)
+	deadURL := dead.URL
+	dead.Close() // nothing is listening on that port now
+
+	rr := &requestRec{}
+	rr.ev.Model = "m"
+	var usage int
+	rr.onUsage = func(context.Context, UsageSample) { usage++ }
+	w := httptest.NewRecorder()
+
+	started, err := proxyToEngine(context.Background(), http.DefaultClient, deadURL, "/v1/chat/completions",
+		http.Header{}, []byte(`{}`), w, localSel, rr, nil)
+	if err == nil {
+		t.Fatal("proxyToEngine returned nil for an engine that is not listening")
+	}
+	if started {
+		t.Fatalf("responseStarted = true though the client got %d from us, not the engine", w.Code)
+	}
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("client status = %d, want 502", w.Code)
+	}
+	if rr.ev.Status != http.StatusBadGateway {
+		t.Errorf("recorded status = %d, want the 502 the client got", rr.ev.Status)
+	}
+	// Same reason as the two Anthropic legs: one failure must not be
+	// described two ways by two transports.
+	if rr.ev.ErrorReason != "engine_request_failed" {
+		t.Errorf("recorded error_reason = %q, want engine_request_failed", rr.ev.ErrorReason)
+	}
+	// succeed() must not be able to undo it, exactly as on the non-2xx path.
+	rr.succeed()
+	if rr.ev.Status != http.StatusBadGateway {
+		t.Errorf("succeed() overwrote the failure status: %d", rr.ev.Status)
+	}
+	rr.emitUsage()
+	if usage != 0 {
+		t.Errorf("emitted %d usage samples for a request that never reached an engine, want 0", usage)
+	}
+}
+
+// TestProxyToEngine_MidStreamFailureIsCommitted is the other side of the
+// same boundary: once the engine's status has gone out, proxyToEngine must
+// NOT record anything, because only the caller can say what a half-delivered
+// turn is (mid_stream_truncate, which stays metered — see
+// TestGateway_MidStreamTruncationIsStillMetered).
+func TestProxyToEngine_MidStreamFailureIsCommitted(t *testing.T) {
+	upstream := truncatedAfterHeadersEngine(t)
+	rr := &requestRec{}
+	w := httptest.NewRecorder()
+
+	started, err := proxyToEngine(context.Background(), http.DefaultClient, upstream.URL, "/v1/chat/completions",
+		http.Header{}, []byte(`{}`), w, localSel, rr, nil)
+	if err == nil {
+		t.Fatal("proxyToEngine returned nil for a body that stopped short of its Content-Length")
+	}
+	if !started {
+		t.Fatal("responseStarted = false though the engine's 200 already reached the client")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("client status = %d, want the engine's committed 200", w.Code)
+	}
+	if rr.ev.Status != 0 || rr.ev.ErrorReason != "" {
+		t.Errorf("proxyToEngine recorded %d/%q for a committed response; naming a "+
+			"half-delivered turn is the caller's job", rr.ev.Status, rr.ev.ErrorReason)
+	}
+}
+
 // TestProxyToEngine_NilReporter pins that an adapter which does not implement
 // FailureReporter is simply skipped. PRODUCT CONTRACT: peer adapters
 // deliberately do not implement it, so a REMOTE peer's 500 can never demote
@@ -116,8 +197,8 @@ func TestProxyToEngine_NilReporter(t *testing.T) {
 	rr := &requestRec{}
 	w := httptest.NewRecorder()
 
-	if err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, rr, nil); err != nil {
+	if _, err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
+		http.Header{}, []byte(`{}`), w, localSel, rr, nil); err != nil {
 		t.Fatalf("proxyToEngine: %v", err)
 	}
 	if rr.ev.Status != http.StatusInternalServerError {
@@ -136,8 +217,8 @@ func TestProxyToEngine_LargeErrorBodyReachesClient(t *testing.T) {
 	rep := &recordingReporter{}
 	w := httptest.NewRecorder()
 
-	if err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, &requestRec{}, rep); err != nil {
+	if _, err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
+		http.Header{}, []byte(`{}`), w, localSel, &requestRec{}, rep); err != nil {
 		t.Fatalf("proxyToEngine: %v", err)
 	}
 	if got := w.Body.Len(); got != len(big) {
@@ -156,9 +237,13 @@ func TestProxyToEngine_2xxUnaffected(t *testing.T) {
 	rr := &requestRec{}
 	w := httptest.NewRecorder()
 
-	if err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, rr, rep); err != nil {
+	started, err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
+		http.Header{}, []byte(`{}`), w, localSel, rr, rep)
+	if err != nil {
 		t.Fatalf("proxyToEngine: %v", err)
+	}
+	if !started {
+		t.Errorf("responseStarted = false on a completed 2xx")
 	}
 	if _, _, calls := rep.snapshot(); calls != 0 {
 		t.Errorf("reporter called %d times on a 2xx, want 0", calls)

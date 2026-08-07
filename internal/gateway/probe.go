@@ -574,8 +574,9 @@ func displayRuntime(sel router.Selection) string {
 	return sel.Runtime
 }
 
-// adapterErrorForClient renders a peer-adapter lookup failure for a
-// client-visible error body.
+// adapterErrorForClient renders a dispatch-path failure for a
+// client-visible error body, or for a log line describing the same
+// failure — agent.log gets the rendering the client does.
 //
 // displayRuntime alone is not enough: the production PeerAdapterFactory
 // formats the peer's real DeviceID and overlay IP into its error
@@ -585,12 +586,24 @@ func displayRuntime(sel router.Selection) string {
 // expiry and map propagation make it the expected teardown window — so
 // this is not an exotic path.
 //
+// A transport error is the same problem arriving by a different route:
+// client.Do returns a *url.Error holding the URL it was dialling, and
+// the *net.OpError beneath it holds the address again, so every
+// dispatch-path error string has to come through here (waired-agent#538).
+//
 // Own-network selections keep the detailed error: the identifiers in it
 // are the operator's own, and support relies on them.
+//
+// err may be nil — bufio.Scanner reports a clean end that way, and a
+// renderer that panics on the ordinary case would be a poor place to put
+// a privacy rule.
 func adapterErrorForClient(sel router.Selection, err error) string {
 	if sel.PeerDisplayID != "" && sel.PeerDisplayID != strings.TrimPrefix(sel.Runtime, remoteRuntimePrefix) {
 		// Public peer: the pseudonym is the whole story the client gets.
 		return fmt.Sprintf("runtime %q: peer unavailable", displayRuntime(sel))
+	}
+	if err == nil {
+		return fmt.Sprintf("runtime %q", displayRuntime(sel))
 	}
 	return fmt.Sprintf("runtime %q: %s", displayRuntime(sel), err.Error())
 }

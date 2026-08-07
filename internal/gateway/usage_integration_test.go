@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -214,6 +215,104 @@ func TestGateway_FailedRequestNotMetered(t *testing.T) {
 	}
 	if got := sink.snapshot(); len(got) != 0 {
 		t.Fatalf("metered a request that never reached an engine: %+v", got)
+	}
+}
+
+// A transport failure is the same rule as the test above, one branch
+// further along: nothing was written to the client by the time it
+// happened, so proxyToEngine hands the client a 502 of its own. The
+// record used to say 200 with a mid-stream reason, which is the one
+// combination emitUsage's status-only gate lets through — and on the
+// overlay listener, the only surface that wires OnUsage, the sample
+// becomes a request and a duration in the Public Share usage report for
+// a turn its guest saw fail.
+//
+// PRODUCT CONTRACT (waired-agent#538): what the client got is what is
+// recorded, and a request that never reached an engine is not metered.
+func TestGateway_TransportFailureIsNotMetered(t *testing.T) {
+	dead := meteringEngine(t, nil)
+	deadURL := dead.URL
+	dead.Close() // nothing is listening on that port now
+
+	rec := &captureRecorder{}
+	sink := &captureSink{}
+	gw := newMeteringGateway(t, deadURL, rec, sink.fn())
+
+	w := postJSON(t, gw, "/v1/chat/completions", map[string]any{
+		"model": "waired/default", "messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("client status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+
+	events := rec.requestsSnapshot()
+	if len(events) != 1 {
+		t.Fatalf("request events = %d, want 1", len(events))
+	}
+	if events[0].Status != http.StatusBadGateway {
+		t.Errorf("recorded status = %d, want the 502 the client was handed", events[0].Status)
+	}
+	// The reason both Anthropic legs have always used for this exit: one
+	// failure described two ways by two transports is how they drift.
+	if events[0].ErrorReason != "engine_request_failed" {
+		t.Errorf("recorded error_reason = %q, want engine_request_failed", events[0].ErrorReason)
+	}
+	if got := sink.snapshot(); len(got) != 0 {
+		t.Fatalf("metered a request that never reached an engine: %+v", got)
+	}
+}
+
+// truncatedAfterHeadersEngine answers 200, declares more body than it
+// sends, and returns. Go's server cannot keep the connection alive after
+// a short write, so the gateway's read of the body fails with the
+// response already committed — the post-header half of the same branch.
+func truncatedAfterHeadersEngine(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","choices":[`))
+	}))
+	// The short write is the point of the fixture; the server's complaint
+	// about it is not test output anyone needs.
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// The other half of waired-agent#538, and the reason the two cheap fixes
+// it rejects are rejected: a stream that broke after the client started
+// receiving it IS metered.
+//
+// PRODUCT CONTRACT (waired-agent#538): the engine did the work and the
+// client received part of it, so widening emitUsage's gate to "any
+// error_reason" — the obvious-looking fix — would stop metering a turn
+// that really ran. This is what tells the two apart.
+func TestGateway_MidStreamTruncationIsStillMetered(t *testing.T) {
+	upstream := truncatedAfterHeadersEngine(t)
+	rec := &captureRecorder{}
+	sink := &captureSink{}
+	gw := newMeteringGateway(t, upstream.URL, rec, sink.fn())
+
+	w := postJSON(t, gw, "/v1/chat/completions", map[string]any{
+		"model": "waired/default", "messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	// The engine's 200 went out before anything went wrong; HTTP has no
+	// way to take it back.
+	if w.Code != http.StatusOK {
+		t.Fatalf("client status = %d, want the 200 already committed", w.Code)
+	}
+
+	events := rec.requestsSnapshot()
+	if len(events) != 1 {
+		t.Fatalf("request events = %d, want 1", len(events))
+	}
+	if events[0].ErrorReason != "mid_stream_truncate" {
+		t.Errorf("recorded error_reason = %q, want mid_stream_truncate", events[0].ErrorReason)
+	}
+	if got := sink.snapshot(); len(got) != 1 {
+		t.Fatalf("usage samples = %d, want 1: the engine ran and the client got part of it", len(got))
 	}
 }
 

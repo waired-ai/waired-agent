@@ -212,10 +212,11 @@ func (c *cancellingSelector) SelectK(ctx context.Context, req router.Request, k 
 // TestPeerOutcome_ClientCancellationIsNotChargedToThePeer.
 //
 // PRODUCT CONTRACT (waired-agent#281): an operator pressing Ctrl-C
-// cancels the request context, the dispatch then fails, and the handler
-// records mid_stream_truncate — the same shape a peer failure takes.
-// Without the guard, the peer an operator interrupts most would be the
-// peer routing demotes first.
+// cancels the request context and the dispatch then fails on it, in
+// exactly the shape a dead peer produces — here engine_request_failed,
+// because the cancellation lands on client.Do before any response has
+// started (waired-agent#538). Without the guard, the peer an operator
+// interrupts most would be the peer routing demotes first.
 //
 // The cancel fires after selection on purpose: a context cancelled
 // before it would fail inside selectAndProbe with no peer named, and
@@ -242,8 +243,9 @@ func TestPeerOutcome_ClientCancellationIsNotChargedToThePeer(t *testing.T) {
 	if len(reqs) != 1 {
 		t.Fatalf("RecordRequest emits = %d, want 1", len(reqs))
 	}
-	if reqs[0].ErrorReason == "" {
-		t.Errorf("the request must still be recorded as an error; got %+v", reqs[0])
+	if reqs[0].ErrorReason != "engine_request_failed" {
+		t.Errorf("the request must still be recorded as an error, and as the one the "+
+			"dispatch actually hit; got %+v", reqs[0])
 	}
 	if reqs[0].PeerID != "dev-peer-b" {
 		t.Fatalf("PeerID = %q — the request never reached the peer, so this case proves nothing", reqs[0].PeerID)

@@ -93,6 +93,14 @@ mesh probe は 2xx-4xx ルールを緩めず `EngineDead` を差し込む — **
   「永久に嘘をつく」より厳密に良い。
 - gateway が非 2xx を `rr.fail(status, "engine_error")` で記録するようになり、
   イベントリングと課金 usage が正直になった（副次的だが独立した修正）。
+  - **訂正（20260807）**: この一文が及んでいたのは**非 2xx 分岐だけ**だった。
+    同じ性質の出口が 3 つ残っており、いずれも「クライアントには 502 を書いて
+    記録は 200」という形。Anthropic ストリームの 2 つ（TTFB 予算切れ・
+    `postToEngine` 失敗）は waired-agent#530 / PR #532 で、OpenAI の
+    transport 双子は waired-agent#538 で閉じた。なお本文の「課金 usage」は
+    当時の呼称で、現時点でレートリミットもトークン課金も存在しない。
+    計上先は Public Share の使用量レポート（spec §12 の表示と
+    `InferenceUsage`）である。
 - 残存リスク: ちょうど `engineRecoveryStableFor` + 1 秒毎にクラッシュすると
   永久に許容される（約 288 回/日）。必要なら通算上限を追加する。
 - `EnsureRunning` の同一ラッチ問題は `vllm.go` と `openaicompat/adapter.go` にも
@@ -100,6 +108,7 @@ mesh probe は 2xx-4xx ルールを緩めず `EngineDead` を差し込む — **
 
 ## Refs
 - waired-ai/waired-agent#29
+- waired-ai/waired-agent#530 / waired-ai/waired-agent#538（残っていた 3 出口）
 - `internal/runtime/ollama.go`（`markUnhealthy` / `superviseChild` / `LatchFailed`）
 - `cmd/waired-agent/inference.go`（`onEngineUnhealthy`）
 - `docs/decisions/20260727/1715-ollama-kv-quant-only-when-it-buys-ctx.md`
