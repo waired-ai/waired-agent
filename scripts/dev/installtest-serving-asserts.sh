@@ -77,11 +77,20 @@ trap 'rm -rf "$WORK"' EXIT
 GOOD_STATUS='{"subsystem_state":"ready","runtimes":{"ollama":{"installed":true,"state":"ready","mode":"spawned","live_version":"0.31.1","pinned_version":"0.31.1"},"vllm":{"installed":false,"state":"absent"}}}'
 ADOPTED_STATUS="${GOOD_STATUS/\"mode\":\"spawned\"/\"mode\":\"adopted\"}"
 
-# normalize <bin> <other> <tool> — stdin to stdout. The em dash goes last so a
-# path containing one (there are none, but the order should not matter) is
-# already gone.
+# normalize <bin> <other> <tool> — stdin to stdout.
+#
+# The dash goes FIRST so the tool rule below can anchor on the "-- " the .ps1
+# writes literally and the .sh harnesses write as an em dash. The tool rule
+# matches its whole sentence rather than the bare name: a word-boundary \b is a
+# GNU sed extension that silently does nothing under the BSD sed a developer on
+# a Mac would run this with, and matching the sentence also keeps the check
+# honest — a copy that named the WRONG tool would not be normalized, so it
+# still lands as a diff.
 normalize() {
-  sed -e "s|$1|<BIN>|g" -e "s|$2|<OTHER>|g" -e "s|\\b$3\\b|<TOOL>|g" -e 's/—/--/g'
+  sed -e 's/—/--/g' \
+      -e "s|$1|<BIN>|g" \
+      -e "s|$2|<OTHER>|g" \
+      -e "s|-- $3 found no listening process|-- <TOOL> found no listening process|"
 }
 
 # --- Linux: source the library and stub gx() -------------------------------
@@ -98,7 +107,7 @@ linux_transcript() {
     bad()     { LINES+=("FAIL $*"); }
     it_warn() { :; }
     it_log()  { :; }
-    sleep()   { :; }        # the not-answering scenario must not take 90 s
+    sleep()   { :; }        # the not-answering scenario must not take 180 s
 
     VERSION_BODY='' STATUS_BODY='' LISTENER_PID='' LISTENER_EXE=''
     gx() {
