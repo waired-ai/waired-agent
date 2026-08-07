@@ -367,6 +367,20 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 		p.finalizeOllamaServeTuning(ctx, p.bootPlan.tune,
 			p.bootPlan.tuneManifest, p.bootPlan.tuneVariant, p.bootPlan.tuneTag)
 	}
+	// How fast one coding-agent turn is on this host (#496), taken here
+	// because this is the only line every install path reaches with a
+	// serving engine. It used to be taken by the two paths that needed it
+	// — the bundled pre-pull and the model apply — and the browser wizard
+	// reaches neither before the operator has to choose, so the majority
+	// install path had no figure at the moment it mattered (waired#1099).
+	//
+	// BELOW the two steps above, which restart the engine, and above the
+	// dispatch, which does not: a measurement is a request to the engine,
+	// so a restart underneath it discards three minutes of work. #359
+	// records the same ordering for the downloads below.
+	//
+	// Returns immediately; the work is on pullsWG.
+	p.startHostSpeedMeasurement(ctx)
 	// The operator's model comes FIRST, and the hardware auto-select is
 	// only the fallback for a host with no operator model to serve (#306).
 	// Both used to be dispatched here back to back, and #305's registry is

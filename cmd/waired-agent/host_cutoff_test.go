@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -560,10 +561,11 @@ func TestMeasureHostCutoff_WhenTheEngineCapsThePrompt_MeasuresAgainWider(t *test
 	}
 }
 
-// The measurement is taken once per ENGINE BUILD. Re-measuring on every
-// install path would cost a minute or two of a user's install for an
-// answer already on disk; never re-measuring would keep serving pre-bump
-// numbers after an Ollama bundle bump, which is waired#668 exactly.
+// The measurement is taken once per INSTALL, and the engine build is one
+// half of that. Re-measuring on every call would cost a minute or two of
+// a user's install for an answer already on disk; never re-measuring
+// would keep serving pre-bump numbers after an Ollama bundle bump, which
+// is waired#668 exactly.
 func TestEnsureHostSpeedMeasured_OncePerEngineBuild(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
 	ctx := context.Background()
@@ -593,6 +595,139 @@ func TestEnsureHostSpeedMeasured_OncePerEngineBuild(t *testing.T) {
 	}
 	if got := p.hostSpeedNow(); got == nil || got.EngineVersion != "0.32.0" {
 		t.Fatalf("published engine_version = %v, want 0.32.0", got)
+	}
+}
+
+// The other half of "once per install": the AGENT build. An upgrade
+// leaves the engine and the hardware exactly as they were, so nothing in
+// the stored figure's own fields says it is stale — and waired#1099 is
+// the ruling that a figure kept for as long as the hardware looks the
+// same is the wrong rule. Every install and every upgrade restarts the
+// daemon on a new version, so this is what makes it an install-time step.
+func TestEnsureHostSpeedMeasured_AnUpgradeReMeasures(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	ctx := context.Background()
+
+	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+		t.Fatal("first call did not measure")
+	}
+	afterFirst := len(eng.generateBodies())
+
+	// The next daemon start on the same state dir, from a newer build.
+	// Same engine, same hardware, same everything the record can see.
+	rec, err := state.ReadHostSpeed(p.stateDir)
+	if err != nil || rec.Measurement == nil {
+		t.Fatalf("no stored record to age: %+v (%v)", rec, err)
+	}
+	if rec.AgentVersion != buildinfo.Version {
+		t.Fatalf("stored agent_version = %q, want %q — the record cannot say which build measured it",
+			rec.AgentVersion, buildinfo.Version)
+	}
+	rec.AgentVersion = "0.0.1-previous"
+	if err := state.WriteHostSpeed(p.stateDir, rec); err != nil {
+		t.Fatal(err)
+	}
+	next := &agentInferenceProvider{
+		ollama: p.ollama, manifests: p.manifests, stateDir: p.stateDir, store: p.store,
+		cfg: p.cfg, profiler: p.profiler, logger: p.logger, agentCtx: p.agentCtx,
+		ollamaUsable: p.ollamaUsable,
+	}
+	if _, measured := next.ensureHostSpeedMeasured(ctx); !measured {
+		t.Fatal("no measurement after the agent build moved")
+	}
+	if got := len(eng.generateBodies()); got <= afterFirst {
+		t.Fatalf("/api/generate requests = %d after an upgrade, want more than %d — an install "+
+			"that has not measured this host has no figure of its own", got, afterFirst)
+	}
+	if got, err := state.ReadHostSpeed(p.stateDir); err != nil || got.AgentVersion != buildinfo.Version {
+		t.Fatalf("stored agent_version = %q after the re-measure, want %q (%v)",
+			got.AgentVersion, buildinfo.Version, err)
+	}
+}
+
+// A record written before AgentVersion existed cannot say which build
+// took it, so it is re-measured. The first boot after the upgrade that
+// introduces the field is exactly the case the field exists for.
+func TestEnsureHostSpeedMeasured_ARecordWithNoAgentVersionIsReMeasured(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	ctx := context.Background()
+
+	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+		t.Fatal("first call did not measure")
+	}
+	afterFirst := len(eng.generateBodies())
+
+	rec, _ := state.ReadHostSpeed(p.stateDir)
+	rec.AgentVersion = ""
+	if err := state.WriteHostSpeed(p.stateDir, rec); err != nil {
+		t.Fatal(err)
+	}
+	next := &agentInferenceProvider{
+		ollama: p.ollama, manifests: p.manifests, stateDir: p.stateDir, store: p.store,
+		cfg: p.cfg, profiler: p.profiler, logger: p.logger, agentCtx: p.agentCtx,
+		ollamaUsable: p.ollamaUsable,
+	}
+	if _, measured := next.ensureHostSpeedMeasured(ctx); !measured {
+		t.Fatal("no measurement from a record that cannot say who took it")
+	}
+	if got := len(eng.generateBodies()); got <= afterFirst {
+		t.Fatalf("/api/generate requests = %d, want more than %d", got, afterFirst)
+	}
+}
+
+// The bootstrap trigger: a host that is never told to install anything
+// still publishes a figure. This is the whole point of waired#1099 — the
+// browser wizard names a model, which stands the pre-pull down, so before
+// this the majority install path measured nothing until after the
+// operator had already chosen.
+func TestStartHostSpeedMeasurement_MeasuresWithNoModelNamed(t *testing.T) {
+	p, eng, disabled := hostCutoffProvider(t, cpuOnlyCounters, 0)
+
+	p.startHostSpeedMeasurement(context.Background())
+	p.waitForPulls()
+
+	got := p.hostSpeedNow()
+	if got == nil {
+		t.Fatal("nothing published — a host nobody has chosen a model for still has a speed")
+	}
+	if got.TurnSeconds <= hostfit.HostCutoffTurnBudgetSeconds {
+		t.Fatalf("published turn = %.1f s, want the below-budget figure the counters describe",
+			got.TurnSeconds)
+	}
+	if len(eng.generateBodies()) == 0 {
+		t.Fatal("the engine was never asked to generate anything")
+	}
+	// MEASURING is not DECIDING. The bootstrap has no one else's answer to
+	// defer to yet — the wizard may be about to name a model — so it takes
+	// the figure and nothing more.
+	if *disabled != 0 {
+		t.Fatalf("local inference was turned off %d times by a measurement; the decision "+
+			"belongs to applyHostCutoff, which knows whether anyone has chosen", *disabled)
+	}
+	if st, err := state.ReadDesiredInferenceState(p.stateDir); err != nil || st != "" {
+		t.Fatalf("the local-inference toggle reads %q after a measurement, want unset (%v)", st, err)
+	}
+}
+
+// A second trigger reuses the first one's answer rather than measuring a
+// host the first one is still measuring. The bootstrap's call and a later
+// pre-pull or setup call overlap on a slow host by construction: the
+// measurement takes minutes and the pre-pull hold releases on its own.
+func TestStartHostSpeedMeasurement_DoesNotRaceASecondCaller(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	ctx := context.Background()
+
+	p.startHostSpeedMeasurement(ctx)
+	p.startHostSpeedMeasurement(ctx)
+	p.waitForPulls()
+
+	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+		t.Fatal("no measurement")
+	}
+	// One calibration + benchSampleCount samples, once. Anything more is a
+	// second measurement of a host that had already answered.
+	if got, want := len(eng.generateBodies()), 1+benchSampleCount; got != want {
+		t.Fatalf("/api/generate requests = %d, want %d — the measurement ran more than once", got, want)
 	}
 }
 

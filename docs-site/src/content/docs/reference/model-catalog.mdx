@@ -150,14 +150,21 @@ graphics card can take several minutes to answer one coding question, and it
 takes nearly as long on the smallest model in the catalog as on the largest one
 it can hold. That is the machine talking, not the model.
 
-So Waired finds out by trying it. Before downloading a full-size model — tens of
-gigabytes — it downloads a small one, about a gigabyte, and times a realistic
-coding question end to end on your computer: a long question, a full-length
-answer. It times it three times and takes the middle result, so a computer that
-happened to be busy for one of them is not judged on that. The whole thing takes
-a few seconds on a fast machine and a couple of minutes on a slow one. If one
-such answer would take longer than **45 seconds**, Waired starts with **local AI
-off** rather than downloading something that will disappoint you.
+So Waired finds out by trying it. As soon as the AI engine is installed — and
+before anything downloads a full-size model, tens of gigabytes — it downloads a
+small one, about a gigabyte, and times a realistic coding question end to end on
+your computer: a long question, a full-length answer. It times it three times
+and takes the middle result, so a computer that happened to be busy for one of
+them is not judged on that. The whole thing takes a few seconds on a fast
+machine and a couple of minutes on a slow one. If one such answer would take
+longer than **45 seconds**, Waired starts with **local AI off** rather than
+downloading something that will disappoint you.
+
+This happens on every setup route — the terminal and the browser — so the figure
+is there before you pick a model rather than after. It is measured once per
+install: a later start of the service reuses it, and updating Waired or its AI
+engine times the machine again, because a new build's speed is a new fact about
+your computer rather than the old one.
 
 `waired inference status` reports that measurement afterwards, and says so when
 it is the reason local AI is off.

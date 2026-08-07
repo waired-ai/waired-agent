@@ -1169,6 +1169,11 @@ type agentInferenceProvider struct {
 	// probe tick.
 	hostSpeed       *signer.HostSpeed
 	hostSpeedLoaded bool
+	// hostSpeedAgentVersion is the agent build that took hostSpeed, from
+	// the stored record. It is the half of "does this figure still apply"
+	// that the wire form cannot answer — EngineKind/EngineVersion cover
+	// the engine, and this covers the install (waired#1099).
+	hostSpeedAgentVersion string
 
 	// meshSnapshotFn, when non-nil, threads the inferencemesh
 	// aggregator into Select so a request whose model isn't local-
