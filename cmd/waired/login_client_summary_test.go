@@ -78,6 +78,7 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		celebration  = "everything completed successfully"
 		needsInstall = "local AI still needs installing"
 		notRunning   = "local AI isn't running"
+		notAnswering = "local AI is not answering yet"
 	)
 
 	cases := []struct {
@@ -125,6 +126,42 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			want:     needsInstall,
 			absent:   []string{celebration, notRunning},
 			wantExit: exitLocalAIDown,
+		},
+		{
+			// #552, the third case that had no box of its own. The engine
+			// installed, stayed up, took the model — and returned HTTP 500
+			// on the test generation. The run still ended on the
+			// celebration, three lines after saying so.
+			name:     "the engine ran and could not answer (#29/#552)",
+			summary:  daemonSummary{benchFailed: true},
+			want:     notAnswering,
+			absent:   []string{celebration, needsInstall, notRunning},
+			wantExit: exitLocalAIDown,
+		},
+		{
+			// Order: an engine that never stayed up cannot have had a
+			// benchmark reach it, so #310's wording is the one that
+			// describes this host.
+			name: "an engine that would not stay up outranks the benchmark",
+			summary: daemonSummary{
+				engineFailure: "ollama: process exited during startup: signal: killed",
+				benchFailed:   true,
+			},
+			want:     notRunning,
+			absent:   []string{celebration, notAnswering},
+			wantExit: exitLocalAIDown,
+		},
+		{
+			// NEGATIVE CONTROL, and the one that matters most here. A
+			// benchmark that was SKIPPED is not a benchmark that failed:
+			// routing-only nodes and hosts pointed at an external
+			// endpoint return Capacity=0 and never benchmark by design
+			// (#203). Keying the box on "no measurement" instead of on a
+			// stated failure would warn every one of them.
+			name:    "a skipped benchmark is not a failed one",
+			summary: daemonSummary{accountEmail: "someone@example.test", bench: benchmarkOutcome{}},
+			want:    celebration,
+			absent:  []string{notAnswering, notRunning},
 		},
 		{
 			// NEGATIVE CONTROL. A gateway-only host answers `disabled` and

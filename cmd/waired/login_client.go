@@ -420,6 +420,10 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			}
 
 			var resp *management.BenchmarkRunResponse
+			// benchFailed is "the benchmark ran and the engine could not
+			// complete a generation", never "no benchmark happened" — see
+			// waitForBenchmark's ranAndFailed.
+			var benchFailed bool
 			switch {
 			case setupActive:
 				// waired#939: the degraded wording. Everything this process
@@ -447,7 +451,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			default:
 				// #133: once the daemon has the model ready, benchmark it and
 				// offer a lighter model if this host can't sustain the pick.
-				resp, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout))
+				resp, benchFailed, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout))
 			}
 			// Claude Code request routing (#294). The installers deleted
 			// their own post-init `waired claude enable` and forward the
@@ -497,6 +501,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				accountEmail:  st.AccountEmail,
 				engineErr:     engineErr,
 				engineFailure: modelWait.engineFailure,
+				benchFailed:   benchFailed,
 				bench:         outcomeFrom(resp),
 				claudeRouted:  claudeRouted,
 			}
@@ -590,8 +595,16 @@ type daemonSummary struct {
 	// including the ones where the wait ended not-ready for a reason
 	// that is not a fault.
 	engineFailure string
-	bench         benchmarkOutcome
-	claudeRouted  bool
+	// benchFailed is the benchmark RUNNING and the engine failing to
+	// complete a generation (#29), which is a third outcome and not a
+	// weaker form of either field above: the engine installed, it stayed
+	// up, and it still cannot serve. Never set for a benchmark that was
+	// skipped — a routing-only node and an external endpoint both skip it
+	// by design, and #203 is explicit that a skip must not read as a
+	// fault (waired-ai/waired-agent#552).
+	benchFailed  bool
+	bench        benchmarkOutcome
+	claudeRouted bool
 }
 
 // exitErr is what `waired init` returns for this outcome: errLocalAIDown
@@ -608,7 +621,13 @@ type daemonSummary struct {
 // counts, which is the same rule the box above is chosen by — and the
 // reason they are derived from one struct rather than decided twice.
 func (s daemonSummary) exitErr() error {
-	if s.engineErr != nil || s.engineFailure != "" {
+	// benchFailed joins the other two rather than being a warning with a
+	// zero exit: to an installer "local AI is down" is a statement about
+	// whether the thing can answer a request, and an engine that runs but
+	// cannot complete one answers no. Reachable only from a STATED
+	// failure, never from a skipped benchmark, so a gateway-only host and
+	// an external endpoint keep exiting 0 (#310's rule, #552's case).
+	if s.engineErr != nil || s.engineFailure != "" || s.benchFailed {
 		return errLocalAIDown
 	}
 	return nil
@@ -625,16 +644,49 @@ func (s daemonSummary) exitErr() error {
 // Order is a contract. The install failing is the more specific answer —
 // there is no engine to be down — and its box names the command that
 // finishes the install, which would be the wrong instruction on a host
-// where the files are already there.
+// where the files are already there. The benchmark arm comes last of the
+// three for the same reason: it is the only one that needed an engine
+// that installed AND stayed up in order to be reached at all.
 func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 	switch {
 	case s.engineErr != nil:
 		printDaemonEngineFailedBox(out, s.accountEmail)
 	case s.engineFailure != "":
 		printDaemonEngineDownBox(out, s.accountEmail)
+	case s.benchFailed:
+		printDaemonBenchmarkFailedBox(out, s.accountEmail, s.claudeRouted)
 	default:
 		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted)
 	}
+}
+
+// printDaemonBenchmarkFailedBox is the summary for a run whose engine
+// installed, started, took the model — and then could not complete a
+// single generation (#29).
+//
+// It is a third box rather than a suppressed line in the success box.
+// This run really did end with "[!] Local inference could not complete a
+// test generation: HTTP 500" followed by "Waired is ready — everything
+// completed successfully!" and "Local inference is live via the
+// waired-agent daemon", three lines apart, which is the same defect #188
+// and #310 each fixed one layer earlier
+// (waired-ai/waired-agent#552, run 31164150206).
+//
+// The engine's reason is not repeated: waitForBenchmark printed it in
+// full moments ago, along with where to look next.
+func printDaemonBenchmarkFailedBox(out io.Writer, accountEmail string, claudeRouted bool) {
+	var lines []string
+	if accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
+	}
+	if claudeRouted {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
+	} else {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
+	}
+	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	lines = append(lines, dim("The AI engine here could not answer a test request; the reason is above."))
+	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI is not answering yet", lines)
 }
 
 // errLocalAIDown makes the outcome above scriptable. main.go maps it to
