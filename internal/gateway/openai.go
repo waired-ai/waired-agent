@@ -199,7 +199,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	started, err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, rr, asFailureReporter(adapter))
+	started, err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, sel, rr, asFailureReporter(adapter))
 	if err != nil {
 		if !started {
 			// The request never reached the engine. proxyToEngine chose
@@ -207,7 +207,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 			// same status on rr, so there is no truncation to describe
 			// here and nothing to restate (waired-agent#538).
 			slog.Warn("openai proxy failed before the engine answered",
-				"err", err,
+				"err", adapterErrorForClient(sel, err),
 				"peer", peerDisplayID(sel),
 				"model", sel.ModelID,
 			)
@@ -220,7 +220,7 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		// see "peer-A died mid-stream" in agent.log even though the
 		// client only saw a truncated response.
 		slog.Warn("openai proxy truncated mid-stream",
-			"err", err,
+			"err", adapterErrorForClient(sel, err),
 			"peer", peerDisplayID(sel),
 			"model", sel.ModelID,
 		)
@@ -281,16 +281,20 @@ func rewriteModelField(body []byte, newModel string) (string, []byte, error) {
 // already did. Once it has, the status is spent, and only the caller's
 // mid-stream reason is left to record.
 //
+// sel is what the request was dispatched to, and is here only so
+// adapterErrorForClient can render an error without the peer's overlay
+// address in it — every error below carries the URL it was dialling.
+//
 // engineErrorSniffMax bounds how much of a non-2xx engine body is read
 // before forwarding, so the adapter can classify it without buffering an
 // arbitrarily large error.
 const engineErrorSniffMax = 32 << 10
 
-func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) (responseStarted bool, err error) {
+func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) (responseStarted bool, err error) {
 	target, err := url.Parse(baseURL)
 	if err != nil {
 		rr.fail(http.StatusInternalServerError, "bad_engine_url")
-		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "bad_engine_url", err.Error())
+		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "bad_engine_url", adapterErrorForClient(sel, err))
 		return false, err
 	}
 	target.Path = singleSlash(target.Path, path)
@@ -298,7 +302,7 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
 	if err != nil {
 		rr.fail(http.StatusInternalServerError, "build_request_failed")
-		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "build_request_failed", err.Error())
+		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "build_request_failed", adapterErrorForClient(sel, err))
 		return false, err
 	}
 	// Copy a curated set of headers; Authorization is dropped because
@@ -325,7 +329,7 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		// status-only gate honest — nothing reached an engine, so there
 		// is nothing to meter (waired-agent#538).
 		rr.fail(http.StatusBadGateway, "engine_request_failed")
-		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "engine_request_failed", err.Error())
+		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "engine_request_failed", adapterErrorForClient(sel, err))
 		return false, err
 	}
 	defer resp.Body.Close()

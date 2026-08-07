@@ -183,6 +183,104 @@ func TestRuntimeUnavailableError_DoesNotLeakDeviceID(t *testing.T) {
 	}
 }
 
+// A peer's overlay address is covered by the same rule as its DeviceID:
+// spec §8.5 keeps both out of any log line, header or response body.
+// proxyToEngine's own comment says as much about the host it dials — but
+// a transport error carries that host anyway. client.Do returns a
+// *url.Error holding the full target URL, and the *net.OpError under it
+// holds the address a second time, so handing err.Error() to the client
+// publishes the provider's overlay address to a guest whose request
+// simply failed to connect.
+//
+// Both directions are asserted on every surface that dispatches: the
+// address must be gone, and the pseudonym must still be there — a scrub
+// that returned nothing would pass a leak test and tell nobody anything.
+func TestDispatchTransportError_DoesNotLeakThePeerAddress(t *testing.T) {
+	peer := peerThatAnswersTheProbeThenDies(t)
+	peerAddr := strings.TrimPrefix(peer.URL, "http://")
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		payload map[string]any
+	}{
+		{"openai", "/v1/chat/completions", map[string]any{
+			"model": "waired/default", "messages": []map[string]string{{"role": "user", "content": "hi"}}}},
+		{"anthropic", "/anthropic/v1/messages", map[string]any{
+			"model": "waired/default", "max_tokens": 16,
+			"messages": []map[string]string{{"role": "user", "content": "hi"}}}},
+		{"anthropic stream", "/anthropic/v1/messages", map[string]any{
+			"model": "waired/default", "max_tokens": 16, "stream": true,
+			"messages": []map[string]string{{"role": "user", "content": "hi"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			defer slog.SetDefault(prev)
+
+			gw := newGatewayWithPeerFactory(t, &fakeSelector{sel: publicSelection()},
+				func(string) (runtime.Adapter, error) {
+					return probeableAdapter{baseURL: peer.URL}, nil
+				})
+
+			body, _ := json.Marshal(tc.payload)
+			r := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(body))
+			r.RemoteAddr = "127.0.0.1:1"
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			gw.Handler().ServeHTTP(w, r)
+
+			// 502 is the transport failure itself. Any other status means
+			// the request stopped earlier — before or during the probe —
+			// and this case would be proving nothing.
+			if w.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+			}
+			for what, text := range map[string]string{
+				"error body": w.Body.String(),
+				"agent.log":  buf.String(),
+			} {
+				if strings.Contains(text, peerAddr) {
+					t.Errorf("%s leaks the peer's overlay address %q: %s", what, peerAddr, text)
+				}
+				if strings.Contains(text, foreignDeviceID) {
+					t.Errorf("%s leaks the foreign device id: %s", what, text)
+				}
+			}
+			if !strings.Contains(w.Body.String(), foreignAlias) {
+				t.Errorf("the error body no longer says which peer failed: %s", w.Body.String())
+			}
+		})
+	}
+}
+
+// peerThatAnswersTheProbeThenDies passes the mesh /healthz probe, so the
+// request really commits to this peer, and then drops the connection on
+// the inference call without writing a response. That is the shape a
+// peer whose engine died between the probe and the dispatch produces,
+// and it is the shape that makes client.Do return a *url.Error naming
+// the address.
+func peerThatAnswersTheProbeThenDies(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/waired/v1/inference/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(readyBody(0, 8)))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // newGatewayWithPeerFactory is newGatewayUnderTest with a peer-adapter
 // factory wired, so the remote dispatch path can be driven.
 func newGatewayWithPeerFactory(t *testing.T, sel SelectorIface, f func(string) (runtime.Adapter, error)) *Server {

@@ -230,10 +230,10 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	client := h.clientFor(adapter)
 	if req.Stream {
 		h.proxyAnthropicStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w,
-			ttfbBudgetFor(h.deps, sel, r, class), rr, asFailureReporter(adapter))
+			ttfbBudgetFor(h.deps, sel, r, class), sel, rr, asFailureReporter(adapter))
 		return
 	}
-	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w, rr, asFailureReporter(adapter))
+	h.proxyAnthropicNonStream(r.Context(), client, adapter.BaseURL(), encoded, req.Model, req.Tools, w, sel, rr, asFailureReporter(adapter))
 }
 
 // handleAnthropicCountTokensImpl returns an approximate token count.
@@ -263,7 +263,10 @@ func (h *HandlerSet) handleAnthropicCountTokensImpl(w http.ResponseWriter, r *ht
 
 // rr may be nil (direct calls from tests). The upstream response is
 // already decoded here, so metering costs one field read (waired#829).
-func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) {
+// sel is here for the same reason as on proxyToEngine: a transport error
+// names the URL it was dialling, and for a Public Share peer that is an
+// overlay address no client and no log line may carry (spec §8.5).
+func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) {
 	start := time.Now()
 	var (
 		resp     *http.Response
@@ -284,14 +287,14 @@ func (h *HandlerSet) proxyAnthropicNonStream(ctx context.Context, client *http.C
 		if err != nil {
 			rr.fail(http.StatusBadGateway, "engine_request_failed")
 			slog.Debug("anthropic upstream unreachable", "latency_ms", time.Since(start).Milliseconds())
-			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
 			return
 		}
 		respBody, err = io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
 			rr.fail(http.StatusBadGateway, "engine_read_failed")
-			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
+			writeAnthropicError(w, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
 			return
 		}
 		if resp.StatusCode/100 == 2 || attempt > maxStreamRetries ||
@@ -433,7 +436,7 @@ func ttfbBudgetFor(deps Deps, sel router.Selection, r *http.Request, class strin
 // accumulates the upstream's usage object; metering reuses it, so a
 // client that disconnects mid-stream still contributes whatever the
 // engine reported before the break (waired#829).
-func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, ttfb time.Duration, rr *requestRec, reporter runtime.FailureReporter) {
+func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Client, baseURL string, body []byte, originalModel string, offered []AnthropicTool, w http.ResponseWriter, ttfb time.Duration, sel router.Selection, rr *requestRec, reporter runtime.FailureReporter) {
 	// #757: bound only the PRE-first-byte window. reqCtx governs the peer
 	// request; a time.AfterFunc cancels it if the engine returns no headers
 	// within ttfb, so postToEngine errors BEFORE the stream commits and the
@@ -499,7 +502,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		// recorded this since it was written: the two transports must not
 		// describe one failure differently.
 		rr.fail(http.StatusBadGateway, "engine_request_failed")
-		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		writeAnthropicError(w, http.StatusBadGateway, "upstream_error", adapterErrorForClient(sel, err))
 		return
 	}
 	// A closure, not `defer resp.Body.Close()`: resp is reassigned when a
@@ -732,10 +735,10 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		slog.Warn("gateway: engine produced no usable turn; retrying",
 			"model", recordedModel(rr), "attempt", attempts,
 			"max_attempts", maxStreamRetries+1, "truncated", truncated,
-			"finish_reason", finishReason, "scan_err", scanner.Err())
+			"finish_reason", finishReason, "scan_err", adapterErrorForClient(sel, scanner.Err()))
 		next, nerr := h.postToEngine(reqCtx, client, baseURL, "/v1/chat/completions", body)
 		if nerr != nil {
-			slog.Warn("gateway: retrying a truncated stream failed", "err", nerr)
+			slog.Warn("gateway: retrying a truncated stream failed", "err", adapterErrorForClient(sel, nerr))
 			break
 		}
 		if next.StatusCode/100 != 2 {

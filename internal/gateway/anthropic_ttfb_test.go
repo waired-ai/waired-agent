@@ -72,6 +72,13 @@ func slowBodyEngine(bodyDelay time.Duration) *httptest.Server {
 
 const ttfbStreamBody = `{"model":"waired/default","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
 
+// localSel is what these tests dispatch under: the baseURL they pass is a
+// local test engine, not a peer. The selection reaches only
+// adapterErrorForClient, and a local one keeps the error's detail; the
+// public-peer rendering is covered by
+// TestDispatchTransportError_DoesNotLeakThePeerAddress.
+var localSel = router.Selection{Runtime: "ollama"}
+
 func TestProxyAnthropicStream_TTFBAbortsPreCommit(t *testing.T) {
 	// Delay comfortably exceeds the budget so headers never arrive first; the
 	// select-on-cancel + short delay keep the lingering handler from stalling
@@ -83,7 +90,7 @@ func TestProxyAnthropicStream_TTFBAbortsPreCommit(t *testing.T) {
 	w.Header().Set(HeaderInferencePeer, "peerX") // as setSelectionHeaders stages it
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w, 50*time.Millisecond, nil, nil)
+		[]byte(ttfbStreamBody), "waired/default", nil, w, 50*time.Millisecond, localSel, nil, nil)
 
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body=%s", w.Code, w.Body.String())
@@ -106,7 +113,7 @@ func TestProxyAnthropicStream_FastPeerNotAborted(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w, 100*time.Millisecond, nil, nil)
+		[]byte(ttfbStreamBody), "waired/default", nil, w, 100*time.Millisecond, localSel, nil, nil)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -128,7 +135,7 @@ func TestProxyAnthropicStream_PostCommitSlownessNotAborted(t *testing.T) {
 	// Budget shorter than the mid-stream delay: the deadline must disarm at
 	// headers, so the slow SECOND chunk is delivered rather than aborted.
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w, 30*time.Millisecond, nil, nil)
+		[]byte(ttfbStreamBody), "waired/default", nil, w, 30*time.Millisecond, localSel, nil, nil)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -145,7 +152,7 @@ func TestProxyAnthropicStream_TTFBZeroDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w, 0, nil, nil) // disabled
+		[]byte(ttfbStreamBody), "waired/default", nil, w, 0, localSel, nil, nil) // disabled
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (ttfb=0 disables the deadline)", w.Code)
@@ -211,7 +218,7 @@ func TestProxyAnthropicStream_TTFBTimeoutIsRecorded(t *testing.T) {
 	rr.succeed() // as the handler does, before it knows anything
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, engine.URL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w, 50*time.Millisecond, rr, nil)
+		[]byte(ttfbStreamBody), "waired/default", nil, w, 50*time.Millisecond, localSel, rr, nil)
 
 	if rr.ev.Status != http.StatusBadGateway {
 		t.Errorf("recorded status = %d, want %d (the client was sent 502)", rr.ev.Status, http.StatusBadGateway)
@@ -232,7 +239,7 @@ func TestProxyAnthropicStream_TransportErrorIsRecorded(t *testing.T) {
 	rr.succeed()
 
 	h.proxyAnthropicStream(context.Background(), http.DefaultClient, deadURL,
-		[]byte(ttfbStreamBody), "waired/default", nil, w, 0, rr, nil)
+		[]byte(ttfbStreamBody), "waired/default", nil, w, 0, localSel, rr, nil)
 
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", w.Code)

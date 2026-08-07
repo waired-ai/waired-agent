@@ -52,7 +52,7 @@ func engineReturning(t *testing.T, status int, body string) *httptest.Server {
 //   - the adapter is told, with the verbatim body (only it can classify);
 //   - the event ring records the REAL status, not 200 (this path used to fall
 //     through to the caller's rr.succeed(), so a wire-500 logged as 200);
-//   - no usage sample is emitted, so a failed request is not billed.
+//   - no usage sample is emitted, so a failed request is not metered.
 func TestProxyToEngine_Upstream500_ReportsAndRecords(t *testing.T) {
 	const body = `{"error":{"message":"llama-server process has terminated: signal: segmentation fault (core dumped)","type":"api_error"}}`
 	srv := engineReturning(t, http.StatusInternalServerError, body)
@@ -65,7 +65,7 @@ func TestProxyToEngine_Upstream500_ReportsAndRecords(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	started, err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, rr, rep)
+		http.Header{}, []byte(`{}`), w, localSel, rr, rep)
 	if err != nil {
 		t.Fatalf("proxyToEngine returned %v; a forwarded upstream error is not a transport failure", err)
 	}
@@ -132,7 +132,7 @@ func TestProxyToEngine_TransportFailureRecordsWhatTheClientGot(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	started, err := proxyToEngine(context.Background(), http.DefaultClient, deadURL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, rr, nil)
+		http.Header{}, []byte(`{}`), w, localSel, rr, nil)
 	if err == nil {
 		t.Fatal("proxyToEngine returned nil for an engine that is not listening")
 	}
@@ -172,7 +172,7 @@ func TestProxyToEngine_MidStreamFailureIsCommitted(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	started, err := proxyToEngine(context.Background(), http.DefaultClient, upstream.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, rr, nil)
+		http.Header{}, []byte(`{}`), w, localSel, rr, nil)
 	if err == nil {
 		t.Fatal("proxyToEngine returned nil for a body that stopped short of its Content-Length")
 	}
@@ -198,7 +198,7 @@ func TestProxyToEngine_NilReporter(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	if _, err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, rr, nil); err != nil {
+		http.Header{}, []byte(`{}`), w, localSel, rr, nil); err != nil {
 		t.Fatalf("proxyToEngine: %v", err)
 	}
 	if rr.ev.Status != http.StatusInternalServerError {
@@ -218,7 +218,7 @@ func TestProxyToEngine_LargeErrorBodyReachesClient(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	if _, err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, &requestRec{}, rep); err != nil {
+		http.Header{}, []byte(`{}`), w, localSel, &requestRec{}, rep); err != nil {
 		t.Fatalf("proxyToEngine: %v", err)
 	}
 	if got := w.Body.Len(); got != len(big) {
@@ -238,7 +238,7 @@ func TestProxyToEngine_2xxUnaffected(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	started, err := proxyToEngine(context.Background(), srv.Client(), srv.URL, "/v1/chat/completions",
-		http.Header{}, []byte(`{}`), w, rr, rep)
+		http.Header{}, []byte(`{}`), w, localSel, rr, rep)
 	if err != nil {
 		t.Fatalf("proxyToEngine: %v", err)
 	}
