@@ -32,6 +32,7 @@
       "quantization_tier": 4,
       "attention_arch": "hybrid_mamba",
       "kv_bytes_per_token_fp16": 32768,
+      "vision_working_set_gb": 0.42,
       "vendor_support": {
         "nvidia": {
           "ollama": "stable",

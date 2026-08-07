@@ -834,7 +834,29 @@ func OllamaResidentMB(v catalog.Variant, unifiedMemory bool) int {
 		return 0
 	}
 	return OllamaWeightsResidentMB(v, unifiedMemory) +
+		OllamaVisionResidentMB(v) +
 		v.KVBytesPerTokenFP16*OllamaKVBudgetTokens/(1<<20)
+}
+
+// OllamaVisionResidentMB is the vision tower's load-time reservation in
+// binary MiB, 0 for a text-only variant. See
+// catalog.Variant.VisionWorkingSetGB for what the figure is and for why
+// it is the reservation rather than the projector's ceiling.
+//
+// It is charged by the two CAPACITY terms — OllamaResidentMB and
+// OllamaWindowResidentMB — and deliberately not by
+// OllamaWeightsResidentMB, which is the RECOMMENDATION term. Capacity
+// asks "would this load run out of memory", and a reservation the engine
+// takes at load is part of that answer on every host. The recommendation
+// asks "are the weights resident on the card", which is a question about
+// where bytes live rather than how many there are, and moving it would
+// change discrete-GPU recommendations on a measurement taken on unified
+// memory (#552).
+func OllamaVisionResidentMB(v catalog.Variant) int {
+	if v.VisionWorkingSetGB <= 0 {
+		return 0
+	}
+	return int(math.Ceil(v.VisionWorkingSetGB * 1e9 / (1 << 20)))
 }
 
 // OllamaWeightsResidentMB is OllamaResidentMB without the KV term: what
@@ -1000,7 +1022,9 @@ func OllamaWindowResidentMB(v catalog.Variant, window int, unifiedMemory bool) i
 	if v.EstimatedWeightGB <= 0 {
 		return 0
 	}
-	return OllamaWeightsResidentMB(v, unifiedMemory) + ServingWindowKVMB(v, window)
+	return OllamaWeightsResidentMB(v, unifiedMemory) +
+		OllamaVisionResidentMB(v) +
+		ServingWindowKVMB(v, window)
 }
 
 // OllamaResident is the GPU-residency half of the ollama fit: can this

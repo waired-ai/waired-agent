@@ -105,6 +105,11 @@ func TestTotalMemoryMB(t *testing.T) {
 // in its body. The old gate refused three of these four on a
 // hand-authored min_ram_gb or a carve-out comparison; none of them was
 // out of memory.
+//
+// The 8 GB Mac row was AMENDED on 2026-08-07 — see the comment on that
+// case and docs/decisions/20260807/1412-a-small-mac-gets-a-model-it-can-run.md.
+// What the row promises has not changed: that host still keeps local
+// inference. The model it keeps it with did.
 func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -127,10 +132,14 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 		// same claim: the model's own window, the weights' residency, and
 		// the window this host would serve.
 		wantRec string
+		// keepsItWith is the model this host is asserted to be able to
+		// hold. Empty means qwen3.5-4b itself, which is the answer for
+		// every host here but one.
+		keepsItWith string
 	}{
 		{
 			"8 GB RAM, no card",
-			hostfit.Host{RAMTotalGB: 8}, false, hostfit.ReasonWindowExceedsMemory,
+			hostfit.Host{RAMTotalGB: 8}, false, hostfit.ReasonWindowExceedsMemory, "",
 		},
 		{
 			// A 2 GB card holds none of the weights, and a host WITH an
@@ -139,7 +148,7 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 			// That asymmetry is real, known, and waits on a measured
 			// speed for the CPU-only arm (waired-ai/waired-agent#466).
 			"8 GB RAM + 2 GB card",
-			hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 2048}, false, hostfit.ReasonWeightsSpill,
+			hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 2048}, false, hostfit.ReasonWeightsSpill, "",
 		},
 		{
 			// This host CAN declare the coding window, and only because
@@ -149,23 +158,55 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 			// window, so the carded host must too. The residency clause
 			// still declines to preselect it.
 			"16 GB RAM + 2 GB card",
-			hostfit.Host{RAMTotalGB: 16, GPUCount: 1, VRAM0MB: 2048}, true, hostfit.ReasonWeightsSpill,
+			hostfit.Host{RAMTotalGB: 16, GPUCount: 1, VRAM0MB: 2048}, true, hostfit.ReasonWeightsSpill, "",
 		},
 		{
-			// 3.4 GB of weights fit the 6 GB wired limit; ~120k of window
-			// is all that fits beside them, and a unified host has
-			// nowhere to spill the rest TO.
+			// AMENDED 2026-08-07 (#552). This row used to assert
+			// qwen3.5-4b, on the reasoning that 3.4 GB of weights fit the
+			// 6 GB wired limit with ~120k of window beside them. The
+			// arithmetic behind "fit" was incomplete: qwen3.5-4b is a
+			// multimodal GGUF, ollama loads it with --mmproj whether or
+			// not an image is ever sent, and the vision tower's load-time
+			// reservation was charged to nobody.
+			//
+			// It is not a rounding error. The window sizing spends the
+			// WHOLE accelerator budget, and the capacity gate then prices
+			// that window against a budget that is the same number on a
+			// unified host — floor(3R/4) == R-2 at R = 7 and R = 8 — so
+			// the margin here was 5 MiB before this term and -396 after.
+			// A 7 GiB runner of this shape was measured failing exactly
+			// that way: partial offload, then HTTP 500 on the first
+			// generation (run 31164150206). Extra RAM does not rescue it,
+			// because the sizing converts every extra byte into KV cache
+			// rather than into margin.
+			//
+			// So this host is refused the 4b and keeps local inference on
+			// the 2b — which serves its full native 262,144 window here
+			// with 1.7 GB to spare, a WIDER window than the 119,808 the
+			// 4b was being sized for. waired-ai/waired#1056's symptom was
+			// a host left with no local model at all; that is still not
+			// what happens.
 			"8 GB Mac",
 			hostfit.Host{RAMTotalGB: 8, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 6144},
-			false, hostfit.ReasonWindowExceedsMemory,
+			false, hostfit.ReasonWindowExceedsMemory, "qwen3.5-2b",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			keepsItWith := tc.keepsItWith
+			if keepsItWith == "" {
+				keepsItWith = "qwen3.5-4b"
+			}
+			km := manifestOf(t, manifests, keepsItWith)
+			kv := variantOf(t, manifests, keepsItWith)
+			if fit := hostfit.OllamaCapacityFit(km, kv, tc.host); !fit.Fits {
+				t.Errorf("%s is refused (%s: needs %d MiB, host has %d MiB). "+
+					"Refusal is reserved for certain OOM, and this host is not "+
+					"out of memory for it", keepsItWith, fit.Reason, fit.NeedMB, fit.HaveMB)
+			}
 			fit := hostfit.OllamaCapacityFit(m, v, tc.host)
-			if !fit.Fits {
-				t.Errorf("qwen3.5-4b is refused (%s: needs %d MiB, host has %d MiB). "+
-					"Refusal is reserved for certain OOM, and 3.4 GB of weights is not "+
-					"out of memory here", fit.Reason, fit.NeedMB, fit.HaveMB)
+			if fit.Fits != (tc.keepsItWith == "") {
+				t.Errorf("qwen3.5-4b fits = %v, want %v (%s: needs %d MiB, host has %d MiB)",
+					fit.Fits, tc.keepsItWith == "", fit.Reason, fit.NeedMB, fit.HaveMB)
 			}
 			if got := hostfit.OllamaDeclaresWindow(m, v, tc.host, hostfit.ServingWindow200k); got != tc.declares200k {
 				t.Errorf("declares the coding window = %v, want %v", got, tc.declares200k)

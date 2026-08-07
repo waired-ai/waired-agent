@@ -183,6 +183,28 @@ type Variant struct {
 	// the variant: a silent server-side failure is exactly the
 	// incident this field prevents, so the gate fails closed.
 	MinEngineVersion string `json:"min_engine_version,omitempty"`
+
+	// VisionWorkingSetGB is the extra GPU-addressable memory a
+	// MULTIMODAL variant reserves at load for its vision tower, over and
+	// above the weights and the KV cache. Decimal GB, the same unit
+	// EstimatedWeightGB is annotated in. 0 (absent) means text-only and
+	// leaves the fit arithmetic exactly as it was.
+	//
+	// It exists because a multimodal GGUF is loaded with --mmproj whether
+	// or not anything will ever send an image, and the CLIP graph's
+	// compute buffers are reserved at that point. On qwen3.5-4b the
+	// engine reserved 231.44 MiB on the accelerator and 173.31 MiB on the
+	// host — 405 MiB the capacity gate did not know about, on a host it
+	// admitted with 5 MiB to spare (#552).
+	//
+	// It is the load-time RESERVATION, not the projector's ceiling. The
+	// same load reports "[mtmd] estimated worst-case memory usage of
+	// mmproj is 1143.19 MiB", which is what a maximum-size image would
+	// cost; charging that to a hard gate would refuse hosts over memory
+	// a text-only session never touches. Refusal is reserved for certain
+	// OOM (waired-ai/waired#1056), and what a load certainly reserves is
+	// the part that qualifies.
+	VisionWorkingSetGB float64 `json:"vision_working_set_gb,omitempty"`
 }
 
 // VendorSupportMatrix records, for one variant, which GPU vendor / runtime
@@ -414,6 +436,9 @@ func (m *Manifest) Validate() error {
 		}
 		if v.KVBytesPerTokenFP16 < 0 {
 			return fmt.Errorf("manifest %s variant %s: kv_bytes_per_token_fp16 must be ≥ 0, got %d", m.ModelID, v.VariantID, v.KVBytesPerTokenFP16)
+		}
+		if v.VisionWorkingSetGB < 0 {
+			return fmt.Errorf("manifest %s variant %s: vision_working_set_gb must be ≥ 0, got %g", m.ModelID, v.VariantID, v.VisionWorkingSetGB)
 		}
 		if !isAttentionArchValid(v.AttentionArch) {
 			return fmt.Errorf("manifest %s variant %s: unknown attention_arch %q", m.ModelID, v.VariantID, v.AttentionArch)
