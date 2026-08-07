@@ -151,12 +151,16 @@ takes nearly as long on the smallest model in the catalog as on the largest one
 it can hold. That is the machine talking, not the model.
 
 So Waired finds out by trying it. Before downloading a full-size model — tens of
-gigabytes — it downloads a small one, about a gigabyte, and times a single
-realistic coding question end to end on your computer: a long question, a
-full-length answer. That takes well under a minute even on a slow machine, and a
-few seconds on a fast one. If one such answer would take longer than **45
-seconds**, Waired starts with **local AI off** rather than downloading something
-that will disappoint you.
+gigabytes — it downloads a small one, about a gigabyte, and times a realistic
+coding question end to end on your computer: a long question, a full-length
+answer. It times it three times and takes the middle result, so a computer that
+happened to be busy for one of them is not judged on that. The whole thing takes
+a few seconds on a fast machine and a couple of minutes on a slow one. If one
+such answer would take longer than **45 seconds**, Waired starts with **local AI
+off** rather than downloading something that will disappoint you.
+
+`waired inference status` reports that measurement afterwards, and says so when
+it is the reason local AI is off.
 
 The same thing happens for a different reason when the best model your computer
 can hold is below the quality Waired treats as usable for coding work.

@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: ff8a77e6d5afad22
+sourceHash: b66f6f4d862809e4
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -220,7 +220,7 @@ Ctrl-C が必要です。おかしくなったのがブラウザのタブのほ�
 
 2. **Run AI models on this computer? `[Y/n]`** — デスクトップや GPU マシンなら **Y**。
 	ほかのパソコンの AI を*使うだけ*のマシンなら **N**（それでもネットワークには参加します）。
-	既定値はこのマシンのメモリ量に従います。
+	既定値はこのマシンのメモリ量と、Waired が計測した速さに従います。
 
 3. **Let your other devices use this computer's AI? `[Y/n]`** — ノートパソコンに
 	提供するためのマシンなら **Y**。前の回答とは独立した設定です。

@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: 3abeceb211bbd9cb
+sourceHash: d431b637551fc1a3
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -23,6 +23,7 @@ import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starli
 | 回答の質を上げたい（メモリに余裕がある） | ひとつ**大きい**モデルへ |
 | 回答を速くしたい・動作が重い | ひとつ**小さい**モデルへ |
 | 今どれを使っているか知りたい | [いま動いているモデルを確認する](#いま動いているモデルを確認する) |
+| このパソコンでモデルを動かしたいが、動いていない | [モデルが選ばれなかった場合](#モデルが選ばれなかった場合) |
 | 特にない | 変更不要（自動選択は妥当な既定値です） |
 
 <Aside type="note" title="大きいモデルが常に良いわけではありません">
@@ -30,6 +31,28 @@ import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starli
 	AI が応答しなくなります**。大きくする前に
 	[モデルカタログ](/ja/reference/model-catalog/)でメモリ要件を確認してください。
 </Aside>
+
+## モデルが選ばれなかった場合
+
+パソコンによっては Waired はモデルを選ばず、**ローカル AI をオフの状態**で
+始めます。理由は 2 つあります。
+
+- **メモリ。** 載るモデルのどれもコーディングに使える品質に届かない場合。
+  → [「非常に小さいモデルしか動かせない」と言われた](/ja/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model)
+- **速度。** フルサイズのモデルをダウンロードする前に、Waired は小さいモデルを
+  取得して現実的なコーディングの質問を計測します。1 往復が 45 秒を超える
+  見込みなら、1 往復に数分待つことになる数十 GB をダウンロードせずにそこで
+  止めます。
+  → [選んでいないのにローカル AI がオフで始まった](/ja/troubleshooting/#local-ai-started-off-and-i-did-not-choose-that)
+
+どちらの場合も、そのパソコンはネットワークには参加し、他のパソコンで動いて
+いる AI を使えます。ローカル AI はいつでもオンにできます——`waired inference on`、
+または Waired アプリの **Run AI models on this computer** です。一度選んだ
+あとは、Waired はその選択を保持します。
+
+```sh
+waired inference status   # オン／オフと、Waired が判断した場合はその理由
+```
 
 ## いま動いているモデルを確認する
 
