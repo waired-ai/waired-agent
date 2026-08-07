@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: b66f6f4d862809e4
+sourceHash: 60fd736c285c52b8
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -360,6 +360,31 @@ AI ソフトウェアをインストールできませんでした。多くは�
 成功しているので、このパソコンはネットワークに参加していて、ほかのマシンの AI を
 すでに使えます。表示された原因を解消してから、同じコマンドを実行し直してください。
 来ないエンジンを待ち続けることはせず、ここでセットアップは止まります。
+</Expected>
+
+<Expected tone="bad">
+```
+[!] Local inference could not complete a test generation: HTTP 500
+  Check `waired status`, then `waired doctor`, for the engine's own reason.
+
+!  Waired is signed in — local AI is not answering yet
+   Signed in and running — this device is on your network.
+   The AI engine here could not answer a test request; the reason is above.
+```
+
+AI ソフトウェアのインストールと起動は成功し、モデルも読み込んだうえで、テスト
+リクエストに 1 件も応答できなかった状態です。上のケースとは別物で、インストール
+すべきものは残っていないため、インストールをやり直しても変わりません。
+
+枠の上の行はエンジン自身が返した理由で、そのまま引用しています。よくある原因は
+2 つ — モデルがこのパソコンのメモリに対して大きすぎる場合と、エンジンが利用でき
+ないグラフィックスドライバの場合。`waired status` で読み込み中のモデルとこの
+パソコンのメモリ量を確認、`waired doctor` でエンジン自身の状態を確認。対処後は
+`waired runtimes benchmark` で同じテストを再実行でき、収まる軽いモデルがあれば
+提示されます。
+
+いずれの場合もサインイン自体は成功しています。このパソコンはネットワークに参加
+していて、ほかのマシンの AI を使えます。
 </Expected>
 
 <Aside type="caution" title="「非常に小さいモデルしか動かせません」と出たら">

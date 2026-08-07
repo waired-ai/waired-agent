@@ -368,6 +368,31 @@ already. Fix what the message names and run the command again; setup stops
 there rather than waiting for an engine that is not coming.
 </Expected>
 
+<Expected tone="bad">
+```
+[!] Local inference could not complete a test generation: HTTP 500
+  Check `waired status`, then `waired doctor`, for the engine's own reason.
+
+!  Waired is signed in — local AI is not answering yet
+   Signed in and running — this device is on your network.
+   The AI engine here could not answer a test request; the reason is above.
+```
+
+The AI software installed and started, took the model, and then could not
+answer a single test request. This is different from the case above: nothing
+needs installing, so running the install again changes nothing.
+
+The line above the box is the engine's own reason, quoted as the engine gave
+it. Two causes are common — the model is too large for this computer's memory,
+and a graphics driver the engine cannot use. `waired status` shows which model
+is loaded and how much memory this computer has; `waired doctor` reports the
+engine's own state. `waired runtimes benchmark` re-runs the same test after a
+change, and offers a lighter model when one would fit.
+
+Sign-in is unaffected either way: the computer is on your network and can use
+the AI on your other machines.
+</Expected>
+
 <Aside type="caution" title="“This machine can only run a very small model”">
 	On a low-memory computer, setup may report that only a very small model fits
 	and suggest **not** running one. Take that advice: at that size a coding
