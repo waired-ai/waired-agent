@@ -29,16 +29,19 @@
     1 = install + service asserts; 2 = + hands-free enroll. Default 1.
 
 .PARAMETER WithInference
-    Pairs with -Tier 2 (#514): install Ollama (no -SkipOllama) and enroll with
-    --inference-enabled=true. init starts the agent and, via #519's foreground
-    wait, blocks until the agent has pulled the bundled model into the
-    waired-owned engine on :9475, then runs the end-of-init benchmark. Asserts:
-    Ollama present, the bundled model reaches `ready` in the waired-owned store
-    (queried through the agent mgmt API at :9476 /waired/v1/inference/status, NOT
-    a bare `ollama list` which targets the upstream :11434 store the bundled
-    engine does not use — see #564), inference enabled in the persisted config,
-    and a benchmark figure in the init transcript (the Windows analog of
-    lib/installtest-enroll.sh's assert_inference).
+    Pairs with -Tier 2 (#514): enroll with --inference-enabled=true, so init
+    installs the bundled engine itself (since #138 install.ps1 puts no engine on
+    the host; -SkipOllama is how you tell init not to). init starts the agent
+    and, via #519's foreground wait, blocks until the agent has pulled the
+    bundled model into the waired-owned engine on :9475, then runs the
+    end-of-init benchmark. Asserts: the engine is waired's own under the state
+    dir AND is what serves, at the pin (#494); the bundled model reaches `ready`
+    in the waired-owned store (queried through the agent mgmt API at :9476
+    /waired/v1/inference/status, NOT a bare `ollama list` which targets the
+    upstream :11434 store the bundled engine does not use — see #564); inference
+    enabled in the persisted config; and a benchmark figure in the init
+    transcript (the Windows analog of lib/installtest-enroll.sh's
+    assert_inference).
 
 .PARAMETER Contract
     waired#760: behavioral-contract asserts (`waired status` exit 0 incl.
@@ -258,6 +261,110 @@ function Assert-BundledEngine {
     }
 }
 
+# --- serving-engine assert (#494) --------------------------------------------
+# The engine ANSWERING REQUESTS is waired's own, at the pinned version. Twin of
+# lib/installtest-enroll.sh's assert_serving_ollama; that function carries the
+# reasoning for all three asserts. Mirror any change there and in
+# installtest-macos.sh (assert_serving_ollama_macos).
+#
+# Assert-BundledEngine above stats a file. This is a different claim, and the
+# gap between the two is the whole of #139: a host can hold waired's binary at
+# the right path and still be served by something else.
+#
+# The Windows-only part is how the listener is resolved -- Get-NetTCPConnection
+# for the owning pid, Win32_Process for its image path (there is no /proc, and
+# Get-Process .Path throws on a process owned by SYSTEM). The runner is
+# permanently Administrator, so the CIM query sees the LocalSystem-owned
+# engine.
+function Assert-ServingEngine {
+    param([string]$Context)
+
+    $bin = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
+
+    # No engine on disk means nothing can be serving -- see the Linux twin
+    # (lib/installtest-enroll.sh) for why this comes before the poll. This is
+    # the leg it was found on: the executor never attached (#505), no engine
+    # was ever installed, and the poll spent 180 s to report "installed but
+    # not answering" one line under an assert saying it was not installed.
+    if (-not (Test-Path -LiteralPath $bin)) {
+        ItBad "nothing can be serving on :9475 ($Context): no engine at $bin"
+        return
+    }
+
+    # The engine is normally up already -- the -WithInference leg is past
+    # init's foreground model wait (#519). The daemon-engine leg can arrive mid
+    # cold start, so give the port a bounded window rather than racing it.
+    #
+    # 180 s, deliberately LONGER than the agent's own first-readiness budget
+    # (OllamaConfig.StartupReadyTimeout, 150 s by default): a harness window
+    # shorter than the product's tolerance reds on a slow cold start the
+    # product is still happy with -- and Windows is where cold starts are
+    # slowest, with Defender scanning a freshly extracted 1.9 GB tree.
+    $live = ''
+    $deadline = (Get-Date).AddSeconds(180)
+    while ((Get-Date) -lt $deadline) {
+        try { $live = [string](Invoke-RestMethod -Uri 'http://127.0.0.1:9475/api/version' -TimeoutSec 5).version } catch { }
+        if ($live) { break }
+        Start-Sleep -Seconds 3
+    }
+    if (-not $live) {
+        ItBad "nothing is serving on :9475 after 180 s ($Context) -- the engine is installed but not answering"
+        $englog = Join-Path $StateDir 'runtimes\ollama\logs\engine.log'
+        if (Test-Path -LiteralPath $englog) {
+            Get-Content -LiteralPath $englog -Tail 40 -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "    engine.log| $_" }
+        }
+        return
+    }
+
+    $ollamaStatus = $null
+    try { $ollamaStatus = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).runtimes.ollama } catch { }
+    $pinned = [string]$ollamaStatus.pinned_version
+    $mode   = [string]$ollamaStatus.mode
+
+    # 1. the listener IS the state-dir binary. $ownerPid, never $pid: that name
+    #    is a PowerShell automatic variable holding OUR process id, and
+    #    assigning it here would silently compare the harness against itself.
+    $conn = $null
+    try { $conn = Get-NetTCPConnection -LocalPort 9475 -State Listen -ErrorAction Stop | Select-Object -First 1 } catch { }
+    if (-not $conn) {
+        # /api/version answered above, so something IS listening -- an empty
+        # result is a lookup failure, not an absent engine, and must not be
+        # reported as the wrong binary.
+        ItBad "could not identify the process listening on :9475 ($Context) -- Get-NetTCPConnection found no listening process"
+    } else {
+        $ownerPid = [int]$conn.OwningProcess
+        $exe = ''
+        try { $exe = [string](Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid" -ErrorAction Stop).ExecutablePath } catch { }
+        if ($exe -eq $bin) {
+            ItOk "the process serving :9475 is the state-dir binary ($Context; pid $ownerPid)"
+        } else {
+            $shown = if ($exe) { $exe } else { 'unreadable' }
+            ItBad "the process serving :9475 is not waired's engine ($Context): pid=$ownerPid exe=$shown, expected $bin"
+        }
+    }
+
+    # 2. it reports the pin. An empty pinned_version is its own failure -- two
+    #    empty strings compare equal, which is the assert-that-cannot-fail
+    #    shape #178/#215 already cost this repo five days of green CI.
+    if (-not $pinned) {
+        ItBad "the daemon published no pinned_version ($Context) -- the version comparison would be vacuous"
+    } elseif ($live -eq $pinned) {
+        ItOk "the serving engine is the pinned release ($Context; /api/version = $live)"
+    } else {
+        ItBad "the serving engine is not the pinned release ($Context): /api/version = $live, pinned $pinned"
+    }
+
+    # 3. waired spawned it, rather than adopting a survivor of a previous run.
+    if ($mode -eq 'spawned') {
+        ItOk "waired spawned the serving engine ($Context; mode=spawned)"
+    } elseif (-not $mode) {
+        ItBad "the daemon published no engine mode ($Context) -- cannot tell a spawned engine from an adopted one"
+    } else {
+        ItBad "waired did not spawn the serving engine ($Context; mode=$mode) -- it adopted a process it does not supervise"
+    }
+}
+
 # --- daemon-path executor engine-install assert (waired#835 §9/§11) ----------
 # Windows analog of lib/installtest-daemon-engine.sh's assert_daemon_engine.
 # Regression bar: an engine-less daemon-path first-run ends up WITH an engine
@@ -282,6 +389,10 @@ function Assert-DaemonEngine {
     # executor could have put an engine here -- and since #493 "here" is one
     # path, not "anywhere internal/download can see" (#139).
     Assert-BundledEngine -Context 'daemon-path executor'
+    # ...and that binary is the one serving, at the pin (#494). The assert
+    # above proves the executor put something on disk; this proves the host is
+    # not being served by something else, which is the half #139 was about.
+    Assert-ServingEngine -Context 'daemon-path executor'
 
     $state = ''
     try { $state = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).subsystem_state } catch { }
@@ -354,6 +465,9 @@ function Assert-Inference {
     #    SECONDARY, and worded as presence rather than success -- see (0).
     $ollama = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
     Assert-BundledEngine -Context 'waired init'
+    # ...and it is what actually serves, at the pin (#494). "Installed" and
+    # "serving" are two claims; see Assert-ServingEngine for why.
+    Assert-ServingEngine -Context 'waired init'
 
     # 2) bundled model READY in the waired-owned store (:9475), via the agent
     #    mgmt API. init (#519) foreground-waits for the pull, so it is normally

@@ -7,17 +7,19 @@
 # installtest.yml (the per-PR gate) runs the real `install → service-manager
 # → hands-free enroll` journey but STOPS before inference: every leg passes
 # --skip-ollama / --inference-enabled=false. This workflow runs the SAME
-# harness with inference ON — install.sh / install.ps1 install Ollama, and
-# `waired init --inference-enabled=true` pulls the bundled model in its
-# deploy phase and runs the end-of-init benchmark. That covers the class
-# where the post-install benchmark / auto model-fallback never ran on a
-# fresh bundled install, which an install/enroll-only gate cannot see.
+# harness with inference ON — `waired init --inference-enabled=true` installs
+# the bundled engine, pulls the bundled model in its deploy phase and runs the
+# end-of-init benchmark. That covers the class where the post-install
+# benchmark / auto model-fallback never ran on a fresh bundled install, which
+# an install/enroll-only gate cannot see. (Since #138 no installer puts an
+# engine on the host on any OS; init owns that decision. --skip-ollama /
+# -SkipOllama survive as the way to tell init not to.)
 #
-# Why scheduled, not per-PR: Ollama install + a bundled-model pull (~5 GB) +
-# a benchmark is minutes-scale and depends on EXTERNAL state (the upstream
-# Ollama install script + the model registry), so it suits a nightly canary.
-# Being schedule/dispatch-only it carries no paths filter and is never a
-# required check.
+# Why scheduled, not per-PR: an engine install + a bundled-model pull (~5 GB) +
+# a benchmark is minutes-scale and depends on EXTERNAL state (the pinned Ollama
+# release assets + the model registry), so it suits a nightly canary. Being
+# schedule/dispatch-only it carries no paths filter and is never a required
+# check.
 #
 # The banner job is per waired#760: the cp932 render check only breaks on
 # installer-surface changes, so it left the per-PR critical path (~2 min)
@@ -143,8 +145,8 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
 
       # Linux: in-place install (systemd is PID 1 on the disposable runner) +
-      # --inference → install.sh installs Ollama, `waired init
-      # --inference-enabled=true` pulls the bundled model + benchmarks on CPU.
+      # --inference → `waired init --inference-enabled=true` installs the
+      # bundled engine, pulls the bundled model + benchmarks on CPU.
       - name: install+inference (linux, tier 2)
         if: matrix.os == 'linux'
         env:

@@ -18,6 +18,15 @@ $Settings = Join-Path $PSScriptRoot 'PSScriptAnalyzerSettings.psd1'
 #                               and written out at runtime
 #   scripts/dev/installtest-*   not shipped, but it is the thing asserting on
 #                               the above, so it is held to the same bar
+#
+# Deliberately NOT listed: scripts/dev/installtest-serving-asserts.ps1. It is a
+# test double whose method is exactly what PSAvoidOverwritingBuiltInCmdlets and
+# PSAvoidUsingInvokeExpression forbid -- it shadows Invoke-RestMethod /
+# Get-NetTCPConnection / Get-CimInstance and evals a function lifted out of
+# installtest-windows.ps1 with the AST. Silencing those rules in the settings
+# file would silence them for the SHIPPED scripts too, which is where they
+# earn their keep. That file is covered instead by being RUN on every PR
+# (ci.yml, installer-pwsh job), which is a stronger check than lint for it.
 $Targets = @(
     'packaging/install/install.ps1'
     'packaging/install/uninstall.ps1'
