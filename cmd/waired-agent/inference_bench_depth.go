@@ -145,9 +145,23 @@ var depthPromptWords = []string{
 // measures 19.2 on the same text. Baking one in silently produced a
 // prompt at 55 % of the requested depth.
 func depthBenchPrompt(targetTokens, tokensPerLine int, nonce string) string {
+	if tokensPerLine <= 0 {
+		tokensPerLine = 1
+	}
+	return depthBenchPromptLines((targetTokens+tokensPerLine-1)/tokensPerLine, nonce)
+}
+
+// depthBenchPromptLines builds the same prompt from an exact LINE count.
+//
+// The line count is what a caller controls; the token count is what the
+// model decides, and only the model can say what the exchange rate is
+// (#496's probe measures it rather than assuming — see
+// calibrateHostCutoffPrompt). Splitting the two apart is what lets a
+// caller read a prefill count back and correct its own estimate.
+func depthBenchPromptLines(lines int, nonce string) string {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "session %s log begin\n", nonce)
-	for n, i := 0, 0; n < targetTokens; n, i = n+tokensPerLine, i+1 {
+	for i := 0; i < lines; i++ {
 		fmt.Fprintf(&b, "entry %s-%06d: subsystem %s reported state %d with latency %d ms and checksum %d\n",
 			nonce, i, depthPromptWords[i%len(depthPromptWords)], i%7, (i*13)%997, (i*31+7)%65521)
 	}

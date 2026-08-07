@@ -1,10 +1,18 @@
 // #496: the install-time host cutoff.
 //
-// Everything else in this package ranks MODELS. This file answers a
-// different question, and only that one: can this host run an inference
-// engine usefully at all, or should local inference start off with the
-// #465 opt-in? The answer is one measurement on one small model, and it
-// is deliberately not an input to any ranking.
+// Everything else in this package answers "can this machine serve this
+// MODEL". This file answers a different question, and only that one: can
+// this host run an inference engine usefully at all, or should local
+// inference start off with the #465 opt-in? The answer is one measurement
+// on one small model, and it is deliberately not an input to any ranking.
+//
+// Why it lives in proto rather than in the agent. The threshold and the
+// arithmetic below are the whole verdict, and the control plane has to
+// reach the same one from the figure the agent publishes
+// (signer.InferenceState.HostSpeed). The control plane can import proto
+// and nothing else, so a copy in internal/router would be a second 45 s
+// that nobody would notice drifting — the identical failure this package
+// was created to end (waired-ai/waired#942, see the package doc).
 //
 // Why a measurement and not a computation. #496 was written to feed a
 // measured decode rate into the recommendation. Stage 1 measured that
@@ -23,17 +31,18 @@
 // 17.8 s. Picking a smaller model does not rescue that host, so no model
 // ranking can be the answer to it.
 //
-// Why it does not run through OllamaRecommend. model_picker.go's narrow
-// helper keeps the previous candidate set whenever a filter rejects
-// everything (`if len(pass) > 0`), so a speed verdict routed there is a
-// no-op on exactly the hosts it exists to catch. The verdict reaches the
-// same place SelectInstallModel's ok=false reaches — local inference off,
+// Why it does not run through OllamaRecommend. The agent's
+// internal/router/model_picker.go narrow helper keeps the previous
+// candidate set whenever a filter rejects everything (`if len(pass) > 0`),
+// so a speed verdict routed there is a no-op on exactly the hosts it
+// exists to catch. The verdict reaches the same place
+// router.SelectInstallModel's ok=false reaches — local inference off,
 // with a working opt-in.
 //
 // Full derivation: docs/knowledges/20260805/1513-probe-predicts-decode-rate.md.
 // Ratified in docs/decisions/20260805/1620-host-cutoff-is-a-measured-probe.md
 // (owner, 2026-08-05); threshold fixed at 45 s the same day.
-package router
+package hostfit
 
 const (
 	// HostCutoffProbeModelID is the model the cutoff is measured on. It

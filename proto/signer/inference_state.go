@@ -325,6 +325,119 @@ type InferenceState struct {
 	// nothing — an agent that predates the field — and consumers must fail
 	// open to whatever they decided before.
 	SubsystemState string `json:"subsystem_state,omitempty"`
+
+	// HostSpeed is what one coding-agent turn costs on this machine,
+	// measured once per engine build on a fixed ~1 GB probe model
+	// (waired-ai/waired-agent#496). See the type for what the numbers are.
+	//
+	// It is a RAW MEASUREMENT and carries no verdict. The threshold that
+	// turns it into one is hostfit.HostCutoffTurnBudgetSeconds, and a
+	// consumer applies whatever threshold its own question needs —
+	// waired#1065's public-share gate is a different question from the
+	// install-time default and may well settle on a different number. That
+	// is deliberate: publishing the figure rather than the answer is what
+	// makes this shape safe to freeze while its consumers are still being
+	// designed, and proto is additive-only so the shape cannot be
+	// corrected afterwards.
+	//
+	// It is NOT the reserved memory_bandwidth_measured_gbs (#252). That
+	// field is a bandwidth figure bounding decode from below; this is a
+	// turn time measured end to end on one model, and neither substitutes
+	// for the other.
+	//
+	// nil means NO CLAIM — an agent that predates the field, a host whose
+	// engine could not be measured, a truncated prefill — and a consumer
+	// must fail open to whatever it did before. It never means "measured
+	// as zero"; that is why it is a pointer.
+	//
+	// It MUST be stripped from the served NetworkMap, exactly as
+	// RecommendedMaxParallel and NotShared are (effectiveInferenceState
+	// zeroes them). Peers route on Capacity and Models and have no use for
+	// it, and a field that rides the signed map is dropped on canonical
+	// re-marshal by any agent that predates it — which fails verification
+	// of the WHOLE map, not just that entry. The path this travels is
+	// agent → CP push → Spanner inference_state JSON → the management API.
+	HostSpeed *HostSpeed `json:"host_speed,omitempty"`
+}
+
+// HostSpeed is one coding-agent turn's cost on a host, measured at
+// install time on a fixed probe model (waired-ai/waired-agent#496).
+//
+// The point of a FIXED probe is comparability: every host publishes a
+// number measured the same way, on the same weights, at the same context
+// depth, so two hosts' figures can be compared and one threshold can mean
+// the same thing everywhere. A figure measured on whatever model the host
+// happens to serve can do neither.
+//
+// Every field is `omitempty` — the additive guard requires it of a field
+// added to a published struct — and a zero means "not reported" rather
+// than a measured zero. The struct as a whole is absent when there is
+// nothing to say.
+type HostSpeed struct {
+	// ProbeModelID is the catalog model_id the measurement was taken on
+	// (hostfit.HostCutoffProbeModelID). It travels because the threshold
+	// is calibrated against this model: a figure measured on anything
+	// else is not comparable to it, and a consumer that finds an
+	// unexpected id here must decline to judge rather than judge anyway.
+	ProbeModelID string `json:"probe_model_id,omitempty"`
+
+	// DepthTokens is the context depth the figures are normalised to
+	// (hostfit.HostCutoffProbeDepthTokens); PromptTokens is what the
+	// engine reported actually prefilling. They differ by ordinary
+	// tokenizer drift. A large gap means the engine truncated the prompt,
+	// and a truncated prefill measures the truncation rather than the
+	// host — the agent publishes nothing in that case.
+	DepthTokens  int `json:"depth_tokens,omitempty"`
+	PromptTokens int `json:"prompt_tokens,omitempty"`
+
+	// PrefillTokps and DecodeTokps are the engine's own counters
+	// (prompt_eval_* and eval_* from ollama's /api/generate), never wall
+	// clock: wall clock on a 1 GB model is dominated by model load and
+	// request overhead, which is how the pre-#764 benchmark under-measured
+	// fast hosts by ~35 %.
+	PrefillTokps float64 `json:"prefill_tokps,omitempty"`
+	DecodeTokps  float64 `json:"decode_tokps,omitempty"`
+
+	// TurnSeconds is one turn at DepthTokens — a DepthTokens prefill plus
+	// a DepthTokens/21 decode — computed from the two rates above.
+	//
+	// Derived, and deliberately on the wire anyway: it is the quantity a
+	// threshold is compared against and the one an operator reads, and a
+	// consumer that recomputes it has to know the 21:1 ratio to get the
+	// same answer. All three come from the SAME sample, so they cannot
+	// disagree with each other.
+	TurnSeconds float64 `json:"turn_seconds,omitempty"`
+
+	// Method is how the rates were obtained — one of the BenchmarkMethod*
+	// constants, the same vocabulary SetupBenchmark.Method uses. It
+	// travels for the same reason it does there: it changes what the
+	// number may be used for downstream.
+	Method string `json:"method,omitempty"`
+
+	// Samples is how many measurements the published one is the median of;
+	// SpreadPct is (max−min)/median across their turn times.
+	//
+	// They are not optional colour. A published measurement is the median
+	// of N samples with its spread rather than a single reading, because
+	// one reading on a machine that briefly got busy is off by enough to
+	// cross a threshold: the runs that fixed this threshold sat within
+	// ±2 % of each other while the one contended run landed +21 %. A
+	// consumer that finds Samples <= 1 knows it holds a reading that was
+	// never checked against another, and can weigh it accordingly.
+	Samples   int     `json:"samples,omitempty"`
+	SpreadPct float64 `json:"spread_pct,omitempty"`
+
+	// EngineKind and EngineVersion identify the engine that produced the
+	// counters. A measurement is only comparable within an engine build —
+	// waired#668 is the same lesson from the boot benchmark's cache, where
+	// an Ollama bundle bump left it serving pre-bump numbers.
+	EngineKind    string `json:"engine_kind,omitempty"`
+	EngineVersion string `json:"engine_version,omitempty"`
+
+	// MeasuredAt is when the median sample was taken, RFC3339Nano — a
+	// string rather than time.Time for the reason given at the top of this
+	// file: the canonical JSON form has to be byte-deterministic.
+	MeasuredAt string `json:"measured_at,omitempty"`
 }
 
 // HardwareSummary is the subset of the agent's hardware profile that

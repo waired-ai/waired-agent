@@ -100,6 +100,9 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 		name string
 		body string
 		want []string
+		// notWant is for the lines that must NOT appear: a claim about
+		// why something is off is wrong to make when it is not the reason.
+		notWant []string
 	}{
 		{
 			name: "off names the command that turns it on",
@@ -118,6 +121,37 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			body: `{"subsystem_state":"ready"}`,
 			want: []string{"Local inference: unknown"},
 		},
+		{
+			// #496: when Waired is the one who decided, it says so. Until
+			// this shipped the only record of that decision was a line in
+			// the daemon log, so an off state read as a setting somebody
+			// forgot rather than an answer the machine worked out.
+			name: "off because the machine measured too slow says so",
+			body: `{"subsystem_state":"disabled","desired_state":"disabled",` +
+				`"host_speed":{"turn_seconds":68.4,"budget_seconds":45,"turned_inference_off":true}}`,
+			want: []string{
+				"Local inference: off",
+				"One coding question would take about 68.4 s here; Waired starts local AI off above 45 s.",
+				"This computer can still use the AI running on your other computers.",
+				"waired inference on",
+			},
+		},
+		{
+			// The same measurement, but somebody turned the toggle off
+			// themselves. Telling them their machine is too slow would be
+			// a story about a decision they made, not one Waired made.
+			name: "off by hand is not blamed on the measurement",
+			body: `{"subsystem_state":"disabled","desired_state":"disabled",` +
+				`"host_speed":{"turn_seconds":68.4,"budget_seconds":45}}`,
+			notWant: []string{"would take about"},
+			want:    []string{"Local inference: off", "waired inference on"},
+		},
+		{
+			name: "on reports what one question costs here",
+			body: `{"subsystem_state":"ready","desired_state":"enabled",` +
+				`"host_speed":{"turn_seconds":4.5,"budget_seconds":45}}`,
+			want: []string{"Local inference: on", "One coding question takes about 4.5 s on this computer."},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -135,6 +169,11 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			for _, want := range tc.want {
 				if !strings.Contains(out, want) {
 					t.Errorf("output %q does not contain %q", out, want)
+				}
+			}
+			for _, unwanted := range tc.notWant {
+				if strings.Contains(out, unwanted) {
+					t.Errorf("output %q contains %q", out, unwanted)
 				}
 			}
 		})

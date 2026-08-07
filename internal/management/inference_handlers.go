@@ -178,6 +178,48 @@ type InferenceStatus struct {
 	// a non-empty EnginePower. The tray renders the Stop/Start control
 	// disabled ("Engine not managed") when false.
 	EngineManaged bool `json:"engine_managed,omitempty"`
+
+	// HostSpeed is what one coding-agent turn costs on this machine
+	// (waired-ai/waired-agent#496), and whether that measurement is what
+	// set DesiredState to disabled. nil when nothing has been measured.
+	//
+	// It exists so an operator can be told WHY local inference is off.
+	// Until this shipped the only trace of the decision was a line in the
+	// daemon log, so `waired inference status` could say "off" and nothing
+	// more — which reads as a setting someone forgot rather than an
+	// answer the machine worked out.
+	HostSpeed *HostSpeedStatus `json:"host_speed,omitempty"`
+}
+
+// HostSpeedStatus is the install-time host measurement as the local
+// management API reports it (waired-ai/waired-agent#496). The wire form
+// the control plane sees is signer.HostSpeed; this is the subset a person
+// standing at the machine is asking about.
+type HostSpeedStatus struct {
+	// TurnSeconds is one coding-agent turn at the measured depth, and
+	// BudgetSeconds is what it is compared against
+	// (hostfit.HostCutoffTurnBudgetSeconds). The budget travels so a
+	// client can render "68 s against a 45 s budget" without carrying its
+	// own copy of a threshold that is allowed to move.
+	TurnSeconds   float64 `json:"turn_seconds"`
+	BudgetSeconds float64 `json:"budget_seconds"`
+
+	// PrefillTokps / DecodeTokps / Samples / SpreadPct / ProbeModelID /
+	// MeasuredAt are the same figures signer.HostSpeed carries, for
+	// `waired status --observability` and for a bug report.
+	PrefillTokps float64 `json:"prefill_tokps,omitempty"`
+	DecodeTokps  float64 `json:"decode_tokps,omitempty"`
+	Samples      int     `json:"samples,omitempty"`
+	SpreadPct    float64 `json:"spread_pct,omitempty"`
+	ProbeModelID string  `json:"probe_model_id,omitempty"`
+	MeasuredAt   string  `json:"measured_at,omitempty"`
+
+	// TurnedInferenceOff is true when this measurement is what set the
+	// local-inference default to off. False on a host that measured above
+	// the budget, and false again as soon as anyone moves the toggle for
+	// any other reason — it is a claim about why the toggle reads the way
+	// it does, so it stops being made the moment that stops being true.
+	TurnedInferenceOff bool `json:"turned_inference_off,omitempty"`
 }
 
 // ActiveSelection mirrors catalog.ActiveSelection's wire shape so the

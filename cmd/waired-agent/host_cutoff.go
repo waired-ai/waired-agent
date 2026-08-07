@@ -1,21 +1,36 @@
-// The install-time host cutoff's WIRING half (#496): getting the probe
-// model onto the host, taking the measurement, and acting on the verdict.
-// The policy is internal/router/host_cutoff.go; the measurement is
-// host_cutoff_probe.go.
+// The install-time host measurement's WIRING half (#496): getting the
+// probe model onto the host, taking the measurement, publishing it, and
+// acting on it. The policy is proto/hostfit/host_cutoff.go; the
+// measurement is host_cutoff_probe.go.
+//
+// MEASURING and DECIDING are two different questions here, and they have
+// different triggers.
+//
+// The MEASUREMENT is a property of the host, taken once per engine build
+// and kept in the state dir. Every install path takes it before starting
+// a 20-45 GB download, because that is both the last quiet moment and the
+// point where the cost of not knowing is about to be paid. It is
+// published on the wire (signer.InferenceState.HostSpeed) so the control
+// plane, the admin device page and waired#1065's public-share gate can
+// each ask their own question of the same number, and so an operator can
+// be told why local inference is off.
+//
+// The DECISION — start local inference off, with #465's opt-in — is taken
+// only where the daemon has no one else's answer to defer to: the bundled
+// pre-pull path, where this host chose its own model, and only while the
+// local-inference toggle is still unset. A person who named a model, or
+// who has already moved the toggle, has said what they want, and #465's
+// default is not ours to override (waired-ai/waired#1056: refusal is
+// reserved for certain OOM, and this refuses nothing — it sets a
+// default).
 //
 // WHERE THIS RUNS, and why not where #496 said. The issue put the cutoff
 // beside the install-time model selection, which is
 // maybeSelectBundledModelForFreshInstall — and that runs at main.go:219,
 // before the logger exists and long before any engine does. A probe needs
-// a running engine and its ~1 GB model, so it cannot run there.
-//
-// It runs instead at the moment the decision is actually worth taking:
-// the daemon has an engine up, has chosen a bundled model for itself
-// (nobody else chose one for it), and is about to download 20-45 GB of
-// weights. That is the last point before the cost lands and the first
-// point where the measurement is possible. The verdict reaches the same
-// place SelectInstallModel's ok=false reaches — local inference off with
-// the #465 opt-in — which is what
+// a running engine and its ~1 GB model, so it cannot run there. The
+// verdict still reaches the same place SelectInstallModel's ok=false
+// reaches — local inference off with the #465 opt-in — which is what
 // docs/decisions/20260805/1620-host-cutoff-is-a-measured-probe.md
 // decision 6 requires of it.
 package main
@@ -28,6 +43,8 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
+	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
 const (
@@ -40,33 +57,103 @@ const (
 	hostCutoffPullTimeout = 20 * time.Minute
 )
 
-// hostMeetsRecommendedSpec measures this host and reports whether it
-// clears the cutoff. decided is false whenever no verdict could be
-// reached — no engine, no probe model, no timing counters, a truncated
-// prefill, a machine too busy to answer — and callers must carry on
-// unchanged in that case. An unrun measurement is not evidence.
+// hostSpeedNow returns the measurement this host publishes, or nil when
+// there is none. Safe to call from the probe loop on every tick.
+func (p *agentInferenceProvider) hostSpeedNow() *signer.HostSpeed {
+	if p == nil {
+		return nil
+	}
+	p.hostSpeedMu.Lock()
+	defer p.hostSpeedMu.Unlock()
+	p.loadHostSpeedLocked()
+	return p.hostSpeed
+}
+
+// hostSpeedTurnedInferenceOff reports whether the stored measurement is
+// what set the local-inference default to off.
 //
-// Opinionated about one thing only: it does not run when the operator has
-// said something. A pin, a force, or a preferred model is a person
-// choosing to serve on this host, and #465's default is not theirs to
-// override (waired-ai/waired#1056: refusal is reserved for certain OOM,
-// and this refuses nothing — it sets a default).
-func (p *agentInferenceProvider) hostMeetsRecommendedSpec(ctx context.Context) (ok, decided bool) {
-	if p == nil || p.ollama == nil {
-		return false, false
+// Read from disk on every call rather than cached, because that file is
+// where the answer changes: `waired inference off|on` clears the flag
+// through WriteDesiredInferenceState, and an in-memory copy would go on
+// claiming the cutoff's reason for a state a person had since chosen.
+func (p *agentInferenceProvider) hostSpeedTurnedInferenceOff() bool {
+	if p == nil || p.stateDir == "" {
+		return false
 	}
-	tag, err := p.hostCutoffProbeTag(ctx)
+	rec, err := state.ReadHostSpeed(p.stateDir)
+	return err == nil && rec.TurnedInferenceOff
+}
+
+// loadHostSpeedLocked brings the stored measurement into memory, once per
+// process. Call with hostSpeedMu held.
+//
+// It deliberately does NOT check that the stored figure was taken on the
+// engine running now. That check belongs to ensureHostSpeedMeasured,
+// which decides whether to re-measure; here the question is what this
+// host currently knows about itself, and a figure from an earlier engine
+// build is still the best answer available. It travels with its own
+// EngineVersion, so a consumer can see what produced it.
+//
+// Without this the daemon that turned local inference off would forget
+// why the moment it restarted: nothing re-measures on a host whose
+// install path already ran, so `waired inference status` would be back to
+// reporting a bare "off".
+func (p *agentInferenceProvider) loadHostSpeedLocked() {
+	if p.hostSpeedLoaded || p.stateDir == "" {
+		return
+	}
+	p.hostSpeedLoaded = true
+	rec, err := state.ReadHostSpeed(p.stateDir)
 	if err != nil {
-		p.logger.Info("host cutoff: skipping the measurement", "err", err)
-		return false, false
+		p.logger.Warn("host speed: could not read the stored measurement", "err", err)
+		return
 	}
-	if err := p.ensureHostCutoffProbeModel(ctx, tag); err != nil {
-		p.logger.Info("host cutoff: probe model unavailable; skipping the measurement",
-			"model", router.HostCutoffProbeModelID, "err", err)
-		return false, false
+	if rec.Measurement != nil && p.hostSpeed == nil {
+		p.hostSpeed = rec.Measurement
+	}
+}
+
+// ensureHostSpeedMeasured returns this host's measurement, taking it if
+// this engine build has not been measured yet. measured is false whenever
+// no usable measurement could be reached — no engine, no probe model, no
+// timing counters, a truncated prefill, a machine too busy to answer —
+// and callers must carry on unchanged in that case. An unrun measurement
+// is not evidence about the host.
+//
+// Once per ENGINE BUILD, not once per process and not once per host: the
+// counters come from the engine, and waired#668 is the standing lesson
+// that a bundle bump silently keeps serving pre-bump numbers. A cached
+// record whose engine no longer matches is re-measured.
+func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context) (probe hostfit.HostProbe, measured bool) {
+	if p == nil || p.ollama == nil {
+		return hostfit.HostProbe{}, false
+	}
+	p.hostSpeedMu.Lock()
+	defer p.hostSpeedMu.Unlock()
+	p.loadHostSpeedLocked()
+
+	engine := p.servingEngine()
+	engineVersion := p.engineVersionFor(ctx, engine)
+
+	if cached, ok := hostSpeedStillApplies(p.hostSpeed, string(engine), engineVersion); ok {
+		p.logger.Info("host speed: reusing the measurement already taken on this engine build",
+			"turn_seconds", fmt.Sprintf("%.1f", cached.TurnSeconds()),
+			"engine_version", engineVersion)
+		return cached, true
 	}
 
-	probe, err := measureHostCutoff(ctx, hostCutoffDeps{
+	tag, err := p.hostCutoffProbeTag(ctx)
+	if err != nil {
+		p.logger.Info("host speed: skipping the measurement", "err", err)
+		return hostfit.HostProbe{}, false
+	}
+	if err := p.ensureHostCutoffProbeModel(ctx, tag); err != nil {
+		p.logger.Info("host speed: probe model unavailable; skipping the measurement",
+			"model", hostfit.HostCutoffProbeModelID, "err", err)
+		return hostfit.HostProbe{}, false
+	}
+
+	m, err := measureHostCutoff(ctx, hostCutoffDeps{
 		BaseURL:     p.ollama.BaseURL(),
 		EngineModel: tag,
 		Logger:      p.logger,
@@ -75,26 +162,88 @@ func (p *agentInferenceProvider) hostMeetsRecommendedSpec(ctx context.Context) (
 		Nonce: fmt.Sprintf("hostcutoff-%d", time.Now().UnixNano()),
 	})
 	if err != nil {
-		p.logger.Info("host cutoff: measurement did not complete; leaving local inference as configured",
+		p.logger.Info("host speed: measurement did not complete; leaving local inference as configured",
 			"err", err)
-		return false, false
+		return hostfit.HostProbe{}, false
 	}
-	ok, decided = probe.MeetsRecommendedSpec()
-	if !decided {
+	if !m.Probe.Measured() {
 		// Reached when the engine answered but the prefill was not the
 		// depth asked for — the silent-truncation case Measured() guards.
-		p.logger.Warn("host cutoff: the engine did not prefill the depth asked for; no verdict",
-			"prompt_tokens", probe.PromptTokens, "want_tokens", router.HostCutoffProbeDepthTokens)
-		return false, false
+		// Nothing is published: a truncated prefill measures the
+		// truncation, and a consumer cannot tell that from a fast host.
+		p.logger.Warn("host speed: the engine did not prefill the depth asked for; no measurement",
+			"prompt_tokens", m.Probe.PromptTokens, "want_tokens", hostfit.HostCutoffProbeDepthTokens)
+		return hostfit.HostProbe{}, false
 	}
-	p.logger.Info("host cutoff: measured",
-		"turn_seconds", fmt.Sprintf("%.1f", probe.TurnSeconds()),
-		"budget_seconds", fmt.Sprintf("%.0f", router.HostCutoffTurnBudgetSeconds),
-		"prefill_tok_s", fmt.Sprintf("%.0f", probe.PrefillTokps),
-		"decode_tok_s", fmt.Sprintf("%.1f", probe.DecodeTokps),
-		"prompt_tokens", probe.PromptTokens,
-		"meets_recommended_spec", ok)
-	return ok, true
+	p.logger.Info("host speed: measured",
+		"turn_seconds", fmt.Sprintf("%.1f", m.Probe.TurnSeconds()),
+		"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds),
+		"prefill_tok_s", fmt.Sprintf("%.0f", m.Probe.PrefillTokps),
+		"decode_tok_s", fmt.Sprintf("%.1f", m.Probe.DecodeTokps),
+		"prompt_tokens", m.Probe.PromptTokens,
+		"samples", m.Samples, "spread_pct", fmt.Sprintf("%.1f", m.SpreadPct))
+
+	p.hostSpeed = &signer.HostSpeed{
+		ProbeModelID:  hostfit.HostCutoffProbeModelID,
+		DepthTokens:   hostfit.HostCutoffProbeDepthTokens,
+		PromptTokens:  m.Probe.PromptTokens,
+		PrefillTokps:  m.Probe.PrefillTokps,
+		DecodeTokps:   m.Probe.DecodeTokps,
+		TurnSeconds:   m.Probe.TurnSeconds(),
+		Method:        signer.BenchmarkMethodOllamaEval,
+		Samples:       m.Samples,
+		SpreadPct:     m.SpreadPct,
+		EngineKind:    string(engine),
+		EngineVersion: engineVersion,
+		MeasuredAt:    time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	p.persistHostSpeedLocked(false)
+	return m.Probe, true
+}
+
+// hostSpeedStillApplies reports whether a stored measurement describes
+// the engine running now. An empty stored version is not a match: it
+// means the version could not be read when the figure was taken, and a
+// figure that cannot say what produced it cannot be trusted to survive an
+// engine bump (waired#668).
+func hostSpeedStillApplies(s *signer.HostSpeed, engineKind, engineVersion string) (hostfit.HostProbe, bool) {
+	if s == nil || s.EngineKind != engineKind || s.EngineVersion == "" || s.EngineVersion != engineVersion {
+		return hostfit.HostProbe{}, false
+	}
+	probe := hostfit.HostProbe{
+		PromptTokens: s.PromptTokens,
+		PrefillTokps: s.PrefillTokps,
+		DecodeTokps:  s.DecodeTokps,
+	}
+	if !probe.Measured() {
+		return hostfit.HostProbe{}, false
+	}
+	return probe, true
+}
+
+// persistHostSpeedLocked writes the in-memory measurement to the state
+// dir. Call with hostSpeedMu held.
+//
+// turnedInferenceOff is a claim about causation, so it is written only by
+// the caller that actually turned local inference off, and only after it
+// did: WriteDesiredInferenceState clears the flag, so asserting it first
+// would assert it into a file the disable then rewrites.
+func (p *agentInferenceProvider) persistHostSpeedLocked(turnedInferenceOff bool) {
+	if p.stateDir == "" || p.hostSpeed == nil {
+		return
+	}
+	rec := state.HostSpeedRecord{Measurement: p.hostSpeed, TurnedInferenceOff: turnedInferenceOff}
+	if !turnedInferenceOff {
+		// A re-measure does not un-say why inference was turned off; only
+		// someone moving the toggle does, and that goes through
+		// WriteDesiredInferenceState.
+		if prev, err := state.ReadHostSpeed(p.stateDir); err == nil {
+			rec.TurnedInferenceOff = prev.TurnedInferenceOff
+		}
+	}
+	if err := state.WriteHostSpeed(p.stateDir, rec); err != nil {
+		p.logger.Warn("host speed: could not store the measurement", "err", err)
+	}
 }
 
 // hostCutoffProbeTag resolves the probe model to the engine-native tag to
@@ -102,9 +251,9 @@ func (p *agentInferenceProvider) hostMeetsRecommendedSpec(ctx context.Context) (
 // threshold is calibrated against this one, and a number measured on
 // something else is not comparable to it.
 func (p *agentInferenceProvider) hostCutoffProbeTag(ctx context.Context) (string, error) {
-	manifest, ok := catalog.LookupByAlias(router.HostCutoffProbeModelID, p.manifests)
+	manifest, ok := catalog.LookupByAlias(hostfit.HostCutoffProbeModelID, p.manifests)
 	if !ok {
-		return "", fmt.Errorf("probe model %s is not in this build's catalog", router.HostCutoffProbeModelID)
+		return "", fmt.Errorf("probe model %s is not in this build's catalog", hostfit.HostCutoffProbeModelID)
 	}
 	engine := p.servingEngine()
 	if engine != catalog.RuntimeOllama {
@@ -131,7 +280,7 @@ func (p *agentInferenceProvider) ensureHostCutoffProbeModel(ctx context.Context,
 	if p.engineServesTag(ctx, tag) {
 		return nil
 	}
-	if _, err := p.PullModel(ctx, router.HostCutoffProbeModelID); err != nil {
+	if _, err := p.PullModel(ctx, hostfit.HostCutoffProbeModelID); err != nil {
 		return fmt.Errorf("pull probe model: %w", err)
 	}
 	deadline := time.Now().Add(hostCutoffPullTimeout)
@@ -142,7 +291,7 @@ func (p *agentInferenceProvider) ensureHostCutoffProbeModel(ctx context.Context,
 		case <-time.After(hostCutoffPullPoll):
 		}
 		st, _ := p.store.Load()
-		switch st.Models[router.HostCutoffProbeModelID].State {
+		switch st.Models[hostfit.HostCutoffProbeModelID].State {
 		case catalog.ModelStateReady:
 			return nil
 		case catalog.ModelStateFailed:
@@ -193,18 +342,27 @@ func (p *agentInferenceProvider) hostCutoffIsStillOurs() bool {
 // afterwards and starts the engine, and the node enrols and relays
 // either way. Which is exactly why the message has to name the opt-in.
 func (p *agentInferenceProvider) applyHostCutoff(ctx context.Context) bool {
+	// Measured first, and unconditionally. The figure is a host fact
+	// worth publishing however the toggle happens to be set — the control
+	// plane and waired#1065 want it from every host, not only from the
+	// ones nobody has answered for — and it is what lets `waired inference
+	// status` explain an off state at all. Only the DECISION below is
+	// withheld when someone has already made it.
+	probe, measured := p.ensureHostSpeedMeasured(ctx)
 	if !p.hostCutoffIsStillOurs() {
 		return true
 	}
-	ok, decided := p.hostMeetsRecommendedSpec(ctx)
-	if !decided || ok {
+	if !measured {
+		return true
+	}
+	if ok, decided := probe.MeetsRecommendedSpec(); !decided || ok {
 		return true
 	}
 	p.logger.Warn("this host is below the recommended spec for local inference: one coding-agent turn "+
 		"would take longer than the budget, on the smallest model there is. Local inference starts off "+
 		"and this node runs as a gateway/relay — it can still route inference to mesh peers. "+
 		"Turn it on anyway with `waired inference on`.",
-		"budget_seconds", fmt.Sprintf("%.0f", router.HostCutoffTurnBudgetSeconds))
+		"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds))
 	if p.disableInference == nil {
 		// --disable-inference already took the subsystem out; there is no
 		// controller to persist through and nothing to turn off.
@@ -215,6 +373,13 @@ func (p *agentInferenceProvider) applyHostCutoff(ctx context.Context) bool {
 		// matters: without the persisted state the next boot will measure
 		// again and reach the same answer, which is correct but silent.
 		p.logger.Warn("host cutoff: could not persist local inference off; skipping the download anyway", "err", err)
+		return false
 	}
+	// After the disable, never before: WriteDesiredInferenceState clears
+	// this flag on the way past, because everything else that writes the
+	// toggle is a different reason for it to read the way it does.
+	p.hostSpeedMu.Lock()
+	p.persistHostSpeedLocked(true)
+	p.hostSpeedMu.Unlock()
 	return false
 }
