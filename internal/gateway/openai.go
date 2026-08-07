@@ -199,10 +199,23 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, rr, asFailureReporter(adapter)); err != nil {
+	started, err := proxyToEngine(r.Context(), h.clientFor(adapter), adapter.BaseURL(), "/v1/chat/completions", r.Header, finalBody, w, rr, asFailureReporter(adapter))
+	if err != nil {
+		if !started {
+			// The request never reached the engine. proxyToEngine chose
+			// and wrote the status the client received and recorded that
+			// same status on rr, so there is no truncation to describe
+			// here and nothing to restate (waired-agent#538).
+			slog.Warn("openai proxy failed before the engine answered",
+				"err", err,
+				"peer", peerDisplayID(sel),
+				"model", sel.ModelID,
+			)
+			return
+		}
 		rr.fail(http.StatusOK, "mid_stream_truncate")
-		// Phase 8: if proxying failed AFTER the response headers were
-		// sent, HTTP semantics mean we can no longer switch the
+		// Phase 8: proxying failed AFTER the response headers were
+		// sent, and HTTP semantics mean we can no longer switch the
 		// status — surface the truncation as a slog.Warn so operators
 		// see "peer-A died mid-stream" in agent.log even though the
 		// client only saw a truncated response.
@@ -259,23 +272,34 @@ func rewriteModelField(body []byte, newModel string) (string, []byte, error) {
 // telemetry record. When non-nil, a passive sniffer reads the token
 // counts out of the bytes being forwarded (waired#829) — see
 // usageSniffer for why this is a tee and not a buffer.
+//
+// responseStarted says whether the engine's response had begun reaching
+// the client when err was returned, and it decides who owns the failure
+// (waired-agent#538). Until it has, the status is still proxyToEngine's
+// to choose: it writes the error the client receives and records that
+// same status and reason on rr, exactly as the non-2xx branch below
+// already did. Once it has, the status is spent, and only the caller's
+// mid-stream reason is left to record.
+//
 // engineErrorSniffMax bounds how much of a non-2xx engine body is read
 // before forwarding, so the adapter can classify it without buffering an
 // arbitrarily large error.
 const engineErrorSniffMax = 32 << 10
 
-func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) error {
+func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path string, hdr http.Header, body []byte, w http.ResponseWriter, rr *requestRec, reporter runtime.FailureReporter) (responseStarted bool, err error) {
 	target, err := url.Parse(baseURL)
 	if err != nil {
+		rr.fail(http.StatusInternalServerError, "bad_engine_url")
 		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "bad_engine_url", err.Error())
-		return err
+		return false, err
 	}
 	target.Path = singleSlash(target.Path, path)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
 	if err != nil {
+		rr.fail(http.StatusInternalServerError, "build_request_failed")
 		writeOpenAIError(w, http.StatusInternalServerError, "internal_error", "build_request_failed", err.Error())
-		return err
+		return false, err
 	}
 	// Copy a curated set of headers; Authorization is dropped because
 	// the local gateway authenticates by listening on loopback only.
@@ -294,8 +318,15 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		// The status and reason the two Anthropic legs have always used
+		// for this exit (anthropic.go's non-streaming and streaming
+		// twins): one failure described two ways by two transports is how
+		// they drift. Recording it is also what keeps emitUsage's
+		// status-only gate honest — nothing reached an engine, so there
+		// is nothing to meter (waired-agent#538).
+		rr.fail(http.StatusBadGateway, "engine_request_failed")
 		writeOpenAIError(w, http.StatusBadGateway, "upstream_error", "engine_request_failed", err.Error())
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
 	slog.Debug("gateway upstream response",
@@ -335,7 +366,7 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 		_, _ = w.Write(head)
 		_, _ = io.Copy(w, resp.Body)
 		rr.fail(resp.StatusCode, "engine_error")
-		return nil
+		return true, nil
 	}
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
@@ -355,7 +386,7 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 			// Forward first, meter second: the client's bytes are never
 			// delayed by, or dependent on, the sniffer.
 			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr
+				return true, werr
 			}
 			if flusher != nil {
 				flusher.Flush()
@@ -363,10 +394,10 @@ func proxyToEngine(ctx context.Context, client *http.Client, baseURL, path strin
 			sniff.Feed(buf[:n])
 		}
 		if rerr == io.EOF {
-			return nil
+			return true, nil
 		}
 		if rerr != nil {
-			return rerr
+			return true, rerr
 		}
 	}
 }

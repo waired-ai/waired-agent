@@ -108,6 +108,13 @@ func (rr *requestRec) finish() {
 // sees. A mid-stream truncation is NOT a failure for this purpose — the
 // engine did the work and the client received part of it — and
 // rr.succeed() has already recorded 200 in that case.
+//
+// The status alone is enough to tell those two apart only because every
+// exit that fails BEFORE the engine's response starts records the 4xx/5xx
+// it wrote to the client (waired-agent#538). Widening this gate to "any
+// error_reason" instead would take the real mid-stream truncation with
+// it, and skipping samples with no observed tokens would take every turn
+// an engine reported no usage for.
 func (rr *requestRec) emitUsage() {
 	if rr.onUsage == nil || rr.ev.Status <= 0 || rr.ev.Status >= 400 {
 		return
@@ -163,10 +170,12 @@ func (rr *requestRec) peerVerdict() (ok, charge bool) {
 		return false, false
 	}
 	// The operator pressed Ctrl-C. The client's disconnect cancels this
-	// context, the upstream read then fails, and the stream loop lands
-	// on engine_truncated_stream (anthropic) or mid_stream_truncate
-	// (openai) — so without this guard every interrupted turn would
-	// demote whichever peer the operator interrupts most.
+	// context and the upstream call then fails, landing on
+	// engine_truncated_stream (anthropic) or, on the openai leg, on
+	// engine_request_failed when the dispatch had not started yet and
+	// mid_stream_truncate once it had — so without this guard every
+	// interrupted turn would demote whichever peer the operator
+	// interrupts most.
 	//
 	// It is the REQUEST context: proxyAnthropicStream's TTFB timer
 	// cancels a child of it, and cancelling a child never propagates
