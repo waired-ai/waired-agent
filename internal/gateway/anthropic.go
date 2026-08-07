@@ -826,10 +826,21 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": nextIdx})
 		nextIdx++
 		if reason != "" {
-			// Recorded as a failure even though the client was sent a
-			// 200: the status went out before anything was known, and a
-			// request metered as a success is one nobody investigates.
-			rr.fail(http.StatusBadGateway, reason)
+			// Recorded as a failure, at the status the client actually
+			// received: the 200 went out at the WriteHeader above, before
+			// anything was known, and HTTP gives no way to take it back
+			// (waired-agent#538). The reason is what makes it a failure —
+			// RecordRequest labels on `Status >= 400 || ErrorReason != ""`,
+			// so the error metric and the WARN below are unchanged by the
+			// status, and a request metered as a success is still not one
+			// nobody investigates.
+			//
+			// The status is also what decides whether the usage sample is
+			// reported (emitUsage), and it must be: setUsage below folds
+			// every abandoned attempt in on purpose, because the engine
+			// really did that work (waired-agent#458). A 502 here threw
+			// exactly those tokens away (waired-agent#554).
+			rr.fail(http.StatusOK, reason)
 			slog.Warn("gateway: no usable turn after every attempt",
 				"model", recordedModel(rr), "attempts", attempts,
 				"truncated", truncated, "finish_reason", finishReason,

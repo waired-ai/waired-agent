@@ -34,8 +34,12 @@ type UsageSample struct {
 	InputTokens  int64
 	OutputTokens int64
 	DurationMS   int64
-	// Status is the HTTP status the client saw. Consumers that bill or
-	// report usage must ignore failures; local telemetry keeps them.
+	// Status is the HTTP status the client saw — not a verdict on the
+	// turn. A sample only exists for a request that reached an engine
+	// (emitUsage), and a turn the engine drew and then failed to deliver
+	// arrives here as a 200 with an error_reason the sample does not
+	// carry (waired-agent#554). Local telemetry keeps the reason; a
+	// consumer reporting usage is meant to count the work.
 	Status int
 }
 

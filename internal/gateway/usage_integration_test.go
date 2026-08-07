@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -313,6 +315,159 @@ func TestGateway_MidStreamTruncationIsStillMetered(t *testing.T) {
 	}
 	if got := sink.snapshot(); len(got) != 1 {
 		t.Fatalf("usage samples = %d, want 1: the engine ran and the client got part of it", len(got))
+	}
+}
+
+// unusableTurnEngine ends every attempt the way ollama 0.31.1 does when
+// its own tool parser rejects what the model emitted (#442): reasoning
+// in full, no content, no finish_reason, no [DONE] — the body simply
+// closes. Each attempt reports its own usage, and a DIFFERENT number
+// each time, so a test can tell three attempts folded together from one
+// attempt counted three times.
+//
+// The attempt counter is returned rather than inferred from the tokens:
+// what needs proving is that the engine really was asked three times.
+func unusableTurnEngine(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := int(attempts.Add(1))
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		f, _ := w.(http.Flusher)
+		send := func(payload string) {
+			_, _ = w.Write([]byte("data: " + payload + "\n\n"))
+			if f != nil {
+				f.Flush()
+			}
+		}
+		send(`{"choices":[{"index":0,"delta":{"reasoning":"deciding which tool to call"}}]}`)
+		send(fmt.Sprintf(`{"choices":[],"usage":{"prompt_tokens":%d,"completion_tokens":%d}}`, 10*n, n))
+		// The measured tail: a chunk carrying nothing, a null
+		// finish_reason, and then silence.
+		send(`{"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &attempts
+}
+
+// waired-agent#554. The anthropic streaming leg gives up on a turn no
+// retry could make usable and records the failure — but the client was
+// handed a 200 back when the SSE headers went out, and the record said
+// 502, the one thing emitUsage's status gate drops.
+//
+// The tokens are the point. proxyAnthropicStream folds every abandoned
+// attempt into setUsage deliberately (waired-agent#458: "the engine
+// really did that work, and leaving it out would make a model that needs
+// three tries look as cheap as one that needs none") — and then the 502
+// threw the sample away, so the one surface that reports usage saw none
+// of it. This follows those tokens all the way to the sink.
+//
+// PRODUCT CONTRACT (waired-agent#554, #458, #112): a turn the engine
+// really ran is metered even when nothing usable came back, and the
+// record states the 200 the client received.
+func TestGateway_AnthropicUnusableTurnIsMeteredWithRetriesFolded(t *testing.T) {
+	upstream, attempts := unusableTurnEngine(t)
+	rec := &captureRecorder{}
+	sink := &captureSink{}
+	gw := newMeteringGateway(t, upstream.URL, rec, sink.fn())
+
+	w := postJSON(t, gw, "/anthropic/v1/messages", map[string]any{
+		"model": "waired/default", "max_tokens": 16, "stream": true,
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("client status = %d, want the 200 the SSE headers already committed", w.Code)
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("engine attempts = %d, want 3 (one draw plus maxStreamRetries)", got)
+	}
+
+	events := rec.requestsSnapshot()
+	if len(events) != 1 {
+		t.Fatalf("request events = %d, want 1", len(events))
+	}
+	if events[0].Status != http.StatusOK {
+		t.Errorf("recorded status = %d, want the 200 the client was handed", events[0].Status)
+	}
+	if events[0].ErrorReason != "engine_truncated_stream" {
+		t.Errorf("recorded error_reason = %q, want engine_truncated_stream", events[0].ErrorReason)
+	}
+
+	got := sink.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("usage samples = %d, want 1: the engine drew three times", len(got))
+	}
+	// 10+20+30 and 1+2+3. Distinct per attempt, so this cannot pass with
+	// one attempt counted three times, or with only the last one kept.
+	if got[0].InputTokens != 60 || got[0].OutputTokens != 6 {
+		t.Errorf("metered (in=%d, out=%d), want (60, 6) — every attempt folded in",
+			got[0].InputTokens, got[0].OutputTokens)
+	}
+}
+
+// truncatedSSEStreamEngine delivers part of an answer and then stops
+// short of the body it declared, so the gateway's scanner fails with the
+// SSE response already committed. The anthropic twin of
+// truncatedAfterHeadersEngine: the same physical event, a peer's engine
+// dying with the client already reading.
+//
+// Content, not just reasoning, so the turn is past the point of a redraw
+// — this is a broken stream, not a bad draw.
+func truncatedSSEStreamEngine(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"choices":[{"index":0,"delta":{"content":"the answer beg"}}]}` + "\n\n"))
+	}))
+	// The short write is the point of the fixture; the server's complaint
+	// about it is not test output anyone needs.
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// waired-agent#554. The same event as
+// TestGateway_MidStreamTruncationIsStillMetered, arriving on the other
+// transport. It was metered on /v1/chat/completions and dropped on
+// /anthropic/v1/messages, so what a provider reported for one dead
+// engine depended on which API its guest happened to call.
+//
+// PRODUCT CONTRACT (waired-agent#554, #532): two transports do not
+// describe one failure differently.
+func TestGateway_AnthropicTruncatedStreamIsMetered(t *testing.T) {
+	upstream := truncatedSSEStreamEngine(t)
+	rec := &captureRecorder{}
+	sink := &captureSink{}
+	gw := newMeteringGateway(t, upstream.URL, rec, sink.fn())
+
+	w := postJSON(t, gw, "/anthropic/v1/messages", map[string]any{
+		"model": "waired/default", "max_tokens": 16, "stream": true,
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("client status = %d, want the 200 the SSE headers already committed", w.Code)
+	}
+
+	events := rec.requestsSnapshot()
+	if len(events) != 1 {
+		t.Fatalf("request events = %d, want 1", len(events))
+	}
+	if events[0].Status != http.StatusOK {
+		t.Errorf("recorded status = %d, want the 200 the client was handed", events[0].Status)
+	}
+	if events[0].ErrorReason != "engine_truncated_stream" {
+		t.Errorf("recorded error_reason = %q, want engine_truncated_stream", events[0].ErrorReason)
+	}
+	got := sink.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("usage samples = %d, want 1: the engine ran and the client got part of it", len(got))
+	}
+	if got[0].InputTokens != 11 || got[0].OutputTokens != 7 {
+		t.Errorf("metered (in=%d, out=%d), want (11, 7)", got[0].InputTokens, got[0].OutputTokens)
 	}
 }
 
