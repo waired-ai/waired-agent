@@ -249,6 +249,11 @@ assert_daemon_engine() {
     gx "$guest" journalctl -u waired-agent --no-pager -n 30 2>&1 | sed 's/^/    /' || true
   fi
 
+  # 5b. …and that binary is the one serving, at the pin (#494). Item 5 proves
+  #     the executor put something on disk; this proves the host is not being
+  #     served by something else, which is the half #139 was about.
+  assert_serving_ollama "$guest" "daemon-path executor"
+
   # 6. The inference subsystem left the no_engine state.
   out="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
   state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"' || true)"

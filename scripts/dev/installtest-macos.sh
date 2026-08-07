@@ -15,10 +15,13 @@
 #   on the mgmt API.
 #
 # --inference (pairs with --tier 2; #514): exercise the full first-run journey on
-#   CPU — install.sh installs Ollama (no --skip-ollama) and `waired init
-#   --inference-enabled=true` pulls the bundled model in its deploy phase and runs
-#   the end-of-init benchmark. Asserts Ollama present, the model in `ollama list`,
-#   inference enabled in the persisted config, and a benchmark figure in the init
+#   CPU — `waired init --inference-enabled=true` installs the bundled engine
+#   (since #138 install.sh puts no engine on the host; --skip-ollama is how you
+#   tell init not to), pulls the bundled model in its deploy phase and runs the
+#   end-of-init benchmark. Asserts the engine is waired's own under the state dir
+#   AND is what serves, at the pin (#494); the model READY in the waired store via
+#   the mgmt API on :9476, never a bare `ollama list` against :11434 (#567);
+#   inference enabled in the persisted config; and a benchmark figure in the init
 #   transcript (the macOS analog of lib/installtest-enroll.sh's assert_inference).
 #
 # Since #520 the agent is a system LaunchDaemon (root, /Library/LaunchDaemons,
@@ -203,6 +206,78 @@ assert_bundled_ollama_macos() {
   fi
 }
 
+# assert_serving_ollama_macos <context> — the engine ANSWERING REQUESTS is
+# waired's own, at the pinned version (#494). Twin of
+# lib/installtest-enroll.sh's assert_serving_ollama; see that function for the
+# reasoning behind all three asserts. Mirror any change there and in
+# installtest-windows.ps1 (Assert-ServingEngine).
+#
+# The macOS-only parts are the two host commands. There is no /proc here, so
+# the listener is resolved with lsof and its executable read from `ps -o
+# comm=`, which on macOS prints the full path (on Linux it prints the short
+# name — the reason this cannot be one shared implementation). Both need sudo:
+# the LaunchDaemon runs as root, so its child engine does too.
+assert_serving_ollama_macos() {
+  local ctx="$1" _ body live st pinned mode pid exe
+  local bin="$STATE_DIR/runtimes/ollama/bin/ollama"
+
+  # The gate is a PARSED version, and 180 s outlasts the agent's own
+  # first-readiness budget — see the Linux twin for both.
+  for _ in $(seq 1 60); do            # ~180 s; the daemon-engine leg can arrive mid cold start
+    body="$(curl -fsS --max-time 5 http://127.0.0.1:9475/api/version 2>/dev/null || true)"
+    live="$(printf '%s' "$body" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    [ -n "$live" ] && break
+    sleep 3
+  done
+  if [ -z "$live" ]; then
+    bad "nothing is serving on :9475 after 180 s ($ctx) — the engine is installed but not answering"
+    sudo tail -n 40 "$STATE_DIR/runtimes/ollama/logs/engine.log" 2>/dev/null \
+      | sed 's/^/    engine.log| /' >&2 || true
+    return
+  fi
+
+  st="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
+  pinned="$(printf '%s' "$st" | sed -n 's/.*"pinned_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  mode="$(printf '%s' "$st" | grep -oE '"mode"[[:space:]]*:[[:space:]]*"[a-z]+"' | head -1 \
+    | sed 's/.*"\([a-z]*\)"$/\1/' || true)"
+
+  # 1. the listener IS the state-dir binary. Quoted throughout: this path has a
+  #    space in it (/Library/Application Support/waired).
+  pid="$(sudo lsof -nP -iTCP:9475 -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+  exe=""
+  if [ -n "$pid" ]; then
+    exe="$(sudo ps -p "$pid" -o comm= 2>/dev/null || true)"
+  fi
+  if [ -z "$pid" ]; then
+    # /api/version answered above, so something IS listening — an empty pid is
+    # a lookup failure, not an absent engine, and must not be reported as the
+    # wrong binary.
+    bad "could not identify the process listening on :9475 ($ctx) — lsof found no listening process"
+  elif [ "$exe" = "$bin" ]; then
+    ok "the process serving :9475 is the state-dir binary ($ctx; pid $pid)"
+  else
+    bad "the process serving :9475 is not waired's engine ($ctx): pid=$pid exe=${exe:-unreadable}, expected $bin"
+    sudo lsof -nP -iTCP:9475 -sTCP:LISTEN 2>&1 | sed 's/^/    lsof| /' >&2 || true
+  fi
+
+  # 2. it reports the pin. An empty pinned_version is its own failure — two
+  #    empty strings compare equal.
+  if [ -z "$pinned" ]; then
+    bad "the daemon published no pinned_version ($ctx) — the version comparison would be vacuous"
+  elif [ "$live" = "$pinned" ]; then
+    ok "the serving engine is the pinned release ($ctx; /api/version = $live)"
+  else
+    bad "the serving engine is not the pinned release ($ctx): /api/version = $live, pinned $pinned"
+  fi
+
+  # 3. waired spawned it, rather than adopting a survivor.
+  case "$mode" in
+    spawned) ok "waired spawned the serving engine ($ctx; mode=spawned)" ;;
+    "")      bad "the daemon published no engine mode ($ctx) — cannot tell a spawned engine from an adopted one" ;;
+    *)       bad "waired did not spawn the serving engine ($ctx; mode=$mode) — it adopted a process it does not supervise" ;;
+  esac
+}
+
 assert_inference_macos() {
   local ollama_bin="$STATE_DIR/runtimes/ollama/bin/ollama" tps notready
 
@@ -222,6 +297,9 @@ assert_inference_macos() {
   fi
 
   assert_bundled_ollama_macos
+  # …and it is what actually serves, at the pin (#494). "Installed" and
+  # "serving" are two claims; see assert_serving_ollama_macos for why.
+  assert_serving_ollama_macos "waired init"
 
   # #567: the bundled engine is waired-owned on :9475 with its own store; the
   # agent (spawning the state-dir binary) pulls there, NOT into the
@@ -481,6 +559,10 @@ assert_daemon_engine_macos() {
   # executor could have put an engine here — and since #492 "here" is one
   # path, not "anywhere download.ResolveBinary can see" (#139).
   assert_bundled_ollama_macos
+  # …and that binary is the one serving, at the pin (#494). The assert above
+  # proves the executor put something on disk; this proves the host is not
+  # being served by something else, which is the half #139 was about.
+  assert_serving_ollama_macos "daemon-path executor"
   out="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
   state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
   case "$state" in

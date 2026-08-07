@@ -542,6 +542,113 @@ it_prepull_evidence() {
     sed 's/^/    agent| /' || true
 }
 
+# assert_serving_ollama <guest> <context> — the engine ANSWERING REQUESTS is
+# waired's own, at the pinned version (#494, Phase 3 of #488).
+#
+# The assert beside this one stats a file. That is a different claim, and the
+# gap between them is the whole of #139: a host can hold waired's binary at the
+# right path and still be served by something else. Three facts close it, and
+# they are deliberately three lines rather than one — a red then says WHICH
+# layer broke without a second run.
+#
+#   1. the process listening on :9475 is that exact binary. Read from the
+#      host (ss -> /proc/<pid>/exe), not from the agent, so it holds even if
+#      the agent's own bookkeeping is what is wrong. It is also the only one
+#      of the three a foreign engine AT THE PIN could not satisfy — which is
+#      reachable: EnsureRunning adopts an exact-pin survivor on our port
+#      (internal/runtime/ollama.go, EngineModeAdopted).
+#   2. it reports the pinned version. Compared against the daemon's
+#      pinned_version rather than a version literal kept here: that field IS
+#      infruntime.OllamaPinnedVersion compiled into the build under test, so
+#      a pin bump needs no harness edit and the two cannot drift.
+#   3. waired spawned it. Distinguishes (1)-satisfied-by-our-own-child from
+#      (1)-satisfied-by-an-orphan-of-a-previous-run.
+#
+# Mirror any change in installtest-macos.sh (assert_serving_ollama_macos) and
+# installtest-windows.ps1 (Assert-ServingEngine). The wording is identical in
+# all three down to the punctuation, and scripts/dev/installtest-serving-asserts.sh
+# runs every branch of every copy per PR and fails on the first difference —
+# these asserts otherwise execute only in the nightly legs, where a copy that
+# had stopped being able to fail would sit green for a long time.
+assert_serving_ollama() {
+  local guest="$1" ctx="$2" _ body live st pinned mode pid exe
+
+  # The engine is normally up by the time we get here — the --inference leg is
+  # past init's foreground model wait (#519). The daemon-engine leg can arrive
+  # mid cold start, so give the port a bounded window rather than racing it.
+  # The gate is a PARSED version, not a non-empty body: a reply we cannot read
+  # a version out of is not an engine we can check, and calling that "serving"
+  # would carry an empty $live into the comparison below.
+  #
+  # 180 s, deliberately LONGER than the agent's own first-readiness budget
+  # (OllamaConfig.StartupReadyTimeout, 150 s by default): a harness window
+  # shorter than the product's tolerance reds on a slow cold start the product
+  # is still happy with. Keep it above whatever that constant becomes.
+  for _ in $(seq 1 60); do            # ~180 s
+    body="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9475/api/version 2>/dev/null || true)"
+    live="$(printf '%s' "$body" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    [ -n "$live" ] && break
+    sleep 3
+  done
+  if [ -z "$live" ]; then
+    bad "nothing is serving on :9475 after 180 s ($ctx) — the engine is installed but not answering"
+    gx "$guest" sh -c 'tail -n 40 /var/lib/waired/runtimes/ollama/logs/engine.log 2>/dev/null || echo "(no engine.log)"' 2>&1 \
+      | sed 's/^/    engine.log| /' >&2 || true
+    return
+  fi
+
+  st="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
+  # pinned_version is emitted by the ollama runtime only, so it is unique in
+  # the document. "mode" is not a unique key across the API, but within THIS
+  # payload it is: runtimes is the second field of InferenceStatus, Go sorts
+  # map keys so "ollama" precedes "vllm", and vllm sets no mode.
+  pinned="$(printf '%s' "$st" | sed -n 's/.*"pinned_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  mode="$(printf '%s' "$st" | grep -oE '"mode"[[:space:]]*:[[:space:]]*"[a-z]+"' | head -1 \
+    | sed 's/.*"\([a-z]*\)"$/\1/' || true)"
+
+  # 1. the listener IS the state-dir binary. No separate "is ss installed"
+  #    probe: a missing ss and a listener ss cannot see both come back as an
+  #    empty pid, and "ss found no listening process" is the right report for
+  #    either — one branch fewer, and the same sentence on all three OSes.
+  pid="$(gx "$guest" sh -c 'ss -Hltpn "sport = :9475" 2>/dev/null | sed -n "s/.*pid=\([0-9][0-9]*\).*/\1/p" | head -1' 2>/dev/null || true)"
+  # Plain readlink, not -f: a binary replaced under a running process leaves
+  # the target as "<path> (deleted)", which should read as a mismatch with its
+  # reason on show — `readlink -f` would resolve it to nothing at all.
+  exe=""
+  if [ -n "$pid" ]; then
+    exe="$(gx "$guest" readlink "/proc/$pid/exe" 2>/dev/null || true)"
+  fi
+  if [ -z "$pid" ]; then
+    # /api/version answered above, so something IS listening — an empty pid is
+    # a lookup failure, not an absent engine, and must not be reported as the
+    # wrong binary.
+    bad "could not identify the process listening on :9475 ($ctx) — ss found no listening process"
+  elif [ "$exe" = "$IT_BUNDLED_OLLAMA_BIN" ]; then
+    ok "the process serving :9475 is the state-dir binary ($ctx; pid $pid)"
+  else
+    bad "the process serving :9475 is not waired's engine ($ctx): pid=$pid exe=${exe:-unreadable}, expected $IT_BUNDLED_OLLAMA_BIN"
+    gx "$guest" sh -c 'ss -Hltpn "sport = :9475" 2>/dev/null' 2>&1 | sed 's/^/    ss| /' >&2 || true
+  fi
+
+  # 2. it reports the pin. An empty pinned_version is its own failure: two
+  #    empty strings compare equal, which is the assert-that-cannot-fail shape
+  #    #178/#215 already cost this repo five days of green CI.
+  if [ -z "$pinned" ]; then
+    bad "the daemon published no pinned_version ($ctx) — the version comparison would be vacuous"
+  elif [ "$live" = "$pinned" ]; then
+    ok "the serving engine is the pinned release ($ctx; /api/version = $live)"
+  else
+    bad "the serving engine is not the pinned release ($ctx): /api/version = $live, pinned $pinned"
+  fi
+
+  # 3. waired spawned it, rather than adopting a survivor.
+  case "$mode" in
+    spawned) ok "waired spawned the serving engine ($ctx; mode=spawned)" ;;
+    "")      bad "the daemon published no engine mode ($ctx) — cannot tell a spawned engine from an adopted one" ;;
+    *)       bad "waired did not spawn the serving engine ($ctx; mode=$mode) — it adopted a process it does not supervise" ;;
+  esac
+}
+
 # assert_inference — verify the install→...→model-download→benchmark tail of
 # the journey ran on CPU (Tier-2 --inference). `waired init
 # --inference-enabled=true` installed the bundled engine through the daemon
@@ -581,6 +688,10 @@ assert_inference() {
   gx "$guest" test -x "$IT_BUNDLED_OLLAMA_BIN" \
     && ok "bundled ollama binary present ($IT_BUNDLED_OLLAMA_BIN, CPU)" \
     || bad "bundled ollama not installed at $IT_BUNDLED_OLLAMA_BIN (\`waired init --inference-enabled=true\` should have, via the daemon-path engine install)"
+
+  # …and it is what actually serves, at the pin (#494). See the function for
+  # why "installed" and "serving" are two claims and not one.
+  assert_serving_ollama "$guest" "waired init"
 
   # #567: the bundled engine is waired-owned on :9475 with its own store; the
   # agent pulls there, NOT into the upstream default :11434. Read readiness

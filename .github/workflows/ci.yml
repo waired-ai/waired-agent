@@ -649,3 +649,12 @@ jobs:
 
       - name: install.ps1 dry-run dispatch matrix
         run: pwsh -NoProfile -File scripts/dev/installtest-pwsh.ps1
+
+      # The serving-engine asserts (#494) run only in installtest-inference,
+      # which is schedule/dispatch-only -- so a copy of them that had stopped
+      # being able to fail would sit green for a long time with nothing on a PR
+      # to say so. This drives all three copies through every branch in about a
+      # second. It lives in THIS job because it needs pwsh for the Windows copy
+      # (install-scripts has shellcheck but no PowerShell).
+      - name: serving-engine asserts (3-OS parity + every branch)
+        run: bash scripts/dev/installtest-serving-asserts.sh
