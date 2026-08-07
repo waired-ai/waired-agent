@@ -232,9 +232,13 @@ everything on disk and stops answering locally. It survives restarts, and it
 works even when the background service is not answering — the choice is saved
 and applied at the next start.
 
-Machines that would only manage a very small model start with this **off**; see
-[It said my machine can only run a very small
-model](/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model).
+Two kinds of machine start with this **off**: those that would only manage a
+very small model, and those that measured too slow to answer a coding question
+in reasonable time. `status` names the reason when Waired is the one that
+decided — see [It said my machine can only run a very small
+model](/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model) and
+[Local AI started off and I did not choose
+that](/troubleshooting/#local-ai-started-off-and-i-did-not-choose-that).
 
 `engine stop` is the memory-pressure escape hatch; `share off` keeps your own
 use working while closing it to your other machines. See

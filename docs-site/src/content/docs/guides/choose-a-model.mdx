@@ -22,6 +22,7 @@ You only need this page if you want to change it.
 | Better answers, and you have memory to spare | Switch **up** a model |
 | Faster answers, or your computer feels slow | Switch **down** a model |
 | To know what you're running right now | See [Which model am I running?](#which-model-am-i-running) below |
+| To run models here at all, when this computer is not | See [What if no model was picked?](#what-if-no-model-was-picked) below |
 | Nothing in particular | Leave it — the automatic pick is a good default |
 
 <Aside type="note" title="Bigger is not always better">
@@ -29,6 +30,29 @@ You only need this page if you want to change it.
 	load, and your AI stops answering. Check the memory column for your model in
 	the [model catalog](/reference/model-catalog/) before switching up.
 </Aside>
+
+## What if no model was picked?
+
+On some computers Waired picks none, and starts with **local AI off**. Two
+things put a computer in that group:
+
+- **Memory.** Nothing that fits is good enough to write code with. See
+  [It said my machine can only run a very small
+  model](/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model).
+- **Speed.** Before downloading a full-size model, Waired downloads a small one
+  and times a realistic coding question on it. If one answer would take longer
+  than 45 seconds, it stops there rather than downloading tens of gigabytes you
+  would wait minutes at a time on. See [Local AI started off and I did not
+  choose that](/troubleshooting/#local-ai-started-off-and-i-did-not-choose-that).
+
+Either way the computer still joins your network and can use the AI running on
+your other computers, and you can turn local AI on whenever you want —
+`waired inference on`, or **Run AI models on this computer** in the Waired app.
+Waired keeps that choice once you have made it.
+
+```sh
+waired inference status   # on or off, and why if Waired decided it
+```
 
 ## Which model am I running?
 

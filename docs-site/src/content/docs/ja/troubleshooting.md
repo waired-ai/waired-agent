@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 97897cbcd3c4b31f
+sourceHash: a17b1701d47bb392
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -38,6 +38,7 @@ waired doctor
 - [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
 - [「非常に小さいモデルしか動かせない」と言われた](#it-said-my-machine-can-only-run-a-very-small-model)
+- [選んでいないのにローカル AI がオフで始まった](#local-ai-started-off-and-i-did-not-choose-that)
 - [セットアップで「テスト生成を完了できませんでした」と出た](#setup-said-it-could-not-complete-a-test-generation)
 
 **応答がない**
@@ -300,6 +301,11 @@ sudo waired status          # Windows は管理者プロンプトから
 壊れた出力のほうが多くなります。このようなマシンで Waired が
 **ローカル AI をオフの状態から始める**のはそのためです。
 
+Waired がこの状態から始める理由は 2 つあり、これはそのうちの 1 つです。
+もう 1 つは速度です。メモリに余裕があるパソコンなら
+[選んでいないのにローカル AI がオフで始まった](#local-ai-started-off-and-i-did-not-choose-that)
+を参照してください。
+
 オフは出発点であって、結論ではありません。このマシンはそのままでもネットワークに
 入れる価値があります — ほかのパソコンの AI を使えるからです。ローカル AI は
 いつでもオンにできます。
@@ -317,6 +323,52 @@ waired inference off
 ```
 
 現在どちらに設定されているかは `waired inference status` で確認できます。
+
+<a id="local-ai-started-off-and-i-did-not-choose-that"></a>
+
+## 選んでいないのにローカル AI がオフで始まった
+
+理由はパソコン自身に聞けます。
+
+```sh
+waired inference status
+```
+
+Waired が判断した場合は、その旨が表示されます。
+
+```
+Local inference: off
+  One coding question would take about 68.4 s here; Waired starts local AI off above 45 s.
+  This computer can still use the AI running on your other computers.
+  Turn it on with `waired inference on`.
+```
+
+**この数値の出どころ。** 数十 GB のフルサイズのモデルをダウンロードする前に、
+Waired は 1 GB 程度の小さいモデルを取得し、現実的なコーディングの質問——長い
+質問と、それに対する通常の長さの回答——を計測します。計測は 3 回行い、中央の
+結果を採用するため、たまたま 1 回だけ混雑していたことで結論が決まることは
+ありません。速いパソコンなら数秒、遅いパソコンでも数分で終わります。
+
+**小さいモデルにしても解決しない理由。** グラフィックスカードの無いパソコンでは、
+カタログ内で最小のコーディングモデルも、載る範囲で最大のモデルも、速さは大きく
+変わりません——どちらも 1 往復に数分かかります。これはモデルではなくパソコン側の
+話であり、Waired がより小さいモデルを選び直すのではなく止める理由です。
+
+**これは出発点であって、判定ではありません。** そのパソコンはネットワークには
+参加し、他のパソコンで動いている AI を使えます。ローカル AI はいつでも
+オンにできます。
+
+```sh
+waired inference on
+```
+
+Waired アプリでは **Run AI models on this computer** が同じ操作です。
+一度選んだあとは、Waired はその選択を保持します。計測は出発点を決めるために
+走るものであり、あとから選択を覆すことはありません。
+
+`waired inference status` が理由なしで**オフ**と表示する場合、判断したのは
+このパソコンではありません。セットアップでの選択、インストーラの
+`--inference-enabled false`、`waired inference off` のいずれかです。
 
 <a id="setup-said-it-could-not-complete-a-test-generation"></a>
 

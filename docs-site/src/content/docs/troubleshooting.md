@@ -35,6 +35,7 @@ most problems on its own.
 - [It says I have reached the device limit](#it-says-i-have-reached-the-device-limit)
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
 - [It said my machine can only run a very small model](#it-said-my-machine-can-only-run-a-very-small-model)
+- [Local AI started off and I did not choose that](#local-ai-started-off-and-i-did-not-choose-that)
 - [Setup said it could not complete a test generation](#setup-said-it-could-not-complete-a-test-generation)
 
 **Nothing answers**
@@ -288,6 +289,10 @@ Believe it. At that size a coding model produces broken output more often than
 useful output, which is why Waired starts with **local AI off** on machines
 like this one.
 
+This is one of two reasons Waired starts that way. The other is speed — see
+[Local AI started off and I did not choose that](#local-ai-started-off-and-i-did-not-choose-that)
+if this computer has plenty of memory.
+
 Off is a starting point, not a verdict. The machine is worth having in your
 network as it is — it can use the AI running on your other computers — and you
 can turn local AI on whenever you want to:
@@ -305,6 +310,52 @@ waired inference off
 ```
 
 `waired inference status` says which way it is set right now.
+
+## Local AI started off and I did not choose that
+
+Ask the computer why:
+
+```sh
+waired inference status
+```
+
+When Waired is the one that decided, the answer says so:
+
+```
+Local inference: off
+  One coding question would take about 68.4 s here; Waired starts local AI off above 45 s.
+  This computer can still use the AI running on your other computers.
+  Turn it on with `waired inference on`.
+```
+
+**Where that number comes from.** Before downloading a full-size model — tens
+of gigabytes — Waired downloads a small one, about a gigabyte, and times a
+realistic coding question on it: a long question, a full-length answer. It times
+it three times and takes the middle result, so one busy moment cannot decide the
+outcome. That takes a few seconds on a fast machine and a couple of minutes on a
+slow one.
+
+**Why a smaller model would not rescue it.** On a computer with no graphics
+card, the smallest coding model in the catalog is not much faster than the
+largest one that fits — minutes per question either way. That is the machine
+talking, not the model, which is why Waired stops rather than picking something
+smaller.
+
+**It is a starting point, not a verdict.** The computer still joins your
+network and can use the AI running on your other computers. Turn local AI on
+whenever you want:
+
+```sh
+waired inference on
+```
+
+In the Waired app the same choice is **Run AI models on this computer**. Once
+you have made that choice, Waired keeps it — the timing runs to pick a starting
+point, and never again to overrule you.
+
+If `waired inference status` reports **off** and gives no reason, nothing on
+this computer decided it: it was chosen here — during setup, with the
+installer's `--inference-enabled false`, or with `waired inference off`.
 
 ## Setup said it could not complete a test generation
 
