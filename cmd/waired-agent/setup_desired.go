@@ -18,6 +18,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -1972,6 +1973,25 @@ func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID st
 	applyCtx := p.agentCtx
 	if applyCtx == nil {
 		applyCtx = ctx
+	}
+	// #496: measure the host before the weights start arriving.
+	//
+	// This is the OTHER install path — a person chose this model in the
+	// browser — so the cutoff's decision is deliberately not taken here:
+	// they have said they want to serve, and #465's default is not ours to
+	// override. The measurement is taken all the same, because it is a
+	// property of the host rather than a step of that decision, and
+	// because this is the majority path: skipping it here would leave the
+	// control plane, the device page and waired#1065 with a figure for
+	// almost no one. Cached per engine build, so a later model switch on
+	// the same host costs nothing.
+	//
+	// Before rather than after the download for the same reason the
+	// bundled path measures early: a 20-45 GB transfer saturates the link
+	// and the disk, and a measurement taken alongside one measures the
+	// contention.
+	if modelID != hostfit.HostCutoffProbeModelID {
+		p.ensureHostSpeedMeasured(applyCtx)
 	}
 	downloading, err := p.SwapPreferredModel(applyCtx, modelID)
 	if err == nil {

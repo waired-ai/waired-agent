@@ -213,6 +213,11 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 type inferenceStatusResponse struct {
 	SubsystemState string `json:"subsystem_state"`
 	DesiredState   string `json:"desired_state"`
+	HostSpeed      *struct {
+		TurnSeconds        float64 `json:"turn_seconds"`
+		BudgetSeconds      float64 `json:"budget_seconds"`
+		TurnedInferenceOff bool    `json:"turned_inference_off"`
+	} `json:"host_speed"`
 }
 
 func runInferenceStatus(mgmt string) error {
@@ -228,8 +233,21 @@ func runInferenceStatus(mgmt string) error {
 	switch s.DesiredState {
 	case string(state.InferenceEnabled):
 		fmt.Println("Local inference: on")
+		if s.HostSpeed != nil && s.HostSpeed.TurnSeconds > 0 {
+			fmt.Printf("  One coding question takes about %.1f s on this computer.\n", s.HostSpeed.TurnSeconds)
+		}
 	case string(state.InferenceDisabled):
 		fmt.Println("Local inference: off")
+		// Why, when Waired is the one who decided. Reported only while
+		// the measurement is still the reason — the daemon drops that
+		// claim as soon as anyone moves the toggle themselves, so a
+		// person who ran `waired inference off` is not told a story about
+		// their own machine being slow.
+		if s.HostSpeed != nil && s.HostSpeed.TurnedInferenceOff && s.HostSpeed.TurnSeconds > 0 {
+			fmt.Printf("  One coding question would take about %.1f s here; Waired starts local AI off above %.0f s.\n",
+				s.HostSpeed.TurnSeconds, s.HostSpeed.BudgetSeconds)
+			fmt.Println("  This computer can still use the AI running on your other computers.")
+		}
 		fmt.Println("  Turn it on with `waired inference on`.")
 	default:
 		// Nothing to report is not the same as off, and telling someone

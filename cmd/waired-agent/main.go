@@ -1206,6 +1206,11 @@ func run(ctx context.Context, args []string) error {
 			if inferenceSub != nil && inferenceSub.provider != nil {
 				prov := inferenceSub.provider
 				deps.DeclaredContextWindow = prov.DeclaredContextWindow
+				// #496: what one coding-agent turn costs here. Wired for
+				// every provider for the same reason as the window — the
+				// getter answers nil on a host that has not measured, and a
+				// vLLM host is exactly such a host by construction.
+				deps.HostSpeed = prov.hostSpeedNow
 				// waired#1064: what this node runs and why it is or is
 				// not serving it. Wired for every provider, like the
 				// window above and unlike the ollama-only getters below:

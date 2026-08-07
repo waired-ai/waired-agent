@@ -1155,6 +1155,21 @@ type agentInferenceProvider struct {
 	disableInference func() error
 	inferenceState   func() (current, desired state.InferenceState)
 
+	// hostSpeedMu guards hostSpeed and serialises the measurement itself
+	// (#496). Both install paths that take it run in their own goroutine
+	// and the probe is a minutes-long engine-bound job, so two running at
+	// once would measure each other's contention. Holding the lock across
+	// the whole measurement is the point rather than a cost: the second
+	// caller wants the first one's answer, not one of its own.
+	hostSpeedMu sync.Mutex
+	// hostSpeed is this process's copy of the published measurement, nil
+	// until one has been taken or loaded back from the state dir;
+	// hostSpeedLoaded records that the load has been attempted, so a host
+	// that has never measured does not re-read the absent file every
+	// probe tick.
+	hostSpeed       *signer.HostSpeed
+	hostSpeedLoaded bool
+
 	// meshSnapshotFn, when non-nil, threads the inferencemesh
 	// aggregator into Select so a request whose model isn't local-
 	// ready can fall through to a peer's engine (Phase 4 peer-engine
@@ -1822,6 +1837,27 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx)),
 		LongContext:     longContextBenchFor(depth),
 		DesiredState:    desiredStateStr,
+		HostSpeed:       p.hostSpeedStatus(),
+	}
+}
+
+// hostSpeedStatus maps the host measurement onto the management wire
+// shape (#496). nil when this host has never measured.
+func (p *agentInferenceProvider) hostSpeedStatus() *management.HostSpeedStatus {
+	s := p.hostSpeedNow()
+	if s == nil {
+		return nil
+	}
+	return &management.HostSpeedStatus{
+		TurnSeconds:        s.TurnSeconds,
+		BudgetSeconds:      hostfit.HostCutoffTurnBudgetSeconds,
+		PrefillTokps:       s.PrefillTokps,
+		DecodeTokps:        s.DecodeTokps,
+		Samples:            s.Samples,
+		SpreadPct:          s.SpreadPct,
+		ProbeModelID:       s.ProbeModelID,
+		MeasuredAt:         s.MeasuredAt,
+		TurnedInferenceOff: p.hostSpeedTurnedInferenceOff(),
 	}
 }
 

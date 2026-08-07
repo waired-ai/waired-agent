@@ -531,11 +531,21 @@ func ReadDesiredInferenceState(stateDir string) (InferenceState, error) {
 }
 
 // WriteDesiredInferenceState persists the operator's enable/disable intent.
+//
+// It also drops the host measurement's "and that is why local inference
+// is off" claim (#496), because whoever is writing here is now the reason
+// the toggle reads the way it does. The install-time cutoff re-asserts
+// the claim immediately after its own write; every other writer — the
+// tray, `waired inference on|off`, the boot plan — leaves it cleared.
 func WriteDesiredInferenceState(stateDir string, s InferenceState) error {
 	if s != InferenceEnabled && s != InferenceDisabled {
 		return fmt.Errorf("runtime/state: invalid inference state %q", s)
 	}
-	return atomicWrite(DesiredInferencePath(stateDir), []byte(string(s)+"\n"), 0o644)
+	if err := atomicWrite(DesiredInferencePath(stateDir), []byte(string(s)+"\n"), 0o644); err != nil {
+		return err
+	}
+	clearHostSpeedCutoffFlag(stateDir)
+	return nil
 }
 
 // ReadDesiredShareMesh parses <state-dir>/runtime/desired-share. A

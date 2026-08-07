@@ -86,6 +86,19 @@ type inferenceProbeDeps struct {
 	// it per tick costs a cache read almost every time.
 	Hardware func() *signer.HardwareSummary
 
+	// HostSpeed, when non-nil, returns what one coding-agent turn costs on
+	// this machine (#496), or nil when nothing has been measured. It rides
+	// both push paths for the same reason Hardware does: the browser setup
+	// wizard scores its catalog in exactly the window where there is no
+	// engine to probe, and a figure that only an engine-present host could
+	// publish would be missing from the host most likely to need it.
+	//
+	// A getter rather than a captured value because the measurement lands
+	// mid-process — the install path takes it just before the model
+	// download — and a value captured at boot would be nil for the life of
+	// the daemon that measured it.
+	HostSpeed func() *signer.HostSpeed
+
 	// Capacity is the concurrent-request admission cap the Phase 7
 	// Selector enforces against. Derived from the local token/s
 	// benchmark. 0 means "unlimited" (the backward-compat value, and
@@ -270,6 +283,9 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 				s.Hardware = hw
 			}
 		}
+		if deps.HostSpeed != nil {
+			s.HostSpeed = deps.HostSpeed()
+		}
 		if deps.Capacity != nil {
 			if c := deps.Capacity(); c != 0 {
 				s.Capacity = c
@@ -405,6 +421,9 @@ func runHardwareOnlyReport(ctx context.Context, deps inferenceProbeDeps) {
 		// as a candidate), but the admin Device page reads the same field.
 		if deps.SubsystemState != nil {
 			st.SubsystemState = deps.SubsystemState()
+		}
+		if deps.HostSpeed != nil {
+			st.HostSpeed = deps.HostSpeed()
 		}
 		pushCtx, cancel := context.WithTimeout(deps.cpCtx(ctx), 5*time.Second)
 		_, err := deps.PushClient.PushInferenceStatus(pushCtx, deps.DeviceID, st, deps.MachineKey)
