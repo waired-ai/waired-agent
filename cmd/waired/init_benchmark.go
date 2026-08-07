@@ -56,7 +56,11 @@ var benchHTTP = &http.Client{Timeout: 240 * time.Second}
 // Enter escape without a second reader (#223); every other caller passes
 // its own scanner.
 func promptBenchmarkRecommendation(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) error {
-	_, err := benchmarkWithScanner(mgmtURL, nonInteractive, out, sc, tty)
+	// The ran-and-failed signal is for the `waired init` summary box, not
+	// for this caller: `waired runtimes benchmark` has already printed the
+	// engine's refusal in full, and turning it into a non-nil error here
+	// would make an informational path start failing.
+	_, _, err := benchmarkWithScanner(mgmtURL, nonInteractive, out, sc, tty)
 	return err
 }
 
@@ -86,10 +90,11 @@ func outcomeFrom(resp *management.BenchmarkRunResponse) benchmarkOutcome {
 // obtained) so the caller can surface the throughput in the final success
 // summary; the error is always nil today (every give-up path is
 // best-effort) but kept for future use.
-func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) (*management.BenchmarkRunResponse, error) {
-	resp, ok := waitForBenchmark(mgmtURL, out)
+func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool) (*management.BenchmarkRunResponse, bool, error) {
+	resp, ok, ranAndFailed := waitForBenchmark(mgmtURL, out)
 	if !ok {
-		return nil, nil // already explained inside waitForBenchmark
+		// already explained inside waitForBenchmark
+		return nil, ranAndFailed, nil
 	}
 
 	if rec := resp.Recommendation; rec != nil && !rec.Dismissed {
@@ -112,7 +117,7 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		if nonInteractive {
 			writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to switch interactively.\n",
 				from)
-			return resp, nil
+			return resp, false, nil
 		}
 
 		// Default Yes: stepping down is cheap and the host is struggling.
@@ -123,10 +128,10 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 				writePromptf(out, "Keeping %s. You can switch later from the tray or `waired runtimes benchmark`.\n",
 					from)
 			}
-			return resp, nil
+			return resp, false, nil
 		}
 		switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty)
-		return resp, nil
+		return resp, false, nil
 	}
 
 	// At or above the floor: a 200 means the daemon ran a real
@@ -162,7 +167,7 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		if nonInteractive {
 			writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to switch interactively.\n",
 				from)
-			return resp, nil
+			return resp, false, nil
 		}
 
 		// Default No: an upgrade pulls a multi-GB download — the opposite
@@ -175,11 +180,11 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 				writePromptf(out, "Keeping %s. You can switch later from the tray or `waired runtimes benchmark`.\n",
 					from)
 			}
-			return resp, nil
+			return resp, false, nil
 		}
 		switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty)
 	}
-	return resp, nil
+	return resp, false, nil
 }
 
 // switchAndWait accepts the recommendation and, when the target model still
@@ -218,7 +223,7 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader,
 func tinyBenchmarkDisableFlow(
 	mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool,
 	rec *management.BenchmarkRecommendation, resp *management.BenchmarkRunResponse,
-) (*management.BenchmarkRunResponse, error) {
+) (*management.BenchmarkRunResponse, bool, error) {
 	from := modelWithQuality(rec.FromModelID, rec.FromVariantID)
 	label := modelWithQuality(rec.ToModelID, rec.ToVariantID)
 	writePromptf(out, "\n%s Local inference is slow here: %s measured %.0f tok/s, below the %.0f tok/s\n",
@@ -228,7 +233,7 @@ func tinyBenchmarkDisableFlow(
 
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", from)
-		return resp, nil
+		return resp, false, nil
 	}
 
 	// Two-line question so the default and the "No disables it" clarifier read
@@ -237,14 +242,14 @@ func tinyBenchmarkDisableFlow(
 		"  No turns local inference off — Waired still works as a gateway/relay."
 	if ynPrompt(out, sc, q, false) {
 		switchAndWait(mgmtURL, rec.ToModelID, label, out, sc, tty)
-		return resp, nil
+		return resp, false, nil
 	}
 	if err := disableLocalInference(mgmtURL); err != nil {
 		writePromptf(out, "warn: could not disable local inference: %v\n", err)
 	} else {
 		writePrompt(out, "Local inference disabled — Waired keeps working as a gateway/relay.")
 	}
-	return resp, nil
+	return resp, false, nil
 }
 
 // disableLocalInference POSTs the management soft-disable, which persists the
@@ -260,7 +265,16 @@ func disableLocalInference(mgmtURL string) error {
 // "could not obtain a result" (daemon too old, model never readied
 // within the deadline, terminal pull failure) — the caller should
 // treat that as a non-error skip.
-func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.BenchmarkRunResponse, ok bool) {
+//
+// ranAndFailed separates the ONE outcome inside ok=false that is not a
+// skip: the benchmark reached the engine and the engine could not
+// complete a generation (#29). Every other give-up here is a legitimate
+// skip — a routing-only node, an external endpoint, a daemon too old —
+// and #203 is explicit that those must not read as a fault. Without the
+// distinction they were the same zero value, which is how `waired init`
+// came to print "everything completed successfully!" one line after
+// reporting HTTP 500 (waired-ai/waired-agent#552).
+func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.BenchmarkRunResponse, ok, ranAndFailed bool) {
 	deadline := time.Now().Add(benchPollDeadline)
 	announcedWait := false
 	announcedEngine := false
@@ -280,18 +294,18 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 			// yet, or restarting). Tell the user how to act instead of
 			// returning silently (the `waired runtimes benchmark` complaint).
 			writePromptf(out, "Could not reach the waired-agent service at %s (%v).\nStart it, then run `waired runtimes benchmark`.\n", mgmtURL, err)
-			return nil, false
+			return nil, false, false
 		case status == http.StatusNotFound:
 			// Older daemon without the benchmark endpoint.
 			writePrompt(out, "This waired-agent build doesn't support benchmarking yet; skipping.")
-			return nil, false
+			return nil, false, false
 		case status == http.StatusOK:
 			var r management.BenchmarkRunResponse
 			if jErr := json.Unmarshal(body, &r); jErr != nil {
 				writePromptf(out, "Benchmark returned an unreadable response (%v); skipping.\n", jErr)
-				return nil, false
+				return nil, false, false
 			}
-			return &r, true
+			return &r, true, false
 		case status == http.StatusTooEarly:
 			// Engine / model not ready yet. Consult /status to distinguish
 			// "still loading" from a terminal failure so we don't spin for
@@ -305,7 +319,7 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 				// itself recommended.
 				writePromptf(out, "Model download failed.%s Skipping the interactive-performance check.\n",
 					reasonSuffix(failureReason))
-				return nil, false
+				return nil, false, false
 			case "disabled", "stopped":
 				// Terminal, the same way waitForBundledModel already treats
 				// them (init_pull.go): a subsystem that is off or parked will
@@ -321,7 +335,7 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 				// by #175's installtest migration, which made this the path
 				// CI takes: ten minutes per leg, three legs, every PR.
 				writePrompt(out, "Local inference is off on this device; skipping the performance check.")
-				return nil, false
+				return nil, false, false
 			case "no_engine":
 				// On a fresh bundled install the engine is still being
 				// brought up at the first polls, so `no_engine` is transient
@@ -334,7 +348,7 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 					}
 					if time.Now().After(noEngineDeadline) {
 						writePrompt(out, "No inference engine available; skipping the interactive-performance check.")
-						return nil, false
+						return nil, false, false
 					}
 					if !announcedEngine {
 						writePrompt(out, "Waiting for the inference engine to start before benchmarking… "+
@@ -368,17 +382,17 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 				writePromptf(out, "%s Local inference could not complete a test generation.\n", emo("⚠", "[!]"))
 			}
 			writePrompt(out, "  Check `waired status`, then `waired doctor`, for the engine's own reason.")
-			return nil, false
+			return nil, false, true
 		default:
 			// Unexpected status — surface it (don't block init) instead of
 			// exiting silently.
 			writePromptf(out, "Benchmark unavailable (HTTP %d); skipping.\n", status)
-			return nil, false
+			return nil, false, false
 		}
 
 		if time.Now().After(deadline) {
 			writePrompt(out, "Model not ready in time; run `waired runtimes benchmark` later to check performance.")
-			return nil, false
+			return nil, false, false
 		}
 		time.Sleep(benchPollInterval)
 	}

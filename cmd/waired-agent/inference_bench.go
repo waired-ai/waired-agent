@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/router"
@@ -483,13 +484,68 @@ func warmUpEngine(ctx context.Context, deps BenchDeps) error {
 		return err
 	}
 	defer resp.Body.Close()
+	// Status first, because the failure path wants the body the success
+	// path only needs to drain. engineHTTPError drains what it does not
+	// read, so the keep-alive connection is reusable either way.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return engineHTTPError(resp)
+	}
 	// Drain so the keep-alive connection is immediately reusable for
 	// the timed request.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
 	return nil
+}
+
+// engineErrorBodyLimit bounds how much of a failed response is read for
+// the error message. ollama's is one sentence; an HTML error page from
+// something else on the port is not, and neither belongs in a log line
+// in full.
+const engineErrorBodyLimit = 512
+
+// engineHTTPError turns a non-2xx engine response into an error carrying
+// the engine's OWN reason, and drains the rest of the body so the
+// keep-alive connection stays reusable.
+//
+// It exists because every failure in this file used to read as
+// `HTTP 500` and nothing else. ollama answers a failed completion with
+// `{"error": "..."}` and that sentence was discarded at the status
+// check. waired-ai/waired-agent#552 spent three CI runs and a complete
+// engine.log unable to say why a benchmark failed, and the reason was
+// sitting in a body nobody read.
+//
+// The result is one line: it reaches a slog attribute and the `waired
+// init` transcript, neither of which survives an embedded newline
+// legibly.
+func engineHTTPError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, engineErrorBodyLimit))
+	// Whatever is left after the prefix, so the connection is reusable.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+
+	reason := strings.TrimSpace(string(body))
+	// ollama and the OpenAI-compat surface both answer with an error
+	// object; the message alone is what a reader wants. Anything that
+	// does not parse falls back to the raw prefix, which is still more
+	// than the status code was.
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && len(envelope.Error) > 0 {
+		var msg string
+		var obj struct {
+			Message string `json:"message"`
+		}
+		switch {
+		case json.Unmarshal(envelope.Error, &msg) == nil && msg != "":
+			reason = msg
+		case json.Unmarshal(envelope.Error, &obj) == nil && obj.Message != "":
+			reason = obj.Message
+		}
+	}
+	reason = strings.Join(strings.Fields(reason), " ")
+	if reason == "" {
+		return fmt.Errorf("HTTP %d (engine sent no reason)", resp.StatusCode)
+	}
+	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, reason)
 }
 
 // errNoEvalCounters signals the engine's native endpoint is absent or
@@ -577,7 +633,7 @@ func ollamaGenerateOnce(ctx context.Context, deps BenchDeps, numPredict int, tim
 		return 0, fmt.Errorf("%w: /api/generate returned 404", errNoEvalCounters)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return 0, engineHTTPError(resp)
 	}
 	var gen struct {
 		EvalCount    int   `json:"eval_count"`
@@ -741,7 +797,7 @@ func timedChatCompletion(ctx context.Context, deps BenchDeps, maxTokens int) (in
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return 0, 0, engineHTTPError(resp)
 	}
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	if err != nil {
