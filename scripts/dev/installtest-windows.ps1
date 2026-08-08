@@ -1992,19 +1992,20 @@ if ($script:Skip -gt 0) {
 # table), both in the same always-run Tier-1 section as the
 # ConvertTo-NativeArg pair above them.
 #
-# Everything else at tier 2: 65, and this one is NOT a measured green floor --
-# no Windows nightly leg has been green since the floor was introduced, so
-# there is no green run to take a number from. It is the lower bound the three
-# RED legs above already clear, which is enough to keep catching "a whole
-# block stopped executing" while being unable to fire spuriously on any run at
-# least as complete as those. Replace it with the real figure in the first PR
-# that has a green `gh workflow run installtest-inference.yml -f os=windows`
-# to read it from.
+# Everything else at tier 2: 71, and as of waired-agent#551 this IS a measured
+# green floor. It was 65 -- an unmeasured lower bound, because no Windows
+# nightly leg had ever been green and there was no run to read a number from.
+# The note here asked for the real figure from the first PR with a green
+# `gh workflow run installtest-inference.yml -f os=windows`; run 31241725159
+# is that run, and its three legs executed:
 #
-# waired-agent#551 added 4 asserts to -DaemonEngine only (the engine opt-out
-# block). 65 still holds -- it is a lower bound and this only ADDS -- and the
-# number to measure from a green -DaemonEngine run is now 4 higher than the 68
-# recorded above.
+#   -WithInference    71   <- the minimum, and therefore the floor
+#   -WithIntegration  72
+#   -DaemonEngine     77   (+4 from #551's engine-opt-out block)
+#
+# The floor is the MINIMUM across the configurations that share it, not the
+# largest: every one of them has to clear it. Re-measure the same way when a
+# leg gains or loses an assert that always runs.
 #
 # Tier 1 deliberately has NO floor: CI only ever runs -Tier 2, so there is no
 # green tier-1 run to take a number from, and a guessed floor is either
@@ -2015,7 +2016,7 @@ if ($script:Skip -gt 0) {
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 80 } else { 65 }
+    $floor = if ($Contract) { 80 } else { 71 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
