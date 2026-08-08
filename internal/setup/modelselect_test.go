@@ -224,12 +224,14 @@ func TestSelectBundledModel(t *testing.T) {
 	t.Run("pinned-skips-autoselection", func(t *testing.T) {
 		in := baseInputs(cpuProfile(32), manifests) // capable host
 		in.Pinned = true
-		in.Inference.BundledModelID = "qwen2.5-coder-3b-instruct"
+		// A model the host would NOT pick for itself (a 32 GB box picks
+		// something far larger), so "verbatim" is actually being tested.
+		in.Inference.BundledModelID = "qwen3.5-2b"
 		sel, err := SelectBundledModel(in)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		if sel.ModelID != "qwen2.5-coder-3b-instruct" {
+		if sel.ModelID != "qwen3.5-2b" {
 			t.Errorf("pinned id should be used verbatim, got %q", sel.ModelID)
 		}
 		if !sel.EnableInference {
@@ -306,10 +308,21 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 		}
 	})
 
+	// A pin naming a model whose native window is below the #624 coding
+	// floor is honoured and SAID so — the floor is not enforced for pins.
+	//
+	// The subject needs a live 32k-native model, and after #522 retired the
+	// qwen2.5-coder line there is exactly one: granite4-350m, which is
+	// internal_only. That is not a weakening — an internal_only entry is
+	// shipped and pinnable, and the routing sentinel pins this very model
+	// in production. It does mean the case now depends on the withheld
+	// entry existing; if that ever goes, this needs a manifest fixture
+	// rather than a substitute from the offered set, because the offered
+	// set no longer contains a sub-floor window at all.
 	t.Run("pinned-subfloor-notes-escape-hatch", func(t *testing.T) {
-		in := baseInputs(cpuProfile(8), manifests)
+		in := baseInputs(cpuProfile(8), completeManifests(t))
 		in.Pinned = true
-		in.Inference.BundledModelID = "qwen2.5-coder-7b-instruct"
+		in.Inference.BundledModelID = "granite4-350m"
 		sel, err := SelectBundledModel(in)
 		if err != nil {
 			t.Fatalf("err: %v", err)
@@ -318,4 +331,17 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 			t.Errorf("notes lack the pin floor note: %v", sel.Notes)
 		}
 	})
+}
+
+// completeManifests is the SHIPPED set including internal_only entries.
+// Needed where a test pins a withheld model: BundledManifests deliberately
+// omits them, and a pin is a name somebody handed us rather than a choice
+// we made for them.
+func completeManifests(t *testing.T) []catalog.Manifest {
+	t.Helper()
+	ms, err := catalog.BundledManifestsIncludingInternal()
+	if err != nil {
+		t.Fatalf("BundledManifestsIncludingInternal: %v", err)
+	}
+	return ms
 }

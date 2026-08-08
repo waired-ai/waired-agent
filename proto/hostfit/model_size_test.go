@@ -109,37 +109,37 @@ func TestModelSize_TakesTheLightestVariant(t *testing.T) {
 }
 
 // shippedSizes is the class of every model this build ships, as of
-// 2026-08-08. It is a record of today's catalog, not a contract: #522
-// retires the 2025 generation and will move rows out of it.
+// 2026-08-08. It is a record of today's catalog, not a contract.
 //
 // It is pinned because the classification is the thing users read now.
 // A catalog change that silently moves a model between classes is a
 // change to what the product tells people about their hardware, and
 // this is where that shows up as a diff.
+//
+// #522 dropped seven rows from it — the 2025 generation — and no
+// surviving model changed class, which is the useful half of the diff:
+// the retirement removed entries, it did not re-describe anybody's
+// hardware. Gone: glm-4.5-air-106b-a12b, qwen3-coder-480b-a35b-instruct
+// and qwen3-coder-next-80b-a3b-instruct (large); qwen2.5-coder-14b-instruct
+// and qwen3-coder-30b-a3b-instruct (medium); qwen2.5-coder-3b-instruct
+// and qwen2.5-coder-7b-instruct (small).
 var shippedSizes = map[string]string{
-	"deepseek-v4-flash":                 hostfit.ModelSizeLarge,
-	"glm-4.5-air-106b-a12b":             hostfit.ModelSizeLarge,
-	"glm-5.2":                           hostfit.ModelSizeLarge,
-	"gpt-oss-120b":                      hostfit.ModelSizeLarge,
-	"qwen3-coder-480b-a35b-instruct":    hostfit.ModelSizeLarge,
-	"qwen3-coder-next-80b-a3b-instruct": hostfit.ModelSizeLarge,
-	"qwen3.5-122b-a10b":                 hostfit.ModelSizeLarge,
+	"deepseek-v4-flash": hostfit.ModelSizeLarge,
+	"glm-5.2":           hostfit.ModelSizeLarge,
+	"gpt-oss-120b":      hostfit.ModelSizeLarge,
+	"qwen3.5-122b-a10b": hostfit.ModelSizeLarge,
 
-	"gpt-oss-20b":                  hostfit.ModelSizeMedium,
-	"qwen2.5-coder-14b-instruct":   hostfit.ModelSizeMedium,
-	"qwen3-coder-30b-a3b-instruct": hostfit.ModelSizeMedium,
-	"qwen3.5-27b":                  hostfit.ModelSizeMedium,
-	"qwen3.5-35b-a3b":              hostfit.ModelSizeMedium,
-	"qwen3.6-27b":                  hostfit.ModelSizeMedium,
-	"qwen3.6-35b-a3b":              hostfit.ModelSizeMedium,
+	"gpt-oss-20b":     hostfit.ModelSizeMedium,
+	"qwen3.5-27b":     hostfit.ModelSizeMedium,
+	"qwen3.5-35b-a3b": hostfit.ModelSizeMedium,
+	"qwen3.6-27b":     hostfit.ModelSizeMedium,
+	"qwen3.6-35b-a3b": hostfit.ModelSizeMedium,
 
-	"granite4-350m":             hostfit.ModelSizeSmall,
-	"qwen2.5-coder-3b-instruct": hostfit.ModelSizeSmall,
-	"qwen2.5-coder-7b-instruct": hostfit.ModelSizeSmall,
-	"qwen3.5-0.8b":              hostfit.ModelSizeSmall,
-	"qwen3.5-2b":                hostfit.ModelSizeSmall,
-	"qwen3.5-4b":                hostfit.ModelSizeSmall,
-	"qwen3.5-9b":                hostfit.ModelSizeSmall,
+	"granite4-350m": hostfit.ModelSizeSmall,
+	"qwen3.5-0.8b":  hostfit.ModelSizeSmall,
+	"qwen3.5-2b":    hostfit.ModelSizeSmall,
+	"qwen3.5-4b":    hostfit.ModelSizeSmall,
+	"qwen3.5-9b":    hostfit.ModelSizeSmall,
 }
 
 func TestModelSize_ShippedCatalog(t *testing.T) {
@@ -170,7 +170,14 @@ func TestModelSize_ShippedCatalog(t *testing.T) {
 // either one. The closest approaches as of 2026-08-08 are 7.4 %
 // (qwen3.5-9b, 7,583 MiB under the 8 GB line) and 24.1 %
 // (qwen3.5-35b-a3b, 24,873 MiB under the 32 GB line) — there is nothing
-// at all between 24,873 and 48,721 MiB.
+// at all between 24,873 and 62,632 MiB.
+//
+// #522 widened the upper gap rather than narrowing it: the build that
+// used to sit above the 32 GB line at 48,721 MiB was
+// qwen3-coder-next-80b-a3b-instruct, which retired with the rest of the
+// 2025 generation, so the next one up is now gpt-oss-120b at 62,632.
+// Both closest approaches are unchanged, because neither is a retiring
+// model.
 //
 // A future variant landing inside the margin is not automatically wrong,
 // but it is a model whose class turns on the overhead calibration rather

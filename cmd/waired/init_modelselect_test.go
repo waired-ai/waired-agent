@@ -18,7 +18,7 @@ import (
 // what is pinned.
 func TestBundledModelLabel_ResolvesAgainstTheCompleteSet(t *testing.T) {
 	t.Run("offered model", func(t *testing.T) {
-		if got := bundledModelLabelDefault("qwen2.5-coder-3b-instruct"); got != "Qwen2.5 Coder 3B Instruct" {
+		if got := bundledModelLabelDefault("qwen3.5-2b"); got != "Qwen3.5 2B" {
 			t.Errorf("label = %q, want the display name with the parenthetical dropped", got)
 		}
 	})
@@ -76,8 +76,14 @@ func TestCanonicalBundledModelIDResolvesAnInternalModel(t *testing.T) {
 		t.Errorf("canonicalBundledModelID(%q) = %q, want %q", alias, got, canonical)
 	}
 	// The offered set still resolves, and an unknown name is still kept.
-	if got := canonicalBundledModelID("qwen2.5-coder-14b"); got != "qwen2.5-coder-14b-instruct" {
-		t.Errorf("canonicalBundledModelID(qwen2.5-coder-14b) = %q", got)
+	if got := canonicalBundledModelID("qwen3.6-35b"); got != "qwen3.6-35b-a3b" {
+		t.Errorf("canonicalBundledModelID(qwen3.6-35b) = %q", got)
+	}
+	// A RETIRED alias resolves to its successor rather than being kept
+	// verbatim, which is catalog.ResolveModel doing its job: a pin written
+	// against an older release outlives the catalog it was written for.
+	if got := canonicalBundledModelID("qwen2.5-coder-14b"); got != "qwen3.5-9b" {
+		t.Errorf("canonicalBundledModelID(qwen2.5-coder-14b) = %q, want the successor qwen3.5-9b", got)
 	}
 	if got := canonicalBundledModelID("model-from-a-newer-catalog"); got != "model-from-a-newer-catalog" {
 		t.Errorf("canonicalBundledModelID kept nothing for an unknown id: %q", got)

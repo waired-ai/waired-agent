@@ -7,7 +7,7 @@
       "name": "LiveBench (current table)",
       "url": "https://livebench.ai/",
       "last_updated": "2026-06-25",
-      "notes": "Independent single-harness runs, questions refreshed to resist contamination; results published as an unauthenticated CSV (table_YYYY_MM_DD.csv). Caveat when reading coverage: the roster resets with each question refresh, and open-weight models are what falls off — the 2026-06-25 table is 38 models, 34 of them frontier API models."
+      "notes": "Independent single-harness runs, questions refreshed to resist contamination; results published as an unauthenticated CSV (table_YYYY_MM_DD.csv). Caveat when reading coverage: the roster resets with each question refresh, and open-weight models are what falls off \u2014 the 2026-06-25 table is 38 models, 34 of them frontier API models."
     },
     {
       "id": "swe_rebench",
@@ -110,7 +110,7 @@
           "source": "swe_rebench",
           "url": "https://swe-rebench.com/leaderboard",
           "retrieved": "2026-08-05",
-          "notes": "Above qwen3.6-35b-a3b (24.7) even though the ladder places the 35B-A3B higher. Recorded rather than acted on — see that model's notes."
+          "notes": "Above qwen3.6-35b-a3b (24.7) even though the ladder places the 35B-A3B higher. Recorded rather than acted on \u2014 see that model's notes."
         },
         "swe_bench_verified": {
           "value": 77.2,
@@ -129,7 +129,7 @@
           "retrieved": "2026-08-05"
         }
       },
-      "notes": "This model sits above qwen3.6-27b in the ladder (89/90 vs 70/72) while the one accepted source covering both puts it 6.5 points below. Left as it is, deliberately (owner decision, 2026-08-05): one window of 111 problems is thin, LiveBench's current table carries no 35B-A3B so nothing cross-checks it, and the MoE's speed is a real axis quality_tier does not encode — it activates 3.3B of 35B per token against the 27B dense model's 27B. Revisit when a second accepted source covers the pair. The current order is not a measurement either: the composite uses TOTAL parameters by design, which structurally places a MoE above a dense model of similar size."
+      "notes": "This model sits above qwen3.6-27b in the ladder (89/90 vs 70/72) while the one accepted source covering both puts it 6.5 points below. Left as it is, deliberately (owner decision, 2026-08-05): one window of 111 problems is thin, LiveBench's current table carries no 35B-A3B so nothing cross-checks it, and the MoE's speed is a real axis quality_tier does not encode \u2014 it activates 3.3B of 35B per token against the 27B dense model's 27B. Revisit when a second accepted source covers the pair. The current order is not a measurement either: the composite uses TOTAL parameters by design, which structurally places a MoE above a dense model of similar size."
     },
     "qwen3.5-35b-a3b": {
       "scores": {
@@ -139,16 +139,6 @@
           "url": "https://swe-rebench.com/leaderboard",
           "retrieved": "2026-08-05",
           "notes": "Below its qwen3.6 counterpart (24.7), which is the direction the ladder already has them in."
-        }
-      }
-    },
-    "qwen3-coder-next-80b-a3b-instruct": {
-      "scores": {
-        "swe_bench_verified": {
-          "value": 70.6,
-          "url": "https://www.swebench.com/",
-          "retrieved": "2026-05-16",
-          "notes": "Recorded only. No accepted source carries this model."
         }
       }
     },

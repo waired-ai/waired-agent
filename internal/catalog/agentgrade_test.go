@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -72,9 +73,22 @@ func TestUnmeasurableEntriesCarryReasons(t *testing.T) {
 		if strings.TrimSpace(reason) == "" {
 			t.Errorf("%s: unmeasurable with no reason", modelID)
 		}
+		// SHIPPED OR RETIRED, for the same reason
+		// TestAgentGradeKeysExistInCatalog takes retired keys: an
+		// unmeasurable declaration is the record of WHY a model was never
+		// measured, and a retirement whose reason says "unmeasurable on
+		// every runner we have" needs that record to still exist. #522
+		// retired three of them at once (glm-4.5-air-106b-a12b,
+		// qwen3-coder-480b-a35b-instruct, qwen3-coder-next-80b-a3b-instruct).
+		//
+		// A typo is still caught: a name that is neither shipped nor in
+		// the retirement table fails exactly as before.
+		if _, gone := LookupRetirement(modelID); gone {
+			continue
+		}
 		if !known[modelID] {
-			t.Errorf("%s: declared unmeasurable but is not in the bundled catalog — "+
-				"a stale exemption silently excuses nothing", modelID)
+			t.Errorf("%s: declared unmeasurable but is neither in the bundled catalog nor "+
+				"in the retirement table — a stale exemption silently excuses nothing", modelID)
 		}
 	}
 }
@@ -448,20 +462,39 @@ func TestFailuresOnTheShippedCatalog(t *testing.T) {
 	// The entry that WAS on this list left through the retirement map, and
 	// its evidence has to survive the manifest that carried it. Everything
 	// retired keeps a resolvable successor and a record of what it did.
+	//
+	// The reason requirement used to be the literals "95% confidence" and
+	// "#200", which encoded the shape of the ONE retirement that existed:
+	// a model deleted for a measured failure rate, decided in #200. #522
+	// retired seven at once for a reason that is not a measurement — they
+	// are not the generation the catalog carries (#518) — and three of
+	// them are `unmeasurable`, so demanding a confidence bound would have
+	// forced a number nobody has.
+	//
+	// What survives is the part that was actually load-bearing: a reason
+	// must CITE WHERE IT WAS DECIDED, so a reader can find the argument
+	// rather than take the sentence on trust. A measurement, where one
+	// exists, is evidence inside that argument and not a substitute for
+	// it — hence the second check, which holds every retirement that
+	// claims a bound to stating it properly rather than waving at one.
 	if len(Retirements()) == 0 {
 		t.Fatal("nothing has ever been retired — this half is asserting nothing")
 	}
+	issueRef := regexp.MustCompile(`#\d+`)
 	for _, r := range Retirements() {
 		if _, ok := LookupByAlias(r.SuccessorModelID, all); !ok {
 			t.Errorf("retired %v points at successor %q, which the catalog does not ship",
 				r.Names, r.SuccessorModelID)
 		}
-		if !strings.Contains(r.Reason, "95% confidence") {
-			t.Errorf("retirement of %v must keep the evidence behind the claim, got %q",
-				r.Names, r.Reason)
+		if !issueRef.MatchString(r.Reason) {
+			t.Errorf("retirement of %v does not cite where it was decided — no issue "+
+				"reference in %q", r.Names, r.Reason)
 		}
-		if !strings.Contains(r.Reason, "#200") {
-			t.Errorf("retirement of %v does not cite where it was decided: %q",
+		// A claimed rate has to carry its bound. "failed 12 of 72" without
+		// one is a number with no interval, which is what #475 was opened
+		// about; a generation reason makes no rate claim and is exempt.
+		if strings.Contains(r.Reason, "failure rate") && !strings.Contains(r.Reason, "confidence") {
+			t.Errorf("retirement of %v claims a failure rate without a confidence bound: %q",
 				r.Names, r.Reason)
 		}
 	}

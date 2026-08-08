@@ -331,7 +331,7 @@ func TestModelTargetInertShapes(t *testing.T) {
 // Product contract, using a real shipped alias so a catalog change that
 // dropped alias support would fail here rather than silently.
 func TestModelTargetResolvesAnAliasToTheCatalogID(t *testing.T) {
-	const alias, canonical = "qwen2.5-coder-14b", "qwen2.5-coder-14b-instruct"
+	const alias, canonical = "qwen3.6-35b", "qwen3.6-35b-a3b"
 	s := &scriptedState{states: []management.SetupStateResponse{wizardState(alias)}}
 	if got := newScriptedTarget(t, s).Poll(); got != canonical {
 		t.Errorf("target = %q for alias %q, want the catalog id %q", got, alias, canonical)

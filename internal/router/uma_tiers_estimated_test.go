@@ -126,8 +126,15 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 // overhead moved — the constant is asserted directly now, so #424's subject no
 // longer rides on which model happens to clear a budget. The 4b is a
 // 262144-native model and the gate prices it at the 200,704 rung: 7403 MiB
-// against 6144. The 4.7 GB coder-7b is the better guard anyway, being the
-// larger model and so the one with less room for an overhead to hide in.
+// against 6144.
+//
+// AMENDED AGAIN 2026-08-08 (#522). qwen2.5-coder-7b was the "better guard,
+// being the larger model", and it retired with the 2025 generation. The
+// largest ollama build that still fits this budget is qwen3.5-2b, so the
+// fitting row is smaller than it was and has correspondingly more room for
+// an overhead to hide in. That is why the overhead is asserted directly
+// above rather than inferred from these rows: the direct assertion is what
+// makes the guard survive its own fixtures being retired.
 func TestUMA8GBFitsMidModelsOnMetal(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -144,7 +151,7 @@ func TestUMA8GBFitsMidModelsOnMetal(t *testing.T) {
 		wantFits bool
 		why      string
 	}{
-		{"qwen2.5-coder-7b-instruct", true, "4.7 GB, 32k-native: its rung IS 32768, and that fits (#424)"},
+		{"qwen3.5-9b", false, "262144-native at 6.6 GB: nowhere near the 6144 MB budget at its rung"},
 		{"qwen3.5-4b", false, "262144-native, so priced at the 200,704 rung: 7403 MiB (#552)"},
 		{"qwen3.5-2b", true, "holds its full native window here, which is why the host keeps local inference"},
 	} {

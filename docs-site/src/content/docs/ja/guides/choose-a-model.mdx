@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: 732d1c282596208f
+sourceHash: 87d116889c767c4c
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -129,7 +129,7 @@ waired models ls --detail     # 各モデルの必要メモリと、このパソ
 		</Tabs>
 
 		モデル ID は[モデルカタログ](/ja/reference/model-catalog/)の ID 列の値です
-		（例: `qwen3-coder-30b-a3b-instruct`）。
+		（例: `qwen3.6-27b`）。
 
 		<Aside type="note" title="同じ設定をする別の方法">
 			環境変数 `WAIRED_INFERENCE_BUNDLED_MODEL_ID` と
@@ -148,7 +148,7 @@ waired status --observability
 **Engine** の行に、いま読み込まれているモデルが表示されます。
 
 ```
-Engine:   ready (model=qwen3-coder-30b-a3b-instruct, 0/4 slots used, inflight=0)
+Engine:   ready (model=qwen3.6-27b, 0/4 slots used, inflight=0)
 ```
 
 `not ready` と出る場合、多くはまだダウンロード中です（`waired models ls` で進捗を確認）。

@@ -75,15 +75,32 @@ const (
 // 8 GB matches the smallest reasonable model card we ship.
 const MinVLLMVRAMMB = 8 * 1024
 
-// InstallQualityFloorTier is the coding-quality floor for install-time
-// model auto-selection (#517): the installer picks the largest catalog
-// model that fits the host AND clears this quality_tier. When even the
-// best-fitting model is below it — only sub-coding tiny models fit —
-// the host is treated as under-spec and local inference is skipped (the
-// node still enrolls and routes to peers).
+// Deprecated: nothing reads this. The install-time coding-quality floor
+// it named was abolished in waired-agent#522 (owner decision
+// 2026-08-08), and refusal is now capacity (OllamaCapacityFit — certain
+// OOM) plus the #624 native window, both of which RankModels already
+// applies.
 //
-// 30 == qwen2.5-coder-3b-instruct, the smallest usable coding model we
-// ship. qwen3.5-2b (tier 27) and qwen3.5-0.8b (tier 12) fall below it.
+// It was "the installer picks the largest catalog model that fits the
+// host AND clears this quality_tier", anchored at 30 ==
+// qwen2.5-coder-3b-instruct. That anchor retired with the 2025
+// generation, and the deeper problem was that a tier threshold could
+// not say what it was being asked to say: within the one generation the
+// catalog carries, quality_tier is 10*log10(params) -
+// 5*log10(footprint) (#518), so the floor was a size cutoff written the
+// long way round — and the agent-grade harness, the only measurement
+// that could have ranked those models, is not monotone in size across
+// them.
+//
+// The declaration stays because scripts/ci/protoguard fails on both
+// `const removed` and `const value changed`, with no exemption
+// mechanism: this module is a published contract and the control plane
+// compiles against whatever tag it has pinned. Consumers migrate first;
+// the declaration can go in a later release once nothing on either side
+// reads it.
+//
+// quality_tier itself is unaffected. It remains the internal ranking
+// order, the only record of a tier_override, and a published field.
 const InstallQualityFloorTier = 30
 
 // NativeContextFloorTokens gates manifest membership in the

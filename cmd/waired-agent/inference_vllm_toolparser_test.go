@@ -14,10 +14,12 @@ func TestResolveVLLMToolParser(t *testing.T) {
 		override string
 		want     string
 	}{
-		{"qwen2.5-coder ships the Hermes template", "qwen2.5-coder-7b-instruct", "", vllmParserHermes},
-		{"qwen3-coder ships the XML dialect", "qwen3-coder-30b-a3b-instruct", "", vllmParserQwen3XML},
+		// The qwen2.5-coder (hermes), qwen3-coder (qwen3_xml) and
+		// glm-4.5-air (glm45) rows went with #522's retirement, and their
+		// map entries went with them — an entry for a model the catalog
+		// no longer ships is dead code that reads as coverage.
+		{"qwen3.6 ships the XML dialect", "qwen3.6-27b", "", vllmParserQwen3XML},
 		{"gpt-oss ships harmony", "gpt-oss-20b", "", vllmParserOpenAI},
-		{"glm-4.5-air", "glm-4.5-air-106b-a12b", "", vllmParserGLM45},
 		{"deepseek v4 flash", "deepseek-v4-flash", "", vllmParserDeepSeekV4},
 
 		// An unestablished template must NOT be guessed into a
@@ -30,7 +32,7 @@ func TestResolveVLLMToolParser(t *testing.T) {
 		// The override is the escape hatch for a parser vLLM registered
 		// after this binary was built, so it is passed through
 		// unvalidated and outranks the table.
-		{"override wins over a mapped model", "qwen2.5-coder-7b-instruct", "llama3_json", "llama3_json"},
+		{"override wins over a mapped model", "qwen3.6-27b", "llama3_json", "llama3_json"},
 		{"override supplies a parser for an unmapped model", "glm-5.2", "glm47", "glm47"},
 	}
 
@@ -51,6 +53,12 @@ func TestResolveVLLMToolParser(t *testing.T) {
 // would cost the whole engine rather than just tool calling — and no
 // unit test that only exercises the mapped models would notice.
 func TestVLLMToolParserTableUsesRegisteredNames(t *testing.T) {
+	// hermes and glm45 have no row in the table since #522 retired the
+	// models that used them. They stay declared: these are vLLM's
+	// registered parser names read out of its source at the pinned
+	// version, not names we invented, and the next model of either
+	// lineage needs them back. The check below is over the table's
+	// VALUES, so an unused constant costs nothing here.
 	registered := map[string]bool{
 		vllmParserHermes:     true,
 		vllmParserQwen3XML:   true,
@@ -76,11 +84,12 @@ func TestVLLMToolParserTableUsesRegisteredNames(t *testing.T) {
 // variant has to be paired with a decision here. Deleting an entry is
 // the fix — measure the model, add the row.
 var vllmToolParserUnestablished = map[string]string{
-	// The catalog id says "coder" but the variant loads
-	// Qwen/Qwen3-Next-80B-A3B-Instruct, the general Instruct model,
-	// whose template is Hermes-style rather than the Coder XML one. The
-	// two disagree, so neither parser is established.
-	"qwen3-coder-next-80b-a3b-instruct": "id says coder, repo is the general Instruct model",
+	// qwen3-coder-next-80b-a3b-instruct sat here — its id said "coder"
+	// while the variant loaded the general Instruct model, so neither
+	// parser was established — until #522 retired it. Dropped rather than
+	// kept: the guard below iterates the shipped manifests, so an
+	// exemption for a model nobody ships excuses nothing.
+	//
 	// vLLM 0.24.0 documents glm45 for GLM-4.5/4.6 and glm47 for GLM-4.7.
 	// zai-org/GLM-5.2 is a later major version with neither listed.
 	"glm-5.2": "no vLLM parser documented for the GLM-5 line",

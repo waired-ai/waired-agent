@@ -51,7 +51,7 @@ page stops you.
 
 <a id="model"></a>
 **Model**
-: The AI itself — a multi-gigabyte file of learned parameters. `qwen3-coder-30b`
+: The AI itself — a multi-gigabyte file of learned parameters. `qwen3.6-27b`
   is a model. Bigger models give better answers and need more memory.
 
 <a id="inference"></a>

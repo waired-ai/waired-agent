@@ -5,7 +5,7 @@ meta:
   audience: モデルを選ぶ人、何が動くか確認したい人
   needs: 何も要りません
   time: 自分のハードウェアの行を引く
-sourceHash: 6ac936b71ce42eb4
+sourceHash: c453cbfe7507e292
 ---
 
 import ModelCatalogTable from '../../../../components/ModelCatalogTable.astro';
@@ -276,3 +276,15 @@ Waired ならどれを選ぶか — を確認できます。`waired models ls` �
 | 退役 | 代わりに使うモデル | 理由 |
 |---|---|---|
 | `qwen2.5-coder-0.5b-instruct` | `qwen3.5-0.8b` | コーディングエージェントが依存するツール呼び出しを安定して行えなかったため。 |
+| `qwen2.5-coder-3b-instruct` | `qwen3.5-2b` | 1 つ前の世代。後継のほうが小さく、より安定して応答します。 |
+| `qwen2.5-coder-7b-instruct` | `qwen3.5-4b` | 1 つ前の世代。会話を 32,000 トークンまでしか保持できず、コーディング作業には短すぎました。 |
+| `qwen2.5-coder-14b-instruct` | `qwen3.5-9b` | 7B と同じ 32,000 トークンの制限。 |
+| `qwen3-coder-30b-a3b-instruct` | `qwen3.6-27b` | 同種のモデルの 1 つ前の世代。 |
+| `qwen3-coder-next-80b-a3b-instruct` | `qwen3.6-35b-a3b` | 1 つ前の世代。後継のほうが小さく、成績も上です。 |
+| `qwen3-coder-480b-a35b-instruct` | `glm-5.2` | 1 つ前の世代。 |
+| `glm-4.5-air-106b-a12b` | `glm-5.2` | 1 つ前の世代で、会話を 131,000 トークンまでしか保持できませんでした。 |
+
+0.5B より下の行は 1 回のリリースでまとめて退役しました。Waired は同時に 1 世代の
+モデルだけを載せる方針で、これらは現行世代の 1 つ前にあたります。個々のモデルへの
+評価ではありません。いくつかは良いモデルでしたし、計測できたものは単純に後継に
+負けただけです。

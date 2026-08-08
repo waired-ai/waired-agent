@@ -438,26 +438,44 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 		engineVersion string
 		wantModel     string
 		wantVariant   string
+		// wantNoFit expects ErrHardwareInsufficient: this engine has no
+		// build this host can run. Distinct from a wrong pick, and the
+		// only honest expectation once a class of hardware loses its
+		// last variant on an engine.
+		wantNoFit bool
 	}{
 		{
-			name: "8GB NVIDIA dGPU (RTX 3060/4060)",
+			// These two picked qwen2.5-coder's awq-int4 builds (8000 and
+			// 16000 MB of VRAM) until #522 retired the 2025 generation.
+			// Every vLLM build under 24 GB went with it — the smallest
+			// left is qwen3.6-27b/awq-int4 at 24000 MB — so vLLM has
+			// nothing for a card this size and the picker says so.
+			//
+			// A user never reaches this state: PickEngine will not name
+			// an engine the catalog cannot feed (#572), so these hosts
+			// serve on ollama. That is asserted in
+			// TestPickEngine_ShippedCatalog_TodaysVerdicts; here the
+			// subject is the picker with the engine already forced, which
+			// is what an explicit `--prefer vllm` does.
+			//
+			// #575 tracks adding vLLM builds for the qwen3.5 line, which
+			// would give these rows a model again.
+			name: "8GB NVIDIA dGPU (RTX 3060/4060), vllm forced",
 			hw: hardware.Profile{
 				RAMTotalGB: 32,
 				GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4060", VRAMTotalMB: 8000}},
 			},
-			engine:      "vllm",
-			wantModel:   "qwen2.5-coder-7b-instruct",
-			wantVariant: "awq-int4",
+			engine:    "vllm",
+			wantNoFit: true,
 		},
 		{
-			name: "16GB NVIDIA dGPU (RTX 4060 Ti)",
+			name: "16GB NVIDIA dGPU (RTX 4060 Ti), vllm forced",
 			hw: hardware.Profile{
 				RAMTotalGB: 32,
 				GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4060 Ti", VRAMTotalMB: 16000}},
 			},
-			engine:      "vllm",
-			wantModel:   "qwen2.5-coder-14b-instruct",
-			wantVariant: "awq-int4",
+			engine:    "vllm",
+			wantNoFit: true,
 		},
 		{
 			name: "24GB NVIDIA dGPU (RTX 4090)",
@@ -481,9 +499,11 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 			},
 			engine: "vllm",
 			// #624: gpt-oss-120b (tier 88) is 131072-native and excluded
-			// by the context floor; the best 262144-native vllm fit is
-			// qwen3-coder-next-80b (tier 82).
-			wantModel:   "qwen3-coder-next-80b-a3b-instruct",
+			// by the context floor. qwen3-coder-next-80b (tier 82) was
+			// the best 262144-native vllm fit until #522 retired it, so
+			// the answer steps down to the only vLLM build the pinned
+			// generation ships.
+			wantModel:   "qwen3.6-27b",
 			wantVariant: "awq-int4",
 		},
 		{
@@ -536,8 +556,15 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 				UsableVRAMMB:  384 * 1024,
 				GPUs:          []hardware.GPU{{Vendor: "apple", Model: "Apple M4 Ultra"}},
 			},
-			engine:      "ollama",
-			wantModel:   "qwen3-coder-480b-a35b-instruct",
+			engine: "ollama",
+			// qwen3-coder-480b (tier 92) held this row until #522. The
+			// biggest ollama build the pinned generation ships is
+			// qwen3.6-35b-a3b (tier 90) — a 512 GB Mac steps down two
+			// tier points and loses nothing else.
+			wantModel: "qwen3.6-35b-a3b",
+			// q4-gguf, not mtp: this row sets no engineVersion, and the
+			// mtp build carries a MinEngineVersion floor that an unknown
+			// version fails closed on.
 			wantVariant: "q4-gguf",
 		},
 	}
@@ -545,6 +572,13 @@ func TestPickModel_BundledCatalog_HardwareTiers(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			pick, err := PickModel(PickInput{Catalog: ms, Hardware: c.hw, Engine: c.engine, EngineVersion: c.engineVersion})
+			if c.wantNoFit {
+				if !errors.Is(err, ErrHardwareInsufficient) {
+					t.Fatalf("want ErrHardwareInsufficient, got pick=%s/%s err=%v",
+						pick.Manifest.ModelID, pick.Variant.VariantID, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("PickModel: %v (reasons may show why no variant fit)", err)
 			}
