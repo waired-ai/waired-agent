@@ -443,6 +443,61 @@ assert_reinit_resumes() {
   [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
 }
 
+# assert_reinit_engine_optout: on a host where engine installs are turned
+# off, `waired init` must not report the operator's own instruction back to
+# them as a failed install (waired-agent#551).
+#
+# The arm under test is installEngineAsExecutor's engineActionSkipOptOut. It
+# needs three things true AT ONCE — the host wants inference, it has no
+# engine, and WAIRED_NO_OLLAMA is set — and until #551 the only place in all
+# of CI where that happened was the Windows daemon-path leg, by accident: a
+# `$env:` assignment there outlives the command that made it, so the leg told
+# the executor not to install the engine the leg exists to prove it installs.
+# That is fixed in installtest-windows.ps1, which is why this exists: without
+# it, fixing the leak would have deleted the last runtime coverage of an arm
+# whose exit status this very issue changes.
+#
+# Here it is deliberate and cheap. The lean tier-2 guest is already enrolled
+# with no engine, so the whole probe is one extra init that downloads nothing.
+# --inference-enabled=true is what makes it non-vacuous: without it the daemon
+# answers `disabled`, daemonWantsEngine returns false, and the executor never
+# reaches the decision — the leg would go green having tested nothing, which
+# is the #178/#215 shape. Assert 2 is what proves that did not happen.
+#
+# Exactly four asserts, always — the tier-2 floor counts on it.
+assert_reinit_engine_optout() {
+  local guest="$1" name log rc=0
+  name="$(_it_dev_name "$guest")"
+  mkdir -p "$IT_LOGDIR"
+  log="$IT_LOGDIR/reinit-optout-$name.log"
+
+  it_log "re-running waired init in $guest with engine installs turned off (waired-agent#551)"
+  gx "$guest" env WAIRED_NO_EMOJI=1 WAIRED_NO_OLLAMA=1 waired init \
+    --control "$IT_CONTROL_URL" --device-name "$name" \
+    --inference-enabled=true --non-interactive --skip-integration \
+    >"$log" 2>&1 || rc=$?
+
+  [ "$rc" = 0 ] \
+    && ok "re-init with engine installs turned off exits 0 (waired-agent#551)" \
+    || bad "re-init exited $rc with WAIRED_NO_OLLAMA set — an opt-out the operator configured is not a failed install — see $log"
+  grep -q "$IT_ENGINE_OPTOUT_RE" "$log" \
+    && ok "the executor reached the opt-out arm and said so" \
+    || bad "init never reported the engine install as skipped — the opt-out arm was not reached, so the asserts around it prove nothing — see $log"
+  grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
+    && bad "init called the operator's own opt-out a failed install — see $log" \
+    || ok "init does not report the opt-out as a failed install"
+  gx "$guest" test -x "$IT_BUNDLED_OLLAMA_BIN" \
+    && bad "an engine was installed at $IT_BUNDLED_OLLAMA_BIN despite WAIRED_NO_OLLAMA" \
+    || ok "no engine was installed while the opt-out was set"
+
+  [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
+  # Leave the guest as we found it. The asserts after this one were measured
+  # against a host with inference off, and `waired inference off` is the only
+  # way back: :9476 refuses mutating writes over TCP (waired#838).
+  gx "$guest" waired inference off >/dev/null 2>&1 || \
+    it_warn "could not turn inference back off in $guest after the #551 probe"
+}
+
 # Bundled engine path on Linux: waired's BUNDLED Ollama lives under the state
 # dir (#567) — it is NOT a system ollama on PATH, and it serves on the
 # waired-owned port :9475, never the upstream default :11434.
@@ -466,6 +521,28 @@ IT_BUNDLED_OLLAMA_BIN=/var/lib/waired/runtimes/ollama/bin/ollama
 # still exists in the product source. Mirror any change in
 # installtest-macos.sh and installtest-windows.ps1.
 IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
+
+# The two strings the engine-opt-out probe greps for (waired-agent#551), under
+# the same guard and for the same reason.
+#
+# IT_ENGINE_OPTOUT_RE is a POSITIVE grep, so a rename shows up as a red leg on
+# its own. IT_INSTALL_FAILURE_BOX_RE is asserted ABSENT — init must not call
+# the operator's own opt-out a failed install — and an absent-assert for
+# wording the product stopped printing passes forever, which is #178 with the
+# sign flipped.
+#
+# What actually catches a rename of that second string is
+# TestRunInitViaDaemon_EngineInstallFailureSkipsTheWait, not this guard's
+# "still in the product" half: that half searches *.go, and
+# the test file's own copy satisfies it. Measured, not assumed — renaming the
+# string leaves the guard green and turns the unit test red. The guard earns
+# its entry on the OTHER check, that the three harnesses agree on one literal.
+#
+# Both are literals in BRE (grep) and in .NET regex (Select-String): the only
+# metacharacters are the parentheses, which capture a literal either way. That
+# is what lets one declaration be shared byte-for-byte across three harnesses.
+IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
+IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready — not because anything is broken (#382). The benchmark assert

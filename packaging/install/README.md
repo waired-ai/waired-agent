@@ -196,7 +196,7 @@ Shared between `install.sh` and `install.ps1`:
 | `WAIRED_INSTALL_BASE_URL` | Override the URL hosting `install.sh` / `install.ps1` + the OS binaries (tests / mirrors). |
 | `WAIRED_INSTALL_REPO`     | Override the GitHub repo whose Releases API resolves `latest` during `--check` / `--update` on macOS + Windows (Linux uses the apt candidate). Default `waired-ai/waired-agent`. |
 | `WAIRED_CLEAN`            | If non-empty, same as `--clean` / `-Clean` (full wipe, then a fresh install). The env form is how the piped Windows `iwr \| iex` one-liner opts in — the pipeline cannot pass named parameters. |
-| `WAIRED_NO_OLLAMA`        | If non-empty, `waired init` skips the Ollama engine install (same as `--skip-ollama` / `-SkipOllama`). The installers no longer install the engine themselves — init owns the decision and the install, right after its "run local inference?" questions. |
+| `WAIRED_NO_OLLAMA`        | If non-empty, `waired init` skips the Ollama engine install (same as `--skip-ollama` / `-SkipOllama`). The installers no longer install the engine themselves — init owns the decision and the install, right after its "run local inference?" questions. init says the install was skipped and **exits 0**: this is an instruction, not a failed install, so it never raises `WAIRED_INIT_LOCAL_AI_DOWN` (3) (waired-agent#551). |
 
 macOS-only:
 

@@ -290,7 +290,22 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// measure. Say what happened once, here, instead of
 				// parking the terminal on "Waiting for the AI engine to
 				// start…" until the setup budget runs out.
-				printEngineInstallFailure(os.Stdout, engineErr, setupActive)
+				//
+				// Skipping the wait is right for the opt-out too — no engine
+				// is coming either way — but the failure block is not: the
+				// arm already said the install was skipped and named the
+				// variable, and following the operator's own instruction with
+				// printEngineInstallFailure's headline reports their decision
+				// back to them as a fault (#551). The closing box says what
+				// this host ended up with.
+				//
+				// Both of those strings are grepped by the installtest
+				// harnesses and pinned by harness-failure-strings-guard.sh, so
+				// they are deliberately NOT quoted here: a comment holding the
+				// literal is enough to keep that guard green through a rename.
+				if !errors.Is(engineErr, errEngineOptOut) {
+					printEngineInstallFailure(os.Stdout, engineErr, setupActive)
+				}
 			} else {
 				// #756: the daemon pulls the bundled model in the background
 				// after enroll, so the daemon-mediated init used to return while a
@@ -632,6 +647,10 @@ type daemonSummary struct {
 // takeover, and on a budget that simply elapsed. Only a STATED fault
 // counts, which is the same rule the box above is chosen by — and the
 // reason they are derived from one struct rather than decided twice.
+//
+// And an engineErr is not automatically a fault: engine installs turned
+// off on this host is an instruction the operator gave, so it exits 0
+// (#551). See engineOptOut.
 func (s daemonSummary) exitErr() error {
 	// benchFailed joins the other two rather than being a warning with a
 	// zero exit: to an installer "local AI is down" is a statement about
@@ -639,10 +658,29 @@ func (s daemonSummary) exitErr() error {
 	// cannot complete one answers no. Reachable only from a STATED
 	// failure, never from a skipped benchmark, so a gateway-only host and
 	// an external endpoint keep exiting 0 (#310's rule, #552's case).
+	if s.engineOptOut() {
+		return nil
+	}
 	if s.engineErr != nil || s.engineFailure != "" || s.benchFailed {
 		return errLocalAIDown
 	}
 	return nil
+}
+
+// engineOptOut reports whether the only reason this host has no local AI
+// is the one its operator configured (#551).
+//
+// Same rule for the box and for the exit code, in one place, for the
+// reason exitErr gives above: an installer branching on 3 and a person
+// reading the box must not be told different things about one run.
+//
+// The two engine faults are checked as well — not because either can
+// happen alongside an opt-out today (no engine was installed, so nothing
+// can be down and nothing can be benchmarked), but so that this cannot
+// become the arm that swallows a real fault if one ever does.
+func (s daemonSummary) engineOptOut() bool {
+	return errors.Is(s.engineErr, errEngineOptOut) &&
+		s.engineFailure == "" && !s.benchFailed
 }
 
 // printDaemonSummaryBox renders the one box `waired init` ends on.
@@ -659,8 +697,23 @@ func (s daemonSummary) exitErr() error {
 // where the files are already there. The benchmark arm comes last of the
 // three for the same reason: it is the only one that needed an engine
 // that installed AND stayed up in order to be reached at all.
+//
+// The opt-out arm sits above the three faults because it is not one of
+// them: it is the same engineErr the install arm reads, refined by asking
+// whether the operator asked for this (#551). engineOptOut clears the
+// other two itself, so a real fault still outranks it.
+//
+// It also sits above the measurement's own box (waired#1099), and that
+// order is the load-bearing one, because those two are the only endings
+// that are not faults and a reader could mistake either for the other.
+// The remedies decide it: that box says `waired inference on`, which on
+// a host that will not install an engine flips a toggle and leaves the
+// operator with no local AI and no idea why. Naming the opt-out is the
+// only one of the two that is actionable here.
 func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 	switch {
+	case s.engineOptOut():
+		printDaemonEngineOptOutBox(out, s.accountEmail, s.claudeRouted)
 	case s.engineErr != nil:
 		printDaemonEngineFailedBox(out, s.accountEmail)
 	case s.engineFailure != "":
@@ -758,6 +811,42 @@ func printDaemonEngineFailedBox(out io.Writer, accountEmail string) {
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
 	lines = append(lines, dim("Local AI is not installed yet; the command above finishes it."))
 	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI still needs installing", lines)
+}
+
+// printDaemonEngineOptOutBox is the summary for a run that signed the
+// device in on a host where engine installs are turned off (#551).
+//
+// box, not boxWarn, and no "could not" anywhere in it: everything the
+// operator asked this run to do, it did. The three warn boxes above all
+// describe something that went wrong and name the command that repairs
+// it; this one describes a host that is finished, and names the command
+// that would ADD local AI to it if the operator ever wants it.
+//
+// Not the success box either. That one ends on "Local inference is live
+// via the waired-agent daemon", which is exactly the sentence this host
+// cannot support — the #310 shape, one reason along.
+//
+// And deliberately NOT worded like printDaemonTooSlowBox, which is the
+// other "local AI is off and nothing failed" ending (waired#1099). Those
+// two are one glance apart and their REMEDIES are opposites: that box
+// says `waired inference on`, which on a host that will not install an
+// engine turns a toggle and produces no local AI at all. So this title
+// names the cause rather than the symptom, and the ordering above puts
+// it first.
+func printDaemonEngineOptOutBox(out io.Writer, accountEmail string, claudeRouted bool) {
+	var lines []string
+	if accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
+	}
+	if claudeRouted {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
+	} else {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
+	}
+	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	lines = append(lines, dim("No local AI here; it can still use the AI on your other computers."))
+	lines = append(lines, dim("Add local AI later with: waired runtimes install ollama"))
+	box(out, emo("✅", "*"), "Waired is signed in — engine installs are turned off here", lines)
 }
 
 // printDaemonEngineDownBox is the summary for a run that signed the

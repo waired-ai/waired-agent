@@ -376,6 +376,26 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 [この計測について詳しく](/ja/reference/model-catalog/#and-if-none-of-them-is-good-enough-here)
 </Expected>
 
+<Expected>
+```
+Engine install skipped (WAIRED_NO_OLLAMA).
+
+*  Waired is signed in — local AI is off on this device
+   Signed in and running — this device is on your network.
+   Engine installs are turned off here; local AI was not installed.
+   Add it later with: waired runtimes install ollama
+```
+
+エンジンをインストールしない指定でセットアップした場合の表示です。Linux と macOS
+なら `--skip-ollama`、Windows なら `-SkipOllama`、あるいは環境変数
+`WAIRED_NO_OLLAMA` が該当します。異常ではありません。パソコンはサインイン済みで
+ネットワークにも参加しており、ほかのマシンで動いている AI を使えます。ここでの
+`waired init` は `0` で終了するため、スクリプトが失敗と取り違えることもありません。
+
+このパソコンでもモデルを動かしたくなったら、`sudo waired runtimes install ollama`
+(Windows は管理者プロンプトで `waired runtimes install ollama`)を実行します。
+</Expected>
+
 <Expected tone="bad">
 ```
 !  The AI engine could not be installed on this device.

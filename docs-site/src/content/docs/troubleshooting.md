@@ -207,6 +207,10 @@ it apart from a sign-in that really did not happen:
 Code `3` is deliberately not `1`: the device really is signed in and usable, and
 re-running sign-in would not change anything about the engine.
 
+If you turned engine installs off yourself — `--skip-ollama` / `-SkipOllama`,
+or `WAIRED_NO_OLLAMA` in the environment — this is not what you are looking at.
+That device gets no engine on purpose, and `waired init` exits `0`.
+
 Common causes:
 
 - **macOS**: the engine app fails its signature check — see

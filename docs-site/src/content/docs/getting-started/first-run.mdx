@@ -383,6 +383,27 @@ whenever you ask.
 [More about that check](/reference/model-catalog/#and-if-none-of-them-is-good-enough-here)
 </Expected>
 
+<Expected>
+```
+Engine install skipped (WAIRED_NO_OLLAMA).
+
+*  Waired is signed in — local AI is off on this device
+   Signed in and running — this device is on your network.
+   Engine installs are turned off here; local AI was not installed.
+   Add it later with: waired runtimes install ollama
+```
+
+This is what you get when you told setup not to install an engine —
+`--skip-ollama` on Linux and macOS, `-SkipOllama` on Windows, or
+`WAIRED_NO_OLLAMA` in the environment. Nothing went wrong: the computer is
+signed in, on your network, and can use the AI running on your other machines.
+`waired init` exits `0` here, so a script cannot mistake it for a failure.
+
+Run `sudo waired runtimes install ollama` (`waired runtimes install ollama`
+from an elevated prompt on Windows) whenever you want this computer to run
+models itself.
+</Expected>
+
 <Expected tone="bad">
 ```
 !  The AI engine could not be installed on this device.

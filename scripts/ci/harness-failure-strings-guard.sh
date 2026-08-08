@@ -17,12 +17,17 @@
 # is that the harness and the producer agree on an exact string, so the check
 # has to be the exact string.
 #
-# Two alternations are covered, both keyed on `waired init`'s transcript:
+# Four alternations are covered, all keyed on `waired init`'s transcript:
 #
-#   install-failure   the engine install did not succeed (#215/#178)
-#   bench-not-ready   the end-of-init benchmark never ran because the model was
-#                     not ready (#382) — the arm that decides whether the red
-#                     names the download or the engine
+#   install-failure     the engine install did not succeed (#215/#178)
+#   bench-not-ready     the end-of-init benchmark never ran because the model
+#                       was not ready (#382) — the arm that decides whether the
+#                       red names the download or the engine
+#   engine-opt-out      the executor reached the WAIRED_NO_OLLAMA arm (#551)
+#   install-failure-box the block init must NOT print for that arm (#551).
+#                       Asserted ABSENT, which is why it is here: an
+#                       absent-assert for wording the product no longer prints
+#                       passes forever — #178 with the sign flipped.
 #
 # Run: bash scripts/ci/harness-failure-strings-guard.sh
 set -euo pipefail
@@ -111,8 +116,10 @@ check_set() {
 }
 
 fail=0
-check_set 'install-failure' 'IT_INSTALL_FAILURE_RE' 'InstallFailureRe' || fail=1
-check_set 'bench-not-ready' 'IT_BENCH_NOT_READY_RE' 'BenchNotReadyRe'  || fail=1
+check_set 'install-failure'     'IT_INSTALL_FAILURE_RE'     'InstallFailureRe'     || fail=1
+check_set 'bench-not-ready'     'IT_BENCH_NOT_READY_RE'     'BenchNotReadyRe'      || fail=1
+check_set 'engine-opt-out'      'IT_ENGINE_OPTOUT_RE'       'EngineOptOutRe'       || fail=1
+check_set 'install-failure-box' 'IT_INSTALL_FAILURE_BOX_RE' 'InstallFailureBoxRe'  || fail=1
 [ "${fail}" -eq 0 ] || exit 1
 
 echo "harness-failure-strings-guard: ok"
