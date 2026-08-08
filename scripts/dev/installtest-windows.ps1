@@ -1486,13 +1486,23 @@ if ($Tier -ge 2) {
             # Anti-vacuity: proves the executor REACHED the opt-out arm. Without
             # it, a daemon that answered `disabled` would satisfy the exit-0 and
             # no-engine asserts while never running the code under test.
-            $skipped = Select-String -Path $initLog -Pattern $EngineOptOutRe -Quiet -ErrorAction SilentlyContinue
+            # -SimpleMatch on both, and it is load-bearing: Select-String's
+            # -Pattern is a .NET REGEX, so the parentheses in the shared
+            # literal would be a capture group and the pattern would look for
+            # "skipped WAIRED_NO_OLLAMA" with no brackets -- text that never
+            # appears. grep's BRE treats them literally, which is why only the
+            # Windows copy was wrong. Escaping instead is not an option: one
+            # literal is shared by all three harnesses (see the declarations
+            # above), and `\(` in BRE means the opposite of what it means here.
+            $skipped = Select-String -Path $initLog -Pattern $EngineOptOutRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
             if ($skipped) {
                 ItOk "the executor reached the opt-out arm and said so (Engine install skipped)"
             } else {
                 ItBad "init never reported the engine install as skipped -- the opt-out arm was not reached, so the asserts around it prove nothing. See $initLog"
+                Get-Content -LiteralPath $initLog -Tail 20 -ErrorAction SilentlyContinue |
+                    ForEach-Object { ItLog "    init| $_" }
             }
-            $calledItFailed = Select-String -Path $initLog -Pattern $InstallFailureBoxRe -Quiet -ErrorAction SilentlyContinue
+            $calledItFailed = Select-String -Path $initLog -Pattern $InstallFailureBoxRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
             if ($calledItFailed) {
                 ItBad "init called the operator's own opt-out a failed install -- see $initLog"
             } else {

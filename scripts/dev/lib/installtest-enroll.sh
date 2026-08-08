@@ -538,9 +538,15 @@ IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
 # string leaves the guard green and turns the unit test red. The guard earns
 # its entry on the OTHER check, that the three harnesses agree on one literal.
 #
-# Both are literals in BRE (grep) and in .NET regex (Select-String): the only
-# metacharacters are the parentheses, which capture a literal either way. That
-# is what lets one declaration be shared byte-for-byte across three harnesses.
+# These are matched as LITERALS, not patterns — grep without -E (parentheses
+# are ordinary characters in BRE) and Select-String -SimpleMatch on Windows.
+# The Windows half is not optional: -Pattern is a .NET regex, where
+# `(WAIRED_NO_OLLAMA)` is a capture group, so the pattern would hunt for
+# "skipped WAIRED_NO_OLLAMA" with no brackets and never match. Escaping the
+# declaration instead would break the other two, since `\(` in BRE means the
+# opposite. Sharing one literal is what keeps the three harnesses honest, so
+# the matching side is what adapts — keep any new string here free of regex
+# metacharacters for the same reason.
 IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
 IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
 
