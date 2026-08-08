@@ -11,6 +11,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // InstallDiskHeadroomGB is the slack added on top of a model's estimated
@@ -320,11 +321,51 @@ func belowRecommendedSpecNeed(manifests []catalog.Manifest, engine string, floor
 		return fmt.Sprintf("(needs ≥ %d GB VRAM; this host has %d MB)",
 			(minVRAM+1023)/1024, router.VLLMVRAMBudgetMB(hw))
 	default:
+		// Not min_ram_gb. That is a hand-authored opinion, and since #552
+		// the gate refuses on a computed figure — the memory a variant
+		// needs to hold its SERVED window — so quoting the annotation
+		// would name a spec that does not match the verdict. An 8 GB host
+		// was being told it "needs ≥ 4 GB RAM".
+		if gb := smallestAboveFloorRAMGB(manifests, engine, floor, hw.UnifiedMemory); gb > 0 {
+			return fmt.Sprintf("(the smallest coding model needs ≥ %d GB of RAM to serve a %d-token window; this host has %d GB)",
+				gb, hostfit.ServingWindow200k, hw.RAMTotalGB)
+		}
 		if minRAM <= 0 {
 			return ""
 		}
 		return fmt.Sprintf("(needs ≥ %d GB RAM; this host has %d GB)", minRAM, hw.RAMTotalGB)
 	}
+}
+
+// smallestAboveFloorRAMGB is the least total system RAM any above-floor
+// variant would need to hold its served window here, in whole GB and
+// including the OS allowance the capacity gate deducts. 0 when nothing
+// above the floor can be priced.
+//
+// It is the same arithmetic the refusal was made with, so the number an
+// operator reads is the number they would have to beat.
+func smallestAboveFloorRAMGB(manifests []catalog.Manifest, engine string, floor int, unifiedMemory bool) int {
+	best := 0
+	for _, m := range manifests {
+		ceiling := hostfit.OllamaCeilingWindow(m)
+		if ceiling <= 0 {
+			continue
+		}
+		for _, v := range m.Variants {
+			if v.QualityTier < floor || !slices.Contains(v.RuntimeSupport, engine) {
+				continue
+			}
+			need := hostfit.OllamaWindowResidentMB(v, ceiling, unifiedMemory)
+			if need <= 0 {
+				continue
+			}
+			gb := (need+1023)/1024 + hostfit.OSMemoryAllowanceGB
+			if best == 0 || gb < best {
+				best = gb
+			}
+		}
+	}
+	return best
 }
 
 // smallestAboveFloorReq returns the smallest MinRAMGB (ollama) / MinVRAMMB

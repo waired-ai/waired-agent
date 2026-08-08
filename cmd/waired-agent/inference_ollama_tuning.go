@@ -310,9 +310,17 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	}
 
 	// Parallelism never costs context: only serve >1 request slot when
-	// the full manifest window is already granted AND doubling the KV
-	// allocation (Ollama reserves num_ctx × num_parallel) still fits.
-	if m.ContextLength > 0 && ctx == m.ContextLength && maxCtx >= ollamaMaxAutoParallel*ctx {
+	// the full window is already granted AND doubling the KV allocation
+	// (Ollama reserves num_ctx × num_parallel) still fits.
+	//
+	// "Full" is the window this product would serve — the top rung of
+	// hostfit.OllamaServedWindows — not the manifest's native figure. The
+	// two used to be the same thing; since #552 capped the sizing at the
+	// rung, comparing against the manifest would never be equal on a
+	// 262144-native model and would silently withdraw the second slot
+	// from every host that has one.
+	if ceiling := hostfit.OllamaCeilingWindow(m); ceiling > 0 &&
+		ctx == ceiling && maxCtx >= ollamaMaxAutoParallel*ctx {
 		t.NumParallel = ollamaMaxAutoParallel
 	}
 	// The VRAM-safe ceiling the admin's override is advised against exceeding:

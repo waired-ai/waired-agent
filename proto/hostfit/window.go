@@ -160,6 +160,56 @@ func OllamaEffectiveContextFloor(m catalog.Manifest) int {
 	return ServingWindow200k
 }
 
+// OllamaServedWindows is the ladder of windows this product will actually
+// serve a model at, highest first. Empty for a manifest with no window
+// annotation, which every caller must read as "no opinion" rather than
+// as a refusal.
+//
+// A node declares one of two windows or nothing (waired#1031), and a
+// coding session is sized for the 200k rung (#624). A window between the
+// rungs is therefore not a smaller version of the product — it is a
+// window the mesh cannot route on and a coding agent cannot work in. So
+// there are two rungs and, below them, the model's own window: a
+// 131072-native model has nothing to trim TO, and serving it at 131072
+// is the whole of what it can offer.
+//
+// This is where the capacity gate is priced (waired-ai/waired-agent#552).
+// Pricing it at OllamaPlannedWindow's output instead made the gate
+// unable to refuse anything: the sizing picks the largest window that
+// fits, so re-checking that window against the same machine is a
+// question that has already been answered yes. A 7 GiB Mac was admitted
+// qwen3.5-4b at 54,272 — 200,704 of it needs 7403 MiB against a 4096 MiB
+// budget, so the model was never servable there — loaded it, and
+// returned HTTP 500 on the first generation.
+//
+// Deliberately platform-free, like everything else in this package: the
+// rungs are a product contract, and the arithmetic below branches on
+// Host.Class(), never on an operating system. macOS, Windows and Linux
+// get the same answer for the same machine.
+func OllamaServedWindows(m catalog.Manifest) []int {
+	if m.ContextLength <= 0 {
+		return nil
+	}
+	if m.ContextLength >= ServingWindow1M {
+		// A 1M-native model may also be served — and declared — at the
+		// coding rung, so a host that cannot hold 1M is not out of
+		// options.
+		return []int{ServingWindow1M, ServingWindow200k}
+	}
+	return []int{OllamaEffectiveContextFloor(m)}
+}
+
+// OllamaCeilingWindow is the top rung of OllamaServedWindows: the largest
+// window this product will ever ask an engine to serve this model at. 0
+// when the manifest carries no window, which callers read as "no cap".
+func OllamaCeilingWindow(m catalog.Manifest) int {
+	w := OllamaServedWindows(m)
+	if len(w) == 0 {
+		return 0
+	}
+	return w[0]
+}
+
 // OllamaExpectedSpillFraction predicts the /api/ps-visible spill fraction
 // of serving ctxTokens on this host: the byte-math overshoot of
 // (weights + KV + engine overhead) over the GPU budget, scaled by the
@@ -313,9 +363,22 @@ func OllamaPlannedWindow(m catalog.Manifest, v catalog.Variant, h Host, kvFactor
 	}
 	maxCtx := MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, budgetGB)
 
+	// The ceiling is the top rung of OllamaServedWindows, not the model's
+	// native window. A 262144-native model on a big host used to be
+	// served at 262144 while DeclaredContextWindow could never claim more
+	// than ServingWindow200k — 61,440 tokens of KV, about 960 MiB on
+	// qwen3.5-4b at the q8_0 cache this tuning exports, for context the
+	// mesh cannot route on (waired-ai/waired-agent#552).
+	//
+	// It is not free: the local overflow guard reads the APPLIED window
+	// through ContextWindowFor, so this also lowers where a local request
+	// gets its 400 and Claude Code compacts. That trade is the point —
+	// the product serves two windows, so the rung is what a session is
+	// sized for either way.
+	ceiling := OllamaCeilingWindow(m)
 	capNative := func(ctx int) int {
-		if m.ContextLength > 0 && ctx > m.ContextLength {
-			return m.ContextLength
+		if ceiling > 0 && ctx > ceiling {
+			return ceiling
 		}
 		return ctx
 	}

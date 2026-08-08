@@ -37,8 +37,10 @@ func TestSelectBundledModel(t *testing.T) {
 		t.Fatalf("BundledManifests: %v", err)
 	}
 
-	t.Run("8gb-memory-fit-picks-7b", func(t *testing.T) {
-		in := baseInputs(cpuProfile(8), manifests)
+	t.Run("32gb-memory-fit-picks-above-the-floor", func(t *testing.T) {
+		// 8 GB until #552, which is now below the recommended spec: no
+		// above-floor model holds a 200,704 window there.
+		in := baseInputs(cpuProfile(32), manifests)
 		in.FreeDiskBytes = fixedDisk(500) // plenty
 		sel, err := SelectBundledModel(in)
 		if err != nil {
@@ -47,11 +49,14 @@ func TestSelectBundledModel(t *testing.T) {
 		if !sel.EnableInference || sel.SkipPull {
 			t.Fatalf("want enabled+pull, got enable=%v skip=%v", sel.EnableInference, sel.SkipPull)
 		}
-		// #624: the 32k-native coder-7b is excluded by the coding-agent
-		// context floor; qwen3.5-4b (262144-native, tier 42) is the best
-		// floor-passing fit on 8 GB.
-		if sel.ModelID != "qwen3.5-4b" {
-			t.Errorf("ModelID = %q, want qwen3.5-4b", sel.ModelID)
+		// #624: the 32k-native coder entries are excluded by the
+		// coding-agent context floor. Which of the survivors wins tracks
+		// the evolving catalog, so the assertion is that an above-floor
+		// pick was made at all — the id was pinned when this case ran on
+		// an 8 GB host and there was only one candidate.
+		if sel.ModelID == "" || sel.BelowRecommendedSpec {
+			t.Errorf("ModelID = %q belowSpec=%v, want an above-floor pick",
+				sel.ModelID, sel.BelowRecommendedSpec)
 		}
 	})
 
@@ -77,9 +82,10 @@ func TestSelectBundledModel(t *testing.T) {
 	})
 
 	t.Run("disk-too-small-skips-pull", func(t *testing.T) {
-		// 8 GB RAM, but < headroom free disk: even the smallest above-floor
-		// model won't fit → keep it configured but skip the pull.
-		in := baseInputs(cpuProfile(8), manifests)
+		// Enough RAM for an above-floor pick, but < headroom free disk:
+		// even the smallest above-floor model won't fit → keep it
+		// configured but skip the pull. 32 GB rather than 8 since #552.
+		in := baseInputs(cpuProfile(32), manifests)
 		in.FreeDiskBytes = fixedDisk(1)
 		sel, err := SelectBundledModel(in)
 		if err != nil {
@@ -97,7 +103,7 @@ func TestSelectBundledModel(t *testing.T) {
 	})
 
 	t.Run("below-recommended-spec-tiny-fits-explains-the-opt-in", func(t *testing.T) {
-		// 4 GB RAM: nothing above the coding-quality floor fits, but a tiny
+		// 8 GB RAM: nothing above the coding-quality floor fits, but a tiny
 		// below-floor model does. Local inference starts off, and
 		// BelowRecommendedSpec / BelowFloorModelID are set so the caller
 		// can offer the tiny model as an opt-in.
@@ -114,7 +120,7 @@ func TestSelectBundledModel(t *testing.T) {
 		// (waired-ai/waired#1056 decision 1) — and a 2 GB machine has
 		// nothing left for a model once the OS is served, so the tiny
 		// fit lives at 4 GB. Record of today's arithmetic, not a rule.
-		in := baseInputs(cpuProfile(4), manifests)
+		in := baseInputs(cpuProfile(8), manifests)
 		in.FreeDiskBytes = fixedDisk(500)
 		sel, err := SelectBundledModel(in)
 		if err != nil {
@@ -127,7 +133,7 @@ func TestSelectBundledModel(t *testing.T) {
 			t.Errorf("expected BelowRecommendedSpec=true")
 		}
 		if sel.BelowFloorModelID == "" {
-			t.Errorf("expected a below-floor model to be offered on a 4 GB host")
+			t.Errorf("expected a below-floor model to be offered on an 8 GB host")
 		}
 		if !containsNote(sel.Notes, sel.BelowFloorModelID) {
 			t.Errorf("the notes must name the model this host CAN run; got %v", sel.Notes)
@@ -183,7 +189,7 @@ func TestSelectBundledModel(t *testing.T) {
 	// default there is nothing to fall back to but the below-floor fit.
 	// Without this the daemon would boot inference on and pre-pull nothing.
 	t.Run("under-spec-forced-with-nothing-configured-takes-the-below-floor-fit", func(t *testing.T) {
-		in := baseInputs(cpuProfile(4), manifests)
+		in := baseInputs(cpuProfile(8), manifests)
 		in.Forced = true
 		in.Inference.BundledModelID = "" // agentconfig.Defaults()
 		sel, err := SelectBundledModel(in)
@@ -194,7 +200,7 @@ func TestSelectBundledModel(t *testing.T) {
 			t.Errorf("forced inference must stay enabled even under-spec")
 		}
 		if sel.BelowFloorModelID == "" {
-			t.Fatal("a 4 GB host should still have a below-floor fit")
+			t.Fatal("an 8 GB host should still have a below-floor fit")
 		}
 		if sel.ModelID != sel.BelowFloorModelID {
 			t.Errorf("ModelID = %q, want the below-floor fit %q", sel.ModelID, sel.BelowFloorModelID)
@@ -236,15 +242,17 @@ func TestSelectBundledModel(t *testing.T) {
 	})
 
 	t.Run("no-disk-seam-takes-best-fit", func(t *testing.T) {
-		in := baseInputs(cpuProfile(8), manifests)
+		in := baseInputs(cpuProfile(32), manifests)
 		in.FreeDiskBytes = nil // disk pre-flight disabled
 		sel, err := SelectBundledModel(in)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		// #624: floor-passing best fit on 8 GB is qwen3.5-4b.
-		if sel.ModelID != "qwen3.5-4b" || sel.SkipPull {
-			t.Errorf("want best-fit qwen3.5-4b, no skip; got %q skip=%v", sel.ModelID, sel.SkipPull)
+		// The id tracks the evolving catalog; what this case is about is
+		// that the disk seam being absent does not suppress the pull.
+		if sel.ModelID == "" || sel.SkipPull || !sel.EnableInference {
+			t.Errorf("want an above-floor pick with no skip; got %q skip=%v enable=%v",
+				sel.ModelID, sel.SkipPull, sel.EnableInference)
 		}
 	})
 }
@@ -268,12 +276,12 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 	}
 
 	t.Run("under-spec-when-only-a-subfloor-model-would-fit", func(t *testing.T) {
-		// 4 GB CPU host: the only tier-30+ fit is a 32k-window coder.
+		// 8 GB CPU host: the only tier-30+ fit is a 32k-window coder.
 		// That used to be rescued by re-ranking without the context floor;
 		// waired#1031 removed the rescue, because the window is a contract
 		// a node either declares or does not, and 32k is not one of the two
 		// windows it can declare.
-		in := baseInputs(cpuProfile(4), manifests)
+		in := baseInputs(cpuProfile(8), manifests)
 		in.FreeDiskBytes = fixedDisk(500)
 		sel, err := SelectBundledModel(in)
 		if err != nil {
@@ -290,7 +298,7 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 		// window even though it does not clear the quality floor — which is
 		// the whole trade waired#1031 makes: tier flexes, the window does not.
 		if sel.BelowFloorModelID == "" {
-			t.Fatal("no below-floor opt-in offered; a 4 GB host can still run something")
+			t.Fatal("no below-floor opt-in offered; an 8 GB host can still run something")
 		}
 		m, found := catalog.LookupByAlias(sel.BelowFloorModelID, manifests)
 		if !found {
