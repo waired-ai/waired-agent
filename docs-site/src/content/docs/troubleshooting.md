@@ -34,7 +34,7 @@ most problems on its own.
 - [Setup says it cannot download the model you chose](#setup-says-it-cannot-download-the-model-you-chose)
 - [It says I have reached the device limit](#it-says-i-have-reached-the-device-limit)
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
-- [It said my machine can only run a very small model](#it-said-my-machine-can-only-run-a-very-small-model)
+- [Waired chose a very small model for my machine](#waired-chose-a-very-small-model-for-my-machine)
 - [Local AI started off and I did not choose that](#local-ai-started-off-and-i-did-not-choose-that)
 - [Setup said it could not complete a test generation](#setup-said-it-could-not-complete-a-test-generation)
 
@@ -292,33 +292,36 @@ If instead you see `Not enrolled. Run 'waired init' to connect this device.`,
 this machine really has not been set up yet — see
 [Sign in and set up](/getting-started/first-run/).
 
-## It said my machine can only run a very small model
+## Waired chose a very small model for my machine
 
-Believe it. At that size a coding model produces broken output more often than
-useful output, which is why Waired starts with **local AI off** on machines
-like this one.
+That is the largest one this computer can hold while keeping a full coding
+session in memory, and Waired runs it. A model that fits but has to throw away
+most of a long conversation is not the better choice.
 
-This is one of two reasons Waired starts that way. The other is speed — see
-[Local AI started off and I did not choose that](#local-ai-started-off-and-i-did-not-choose-that)
-if this computer has plenty of memory.
+Waired used to refuse instead: if the best model your machine could hold was
+one it judged too weak for coding work, it started with local AI **off** and
+you got nothing. It no longer does that. The one thing that still starts local
+AI off is **speed** — see
+[Local AI started off and I did not choose that](#local-ai-started-off-and-i-did-not-choose-that).
 
-Off is a starting point, not a verdict. The machine is worth having in your
-network as it is — it can use the AI running on your other computers — and you
-can turn local AI on whenever you want to:
-
-```sh
-waired inference on
-```
-
-That installs the AI engine and downloads the small model if they are not on
-this computer yet. In the Waired app the same choice is **Run AI models on this
-computer**. To go back:
+To see what you got and why:
 
 ```sh
-waired inference off
+waired models ls --detail
 ```
 
-`waired inference status` says which way it is set right now.
+The **SIZE** column says which class of graphics card a model is for, and
+**FIT** says whether this computer can hold it. Anything in the list is yours
+to choose:
+
+```sh
+waired models use <model>
+```
+
+A bigger model will run — it just spends the conversation reloading itself from
+system memory, which is slow in a way you feel most on long coding sessions.
+`waired inference off` stops running models here entirely; the machine stays in
+your network and can use the AI on your other computers.
 
 ## Local AI started off and I did not choose that
 

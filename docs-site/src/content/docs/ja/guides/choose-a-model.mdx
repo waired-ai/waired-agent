@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: 6165e9448c6c8489
+sourceHash: 732d1c282596208f
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -35,10 +35,8 @@ import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starli
 ## モデルが選ばれなかった場合
 
 パソコンによっては Waired はモデルを選ばず、**ローカル AI をオフの状態**で
-始めます。理由は 2 つあります。
+始めます。理由は 1 つです。
 
-- **メモリ。** 載るモデルのどれもコーディングに使える品質に届かない場合。
-  → [「非常に小さいモデルしか動かせない」と言われた](/ja/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model)
 - **速度。** フルサイズのモデルをダウンロードする前に、Waired は小さいモデルを
   取得して現実的なコーディングの質問を計測します。1 往復が 45 秒を超える
   見込みなら、1 往復に数分待つことになる数十 GB をダウンロードせずにそこで

@@ -10,8 +10,13 @@ import (
 
 // TestSelectInstallModel_RealCatalog drives the install-time selector
 // against the REAL bundled catalog with synthetic hardware profiles, so
-// the assertions track the shipped quality_tiers / resource floors and
-// the tier-30 coding floor (#517).
+// the assertions track the shipped resource floors.
+//
+// There is no quality floor to track any more (#522, owner decision
+// 2026-08-08). What decides a host now is capacity — certain OOM, priced
+// at the window the product serves since #552 — and the #624 native
+// window. Both are hardware or manifest facts; neither is a threshold on
+// quality_tier.
 func TestSelectInstallModel_RealCatalog(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -38,41 +43,44 @@ func TestSelectInstallModel_RealCatalog(t *testing.T) {
 			wantOK: true,
 		},
 		{
-			// 8 GB CPU box: the #624 context floor excludes the 32k-window
-			// coder entries from auto-selection, and since #552 the
-			// capacity gate prices the survivors at the window this
-			// product serves. qwen3.5-4b needs 7403 MiB to hold a 200,704
-			// cache and this host has 6144, so nothing above the quality
-			// floor is left. It is below the recommended spec: it enrols,
-			// routes to peers, and qwen3.5-2b — which DOES hold the full
-			// window here — is offered through #465's opt-in.
+			// 8 GB CPU box: THIS CASE IS INVERTED BY #522. It expected
+			// wantOK=false, because qwen3.5-2b is tier 27 and the floor
+			// was 30 — a host that could hold a model was told it was
+			// below the recommended spec and got none.
+			//
+			// The #624 context floor still excludes the 32k-window coder
+			// entries, and #552's capacity gate still prices at the served
+			// window: qwen3.5-4b needs 7403 MiB and this host has 6144, so
+			// it is out. qwen3.5-2b needs 4012 MiB, holds its full 262,144
+			// native window here, and is now the pick.
 			//
 			// The same verdict as an 8 GB Mac, and that is the point: the
 			// arithmetic branches on Host.Class(), never on an operating
 			// system.
-			name: "cpu-8gb-under-spec", hw: cpu(8), engine: catalog.RuntimeOllama,
+			name: "cpu-8gb-picks-the-lightest-that-holds-its-window",
+			hw:   cpu(8), engine: catalog.RuntimeOllama,
+			wantOK: true, wantTop: "qwen3.5-2b",
+		},
+		{
+			// 4 GB CPU box: nothing fits, and it is capacity that says so
+			// rather than quality. After the OS allowance this host has
+			// 2048 MiB, and the lightest catalog entry needs 3154 MiB to
+			// hold its window (#552's 6 GB CPU-only cutoff). The 32k-window
+			// coder entries that used to fit here are excluded by #624
+			// regardless — waired#1031 removed the re-rank that rescued
+			// them, because the window is a contract now and a 32k node has
+			// no way to say so that a requester could route on.
+			name: "cpu-4gb-nothing-fits", hw: cpu(4), engine: catalog.RuntimeOllama,
 			wantOK: false,
 		},
 		{
-			// 4 GB CPU box: only 3b/2b/0.8b fit, and the sole tier-30+ fit
-			// (coder-3b) is a 32k-window model. That used to be rescued by
-			// re-ranking without the context floor; waired#1031 removed the
-			// rescue, because the window is a contract now and a 32k node
-			// has no way to say so that a requester could route on. The
-			// host is below the recommended spec: it enrols, routes to peers, and runs no
-			// local engine.
-			name: "cpu-4gb-under-spec", hw: cpu(4), engine: catalog.RuntimeOllama,
+			// 2 GB CPU box: the OS allowance alone accounts for it.
+			name: "cpu-2gb-nothing-fits", hw: cpu(2), engine: catalog.RuntimeOllama,
 			wantOK: false,
 		},
 		{
-			// 2 GB CPU box: only qwen3.5-0.8b (tier 12) fits — below the
-			// floor → under-spec, no auto-selection.
-			name: "cpu-2gb-under-spec", hw: cpu(2), engine: catalog.RuntimeOllama,
-			wantOK: false,
-		},
-		{
-			// 16 GB Apple-Silicon UMA Mac (12 GB GPU budget): a coder fits
-			// resident; selection clears the floor.
+			// 16 GB Apple-Silicon UMA Mac (12 GB GPU budget): a model fits
+			// resident and holds its window.
 			name: "apple-uma-16gb-ok", hw: syntheticAppleUMA(16, 12*1024),
 			engine: catalog.RuntimeOllama, wantOK: true,
 		},
@@ -85,7 +93,7 @@ func TestSelectInstallModel_RealCatalog(t *testing.T) {
 				Hardware:      tc.hw,
 				Engine:        tc.engine,
 				EngineVersion: runtime.OllamaPinnedVersion,
-			}, InstallQualityFloorTier)
+			})
 			if err != nil {
 				t.Fatalf("SelectInstallModel: unexpected error %v", err)
 			}
@@ -101,13 +109,12 @@ func TestSelectInstallModel_RealCatalog(t *testing.T) {
 			if len(above) == 0 {
 				t.Fatal("ok=true but no candidates returned")
 			}
-			// Every returned candidate must clear the floor and be ordered
-			// best-first (quality_tier non-increasing).
+			// Candidates must be ordered best-first (quality_tier
+			// non-increasing) so a caller stepping down for disk space
+			// gets progressively lighter models without re-ranking.
+			// quality_tier is the ordering here and nothing more — there
+			// is no threshold left to clear (#522).
 			for i, p := range above {
-				if p.Variant.QualityTier < InstallQualityFloorTier {
-					t.Errorf("candidate %d (%s) tier %d below floor %d",
-						i, p.Manifest.ModelID, p.Variant.QualityTier, InstallQualityFloorTier)
-				}
 				if i > 0 && above[i-1].Variant.QualityTier < p.Variant.QualityTier {
 					t.Errorf("candidates not tier-desc at %d: %d < %d",
 						i, above[i-1].Variant.QualityTier, p.Variant.QualityTier)
@@ -132,7 +139,7 @@ func TestSelectInstallModel_ErrorsSurface(t *testing.T) {
 		Catalog:  manifests,
 		Hardware: hardware.Profile{RAMTotalGB: 32},
 		// Engine deliberately empty.
-	}, InstallQualityFloorTier); err == nil || ok {
+	}); err == nil || ok {
 		t.Fatalf("empty engine: want (ok=false, err!=nil), got ok=%v err=%v", ok, err)
 	}
 }
@@ -186,7 +193,7 @@ func TestSelectInstallModel_ASmallCardMustNotMakeAHostUnderSpec(t *testing.T) {
 		t.Helper()
 		above, ok, err := SelectInstallModel(PickInput{
 			Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama,
-		}, InstallQualityFloorTier)
+		})
 		if err != nil {
 			t.Fatalf("SelectInstallModel: %v", err)
 		}

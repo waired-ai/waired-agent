@@ -98,11 +98,12 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 	}
 
 	if rec := resp.Recommendation; rec != nil && !rec.Dismissed {
-		// Special case: the only lighter step-down is below the install
-		// quality floor. There's nothing lighter to fall back to, so instead
-		// of the neutral "switch to a lighter model" flow, confirm whether to
-		// keep local inference at all (drop to it) or turn it off. Default No.
-		if isBundledModelBelowFloor(rec.ToModelID) {
+		// Special case: the step-down lands on the lightest model we
+		// offer. There's nothing lighter to fall back to after it, so
+		// instead of the neutral "switch to a lighter model" flow, confirm
+		// whether to keep local inference at all (drop to it) or turn it
+		// off. Default No.
+		if isLightestOfferedModel(rec.ToModelID) {
 			return tinyBenchmarkDisableFlow(mgmtURL, nonInteractive, out, sc, tty, rec, resp)
 		}
 

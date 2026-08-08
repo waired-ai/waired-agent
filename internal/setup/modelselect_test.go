@@ -26,8 +26,7 @@ func baseInputs(hw hardware.Profile, manifests []catalog.Manifest) BundledModelI
 		Inference: agentconfig.InferenceConfig{
 			BundledModelID: "qwen2.5-coder-7b-instruct",
 		},
-		StateDir:  "/var/lib/waired",
-		FloorTier: 30, // mirror router.InstallQualityFloorTier
+		StateDir: "/var/lib/waired",
 	}
 }
 
@@ -102,44 +101,40 @@ func TestSelectBundledModel(t *testing.T) {
 		}
 	})
 
-	t.Run("below-recommended-spec-tiny-fits-explains-the-opt-in", func(t *testing.T) {
-		// 8 GB RAM: nothing above the coding-quality floor fits, but a tiny
-		// below-floor model does. Local inference starts off, and
-		// BelowRecommendedSpec / BelowFloorModelID are set so the caller
-		// can offer the tiny model as an opt-in.
+	t.Run("8gb-installs-the-model-it-can-hold", func(t *testing.T) {
+		// THIS CASE IS INVERTED BY #522 (owner decision 2026-08-08). It
+		// asserted that an 8 GB host starts with local inference OFF and
+		// exposes a "below-floor" model the caller may offer as an opt-in.
+		// The host could hold qwen3.5-2b's full 262,144 window the whole
+		// time; the only thing stopping it was that 2b is tier 27 and the
+		// floor was 30.
 		//
-		// This case used to assert the OPPOSITE of the note check below:
-		// no notes at all, "messaging is the caller's". The caller it
-		// deferred to — an interactive opt-in dialog — was never built, so
-		// the host that could run SOMETHING got less explanation than the
-		// host that could run nothing (#465, waired-ai/waired#1056).
+		// Nothing about the machine changed. What changed is that a tier
+		// threshold stopped being treated as a statement about whether a
+		// model is usable — within one generation quality_tier is
+		// 10*log10(params) - 5*log10(footprint) (#518), so the floor was a
+		// size cutoff written the long way round, and the agent-grade
+		// harness is not monotone in size across that generation.
 		//
-		// The 4 GB figure sat at 2 GB while capacity was the hand-authored
-		// min_ram_gb. It is a computation now — weights, the window's KV
-		// cache and engine overhead against RAM less the OS allowance
-		// (waired-ai/waired#1056 decision 1) — and a 2 GB machine has
-		// nothing left for a model once the OS is served, so the tiny
-		// fit lives at 4 GB. Record of today's arithmetic, not a rule.
+		// Product contract, ratified in #522: refusal is capacity and the
+		// #624 window, nothing else.
 		in := baseInputs(cpuProfile(8), manifests)
 		in.FreeDiskBytes = fixedDisk(500)
 		sel, err := SelectBundledModel(in)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		if sel.EnableInference {
-			t.Errorf("a host below the recommended spec should start with local inference off")
+		if !sel.EnableInference {
+			t.Errorf("an 8 GB host holds a model's full window; local inference must start on (notes: %v)", sel.Notes)
 		}
-		if !sel.BelowRecommendedSpec {
-			t.Errorf("expected BelowRecommendedSpec=true")
+		if sel.BelowRecommendedSpec {
+			t.Errorf("BelowRecommendedSpec = true on a host that fits a model")
 		}
-		if sel.BelowFloorModelID == "" {
-			t.Errorf("expected a below-floor model to be offered on an 8 GB host")
-		}
-		if !containsNote(sel.Notes, sel.BelowFloorModelID) {
-			t.Errorf("the notes must name the model this host CAN run; got %v", sel.Notes)
-		}
-		if !containsNote(sel.Notes, "waired inference on") {
-			t.Errorf("the notes must name the way to turn it on; got %v", sel.Notes)
+		// Which model tracks the catalog, so the assertion is that a real
+		// one was chosen. Today it is qwen3.5-2b — the ladder across every
+		// host size is in TestSelectBundledModel_TheBottomRung.
+		if sel.ModelID == "" {
+			t.Errorf("no model selected on an 8 GB host; notes: %v", sel.Notes)
 		}
 	})
 
@@ -155,8 +150,8 @@ func TestSelectBundledModel(t *testing.T) {
 		if sel.EnableInference {
 			t.Errorf("under-spec host should disable local inference")
 		}
-		if sel.BelowFloorModelID != "" {
-			t.Errorf("nothing should fit a 2 GB host, got %q", sel.BelowFloorModelID)
+		if sel.ModelID != "qwen2.5-coder-7b-instruct" {
+			t.Errorf("nothing fits a 2 GB host, so the configured id stays; got %q", sel.ModelID)
 		}
 		if !containsNote(sel.Notes, "gateway/relay") {
 			t.Errorf("warning should explain the node still works as gateway/relay; got %v", sel.Notes)
@@ -184,11 +179,12 @@ func TestSelectBundledModel(t *testing.T) {
 		}
 	})
 
-	// Forcing inference on says WHETHER it runs, not WHICH model runs, so
-	// a forced under-spec host still needs an id — and with no compiled-in
-	// default there is nothing to fall back to but the below-floor fit.
-	// Without this the daemon would boot inference on and pre-pull nothing.
-	t.Run("under-spec-forced-with-nothing-configured-takes-the-below-floor-fit", func(t *testing.T) {
+	// An 8 GB host with nothing configured used to reach the forced
+	// under-spec branch and inherit its "below-floor fit" so the daemon
+	// would not boot inference with nothing to serve. #522 makes it an
+	// ordinary host: it fits a model, so it is selected the ordinary way
+	// and Forced changes nothing about the outcome.
+	t.Run("8gb-forced-with-nothing-configured-selects-normally", func(t *testing.T) {
 		in := baseInputs(cpuProfile(8), manifests)
 		in.Forced = true
 		in.Inference.BundledModelID = "" // agentconfig.Defaults()
@@ -197,13 +193,13 @@ func TestSelectBundledModel(t *testing.T) {
 			t.Fatalf("err: %v", err)
 		}
 		if !sel.EnableInference {
-			t.Errorf("forced inference must stay enabled even under-spec")
+			t.Errorf("forced inference must stay enabled")
 		}
-		if sel.BelowFloorModelID == "" {
-			t.Fatal("an 8 GB host should still have a below-floor fit")
+		if sel.BelowRecommendedSpec {
+			t.Errorf("BelowRecommendedSpec = true on a host that fits a model")
 		}
-		if sel.ModelID != sel.BelowFloorModelID {
-			t.Errorf("ModelID = %q, want the below-floor fit %q", sel.ModelID, sel.BelowFloorModelID)
+		if sel.ModelID == "" {
+			t.Fatalf("forced install left no model to serve; notes: %v", sel.Notes)
 		}
 	})
 
@@ -275,39 +271,38 @@ func TestSelectBundledModel_ContextFloorNotes(t *testing.T) {
 		t.Fatalf("BundledManifests: %v", err)
 	}
 
-	t.Run("under-spec-when-only-a-subfloor-model-would-fit", func(t *testing.T) {
-		// 8 GB CPU host: the only tier-30+ fit is a 32k-window coder.
-		// That used to be rescued by re-ranking without the context floor;
-		// waired#1031 removed the rescue, because the window is a contract
-		// a node either declares or does not, and 32k is not one of the two
-		// windows it can declare.
+	t.Run("a-small-host-is-given-a-model-that-can-declare-a-window", func(t *testing.T) {
+		// 8 GB CPU host. The subject is waired#1031's trade — tier flexes,
+		// the window does not — and #522 makes it read directly: the model
+		// this host SELECTS declares a servable window. It used to have to
+		// be read off the below-floor opt-in, because the quality floor
+		// stopped the same model from being selected outright.
+		//
+		// The 32k-window coder entries that fit here are excluded by #624
+		// and stay excluded: waired#1031 removed the re-rank that rescued
+		// them, because the window is a contract a node either declares or
+		// does not, and 32k is not one of the two windows it can declare.
 		in := baseInputs(cpuProfile(8), manifests)
 		in.FreeDiskBytes = fixedDisk(500)
 		sel, err := SelectBundledModel(in)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		if sel.EnableInference {
-			t.Fatalf("a host that can declare no window must not auto-enable local "+
-				"inference (picked %q)", sel.ModelID)
+		if !sel.EnableInference {
+			t.Fatalf("an 8 GB host holds a model's window; it must auto-enable local "+
+				"inference (notes: %v)", sel.Notes)
 		}
-		if !sel.BelowRecommendedSpec {
-			t.Error("UnderSpec must be set so the caller can explain the outcome")
+		if sel.ModelID == "" {
+			t.Fatal("no model selected on an 8 GB host")
 		}
-		// The opt-in offer is still made, and what it offers now clears the
-		// window even though it does not clear the quality floor — which is
-		// the whole trade waired#1031 makes: tier flexes, the window does not.
-		if sel.BelowFloorModelID == "" {
-			t.Fatal("no below-floor opt-in offered; an 8 GB host can still run something")
-		}
-		m, found := catalog.LookupByAlias(sel.BelowFloorModelID, manifests)
+		m, found := catalog.LookupByAlias(sel.ModelID, manifests)
 		if !found {
-			t.Fatalf("BelowFloorModelID %q is not in the catalog", sel.BelowFloorModelID)
+			t.Fatalf("selected %q is not in the catalog", sel.ModelID)
 		}
 		if !router.MeetsNativeContextFloor(m) {
-			t.Errorf("the opt-in offers %s (%d-token window); offering a model that cannot "+
+			t.Errorf("selected %s (%d-token window); installing a model that cannot "+
 				"declare a window puts the host back where the rescue left it",
-				sel.BelowFloorModelID, m.ContextLength)
+				sel.ModelID, m.ContextLength)
 		}
 	})
 

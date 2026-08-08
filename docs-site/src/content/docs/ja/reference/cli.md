@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 0d8eb5830c8f7a33
+sourceHash: 5f342a184d222979
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -234,11 +234,14 @@ waired inference share status
 残り、ローカルでの応答だけを止めます。設定は再起動をまたいで保持され、
 バックグラウンドサービスが応答しない状態でも保存され、次回起動時に適用されます。
 
-この設定が**オフ**の状態から始まるマシンは 2 種類あります。非常に小さいモデルしか
-動かせないマシンと、コーディングの質問に現実的な時間で答えられないと計測された
-マシンです。Waired が判断した場合は `status` がその理由を表示します。
-→ [「非常に小さいモデルしか動かせない」と言われた](/ja/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model)
+この設定が**オフ**の状態から始まるマシンは 1 種類です。コーディングの質問に
+現実的な時間で答えられないと計測されたマシンです。Waired が判断した場合は
+`status` がその理由を表示します。
 → [選んでいないのにローカル AI がオフで始まった](/ja/troubleshooting/#local-ai-started-off-and-i-did-not-choose-that)
+
+メモリの少ないマシンはこの対象ではなくなりました。載せられる最大のモデルが
+選ばれ、それが非常に小さいモデルになることはあります。
+→ [非常に小さいモデルが選ばれた](/ja/troubleshooting/#waired-chose-a-very-small-model-for-my-machine)
 
 `engine stop` はメモリ逼迫時の緊急手段、`share off` は自分の利用を保ったまま
 ほかのマシンからの利用だけを閉じる設定です。

@@ -179,10 +179,12 @@ your computer rather than the old one.
 `waired inference status` reports that measurement afterwards, and says so when
 it is the reason local AI is off.
 
-The same thing happens for a different reason when the best model your computer
-can hold is below the quality Waired treats as usable for coding work.
+Speed is the only thing that starts local AI off. Waired used to also refuse a
+computer whose best model it judged too weak for coding work, which meant a
+machine that could hold a model perfectly well was given none. It runs the model
+it can hold now, and says what that model is.
 
-Either way it is a starting point, not a verdict:
+It is a starting point, not a verdict:
 
 - The computer still joins your network, and can use the AI running on your
   other computers.
@@ -193,7 +195,7 @@ Either way it is a starting point, not a verdict:
 - Once you have made that choice, Waired keeps it. The timing runs to pick a
   starting point, and never again to overrule you.
 
-[Troubleshooting → my machine can only run a very small model](/troubleshooting/#it-said-my-machine-can-only-run-a-very-small-model)
+[Troubleshooting → Waired chose a very small model for my machine](/troubleshooting/#waired-chose-a-very-small-model-for-my-machine)
 has the longer version.
 
 ### A few models are never the automatic choice

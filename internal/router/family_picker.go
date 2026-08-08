@@ -137,24 +137,25 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 // RecommendedFamily is the model this host would choose for ITSELF on
 // this engine — the model_id a catalog UI marks "recommended".
 //
-// It is SelectInstallModel, not a second policy: the badge a person sees
-// and the model the installer would commit to have to be the same
+// It is RankModels' own answer, not a second policy: the badge a person
+// sees and the model the installer would commit to have to be the same
 // answer, and the way to guarantee that is to ask the same function.
-// That also inherits its escape ladder, which matters here — the
-// recommendation gate is not monotone in hardware, so a small graphics
-// card can leave nothing above the quality floor on a host that installs
-// fine without one (see PickInput.NoRecommendGate).
+// SelectInstallModel is RankModels plus an ok flag, so this reads the
+// ranking directly.
 //
-// Hosts below the recommended spec still get a mark. When nothing clears the floor even
-// after the ladder, the best-fitting model is named anyway, mirroring
-// the control plane's below_quality_floor basis: a picker with no mark
-// at all tells the operator nothing, and "the best this machine can do"
-// is still true. Empty only when nothing fits at all, or the input is
-// misconfigured — there is genuinely nothing to point at then.
+// It used to run a two-step ladder — SelectInstallModel above the
+// quality floor, then RankModels when nothing cleared it — because the
+// tier filter could empty a set that RankModels had filled. #522 removed
+// the floor, so the two steps became the same query and the fallback
+// became unreachable. What the ladder existed to protect still holds and
+// is now structural: RankModels' narrow() falls through rather than
+// returning nothing, so a host that fits anything gets a mark. A picker
+// with no mark at all tells the operator nothing, and "the best this
+// machine can do" is still true.
+//
+// Empty only when nothing fits at all, or the input is misconfigured —
+// there is genuinely nothing to point at then.
 func RecommendedFamily(in PickInput) string {
-	if above, ok, err := SelectInstallModel(in, InstallQualityFloorTier); err == nil && ok && len(above) > 0 {
-		return above[0].Manifest.ModelID
-	}
 	ranked, err := RankModels(in)
 	if err != nil || len(ranked) == 0 {
 		return ""

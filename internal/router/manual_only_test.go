@@ -106,7 +106,7 @@ func TestManualOnly_WithheldFromEveryAutomaticPath(t *testing.T) {
 			// The install-time commitment, at the shipped floor.
 			name: "SelectInstallModel",
 			pick: func(t *testing.T, in PickInput) string {
-				above, ok, err := SelectInstallModel(in, InstallQualityFloorTier)
+				above, ok, err := SelectInstallModel(in)
 				if err != nil {
 					t.Fatalf("SelectInstallModel: %v", err)
 				}
@@ -231,7 +231,7 @@ func TestManualOnly_EverythingWithheldIsHardwareShaped(t *testing.T) {
 		t.Errorf("reported as a capability failure; nothing was asked of capabilities")
 	}
 
-	above, ok, err := SelectInstallModel(in, InstallQualityFloorTier)
+	above, ok, err := SelectInstallModel(in)
 	if err != nil {
 		t.Errorf("SelectInstallModel error = %v, want nil (no pick is not a failure)", err)
 	}
@@ -325,7 +325,7 @@ func TestManualOnly_ShippedCatalogNeverOffersGptOss(t *testing.T) {
 			if got := RecommendedFamily(in); contains(withheld, got) {
 				t.Errorf("RecommendedFamily = %q, a manual_only model", got)
 			}
-			if above, ok, err := SelectInstallModel(in, InstallQualityFloorTier); err == nil && ok {
+			if above, ok, err := SelectInstallModel(in); err == nil && ok {
 				for _, p := range above {
 					if contains(withheld, p.Manifest.ModelID) {
 						t.Errorf("SelectInstallModel offered %q, a manual_only model", p.Manifest.ModelID)
@@ -365,12 +365,12 @@ func TestManualOnly_NoHostLosesItsPick(t *testing.T) {
 			with, withOK, _ := func() ([]Pick, bool, error) {
 				in := base
 				in.Catalog = manifests
-				return SelectInstallModel(in, InstallQualityFloorTier)
+				return SelectInstallModel(in)
 			}()
 			without, withoutOK, _ := func() ([]Pick, bool, error) {
 				in := base
 				in.Catalog = allowed
-				return SelectInstallModel(in, InstallQualityFloorTier)
+				return SelectInstallModel(in)
 			}()
 
 			if withoutOK && !withOK {

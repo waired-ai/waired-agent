@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/router"
 )
 
 // bundledModelLabel returns a short human-facing label for a bundled model
@@ -89,33 +88,64 @@ func canonicalBundledModelID(modelID string) string {
 // direction it is offering — so it says so in its own prose rather than
 // leaving the reader to compare two numbers. See benchmarkWithScanner.
 
-// isBundledModelBelowFloor reports whether modelID (id or alias) resolves to a
-// bundled model whose best variant sits below the install quality floor —
-// a model Waired does not choose for anyone.
+// isLightestOfferedModel reports whether modelID (id or alias) resolves to
+// a bundled model with nothing lighter offered beneath it — the case where
+// "switch to a lighter model" has no next step, and the real question is
+// whether to keep local inference on this machine at all.
 //
-// Not "very low quality", which is what the prompt used to call it. The
-// floor is not a measurement, and #537 gives `small` a meaning that
-// reaches models this flow recommends without hesitation, so one word for
-// the two lines would have been a product saying two things.
+// An ORDERING, not a floor. It used to ask whether the model sat below
+// the install quality floor; #522 removed that floor because a tier
+// threshold could not say what it was being asked to say. quality_tier
+// survives as the internal ranking (#518), and "is anything ranked below
+// this" is a different question from "is this good enough" — the second
+// is the one that had no answer.
+//
+// The comparison runs over the OFFERED set while the lookup runs over the
+// complete one, so an internal-only id (a test harness pinning
+// waired/tiny) resolves and correctly reports that there is nothing to
+// step down to.
 //
 // Which model that is moves with the catalog, so this does not name one:
-// it was qwen2.5-coder-0.5b (tier 10) until #200 retired it, and the
-// smallest offered entry is qwen3.5-0.8b (tier 12) today. Best-effort:
-// false when the catalog is unreadable or the id is unknown.
-func isBundledModelBelowFloor(modelID string) bool {
-	manifests, err := catalog.BundledManifestsIncludingInternal()
+// it was qwen2.5-coder-0.5b until #200 retired it, and the lightest
+// offered entry is qwen3.5-0.8b today. Best-effort: false when the
+// catalog is unreadable or the id is unknown.
+func isLightestOfferedModel(modelID string) bool {
+	all, err := catalog.BundledManifestsIncludingInternal()
 	if err != nil {
 		return false
 	}
-	m, ok := catalog.LookupByAlias(modelID, manifests)
+	m, ok := catalog.LookupByAlias(modelID, all)
 	if !ok {
 		return false
 	}
+	mine := bestVariantTier(m)
+	if mine <= 0 {
+		return false
+	}
+	offered, err := catalog.BundledManifests()
+	if err != nil {
+		return false
+	}
+	for _, o := range offered {
+		if o.ModelID == m.ModelID {
+			continue
+		}
+		if t := bestVariantTier(o); t > 0 && t < mine {
+			return false
+		}
+	}
+	return true
+}
+
+// bestVariantTier is the manifest's highest variant quality_tier, 0 when
+// it has no annotated variant. Mirrors catalog.BestTier's contract that
+// an unknown tier is 0 and ranks below every real one.
+func bestVariantTier(m catalog.Manifest) int {
 	best := 0
 	for _, v := range m.Variants {
 		if v.QualityTier > best {
 			best = v.QualityTier
 		}
 	}
-	return best > 0 && best < router.InstallQualityFloorTier
+	return best
 }
