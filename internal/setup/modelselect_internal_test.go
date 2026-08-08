@@ -5,7 +5,6 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
-	"github.com/waired-ai/waired-agent/internal/router"
 )
 
 // These run against the REAL bundled catalog, not a synthetic manifest
@@ -67,23 +66,19 @@ func TestSelectBundledModel_neverOffersAnInternalModel(t *testing.T) {
 				BundledModelID: "qwen3.5-4b",
 			},
 			StateDir:      "/var/lib/waired",
-			FloorTier:     router.InstallQualityFloorTier,
 			FreeDiskBytes: fixedDisk(500),
 		}
 		sel, err := SelectBundledModel(in)
 		if err != nil {
 			t.Fatalf("%d GB: %v", ramGB, err)
 		}
+		// #522 removed the below-recommended-spec fallback that used to
+		// need its own check here: it reached past the quality floor for a
+		// host that had nothing else, and a withheld model is exactly the
+		// shape of thing it would find there. There is one selection path
+		// now, so one assertion covers every host in the sweep.
 		if withheld[sel.ModelID] {
 			t.Errorf("%d GB host: selected the withheld model %q", ramGB, sel.ModelID)
-		}
-		// The below-recommended-spec fallback is the dangerous one: its whole job is
-		// to reach past the quality floor for a host that has nothing
-		// else, and a withheld model is exactly the shape of thing it
-		// would find there.
-		if withheld[sel.BelowFloorModelID] {
-			t.Errorf("%d GB host: offered the withheld model %q as the below-floor opt-in",
-				ramGB, sel.BelowFloorModelID)
 		}
 	}
 }
@@ -103,9 +98,8 @@ func TestSelectBundledModel_pinStillHonoursAnInternalModel(t *testing.T) {
 		Inference: agentconfig.InferenceConfig{
 			BundledModelID: internal[0],
 		},
-		StateDir:  "/var/lib/waired",
-		FloorTier: router.InstallQualityFloorTier,
-		Pinned:    true,
+		StateDir: "/var/lib/waired",
+		Pinned:   true,
 	}
 	sel, err := SelectBundledModel(in)
 	if err != nil {

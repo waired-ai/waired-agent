@@ -5,7 +5,7 @@ meta:
   audience: 画面のあるパソコンで Waired を使う人
   needs: Waired がインストール済みでサインイン済みであること
   time: 5 分（最初の 1 週間は開いたままにしておくと便利です）
-sourceHash: 6d46a827a76098be
+sourceHash: 583c232f3af0a868
 ---
 
 import { Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -91,7 +91,7 @@ import Expected from '../../../../components/Expected.astro';
 | 項目 | 内容 |
 |---|---|
 | **Pause / Resume local inference** | このパソコンが AI リクエストに応答するかどうか。停止中でも**ほかの**パソコンの AI は使えます。モデルは**載ったまま**なので再開は一瞬です。 |
-| **Run AI models on this computer** | 同じ切り替えを、まだ一度もモデルを動かしていないパソコン向けに言い換えたもの。非常に小さいモデルしか動かせないマシンと、コーディングの質問に現実的な時間で答えられないと計測されたマシンでは、Waired はこの状態から始まります。選ぶと AI エンジンとモデルをあわせて導入します。 |
+| **Run AI models on this computer** | 同じ切り替えを、まだ一度もモデルを動かしていないパソコン向けに言い換えたもの。コーディングの質問に現実的な時間で答えられないと計測されたマシンでは、Waired はこの状態から始まります。選ぶと AI エンジンとモデルをあわせて導入します。 |
 | **Start / Stop inference engine** | 設定を変えずに、いますぐエンジンを止めてメモリ（数 GB）を解放します。再開するとモデルを読み直します。 |
 | **Install Ollama…** | AI ソフトウェアが未導入のときに表示されます。 |
 | **Share engine to mesh** | **自分のほかのパソコン**にこのマシンの AI を使わせるかどうか。オフでも自分では使えます。 |

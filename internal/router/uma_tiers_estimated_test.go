@@ -57,16 +57,18 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 		// claimed — so the row above did not describe a machine that could
 		// serve the floor window, it described an under-stated input.
 		//
-		// The consequence is NOT contained here: q27 is below
-		// InstallQualityFloorTier (30), so an 8 GB Mac now reports
-		// under-spec and installs no local engine at all. That is the
+		// RESOLVED. This row was the sentinel for a separate defect: q27
+		// sat below the install quality floor (30), so an 8 GB Mac
+		// reported under-spec and installed no local engine at all — the
 		// install path converting a quality judgement into a hard
-		// outcome, which is a separate defect — waired-ai/waired#1056.
-		// This row is the sentinel for it: when #1056 lands, an 8 GB Mac
-		// should be OFFERED this pick rather than dropped, and this
-		// expectation is where that shows up first.
+		// outcome, against waired-ai/waired#1056. The comment said an
+		// 8 GB Mac should be OFFERED this pick rather than dropped and
+		// that this expectation was where it would show up first.
+		//
+		// #522 removed the floor (owner decision 2026-08-08). This pick
+		// is now what the host installs, not what it is refused.
 		{8, "qwen3.5-2b", "q4-gguf", 27,
-			"#448: the 4b's real KV (32768) leaves ~120k on the 6144 MB budget, below the ~200k floor — 2b is the best floor-passing fit. Below InstallQualityFloorTier, so SelectInstallModel calls this host under-spec (waired-ai/waired#1056)"},
+			"#448: the 4b's real KV (32768) leaves ~120k on the 6144 MB budget, below the ~200k floor — 2b is the best fit that holds its window, and since #522 it is what this host installs"},
 		{12, "qwen3.5-4b", "q4-gguf", 42,
 			"#624: the 6.6 GB 9b fits by residency but its no-spill window on the 9216 MB budget is ~121k < floor (UMA gets no spill allowance) — 4b keeps the full window"},
 		{16, "qwen3.5-9b", "q4-gguf", 52, "confirmed on real Apple M4 (16 GB); 9b's no-spill window ~318k clears the floor here"},

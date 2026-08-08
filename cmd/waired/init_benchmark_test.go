@@ -110,15 +110,20 @@ func (b *benchStub) server() *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-// tinyRec is a below-floor recommendation: the only lighter step-down is
-// below the install quality floor, which triggers the disable-or-proceed
-// dialog instead of the neutral lighter-model switch.
+// tinyRec is a recommendation that steps down onto the lightest model we
+// offer, which triggers the disable-or-proceed dialog instead of the
+// neutral lighter-model switch: there is nothing lighter to fall back to
+// after it, so the real question is whether to keep local inference at
+// all.
 //
-// The target is qwen3.5-0.8b (tier 12 < InstallQualityFloorTier 30) since
-// #200 retired qwen2.5-coder-0.5b-instruct out of the catalog. Not
-// cosmetic: isBundledModelBelowFloor is what selects the branch under
-// test, and a target the catalog cannot resolve takes the OTHER one.
-// Record of today's below-floor model.
+// The target is qwen3.5-0.8b, the lightest offered entry since #200
+// retired qwen2.5-coder-0.5b-instruct. Not cosmetic:
+// isLightestOfferedModel is what selects the branch under test, and a
+// target the catalog cannot resolve takes the OTHER one. Record of
+// today's catalog.
+//
+// It used to say "below the install quality floor", which #522 removed —
+// the branch is chosen by an ordering now, not a threshold.
 func tinyRec() *management.BenchmarkRecommendation {
 	return &management.BenchmarkRecommendation{
 		FromModelID: "qwen2.5-coder-3b-instruct", FromVariantID: "q4-gguf",

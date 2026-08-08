@@ -32,13 +32,13 @@ func TestRecommendGateCanNeverWithholdEveryModel(t *testing.T) {
 		hw := hardware.Profile{OS: "linux", Arch: "x86_64", RAMTotalGB: ramGB}
 		in := PickInput{Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama}
 
-		gated, gatedOK, err := SelectInstallModel(in, InstallQualityFloorTier)
+		gated, gatedOK, err := SelectInstallModel(in)
 		if err != nil {
 			t.Fatalf("%d GB: SelectInstallModel: %v", ramGB, err)
 		}
 		ungated := in
 		ungated.NoRecommendGate = true
-		stoodDown, stoodDownOK, err := SelectInstallModel(ungated, InstallQualityFloorTier)
+		stoodDown, stoodDownOK, err := SelectInstallModel(ungated)
 		if err != nil {
 			t.Fatalf("%d GB: SelectInstallModel (gate stood down): %v", ramGB, err)
 		}

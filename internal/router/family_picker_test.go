@@ -317,7 +317,7 @@ func TestRecommendedFamily_IsSelectInstallModelsAnswer(t *testing.T) {
 		Hardware: hardware.Profile{RAMTotalGB: 64, GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 24564}}},
 		Engine:   catalog.RuntimeOllama,
 	}
-	above, ok, err := SelectInstallModel(in, InstallQualityFloorTier)
+	above, ok, err := SelectInstallModel(in)
 	if err != nil || !ok || len(above) == 0 {
 		t.Fatalf("fixture host must have an install pick: ok=%v err=%v", ok, err)
 	}

@@ -103,7 +103,7 @@ func TestInstallPickIsMonotoneOnceRecommended(t *testing.T) {
 		t.Helper()
 		above, ok, err := SelectInstallModel(PickInput{
 			Catalog: manifests, Hardware: hw, Engine: catalog.RuntimeOllama,
-		}, InstallQualityFloorTier)
+		})
 		if err != nil {
 			t.Fatalf("SelectInstallModel: %v", err)
 		}
@@ -175,5 +175,79 @@ func TestDeclaredWindowIsMonotoneInVRAM(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestInstallPickIsMonotoneInRAM is the sibling of
+// TestInstallPickIsMonotoneOnceRecommended on the other axis: that one
+// grows the card at fixed RAM, this one grows system RAM.
+//
+// Same ratified rule (waired-ai/waired#1056 decision 3), same reason it
+// is stated about the RECOMMENDED ladder only. A host below the
+// recommendation gets a fall-through pick — the biggest thing that fits,
+// which cannot hold a coding session — and the step from there to the
+// first genuinely servable model may well lower the tier. That is the
+// trade, not a sag. Once a host is being given a model it can serve,
+// more memory may only improve it.
+//
+// The low end of this axis is new. Until #522 the install quality floor
+// refused most of it outright, so there was no ladder down there to
+// check; abolishing the floor gave every host from 6 GB up a pick and
+// made the shape worth pinning.
+func TestInstallPickIsMonotoneInRAM(t *testing.T) {
+	manifests, err := catalog.BundledManifests()
+	if err != nil {
+		t.Fatalf("BundledManifests: %v", err)
+	}
+
+	classes := []struct {
+		name    string
+		profile func(int) hardware.Profile
+	}{
+		{"cpu-only", func(ramGB int) hardware.Profile { return hostWithCard(ramGB, 0) }},
+		{"unified", func(ramGB int) hardware.Profile { return syntheticAppleUMA(ramGB, 0) }},
+	}
+
+	for _, class := range classes {
+		t.Run(class.name, func(t *testing.T) {
+			prevID, prevTier, prevRec, prevRAM := "", -1, false, 0
+			compared := 0
+
+			for ramGB := 2; ramGB <= 128; ramGB++ {
+				above, ok, err := SelectInstallModel(PickInput{
+					Catalog:  manifests,
+					Hardware: class.profile(ramGB),
+					Engine:   catalog.RuntimeOllama,
+				})
+				if err != nil {
+					t.Fatalf("%d GB: SelectInstallModel: %v", ramGB, err)
+				}
+				if !ok {
+					continue
+				}
+				id := above[0].Manifest.ModelID
+				tier := above[0].Variant.QualityTier
+				rec := above[0].Recommendation.Fits
+
+				switch {
+				case prevRec && !rec:
+					t.Errorf("%d GB installs %s unrecommended, where %d GB was recommended %s. "+
+						"More memory must not turn a model the host can serve into one it cannot",
+						ramGB, id, prevRAM, prevID)
+				case prevRec && tier < prevTier:
+					t.Errorf("%d GB installs %s (tier %d) where %d GB installed %s (tier %d), "+
+						"both recommended. More memory must not lower the pick",
+						ramGB, id, tier, prevRAM, prevID, prevTier)
+				case prevRec:
+					compared++
+				}
+				prevID, prevTier, prevRec, prevRAM = id, tier, rec, ramGB
+			}
+
+			if compared == 0 {
+				t.Error("no two host sizes in the sweep both had a recommended pick, so this " +
+					"test compared nothing — re-pick the sweep")
+			}
+		})
 	}
 }

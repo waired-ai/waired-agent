@@ -12,7 +12,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
-	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/setup"
 )
 
@@ -55,7 +54,6 @@ func maybeSelectBundledModelForFreshInstall(cfg *agentconfig.Config, disableInfe
 		Manifests:     manifests,
 		Inference:     cfg.Inference,
 		StateDir:      stateDir,
-		FloorTier:     router.InstallQualityFloorTier,
 		FreeDiskBytes: hardware.FreeDiskBytes,
 		Pinned:        intent.Pinned,
 		Forced:        intent.Forced,

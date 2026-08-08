@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 33c7121f130db7c3
+sourceHash: RESOLVE-BY-ACCEPT
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -37,7 +37,7 @@ waired doctor
 - [セットアップで「選んだモデルをダウンロードできない」と出た](#setup-says-it-cannot-download-the-model-you-chose)
 - [デバイス数の上限に達したと言われた](#it-says-i-have-reached-the-device-limit)
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
-- [「非常に小さいモデルしか動かせない」と言われた](#it-said-my-machine-can-only-run-a-very-small-model)
+- [非常に小さいモデルが選ばれた](#waired-chose-a-very-small-model-for-my-machine)
 - [選んでいないのにローカル AI がオフで始まった](#local-ai-started-off-and-i-did-not-choose-that)
 - [セットアップで「テスト生成を完了できませんでした」と出た](#setup-said-it-could-not-complete-a-test-generation)
 
@@ -302,36 +302,37 @@ sudo waired status          # Windows は管理者プロンプトから
 本当にまだセットアップされていません
 （→ [サインインとセットアップ](/ja/getting-started/first-run/)）。
 
-<a id="it-said-my-machine-can-only-run-a-very-small-model"></a>
+<a id="waired-chose-a-very-small-model-for-my-machine"></a>
 
-## 「非常に小さいモデルしか動かせない」と言われた
+## 非常に小さいモデルが選ばれた
 
-その判断は信頼してください。そのサイズのコーディングモデルは、役に立つ出力より
-壊れた出力のほうが多くなります。このようなマシンで Waired が
-**ローカル AI をオフの状態から始める**のはそのためです。
+それがこのパソコンで、コーディング 1 セッション分をメモリに保持したまま
+動かせる最大のモデルです。Waired はそれを実行します。収まりはするが長い
+会話の大半を捨てることになるモデルは、より良い選択ではありません。
 
-Waired がこの状態から始める理由は 2 つあり、これはそのうちの 1 つです。
-もう 1 つは速度です。メモリに余裕があるパソコンなら
-[選んでいないのにローカル AI がオフで始まった](#local-ai-started-off-and-i-did-not-choose-that)
-を参照してください。
+以前は拒否していました。載せられる最良のモデルがコーディングに使える品質に
+届かないと判断した場合、ローカル AI を**オフ**の状態から始め、何も動きません
+でした。現在はそうしません。ローカル AI がオフで始まる理由として残っているのは
+**速度**だけです。
+→ [選んでいないのにローカル AI がオフで始まった](#local-ai-started-off-and-i-did-not-choose-that)
 
-オフは出発点であって、結論ではありません。このマシンはそのままでもネットワークに
-入れる価値があります — ほかのパソコンの AI を使えるからです。ローカル AI は
-いつでもオンにできます。
-
-```sh
-waired inference on
-```
-
-AI エンジンと小さいモデルがこのパソコンにまだ無ければ、あわせて導入します。
-Waired アプリでは **Run AI models on this computer** が同じ操作です。
-戻すときは次のとおりです。
+何が選ばれ、なぜそうなったかは次で確認できます。
 
 ```sh
-waired inference off
+waired models ls --detail
 ```
 
-現在どちらに設定されているかは `waired inference status` で確認できます。
+**SIZE** 列はそのモデルがどのクラスのグラフィックボード向けかを、**FIT** 列は
+このパソコンに収まるかどうかを示します。一覧にあるモデルはどれも選択できます。
+
+```sh
+waired models use <model>
+```
+
+より大きいモデルも動きます。ただし会話の間じゅうシステムメモリから自分自身を
+読み直すことになり、長いコーディングセッションほどその遅さを感じます。
+`waired inference off` はこのパソコンでモデルを動かすこと自体をやめる設定です。
+その場合もネットワークには残り、ほかのパソコンの AI を使えます。
 
 <a id="local-ai-started-off-and-i-did-not-choose-that"></a>
 

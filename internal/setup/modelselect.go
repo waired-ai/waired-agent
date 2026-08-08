@@ -31,24 +31,20 @@ type BundledModelSelection struct {
 	ModelID string
 
 	// EnableInference is false when the host is below the recommended
-	// spec — nothing clears the coding-quality floor — and the operator
-	// did not force inference on. It is the install-time DEFAULT for the
+	// spec — no model fits it at all — and the operator did not force
+	// inference on. It is the install-time DEFAULT for the
 	// local-inference toggle, not a decision the user is stuck with: the
 	// node enrolls, runs as a gateway/relay, routes inference to peers,
 	// and can turn local inference on at any time (#465).
 	EnableInference bool
 
-	// BelowRecommendedSpec is true when no model above the coding-quality
-	// floor fits the host (the branch that sets EnableInference=false
-	// unless forced/pinned).
+	// BelowRecommendedSpec is true when no model fits the host (the
+	// branch that sets EnableInference=false unless forced/pinned).
+	//
+	// Until #522 it also covered "the only models that fit are below the
+	// coding-quality floor". There is no floor now, so a host that can
+	// hold a model gets one and this stays false.
 	BelowRecommendedSpec bool
-
-	// BelowFloorModelID is the best-fitting model BELOW the coding-quality
-	// floor when the host is below the recommended spec but can still run
-	// *something*; "" when even the smallest catalog model won't fit. The
-	// caller uses it to offer local inference on the tiny model as a
-	// deliberate, low-quality opt-in rather than silently disabling.
-	BelowFloorModelID string
 
 	// SkipPull is true when the selected model fits memory but not free
 	// disk: keep it configured, but don't pull now (avoid a mid-download
@@ -76,8 +72,6 @@ type BundledModelInputs struct {
 
 	StateDir string
 
-	FloorTier int
-
 	// Forced is set when the operator forced inference on
 	// (--inference-enabled=true): honour the choice even on a host below
 	// the recommended spec rather than defaulting it off.
@@ -98,17 +92,18 @@ type BundledModelInputs struct {
 // from the host's hardware profile (#517). It:
 //
 //  1. picks the engine (router.PickEngine);
-//  2. selects the largest catalog model that fits the host AND clears the
-//     coding-quality floor (router.SelectInstallModel);
+//  2. selects the best catalog model that fits the host
+//     (router.SelectInstallModel);
 //  3. pre-flights free disk at the download target and steps down to a
-//     smaller-but-still-above-floor model when the best fit won't fit
-//     disk (or skips the pull when even the smallest won't);
-//  4. on a host below the recommended spec (nothing above the floor fits) reports
+//     smaller model when the best fit won't fit disk (or skips the pull
+//     when even the smallest won't);
+//  4. on a host below the recommended spec (nothing fits at all) reports
 //     EnableInference=false with an actionable warning — unless the
 //     operator pinned a model or forced inference on.
 //
 // It reuses the runtime fit/scoring machinery wholesale; the only
-// install-specific logic is the quality floor and the disk pre-flight.
+// install-specific logic left is the disk pre-flight. The coding-quality
+// floor that used to sit beside it went away with #522.
 func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 	sel := BundledModelSelection{
 		ModelID:         in.Inference.BundledModelID,
@@ -159,69 +154,41 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 		Hardware:      in.Hardware,
 		Engine:        engine,
 		EngineVersion: engineVer,
-	}, in.FloorTier)
+	})
 	if err != nil {
 		return sel, fmt.Errorf("select install model: %w", err)
 	}
 
 	if !ok {
-		// Below the recommended spec: no model above the coding-quality floor fits.
+		// Below the recommended spec. Since #522 that means one thing:
+		// no model fits this host at all. It used to also mean "the only
+		// models that fit are below the coding-quality floor", and that
+		// second arm is what the floor's removal deleted — a host that
+		// can hold a model now installs it.
 		sel.BelowRecommendedSpec = true
-		// Does anything fit at all, below the floor? On a 2–4 GB host the tiny
-		// 0.5B may still run; expose it so the caller can offer local inference
-		// on it as a deliberate low-quality opt-in rather than silently
-		// disabling. (Guaranteed sub-floor: a tier ≥ floor variant would have
-		// satisfied the floor pick above.)
-		if below, belowOK, derr := router.SelectInstallModel(router.PickInput{
-			Catalog:       in.Manifests,
-			Hardware:      in.Hardware,
-			Engine:        engine,
-			EngineVersion: engineVer,
-		}, 1); derr == nil && belowOK && len(below) > 0 {
-			sel.BelowFloorModelID = below[0].Manifest.ModelID
-		}
 		if in.Forced {
 			// Forcing inference on answers WHETHER local inference runs,
-			// not WHICH model runs it. There is no compiled-in bundled
-			// model to inherit any more, so on a fresh forced install the
-			// configured id is empty and the below-floor fit is the only
-			// honest answer — the one model this host can actually load.
-			// Leaving it empty would boot inference with nothing to serve.
-			if sel.ModelID == "" {
-				sel.ModelID = sel.BelowFloorModelID
-			}
+			// not WHICH model runs it. Nothing fits, so there is no
+			// honest id to fill in: the configured one stays, empty or
+			// not, and the note says the load may fail.
 			sel.Notes = append(sel.Notes, fmt.Sprintf(
 				"hardware is below the recommended spec for a usable coding model, but inference was forced on — %q may fail to load (%s)",
 				sel.ModelID, describeHardwareFit(in.Hardware, engine)))
 			return sel, nil
 		}
 		sel.EnableInference = false
-		// Both branches speak. This used to say nothing at all when a
-		// below-floor model DID fit, deferring to "the interactive
-		// opt-in dialog, or a non-interactive left-disabled note" —
-		// neither of which was ever built. The result was that the host
-		// that could run SOMETHING got less explanation than the host
-		// that could run nothing (#465).
 		sel.Notes = append(sel.Notes,
 			"local inference starts off: this host is below the recommended spec for a usable coding model "+
-				belowRecommendedSpecNeed(in.Manifests, engine, in.FloorTier, in.Hardware)+".")
-		if sel.BelowFloorModelID != "" {
-			sel.Notes = append(sel.Notes, fmt.Sprintf(
-				"%s does fit and can be run here — its coding quality is very low, "+
-					"but it is a real choice. Turn local inference on with `waired inference on`.",
-				sel.BelowFloorModelID))
-		} else {
-			sel.Notes = append(sel.Notes,
-				"This node still enrolls and runs as a gateway/relay — it can route inference to "+
-					"mesh peers. To run models here, install a capable engine with "+
-					"`waired runtimes install`, then `waired inference on`.")
-		}
+				belowRecommendedSpecNeed(in.Manifests, engine, in.Hardware)+".")
+		sel.Notes = append(sel.Notes,
+			"This node still enrolls and runs as a gateway/relay — it can route inference to "+
+				"mesh peers. To run models here, install a capable engine with "+
+				"`waired runtimes install`, then `waired inference on`.")
 		return sel, nil
 	}
 
-	// A fitting model above the floor exists. Pick the best that also fits
-	// free disk; fall back to the smallest-above-floor with the pull
-	// skipped when even that won't fit disk.
+	// Something fits. Pick the best that also fits free disk; fall back to
+	// the smallest with the pull skipped when even that won't fit disk.
 	chosen, skipPull, notes := applyDiskPreflight(in, above, engine)
 	sel.ModelID = chosen.Manifest.ModelID
 	sel.SkipPull = skipPull
@@ -229,7 +196,7 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 	return sel, nil
 }
 
-// applyDiskPreflight walks the above-floor candidates (best first) and
+// applyDiskPreflight walks the fitting candidates (best first) and
 // returns the highest-tier one whose weights + headroom fit free disk at
 // the download target. When even the smallest won't fit, it returns that
 // smallest with skipPull=true so the caller keeps it configured but does
@@ -309,11 +276,15 @@ func selectionNote(p router.Pick, hw hardware.Profile, engine string) string {
 	return note
 }
 
-// underSpecNeed renders the actionable "what's needed" tail of the
-// below-recommended-spec warning, derived from the least-demanding above-floor
-// variant the engine could run.
-func belowRecommendedSpecNeed(manifests []catalog.Manifest, engine string, floor int, hw hardware.Profile) string {
-	minRAM, minVRAM := smallestAboveFloorReq(manifests, engine, floor)
+// belowRecommendedSpecNeed renders the actionable "what's needed" tail of
+// the below-recommended-spec warning, derived from the least-demanding
+// variant the engine could run at all.
+//
+// "At all" rather than "above the floor" since #522 removed the quality
+// floor: the warning now fires only when nothing fits, so the smallest
+// thing the engine can serve IS the bar the operator has to clear.
+func belowRecommendedSpecNeed(manifests []catalog.Manifest, engine string, hw hardware.Profile) string {
+	minRAM, minVRAM := smallestVariantReq(manifests, engine)
 	switch engine {
 	case catalog.RuntimeVLLM:
 		if minVRAM <= 0 {
@@ -327,7 +298,7 @@ func belowRecommendedSpecNeed(manifests []catalog.Manifest, engine string, floor
 		// needs to hold its SERVED window — so quoting the annotation
 		// would name a spec that does not match the verdict. An 8 GB host
 		// was being told it "needs ≥ 4 GB RAM".
-		if gb := smallestAboveFloorRAMGB(manifests, engine, floor, hw.UnifiedMemory); gb > 0 {
+		if gb := smallestServableRAMGB(manifests, engine, hw.UnifiedMemory); gb > 0 {
 			return fmt.Sprintf("(the smallest coding model needs ≥ %d GB of RAM to serve a %d-token window; this host has %d GB)",
 				gb, hostfit.ServingWindow200k, hw.RAMTotalGB)
 		}
@@ -338,14 +309,15 @@ func belowRecommendedSpecNeed(manifests []catalog.Manifest, engine string, floor
 	}
 }
 
-// smallestAboveFloorRAMGB is the least total system RAM any above-floor
-// variant would need to hold its served window here, in whole GB and
-// including the OS allowance the capacity gate deducts. 0 when nothing
-// above the floor can be priced.
+// smallestServableRAMGB is the least total system RAM any variant would
+// need to hold its served window here, in whole GB and including the OS
+// allowance the capacity gate deducts. 0 when nothing can be priced.
 //
-// It is the same arithmetic the refusal was made with, so the number an
-// operator reads is the number they would have to beat.
-func smallestAboveFloorRAMGB(manifests []catalog.Manifest, engine string, floor int, unifiedMemory bool) int {
+// It is the same arithmetic the refusal was made with (#552), so the
+// number an operator reads is the number they would have to beat. Not
+// min_ram_gb: that is a hand-authored opinion, and quoting it told an
+// 8 GB host it "needs ≥ 4 GB RAM".
+func smallestServableRAMGB(manifests []catalog.Manifest, engine string, unifiedMemory bool) int {
 	best := 0
 	for _, m := range manifests {
 		ceiling := hostfit.OllamaCeilingWindow(m)
@@ -353,7 +325,7 @@ func smallestAboveFloorRAMGB(manifests []catalog.Manifest, engine string, floor 
 			continue
 		}
 		for _, v := range m.Variants {
-			if v.QualityTier < floor || !slices.Contains(v.RuntimeSupport, engine) {
+			if !slices.Contains(v.RuntimeSupport, engine) {
 				continue
 			}
 			need := hostfit.OllamaWindowResidentMB(v, ceiling, unifiedMemory)
@@ -369,15 +341,16 @@ func smallestAboveFloorRAMGB(manifests []catalog.Manifest, engine string, floor 
 	return best
 }
 
-// smallestAboveFloorReq returns the smallest MinRAMGB (ollama) / MinVRAMMB
-// (vllm) among engine-supported variants at or above the floor tier — the
-// closest spec an operator could upgrade to. Zero when none exists.
-func smallestAboveFloorReq(manifests []catalog.Manifest, engine string, floor int) (minRAMGB, minVRAMMB int) {
+// smallestVariantReq returns the smallest MinRAMGB (ollama) / MinVRAMMB
+// (vllm) among engine-supported variants — the closest spec an operator
+// could upgrade to. Zero when none exists.
+//
+// It is the vLLM half's only source and the ollama half's last resort:
+// smallestServableRAMGB answers first there, on the arithmetic the
+// refusal was actually made with.
+func smallestVariantReq(manifests []catalog.Manifest, engine string) (minRAMGB, minVRAMMB int) {
 	for _, m := range manifests {
 		for _, v := range m.Variants {
-			if v.QualityTier < floor {
-				continue
-			}
 			if !slices.Contains(v.RuntimeSupport, engine) {
 				continue
 			}
