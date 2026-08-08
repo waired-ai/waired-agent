@@ -83,6 +83,7 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		notAnswering = "local AI is not answering yet"
 		startsOff    = "local AI starts off on this computer"
 		installsOff  = "engine installs are turned off here"
+		settingUp    = "local AI is still setting up here"
 	)
 	slow := func() *management.HostSpeedStatus {
 		return &management.HostSpeedStatus{
@@ -277,6 +278,63 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			absent:   []string{celebration, installsOff},
 			wantExit: exitLocalAIDown,
 		},
+		{
+			// #569, and the pairing is the whole point: the box stops
+			// claiming a live local AI, and the exit code stays 0. A
+			// download that has not finished is not a failed install, and
+			// install.sh / install.ps1 branch on this number.
+			//
+			// `is live` is in the absent list because that sentence — not
+			// the title — is the false claim this row exists to stop: on
+			// job 93067141684 it was printed over a host whose 6.6 GB
+			// model did not arrive until the following init.
+			name: "the model was still on its way when init's window closed (#569)",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				modelPending: true,
+			},
+			want:   settingUp,
+			absent: []string{celebration, needsInstall, notRunning, notAnswering, "is live"},
+		},
+		{
+			// Order: a stated fault outranks "not yet". The wait sets
+			// engineFailure and pending on different arms, so this is
+			// unreachable today and pinned for the same reason as the
+			// opt-out row above — this must never become the arm that
+			// swallows a fault.
+			name: "an engine that would not stay up outranks a model still arriving",
+			summary: daemonSummary{
+				engineFailure: "ollama: process exited during startup: signal: killed",
+				modelPending:  true,
+			},
+			want:     notRunning,
+			absent:   []string{settingUp, celebration},
+			wantExit: exitLocalAIDown,
+		},
+		{
+			// Order against the measurement's box (waired#1099). Both are
+			// non-faults, and the remedies decide it: `waired inference
+			// on` is actionable on a host the measurement switched off,
+			// whereas waiting for a download nobody is running is not.
+			name: "the measurement's own box outranks a model still arriving",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				modelPending: true,
+				hostSpeed:    slow(),
+			},
+			want:   startsOff,
+			absent: []string{settingUp, celebration},
+		},
+		{
+			// NEGATIVE CONTROL for #569, and the row that stops the fix
+			// from being written as plain !ready. A gateway-only host is
+			// not-ready by design, so the wait leaves pending false and
+			// this operator keeps the box and the exit code they had.
+			name:    "a host with inference switched off is not 'still setting up'",
+			summary: daemonSummary{accountEmail: "someone@example.test", modelPending: false},
+			want:    celebration,
+			absent:  []string{settingUp, notRunning},
+		},
 	}
 
 	for _, tc := range cases {
@@ -299,6 +357,88 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			// were configured to do.
 			if got, _ := exitPlanFor(tc.summary.exitErr()); got != tc.wantExit {
 				t.Errorf("exit code = %d, want %d", got, tc.wantExit)
+			}
+		})
+	}
+}
+
+// TestBenchmarkPlanForDoesNotMeasureWhatIsNotThere pins the other half of
+// #569: which hosts `waired init` measures at all.
+//
+// The not-ready row is the new one, and it is not a tidying-up. Before it,
+// a host whose model wait had given up fell through to benchmarkWithScanner,
+// whose waitForBenchmark re-ran the ENTIRE readiness wait on a fresh
+// benchPollDeadline — ten more minutes on the download init had just told
+// the operator it was leaving to the background, and then whatever that
+// second wait concluded became the run's verdict.
+//
+// The benchRun row is load-bearing the other way: this must skip the four
+// states it names and nothing else, or #133's model-switch offer and the
+// throughput figure in the closing box quietly stop happening.
+func TestBenchmarkPlanForDoesNotMeasureWhatIsNotThere(t *testing.T) {
+	ready := modelWaitResult{ready: true}
+	cases := []struct {
+		name        string
+		setupActive bool
+		engineErr   error
+		wait        modelWaitResult
+		want        benchSkip
+	}{
+		{
+			name: "engine up, model ready — measure it",
+			wait: ready, want: benchRun,
+		},
+		{
+			// §4.2: the benchmark prompt reads stdin and can offer to
+			// switch the active model, which would race the wizard.
+			name: "a browser setup is driving", setupActive: true, wait: ready,
+			want: benchSkipSetupDriving,
+		},
+		{
+			name:      "the engine could not be installed (#188)",
+			engineErr: errors.New("download: 403"), want: benchSkipNoEngine,
+		},
+		{
+			// #551: no engine either, by instruction rather than by
+			// failure. Still nothing to measure.
+			name:      "engine installs are turned off (#551)",
+			engineErr: fmt.Errorf("%w (%s)", errEngineOptOut, "WAIRED_NO_OLLAMA"),
+			want:      benchSkipNoEngine,
+		},
+		{
+			name: "the engine installed and would not stay up (#310)",
+			wait: modelWaitResult{engineFailure: "ollama: exited during startup"},
+			want: benchSkipEngineDown,
+		},
+		{
+			// #569, the arm this test was written for. pending is what the
+			// closing box keys on; the skip keys on !ready, so the quieter
+			// not-ready endings are covered by the row below too.
+			name: "the model was still downloading when the window closed (#569)",
+			wait: modelWaitResult{pending: true},
+			want: benchSkipModelNotReady,
+		},
+		{
+			// A gateway-only host: not-ready by design, pending false. It
+			// skips too — there is no model to measure — and it is the
+			// closing box, not this, that must keep treating it as normal.
+			name: "inference is switched off on this host",
+			wait: modelWaitResult{},
+			want: benchSkipModelNotReady,
+		},
+		{
+			// Order: an install that never produced an engine is the more
+			// specific answer than a wait that then found none.
+			name:      "no engine outranks the wait that saw none",
+			engineErr: errors.New("download: 403"),
+			wait:      modelWaitResult{engineFailure: "ollama: exited during startup"},
+			want:      benchSkipNoEngine,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := benchmarkPlanFor(tc.setupActive, tc.engineErr, tc.wait); got != tc.want {
+				t.Errorf("benchmarkPlanFor() = %v, want %v", got, tc.want)
 			}
 		})
 	}

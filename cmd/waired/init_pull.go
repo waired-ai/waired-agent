@@ -25,6 +25,20 @@ import (
 type modelWaitResult struct {
 	ready         bool
 	engineFailure string
+	// pending is the wait ending with local AI still on its way: the
+	// model had not finished downloading inside init's window, the
+	// engine was still being brought up, or the operator took the
+	// terminal back and left the agent to it. Nothing failed and nothing
+	// was configured off — the daemon is still working — so this is not
+	// engineFailure's weaker sibling and never changes the exit code.
+	//
+	// Set on exactly the three endings whose own printed line already
+	// promises the work continues, and on no other. In particular NOT on
+	// the disabled/stopped arm, which is a gateway-only host answering
+	// truthfully and silently: keying a caller on plain !ready instead
+	// would put a "still setting up" ending in front of every host that
+	// was configured never to have local AI (#569).
+	pending bool
 }
 
 // waitForBundledModel blocks until the agent's active (bundled) model has
@@ -145,7 +159,9 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			}
 			if took {
 				writePrompt(out, "Continuing in the background — the agent finishes the download on its own.")
-				return modelWaitResult{}
+				// pending: that sentence is the promise, and the closing
+				// box has to keep it rather than celebrate (#569).
+				return modelWaitResult{pending: true}
 			}
 			lastNote = "" // re-announce the current phase after the interruption
 		}
@@ -291,6 +307,11 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			announce("The AI engine won't start; Waired is retrying…")
 		case st.SubsystemState == "disabled" || st.SubsystemState == "stopped":
 			// Inference won't become ready while disabled / parked — don't block.
+			//
+			// The zero value, deliberately: not-ready here is the honest
+			// answer for a host that was configured to have no local AI,
+			// so it is not pending either. This is the arm that decides a
+			// gateway-only install still ends on the success box (#569).
 			return modelWaitResult{}
 		case st.SubsystemState == "no_engine":
 			// Engine still being brought up on a fresh bundled install
@@ -311,7 +332,10 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				endProgressLine(out, tty, &line)
 				writePrompt(out, "The AI engine still isn't up; Waired keeps bringing it up in the background.")
 				writePrompt(out, "Check progress with `waired status`; if it persists, see `waired doctor` or `journalctl -u waired-agent -e`.")
-				return modelWaitResult{}
+				// pending, not engineFailure: the daemon has not reported a
+				// failure, it just has not finished. engineFailure is the
+				// arm above, where one was actually observed (#310, #569).
+				return modelWaitResult{pending: true}
 			}
 			// Nothing is pulled before an engine exists — applying a desired
 			// model is itself gated on one being present — so the target
@@ -391,7 +415,11 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			endProgressLine(out, tty, &line)
 			writePrompt(out, "Model still downloading; it will finish in the background. "+
 				"Run `waired status` to watch progress, or `waired runtimes benchmark` later to check performance.")
-			return modelWaitResult{}
+			// pending: this line hands the terminal back, and until #569
+			// the caller went straight on to a second readiness wait of
+			// its own — up to ten more minutes on the download this
+			// sentence had just handed to the background.
+			return modelWaitResult{pending: true}
 		}
 		time.Sleep(pullPollInterval)
 	}

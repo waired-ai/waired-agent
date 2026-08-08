@@ -211,6 +211,11 @@ If you turned engine installs off yourself — `--skip-ollama` / `-SkipOllama`,
 or `WAIRED_NO_OLLAMA` in the environment — this is not what you are looking at.
 That device gets no engine on purpose, and `waired init` exits `0`.
 
+Nor is this what a model that is still downloading looks like. Setup ends on
+**`Waired is signed in — local AI is still setting up here`** and exits `0`:
+nothing failed, the transfer simply outlasted the window setup waits in, and
+the background service finishes it. Run `waired status` to watch it.
+
 Common causes:
 
 - **macOS**: the engine app fails its signature check — see
