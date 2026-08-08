@@ -107,8 +107,8 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		}
 
 		// Below the interactive floor → lighter-model flow (issue #133).
-		from := modelWithQuality(rec.FromModelID, rec.FromVariantID)
-		to := modelWithQuality(rec.ToModelID, rec.ToVariantID)
+		from := bundledModelLabelDefault(rec.FromModelID)
+		to := bundledModelLabelDefault(rec.ToModelID)
 		writePromptf(out, "\n%s Local inference is slow: %s measured %.0f tok/s, below the %.0f tok/s interactive floor.\n",
 			emo("🐢", "!"), from, rec.MeasuredTokps, rec.FloorTokps)
 		writePromptf(out, "Recommend switching %s → %s; the lighter model should run more smoothly on this hardware.\n",
@@ -140,9 +140,9 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 	// model's identity, so name it from /inference/status (waired#773);
 	// fall back to the model-less wording when that can't be resolved.
 	if resp.MeasuredTokps > 0 {
-		if modelID, variantID := activeModelForDisplay(mgmtURL); modelID != "" {
+		if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
 			writePromptf(out, "%s Local inference works — %s measured %.0f tok/s on this host.\n",
-				emo("✅", "[ok]"), modelWithQuality(modelID, variantID), resp.MeasuredTokps)
+				emo("✅", "[ok]"), bundledModelLabelDefault(modelID), resp.MeasuredTokps)
 		} else {
 			writePromptf(out, "%s Local inference works — measured %.0f tok/s on this host.\n",
 				emo("✅", "[ok]"), resp.MeasuredTokps)
@@ -159,9 +159,13 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 	}
 
 	if rec := resp.Upgrade; rec != nil && !rec.Dismissed {
-		from := modelWithQuality(rec.FromModelID, rec.FromVariantID)
-		to := modelWithQuality(rec.ToModelID, rec.ToVariantID)
-		writePromptf(out, "\n%s This host has headroom: %s is predicted to run at ~%.0f tok/s here (vs %.0f tok/s measured on %s).\n",
+		from := bundledModelLabelDefault(rec.FromModelID)
+		to := bundledModelLabelDefault(rec.ToModelID)
+		// The direction is stated because the labels no longer carry a
+		// quality figure to compare (#537): the line said which model was
+		// faster and left "and is it better?" to two numbers beside the
+		// names. This flow only ever offers a stronger model, so it says so.
+		writePromptf(out, "\n%s This host has headroom: %s is a stronger model and is predicted to run at ~%.0f tok/s here (vs %.0f tok/s measured on %s).\n",
 			emo("⬆", "^"), to, rec.PredictedTokps, rec.MeasuredTokps, from)
 
 		if nonInteractive {
@@ -224,12 +228,18 @@ func tinyBenchmarkDisableFlow(
 	mgmtURL string, nonInteractive bool, out io.Writer, sc lineReader, tty bool,
 	rec *management.BenchmarkRecommendation, resp *management.BenchmarkRunResponse,
 ) (*management.BenchmarkRunResponse, bool, error) {
-	from := modelWithQuality(rec.FromModelID, rec.FromVariantID)
-	label := modelWithQuality(rec.ToModelID, rec.ToVariantID)
+	from := bundledModelLabelDefault(rec.FromModelID)
+	label := bundledModelLabelDefault(rec.ToModelID)
 	writePromptf(out, "\n%s Local inference is slow here: %s measured %.0f tok/s, below the %.0f tok/s\n",
 		emo("⚠", "!"), from, rec.MeasuredTokps, rec.FloorTokps)
-	writePromptf(out, "   interactive floor. The only lighter model left is %s, whose coding\n", label)
-	writePrompt(out, "   quality is very low and generally not worth running locally.")
+	// "very low quality" was the old wording. It said the wrong thing
+	// twice: the install floor is not a measurement of quality, and #537
+	// gives `small` a meaning that reaches models this flow would happily
+	// recommend — so two lines of the product would have used one word
+	// for two different lines. What the floor actually records is that
+	// this is a model Waired does not choose for anyone.
+	writePromptf(out, "   interactive floor. The only lighter model left is %s, which sits below\n", label)
+	writePrompt(out, "   the bar Waired uses for coding — we would not choose it for any computer.")
 
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", from)
@@ -418,12 +428,16 @@ func inferenceSubsystemState(mgmtURL string) (state, failureReason string) {
 // /inference/status for the no-recommendation "works" line — the benchmark
 // response itself doesn't name the model (waired#773). Empty on any error
 // (old daemon, unreachable); callers fall back to model-less wording.
-func activeModelForDisplay(mgmtURL string) (modelID, variantID string) {
+//
+// It returned the variant id too, for the quality figure the label used to
+// carry. #537 removed the figure and nothing else ever read the variant,
+// so it is gone rather than left as a return value with no reader.
+func activeModelForDisplay(mgmtURL string) string {
 	st, ok := fetchInferenceStatus(mgmtURL)
 	if !ok || st.Active == nil {
-		return "", ""
+		return ""
 	}
-	return st.Active.ModelID, st.Active.VariantID
+	return st.Active.ModelID
 }
 
 // acceptRecommendation POSTs the switch and returns the daemon's response —

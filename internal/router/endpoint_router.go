@@ -1383,7 +1383,7 @@ func (s *Selector) buildMeshCandidates(
 				// common no-public-peers path never pays for the scan.
 				s.ensureBeat(gate, snap)
 			}
-			if !gate.admits(tier) {
+			if !gate.admits(tier, s.peerSize(p.InferenceState.Type, p.InferenceState.Models)) {
 				continue
 			}
 			displayID, isPublic = pseudonym, true

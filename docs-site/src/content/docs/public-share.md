@@ -46,8 +46,8 @@ the owner's own work.
 
 **This version does not verify that a public node ran the model faithfully**,
 or that it returned honest, full-quality output. Your controls: set a minimum
-quality score (`--min-tier`), use explicit mode so public nodes are only used
-when you say so, and judge results yourself.
+model size (`--min-model-size`), use explicit mode so public nodes are only
+used when you say so, and judge results yourself.
 
 ### Your nickname is stable, so patterns can be linked
 
@@ -116,7 +116,8 @@ your requests may go to public nodes:
 - **explicit** — public nodes are allowed whenever the filters below allow
   them.
 
-Extra controls (CLI): `--min-tier N` sets a minimum quality score;
+Extra controls (CLI): `--min-model-size small|medium|large` only uses machines
+running a model of at least that size;
 `--main on|off` and `--sub on|off` allow or deny public nodes for the main
 conversation and sub-agents separately — for example, keep
 your main assistant off public nodes while sub-agents may use them.

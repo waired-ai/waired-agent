@@ -10,6 +10,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 func newPublicUseTestServer(t *testing.T) (*Server, string) {
@@ -97,7 +98,7 @@ func TestPublicConsent_FlowAndDefaults(t *testing.T) {
 	}
 
 	// Correct version → consent recorded + §4.2 defaults applied
-	// (auto, main+sub on, no tier threshold).
+	// (auto, main+sub on, no size threshold).
 	w = doPostJSON(t, s, "/waired/v1/public/consent", PublicConsentRequest{WarningVersion: PublicShareWarningVersion})
 	if w.Code != http.StatusOK {
 		t.Fatalf("consent status = %d body=%s", w.Code, w.Body.String())
@@ -106,19 +107,19 @@ func TestPublicConsent_FlowAndDefaults(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if !resp.Consented || resp.Mode != agentconfig.PublicUseModeAuto ||
 		resp.EffectiveMode != agentconfig.PublicUseModeAuto ||
-		!resp.Main || !resp.Sub || resp.MinQualityTier != 0 {
+		!resp.Main || !resp.Sub || resp.MinModelSize != "" || resp.MinQualityTier != 0 {
 		t.Fatalf("post-consent state = %+v, want auto defaults", resp)
 	}
 
 	// Now settings apply, partially (unset fields unchanged).
-	tier := 4
+	size := hostfit.ModelSizeMedium
 	sub := false
-	w = doPostJSON(t, s, "/waired/v1/public/use", PublicUseUpdateRequest{MinQualityTier: &tier, Sub: &sub})
+	w = doPostJSON(t, s, "/waired/v1/public/use", PublicUseUpdateRequest{MinModelSize: &size, Sub: &sub})
 	if w.Code != http.StatusOK {
 		t.Fatalf("settings status = %d body=%s", w.Code, w.Body.String())
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.Mode != agentconfig.PublicUseModeAuto || resp.MinQualityTier != 4 || !resp.Main || resp.Sub {
+	if resp.Mode != agentconfig.PublicUseModeAuto || resp.MinModelSize != hostfit.ModelSizeMedium || !resp.Main || resp.Sub {
 		t.Fatalf("partial update = %+v", resp)
 	}
 
@@ -128,6 +129,14 @@ func TestPublicConsent_FlowAndDefaults(t *testing.T) {
 		t.Fatalf("invalid mode status = %d, want 400", w.Code)
 	}
 
+	// A size outside the vocabulary is a 400 rather than a silently
+	// stored value: the floor is enforced by rank, and an unrecognised
+	// word ranks as unknown, which would quietly mean "no floor".
+	huge := "enormous"
+	if w := doPostJSON(t, s, "/waired/v1/public/use", PublicUseUpdateRequest{MinModelSize: &huge}); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid min_model_size status = %d, want 400", w.Code)
+	}
+
 	// Re-consent (same version, e.g. re-running the flow) keeps the
 	// user's settings — defaults are first-consent only.
 	w = doPostJSON(t, s, "/waired/v1/public/consent", PublicConsentRequest{WarningVersion: PublicShareWarningVersion})
@@ -135,7 +144,7 @@ func TestPublicConsent_FlowAndDefaults(t *testing.T) {
 		t.Fatalf("re-consent status = %d", w.Code)
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.MinQualityTier != 4 || resp.Sub {
+	if resp.MinModelSize != hostfit.ModelSizeMedium || resp.Sub {
 		t.Fatalf("re-consent must keep settings, got %+v", resp)
 	}
 }

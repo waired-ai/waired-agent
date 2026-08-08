@@ -85,7 +85,7 @@ func TestRunPublicStatus_RendersProviderAndConsumerState(t *testing.T) {
 		"Guest limit: 3 at once",
 		"Use public nodes: auto",
 		"Consented: yes",
-		"Minimum quality tier: 2",
+		"Smallest model accepted:",
 		"Main agent: on",
 		"Sub agents: off",
 	} {

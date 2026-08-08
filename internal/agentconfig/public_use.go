@@ -40,8 +40,20 @@ type PublicUse struct {
 	// Mode is off / auto / explicit. Empty means off (never consented
 	// or never enabled).
 	Mode string `json:"mode,omitempty"`
-	// MinQualityTier is the lower bound on a public node's advertised
-	// model tier. 0 = no threshold.
+	// MinModelSize is the lower bound on the size of the model a public
+	// node advertises — hostfit.ModelSizeSmall / Medium / Large. Empty =
+	// no threshold.
+	//
+	// It replaced MinQualityTier in #537, and it had to: a size floor
+	// cannot be expressed as a tier floor, because the two orderings
+	// cross. glm-4.5-air is tier 75 and large; qwen3.6-35b-a3b is tier 90
+	// and medium. Picking either number as the boundary admits a model
+	// the other rule excludes.
+	MinModelSize string `json:"min_model_size,omitempty"`
+
+	// MinQualityTier is the retired numeric floor. Read on load and
+	// migrated into MinModelSize (see migrateMinQualityTier), then
+	// dropped on the next write — it is not consulted anywhere else.
 	MinQualityTier int `json:"min_quality_tier,omitempty"`
 	// Main / Sub toggle whether main-class and sub-class requests may
 	// use public candidates.

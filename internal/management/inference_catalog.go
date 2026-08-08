@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -139,6 +140,20 @@ type CatalogFamily struct {
 	// no code for it. A renderer reads Fit.Reason first and falls back
 	// here.
 	DeficitLabel string `json:"deficit_label,omitempty"`
+
+	// ModelSize is which class of graphics card runs this model —
+	// hostfit.ModelSize, small / medium / large. It is what the tray and
+	// `waired models ls --detail` print where they used to print the
+	// quality tier (#537).
+	//
+	// Filled here rather than read off Fit.ModelSize because it is true
+	// of every row, and Fit is not built on every branch: the
+	// engine-version floor deliberately leaves it at its zero value, and
+	// the size of a model is not a fact about the engine's version.
+	// Filling it here also keeps router/family_picker.go from becoming a
+	// second writer of a Presentation, which is the split
+	// waired-agent#321 established.
+	ModelSize string `json:"model_size,omitempty"`
 
 	// Fit is the shared projection (proto/hostfit.Presentation) — the
 	// same shape and the same JSON names the control plane's onboarding
@@ -282,6 +297,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		f := CatalogFamily{
 			ModelID:         m.ModelID,
 			DisplayName:     m.DisplayName,
+			ModelSize:       hostfit.ModelSize(m),
 			Fits:            fit.Fits,
 			Active:          m.ModelID == activeModelID,
 			Preferred:       pref.ModelID != "" && m.ModelID == pref.ModelID,
@@ -311,6 +327,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 		}
 		resp.Families = append(resp.Families, f)
 	}
+	sortCatalogFamilies(resp.Families)
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -396,4 +413,88 @@ func displayNameFor(manifests []catalog.Manifest, modelID string) string {
 		}
 	}
 	return ""
+}
+
+// sortCatalogFamilies orders the catalog the way the computer itself
+// would rank it: what it can run first, best first.
+//
+// The rows used to arrive in catalog order, which is the manifest
+// filenames sorted — alphabetical, and a statement about nothing. That
+// was survivable only because every row printed a quality number a
+// reader could sort by eye. #537 took the number off, so the order has
+// to carry what the number did.
+//
+// It is the rule the control plane's setup wizard already applies to the
+// same catalog (waired/web/admin modelsForEngine). One list, one order,
+// whichever picker the operator opens — the agreement waired-agent#321
+// exists to keep.
+//
+// Models that merely do not FIT stay in the list, shown with their
+// shortfall: a picker that silently omits them leaves the operator
+// wondering where a model they read about went, and on a small computer
+// it could empty the list entirely. They sort to the bottom, because a
+// list that opens with things you cannot have reads as a wall.
+//
+// quality_tier is the final key and stays internal — #537 removed it
+// from every surface but kept it as the ranking it always was, and
+// "best first" is exactly the ordering the machine's own picker uses.
+func sortCatalogFamilies(fams []CatalogFamily) {
+	rank := func(f CatalogFamily) (runnable, noVariant, slow, demoted int) {
+		if !f.Fits {
+			runnable = 1
+		}
+		if f.Fit != nil {
+			if f.Fit.Reason == hostfit.ReasonNoVariantForEngine {
+				noVariant = 1
+			}
+			if f.Fit.Speed == hostfit.SpeedSlow {
+				slow = 1
+			}
+			if f.Fit.NotRecommended {
+				demoted = 1
+			}
+		}
+		return
+	}
+	sort.SliceStable(fams, func(i, j int) bool {
+		ai, bi, ci, di := rank(fams[i])
+		aj, bj, cj, dj := rank(fams[j])
+		switch {
+		case ai != aj:
+			return ai < aj
+		// Below everything else: models this way of running AI has no
+		// build of. They are shown rather than dropped, but they are the
+		// least actionable of the unavailable rows — the shortfalls above
+		// at least name hardware.
+		case bi != bj:
+			return bi < bj
+		// Ones we already know are too slow sink below ones we do not.
+		// Ranking on quality alone would put a model this computer decodes
+		// at a few words a second at the top, purely for being the largest
+		// thing that fits.
+		case ci != cj:
+			return ci < cj
+		// Then the demotion: a model that runs but is not the right choice
+		// here sits under the ones that are, and above the ones that do
+		// not run. It stays selectable — this is an ordering, not a filter
+		// (waired-agent#229).
+		case di != dj:
+			return di < dj
+		}
+		return catalogRankTier(fams[i]) > catalogRankTier(fams[j])
+	})
+}
+
+// catalogRankTier is the ordering key only, never rendered. It prefers
+// the projection's tier — that one describes the variant the verdict is
+// about, including on a row with no fitting variant — and falls back to
+// the recommended-spec projection.
+func catalogRankTier(f CatalogFamily) int {
+	if f.Fit != nil && f.Fit.QualityTier > 0 {
+		return f.Fit.QualityTier
+	}
+	if f.Recommended != nil {
+		return f.Recommended.QualityTier
+	}
+	return 0
 }

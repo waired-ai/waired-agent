@@ -525,10 +525,15 @@ func realRec() *management.BenchmarkRecommendation {
 	}
 }
 
-// Every benchmark line must name the model it talks about: the slow headline
-// names the benchmarked (from) model, the suggestion names the from → to pair,
-// and both carry the catalog quality tier (waired#773).
-func TestPromptBenchmark_NamesFromToAndQuality(t *testing.T) {
+// Every benchmark line must name the model it talks about: the slow
+// headline names the benchmarked (from) model and the suggestion names
+// the from → to pair (waired#773).
+//
+// The names used to carry "(quality N)" beside them. #537 removed the
+// figure — after #518 it is arithmetic over two catalog fields, not a
+// measurement — and this flow says which direction it is offering in its
+// own prose instead of leaving a reader to compare two numbers.
+func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 	stub := &benchStub{ready: true, rec: realRec()}
 	srv := stub.server()
 	defer srv.Close()
@@ -539,12 +544,17 @@ func TestPromptBenchmark_NamesFromToAndQuality(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		"Qwen3 Coder 30B-A3B Instruct (quality 65) measured 43 tok/s",
-		"Recommend switching Qwen3 Coder 30B-A3B Instruct (quality 65) → Qwen3.6 27B (quality 70)",
+		"Qwen3 Coder 30B-A3B Instruct measured 43 tok/s",
+		"Recommend switching Qwen3 Coder 30B-A3B Instruct → Qwen3.6 27B",
+		// The direction, which the numbers used to carry.
+		"the lighter model should run more smoothly",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q; got:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "quality 65") || strings.Contains(got, "quality 70") {
+		t.Errorf("output still prints a quality figure (#537); got:\n%s", got)
 	}
 }
 
@@ -560,7 +570,7 @@ func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	want := "Local inference works — Qwen3 Coder 30B-A3B Instruct (quality 65) measured 120 tok/s"
+	want := "Local inference works — Qwen3 Coder 30B-A3B Instruct measured 120 tok/s"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
 	}
@@ -583,9 +593,14 @@ func TestPromptBenchmark_WorksLineFallsBackWhenActiveUnknown(t *testing.T) {
 	}
 }
 
-// The upgrade recommendation names the from → to pair with quality tiers and
-// contrasts predicted vs measured throughput.
-func TestPromptBenchmark_UpgradeNamesFromToAndQuality(t *testing.T) {
+// The upgrade recommendation names the from → to pair and contrasts
+// predicted vs measured throughput.
+//
+// It also has to SAY that the target is the stronger model. The line is
+// otherwise entirely about speed, and this flow is the one that offers a
+// multi-GB download — with the quality figures gone (#537) nothing else
+// in it tells the reader what they would be getting.
+func TestPromptBenchmark_UpgradeNamesFromTo(t *testing.T) {
 	upgrade := &management.BenchmarkRecommendation{
 		Direction:   "upgrade",
 		FromModelID: "qwen3.6-27b", FromVariantID: "q4-gguf",
@@ -600,9 +615,12 @@ func TestPromptBenchmark_UpgradeNamesFromToAndQuality(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("n\n")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	want := "Qwen3.6 35B-A3B (quality 89) is predicted to run at ~110 tok/s here (vs 140 tok/s measured on Qwen3.6 27B (quality 70))"
+	want := "Qwen3.6 35B-A3B is a stronger model and is predicted to run at ~110 tok/s here (vs 140 tok/s measured on Qwen3.6 27B)"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
+	}
+	if strings.Contains(out.String(), "quality 89") || strings.Contains(out.String(), "quality 70") {
+		t.Errorf("upgrade line still prints a quality figure (#537); got:\n%s", out.String())
 	}
 }
 

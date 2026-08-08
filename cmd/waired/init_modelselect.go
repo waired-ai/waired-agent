@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -22,8 +21,7 @@ func bundledModelLabel(manifests []catalog.Manifest, modelID string) string {
 // it up, so they resolve against EVERY shipped manifest rather than the
 // offered subset. A withheld model is one an operator can still pin,
 // and a lookup that cannot find it degrades quietly: the wrong label
-// printed, no quality tier, no below-floor warning — for a model this
-// build ships.
+// printed, no below-floor warning — for a model this build ships.
 //
 // The rule across the tree: taking a model id as input and looking it
 // up is RESOLUTION and takes the complete set; enumerating models to
@@ -78,50 +76,27 @@ func canonicalBundledModelID(modelID string) string {
 	return modelID
 }
 
-// bundledVariantQuality resolves the catalog quality tier (1–100) for
-// modelID's variantID, falling back to the model's best variant when
-// variantID is empty or not found (the recommendation may name a variant the
-// local catalog build doesn't carry). ok is false when the embedded catalog
-// is unreadable or modelID is unknown.
-func bundledVariantQuality(modelID, variantID string) (int, bool) {
-	manifests, err := catalog.BundledManifestsIncludingInternal()
-	if err != nil {
-		return 0, false
-	}
-	m, ok := catalog.LookupByAlias(modelID, manifests)
-	if !ok {
-		return 0, false
-	}
-	best := 0
-	for _, v := range m.Variants {
-		if variantID != "" && v.VariantID == variantID && v.QualityTier > 0 {
-			return v.QualityTier, true
-		}
-		if v.QualityTier > best {
-			best = v.QualityTier
-		}
-	}
-	if best > 0 {
-		return best, true
-	}
-	return 0, false
-}
-
-// modelWithQuality renders "<label> (quality N)" for benchmark and
-// recommendation lines, so the user can weigh the speed/quality trade-off of
-// a switch (waired#773). Degrades to the bare label when the tier is unknown
-// and to the raw id when the catalog can't resolve the model.
-func modelWithQuality(modelID, variantID string) string {
-	label := bundledModelLabelDefault(modelID)
-	if q, ok := bundledVariantQuality(modelID, variantID); ok {
-		return fmt.Sprintf("%s (quality %d)", label, q)
-	}
-	return label
-}
+// The benchmark and recommendation lines used to render
+// "<label> (quality 30)" so the user could weigh the speed/quality
+// trade-off of a switch (waired#773). #537 removed the figure: after
+// #518 the tier is arithmetic over two catalog fields, and a number
+// labelled "quality" beside a model claims a measurement behind a
+// composite.
+//
+// Nothing replaces it in the label, because a coarse size class would
+// not answer the question those lines ask either. What the user needs
+// there is the DIRECTION of the swap, and each flow already knows which
+// direction it is offering — so it says so in its own prose rather than
+// leaving the reader to compare two numbers. See benchmarkWithScanner.
 
 // isBundledModelBelowFloor reports whether modelID (id or alias) resolves to a
-// bundled model whose best variant sits below the install quality floor — the
-// "very low quality, not recommended for local use" tier.
+// bundled model whose best variant sits below the install quality floor —
+// a model Waired does not choose for anyone.
+//
+// Not "very low quality", which is what the prompt used to call it. The
+// floor is not a measurement, and #537 gives `small` a meaning that
+// reaches models this flow recommends without hesitation, so one word for
+// the two lines would have been a product saying two things.
 //
 // Which model that is moves with the catalog, so this does not name one:
 // it was qwen2.5-coder-0.5b (tier 10) until #200 retired it, and the

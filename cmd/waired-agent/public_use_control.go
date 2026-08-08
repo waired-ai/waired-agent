@@ -125,11 +125,15 @@ func (c *publicUseController) Nudge(n router.PublicNudge) {
 // "consented and deliberately off".
 func resolvePublicPolicy(pu agentconfig.PublicUse, warningVersion int) router.PublicPolicy {
 	return router.PublicPolicy{
-		Mode:           publicModeOf(pu.EffectiveMode(warningVersion)),
-		Consented:      pu.Consented(warningVersion),
-		MinQualityTier: pu.MinQualityTier,
-		Main:           pu.Main,
-		Sub:            pu.Sub,
+		Mode:      publicModeOf(pu.EffectiveMode(warningVersion)),
+		Consented: pu.Consented(warningVersion),
+		// Both floors travel: the router resolves the legacy tier into a
+		// size where the catalog is in hand, and the stored file keeps it
+		// until the next settings write clears it (#537).
+		MinModelSize:         pu.MinModelSize,
+		LegacyMinQualityTier: pu.MinQualityTier,
+		Main:                 pu.Main,
+		Sub:                  pu.Sub,
 	}
 }
 

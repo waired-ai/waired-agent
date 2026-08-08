@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // PublicShareWarningVersion is the version of the consent warning text
@@ -95,8 +96,13 @@ func (s *Server) handlePublicWarning(w http.ResponseWriter, r *http.Request) {
 // success body of the POST variants. EffectiveMode is what the router
 // enforces (off until consent for the current warning version exists).
 type PublicUseResponse struct {
-	Mode           string `json:"mode"`
-	EffectiveMode  string `json:"effective_mode"`
+	Mode          string `json:"mode"`
+	EffectiveMode string `json:"effective_mode"`
+	// MinModelSize is the size floor — small|medium|large, or empty for
+	// none. It replaced min_quality_tier in #537, which is still reported
+	// so a client can show a floor an operator set before the change;
+	// once they set a size it is cleared.
+	MinModelSize   string `json:"min_model_size,omitempty"`
 	MinQualityTier int    `json:"min_quality_tier"`
 	Main           bool   `json:"main"`
 	Sub            bool   `json:"sub"`
@@ -107,10 +113,14 @@ type PublicUseResponse struct {
 // PublicUseUpdateRequest is the body of POST /waired/v1/public/use.
 // Pointer fields distinguish "leave unchanged" from an explicit value.
 type PublicUseUpdateRequest struct {
-	Mode           *string `json:"mode,omitempty"`
-	MinQualityTier *int    `json:"min_quality_tier,omitempty"`
-	Main           *bool   `json:"main,omitempty"`
-	Sub            *bool   `json:"sub,omitempty"`
+	Mode *string `json:"mode,omitempty"`
+	// MinModelSize is small|medium|large, or "" to clear the floor.
+	// Setting it also clears any pre-#537 numeric floor: keeping both
+	// would leave two rules for one setting, and the one the operator
+	// just expressed wins.
+	MinModelSize *string `json:"min_model_size,omitempty"`
+	Main         *bool   `json:"main,omitempty"`
+	Sub          *bool   `json:"sub,omitempty"`
 }
 
 // PublicConsentRequest is the body of POST /waired/v1/public/consent.
@@ -128,6 +138,7 @@ func (s *Server) publicUseResponse(p agentconfig.PublicUse) PublicUseResponse {
 	return PublicUseResponse{
 		Mode:           mode,
 		EffectiveMode:  p.EffectiveMode(PublicShareWarningVersion),
+		MinModelSize:   p.MinModelSize,
 		MinQualityTier: p.MinQualityTier,
 		Main:           p.Main,
 		Sub:            p.Sub,
@@ -174,12 +185,16 @@ func (s *Server) handlePublicUse(w http.ResponseWriter, r *http.Request) {
 			}
 			p.Mode = *req.Mode
 		}
-		if req.MinQualityTier != nil {
-			if *req.MinQualityTier < 0 {
-				writeJSON(w, http.StatusBadRequest, errorBody("bad_request", "min_quality_tier must be >= 0"))
+		if req.MinModelSize != nil {
+			if *req.MinModelSize != "" && hostfit.SizeRank(*req.MinModelSize) == 0 {
+				writeJSON(w, http.StatusBadRequest, errorBody("bad_request", "min_model_size must be small|medium|large (or empty for no floor)"))
 				return
 			}
-			p.MinQualityTier = *req.MinQualityTier
+			p.MinModelSize = *req.MinModelSize
+			// The operator has now expressed this setting in the current
+			// vocabulary, so the retired one stops being consulted and stops
+			// being stored (#537).
+			p.MinQualityTier = 0
 		}
 		if req.Main != nil {
 			p.Main = *req.Main
@@ -231,11 +246,12 @@ func (s *Server) handlePublicConsent(w http.ResponseWriter, r *http.Request) {
 	}
 	if first {
 		// §4.2: consent switches auto mode on with both classes enabled
-		// and no tier threshold. Re-consent after a warning-text bump
+		// and no size threshold. Re-consent after a warning-text bump
 		// keeps whatever the user had configured.
 		p.Mode = agentconfig.PublicUseModeAuto
 		p.Main = true
 		p.Sub = true
+		p.MinModelSize = ""
 		p.MinQualityTier = 0
 	}
 	if err := agentconfig.SavePublicUse(s.publicUse.Path, p); err != nil {

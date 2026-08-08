@@ -71,8 +71,9 @@ waired models ls --detail     # every model, what it needs, and what fits this c
 
 ## What the list tells you
 
-Every model in the list shows the memory it needs and its quality score — a
-bigger score means better answers.
+Every model in the list shows the memory it needs and its size — `small`,
+`medium` or `large`, meaning the class of graphics card that runs it at all.
+Bigger models generally give better answers and need more machine.
 
 - **The memory figure** is what the model takes to serve a full coding
   session: its weights, the AI engine's working memory, and the context
@@ -108,8 +109,8 @@ and Linux).
 		```
 
 		This measures how fast this computer actually is. If a different model
-		would suit it better, Waired offers the swap and names both models with
-		their quality score, so you can weigh speed against quality. Accept and
+		would suit it better, Waired offers the swap, names both models and says
+		which direction it is offering. Accept and
 		the download runs in the foreground with a progress bar — press
 		**Enter** at any time to let it finish in the background instead.
 	</TabItem>

@@ -36,6 +36,12 @@ type catalogDetailFamily struct {
 	DeficitLabel string             `json:"deficit_label"`
 	Recommended  *catalogDetailSpec `json:"recommended"`
 
+	// ModelSize is which class of graphics card runs this model —
+	// small / medium / large (#537). A property of the model, so it
+	// reads the same on every computer; the FIT and NEEDS columns are
+	// the ones about this one.
+	ModelSize string `json:"model_size"`
+
 	// Fit is the shared projection (proto/hostfit.Presentation) the
 	// agent, the tray and the setup wizard all render from
 	// (waired-agent#321). Mirrored rather than imported, like every other
@@ -126,7 +132,7 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	// Writes target a strings.Builder-backed tabwriter, so they never
 	// error; ignore the returns to satisfy errcheck.
-	_, _ = fmt.Fprintln(tw, "  MODEL\tPARAMS\tTIER\tNEEDS\tFIT")
+	_, _ = fmt.Fprintln(tw, "  MODEL\tPARAMS\tSIZE\tNEEDS\tFIT")
 	for _, f := range c.Families {
 		params := "-"
 		if f.Recommended != nil {
@@ -134,7 +140,7 @@ func formatCatalogDetail(c catalogDetailResp) string {
 		}
 		_, _ = fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\t%s\n",
 			catalogStateMarker(f), f.ModelID, params,
-			catalogTierColumn(f), catalogNeedsColumn(c.Engine, f), catalogFitColumn(f))
+			catalogSizeColumn(f), catalogNeedsColumn(c.Engine, f), catalogFitColumn(f))
 	}
 	_ = tw.Flush()
 
@@ -143,7 +149,10 @@ func formatCatalogDetail(c catalogDetailResp) string {
 		"session: its weights, the engine's overhead, and the context cache.\n")
 	b.WriteString("A model is offered whenever this computer has that much memory in total,\n" +
 		"counting system RAM and graphics memory together. Waired recommends the\n" +
-		"highest quality-tier model that can hold a whole coding session here.\n")
+		"strongest model that can hold a whole coding session here.\n")
+	b.WriteString("SIZE is which class of graphics card runs the model at all — small fits an\n" +
+		"8 GB card, medium a 32 GB one, large needs more. Unlike NEEDS it says the\n" +
+		"same thing on every computer, so it is the one to quote elsewhere.\n")
 	b.WriteString("Why the current pick: `waired infer --explain`.\n")
 	b.WriteString("Full hardware-fit reference: https://docs.waired.ai/reference/model-catalog/\n")
 	return b.String()
@@ -165,22 +174,22 @@ func catalogStateMarker(f catalogDetailFamily) string {
 	}
 }
 
-// catalogTierColumn is the raw catalog quality ranking. Preferred from
-// the shared projection — it describes the variant the verdict is about,
-// which the recommended-spec projection cannot on a row with no fitting
-// variant.
-func catalogTierColumn(f catalogDetailFamily) string {
-	tier := 0
-	switch {
-	case f.Fit != nil && f.Fit.QualityTier > 0:
-		tier = f.Fit.QualityTier
-	case f.Recommended != nil:
-		tier = f.Recommended.QualityTier
-	}
-	if tier <= 0 {
+// catalogSizeColumn is which class of graphics card runs this model —
+// small / medium / large, hostfit.ModelSize (#537).
+//
+// It used to print the raw quality_tier. #518 redefined that number as
+// arithmetic over two catalog fields, so a column headed by a quality
+// word claimed a measurement behind a composite.
+//
+// Not the same question as NEEDS beside it. NEEDS is what this model
+// costs on THIS computer, counting its RAM and graphics memory together;
+// this is a property of the model, the same on every machine, and it is
+// the one that survives being read on a machine other than your own.
+func catalogSizeColumn(f catalogDetailFamily) string {
+	if f.ModelSize == "" {
 		return "-"
 	}
-	return fmt.Sprintf("%d", tier)
+	return f.ModelSize
 }
 
 // catalogNeedsColumn is what the model needs to do coding work here:

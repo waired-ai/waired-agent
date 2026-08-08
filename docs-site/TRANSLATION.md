@@ -20,7 +20,7 @@ provenance rules (#468).
 - CLI / アプリの出力を引用するときは**逐語**で写す（`Mesh` ステータス行、
   `Worker:` メニューラベル、`waired phase` の出力など）。訳したい場合は
   引用の外に補足を添える。出力の引用を「修正」しない。
-- フラグ名・JSON キー・識別子は逐語（`--min-tier`、`quality_tier` など）。
+- フラグ名・JSON キー・識別子は逐語（`--min-model-size`、`model_size` など）。
 
 ## Terms
 
@@ -35,7 +35,8 @@ provenance rules (#468).
 | control plane | コントロールプレーン（= コーディネーションサービス） | glossary で相互リンク | #473 §3 |
 | coordination service | コーディネーションサービス | 調整サービスとしない | #473 §3 |
 | Network Map | Network Map（初出に 1 行説明） | 固有名詞 | #473 §3 |
-| quality score (`quality_tier`) | 品質スコア（1–100） | ティア/ランク/floor と書かない。識別子は逐語 | #473 §2 |
+| model size (`small`/`medium`/`large`) | サイズ（`small`/`medium`/`large` は逐語） | 「どのクラスのグラフィックボードで動くか」であって品質の主張ではない。訳語を当てず値は英語のまま | #537 |
+| ~~quality score (`quality_tier`)~~ | ~~品質スコア（1–100）~~ | **ユーザー向け文面から撤去（#537）**。数値はカタログの内部順位で測定値ではない。以後この語をユーザー面に書かない | #473 §2 → #537 |
 | context window | コンテキストウィンドウ | 「窓」単独は禁止 | #473 §4 |
 | enrollment / enroll | 登録 | エンロールとしない | #473 §4 |
 | sign in | サインイン | | glossary |

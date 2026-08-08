@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // useDaemon is a fake Local Management API for the `public use` tests. It
@@ -123,13 +124,27 @@ func TestNewPublicUseCmd_SendsOnlyChangedFields(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetIn(strings.NewReader(""))
-	cmd.SetArgs([]string{"--mgmt", url, "--min-tier", "2"})
+	cmd.SetArgs([]string{"--mgmt", url, "--min-model-size", "medium"})
 	cmd.SilenceUsage = true
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if got := strings.TrimSpace(string(d.usePostBody)); got != `{"min_quality_tier":2}` {
-		t.Errorf("POST body = %s, want exactly {\"min_quality_tier\":2}", got)
+	if got := strings.TrimSpace(string(d.usePostBody)); got != `{"min_model_size":"medium"}` {
+		t.Errorf("POST body = %s, want exactly {\"min_model_size\":\"medium\"}", got)
+	}
+}
+
+// TestNewPublicUseCmd_RejectsUnknownSize: the floor is enforced by rank
+// and an unrecognised word ranks as unknown, which would quietly mean "no
+// floor" — so it is rejected at the flag rather than sent.
+func TestNewPublicUseCmd_RejectsUnknownSize(t *testing.T) {
+	cmd := newPublicUseCmd()
+	cmd.SetArgs([]string{"--min-model-size", "enormous"})
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "small, medium or large") {
+		t.Fatalf("err = %v, want a vocabulary rejection", err)
 	}
 }
 
@@ -162,14 +177,18 @@ func TestNewPublicUseCmd_RejectsInvalidOnOff(t *testing.T) {
 	}
 }
 
-func TestNewPublicUseCmd_RejectsNegativeMinTier(t *testing.T) {
+// TestNewPublicUseCmd_MinTierIsRetired: --min-tier still parses so a
+// script that passes it is told what changed instead of failing on an
+// unknown flag, and it never silently writes a floor the daemon no longer
+// reads (#537, #200's treatment of a retired name).
+func TestNewPublicUseCmd_MinTierIsRetired(t *testing.T) {
 	cmd := newPublicUseCmd()
-	cmd.SetArgs([]string{"--min-tier", "-1"})
+	cmd.SetArgs([]string{"--min-tier", "40"})
 	cmd.SilenceUsage = true
 	cmd.SilenceErrors = true
 	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), ">= 0") {
-		t.Fatalf("err = %v, want a >= 0 rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "--min-model-size") {
+		t.Fatalf("err = %v, want a rejection naming the replacement flag", err)
 	}
 }
 
@@ -183,7 +202,7 @@ func TestRunPublicUse_ConsentRequired409TriggersConsentFlowAndRetries(t *testing
 	url := d.start(t)
 
 	var out bytes.Buffer
-	upd := management.PublicUseUpdateRequest{MinQualityTier: intPtr(3)}
+	upd := management.PublicUseUpdateRequest{MinModelSize: strPtr(hostfit.ModelSizeMedium)}
 	if err := runPublicUse(url, upd, true, false, &out, strings.NewReader("y\n")); err != nil {
 		t.Fatalf("runPublicUse: %v", err)
 	}
@@ -195,4 +214,4 @@ func TestRunPublicUse_ConsentRequired409TriggersConsentFlowAndRetries(t *testing
 	}
 }
 
-func intPtr(i int) *int { return &i }
+func strPtr(s string) *string { return &s }

@@ -9,6 +9,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -52,11 +53,19 @@ func allowAll() PublicPolicy {
 // candidates can appear on.
 func publicSelector(t *testing.T, policy PublicPolicy, peers ...inferencemesh.PeerView) (*Selector, *[]PublicNudge, *int) {
 	t.Helper()
+	return publicSelectorWith(t, policy, qwenTier(50), peers...)
+}
+
+// publicSelectorWith is publicSelector over a caller-chosen manifest, for
+// the size-floor cases that need a weight annotation (or deliberately no
+// weight annotation) on the model the peer advertises.
+func publicSelectorWith(t *testing.T, policy PublicPolicy, manifest catalog.Manifest, peers ...inferencemesh.PeerView) (*Selector, *[]PublicNudge, *int) {
+	t.Helper()
 	var nudges []PublicNudge
 	demands := 0
 	snap := inferencemesh.Snapshot{Peers: peers}
 	s := NewSelector(Inputs{
-		Manifests:           []catalog.Manifest{qwenTier(50)},
+		Manifests:           []catalog.Manifest{manifest},
 		LocalState:          emptyState(),
 		Hardware:            goodHardware(),
 		Runtimes:            registryWithOllama(),
@@ -121,29 +130,120 @@ func TestPublicGate_ClassToggles(t *testing.T) {
 	}
 }
 
-func TestPublicGate_MinQualityTier(t *testing.T) {
+// qwenSized is qwenTier with a weight annotation, which is what
+// hostfit.VariantSize prices the model from. The bare qwen() fixture has
+// none on purpose — it is the "unknown size" case below.
+func qwenSized(tier int, weightGB float64) catalog.Manifest {
+	m := qwenTier(tier)
+	m.Variants[0].EstimatedWeightGB = weightGB
+	return m
+}
+
+// TestPublicGate_MinModelSize: the floor an operator sets is a size
+// class, because that is the only claim that means the same thing on a
+// machine they cannot see (#537).
+func TestPublicGate_MinModelSize(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		floor   int
-		wantOK  bool
-		comment string
+		name     string
+		manifest catalog.Manifest
+		floor    string
+		wantOK   bool
 	}{
-		{name: "no floor", floor: 0, wantOK: true},
-		{name: "floor met exactly", floor: 50, wantOK: true},
-		{name: "floor above peer", floor: 51, wantOK: false},
+		// 4.7 GB of weights prices at 5,695 MiB — under the 8 GB card.
+		{name: "no floor", manifest: qwenSized(50, 4.7), floor: "", wantOK: true},
+		{name: "floor met exactly", manifest: qwenSized(50, 4.7), floor: hostfit.ModelSizeSmall, wantOK: true},
+		{name: "floor above the peer", manifest: qwenSized(50, 4.7), floor: hostfit.ModelSizeMedium, wantOK: false},
+		// 18 GB prices at 19,308 MiB: over the 8 GB card, under the 32 GB one.
+		{name: "peer clears a lower floor", manifest: qwenSized(50, 18), floor: hostfit.ModelSizeSmall, wantOK: true},
+		{name: "peer meets the floor", manifest: qwenSized(50, 18), floor: hostfit.ModelSizeMedium, wantOK: true},
+		{name: "peer under the top floor", manifest: qwenSized(50, 18), floor: hostfit.ModelSizeLarge, wantOK: false},
+		// A model we cannot price is "unknown", and a floor excludes it —
+		// the same fail-closed contract tier 0 already had. Reading it as
+		// "small" would let an unpriceable peer through every floor.
+		{name: "unpriceable peer is excluded by any floor", manifest: qwenTier(50), floor: hostfit.ModelSizeSmall, wantOK: false},
+		{name: "unpriceable peer survives no floor", manifest: qwenTier(50), floor: "", wantOK: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := allowAll()
-			policy.MinQualityTier = tc.floor
-			s, _, _ := publicSelector(t, policy,
+			policy.MinModelSize = tc.floor
+			s, _, _ := publicSelectorWith(t, policy, tc.manifest,
 				mkPublicPeer(publicPeerDeviceID, publicPeerAlias, "qwen3:8b-q4_K_M"))
 			cands, err := s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
 			got := err == nil && len(cands) > 0
 			if got != tc.wantOK {
-				t.Fatalf("admitted = %v, want %v", got, tc.wantOK)
+				t.Fatalf("admitted = %v, want %v (floor %q, peer size %q)",
+					got, tc.wantOK, tc.floor, hostfit.ModelSize(tc.manifest))
 			}
 		})
 	}
+}
+
+// TestPublicGate_LegacyTierFloorMigrates: a floor stored as a number
+// before #537 keeps being enforced, resolved to the LEAST restrictive
+// class it admitted.
+//
+// Least restrictive rather than most: the mapping is approximate either
+// way — that a tier floor cannot express a size line is why the field
+// changed — so it errs towards leaving the operator the machines they
+// had rather than quietly taking some away.
+func TestPublicGate_LegacyTierFloorMigrates(t *testing.T) {
+	// A two-model catalog whose tier order and size order disagree, which
+	// is the case that makes the two floors different rules at all.
+	small := qwenSized(90, 4.7) // tier 90, small
+	medium := qwenSized(40, 18) // tier 40, medium
+	medium.ModelID = "other-model"
+	medium.ModelAliases = nil
+	medium.Variants[0].Source.Tag = "other:q4"
+
+	for _, tc := range []struct {
+		name  string
+		floor int
+		want  string
+	}{
+		// Both models clear a floor of 40, and the least restrictive class
+		// among them is small — even though the tier-90 model is the small
+		// one, which is exactly the crossing that broke the numeric floor.
+		{name: "both models clear it", floor: 40, want: hostfit.ModelSizeSmall},
+		// Only the tier-90 model clears 50, and it is small.
+		{name: "only the small model clears it", floor: 50, want: hostfit.ModelSizeSmall},
+		// Nothing clears it: the stored setting admitted nothing, so it maps
+		// to the most restrictive class rather than to "no floor".
+		{name: "nothing clears it", floor: 95, want: hostfit.ModelSizeLarge},
+		{name: "no legacy floor", floor: 0, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := allowAll()
+			policy.LegacyMinQualityTier = tc.floor
+			s := NewSelector(Inputs{
+				Manifests:      []catalog.Manifest{small, medium},
+				LocalState:     emptyState(),
+				Hardware:       goodHardware(),
+				Runtimes:       registryWithOllama(),
+				PublicPolicyFn: func() PublicPolicy { return policy },
+			})
+			if got := s.resolveMinModelSize(policy); got != tc.want {
+				t.Errorf("resolveMinModelSize(tier floor %d) = %q, want %q", tc.floor, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("an explicit size wins over the legacy number", func(t *testing.T) {
+		policy := allowAll()
+		policy.MinModelSize = hostfit.ModelSizeLarge
+		policy.LegacyMinQualityTier = 40
+		s := NewSelector(Inputs{
+			Manifests:      []catalog.Manifest{small, medium},
+			LocalState:     emptyState(),
+			Hardware:       goodHardware(),
+			Runtimes:       registryWithOllama(),
+			PublicPolicyFn: func() PublicPolicy { return policy },
+		})
+		if got := s.resolveMinModelSize(policy); got != hostfit.ModelSizeLarge {
+			t.Errorf("resolveMinModelSize = %q, want %q — the setting the operator "+
+				"expressed in the current vocabulary is the one that counts",
+				got, hostfit.ModelSizeLarge)
+		}
+	})
 }
 
 func TestPublicGate_AutoComparesAgainstOwnBestTier(t *testing.T) {
@@ -338,10 +438,10 @@ func TestPublicGrantDemand_EmittedWhenNoGrantHeld(t *testing.T) {
 	})
 
 	t.Run("silent when a grant peer is already present", func(t *testing.T) {
-		// A public peer exists but is excluded by the tier floor: we hold
+		// A public peer exists but is excluded by the size floor: we hold
 		// a grant, so waking the acquirer would achieve nothing.
 		policy := allowAll()
-		policy.MinQualityTier = 99
+		policy.MinModelSize = hostfit.ModelSizeLarge
 		s, _, demands := publicSelector(t, policy,
 			mkPublicPeer(publicPeerDeviceID, publicPeerAlias, "qwen3:8b-q4_K_M"))
 		_, _ = s.SelectK(t.Context(), Request{Model: "waired/default"}, 3)
