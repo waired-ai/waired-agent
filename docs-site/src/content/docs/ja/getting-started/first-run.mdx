@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 3edf3cb28db59b85
+sourceHash: dfdd8409acb85b8a
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -229,7 +229,13 @@ Ctrl-C が必要です。おかしくなったのがブラウザのタブのほ�
 
 4. **Route Claude Code through Waired? `[Y/n]`**
 
-5. **Run a quick performance benchmark now? `[Y/n]`** — モデルの準備ができてから
+5. **Keep local inference on anyway? `[y/N]`** — AI ソフトウェアの
+	インストール直後に行われる一度きりの速度計測で、このパソコンが
+	ふだんのコーディング作業には遅いと分かった場合にだけ聞かれます。
+	既定の **N** でローカル AI はオフになります（ゲートウェイ/リレーとしては
+	参加を続け、`waired inference on` で戻せます）。
+
+6. **Run a quick performance benchmark now? `[Y/n]`** — モデルの準備ができてから
 	聞かれます。実施を推奨します。このパソコンの速度が足りない場合、
 	軽いモデルを提案し、両方のモデル名とどちら向きの切り替えかを示すので判断できます。
 

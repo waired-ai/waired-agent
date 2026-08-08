@@ -233,7 +233,13 @@ itself and asks the full set of questions:
 
 4. **Route Claude Code through Waired? `[Y/n]`**
 
-5. **Run a quick performance benchmark now? `[Y/n]`** — asked once the model is
+5. **Keep local inference on anyway? `[y/N]`** — asked only if the quick
+	one-time speed measurement, taken right after the AI software is installed,
+	finds this computer slow for everyday coding work. **No** (the default)
+	turns local AI off; the machine still joins as a gateway/relay, and
+	`waired inference on` brings it back.
+
+6. **Run a quick performance benchmark now? `[Y/n]`** — asked once the model is
 	ready. Worth doing: if this computer cannot keep up, Waired offers a lighter
 	model, names both and says which direction it is offering, so you can weigh
 	the trade-off.

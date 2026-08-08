@@ -338,6 +338,19 @@ func runInitViaDaemon(o daemonInitOpts) error {
 						writePrompt(os.Stdout, setupKeepTerminalOpenLine)
 					}
 				}
+				// Install-flow step 6 (waired-agent#585): wait for the
+				// one-time host-speed measurement here — between the
+				// engine install and the model wait, which is when the
+				// daemon takes it (#496/#579) — and ask when it misses
+				// the budget, instead of the cutoff defaulting local AI
+				// off with the terminal sitting right there. Gated off
+				// while a browser wizard drives (§4.2), and stillMine
+				// re-checks at prompt time for one that started during
+				// the wait.
+				if !setupActive {
+					confirmHostSpeedBudget(mgmtURL, inf, nonInteractive, stdin, os.Stdout,
+						func() bool { return !watch.Started() })
+				}
 				// #306: report on the model the WIZARD chose. Deliberately
 				// not gated on setupActive — that is a snapshot taken
 				// before this wait, and the whole point of the watch above
