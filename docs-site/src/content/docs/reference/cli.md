@@ -91,6 +91,11 @@ expired beyond repair.
 `3` is deliberately separate from `1`: the computer really is signed in and on
 your network, and re-running sign-in would not change anything about the engine.
 
+Turning engine installs off yourself is **not** one of these. On a computer
+where `WAIRED_NO_OLLAMA` is set — which is what `--skip-ollama` /
+`-SkipOllama` does — `waired init` skips the engine, says so, and exits `0`.
+Nothing went wrong, so nothing is reported as an error.
+
 ### `waired status`
 
 The quick "is it working" check.

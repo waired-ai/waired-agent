@@ -85,6 +85,12 @@ param(
     # observe. Keeps install.ps1's engine-absent state,
     # completes the daemon login out-of-band via the OIDC grant, and asserts the
     # engine landed via the executor (not install.ps1). Its own mode; Tier 2.
+    #
+    # Two inits, on purpose (waired-agent#551): the first still has
+    # WAIRED_NO_OLLAMA set and must exit 0 having installed nothing -- the only
+    # end-to-end coverage of the executor's opt-out arm anywhere in CI -- and
+    # the second, after the variable is cleared, is where the engine install
+    # being asserted actually happens.
     [switch]$DaemonEngine
 )
 
@@ -135,6 +141,12 @@ $Mirror       = Join-Path $Work 'mirror'
 # product source (cmd/waired/init_engine.go, cmd/waired/setup_install.go) --
 # a grep for wording the product stopped printing is green forever.
 $InstallFailureRe = 'Engine install failed:|vLLM install failed:'
+
+# Mirrors of lib/installtest-enroll.sh's engine-opt-out pair
+# (waired-agent#551) -- see the comment there for why the second one needs the
+# guard more than the first. Same guard checks these three copies agree.
+$EngineOptOutRe = 'Engine install skipped (WAIRED_NO_OLLAMA)'
+$InstallFailureBoxRe = 'The AI engine could not be installed on this device'
 
 # Lines `waired init` prints when the benchmark did not run because the MODEL
 # was not ready -- not because anything is broken (#382). Mirror of
@@ -1281,6 +1293,14 @@ try {
         ItStep "running install.ps1 (-Dev -SkipInit -NonInteractive; engine installed later by the Tier-2 init)"
         & $installPs1 -Dev -SkipInit -NonInteractive -LogLevel debug
     } else {
+        # Set here AND left in the environment by install.ps1's own
+        # Set-OllamaEnvForInit (it runs in this process, `&`). On the lean
+        # legs that is exactly what we want -- they init with
+        # --inference-enabled=false, so nothing reaches the engine decision
+        # anyway. On -DaemonEngine it is deliberately kept through the FIRST
+        # init, which is waired-agent#551's end-to-end case, and cleared
+        # immediately after it so the re-init installs the engine that leg
+        # exists to prove. Do not clear it here (see the #551 block below).
         $env:WAIRED_NO_OLLAMA = '1'
         ItStep "running install.ps1 (-Dev -SkipOllama -SkipInit -NonInteractive -LogLevel debug)"
         & $installPs1 -Dev -SkipOllama -SkipInit -NonInteractive -LogLevel debug
@@ -1404,8 +1424,14 @@ if ($Tier -ge 2) {
                         -Body (@{ login_session_id = $sess; id_token = $tok } | ConvertTo-Json -Compress) -TimeoutSec 20 | Out-Null
                     Add-Content -LiteralPath $flag -Value 'completed=1'
                 } catch { Add-Content -LiteralPath $flag -Value 'complete-failed'; return }
+                # 240 x 2 s = 8 min. It used to be 150 and the job was
+                # stopped the moment the first init returned; the executor's
+                # engine install now happens in the SECOND init (the #313
+                # re-init below), a minute or two further along, so the
+                # window this loop has to cover is the whole of both plus
+                # the Tier-2 asserts between them.
                 $seenExec = $false; $seenClaim = $false
-                for ($i = 0; $i -lt 150; $i++) {
+                for ($i = 0; $i -lt 240; $i++) {
                     try {
                         $stt = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/setup/state' -TimeoutSec 5
                         if (-not $seenExec  -and $stt.executor_attached)        { Add-Content -LiteralPath $flag -Value 'executor_attached=1'; $seenExec  = $true }
@@ -1434,10 +1460,66 @@ if ($Tier -ge 2) {
             & $waired @initArgs 2>&1 | Tee-Object -FilePath $initLog
             $initExit = $LASTEXITCODE
             $ErrorActionPreference = $prevEap
-            Stop-Job $watcher -ErrorAction SilentlyContinue
-            Receive-Job $watcher -ErrorAction SilentlyContinue | Out-Null
-            Remove-Job $watcher -Force -ErrorAction SilentlyContinue
-            if ($initExit -ne 0) { ItLog "daemon-path init exited $initExit -- asserts will surface what landed" }
+            # The watcher is deliberately NOT stopped here (it was, until
+            # #551): the engine install it has to observe now happens in the
+            # re-init further down. Torn down after that block.
+
+            # --- waired-agent#551: the engine opt-out is not a failed init ---
+            # This init ran with WAIRED_NO_OLLAMA still set -- install.ps1 is
+            # invoked with `&`, in THIS process, so its Set-OllamaEnvForInit
+            # left the variable in our environment (same leak the
+            # WAIRED_LOG_LEVEL cleanup above exists for). That was an
+            # accident, and it is the only place in CI that reaches the
+            # executor's opt-out arm at all, so it is kept ON PURPOSE for
+            # this one init and asserted, then cleared.
+            #
+            # Before #551 all three of these were wrong on this leg: init
+            # exited 3, and the four asserts downstream failed because the
+            # executor had been told not to install the engine the leg
+            # exists to prove it installs.
+            ItStep "engine opt-out asserts (waired-agent#551)"
+            if ($initExit -eq 0) {
+                ItOk "daemon-path init with engine installs turned off exits 0 (waired-agent#551)"
+            } else {
+                ItBad "daemon-path init exited $initExit with engine installs turned off; an opt-out the operator configured is not a failed init -- see $initLog"
+            }
+            # Anti-vacuity: proves the executor REACHED the opt-out arm. Without
+            # it, a daemon that answered `disabled` would satisfy the exit-0 and
+            # no-engine asserts while never running the code under test.
+            # -SimpleMatch on both, and it is load-bearing: Select-String's
+            # -Pattern is a .NET REGEX, so the parentheses in the shared
+            # literal would be a capture group and the pattern would look for
+            # "skipped WAIRED_NO_OLLAMA" with no brackets -- text that never
+            # appears. grep's BRE treats them literally, which is why only the
+            # Windows copy was wrong. Escaping instead is not an option: one
+            # literal is shared by all three harnesses (see the declarations
+            # above), and `\(` in BRE means the opposite of what it means here.
+            $skipped = Select-String -Path $initLog -Pattern $EngineOptOutRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+            if ($skipped) {
+                ItOk "the executor reached the opt-out arm and said so (Engine install skipped)"
+            } else {
+                ItBad "init never reported the engine install as skipped -- the opt-out arm was not reached, so the asserts around it prove nothing. See $initLog"
+                Get-Content -LiteralPath $initLog -Tail 20 -ErrorAction SilentlyContinue |
+                    ForEach-Object { ItLog "    init| $_" }
+            }
+            $calledItFailed = Select-String -Path $initLog -Pattern $InstallFailureBoxRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+            if ($calledItFailed) {
+                ItBad "init called the operator's own opt-out a failed install -- see $initLog"
+            } else {
+                ItOk "init does not report the opt-out as a failed install"
+            }
+            $optOutBin = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
+            if (Test-Path -LiteralPath $optOutBin) {
+                ItBad "an engine is installed at $optOutBin despite WAIRED_NO_OLLAMA -- the opt-out was not honoured"
+            } else {
+                ItOk "no engine was installed while the opt-out was set (and the install below is the executor's)"
+            }
+
+            # Now clear it, so the rest of the leg does what it exists to do:
+            # the #313 re-init below runs opt-out-free against a daemon that
+            # still wants an engine (this init turned inference on through the
+            # mgmt route), so the resident executor installs it.
+            Remove-Item Env:WAIRED_NO_OLLAMA -ErrorAction SilentlyContinue
         } else {
         $inferFlag = if ($WithInference) { '--inference-enabled=true' } else { '--inference-enabled=false' }
         # Build the whole init arg vector as ONE flat array and splat it once (matches
@@ -1566,6 +1648,16 @@ if ($Tier -ge 2) {
             $keyNoted = Select-String -Path $reinitLog -Pattern 'auth key was not used' -Quiet -ErrorAction SilentlyContinue
             ItSoft '313' ([bool]$keyNoted) "re-init says the auth key went unused" -Repo 'waired-agent'
             if (-not $resumed) { Get-Content -LiteralPath $reinitLog -Tail 20 | ForEach-Object { ItLog "    reinit| $_" } }
+        }
+
+        # Watcher teardown. It used to happen the moment the enrolling init
+        # returned; on -DaemonEngine the executor's engine install is the
+        # re-init just above, so the job has to outlive it or
+        # executor_attached / install_claimed can never be observed (#551).
+        if ($DaemonEngine -and $watcher) {
+            Stop-Job $watcher -ErrorAction SilentlyContinue
+            Receive-Job $watcher -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job $watcher -Force -ErrorAction SilentlyContinue
         }
 
         # Cheap and fast, so they run before the minutes-long inference asserts.
@@ -1900,14 +1992,20 @@ if ($script:Skip -gt 0) {
 # table), both in the same always-run Tier-1 section as the
 # ConvertTo-NativeArg pair above them.
 #
-# Everything else at tier 2: 65, and this one is NOT a measured green floor --
-# no Windows nightly leg has been green since the floor was introduced, so
-# there is no green run to take a number from. It is the lower bound the three
-# RED legs above already clear, which is enough to keep catching "a whole
-# block stopped executing" while being unable to fire spuriously on any run at
-# least as complete as those. Replace it with the real figure in the first PR
-# that has a green `gh workflow run installtest-inference.yml -f os=windows`
-# to read it from.
+# Everything else at tier 2: 71, and as of waired-agent#551 this IS a measured
+# green floor. It was 65 -- an unmeasured lower bound, because no Windows
+# nightly leg had ever been green and there was no run to read a number from.
+# The note here asked for the real figure from the first PR with a green
+# `gh workflow run installtest-inference.yml -f os=windows`; run 31241725159
+# is that run, and its three legs executed:
+#
+#   -WithInference    71   <- the minimum, and therefore the floor
+#   -WithIntegration  72
+#   -DaemonEngine     77   (+4 from #551's engine-opt-out block)
+#
+# The floor is the MINIMUM across the configurations that share it, not the
+# largest: every one of them has to clear it. Re-measure the same way when a
+# leg gains or loses an assert that always runs.
 #
 # Tier 1 deliberately has NO floor: CI only ever runs -Tier 2, so there is no
 # green tier-1 run to take a number from, and a guessed floor is either
@@ -1918,7 +2016,7 @@ if ($script:Skip -gt 0) {
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 80 } else { 65 }
+    $floor = if ($Contract) { 80 } else { 71 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

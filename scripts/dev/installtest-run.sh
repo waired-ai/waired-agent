@@ -379,6 +379,11 @@ if [ "$TIER" -le 2 ]; then
       it_enroll_guest "$GUEST"   # enrol (IT_ENROLL_MODE) against the Control Plane
       assert_tier2 "$GUEST"
       assert_reinit_resumes "$GUEST"   # a second init resumes, it does not fail (waired-agent#313)
+      # An opt-out is not a failed install (waired-agent#551). Only where the
+      # guest still has no engine: with --inference one is already installed,
+      # so daemonWantsEngine would answer false and the probe would pass
+      # without reaching the arm it exists to test.
+      if [ "$INFER" != 1 ]; then assert_reinit_engine_optout "$GUEST"; fi
       assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
       [ "$INFER" = 1 ] && assert_inference "$GUEST"
       if [ "$INTEG" = 1 ]; then
@@ -415,15 +420,23 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # each tier, not estimated: tier 1 = the 10 package/unit/state-dir asserts,
 # tier 2 = those plus the 8 enrol + mgmt-socket ones and the 2 Claude-routing
 # ones (#294 — assert_claude_route runs both ways round, so it contributes
-# the same 2 whether or not the leg set IT_SKIP_INTEGRATION). Options only
-# ever ADD asserts (--inference, --daemon-engine, tier 3), so a floor keyed
-# on the tier alone holds for every invocation of it.
+# the same 2 whether or not the leg set IT_SKIP_INTEGRATION).
+#
+# "Options only ever ADD asserts, so a floor keyed on the tier alone holds"
+# was true until waired-agent#551, and is not any more: the engine-opt-out
+# probe runs ONLY on the lean leg, because --inference and --daemon-engine
+# leave an engine on the host and the probe would then pass without reaching
+# the arm it tests. The floor still holds, for a different reason — it is
+# measured from the leanest configuration, which is the one that runs the
+# probe, and both richer options add far more than the 4 it contributes.
 #
 # Raise these when you add an assert that always runs; lower them, in the
 # same commit and with the reason, if a leg legitimately becomes conditional.
 case "$TIER" in
   1) floor=10 ;;
-  *) floor=23 ;;   # +3: assert_reinit_resumes (waired-agent#313)
+  # +3: assert_reinit_resumes (waired-agent#313)
+  # +4: assert_reinit_engine_optout (waired-agent#551, lean leg only)
+  *) floor=27 ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then

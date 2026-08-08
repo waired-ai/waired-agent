@@ -66,6 +66,10 @@ MGMT="http://127.0.0.1:9476/waired/v1/status"
 # there. scripts/ci/harness-failure-strings-guard.sh checks the three copies
 # agree and that every branch still exists in the product source.
 IT_INSTALL_FAILURE_RE='Engine install failed:|vLLM install failed:'
+# Mirrors of lib/installtest-enroll.sh's engine-opt-out pair (waired-agent#551)
+# — see the comment there. Same guard checks these three copies agree.
+IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
+IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
 # Mirror of lib/installtest-enroll.sh's IT_BENCH_NOT_READY_RE — see the comment
 # there (#382). Same guard checks these three copies agree.
 IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading'
@@ -427,6 +431,54 @@ assert_inference_macos() {
 # authorization was rejected because it contradicts a system-wide install), and
 # macOS is the only leg where the daemon and the CLI genuinely run as different
 # users.
+# assert_reinit_engine_optout_macos: the darwin twin of
+# lib/installtest-enroll.sh's assert_reinit_engine_optout — on a host where
+# engine installs are turned off, `waired init` must not report the
+# operator's own instruction back to them as a failed install
+# (waired-agent#551). See that function for why the probe exists and why
+# --inference-enabled=true is what keeps it from being vacuous.
+#
+# macOS is where this leg is worth the most: it has no #313 re-init assert at
+# all, so until now nothing here re-ran init on an enrolled device.
+#
+# Exactly four asserts, always — the tier-2 floor counts on it.
+assert_reinit_engine_optout_macos() {
+  local log="$WORK/reinit-optout.log" rc=0
+
+  # `| tee`, not `>`: the enrol block above uses the same shape for the same
+  # two reasons — sudo does not own the redirect, and pipefail collapses the
+  # pipeline's status so init's own exit code has to come from PIPESTATUS[0].
+  it_log "re-running waired init with engine installs turned off (waired-agent#551)"
+  if sudo env WAIRED_NO_EMOJI=1 WAIRED_NO_OLLAMA=1 "$BINDIR/waired" init \
+        --control "$IT_CONTROL_URL" --device-name "$device" \
+        --inference-enabled=true --non-interactive --skip-integration \
+        --state-dir "$STATE_DIR" 2>&1 | tee "$log"; then
+    rc=0
+  else
+    rc="${PIPESTATUS[0]}"
+  fi
+
+  [ "$rc" = 0 ] \
+    && ok "re-init with engine installs turned off exits 0 (waired-agent#551)" \
+    || bad "re-init exited $rc with WAIRED_NO_OLLAMA set — an opt-out the operator configured is not a failed install — see $log"
+  grep -q "$IT_ENGINE_OPTOUT_RE" "$log" \
+    && ok "the executor reached the opt-out arm and said so" \
+    || bad "init never reported the engine install as skipped — the opt-out arm was not reached, so the asserts around it prove nothing — see $log"
+  grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
+    && bad "init called the operator's own opt-out a failed install — see $log" \
+    || ok "init does not report the opt-out as a failed install"
+  sudo test -x "$STATE_DIR/runtimes/ollama/bin/ollama" \
+    && bad "an engine was installed under $STATE_DIR despite WAIRED_NO_OLLAMA" \
+    || ok "no engine was installed while the opt-out was set"
+
+  [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
+  # Leave the host as we found it: the asserts after this one were measured
+  # against inference off, and :9476 refuses mutating writes over TCP
+  # (waired#838), so the CLI is the only way back.
+  sudo "$BINDIR/waired" inference off --state-dir "$STATE_DIR" >/dev/null 2>&1 || \
+    it_warn "could not turn inference back off after the #551 probe"
+}
+
 assert_mgmt_socket_macos() {
   local sock=/var/run/waired/mgmt.sock out code
 
@@ -867,6 +919,15 @@ if [ "$TIER" -ge 2 ]; then
     [ -f /Library/Logs/waired-agent.err.log ] && sudo tail -40 /Library/Logs/waired-agent.err.log >&2 || true
   fi
 
+  # An opt-out is not a failed install (waired-agent#551). Lean leg only:
+  # --inference and --daemon-engine leave an engine on the host, so
+  # daemonWantsEngine would answer false and the probe would pass without
+  # reaching the arm it exists to test.
+  if [ "$INFER" != 1 ] && [ "$DAEMON_ENGINE" != 1 ]; then
+    it_step "engine opt-out asserts (waired-agent#551)"
+    assert_reinit_engine_optout_macos
+  fi
+
   # Cheap and fast, so it runs before the minutes-long inference asserts.
   it_step "management write socket asserts (waired#838)"
   assert_mgmt_socket_macos
@@ -959,11 +1020,19 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # the rationale. Floors MEASURED from a green run of the leanest config:
 # tier 1 = the binaries / Gatekeeper / plist / state-dir / launchd asserts
 # plus the uninstall->reinstall round trip, tier 2 = those plus enrol and
-# the mgmt-socket set. Options only ever add asserts. Raised by 3 in #331:
-# the next-steps banner assert and the two log-rotation asserts.
+# the mgmt-socket set. Raised by 3 in #331: the next-steps banner assert and
+# the two log-rotation asserts.
+#
+# "Options only ever add asserts" stopped being true at waired-agent#551:
+# assert_reinit_engine_optout_macos runs ONLY on the lean leg, because
+# --inference and --daemon-engine leave an engine on the host and the probe
+# would then pass without reaching the arm it tests. The floor still holds —
+# it is measured from the leanest config, which is the one that runs the
+# probe, and both richer options add far more than the 4 it contributes.
 case "$TIER" in
   1) floor=24 ;;
-  *) floor=31 ;;
+  # +4: assert_reinit_engine_optout_macos (waired-agent#551, lean leg only)
+  *) floor=35 ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then

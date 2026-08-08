@@ -327,6 +327,9 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 		wantPhase   string
 		wantDetail  string
 		wantCode    string
+		// wantOptOut is whether the returned error must carry
+		// errEngineOptOut — the marker init's exit status turns on (#551).
+		wantOptOut bool
 	}{
 		{
 			name: "linux elevated installs", goos: "linux", elevated: true,
@@ -361,9 +364,14 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 		},
 
 		{
+			// wantOptOut is the half #551 turned on: the wizard row is
+			// unchanged (phase/detail/code below are what they always
+			// were), and the only new fact is that the CALLER can now
+			// recognise this as the operator's instruction.
 			name: "opt-out refuses and says why", goos: "linux", elevated: true, optOut: true,
-			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "WAIRED_NO_OLLAMA",
-			wantCode: signer.SetupErrorPermissionDenied,
+			wantPhase:  management.SetupExecutorPhaseFailed,
+			wantDetail: "engine installs are turned off on this device (WAIRED_NO_OLLAMA)",
+			wantCode:   signer.SetupErrorPermissionDenied, wantOptOut: true,
 		},
 	}
 	for _, tc := range tests {
@@ -379,8 +387,16 @@ func TestSetupEngineInstallPerOS(t *testing.T) {
 
 			s := attachSetupExecutor(srv.URL, true)
 			defer s.Release()
-			setupEngineInstall(context.Background(), s, io.Discard, tc.goos, tc.elevated)
+			err := setupEngineInstall(context.Background(), s, io.Discard, tc.goos, tc.elevated)
 
+			// The return value used to be discarded here, so nothing
+			// asserted the value `waired init`'s exit code is derived
+			// from. The negative rows carry as much weight as the
+			// positive one: errEngineOptOut turning up on an arm that is
+			// a genuine fault would silently exit 0 on it (#551).
+			if got := errors.Is(err, errEngineOptOut); got != tc.wantOptOut {
+				t.Errorf("errors.Is(err, errEngineOptOut) = %v, want %v (err = %v)", got, tc.wantOptOut, err)
+			}
 			if got := len(f.installed()) > 0; got != tc.wantInstall {
 				t.Fatalf("installed = %v, want %v", got, tc.wantInstall)
 			}
@@ -635,6 +651,9 @@ func TestSetupVLLMInstallDecisionsThroughExecutor(t *testing.T) {
 		wantPhase        string
 		wantDetail       string
 		wantCode         string
+		// Same marker as the ollama table: vLLM's opt-out is the same
+		// class of answer and must reach init's exit status the same way.
+		wantOptOut bool
 	}{
 		{
 			name: "linux nvidia elevated installs", goos: "linux", elevated: true, nvidia: true,
@@ -660,8 +679,9 @@ func TestSetupVLLMInstallDecisionsThroughExecutor(t *testing.T) {
 		},
 		{
 			name: "opt-out refuses and says why", goos: "linux", elevated: true, nvidia: true, optOut: true,
-			wantPhase: management.SetupExecutorPhaseFailed, wantDetail: "WAIRED_NO_VLLM",
-			wantCode: signer.SetupErrorPermissionDenied,
+			wantPhase:  management.SetupExecutorPhaseFailed,
+			wantDetail: "engine installs are turned off on this device (WAIRED_NO_VLLM)",
+			wantCode:   signer.SetupErrorPermissionDenied, wantOptOut: true,
 		},
 		{
 			name: "already present is done without a rebuild", goos: "linux", elevated: true, nvidia: true, active: true,
@@ -681,8 +701,11 @@ func TestSetupVLLMInstallDecisionsThroughExecutor(t *testing.T) {
 
 			s := attachSetupExecutor(srv.URL, true)
 			defer s.Release()
-			setupEngineInstall(context.Background(), s, io.Discard, tc.goos, tc.elevated)
+			err := setupEngineInstall(context.Background(), s, io.Discard, tc.goos, tc.elevated)
 
+			if got := errors.Is(err, errEngineOptOut); got != tc.wantOptOut {
+				t.Errorf("errors.Is(err, errEngineOptOut) = %v, want %v (err = %v)", got, tc.wantOptOut, err)
+			}
 			if got := len(f.installed()) > 0; got != tc.wantInstall {
 				t.Fatalf("installed = %v, want %v", got, tc.wantInstall)
 			}

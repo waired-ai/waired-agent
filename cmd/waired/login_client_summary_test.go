@@ -82,6 +82,7 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		notRunning   = "local AI isn't running"
 		notAnswering = "local AI is not answering yet"
 		startsOff    = "local AI starts off on this computer"
+		installsOff  = "engine installs are turned off here"
 	)
 	slow := func() *management.HostSpeedStatus {
 		return &management.HostSpeedStatus{
@@ -223,6 +224,58 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			},
 			want:   celebration,
 			absent: []string{startsOff, notRunning},
+		},
+		{
+			// #551. The same engineErr field as the #188 row above, and a
+			// different outcome, because the operator asked for this: the
+			// installer ran --skip-ollama, or WAIRED_NO_OLLAMA is set on
+			// the host. Nothing failed, so nothing warns and the exit code
+			// stays 0 — the pairing this table exists to keep honest.
+			//
+			// `celebration` is absent as well as the three faults: this
+			// host has no local AI, so "everything completed successfully
+			// — local inference is live" would be the #310 shape one
+			// reason along.
+			name: "engine installs are turned off on this host (#551)",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				engineErr:    fmt.Errorf("%w (%s)", errEngineOptOut, "WAIRED_NO_OLLAMA"),
+			},
+			want:   installsOff,
+			absent: []string{celebration, needsInstall, notRunning, notAnswering, startsOff},
+		},
+		{
+			// PRECEDENCE against waired#1099's box, and the reason this row
+			// exists rather than being left to the switch's order: both are
+			// "local AI is off and nothing failed", so a reader could take
+			// either. They differ in the REMEDY, and only one of them is
+			// true here — `waired inference on` cannot produce local AI on a
+			// host that will not install an engine, so pointing at it would
+			// send the operator round a loop. The opt-out wins.
+			name: "the opt-out outranks the measurement, because their remedies differ",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				engineErr:    fmt.Errorf("%w (%s)", errEngineOptOut, "WAIRED_NO_OLLAMA"),
+				hostSpeed:    slow(),
+			},
+			want:   installsOff,
+			absent: []string{startsOff, celebration},
+		},
+		{
+			// Unreachable today — no engine was installed, so nothing can
+			// be down — and pinned anyway, because that is the assumption
+			// engineOptOut is built on. If a stated fault ever does turn
+			// up beside the sentinel, this must NOT become the arm that
+			// swallows it: the run keeps its warn box and its exit 3, and
+			// only which warn box is a question of the existing ordering.
+			name: "a stated fault beside the opt-out is still a fault",
+			summary: daemonSummary{
+				engineErr:     fmt.Errorf("%w (%s)", errEngineOptOut, "WAIRED_NO_OLLAMA"),
+				engineFailure: "ollama: process exited during startup: signal: killed",
+			},
+			want:     needsInstall,
+			absent:   []string{celebration, installsOff},
+			wantExit: exitLocalAIDown,
 		},
 	}
 

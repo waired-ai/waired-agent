@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: ca6361f8d5e1be2b
+sourceHash: feb99d8dfae56e71
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -374,6 +374,31 @@ Downloading qwen3-coder-30b-a3b-instruct: 41%  7.9 GB / 19.2 GB (44 MB/s)
 確認できます。
 
 [この計測について詳しく](/ja/reference/model-catalog/#and-if-none-of-them-is-good-enough-here)
+</Expected>
+
+<Expected>
+```
+Engine install skipped (WAIRED_NO_OLLAMA).
+
+*  Waired is signed in — engine installs are turned off here
+   Signed in and running — this device is on your network.
+   No local AI here; it can still use the AI on your other computers.
+   Add local AI later with: waired runtimes install ollama
+```
+
+エンジンをインストールしない指定でセットアップした場合の表示です。Linux と macOS
+なら `--skip-ollama`、Windows なら `-SkipOllama`、あるいは環境変数
+`WAIRED_NO_OLLAMA` が該当します。異常ではありません。パソコンはサインイン済みで
+ネットワークにも参加しており、ほかのマシンで動いている AI を使えます。ここでの
+`waired init` は `0` で終了するため、スクリプトが失敗と取り違えることもありません。
+
+このパソコンでもモデルを動かしたくなったら、`sudo waired runtimes install ollama`
+(Windows は管理者プロンプトで `waired runtimes install ollama`)を実行します。
+
+すぐ上のボックスとは別物です。どちらもローカル AI がオフで終わりますが、上は
+Waired がこのパソコンを計測して判断した結果、こちらは計測より前に利用者自身が
+決めた結果です。違いが効くのは戻し方で、`waired inference on` が有効なのは上だけ
+です。こちらのパソコンには、そもそもオンにするエンジンがありません。
 </Expected>
 
 <Expected tone="bad">

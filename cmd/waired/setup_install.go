@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -220,8 +221,7 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 
 	case vllmActionSkipOptOut:
 		writePrompt(out, "vLLM install skipped (WAIRED_NO_VLLM).")
-		return failEngineInstall(s, "vllm", signer.SetupErrorPermissionDenied,
-			"engine installs are turned off on this device (WAIRED_NO_VLLM)")
+		return failEngineOptOut(s, "vllm", "WAIRED_NO_VLLM")
 
 	case vllmActionFailUnsupportedOS:
 		// Defense in depth: the CP only offers vLLM on Linux, so this is a
@@ -252,6 +252,31 @@ func installVLLMAsExecutor(ctx context.Context, s *executorSession, out io.Write
 func failEngineInstall(s *executorSession, engine, code, detail string) error {
 	s.Failed(engine, code, detail)
 	return errors.New(detail)
+}
+
+// errEngineOptOut is the one "no engine on this host" the operator
+// configured rather than suffered: WAIRED_NO_OLLAMA / WAIRED_NO_VLLM, set
+// by hand or by the installer's --skip-ollama / -SkipOllama.
+//
+// The WIZARD row is unaffected. A browser that just asked for an engine
+// and will not get one is still permission_denied with this detail —
+// "the closest of the eight codes", waired#835 decisions 20260720 13:00.
+// This sentinel exists for the CALLER, which has a different question to
+// answer: `waired init` ends on a box and an exit code, and an
+// instruction the operator gave is not a fault to report back to them
+// (#551). Everything else about the arm is unchanged.
+var errEngineOptOut = errors.New("engine installs are turned off on this device")
+
+// failEngineOptOut is failEngineInstall for that one arm.
+//
+// The `%w (%s)` is what keeps this a pure caller-side change: Error()
+// renders the same sentence failEngineInstall sent before, so the detail
+// the daemon stores and the wizard paints is byte-identical to what it
+// was — only the returned error grew a marker.
+func failEngineOptOut(s *executorSession, engine, envVar string) error {
+	err := fmt.Errorf("%w (%s)", errEngineOptOut, envVar)
+	s.Failed(engine, signer.SetupErrorPermissionDenied, err.Error())
+	return err
 }
 
 // installEngineAsExecutor is the shared install core: claim the lease,
@@ -319,8 +344,7 @@ func installEngineAsExecutor(
 		// That was the intent from the start — until now the daemon
 		// re-derived network_error from this text and the intent was lost.
 		writePrompt(out, "Engine install skipped (WAIRED_NO_OLLAMA).")
-		return failEngineInstall(s, engine, signer.SetupErrorPermissionDenied,
-			"engine installs are turned off on this device (WAIRED_NO_OLLAMA)")
+		return failEngineOptOut(s, engine, "WAIRED_NO_OLLAMA")
 	}
 	return nil
 }
