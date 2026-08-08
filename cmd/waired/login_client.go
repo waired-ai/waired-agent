@@ -239,7 +239,8 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// been landing here all along, and the §11.2 ordering
 				// flip puts Linux and Windows here too. Condition is
 				// "does the host want inference", read from the daemon.
-				engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, os.Stdout)
+				engineErr = ensureDaemonPathEngine(context.Background(), sess, mgmtURL, os.Stdout,
+					inf, nonInteractive, stdin)
 			}
 
 			// #308: the engine step above can run for minutes, so the

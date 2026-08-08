@@ -195,7 +195,8 @@ func TestDaemonPathEngineInstallNoWizard(t *testing.T) {
 
 	s := attachSetupExecutor(srv.URL, true)
 	defer s.Release()
-	daemonPathEngineInstall(context.Background(), s, infSrv.URL, io.Discard, "linux", true)
+	daemonPathEngineInstall(context.Background(), s, infSrv.URL, io.Discard, "linux", true,
+		daemonInitInference{}, false, eofLineReader())
 
 	if got := f.installed(); len(got) != 1 || got[0] != "/var/lib/waired" {
 		t.Fatalf("installer calls = %v, want one call with the daemon's state dir", got)
@@ -242,7 +243,8 @@ func TestDaemonPathEngineInstallSkips(t *testing.T) {
 
 			s := attachSetupExecutor(srv.URL, true)
 			defer s.Release()
-			daemonPathEngineInstall(context.Background(), s, infSrv.URL, io.Discard, "linux", true)
+			daemonPathEngineInstall(context.Background(), s, infSrv.URL, io.Discard, "linux", true,
+				daemonInitInference{}, false, eofLineReader())
 
 			if got := f.installed(); len(got) != 0 {
 				t.Fatalf("installed %v, want no install", got)
