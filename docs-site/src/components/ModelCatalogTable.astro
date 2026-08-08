@@ -31,8 +31,8 @@ const memHeader = engine === 'ollama' ? 'Ollama RAM' : 'vLLM VRAM';
 const paramsHeader =
 	arch === 'moe' ? (lang === 'ja' ? 'パラメータ（アクティブ）' : 'Params (active)') : lang === 'ja' ? 'パラメータ' : 'Params';
 const modelHeader = lang === 'ja' ? 'モデル' : 'Model';
-const qualityHeader = lang === 'ja' ? '品質ティア' : 'Quality tier';
-const headers = [modelHeader, paramsHeader, qualityHeader, memHeader];
+const sizeHeader = lang === 'ja' ? 'サイズ' : 'Size';
+const headers = [modelHeader, paramsHeader, sizeHeader, memHeader];
 
 const defaultTag = lang === 'ja' ? '(デフォルト)' : '(default)';
 const emptyNote =
@@ -65,7 +65,7 @@ const fmtGB = (n: number | null) => (n == null ? dash : `${n} GB`);
 							)}
 						</td>
 						<td>{r.paramsLabel}</td>
-						<td>{r.qualityTier ?? dash}</td>
+						<td>{r.modelSize ?? dash}</td>
 						<td>{fmtGB(mem(r))}</td>
 					</tr>
 				))}

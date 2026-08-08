@@ -139,7 +139,7 @@ func runPublicStatus(mgmt string, jsonOut bool, out io.Writer) error {
 		}
 		pf(out, "Use public nodes: %s\n", mode)
 		pf(out, "Consented: %s\n", publicYesNo(use.Consented))
-		pf(out, "Minimum quality tier: %d\n", use.MinQualityTier)
+		pf(out, "Smallest model accepted: %s\n", publicMinModelSize(use.MinModelSize, use.MinQualityTier))
 		pf(out, "Main agent: %s\n", publicOnOff(use.Main))
 		pf(out, "Sub agents: %s\n", publicOnOff(use.Sub))
 

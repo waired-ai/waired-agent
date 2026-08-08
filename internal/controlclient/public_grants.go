@@ -28,10 +28,19 @@ type PublicGrant struct {
 
 // AcquirePublicGrantsRequest mirrors the CP's PublicGrantAcquireRequest.
 type AcquirePublicGrantsRequest struct {
-	Class          string `json:"class"`            // "" | "main" | "sub"
-	MinQualityTier int    `json:"min_quality_tier"` // 0 = no floor
-	Want           int    `json:"want"`             // 0 → server default (3)
-	ConsentVersion int    `json:"consent_version"`  // accepted warning version, ≥1
+	Class string `json:"class"` // "" | "main" | "sub"
+	// MinModelSize is the size floor — small|medium|large, "" = none
+	// (#537). The control plane starts honouring it when its own half
+	// lands; until then this is a prefilter the agent's gate enforces
+	// anyway, so a grant it should have skipped costs a wasted grant
+	// rather than a peer that gets used.
+	MinModelSize string `json:"min_model_size,omitempty"`
+	// MinQualityTier is the retired numeric floor, still sent while an
+	// operator has one stored so the control plane's prefilter keeps
+	// applying it. Cleared the moment they set a size.
+	MinQualityTier int `json:"min_quality_tier"`
+	Want           int `json:"want"`            // 0 → server default (3)
+	ConsentVersion int `json:"consent_version"` // accepted warning version, ≥1
 }
 
 // AcquirePublicGrantsResponse carries the device's FULL current active

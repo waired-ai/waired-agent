@@ -36,9 +36,19 @@ to **your** machine:
      per token, so decode stays fast. Best on **memory-rich unified-memory**
      machines (Apple Silicon, AMD Strix Halo) that can hold a large model in RAM.
 
-**Quality score** is a 1–100 ranking (higher is better); Waired picks the
-highest-scoring model that fits your machine **and can hold a large coding
-context (~200k tokens)** — coding agents routinely fill 100k+ tokens of
+**Size** is which class of graphics card runs a model at all:
+
+- **small** — fits an 8 GB card
+- **medium** — fits a 32 GB card
+- **large** — needs more than a 32 GB card
+
+It says the same thing on every computer, which is what makes it worth
+quoting. The memory column beside it is a threshold; the *fit* verdict for
+**your** machine comes from `waired models ls --detail`, which counts your
+system memory and graphics memory together.
+
+Waired picks the strongest model that fits your machine **and can hold a large
+coding context (~200k tokens)** — coding agents routinely fill 100k+ tokens of
 context, so a model that would truncate it loses to a slightly smaller one
 with the full window. On hardware where no model can hold that window, Waired
 picks the best fit anyway and says so in `waired status`. Whatever wins,
@@ -46,8 +56,8 @@ clients can address it by the fixed model name `waired/default` (see
 [Chat clients](/guides/chat-clients/)).
 
 The tables below are generated at build time from each model's bundled manifest
-(`min_ram_gb` / `min_vram_mb` / `quality_tier` / `param_count` / `active_params`),
-so they always match the catalog the client ships.
+(`min_ram_gb` / `min_vram_mb` / `estimated_weight_gb` / `param_count` /
+`active_params`), so they always match the catalog the client ships.
 
 ## Ollama models
 
@@ -114,9 +124,9 @@ the RAM total is the whole of it.
 
 ### Picked: can it hold a whole coding session here?
 
-Of the models that fit, Waired recommends the highest-quality one your
-computer can serve a **full ~200,000-token coding session** on, keeping the
-model's weights on the graphics card.
+Of the models that fit, Waired recommends the strongest one your computer can
+serve a **full ~200,000-token coding session** on, keeping the model's weights
+on the graphics card.
 
 A model that fits but cannot do that is still offered and still selectable —
 it is simply not the one Waired chooses for you. Two things commonly put a
@@ -228,7 +238,7 @@ waired infer --explain "say hi"
 ```
 
 Run `waired models ls --detail` to see this same view for **your** hardware —
-each model's quality score, the memory it needs on the graphics card, whether
+each model's size, the memory it needs on the graphics card, whether
 it fits, and which one Waired would choose. `waired models ls` shows disk usage,
 and `waired runtimes status` the VRAM a loaded model is actually using.
 

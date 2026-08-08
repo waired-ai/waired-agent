@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // newPublicUseCmd builds `waired public use` — the consumer-side settings
@@ -23,6 +25,7 @@ func newPublicUseCmd() *cobra.Command {
 	var mgmt string
 	var jsonOut bool
 	var auto, explicit, off bool
+	var minSize string
 	var minTier int
 	var mainStr, subStr string
 
@@ -31,7 +34,7 @@ func newPublicUseCmd() *cobra.Command {
 		Short: "Show or change whether this computer uses other people's public machines.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			upd, hasUpdate, err := buildPublicUseUpdate(cmd, auto, explicit, off, minTier, mainStr, subStr)
+			upd, hasUpdate, err := buildPublicUseUpdate(cmd, auto, explicit, off, minSize, minTier, mainStr, subStr)
 			if err != nil {
 				return err
 			}
@@ -42,7 +45,16 @@ func newPublicUseCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&auto, "auto", false, "use public machines automatically when they beat your own")
 	cmd.Flags().BoolVar(&explicit, "explicit", false, "use public machines only when a request is aimed at one")
 	cmd.Flags().BoolVar(&off, "off", false, "never use other people's public machines")
-	cmd.Flags().IntVar(&minTier, "min-tier", 0, "only use public machines at or above this quality tier")
+	cmd.Flags().StringVar(&minSize, "min-model-size", "",
+		"small|medium|large — only use public machines running a model of at least this size (empty clears the floor)")
+	// --min-tier named the 1-100 quality number, which #537 took off every
+	// surface a person reads: with nothing left to look the value up in,
+	// there was no way to choose one. It keeps parsing so a script that
+	// passes it says what changed instead of failing on an unknown flag,
+	// and is hidden so it is not offered to anyone new (the same treatment
+	// #200 gives a retired model name).
+	cmd.Flags().IntVar(&minTier, "min-tier", 0, "retired — use --min-model-size")
+	_ = cmd.Flags().MarkHidden("min-tier")
 	cmd.Flags().StringVar(&mainStr, "main", "", "on|off — let your main agent use public machines")
 	cmd.Flags().StringVar(&subStr, "sub", "", "on|off — let sub-agents use public machines")
 	addMgmtFlag(cmd, &mgmt)
@@ -53,9 +65,9 @@ func newPublicUseCmd() *cobra.Command {
 // buildPublicUseUpdate translates the flags into a PublicUseUpdateRequest,
 // setting ONLY the fields the operator actually passed (a nil pointer
 // means "leave unchanged"). It also enforces the client-side rejections:
-// the three mode flags are mutually exclusive, --min-tier may not be
-// negative, and --main/--sub accept only on|off.
-func buildPublicUseUpdate(cmd *cobra.Command, auto, explicit, off bool, minTier int, mainStr, subStr string) (management.PublicUseUpdateRequest, bool, error) {
+// the three mode flags are mutually exclusive, --min-model-size takes one
+// of three words, and --main/--sub accept only on|off.
+func buildPublicUseUpdate(cmd *cobra.Command, auto, explicit, off bool, minSize string, minTier int, mainStr, subStr string) (management.PublicUseUpdateRequest, bool, error) {
 	var upd management.PublicUseUpdateRequest
 	hasUpdate := false
 
@@ -83,11 +95,18 @@ func buildPublicUseUpdate(cmd *cobra.Command, auto, explicit, off bool, minTier 
 	}
 
 	if cmd.Flags().Changed("min-tier") {
-		if minTier < 0 {
-			return upd, false, errors.New("waired public use: --min-tier must be >= 0")
+		return upd, false, errors.New(
+			"waired public use: --min-tier is retired — use --min-model-size small|medium|large. " +
+				"A model's quality number is no longer shown anywhere, so there was nothing to pick a value from")
+	}
+
+	if cmd.Flags().Changed("min-model-size") {
+		v := strings.ToLower(strings.TrimSpace(minSize))
+		if v != "" && hostfit.SizeRank(v) == 0 {
+			return upd, false, fmt.Errorf(
+				"waired public use: --min-model-size must be small, medium or large (got %q); pass an empty value to clear the floor", minSize)
 		}
-		v := minTier
-		upd.MinQualityTier = &v
+		upd.MinModelSize = &v
 		hasUpdate = true
 	}
 
@@ -207,7 +226,24 @@ func printPublicUse(out io.Writer, r management.PublicUseResponse) {
 	}
 	pf(out, "Use public nodes: %s\n", mode)
 	pf(out, "Consented: %s\n", publicYesNo(r.Consented))
-	pf(out, "Minimum quality tier: %d\n", r.MinQualityTier)
+	pf(out, "Smallest model accepted: %s\n", publicMinModelSize(r.MinModelSize, r.MinQualityTier))
 	pf(out, "Main agent: %s\n", publicOnOff(r.Main))
 	pf(out, "Sub agents: %s\n", publicOnOff(r.Sub))
+}
+
+// publicMinModelSize is the "smallest model this computer will accept on
+// somebody else's machine" line.
+//
+// It prints the retired numeric floor when that is all the daemon has,
+// rather than an empty line: an operator who set one before #537 still
+// has it enforced (the router migrates it), and a settings view that
+// showed nothing would read as "no floor".
+func publicMinModelSize(size string, legacyTier int) string {
+	if size != "" {
+		return size
+	}
+	if legacyTier > 0 {
+		return fmt.Sprintf("(set as quality tier %d, a retired setting — re-set it with --min-model-size)", legacyTier)
+	}
+	return "any"
 }

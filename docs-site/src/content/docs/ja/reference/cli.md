@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 3c8be6dba05c23e3
+sourceHash: 8da0eb0be80a618a
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -199,7 +199,7 @@ waired runtimes benchmark         # このパソコンの実際の速度を測�
 
 注目すべきは `benchmark` です。実測のスループットを計測し、
 別のモデルのほうが合っている場合は切り替えを提案し、
-両方のモデルを品質スコアつきで示すので、速さと質を見比べて選べます。
+両方のモデル名とどちら向きの切り替えかを示すので、速さと質を見比べて選べます。
 
 ### `waired inference`
 
@@ -285,7 +285,7 @@ waired public use                      # いまの設定を表示
 waired public use --auto               # 自分のより速いときは他人のマシンを使う
 waired public use --explicit           # 明示したときだけ使う
 waired public use --off
-waired public use --min-tier N         # この品質スコア以上のマシンだけ
+waired public use --min-model-size small|medium|large   # このサイズ以上のモデルを動かすマシンだけ
 waired public use --main on|off --sub on|off
 ```
 

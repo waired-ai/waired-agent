@@ -4,6 +4,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 このページは Waired のエージェントが**標準で扱えるモデル**の一覧である。「どのモデルが用意されているか」「`waired/default` が実際にどのモデルへ解決されるか」を一望できる。
 
+- 下表の **品質** 列（`quality_tier`）は **maintainer 向けの序列**であり、製品面には出さない（#537）。ユーザーが見るのは `small` / `medium` / `large` のサイズクラスで、これは `proto/hostfit.ModelSize` が重み注記から導出する。
 - 一覧の単一の情報源（source of truth）は `proto/catalog/bundled/*.json`（バイナリに `//go:embed` される）。型は `internal/catalog/manifest.go` の `Manifest` / `Variant`。
 - 下表は `catalog-tool docs`（`cmd/catalog-tool/docs.go`）が bundled manifest から**自動生成**する。`<!-- BEGIN GENERATED ... -->` / `<!-- END GENERATED ... -->` の間だけが生成対象で、その外側の本文は手書き。
 - 生成物の同期チェック: bundled JSON を変更したのに本ページを再生成し忘れると CI（`catalog-tool docs --check`）が落ちる。週次の catalog-radar（monorepo #413、.github/workflows/catalog-radar.yml）が出す draft PR も同じ手順で本ページを更新する。手で表を編集しないこと。
@@ -26,7 +27,7 @@ Waired が同梱するローカル LLM の一覧。エイリアス、ファミ�
 
 ### エイリアス
 
-コーディングエージェント連携が提示する 3 つのエイリアスと、それが解決する bundled モデル。
+コーディングエージェント連携が提示する 1 つのエイリアスと、それが解決する bundled モデル。
 
 | エイリアス | 解決先 model_id | 表示名 |
 | --- | --- | --- |

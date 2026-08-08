@@ -137,14 +137,16 @@ func TestFormatCatalogDetail_MarksTheHostsOwnPickAndItsDemotions(t *testing.T) {
 		},
 		{
 			ModelID: "qwen3.6-35b-a3b", Fits: true,
+			ModelSize: "medium",
 			Fit: &catalogDetailFit{
 				Runnable: true, RequiredResidentMB: 24 * 1024, QualityTier: 65,
 				NotRecommended: true, NotRecommendedReason: "weights_spill",
 			},
 		},
 		{
-			ModelID: "deepseek-v4-flash", Fits: false, DeficitLabel: "no variant supports ollama",
-			Fit: &catalogDetailFit{Reason: "no_variant_for_engine", QualityTier: 80},
+			ModelID: "deepseek-v4-flash", Fits: false, ModelSize: "large",
+			DeficitLabel: "no variant supports ollama",
+			Fit:          &catalogDetailFit{Reason: "no_variant_for_engine", QualityTier: 80},
 		},
 	}
 	out := formatCatalogDetail(c)
@@ -152,7 +154,8 @@ func TestFormatCatalogDetail_MarksTheHostsOwnPickAndItsDemotions(t *testing.T) {
 		"✓ fits · recommended",
 		"✓ fits · not recommended (weights spill)",
 		"✗ not available on this computer",
-		"tier", // the raw quality number now has a column of its own
+		"SIZE",   // the size class has a column of its own (#537)
+		"medium", // and the rows carry it
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n---\n%s", want, out)
@@ -160,6 +163,10 @@ func TestFormatCatalogDetail_MarksTheHostsOwnPickAndItsDemotions(t *testing.T) {
 	}
 	// The blocked row must not print the wire's own sentence, which names
 	// an engine and a "variant" to somebody who has heard of neither.
+	// The quality number is off this surface entirely (#537).
+	if strings.Contains(out, "TIER") || strings.Contains(out, "quality-tier") {
+		t.Errorf("catalog detail still prints the quality tier:\n%s", out)
+	}
 	if strings.Contains(out, "no variant supports") {
 		t.Errorf("blocked row leaked internal vocabulary:\n%s", out)
 	}

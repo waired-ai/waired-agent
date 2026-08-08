@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // docs regenerates the machine-generated model table embedded in the
@@ -25,6 +27,18 @@ import (
 // catalog-radar draft PRs that touch bundled/*.json) keep the page fresh.
 const (
 	docsDefaultFile = "docs/reference/models.md"
+	// docsSizesFile is the size class of every offered model, emitted for
+	// the public docs site.
+	//
+	// Generated rather than recomputed there because docs-site/ reads the
+	// bundled JSON directly at build time, in TypeScript, so any rule it
+	// needs is a SECOND implementation of a Go rule — which is how the
+	// fit rules came to disagree between the two repositories before
+	// proto/hostfit existed (waired#942). The loader already repeats one
+	// (the internal_only filter) and its comment claims a test keeps the
+	// two in step; docs-site has no test runner, so there is none. This
+	// one is not going to be the third.
+	docsSizesFile   = "docs-site/src/data/model-sizes.json"
 	docsBeginMarker = "<!-- BEGIN GENERATED: catalog-tool docs -->"
 	docsEndMarker   = "<!-- END GENERATED: catalog-tool docs -->"
 )
@@ -49,6 +63,7 @@ func init() {
 func runDocs(args []string) error {
 	fs := flag.NewFlagSet("docs", flag.ContinueOnError)
 	file := fs.String("file", docsDefaultFile, "path to the model-catalog page to update")
+	sizes := fs.String("sizes", docsSizesFile, "path to the docs-site model-size data file")
 	check := fs.Bool("check", false, "verify the page is up to date; exit non-zero (no write) if it drifted")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -69,12 +84,28 @@ func runDocs(args []string) error {
 		return fmt.Errorf("docs: %s: %w", *file, err)
 	}
 
+	wantSizes, err := renderModelSizes(manifests)
+	if err != nil {
+		return err
+	}
+
 	if *check {
 		if !bytes.Equal(existing, updated) {
 			return fmt.Errorf("docs: %s is stale — regenerate with `make catalog-docs` (or `catalog-tool docs`) and commit the result", *file)
 		}
-		fmt.Printf("ok: %s up to date (%d bundled manifests)\n", *file, len(manifests))
+		gotSizes, err := os.ReadFile(*sizes)
+		if err != nil {
+			return fmt.Errorf("docs: read %s: %w", *sizes, err)
+		}
+		if !bytes.Equal(gotSizes, wantSizes) {
+			return fmt.Errorf("docs: %s is stale — regenerate with `make catalog-docs` and commit the result", *sizes)
+		}
+		fmt.Printf("ok: %s and %s up to date (%d bundled manifests)\n", *file, *sizes, len(manifests))
 		return nil
+	}
+
+	if err := os.WriteFile(*sizes, wantSizes, 0o644); err != nil {
+		return fmt.Errorf("docs: write %s: %w", *sizes, err)
 	}
 
 	if bytes.Equal(existing, updated) {
@@ -150,7 +181,10 @@ func renderCatalogBlock(manifests []catalog.Manifest) string {
 
 	// --- Fixed aliases -----------------------------------------------------
 	b.WriteString("### エイリアス\n\n")
-	b.WriteString("コーディングエージェント連携が提示する 3 つのエイリアスと、それが解決する bundled モデル。\n\n")
+	// One alias, since #521 retired waired/coding and waired/small. It
+	// counted itself as "3" for two PRs because the sentence was a
+	// literal beside a list it does not read.
+	fmt.Fprintf(&b, "コーディングエージェント連携が提示する %d つのエイリアスと、それが解決する bundled モデル。\n\n", len(fixedAliases))
 	b.WriteString("| エイリアス | 解決先 model_id | 表示名 |\n")
 	b.WriteString("| --- | --- | --- |\n")
 	for _, alias := range fixedAliases {
@@ -463,4 +497,27 @@ func intOrDash(n int) string {
 // esc neutralises markdown table delimiters in free-text cells.
 func esc(s string) string {
 	return strings.ReplaceAll(s, "|", "\\|")
+}
+
+// renderModelSizes emits the size class of every offered model as JSON,
+// keyed by model_id, for the docs-site catalog table.
+//
+// Offered only — it renders from the same BundledManifests() the page
+// does, so an internal-only model has no row to carry a class for.
+//
+// Sorted keys and a trailing newline so the file is byte-stable across
+// runs: --check diffs it, and an unstable encoder would make every
+// unrelated PR look like a stale generated artifact.
+func renderModelSizes(manifests []catalog.Manifest) ([]byte, error) {
+	sizes := make(map[string]string, len(manifests))
+	for _, m := range manifests {
+		if s := hostfit.ModelSize(m); s != "" {
+			sizes[m.ModelID] = s
+		}
+	}
+	out, err := json.MarshalIndent(sizes, "", "\t")
+	if err != nil {
+		return nil, fmt.Errorf("docs: marshal model sizes: %w", err)
+	}
+	return append(out, '\n'), nil
 }

@@ -315,6 +315,7 @@ func runPublicGrantLoop(ctx context.Context, deps publicGrantDeps) {
 		lastAcquireAt = tnow
 		res, err := deps.API.AcquirePublicGrants(ctx, controlclient.AcquirePublicGrantsRequest{
 			Class:          "",
+			MinModelSize:   pu.MinModelSize,
 			MinQualityTier: pu.MinQualityTier,
 			Want:           publicGrantWant, // K=1 (waired#898)
 			ConsentVersion: consentVersion,

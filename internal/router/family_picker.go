@@ -77,7 +77,7 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 		// list rather than dropped (waired-agent#321 F36).
 		return FamilyFit{
 			DeficitLabel: fmt.Sprintf("no variant supports %s", engine),
-			Fit:          hostfit.NoVariantForEngine(bestQualityTier(m.Variants)),
+			Fit:          hostfit.NoVariantForEngineModel(m, bestQualityTier(m.Variants)),
 		}
 	}
 

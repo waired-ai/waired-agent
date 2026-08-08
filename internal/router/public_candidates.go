@@ -7,6 +7,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	protocatalog "github.com/waired-ai/waired-agent/proto/catalog"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -40,7 +41,7 @@ const (
 	// online nodes.
 	PublicModeAuto
 	// PublicModeExplicit admits public candidates without the tier
-	// comparison. The min-tier floor and the class toggles still apply.
+	// comparison. The size floor and the class toggles still apply.
 	PublicModeExplicit
 )
 
@@ -69,9 +70,21 @@ type PublicPolicy struct {
 	// nudge must distinguish "never consented" (nudgeable) from
 	// "consented and deliberately switched off" (never nudge).
 	Consented bool
-	// MinQualityTier is the floor on a public node's advertised tier.
-	// 0 = no floor.
-	MinQualityTier int
+	// MinModelSize is the floor on the size of the model a public node
+	// advertises — hostfit.ModelSizeSmall / Medium / Large. Empty = no
+	// floor.
+	//
+	// A size and not a tier because the two orderings cross: glm-4.5-air
+	// is tier 75 and large, qwen3.6-35b-a3b is tier 90 and medium, so no
+	// numeric boundary draws the size line (#537). The tier is still the
+	// ranking everything sorts by — it just is not a thing a person
+	// types.
+	MinModelSize string
+	// LegacyMinQualityTier is a floor stored before #537, kept readable
+	// so an operator who set one does not silently lose it. Resolved to a
+	// size in publicGateFor, which is where the catalog is in hand; the
+	// stored file keeps it until the next settings write clears it.
+	LegacyMinQualityTier int
 	// Main and Sub gate the Claude traffic classes independently.
 	Main, Sub bool
 }
@@ -109,8 +122,9 @@ type publicGate struct {
 	admit bool
 	// auto requires a candidate to strictly beat beat.
 	auto bool
-	// minTier is PublicPolicy.MinQualityTier.
-	minTier int
+	// minSize is the resolved size floor — PublicPolicy.MinModelSize, or
+	// the migrated legacy tier floor. Empty = no floor.
+	minSize string
 	// beat is the best tier among the consumer's own online nodes.
 	// Only meaningful when auto.
 	beat int
@@ -118,16 +132,25 @@ type publicGate struct {
 	beatComputed bool
 }
 
-// admits reports whether a public peer advertising tier may enter the
-// candidate set. Tier 0 means "no tier information" (the peer serves
-// nothing this catalog knows) and is excluded by any floor, and can
-// never beat an own tier, so it only survives explicit mode with no
+// admits reports whether a public peer may enter the candidate set,
+// given the tier and the size class it advertises.
+//
+// The two are asked different questions, and that split is the shape of
+// #537. The SIZE carries the operator's floor, because a size class is
+// the only thing that means the same on a machine you cannot see. The
+// TIER carries the auto-mode comparison, which is an ordering nobody
+// types or reads — exactly the internal use #537 kept the number for.
+//
+// Both zero values are "no information" and both fail closed. Tier 0
+// means the peer serves nothing this catalog knows, so it can never beat
+// an own tier; an empty size ranks below every real class, so any floor
+// excludes it. Either way the peer only survives explicit mode with no
 // floor — matching proto/catalog.BestTier's documented contract.
-func (g *publicGate) admits(tier int) bool {
+func (g *publicGate) admits(tier int, size string) bool {
 	if !g.admit {
 		return false
 	}
-	if g.minTier > 0 && tier < g.minTier {
+	if g.minSize != "" && hostfit.SizeRank(size) < hostfit.SizeRank(g.minSize) {
 		return false
 	}
 	if g.auto && tier <= g.beat {
@@ -154,8 +177,46 @@ func (s *Selector) publicGateFor(class string) publicGate {
 	return publicGate{
 		admit:   true,
 		auto:    p.Mode == PublicModeAuto,
-		minTier: p.MinQualityTier,
+		minSize: s.resolveMinModelSize(p),
 	}
+}
+
+// resolveMinModelSize is the size floor to enforce, migrating a floor
+// stored as a tier before #537.
+//
+// The migration takes the LEAST restrictive class among the models that
+// tier floor admitted. A tier floor and a size floor do not draw the
+// same line — that is why the field changed — so any mapping is
+// approximate, and this one is approximate in the direction that does
+// not silently take machines away from somebody who is not watching.
+//
+// A floor above everything in the catalog admitted nothing, so it maps
+// to the most restrictive class rather than to "no floor": reading an
+// exclude-everything setting as an allow-everything one is the one
+// outcome the operator certainly did not ask for.
+func (s *Selector) resolveMinModelSize(p PublicPolicy) string {
+	if p.MinModelSize != "" {
+		return p.MinModelSize
+	}
+	if p.LegacyMinQualityTier <= 0 {
+		return ""
+	}
+	best := ""
+	for _, m := range s.in.Manifests {
+		for _, v := range m.Variants {
+			if v.QualityTier < p.LegacyMinQualityTier {
+				continue
+			}
+			if sz := hostfit.VariantSize(v); sz != "" &&
+				(best == "" || hostfit.SizeRank(sz) < hostfit.SizeRank(best)) {
+				best = sz
+			}
+		}
+	}
+	if best == "" {
+		return hostfit.ModelSizeLarge
+	}
+	return best
 }
 
 // classAllowsPublic applies the per-class toggles. An empty class —
@@ -258,6 +319,21 @@ func (s *Selector) peerTier(engineType string, models []string) int {
 		engineType = catalog.RuntimeOllama
 	}
 	return protocatalog.BestTierIn(s.in.Manifests, engineType, models)
+}
+
+// peerSize is peerTier's sibling: the largest size class an inference
+// endpoint advertises, resolved through the same catalog and the same
+// engine-kind default (an empty Type means ollama, or every legacy peer
+// would resolve to "unknown" and be excluded by any floor).
+//
+// The VARIANT decides, not the family — this is what the peer is
+// running, and a model shipping both a light and a heavy build would
+// otherwise be reported at the light one.
+func (s *Selector) peerSize(engineType string, models []string) string {
+	if engineType == "" {
+		engineType = catalog.RuntimeOllama
+	}
+	return hostfit.BestSizeIn(s.in.Manifests, engineType, models)
 }
 
 // publicDisplayID is the only identifier that may be shown for a public

@@ -1,64 +1,62 @@
 package main
 
 import (
+	"os"
+	"strings"
 	"testing"
 )
 
-// bundledVariantQuality / modelWithQuality resolve catalog quality tiers for
-// the benchmark display lines (waired#773).
-func TestBundledVariantQuality(t *testing.T) {
-	t.Run("known-variant", func(t *testing.T) {
-		q, ok := bundledVariantQuality("qwen2.5-coder-3b-instruct", "q4-gguf")
-		if !ok || q != 30 {
-			t.Errorf("quality = %d ok=%v, want 30 true", q, ok)
+// TestBundledModelLabel_ResolvesAgainstTheCompleteSet: the benchmark
+// lines name a model somebody already has, so resolution takes EVERY
+// shipped manifest — a withheld model an operator can still pin has to
+// print its own name, not its raw id.
+//
+// These used to assert bundledVariantQuality / modelWithQuality, which
+// rendered "<label> (quality 30)". #537 removed the figure: the tier is
+// arithmetic over two catalog fields (#518) and a number labelled
+// "quality" claimed a measurement. The label is what is left, so it is
+// what is pinned.
+func TestBundledModelLabel_ResolvesAgainstTheCompleteSet(t *testing.T) {
+	t.Run("offered model", func(t *testing.T) {
+		if got := bundledModelLabelDefault("qwen2.5-coder-3b-instruct"); got != "Qwen2.5 Coder 3B Instruct" {
+			t.Errorf("label = %q, want the display name with the parenthetical dropped", got)
 		}
 	})
-	t.Run("unknown-variant-falls-back-to-best", func(t *testing.T) {
-		q, ok := bundledVariantQuality("qwen2.5-coder-3b-instruct", "no-such-variant")
-		if !ok || q != 31 { // best variant (awq-int4) of the 3B
-			t.Errorf("quality = %d ok=%v, want best-variant 31 true", q, ok)
+	// A WITHHELD model, deliberately: internal_only keeps it off every
+	// offer surface, and resolving a name somebody hands us is a
+	// different question from choosing one for them.
+	t.Run("withheld model still names itself", func(t *testing.T) {
+		if got := bundledModelLabelDefault("granite4-350m"); got == "granite4-350m" {
+			t.Errorf("label = %q, want the display name — a model this build ships "+
+				"must not degrade to its raw id", got)
 		}
 	})
-	// A WITHHELD model, deliberately: this case's real subject is that
-	// resolution takes the complete set, so a model an operator can still
-	// pin does not silently lose its tier. It used to name
-	// qwen2.5-coder-0.5b-instruct, which #200 retired out of the catalog.
-	t.Run("empty-variant-falls-back-to-best", func(t *testing.T) {
-		q, ok := bundledVariantQuality("granite4-350m", "")
-		if !ok || q != 11 {
-			t.Errorf("quality = %d ok=%v, want 11 true", q, ok)
-		}
-	})
-	t.Run("unknown-model", func(t *testing.T) {
-		if _, ok := bundledVariantQuality("no-such-model", "q4"); ok {
-			t.Errorf("unknown model must not resolve a quality tier")
-		}
-	})
-	// A RETIRED name has no tier of its own, and must not borrow the
-	// successor's (#200): a tier is a claim about weights, and attributing
-	// qwen3.5-0.8b's quality to the model somebody is actually running
-	// would misreport exactly the thing this number exists to report.
-	// Record of today's behaviour, and the observation half of the
-	// instruction/observation rule in internal/catalog/retired.go.
-	t.Run("retired-model-has-no-tier", func(t *testing.T) {
-		if q, ok := bundledVariantQuality("qwen2.5-coder-0.5b-instruct", ""); ok {
-			t.Errorf("retired model resolved a quality tier of %d", q)
+	t.Run("non-catalog id degrades to the raw id", func(t *testing.T) {
+		if got := bundledModelLabelDefault("heavy"); got != "heavy" {
+			t.Errorf("label = %q, want the raw id back unchanged", got)
 		}
 	})
 }
 
-func TestModelWithQuality(t *testing.T) {
-	t.Run("catalog-model-renders-label-and-tier", func(t *testing.T) {
-		got := modelWithQuality("qwen2.5-coder-3b-instruct", "q4-gguf")
-		if got != "Qwen2.5 Coder 3B Instruct (quality 30)" {
-			t.Errorf("got %q", got)
+// TestBenchmarkLinesCarryNoQualityFigure is the guard on the removal
+// itself: nothing in the benchmark flow may put a bare quality number
+// beside a model name again (#537). It reads the rendered prompts rather
+// than the helpers, because the helpers are exactly what a reinstatement
+// would route around.
+func TestBenchmarkLinesCarryNoQualityFigure(t *testing.T) {
+	for _, fn := range []string{"init_benchmark.go", "init_modelselect.go"} {
+		src, err := os.ReadFile(fn)
+		if err != nil {
+			t.Fatalf("read %s: %v", fn, err)
 		}
-	})
-	t.Run("non-catalog-id-degrades-to-raw-id", func(t *testing.T) {
-		if got := modelWithQuality("heavy", "q4"); got != "heavy" {
-			t.Errorf("got %q, want bare raw id", got)
+		for _, banned := range []string{"(quality %d)", "quality %d", "tier %d"} {
+			if strings.Contains(string(src), banned) {
+				t.Errorf("%s renders %q — the quality number is off every user-facing "+
+					"surface (#537, docs/decisions/20260808/0452-model-size-class-replaces-the-quality-number.md)",
+					fn, banned)
+			}
 		}
-	})
+	}
 }
 
 // TestCanonicalBundledModelIDResolvesAnInternalModel: resolution takes

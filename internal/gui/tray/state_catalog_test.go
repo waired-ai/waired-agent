@@ -220,21 +220,22 @@ func TestUpdate_CatalogRecommendedSpec_OllamaShowsRAM(t *testing.T) {
 		Families: []management.CatalogFamily{
 			{
 				ModelID: "qwen3-8b-instruct", DisplayName: "Qwen3 8B Instruct",
-				Fits: true, Downloaded: true,
+				ModelSize: "small",
+				Fits:      true, Downloaded: true,
 				Recommended: &management.CatalogSpec{MinRAMGB: 8, QualityTier: 50, ParamCount: 7_610_000_000},
 			},
 		},
 	}
 	got := Update(connectedSnapshotWithCatalog(c))
 	row := got.CatalogEntries[0]
-	// The unit is spelled out and the tier joins the label
+	// The unit is spelled out and the size class joins the label
 	// (waired-agent#321): the review that asked for one presentation across
 	// the pickers asked for a quality value on each of them, and a bare
 	// "· 8 GB" left the operator to infer which memory it meant.
-	if row.Label != "Qwen3 8B Instruct · 8 GB RAM · tier 50" {
+	if row.Label != "Qwen3 8B Instruct · 8 GB RAM · small" {
 		t.Errorf("ollama spec label: %q", row.Label)
 	}
-	for _, want := range []string{"needs 8 GB RAM", "quality tier 50", "7.6B params"} {
+	for _, want := range []string{"needs 8 GB RAM", "small — fits an 8 GB graphics card", "7.6B params"} {
 		if !strings.Contains(row.Tooltip, want) {
 			t.Errorf("tooltip %q missing %q", row.Tooltip, want)
 		}
@@ -248,7 +249,8 @@ func TestUpdate_CatalogRecommendedSpec_VLLMShowsVRAM(t *testing.T) {
 		Families: []management.CatalogFamily{
 			{
 				ModelID: "qwen3-8b-instruct", DisplayName: "Qwen3 8B Instruct",
-				Fits: true, Downloaded: true, Active: true,
+				ModelSize: "small",
+				Fits:      true, Downloaded: true, Active: true,
 				Recommended: &management.CatalogSpec{MinVRAMMB: 8000, QualityTier: 60, ParamCount: 7_610_000_000},
 			},
 		},
@@ -256,7 +258,7 @@ func TestUpdate_CatalogRecommendedSpec_VLLMShowsVRAM(t *testing.T) {
 	got := Update(connectedSnapshotWithCatalog(c))
 	row := got.CatalogEntries[0]
 	// 8000 MB rounds to 8 GB; active row keeps its bullet plus the suffix.
-	if row.Label != "● Qwen3 8B Instruct · 8 GB VRAM · tier 60" {
+	if row.Label != "● Qwen3 8B Instruct · 8 GB VRAM · small" {
 		t.Errorf("vllm active spec label: %q", row.Label)
 	}
 	if !strings.Contains(row.Tooltip, "needs 8 GB VRAM") {
@@ -277,14 +279,15 @@ func TestUpdate_CatalogRecommendedSpec_VLLMRoundsUp(t *testing.T) {
 		Families: []management.CatalogFamily{
 			{
 				ModelID: "qwen3.6-27b", DisplayName: "Qwen3.6 27B",
-				Fits: true, Downloaded: true,
+				ModelSize: "medium",
+				Fits:      true, Downloaded: true,
 				Recommended: &management.CatalogSpec{MinVRAMMB: 24000, QualityTier: 72},
 			},
 		},
 	}
 	got := Update(connectedSnapshotWithCatalog(c))
 	row := got.CatalogEntries[0]
-	if row.Label != "Qwen3.6 27B · 24 GB VRAM · tier 72" {
+	if row.Label != "Qwen3.6 27B · 24 GB VRAM · medium" {
 		t.Errorf("24000 MB must round up to 24 GB, got label %q", row.Label)
 	}
 	if !strings.Contains(row.Tooltip, "needs 24 GB VRAM") {
@@ -355,13 +358,14 @@ func TestUpdate_CatalogPrefersTheResidentRequirement(t *testing.T) {
 		Families: []management.CatalogFamily{
 			{
 				ModelID: "qwen3.6-27b", DisplayName: "Qwen3.6 27B", Fits: true, Downloaded: true,
+				ModelSize:   "medium",
 				Recommended: &management.CatalogSpec{MinRAMGB: 32, QualityTier: 62},
 				Fit:         &hostfit.Presentation{Runnable: true, RequiredResidentMB: 18 * 1024, QualityTier: 62},
 			},
 		},
 	}
 	row := Update(connectedSnapshotWithCatalog(c)).CatalogEntries[0]
-	if row.Label != "Qwen3.6 27B · 18 GB VRAM · tier 62" {
+	if row.Label != "Qwen3.6 27B · 18 GB VRAM · medium" {
 		t.Errorf("label should carry the resident figure in graphics memory: %q", row.Label)
 	}
 }
@@ -375,6 +379,7 @@ func TestUpdate_CatalogRecommendedPickIsMarked(t *testing.T) {
 		Families: []management.CatalogFamily{
 			{
 				ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B", Fits: true, Downloaded: true,
+				ModelSize:       "small",
 				RecommendedPick: true,
 				Fit:             &hostfit.Presentation{Runnable: true, RequiredResidentMB: 9 * 1024, QualityTier: 55},
 			},
@@ -385,7 +390,7 @@ func TestUpdate_CatalogRecommendedPickIsMarked(t *testing.T) {
 		},
 	}
 	rows := Update(connectedSnapshotWithCatalog(c)).CatalogEntries
-	if rows[0].Label != "Qwen3.5 9B · 9 GB VRAM · tier 55 — recommended" {
+	if rows[0].Label != "Qwen3.5 9B · 9 GB VRAM · small — recommended" {
 		t.Errorf("recommended label: %q", rows[0].Label)
 	}
 	if !strings.Contains(rows[0].Tooltip, "Chosen from this computer’s memory and graphics card.") {
@@ -407,6 +412,7 @@ func TestUpdate_CatalogNotRecommendedIsOfferedNotHidden(t *testing.T) {
 		Families: []management.CatalogFamily{
 			{
 				ModelID: "qwen3.6-35b-a3b", DisplayName: "Qwen3.6 35B A3B", Fits: true, Downloaded: true,
+				ModelSize: "medium",
 				Fit: &hostfit.Presentation{
 					Runnable: true, RequiredResidentMB: 24 * 1024, QualityTier: 65,
 					NotRecommended: true, NotRecommendedReason: hostfit.ReasonWeightsSpill,
@@ -418,7 +424,7 @@ func TestUpdate_CatalogNotRecommendedIsOfferedNotHidden(t *testing.T) {
 	if row.Disabled {
 		t.Error("a runnable model must stay selectable however strongly it is discouraged")
 	}
-	if row.Label != "Qwen3.6 35B A3B · 24 GB VRAM · tier 65 — not recommended here" {
+	if row.Label != "Qwen3.6 35B A3B · 24 GB VRAM · medium — not recommended here" {
 		t.Errorf("not-recommended label: %q", row.Label)
 	}
 	if !strings.Contains(row.Tooltip, "not entirely on the graphics card") {
@@ -436,6 +442,7 @@ func TestUpdate_CatalogNoVariantForEngineSaysSoInPlainWords(t *testing.T) {
 		Families: []management.CatalogFamily{
 			{
 				ModelID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Fits: false,
+				ModelSize:    "large",
 				DeficitLabel: "no variant supports ollama",
 				Fit:          &hostfit.Presentation{Reason: hostfit.ReasonNoVariantForEngine, QualityTier: 80},
 			},

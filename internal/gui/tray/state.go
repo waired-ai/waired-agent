@@ -210,7 +210,7 @@ type PeerHardwareRow struct {
 // already carries any annotation suffix ("(switching…)", "— needs 24 GB
 // VRAM", "· 8 GB", etc.) so the tray's apply() only needs to call
 // SetTitle/SetDisabled. Tooltip carries the fuller recommended-spec hint
-// (min RAM/VRAM · quality tier · params); it is best-effort since some
+// (min RAM/VRAM · size class · params); it is best-effort since some
 // Linux indicators don't render menu-item tooltips.
 type CatalogEntryView struct {
 	ModelID  string
@@ -1527,7 +1527,7 @@ func catalogBlockedText(f management.CatalogFamily) string {
 // local literal so the tray view-model layer needs no catalog import.
 const engineVLLM = "vllm"
 
-// catalogSpecSuffix returns the compact "· N GB VRAM · tier T" hint for
+// catalogSpecSuffix returns the compact "· N GB VRAM · medium" hint for
 // menu labels.
 //
 // The size is what the model needs to serve the ~200k coding window
@@ -1537,18 +1537,22 @@ const engineVLLM = "vllm"
 // figure is still the last fallback, and it is the RIGHT answer on a
 // computer the projection cannot price.
 //
-// The tier rides along because the review that asked for this asked for
-// a quality value on every picker, and it is the raw catalog number
-// rather than a coarse scale — a re-bucketing would have to be kept in
-// step with the catalog forever.
+// The size class rides along because the review that asked for this
+// asked for a quality value on every picker. It used to be the raw
+// quality tier, on the argument that a coarse scale would have to be
+// kept in step with the catalog forever — true of a scale somebody
+// authors, and #537 replaced it with one nothing authors: hostfit
+// derives small/medium/large from the weight annotation the manifest
+// already carries. The number itself is arithmetic over two catalog
+// fields (#518) and printing it claimed a measurement.
 func catalogSpecSuffix(engine string, f management.CatalogFamily) string {
 	gb, unit := catalogSizeGB(engine, f)
 	var out string
 	if gb > 0 {
 		out = fmt.Sprintf(" · %d GB %s", gb, unit)
 	}
-	if tier := catalogTier(f); tier > 0 {
-		out += fmt.Sprintf(" · tier %d", tier)
+	if f.ModelSize != "" {
+		out += " · " + f.ModelSize
 	}
 	return out
 }
@@ -1582,21 +1586,28 @@ func catalogSizeGB(engine string, f management.CatalogFamily) (int, string) {
 	return gb, "RAM"
 }
 
-// catalogTier prefers the projection's tier — it describes the variant
-// the verdict is about, including on a row with no fitting variant at
-// all — and falls back to the recommended-spec projection.
-func catalogTier(f management.CatalogFamily) int {
-	if f.Fit != nil && f.Fit.QualityTier > 0 {
-		return f.Fit.QualityTier
+// catalogSizeNote spells out what the label's one-word size class means,
+// in the only terms that make it comparable across computers: the card
+// it runs on.
+//
+// It does not repeat the memory figure beside it. That one is about THIS
+// computer and counts its RAM too; this one is a property of the model,
+// the same on every machine. Two numbers under one row would read as one
+// quantity stated twice.
+func catalogSizeNote(size string) string {
+	switch size {
+	case hostfit.ModelSizeSmall:
+		return "small — fits an 8 GB graphics card"
+	case hostfit.ModelSizeMedium:
+		return "medium — fits a 32 GB graphics card"
+	case hostfit.ModelSizeLarge:
+		return "large — needs more than a 32 GB graphics card"
 	}
-	if f.Recommended != nil {
-		return f.Recommended.QualityTier
-	}
-	return 0
+	return ""
 }
 
-// catalogSpecTooltip is the fuller per-row hint: the memory figure,
-// quality tier, parameter counts, and the sentence behind whichever pick
+// catalogSpecTooltip is the fuller per-row hint: the memory figure, the
+// size class, parameter counts, and the sentence behind whichever pick
 // note the label carries. Best-effort — some Linux indicators drop menu
 // item tooltips. Empty when there is nothing to say.
 func catalogSpecTooltip(engine string, f management.CatalogFamily) string {
@@ -1604,8 +1615,8 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily) string {
 	if gb, unit := catalogSizeGB(engine, f); gb > 0 {
 		parts = append(parts, fmt.Sprintf("needs %d GB %s", gb, unit))
 	}
-	if tier := catalogTier(f); tier > 0 {
-		parts = append(parts, fmt.Sprintf("quality tier %d", tier))
+	if note := catalogSizeNote(f.ModelSize); note != "" {
+		parts = append(parts, note)
 	}
 	if rec := f.Recommended; rec != nil {
 		if p := formatTrayParams(rec.ParamCount, rec.ActiveParams); p != "" {
