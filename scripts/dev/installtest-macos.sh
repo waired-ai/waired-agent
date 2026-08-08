@@ -356,11 +356,25 @@ assert_inference_macos() {
     fi
   fi
 
-  if sudo sh -c 'grep -hqsE "\"enabled\" *: *true" "/Library/Application Support/waired"/*.json' 2>/dev/null; then
-    ok "inference enabled in persisted agent config"
-  else
-    bad "inference not enabled in persisted config"
-  fi
+  # Asked of the DAEMON, not of agent.json. The config file carries the
+  # install-time DEFAULT (agentconfig.Inference.Enabled); the runtime answer is
+  # planInitialInference's, folding that default together with the persisted
+  # desired-inference toggle and any --inference-enabled flag. The two diverge
+  # by design on a host the install-time selection declined and the operator
+  # then turned on — which is exactly the routing sentinel, where this assert
+  # failed while inference was demonstrably serving (waired-agent#552).
+  #
+  # desired_state is the field the tray reads for the same reason: it is the
+  # operator's intent, independent of SubsystemState's engine health.
+  local desired
+  desired="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null \
+    | grep -oE '"desired_state"[[:space:]]*:[[:space:]]*"[a-z]+"' \
+    | grep -oE '"[a-z]+"$' | tr -d '"' || true)"
+  case "$desired" in
+    enabled) ok "local inference is on (mgmt API desired_state=enabled)" ;;
+    "")      bad "the daemon published no desired_state — cannot tell an enabled host from a disabled one" ;;
+    *)       bad "local inference is off (mgmt API desired_state=$desired)" ;;
+  esac
 
   # The end-of-init benchmark (offerBenchmark) must report a THROUGHPUT NUMBER.
   # Mirrors installtest-enroll.sh's assert (cross-OS parity): the bare "Local

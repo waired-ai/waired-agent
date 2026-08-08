@@ -521,14 +521,16 @@ function Assert-Inference {
         }
     }
 
-    # 3) inference enabled in the persisted config under %ProgramData%\waired
-    $cfgEnabled = $false
-    Get-ChildItem -LiteralPath $StateDir -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object {
-        $raw = Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue
-        if ($raw -match '"enabled"\s*:\s*true') { $cfgEnabled = $true }
-    }
-    if ($cfgEnabled) { ItOk "inference enabled in persisted agent config" }
-    else { ItBad "inference not enabled in persisted config" }
+    # 3) local inference is on -- asked of the DAEMON, not of the config under
+    #    %ProgramData%\waired. The file carries the install-time DEFAULT; the
+    #    runtime answer is planInitialInference's, folding that default with
+    #    the persisted desired-inference toggle and any --inference-enabled
+    #    flag. See the darwin twin in installtest-macos.sh (waired-agent#552).
+    $desired = ''
+    try { $desired = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).desired_state } catch { }
+    if ($desired -eq 'enabled') { ItOk "local inference is on (mgmt API desired_state=enabled)" }
+    elseif ([string]::IsNullOrEmpty($desired)) { ItBad "the daemon published no desired_state -- cannot tell an enabled host from a disabled one" }
+    else { ItBad "local inference is off (mgmt API desired_state=$desired)" }
 
     # 4) benchmark ran in the init transcript (offerBenchmark): require a
     #    THROUGHPUT NUMBER (tok/s | tokens/s). Mirrors installtest-enroll.sh
