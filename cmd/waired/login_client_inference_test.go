@@ -123,6 +123,10 @@ const bundledModel = "qwen3.5-9b"
 func downloadingStatus(completed, total int64) management.InferenceStatus {
 	return management.InferenceStatus{
 		SubsystemState: "downloading",
+		// A within-budget measurement: install-flow step 6 reads the
+		// status once, finds it, and stays out of these choreographies
+		// (its own scenarios build over-budget fixtures explicitly).
+		HostSpeed: &management.HostSpeedStatus{TurnSeconds: 30, BudgetSeconds: 45},
 		Models: management.ModelsSnapshot{
 			Downloading: []string{bundledModel},
 			Downloads:   []management.ModelDownload{{Model: bundledModel, CompletedBytes: completed, TotalBytes: total}},
@@ -141,6 +145,9 @@ func TestRunInitViaDaemon_ShowsDownloadProgressAndGuidance(t *testing.T) {
 		benchOK:    true,
 		benchTokps: 42,
 		statusSeq: []management.InferenceStatus{
+			// One extra leading entry: step 6's single status read
+			// consumes it before the model wait begins.
+			downloadingStatus(1<<30, 4<<30),
 			downloadingStatus(1<<30, 4<<30),
 			downloadingStatus(3<<30, 4<<30),
 			{SubsystemState: "ready", Models: management.ModelsSnapshot{Ready: []string{bundledModel}}, Active: &management.ActiveSelection{ModelID: bundledModel}},
