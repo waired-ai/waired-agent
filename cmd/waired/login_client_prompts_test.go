@@ -132,6 +132,9 @@ func readyStatus() management.InferenceStatus {
 		SubsystemState: "ready",
 		Models:         management.ModelsSnapshot{Ready: []string{bundledModel}},
 		Active:         &management.ActiveSelection{ModelID: bundledModel},
+		// A within-budget measurement: install-flow step 6 reads the
+		// status once, finds it, and stays out of these choreographies.
+		HostSpeed: &management.HostSpeedStatus{TurnSeconds: 30, BudgetSeconds: 45},
 	}
 }
 
@@ -519,7 +522,11 @@ func TestRunInitViaDaemon_LeftoverDesiredStateIsNotABrowserHandoff(t *testing.T)
 		},
 	}
 	d.onStatus = func(poll int32) {
-		if poll == 1 {
+		// Poll 1 is step 6's measurement read (waired-agent#585); poll 2
+		// is the model wait's. The answer is typed during the wait's
+		// read — after that tick's enter.Poll has run — so the takeover
+		// gate cannot eat it before the coding-agent question asks.
+		if poll == 2 {
 			_, _ = keys.Write([]byte("n\n")) // the coding-agent answer
 		}
 	}

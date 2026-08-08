@@ -72,9 +72,22 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 
 	deadline := time.Now().Add(hostSpeedAskWait)
 	narrated := false
+	misses := 0
 	var p hostSpeedPoll
 	for {
 		p = readHostSpeedPoll(mgmtURL)
+		if !p.ok {
+			// An unreachable daemon — or an older build without the
+			// status route — is not going to produce a measurement.
+			// Three consecutive misses and this gives up rather than
+			// parking init on the full wait (best-effort, like every
+			// other read of this route).
+			if misses++; misses >= 3 {
+				return
+			}
+		} else {
+			misses = 0
+		}
 		if p.ok {
 			if p.desiredState == string(state.InferenceDisabled) &&
 				(p.hs == nil || !p.hs.TurnedInferenceOff) {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
@@ -61,5 +62,12 @@ func runTests(m *testing.M) int {
 	os.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
 
 	mgmtWriteBase = ""
+	// The step-6 host-speed wait is minutes in production (the probe
+	// model has to download); at test scale every login-flow fixture that
+	// parks on a measurement-less status would otherwise burn the full
+	// wait. Sealed here for the same reason as the rest: an opt-in shrink
+	// only protects the tests that remember it. Tests that exercise the
+	// wait itself re-shrink locally.
+	hostSpeedAskWait, hostSpeedAskPoll = 250*time.Millisecond, 10*time.Millisecond
 	return m.Run()
 }
