@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/waired-ai/waired-agent/internal/management"
 )
 
 // TestExitPlanFor pins the numbers themselves. PRODUCT CONTRACT: these are
@@ -79,7 +81,13 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		needsInstall = "local AI still needs installing"
 		notRunning   = "local AI isn't running"
 		notAnswering = "local AI is not answering yet"
+		startsOff    = "local AI starts off on this computer"
 	)
+	slow := func() *management.HostSpeedStatus {
+		return &management.HostSpeedStatus{
+			TurnSeconds: 66.9, BudgetSeconds: 45, TurnedInferenceOff: true,
+		}
+	}
 
 	cases := []struct {
 		name    string
@@ -173,6 +181,48 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			summary: daemonSummary{accountEmail: "someone@example.test"},
 			want:    celebration,
 			absent:  []string{notRunning},
+		},
+		{
+			// waired#1099. The measurement left local AI off, so the
+			// ordinary box's two claims — "everything completed
+			// successfully" and "Local inference is live via the
+			// waired-agent daemon" — are both false on this host. Nothing
+			// FAILED, so it is not one of the fault boxes either, and the
+			// exit code stays 0: #465's off is a default with a working
+			// opt-in, and an installer must not read it as a bad install
+			// (waired-ai/waired#1056).
+			name: "the measurement left local AI off",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				hostSpeed:    slow(),
+			},
+			want:   startsOff,
+			absent: []string{celebration, notRunning, notAnswering, "is live"},
+		},
+		{
+			// Order: a real fault outranks the measurement. An engine that
+			// would not stay up was never measured usefully, and telling
+			// that operator their machine is slow points at the wrong
+			// thing.
+			name: "an engine that would not stay up outranks the measurement",
+			summary: daemonSummary{
+				engineFailure: "ollama: process exited during startup: signal: killed",
+				hostSpeed:     slow(),
+			},
+			want:     notRunning,
+			absent:   []string{startsOff, celebration},
+			wantExit: exitLocalAIDown,
+		},
+		{
+			// A figure on a host that CLEARED the budget is just a figure.
+			// TurnedInferenceOff is the claim, not the number.
+			name: "a fast host keeps the ordinary box, with its speed on it",
+			summary: daemonSummary{
+				accountEmail: "someone@example.test",
+				hostSpeed:    &management.HostSpeedStatus{TurnSeconds: 4.5, BudgetSeconds: 45},
+			},
+			want:   celebration,
+			absent: []string{startsOff, notRunning},
 		},
 	}
 

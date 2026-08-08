@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
@@ -213,11 +214,55 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 type inferenceStatusResponse struct {
 	SubsystemState string `json:"subsystem_state"`
 	DesiredState   string `json:"desired_state"`
-	HostSpeed      *struct {
-		TurnSeconds        float64 `json:"turn_seconds"`
-		BudgetSeconds      float64 `json:"budget_seconds"`
-		TurnedInferenceOff bool    `json:"turned_inference_off"`
-	} `json:"host_speed"`
+	// The daemon's own type rather than a local re-declaration: `waired
+	// init` reads the same field now (waired#1099), and two hand-written
+	// copies of one wire shape is how a field comes to be read on one
+	// surface and silently dropped on the other.
+	HostSpeed *management.HostSpeedStatus `json:"host_speed"`
+}
+
+// hostSpeedTurnLine is what one coding question costs on this computer,
+// as the `waired init` summary box says it (waired-ai/waired-agent#496,
+// reported there per waired#1099).
+//
+// It lives beside the status command deliberately: the two surfaces
+// report the same measurement and must not disagree about the NUMBER.
+// The sentences differ because a box row and a full sentence are
+// different shapes, but the precision does not — one decimal, the same
+// %.1f runInferenceStatus below has shipped and the user docs quote
+// verbatim.
+func hostSpeedTurnLine(hs *management.HostSpeedStatus) string {
+	if hs == nil || hs.TurnSeconds <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("about %.1f s per coding question", hs.TurnSeconds)
+}
+
+// fetchHostSpeed reads the measurement off the daemon for the `waired
+// init` summary. Best-effort by construction: a daemon that cannot be
+// reached, an older one with no such field, or a host that was never
+// measured all yield nil, and the summary simply says nothing about
+// speed. Nothing here may fail an install (waired#1099).
+func fetchHostSpeed(mgmt string) *management.HostSpeedStatus {
+	body, err := httpGet(mgmt + "/waired/v1/inference/status")
+	if err != nil {
+		return nil
+	}
+	var s inferenceStatusResponse
+	if err := json.Unmarshal(body, &s); err != nil {
+		return nil
+	}
+	if s.HostSpeed == nil || s.HostSpeed.TurnSeconds <= 0 {
+		return nil
+	}
+	// The causal claim only holds while the toggle actually reads off.
+	// The daemon drops it when anyone moves the toggle themselves, but it
+	// cannot drop it for a state it has not been asked about — so the two
+	// are checked together, exactly as `waired inference status` does.
+	if s.DesiredState != string(state.InferenceDisabled) {
+		s.HostSpeed.TurnedInferenceOff = false
+	}
+	return s.HostSpeed
 }
 
 func runInferenceStatus(mgmt string) error {
