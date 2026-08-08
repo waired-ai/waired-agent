@@ -173,11 +173,11 @@ waired models check-agent         # will this model work with a coding agent?
 
 `pull` waits until the model is ready. A model that runs here but is not the one
 Waired would choose takes a confirmation — `--yes` skips that prompt in a
-script. A model this computer does not have the memory for takes a sterner
-confirmation with the shortfall, default No, because loading it is expected to
-fail after the download completes; `--yes` alone does not skip that one — a
-script that really means it passes `--yes --force`. `rm` also confirms first.
-Model IDs come from the [model catalog](/reference/model-catalog/).
+script. A model this computer does not have the memory for asks you to confirm
+once more, showing the shortfall, with No as the default — loading it is
+expected to fail after the download completes. `--yes` alone does not skip that
+one; a script that really means it passes `--yes --force`. `rm` also confirms
+first. Model IDs come from the [model catalog](/reference/model-catalog/).
 
 `check-agent` asks a question the other commands do not: not "does this model
 fit" and not "is it fast enough", but "can a coding agent actually drive it?"
