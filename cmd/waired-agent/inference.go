@@ -3970,6 +3970,7 @@ func computeAvailableUpdate(ctx context.Context, store *catalog.Store, profiler 
 	enginePick, err := router.PickEngine(router.EnginePickInput{
 		Hardware:   hw,
 		Preference: cfg.PreferredEngine,
+		Catalog:    manifests,
 	})
 	if err != nil {
 		return nil

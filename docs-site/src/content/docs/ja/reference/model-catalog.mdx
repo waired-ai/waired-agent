@@ -5,7 +5,7 @@ meta:
   audience: モデルを選ぶ人、何が動くか確認したい人
   needs: 何も要りません
   time: 自分のハードウェアの行を引く
-sourceHash: d39f07db1af6c75c
+sourceHash: da61037837604b4a
 ---
 
 import ModelCatalogTable from '../../../../components/ModelCatalogTable.astro';
@@ -224,6 +224,12 @@ NVIDIA のグラフィックスカードを複数搭載したマシンでは、W
 Windows と macOS では Ollama で動作します。vLLM での推論には Linux が必要な
 ため、これらのマシンでは大容量の NVIDIA カードを積んでいても Ollama 向けの
 一覧から選ばれます。
+
+vLLM 向けの一覧にカードへ収まるモデルが 1 つもない場合も、Ollama 向けの
+一覧から選ばれます。vLLM 向けのビルドは Ollama 向けより大きいサイズから
+始まるため、vLLM のしきい値を超えたカードでも、その一覧のどのモデルにも
+届かないことがあります。この場合 Waired は「スペック不足」とは扱わず、
+カードで実際に動くモデルを提供します。
 
 これは Waired が**自動で選ぶ**対象にのみ影響します。メモリに収まるモデルは
 引き続き自分で選択できます —

@@ -90,6 +90,17 @@ type EnginePickInput struct {
 	// engine wants — operators using --prefer vllm on a CPU host are
 	// telling us they have an external reason for that decision.
 	Preference string
+
+	// Catalog is the manifest set this pick will be judged against. When
+	// it is non-empty the auto path additionally requires that the engine
+	// it is about to name can actually be fed here — see PickEngine's
+	// fourth term.
+	//
+	// Empty means the caller has no catalog in hand, and the engine is
+	// decided on hardware alone. Every production caller passes one; the
+	// tests that leave it empty are exercising the hardware rule on its
+	// own.
+	Catalog []catalog.Manifest
 }
 
 // EnginePick is the picker's verdict.
@@ -104,12 +115,24 @@ type EnginePick struct {
 //   - If Preference is "ollama" or "vllm", honour it.
 //   - Else if Hardware has at least one NVIDIA GPU with VRAMTotalMB
 //     ≥ MinVLLMVRAMMB AND Hardware.OS can serve vLLM
-//     (VLLMSupportedOS — Linux), pick "vllm".
+//     (VLLMSupportedOS — Linux) AND — when Catalog is supplied — that
+//     engine has at least one variant fitting this host, pick "vllm".
 //   - Else pick "ollama".
 //
 // The OS term reads Hardware.OS rather than runtime.GOOS so the rule stays a
 // pure (facts) -> plan function that table-tests across all three OSes;
 // production profiles carry runtime.GOOS there (hardware.defaultOSArch).
+//
+// The fourth term exists because every consumer of this pick judges
+// models against the engine it names — the install pick, the catalog
+// endpoint, computeAvailableUpdate — and none of them can revisit the
+// engine once it is chosen. Naming one the catalog cannot feed hands
+// SelectInstallModel an empty candidate set, and the host reports below
+// the recommended spec on hardware that would serve a model perfectly
+// well on the other engine. Found while scoping waired-agent#522: the
+// only vLLM variants under 24 GB of VRAM are in the model generation
+// that issue retires, so an 8-23 GB NVIDIA Linux host would have lost
+// local inference entirely the moment those manifests were deleted.
 //
 // Returns ErrInvalidEnginePreference when Preference is set to an
 // unknown value.
@@ -171,6 +194,11 @@ func PickEngine(in EnginePickInput) (EnginePick, error) {
 				fmt.Sprintf("auto: ollama (vllm serving is linux-only; host os=%s)", osLabel(in.Hardware.OS)))
 			return EnginePick{Engine: catalog.RuntimeOllama, Source: EngineSourceAuto, Reasons: reasons}, nil
 		}
+		if !engineServesAModelHere(in.Catalog, catalog.RuntimeVLLM, in.Hardware) {
+			reasons = append(reasons,
+				"auto: ollama (no vllm variant in the catalog fits this host)")
+			return EnginePick{Engine: catalog.RuntimeOllama, Source: EngineSourceAuto, Reasons: reasons}, nil
+		}
 		reasons = append(reasons,
 			fmt.Sprintf("auto: vllm (VRAM %d MB ≥ threshold %d MB)", vramMB, MinVLLMVRAMMB))
 		return EnginePick{Engine: catalog.RuntimeVLLM, Source: EngineSourceAuto, Reasons: reasons}, nil
@@ -200,6 +228,31 @@ func PickEngine(in EnginePickInput) (EnginePick, error) {
 		reasons = append(reasons, "auto: ollama")
 		return EnginePick{Engine: catalog.RuntimeOllama, Source: EngineSourceAuto, Reasons: reasons}, nil
 	}
+}
+
+// engineServesAModelHere reports whether manifests hold at least one
+// variant that engine could serve on hw.
+//
+// It answers through RankModels rather than re-deriving the fit, so the
+// engine picker and the install pick a moment later ask the same
+// question about the same host and cannot drift — the shape
+// VLLMAutoEligible already uses for the hardware half of the rule.
+//
+// An empty catalog answers yes: the caller has nothing to judge
+// against, so the hardware terms alone decide, which is what every
+// caller got before this term existed.
+//
+// EngineVersion is deliberately left unset. It floors ollama's
+// mtp-class variants and nothing on the vllm side declares
+// MinEngineVersion today, so an unknown version excludes nothing this
+// call would have counted. Were that to change, the effect is a more
+// conservative answer — falling back to ollama — not a wrong engine.
+func engineServesAModelHere(manifests []catalog.Manifest, engine string, hw hardware.Profile) bool {
+	if len(manifests) == 0 {
+		return true
+	}
+	ranked, err := RankModels(PickInput{Catalog: manifests, Hardware: hw, Engine: engine})
+	return err == nil && len(ranked) > 0
 }
 
 // osLabel renders a Profile.OS value for a reason string, naming the
