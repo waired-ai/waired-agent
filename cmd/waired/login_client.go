@@ -504,6 +504,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				benchFailed:   benchFailed,
 				bench:         outcomeFrom(resp),
 				claudeRouted:  claudeRouted,
+				hostSpeed:     fetchHostSpeed(o.MgmtURL),
 			}
 			printDaemonSummaryBox(os.Stdout, summary)
 			// Sign-in succeeded, so this is never a failed init: #188's rule
@@ -605,6 +606,17 @@ type daemonSummary struct {
 	benchFailed  bool
 	bench        benchmarkOutcome
 	claudeRouted bool
+	// hostSpeed is what one coding question cost on this machine, as the
+	// daemon measured it during this install (waired-ai/waired-agent#496,
+	// reported here per waired#1099). nil when nothing was measured — an
+	// engine that never came up, a host whose probe model would not
+	// download — and the summary simply does not mention speed.
+	//
+	// It carries `TurnedInferenceOff`, which is the one case the ordinary
+	// success box gets WRONG: that box says "Local inference is live via
+	// the waired-agent daemon", and on a host the measurement cut it is
+	// not live and was never going to be.
+	hostSpeed *management.HostSpeedStatus
 }
 
 // exitErr is what `waired init` returns for this outcome: errLocalAIDown
@@ -655,9 +667,46 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonEngineDownBox(out, s.accountEmail)
 	case s.benchFailed:
 		printDaemonBenchmarkFailedBox(out, s.accountEmail, s.claudeRouted)
+	case s.hostSpeed != nil && s.hostSpeed.TurnedInferenceOff:
+		printDaemonTooSlowBox(out, s)
 	default:
-		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted)
+		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted, s.hostSpeed)
 	}
+}
+
+// printDaemonTooSlowBox is the summary for a host the install-time
+// measurement judged too slow to run local AI usefully
+// (waired-ai/waired-agent#496), so the daemon left it off.
+//
+// A box of its own, ahead of the success box, because the success box
+// makes two claims that are false here: "everything completed
+// successfully" and "Local inference is live via the waired-agent
+// daemon". Nothing failed — the sign-in worked, the device is on the
+// network, and it can use the AI on the operator's other computers —
+// but the one thing this box exists to prevent is someone walking away
+// believing local AI is running when the machine decided it should not.
+//
+// NOT an error box, and it does not change the exit code: #465's off is
+// a DEFAULT with a working opt-in, not a refusal (waired-ai/waired#1056),
+// and an installer must not read it as a failed install.
+//
+// The wording is the same claim `waired inference status` makes, because
+// they are the same fact — see hostSpeedTurnLine.
+func printDaemonTooSlowBox(out io.Writer, s daemonSummary) {
+	var lines []string
+	if s.accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", s.accountEmail))
+	}
+	lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", dim(hostSpeedTurnLine(s.hostSpeed))))
+	if s.claudeRouted {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
+	} else {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
+	}
+	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	lines = append(lines, dim("Local AI starts off here; it can still use the AI on your other computers."))
+	lines = append(lines, dim("Turn it on anyway with `waired inference on`."))
+	box(out, emo("🎉", "*"), "Waired is ready — local AI starts off on this computer", lines)
 }
 
 // printDaemonBenchmarkFailedBox is the summary for a run whose engine
@@ -738,10 +787,19 @@ func printDaemonEngineDownBox(out io.Writer, accountEmail string) {
 // of a first install for a Claude Code user, and a box that stays silent
 // when routing did not happen is how an operator walks away believing it
 // did.
-func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOutcome, claudeRouted bool) {
+func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOutcome, claudeRouted bool, hostSpeed *management.HostSpeedStatus) {
 	var lines []string
 	if accountEmail != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
+	}
+	// Two different measurements, and they are not interchangeable.
+	// `Model` is the chosen model's decode rate on this host; `Speed` is
+	// what one whole coding question costs, measured on a small stand-in
+	// before the model was downloaded. The second is the one an operator
+	// can compare against another computer, and it is the only one a host
+	// that declined the benchmark has.
+	if hostSpeed != nil && hostSpeed.TurnSeconds > 0 {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(hostSpeed))))
 	}
 	if bench.Measured {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Model", green(fmt.Sprintf("%.0f tok/s", bench.Tokps))))

@@ -179,3 +179,86 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 		})
 	}
 }
+
+// waired#1099: `waired init` reports the measurement at the end of a
+// setup, so it reads the same route `waired inference status` does — and
+// inherits the same rule about the causal claim.
+func TestFetchHostSpeed(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		wantNil     bool
+		wantTurnOff bool
+	}{
+		{
+			// The claim holds: the toggle reads off AND the measurement
+			// is why.
+			name:        "a host the measurement cut",
+			body:        `{"desired_state":"disabled","host_speed":{"turn_seconds":66.9,"budget_seconds":45,"turned_inference_off":true}}`,
+			wantTurnOff: true,
+		},
+		{
+			// The daemon drops the claim when anyone moves the toggle,
+			// but it cannot drop it for a state it was not asked about.
+			// Someone who ran `waired inference on` after being cut must
+			// not be told, at the end of their next init, that their
+			// machine is too slow to run anything.
+			name:        "the same host after the operator opted back in",
+			body:        `{"desired_state":"enabled","host_speed":{"turn_seconds":66.9,"budget_seconds":45,"turned_inference_off":true}}`,
+			wantTurnOff: false,
+		},
+		{
+			name:        "a fast host reports a figure and no claim",
+			body:        `{"desired_state":"enabled","host_speed":{"turn_seconds":4.5,"budget_seconds":45}}`,
+			wantTurnOff: false,
+		},
+		{
+			// Never measured, an older daemon, or a figure of zero — all
+			// "no claim", and the summary says nothing about speed.
+			name:    "no measurement",
+			body:    `{"desired_state":"enabled"}`,
+			wantNil: true,
+		},
+		{
+			name:    "a zero figure is not a measurement",
+			body:    `{"desired_state":"enabled","host_speed":{"turn_seconds":0,"budget_seconds":45}}`,
+			wantNil: true,
+		},
+		{
+			name:    "a daemon that answers nonsense fails the init summary open",
+			body:    `not json`,
+			wantNil: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			got := fetchHostSpeed(srv.URL)
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("got %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("got nil, want a measurement")
+			}
+			if got.TurnedInferenceOff != tc.wantTurnOff {
+				t.Errorf("turned_inference_off = %v, want %v", got.TurnedInferenceOff, tc.wantTurnOff)
+			}
+		})
+	}
+}
+
+// A daemon that is not answering at all must not fail the init summary.
+func TestFetchHostSpeedUnreachableDaemon(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	if got := fetchHostSpeed(url); got != nil {
+		t.Fatalf("got %+v from a dead daemon, want nil", got)
+	}
+}
