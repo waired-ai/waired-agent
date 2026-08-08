@@ -150,7 +150,15 @@ func TestAnthropicStream_GivesUpWithAVisibleNote(t *testing.T) {
 		t.Fatalf("recorded %d requests, want 1", len(events))
 	}
 	if events[0].ErrorReason != "engine_truncated_stream" {
-		t.Errorf("ErrorReason = %q, so the failure is metered as a success", events[0].ErrorReason)
+		t.Errorf("ErrorReason = %q, so the failure is recorded as a success", events[0].ErrorReason)
+	}
+	// The reason, not the status, is what marks this a failure: the client
+	// received a 200 when the SSE headers went out, so that is what the
+	// record says, and the usage sample the engine earned is reported
+	// rather than dropped (waired-agent#554, asserted end-to-end in
+	// TestGateway_AnthropicUnusableTurnIsMeteredWithRetriesFolded).
+	if events[0].Status != http.StatusOK {
+		t.Errorf("Status = %d, want the 200 the client was handed", events[0].Status)
 	}
 }
 

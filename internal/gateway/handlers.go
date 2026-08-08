@@ -105,16 +105,24 @@ func (rr *requestRec) finish() {
 // Only requests that reached an engine are emitted: finish() also runs
 // for gateway-level failures (runtime_unavailable, runtime_unhealthy,
 // rewrite_failed), and counting those would inflate a ledger the user
-// sees. A mid-stream truncation is NOT a failure for this purpose — the
-// engine did the work and the client received part of it — and
-// rr.succeed() has already recorded 200 in that case.
+// sees.
 //
-// The status alone is enough to tell those two apart only because every
-// exit that fails BEFORE the engine's response starts records the 4xx/5xx
-// it wrote to the client (waired-agent#538). Widening this gate to "any
-// error_reason" instead would take the real mid-stream truncation with
-// it, and skipping samples with no observed tokens would take every turn
-// an engine reported no usage for.
+// The line is whether the engine did the work, not whether the client
+// could use the answer, and both post-commit outcomes are on the working
+// side of it. The openai leg's mid_stream_truncate is a stream that broke
+// with the client already reading. The anthropic streaming leg's
+// engine_truncated_stream is a turn no retry could make usable — the one
+// that cost the MOST, since proxyAnthropicStream folds every abandoned
+// attempt into setUsage precisely because the engine really drew them
+// (waired-agent#458). Both record the 200 their client received, so both
+// are emitted (waired-agent#554).
+//
+// The status alone is enough to tell those from a gateway-level failure
+// only because every exit that fails BEFORE the response starts records
+// the 4xx/5xx it wrote to the client (waired-agent#538). Widening this
+// gate to "any error_reason" instead would take both truncations with it,
+// and skipping samples with no observed tokens would take every turn an
+// engine reported no usage for.
 func (rr *requestRec) emitUsage() {
 	if rr.onUsage == nil || rr.ev.Status <= 0 || rr.ev.Status >= 400 {
 		return
