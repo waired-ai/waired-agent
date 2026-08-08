@@ -125,6 +125,15 @@ func TestRunBenchmark_JoiningANotReadyJobAlsoAnswers425(t *testing.T) {
 		return notReadyBench()
 	})
 	seedActiveReady(t, p, "granite4-350m")
+	// The join leaves no state a poll could observe, so the provider's
+	// test hook is the only honest way to hold the first run open until
+	// the POST has actually joined it. Waiting on benchJobDone instead
+	// was a no-op — startSetupBenchmark registers it synchronously — and
+	// on a loaded runner the run could finish before the goroutine below
+	// ever called startBenchmarkJob, which then started a legitimate
+	// second run and failed the single-run assertion.
+	joined := make(chan struct{})
+	p.benchJobJoined = func() { close(joined) }
 
 	p.startSetupBenchmark(7) // in flight, blocked in the measurement
 
@@ -140,7 +149,11 @@ func TestRunBenchmark_JoiningANotReadyJobAlsoAnswers425(t *testing.T) {
 	}()
 
 	// Let the POST reach startBenchmarkJob and join before the job ends.
-	waitForBenchJobJoin(t, p)
+	select {
+	case <-joined:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunBenchmark never joined the in-flight job")
+	}
 	close(release)
 
 	select {
@@ -156,26 +169,6 @@ func TestRunBenchmark_JoiningANotReadyJobAlsoAnswers425(t *testing.T) {
 	}
 	if runs != 1 {
 		t.Errorf("measurement ran %d times, want 1 — the POST must join, not start a second run", runs)
-	}
-}
-
-// waitForBenchJobJoin blocks until a benchmark job is in flight, which is
-// the state startBenchmarkJob joins. Polling rather than sleeping keeps
-// the test honest on a loaded runner.
-func waitForBenchJobJoin(t *testing.T, p *agentInferenceProvider) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		p.benchJobMu.Lock()
-		inFlight := p.benchJobDone != nil
-		p.benchJobMu.Unlock()
-		if inFlight {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no benchmark job went in flight")
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 

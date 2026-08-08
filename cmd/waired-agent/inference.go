@@ -1065,6 +1065,14 @@ type agentInferenceProvider struct {
 	benchJobDone    chan struct{}
 	benchJobOutcome *management.BenchmarkOutcome // last completed outcome (in-memory)
 	benchJobResult  *catalog.BenchmarkRecord     // last completed record (mirrors the persisted one)
+	// benchJobJoined, when non-nil (tests only), is called under
+	// benchJobMu each time startBenchmarkJob JOINS a run instead of
+	// starting one. The join leaves no observable state of its own, so
+	// without this a test synchronising on it can only sleep — and the
+	// join-semantics test was flaky on loaded runners for exactly that
+	// reason: the in-flight job could finish before the joining call
+	// arrived, and the "join" started a legitimate second run.
+	benchJobJoined func()
 	// benchJobOutcomeKind is the finishing BenchResult.Outcome of the run
 	// benchJobOutcome came from. RunBenchmark reads it to tell the one
 	// not-ready ending apart from a run that reached the engine and
