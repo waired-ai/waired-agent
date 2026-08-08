@@ -192,10 +192,15 @@ func TestHardwareSummaryFor_MatchesEffectiveVRAM(t *testing.T) {
 //
 // It briefly held HardwareSummary.MemoryBandwidthSpecGBs while the proto
 // contract was on main and its producer was not — the gap a required
-// proto-only PR opens. This PR lands internal/hardware's chip table, so
-// the entry is deleted rather than edited, which is the whole point of
-// recording it as a debt.
-var notPublishedByAgent = map[string]bool{}
+// proto-only PR opens. The chip-table PR deleted that entry rather than
+// editing it, which is the whole point of recording it as a debt.
+//
+// HardwareSummary.RAMAvailableGB holds the debt now (#568): the wire
+// landed as its own proto-only PR, and the install-time measurement PR
+// — the producer — deletes the entry.
+var notPublishedByAgent = map[string]bool{
+	"HardwareSummary.RAMAvailableGB": true,
+}
 
 // TestHardwareSummaryFor_PublishesEveryWireField guards the bug class
 // rather than the three fields: a field added to the broadcast summary
