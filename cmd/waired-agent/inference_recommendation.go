@@ -314,6 +314,23 @@ func (p *agentInferenceProvider) RunBenchmark(ctx context.Context) (management.B
 		// Defensive: the job closed done without recording an outcome.
 		return management.BenchmarkOutcome{}, false, nil
 	}
+	if p.benchJobOutcomeKind == benchOutcomeEngineNotReady {
+		// The run this call started — or joined — stopped at the readiness
+		// gate and never reached the engine. That is what ok=false means on
+		// this interface, and the handler answers 425 "poll
+		// /inference/status and retry", which is what the caller then does.
+		//
+		// Reported through BenchmarkOutcome.Failed it left by the 503
+		// benchmark_did_not_complete door instead, which `waired init` reads
+		// as a fault: exit 3, branched on by install.sh
+		// (WAIRED_INIT_LOCAL_AI_DOWN) and install.ps1
+		// ($WairedInitLocalAIDown). The gate fires on an engine that is
+		// merely still coming up, so a slow-starting host was reported as a
+		// failed install (#576). The front EngineReady gate above does not
+		// catch it: the job's own gate is checked later, and startBenchmarkJob
+		// can join a run that failed it before this call arrived.
+		return management.BenchmarkOutcome{}, false, nil
+	}
 	return *p.benchJobOutcome, true, nil
 }
 
@@ -391,6 +408,21 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		Error:  bench.Err,
 	}
 
+	// A run that stopped at the readiness gate never reached the engine, so
+	// it is not a benchmark result and does not become the completed one.
+	// Recording it did two things (#576): it replaced this host's last real
+	// measurement with a failure, so /benchmark/status answered `failed`
+	// where it used to answer the number; and because the record carries the
+	// REQUESTED generation, the setup reconciler's retry guard
+	// (`bs.Gen < d.benchmarkGen`, setup_desired.go) was already satisfied, so
+	// nothing ever re-ran it and the wizard's benchmark step stayed failed
+	// for a host whose engine came up seconds later. Leaving the record alone
+	// keeps the served generation behind the desired one, which is the
+	// reconciler's own signal to kick the job again.
+	//
+	// p.SetLastBench(bench) above is deliberately NOT skipped: that is #203's
+	// node-rating path, and its Capacity 1 fail-safe is exactly what a host
+	// with no working engine should be advertising meanwhile.
 	record := catalog.BenchmarkRecord{
 		Gen:           gen,
 		MeasuredTokps: bench.TokensPerSec,
@@ -401,20 +433,26 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		Error:         bench.Err,
 		MeasuredAt:    time.Now().UTC(),
 	}
-	if err := p.store.Update(func(s *catalog.State) {
-		// A gen-0 (boot/CLI) run must not regress a counter-driven
-		// generation the CP already saw — keep the stored gen then.
-		if record.Gen == 0 && s.LastBenchmark != nil && s.LastBenchmark.Gen > 0 {
-			record.Gen = s.LastBenchmark.Gen
+	ranAtAll := bench.Outcome != benchOutcomeEngineNotReady
+	if ranAtAll {
+		if err := p.store.Update(func(s *catalog.State) {
+			// A gen-0 (boot/CLI) run must not regress a counter-driven
+			// generation the CP already saw — keep the stored gen then.
+			if record.Gen == 0 && s.LastBenchmark != nil && s.LastBenchmark.Gen > 0 {
+				record.Gen = s.LastBenchmark.Gen
+			}
+			s.LastBenchmark = &record
+		}); err != nil {
+			p.logger.Warn("benchmark: persist completion record", "err", err)
 		}
-		s.LastBenchmark = &record
-	}); err != nil {
-		p.logger.Warn("benchmark: persist completion record", "err", err)
 	}
 
 	p.benchJobMu.Lock()
 	p.benchJobOutcome = &outcome
-	p.benchJobResult = &record
+	p.benchJobOutcomeKind = bench.Outcome
+	if ranAtAll {
+		p.benchJobResult = &record
+	}
 	p.benchJobDone = nil
 	// The run is over; its live progress would otherwise be reported
 	// forever beside a finished result.

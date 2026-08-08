@@ -1061,6 +1061,15 @@ type agentInferenceProvider struct {
 	benchJobDone    chan struct{}
 	benchJobOutcome *management.BenchmarkOutcome // last completed outcome (in-memory)
 	benchJobResult  *catalog.BenchmarkRecord     // last completed record (mirrors the persisted one)
+	// benchJobOutcomeKind is the finishing BenchResult.Outcome of the run
+	// benchJobOutcome came from. RunBenchmark reads it to tell the one
+	// not-ready ending apart from a run that reached the engine and
+	// failed: the first is the 425 "poll status and retry" door, the
+	// second the 503 one (#576). Written on every completion, so a later
+	// successful run clears it. Empty on a result built before Outcome
+	// existed (a cache entry, a test literal), which is not the not-ready
+	// value and so reads as it did before.
+	benchJobOutcomeKind string
 	// benchJobProgress is the live per-measurement report of the run in
 	// flight (waired-agent#199), nil between runs. Guarded by benchJobMu
 	// like the rest of the job state: it is written from the detached

@@ -287,7 +287,11 @@ func disableLocalInference(mgmtURL string) error {
 // reporting HTTP 500 (waired-ai/waired-agent#552).
 func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.BenchmarkRunResponse, ok, ranAndFailed bool) {
 	deadline := time.Now().Add(benchPollDeadline)
-	announcedWait := false
+	// announcedWait is the lead of the wait line last printed, not a bool:
+	// what init is waiting on can change mid-wait (the download finishes and
+	// the engine starts loading), and the operator should be told when it
+	// does — but only then.
+	announcedWait := ""
 	announcedEngine := false
 	// noEngineDeadline is armed lazily on the first `no_engine` observation
 	// and disarmed once any other state is seen, so a transient startup
@@ -374,12 +378,12 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 			default:
 				// Engine is up (some non-no_engine state): disarm the
 				// no_engine grace so a later blip can't cut the wait short,
-				// and fall through to the model-download wait.
+				// and say which of the two remaining waits this is.
 				engineSeen = true
-				if !announcedWait {
-					writePrompt(out, "Waiting for the model to finish downloading before benchmarking… "+
-						dim("(this can take a few minutes)"))
-					announcedWait = true
+				lead, hint := benchWaitLineFor(state)
+				if lead != announcedWait {
+					writePrompt(out, lead+" "+dim(hint))
+					announcedWait = lead
 				}
 			}
 		case status == http.StatusServiceUnavailable:
@@ -407,6 +411,32 @@ func waitForBenchmark(mgmtURL string, out io.Writer) (resp *management.Benchmark
 		}
 		time.Sleep(benchPollInterval)
 	}
+}
+
+// benchWaitLineFor is what init says it is waiting on while the daemon
+// answers 425, derived from the subsystem state /status reported. lead is
+// the sentence; hint is the parenthetical the caller dims.
+//
+// Two waits reach here and they are not the same thing. `awaiting_model`
+// is the download. Everything else that gets this far is the engine
+// bringing up a model that is ALREADY on disk — the states are `loading`
+// and `starting`, plus `initializing` / `ready` / `degraded`, which are
+// what a host in the readiness race reports for the moment between the
+// model landing and the engine serving it (#576). `pull_failed`,
+// `disabled`, `stopped` and `no_engine` never arrive here; they have their
+// own arms above.
+//
+// Before this, every state that was not named printed the download line,
+// so a host whose model was already ready was told to wait for a download
+// that had finished — observed verbatim in a routing-sentinel transcript
+// one line after `[ok] granite4-350m ready`. Record of today's behaviour,
+// not a contract: the split follows the states, and a new state joins the
+// engine side by default.
+func benchWaitLineFor(state string) (lead, hint string) {
+	if state == "awaiting_model" {
+		return "Waiting for the model to finish downloading before benchmarking…", "(this can take a few minutes)"
+	}
+	return "Waiting for the AI engine to load the model before benchmarking…", "(this can take a minute)"
 }
 
 // inferenceSubsystemState GETs /inference/status and returns the
