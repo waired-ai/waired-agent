@@ -6,14 +6,29 @@
 // MEASURING and DECIDING are two different questions here, and they have
 // different triggers.
 //
-// The MEASUREMENT is a property of the host, taken once per engine build
-// and kept in the state dir. Every install path takes it before starting
-// a 20-45 GB download, because that is both the last quiet moment and the
-// point where the cost of not knowing is about to be paid. It is
-// published on the wire (signer.InferenceState.HostSpeed) so the control
-// plane, the admin device page and waired#1065's public-share gate can
-// each ask their own question of the same number, and so an operator can
-// be told why local inference is off.
+// The MEASUREMENT is a property of the host, taken once per install and
+// kept in the state dir. It runs from the engine bootstrap's tail, on
+// every path, as soon as the engine is serving and before anything has
+// asked for a 20-45 GB download. It is published on the wire
+// (signer.InferenceState.HostSpeed) so the control plane, the admin
+// device page and waired#1065's public-share gate can each ask their own
+// question of the same number, and so an operator can be told why local
+// inference is off.
+//
+// "Once per install" is the rule, not "once per machine": the stored
+// figure is reused only while BOTH the engine build and the agent build
+// still match (state.HostSpeedRecord.AgentVersion). A daemon restart
+// reuses it; an install, an upgrade or an engine bump measures again.
+// The alternative — keeping a figure for as long as the hardware looks
+// the same — is what waired#1099 ruled out, and it is also what would
+// leave a machine that gained a graphics card describing itself with the
+// number it had before (waired#668 is the same lesson one level down).
+//
+// It runs at the bootstrap tail rather than beside the model choice
+// because that is the only point that every install path passes through.
+// The browser wizard names a model, which stands the pre-pull down, so
+// the pre-pull's own call reaches only the hosts nobody is setting up
+// from a browser — i.e. not the majority path (waired#1099).
 //
 // The DECISION — start local inference off, with #465's opt-in — is taken
 // only where the daemon has no one else's answer to defer to: the bundled
@@ -40,8 +55,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/router"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -55,7 +72,18 @@ const (
 	// behind it was never going to arrive either.
 	hostCutoffPullPoll    = 2 * time.Second
 	hostCutoffPullTimeout = 20 * time.Minute
+
+	// hostSpeedSettlePoll / hostSpeedSettleWait pace awaitQuietEngine. The
+	// wait is generous because what it is usually waiting for is the
+	// operator's own model download, which is the whole reason this host
+	// has an engine at all; the measurement is the least urgent thing
+	// running and should say so by yielding. A var so tests do not wait.
+	hostSpeedSettlePoll = 2 * time.Second
 )
+
+// hostSpeedSettleWait bounds awaitQuietEngine. A var, not a const, so a
+// test can shrink it.
+var hostSpeedSettleWait = 60 * time.Minute
 
 // hostSpeedNow returns the measurement this host publishes, or nil when
 // there is none. Safe to call from the probe loop on every tick.
@@ -110,33 +138,146 @@ func (p *agentInferenceProvider) loadHostSpeedLocked() {
 	}
 	if rec.Measurement != nil && p.hostSpeed == nil {
 		p.hostSpeed = rec.Measurement
+		p.hostSpeedAgentVersion = rec.AgentVersion
 	}
 }
 
+// startHostSpeedMeasurement takes the measurement in the background, if
+// this install has not taken it yet. Called from the engine bootstrap's
+// tail, which is the one point every install path reaches with a serving
+// engine.
+//
+// ASYNCHRONOUS on purpose. The tail's remaining job is to dispatch the
+// model the operator will actually use, and this can take three minutes
+// plus a ~1 GB download on exactly the hosts that most need the model to
+// start arriving. Registered on pullsWG like holdBundledPrePull, so the
+// whole chain still has one join point.
+//
+// And it waits for the host to go quiet first. The boot tail's two engine
+// restarts (#359) are not the only ones: endPull fires a serve reconcile
+// when a model lands, and that reconcile restarts the engine too. Measured
+// on a CI host, the measurement started 400 ms before the operator's model
+// finished downloading and died 3 ms after the reconcile it triggered —
+// `connect: connection refused`, three minutes of work discarded, and
+// nothing published. A measurement taken while the host is installing is
+// also a measurement of contention, which is the one thing the median of
+// three samples cannot correct for.
+//
+// Same reasoning warmTarget already applies to loading a model (see
+// inference_warm.go): a pull holds the disk and the memory, so defer.
+func (p *agentInferenceProvider) startHostSpeedMeasurement(ctx context.Context) {
+	if p == nil || p.ollama == nil {
+		return
+	}
+	p.pullsWG.Add(1)
+	go func() {
+		defer p.pullsWG.Done()
+		if !p.awaitQuietEngine(ctx) {
+			p.logger.Info("host speed: the engine did not go quiet; not measuring this boot")
+			return
+		}
+		p.ensureHostSpeedMeasured(ctx)
+	}()
+}
+
+// awaitQuietEngine blocks until nothing else on this host is using the
+// engine, and reports whether it got there. Bounded by
+// hostSpeedSettleWait — a host still downloading a 45 GB model after that
+// is one whose measurement can wait for the next boot.
+func (p *agentInferenceProvider) awaitQuietEngine(ctx context.Context) bool {
+	deadline := time.Now().Add(hostSpeedSettleWait)
+	for {
+		if p.engineIsQuiet(ctx) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(hostSpeedSettlePoll):
+		}
+	}
+}
+
+// engineIsQuiet reports whether the engine is ready and nothing else is
+// about to take it away.
+//
+// A pending reconcile counts as busy, not just a running one: reconcile
+// STOPS AND RESTARTS the engine, so starting a minutes-long measurement
+// while one is queued behind a finishing pull is how the measurement gets
+// its connection refused.
+func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
+	if p.ollama == nil {
+		return false
+	}
+	p.pullMu.Lock()
+	pulling := len(p.pullsInFlight) > 0
+	p.pullMu.Unlock()
+	if pulling || p.engineReconcileInFlight.Load() {
+		return false
+	}
+	if p.ollama.IsParked() {
+		return false
+	}
+	return p.ollama.Health(ctx).State == infruntime.StateReady
+}
+
 // ensureHostSpeedMeasured returns this host's measurement, taking it if
-// this engine build has not been measured yet. measured is false whenever
+// this install has not been measured yet. measured is false whenever
 // no usable measurement could be reached — no engine, no probe model, no
 // timing counters, a truncated prefill, a machine too busy to answer —
 // and callers must carry on unchanged in that case. An unrun measurement
 // is not evidence about the host.
 //
-// Once per ENGINE BUILD, not once per process and not once per host: the
-// counters come from the engine, and waired#668 is the standing lesson
-// that a bundle bump silently keeps serving pre-bump numbers. A cached
-// record whose engine no longer matches is re-measured.
+// Once per INSTALL, not once per process and not once per host. Two
+// halves decide it, and a mismatch in either re-measures:
+//
+//   - the ENGINE build. The counters come from the engine, and waired#668
+//     is the standing lesson that a bundle bump silently keeps serving
+//     pre-bump numbers.
+//   - the AGENT build. Every install and every upgrade restarts the
+//     daemon on a new version, so this is what makes the measurement an
+//     install-time step (waired#1099) without needing anything to tell it
+//     that an install happened.
+//
+// Single-flight through hostSpeedMeasureMu: the bootstrap's background
+// call and a later pre-pull or setup call can overlap, and the second one
+// waits and then reuses rather than measuring a host the first is still
+// measuring.
+//
+// hostSpeedMu — the lock Status() waits on — is taken only at the two
+// ends, never across the engine request. See the field comment: one mutex
+// doing both jobs is what made a running measurement stall
+// /waired/v1/inference/status for the length of the measurement.
 func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context) (probe hostfit.HostProbe, measured bool) {
 	if p == nil || p.ollama == nil {
 		return hostfit.HostProbe{}, false
 	}
-	p.hostSpeedMu.Lock()
-	defer p.hostSpeedMu.Unlock()
-	p.loadHostSpeedLocked()
+	p.hostSpeedMeasureMu.Lock()
+	defer p.hostSpeedMeasureMu.Unlock()
 
 	engine := p.servingEngine()
 	engineVersion := p.engineVersionFor(ctx, engine)
 
-	if cached, ok := hostSpeedStillApplies(p.hostSpeed, string(engine), engineVersion); ok {
-		p.logger.Info("host speed: reusing the measurement already taken on this engine build",
+	p.hostSpeedMu.Lock()
+	p.loadHostSpeedLocked()
+	stored, storedBy := p.hostSpeed, p.hostSpeedAgentVersion
+	p.hostSpeedMu.Unlock()
+
+	cached, ok := hostSpeedStillApplies(stored, string(engine), engineVersion)
+	if ok && storedBy != buildinfo.Version {
+		// Same engine, different agent build: this is an upgrade, and an
+		// upgrade re-measures. Logged rather than silent because it is the
+		// one re-measure whose cause is not visible in the record's own
+		// fields — EngineKind and EngineVersion both still match.
+		p.logger.Info("host speed: re-measuring, this agent build has not measured this host",
+			"measured_by", storedBy, "agent_version", buildinfo.Version)
+		ok = false
+	}
+	if ok {
+		p.logger.Info("host speed: reusing the measurement already taken by this install",
 			"turn_seconds", fmt.Sprintf("%.1f", cached.TurnSeconds()),
 			"engine_version", engineVersion)
 		return cached, true
@@ -183,6 +324,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context) (p
 		"prompt_tokens", m.Probe.PromptTokens,
 		"samples", m.Samples, "spread_pct", fmt.Sprintf("%.1f", m.SpreadPct))
 
+	p.hostSpeedMu.Lock()
 	p.hostSpeed = &signer.HostSpeed{
 		ProbeModelID:  hostfit.HostCutoffProbeModelID,
 		DepthTokens:   hostfit.HostCutoffProbeDepthTokens,
@@ -197,7 +339,9 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context) (p
 		EngineVersion: engineVersion,
 		MeasuredAt:    time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	p.hostSpeedAgentVersion = buildinfo.Version
 	p.persistHostSpeedLocked(false)
+	p.hostSpeedMu.Unlock()
 	return m.Probe, true
 }
 
@@ -232,7 +376,11 @@ func (p *agentInferenceProvider) persistHostSpeedLocked(turnedInferenceOff bool)
 	if p.stateDir == "" || p.hostSpeed == nil {
 		return
 	}
-	rec := state.HostSpeedRecord{Measurement: p.hostSpeed, TurnedInferenceOff: turnedInferenceOff}
+	rec := state.HostSpeedRecord{
+		Measurement:        p.hostSpeed,
+		TurnedInferenceOff: turnedInferenceOff,
+		AgentVersion:       p.hostSpeedAgentVersion,
+	}
 	if !turnedInferenceOff {
 		// A re-measure does not un-say why inference was turned off; only
 		// someone moving the toggle does, and that goes through

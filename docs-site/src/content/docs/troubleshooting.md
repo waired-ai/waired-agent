@@ -328,12 +328,17 @@ Local inference: off
   Turn it on with `waired inference on`.
 ```
 
-**Where that number comes from.** Before downloading a full-size model — tens
-of gigabytes — Waired downloads a small one, about a gigabyte, and times a
-realistic coding question on it: a long question, a full-length answer. It times
-it three times and takes the middle result, so one busy moment cannot decide the
-outcome. That takes a few seconds on a fast machine and a couple of minutes on a
-slow one.
+**Where that number comes from.** As soon as the AI engine is installed — and
+before anything downloads a full-size model, tens of gigabytes — Waired
+downloads a small one, about a gigabyte, and times a realistic coding question
+on it: a long question, a full-length answer. It times it three times and takes
+the middle result, so one busy moment cannot decide the outcome. That takes a
+few seconds on a fast machine and a couple of minutes on a slow one, and it
+happens whether you set the computer up from the terminal or from the browser.
+
+The figure is measured once per install. Starting the service again reuses it;
+updating Waired or its AI engine measures the machine again, because how fast a
+new build runs is a new fact about your computer.
 
 **Why a smaller model would not rescue it.** On a computer with no graphics
 card, the smallest coding model in the catalog is not much faster than the

@@ -43,6 +43,26 @@ type HostSpeedRecord struct {
 	// a true fact about the host and is still published. Only the "and
 	// that is why" is dropped.
 	TurnedInferenceOff bool `json:"turned_inference_off,omitempty"`
+
+	// AgentVersion is the buildinfo.Version of the daemon that took the
+	// figure, and it is half of what decides whether the figure still
+	// applies (the other half is the engine build, which travels on the
+	// wire as EngineKind/EngineVersion).
+	//
+	// It is here rather than on the wire because it answers a question
+	// only this host asks: "has anything about this install changed since
+	// I last measured?" Every install and every upgrade restarts the
+	// daemon on a new version, so keying on it is what makes the
+	// measurement an install-time step rather than a once-per-machine one
+	// (waired#1099). A record from an older agent is re-measured even
+	// though the hardware and the engine are identical — deliberately: the
+	// thing being measured is what THIS build does on THIS host, and a
+	// figure a previous build produced is not evidence about that.
+	//
+	// Empty means a record written before this field existed. Treated as
+	// "does not match", so the first boot after an upgrade re-measures,
+	// which is the behaviour the field exists to produce.
+	AgentVersion string `json:"agent_version,omitempty"`
 }
 
 // HostSpeedPath is the on-disk location of the host measurement.
