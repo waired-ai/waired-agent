@@ -155,7 +155,7 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 		},
 		{
 			// This host CAN declare the coding window, and only because
-			// of OllamaPlannedWindow's rule 3: the 2 GB card holds almost
+			// of OllamaPlannedRung's rule 3: the 2 GB card holds almost
 			// nothing, but the same machine with the card removed sizes
 			// its window from 12 GB of system RAM and reaches the coding
 			// window, so the carded host must too. The residency clause
@@ -244,12 +244,12 @@ func TestOllamaCapacityFit_PricesAWindowTheProductWouldServe(t *testing.T) {
 	v := tiny.Variants[0]
 	host := hostfit.Host{RAMTotalGB: 5}
 
-	// The fixture is only interesting while the host would have been
-	// sized BELOW the rung — that gap is the whole subject.
-	plan := hostfit.OllamaPlannedWindow(tiny, v, host, hostfit.OllamaKVFactorQ8_0, true)
-	if plan.ContextLength >= hostfit.ServingWindow200k {
-		t.Fatalf("fixture: this host plans a %d-token window, so it does not exercise "+
-			"the gap between the served window and the coding one", plan.ContextLength)
+	// The fixture is only interesting while the host cannot prove the
+	// rung — that gap is the whole subject.
+	plan := hostfit.OllamaPlannedRung(tiny, v, host, hostfit.OllamaKVFactorQ8_0, 0)
+	if plan.Fits {
+		t.Fatalf("fixture: this host reaches the rung (plan %+v), so it does not exercise "+
+			"the gap between the served window and the coding one", plan)
 	}
 	got := hostfit.OllamaCapacityFit(tiny, v, host)
 	if got.Fits {

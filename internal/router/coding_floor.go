@@ -15,7 +15,7 @@
 //   - Host gate (ollama path): whether this host would actually SERVE
 //     the floor window here. Since the 2026-08-03 owner decision that
 //     question has one answer and one implementation,
-//     hostfit.OllamaPlannedWindow — the same sizing the serve tuning
+//     hostfit.OllamaPlannedRung — the same sizing the serve tuning
 //     exports — so "the picker says it serves 200k" and "the engine was
 //     started at 200k" cannot disagree (waired-ai/waired#1056 decision 3).
 //     It is reported on the Pick and narrowed on by the RECOMMENDATION
@@ -148,12 +148,14 @@ func OllamaExpectedSpillFraction(v catalog.Variant, hw hardware.Profile, kvFacto
 // doing so, which callers surface either way.
 //
 // It is now exactly "what would the serve tuning size here, and does it
-// reach the floor" — hostfit.OllamaPlannedWindow, the same function the
-// tuner exports from. Before, this was a second implementation of the
-// same byte math with a looser rule bolted on (discrete hosts passed
-// whatever the spill, UMA hosts were gated), and the looseness was doing
-// the work an escape hatch should do: it let a host that could not hold
-// the window still be given a model, by pretending it could.
+// reach the floor" — hostfit.OllamaPlannedRung, the same function the
+// tuner exports from (a rung the reachability rules passed; a forced
+// lowest rung reports false, waired-ai/waired-agent#587). Before, this
+// was a second implementation of the same byte math with a looser rule
+// bolted on (discrete hosts passed whatever the spill, UMA hosts were
+// gated), and the looseness was doing the work an escape hatch should
+// do: it let a host that could not hold the window still be given a
+// model, by pretending it could.
 //
 // Which is why the gate MOVED rather than tightened. RankModels no
 // longer narrows the non-standable native-floor pass on this answer; it
@@ -169,11 +171,11 @@ func OllamaExpectedSpillFraction(v catalog.Variant, hw hardware.Profile, kvFacto
 // multi-GPU host is priced on the pool it actually spreads layers over
 // (#264).
 func OllamaServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.Profile) (bool, float64) {
-	plan := hostfit.OllamaPlannedWindow(m, v, hw.HostFit(), hostfit.OllamaKVFactorQ8_0, true)
+	plan := hostfit.OllamaPlannedRung(m, v, hw.HostFit(), hostfit.OllamaKVFactorQ8_0, 0)
 	if plan.ContextLength <= 0 {
 		return true, 0
 	}
-	return plan.ContextLength >= EffectiveContextFloor(m), plan.ExpectedSpillFraction
+	return plan.Fits && plan.ContextLength >= EffectiveContextFloor(m), plan.ExpectedSpillFraction
 }
 
 // VLLMServesContextFloor is the #624 host gate for the vllm path: can
@@ -210,8 +212,9 @@ func VLLMServesContextFloor(m catalog.Manifest, v catalog.Variant, hw hardware.P
 // when the inputs are unknown or even a zero-token window would exceed
 // the bound (weights alone spill too far).
 //
-// The arithmetic is hostfit's; this is the hardware.Profile-shaped door
-// into it.
+// Deprecated: mirrors the deprecated hostfit.OllamaMaxContextAtSpill —
+// the serve window is a rung of hostfit.OllamaServedWindows, never a
+// window solved back from a spill bound (waired-ai/waired-agent#587).
 func OllamaMaxContextAtSpill(v catalog.Variant, hw hardware.Profile, kvFactor, maxExpected float64) int {
 	return hostfit.OllamaMaxContextAtSpill(v, hw.HostFit(), kvFactor, maxExpected)
 }

@@ -125,22 +125,30 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 	})
 
-	t.Run("uma-below-floor-keeps-nospill-window", func(t *testing.T) {
-		// UMA gets no bounded-spill allowance: a carve-out whose no-spill
-		// window is under the floor keeps that window (no intentional
-		// spill, no floor warning).
+	t.Run("uma-below-the-rung-serves-the-rung", func(t *testing.T) {
+		// UMA gets no bounded-spill allowance, and since waired-agent#587
+		// no sub-rung window either: a carve-out whose no-spill window
+		// (~158k) is under the rung serves the rung anyway — WindowFits
+		// false, the oversubscription reported, and never declared to
+		// the mesh (see TestDeclaredContextWindow's forced-rung case).
 		hw := hardware.Profile{
 			RAMTotalGB:    32,
 			UnifiedMemory: true,
 			UsableVRAMMB:  23552,
 		}
 		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
-		// budget = (23552 − 1024) MiB ≈ 23.62 GB − 22 GB → ≈ 158k.
-		if got.ContextLength >= 200704 || got.ContextLength < ollamaContextFloor {
-			t.Errorf("ContextLength = %d, want the no-spill window below the floor", got.ContextLength)
+		if got.ContextLength != 200704 || got.WindowFits {
+			t.Errorf("ContextLength/WindowFits = %d/%v, want the forced 200704 rung with WindowFits=false",
+				got.ContextLength, got.WindowFits)
 		}
-		if got.ExpectedSpillFraction != 0 {
-			t.Errorf("ExpectedSpillFraction = %.4f, want 0 on UMA", got.ExpectedSpillFraction)
+		if got.ExpectedSpillFraction <= 0 {
+			t.Error("the forced rung oversubscribes the carve-out; the plan must say so")
+		}
+		if got.NumBatch != 0 {
+			t.Errorf("NumBatch = %d, want 0 — the #642 batch override is a discrete-card measurement", got.NumBatch)
+		}
+		if !strings.Contains(got.Warning, "expected to sit in system RAM") {
+			t.Errorf("warning should state the reported spill: %q", got.Warning)
 		}
 	})
 
@@ -165,38 +173,30 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 	})
 
-	t.Run("spill-past-speed-cap-serves-capped-window", func(t *testing.T) {
-		// #670/#765: when the floor window would spill past the speed
-		// cap (single-thread CPU spill, #664), the tuner serves the
-		// largest window that holds the cap instead of the full floor.
-		// 23.7 GB weights on the 24 GiB card: floor spill ≈ 22% > the
-		// 0.20 cap. (At the pre-#765 0.075 cap a 23 GB fixture spilling
-		// ≈ 14.7% exercised this branch; gate-passing variants now
-		// serve the full floor, so only heavier overshoots trim.)
-		//
-		// 28 GB of RAM rather than the 64 this used to carry. The cap is
-		// no longer the last word: hostfit.OllamaPlannedWindow's rule 3
-		// will not size a window below what the same machine would reach
-		// with the card removed, and 60 GB of system RAM reaches the full
-		// floor outright. Only a host whose RAM cannot reach it either
-		// still exercises the trim, which is the case this test is for —
-		// see the sibling below for what a roomy host does now.
+	t.Run("spill-past-speed-cap-is-forced-to-the-rung", func(t *testing.T) {
+		// 23.7 GB weights on the 24 GiB card, 28 GB of RAM: the rung's
+		// expected spill (~22%) exceeds the bounded-spill cap, and the
+		// card-less machine cannot reach the rung from RAM either — no
+		// rung passes. Before waired-agent#587 the tuner served a
+		// speed-capped window between the rungs; a window between the
+		// rungs is not one this product serves, so the host now gets the
+		// rung with WindowFits=false, the honest over-cap spill figure,
+		// and no mesh declaration.
 		v := m.Variants[0]
 		v.EstimatedWeightGB = 23.7
 		hw := discrete24GB()
 		hw.RAMTotalGB = 28
 		got := computeOllamaTuning(m, v, hw, "q8_0")
-		if got.ContextLength >= 200704 || got.ContextLength <= ollamaContextFloor {
-			t.Errorf("ContextLength = %d, want a speed-capped window between %d and the floor",
-				got.ContextLength, ollamaContextFloor)
+		if got.ContextLength != 200704 || got.WindowFits {
+			t.Errorf("ContextLength/WindowFits = %d/%v, want the forced 200704 rung with WindowFits=false",
+				got.ContextLength, got.WindowFits)
 		}
-		if got.ExpectedSpillFraction <= 0 || got.ExpectedSpillFraction > router.OllamaIntentionalSpillCapExpected {
-			t.Errorf("ExpectedSpillFraction = %.4f, want within (0, %.3f]",
+		if got.ExpectedSpillFraction <= router.OllamaIntentionalSpillCapExpected {
+			t.Errorf("ExpectedSpillFraction = %.4f, want the honest over-cap figure (> %.3f)",
 				got.ExpectedSpillFraction, router.OllamaIntentionalSpillCapExpected)
 		}
-		if !strings.Contains(got.Warning, "below the ~200k coding target") ||
-			!strings.Contains(got.Warning, "tok/s floor") {
-			t.Errorf("warning should explain the speed-capped window: %q", got.Warning)
+		if !strings.Contains(got.Warning, "expected to sit in system RAM") {
+			t.Errorf("warning should state the reported spill: %q", got.Warning)
 		}
 		for _, bad := range []string{"error", "fail", "degraded"} {
 			if strings.Contains(strings.ToLower(got.Warning), bad) {
@@ -205,28 +205,24 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 	})
 
-	t.Run("discrete-16gb-weights-exceed-budget-floors", func(t *testing.T) {
-		// mtp variant: 22 GB weights over a (16384 − 1904) MiB ≈ 15.2 GB
-		// budget — even the floor spills, so keep the engine floor and
-		// warn.
-		//
-		// 24 GB of RAM rather than 64, for the reason the sibling above
-		// gives: with 60 GB of RAM behind the card the machine would
-		// serve the full coding window from system memory with the card
-		// removed, so rule 3 has it serve that window WITH the card too.
-		// This branch is now the genuinely-cornered host — too little of
-		// either kind of memory — which is what it always meant to
-		// describe.
+	t.Run("discrete-16gb-cornered-host-is-forced-to-the-rung", func(t *testing.T) {
+		// mtp variant: 22 GB weights over a ≈15 GB card budget, with too
+		// little RAM behind the card for the card-less rule to reach the
+		// rung either — the genuinely-cornered host. Before
+		// waired-agent#587 it kept the engine's 32k default; now it is
+		// started at the rung like everyone else, with the (large) spill
+		// reported, WindowFits=false and no mesh declaration.
 		hw := hardware.Profile{
 			RAMTotalGB: 24,
 			GPUs:       []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 16384}},
 		}
 		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
-		if got.ContextLength != ollamaContextFloor {
-			t.Errorf("ContextLength = %d, want floor %d", got.ContextLength, ollamaContextFloor)
+		if got.ContextLength != 200704 || got.WindowFits {
+			t.Errorf("ContextLength/WindowFits = %d/%v, want the forced 200704 rung with WindowFits=false",
+				got.ContextLength, got.WindowFits)
 		}
 		if got.Warning == "" {
-			t.Error("expected a spill warning when even the floor doesn't fit")
+			t.Error("expected a spill warning on the forced rung")
 		}
 		if got.NumParallel != 1 {
 			t.Errorf("NumParallel = %d, want 1", got.NumParallel)
@@ -423,20 +419,24 @@ func TestComputeOllamaTuning(t *testing.T) {
 		}
 	})
 
-	t.Run("f16-pass-shrinks-window", func(t *testing.T) {
-		// A 131072-native model on a UMA host: the ceiling is the model's
-		// own window and there is no spill allowance to push either pass
-		// up to it, so the two cache formats can be compared on their own
-		// terms. On the 262144-native fixture both now clamp to the same
-		// rung and the case would compare nothing (#552).
+	t.Run("f16-pass-serves-the-same-rung-without-the-proof", func(t *testing.T) {
+		// A 131072-native model on a UMA host whose carve-out holds the
+		// q8_0 KV but not the f16 one. Both passes serve the model's own
+		// rung — the window no longer shrinks with the cache format
+		// (waired-agent#587) — but only the q8_0 pass can prove it fits;
+		// the f16 pass is a forced rung that reports its cost and is
+		// never declared.
 		sub := m
 		sub.ContextLength = 131072
 		uma := hardware.Profile{RAMTotalGB: 32, UnifiedMemory: true, UsableVRAMMB: 23552}
 		q8 := computeOllamaTuning(sub, sub.Variants[1], uma, "q8_0")
 		f16 := computeOllamaTuning(sub, sub.Variants[1], uma, "f16")
-		if f16.ContextLength >= q8.ContextLength {
-			t.Errorf("f16 sizing (%d) should be smaller than q8_0 (%d)",
-				f16.ContextLength, q8.ContextLength)
+		if q8.ContextLength != 131072 || !q8.WindowFits {
+			t.Errorf("q8_0 = %d/%v, want the fitting 131072 rung", q8.ContextLength, q8.WindowFits)
+		}
+		if f16.ContextLength != 131072 || f16.WindowFits {
+			t.Errorf("f16 = %d/%v, want the forced 131072 rung with WindowFits=false",
+				f16.ContextLength, f16.WindowFits)
 		}
 		if f16.KVCacheType != "f16" {
 			t.Errorf("KVCacheType = %q, want f16", f16.KVCacheType)
@@ -569,11 +569,13 @@ func TestPlanOllamaKV(t *testing.T) {
 
 	// want = 32768 (the manifest window), so the boundary is 2*32768 = 65536
 	// f16 tokens. kv/tok = 12288 at f16, weights 0.4 GB, so a budget B gives
-	// (B*1e9 - 0.4e9)/12288 tokens.
+	// (B*1e9 - 0.4e9)/12288 tokens. The CPU-only budget is RAM − the 2 GB
+	// OS deduction − the ~1.09 GB engine reservation at this weight
+	// (OllamaSizingBudgetGB):
 	//   65536 tokens exactly  -> 0.4e9 + 65536*12288 = 1.2054e9 -> 5.2054 GB
-	//                            budget => RAMTotalGB 9.2054 (headroom 4)
-	atBoundary := hardware.Profile{RAMTotalGB: 10} // budget 6 GB -> ~455k >= 65536
-	belowBoundary := hardware.Profile{RAMTotalGB: 5}
+	//                            budget => RAMTotalGB ≈ 8.29
+	atBoundary := hardware.Profile{RAMTotalGB: 10}   // budget ≈ 6.9 GB -> ~530k >= 65536
+	belowBoundary := hardware.Profile{RAMTotalGB: 4} // budget ≈ 0.91 GB -> ~42k < 65536
 
 	cases := []struct {
 		name      string

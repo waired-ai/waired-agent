@@ -7,8 +7,8 @@
 // front-truncated and the model lost its tool schemas and instructions.
 // This file computes the env that fixes that:
 //
-//	OLLAMA_CONTEXT_LENGTH  manifest context_length, clamped down so
-//	                       weights + KV cache fit host memory un-spilled
+//	OLLAMA_CONTEXT_LENGTH  the rung of hostfit.OllamaServedWindows this
+//	                       host serves the model at (waired-agent#587)
 //	OLLAMA_KV_CACHE_TYPE   q8_0 (near-lossless, halves KV) only where
 //	                       halving KV actually buys context — see
 //	                       planOllamaKV; f16 otherwise
@@ -36,11 +36,11 @@ import (
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
-// ollamaContextFloor is the smallest OLLAMA_CONTEXT_LENGTH we ever export:
-// the pinned engine's own default. Setting less would make hosts strictly
-// worse than the pre-#621 behavior; when even the floor doesn't fit
-// un-spilled we keep it and warn instead (a truncated-context model is
-// broken silently, a spilling one is slow visibly).
+// ollamaContextFloor is the pinned engine's own default window. The
+// verify pass's size heuristics still reference it; the sizing itself
+// stopped using a separate floor when the serve window became a rung of
+// hostfit.OllamaServedWindows (waired-agent#587) — rungs never sit below
+// the model's own window, so there is nothing to floor.
 const ollamaContextFloor = 32768
 
 // ollamaLargeBatch is the generation ubatch the tuning selects for the
@@ -192,7 +192,7 @@ func ollamaTuningBudgetGB(hw hardware.Profile, weightGB float64) float64 {
 // then NOT exported and the engine keeps its own default, which is
 // exactly the pre-#621 behavior. We never guess a window we can't size.
 func computeOllamaTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string) ollamaTuning {
-	return computeOllamaTuningOpts(m, v, hw, kvType, true, 0)
+	return computeOllamaTuningOpts(m, v, hw, kvType, 0, 0)
 }
 
 // recommendedParallel is the VRAM-safe engine-parallelism ceiling: how many
@@ -231,16 +231,16 @@ func finalizeParallel(t *ollamaTuning, operatorParallel int) {
 	}
 }
 
-// computeOllamaTuningOpts is computeOllamaTuning with the intentional-
-// spill branch switchable: the verify pass's degrade recomputes pass
-// false so a sizing that just proved unreliable is never re-entered
-// (the f16 recompute also stays no-spill — compounding an f16 KV with
-// a spill on an unmeasured GPU class is not a bet worth one restart).
+// computeOllamaTuningOpts is computeOllamaTuning with the rung ladder
+// cappable: ceilingCtx > 0 drops every rung above it, which is how the
+// verify pass's degrade recomputes step DOWN — a rung that just proved
+// unreliable is never re-entered, and never stepped back up to
+// (waired-agent#587). 0 considers the full ladder.
 //
 // operatorParallel is the admin's max-concurrent-requests override (0 = auto):
 // when > 0 it replaces the auto-sized NumParallel (see finalizeParallel), and
 // RecommendedMaxParallel is reported regardless so the UI can advise the trade.
-func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string, allowIntentionalSpill bool, operatorParallel int) (t ollamaTuning) {
+func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.Profile, kvType string, ceilingCtx, operatorParallel int) (t ollamaTuning) {
 	// The operator override is applied at every exit (named return + defer) so
 	// each sizing branch just records its RecommendedMaxParallel and returns.
 	defer func() { finalizeParallel(&t, operatorParallel) }()
@@ -266,7 +266,7 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	// (waired-ai/waired#1056 decision 3). This function's job is the
 	// engine-facing consequences: which ubatch, how many slots, and what
 	// to tell the user.
-	plan := hostfit.OllamaPlannedWindow(m, v, hw.HostFit(), t.KVFactor, allowIntentionalSpill)
+	plan := hostfit.OllamaPlannedRung(m, v, hw.HostFit(), t.KVFactor, ceilingCtx)
 	if plan.ContextLength <= 0 {
 		// Unknown sizing: recommend a single slot (we cannot prove more fit).
 		t.RecommendedMaxParallel = 1
@@ -274,35 +274,34 @@ func computeOllamaTuningOpts(m catalog.Manifest, v catalog.Variant, hw hardware.
 	}
 	maxCtx, ctx := plan.NoSpillCapacityTokens, plan.ContextLength
 	t.ContextLength = ctx
+	t.WindowFits = plan.Fits
 	t.ExpectedSpillFraction = plan.ExpectedSpillFraction
 
 	if plan.ExpectedSpillFraction > 0 {
-		// The window is being held partly in system RAM. #642: this is the
-		// spilled discrete-GPU config where Ollama's automatic batch sizing
-		// falls back to 512; force the larger ubatch (delivered via a
-		// derived model) for the prefill win. The verify pass widens its
-		// spill tolerance for the compute buffer this adds
-		// (inference_ollama_verify.go).
-		t.NumBatch = ollamaLargeBatch
-		floorCtx := router.EffectiveContextFloor(m)
-		switch {
-		case ctx >= floorCtx:
-			t.Warning = fmt.Sprintf(
-				"context window set to %d tokens for coding-agent workloads; about %.0f%% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
-				ctx, plan.ExpectedSpillFraction*100)
-		default:
-			t.Warning = fmt.Sprintf(
-				"context window set to %d tokens (below the ~200k coding target: widening further would spill past ~%.1f%% of the model to system RAM and drop decode below the %.0f tok/s floor)",
-				ctx, router.OllamaIntentionalSpillCapExpected*100, router.CodingAgentSelectionFloorTokps)
+		if hw.HostFit().Class() == hostfit.ClassDiscrete {
+			// The window is being held partly in system RAM. #642: this is
+			// the spilled discrete-GPU config where Ollama's automatic
+			// batch sizing falls back to 512; force the larger ubatch
+			// (delivered via a derived model) for the prefill win. The
+			// verify pass widens its spill tolerance for the compute
+			// buffer this adds (inference_ollama_verify.go). Discrete
+			// only: a forced rung on unified memory also predicts spill,
+			// but the #642 measurement behind this override is a
+			// discrete-card one.
+			t.NumBatch = ollamaLargeBatch
 		}
+		t.Warning = fmt.Sprintf(
+			"context window set to %d tokens for coding-agent workloads; about %.0f%% of the model is expected to sit in system RAM (larger window traded for some decode speed)",
+			ctx, plan.ExpectedSpillFraction*100)
 		// Already spilling to reach the window: a single slot only (adding
 		// parallel slots would multiply the spill).
 		t.RecommendedMaxParallel = 1
 		return t
 	}
 	if maxCtx < ctx {
-		// The engine's own default floor is being kept though the budget
-		// does not hold it un-spilled — a truncated-context model is broken
+		// The rung is being kept though the budget does not hold it
+		// un-spilled (a CPU-only or unified host below the lowest rung —
+		// Fits=false above): a truncated-context model is broken
 		// silently, a spilling one is slow visibly.
 		t.Warning = fmt.Sprintf(
 			"context window kept at %d though host memory fits ~%d tokens un-spilled; the model may spill to system RAM and slow down",
@@ -424,13 +423,16 @@ func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t
 				m.ContextLength)
 		}
 		reasons = append(reasons, extraWarning)
-	case t.ContextLength >= router.CodingAgentContextFloorTokens:
+	case t.ContextLength >= router.CodingAgentContextFloorTokens && t.WindowFits:
 		reasons = append(reasons, fmt.Sprintf(
 			"%s serves the ~200k coding window fully GPU-resident (ctx %d)",
 			m.ModelID, t.ContextLength))
 	case t.ContextLength > 0:
+		// A rung this host's memory was not shown to hold (WindowFits
+		// false — the forced lowest rung, waired-agent#587). Served for
+		// this machine's own use, never declared to the mesh.
 		extraWarning = fmt.Sprintf(
-			"%s serves a %d-token window on this host, below the ~200k coding target — "+
+			"%s serves a %d-token window this host's memory could not be shown to hold — "+
 				"this device advertises no serving window to the mesh, so Claude Code's "+
 				"Waired entries will not route work here (it still serves this machine's "+
 				"own requests)",

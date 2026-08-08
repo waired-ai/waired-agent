@@ -63,7 +63,13 @@ func TestDeclaredWindowMatchesTheTuner(t *testing.T) {
 				}
 				tuned := computeOllamaTuning(m, v, hw, ollamaKVAuto)
 				declared := hostfit.OllamaDeclaresWindow(m, v, hw.HostFit(), hostfit.ServingWindow200k)
+				// WindowFits joined the predicate at waired-agent#587: a
+				// forced rung is started at 200,704 too, and what
+				// separates "serves it" from "was given it anyway" is the
+				// sizing's own proof — the same bit the declaration gate
+				// reads (see DeclaredContextWindow).
 				serves := tuned.ContextLength >= hostfit.ServingWindow200k &&
+					tuned.WindowFits &&
 					m.ContextLength >= hostfit.ServingWindow200k
 				if declared != serves {
 					t.Errorf("%s / %s/%s: the recommendation says declares-200k=%v while the "+

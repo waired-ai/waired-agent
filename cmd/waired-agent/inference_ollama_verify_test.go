@@ -306,21 +306,64 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		}
 	})
 
-	t.Run("still-degraded-never-restarts-twice", func(t *testing.T) {
+	t.Run("spill-at-the-only-rung-latches-without-restart", func(t *testing.T) {
+		// The fixture's ladder has one rung, so a spill degrade has
+		// nowhere to step (waired-agent#587): the failure latches — no
+		// restart, the warning records it, and WindowFits drops so the
+		// window measured unreliable stops being declared.
 		size, _ := healthy(262144)
 		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size * 7 / 10,
 			psCtx: verifyCtx, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
-		sw := &fakeModelEnvSwitcher{} // onEnsure absent: the spill persists
+		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
+			verifyTag, srv.URL, srv.Client(), nil, testLogger())
+		if sw.stops != 0 || sw.ensures != 0 {
+			t.Fatalf("stops=%d ensures=%d, want no restart at the ladder's only rung", sw.stops, sw.ensures)
+		}
+		got := sw.lastTuning(t)
+		if !strings.Contains(got.Warning, "minimum context window") {
+			t.Errorf("warning should record the latched spill: %q", got.Warning)
+		}
+		if got.WindowFits {
+			t.Error("a latched failure must drop WindowFits so the window is no longer declared")
+		}
+	})
+
+	t.Run("spill-steps-down-one-rung-and-never-restarts-twice", func(t *testing.T) {
+		// A 1M-native model served at the 1M rung: a spill degrade steps
+		// down exactly one rung (to 200,704), restarts once, and when the
+		// restarted engine still spills the failure latches instead of a
+		// second restart.
+		mm := m
+		mm.ContextLength = 1048576
+		v := variant
+		v.KVBytesPerTokenFP16 = 20480
+		big := computeOllamaTuning(mm, v, hw, "q8_0")
+		if big.ContextLength != 1048576 || !big.WindowFits {
+			t.Fatalf("fixture should serve the 1M rung outright: %+v", big.ModelTuning)
+		}
+		size := weight + int64(0.5*20480)*int64(big.ContextLength)
+		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size * 7 / 10,
+			psCtx: big.ContextLength, tagSize: weight}
+		srv := api.server(t)
+		defer srv.Close()
+		sw := &fakeModelEnvSwitcher{} // onEnsure absent: the spill persists
+		applyOllamaTuningVerification(context.Background(), sw, big, mm, v, hw,
 			verifyTag, srv.URL, srv.Client(), nil, testLogger())
 		if sw.stops != 1 || sw.ensures != 1 {
 			t.Fatalf("stops=%d ensures=%d, want exactly one restart even when still degraded", sw.stops, sw.ensures)
 		}
 		got := sw.lastTuning(t)
+		if got.ContextLength != 200704 {
+			t.Errorf("ContextLength = %d, want the next rung down 200704", got.ContextLength)
+		}
 		if !strings.Contains(got.Warning, "still degraded") {
 			t.Errorf("warning should record the persisting spill: %q", got.Warning)
+		}
+		if got.WindowFits {
+			t.Error("still-degraded after the restart must drop WindowFits")
 		}
 	})
 
@@ -558,8 +601,12 @@ func TestVerifyOllamaTuning_LargeBatchWidensSpillTolerance(t *testing.T) {
 	}
 }
 
-// #624: a spill grossly over the planned bound (>2× expected) falls
-// back to the no-spill sizing with exactly one restart.
+// #624/#587: a spill grossly over the planned bound (>2× expected) at
+// the ladder's only rung LATCHES — the engine keeps serving the rung
+// (there is no smaller window this product serves), the warning records
+// the measured overshoot, and WindowFits drops so the window stops being
+// declared. Before waired-agent#587 this fell back to a sub-rung
+// no-spill window with one restart; that window no longer exists.
 func TestApplyOllamaTuningVerification_PlannedSpillOverBound(t *testing.T) {
 	m, v, hw, tn := anchorSpillFixture()
 	// 30% measured spill > the 25% absolute tolerance clamp.
@@ -569,24 +616,19 @@ func TestApplyOllamaTuningVerification_PlannedSpillOverBound(t *testing.T) {
 	defer srv.Close()
 
 	sw := &fakeModelEnvSwitcher{}
-	// After the restart the fake reports a fully-resident model at the
-	// shrunken window so the re-verify passes.
-	sw.onEnsure = func() {
-		f.mu.Lock()
-		f.psVRAM = f.psSize
-		f.psCtx = 0
-		f.mu.Unlock()
-	}
 	applyOllamaTuningVerification(context.Background(), sw, tn, m, v, hw, "anchor:tag", srv.URL, srv.Client(), nil, testLogger())
 
-	if sw.stops != 1 || sw.ensures != 1 {
-		t.Fatalf("restarts: stops=%d ensures=%d, want exactly 1 each", sw.stops, sw.ensures)
+	if sw.stops != 0 || sw.ensures != 0 {
+		t.Fatalf("restarts: stops=%d ensures=%d, want none — no smaller rung exists", sw.stops, sw.ensures)
 	}
 	applied := sw.lastTuning(t)
-	if applied.ContextLength >= 200704 {
-		t.Errorf("degraded ContextLength = %d, want the no-spill window (< floor)", applied.ContextLength)
+	if applied.ContextLength != 200704 {
+		t.Errorf("ContextLength = %d, want the rung kept", applied.ContextLength)
 	}
-	if !strings.Contains(applied.Warning, "exceeded the planned bound") {
+	if !strings.Contains(applied.Warning, "beyond the planned bound") {
 		t.Errorf("warning should record the over-bound spill: %q", applied.Warning)
+	}
+	if applied.WindowFits {
+		t.Error("an over-bound spill must drop WindowFits so the rung is no longer declared")
 	}
 }

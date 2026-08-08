@@ -430,10 +430,9 @@ func (m *Manifest) Validate() error {
 	// structural fault still reports that fault rather than this one.
 	//
 	// A missing context_length is a silent opt-out rather than an obvious
-	// hole: hostfit.OllamaCeilingWindow returns 0 for it and
-	// OllamaPlannedWindow's cap is guarded on ceiling > 0, so a manifest
-	// that lost its window stops being capped and quietly reverts to
-	// pre-#552 sizing. Nothing reaches that today — every bundled entry
+	// hole: hostfit.OllamaServedWindows is empty for it, so a manifest
+	// that lost its window has no rung ladder and the tuner exports no
+	// window at all (the engine keeps its 32k default). Nothing reaches that today — every bundled entry
 	// has one, and MeetsNativeContextFloor needs >= 200000, so a
 	// zero-window model is unselectable anyway — but a PIN skips both,
 	// and a pin is the one input that arrives from outside.

@@ -1655,7 +1655,7 @@ func (p *agentInferenceProvider) reconcileEngineServe(ctx context.Context) {
 		if !swap && cur.KVCacheType != "" {
 			kvType = cur.KVCacheType
 		}
-		tune := computeOllamaTuningOpts(tm, tv, p.profiler.Profile(ctx), kvType, true, want)
+		tune := computeOllamaTuningOpts(tm, tv, p.profiler.Profile(ctx), kvType, 0, want)
 		// Bounce predicate: an operator switch always bounces (Option 2) so the
 		// new model's per-model spawn env applies; otherwise bounce iff any
 		// input to the engine's spawn env actually moved.
@@ -2163,25 +2163,38 @@ func (p *agentInferenceProvider) ContextWindowFor(modelID string) int {
 	}
 }
 
-// appliedContextWindow is the window the engine reports it is ACTUALLY
-// loaded with for m, or 0 when nothing has tuned yet. AppliedTuning is
-// per-adapter (1 agent = 1 model), so the ModelID match is what keeps a
-// stale tuning for a different model out of the answer.
-func (p *agentInferenceProvider) appliedContextWindow(m catalog.Manifest) int {
-	applied := 0
-	if p.ollama != nil {
-		if t := p.ollama.AppliedTuning(); t.ContextLength > 0 && t.ModelID == m.ModelID {
-			applied = t.ContextLength
-		}
-	}
+// appliedTuningFor is the tuning the serving engine ACTUALLY loaded for
+// m, ok=false when nothing has tuned yet. AppliedTuning is per-adapter
+// (1 agent = 1 model), so the ModelID match is what keeps a stale tuning
+// for a different model out of the answer. vLLM's answer wins when both
+// adapters somehow carry one, preserving the precedence of the two-step
+// scan this replaces.
+func (p *agentInferenceProvider) appliedTuningFor(m catalog.Manifest) (infruntime.ModelTuning, bool) {
 	if tuner, ok := p.vllmAdapter().(interface {
 		AppliedTuning() infruntime.ModelTuning
 	}); ok {
 		if t := tuner.AppliedTuning(); t.ContextLength > 0 && t.ModelID == m.ModelID {
-			applied = t.ContextLength
+			return t, true
 		}
 	}
-	return applied
+	if p.ollama != nil {
+		if t := p.ollama.AppliedTuning(); t.ContextLength > 0 && t.ModelID == m.ModelID {
+			return t, true
+		}
+	}
+	return infruntime.ModelTuning{}, false
+}
+
+// appliedContextWindow is appliedTuningFor's window alone, 0 when
+// nothing has tuned yet — the shape the guard sizing wants: the engine
+// really is serving this window (fit-proven or forced rung alike), so
+// overflow guards must size to it either way.
+func (p *agentInferenceProvider) appliedContextWindow(m catalog.Manifest) int {
+	t, ok := p.appliedTuningFor(m)
+	if !ok {
+		return 0
+	}
+	return t.ContextLength
 }
 
 // DeclaredContextWindow reports the window this device is willing to
@@ -2214,10 +2227,22 @@ func (p *agentInferenceProvider) DeclaredContextWindow() int {
 	if !ok {
 		return 0
 	}
-	win := p.appliedContextWindow(m)
-	if win <= 0 {
+	t, ok := p.appliedTuningFor(m)
+	if !ok || t.ContextLength <= 0 {
 		return 0
 	}
+	// A window the sizing could not prove this host holds — the forced
+	// lowest rung (waired-agent#587) — is SERVED for this machine's own
+	// keyboard but never declared: the engine is holding it out of
+	// memory the host does not have, and a requester routing a 200k
+	// session onto that is the failure waired-ai/waired#1031's window
+	// contract exists to remove. The <200k check below used to carry
+	// this weight alone (a trimmed window fell under it); with sub-rung
+	// trimming retired it remains as the safety net.
+	if !t.WindowFits {
+		return 0
+	}
+	win := t.ContextLength
 	// Never claim past the model's own window, whatever the engine was
 	// told: a tuning above native is a misconfiguration, not a capability.
 	if m.ContextLength > 0 && win > m.ContextLength {
