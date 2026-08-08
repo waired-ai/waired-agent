@@ -105,6 +105,15 @@ func TestTotalMemoryMB(t *testing.T) {
 // in its body. The old gate refused three of these four on a
 // hand-authored min_ram_gb or a carve-out comparison; none of them was
 // out of memory.
+//
+// AMENDED 2026-08-08 (#552). The two 8 GB rows keep local inference on
+// qwen3.5-2b instead of qwen3.5-4b. What the test promises is unchanged
+// — none of these four hosts is left with no local model — but "a model
+// it can hold" now means holdable at a window the product serves, and
+// 8 GB holds neither the 4b's 200,704-token cache (7403 MiB against a
+// 6144 MiB budget) nor anything near it. The 2b holds its FULL native
+// 262,144 there with room to spare, so the window goes up, not down.
+// See docs/decisions/20260808/1907-price-capacity-at-the-served-window.md.
 func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -127,10 +136,13 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 		// same claim: the model's own window, the weights' residency, and
 		// the window this host would serve.
 		wantRec string
+		// keepsItWith is the model this host is asserted to be able to
+		// hold. Empty means qwen3.5-4b itself.
+		keepsItWith string
 	}{
 		{
 			"8 GB RAM, no card",
-			hostfit.Host{RAMTotalGB: 8}, false, hostfit.ReasonWindowExceedsMemory,
+			hostfit.Host{RAMTotalGB: 8}, false, hostfit.ReasonWindowExceedsMemory, "qwen3.5-2b",
 		},
 		{
 			// A 2 GB card holds none of the weights, and a host WITH an
@@ -139,7 +151,7 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 			// That asymmetry is real, known, and waits on a measured
 			// speed for the CPU-only arm (waired-ai/waired-agent#466).
 			"8 GB RAM + 2 GB card",
-			hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 2048}, false, hostfit.ReasonWeightsSpill,
+			hostfit.Host{RAMTotalGB: 8, GPUCount: 1, VRAM0MB: 2048}, false, hostfit.ReasonWeightsSpill, "",
 		},
 		{
 			// This host CAN declare the coding window, and only because
@@ -149,23 +161,36 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 			// window, so the carded host must too. The residency clause
 			// still declines to preselect it.
 			"16 GB RAM + 2 GB card",
-			hostfit.Host{RAMTotalGB: 16, GPUCount: 1, VRAM0MB: 2048}, true, hostfit.ReasonWeightsSpill,
+			hostfit.Host{RAMTotalGB: 16, GPUCount: 1, VRAM0MB: 2048}, true, hostfit.ReasonWeightsSpill, "",
 		},
 		{
-			// 3.4 GB of weights fit the 6 GB wired limit; ~120k of window
-			// is all that fits beside them, and a unified host has
-			// nowhere to spill the rest TO.
+			// 3.4 GB of weights fit the 6 GB wired limit, and ~120k of
+			// window is all that fits beside them — which is the problem,
+			// not the answer. 200,704 of the 4b's KV needs 7403 MiB here.
+			// A 7 GiB machine of exactly this shape was measured taking
+			// the model and returning HTTP 500 on the first generation
+			// (run 31164150206).
 			"8 GB Mac",
 			hostfit.Host{RAMTotalGB: 8, GPUCount: 1, UnifiedMemory: true, UsableVRAMMB: 6144},
-			false, hostfit.ReasonWindowExceedsMemory,
+			false, hostfit.ReasonWindowExceedsMemory, "qwen3.5-2b",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			keeper := tc.keepsItWith
+			if keeper == "" {
+				keeper = "qwen3.5-4b"
+			}
+			if got := hostfit.OllamaCapacityFit(
+				manifestOf(t, manifests, keeper), variantOf(t, manifests, keeper), tc.host,
+			); !got.Fits {
+				t.Errorf("%s is refused (%s: needs %d MiB, host has %d MiB); this host is "+
+					"left with no local model at all, which is the symptom waired#1056 opens with",
+					keeper, got.Reason, got.NeedMB, got.HaveMB)
+			}
 			fit := hostfit.OllamaCapacityFit(m, v, tc.host)
-			if !fit.Fits {
-				t.Errorf("qwen3.5-4b is refused (%s: needs %d MiB, host has %d MiB). "+
-					"Refusal is reserved for certain OOM, and 3.4 GB of weights is not "+
-					"out of memory here", fit.Reason, fit.NeedMB, fit.HaveMB)
+			if fit.Fits != (tc.keepsItWith == "") {
+				t.Errorf("qwen3.5-4b fits = %v, want %v (%s: needs %d MiB, host has %d MiB)",
+					fit.Fits, tc.keepsItWith == "", fit.Reason, fit.NeedMB, fit.HaveMB)
 			}
 			if got := hostfit.OllamaDeclaresWindow(m, v, tc.host, hostfit.ServingWindow200k); got != tc.declares200k {
 				t.Errorf("declares the coding window = %v, want %v", got, tc.declares200k)
@@ -183,16 +208,30 @@ func TestBundledCatalog_TheSymptomHostsKeepLocalInference(t *testing.T) {
 	}
 }
 
-// TestOllamaCapacityFit_PricesTheWindowTheHostWouldServe pins the
-// distinction that keeps the gate honest on small machines.
+// TestOllamaCapacityFit_PricesAWindowTheProductWouldServe pins the rule
+// the gate now runs on, and it is the REVERSE of what this test used to
+// assert.
 //
-// A 2 GB host asked to hold a 1 GB model at the coding window needs a
-// 200k KV cache it will never be given: the sizing lands on the engine's
-// own default there, and pricing the refusal at 200k would turn "this
-// machine would serve a small window" into "this machine is out of
-// memory". The window-inclusive figure a SURFACE shows is the coding one
-// either way — see Presentation.RequiredWindowResidentMB.
-func TestOllamaCapacityFit_PricesTheWindowTheHostWouldServe(t *testing.T) {
+// It used to say: a 5 GB host asked to hold a 1 GB model at the coding
+// window needs a 200k KV cache it will never be given, the sizing lands
+// on the engine's own default there, and pricing the refusal at 200k
+// would turn "this machine would serve a small window" into "this
+// machine is out of memory".
+//
+// That reasoning rested on a premise the product does not hold: that a
+// window between the rungs is a smaller version of the thing. It is not.
+// A node declares 200,704 or 1,048,576 or nothing (waired#1031), and a
+// coding session is sized for the 200k rung (#624), so a machine served
+// at 32,768 has a model it cannot route to and cannot code with. Pricing
+// the gate at the shrunken window also made it unable to refuse
+// ANYTHING — the sizing picks the largest window that fits, so
+// re-checking it is a question already answered yes, and that is how a
+// 7 GiB Mac was handed a model that returned HTTP 500 on its first
+// generation (waired-ai/waired-agent#552).
+//
+// Owner decision 2026-08-08, recorded in
+// docs/decisions/20260808/1907-price-capacity-at-the-served-window.md.
+func TestOllamaCapacityFit_PricesAWindowTheProductWouldServe(t *testing.T) {
 	tiny := catalog.Manifest{
 		ModelID: "tiny", ContextLength: 262144,
 		Variants: []catalog.Variant{{
@@ -205,21 +244,46 @@ func TestOllamaCapacityFit_PricesTheWindowTheHostWouldServe(t *testing.T) {
 	v := tiny.Variants[0]
 	host := hostfit.Host{RAMTotalGB: 5}
 
+	// The fixture is only interesting while the host would have been
+	// sized BELOW the rung — that gap is the whole subject.
 	plan := hostfit.OllamaPlannedWindow(tiny, v, host, hostfit.OllamaKVFactorQ8_0, true)
 	if plan.ContextLength >= hostfit.ServingWindow200k {
 		t.Fatalf("fixture: this host plans a %d-token window, so it does not exercise "+
 			"the gap between the served window and the coding one", plan.ContextLength)
 	}
-	if got := hostfit.OllamaCapacityFit(tiny, v, host); !got.Fits {
-		t.Errorf("capacity = %+v, want a fitting verdict: this host serves the model at "+
-			"%d tokens, and refusing it for a %d-token cache it is never given would be "+
-			"a refusal on a window question", got, plan.ContextLength, hostfit.ServingWindow200k)
+	got := hostfit.OllamaCapacityFit(tiny, v, host)
+	if got.Fits {
+		t.Errorf("capacity = %+v, want a refusal: this host cannot hold the model at "+
+			"%d tokens, and %d is not a window this product serves",
+			got, hostfit.ServingWindow200k, plan.ContextLength)
 	}
-	// The legacy variant-only entry point has no manifest to size from
-	// and therefore assumes the coding window. That is exactly why every
-	// in-tree caller moved off it.
+	if got.NeedMB <= got.HaveMB {
+		t.Errorf("refusal carries need %d ≤ have %d; the figures must name the shortfall",
+			got.NeedMB, got.HaveMB)
+	}
+
+	// OllamaFit, the variant-only entry point, has no manifest and so
+	// always assumes the coding rung. For a 262144-native model the two
+	// now AGREE — that is the change. They still part company on a model
+	// whose own window is below the rung, which is the case the doc
+	// comment on OllamaFit is about.
 	if got := hostfit.OllamaFit(v, host); got.Fits {
-		t.Errorf("OllamaFit = %+v, want the coding-window refusal — if this starts "+
-			"agreeing with OllamaCapacityFit the doc comment on it is stale", got)
+		t.Errorf("OllamaFit = %+v, want the same coding-window refusal", got)
+	}
+	short := catalog.Manifest{
+		ModelID: "short", ContextLength: 131072,
+		Variants: []catalog.Variant{{
+			RuntimeSupport:    []string{catalog.RuntimeOllama},
+			EstimatedWeightGB: 1.0, KVBytesPerTokenFP16: 12288,
+		}},
+	}
+	sv := short.Variants[0]
+	if got := hostfit.OllamaCapacityFit(short, sv, host); !got.Fits {
+		t.Errorf("a 131072-native model = %+v, want a fitting verdict: 131072 is the "+
+			"whole of what it offers, so there is no rung to trim it to", got)
+	}
+	if got := hostfit.OllamaFit(sv, host); got.Fits {
+		t.Errorf("OllamaFit on the same variant = %+v, want the coding-window refusal — "+
+			"this is the gap the manifest-aware entry point exists to close", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -83,14 +84,22 @@ func verifyFixture() (catalog.Manifest, catalog.Variant, hardware.Profile, ollam
 
 const verifyTag = "verify-model:q4"
 
+// verifyCtx is the window this fixture is SERVED at. Derived rather than
+// written out: since #552 the sizing caps at the top rung of
+// hostfit.OllamaServedWindows, so a 262144-native model is served at
+// ServingWindow200k and the two numbers stopped being the same. Every
+// psCtx below is "the engine is doing what it was told", which is a
+// statement about the tuning, not about a constant.
+var verifyCtx = func() int { _, _, _, t := verifyFixture(); return t.ContextLength }()
+
 func TestVerifyOllamaTuning(t *testing.T) {
 	_, _, hw, tn := verifyFixture()
-	if tn.ContextLength != 262144 {
-		t.Fatalf("fixture sizing drifted: ctx = %d, want 262144", tn.ContextLength)
+	if tn.ContextLength != verifyCtx {
+		t.Fatalf("fixture sizing drifted: ctx = %d, want %d", tn.ContextLength, verifyCtx)
 	}
 	weight := int64(10e9)
-	// Healthy q8_0 excess: ~0.5 × 65536 × 262144 ≈ 8.6 GB.
-	healthySize := weight + int64(0.5*65536*262144)
+	// Healthy q8_0 excess: 0.5 × 65536 × the served window.
+	healthySize := weight + int64(0.5*65536)*int64(verifyCtx)
 
 	run := func(f *fakeOllamaAPI, tun ollamaTuning, hw hardware.Profile) (tuningVerdict, string) {
 		srv := f.server(t)
@@ -100,7 +109,7 @@ func TestVerifyOllamaTuning(t *testing.T) {
 
 	t.Run("ok", func(t *testing.T) {
 		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: healthySize,
-			psCtx: 262144, tagSize: weight}
+			psCtx: verifyCtx, tagSize: weight}
 		v, detail := run(f, tn, hw)
 		if v != tuningOK || detail != "" {
 			t.Errorf("= (%v, %q), want (tuningOK, \"\")", v, detail)
@@ -120,7 +129,7 @@ func TestVerifyOllamaTuning(t *testing.T) {
 		tp := tn
 		tp.NumParallel = 2
 		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize, psVRAM: healthySize,
-			psCtx: 2 * 262144, tagSize: weight}
+			psCtx: 2 * verifyCtx, tagSize: weight}
 		v, detail := run(f, tp, hw)
 		if v != tuningOK || detail != "" {
 			t.Errorf("= (%v, %q), want (tuningOK, \"\") for ctx×parallel", v, detail)
@@ -129,7 +138,7 @@ func TestVerifyOllamaTuning(t *testing.T) {
 
 	t.Run("spill-discrete", func(t *testing.T) {
 		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize,
-			psVRAM: healthySize * 8 / 10, psCtx: 262144, tagSize: weight}
+			psVRAM: healthySize * 8 / 10, psCtx: verifyCtx, tagSize: weight}
 		v, detail := run(f, tn, hw)
 		if v != tuningSpill {
 			t.Errorf("= (%v, %q), want tuningSpill", v, detail)
@@ -139,7 +148,7 @@ func TestVerifyOllamaTuning(t *testing.T) {
 	t.Run("spill-uma-ignored", func(t *testing.T) {
 		uma := hardware.Profile{RAMTotalGB: 128, UnifiedMemory: true, UsableVRAMMB: 98304}
 		f := &fakeOllamaAPI{psName: verifyTag, psSize: healthySize,
-			psVRAM: healthySize * 8 / 10, psCtx: 262144, tagSize: weight}
+			psVRAM: healthySize * 8 / 10, psCtx: verifyCtx, tagSize: weight}
 		v, _ := run(f, tn, uma)
 		if v == tuningSpill {
 			t.Error("UMA hosts must not classify size_vram<size as a spill")
@@ -147,10 +156,10 @@ func TestVerifyOllamaTuning(t *testing.T) {
 	})
 
 	t.Run("f16-fallback", func(t *testing.T) {
-		// Excess ≈ full-f16 KV: 65536 × 262144 ≈ 17.2 GB.
+		// Excess ≈ full-f16 KV: 65536 × the served window.
 		f := &fakeOllamaAPI{psName: verifyTag,
-			psSize: weight + int64(65536)*262144, psVRAM: weight + int64(65536)*262144,
-			psCtx: 262144, tagSize: weight}
+			psSize: weight + int64(65536)*int64(verifyCtx), psVRAM: weight + int64(65536)*int64(verifyCtx),
+			psCtx: verifyCtx, tagSize: weight}
 		v, detail := run(f, tn, hw)
 		if v != tuningF16Fallback {
 			t.Errorf("= (%v, %q), want tuningF16Fallback", v, detail)
@@ -164,7 +173,7 @@ func TestVerifyOllamaTuning(t *testing.T) {
 		// context against this tuning and cry "OLLAMA_CONTEXT_LENGTH did not
 		// apply". Even an f16-sized excess must not trigger a size verdict.
 		f := &fakeOllamaAPI{psName: "someone-else:latest",
-			psSize: weight + int64(65536)*262144, psVRAM: weight + int64(65536)*262144,
+			psSize: weight + int64(65536)*int64(verifyCtx), psVRAM: weight + int64(65536)*int64(verifyCtx),
 			psCtx: 32768, tagSize: weight}
 		v, detail := run(f, tn, hw)
 		if v != tuningInconclusive {
@@ -185,7 +194,7 @@ func TestVerifyOllamaTuning(t *testing.T) {
 
 	t.Run("loads-idle-model-then-verifies", func(t *testing.T) {
 		f := &fakeOllamaAPI{psEmpty: true, psName: verifyTag,
-			psSize: healthySize, psVRAM: healthySize, psCtx: 262144, tagSize: weight}
+			psSize: healthySize, psVRAM: healthySize, psCtx: verifyCtx, tagSize: weight}
 		v, detail := run(f, tn, hw)
 		if v != tuningOK || detail != "" {
 			t.Errorf("= (%v, %q), want OK after forced load", v, detail)
@@ -234,17 +243,17 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 	}
 
 	t.Run("ok-records-verified", func(t *testing.T) {
-		size, vram := healthy(262144)
+		size, vram := healthy(verifyCtx)
 		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: vram,
-			psCtx: 262144, tagSize: weight}
+			psCtx: verifyCtx, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{}
 		applyOllamaTuningVerification(context.Background(), sw, tn, m, variant, hw,
 			verifyTag, srv.URL, srv.Client(), nil, testLogger())
 		got := sw.lastTuning(t)
-		if !got.Verified || got.Warning != "" || got.ContextLength != 262144 {
-			t.Errorf("recorded %+v, want verified clean 262144", got)
+		if !got.Verified || got.Warning != "" || got.ContextLength != verifyCtx {
+			t.Errorf("recorded %+v, want verified clean at the served window", got)
 		}
 		if sw.stops != 0 || sw.ensures != 0 {
 			t.Errorf("engine touched on OK verdict (stops=%d ensures=%d)", sw.stops, sw.ensures)
@@ -252,9 +261,9 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 	})
 
 	t.Run("f16-fallback-restarts-once-with-f16-sizing", func(t *testing.T) {
-		f16Size := weight + int64(65536)*262144
+		f16Size := weight + int64(65536)*int64(verifyCtx)
 		api := &fakeOllamaAPI{psName: verifyTag, psSize: f16Size, psVRAM: f16Size,
-			psCtx: 262144, tagSize: weight}
+			psCtx: verifyCtx, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
 
@@ -300,7 +309,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 	t.Run("still-degraded-never-restarts-twice", func(t *testing.T) {
 		size, _ := healthy(262144)
 		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size * 7 / 10,
-			psCtx: 262144, tagSize: weight}
+			psCtx: verifyCtx, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{} // onEnsure absent: the spill persists
@@ -336,9 +345,9 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 	})
 
 	t.Run("stop-error-keeps-engine-and-warns", func(t *testing.T) {
-		f16Size := weight + int64(65536)*262144
+		f16Size := weight + int64(65536)*int64(verifyCtx)
 		api := &fakeOllamaAPI{psName: verifyTag, psSize: f16Size, psVRAM: f16Size,
-			psCtx: 262144, tagSize: weight}
+			psCtx: verifyCtx, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
 		sw := &fakeModelEnvSwitcher{stopErr: errors.New("stop refused")}
@@ -376,15 +385,15 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 		// the stale intent 2. A foreign runner still resident is ignored.
 		tp := tn
 		tp.NumParallel = 2
-		size, vram := healthy(262144)
+		size, vram := healthy(verifyCtx)
 		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: vram,
-			psCtx: 262144, tagSize: weight}
+			psCtx: verifyCtx, tagSize: weight}
 		srv := api.server(t)
 		defer srv.Close()
 		procs := func() ([]proclist.ProcInfo, error) {
 			return []proclist.ProcInfo{
 				{PID: 10, Argv: []string{"llama-server", "-c", "32768", "-np", "2"}},
-				{PID: 20, Argv: []string{"llama-server", "-c", "262144", "-np", "1"}},
+				{PID: 20, Argv: []string{"llama-server", "-c", strconv.Itoa(verifyCtx), "-np", "1"}},
 			}, nil
 		}
 		sw := &fakeModelEnvSwitcher{}
@@ -405,7 +414,13 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 // context (or ctx × its own -np) wins; anything else abstains so status
 // keeps the intent.
 func TestObserveRunnerParallel(t *testing.T) {
-	_, _, _, tn := verifyFixture() // tn.ContextLength == 262144
+	// Derived from the fixture rather than written out: the served window
+	// is a product decision that has moved once already (#552 capped it
+	// at the top rung of hostfit.OllamaServedWindows), and this test is
+	// about matching a runner to the tuning, not about the number.
+	_, _, _, tn := verifyFixture()
+	ctx := strconv.Itoa(tn.ContextLength)
+	ctxTimes2 := strconv.Itoa(tn.ContextLength * 2)
 	mk := func(argvs ...[]string) runnerProcLister {
 		return func() ([]proclist.ProcInfo, error) {
 			out := make([]proclist.ProcInfo, len(argvs))
@@ -417,17 +432,17 @@ func TestObserveRunnerParallel(t *testing.T) {
 	}
 	t.Run("reduced-to-1-ignores-foreign", func(t *testing.T) {
 		np, ok := observeRunnerParallel(tn, mk(
-			[]string{"llama-server", "-c", "32768", "-np", "2"},  // foreign 32k runner
-			[]string{"llama-server", "-c", "262144", "-np", "1"}, // target, reduced
+			[]string{"llama-server", "-c", "32768", "-np", "2"}, // foreign 32k runner
+			[]string{"llama-server", "-c", ctx, "-np", "1"},     // target, reduced
 		))
 		if !ok || np != 1 {
 			t.Errorf("= (%d, %v), want (1, true)", np, ok)
 		}
 	})
 	t.Run("honored-ctx-times-parallel", func(t *testing.T) {
-		// -c is the TOTAL context: an honored np=2 shows -c = 262144 × 2.
+		// -c is the TOTAL context: an honored np=2 shows -c = ctx × 2.
 		np, ok := observeRunnerParallel(tn, mk(
-			[]string{"ollama", "runner", "--ctx-size", "524288", "--parallel", "2"},
+			[]string{"ollama", "runner", "--ctx-size", ctxTimes2, "--parallel", "2"},
 		))
 		if !ok || np != 2 {
 			t.Errorf("= (%d, %v), want (2, true)", np, ok)

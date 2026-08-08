@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/router"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // qwen3.6-35b-a3b-shaped manifest: the dogfood host's real numbers, so
@@ -106,12 +108,14 @@ func TestComputeOllamaTuning(t *testing.T) {
 
 	t.Run("discrete-24gb-nospill-clamp-above-floor", func(t *testing.T) {
 		// A 21.5 GB variant's no-spill window (≈ 223k) already clears the
-		// floor: plain clamp, no spill, no warning.
+		// floor: plain clamp, no spill, no warning. Since #552 the clamp
+		// lands on the top rung rather than on 223232 — a window between
+		// the rungs is not one this product serves.
 		v := m.Variants[0]
 		v.EstimatedWeightGB = 21.5
 		got := computeOllamaTuning(m, v, discrete24GB(), "q8_0")
-		if got.ContextLength != 223232 {
-			t.Errorf("ContextLength = %d, want 223232", got.ContextLength)
+		if got.ContextLength != hostfit.ServingWindow200k {
+			t.Errorf("ContextLength = %d, want %d", got.ContextLength, hostfit.ServingWindow200k)
 		}
 		if got.ExpectedSpillFraction != 0 {
 			t.Errorf("ExpectedSpillFraction = %.4f, want 0", got.ExpectedSpillFraction)
@@ -282,8 +286,11 @@ func TestComputeOllamaTuning(t *testing.T) {
 			UsableVRAMMB:  98304, // 96 GiB carve-out
 		}
 		got := computeOllamaTuning(m, m.Variants[0], hw, "q8_0")
-		if got.ContextLength != m.ContextLength {
-			t.Errorf("ContextLength = %d, want manifest %d", got.ContextLength, m.ContextLength)
+		// The ceiling, not the manifest's 262144: #552 stopped serving
+		// context the mesh cannot route on. The second slot still lands,
+		// which is the thing this case is really about.
+		if got.ContextLength != hostfit.OllamaCeilingWindow(m) {
+			t.Errorf("ContextLength = %d, want ceiling %d", got.ContextLength, hostfit.OllamaCeilingWindow(m))
 		}
 		if got.NumParallel != 2 {
 			t.Errorf("NumParallel = %d, want 2 (full window granted and 2× KV fits)", got.NumParallel)
@@ -297,9 +304,9 @@ func TestComputeOllamaTuning(t *testing.T) {
 		hw := hardware.Profile{RAMTotalGB: 32}
 		got := computeOllamaTuning(m, m.Variants[1], hw, ollamaKVAuto)
 		// budget = 28 GB; leftover 7 GB → q8_0 → ~683k tokens → capped
-		// at the manifest window.
-		if got.ContextLength != m.ContextLength {
-			t.Errorf("ContextLength = %d, want manifest %d", got.ContextLength, m.ContextLength)
+		// at the served ceiling (#552), not the manifest window.
+		if got.ContextLength != hostfit.OllamaCeilingWindow(m) {
+			t.Errorf("ContextLength = %d, want ceiling %d", got.ContextLength, hostfit.OllamaCeilingWindow(m))
 		}
 		// PRODUCT CONTRACT: a genuinely tight CPU host KEEPS the quantized KV
 		// cache. f16 here affords only ~341k tokens, short of 2 x 262144, so
@@ -417,8 +424,16 @@ func TestComputeOllamaTuning(t *testing.T) {
 	})
 
 	t.Run("f16-pass-shrinks-window", func(t *testing.T) {
-		q8 := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0")
-		f16 := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "f16")
+		// A 131072-native model on a UMA host: the ceiling is the model's
+		// own window and there is no spill allowance to push either pass
+		// up to it, so the two cache formats can be compared on their own
+		// terms. On the 262144-native fixture both now clamp to the same
+		// rung and the case would compare nothing (#552).
+		sub := m
+		sub.ContextLength = 131072
+		uma := hardware.Profile{RAMTotalGB: 32, UnifiedMemory: true, UsableVRAMMB: 23552}
+		q8 := computeOllamaTuning(sub, sub.Variants[1], uma, "q8_0")
+		f16 := computeOllamaTuning(sub, sub.Variants[1], uma, "f16")
 		if f16.ContextLength >= q8.ContextLength {
 			t.Errorf("f16 sizing (%d) should be smaller than q8_0 (%d)",
 				f16.ContextLength, q8.ContextLength)
@@ -494,7 +509,7 @@ func TestOllamaTuningEnv(t *testing.T) {
 	tn := computeOllamaTuning(m, m.Variants[1], discrete24GB(), "q8_0")
 	env := tn.Env()
 	for _, want := range []string{
-		"OLLAMA_CONTEXT_LENGTH=262144",
+		fmt.Sprintf("OLLAMA_CONTEXT_LENGTH=%d", hostfit.OllamaCeilingWindow(m)),
 		"OLLAMA_KV_CACHE_TYPE=q8_0",
 		"OLLAMA_NUM_PARALLEL=1",
 		"OLLAMA_FLASH_ATTENTION=1",

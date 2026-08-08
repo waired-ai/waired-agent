@@ -1104,8 +1104,42 @@ func OllamaResident(v catalog.Variant, h Host) Verdict {
 // rides on Verdict.Estimate, so a caller can offer a slow-but-working
 // model with a warning rather than silently withholding it.
 func OllamaCapacityFit(m catalog.Manifest, v catalog.Variant, h Host) Verdict {
-	plan := OllamaPlannedWindow(m, v, h, OllamaKVFactorQ8_0, true)
-	return ollamaCapacityAtWindow(v, h, plan.ContextLength)
+	// Priced at a window this product would SERVE (OllamaServedWindows),
+	// highest rung first, not at the window the sizing shrank to.
+	//
+	// It used to be the latter, and that made the gate structurally
+	// unable to refuse: OllamaPlannedWindow returns the largest window
+	// that fits, so asking whether that window fits is a question the
+	// sizing has already answered yes. On a unified host the two even
+	// come back to the same number — floor(3R/4)·1024 against
+	// (R−2)·1024, equal for 5 ≤ R ≤ 8 — and a 7 GiB Mac cleared the gate
+	// by 5 MiB for a model that needed 7403 MiB to serve the coding
+	// window on a 4096 MiB budget (waired-ai/waired-agent#552).
+	//
+	// The reversal is deliberate and is the owner decision of
+	// 2026-08-08: a window between the rungs is not a smaller version of
+	// the product, so "this host can load it at 32k" stopped being a
+	// reason to hand it over. Refusal is still reserved for a model this
+	// host cannot serve — what changed is what serving means, not how
+	// hard the gate presses (waired-ai/waired#1056 decision 1, amended;
+	// docs/decisions/20260808/…-price-capacity-at-the-served-window.md).
+	windows := OllamaServedWindows(m)
+	if len(windows) == 0 {
+		// No window annotation: no opinion, exactly as a missing weight
+		// or a failed RAM probe yields one. Fall back to the variant-only
+		// entry point rather than inventing a rung.
+		return OllamaFit(v, h)
+	}
+	var last Verdict
+	for _, w := range windows {
+		last = ollamaCapacityAtWindow(v, h, w)
+		if last.Fits {
+			return last
+		}
+	}
+	// Every rung refused; report the lowest one's shortfall, which is the
+	// smallest ask this host still could not meet.
+	return last
 }
 
 // ollamaCapacityAtWindow is OllamaCapacityFit's arithmetic against an
