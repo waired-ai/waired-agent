@@ -39,16 +39,26 @@ func computeVLLMTuning(m catalog.Manifest, v catalog.Variant, hw hardware.Profil
 	mt := infruntime.ModelTuning{ModelID: m.ModelID, VariantID: v.VariantID}
 	est := router.VLLMMaxModelLen(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, tp, gpuMemUtil, kvFactor, hw)
 	if est <= 0 {
+		// Unknown sizing inputs are not evidence against the host —
+		// permissive, like VLLMServesContextFloor. The exception is the
+		// warning branch: with every input known, est<=0 means the
+		// padded weights alone overflow the budget, and a window the
+		// engine will likely fail to start with is not one to declare
+		// (WindowFits=false keeps it off the mesh).
 		mt.ContextLength = m.ContextLength
+		mt.WindowFits = true
 		if v.EstimatedWeightGB > 0 && v.KVBytesPerTokenFP16 > 0 && gpuMemUtil > 0 && hasNVIDIAGPU(hw) {
-			// All inputs known ⇒ the padded weights alone overflow the
-			// utilization budget.
+			mt.WindowFits = false
 			mt.Warning = fmt.Sprintf(
 				"model weights (~%.1f GB plus activations) exceed the vLLM GPU memory budget at gpu-memory-utilization=%.2f, TP=%d; engine startup will likely fail — see engine.log",
 				v.EstimatedWeightGB, gpuMemUtil, tp)
 		}
 		return m.ContextLength, mt
 	}
+	// A real estimate: the window exported below is one the KV-pool
+	// arithmetic says this host holds (vLLM clamps rather than spills),
+	// so it is a proven window either way.
+	mt.WindowFits = true
 	if m.ContextLength > 0 && est >= m.ContextLength {
 		mt.ContextLength = m.ContextLength
 		return m.ContextLength, mt

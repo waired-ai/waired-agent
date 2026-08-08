@@ -1117,8 +1117,8 @@ func OllamaResident(v catalog.Variant, h Host) Verdict {
 // docs/decisions/20260803/1332-hard-vs-soft-model-limits.md).
 //
 // The window it is priced at is the one this host would actually SERVE
-// it at (OllamaPlannedWindow), and that is load-bearing rather than a
-// detail. Refusal is reserved for certain OOM, and a machine that would
+// it at (a rung of OllamaServedWindows — OllamaPlannedRung), and that is
+// load-bearing rather than a detail. Refusal is reserved for certain OOM, and a machine that would
 // run a 1 GB model at the engine's 32k default is not out of memory just
 // because a 200k KV cache would not fit beside it. Pricing every host at
 // the coding window would refuse small hosts a model they can load,
@@ -1166,9 +1166,10 @@ func OllamaCapacityFit(m catalog.Manifest, v catalog.Variant, h Host) Verdict {
 	// highest rung first, not at the window the sizing shrank to.
 	//
 	// It used to be the latter, and that made the gate structurally
-	// unable to refuse: OllamaPlannedWindow returns the largest window
-	// that fits, so asking whether that window fits is a question the
-	// sizing has already answered yes. On a unified host the two even
+	// unable to refuse: the continuous sizing (the deprecated
+	// OllamaPlannedWindow) returns the largest window that fits, so
+	// asking whether that window fits is a question the sizing has
+	// already answered yes. On a unified host the two even
 	// come back to the same number — floor(3R/4)·1024 against
 	// (R−2)·1024, equal for 5 ≤ R ≤ 8 — and a 7 GiB Mac cleared the gate
 	// by 5 MiB for a model that needed 7403 MiB to serve the coding

@@ -171,6 +171,8 @@ var producedInProto = []exemption{
 		"the shared fit projection, built by hostfit.ProjectModel"},
 	{reflect.TypeFor[hostfit.OllamaWindowPlan](), "NoSpillCapacityTokens",
 		"the window sizing's own working, computed inside hostfit.OllamaPlannedWindow"},
+	{reflect.TypeFor[hostfit.OllamaRungPlan](), "NoSpillCapacityTokens",
+		"the rung sizing's own working, computed inside hostfit.OllamaPlannedRung"},
 	{reflect.TypeFor[hostfit.Presentation](), "NotRecommended",
 		"the shared fit projection, built by hostfit.Project"},
 	{reflect.TypeFor[hostfit.Presentation](), "NotRecommendedReason",

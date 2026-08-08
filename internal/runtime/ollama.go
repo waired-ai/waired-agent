@@ -930,6 +930,14 @@ type ModelTuning struct {
 	// quantized cache REQUIRES it — and on an f16 cache it would force
 	// llama.cpp's flash-attention path for no memory saving at all.
 	FlashAttention bool
+	// WindowFits is true when ContextLength is a window the sizing rules
+	// proved this host holds (hostfit.OllamaRungPlan.Fits on the ollama
+	// path; a real vLLM estimate on that path). False marks a window the
+	// engine was given anyway — the lowest rung, forced because sub-rung
+	// windows are not served (waired-ai/waired-agent#587) — which is
+	// SERVED but never declared to the mesh: DeclaredContextWindow reads
+	// false as "declares nothing" (waired-ai/waired#1031).
+	WindowFits bool
 	// Verified is true once the post-load /api/ps verification completed
 	// (regardless of outcome).
 	Verified bool
@@ -946,8 +954,10 @@ type ModelTuning struct {
 // The fields it deliberately ignores are the ones this struct accretes
 // AFTER the spawn, describing the outcome rather than the intent:
 // Verified and Warning are written by the post-load verification,
-// ObservedNumParallel by reading the runner's command line, and
-// RecommendedMaxParallel is advisory telemetry. A freshly computed
+// ObservedNumParallel by reading the runner's command line,
+// RecommendedMaxParallel is advisory telemetry, and WindowFits is the
+// sizing's own judgement of the window — a pure function of the inputs
+// already compared, so comparing it too could never change the answer. A freshly computed
 // tuning has none of them, so a whole-struct `==` against the applied
 // value would differ on every single call — and a bounce predicate built
 // on that would restart the engine each time anything asked for a

@@ -59,21 +59,30 @@ const (
 	// with a computation a like-for-like swap rather than a loosening.
 	OSMemoryAllowanceGB = 2
 
-	// OllamaCPUOnlyRAMHeadroomGB is the system headroom left out of the
+	// OllamaCPUOnlyRAMHeadroomGB was the system headroom left out of the
 	// window SIZING budget when the weights are read from system RAM: the
 	// OS allowance above plus as much again for the agent, the engine's
 	// own process, and page cache.
 	//
-	// Sizing is allowed a comfort margin that a refusal is not. Charging
-	// the full 4 GB in the capacity gate would refuse an 8 GB laptop a
-	// 3.4 GB model it runs perfectly well; charging only 2 GB when sizing
-	// a window would hand the engine a budget the machine cannot honour.
-	// Different questions, deliberately different margins.
+	// Deprecated: the 2 GB-gate / 4 GB-sizing asymmetry was dissolved by
+	// the 2026-08-08 owner rulings on waired-ai/waired#1067 — both
+	// questions now charge Host.OSMemoryDeductionGB (the install-time
+	// measurement, floored at OSMemoryAllowanceGB), and the sizing budget
+	// reserves the engine's own overhead explicitly
+	// (OllamaSizingBudgetGB) instead of approximating it with this
+	// doubled constant. Nothing reads it; it stays because proto is
+	// additive-only across published tags.
 	OllamaCPUOnlyRAMHeadroomGB = 2 * OSMemoryAllowanceGB
 
-	// OllamaMinContextTokens is the smallest window the tuning ever
-	// exports — the pinned engine's own default. Going below it would
-	// make hosts strictly worse than exporting nothing at all.
+	// OllamaMinContextTokens is the smallest window the deprecated
+	// continuous sizing (OllamaPlannedWindow) ever exports — the pinned
+	// engine's own default.
+	//
+	// Deprecated: the serve window is one of OllamaServedWindows' rungs
+	// since the 2026-08-08 rulings on waired-ai/waired#1067
+	// (waired-ai/waired-agent#587); rungs are already at or above the
+	// model's own window floor, so no separate minimum applies. Retained
+	// because proto is additive-only across published tags.
 	OllamaMinContextTokens = 32768
 )
 
@@ -122,12 +131,22 @@ func OllamaAcceleratorBudgetGB(h Host, weightGB float64) float64 {
 	return mibToGB(mib)
 }
 
-// OllamaSystemRAMBudgetGB is the same quantity for weights read out of
-// system RAM: total RAM less the headroom the OS and the agent need.
-// 0 when RAM is unknown or smaller than the headroom.
+// OllamaSystemRAMBudgetGB is the raw system-RAM pool available to hold
+// weights and KV: total RAM less the OS deduction — the same
+// Host.OSMemoryDeductionGB the capacity gate's TotalMemoryMB charges, so
+// the two questions stop deducting different amounts for the same
+// operating system (the 2 GB-gate / 4 GB-sizing asymmetry dissolved by
+// the 2026-08-08 owner rulings on waired-ai/waired#1067). 0 when RAM is
+// unknown or smaller than the deduction.
+//
+// It does NOT reserve the engine's own overhead; a caller pairing it
+// with MaxContextTokens must subtract that reservation itself, exactly
+// as OllamaAcceleratorBudgetGB does on the accelerator side —
+// OllamaSizingBudgetGB is the entry point that keeps the two legs
+// symmetric.
 func OllamaSystemRAMBudgetGB(h Host) float64 {
-	if h.RAMTotalGB > OllamaCPUOnlyRAMHeadroomGB {
-		return float64(h.RAMTotalGB - OllamaCPUOnlyRAMHeadroomGB)
+	if ded := h.OSMemoryDeductionGB(); h.RAMTotalGB > ded {
+		return float64(h.RAMTotalGB - ded)
 	}
 	return 0
 }
@@ -136,6 +155,14 @@ func OllamaSystemRAMBudgetGB(h Host) float64 {
 // weights and KV in: GPU-addressable memory where there is any, system
 // RAM otherwise. It is the one budget the tuner and every window
 // question share, so a host cannot be sized one way and judged another.
+//
+// Both legs subtract the engine's own overhead (OllamaVRAMOverheadMB —
+// the same reservation the capacity gate charges through
+// OllamaWeightsResidentMB), so MaxContextTokens sees weights RAW on
+// either leg. The RAM leg used not to: its overhead allowance was baked
+// into the doubled OllamaCPUOnlyRAMHeadroomGB constant, which the
+// 2026-08-08 waired-ai/waired#1067 rulings replaced with the measured OS
+// deduction — leaving the reservation to be charged explicitly here.
 //
 // The fall-through is on whether the host HAS GPU-addressable memory,
 // not on whether any was left after overhead. A unified host whose
@@ -147,7 +174,11 @@ func OllamaSizingBudgetGB(h Host, weightGB float64) float64 {
 	if h.OllamaVRAMBudgetMB() > 0 {
 		return OllamaAcceleratorBudgetGB(h, weightGB)
 	}
-	return OllamaSystemRAMBudgetGB(h)
+	ram := OllamaSystemRAMBudgetGB(h) - mibToGB(OllamaVRAMOverheadMB(h.UnifiedMemory, weightGB))
+	if ram <= 0 {
+		return 0
+	}
+	return ram
 }
 
 // OllamaEffectiveContextFloor is the window the sizing aims for: the
@@ -244,6 +275,12 @@ func OllamaExpectedSpillFraction(v catalog.Variant, h Host, kvFactor float64, ct
 // spill stays at or under maxExpected. 0 when the inputs are unknown or
 // when even a zero-token window would exceed the bound — the weights
 // alone already spill too far.
+//
+// Deprecated: only the frozen continuous sizing (OllamaPlannedWindow)
+// still calls it. Since the 2026-08-08 waired-ai/waired#1067 rulings the
+// serve window is a rung of OllamaServedWindows, never a window solved
+// back from a spill bound (waired-ai/waired-agent#587). Retained because
+// proto is additive-only across published tags.
 func OllamaMaxContextAtSpill(v catalog.Variant, h Host, kvFactor, maxExpected float64) int {
 	eff := h.OllamaVRAMBudgetMB()
 	if v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 || kvFactor <= 0 ||
@@ -263,9 +300,10 @@ func OllamaMaxContextAtSpill(v catalog.Variant, h Host, kvFactor, maxExpected fl
 	return int(tokens/1024) * 1024
 }
 
-// OllamaWindowPlan is what the sizing decided, and enough of how it got
-// there for the tuner to word the user-visible consequence without
-// re-deriving anything.
+// OllamaWindowPlan is what the deprecated continuous sizing
+// (OllamaPlannedWindow) decided. New callers read OllamaRungPlan; this
+// type stays undeprecated only so tooling that enumerates it (the
+// protoconsumer exemption table) lints clean.
 type OllamaWindowPlan struct {
 	// ContextLength is the window to export. 0 means the inputs were
 	// unknown and nothing may be exported or declared.
@@ -291,12 +329,21 @@ type OllamaWindowPlan struct {
 	ExpectedSpillFraction float64
 }
 
-// OllamaPlannedWindow is the window this host would actually serve
-// (m, v) at, and the spill that costs. It is the single implementation
-// of that arithmetic: the serve tuning exports what it returns, and
-// OllamaDeclaresWindow — and through it the recommendation shown by both
-// the agent's picker and the control plane's wizard — asks it whether
-// the coding window is reachable here.
+// OllamaPlannedWindow is the window the pre-rung sizing would serve
+// (m, v) at, and the spill that costs.
+//
+// Deprecated: the serve tuning and OllamaDeclaresWindow moved to
+// OllamaPlannedRung under the 2026-08-08 owner rulings on
+// waired-ai/waired#1067 — the engine is started at a rung of
+// OllamaServedWindows, never at a continuously shrunk window between
+// them (waired-ai/waired-agent#587). Nothing in production calls this;
+// it stays because proto is additive-only across published tags. It is
+// NOT byte-frozen: it reads the shared budgets, which now charge the
+// measured OS deduction, so its outputs shift with them.
+//
+// Its three rules survive inside OllamaPlannedRung as the per-rung
+// reachability test; the rule documentation below is kept because it is
+// still the ratified reasoning for those rules.
 //
 // kvFactor is the cache format the tuning will export. Callers that only
 // want to know whether the window is reachable may pass
@@ -439,9 +486,130 @@ func OllamaPlannedWindow(m catalog.Manifest, v catalog.Variant, h Host, kvFactor
 	return plan
 }
 
+// OllamaRungPlan is which rung of OllamaServedWindows this host serves
+// (m, v) at, and enough of how it got there for the tuner to word the
+// user-visible consequence without re-deriving anything.
+type OllamaRungPlan struct {
+	// ContextLength is the rung to export. 0 means the inputs were
+	// unknown — an unannotated variant or a machine reporting no memory
+	// at all — and nothing may be exported or declared.
+	ContextLength int
+
+	// Fits is true when ContextLength is a rung the per-rung
+	// reachability rules passed: this host holds it outright, or reaches
+	// it under the bounded-spill / card-never-shrinks rules. False means
+	// no rung passed and ContextLength is the ladder's lowest rung
+	// anyway — serving a window between the rungs is not a smaller
+	// version of the product, so the host that cannot prove any rung is
+	// still started at the lowest one (2026-08-08 owner rulings on
+	// waired-ai/waired#1067; waired-ai/waired-agent#587). A false plan is
+	// served but never DECLARED: OllamaDeclaresWindow reads it as no.
+	Fits bool
+
+	// NoSpillCapacityTokens is how many tokens of KV cache the sizing
+	// budget holds outright, alongside the weights. Dividing the rung
+	// into it says how many full-window request slots the budget
+	// affords; it is deliberately not capped at the model's own window
+	// (see OllamaWindowPlan's field of the same name).
+	NoSpillCapacityTokens int
+
+	// ExpectedSpillFraction is the /api/ps spill predicted at
+	// ContextLength — 0 when the rung is held outright or the host has
+	// no accelerator to overflow. It must be reported honestly on every
+	// branch: the verify pass widens its tolerance to twice this figure
+	// before it calls a load degraded, so under-reporting it makes the
+	// engine restart into a lower rung the plan did not ask for.
+	ExpectedSpillFraction float64
+}
+
+// OllamaPlannedRung is the window this host actually serves (m, v) at:
+// the highest rung of OllamaServedWindows the reachability rules pass,
+// or the ladder's lowest rung — reported with Fits=false — when none
+// passes. It is the single implementation of that arithmetic: the serve
+// tuning exports what it returns, and OllamaDeclaresWindow — and through
+// it the recommendation shown by both the agent's picker and the control
+// plane's wizard — asks it whether the coding window is reachable here.
+//
+// kvFactor is the cache format the tuning will export (see
+// OllamaPlannedWindow's doc for why q8_0 is a safe default for callers
+// that only ask reachability).
+//
+// ceiling, when > 0, drops every rung above it from the ladder. It is
+// the verify pass's seam: after a load at one rung measured unreliable,
+// the recompute is capped so it can only step down, never back up. 0
+// considers the full ladder.
+//
+// A rung R is reachable by the same three rules the continuous sizing
+// applied, evaluated at R instead of maximized (their reasoning is
+// documented on OllamaPlannedWindow):
+//
+//  1. What fits GPU-addressable memory outright — or system RAM, on a
+//     host with none (OllamaSizingBudgetGB).
+//  2. On discrete GPUs only, by deliberately spilling, bounded by
+//     OllamaMaxExpectedSpillFraction, up to the model's effective floor.
+//  3. On discrete GPUs only, whatever the same machine would reach with
+//     the accelerator REMOVED — up to the effective floor, so fitting a
+//     card never shrinks the window (waired-ai/waired#1056).
+//
+// What no rule does any more is pick a window BETWEEN the rungs: a
+// window the mesh cannot route on and a coding agent cannot work in is
+// not a smaller version of the product, so sub-rung shrinking is retired
+// entirely — the host that cannot prove any rung serves the lowest one,
+// slowly and with the cost reported, instead of a quietly trimmed window
+// (2026-08-08 owner rulings on waired-ai/waired#1067, superseding the
+// intentional-spill selection; waired-ai/waired-agent#587).
+func OllamaPlannedRung(m catalog.Manifest, v catalog.Variant, h Host, kvFactor float64, ceiling int) OllamaRungPlan {
+	rungs := OllamaServedWindows(m)
+	budgetGB := OllamaSizingBudgetGB(h, v.EstimatedWeightGB)
+	ramGB := OllamaSystemRAMBudgetGB(h)
+	if len(rungs) == 0 || v.EstimatedWeightGB <= 0 || v.KVBytesPerTokenFP16 <= 0 || (budgetGB <= 0 && ramGB <= 0) {
+		return OllamaRungPlan{}
+	}
+	if ceiling > 0 {
+		for len(rungs) > 1 && rungs[0] > ceiling {
+			rungs = rungs[1:]
+		}
+	}
+	maxCtx := MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, budgetGB)
+
+	discrete := h.Class() == ClassDiscrete
+	floorCtx := OllamaEffectiveContextFloor(m)
+	reachable := func(rung int) bool {
+		if maxCtx >= rung {
+			return true
+		}
+		if !discrete || rung > floorCtx {
+			return false
+		}
+		// Rule 2 — bounded intentional spill toward the floor.
+		if e := OllamaExpectedSpillFraction(v, h, kvFactor, rung); e > 0 && e <= OllamaMaxExpectedSpillFraction {
+			return true
+		}
+		// Rule 3 — the accelerator may not make the window smaller. The
+		// card-less machine sizes from system RAM, less the same engine
+		// reservation the card-less sizing budget would subtract.
+		cardless := ramGB - mibToGB(OllamaVRAMOverheadMB(false, v.EstimatedWeightGB))
+		return MaxContextTokens(v.EstimatedWeightGB, v.KVBytesPerTokenFP16, kvFactor, cardless) >= rung
+	}
+
+	plan := OllamaRungPlan{NoSpillCapacityTokens: maxCtx}
+	for _, rung := range rungs {
+		if reachable(rung) {
+			plan.ContextLength = rung
+			plan.Fits = true
+			break
+		}
+	}
+	if !plan.Fits {
+		plan.ContextLength = rungs[len(rungs)-1]
+	}
+	plan.ExpectedSpillFraction = OllamaExpectedSpillFraction(v, h, kvFactor, plan.ContextLength)
+	return plan
+}
+
 // OllamaDeclaresWindow reports whether this host would actually serve
-// (m, v) at window — the model's own window reaches it AND the sizing
-// above lands there.
+// (m, v) at window — the model's own window reaches it AND the rung plan
+// above reaches it within the reachability rules.
 //
 // It is the predicate "recommended" is defined as at window =
 // ServingWindow200k, and it is deliberately the same function the serve
@@ -454,20 +622,21 @@ func OllamaDeclaresWindow(m catalog.Manifest, v catalog.Variant, h Host, window 
 	if DeclarableNativeWindow(m) < window {
 		return false
 	}
-	plan := OllamaPlannedWindow(m, v, h, OllamaKVFactorQ8_0, true)
-	// A window of 0 means the sizing could not be proved — an unannotated
-	// variant, or a host whose accelerator budget the engine overhead
-	// consumes entirely. Every OTHER rule in this package is permissive
-	// there, and this one is deliberately not.
+	plan := OllamaPlannedRung(m, v, h, OllamaKVFactorQ8_0, 0)
+	// Fits=false means the sizing could not be proved — an unannotated
+	// variant, a host whose accelerator budget the engine overhead
+	// consumes entirely, or a lowest rung the host was given anyway
+	// because sub-rung windows are not served. Every OTHER rule in this
+	// package is permissive there, and this one is deliberately not.
 	//
 	// The asymmetry is the difference between refusing and promising.
 	// Being permissive about a refusal costs a user nothing: the model is
 	// offered and either works or does not. Being permissive about a
-	// DECLARATION publishes a window this node never loaded — the tuner
-	// exports nothing in that case and the engine keeps its own 32k
-	// default — and a requester routes a 200k session to it. That is the
-	// failure waired-ai/waired#1031's window contract exists to remove.
-	return plan.ContextLength >= window
+	// DECLARATION publishes a window this node cannot hold — the engine
+	// is serving it out of memory it does not have — and a requester
+	// routes a 200k session to it. That is the failure
+	// waired-ai/waired#1031's window contract exists to remove.
+	return plan.Fits && plan.ContextLength >= window
 }
 
 // OllamaRecommendModel decides whether (m, v) is what this host should be

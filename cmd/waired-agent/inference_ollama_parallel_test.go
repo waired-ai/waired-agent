@@ -39,7 +39,7 @@ func TestComputeOllamaTuning_OperatorOverride(t *testing.T) {
 	v.EstimatedWeightGB = 21.5
 
 	t.Run("auto-reports-recommendation", func(t *testing.T) {
-		got := computeOllamaTuningOpts(m, v, discrete24GB(), "q8_0", true, 0)
+		got := computeOllamaTuningOpts(m, v, discrete24GB(), "q8_0", 0, 0)
 		if got.NumParallel != 1 {
 			t.Errorf("NumParallel = %d, want auto 1", got.NumParallel)
 		}
@@ -52,7 +52,7 @@ func TestComputeOllamaTuning_OperatorOverride(t *testing.T) {
 	})
 
 	t.Run("override-at-recommendation-no-warning", func(t *testing.T) {
-		got := computeOllamaTuningOpts(m, v, discrete24GB(), "q8_0", true, 1)
+		got := computeOllamaTuningOpts(m, v, discrete24GB(), "q8_0", 0, 1)
 		if got.NumParallel != 1 {
 			t.Errorf("NumParallel = %d, want 1", got.NumParallel)
 		}
@@ -62,7 +62,7 @@ func TestComputeOllamaTuning_OperatorOverride(t *testing.T) {
 	})
 
 	t.Run("override-above-recommendation-honored-and-warns", func(t *testing.T) {
-		got := computeOllamaTuningOpts(m, v, discrete24GB(), "q8_0", true, 8)
+		got := computeOllamaTuningOpts(m, v, discrete24GB(), "q8_0", 0, 8)
 		if got.NumParallel != 8 {
 			t.Errorf("NumParallel = %d, want the operator override 8", got.NumParallel)
 		}
@@ -80,7 +80,7 @@ func TestComputeOllamaTuning_OperatorOverride(t *testing.T) {
 	// makes this a proof rather than a coincidence.
 	t.Run("auto-cpu-host-keeps-parallelism", func(t *testing.T) {
 		tm := tinyCoderManifest()
-		got := computeOllamaTuningOpts(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, true, 0)
+		got := computeOllamaTuningOpts(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, 0, 0)
 		if got.KVCacheType != "f16" {
 			t.Fatalf("precondition: KVCacheType = %q, want f16", got.KVCacheType)
 		}
@@ -89,7 +89,7 @@ func TestComputeOllamaTuning_OperatorOverride(t *testing.T) {
 		}
 		// The operator override still wins, and still warns above the
 		// recommendation.
-		over := computeOllamaTuningOpts(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, true, 8)
+		over := computeOllamaTuningOpts(tm, tm.Variants[0], ciRunner16GB(), ollamaKVAuto, 0, 8)
 		if over.NumParallel != 8 {
 			t.Errorf("NumParallel = %d, want the operator override 8", over.NumParallel)
 		}
@@ -99,7 +99,7 @@ func TestComputeOllamaTuning_OperatorOverride(t *testing.T) {
 		// The 22 GB variant spills to the coding floor (recommended = 1). The
 		// override is still honored, with the concurrency warning joined onto the
 		// existing spill warning.
-		got := computeOllamaTuningOpts(m, m.Variants[0], discrete24GB(), "q8_0", true, 4)
+		got := computeOllamaTuningOpts(m, m.Variants[0], discrete24GB(), "q8_0", 0, 4)
 		if got.NumParallel != 4 {
 			t.Errorf("NumParallel = %d, want 4", got.NumParallel)
 		}

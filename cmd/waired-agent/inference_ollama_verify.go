@@ -22,6 +22,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/platform/proclist"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // tuningVerdict classifies one post-load /api/ps inspection.
@@ -351,10 +352,16 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		record(t, true, joinTuningWarn(t.Warning, detail))
 		return
 	case next.ContextLength == t.ContextLength && next.KVCacheType == t.KVCacheType:
-		// The recompute changed nothing (already at the floor): a
-		// restart would land in the same place, so warn and keep going.
+		// The recompute changed nothing (already at the ladder's lowest
+		// rung): a restart would land in the same place, so the failure
+		// LATCHES — the engine keeps serving the rung for this machine's
+		// own use, the warning records it, and WindowFits drops so a
+		// window that measured unreliable is no longer declared to the
+		// mesh (waired-agent#587; waired-ai/waired#1031).
 		logger.Warn("ollama tuning degraded but no smaller sizing available", "detail", detail)
-		record(t, true, restartWarn)
+		latched := t
+		latched.WindowFits = false
+		record(latched, true, restartWarn)
 		return
 	}
 
@@ -387,78 +394,71 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 	case tuningInconclusive:
 		record(next, false, restartWarn)
 	default:
+		// Still degraded after the one restart: the same latch as the
+		// no-smaller-sizing path — keep serving, stop declaring.
 		logger.Warn("ollama tuning still degraded after one restart; leaving engine as-is",
 			"detail", detail2)
-		record(next, true, restartWarn+"; still degraded after restart: "+detail2)
+		latched := next
+		latched.WindowFits = false
+		record(latched, true, restartWarn+"; still degraded after restart: "+detail2)
 	}
 }
 
 // degradedTuning recomputes the sizing for a failed verification. For an
 // f16 fallback the whole budget is re-sized at the f16 factor (and the
 // exported KV type flips to f16 — explicit beats a knowingly-ignored
-// q8_0). For a spill the window shrinks by the observed overshoot plus a
-// 25% safety margin. The returned warning is the user-visible record of
-// what happened; callers compare the result against the current tuning
-// to detect a no-op (already at the floor).
+// q8_0), capped at the current rung so a degrade can only hold or step
+// down. For a spill the window steps down ONE RUNG of
+// hostfit.OllamaServedWindows; at the ladder's lowest rung there is
+// nothing to step to and the recompute is a no-op — the caller's
+// no-smaller-sizing path then records the warning and leaves the engine
+// serving the rung, which is the whole of what a degrade may do now that
+// sub-rung windows are not served (waired-agent#587). The returned
+// warning is the user-visible record of what happened; callers compare
+// the result against the current tuning to detect that no-op.
 func degradedTuning(t ollamaTuning, m catalog.Manifest, v catalog.Variant, hw hardware.Profile, verdict tuningVerdict, detail string) (ollamaTuning, string) {
 	switch verdict {
 	case tuningF16Fallback:
 		// operatorParallel=0: a degrade recompute drops any operator concurrency
 		// override back to the VRAM-safe auto value — the backstop that keeps an
 		// over-aggressive override from leaving the engine spilling/unloadable.
-		next := computeOllamaTuningOpts(m, v, hw, "f16", false, 0)
+		next := computeOllamaTuningOpts(m, v, hw, "f16", t.ContextLength, 0)
 		warn := fmt.Sprintf(
 			"this model runs its KV cache at f16 (q8_0 needs flash attention, which it doesn't support); context window sized accordingly at %d tokens",
 			next.ContextLength)
 		return next, warn
 	case tuningSpill:
+		below := rungBelow(m, t.ContextLength)
+		if below <= 0 {
+			// Already at the lowest rung: nothing to step down to.
+			if t.ExpectedSpillFraction > 0 {
+				return t, "model spills to system RAM beyond the planned bound even at the fallback window; inference will be slower (" + detail + ")"
+			}
+			return t, "model spills to system RAM even at the minimum context window on this host; inference will be slower (" + detail + ")"
+		}
+		next := computeOllamaTuningOpts(m, v, hw, t.KVCacheType, below, 0)
 		if t.ExpectedSpillFraction > 0 {
-			// The intentional spill overshot its bound: the prediction
-			// was wrong on this host, so fall back to the no-spill
-			// sizing rather than proportional shrinking around a number
-			// that just proved unreliable. The recompute never re-takes
-			// the intentional-spill branch (allowIntentionalSpill=false),
-			// so its ExpectedSpillFraction is 0 and the re-verify runs
-			// the strict 1% check.
-			next := computeOllamaTuningOpts(m, v, hw, t.KVCacheType, false, 0)
-			warn := fmt.Sprintf(
+			return next, fmt.Sprintf(
 				"measured spill exceeded the planned bound at a %d-token window; context window reduced to %d tokens to keep the model GPU-resident",
 				t.ContextLength, next.ContextLength)
-			if next.ContextLength == t.ContextLength {
-				warn = "model spills to system RAM beyond the planned bound even at the fallback window; inference will be slower (" + detail + ")"
-			}
-			return next, warn
 		}
-		next := t
-		next.ContextLength = spillShrunkContext(t, detail)
-		warn := fmt.Sprintf(
+		return next, fmt.Sprintf(
 			"model spilled to system RAM at a %d-token window; context window reduced to %d tokens to keep the model GPU-resident",
 			t.ContextLength, next.ContextLength)
-		if next.ContextLength == t.ContextLength {
-			warn = "model spills to system RAM even at the minimum context window on this host; inference will be slower (" + detail + ")"
-		}
-		return next, warn
 	default:
 		return t, ""
 	}
 }
 
-// spillOvershootBytes is set by verifyOllamaTuning via its detail — but
-// parsing prose is brittle, so the shrink instead recomputes from the
-// live /api/ps numbers captured in lastSpillBytes. To keep the flow
-// testable and free of hidden state, the overshoot is re-derived from
-// the sizing itself: shrink by 25% of the current window per pass,
-// floored at ollamaContextFloor and 1024-aligned. One restart means at
-// most one shrink, so a fixed proportional step is both simple and
-// sufficient — the re-verify records a warning if it still spills.
-func spillShrunkContext(t ollamaTuning, _ string) int {
-	shrunk := t.ContextLength * 3 / 4
-	shrunk = shrunk / 1024 * 1024
-	if shrunk < ollamaContextFloor {
-		shrunk = ollamaContextFloor
+// rungBelow returns the highest rung of hostfit.OllamaServedWindows(m)
+// strictly below ctx, or 0 when ctx already sits at (or below) the
+// ladder's lowest rung — the point where a spill degrade has nowhere
+// left to step and latches into a warning instead of a restart.
+func rungBelow(m catalog.Manifest, ctx int) int {
+	for _, rung := range hostfit.OllamaServedWindows(m) {
+		if rung < ctx {
+			return rung
+		}
 	}
-	if shrunk > t.ContextLength {
-		shrunk = t.ContextLength
-	}
-	return shrunk
+	return 0
 }

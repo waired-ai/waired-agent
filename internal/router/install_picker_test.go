@@ -158,7 +158,7 @@ func TestSelectInstallModel_ErrorsSurface(t *testing.T) {
 //
 // Two mechanisms keep it true, and both are needed:
 //
-//   - hostfit.OllamaPlannedWindow's rule 3 — a host's window is never
+//   - hostfit.OllamaPlannedRung's rule 3 — a host's window is never
 //     sized below what it would be with the accelerator removed. Without
 //     it, an 8 GB card shrinks the sizing budget from tens of GB of
 //     system RAM to 8 GB, the carded host declares a smaller window than

@@ -42,7 +42,7 @@ func TestDeclaredContextWindow(t *testing.T) {
 	}
 
 	t.Run("applied window at the 200k mode", func(t *testing.T) {
-		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 200704}, "big")
+		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 200704, WindowFits: true}, "big")
 		if got := p.DeclaredContextWindow(); got != 200704 {
 			t.Errorf("got %d, want 200704", got)
 		}
@@ -52,19 +52,32 @@ func TestDeclaredContextWindow(t *testing.T) {
 		// The mode is a floor to compare against, not a value to round to:
 		// a peer serving 262144 can take 200k traffic AND is worth knowing
 		// about for anything that wants more.
-		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 262144}, "big")
+		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 262144, WindowFits: true}, "big")
 		if got := p.DeclaredContextWindow(); got != 262144 {
 			t.Errorf("got %d, want 262144", got)
 		}
 	})
 
-	t.Run("a trimmed window declares nothing", func(t *testing.T) {
-		// The tuner trims for spill. Publishing the trimmed number would
-		// advertise a window nobody can route on; publishing the intended
-		// one would be a lie. Saying nothing is the only safe answer.
-		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 150000}, "big")
+	t.Run("a sub-200k window declares nothing", func(t *testing.T) {
+		// The tuner no longer trims for spill (waired-agent#587), so this
+		// is the safety net: were a sub-rung window ever applied again,
+		// publishing it would advertise a window nobody can route on, and
+		// publishing the intended one would be a lie. Saying nothing is
+		// the only safe answer.
+		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 150000, WindowFits: true}, "big")
 		if got := p.DeclaredContextWindow(); got != 0 {
 			t.Errorf("got %d, want 0 (below the smallest declarable window)", got)
+		}
+	})
+
+	t.Run("a forced rung declares nothing", func(t *testing.T) {
+		// The rung a host could not be shown to hold is SERVED for its
+		// own keyboard but never declared (waired-agent#587): WindowFits
+		// false is how the tuner and the verify pass's failure latch both
+		// say so, and the declaration reads it before the width.
+		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 200704, WindowFits: false}, "big")
+		if got := p.DeclaredContextWindow(); got != 0 {
+			t.Errorf("got %d, want 0 (the sizing never proved this window)", got)
 		}
 	})
 
@@ -93,14 +106,14 @@ func TestDeclaredContextWindow(t *testing.T) {
 		// A tuning above native is a misconfiguration, not a capability —
 		// and "small" cannot reach a declarable window at all, so capping
 		// first is what makes the answer 0 instead of 262144.
-		p := newProv(t, infruntime.ModelTuning{ModelID: "small", ContextLength: 262144}, "small")
+		p := newProv(t, infruntime.ModelTuning{ModelID: "small", ContextLength: 262144, WindowFits: true}, "small")
 		if got := p.DeclaredContextWindow(); got != 0 {
 			t.Errorf("got %d, want 0 (native window is 131072)", got)
 		}
 	})
 
 	t.Run("the 1M mode", func(t *testing.T) {
-		p := newProv(t, infruntime.ModelTuning{ModelID: "huge", ContextLength: hostfit.ServingWindow1M}, "huge")
+		p := newProv(t, infruntime.ModelTuning{ModelID: "huge", ContextLength: hostfit.ServingWindow1M, WindowFits: true}, "huge")
 		if got := p.DeclaredContextWindow(); got != hostfit.ServingWindow1M {
 			t.Errorf("got %d, want %d", got, hostfit.ServingWindow1M)
 		}
