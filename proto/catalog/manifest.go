@@ -350,6 +350,7 @@ func LookupByAlias(name string, manifests []Manifest) (Manifest, bool) {
 //   - param_count > 0 (Phase 7 router score input)
 //   - quantization_tier ∈ [1, 8] (Phase 7 router score input)
 //   - AWQ-quantized variants must source from the official Qwen/* org
+//   - context_length > 0
 func (m *Manifest) Validate() error {
 	if m.ModelID == "" {
 		return errors.New("manifest: model_id required")
@@ -424,6 +425,24 @@ func (m *Manifest) Validate() error {
 		if err := validateVendorSupport(m.ModelID, v); err != nil {
 			return err
 		}
+	}
+	// Last, matching the bullet order above, so a manifest with a
+	// structural fault still reports that fault rather than this one.
+	//
+	// A missing context_length is a silent opt-out rather than an obvious
+	// hole: hostfit.OllamaCeilingWindow returns 0 for it and
+	// OllamaPlannedWindow's cap is guarded on ceiling > 0, so a manifest
+	// that lost its window stops being capped and quietly reverts to
+	// pre-#552 sizing. Nothing reaches that today — every bundled entry
+	// has one, and MeetsNativeContextFloor needs >= 200000, so a
+	// zero-window model is unselectable anyway — but a PIN skips both,
+	// and a pin is the one input that arrives from outside.
+	//
+	// Found by a concurrent session while reviewing #552's capacity
+	// pricing; closed here because #522 is the change that touches these
+	// manifests.
+	if m.ContextLength <= 0 {
+		return fmt.Errorf("manifest %s: context_length must be > 0, got %d", m.ModelID, m.ContextLength)
 	}
 	return nil
 }

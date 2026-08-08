@@ -69,10 +69,13 @@ var hybridArchConfigs = map[string]ArchConfig{
 	// L=48, full=12, n_kv=2 → 24576. Header read from the registry blob
 	// (ranged GET) rather than a local pull — the artifact is 70 GB.
 	"qwen3.5-122b-a10b": {NumHiddenLayers: 48, HiddenSize: 3072, NumAttentionHeads: 32, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 256, NumExpertsPerTok: 8},
-	// Already pinned in archCases from the scoring report; the shipped
-	// manifest agrees, so it is listed here too rather than left as the
-	// one hybrid family with no manifest check.
-	"qwen3-coder-next-80b-a3b-instruct": {NumHiddenLayers: 48, HiddenSize: 2048, NumAttentionHeads: 16, NumKeyValueHeads: 2, HeadDim: 256, FullAttentionInterval: 4, NumExperts: 512, NumExpertsPerTok: 10},
+	// qwen3-coder-next-80b-a3b-instruct sat here until #522 retired the
+	// 2025 generation. Its row is gone because this map is checked against
+	// the SHIPPED manifests and a name the catalog no longer carries fails
+	// below — deliberately, so an annotation cannot outlive the model it
+	// annotates. The architecture itself is not lost: archCases still pins
+	// it from the scoring report, where it is evidence about a derivation
+	// rather than a claim about a shipped file.
 }
 
 // TestBundledHybridManifestsMatchTheDerivation is the check that was

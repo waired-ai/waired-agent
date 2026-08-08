@@ -138,15 +138,21 @@ func TestPickEngine_RequiresAModelTheEngineCanServe(t *testing.T) {
 
 // The shipped catalog today, so the diff that changes it is visible.
 //
-// This is a record of today's catalog, not a contract. The 8 GB and 16 GB
-// NVIDIA Linux rows pass only because qwen2.5-coder's awq-int4 variants sit
-// at 8000 and 16000 MB of VRAM — and waired-agent#522 retires that
-// generation. When it does, these two rows move to ollama and the retiring
-// PR must say so: the smallest remaining vLLM variant needs 24000 MB, so
-// every NVIDIA card between the vLLM threshold and 24 GB changes engine.
+// This is a record of today's catalog, not a contract — and #522 is the
+// diff it was written to catch. The 8 GB and 16 GB rows used to answer
+// vllm, because qwen2.5-coder's awq-int4 variants sat at 8000 and
+// 16000 MB of VRAM. Those retired with the rest of the 2025 generation,
+// and every vLLM variant under 24 GB went with them: the smallest one
+// left is qwen3.6-27b/awq-int4 at 24000 MB, the pinned generation's only
+// safetensors build.
 //
-// That is the whole reason this term landed first. Before it, the same
-// change would have taken local inference away from those hosts instead.
+// So every NVIDIA card between MinVLLMVRAMMB and 24 GB now serves on
+// ollama. That is a fallback, not coverage — #575 tracks adding vLLM
+// builds for the qwen3.5 line, and closing it moves these rows back.
+//
+// It is also the whole reason the catalog term landed in #572 first.
+// Without it these hosts would have lost local inference outright
+// instead of changing engine.
 func TestPickEngine_ShippedCatalog_TodaysVerdicts(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
@@ -157,8 +163,10 @@ func TestPickEngine_ShippedCatalog_TodaysVerdicts(t *testing.T) {
 		vramMB int
 		want   string
 	}{
-		{vramMB: 8192, want: catalog.RuntimeVLLM},
-		{vramMB: 16000, want: catalog.RuntimeVLLM},
+		// Below the smallest remaining vLLM build (24000 MB).
+		{vramMB: 8192, want: catalog.RuntimeOllama},
+		{vramMB: 16000, want: catalog.RuntimeOllama},
+		// At and above it.
 		{vramMB: 24576, want: catalog.RuntimeVLLM},
 		{vramMB: 81920, want: catalog.RuntimeVLLM},
 	}

@@ -149,10 +149,17 @@ func TestOllamaWindowResidentMB_IsNotTheFitReserve(t *testing.T) {
 	}
 }
 
-// TestOllamaWindowResidentMB_AnchorHostServesTheFloor is the concrete
-// claim the 200k window rests on: the smallest catalog variant above
-// the install quality floor holds a full 200k KV cache on a small
-// laptop GPU, so declaring the window is not a datacenter-only ability.
+// TestOllamaWindowResidentMB_SmallHostCanDeclare200k is the concrete
+// claim the 200k window rests on: a shipped catalog variant holds a
+// full 200k KV cache on a small laptop GPU, so declaring the window is
+// not a datacenter-only ability.
+//
+// It used to say "the smallest variant ABOVE THE INSTALL QUALITY FLOOR",
+// and filtered on that tier. #522 abolished the floor, and the filter
+// went with it — leaving the claim stronger rather than weaker, since it
+// no longer depends on a threshold to be true. The variant that wins is
+// unchanged either way: qwen3.5-4b at tier 42, which cleared the old
+// floor of 30 comfortably.
 //
 // Deliberately reads the shipped manifest rather than a fixture — the
 // claim is about the catalog we actually ship.
@@ -170,9 +177,6 @@ func TestOllamaWindowResidentMB_SmallHostCanDeclare200k(t *testing.T) {
 			continue
 		}
 		for _, v := range m.Variants {
-			if v.QualityTier < hostfit.InstallQualityFloorTier {
-				continue
-			}
 			need := hostfit.OllamaWindowResidentMB(v, hostfit.ServingWindow200k, false)
 			if need <= 0 || need > budgetMB {
 				continue
@@ -183,8 +187,8 @@ func TestOllamaWindowResidentMB_SmallHostCanDeclare200k(t *testing.T) {
 		}
 	}
 	if bestModel == "" {
-		t.Fatalf("no shipped variant above the install quality floor holds a 200k window "+
-			"in %d MiB; the contract would take local inference away from small hosts", budgetMB)
+		t.Fatalf("no shipped variant holds a 200k window in %d MiB; the contract "+
+			"would take local inference away from small hosts", budgetMB)
 	}
 	t.Logf("8 GB card declares 200k with %s/%s (tier %d, %d MiB)",
 		bestModel, best.VariantID, best.QualityTier,

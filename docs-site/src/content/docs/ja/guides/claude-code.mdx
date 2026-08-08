@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: ea8a0adf1a3d4148
+sourceHash: 75e0d2e281e8faff
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -156,7 +156,7 @@ Claude Code を接続したあとに表示され、一度 Claude Code を再起�
 （→ [長い Claude Code のセッションが要約される](/ja/troubleshooting/#long-claude-code-sessions-get-summarized)）。
 
 **モデルによっては保持できる量がかなり少なくなります。** カタログの一部 —
-`gpt-oss` の 2 本と `glm-4.5-air` — は 200,000 ではなく 131,000 トークン程度が
+`gpt-oss` の 2 本 — は 200,000 ではなく 131,000 トークン程度が
 上限です。Waired がこれらを自動で選ぶことはなく、モデル一覧でもその旨を示しますが、
 選ぶこと自体は可能です。選んだ場合、Claude Code は想定より早く上限に達します。
 要約して継続するので止まりはしませんが、限界まで詰めてからの要約は、早めの要約より

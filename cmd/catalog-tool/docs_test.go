@@ -32,8 +32,8 @@ func TestRenderCatalogBlock_Deterministic(t *testing.T) {
 		t.Fatal("renderCatalogBlock is not deterministic")
 	}
 	for _, want := range []string{
-		"qwen2.5-coder-7b-instruct", // a known bundled model
-		"waired/default",            // the renamed default alias (#422/#478)
+		"qwen3.6-27b",    // a known bundled model
+		"waired/default", // the renamed default alias (#422/#478)
 		"### エイリアス",
 		"### ファミリ概要",
 		"### 全バリアント（数値）",
@@ -41,8 +41,8 @@ func TestRenderCatalogBlock_Deterministic(t *testing.T) {
 		"#### vLLM で動かす場合（NVIDIA / AMD GPU サーバ）",
 		"**Dense**",
 		"**MoE（総 / アクティブ）**",
-		"glm-4.5-air-106b-a12b", // a vLLM-only family
-		"qwen3.5-9b",            // an Ollama-only family
+		"deepseek-v4-flash", // a vLLM-only family
+		"qwen3.5-9b",        // an Ollama-only family
 	} {
 		if !strings.Contains(a, want) {
 			t.Errorf("generated block missing %q", want)
@@ -71,15 +71,22 @@ func TestRenderCatalogBlock_EngineArchSplit(t *testing.T) {
 	}
 	// A vLLM-only family must not leak into the Ollama section, and must appear
 	// under vLLM.
-	if strings.Contains(ollama, "glm-4.5-air-106b-a12b") {
-		t.Error("vLLM-only glm-4.5-air leaked into the Ollama family section")
+	//
+	// The exemplars moved with #522: glm-4.5-air was the vLLM-only family
+	// and qwen2.5-coder-7b the dual-engine one, and both retired with the
+	// 2025 generation. deepseek-v4-flash takes the first role. The second
+	// is now down to ONE candidate — qwen3.6-27b is the pinned
+	// generation's only safetensors build, so it is the only family that
+	// appears under both engines. #575 tracks widening that back out.
+	if strings.Contains(ollama, "deepseek-v4-flash") {
+		t.Error("vLLM-only deepseek-v4-flash leaked into the Ollama family section")
 	}
-	if !strings.Contains(vllm, "glm-4.5-air-106b-a12b") {
-		t.Error("vLLM-only glm-4.5-air missing from the vLLM family section")
+	if !strings.Contains(vllm, "deepseek-v4-flash") {
+		t.Error("vLLM-only deepseek-v4-flash missing from the vLLM family section")
 	}
 	// A dual-engine family appears under both engines.
-	if !strings.Contains(ollama, "qwen2.5-coder-7b-instruct") || !strings.Contains(vllm, "qwen2.5-coder-7b-instruct") {
-		t.Error("dual-engine qwen2.5-coder-7b-instruct should appear under both engines")
+	if !strings.Contains(ollama, "qwen3.6-27b") || !strings.Contains(vllm, "qwen3.6-27b") {
+		t.Error("dual-engine qwen3.6-27b should appear under both engines")
 	}
 }
 

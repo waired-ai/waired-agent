@@ -101,14 +101,30 @@ func runRadar(args []string) error {
 	return printJSON(radarOutput{Orgs: orgList, SinceDays: *sinceDays, Candidates: cands})
 }
 
-// knownCatalogRepos collects the repo_ids / HF-style aliases already present in
-// the bundled catalog (lower-cased) so the radar never re-proposes them.
+// knownCatalogRepos collects the repo_ids / HF-style aliases the radar must
+// never propose (lower-cased): everything the bundled catalog ships, plus
+// everything it has deliberately retired.
+//
+// The retired half is not defensive. A retirement deletes the manifest, so
+// without it the weekly radar re-discovers exactly the models we just decided
+// to stop carrying and files them as fresh candidates — #522 retired seven at
+// once and the radar's own test caught all of them coming back. The retirement
+// table is the only place those names survive, which makes it the only thing
+// that can answer "we have seen this and said no".
+//
+// A future re-adoption is still possible; it just has to go through the table
+// rather than arrive as a surprise from a scheduled job.
 func knownCatalogRepos() (map[string]bool, error) {
 	ms, err := catalog.BundledManifests()
 	if err != nil {
 		return nil, fmt.Errorf("radar: load bundled catalog: %w", err)
 	}
 	known := map[string]bool{}
+	for _, r := range catalog.Retirements() {
+		for _, n := range r.Names {
+			known[strings.ToLower(n)] = true
+		}
+	}
 	for _, m := range ms {
 		known[strings.ToLower(m.ModelID)] = true
 		for _, a := range m.ModelAliases {

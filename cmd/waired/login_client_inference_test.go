@@ -118,7 +118,7 @@ func runViaDaemonGuarded(t *testing.T, url string) string {
 	return out
 }
 
-const bundledModel = "qwen2.5-coder-7b-instruct"
+const bundledModel = "qwen3.5-9b"
 
 func downloadingStatus(completed, total int64) management.InferenceStatus {
 	return management.InferenceStatus{
@@ -202,7 +202,7 @@ func TestRunInitViaDaemon_DisabledInferenceDoesNotBlock(t *testing.T) {
 func TestRunInitViaDaemon_ReportsTheWizardsModel(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
 	shrinkSetupTimers(t)
-	const chosen = "qwen2.5-coder-14b-instruct" // what the wizard asked for
+	const chosen = "qwen3.6-27b" // what the wizard asked for
 
 	// A live wizard whose engine is already in place, so nothing here tries
 	// to install one.

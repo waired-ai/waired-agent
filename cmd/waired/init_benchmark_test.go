@@ -524,7 +524,7 @@ func TestPromptBenchmark_PersistentNoEngineSkipsAfterGrace(t *testing.T) {
 // so the display resolves labels and quality tiers (waired#773).
 func realRec() *management.BenchmarkRecommendation {
 	return &management.BenchmarkRecommendation{
-		FromModelID: "qwen3-coder-30b-a3b-instruct", FromVariantID: "q4-gguf",
+		FromModelID: "qwen3.6-35b-a3b", FromVariantID: "q4-gguf",
 		ToModelID: "qwen3.6-27b", ToVariantID: "q4-gguf",
 		MeasuredTokps: 43, FloorTokps: 100,
 	}
@@ -549,8 +549,8 @@ func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 	}
 	got := out.String()
 	for _, want := range []string{
-		"Qwen3 Coder 30B-A3B Instruct measured 43 tok/s",
-		"Recommend switching Qwen3 Coder 30B-A3B Instruct → Qwen3.6 27B",
+		"Qwen3.6 35B-A3B measured 43 tok/s",
+		"Recommend switching Qwen3.6 35B-A3B → Qwen3.6 27B",
 		// The direction, which the numbers used to carry.
 		"the lighter model should run more smoothly",
 	} {
@@ -558,7 +558,7 @@ func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 			t.Errorf("output missing %q; got:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "quality 65") || strings.Contains(got, "quality 70") {
+	if strings.Contains(got, "quality 89") || strings.Contains(got, "quality 70") {
 		t.Errorf("output still prints a quality figure (#537); got:\n%s", got)
 	}
 }
@@ -567,7 +567,7 @@ func TestPromptBenchmark_NamesFromTo(t *testing.T) {
 // from /inference/status Active (the benchmark response carries no model id).
 func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
 	stub := &benchStub{ready: true, measured: 120,
-		active: &management.ActiveSelection{ModelID: "qwen3-coder-30b-a3b-instruct", VariantID: "q4-gguf"}}
+		active: &management.ActiveSelection{ModelID: "qwen3.6-35b-a3b", VariantID: "q4-gguf"}}
 	srv := stub.server()
 	defer srv.Close()
 
@@ -575,7 +575,7 @@ func TestPromptBenchmark_WorksLineNamesActiveModel(t *testing.T) {
 	if err := promptBenchmarkRecommendation(srv.URL, false, &out, bufio.NewScanner(strings.NewReader("")), false); err != nil {
 		t.Fatalf("prompt: %v", err)
 	}
-	want := "Local inference works — Qwen3 Coder 30B-A3B Instruct measured 120 tok/s"
+	want := "Local inference works — Qwen3.6 35B-A3B measured 120 tok/s"
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("output missing %q; got:\n%s", want, out.String())
 	}

@@ -62,17 +62,13 @@ const (
 // than the pre-#410 behaviour of passing it through as text, and the
 // gateway's own recovery (#409) can still rescue the untouched text.
 var vllmToolParserByModelID = map[string]string{
-	// docs §"Qwen Models": Qwen2.5's tokenizer_config.json ships the
-	// Hermes-style tool template, listed as `Qwen/Qwen2.5-*`.
-	"qwen2.5-coder-3b-instruct":  vllmParserHermes,
-	"qwen2.5-coder-7b-instruct":  vllmParserHermes,
-	"qwen2.5-coder-14b-instruct": vllmParserHermes,
-
-	// docs §"Qwen3-Coder Models (`qwen3_xml`)", which lists both repos
-	// by name.
-	"qwen3-coder-30b-a3b-instruct":   vllmParserQwen3XML, // Qwen/Qwen3-Coder-30B-A3B-Instruct
-	"qwen3-coder-480b-a35b-instruct": vllmParserQwen3XML, // Qwen/Qwen3-Coder-480B-A35B-Instruct
-
+	// The qwen2.5-coder (hermes) and qwen3-coder (qwen3_xml) rows lived
+	// here until #522 retired the 2025 generation, along with the
+	// glm-4.5-air (glm45) row below. They are deleted rather than left in
+	// place: TestResolveVLLMToolParser_bundledCatalogCovered iterates the
+	// MANIFESTS, not this map, so an entry for a model the catalog no
+	// longer ships is invisible to it — dead code that reads as coverage.
+	//
 	// Not in the vLLM docs table, but the dialect is measured rather
 	// than assumed: #409 recorded the Qwen3.5/3.6 lineage emitting the
 	// same <function=…> XML (and ollama's strict encoding/xml parser
@@ -82,9 +78,6 @@ var vllmToolParserByModelID = map[string]string{
 	// docs §"OpenAI OSS Models (`openai`)", both repos listed by name.
 	"gpt-oss-20b":  vllmParserOpenAI, // openai/gpt-oss-20b
 	"gpt-oss-120b": vllmParserOpenAI, // openai/gpt-oss-120b
-
-	// docs §"GLM-4.5 Models (`glm45`)", which lists zai-org/GLM-4.5-Air.
-	"glm-4.5-air-106b-a12b": vllmParserGLM45, // zai-org/GLM-4.5-Air
 
 	// No docs section, but vLLM registers `deepseek_v4` and its
 	// DeepSeekV4ToolParser is documented in-source as "DeepSeek V4 DSML

@@ -591,24 +591,25 @@ func TestBundledManifests_HFAliasesResolve(t *testing.T) {
 		// waired/tiny, belongs to an internal_only entry and so is
 		// absent from BundledManifests by construction.
 		// HF-style aliases (Phase 5 OpenAI-compat reverse lookup).
-		{"Qwen/Qwen2.5-Coder-7B-Instruct", "qwen2.5-coder-7b-instruct"},
-		{"Qwen/Qwen3-Coder-30B-A3B-Instruct", "qwen3-coder-30b-a3b-instruct"},
+		//
+		// The qwen2.5-coder, qwen3-coder and GLM-4.5-Air rows left with
+		// #522. They resolve through catalog.LookupRetirement now rather
+		// than here, which is a different promise: an operator who pasted
+		// one is redirected to the successor and told so, instead of
+		// getting a hit on a model we still ship.
+		// TestLookupRetirement pins that half.
 		{"openai/gpt-oss-20b", "gpt-oss-20b"},
 		{"openai/gpt-oss-120b", "gpt-oss-120b"},
-		{"zai-org/GLM-4.5-Air", "glm-4.5-air-106b-a12b"},
+		{"Qwen/Qwen3.6-35B-A3B", "qwen3.6-35b-a3b"},
+		{"Qwen/Qwen3.5-9B", "qwen3.5-9b"},
 		// Short-form aliases operators commonly paste.
-		{"qwen2.5-coder-3b", "qwen2.5-coder-3b-instruct"},
-		{"qwen2.5-coder-7b", "qwen2.5-coder-7b-instruct"},
-		{"qwen2.5-coder-14b", "qwen2.5-coder-14b-instruct"},
-		{"qwen3-coder-30b-a3b", "qwen3-coder-30b-a3b-instruct"},
-		{"qwen3-coder-next-80b-a3b", "qwen3-coder-next-80b-a3b-instruct"},
-		{"qwen3-coder-480b-a35b", "qwen3-coder-480b-a35b-instruct"},
 		{"qwen3.6-27b", "qwen3.6-27b"},
 		{"qwen3.6-35b-a3b", "qwen3.6-35b-a3b"},
-		{"Qwen/Qwen3.6-35B-A3B", "qwen3.6-35b-a3b"},
+		{"qwen3.5-9b", "qwen3.5-9b"},
+		{"qwen3.5-35b-a3b", "qwen3.5-35b-a3b"},
 		{"gpt-oss-20b", "gpt-oss-20b"},
 		{"gpt-oss-120b", "gpt-oss-120b"},
-		{"glm-4.5-air", "glm-4.5-air-106b-a12b"},
+		{"glm-5.2", "glm-5.2"},
 	}
 	for _, c := range cases {
 		got, ok := LookupByAlias(c.alias, ms)
