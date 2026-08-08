@@ -1155,12 +1155,24 @@ type agentInferenceProvider struct {
 	disableInference func() error
 	inferenceState   func() (current, desired state.InferenceState)
 
-	// hostSpeedMu guards hostSpeed and serialises the measurement itself
-	// (#496). Both install paths that take it run in their own goroutine
-	// and the probe is a minutes-long engine-bound job, so two running at
-	// once would measure each other's contention. Holding the lock across
-	// the whole measurement is the point rather than a cost: the second
-	// caller wants the first one's answer, not one of its own.
+	// hostSpeedMeasureMu serialises the measurement itself (#496). Every
+	// path that takes it runs in its own goroutine and the probe is a
+	// minutes-long engine-bound job, so two running at once would measure
+	// each other's contention. Held across the whole measurement on
+	// purpose: the second caller wants the first one's answer, not one of
+	// its own.
+	//
+	// SEPARATE from hostSpeedMu, and that separation is load-bearing.
+	// Status() reads hostSpeed on every poll, and while one mutex did both
+	// jobs a running measurement blocked /waired/v1/inference/status for
+	// as long as the engine took to answer — ten minutes on a small host,
+	// with the tray, the CLI and the wizard all reading nothing
+	// (waired#1099). A lock a reader waits on must never be held across an
+	// engine request.
+	hostSpeedMeasureMu sync.Mutex
+	// hostSpeedMu guards the fields below and is a LEAF: taken briefly,
+	// never held across an engine request or a disk write of unbounded
+	// size, and never while hostSpeedMeasureMu is being acquired.
 	hostSpeedMu sync.Mutex
 	// hostSpeed is this process's copy of the published measurement, nil
 	// until one has been taken or loaded back from the state dir;

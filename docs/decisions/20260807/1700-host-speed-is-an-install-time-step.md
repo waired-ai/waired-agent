@@ -42,8 +42,34 @@ CLI 経由でも、モデルを選ぶより前に数値が揃う。
 `Measured()` が false になって 3 分が黙って捨てられる。
 
 非同期。`pullsWG` に登録するので `waitForPulls()` が従来どおり全体を
-join でき、`hostSpeedMu` が後続の呼び出し（pre-pull / setup）を
+join でき、`hostSpeedMeasureMu` が後続の呼び出し（pre-pull / setup）を
 待たせて 1 回に畳む。
+
+**さらに、ホストが静かになるまで待つ**（`awaitQuietEngine`）。ダウンロード中
+でもなく、serve reconcile も控えていない状態まで待ってから測る。これは CI が
+教えてくれた:
+
+- 起動直後に測り始めた結果、オペレータのモデルのダウンロードが終わる
+  400 ms 前に計測が始まり、その完了が引き起こした reconcile の 3 ms 後に
+  `connect: connection refused` で死んだ。#359 が言う再起動は boot tail の
+  2 つだけではなく、`endPull` からの reconcile も同じことをする。
+- インストール中に測った値は、そもそも輻輳を測った値になる。3 サンプルの
+  中央値が唯一補正できないのがこれ。
+
+`warmTarget`（`inference_warm.go`）が同じ理由で同じ待ち方をしている。
+
+## ロックの分割（同じく CI が見つけた）
+
+`Status()` は毎回のポーリングで publish 済みの値を読む。計測とフィールドを
+同じ mutex で守っていたため、**計測が走っている間 `/waired/v1/inference/status`
+が丸ごと止まった**。CI ホストでは 10 分 41 秒。installtest は
+`curl --max-time 5` で読むので空文字が返り、「daemon published no
+pinned_version / no engine mode」として落ちた。トレイも CLI もウィザードも
+同じ経路を読む。
+
+`hostSpeedMeasureMu`（計測の直列化・長時間保持）と `hostSpeedMu`（フィールド
+のみ・leaf・短時間）に分けた。**読み手が待つロックを、エンジンへのリクエスト
+を跨いで保持してはならない。**
 
 **キャッシュのキーは「インストール」にする。** エンジンビルド（従来）に
 加えて `state.HostSpeedRecord.AgentVersion` を見る。デーモンの再起動は

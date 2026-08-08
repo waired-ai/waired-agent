@@ -80,6 +80,9 @@ type hostCutoffEngine struct {
 	// the sampler or the widen-and-retry.
 	answers []map[string]any
 	serving []string
+	// block, when non-nil, holds every /api/generate until it is closed —
+	// a slow engine, which is what the host this measures actually is.
+	block chan struct{}
 }
 
 func (e *hostCutoffEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -100,11 +103,15 @@ func (e *hostCutoffEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.mu.Lock()
 		e.bodies = append(e.bodies, parsed)
 		status := e.status
+		block := e.block
 		answer := map[string]any(nil)
 		if n := len(e.answers); n > 0 {
 			answer = e.answers[min(len(e.bodies)-1, n-1)]
 		}
 		e.mu.Unlock()
+		if block != nil {
+			<-block
+		}
 		if status != 0 && status/100 != 2 {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"error":"model requires more system memory"}`))
@@ -675,6 +682,17 @@ func TestEnsureHostSpeedMeasured_ARecordWithNoAgentVersionIsReMeasured(t *testin
 	}
 }
 
+// hostCutoffEngineUp brings the fixture's adapter to StateReady, which is
+// what the bootstrap trigger waits for before it measures. The fake
+// answers /api/tags, so the adapter's own readiness poll is what runs.
+func hostCutoffEngineUp(t *testing.T, p *agentInferenceProvider) {
+	t.Helper()
+	if err := p.ollama.EnsureRunning(context.Background()); err != nil {
+		t.Fatalf("fixture engine did not come up: %v", err)
+	}
+	t.Cleanup(func() { _ = p.ollama.Stop(context.Background()) })
+}
+
 // The bootstrap trigger: a host that is never told to install anything
 // still publishes a figure. This is the whole point of waired#1099 — the
 // browser wizard names a model, which stands the pre-pull down, so before
@@ -682,6 +700,7 @@ func TestEnsureHostSpeedMeasured_ARecordWithNoAgentVersionIsReMeasured(t *testin
 // operator had already chosen.
 func TestStartHostSpeedMeasurement_MeasuresWithNoModelNamed(t *testing.T) {
 	p, eng, disabled := hostCutoffProvider(t, cpuOnlyCounters, 0)
+	hostCutoffEngineUp(t, p)
 
 	p.startHostSpeedMeasurement(context.Background())
 	p.waitForPulls()
@@ -715,6 +734,7 @@ func TestStartHostSpeedMeasurement_MeasuresWithNoModelNamed(t *testing.T) {
 // measurement takes minutes and the pre-pull hold releases on its own.
 func TestStartHostSpeedMeasurement_DoesNotRaceASecondCaller(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
 	ctx := context.Background()
 
 	p.startHostSpeedMeasurement(ctx)
@@ -728,6 +748,140 @@ func TestStartHostSpeedMeasurement_DoesNotRaceASecondCaller(t *testing.T) {
 	// second measurement of a host that had already answered.
 	if got, want := len(eng.generateBodies()), 1+benchSampleCount; got != want {
 		t.Fatalf("/api/generate requests = %d, want %d — the measurement ran more than once", got, want)
+	}
+}
+
+// THE waired#1099 CI BAR. A running measurement must not stall the local
+// management API.
+//
+// Status() reads the published figure on every poll, and while one mutex
+// guarded both the field and the measurement, /waired/v1/inference/status
+// blocked for as long as the engine took to answer. On a CI host that was
+// ten minutes and 41 seconds: the installtest reads status with `curl
+// --max-time 5`, got nothing, and reported the daemon as publishing no
+// pinned_version and no engine mode. The tray, the CLI and the setup
+// wizard all read the same route.
+func TestHostSpeed_AMeasurementDoesNotStallTheStatusRoute(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	// A slow engine, which is the ordinary case this is about: the request
+	// hangs until the test lets it answer.
+	release := make(chan struct{})
+	eng.mu.Lock()
+	eng.block = release
+	eng.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.ensureHostSpeedMeasured(context.Background())
+	}()
+
+	// Wait until a request is actually in flight, so this is not asserting
+	// against a goroutine that has not started yet.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(eng.generateBodies()) == 0 {
+		if time.Now().After(deadline) {
+			close(release)
+			<-done
+			t.Fatal("the measurement never reached the engine")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	read := make(chan struct{})
+	go func() {
+		defer close(read)
+		p.hostSpeedNow()
+	}()
+	select {
+	case <-read:
+	case <-time.After(5 * time.Second):
+		close(release)
+		<-done
+		t.Fatal("reading the published figure blocked while a measurement was running — " +
+			"this is the whole management API going quiet for the length of the probe")
+	}
+	close(release)
+	<-done
+}
+
+// The measurement waits for the host to go quiet. It used to start the
+// moment the engine was up, which on a CI host meant it began 400 ms
+// before the operator's own model finished downloading and died 3 ms
+// after the serve reconcile that pull triggered — `connection refused`,
+// with nothing published and the download slowed for its trouble.
+func TestStartHostSpeedMeasurement_WaitsForTheHostToGoQuiet(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+
+	// The operator's model is downloading. Nothing else about the host has
+	// changed: the engine is up and would answer.
+	p.pullMu.Lock()
+	p.pullsInFlight = map[string]*pullJob{"the-operators-model": {modelID: "the-operators-model"}}
+	p.pullMu.Unlock()
+
+	p.startHostSpeedMeasurement(context.Background())
+	time.Sleep(150 * time.Millisecond)
+	if got := len(eng.generateBodies()); got != 0 {
+		t.Fatalf("%d /api/generate request(s) while a pull was in flight, want 0 — the "+
+			"measurement is competing with the download it exists to precede", got)
+	}
+
+	p.pullMu.Lock()
+	p.pullsInFlight = map[string]*pullJob{}
+	p.pullMu.Unlock()
+	p.waitForPulls()
+
+	if p.hostSpeedNow() == nil {
+		t.Fatal("nothing published once the host went quiet")
+	}
+}
+
+// A reconcile is a stop-and-restart of the engine, so one that is pending
+// counts as busy. Measuring into it is what produced the connection
+// refused above; the pull it followed had already finished by then, so
+// waiting on pulls alone would not have caught it.
+func TestStartHostSpeedMeasurement_WaitsForAPendingEngineReconcile(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+
+	p.engineReconcileInFlight.Store(true)
+	p.startHostSpeedMeasurement(context.Background())
+	time.Sleep(150 * time.Millisecond)
+	if got := len(eng.generateBodies()); got != 0 {
+		t.Fatalf("%d /api/generate request(s) with a reconcile in flight, want 0 — the "+
+			"restart it is about to perform kills the measurement", got)
+	}
+
+	p.engineReconcileInFlight.Store(false)
+	p.waitForPulls()
+	if p.hostSpeedNow() == nil {
+		t.Fatal("nothing published once the reconcile finished")
+	}
+}
+
+// A host that never goes quiet is left unmeasured rather than measured
+// badly. The next boot tries again.
+func TestStartHostSpeedMeasurement_GivesUpWhenTheHostNeverSettles(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	prev := hostSpeedSettleWait
+	hostSpeedSettleWait = 50 * time.Millisecond
+	t.Cleanup(func() { hostSpeedSettleWait = prev })
+
+	p.pullMu.Lock()
+	p.pullsInFlight = map[string]*pullJob{"never-finishes": {modelID: "never-finishes"}}
+	p.pullMu.Unlock()
+
+	p.startHostSpeedMeasurement(context.Background())
+	p.waitForPulls()
+
+	if got := len(eng.generateBodies()); got != 0 {
+		t.Fatalf("%d /api/generate request(s) after giving up, want 0", got)
+	}
+	if p.hostSpeedNow() != nil {
+		t.Fatal("published a figure without measuring one")
 	}
 }
 
