@@ -192,15 +192,10 @@ func TestHardwareSummaryFor_MatchesEffectiveVRAM(t *testing.T) {
 //
 // It briefly held HardwareSummary.MemoryBandwidthSpecGBs while the proto
 // contract was on main and its producer was not — the gap a required
-// proto-only PR opens. The chip-table PR deleted that entry rather than
-// editing it, which is the whole point of recording it as a debt.
-//
-// HardwareSummary.RAMAvailableGB holds the debt now (#568): the wire
-// landed as its own proto-only PR, and the install-time measurement PR
-// — the producer — deletes the entry.
-var notPublishedByAgent = map[string]bool{
-	"HardwareSummary.RAMAvailableGB": true,
-}
+// proto-only PR opens — and HardwareSummary.RAMAvailableGB (#568) the
+// same way. Each producer PR deleted its entry rather than editing it,
+// which is the whole point of recording it as a debt. Empty again.
+var notPublishedByAgent = map[string]bool{}
 
 // TestHardwareSummaryFor_PublishesEveryWireField guards the bug class
 // rather than the three fields: a field added to the broadcast summary
@@ -214,10 +209,14 @@ func TestHardwareSummaryFor_PublishesEveryWireField(t *testing.T) {
 	// carry is present, so any zero in the output is the producer
 	// dropping it rather than the host not having it.
 	prof := hardware.Profile{
-		RAMTotalGB:             64,
-		UnifiedMemory:          true,
-		UsableVRAMMB:           49152,
-		MemoryBandwidthSpecGBs: 400, // Apple M3 Max, matching the GPU below
+		RAMTotalGB: 64,
+		// The install-time measurement (#568), which is what the
+		// summary publishes — the live RAMAvailableGB deliberately
+		// never reaches the wire.
+		RAMAvailableAtInstallGB: 41,
+		UnifiedMemory:           true,
+		UsableVRAMMB:            49152,
+		MemoryBandwidthSpecGBs:  400, // Apple M3 Max, matching the GPU below
 		// No real Apple host reports a carve-out either — its usable
 		// figure is synthesized from RAM, which is exactly why the field
 		// exists. Populated here for the same reason as the compute

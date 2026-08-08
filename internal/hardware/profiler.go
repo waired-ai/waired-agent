@@ -33,16 +33,28 @@ import (
 // at a moment in time. JSON-serialisable so it can be returned by
 // /waired/v1/inference/hardware verbatim.
 type Profile struct {
-	OS             string           `json:"os"`
-	Arch           string           `json:"arch"`
-	CPU            CPUInfo          `json:"cpu"`
-	RAMTotalGB     int              `json:"ram_total_gb"`
-	RAMAvailableGB int              `json:"ram_available_gb"`
-	GPUs           []GPU            `json:"gpus"`
-	Accelerators   Accelerators     `json:"accelerators"`
-	Storage        StorageInfo      `json:"storage"`
-	Engines        InstalledEngines `json:"engines"`
-	CollectedAt    time.Time        `json:"collected_at"`
+	OS             string  `json:"os"`
+	Arch           string  `json:"arch"`
+	CPU            CPUInfo `json:"cpu"`
+	RAMTotalGB     int     `json:"ram_total_gb"`
+	RAMAvailableGB int     `json:"ram_available_gb"`
+
+	// RAMAvailableAtInstallGB is the persisted install-time
+	// available-memory measurement (#568), injected via
+	// WithRAMAvailableAtInstall — never probed here. It is what
+	// HostFit projects and what the broadcast HardwareSummary carries;
+	// the live RAMAvailableGB above stays on the JSON endpoint for
+	// diagnostics and is deliberately NOT used in fit decisions (a
+	// live figure would count a resident model against the host
+	// serving it). 0 means "no measurement": hostfit answers with its
+	// OSMemoryAllowanceGB constant.
+	RAMAvailableAtInstallGB int `json:"ram_available_at_install_gb,omitempty"`
+
+	GPUs         []GPU            `json:"gpus"`
+	Accelerators Accelerators     `json:"accelerators"`
+	Storage      StorageInfo      `json:"storage"`
+	Engines      InstalledEngines `json:"engines"`
+	CollectedAt  time.Time        `json:"collected_at"`
 	// Errors collects non-fatal detection failures so the caller can
 	// surface "RAM detection unavailable" without losing the rest of
 	// the profile.
@@ -101,7 +113,11 @@ type Profile struct {
 // (waired-ai/waired#942, waired-ai/waired-agent#228).
 func (p Profile) HostFit() hostfit.Host {
 	h := hostfit.Host{
-		RAMTotalGB:             p.RAMTotalGB,
+		RAMTotalGB: p.RAMTotalGB,
+		// The install-time figure, never the live RAMAvailableGB: a
+		// live reading would count a resident model against the very
+		// host serving it (#568).
+		RAMAvailableGB:         p.RAMAvailableAtInstallGB,
 		GPUCount:               len(p.GPUs),
 		UnifiedMemory:          p.UnifiedMemory,
 		UsableVRAMMB:           p.UsableVRAMMB,
@@ -257,6 +273,8 @@ type Profiler struct {
 	gpuFn           func(context.Context) ([]GPU, Accelerators, error)
 	umaFn           func(context.Context, *Profile)
 
+	ramAtInstallGB int
+
 	mu       sync.Mutex
 	cached   *Profile
 	cachedAt time.Time
@@ -277,6 +295,23 @@ func WithCPU(fn func(context.Context) CPUInfo) Option {
 }
 func WithRAM(fn func(context.Context) (int, int, error)) Option {
 	return func(p *Profiler) { p.ramFn = fn }
+}
+
+// WithRAMAvailableAtInstall injects the persisted install-time
+// available-memory figure (#568). The profiler carries it verbatim
+// into every Profile it builds — it is a fact about the install, not
+// about this snapshot, so re-detection never changes it.
+func WithRAMAvailableAtInstall(gb int) Option {
+	return func(p *Profiler) { p.ramAtInstallGB = gb }
+}
+
+// ProbeRAM reads total and available system RAM in whole GiB using the
+// same per-OS reader the profiler uses (linux /proc/meminfo, windows
+// GlobalMemoryStatusEx, darwin sysctl+vm_stat). It exists for the
+// install-time measurement (#568), which needs the reading without a
+// full profile.
+func ProbeRAM(ctx context.Context) (totalGB, availGB int, err error) {
+	return defaultRAM(ctx)
 }
 func WithStorage(fn func(context.Context, string) (int64, error)) Option {
 	return func(p *Profiler) { p.storageFn = fn }
@@ -331,12 +366,13 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 
 	osName, arch := p.osArchFn()
 	prof := Profile{
-		OS:          osName,
-		Arch:        arch,
-		CPU:         p.cpuFn(ctx),
-		GPUs:        []GPU{},
-		Storage:     StorageInfo{CachePath: p.cachePath},
-		CollectedAt: now,
+		OS:                      osName,
+		Arch:                    arch,
+		CPU:                     p.cpuFn(ctx),
+		GPUs:                    []GPU{},
+		Storage:                 StorageInfo{CachePath: p.cachePath},
+		CollectedAt:             now,
+		RAMAvailableAtInstallGB: p.ramAtInstallGB,
 	}
 
 	if p.gpuFn != nil {

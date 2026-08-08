@@ -85,7 +85,12 @@ func hardwareSummaryFor(prof hardware.Profile) *signer.HardwareSummary {
 		return nil
 	}
 	summary := &signer.HardwareSummary{
-		RAMTotalGB:             prof.RAMTotalGB,
+		RAMTotalGB: prof.RAMTotalGB,
+		// The persisted install-time figure, never the live
+		// RAMAvailableGB — fixed for the life of the install, so it
+		// adds no map churn and never counts a resident model against
+		// the host serving it (#568).
+		RAMAvailableGB:         prof.RAMAvailableAtInstallGB,
 		UnifiedMemory:          prof.UnifiedMemory,
 		UsableVRAMMB:           prof.UsableVRAMMB,
 		MemoryBandwidthSpecGBs: prof.MemoryBandwidthSpecGBs,

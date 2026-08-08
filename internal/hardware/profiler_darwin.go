@@ -78,9 +78,12 @@ func parseSPHardwareChip(out []byte) string {
 // speculative + purgeable) — a cgo-free read that matches the existing
 // subprocess pattern. On any parse failure RAMAvailableGB falls back to
 // RAMTotalGB (the prior conservative behaviour); the value is also
-// clamped to ≤ total. The Auto Selector only uses RAMAvailableGB for
-// soft warnings, not fit decisions, so this is a strict accuracy
-// improvement with no fit-decision risk.
+// clamped to ≤ total. Both failure shapes land the OS deduction on its
+// constant floor: total − total = 0 reads as "measurement unavailable"
+// in hostfit.OSMemoryDeductionGB, exactly like the untouched 0 a probe
+// error leaves. Fit decisions read this only through the install-time
+// measurement (hardware.ProbeRAM → the persisted record, #568); the
+// live figure on the profile is diagnostic.
 func defaultRAM(ctx context.Context) (int, int, error) {
 	total, err := sysctlUint64(ctx, "hw.memsize")
 	if err != nil {

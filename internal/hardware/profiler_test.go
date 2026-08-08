@@ -629,3 +629,51 @@ func TestProfile_MemoryBandwidthFromChipName(t *testing.T) {
 		}
 	})
 }
+
+// TestProfile_InstallTimeMemoryFigure pins the #568 split (2026-08-08
+// owner rulings on waired-agent#568): the install-time figure
+// (WithRAMAvailableAtInstall) is what HostFit projects — never the
+// live RAMAvailableGB, which stays on the profile for diagnostics. A
+// live figure in the fit adapter would count a resident model against
+// the very host serving it.
+func TestProfile_InstallTimeMemoryFigure(t *testing.T) {
+	p := NewProfiler("",
+		WithOSArch(func() (string, string) { return "linux", "x86_64" }),
+		WithCPU(func(context.Context) CPUInfo { return CPUInfo{Model: "Test CPU", Cores: 8} }),
+		WithRAM(func(context.Context) (int, int, error) { return 64, 48, nil }),
+		WithStorage(func(context.Context, string) (int64, error) { return 0, nil }),
+		WithEngineVersion(func(context.Context, string) (bool, string) { return false, "" }),
+		WithGPU(func(context.Context) ([]GPU, Accelerators, error) { return nil, Accelerators{}, nil }),
+		WithUMA(func(context.Context, *Profile) {}),
+		WithRAMAvailableAtInstall(41),
+	)
+	prof := p.Profile(context.Background())
+	if prof.RAMAvailableGB != 48 {
+		t.Errorf("live RAMAvailableGB = %d, want 48", prof.RAMAvailableGB)
+	}
+	if prof.RAMAvailableAtInstallGB != 41 {
+		t.Errorf("RAMAvailableAtInstallGB = %d, want 41", prof.RAMAvailableAtInstallGB)
+	}
+	h := prof.HostFit()
+	if h.RAMAvailableGB != 41 {
+		t.Errorf("HostFit().RAMAvailableGB = %d, want the install-time 41, never the live 48", h.RAMAvailableGB)
+	}
+}
+
+// TestProfile_NoInstallFigure pins the fallback: with no injected
+// figure the adapter hands hostfit 0, which OSMemoryDeductionGB reads
+// as "measurement unavailable" and answers with the constant.
+func TestProfile_NoInstallFigure(t *testing.T) {
+	p := NewProfiler("",
+		WithOSArch(func() (string, string) { return "linux", "x86_64" }),
+		WithCPU(func(context.Context) CPUInfo { return CPUInfo{} }),
+		WithRAM(func(context.Context) (int, int, error) { return 64, 48, nil }),
+		WithStorage(func(context.Context, string) (int64, error) { return 0, nil }),
+		WithEngineVersion(func(context.Context, string) (bool, string) { return false, "" }),
+		WithGPU(func(context.Context) ([]GPU, Accelerators, error) { return nil, Accelerators{}, nil }),
+		WithUMA(func(context.Context, *Profile) {}),
+	)
+	if h := p.Profile(context.Background()).HostFit(); h.RAMAvailableGB != 0 {
+		t.Errorf("HostFit().RAMAvailableGB = %d, want 0 (live figure must not leak)", h.RAMAvailableGB)
+	}
+}

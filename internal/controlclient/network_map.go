@@ -124,7 +124,13 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		// runtime — unlike the onboarding set, whose applier only exists
 		// on some paths — and the gate protects signature verification,
 		// not the routing decision (waired#1031).
+		//
+		// ram-available-v1 is unconditional on the same grounds: it
+		// declares that this build understands
+		// HardwareSummary.RAMAvailableGB on peer entries
+		// (waired-agent#568), a build-level fact.
 		caps := `"` + signer.CapabilityContextWindowV1 +
+			`","` + signer.CapabilityRAMAvailableV1 +
 			`","` + signer.CapabilityPublicShareV1 + `"`
 		if c.OnboardingCapable {
 			// All three or none: the CP gates desired_integrations on v2
