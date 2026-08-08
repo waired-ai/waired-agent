@@ -48,7 +48,13 @@ func maybeSelectBundledModelForFreshInstall(cfg *agentconfig.Config, disableInfe
 		return
 	}
 
-	prof := hardware.NewProfiler("").Profile(context.Background())
+	// The install-time memory measurement was taken just before this
+	// runs (ensureHostMemoryMeasured in run(), pre-engine), so the
+	// fresh-install selection already sees the measured OS deduction
+	// (#568).
+	prof := hardware.NewProfiler("",
+		hardware.WithRAMAvailableAtInstall(hostMemoryGB(stateDir, os.Getenv))).
+		Profile(context.Background())
 	sel, err := setup.SelectBundledModel(setup.BundledModelInputs{
 		Hardware:      prof,
 		Manifests:     manifests,

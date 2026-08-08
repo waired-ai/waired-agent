@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/controlclient"
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/devicekeys"
@@ -209,6 +210,16 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// #568: the install-time available-memory measurement, taken here —
+	// after flags, before anything that could start an engine — and
+	// persisted per install (AgentVersion-keyed). Everything downstream
+	// reads it through hostMemoryGB; this is the only place that
+	// measures. The logger does not exist yet, so the outcome is logged
+	// right after it does.
+	hostMemGB, hostMemErr := ensureHostMemoryMeasured(
+		filepath.Dir(agentJSONPath), buildinfo.Version, os.Getenv,
+		hardware.ProbeRAM, engineListening(cfgRoot.Inference), time.Now)
+
 	// waired#756: on a fresh daemon-mediated install the local init path's
 	// hardware-aware bundled-model selection never ran (setup.Enroll has no
 	// ConfigureInference hook), so a host below the recommended spec would
@@ -230,6 +241,14 @@ func run(ctx context.Context, args []string) error {
 	// survive stderr being closed (e.g. Windows SCM dispatcher).
 	logger := slog.New(logsink.New(primary, service.ServiceName))
 	slog.SetDefault(logger)
+
+	if hostMemErr != nil {
+		logger.Warn("host memory: measurement unavailable; the OS deduction stays at its floor",
+			"err", hostMemErr)
+	} else if hostMemGB > 0 {
+		logger.Info("host memory: install-time available-memory figure",
+			"available_gb", hostMemGB)
+	}
 
 	// Keep the launchd log files this process writes through bounded,
 	// from inside the process that holds their descriptors (#331). An
@@ -1073,7 +1092,8 @@ func run(ctx context.Context, args []string) error {
 			var firstGPU hardware.GPU
 			if !*disableInference {
 				hwProfiler = hardware.NewProfiler("",
-					hardware.WithTTL(hardwareResampleInterval))
+					hardware.WithTTL(hardwareResampleInterval),
+					hardware.WithRAMAvailableAtInstall(hostMemGB))
 				prof := hwProfiler.Profile(ctx)
 				if len(prof.GPUs) > 0 {
 					firstGPU = prof.GPUs[0]

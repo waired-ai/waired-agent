@@ -349,6 +349,42 @@ type Host struct {
 	// an INPUT to a decision, not a payload, and the additive-only guard
 	// asks a field added to a published struct to say so explicitly.
 	CarveOutVRAMMB int `json:"-"`
+
+	// RAMAvailableGB is how much of RAMTotalGB the operating system
+	// reported as available, measured once per install/upgrade while no
+	// engine or model was resident (waired-agent#568; the wire field is
+	// signer.HardwareSummary.RAMAvailableGB, and the agent projects the
+	// same persisted figure, so both adapters produce identical
+	// verdicts).
+	//
+	// 0 means "measurement unavailable", never "the OS holds
+	// everything" — OSMemoryDeductionGB answers with the
+	// OSMemoryAllowanceGB constant then, which is also what every host
+	// behind a pre-#568 agent gets. The value is clamped by the reader:
+	// anything outside (0, RAMTotalGB] is treated as unavailable.
+	//
+	// json:"-" for the reason MemoryBandwidthSpecGBs carries it.
+	RAMAvailableGB int `json:"-"`
+}
+
+// OSMemoryDeductionGB is what the operating system keeps of system RAM
+// before any model is loaded: the larger of the OSMemoryAllowanceGB
+// floor and this host's own install-time measurement
+// (RAMTotalGB − RAMAvailableGB). One method so the capacity computation
+// and the window sizing cannot subtract different figures
+// (waired-agent#568, 2026-08-08 owner rulings on the issue).
+//
+// The measurement can only tighten: max() means a host that measured
+// under the floor keeps the floor, and a host with no measurement
+// (RAMAvailableGB == 0, or an implausible reading) keeps today's
+// constant arithmetic. All three OS probes count reclaimable cache as
+// available, so total − available never charges the OS for cache it
+// would give back.
+func (h Host) OSMemoryDeductionGB() int {
+	if h.RAMAvailableGB <= 0 || h.RAMAvailableGB > h.RAMTotalGB {
+		return OSMemoryAllowanceGB
+	}
+	return max(OSMemoryAllowanceGB, h.RAMTotalGB-h.RAMAvailableGB)
 }
 
 // Device is the per-device facts the pool rule reads. Like Host it is
@@ -442,6 +478,7 @@ func FromHardwareSummary(hw *signer.HardwareSummary) Host {
 	}
 	h := Host{
 		RAMTotalGB:             hw.RAMTotalGB,
+		RAMAvailableGB:         hw.RAMAvailableGB,
 		GPUCount:               len(hw.GPUs),
 		UnifiedMemory:          hw.UnifiedMemory,
 		UsableVRAMMB:           hw.UsableVRAMMB,
@@ -517,9 +554,11 @@ func (h Host) HasGPU() bool {
 
 // TotalMemoryMB is every byte a model may occupy on this machine: system
 // RAM plus dedicated VRAM, counted once. It is the denominator of the
-// capacity gate, and capacity is now the ONLY thing allowed to refuse a
-// model (owner decision 2026-08-03, waired-ai/waired#1056 — the ratifying
-// source; `waired` docs/decisions/20260803/1332-hard-vs-soft-model-limits.md).
+// capacity computation. Since the 2026-08-08 owner decision
+// (waired-ai/waired#1067, superseding #1056's refusal rule) capacity no
+// longer refuses anything: it decides which models are auto-selected
+// and recommended, and what an explicit pick must be warned about and
+// confirm — never whether the pick is allowed.
 //
 // The three classes differ only in what "dedicated VRAM" is worth here:
 //
@@ -533,12 +572,14 @@ func (h Host) HasGPU() bool {
 //     PROVEN firmware carve-out is added: see CarveOutVRAMMB for why the
 //     discriminator is the figure's provenance rather than the platform.
 //
-// The system-RAM term is net of OSMemoryAllowanceGB. A gate that reports
-// "it fits" for a load that leaves the operating system nothing is not a
-// capacity gate, and the hand-authored min_ram_gb this replaces had that
-// allowance built into it (scoring.SuggestMinRAMGB: "VRAM at context plus
-// a 2 GB OS/runtime headroom"). Dedicated VRAM takes no such deduction —
-// the OS does not live there.
+// The system-RAM term is net of OSMemoryDeductionGB — the
+// OSMemoryAllowanceGB floor, raised by this host's own install-time
+// measurement when one exists (waired-agent#568). A computation that
+// reports "it fits" for a load that leaves the operating system nothing
+// is not a capacity computation, and the hand-authored min_ram_gb this
+// replaces had the allowance built into it (scoring.SuggestMinRAMGB:
+// "VRAM at context plus a 2 GB OS/runtime headroom"). Dedicated VRAM
+// takes no such deduction — the OS does not live there.
 //
 // It returns 0 for two different situations, and a caller must not treat
 // them alike: RAMTotalGB == 0 is a FAILED PROBE (an OS whose detector we
@@ -550,7 +591,7 @@ func (h Host) TotalMemoryMB() int {
 	if h.RAMTotalGB <= 0 {
 		return 0
 	}
-	ram := max((h.RAMTotalGB-OSMemoryAllowanceGB)*1024, 0)
+	ram := max((h.RAMTotalGB-h.OSMemoryDeductionGB())*1024, 0)
 	switch h.Class() {
 	case ClassDiscrete:
 		if b := h.OllamaVRAMBudgetMB(); b > 0 {

@@ -35,6 +35,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 			name: "onboarding capable", capable: true,
 			want: []string{
 				signer.CapabilityContextWindowV1,
+				signer.CapabilityRAMAvailableV1,
 				signer.CapabilityPublicShareV1,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
@@ -49,7 +50,13 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 			// consumes peer entries and still has to be able to read the
 			// window on them (waired#1031).
 			name: "local AI off", capable: false,
-			want: []string{signer.CapabilityContextWindowV1, signer.CapabilityPublicShareV1},
+			// ram-available-v1 rides with them: it too declares what
+			// this BUILD understands on peer entries (waired-agent#568).
+			want: []string{
+				signer.CapabilityContextWindowV1,
+				signer.CapabilityRAMAvailableV1,
+				signer.CapabilityPublicShareV1,
+			},
 			absent: []string{
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,

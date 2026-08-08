@@ -133,3 +133,20 @@ func TestDefaultUMA_Windows(t *testing.T) {
 		})
 	}
 }
+
+// TestDefaultRAM_Windows exercises the real GlobalMemoryStatusEx
+// reader on the machine the test runs on — the parity gap called out
+// on waired-agent#568 (linux and darwin had real-probe coverage,
+// windows had none). Bounds only: the figures are the host's own.
+func TestDefaultRAM_Windows(t *testing.T) {
+	totalGB, availGB, err := defaultRAM(context.Background())
+	if err != nil {
+		t.Fatalf("defaultRAM: %v", err)
+	}
+	if totalGB <= 0 {
+		t.Fatalf("totalGB = %d, want > 0", totalGB)
+	}
+	if availGB <= 0 || availGB > totalGB {
+		t.Fatalf("availGB = %d, want in (0, %d]", availGB, totalGB)
+	}
+}

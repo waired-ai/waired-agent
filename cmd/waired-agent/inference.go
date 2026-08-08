@@ -270,7 +270,11 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// one instead of only through this profiler's 30 s snapshot — which
 	// on a fresh install predates the engine install entirely (#361).
 	engineVersionProbe := engineVersionOnHost(runtime.GOOS, stateDir, hardware.EngineVersionAt)
-	profiler := hardware.NewProfiler(cachePath, hardware.WithEngineVersion(engineVersionProbe))
+	profiler := hardware.NewProfiler(cachePath,
+		hardware.WithEngineVersion(engineVersionProbe),
+		// The persisted install-time memory figure (#568): the catalog
+		// endpoint's fit verdicts must match what the wire publishes.
+		hardware.WithRAMAvailableAtInstall(hostMemoryGB(stateDir, os.Getenv)))
 
 	// Step 5 migration runs inside Load; warm it once now so the
 	// bootstrap log records what happened.
