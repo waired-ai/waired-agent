@@ -138,19 +138,19 @@ func TestInferenceCatalog_RAMOnlyHost(t *testing.T) {
 }
 
 func TestInferenceCatalog_GPUHost_ShortVRAM(t *testing.T) {
-	// 12 GB NVIDIA host (≥ the 8 GB vLLM threshold). vLLM auto-selection is
-	// gated off while #557 is unwired, so force it on to exercise the
-	// vLLM-engine catalog rendering this test covers (vllm-only families and
-	// VRAM-based deficit labels). 8B/fp16 needs 18 GB → doesn't fit; 32B AWQ
-	// needs 24 GB → doesn't fit.
+	// 12 GB NVIDIA host. The subject is the vLLM-engine catalog rendering —
+	// vllm-only families and VRAM-based deficit labels — so the engine has to
+	// be vllm: 8B/fp16 needs 18 GB → doesn't fit; 32B AWQ needs 24 GB →
+	// doesn't fit.
 	//
-	// Nothing is committed in state.json here, so the endpoint falls back to
-	// the auto-picker: the profile must therefore name a Linux host with a
-	// vLLM venv installed, the two facts that fallback now requires
-	// (waired-agent#319).
-	old := router.VLLMAutoSelectable
-	router.VLLMAutoSelectable = true
-	t.Cleanup(func() { router.VLLMAutoSelectable = old })
+	// The engine is COMMITTED here rather than auto-picked. Since #522 the
+	// auto-picker will not name an engine no catalog variant fits, and on
+	// this fixture nothing vllm does — so the fallback path answers ollama
+	// and this rendering would never be exercised. A committed
+	// Active.Runtime is how a real device reaches this state: the daemon
+	// chose vllm when something fitted, and the hardware or the catalog
+	// moved underneath it. TestInferenceCatalog_EngineFallsBackWhenNothingFitsVLLM
+	// covers the auto-picked half.
 	inf := &fakeInference{
 		hwProfile: hardware.Profile{
 			OS:         "linux",
@@ -158,6 +158,7 @@ func TestInferenceCatalog_GPUHost_ShortVRAM(t *testing.T) {
 			GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 3060", VRAMTotalMB: 12288}},
 			Engines:    hardware.InstalledEngines{VLLM: hardware.EngineInfo{Installed: true}},
 		},
+		canned: InferenceStatus{Active: &ActiveSelection{Runtime: catalog.RuntimeVLLM}},
 	}
 	s := newCatalogTestServer(t, inf, t.TempDir())
 
@@ -194,6 +195,48 @@ func TestInferenceCatalog_GPUHost_ShortVRAM(t *testing.T) {
 	}
 }
 
+// The catalog endpoint and the install pick must judge models against the
+// same engine. On a host that qualifies for vLLM on hardware but has no
+// vllm variant it can fit, the auto-picker answers ollama, so this endpoint
+// renders the ollama view — the one the device will actually install
+// against.
+//
+// Product contract, ratified in waired-agent#522 (owner decision
+// 2026-08-08): the engine auto-pick requires a model the engine can serve.
+// Before it, this endpoint reported vllm and rendered every family as
+// not-fitting while `waired init` on the same machine reported below the
+// recommended spec.
+//
+// The fixture is the pre-existing 12 GB RTX 3060 one: its two vllm variants
+// need 18 GB and 24 GB.
+func TestInferenceCatalog_EngineFallsBackWhenNothingFitsVLLM(t *testing.T) {
+	inf := &fakeInference{hwProfile: hardware.Profile{
+		OS:         "linux",
+		RAMTotalGB: 32,
+		GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 3060", VRAMTotalMB: 12288}},
+		Engines:    hardware.InstalledEngines{VLLM: hardware.EngineInfo{Installed: true}},
+	}}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	w, got := doGet(t, s, "/waired/v1/inference/catalog")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got.Engine != catalog.RuntimeOllama {
+		t.Fatalf("engine = %q, want ollama: the host clears the %d MB vLLM VRAM "+
+			"threshold but no vllm variant in the catalog fits 12288 MB",
+			got.Engine, router.MinVLLMVRAMMB)
+	}
+	// And the fallback is worth something: the ollama view has models.
+	byID := map[string]CatalogFamily{}
+	for _, f := range got.Families {
+		byID[f.ModelID] = f
+	}
+	if !byID["qwen3-8b-instruct"].Fits {
+		t.Errorf("8B should fit the ollama view on a 32 GB host: %+v", byID["qwen3-8b-instruct"])
+	}
+}
+
 func TestInferenceCatalog_RecommendedSpecs(t *testing.T) {
 	// RAM-only host (ollama engine): fitting families carry the best-fit
 	// variant's RAM spec; the vllm-only family has no engine-supported
@@ -220,18 +263,20 @@ func TestInferenceCatalog_RecommendedSpecs(t *testing.T) {
 
 	// GPU host (vllm engine): even over-capacity families expose the
 	// representative variant's VRAM spec so the UI can show what it wants.
-	// vLLM auto-selection is gated off while #557 is unwired, so force it on
-	// to keep exercising the vLLM-engine rendering this subtest covers.
+	// The engine is committed rather than auto-picked for the reason given
+	// on TestInferenceCatalog_GPUHost_ShortVRAM — since #522 the auto-picker
+	// will not name vllm on a host where no vllm variant fits, which is
+	// exactly the over-capacity fixture this subtest needs.
 	t.Run("vllm host over-capacity", func(t *testing.T) {
-		old := router.VLLMAutoSelectable
-		router.VLLMAutoSelectable = true
-		t.Cleanup(func() { router.VLLMAutoSelectable = old })
-		inf := &fakeInference{hwProfile: hardware.Profile{
-			OS:         "linux",
-			RAMTotalGB: 32,
-			GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 3060", VRAMTotalMB: 12288}},
-			Engines:    hardware.InstalledEngines{VLLM: hardware.EngineInfo{Installed: true}},
-		}}
+		inf := &fakeInference{
+			hwProfile: hardware.Profile{
+				OS:         "linux",
+				RAMTotalGB: 32,
+				GPUs:       []hardware.GPU{{Vendor: "nvidia", Model: "RTX 3060", VRAMTotalMB: 12288}},
+				Engines:    hardware.InstalledEngines{VLLM: hardware.EngineInfo{Installed: true}},
+			},
+			canned: InferenceStatus{Active: &ActiveSelection{Runtime: catalog.RuntimeVLLM}},
+		}
 		s := newCatalogTestServer(t, inf, t.TempDir())
 		_, got := doGet(t, s, "/waired/v1/inference/catalog")
 		byID := map[string]CatalogFamily{}

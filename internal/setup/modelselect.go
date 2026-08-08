@@ -142,6 +142,7 @@ func SelectBundledModel(in BundledModelInputs) (BundledModelSelection, error) {
 	enginePick, err := router.PickEngine(router.EnginePickInput{
 		Hardware:   in.Hardware,
 		Preference: in.Inference.PreferredEngine,
+		Catalog:    in.Manifests,
 	})
 	if err != nil {
 		return sel, fmt.Errorf("pick engine: %w", err)

@@ -228,6 +228,12 @@ engine cannot spread one model across them.
 Windows and macOS run on Ollama. vLLM serving needs Linux, so on those machines
 Waired picks from the Ollama list — a large NVIDIA card does not change that.
 
+Waired also picks from the Ollama list when nothing in the vLLM list fits your
+card. The vLLM builds start at larger sizes than the Ollama ones, so a card
+that clears the vLLM threshold can still be too small for every model in that
+list. Rather than tell you your machine is under-spec, Waired serves the model
+your card can actually run.
+
 This only affects what Waired picks *for* you. You can still choose any model
 that fits — see [Choose which AI model runs](/guides/choose-a-model/).
 

@@ -132,6 +132,7 @@ func recommendationFromBench(
 	enginePick, err := router.PickEngine(router.EnginePickInput{
 		Hardware:   hw,
 		Preference: cfg.PreferredEngine,
+		Catalog:    manifests,
 	})
 	if err != nil {
 		return nil
@@ -221,6 +222,7 @@ func upgradeFromBench(
 		enginePick, err := router.PickEngine(router.EnginePickInput{
 			Hardware:   hw,
 			Preference: cfg.PreferredEngine,
+			Catalog:    manifests,
 		})
 		if err != nil {
 			return nil

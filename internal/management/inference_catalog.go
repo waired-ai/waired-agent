@@ -229,7 +229,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 
 	hw := s.inference.Hardware(r.Context())
 	status := s.inference.Status(r.Context())
-	engine, err := catalogEngine(status, hw)
+	engine, err := catalogEngine(status, hw, manifests)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("engine_pick_failed", err.Error()))
 		return
@@ -349,16 +349,18 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 //     same source upgradeFromBench already prefers for the same reason.
 //  2. Nothing committed yet (fresh install, pre-bootstrap): fall back to
 //     the auto-picker, which since waired-agent#319 also refuses vllm on
-//     a non-Linux host. A vllm answer is additionally demoted when no
-//     venv is installed here — hardware.Profile.Engines resolves through
+//     a non-Linux host and since #522 refuses it on a host where no vllm
+//     variant fits — hence the manifests argument, which is the same set
+//     this handler is about to render. A vllm answer is additionally
+//     demoted when no venv is installed here — hardware.Profile.Engines resolves through
 //     the daemon's injected engineVersionOnHost, so it reports the same
 //     presence engineViable would, and a Linux host with a big NVIDIA card
 //     and no venv will serve ollama regardless of what the picker prefers.
-func catalogEngine(status InferenceStatus, hw hardware.Profile) (string, error) {
+func catalogEngine(status InferenceStatus, hw hardware.Profile, manifests []catalog.Manifest) (string, error) {
 	if status.Active != nil && status.Active.Runtime != "" {
 		return status.Active.Runtime, nil
 	}
-	pick, err := router.PickEngine(router.EnginePickInput{Hardware: hw})
+	pick, err := router.PickEngine(router.EnginePickInput{Hardware: hw, Catalog: manifests})
 	if err != nil {
 		return "", err
 	}
