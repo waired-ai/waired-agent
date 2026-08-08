@@ -387,10 +387,10 @@ whenever you ask.
 ```
 Engine install skipped (WAIRED_NO_OLLAMA).
 
-*  Waired is signed in — local AI is off on this device
+*  Waired is signed in — engine installs are turned off here
    Signed in and running — this device is on your network.
-   Engine installs are turned off here; local AI was not installed.
-   Add it later with: waired runtimes install ollama
+   No local AI here; it can still use the AI on your other computers.
+   Add local AI later with: waired runtimes install ollama
 ```
 
 This is what you get when you told setup not to install an engine —
@@ -398,6 +398,12 @@ This is what you get when you told setup not to install an engine —
 `WAIRED_NO_OLLAMA` in the environment. Nothing went wrong: the computer is
 signed in, on your network, and can use the AI running on your other machines.
 `waired init` exits `0` here, so a script cannot mistake it for a failure.
+
+Not the same as the box above it, even though both end with local AI off.
+There, Waired timed the computer and decided; here, you decided before it ever
+looked. The difference that matters is the way back: `waired inference on`
+fixes the one above and does nothing here, because this computer has no engine
+to turn on.
 
 Run `sudo waired runtimes install ollama` (`waired runtimes install ollama`
 from an elevated prompt on Windows) whenever you want this computer to run

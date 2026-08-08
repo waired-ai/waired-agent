@@ -184,7 +184,6 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			absent:  []string{notRunning},
 		},
 		{
-<<<<<<< HEAD
 			// waired#1099. The measurement left local AI off, so the
 			// ordinary box's two claims — "everything completed
 			// successfully" and "Local inference is live via the

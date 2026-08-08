@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: e74e087426a612f0
+sourceHash: 576f3e553c48f81e
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
