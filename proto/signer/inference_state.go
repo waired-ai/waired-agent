@@ -527,6 +527,37 @@ type HardwareSummary struct {
 	// adds no map churn, and omitempty keeps it off the wire for every
 	// host that has no carve-out.
 	CarveOutVRAMMB int `json:"carve_out_vram_mb,omitempty"`
+
+	// RAMAvailableGB is how much of RAMTotalGB the operating system
+	// reported as available at install time, in whole GB, rounded once
+	// at measure time so every consumer computes on the same integer.
+	// Linux reads /proc/meminfo MemAvailable, macOS sums vm_stat's
+	// reclaimable page classes, Windows reads
+	// GlobalMemoryStatusEx.AvailPhys — all three count reclaimable
+	// cache as available, so RAMTotalGB − RAMAvailableGB never charges
+	// the operating system for cache it would give back.
+	//
+	// It is measured ONCE per install/upgrade, while no engine or model
+	// is resident, and persisted (waired-agent#568) — never a live
+	// reading. That is what lets it ride the served NetworkMap under
+	// the same claim the fields above make: fixed for the life of the
+	// install, so it adds no map churn. A live figure would move with
+	// every resample and would count a resident model against the very
+	// host that serves it.
+	//
+	// 0 means "measurement unavailable", never "the OS holds
+	// everything": a consumer computes the OS deduction as
+	// max(hostfit.OSMemoryAllowanceGB, RAMTotalGB − RAMAvailableGB),
+	// so 0 lands on the constant. A pre-addition agent sends 0 and
+	// keeps today's arithmetic.
+	//
+	// Unlike the fields above this one is gated: it is agent-reported
+	// and rides the signed map on every PEER entry (the
+	// InferenceState.ContextWindow situation), so the CP strips it
+	// across the whole map for a poller that has not declared
+	// CapabilityRAMAvailableV1, keeping verification byte-identical
+	// for older agents.
+	RAMAvailableGB int `json:"ram_available_gb,omitempty"`
 }
 
 // HardwareGPUSummary identifies one GPU. Fields mirror

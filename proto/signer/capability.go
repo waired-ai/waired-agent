@@ -82,4 +82,22 @@ const (
 	// protects signature verification, not correctness of the routing
 	// decision: an old agent simply routes the way it does today.
 	CapabilityContextWindowV1 = "context-window-v1"
+
+	// CapabilityRAMAvailableV1 declares that this agent understands
+	// HardwareSummary.RAMAvailableGB — the install-time available-memory
+	// measurement behind the OS deduction
+	// max(OSMemoryAllowanceGB, RAMTotalGB − RAMAvailableGB)
+	// (waired-agent#568).
+	//
+	// It needs the gate for the reason ContextWindow did: the field is
+	// agent-reported and rides the signed map on every PEER entry, so
+	// an agent that does not know it drops it on canonical re-marshal
+	// and fails verification, and the CP has to strip it across the
+	// whole map for an undeclared poller, not just from Self.
+	//
+	// A reader that predates the field sees 0, which every consumer
+	// already treats as "measurement unavailable" and answers with the
+	// OSMemoryAllowanceGB constant — an old agent simply computes the
+	// deduction the way it does today.
+	CapabilityRAMAvailableV1 = "ram-available-v1"
 )
