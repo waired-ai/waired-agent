@@ -342,6 +342,9 @@ func (p *agentInferenceProvider) startBenchmarkJob(gen int) <-chan struct{} {
 	p.benchJobMu.Lock()
 	defer p.benchJobMu.Unlock()
 	if p.benchJobDone != nil {
+		if p.benchJobJoined != nil {
+			p.benchJobJoined()
+		}
 		return p.benchJobDone
 	}
 	done := make(chan struct{})
