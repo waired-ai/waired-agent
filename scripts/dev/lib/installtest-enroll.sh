@@ -806,11 +806,19 @@ assert_inference() {
     gx "$guest" sh -c 'tail -n 60 /var/lib/waired/runtimes/ollama/logs/engine.log 2>/dev/null || echo "(no engine.log)"' 2>&1 | sed 's/^/    engine.log| /' || true
   fi
 
-  if gx "$guest" sh -c 'grep -hqsE "\"enabled\" *: *true" /var/lib/waired/*.json' 2>/dev/null; then
-    ok "inference enabled in persisted agent config"
-  else
-    bad "inference not enabled in persisted config"
-  fi
+  # Asked of the DAEMON, not of agent.json — see the darwin twin in
+  # installtest-macos.sh for why the config file is the wrong source
+  # (waired-agent#552). desired_state is planInitialInference's answer:
+  # install-time default, persisted toggle and flag, already folded.
+  local desired
+  desired="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null \
+    | grep -oE '"desired_state"[[:space:]]*:[[:space:]]*"[a-z]+"' \
+    | grep -oE '"[a-z]+"$' | tr -d '"' || true)"
+  case "$desired" in
+    enabled) ok "local inference is on (mgmt API desired_state=enabled)" ;;
+    "")      bad "the daemon published no desired_state — cannot tell an enabled host from a disabled one" ;;
+    *)       bad "local inference is off (mgmt API desired_state=$desired)" ;;
+  esac
 
   # The end-of-init benchmark (offerBenchmark, non-bypass) must report a
   # THROUGHPUT NUMBER.
