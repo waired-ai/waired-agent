@@ -11,6 +11,42 @@ Provenance: the 2026-08-03 terminology audit
 (waired-ai/waired#1056 → #473) and the CLAUDE.md §Vocabulary and
 provenance rules (#468).
 
+## Rebasing: the conflict is the hash, and picking a side loses a translation
+
+Two PRs that touch the same **English** page will conflict on the ja
+page's `sourceHash`, and on nothing else. The hash is one line of
+frontmatter; the prose sits in whatever sections each PR happened to
+edit, so git merges the bodies cleanly and stops on the line that records
+"this pair was looked at".
+
+Which makes the failure misleading. `CONFLICT (content): Merge conflict
+in src/content/docs/ja/<page>` reads like a prose collision, and you find
+out otherwise only by opening the file. It is also not auto-mergeable, so
+whoever lands second pays a full CI cycle for a one-line resolution.
+
+**Resolve by re-deriving, never by choosing.** Take either side to get
+the file to parse, then recompute against the MERGED English page:
+
+```sh
+npm run i18n:accept -- src/content/docs/ja/<page>
+npm run i18n:check          # must report all pairs in sync
+```
+
+`--accept` records "this pair was looked at" — it does not translate
+anything and does not verify that anyone did. So before you run it,
+**read the ja page and confirm both PRs' prose survived the merge.**
+Keeping the incoming hash over a body that lost the other side's
+paragraph produces a page that builds, passes `i18n:check`, and is
+missing a translation. That is the failure mode this step exists to
+prevent, and nothing downstream catches it.
+
+Observed repeatedly through one afternoon of concurrent work
+(2026-08-08): #557 rebasing onto #559 on `getting-started/first-run.mdx`,
+then #574 again each time #571, #572 and #570 landed under it, across
+`first-run.mdx`, `reference/cli.md` and `troubleshooting.md`. It is a
+property of two PRs sharing an English page, not bad luck — worth knowing
+when sequencing work that touches docs.
+
 ## Register
 
 - 断定形・体言止めのコンソール調で書く。soft-assistant 的な語尾は使わない
