@@ -212,14 +212,19 @@ var producedInProto = []exemption{
 // took the debt on the same terms and #428 paid it. waired#1031's
 // `ContextWindow` (#439) was the most recent, and #440 paid it.
 // waired#1064's `ActiveModel` (#469) took the debt on the same terms and
-// this PR pays it. Empty again, and that is the point.
+// #472 paid it. Empty again, and that is the point.
 //
 // (waired#1064's sibling field, InferenceState.SubsystemState, never
 // appeared here, for the reason Presentation.Reason is absent above:
 // management.InferenceStatus already has a field of that name, and the
 // guard matches producers by field NAME, so it read the local write as
 // this one's producer. Listing it would have failed as "a field that has
-// since gained a writer" before its writer existed.)
+// since gained a writer" before its writer existed. #568's
+// HardwareSummary.RAMAvailableGB is the same situation from its first
+// day: hardware.Profile has carried a same-named written field since
+// long before the wire field existed, so the guard has never seen this
+// one as producer-less — the real producer debt is tracked by #568
+// itself, not by this table.)
 var producerPending = []exemption{}
 
 // exemption declares one proto field with no producer under cmd/ or

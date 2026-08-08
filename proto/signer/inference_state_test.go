@@ -249,6 +249,87 @@ func TestHardwareSummary_HostFitBackwardCompat(t *testing.T) {
 	}
 }
 
+// TestHardwareSummary_RAMAvailable_CanonicalJSON is the byte-identity
+// pin for the #568 addition. RAMAvailableGB is the install-time
+// available-memory measurement; a host that has not measured (and an
+// agent that predates the field) sends 0, and 0 must keep the
+// pre-addition encoding byte-for-byte, because HardwareSummary rides
+// the signed NetworkMap and a shifted encoding would churn the map for
+// every peer on a rolling upgrade.
+func TestHardwareSummary_RAMAvailable_CanonicalJSON(t *testing.T) {
+	// Unset: byte-for-byte the pre-#568 encoding.
+	unmeasured := HardwareSummary{
+		GPUs: []HardwareGPUSummary{{
+			Model:       "NVIDIA GeForce RTX 4090",
+			VRAMTotalMB: 24564,
+			ComputeCap:  "8.9",
+		}},
+		RAMTotalGB: 64,
+	}
+	const wantUnmeasured = `{"gpus":[{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,` +
+		`"compute_cap":"8.9"}],"ram_total_gb":64}`
+	data, err := json.Marshal(&unmeasured)
+	if err != nil {
+		t.Fatalf("marshal unmeasured: %v", err)
+	}
+	if got := string(data); got != wantUnmeasured {
+		t.Errorf("an unmeasured host changed the encoding:\n got %s\nwant %s", got, wantUnmeasured)
+	}
+
+	// Set: the key appears last, in struct-declaration order.
+	measured := HardwareSummary{
+		GPUs: []HardwareGPUSummary{{
+			Model:       "Apple M3 Max",
+			VRAMTotalMB: 40960,
+			Vendor:      "apple",
+		}},
+		RAMTotalGB:     64,
+		UnifiedMemory:  true,
+		UsableVRAMMB:   49152,
+		RAMAvailableGB: 41,
+	}
+	const wantMeasured = `{"gpus":[{"model":"Apple M3 Max","vram_total_mb":40960,"vendor":"apple"}],` +
+		`"ram_total_gb":64,"unified_memory":true,"usable_vram_mb":49152,"ram_available_gb":41}`
+	data, err = json.Marshal(&measured)
+	if err != nil {
+		t.Fatalf("marshal measured: %v", err)
+	}
+	if got := string(data); got != wantMeasured {
+		t.Errorf("ram_available_gb encoding drifted:\n got %s\nwant %s", got, wantMeasured)
+	}
+
+	// Round trip (the CP reads it off the stored push to compute the
+	// same OS deduction the agent computes).
+	var out HardwareSummary
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&measured, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", measured, out)
+	}
+
+	// And a pre-addition payload parses with the field zero — which
+	// every consumer treats as "measurement unavailable" and answers
+	// with the OSMemoryAllowanceGB constant.
+	var pre HardwareSummary
+	if err := json.Unmarshal([]byte(wantUnmeasured), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition: %v", err)
+	}
+	if pre.RAMAvailableGB != 0 {
+		t.Errorf("RAMAvailableGB = %d, want 0 on a pre-addition payload", pre.RAMAvailableGB)
+	}
+}
+
+// TestCapabilityRAMAvailableV1_WireValue pins the capability literal:
+// CP poll intake, distribution gate, and agent poller all compare this
+// exact string, so a reword is a wire-protocol break, not a rename.
+func TestCapabilityRAMAvailableV1_WireValue(t *testing.T) {
+	if CapabilityRAMAvailableV1 != "ram-available-v1" {
+		t.Fatalf("CapabilityRAMAvailableV1 = %q, want %q",
+			CapabilityRAMAvailableV1, "ram-available-v1")
+	}
+}
+
 // TestHardwareSummary_MemoryBandwidthSpec_CanonicalJSON is the same
 // byte-identity pin for the #251 addition. It matters more than most:
 // MemoryBandwidthSpecGBs is populated from a chip table, so the hosts
