@@ -169,6 +169,15 @@ var producedInProto = []exemption{
 		"the shared fit projection, built by hostfit.Project"},
 	{reflect.TypeFor[hostfit.Presentation](), "RequiredWindowResidentMB",
 		"the shared fit projection, built by hostfit.ProjectModel"},
+	// ModelSize is computed from the manifest inside hostfit, so it
+	// belongs here today. It will not stay: #537 gives the tray and
+	// `waired models ls --detail` a field of the same name on
+	// management.CatalogFamily, and the guard matches producers by field
+	// NAME — that local write becomes a producer and this entry starts
+	// failing as "a field that has since gained a writer". Delete it in
+	// the PR that adds the management field rather than editing it.
+	{reflect.TypeFor[hostfit.Presentation](), "ModelSize",
+		"the shared fit projection, built by hostfit.ProjectModel"},
 	{reflect.TypeFor[hostfit.OllamaWindowPlan](), "NoSpillCapacityTokens",
 		"the window sizing's own working, computed inside hostfit.OllamaPlannedWindow"},
 	{reflect.TypeFor[hostfit.Presentation](), "NotRecommended",

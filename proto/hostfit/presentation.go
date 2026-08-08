@@ -138,14 +138,33 @@ type Presentation struct {
 
 	// QualityTier is the maintainers' ranking of the variant this
 	// verdict describes. Higher is better; it is what the pickers order
-	// by, and it is deliberately a raw number rather than a coarse
-	// scale — the catalog's own value, not a re-bucketing that would
-	// have to be kept in step with it.
+	// by.
+	//
+	// ORDERING ONLY — #537 took it off every user-facing surface. #518
+	// redefined it as arithmetic over two catalog fields, and a picker
+	// that prints "quality 72" claims a measurement behind a composite.
+	// It stays on the wire because sorting by it is still the order the
+	// machine itself would choose; render ModelSize instead.
 	//
 	// True even where nothing else is: it ranks the MODEL, not its fit
 	// on this host, so it stays meaningful for a row that cannot run
 	// and for a host that has reported no hardware.
 	QualityTier int `json:"quality_tier,omitempty"`
+
+	// ModelSize is the class of graphics card that runs this model —
+	// ModelSize(manifest), see model_size.go. It is what a picker
+	// prints where it used to print QualityTier.
+	//
+	// The FAMILY's class, not this variant's, and constant across the
+	// rows of one model: it names the smallest card that can run the
+	// model at all, and a badge that changed as the host resolved a
+	// different build would be describing our choice rather than the
+	// model.
+	//
+	// Empty for a model whose variants carry no weight annotation, and
+	// on the variant-only Project path which has no manifest to ask.
+	// Empty is "unknown", never "small" — see SizeRank.
+	ModelSize string `json:"model_size,omitempty"`
 
 	// NotRecommended marks a model this computer CAN run but should not
 	// be pointed at by default (OllamaRecommend), with
@@ -241,7 +260,7 @@ func Project(v catalog.Variant, engine string, h Host, budgetMB int) Presentatio
 // which is the drift this package exists to prevent, and the reason
 // every in-tree caller moves to this one.
 func ProjectModel(m catalog.Manifest, v catalog.Variant, engine string, h Host, budgetMB int) Presentation {
-	out := Presentation{QualityTier: v.QualityTier}
+	out := Presentation{QualityTier: v.QualityTier, ModelSize: ModelSize(m)}
 	var got Verdict
 	switch engine {
 	case catalog.RuntimeOllama:
@@ -289,4 +308,23 @@ func ProjectModel(m catalog.Manifest, v catalog.Variant, engine string, h Host, 
 // went missing before this package.
 func NoVariantForEngine(qualityTier int) Presentation {
 	return Presentation{Reason: ReasonNoVariantForEngine, QualityTier: qualityTier}
+}
+
+// NoVariantForEngineModel is NoVariantForEngine with the manifest in
+// hand, so the row carries its size class too.
+//
+// A second entry point rather than a third argument for the reason
+// ProjectModel is one: proto is additive-only across published tags, so
+// a signature already consumed by the other repository cannot grow.
+//
+// The tier is still the caller's, because "the model's tier" is not a
+// question this package answers — the control plane takes the strongest
+// variant so a model shipping a small quantization does not sink in the
+// ordering, and that choice belongs where the ordering is.
+func NoVariantForEngineModel(m catalog.Manifest, qualityTier int) Presentation {
+	return Presentation{
+		Reason:      ReasonNoVariantForEngine,
+		QualityTier: qualityTier,
+		ModelSize:   ModelSize(m),
+	}
 }
