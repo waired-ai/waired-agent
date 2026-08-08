@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: 87d116889c767c4c
+sourceHash: 3191d32bda722268
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -156,8 +156,11 @@ Engine:   ready (model=qwen3.6-27b, 0/4 slots used, inflight=0)
 ひとつ小さいモデルに戻してください。
 
 <Aside type="tip" title="スペック超えのモデルも選べます">
-	不足分（例: `needs 32 GB RAM (have 31 GB)`）を示して確認を求めますが、
-	**禁止はしません**。少しの超過なら動くことが多く、単に遅くなるだけです。
+	動きはするが Waired が選ばないモデルは、警告と確認のうえで選べます —
+	コストを承知した上での、本当の選択肢です。メモリに載らないモデルも選択肢の
+	ままです: 不足分（例: `needs 32 GB RAM (have 31 GB)`）を示し、読み込みに
+	失敗する見込みだと伝えたうえで、ダウンロード前にもう一度確認します。
+	一律に禁止されるものはありません。
 </Aside>
 
 ## ディスクの空きを増やす

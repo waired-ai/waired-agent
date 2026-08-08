@@ -126,15 +126,17 @@ func newModelsPullCmd() *cobra.Command {
 	var mgmt string
 	var wait bool
 	var assumeYes bool
+	var force bool
 	cmd := &cobra.Command{
 		Use:   "pull <model_id|alias>",
 		Short: "Pull a model and (by default) wait until it is ready.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			model := args[0]
-			// #61: over-spec picks are warn-but-allow — confirm before
-			// pulling a model that exceeds this host's recommended spec.
-			proceed, err := confirmModelFitsForPull(mgmt, model, assumeYes, os.Stdout, os.Stdin)
+			// #61/#583: every fit warning is warn-then-honour — confirm
+			// before pulling a model this host would not choose, or one
+			// that does not fit its memory at all.
+			proceed, err := confirmModelFitsForPull(mgmt, model, assumeYes, force, os.Stdout, os.Stdin)
 			if err != nil {
 				return err
 			}
@@ -166,6 +168,8 @@ func newModelsPullCmd() *cobra.Command {
 	addMgmtFlag(cmd, &mgmt)
 	cmd.Flags().BoolVar(&wait, "wait", true, "poll status until the model becomes ready")
 	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "skip the over-spec confirmation prompt")
+	cmd.Flags().BoolVar(&force, "force", false,
+		"with --yes, also confirm downloading a model that does not fit in this computer's memory")
 	return cmd
 }
 

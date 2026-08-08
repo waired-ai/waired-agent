@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -12,22 +11,22 @@ import (
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
-// confirmModelFitsForPull gates `waired models pull` (#61). Two
-// different things, and the difference is the whole point:
+// confirmModelFitsForPull gates `waired models pull` (#61, #583). Two
+// different warnings, and the difference is what consent takes:
 //
 //   - fits=false means this computer does not have the memory — weights
 //     plus the window's KV cache plus engine overhead exceed RAM and
-//     graphics memory together. Loading it is a certain OOM, so the pull
-//     is REFUSED with the shortfall. This is the only gate the ratified
-//     policy allows to refuse anything (waired-ai/waired#1056,
-//     2026-08-03 owner decision; the arithmetic is #464's).
+//     graphics memory together, so loading it is expected to fail after
+//     the download is spent. It is still a choice
+//     (waired-ai/waired#1067, 2026-08-08 owner decision: no surface
+//     refuses a model any more; supersedes waired-ai/waired#1056's
+//     refusal rule): interactively it asks with the shortfall, default
+//     No, and a script consents with --yes --force. --yes alone
+//     deliberately does not cover it — that flag skips confirmations
+//     whose safe answer is yes, and this one's is No.
 //   - not_recommended means it runs here and Waired would pick something
 //     else. Warned, then honoured — interactively (default No) or with
 //     --yes in a non-interactive context.
-//
-// The two used to be one gate that --yes could clear, so the CLI pulled
-// models the browser hard-disabled and docs-site said were refused
-// (#465 item 4).
 //
 // The fit verdict comes from the agent's /inference/catalog endpoint (the
 // same fit logic the tray and `models ls --detail` use), so the CLI never
@@ -35,9 +34,11 @@ import (
 //
 // Returns (proceed, err). Fail-open: if the catalog can't be fetched or
 // the model can't be matched to a family, proceed is true — a gate must
-// never turn an infra hiccup into a hard failure. A non-nil err means the
-// pull must be aborted; the caller surfaces it verbatim.
-func confirmModelFitsForPull(mgmt, model string, assumeYes bool, out io.Writer, in io.Reader) (bool, error) {
+// never turn an infra hiccup into a hard failure. A decline is
+// (false, nil) — a choice, not a fault — which the caller reports as a
+// cancelled pull. A non-nil err means the pull must be aborted; the
+// caller surfaces it verbatim.
+func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.Writer, in io.Reader) (bool, error) {
 	fam, ok := lookupCatalogFamily(mgmt, model)
 	if !ok {
 		return true, nil // unknown fit → no gate
@@ -54,12 +55,16 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes bool, out io.Writer, 
 		}
 		writePromptf(out, "\n%s %s does not fit in this computer's memory: %s.\n",
 			emo("⚠", "!"), name, deficit)
+		writePrompt(out, "  Loading it is expected to fail after the download completes.")
 		writePrompt(out, "  Run `waired models ls --detail` to see what does fit.")
-		// No --yes escape on purpose: the flag skips a confirmation, and
-		// this is not one. Nothing downstream can recover from weights
-		// that do not fit, so "pull it anyway" would only spend the
-		// download and fail at load.
-		return false, fmt.Errorf("%s does not fit in this computer's memory (%s)", model, deficit)
+		switch unfitPullAction(assumeYes, force, stdinIsInteractive()) {
+		case pullProceed:
+			return true, nil
+		case pullDecline:
+			writePrompt(out, "  Not downloading. Re-run with --yes --force to download it anyway.")
+			return false, nil
+		}
+		return ynPrompt(out, bufio.NewScanner(in), "Download it anyway?", false), nil
 	}
 
 	// It runs. It may still be the wrong choice for this machine
@@ -80,6 +85,32 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes bool, out io.Writer, 
 		return true, nil
 	}
 	return ynPrompt(out, bufio.NewScanner(in), "Use it anyway?", false), nil
+}
+
+// pullFitAction is what the does-not-fit branch does for one flag/tty
+// combination.
+type pullFitAction int
+
+const (
+	pullProceed pullFitAction = iota
+	pullDecline
+	pullAsk
+)
+
+// unfitPullAction decides how a fits=false pull is confirmed
+// (waired-ai/waired#1067, 2026-08-08 owner decision). Auto-consent
+// takes BOTH --yes and --force; anything less asks a present human and
+// declines an absent one. --force without --yes still asks: the pair is
+// the scripted consent, not two synonyms.
+func unfitPullAction(assumeYes, force, interactive bool) pullFitAction {
+	switch {
+	case assumeYes && force:
+		return pullProceed
+	case interactive:
+		return pullAsk
+	default:
+		return pullDecline
+	}
 }
 
 // notRecommendedBecause turns the demotion code into the clause that
