@@ -194,6 +194,18 @@ func TestDeclaredWindowIsMonotoneInVRAM(t *testing.T) {
 // refused most of it outright, so there was no ladder down there to
 // check; abolishing the floor gave every host from 6 GB up a pick and
 // made the shape worth pinning.
+//
+// One row down there surprises everyone who checks it, so: on a CPU-only
+// host at exactly 7 GB the pick is qwen3.5-0.8b, not the higher-tier
+// qwen3.5-2b. Reasoning from OllamaCapacityFit alone gives the wrong
+// answer — capacity says 2b is fine there (4012 MiB at the rung against
+// a 5120 MiB budget). The pick is driven by DECLARABILITY, and the
+// CPU-only SIZING budget is RAM - OllamaCPUOnlyRAMHeadroomGB (4), a full
+// 2 GB tighter than the capacity budget's RAM - OSMemoryAllowanceGB (2).
+// Two deductions on one axis, deliberately different; hostfit's own
+// constant says why ("sizing is allowed a comfort margin that a refusal
+// is not"). At 7 GB that gap is what lets 0.8b declare 200,704 while 2b
+// reaches only 178,176.
 func TestInstallPickIsMonotoneInRAM(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
