@@ -8,6 +8,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/runtime"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // TestUMATierSelectionEstimated is the #415 "Tier B" deliverable: validate
@@ -113,29 +114,48 @@ func TestUMATierSelectionEstimated(t *testing.T) {
 
 // TestUMA8GBFitsMidModelsOnMetal is the #424 regression guard, the inverse of
 // the old #415 finding-lock: on an 8 GB Apple Silicon Mac the Metal-aware
-// 1024 MB UMA overhead (down from the CUDA-calibrated 4096) lets the 3.4 GB
-// qwen3.5-4b and the 4.7 GB qwen2.5-coder-7b fit the 6144 MB budget — the
-// models the box actually runs on Metal (UMA shares memory; ollama spills
-// gracefully). Before #424 the 4 GB overhead pushed both just past the budget
-// and collapsed the auto-pick to the 1.9 GB qwen3.5-2b. If the UMA overhead is
-// ever raised back, this test catches the regression.
+// 1024 MB UMA overhead (down from the CUDA-calibrated 4096) lets a mid-sized
+// model fit the 6144 MB budget — the models the box actually runs on Metal
+// (UMA shares memory; ollama spills gracefully). Before #424 the 4 GB overhead
+// pushed them past the budget and collapsed the auto-pick to the 1.9 GB
+// qwen3.5-2b. If the UMA overhead is ever raised back, this catches it.
+//
+// AMENDED 2026-08-08 (#552). qwen3.5-4b left the list, and NOT because the
+// overhead moved — the constant is asserted directly now, so #424's subject no
+// longer rides on which model happens to clear a budget. The 4b is a
+// 262144-native model and the gate prices it at the 200,704 rung: 7403 MiB
+// against 6144. The 4.7 GB coder-7b is the better guard anyway, being the
+// larger model and so the one with less room for an overhead to hide in.
 func TestUMA8GBFitsMidModelsOnMetal(t *testing.T) {
 	manifests, err := catalog.BundledManifests()
 	if err != nil {
 		t.Fatalf("BundledManifests: %v", err)
 	}
+	// #424's actual subject, asserted as itself.
+	if got := hostfit.OllamaVRAMOverheadUMAMB; got != 1024 {
+		t.Errorf("UMA overhead = %d MB, want 1024 — #424 lowered it from the CUDA-calibrated 4096", got)
+	}
 	hw := syntheticAppleUMA(8, 0) // 6144 MB budget
 
-	for _, id := range []string{"qwen3.5-4b", "qwen2.5-coder-7b-instruct"} {
-		m, ok := manifestByPrefix(manifests, id)
+	for _, tc := range []struct {
+		id       string
+		wantFits bool
+		why      string
+	}{
+		{"qwen2.5-coder-7b-instruct", true, "4.7 GB, 32k-native: its rung IS 32768, and that fits (#424)"},
+		{"qwen3.5-4b", false, "262144-native, so priced at the 200,704 rung: 7403 MiB (#552)"},
+		{"qwen3.5-2b", true, "holds its full native window here, which is why the host keeps local inference"},
+	} {
+		m, ok := manifestByPrefix(manifests, tc.id)
 		if !ok {
-			t.Fatalf("catalog missing %s", id)
+			t.Fatalf("catalog missing %s", tc.id)
 		}
 		fit := FamilyBestFit(m, catalog.RuntimeOllama, runtime.OllamaPinnedVersion, hw)
-		if !fit.Fits {
-			t.Errorf("%s does not fit 8 GB (deficit=%q) — UMA overhead may have been raised; #424 expects it to fit", id, fit.DeficitLabel)
+		if fit.Fits != tc.wantFits {
+			t.Errorf("%s fits 8 GB = %v, want %v (deficit=%q) — %s",
+				tc.id, fit.Fits, tc.wantFits, fit.DeficitLabel, tc.why)
 		}
-		t.Logf("8 GB: %s fits=%v (runs on Metal; #424 Metal-aware overhead)", id, fit.Fits)
+		t.Logf("8 GB: %s fits=%v — %s", tc.id, fit.Fits, tc.why)
 	}
 }
 

@@ -38,12 +38,20 @@ func TestSelectInstallModel_RealCatalog(t *testing.T) {
 			wantOK: true,
 		},
 		{
-			// 8 GB CPU box: 14b (min 16) is out. The #624 context floor
-			// excludes the 32k-window coder-7b (tier 45) from
-			// auto-selection; the best 262144-native fit is qwen3.5-4b
-			// (tier 42) — a small tier cost for a real coding window.
-			name: "cpu-8gb-picks-7b", hw: cpu(8), engine: catalog.RuntimeOllama,
-			wantOK: true, wantTop: "qwen3.5-4b",
+			// 8 GB CPU box: the #624 context floor excludes the 32k-window
+			// coder entries from auto-selection, and since #552 the
+			// capacity gate prices the survivors at the window this
+			// product serves. qwen3.5-4b needs 7403 MiB to hold a 200,704
+			// cache and this host has 6144, so nothing above the quality
+			// floor is left. It is below the recommended spec: it enrols,
+			// routes to peers, and qwen3.5-2b — which DOES hold the full
+			// window here — is offered through #465's opt-in.
+			//
+			// The same verdict as an 8 GB Mac, and that is the point: the
+			// arithmetic branches on Host.Class(), never on an operating
+			// system.
+			name: "cpu-8gb-under-spec", hw: cpu(8), engine: catalog.RuntimeOllama,
+			wantOK: false,
 		},
 		{
 			// 4 GB CPU box: only 3b/2b/0.8b fit, and the sole tier-30+ fit
