@@ -820,3 +820,81 @@ func TestAcceptSwitch_TransientFailureRecovers(t *testing.T) {
 		t.Errorf("expected the wait to reach ready, got:\n%s", out.String())
 	}
 }
+
+// TestBenchWaitLineFor covers every subsystem state that can reach the
+// 425 wait, because the arm used to name a download for all of them.
+//
+// Record of today's behaviour, not a contract: only `awaiting_model` is a
+// download, and a state this build has never heard of joins the engine
+// side — which is the honest default here, since a model this wait was
+// entered for is already known to be on disk in every other case.
+//
+// The observed instance is the routing-sentinel transcript in #576, where
+// init printed "Waiting for the model to finish downloading…" 1 ms after
+// "[ok] granite4-350m ready" and then measured 20 tok/s 52 s later: the
+// engine was loading, and there was no download to wait for.
+func TestBenchWaitLineFor(t *testing.T) {
+	const (
+		downloadLead = "Waiting for the model to finish downloading before benchmarking…"
+		engineLead   = "Waiting for the AI engine to load the model before benchmarking…"
+	)
+	for _, tc := range []struct {
+		state    string
+		wantLead string
+		wantHint string
+	}{
+		// The one download.
+		{"awaiting_model", downloadLead, "(this can take a few minutes)"},
+		// The engine bringing up a model already on disk.
+		{"loading", engineLead, "(this can take a minute)"},
+		{"starting", engineLead, "(this can take a minute)"},
+		{"initializing", engineLead, "(this can take a minute)"},
+		// The readiness race: /status says ready while /benchmark still
+		// answers 425 (#576).
+		{"ready", engineLead, "(this can take a minute)"},
+		{"degraded", engineLead, "(this can take a minute)"},
+		{"engine_failed", engineLead, "(this can take a minute)"},
+		// Not a state this build knows, and the empty one /status returns
+		// when it could not be read this tick.
+		{"something_new", engineLead, "(this can take a minute)"},
+		{"", engineLead, "(this can take a minute)"},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			lead, hint := benchWaitLineFor(tc.state)
+			if lead != tc.wantLead {
+				t.Errorf("lead = %q, want %q", lead, tc.wantLead)
+			}
+			if hint != tc.wantHint {
+				t.Errorf("hint = %q, want %q", hint, tc.wantHint)
+			}
+		})
+	}
+}
+
+// TestPromptBenchmark_EngineLoadWaitDoesNotNameADownload is the arm above
+// reached through the real poll loop: a host whose model is on disk and
+// whose engine is still loading it must not be told to wait for a
+// download. Without this the table test would pass while waitForBenchmark
+// kept its own hardcoded line.
+func TestPromptBenchmark_EngineLoadWaitDoesNotNameADownload(t *testing.T) {
+	restore := benchPollInterval
+	benchPollInterval = time.Millisecond
+	defer func() { benchPollInterval = restore }()
+
+	stub := &benchStub{ready: false, state: "loading", readyAfter: 3}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "finish downloading") {
+		t.Errorf("named a download while the engine was loading:\n%s", got)
+	}
+	if !strings.Contains(got, "Waiting for the AI engine to load the model") {
+		t.Errorf("expected the engine-load wait line, got:\n%s", got)
+	}
+}
