@@ -439,8 +439,8 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// complete a generation", never "no benchmark happened" — see
 			// waitForBenchmark's ranAndFailed.
 			var benchFailed bool
-			switch {
-			case setupActive:
+			switch benchmarkPlanFor(setupActive, engineErr, modelWait) {
+			case benchSkipSetupDriving:
 				// waired#939: the degraded wording. Everything this process
 				// owed the setup is done and init is about to return, so the
 				// keep-open instruction no longer applies — saying it here
@@ -456,14 +456,9 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				if !terminalDoneSaid {
 					fmt.Println(setupTerminalDoneLine)
 				}
-			case engineErr != nil:
-				// Nothing to measure: there is no engine.
-			case modelWait.engineFailure != "":
-				// Nothing to measure for the same reason one layer along:
-				// the engine is installed but will not stay up, so the
-				// benchmark would only add its own refusal to a failure
-				// the wait has already explained (#310).
-			default:
+			case benchSkipNoEngine, benchSkipEngineDown, benchSkipModelNotReady:
+				// Nothing to measure, and the wait above already said why.
+			case benchRun:
 				// #133: once the daemon has the model ready, benchmark it and
 				// offer a lighter model if this host can't sustain the pick.
 				resp, benchFailed, _ = benchmarkWithScanner(mgmtURL, nonInteractive, os.Stdout, stdin, isTerminal(os.Stdout))
@@ -516,6 +511,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				accountEmail:  st.AccountEmail,
 				engineErr:     engineErr,
 				engineFailure: modelWait.engineFailure,
+				modelPending:  modelWait.pending,
 				benchFailed:   benchFailed,
 				bench:         outcomeFrom(resp),
 				claudeRouted:  claudeRouted,
@@ -601,6 +597,62 @@ func printEngineInstallFailure(out io.Writer, err error, setupActive bool) {
 	writePrompt(out)
 }
 
+// benchSkip is whether `waired init` measures this host, and when it does
+// not, which of the four reasons applies.
+//
+// A named decision rather than a switch inline in the login flow, for the
+// reason exitErr gives about itself: it is one rule that several things
+// have to agree on, and the only way to test it is to be able to call it.
+type benchSkip int
+
+const (
+	// benchRun: the engine is installed, it stayed up, and the model wait
+	// reached ready — the one state in which there is something to measure.
+	benchRun benchSkip = iota
+	// benchSkipSetupDriving: §4.2, the browser owns the questions. The
+	// benchmark prompt reads stdin and can offer to switch the active
+	// model, which is a second writer racing desired_model_id.
+	benchSkipSetupDriving
+	// benchSkipNoEngine: nothing to measure, because there is no engine
+	// (#188). Includes the opt-out, where there was never going to be one.
+	benchSkipNoEngine
+	// benchSkipEngineDown: the engine is installed and will not stay up,
+	// so benchmarking would only add its own refusal to a failure the
+	// wait has already explained in full (#310).
+	benchSkipEngineDown
+	// benchSkipModelNotReady: the model wait ended without a ready model
+	// and SAID so, handing the terminal back — "it will finish in the
+	// background. Run `waired status` to watch progress".
+	//
+	// Until #569 this state fell through to the benchmark, and
+	// waitForBenchmark re-ran the whole readiness wait on a fresh
+	// benchPollDeadline of its own: up to ten more minutes on the very
+	// download init had just handed to the background, ending on
+	// whatever that second wait happened to conclude. On one nightly leg
+	// that was "everything completed successfully! / Local inference is
+	// live via the waired-agent daemon", printed over a host whose model
+	// did not finish arriving until the following init.
+	benchSkipModelNotReady
+)
+
+// benchmarkPlanFor is that rule. Order is a contract, and it is the same
+// order printDaemonSummaryBox uses, because the two describe one run: the
+// more specific reason wins, and a reason that made the next one
+// unreachable comes first.
+func benchmarkPlanFor(setupActive bool, engineErr error, w modelWaitResult) benchSkip {
+	switch {
+	case setupActive:
+		return benchSkipSetupDriving
+	case engineErr != nil:
+		return benchSkipNoEngine
+	case w.engineFailure != "":
+		return benchSkipEngineDown
+	case !w.ready:
+		return benchSkipModelNotReady
+	}
+	return benchRun
+}
+
 // daemonSummary is everything the closing box is chosen from.
 type daemonSummary struct {
 	accountEmail string
@@ -618,7 +670,18 @@ type daemonSummary struct {
 	// skipped — a routing-only node and an external endpoint both skip it
 	// by design, and #203 is explicit that a skip must not read as a
 	// fault (waired-ai/waired-agent#552).
-	benchFailed  bool
+	benchFailed bool
+	// modelPending is the model wait ending with local AI still on its
+	// way — still downloading, engine still coming up, terminal handed
+	// back (modelWaitResult.pending, #569). Nothing failed, so it never
+	// reaches exitErr; what it changes is the box, because the success
+	// box's "Local inference is live via the waired-agent daemon" is a
+	// claim this host cannot support yet.
+	//
+	// Deliberately not "the wait returned not-ready": that is also the
+	// honest answer on a gateway-only host, which must keep the success
+	// box. The wait sets this only where it knows better.
+	modelPending bool
 	bench        benchmarkOutcome
 	claudeRouted bool
 	// hostSpeed is what one coding question cost on this machine, as the
@@ -647,6 +710,11 @@ type daemonSummary struct {
 // takeover, and on a budget that simply elapsed. Only a STATED fault
 // counts, which is the same rule the box above is chosen by — and the
 // reason they are derived from one struct rather than decided twice.
+//
+// modelPending is that rule's newest case and does not appear below: a
+// download that has not finished is not a device with no local AI, it is
+// a device a few minutes from having some, and an installer that exited 3
+// on it would report a failed install to everyone on a slow link (#569).
 //
 // And an engineErr is not automatically a fault: engine installs turned
 // off on this host is an instruction the operator gave, so it exits 0
@@ -710,6 +778,17 @@ func (s daemonSummary) engineOptOut() bool {
 // a host that will not install an engine flips a toggle and leaves the
 // operator with no local AI and no idea why. Naming the opt-out is the
 // only one of the two that is actionable here.
+//
+// The still-setting-up arm (#569) comes last of all, immediately above the
+// success box, because it is the weakest claim on the page: it says only
+// that local AI has not arrived YET, and every arm above it knows
+// something more specific about why it never will. It sits below the
+// measurement's box in particular for the reason that ordering always
+// turns on — the remedies. That box says `waired inference on`; telling
+// an operator to wait for a download the daemon abandoned would be advice
+// about nothing. They cannot collide today (a host the measurement
+// switched off answers `disabled`, which the wait does not call pending),
+// so the order is what keeps that true rather than what depends on it.
 func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 	switch {
 	case s.engineOptOut():
@@ -722,9 +801,42 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonBenchmarkFailedBox(out, s.accountEmail, s.claudeRouted)
 	case s.hostSpeed != nil && s.hostSpeed.TurnedInferenceOff:
 		printDaemonTooSlowBox(out, s)
+	case s.modelPending:
+		printDaemonSettingUpBox(out, s.accountEmail, s.claudeRouted)
 	default:
 		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted, s.hostSpeed)
 	}
+}
+
+// printDaemonSettingUpBox is the summary for a run that signed the device
+// in and left local AI still on its way: the model was still downloading
+// when init's window closed, the engine had not finished coming up, or
+// the operator took the terminal back and the agent carried on (#569).
+//
+// box, not boxWarn, and it names no repair command: nothing is broken and
+// there is nothing for the operator to do. It exists because the success
+// box ends on "Local inference is live via the waired-agent daemon", and
+// on this host that sentence is not true yet — the same defect #310 and
+// #552 each fixed one reason earlier, reached here through a download
+// rather than through a fault.
+//
+// The reason is deliberately not repeated. All three endings that set
+// modelPending print their own account immediately before this box, and
+// they are the ones that know which of the three it was.
+func printDaemonSettingUpBox(out io.Writer, accountEmail string, claudeRouted bool) {
+	var lines []string
+	if accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
+	}
+	if claudeRouted {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
+	} else {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
+	}
+	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	lines = append(lines, dim("Waired is still setting local AI up in the background; the line above says what it's waiting on."))
+	lines = append(lines, dim("Watch it with: waired status"))
+	box(out, emo("✅", "*"), "Waired is signed in — local AI is still setting up here", lines)
 }
 
 // printDaemonTooSlowBox is the summary for a host the install-time

@@ -96,6 +96,12 @@ where `WAIRED_NO_OLLAMA` is set — which is what `--skip-ollama` /
 `-SkipOllama` does — `waired init` skips the engine, says so, and exits `0`.
 Nothing went wrong, so nothing is reported as an error.
 
+Nor is a model that has not finished downloading. Setup waits a bounded time
+for it; past that it hands the terminal back, says so, and exits `0` while the
+background service carries on with the transfer. The computer gets local AI a
+few minutes later without you doing anything, so a script must not treat it as
+a failed install — `waired status` is what reports the progress.
+
 ### `waired status`
 
 The quick "is it working" check.

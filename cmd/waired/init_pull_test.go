@@ -84,6 +84,75 @@ func TestWaitForBundledModel_NoEngineThenDownloadThenReady(t *testing.T) {
 	}
 }
 
+// The budget elapsing mid-download is the ending #569 is about, and it had
+// no test of its own: the two places that mention "Model still downloading"
+// both assert its ABSENCE, so the arm that prints it was never exercised.
+//
+// It hands the terminal back — "it will finish in the background" — which
+// is why it is pending: init must not then start a second readiness wait of
+// its own, and the closing box must not celebrate over a host whose model
+// has not arrived (run 31243063107, job 93067141684).
+func TestWaitForBundledModel_BudgetElapsedMidDownloadIsPendingNotFailed(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	const mb = 1 << 20
+	stub := &pullStub{seq: []management.InferenceStatus{
+		downloadingSnap("qwen", 1*mb, 4*mb),
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	// A budget that is already spent: the wait polls once and gives up.
+	res := waitForBundledModel(srv.URL, &out, false, time.Nanosecond, false, nil, nil, nil)
+	if res.ready {
+		t.Fatalf("an elapsed budget must return not-ready; out=%q", out.String())
+	}
+	if !res.pending {
+		t.Error("the download is still running in the background; want pending")
+	}
+	if res.engineFailure != "" {
+		t.Errorf("a slow download is not an engine fault; got engineFailure=%q", res.engineFailure)
+	}
+	s := out.String()
+	if !strings.Contains(s, "Model still downloading") {
+		t.Errorf("expected the hand-back notice, got: %q", s)
+	}
+	if !strings.Contains(s, "waired status") {
+		t.Errorf("expected the progress hint the hand-back promises, got: %q", s)
+	}
+}
+
+// NEGATIVE CONTROL for the field above, and the reason #569 could not be
+// written as plain !ready. A gateway-only host answers `disabled`, so the
+// wait returns not-ready and says nothing — there is nothing to say. It
+// must NOT be pending: this operator configured a machine with no local AI
+// and has to keep the ordinary closing box, not a "still setting up" one.
+func TestWaitForBundledModel_InferenceOffIsNotPending(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	for _, state := range []string{"disabled", "stopped"} {
+		t.Run(state, func(t *testing.T) {
+			stub := &pullStub{seq: []management.InferenceStatus{{SubsystemState: state}}}
+			srv := stub.server()
+			defer srv.Close()
+
+			var out strings.Builder
+			res := waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil)
+			if res.ready {
+				t.Errorf("%s must return not-ready", state)
+			}
+			if res.pending {
+				t.Errorf("%s is a host configured without local AI, not one still setting up", state)
+			}
+			if res.engineFailure != "" {
+				t.Errorf("%s is not a fault; got engineFailure=%q", state, res.engineFailure)
+			}
+			if out.String() != "" {
+				t.Errorf("nothing is happening, so the wait should stay quiet; got: %q", out.String())
+			}
+		})
+	}
+}
+
 // A terminal pull failure returns false with a retry hint, without hanging.
 func TestWaitForBundledModel_PullFailed(t *testing.T) {
 	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
@@ -190,10 +259,10 @@ func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {
 	defer srv.Close()
 
 	var out strings.Builder
-	var ready bool
+	var res modelWaitResult
 	done := make(chan struct{})
 	go func() {
-		ready = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil).ready
+		res = waitForBundledModel(srv.URL, &out, false, benchPollDeadline, false, nil, nil, nil)
 		close(done)
 	}()
 	select {
@@ -201,8 +270,18 @@ func TestWaitForBundledModel_NoEnginePersists(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("waitForBundledModel hung on a persistent no_engine state")
 	}
-	if ready {
+	if res.ready {
 		t.Errorf("persistent no_engine must return false")
+	}
+	// The line below promises Waired keeps bringing the engine up, so this
+	// ending is pending and not a fault: the closing box says local AI is
+	// still setting up, and init still exits 0 (#569). engineFailure stays
+	// empty — the daemon reported no failure, it just has not finished.
+	if !res.pending {
+		t.Errorf("the no_engine grace hands back a host the daemon is still working on; want pending")
+	}
+	if res.engineFailure != "" {
+		t.Errorf("no failure was observed, so engineFailure must stay empty; got %q", res.engineFailure)
 	}
 	if !strings.Contains(out.String(), "AI engine still isn't up") {
 		t.Errorf("expected the no_engine grace skip, got: %q", out.String())
@@ -346,8 +425,15 @@ func TestWaitForBundledModel_EndedByConfirmedTakeover(t *testing.T) {
 	enter := newTakeoverWatch(newStdinReader(strings.NewReader("\ny\n")))
 
 	var out strings.Builder
-	if waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter, nil, nil).ready {
+	res := waitForBundledModel(srv.URL, &out, false, benchPollDeadline, true, enter, nil, nil)
+	if res.ready {
 		t.Fatal("a taken-over wait must return false")
+	}
+	// "Continuing in the background" is a promise about a download that is
+	// still running, so this ending is pending: the closing box says local
+	// AI is still setting up rather than celebrating (#569).
+	if !res.pending {
+		t.Error("a takeover leaves the agent finishing the download; want pending")
 	}
 	s := out.String()
 	for _, want := range []string{"Take over setup in this terminal?", "Continuing in the background"} {

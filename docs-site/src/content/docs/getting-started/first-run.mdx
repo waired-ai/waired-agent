@@ -410,6 +410,36 @@ from an elevated prompt on Windows) whenever you want this computer to run
 models itself.
 </Expected>
 
+<Expected>
+```
+Model still downloading; it will finish in the background. Run `waired status`
+to watch progress, or `waired runtimes benchmark` later to check performance.
+
+*  Waired is signed in — local AI is still setting up here
+   Account   you@example.com
+   Claude    still using the Anthropic API
+
+   Signed in and running — this device is on your network.
+   Waired is still setting local AI up in the background; the line above says what it's waiting on.
+   Watch it with: waired status
+```
+
+Setup finished before the model did. A model is several gigabytes, and on a
+slow connection it can outlast the window `waired init` waits in — so setup
+hands the terminal back and the background service carries on downloading. The
+line above the box says which step it stopped on: the download, or an engine
+that had not finished starting.
+
+Nothing is wrong and there is nothing to run. `waired init` exits `0`, and
+`waired status` shows the download's progress. Local AI starts answering on
+this computer by itself when the file lands; you do not need to run setup
+again.
+
+The box you get instead of the first one on this page, and the difference is
+only time. If you want the throughput figure that box shows, run
+`waired runtimes benchmark` once `waired status` says the model is ready.
+</Expected>
+
 <Expected tone="bad">
 ```
 !  The AI engine could not be installed on this device.

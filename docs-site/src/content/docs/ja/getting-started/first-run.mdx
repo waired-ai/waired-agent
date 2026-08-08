@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: feb99d8dfae56e71
+sourceHash: 4b30804d0a1a6ccb
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -399,6 +399,35 @@ Engine install skipped (WAIRED_NO_OLLAMA).
 Waired がこのパソコンを計測して判断した結果、こちらは計測より前に利用者自身が
 決めた結果です。違いが効くのは戻し方で、`waired inference on` が有効なのは上だけ
 です。こちらのパソコンには、そもそもオンにするエンジンがありません。
+</Expected>
+
+<Expected>
+```
+Model still downloading; it will finish in the background. Run `waired status`
+to watch progress, or `waired runtimes benchmark` later to check performance.
+
+*  Waired is signed in — local AI is still setting up here
+   Account   you@example.com
+   Claude    still using the Anthropic API
+
+   Signed in and running — this device is on your network.
+   Waired is still setting local AI up in the background; the line above says what it's waiting on.
+   Watch it with: waired status
+```
+
+モデルより先にセットアップが終わった場合の表示です。モデルは数 GB あり、回線が
+遅ければ `waired init` が待つ時間を超えることがあります。その場合セットアップは
+端末を返し、バックグラウンドのサービスがダウンロードを続けます。ボックスの上の
+行が、どの段階で待ちを終えたか — ダウンロードか、起動しきっていないエンジンか —
+を示します。
+
+異常ではなく、実行すべきコマンドもありません。`waired init` は `0` で終了し、
+進捗は `waired status` で確認できます。ファイルが届いた時点で、このパソコンの
+ローカル AI はひとりでに応答を始めます。セットアップをやり直す必要はありません。
+
+このページ最初のボックスの代わりに出るもので、違いは時間だけです。あちらに出る
+スループットの数値が必要なら、`waired status` がモデルの準備完了を示してから
+`waired runtimes benchmark` を実行します。
 </Expected>
 
 <Expected tone="bad">
