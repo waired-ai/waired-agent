@@ -229,7 +229,18 @@ var producedInProto = []exemption{
 // long before the wire field existed, so the guard has never seen this
 // one as producer-less — the real producer debt is tracked by #568
 // itself, not by this table.)
-var producerPending = []exemption{}
+var producerPending = []exemption{
+	// waired-agent#579 Stage 3a. The wire for the prefill-floor verdict
+	// lands ahead of the agent that sets it, for the reason every entry
+	// above did: proto ships as its own PR and tags before anything can
+	// depend on it, and the control plane has to accept the shape before
+	// an agent emits it or the whole inference-state push is rejected.
+	//
+	// Paid by Stage 3b, which adds screenHostCutoffPrompt and the publish
+	// arm that fills this in. Delete this entry there.
+	{reflect.TypeFor[signer.HostSpeed](), "TurnFloorSeconds",
+		"waired-agent#579 Stage 3b writes it; the wire landed first so the CP could accept it"},
+}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the

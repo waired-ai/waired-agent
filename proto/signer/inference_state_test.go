@@ -649,23 +649,23 @@ func TestIsValidSubsystemState(t *testing.T) {
 // issue).
 func TestHostSpeed_PrefillFloor_CanonicalJSON(t *testing.T) {
 	// A screen verdict: a prefill rate read at the calibration depth, the
-	// turn as a LOWER BOUND, and no decode rate at all because none was
-	// measured.
+	// turn as a LOWER BOUND in its OWN field, no turn_seconds at all, and
+	// no decode rate because none was measured.
 	floor := HostSpeed{
-		ProbeModelID:  "qwen3.5-0.8b",
-		DepthTokens:   21000,
-		PromptTokens:  2812,
-		PrefillTokps:  104.4,
-		TurnSeconds:   201.15,
-		Method:        BenchmarkMethodOllamaPrefillFloor,
-		Samples:       2,
-		SpreadPct:     1.4,
-		EngineKind:    "ollama",
-		EngineVersion: "0.31.1",
-		MeasuredAt:    "2026-08-09T14:20:00Z",
+		ProbeModelID:     "qwen3.5-0.8b",
+		DepthTokens:      21000,
+		PromptTokens:     2812,
+		PrefillTokps:     104.4,
+		TurnFloorSeconds: 201.15,
+		Method:           BenchmarkMethodOllamaPrefillFloor,
+		Samples:          2,
+		SpreadPct:        1.4,
+		EngineKind:       "ollama",
+		EngineVersion:    "0.31.1",
+		MeasuredAt:       "2026-08-09T14:20:00Z",
 	}
 	const wantFloor = `{"probe_model_id":"qwen3.5-0.8b","depth_tokens":21000,` +
-		`"prompt_tokens":2812,"prefill_tokps":104.4,"turn_seconds":201.15,` +
+		`"prompt_tokens":2812,"prefill_tokps":104.4,"turn_floor_seconds":201.15,` +
 		`"method":"ollama_prefill_floor","samples":2,"spread_pct":1.4,` +
 		`"engine_kind":"ollama","engine_version":"0.31.1","measured_at":"2026-08-09T14:20:00Z"}`
 	data, err := json.Marshal(&floor)
@@ -676,22 +676,38 @@ func TestHostSpeed_PrefillFloor_CanonicalJSON(t *testing.T) {
 		t.Errorf("prefill-floor encoding drifted:\n got %s\nwant %s", got, wantFloor)
 	}
 
-	// decode_tokps is ABSENT, not zero. A consumer that read a 0 here as a
-	// measured decode rate would compute an infinite turn time for a host
-	// this method deliberately says nothing about.
-	if indexOf(string(data), "decode_tokps") >= 0 {
-		t.Errorf("decode_tokps appears in a prefill-floor payload: %s", data)
+	// The two absences are the point of the owner ruling, so they are
+	// asserted rather than left to the byte comparison to imply.
+	//
+	// turn_seconds absent: a consumer that has not been taught this method
+	// reads "no measurement" and declines to judge. Had the bound ridden
+	// turn_seconds, that same consumer would have read a bound as a
+	// measured turn time.
+	//
+	// decode_tokps absent, not zero: a zero read as a measured decode rate
+	// computes an infinite turn for a host this method says nothing about.
+	for _, absent := range []string{"turn_seconds", "decode_tokps"} {
+		if indexOf(string(data), absent) >= 0 {
+			t.Errorf("%s appears in a prefill-floor payload: %s", absent, data)
+		}
 	}
 
 	// A full measurement is unchanged by any of this — the same struct,
-	// every field populated, the method it always carried.
-	full := floor
-	full.PromptTokens = 21066
-	full.PrefillTokps = 671.17
-	full.DecodeTokps = 28.47
-	full.TurnSeconds = 66.4
-	full.Method = BenchmarkMethodOllamaEval
-	full.Samples = 3
+	// the turn in turn_seconds, the method it always carried.
+	full := HostSpeed{
+		ProbeModelID:  "qwen3.5-0.8b",
+		DepthTokens:   21000,
+		PromptTokens:  21066,
+		PrefillTokps:  671.17,
+		DecodeTokps:   28.47,
+		TurnSeconds:   66.4,
+		Method:        BenchmarkMethodOllamaEval,
+		Samples:       3,
+		SpreadPct:     1.4,
+		EngineKind:    "ollama",
+		EngineVersion: "0.31.1",
+		MeasuredAt:    "2026-08-09T14:20:00Z",
+	}
 	const wantFull = `{"probe_model_id":"qwen3.5-0.8b","depth_tokens":21000,` +
 		`"prompt_tokens":21066,"prefill_tokps":671.17,"decode_tokps":28.47,` +
 		`"turn_seconds":66.4,"method":"ollama_eval","samples":3,"spread_pct":1.4,` +
@@ -703,17 +719,20 @@ func TestHostSpeed_PrefillFloor_CanonicalJSON(t *testing.T) {
 	if got := string(data); got != wantFull {
 		t.Errorf("full-measurement encoding drifted:\n got %s\nwant %s", got, wantFull)
 	}
+	if indexOf(string(data), "turn_floor_seconds") >= 0 {
+		t.Errorf("turn_floor_seconds appears in a full measurement: %s", data)
+	}
 
 	// The rolling-upgrade direction: a payload from an agent that predates
-	// the method leaves Method empty, and empty means "not reported" —
-	// which is what makes it safe for an old agent's full measurement to
-	// keep arriving unchanged while new agents publish bounds.
+	// both additions leaves Method empty and TurnFloorSeconds zero, and a
+	// zero bound has to mean "no bound reported" — never "instant".
 	var pre HostSpeed
 	if err := json.Unmarshal([]byte(`{"probe_model_id":"qwen3.5-0.8b","turn_seconds":66.4}`), &pre); err != nil {
 		t.Fatalf("unmarshal pre-addition payload: %v", err)
 	}
-	if pre.Method != "" {
-		t.Errorf("Method = %q on a pre-addition payload, want empty", pre.Method)
+	if pre.Method != "" || pre.TurnFloorSeconds != 0 {
+		t.Errorf("pre-addition payload: Method=%q TurnFloorSeconds=%v, want empty and 0",
+			pre.Method, pre.TurnFloorSeconds)
 	}
 
 	var out HostSpeed
