@@ -24,6 +24,15 @@ const PreferenceFileName = "preferred-model.json"
 type Preference struct {
 	ModelID string    `json:"model_id"`
 	SetAt   time.Time `json:"set_at,omitempty"`
+
+	// None records that the operator chose to run WITHOUT a local model
+	// (install-flow "don't download a model now", waired-agent#586;
+	// owner-ruled 2026-08-08, waired-ai/waired#1067). Mutually exclusive
+	// with ModelID: a later model choice overwrites the whole file. It is
+	// a choice, not an error state — the engine stays installed and a
+	// model can be added any time — and its one effect at boot is that
+	// the bundled fallback pre-pull stands down.
+	None bool `json:"none,omitempty"`
 }
 
 // DefaultPreferencePath returns the on-disk location of preferred-model.json,
@@ -51,9 +60,12 @@ func LoadPreference(path string) (Preference, bool, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return Preference{}, false, fmt.Errorf("preference: parse %s: %w", path, err)
 	}
-	if p.ModelID == "" {
+	if p.ModelID == "" && !p.None {
 		// Treat a present-but-empty file as "no preference" rather than
-		// pinning the agent to the empty string.
+		// pinning the agent to the empty string. A None record is NOT
+		// empty: "run without a model" is a stated choice (#586), and
+		// reporting it as absence is how a boot would re-arm the fallback
+		// download the choice exists to stand down.
 		return Preference{}, false, nil
 	}
 	return p, true, nil
@@ -84,6 +96,12 @@ func SavePreference(path string, p Preference) error {
 // runs after the regular defaults → JSON → env → flags chain so the
 // tray-driven choice survives across restarts without forcing the
 // operator to thread a CLI flag through their service unit.
+//
+// A None preference (#586) deliberately changes nothing here: it names no
+// model, and the config it would want to influence — the bundled
+// fallback — is stood down by the provider reading Preference.None
+// directly, not by clearing BundledModelID (which status surfaces and
+// `isBundledModel` still need to answer questions about).
 func ApplyPreferenceOverride(c *InferenceConfig, p Preference) {
 	if p.ModelID == "" {
 		return

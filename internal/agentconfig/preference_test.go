@@ -92,6 +92,50 @@ func TestPreference_SaveAutoFillsSetAt(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#586; owner-ruled 2026-08-08,
+// waired-ai/waired#1067): a None record is a stated choice, not an empty
+// file — LoadPreference must report it ok=true, or every boot would read
+// "no preference" and re-arm the fallback download the choice stands down.
+func TestPreference_NoneRoundTripsAsAStatedChoice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "preferred-model.json")
+	if err := SavePreference(path, Preference{None: true}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, ok, err := LoadPreference(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !ok {
+		t.Fatalf("a None record must be ok=true, not 'no preference'")
+	}
+	if !got.None || got.ModelID != "" {
+		t.Errorf("got %+v, want None=true with no model", got)
+	}
+
+	// A later model choice overwrites the whole file: none is gone.
+	if err := SavePreference(path, Preference{ModelID: "qwen3-4b-instruct"}); err != nil {
+		t.Fatalf("save model: %v", err)
+	}
+	got, ok, err = LoadPreference(path)
+	if err != nil || !ok {
+		t.Fatalf("load after model choice: %v ok=%v", err, ok)
+	}
+	if got.None || got.ModelID != "qwen3-4b-instruct" {
+		t.Errorf("model choice must replace none: %+v", got)
+	}
+}
+
+// ApplyPreferenceOverride deliberately ignores a None record: it names no
+// model, and the fallback stand-down is the provider's job (#586).
+func TestApplyPreferenceOverride_NoneChangesNothing(t *testing.T) {
+	c := &InferenceConfig{PreferredModelID: "qwen2.5-coder-7b-instruct", BundledModelID: "qwen3-4b-instruct"}
+	ApplyPreferenceOverride(c, Preference{None: true})
+	if c.PreferredModelID != "qwen2.5-coder-7b-instruct" || c.BundledModelID != "qwen3-4b-instruct" {
+		t.Errorf("none must leave the config untouched, got %+v", c)
+	}
+}
+
 func TestApplyPreferenceOverride(t *testing.T) {
 	c := &InferenceConfig{PreferredModelID: "qwen2.5-coder-7b-instruct"}
 	ApplyPreferenceOverride(c, Preference{ModelID: "qwen3-4b-instruct"})

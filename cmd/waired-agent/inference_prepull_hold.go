@@ -41,6 +41,15 @@ const (
 	// step, say. It matches setupDesiredFreshWindow, which is how long the
 	// reconciler itself keeps calling such an instruction fresh.
 	prePullHoldMax = setupDesiredFreshWindow
+
+	// modelChoiceWaitMax is the ceiling on the terminal install flow's
+	// claim that a model question is about to be asked (waired-agent#586,
+	// the same 60 minutes as prePullHoldMax and for the same reason: an
+	// abandoned setup — here a closed terminal — eventually gets the
+	// fallback download it would have had without the question; owner
+	// ruling 2026-08-09). The deadline is stamped server-side when the
+	// claim is registered, so a killed `waired init` cannot renew it.
+	modelChoiceWaitMax = prePullHoldMax
 )
 
 // setupNoteDesired records what the control plane's latest frame said
@@ -96,18 +105,139 @@ func (p *agentInferenceProvider) holdBundledPrePull(ctx context.Context, modelID
 		// is already in flight) or the weights may have landed some other
 		// way. bundledPrePullTarget also re-reads the config's model id,
 		// so a retirement resolved since boot is honoured.
-		if id, ok := p.prePullStillWanted(ctx, modelID); ok {
-			// #496: the last point before 20-45 GB lands, and the first
-			// point at which the question can be measured — an engine is
-			// up and this host chose its own model, so nobody has said
-			// they want to serve here. Undecided leaves the download
-			// exactly as it was.
-			if !p.applyHostCutoff(ctx) {
+		id, ok := p.prePullStillWanted(ctx, modelID)
+		if !ok {
+			return
+		}
+		// #496: the last point before 20-45 GB lands, and the first
+		// point at which the question can be measured — an engine is
+		// up and this host chose its own model, so nobody has said
+		// they want to serve here. Undecided leaves the download
+		// exactly as it was.
+		if !p.applyHostCutoff(ctx) {
+			return
+		}
+		// waired-agent#586: `waired init` may have claimed that the model
+		// question is about to be asked at this terminal. The claim sits
+		// HERE — after the cutoff measurement, never before it — because
+		// the terminal's own flow asks its questions only once the
+		// measurement has been published, so a wait placed upstream would
+		// deadlock the two against each other.
+		if waited, proceed := p.awaitModelChoice(ctx); !proceed {
+			return
+		} else if waited {
+			// The question was asked, and time has passed. A browser setup
+			// may also have taken the terminal over and named a model
+			// mid-wait — the arm awaitPrePullRelease owns, re-checked here
+			// because that release has already happened.
+			if named, _, _, _ := p.setupFrameSnapshot(); named != "" {
+				p.logger.Info("boot pre-pull stands down: setup chose a model while the terminal was asked",
+					"model", named)
 				return
 			}
-			p.dispatchBundledPrePull(ctx, id)
+			if id, ok = p.prePullStillWanted(ctx, id); !ok {
+				return
+			}
 		}
+		p.dispatchBundledPrePull(ctx, id)
 	}()
+}
+
+// noteModelChoicePending registers (or withdraws) the terminal install
+// flow's claim that a model question is about to be asked (#586). The
+// deadline is stamped here, server-side: the CLI states intent, never a
+// duration.
+func (p *agentInferenceProvider) noteModelChoicePending(pending bool) {
+	window := p.modelChoiceWait
+	if window <= 0 {
+		window = modelChoiceWaitMax
+	}
+	p.modelChoiceMu.Lock()
+	if pending {
+		p.modelChoicePendingUntil = time.Now().Add(window)
+	} else {
+		p.modelChoicePendingUntil = time.Time{}
+	}
+	p.wakeModelChoiceLocked()
+	p.modelChoiceMu.Unlock()
+	if pending {
+		p.logger.Info("bundled fallback download deferred: the install flow is asking which model to download",
+			"wait_max", window)
+	}
+}
+
+// noteModelChoiceAnswered withdraws the claim because an answer landed —
+// a model choice (SwapPreferredModel) or the none choice
+// (applyNoModelSelected). Distinct from noteModelChoicePending(false)
+// only in that it never logs: the answer's own path already says what
+// happened.
+func (p *agentInferenceProvider) noteModelChoiceAnswered() {
+	p.modelChoiceMu.Lock()
+	p.modelChoicePendingUntil = time.Time{}
+	p.wakeModelChoiceLocked()
+	p.modelChoiceMu.Unlock()
+}
+
+// applyNoModelSelected applies the operator's "don't download a model
+// now" choice in process (#586): the management handler has already
+// persisted it; this is what a held fallback dispatch reads.
+func (p *agentInferenceProvider) applyNoModelSelected() {
+	p.noModelSelected.Store(true)
+	p.noteModelChoiceAnswered()
+	p.logger.Info("the operator chose to run without a local model; the bundled fallback download stands down")
+}
+
+// wakeModelChoiceLocked is the setupFrameCh pattern: close-and-replace so
+// a parked waiter wakes and a later one parks on a live channel. Callers
+// hold modelChoiceMu.
+func (p *agentInferenceProvider) wakeModelChoiceLocked() {
+	if p.modelChoiceCh != nil {
+		close(p.modelChoiceCh)
+	}
+	p.modelChoiceCh = make(chan struct{})
+}
+
+// modelChoiceSnapshot reads the claim's deadline together with the
+// channel to park on, so a waiter cannot miss a change between its read
+// and its select.
+func (p *agentInferenceProvider) modelChoiceSnapshot() (until time.Time, next <-chan struct{}) {
+	p.modelChoiceMu.Lock()
+	defer p.modelChoiceMu.Unlock()
+	if p.modelChoiceCh == nil {
+		p.modelChoiceCh = make(chan struct{})
+	}
+	return p.modelChoicePendingUntil, p.modelChoiceCh
+}
+
+// awaitModelChoice blocks while the terminal install flow's claim is
+// live. waited reports whether it blocked at all (so the caller knows to
+// re-take its decision); proceed is false only when ctx ended. The claim
+// expiring is a proceed: an abandoned terminal gets the fallback
+// download, exactly like an abandoned browser wizard at prePullHoldMax.
+func (p *agentInferenceProvider) awaitModelChoice(ctx context.Context) (waited, proceed bool) {
+	for {
+		until, next := p.modelChoiceSnapshot()
+		if until.IsZero() {
+			return waited, true
+		}
+		remaining := time.Until(until)
+		if remaining <= 0 {
+			p.logger.Info("boot pre-pull proceeding: the install flow asked which model to download and got no answer")
+			return waited, true
+		}
+		waited = true
+		expiry := time.NewTimer(remaining)
+		select {
+		case <-next:
+			// The claim changed (answered or withdrawn); re-read it.
+		case <-expiry.C:
+			// Re-read: the loop's remaining<=0 arm logs and proceeds.
+		case <-ctx.Done():
+			expiry.Stop()
+			return waited, false
+		}
+		expiry.Stop()
+	}
 }
 
 // awaitPrePullRelease blocks until the bundled pre-pull should be

@@ -179,6 +179,15 @@ type InferenceStatus struct {
 	// disabled ("Engine not managed") when false.
 	EngineManaged bool `json:"engine_managed,omitempty"`
 
+	// NoModelSelected reports the operator's standing "run without a
+	// local model" choice (waired-agent#586): the install flow's model
+	// picker offered "don't download a model now" and they took it. The
+	// engine may still be installed and running; nothing is failed and
+	// nothing is pending — the bundled fallback download stands down and
+	// a model can be added later. Cleared the moment any model choice
+	// lands (tray, CLI, or wizard).
+	NoModelSelected bool `json:"no_model_selected,omitempty"`
+
 	// HostSpeed is what one coding-agent turn costs on this machine
 	// (waired-ai/waired-agent#496), and whether that measurement is what
 	// set DesiredState to disabled. nil when nothing has been measured.

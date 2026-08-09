@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/management"
+	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -245,6 +249,185 @@ func TestPrePullHold_AnExecutorLeaseIsNotAWizard(t *testing.T) {
 
 	if got := r.pulledTags(); len(got) != 1 || got[0] != "a:q4" {
 		t.Fatalf("tags pulled = %v, want exactly [a:q4]", got)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#586; owner-ruled 2026-08-08,
+// waired-ai/waired#1067): while `waired init` has claimed that the model
+// question is about to be asked at the terminal, the bundled fallback
+// download waits — and a "don't download a model now" answer stands it
+// down for good. This is the terminal twin of the wizard-driving hold
+// above: without it the dispatch fires the moment the host-speed
+// measurement lands, always before a human can answer, and there is no
+// pull-cancel API to take it back.
+func TestPrePullHold_ModelChoiceClaim_NoneAnswerStandsDown(t *testing.T) {
+	p, r, installed := prePullHoldProvider(t)
+	p.noteModelChoicePending(true)
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	p.setupNoteDesired("", false) // the frame release: nobody is driving
+
+	time.Sleep(200 * time.Millisecond)
+	if n := r.calls(); n != 0 {
+		t.Fatalf("pulls started = %d, want 0 — the terminal is mid-question; dispatching "+
+			"now is what makes the answer arrive too late to matter", n)
+	}
+
+	p.applyNoModelSelected()
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 0 {
+		t.Fatalf("tags pulled = %v, want none — the operator chose to run without a model", got)
+	}
+}
+
+// PRODUCT CONTRACT (#586): a model answer releases the claim through the
+// same door an operator switch already uses — SwapPreferredModel
+// publishes the preference and withdraws the claim — so the fallback
+// re-reads the world and stands down instead of waiting out its deadline.
+func TestPrePullHold_ModelChoiceClaim_AModelAnswerStandsDown(t *testing.T) {
+	p, r, installed := prePullHoldProvider(t)
+	p.noteModelChoicePending(true)
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	p.setupNoteDesired("", false)
+
+	// What SwapPreferredModel does on the picker's answer, minus the pull
+	// of the chosen model itself (not under test here).
+	chosen := "model-b"
+	p.preferredOverride.Store(&chosen)
+	p.noteModelChoiceAnswered()
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 0 {
+		t.Fatalf("tags pulled = %v, want none — the operator picked model-b; the bundled "+
+			"fallback alongside it is the #305 double download", got)
+	}
+}
+
+// Records today's behaviour with its ratifying source (owner ruling
+// 2026-08-09 on waired-agent#586): a claim nobody answers expires
+// server-side — 60 minutes in production, the prePullHoldMax window — and
+// the fallback then downloads exactly as it would have without the
+// question. A killed terminal cannot park the host forever.
+func TestPrePullHold_ModelChoiceClaim_ExpiresToTheFallback(t *testing.T) {
+	p, r, installed := prePullHoldProvider(t)
+	p.modelChoiceWait = 20 * time.Millisecond
+	p.noteModelChoicePending(true)
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	p.setupNoteDesired("", false)
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 1 || got[0] != "a:q4" {
+		t.Fatalf("tags pulled = %v, want exactly [a:q4] — an abandoned question must "+
+			"converge to the fallback, like an abandoned wizard", got)
+	}
+}
+
+// The claim withdrawn without an answer (the picker was skipped: a
+// browser takeover, a catalog error, local AI turned off at the speed
+// step) proceeds at once — the question is not coming, and the host
+// wants its fallback.
+func TestPrePullHold_ModelChoiceClaim_WithdrawnProceedsAtOnce(t *testing.T) {
+	p, r, installed := prePullHoldProvider(t)
+	p.noteModelChoicePending(true)
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	p.setupNoteDesired("", false)
+	p.noteModelChoicePending(false)
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 1 || got[0] != "a:q4" {
+		t.Fatalf("tags pulled = %v, want exactly [a:q4] — a withdrawn claim is not a "+
+			"none answer", got)
+	}
+}
+
+// PRODUCT CONTRACT (#586): a browser setup that takes over and names a
+// model while the terminal question is open wins, and the fallback still
+// stands down. The named-model arm of awaitPrePullRelease has already
+// released by the time the claim wait runs, so the claim path re-checks
+// it — dropping that re-check re-creates the #305 double download for
+// exactly the takeover case.
+func TestPrePullHold_ModelChoiceClaim_SetupNamingAModelMidAskStandsDown(t *testing.T) {
+	p, r, installed := prePullHoldProvider(t)
+	p.noteModelChoicePending(true)
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	p.setupNoteDesired("", false)
+
+	time.Sleep(50 * time.Millisecond) // let the claim wait park first
+	p.setupNoteDesired("model-b", true)
+	p.noteModelChoicePending(false)
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 0 {
+		t.Fatalf("tags pulled = %v, want none — setup named model-b while the terminal "+
+			"was asked, so the bundled fallback must not run alongside it", got)
+	}
+}
+
+// PRODUCT CONTRACT (#586): the persisted none choice survives restarts —
+// a boot that reads Preference.None never arms the fallback, claim or no
+// claim. This is the every-later-boot half of the none answer above.
+func TestPrePullHold_PersistedNoneChoice_TheFallbackNeverArms(t *testing.T) {
+	p, r, installed := prePullHoldProvider(t)
+	p.noModelSelected.Store(true) // what the boot fold does for Preference.None
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	p.setupNoteDesired("", false)
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 0 {
+		t.Fatalf("tags pulled = %v, want none — this host's operator chose to run "+
+			"without a local model, and that choice is persistent", got)
+	}
+}
+
+// The status route is how `waired init` (and later `waired status`)
+// reads the standing choice back, so the wire field tracks the atomic —
+// both the none answer setting it and a model answer clearing it (#586).
+// Built like startFailProvider (registry + profiler + store) because a
+// full Status() is the subject: the field must actually reach the wire.
+func TestStatus_ReportsNoModelSelected(t *testing.T) {
+	p := &agentInferenceProvider{
+		registry: infruntime.NewRegistry(),
+		store:    catalog.NewStore(filepath.Join(t.TempDir(), "state.json")),
+		profiler: hardware.NewProfiler(t.TempDir(),
+			hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
+				return nil, hardware.Accelerators{}, nil
+			})),
+		dlProgress:   newDownloadProgress(),
+		ollamaUsable: func() bool { return false },
+		logger:       quietLogger(),
+		agentCtx:     context.Background(),
+	}
+	ctx := context.Background()
+
+	if p.Status(ctx).NoModelSelected {
+		t.Fatal("NoModelSelected should start false")
+	}
+	p.applyNoModelSelected()
+	if !p.Status(ctx).NoModelSelected {
+		t.Fatal("NoModelSelected should be true after the none choice applies")
+	}
+	// What SwapPreferredModel does when any model choice lands.
+	p.noModelSelected.Store(false)
+	if p.Status(ctx).NoModelSelected {
+		t.Fatal("NoModelSelected should clear once a model is chosen")
 	}
 }
 

@@ -11,8 +11,13 @@ import (
 )
 
 // PreferredModelRequest is the body of POST /waired/v1/inference/preferred-model.
+// Exactly one of the two fields is set: a model choice names ModelID, and
+// the install flow's "don't download a model now" (waired-agent#586) sends
+// {"none":true}. A body with both — a name AND the statement that there is
+// no name — is contradictory and refused.
 type PreferredModelRequest struct {
 	ModelID string `json:"model_id"`
+	None    bool   `json:"none,omitempty"`
 }
 
 // PreferredModelResponse is the 202-Accepted body. WillRestart is false
@@ -36,8 +41,17 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var req PreferredModelRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ModelID == "" {
-		writeJSON(w, http.StatusBadRequest, errorBody("bad_request", `body must be {"model_id":"..."}`))
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.ModelID == "" && !req.None) {
+		writeJSON(w, http.StatusBadRequest, errorBody("bad_request", `body must be {"model_id":"..."} or {"none":true}`))
+		return
+	}
+	if req.None {
+		if req.ModelID != "" {
+			writeJSON(w, http.StatusBadRequest, errorBody("bad_request",
+				`{"none":true} cannot also name a model_id`))
+			return
+		}
+		s.handleNoModelSelected(w)
 		return
 	}
 
@@ -137,6 +151,51 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		WillRestart: true,
 		Downloading: downloading,
 	})
+}
+
+// handleNoModelSelected is the {"none":true} arm of /preferred-model
+// (waired-agent#586): persist "the operator chose to run without a local
+// model", tell the provider so a held fallback download stands down, and
+// answer 202 with no model named. No restart is scheduled and no engine
+// work happens — there is nothing to apply beyond the record itself; the
+// engine keeps running and a model can be chosen later through this same
+// endpoint.
+func (s *Server) handleNoModelSelected(w http.ResponseWriter) {
+	if err := agentconfig.SavePreference(s.catalog.PreferencePath, agentconfig.Preference{
+		None: true,
+	}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorBody("preference_save_failed", err.Error()))
+		return
+	}
+	if s.catalog.ApplyNoModelSelected != nil {
+		s.catalog.ApplyNoModelSelected()
+	}
+	writeJSON(w, http.StatusAccepted, PreferredModelResponse{})
+}
+
+// ModelChoicePendingRequest is the body of
+// POST /waired/v1/inference/model-choice-pending — see
+// CatalogConfig.NoteModelChoicePending for what the claim means.
+type ModelChoicePendingRequest struct {
+	Pending bool `json:"pending"`
+}
+
+func (s *Server) handleModelChoicePending(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method_not_allowed", "POST only"))
+		return
+	}
+	if s.inference == nil || s.catalog == nil || s.catalog.NoteModelChoicePending == nil {
+		http.Error(w, "model choice claim not supported", http.StatusNotFound)
+		return
+	}
+	var req ModelChoicePendingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody("bad_request", `body must be {"pending":true|false}`))
+		return
+	}
+	s.catalog.NoteModelChoicePending(req.Pending)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func findManifest(manifests []catalog.Manifest, modelID string) (catalog.Manifest, bool) {

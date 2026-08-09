@@ -32,3 +32,16 @@ func newModelSwapController(ctx context.Context, provider *agentInferenceProvide
 func (c *modelSwapController) ApplyModelSwitch(_ context.Context, modelID string) (bool, error) {
 	return c.provider.SwapPreferredModel(c.agentCtx, modelID)
 }
+
+// ApplyNoModelSelected applies the operator's "don't download a model
+// now" choice in process (waired-agent#586) — the management handler has
+// already persisted it.
+func (c *modelSwapController) ApplyNoModelSelected() {
+	c.provider.applyNoModelSelected()
+}
+
+// NoteModelChoicePending registers or withdraws `waired init`'s claim
+// that the model question is about to be asked at the terminal (#586).
+func (c *modelSwapController) NoteModelChoicePending(pending bool) {
+	c.provider.noteModelChoicePending(pending)
+}

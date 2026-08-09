@@ -392,6 +392,25 @@ func (a sbModelSwapControl) ApplyModelSwitch(ctx context.Context, modelID string
 	return false, errNotEnrolled
 }
 
+// ApplyNoModelSelected delegates the "don't download a model now" choice
+// (waired-agent#586). Before enrollment there is nothing to tell: the
+// persisted preference the handler already wrote is what the eventual
+// session boots from.
+func (a sbModelSwapControl) ApplyNoModelSelected() {
+	if s := a.sb.current(); s != nil && s.swapControl != nil {
+		s.swapControl.ApplyNoModelSelected()
+	}
+}
+
+// NoteModelChoicePending delegates `waired init`'s pending-question claim
+// (#586). Before enrollment it is a no-op for the same reason: the
+// pre-pull hold this claim defers only runs on an enrolled session.
+func (a sbModelSwapControl) NoteModelChoicePending(pending bool) {
+	if s := a.sb.current(); s != nil && s.swapControl != nil {
+		s.swapControl.NoteModelChoicePending(pending)
+	}
+}
+
 // sbSetupExecutor delegates the onboarding executor lease (waired#835
 // §9/§11) to the live session's reconciler. The management server is
 // built once at boot but the reconciler only exists after enrollment, so
