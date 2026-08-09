@@ -212,14 +212,14 @@ func (p HostProbe) TurnSeconds() float64 {
 //     figures that made the agent measure its prompt's token cost rather
 //     than assume it (hostCutoffCalibrationLines, host_cutoff_probe.go).
 //
-// A caller that publishes this figure has to say so. It rides
-// signer.HostSpeed.TurnSeconds with Method =
-// signer.BenchmarkMethodOllamaPrefillFloor, and a consumer that reads it
-// as an exact turn time believes the host is FASTER than it is. That is
-// tolerable only because the agent publishes this shape solely when the
-// bound already exceeds HostCutoffTurnBudgetSeconds, so every threshold
-// comparison at or below the budget still lands where the full
-// measurement would have put it.
+// A caller that publishes this figure has to say so, and it says so in a
+// field of its own: signer.HostSpeed.TurnFloorSeconds, with Method =
+// signer.BenchmarkMethodOllamaPrefillFloor and TurnSeconds left unset
+// (owner ruling, 2026-08-09, on waired-agent#579 — see that field's doc
+// for why the alternative was rejected). A consumer that has not been
+// taught the field therefore reads "nothing was measured" and declines
+// to judge, rather than reading a bound as an exact turn time and
+// believing the host is FASTER than it is.
 //
 // Zero when the rate cannot be used, matching TurnSeconds: zero is "no
 // claim", never "instant".
