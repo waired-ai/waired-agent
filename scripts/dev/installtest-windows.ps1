@@ -253,6 +253,7 @@ $script:ContractBlocking = @{
     '838' = $true    # waired#838: management writes travel over the local named pipe, not TCP (FIXED)
     '313' = $true    # waired-agent#313: `waired init` on an enrolled device resumes instead of failing (FIXED)
     '315' = $true    # waired#315: SCM recovery actions also fire on a non-crash failure exit (FIXED)
+    '579' = $true    # waired-agent#579: the host-speed measurement reaches a verdict inside init's window (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -626,6 +627,18 @@ function Assert-Inference {
 
     # #496/#579: the one-time host-speed measurement -- see the Linux twin in
     # lib/installtest-enroll.sh for why this leg asserts it.
+    # POLLED, not read once -- see the Linux twin in lib/installtest-enroll.sh.
+    # The measurement is asynchronous by design (it must not block init), so a
+    # single read asserts on scheduling rather than on the daemon. Returns as
+    # soon as a figure appears, so a healthy leg pays nothing.
+    $hsDeadline = (Get-Date).AddSeconds(180)
+    while ($st -and (Get-Date) -lt $hsDeadline) {
+        if (([double]$st.host_speed.turn_seconds -gt 0) -or
+            ([double]$st.host_speed.turn_floor_seconds -gt 0)) { break }
+        Start-Sleep -Seconds 5
+        try { $st = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5 } catch { }
+    }
+
     if (-not $st) {
         ItLog "no inference status payload -- skipping the host-speed assert"
     } else {
@@ -637,11 +650,12 @@ function Assert-Inference {
         $floor   = [double]$st.host_speed.turn_floor_seconds
         $method  = [string]$st.host_speed.method
         $figure  = if ($turn -gt 0) { $turn } else { $floor }
-        # ItSoft, not ItBad: a host that published no measurement is a REAL
-        # defect (waired-agent#579) and the per-PR legs hit it, so blocking
-        # today would turn every PR in the repo red for something none of them
-        # introduced. The #579 fix adds its $ContractBlocking entry and this
-        # becomes blocking automatically -- which is what that mechanism is for.
+        # Still ItSoft in shape, and BLOCKING in effect: $ContractBlocking['579']
+        # is now $true, which is exactly what that mechanism is for. It was soft
+        # while #579 was open because the absent case was a real defect every PR
+        # would have gone red for; Stage 3 closed it from both ends, and this
+        # assert takes either figure -- a measured turn, or the prefill-only
+        # bound a host too slow to measure at full depth publishes instead.
         ItSoft '579' ($figure -gt 0) "host speed measured inside init (${method}: turn ${turn}s, floor ${floor}s, against a ${budget}s budget; $samples samples)" 'waired-agent'
     }
 
@@ -2057,6 +2071,22 @@ if ($Tier -ge 2) {
         #
         # The auth key is deliberately still passed: an already-signed-in
         # device must not spend it (the `tailscale up` rule), and must say so.
+        #
+        # $inferFlag is passed for the same reason the Linux twin passes it
+        # (lib/installtest-enroll.sh, assert_reinit_resumes): this leg must
+        # leave the host's local-AI posture exactly as it found it, in EITHER
+        # direction. Leaving the toggle unset hands the decision to
+        # install-flow step 6, and GitHub-hosted runners are genuinely below
+        # the recommended spec -- 268.9 s per coding question against a 45 s
+        # budget on this very leg (run 31330389679). Step 6 then turns local
+        # AI off, correctly, and Assert-Inference's "local inference is on"
+        # fails for a reason that has nothing to do with #313. It began only
+        # when init learned to READ the prefill bound (waired-agent#579
+        # Stage 3c); the behaviour is the fix, not the bug.
+        #
+        # A bare 'true' would be wrong in the other direction, for the reason
+        # recorded on the Linux twin: it installs an engine, which is a
+        # postcondition the lean legs depend on.
         if ($authKey) {
             ItStep "re-init on an enrolled device (waired-agent#313)"
             $reinitLog  = Join-Path $Work 'reinit.log'
@@ -2066,6 +2096,11 @@ if ($Tier -ge 2) {
                 '--auth-key', $authKey
                 '--device-name', $device
                 '--non-interactive'
+                # Recomputed rather than reusing $inferFlag: that one is
+                # assigned inside the non-DaemonEngine branch above, so on the
+                # -DaemonEngine leg it would splat as $null and hand
+                # `waired init` an empty argument (the #613 shape).
+                $(if ($WithInference) { '--inference-enabled=true' } else { '--inference-enabled=false' })
                 '--skip-integration'
             )
             $env:WAIRED_NO_EMOJI = '1'
@@ -2473,10 +2508,22 @@ if ($script:Skip -gt 0) {
 # the two probes contribute exactly 9 unconditional asserts between them
 # (their no-catalog arms report the same 5, on purpose).
 #
-# waired-agent#573's host-speed assert does NOT move these. It is an ItSoft
-# tied to waired-agent#579, so a leg where no measurement was published WARNs
-# and contributes 0 rather than 1. The #579 fix adds the $ContractBlocking
-# entry and raises this to 72 in that PR.
+# waired-agent#573's host-speed assert moves 71, and ONLY 71. While #579 was
+# open it was an ItSoft that contributed 0 on a leg where no measurement was
+# published; now that $ContractBlocking['579'] is $true it contributes 1
+# either way, so the minimum for the configuration that runs it rises by one.
+#
+# Which configuration is that? Measured on run 31330389679, by counting the
+# assert's own line across every Windows leg:
+#
+#   install+inference          runs it   71 passed + 1 failed = 72 executed
+#   daemon-path engine install does not  77
+#   engine installed, no model does not  75
+#
+# So -WithInference (the 71) goes to 72 and the other two are untouched. The
+# one failure in that leg was Assert-Inference's "local inference is on",
+# which the re-init argv fix in this same PR turns back into a pass — the
+# executed count is 72 either way, because ItSoft counts on both arms.
 #
 # waired-agent#590 also adds -EngineOnly, and that one could NOT be derived
 # from either number above. It is the first Windows configuration that is lean
@@ -2491,7 +2538,7 @@ if ($script:Skip -gt 0) {
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 89 } elseif ($EngineOnly) { 75 } else { 71 }
+    $floor = if ($Contract) { 89 } elseif ($EngineOnly) { 75 } else { 72 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
