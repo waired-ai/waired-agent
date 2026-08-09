@@ -49,6 +49,13 @@
 #                       failing on a healthy host; this check is the only place
 #                       the rename can be caught, and it catches it in the PR
 #                       that makes it
+#   daemon-evidence     the daemon-log lines the three not-ready dumps grep
+#                       for (#540/#579) — the boot pre-pull's hold, the model
+#                       selection, and the #496 host-speed measurement that
+#                       runs in front of the download. Not an assert: a dump
+#                       that matches nothing prints one "(no lines)" line and
+#                       the leg still goes red, just unreadably, which is
+#                       exactly how run 31316731884 ended
 #
 # Run: bash scripts/ci/harness-failure-strings-guard.sh
 set -euo pipefail
@@ -62,7 +69,13 @@ ps_win='scripts/dev/installtest-windows.ps1'
 
 # Every branch must still be printed by the product. Searched as a literal in
 # the Go sources that own the first-run narration.
-producers=(cmd/waired internal)
+#
+# cmd/waired-agent is in the list because the daemon narrates half of the
+# install too: the boot pre-pull and the #496 host-speed measurement print from
+# there, not from the CLI, and the daemon-evidence set below greps for those
+# lines. Widening the search can only make more branches findable — a branch
+# passes when ANY producer contains it — so the existing sets are unaffected.
+producers=(cmd/waired cmd/waired-agent internal)
 
 # Read each declaration. Single-quoted, one line, one per file — matching the
 # assignment rather than a comment marker keeps the value that the harness
@@ -144,6 +157,7 @@ check_set 'install-failure-box' 'IT_INSTALL_FAILURE_BOX_RE' 'InstallFailureBoxRe
 check_set 'unfit-skip-note'     'IT_UNFIT_SKIP_RE'          'UnfitSkipRe'          || fail=1
 check_set 'pull-decline'        'IT_PULL_DECLINE_RE'        'PullDeclineRe'        || fail=1
 check_set 'status-fields'       'IT_STATUS_FIELDS_RE'       'StatusFieldsRe'       || fail=1
+check_set 'daemon-evidence'     'IT_DAEMON_EVIDENCE_RE'     'DaemonEvidenceRe'     || fail=1
 [ "${fail}" -eq 0 ] || exit 1
 
 echo "harness-failure-strings-guard: ok"

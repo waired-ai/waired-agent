@@ -177,6 +177,12 @@ $PullReachedRe = 'cannot download'
 # -- the inference-status field names Get-ModelReadyState reads. Same guard
 # checks these three copies agree and that the product still publishes them.
 $StatusFieldsRe = 'no_model_selected|host_speed|probe_model_id'
+# Mirror of lib/installtest-enroll.sh's IT_DAEMON_EVIDENCE_RE
+# (waired-agent#579) -- the daemon-log lines the not-ready dump greps for. See
+# the comment there for why the host-speed group belongs in a dump that used to
+# be pull-side only, and why 'api/pull' is appended at the use site rather than
+# living in the alternation.
+$DaemonEvidenceRe = 'boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host'
 
 # --- logging / assert counters ----------------------------------------------
 # All three declared together, above the helpers: ItDie prints the tally, so
@@ -664,12 +670,17 @@ function Assert-Inference {
             # service log and the bundled engine log on every OS, which is how
             # this leg gets an engine log at all -- it had none, so a Windows
             # occurrence could not be diagnosed without a re-run.
+            #
+            # The pattern carries the #496 measurement too (#579): "the
+            # download was slow" and "the measurement was in front of the
+            # download" are different failures, and a pull-side-only grep
+            # cannot tell them apart.
             $bundle = Join-Path $env:TEMP 'it-logs.txt'
             & (Join-Path $InstallDir 'waired.exe') logs --since 30m --state-dir $StateDir -o $bundle *> $null
             $agentLines = @()
             if (Test-Path -LiteralPath $bundle) {
-                $agentLines = @(Select-String -LiteralPath $bundle -Pattern 'boot pre-pull|bundled model|api/pull' |
-                    Select-Object -Last 20 | ForEach-Object { "    agent| $($_.Line)" })
+                $agentLines = @(Select-String -LiteralPath $bundle -Pattern "$DaemonEvidenceRe|api/pull" |
+                    Select-Object -Last 40 | ForEach-Object { "    agent| $($_.Line)" })
             }
             if ($agentLines.Count -gt 0) { $agentLines | Write-Host }
             else { Write-Host "    agent| (no pre-pull or pull lines in the daemon log)" }

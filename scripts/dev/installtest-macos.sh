@@ -85,6 +85,11 @@ IT_PULL_REACHED_RE='queued pull:|cannot download'
 # the product still publishes the fields.
 # shellcheck disable=SC2034  # read by the guard, not by this script.
 IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id'
+# Mirror of lib/installtest-enroll.sh's IT_DAEMON_EVIDENCE_RE (waired-agent#579)
+# — see the comment there for why the host-speed group belongs in a dump that
+# was previously pull-side only, and why `api/pull` is appended at the use site
+# instead of living in the alternation.
+IT_DAEMON_EVIDENCE_RE='boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
@@ -124,6 +129,30 @@ cleanup() {
   rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+# hostspeed_evidence — the macOS twin of lib/installtest-enroll.sh's
+# it_hostspeed_evidence (waired-agent#579), for the arms that end on init's
+# exit code rather than on an assert.
+#
+# It is a separate function from the dump inside assert_inference_macos for the
+# reason the linux comment gives: an init that exits 3 never reaches any
+# assert, so on a finished run the state of the #496 measurement — the thing
+# #579 turns on — was unrecoverable. This leg had NO daemon output at all on
+# that path.
+#
+# Prints nothing this script can assert on; it exists so a red says why. Both
+# streams go to stderr so the dump sits with the `bad` line it explains.
+hostspeed_evidence() {
+  sudo "$BINDIR/waired" logs --since 30m --state-dir "$STATE_DIR" -o /tmp/it-hs.txt >/dev/null 2>&1 || true
+  { grep -iE "$IT_DAEMON_EVIDENCE_RE|api/pull" /tmp/it-hs.txt 2>/dev/null | tail -40 |
+    grep . || echo "(no host-speed lines in the daemon log)"; } 2>&1 |
+    sed 's/^/    agent| /' >&2 || true
+  # `|| echo` inside the pipe, not after it: a failed `curl -fsS` prints
+  # nothing and the pipeline's status is sed's, so a trailing `|| true` would
+  # never fire and an unreachable daemon would leave no line at all.
+  { curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"; } 2>&1 |
+    sed 's/^/    status| /' >&2 || true
+}
 
 # assert_launchd_healthy <context> — the three things that have to be true of
 # the registered system LaunchDaemon. Factored out of the Tier-1 block because
@@ -519,11 +548,12 @@ assert_inference_macos() {
     # The daemon's own account of a model that never arrived (#540). Mirrors
     # lib/installtest-enroll.sh's it_prepull_evidence: `waired logs` is the one
     # surface that reads the service log and the engine log on every OS, and
-    # the pattern is the three facts that settle where the time went — what the
-    # boot pre-pull's hold was waiting for, what released it, and `POST
-    # /api/pull` with the download's real duration.
+    # the pattern is the facts that settle where the time went — what the boot
+    # pre-pull's hold was waiting for, what released it, `POST /api/pull` with
+    # the download's real duration, and what the #496 measurement was doing
+    # while all of that waited (#579).
     sudo "$BINDIR/waired" logs --since 30m --state-dir "$STATE_DIR" -o /tmp/it-logs.txt >/dev/null 2>&1 || true
-    { grep -iE 'boot pre-pull|bundled model|api/pull' /tmp/it-logs.txt 2>/dev/null | tail -20 |
+    { grep -iE "$IT_DAEMON_EVIDENCE_RE|api/pull" /tmp/it-logs.txt 2>/dev/null | tail -40 |
       grep . || echo "(no pre-pull or pull lines in the daemon log)"; } 2>&1 |
       sed 's/^/    agent| /' >&2 || true
   else
@@ -1209,6 +1239,10 @@ if [ "$TIER" -ge 2 ]; then
       # it_log moves no counter.
       if [ "$INFER" = 1 ]; then
         bad "waired init (authkey) enrolled but local AI is not running, and this tier asked for it — see $INITLOG"
+        # Say what the daemon measured before init gave up. Without this the
+        # arm ends with init's transcript and nothing else, which is how the
+        # linux twin's #579 failures were unreadable (see the linux arm).
+        hostspeed_evidence
       else
         ok "waired init (authkey) enrolled; local AI is not running here (expected: this tier did not ask for it)"
       fi
