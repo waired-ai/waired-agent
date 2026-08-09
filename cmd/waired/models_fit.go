@@ -49,14 +49,7 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 	}
 
 	if !fam.Fits {
-		deficit := fam.DeficitLabel
-		if deficit == "" {
-			deficit = "there is not enough memory on this computer"
-		}
-		writePromptf(out, "\n%s %s does not fit in this computer's memory: %s.\n",
-			emo("⚠", "!"), name, deficit)
-		writePrompt(out, "  Loading it is expected to fail after the download completes.")
-		writePrompt(out, "  Run `waired models ls --detail` to see what does fit.")
+		warnModelDoesNotFit(out, name, fam.DeficitLabel)
 		switch unfitPullAction(assumeYes, force, stdinIsInteractive()) {
 		case pullProceed:
 			return true, nil
@@ -73,8 +66,7 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 	if fam.Fit == nil || !fam.Fit.NotRecommended {
 		return true, nil
 	}
-	writePromptf(out, "\n%s %s runs on this computer, but Waired would not choose it here%s.\n",
-		emo("ℹ", "i"), name, notRecommendedBecause(fam.Fit.NotRecommendedReason))
+	warnModelNotRecommended(out, name, fam.Fit.NotRecommendedReason)
 	if assumeYes {
 		return true, nil
 	}
@@ -85,6 +77,26 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 		return true, nil
 	}
 	return ynPrompt(out, bufio.NewScanner(in), "Use it anyway?", false), nil
+}
+
+// warnModelDoesNotFit prints the does-not-fit warning (#592's confirmed
+// copy). One function, two surfaces — `models pull` and the init model
+// picker (#586) — so the wording cannot drift between them.
+func warnModelDoesNotFit(out io.Writer, name, deficit string) {
+	if deficit == "" {
+		deficit = "there is not enough memory on this computer"
+	}
+	writePromptf(out, "\n%s %s does not fit in this computer's memory: %s.\n",
+		emo("⚠", "!"), name, deficit)
+	writePrompt(out, "  Loading it is expected to fail after the download completes.")
+	writePrompt(out, "  Run `waired models ls --detail` to see what does fit.")
+}
+
+// warnModelNotRecommended prints the runs-but-demoted warning
+// (waired-agent#321), shared with the picker for the same reason.
+func warnModelNotRecommended(out io.Writer, name, reason string) {
+	writePromptf(out, "\n%s %s runs on this computer, but Waired would not choose it here%s.\n",
+		emo("ℹ", "i"), name, notRecommendedBecause(reason))
 }
 
 // pullFitAction is what the does-not-fit branch does for one flag/tty
