@@ -2119,7 +2119,12 @@ func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID st
 	// and the disk, and a measurement taken alongside one measures the
 	// contention.
 	if modelID != hostfit.HostCutoffProbeModelID {
-		p.ensureHostSpeedMeasured(applyCtx)
+		// The install window, not the background one: SwapPreferredModel is
+		// on the next line and the weights start arriving from it. This path
+		// does not even take the verdict — see above — so blocking a chosen
+		// download on it for the full budget buys the operator nothing
+		// (waired-agent#579).
+		p.ensureHostSpeedMeasured(applyCtx, p.hostSpeedInstallWindow())
 	}
 	downloading, err := p.SwapPreferredModel(applyCtx, modelID)
 	if err == nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/download"
 	"github.com/waired-ai/waired-agent/internal/hardware"
+	"github.com/waired-ai/waired-agent/internal/hostspeed"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
@@ -329,7 +330,7 @@ func TestApplyHostCutoff_Undecided_LeavesTheInstallPathAlone(t *testing.T) {
 // resident on the host least able to spare the memory.
 func TestMeasureHostCutoff_SendsTheCalibratedRequest(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
-	if _, measured := p.ensureHostSpeedMeasured(context.Background()); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("no measurement from a well-formed engine response")
 	}
 
@@ -403,7 +404,7 @@ func TestMeasureHostCutoff_PublishesTheMedianSampleNotAMedianOfFields(t *testing
 	p, eng, _ := hostCutoffProviderAnswering(t, []map[string]any{
 		calibrationCounters, scaledCounters(3), scaledCounters(1), scaledCounters(2),
 	}, 0)
-	if _, measured := p.ensureHostSpeedMeasured(context.Background()); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("no measurement")
 	}
 	if got := len(eng.generateBodies()); got != benchSampleCount+1 {
@@ -449,7 +450,7 @@ func scaledCountersProbe(factor float64) hostfit.HostProbe {
 // would agree perfectly while measuring nothing.
 func TestMeasureHostCutoff_EverySampleUsesADifferentPrompt(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
-	if _, measured := p.ensureHostSpeedMeasured(context.Background()); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("no measurement")
 	}
 
@@ -584,12 +585,12 @@ func TestEnsureHostSpeedMeasured_OncePerEngineBuild(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
 	ctx := context.Background()
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("first call did not measure")
 	}
 	afterFirst := len(eng.generateBodies())
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("second call lost the measurement")
 	}
 	if got := len(eng.generateBodies()); got != afterFirst {
@@ -600,7 +601,7 @@ func TestEnsureHostSpeedMeasured_OncePerEngineBuild(t *testing.T) {
 	// A bundle bump is a different engine, so the figure no longer
 	// describes what is running.
 	p.profiler = hostCutoffProfiler(t, "0.32.0")
-	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("no measurement after the engine version moved")
 	}
 	if got := len(eng.generateBodies()); got <= afterFirst {
@@ -622,7 +623,7 @@ func TestEnsureHostSpeedMeasured_AnUpgradeReMeasures(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
 	ctx := context.Background()
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("first call did not measure")
 	}
 	afterFirst := len(eng.generateBodies())
@@ -646,7 +647,7 @@ func TestEnsureHostSpeedMeasured_AnUpgradeReMeasures(t *testing.T) {
 		cfg: p.cfg, profiler: p.profiler, logger: p.logger, agentCtx: p.agentCtx,
 		ollamaUsable: p.ollamaUsable,
 	}
-	if _, measured := next.ensureHostSpeedMeasured(ctx); !measured {
+	if _, measured := next.ensureHostSpeedMeasured(ctx, next.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("no measurement after the agent build moved")
 	}
 	if got := len(eng.generateBodies()); got <= afterFirst {
@@ -666,7 +667,7 @@ func TestEnsureHostSpeedMeasured_ARecordWithNoAgentVersionIsReMeasured(t *testin
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
 	ctx := context.Background()
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("first call did not measure")
 	}
 	afterFirst := len(eng.generateBodies())
@@ -681,7 +682,7 @@ func TestEnsureHostSpeedMeasured_ARecordWithNoAgentVersionIsReMeasured(t *testin
 		cfg: p.cfg, profiler: p.profiler, logger: p.logger, agentCtx: p.agentCtx,
 		ollamaUsable: p.ollamaUsable,
 	}
-	if _, measured := next.ensureHostSpeedMeasured(ctx); !measured {
+	if _, measured := next.ensureHostSpeedMeasured(ctx, next.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("no measurement from a record that cannot say who took it")
 	}
 	if got := len(eng.generateBodies()); got <= afterFirst {
@@ -748,7 +749,7 @@ func TestStartHostSpeedMeasurement_DoesNotRaceASecondCaller(t *testing.T) {
 	p.startHostSpeedMeasurement(ctx)
 	p.waitForPulls()
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("no measurement")
 	}
 	// One calibration + benchSampleCount samples, once. Anything more is a
@@ -781,7 +782,7 @@ func TestHostSpeed_AMeasurementDoesNotStallTheStatusRoute(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.ensureHostSpeedMeasured(context.Background())
+		p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow())
 	}()
 
 	// Wait until a request is actually in flight, so this is not asserting
@@ -897,7 +898,7 @@ func TestStartHostSpeedMeasurement_GivesUpWhenTheHostNeverSettles(t *testing.T) 
 // decide whether the number is comparable to its own threshold.
 func TestHostSpeed_PublishedRecordCarriesItsProvenance(t *testing.T) {
 	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
-	if _, measured := p.ensureHostSpeedMeasured(context.Background()); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("no measurement")
 	}
 	got := p.hostSpeedNow()
@@ -990,7 +991,7 @@ func TestHostCutoff_WithoutTheProbeModelInTheCatalog_NoVerdict(t *testing.T) {
 	p, eng, disabled := hostCutoffProvider(t, cpuOnlyCounters, 0)
 	p.manifests = bounceTestManifests() // no qwen3.5-0.8b in here
 
-	if _, measured := p.ensureHostSpeedMeasured(context.Background()); measured {
+	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); measured {
 		t.Fatal("reached a measurement without the probe model; the threshold is calibrated " +
 			"against one model and means nothing measured on another")
 	}
@@ -1329,7 +1330,7 @@ func TestEnsureHostSpeedMeasured_IsBoundedByTheInstallWindow(t *testing.T) {
 	p.hostSpeedWindow = 200 * time.Millisecond
 
 	started := time.Now()
-	probe, measured := p.ensureHostSpeedMeasured(context.Background())
+	probe, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow())
 	elapsed := time.Since(started)
 
 	if measured {
@@ -1354,7 +1355,7 @@ func TestEnsureHostSpeedMeasured_IsBoundedByTheInstallWindow(t *testing.T) {
 func TestEnsureHostSpeedMeasured_AQueuedCallerStillReadsThePublishedMeasurement(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
 
-	if _, measured := p.ensureHostSpeedMeasured(context.Background()); !measured {
+	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
 		t.Fatal("the first call did not measure")
 	}
 	before := len(eng.generateBodies())
@@ -1362,7 +1363,7 @@ func TestEnsureHostSpeedMeasured_AQueuedCallerStillReadsThePublishedMeasurement(
 	// Enter with a window that has already run out, which is what a caller
 	// that queued behind a full-length measurement sees.
 	p.hostSpeedWindow = time.Nanosecond
-	probe, measured := p.ensureHostSpeedMeasured(context.Background())
+	probe, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow())
 	if !measured {
 		t.Fatal("the queued caller re-measured instead of reusing the published figure — " +
 			"the cache read is on the deadline ctx, not the parent")
@@ -1372,5 +1373,80 @@ func TestEnsureHostSpeedMeasured_AQueuedCallerStillReadsThePublishedMeasurement(
 	}
 	if after := len(eng.generateBodies()); after != before {
 		t.Fatalf("/api/generate requests %d -> %d: the queued caller measured again", before, after)
+	}
+}
+
+// The second half of waired-agent#579: the window is a property of the
+// CALLER, not of the measurement. Stage 2 bounded the measurement and the
+// bound held — on run 31316731884 the linux pre-pull released at 14:28:49
+// and the model was dispatched at 14:45:11, sixteen minutes later, which is
+// hostSpeedMeasureDeadline exactly. The download then took 21.9 s, and init
+// had stopped waiting at minute ten.
+//
+// So the background window is generous here (30 s) and the install window
+// is not (50 ms), and the pre-pull has to take the second one. Before this
+// change the arrangement was impossible to express: there was one window,
+// and the pull waited it out.
+//
+// Product contract (waired-agent#579). Not parallel: it swaps a
+// package-level window.
+func TestPrePullHold_TheMeasurementTakesOnlyTheShareTheDownloadCanSpare(t *testing.T) {
+	defer hostspeed.SwapInstallWindowForTest(50 * time.Millisecond)()
+
+	p, eng, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	eng.mu.Lock()
+	eng.block = block
+	eng.mu.Unlock()
+
+	r := newBlockingRunner(t)
+	p.puller = download.NewPuller("ollama-fake", r)
+	p.cfg.BundledModelID = "some-big-model"
+	p.cfg.PullOnStartup = true
+	p.prePullFrameGrace = 5 * time.Millisecond
+	p.prePullHoldMax = time.Minute
+	// Generous, and deliberately far above the install window: this is what
+	// the boot goroutine would get, and the pre-pull must not.
+	p.hostSpeedWindow = 30 * time.Second
+
+	started := time.Now()
+	got := runHeldPrePull(t, p, r)
+	elapsed := time.Since(started)
+
+	if len(got) != 1 || got[0] != "big:q4" {
+		t.Fatalf("tags pulled = %v, want [big:q4] — a measurement that could not finish is "+
+			"undecided, and undecided leaves the download exactly as it was", got)
+	}
+	// The number that matters. On the background window this is ~30 s; on
+	// the install window it is ~50 ms. 10 s is far below the one and far
+	// above the other, so the assert says which window was used without
+	// being a timing race.
+	if elapsed > 10*time.Second {
+		t.Fatalf("the pre-pull took %s — it waited out the 30 s BACKGROUND window instead of the "+
+			"50 ms install window, which is #579 with a smaller number", elapsed)
+	}
+}
+
+// hostSpeedInstallWindow is the smaller of the two, never a replacement for
+// the caller's own. A test that shrinks the background window to
+// milliseconds must not find the install path still holding five minutes.
+//
+// Record of today's behaviour, not a product contract: the clamp exists so
+// the existing hostSpeedWindow seam keeps working for both paths.
+func TestHostSpeedInstallWindow_IsNeverLongerThanTheBackgroundOne(t *testing.T) {
+	defer hostspeed.SwapInstallWindowForTest(5 * time.Minute)()
+
+	p := &agentInferenceProvider{}
+	if got, want := p.hostSpeedInstallWindow(), 5*time.Minute; got != want {
+		t.Fatalf("with no override: install window = %v, want %v", got, want)
+	}
+	p.hostSpeedWindow = 200 * time.Millisecond
+	if got, want := p.hostSpeedInstallWindow(), 200*time.Millisecond; got != want {
+		t.Fatalf("with a 200 ms background window: install window = %v, want %v — a test that "+
+			"shrinks the measurement must shrink the wait in front of the download too", got, want)
+	}
+	if got, want := p.hostSpeedMeasureWindow(), 200*time.Millisecond; got != want {
+		t.Fatalf("background window = %v, want %v", got, want)
 	}
 }

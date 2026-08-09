@@ -23,6 +23,7 @@ internal/e2e/               # local e2e rigs for inference/integration flows (ta
 internal/gateway/           # Local Gateway (:9473) HTTP adapters; rides the established overlay, does not implement it
 internal/gui/               # tray UI widgets/icons
 internal/hardware/          # hardware probing for model selection
+internal/hostspeed/         # two install-time wait budgets `waired init` and the daemon have to agree about (#579); no mesh/enrollment surface
 internal/inference/         # overlay-side inference HTTP service (serves over wgnet, no control/data-plane logic)
 internal/inferencemesh/     # inference request routing across the established overlay
 internal/integration/       # coding-agent integrations (claudecode/openclaw/vscode/...)
