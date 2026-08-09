@@ -411,7 +411,16 @@ assert_inference_macos() {
     bad "the model was not ready inside init's benchmark window, so nothing was measured — the download, not the engine (\"$notready\"; $INITLOG)"
     grep -iE 'download|model|pull' "$INITLOG" 2>/dev/null | tail -20 | sed 's/^/    init| /' >&2 || true
     # Pull-side evidence only; engine.log stays on the arm below (#382).
-    [ -n "$ollama_bin" ] && OLLAMA_HOST=127.0.0.1:9475 "$ollama_bin" list 2>&1 | sed 's/^/    :9475 /' >&2 || true
+    #
+    # sudo, like the sibling read further up: $ollama_bin lives under the state
+    # dir, and this script's own Tier 1 asserts that dir is root-owned and mode
+    # 700. An unelevated exec there cannot work by construction — it printed
+    # `Permission denied` on every failed macOS leg instead of the model list,
+    # which is exactly the line an investigation needs (#580). `sudo test -x`
+    # rather than `[ -n ]` for the same reason: a mode-700 dir also hides the
+    # binary from an unelevated test.
+    sudo test -x "$ollama_bin" \
+      && sudo env OLLAMA_HOST=127.0.0.1:9475 "$ollama_bin" list 2>&1 | sed 's/^/    :9475 /' >&2 || true
     # The `|| echo` is inside the pipe on purpose: a failed `curl -fsS` prints
     # nothing, and a trailing `|| true` would never fire because the pipeline's
     # status is sed's — so an unreachable daemon would leave no line at all.
