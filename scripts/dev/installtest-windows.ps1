@@ -91,7 +91,17 @@ param(
     # end-to-end coverage of the executor's opt-out arm anywhere in CI -- and
     # the second, after the variable is cleared, is where the engine install
     # being asserted actually happens.
-    [switch]$DaemonEngine
+    [switch]$DaemonEngine,
+    # -EngineOnly (waired-agent#590): install the AI software and answer the
+    # model picker with "don't download a model now", then assert that state is
+    # a FINISHED install -- exit 0, an engine on disk, and a standing choice the
+    # daemon keeps across a restart. Its own mode; Tier 2. The Windows twin of
+    # installtest-run.sh's --engine-only.
+    #
+    # Its single init is INTERACTIVE, which is what keeps it out of every other
+    # mode: they all pass --non-interactive, and runInitModelPicker returns on
+    # that flag before it asks anything.
+    [switch]$EngineOnly
 )
 
 # -WithIntegration rides the inference engine.
@@ -108,6 +118,14 @@ if ($DaemonEngine -and ($WithInference -or $WithIntegration)) {
 }
 if ($DaemonEngine -and $Tier -lt 2) {
     Write-Host "[installtest] -DaemonEngine requires -Tier 2 (it enrolls to reach the executor)" -ForegroundColor Red
+    exit 1
+}
+if ($EngineOnly -and ($WithInference -or $WithIntegration -or $DaemonEngine)) {
+    Write-Host "[installtest] -EngineOnly is its own mode; not with -WithInference/-WithIntegration/-DaemonEngine" -ForegroundColor Red
+    exit 1
+}
+if ($EngineOnly -and $Tier -lt 2) {
+    Write-Host "[installtest] -EngineOnly requires -Tier 2 (it enrolls before it asks about models)" -ForegroundColor Red
     exit 1
 }
 
@@ -177,6 +195,12 @@ $PullReachedRe = 'cannot download'
 # -- the inference-status field names Get-ModelReadyState reads. Same guard
 # checks these three copies agree and that the product still publishes them.
 $StatusFieldsRe = 'no_model_selected|host_speed|probe_model_id'
+
+# Mirror of lib/installtest-enroll.sh's IT_NO_MODEL_RE (waired-agent#586/#590)
+# -- see the comment there, including why only the ASCII head of the product's
+# line is matched. Guarded: the three harnesses must agree and the product must
+# still print it. One space around the `=`, for the reason above.
+$NoModelRe = 'No model selected'
 
 # --- logging / assert counters ----------------------------------------------
 # All three declared together, above the helpers: ItDie prints the tally, so
@@ -895,6 +919,109 @@ function Assert-ModelsPullConfirm {
     }
 
     Restore-HostMemory -Waired $Waired -Who '#590 pull twin'
+}
+
+# Test-NoModelSelected: is the daemon publishing the standing "run without a
+# model" choice? Twin of lib/installtest-enroll.sh's _it_no_model_selected; see
+# that one for why it reads the mgmt API's own field rather than inferring from
+# an empty model list.
+function Test-NoModelSelected {
+    try {
+        $st = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5
+        return [bool]$st.no_model_selected
+    } catch { return $false }
+}
+
+# Assert-EngineOnlyInstall: the Windows twin of lib/installtest-enroll.sh's
+# assert_engine_only_install (waired-agent#590). See that function for the
+# contract -- "the AI software is installed and no model was chosen" is a
+# FINISHED install, and the restart is what makes the answer a standing choice
+# rather than a transient one.
+#
+# THE ONE INTERACTIVE INIT ON THIS HARNESS. Every other init here passes
+# --non-interactive, which is exactly what makes them unable to reach the
+# picker. One line of stdin is enough because --inference-enabled=true silences
+# the two questions in front of it.
+#
+# Piping a string into a native command is how that line is delivered. It is
+# the one piece of this twin with no Linux precedent to copy -- PowerShell has
+# no `<` redirect and its pipeline carries objects, not bytes -- so it was
+# measured before it was written, against a stdin-reading stub built for
+# GOOS=windows and run from both Windows PowerShell 5.1 (5.1.26100) and pwsh
+# 7.6.3, the shell this leg actually runs under: the line arrives, $LASTEXITCODE
+# survives Tee-Object, and a spaced install path changes nothing. The same run
+# with no stdin at all reached EOF instead -- which is what a leg that silently
+# answered nothing would look like, and is the reason the no-model grep below
+# is the load-bearing assert rather than a nicety.
+#
+# Exactly six asserts, always -- the floor counts on it.
+function Assert-EngineOnlyInstall {
+    param([string]$Waired, [string]$Device, [string]$ControlUrl)
+
+    ItLog "installing an engine and answering the model picker with 0 (waired-agent#590)"
+
+    # WINDOWS-ONLY ARRANGEMENT, and the one thing this twin needs that neither
+    # sibling does. install.ps1 is invoked with `&` -- in THIS process -- so its
+    # Set-OllamaEnvForInit leaves WAIRED_NO_OLLAMA=1 in our environment, and
+    # every `waired init` the harness spawns inherits it. Today only the
+    # -DaemonEngine branch clears it (see the #551 block below), because that is
+    # the only other leg that needs an engine to actually install. On Linux the
+    # question never arises: install.sh sets the variable in its own process and
+    # the probe's init runs in a fresh one.
+    #
+    # Cleared for this probe and put back after it, rather than globally: the
+    # opt-out state is what the asserts before this one were written against.
+    $prevNoOllama = $env:WAIRED_NO_OLLAMA
+    Remove-Item Env:WAIRED_NO_OLLAMA -ErrorAction SilentlyContinue
+
+    # The daemon has to WANT an engine: the two #590 probes above leave the
+    # toggle off, and the #551 probe before them turned it off too.
+    & $Waired inference on --state-dir $StateDir 2>&1 | Out-Null
+
+    $log = Join-Path $Work 'engine-only.log'
+    $env:WAIRED_NO_EMOJI = '1'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    '0' | & $Waired init --control $ControlUrl --device-name $Device `
+        --inference-enabled=true --skip-integration --state-dir $StateDir 2>&1 |
+        Tee-Object -FilePath $log
+    $rc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+
+    if ($rc -eq 0) { ItOk "an install that ends with no model chosen exits 0 (waired-agent#590)" }
+    else { ItBad "init exited $rc after the operator chose not to download a model -- that is a finished install, not a failure -- see $log" }
+
+    # Anti-vacuity, and the load-bearing one: without it every assert here
+    # would pass on a host where the picker never ran and the daemon's own
+    # auto-selection quietly applied instead (which is what #607 was).
+    $answered = Select-String -Path $log -Pattern $NoModelRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+    if ($answered) { ItOk "the picker asked and recorded the no-model answer" }
+    else {
+        ItBad "init never printed the no-model line -- the picker did not run, so the asserts around it prove nothing -- see $log"
+        Get-Content -LiteralPath $log -Tail 25 -ErrorAction SilentlyContinue | ForEach-Object { ItLog "    init| $_" }
+    }
+    $calledItFailed = Select-String -Path $log -Pattern $InstallFailureBoxRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+    if ($calledItFailed) { ItBad "init reported an engine-only install as a failed install -- see $log" }
+    else { ItOk "an engine-only install is not reported as a failed install" }
+
+    $bin = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
+    if (Test-Path -LiteralPath $bin) { ItOk "the engine is installed ($bin) -- this host runs AI, it just has no model yet" }
+    else { ItBad "no engine at $bin -- the point of this state is that the software IS installed -- see $log" }
+
+    if (Test-NoModelSelected) { ItOk "the daemon publishes the standing no-model choice (mgmt API no_model_selected=true)" }
+    else { ItBad "mgmt API does not report no_model_selected after the operator chose not to download a model" }
+
+    # The restart is the whole point of the sixth assert: an answer that does
+    # not survive one is not a standing choice, and the #379 boot pre-pull is
+    # what would otherwise fetch a model nobody asked for.
+    Restart-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    if (-not (Wait-Enrolled)) { ItLog "WARN daemon did not report enrolled after the #590 engine-only restart" }
+    if (Test-NoModelSelected) { ItOk "the choice survives a restart -- the boot pre-pull stands down (waired-agent#379)" }
+    else { ItBad "no_model_selected is gone after a restart -- the boot pre-pull is about to download a model nobody asked for" }
+
+    # Leave the host as we found it for anything after this one.
+    & $Waired inference off --state-dir $StateDir 2>&1 | Out-Null
+    if ($prevNoOllama) { $env:WAIRED_NO_OLLAMA = $prevNoOllama }
 }
 
 function Assert-ServiceRecoveryFlag {
@@ -1969,6 +2096,13 @@ if ($Tier -ge 2) {
         ItStep "management write pipe asserts (waired#838)"
         Assert-MgmtPipe
 
+        # LAST of the engine-less probes, because it is the one that ends this
+        # host's engine-less life: it installs one (waired-agent#590).
+        if ($EngineOnly) {
+            ItStep "engine installed, no model chosen (waired-agent#590)"
+            Assert-EngineOnlyInstall -Waired $waired -Device $device -ControlUrl $ControlUrl
+        }
+
         if ($DaemonEngine) {
             ItStep "daemon-path executor engine-install asserts (waired#835 §9/§11)"
             Assert-DaemonEngine -InitLog $initLog -Flag $daemonFlag
@@ -2328,11 +2462,20 @@ if ($script:Skip -gt 0) {
 # and contributes 0 rather than 1. The #579 fix adds the $ContractBlocking
 # entry and raises this to 72 in that PR.
 #
+# waired-agent#590 also adds -EngineOnly, and that one could NOT be derived
+# from either number above. It is the first Windows configuration that is lean
+# WITHOUT -Contract: the 71 behind -WithInference counts Assert-Inference's tail
+# and none of the lean block, the 89 behind -Contract counts the lean block and
+# a pile of contract asserts, and neither difference is separable by arithmetic.
+# So it is MEASURED, the way this file has asked for since #505: run
+# 31316424716's -EngineOnly leg executed 75 (75 passed, 0 failed, 0 warn,
+# 0 skipped) and that is the floor.
+#
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 89 } else { 71 }
+    $floor = if ($Contract) { 89 } elseif ($EngineOnly) { 75 } else { 71 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
