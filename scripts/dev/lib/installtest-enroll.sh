@@ -498,6 +498,76 @@ assert_reinit_engine_optout() {
     it_warn "could not turn inference back off in $guest after the #551 probe"
 }
 
+# assert_reinit_default_unfit: the OTHER half of the step-4 twin
+# (waired-agent#590; the waired#1067 rule "explicit flag > non-interactive
+# default > interactive ask", waired-agent#584). On a host below the
+# recommended spec, a non-interactive init with NO inference flag must END
+# with local AI off, exit 0, and the skip note — a choice, not a fault
+# (waired-agent#551's exit discipline; distinct from the #569/#576 exit-3
+# contract). The measured deduction (waired-agent#568) is what makes the
+# host below-spec DETERMINISTICALLY: WAIRED_RAM_AVAILABLE_GB=1 makes the
+# fit verdicts read "nothing fits" whatever the runner's real memory, so
+# the probe never depends on which machine class CI happened to buy.
+#
+# Non-vacuous the same way the #551 probe above is: the flagless run only
+# reaches the ask when the daemon still wants an engine, so the probe
+# turns inference back on first (the #551 probe left it off). Cleanup
+# restores both the seam and the toggle, so the asserts after this one
+# meet the guest exactly as the #551 probe left it.
+assert_reinit_default_unfit() {
+  local guest="$1" name log rc=0
+  name="$(_it_dev_name "$guest")"
+  mkdir -p "$IT_LOGDIR"
+  log="$IT_LOGDIR/reinit-default-unfit-$name.log"
+
+  it_log "re-running waired init in $guest with no inference flag on a forced below-spec host (waired-agent#590)"
+  # Arrange: the daemon must WANT an engine (desired enabled, none
+  # installed) and must measure as below-spec. The seam is daemon env, so
+  # it takes a service restart to be read.
+  gx "$guest" waired inference on >/dev/null 2>&1 ||     it_warn "could not turn inference on in $guest before the #590 probe"
+  gx "$guest" sh -c "printf 'WAIRED_RAM_AVAILABLE_GB=1\n' >> /etc/waired/agent.env && systemctl restart waired-agent"
+  # The restart drops the enrolled session for a few seconds; init's own
+  # polling absorbs that, but waiting here keeps the probe deterministic.
+  _it_wait_enrolled "$guest" >/dev/null || \
+    it_warn "daemon did not report enrolled after the #590 seam restart"
+
+  gx "$guest" env WAIRED_NO_EMOJI=1 waired init \
+    --control "$IT_CONTROL_URL" --device-name "$name" \
+    --non-interactive --skip-integration \
+    >"$log" 2>&1 || rc=$?
+
+  [ "$rc" = 0 ] \
+    && ok "flagless init on a below-spec host exits 0 (a choice, not a fault — waired-agent#590)" \
+    || bad "flagless init exited $rc on a below-spec host — the non-interactive default is skip-and-continue, never a failure — see $log"
+  grep -q "Non-interactive: skipping local AI" "$log" \
+    && ok "the step-4 non-interactive default said what it did" \
+    || bad "init never printed the skip note — the step-4 default arm was not reached, so the asserts around it prove nothing — see $log"
+  grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
+    && bad "init reported the below-spec default as a failed install — see $log" \
+    || ok "the default is not reported as a failed install"
+  local desired
+  desired="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null \
+    | grep -oE '"desired_state"[[:space:]]*:[[:space:]]*"[a-z]+"' \
+    | grep -oE '"[a-z]+"$' | tr -d '"' || true)"
+  [ "$desired" = disabled ] \
+    && ok "the default landed as the persisted toggle (mgmt API desired_state=disabled)" \
+    || bad "mgmt API desired_state=$desired after the flagless below-spec init, want disabled"
+
+  [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
+  # Leave the guest as we found it: seam out, daemon restarted on real
+  # measurements, toggle back off (the state every assert after this one
+  # was written against).
+  gx "$guest" sh -c "sed -i '/^WAIRED_RAM_AVAILABLE_GB=/d' /etc/waired/agent.env && systemctl restart waired-agent" || \
+    it_warn "could not remove the RAM seam from $guest's agent.env"
+  # The asserts after this probe talk to the daemon straight away (the
+  # pause/resume pair was the first casualty): wait out the restart's
+  # re-enrollment window before handing the guest back.
+  _it_wait_enrolled "$guest" >/dev/null || \
+    it_warn "daemon did not report enrolled after the #590 cleanup restart"
+  gx "$guest" waired inference off >/dev/null 2>&1 || \
+    it_warn "could not turn inference back off in $guest after the #590 probe"
+}
+
 # Bundled engine path on Linux: waired's BUNDLED Ollama lives under the state
 # dir (#567) — it is NOT a system ollama on PATH, and it serves on the
 # waired-owned port :9475, never the upstream default :11434.
