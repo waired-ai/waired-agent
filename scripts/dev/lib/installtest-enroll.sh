@@ -196,6 +196,12 @@ it_enroll_guest() {
       # A tier that asked for local inference and did not get it IS a
       # failure: that is the thing that tier exists to verify.
       if [ "$IT_INFERENCE_ENABLED" = true ]; then
+        # Say what the daemon measured before dying. This arm is where the
+        # inference leg actually ends when local AI does not come up, and it
+        # used to end with nothing but init's transcript — no daemon log, no
+        # status payload — which is why "did the host-speed measurement
+        # complete?" was unanswerable from a finished run (#579).
+        it_hostspeed_evidence "$guest"
         it_die "waired init enrolled $guest but local AI is not running, and this tier asked for it — see $initlog"
       fi
       it_log "waired init enrolled $guest; local AI is not running there (expected: IT_INFERENCE_ENABLED=$IT_INFERENCE_ENABLED)"
@@ -1059,6 +1065,30 @@ _it_wait_inference_ready() {
 # `POST /api/pull` carries the download's real duration. `grep .` is what
 # makes an empty result say so — a bare grep would print nothing and read as
 # "the dump did not run".
+# it_hostspeed_evidence — the daemon's own account of the #496 host-speed
+# measurement and the selection it fed, for the arms that die on init's exit
+# code.
+#
+# A sibling of it_prepull_evidence rather than part of it, because the failure
+# that needs this one kills the run BEFORE assert_inference is reached: a leg
+# that dies in it_enroll_guest never reaches any of the diagnostic dumps below,
+# so on a finished run the state of the measurement — the thing #579 turns on —
+# was simply unrecoverable. Observed on run 31311709284, where 611 lines of job
+# log contained no daemon output at all and the question "did the measurement
+# complete?" could not be answered even in principle.
+#
+# `waired logs` for the same reason it_prepull_evidence uses it: one surface
+# that reads the service log and the bundled engine's log on all three OSes.
+it_hostspeed_evidence() {
+  local guest="$1"
+  gx "$guest" sh -c 'waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-hs.txt >/dev/null 2>&1
+    grep -iE "host speed|host cutoff|below the recommended spec|selected bundled model|measuring whether this host" /tmp/it-hs.txt 2>/dev/null | tail -20 |
+      grep . || echo "(no host-speed lines in the daemon log)"' 2>&1 |
+    sed 's/^/    agent| /' >&2 || true
+  gx "$guest" sh -c 'curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"' 2>&1 |
+    sed 's/^/    status| /' >&2 || true
+}
+
 it_prepull_evidence() {
   local guest="$1"
   gx "$guest" sh -c 'waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-logs.txt >/dev/null 2>&1
