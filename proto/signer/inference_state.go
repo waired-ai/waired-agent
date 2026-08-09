@@ -190,6 +190,27 @@ type InferenceState struct {
 	// on canonical re-marshal and fails verification outright.
 	DesiredModelGen int `json:"desired_model_gen,omitempty"`
 
+	// DesiredInference is the sixth CP-injected onboarding target: the
+	// operator's explicit local-AI answer from the NAVI wizard.
+	// DesiredInferenceOff carries both the step-4 "don't run local AI on
+	// this computer" choice (waired#1109) and the step-6 "it measured
+	// slow, turn it off" action (waired#1110); DesiredInferenceOn
+	// re-enables. Same Self-entry-only injection as every field above,
+	// empty meaning "no instruction", and the values are a closed
+	// two-word set for the same reason DesiredModelID is a catalog ID.
+	//
+	// It exists because clearing DesiredEngine cannot express either
+	// answer: an empty (engine, model) pair reads as "setup not
+	// started" and can never become complete, while "off" is a
+	// COMPLETED setup for a host that joins as a gateway/relay
+	// (waired-agent#597; the waired#835 §6 pair-contract amendment).
+	//
+	// Gated on CapabilityOnboardingV4 for the same non-cosmetic reason
+	// as V3: it rides the SIGNED map, so an agent that does not know
+	// the field drops it on canonical re-marshal and fails
+	// verification outright.
+	DesiredInference string `json:"desired_inference,omitempty"`
+
 	// RecommendedMaxParallel is the agent-computed VRAM-safe engine parallelism
 	// ceiling (floor(maxCtx/ctx) in the no-spill regime; 1 when spilling or when
 	// the host is unsizable). It is ADVISORY telemetry for the Device detail page
@@ -598,6 +619,14 @@ const (
 	InferenceTypeOllama = "ollama"
 	InferenceTypeVLLM   = "vllm"
 	InferenceTypeNone   = "none"
+)
+
+// Accepted values for InferenceState.DesiredInference (waired-agent#597).
+// The empty string — "no instruction" — is deliberately not a constant:
+// it is the field's zero value, not a value anyone writes.
+const (
+	DesiredInferenceOn  = "on"
+	DesiredInferenceOff = "off"
 )
 
 // IsValidInferenceType reports whether t is one of the accepted

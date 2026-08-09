@@ -58,7 +58,8 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		DesiredIntegrations: &signer.DesiredIntegrations{
 			Enabled: []string{signer.IntegrationClaudeCode, signer.IntegrationOpenClaw},
 		},
-		DesiredModelGen: 2,
+		DesiredModelGen:  2,
+		DesiredInference: signer.DesiredInferenceOff,
 	}
 	signed, err := k.SignNetworkMap(nm)
 	if err != nil {
@@ -87,6 +88,13 @@ func TestNetworkMapWithDesiredState_RoundTripVerifies(t *testing.T) {
 		// re-download rather than a wrong model, which is why it is a
 		// counter and not a command — but it is signed all the same.
 		{"DesiredModelGen", func(m *signer.NetworkMap) { m.Self.InferenceState.DesiredModelGen = 9 }},
+		// An on-path attacker flipping off→on would restart local AI on
+		// a host whose operator explicitly declined it (#597) — the
+		// closed two-word set is validated CP-side, and the value is
+		// signed here.
+		{"DesiredInference", func(m *signer.NetworkMap) {
+			m.Self.InferenceState.DesiredInference = signer.DesiredInferenceOn
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
