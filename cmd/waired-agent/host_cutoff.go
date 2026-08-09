@@ -224,6 +224,24 @@ func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
 	return p.ollama.Health(ctx).State == infruntime.StateReady
 }
 
+// engineQuietForBench is engineIsQuiet as the boot/explicit benchmark
+// asks it (BenchDeps.EngineQuiet, #582/#601). Same question — is anything
+// about to take the engine away — with one difference at the nil end.
+//
+// No ollama adapter, or a host serving something else, answers QUIET
+// rather than busy: the pull registry and the serve-env reconcile this
+// guards against are both ollama's, so on a vLLM host there is nothing
+// here that can restart the engine and a `false` would gate that host's
+// benchmark off forever. engineIsQuiet cannot answer that way for its own
+// caller — the host-speed measurement reads ollama's counters and refuses
+// non-ollama outright (hostCutoffProbeTag).
+func (p *agentInferenceProvider) engineQuietForBench(ctx context.Context) bool {
+	if p == nil || p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama {
+		return true
+	}
+	return p.engineIsQuiet(ctx)
+}
+
 // ensureHostSpeedMeasured returns this host's measurement, taking it if
 // this install has not been measured yet. measured is false whenever
 // no usable measurement could be reached — no engine, no probe model, no

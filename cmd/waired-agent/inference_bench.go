@@ -88,6 +88,17 @@ const (
 	benchPhaseMeasuring = "measuring"
 )
 
+// engineGen is a nil-safe EngineGen call. A caller that does not wire it
+// gets a constant 0, so the generation never appears to move — the same
+// nil-safety engineProcessGen gives the unit fixtures that construct a
+// provider without an adapter.
+func (d BenchDeps) engineGen() uint64 {
+	if d.EngineGen == nil {
+		return 0
+	}
+	return d.EngineGen()
+}
+
 // report is a nil-safe Progress call.
 func (d BenchDeps) report(p BenchProgress) {
 	if d.Progress != nil {
@@ -268,6 +279,42 @@ type BenchDeps struct {
 	// errors is NOT this case and still de-rates.
 	EngineReady func() (bool, string)
 
+	// EngineQuiet, when non-nil, reports whether anything else on this host
+	// is about to take the engine away — a download in flight, or a
+	// serve-env reconcile queued behind one. Ready and quiet are different
+	// questions: an engine serving a loaded model answers the first yes
+	// while a finished pull is about to stop and respawn it.
+	//
+	// Consulted because a benchmark that starts anyway loses either way
+	// (#582/#601). It either dies to the restart — `EOF` mid-warm-up,
+	// reported as a host that cannot answer — or, if it survives, it
+	// measures a machine that is concurrently downloading a model, which is
+	// the contention awaitQuietEngine's own doc records as the one thing
+	// the median of three samples cannot correct for.
+	//
+	// Not waited on here: this returns the not-ready outcome instead, and
+	// the 425 door it leaves through is already a poll-and-retry loop in
+	// `waired init` and a re-kick in the setup reconciler.
+	//
+	// nil means "assume quiet", so every existing caller and test keeps
+	// today's behaviour.
+	EngineQuiet func(context.Context) bool
+
+	// EngineGen, when non-nil, is the engine's process generation
+	// (agentInferenceProvider.engineProcessGen). Sampled before the
+	// warm-up and re-read on failure: a run whose engine generation moved
+	// under it was killed by a restart THIS AGENT ordered, which is not a
+	// statement about the host's speed.
+	//
+	// Counting our own restarts rather than classifying the error is the
+	// shape runPullJob already uses for the same hazard (#359) — the engine
+	// surfaces a killed connection as a bare EOF, so there is no error text
+	// to key on.
+	//
+	// nil returns a constant 0, so the generation never appears to move and
+	// every existing caller keeps today's straight-to-failBench behaviour.
+	EngineGen func() uint64
+
 	// Now defaults to time.Now if nil. Test injection.
 	Now func() time.Time
 
@@ -342,13 +389,7 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 				"model", model,
 				"engine", deps.EngineKind,
 				"port", deps.EnginePort)
-			return BenchResult{
-				Capacity:  1,
-				VariantID: deps.VariantID,
-				Failed:    true,
-				Err:       "engine not ready",
-				Outcome:   benchOutcomeEngineNotReady,
-			}
+			return notReadyBenchResult(deps, "engine not ready")
 		}
 	}
 
@@ -377,27 +418,70 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 		}
 	}
 
-	// Warm-up: one tiny untimed completion so the engine loads the
-	// model OUTSIDE the measured window. Without it a cold multi-GB
-	// load dominated the elapsed time and the host read as an order of
-	// magnitude slower than its real decode rate.
-	//
-	// Announced before it starts: this is the longest silent stretch of
-	// the whole run (#199).
-	deps.report(BenchProgress{Phase: benchPhaseWarmup, Trials: benchSampleCount})
-	if err := warmUpEngine(ctx, deps); err != nil {
-		return failBench(deps, "warmup", err)
-	}
-
-	tokps, spread, samples, method, err := measureDecodeRate(ctx, deps)
-	if err != nil {
-		// Distinguish timeout (context deadline) from other errors
-		// in the log line so operators can tell "model loading too
-		// slow" from "engine not listening".
-		if errors.Is(err, context.DeadlineExceeded) {
-			return failBench(deps, "timeout", err)
+	// The measurement, retried without charge across restarts this agent
+	// ordered (#582/#601). Every iteration re-asks whether the engine is
+	// quiet, so a run that arrives while the host is still installing
+	// leaves through the 425 door instead of measuring the contention.
+	var (
+		tokps   float64
+		spread  float64
+		samples int
+		method  string
+	)
+	bounceGrace := benchEngineBounceGrace
+	for {
+		// A busy engine is not a slow one — the same distinction #203 draws
+		// for an absent one, reached from the other direction. The reconcile
+		// a finishing pull fires stops and respawns `ollama serve`, so
+		// starting a measurement while a download is in flight is starting
+		// one under a restart that has already been decided.
+		if deps.EngineQuiet != nil && !deps.EngineQuiet(ctx) {
+			deps.Logger.Warn("inference boot benchmark not run: the engine is busy",
+				"reason", benchOutcomeEngineNotReady,
+				"engine", deps.EngineKind,
+				"port", deps.EnginePort)
+			return notReadyBenchResult(deps, "engine busy: a download or an engine restart is in flight")
 		}
-		return failBench(deps, "measure", err)
+		// Sampled before the first byte is asked for, and compared against
+		// on every failure below.
+		gen := deps.engineGen()
+
+		// Warm-up: one tiny untimed completion so the engine loads the
+		// model OUTSIDE the measured window. Without it a cold multi-GB
+		// load dominated the elapsed time and the host read as an order of
+		// magnitude slower than its real decode rate.
+		//
+		// Announced before it starts: this is the longest silent stretch of
+		// the whole run (#199).
+		deps.report(BenchProgress{Phase: benchPhaseWarmup, Trials: benchSampleCount})
+		if err := warmUpEngine(ctx, deps); err != nil {
+			if bounceGrace > 0 && deps.engineGen() != gen {
+				bounceGrace--
+				deps.Logger.Info("inference boot benchmark interrupted by an engine restart during warm-up; retrying without charging the attempt",
+					"grace_left", bounceGrace, "err", err)
+				continue
+			}
+			return failBench(deps, "warmup", err)
+		}
+
+		var err error
+		tokps, spread, samples, method, err = measureDecodeRate(ctx, deps)
+		if err != nil {
+			if bounceGrace > 0 && deps.engineGen() != gen {
+				bounceGrace--
+				deps.Logger.Info("inference boot benchmark interrupted by an engine restart during the measurement; retrying without charging the attempt",
+					"grace_left", bounceGrace, "err", err)
+				continue
+			}
+			// Distinguish timeout (context deadline) from other errors
+			// in the log line so operators can tell "model loading too
+			// slow" from "engine not listening".
+			if errors.Is(err, context.DeadlineExceeded) {
+				return failBench(deps, "timeout", err)
+			}
+			return failBench(deps, "measure", err)
+		}
+		break
 	}
 	cap := int(tokps / avgCodingAgentTokRate)
 	if cap < 1 {
@@ -853,6 +937,43 @@ func spreadPercent(xs []float64) float64 {
 	}
 	return (hi - lo) / m * 100
 }
+
+// notReadyBench is what both readiness gates return: a run that never
+// produced a measurement because the engine was not there to measure —
+// not up yet (#203), or about to be restarted under it (#582/#601).
+//
+// Capacity stays 1, not 0: on the wire 0 means UNLIMITED
+// (proto/signer/inference_state.go), and the probe loop only overwrites
+// s.Capacity when non-zero — so returning 0 here would advertise a host
+// with no working engine as accepting unbounded concurrency. 1 is the
+// fail-safe, and it is no longer permanent: inferenceProbeDeps.Capacity
+// re-reads the provider each tick, so the first successful
+// /inference/benchmark lifts it without a restart.
+//
+// Failed stays true because every consumer gates on it to skip an
+// unusable measurement; Outcome is what tells this ending apart from a
+// run that reached the engine and failed, and it is the value the 425
+// door keys on (RunBenchmark, internal/management maps it to 425).
+func notReadyBenchResult(deps BenchDeps, reason string) BenchResult {
+	return BenchResult{
+		Capacity:  1,
+		VariantID: deps.VariantID,
+		Failed:    true,
+		Err:       reason,
+		Outcome:   benchOutcomeEngineNotReady,
+	}
+}
+
+// benchEngineBounceGrace bounds how many times one benchmark run may be
+// restarted out from under itself before it reports an honest failure.
+//
+// Two, for the reason enginePullBounceGrace documents for downloads: two
+// is the worst case the daemon can inflict in one go (a backend fallback
+// restart and a tuning degrade, one each), and a bound rather than an
+// unbounded free pass keeps an engine that restarts forever reaching a
+// verdict — `waired init`'s exit 3 is what install.sh and install.ps1
+// branch on for a host whose local AI is genuinely down.
+const benchEngineBounceGrace = 2
 
 // failBench logs a warning and returns Capacity=1 so the agent
 // continues with a single-stream admission rather than refusing to

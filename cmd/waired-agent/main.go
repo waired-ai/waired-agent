@@ -1141,14 +1141,28 @@ func run(ctx context.Context, args []string) error {
 				// enrollment succeeds — while `waired init` is still
 				// installing the engine and pulling the model — and reports
 				// the resulting dial failure as a performance verdict.
+				//
+				// #582/#601: ready is not enough either. The boot tail
+				// dispatches the host-speed probe's download and the
+				// operator's model together, and whichever lands LAST fires
+				// the serve-env reconcile that restarts the engine — under
+				// this warm-up when the timing falls that way. engineQuiet
+				// holds the run off while either is in flight, and engineGen
+				// tells a restart we ordered from a host that cannot answer.
 				var engineReady func() (bool, string)
+				var engineQuiet func(context.Context) bool
+				var engineGen func() uint64
 				if inferenceSub != nil && inferenceSub.provider != nil {
 					engineReady = inferenceSub.provider.EngineReady
+					engineQuiet = inferenceSub.provider.engineQuietForBench
+					engineGen = inferenceSub.provider.engineProcessGen
 				}
 				bench := RunBootBenchmark(ctx, BenchDeps{
 					EngineKind:    engineKind,
 					EnginePort:    enginePort,
 					EngineReady:   engineReady,
+					EngineQuiet:   engineQuiet,
+					EngineGen:     engineGen,
 					EngineModel:   engineModelForActive(cfgRoot.Inference),
 					VariantID:     variantIDForActive(),
 					GPUModel:      firstGPU.Model,
