@@ -37,6 +37,16 @@
 #   tiny bundled model keeps the trailing pull cheap. Pairs with Tier 2; its
 #   own mode (not combinable with --inference/--integration).
 #
+# --engine-only (waired-agent#590): the operator installs the AI software and
+#   chooses NOT to download a model. Enrols exactly like the lean leg, then
+#   runs ONE interactive init (--inference-enabled=true, "0" on stdin) so the
+#   #586 model picker is reached and answered with "don't download a model
+#   now". Asserts that state is a FINISHED install — exit 0, no failure box,
+#   an engine on disk, and a standing choice the daemon keeps across a
+#   restart. Its own mode, and nightly: it installs a real engine from a
+#   release asset. Linux only for now (the interactive stdin choreography has
+#   no macOS/Windows twin yet — tracked on #590).
+#
 # A system container is used for Tier 1/2 (fast); Tier 3 forces a VM.
 #
 # Usage:
@@ -45,6 +55,7 @@
 #   bash scripts/dev/installtest-run.sh --tier 2 --inference   # + Ollama/model/benchmark (CPU)
 #   bash scripts/dev/installtest-run.sh --tier 2 --integration --local  # + routing sentinel (350M)
 #   bash scripts/dev/installtest-run.sh --tier 2 --daemon-engine  # + daemon-path executor engine install (waired#835)
+#   bash scripts/dev/installtest-run.sh --tier 2 --engine-only    # + engine installed, no model chosen (waired-agent#590)
 #   bash scripts/dev/installtest-run.sh --tier 3        # + data plane (2 VMs)
 #   bash scripts/dev/installtest-run.sh --keep          # don't delete the guest
 #   bash scripts/dev/installtest-run.sh --name foo --image ubuntu:22.04
@@ -61,6 +72,7 @@ USE_VM=0
 INFER=0
 INTEG=0
 DAEMON_ENGINE=0
+ENGINE_ONLY=0
 NAME="g1"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -71,6 +83,7 @@ while [ $# -gt 0 ]; do
     --inference) INFER=1 ;;
     --integration) INTEG=1; INFER=1 ;;   # routing sentinel rides the inference engine
     --daemon-engine) DAEMON_ENGINE=1 ;;  # waired#835 §9/§11 daemon-path executor engine install
+    --engine-only) ENGINE_ONLY=1 ;;      # waired-agent#590 engine installed, no model chosen
     --vm) USE_VM=1 ;;
     --local) IT_LOCAL=1 ;;
     --name) shift; NAME="${1:?--name needs a value}" ;;
@@ -99,6 +112,16 @@ if [ "$DAEMON_ENGINE" = 1 ]; then
     "--daemon-engine is its own mode; do not combine it with --inference/--integration"
   [ "$TIER" -ge 2 ] || it_die "--daemon-engine needs --tier 2 (it enrols to reach the executor)"
   export IT_BUNDLED_MODEL_ID="${IT_BUNDLED_MODEL_ID:-granite4-350m}"
+fi
+
+# --engine-only (waired-agent#590) is its own mode for the same reason: it
+# keeps install.sh's --skip-ollama so the engine arrives through init, and its
+# one init is INTERACTIVE, which every other mode's --non-interactive would
+# make unreachable.
+if [ "$ENGINE_ONLY" = 1 ]; then
+  { [ "$INFER" = 1 ] || [ "$INTEG" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; } && it_die \
+    "--engine-only is its own mode; do not combine it with --inference/--integration/--daemon-engine"
+  [ "$TIER" -ge 2 ] || it_die "--engine-only needs --tier 2 (it enrols before it asks about models)"
 fi
 
 # --local installs waired ON THIS HOST as root (apt + systemd + a service
@@ -173,7 +196,7 @@ launch_guest() {
     return 0
   fi
   [ "$USE_VM" = 1 ] && extra+=(--vm)
-  if { [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; } && [ -n "${IT_GUEST_MEMORY-16GiB}" ]; then
+  if { [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ] || [ "$ENGINE_ONLY" = 1 ]; } && [ -n "${IT_GUEST_MEMORY-16GiB}" ]; then
     # Applied at LAUNCH, not via a post-launch `lxc config set`: a VM's
     # memory is fixed at boot, so the old post-launch set was silently
     # ineffective (error swallowed by `|| true`) and a VM guest ran the
@@ -399,6 +422,9 @@ if [ "$TIER" -le 2 ]; then
         assert_models_pull_confirm "$GUEST"
       fi
       assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
+      # LAST of the engine-less probes, because it is the one that ends
+      # the guest's engine-less life: it installs one (waired-agent#590).
+      [ "$ENGINE_ONLY" = 1 ] && assert_engine_only_install "$GUEST"
       [ "$INFER" = 1 ] && assert_inference "$GUEST"
       if [ "$INTEG" = 1 ]; then
         # shellcheck source=scripts/dev/lib/installtest-integration.sh
@@ -456,7 +482,13 @@ case "$TIER" in
   #   +5  assert_models_pull_confirm    (waired-agent#590)
   # A richer leg trades that block for assert_inference / assert_daemon_engine
   # and their own tails; 27 is the measured floor for those and stays.
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=27; else floor=36; fi ;;
+  #
+  # --engine-only keeps the whole engine-less block (it does not set INFER)
+  # and adds its own 6 on top, so it is the lean floor plus 6
+  # (waired-agent#590).
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=27
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=42
+     else floor=36; fi ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then
