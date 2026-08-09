@@ -1052,7 +1052,10 @@ func printDaemonSuccessBox(out io.Writer, accountEmail string, bench benchmarkOu
 	// before the model was downloaded. The second is the one an operator
 	// can compare against another computer, and it is the only one a host
 	// that declined the benchmark has.
-	if hostSpeed != nil && hostSpeed.TurnSeconds > 0 {
+	// Asked as "is there a figure" rather than of one field: a host judged
+	// from the prefill bound alone leaves TurnSeconds at zero and fills
+	// TurnFloorSeconds (waired-agent#579).
+	if hostSpeedTurnLine(hostSpeed) != "" {
 		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(hostSpeed))))
 	}
 	if bench.Measured {

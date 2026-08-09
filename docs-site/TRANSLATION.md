@@ -63,6 +63,9 @@ when sequencing work that touches docs.
 | EN | ja | Rationale | Ruling |
 |---|---|---|---|
 | below recommended spec (旧 under-spec) | 推奨要件未満 | 最小要件/推奨要件 が PC スペックの定着語。「未満」は境界を含まない=「満たさない」。旧 under-spec は造語で使用禁止 | #465 裁定(20260804) |
+| Running AI locally is not recommended here. | このパソコンでのローカル AI 実行は推奨しません。 | 上の「推奨要件未満」から導かれる平易な結論として製品が出力する文。**「非推奨」を使わない** — 同表の `manual_only` 行と同じ理由で deprecated と衝突する。動詞形「推奨しません」なら衝突しない | #579 承認文言(20260809) |
+| N s or more (per coding question) | N 秒以上 | 実測ではなく下界（プレフィル律速の下限）であることを示す。「約」「少なくとも」は付けない — 英語側で `about` / `at least` を落とした理由がそのまま当てはまる（要件の下限と読まれる） | #579 承認文言(20260809) |
+| comfortable (speed criterion) | 快適 | 判定基準そのものの見出し。数値の横に並べる行なので短語。「推奨」としない（推奨要件と紛れる） | #579 承認文言(20260809) |
 | completions (LLM output) | 応答 / 生成結果 | 補完 = 入力補完の意で誤読される | #473 §1 |
 | mesh | 初出「Waired メッシュ」→ 以降「メッシュ」 | 一般語のため初出は修飾 | #473 §3 |
 | overlay (network) | 初出「オーバーレイネットワーク」 | 〃 | #473 §3 |

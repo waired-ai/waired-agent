@@ -232,11 +232,97 @@ type inferenceStatusResponse struct {
 // %.1f runInferenceStatus below has shipped and the user docs quote
 // verbatim.
 func hostSpeedTurnLine(hs *management.HostSpeedStatus) string {
-	if hs == nil || hs.TurnSeconds <= 0 {
+	figure := hostSpeedFigure(hs)
+	if figure == "" {
 		return ""
 	}
-	return fmt.Sprintf("about %.1f s per coding question", hs.TurnSeconds)
+	return fmt.Sprintf("%s per coding question (comfortable: %.0f s)", figure, hs.BudgetSeconds)
 }
+
+// hostSpeedFigure is what this host's measurement says one coding
+// question costs. Empty when there is nothing to say.
+//
+// Two shapes, because the daemon has two (waired-agent#579): a full
+// measurement at the canonical depth, and a lower bound taken from the
+// prefill rate alone on a host too slow to measure inside the install
+// window. `66.9 s` for the first, `210.4 s or more` for the second.
+//
+// Reading only TurnSeconds is what this function exists to stop. A
+// screened host leaves it at zero and fills TurnFloorSeconds, so every
+// surface that gated on `TurnSeconds > 0` would have gone silent for
+// exactly the machines it most needs to explain itself to — the ones
+// Waired has just turned local AI off on.
+//
+// `or more` and not `at least`: `at least 210.4 s` reads as a
+// requirement floor ("you need at least…") in a bare sentence, because a
+// reader supplies the missing criterion. The criterion is supplied here
+// instead, on its own line — see hostSpeedComparisonLines (owner-approved
+// copy, 2026-08-09, waired-agent#579).
+func hostSpeedFigure(hs *management.HostSpeedStatus) string {
+	switch {
+	case hs == nil:
+		return ""
+	case hs.TurnSeconds > 0:
+		return fmt.Sprintf("%.1f s", hs.TurnSeconds)
+	case hs.TurnFloorSeconds > 0:
+		return fmt.Sprintf("%.1f s or more", hs.TurnFloorSeconds)
+	}
+	return ""
+}
+
+// hostSpeedComparisonLines is the two-row block that puts the figure
+// beside the thing it is being judged against, indented by the caller's
+// prefix.
+//
+//	one coding question   210.4 s or more
+//	comfortable           45 s or less
+//
+// A shared renderer because three surfaces print it — init step 6
+// interactive, init step 6 non-interactive, and `waired inference
+// status` — and they must not disagree about the number or about how it
+// is qualified. Empty when there is nothing to compare.
+//
+// The layout is the point, not decoration. An adjective on the figure
+// ("at least 210.4 s") reads as a requirement because the reader has to
+// invent the standard being applied; a second row naming the standard
+// removes the ambiguity and lets the qualifier stay a plain `or more`.
+func hostSpeedComparisonLines(hs *management.HostSpeedStatus, indent string) []string {
+	figure := hostSpeedFigure(hs)
+	if figure == "" || hs.BudgetSeconds <= 0 {
+		return nil
+	}
+	return []string{
+		fmt.Sprintf("%s%-22s%s", indent, "one coding question", figure),
+		fmt.Sprintf("%s%-22s%.0f s or less", indent, "comfortable", hs.BudgetSeconds),
+	}
+}
+
+// hostSpeedMissesBudget reports whether this measurement says the host is
+// below the recommended spec.
+//
+// A bound answers the question as well as a measurement does, and in one
+// direction only: the daemon publishes a bound solely once it already
+// exceeds the budget (waired-agent#579), so `floor > budget` is the same
+// verdict `turn > budget` is, reached more cheaply.
+func hostSpeedMissesBudget(hs *management.HostSpeedStatus) bool {
+	if hs == nil || hs.BudgetSeconds <= 0 {
+		return false
+	}
+	if hs.TurnSeconds > 0 {
+		return hs.TurnSeconds > hs.BudgetSeconds
+	}
+	return hs.TurnFloorSeconds > hs.BudgetSeconds
+}
+
+// hostSpeedBelowSpecLine is the judgement itself, in the term the #465
+// ruling pinned (docs-site/TRANSLATION.md: 推奨要件未満). The daemon log
+// prints the same words, so an operator reading both sees one claim.
+const hostSpeedBelowSpecLine = "This computer is below the recommended spec for running AI locally."
+
+// hostSpeedNotRecommendedLine is the plain-language consequence of the
+// line above. It goes AFTER the figures, so it reads as a conclusion
+// drawn from them rather than as an echo of the heading.
+const hostSpeedNotRecommendedLine = "Running AI locally is not recommended here."
 
 // fetchHostSpeed reads the measurement off the daemon for the `waired
 // init` summary. Best-effort by construction: a daemon that cannot be
@@ -252,7 +338,7 @@ func fetchHostSpeed(mgmt string) *management.HostSpeedStatus {
 	if err := json.Unmarshal(body, &s); err != nil {
 		return nil
 	}
-	if s.HostSpeed == nil || s.HostSpeed.TurnSeconds <= 0 {
+	if hostSpeedFigure(s.HostSpeed) == "" {
 		return nil
 	}
 	// The causal claim only holds while the toggle actually reads off.
@@ -278,8 +364,9 @@ func runInferenceStatus(mgmt string) error {
 	switch s.DesiredState {
 	case string(state.InferenceEnabled):
 		fmt.Println("Local inference: on")
-		if s.HostSpeed != nil && s.HostSpeed.TurnSeconds > 0 {
-			fmt.Printf("  One coding question takes about %.1f s on this computer.\n", s.HostSpeed.TurnSeconds)
+		if figure := hostSpeedFigure(s.HostSpeed); figure != "" {
+			fmt.Printf("  One coding question takes %s on this computer (comfortable: %.0f s or less).\n",
+				figure, s.HostSpeed.BudgetSeconds)
 		}
 	case string(state.InferenceDisabled):
 		fmt.Println("Local inference: off")
@@ -288,10 +375,18 @@ func runInferenceStatus(mgmt string) error {
 		// claim as soon as anyone moves the toggle themselves, so a
 		// person who ran `waired inference off` is not told a story about
 		// their own machine being slow.
-		if s.HostSpeed != nil && s.HostSpeed.TurnedInferenceOff && s.HostSpeed.TurnSeconds > 0 {
-			fmt.Printf("  One coding question would take about %.1f s here; Waired starts local AI off above %.0f s.\n",
-				s.HostSpeed.TurnSeconds, s.HostSpeed.BudgetSeconds)
-			fmt.Println("  This computer can still use the AI running on your other computers.")
+		//
+		// The state comes first here and the judgement first in init step
+		// 6, on purpose: this command was ASKED for the state, and step 6
+		// is about to ask a question and has to justify it. An earlier
+		// draft that led with the judgement here read as a report of what
+		// was about to happen rather than of what already had.
+		if s.HostSpeed != nil && s.HostSpeed.TurnedInferenceOff && hostSpeedFigure(s.HostSpeed) != "" {
+			fmt.Printf("  %s\n", hostSpeedBelowSpecLine)
+			for _, line := range hostSpeedComparisonLines(s.HostSpeed, "  ") {
+				fmt.Println(line)
+			}
+			fmt.Println("  It can still use the AI running on your other computers.")
 		}
 		fmt.Println("  Turn it on with `waired inference on`.")
 	default:
