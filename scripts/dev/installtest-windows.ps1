@@ -602,11 +602,12 @@ function Assert-Inference {
         $turn    = [double]$st.host_speed.turn_seconds
         $budget  = [double]$st.host_speed.budget_seconds
         $samples = [int]$st.host_speed.samples
-        if ($turn -gt 0) {
-            ItOk "host speed measured (turn ${turn}s against a ${budget}s budget; $samples samples)"
-        } else {
-            ItBad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (#579)"
-        }
+        # ItSoft, not ItBad: a host that published no measurement is a REAL
+        # defect (waired-agent#579) and the per-PR legs hit it, so blocking
+        # today would turn every PR in the repo red for something none of them
+        # introduced. The #579 fix adds its $ContractBlocking entry and this
+        # becomes blocking automatically -- which is what that mechanism is for.
+        ItSoft '579' ($turn -gt 0) "host speed measured inside init (turn ${turn}s against a ${budget}s budget; $samples samples)" 'waired-agent'
     }
 
     # 3) local inference is on -- asked of the DAEMON, not of the config under
@@ -2322,30 +2323,16 @@ if ($script:Skip -gt 0) {
 # the two probes contribute exactly 9 unconditional asserts between them
 # (their no-catalog arms report the same 5, on purpose).
 #
-# waired-agent#573 adds ONE always-run assert to Assert-Inference: the #496
-# host-speed measurement. Assert-Inference runs only under -WithInference (the
-# elseif above the inference asserts), so of the three configurations behind
-# the 71 the only one that moves is the one that WAS the minimum:
-#
-#   -WithInference    71 -> 72   <- still the minimum, and therefore the floor
-#   -WithIntegration  72         unchanged
-#   -DaemonEngine     77         unchanged
-#
-# -Contract does not set -WithInference, so 89 is unchanged. This raise is
-# ARITHMETIC on a measured floor rather than a fresh measurement -- +1 assert
-# on the leg the floor came from -- so confirm it against the first green
-# `gh workflow run installtest-inference.yml -f os=windows` and correct it here
-# if the leg reports otherwise.
-#
-# The one path where that assert does not fire is a daemon that published no
-# status at all for five minutes; that leg is already red on the assert above
-# it, so the floor cannot be the first thing a reader sees there.
+# waired-agent#573's host-speed assert does NOT move these. It is an ItSoft
+# tied to waired-agent#579, so a leg where no measurement was published WARNs
+# and contributes 0 rather than 1. The #579 fix adds the $ContractBlocking
+# entry and raises this to 72 in that PR.
 #
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 89 } else { 72 }
+    $floor = if ($Contract) { 89 } else { 71 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

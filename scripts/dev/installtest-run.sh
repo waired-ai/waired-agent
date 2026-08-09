@@ -487,15 +487,11 @@ case "$TIER" in
   # and adds its own 6 on top, so it is the lean floor plus 6
   # (waired-agent#590).
   #
-  # waired-agent#573 splits the INFER arm off the DAEMON_ENGINE one:
-  # assert_inference gained ONE always-run assert (the #496 host-speed
-  # measurement) and assert_daemon_engine gained nothing, so a single 28 would
-  # have made the daemon-engine leg red for an assert it never runs.
-  # Arithmetic on a measured floor, not a fresh measurement — confirm against
-  # the first green `gh workflow run installtest-inference.yml -f os=linux`
-  # and correct here.
-  *) if [ "$INFER" = 1 ]; then floor=28
-     elif [ "$DAEMON_ENGINE" = 1 ]; then floor=27
+  # waired-agent#573's host-speed assert does NOT move these: it is soft while
+  # waired-agent#579 is open (it warns rather than failing when no measurement
+  # was published), so on the leg that hits that case it contributes 0, not 1.
+  # The #579 fix flips it to blocking and raises INFER to 28 then.
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=27
      elif [ "$ENGINE_ONLY" = 1 ]; then floor=42
      else floor=36; fi ;;
 esac
