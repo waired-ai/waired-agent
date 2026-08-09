@@ -533,7 +533,7 @@ assert_reinit_default_unfit() {
   [ "$rc" = 0 ] \
     && ok "flagless init on a below-spec host exits 0 (a choice, not a fault — waired-agent#590)" \
     || bad "flagless init exited $rc on a below-spec host — the non-interactive default is skip-and-continue, never a failure — see $log"
-  grep -q "Non-interactive: skipping local AI" "$log" \
+  grep -q "$IT_UNFIT_SKIP_RE" "$log" \
     && ok "the step-4 non-interactive default said what it did" \
     || bad "init never printed the skip note — the step-4 default arm was not reached, so the asserts around it prove nothing — see $log"
   grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
@@ -685,19 +685,26 @@ _it_restore_host_memory() {
     it_warn "could not turn inference back off in $guest after the $who probe"
 }
 
+# The step-4 non-interactive default's skip note (waired-agent#584/#590).
+# A POSITIVE grep, and the anti-vacuity assert of the default probe: a
+# host that did not read as below-spec never reaches this arm, and every
+# other assert around it would pass having tested nothing.
+IT_UNFIT_SKIP_RE='Non-interactive: skipping local AI'
+
 # The three strings assert_models_pull_confirm greps for. Kept as named
 # literals for the same reason IT_ENGINE_OPTOUT_RE is, and matched the
 # same way: IT_PULL_DECLINE_RE is asserted both PRESENT (row 1) and
 # ABSENT (row 2), so a rename would half-pass silently.
 #
-# Not yet in scripts/ci/harness-failure-strings-guard.sh: that guard
-# checks the three harnesses declare the SAME literal, and this probe is
-# linux-only until the macOS/Windows twins land (#590). Until then the
-# product side is pinned by cmd/waired/models_fit_test.go. Register all
-# three here when the twins land.
-#
 # Matched with grep -F (decline) / -E (reached), never with a pattern
 # that would make `--yes --force` a regex operator set.
+#
+# IT_PULL_QUEUED_RE and IT_PULL_REACHED_RE are deliberately NOT in
+# scripts/ci/harness-failure-strings-guard.sh: `queued pull:` is a
+# format string with a `%s` after it and `cannot download` is a wrapped
+# error, so a literal search of the product source cannot find either,
+# and a guard entry that can never pass is worse than none. The two that
+# ARE searchable — the skip note and the decline line — are registered.
 IT_PULL_DECLINE_RE='Not downloading. Re-run with --yes --force to download it anyway.'
 IT_PULL_QUEUED_RE='queued pull:'
 IT_PULL_REACHED_RE='queued pull:|cannot download'

@@ -154,6 +154,26 @@ $InstallFailureBoxRe = 'The AI engine could not be installed on this device'
 # which Go file prints each branch. Same guard checks the three copies agree.
 $BenchNotReadyRe = 'Model not ready in time|Model download failed|Model still downloading'
 
+# Mirrors of lib/installtest-enroll.sh's step-4 default / models-pull pair
+# (waired-agent#590) -- see the comments there. The guard checks the first two
+# agree across the three harnesses and still exist in the product.
+#
+# $PullQueuedRe / $PullReachedRe are NOT guarded and NOT shaped like their .sh
+# counterparts: the .sh side reads `queued pull:|cannot download` as one ERE
+# alternation, and PowerShell matches these with -SimpleMatch (a .NET regex
+# would misread the shared literals), so Windows keeps them as two literals
+# and ORs the two reads. Neither string is literally searchable in the product
+# either -- `queued pull:` has a %s after it and `cannot download` is a
+# wrapped error -- and a guard entry that can never pass is worse than none.
+#
+# One space around each `=`, not aligned columns: the guard reads these
+# declarations with `sed -n "s/^\$<name> = '\(...\)'"`, so padding makes the
+# value invisible to it and the check reports "no alternation found".
+$UnfitSkipRe = 'Non-interactive: skipping local AI'
+$PullDeclineRe = 'Not downloading. Re-run with --yes --force to download it anyway.'
+$PullQueuedRe = 'queued pull:'
+$PullReachedRe = 'cannot download'
+
 # --- logging / assert counters ----------------------------------------------
 # All three declared together, above the helpers: ItDie prints the tally, so
 # every counter it reads must exist before any function can be called.
@@ -599,6 +619,208 @@ function Assert-Inference {
 # installs, starts, and serves exactly the same either way. Blocking from the
 # start ($ContractBlocking['315'] = $true) because the fix ships in the same
 # PR as this assert.
+# --- the #568 measurement seam, and the two probes that need it --------------
+#
+# Wait-Enrolled: poll the daemon until it reports an identity. The Windows
+# twin of lib/installtest-enroll.sh's _it_wait_enrolled, factored out of the
+# Tier-2 readback below so the probes that restart the service can reuse it —
+# a restart drops the enrolled session for a few seconds, and on linux the
+# assert right after a restart was the first casualty of not waiting (#605).
+function Wait-Enrolled {
+    param([int]$TimeoutSec = 45)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $attempt  = 0
+    while ((Get-Date) -lt $deadline) {
+        $attempt++
+        try {
+            $st = Invoke-RestMethod -Uri $MgmtStatus -TimeoutSec 1
+            if ($st.device_id -match '^dev_') { return $true }
+        } catch { }
+        Start-Sleep -Milliseconds $(if ($attempt -le 10) { 250 } else { 1000 })
+    }
+    return $false
+}
+
+# Set-HostBelowSpec / Restore-HostMemory: make this host read as below the
+# recommended spec for the probes that need it, and put it back.
+#
+# Linux arranges this with WAIRED_RAM_AVAILABLE_GB in the systemd
+# EnvironmentFile. Windows services have no equivalent that a restart is
+# guaranteed to pick up: the machine environment block is cached by the SCM
+# at boot. The persisted measurement is the OTHER end of the same read --
+# hostMemoryGB() takes the env seam first and this record otherwise -- so
+# patching the record arranges the same fact through the path production
+# actually uses, with no service-manager subtleties. installtest-macos.sh
+# does the same, for the same reason.
+#
+# The daemon reuses a record whose agent_version matches its own build
+# (waired-agent#568), so the patched figure survives the restart instead of
+# being re-measured. Only the number is rewritten; agent_version is left
+# exactly as the daemon wrote it, which is what makes that true.
+#
+# .NET's ReadAllText/WriteAllText rather than Get-Content/Set-Content: under
+# Windows PowerShell 5.1 `Set-Content -Encoding utf8` writes a BOM, and a BOM
+# makes the record unparseable, which ReadHostMemory treats as "never
+# measured" -- the daemon would then re-measure and the seam would silently
+# not take.
+function Get-HostMemoryPath { Join-Path $StateDir 'runtime\host-memory.json' }
+
+function Set-HostBelowSpec {
+    param([string]$Waired, [string]$Who)
+    & $Waired inference on --state-dir $StateDir 2>&1 | Out-Null
+    $rec = Get-HostMemoryPath
+    $bak = Join-Path $Work 'host-memory.json.bak'
+    if (Test-Path -LiteralPath $rec) {
+        Copy-Item -LiteralPath $rec -Destination $bak -Force -ErrorAction SilentlyContinue
+        $txt = [System.IO.File]::ReadAllText($rec)
+        $txt = [regex]::Replace($txt, '"available_gb"\s*:\s*\d+', '"available_gb": 1')
+        [System.IO.File]::WriteAllText($rec, $txt)
+        if ($txt -notmatch '"available_gb"\s*:\s*1\b') {
+            ItLog "WARN the #568 measurement seam did not take on $rec; the $Who probe's own asserts are what will say so"
+        }
+    } else {
+        ItLog "WARN no host-memory record at $rec -- the $Who probe cannot force a below-spec verdict"
+    }
+    Restart-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    if (-not (Wait-Enrolled)) { ItLog "WARN daemon did not report enrolled after the $Who seam restart" }
+}
+
+# Leave the host as we found it: the real measurement back, the daemon
+# restarted on it, and inference off -- the state every assert after these
+# probes was written against.
+function Restore-HostMemory {
+    param([string]$Waired, [string]$Who)
+    $rec = Get-HostMemoryPath
+    $bak = Join-Path $Work 'host-memory.json.bak'
+    if (Test-Path -LiteralPath $bak) {
+        Copy-Item -LiteralPath $bak -Destination $rec -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue
+    } else {
+        # Nothing to restore: removing it makes the daemon measure again on
+        # its next clean boot, which is the state we would have left anyway.
+        Remove-Item -LiteralPath $rec -Force -ErrorAction SilentlyContinue
+    }
+    Restart-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    if (-not (Wait-Enrolled)) { ItLog "WARN daemon did not report enrolled after the $Who cleanup restart" }
+    & $Waired inference off --state-dir $StateDir 2>&1 | Out-Null
+}
+
+# Assert-ReinitDefaultUnfit: the Windows twin of lib/installtest-enroll.sh's
+# assert_reinit_default_unfit (waired-agent#590). On a host below the
+# recommended spec, a non-interactive init with NO inference flag must end
+# with local AI off, exit 0, and the skip note -- a choice, not a fault (the
+# #551 exit discipline; distinct from the #569/#576 exit-3 contract).
+#
+# Exactly four asserts, always -- the tier-2 floor counts on it.
+function Assert-ReinitDefaultUnfit {
+    param([string]$Waired, [string]$Device, [string]$ControlUrl)
+
+    Set-HostBelowSpec -Waired $Waired -Who '#590 default'
+
+    $log = Join-Path $Work 'reinit-default-unfit.log'
+    $env:WAIRED_NO_EMOJI = '1'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $Waired init --control $ControlUrl --device-name $Device `
+        --non-interactive --skip-integration --state-dir $StateDir 2>&1 |
+        Tee-Object -FilePath $log
+    $rc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+
+    if ($rc -eq 0) { ItOk "flagless init on a below-spec host exits 0 (a choice, not a fault -- waired-agent#590)" }
+    else { ItBad "flagless init exited $rc on a below-spec host -- the non-interactive default is skip-and-continue, never a failure -- see $log" }
+
+    # -SimpleMatch on every one of these: -Pattern is a .NET regex, and the
+    # shared literals are written for grep's BRE. See the EngineOptOutRe
+    # comment for the whole story.
+    $skipped = Select-String -Path $log -Pattern $UnfitSkipRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+    if ($skipped) { ItOk "the step-4 non-interactive default said what it did" }
+    else {
+        ItBad "init never printed the skip note -- the step-4 default arm was not reached, so the asserts around it prove nothing -- see $log"
+        Get-Content -LiteralPath $log -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { ItLog "    init| $_" }
+    }
+    $calledItFailed = Select-String -Path $log -Pattern $InstallFailureBoxRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+    if ($calledItFailed) { ItBad "init reported the below-spec default as a failed install -- see $log" }
+    else { ItOk "the default is not reported as a failed install" }
+
+    $desired = ''
+    try { $desired = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).desired_state } catch { }
+    if ($desired -eq 'disabled') { ItOk "the default landed as the persisted toggle (mgmt API desired_state=disabled)" }
+    else { ItBad "mgmt API desired_state=$desired after the flagless below-spec init, want disabled" }
+
+    Restore-HostMemory -Waired $Waired -Who '#590 default'
+}
+
+# Assert-ModelsPullConfirm: the Windows twin of lib/installtest-enroll.sh's
+# assert_models_pull_confirm (waired-agent#590). See that function for the
+# contract and for why an engine-less host makes the honoured row free -- the
+# daemon refuses the handed-on pull at #307's admission check instead of
+# fetching weights.
+#
+# Exactly five asserts, always -- the tier-2 floor counts on it.
+function Assert-ModelsPullConfirm {
+    param([string]$Waired)
+
+    Set-HostBelowSpec -Waired $Waired -Who '#590 pull twin'
+
+    # From the catalog, not a literal: the bundled set is retired and
+    # replaced on its own schedule (#577). Under the seam every family is
+    # fits=false, so any of them will do.
+    $model = ''
+    try {
+        $cat = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/catalog' -TimeoutSec 5
+        if ($cat.families -and $cat.families.Count -gt 0) { $model = [string]$cat.families[0].model_id }
+    } catch { }
+    if (-not $model) {
+        ItBad "no model_id in the catalog response -- the pull gate reads the same endpoint, so nothing below would be testing it"
+        Restore-HostMemory -Waired $Waired -Who '#590 pull twin'
+        # Still five: a leg that reports four has a block that stopped
+        # executing, and the floor is what says so.
+        ItBad "skipped: --yes on a model that does not fit was not exercised"
+        ItBad "skipped: the decline is not a failed command"
+        ItBad "skipped: --yes alone did not reach the pull layer"
+        ItBad "skipped: --yes --force honoured the choice"
+        return
+    }
+
+    $env:WAIRED_NO_EMOJI = '1'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    $log = Join-Path $Work 'models-pull-yes.log'
+    & $Waired models pull $model --yes --wait=false 2>&1 | Tee-Object -FilePath $log
+    $rc = $LASTEXITCODE
+
+    if ($rc -eq 0) { ItOk "declining an over-memory pull is not a failed command (exit 0)" }
+    else { ItBad "``models pull --yes`` exited $rc on a model that does not fit -- a decline is a choice, not a fault -- see $log" }
+    $declined = Select-String -Path $log -Pattern $PullDeclineRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+    if ($declined) { ItOk "--yes alone declines an over-memory pull and says how to override" }
+    else { ItBad "``models pull --yes`` never printed the decline line -- --yes must not auto-confirm a default-No question -- see $log" }
+    $queued = Select-String -Path $log -Pattern $PullQueuedRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+    if ($queued) { ItBad "``models pull --yes`` queued the download anyway -- the gate did not stop it -- see $log" }
+    else { ItOk "--yes alone dispatched nothing to the daemon" }
+
+    $log = Join-Path $Work 'models-pull-force.log'
+    & $Waired models pull $model --yes --force --wait=false 2>&1 | Tee-Object -FilePath $log
+    $ErrorActionPreference = $prevEap
+
+    $declined = Select-String -Path $log -Pattern $PullDeclineRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
+    if ($declined) { ItBad "``models pull --yes --force`` still declined -- the scripted consent is the pair, and it was not honoured -- see $log" }
+    else { ItOk "--yes --force is not stopped by the over-memory gate" }
+    # Two literals, so two -SimpleMatch reads rather than the .sh side's one
+    # alternation: -Pattern would make it a regex and the shared strings are
+    # written for grep.
+    $reached = (Select-String -Path $log -Pattern $PullQueuedRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue) -or
+               (Select-String -Path $log -Pattern $PullReachedRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue)
+    if ($reached) { ItOk "--yes --force handed the pull to the daemon" }
+    else {
+        ItBad "``models pull --yes --force`` neither queued nor reached the daemon's pull layer -- see $log"
+        Get-Content -LiteralPath $log -Tail 10 -ErrorAction SilentlyContinue | ForEach-Object { ItLog "    pull| $_" }
+    }
+
+    Restore-HostMemory -Waired $Waired -Who '#590 pull twin'
+}
+
 function Assert-ServiceRecoveryFlag {
     $out = & sc.exe qfailureflag $ServiceName 2>&1 | Out-String
     ItLog "sc qfailureflag: $($out.Trim())"
@@ -1602,17 +1824,7 @@ if ($Tier -ge 2) {
         # a 1s per-request timeout is plenty; poll densely (250ms) at first —
         # init normally leaves the daemon already enrolled, so the common case
         # lands in the first second — then back off to 1s up to a 45s ceiling.
-        $enrolled = $false
-        $attempt  = 0
-        $deadline = (Get-Date).AddSeconds(45)
-        while ((Get-Date) -lt $deadline) {
-            $attempt++
-            try {
-                $st = Invoke-RestMethod -Uri $MgmtStatus -TimeoutSec 1
-                if ($st.device_id -match '^dev_') { $enrolled = $true; break }
-            } catch { }
-            Start-Sleep -Milliseconds $(if ($attempt -le 10) { 250 } else { 1000 })
-        }
+        $enrolled = Wait-Enrolled
         if ($enrolled) { ItOk "daemon read the enrolled state and reports an identity" }
         else { ItBad "daemon did not report enrolled" }
 
@@ -1650,6 +1862,18 @@ if ($Tier -ge 2) {
             $keyNoted = Select-String -Path $reinitLog -Pattern 'auth key was not used' -Quiet -ErrorAction SilentlyContinue
             ItSoft '313' ([bool]$keyNoted) "re-init says the auth key went unused" -Repo 'waired-agent'
             if (-not $resumed) { Get-Content -LiteralPath $reinitLog -Tail 20 | ForEach-Object { ItLog "    reinit| $_" } }
+        }
+
+        # The step-4 twin's other half and the models-pull twin
+        # (waired-agent#590). Lean leg only, for the same reason the #551
+        # opt-out probe is: this host still has no engine, so every arm they
+        # test is reachable -- and for the pull twin, an engine-less host is
+        # what keeps the honoured row from downloading anything.
+        if (-not $DaemonEngine -and -not $WithInference) {
+            ItStep "below-spec default asserts (waired-agent#590)"
+            Assert-ReinitDefaultUnfit -Waired $waired -Device $device -ControlUrl $ControlUrl
+            ItStep "models-pull confirmation asserts (waired-agent#590)"
+            Assert-ModelsPullConfirm -Waired $waired
         }
 
         # Watcher teardown. It used to happen the moment the enrolling init
@@ -2014,11 +2238,20 @@ if ($script:Skip -gt 0) {
 # useless (too low) or a spurious red (too high). Measure one and add it
 # rather than estimating.
 #
+# waired-agent#590 adds a lean-only block, the way #551 did: the below-spec
+# default probe (4) and the models-pull twin (5) run only where neither
+# -DaemonEngine nor -WithInference is set, because both need a host with no
+# engine. The configurations behind the 71 floor all set one of those, so 71
+# is unaffected; -Contract is the per-PR configuration and does run them, so
+# it goes 80 -> 89. Measured, not estimated: 80 was a green -Contract run and
+# the two probes contribute exactly 9 unconditional asserts between them
+# (their no-catalog arms report the same 5, on purpose).
+#
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 80 } else { 71 }
+    $floor = if ($Contract) { 89 } else { 71 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

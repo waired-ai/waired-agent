@@ -17,7 +17,10 @@
 # is that the harness and the producer agree on an exact string, so the check
 # has to be the exact string.
 #
-# Four alternations are covered, all keyed on `waired init`'s transcript:
+# Six alternations are covered. Four are keyed on `waired init`'s transcript;
+# the last is a `waired models pull` transcript, which is the same problem on
+# a different command — the harnesses grep it as a present-assert AND an
+# absent-assert, so a rename would half-pass silently:
 #
 #   install-failure     the engine install did not succeed (#215/#178)
 #   bench-not-ready     the end-of-init benchmark never ran because the model
@@ -28,6 +31,12 @@
 #                       Asserted ABSENT, which is why it is here: an
 #                       absent-assert for wording the product no longer prints
 #                       passes forever — #178 with the sign flipped.
+#   unfit-skip-note     the step-4 non-interactive default's skip note
+#                       (#584/#590) — the anti-vacuity assert of the
+#                       below-spec default probe
+#   pull-decline        `waired models pull --yes` declining a model that does
+#                       not fit (#583/#590), asserted PRESENT for --yes and
+#                       ABSENT for --yes --force
 #
 # Run: bash scripts/ci/harness-failure-strings-guard.sh
 set -euo pipefail
@@ -120,6 +129,8 @@ check_set 'install-failure'     'IT_INSTALL_FAILURE_RE'     'InstallFailureRe'  
 check_set 'bench-not-ready'     'IT_BENCH_NOT_READY_RE'     'BenchNotReadyRe'      || fail=1
 check_set 'engine-opt-out'      'IT_ENGINE_OPTOUT_RE'       'EngineOptOutRe'       || fail=1
 check_set 'install-failure-box' 'IT_INSTALL_FAILURE_BOX_RE' 'InstallFailureBoxRe'  || fail=1
+check_set 'unfit-skip-note'     'IT_UNFIT_SKIP_RE'          'UnfitSkipRe'          || fail=1
+check_set 'pull-decline'        'IT_PULL_DECLINE_RE'        'PullDeclineRe'        || fail=1
 [ "${fail}" -eq 0 ] || exit 1
 
 echo "harness-failure-strings-guard: ok"

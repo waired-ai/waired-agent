@@ -73,6 +73,13 @@ IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
 # Mirror of lib/installtest-enroll.sh's IT_BENCH_NOT_READY_RE — see the comment
 # there (#382). Same guard checks these three copies agree.
 IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading'
+# Mirrors of lib/installtest-enroll.sh's step-4 default / models-pull pair
+# (waired-agent#590) — see the comments there. Same guard checks these three
+# copies agree and that the product still prints them.
+IT_UNFIT_SKIP_RE='Non-interactive: skipping local AI'
+IT_PULL_DECLINE_RE='Not downloading. Re-run with --yes --force to download it anyway.'
+IT_PULL_QUEUED_RE='queued pull:'
+IT_PULL_REACHED_RE='queued pull:|cannot download'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
@@ -491,6 +498,207 @@ assert_reinit_engine_optout_macos() {
   # (waired#838), so the CLI is the only way back.
   sudo "$BINDIR/waired" inference off --state-dir "$STATE_DIR" >/dev/null 2>&1 || \
     it_warn "could not turn inference back off after the #551 probe"
+}
+
+# _it_wait_enrolled_macos — poll the system daemon until it reports an
+# identity. The darwin twin of lib/installtest-enroll.sh's
+# _it_wait_enrolled, factored out of the Tier-2 readback below so the
+# probes that restart the service can reuse it: a restart drops the
+# enrolled session for a few seconds, and on linux the assert right
+# after a restart was the first casualty of not waiting (#605).
+_it_wait_enrolled_macos() {
+  local _ out=""
+  for _ in $(seq 1 40); do
+    out="$(curl -fsS --max-time 5 "$MGMT" 2>/dev/null || true)"
+    if printf '%s' "$out" | grep -qE '"device_id"[[:space:]]*:[[:space:]]*"dev_'; then
+      printf '%s' "$out"; return 0
+    fi
+    sleep 1
+  done
+  printf '%s' "$out"; return 1
+}
+
+# The #568 install-time memory measurement, as the daemon persists it.
+HOSTMEM_JSON="$STATE_DIR/runtime/host-memory.json"
+
+# _it_force_below_spec_macos / _it_restore_host_memory_macos — make this
+# host read as below the recommended spec for the probes that need it,
+# and put it back.
+#
+# Linux arranges this with WAIRED_RAM_AVAILABLE_GB in the systemd
+# EnvironmentFile. There is no darwin equivalent worth using: a
+# LaunchDaemon's environment is baked into the plist at install time and
+# launchd does not re-read a plist on `kickstart`, so the env route would
+# need a bootout/bootstrap cycle to take effect at all. The persisted
+# measurement is the OTHER end of the same read — hostMemoryGB() takes
+# the env seam first and this record otherwise — so patching the record
+# arranges the same fact through the path production actually uses, with
+# no service-manager subtleties. installtest-windows.ps1 does the same,
+# for the same reason.
+#
+# The daemon reuses a record whose agent_version matches its own build
+# (waired-agent#568), so the patched figure survives the restart instead
+# of being re-measured. Only the number is rewritten; agent_version is
+# left exactly as the daemon wrote it, which is what makes that true.
+_it_force_below_spec_macos() {
+  local who="$1"
+  sudo "$BINDIR/waired" inference on --state-dir "$STATE_DIR" >/dev/null 2>&1 || \
+    it_warn "could not turn inference on before the $who probe"
+  sudo cp "$HOSTMEM_JSON" "$WORK/host-memory.json.bak" 2>/dev/null || \
+    it_warn "no host-memory record at $HOSTMEM_JSON — the $who probe cannot force a below-spec verdict"
+  sudo /usr/bin/sed -i '' 's/"available_gb": *[0-9]*/"available_gb": 1/' "$HOSTMEM_JSON" 2>/dev/null || true
+  # `1` followed by a NON-digit: a plain '"available_gb": 1' would also
+  # match the 16 or 121 a failed sed would have left behind, which is a
+  # verification that cannot fail.
+  sudo grep -qE '"available_gb": 1([^0-9]|$)' "$HOSTMEM_JSON" 2>/dev/null || \
+    it_warn "the #568 measurement seam did not take on $HOSTMEM_JSON; the $who probe's own asserts are what will say so"
+  sudo launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || \
+    it_warn "could not restart the daemon for the $who probe"
+  _it_wait_enrolled_macos >/dev/null || \
+    it_warn "daemon did not report enrolled after the $who seam restart"
+}
+
+# Leave the host as we found it: the real measurement back, the daemon
+# restarted on it, and inference off — the state every assert after these
+# probes was written against.
+_it_restore_host_memory_macos() {
+  local who="$1"
+  if [ -f "$WORK/host-memory.json.bak" ]; then
+    sudo cp "$WORK/host-memory.json.bak" "$HOSTMEM_JSON" || \
+      it_warn "could not restore the host-memory record after the $who probe"
+  else
+    # Nothing to restore: removing it makes the daemon measure again on
+    # its next clean boot, which is the state we would have left anyway.
+    sudo rm -f "$HOSTMEM_JSON" || true
+  fi
+  sudo launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || \
+    it_warn "could not restart the daemon after the $who probe"
+  _it_wait_enrolled_macos >/dev/null || \
+    it_warn "daemon did not report enrolled after the $who cleanup restart"
+  sudo "$BINDIR/waired" inference off --state-dir "$STATE_DIR" >/dev/null 2>&1 || \
+    it_warn "could not turn inference back off after the $who probe"
+}
+
+# assert_reinit_default_unfit_macos: the darwin twin of
+# lib/installtest-enroll.sh's assert_reinit_default_unfit
+# (waired-agent#590). On a host below the recommended spec, a
+# non-interactive init with NO inference flag must end with local AI off,
+# exit 0, and the skip note — a choice, not a fault (the #551 exit
+# discipline; distinct from the #569/#576 exit-3 contract).
+#
+# macOS is where this twin is worth the most: the macos-14 runner has
+# 7 GB, so this is the machine class where the measured deduction
+# (waired-agent#568) flips the default in the field. The seam still runs,
+# because a probe that only fires on small runners is a probe that stops
+# firing the day CI buys a bigger one.
+#
+# Exactly four asserts, always — the tier-2 floor counts on it.
+assert_reinit_default_unfit_macos() {
+  local log="$WORK/reinit-default-unfit.log" rc=0
+
+  it_log "re-running waired init with no inference flag on a forced below-spec host (waired-agent#590)"
+  _it_force_below_spec_macos "#590 default"
+
+  # `| tee`, not `>`, and PIPESTATUS[0] — same two reasons as the #551
+  # probe above.
+  if sudo env WAIRED_NO_EMOJI=1 "$BINDIR/waired" init \
+        --control "$IT_CONTROL_URL" --device-name "$device" \
+        --non-interactive --skip-integration \
+        --state-dir "$STATE_DIR" 2>&1 | tee "$log"; then
+    rc=0
+  else
+    rc="${PIPESTATUS[0]}"
+  fi
+
+  [ "$rc" = 0 ] \
+    && ok "flagless init on a below-spec host exits 0 (a choice, not a fault — waired-agent#590)" \
+    || bad "flagless init exited $rc on a below-spec host — the non-interactive default is skip-and-continue, never a failure — see $log"
+  grep -q "$IT_UNFIT_SKIP_RE" "$log" \
+    && ok "the step-4 non-interactive default said what it did" \
+    || bad "init never printed the skip note — the step-4 default arm was not reached, so the asserts around it prove nothing — see $log"
+  grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
+    && bad "init reported the below-spec default as a failed install — see $log" \
+    || ok "the default is not reported as a failed install"
+  local desired
+  desired="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null \
+    | grep -oE '"desired_state"[[:space:]]*:[[:space:]]*"[a-z]+"' \
+    | grep -oE '"[a-z]+"$' | tr -d '"' || true)"
+  [ "$desired" = disabled ] \
+    && ok "the default landed as the persisted toggle (mgmt API desired_state=disabled)" \
+    || bad "mgmt API desired_state=$desired after the flagless below-spec init, want disabled"
+
+  [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
+  _it_restore_host_memory_macos "#590 default"
+}
+
+# assert_models_pull_confirm_macos: the darwin twin of
+# lib/installtest-enroll.sh's assert_models_pull_confirm
+# (waired-agent#590). See that function for the contract and for why an
+# engine-less host makes the honoured row free — the daemon refuses the
+# handed-on pull at #307's admission check instead of fetching weights.
+#
+# Exactly five asserts, always — the tier-2 floor counts on it.
+assert_models_pull_confirm_macos() {
+  local log model rc=0
+
+  it_log "checking the models-pull confirmation on a forced below-spec host (waired-agent#590)"
+  _it_force_below_spec_macos "#590 pull twin"
+
+  model="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/catalog 2>/dev/null \
+    | grep -oE '"model_id"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 \
+    | grep -oE '"[^"]+"$' | tr -d '"' || true)"
+  if [ -z "$model" ]; then
+    bad "no model_id in the catalog response — the pull gate reads the same endpoint, so nothing below would be testing it"
+    _it_restore_host_memory_macos "#590 pull twin"
+    # Still five: a leg that reports four has a block that stopped
+    # executing, and the floor is what says so.
+    bad "skipped: --yes on a model that does not fit was not exercised"
+    bad "skipped: the decline is not a failed command"
+    bad "skipped: --yes alone did not reach the pull layer"
+    bad "skipped: --yes --force honoured the choice"
+    return
+  fi
+
+  # `| tee`, not `>`: sudo does not own the redirect (shellcheck SC2024),
+  # and pipefail collapses the pipeline's status, so the CLI's own exit
+  # code has to come from PIPESTATUS[0] — the same shape the #551 probe
+  # above uses.
+  log="$WORK/models-pull-yes.log"
+  if sudo env WAIRED_NO_EMOJI=1 "$BINDIR/waired" models pull "$model" --yes --wait=false \
+        </dev/null 2>&1 | tee "$log"; then
+    rc=0
+  else
+    rc="${PIPESTATUS[0]}"
+  fi
+
+  [ "$rc" = 0 ] \
+    && ok "declining an over-memory pull is not a failed command (exit 0)" \
+    || bad "\`models pull --yes\` exited $rc on a model that does not fit — a decline is a choice, not a fault — see $log"
+  grep -qF "$IT_PULL_DECLINE_RE" "$log" \
+    && ok "--yes alone declines an over-memory pull and says how to override" \
+    || bad "\`models pull --yes\` never printed the decline line — --yes must not auto-confirm a default-No question — see $log"
+  grep -q "$IT_PULL_QUEUED_RE" "$log" \
+    && bad "\`models pull --yes\` queued the download anyway — the gate did not stop it — see $log" \
+    || ok "--yes alone dispatched nothing to the daemon"
+
+  rc=0
+  log="$WORK/models-pull-force.log"
+  if sudo env WAIRED_NO_EMOJI=1 "$BINDIR/waired" models pull "$model" --yes --force --wait=false \
+        </dev/null 2>&1 | tee "$log"; then
+    rc=0
+  else
+    rc="${PIPESTATUS[0]}"
+  fi
+
+  grep -qF "$IT_PULL_DECLINE_RE" "$log" \
+    && bad "\`models pull --yes --force\` still declined — the scripted consent is the pair, and it was not honoured — see $log" \
+    || ok "--yes --force is not stopped by the over-memory gate"
+  grep -qE "$IT_PULL_REACHED_RE" "$log" \
+    && ok "--yes --force handed the pull to the daemon" \
+    || bad "\`models pull --yes --force\` neither queued nor reached the daemon's pull layer — see $log"
+
+  [ "$rc" = 0 ] || tail -n 10 "$log" | sed 's/^/    /' >&2
+  _it_restore_host_memory_macos "#590 pull twin"
 }
 
 assert_mgmt_socket_macos() {
@@ -919,11 +1127,7 @@ if [ "$TIER" -ge 2 ]; then
   # daemon now reads the System keychain as root (#520), so a readback failure
   # here is a real regression.
   enrolled=0
-  for _ in $(seq 1 40); do
-    out="$(curl -fsS --max-time 5 "$MGMT" 2>/dev/null || true)"
-    if printf '%s' "$out" | grep -qE '"device_id"[[:space:]]*:[[:space:]]*"dev_'; then enrolled=1; break; fi
-    sleep 1
-  done
+  out="$(_it_wait_enrolled_macos)" && enrolled=1
   if [ "$enrolled" = 1 ]; then
     ok "system daemon read the enrolled state and reports an identity"
   else
@@ -940,6 +1144,15 @@ if [ "$TIER" -ge 2 ]; then
   if [ "$INFER" != 1 ] && [ "$DAEMON_ENGINE" != 1 ]; then
     it_step "engine opt-out asserts (waired-agent#551)"
     assert_reinit_engine_optout_macos
+    # The step-4 twin's other half and the models-pull twin
+    # (waired-agent#590). Here for the same reason the opt-out probe is:
+    # this host still has no engine, so every arm they test is reachable
+    # — and for the pull twin, an engine-less host is what keeps the
+    # honoured row from downloading anything.
+    it_step "below-spec default asserts (waired-agent#590)"
+    assert_reinit_default_unfit_macos
+    it_step "models-pull confirmation asserts (waired-agent#590)"
+    assert_models_pull_confirm_macos
   fi
 
   # Cheap and fast, so it runs before the minutes-long inference asserts.
@@ -1043,10 +1256,19 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # would then pass without reaching the arm it tests. The floor still holds —
 # it is measured from the leanest config, which is the one that runs the
 # probe, and both richer options add far more than the 4 it contributes.
+#
+# waired-agent#590 makes that lean-only block 13 asserts rather than 4, which
+# is more than a richer leg's own tail is guaranteed to make up. So the tier-2
+# floor is PER CONFIGURATION now, the way installtest-windows.ps1 has kept its
+# since #215: 35 was measured on the lean config and stays as the floor for
+# the richer ones, and lean adds the 9 the two new probes contribute.
 case "$TIER" in
   1) floor=24 ;;
-  # +4: assert_reinit_engine_optout_macos (waired-agent#551, lean leg only)
-  *) floor=35 ;;
+  # 31 shared + the lean-only engine-less block:
+  #   +4  assert_reinit_engine_optout_macos  (waired-agent#551)
+  #   +4  assert_reinit_default_unfit_macos  (waired-agent#590)
+  #   +5  assert_models_pull_confirm_macos   (waired-agent#590)
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=35; else floor=44; fi ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then
