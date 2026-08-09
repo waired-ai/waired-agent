@@ -196,16 +196,39 @@ func IsValidSetupDriver(d string) bool {
 	return false
 }
 
-// Benchmark methods — accepted values for SetupBenchmark.Method, in the
-// agent's fallback order. The distinction is not cosmetic:
-// BenchmarkMethodWallClock times the whole request, so it carries queue
-// and prompt-processing overhead and understates a fast host; results
-// measured that way must be excluded from anything that re-classifies
-// models by speed.
+// Benchmark methods — the shared vocabulary for SetupBenchmark.Method and
+// InferenceState.HostSpeed.Method. The first three are the agent's
+// fallback order for measuring a rate; the fourth is a bound rather than a
+// measurement and documents itself.
+//
+// The distinction is not cosmetic: BenchmarkMethodWallClock times the
+// whole request, so it carries queue and prompt-processing overhead and
+// understates a fast host; results measured that way must be excluded from
+// anything that re-classifies models by speed.
 const (
 	BenchmarkMethodOllamaEval  = "ollama_eval"
 	BenchmarkMethodOpenAISlope = "openai_slope"
 	BenchmarkMethodWallClock   = "wall_clock"
+
+	// BenchmarkMethodOllamaPrefillFloor is not a measurement of the same
+	// kind as the three above. It is a LOWER BOUND, derived from the
+	// engine's prompt_eval_* counters alone with the decode term dropped
+	// (hostfit.TurnFloorSeconds), and a figure carrying it says "the real
+	// number is at least this".
+	//
+	// It exists for HostSpeed rather than for SetupBenchmark. Measuring a
+	// host that sits far below the install-time cutoff at full depth costs
+	// minutes, and those minutes stand in front of the model download
+	// (waired-agent#579). The agent emits this method only when the bound
+	// is already past hostfit.HostCutoffTurnBudgetSeconds, so a consumer
+	// comparing it against any threshold at or below that budget reaches
+	// the answer the full measurement would have reached.
+	//
+	// What it must not be used for is anything needing the number itself:
+	// a decode rate (there is none — DecodeTokps is absent under this
+	// method), a ranking, or a re-classification. Same exclusion
+	// BenchmarkMethodWallClock carries, for a different reason.
+	BenchmarkMethodOllamaPrefillFloor = "ollama_prefill_floor"
 )
 
 // IsValidBenchmarkMethod reports whether m is an accepted method value
@@ -213,7 +236,7 @@ const (
 func IsValidBenchmarkMethod(m string) bool {
 	switch m {
 	case "", BenchmarkMethodOllamaEval, BenchmarkMethodOpenAISlope,
-		BenchmarkMethodWallClock:
+		BenchmarkMethodWallClock, BenchmarkMethodOllamaPrefillFloor:
 		return true
 	}
 	return false

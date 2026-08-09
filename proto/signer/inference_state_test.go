@@ -637,6 +637,94 @@ func TestIsValidSubsystemState(t *testing.T) {
 	}
 }
 
+// TestHostSpeed_PrefillFloor_CanonicalJSON is the byte-identity pin the
+// concurrent-proto rules require of a change to this contract face
+// (docs/decisions/20260719/0000-concurrent-proto-development.md, decision
+// 3). waired-agent#579 adds no FIELD here — it adds a Method value under
+// which the existing fields say something different — so what needs
+// pinning is the encoding of that shape, and above all which fields are
+// absent from it.
+//
+// Product contract (waired-agent#579, the Stage 3 contract table on the
+// issue).
+func TestHostSpeed_PrefillFloor_CanonicalJSON(t *testing.T) {
+	// A screen verdict: a prefill rate read at the calibration depth, the
+	// turn as a LOWER BOUND, and no decode rate at all because none was
+	// measured.
+	floor := HostSpeed{
+		ProbeModelID:  "qwen3.5-0.8b",
+		DepthTokens:   21000,
+		PromptTokens:  2812,
+		PrefillTokps:  104.4,
+		TurnSeconds:   201.15,
+		Method:        BenchmarkMethodOllamaPrefillFloor,
+		Samples:       2,
+		SpreadPct:     1.4,
+		EngineKind:    "ollama",
+		EngineVersion: "0.31.1",
+		MeasuredAt:    "2026-08-09T14:20:00Z",
+	}
+	const wantFloor = `{"probe_model_id":"qwen3.5-0.8b","depth_tokens":21000,` +
+		`"prompt_tokens":2812,"prefill_tokps":104.4,"turn_seconds":201.15,` +
+		`"method":"ollama_prefill_floor","samples":2,"spread_pct":1.4,` +
+		`"engine_kind":"ollama","engine_version":"0.31.1","measured_at":"2026-08-09T14:20:00Z"}`
+	data, err := json.Marshal(&floor)
+	if err != nil {
+		t.Fatalf("marshal floor: %v", err)
+	}
+	if got := string(data); got != wantFloor {
+		t.Errorf("prefill-floor encoding drifted:\n got %s\nwant %s", got, wantFloor)
+	}
+
+	// decode_tokps is ABSENT, not zero. A consumer that read a 0 here as a
+	// measured decode rate would compute an infinite turn time for a host
+	// this method deliberately says nothing about.
+	if indexOf(string(data), "decode_tokps") >= 0 {
+		t.Errorf("decode_tokps appears in a prefill-floor payload: %s", data)
+	}
+
+	// A full measurement is unchanged by any of this — the same struct,
+	// every field populated, the method it always carried.
+	full := floor
+	full.PromptTokens = 21066
+	full.PrefillTokps = 671.17
+	full.DecodeTokps = 28.47
+	full.TurnSeconds = 66.4
+	full.Method = BenchmarkMethodOllamaEval
+	full.Samples = 3
+	const wantFull = `{"probe_model_id":"qwen3.5-0.8b","depth_tokens":21000,` +
+		`"prompt_tokens":21066,"prefill_tokps":671.17,"decode_tokps":28.47,` +
+		`"turn_seconds":66.4,"method":"ollama_eval","samples":3,"spread_pct":1.4,` +
+		`"engine_kind":"ollama","engine_version":"0.31.1","measured_at":"2026-08-09T14:20:00Z"}`
+	data, err = json.Marshal(&full)
+	if err != nil {
+		t.Fatalf("marshal full: %v", err)
+	}
+	if got := string(data); got != wantFull {
+		t.Errorf("full-measurement encoding drifted:\n got %s\nwant %s", got, wantFull)
+	}
+
+	// The rolling-upgrade direction: a payload from an agent that predates
+	// the method leaves Method empty, and empty means "not reported" —
+	// which is what makes it safe for an old agent's full measurement to
+	// keep arriving unchanged while new agents publish bounds.
+	var pre HostSpeed
+	if err := json.Unmarshal([]byte(`{"probe_model_id":"qwen3.5-0.8b","turn_seconds":66.4}`), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.Method != "" {
+		t.Errorf("Method = %q on a pre-addition payload, want empty", pre.Method)
+	}
+
+	var out HostSpeed
+	if err := json.Unmarshal([]byte(wantFloor), &out); err != nil {
+		t.Fatalf("unmarshal floor: %v", err)
+	}
+	if !reflect.DeepEqual(floor, out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", floor, out)
+	}
+}
+
 func indexOf(haystack, needle string) int {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {

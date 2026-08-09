@@ -173,3 +173,93 @@ func TestHostProbe_TurnSeconds_DoesNotDependOnTheMeasuredPromptLength(t *testing
 		}
 	}
 }
+
+// The soundness property, stated as a property rather than as examples:
+// the floor is never above the turn it bounds. Everything the screen is
+// allowed to conclude rests on this one inequality, so it is checked over
+// a grid rather than at the two calibration points — a future edit that
+// added a term, or divided by the wrong depth, would still reproduce those
+// two.
+//
+// Product contract (waired-agent#579, the Stage 3 contract table on the
+// issue): the agent publishes a floor in HostSpeed.TurnSeconds, and a
+// consumer that compares it against a threshold is relying on exactly
+// this.
+func TestTurnFloorSeconds_IsNeverAboveTheTurnItBounds(t *testing.T) {
+	for _, prefill := range []float64{12, 83.53, 130, 671.17, 833, 20251.41} {
+		for _, decode := range []float64{0.5, 3.44, 28.47, 291.77, 4000} {
+			p := HostProbe{PromptTokens: HostCutoffProbeDepthTokens, PrefillTokps: prefill, DecodeTokps: decode}
+			floor, turn := TurnFloorSeconds(p.PrefillTokps), p.TurnSeconds()
+			if floor > turn {
+				t.Fatalf("prefill %.2f / decode %.2f tok/s: floor %.3f s > turn %.3f s — "+
+					"the bound is not a bound, and every screen verdict built on it is unsound",
+					prefill, decode, floor, turn)
+			}
+		}
+	}
+}
+
+// The reference host is the anchor the 45 s threshold was set from, and it
+// is a machine already proven unusable. The screen must not conclude
+// anything about a host BETTER than that anchor, so the figure it would
+// read there — 833 tok/s, this repo's own measurement at 68 % of the
+// canonical depth — has to leave the floor under the budget with room.
+//
+// Product contract (waired-agent#579): the shallow reading is what the
+// screen sees, and using it is only safe because it over-states the rate.
+// If this ever inverts, the screen starts cutting hosts the full
+// measurement would have passed.
+func TestTurnFloorSeconds_TheProvenBadAnchorIsNotCutByItsShallowRate(t *testing.T) {
+	const shallowPrefillTokps = 833.0 // reference host at ~68 % depth
+	floor := TurnFloorSeconds(shallowPrefillTokps)
+	if floor > HostCutoffTurnBudgetSeconds {
+		t.Fatalf("floor %.1f s from the reference host's shallow prefill rate exceeds the "+
+			"%.0f s budget — the screen would cut the anchor the budget was derived from",
+			floor, HostCutoffTurnBudgetSeconds)
+	}
+	// Pinned rather than merely bounded, the way the calibration test above
+	// pins 66.4 s: the gap between "proven bad" and "the screen fires" is
+	// the whole design, so it is a number to notice moving and not just an
+	// inequality to satisfy. 25.2 s against a 45 s budget — and the agent
+	// fires above the budget, not at it, so the real clearance is wider.
+	if math.Abs(floor-25.2) > 0.1 {
+		t.Fatalf("floor = %.2f s, want 25.2 s (±0.1) from 833 tok/s at the canonical depth", floor)
+	}
+}
+
+// The host the screen exists for. These are the counters the GitHub
+// macos-14 runner published on 2026-08-09 (run 31316731884): a 542 s turn,
+// twelve times the budget, that cost 7 min 12 s of one sample to reach
+// while the model download waited behind it (waired-agent#579).
+//
+// The rate below is the FULL-depth one, which is the conservative
+// substitute: a shallow reading is faster still (833/671 = 1.24x on the
+// reference host), so the real screen would see an even larger rate and a
+// smaller floor. Asserting on the full-depth rate therefore under-states
+// how far over the line this host sits.
+func TestTurnFloorSeconds_AHostFarPastTheBudgetIsCaughtWithoutTheDecode(t *testing.T) {
+	const macOSRunnerPrefillTokps = 83.53
+	floor := TurnFloorSeconds(macOSRunnerPrefillTokps)
+	if floor <= HostCutoffTurnBudgetSeconds {
+		t.Fatalf("floor %.1f s does not exceed the %.0f s budget — the prefill term alone "+
+			"has to settle a host measured at 542 s per turn", floor, HostCutoffTurnBudgetSeconds)
+	}
+	// The full measurement's own answer, for the record: the bound is a
+	// bound, and a loose one. It has to be — it is the price of not paying
+	// for the decode.
+	full := HostProbe{PromptTokens: 21000, PrefillTokps: macOSRunnerPrefillTokps, DecodeTokps: 3.4376796295033905}
+	if floor > full.TurnSeconds() {
+		t.Fatalf("floor %.1f s > measured turn %.1f s", floor, full.TurnSeconds())
+	}
+}
+
+// No rate, no claim — the same rule Measured() enforces for the full
+// measurement. A zero here must never read as an instant turn, which
+// would pass every host including the ones that reported nothing.
+func TestTurnFloorSeconds_RefusesToClaimWithoutARate(t *testing.T) {
+	for _, prefill := range []float64{0, -1} {
+		if got := TurnFloorSeconds(prefill); got != 0 {
+			t.Fatalf("TurnFloorSeconds(%v) = %v, want 0 — an unmeasured rate is no claim", prefill, got)
+		}
+	}
+}
