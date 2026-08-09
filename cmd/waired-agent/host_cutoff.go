@@ -70,8 +70,39 @@ const (
 	// cutoff has nothing to measure until the weights land. ~1 GB, so the
 	// ceiling is about a connection slow enough that the 20-45 GB model
 	// behind it was never going to arrive either.
+	//
+	// 4 minutes, down from 20 (waired-agent#579). 1 GB in 4 minutes is
+	// ~34 Mbit/s; at the old ceiling it was ~6.8 Mbit/s, at which a 45 GB
+	// model takes fifteen hours — so 20 minutes never met the bar its own
+	// sentence above sets. What made the old figure look free is that this
+	// is a WAIT, not the transfer: PullModel puts the download on the
+	// daemon's own context (inference.go, backgroundCtx), so cutting the
+	// wait does not cancel it. The weights keep landing, and the next
+	// daemon start finds engineServesTag already true and skips this phase.
 	hostCutoffPullPoll    = 2 * time.Second
-	hostCutoffPullTimeout = 20 * time.Minute
+	hostCutoffPullTimeout = 4 * time.Minute
+
+	// hostSpeedMeasureDeadline bounds ONE ensureHostSpeedMeasured call end
+	// to end — the probe download wait plus the measurement — and is the
+	// whole of waired-agent#579 in one number.
+	//
+	// Before it, nothing bounded that call. hostCutoffMeasureBudget was
+	// consulted only between samples, so the calibration and sample 1 could
+	// each run for hostCutoffProbeTimeout, and measureHostCutoffSample
+	// retries: roughly 50 minutes of requests behind a 20-minute download
+	// wait. The bundled model's own download waits behind all of it
+	// (inference_prepull_hold.go: applyHostCutoff, then dispatch), and on
+	// the macOS runner that meant the pull was dispatched one second after
+	// a 9m29s measurement ended and completed in 11.5 s. It was never
+	// slow; it was never started.
+	//
+	// 16 minutes = hostCutoffPullTimeout + hostCutoffMeasureBudget, pinned
+	// by TestHostSpeedBudgets_PartitionTheInstallWindow. It is 1.7x the
+	// slowest measurement anyone has recorded, and it sits inside
+	// hostSpeedAskWait (20 min, cmd/waired/init_host_speed.go) — the wait
+	// `waired init` puts in front of the operator for this exact
+	// measurement on the paths where it asks.
+	hostSpeedMeasureDeadline = hostCutoffPullTimeout + hostCutoffMeasureBudget
 
 	// hostSpeedSettlePoll / hostSpeedSettleWait pace awaitQuietEngine. The
 	// wait is generous because what it is usually waiting for is the
@@ -83,7 +114,24 @@ const (
 
 // hostSpeedSettleWait bounds awaitQuietEngine. A var, not a const, so a
 // test can shrink it.
+//
+// Deliberately NOT bounded by hostSpeedMeasureDeadline: awaitQuietEngine
+// sits in front of nothing. It runs only on the boot goroutine, and on the
+// branch that reaches it the bundled pre-pull is not behind it — the
+// pre-pull path calls applyHostCutoff directly. Waiting an hour for the
+// operator's own download to finish is the measurement yielding, which is
+// what that wait is for.
 var hostSpeedSettleWait = 60 * time.Minute
+
+// hostSpeedMeasureWindow is hostSpeedMeasureDeadline, or the provider's
+// override when a test set one. Matches the prePullHoldMax idiom (a field,
+// not a package var) so the tests that shrink it stay parallel-safe.
+func (p *agentInferenceProvider) hostSpeedMeasureWindow() time.Duration {
+	if p != nil && p.hostSpeedWindow > 0 {
+		return p.hostSpeedWindow
+	}
+	return hostSpeedMeasureDeadline
+}
 
 // hostSpeedNow returns the measurement this host publishes, or nil when
 // there is none. Safe to call from the probe loop on every tick.
@@ -273,9 +321,26 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context) (p
 	if p == nil || p.ollama == nil {
 		return hostfit.HostProbe{}, false
 	}
+	// Anchored BEFORE the single-flight lock, on purpose (waired-agent#579).
+	//
+	// Both the boot goroutine and the pre-pull path call this, and on the
+	// ordinary install path they overlap: the second one blocks on the
+	// mutex for the whole of the first one's measurement and only then
+	// checks the cache. A deadline started after the lock would give that
+	// caller a fresh window on top of the one it just waited out, so the
+	// bound would not be a bound — the thing the pull is waiting behind
+	// could still take twice as long as this says.
+	notAfter := time.Now().Add(p.hostSpeedMeasureWindow())
+
 	p.hostSpeedMeasureMu.Lock()
 	defer p.hostSpeedMeasureMu.Unlock()
 
+	// On the PARENT ctx, not the deadline below, and that is load-bearing:
+	// engineVersionFor returns "" on a cancelled ctx, hostSpeedStillApplies
+	// rejects an empty version, and a caller that waited out the window
+	// would then discard the measurement the first caller had just
+	// published and re-measure it. Pinned by
+	// TestEnsureHostSpeedMeasured_AQueuedCallerStillReadsThePublishedMeasurement.
 	engine := p.servingEngine()
 	engineVersion := p.engineVersionFor(ctx, engine)
 
@@ -300,6 +365,12 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context) (p
 			"engine_version", engineVersion)
 		return cached, true
 	}
+
+	// Everything from here down is the work the install waits behind, so
+	// everything from here down is bounded. Applied after the cache read
+	// for the reason stated above it.
+	ctx, cancel := context.WithDeadline(ctx, notAfter)
+	defer cancel()
 
 	tag, err := p.hostCutoffProbeTag(ctx)
 	if err != nil {
@@ -466,6 +537,13 @@ func (p *agentInferenceProvider) ensureHostCutoffProbeModel(ctx context.Context,
 		if time.Now().After(deadline) {
 			return fmt.Errorf("probe model did not finish downloading within %s", hostCutoffPullTimeout)
 		}
+		if err := ctx.Err(); err != nil {
+			// Named rather than returned bare: this is the arm a slow link
+			// now takes, and `context deadline exceeded` in a daemon log
+			// says nothing about which deadline or why it exists.
+			return fmt.Errorf("probe model did not arrive inside the install window (%s): %w",
+				p.hostSpeedMeasureWindow(), err)
+		}
 	}
 }
 
@@ -519,9 +597,20 @@ func (p *agentInferenceProvider) applyHostCutoff(ctx context.Context) bool {
 		return true
 	}
 	if !measured {
+		// Say so. This is the arm a host takes when the measurement could
+		// not finish — and after #579 bounded that measurement, it is the
+		// arm the SLOWEST hosts take, which are the ones the cutoff exists
+		// for. Silence here is what made "the cutoff was wrong" and "the
+		// cutoff never ran" indistinguishable in a daemon log.
+		p.logger.Info("host cutoff: no measurement, so no verdict; downloading the model as configured",
+			"window", p.hostSpeedMeasureWindow())
 		return true
 	}
 	if ok, decided := probe.MeetsRecommendedSpec(); !decided || ok {
+		p.logger.Info("host cutoff: this host clears the budget",
+			"turn_seconds", fmt.Sprintf("%.1f", probe.TurnSeconds()),
+			"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds),
+			"decided", decided)
 		return true
 	}
 	p.logger.Warn("this host is below the recommended spec for local inference: one coding-agent turn "+
