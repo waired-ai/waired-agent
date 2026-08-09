@@ -164,6 +164,102 @@ func (p *agentInferenceProvider) hostSpeedInstallWindow() time.Duration {
 	return hostspeed.InstallWindow
 }
 
+// hostSpeedVerdict is this host's answer to "can this machine serve local
+// inference usefully", together with what the answer rests on.
+//
+// It exists because there are now two shapes an answer can arrive in, and
+// only one of them is a hostfit.HostProbe the policy package can judge
+// (waired-agent#579 Stage 3): a full-depth measurement, and a
+// prefill-only lower bound taken at ~2.8k tokens that is deliberately NOT
+// Measured(). Callers used to be handed the probe and re-derive the
+// verdict; a screen verdict would have read as "nothing measured" at
+// every one of them.
+type hostSpeedVerdict struct {
+	// Decided is whether anything was learned about this host at all.
+	// False means carry on unchanged — no engine, no probe model, no
+	// timing counters, a truncated prefill, a machine too busy to answer.
+	// An unrun measurement is not evidence about the host.
+	Decided bool
+
+	// MeetsBudget is whether the host clears
+	// hostfit.HostCutoffTurnBudgetSeconds. Meaningless unless Decided.
+	MeetsBudget bool
+
+	// TurnSeconds is the measured turn and is zero under Method
+	// BenchmarkMethodOllamaPrefillFloor, where nothing measured one;
+	// TurnFloorSeconds is the lower bound and is set under both. For log
+	// lines and the management API — MeetsBudget is the decision.
+	TurnSeconds      float64
+	TurnFloorSeconds float64
+	Method           string
+}
+
+// hostSpeedVerdictOf reads a published measurement back as the verdict it
+// stands for.
+//
+// One function for both directions — the figure just taken and the figure
+// read off disk a boot later — so a measurement cannot mean one thing
+// when it is written and another when it is loaded.
+//
+// ok=false means the record cannot support a verdict and the host should
+// be measured again.
+func hostSpeedVerdictOf(s *signer.HostSpeed) (hostSpeedVerdict, bool) {
+	if s == nil {
+		return hostSpeedVerdict{}, false
+	}
+	if s.Method == signer.BenchmarkMethodOllamaPrefillFloor {
+		// A bound, not a measurement. The agent emits this shape only once
+		// the bound is already past the budget (screenHostCutoffOnce), so a
+		// record claiming it while sitting at or under the budget is
+		// self-contradictory and gets re-measured rather than believed.
+		if s.TurnFloorSeconds <= hostfit.HostCutoffTurnBudgetSeconds {
+			return hostSpeedVerdict{}, false
+		}
+		return hostSpeedVerdict{
+			Decided:          true,
+			MeetsBudget:      false,
+			TurnFloorSeconds: s.TurnFloorSeconds,
+			Method:           s.Method,
+		}, true
+	}
+	// Every other method — including the empty one written by builds
+	// before the screen existed — is a full-depth measurement, and the
+	// policy in proto/hostfit judges it.
+	probe := hostfit.HostProbe{
+		PromptTokens: s.PromptTokens,
+		PrefillTokps: s.PrefillTokps,
+		DecodeTokps:  s.DecodeTokps,
+	}
+	meets, decided := probe.MeetsRecommendedSpec()
+	if !decided {
+		return hostSpeedVerdict{}, false
+	}
+	method := s.Method
+	if method == "" {
+		method = signer.BenchmarkMethodOllamaEval
+	}
+	return hostSpeedVerdict{
+		Decided:          true,
+		MeetsBudget:      meets,
+		TurnSeconds:      probe.TurnSeconds(),
+		TurnFloorSeconds: hostfit.TurnFloorSeconds(probe.PrefillTokps),
+		Method:           method,
+	}, true
+}
+
+// logArgs renders the verdict for a daemon log line. Both figures travel,
+// because which one is present is the difference between "this host takes
+// 68 s" and "this host takes at least 210 s and nobody waited to find out
+// the rest".
+func (v hostSpeedVerdict) logArgs() []any {
+	return []any{
+		"turn_seconds", fmt.Sprintf("%.1f", v.TurnSeconds),
+		"turn_floor_seconds", fmt.Sprintf("%.1f", v.TurnFloorSeconds),
+		"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds),
+		"method", v.Method,
+	}
+}
+
 // hostSpeedNow returns the measurement this host publishes, or nil when
 // there is none. Safe to call from the probe loop on every tick.
 func (p *agentInferenceProvider) hostSpeedNow() *signer.HostSpeed {
@@ -352,9 +448,9 @@ func (p *agentInferenceProvider) engineQuietForBench(ctx context.Context) bool {
 // measurement: hostSpeedMeasureWindow from the boot goroutine, which has
 // nothing behind it, and hostSpeedInstallWindow from the two paths with a
 // model download behind them (waired-agent#579).
-func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, window time.Duration) (probe hostfit.HostProbe, measured bool) {
+func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, window time.Duration) hostSpeedVerdict {
 	if p == nil || p.ollama == nil {
-		return hostfit.HostProbe{}, false
+		return hostSpeedVerdict{}
 	}
 	// Anchored BEFORE the single-flight lock, on purpose (waired-agent#579).
 	//
@@ -396,9 +492,8 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	}
 	if ok {
 		p.logger.Info("host speed: reusing the measurement already taken by this install",
-			"turn_seconds", fmt.Sprintf("%.1f", cached.TurnSeconds()),
-			"engine_version", engineVersion)
-		return cached, true
+			append(cached.logArgs(), "engine_version", engineVersion)...)
+		return cached
 	}
 
 	// Everything from here down is the work the install waits behind, so
@@ -410,12 +505,12 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	tag, err := p.hostCutoffProbeTag(ctx)
 	if err != nil {
 		p.logger.Info("host speed: skipping the measurement", "err", err)
-		return hostfit.HostProbe{}, false
+		return hostSpeedVerdict{}
 	}
 	if err := p.ensureHostCutoffProbeModel(ctx, tag); err != nil {
 		p.logger.Info("host speed: probe model unavailable; skipping the measurement",
 			"model", hostfit.HostCutoffProbeModelID, "err", err)
-		return hostfit.HostProbe{}, false
+		return hostSpeedVerdict{}
 	}
 
 	m, err := measureHostCutoff(ctx, hostCutoffDeps{
@@ -425,48 +520,74 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		// Unique per run: a repeat that shares a prefix is answered from
 		// the engine's KV cache at a rate no host can achieve.
 		Nonce: fmt.Sprintf("hostcutoff-%d", time.Now().UnixNano()),
+		// Only the screen consults these, and only as a precondition for
+		// concluding without a full-depth sample (waired-agent#579).
+		EngineQuiet: p.engineQuietForBench,
+		EngineGen:   p.engineProcessGen,
 	})
 	if err != nil {
 		p.logger.Info("host speed: measurement did not complete; leaving local inference as configured",
 			"err", err)
-		return hostfit.HostProbe{}, false
+		return hostSpeedVerdict{}
 	}
-	if !m.Probe.Measured() {
+	if m.Method != signer.BenchmarkMethodOllamaPrefillFloor && !m.Probe.Measured() {
 		// Reached when the engine answered but the prefill was not the
 		// depth asked for — the silent-truncation case Measured() guards.
 		// Nothing is published: a truncated prefill measures the
 		// truncation, and a consumer cannot tell that from a fast host.
+		//
+		// The screen arm is exempt because it is never at that depth by
+		// construction; its own guards ran in screenHostCutoffOnce, and
+		// they are stricter — two readings, one engine process, an idle
+		// host, and a bound already past the budget with margin.
 		p.logger.Warn("host speed: the engine did not prefill the depth asked for; no measurement",
 			"prompt_tokens", m.Probe.PromptTokens, "want_tokens", hostfit.HostCutoffProbeDepthTokens)
-		return hostfit.HostProbe{}, false
+		return hostSpeedVerdict{}
+	}
+
+	published := &signer.HostSpeed{
+		ProbeModelID: hostfit.HostCutoffProbeModelID,
+		DepthTokens:  hostfit.HostCutoffProbeDepthTokens,
+		PromptTokens: m.Probe.PromptTokens,
+		PrefillTokps: m.Probe.PrefillTokps,
+		DecodeTokps:  m.Probe.DecodeTokps,
+		// Zero on the screen arm, and not by a branch here: HostProbe's own
+		// TurnSeconds returns 0 unless Measured(), and a screen probe is
+		// never Measured(). That is the owner ruling on #620 holding at the
+		// producer — TurnSeconds stays a measurement wherever it appears,
+		// and the bound travels in its own field.
+		TurnSeconds:      m.Probe.TurnSeconds(),
+		TurnFloorSeconds: m.TurnFloorSeconds,
+		Method:           m.Method,
+		Samples:          m.Samples,
+		SpreadPct:        m.SpreadPct,
+		EngineKind:       string(engine),
+		EngineVersion:    engineVersion,
+		MeasuredAt:       time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	// Read back through the same function that reads it off disk a boot
+	// later, so what this call returns and what the next boot concludes
+	// cannot drift apart.
+	verdict, ok := hostSpeedVerdictOf(published)
+	if !ok {
+		p.logger.Warn("host speed: the measurement does not support a verdict; not publishing it",
+			"method", m.Method, "prompt_tokens", m.Probe.PromptTokens,
+			"turn_floor_seconds", fmt.Sprintf("%.1f", m.TurnFloorSeconds))
+		return hostSpeedVerdict{}
 	}
 	p.logger.Info("host speed: measured",
-		"turn_seconds", fmt.Sprintf("%.1f", m.Probe.TurnSeconds()),
-		"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds),
-		"prefill_tok_s", fmt.Sprintf("%.0f", m.Probe.PrefillTokps),
-		"decode_tok_s", fmt.Sprintf("%.1f", m.Probe.DecodeTokps),
-		"prompt_tokens", m.Probe.PromptTokens,
-		"samples", m.Samples, "spread_pct", fmt.Sprintf("%.1f", m.SpreadPct))
+		append(verdict.logArgs(),
+			"prefill_tok_s", fmt.Sprintf("%.0f", m.Probe.PrefillTokps),
+			"decode_tok_s", fmt.Sprintf("%.1f", m.Probe.DecodeTokps),
+			"prompt_tokens", m.Probe.PromptTokens,
+			"samples", m.Samples, "spread_pct", fmt.Sprintf("%.1f", m.SpreadPct))...)
 
 	p.hostSpeedMu.Lock()
-	p.hostSpeed = &signer.HostSpeed{
-		ProbeModelID:  hostfit.HostCutoffProbeModelID,
-		DepthTokens:   hostfit.HostCutoffProbeDepthTokens,
-		PromptTokens:  m.Probe.PromptTokens,
-		PrefillTokps:  m.Probe.PrefillTokps,
-		DecodeTokps:   m.Probe.DecodeTokps,
-		TurnSeconds:   m.Probe.TurnSeconds(),
-		Method:        signer.BenchmarkMethodOllamaEval,
-		Samples:       m.Samples,
-		SpreadPct:     m.SpreadPct,
-		EngineKind:    string(engine),
-		EngineVersion: engineVersion,
-		MeasuredAt:    time.Now().UTC().Format(time.RFC3339Nano),
-	}
+	p.hostSpeed = published
 	p.hostSpeedAgentVersion = buildinfo.Version
 	p.persistHostSpeedLocked(false)
 	p.hostSpeedMu.Unlock()
-	return m.Probe, true
+	return verdict
 }
 
 // hostSpeedStillApplies reports whether a stored measurement describes
@@ -474,19 +595,17 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 // means the version could not be read when the figure was taken, and a
 // figure that cannot say what produced it cannot be trusted to survive an
 // engine bump (waired#668).
-func hostSpeedStillApplies(s *signer.HostSpeed, engineKind, engineVersion string) (hostfit.HostProbe, bool) {
+func hostSpeedStillApplies(s *signer.HostSpeed, engineKind, engineVersion string) (hostSpeedVerdict, bool) {
 	if s == nil || s.EngineKind != engineKind || s.EngineVersion == "" || s.EngineVersion != engineVersion {
-		return hostfit.HostProbe{}, false
+		return hostSpeedVerdict{}, false
 	}
-	probe := hostfit.HostProbe{
-		PromptTokens: s.PromptTokens,
-		PrefillTokps: s.PrefillTokps,
-		DecodeTokps:  s.DecodeTokps,
-	}
-	if !probe.Measured() {
-		return hostfit.HostProbe{}, false
-	}
-	return probe, true
+	// What the record MEANS is hostSpeedVerdictOf's question, not this
+	// one's. Before the screen existed the two were the same test, because
+	// a stored figure supported a verdict exactly when its probe was
+	// Measured(); a stored bound is not Measured() and supports one
+	// anyway, so a Measured() check here would have re-measured every slow
+	// host on every boot (waired-agent#579 Stage 3).
+	return hostSpeedVerdictOf(s)
 }
 
 // persistHostSpeedLocked writes the in-memory measurement to the state
@@ -634,11 +753,11 @@ func (p *agentInferenceProvider) applyHostCutoff(ctx context.Context) bool {
 	// nothing (waired-agent#579). Handing the window back is the right
 	// answer when the host cannot be measured in it — the background
 	// goroutine keeps measuring on the full budget, and publishes.
-	probe, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedInstallWindow())
+	verdict := p.ensureHostSpeedMeasured(ctx, p.hostSpeedInstallWindow())
 	if !p.hostCutoffIsStillOurs() {
 		return true
 	}
-	if !measured {
+	if !verdict.Decided {
 		// Say so. This is the arm a host takes when the measurement could
 		// not finish — and after #579 bounded that measurement, it is the
 		// arm the SLOWEST hosts take, which are the ones the cutoff exists
@@ -648,18 +767,15 @@ func (p *agentInferenceProvider) applyHostCutoff(ctx context.Context) bool {
 			"window", p.hostSpeedInstallWindow())
 		return true
 	}
-	if ok, decided := probe.MeetsRecommendedSpec(); !decided || ok {
-		p.logger.Info("host cutoff: this host clears the budget",
-			"turn_seconds", fmt.Sprintf("%.1f", probe.TurnSeconds()),
-			"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds),
-			"decided", decided)
+	if verdict.MeetsBudget {
+		p.logger.Info("host cutoff: this host clears the budget", verdict.logArgs()...)
 		return true
 	}
 	p.logger.Warn("this host is below the recommended spec for local inference: one coding-agent turn "+
 		"would take longer than the budget, on the smallest model there is. Local inference starts off "+
 		"and this node runs as a gateway/relay — it can still route inference to mesh peers. "+
 		"Turn it on anyway with `waired inference on`.",
-		"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds))
+		verdict.logArgs()...)
 	if p.disableInference == nil {
 		// --disable-inference already took the subsystem out; there is no
 		// controller to persist through and nothing to turn off.

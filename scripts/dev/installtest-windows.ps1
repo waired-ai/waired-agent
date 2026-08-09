@@ -194,7 +194,7 @@ $PullReachedRe = 'cannot download'
 # Mirror of lib/installtest-enroll.sh's IT_STATUS_FIELDS_RE (waired-agent#573)
 # -- the inference-status field names Get-ModelReadyState reads. Same guard
 # checks these three copies agree and that the product still publishes them.
-$StatusFieldsRe = 'no_model_selected|host_speed|probe_model_id'
+$StatusFieldsRe = 'no_model_selected|host_speed|probe_model_id|turn_floor_seconds'
 # Mirror of lib/installtest-enroll.sh's IT_DAEMON_EVIDENCE_RE
 # (waired-agent#579) -- the daemon-log lines the not-ready dump greps for. See
 # the comment there for why the host-speed group belongs in a dump that used to
@@ -632,12 +632,17 @@ function Assert-Inference {
         $turn    = [double]$st.host_speed.turn_seconds
         $budget  = [double]$st.host_speed.budget_seconds
         $samples = [int]$st.host_speed.samples
+        # A host far below the cutoff publishes a BOUND and no turn -- see the
+        # Linux twin in lib/installtest-enroll.sh (waired-agent#579 Stage 3).
+        $floor   = [double]$st.host_speed.turn_floor_seconds
+        $method  = [string]$st.host_speed.method
+        $figure  = if ($turn -gt 0) { $turn } else { $floor }
         # ItSoft, not ItBad: a host that published no measurement is a REAL
         # defect (waired-agent#579) and the per-PR legs hit it, so blocking
         # today would turn every PR in the repo red for something none of them
         # introduced. The #579 fix adds its $ContractBlocking entry and this
         # becomes blocking automatically -- which is what that mechanism is for.
-        ItSoft '579' ($turn -gt 0) "host speed measured inside init (turn ${turn}s against a ${budget}s budget; $samples samples)" 'waired-agent'
+        ItSoft '579' ($figure -gt 0) "host speed measured inside init (${method}: turn ${turn}s, floor ${floor}s, against a ${budget}s budget; $samples samples)" 'waired-agent'
     }
 
     # 3) local inference is on -- asked of the DAEMON, not of the config under

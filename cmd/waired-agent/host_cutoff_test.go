@@ -330,7 +330,7 @@ func TestApplyHostCutoff_Undecided_LeavesTheInstallPathAlone(t *testing.T) {
 // resident on the host least able to spare the memory.
 func TestMeasureHostCutoff_SendsTheCalibratedRequest(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
-	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no measurement from a well-formed engine response")
 	}
 
@@ -404,7 +404,7 @@ func TestMeasureHostCutoff_PublishesTheMedianSampleNotAMedianOfFields(t *testing
 	p, eng, _ := hostCutoffProviderAnswering(t, []map[string]any{
 		calibrationCounters, scaledCounters(3), scaledCounters(1), scaledCounters(2),
 	}, 0)
-	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no measurement")
 	}
 	if got := len(eng.generateBodies()); got != benchSampleCount+1 {
@@ -450,7 +450,7 @@ func scaledCountersProbe(factor float64) hostfit.HostProbe {
 // would agree perfectly while measuring nothing.
 func TestMeasureHostCutoff_EverySampleUsesADifferentPrompt(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
-	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no measurement")
 	}
 
@@ -585,12 +585,12 @@ func TestEnsureHostSpeedMeasured_OncePerEngineBuild(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
 	ctx := context.Background()
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("first call did not measure")
 	}
 	afterFirst := len(eng.generateBodies())
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("second call lost the measurement")
 	}
 	if got := len(eng.generateBodies()); got != afterFirst {
@@ -601,7 +601,7 @@ func TestEnsureHostSpeedMeasured_OncePerEngineBuild(t *testing.T) {
 	// A bundle bump is a different engine, so the figure no longer
 	// describes what is running.
 	p.profiler = hostCutoffProfiler(t, "0.32.0")
-	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no measurement after the engine version moved")
 	}
 	if got := len(eng.generateBodies()); got <= afterFirst {
@@ -623,7 +623,7 @@ func TestEnsureHostSpeedMeasured_AnUpgradeReMeasures(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
 	ctx := context.Background()
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("first call did not measure")
 	}
 	afterFirst := len(eng.generateBodies())
@@ -647,7 +647,7 @@ func TestEnsureHostSpeedMeasured_AnUpgradeReMeasures(t *testing.T) {
 		cfg: p.cfg, profiler: p.profiler, logger: p.logger, agentCtx: p.agentCtx,
 		ollamaUsable: p.ollamaUsable,
 	}
-	if _, measured := next.ensureHostSpeedMeasured(ctx, next.hostSpeedMeasureWindow()); !measured {
+	if v := next.ensureHostSpeedMeasured(ctx, next.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no measurement after the agent build moved")
 	}
 	if got := len(eng.generateBodies()); got <= afterFirst {
@@ -667,7 +667,7 @@ func TestEnsureHostSpeedMeasured_ARecordWithNoAgentVersionIsReMeasured(t *testin
 	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
 	ctx := context.Background()
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("first call did not measure")
 	}
 	afterFirst := len(eng.generateBodies())
@@ -682,7 +682,7 @@ func TestEnsureHostSpeedMeasured_ARecordWithNoAgentVersionIsReMeasured(t *testin
 		cfg: p.cfg, profiler: p.profiler, logger: p.logger, agentCtx: p.agentCtx,
 		ollamaUsable: p.ollamaUsable,
 	}
-	if _, measured := next.ensureHostSpeedMeasured(ctx, next.hostSpeedMeasureWindow()); !measured {
+	if v := next.ensureHostSpeedMeasured(ctx, next.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no measurement from a record that cannot say who took it")
 	}
 	if got := len(eng.generateBodies()); got <= afterFirst {
@@ -749,7 +749,7 @@ func TestStartHostSpeedMeasurement_DoesNotRaceASecondCaller(t *testing.T) {
 	p.startHostSpeedMeasurement(ctx)
 	p.waitForPulls()
 
-	if _, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no measurement")
 	}
 	// One calibration + benchSampleCount samples, once. Anything more is a
@@ -898,7 +898,7 @@ func TestStartHostSpeedMeasurement_GivesUpWhenTheHostNeverSettles(t *testing.T) 
 // decide whether the number is comparable to its own threshold.
 func TestHostSpeed_PublishedRecordCarriesItsProvenance(t *testing.T) {
 	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
-	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("no measurement")
 	}
 	got := p.hostSpeedNow()
@@ -991,7 +991,7 @@ func TestHostCutoff_WithoutTheProbeModelInTheCatalog_NoVerdict(t *testing.T) {
 	p, eng, disabled := hostCutoffProvider(t, cpuOnlyCounters, 0)
 	p.manifests = bounceTestManifests() // no qwen3.5-0.8b in here
 
-	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); measured {
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); v.Decided {
 		t.Fatal("reached a measurement without the probe model; the threshold is calibrated " +
 			"against one model and means nothing measured on another")
 	}
@@ -1330,11 +1330,11 @@ func TestEnsureHostSpeedMeasured_IsBoundedByTheInstallWindow(t *testing.T) {
 	p.hostSpeedWindow = 200 * time.Millisecond
 
 	started := time.Now()
-	probe, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow())
+	v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow())
 	elapsed := time.Since(started)
 
-	if measured {
-		t.Fatalf("an engine that never answered produced a measurement: %+v", probe)
+	if v.Decided {
+		t.Fatalf("an engine that never answered produced a verdict: %+v", v)
 	}
 	if elapsed > 10*time.Second {
 		t.Fatalf("ensureHostSpeedMeasured took %s on a 200 ms window", elapsed)
@@ -1355,7 +1355,7 @@ func TestEnsureHostSpeedMeasured_IsBoundedByTheInstallWindow(t *testing.T) {
 func TestEnsureHostSpeedMeasured_AQueuedCallerStillReadsThePublishedMeasurement(t *testing.T) {
 	p, eng, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
 
-	if _, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !measured {
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
 		t.Fatal("the first call did not measure")
 	}
 	before := len(eng.generateBodies())
@@ -1363,13 +1363,13 @@ func TestEnsureHostSpeedMeasured_AQueuedCallerStillReadsThePublishedMeasurement(
 	// Enter with a window that has already run out, which is what a caller
 	// that queued behind a full-length measurement sees.
 	p.hostSpeedWindow = time.Nanosecond
-	probe, measured := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow())
-	if !measured {
+	reused := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow())
+	if !reused.Decided {
 		t.Fatal("the queued caller re-measured instead of reusing the published figure — " +
 			"the cache read is on the deadline ctx, not the parent")
 	}
-	if !probe.Measured() {
-		t.Fatalf("the reused probe is not a measurement: %+v", probe)
+	if reused.TurnSeconds <= 0 || reused.Method != signer.BenchmarkMethodOllamaEval {
+		t.Fatalf("the reused verdict is not a full measurement: %+v", reused)
 	}
 	if after := len(eng.generateBodies()); after != before {
 		t.Fatalf("/api/generate requests %d -> %d: the queued caller measured again", before, after)

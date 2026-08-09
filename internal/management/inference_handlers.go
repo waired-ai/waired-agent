@@ -213,6 +213,31 @@ type HostSpeedStatus struct {
 	TurnSeconds   float64 `json:"turn_seconds"`
 	BudgetSeconds float64 `json:"budget_seconds"`
 
+	// TurnFloorSeconds is a LOWER BOUND on the same turn, and on a host
+	// far below the cutoff it is the ONLY figure there is: TurnSeconds is
+	// zero and this one is set (waired-ai/waired-agent#579). Measuring
+	// such a host at full depth costs minutes standing in front of the
+	// model download, so the agent concludes from the prefill rate alone
+	// and says so in Method.
+	//
+	// A client that renders only TurnSeconds shows nothing at all for
+	// exactly the hosts that most need telling. Both fields are present
+	// so a client can render "210.4 s or more" without inferring the
+	// distinction from a method string.
+	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
+
+	// Method is how the figure above was obtained — one of proto/signer's
+	// BenchmarkMethod* values. BenchmarkMethodOllamaPrefillFloor is the
+	// bound; anything else is a measurement at DepthTokens.
+	//
+	// DepthTokens is the depth the turn is normalised to and PromptTokens
+	// is what the engine actually prefilled. They are equal within
+	// tolerance for a measurement and far apart for a bound, which is what
+	// makes the distinction checkable rather than merely asserted.
+	Method       string `json:"method,omitempty"`
+	DepthTokens  int    `json:"depth_tokens,omitempty"`
+	PromptTokens int    `json:"prompt_tokens,omitempty"`
+
 	// PrefillTokps / DecodeTokps / Samples / SpreadPct / ProbeModelID /
 	// MeasuredAt are the same figures signer.HostSpeed carries, for
 	// `waired status --observability` and for a bug report.

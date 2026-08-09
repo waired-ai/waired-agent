@@ -1,11 +1,20 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260810/0228-prefill-floor-screens-below-spec-hosts.md
 ---
 
 # 推奨要件未満の判定は、実測プローブ 1 本のターン時間で行う (20260805 16:20)
 
 ## Status
-Accepted
+Accepted。ただし**決定 4 は部分的に狭められている** —
+`docs/decisions/20260810/0228-prefill-floor-screens-below-spec-hosts.md`
+（waired-agent#579）が「推奨要件未満と結論するには深さ付きの計測が要る」を
+「深さ付きの計測**か**、独立フィールドに載りその旨を宣言したプレフィルのみの
+下界」に緩めた。決定 4 の残り（浅いブートベンチはデコードを過大評価する、
+プロンプト先頭のノンス）と、決定 1〜3 および 5〜8 はそのまま有効。とくに
+決定 2 の「判定量はプローブ自身の 1 ターン所要時間」は `turn_seconds` の
+意味として保存されている: 下界は別のフィールドに載る。
 
 ## Context
 
