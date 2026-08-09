@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
 	"github.com/waired-ai/waired-agent/internal/management"
@@ -159,14 +160,17 @@ func TestPrePullHold_AWizardIsDriving_TheGraceDoesNotReleaseIt(t *testing.T) {
 	p.waitForPulls()
 }
 
-// Records today's behaviour rather than a contract: the ceiling exists so
-// a setup abandoned between the engine step and the model step cannot
-// leave a host with no model forever. The value it takes (the same window
-// the reconciler uses to call an instruction fresh) is a judgement call,
-// not something an issue ratified.
-func TestPrePullHold_DrivingForeverGivesUpAtTheCeiling(t *testing.T) {
+// PRODUCT CONTRACT (waired-agent#586; owner ruling 2026-08-09, recorded
+// on that issue — inverting the #379-era behaviour this test used to
+// pin): a wizard that drove, asked, and got no answer within the ceiling
+// is an ABANDONED question, and an abandoned question is not consent to
+// a multi-GB download. The fallback stands down, the abandonment is
+// persisted, and — because the record survives restarts — no later boot
+// quietly starts the download either.
+func TestPrePullHold_DrivingForeverStandsDownAtTheCeiling(t *testing.T) {
 	p, r, installed := prePullHoldProvider(t)
 	p.prePullHoldMax = 20 * time.Millisecond
+	p.preferencePath = filepath.Join(t.TempDir(), "preferred-model.json")
 
 	cancel := bootWithHold(t, p, installed)
 	defer cancel()
@@ -174,9 +178,13 @@ func TestPrePullHold_DrivingForeverGivesUpAtTheCeiling(t *testing.T) {
 	r.releaseAll()
 	p.waitForPulls()
 
-	if got := r.pulledTags(); len(got) != 1 || got[0] != "a:q4" {
-		t.Fatalf("tags pulled = %v, want exactly [a:q4] — the hold must not outlive "+
-			"a wizard that stopped without naming a model", got)
+	if got := r.pulledTags(); len(got) != 0 {
+		t.Fatalf("tags pulled = %v, want none — an abandoned wizard question is not consent", got)
+	}
+	pref, ok, err := agentconfig.LoadPreference(p.preferencePath)
+	if err != nil || !ok || !pref.Unanswered {
+		t.Fatalf("abandonment not persisted (pref=%+v ok=%v err=%v) — without the record "+
+			"the next restart folds this host back into the never-asked arm and downloads anyway", pref, ok, err)
 	}
 }
 
@@ -309,14 +317,17 @@ func TestPrePullHold_ModelChoiceClaim_AModelAnswerStandsDown(t *testing.T) {
 	}
 }
 
-// Records today's behaviour with its ratifying source (owner ruling
-// 2026-08-09 on waired-agent#586): a claim nobody answers expires
-// server-side — 60 minutes in production, the prePullHoldMax window — and
-// the fallback then downloads exactly as it would have without the
-// question. A killed terminal cannot park the host forever.
-func TestPrePullHold_ModelChoiceClaim_ExpiresToTheFallback(t *testing.T) {
+// PRODUCT CONTRACT (waired-agent#586; owner ruling 2026-08-09, recorded
+// on that issue): a terminal claim nobody answers expires server-side —
+// 60 minutes in production — and the expiry ABORTS the fallback rather
+// than dispatching it: the question was on screen, nobody said yes. The
+// abandonment is persisted so the stand-down survives restarts, and a
+// model arrives only once someone chooses (browser dashboard,
+// `waired models pull`, or a re-run init).
+func TestPrePullHold_ModelChoiceClaim_ExpiresToAStandDown(t *testing.T) {
 	p, r, installed := prePullHoldProvider(t)
 	p.modelChoiceWait = 20 * time.Millisecond
+	p.preferencePath = filepath.Join(t.TempDir(), "preferred-model.json")
 	p.noteModelChoicePending(true)
 
 	cancel := bootWithHold(t, p, installed)
@@ -325,9 +336,31 @@ func TestPrePullHold_ModelChoiceClaim_ExpiresToTheFallback(t *testing.T) {
 	r.releaseAll()
 	p.waitForPulls()
 
-	if got := r.pulledTags(); len(got) != 1 || got[0] != "a:q4" {
-		t.Fatalf("tags pulled = %v, want exactly [a:q4] — an abandoned question must "+
-			"converge to the fallback, like an abandoned wizard", got)
+	if got := r.pulledTags(); len(got) != 0 {
+		t.Fatalf("tags pulled = %v, want none — an expired question is an abandonment, not consent", got)
+	}
+	pref, ok, err := agentconfig.LoadPreference(p.preferencePath)
+	if err != nil || !ok || !pref.Unanswered {
+		t.Fatalf("abandonment not persisted: pref=%+v ok=%v err=%v", pref, ok, err)
+	}
+}
+
+// The persisted abandonment is what keeps the stand-down across
+// restarts: a boot that reads Preference.Unanswered never arms the
+// fallback, exactly like the persisted none choice (#586).
+func TestPrePullHold_PersistedUnansweredQuestion_TheFallbackNeverArms(t *testing.T) {
+	p, r, installed := prePullHoldProvider(t)
+	p.modelQuestionUnanswered.Store(true) // what the boot fold does for Preference.Unanswered
+
+	cancel := bootWithHold(t, p, installed)
+	defer cancel()
+	p.setupNoteDesired("", false)
+	r.releaseAll()
+	p.waitForPulls()
+
+	if got := r.pulledTags(); len(got) != 0 {
+		t.Fatalf("tags pulled = %v, want none — the question from the last boot is still "+
+			"unanswered, and a restart must not turn that into consent", got)
 	}
 }
 

@@ -246,8 +246,11 @@ itself and asks the full set of questions:
 	anyway? `[y/N]`** — **No** returns to the list). Choosing **0) Don't
 	download a model now** finishes setup with the AI software installed and no
 	model, which is a normal state, not an error: pick one later from the
-	browser dashboard or with `waired models pull <model>`. Asked only on the
-	first install — a machine that already has a model keeps it.
+	browser dashboard or with `waired models pull <model>`. If nobody answers
+	— the terminal closed, nobody at the keyboard — nothing is downloaded:
+	the question is recorded as open and Waired waits until someone chooses.
+	Asked only on the first install — a machine that already has a model
+	keeps it.
 
 7. **Run a quick performance benchmark now? `[Y/n]`** — asked once the model is
 	ready. Worth doing: if this computer cannot keep up, Waired offers a lighter

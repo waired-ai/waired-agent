@@ -33,6 +33,19 @@ type Preference struct {
 	// model can be added any time — and its one effect at boot is that
 	// the bundled fallback pre-pull stands down.
 	None bool `json:"none,omitempty"`
+
+	// Unanswered records that the install flow — the terminal picker or
+	// the browser wizard — asked which model to download and the question
+	// expired with no answer (waired-agent#586; owner ruling 2026-08-09,
+	// recorded on that issue). An abandoned question is not consent: the
+	// bundled fallback download stays down on EVERY boot until an actual
+	// answer (a model, or None) replaces this record — without the
+	// persistence, the next daemon restart would fold the host back into
+	// the never-asked arm and start the multi-GB download the operator
+	// never agreed to. Hosts that were never asked (non-interactive and
+	// fleet installs, ordinary restarts) never carry this record and keep
+	// the spec §11.1 auto-pull.
+	Unanswered bool `json:"unanswered,omitempty"`
 }
 
 // DefaultPreferencePath returns the on-disk location of preferred-model.json,
@@ -60,12 +73,15 @@ func LoadPreference(path string) (Preference, bool, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return Preference{}, false, fmt.Errorf("preference: parse %s: %w", path, err)
 	}
-	if p.ModelID == "" && !p.None {
+	if p.ModelID == "" && !p.None && !p.Unanswered {
 		// Treat a present-but-empty file as "no preference" rather than
 		// pinning the agent to the empty string. A None record is NOT
 		// empty: "run without a model" is a stated choice (#586), and
 		// reporting it as absence is how a boot would re-arm the fallback
-		// download the choice exists to stand down.
+		// download the choice exists to stand down. An Unanswered record
+		// is not empty either, for the mirrored reason: reporting it as
+		// absence is how a restart would turn an abandoned question into
+		// consent.
 		return Preference{}, false, nil
 	}
 	return p, true, nil

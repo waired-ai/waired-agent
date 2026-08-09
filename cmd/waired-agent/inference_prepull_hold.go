@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/agentconfig"
 )
 
 // The boot pre-pull of the bundled model is the FALLBACK for a host with
@@ -39,15 +41,21 @@ const (
 	// prePullHoldMax is the ceiling on holding for a wizard that is
 	// driving but never names a model — a setup abandoned after the engine
 	// step, say. It matches setupDesiredFreshWindow, which is how long the
-	// reconciler itself keeps calling such an instruction fresh.
+	// reconciler itself keeps calling such an instruction fresh. Reaching
+	// it STANDS THE FALLBACK DOWN, permanently (#586; owner ruling
+	// 2026-08-09, recorded on that issue): an abandoned question is not
+	// consent to a multi-GB download. Until that ruling this arm
+	// proceeded to the download instead — the #379-era judgement from
+	// when a model-less host was a broken state rather than the normal
+	// one #586 made it.
 	prePullHoldMax = setupDesiredFreshWindow
 
 	// modelChoiceWaitMax is the ceiling on the terminal install flow's
-	// claim that a model question is about to be asked (waired-agent#586,
-	// the same 60 minutes as prePullHoldMax and for the same reason: an
-	// abandoned setup — here a closed terminal — eventually gets the
-	// fallback download it would have had without the question; owner
-	// ruling 2026-08-09). The deadline is stamped server-side when the
+	// claim that a model question is about to be asked (waired-agent#586)
+	// — the same 60 minutes as prePullHoldMax, ending the same way: the
+	// question expires, the abandonment is PERSISTED
+	// (Preference.Unanswered), and no boot auto-pulls until someone
+	// actually chooses. The deadline is stamped server-side when the
 	// claim is registered, so a killed `waired init` cannot renew it.
 	modelChoiceWaitMax = prePullHoldMax
 )
@@ -180,9 +188,12 @@ func (p *agentInferenceProvider) noteModelChoiceAnswered() {
 
 // applyNoModelSelected applies the operator's "don't download a model
 // now" choice in process (#586): the management handler has already
-// persisted it; this is what a held fallback dispatch reads.
+// persisted it; this is what a held fallback dispatch reads. It is an
+// ANSWER, so it also clears an abandoned-question record from an
+// earlier boot.
 func (p *agentInferenceProvider) applyNoModelSelected() {
 	p.noModelSelected.Store(true)
+	p.modelQuestionUnanswered.Store(false)
 	p.noteModelChoiceAnswered()
 	p.logger.Info("the operator chose to run without a local model; the bundled fallback download stands down")
 }
@@ -211,9 +222,12 @@ func (p *agentInferenceProvider) modelChoiceSnapshot() (until time.Time, next <-
 
 // awaitModelChoice blocks while the terminal install flow's claim is
 // live. waited reports whether it blocked at all (so the caller knows to
-// re-take its decision); proceed is false only when ctx ended. The claim
-// expiring is a proceed: an abandoned terminal gets the fallback
-// download, exactly like an abandoned browser wizard at prePullHoldMax.
+// re-take its decision); proceed is false when ctx ended — and when the
+// claim EXPIRED: an abandoned question is not consent (#586; owner
+// ruling 2026-08-09), so the expiry persists the abandonment and stands
+// the fallback down for every boot until someone actually chooses. Only
+// an explicit withdrawal (the picker was skipped — the question was
+// never put to anyone) proceeds to the download.
 func (p *agentInferenceProvider) awaitModelChoice(ctx context.Context) (waited, proceed bool) {
 	for {
 		until, next := p.modelChoiceSnapshot()
@@ -222,8 +236,9 @@ func (p *agentInferenceProvider) awaitModelChoice(ctx context.Context) (waited, 
 		}
 		remaining := time.Until(until)
 		if remaining <= 0 {
-			p.logger.Info("boot pre-pull proceeding: the install flow asked which model to download and got no answer")
-			return waited, true
+			p.logger.Info("boot pre-pull stands down: the install flow asked which model to download and nobody answered")
+			p.persistModelQuestionUnanswered()
+			return waited, false
 		}
 		waited = true
 		expiry := time.NewTimer(remaining)
@@ -231,12 +246,37 @@ func (p *agentInferenceProvider) awaitModelChoice(ctx context.Context) (waited, 
 		case <-next:
 			// The claim changed (answered or withdrawn); re-read it.
 		case <-expiry.C:
-			// Re-read: the loop's remaining<=0 arm logs and proceeds.
+			// Re-read: the loop's remaining<=0 arm records the abandonment.
 		case <-ctx.Done():
 			expiry.Stop()
 			return waited, false
 		}
 		expiry.Stop()
+	}
+}
+
+// persistModelQuestionUnanswered records "asked, and nobody answered"
+// (Preference.Unanswered, #586) so the stand-down survives restarts. The
+// in-process flag is set even when the write cannot happen; an answer
+// that landed in the meantime — a stored preference, a live override,
+// the none choice — wins, and the record is then deliberately NOT
+// written over it.
+func (p *agentInferenceProvider) persistModelQuestionUnanswered() {
+	if pref := p.preferredOverride.Load(); pref != nil && *pref != "" {
+		return
+	}
+	if p.noModelSelected.Load() {
+		return
+	}
+	if _, ok, err := agentconfig.LoadPreference(p.preferencePath); err == nil && ok {
+		return
+	}
+	p.modelQuestionUnanswered.Store(true)
+	if p.preferencePath == "" {
+		return
+	}
+	if err := agentconfig.SavePreference(p.preferencePath, agentconfig.Preference{Unanswered: true}); err != nil {
+		p.logger.Warn("could not record the unanswered model question; the stand-down lasts only until the next restart", "err", err)
 	}
 }
 
@@ -299,9 +339,15 @@ func (p *agentInferenceProvider) awaitPrePullRelease(ctx context.Context) bool {
 				"waited", frameGrace)
 			return true
 		case <-ceiling.C:
-			p.logger.Info("boot pre-pull proceeding: setup is driving but named no model",
+			// The wizard drove, asked its model question, and nobody
+			// answered within the window. That is an abandonment, not
+			// consent (#586; owner ruling 2026-08-09) — persist it so the
+			// next boot does not fold this host back into the never-asked
+			// arm and start the download anyway.
+			p.logger.Info("boot pre-pull stands down: setup asked which model to download and nobody answered",
 				"waited", holdMax)
-			return true
+			p.persistModelQuestionUnanswered()
+			return false
 		case <-ctx.Done():
 			return false
 		}

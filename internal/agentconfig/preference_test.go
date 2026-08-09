@@ -126,6 +126,37 @@ func TestPreference_NoneRoundTripsAsAStatedChoice(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#586; owner ruling 2026-08-09, recorded
+// on that issue): an abandoned model question is persisted and reads
+// back as a record, not as absence — reporting it ok=false is how a
+// restart would turn the abandonment into consent and start the
+// download nobody agreed to. Any actual answer replaces it.
+func TestPreference_UnansweredRoundTripsAsARecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "preferred-model.json")
+	if err := SavePreference(path, Preference{Unanswered: true}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, ok, err := LoadPreference(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !ok || !got.Unanswered || got.ModelID != "" || got.None {
+		t.Fatalf("got %+v ok=%v, want an Unanswered record read back ok=true", got, ok)
+	}
+
+	if err := SavePreference(path, Preference{None: true}); err != nil {
+		t.Fatalf("save none: %v", err)
+	}
+	got, ok, err = LoadPreference(path)
+	if err != nil || !ok {
+		t.Fatalf("load after answer: %v ok=%v", err, ok)
+	}
+	if got.Unanswered || !got.None {
+		t.Errorf("an answer must replace the abandonment record: %+v", got)
+	}
+}
+
 // ApplyPreferenceOverride deliberately ignores a None record: it names no
 // model, and the fallback stand-down is the provider's job (#586).
 func TestApplyPreferenceOverride_NoneChangesNothing(t *testing.T) {
