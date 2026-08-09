@@ -522,14 +522,8 @@ assert_reinit_default_unfit() {
 
   it_log "re-running waired init in $guest with no inference flag on a forced below-spec host (waired-agent#590)"
   # Arrange: the daemon must WANT an engine (desired enabled, none
-  # installed) and must measure as below-spec. The seam is daemon env, so
-  # it takes a service restart to be read.
-  gx "$guest" waired inference on >/dev/null 2>&1 ||     it_warn "could not turn inference on in $guest before the #590 probe"
-  gx "$guest" sh -c "printf 'WAIRED_RAM_AVAILABLE_GB=1\n' >> /etc/waired/agent.env && systemctl restart waired-agent"
-  # The restart drops the enrolled session for a few seconds; init's own
-  # polling absorbs that, but waiting here keeps the probe deterministic.
-  _it_wait_enrolled "$guest" >/dev/null || \
-    it_warn "daemon did not report enrolled after the #590 seam restart"
+  # installed) and must measure as below-spec.
+  _it_force_below_spec "$guest" "#590 default"
 
   gx "$guest" env WAIRED_NO_EMOJI=1 waired init \
     --control "$IT_CONTROL_URL" --device-name "$name" \
@@ -554,19 +548,159 @@ assert_reinit_default_unfit() {
     || bad "mgmt API desired_state=$desired after the flagless below-spec init, want disabled"
 
   [ "$rc" = 0 ] || tail -n 20 "$log" | sed 's/^/    /' >&2
-  # Leave the guest as we found it: seam out, daemon restarted on real
-  # measurements, toggle back off (the state every assert after this one
-  # was written against).
+  _it_restore_host_memory "$guest" "#590 default"
+}
+
+# assert_models_pull_confirm: the `waired models pull` half of the #590
+# twin (waired-ai/waired#1067, 2026-08-08 owner decision — no surface
+# refuses a model any more; the refusal rule it supersedes was
+# waired-ai/waired#1056).
+#
+# The contract has two rows and they differ only by --force:
+#
+#   --yes          a fits=false model is NOT downloaded. --yes skips
+#                  confirmations whose safe answer is yes; this one's is
+#                  No, so a non-interactive run declines and says how to
+#                  override. Exit 0 — a decline is a choice, not a fault.
+#   --yes --force  the same model IS honoured: the gate does not stop it.
+#
+# Runs on the LEAN tier-2 guest, beside the other two step-4 probes, and
+# that placement is what makes it free: this guest has no engine, so
+# PullModel refuses at #307's admission check ("cannot download … yet")
+# BEFORE writing a catalog row or opening a socket. The --force row
+# therefore proves the gate was passed without a single byte being
+# downloaded, which is why this can live on the per-PR gate at all —
+# `installtest.yml` deliberately stops before anything fetches weights.
+#
+# Anti-vacuity has two parts. The host is made below-spec with the same
+# #568 measurement seam the probe above uses, so EVERY family reads
+# fits=false whatever the runner's real memory (without it the gate is
+# never reached and all five asserts pass having tested nothing); and
+# inference is turned on first, because /inference/catalog is what the
+# CLI asks for the fit verdict and a fail-open lookup would silently
+# skip the gate.
+#
+# Exactly five asserts, always — the tier-2 floor counts on it.
+assert_models_pull_confirm() {
+  local guest="$1" name log model rc=0
+
+  name="$(_it_dev_name "$guest")"
+  mkdir -p "$IT_LOGDIR"
+
+  it_log "checking the models-pull confirmation on a forced below-spec host (waired-agent#590)"
+  _it_force_below_spec "$guest" "#590 pull twin"
+
+  # The model comes from the catalog, not from a literal: the bundled
+  # set is retired and replaced on its own schedule (#577), and a
+  # hardcoded id turns that into a red leg about the wrong thing. Any
+  # family will do — under the seam they are all fits=false.
+  model="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/catalog 2>/dev/null \
+    | grep -oE '"model_id"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 \
+    | grep -oE '"[^"]+"$' | tr -d '"' || true)"
+  if [ -z "$model" ]; then
+    bad "no model_id in the catalog response — the pull gate reads the same endpoint, so nothing below would be testing it"
+    _it_restore_host_memory "$guest" "#590 pull twin"
+    # Still five. A leg that reports four has a block that stopped
+    # executing, and the floor is what says so.
+    bad "skipped: --yes on a model that does not fit was not exercised"
+    bad "skipped: the decline is not a failed command"
+    bad "skipped: --yes alone did not reach the pull layer"
+    bad "skipped: --yes --force honoured the choice"
+    return
+  fi
+
+  # Row 1: --yes alone. stdin from /dev/null so stdinIsInteractive() is
+  # unambiguously false — this row IS the non-interactive branch.
+  log="$IT_LOGDIR/models-pull-yes-$name.log"
+  gx "$guest" sh -c "WAIRED_NO_EMOJI=1 waired models pull '$model' --yes --wait=false </dev/null" \
+    >"$log" 2>&1 || rc=$?
+
+  [ "$rc" = 0 ] \
+    && ok "declining an over-memory pull is not a failed command (exit 0)" \
+    || bad "\`models pull --yes\` exited $rc on a model that does not fit — a decline is a choice, not a fault — see $log"
+  grep -qF "$IT_PULL_DECLINE_RE" "$log" \
+    && ok "--yes alone declines an over-memory pull and says how to override" \
+    || bad "\`models pull --yes\` never printed the decline line — --yes must not auto-confirm a default-No question — see $log"
+  grep -q "$IT_PULL_QUEUED_RE" "$log" \
+    && bad "\`models pull --yes\` queued the download anyway — the gate did not stop it — see $log" \
+    || ok "--yes alone dispatched nothing to the daemon"
+
+  # Row 2: --yes --force. Same model, same host; only the flag differs.
+  rc=0
+  log="$IT_LOGDIR/models-pull-force-$name.log"
+  gx "$guest" sh -c "WAIRED_NO_EMOJI=1 waired models pull '$model' --yes --force --wait=false </dev/null" \
+    >"$log" 2>&1 || rc=$?
+
+  grep -qF "$IT_PULL_DECLINE_RE" "$log" \
+    && bad "\`models pull --yes --force\` still declined — the scripted consent is the pair, and it was not honoured — see $log" \
+    || ok "--yes --force is not stopped by the over-memory gate"
+  # …and it reached the daemon. On this engine-less guest that shows up
+  # as PullModel's own admission refusal (#307), which is the point: the
+  # gate handed the request on, and the daemon declined it for an
+  # unrelated and much cheaper reason.
+  grep -qE "$IT_PULL_REACHED_RE" "$log" \
+    && ok "--yes --force handed the pull to the daemon" \
+    || bad "\`models pull --yes --force\` neither queued nor reached the daemon's pull layer — see $log"
+
+  [ "$rc" = 0 ] || tail -n 10 "$log" | sed 's/^/    /' >&2
+  _it_restore_host_memory "$guest" "#590 pull twin"
+}
+
+# _it_force_below_spec / _it_restore_host_memory — arrange and undo for
+# every probe that needs this host to read as below the recommended
+# spec. Shared by assert_reinit_default_unfit and
+# assert_models_pull_confirm so the two can never drift on the ONE thing
+# that makes them non-vacuous.
+#
+# WAIRED_RAM_AVAILABLE_GB is the #568 measurement seam: the daemon reads
+# it in place of the probe and the persisted record, so the fit verdicts
+# read "nothing fits" whatever the runner's real memory, and the probes
+# never depend on which machine class CI happened to buy. It is daemon
+# env, so it takes a service restart to be read — and the restart drops
+# the enrolled session for a few seconds, which is what _it_wait_enrolled
+# is for. Inference is turned ON because both probes need the daemon to
+# still want an engine (the #551 probe before them leaves it off).
+_it_force_below_spec() {
+  local guest="$1" who="$2"
+  gx "$guest" waired inference on >/dev/null 2>&1 || \
+    it_warn "could not turn inference on in $guest before the $who probe"
+  gx "$guest" sh -c "printf 'WAIRED_RAM_AVAILABLE_GB=1\n' >> /etc/waired/agent.env && systemctl restart waired-agent"
+  _it_wait_enrolled "$guest" >/dev/null || \
+    it_warn "daemon did not report enrolled after the $who seam restart"
+}
+
+# Leave the guest as we found it: seam out, daemon restarted on real
+# measurements, toggle back off — the state every assert after these
+# probes was written against.
+_it_restore_host_memory() {
+  local guest="$1" who="$2"
   gx "$guest" sh -c "sed -i '/^WAIRED_RAM_AVAILABLE_GB=/d' /etc/waired/agent.env && systemctl restart waired-agent" || \
     it_warn "could not remove the RAM seam from $guest's agent.env"
-  # The asserts after this probe talk to the daemon straight away (the
+  # The asserts after these probes talk to the daemon straight away (the
   # pause/resume pair was the first casualty): wait out the restart's
   # re-enrollment window before handing the guest back.
   _it_wait_enrolled "$guest" >/dev/null || \
-    it_warn "daemon did not report enrolled after the #590 cleanup restart"
+    it_warn "daemon did not report enrolled after the $who cleanup restart"
   gx "$guest" waired inference off >/dev/null 2>&1 || \
-    it_warn "could not turn inference back off in $guest after the #590 probe"
+    it_warn "could not turn inference back off in $guest after the $who probe"
 }
+
+# The three strings assert_models_pull_confirm greps for. Kept as named
+# literals for the same reason IT_ENGINE_OPTOUT_RE is, and matched the
+# same way: IT_PULL_DECLINE_RE is asserted both PRESENT (row 1) and
+# ABSENT (row 2), so a rename would half-pass silently.
+#
+# Not yet in scripts/ci/harness-failure-strings-guard.sh: that guard
+# checks the three harnesses declare the SAME literal, and this probe is
+# linux-only until the macOS/Windows twins land (#590). Until then the
+# product side is pinned by cmd/waired/models_fit_test.go. Register all
+# three here when the twins land.
+#
+# Matched with grep -F (decline) / -E (reached), never with a pattern
+# that would make `--yes --force` a regex operator set.
+IT_PULL_DECLINE_RE='Not downloading. Re-run with --yes --force to download it anyway.'
+IT_PULL_QUEUED_RE='queued pull:'
+IT_PULL_REACHED_RE='queued pull:|cannot download'
 
 # Bundled engine path on Linux: waired's BUNDLED Ollama lives under the state
 # dir (#567) — it is NOT a system ollama on PATH, and it serves on the
