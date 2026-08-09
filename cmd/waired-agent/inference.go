@@ -1209,6 +1209,11 @@ type agentInferenceProvider struct {
 	// (waired#1099). A lock a reader waits on must never be held across an
 	// engine request.
 	hostSpeedMeasureMu sync.Mutex
+	// hostSpeedWindow overrides hostSpeedMeasureDeadline — the #579 bound on
+	// one ensureHostSpeedMeasured call — in tests. Zero means the constant.
+	// A field rather than a package var (the prePullHoldMax idiom) so the
+	// timing tests that shrink it can run in parallel.
+	hostSpeedWindow time.Duration
 	// hostSpeedMu guards the fields below and is a LEAF: taken briefly,
 	// never held across an engine request or a disk write of unbounded
 	// size, and never while hostSpeedMeasureMu is being acquired.

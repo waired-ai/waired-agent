@@ -89,13 +89,27 @@ const (
 	// splits the window further than hostCutoffWindowSlots expects.
 	hostCutoffMaxAttempts = 2
 
-	// hostCutoffProbeTimeout bounds each measuring request. Generous by
-	// design: the reference CPU-only host spends ~40 s here, and a host
-	// several times slower is exactly the host this measures. A run that
-	// exceeds even this is not evidence of a slow host — a wedged engine
-	// looks identical — so the timeout yields "undecided" and the install
-	// path carries on unchanged.
-	hostCutoffProbeTimeout = 10 * time.Minute
+	// hostCutoffCalibrationTimeout bounds the calibration request, and
+	// hostCutoffProbeTimeout bounds each measuring request. They are
+	// per-request CEILINGS UNDER the budget below, not budgets of their
+	// own: measureHostCutoff puts a deadline on the whole run, and
+	// context.WithTimeout keeps the earlier of the two, so a request late
+	// in the run gets whatever is left rather than a fresh ten minutes.
+	//
+	// The split exists because the two requests do different amounts of
+	// work. Calibration sends hostCutoffCalibrationLines with
+	// num_predict:1; a measuring request sends ~21k tokens and decodes 200.
+	// Measured on the GitHub-hosted macOS runner (macos-14, 3 vCPU M1 /
+	// 7 GB, the permanent hardware of the install+inference leg):
+	// calibration 2 min 17 s, one sample 7 min 12 s. Each ceiling is
+	// ~1.25x its measured worst case, which is margin against runner
+	// contention rather than against a slower machine.
+	//
+	// A run that exceeds even these is not evidence of a slow host — a
+	// wedged engine looks identical — so the timeout still yields
+	// "undecided" and the install path carries on unchanged.
+	hostCutoffCalibrationTimeout = 3 * time.Minute
+	hostCutoffProbeTimeout       = 9 * time.Minute
 
 	// hostCutoffMeasureBudget bounds the whole sampled measurement, not
 	// one request. The figure is published, and a published measurement is
@@ -106,11 +120,24 @@ const (
 	// of it. So: take as many of benchSampleCount as fit, never fewer than
 	// one, and publish how many were actually taken.
 	//
-	// Three minutes buys all three samples on the reference CPU-only host
-	// (~40 s each) and on anything faster; a host slower than that
-	// publishes one or two and is, by the same token, nowhere near the
-	// threshold.
-	hostCutoffMeasureBudget = 3 * time.Minute
+	// It is 12 minutes, and it GREW from 3 (waired-agent#579). That reads
+	// backwards in a diff, so: the 3 was not enforced. measureHostCutoff
+	// only consulted it between samples, so the calibration and sample 1
+	// were outside it entirely and one request could take
+	// hostCutoffProbeTimeout regardless. The number gets bigger because it
+	// starts being true.
+	//
+	// 12 minutes is the partition below, and the partition is what makes
+	// it defensible: one calibration at its ceiling plus one full sample at
+	// its ceiling. A host sitting at BOTH ceilings still publishes a
+	// one-sample measurement instead of timing out with nothing. The old
+	// doc justified 3 minutes with "~40 s each" — a figure this repo's own
+	// reference host (66.6 s, proto/hostfit/host_cutoff.go) already
+	// exceeded by 1.7x and the macOS runner exceeds by 10.8x.
+	//
+	// Reference host: 4 s + 3 x 66.6 s = 204 s, still three samples.
+	// macOS runner: 137 s + 432 s = 569 s, one sample, published.
+	hostCutoffMeasureBudget = hostCutoffCalibrationTimeout + hostCutoffProbeTimeout
 )
 
 // hostCutoffMeasurement is a completed sampled measurement: the median
@@ -206,6 +233,13 @@ type hostCutoffDeps struct {
 	// hostCutoffMeasureBudget. Injected rather than read from the constant
 	// so the early-exit can be tested without a test that waits minutes.
 	MeasureBudget time.Duration
+
+	// CalibrationTimeout is the per-request ceiling for the calibration
+	// request; 0 means hostCutoffCalibrationTimeout. Injected for the same
+	// reason as MeasureBudget, and separately from it because the defect
+	// this bounds is precisely a calibration that consumed the budget
+	// before any sample ran (waired-agent#579).
+	CalibrationTimeout time.Duration
 }
 
 // measureHostCutoff takes the measurement the cutoff judges and the wire
@@ -240,6 +274,23 @@ func measureHostCutoff(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeas
 		"samples", benchSampleCount, "budget", budget)
 
 	started := time.Now()
+
+	// The budget becomes a real deadline over EVERYTHING below, not just a
+	// figure consulted between samples (waired-agent#579).
+	//
+	// It used to be checked only at `sample > 1`, which left the
+	// calibration and sample 1 outside it: each could run for
+	// hostCutoffProbeTimeout, and measureHostCutoffSample retries, so one
+	// measurement could occupy ~50 minutes of a budget that said 3. On the
+	// macOS runner it took 9 min 29 s, and the bundled model download that
+	// waits behind this call was dispatched one second after it ended.
+	//
+	// context.WithTimeout keeps the earlier of parent and child, so the
+	// per-request ceilings below become min(ceiling, remaining) for free —
+	// no signature changes, and no request can outlive the run.
+	ctx, cancel := context.WithDeadline(ctx, started.Add(budget))
+	defer cancel()
+
 	tokensPerLine := hostCutoffPromptTokensPerLine
 	if measured, err := calibrateHostCutoffPrompt(ctx, deps); err != nil {
 		deps.Logger.Info("host cutoff: could not measure what a prompt line costs; using the seed estimate",
@@ -339,7 +390,16 @@ func hostCutoffNonce(base string, sample, attempt int) string {
 // the ±30 % the depth guard allows, and TurnSeconds normalises to the
 // canonical depth regardless.
 func calibrateHostCutoffPrompt(ctx context.Context, deps hostCutoffDeps) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, hostCutoffProbeTimeout)
+	// Its own ceiling, not the measuring request's: this sends 50 filler
+	// lines with num_predict:1, and giving it the same ten minutes a
+	// 21k-token prefill gets is what let it consume a whole measurement
+	// before any sample ran (waired-agent#579). Still bounded by the run's
+	// deadline above, which WithTimeout keeps when it is the earlier one.
+	timeout := deps.CalibrationTimeout
+	if timeout <= 0 {
+		timeout = hostCutoffCalibrationTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	counters, err := postOllamaGenerate(ctx, deps.HTTPClient, deps.BaseURL, map[string]any{

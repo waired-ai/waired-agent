@@ -497,7 +497,14 @@ func TestMeasureHostCutoff_StopsAtTheSampleBudget(t *testing.T) {
 	m, err := measureHostCutoff(context.Background(), hostCutoffDeps{
 		BaseURL: srv.URL, EngineModel: hostCutoffFixtureTag,
 		HTTPClient: srv.Client(), Logger: slog.New(slog.DiscardHandler),
-		Nonce: "budget", MeasureBudget: 50 * time.Millisecond,
+		// 100 ms, and the value matters: since waired-agent#579 the budget is
+		// a real deadline over the WHOLE run, so it has to sit between
+		// (calibration + sample 1) = 80 ms and (+ sample 2) = 120 ms. The old
+		// 50 ms predates that and now cancels sample 1 mid-flight, which is
+		// the defect being fixed rather than the behaviour being tested. The
+		// three assertions below are unchanged and now rest on a stronger
+		// premise: the calibration is inside the budget it is measured against.
+		Nonce: "budget", MeasureBudget: 100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("measureHostCutoff: %v", err)
@@ -1147,5 +1154,223 @@ func TestPrePullHold_HostAboveTheBudget_DownloadsAsBefore(t *testing.T) {
 	got := runHeldPrePull(t, p, r)
 	if len(got) != 1 || got[0] != "big:q4" {
 		t.Fatalf("tags pulled = %v, want [big:q4]", got)
+	}
+}
+
+// THE STRUCTURAL CLAIM OF waired-agent#579, at the bar the two tests above
+// share: a measurement that cannot finish does not stop the download.
+//
+// The cutoff sits in front of the bundled pull by design (waired#1099 — measure
+// before recommending), so anything unbounded there is unbounded in front of
+// the install. Before the deadline this hung for hostCutoffProbeTimeout and the
+// pull was dispatched only after; on the macOS runner that was 9m29s, and the
+// pull that followed took 11.5 s. It was never slow — it was never started.
+//
+// Undecided still means "carry on unchanged", which is why the tags come back
+// non-empty here: a wedged engine must never read as a slow host.
+func TestPrePullHold_ASlowMeasurementDoesNotStarveTheDownload(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	eng.mu.Lock()
+	eng.block = block
+	eng.mu.Unlock()
+
+	r := newBlockingRunner(t)
+	p.puller = download.NewPuller("ollama-fake", r)
+	p.cfg.BundledModelID = "some-big-model"
+	p.cfg.PullOnStartup = true
+	p.prePullFrameGrace = 5 * time.Millisecond
+	p.prePullHoldMax = time.Minute
+	p.hostSpeedWindow = 200 * time.Millisecond
+
+	started := time.Now()
+	got := runHeldPrePull(t, p, r)
+	elapsed := time.Since(started)
+
+	if len(got) != 1 || got[0] != "big:q4" {
+		t.Fatalf("tags pulled = %v, want [big:q4] — a measurement that could not finish is "+
+			"undecided, and undecided leaves the download exactly as it was", got)
+	}
+	if elapsed > 20*time.Second {
+		t.Fatalf("the pre-pull took %s behind a 200 ms measurement window", elapsed)
+	}
+}
+
+// The budgets partition the install window, and the numbers in the failure
+// messages are the measurements they were derived from.
+//
+// This is the whole of waired-agent#579 as arithmetic: a calibration at its
+// ceiling plus one full-depth sample at its ceiling still fits the budget, and
+// the budget plus the probe download still fits the call's deadline. Move any
+// one of them and this says the window stopped closing.
+//
+// Record of today's behaviour, not a ratified contract: the figures come from
+// run 31255547516's macOS leg (macos-14, 3 vCPU M1 / 7 GB — the permanent
+// hardware of the install+inference leg) and from proto/hostfit's reference
+// host, not from an owner ruling.
+func TestHostSpeedBudgets_PartitionTheInstallWindow(t *testing.T) {
+	if got := hostCutoffCalibrationTimeout + hostCutoffProbeTimeout; got != hostCutoffMeasureBudget {
+		t.Errorf("calibration ceiling + sample ceiling = %s, want hostCutoffMeasureBudget %s — "+
+			"a host sitting at both ceilings must still publish a one-sample measurement",
+			got, hostCutoffMeasureBudget)
+	}
+	if got := hostCutoffPullTimeout + hostCutoffMeasureBudget; got != hostSpeedMeasureDeadline {
+		t.Errorf("probe-download wait + measurement budget = %s, want hostSpeedMeasureDeadline %s",
+			got, hostSpeedMeasureDeadline)
+	}
+	// The measured worst cases these ceilings exist to hold, with ~25% margin
+	// for runner contention. Not "a slower machine could exist" — a slower
+	// machine reaches the undecided arm on purpose.
+	if hostCutoffProbeTimeout < 432*time.Second {
+		t.Errorf("hostCutoffProbeTimeout = %s, but one sample measured 432 s on the macOS runner",
+			hostCutoffProbeTimeout)
+	}
+	if hostCutoffCalibrationTimeout < 137*time.Second {
+		t.Errorf("hostCutoffCalibrationTimeout = %s, but the calibration measured 137 s on the macOS runner",
+			hostCutoffCalibrationTimeout)
+	}
+}
+
+// Sample 1 is inside the budget. Before waired-agent#579 the budget was
+// consulted only at `sample > 1`, so the first sample ran until
+// hostCutoffProbeTimeout no matter what the budget said — which is how one
+// measurement occupied the window the bundled download was waiting behind.
+func TestMeasureHostCutoff_SampleOneIsInsideTheBudget(t *testing.T) {
+	block := make(chan struct{})
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		n := requests
+		mu.Unlock()
+		if n == 1 { // the calibration answers; the sample never does
+			body, _ := json.Marshal(calibrationCounters)
+			_, _ = w.Write(body)
+			return
+		}
+		<-block
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(block) })
+
+	started := time.Now()
+	_, err := measureHostCutoff(context.Background(), hostCutoffDeps{
+		BaseURL: srv.URL, EngineModel: hostCutoffFixtureTag,
+		HTTPClient: srv.Client(), Logger: slog.New(slog.DiscardHandler),
+		Nonce: "sample1", MeasureBudget: 200 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("a sample that never answered produced no error")
+	}
+	// The bound, not the exact figure: what must not happen is waiting
+	// hostCutoffProbeTimeout for a budget that said 200 ms.
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("measureHostCutoff took %s on a 200 ms budget — sample 1 is outside it again", elapsed)
+	}
+}
+
+// The calibration cannot eat the budget. It sends 50 filler lines with
+// num_predict:1; giving it the ceiling a 21k-token prefill gets is what let it
+// consume a whole measurement before any sample ran.
+func TestMeasureHostCutoff_TheCalibrationCannotEatTheBudget(t *testing.T) {
+	block := make(chan struct{})
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		n := requests
+		mu.Unlock()
+		if n == 1 { // the calibration hangs; the samples answer
+			<-block
+			return
+		}
+		body, _ := json.Marshal(cpuOnlyCounters)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(block) })
+
+	started := time.Now()
+	m, err := measureHostCutoff(context.Background(), hostCutoffDeps{
+		BaseURL: srv.URL, EngineModel: hostCutoffFixtureTag,
+		HTTPClient: srv.Client(), Logger: slog.New(slog.DiscardHandler),
+		Nonce:              "calib",
+		MeasureBudget:      2 * time.Second,
+		CalibrationTimeout: 100 * time.Millisecond,
+	})
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("measureHostCutoff took %s — the calibration is unbounded again", elapsed)
+	}
+	// A calibration that times out is soft: the seed estimate stands in and
+	// the samples still run. That is the pre-existing contract at
+	// host_cutoff_probe.go's "using the seed estimate" arm; this only pins
+	// that bounding it did not turn it fatal.
+	if err != nil {
+		t.Fatalf("a timed-out calibration ended the whole measurement: %v", err)
+	}
+	if !m.Probe.Measured() {
+		t.Fatal("no usable measurement after a timed-out calibration; the seed estimate should have carried it")
+	}
+}
+
+// One ensureHostSpeedMeasured call is bounded end to end — the probe-download
+// wait and the measurement together — so the bundled download waiting behind
+// it (inference_prepull_hold.go) has a ceiling it can be reasoned about.
+func TestEnsureHostSpeedMeasured_IsBoundedByTheInstallWindow(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	eng.mu.Lock()
+	eng.block = block
+	eng.mu.Unlock()
+	p.hostSpeedWindow = 200 * time.Millisecond
+
+	started := time.Now()
+	probe, measured := p.ensureHostSpeedMeasured(context.Background())
+	elapsed := time.Since(started)
+
+	if measured {
+		t.Fatalf("an engine that never answered produced a measurement: %+v", probe)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("ensureHostSpeedMeasured took %s on a 200 ms window", elapsed)
+	}
+	if p.hostSpeedNow() != nil {
+		t.Error("a measurement that never completed was published anyway")
+	}
+}
+
+// A caller that waited out the window still gets the first caller's answer.
+//
+// The deadline is anchored before the single-flight lock so a queued caller
+// cannot add a second window to the one it just waited through. That makes it
+// possible to acquire the lock with nothing left — and the cache read has to
+// happen on the PARENT context anyway, or engineVersionFor returns "" on the
+// dead one, hostSpeedStillApplies rejects the empty version, and the caller
+// throws away a perfectly good measurement and re-measures.
+func TestEnsureHostSpeedMeasured_AQueuedCallerStillReadsThePublishedMeasurement(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
+
+	if _, measured := p.ensureHostSpeedMeasured(context.Background()); !measured {
+		t.Fatal("the first call did not measure")
+	}
+	before := len(eng.generateBodies())
+
+	// Enter with a window that has already run out, which is what a caller
+	// that queued behind a full-length measurement sees.
+	p.hostSpeedWindow = time.Nanosecond
+	probe, measured := p.ensureHostSpeedMeasured(context.Background())
+	if !measured {
+		t.Fatal("the queued caller re-measured instead of reusing the published figure — " +
+			"the cache read is on the deadline ctx, not the parent")
+	}
+	if !probe.Measured() {
+		t.Fatalf("the reused probe is not a measurement: %+v", probe)
+	}
+	if after := len(eng.generateBodies()); after != before {
+		t.Fatalf("/api/generate requests %d -> %d: the queued caller measured again", before, after)
 	}
 }
