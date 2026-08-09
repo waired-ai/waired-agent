@@ -2467,13 +2467,15 @@ if ($script:Skip -gt 0) {
 # WITHOUT -Contract: the 71 behind -WithInference counts Assert-Inference's tail
 # and none of the lean block, the 89 behind -Contract counts the lean block and
 # a pile of contract asserts, and neither difference is separable by arithmetic.
-# So it is MEASURED, the way this file has asked for since #505.
+# So it is MEASURED, the way this file has asked for since #505: run
+# 31316424716's -EngineOnly leg executed 75 (75 passed, 0 failed, 0 warn,
+# 0 skipped) and that is the floor.
 #
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 89 } else { 71 }
+    $floor = if ($Contract) { 89 } elseif ($EngineOnly) { 75 } else { 71 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1

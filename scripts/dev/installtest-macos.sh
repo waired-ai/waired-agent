@@ -1481,10 +1481,11 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 #
 # --engine-only is a THIRD configuration: it does not set INFER, so it keeps
 # the whole lean engine-less block above and adds its own six on top of it.
-# 50 is that arithmetic rather than a fresh measurement, and it is sound only
-# because assert_engine_only_install_macos contributes a fixed six whichever
-# way each one lands — no early return, no conditional assert. Re-measure it
-# the moment that stops being true.
+# 50 was derived that way (44 + 6) and then CONFIRMED — run 31316424716's
+# --engine-only leg executed exactly 50, 0 failed. The derivation is sound
+# only because assert_engine_only_install_macos contributes a fixed six
+# whichever way each one lands (no early return, no conditional assert), so
+# re-measure the moment that stops being true.
 case "$TIER" in
   1) floor=24 ;;
   # 31 shared + the lean-only engine-less block:
