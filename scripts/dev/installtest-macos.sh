@@ -458,14 +458,18 @@ assert_inference_macos() {
   #
   # desired_state is the field the tray reads for the same reason: it is the
   # operator's intent, independent of SubsystemState's engine health.
-  local desired
-  desired="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null \
-    | grep -oE '"desired_state"[[:space:]]*:[[:space:]]*"[a-z]+"' \
+  # One read, two facts — see the Linux twin in lib/installtest-enroll.sh for
+  # why turned_inference_off rides along.
+  local desired_json desired by_cutoff
+  desired_json="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
+  desired="$(printf '%s' "$desired_json" | grep -oE '"desired_state"[[:space:]]*:[[:space:]]*"[a-z]+"' \
     | grep -oE '"[a-z]+"$' | tr -d '"' || true)"
+  by_cutoff=false
+  it_json_true "$(it_json_object "$desired_json" host_speed)" turned_inference_off && by_cutoff=true
   case "$desired" in
     enabled) ok "local inference is on (mgmt API desired_state=enabled)" ;;
     "")      bad "the daemon published no desired_state — cannot tell an enabled host from a disabled one" ;;
-    *)       bad "local inference is off (mgmt API desired_state=$desired)" ;;
+    *)       bad "local inference is off (mgmt API desired_state=$desired; the host-speed cutoff turned it off: $by_cutoff)" ;;
   esac
 
   # The end-of-init benchmark (offerBenchmark) must report a THROUGHPUT NUMBER.

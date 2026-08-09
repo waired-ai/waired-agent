@@ -618,7 +618,14 @@ function Assert-Inference {
     try { $desired = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).desired_state } catch { }
     if ($desired -eq 'enabled') { ItOk "local inference is on (mgmt API desired_state=enabled)" }
     elseif ([string]::IsNullOrEmpty($desired)) { ItBad "the daemon published no desired_state -- cannot tell an enabled host from a disabled one" }
-    else { ItBad "local inference is off (mgmt API desired_state=$desired)" }
+    else {
+        # turned_inference_off names WHICH thing turned it off: it is the
+        # host-speed cutoff's own claim, and it stops being made the moment
+        # anything else moves the toggle (HostSpeedStatus). Without it a red
+        # here needs a second run to tell a cutoff from an operator.
+        $byCutoff = [bool]$st.host_speed.turned_inference_off
+        ItBad "local inference is off (mgmt API desired_state=$desired; the host-speed cutoff claims this: turned_inference_off=$byCutoff)"
+    }
 
     # 4) benchmark ran in the init transcript (offerBenchmark): require a
     #    THROUGHPUT NUMBER (tok/s | tokens/s). Mirrors installtest-enroll.sh

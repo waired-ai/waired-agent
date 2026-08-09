@@ -1319,14 +1319,22 @@ assert_inference() {
   # installtest-macos.sh for why the config file is the wrong source
   # (waired-agent#552). desired_state is planInitialInference's answer:
   # install-time default, persisted toggle and flag, already folded.
-  local desired
-  desired="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null \
-    | grep -oE '"desired_state"[[:space:]]*:[[:space:]]*"[a-z]+"' \
+  # One read, two facts, so they cannot disagree: `desired_state` says the
+  # toggle is off, and `host_speed.turned_inference_off` says whether the
+  # #496 cutoff is what turned it off. That flag is the cutoff's own claim
+  # and stops being made the moment anything else moves the toggle
+  # (HostSpeedStatus), so the pair names the culprit in the red's first
+  # line instead of costing a second run.
+  local desired_json desired by_cutoff
+  desired_json="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
+  desired="$(printf '%s' "$desired_json" | grep -oE '"desired_state"[[:space:]]*:[[:space:]]*"[a-z]+"' \
     | grep -oE '"[a-z]+"$' | tr -d '"' || true)"
+  by_cutoff=false
+  it_json_true "$(it_json_object "$desired_json" host_speed)" turned_inference_off && by_cutoff=true
   case "$desired" in
     enabled) ok "local inference is on (mgmt API desired_state=enabled)" ;;
     "")      bad "the daemon published no desired_state — cannot tell an enabled host from a disabled one" ;;
-    *)       bad "local inference is off (mgmt API desired_state=$desired)" ;;
+    *)       bad "local inference is off (mgmt API desired_state=$desired; the host-speed cutoff turned it off: $by_cutoff)" ;;
   esac
 
   # The end-of-init benchmark (offerBenchmark, non-bypass) must report a
