@@ -63,6 +63,20 @@ const (
 	// agent. One capability answers both questions.
 	CapabilityOnboardingV3 = "onboarding-v3"
 
+	// CapabilityOnboardingV4 declares that this agent understands the
+	// operator's explicit local-AI answer (waired-agent#597): the
+	// signed-map field InferenceState.DesiredInference, applied as the
+	// same persisted soft-disable / re-enable a person's own
+	// `waired inference off|on` writes.
+	//
+	// The field needs the gate for the reason V2 and V3 each state: it
+	// rides the signed map, so an agent that does not know it drops it
+	// on canonical re-marshal and fails verification. And the READER
+	// needs the constant regardless — a wizard that cannot tell "this
+	// agent will never act on off" from "it has not acted yet" would
+	// wait forever on every older agent.
+	CapabilityOnboardingV4 = "onboarding-v4"
+
 	// CapabilityContextWindowV1 declares that this agent understands
 	// InferenceState.ContextWindow — the window a device says its engine
 	// is loaded with, which the requesting router uses to decide whether

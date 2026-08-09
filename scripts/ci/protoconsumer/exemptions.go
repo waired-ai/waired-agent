@@ -127,6 +127,8 @@ var receiveOnly = []exemption{
 		"CP-injected onboarding target (which coding agents to configure); the agent reads it"},
 	{reflect.TypeFor[signer.InferenceState](), "DesiredModelGen",
 		"CP-injected retry generation for the model download; the agent reads it to re-admit the pull"},
+	{reflect.TypeFor[signer.InferenceState](), "DesiredInference",
+		"CP-injected explicit local-AI answer (on/off); the agent reads it to apply the soft toggle (#597)"},
 }
 
 // producedInProto: the proto module writes it itself. Not every package
