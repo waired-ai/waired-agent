@@ -889,6 +889,123 @@ IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
 # installtest-windows.ps1.
 IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading'
 
+# The /waired/v1/inference/status field NAMES it_model_ready_state greps for.
+# Not init wording — JSON keys, owned by
+# internal/management/inference_handlers.go (ActiveSelection, HostSpeedStatus,
+# and the no_model_selected flag) — but here for exactly the reason the
+# alternations above are: this leg's model verdict is built by matching these
+# literals out of a payload, so a field the daemon renamed reads as "nothing
+# decided yet" and the leg goes red blaming the download for a rename.
+#
+#   no_model_selected  the operator's standing "no model now" choice (#586),
+#                      which is terminal — nothing is coming, so stop polling
+#   host_speed         the #496 measurement, and the object probe_model_id
+#                      lives in
+#   probe_model_id     which model the measurement pulled — what lets a red
+#                      say "this host got a probe, not a pick" (#573)
+#
+# Checked, not asserted at runtime: all three are `omitempty`, so absence is a
+# legitimate state (no measurement yet; no standing choice) and a presence
+# assert would fail on a healthy host. The guard is the right place — it fails
+# lint in the PR that renames the field, which is earlier than the leg could
+# have told anyone anyway.
+#
+# Same mirror-and-guard rule as the alternations above: installtest-macos.sh
+# and installtest-windows.ps1 carry the identical literal.
+#
+# shellcheck disable=SC2034  # read by scripts/ci/harness-failure-strings-guard.sh,
+# not by this script: the literals themselves are inlined in the readers below,
+# and this declaration is what lets the guard find and cross-check them.
+IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id'
+
+# --- reading the inference status --------------------------------------
+#
+# Four small readers instead of one jq call: jq is not on every guest image
+# these legs run against, and the two objects being read are flat by
+# construction, so a brace-free match is exact rather than approximate.
+#
+# it_json_object <json> <key> — the {...} value of an object key.
+#
+# Safe ONLY for objects whose own values contain no nested braces. The two
+# read here qualify by construction: ActiveSelection is five strings and a
+# string array, HostSpeedStatus is scalars only
+# (internal/management/inference_handlers.go). The closing quote in the
+# pattern is what stops "active" from matching "active_endpoints".
+it_json_object() {
+  printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\{[^}]*\}" | head -1 || true
+}
+
+# it_json_str <json> <field> — a string field's value. Scope it to an object
+# first when the field name is not unique in the payload: "model_id" appears
+# on active, on available_update and inside benchmark_recommendation.
+it_json_str() {
+  printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 |
+    sed -E 's/.*:[[:space:]]*"(.*)"$/\1/' || true
+}
+
+# it_json_true <json> <field> — 0 when the field is literally true.
+it_json_true() {
+  printf '%s' "$1" | grep -qE "\"$2\"[[:space:]]*:[[:space:]]*true"
+}
+
+# it_models_ready <json> — the ids in models.ready, one per line. `sed 1d`
+# drops the key itself, which is the first quoted token the slice matches.
+it_models_ready() {
+  printf '%s' "$1" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | head -1 |
+    grep -oE '"[^"]+"' | sed 1d | tr -d '"' || true
+}
+
+# it_model_ready_state <json> — what the daemon says about the model this leg
+# is waiting for. Echoes exactly one of:
+#
+#   ready <id>   the daemon is COMMITTED to serving <id>, and <id> is on disk
+#   none         the operator's standing "no model now" choice (#586)
+#   probe <id>   the only weights on disk are #496's host-cutoff probe and
+#                nothing was selected — a probe, not a pick (#573)
+#   pending      nothing decided yet
+#
+# Keyed on `active` — "the engine + model the agent is committed to serving" —
+# rather than on models.ready being non-empty. models.ready is "every model on
+# disk and loadable", and the cutoff probe lands there like any other pull, so
+# a probe and a pick are indistinguishable from that field alone. That is
+# #573: a green `ok` naming the probe, on a host where selection declined and
+# the 1 GB download was the measurement.
+#
+# Deliberately matches NO model id literal. The id comes from the daemon, so a
+# catalog change needs no harness edit and this cannot silently start reading
+# "not ready" the way a vendor-name match would (#322) — the rule that comment
+# in installtest-windows.ps1 states, kept by asking the daemon which id it
+# committed to instead of by knowing the answer.
+it_model_ready_state() {
+  local json="$1" id ready probe
+  id="$(it_json_str "$(it_json_object "$json" active)" model_id)"
+  ready="$(it_models_ready "$json")"
+  if [ -n "$id" ] && printf '%s\n' "$ready" | grep -qxF "$id"; then
+    printf 'ready %s\n' "$id"; return 0
+  fi
+  # subsystem_state "ready" is strictly stronger than the arm above — it needs
+  # an active selection whose model is ready (cmd/waired-agent/inference.go,
+  # subsystemState) — so it cannot be satisfied by the probe. Kept as a second
+  # accepting arm rather than dropped: it is what the assert accepted before
+  # #573, and removing an accepting arm is how a fix turns a legitimate green
+  # red.
+  if printf '%s' "$json" | grep -qE '"subsystem_state"[[:space:]]*:[[:space:]]*"ready"'; then
+    printf 'ready %s\n' "${id:-(ready)}"; return 0
+  fi
+  if it_json_true "$json" no_model_selected; then
+    printf 'none\n'; return 0
+  fi
+  # Only when NOTHING was selected. An active selection whose weights have not
+  # landed yet is the ordinary state for most of this poll — the probe is ~1 GB
+  # and the pick is 20-45 GB — and calling that "a probe, not a pick" would put
+  # a false claim in the red every time a download simply ran long.
+  probe="$(it_json_str "$(it_json_object "$json" host_speed)" probe_model_id)"
+  if [ -z "$id" ] && [ -n "$probe" ] && [ "$ready" = "$probe" ]; then
+    printf 'probe %s\n' "$probe"; return 0
+  fi
+  printf 'pending\n'
+}
+
 # _it_wait_inference_ready — poll the agent mgmt API's inference status
 # until the bundled model is ready in the waired-owned engine, proving the
 # install -> enroll -> engine-spawn -> model-pull tail ran. Mirrors
@@ -901,17 +1018,22 @@ IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still
 # budget absorbs the harness's post-init `systemctl restart` re-check tail.
 # Echoes the last status JSON; returns 0 when ready, 1 on timeout / a
 # terminal failure state.
+#
+# "Ready" is it_model_ready_state's verdict, not "models.ready is non-empty":
+# the #496 cutoff probe lands in models.ready like any other pull, so the old
+# test returned 0 on a host that had a probe and no selection (#573).
 _it_wait_inference_ready() {
   local guest="$1" _ out state
   for _ in $(seq 1 60); do          # ~5 min; CPU model pull is minutes-scale
     out="$(gx "$guest" curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
-    if printf '%s' "$out" | grep -qE '"subsystem_state"[[:space:]]*:[[:space:]]*"ready"'; then
-      printf '%s' "$out"; return 0
-    fi
-    # models.ready lists a loaded qwen/coder model (the only json:"ready" key).
-    if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[[:space:]]*"[^"]' >/dev/null; then
-      printf '%s' "$out"; return 0
-    fi
+    case "$(it_model_ready_state "$out")" in
+      ready\ *)
+        printf '%s' "$out"; return 0 ;;
+      none)
+        # The operator's standing "no model now" choice (#586). Nothing is
+        # coming, so waiting out the budget only delays the red.
+        printf '%s' "$out"; return 1 ;;
+    esac
     # Bail early on a terminal state instead of burning the whole budget.
     # (no_engine/initializing are transient during engine cold start.)
     state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
@@ -1072,7 +1194,7 @@ assert_serving_ollama() {
 # (mgmt API on :9476, NOT a bare `ollama list` on :11434 — #567), inference
 # enabled in persisted config, and a benchmark figure in the init transcript.
 assert_inference() {
-  local guest="$1" name initlog tps notready out model
+  local guest="$1" name initlog tps notready out
 
   name="$(_it_dev_name "$guest")"
   initlog="$IT_LOGDIR/init-$name.log"
@@ -1110,11 +1232,24 @@ assert_inference() {
   # agent pulls there, NOT into the upstream default :11434. Read readiness
   # from the mgmt API and poll until ready, never a bare `ollama list` (:11434,
   # always empty here, the original false negative).
+  local state
   if out="$(_it_wait_inference_ready "$guest")"; then
-    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oE '"[^"]+"' | sed -n 2p | tr -d '"' || true)"
-    ok "bundled model ready in waired store :9475 (${model:-ready}; via mgmt API)"
+    state="$(it_model_ready_state "$out")"
+    ok "bundled model ready in waired store :9475 (${state#ready }; the daemon's active selection, via mgmt API)"
   else
-    bad "bundled model not ready via mgmt API (deploy/pull failed?)"
+    state="$(it_model_ready_state "$out")"
+    case "$state" in
+      probe\ *)
+        # The #573 red. Reported by name because the alternative — "not ready"
+        # — sends the reader to the download, and on this host the download
+        # SUCCEEDED: it was the measurement's own 1 GB probe, and selection is
+        # what declined. See #579 for the defect this arm exists to surface.
+        bad "this host got a probe, not a pick: the only model in the waired store is the host-cutoff probe (${state#probe }), and the daemon committed to no selection (#573)" ;;
+      none)
+        bad "no model was selected on this host (mgmt API no_model_selected=true) — \`waired init --inference-enabled=true\` should have picked one" ;;
+      *)
+        bad "bundled model not ready via mgmt API (deploy/pull failed?)" ;;
+    esac
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     # Diagnostics from the RIGHT store (:9475), using the bundled binary.
     gx "$guest" sh -c "OLLAMA_HOST=127.0.0.1:9475 '$IT_BUNDLED_OLLAMA_BIN' list" 2>&1 | sed 's/^/    :9475 /' || true
@@ -1124,6 +1259,30 @@ assert_inference() {
     # only shows the agent's "not ready" wrapper. (gx runs as root in the
     # guest, same as the journalctl read above.)
     gx "$guest" sh -c 'tail -n 60 /var/lib/waired/runtimes/ollama/logs/engine.log 2>/dev/null || echo "(no engine.log)"' 2>&1 | sed 's/^/    engine.log| /' || true
+  fi
+
+  # #496/#579: the one-time host-speed measurement. Asserted on the inference
+  # leg because it is what decides whether a model is downloaded at all — and
+  # because it runs inside init's window, so a leg that ends with no
+  # measurement published is the shape #579 is about. The figures go in the ok
+  # line so the nightly's job summary carries them: the 9m29s that opened #579
+  # was only recoverable by downloading engine.log from a failed run.
+  #
+  # Skipped when the daemon published nothing at all — the red above already
+  # named an unreachable daemon, and a second red would spread one cause over
+  # two lines.
+  local hs turn budget samples
+  if [ -z "$out" ]; then
+    it_warn "no inference status payload — skipping the host-speed assert"
+  else
+    hs="$(it_json_object "$out" host_speed)"
+    turn="$(printf '%s' "$hs" | grep -oE '"turn_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' || true)"
+    budget="$(printf '%s' "$hs" | grep -oE '"budget_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' || true)"
+    samples="$(printf '%s' "$hs" | grep -oE '"samples"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' || true)"
+    case "$turn" in
+      ""|0|0.0) bad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (#579)" ;;
+      *)        ok "host speed measured (turn ${turn}s against a ${budget:-?}s budget; ${samples:-0} samples)" ;;
+    esac
   fi
 
   # Asked of the DAEMON, not of agent.json — see the darwin twin in

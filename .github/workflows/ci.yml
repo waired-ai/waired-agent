@@ -658,3 +658,11 @@ jobs:
       # (install-scripts has shellcheck but no PowerShell).
       - name: serving-engine asserts (3-OS parity + every branch)
         run: bash scripts/dev/installtest-serving-asserts.sh
+
+      # Same reason, one assert along (#573): the model-readiness verdict also
+      # runs only in installtest-inference, and it spent months reporting the
+      # host-cutoff probe as the bundled model because `models.ready` cannot
+      # tell a probe from a pick. This drives all three copies over one shared
+      # fixture table.
+      - name: model-readiness verdict (3-OS parity over shared fixtures)
+        run: bash scripts/dev/installtest-model-ready-asserts.sh

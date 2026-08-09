@@ -80,6 +80,11 @@ IT_UNFIT_SKIP_RE='Non-interactive: skipping local AI'
 IT_PULL_DECLINE_RE='Not downloading. Re-run with --yes --force to download it anyway.'
 IT_PULL_QUEUED_RE='queued pull:'
 IT_PULL_REACHED_RE='queued pull:|cannot download'
+# Mirror of lib/installtest-enroll.sh's IT_STATUS_FIELDS_RE (waired-agent#573)
+# — see the comment there. Same guard checks these three copies agree and that
+# the product still publishes the fields.
+# shellcheck disable=SC2034  # read by the guard, not by this script.
+IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
@@ -296,6 +301,53 @@ assert_serving_ollama_macos() {
   esac
 }
 
+# --- reading the inference status (mirror of lib/installtest-enroll.sh) -----
+#
+# Five functions duplicated rather than sourced: this script installs onto the
+# host it runs on and cannot source the Linux library. See the comments there
+# for what each one is safe for. scripts/dev/installtest-model-ready-asserts.sh
+# drives all three copies through the same scenarios per PR and fails on the
+# first disagreement — these run only in the dispatch-only inference leg, so a
+# copy that had quietly stopped being able to fail would sit green for a long
+# time (the shape #573 itself is).
+it_json_object() {
+  printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\{[^}]*\}" | head -1 || true
+}
+
+it_json_str() {
+  printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 |
+    sed -E 's/.*:[[:space:]]*"(.*)"$/\1/' || true
+}
+
+it_json_true() {
+  printf '%s' "$1" | grep -qE "\"$2\"[[:space:]]*:[[:space:]]*true"
+}
+
+it_models_ready() {
+  printf '%s' "$1" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | head -1 |
+    grep -oE '"[^"]+"' | sed 1d | tr -d '"' || true
+}
+
+it_model_ready_state() {
+  local json="$1" id ready probe
+  id="$(it_json_str "$(it_json_object "$json" active)" model_id)"
+  ready="$(it_models_ready "$json")"
+  if [ -n "$id" ] && printf '%s\n' "$ready" | grep -qxF "$id"; then
+    printf 'ready %s\n' "$id"; return 0
+  fi
+  if printf '%s' "$json" | grep -qE '"subsystem_state"[[:space:]]*:[[:space:]]*"ready"'; then
+    printf 'ready %s\n' "${id:-(ready)}"; return 0
+  fi
+  if it_json_true "$json" no_model_selected; then
+    printf 'none\n'; return 0
+  fi
+  probe="$(it_json_str "$(it_json_object "$json" host_speed)" probe_model_id)"
+  if [ -z "$id" ] && [ -n "$probe" ] && [ "$ready" = "$probe" ]; then
+    printf 'probe %s\n' "$probe"; return 0
+  fi
+  printf 'pending\n'
+}
+
 assert_inference_macos() {
   local ollama_bin="$STATE_DIR/runtimes/ollama/bin/ollama" tps notready
 
@@ -327,11 +379,19 @@ assert_inference_macos() {
   # `ollama list` (which targets :11434 and is always empty here, the original
   # false negative). Poll briefly to absorb any residual async tail.
   local infurl="http://127.0.0.1:9476/waired/v1/inference/status"
-  local out="" state model ready=0 _
+  # "Ready" is it_model_ready_state's verdict, not "models.ready is non-empty":
+  # the #496 cutoff probe lands in models.ready like any other pull, so the old
+  # test broke here on a host that had a probe and no selection (#573).
+  local out="" state verdict ready=0 _
   for _ in $(seq 1 60); do          # ~5 min; CPU model pull is minutes-scale
     out="$(curl -fsS --max-time 10 "$infurl" 2>/dev/null || true)"
-    if printf '%s' "$out" | grep -qE '"subsystem_state"[[:space:]]*:[[:space:]]*"ready"'; then ready=1; break; fi
-    if printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[[:space:]]*"[^"]' >/dev/null; then ready=1; break; fi
+    verdict="$(it_model_ready_state "$out")"
+    case "$verdict" in
+      ready\ *) ready=1; break ;;
+      # The operator's standing "no model now" choice (#586) is terminal:
+      # nothing is coming, so waiting out the budget only delays the red.
+      none)     break ;;
+    esac
     state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
     # engine_failed is terminal too (waired-agent#29): the engine crashed and
     # automatic recovery either is mid-flight (which shows as "starting") or
@@ -341,11 +401,18 @@ assert_inference_macos() {
     case "$state" in pull_failed|disabled|stopped|engine_failed) break ;; esac
     sleep 5
   done
+  verdict="$(it_model_ready_state "$out")"
   if [ "$ready" = 1 ]; then
-    model="$(printf '%s' "$out" | grep -oE '"ready"[[:space:]]*:[[:space:]]*\[[^]]*\]' | grep -oE '"[^"]+"' | sed -n 2p | tr -d '"' || true)"
-    ok "bundled model ready in waired store :9475 (${model:-ready}; via mgmt API)"
+    ok "bundled model ready in waired store :9475 (${verdict#ready }; the daemon's active selection, via mgmt API)"
   else
-    bad "bundled model not ready via mgmt API (deploy/pull failed?)"
+    case "$verdict" in
+      probe\ *)
+        bad "this host got a probe, not a pick: the only model in the waired store is the host-cutoff probe (${verdict#probe }), and the daemon committed to no selection (#573)" ;;
+      none)
+        bad "no model was selected on this host (mgmt API no_model_selected=true) — \`waired init --inference-enabled=true\` should have picked one" ;;
+      *)
+        bad "bundled model not ready via mgmt API (deploy/pull failed?)" ;;
+    esac
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     # Diagnostics from the RIGHT store (:9475), using the bundled binary.
     sudo test -x "$ollama_bin" \
@@ -361,6 +428,24 @@ assert_inference_macos() {
     else
       echo "    (no ollama engine.log at $englog)" >&2
     fi
+  fi
+
+  # #496/#579: the one-time host-speed measurement — see the Linux twin in
+  # lib/installtest-enroll.sh for why this leg asserts it. This runner is the
+  # one that measured 432 s per sample against a 45 s budget, so the figures in
+  # the ok line are the early warning for a cap that has stopped fitting.
+  local hs turn budget samples
+  if [ -z "$out" ]; then
+    it_warn "no inference status payload — skipping the host-speed assert"
+  else
+    hs="$(it_json_object "$out" host_speed)"
+    turn="$(printf '%s' "$hs" | grep -oE '"turn_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' || true)"
+    budget="$(printf '%s' "$hs" | grep -oE '"budget_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' || true)"
+    samples="$(printf '%s' "$hs" | grep -oE '"samples"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' || true)"
+    case "$turn" in
+      ""|0|0.0) bad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (#579)" ;;
+      *)        ok "host speed measured (turn ${turn}s against a ${budget:-?}s budget; ${samples:-0} samples)" ;;
+    esac
   fi
 
   # Asked of the DAEMON, not of agent.json. The config file carries the
@@ -1277,7 +1362,15 @@ case "$TIER" in
   #   +4  assert_reinit_engine_optout_macos  (waired-agent#551)
   #   +4  assert_reinit_default_unfit_macos  (waired-agent#590)
   #   +5  assert_models_pull_confirm_macos   (waired-agent#590)
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=35; else floor=44; fi ;;
+  # waired-agent#573 splits the inference arm off: assert_inference_macos gained
+  # ONE always-run assert (the #496 host-speed measurement) and
+  # assert_daemon_engine_macos gained nothing, so a single 36 would have made
+  # the daemon-engine leg red for an assert it never runs. Arithmetic on a
+  # measured floor — confirm against the first green
+  # `gh workflow run installtest-inference.yml -f os=macos` and correct here.
+  *) if [ "$INFER" = 1 ]; then floor=36
+     elif [ "$DAEMON_ENGINE" = 1 ]; then floor=35
+     else floor=44; fi ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then

@@ -481,12 +481,21 @@ case "$TIER" in
   #   +4  assert_reinit_default_unfit   (waired-agent#590 / #605)
   #   +5  assert_models_pull_confirm    (waired-agent#590)
   # A richer leg trades that block for assert_inference / assert_daemon_engine
-  # and their own tails; 27 is the measured floor for those and stays.
+  # and their own tails; 27 was the measured floor across both.
   #
   # --engine-only keeps the whole engine-less block (it does not set INFER)
   # and adds its own 6 on top, so it is the lean floor plus 6
   # (waired-agent#590).
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=27
+  #
+  # waired-agent#573 splits the INFER arm off the DAEMON_ENGINE one:
+  # assert_inference gained ONE always-run assert (the #496 host-speed
+  # measurement) and assert_daemon_engine gained nothing, so a single 28 would
+  # have made the daemon-engine leg red for an assert it never runs.
+  # Arithmetic on a measured floor, not a fresh measurement — confirm against
+  # the first green `gh workflow run installtest-inference.yml -f os=linux`
+  # and correct here.
+  *) if [ "$INFER" = 1 ]; then floor=28
+     elif [ "$DAEMON_ENGINE" = 1 ]; then floor=27
      elif [ "$ENGINE_ONLY" = 1 ]; then floor=42
      else floor=36; fi ;;
 esac
