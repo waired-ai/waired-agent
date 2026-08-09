@@ -171,7 +171,6 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 	var pushCount int32
 	var capturedState signer.InferenceState
 	cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&pushCount, 1)
 		body, _ := io.ReadAll(r.Body)
 		sig, _ := base64.StdEncoding.DecodeString(r.Header.Get("X-Waired-Body-Signature"))
 		if !ed25519.Verify(ed25519.PublicKey(machinePub), body, sig) {
@@ -182,6 +181,13 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 		}
 		_ = json.Unmarshal(body, &req)
 		capturedState = req.State
+		// AFTER capturedState, never before. The counter is what
+		// probeRunUntil waits on, so incrementing it first would let the
+		// run end — and the assertions below read capturedState — while
+		// this handler was still filling it in. Ordered this way the
+		// atomic pair is also the happens-before edge that makes the
+		// unsynchronised read safe.
+		atomic.AddInt32(&pushCount, 1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","content_changed":true}`))
 	}))
