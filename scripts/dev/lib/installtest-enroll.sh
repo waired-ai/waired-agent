@@ -925,6 +925,34 @@ IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still
 # and this declaration is what lets the guard find and cross-check them.
 IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id'
 
+# The daemon-log lines the evidence dumps grep for when a model did not arrive
+# in time. Two groups, and the second is the whole reason this is a named
+# literal rather than three inlined copies:
+#
+#   boot pre-pull / bundled model    what the download was waiting for, what
+#                                    released it, and which model was chosen
+#   host speed / host cutoff /       what the #496 measurement was doing while
+#   below the recommended spec /     the download waited, and whether it
+#   measuring whether this host      reached a verdict at all (#579)
+#
+# The second group was missing everywhere, and that is not a detail. On run
+# 31316731884 the macOS leg failed with the bundled model absent, and the same
+# status payload carried `turn_seconds: 542.3` against a 45 s budget — the
+# measurement had taken 7 min 12 s of a 10 min window and finished 53 seconds
+# before init gave up. None of that was in the job log: the dump ran, matched
+# `api/pull` alone, and printed one line. "The download was slow" and "the
+# measurement was in front of the download" are different failures with
+# different fixes, and the pattern could not tell them apart.
+#
+# `api/pull` is deliberately OUTSIDE this alternation and appended at each use
+# site. It is ollama's own request log surfaced through `waired logs`, not a
+# string the agent's Go source contains, so a guard entry for it could never
+# pass — the same reason IT_PULL_QUEUED_RE is left out above.
+#
+# Same mirror-and-guard rule as the alternations above: installtest-macos.sh
+# and installtest-windows.ps1 carry the identical literal.
+IT_DAEMON_EVIDENCE_RE='boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host'
+
 # --- reading the inference status --------------------------------------
 #
 # Four small readers instead of one jq call: jq is not on every guest image
@@ -1061,11 +1089,12 @@ _it_wait_inference_ready() {
 # three harnesses ask this question the same way — and the Windows leg, which
 # had no engine-log dump at all, gets one for free.
 #
-# The pattern is the three facts that settle where the time went: the boot
-# pre-pull's hold says what it is waiting for and what released it, and
-# `POST /api/pull` carries the download's real duration. `grep .` is what
-# makes an empty result say so — a bare grep would print nothing and read as
-# "the dump did not run".
+# The pattern is IT_DAEMON_EVIDENCE_RE plus `api/pull` — the facts that settle
+# where the time went. The boot pre-pull's hold says what it is waiting for and
+# what released it, `POST /api/pull` carries the download's real duration, and
+# the host-speed lines say what was standing in front of it (#579). `grep .` is
+# what makes an empty result say so — a bare grep would print nothing and read
+# as "the dump did not run".
 # it_hostspeed_evidence — the daemon's own account of the #496 host-speed
 # measurement and the selection it fed, for the arms that die on init's exit
 # code.
@@ -1082,9 +1111,9 @@ _it_wait_inference_ready() {
 # that reads the service log and the bundled engine's log on all three OSes.
 it_hostspeed_evidence() {
   local guest="$1"
-  gx "$guest" sh -c 'waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-hs.txt >/dev/null 2>&1
-    grep -iE "host speed|host cutoff|below the recommended spec|selected bundled model|measuring whether this host" /tmp/it-hs.txt 2>/dev/null | tail -20 |
-      grep . || echo "(no host-speed lines in the daemon log)"' 2>&1 |
+  gx "$guest" sh -c "waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-hs.txt >/dev/null 2>&1
+    grep -iE '$IT_DAEMON_EVIDENCE_RE|api/pull' /tmp/it-hs.txt 2>/dev/null | tail -40 |
+      grep . || echo '(no host-speed lines in the daemon log)'" 2>&1 |
     sed 's/^/    agent| /' >&2 || true
   gx "$guest" sh -c 'curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"' 2>&1 |
     sed 's/^/    status| /' >&2 || true
@@ -1092,9 +1121,9 @@ it_hostspeed_evidence() {
 
 it_prepull_evidence() {
   local guest="$1"
-  gx "$guest" sh -c 'waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-logs.txt >/dev/null 2>&1
-    grep -iE "boot pre-pull|bundled model|api/pull" /tmp/it-logs.txt 2>/dev/null | tail -20 |
-      grep . || echo "(no pre-pull or pull lines in the daemon log)"' 2>&1 |
+  gx "$guest" sh -c "waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-logs.txt >/dev/null 2>&1
+    grep -iE '$IT_DAEMON_EVIDENCE_RE|api/pull' /tmp/it-logs.txt 2>/dev/null | tail -40 |
+      grep . || echo '(no pre-pull or pull lines in the daemon log)'" 2>&1 |
     sed 's/^/    agent| /' || true
 }
 
