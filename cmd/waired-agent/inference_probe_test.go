@@ -742,7 +742,6 @@ func capturingCP(t *testing.T) (*httptest.Server, func() int32, func() signer.In
 	var mu sync.Mutex
 	var last signer.InferenceState
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&count, 1)
 		body, _ := io.ReadAll(r.Body)
 		var req struct {
 			State signer.InferenceState `json:"state"`
@@ -751,6 +750,14 @@ func capturingCP(t *testing.T) (*httptest.Server, func() int32, func() signer.In
 		mu.Lock()
 		last = req.State
 		mu.Unlock()
+		// LAST, and that is the whole contract of this counter: probeRunUntil
+		// ends the run the instant pushes() goes non-zero and then reads
+		// lastState(). Incremented first — as it was — the counter means "a
+		// request arrived", so a reader could win the race against this
+		// handler's own unmarshal and see a zero-value InferenceState.
+		// Incremented here it means "a push is fully recorded", which is what
+		// every caller actually waits for.
+		atomic.AddInt32(&count, 1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","content_changed":true}`))
 	}))
