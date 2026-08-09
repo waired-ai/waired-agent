@@ -380,7 +380,14 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 			// 425, but startSetupBenchmark -> startBenchmarkJob does not:
 			// a control-plane-requested benchmark on a not-ready engine
 			// used to de-rate the node exactly the way #203 describes.
-			EngineReady:   p.EngineReady,
+			EngineReady: p.EngineReady,
+			// #582/#601: ready is not enough. This is the path `waired init`
+			// reaches (POST /inference/benchmark, or a join of the run one
+			// already started), and a fresh install reaches it with the
+			// host-speed probe's download still in flight — whose completion
+			// reconcile then restarts the engine under the warm-up.
+			EngineQuiet:   p.engineQuietForBench,
+			EngineGen:     p.engineProcessGen,
 			EngineModel:   engineModelForActive(p.cfg),
 			VariantID:     variantIDForActive(),
 			GPUModel:      firstGPU.Model,

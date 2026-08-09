@@ -33,18 +33,17 @@ func seedActiveReady(t *testing.T, p *agentInferenceProvider, modelID string) {
 	}
 }
 
-// notReadyBench is what RunBootBenchmark's readiness gate returns
+// notReadyBench is what RunBootBenchmark's readiness gates return
 // (inference_bench.go): Failed, because every #203 consumer gates on that
 // flag to skip an unusable measurement, plus the Outcome that says the
 // engine was never reached.
+//
+// Built by the production constructor rather than restated here, so the
+// two cannot drift — and so the busy-engine gate added for #582/#601,
+// which returns the same shape with a different reason, is covered by
+// every test below without a second fixture.
 func notReadyBench() BenchResult {
-	return BenchResult{
-		Capacity:  1,
-		VariantID: "q4-gguf",
-		Failed:    true,
-		Err:       "engine not ready",
-		Outcome:   benchOutcomeEngineNotReady,
-	}
+	return notReadyBenchResult(BenchDeps{VariantID: "q4-gguf"}, "engine not ready")
 }
 
 // TestRunBenchmark_NotReadyLeavesThroughThe425Door is #576.
