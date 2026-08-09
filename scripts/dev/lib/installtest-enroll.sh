@@ -802,8 +802,9 @@ IT_UNFIT_SKIP_RE='Non-interactive: skipping local AI'
 # The product line ends with an em dash clause ("— the AI software stays
 # ready"); only the ASCII head is matched, so a leg on a console that
 # mangles the dash still greps true. Registered in
-# scripts/ci/harness-failure-strings-guard.sh once the macOS/Windows
-# engine-only twins exist — that guard requires three agreeing copies.
+# scripts/ci/harness-failure-strings-guard.sh now that the macOS and
+# Windows engine-only twins exist — that guard requires three agreeing
+# copies, and it was the reason this one waited.
 IT_NO_MODEL_RE='No model selected'
 
 # The three strings assert_models_pull_confirm greps for. Kept as named

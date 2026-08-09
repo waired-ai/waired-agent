@@ -44,8 +44,8 @@
 #   now". Asserts that state is a FINISHED install — exit 0, no failure box,
 #   an engine on disk, and a standing choice the daemon keeps across a
 #   restart. Its own mode, and nightly: it installs a real engine from a
-#   release asset. Linux only for now (the interactive stdin choreography has
-#   no macOS/Windows twin yet — tracked on #590).
+#   release asset. Mirrored by installtest-macos.sh --engine-only and
+#   installtest-windows.ps1 -EngineOnly; all three run in the same nightly job.
 #
 # A system container is used for Tier 1/2 (fast); Tier 3 forces a VM.
 #

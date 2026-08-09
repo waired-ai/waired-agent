@@ -17,7 +17,7 @@
 # is that the harness and the producer agree on an exact string, so the check
 # has to be the exact string.
 #
-# Seven alternations are covered. Four are keyed on `waired init`'s transcript;
+# Eight alternations are covered. Six are keyed on `waired init`'s transcript;
 # one is a `waired models pull` transcript, which is the same problem on
 # a different command — the harnesses grep it as a present-assert AND an
 # absent-assert, so a rename would half-pass silently; and the last is not
@@ -36,6 +36,11 @@
 #   unfit-skip-note     the step-4 non-interactive default's skip note
 #                       (#584/#590) — the anti-vacuity assert of the
 #                       below-spec default probe
+#   no-model-line       the model picker acknowledging "don't download a model
+#                       now" (#586/#590) — the anti-vacuity assert of the
+#                       engine-only probe, and the one that tells an install
+#                       where the operator declined from one where the picker
+#                       never ran at all
 #   pull-decline        `waired models pull --yes` declining a model that does
 #                       not fit (#583/#590), asserted PRESENT for --yes and
 #                       ABSENT for --yes --force
@@ -142,6 +147,7 @@ check_set 'bench-not-ready'     'IT_BENCH_NOT_READY_RE'     'BenchNotReadyRe'   
 check_set 'engine-opt-out'      'IT_ENGINE_OPTOUT_RE'       'EngineOptOutRe'       || fail=1
 check_set 'install-failure-box' 'IT_INSTALL_FAILURE_BOX_RE' 'InstallFailureBoxRe'  || fail=1
 check_set 'unfit-skip-note'     'IT_UNFIT_SKIP_RE'          'UnfitSkipRe'          || fail=1
+check_set 'no-model-line'       'IT_NO_MODEL_RE'            'NoModelRe'            || fail=1
 check_set 'pull-decline'        'IT_PULL_DECLINE_RE'        'PullDeclineRe'        || fail=1
 check_set 'status-fields'       'IT_STATUS_FIELDS_RE'       'StatusFieldsRe'       || fail=1
 [ "${fail}" -eq 0 ] || exit 1

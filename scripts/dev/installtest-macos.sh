@@ -24,6 +24,12 @@
 #   inference enabled in the persisted config; and a benchmark figure in the init
 #   transcript (the macOS analog of lib/installtest-enroll.sh's assert_inference).
 #
+# --engine-only (pairs with --tier 2; waired-agent#590): its own mode. Install
+#   the AI software and answer the model picker with "don't download a model
+#   now", then assert that state is a FINISHED install — exit 0, an engine on
+#   disk, and a standing choice the daemon keeps across a restart. The darwin
+#   twin of installtest-run.sh's --engine-only.
+#
 # Since #520 the agent is a system LaunchDaemon (root, /Library/LaunchDaemons,
 # system/ launchctl domain) — boot-time and login-independent, exactly like the
 # Linux systemd unit and Windows SCM service. That removes the old per-user
@@ -38,6 +44,7 @@ TIER=1
 INFER=0
 INTEG=0
 DAEMON_ENGINE=0
+ENGINE_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --tier) shift; TIER="${1:?--tier needs N}" ;;
@@ -45,7 +52,8 @@ while [ $# -gt 0 ]; do
     --inference) INFER=1 ;;
     --integration) INTEG=1; INFER=1 ;;   # routing sentinel rides the inference engine
     --daemon-engine) DAEMON_ENGINE=1 ;;  # waired#835 §9/§11 daemon-path executor engine install
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    --engine-only) ENGINE_ONLY=1 ;;      # waired-agent#590 engine installed, no model chosen
+    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
@@ -80,6 +88,10 @@ IT_UNFIT_SKIP_RE='Non-interactive: skipping local AI'
 IT_PULL_DECLINE_RE='Not downloading. Re-run with --yes --force to download it anyway.'
 IT_PULL_QUEUED_RE='queued pull:'
 IT_PULL_REACHED_RE='queued pull:|cannot download'
+# Mirror of lib/installtest-enroll.sh's IT_NO_MODEL_RE (waired-agent#586/#590)
+# — see the comment there, including why only the ASCII head of the line is
+# matched. Same guard checks these three copies agree.
+IT_NO_MODEL_RE='No model selected'
 # Mirror of lib/installtest-enroll.sh's IT_STATUS_FIELDS_RE (waired-agent#573)
 # — see the comment there. Same guard checks these three copies agree and that
 # the product still publishes the fields.
@@ -800,6 +812,95 @@ assert_models_pull_confirm_macos() {
   _it_restore_host_memory_macos "#590 pull twin"
 }
 
+# assert_engine_only_install_macos: the darwin twin of
+# lib/installtest-enroll.sh's assert_engine_only_install
+# (waired-agent#590). See that function for the contract — "the AI
+# software is installed and no model was chosen" is a FINISHED install,
+# and the restart is what makes the answer a standing choice rather than
+# a transient one.
+#
+# THE ONE INTERACTIVE INIT ON THIS HARNESS, for the same reason it is on
+# the Linux one: every other init here passes --non-interactive, and
+# runInitModelPicker returns on that flag before it asks anything. One
+# line of stdin is the only way in, and one line is enough because
+# --inference-enabled=true silences the two questions in front of the
+# picker.
+#
+# Exactly six asserts, always — the floor counts on it.
+assert_engine_only_install_macos() {
+  local log="$WORK/engine-only.log" rc=0
+  local bin="$STATE_DIR/runtimes/ollama/bin/ollama"
+
+  it_log "installing an engine and answering the model picker with 0 (waired-agent#590)"
+  # The daemon has to WANT an engine — the two #590 probes above leave the
+  # toggle off, and the #551 probe before them turned it off too.
+  sudo "$BINDIR/waired" inference on --state-dir "$STATE_DIR" >/dev/null 2>&1 || \
+    it_warn "could not turn inference on before the #590 engine-only probe"
+
+  # `| tee`, not `>`, and PIPESTATUS — same two reasons as the #551 probe
+  # above. The index is [1], not [0]: printf is the head of this pipeline,
+  # so the CLI is the SECOND element. sudo hands its own stdin to the
+  # command it runs, and this host has passwordless sudo (asserted at
+  # startup), so nothing upstream consumes the line.
+  if printf '0\n' | sudo env WAIRED_NO_EMOJI=1 "$BINDIR/waired" init \
+        --control "$IT_CONTROL_URL" --device-name "$device" \
+        --inference-enabled=true --skip-integration \
+        --state-dir "$STATE_DIR" 2>&1 | tee "$log"; then
+    rc=0
+  else
+    rc="${PIPESTATUS[1]}"
+  fi
+
+  [ "$rc" = 0 ] \
+    && ok "an install that ends with no model chosen exits 0 (waired-agent#590)" \
+    || bad "init exited $rc after the operator chose not to download a model — that is a finished install, not a failure — see $log"
+  # Anti-vacuity, and the load-bearing one: without it every assert here
+  # would pass on a host where the picker never ran and the daemon's own
+  # auto-selection quietly applied instead (which is what #607 was).
+  grep -qF "$IT_NO_MODEL_RE" "$log" \
+    && ok "the picker asked and recorded the no-model answer" \
+    || bad "init never printed the no-model line — the picker did not run, so the asserts around it prove nothing — see $log"
+  grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
+    && bad "init reported an engine-only install as a failed install — see $log" \
+    || ok "an engine-only install is not reported as a failed install"
+  sudo test -x "$bin" \
+    && ok "the engine is installed ($bin) — this host runs AI, it just has no model yet" \
+    || bad "no engine at $bin — the point of this state is that the software IS installed — see $log"
+
+  _it_no_model_selected_macos \
+    && ok "the daemon publishes the standing no-model choice (mgmt API no_model_selected=true)" \
+    || bad "mgmt API does not report no_model_selected after the operator chose not to download a model"
+
+  # The restart is the whole point of the sixth assert: an answer that
+  # does not survive one is not a standing choice, and the #379 boot
+  # pre-pull is what would otherwise fetch a model nobody asked for.
+  sudo launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || \
+    it_warn "could not restart the daemon for the #590 engine-only probe"
+  _it_wait_enrolled_macos >/dev/null || \
+    it_warn "daemon did not report enrolled after the #590 engine-only restart"
+  _it_no_model_selected_macos \
+    && ok "the choice survives a restart — the boot pre-pull stands down (waired-agent#379)" \
+    || bad "no_model_selected is gone after a restart — the boot pre-pull is about to download a model nobody asked for"
+
+  if [ "$rc" != 0 ]; then
+    tail -n 25 "$log" | sed 's/^/    /' >&2
+    curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status 2>&1 | sed 's/^/    status| /' || true
+  fi
+
+  # Leave the host as we found it for anything after this one.
+  sudo "$BINDIR/waired" inference off --state-dir "$STATE_DIR" >/dev/null 2>&1 || \
+    it_warn "could not turn inference back off after the #590 engine-only probe"
+}
+
+# _it_no_model_selected_macos — is the daemon publishing the standing "run
+# without a model" choice? Twin of lib/installtest-enroll.sh's
+# _it_no_model_selected; see that one for why it reads the mgmt API's own
+# field rather than inferring from an empty model list.
+_it_no_model_selected_macos() {
+  curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null \
+    | grep -qE '"no_model_selected"[[:space:]]*:[[:space:]]*true'
+}
+
 assert_mgmt_socket_macos() {
   local sock=/var/run/waired/mgmt.sock out code
 
@@ -986,6 +1087,15 @@ sudo -n true 2>/dev/null || it_die "passwordless sudo required (system LaunchDae
 if [ "$DAEMON_ENGINE" = 1 ]; then
   { [ "$INFER" = 1 ] || [ "$INTEG" = 1 ]; } && it_die "--daemon-engine is its own mode; not with --inference/--integration"
   [ "$TIER" -ge 2 ] || it_die "--daemon-engine needs --tier 2 (it enrols to reach the executor)"
+fi
+
+# --engine-only (waired-agent#590) is its own mode for the same reason, plus
+# one of its own: its single init is INTERACTIVE, which every other mode's
+# --non-interactive would make unreachable.
+if [ "$ENGINE_ONLY" = 1 ]; then
+  { [ "$INFER" = 1 ] || [ "$INTEG" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; } && it_die \
+    "--engine-only is its own mode; not with --inference/--integration/--daemon-engine"
+  [ "$TIER" -ge 2 ] || it_die "--engine-only needs --tier 2 (it enrols before it asks about models)"
 fi
 
 # --- build the darwin tarball install.sh will consume -----------------------
@@ -1258,6 +1368,13 @@ if [ "$TIER" -ge 2 ]; then
   it_step "management write socket asserts (waired#838)"
   assert_mgmt_socket_macos
 
+  # LAST of the engine-less probes, because it is the one that ends this
+  # host's engine-less life: it installs one (waired-agent#590).
+  if [ "$ENGINE_ONLY" = 1 ]; then
+    it_step "engine installed, no model chosen (waired-agent#590)"
+    assert_engine_only_install_macos
+  fi
+
   if [ "$DAEMON_ENGINE" = 1 ]; then
     it_step "daemon-path executor engine-install asserts (waired#835 §9/§11)"
     assert_daemon_engine_macos
@@ -1361,6 +1478,13 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # floor is PER CONFIGURATION now, the way installtest-windows.ps1 has kept its
 # since #215: 35 was measured on the lean config and stays as the floor for
 # the richer ones, and lean adds the 9 the two new probes contribute.
+#
+# --engine-only is a THIRD configuration: it does not set INFER, so it keeps
+# the whole lean engine-less block above and adds its own six on top of it.
+# 50 is that arithmetic rather than a fresh measurement, and it is sound only
+# because assert_engine_only_install_macos contributes a fixed six whichever
+# way each one lands — no early return, no conditional assert. Re-measure it
+# the moment that stops being true.
 case "$TIER" in
   1) floor=24 ;;
   # 31 shared + the lean-only engine-less block:
@@ -1371,6 +1495,7 @@ case "$TIER" in
   # waired-agent#579 is open, so it contributes 0 on the leg that hits that
   # case. See the Linux twin in installtest-run.sh.
   *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=35
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=50   # 44 + assert_engine_only_install_macos's 6
      else floor=44; fi ;;
 esac
 executed=$((PASS + FAIL))
