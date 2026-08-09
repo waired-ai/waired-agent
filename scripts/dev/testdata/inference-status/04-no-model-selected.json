@@ -1,0 +1,1 @@
+{"subsystem_state":"awaiting_model","models":{"ready":["qwen3.5-0.8b"],"failed":[]},"active":null,"no_model_selected":true,"desired_state":"enabled","host_speed":{"turn_seconds":9.4,"budget_seconds":45,"samples":3,"probe_model_id":"qwen3.5-0.8b"}}

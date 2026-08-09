@@ -17,10 +17,12 @@
 # is that the harness and the producer agree on an exact string, so the check
 # has to be the exact string.
 #
-# Six alternations are covered. Four are keyed on `waired init`'s transcript;
-# the last is a `waired models pull` transcript, which is the same problem on
+# Seven alternations are covered. Four are keyed on `waired init`'s transcript;
+# one is a `waired models pull` transcript, which is the same problem on
 # a different command — the harnesses grep it as a present-assert AND an
-# absent-assert, so a rename would half-pass silently:
+# absent-assert, so a rename would half-pass silently; and the last is not
+# transcript wording at all but JSON field names, for the same reason one step
+# further out (see status-fields below):
 #
 #   install-failure     the engine install did not succeed (#215/#178)
 #   bench-not-ready     the end-of-init benchmark never ran because the model
@@ -37,6 +39,16 @@
 #   pull-decline        `waired models pull --yes` declining a model that does
 #                       not fit (#583/#590), asserted PRESENT for --yes and
 #                       ABSENT for --yes --force
+#   status-fields       the /waired/v1/inference/status field NAMES the
+#                       model-readiness verdict is built from (#573). Not
+#                       wording — but the harnesses match these literals out of
+#                       a JSON payload, so a renamed field reads as "nothing
+#                       decided yet" and the leg goes red blaming the download
+#                       for a rename. All three are `omitempty`, so the
+#                       harnesses cannot assert them present at runtime without
+#                       failing on a healthy host; this check is the only place
+#                       the rename can be caught, and it catches it in the PR
+#                       that makes it
 #
 # Run: bash scripts/ci/harness-failure-strings-guard.sh
 set -euo pipefail
@@ -131,6 +143,7 @@ check_set 'engine-opt-out'      'IT_ENGINE_OPTOUT_RE'       'EngineOptOutRe'    
 check_set 'install-failure-box' 'IT_INSTALL_FAILURE_BOX_RE' 'InstallFailureBoxRe'  || fail=1
 check_set 'unfit-skip-note'     'IT_UNFIT_SKIP_RE'          'UnfitSkipRe'          || fail=1
 check_set 'pull-decline'        'IT_PULL_DECLINE_RE'        'PullDeclineRe'        || fail=1
+check_set 'status-fields'       'IT_STATUS_FIELDS_RE'       'StatusFieldsRe'       || fail=1
 [ "${fail}" -eq 0 ] || exit 1
 
 echo "harness-failure-strings-guard: ok"

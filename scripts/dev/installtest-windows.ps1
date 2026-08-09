@@ -173,6 +173,10 @@ $UnfitSkipRe = 'Non-interactive: skipping local AI'
 $PullDeclineRe = 'Not downloading. Re-run with --yes --force to download it anyway.'
 $PullQueuedRe = 'queued pull:'
 $PullReachedRe = 'cannot download'
+# Mirror of lib/installtest-enroll.sh's IT_STATUS_FIELDS_RE (waired-agent#573)
+# -- the inference-status field names Get-ModelReadyState reads. Same guard
+# checks these three copies agree and that the product still publishes them.
+$StatusFieldsRe = 'no_model_selected|host_speed|probe_model_id'
 
 # --- logging / assert counters ----------------------------------------------
 # All three declared together, above the helpers: ItDie prints the tally, so
@@ -470,6 +474,44 @@ function Assert-DaemonEngine {
 # asserted through the agent's mgmt API (/waired/v1/inference/status), the same
 # source init's own foreground wait polls — never a bare `ollama list` (which
 # queries :11434 and is always empty here, the original false negative).
+# Get-ModelReadyState -- mirror of it_model_ready_state in
+# lib/installtest-enroll.sh; see the comment there for why the verdict is keyed
+# on `active` rather than on models.ready being non-empty (waired-agent#573).
+# Returns exactly one of 'ready <id>', 'none', 'probe <id>', 'pending'.
+#
+# Still matches NO model id literal, which is what the #322 note below asked
+# for: the id comes from the daemon, so a pinned-fixture change needs no
+# harness edit. What changed is WHICH field the daemon is asked for -- the one
+# that says which model it committed to serving, instead of the one that lists
+# everything on disk (where the #496 cutoff probe lands like any other pull).
+#
+# scripts/dev/installtest-model-ready-asserts.sh drives this and its two .sh
+# twins through the same scenarios per PR: these run only in the dispatch-only
+# inference leg, so a copy that had stopped being able to fail would sit green
+# for a long time.
+function Get-ModelReadyState {
+    param($Status)
+    if (-not $Status) { return 'pending' }
+    $id    = [string]$Status.active.model_id
+    $ready = @($Status.models.ready)
+    if ($id -and ($ready -contains $id)) { return "ready $id" }
+    # subsystem_state 'ready' needs an active selection whose model is ready
+    # (cmd/waired-agent/inference.go, subsystemState), so the probe cannot
+    # satisfy it. Kept as a second accepting arm rather than dropped.
+    if ([string]$Status.subsystem_state -eq 'ready') {
+        $shown = if ($id) { $id } else { '(ready)' }
+        return "ready $shown"
+    }
+    if ($Status.no_model_selected -eq $true) { return 'none' }
+    # Only when NOTHING was selected: an active pick whose 20-45 GB has not
+    # landed yet is the ordinary state for most of this poll.
+    $probe = [string]$Status.host_speed.probe_model_id
+    if ((-not $id) -and $probe -and ($ready.Count -eq 1) -and ($ready[0] -eq $probe)) {
+        return "probe $probe"
+    }
+    return 'pending'
+}
+
 function Assert-Inference {
     param([string]$InitLog)
 
@@ -506,18 +548,20 @@ function Assert-Inference {
     #    ready the moment init returns; poll briefly to absorb any residual async
     #    tail (e.g. the harness's post-init service restart re-checking the model).
     $inferStatusUrl = 'http://127.0.0.1:9476/waired/v1/inference/status'
-    $modelReady = $false; $subState = ''; $modelsReady = @()
+    $modelReady = $false; $subState = ''; $modelsReady = @(); $st = $null
+    $verdict = 'pending'
     $deadline = (Get-Date).AddMinutes(5)
     while ((Get-Date) -lt $deadline) {
         try {
             $st = Invoke-RestMethod -Uri $inferStatusUrl -TimeoutSec 10
             $subState    = [string]$st.subsystem_state
             $modelsReady = @($st.models.ready)
-            # Any entry in models.ready means a model is ready. Matching a
-            # vendor name here would have to be edited every time the pinned
-            # fixture changes, and silently reads "not ready" until somebody
-            # does (waired-ai/waired-agent#322).
-            if (($subState -eq 'ready') -or ($modelsReady.Count -gt 0)) { $modelReady = $true; break }
+            $verdict     = Get-ModelReadyState $st
+            if ($verdict -like 'ready *') { $modelReady = $true; break }
+            # The operator's standing "no model now" choice (waired-agent#586)
+            # is terminal: nothing is coming, so waiting out the budget only
+            # delays the red.
+            if ($verdict -eq 'none') { break }
             # engine_failed is terminal too (waired-agent#29): the engine
             # crashed and automatic recovery either is mid-flight (which shows
             # as "starting") or has given up. Either way, polling for "ready"
@@ -529,16 +573,41 @@ function Assert-Inference {
         Start-Sleep -Seconds 10
     }
     if ($modelReady) {
-        $name = if ($modelsReady) { @($modelsReady)[0] } else { '(ready)' }
-        ItOk "bundled model ready in waired store :9475 ($name; subsystem_state=$subState)"
+        ItOk "bundled model ready in waired store :9475 ($($verdict -replace '^ready ',''); the daemon's active selection, subsystem_state=$subState)"
     } else {
-        ItBad "bundled model not ready via mgmt API (subsystem_state=$subState; models.ready=$($modelsReady -join ','))"
+        if ($verdict -like 'probe *') {
+            # The #573 red. Reported by name because "not ready" sends the
+            # reader to the download, and on this host the download SUCCEEDED:
+            # it was the measurement's own 1 GB probe, and selection is what
+            # declined. See waired-agent#579 for the defect this surfaces.
+            ItBad "this host got a probe, not a pick: the only model in the waired store is the host-cutoff probe ($($verdict -replace '^probe ','')), and the daemon committed to no selection (#573)"
+        } elseif ($verdict -eq 'none') {
+            ItBad "no model was selected on this host (mgmt API no_model_selected=true) -- ``waired init --inference-enabled=true`` should have picked one"
+        } else {
+            ItBad "bundled model not ready via mgmt API (subsystem_state=$subState; models.ready=$($modelsReady -join ','))"
+        }
         # Diagnostics: query the waired-owned store directly (NOT the default :11434).
         if ($ollama) {
             $env:OLLAMA_HOST = '127.0.0.1:9475'
             try { ((& $ollama list 2>&1 | Out-String) -split "`n") | ForEach-Object { Write-Host "    :9475 $_" } } catch { }
             Remove-Item Env:\OLLAMA_HOST -ErrorAction SilentlyContinue
         }
+    }
+
+    # #496/#579: the one-time host-speed measurement -- see the Linux twin in
+    # lib/installtest-enroll.sh for why this leg asserts it.
+    if (-not $st) {
+        ItLog "no inference status payload -- skipping the host-speed assert"
+    } else {
+        $turn    = [double]$st.host_speed.turn_seconds
+        $budget  = [double]$st.host_speed.budget_seconds
+        $samples = [int]$st.host_speed.samples
+        # ItSoft, not ItBad: a host that published no measurement is a REAL
+        # defect (waired-agent#579) and the per-PR legs hit it, so blocking
+        # today would turn every PR in the repo red for something none of them
+        # introduced. The #579 fix adds its $ContractBlocking entry and this
+        # becomes blocking automatically -- which is what that mechanism is for.
+        ItSoft '579' ($turn -gt 0) "host speed measured inside init (turn ${turn}s against a ${budget}s budget; $samples samples)" 'waired-agent'
     }
 
     # 3) local inference is on -- asked of the DAEMON, not of the config under
@@ -550,7 +619,14 @@ function Assert-Inference {
     try { $desired = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).desired_state } catch { }
     if ($desired -eq 'enabled') { ItOk "local inference is on (mgmt API desired_state=enabled)" }
     elseif ([string]::IsNullOrEmpty($desired)) { ItBad "the daemon published no desired_state -- cannot tell an enabled host from a disabled one" }
-    else { ItBad "local inference is off (mgmt API desired_state=$desired)" }
+    else {
+        # turned_inference_off names WHICH thing turned it off: it is the
+        # host-speed cutoff's own claim, and it stops being made the moment
+        # anything else moves the toggle (HostSpeedStatus). Without it a red
+        # here needs a second run to tell a cutoff from an operator.
+        $byCutoff = [bool]$st.host_speed.turned_inference_off
+        ItBad "local inference is off (mgmt API desired_state=$desired; the host-speed cutoff claims this: turned_inference_off=$byCutoff)"
+    }
 
     # 4) benchmark ran in the init transcript (offerBenchmark): require a
     #    THROUGHPUT NUMBER (tok/s | tokens/s). Mirrors installtest-enroll.sh
@@ -2246,6 +2322,11 @@ if ($script:Skip -gt 0) {
 # it goes 80 -> 89. Measured, not estimated: 80 was a green -Contract run and
 # the two probes contribute exactly 9 unconditional asserts between them
 # (their no-catalog arms report the same 5, on purpose).
+#
+# waired-agent#573's host-speed assert does NOT move these. It is an ItSoft
+# tied to waired-agent#579, so a leg where no measurement was published WARNs
+# and contributes 0 rather than 1. The #579 fix adds the $ContractBlocking
+# entry and raises this to 72 in that PR.
 #
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.

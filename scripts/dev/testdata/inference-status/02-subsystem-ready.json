@@ -1,0 +1,1 @@
+{"subsystem_state":"ready","models":{"ready":["qwen3.5-9b"],"failed":[]},"active":{"runtime":"ollama","model_id":"qwen3.5-9b","variant_id":"qwen3.5-9b-q4"},"desired_state":"enabled"}
