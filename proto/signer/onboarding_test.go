@@ -208,8 +208,14 @@ func TestSetupEnums(t *testing.T) {
 	if signer.IsValidSetupDriver("tray") {
 		t.Fatal(`IsValidSetupDriver("tray") = true, want false`)
 	}
+	// BenchmarkMethodOllamaPrefillFloor rides HostSpeed rather than
+	// SetupBenchmark, but shares this enum — and it has to be accepted
+	// BEFORE the agent emits it, or the control plane's validator and the
+	// agent's own push pre-flight reject the whole payload
+	// (waired-agent#579).
 	for _, m := range []string{"", signer.BenchmarkMethodOllamaEval,
-		signer.BenchmarkMethodOpenAISlope, signer.BenchmarkMethodWallClock} {
+		signer.BenchmarkMethodOpenAISlope, signer.BenchmarkMethodWallClock,
+		signer.BenchmarkMethodOllamaPrefillFloor} {
 		if !signer.IsValidBenchmarkMethod(m) {
 			t.Fatalf("IsValidBenchmarkMethod(%q) = false, want true", m)
 		}

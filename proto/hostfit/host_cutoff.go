@@ -180,6 +180,56 @@ func (p HostProbe) TurnSeconds() float64 {
 	return depth/p.PrefillTokps + (depth/HostCutoffPromptCompletionRatio)/p.DecodeTokps
 }
 
+// TurnFloorSeconds is a LOWER BOUND on the TurnSeconds of a host whose
+// prefill rate is prefillTokps — the same turn with the decode term
+// dropped:
+//
+//	floor = P/prefill        against        turn = P/prefill + (P/ratio)/decode
+//
+// It exists so a host can be found below the cutoff WITHOUT paying for a
+// full-depth measurement. A full measurement is a ~21k-token prefill plus
+// a 200-token decode, which on the hosts the cutoff exists to catch is
+// minutes standing in front of the model download (waired-agent#579): the
+// GitHub macos-14 runner takes 7 min 12 s for one sample. A prefill rate
+// comes far cheaper — the agent's own calibration request already measures
+// one at ~2.8k tokens and discards the timing.
+//
+// One-sided, and used in one direction only:
+//
+//	floor >  budget  =>  turn > budget    sound; this is a verdict
+//	floor <= budget  =>  nothing at all   falls through to the measurement
+//
+// Two independent facts make that direction sound, and both point the
+// same way:
+//
+//  1. The decode term is strictly positive on any host that decodes at
+//     all, so dropping it can only make the number smaller.
+//  2. Prefill rate is monotone non-increasing in depth, so a rate measured
+//     SHALLOWER than HostCutoffProbeDepthTokens over-estimates the rate at
+//     the canonical depth, and dividing by an over-estimate under-estimates
+//     the time. Measured on this repo's reference host: 833 tok/s at 68 %
+//     of the depth against 671 tok/s at the full depth — the same pair of
+//     figures that made the agent measure its prompt's token cost rather
+//     than assume it (hostCutoffCalibrationLines, host_cutoff_probe.go).
+//
+// A caller that publishes this figure has to say so. It rides
+// signer.HostSpeed.TurnSeconds with Method =
+// signer.BenchmarkMethodOllamaPrefillFloor, and a consumer that reads it
+// as an exact turn time believes the host is FASTER than it is. That is
+// tolerable only because the agent publishes this shape solely when the
+// bound already exceeds HostCutoffTurnBudgetSeconds, so every threshold
+// comparison at or below the budget still lands where the full
+// measurement would have put it.
+//
+// Zero when the rate cannot be used, matching TurnSeconds: zero is "no
+// claim", never "instant".
+func TurnFloorSeconds(prefillTokps float64) float64 {
+	if prefillTokps <= 0 {
+		return 0
+	}
+	return float64(HostCutoffProbeDepthTokens) / prefillTokps
+}
+
 // MeetsRecommendedSpec is the verdict. ok is whether this host clears the
 // cutoff; decided is whether the probe was able to judge at all.
 //
