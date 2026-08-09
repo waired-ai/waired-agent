@@ -40,6 +40,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
 				signer.CapabilityOnboardingV3,
+				signer.CapabilityOnboardingV4,
 			},
 		},
 		{
@@ -61,6 +62,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
 				signer.CapabilityOnboardingV3,
+				signer.CapabilityOnboardingV4,
 			},
 		},
 	} {

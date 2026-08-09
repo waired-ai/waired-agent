@@ -140,9 +140,12 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// model-download retry generation (waired-agent#136) — the
 			// applier for it is setupReconciler.Apply, which is
 			// constructed on exactly this condition.
+			// onboarding-v4 is the explicit local-AI answer
+			// (waired-agent#597), applied by the same reconciler.
 			caps += `,"` + signer.CapabilityOnboardingV1 +
 				`","` + signer.CapabilityOnboardingV2 +
-				`","` + signer.CapabilityOnboardingV3 + `"`
+				`","` + signer.CapabilityOnboardingV3 +
+				`","` + signer.CapabilityOnboardingV4 + `"`
 		}
 		body := bytes.NewBufferString(`{"capabilities":[` + caps + `]}`)
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/network-map/poll", body)
