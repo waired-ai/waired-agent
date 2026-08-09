@@ -127,20 +127,19 @@ func TestRunLocalInferenceProbe_PicksUpReachableEngine(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// runLocalInferenceProbe ticks once synchronously then blocks until
-	// ctx expires, so this budget doubles as both the probe window and
-	// the test's run time. 50ms was too tight under load — the initial
-	// tick's httptest round-trip + state write would occasionally exceed
-	// it, cancelling the probe mid-flight (Reachable=false). 500ms gives
-	// 10x headroom; it stays well under HeartbeatInterval (5s) so no
-	// second tick fires, and the ~+0.45s/test is negligible.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, inferenceProbeDeps{
+	// This test has no CP, so the completion signal is the state write the
+	// assertion below reads. The 500 ms budget it replaces had already been
+	// raised once from 50 ms for the same reason (#567): the initial tick's
+	// httptest round-trip plus the state write occasionally outran it under
+	// load, cancelling the probe mid-flight and reading Reachable=false.
+	probeRunUntil(t, inferenceProbeDeps{
 		StateWriter: w,
 		EngineKind:  signer.InferenceTypeOllama,
 		EnginePort:  port,
 		Logger:      slog.Default(),
+	}, "record the engine as reachable", func() bool {
+		got, err := state.Read(dir)
+		return err == nil && got.InferenceReachableLocal
 	})
 
 	got, err := state.Read(dir)
@@ -200,9 +199,7 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 	// 50ms < HeartbeatInterval (5s), so the loop runs the immediate tick
 	// once and then ctx-cancels before the ticker fires. Matches the
 	// _PicksUpReachableEngine test's pattern.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, inferenceProbeDeps{
+	probeRunUntil(t, inferenceProbeDeps{
 		StateWriter: stWriter,
 		Aggregator:  agg,
 		PushClient:  cli,
@@ -211,6 +208,8 @@ func TestRunLocalInferenceProbe_FeedsAggregatorAndPushClient(t *testing.T) {
 		EngineKind:  signer.InferenceTypeOllama,
 		EnginePort:  port,
 		Logger:      slog.Default(),
+	}, "push a state to the control plane", func() bool {
+		return atomic.LoadInt32(&pushCount) >= 1
 	})
 
 	if got := atomic.LoadInt32(&pushCount); got < 1 {
@@ -267,9 +266,7 @@ func TestRunLocalInferenceProbe_ReportsShareDenied(t *testing.T) {
 	agg := inferencemesh.New("dev-self", inferencemesh.Policy{}, time.Now)
 	cli := controlclient.New(cpSrv.URL, "tok")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, inferenceProbeDeps{
+	probeRunUntil(t, inferenceProbeDeps{
 		StateWriter: stWriter,
 		Aggregator:  agg,
 		PushClient:  cli,
@@ -279,7 +276,7 @@ func TestRunLocalInferenceProbe_ReportsShareDenied(t *testing.T) {
 		EnginePort:  port,
 		IsShared:    func() bool { return false },
 		Logger:      slog.Default(),
-	})
+	}, "push a state to the control plane", func() bool { return pushes() >= 1 })
 
 	if got := pushes(); got == 0 {
 		t.Fatal("no CP push while sharing is off; the admin view goes stale again")
@@ -334,11 +331,14 @@ func TestRunLocalInferenceProbe_SharingOmitsTheField(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// A fresh deadline per configuration — one shared context would expire
-	// during the first run and make the second a no-op.
+	// Each configuration runs until IT has pushed — counted against the
+	// bodies seen before it started, so the second run cannot be satisfied by
+	// the first one's push.
 	for _, shared := range []func() bool{nil, func() bool { return true }} {
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		runLocalInferenceProbe(ctx, inferenceProbeDeps{
+		mu.Lock()
+		before := len(bodies)
+		mu.Unlock()
+		probeRunUntil(t, inferenceProbeDeps{
 			StateWriter: stWriter,
 			PushClient:  controlclient.New(cpSrv.URL, "tok"),
 			DeviceID:    "dev-self",
@@ -347,8 +347,11 @@ func TestRunLocalInferenceProbe_SharingOmitsTheField(t *testing.T) {
 			EnginePort:  port,
 			IsShared:    shared,
 			Logger:      slog.Default(),
+		}, "push a state to the control plane", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(bodies) > before
 		})
-		cancel()
 	}
 
 	mu.Lock()
@@ -393,9 +396,7 @@ func TestRunLocalInferenceProbe_IsSharedTrueAllowsPush(t *testing.T) {
 	agg := inferencemesh.New("dev-self", inferencemesh.Policy{}, time.Now)
 	cli := controlclient.New(cpSrv.URL, "tok")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, inferenceProbeDeps{
+	probeRunUntil(t, inferenceProbeDeps{
 		StateWriter: stWriter,
 		Aggregator:  agg,
 		PushClient:  cli,
@@ -405,6 +406,8 @@ func TestRunLocalInferenceProbe_IsSharedTrueAllowsPush(t *testing.T) {
 		EnginePort:  port,
 		IsShared:    func() bool { return true },
 		Logger:      slog.Default(),
+	}, "push a state to the control plane", func() bool {
+		return atomic.LoadInt32(&pushCount) >= 1
 	})
 
 	if got := atomic.LoadInt32(&pushCount); got < 1 {
@@ -542,6 +545,9 @@ func TestRunLocalInferenceProbe_DispatchesByEngineKind(t *testing.T) {
 
 	machinePub, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
 	var capturedState signer.InferenceState
+	// Counted separately from capturedState: probeRunUntil polls the signal
+	// from another goroutine, and capturedState is written here without a lock.
+	var pushCount int32
 	cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		sig, _ := base64.StdEncoding.DecodeString(r.Header.Get("X-Waired-Body-Signature"))
@@ -553,6 +559,7 @@ func TestRunLocalInferenceProbe_DispatchesByEngineKind(t *testing.T) {
 		}
 		_ = json.Unmarshal(body, &req)
 		capturedState = req.State
+		atomic.AddInt32(&pushCount, 1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok","content_changed":true}`))
 	}))
@@ -565,9 +572,7 @@ func TestRunLocalInferenceProbe_DispatchesByEngineKind(t *testing.T) {
 	}
 	cli := controlclient.New(cpSrv.URL, "tok")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, inferenceProbeDeps{
+	probeRunUntil(t, inferenceProbeDeps{
 		StateWriter: stWriter,
 		PushClient:  cli,
 		DeviceID:    "dev-self",
@@ -575,6 +580,8 @@ func TestRunLocalInferenceProbe_DispatchesByEngineKind(t *testing.T) {
 		EngineKind:  signer.InferenceTypeVLLM,
 		EnginePort:  port,
 		Logger:      slog.Default(),
+	}, "push a state to the control plane", func() bool {
+		return atomic.LoadInt32(&pushCount) >= 1
 	})
 
 	if capturedState.Type != signer.InferenceTypeVLLM {
@@ -644,6 +651,85 @@ func TestRunLocalInferenceProbe_NoneKindPinsFalse(t *testing.T) {
 // capturingCP is the CP mock the push-observing tests share: it counts
 // pushes and keeps the last state body. Returns the server plus accessors
 // so each test states its own expectation.
+// probeBackstop bounds a probeRunUntil call. It is a BACKSTOP, not a budget:
+// reaching it is a failure, and the run normally ends within milliseconds when
+// the completion signal fires. Generous enough that no plausible amount of
+// runner contention reaches it.
+const probeBackstop = 30 * time.Second
+
+// probeSettlePoll paces probeRunUntil's check of the completion signal. Small
+// enough to be invisible next to a test's real work, and it costs nothing on a
+// signal that has already fired: done() is checked before the first sleep.
+const probeSettlePoll = 2 * time.Millisecond
+
+// probeRunUntil runs runLocalInferenceProbe and stops it the moment `done`
+// reports that the thing the test is about to assert has actually happened.
+//
+// runLocalInferenceProbe ticks once synchronously and then blocks on ctx, so
+// a ctx deadline used to double as the whole test budget: 500 ms had to cover
+// an httptest round-trip, an aggregator update, a signed CP push and a state
+// write, on whatever else the runner was doing at that moment. Thirteen tests
+// shared that figure and any of them could lose the race — waired-agent#567
+// caught TestRunLocalInferenceProbe_ReportsShareDenied failing in exactly
+// 0.50 s with every field of the pushed state at its zero value, on a PR whose
+// diff could not reach the probe.
+//
+// The assertion each of those tests wants is "the probe reported X". A fixed
+// wall-clock figure is not part of that claim, and a test that encodes one
+// fails for a reason that is not about the subject. So the deadline becomes a
+// backstop and the completion signal ends the run.
+//
+// This does not weaken the "exactly one push" assertions. The probe's second
+// tick is a state.HeartbeatInterval (5 s) away, so cancelling on the first
+// push lands three orders of magnitude inside the window that would have
+// produced a second one — a wider margin than the 500 ms it replaces.
+func probeRunUntil(t *testing.T, deps inferenceProbeDeps, what string, done func() bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), probeBackstop)
+	defer cancel()
+
+	watching := make(chan struct{})
+	go func() {
+		defer close(watching)
+		for {
+			if done() {
+				cancel()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(probeSettlePoll):
+			}
+		}
+	}()
+
+	runLocalInferenceProbe(ctx, deps)
+	<-watching
+	if !done() {
+		t.Fatalf("the probe did not %s within %s — the backstop, not a budget: something is wrong with the subject, not with the runner", what, probeBackstop)
+	}
+}
+
+// probeRunOnce runs runLocalInferenceProbe for a path that RETURNS on its own
+// rather than blocking on ctx, so there is nothing to wait for.
+//
+// Both callers are absence assertions ("nothing was pushed"), and both reach
+// an early return before any loop: Disabled short-circuits runHardwareOnlyReport
+// at its first line, and the decision is made synchronously on the way there.
+// Waiting a fixed 500 ms for that proved nothing and slowed the suite; the
+// backstop here exists only so a future change that DOES make the path block
+// fails loudly instead of hanging.
+func probeRunOnce(t *testing.T, deps inferenceProbeDeps) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), probeBackstop)
+	defer cancel()
+	runLocalInferenceProbe(ctx, deps)
+	if ctx.Err() != nil {
+		t.Fatalf("the probe blocked instead of returning: this path is expected to short-circuit, so an absence assertion after it no longer proves anything")
+	}
+}
+
 func capturingCP(t *testing.T) (*httptest.Server, func() int32, func() signer.InferenceState) {
 	t.Helper()
 	var count int32
@@ -719,9 +805,8 @@ func TestRunLocalInferenceProbe_EngineLessPublishesHardware(t *testing.T) {
 
 	// 500 ms is one immediate report and no ticker fire
 	// (hardwareOnlyPushInterval is 60 s), so the count below is exact.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, engineLessDeps(t, cp.URL))
+	probeRunUntil(t, engineLessDeps(t, cp.URL),
+		"push a hardware profile", func() bool { return pushes() >= 1 })
 
 	if got := pushes(); got != 1 {
 		t.Fatalf("push count = %d, want exactly 1", got)
@@ -755,9 +840,7 @@ func TestRunLocalInferenceProbe_EngineLessRespectsDisabled(t *testing.T) {
 
 	deps := engineLessDeps(t, cp.URL)
 	deps.Disabled = true
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, deps)
+	probeRunOnce(t, deps)
 
 	if got := pushes(); got != 0 {
 		t.Errorf("push count = %d, want 0 when inference is disabled", got)
@@ -779,9 +862,7 @@ func TestRunLocalInferenceProbe_EngineLessReportsShareDenied(t *testing.T) {
 
 	deps := engineLessDeps(t, cp.URL)
 	deps.IsShared = func() bool { return false }
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, deps)
+	probeRunUntil(t, deps, "push a hardware profile", func() bool { return pushes() >= 1 })
 
 	if got := pushes(); got != 1 {
 		t.Fatalf("push count = %d, want exactly 1 (sharing off is not silence)", got)
@@ -803,10 +884,16 @@ func TestRunLocalInferenceProbe_EngineLessSkipsUnknownProfile(t *testing.T) {
 	cp, pushes, _ := capturingCP(t)
 
 	deps := engineLessDeps(t, cp.URL)
-	deps.Hardware = func() *signer.HardwareSummary { return nil }
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, deps)
+	// Wait on the getter, not on a clock: an absence assertion is only worth
+	// anything once the code that would have pushed has actually run. A fixed
+	// 500 ms could end before the first push() and pass vacuously.
+	var hwCalls int32
+	deps.Hardware = func() *signer.HardwareSummary {
+		atomic.AddInt32(&hwCalls, 1)
+		return nil
+	}
+	probeRunUntil(t, deps, "consult the hardware getter",
+		func() bool { return atomic.LoadInt32(&hwCalls) >= 1 })
 
 	if got := pushes(); got != 0 {
 		t.Errorf("push count = %d, want 0 when the host profile is unknown", got)
@@ -854,9 +941,8 @@ func TestRunLocalInferenceProbe_ReadsHardwareEachTick(t *testing.T) {
 		return upgraded
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	runLocalInferenceProbe(ctx, deps)
+	probeRunUntil(t, deps, "re-read the hardware profile and push",
+		func() bool { return atomic.LoadInt32(&calls) >= 1 && pushes() >= 1 })
 
 	if got := atomic.LoadInt32(&calls); got < 1 {
 		t.Fatalf("hardware getter called %d times, want ≥ 1 — the probe is not re-reading it", got)
@@ -1267,8 +1353,7 @@ func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T
 		if err := stWriter.Set(stWriter.Snapshot()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		runLocalInferenceProbe(ctx, inferenceProbeDeps{
+		probeRunUntil(t, inferenceProbeDeps{
 			StateWriter:           stWriter,
 			PushClient:            controlclient.New(cpSrv.URL, "tok"),
 			DeviceID:              "dev-self",
@@ -1279,8 +1364,11 @@ func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T
 			ServingTag:            advertise,
 			DeclaredContextWindow: func() int { return window },
 			Logger:                slog.Default(),
+		}, "push a state to the control plane", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(bodies) > 0
 		})
-		cancel()
 		mu.Lock()
 		defer mu.Unlock()
 		if len(bodies) == 0 {
@@ -1340,8 +1428,7 @@ func TestRunLocalInferenceProbe_ActiveModelAndStateExplainAWithdrawnNode(t *test
 		if err := stWriter.Set(stWriter.Snapshot()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		runLocalInferenceProbe(ctx, inferenceProbeDeps{
+		probeRunUntil(t, inferenceProbeDeps{
 			StateWriter:    stWriter,
 			PushClient:     controlclient.New(cpSrv.URL, "tok"),
 			DeviceID:       "dev-self",
@@ -1353,8 +1440,11 @@ func TestRunLocalInferenceProbe_ActiveModelAndStateExplainAWithdrawnNode(t *test
 			ActiveModel:    func() string { return model },
 			SubsystemState: func() string { return subState },
 			Logger:         slog.Default(),
+		}, "push a state to the control plane", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(bodies) > 0
 		})
-		cancel()
 		mu.Lock()
 		defer mu.Unlock()
 		if len(bodies) == 0 {
