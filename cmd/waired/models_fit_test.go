@@ -74,6 +74,28 @@ func TestConfirmModelFitsForPull(t *testing.T) {
 		}
 	})
 
+	// The decline line, character for character. The installtest harness
+	// greps this exact sentence (IT_PULL_DECLINE_RE in
+	// scripts/dev/lib/installtest-enroll.sh) as BOTH a present-assert and
+	// an absent-assert, and an absent-assert for wording the product
+	// stopped printing passes forever — #178 with the sign flipped. The
+	// harness cannot catch its own rename; this is what does, in the same
+	// PR. Until the macOS/Windows twins land (#590) this pin stands in for
+	// scripts/ci/harness-failure-strings-guard.sh, which checks agreement
+	// across three harnesses and so cannot cover a linux-only probe.
+	t.Run("the decline line is what the harness greps", func(t *testing.T) {
+		srv := catalogStub(t, http.StatusOK, overSpec)
+		var out bytes.Buffer
+		proceed, err := confirmModelFitsForPull(srv.URL, "qwen3.6-35b-a3b", true, false, &out, strings.NewReader(""))
+		if err != nil || proceed {
+			t.Fatalf("proceed=%v err=%v, want false/nil — --yes alone declines a fits=false pull", proceed, err)
+		}
+		const declineLine = "Not downloading. Re-run with --yes --force to download it anyway."
+		if !strings.Contains(out.String(), declineLine) {
+			t.Errorf("output does not contain the pinned decline line %q:\n%s", declineLine, out.String())
+		}
+	})
+
 	// The decision seam, all combinations: auto-consent takes BOTH flags,
 	// a present human is asked, an absent one declines
 	// (waired-ai/waired#1067, 2026-08-08 owner decision).

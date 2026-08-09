@@ -390,6 +390,13 @@ if [ "$TIER" -le 2 ]; then
         # exit 0. Runs here for the same reason the opt-out probe does —
         # this guest still has no engine, so both arms are reachable.
         assert_reinit_default_unfit "$GUEST"
+        # The `waired models pull` half of the same twin (waired-agent#590):
+        # --yes alone declines a model that does not fit, --yes --force is
+        # honoured. Here for a THIRD reason on top of the two above — an
+        # engine-less guest makes the honoured row free, because the daemon
+        # refuses the handed-on pull at its own admission check (#307)
+        # instead of fetching weights this gate has no business fetching.
+        assert_models_pull_confirm "$GUEST"
       fi
       assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
       [ "$INFER" = 1 ] && assert_inference "$GUEST"
@@ -430,20 +437,26 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # the same 2 whether or not the leg set IT_SKIP_INTEGRATION).
 #
 # "Options only ever ADD asserts, so a floor keyed on the tier alone holds"
-# was true until waired-agent#551, and is not any more: the engine-opt-out
-# probe runs ONLY on the lean leg, because --inference and --daemon-engine
-# leave an engine on the host and the probe would then pass without reaching
-# the arm it tests. The floor still holds, for a different reason — it is
-# measured from the leanest configuration, which is the one that runs the
-# probe, and both richer options add far more than the 4 it contributes.
+# was true until waired-agent#551, and is not any more: the engine-less
+# probes run ONLY on the lean leg, because --inference and --daemon-engine
+# leave an engine on the host and those probes would then pass without
+# reaching the arms they test. One number for both shapes held while the
+# lean-only block was 4 asserts — it is 13 now, and a floor of 27 stopped
+# covering the block it exists to cover the moment waired-agent#605 added
+# to it without raising anything. So the tier-2 floor is PER CONFIGURATION,
+# the way installtest-windows.ps1 has kept its since #215.
 #
 # Raise these when you add an assert that always runs; lower them, in the
 # same commit and with the reason, if a leg legitimately becomes conditional.
 case "$TIER" in
   1) floor=10 ;;
-  # +3: assert_reinit_resumes (waired-agent#313)
-  # +4: assert_reinit_engine_optout (waired-agent#551, lean leg only)
-  *) floor=27 ;;
+  # 23 shared + the lean-only engine-less block:
+  #   +4  assert_reinit_engine_optout   (waired-agent#551)
+  #   +4  assert_reinit_default_unfit   (waired-agent#590 / #605)
+  #   +5  assert_models_pull_confirm    (waired-agent#590)
+  # A richer leg trades that block for assert_inference / assert_daemon_engine
+  # and their own tails; 27 is the measured floor for those and stays.
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=27; else floor=36; fi ;;
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then
