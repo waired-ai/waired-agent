@@ -289,6 +289,84 @@ jobs:
             echo "- result: **${{ job.status }}**"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The AI software installed, and no model chosen (waired-agent#590; owner
+  # decision 2026-08-08, waired-ai/waired#1067). The #586 picker offers
+  # "0) Don't download a model now", and that answer is a FINISHED install —
+  # exit 0, an engine on disk, and a standing choice the daemon keeps across a
+  # restart instead of the #379 boot pre-pull fetching something anyway.
+  #
+  # Here rather than on the per-PR gate for the same reason install+inference
+  # is: it installs a real engine from a release asset. Cheaper than its
+  # neighbours, though — the whole point of the state under test is that no
+  # weights are downloaded.
+  #
+  # LINUX ONLY, deliberately. It is the suite's one INTERACTIVE init (one line
+  # of stdin into the model picker); the macOS and Windows harnesses have no
+  # equivalent choreography yet, and that gap is tracked on waired-agent#590
+  # rather than papered over with a leg that would silently answer nothing.
+  engine-only:
+    if: github.event.inputs.os == null || github.event.inputs.os == 'all' || github.event.inputs.os == 'linux'
+    name: engine installed, no model chosen (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      # Tier 2: hands-free enroll vs the real dev control plane (#339 grant).
+      IT_ENROLL_MODE: authkey
+      IT_IMPERSONATE_SA: waired-devtest-login@dev-waired.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      # gcloud uses the WIF credential to mint the SA id_token in the harness.
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: engine installed, no model chosen (linux, tier 2)
+        env:
+          IT_LOCAL: "1"
+          IT_ALLOW_LOCAL_DESTRUCTIVE: "1"
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/go/bin:$PATH"
+          bash scripts/dev/installtest-host-up.sh
+          bash scripts/dev/installtest-run.sh --tier 2 --engine-only 2>&1 | tee it-engine-only.log
+
+      # The interesting failure here is "the picker never ran", and the
+      # evidence for it is the init transcript plus what the daemon thinks it
+      # was told. Stage both while the runner still exists.
+      - name: collect engine-only diagnostics
+        if: failure()
+        run: |
+          mkdir -p diag
+          cp it-engine-only.log diag/ 2>/dev/null || true
+          cp -r "${IT_WORKDIR:-$HOME/.cache/waired-installtest}/logs" diag/harness-logs 2>/dev/null || true
+          curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status > diag/inference-status.json 2>/dev/null || true
+          sudo chown -R "$(id -un)" diag || true
+          ls -la diag || true
+      - name: upload engine-only diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-only-diag
+          path: diag
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "## engine installed, no model chosen (linux)"
+            echo "- result: **${{ job.status }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # 3-OS coding-agent routing sentinel (#496). Rides the SAME enrolled-daemon
   # harness with `--integration`, which pins the withheld 350M as the bundled
   # model (deploy pulls ~0.7 GB), then runs the Go routing harness that

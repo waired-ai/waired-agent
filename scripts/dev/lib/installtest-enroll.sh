@@ -646,6 +646,103 @@ assert_models_pull_confirm() {
   _it_restore_host_memory "$guest" "#590 pull twin"
 }
 
+# assert_engine_only_install: "the AI software is installed and no model
+# was chosen" is a FINISHED install, not a stalled one (waired-agent#590;
+# owner-ruled 2026-08-08, waired-ai/waired#1067 — the picker's
+# "0) Don't download a model now" is a normal completed state, exit 0,
+# and a model can be added later from the browser dashboard or
+# `waired models pull`).
+#
+# Nothing exercised that end to end. The Go tests cover the picker's own
+# branches (#600), but the claim here is about the WHOLE tail: that init
+# finishes, that the closing box does not read the host as broken, that
+# the daemon publishes the standing choice, and — the part only a real
+# host can show — that the answer SURVIVES a restart without the #379
+# boot pre-pull deciding to fetch something anyway.
+#
+# THE ONE INTERACTIVE INIT IN THE SUITE. Every other init here passes
+# --non-interactive, which is exactly what makes them unable to reach
+# this: runInitModelPicker returns immediately on that flag. Feeding it
+# one line of stdin is the only way in, and one line is enough because
+# --inference-enabled=true silences the two questions in front of the
+# picker — step 4 takes the flag as its answer, and step 6 returns
+# before it waits for a measurement. The picker itself re-prompts on
+# unparseable input, so even a stray line ahead of the "0" would not
+# desync it.
+#
+# Not on the per-PR gate: this installs a real engine from a release
+# asset, which is the external state installtest.yml deliberately stops
+# short of.
+#
+# Exactly six asserts, always — the floor counts on it.
+assert_engine_only_install() {
+  local guest="$1" name log rc=0 out
+  name="$(_it_dev_name "$guest")"
+  mkdir -p "$IT_LOGDIR"
+  log="$IT_LOGDIR/engine-only-$name.log"
+
+  it_log "installing an engine and answering the model picker with 0 (waired-agent#590)"
+  # The daemon has to WANT an engine, the same arrangement the two probes
+  # above make. The guest is already enrolled, so this init resumes
+  # (#313) rather than signing in again.
+  gx "$guest" waired inference on >/dev/null 2>&1 || \
+    it_warn "could not turn inference on in $guest before the #590 engine-only probe"
+
+  gx "$guest" sh -c "printf '0\n' | WAIRED_NO_EMOJI=1 waired init \
+      --control '$IT_CONTROL_URL' --device-name '$name' \
+      --inference-enabled=true --skip-integration" >"$log" 2>&1 || rc=$?
+
+  [ "$rc" = 0 ] \
+    && ok "an install that ends with no model chosen exits 0 (waired-agent#590)" \
+    || bad "init exited $rc after the operator chose not to download a model — that is a finished install, not a failure — see $log"
+  # Anti-vacuity, and the load-bearing one: without it every assert here
+  # would pass on a host where the picker never ran and the daemon's own
+  # auto-selection quietly applied instead (which is what #607 was).
+  grep -qF "$IT_NO_MODEL_RE" "$log" \
+    && ok "the picker asked and recorded the no-model answer" \
+    || bad "init never printed the no-model line — the picker did not run, so the asserts around it prove nothing — see $log"
+  grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
+    && bad "init reported an engine-only install as a failed install — see $log" \
+    || ok "an engine-only install is not reported as a failed install"
+  gx "$guest" test -x "$IT_BUNDLED_OLLAMA_BIN" \
+    && ok "the engine is installed ($IT_BUNDLED_OLLAMA_BIN) — this host runs AI, it just has no model yet" \
+    || bad "no engine at $IT_BUNDLED_OLLAMA_BIN — the point of this state is that the software IS installed — see $log"
+
+  _it_no_model_selected "$guest" \
+    && ok "the daemon publishes the standing no-model choice (mgmt API no_model_selected=true)" \
+    || bad "mgmt API does not report no_model_selected after the operator chose not to download a model"
+
+  # The restart is the whole point of the sixth assert: an answer that
+  # does not survive one is not a standing choice, and the #379 boot
+  # pre-pull is what would otherwise fetch a model nobody asked for.
+  gx "$guest" systemctl restart waired-agent || \
+    it_warn "could not restart the daemon in $guest for the #590 engine-only probe"
+  _it_wait_enrolled "$guest" >/dev/null || \
+    it_warn "daemon did not report enrolled after the #590 engine-only restart"
+  _it_no_model_selected "$guest" \
+    && ok "the choice survives a restart — the boot pre-pull stands down (waired-agent#379)" \
+    || bad "no_model_selected is gone after a restart — the boot pre-pull is about to download a model nobody asked for"
+
+  if [ "$rc" != 0 ]; then
+    tail -n 25 "$log" | sed 's/^/    /' >&2
+    gx "$guest" sh -c 'curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"' 2>&1 | sed 's/^/    status| /' || true
+  fi
+
+  # Leave the guest as we found it for anything after this one.
+  gx "$guest" waired inference off >/dev/null 2>&1 || \
+    it_warn "could not turn inference back off in $guest after the #590 engine-only probe"
+}
+
+# _it_no_model_selected — is the daemon publishing the standing "run
+# without a model" choice? Reads the mgmt API's own field rather than
+# inferring from an empty model list: an empty list is also what a host
+# that has simply not downloaded anything yet looks like, and telling
+# those two apart is the whole contract.
+_it_no_model_selected() {
+  gx "$1" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null \
+    | grep -qE '"no_model_selected"[[:space:]]*:[[:space:]]*true'
+}
+
 # _it_force_below_spec / _it_restore_host_memory — arrange and undo for
 # every probe that needs this host to read as below the recommended
 # spec. Shared by assert_reinit_default_unfit and
@@ -690,6 +787,18 @@ _it_restore_host_memory() {
 # host that did not read as below-spec never reaches this arm, and every
 # other assert around it would pass having tested nothing.
 IT_UNFIT_SKIP_RE='Non-interactive: skipping local AI'
+
+# The model picker's "0) Don't download a model now" acknowledgement
+# (waired-agent#586/#590). A POSITIVE grep, and the anti-vacuity assert
+# of the engine-only probe: a host where the picker never ran satisfies
+# every other assert there.
+#
+# The product line ends with an em dash clause ("— the AI software stays
+# ready"); only the ASCII head is matched, so a leg on a console that
+# mangles the dash still greps true. Registered in
+# scripts/ci/harness-failure-strings-guard.sh once the macOS/Windows
+# engine-only twins exist — that guard requires three agreeing copies.
+IT_NO_MODEL_RE='No model selected'
 
 # The three strings assert_models_pull_confirm greps for. Kept as named
 # literals for the same reason IT_ENGINE_OPTOUT_RE is, and matched the
