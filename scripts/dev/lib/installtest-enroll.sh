@@ -526,6 +526,10 @@ assert_reinit_default_unfit() {
   # it takes a service restart to be read.
   gx "$guest" waired inference on >/dev/null 2>&1 ||     it_warn "could not turn inference on in $guest before the #590 probe"
   gx "$guest" sh -c "printf 'WAIRED_RAM_AVAILABLE_GB=1\n' >> /etc/waired/agent.env && systemctl restart waired-agent"
+  # The restart drops the enrolled session for a few seconds; init's own
+  # polling absorbs that, but waiting here keeps the probe deterministic.
+  _it_wait_enrolled "$guest" >/dev/null || \
+    it_warn "daemon did not report enrolled after the #590 seam restart"
 
   gx "$guest" env WAIRED_NO_EMOJI=1 waired init \
     --control "$IT_CONTROL_URL" --device-name "$name" \
@@ -555,6 +559,11 @@ assert_reinit_default_unfit() {
   # was written against).
   gx "$guest" sh -c "sed -i '/^WAIRED_RAM_AVAILABLE_GB=/d' /etc/waired/agent.env && systemctl restart waired-agent" || \
     it_warn "could not remove the RAM seam from $guest's agent.env"
+  # The asserts after this probe talk to the daemon straight away (the
+  # pause/resume pair was the first casualty): wait out the restart's
+  # re-enrollment window before handing the guest back.
+  _it_wait_enrolled "$guest" >/dev/null || \
+    it_warn "daemon did not report enrolled after the #590 cleanup restart"
   gx "$guest" waired inference off >/dev/null 2>&1 || \
     it_warn "could not turn inference back off in $guest after the #590 probe"
 }
