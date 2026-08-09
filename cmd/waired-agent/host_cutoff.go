@@ -57,6 +57,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/hostspeed"
 	"github.com/waired-ai/waired-agent/internal/router"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
@@ -98,10 +99,17 @@ const (
 	//
 	// 16 minutes = hostCutoffPullTimeout + hostCutoffMeasureBudget, pinned
 	// by TestHostSpeedBudgets_PartitionTheInstallWindow. It is 1.7x the
-	// slowest measurement anyone has recorded, and it sits inside
-	// hostSpeedAskWait (20 min, cmd/waired/init_host_speed.go) — the wait
-	// `waired init` puts in front of the operator for this exact
-	// measurement on the paths where it asks.
+	// slowest measurement anyone has recorded.
+	//
+	// It is the BACKGROUND window — startHostSpeedMeasurement, which has
+	// nothing waiting behind it. A caller with a download behind it gets
+	// hostSpeedInstallWindow instead, which is smaller than this on
+	// purpose: 16 minutes was first written against hostSpeedAskWait
+	// (20 min, cmd/waired/init_host_speed.go), and that wait is not the
+	// binding one. confirmHostSpeedBudget returns immediately when the
+	// operator passed --inference-enabled (init_host_speed.go), so what
+	// actually stands in front of the operator is hostspeed.ModelWait —
+	// ten minutes, which 16 does not fit inside.
 	hostSpeedMeasureDeadline = hostCutoffPullTimeout + hostCutoffMeasureBudget
 
 	// hostSpeedSettlePoll / hostSpeedSettleWait pace awaitQuietEngine. The
@@ -131,6 +139,29 @@ func (p *agentInferenceProvider) hostSpeedMeasureWindow() time.Duration {
 		return p.hostSpeedWindow
 	}
 	return hostSpeedMeasureDeadline
+}
+
+// hostSpeedInstallWindow is the window for a caller that has a model
+// DOWNLOAD waiting behind it — the pre-pull hold and the browser wizard's
+// apply path. See hostspeed.InstallWindow for the size and why.
+//
+// The distinction is the whole of the second half of waired-agent#579.
+// Stage 2 bounded the measurement and the bound held: on run 31316731884
+// the linux pre-pull released at 14:28:49 and the model was dispatched at
+// 14:45:11 — 16 minutes, exactly hostSpeedMeasureDeadline. The download
+// then took 21.9 seconds, and init had stopped waiting at minute ten. One
+// window cannot serve both callers, because they are not waiting for the
+// same thing: the background call wants the published median of three
+// samples, and this one wants a verdict before 20-45 GB starts arriving.
+//
+// The minimum, not a replacement, so a test that shrinks hostSpeedWindow
+// still shrinks this one — otherwise the install path would keep the full
+// five minutes in a unit test that asked for milliseconds.
+func (p *agentInferenceProvider) hostSpeedInstallWindow() time.Duration {
+	if w := p.hostSpeedMeasureWindow(); w < hostspeed.InstallWindow {
+		return w
+	}
+	return hostspeed.InstallWindow
 }
 
 // hostSpeedNow returns the measurement this host publishes, or nil when
@@ -224,7 +255,7 @@ func (p *agentInferenceProvider) startHostSpeedMeasurement(ctx context.Context) 
 			p.logger.Info("host speed: the engine did not go quiet; not measuring this boot")
 			return
 		}
-		p.ensureHostSpeedMeasured(ctx)
+		p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow())
 	}()
 }
 
@@ -317,7 +348,11 @@ func (p *agentInferenceProvider) engineQuietForBench(ctx context.Context) bool {
 // ends, never across the engine request. See the field comment: one mutex
 // doing both jobs is what made a running measurement stall
 // /waired/v1/inference/status for the length of the measurement.
-func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context) (probe hostfit.HostProbe, measured bool) {
+// window is what THIS caller can spare, not a property of the
+// measurement: hostSpeedMeasureWindow from the boot goroutine, which has
+// nothing behind it, and hostSpeedInstallWindow from the two paths with a
+// model download behind them (waired-agent#579).
+func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, window time.Duration) (probe hostfit.HostProbe, measured bool) {
 	if p == nil || p.ollama == nil {
 		return hostfit.HostProbe{}, false
 	}
@@ -330,7 +365,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context) (p
 	// caller a fresh window on top of the one it just waited out, so the
 	// bound would not be a bound — the thing the pull is waiting behind
 	// could still take twice as long as this says.
-	notAfter := time.Now().Add(p.hostSpeedMeasureWindow())
+	notAfter := time.Now().Add(window)
 
 	p.hostSpeedMeasureMu.Lock()
 	defer p.hostSpeedMeasureMu.Unlock()
@@ -592,7 +627,14 @@ func (p *agentInferenceProvider) applyHostCutoff(ctx context.Context) bool {
 	// ones nobody has answered for — and it is what lets `waired inference
 	// status` explain an off state at all. Only the DECISION below is
 	// withheld when someone has already made it.
-	probe, measured := p.ensureHostSpeedMeasured(ctx)
+	//
+	// On the INSTALL window, not the background one: a 20-45 GB download
+	// is waiting on this return, and a verdict that arrives after init has
+	// stopped waiting has cost the operator their first run to decide
+	// nothing (waired-agent#579). Handing the window back is the right
+	// answer when the host cannot be measured in it — the background
+	// goroutine keeps measuring on the full budget, and publishes.
+	probe, measured := p.ensureHostSpeedMeasured(ctx, p.hostSpeedInstallWindow())
 	if !p.hostCutoffIsStillOurs() {
 		return true
 	}
@@ -603,7 +645,7 @@ func (p *agentInferenceProvider) applyHostCutoff(ctx context.Context) bool {
 		// for. Silence here is what made "the cutoff was wrong" and "the
 		// cutoff never ran" indistinguishable in a daemon log.
 		p.logger.Info("host cutoff: no measurement, so no verdict; downloading the model as configured",
-			"window", p.hostSpeedMeasureWindow())
+			"window", p.hostSpeedInstallWindow())
 		return true
 	}
 	if ok, decided := probe.MeetsRecommendedSpec(); !decided || ok {

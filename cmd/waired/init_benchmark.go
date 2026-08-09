@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/hostspeed"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 )
@@ -18,7 +19,14 @@ import (
 // multi-GB model over a slow link can take many minutes; the user can
 // always re-run `waired runtimes benchmark` later. A var (not const) so
 // tests can shrink it.
-var benchPollDeadline = 10 * time.Minute
+//
+// The figure itself lives in internal/hostspeed because the daemon has to
+// fit inside it and could not see it: the #496 measurement runs in front of
+// the download this waits for, and it was bounded at 16 minutes against
+// this 10 (waired-agent#579). Two `package main`s, no test that could
+// compare them. Changing the number here now moves the daemon's share with
+// it, and hostspeed's own test says whether the two still add up.
+var benchPollDeadline = hostspeed.ModelWait
 
 // benchPollInterval is the gap between status / benchmark polls. A var so
 // tests can shrink it to stay fast.
