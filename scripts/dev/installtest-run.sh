@@ -383,7 +383,14 @@ if [ "$TIER" -le 2 ]; then
       # guest still has no engine: with --inference one is already installed,
       # so daemonWantsEngine would answer false and the probe would pass
       # without reaching the arm it exists to test.
-      if [ "$INFER" != 1 ]; then assert_reinit_engine_optout "$GUEST"; fi
+      if [ "$INFER" != 1 ]; then
+        assert_reinit_engine_optout "$GUEST"
+        # The step-4 twin's other half (waired-agent#590): the flagless
+        # default on a deterministically below-spec host ends disabled,
+        # exit 0. Runs here for the same reason the opt-out probe does —
+        # this guest still has no engine, so both arms are reachable.
+        assert_reinit_default_unfit "$GUEST"
+      fi
       assert_claude_route "$GUEST"     # init is the single decider of Claude routing (#294)
       [ "$INFER" = 1 ] && assert_inference "$GUEST"
       if [ "$INTEG" = 1 ]; then
