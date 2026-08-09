@@ -425,8 +425,36 @@ assert_reinit_resumes() {
   mkdir -p "$IT_LOGDIR"
   log="$IT_LOGDIR/reinit-$name.log"
 
+  # The same --inference-enabled the enrol used, and it is load-bearing
+  # rather than tidy: this leg must leave the host's local-AI posture
+  # exactly as it found it, in EITHER direction.
+  #
+  # Passing nothing leaves the toggle unset, which hands the decision to
+  # install-flow step 6 — and GitHub-hosted runners are genuinely below
+  # the recommended spec. Measured on the routing sentinel's runner:
+  # 81.9 tok/s of prefill, a 256 s lower bound on one coding question
+  # against a 45 s budget. Step 6 then turns local AI off, correctly, and
+  # the "local inference is on" assert later in the same run fails for a
+  # reason that has nothing to do with #313. That only began when init
+  # learned to READ that bound (waired-agent#579 Stage 3c); before, the
+  # figure was published and step 6 could not see it. The behaviour is
+  # the fix, not the bug.
+  #
+  # Passing a bare `true` is equally wrong, and in the other direction: on
+  # the lean tier-2 guest it would INSTALL an engine, and the two legs
+  # after this one (assert_reinit_engine_optout, #551; and
+  # assert_reinit_default_unfit, #590) both need a host that wants
+  # inference and HAS NO ENGINE. Their preconditions are this leg's
+  # postconditions.
+  #
+  # Mirroring the enrol satisfies both: --inference-enabled=true on a tier
+  # that asked for inference, =false where it did not, and never the unset
+  # toggle that makes the outcome depend on how fast a runner happens to
+  # be. The below-spec default has its own leg (#590) which FORCES the
+  # verdict rather than depending on which machine CI bought; this leg
+  # must not become a second, accidental copy of it.
   local -a args=(waired init --control "$IT_CONTROL_URL" --device-name "$name"
-    --non-interactive --skip-integration)
+    "--inference-enabled=${IT_INFERENCE_ENABLED}" --non-interactive --skip-integration)
   # Keyed on the key itself, not the mode: the daemon-path leg
   # (--daemon-engine) runs under authkey too but deliberately never mints
   # one, and an empty --auth-key is not the same argv.

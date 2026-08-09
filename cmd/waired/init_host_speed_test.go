@@ -97,9 +97,17 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 			t.Errorf("the default off must report keptOn=false — the model picker keys on it (#586)")
 		}
 		got := out.String()
+		// Copy owner-approved 2026-08-09 (waired-agent#579), replacing
+		// "This computer looks slow for everyday coding work: one coding
+		// question takes about 68.4 s here (comfortable is <= 45 s)".
+		// The figure and the standard it is judged against now sit on
+		// their own rows, because an adjective on the figure inside a
+		// sentence reads as a requirement floor.
 		for _, want := range []string{
-			"slow for everyday coding work",
-			"one coding question takes about 68.4 s here (comfortable is ≤ 45 s)",
+			"This computer is below the recommended spec for running AI locally.",
+			"one coding question   68.4 s",
+			"comfortable           45 s or less",
+			"Running AI locally is not recommended here.",
 			"Keep local inference on anyway?",
 			"No turns local inference off — Waired still works as a gateway/relay.",
 			"(default: No)",
@@ -163,9 +171,16 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		if keptOn {
 			t.Errorf("the non-interactive off must report keptOn=false (#586)")
 		}
-		if !strings.Contains(out.String(), "Non-interactive: turning local inference off") ||
-			!strings.Contains(out.String(), "`waired inference on`") {
-			t.Errorf("non-interactive note missing: %q", out.String())
+		for _, want := range []string{
+			"This computer is below the recommended spec for running AI locally.",
+			"one coding question   68.4 s",
+			"comfortable           45 s or less",
+			"Running AI locally is not recommended here. Non-interactive: turning local",
+			"inference off. Re-enable with `waired inference on`.",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("non-interactive note missing %q: %q", want, out.String())
+			}
 		}
 	})
 

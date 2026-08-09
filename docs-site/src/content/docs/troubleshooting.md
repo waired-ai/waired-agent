@@ -335,8 +335,10 @@ When Waired is the one that decided, the answer says so:
 
 ```
 Local inference: off
-  One coding question would take about 68.4 s here; Waired starts local AI off above 45 s.
-  This computer can still use the AI running on your other computers.
+  This computer is below the recommended spec for running AI locally.
+  one coding question   210.4 s or more
+  comfortable           45 s or less
+  It can still use the AI running on your other computers.
   Turn it on with `waired inference on`.
 ```
 
@@ -347,6 +349,12 @@ on it: a long question, a full-length answer. It times it three times and takes
 the middle result, so one busy moment cannot decide the outcome. That takes a
 few seconds on a fast machine and a couple of minutes on a slow one, and it
 happens whether you set the computer up from the terminal or from the browser.
+
+On a computer that is a long way under the mark, Waired stops sooner than that.
+The opening part of the very first timing is already enough to show the answer
+would take far too long, so it says **210.4 s or more** instead of an exact
+number and does not spend the minutes a full timing would cost — minutes your
+model download would otherwise be waiting through.
 
 The figure is measured once per install. Starting the service again reuses it;
 updating Waired or its AI engine measures the machine again, because how fast a

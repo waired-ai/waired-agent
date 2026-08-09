@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 8c1e21356cd1e075
+sourceHash: c8241967ce1fcc92
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -348,8 +348,10 @@ Waired が判断した場合は、その旨が表示されます。
 
 ```
 Local inference: off
-  One coding question would take about 68.4 s here; Waired starts local AI off above 45 s.
-  This computer can still use the AI running on your other computers.
+  This computer is below the recommended spec for running AI locally.
+  one coding question   210.4 s or more
+  comfortable           45 s or less
+  It can still use the AI running on your other computers.
   Turn it on with `waired inference on`.
 ```
 
@@ -360,6 +362,11 @@ Local inference: off
 だけ混雑していたことで結論が決まることはありません。速いパソコンなら数秒、
 遅いパソコンでも数分で終わります。ターミナルからセットアップした場合も、
 ブラウザからセットアップした場合も同じです。
+
+基準を大きく下回るパソコンでは、Waired はそこまで測りません。最初の計測の
+冒頭部分だけで「答えが出るまで長くかかりすぎる」と分かるため、正確な数値では
+なく **210.4 s or more**（210.4 秒以上）と表示し、完全な計測にかかる数分を
+使いません。その数分は、モデルのダウンロードが待たされる時間でもあります。
 
 計測はインストールごとに 1 回です。サービスを再起動しただけなら前回の結果を
 再利用し、Waired または AI エンジンを更新した場合は計測し直します。新しい

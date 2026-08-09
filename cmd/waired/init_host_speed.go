@@ -45,7 +45,12 @@ func readHostSpeedPoll(mgmt string) hostSpeedPoll {
 	if err := json.Unmarshal(body, &s); err != nil {
 		return hostSpeedPoll{}
 	}
-	if s.HostSpeed != nil && s.HostSpeed.TurnSeconds <= 0 {
+	if hostSpeedFigure(s.HostSpeed) == "" {
+		// Nothing to report yet. A screened host fills TurnFloorSeconds
+		// and leaves TurnSeconds at zero (waired-agent#579), so this asks
+		// for "is there a figure" rather than for one of the two fields —
+		// checking TurnSeconds alone would park step 6 on the full wait
+		// for a host that had already been judged.
 		s.HostSpeed = nil
 	}
 	if s.HostSpeed != nil && s.DesiredState != string(state.InferenceDisabled) {
@@ -123,24 +128,35 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 	}
 
 	hs := p.hs
-	if hs.BudgetSeconds <= 0 || hs.TurnSeconds <= hs.BudgetSeconds {
+	if !hostSpeedMissesBudget(hs) {
 		return true // within budget (or an older daemon with no budget figure)
 	}
 	if !stillMine() {
 		return true
 	}
+	// The judgement leads on both arms below, because both are about to
+	// act on it — one by asking, one by announcing what it did.
+	// `waired inference status` puts the state first instead; that command
+	// was asked for the state. (Owner-approved copy, 2026-08-09,
+	// waired-agent#579.)
 	if nonInteractive {
-		writePromptf(out, "Non-interactive: turning local inference off (one coding question takes about %.1f s here; the comfortable target is ≤ %.0f s).\n",
-			hs.TurnSeconds, hs.BudgetSeconds)
-		writePrompt(out, "Re-enable with `waired inference on`.")
+		writePrompt(out, hostSpeedBelowSpecLine)
+		for _, line := range hostSpeedComparisonLines(hs, "  ") {
+			writePrompt(out, line)
+		}
+		writePromptf(out, "%s Non-interactive: turning local\ninference off. Re-enable with `waired inference on`.\n",
+			hostSpeedNotRecommendedLine)
 		if !hs.TurnedInferenceOff {
 			turnLocalAIOff(mgmtURL, out)
 		}
 		return false
 	}
 
-	writePromptf(out, "\n%s This computer looks slow for everyday coding work: one coding question takes about %.1f s here (comfortable is ≤ %.0f s).\n",
-		emo("🐢", "!"), hs.TurnSeconds, hs.BudgetSeconds)
+	writePromptf(out, "\n%s %s\n", emo("🐢", "!"), hostSpeedBelowSpecLine)
+	for _, line := range hostSpeedComparisonLines(hs, "     ") {
+		writePrompt(out, line)
+	}
+	writePromptf(out, "   %s\n", hostSpeedNotRecommendedLine)
 	// Two-line question so the default and the "No disables it" clarifier
 	// read as one prompt, the tinyBenchmarkDisableFlow shape.
 	q := "Keep local inference on anyway?\n" +

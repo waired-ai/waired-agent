@@ -129,12 +129,44 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			name: "off because the machine measured too slow says so",
 			body: `{"subsystem_state":"disabled","desired_state":"disabled",` +
 				`"host_speed":{"turn_seconds":68.4,"budget_seconds":45,"turned_inference_off":true}}`,
+			// Copy owner-approved 2026-08-09 (waired-agent#579). It
+			// replaces "would take about 68.4 s here; Waired starts local
+			// AI off above 45 s" — one sentence carrying the figure, the
+			// criterion and the consequence at once, in which the figure
+			// read as a requirement floor because the reader had to supply
+			// the standard being applied. The two-row comparison supplies
+			// it instead.
 			want: []string{
 				"Local inference: off",
-				"One coding question would take about 68.4 s here; Waired starts local AI off above 45 s.",
-				"This computer can still use the AI running on your other computers.",
+				"This computer is below the recommended spec for running AI locally.",
+				"one coding question   68.4 s",
+				"comfortable           45 s or less",
+				"It can still use the AI running on your other computers.",
 				"waired inference on",
 			},
+			// "Waired starts local AI off here." was dropped: it restated
+			// the "Local inference: off" line directly above it.
+			notWant: []string{"Waired starts local AI off"},
+		},
+		{
+			// The same surface for a host judged from the prefill bound
+			// alone (waired-agent#579 Stage 3b): turn_seconds is absent
+			// and turn_floor_seconds carries the figure. Before this,
+			// every speed surface gated on turn_seconds > 0 and would have
+			// said NOTHING here — on exactly the machines Waired has just
+			// turned local AI off on.
+			name: "off from a bound explains itself too",
+			body: `{"subsystem_state":"disabled","desired_state":"disabled",` +
+				`"host_speed":{"turn_floor_seconds":210.4,"method":"ollama_prefill_floor",` +
+				`"budget_seconds":45,"turned_inference_off":true}}`,
+			want: []string{
+				"This computer is below the recommended spec for running AI locally.",
+				"one coding question   210.4 s or more",
+				"comfortable           45 s or less",
+			},
+			// Never "at least": in a bare sentence that reads as a
+			// requirement, which is the defect the whole layout answers.
+			notWant: []string{"at least", "about"},
 		},
 		{
 			// The same measurement, but somebody turned the toggle off
@@ -150,7 +182,21 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 			name: "on reports what one question costs here",
 			body: `{"subsystem_state":"ready","desired_state":"enabled",` +
 				`"host_speed":{"turn_seconds":4.5,"budget_seconds":45}}`,
-			want: []string{"Local inference: on", "One coding question takes about 4.5 s on this computer."},
+			// "about" is gone everywhere (owner-approved, 2026-08-09): it
+			// adds nothing to a measurement and is false on a bound.
+			want: []string{
+				"Local inference: on",
+				"One coding question takes 4.5 s on this computer (comfortable: 45 s or less).",
+			},
+			notWant: []string{"about"},
+		},
+		{
+			// A host kept on by its operator after the cutoff screened it
+			// still has a figure, and it is still a bound.
+			name: "on from a bound says or more",
+			body: `{"subsystem_state":"ready","desired_state":"enabled",` +
+				`"host_speed":{"turn_floor_seconds":210.4,"method":"ollama_prefill_floor","budget_seconds":45}}`,
+			want: []string{"One coding question takes 210.4 s or more on this computer (comfortable: 45 s or less)."},
 		},
 	}
 	for _, tc := range cases {
