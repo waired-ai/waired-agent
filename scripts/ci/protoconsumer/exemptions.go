@@ -216,7 +216,7 @@ var producedInProto = []exemption{
 // took the debt on the same terms and #428 paid it. waired#1031's
 // `ContextWindow` (#439) was the most recent, and #440 paid it.
 // waired#1064's `ActiveModel` (#469) took the debt on the same terms and
-// #472 paid it. Empty again, and that is the point.
+// #472 paid it.
 //
 // (waired#1064's sibling field, InferenceState.SubsystemState, never
 // appeared here, for the reason Presentation.Reason is absent above:
@@ -229,18 +229,11 @@ var producedInProto = []exemption{
 // long before the wire field existed, so the guard has never seen this
 // one as producer-less — the real producer debt is tracked by #568
 // itself, not by this table.)
-var producerPending = []exemption{
-	// waired-agent#579 Stage 3a. The wire for the prefill-floor verdict
-	// lands ahead of the agent that sets it, for the reason every entry
-	// above did: proto ships as its own PR and tags before anything can
-	// depend on it, and the control plane has to accept the shape before
-	// an agent emits it or the whole inference-state push is rejected.
-	//
-	// Paid by Stage 3b, which adds screenHostCutoffPrompt and the publish
-	// arm that fills this in. Delete this entry there.
-	{reflect.TypeFor[signer.HostSpeed](), "TurnFloorSeconds",
-		"waired-agent#579 Stage 3b writes it; the wire landed first so the CP could accept it"},
-}
+// waired-agent#579's TurnFloorSeconds (#620) was the most recent, and
+// Stage 3b paid it: screenHostCutoffPrompt reads the prefill rate the
+// calibration was already discarding, and ensureHostSpeedMeasured
+// publishes the bound. Empty again, and that is the point.
+var producerPending = []exemption{}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the

@@ -923,7 +923,7 @@ IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still
 # shellcheck disable=SC2034  # read by scripts/ci/harness-failure-strings-guard.sh,
 # not by this script: the literals themselves are inlined in the readers below,
 # and this declaration is what lets the guard find and cross-check them.
-IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id'
+IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id|turn_floor_seconds'
 
 # The daemon-log lines the evidence dumps grep for when a model did not arrive
 # in time. Two groups, and the second is the whole reason this is a named
@@ -1331,7 +1331,7 @@ assert_inference() {
   # Skipped when the daemon published nothing at all — the red above already
   # named an unreachable daemon, and a second red would spread one cause over
   # two lines.
-  local hs turn budget samples
+  local hs turn budget samples floor method figure
   if [ -z "$out" ]; then
     it_warn "no inference status payload — skipping the host-speed assert"
   else
@@ -1339,15 +1339,23 @@ assert_inference() {
     turn="$(printf '%s' "$hs" | grep -oE '"turn_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' || true)"
     budget="$(printf '%s' "$hs" | grep -oE '"budget_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' || true)"
     samples="$(printf '%s' "$hs" | grep -oE '"samples"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' || true)"
+    # A host far below the cutoff publishes a BOUND and no turn: turn_seconds
+    # stays a measurement wherever it appears (owner ruling on waired-agent#620),
+    # so the figure to assert on is whichever of the two the daemon set, and
+    # `method` says which one that is (waired-agent#579 Stage 3).
+    floor="$(printf '%s' "$hs" | grep -oE '"turn_floor_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' || true)"
+    method="$(printf '%s' "$hs" | sed -n 's/.*"method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+    figure="$turn"
+    case "$figure" in ""|0|0.0) figure="$floor" ;; esac
     # SOFT while waired-agent#579 is open, the way installtest-windows.ps1's
     # $ContractBlocking asserts are: the absent case is a REAL defect and the
     # per-PR routing-sentinel leg hits it, so making it blocking today would
     # turn every PR in the repo red for a defect none of them introduced.
     # The #579 fix flips this to `bad` (and raises the assert-count floors,
     # which stay put until it does).
-    case "$turn" in
+    case "$figure" in
       ""|0|0.0) it_warn "WARN no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579 open — soft)" ;;
-      *)        ok "host speed measured (turn ${turn}s against a ${budget:-?}s budget; ${samples:-0} samples)" ;;
+      *)        ok "host speed measured (${method:-?}: turn ${turn:-0}s, floor ${floor:-0}s, against a ${budget:-?}s budget; ${samples:-0} samples)" ;;
     esac
   fi
 

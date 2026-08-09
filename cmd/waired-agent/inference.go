@@ -1938,8 +1938,13 @@ func (p *agentInferenceProvider) hostSpeedStatus() *management.HostSpeedStatus {
 		return nil
 	}
 	return &management.HostSpeedStatus{
-		TurnSeconds:        s.TurnSeconds,
-		BudgetSeconds:      hostfit.HostCutoffTurnBudgetSeconds,
+		TurnSeconds:      s.TurnSeconds,
+		BudgetSeconds:    hostfit.HostCutoffTurnBudgetSeconds,
+		TurnFloorSeconds: s.TurnFloorSeconds,
+		Method:           s.Method,
+		DepthTokens:      s.DepthTokens,
+		PromptTokens:     s.PromptTokens,
+
 		PrefillTokps:       s.PrefillTokps,
 		DecodeTokps:        s.DecodeTokps,
 		Samples:            s.Samples,
