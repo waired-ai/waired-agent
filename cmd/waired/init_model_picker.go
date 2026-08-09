@@ -5,6 +5,8 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // Owner-ruled install-flow model step (2026-08-08, waired-ai/waired#1067;
@@ -129,12 +131,33 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 // anything about models — an active or preferred model, weights on disk,
 // or a download in flight. The picker is the FIRST choice only (#586);
 // re-choosing on a configured host is waired-agent#599.
+//
+// "Decided" means a PERSON decided. The one model this has to tell apart
+// is hostfit.HostCutoffProbeModelID: #496 measures the host by pulling
+// it, through the same registry the catalog reports downloads from, and
+// it is a real catalog entry rather than a private fixture — so its
+// weights arriving used to read as history and skip the picker
+// entirely (waired-agent#607). Not a race: step 6 blocks until the
+// measurement lands, and the measurement cannot land until that pull
+// has finished, so on the ordinary interactive path the picker was
+// unreachable. Weights Waired fetched to measure with are not an
+// answer; being ACTIVE or PREFERRED still is, because that model is a
+// legitimate pick (quality_tier 12, the smallest offered entry).
+//
+// Same exclusion, one layer down, in cmd/waired-agent/setup_desired.go:
+// the probe model does not trigger ensureHostSpeedMeasured either.
 func hostHasModelHistory(cat catalogDetailResp) bool {
 	if cat.PreferredModelID != "" {
 		return true
 	}
 	for _, f := range cat.Families {
-		if f.Active || f.Preferred || f.Downloaded || f.Downloading {
+		if f.Active || f.Preferred {
+			return true
+		}
+		if f.ModelID == hostfit.HostCutoffProbeModelID {
+			continue
+		}
+		if f.Downloaded || f.Downloading {
 			return true
 		}
 	}

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 // pickerFakeDaemon serves the three routes the model picker touches,
@@ -273,6 +275,94 @@ func TestModelPicker_SkipsWhenTheHostHasModelHistory(t *testing.T) {
 			}
 		})
 	}
+}
+
+// PRODUCT CONTRACT (waired-agent#607): the host-speed probe's own
+// download is NOT model history. #496's probe pulls
+// hostfit.HostCutoffProbeModelID through the same registry the catalog
+// reports from, and that model is a real catalog entry rather than a
+// private fixture, so counting its weights as a decision made the picker
+// unreachable on the path it was designed for — deterministically, since
+// step 6 waits for the very measurement that pull produces.
+//
+// The split is who chose it. Waired downloaded it to measure the host;
+// a person may still PICK it (quality_tier 12, the smallest offered
+// entry), and then it is history like any other model.
+func TestModelPicker_ProbeModelIsNotModelHistory(t *testing.T) {
+	probeCatalog := func(mutate func(*catalogDetailFamily)) catalogDetailResp {
+		var c catalogDetailResp
+		probe := catalogDetailFamily{ModelID: hostfit.HostCutoffProbeModelID, Fits: true}
+		mutate(&probe)
+		c.Families = []catalogDetailFamily{
+			probe,
+			{ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B", Fits: true, RecommendedPick: true},
+		}
+		return c
+	}
+
+	t.Run("waired downloaded it, so the question still gets asked", func(t *testing.T) {
+		for name, mutate := range map[string]func(*catalogDetailFamily){
+			"weights on disk":    func(f *catalogDetailFamily) { f.Downloaded = true },
+			"download in flight": func(f *catalogDetailFamily) { f.Downloading = true },
+			"both":               func(f *catalogDetailFamily) { f.Downloaded, f.Downloading = true, true },
+		} {
+			t.Run(name, func(t *testing.T) {
+				f := &pickerFakeDaemon{catalogs: []catalogDetailResp{probeCatalog(mutate)}}
+				var out strings.Builder
+				got := runInitModelPicker(f.server(t).URL, false, "", linesOf("0\n"), &out, mine)
+
+				if !got.none {
+					t.Fatalf("outcome = %+v, want the none answer — the picker never ran", got)
+				}
+				if !strings.Contains(out.String(), "Choose the AI model for this computer") {
+					t.Errorf("the list was never printed:\n%s", out.String())
+				}
+			})
+		}
+	})
+
+	t.Run("a person picked it, so it is history", func(t *testing.T) {
+		for name, cat := range map[string]catalogDetailResp{
+			"active":    probeCatalog(func(f *catalogDetailFamily) { f.Active = true }),
+			"preferred": probeCatalog(func(f *catalogDetailFamily) { f.Preferred = true }),
+			"stored preference": func() catalogDetailResp {
+				c := probeCatalog(func(*catalogDetailFamily) {})
+				c.PreferredModelID = hostfit.HostCutoffProbeModelID
+				return c
+			}(),
+			"picked AND still marked downloaded": probeCatalog(func(f *catalogDetailFamily) {
+				f.Active, f.Downloaded = true, true
+			}),
+		} {
+			t.Run(name, func(t *testing.T) {
+				f := &pickerFakeDaemon{catalogs: []catalogDetailResp{cat}}
+				var out strings.Builder
+				got := runInitModelPicker(f.server(t).URL, false, "", linesOf("0\n"), &out, mine)
+
+				if got.none || got.picked != "" || out.String() != "" {
+					t.Fatalf("outcome = %+v out=%q, want a silent skip", got, out.String())
+				}
+			})
+		}
+	})
+
+	// The exclusion is for the probe model alone: any OTHER model's
+	// weights still mean this host has decided something. Guards against
+	// a fix that drops the Downloaded/Downloading arms altogether.
+	t.Run("another model's weights are still history", func(t *testing.T) {
+		var c catalogDetailResp
+		c.Families = []catalogDetailFamily{
+			{ModelID: hostfit.HostCutoffProbeModelID, Fits: true, Downloaded: true},
+			{ModelID: "qwen3.5-9b", Fits: true, RecommendedPick: true, Downloaded: true},
+		}
+		f := &pickerFakeDaemon{catalogs: []catalogDetailResp{c}}
+		var out strings.Builder
+		got := runInitModelPicker(f.server(t).URL, false, "", linesOf("0\n"), &out, mine)
+
+		if got.none || got.picked != "" || out.String() != "" {
+			t.Fatalf("outcome = %+v out=%q, want a silent skip", got, out.String())
+		}
+	})
 }
 
 // The engine ask's precedence, applied here too: --non-interactive keeps
