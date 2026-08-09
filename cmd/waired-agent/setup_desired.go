@@ -41,9 +41,9 @@ const setupPushInterval = 2 * time.Second
 // and pushes nothing at all.
 const setupKeepaliveInterval = 30 * time.Second
 
-// Onboarding step IDs (waired#835 §7, five ids as of waired#934). The CP
-// treats them as opaque strings; NAVI's wizard keys its step rows off
-// them. The three the elevated executor drives are named in
+// Onboarding step IDs (waired#835 §7, five ids as of waired#934; a sixth
+// for #597). The CP treats them as opaque strings; NAVI's wizard keys its
+// step rows off them. The three the elevated executor drives are named in
 // internal/management, because the executor and the daemon have to agree
 // on which row a report belongs to.
 const (
@@ -52,6 +52,12 @@ const (
 	setupStepModelPull      = "model_pull"
 	setupStepBenchmark      = "benchmark"
 	setupStepIntegration    = management.SetupStepIntegration
+	// setupStepInferenceOff is the echo of the acted-on "don't run local
+	// AI on this computer" answer (#597; waired#1109) — the row the CP's
+	// completion derivation reads to count an off-host as COMPLETE with
+	// no engine or model rows at all. An older NAVI renders the raw id,
+	// the documented degradation for unknown step ids.
+	setupStepInferenceOff = "inference_off"
 )
 
 // Executor lease timings (waired#835 §9/§11). Both sides of the range
@@ -93,6 +99,11 @@ type setupDesired struct {
 	// Same contract as benchmarkGen — declarative, idempotent, and a
 	// bump is the operator saying "try that download again".
 	modelGen int
+	// inference is the operator's explicit local-AI answer (#597):
+	// signer.DesiredInferenceOn / DesiredInferenceOff, "" = no
+	// instruction. Applied once per persisted VALUE, never per frame —
+	// see applyDesiredInference.
+	inference string
 	// integrations is the coding-agent instruction (waired#935), flattened
 	// so this struct stays comparable — change detection here is a plain
 	// `!=`, and a slice field would not compile.
@@ -275,6 +286,12 @@ type setupProvider interface {
 	//
 	// Fire-and-forget for the same reason startSetupEngine is.
 	setupEnableLocalInference(reason string)
+	// setupDisableLocalInference is the other half of the operator's
+	// explicit local-AI answer (#597; waired#1109/#1110): the same
+	// persisted soft toggle a person's own `waired inference off`
+	// writes (#465) — a recorded choice, never a fault. A no-op when it
+	// is already off. Fire-and-forget, like the enable above.
+	setupDisableLocalInference(reason string)
 	// setupNoteDesired reports what the control plane's latest frame said
 	// about this host — the canonical desired model id ("" when the frame
 	// named none) and whether a wizard is driving the host right now — so
@@ -363,6 +380,14 @@ type setupReconciler struct {
 	// without it every service restart walked a finished device back to
 	// "nobody has run the setup command here".
 	integrationsWritten state.SetupIntegrations
+	// inferenceActed is the last DesiredInference value acted on here,
+	// read from the daemon state dir at construction and re-written on
+	// every application (#597). Durable for the reason the record's own
+	// doc states: the CP re-sends the instruction on every frame and
+	// never clears it, so without the marker every restart would
+	// re-apply a weeks-old wizard answer over a person's later local
+	// `waired inference off|on` — the silent revert #465 forbids.
+	inferenceActed state.SetupInference
 	// executorDriver is the surface a live lease claims to be driving
 	// (waired-agent#198) — in practice only ever "terminal". Bound to the
 	// lease exactly like installClaimed below: a claim that outlived its
@@ -434,6 +459,15 @@ func newSetupReconciler(provider setupProvider, push *controlclient.Client, devi
 		logger.Warn("setup: cannot read the coding-tools record", "err", err)
 	}
 	r.integrationsWritten = written
+	acted, err := state.ReadSetupInference(r.stateDir)
+	if err != nil && logger != nil {
+		// Same posture as above — with the one consequence worth naming:
+		// an unreadable record means a replayed instruction acts once
+		// more, which is idempotent against the persisted toggle unless a
+		// person flipped it since.
+		logger.Warn("setup: cannot read the local-AI answer record", "err", err)
+	}
+	r.inferenceActed = acted
 	return r
 }
 
@@ -454,6 +488,7 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		benchmarkGen: st.DesiredBenchmarkGen,
 		modelGen:     st.DesiredModelGen,
 		integrations: flattenIntegrations(st.DesiredIntegrations),
+		inference:    st.DesiredInference,
 	}
 	r.mu.Lock()
 	// The baseline is the first frame folded here, whatever it carries —
@@ -478,6 +513,15 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		return
 	}
 	changed := d != r.desired
+	// The serve-ask below must not read an inference-only change as
+	// "asked to serve" (#597): a wizard writing "off" beside a standing
+	// engine would otherwise fire an enable a breath before the off
+	// applies. Compared with the inference field blanked on both sides,
+	// which is exactly the comparison `changed` made before the field
+	// existed.
+	prevServe, dServe := r.desired, d
+	prevServe.inference, dServe.inference = "", ""
+	changedServe := dServe != prevServe
 	if changed && !baseline {
 		// Watched it change: something wrote this instruction while we
 		// were here (#308).
@@ -535,15 +579,24 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 			"gen", d.modelGen, "model", d.modelID)
 	}
 
-	// Someone asked this device to serve (#465). Gated on `changed` — not
-	// on the current toggle state — because Apply runs on every frame and
-	// the control plane never clears a desired value: re-asserting on
-	// every frame would undo a `waired inference off` seconds after the
-	// user made it. A benchmark generation alone is deliberately not an
-	// ask; it tells a device that already serves to measure itself.
-	if changed && (d.engine != "" || d.modelID != "") {
+	// Someone asked this device to serve (#465). Gated on `changedServe`
+	// — not on the current toggle state — because Apply runs on every
+	// frame and the control plane never clears a desired value:
+	// re-asserting on every frame would undo a `waired inference off`
+	// seconds after the user made it. A benchmark generation alone is
+	// deliberately not an ask; it tells a device that already serves to
+	// measure itself. And an inference-only change is the OPPOSITE of an
+	// ask (#597) — it is excluded from this comparison and applied below.
+	if changedServe && (d.engine != "" || d.modelID != "") {
 		r.provider.setupEnableLocalInference("setup: the wizard asked this device to serve")
 	}
+
+	// The operator's explicit local-AI answer (#597; waired#1109/#1110),
+	// applied once per persisted value — see applyDesiredInference. AFTER
+	// the serve-ask above, so a frame that (incoherently) carries both a
+	// serve instruction and "off" lands on off — the explicit answer
+	// outranks the implied one, and the CP validates the pair anyway.
+	r.applyDesiredInference(d.inference)
 
 	// Benchmark (§12): the served generation counter is the request;
 	// the persisted last-completed generation is the answer. A run that
@@ -929,6 +982,47 @@ func (r *setupReconciler) SetupState(ctx context.Context) management.SetupStateR
 // snapshot builds the current typed progress (§7), or nil when this
 // host has no onboarding activity. Statuses derive from observable
 // state only, so a restarted agent reports the same truth.
+// applyDesiredInference acts on the wizard's explicit local-AI answer
+// (#597) — once per persisted VALUE, never per frame and never per
+// process. The CP re-sends the instruction on every map frame and never
+// clears it, so any weaker guard re-applies a weeks-old answer over a
+// person's later local `waired inference off|on`: acting on the toggle
+// state would do it every frame, an in-memory marker every restart. The
+// durable record (state.SetupInference) is what lets a person's local
+// flip stand until the wizard actually says something different — the
+// #465 rule that an opt-in silently reverted on the next boot is no
+// opt-in at all.
+//
+// A value outside the closed on/off set is left un-acted and UNRECORDED:
+// a newer CP speaking a vocabulary this build does not know should find
+// the instruction still pending after an upgrade, not consumed.
+func (r *setupReconciler) applyDesiredInference(value string) {
+	if value != signer.DesiredInferenceOn && value != signer.DesiredInferenceOff {
+		return
+	}
+	r.mu.Lock()
+	if r.inferenceActed.Value == value {
+		r.mu.Unlock()
+		return
+	}
+	rec := state.SetupInference{Value: value, AppliedAt: r.now().UTC().Format(time.RFC3339)}
+	r.inferenceActed = rec
+	r.mu.Unlock()
+	switch value {
+	case signer.DesiredInferenceOff:
+		r.provider.setupDisableLocalInference("setup: the wizard asked this device to run without local AI")
+	case signer.DesiredInferenceOn:
+		r.provider.setupEnableLocalInference("setup: the wizard turned local AI back on")
+	}
+	if r.stateDir == "" {
+		return
+	}
+	if err := state.WriteSetupInference(r.stateDir, rec); err != nil && r.logger != nil {
+		r.logger.Warn("setup: could not persist the local-AI answer record; a restart may re-apply the instruction",
+			"value", value, "err", err)
+	}
+}
+
 func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	r.mu.Lock()
 	d := r.desired
@@ -942,6 +1036,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	install := r.executorSteps[setupStepEngineInstall]
 	integ := r.executorSteps[setupStepIntegration]
 	integWritten := r.integrationsWritten
+	actedInference := r.inferenceActed.Value
 	phase := install.phase
 	execErr := install.errText
 	// leaseLiveLocked above already dropped the driver if the lease died,
@@ -973,6 +1068,15 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		// "picked up, tried again, failed again" — the step is `failed`
 		// in both, and those two want opposite things on screen.
 		ModelGen: modelGenActed,
+	}
+	// The acted-on "don't run local AI on this computer" answer (#597):
+	// the row the CP's completion derivation reads to count an off-host
+	// as COMPLETE with no engine or model rows at all (the waired#835 §6
+	// pair-contract amendment, waired#1109). Emitted from the ACTED
+	// record, not the desired frame, so the wizard sees confirmation
+	// rather than its own instruction read back.
+	if actedInference == signer.DesiredInferenceOff {
+		p.Steps = append(p.Steps, signer.SetupStep{ID: setupStepInferenceOff, Status: signer.SetupStatusDone})
 	}
 	if d.engine != "" {
 		installed, ready := r.provider.setupEngineState(ctx, d.engine)
@@ -1892,6 +1996,30 @@ func (p *agentInferenceProvider) setupEnableLocalInference(reason string) {
 	}
 	if err := p.enableInference(); err != nil && p.logger != nil {
 		p.logger.Warn("could not turn local inference on", "reason", reason, "err", err)
+	}
+}
+
+// setupDisableLocalInference turns local inference off when the wizard's
+// explicit answer arrives (#597; waired#1109/#1110) — the same persisted
+// soft toggle a person's own `waired inference off` writes (#465), so a
+// recorded choice, never a fault, and the #569 closing-box arms read it
+// exactly like one. A no-op when it is already off, for the reason the
+// enable above states.
+//
+// disableInference is nil on a daemon started with --disable-inference:
+// the subsystem is already out, and there is nothing to persist through.
+func (p *agentInferenceProvider) setupDisableLocalInference(reason string) {
+	if p == nil || p.disableInference == nil {
+		return
+	}
+	if p.isInferenceDisabled != nil && p.isInferenceDisabled() {
+		return
+	}
+	if p.logger != nil {
+		p.logger.Info("turning local inference off", "reason", reason)
+	}
+	if err := p.disableInference(); err != nil && p.logger != nil {
+		p.logger.Warn("could not turn local inference off", "reason", reason, "err", err)
 	}
 }
 

@@ -72,6 +72,9 @@ type fakeSetupProvider struct {
 	// count here is "how often the reconciler ASKED", which is what the
 	// per-frame idempotence assertions are about (#465).
 	localInferenceEnables []string
+	// localInferenceDisables is the same record for the other half of the
+	// operator's explicit local-AI answer (#597).
+	localInferenceDisables []string
 	// desiredNotes records every setupNoteDesired call, in order. The
 	// boot pre-pull's hold reads nothing else (#379), so what the
 	// reconciler reports here IS the interface between the two.
@@ -299,6 +302,18 @@ func (f *fakeSetupProvider) setupEnableLocalInference(reason string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.localInferenceEnables = append(f.localInferenceEnables, reason)
+}
+
+func (f *fakeSetupProvider) setupDisableLocalInference(reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.localInferenceDisables = append(f.localInferenceDisables, reason)
+}
+
+func (f *fakeSetupProvider) localInferenceDisableCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.localInferenceDisables)
 }
 
 func (f *fakeSetupProvider) localInferenceEnableCount() int {
