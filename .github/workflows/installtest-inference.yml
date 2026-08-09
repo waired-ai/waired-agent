@@ -730,7 +730,7 @@ jobs:
     # runs on a schedule, and its red means "this model cannot drive a coding
     # agent" — a measurement result somebody asked for, not a broken night.
     # Filing an issue for it would report a verdict as an outage.
-    needs: [legs, installtest-inference, daemon-engine, routing, banner, vllm-install]
+    needs: [legs, installtest-inference, daemon-engine, engine-only, routing, banner, vllm-install]
     if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -746,6 +746,7 @@ jobs:
           TITLE_TAG: "[nightly-installtest]"
           RESULT_INFERENCE: ${{ needs.installtest-inference.result }}
           RESULT_DAEMON_ENGINE: ${{ needs.daemon-engine.result }}
+          RESULT_ENGINE_ONLY: ${{ needs.engine-only.result }}
           RESULT_ROUTING: ${{ needs.routing.result }}
           RESULT_BANNER: ${{ needs.banner.result }}
           RESULT_VLLM: ${{ needs.vllm-install.result }}
@@ -755,6 +756,7 @@ jobs:
           for pair in \
               "install+inference:${RESULT_INFERENCE}" \
               "daemon-path engine install:${RESULT_DAEMON_ENGINE}" \
+              "engine installed, no model chosen:${RESULT_ENGINE_ONLY}" \
               "routing sentinel:${RESULT_ROUTING}" \
               "banner render check:${RESULT_BANNER}" \
               "vLLM install+serve:${RESULT_VLLM}"; do
