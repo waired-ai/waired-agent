@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1341,6 +1342,136 @@ func TestEnsureHostSpeedMeasured_IsBoundedByTheInstallWindow(t *testing.T) {
 	}
 	if p.hostSpeedNow() != nil {
 		t.Error("a measurement that never completed was published anyway")
+	}
+}
+
+// A measurement whose engine version could not be read at the START is
+// published with the version read at the END.
+//
+// This is the whole of waired-agent#637. Real hardware produced a record
+// with the engine_version key simply ABSENT, and such a record can never
+// be reused — hostSpeedStillApplies rejects an empty version by design
+// (waired#668). So the host re-measured on every daemon start, ~82 s
+// each, until something happened to overwrite it. Nothing guarantees the
+// overwrite.
+//
+// The version is unreadable at the top of the call because that is the
+// boot path: the adapter has recorded nothing yet, the profiler snapshot
+// is cold, and probedOllamaVersion memoises a failed exec. A minute later
+// a serving engine has been answering requests and can say what it is.
+//
+// Product contract (waired-agent#637).
+func TestEnsureHostSpeedMeasured_RecordsTheVersionItCouldReadAtTheEnd(t *testing.T) {
+	var reads atomic.Int64
+	tick := int64(0)
+	prof := hardware.NewProfiler(t.TempDir(),
+		// An advancing clock, so the profiler's own snapshot cache expires
+		// between the two reads rather than serving the first answer twice.
+		hardware.WithNow(func() time.Time {
+			tick++
+			return time.Unix(1_800_000_000+tick*3600, 0)
+		}),
+		hardware.WithGPU(func(context.Context) ([]hardware.GPU, hardware.Accelerators, error) {
+			return nil, hardware.Accelerators{}, nil
+		}),
+		hardware.WithEngineVersion(func(_ context.Context, name string) (bool, string) {
+			if name != "ollama" {
+				return false, ""
+			}
+			if reads.Add(1) == 1 {
+				// The engine is still coming up.
+				return true, ""
+			}
+			return true, "0.31.1"
+		}),
+	)
+
+	p, _, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
+	p.profiler = prof
+
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement")
+	}
+	got := p.hostSpeedNow()
+	if got == nil {
+		t.Fatal("nothing published")
+	}
+	if got.EngineVersion != "0.31.1" {
+		t.Fatalf("engine_version = %q, want %q. A record with no version can never be reused, "+
+			"so this host would re-measure on every single daemon start (waired-agent#637)",
+			got.EngineVersion, "0.31.1")
+	}
+}
+
+// And the cost that record carries, pinned so the fix above cannot be
+// dropped without something failing: a stored measurement with no engine
+// version is measured again rather than reused.
+//
+// Record of today's behaviour AND the deliberate rule behind it
+// (waired#668): a figure that cannot say what produced it must not
+// survive an engine bump. The defect in waired-agent#637 was never this
+// rule — it was writing a record the rule can only reject.
+func TestEnsureHostSpeedMeasured_AStoredRecordWithNoEngineVersionIsNotReused(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the first measurement did not land")
+	}
+	first := len(eng.generateBodies())
+
+	// Poison it exactly the way the real host's record was poisoned.
+	p.hostSpeedMu.Lock()
+	p.hostSpeed.EngineVersion = ""
+	p.persistHostSpeedLocked(false)
+	p.hostSpeedMu.Unlock()
+
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the second call reached no verdict")
+	}
+	if got := len(eng.generateBodies()); got == first {
+		t.Fatalf("/api/generate requests stayed at %d: a record with no engine version was "+
+			"reused. waired#668 requires it not to be — the fix is to never write one, "+
+			"not to start trusting it", first)
+	}
+}
+
+// The two install callers, one after the other, measure ONCE between them.
+//
+// This is the SEQUENTIAL twin of the queued-caller test below, and the case
+// that was never covered: applyHostCutoff (the bundled pre-pull) and
+// setup_desired's apply path (a model chosen in the browser) both call this,
+// and on a control-plane-driven install both run — minutes apart, with the
+// single-flight lock free by the time the second arrives. Nothing but the
+// cache stands between that and a second full measurement.
+//
+// Record of today's behaviour, and a floor rather than a reproduction: this
+// passes today, and waired-agent#637 is a real host that measured twice
+// anyway. What the fixture cannot express is the engine restart the second
+// caller is suspected of landing in the middle of — engineVersionFor is
+// stable here by construction. So this pins the contract and will catch a
+// regression in the cache logic; it does not close #637.
+func TestEnsureHostSpeedMeasured_TheSecondInstallCallerDoesNotMeasureAgain(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, cpuOnlyCounters, 0)
+	hostCutoffEngineUp(t, p)
+
+	// The pre-pull path: the install window, because a download waits on it.
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedInstallWindow()); !v.Decided {
+		t.Fatal("the first caller did not measure")
+	}
+	first := len(eng.generateBodies())
+	if first == 0 {
+		t.Fatal("the first caller issued no requests at all")
+	}
+
+	// The wizard's apply path, later, on its own window. Same install, same
+	// engine build, so there is nothing left to learn about this host.
+	v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedInstallWindow())
+	if !v.Decided {
+		t.Fatal("the second caller reached no verdict; it should have reused the first's")
+	}
+	if got := len(eng.generateBodies()); got != first {
+		t.Fatalf("/api/generate requests %d -> %d: the second install caller measured this host "+
+			"again. Each caller takes its own window, so two measurements is two windows of the "+
+			"install spent deciding one thing (waired-agent#637)", first, got)
 	}
 }
 

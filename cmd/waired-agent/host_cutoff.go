@@ -481,6 +481,26 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	p.hostSpeedMu.Unlock()
 
 	cached, ok := hostSpeedStillApplies(stored, string(engine), engineVersion)
+	if !ok && stored != nil {
+		// A stored measurement that no longer applies. Logged because the
+		// silence here was total: the two arms that DO log are the cache
+		// hit just below and the agent-upgrade re-measure just after, so a
+		// host that threw away a good measurement and paid for another one
+		// looked exactly like a host measuring for the first time.
+		//
+		// That is how waired-agent#637 was found from the outside rather
+		// than from a log: an install measured twice, eight seconds apart,
+		// on the same engine build, and the only evidence was which lines
+		// were ABSENT. Every field the decision reads goes on the line, so
+		// the next occurrence names its own cause.
+		p.logger.Info("host speed: the stored measurement does not apply; measuring again",
+			"stored_engine_kind", stored.EngineKind, "engine_kind", string(engine),
+			"stored_engine_version", stored.EngineVersion, "engine_version", engineVersion,
+			"stored_method", stored.Method,
+			"stored_prompt_tokens", stored.PromptTokens,
+			"stored_turn_seconds", fmt.Sprintf("%.1f", stored.TurnSeconds),
+			"stored_turn_floor_seconds", fmt.Sprintf("%.1f", stored.TurnFloorSeconds))
+	}
 	if ok && storedBy != buildinfo.Version {
 		// Same engine, different agent build: this is an upgrade, and an
 		// upgrade re-measures. Logged rather than silent because it is the
@@ -545,6 +565,45 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		return hostSpeedVerdict{}
 	}
 
+	// Read the engine version AGAIN, now that the measurement is done, and
+	// keep whichever read produced one.
+	//
+	// The version is provenance for the record, and the moment it is most
+	// likely to be readable is after a serving engine has just answered
+	// requests for a minute or more — not at the top of this call, which
+	// on the boot path can land while the engine is still coming up. All
+	// three sources can miss there: the adapter has not recorded a version
+	// yet, the profiler's snapshot is cold, and probedOllamaVersion
+	// MEMOISES a failed exec for engineVersionMemoTTL.
+	//
+	// A record published with no version is not merely incomplete: it can
+	// never be reused, because hostSpeedStillApplies rejects an empty
+	// version by design (waired#668 — a figure that cannot say what
+	// produced it must not survive an engine bump). So it re-measures on
+	// every daemon start, forever, until something happens to overwrite it
+	// with a better one. Measured on real hardware at ~82 s per start
+	// (waired-agent#637), and nothing in the code guarantees the
+	// overwrite ever comes.
+	if engineVersion == "" {
+		if v := p.engineVersionFor(ctx, engine); v != "" {
+			p.logger.Info("host speed: the engine version was unreadable when the measurement "+
+				"started and readable when it finished; recording the later one",
+				"engine_version", v)
+			engineVersion = v
+		}
+	}
+	if engineVersion == "" {
+		// Publishing it anyway: the figure is still the best thing this
+		// host knows about itself, and withholding it would leave the
+		// admin page and `waired inference status` blank without stopping
+		// the re-measure — the next start would take the same reading and
+		// fail to record it the same way. Said out loud instead, because
+		// the cost is real and recurring.
+		p.logger.Warn("host speed: measured, but this engine will not say what version it is; "+
+			"the measurement cannot be reused and this host will measure again on every start",
+			"engine_kind", string(engine))
+	}
+
 	published := &signer.HostSpeed{
 		ProbeModelID: hostfit.HostCutoffProbeModelID,
 		DepthTokens:  hostfit.HostCutoffProbeDepthTokens,
@@ -580,7 +639,12 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 			"prefill_tok_s", fmt.Sprintf("%.0f", m.Probe.PrefillTokps),
 			"decode_tok_s", fmt.Sprintf("%.1f", m.Probe.DecodeTokps),
 			"prompt_tokens", m.Probe.PromptTokens,
-			"samples", m.Samples, "spread_pct", fmt.Sprintf("%.1f", m.SpreadPct))...)
+			"samples", m.Samples, "spread_pct", fmt.Sprintf("%.1f", m.SpreadPct),
+			// Only the LAST measurement survives in the state dir, so when a
+			// host measures more than once the log is the only place the two
+			// can be compared — and the engine version is the field the
+			// reuse decision turns on (waired-agent#637).
+			"engine_version", engineVersion)...)
 
 	p.hostSpeedMu.Lock()
 	p.hostSpeed = published
