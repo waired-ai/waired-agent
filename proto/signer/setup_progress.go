@@ -220,9 +220,13 @@ const (
 	// host that sits far below the install-time cutoff at full depth costs
 	// minutes, and those minutes stand in front of the model download
 	// (waired-agent#579). The agent emits this method only when the bound
-	// is already past hostfit.HostCutoffTurnBudgetSeconds, so a consumer
-	// comparing it against any threshold at or below that budget reaches
-	// the answer the full measurement would have reached.
+	// is already past hostfit.HostCutoffTurnBudgetSeconds.
+	//
+	// The bound rides HostSpeed.TurnFloorSeconds, its own field;
+	// TurnSeconds stays absent, and stays a measurement everywhere it
+	// appears (owner ruling, 2026-08-09, on waired-agent#579). So this
+	// method does not change how any existing field is read — it says
+	// which of the two turn figures is present.
 	//
 	// What it must not be used for is anything needing the number itself:
 	// a decode rate (there is none — DecodeTokps is absent under this

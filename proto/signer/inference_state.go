@@ -427,7 +427,41 @@ type HostSpeed struct {
 	// consumer that recomputes it has to know the 21:1 ratio to get the
 	// same answer. All three come from the SAME sample, so they cannot
 	// disagree with each other.
+	//
+	// Always a measurement, never a bound. A device that could only
+	// establish a bound leaves this zero and fills TurnFloorSeconds
+	// instead, so zero here keeps meaning exactly what it meant before
+	// that was possible: nothing was measured.
 	TurnSeconds float64 `json:"turn_seconds,omitempty"`
+
+	// TurnFloorSeconds is a LOWER BOUND on the same turn: hostfit's
+	// TurnFloorSeconds, the prefill term alone, with the decode term
+	// dropped. The real turn is at least this and may be much more.
+	//
+	// It exists because a host far below the cutoff costs minutes to
+	// measure at full depth, and those minutes stand in front of the model
+	// download during the install (waired-agent#579): one full sample took
+	// 7 min 12 s on the GitHub macos-14 runner. The bound comes from a
+	// reading the agent already takes and discards, at ~2.8k tokens rather
+	// than the canonical 21k, which is why PromptTokens sits far under
+	// DepthTokens whenever this field is set.
+	//
+	// A SEPARATE FIELD rather than a bound in TurnSeconds (owner ruling,
+	// 2026-08-09, on waired-agent#579). Putting it in TurnSeconds would
+	// have been additive too, and safe in the narrow sense — the agent
+	// publishes a bound only once it already exceeds
+	// hostfit.HostCutoffTurnBudgetSeconds, so every threshold comparison
+	// at or below the budget still lands where the measurement would have
+	// put it. It was rejected because the whole of #579 is one figure
+	// meaning different things in different places, and a TurnSeconds
+	// whose meaning depends on Method carries that same defect onto a wire
+	// that cannot be corrected later. A consumer that has not been taught
+	// this field reads "no measurement" and declines to judge, which is
+	// the answer it should give.
+	//
+	// Set together with Method = BenchmarkMethodOllamaPrefillFloor, and
+	// with DecodeTokps absent: no decode rate was measured.
+	TurnFloorSeconds float64 `json:"turn_floor_seconds,omitempty"`
 
 	// Method is how the rates were obtained — one of the BenchmarkMethod*
 	// constants, the same vocabulary SetupBenchmark.Method uses. It
