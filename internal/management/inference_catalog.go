@@ -43,6 +43,24 @@ type CatalogConfig struct {
 	// ManifestsFn returns the bundled manifests. nil falls back to
 	// catalog.BundledManifests. Tests inject a synthetic catalog.
 	ManifestsFn func() ([]catalog.Manifest, error)
+
+	// ApplyNoModelSelected applies the operator's "don't download a model
+	// now" choice in process (waired-agent#586): the provider records it
+	// and the bundled fallback pre-pull stands down. Called by
+	// /preferred-model on a {"none":true} body, after the choice has been
+	// persisted. nil is fine — the persisted preference alone covers the
+	// next boot; only the currently-held pre-pull dispatch misses the news.
+	ApplyNoModelSelected func()
+
+	// NoteModelChoicePending is POST /waired/v1/inference/model-choice-pending:
+	// `waired init` announcing that it is about to put the model question
+	// to the operator at the terminal (pending=true), or that the question
+	// is no longer coming (pending=false). While the claim is live the
+	// provider defers the bundled fallback download, exactly as it already
+	// defers for a browser wizard that is driving — bounded server-side,
+	// so a killed terminal cannot park it forever. nil leaves the route
+	// answering 404, which the CLI treats as best-effort.
+	NoteModelChoicePending func(pending bool)
 }
 
 // ErrModelSwitchUnavailable is ApplyModelSwitch reporting that the

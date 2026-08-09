@@ -234,6 +234,19 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			if setupActive {
 				engineErr = runSetupEngineInstall(context.Background(), sess, os.Stdout)
 			} else {
+				// waired-agent#586: tell the daemon the model question is
+				// coming, BEFORE the engine step — the fallback download
+				// dispatches the moment the host-speed measurement lands,
+				// which is always before a human has answered the picker
+				// below, and there is no way to cancel it afterwards. The
+				// daemon bounds the claim server-side, so an interrupted
+				// init converges to the fallback like an abandoned wizard.
+				// Skipped when the picker itself will be: an explicit pin
+				// answers the question, and --non-interactive keeps the
+				// daemon's auto-selection.
+				if !nonInteractive && inf.ModelID == "" {
+					postModelChoicePending(mgmtURL, true)
+				}
 				// No wizard is driving, but this host may still want an
 				// engine and have none — the default macOS install has
 				// been landing here all along, and the §11.2 ordering
@@ -307,6 +320,9 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				if !errors.Is(engineErr, errEngineOptOut) {
 					printEngineInstallFailure(os.Stdout, engineErr, setupActive)
 				}
+				// The model question is not coming — no engine means no
+				// picker — so withdraw the #586 claim registered above.
+				postModelChoicePending(mgmtURL, false)
 			} else {
 				// #756: the daemon pulls the bundled model in the background
 				// after enroll, so the daemon-mediated init used to return while a
@@ -347,17 +363,40 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				// while a browser wizard drives (§4.2), and stillMine
 				// re-checks at prompt time for one that started during
 				// the wait.
+				keptOn := true
 				if !setupActive {
-					confirmHostSpeedBudget(mgmtURL, inf, nonInteractive, stdin, os.Stdout,
+					keptOn = confirmHostSpeedBudget(mgmtURL, inf, nonInteractive, stdin, os.Stdout,
 						func() bool { return !watch.Started() })
 				}
-				// #306: report on the model the WIZARD chose. Deliberately
-				// not gated on setupActive — that is a snapshot taken
-				// before this wait, and the whole point of the watch above
-				// is that a browser setup can commit minutes into it. The
-				// target self-gates on setupDriving per read instead.
-				modelWait = waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
-					engineComing, enter, watch, newModelTarget(sess))
+				// Install-flow model step (waired-agent#586): the picker,
+				// between the speed question and the model wait — the wait
+				// below then watches the download the answer started.
+				// Skipped while a browser wizard drives (§4.2) and when
+				// local AI just went off (asking which model to download
+				// right after would be the flow contradicting itself);
+				// both skips withdraw the pending-question claim.
+				var picked modelPickerOutcome
+				if !setupActive {
+					if keptOn {
+						picked = runInitModelPicker(mgmtURL, nonInteractive, inf.ModelID, stdin, os.Stdout,
+							func() bool { return !watch.Started() })
+					} else {
+						postModelChoicePending(mgmtURL, false)
+					}
+				}
+				if picked.none {
+					// #586: nothing is coming, and that is the choice — the
+					// picker already printed what it means, and the closing
+					// box reads this host as configured, not pending.
+				} else {
+					// #306: report on the model the WIZARD chose. Deliberately
+					// not gated on setupActive — that is a snapshot taken
+					// before this wait, and the whole point of the watch above
+					// is that a browser setup can commit minutes into it. The
+					// target self-gates on setupDriving per read instead.
+					modelWait = waitForBundledModel(mgmtURL, os.Stdout, isTerminal(os.Stdout), budget,
+						engineComing, enter, watch, newModelTarget(sess))
+				}
 			}
 			// #308: a setup that started during the wait leaves this
 			// terminal as the browser's executor, so it must stop asking

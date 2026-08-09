@@ -372,3 +372,126 @@ func TestPreferredModel_NotConfiguredReturns404(t *testing.T) {
 		t.Errorf("want 404 when catalog unconfigured, got %d", w.Code)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#586; owner-ruled 2026-08-08,
+// waired-ai/waired#1067): {"none":true} is the install flow's "don't
+// download a model now". It persists Preference.None, applies in process
+// through the hook, restarts nothing, and downloads nothing.
+func TestPreferredModel_NoneChoicePersistsAndAppliesInProcess(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	var noneApplied int
+	inf := &fakeInference{}
+	cfg := &CatalogConfig{
+		PreferencePath:       filepath.Join(prefDir, "preferred-model.json"),
+		ManifestsFn:          func() ([]catalog.Manifest, error) { return catalogFixture(), nil },
+		RestartScheduler:     func() { atomic.AddInt32(&restarts, 1) },
+		ApplyNoModelSelected: func() { noneApplied++ },
+	}
+	s := New(stubStatus{}, stubPinger{}).WithInference(inf).WithCatalog(cfg)
+
+	w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+		PreferredModelRequest{None: true})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	var got PreferredModelResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ModelID != "" || got.WillRestart || got.Downloading {
+		t.Errorf("none must name no model, restart nothing and download nothing: %+v", got)
+	}
+	if noneApplied != 1 {
+		t.Errorf("ApplyNoModelSelected calls = %d, want 1", noneApplied)
+	}
+	pref, ok, err := agentconfig.LoadPreference(filepath.Join(prefDir, "preferred-model.json"))
+	if err != nil || !ok {
+		t.Fatalf("none preference not persisted: ok=%v err=%v", ok, err)
+	}
+	if !pref.None || pref.ModelID != "" {
+		t.Errorf("persisted preference: %+v, want None with no model", pref)
+	}
+	if inf.pulled != "" {
+		t.Errorf("PullModel must not run on a none choice, got %q", inf.pulled)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if atomic.LoadInt32(&restarts) != 0 {
+		t.Errorf("RestartScheduler must not fire on a none choice, fired %d times", restarts)
+	}
+}
+
+// A body that both names a model and claims there is none is
+// contradictory, and a later model choice must overwrite a stored none —
+// LoadPreference reporting ok=false for it would re-arm the fallback the
+// record stands down (#586).
+func TestPreferredModel_NoneWithModelIDIsRefused(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	s := newPreferredModelTestServer(t, &fakeInference{}, prefDir, &restarts)
+
+	w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+		PreferredModelRequest{ModelID: "qwen3-8b-instruct", None: true})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("none+model_id: want 400, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// The nil-hook wiring (an older main.go, or --disable-inference builds)
+// still persists the choice: the next boot reads the file, which is the
+// half the hook only accelerates.
+func TestPreferredModel_NoneWithoutHookStillPersists(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	s := newPreferredModelTestServer(t, &fakeInference{}, prefDir, &restarts)
+
+	w := doPostJSON(t, s, "/waired/v1/inference/preferred-model",
+		PreferredModelRequest{None: true})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status: want 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	pref, ok, err := agentconfig.LoadPreference(filepath.Join(prefDir, "preferred-model.json"))
+	if err != nil || !ok || !pref.None {
+		t.Fatalf("none preference not persisted without the hook: pref=%+v ok=%v err=%v", pref, ok, err)
+	}
+}
+
+// POST /inference/model-choice-pending relays the claim to the provider
+// hook verbatim — both directions — and answers 404 when no hook is
+// wired, which the CLI reads as best-effort (#586).
+func TestModelChoicePending_RelaysTheClaim(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	var claims []bool
+	inf := &fakeInference{}
+	cfg := &CatalogConfig{
+		PreferencePath:         filepath.Join(prefDir, "preferred-model.json"),
+		ManifestsFn:            func() ([]catalog.Manifest, error) { return catalogFixture(), nil },
+		RestartScheduler:       func() { atomic.AddInt32(&restarts, 1) },
+		NoteModelChoicePending: func(pending bool) { claims = append(claims, pending) },
+	}
+	s := New(stubStatus{}, stubPinger{}).WithInference(inf).WithCatalog(cfg)
+
+	if w := doPostJSON(t, s, "/waired/v1/inference/model-choice-pending",
+		ModelChoicePendingRequest{Pending: true}); w.Code != http.StatusNoContent {
+		t.Fatalf("pending=true: want 204, got %d body=%s", w.Code, w.Body.String())
+	}
+	if w := doPostJSON(t, s, "/waired/v1/inference/model-choice-pending",
+		ModelChoicePendingRequest{Pending: false}); w.Code != http.StatusNoContent {
+		t.Fatalf("pending=false: want 204, got %d body=%s", w.Code, w.Body.String())
+	}
+	if len(claims) != 2 || claims[0] != true || claims[1] != false {
+		t.Errorf("claims relayed = %v, want [true false]", claims)
+	}
+}
+
+func TestModelChoicePending_NoHookAnswers404(t *testing.T) {
+	prefDir := t.TempDir()
+	var restarts int32
+	s := newPreferredModelTestServer(t, &fakeInference{}, prefDir, &restarts)
+
+	if w := doPostJSON(t, s, "/waired/v1/inference/model-choice-pending",
+		ModelChoicePendingRequest{Pending: true}); w.Code != http.StatusNotFound {
+		t.Errorf("no hook: want 404, got %d", w.Code)
+	}
+}

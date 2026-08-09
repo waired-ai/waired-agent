@@ -557,6 +557,7 @@ func (s *Server) mux() *http.ServeMux {
 	if s.catalog != nil && s.catalog.PreferencePath != "" {
 		mux.HandleFunc("/waired/v1/inference/catalog", s.handleInferenceCatalog)
 		mux.HandleFunc("/waired/v1/inference/preferred-model", s.handleInferencePreferredModel)
+		mux.HandleFunc("/waired/v1/inference/model-choice-pending", s.handleModelChoicePending)
 		mux.HandleFunc("/waired/v1/inference/benchmark", s.handleInferenceBenchmark)
 		mux.HandleFunc("/waired/v1/inference/benchmark/status", s.handleInferenceBenchmarkStatus)
 		mux.HandleFunc("/waired/v1/inference/recommendation/dismiss", s.handleInferenceRecommendationDismiss)

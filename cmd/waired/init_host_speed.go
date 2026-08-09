@@ -59,15 +59,23 @@ func readHostSpeedPoll(mgmt string) hostSpeedPoll {
 // post-download benchmark still runs afterwards as the confirmation
 // measurement.
 //
+// keptOn reports whether local AI is (as far as this step can tell)
+// still on when it returns — false exactly when it observed or applied
+// an off state. The model picker behind it (waired-agent#586) keys on
+// this: asking which model to download right after local AI went off
+// would be the flow contradicting itself. Unknown states (an unreachable
+// daemon, a measurement that never came) stay true — the picker has its
+// own fail-open guards.
+//
 // stillMine reports whether this terminal still owns the questions — a
 // browser setup that started during the wait takes them over (§4.2),
 // and a prompt racing the wizard is what it must never print.
-func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteractive bool, sc lineReader, out io.Writer, stillMine func() bool) {
+func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteractive bool, sc lineReader, out io.Writer, stillMine func() bool) (keptOn bool) {
 	if inf.Enabled != nil && *inf.Enabled {
 		// #465: the operator already answered with --inference-enabled=true.
 		// The daemon's cutoff does not override a set toggle, and neither
 		// may this ask.
-		return
+		return true
 	}
 
 	deadline := time.Now().Add(hostSpeedAskWait)
@@ -83,7 +91,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 			// parking init on the full wait (best-effort, like every
 			// other read of this route).
 			if misses++; misses >= 3 {
-				return
+				return true
 			}
 		} else {
 			misses = 0
@@ -93,11 +101,11 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 				(p.hs == nil || !p.hs.TurnedInferenceOff) {
 				// A person (or the step-4 decline) turned local AI off.
 				// That is an answer, not a measurement — nothing to ask.
-				return
+				return false
 			}
 			if p.subState == "no_engine" || p.subState == "stopped" {
 				// Nothing is going to measure anything.
-				return
+				return false
 			}
 			if p.hs != nil {
 				break
@@ -109,17 +117,17 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 			}
 		}
 		if time.Now().After(deadline) {
-			return
+			return true
 		}
 		time.Sleep(hostSpeedAskPoll)
 	}
 
 	hs := p.hs
 	if hs.BudgetSeconds <= 0 || hs.TurnSeconds <= hs.BudgetSeconds {
-		return // within budget (or an older daemon with no budget figure)
+		return true // within budget (or an older daemon with no budget figure)
 	}
 	if !stillMine() {
-		return
+		return true
 	}
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: turning local inference off (one coding question takes about %.1f s here; the comfortable target is ≤ %.0f s).\n",
@@ -128,7 +136,7 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 		if !hs.TurnedInferenceOff {
 			turnLocalAIOff(mgmtURL, out)
 		}
-		return
+		return false
 	}
 
 	writePromptf(out, "\n%s This computer looks slow for everyday coding work: one coding question takes about %.1f s here (comfortable is ≤ %.0f s).\n",
@@ -144,10 +152,11 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 				writePromptf(out, "warn: could not turn local AI back on (%v); run `waired inference on`\n", err)
 			}
 		}
-		return
+		return true
 	}
 	if !hs.TurnedInferenceOff {
 		turnLocalAIOff(mgmtURL, out)
 	}
 	writePrompt(out, "Local inference disabled — Waired keeps working as a gateway/relay.")
+	return false
 }

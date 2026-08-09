@@ -1,0 +1,322 @@
+package main
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+)
+
+// pickerFakeDaemon serves the three routes the model picker touches,
+// recording every write so the tests can assert what the daemon was
+// actually told (repo rule: fakes take and record the real arguments).
+type pickerFakeDaemon struct {
+	mu sync.Mutex
+	// catalogs is served in order, one per GET; the last repeats. The
+	// picker fetches once for the list and once per live re-check, so a
+	// two-element slice is "the world changed between list and confirm".
+	catalogs []catalogDetailResp
+	noCat    bool
+	gets     int
+	// preferred records each POST /inference/preferred-model body, raw.
+	preferred []string
+	// pendings records each POST /inference/model-choice-pending claim.
+	pendings []bool
+}
+
+func (f *pickerFakeDaemon) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		switch r.URL.Path {
+		case "/waired/v1/inference/catalog":
+			if f.noCat || len(f.catalogs) == 0 {
+				http.NotFound(w, r)
+				return
+			}
+			i := f.gets
+			if i >= len(f.catalogs) {
+				i = len(f.catalogs) - 1
+			}
+			f.gets++
+			_ = json.NewEncoder(w).Encode(f.catalogs[i])
+		case "/waired/v1/inference/preferred-model":
+			b, _ := io.ReadAll(r.Body)
+			f.preferred = append(f.preferred, string(b))
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"model_id":"","will_restart":false}`))
+		case "/waired/v1/inference/model-choice-pending":
+			var req struct {
+				Pending bool `json:"pending"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			f.pendings = append(f.pendings, req.Pending)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func (f *pickerFakeDaemon) preferredBodies() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.preferred...)
+}
+
+func (f *pickerFakeDaemon) pendingClaims() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.pendings...)
+}
+
+func pickerCatalog() catalogDetailResp {
+	var c catalogDetailResp
+	c.Families = []catalogDetailFamily{
+		{ModelID: "qwen3.5-2b", Fits: true},
+		{ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B", Fits: true, RecommendedPick: true},
+		{ModelID: "qwen3.5-27b", Fits: false, DeficitLabel: "needs 24 GB RAM (have 16 GB)"},
+	}
+	return c
+}
+
+// PRODUCT CONTRACT (waired-agent#586; owner-ruled 2026-08-08,
+// waired-ai/waired#1067): Enter takes the recommended pick — and the
+// default is the recommended ROW, not row 1, so the prompt must carry
+// its number.
+func TestModelPicker_EnterTakesTheRecommended(t *testing.T) {
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", eofLineReader(), &out, mine)
+
+	if got.picked != "qwen3.5-9b" || got.none {
+		t.Fatalf("outcome = %+v, want the recommended qwen3.5-9b", got)
+	}
+	bodies := f.preferredBodies()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"model_id":"qwen3.5-9b"`) {
+		t.Errorf("preferred-model bodies = %v, want one naming qwen3.5-9b", bodies)
+	}
+	o := out.String()
+	for _, want := range []string{
+		"Choose the AI model for this computer (Enter = recommended):",
+		"2) qwen3.5-9b — recommended for this computer",
+		"3) qwen3.5-27b — needs 24 GB RAM (have 16 GB)",
+		"0) Don't download a model now",
+		"Model [2]: ",
+	} {
+		if !strings.Contains(o, want) {
+			t.Errorf("output missing %q:\n%s", want, o)
+		}
+	}
+}
+
+// PRODUCT CONTRACT (#586): "0" completes init with the engine installed
+// and no model — a normal state, with the approved completion copy.
+func TestModelPicker_ZeroIsTheNoneChoice(t *testing.T) {
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", linesOf("0\n"), &out, mine)
+
+	if !got.none || got.picked != "" {
+		t.Fatalf("outcome = %+v, want none", got)
+	}
+	bodies := f.preferredBodies()
+	if len(bodies) != 1 || !strings.Contains(bodies[0], `"none":true`) {
+		t.Errorf("preferred-model bodies = %v, want one {\"none\":true}", bodies)
+	}
+	o := out.String()
+	if !strings.Contains(o, "No model selected — the AI software stays ready.") ||
+		!strings.Contains(o, "Pick one later with `waired models pull <model>` or from the browser dashboard.") {
+		t.Errorf("missing the approved completion copy:\n%s", o)
+	}
+}
+
+// PRODUCT CONTRACT (#586, sharing #592's confirmed copy): an unfit pick
+// warns with the deficit and asks, default No — and No returns to the
+// list rather than ending the step.
+func TestModelPicker_UnfitPickNoReturnsToTheList(t *testing.T) {
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", linesOf("3\nn\n1\n"), &out, mine)
+
+	if got.picked != "qwen3.5-2b" {
+		t.Fatalf("outcome = %+v, want qwen3.5-2b after declining the unfit pick", got)
+	}
+	o := out.String()
+	if !strings.Contains(o, "does not fit in this computer's memory: needs 24 GB RAM (have 16 GB).") ||
+		!strings.Contains(o, "Loading it is expected to fail after the download completes.") ||
+		!strings.Contains(o, "Download it anyway?") || !strings.Contains(o, "(default: No)") {
+		t.Errorf("missing the #592 unfit confirm:\n%s", o)
+	}
+	if strings.Count(o, "Choose the AI model for this computer") != 2 {
+		t.Errorf("No must return to the list (want it rendered twice):\n%s", o)
+	}
+	if bodies := f.preferredBodies(); len(bodies) != 1 || !strings.Contains(bodies[0], "qwen3.5-2b") {
+		t.Errorf("preferred-model bodies = %v, want only the final qwen3.5-2b", bodies)
+	}
+}
+
+// PRODUCT CONTRACT (waired-ai/waired#1067 R5, soft limits): Yes is
+// honoured — no surface refuses a model any more.
+func TestModelPicker_UnfitPickYesIsHonoured(t *testing.T) {
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", linesOf("3\ny\n"), &out, mine)
+
+	if got.picked != "qwen3.5-27b" {
+		t.Fatalf("outcome = %+v, want the unfit qwen3.5-27b honoured on Yes", got)
+	}
+}
+
+// The runs-but-demoted row confirms through #592's other arm
+// ("Use it anyway?", default No) instead of the unfit one.
+func TestModelPicker_NotRecommendedPickConfirms(t *testing.T) {
+	cat := pickerCatalog()
+	cat.Families[0].Fit = &catalogDetailFit{Runnable: true, NotRecommended: true, NotRecommendedReason: "weights_spill"}
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{cat}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", linesOf("1\ny\n"), &out, mine)
+
+	if got.picked != "qwen3.5-2b" {
+		t.Fatalf("outcome = %+v, want qwen3.5-2b honoured on Yes", got)
+	}
+	o := out.String()
+	if !strings.Contains(o, "runs on this computer, but Waired would not choose it here") ||
+		!strings.Contains(o, "Use it anyway?") {
+		t.Errorf("missing the not-recommended confirm:\n%s", o)
+	}
+}
+
+// PRODUCT CONTRACT (#586 + waired-ai/waired#1067 R5): on a host where
+// nothing is recommended the default is "0) don't download a model now"
+// — the auto-selection would pick nothing there either, and Enter must
+// not mean a download the machine cannot hold.
+func TestModelPicker_NothingRecommendedDefaultsToNone(t *testing.T) {
+	var cat catalogDetailResp
+	cat.Families = []catalogDetailFamily{
+		{ModelID: "qwen3.5-9b", Fits: false, DeficitLabel: "needs 12 GB RAM (have 7 GB)"},
+	}
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{cat}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", eofLineReader(), &out, mine)
+
+	if !got.none {
+		t.Fatalf("outcome = %+v, want none by default", got)
+	}
+	o := out.String()
+	if !strings.Contains(o, "Model [0]: ") {
+		t.Errorf("prompt must show 0 as the default:\n%s", o)
+	}
+	if strings.Contains(o, "(Enter = recommended)") {
+		t.Errorf("header must not promise a recommendation that does not exist:\n%s", o)
+	}
+}
+
+// The live re-check re-reads the catalog at confirm time: a verdict that
+// moved between the list and the answer (an engine loaded, a VM
+// started) is the one the confirm shows (#586).
+func TestModelPicker_LiveRecheckUsesTheFreshVerdict(t *testing.T) {
+	stale := pickerCatalog()
+	stale.Families[0].Fits = true // listed as fitting…
+	fresh := pickerCatalog()
+	fresh.Families[0].Fits = false // …but does not fit by confirm time
+	fresh.Families[0].DeficitLabel = "needs 6 GB RAM (have 5 GB)"
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{stale, fresh}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", linesOf("1\nn\n0\n"), &out, mine)
+
+	if !got.none {
+		t.Fatalf("outcome = %+v, want none after declining the re-checked pick", got)
+	}
+	if !strings.Contains(out.String(), "needs 6 GB RAM (have 5 GB)") {
+		t.Errorf("the confirm must show the FRESH verdict:\n%s", out.String())
+	}
+}
+
+// The picker is the FIRST model choice only: any model history — active,
+// preferred, downloaded, downloading — skips it (the owner-ruled full
+// re-run is waired-agent#599), and the skip withdraws the
+// pending-question claim so the daemon's fallback proceeds.
+func TestModelPicker_SkipsWhenTheHostHasModelHistory(t *testing.T) {
+	for name, mutate := range map[string]func(*catalogDetailResp){
+		"active model":      func(c *catalogDetailResp) { c.Families[1].Active = true },
+		"stored preference": func(c *catalogDetailResp) { c.PreferredModelID = "qwen3.5-9b" },
+		"weights on disk":   func(c *catalogDetailResp) { c.Families[0].Downloaded = true },
+		"download in flight": func(c *catalogDetailResp) {
+			c.Families[1].Downloading = true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cat := pickerCatalog()
+			mutate(&cat)
+			f := &pickerFakeDaemon{catalogs: []catalogDetailResp{cat}}
+			var out strings.Builder
+			got := runInitModelPicker(f.server(t).URL, false, "", linesOf("0\n"), &out, mine)
+
+			if got.none || got.picked != "" {
+				t.Fatalf("outcome = %+v, want a silent skip", got)
+			}
+			if bodies := f.preferredBodies(); len(bodies) != 0 {
+				t.Errorf("no preference may be written on a skip, got %v", bodies)
+			}
+			if claims := f.pendingClaims(); len(claims) != 1 || claims[0] {
+				t.Errorf("the skip must withdraw the claim, got %v", claims)
+			}
+			if out.String() != "" {
+				t.Errorf("a skipped picker prints nothing, got:\n%s", out.String())
+			}
+		})
+	}
+}
+
+// The engine ask's precedence, applied here too: --non-interactive keeps
+// the daemon's auto-selection, an explicit --inference-bundled-model-id
+// pin IS the answer, a browser takeover owns the terminal, and an older
+// daemon with no catalog fails open — all silent, all withdrawing the
+// claim.
+func TestModelPicker_SkipPrecedence(t *testing.T) {
+	cases := map[string]struct {
+		nonInteractive bool
+		pin            string
+		noCat          bool
+		stillMine      func() bool
+	}{
+		"non-interactive":  {nonInteractive: true, stillMine: mine},
+		"pinned model":     {pin: "qwen3.5-9b", stillMine: mine},
+		"browser takeover": {stillMine: func() bool { return false }},
+		"no catalog":       {noCat: true, stillMine: mine},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}, noCat: tc.noCat}
+			var out strings.Builder
+			got := runInitModelPicker(f.server(t).URL, tc.nonInteractive, tc.pin, linesOf("0\n"), &out, tc.stillMine)
+
+			if got.none || got.picked != "" || out.String() != "" {
+				t.Fatalf("outcome = %+v out=%q, want a silent skip", got, out.String())
+			}
+			if claims := f.pendingClaims(); len(claims) != 1 || claims[0] {
+				t.Errorf("the skip must withdraw the claim, got %v", claims)
+			}
+		})
+	}
+}
+
+// An answer is its own claim withdrawal on the daemon side, so answered
+// runs must NOT also post pending=false — that would race the daemon's
+// own bookkeeping for no reason.
+func TestModelPicker_AnAnswerDoesNotAlsoWithdrawTheClaim(t *testing.T) {
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{pickerCatalog()}}
+	var out strings.Builder
+	_ = runInitModelPicker(f.server(t).URL, false, "", eofLineReader(), &out, mine)
+
+	if claims := f.pendingClaims(); len(claims) != 0 {
+		t.Errorf("an answered picker posts no pending claims, got %v", claims)
+	}
+}

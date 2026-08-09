@@ -391,6 +391,11 @@ func run(ctx context.Context, args []string) error {
 				// Fallback when the in-process swap can't apply (cross-engine
 				// target / wedged engine / unenrolled).
 				RestartScheduler: supervisedRestart,
+				// waired-agent#586: the install flow's "don't download a
+				// model now" choice and its pending-question claim, both
+				// delegated the same way as the switch above.
+				ApplyNoModelSelected:   sbModelSwapControl{sb}.ApplyNoModelSelected,
+				NoteModelChoicePending: sbModelSwapControl{sb}.NoteModelChoicePending,
 			})
 	}
 	// Integration endpoints are $HOME / state-dir based, not identity

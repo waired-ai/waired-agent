@@ -76,9 +76,12 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		shrinkHostSpeedAsk(t)
 		f := &speedFakeDaemon{status: slowStatus(30, 45, "enabled", false)}
 		var out strings.Builder
-		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
 		if out.Len() != 0 || f.disables.Load() != 0 || f.enables.Load() != 0 {
 			t.Fatalf("out=%q disables=%d enables=%d, want nothing", out.String(), f.disables.Load(), f.enables.Load())
+		}
+		if !keptOn {
+			t.Errorf("within budget must report local AI kept on (#586 picker gate)")
 		}
 	})
 
@@ -86,9 +89,12 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		shrinkHostSpeedAsk(t)
 		f := &speedFakeDaemon{status: slowStatus(68.4, 45, "enabled", false)}
 		var out strings.Builder
-		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
 		if f.disables.Load() != 1 {
 			t.Fatalf("disables = %d, want the default decline recorded", f.disables.Load())
+		}
+		if keptOn {
+			t.Errorf("the default off must report keptOn=false — the model picker keys on it (#586)")
 		}
 		got := out.String()
 		for _, want := range []string{
@@ -112,9 +118,12 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		// there is somebody to ask.
 		f := &speedFakeDaemon{status: slowStatus(68.4, 45, "disabled", true)}
 		var out strings.Builder
-		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, linesOf("y\n"), &out, mine)
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, linesOf("y\n"), &out, mine)
 		if f.enables.Load() != 1 || f.disables.Load() != 0 {
 			t.Fatalf("enables=%d disables=%d, want the default overturned once", f.enables.Load(), f.disables.Load())
+		}
+		if !keptOn {
+			t.Errorf("Yes must report keptOn=true so the model picker still runs (#586)")
 		}
 	})
 
@@ -124,9 +133,12 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		// or the step-4 decline. Asking would re-litigate their choice.
 		f := &speedFakeDaemon{status: slowStatus(68.4, 45, "disabled", false)}
 		var out strings.Builder
-		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
 		if out.Len() != 0 || f.disables.Load() != 0 || f.enables.Load() != 0 {
 			t.Fatalf("out=%q, want nothing on a deliberate off", out.String())
+		}
+		if keptOn {
+			t.Errorf("a deliberate off must report keptOn=false — no model question after it (#586)")
 		}
 	})
 
@@ -144,9 +156,12 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		shrinkHostSpeedAsk(t)
 		f := &speedFakeDaemon{status: slowStatus(68.4, 45, "enabled", false)}
 		var out strings.Builder
-		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
 		if f.disables.Load() != 1 {
 			t.Fatalf("disables = %d, want the non-interactive default", f.disables.Load())
+		}
+		if keptOn {
+			t.Errorf("the non-interactive off must report keptOn=false (#586)")
 		}
 		if !strings.Contains(out.String(), "Non-interactive: turning local inference off") ||
 			!strings.Contains(out.String(), "`waired inference on`") {

@@ -313,6 +313,14 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 			// so it is not pending either. This is the arm that decides a
 			// gateway-only install still ends on the success box (#569).
 			return modelWaitResult{}
+		case st.NoModelSelected && want == "":
+			// waired-agent#586: the operator's standing choice is "no
+			// model" — nothing is coming and nothing failed. The picker
+			// (or the init that ran it) already said what this means, so
+			// end quietly with the same zero value as the disabled arm.
+			// A wizard-named target (want != "") overrides: naming a
+			// model IS the choice changing.
+			return modelWaitResult{}
 		case st.SubsystemState == "no_engine":
 			// Engine still being brought up on a fresh bundled install
 			// (issue #489): wait it out within the grace, then conclude it

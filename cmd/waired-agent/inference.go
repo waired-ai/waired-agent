@@ -248,8 +248,21 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// the tray's "click → SIGTERM → systemd restart" actually lands on
 	// the operator's choice.
 	prefPath := agentconfig.DefaultPreferencePath()
+	// prefNone / prefUnanswered survive past this block into the provider
+	// below: the "run without a local model" choice and the abandoned
+	// model question (#586) are applied by the provider's pre-pull path,
+	// not by rewriting cfg (see ApplyPreferenceOverride).
+	prefNone, prefUnanswered := false, false
 	if pref, ok, err := agentconfig.LoadPreference(prefPath); err != nil {
 		logger.Warn("preferred-model.json unreadable; ignoring", "path", prefPath, "err", err)
+	} else if ok && pref.None {
+		prefNone = true
+		logger.Info("preferred-model.json records no-model-selected; the bundled fallback pre-pull stands down",
+			"set_at", pref.SetAt)
+	} else if ok && pref.Unanswered {
+		prefUnanswered = true
+		logger.Info("preferred-model.json records an unanswered model question; the bundled fallback pre-pull stays down until someone chooses",
+			"set_at", pref.SetAt)
 	} else if ok {
 		logger.Info("preferred-model override applied",
 			"model_id", pref.ModelID, "set_at", pref.SetAt)
@@ -532,6 +545,11 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// because the adopt trigger may take on a vLLM venv installed after
 	// this process started.
 	provider.setServingEngine(decision.Engine)
+	// Not in the literal above either (atomic.Bool): the persisted "run
+	// without a local model" choice and the abandoned-question record
+	// (#586), read with the preference at the top of this function.
+	provider.noModelSelected.Store(prefNone)
+	provider.modelQuestionUnanswered.Store(prefUnanswered)
 
 	// waired-agent#29: hand the adapter a way to report its engine's death.
 	// Installed here rather than in OllamaConfig because the handler is a
@@ -1311,6 +1329,33 @@ type agentInferenceProvider struct {
 	// bounce (a wedged engine). Wired from main.go to the same scheduler the
 	// management RestartScheduler uses. nil in unit tests.
 	restartOnWedge func()
+
+	// noModelSelected is the operator's standing "run without a local
+	// model" choice (waired-agent#586): true when preferred-model.json
+	// records None, or the management API just applied it in process. The
+	// bundled fallback pre-pull stands down while it holds; any model
+	// choice clears it.
+	noModelSelected atomic.Bool
+	// modelQuestionUnanswered is the persisted "asked, and nobody
+	// answered" record (Preference.Unanswered, #586): the model question
+	// expired on some boot, so the fallback download stays down — this
+	// boot and every later one — until an actual answer clears it. Set
+	// from the preference at boot and by the expiry arms of the two
+	// holds; cleared wherever an answer lands.
+	modelQuestionUnanswered atomic.Bool
+	// modelChoiceMu guards the terminal install flow's claim that a model
+	// question is about to be asked (waired-agent#586). While
+	// modelChoicePendingUntil is in the future, the bundled fallback
+	// download waits — the terminal twin of the browser wizard's
+	// setupDriving hold, bounded server-side so a killed `waired init`
+	// cannot park it past the deadline. modelChoiceCh is close-and-replace
+	// (the setupFrameCh pattern) so a parked waiter wakes on every change.
+	modelChoiceMu           sync.Mutex
+	modelChoicePendingUntil time.Time
+	modelChoiceCh           chan struct{}
+	// modelChoiceWaitMax overrides the claim's server-side ceiling in
+	// tests; zero means the package default (modelChoiceWaitMax).
+	modelChoiceWait time.Duration
 }
 
 // setVLLM records the running vLLM adapter. Called from bootstrapVLLM on the
@@ -1875,6 +1920,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx)),
 		LongContext:     longContextBenchFor(depth),
 		DesiredState:    desiredStateStr,
+		NoModelSelected: p.noModelSelected.Load(),
 		HostSpeed:       p.hostSpeedStatus(),
 	}
 }
@@ -3276,6 +3322,23 @@ func (p *agentInferenceProvider) bundledPrePullTarget(ctx context.Context) (stri
 		p.logger.Info("no bundled model configured; skipping pre-pull")
 		return "", false
 	}
+	if p.noModelSelected.Load() {
+		// The operator chose to run without a local model (#586). A
+		// choice, not a fault, and Info for the same reason as above: the
+		// engine stays up, and picking a model later re-enters through
+		// /preferred-model, which clears this.
+		p.logger.Info("the operator chose to run without a local model; skipping the bundled pre-pull")
+		return "", false
+	}
+	if p.modelQuestionUnanswered.Load() {
+		// The model question was asked on some boot and nobody answered
+		// (#586; owner ruling 2026-08-09). An abandoned question is not
+		// consent, so the fallback stays down until someone chooses —
+		// through the browser dashboard, `waired models pull`, or a
+		// re-run `waired init`.
+		p.logger.Info("the install flow asked which model to download and nobody answered; the bundled pre-pull stays down until someone chooses")
+		return "", false
+	}
 	// Through bundledModelID, not a second LookupByAlias: the pre-pull and
 	// everything that later asks "is this the bundled model" have to
 	// resolve the configured value identically, and only one of the two
@@ -3572,6 +3635,14 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 	// sees the new model rather than the frozen boot snapshot.
 	id := manifest.ModelID
 	p.preferredOverride.Store(&id)
+	// A model choice ends every #586 "no model yet" state: the standing
+	// no-model-selected record, the abandoned-question record (the file
+	// was just overwritten by the caller / self-heals on the next boot),
+	// and the install flow's pending-question claim, so a held fallback
+	// dispatch re-reads the world instead of waiting out its deadline.
+	p.noModelSelected.Store(false)
+	p.modelQuestionUnanswered.Store(false)
+	p.noteModelChoiceAnswered()
 
 	st, _ := p.store.Load()
 	if ms, found := st.Models[manifest.ModelID]; found && ms.State == catalog.ModelStateReady {
