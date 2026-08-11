@@ -383,6 +383,7 @@ func run(ctx context.Context, args []string) error {
 			WithShareControl(sbShareControl{sb}).
 			WithPublicShareControl(sbPublicShareControl{sb}).
 			WithEngineControl(sbEngineControl{sb}).
+			WithHostSpeedControl(sbHostSpeedControl{sb}).
 			WithCatalog(&management.CatalogConfig{
 				PreferencePath: preferencePath,
 				// #812 in-process swap seam; delegates to the live session's

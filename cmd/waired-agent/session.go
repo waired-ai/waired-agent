@@ -380,6 +380,26 @@ func (a sbEngineControl) EngineState() (management.EnginePowerState, bool) {
 	return "", false
 }
 
+// sbHostSpeedControl delegates the install-flow re-run's request for a fresh
+// host-speed figure (waired-agent#599) to the live session's provider.
+//
+// No session means nothing has been measured on this host yet and nothing is
+// going to be until one exists, so "did not start" is the honest answer — the
+// caller then waits for a figure exactly as a fresh install does.
+type sbHostSpeedControl struct{ sb *switchboard }
+
+func (a sbHostSpeedControl) Remeasure(ctx context.Context) bool {
+	// Type-asserted rather than added to management.InferenceProvider: this
+	// is one optional capability on one route, and the interface is
+	// implemented by three types plus the test fakes.
+	if s := a.sb.current(); s != nil {
+		if hs, ok := s.infProvider.(management.HostSpeedController); ok {
+			return hs.Remeasure(ctx)
+		}
+	}
+	return false
+}
+
 type sbModelSwapControl struct{ sb *switchboard }
 
 // ApplyModelSwitch delegates the #812 in-process preferred-model switch to the

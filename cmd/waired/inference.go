@@ -214,6 +214,11 @@ func runInferenceTransition(mgmt, stateDir string, target state.InferenceState, 
 type inferenceStatusResponse struct {
 	SubsystemState string `json:"subsystem_state"`
 	DesiredState   string `json:"desired_state"`
+	// Whether DesiredState was WRITTEN or is just the live default. Step 6
+	// needs the difference to know whose choice it would be overriding
+	// (waired#1142); an older daemon omits it, which reads as false — the
+	// pre-#1142 behaviour.
+	DesiredStateSet bool `json:"desired_state_set"`
 	// The daemon's own type rather than a local re-declaration: `waired
 	// init` reads the same field now (waired#1099), and two hand-written
 	// copies of one wire shape is how a field comes to be read on one

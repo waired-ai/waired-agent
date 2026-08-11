@@ -13,10 +13,14 @@ import (
 // speedFakeDaemon serves /inference/status with a configurable snapshot
 // and records the enable/disable writes step 6 may take.
 type speedFakeDaemon struct {
-	status   map[string]any
-	noSpeed  bool
-	enables  atomic.Int32
-	disables atomic.Int32
+	status     map[string]any
+	noSpeed    bool
+	enables    atomic.Int32
+	disables   atomic.Int32
+	remeasures atomic.Int32
+	// noRemeasureRoute makes the daemon 404 the remeasure route, which is
+	// what an older one does.
+	noRemeasureRoute bool
 }
 
 func slowStatus(turn, budget float64, desired string, cutoffOff bool) map[string]any {
@@ -47,6 +51,13 @@ func (f *speedFakeDaemon) server(t *testing.T) *httptest.Server {
 		case "/waired/v1/inference/disable":
 			f.disables.Add(1)
 			_, _ = w.Write([]byte(`{}`))
+		case "/waired/v1/inference/host-speed/remeasure":
+			if f.noRemeasureRoute {
+				http.NotFound(w, r)
+				return
+			}
+			f.remeasures.Add(1)
+			_, _ = w.Write([]byte(`{"started":true}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -60,6 +71,13 @@ func shrinkHostSpeedAsk(t *testing.T) {
 	prevWait, prevPoll := hostSpeedAskWait, hostSpeedAskPoll
 	hostSpeedAskWait, hostSpeedAskPoll = 50*time.Millisecond, 5*time.Millisecond
 	t.Cleanup(func() { hostSpeedAskWait, hostSpeedAskPoll = prevWait, prevPoll })
+}
+
+// setToggle marks the status as one somebody actually wrote, which is the
+// distinction waired#1142 turns on.
+func setToggle(st map[string]any) map[string]any {
+	st["desired_state_set"] = true
+	return st
 }
 
 func mine() bool { return true }
@@ -181,6 +199,114 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("non-interactive note missing %q: %q", want, out.String())
 			}
+		}
+	})
+
+	// PRODUCT CONTRACT (waired#1142, owner ruling this session; the rule it
+	// restores is #465 / waired#1056 — the daemon's cutoff stands down on any
+	// written toggle, and until now this step could not tell one from the
+	// live default). Non-interactive has nobody to ask, so it must not
+	// overrule a choice somebody made.
+	t.Run("non-interactive leaves a toggle somebody wrote alone", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		f := &speedFakeDaemon{status: setToggle(slowStatus(68.4, 45, "enabled", false))}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
+		if f.disables.Load() != 0 {
+			t.Fatalf("disables = %d, want none — the operator turned this on here", f.disables.Load())
+		}
+		if !keptOn {
+			t.Error("a toggle left alone must report keptOn=true")
+		}
+		for _, want := range []string{
+			"This computer is below the recommended spec for running AI locally.",
+			"one coding question   68.4 s",
+			"Running AI locally is not recommended here. Non-interactive: leaving local",
+			"inference on, because it was turned on here. Turn it off with `waired inference off`.",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("output missing %q: %q", want, out.String())
+			}
+		}
+	})
+
+	// The carve-out, and the reason the guard reads TurnedInferenceOff: the
+	// cutoff's own silent default is a written toggle that nobody chose.
+	// Treating it as an answer would make step 6 unable to do the one thing
+	// it exists for.
+	t.Run("the cutoff's own off is not somebody's answer", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		f := &speedFakeDaemon{status: setToggle(slowStatus(68.4, 45, "disabled", true))}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, linesOf("y\n"), &out, mine)
+		if f.enables.Load() != 1 {
+			t.Fatalf("enables = %d, want the question asked and answered yes", f.enables.Load())
+		}
+		if !keptOn {
+			t.Error("Yes must still report keptOn=true")
+		}
+	})
+
+	// Interactive is unchanged by all of the above: a re-run replays the
+	// whole install conversation, gates included (owner ruling 2026-08-09,
+	// waired-agent#599), so a written "on" still gets asked about when there
+	// is somebody there to ask.
+	t.Run("interactive still asks even when the toggle was written", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		f := &speedFakeDaemon{status: setToggle(slowStatus(68.4, 45, "enabled", false))}
+		var out strings.Builder
+		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, linesOf("y\n"), &out, mine)
+		if !strings.Contains(out.String(), "Keep local inference on anyway?") {
+			t.Errorf("a re-run must still ask: %q", out.String())
+		}
+	})
+
+	// waired-agent#599: the re-run asks for a fresh figure rather than
+	// reading whatever the last boot left behind. waired#1140 is what
+	// reading the leftovers costs.
+	t.Run("step 6 asks for a fresh measurement first", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		f := &speedFakeDaemon{status: slowStatus(30, 45, "enabled", false)}
+		var out strings.Builder
+		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+		if got := f.remeasures.Load(); got != 1 {
+			t.Fatalf("remeasure requests = %d, want exactly 1", got)
+		}
+	})
+
+	// An older daemon 404s the route, and the step behaves exactly as it did
+	// before it existed.
+	t.Run("an older daemon without the remeasure route still works", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		f := &speedFakeDaemon{
+			status:           slowStatus(68.4, 45, "enabled", false),
+			noRemeasureRoute: true,
+		}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
+		if f.disables.Load() != 1 || keptOn {
+			t.Fatalf("disables=%d keptOn=%v, want the pre-#599 behaviour intact", f.disables.Load(), keptOn)
+		}
+	})
+
+	// waired-agent#623: a one-shot line in front of a wait that ran 6m45s on
+	// a real install cannot tell a working measurement from a hung one.
+	t.Run("the wait keeps saying it is still going", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		prev := hostSpeedNarrateEvery
+		hostSpeedNarrateEvery = 5 * time.Millisecond
+		t.Cleanup(func() { hostSpeedNarrateEvery = prev })
+
+		f := &speedFakeDaemon{noSpeed: true}
+		var out strings.Builder
+		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+
+		got := out.String()
+		if !strings.Contains(got, "Measuring how fast this computer runs AI") {
+			t.Fatalf("the wait must still say what it is waiting for: %q", got)
+		}
+		if n := strings.Count(got, "still measuring — "); n < 2 {
+			t.Errorf("progress lines = %d, want the wait to keep reporting: %q", n, got)
 		}
 	})
 

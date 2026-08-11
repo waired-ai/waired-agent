@@ -554,6 +554,18 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 			"stored_turn_seconds", fmt.Sprintf("%.1f", stored.TurnSeconds),
 			"stored_turn_floor_seconds", fmt.Sprintf("%.1f", stored.TurnFloorSeconds))
 	}
+	// An install-flow re-run asked for a fresh figure (Remeasure). Consumed
+	// unconditionally — before the arms below can short-circuit past it — so
+	// one request cannot latch this host into re-measuring on every boot: a
+	// call that finds nothing stored measures anyway, and would otherwise
+	// leave the flag standing for the next one.
+	forced := p.hostSpeedForce.CompareAndSwap(true, false)
+	if ok && forced {
+		p.logger.Info("host speed: re-measuring, the install flow asked for a fresh figure",
+			"stored_turn_seconds", fmt.Sprintf("%.1f", stored.TurnSeconds),
+			"agent_version", buildinfo.Version)
+		ok = false
+	}
 	if ok && storedBy != buildinfo.Version {
 		// Same engine, different agent build: this is an upgrade, and an
 		// upgrade re-measures. Logged rather than silent because it is the
@@ -737,7 +749,36 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	p.hostSpeedAgentVersion = buildinfo.Version
 	p.persistHostSpeedLocked(false)
 	p.hostSpeedMu.Unlock()
+	p.hostSpeedTakenHere.Store(true)
 	return verdict
+}
+
+// Remeasure re-takes the install-time measurement for a re-run of the
+// install flow (management.HostSpeedController, waired-agent#599). It
+// returns as soon as the work is admitted — the measurement is minutes of
+// engine time, and the caller polls the status route for the figure.
+//
+// A process that has already measured declines, and that is the whole of
+// the "same host, twice, in one install" guard: on a fresh install the
+// engine bootstrap measures seconds before `waired init` reaches step 6, so
+// the ask arrives against a figure this daemon just took. A re-run days
+// later reaches a daemon whose boot found a usable stored figure and
+// measured nothing, so the ask goes through.
+func (p *agentInferenceProvider) Remeasure(ctx context.Context) bool {
+	if p == nil || p.ollama == nil {
+		return false
+	}
+	if p.hostSpeedTakenHere.Load() {
+		p.logger.Info("host speed: the install flow asked for a fresh figure; " +
+			"reusing the one this daemon already took")
+		return false
+	}
+	p.hostSpeedForce.Store(true)
+	// Not the caller's context: net/http cancels a request context the
+	// moment the response is written, and this outlives the response by
+	// minutes (the same rule PullModel states for downloads).
+	p.startHostSpeedMeasurement(p.backgroundCtx())
+	return true
 }
 
 // hostSpeedStillApplies reports whether a stored measurement describes
@@ -866,6 +907,22 @@ func (p *agentInferenceProvider) ensureHostCutoffProbeModel(ctx context.Context,
 // An unreadable state dir reads as "unset", which costs at most one
 // re-measure; refusing to measure at all on a read error would be the
 // worse failure, since a fresh install's file is legitimately absent.
+// desiredInferenceStateSet reports whether the local-inference toggle has
+// been written on this host at all — the same read hostCutoffIsStillOurs
+// makes below, without the log line, for the callers that only need the fact.
+//
+// An unreadable file answers "not set", which is the conservative direction
+// here: it makes a caller treat the state as a default rather than as
+// somebody's answer, and the only caller that acts on it (install-flow step 6,
+// waired#1142) then asks rather than assuming.
+func (p *agentInferenceProvider) desiredInferenceStateSet() bool {
+	if p == nil {
+		return false
+	}
+	written, err := state.ReadDesiredInferenceState(p.stateDir)
+	return err == nil && written != ""
+}
+
 func (p *agentInferenceProvider) hostCutoffIsStillOurs() bool {
 	desired, err := state.ReadDesiredInferenceState(p.stateDir)
 	if err != nil {

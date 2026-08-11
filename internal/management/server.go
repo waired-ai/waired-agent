@@ -334,6 +334,27 @@ type EngineController interface {
 	EngineState() (power EnginePowerState, managed bool)
 }
 
+// HostSpeedController re-takes the install-time host-speed measurement for a
+// re-run of the install flow.
+//
+// Owner ruling 2026-08-09 (waired-agent#599): re-running `waired init` on a
+// configured host replays the whole install conversation, and "各種の
+// ベンチマークやゲートも新規インストールと同じように設定する" — the
+// benchmarks and gates are re-taken, not inherited. The stored figure is
+// keyed by install and agent build (docs/decisions/20260807/1700-host-speed-
+// is-an-install-time-step.md), so without this a re-run reads whatever the
+// last boot left behind. waired#1140 is what that costs: three machines
+// carrying a figure that describes a residency rather than a host, with no
+// way to retake it short of an upgrade.
+//
+// Remeasure reports whether a fresh measurement was started. False means the
+// daemon already took one in this process — a fresh install, where the engine
+// bootstrap measured seconds earlier — and re-taking it would measure the
+// same host twice in one install, which the decision above rules out.
+type HostSpeedController interface {
+	Remeasure(ctx context.Context) (started bool)
+}
+
 type Server struct {
 	status              StatusProvider
 	pinger              Pinger
@@ -341,6 +362,7 @@ type Server struct {
 	inference           InferenceProvider          // optional; nil disables /waired/v1/inference/status etc. and /waired/v1/models*
 	infControl          InferenceController        // optional; nil disables /waired/v1/inference/{enable,disable}
 	engineControl       EngineController           // optional; nil disables /waired/v1/inference/engine/{stop,start}
+	hostSpeedControl    HostSpeedController        // optional; nil disables /waired/v1/inference/host-speed/remeasure
 	shareControl        ShareController            // optional; nil disables /waired/v1/inference/share/{enable,disable}
 	publicShare         PublicShareController      // optional; nil disables /waired/v1/public/share{,/enable,/disable}
 	workerControl       WorkerController           // optional; nil disables /waired/v1/worker and worker_routing in /v1/inference/status
@@ -423,6 +445,15 @@ func (s *Server) WithInferenceControl(c InferenceController) *Server {
 // stays warm; this axis actually stops the process to free memory.
 func (s *Server) WithEngineControl(c EngineController) *Server {
 	s.engineControl = c
+	return s
+}
+
+// WithHostSpeedControl attaches a HostSpeedController so the server exposes
+// POST /waired/v1/inference/host-speed/remeasure, which an install-flow
+// re-run calls before it waits for a figure (waired-agent#599). Pass nil to
+// disable.
+func (s *Server) WithHostSpeedControl(c HostSpeedController) *Server {
+	s.hostSpeedControl = c
 	return s
 }
 
@@ -512,6 +543,9 @@ func (s *Server) mux() *http.ServeMux {
 	if s.engineControl != nil {
 		mux.HandleFunc("/waired/v1/inference/engine/stop", s.handleEngineStop)
 		mux.HandleFunc("/waired/v1/inference/engine/start", s.handleEngineStart)
+	}
+	if s.hostSpeedControl != nil {
+		mux.HandleFunc("/waired/v1/inference/host-speed/remeasure", s.handleHostSpeedRemeasure)
 	}
 	mux.HandleFunc("/waired/v1/inference/share/enable", s.handleShareEnable)
 	mux.HandleFunc("/waired/v1/inference/share/disable", s.handleShareDisable)
@@ -709,6 +743,30 @@ func (s *Server) handleInferenceTransition(w http.ResponseWriter, r *http.Reques
 type EngineStateResponse struct {
 	Power   string `json:"power"`
 	Managed bool   `json:"managed"`
+}
+
+// HostSpeedRemeasureResponse says whether this call started a fresh
+// measurement or the daemon's own is being reused.
+type HostSpeedRemeasureResponse struct {
+	Started bool `json:"started"`
+}
+
+// handleHostSpeedRemeasure asks for a fresh install-time measurement. It
+// returns as soon as the request is admitted: the measurement is minutes of
+// engine time and the caller polls /waired/v1/inference/status for the
+// figure, exactly as it already does on a fresh install.
+func (s *Server) handleHostSpeedRemeasure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.hostSpeedControl == nil {
+		http.Error(w, "host-speed controller not configured", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, HostSpeedRemeasureResponse{
+		Started: s.hostSpeedControl.Remeasure(r.Context()),
+	})
 }
 
 func (s *Server) handleEngineStop(w http.ResponseWriter, r *http.Request) {

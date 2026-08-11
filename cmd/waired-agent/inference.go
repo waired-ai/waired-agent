@@ -1230,6 +1230,18 @@ type agentInferenceProvider struct {
 	// that the wire form cannot answer — EngineKind/EngineVersion cover
 	// the engine, and this covers the install (waired#1099).
 	hostSpeedAgentVersion string
+	// hostSpeedTakenHere records that THIS process ran the measurement,
+	// rather than reading one off disk. It is what lets an install-flow
+	// re-run ask for a fresh figure without measuring a fresh install's
+	// host twice: on a fresh install the engine bootstrap measured seconds
+	// before `waired init` asks (waired-agent#599, and the "no second
+	// measurement in one install" half of
+	// docs/decisions/20260807/1700-host-speed-is-an-install-time-step.md).
+	hostSpeedTakenHere atomic.Bool
+	// hostSpeedForce makes the next ensureHostSpeedMeasured ignore a stored
+	// figure that would otherwise still apply. Set by Remeasure and consumed
+	// once, so a request cannot latch the host into measuring every boot.
+	hostSpeedForce atomic.Bool
 
 	// meshSnapshotFn, when non-nil, threads the inferencemesh
 	// aggregator into Select so a request whose model isn't local-
@@ -1913,6 +1925,13 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		_, desired := p.inferenceState()
 		desiredStateStr = string(desired)
 	}
+	// Whether anyone has actually written the toggle, read from the file the
+	// daemon's own cutoff reads (hostCutoffIsStillOurs). DesiredState above
+	// cannot answer it: an unset file reports the LIVE state, so a host that
+	// is on by default and a host somebody turned on both say "enabled".
+	// waired#1142 is what that costs — install-flow step 6 could not tell a
+	// choice from a default, so it treated only "off" as an answer.
+	desiredStateSet := p.desiredInferenceStateSet()
 	p.benchMu.Lock()
 	depth := p.lastDepthBench
 	p.benchMu.Unlock()
@@ -1925,6 +1944,7 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		AvailableUpdate: computeAvailableUpdate(ctx, p.store, p.profiler, p.manifests, p.effectiveCfg(), p.ollamaEngineVersion(ctx)),
 		LongContext:     longContextBenchFor(depth),
 		DesiredState:    desiredStateStr,
+		DesiredStateSet: desiredStateSet,
 		NoModelSelected: p.noModelSelected.Load(),
 		HostSpeed:       p.hostSpeedStatus(),
 	}

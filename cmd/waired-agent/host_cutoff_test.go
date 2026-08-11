@@ -839,6 +839,97 @@ func TestEnsureHostSpeedMeasured_PutsTheServingModelBack(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (owner ruling 2026-08-09, waired-agent#599: a re-run of
+// `waired init` replays the whole install conversation, "各種のベンチマークや
+// ゲートも新規インストールと同じように設定する"). Without this the stored
+// figure is kept for the life of the install, which is how three machines came
+// to be carrying a measurement of a residency rather than of a host, with no
+// way to retake it short of an upgrade (waired#1140).
+func TestRemeasure_AReRunTakesAFreshMeasurement(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("first call did not measure")
+	}
+	afterFirst := len(eng.generateBodies())
+
+	// The next daemon start on the same state dir: it finds a usable stored
+	// figure and measures nothing, which is the state a re-run days later
+	// actually meets.
+	next := &agentInferenceProvider{
+		ollama: p.ollama, manifests: p.manifests, stateDir: p.stateDir, store: p.store,
+		cfg: p.cfg, profiler: p.profiler, logger: p.logger, agentCtx: p.agentCtx,
+		ollamaUsable: p.ollamaUsable,
+	}
+	if v := next.ensureHostSpeedMeasured(ctx, next.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the stored figure was not reused")
+	}
+	if got := len(eng.generateBodies()); got != afterFirst {
+		t.Fatalf("/api/generate requests = %d, want %d — a boot with a usable figure measures nothing",
+			got, afterFirst)
+	}
+
+	if !next.Remeasure(ctx) {
+		t.Fatal("Remeasure declined on a daemon that had not measured in this process")
+	}
+	next.waitForPulls()
+	if got := len(eng.generateBodies()); got <= afterFirst {
+		t.Fatalf("/api/generate requests = %d after the ask, want more than %d", got, afterFirst)
+	}
+}
+
+// The other half, and the constraint it protects: a fresh install measured
+// seconds before `waired init` reaches step 6, and measuring the same host
+// twice in one install is what
+// docs/decisions/20260807/1700-host-speed-is-an-install-time-step.md rules
+// out — three minutes becomes six on exactly the slow hosts the measurement
+// exists to identify.
+func TestRemeasure_AFreshInstallReusesWhatTheBootstrapTook(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the bootstrap measurement did not happen")
+	}
+	afterBootstrap := len(eng.generateBodies())
+
+	if p.Remeasure(ctx) {
+		t.Error("Remeasure started a second measurement in the same install")
+	}
+	p.waitForPulls()
+	if got := len(eng.generateBodies()); got != afterBootstrap {
+		t.Fatalf("/api/generate requests = %d, want %d — no second measurement in one install",
+			got, afterBootstrap)
+	}
+}
+
+// The force is consumed, not latched: one request must not turn the host into
+// one that re-measures on every boot for the rest of the install.
+func TestRemeasure_TheRequestIsConsumedOnce(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	p.hostSpeedForce.Store(true)
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement")
+	}
+	afterForced := len(eng.generateBodies())
+	if p.hostSpeedForce.Load() {
+		t.Error("the force flag survived the measurement it asked for")
+	}
+
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the second call lost the figure")
+	}
+	if got := len(eng.generateBodies()); got != afterForced {
+		t.Fatalf("/api/generate requests = %d, want %d — the force must not latch", got, afterForced)
+	}
+}
+
 // A record written before AgentVersion existed cannot say which build
 // took it, so it is re-measured. The first boot after the upgrade that
 // introduces the field is exactly the case the field exists for.
