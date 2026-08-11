@@ -42,6 +42,7 @@ All ticks. Nothing to do.
 | **✓** | Fine. |
 | **⚠** | Working, but not the way it should be. Worth reading, not urgent. |
 | **✗** | Broken. Something you are trying to do will not work. |
+| **·** | Not checked. The line says why — usually that it needs administrator rights. |
 
 When anything is not a ✓, the command finishes with a non-zero exit code and a
 count — useful in a script, ignorable when you are reading it yourself.
@@ -95,8 +96,18 @@ waired doctor --fix
 ## When the check itself cannot see everything
 
 On a normal desktop install some of Waired's files belong to the system, not to
-you. Without administrator rights the doctor reports what it can and says so
-rather than guessing.
+you. Without administrator rights the doctor reports what it can, and marks the
+checks it could not run with a **·** instead of leaving them out:
+
+<Expected title="Without administrator rights">
+```
+· device sign-in — needs elevation to check; run `sudo waired doctor`
+· waired phase — needs elevation to check; run `sudo waired doctor`
+```
+</Expected>
+
+A **·** never counts towards the exit code — it is not a failure, only a gap.
+To close the gap, run the check again with administrator rights.
 
 <Tabs syncKey="os">
 	<TabItem label="macOS / Linux">

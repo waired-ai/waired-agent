@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"runtime"
@@ -338,14 +340,46 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	return out
 }
 
+// unreadableFinding decides what to say when a check could not read what
+// it needed.
+//
+// The distinction that matters is permission versus absence. An absent
+// file means the check has nothing to report and something else in the
+// output already explains why (the live probe, the gateway-token line) —
+// staying quiet there is deliberate. A permission error means the check
+// did not run at all, and before #651 that was indistinguishable from a
+// pass: an unprivileged `waired doctor` printed 13 checks and exited 0
+// while the elevated run printed 15 and found problems in two of them.
+//
+// A doctor that omits a check should say so. The row is StatusSkip, so it
+// renders as `·` and — like every other skip — does not contribute to the
+// exit code (countFails). What changes is only that the omission is
+// visible; the verdict is unchanged.
+//
+// The second return reports whether there is anything to print at all.
+func unreadableFinding(subject string, err error) (integration.AuditFinding, bool) {
+	if !errors.Is(err, fs.ErrPermission) {
+		return integration.AuditFinding{}, false
+	}
+	return integration.AuditFinding{
+		Status:  integration.StatusSkip,
+		Subject: subject,
+		Detail:  "needs elevation to check; " + elevationHint("waired doctor"),
+	}, true
+}
+
 // phaseFinding inspects <state>/runtime/state and reports the agent's
 // current pause/resume mode. Returns an empty finding (caller skips)
 // when the state file is missing or stale — the live probe further
 // down will report the underlying daemon-not-running condition with a
-// more useful message.
+// more useful message. A state dir this run may not read is reported as
+// a skipped check rather than dropped (#651).
 func phaseFinding(stateDir string) integration.AuditFinding {
 	s, err := state.Read(stateDir)
 	if err != nil {
+		if f, ok := unreadableFinding("waired phase", err); ok {
+			return f
+		}
 		return integration.AuditFinding{}
 	}
 	if s.Phase == state.PhasePaused {

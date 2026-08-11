@@ -22,13 +22,25 @@ import (
 // agent 401'd the Control Plane on every push.
 func signInFinding(stateDir string) integration.AuditFinding {
 	id, err := identity.Load(stateDir)
-	if err != nil || id == nil {
-		// Not enrolled, or unreadable state. The gateway-token and
-		// live-probe findings already cover both, with better advice.
+	if err != nil {
+		// A state dir this run may not read is a check that did not
+		// happen, and #651 is about saying so instead of dropping the
+		// row. Any other error still stays quiet: the gateway-token and
+		// live-probe findings cover it with better advice.
+		if f, ok := unreadableFinding("device sign-in", err); ok {
+			return f
+		}
+		return integration.AuditFinding{}
+	}
+	if id == nil {
+		// Not enrolled. Covered elsewhere, with better advice.
 		return integration.AuditFinding{}
 	}
 	meta, err := identity.LoadTokenMeta(stateDir)
 	if err != nil {
+		if f, ok := unreadableFinding("device sign-in", err); ok {
+			return f
+		}
 		return integration.AuditFinding{}
 	}
 	return signInFindingFrom(meta, time.Now())

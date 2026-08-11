@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 507adaa0699391f5
+sourceHash: 903e98a86fb0f77c
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -43,6 +43,7 @@ waired doctor
 | **✓** | 問題なし。 |
 | **⚠** | 動いてはいるが、本来の状態ではない。急ぎではないが読む価値あり。 |
 | **✗** | 壊れている。やろうとしていることが動きません。 |
+| **·** | 未確認。その行に理由が出ます（多くは管理者権限が必要）。 |
 
 ✓ 以外があると、終了コードが 0 以外になり件数が表示されます。スクリプトでは役に立ち、
 自分で読むぶんには気にしなくて構いません。
@@ -96,7 +97,17 @@ waired doctor --fix
 
 通常のデスクトップ用インストールでは、Waired のファイルの一部はあなたではなく
 システムの所有物です。管理者権限がないと、doctor は見える範囲だけを報告し、
-「見えていない」ことを推測ではなく明示します。
+実行できなかった検査は行ごと省略せず **·** を付けて示します。
+
+<Expected title="管理者権限なしで実行した場合">
+```
+· device sign-in — needs elevation to check; run `sudo waired doctor`
+· waired phase — needs elevation to check; run `sudo waired doctor`
+```
+</Expected>
+
+**·** は終了コードに影響しません。失敗ではなく、確認できていないという意味です。
+確認するには、管理者権限を付けて実行し直してください。
 
 <Tabs syncKey="os">
 	<TabItem label="macOS / Linux">

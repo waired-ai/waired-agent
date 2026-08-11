@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -193,6 +194,54 @@ func TestPhaseFinding_StaleActiveIsSkipped(t *testing.T) {
 	got := phaseFinding(dir)
 	if got.Subject != "" {
 		t.Errorf("stale active should yield empty finding, got %+v", got)
+	}
+}
+
+// TestUnreadableFinding pins the permission-vs-absence split behind #651.
+// The GOOS-varying half is elevationHint's, which has its own test; here
+// the contract is only which errors produce a row at all.
+func TestUnreadableFinding(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"permission denied is a check that did not run", fs.ErrPermission, true},
+		{"wrapped permission denied still counts", fmt.Errorf("read x: %w", fs.ErrPermission), true},
+		{"absent is not a skipped check", fs.ErrNotExist, false},
+		{"a parse error is not a skipped check", errors.New("invalid character"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, ok := unreadableFinding("device sign-in", c.err)
+			if ok != c.want {
+				t.Fatalf("unreadableFinding(%v) ok = %v, want %v", c.err, ok, c.want)
+			}
+			if !ok {
+				return
+			}
+			if f.Status != integration.StatusSkip {
+				t.Errorf("status = %s, want skip", f.Status)
+			}
+			if f.Subject != "device sign-in" {
+				t.Errorf("subject = %q, want the caller's subject verbatim", f.Subject)
+			}
+			if !strings.Contains(f.Detail, "needs elevation to check") {
+				t.Errorf("detail = %q, want it to say the check did not run", f.Detail)
+			}
+		})
+	}
+}
+
+// A skipped row must never move the exit code — the point of #651 is
+// visibility, not a new failure mode.
+func TestUnreadableFinding_DoesNotCountAsFailure(t *testing.T) {
+	f, ok := unreadableFinding("waired phase", fs.ErrPermission)
+	if !ok {
+		t.Fatal("expected a finding")
+	}
+	if got := countFails([]integration.AuditFinding{f}); got != 0 {
+		t.Errorf("countFails = %d, want 0", got)
 	}
 }
 
