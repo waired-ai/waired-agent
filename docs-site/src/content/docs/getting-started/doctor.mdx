@@ -114,6 +114,19 @@ rather than guessing.
 	</TabItem>
 </Tabs>
 
+Running it with `sudo` does not switch the check over to the administrator's own
+setup. Your coding tools are configured in **your** home folder, so that is what
+gets checked, and the first line says whose:
+
+<Expected title="At the top of the output">
+```
+Running under sudo — checking the setup for user "you", not root.
+```
+</Expected>
+
+Pressing **f** after an elevated run repairs that same setup, as you — the files
+it writes stay yours.
+
 <Aside type="tip" title="Sharing the output">
 	If you are pasting the result into a bug report, add `--mask-pii` to
 	`waired status` and `waired init` to hide your home folder, username, machine

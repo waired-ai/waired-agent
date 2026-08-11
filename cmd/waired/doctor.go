@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -60,12 +61,16 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	fix := &fixVal
 	noInteractive := &noInteractiveVal
 
-	homeDir, _ := os.UserHomeDir()
+	procHome, _ := os.UserHomeDir()
+	home := doctorHomeFor(runtime.GOOS, os.Geteuid(), os.Getenv("SUDO_USER"), procHome, sudoUserHome)
+	if notice := home.notice(); notice != "" {
+		fmt.Println(notice)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	tray := checkTray()
-	findings := collectDoctorFindings(ctx, homeDir, *stateDir, *gatewayBaseURL, *mgmtURL, tray, checkService(ctx))
+	findings := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray, checkService(ctx))
 	hasFail := false
 	for _, f := range findings {
 		fmt.Println(formatFinding(f))
@@ -84,7 +89,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	}
 	if plan.Integration {
 		fmt.Println("Running repair (waired link all)...")
-		if err := repairWithUse(ctx, homeDir, *stateDir, *gatewayBaseURL); err != nil {
+		if err := repairWithUse(ctx, home, *stateDir, *gatewayBaseURL); err != nil {
 			return err
 		}
 	}
@@ -108,6 +113,68 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 		return fmt.Errorf("waired doctor: %d findings need attention (see above)", countFails(findings))
 	}
 	return nil
+}
+
+// doctorHome is whose home directory this doctor run inspects.
+//
+// The doctor's checks split across two different notions of "which user"
+// and they used to disagree. The token / sign-in / phase checks follow
+// --state-dir, whose default is euid-dependent (initStateDirMode); the
+// skill / plugin / config checks follow a home directory, which used to be
+// the *process* home. Under `sudo waired doctor` that is /root, so the
+// second half reported four missing integrations and a failing exit code
+// for a host whose integrations were all fine (#650).
+//
+// It only showed up on Linux. macOS sudo keeps HOME by default, so the
+// process home there already WAS the invoking user's — the darwin doctor
+// looked correct by accident, not by design.
+type doctorHome struct {
+	// Dir is the home directory to inspect.
+	Dir string
+	// SudoUser is the invoking human when this run is elevated via sudo,
+	// otherwise "".
+	SudoUser string
+	// Fellback records that SudoUser's home could not be looked up and Dir
+	// is the process home instead. The doctor says so rather than quietly
+	// reporting on root's files as if they were the user's.
+	Fellback bool
+}
+
+// notice is the line printed above the findings when the run is elevated.
+// Empty for an ordinary unelevated run, which needs no explanation.
+func (h doctorHome) notice() string {
+	switch {
+	case h.SudoUser == "":
+		return ""
+	case h.Fellback:
+		return fmt.Sprintf("Running under sudo — could not resolve the home directory of user %q, "+
+			"so the checks below cover %s. Run `waired doctor` without sudo to check your own setup.",
+			h.SudoUser, h.Dir)
+	default:
+		return fmt.Sprintf("Running under sudo — checking the setup for user %q, not root.", h.SudoUser)
+	}
+}
+
+// doctorHomeFor is the pure decision behind the home directory the doctor
+// inspects. It takes the facts rather than reading them so all three
+// platforms are table-tested on every CI leg (CLAUDE.md §Test discipline);
+// the sudo half is delegated to invokingSudoUserAt, which `waired init`
+// already uses for the same question.
+//
+// lookup resolves a username to a home directory (sudoUserHome in
+// production). It can fail for an NSS/LDAP user under a CGO-less build —
+// see sudoUserHome's comment — so a failure falls back to the process home
+// and is recorded, not swallowed.
+func doctorHomeFor(goos string, euid int, sudoUser, procHome string, lookup func(string) (string, error)) doctorHome {
+	u, isSudo := invokingSudoUserAt(goos, euid, sudoUser)
+	if !isSudo {
+		return doctorHome{Dir: procHome}
+	}
+	h, err := lookup(u)
+	if err != nil || h == "" {
+		return doctorHome{Dir: procHome, SudoUser: u, Fellback: true}
+	}
+	return doctorHome{Dir: h, SudoUser: u}
 }
 
 // doctorFixPlan is what runDoctorBody does after printing the findings.
@@ -370,9 +437,23 @@ func pressedF(in *os.File) bool {
 	return s == "f" || s == "fix"
 }
 
-func repairWithUse(ctx context.Context, homeDir, stateDir, gatewayURL string) error {
+// repairWithUse re-applies the per-user integration for whoever the
+// findings were about.
+//
+// Under sudo it delegates to `waired link all` running AS that user, the
+// same hop runPostLoginIntegration uses. Applying in-process would write
+// root-owned files into the user's ~/.claude and ~/.openclaw, and would
+// create the ledger and gateway token under root's state dir — so before
+// #650, when the diagnosis looked at /root, pressing `f` at least repaired
+// the same /root it had just complained about. Now that the diagnosis
+// follows the invoking user, the repair has to follow them too, ownership
+// and all.
+func repairWithUse(ctx context.Context, home doctorHome, stateDir, gatewayURL string) error {
+	if home.SudoUser != "" && !home.Fellback {
+		return runLinkAllAsUser(ctx, home.SudoUser, linkAllChildArgs(gatewayURL), os.Stdout, os.Stderr)
+	}
 	res, err := setup.Integration(ctx, setup.IntegrationOptions{
-		HomeDir:        homeDir,
+		HomeDir:        home.Dir,
 		StateDir:       stateDir,
 		GatewayBaseURL: gatewayURL,
 		NonInteractive: !isTerminal(os.Stdin),

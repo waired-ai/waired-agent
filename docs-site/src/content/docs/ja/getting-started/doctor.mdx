@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: 46848a059708627e
+sourceHash: 507adaa0699391f5
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -113,6 +113,19 @@ waired doctor --fix
 		```
 	</TabItem>
 </Tabs>
+
+`sudo` を付けても、確認対象が管理者自身の設定に切り替わるわけではありません。
+コーディングツールの設定は**あなたの**ホームフォルダにあるので、そちらが確認され、
+誰の設定を見ているかが 1 行目に出ます。
+
+<Expected title="出力の先頭">
+```
+Running under sudo — checking the setup for user "you", not root.
+```
+</Expected>
+
+管理者権限で実行したあとに **f** を押した場合も、修復されるのは同じ設定です。
+書き込まれるファイルはあなたの所有のままになります。
 
 <Aside type="tip" title="出力を共有するとき">
 	バグ報告に貼るなら、`waired status` や `waired init` には `--mask-pii` を付けると

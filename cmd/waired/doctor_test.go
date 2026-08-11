@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -39,6 +41,96 @@ func TestCountFails_OnlyCountsStatusFail(t *testing.T) {
 	}
 	if got := countFails(findings); got != 2 {
 		t.Errorf("countFails = %d, want 2", got)
+	}
+}
+
+// TestDoctorHomeFor pins the fix for #650: under sudo the doctor inspects
+// the invoking user's home, not root's. This is a product contract, not a
+// record of today's behaviour — it is the defect the issue reports.
+//
+// Windows has no sudo hop (invokingSudoUserAt returns false for any goos
+// that is not linux/darwin), and darwin is included because it only LOOKED
+// correct before: macOS sudo keeps HOME, so its process home already was
+// the user's. The seam has to prove that on purpose, not by accident.
+func TestDoctorHomeFor(t *testing.T) {
+	const (
+		procHome = "/root"
+		userHome = "/home/alice"
+	)
+	okLookup := func(u string) (string, error) {
+		if u != "alice" {
+			return "", fmt.Errorf("unexpected lookup of %q", u)
+		}
+		return userHome, nil
+	}
+	failLookup := func(string) (string, error) { return "", errors.New("nss miss") }
+	emptyLookup := func(string) (string, error) { return "", nil }
+
+	cases := []struct {
+		name     string
+		goos     string
+		euid     int
+		sudoUser string
+		lookup   func(string) (string, error)
+		want     doctorHome
+	}{
+		{
+			name: "linux under sudo follows SUDO_USER", goos: "linux", euid: 0,
+			sudoUser: "alice", lookup: okLookup,
+			want: doctorHome{Dir: userHome, SudoUser: "alice"},
+		},
+		{
+			name: "darwin under sudo follows SUDO_USER", goos: "darwin", euid: 0,
+			sudoUser: "alice", lookup: okLookup,
+			want: doctorHome{Dir: userHome, SudoUser: "alice"},
+		},
+		{
+			name: "windows has no sudo hop", goos: "windows", euid: -1,
+			sudoUser: "alice", lookup: okLookup,
+			want: doctorHome{Dir: procHome},
+		},
+		{
+			name: "unelevated uses the process home", goos: "linux", euid: 1000,
+			sudoUser: "", lookup: okLookup,
+			want: doctorHome{Dir: procHome},
+		},
+		{
+			name: "a real root login is not a sudo hop", goos: "linux", euid: 0,
+			sudoUser: "root", lookup: okLookup,
+			want: doctorHome{Dir: procHome},
+		},
+		{
+			name: "an unresolvable user falls back and says so", goos: "linux", euid: 0,
+			sudoUser: "alice", lookup: failLookup,
+			want: doctorHome{Dir: procHome, SudoUser: "alice", Fellback: true},
+		},
+		{
+			name: "a user with no home falls back and says so", goos: "linux", euid: 0,
+			sudoUser: "alice", lookup: emptyLookup,
+			want: doctorHome{Dir: procHome, SudoUser: "alice", Fellback: true},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := doctorHomeFor(c.goos, c.euid, c.sudoUser, procHome, c.lookup)
+			if got != c.want {
+				t.Errorf("doctorHomeFor = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestDoctorHomeNotice(t *testing.T) {
+	if n := (doctorHome{Dir: "/home/alice"}).notice(); n != "" {
+		t.Errorf("an unelevated run should print no notice, got %q", n)
+	}
+	n := doctorHome{Dir: "/home/alice", SudoUser: "alice"}.notice()
+	if !strings.Contains(n, `"alice"`) || !strings.Contains(n, "not root") {
+		t.Errorf("sudo notice = %q, want it to name the user and say it is not root", n)
+	}
+	n = doctorHome{Dir: "/root", SudoUser: "alice", Fellback: true}.notice()
+	if !strings.Contains(n, "/root") || !strings.Contains(n, "without sudo") {
+		t.Errorf("fallback notice = %q, want the directory it actually used and the way out", n)
 	}
 }
 
