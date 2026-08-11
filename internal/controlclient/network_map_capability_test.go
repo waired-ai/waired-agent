@@ -126,3 +126,91 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 		})
 	}
 }
+
+// TestSubscribeNetworkMapReportsClientVersion pins the waired-agent#655
+// contract: the poll body carries this build's version, so the control
+// plane's record follows an in-place upgrade instead of freezing at
+// whatever first enrolled.
+//
+// Product contract, ratified on waired-agent#655 (design comment,
+// 2026-08-12): the version rides the POLL and not one of the 5s pushes,
+// because the poll is opened once per daemon start and per reconnect, and
+// an installer upgrade always restarts the daemon.
+//
+// The empty case is contract too. Omitted means "no claim", and the CP is
+// required to keep whatever it already recorded — which it cannot do if an
+// agent that does not know its version sends an empty string instead.
+func TestSubscribeNetworkMapReportsClientVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		version   string
+		wantKey   bool
+		wantValue string
+	}{
+		{
+			name:      "reports the build version",
+			version:   "0.0.2-edge.20260812010203+abcdef1",
+			wantKey:   true,
+			wantValue: "0.0.2-edge.20260812010203+abcdef1",
+		},
+		{
+			name:    "unset version is omitted, not empty",
+			version: "",
+			wantKey: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotBody := make(chan []byte, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+				gotBody <- body
+				w.Header().Set("Content-Type", "application/x-ndjson")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"version":1,"network_id":"wn_test"}` + "\n"))
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}))
+			defer srv.Close()
+
+			c := &Client{
+				BaseURL: srv.URL, HTTP: srv.Client(),
+				BearerFn:      func() string { return "tok" },
+				ClientVersion: tc.version,
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			frames, errs := c.SubscribeNetworkMap(ctx)
+			select {
+			case nm := <-frames:
+				if nm == nil || nm.NetworkID != "wn_test" {
+					t.Fatalf("frame = %+v", nm)
+				}
+			case err := <-errs:
+				t.Fatalf("subscribe error: %v", err)
+			case <-ctx.Done():
+				t.Fatalf("timeout waiting for frame")
+			}
+
+			raw := <-gotBody
+			// Decoded into a map, not a struct: a struct field cannot tell
+			// "absent" from "present and empty", and that distinction is the
+			// whole of the second case.
+			var req map[string]any
+			if err := json.Unmarshal(raw, &req); err != nil {
+				t.Fatalf("poll body decode: %v (body %s)", err, raw)
+			}
+			got, ok := req["client_version"]
+			if ok != tc.wantKey {
+				t.Fatalf("client_version present = %v, want %v (body %s)", ok, tc.wantKey, raw)
+			}
+			if tc.wantKey && got != tc.wantValue {
+				t.Errorf("client_version = %v, want %q (body %s)", got, tc.wantValue, raw)
+			}
+			// The version must not have cost the capability declaration.
+			if _, ok := req["capabilities"]; !ok {
+				t.Errorf("poll body lost its capabilities (body %s)", raw)
+			}
+		})
+	}
+}
