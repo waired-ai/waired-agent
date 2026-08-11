@@ -229,11 +229,20 @@ var producedInProto = []exemption{
 // long before the wire field existed, so the guard has never seen this
 // one as producer-less — the real producer debt is tracked by #568
 // itself, not by this table.)
-// waired-agent#579's TurnFloorSeconds (#620) was the most recent, and
-// Stage 3b paid it: screenHostCutoffPrompt reads the prefill rate the
-// calibration was already discarding, and ensureHostSpeedMeasured
-// publishes the bound. Empty again, and that is the point.
-var producerPending = []exemption{}
+// waired-agent#579's TurnFloorSeconds (#620) paid it the same way:
+// screenHostCutoffPrompt reads the prefill rate the calibration was
+// already discarding, and ensureHostSpeedMeasured publishes the bound.
+//
+// The name of the entry below was chosen partly to keep this table
+// working. The obvious spellings for it all contain `PreferredModelID`,
+// and management.ModelCatalogResponse has carried a written field of that
+// name for far longer — so, by the name-matching rule above, the guard
+// would have read that write as this field's producer and the debt would
+// never have been visible here at all.
+var producerPending = []exemption{
+	{reflect.TypeFor[signer.InferenceState](), "LocalModelChoiceAt",
+		"waired-agent#647: the agent publishes it once a stored model preference records whether a person here chose it"},
+}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the
