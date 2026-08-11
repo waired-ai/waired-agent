@@ -66,6 +66,13 @@ when sequencing work that touches docs.
 | Running AI locally is not recommended here. | このパソコンでのローカル AI 実行は推奨しません。 | 上の「推奨要件未満」から導かれる平易な結論として製品が出力する文。**「非推奨」を使わない** — 同表の `manual_only` 行と同じ理由で deprecated と衝突する。動詞形「推奨しません」なら衝突しない | #579 承認文言(20260809) |
 | N s or more (per coding question) | N 秒以上 | 実測ではなく下界（プレフィル律速の下限）であることを示す。「約」「少なくとも」は付けない — 英語側で `about` / `at least` を落とした理由がそのまま当てはまる（要件の下限と読まれる） | #579 承認文言(20260809) |
 | comfortable (speed criterion) | 快適 | 判定基準そのものの見出し。数値の横に並べる行なので短語。「推奨」としない（推奨要件と紛れる） | #579 承認文言(20260809) |
+| Not recommended (model demotion) | 推奨されません（主語なし受け身。本文が「このコンピュータ」に言及済みなら「推奨されません。」、未言及なら「このコンピュータには推奨されません。」） | 旧 Waired would not choose / Waired は推奨しません の主語落とし。「非推奨」禁止（上の Running AI locally 行）は維持 — deprecated と衝突する名詞形は不可 | waired#1146 裁定(20260812) |
+| Continue (setup wizard CTA) | 続行 | 押下時点でエンジン導入と計測は完了済みで、開始するのは選んだモデルの取得のみ。旧 Yes, set it up / セットアップを開始 | waired#1146 §5 裁定(20260812) |
+| Model about {W} + session cache about {K} | モデル本体 約 {W} + セッションキャッシュ 約 {K} | ピッカー行の事実行（スペック表記・全行同一）。`weights_resident_mb` と `required_window_resident_mb − weights_resident_mb` の内訳。model_size バケットは NAVI ピッカーから撤去（カタログ面は #537 のまま） | waired#1174 裁定(20260812) |
+| RAM and graphics memory combined | RAM と VRAM の合計 | 容量の数え方の定型。推奨文と実行不可文が同一式を使う。統合メモリ機では VRAM=0 扱いの合計（`carve_out_vram_mb` が読めた場合のみ非ゼロ）で二重計上はない — 裁定時に明示のうえ承認 | waired#1146 裁定(20260812) |
+| graphics memory | docs-site は「グラフィックスメモリ」（en 直訳・#681 出荷済み）/ NAVI UI は「GPUメモリ」（既存面の統一語）。合算式は上の行 | en のユーザー向け文中の GPU メモリの語（VRAM は en 文中で使わない — フィールド名・KV ラベルは逐語）。ja は面ごとに定着語が異なり、この行がその使い分けを固定する | オーナー承認文言(20260811 CLI/tray; 20260812 NAVI, waired#1146) |
+| system RAM (spill destination) | 通常のメモリ | GPU からあふれた分が読まれる先。graphics memory と対で使い、統合メモリ機では両者を足さない（同一バイト）。en は全面 system RAM に統一（旧 ordinary memory — tray/CLI #681 と NAVI で2語併存していたのを解消）。CLI 出力は英語のまま | オーナー承認文言(20260811 CLI/tray) + 統一裁定 waired#1146(20260812) |
+| allocatable (fit verdict, predicate use) | 値は英語のまま（NAVI 未使用 — 使う際に改めて裁定） | 「このパソコンがモデルに割り当てられる量」。判定が実際に比較した `have_mb` を指し、搭載量ではない。tray のメニュー行など幅のない面で `needs 11 GB — 6 GB allocatable` の形（述語）でのみ使用。名詞句 allocatable memory / allocatable VRAM は不採用。射程は CLI と tray の2面 | オーナー裁定(20260811、セッション内; 出荷 waired-agent#681) |
 | completions (LLM output) | 応答 / 生成結果 | 補完 = 入力補完の意で誤読される | #473 §1 |
 | mesh | 初出「Waired メッシュ」→ 以降「メッシュ」 | 一般語のため初出は修飾 | #473 §3 |
 | overlay (network) | 初出「オーバーレイネットワーク」 | 〃 | #473 §3 |

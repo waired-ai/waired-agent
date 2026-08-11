@@ -393,7 +393,7 @@ func TestUpdate_CatalogRecommendedPickIsMarked(t *testing.T) {
 	if rows[0].Label != "Qwen3.5 9B · 9 GB VRAM · small — recommended" {
 		t.Errorf("recommended label: %q", rows[0].Label)
 	}
-	if !strings.Contains(rows[0].Tooltip, "Chosen from this computer’s memory and graphics card.") {
+	if !strings.Contains(rows[0].Tooltip, "Chosen from this computer’s RAM and graphics memory combined.") {
 		t.Errorf("recommended tooltip: %q", rows[0].Tooltip)
 	}
 	if strings.Contains(rows[1].Label, "recommended") {

@@ -89,7 +89,7 @@ func installEngineFit(mgmt string) (fit bool, reason string) {
 		}
 	}
 	if anyFits {
-		return false, "models can run here, but Waired would not choose any of them for this hardware"
+		return false, "models can run here, but none of them is recommended for this hardware"
 	}
 	return false, "no bundled model fits in this computer's memory"
 }

@@ -1704,32 +1704,35 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily, host manageme
 // catalogPickTooltip is the full sentence the label's short mark stands
 // in for. The wording of the demotion is the same one the public docs
 // use for the same rule, so a person who read the docs meets the same
-// explanation here (docs-site reference/model-catalog).
+// explanation here (docs-site reference/model-catalog). Subjectless
+// "Not recommended" since waired#1146 (owner-approved 2026-08-12), with
+// two tails only: "here" when the body already names this computer,
+// "for this computer" when it does not — the same sentences the setup
+// wizard renders, byte for byte.
 func catalogPickTooltip(f management.CatalogFamily) string {
 	switch {
 	case f.RecommendedPick:
 		// Word for word the sentence the setup wizard puts under its own
 		// Recommended badge (web/admin EnginePicker). One rule, one
 		// explanation, whichever surface the operator meets it on.
-		return "Chosen from this computer’s memory and graphics card."
+		return "Chosen from this computer’s RAM and graphics memory combined."
 	case f.Fit != nil && f.Fit.NotRecommended:
 		switch f.Fit.NotRecommendedReason {
 		case hostfit.ReasonWeightsSpill:
-			return "It runs, but not entirely on the graphics card — every reply pays for that. " +
-				"Waired would not choose this one for this computer."
+			return "It fits, but not entirely on the graphics card — the rest is fetched from " +
+				"system RAM on every reply, so replies are slower. Not recommended for this computer."
 		case hostfit.ReasonTooSlow:
-			return "It runs, but this computer would be slow with it. " +
-				"Waired would not choose this one for this computer."
+			return "It fits, but this computer would be slow with it. Not recommended here."
 		case hostfit.ReasonWindowTooSmall:
 			// The one reason that is not about this computer: no machine
 			// makes this model hold a coding session (#465 item 5).
-			return "It runs, but it cannot hold a long coding session — a coding agent " +
-				"has to compact much earlier with it. Waired would not choose this one."
+			return "It fits, but it cannot hold a long coding session — a coding agent " +
+				"has to compact much earlier with it. Not recommended on any computer."
 		case hostfit.ReasonWindowExceedsMemory:
-			return "It runs and answers well, but this computer cannot hold a long " +
-				"coding session with it. Waired would not choose this one for this computer."
+			return "It runs and answers well, but this computer cannot hold a full " +
+				"coding session in it. Not recommended here."
 		default:
-			return "Waired would not choose this one for this computer."
+			return "Not recommended for this computer."
 		}
 	}
 	return ""

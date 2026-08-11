@@ -191,7 +191,7 @@ func TestModelPicker_NotRecommendedPickConfirms(t *testing.T) {
 		t.Fatalf("outcome = %+v, want qwen3.5-2b honoured on Yes", got)
 	}
 	o := out.String()
-	if !strings.Contains(o, "runs on this computer, but Waired would not choose it here") ||
+	if !strings.Contains(o, "runs on this computer, but is not recommended here") ||
 		!strings.Contains(o, "Use it anyway?") {
 		t.Errorf("missing the not-recommended confirm:\n%s", o)
 	}

@@ -150,7 +150,7 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if !got || f.disables.Load() != 0 {
 			t.Fatalf("= %v (disables %d), want an explicit yes to install", got, f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "Waired would not choose any of them") {
+		if !strings.Contains(out.String(), "none of them is recommended") {
 			t.Errorf("fits-but-not-recommended reason missing: %q", out.String())
 		}
 	})
