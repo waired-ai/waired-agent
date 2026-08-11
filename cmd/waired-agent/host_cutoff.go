@@ -273,6 +273,39 @@ func (p *agentInferenceProvider) hostSpeedNow() *signer.HostSpeed {
 	return p.hostSpeed
 }
 
+// noteHostSpeedStage records how far the measurement has got, for the
+// setup-progress reporter (waired#1143). Report only.
+func (p *agentInferenceProvider) noteHostSpeedStage(stage hostSpeedStage, detail string) {
+	if p == nil {
+		return
+	}
+	p.hostSpeedMu.Lock()
+	defer p.hostSpeedMu.Unlock()
+	p.hostSpeedStage, p.hostSpeedStageDetail = stage, detail
+}
+
+// setupHostSpeedProgress reports the measurement's stage to the
+// setup-progress reporter (waired#1143).
+//
+// A stored figure counts as measured whatever this process has done. That
+// is the whole reason the two are read under one lock: the measurement runs
+// from the engine bootstrap behind awaitQuietEngine, which is bounded by
+// hostSpeedSettleWait, so a daemon restart on a host that was set up weeks
+// ago would otherwise report an unstarted measurement for up to an hour —
+// and `pending` rows deny setup_complete on a computer that is finished.
+func (p *agentInferenceProvider) setupHostSpeedProgress() hostSpeedProgress {
+	if p == nil {
+		return hostSpeedProgress{}
+	}
+	p.hostSpeedMu.Lock()
+	defer p.hostSpeedMu.Unlock()
+	p.loadHostSpeedLocked()
+	if p.hostSpeedStage == hostSpeedStageNone && p.hostSpeed != nil {
+		return hostSpeedProgress{Stage: hostSpeedStageMeasured}
+	}
+	return hostSpeedProgress{Stage: p.hostSpeedStage, Detail: p.hostSpeedStageDetail}
+}
+
 // hostSpeedTurnedInferenceOff reports whether the stored measurement is
 // what set the local-inference default to off.
 //
@@ -612,11 +645,19 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		p.logger.Info("host speed: skipping the measurement", "err", err)
 		return hostSpeedVerdict{}
 	}
+	// From here the work is visible to the wizard (waired#1143). Above this
+	// line nothing is reported: a host with no engine this probe can drive
+	// has no measurement to describe, and a row it would leave at `pending`
+	// forever would deny setup_complete to a computer that is otherwise
+	// finished.
+	p.noteHostSpeedStage(hostSpeedStagePullingProbe, "")
 	if err := p.ensureHostCutoffProbeModel(ctx, tag); err != nil {
 		p.logger.Info("host speed: probe model unavailable; skipping the measurement",
 			"model", hostfit.HostCutoffProbeModelID, "err", err)
+		p.noteHostSpeedStage(hostSpeedStageProbeFailed, err.Error())
 		return hostSpeedVerdict{}
 	}
+	p.noteHostSpeedStage(hostSpeedStageMeasuring, "")
 
 	// Put the serving model back afterwards. infruntime.MaxResidentModels is
 	// what makes this measurement honest, and the way it does that is by
@@ -646,6 +687,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	if err != nil {
 		p.logger.Info("host speed: measurement did not complete; leaving local inference as configured",
 			"err", err)
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed, err.Error())
 		return hostSpeedVerdict{}
 	}
 	if m.Method != signer.BenchmarkMethodOllamaPrefillFloor && !m.Probe.Measured() {
@@ -660,6 +702,9 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		// host, and a bound already past the budget with margin.
 		p.logger.Warn("host speed: the engine did not prefill the depth asked for; no measurement",
 			"prompt_tokens", m.Probe.PromptTokens, "want_tokens", hostfit.HostCutoffProbeDepthTokens)
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
+			fmt.Sprintf("the engine prefilled %d tokens, not the %d asked for",
+				m.Probe.PromptTokens, hostfit.HostCutoffProbeDepthTokens))
 		return hostSpeedVerdict{}
 	}
 
@@ -730,6 +775,8 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		p.logger.Warn("host speed: the measurement does not support a verdict; not publishing it",
 			"method", m.Method, "prompt_tokens", m.Probe.PromptTokens,
 			"turn_floor_seconds", fmt.Sprintf("%.1f", m.TurnFloorSeconds))
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
+			fmt.Sprintf("the reading does not support a verdict (method %s)", m.Method))
 		return hostSpeedVerdict{}
 	}
 	p.logger.Info("host speed: measured",
@@ -747,6 +794,7 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	p.hostSpeedMu.Lock()
 	p.hostSpeed = published
 	p.hostSpeedAgentVersion = buildinfo.Version
+	p.hostSpeedStage, p.hostSpeedStageDetail = hostSpeedStageMeasured, ""
 	p.persistHostSpeedLocked(false)
 	p.hostSpeedMu.Unlock()
 	p.hostSpeedTakenHere.Store(true)

@@ -1243,6 +1243,18 @@ type agentInferenceProvider struct {
 	// figure that would otherwise still apply. Set by Remeasure and consumed
 	// once, so a request cannot latch the host into measuring every boot.
 	hostSpeedForce atomic.Bool
+	// hostSpeedStage / hostSpeedStageDetail are how far the measurement has
+	// got, for the setup-progress reporter's two rows (waired#1143). Report
+	// only — nothing reads them to decide anything.
+	//
+	// Guarded by hostSpeedMu alongside the figure rather than kept in an
+	// atomic of their own, because the stage and the figure are read
+	// TOGETHER: a process that has not measured but has one stored reports
+	// "measured", which is what makes a daemon restart on an already-set-up
+	// host report done rows straight away instead of pending ones for the
+	// up-to-hostSpeedSettleWait it spends waiting for a quiet engine.
+	hostSpeedStage       hostSpeedStage
+	hostSpeedStageDetail string
 
 	// meshSnapshotFn, when non-nil, threads the inferencemesh
 	// aggregator into Select so a request whose model isn't local-
