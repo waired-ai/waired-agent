@@ -160,6 +160,29 @@ func integrationTargets(flat string) []string {
 	return strings.Split(flat, ",")
 }
 
+// validIntegrationTargets keeps the ids an executor may claim to have
+// written and drops the rest, applying the same rule flattenIntegrations
+// applies to the control plane's instruction: unknown and retired targets
+// are ignored rather than rejected, because a CLI newer or older than the
+// daemon it is driving is the ordinary state for the seconds around an
+// upgrade.
+//
+// Sorted and de-duplicated so the record on disk is stable across writes,
+// which is what WriteSetupIntegrations would do anyway.
+func validIntegrationTargets(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range in {
+		if !signer.IsValidIntegrationTarget(t) || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // setupExecutorStep is what the elevated CLI last reported about one
 // setup step: its phase, the failure detail and declared code if it
 // failed, and the live transfer figures for a byte-denominated step.
@@ -212,6 +235,17 @@ type setupProvider interface {
 	// setupStateDir is the agent's state root, published to the executor
 	// so a bundled engine lands where this daemon will look for it.
 	setupStateDir() string
+	// setupServingEngine names the engine kind this device serves from.
+	// It is the observation that stands in for an instruction on a host
+	// nobody set up from a browser (waired-agent#646): the control plane's
+	// desired columns are written by the management API alone, so a
+	// `waired init` run from a terminal leaves them empty and the desired
+	// triple says nothing about what happened here.
+	//
+	// Always a kind, never "" — the historical ollama default — so it is
+	// not on its own evidence that an engine exists. Callers pair it with
+	// setupEngineState, which asks the disk.
+	setupServingEngine() string
 	// setupModelState reports one catalog model's lifecycle state plus
 	// live pull bytes and any stored failure detail.
 	setupModelState(modelID string) (state string, completed, total int64, errText string)
@@ -870,6 +904,20 @@ func (r *setupReconciler) NoteExecutor(ctx context.Context, req management.Setup
 		// record: that row is served as `skipped` from the instruction
 		// itself, on every boot, without an executor.
 		recordIntegrations = integrationTargets(r.desired.integrations)
+		if len(recordIntegrations) == 0 && r.desired.integrations == "" {
+			// No instruction to read back. That is the ordinary state of a
+			// terminal-driven init (waired-agent#646): the desired columns
+			// are the management API's, so `waired init` never populates
+			// them, and the coding tools it wrote would go unrecorded — the
+			// row would then be missing from the report for the rest of the
+			// device's life, on a machine where it demonstrably happened.
+			//
+			// The executor names them, and only here. While an instruction
+			// exists it stays the authority, so the two still cannot
+			// disagree about a row the daemon serves — which is what the
+			// comment above is protecting.
+			recordIntegrations = validIntegrationTargets(req.IntegrationTargets)
+		}
 	}
 	r.mu.Unlock()
 	if startEngine {
@@ -1023,6 +1071,58 @@ func (r *setupReconciler) applyDesiredInference(value string) {
 	}
 }
 
+// observedSetup names the engine, model and coding tools to report on for
+// a host the control plane has never sent an instruction to
+// (waired-agent#646) — the terminal-driven `waired init`, which writes its
+// answers to this daemon and has no route to the desired columns.
+//
+// Reports false when there is nothing to say, which keeps two populations
+// silent exactly as they were before: a device that has only enrolled, and
+// one whose engine never arrived. Both would otherwise open a red
+// engine_install row for an install nobody asked for.
+//
+// The pair is what makes the answer safe. setupServingEngine alone always
+// names a kind, so it says nothing about this host; setupEngineState asks
+// the disk, and setupPreferredModelID is empty until something has chosen.
+// Together they mean "an engine is installed here and this device is set to
+// serve a model with it", which is the definition of a machine somebody set
+// up.
+//
+// acted is the local-AI answer already acted on. An off-host reports its
+// own `inference_off` row and has no engine to describe (#597), so
+// synthesising engine and model rows beside it would contradict the row the
+// completion rule reads.
+//
+// written is the coding-tool record (waired-agent#312), the only part of
+// this that cannot be re-derived by looking at the machine. No record means
+// no row — the same answer "nobody asked" already produces — rather than a
+// claim about files the daemon deliberately never reads.
+func (r *setupReconciler) observedSetup(ctx context.Context, acted string, written state.SetupIntegrations) (setupDesired, bool) {
+	if acted == signer.DesiredInferenceOff {
+		return setupDesired{}, false
+	}
+	engine := r.provider.setupServingEngine()
+	if engine == "" {
+		return setupDesired{}, false
+	}
+	if installed, _ := r.provider.setupEngineState(ctx, engine); !installed {
+		return setupDesired{}, false
+	}
+	modelID := r.provider.setupPreferredModelID()
+	if modelID == "" {
+		return setupDesired{}, false
+	}
+	return setupDesired{
+		engine:  engine,
+		modelID: modelID,
+		// Already sorted and de-duplicated by the record's own reader, so
+		// this is the same flat form flattenIntegrations produces. An empty
+		// record yields "", which the projection reads as no instruction and
+		// emits no row for.
+		integrations: strings.Join(written.Targets, ","),
+	}, true
+}
+
 func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	r.mu.Lock()
 	d := r.desired
@@ -1050,13 +1150,34 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		driver = signer.SetupDriverBrowser
 	}
 	r.mu.Unlock()
+	// A setup driven from the terminal leaves the control plane's desired
+	// columns empty — only the management API writes them, so `waired init`
+	// has no route to them at all — and everything above is derived from
+	// those columns. The device therefore said nothing about itself, the
+	// completion rule saw no steps, and the model card stayed shut on every
+	// CLI-installed node (waired-agent#646).
+	//
+	// What the browser wrote, this host can be asked. Reporting the answer
+	// is not a second opinion about the desired state: the rows below are
+	// already re-derived from the disk and the engine probe on every
+	// snapshot, and this only supplies the three values naming WHICH engine,
+	// model and coding tools to report on.
+	//
+	// Deliberately only when the control plane is serving no instruction of
+	// its own. An authored desired state is the operator's, and a derived
+	// one racing it is how the two would come to disagree about the same
+	// device.
+	observed := false
+	if !active {
+		d, observed = r.observedSetup(ctx, actedInference, integWritten)
+	}
 	// A terminal takeover produces no desired state and therefore no
 	// steps — but the wizard is on screen waiting for this device, and
 	// with nothing pushed it waits forever. A driver alone is worth a
 	// push: zero steps keeps setup_complete false and the "setup
 	// unfinished" banner away, and tells the wizard who has it
 	// (waired-agent#198).
-	if !active && driver == "" {
+	if !active && !observed && driver == "" {
 		return nil
 	}
 
@@ -1951,6 +2072,11 @@ func (p *agentInferenceProvider) setupEngineHealth(_ context.Context, engine str
 // bundled engine relative to this, so it matches bundledOllamaBinPath's
 // join (engine_resolve.go) by construction rather than by coincidence.
 func (p *agentInferenceProvider) setupStateDir() string { return p.stateDir }
+
+// setupServingEngine is the engine kind this process serves from. Same
+// value setupEngineState compares against, so the two cannot disagree
+// about which engine the observed projection is describing.
+func (p *agentInferenceProvider) setupServingEngine() string { return p.servingEngine() }
 
 // setupModelState reports one catalog model's lifecycle state, live
 // pull bytes (while downloading) and the stored failure detail.

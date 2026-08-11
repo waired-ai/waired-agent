@@ -105,6 +105,9 @@ type fakeSetupProvider struct {
 	// successful apply sets it, which is what makes the reconciler's
 	// convergence observable rather than flag-based.
 	preferred string
+	// servingEngine overrides the engine kind this device serves from;
+	// empty means the real provider's ollama default (waired-agent#646).
+	servingEngine string
 }
 
 // engineStateCall is one observed setupEngineState call. The context is
@@ -187,6 +190,20 @@ func (f *fakeSetupProvider) setupStateDir() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.stateDir
+}
+
+// setupServingEngine mirrors the real provider's contract rather than the
+// zero value: servingEngine() never answers "", it falls back to ollama for
+// every host that never opted into vLLM. A fake that returned "" here would
+// make the observed projection unreachable in tests for the exact reason it
+// is reachable in production — which is the shape #646 was hiding behind.
+func (f *fakeSetupProvider) setupServingEngine() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.servingEngine == "" {
+		return catalog.RuntimeOllama
+	}
+	return f.servingEngine
 }
 
 func (f *fakeSetupProvider) setupModelState(string) (string, int64, int64, string) {

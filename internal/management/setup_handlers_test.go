@@ -150,6 +150,25 @@ func TestSetupExecutorHandlerRejectsBadInput(t *testing.T) {
 		{"unknown error code", `{"attached":true,"phase":"failed","error_code":"sad"}`, http.StatusBadRequest},
 		{"known error code", `{"attached":true,"phase":"failed","error_code":"permission_denied"}`, http.StatusOK},
 		{"absent error code is 'you classify it'", `{"attached":true,"phase":"failed","error":"boom"}`, http.StatusOK},
+		// The terminal names what it configured, because a terminal-driven
+		// init has no instruction for the daemon to read the names from
+		// (waired-agent#646). Unknown and retired ids are dropped further in
+		// rather than refused here — a CLI newer or older than the daemon it
+		// drives is the ordinary state around an upgrade — but a list this
+		// long is a malformed request, and the daemon persists it.
+		{
+			"integration targets", `{"attached":true,"step":"integration","phase":"done",` +
+				`"integration_targets":["claude-code","openclaw"]}`, http.StatusOK,
+		},
+		{
+			"unknown integration target is tolerated", `{"attached":true,"step":"integration","phase":"done",` +
+				`"integration_targets":["cursor"]}`, http.StatusOK,
+		},
+		{
+			"too many integration targets", `{"attached":true,"step":"integration","phase":"done",` +
+				`"integration_targets":["a","b","c","d","e","f","g","h",` +
+				`"i","j","k","l","m","n","o","p","q"]}`, http.StatusBadRequest,
+		},
 	} {
 		rec := httptest.NewRecorder()
 		srv.mux().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/waired/v1/setup/executor", strings.NewReader(tc.body)))

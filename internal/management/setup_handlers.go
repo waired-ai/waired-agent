@@ -273,7 +273,31 @@ type SetupExecutorRequest struct {
 	// a terminal that is not there. Empty leaves the current claim
 	// untouched, so a heartbeat need not repeat it.
 	Driver string `json:"driver,omitempty"`
+
+	// IntegrationTargets names the coding tools a `done` integration
+	// report actually configured (waired-agent#646).
+	//
+	// The daemon normally takes them from the instruction it is serving,
+	// because the executor applies exactly what SetupState handed it. A
+	// terminal-driven init has no instruction to apply — the control
+	// plane's desired columns are written by the management API alone —
+	// so what it wrote is knowable only from the process that wrote it.
+	// The daemon reads this ONLY in that case; an instruction always wins,
+	// so the two cannot end up disagreeing about the row.
+	//
+	// Self-asserted with the same blast radius as Attached and Elevated:
+	// a local process that lies here changes which coding tools the
+	// device's setup report claims, not what anyone is allowed to write.
+	// This is agent-local IPC and never reaches the control plane wire;
+	// the CP receives only the projected §7 row.
+	IntegrationTargets []string `json:"integration_targets,omitempty"`
 }
+
+// MaxSetupIntegrationTargets caps the reported target list. The set is
+// two ids today and grows by product decisions, not by request; the cap
+// exists so a local caller cannot make the daemon persist an unbounded
+// list under its state dir.
+const MaxSetupIntegrationTargets = 16
 
 // SetupExecutorController is implemented by the agent's desired-state
 // reconciler (cmd/waired-agent). Kept narrow so this package never
@@ -345,6 +369,15 @@ func (s *Server) handleSetupExecutor(w http.ResponseWriter, r *http.Request) {
 	// step verbatim, and the CP validates the enum on intake.
 	if !signer.IsValidSetupErrorCode(req.ErrorCode) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid error code"})
+		return
+	}
+	// Bounded here rather than filtered: the reconciler drops unknown and
+	// retired ids on its way to the record (validIntegrationTargets), which
+	// is the same tolerance the control plane's instruction gets, but a
+	// list long enough to be a problem is a malformed request rather than a
+	// version skew.
+	if len(req.IntegrationTargets) > MaxSetupIntegrationTargets {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "too many integration targets"})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.setupExecutor.NoteExecutor(r.Context(), req))

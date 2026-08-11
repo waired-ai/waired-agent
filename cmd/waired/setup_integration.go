@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
+	"github.com/waired-ai/waired-agent/internal/integration/claudecode"
 	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
+	"github.com/waired-ai/waired-agent/internal/integration/openclaw"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/setup"
 	"github.com/waired-ai/waired-agent/proto/signer"
@@ -102,6 +104,46 @@ func runWizardIntegrations(s *executorSession, setupActive bool, o setupIntegrat
 			"warn: coding-tool setup had problems (%v); re-run later: waired link --force all\n", err)
 	}
 	return true
+}
+
+// reportTerminalIntegrations reports the coding-tool §7 row for the
+// TERMINAL's own integration step (waired-agent#646).
+//
+// The wizard's apply has reported this row since waired#935; the terminal's
+// never has, so a `waired init` that configured the coding tools left the
+// row with no author at all. On a device carrying a leftover instruction
+// the daemon then read the executor's exit as "it left before it got to
+// this row" and reported a failure for work that had just succeeded
+// (waired-agent#645).
+//
+// Silent unless the operator consented AND the apply came back clean:
+// a declined question wrote nothing, and a half-configured machine is what
+// applySetupIntegrations already refuses to report as done.
+func reportTerminalIntegrations(s *executorSession, consented bool, err error) {
+	if !s.Supported() || !consented || err != nil {
+		return
+	}
+	s.IntegrationDone(terminalIntegrationTargets())
+}
+
+// terminalIntegrationTargets names what the terminal's coding-agent step
+// configures on a clean run: every adapter the applier covers.
+//
+// Both terminal journeys go through integration.Manager.ApplyAll over this
+// same adapter set — in process, or in a `waired link all` child under sudo
+// — and both stop at the first failure. "No error" therefore means every
+// one of these was written, which is what makes one list honest for both.
+// Derived from the adapters rather than from the wire constants so it
+// tracks what actually gets written; the filter keeps a retired adapter,
+// should one linger, out of a claim the control plane would reject.
+func terminalIntegrationTargets() []string {
+	var out []string
+	for _, a := range []integration.Adapter{claudecode.New(), openclaw.New()} {
+		if id := string(a.ID()); signer.IsValidIntegrationTarget(id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // setupIntegrationOpts is what the wizard's apply needs beyond the target
