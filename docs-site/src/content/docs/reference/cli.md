@@ -22,7 +22,7 @@ covers what the flags are *for*.
 | [`waired auth status`](#waired-auth-status) | When does this computer's sign-in expire? |
 | [`waired logout`](#waired-logout) | Remove this computer's identity |
 | [`waired infer`](#waired-infer) | Ask your AI something, right now |
-| [`waired models`](#waired-models) | What is downloaded, download more, delete some |
+| [`waired models`](#waired-models) | What is downloaded, download more, stop a download, delete some |
 | [`waired runtimes`](#waired-runtimes) | The AI software itself, and a speed test |
 | [`waired inference`](#waired-inference) | Run AI models here or not; start / stop the engine; share it with your other computers |
 | [`waired worker`](#waired-worker) | Which computer answers your requests |
@@ -166,6 +166,7 @@ waired infer "say hi" --explain    # show which machine and model would answer, 
 waired models ls                  # what is downloaded, and what is active
 waired models ls --detail         # the whole catalog, with what fits this computer
 waired models pull <model-id>     # download one
+waired models cancel <model-id>   # stop a download that is running
 waired models rm <model-id>       # delete one, freeing several GB
 waired models refresh             # is there a better pick for this machine?
 waired models check-agent         # will this model work with a coding agent?
@@ -178,6 +179,29 @@ once more, showing the shortfall, with No as the default — loading it is
 expected to fail after the download completes. `--yes` alone does not skip that
 one; a script that really means it passes `--yes --force`. `rm` also confirms
 first. Model IDs come from the [model catalog](/reference/model-catalog/).
+
+`cancel` stops a download that is running — the way out of a multi-gigabyte
+pull started by mistake. It asks nothing first: you are stopping something this
+computer is in the middle of fetching, which is what you just said you did not
+want. It prints the job it stopped:
+
+```
+cancelled download: model=qwen3.5-9b job=job_a761d6a4ca1a
+```
+
+and, when nothing was downloading, says so and stops there:
+
+```
+no download in progress for qwen3.5-9b
+```
+
+The part already downloaded stays on disk, so pulling the same model again
+resumes rather than starting over. Reclaiming it means deleting the model with
+`rm` after it finishes downloading — a download that never finished leaves data
+`rm` cannot name yet.
+
+You do not have to cancel before removing: `rm` stops a download of that model
+first and tells you it did.
 
 `check-agent` asks a question the other commands do not: not "does this model
 fit" and not "is it fast enough", but "can a coding agent actually drive it?"

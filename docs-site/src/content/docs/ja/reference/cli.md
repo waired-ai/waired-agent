@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 441592b86e47060d
+sourceHash: 2b5ac95aef33fd9e
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -22,7 +22,7 @@ sourceHash: 441592b86e47060d
 | [`waired auth status`](#waired-auth-status) | このパソコンのサインインはいつ切れる？ |
 | [`waired logout`](#waired-logout) | このパソコンの識別情報を削除する |
 | [`waired infer`](#waired-infer) | いますぐ自分の AI に尋ねる |
-| [`waired models`](#waired-models) | 何が入っているか、追加、削除 |
+| [`waired models`](#waired-models) | 何が入っているか、追加、ダウンロードの中止、削除 |
 | [`waired runtimes`](#waired-runtimes) | AI ソフトウェア本体と、速度テスト |
 | [`waired inference`](#waired-inference) | ここで AI モデルを動かすかどうか、エンジンの起動・停止、自分のほかのパソコンへの提供 |
 | [`waired worker`](#waired-worker) | どのパソコンが答えるか |
@@ -162,6 +162,7 @@ waired infer "say hi" --explain    # 実際には尋ねず、どのマシンと�
 waired models ls                  # ダウンロード済みのモデルと、動作中のモデル
 waired models ls --detail         # カタログ全体と、このパソコンで動くかどうか
 waired models pull <モデルID>      # ダウンロードする
+waired models cancel <モデルID>    # 実行中のダウンロードを止める
 waired models rm <モデルID>        # 削除して数 GB 空ける
 waired models refresh             # このマシンにもっと合うモデルはあるか
 waired models check-agent         # コーディングエージェントで使えるモデルか
@@ -174,6 +175,28 @@ waired models check-agent         # コーディングエージェントで使�
 再確認は `--yes` だけでは省略できません。本当に実行したいスクリプトは
 `--yes --force` を渡します。`rm` も実行前に確認します。
 モデル ID は[モデルカタログ](/ja/reference/model-catalog/)にあります。
+
+`cancel` は実行中のダウンロードを止めます。数 GB の `pull` を誤って始めたときの
+抜け道です。事前確認はしません — いま取得中のものを止めるだけで、それは直前に
+「要らない」と言った当のものだからです。止めたジョブを表示します。
+
+```
+cancelled download: model=qwen3.5-9b job=job_a761d6a4ca1a
+```
+
+何もダウンロードしていなければ、そう伝えて終わります。
+
+```
+no download in progress for qwen3.5-9b
+```
+
+途中まで取得したデータはディスクに残るので、同じモデルを再度 `pull` すると
+最初からではなく途中から再開します。この分を空けるには、ダウンロードを完了させて
+から `rm` してください — 完了しなかったダウンロードが残したデータは、まだ `rm`
+が名前で指せません。
+
+削除の前に `cancel` する必要はありません。`rm` はそのモデルのダウンロードを先に
+止め、止めたことを表示します。
 
 `check-agent` は他のコマンドとは別の問いに答えます。「このパソコンで動くか」でも
 「速度は足りるか」でもなく、「コーディングエージェントがこのモデルを動かせるか」です。

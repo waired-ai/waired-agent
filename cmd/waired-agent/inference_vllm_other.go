@@ -14,7 +14,7 @@ import (
 // cmd/waired-agent compiling on Windows/macOS, where engineViable("vllm")
 // already returns false so neither is reached in practice.
 
-func (p *agentInferenceProvider) dispatchHFPull(_ context.Context, _ catalog.Manifest, _ catalog.Variant, _ string) error {
+func (p *agentInferenceProvider) dispatchHFPull(_ context.Context, _ *pullJob, _ catalog.Manifest, _ catalog.Variant) error {
 	// Wrapped so the setup reconciler reports this as a host limitation
 	// rather than "that model is not available" — the model is fine, this
 	// OS just cannot serve it (waired-agent#134).

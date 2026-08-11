@@ -30,6 +30,9 @@ type fakeInference struct {
 	mu         sync.Mutex
 	pulled     string
 	deleted    string
+	cancelled  string
+	cancelResp PullCancel
+	cancelErr  error
 	deleteErr  error
 	pullErr    error
 	selectErr  error
@@ -60,6 +63,24 @@ func (f *fakeInference) PullModel(_ context.Context, m string) (PullJob, error) 
 	}
 	f.pulled = m
 	return PullJob{JobID: "job_1", ModelID: m, Status: "queued"}, nil
+}
+func (f *fakeInference) CancelPull(_ context.Context, m string) (PullCancel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Records the model id it was asked about, so "cancelled the wrong
+	// model" is a writable failure (CLAUDE.md §Test discipline).
+	f.cancelled = m
+	if f.cancelErr != nil {
+		return PullCancel{}, f.cancelErr
+	}
+	out := f.cancelResp
+	if out.ModelID == "" {
+		out.ModelID = m
+	}
+	if out.Status == "" {
+		out.Status = "cancelled"
+	}
+	return out, nil
 }
 func (f *fakeInference) DeleteModel(_ context.Context, m string) error {
 	f.mu.Lock()
@@ -309,6 +330,73 @@ func TestModelsDelete(t *testing.T) {
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if inf.deleted != "qwen3-8b-instruct" {
+		t.Errorf("deleted = %q", inf.deleted)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#633): stopping a download and removing a
+// model are different requests. `DELETE /models/{id}/pull` must reach
+// CancelPull and must NOT delete the model — an operator who cancels a
+// mistaken 6 GB pull has said nothing about the model they already have.
+func TestModelsCancelPull(t *testing.T) {
+	inf := &fakeInference{cancelResp: PullCancel{JobID: "job_a761d6a4ca1a", Status: "cancelled"}}
+	s := newServerWithInference(inf)
+	r := httptest.NewRequest(http.MethodDelete, "/waired/v1/models/qwen3-8b-instruct/pull", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if inf.cancelled != "qwen3-8b-instruct" {
+		t.Errorf("cancelled = %q, want qwen3-8b-instruct", inf.cancelled)
+	}
+	if inf.deleted != "" {
+		t.Errorf("cancelling a download deleted the model %q", inf.deleted)
+	}
+	var got PullCancel
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body: %v (%s)", err, w.Body.String())
+	}
+	if got.Status != "cancelled" || got.JobID != "job_a761d6a4ca1a" {
+		t.Errorf("body = %+v", got)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#633): nothing in flight is a 200, not an
+// error. `waired models cancel` renders it as a sentence and exits 0 —
+// the host is in the state the caller asked for.
+func TestModelsCancelPull_NothingInFlightIs200(t *testing.T) {
+	inf := &fakeInference{cancelResp: PullCancel{Status: "not_downloading"}}
+	s := newServerWithInference(inf)
+	r := httptest.NewRequest(http.MethodDelete, "/waired/v1/models/qwen3-8b-instruct/pull", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if inf.deleted != "" {
+		t.Errorf("an idle cancel deleted the model %q", inf.deleted)
+	}
+}
+
+// Records today's behaviour: the /pull suffix does not swallow the model
+// route. Deleting a model still deletes it.
+func TestModelsDelete_IsNotShadowedByTheCancelSubroute(t *testing.T) {
+	inf := &fakeInference{}
+	s := newServerWithInference(inf)
+	r := httptest.NewRequest(http.MethodDelete, "/waired/v1/models/qwen3-8b-instruct", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	if inf.cancelled != "" {
+		t.Errorf("deleting a model went to CancelPull for %q", inf.cancelled)
 	}
 	if inf.deleted != "qwen3-8b-instruct" {
 		t.Errorf("deleted = %q", inf.deleted)

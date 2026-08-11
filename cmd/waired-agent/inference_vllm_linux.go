@@ -196,7 +196,7 @@ func (p *agentInferenceProvider) downloadHFWeights(ctx context.Context, modelID 
 // writes the queued state and launches the download in the background; the
 // serving swap to the new weights happens on the next agent restart (the same
 // restart-to-swap contract ollama uses for a model change, #347).
-func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, manifest catalog.Manifest, variant catalog.Variant, jobID string) error {
+func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, job *pullJob, manifest catalog.Manifest, variant catalog.Variant) error {
 	puller, _, err := p.vllmServingDeps()
 	if err != nil {
 		return fmt.Errorf("vllm HF pull unavailable: %w", err)
@@ -219,10 +219,11 @@ func (p *agentInferenceProvider) dispatchHFPull(ctx context.Context, manifest ca
 		return err
 	}
 	// spawnPull, not a bare `go`: it releases the model's in-flight slot
-	// (#305b) and puts HF downloads under pullsWG, which they escaped —
-	// so waitForPulls() now joins them too (#377).
-	p.spawnPull(manifest.ModelID, func() {
-		p.runHFPullJob(ctx, manifest.ModelID, variant, puller, jobID, refresh)
+	// (#305b), puts HF downloads under pullsWG, which they escaped — so
+	// waitForPulls() now joins them too (#377) — and clears the row a
+	// cancelled job leaves behind (waired-agent#641).
+	p.spawnPull(job, func() {
+		p.runHFPullJob(ctx, manifest.ModelID, variant, puller, job.jobID, refresh)
 	})
 	return nil
 }

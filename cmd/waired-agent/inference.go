@@ -2642,9 +2642,13 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 	//
 	// The setup reconciler already gates its own dispatch on the same
 	// answer (setup_desired.go, enginePresent). This covers the paths that
-	// do not: SwapPreferredModel from the tray, `waired models use`,
-	// `waired models pull`, and applyDaemonInitInference, which runs
-	// BEFORE the engine install in `waired init`.
+	// do not: SwapPreferredModel from the tray, `waired models pull`, and
+	// applyDaemonInitInference, which runs BEFORE the engine install in
+	// `waired init`.
+	//
+	// The list used to name `waired models use` as a fourth. That command
+	// has never existed — see cmd/waired/init_daemon_inference.go, where
+	// #465 removed one of two remediation lines naming it.
 	//
 	// Live, not a boot-time snapshot: ollamaUsable is the state-dir-aware
 	// resolver, so a host whose engine appears mid-run pulls on the next
@@ -2682,6 +2686,17 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 	// download itself outlives the caller and runs on the daemon's ctx
 	// (#305a).
 	jobCtx := p.backgroundCtx()
+	// dlCtx bounds the download and nothing else, so CancelPull can stop
+	// it without touching work that must outlive the job — above all the
+	// engine ollama.EnsureRunning may spawn on jobCtx (#305/R0).
+	//
+	// Created HERE, before beginPull publishes the job, so there is no
+	// window in which a cancellable job is reachable with no CancelFunc
+	// behind it. A cancel arriving in that window was one of the five
+	// objections in
+	// docs/decisions/20260805/1202-hold-the-bundled-prepull-instead-of-cancelling.md;
+	// ordering removes it rather than guarding it.
+	dlCtx, dlCancel := context.WithCancel(jobCtx)
 
 	// Claim the model's single in-flight slot BEFORE the state write
 	// below — that write is precisely what a second dispatcher must not
@@ -2694,8 +2709,11 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 		// engine can load. runPullJob revisits it after the engine is
 		// serving, where the answer is always known (#361).
 		resolvedBlind: engineVersion == "",
+		stop:          newPullStop(dlCancel),
 	}
 	if running, joined := p.beginPull(job); joined {
+		// This job never runs, so nothing will ever cancel its context.
+		dlCancel()
 		if running.tag != variant.Source.Tag {
 			// The one line that would have made the rc7 double download
 			// obvious: two dispatchers, one model, two tags.
@@ -2706,7 +2724,9 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 		return management.PullJob{JobID: running.jobID, ModelID: running.modelID, Status: "queued"}, nil
 	}
 	// From here every exit must release the slot: the ones that spawn do it
-	// via spawnPull's defer, the ones that return early do it inline.
+	// via spawnPull's defer, the ones that return early do it inline —
+	// together with dlCancel, since a job that never starts has nobody
+	// left to cancel it.
 
 	switch variant.Source.Type {
 	case catalog.SourceOllama:
@@ -2727,11 +2747,12 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 				State:     catalog.ModelStateQueued,
 			}
 		}); err != nil {
+			dlCancel()
 			p.endPull(manifest.ModelID)
 			return management.PullJob{}, err
 		}
-		p.spawnPull(manifest.ModelID, func() {
-			p.runPullJob(jobCtx, *job, manifest)
+		p.spawnPull(job, func() {
+			p.runPullJob(jobCtx, dlCtx, *job, manifest)
 		})
 	case catalog.SourceHuggingFace:
 		// #557: vLLM safetensors. dispatchHFPull is defined per-OS — the
@@ -2739,11 +2760,15 @@ func (p *agentInferenceProvider) PullModel(ctx context.Context, modelOrAlias str
 		// <repo> and records LocalPath so the next boot's bootstrapVLLM
 		// spawns the engine against them; non-Linux returns an error
 		// (vLLM serving is Linux-only). It writes the queued state itself.
-		if err := p.dispatchHFPull(jobCtx, manifest, variant, jobID); err != nil {
+		// It takes dlCtx: the HF path spawns no engine, so the download is
+		// all there is to bound.
+		if err := p.dispatchHFPull(dlCtx, job, manifest, variant); err != nil {
+			dlCancel()
 			p.endPull(manifest.ModelID)
 			return management.PullJob{}, err
 		}
 	default:
+		dlCancel()
 		p.endPull(manifest.ModelID)
 		return management.PullJob{}, fmt.Errorf("unsupported variant source type %q for engine %q: %w", variant.Source.Type, engine, errUnsupportedSource)
 	}
@@ -2763,6 +2788,52 @@ type pullJob struct {
 	// and replaces the registry entry with a new job value; the struct
 	// itself stays immutable (#361).
 	resolvedBlind bool
+	// stop is the job's cancellation half. A POINTER because pullJob is
+	// copied — runPullJob takes a value, and upgradeBlindVariant
+	// republishes a replacement — so the flag every copy reads has to
+	// live behind one shared address. It is never nil for a job
+	// PullModel published; the unit fixtures that build a pullJob by
+	// hand leave it nil, which reads as "cannot be cancelled".
+	stop *pullStop
+}
+
+// pullStop carries the intent to abort one download.
+//
+// The intent is RECORDED rather than inferred from what the child
+// process did. download.DefaultRunner.Run returns cmd.Wait()'s error, so
+// a killed `ollama pull` surfaces as *exec.ExitError "signal: killed" —
+// indistinguishable from an OOM kill, and errors.Is(err,
+// context.Canceled) is never true. That is one of the five objections
+// docs/decisions/20260805/1202-hold-the-bundled-prepull-instead-of-cancelling.md
+// raised against cancelling a pull at all; a flag the canceller sets
+// answers it, because provenance stops being a guess.
+//
+// cancel bounds ONLY the download. It must never reach
+// ollama.EnsureRunning: that call can win the single-flight leader race
+// and spawn `ollama serve` through exec.CommandContext, so a pull that
+// cancelled the engine's own context would kill the engine it just
+// started (#305/R0). runPullJob keeps the two contexts apart for that
+// reason.
+type pullStop struct {
+	cancel    context.CancelFunc
+	requested atomic.Bool
+	// done closes when the job goroutine has fully unwound — including
+	// the cancelled-row cleanup. DeleteModel waits on it so it acts on a
+	// settled catalog rather than racing the job it just stopped.
+	done chan struct{}
+}
+
+// newPullStop builds the cancellation half of a job. done is buffered by
+// being a plain channel closed exactly once, in spawnPull's outermost
+// defer.
+func newPullStop(cancel context.CancelFunc) *pullStop {
+	return &pullStop{cancel: cancel, done: make(chan struct{})}
+}
+
+// requestedStop reports whether this job was asked to stop. Safe on a
+// job whose stop half is nil (the hand-built fixtures).
+func (j pullJob) requestedStop() bool {
+	return j.stop != nil && j.stop.requested.Load()
 }
 
 // beginPull claims the in-flight slot for j.modelID. It returns the job
@@ -2811,17 +2882,122 @@ func (p *agentInferenceProvider) endPull(modelID string) {
 	}
 }
 
-// spawnPull runs body as the background job for modelID and releases the
-// slot afterwards. Defers are LIFO, so endPull runs before pullsWG.Done
-// and waitForPulls() returning therefore implies an empty registry.
-// Covers panics as well as every return path inside body.
-func (p *agentInferenceProvider) spawnPull(modelID string, body func()) {
+// spawnPull runs body as the background job for job.modelID and releases
+// the slot afterwards. Defers are LIFO, so the cancelled-job cleanup runs
+// before endPull, which runs before pullsWG.Done — and waitForPulls()
+// returning therefore implies an empty registry. Covers panics as well as
+// every return path inside body.
+//
+// The cleanup ordering is load-bearing: dropping a cancelled job's row
+// after the slot is free would let a pull dispatched in that window have
+// its own queued row deleted by the job that just left.
+func (p *agentInferenceProvider) spawnPull(job *pullJob, body func()) {
 	p.pullsWG.Add(1)
 	go func() {
+		// Registered first, so it runs LAST: a waiter woken by done must
+		// find the slot released and the cancelled row already gone.
+		if job.stop != nil {
+			defer close(job.stop.done)
+		}
 		defer p.pullsWG.Done()
-		defer p.endPull(modelID)
+		defer p.endPull(job.modelID)
+		defer p.settleCancelledPull(job)
 		body()
 	}()
+}
+
+// CancelPull stops the download in flight for modelID. It reports
+// whether one was running: a model with no pull in flight is not an
+// error, because "stop this" and "there is nothing to stop" leave the
+// host in the same state and the operator asked for that state.
+//
+// Keyed on the model, not the job ID: the in-flight registry is keyed by
+// model_id (#305 — keying by tag let two variants of one model download
+// at once) and no index from job ID to job exists.
+func (p *agentInferenceProvider) CancelPull(ctx context.Context, modelID string) (management.PullCancel, error) {
+	p.pullMu.Lock()
+	job := p.pullsInFlight[modelID]
+	p.pullMu.Unlock()
+	if job == nil || job.stop == nil {
+		return management.PullCancel{ModelID: modelID, Status: pullCancelNotDownloading}, nil
+	}
+	// Record the intent BEFORE cancelling, so the job goroutine can never
+	// observe a cancelled context without also seeing why it was
+	// cancelled. The reverse order leaves a window in which the download
+	// dies and runPullJob reads it as a download failure.
+	job.stop.requested.Store(true)
+	job.stop.cancel()
+	p.logger.Info("stopping model download", "model", modelID, "tag", job.tag, "job", job.jobID)
+
+	// Return only once the job has unwound, so the very next `models ls`
+	// tells the truth. Killing the `ollama pull` child is immediate and
+	// the retry backoff selects on the cancelled context, so this is
+	// sub-second in practice; the cap is there so a wedged job cannot
+	// hold the request open past the CLI's own 10s timeout.
+	select {
+	case <-job.stop.done:
+	case <-ctx.Done():
+		p.logger.Warn("the caller went away before the download stopped; it is still unwinding",
+			"model", modelID, "job", job.jobID)
+	case <-time.After(pullCancelSettle):
+		p.logger.Warn("the download did not stop within the settle window; it is still unwinding",
+			"model", modelID, "job", job.jobID, "waited", pullCancelSettle)
+	}
+	return management.PullCancel{ModelID: modelID, JobID: job.jobID, Status: pullCancelCancelled}, nil
+}
+
+// Statuses CancelPull reports. They are part of the management API's wire
+// shape, and `waired models cancel` renders each one differently.
+const (
+	pullCancelCancelled      = "cancelled"
+	pullCancelNotDownloading = "not_downloading"
+)
+
+// pullCancelSettle bounds the wait for a stopped job to unwind. Under the
+// CLI's 10s DELETE timeout, so a wedged job surfaces as a warning here
+// rather than as a client-side timeout with no explanation.
+var pullCancelSettle = 5 * time.Second
+
+// settleCancelledPull removes the half-finished row a cancelled job
+// leaves behind, so the host lands where it was before the pull started.
+//
+// A model that reached Ready anyway is left alone. The cancel raced the
+// last bytes and lost; the weights are on disk, and dropping the record
+// would leave them with no name — the exact defect waired-agent#641
+// reported and waired-agent#671 fixed on the delete path.
+//
+// The partly-downloaded blobs of a job that did NOT finish are not
+// reclaimed: ollama keeps them as `<blob>-partial` under its own model
+// dir, and `ollama rm` cannot name a tag whose manifest was never
+// written. A later pull of the same model resumes from them. See the PR
+// body for the follow-up.
+func (p *agentInferenceProvider) settleCancelledPull(job *pullJob) {
+	if !job.requestedStop() {
+		return
+	}
+	landed := false
+	if err := p.store.Update(func(s *catalog.State) {
+		m, ok := s.Models[job.modelID]
+		if !ok {
+			return
+		}
+		if m.State == catalog.ModelStateReady {
+			landed = true
+			return
+		}
+		delete(s.Models, job.modelID)
+	}); err != nil {
+		p.logger.Warn("clearing the cancelled download's record failed",
+			"model", job.modelID, "job", job.jobID, "err", err)
+		return
+	}
+	if landed {
+		p.logger.Info("model download finished before the cancel landed; keeping it",
+			"model", job.modelID, "tag", job.tag, "job", job.jobID)
+		return
+	}
+	p.logger.Info("cancelled download's record removed; the part already fetched stays on disk",
+		"model", job.modelID, "tag", job.tag, "job", job.jobID)
 }
 
 // waitForPulls blocks until all background pull goroutines started by
@@ -3062,29 +3238,42 @@ func (p *agentInferenceProvider) upgradeBlindVariant(
 		p.pullsInFlight[manifest.ModelID] = &pullJob{
 			jobID: cur.jobID, modelID: cur.modelID,
 			variantID: variant.VariantID, tag: variant.Source.Tag,
+			// The SAME stop half, not a fresh one: a cancel that reaches
+			// the replacement has to arrive at the context the download
+			// is actually running on.
+			stop: cur.stop,
 		}
 	}
 	p.pullMu.Unlock()
 	return variant, true
 }
 
-// runPullJob downloads one model. ctx MUST be the daemon's long-lived
-// context — PullModel dispatches on backgroundCtx(), never on a request
-// ctx (#305a: net/http cancels the handler's context the microsecond the
-// 202 is written, which killed every `waired models pull`).
+// runPullJob downloads one model.
 //
-// It must NOT be re-wrapped in a WithCancel this function cancels on
-// return. EnsureRunning below can win the single-flight leader race and
-// spawn `ollama serve` through exec.CommandContext(ctx, …), so a
-// self-cancelling ctx makes a finished pull kill the engine it just
-// started (#305/R0 — a regression from #304's EnsureRunning join).
+// TWO contexts, and the split is load-bearing:
+//
+//   - ctx MUST be the daemon's long-lived context — PullModel dispatches
+//     on backgroundCtx(), never on a request ctx (#305a: net/http cancels
+//     the handler's context the microsecond the 202 is written, which
+//     killed every `waired models pull`). EnsureRunning below can win the
+//     single-flight leader race and spawn `ollama serve` through
+//     exec.CommandContext, so it gets THIS one: a pull that cancelled the
+//     engine's context would kill the engine it just started (#305/R0 — a
+//     regression from #304's EnsureRunning join).
+//   - dlCtx is a cancellable child of it that bounds the DOWNLOAD alone.
+//     CancelPull cancels it. Nothing that must outlive the job may be
+//     started on it.
+//
+// Neither is re-wrapped here in a WithCancel this function cancels on
+// return — that is the same hazard, one layer down.
 //
 // job is a VALUE: the pointer PullModel published under pullMu stays
 // immutable for joining callers, and this function's own upgrade of a
 // blindly-resolved variant (#361) republishes a replacement rather than
-// writing through. manifest is carried so that upgrade can re-run the
-// selection without a second alias lookup.
-func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, manifest catalog.Manifest) {
+// writing through. Its stop half is a pointer, so the copy reads the same
+// cancellation flag the canceller wrote. manifest is carried so that
+// upgrade can re-run the selection without a second alias lookup.
+func (p *agentInferenceProvider) runPullJob(ctx, dlCtx context.Context, job pullJob, manifest catalog.Manifest) {
 	modelID, jobID := job.modelID, job.jobID
 	variantID, tag := job.variantID, job.tag
 	p.recordPullState(modelID, catalog.ModelStateDownloading, "")
@@ -3132,9 +3321,17 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 		// Once per job: a later attempt's engine is the same engine.
 		if job.resolvedBlind && engineErr == "" {
 			job.resolvedBlind = false
-			if v, ok := p.upgradeBlindVariant(ctx, manifest, jobID, variantID); ok {
+			// dlCtx: a version probe belongs to this download and must
+			// not outlive a cancel.
+			if v, ok := p.upgradeBlindVariant(dlCtx, manifest, jobID, variantID); ok {
 				variantID, tag = v.VariantID, v.Source.Tag
 			}
+		}
+		// The one gate before a byte is fetched. A cancel that landed
+		// while EnsureRunning was joining an engine start must not be
+		// followed by a multi-GB download.
+		if job.requestedStop() {
+			break
 		}
 		// Sampled AFTER EnsureRunning on purpose: that call reaps a dead
 		// child and respawns it, which moves the generation for a reason
@@ -3143,7 +3340,7 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 		// Fresh per attempt: attempt 1's transient must never be reported
 		// as attempt 3's cause.
 		var diag pullDiagnostic
-		err = p.puller.Pull(ctx, tag, func(pr download.Progress) {
+		err = p.puller.Pull(dlCtx, tag, func(pr download.Progress) {
 			p.dlProgress.observe(modelID, pr)
 			if pr.State == download.StateVerifying {
 				p.recordPullState(modelID, catalog.ModelStateVerifying, "")
@@ -3163,6 +3360,14 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 		// makes this hold for a bounce added later: every one of them goes
 		// through the adapter. `ollama pull` surfaces a killed engine as a
 		// bare non-zero exit, so there is no error text to key on anyway.
+		// An operator cancel ends the job here, ahead of the engine-bounce
+		// grace: a cancelled download is not one an engine restart owes a
+		// free retry to, and the flag is read rather than the error
+		// because a killed `ollama pull` is indistinguishable from an OOM
+		// kill (see pullStop).
+		if job.requestedStop() {
+			break
+		}
 		if err != nil && bounceGrace > 0 && p.engineProcessGen() != gen {
 			bounceGrace--
 			p.logger.Info("model download interrupted by an engine restart; retrying without charging the attempt",
@@ -3189,7 +3394,7 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 			"model", modelID, "tag", tag, "attempt", charged, "max", modelPullAttempts, "err", failure)
 		select {
 		case <-time.After(time.Duration(charged) * modelPullBackoff):
-		case <-ctx.Done():
+		case <-dlCtx.Done():
 		}
 		// The single gate on starting another attempt. Shutdown ends the
 		// job rather than restarting it: agentCtx is cancelled on SIGTERM
@@ -3198,6 +3403,13 @@ func (p *agentInferenceProvider) runPullJob(ctx context.Context, job pullJob, ma
 		if ctx.Err() != nil {
 			break
 		}
+	}
+	// A cancelled job records nothing. "failed" would be a wrong answer —
+	// nothing failed, someone asked it to stop — and settleCancelledPull
+	// is about to drop the row anyway, so writing one here only makes the
+	// log read like a fault.
+	if job.requestedStop() {
+		return
 	}
 	if err != nil {
 		p.logger.Warn("ollama pull failed", "model", modelID, "tag", tag, "err", failure)
@@ -3740,12 +3952,34 @@ func (p *agentInferenceProvider) SwapPreferredModel(ctx context.Context, modelOr
 }
 
 func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string) error {
+	// Stop a download of this model before touching the catalog
+	// (waired-agent#641). Deleting the row out from under a running job
+	// did not stop the job — it only removed the one thing that showed it
+	// was running, because models.downloads is derived from state.Models
+	// alone. The job then finished and wrote the model back as Ready,
+	// which is the "deleted model returns to ready" the issue reported.
+	//
+	// CancelPull waits for the job to unwind, so everything below reads a
+	// settled catalog rather than racing it.
+	stopped := false
+	if res, cerr := p.CancelPull(ctx, modelID); cerr == nil && res.Status == pullCancelCancelled {
+		stopped = true
+	}
 	state, err := p.store.Load()
 	if err != nil {
 		return err
 	}
 	m, ok := state.Models[modelID]
 	if !ok {
+		// The cancelled job's own cleanup already removed the row. The
+		// operator asked for the model to be gone and it is gone, so this
+		// is the success case, not "no such model".
+		if stopped {
+			p.logger.Info("model record removed by the cancelled download it was still fetching",
+				"model", modelID)
+			p.forgetDeletedModel(modelID)
+			return nil
+		}
 		return fmt.Errorf("model %q not present", modelID)
 	}
 	// Delete the weights before the record, not after. The record is how
@@ -3781,11 +4015,71 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 			delete(state.Endpoints, k)
 		}
 	}
+	// An ActiveSelection that survives the model it names is not merely
+	// stale, it is load-bearing in the wrong direction (waired-agent#641):
+	// activeEngineTag resolves Active through state.Models, so a dangling
+	// Active makes it answer "", narrowPublishedModels reads that as
+	// "nothing to enforce" and passes the probe result through unmodified,
+	// and within one 5s tick the host advertises every tag /api/tags
+	// reports — the host-speed probe model included. That is the failure
+	// waired-agent#656 reported, reached through a second door that #670
+	// did not close.
+	if state.Active != nil && state.Active.ModelID == modelID {
+		state.Active = nil
+	}
 	if err := p.store.Save(state); err != nil {
 		return err
 	}
 	p.logger.Info("model record removed", "model", modelID, "tag", m.OllamaTag)
+	p.forgetDeletedModel(modelID)
 	return nil
+}
+
+// forgetDeletedModel drops the standing instructions that would download
+// the model again, so a removal survives a restart (waired-agent#641: the
+// model "came back" after several daemon restarts).
+//
+// Two records name a model outside state.json. The in-process override is
+// what every live reader consults; preferred-model.json is what the next
+// boot reads, where bootstrapPreferredModel re-pulls a preferred model
+// that is missing — which is exactly a model someone just deleted.
+//
+// Only a record that names THIS model is touched. A "run without a local
+// model" (None) or an abandoned-question (Unanswered) record is a
+// different statement about a different question (#586) and is left
+// alone.
+//
+// Clearing the preference returns the host to the standing default for a
+// host that has not chosen: bootstrapAfterEngineStart falls to the
+// bundled arm, which may pre-pull the bundled model on the next boot.
+// That is a different model from the one just deleted, and it is the
+// behaviour every never-asked host already has — but it is a download, so
+// it is logged rather than left for the operator to discover.
+func (p *agentInferenceProvider) forgetDeletedModel(modelID string) {
+	if cur := p.preferredOverride.Load(); cur != nil && *cur == modelID {
+		empty := ""
+		p.preferredOverride.Store(&empty)
+	}
+	if p.preferencePath == "" {
+		return
+	}
+	pref, ok, err := agentconfig.LoadPreference(p.preferencePath)
+	if err != nil {
+		p.logger.Warn("preferred-model.json unreadable; the deleted model may be re-downloaded on the next restart",
+			"model", modelID, "path", p.preferencePath, "err", err)
+		return
+	}
+	if !ok || pref.ModelID != modelID {
+		return
+	}
+	pref.ModelID = ""
+	if err := agentconfig.SavePreference(p.preferencePath, pref); err != nil {
+		p.logger.Warn("clearing the deleted model from preferred-model.json failed; it may be re-downloaded on the next restart",
+			"model", modelID, "path", p.preferencePath, "err", err)
+		return
+	}
+	p.logger.Info("the deleted model was this host's preferred model; the preference is cleared, so the next restart falls back to the bundled pick",
+		"model", modelID)
 }
 
 // modelIDsForTag lists the models OTHER than except whose weights are the
