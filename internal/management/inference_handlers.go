@@ -599,6 +599,18 @@ func (s *Server) handleInferenceSelect(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, mapRouterStatus(err), errorBody("selection_failed", err.Error()))
 		return
 	}
+	// Select commits, and committing acquires the peer's admission slot
+	// (router.Selection.Release: "Always non-nil — callers MUST
+	// defer-call it"). This endpoint is a dry run, so it has to give the
+	// slot back: without this, one `waired infer --explain` held a slot
+	// for the daemon's remaining lifetime, and on a host whose effective
+	// admission capacity is 1 that was enough to make every later
+	// request read "every matching mesh peer is at capacity"
+	// (waired-agent#624). Nil guard and defer for the same reasons as
+	// the gateway's two release sites.
+	if sel.Release != nil {
+		defer sel.Release()
+	}
 	writeJSON(w, http.StatusOK, scrubSelectionForDisplay(sel))
 }
 
