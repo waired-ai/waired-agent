@@ -14,9 +14,6 @@ import (
 	"github.com/waired-ai/waired-agent/internal/router"
 )
 
-// Phase 8 tuning constants. The Phase 8 work record documents the
-// reasoning behind each (probe is GPU-free so a 50ms budget is cheap;
-// 250ms brief queue covers in-flight churn from completing requests).
 // probeReasonCapacityFull is router.ProbeResult.FailureReason()'s tag
 // for "the peer answered, it is just full". Named here because
 // pinnedProbeFailure has to treat it as overloaded rather than
@@ -25,9 +22,87 @@ const probeReasonCapacityFull = "capacity_full"
 
 const (
 	probeFanoutK    = 3
-	probeBudget     = 50 * time.Millisecond
 	briefQueueDelay = 250 * time.Millisecond
+
+	// probeAttempts is how many times the SelectK + probe + commit chain
+	// runs before the gateway gives up, with briefQueueDelay between
+	// attempts. More than one because a probe that does not come back is
+	// not evidence about the peer: it can equally be a packet lost on the
+	// way, a relay hiccup, or a peer mid-handshake, and a network fault
+	// should not be reported as a verdict on the mesh (owner ruling on
+	// waired-agent#624, 20260812).
+	probeAttempts = 3
+
+	// probeBudgetFloor and probeBudgetCeiling bound the per-attempt
+	// readiness-probe budget that probeBudgetFor derives from peer RTT.
+	//
+	// The floor is not 2×RTT: even a peer one millisecond away has to
+	// accept a connection, run its /healthz handler and answer, and the
+	// point of the floor is that a LAN peer is never rejected for being
+	// microseconds late.
+	//
+	// The ceiling bounds the whole failure path. Worst case before an
+	// unreachable mesh reports back is
+	// probeAttempts×ceiling + (probeAttempts-1)×briefQueueDelay, which
+	// TestSelectAndProbe_WorstCaseWaitStaysBounded pins.
+	probeBudgetFloor   = 250 * time.Millisecond
+	probeBudgetCeiling = 1000 * time.Millisecond
+
+	// probeRTTMargin multiplies the peer's measured RTT to get its
+	// budget. It is deliberately generous rather than tight: the peer
+	// adapter sets DisableKeepAlives, so every probe pays a fresh overlay
+	// TCP handshake plus the request itself — two round trips before the
+	// peer's own handler time is counted at all. The budget this replaced
+	// was a flat 50 ms, which is under ONE round trip on a mesh measuring
+	// 52 ms, so no probe could ever finish and every mesh request
+	// returned 503 (waired-agent#624).
+	probeRTTMargin = 6
 )
+
+// probeBudgetFor sizes one probe round for the peers it is about to
+// probe. The probes run concurrently under a single deadline, so the
+// budget follows the FARTHEST candidate — a nearer peer answering sooner
+// costs nothing, while sizing to the nearest would cut off the others.
+//
+// A candidate whose RTT was never measured (router.RTTUnknown — no disco
+// pong, which is also every relay-only peer) contributes the ceiling:
+// there is no distance to scale by, and guessing small is what makes a
+// far peer permanently unroutable.
+func probeBudgetFor(cands []router.Candidate) time.Duration {
+	budget := probeBudgetFloor
+	for _, c := range cands {
+		if c.ExecutionMode != "remote" {
+			continue
+		}
+		want := probeBudgetCeiling
+		if c.RTTMS != router.RTTUnknown {
+			want = time.Duration(c.RTTMS) * time.Millisecond * probeRTTMargin
+		}
+		if want > budget {
+			budget = want
+		}
+	}
+	if budget > probeBudgetCeiling {
+		budget = probeBudgetCeiling
+	}
+	return budget
+}
+
+// probesWentUnanswered reports whether no probe in the round produced a
+// verdict about its peer: every result is a transport error (which is
+// also what a budget overrun becomes — see router.ProbeHealth). An empty
+// round is not "unanswered"; there was nothing to ask.
+func probesWentUnanswered(results []router.ProbeResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, r := range results {
+		if r.Outcome != router.ProbeTransportError {
+			return false
+		}
+	}
+	return true
+}
 
 // Wire header names the Phase 8 gateway sets on responses so the
 // caller (claude-code, codex, custom waired plugin) can surface
@@ -183,67 +258,89 @@ func uniformProbeErr(results []router.ProbeResult, target error) error {
 // between the OpenAI and Anthropic handlers. It:
 //
 //  1. SelectK(k=3) ranked candidates.
-//  2. ParallelProbe (50 ms budget) — first ready wins.
+//  2. ParallelProbe under probeBudgetFor(candidates) — first ready wins.
 //  3. Commit the winner. If Commit fails (capacity hit between probe
 //     and commit), walk forward through the remaining ready candidates.
-//  4. If no candidate ever committed, brief-queue 250 ms and retry
-//     the full SelectK + ParallelProbe + Commit chain once.
-//  5. If both rounds fail, return ErrAllPeersOverloaded.
+//  4. If no candidate ever committed, brief-queue 250 ms and run the
+//     whole chain again, up to probeAttempts rounds. A config verdict
+//     (ErrPeerRoutingDisabled) or a failed operator pin short-circuits
+//     instead: retrying those only delays the same answer.
+//  5. When every round fails, report which failure it was —
+//     ErrPeersDidNotAnswer when no probe came back at all,
+//     ErrAllPeersOverloaded when peers answered and were full.
 //
 // The handler caller defers Selection.Release; selectAndProbe never
 // holds an admission slot itself after returning.
 func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request) (probedSelection, error) {
-	got, ok, err := h.tryProbeAndCommit(ctx, req)
-	if ok || err != nil {
-		return got, err
-	}
-	// Special case: every probe failed with the same typed error
-	// (ErrPeerRoutingDisabled is the load-bearing case — overlay-side
-	// listeners pin PeerAdapterFactory=nil for loop prevention).
-	// Surface that directly so operators see "runtime_unavailable"
-	// rather than "all peers overloaded".
-	if e := uniformProbeErr(got.probeResults, ErrPeerRoutingDisabled); e != nil {
-		return probedSelection{}, e
-	}
-	// An operator pin that failed its own probe is a different
-	// operator problem from "the mesh is busy", and it must not be
-	// retried into silence: the brief queue exists to catch a peer
-	// finishing a request, not to wait out an unreachable one.
-	if e := h.pinnedProbeFailure(got); e != nil {
-		return probedSelection{}, e
-	}
-	// Brief queue: short sleep that often coincides with another
-	// request completing on a peer (in-flight count drops below
-	// capacity). Cheaper than asking the client to retry.
-	slog.Debug("gateway brief-queue retry", "delay_ms", briefQueueDelay.Milliseconds())
-	select {
-	case <-time.After(briefQueueDelay):
-	case <-ctx.Done():
-		return probedSelection{}, ctx.Err()
-	}
-	got, ok, err = h.tryProbeAndCommit(ctx, req)
-	if err != nil {
-		if h.deps.Recorder != nil {
-			h.deps.Recorder.RecordBriefQueueRetry("failed")
+	var got probedSelection
+	for attempt := 1; ; attempt++ {
+		var ok bool
+		var err error
+		got, ok, err = h.tryProbeAndCommit(ctx, req)
+		if err != nil {
+			if attempt > 1 {
+				h.recordRetryOutcome("failed")
+			}
+			return probedSelection{}, err
 		}
-		return probedSelection{}, err
-	}
-	if !ok {
-		if h.deps.Recorder != nil {
-			h.deps.Recorder.RecordBriefQueueRetry("failed")
+		if ok {
+			if attempt > 1 {
+				h.recordRetryOutcome("succeeded")
+			}
+			return got, nil
 		}
+		// Two verdicts must not be retried, because retrying them only
+		// adds delay before the same answer.
+		//
+		// Every probe failing with the same typed error
+		// (ErrPeerRoutingDisabled is the load-bearing case — overlay-side
+		// listeners pin PeerAdapterFactory=nil for loop prevention) is a
+		// config problem, so operators see "runtime_unavailable" rather
+		// than "all peers overloaded".
 		if e := uniformProbeErr(got.probeResults, ErrPeerRoutingDisabled); e != nil {
 			return probedSelection{}, e
 		}
+		// An operator pin that failed its own probe is a different
+		// operator problem from "the mesh is busy": the brief queue
+		// exists to catch a peer finishing a request, not to wait out an
+		// unreachable one.
 		if e := h.pinnedProbeFailure(got); e != nil {
 			return probedSelection{}, e
 		}
-		return probedSelection{}, router.ErrAllPeersOverloaded
+		if attempt >= probeAttempts {
+			if attempt > 1 {
+				h.recordRetryOutcome("failed")
+			}
+			// Say which of the two happened. "At capacity" is a claim
+			// about peers that answered; when none of them answered, the
+			// mesh went unmeasured and reporting load sends the reader to
+			// the capacity filter, which never ran (waired-agent#624).
+			if probesWentUnanswered(got.probeResults) {
+				return probedSelection{}, router.ErrPeersDidNotAnswer
+			}
+			return probedSelection{}, router.ErrAllPeersOverloaded
+		}
+		// Brief queue: a short sleep that often coincides with another
+		// request completing on a peer (in-flight count drops below
+		// capacity), and gives a lost probe packet a second chance.
+		// Cheaper than asking the client to retry.
+		slog.Debug("gateway brief-queue retry",
+			"attempt", attempt, "of", probeAttempts, "delay_ms", briefQueueDelay.Milliseconds())
+		select {
+		case <-time.After(briefQueueDelay):
+		case <-ctx.Done():
+			return probedSelection{}, ctx.Err()
+		}
 	}
+}
+
+// recordRetryOutcome reports how a request that needed more than its
+// first probe round ended up. Kept as one helper so the attempt loop
+// cannot record a retry it did not make.
+func (h *HandlerSet) recordRetryOutcome(outcome string) {
 	if h.deps.Recorder != nil {
-		h.deps.Recorder.RecordBriefQueueRetry("succeeded")
+		h.deps.Recorder.RecordBriefQueueRetry(outcome)
 	}
-	return got, nil
 }
 
 // tryProbeAndCommit is one round of SelectK + ParallelProbe + Commit.
@@ -260,8 +357,10 @@ func (h *HandlerSet) tryProbeAndCommit(ctx context.Context, req router.Request) 
 	if len(cands) == 0 {
 		return probedSelection{}, false, nil
 	}
-	winnerIdx, results := ParallelProbe(ctx, cands, h.peerProbeLookup, probeBudget)
-	slog.Debug("probe complete", "candidates", len(cands), "winner_idx", winnerIdx)
+	budget := probeBudgetFor(cands)
+	winnerIdx, results := ParallelProbe(ctx, cands, h.peerProbeLookup, budget)
+	slog.Debug("probe complete",
+		"candidates", len(cands), "winner_idx", winnerIdx, "budget_ms", budget.Milliseconds())
 	// Emit per-probe telemetry for every candidate that actually
 	// reached out over the WG mesh. Fast-path (local / external)
 	// slots carry a synthetic ProbeOK with zero latency and are

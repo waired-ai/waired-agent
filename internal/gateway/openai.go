@@ -440,6 +440,14 @@ func respondSelectionError(w http.ResponseWriter, err error) {
 		// mesh" apart from "wrong model".
 		w.Header().Set("Retry-After", "5")
 		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "waired_all_peers_overloaded", err.Error())
+	case errors.Is(err, router.ErrPeersDidNotAnswer):
+		// Matching peers existed but none answered its readiness probe,
+		// so nothing is known about the mesh's load. Its own code, because
+		// reporting this as waired_all_peers_overloaded points the reader
+		// at capacity — the one thing the gateway did not measure
+		// (waired-agent#624).
+		w.Header().Set("Retry-After", "5")
+		writeOpenAIError(w, http.StatusServiceUnavailable, "service_unavailable", "waired_peers_did_not_answer", err.Error())
 	case errors.Is(err, ErrPeerRoutingDisabled):
 		// Phase 8: selectAndProbe surfaces a uniform
 		// ErrPeerRoutingDisabled when every probe failed because the

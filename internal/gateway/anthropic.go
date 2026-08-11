@@ -932,6 +932,14 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error) {
 		// equivalent state — keep the wire shape stable.
 		w.Header().Set("Retry-After", "5")
 		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
+	case errors.Is(err, router.ErrPeersDidNotAnswer):
+		// Matching peers existed but none answered its readiness probe.
+		// Anthropic's envelope has no code for "unmeasured", so the wire
+		// shape stays overloaded_error; the message carries the
+		// distinction, and the observability reason
+		// (selectionFailureReason) records it exactly.
+		w.Header().Set("Retry-After", "5")
+		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	case errors.Is(err, ErrPeerRoutingDisabled):
 		// Phase 8: probe path bubbled up a uniform routing-disabled
 		// signal. Same shape as the existing runtime_unavailable

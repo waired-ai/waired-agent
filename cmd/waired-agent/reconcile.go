@@ -509,7 +509,18 @@ func (r *reconciler) evaluateSwitchLocked(st *peerPathState, now time.Time, peer
 	// switch, lastSwitchAt is zero and we let probes drive freely.
 	if !st.lastSwitchAt.IsZero() && now.Sub(st.lastSwitchAt) < r.cfg.MinDwellTime {
 		if curr == pathRelay {
-			st.lastUpgradeRejectReason = "dwell"
+			// "dwell" only when dwell is the ONLY thing in the way.
+			// lastUpgradeRejectReason is a single overwritten string, so
+			// recording dwell unconditionally erased the gate that would
+			// still refuse the promotion the moment dwell expired. On real
+			// hardware every peer stuck on relay reported "dwell" — a 30s
+			// timer — while the standing blocker was ring_not_full, i.e. a
+			// direct path that had never come up at all (waired#1137).
+			if gate := r.upgradeGateReason(st); gate != "" {
+				st.lastUpgradeRejectReason = gate
+			} else {
+				st.lastUpgradeRejectReason = "dwell"
+			}
 		}
 		return false, ""
 	}
@@ -543,16 +554,8 @@ func (r *reconciler) evaluateSwitchLocked(st *peerPathState, now time.Time, peer
 		}
 	case pathRelay:
 		// Upgrade?
-		if !r.haveEnoughSamples(st) {
-			st.lastUpgradeRejectReason = "samples"
-			return false, ""
-		}
-		if st.directRTTEWMA == 0 {
-			st.lastUpgradeRejectReason = "ewma_zero"
-			return false, "" // no direct RTT yet — can't compare
-		}
-		if !pongRingFull(st, r.cfg.UpgradePongStreak) {
-			st.lastUpgradeRejectReason = "ring_not_full"
+		if gate := r.upgradeGateReason(st); gate != "" {
+			st.lastUpgradeRejectReason = gate
 			return false, ""
 		}
 		if st.directRTTEWMA < durMul(st.relayRTTEWMA, r.cfg.UpgradeRTTRatio) {
@@ -573,6 +576,25 @@ func (r *reconciler) evaluateSwitchLocked(st *peerPathState, now time.Time, peer
 		st.lastUpgradeRejectReason = "ratio"
 	}
 	return false, ""
+}
+
+// upgradeGateReason names the first relay→direct promotion gate this peer
+// does not satisfy, or "" when all of them pass and only the RTT-ratio
+// comparison is left to make.
+//
+// One function rather than the gate checks inlined at each site, so the
+// reason the dwell veto reports and the reason a normal evaluation
+// reports cannot disagree about the same peer.
+func (r *reconciler) upgradeGateReason(st *peerPathState) string {
+	switch {
+	case !r.haveEnoughSamples(st):
+		return "samples"
+	case st.directRTTEWMA == 0:
+		return "ewma_zero" // no direct RTT yet — can't compare
+	case !pongRingFull(st, r.cfg.UpgradePongStreak):
+		return "ring_not_full"
+	}
+	return ""
 }
 
 func (r *reconciler) haveEnoughSamples(st *peerPathState) bool {

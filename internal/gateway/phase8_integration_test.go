@@ -157,15 +157,22 @@ func TestPhase8Integration_ProbeSelectsReadyPeer(t *testing.T) {
 	}
 }
 
-// TestPhase8Integration_AllPeersFailReturns503 is the brief-queue
-// exhaustion path. All three peers fail their probes; the gateway
-// brief-queues 250 ms and probes once more; both rounds fail; the
-// gateway returns 503 with Retry-After: 5 and the
-// waired_all_peers_overloaded code dashboards key off.
+// TestPhase8Integration_UnreachablePeersReturn503 is the retry
+// exhaustion path where nobody answers: all three peers fail to dial,
+// every round times out, and the gateway returns 503 with
+// Retry-After: 5.
 //
-// The test uses 1 ms briefQueueDelay-equivalent flakeproofing by
-// asserting only the final wire shape, not the timing.
-func TestPhase8Integration_AllPeersFailReturns503(t *testing.T) {
+// The code is waired_peers_did_not_answer, NOT
+// waired_all_peers_overloaded. This test previously asserted the
+// latter; the expectation is inverted here because it was the
+// mis-attribution waired-agent#624 was filed over — "every matching
+// mesh peer is at capacity" is a claim about peers that answered, and
+// these peers never did, so it sent the investigation to the capacity
+// filter, which had not run. See TestPhase8Integration_FullPeersReturn503
+// for the case that genuinely is about load.
+//
+// The test asserts only the final wire shape, not timing.
+func TestPhase8Integration_UnreachablePeersReturn503(t *testing.T) {
 	rt := &stubRT{dialErr: errors.New("connect refused")}
 	sel := &phase8MultiSelector{
 		cands: []router.Candidate{
@@ -192,6 +199,49 @@ func TestPhase8Integration_AllPeersFailReturns503(t *testing.T) {
 	}
 	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "5" {
 		t.Errorf("Retry-After = %q, want %q", retryAfter, "5")
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &env)
+	if env.Error.Code != "waired_peers_did_not_answer" {
+		t.Errorf("error.code = %q, want %q (body=%s)", env.Error.Code, "waired_peers_did_not_answer", raw)
+	}
+}
+
+// TestPhase8Integration_FullPeersReturn503 is the other half of the
+// distinction the code above stops blurring: every peer ANSWERED and
+// reported itself at capacity. That is what waired_all_peers_overloaded
+// has always claimed, and it must keep claiming it — dashboards key off
+// this code to tell an underprovisioned mesh from a wrong model
+// (router.ErrAllPeersOverloaded's own doc).
+func TestPhase8Integration_FullPeersReturn503(t *testing.T) {
+	full := &stubRT{status: 200, body: readyBody(4, 4)} // capacity_used == capacity_total
+	sel := &phase8MultiSelector{
+		cands: []router.Candidate{
+			phase8RemoteCandidate("peer-A"),
+			phase8RemoteCandidate("peer-B"),
+			phase8RemoteCandidate("peer-C"),
+		},
+	}
+	h := buildPhase8Gateway(t, sel, map[string]http.RoundTripper{
+		"peer-A": full, "peer-B": full, "peer-C": full,
+	}, "")
+
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"model":"qwen3-8b-instruct","messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503", resp.StatusCode)
 	}
 	raw, _ := io.ReadAll(resp.Body)
 	var env struct {

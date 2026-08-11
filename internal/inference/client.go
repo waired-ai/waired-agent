@@ -24,6 +24,18 @@ type Client struct {
 	http *http.Client
 }
 
+// PingBudget is how long the daemon waits for a peer to answer an
+// overlay ping before giving up.
+//
+// Exported so the surfaces that drive POST /waired/v1/ping can be checked
+// against it. A client budget SHORTER than this one does not make the
+// daemon's peer-named answer late, it destroys it: net/http cancels the
+// request context when the client gives up, so the handler aborts the
+// ping and the 502 that would have named the peer is never written, and
+// the operator is left holding a loopback timeout that points at their
+// own daemon (waired-agent#659).
+const PingBudget = 15 * time.Second
+
 // NewClient builds a Client whose http.Transport dials peers via the supplied
 // OverlayDialer. The host portion of the URL is treated as the overlay IP.
 func NewClient(dialer OverlayDialer, requestTimeout time.Duration) *Client {
