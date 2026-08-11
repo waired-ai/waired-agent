@@ -15,14 +15,38 @@ import (
 // stays decoupled from the management package, matching the rest of
 // cmd/waired's inline-struct convention.
 type catalogDetailResp struct {
-	PreferredModelID string `json:"preferred_model_id"`
-	Engine           string `json:"engine"`
-	Host             struct {
-		RAMTotalGB  int    `json:"ram_total_gb"`
-		VRAMTotalMB int    `json:"vram_total_mb"`
-		GPUModel    string `json:"gpu_model"`
-	} `json:"host"`
-	Families []catalogDetailFamily `json:"families"`
+	PreferredModelID string                `json:"preferred_model_id"`
+	Engine           string                `json:"engine"`
+	Host             catalogDetailHost     `json:"host"`
+	Families         []catalogDetailFamily `json:"families"`
+}
+
+// catalogDetailHost is the host block of the catalog response: the
+// figures a surface needs to explain a verdict it did not compute.
+//
+// Named rather than inline since #625, because the explaining is now
+// done here. The agent sends VALUES — what the machine has, and what it
+// measured the system to be holding — and this side turns them into the
+// sentence, which is the split waired-agent#321 established.
+type catalogDetailHost struct {
+	RAMTotalGB  int    `json:"ram_total_gb"`
+	VRAMTotalMB int    `json:"vram_total_mb"`
+	GPUModel    string `json:"gpu_model"`
+
+	// UnifiedMemory says RAMTotalGB and VRAMTotalMB are the same bytes,
+	// so a sentence must never add them.
+	UnifiedMemory bool `json:"unified_memory"`
+
+	// OSReservedGB is this install's measured OS + resident-application
+	// deduction (#568). Absent on a host whose RAM probe failed, which
+	// is why 0 means "no figure" rather than "reserves nothing".
+	OSReservedGB int `json:"os_reserved_gb"`
+
+	// GPUBudgetMB is the GPU-addressable memory the engine may use, the
+	// pool where there is one. 0 is "no figure" — a host with no card,
+	// or an agent too old to send it — and both mean this side says
+	// nothing about residency rather than claiming a zero budget.
+	GPUBudgetMB int `json:"gpu_budget_mb"`
 }
 
 type catalogDetailFamily struct {
@@ -140,7 +164,7 @@ func formatCatalogDetail(c catalogDetailResp) string {
 		}
 		_, _ = fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\t%s\n",
 			catalogStateMarker(f), f.ModelID, params,
-			catalogSizeColumn(f), catalogNeedsColumn(c.Engine, f), catalogFitColumn(f))
+			catalogSizeColumn(f), catalogNeedsColumn(c.Engine, f), catalogFitColumn(c.Host, f))
 	}
 	_ = tw.Flush()
 
@@ -153,6 +177,9 @@ func formatCatalogDetail(c catalogDetailResp) string {
 	b.WriteString("SIZE is which class of graphics card runs the model at all — small fits an\n" +
 		"8 GB card, medium a 32 GB one, large needs more. Unlike NEEDS it says the\n" +
 		"same thing on every computer, so it is the one to quote elsewhere.\n")
+	b.WriteString("\"context cache in system RAM\" is the part of a full coding session this\n" +
+		"computer's graphics card cannot hold. The model still runs; that part is\n" +
+		"read from system memory, which is slower than reading it from the card.\n")
 	b.WriteString("Why the current pick: `waired infer --explain`.\n")
 	b.WriteString("Full hardware-fit reference: https://docs.waired.ai/reference/model-catalog/\n")
 	return b.String()
@@ -230,7 +257,16 @@ func catalogNeedsColumn(engine string, f catalogDetailFamily) string {
 // model out of the automatic pick, and this column printed a bare
 // "✓ fits" for exactly those models — the rule was real and no surface
 // showed it.
-func catalogFitColumn(f catalogDetailFamily) string {
+// The third half, added by waired-agent#632: a row can be fitting AND
+// recommended AND still keep gigabytes of its context cache off the
+// card. On the rc8 Windows host the recommended model needed 10719 MB to
+// serve the coding window against an 8188 MB budget, and this column
+// said "✓ fits · recommended" over a 6.6 GB download that then measured
+// 5 tok/s. The shortfall is annotated, never subtracted from the
+// verdict: excluding on a PREDICTED rate is what
+// docs/decisions/20260804/1937-… decision 4 removed, and it returns
+// measured or not at all (waired-agent#466).
+func catalogFitColumn(host catalogDetailHost, f catalogDetailFamily) string {
 	if !f.Fits {
 		if f.Fit != nil && f.Fit.Reason == reasonNoVariantForEngine {
 			return "✗ not available on this computer"
@@ -240,17 +276,21 @@ func catalogFitColumn(f catalogDetailFamily) string {
 		}
 		return "✗"
 	}
+	out := "✓ fits"
 	switch {
 	case f.RecommendedPick:
-		return "✓ fits · recommended"
+		out = "✓ fits · recommended"
 	case f.Fit != nil && f.Fit.NotRecommended:
+		out = "✓ fits · not recommended"
 		if f.Fit.NotRecommendedReason != "" {
-			return "✓ fits · not recommended (" +
+			out = "✓ fits · not recommended (" +
 				strings.ReplaceAll(f.Fit.NotRecommendedReason, "_", " ") + ")"
 		}
-		return "✓ fits · not recommended"
 	}
-	return "✓ fits"
+	if mb := contextCacheSpillMB(host, f.Fit); mb > 0 {
+		out += " · " + formatSpillGB(mb) + " of context cache in system RAM"
+	}
+	return out
 }
 
 // reasonNoVariantForEngine mirrors hostfit.ReasonNoVariantForEngine.

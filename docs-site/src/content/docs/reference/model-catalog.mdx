@@ -143,6 +143,21 @@ Where you choose, Waired says which is which. The model Waired would choose
 for this computer is marked *recommended*, and a model that runs here but is
 not that one is marked with the reason and stays selectable.
 
+A *recommended* model can still leave part of a session's context cache in
+system RAM — the weights fit the card, the cache alongside them does not.
+Where that happens, `waired models ls --detail` and the download confirmation
+say how much, before you spend the download:
+
+```
+qwen3.5-9b  ...  ✓ fits · recommended · 2.5 GB of context cache in system RAM
+```
+
+The model runs; that part is read from system memory, which is slower than
+reading it from the card. How much slower depends on the machine, which is
+why Waired reports the memory rather than guessing at a speed. The
+benchmark after installation measures the real rate and offers a lighter
+model if it is too slow.
+
 Fitting in memory is not the same as running fast: on a shared-memory Mac a
 large dense model can fit and still answer at single-digit words per second,
 while a mixture-of-experts model of similar size answers many times faster.

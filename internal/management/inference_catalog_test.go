@@ -559,3 +559,63 @@ func TestInferenceCatalog_MarksExactlyOneRecommendedPick(t *testing.T) {
 		t.Errorf("endpoint marked %q, router would pick %q — two policies", marked[0], want)
 	}
 }
+
+// Product contract (waired-agent#625): one catalog response describes one
+// machine. The host block reports the budget the fit rules judged this
+// host on, not GPUs[0]'s raw figure.
+//
+// The two differ exactly where it mattered. The darwin detector reports
+// VRAMTotalMB=0 on purpose — Apple Silicon has no separate pool to
+// report — so reading GPUs[0] left vram_total_mb absent on every Mac
+// while the deficit labels in the same document quoted 12288 MB.
+//
+// The profile below is the shape the REAL darwin detector produces:
+// UnifiedMemory with UsableVRAMMB set and no VRAMTotalMB on the device.
+// Fixtures elsewhere in this repo set a non-zero VRAMTotalMB on Apple
+// GPUs, which is a machine that cannot exist, and that fake is why #662
+// shipped green.
+func TestInferenceCatalog_HostBlockMatchesTheBudgetTheFitUsed(t *testing.T) {
+	inf := &fakeInference{
+		hwProfile: hardware.Profile{
+			RAMTotalGB:              16,
+			RAMAvailableAtInstallGB: 6,
+			UnifiedMemory:           true,
+			UsableVRAMMB:            12288,
+			GPUs:                    []hardware.GPU{{Vendor: "apple", Model: "Apple M4"}},
+		},
+	}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	w, got := doGet(t, s, "/waired/v1/inference/catalog")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got.Host.VRAMTotalMB != 12288 {
+		t.Errorf("host.vram_total_mb = %d, want 12288 (EffectiveVRAMMB, not GPUs[0].VRAMTotalMB=0)",
+			got.Host.VRAMTotalMB)
+	}
+	if !got.Host.UnifiedMemory {
+		t.Error("host.unified_memory is false on a unified host; a surface would add the two figures")
+	}
+	// max(OSMemoryAllowanceGB, 16-6). The label says this host has 6 GB
+	// allocatable, and this is the figure that makes that checkable.
+	if got.Host.OSReservedGB != 10 {
+		t.Errorf("host.os_reserved_gb = %d, want 10 (measured 16-6, #568)", got.Host.OSReservedGB)
+	}
+}
+
+// A host whose RAM probe failed reports no reservation at all rather than
+// zero: no machine reserves nothing, and a surface reading 0 as a
+// measurement would print "0 GB is already in use".
+func TestInferenceCatalog_NoRAMReadingReportsNoReservation(t *testing.T) {
+	inf := &fakeInference{hwProfile: hardware.Profile{}}
+	s := newCatalogTestServer(t, inf, t.TempDir())
+
+	w, got := doGet(t, s, "/waired/v1/inference/catalog")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if got.Host.OSReservedGB != 0 {
+		t.Errorf("host.os_reserved_gb = %d on a host that reported no RAM, want absent", got.Host.OSReservedGB)
+	}
+}

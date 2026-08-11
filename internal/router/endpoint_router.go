@@ -790,7 +790,8 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			variant.MinRAMGB, s.in.Hardware.RAMTotalGB))
 	} else {
 		reasons = append(reasons, fmt.Sprintf("hardware below recommended: %s — serving anyway (#61)",
-			deficitLabelFor(variant, engine, s.in.Hardware)))
+			deficitLabelFor(variant, engine, s.in.Hardware,
+				familyPresentation(manifest, variant, engine, s.in.Hardware))))
 	}
 	reasons = append(reasons, fmt.Sprintf("engine %q selected", engine))
 	if _, ok := s.in.Runtimes.Lookup(engine); !ok {

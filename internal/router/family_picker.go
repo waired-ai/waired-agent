@@ -39,6 +39,12 @@ type FamilyFit struct {
 	// no inputs for), so there is no code for it and this sentence stays
 	// the only answer. A renderer therefore reads Fit.Reason first and
 	// falls back here — see the tray's formatCatalogEntry.
+	//
+	// Worded from Fit's own NeedMB/HaveMB since #625, so the two cannot
+	// disagree again. Deliberately short: a surface with room composes
+	// the longer sentence from Fit and CatalogHost's own figures rather
+	// than taking a second slab of prose from here (waired-agent#321 —
+	// values on the wire, wording at the surface).
 	DeficitLabel string
 
 	// Fit is the shared projection of this verdict
@@ -126,11 +132,17 @@ func FamilyBestFit(m catalog.Manifest, engine, engineVersion string, hw hardware
 
 	// No fit: report the gap against the least-demanding variant the
 	// engine could run.
+	//
+	// The projection is built FIRST and the label is worded from it
+	// (#625). They used to be two expressions in this one literal,
+	// computed from different inputs, and that is exactly how a label
+	// came to contradict the verdict standing next to it.
 	smallest := minResourceVariant(loadable, engine)
+	pres := familyPresentation(m, smallest, engine, hw)
 	return FamilyFit{
 		Variant:      smallest,
-		DeficitLabel: deficitLabelFor(smallest, engine, hw),
-		Fit:          familyPresentation(m, smallest, engine, hw),
+		DeficitLabel: deficitLabelFor(smallest, engine, hw, pres),
+		Fit:          pres,
 	}
 }
 
@@ -249,7 +261,31 @@ func minResourceVariant(vs []catalog.Variant, engine string) catalog.Variant {
 	return best
 }
 
-func deficitLabelFor(v catalog.Variant, engine string, hw hardware.Profile) string {
+// deficitLabelFor words the verdict that rejected v, from the figures
+// that verdict actually compared.
+//
+// p is the projection FamilyBestFit returns beside this label. Taking it
+// rather than recomputing is the whole of waired-ai/waired-agent#625:
+// the two used to be built in the same return statement from different
+// inputs and drifted until the label contradicted the decision it was
+// explaining. On a 16 GB Mac the row read "needs ~7 GB GPU-resident
+// (have 12288 MB VRAM)" — 7 is less than 12 — beside a rejection whose
+// own figures were need 10455 / have 6144.
+//
+// The premise the ollama arm used to rest on is the thing that expired.
+// It said UMA hosts reject purely on GPU residency so the reason must
+// too (#425), and that was true when written. Capacity became a
+// total-memory computation (#497) and the OS deduction became a
+// measurement (#568), so a unified host now rejects on the system-memory
+// term like any other — see the sweep in
+// docs/decisions/20260809/0016-measure-the-os-deduction-at-install.md,
+// where uma16 rejects qwen3.5-4b at need 7403 / have 6144.
+//
+// Deliberately short — what a tray menu row and a table column can
+// hold. A surface with a paragraph composes the breakdown itself from
+// Fit's figures and the catalog's host block; this package does not
+// grow a second slab of prose for it (waired-agent#321).
+func deficitLabelFor(v catalog.Variant, engine string, hw hardware.Profile, p hostfit.Presentation) string {
 	switch engine {
 	case catalog.RuntimeVLLM:
 		needGB := mbToGBCeil(v.MinVRAMMB)
@@ -264,40 +300,39 @@ func deficitLabelFor(v catalog.Variant, engine string, hw hardware.Profile) stri
 		}
 		return fmt.Sprintf("needs %d GB VRAM (have %d GB)", needGB, haveGB)
 	case catalog.RuntimeOllama:
-		// On UMA hosts hostFits IGNORES the MinRAMGB gate and rejects
-		// purely on GPU residency, so the deficit reason must too —
-		// otherwise a model whose MinRAMGB exceeds the leftover system RAM
-		// (e.g. qwen3.6-35b-a3b, min_ram 32, on a 16 GB Mac) mislabels as
-		// "needs 32 GB RAM" when the real wall is the GPU-addressable
-		// budget (#425). Reaching here on UMA means ollamaFitsVRAM
-		// rejected, which only happens with EstimatedWeightGB > 0, so the
-		// GPU-resident figure is always meaningful.
-		if hw.UnifiedMemory {
-			return fmt.Sprintf("needs ~%.0f GB GPU-resident (have %d MB VRAM)",
-				v.EstimatedWeightGB, hw.EffectiveVRAMMB())
-		}
-		// When the RAM gate passes but the variant still doesn't fit,
-		// the binding constraint is GPU residency (ollamaFitsVRAM).
-		//
-		// The "have" figure is the budget that gate actually compared
-		// against — the cross-device pool where there is one (#264),
-		// mirroring the vLLM arm above. Naming one card's VRAM after
-		// judging the host on two would send the operator to buy
-		// hardware they already have.
-		ramOK := v.MinRAMGB <= 0 || hw.RAMTotalGB <= 0 || hw.RAMTotalGB >= v.MinRAMGB
-		if ramOK && !ollamaFitsVRAM(v, hw) {
-			have := hw.OllamaVRAMBudgetMB()
-			if n := ollamaPooledGPUs(hw); n > 1 {
-				return fmt.Sprintf("needs ~%.0f GB GPU-resident (have %d MB VRAM across %d GPUs)",
-					v.EstimatedWeightGB, have, n)
+		if p.NeedMB <= 0 || p.HaveMB <= 0 {
+			// The projection could not price this pair — an unannotated
+			// weight on a host whose RAM probe failed. min_ram_gb is the
+			// only figure there is, and it is the one the capacity gate
+			// falls back to as well.
+			if v.MinRAMGB <= 0 {
+				return "does not fit in this computer's memory"
 			}
-			return fmt.Sprintf("needs ~%.0f GB GPU-resident (have %d MB VRAM)",
-				v.EstimatedWeightGB, have)
+			return fmt.Sprintf("needs %d GB of memory", v.MinRAMGB)
 		}
-		if hw.RAMTotalGB <= 0 {
-			return fmt.Sprintf("needs %d GB RAM", v.MinRAMGB)
+		switch p.Reason {
+		case hostfit.ReasonInsufficientRAM:
+			// The min_ram_gb fallback, for a variant the arithmetic
+			// cannot price. Both figures are RAM as installed — the
+			// verdict compares RAMTotalGB here, not the allocatable
+			// total — so the sentence has to say RAM and not
+			// "allocatable", which would claim a deduction this branch
+			// never took.
+			return fmt.Sprintf("needs %d GB RAM (have %d GB)",
+				mbToGBCeil(p.NeedMB), mbToGBCeil(p.HaveMB))
+		case hostfit.ReasonInsufficientVRAM:
+			// The residency wall rather than the capacity one. Reached
+			// through the variant-only entry point; named apart because
+			// "allocatable" would point at system memory the GPU cannot
+			// address.
+			return fmt.Sprintf("needs %d GB of graphics memory (have %d GB)",
+				mbToGBCeil(p.NeedMB), mbToGBCeil(p.HaveMB))
 		}
-		return fmt.Sprintf("needs %d GB RAM (have %d GB)", v.MinRAMGB, hw.RAMTotalGB)
+		// ReasonInsufficientMemory: weights + the window's KV cache +
+		// engine overhead against everything this machine can allocate —
+		// RAM net of its measured OS deduction, plus dedicated VRAM.
+		return fmt.Sprintf("needs %d GB — %d GB allocatable",
+			mbToGBCeil(p.NeedMB), mbToGBCeil(p.HaveMB))
 	default:
 		return "incompatible"
 	}

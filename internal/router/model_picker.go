@@ -618,8 +618,14 @@ func OllamaVRAMOverheadMB(hw hardware.Profile, weightGB float64) int {
 
 // ollamaFitsVRAM reports whether v fits fully resident in the host's
 // GPU-addressable budget — the residency half of the ollama fit, without
-// the system-RAM gate. Callers that need to explain WHICH constraint
-// bound (deficitLabelFor) depend on that separation.
+// the system-RAM gate.
+//
+// It used to be what deficitLabelFor branched on to say WHICH constraint
+// bound. It no longer is: the label reads the verdict's own reason code
+// now, because deciding that a second time from different inputs is how
+// the label came to contradict the verdict (#625). What survives here is
+// the residency question itself, which the tests and the UMA tier tables
+// still ask directly.
 func ollamaFitsVRAM(v catalog.Variant, hw hardware.Profile) bool {
 	return hostfit.OllamaResident(v, hw.HostFit()).Fits
 }
