@@ -314,6 +314,32 @@ func TestAppendServiceLogFiles_BudgetKeepsTheNewest(t *testing.T) {
 	}
 }
 
+// TestAppendServiceLogFiles_ExactFitSaysNothingWasDropped: a budget that
+// happens to cover everything collected everything, and the note must not
+// appear — it would send an operator looking on disk for generations that
+// are already in front of them. Checking "did the budget reach zero" rather
+// than "was anything left behind" gets this wrong.
+func TestAppendServiceLogFiles_ExactFitSaysNothingWasDropped(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "waired-agent.err.log")
+	live := strings.Repeat("L", 99) + "\n"
+	if err := os.WriteFile(base, []byte(live), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Far more than the one small file needs.
+	var buf bytes.Buffer
+	appendServiceLogFiles(&buf, []string{base}, 1<<20)
+	out := buf.String()
+
+	if !strings.Contains(out, live) {
+		t.Fatalf("the live file is missing from the bundle:\n%s", out)
+	}
+	if strings.Contains(out, "bundle budget") {
+		t.Errorf("reported a truncation that did not happen:\n%s", out)
+	}
+}
+
 // TestAppendServiceLogFiles_FullCollectsEverything is the --full path: no
 // budget, nothing dropped, no truncation note to explain.
 func TestAppendServiceLogFiles_FullCollectsEverything(t *testing.T) {

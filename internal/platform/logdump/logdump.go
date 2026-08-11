@@ -260,6 +260,11 @@ func collectServiceLogFiles(w io.Writer, goos, home, stateDir string, budget int
 // the unbounded --full path streams as before.
 func appendServiceLogFiles(w io.Writer, files []string, budget int64) {
 	remaining := budget
+	// dropped, not "remaining == 0": a budget that lands exactly on the
+	// last byte collected everything, and saying otherwise would send an
+	// operator looking on disk for generations that are already in front of
+	// them.
+	dropped := false
 	for _, base := range files {
 		archives := archivesFor(base) // oldest first
 		if budget <= 0 {
@@ -273,13 +278,16 @@ func appendServiceLogFiles(w io.Writer, files []string, budget int64) {
 
 		// Newest first for the spend: the live file, then .0.gz, .1.gz…
 		var chunks [][]byte
-		for _, path := range newestFirst(base, archives) {
+		for i, path := range newestFirst(base, archives) {
 			if remaining <= 0 {
+				dropped = dropped || i < len(archives)+1
 				break
 			}
 			var buf bytes.Buffer
 			gzipped := path != base
-			appendLogFile(&buf, path, gzipped, remaining)
+			if appendLogFile(&buf, path, gzipped, remaining) {
+				dropped = true // this one was cut short mid-file
+			}
 			remaining -= int64(buf.Len())
 			chunks = append(chunks, buf.Bytes())
 		}
@@ -288,9 +296,9 @@ func appendServiceLogFiles(w io.Writer, files []string, budget int64) {
 		}
 		warnLegacyRotationGap(w, base, archives)
 	}
-	if budget > 0 && remaining <= 0 {
-		fprintf(w, "\n(stopped at the %d MB bundle budget; older generations are on disk. "+
-			"Re-run with --full to collect all of them.)\n", budget>>20)
+	if dropped {
+		fprintf(w, "\n(stopped at the %d MB bundle budget; older log is still on disk. "+
+			"Re-run with --full to collect all of it.)\n", budget>>20)
 	}
 }
 
@@ -331,10 +339,14 @@ func archivesFor(base string) []string {
 // limit caps the decompressed content; 0 means the whole file. The header
 // and any note are written whatever the limit, so a generation that ran
 // out of budget still says it exists and how big it is.
-func appendLogFile(w io.Writer, path string, gzipped bool, limit int64) {
+//
+// Reports whether content was left behind, which is what lets the caller
+// tell "the budget happened to be exactly enough" from "there is more on
+// disk".
+func appendLogFile(w io.Writer, path string, gzipped bool, limit int64) (truncated bool) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return // absent is the norm: no archives yet, no tray installed
+		return false // absent is the norm: no archives yet, no tray installed
 	}
 	// "compressed" on archives so the byte count here is not read against
 	// the truncation note below it, which counts decompressed bytes.
@@ -348,7 +360,7 @@ func appendLogFile(w io.Writer, path string, gzipped bool, limit int64) {
 	f, err := os.Open(path)
 	if err != nil {
 		fprintf(w, "(could not read: %v)\n", err)
-		return
+		return false
 	}
 	defer f.Close()
 
@@ -357,7 +369,7 @@ func appendLogFile(w io.Writer, path string, gzipped bool, limit int64) {
 		zr, err := gzip.NewReader(f)
 		if err != nil {
 			fprintf(w, "(could not decompress: %v)\n", err)
-			return
+			return false
 		}
 		defer zr.Close()
 		r = zr
@@ -366,17 +378,18 @@ func appendLogFile(w io.Writer, path string, gzipped bool, limit int64) {
 	if limit > 0 {
 		lim = int(limit)
 	}
-	data, truncated, err := readTail(r, lim)
+	data, cut, err := readTail(r, lim)
 	if err != nil {
 		fprintf(w, "(read failed after %d bytes: %v)\n", len(data), err)
 	}
-	if truncated {
+	if cut {
 		fprintf(w, "(truncated to the last %d bytes)\n", len(data))
 	}
 	_, _ = w.Write(data)
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		_, _ = io.WriteString(w, "\n")
 	}
+	return cut
 }
 
 // readTail returns at most limit trailing bytes of r, reporting whether
