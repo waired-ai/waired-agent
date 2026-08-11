@@ -5,7 +5,7 @@ meta:
   audience: パソコンを 2 台以上持っている人、手元にない端末の設定を変えたい人
   needs: ブラウザと、サインインに使った Google アカウント
   time: 5 分
-sourceHash: 13bb70327eace075
+sourceHash: ca6e699cd108b10c
 ---
 
 import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -51,6 +51,15 @@ Waired アプリの **Open Admin Console…** からなら、サインイン済�
 	そちらなら両側からきれいに外れます。削除しただけで Waired が動き続けている
 	パソコンは、サインインし直すまで単に動かなくなります。
 </Aside>
+
+### AI model
+
+このパソコンが動かしているモデルと、切り替えるための **モデルを変更**。
+新しいモデルはバックグラウンドでダウンロードされ、その進捗がここに出ます。
+完了までは現在のモデルが応答を続けます。
+
+この欄は、セットアップが完了したパソコンに表示されます。ブラウザで終えたか
+ターミナルで終えたかは問いません。AI を自分で動かしていないパソコンには出ません。
 
 ### Inference routing
 

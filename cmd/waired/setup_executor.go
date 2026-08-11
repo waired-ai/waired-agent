@@ -96,6 +96,13 @@ type executorSession struct {
 	// repeated on every post so a daemon that restarted mid-run learns it
 	// again rather than reporting a setup nobody is driving.
 	driver string
+	// writtenIntegrations names the coding tools this process configured,
+	// for the daemon to record when it has no instruction of its own to
+	// read them from (waired-agent#646). Repeated on every post for the
+	// same reason the driver is — a daemon that restarted mid-run has to
+	// learn it again — and read by the daemon only on the integration
+	// row's `done` edge.
+	writtenIntegrations []string
 }
 
 // executorProgress is one step's byte-level transfer figures.
@@ -177,17 +184,18 @@ func (s *executorSession) postStep(attached bool, phase, engine, errText, errCod
 		return management.SetupStateResponse{}
 	}
 	body, _ := json.Marshal(management.SetupExecutorRequest{
-		Attached:       attached,
-		Elevated:       s.elevated,
-		Phase:          phase,
-		Engine:         engine,
-		Error:          errText,
-		ErrorCode:      errCode,
-		Step:           step,
-		CompletedBytes: prog.completed,
-		TotalBytes:     prog.total,
-		RateBps:        prog.rateBps,
-		Driver:         s.currentDriver(),
+		Attached:           attached,
+		Elevated:           s.elevated,
+		Phase:              phase,
+		Engine:             engine,
+		Error:              errText,
+		ErrorCode:          errCode,
+		Step:               step,
+		CompletedBytes:     prog.completed,
+		TotalBytes:         prog.total,
+		RateBps:            prog.rateBps,
+		Driver:             s.currentDriver(),
+		IntegrationTargets: s.currentWrittenIntegrations(),
 	})
 	out, err := httpPost(s.mgmtURL+"/waired/v1/setup/executor", body)
 	if err != nil {
@@ -253,6 +261,36 @@ func (s *executorSession) currentDriver() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.driver
+}
+
+func (s *executorSession) currentWrittenIntegrations() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writtenIntegrations
+}
+
+// IntegrationDone reports the coding-tool row finished and names what this
+// process configured (waired-agent#646).
+//
+// The wizard's own apply does not need the names — the daemon is serving it
+// the instruction and takes them from there — but the terminal's does. A
+// `waired init` run from a terminal has no instruction to apply: the
+// control plane's desired columns are written by the management API, so
+// nothing on this device knows what was written except the process that
+// wrote it. Without this the row went unreported, and a machine whose
+// coding tools were demonstrably configured showed no coding-tools row at
+// all for the rest of its life.
+func (s *executorSession) IntegrationDone(targets []string) {
+	if !s.Supported() {
+		return
+	}
+	s.mu.Lock()
+	s.writtenIntegrations = targets
+	s.mu.Unlock()
+	s.DoneStep(management.SetupStepIntegration)
 }
 
 // currentProgress returns the step the lease is reporting against and its
@@ -451,6 +489,14 @@ func (s *executorSession) watchSignals() {
 // take the terminal over is how a scripted answer went missing (#185).
 func awaitBrowserSetup(s *executorSession, in *stdinReader, out io.Writer, nonInteractive, noBrowser bool) (time.Duration, bool, *enterWatch, *setupWatch) {
 	if !s.Supported() || nonInteractive || noBrowser {
+		// A run that never offers the browser is terminal-driven by
+		// definition, so say so (waired-agent#646). Without a claim the
+		// daemon has to guess from the desired state, and the guess is
+		// wrong twice over on these paths: a host with none reports no
+		// setup at all, and one carrying a leftover instruction reports a
+		// browser that nobody opened. An inert session is a no-op, which
+		// is what keeps a daemon without the routes byte-identical.
+		s.TakeOver()
 		return benchPollDeadline, false, newTakeoverWatch(nil), newSetupWatch(nil, false)
 	}
 	writePrompt(out, "Setup is continuing in your browser…")
@@ -541,5 +587,16 @@ func awaitSetupBudget(s *executorSession, grace time.Duration, out io.Writer, en
 	if out != nil {
 		writePrompt(out, "No setup started in the browser; continuing here.")
 	}
+	// The grace expired with nothing driving, so this terminal is the
+	// driver from here on — the same conclusion #309 already draws one
+	// frame up when it swaps the takeover offer for the background one.
+	// Claiming it is what says so to the daemon (waired-agent#646).
+	//
+	// It matters most on a device carrying a leftover instruction: with no
+	// claim the daemon derives "the browser wrote desired state, so the
+	// browser is driving", and the wizard then reports a browser session
+	// nobody opened — over a setup this terminal is running
+	// (waired-agent#645).
+	s.TakeOver()
 	return benchPollDeadline, false
 }

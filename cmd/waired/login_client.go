@@ -484,6 +484,19 @@ func runInitViaDaemon(o daemonInitOpts) error {
 					fmt.Fprintf(os.Stderr,
 						"warn: coding-agent integration had problems (%v); re-run later: waired link --force all\n", err)
 				}
+				// Report the row the wizard's own apply already reports
+				// (waired-agent#646/#645). This is the SAME §7 step, done by
+				// the other surface, and until now only the browser-driven
+				// apply said so — so a terminal-driven init left the
+				// coding-tools row with no author. On a device carrying a
+				// leftover instruction the daemon then read the executor's
+				// exit as "it left before it got to this row" and reported a
+				// failure for work that had just succeeded.
+				//
+				// Only on consent, and only on a clean apply: a declined
+				// question wrote nothing, and a half-configured machine is
+				// what the wizard's own applier refuses to report as done.
+				reportTerminalIntegrations(sess, consented, err)
 				integConsent = consented
 			}
 
