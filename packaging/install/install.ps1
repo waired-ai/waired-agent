@@ -1123,7 +1123,9 @@ Environment variables:
 
 Diagnostics:
   Get-Service waired-agent
+  %ProgramData%\waired\logs\waired-agent.log  (the agent's own log)
   Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 20
+                                              (warnings and errors only)
 
 Uninstall:
   - Settings -> Apps -> Waired -> Uninstall (when the GUI installer was used)
@@ -2296,7 +2298,13 @@ function Show-NextSteps {
     }
     Write-Host "State / identity:  $cpHint"
     Write-Host "PATH:              $InstallDir (added to PATH; open a NEW shell to run 'waired' directly)"
-    Write-Host 'Diagnostics:       waired doctor   (logs: Get-WinEvent -ProviderName waired-agent -LogName Application)'
+    # The agent's own log file, not the Event Log query this used to name.
+    # internal/platform/logsink mirrors Warn and above to the Event Log, so
+    # that query answers "was there an error" but never "what was the daemon
+    # doing": every INFO and DEBUG record is in the file (#636). $cpHint is
+    # the resolved state dir (Get-AgentStateDir), so a -StateDir install
+    # points at its own path rather than the default.
+    Write-Host "Diagnostics:       waired doctor   (logs: $cpHint\logs\waired-agent.log)"
     Write-Host "Uninstall:         & `"$InstallDir\waired-agent.exe`" uninstall"
     Write-Host 'More:              waired init --help'
     Write-Host 'Quickstart:        https://github.com/waired-ai/waired/blob/main/docs/quickstarts/README.md'
