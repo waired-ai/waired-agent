@@ -8,6 +8,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/platform/service"
 )
 
 // PreferredModelRequest is the body of POST /waired/v1/inference/preferred-model.
@@ -224,10 +225,13 @@ func modelDownloaded(models []ModelEntry, modelID string) bool {
 
 // DefaultRestartScheduler asks the OS service manager to restart the
 // agent so the freshly-written preferred-model.json takes effect on
-// next boot. The actual mechanism is OS-specific: on Unix we SIGTERM
-// our own pid and cmd/waired-agent exits 17, which the systemd unit
-// force-restarts (RestartForceExitStatus=17, issue #347); on Windows
-// we os.Exit(1) and rely on the SCM Recovery Actions configured at
-// service install time. Both paths assume the agent is supervised —
-// running waired-agent under nohup will simply terminate the daemon.
-// Implementation lives in restart_unix.go / restart_windows.go.
+// next boot. Assumes the agent is supervised — running waired-agent
+// under nohup will simply terminate the daemon.
+//
+// One line, because this package used to carry its own per-OS copy and
+// the two drifted: the Windows copy called os.Exit(1) from inside the
+// service process, which the SCM read as a hard crash rather than as a
+// requested restart (#684). service.RequestRestart is the one mechanism,
+// and service.RestartOnExitFor states what each supervisor does with it.
+
+var DefaultRestartScheduler = service.RequestRestart

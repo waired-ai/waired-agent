@@ -657,3 +657,43 @@ var _ = func() bool {
 	var _ = runLaunchctlReal
 	return reflect.TypeOf(runLaunchctlFn).Kind() == reflect.Func
 }()
+
+// PRODUCT CONTRACT (waired-agent#684): the plist keeps the key that makes
+// launchd honour RestartRequestedExitCode.
+//
+// KeepAlive{SuccessfulExit=false} means "restart on any non-zero exit",
+// which is what carries exit 17 on macOS — there is no per-exit-code key
+// in launchd's KeepAlive dict. Flipping it to true, or dropping the key,
+// would leave a preferred-model switch with the daemon down until the
+// next boot, and nothing else in the tree would notice: this is the only
+// place it is written.
+//
+// The pairing is asserted, not the two substrings independently. The
+// happy-path test above checks `<key>Crashed</key>` and `<false/>` as
+// separate strings, which a plist with the values swapped would still
+// satisfy.
+func TestRenderLaunchDaemonPlist_KeepAliveHonoursTheRestartRequestExitCode(t *testing.T) {
+	body, err := renderLaunchDaemonPlist(Config{
+		Binary:   "/usr/local/bin/waired-agent",
+		StateDir: "/Library/Application Support/waired",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	s := string(body)
+
+	if !strings.Contains(s, "<key>SuccessfulExit</key>\n  <false/>") {
+		t.Errorf("plist must set KeepAlive SuccessfulExit=false, or exit %d leaves the daemon down\n--- got ---\n%s",
+			RestartRequestedExitCode, s)
+	}
+	if !strings.Contains(s, "<key>Crashed</key>\n  <true/>") {
+		t.Errorf("plist must set KeepAlive Crashed=true\n--- got ---\n%s", s)
+	}
+	// The table every caller reads has to agree with what is rendered here.
+	if got := RestartOnExitFor("darwin"); !got.Restarts {
+		t.Errorf("RestartOnExitFor(darwin).Restarts = false, but the plist restarts on any non-zero exit")
+	}
+	if got := RestartOnExitFor("darwin"); got.Named {
+		t.Errorf("RestartOnExitFor(darwin).Named = true, but launchd has no per-exit-code key")
+	}
+}

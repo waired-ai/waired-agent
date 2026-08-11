@@ -25,6 +25,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 )
@@ -55,6 +57,107 @@ const (
 // package cannot import — which is how the rendered unit came to disagree
 // with the packaged one.
 const RestartRequestedExitCode = 17
+
+// restartRequested records that something asked for a supervised restart,
+// so the exit path can tell one apart from an ordinary shutdown. It lives
+// here rather than in cmd/waired-agent because BOTH readers are here now:
+// the foreground exit in main() and the Windows SCM handler, which never
+// reaches main()'s exit at all (#684).
+var restartRequested atomic.Bool
+
+// RestartRequested reports whether RequestRestart has been called. The
+// foreground path reads it to choose its exit code; the Windows SCM
+// handler reads it to choose what it reports to the SCM.
+func RestartRequested() bool { return restartRequested.Load() }
+
+// restartRequestDelay is how long RequestRestart waits before taking the
+// daemon down. The management API answers 202 and only then schedules the
+// restart, so going away immediately races the response off the wire. A
+// var so tests do not sleep.
+var restartRequestDelay = time.Second
+
+// RequestRestart asks this OS's supervisor to bring the agent back.
+//
+// It records the intent first, then hands off to the per-OS mechanism,
+// so no exit path can observe the process going down without also seeing
+// why. Callers do not wait for it: on every OS the agent is on its way
+// out by the time this returns.
+func RequestRestart() { requestRestart(osRequestRestart) }
+
+// requestRestart is the ordering decision on its own, so a test can
+// observe it without running a mechanism that takes the test process
+// down with it. The per-OS mechanisms are not seams and are not faked:
+// each one ends this process, and what they do afterwards is a property
+// of the supervisor, stated in RestartOnExitFor and asserted against the
+// rendered unit / plist / SCM report by the per-OS tests.
+func requestRestart(mechanism func()) {
+	restartRequested.Store(true)
+	mechanism()
+}
+
+// RestartOnExit describes what this OS's supervisor does when the agent
+// exits with RestartRequestedExitCode.
+//
+// A record of today's behaviour, not a policy claim: the three answers
+// differ, and before #684 nothing in the tree said so. Untagged and
+// taking the GOOS so all three are pinned by one table test on the Linux
+// leg — the only required one (CLAUDE.md §Test discipline), and the same
+// shape StartHintFor uses for the same reason.
+type RestartOnExit struct {
+	// Restarts: the supervisor brings the agent back.
+	Restarts bool
+	// Named: the supervisor can tell exit 17 apart from a crash. Where
+	// this is false, an intentional restart is indistinguishable from a
+	// fault in whatever the OS shows an operator.
+	Named bool
+	// Mechanism names the directive or API that decides it, so the answer
+	// can be checked against the code that produces it.
+	Mechanism string
+}
+
+// RestartOnExitFor answers for one GOOS. The empty Mechanism is the
+// honest answer for an OS with no service backend (service_stub.go).
+func RestartOnExitFor(goos string) RestartOnExit {
+	switch goos {
+	case "linux":
+		// renderSystemdUnit writes both directives (service_linux.go).
+		// SuccessExitStatus keeps the unit out of `failed`;
+		// RestartForceExitStatus restarts even under Restart=on-failure.
+		return RestartOnExit{
+			Restarts:  true,
+			Named:     true,
+			Mechanism: "systemd SuccessExitStatus=17 + RestartForceExitStatus=17",
+		}
+	case "darwin":
+		// renderLaunchDaemonPlist writes KeepAlive{SuccessfulExit=false}
+		// (service_darwin.go), which means "restart on ANY non-zero
+		// exit". launchd's KeepAlive is a dict of conditions —
+		// SuccessfulExit, Crashed, NetworkState, PathState,
+		// OtherJobEnabled — with no per-exit-code key, so 17 cannot be
+		// distinguished from a crash without moving the decision out of
+		// launchd entirely.
+		return RestartOnExit{
+			Restarts:  true,
+			Named:     false,
+			Mechanism: "launchd KeepAlive{SuccessfulExit=false} — any non-zero exit",
+		}
+	case "windows":
+		// svcHandler.Execute reports it as a service-specific exit
+		// (service_windows.go), which the SCM records as
+		// ERROR_SERVICE_SPECIFIC_ERROR with ServiceSpecificExitCode=17
+		// and treats as a failure — so the recovery actions installed by
+		// applyRecoveryConfig restart it, and `sc queryex` can name it.
+		// SetRecoveryActionsOnNonCrashFailures(true) is what makes a
+		// clean STOPPED-with-error count as a failure at all (#315).
+		return RestartOnExit{
+			Restarts:  true,
+			Named:     true,
+			Mechanism: "SCM ServiceSpecificExitCode=17 + recovery actions on non-crash failures",
+		}
+	default:
+		return RestartOnExit{}
+	}
+}
 
 // Config bundles the install-time options accepted by every backend.
 // Backends ignore fields they cannot honour (e.g. User is a no-op on
