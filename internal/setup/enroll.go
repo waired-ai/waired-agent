@@ -81,9 +81,14 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 	if opts.Endpoint == "" {
 		return nil, errors.New("setup: empty endpoint")
 	}
-	if opts.ClientVersion == "" {
-		opts.ClientVersion = "0.1.0"
-	}
+	// No ClientVersion default. It used to substitute "0.1.0", which is a
+	// version this project has never shipped and which a fleet view cannot
+	// tell apart from a genuinely ancient agent — the placeholder has since
+	// spread into fixtures and specs as if it were real (waired-agent#655).
+	// Nothing can reach it anyway: the only non-test caller is
+	// cmd/waired-agent's login path, which passes buildinfo.Version, and
+	// that defaults to "0.0.0-dev" rather than empty. A caller that leaves
+	// it empty now reports empty, which is at least true.
 
 	paths, err := identity.PathsFor(opts.StateDir)
 	if err != nil {

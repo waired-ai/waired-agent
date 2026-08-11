@@ -47,6 +47,22 @@ type Client struct {
 	// The zero value withholds them. Only the daemon's own subscription
 	// declares onboarding, and it says so explicitly.
 	OnboardingCapable bool
+
+	// ClientVersion is this build's version, reported on every
+	// network-map poll so the control plane's record follows an upgrade
+	// (waired-agent#655). It used to travel only in the enrolment
+	// payloads, and an installer upgrade restarts the service without
+	// re-enrolling — so a device's recorded version froze at whatever
+	// first enrolled while it went on polling happily.
+	//
+	// The poll is the right carrier precisely because it is not a
+	// heartbeat: it is opened once per daemon start and once per
+	// reconnect, and an upgrade always restarts the daemon.
+	//
+	// The zero value makes no claim, and the CP leaves whatever it has
+	// alone. Same shape as OnboardingCapable: a build-level fact, set by
+	// the caller that knows it.
+	ClientVersion string
 }
 
 // New constructs a Client with a static access token. Use this when
@@ -129,9 +145,11 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		// declares that this build understands
 		// HardwareSummary.RAMAvailableGB on peer entries
 		// (waired-agent#568), a build-level fact.
-		caps := `"` + signer.CapabilityContextWindowV1 +
-			`","` + signer.CapabilityRAMAvailableV1 +
-			`","` + signer.CapabilityPublicShareV1 + `"`
+		caps := []string{
+			signer.CapabilityContextWindowV1,
+			signer.CapabilityRAMAvailableV1,
+			signer.CapabilityPublicShareV1,
+		}
 		if c.OnboardingCapable {
 			// All three or none: the CP gates desired_integrations on v2
 			// and desired_model_gen on v3, with the rest on v1, so
@@ -142,12 +160,30 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// constructed on exactly this condition.
 			// onboarding-v4 is the explicit local-AI answer
 			// (waired-agent#597), applied by the same reconciler.
-			caps += `,"` + signer.CapabilityOnboardingV1 +
-				`","` + signer.CapabilityOnboardingV2 +
-				`","` + signer.CapabilityOnboardingV3 +
-				`","` + signer.CapabilityOnboardingV4 + `"`
+			caps = append(caps,
+				signer.CapabilityOnboardingV1,
+				signer.CapabilityOnboardingV2,
+				signer.CapabilityOnboardingV3,
+				signer.CapabilityOnboardingV4,
+			)
 		}
-		body := bytes.NewBufferString(`{"capabilities":[` + caps + `]}`)
+		// Marshalled rather than concatenated. The capability names are
+		// compile-time constants and were safe to splice; ClientVersion is
+		// a linker-injected string, and a hand-built body would have to
+		// assume nothing in it ever needs escaping.
+		//
+		// client_version is omitempty because an empty one is "no claim":
+		// the CP keeps whatever it already recorded rather than blanking
+		// it (waired-agent#655).
+		bodyJSON, err := json.Marshal(struct {
+			Capabilities  []string `json:"capabilities"`
+			ClientVersion string   `json:"client_version,omitempty"`
+		}{Capabilities: caps, ClientVersion: c.ClientVersion})
+		if err != nil {
+			errs <- err
+			return
+		}
+		body := bytes.NewBuffer(bodyJSON)
 		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/v1/network-map/poll", body)
 		if err != nil {
 			errs <- err

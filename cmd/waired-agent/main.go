@@ -1832,6 +1832,11 @@ func newPauseInfra(stateDir string, gatewayPort int, logger *slog.Logger) (*paus
 func runNetworkMapLoop(ctx context.Context, logger *slog.Logger, id *identity.Identity, bearer func() string, rec *reconciler, meshAgg *inferencemesh.Aggregator, peerDir *peerDirectory, dispatcher testharness.Dispatcher, applySelf func(st *signer.InferenceState), applyDesiredSetup func(*signer.InferenceState), onboardingCapable, bypassCPIAM bool) {
 	cli := controlclient.NewWithBearer(id.ControlURL, bearer)
 	cli.OnboardingCapable = onboardingCapable
+	// Reported on every poll so the CP's record follows an upgrade. The
+	// enrolment payloads carry the same value, but an installer upgrade
+	// restarts this service without re-enrolling, and this loop is what
+	// runs again when it does (waired-agent#655).
+	cli.ClientVersion = buildinfo.Version
 	if bypassCPIAM {
 		cli.HTTP = bypassCPHTTPClient(ctx, id.ControlURL, logger)
 		cli.UseCustomAuthHeader = true
