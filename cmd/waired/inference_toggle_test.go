@@ -95,11 +95,39 @@ func TestRunInferenceOn_PersistsWhenTheDaemonIsUnreachable(t *testing.T) {
 // TestRunInferenceStatus_SaysHowToTurnItBackOn: the state this command
 // exists to report is the one a user needs a way out of, so reporting it
 // without the way out would repeat #465's original defect in a new place.
+// TestInferenceNoStateLine pins the three-way split behind #628. The
+// middle case is the one that matters: nil is "the daemon did not answer",
+// which daemonIdentity's own contract says must never be read as "not
+// enrolled" — the CLI would otherwise tell a signed-in user to sign in
+// whenever the identity route was briefly unreachable.
+func TestInferenceNoStateLine(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name     string
+		enrolled *bool
+		want     string
+	}{
+		{"not enrolled points at init", &no, "Local inference: not set up yet — this device is not signed in. Run `waired init`."},
+		{"no answer keeps the old-daemon wording", nil, "Local inference: unknown (this daemon does not report it — `waired update`)"},
+		{"enrolled but silent keeps it too", &yes, "Local inference: unknown (this daemon does not report it — `waired update`)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := inferenceNoStateLine(c.enrolled); got != c.want {
+				t.Errorf("inferenceNoStateLine = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
-		want []string
+		// identity is what /waired/v1/identity answers. Empty means the
+		// route 404s, which is what a daemon predating it does.
+		identity string
+		want     []string
 		// notWant is for the lines that must NOT appear: a claim about
 		// why something is off is wrong to make when it is not the reason.
 		notWant []string
@@ -117,9 +145,41 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 		{
 			// An older daemon answers /inference/status without the
 			// field. Saying nothing beats inventing a state.
+			//
+			// The body keeps subsystem_state:"ready" deliberately — a
+			// state a not-yet-enrolled daemon never reports — and the
+			// identity route 404s, as it does on a daemon that predates
+			// it. So #628 narrows this branch rather than inverting it.
 			name: "an older daemon is not guessed at",
 			body: `{"subsystem_state":"ready"}`,
 			want: []string{"Local inference: unknown"},
+		},
+		{
+			// #628: the state EVERY new user passes through, between
+			// installing and signing in. sbInfProvider.Status returns the
+			// zero value with no live session and desired_state is
+			// omitempty, so a current, healthy daemon produces the same
+			// empty body an old one does — and the operator was told
+			// their daemon was too old and sent to `waired update`, which
+			// then reports the host is already current.
+			//
+			// Product contract from #628, not a record of today's
+			// behaviour.
+			name:     "a fresh install is told to sign in, not to update",
+			body:     `{"subsystem_state":"","runtimes":null,"models":{"ready":null,"downloading":null,"not_present":null},"active_endpoints":null,"worker":{"mode":""}}`,
+			identity: `{"enrolled":false}`,
+			want:     []string{"not signed in", "waired init"},
+			notWant:  []string{"waired update", "does not report it"},
+		},
+		{
+			// Enrolled but silent about the toggle is NOT the fresh-install
+			// case, so the old-daemon wording still stands. daemonIdentity's
+			// contract is that only an explicit false means not-enrolled.
+			name:     "an enrolled daemon that says nothing is still unknown",
+			body:     `{"subsystem_state":"ready"}`,
+			identity: `{"enrolled":true}`,
+			want:     []string{"Local inference: unknown"},
+			notWant:  []string{"not signed in"},
 		},
 		{
 			// #496: when Waired is the one who decided, it says so. Until
@@ -201,9 +261,29 @@ func TestRunInferenceStatus_SaysHowToTurnItBackOn(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(tc.body))
+			// Routed by path, not answered blindly. The status command
+			// now asks a second question — /waired/v1/identity, to tell a
+			// fresh install from an old daemon (#628) — and a fake that
+			// serves one body to every path would answer that question
+			// with the inference payload, making the case under test
+			// unwritable (CLAUDE.md §Test discipline).
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/waired/v1/inference/status":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tc.body))
+				case "/waired/v1/identity":
+					if tc.identity == "" {
+						// The shape of a daemon too old to serve the
+						// route: no answer, so "unknown" stands.
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tc.identity))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
 			}))
 			defer srv.Close()
 
