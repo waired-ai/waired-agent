@@ -116,7 +116,7 @@ func (s *Service) encodeCallMeMaybeFrame(dstDeviceID string, candidates []netip.
 // used as a UDP-reflection amplifier.
 func (s *Service) handleCallMeMaybe(f *wireframe.Frame, pkt wireframe.Inbound, srcNodeKey [wireframe.NodeKeySize]byte) {
 	if f.SrcDeviceID == "" || !f.HasNonce {
-		s.logger.Debug("call_me_maybe missing fields", "src", pkt.Src.String(), "path", pkt.Path)
+		s.logger.Debug("call_me_maybe missing fields", "src", s.srcOf(pkt), "path", pkt.Path)
 		return
 	}
 	if len(f.CandidateList) == 0 {

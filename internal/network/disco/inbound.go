@@ -43,7 +43,7 @@ func (s *Service) handleInbound(pkt wireframe.Inbound) {
 	// Plaintext path = STUN frames only (peer↔peer moved to sealed).
 	f, err := wireframe.Decode(pkt.Payload)
 	if err != nil {
-		s.logger.Debug("disco inbound decode", "err", err, "src", pkt.Src.String())
+		s.logger.Debug("disco inbound decode", "err", err, "src", s.srcOf(pkt))
 		return
 	}
 	if f.HasTimestamp {
@@ -51,7 +51,7 @@ func (s *Service) handleInbound(pkt wireframe.Inbound) {
 		ts := time.UnixMilli(int64(f.Timestamp))
 		if !timestampInWindow(now, ts, s.cfg.ProbeWindow) {
 			s.logger.Debug("disco inbound out of window",
-				"src", pkt.Src.String(), "drift", now.Sub(ts).String())
+				"src", s.srcOf(pkt), "drift", now.Sub(ts).String())
 			return
 		}
 	}
@@ -65,10 +65,10 @@ func (s *Service) handleInbound(pkt wireframe.Inbound) {
 		// the operational signal lives in disco event counters, not in
 		// noisy warn-level chatter.
 		s.logger.Debug("disco: dropped plaintext peer frame (sealed required)",
-			"type", f.Type.String(), "src", pkt.Src.String())
+			"type", f.Type.String(), "src", s.srcOf(pkt))
 	default:
 		s.logger.Debug("disco inbound unhandled type",
-			"type", f.Type.String(), "src", pkt.Src.String())
+			"type", f.Type.String(), "src", s.srcOf(pkt))
 	}
 }
 
@@ -79,7 +79,7 @@ func (s *Service) handleInbound(pkt wireframe.Inbound) {
 func (s *Service) handleSealedInbound(pkt wireframe.Inbound) {
 	f, srcNodeKey, err := wireframe.DecodeSealed(pkt.Payload, s.cfg.SelfNodeKeyPriv, s.cfg.SelfNodeKeyPub)
 	if err != nil {
-		s.logger.Debug("disco sealed decode", "err", err, "src", pkt.Src.String(), "path", pkt.Path)
+		s.logger.Debug("disco sealed decode", "err", err, "src", s.srcOf(pkt), "path", pkt.Path)
 		return
 	}
 	if f.HasTimestamp {
@@ -87,7 +87,7 @@ func (s *Service) handleSealedInbound(pkt wireframe.Inbound) {
 		ts := time.UnixMilli(int64(f.Timestamp))
 		if !timestampInWindow(now, ts, s.cfg.ProbeWindow) {
 			s.logger.Debug("disco sealed out of window",
-				"src", pkt.Src.String(), "drift", now.Sub(ts).String())
+				"src", s.srcOf(pkt), "drift", now.Sub(ts).String())
 			return
 		}
 	}
@@ -104,21 +104,21 @@ func (s *Service) handleSealedInbound(pkt wireframe.Inbound) {
 		// relay-published X25519 pub for ECDH). Drop silently with
 		// debug visibility.
 		s.logger.Debug("disco: sealed STUN frame not supported in v1",
-			"type", f.Type.String(), "src", pkt.Src.String())
+			"type", f.Type.String(), "src", s.srcOf(pkt))
 	default:
 		s.logger.Debug("disco sealed inbound unhandled type",
-			"type", f.Type.String(), "src", pkt.Src.String())
+			"type", f.Type.String(), "src", s.srcOf(pkt))
 	}
 }
 
 func (s *Service) handleSTUNResponse(f *wireframe.Frame, pkt wireframe.Inbound) {
 	if !f.HasNonce || !f.HasObserved {
-		s.logger.Debug("stun_response missing nonce or observed", "src", pkt.Src.String())
+		s.logger.Debug("stun_response missing nonce or observed", "src", s.srcOf(pkt))
 		return
 	}
 	if len(s.cfg.RelaySharedSecret) > 0 {
 		if err := verifyFrameHMAC(pkt.Payload, s.cfg.RelaySharedSecret, f.HMACTag); err != nil {
-			s.logger.Debug("stun_response hmac verify", "err", err, "src", pkt.Src.String())
+			s.logger.Debug("stun_response hmac verify", "err", err, "src", s.srcOf(pkt))
 			return
 		}
 	}
@@ -160,7 +160,7 @@ func isV6Source(a netip.Addr) bool {
 
 func (s *Service) handleProbe(f *wireframe.Frame, pkt wireframe.Inbound, srcNodeKey [wireframe.NodeKeySize]byte) {
 	if !f.HasNonce || f.SrcDeviceID == "" {
-		s.logger.Debug("probe missing fields", "src", pkt.Src.String(), "path", pkt.Path)
+		s.logger.Debug("probe missing fields", "src", s.srcOf(pkt), "path", pkt.Path)
 		return
 	}
 	// Find the peer by device_id and cross-check srcNodeKey. The AEAD
@@ -241,7 +241,7 @@ func (s *Service) handleProbe(f *wireframe.Frame, pkt wireframe.Inbound, srcNode
 
 func (s *Service) handlePong(f *wireframe.Frame, pkt wireframe.Inbound, srcNodeKey [wireframe.NodeKeySize]byte) {
 	if f.SrcDeviceID == "" {
-		s.logger.Debug("pong missing src", "src", pkt.Src.String(), "path", pkt.Path)
+		s.logger.Debug("pong missing src", "src", s.srcOf(pkt), "path", pkt.Path)
 		return
 	}
 	s.mu.Lock()
