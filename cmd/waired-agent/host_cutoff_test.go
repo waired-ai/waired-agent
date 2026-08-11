@@ -82,6 +82,9 @@ type hostCutoffEngine struct {
 	// the sampler or the widen-and-retry.
 	answers []map[string]any
 	serving []string
+	// resident is what /api/ps reports as loaded. Empty is the ordinary
+	// case; an entry is a model occupying the host while it is measured.
+	resident []string
 	// block, when non-nil, holds every /api/generate until it is closed —
 	// a slow engine, which is what the host this measures actually is.
 	block chan struct{}
@@ -97,6 +100,15 @@ func (e *hostCutoffEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		e.mu.Unlock()
 		body, _ := json.Marshal(map[string]any{"models": entries})
+		_, _ = w.Write(body)
+	case "/api/ps":
+		e.mu.Lock()
+		loaded := make([]map[string]any, 0, len(e.resident))
+		for _, tag := range e.resident {
+			loaded = append(loaded, map[string]any{"name": tag, "size_vram": 1 << 30})
+		}
+		e.mu.Unlock()
+		body, _ := json.Marshal(map[string]any{"models": loaded})
 		_, _ = w.Write(body)
 	case "/api/generate":
 		raw, _ := io.ReadAll(r.Body)
@@ -658,6 +670,96 @@ func TestEnsureHostSpeedMeasured_AnUpgradeReMeasures(t *testing.T) {
 	if got, err := state.ReadHostSpeed(p.stateDir); err != nil || got.AgentVersion != buildinfo.Version {
 		t.Fatalf("stored agent_version = %q after the re-measure, want %q (%v)",
 			got.AgentVersion, buildinfo.Version, err)
+	}
+}
+
+// TestResidentBlocksMeasurement covers both engine ownerships, which the
+// integration tests cannot: an adapter only learns it adopted an engine by
+// finding a real exact-pin orphan at EnsureRunning time.
+//
+// PRODUCT CONTRACT for the adopted arm (waired#1139: the re-measurement is
+// structurally contaminated by the resident serving model; host_memory.go's
+// rule that "a resident model is never charged against the very host that
+// serves it"). The spawned arm is the other half and is just as load-bearing:
+// infruntime.MaxResidentModels reaches an engine we spawned, so its probe
+// evicts and the reading is clean — blocking there would stop every host with
+// a serving model from ever measuring.
+func TestResidentBlocksMeasurement(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      infruntime.EngineMode
+		resident  []string
+		wantName  string
+		wantBlock bool
+	}{
+		{"adopted-with-a-resident-model", infruntime.EngineModeAdopted, []string{"qwen3.6:35b-a3b"}, "qwen3.6:35b-a3b", true},
+		{"adopted-with-nothing-loaded", infruntime.EngineModeAdopted, nil, "", false},
+		{"adopted-ignores-a-nameless-row", infruntime.EngineModeAdopted, []string{""}, "", false},
+		{"spawned-with-a-resident-model", infruntime.EngineModeSpawned, []string{"qwen3.6:35b-a3b"}, "", false},
+		{"spawned-with-nothing-loaded", infruntime.EngineModeSpawned, nil, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name, block := residentBlocksMeasurement(tc.mode, tc.resident)
+			if name != tc.wantName || block != tc.wantBlock {
+				t.Errorf("= (%q, %v), want (%q, %v)", name, block, tc.wantName, tc.wantBlock)
+			}
+		})
+	}
+}
+
+// The spawned arm, end to end: a model sitting in /api/ps must not stop the
+// measurement, because the cap makes the probe evict it. This is the
+// regression the guard above could plausibly cause — a host that serves a
+// model is the normal host, and it would simply stop publishing a figure.
+func TestEnsureHostSpeedMeasured_AResidentModelDoesNotBlockASpawnedEngine(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	eng.mu.Lock()
+	eng.resident = []string{"qwen3.6:35b-a3b"}
+	eng.mu.Unlock()
+
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("a resident model stood down the measurement on an engine this agent spawned")
+	}
+}
+
+// The serving model goes back after the measurement. The cap makes the probe
+// evict whatever was loaded and the probe unloads itself with keep_alive:0,
+// so without this a host is cold from the measurement until its next request
+// pays a multi-GB load — the cost waired-agent#320 exists to remove.
+func TestEnsureHostSpeedMeasured_PutsTheServingModelBack(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p) // warmTarget declines unless the engine reports ready
+	if err := p.store.Update(func(s *catalog.State) {
+		s.Models["model-a"] = catalog.ModelState{
+			State: catalog.ModelStateReady, VariantID: "q4", OllamaTag: "a:q4",
+		}
+		s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "model-a"}
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement to warm after")
+	}
+
+	// The warm is detached from this call on purpose (a cold multi-GB load
+	// must not be inside the install's window), so poll for it.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		warmed := false
+		for _, b := range eng.generateBodies() {
+			if b["model"] == "a:q4" && b["keep_alive"] == infruntime.OllamaKeepAlive {
+				warmed = true
+			}
+		}
+		if warmed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the serving model was never re-loaded after the measurement: %+v",
+				eng.generateBodies())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

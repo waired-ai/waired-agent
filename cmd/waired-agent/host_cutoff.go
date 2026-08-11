@@ -53,6 +53,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
@@ -399,6 +400,58 @@ func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
 	return p.ollama.Health(ctx).State == infruntime.StateReady
 }
 
+// residentOnAnAdoptedEngine names a model already loaded in an engine this
+// agent did not spawn, and reports whether there is one.
+//
+// It answers only for adopted engines because that is the only case the
+// question changes anything. infruntime.MaxResidentModels rides the serve
+// environment, so on an engine this agent started the probe's own request
+// evicts what is loaded and the reading is clean whatever /api/ps says here.
+// An adopted engine keeps the environment of the run that spawned it.
+//
+// Residency is deliberately NOT part of engineIsQuiet: that is a wait loop,
+// and a serving model held at OLLAMA_KEEP_ALIVE=60m would make every host
+// with a model wait out hostSpeedSettleWait and never measure. This is a
+// check, like host_memory.go's engineListening.
+func (p *agentInferenceProvider) residentOnAnAdoptedEngine(ctx context.Context) (string, bool) {
+	if p == nil || p.ollama == nil {
+		return "", false
+	}
+	mode := p.ollama.Mode()
+	if mode != infruntime.EngineModeAdopted {
+		// Nothing /api/ps could say would change the answer, so do not ask.
+		return "", false
+	}
+	var ps psResponse
+	if err := getJSON(ctx, &http.Client{}, p.ollama.BaseURL()+"/api/ps", probeHTTPTimeout, &ps); err != nil {
+		// Unreadable /api/ps is not evidence of residency, and refusing to
+		// measure on it would turn a transient engine hiccup into a host
+		// that never publishes a figure at all.
+		return "", false
+	}
+	names := make([]string, 0, len(ps.Models))
+	for _, m := range ps.Models {
+		names = append(names, m.Name)
+	}
+	return residentBlocksMeasurement(mode, names)
+}
+
+// residentBlocksMeasurement is the decision inside residentOnAnAdoptedEngine,
+// separated from the /api/ps read so both engine ownerships are testable
+// without one — an adapter only learns it adopted an engine by finding a real
+// orphan at EnsureRunning time.
+func residentBlocksMeasurement(mode infruntime.EngineMode, resident []string) (string, bool) {
+	if mode != infruntime.EngineModeAdopted {
+		return "", false
+	}
+	for _, name := range resident {
+		if name != "" {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // engineQuietForBench is engineIsQuiet as the boot/explicit benchmark
 // asks it (BenchDeps.EngineQuiet, #582/#601). Same question — is anything
 // about to take the engine away — with one difference at the nil end.
@@ -516,6 +569,26 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		return cached
 	}
 
+	// A resident model this probe cannot displace makes the reading describe
+	// the residency instead of the host, so keep what we have and try on a
+	// later boot (waired#1139). Same answer host_memory.go gives to the same
+	// question, and for the same reason: "a resident model is never charged
+	// against the very host that serves it".
+	//
+	// Only ADOPTED engines reach this. On an engine this agent spawned,
+	// infruntime.MaxResidentModels is in its environment and the probe's own
+	// request evicts whatever is loaded — that is what makes the reading
+	// clean, measured at 4.4376 s capped against 40.9954 s uncapped on the
+	// same host (waired-agent#644). An adopted engine was started by a
+	// previous run and its environment is not ours to set, which is the same
+	// limit waired-agent#320 records for OLLAMA_KEEP_ALIVE.
+	if resident, busy := p.residentOnAnAdoptedEngine(ctx); busy {
+		p.logger.Info("host speed: an adopted engine is holding a model this measurement cannot displace; "+
+			"keeping the previous measurement and trying on a later start",
+			"resident_model", resident, "engine_version", engineVersion)
+		return cached
+	}
+
 	// Everything from here down is the work the install waits behind, so
 	// everything from here down is bounded. Applied after the cache read
 	// for the reason stated above it.
@@ -532,6 +605,19 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 			"model", hostfit.HostCutoffProbeModelID, "err", err)
 		return hostSpeedVerdict{}
 	}
+
+	// Put the serving model back afterwards. infruntime.MaxResidentModels is
+	// what makes this measurement honest, and the way it does that is by
+	// having the probe EVICT whatever was loaded; the probe then unloads
+	// itself with keep_alive:0, so a host that was warm before this call is
+	// cold after it and the next real request pays a multi-GB load — the
+	// exact cost waired-agent#320 exists to remove.
+	//
+	// Deferred, so it also covers the arms below that return on an error
+	// after the probe has already run. Cheap where nothing was evicted:
+	// warmServingModel is single-flight and reads /api/ps before deciding to
+	// load anything.
+	defer p.warmServingModel()
 
 	m, err := measureHostCutoff(ctx, hostCutoffDeps{
 		BaseURL:     p.ollama.BaseURL(),
