@@ -1359,7 +1359,29 @@ assert_inference() {
   # Skipped when the daemon published nothing at all — the red above already
   # named an unreachable daemon, and a second red would spread one cause over
   # two lines.
+  # POLLED, not read once. The measurement is asynchronous by design — it
+  # must not block init, so it runs on the boot goroutine behind
+  # awaitQuietEngine — and reading the status a single time asserts on a
+  # race rather than on the daemon. Observed both ways on the routing
+  # sentinel leg: on one run the figure landed one second before this
+  # assert read it, on the next it had not landed at all.
+  #
+  # So the claim is "the daemon reaches a verdict within this window",
+  # which is a statement about the product; "it had one at the instant I
+  # looked" is a statement about scheduling. Returns as soon as a figure
+  # appears, so a healthy leg pays nothing.
   local hs turn budget samples floor method figure
+  local hs_deadline=$((SECONDS + 180))
+  while [ -n "$out" ] && [ "$SECONDS" -lt "$hs_deadline" ]; do
+    hs="$(it_json_object "$out" host_speed)"
+    case "$(printf '%s' "$hs" | grep -oE '"turn(_floor)?_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' | grep -vE '^0(\.0+)?$' | head -1)" in
+      "") ;;
+      *)  break ;;
+    esac
+    sleep 5
+    out="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
+  done
+
   if [ -z "$out" ]; then
     it_warn "no inference status payload — skipping the host-speed assert"
   else
@@ -1375,14 +1397,18 @@ assert_inference() {
     method="$(printf '%s' "$hs" | sed -n 's/.*"method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
     figure="$turn"
     case "$figure" in ""|0|0.0) figure="$floor" ;; esac
-    # SOFT while waired-agent#579 is open, the way installtest-windows.ps1's
-    # $ContractBlocking asserts are: the absent case is a REAL defect and the
-    # per-PR routing-sentinel leg hits it, so making it blocking today would
-    # turn every PR in the repo red for a defect none of them introduced.
-    # The #579 fix flips this to `bad` (and raises the assert-count floors,
-    # which stay put until it does).
+    # BLOCKING since waired-agent#579 shipped. It was soft while that was
+    # open, because the absent case was a real defect every PR would have
+    # gone red for. Stage 3 closed it from both ends: a host too slow to
+    # measure at full depth inside the install window now publishes a
+    # prefill-only BOUND instead of nothing, and this assert takes either
+    # figure. Proven on run 31330389679 before the flip.
+    #
+    # So "no figure at all" now means what it was always supposed to mean:
+    # the daemon reached no conclusion about this host, and nothing decided
+    # whether a model belonged here.
     case "$figure" in
-      ""|0|0.0) it_warn "WARN no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579 open — soft)" ;;
+      ""|0|0.0) bad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579)" ;;
       *)        ok "host speed measured (${method:-?}: turn ${turn:-0}s, floor ${floor:-0}s, against a ${budget:-?}s budget; ${samples:-0} samples)" ;;
     esac
   fi

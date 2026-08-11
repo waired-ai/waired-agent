@@ -475,7 +475,21 @@ assert_inference_macos() {
   # lib/installtest-enroll.sh for why this leg asserts it. This runner is the
   # one that measured 432 s per sample against a 45 s budget, so the figures in
   # the ok line are the early warning for a cap that has stopped fitting.
+  # POLLED, not read once — see the Linux twin for why. The measurement is
+  # asynchronous by design, so a single read asserts on scheduling rather
+  # than on the daemon.
   local hs turn budget samples floor method figure
+  local hs_deadline=$((SECONDS + 180))
+  while [ -n "$out" ] && [ "$SECONDS" -lt "$hs_deadline" ]; do
+    hs="$(it_json_object "$out" host_speed)"
+    case "$(printf '%s' "$hs" | grep -oE '"turn(_floor)?_seconds"[[:space:]]*:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+$' | grep -vE '^0(\.0+)?$' | head -1)" in
+      "") ;;
+      *)  break ;;
+    esac
+    sleep 5
+    out="$(curl -fsS --max-time 10 "$infurl" 2>/dev/null || true)"
+  done
+
   if [ -z "$out" ]; then
     it_warn "no inference status payload — skipping the host-speed assert"
   else
@@ -491,9 +505,9 @@ assert_inference_macos() {
     method="$(printf '%s' "$hs" | sed -n 's/.*"method"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
     figure="$turn"
     case "$figure" in ""|0|0.0) figure="$floor" ;; esac
-    # SOFT while waired-agent#579 is open — see the Linux twin.
+    # BLOCKING since waired-agent#579 shipped — see the Linux twin.
     case "$figure" in
-      ""|0|0.0) it_warn "WARN no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579 open — soft)" ;;
+      ""|0|0.0) bad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579)" ;;
       *)        ok "host speed measured (${method:-?}: turn ${turn:-0}s, floor ${floor:-0}s, against a ${budget:-?}s budget; ${samples:-0} samples)" ;;
     esac
   fi
