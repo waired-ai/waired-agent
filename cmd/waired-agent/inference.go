@@ -4375,9 +4375,23 @@ func variantSHAForActive() string {
 // advertise is what goes into InferenceState.Models (what peers may
 // ask this node for); serving is what this node's own engine loaded.
 // They differ only when a #642 derived batch model is in use. main.go
-// feeds both to the probe loop, which needs advertise to enforce the
-// "1 agent = 1 model" invariant on the wire and serving to recognise
-// the engine's own report of that tag.
+// feeds this to the probe loop as inferenceProbeDeps.EngineTags, which
+// needs advertise to enforce the "1 agent = 1 model" invariant on the
+// wire and serving to recognise the engine's own report of that tag.
+//
+// Called once per probe tick (#656), not once at boot: the Active
+// selection lands asynchronously and a boot-time pair went stale for the
+// life of the process. One call resolves both names from a single Load so
+// a tick cannot pair an advertise name from before a model switch with a
+// serving name from after it.
+//
+// A failed Load yields the zero State and therefore two empty names,
+// which the probe treats as "no Active selection" and passes the engine's
+// report through unmodified. That is the same fail-open the absent-state
+// case takes, so there is nothing for a caller to branch on; the error is
+// dropped rather than logged because this runs every
+// state.HeartbeatInterval and a genuinely unreadable state file would
+// repeat forever.
 func activeEngineTagsForActive() (advertise, serving string) {
 	st, _ := catalog.NewStore(catalog.DefaultStatePath()).Load()
 	advertise, _ = advertisedEngineTag(st)

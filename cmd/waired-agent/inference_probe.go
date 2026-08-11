@@ -155,23 +155,44 @@ type inferenceProbeDeps struct {
 	ActiveModel    func() string
 	SubsystemState func() string
 
-	// AdvertiseTag is the engine-side name peers may ask this node for
-	// (Ollama /api/tags name, or vLLM /v1/models id). Empty when no
-	// Active selection is set (fresh agent, pre-model-pull). When
-	// non-empty, runLocalInferenceProbe enforces the "1 agent =
-	// 1 model" invariant by narrowing the published Models list to
-	// just this tag; surplus tags pulled locally are stripped from
-	// the network-map advertisement (the engine itself still serves
-	// them — this only affects what peers see).
-	AdvertiseTag string
-
-	// ServingTag is the tag this node's own engine actually loaded.
-	// Equal to AdvertiseTag except when a #642 derived batch model is
-	// in use, where the engine serves `<base>-wb<batch>` while peers
-	// are told the base tag (waired-agent#324). The probe needs it to
-	// recognise the engine's own report of the active model, and to
-	// keep the derived name out of the "surplus models" warning.
-	ServingTag string
+	// EngineTags returns the two engine-side names for this node's Active
+	// selection:
+	//
+	//   - advertise: the name peers may ask this node for (Ollama
+	//     /api/tags name, or vLLM /v1/models id). When non-empty,
+	//     runLocalInferenceProbe enforces the "1 agent = 1 model"
+	//     invariant by narrowing the published Models list to just this
+	//     tag; surplus tags pulled locally are stripped from the
+	//     network-map advertisement (the engine itself still serves them —
+	//     this only affects what peers see).
+	//   - serving: the tag this node's own engine actually loaded. Equal to
+	//     advertise except when a #642 derived batch model is in use, where
+	//     the engine serves `<base>-wb<batch>` while peers are told the
+	//     base tag (waired-agent#324). The probe needs it to recognise the
+	//     engine's own report of the active model, and to keep the derived
+	//     name out of the "surplus models" warning.
+	//
+	// Both empty when no Active selection is set (fresh agent,
+	// pre-model-pull).
+	//
+	// A getter, read on every tick, rather than the boot-time pair it
+	// replaced (#656) — the same correction #387 made to Hardware and
+	// Capacity above. The Active selection it reads is committed
+	// asynchronously, after the probe loop is wired, and since #812 a model
+	// choice no longer restarts the agent; a pair captured at boot
+	// therefore stayed empty for the life of a daemon that started before
+	// its first model landed. Empty skips the narrowing entirely (see
+	// narrowPublishedModels), so the host advertised every tag on disk —
+	// host-speed probe model included — with no way to recover.
+	//
+	// One getter returning both rather than two, so a tick cannot pair an
+	// advertise name from before a model switch with a serving name from
+	// after it: narrowPublishedModels reads the two together and would take
+	// a torn pair for a diverged engine, withdrawing the advertisement.
+	//
+	// nil, or an empty advertise name, keeps that skip: the probe result
+	// passes through unmodified.
+	EngineTags func() (advertise, serving string)
 
 	Disabled bool
 	Logger   *slog.Logger
@@ -272,7 +293,14 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 				s.LastError = "engine model runner is not serving"
 			}
 		}
-		narrowPublishedModels(&s, deps.AdvertiseTag, deps.ServingTag, &lastSurplusSig, deps.Logger)
+		// Re-read here rather than captured at boot — see the field's doc
+		// comment (#656, and #387 for the same correction to the getters
+		// below).
+		var advertiseTag, servingTag string
+		if deps.EngineTags != nil {
+			advertiseTag, servingTag = deps.EngineTags()
+		}
+		narrowPublishedModels(&s, advertiseTag, servingTag, &lastSurplusSig, deps.Logger)
 		// Phase 7: decorate the probe result with Hardware and Capacity.
 		// Both are omitempty on the wire so a zero-value agent (no
 		// hardware probe, no benchmark) still produces a compact push.

@@ -1373,8 +1373,7 @@ func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T
 			MachineKey:            machinePriv,
 			EngineKind:            signer.InferenceTypeOllama,
 			EnginePort:            port,
-			AdvertiseTag:          advertise,
-			ServingTag:            advertise,
+			EngineTags:            func() (string, string) { return advertise, advertise },
 			DeclaredContextWindow: func() int { return window },
 			Logger:                slog.Default(),
 		}, "push a state to the control plane", func() bool {
@@ -1403,6 +1402,117 @@ func TestRunLocalInferenceProbe_DeclaredWindowRidesTheAdvertisement(t *testing.T
 	// so its peer entry stays byte-identical for readers that predate it.
 	if b := push("llama3.1:8b", 0); strings.Contains(b, "context_window") {
 		t.Errorf("a node declaring nothing put the field on the wire: %s", b)
+	}
+}
+
+// TestRunLocalInferenceProbe_AdvertiseTagIsReadLiveNotCapturedAtBoot pins
+// that the advertised tag is re-read on every probe tick rather than
+// captured once when the loop is wired.
+//
+// PRODUCT CONTRACT (waired-ai/waired-agent#656). narrowPublishedModels
+// skips the "1 agent = 1 model" narrowing entirely while the tag is empty
+// (its own doc comment says so), and the tag is empty on a daemon that
+// booted before its Active selection was written — the ordinary case on a
+// fresh install, because Active is committed asynchronously and, since
+// waired-ai/waired-agent#812, choosing a model no longer restarts the
+// agent. Captured at boot, that skip lasted the life of the process, so
+// the host advertised every tag on disk — the host-speed probe model
+// included, which is what put a 0.8b model on every node in the admin UI.
+//
+// This is the same defect waired-ai/waired-agent#387 fixed for Hardware
+// and Capacity; those two are getters for exactly this reason and this
+// one was left behind.
+func TestRunLocalInferenceProbe_AdvertiseTagIsReadLiveNotCapturedAtBoot(t *testing.T) {
+	const active = "qwen3.5:4b-q4_K_M"
+	// What ollama has on disk: the model this host serves, the host-speed
+	// probe model, and one an operator pulled by hand.
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"models":[{"name":"`+active+`"},{"name":"qwen3.5:0.8b-q8_0"},{"name":"llama3.1:8b"}]}`)
+	}))
+	defer ollama.Close()
+	port, err := portFromURL(ollama.URL)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+
+	var mu sync.Mutex
+	var bodies []string
+	// tag is what activeEngineTagsForActive would answer: empty until the
+	// Active selection lands, then the engine tag for it.
+	var tag string
+	cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer cpSrv.Close()
+
+	dir := t.TempDir()
+	stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+	if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	probeRunUntil(t, inferenceProbeDeps{
+		StateWriter: stWriter,
+		PushClient:  controlclient.New(cpSrv.URL, "tok"),
+		DeviceID:    "dev-self",
+		MachineKey:  machinePriv,
+		EngineKind:  signer.InferenceTypeOllama,
+		EnginePort:  port,
+		EngineTags: func() (string, string) {
+			mu.Lock()
+			defer mu.Unlock()
+			return tag, tag
+		},
+		Logger: slog.Default(),
+	}, "narrow the advertisement once the Active selection landed", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) == 0 {
+			return false
+		}
+		if tag == "" {
+			// The first push has been observed with no Active selection.
+			// Commit one, exactly as activatePreferredIfNeeded does after
+			// the model finishes downloading.
+			tag = active
+			return false
+		}
+		for _, b := range bodies[1:] {
+			if strings.Contains(b, `"models":["`+active+`"]`) {
+				return true
+			}
+		}
+		return false
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	// The first push predates the Active selection. Everything on disk goes
+	// out — a record of today's behaviour, not a contract: it is what
+	// narrowPublishedModels documents for an empty tag, and the reason the
+	// tag must not stay empty.
+	if !strings.Contains(bodies[0], "qwen3.5:0.8b-q8_0") {
+		t.Errorf("expected the pre-Active push to carry the whole disk; got %s", bodies[0])
+	}
+	// The last push must carry exactly the one tag, with neither the
+	// host-speed probe model nor the hand-pulled surplus.
+	last := bodies[len(bodies)-1]
+	if !strings.Contains(last, `"models":["`+active+`"]`) {
+		t.Errorf("advertisement was never narrowed — the tag is still a boot snapshot: %s", last)
+	}
+	if strings.Contains(last, "qwen3.5:0.8b-q8_0") {
+		t.Errorf("host-speed probe model reached peers: %s", last)
+	}
+	if strings.Contains(last, "llama3.1:8b") {
+		t.Errorf("surplus model reached peers: %s", last)
 	}
 }
 
@@ -1448,8 +1558,7 @@ func TestRunLocalInferenceProbe_ActiveModelAndStateExplainAWithdrawnNode(t *test
 			MachineKey:     machinePriv,
 			EngineKind:     signer.InferenceTypeOllama,
 			EnginePort:     port,
-			AdvertiseTag:   advertise,
-			ServingTag:     advertise,
+			EngineTags:     func() (string, string) { return advertise, advertise },
 			ActiveModel:    func() string { return model },
 			SubsystemState: func() string { return subState },
 			Logger:         slog.Default(),

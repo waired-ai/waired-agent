@@ -1222,22 +1222,27 @@ func run(ctx context.Context, args []string) error {
 			// The two names differ only when a #642 derived batch model is
 			// in use: peers are told the base tag (nothing else is
 			// matchable), the engine loads the derived one.
-			advertiseTag, servingTag := activeEngineTagsForActive()
+			//
+			// Read per tick, not once here (#656): the Active selection
+			// both names come from is written asynchronously — after this
+			// point — and since #812 a model choice no longer restarts the
+			// agent, so a daemon that booted before its first model landed
+			// kept answering "" forever and never narrowed its
+			// advertisement.
 			deps := inferenceProbeDeps{
-				StateWriter:  stateWriter,
-				Aggregator:   meshAgg,
-				PushClient:   infPushClient,
-				CPCtx:        cpCtx,
-				DeviceID:     id.DeviceID,
-				MachineKey:   mk.Private,
-				EngineKind:   engineKind,
-				EnginePort:   enginePort,
-				Disabled:     *disableInference,
-				Logger:       logger,
-				Hardware:     hardwareSummaryFn(ctx, hwProfiler),
-				Capacity:     capacityFn(capacity, inferenceSub),
-				AdvertiseTag: advertiseTag,
-				ServingTag:   servingTag,
+				StateWriter: stateWriter,
+				Aggregator:  meshAgg,
+				PushClient:  infPushClient,
+				CPCtx:       cpCtx,
+				DeviceID:    id.DeviceID,
+				MachineKey:  mk.Private,
+				EngineKind:  engineKind,
+				EnginePort:  enginePort,
+				Disabled:    *disableInference,
+				Logger:      logger,
+				Hardware:    hardwareSummaryFn(ctx, hwProfiler),
+				Capacity:    capacityFn(capacity, inferenceSub),
+				EngineTags:  activeEngineTagsForActive,
 			}
 			// waired#1031: the window this node stands behind. Wired for
 			// every provider, not just the ollama one — a vLLM host is
