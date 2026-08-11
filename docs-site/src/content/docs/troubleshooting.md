@@ -804,6 +804,20 @@ The **Mesh** line reads `enrolled / reachable / ready`. If `reachable` is 0:
 If it is reachable but never `ready`, it has no model loaded — work through
 [No answer comes back](#no-answer-comes-back) on that machine.
 
+**If everything looks reachable and requests still do not arrive**, run
+`waired doctor`. Its **mesh peers** line does not take the network's word for
+it — it sends a real request to each computer and reports what came back:
+
+```
+⚠ mesh peers — 2/3 reported reachable, but only 0 answered an overlay ping —
+  no reply from mac-mini, work-laptop. Inference cannot route to a peer that
+  does not answer; check NAT traversal and relay connectivity
+```
+
+That line means the two computers are listed as connected but nothing actually
+gets through to them. Work through the three checks above on the named
+machines. A count marked `(measured)` has been confirmed the same way.
+
 You should not need to open ports or configure a VPN. Your computers connect
 directly when the network allows it, and fall back to an encrypted [relay](/reference/glossary/#relay) when a
 firewall gets in the way, automatically.

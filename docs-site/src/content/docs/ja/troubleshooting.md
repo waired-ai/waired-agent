@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: b279d37f65b27458
+sourceHash: 87386e26aa5070f3
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -831,6 +831,20 @@ waired status --observability
 
 届いてはいるが `ready` にならない場合は、そのマシンにモデルが読み込まれていません。
 そちらで[応答が返ってこない](#no-answer-comes-back)を順に確認してください。
+
+**すべて届いているように見えるのにリクエストが通らない場合**は、`waired doctor` を
+実行してください。**mesh peers** の行はネットワークの申告を鵜呑みにせず、各パソコンへ
+実際にリクエストを送って、返ってきたかどうかを報告します。
+
+```
+⚠ mesh peers — 2/3 reported reachable, but only 0 answered an overlay ping —
+  no reply from mac-mini, work-laptop. Inference cannot route to a peer that
+  does not answer; check NAT traversal and relay connectivity
+```
+
+この行は「2 台は接続済みと申告されているが、実際には何も届いていない」という意味です。
+名前の挙がったマシンについて、上の 3 点を確認してください。`(measured)` が付いた
+件数は、同じ方法で実際に確認できたものです。
 
 ポート開放や VPN の設定は不要です。ネットワークが許せば直接つながり、ファイアウォールが
 邪魔する場合は暗号化された中継に自動で切り替わります。
