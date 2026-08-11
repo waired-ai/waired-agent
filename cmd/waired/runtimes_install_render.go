@@ -6,8 +6,10 @@ package main
 // tag.
 
 import (
+	"fmt"
 	"io"
 
+	"github.com/waired-ai/waired-agent/internal/download"
 	infruntime "github.com/waired-ai/waired-agent/internal/runtime"
 )
 
@@ -38,7 +40,7 @@ func newOllamaInstallRenderer(out io.Writer, tty bool, label string) func(infrun
 		}
 		if !hinted[p.Stage] {
 			hinted[p.Stage] = true
-			writePrompt(out, dim(ollamaDownloadHint(p.Stage)))
+			writePrompt(out, dim(ollamaDownloadHint(p.Stage, p.Total)))
 		}
 		barActive = true
 		pct := -1
@@ -51,9 +53,25 @@ func newOllamaInstallRenderer(out io.Writer, tty bool, label string) func(infrun
 
 // ollamaDownloadHint is the one-time please-wait note printed before each
 // download bar, mirroring the model pull's multi-GB hint.
-func ollamaDownloadHint(stage string) string {
+//
+// The size comes from the transfer rather than the sentence. It used to read
+// "a few hundred MB", which was written for macOS's ~129 MB payload and was
+// wrong by an order of magnitude on Linux, where the CUDA payload makes it
+// 1.4 GB (#661). Any fixed phrase is a claim about a payload that changes
+// without this file, so the hint states what the server actually said —
+// total is the same figure the progress bar below it counts up to.
+//
+// total <= 0 means the transfer did not advertise a length (no
+// Content-Length); the sentence then makes no size claim at all rather than
+// guessing one.
+func ollamaDownloadHint(stage string, total int64) string {
+	what := "the Ollama engine"
 	if stage == "download-rocm" {
-		return "Downloading the ROCm GPU runtime — this can take a few minutes. Please wait…"
+		what = "the ROCm GPU runtime"
 	}
-	return "Downloading the Ollama engine — a few hundred MB; this can take a few minutes. Please wait…"
+	if total > 0 {
+		return fmt.Sprintf("Downloading %s — %s; this can take a few minutes. Please wait…",
+			what, download.HumanBytes(total))
+	}
+	return fmt.Sprintf("Downloading %s — this can take a few minutes. Please wait…", what)
 }

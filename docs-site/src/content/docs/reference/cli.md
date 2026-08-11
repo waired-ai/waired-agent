@@ -284,6 +284,11 @@ model under the name its AI software uses, which differs between Ollama and
 vLLM. **WORKER-CAPABLE** says whether it can answer right now, and when it
 cannot, why — for example `no (loading)` while it is still fetching its model.
 
+`no (stale)` means that computer stopped reporting in. Waired prints how old a
+report has to be to count as stale underneath the table, so you do not have to
+guess. A computer that is switched off keeps its row until you remove it from
+your network — the list is who is *on* your network, not who is awake.
+
 `waired worker get` reports the same two things for the computer you pinned:
 a `model:` line, and a `status:` line that spells out the reason when it is
 not serving.

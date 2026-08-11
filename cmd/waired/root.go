@@ -9,13 +9,32 @@ import (
 )
 
 // namespaceRunE is the RunE for a pure-namespace command (one with only
-// subcommands). No args prints help and exits 0; an unrecognized subcommand
-// is an error. Setting RunE makes the command "runnable" so cobra validates
-// args at every nesting level — its built-in unknown-subcommand error only
-// fires at the root, so nested namespaces (e.g. `inference share`) need this.
+// subcommands). It prints help and fails: naming a namespace is not a
+// request this program can carry out, whichever way it was reached.
+// Setting RunE makes the command "runnable" so cobra validates args at
+// every nesting level — its built-in unknown-subcommand error only fires
+// at the root, so nested namespaces (e.g. `inference share`) need this.
+//
+// No args used to exit 0 after printing help, which made `waired peers`
+// indistinguishable from a listing that found nothing: a script got
+// success and no data (#661). Both branches are the same mistake — a
+// namespace was named where a verb belongs — so both now exit non-zero,
+// and help is printed either way because the fix is the same: pick a
+// subcommand from the list.
+//
+// Exit 1, the code every other CLI error uses (exitPlanFor). A distinct
+// code would be a contract the installers and docs would have to carry,
+// and there is nothing here a caller would branch on differently.
 func namespaceRunE(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
-		return cmd.Help()
+		// Help on stdout — it is the answer to "what can I run" — then a
+		// bare error, since cmd.Help() has already said everything a
+		// usage dump would repeat.
+		if err := cmd.Help(); err != nil {
+			return err
+		}
+		cmd.SilenceUsage = true
+		return fmt.Errorf("%q needs a subcommand", cmd.CommandPath())
 	}
 	return fmt.Errorf("unknown subcommand %q for %q", args[0], cmd.CommandPath())
 }
