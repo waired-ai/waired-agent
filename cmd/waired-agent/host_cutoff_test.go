@@ -572,13 +572,27 @@ func TestMeasureHostCutoff_EverySampleUsesADifferentPrompt(t *testing.T) {
 // and a consumer reading Samples=1 knows it was never checked against
 // another run.
 func TestMeasureHostCutoff_StopsAtTheSampleBudget(t *testing.T) {
-	var mu sync.Mutex
-	requests := 0
+	// Time passes when the ENGINE works, not when the runner's scheduler
+	// gets around to us. Advancing the clock from inside the handler makes
+	// the arithmetic exact — calibration 4 s, sample 1 4 s, so the budget
+	// check before sample 2 sees 8 + 4 > 10 — and insensitive to how many
+	// times the code under test happens to read the clock.
+	//
+	// It used to sleep 40 ms per request against a 100 ms budget and bet on
+	// real time. A loaded GitHub-hosted Windows runner only had to add
+	// ~20 ms across the calibration and sample 1 for the deadline to land
+	// INSIDE sample 1, cancelling it mid-flight and failing the first
+	// assertion below on a premise that broke rather than on the behaviour
+	// it guards (waired-agent#677).
+	//
+	// The figures are seconds rather than milliseconds because none of it
+	// is waited on: the fake engine answers immediately and only the fake
+	// clock moves. That also buys the real context deadline below a wide
+	// margin — measureHostCutoff anchors it on started.Add(budget), so the
+	// run now has ten real seconds to do work that takes microseconds.
+	clk := &steppedClock{t: time.Now()}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		mu.Lock()
-		requests++
-		mu.Unlock()
-		time.Sleep(40 * time.Millisecond)
+		clk.advance(4 * time.Second)
 		body, _ := json.Marshal(cpuOnlyCounters)
 		_, _ = w.Write(body)
 	}))
@@ -587,14 +601,12 @@ func TestMeasureHostCutoff_StopsAtTheSampleBudget(t *testing.T) {
 	m, err := measureHostCutoff(context.Background(), hostCutoffDeps{
 		BaseURL: srv.URL, EngineModel: hostCutoffFixtureTag,
 		HTTPClient: srv.Client(), Logger: slog.New(slog.DiscardHandler),
-		// 100 ms, and the value matters: since waired-agent#579 the budget is
-		// a real deadline over the WHOLE run, so it has to sit between
-		// (calibration + sample 1) = 80 ms and (+ sample 2) = 120 ms. The old
-		// 50 ms predates that and now cancels sample 1 mid-flight, which is
-		// the defect being fixed rather than the behaviour being tested. The
-		// three assertions below are unchanged and now rest on a stronger
-		// premise: the calibration is inside the budget it is measured against.
-		Nonce: "budget", MeasureBudget: 100 * time.Millisecond,
+		// The budget has to sit between (calibration + sample 1) = 8 s and
+		// (+ sample 2) = 12 s. Since waired-agent#579 it is a real deadline
+		// over the WHOLE run, so a budget below 8 s would cancel sample 1
+		// mid-flight — a different behaviour from the one under test.
+		Nonce: "budget", MeasureBudget: 10 * time.Second,
+		Now: clk.now,
 	})
 	if err != nil {
 		t.Fatalf("measureHostCutoff: %v", err)
@@ -605,12 +617,43 @@ func TestMeasureHostCutoff_StopsAtTheSampleBudget(t *testing.T) {
 	if m.Samples != 1 {
 		t.Fatalf("samples = %d, want 1 — the budget only had room for one", m.Samples)
 	}
-	mu.Lock()
-	got := requests
-	mu.Unlock()
-	if got != 2 {
+	if got := clk.calls(); got != 2 {
 		t.Fatalf("/api/generate requests = %d, want 2 (the calibration, then one sample)", got)
 	}
+}
+
+// steppedClock is a clock that only moves when the fake engine answers, and
+// counts how often it did. The two belong together: every advance in this
+// file is one request's cost, so a test that asserts on elapsed time and one
+// that asserts on request count are reading the same ledger.
+//
+// The context deadline measureHostCutoff sets still runs on real time — this
+// only feeds hostCutoffDeps.Now, which is the budget arithmetic. That is the
+// intended split: the deadline is a backstop against a wedged engine, and a
+// fake engine that answers immediately never approaches it.
+type steppedClock struct {
+	mu sync.Mutex
+	t  time.Time
+	n  int
+}
+
+func (c *steppedClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+	c.n++
+}
+
+func (c *steppedClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *steppedClock) calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }
 
 // A capped prompt is measured again, wider, rather than thrown away.
