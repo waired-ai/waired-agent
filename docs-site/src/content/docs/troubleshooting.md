@@ -886,8 +886,8 @@ Only after `waired doctor`:
 | | |
 |---|---|
 | Linux | `journalctl -u waired-agent -e` |
-| macOS | `/Library/Logs/waired-agent.err.log`, or `sudo log show --predicate 'process == "waired-agent"' --last 10m`. Waired caps that file at 1 MB and keeps the five previous ones beside it as `waired-agent.err.log.0.gz`, `.1.gz` and so on — look there for anything older (`gzcat`). At `debug` the cap rises to 8 MB and ten copies, so turning the detail up does not shorten how far back you can look. |
-| Windows | `logs\waired-agent.log` under Waired's state folder — `C:\ProgramData\waired\logs\…` for the usual service install, which takes an elevated PowerShell to read. Same caps as macOS: 1 MB and five `.0.gz`, `.1.gz` … copies, rising to 8 MB and ten at `debug`. `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` is the short version: it carries warnings and errors, not the detail. |
+| macOS | `/Library/Logs/waired-agent.err.log`, or `sudo log show --predicate 'process == "waired-agent"' --last 10m`. Waired caps that file at 32 MB and keeps ten previous ones beside it as `waired-agent.err.log.0.gz`, `.1.gz` and so on — look there for anything older (`gzcat`). At `debug` the cap rises to 128 MB, so turning the detail up does not shorten how far back you can look. |
+| Windows | `logs\waired-agent.log` under Waired's state folder — `C:\ProgramData\waired\logs\…` for the usual service install, which takes an elevated PowerShell to read. Same caps as macOS: 32 MB and ten `.0.gz`, `.1.gz` … copies, rising to 128 MB at `debug`. `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` is the short version: it carries warnings and errors, not the detail. |
 | The AI engine | `…/runtimes/ollama/logs/engine.log` under Waired's state folder — `/var/lib/waired/…` on Linux, `/Library/Application Support/waired/…` on macOS, `C:\ProgramData\waired\…` on Windows. |
 
 ## Reporting a problem

@@ -23,6 +23,10 @@ On Windows the Event Log carries warnings and errors only; the agent's INFO and
 DEBUG records go to logs\waired-agent.log under the state dir. Pass --state-dir
 when the state lives somewhere other than the default, or that file is skipped.
 
+The log files are collected newest-first up to 16 MB total, so the file stays
+small enough to attach to an issue. Older rotated generations stay on disk;
+--full collects all of them instead.
+
 Tip: raise verbosity first with ` + "`waired config log-level debug`" + `, reproduce the
 problem, then run ` + "`waired logs --mask-pii`" + `. --mask-pii redacts your home
 directory, username, hostname and account email so the file is safe to attach
@@ -31,14 +35,14 @@ to an issue (best-effort — review it before sharing either way).`
 func newLogsCmd() *cobra.Command {
 	var output, stateDir string
 	var since time.Duration
-	var maskPII bool
+	var maskPII, full bool
 	cmd := &cobra.Command{
 		Use:   "logs",
 		Short: "Collect the agent's logs into a file for debugging.",
 		Long:  logsLong,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runLogsCollect(cmd.Context(), output, stateDir, since, maskPII)
+			return runLogsCollect(cmd.Context(), output, stateDir, since, maskPII, full)
 		},
 	}
 	cmd.Flags().StringVarP(&output, "output", "o", "",
@@ -47,11 +51,13 @@ func newLogsCmd() *cobra.Command {
 		"how far back to collect the service log")
 	cmd.Flags().BoolVar(&maskPII, "mask-pii", os.Getenv("WAIRED_PII_MASK") != "",
 		"mask personal info (home directory, username, hostname, account email) in the collected file — best-effort, for bug reports. Env form: WAIRED_PII_MASK=1.")
+	cmd.Flags().BoolVar(&full, "full", false,
+		"collect every rotated log generation whole instead of the most recent 16 MB. The result can be hundreds of MB at debug verbosity — too large to attach to an issue, but what you want when the problem is older than the default window.")
 	addStateDirFlag(cmd, &stateDir, "agent state dir, for the bundled engine logs")
 	return cmd
 }
 
-func runLogsCollect(ctx context.Context, output, stateDir string, since time.Duration, maskPII bool) error {
+func runLogsCollect(ctx context.Context, output, stateDir string, since time.Duration, maskPII, full bool) error {
 	if output == "" {
 		output = fmt.Sprintf("waired-logs-%s.txt", time.Now().Format("20060102-150405"))
 	}
@@ -67,7 +73,7 @@ func runLogsCollect(ctx context.Context, output, stateDir string, since time.Dur
 	if maskPII {
 		w = maskingWriter{w: f, m: newPIIMasker()}
 	}
-	if err := logdump.Collect(ctx, w, logdump.Options{Since: since, StateDir: stateDir}); err != nil {
+	if err := logdump.Collect(ctx, w, logdump.Options{Since: since, StateDir: stateDir, Full: full}); err != nil {
 		f.Close()
 		return fmt.Errorf("waired logs: %w", err)
 	}

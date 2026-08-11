@@ -116,20 +116,30 @@ type Policy struct {
 }
 
 // DefaultPolicy is the policy that applies at info level and above.
-func DefaultPolicy() Policy { return Policy{MaxBytes: 1 << 20, Keep: 5} }
-
-// debugPolicy is what applies while the log level is debug. Bigger,
-// because debug is roughly an order of magnitude more output and the
-// default bound turns the standard bug-report advice ("raise verbosity,
-// reproduce, then collect") against itself: on the rc8 macOS host at
-// debug the file rotated every ~18 minutes, so five generations held
-// about 90 minutes and an investigation into something an hour old found
-// its evidence already gone (#658).
 //
-// 8 MB x 10 is roughly a day at the ~3.3 MB/h that host measured, for
-// about 15 MB on disk — the live file plus nine archives, which gzip to
-// well under a tenth of their size for JSON records.
-func debugPolicy() Policy { return Policy{MaxBytes: 8 << 20, Keep: 10} }
+// The old bound was 1 MB x 5, inherited from the newsyslog drop-in this
+// package replaced. Measurement on the rc8 macOS host retired it: the
+// INFO records alone ran ~0.96 MB/h there, so six windows held about six
+// hours — not enough to look into something noticed the next morning,
+// which is the ordinary case for a background service.
+//
+// 32 MB x 10 is a few days of that, for ~60 MB on disk once the archives
+// are gzipped. Sizing note: a host running Waired has already downloaded
+// a multi-gigabyte model and a ~1.4 GB engine, so tens of megabytes of
+// log is well under one percent of what is already there — the disk was
+// never the scarce thing, the history was.
+func DefaultPolicy() Policy { return Policy{MaxBytes: 32 << 20, Keep: 10} }
+
+// debugPolicy is what applies while the log level is debug. Bigger again,
+// because the old bound turned the standard bug-report advice ("raise
+// verbosity, reproduce, then collect") against itself: on the rc8 macOS
+// host at debug the file rotated every 18 minutes, so five generations
+// held about 90 minutes. Two separate investigations there lost evidence
+// only an hour old, and `waired logs --since 720h` returned 1h38m (#658).
+//
+// 128 MB x 10 is roughly two weeks at the ~2 MB/h that host measured, for
+// ~240 MB on disk.
+func debugPolicy() Policy { return Policy{MaxBytes: 128 << 20, Keep: 10} }
 
 // PolicyForLevel returns the bound to apply at lvl. Split from Policy
 // itself so it is a pure function of the level, table-testable without a

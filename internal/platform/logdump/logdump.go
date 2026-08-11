@@ -41,6 +41,9 @@ type Options struct {
 	// StateDir is the agent state directory; bundled engine logs live
 	// under <StateDir>/runtimes/<engine>/logs. Empty skips engine logs.
 	StateDir string
+	// Full collects every rotated generation whole instead of the most
+	// recent DefaultBundleBudget bytes of them.
+	Full bool
 }
 
 // Collect writes a consolidated log bundle to w: a header, the OS service
@@ -62,7 +65,11 @@ func Collect(ctx context.Context, w io.Writer, opts Options) error {
 	}
 
 	fprintf(w, "\n===== service log files =====\n")
-	collectServiceLogFiles(w, runtime.GOOS, userHome(), opts.StateDir)
+	budget := int64(DefaultBundleBudget)
+	if opts.Full {
+		budget = 0
+	}
+	collectServiceLogFiles(w, runtime.GOOS, userHome(), opts.StateDir, budget)
 
 	fprintf(w, "\n===== engine logs =====\n")
 	collectEngineLogs(w, opts.StateDir)
@@ -130,13 +137,21 @@ func runServiceLog(ctx context.Context, w io.Writer, name string, args []string)
 	return nil
 }
 
-// tailLimit caps how much of each service log file lands in the bundle.
-// The rotation policy keeps these at 1 MB apiece, so this is a tail only
-// on a legacy host whose rotation never took (#331) — exactly the host
-// whose file can be arbitrarily large. Unlike the engine logs below,
-// these are read incrementally rather than with os.ReadFile, so an
-// unrotated multi-gigabyte file cannot be pulled into memory.
-const tailLimit = 512 << 10
+// DefaultBundleBudget caps how many bytes of service log files land in
+// one bundle, across every file and generation together.
+//
+// A budget rather than the per-file cap this used to be: the rotation
+// policy now keeps up to 128 MB per generation and ten generations of
+// them (logrotate.PolicyForLevel), so a fixed per-file tail would sample
+// a sliver of each and a per-file cap large enough to be useful would
+// multiply by however many files the OS has. What a bug report wants is
+// "as much of the recent past as will still attach to an issue", which is
+// one number spent newest-first.
+//
+// 16 MB leaves room under the 25 MB GitHub attachment limit for the
+// service log and the engine logs collected around it. `waired logs
+// --full` sets it to zero, which means no bound.
+const DefaultBundleBudget = 16 << 20
 
 // serviceLogFiles returns the plain log files to collect on goos, in the
 // (GOOS, facts) -> plan shape the cross-OS parity rule asks for.
@@ -189,7 +204,7 @@ func userHome() string {
 // the stream carrying every slog record — was invisible to the tool we
 // ask users to run for a bug report. Windows had the same hole for a
 // different reason until #636.
-func collectServiceLogFiles(w io.Writer, goos, home, stateDir string) {
+func collectServiceLogFiles(w io.Writer, goos, home, stateDir string, budget int64) {
 	files := serviceLogFiles(goos, home, stateDir)
 	if len(files) == 0 {
 		if goos == "windows" {
@@ -202,21 +217,68 @@ func collectServiceLogFiles(w io.Writer, goos, home, stateDir string) {
 		fprintf(w, "(no service log files on %s; the service log above is the source)\n", goos)
 		return
 	}
-	appendServiceLogFiles(w, files)
+	appendServiceLogFiles(w, files, budget)
 }
 
 // appendServiceLogFiles takes the resolved paths rather than deriving
 // them, so the collection itself is testable against a temp directory
 // while serviceLogFiles is table-tested as a pure plan.
-func appendServiceLogFiles(w io.Writer, files []string) {
+//
+// budget bounds the total decompressed bytes of log content across every
+// file and generation; 0 means no bound (`waired logs --full`). It is
+// spent newest-first, because the end of a bug report's window is the part
+// that explains it, while the output stays oldest-first so the bundle
+// still reads forward in time.
+//
+// Spending newest-first is why the content is buffered rather than
+// streamed: what belongs in the bundle cannot be decided until the newer
+// generations have been read. The buffer is bounded by budget itself, and
+// the unbounded --full path streams as before.
+func appendServiceLogFiles(w io.Writer, files []string, budget int64) {
+	remaining := budget
 	for _, base := range files {
-		archives := archivesFor(base)
-		for _, a := range archives {
-			appendLogFile(w, a, true)
+		archives := archivesFor(base) // oldest first
+		if budget <= 0 {
+			for _, a := range archives {
+				appendLogFile(w, a, true, 0)
+			}
+			appendLogFile(w, base, false, 0)
+			warnLegacyRotationGap(w, base, archives)
+			continue
 		}
-		appendLogFile(w, base, false)
+
+		// Newest first for the spend: the live file, then .0.gz, .1.gz…
+		var chunks [][]byte
+		for _, path := range newestFirst(base, archives) {
+			if remaining <= 0 {
+				break
+			}
+			var buf bytes.Buffer
+			gzipped := path != base
+			appendLogFile(&buf, path, gzipped, remaining)
+			remaining -= int64(buf.Len())
+			chunks = append(chunks, buf.Bytes())
+		}
+		for i := len(chunks) - 1; i >= 0; i-- {
+			_, _ = w.Write(chunks[i])
+		}
 		warnLegacyRotationGap(w, base, archives)
 	}
+	if budget > 0 && remaining <= 0 {
+		fprintf(w, "\n(stopped at the %d MB bundle budget; older generations are on disk. "+
+			"Re-run with --full to collect all of them.)\n", budget>>20)
+	}
+}
+
+// newestFirst orders one base's generations from newest to oldest: the
+// live file, then the archives in reverse of archivesFor's reading order.
+func newestFirst(base string, archives []string) []string {
+	out := make([]string, 0, len(archives)+1)
+	out = append(out, base)
+	for i := len(archives) - 1; i >= 0; i-- {
+		out = append(out, archives[i])
+	}
+	return out
 }
 
 // archivesFor lists base's rotated archives oldest first. The names are
@@ -241,7 +303,11 @@ func archivesFor(base string) []string {
 // appendLogFile writes one file's tail under a header carrying its size
 // and mtime — a bug report often turns on whether a file stopped being
 // written to, which the content alone does not say.
-func appendLogFile(w io.Writer, path string, gzipped bool) {
+//
+// limit caps the decompressed content; 0 means the whole file. The header
+// and any note are written whatever the limit, so a generation that ran
+// out of budget still says it exists and how big it is.
+func appendLogFile(w io.Writer, path string, gzipped bool, limit int64) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return // absent is the norm: no archives yet, no tray installed
@@ -272,7 +338,11 @@ func appendLogFile(w io.Writer, path string, gzipped bool) {
 		defer zr.Close()
 		r = zr
 	}
-	data, truncated, err := readTail(r, tailLimit)
+	lim := -1 // no bound
+	if limit > 0 {
+		lim = int(limit)
+	}
+	data, truncated, err := readTail(r, lim)
 	if err != nil {
 		fprintf(w, "(read failed after %d bytes: %v)\n", len(data), err)
 	}
@@ -286,16 +356,20 @@ func appendLogFile(w io.Writer, path string, gzipped bool) {
 }
 
 // readTail returns at most limit trailing bytes of r, reporting whether
-// anything was dropped. The kept region starts at a line boundary so the
+// anything was dropped. A negative limit reads the whole stream
+// (`waired logs --full`). The kept region starts at a line boundary so the
 // bundle never opens mid-record.
 func readTail(r io.Reader, limit int) (data []byte, truncated bool, err error) {
-	buf := make([]byte, 0, limit)
+	var buf []byte
+	if limit > 0 {
+		buf = make([]byte, 0, limit)
+	}
 	chunk := make([]byte, 32<<10)
 	for {
 		n, rerr := r.Read(chunk)
 		if n > 0 {
 			buf = append(buf, chunk[:n]...)
-			if len(buf) > limit {
+			if limit > 0 && len(buf) > limit {
 				buf = append(buf[:0], buf[len(buf)-limit:]...)
 				truncated = true
 			}

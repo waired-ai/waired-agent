@@ -416,8 +416,8 @@ The levels are `debug`, `info` (the default), `warn` and `error`. `debug` is
 the switch to flip before reproducing a problem: it takes effect immediately —
 **no restart** — on both the background service and the Waired app, and is
 remembered across restarts. While it is on, Waired also keeps more of the log —
-8 MB per file and ten older copies, instead of 1 MB and five — so a problem you
-only notice hours later is still in there. Set it back to `info` when you are
+128 MB per file instead of 32 MB, ten older copies either way — so a problem you
+only notice days later is still in there. Set it back to `info` when you are
 done so the logs stay small. If the service is not running, the choice is saved
 and applies the next time it starts.
 
@@ -430,6 +430,7 @@ waired logs                          # writes waired-logs-<time>.txt here
 waired logs -o report.txt            # choose the file
 waired logs --since 30m              # how far back to look (default 1h)
 waired logs --mask-pii               # redact home dir / username / hostname / email
+waired logs --full                   # every rotated copy, not just the recent 16 MB
 ```
 
 It gathers the background service's log (from the system log), the service's own
@@ -438,8 +439,11 @@ second part is `/Library/Logs` — plus the app's under `~/Library/Logs`; on
 Windows it is `logs\waired-agent.log` under the state folder, which is where
 everything below a warning is written. Older, already-rotated copies are
 included too, so a problem that started before the last rotation is still in the
-report. For the most useful report, turn on detail first, reproduce the problem,
-then collect it:
+report. The files are collected newest-first up to 16 MB in total, so the result
+stays small enough to attach to an issue; `--full` takes every rotated copy
+instead, which at `debug` verbosity can run to hundreds of megabytes. For the
+most useful report, turn on detail first, reproduce the problem, then collect
+it:
 
 ```sh
 waired config log-level debug

@@ -198,7 +198,7 @@ func TestCollectServiceLogFiles_NoFilesSaysWhy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			collectServiceLogFiles(&buf, tc.goos, "/home/example", tc.stateDir)
+			collectServiceLogFiles(&buf, tc.goos, "/home/example", tc.stateDir, DefaultBundleBudget)
 			if !strings.Contains(buf.String(), tc.want) {
 				t.Errorf("note = %q, want it to contain %q", buf.String(), tc.want)
 			}
@@ -237,7 +237,7 @@ func TestAppendServiceLogFiles_OldestArchiveFirst(t *testing.T) {
 	writeGz(t, base+".1.gz", "older archive\n")
 
 	var buf bytes.Buffer
-	appendServiceLogFiles(&buf, []string{base})
+	appendServiceLogFiles(&buf, []string{base}, DefaultBundleBudget)
 	out := buf.String()
 
 	for _, want := range []string{"older archive", "newer archive", "live line"} {
@@ -256,13 +256,75 @@ func TestAppendServiceLogFiles_OldestArchiveFirst(t *testing.T) {
 	}
 }
 
+// TestAppendServiceLogFiles_BudgetKeepsTheNewest is the point of the
+// budget: when there is more log than will fit in a bug report, the part
+// that survives is the recent part. The rotation policy now keeps up to
+// 128 MB per generation, so "collect everything" is no longer an option
+// that produces an attachable file.
+//
+// Product contract.
+func TestAppendServiceLogFiles_BudgetKeepsTheNewest(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "waired-agent.err.log")
+	if err := os.WriteFile(base, []byte(strings.Repeat("L", 400)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeGz(t, base+".0.gz", strings.Repeat("N", 400)+"\n")
+	writeGz(t, base+".1.gz", strings.Repeat("O", 400)+"\n")
+
+	// Room for the live file and part of the next generation back, but not
+	// for the oldest.
+	var buf bytes.Buffer
+	appendServiceLogFiles(&buf, []string{base}, 700)
+	out := buf.String()
+
+	if !strings.Contains(out, strings.Repeat("L", 400)) {
+		t.Error("the live file's content is missing; the budget must be spent on the newest first")
+	}
+	if strings.Contains(out, strings.Repeat("O", 400)) {
+		t.Error("the oldest archive was collected whole; the budget should have run out first")
+	}
+	if !strings.Contains(out, "bundle budget") || !strings.Contains(out, "--full") {
+		t.Errorf("no note explaining the truncation, so the bundle reads as complete:\n%s", out)
+	}
+	// Ordering still runs forward in time for whatever did fit.
+	if newer, live := strings.Index(out, "NNN"), strings.Index(out, "LLL"); newer >= 0 && newer >= live {
+		t.Errorf("archive at %d is not before the live file at %d", newer, live)
+	}
+}
+
+// TestAppendServiceLogFiles_FullCollectsEverything is the --full path: no
+// budget, nothing dropped, no truncation note to explain.
+func TestAppendServiceLogFiles_FullCollectsEverything(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "waired-agent.err.log")
+	if err := os.WriteFile(base, []byte(strings.Repeat("L", 400)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeGz(t, base+".0.gz", strings.Repeat("N", 400)+"\n")
+	writeGz(t, base+".1.gz", strings.Repeat("O", 400)+"\n")
+
+	var buf bytes.Buffer
+	appendServiceLogFiles(&buf, []string{base}, 0)
+	out := buf.String()
+
+	for _, want := range []string{strings.Repeat("O", 400), strings.Repeat("N", 400), strings.Repeat("L", 400)} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--full dropped a generation:\n%s", out)
+		}
+	}
+	if strings.Contains(out, "bundle budget") {
+		t.Error("--full reported a budget it does not have")
+	}
+}
+
 // TestAppendServiceLogFiles_MissingFilesAreSkipped: no archives yet, no
 // tray installed, an agent that never started — all normal, and none of
 // them should put an error in a user's bug report.
 func TestAppendServiceLogFiles_MissingFilesAreSkipped(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
-	appendServiceLogFiles(&buf, []string{filepath.Join(dir, "absent.log")})
+	appendServiceLogFiles(&buf, []string{filepath.Join(dir, "absent.log")}, DefaultBundleBudget)
 	if out := buf.String(); out != "" {
 		t.Errorf("absent file produced output: %q", out)
 	}
@@ -285,7 +347,7 @@ func TestWarnLegacyRotationGap(t *testing.T) {
 		writeGz(t, base+".0.gz", "the lines that survived\n")
 
 		var buf bytes.Buffer
-		appendServiceLogFiles(&buf, []string{base})
+		appendServiceLogFiles(&buf, []string{base}, DefaultBundleBudget)
 		if !strings.Contains(buf.String(), "#331") {
 			t.Errorf("no gap warning for a banner-only live file:\n%s", buf.String())
 		}
@@ -300,7 +362,7 @@ func TestWarnLegacyRotationGap(t *testing.T) {
 		writeGz(t, base+".0.gz", "older\n")
 
 		var buf bytes.Buffer
-		appendServiceLogFiles(&buf, []string{base})
+		appendServiceLogFiles(&buf, []string{base}, DefaultBundleBudget)
 		if strings.Contains(buf.String(), "#331") {
 			t.Errorf("gap warned about a file that is still being written:\n%s", buf.String())
 		}
@@ -313,7 +375,7 @@ func TestWarnLegacyRotationGap(t *testing.T) {
 			t.Fatal(err)
 		}
 		var buf bytes.Buffer
-		appendServiceLogFiles(&buf, []string{base})
+		appendServiceLogFiles(&buf, []string{base}, DefaultBundleBudget)
 		if strings.Contains(buf.String(), "#331") {
 			t.Error("warned about a rotation gap with no archives to point at")
 		}
