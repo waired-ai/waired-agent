@@ -194,7 +194,7 @@ func formatSpillGB(mb int) string {
 // warnModelNotRecommended prints the runs-but-demoted warning
 // (waired-agent#321), shared with the picker for the same reason.
 func warnModelNotRecommended(out io.Writer, name, reason string) {
-	writePromptf(out, "\n%s %s runs on this computer, but Waired would not choose it here%s.\n",
+	writePromptf(out, "\n%s %s runs on this computer, but is not recommended here%s.\n",
 		emo("ℹ", "i"), name, notRecommendedBecause(reason))
 }
 
@@ -225,7 +225,8 @@ func unfitPullAction(assumeYes, force, interactive bool) pullFitAction {
 }
 
 // notRecommendedBecause turns the demotion code into the clause that
-// completes "Waired would not choose it here…". Unknown codes yield no
+// completes "is not recommended here…" (subjectless since waired#1146,
+// owner-approved 2026-08-12). Unknown codes yield no
 // clause rather than a guess — the sentence is already true without one,
 // and the vocabulary is allowed to grow.
 func notRecommendedBecause(reason string) string {

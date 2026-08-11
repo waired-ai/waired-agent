@@ -341,7 +341,7 @@ func tinyBenchmarkDisableFlow(
 	// for two different lines. What the floor actually records is that
 	// this is a model Waired does not choose for anyone.
 	writePromptf(out, "   interactive floor. The only lighter model left is %s, which sits below\n", label)
-	writePrompt(out, "   the bar Waired uses for coding — we would not choose it for any computer.")
+	writePrompt(out, "   the bar Waired uses for coding — not recommended on any computer.")
 
 	if nonInteractive {
 		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", from)
