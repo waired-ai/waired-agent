@@ -27,7 +27,7 @@ func TestExplain_WindowsSmartAppControlBlock(t *testing.T) {
 				`waired-agent.exe that did not meet the Enterprise signing level requirements.`},
 	}
 
-	got := Explain("windows", false, events)
+	got := Explain("windows", false, events, "")
 
 	if got.Status != Failed {
 		t.Errorf("Status=%v, want Failed", got.Status)
@@ -57,7 +57,7 @@ func TestExplain_WindowsPolicyBlockFromTheSCMRecordAlone(t *testing.T) {
 		{Source: "Service Control Manager", ID: 7000,
 			Message: "The Waired Agent service failed to start due to the following error: " +
 				"An Application Control policy has blocked this file."},
-	})
+	}, "")
 	if got.Status != Failed || !strings.Contains(strings.ToLower(got.Cause), "blocked") {
 		t.Errorf("got %+v, want the policy block decoded from 7000 alone", got)
 	}
@@ -83,7 +83,7 @@ func TestExplain_WindowsOtherFailures(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := Explain("windows", false, []Event{c.event})
+			got := Explain("windows", false, []Event{c.event}, "")
 			if got.Status != Failed {
 				t.Errorf("Status=%v, want Failed", got.Status)
 			}
@@ -101,7 +101,7 @@ func TestExplain_RunningAfterAPastFailureIsNotSilent(t *testing.T) {
 	got := Explain("windows", true, []Event{
 		{Source: "Service Control Manager", ID: 7000,
 			Message: "An Application Control policy has blocked this file."},
-	})
+	}, "")
 	if got.Status != Healthy {
 		t.Errorf("Status=%v, want Healthy — the service is up now", got.Status)
 	}
@@ -117,7 +117,7 @@ func TestExplain_LinuxFailedUnit(t *testing.T) {
 		{Source: "systemd", Message: "ExecMainStatus=1"},
 		{Source: "systemd", Message: "NRestarts=3"},
 		{Source: "journal", Message: "identity: no enrollment on disk"},
-	})
+	}, "")
 
 	if got.Status != Failed {
 		t.Errorf("Status=%v, want Failed", got.Status)
@@ -136,7 +136,7 @@ func TestExplain_LinuxDeliberatelyStopped(t *testing.T) {
 	got := Explain("linux", false, []Event{
 		{Source: "systemd", Message: "ActiveState=inactive"},
 		{Source: "systemd", Message: "Result=success"},
-	})
+	}, "")
 	if got.Status != Stopped {
 		t.Errorf("Status=%v, want Stopped", got.Status)
 	}
@@ -150,7 +150,7 @@ func TestExplain_DarwinNonZeroExit(t *testing.T) {
 		{Source: "launchd", Message: "state = not running"},
 		{Source: "launchd", Message: "last exit code = 78"},
 		{Source: "waired-agent.err.log", Message: "state dir not readable"},
-	})
+	}, "")
 	if got.Status != Failed {
 		t.Errorf("Status=%v, want Failed", got.Status)
 	}
@@ -173,7 +173,7 @@ func TestExplain_DarwinNeverExitedIsNotAnError(t *testing.T) {
 		{Source: "launchd", Message: "state = running"},
 		{Source: "launchd", Message: "last exit code = (never exited)"},
 		{Source: "launchd", Message: "pid = 1234"},
-	})
+	}, "")
 	if got.Status == Failed {
 		t.Errorf("Status=%v: a never-exited service is not a failure", got.Status)
 	}
@@ -210,7 +210,7 @@ func TestExplain_DarwinNotRunning(t *testing.T) {
 	got := Explain("darwin", false, []Event{
 		{Source: "launchd", Message: "state = not running"},
 		{Source: "launchd", Message: "last exit code = 0"},
-	})
+	}, "")
 	if got.Status != Stopped {
 		t.Errorf("Status=%v, want Stopped", got.Status)
 	}
@@ -222,7 +222,7 @@ func TestExplain_DarwinNotRunning(t *testing.T) {
 func TestExplain_NoEvidenceSaysNothing(t *testing.T) {
 	for _, goos := range []string{"windows", "linux", "darwin", "plan9"} {
 		t.Run(goos, func(t *testing.T) {
-			got := Explain(goos, false, nil)
+			got := Explain(goos, false, nil, "")
 			if got.Status != Unknown || got.Cause != "" {
 				t.Errorf("got %+v, want the zero Result", got)
 			}
@@ -234,7 +234,7 @@ func TestExplain_HealthyAndQuiet(t *testing.T) {
 	got := Explain("linux", true, []Event{
 		{Source: "systemd", Message: "ActiveState=active"},
 		{Source: "systemd", Message: "Result=success"},
-	})
+	}, "")
 	if got.Status != Healthy {
 		t.Errorf("Status=%v, want Healthy", got.Status)
 	}
@@ -261,5 +261,62 @@ func TestStartCommandMatchesTheServicePackage(t *testing.T) {
 	}
 	if want := service.StartHint(); ours != want {
 		t.Errorf("%s: servicediag says %q, service.StartHint says %q", runtime.GOOS, ours, want)
+	}
+}
+
+// TestLogHint_PerOS pins that the doctor names the agent's own log where
+// one exists, through logrotate.AgentLogPath rather than a second copy of
+// the path.
+//
+// Windows is the case that could not exist before #636: the Event Log
+// takes WARN and above, so every INFO diagnostic the agent wrote was
+// unreachable there and this check could only say "start it again". Linux
+// stays empty on purpose — there is no file, and journalctl is already
+// named in the Linux hints.
+func TestLogHint_PerOS(t *testing.T) {
+	const stateDir = `C:\ProgramData\waired`
+	cases := []struct {
+		goos     string
+		stateDir string
+		want     string
+	}{
+		{"windows", stateDir, `C:\ProgramData\waired\logs\waired-agent.log`},
+		{"darwin", "", "/Library/Logs/waired-agent.err.log"},
+		{"linux", "/var/lib/waired", ""},
+		{"plan9", "/x", ""},
+		// No state dir on Windows: nothing to name, so nothing is said
+		// rather than a path with a hole in it.
+		{"windows", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.goos+"/"+c.stateDir, func(t *testing.T) {
+			got := logHint(c.goos, c.stateDir)
+			if c.want == "" {
+				if got != "" {
+					t.Errorf("logHint = %q, want empty", got)
+				}
+				return
+			}
+			if !strings.Contains(got, c.want) {
+				t.Errorf("logHint = %q, want it to name %q", got, c.want)
+			}
+		})
+	}
+}
+
+// The Windows verdicts carry the log pointer; the same verdict without a
+// state dir carries none. Both go through Explain so the wiring is
+// covered, not just the helper.
+func TestExplain_WindowsHintNamesTheAgentLog(t *testing.T) {
+	events := []Event{{Source: "Service Control Manager", ID: 7000,
+		Message: "The service failed to start: access denied."}}
+
+	with := Explain("windows", false, events, `C:\ProgramData\waired`)
+	if !strings.Contains(with.Hint, `logs\waired-agent.log`) {
+		t.Errorf("Hint=%q does not point at the agent log", with.Hint)
+	}
+	without := Explain("windows", false, events, "")
+	if strings.Contains(without.Hint, "agent's own log") {
+		t.Errorf("Hint=%q names a log it cannot locate", without.Hint)
 	}
 }

@@ -23,7 +23,7 @@ import (
 // best-effort: on a unit whose logs are root-only, `journalctl` prints nothing
 // useful for an unprivileged run, and the systemctl properties alone still
 // produce a verdict.
-func Check(ctx context.Context) Result {
+func Check(ctx context.Context, stateDir string) Result {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return Result{} // no systemd: no unit, nothing to explain
 	}
@@ -38,7 +38,7 @@ func Check(ctx context.Context) Result {
 	if !running {
 		events = append(events, journalErrors(ctx)...)
 	}
-	return Explain("linux", running, events)
+	return Explain("linux", running, events, stateDir)
 }
 
 func showProperties(ctx context.Context) []Event {

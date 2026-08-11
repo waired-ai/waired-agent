@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/inferencemesh"
 	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/management/observabilityclient"
@@ -21,6 +22,12 @@ import (
 type observabilityMux struct {
 	state  func(http.ResponseWriter, *http.Request)
 	events func(http.ResponseWriter, *http.Request)
+	// mesh and ping back the overlay measurement (waired#1137). Absent
+	// setters 404, which is what a daemon without the mesh route does —
+	// and what every test written before the measurement existed relies
+	// on to keep the published counts standing on their own.
+	mesh func(http.ResponseWriter, *http.Request)
+	ping func(http.ResponseWriter, *http.Request)
 }
 
 func newObservabilityServer(t *testing.T, m *observabilityMux) *httptest.Server {
@@ -39,6 +46,18 @@ func newObservabilityServer(t *testing.T, m *observabilityMux) *httptest.Server 
 				return
 			}
 			m.events(w, r)
+		case "/waired/v1/inference/mesh":
+			if m.mesh == nil {
+				http.NotFound(w, r)
+				return
+			}
+			m.mesh(w, r)
+		case "/waired/v1/ping":
+			if m.ping == nil {
+				http.NotFound(w, r)
+				return
+			}
+			m.ping(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -237,17 +256,49 @@ func TestProbeObservability_NoFailNeverEmitsStatusFail(t *testing.T) {
 	// Even when every endpoint behaves badly, doctor must not emit
 	// StatusFail for observability findings — they are operational
 	// signal, not config breakage.
-	srv := newObservabilityServer(t, &observabilityMux{
-		state: func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusServiceUnavailable)
+	//
+	// The bad-state case alone used to be the whole test, and it never
+	// reached the mesh route. It is now a table, so the overlay
+	// measurement (waired#1137) is covered by this pin instead of
+	// passing it vacuously: a mesh that reports peers and answers no
+	// ping is the worst thing this probe can find, and it is still a
+	// warning.
+	cases := map[string]*observabilityMux{
+		"every endpoint behaves badly": {
+			state: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			},
 		},
-	})
-
-	got := probeObservability(context.Background(), srv.URL)
-	for _, f := range got {
-		if f.Status == integration.StatusFail {
-			t.Errorf("observability emitted StatusFail (forbidden): %+v", f)
-		}
+		"the whole mesh fails its overlay ping": {
+			state: func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(management.ObservabilityState{
+					Agent: management.AgentState{EngineReady: true, ModelID: "qwen3:8b"},
+					Mesh:  management.MeshState{PeersEnrolled: 3, PeersReachable: 3, PeersReady: 3},
+				})
+			},
+			events: func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(observabilityclient.EventsResponse{})
+			},
+			mesh: func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{
+					{DeviceName: "a"}, {DeviceName: "b"}, {DeviceName: "c"},
+				}})
+			},
+			ping: func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusBadGateway)
+			},
+		},
+	}
+	for name, mux := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := newObservabilityServer(t, mux)
+			got := probeObservability(context.Background(), srv.URL)
+			for _, f := range got {
+				if f.Status == integration.StatusFail {
+					t.Errorf("observability emitted StatusFail (forbidden): %+v", f)
+				}
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/integration"
@@ -55,7 +56,7 @@ func probeObservability(ctx context.Context, mgmtURL string) []integration.Audit
 
 	out := make([]integration.AuditFinding, 0, 3)
 	out = append(out, engineFinding(state.Agent))
-	out = append(out, meshFinding(state.Mesh))
+	out = append(out, meshFinding(state.Mesh, probeMeshPeers(ctx, mgmtURL)))
 	out = append(out, recentFallbacksFinding(ctx, mgmtURL))
 	return out
 }
@@ -126,7 +127,14 @@ func engineFinding(a management.AgentState) integration.AuditFinding {
 	}
 }
 
-func meshFinding(m management.MeshState) integration.AuditFinding {
+// meshFinding renders the mesh line from the published counts and,
+// when the overlay could be measured, from what actually answered.
+//
+// probes is nil when no measurement was possible (no daemon, no mesh
+// route, no reported-reachable peers) — then the published counts stand
+// on their own, as they always did. See doctor_mesh_probe.go for why
+// they cannot be trusted alone.
+func meshFinding(m management.MeshState, probes []meshPeerProbe) integration.AuditFinding {
 	enrolled, reachable, ready := m.PeersEnrolled, m.PeersReachable, m.PeersReady
 	if enrolled == 0 {
 		return integration.AuditFinding{
@@ -135,6 +143,31 @@ func meshFinding(m management.MeshState) integration.AuditFinding {
 			Detail:  "no peers enrolled — solo deployment",
 		}
 	}
+
+	// The measurement outranks the claim. A peer the control plane calls
+	// reachable and the overlay cannot reach is the exact case
+	// waired#1137 found, and reporting the higher number would be
+	// reporting the wrong one.
+	// StatusWarn, not StatusFail. probeObservability's contract is that
+	// these findings never fail the run — they are operational signal,
+	// not configuration breakage, and nothing the doctor's `f` repair
+	// could fix (pinned by TestProbeObservability_NoFailNeverEmitsStatusFail).
+	// A host whose local inference works is degraded by an unreachable
+	// peer, not broken by it. What was wrong before was the WORDING, not
+	// the severity: `✓ 2/3 reachable` on a host where nothing answered.
+	if silent := silentPeers(probes); len(silent) > 0 {
+		answered := len(probes) - len(silent)
+		return integration.AuditFinding{
+			Status:  integration.StatusWarn,
+			Subject: "mesh peers",
+			Detail: fmt.Sprintf(
+				"%d/%d reported reachable, but only %d answered an overlay ping — "+
+					"no reply from %s. Inference cannot route to a peer that does not answer; "+
+					"check NAT traversal and relay connectivity",
+				reachable, enrolled, answered, strings.Join(silent, ", ")),
+		}
+	}
+
 	switch {
 	case reachable == 0:
 		return integration.AuditFinding{
@@ -146,15 +179,28 @@ func meshFinding(m management.MeshState) integration.AuditFinding {
 		return integration.AuditFinding{
 			Status:  integration.StatusWarn,
 			Subject: "mesh peers",
-			Detail:  fmt.Sprintf("%d/%d enrolled reachable, only %d ready for inference", reachable, enrolled, ready),
+			Detail: fmt.Sprintf("%d/%d enrolled reachable%s, only %d ready for inference",
+				reachable, enrolled, measuredSuffix(probes), ready),
 		}
 	default:
 		return integration.AuditFinding{
 			Status:  integration.StatusOK,
 			Subject: "mesh peers",
-			Detail:  fmt.Sprintf("%d/%d reachable, %d ready", reachable, enrolled, ready),
+			Detail: fmt.Sprintf("%d/%d reachable%s, %d ready",
+				reachable, enrolled, measuredSuffix(probes), ready),
 		}
 	}
+}
+
+// measuredSuffix marks a count the overlay confirmed, so the line never
+// reads the same whether it was checked or merely reported. Empty when
+// nothing was measured — an unqualified count is the old, second-hand
+// meaning, and claiming otherwise would be the defect this fixes.
+func measuredSuffix(probes []meshPeerProbe) string {
+	if len(probes) == 0 {
+		return ""
+	}
+	return " (measured)"
 }
 
 func recentFallbacksFinding(ctx context.Context, mgmtURL string) integration.AuditFinding {

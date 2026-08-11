@@ -28,7 +28,7 @@ import (
 // entered-running/entered-stopped pair). On the rc7 host the System log for
 // the day of the failure contained no 7036 records at all, so a decoder keyed
 // on it would have reported "nothing happened" about the one boot that failed.
-func Check(ctx context.Context) Result {
+func Check(ctx context.Context, stateDir string) Result {
 	running := serviceRunning()
 	since := bootTime()
 
@@ -45,7 +45,7 @@ func Check(ctx context.Context) Result {
 		`*[System[(`+eventIDClause(winCodeIntegrityBlocked, winCodeIntegrityAudit)+`)]]`,
 		service.ServiceName+".exe")...)
 
-	return Explain("windows", running, recentEvents(events, since))
+	return Explain("windows", running, recentEvents(events, since), stateDir)
 }
 
 // bootTime is when this Windows installation last started, derived from the
