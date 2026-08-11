@@ -1512,6 +1512,52 @@ assert_log_rotation() {
 }
 assert_log_rotation
 
+# --- #680: --clean takes the Keychain-stored identity with it ---------------
+# Runs LAST, and only at tier 2, because it is terminal (it removes the
+# binaries and the state dir) and because the item it checks only exists once
+# something has enrolled — LoadOrCreateMachineKey is what writes it, and tier 1
+# installs with --no-init.
+#
+# The bug: on macOS the state dir is not the whole identity. securestore
+# mirrors the Machine Key into the Keychain (the System keychain, since the
+# daemon enrolls as root) and reads it back first, so `--clean` deleting the
+# files left the host able to prove it was the same device. The control plane
+# matches enrollment on the Machine Key, so a wiped and reinstalled host
+# re-enrolled onto its old device row instead of a new one. Linux and Windows
+# have no Keychain backend, so they never had the divergence — which is
+# exactly why a suite that only ever ran `waired-agent uninstall` could not
+# see it.
+#
+# Nothing here re-implements the deletion: the assert is on the observable
+# end state of `uninstall.sh --clean`, so it stays true whichever way the
+# script gets there.
+if [ "$TIER" -ge 2 ]; then
+  it_step "#680 --clean removes the Keychain-stored machine key"
+  kc_before=0
+  sudo security find-generic-password -a waired -s machine-key \
+    /Library/Keychains/System.keychain >/dev/null 2>&1 && kc_before=1
+  it_log "System keychain held the machine key before --clean: $kc_before"
+
+  clean_rc=0
+  sudo -E bash "$ROOT/packaging/install/uninstall.sh" --clean --yes >/dev/null 2>&1 || clean_rc=$?
+  [ "$clean_rc" -eq 0 ] && ok "uninstall.sh --clean exited 0" \
+    || bad "uninstall.sh --clean exited $clean_rc"
+
+  # Proves the --clean arm actually ran, so the Keychain assert below cannot
+  # pass by the script having done nothing.
+  sudo test -d "$STATE_DIR" \
+    && bad "state dir survived uninstall.sh --clean ($STATE_DIR)" \
+    || ok "uninstall.sh --clean removed the state dir"
+
+  # THE REGRESSION BAR.
+  if sudo security find-generic-password -a waired -s machine-key \
+       /Library/Keychains/System.keychain >/dev/null 2>&1; then
+    bad "the machine key survived --clean in the System keychain (#680) — this host will re-enroll as the same device"
+  else
+    ok "no machine key left in the System keychain after --clean (#680)"
+  fi
+fi
+
 echo
 it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 
@@ -1542,6 +1588,11 @@ it_step "Tier $TIER summary: $PASS passed, $FAIL failed, $SKIP skipped"
 # only because assert_engine_only_install_macos contributes a fixed six
 # whichever way each one lands (no early return, no conditional assert), so
 # re-measure the moment that stops being true.
+#
+# #680 adds 3 to every tier-2 configuration (and none to tier 1): the
+# --clean Keychain block runs unconditionally inside `[ "$TIER" -ge 2 ]`
+# and contributes a fixed three whichever way each assert lands, so the
+# derivation stays additive the way the --engine-only note above requires.
 case "$TIER" in
   1) floor=24 ;;
   # 31 shared + the lean-only engine-less block:
@@ -1551,9 +1602,9 @@ case "$TIER" in
   # waired-agent#573's host-speed assert does NOT move these — it is soft while
   # waired-agent#579 is open, so it contributes 0 on the leg that hits that
   # case. See the Linux twin in installtest-run.sh.
-  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=35
-     elif [ "$ENGINE_ONLY" = 1 ]; then floor=50   # 44 + assert_engine_only_install_macos's 6
-     else floor=44; fi ;;
+  *) if [ "$INFER" = 1 ] || [ "$DAEMON_ENGINE" = 1 ]; then floor=38   # 35 + #680's 3
+     elif [ "$ENGINE_ONLY" = 1 ]; then floor=53   # 47 + assert_engine_only_install_macos's 6
+     else floor=47; fi ;;                          # 44 + #680's 3
 esac
 executed=$((PASS + FAIL))
 if [ "$executed" -lt "$floor" ]; then
