@@ -1154,7 +1154,12 @@ fi
 arch="$(uname -m)"; [ "$arch" = "x86_64" ] && arch=amd64   # arm64 stays arm64
 tarball="waired-darwin-${arch}.tar.gz"
 ver="$(git -C "$ROOT" rev-parse --short HEAD)"
-ldf="-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$ver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
+# Version and BuildSHA are DIFFERENT strings, as they are in a real build.
+# Stamping the bare SHA into both is the shape of #631, and it is what this
+# harness used to do — so it could never have caught it. $semver is the same
+# dev version already written to the tarball's VERSION file below.
+semver="0.0.0-$ver"
+ldf="-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$semver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
 
 it_step "building waired + waired-agent (darwin/$arch) and packing $tarball"
 mkdir -p "$WORK/stage" "$DIST"
@@ -1162,7 +1167,7 @@ mkdir -p "$WORK/stage" "$DIST"
   GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="$ldf" -o "$WORK/stage/waired"       ./cmd/waired
   GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags="$ldf" -o "$WORK/stage/waired-agent" ./cmd/waired-agent
 ) || it_die "go build (darwin/$arch) failed"
-printf '0.0.0-%s' "$ver" > "$WORK/stage/VERSION"
+printf '%s' "$semver" > "$WORK/stage/VERSION"
 # Guard the pack + checksum explicitly: this script runs `set -uo pipefail`
 # (NOT -e — the inference poll below relies on no-match greps in command
 # substitutions that -e would abort). Without a guard a failed pack would let

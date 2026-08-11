@@ -1325,7 +1325,12 @@ function Invoke-AsBasicToken {
 # ============================================================================
 ItStep "building waired.exe + waired-agent.exe from worktree"
 $ver = (& git -C $Root rev-parse --short HEAD).Trim()
-$ldf = "-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$ver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
+# Version and BuildSHA are DIFFERENT strings, as they are in a real build.
+# Stamping the bare SHA into both is the shape of #631, and it is what this
+# harness used to do — so it could never have caught it. $semver is the same
+# dev version already used for the VERSION file and the Inno AppVersion.
+$semver = "0.0.0-$ver"
+$ldf = "-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$semver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
 Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $Stage -Force | Out-Null
 Set-Location -LiteralPath $Root
@@ -1340,7 +1345,7 @@ if ($LASTEXITCODE -ne 0) { ItDie "go build waired-agent failed" }
 # mirrors the Makefile (no console window if anything ever launches it).
 & go build -trimpath -ldflags="$ldf -H=windowsgui" -o (Join-Path $Stage 'waired-tray.exe') ./cmd/waired-tray
 if ($LASTEXITCODE -ne 0) { ItDie "go build waired-tray failed" }
-Set-Content -LiteralPath (Join-Path $Stage 'VERSION') -Value "0.0.0-$ver" -Encoding ASCII -NoNewline
+Set-Content -LiteralPath (Join-Path $Stage 'VERSION') -Value $semver -Encoding ASCII -NoNewline
 # LICENSE + THIRD_PARTY_LICENSES are release-zip contents and Inno [Files]
 # inputs (#4). The release build stages them via `make dist-windows-installer`
 # (go-licenses); the harness copies the real repo LICENSE and writes a
@@ -2356,9 +2361,9 @@ if ($ExeVariant) {
         if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
             $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
         }
-        & $iscc "/DAppVersion=0.0.0-$ver" (Join-Path $Root 'packaging\windows\waired-setup.iss') | Select-Object -Last 3 | Out-Host
+        & $iscc "/DAppVersion=$semver" (Join-Path $Root 'packaging\windows\waired-setup.iss') | Select-Object -Last 3 | Out-Host
         if ($LASTEXITCODE -ne 0) { ItDie "ISCC exited $LASTEXITCODE" }
-        $setup = Join-Path $Root "dist\WairedSetup-0.0.0-$ver-x64.exe"
+        $setup = Join-Path $Root "dist\WairedSetup-$semver-x64.exe"
         if (Test-Path -LiteralPath $setup) { ItOk "Inno installer compiled ($(Split-Path -Leaf $setup))" }
         else { ItDie "ISCC produced no installer at $setup" }
 
