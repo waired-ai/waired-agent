@@ -34,6 +34,14 @@ import (
 //     variables are pointed at one temp dir so the same hole cannot open
 //     on a different OS.
 //
+//   - The ASCII fold (ascii.go). Whether output is rewritten depends on the
+//     host OS and its console code page, so the same assertion on a printed
+//     string passed on Linux and failed on the Windows job, where `go test`
+//     has no console and asciiOnlySink is therefore true (#629). Sealed off
+//     for the whole binary: these tests assert product strings as authored,
+//     and the folded rendering has its own guard in
+//     TestPlainInitOutputIsPureASCII, which pins it back on for itself.
+//
 // It also clears mgmtWriteBase for the whole binary: since waired#838
 // management writes travel over a local IPC socket, which httptest cannot
 // serve, so these tests address their httptest TCP servers verbatim. They
@@ -62,6 +70,8 @@ func runTests(m *testing.M) int {
 	os.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
 
 	mgmtWriteBase = ""
+	off := false
+	foldCached = &off
 	// The step-6 host-speed wait is minutes in production (the probe
 	// model has to download); at test scale every login-flow fixture that
 	// parks on a measurement-less status would otherwise burn the full
