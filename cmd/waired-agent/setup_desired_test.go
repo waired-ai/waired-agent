@@ -61,8 +61,20 @@ type fakeSetupProvider struct {
 	modelCompleted int64
 	modelTotal     int64
 	modelErr       string
-	bench          management.BenchmarkStatusResponse
-	benchStarts    []int
+	// modelStateFor overrides the flat fields above for one model id;
+	// modelStateAsked records every id the reconciler looked up.
+	//
+	// Both exist because two rows read this one method now: the operator's
+	// chosen model, and the small model the host is timed on
+	// (waired#1143). A fake that dropped the id would answer both with the
+	// same bytes, which makes "the probe row carries the PROBE's download"
+	// unwritable — exactly the defect a shared answer would hide.
+	modelStateFor   map[string]fakeModelState
+	modelStateAsked []string
+	// hostSpeedProgress scripts how far the install-time measurement has got.
+	hostSpeedProgress hostSpeedProgress
+	bench             management.BenchmarkStatusResponse
+	benchStarts       []int
 	// engineStarts records the reason of every startSetupEngine call, in
 	// order. The reason is kept rather than a bare count so a test can
 	// tell the executor-done trigger from the engine-appeared one (#304).
@@ -206,10 +218,28 @@ func (f *fakeSetupProvider) setupServingEngine() string {
 	return f.servingEngine
 }
 
-func (f *fakeSetupProvider) setupModelState(string) (string, int64, int64, string) {
+// fakeModelState is one scripted answer from setupModelState.
+type fakeModelState struct {
+	state     string
+	completed int64
+	total     int64
+	errText   string
+}
+
+func (f *fakeSetupProvider) setupModelState(modelID string) (string, int64, int64, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.modelStateAsked = append(f.modelStateAsked, modelID)
+	if s, ok := f.modelStateFor[modelID]; ok {
+		return s.state, s.completed, s.total, s.errText
+	}
 	return f.modelState, f.modelCompleted, f.modelTotal, f.modelErr
+}
+
+func (f *fakeSetupProvider) setupHostSpeedProgress() hostSpeedProgress {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hostSpeedProgress
 }
 
 func (f *fakeSetupProvider) BenchmarkStatus() management.BenchmarkStatusResponse {

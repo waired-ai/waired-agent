@@ -42,13 +42,22 @@ const setupPushInterval = 2 * time.Second
 const setupKeepaliveInterval = 30 * time.Second
 
 // Onboarding step IDs (waired#835 §7, five ids as of waired#934; a sixth
-// for #597). The CP treats them as opaque strings; NAVI's wizard keys its
-// step rows off them. The three the elevated executor drives are named in
-// internal/management, because the executor and the daemon have to agree
-// on which row a report belongs to.
+// for #597, two more for waired#1143). The CP treats them as opaque
+// strings; NAVI's wizard keys its step rows off them. The three the
+// elevated executor drives are named in internal/management, because the
+// executor and the daemon have to agree on which row a report belongs to.
 const (
 	setupStepEngineDownload = management.SetupStepEngineDownload
 	setupStepEngineInstall  = management.SetupStepEngineInstall
+	// The install-time measurement, in two rows (waired#1143): the small
+	// model this host is timed on, and the timing itself. Both are the
+	// DAEMON's work — neither crosses the executor API, so neither belongs
+	// in internal/management's vocabulary.
+	//
+	// Not folded into model_pull: that row is the operator's own choice,
+	// and the measurement runs before there is one (waired#1099).
+	setupStepProbeModelPull = "probe_model_pull"
+	setupStepHostSpeed      = "host_speed"
 	setupStepModelPull      = "model_pull"
 	setupStepBenchmark      = "benchmark"
 	setupStepIntegration    = management.SetupStepIntegration
@@ -249,6 +258,12 @@ type setupProvider interface {
 	// setupModelState reports one catalog model's lifecycle state plus
 	// live pull bytes and any stored failure detail.
 	setupModelState(modelID string) (state string, completed, total int64, errText string)
+	// setupHostSpeedProgress reports how far the install-time measurement
+	// has got, for its two rows (waired#1143). The reporter could not see
+	// that work at all before this: it is the daemon's, it runs off the
+	// engine bootstrap rather than off desired state, and the only thing
+	// that ever left the process was the finished figure.
+	setupHostSpeedProgress() hostSpeedProgress
 	BenchmarkStatus() management.BenchmarkStatusResponse
 	// startSetupBenchmark kicks the single-flight benchmark job at the
 	// given generation (waired#835 §12; join semantics from #99 make
@@ -1379,6 +1394,19 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			step.ErrorDetail = "engine is not installed and the agent cannot install it unprivileged"
 		}
 		p.Steps = append(p.Steps, step)
+		// The install-time measurement, directly after the engine that
+		// makes it possible and before anything the operator has to answer
+		// (waired#1143). The wire order IS NAVI's render order, and this is
+		// the order the work happens in: the measurement runs off the
+		// engine bootstrap, so on the browser path it is already going
+		// while the wizard is still asking which model to install.
+		//
+		// Guarded by the engine, NOT by d.modelID, for that reason — gating
+		// it on a chosen model would emit the rows only after the window
+		// they describe had closed. Emits nothing at all on a host with no
+		// measurement under way and none stored; see hostSpeedSteps.
+		p.Steps = append(p.Steps,
+			hostSpeedSteps(r.provider.setupHostSpeedProgress(), r.provider.setupModelState)...)
 	}
 	// The coding tools sit between the engine and the model download
 	// (waired-agent#311). The wire order IS the order NAVI renders, and
