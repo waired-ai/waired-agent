@@ -200,6 +200,75 @@ func TestPeersList_StalePeerFlagged(t *testing.T) {
 	}
 }
 
+// TestPeersList_StaleNoteAnswersBothQuestions covers what the word alone
+// did not (#661): how old is old enough, and whether the row ever goes
+// away. A peer offline for nine days still listed as `no (stale)` reads
+// like a broken listing rather than a departed peer.
+//
+// The window comes from the snapshot, so the printed number is the one the
+// daemon is applying rather than a constant this process guessed.
+func TestPeersList_StaleNoteAnswersBothQuestions(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		StalenessThresholdMS: 90_000,
+		Peers: []inferencemesh.PeerView{
+			{
+				DeviceID:   "dev_stale",
+				DeviceName: "peer-stale",
+				Stale:      true,
+				InferenceState: &signer.InferenceState{
+					Reachable: true,
+					Type:      signer.InferenceTypeOllama,
+					Models:    []string{"qwen3:8b-q4_K_M"},
+				},
+			},
+		},
+	}
+	srv := peersTestServer(t, snap)
+	defer srv.Close()
+	out := captureStdout(t, func() {
+		if err := runPeers([]string{"list", "--mgmt", meshAddrFromURL(srv.URL)}); err != nil {
+			t.Fatalf("runPeers list: %v", err)
+		}
+	})
+	if !strings.Contains(out, "1m30s") {
+		t.Errorf("note does not state the threshold the daemon reported: %q", out)
+	}
+	if !strings.Contains(out, "removed") {
+		t.Errorf("note does not say when the row goes away: %q", out)
+	}
+}
+
+// TestPeersList_NoStaleNoteWhenNothingIsStale keeps the note out of the
+// common case: a footnote on every listing is noise, and it would explain
+// a word that is not on screen.
+func TestPeersList_NoStaleNoteWhenNothingIsStale(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		StalenessThresholdMS: 90_000,
+		Peers: []inferencemesh.PeerView{
+			{
+				DeviceID:   "dev_ok",
+				DeviceName: "peer-ok",
+				InferenceState: &signer.InferenceState{
+					Reachable:      true,
+					Type:           signer.InferenceTypeOllama,
+					Models:         []string{"qwen3:8b-q4_K_M"},
+					SubsystemState: signer.SubsystemStateReady,
+				},
+			},
+		},
+	}
+	srv := peersTestServer(t, snap)
+	defer srv.Close()
+	out := captureStdout(t, func() {
+		if err := runPeers([]string{"list", "--mgmt", meshAddrFromURL(srv.URL)}); err != nil {
+			t.Fatalf("runPeers list: %v", err)
+		}
+	})
+	if strings.Contains(out, "however long they have been offline") {
+		t.Errorf("stale note printed with no stale peer: %q", out)
+	}
+}
+
 func TestPeersList_EmptyMeshMessage(t *testing.T) {
 	srv := peersTestServer(t, inferencemesh.Snapshot{})
 	defer srv.Close()
@@ -244,5 +313,28 @@ func TestPeers_UnknownSubcommandRejected(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown subcommand")
+	}
+}
+
+// TestPeers_BareCommandFailsAndPrintsHelp: naming a namespace where a verb
+// belongs is a mistake, and it used to exit 0 after printing help — which
+// made `waired peers` indistinguishable from a listing that found nothing.
+// A script got success and no data (#661).
+//
+// Help still prints, because the fix is to pick a subcommand and that is
+// the list of them.
+//
+// Product contract, ratified by #661 and the owner's call to make the bare
+// form fail.
+func TestPeers_BareCommandFailsAndPrintsHelp(t *testing.T) {
+	var err error
+	out := captureStdout(t, func() {
+		err = runPeers(nil)
+	})
+	if err == nil {
+		t.Fatal("bare `waired peers` returned nil; it must fail rather than look like an empty listing")
+	}
+	if !strings.Contains(out, "list") {
+		t.Errorf("help did not name the subcommand to use: %q", out)
 	}
 }

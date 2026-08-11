@@ -26,8 +26,12 @@ can pick a '--pin' target for 'worker set'.
 
 func newPeersCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "peers",
-		Short: "List known mesh peers (for picking a 'worker set --pin' target).",
+		Use: "peers",
+		// Names the subcommand, like the other namespaces do ("models
+		// (ls / pull / rm …)"). The old wording — "List known mesh
+		// peers" — read in the top-level index as though the bare command
+		// listed them, which it never did (#661).
+		Short: "Inspect known mesh peers (list), for picking a 'worker set --pin' target.",
 		Long:  peersLong,
 		RunE:  namespaceRunE,
 	}
@@ -75,6 +79,42 @@ func writePeersTable(w io.Writer, m *inferencemesh.Snapshot) {
 		_, _ = fmt.Fprintln(tw, peerRow(p))
 	}
 	_ = tw.Flush()
+	if note := staleNote(m); note != "" {
+		_, _ = fmt.Fprint(w, note)
+	}
+}
+
+// staleNote explains the "stale" reason under the table, and only when a
+// row actually says it.
+//
+// Two separate questions a reader has, neither of which the word answered
+// (#661): how old is old enough, and does the row ever go away. A peer that
+// had been offline for nine days still listed as `no (stale)`, which reads
+// like the listing is broken rather than like the peer is gone.
+//
+// The threshold comes from the snapshot rather than from
+// inferencemesh.DefaultAdvertisedLiveness, so the number printed is the one
+// the daemon is actually applying — a constant quoted here would be a guess
+// about the other process.
+func staleNote(m *inferencemesh.Snapshot) string {
+	stale := false
+	for _, p := range m.Peers {
+		if inferencemesh.PeerCondition(p) == inferencemesh.ConditionStale {
+			stale = true
+			break
+		}
+	}
+	if !stale {
+		return ""
+	}
+	window := time.Duration(m.StalenessThresholdMS) * time.Millisecond
+	if window <= 0 {
+		window = inferencemesh.DefaultAdvertisedLiveness
+	}
+	return fmt.Sprintf(
+		"\n\"stale\" means the peer's own last report was more than %s old when this\n"+
+			"device's network map was updated. Peers stay listed until they are removed\n"+
+			"from your network, however long they have been offline.\n", window)
 }
 
 func peerRow(p inferencemesh.PeerView) string {
