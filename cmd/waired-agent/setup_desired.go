@@ -1364,7 +1364,6 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			// command that would fail the same way.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorPermissionDenied
-			step.ErrorDetail = "the setup command on this device is not running with administrator privileges"
 		case leaseLive:
 			// Elevated executor attached: installing, or about to.
 			step.Status = signer.SetupStatusRunning
@@ -1378,20 +1377,27 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			// outlives the lease precisely so this arm can be reached.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorPermissionDenied
-			step.ErrorDetail = "the setup command on this device ran without administrator privileges and has exited"
 		case everSeen:
 			// §9-4: it was here and it is gone. This is the recoverable
 			// case — NAVI offers the command to re-run.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorExecutorGone
-			step.ErrorDetail = "the setup command on this device exited before the engine was installed"
 		default:
-			// §11: never attached at all. Unprivileged install is
-			// impossible, so this is a permissions problem, not a
-			// liveness one.
+			// Never attached at all this session, so nobody has run the
+			// setup command here — which is what setup_command_not_run
+			// says, and the code exists because that is a different thing
+			// to tell the operator than a privileges problem
+			// (waired-agent#312, on the coding-tools row).
+			//
+			// It used to report permission_denied on the grounds that an
+			// unprivileged install is impossible. True, but it answers a
+			// question nobody asked: nothing was refused here, and this row
+			// ALSO reports permission_denied when an executor really was
+			// refused (classifySetupFailure, above), so the two were
+			// indistinguishable to the reader. Same defect #312 fixed one
+			// row down; it was simply never carried over to this one.
 			step.Status = signer.SetupStatusFailed
-			step.ErrorCode = signer.SetupErrorPermissionDenied
-			step.ErrorDetail = "engine is not installed and the agent cannot install it unprivileged"
+			step.ErrorCode = signer.SetupErrorSetupCommandNotRun
 		}
 		p.Steps = append(p.Steps, step)
 		// The install-time measurement, directly after the engine that
@@ -1667,7 +1673,6 @@ func integrationStep(flat string, st setupExecutorStep, w integrationWriter) sig
 			// §9-4: it was here and it is gone, before it got to this row.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorExecutorGone
-			step.ErrorDetail = "the setup command on this device exited before the coding tools were set up"
 		default:
 			// Never attached at all, and no record of a past one — the
 			// browser-only host waired#935 left undecided. The daemon must
@@ -1685,7 +1690,6 @@ func integrationStep(flat string, st setupExecutorStep, w integrationWriter) sig
 			// same elevated command either way; the sentence is not.
 			step.Status = signer.SetupStatusFailed
 			step.ErrorCode = signer.SetupErrorSetupCommandNotRun
-			step.ErrorDetail = "the coding tools on this device can only be set up by the setup command, and it has not run"
 		}
 	}
 	return step
@@ -1731,7 +1735,6 @@ func engineDownloadStep(st setupExecutorStep, enginePresent, leaseLive bool) sig
 		// same recovery as the install proper: run the command again.
 		step.Status = signer.SetupStatusFailed
 		step.ErrorCode = signer.SetupErrorExecutorGone
-		step.ErrorDetail = "the setup command on this device exited while the download was still running"
 	default:
 		step.Status = signer.SetupStatusRunning
 		step.CompletedBytes = st.completedBytes

@@ -900,8 +900,8 @@ func TestSetupApplyModelCrossEngineFallsBackToPull(t *testing.T) {
 func TestSetupSnapshotStatuses(t *testing.T) {
 	ctx := context.Background()
 
-	// Engine missing → failed + permission_denied (§11: install is the
-	// executor's job).
+	// Engine missing, nobody attached → failed + setup_command_not_run
+	// (§11: install is the executor's job, and it has not run).
 	f := &fakeSetupProvider{modelState: catalog.ModelStateDownloading, modelCompleted: 512, modelTotal: 4096}
 	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
 	r.Apply(ctx, desiredFrame("ollama", "m1", 1))
@@ -911,8 +911,8 @@ func TestSetupSnapshotStatuses(t *testing.T) {
 		t.Fatalf("snapshot = %+v, want 3 steps", snap)
 	}
 	eng, mod, bench := snap.Steps[0], snap.Steps[1], snap.Steps[2]
-	if eng.ID != setupStepEngineInstall || eng.Status != signer.SetupStatusFailed || eng.ErrorCode != signer.SetupErrorPermissionDenied {
-		t.Fatalf("engine step = %+v, want failed/permission_denied", eng)
+	if eng.ID != setupStepEngineInstall || eng.Status != signer.SetupStatusFailed || eng.ErrorCode != signer.SetupErrorSetupCommandNotRun {
+		t.Fatalf("engine step = %+v, want failed/setup_command_not_run", eng)
 	}
 	if mod.ID != setupStepModelPull || mod.Status != signer.SetupStatusRunning || mod.CompletedBytes != 512 || mod.TotalBytes != 4096 {
 		t.Fatalf("model step = %+v, want running with bytes", mod)
@@ -1082,17 +1082,36 @@ func leasedReconciler(t *testing.T, f *fakeSetupProvider, engine, model string) 
 	return r, c
 }
 
-// TestSetupSnapshotNoExecutorStillPermissionDenied pins the UNCHANGED
-// pre-lease wire for the case that has not moved: nobody ever attached,
-// so this is a privileges problem, not a liveness one. Sending the
-// operator to re-run a command would be wrong here — there is no reason
-// to think a second run would attach either.
-func TestSetupSnapshotNoExecutorStillPermissionDenied(t *testing.T) {
+// TestSetupSnapshotNoExecutorIsSetupCommandNotRun: nobody has ever
+// attached, so nobody has run the setup command here.
+//
+// Product contract, waired-agent#312 — extended to this row by
+// waired-agent#690. This test previously pinned the opposite
+// (permission_denied), on the reasoning that an unprivileged install is
+// impossible so the problem must be privileges, and that sending the
+// operator to re-run a command would be wrong when there is no reason a
+// second run would attach.
+//
+// The first half answers a question nobody asked: nothing was refused
+// here, and this row ALSO reports permission_denied when an executor
+// really was refused, so the two readings were indistinguishable. The
+// second half is an argument against executor_gone ("run it again"), not
+// against setup_command_not_run — which says the command has not run at
+// all, and is the code #312 added for exactly this distinction. That
+// issue fixed the identical `default` arm one row down, on the coding
+// tools; it was never carried over to this one, and the sentence in
+// error_detail was covering for it.
+func TestSetupSnapshotNoExecutorIsSetupCommandNotRun(t *testing.T) {
 	f := &fakeSetupProvider{}
 	r, _ := leasedReconciler(t, f, "ollama", "")
 	step := stepByID(t, r.snapshot(context.Background()), setupStepEngineInstall)
-	if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorPermissionDenied {
-		t.Fatalf("engine step = %+v, want failed/permission_denied", step)
+	if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorSetupCommandNotRun {
+		t.Fatalf("engine step = %+v, want failed/setup_command_not_run", step)
+	}
+	// The distinction has to survive in the CODE, because the sentence
+	// that used to carry it is gone (#690).
+	if step.ErrorDetail != "" {
+		t.Fatalf("error_detail = %q, want empty: the agent does not author prose here", step.ErrorDetail)
 	}
 }
 
@@ -1140,6 +1159,122 @@ func TestSetupSnapshotExecutorGoneAfterTTL(t *testing.T) {
 	step := stepByID(t, r.snapshot(context.Background()), setupStepEngineInstall)
 	if step.Status != signer.SetupStatusFailed || step.ErrorCode != signer.SetupErrorExecutorGone {
 		t.Fatalf("engine step = %+v, want failed/executor_gone", step)
+	}
+}
+
+// TestSetupAuthoredArmsSendNoErrorDetail walks every arm that used to put
+// a sentence the agent wrote itself into error_detail.
+//
+// Product contract, waired-agent#690: error_detail forwards what the
+// installer, the engine or the OS actually said. Seven arms filled it with
+// English prose instead, each one restating what the step's own
+// error_code already means — so a reader whose console is not in English
+// got a translated headline followed by an untranslated repeat of it, and
+// nothing downstream could tell the authored sentences apart from genuine
+// third-party output travelling in the same field.
+//
+// The codes are asserted alongside the emptiness on purpose: deleting the
+// sentences is only lossless if the code still separates the cases the
+// sentences did. TestSetupEngineStepMatrix covers the other half — the
+// pass-through arms, which must go on carrying their detail.
+func TestSetupAuthoredArmsSendNoErrorDetail(t *testing.T) {
+	ctx := context.Background()
+	installed := func() *fakeSetupProvider {
+		return &fakeSetupProvider{engineInstalled: true, engineReady: true, modelState: catalog.ModelStateReady}
+	}
+
+	cases := []struct {
+		name     string
+		step     string
+		wantCode string
+		build    func(t *testing.T) *setupReconciler
+	}{
+		{
+			name: "an unelevated executor is attached right now", step: setupStepEngineInstall,
+			wantCode: signer.SetupErrorPermissionDenied,
+			build: func(t *testing.T) *setupReconciler {
+				r, _ := leasedReconciler(t, &fakeSetupProvider{}, "ollama", "")
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: false})
+				return r
+			},
+		},
+		{
+			name: "an unelevated executor ran and exited", step: setupStepEngineInstall,
+			wantCode: signer.SetupErrorPermissionDenied,
+			build: func(t *testing.T) *setupReconciler {
+				r, _ := leasedReconciler(t, &fakeSetupProvider{}, "ollama", "")
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: false})
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: false})
+				return r
+			},
+		},
+		{
+			name: "an elevated executor exited before the install", step: setupStepEngineInstall,
+			wantCode: signer.SetupErrorExecutorGone,
+			build: func(t *testing.T) *setupReconciler {
+				r, _ := leasedReconciler(t, &fakeSetupProvider{}, "ollama", "")
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: false})
+				return r
+			},
+		},
+		{
+			// The one arm whose CODE this change corrects — see
+			// TestSetupSnapshotNoExecutorIsSetupCommandNotRun.
+			name: "nobody has run the setup command", step: setupStepEngineInstall,
+			wantCode: signer.SetupErrorSetupCommandNotRun,
+			build: func(t *testing.T) *setupReconciler {
+				r, _ := leasedReconciler(t, &fakeSetupProvider{}, "ollama", "")
+				return r
+			},
+		},
+		{
+			name: "the executor exited before the coding tools", step: setupStepIntegration,
+			wantCode: signer.SetupErrorExecutorGone,
+			build: func(t *testing.T) *setupReconciler {
+				r, clock := leasedReconciler(t, installed(), "ollama", "")
+				r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationOpenClaw))
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{Attached: true, Elevated: true})
+				clock.advance(setupExecutorTTL + time.Second)
+				return r
+			},
+		},
+		{
+			name: "the coding tools have no author at all", step: setupStepIntegration,
+			wantCode: signer.SetupErrorSetupCommandNotRun,
+			build: func(t *testing.T) *setupReconciler {
+				r := newSetupReconciler(installed(), nil, "dev-1", nil, quietLogger())
+				r.now = newFakeClock().now
+				r.Apply(ctx, integrationsFrame("ollama", "m-1", signer.IntegrationClaudeCode))
+				return r
+			},
+		},
+		{
+			name: "the executor exited mid-download", step: setupStepEngineDownload,
+			wantCode: signer.SetupErrorExecutorGone,
+			build: func(t *testing.T) *setupReconciler {
+				r, clock := leasedReconciler(t, &fakeSetupProvider{}, "ollama", "")
+				r.NoteExecutor(ctx, management.SetupExecutorRequest{
+					Attached: true, Elevated: true, Engine: "ollama",
+					Step: setupStepEngineDownload, Phase: management.SetupExecutorPhaseInstalling,
+					CompletedBytes: 600 << 20, TotalBytes: 1500 << 20,
+				})
+				clock.advance(setupExecutorTTL + time.Second)
+				return r
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			step := stepByID(t, tc.build(t).snapshot(ctx), tc.step)
+			if step.Status != signer.SetupStatusFailed || step.ErrorCode != tc.wantCode {
+				t.Fatalf("step = %+v, want failed/%s", step, tc.wantCode)
+			}
+			if step.ErrorDetail != "" {
+				t.Errorf("error_detail = %q, want empty — the agent does not author prose in this field", step.ErrorDetail)
+			}
+		})
 	}
 }
 
