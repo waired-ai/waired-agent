@@ -145,11 +145,24 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 	// old model keeps serving in the meantime.
 	downloading := !modelDownloaded(s.inference.ListModels(r.Context()), manifest.ModelID)
 
-	scheduler := s.catalog.RestartScheduler
-	if scheduler == nil {
-		scheduler = DefaultRestartScheduler
+	// No fallback. This package used to carry its own per-OS restart
+	// implementation as the default, and the two copies drifting is
+	// precisely what waired-agent#684 was: the Windows one called
+	// os.Exit(1) from inside the service process, which the SCM read as
+	// a crash. The mechanism belongs to platform/service, and every
+	// daemon wires it (cmd/waired-agent/main.go) — importing it here
+	// instead would put the enrollment and service-manager packages in
+	// the routing harness's dependency closure, which
+	// scripts/ci/routing-sentinel-paths-guard.sh exists to notice.
+	//
+	// So a nil scheduler is a wiring gap, and saying so beats answering
+	// 202 for a restart that will not happen.
+	if s.catalog.RestartScheduler == nil {
+		writeJSON(w, http.StatusInternalServerError, errorBody("restart_unavailable",
+			"this daemon has no restart mechanism wired, so the model switch cannot be applied"))
+		return
 	}
-	go scheduler()
+	go s.catalog.RestartScheduler()
 
 	writeJSON(w, http.StatusAccepted, PreferredModelResponse{
 		ModelID:     req.ModelID,
@@ -221,13 +234,3 @@ func modelDownloaded(models []ModelEntry, modelID string) bool {
 	}
 	return false
 }
-
-// DefaultRestartScheduler asks the OS service manager to restart the
-// agent so the freshly-written preferred-model.json takes effect on
-// next boot. The actual mechanism is OS-specific: on Unix we SIGTERM
-// our own pid and cmd/waired-agent exits 17, which the systemd unit
-// force-restarts (RestartForceExitStatus=17, issue #347); on Windows
-// we os.Exit(1) and rely on the SCM Recovery Actions configured at
-// service install time. Both paths assume the agent is supervised —
-// running waired-agent under nohup will simply terminate the daemon.
-// Implementation lives in restart_unix.go / restart_windows.go.

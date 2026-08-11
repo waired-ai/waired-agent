@@ -65,9 +65,10 @@ import (
 
 const inferenceServicePort uint16 = 9474
 
-// restartRequestedExitCode is the agent's "restart me" exit status. The value
-// and the unit directives that honour it are owned by internal/platform/service,
-// which renders the unit; this alias keeps the exit sites readable (#347).
+// restartRequestedExitCode is the agent's "restart me" exit status. The value,
+// the unit directives that honour it, and the per-OS mechanism that requests it
+// are owned by internal/platform/service, which renders the unit; this alias
+// keeps the exit site below readable (#347).
 const restartRequestedExitCode = service.RestartRequestedExitCode
 
 // bootRefreshTimeout bounds the pre-flight token refresh that activation
@@ -77,10 +78,11 @@ const restartRequestedExitCode = service.RestartRequestedExitCode
 // for a service that starts before DHCP settles — does not sit here.
 const bootRefreshTimeout = 10 * time.Second
 
-// restartRequested is set by the management API's RestartScheduler
-// just before it SIGTERMs the process, turning the subsequent clean
-// shutdown into an exit-17 "restart me" signal for systemd.
-var restartRequested atomic.Bool
+// The restart intent lives in internal/platform/service now
+// (service.RequestRestart / service.RestartRequested). It moved because
+// the Windows SCM handler has to read it and cannot reach a variable in
+// package main — which is why exit 17 never reached the SCM at all
+// before #684.
 
 func main() {
 	// Decode this binary's UTF-8 output as UTF-8 on a Windows console (#629).
@@ -109,7 +111,11 @@ func main() {
 		os.Exit(1)
 	}
 	restoreConsole()
-	if restartRequested.Load() {
+	// The foreground exit. Under the Windows SCM this line is unreachable
+	// by construction — Dispatch returns handled=true above and exits with
+	// svc.Run's rc — so svcHandler.Execute reports the same intent to the
+	// SCM itself (#684).
+	if service.RestartRequested() {
 		os.Exit(restartRequestedExitCode)
 	}
 }
@@ -344,16 +350,18 @@ func run(ctx context.Context, args []string) error {
 	claudeRouting := newClaudeRoutingController(*stateDir, claudeRoutingPol, logger).
 		WithObservability(obsRing)
 
-	// supervisedRestart marks the restart intent before the SIGTERM so the
-	// otherwise-clean shutdown exits 17 and systemd/SCM/launchd brings the
-	// agent back up (issue #347). Since #812 this is the FALLBACK for the
-	// preferred-model switch (cross-engine / wedged engine / unenrolled); the
-	// common case swaps the model in process with no restart. Shared by the
-	// management RestartScheduler and the provider's wedged-engine self-heal.
-	supervisedRestart := func() {
-		restartRequested.Store(true)
-		management.DefaultRestartScheduler()
-	}
+	// supervisedRestart records the restart intent and hands off to the
+	// per-OS mechanism, so the otherwise-clean shutdown reads as "restart
+	// me" to systemd / launchd / the SCM rather than as a fault (issue
+	// #347). Since #812 this is the FALLBACK for the preferred-model
+	// switch (cross-engine / wedged engine / unenrolled); the common case
+	// swaps the model in process with no restart. Shared by the management
+	// RestartScheduler and the provider's wedged-engine self-heal.
+	//
+	// The intent flag and the mechanism both live in platform/service now
+	// (#684): the Windows SCM handler has to read the flag too, and it
+	// never reaches main()'s exit below.
+	supervisedRestart := service.RequestRestart
 
 	sb := &switchboard{}
 	// preferencePath is preferred-model.json, and this is the ONLY place

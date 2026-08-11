@@ -102,6 +102,12 @@ func (h *svcHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, stat
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Publish the stop lever so a restart request can bring the daemon
+	// down through this context instead of killing the process (#684).
+	// Cleared on the way out so a late request cannot cancel a context
+	// nobody is running on.
+	scmStop.Store(&cancel)
+	defer scmStop.Store(nil)
 
 	done := make(chan error, 1)
 	go func() { done <- h.run(ctx, h.args) }()
@@ -135,6 +141,22 @@ func (h *svcHandler) Execute(_ []string, requests <-chan svc.ChangeRequest, stat
 				writeEventlogError(fmt.Sprintf("run() exited: %v", err))
 			}
 			status <- svc.Status{State: svc.Stopped}
+			// A restart the agent asked for is reported AS ITSELF (#684).
+			// svcSpecificEC=true makes x/sys set
+			// Win32ExitCode = ERROR_SERVICE_SPECIFIC_ERROR and
+			// ServiceSpecificExitCode = 17, so `sc queryex` and the
+			// service diagnostics can name it instead of showing the
+			// bare failure a plain exit 1 produces. It is still a
+			// non-zero stop, which is what makes the recovery actions
+			// installed by applyRecoveryConfig fire — with
+			// SetRecoveryActionsOnNonCrashFailures(true) (#315) doing
+			// the work, since this is a clean STOPPED, not a crash.
+			if RestartRequested() {
+				writeEventlogError(fmt.Sprintf(
+					"the agent asked to be restarted; reporting exit %d so the SCM restarts it",
+					RestartRequestedExitCode))
+				return true, RestartRequestedExitCode
+			}
 			return false, 1
 		}
 	}

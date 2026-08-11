@@ -268,22 +268,40 @@ func (m darwinManager) Stop() error {
 // small.
 //
 // Notable choices:
+//
 //   - No UserName key, so the job runs as root (the macOS analog of
 //     Windows LocalSystem). Run-as identity rationale is at the top of
 //     this file.
+//
 //   - RunAtLoad=true so the agent starts the moment launchctl
 //     bootstrap finishes (and again on every boot).
+//
 //   - KeepAlive {SuccessfulExit=false} so a clean exit (the user
 //     uninstalled, or the daemon hit a graceful "config invalid, refuse
 //     to start" path) does not flap the agent, but any crash brings it
 //     back.
+//
+//     This is also what honours RestartRequestedExitCode (#684): exit 17
+//     is non-zero, so launchd restarts the job, and a preferred-model
+//     switch completes on macOS the same way it does under systemd. What
+//     it CANNOT do is tell 17 apart from a crash — KeepAlive is a dict of
+//     conditions (SuccessfulExit, Crashed, NetworkState, PathState,
+//     OtherJobEnabled) with no per-exit-code key — so an intentional
+//     restart and a fault look identical to launchd, share the same
+//     ThrottleInterval, and read the same in `launchctl print`.
+//     Distinguishing them would mean moving the decision out of launchd
+//     into the process. RestartOnExitFor("darwin") states this, and one
+//     table test on the Linux leg keeps all three OSes' answers in view.
+//
 //   - ProcessType=Background tells App Nap to leave us alone — the
 //     agent is doing useful overlay-routing work even when no UI is
 //     visible.
+//
 //   - StandardOutPath / StandardErrorPath under /Library/Logs (a
 //     system location, since the daemon runs as root) so a tail-able
 //     file makes triage easier and matches systemd's `journalctl -u`
 //     ergonomic.
+//
 //   - EnvironmentVariables{HOME=StateDir}: launchd exports no $HOME to a
 //     system daemon (systemd derives one from User=), so subprocesses
 //     that resolve ~ die — `ollama serve` aborted with "$HOME is not
