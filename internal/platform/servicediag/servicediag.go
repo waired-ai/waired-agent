@@ -18,6 +18,7 @@ package servicediag
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -189,14 +190,22 @@ func explainLinux(running bool, events []Event) Result {
 }
 
 func explainDarwin(running bool, events []Event) Result {
-	// launchd reports the previous run's exit status; anything nonzero is the
+	// launchd reports the previous run's exit status; a nonzero one is the
 	// daemon having died rather than been stopped.
-	if code := property(events, "last exit code"); code != "" && code != "0" {
+	//
+	// It has to be read as a NUMBER, not merely as "not the string 0".
+	// launchd's healthy steady state prints `last exit code = (never
+	// exited)`, and a string compare let that through into the "exited with
+	// an error (status (never exited))" sentence — a warning that
+	// contradicts itself, on a host whose service the same doctor run
+	// reported as up and serving (#652). A value that is not a number is
+	// not evidence of anything, so it falls through to quietResult.
+	if code, ok := exitCode(property(events, "last exit code")); ok && code != 0 {
 		return Result{
 			Status:   statusFor(running, Failed),
-			Cause:    "The Waired background service exited with an error (status " + code + ").",
+			Cause:    fmt.Sprintf("The Waired background service exited with an error (status %d).", code),
 			Hint:     "Check /Library/Logs/waired-agent.err.log, or start it from the Waired menu.",
-			Evidence: evidenceOr(events, "launchd: last exit code = "+code),
+			Evidence: evidenceOr(events, fmt.Sprintf("launchd: last exit code = %d", code)),
 		}
 	}
 	if property(events, "state") == "not running" {
@@ -237,6 +246,21 @@ func quietResult(running bool) Result {
 	// is worse than saying nothing: the caller already reports the daemon as
 	// unreachable.
 	return Result{}
+}
+
+// exitCode reads a service manager's "last exit code" value as a number.
+//
+// launchctl prints `(never exited)` there for a job that has been up since
+// it was loaded — the healthy steady state — and other non-numeric words
+// for states that are equally not an exit status. Only a number is
+// evidence about how the last run ended, so anything else reports false
+// and the caller stays quiet (#652).
+func exitCode(v string) (int, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func restartSuffix(nRestarts string) string {

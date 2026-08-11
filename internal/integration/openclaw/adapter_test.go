@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -372,6 +373,61 @@ func TestAudit_MissingThenOK(t *testing.T) {
 		if (f.Subject == "openclaw plugin" || f.Subject == "openclaw config") && f.Status != integration.StatusOK {
 			t.Errorf("expected OK for %q, got %s: %s", f.Subject, f.Status, f.Detail)
 		}
+	}
+}
+
+// TestAudit_InstallationRowIsHonestWithoutABinary wires this adapter to
+// the shared decision in integration.InstallationFinding (#652). The
+// judgement itself is table-tested there; this proves the adapter passes
+// the right labels and that a ~/.openclaw with no binary on PATH does not
+// come back as a tick with an empty `binary=`.
+func TestAudit_InstallationRowIsHonestWithoutABinary(t *testing.T) {
+	a := New()
+	opts := newOpts(t)
+	// A ~/.openclaw carrying content waired did not write is what makes
+	// Detect report Found without a binary — configDirLooksInstalled
+	// ignores waired's own footprint on purpose (waired#753). Nothing named
+	// `openclaw` is on PATH, so this is the observed host's exact shape.
+	if err := os.MkdirAll(ConfigDir(opts.HomeDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ConfigDir(opts.HomeDir), "sessions.db"),
+		[]byte("not waired's"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	findings, err := a.Audit(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row *integration.AuditFinding
+	for i := range findings {
+		if findings[i].Subject == "openclaw installation" {
+			row = &findings[i]
+		}
+	}
+	if row == nil {
+		t.Fatal("no openclaw installation row")
+	}
+	det, err := a.Detect(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !det.Found {
+		t.Fatalf("Apply did not make the config dir detectable; det = %+v", det)
+	}
+	if det.BinaryPath != "" {
+		t.Skipf("this host really does have %s on PATH; the case under test cannot occur", det.BinaryPath)
+	}
+	// Found via the config dir alone: the #652 shape.
+	if row.Status != integration.StatusSkip {
+		t.Errorf("status = %s, want skip — a directory without a binary is not an installation (detail %q)",
+			row.Status, row.Detail)
+	}
+	if strings.Contains(row.Detail, "binary=") {
+		t.Errorf("detail = %q: an empty binary= field is the #652 defect", row.Detail)
+	}
+	if !strings.Contains(row.Detail, "~/.openclaw is present") {
+		t.Errorf("detail = %q, want it to name what IS there", row.Detail)
 	}
 }
 

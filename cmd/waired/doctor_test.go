@@ -135,6 +135,22 @@ func TestDoctorHomeNotice(t *testing.T) {
 	}
 }
 
+// "1 findings need attention" was the literal closing line on a host with
+// a single failure (#652). Four rendered correctly, so the defect only
+// showed on the count an operator is most likely to see.
+func TestFindingsSummary_Plural(t *testing.T) {
+	cases := map[int]string{
+		0: "0 findings need attention",
+		1: "1 finding needs attention",
+		2: "2 findings need attention",
+	}
+	for n, want := range cases {
+		if got := findingsSummary(n); got != want {
+			t.Errorf("findingsSummary(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
 func TestPhaseFinding_PausedEmitsWarn(t *testing.T) {
 	dir := t.TempDir()
 	w := state.NewWriter(dir, state.State{Phase: state.PhasePaused, GatewayURL: "http://127.0.0.1:9473", GatewayToken: "tok"})

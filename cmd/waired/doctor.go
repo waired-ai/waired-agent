@@ -112,9 +112,20 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 		// CI-friendly: non-zero when there's nothing the operator can
 		// claim is fine. Soft warnings (StatusWarn / StatusSkip) do
 		// not contribute.
-		return fmt.Errorf("waired doctor: %d findings need attention (see above)", countFails(findings))
+		return fmt.Errorf("waired doctor: %s (see above)", findingsSummary(countFails(findings)))
 	}
 	return nil
+}
+
+// findingsSummary phrases the closing count. Split out and pluralised
+// because "1 findings need attention" was the literal output on a host
+// with a single failure (#652); "4 findings" was already correct, so the
+// bug only ever showed on the case an operator is most likely to hit.
+func findingsSummary(n int) string {
+	if n == 1 {
+		return "1 finding needs attention"
+	}
+	return fmt.Sprintf("%d findings need attention", n)
 }
 
 // doctorHome is whose home directory this doctor run inspects.
