@@ -68,10 +68,15 @@ it_log "repo host = $GW"
 # called directly so the harness needs no `make` (absent on the dev box)
 # and can skip the cgo/GTK waired-tray build unless --with-tray.
 build_deb() {
-  local ver pkgver ldf
-  ver="$(git -C "$ROOT" rev-parse --short HEAD)"
-  pkgver="0.0.0-$ver"
-  ldf="-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$ver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$ver"
+  local sha pkgver ldf
+  sha="$(git -C "$ROOT" rev-parse --short HEAD)"
+  pkgver="0.0.0-$sha"
+  # Version and BuildSHA are DIFFERENT strings, as they are in a real build.
+  # This harness used to stamp the bare SHA into both, which is precisely the
+  # shape of #631 — so the one defect it was best placed to catch, it
+  # reproduced instead. $pkgver is the dev version the harness already
+  # computes for the package; the binary now reports the same thing.
+  ldf="-s -w -X github.com/waired-ai/waired-agent/internal/buildinfo.Version=$pkgver -X github.com/waired-ai/waired-agent/internal/buildinfo.BuildSHA=$sha"
 
   ( cd "$ROOT"
     mkdir -p bin/linux_amd64 dist/nfpm

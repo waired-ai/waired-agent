@@ -300,7 +300,8 @@ on macOS/Windows) and compares it against `waired version`, caching the
 result; `GET /waired/v1/update/status` returns the cached result for the
 tray to poll cheaply. The *apply* is always client-driven under
 elevation — the daemon never installs. Dev/edge builds
-(`0.0.0-<sha>` and the `<core>-edge.<ts>+<sha>` / `<core>~edge.<ts>+<sha>`
+(`0.0.0-dev.g<sha>` from a bare `make`, `0.0.0-<sha>` from the installtest
+harnesses, and the `<core>-edge.<ts>+<sha>` / `<core>~edge.<ts>+<sha>`
 edge versions) are never *proactively* flagged (the dotted-version compare
 can't rank timestamped edge builds, so the tray never prompts an edge host).
 A manual `waired update` on an edge host still proceeds to the installer,

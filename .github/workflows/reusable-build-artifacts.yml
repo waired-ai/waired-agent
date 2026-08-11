@@ -8,8 +8,7 @@
 #
 # Version handling keys off the *caller's* trigger via the `github`
 # context (which, inside a workflow_call workflow, reflects the calling
-# event). The "Resolve build version" step below computes two strings
-# from it:
+# event). The `version` job below computes two strings from it:
 #   - tag push (release.yml): both = the tag with leading `v` stripped
 #     (e.g. 0.0.1-rc11) — unchanged stable behaviour.
 #   - non-tag (edge.yml, push to main / dispatch): a SemVer prerelease off
@@ -21,6 +20,15 @@
 # So this single matrix serves both release.yml (tagged) and edge.yml
 # (main-tracking) with no inputs. DRY-up of the previously-duplicated
 # build jobs — see #282.
+#
+# It is its own JOB rather than a step in the matrix because a step runs
+# once per leg, each calling `date -u` on its own runner at its own start
+# time: one pipeline emitted 0.0.2-edge.20260809164706+c0e2a1f on macOS,
+# ...164711 on Windows and ...164733 in the .deb, 27 seconds apart
+# (waired-agent#631). buildinfo.Version is the reuse key for the
+# install-time host measurements (host-memory.json, host-speed.json), so
+# the same commit's amd64 and arm64 artifacts disagreeing about their
+# version is not cosmetic. One job, one value, fanned out below.
 name: reusable-build-artifacts
 
 on:
@@ -39,7 +47,53 @@ defaults:
     shell: bash
 
 jobs:
+  # Single source of truth for the version stamped into every artifact this
+  # workflow builds, resolved once so all four legs agree. See the file
+  # header for the scheme and why this is a job.
+  #   semver -> Go buildinfo (ldflags VERSION), Windows Inno AppVersion,
+  #             macOS VERSION file.
+  #   debver -> the .deb Version field (PKG_VERSION). nfpm's version_schema
+  #             is 'none', so the SemVer-`-` -> Debian-`~` rewrite is here.
+  version:
+    name: resolve build version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      semver: ${{ steps.resolve.outputs.semver }}
+      debver: ${{ steps.resolve.outputs.debver }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history + tags so the edge version can `git describe` the
+          # latest stable v* tag.
+          fetch-depth: 0
+
+      - name: Resolve build version
+        id: resolve
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            v="${GITHUB_REF_NAME#v}"
+            semver="${v}"
+            debver="${v}"
+          else
+            core="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+            core="${core#v}"
+            core="${core%%[-+]*}"
+            [[ -n "${core}" ]] || core="0.0.0"
+            ts="$(date -u +%Y%m%d%H%M%S)"
+            sha="$(git rev-parse --short HEAD)"
+            semver="${core}-edge.${ts}+${sha}"
+            debver="${core}~edge.${ts}+${sha}"
+          fi
+          echo "semver=${semver}" >> "$GITHUB_OUTPUT"
+          echo "debver=${debver}" >> "$GITHUB_OUTPUT"
+          echo "::notice::build version: semver=${semver} deb=${debver}"
+
   build:
+    needs: version
     # All four legs run on GitHub-hosted runners: the repo is public, so
     # hosted standard runners are free, and the ephemeral hosted runner +
     # GitHub OIDC give a stronger SLSA-style builder provenance chain
@@ -59,6 +113,12 @@ jobs:
     # contents:write are needed only by the caller's publish job.
     permissions:
       contents: read
+    # Job-level, so every leg sees the same two strings without repeating
+    # the `needs.` expression at each use site — and so a new leg cannot be
+    # added without them.
+    env:
+      WAIRED_SEMVER: ${{ needs.version.outputs.semver }}
+      WAIRED_DEB_VERSION: ${{ needs.version.outputs.debver }}
     strategy:
       fail-fast: false
       matrix:
@@ -96,37 +156,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          # Full history + tags so the edge version's "Resolve build
-          # version" step can `git describe` the latest stable v* tag.
+          # Full history + tags: BUILD_SHA comes from `git rev-parse` in the
+          # Makefile, and the darwin/windows dist targets read tags too.
           fetch-depth: 0
-
-      - name: Resolve build version
-        # Single source of truth for the version stamped into every
-        # artifact this matrix builds. See the file header for the scheme.
-        #   WAIRED_SEMVER      -> Go buildinfo (ldflags), Windows Inno
-        #                         AppVersion, macOS VERSION file.
-        #   WAIRED_DEB_VERSION -> the .deb Version field. nfpm's
-        #                         version_schema is 'none', so we do the
-        #                         SemVer-`-` -> Debian-`~` rewrite here.
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            v="${GITHUB_REF_NAME#v}"
-            semver="${v}"
-            debver="${v}"
-          else
-            core="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
-            core="${core#v}"
-            core="${core%%[-+]*}"
-            [[ -n "${core}" ]] || core="0.0.0"
-            ts="$(date -u +%Y%m%d%H%M%S)"
-            sha="$(git rev-parse --short HEAD)"
-            semver="${core}-edge.${ts}+${sha}"
-            debver="${core}~edge.${ts}+${sha}"
-          fi
-          echo "WAIRED_SEMVER=${semver}" >> "$GITHUB_ENV"
-          echo "WAIRED_DEB_VERSION=${debver}" >> "$GITHUB_ENV"
-          echo "::notice::build version: semver=${semver} deb=${debver}"
 
       - uses: actions/setup-go@v6
         with:
@@ -157,9 +189,45 @@ jobs:
         if: matrix.goos == 'linux'
         run: |
           set -euo pipefail
+          # BOTH are needed, and they stamp different things. PKG_VERSION is
+          # the .deb's own Version field; VERSION is what the Makefile puts
+          # in the BINARY through -ldflags. This leg used to export only the
+          # first, so the Makefile's `VERSION ?= git rev-parse --short HEAD`
+          # fallback won and every Linux binary reported a bare commit SHA as
+          # its version while macOS and Windows carried the real one
+          # (waired-agent#631). nfpm repackages the binary this builds, so
+          # the package version looked right and hid it.
+          export VERSION="${WAIRED_SEMVER}"
           export PKG_VERSION="${WAIRED_DEB_VERSION}"
           make deb-${{ matrix.goarch }}
           ls -lh dist/
+
+      - name: The .deb's own binary reports the build version
+        if: matrix.goos == 'linux'
+        # CI had never once run a version command on a binary it built, which
+        # is why #631 shipped: every check upstream of here reads the version
+        # from the same place that produced it. This unpacks the artifact that
+        # actually goes to users and asks it.
+        run: |
+          set -euo pipefail
+          deb="$(ls dist/waired_*.deb)"
+          tmp="$(mktemp -d)"
+          dpkg-deb --fsys-tarfile "$deb" | tar -x -C "$tmp" ./usr/bin/waired
+          out="$("$tmp/usr/bin/waired" version --json)"
+          echo "$out"
+          ver="$(printf '%s' "$out" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+          sha="$(printf '%s' "$out" | sed -n 's/.*"buildSHA":"\([^"]*\)".*/\1/p')"
+          if [[ "${ver}" != "${WAIRED_SEMVER}" ]]; then
+            echo "::error::the .deb's waired reports version=${ver}, want ${WAIRED_SEMVER}"
+            exit 1
+          fi
+          # The exact signature of #631: with VERSION unset both ldflags
+          # resolve to `git rev-parse --short HEAD`, so the two agree and the
+          # version carries strictly less information than the other OSes'.
+          if [[ "${ver}" == "${sha}" ]]; then
+            echo "::error::version and buildSHA are the same string (${ver}) — the version ldflag did not reach the build"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v7
         if: matrix.goos == 'linux'

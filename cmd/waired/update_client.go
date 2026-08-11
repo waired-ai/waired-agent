@@ -182,12 +182,17 @@ func shouldStopUpToDate(st *management.UpdateStatus, requested, host string, for
 // detectHostChannel reports the release channel this host currently tracks
 // ("edge" / "stable"), or "" when it can't tell. It drives which installer
 // mirror is fetched and whether the apply path may report "up to date". The
-// compiled-in version is the most portable signal (macOS/Windows edge builds
-// carry "edge." in buildinfo.Version); Linux .deb edge binaries carry only a
-// short SHA, so there the installed package version is the ground truth (a
-// prior buggy update may have left a stale stable apt source while an edge
-// build is installed — dpkg-first detection recovers edge), with the apt
-// source files as the fallback when nothing is installed via dpkg.
+// compiled-in version is the most portable signal: every edge build carries
+// "edge." in buildinfo.Version.
+//
+// The dpkg branch below predates that being true on Linux. Until #631 the
+// .deb build never received the version ldflag, so Linux edge binaries
+// reported a bare short SHA and the first check could not fire there; the
+// installed package version was the only ground truth. It still earns its
+// place — a prior buggy update may have left a stale stable apt source while
+// an edge build is installed, and dpkg-first detection recovers edge — but it
+// is now the recovery path it reads as, not the primary one. The apt source
+// files remain the fallback when nothing is installed via dpkg.
 func detectHostChannel(goos string) string {
 	if strings.Contains(buildinfo.Version, "edge.") {
 		return "edge"

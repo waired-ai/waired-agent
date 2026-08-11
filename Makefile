@@ -4,8 +4,16 @@
 # directly.
 
 SHELL := /bin/bash
-VERSION ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 BUILD_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# VERSION's fallback is a real (if obviously local) SemVer, NOT the bare
+# short SHA it used to be. A build that forgets to pass VERSION should be
+# recognisable as one: with the old default it was indistinguishable from
+# BUILD_SHA, so the CI leg that dropped it shipped Linux binaries reporting
+# `waired c0e2a1f (c0e2a1f)` for a year and nothing could tell (#631).
+# `0.0.0` is also what internal/update's isDevVersion() already looks for.
+# `.g<sha>` rather than `+<sha>`: the docker target below tags an image with
+# this string, and `+` is not a legal character in a Docker tag.
+VERSION ?= 0.0.0-dev.g$(BUILD_SHA)
 
 # LDFLAGS_VERSION stamps the build version + commit into every binary via
 # internal/buildinfo — read by `waired version`, enrollment (ClientVersion),
@@ -513,18 +521,25 @@ integration-runtime:
 #
 # Requires nfpm in PATH (https://nfpm.goreleaser.com/). PKG_VERSION
 # is normalised so the Debian version comparator works regardless of
-# whether VERSION is a tag or a short SHA.
+# whether it is a tag or a local dev string.
 # ---------------------------------------------------------------------
 
 GOARCHES_DEB ?= amd64 arm64
 
-# Local-dev fallback only: force a leading digit for Debian's
-# upstream_version rules. CI passes PKG_VERSION explicitly — the tag (v
-# stripped) for releases, or <core>~edge.<ts>+<sha> for edge — from
-# .github/workflows/reusable-build-artifacts.yml's "Resolve build
-# version" step (nfpm version_schema is 'none', so the value is used
-# verbatim). Override locally with `make deb-all PKG_VERSION=1.2.3`.
-PKG_VERSION ?= 0.0.0-$(VERSION)
+# Local-dev fallback only: a leading digit for Debian's upstream_version
+# rules, and `~` so it sorts below every real release — the same rewrite CI
+# applies to the edge version. Derived from BUILD_SHA rather than VERSION so
+# it does not double up VERSION's own `0.0.0-dev.` prefix.
+#
+# CI passes PKG_VERSION explicitly — the tag (v stripped) for releases, or
+# <core>~edge.<ts>+<sha> for edge — from the `version` job in
+# .github/workflows/reusable-build-artifacts.yml (nfpm version_schema is
+# 'none', so the value is used verbatim). That job also passes VERSION, which
+# is a DIFFERENT string and stamps a different thing: PKG_VERSION is the
+# package's Version field, VERSION goes into the binary via LDFLAGS_VERSION.
+# Passing only one of them is #631. Override locally with
+# `make deb-all PKG_VERSION=1.2.3`.
+PKG_VERSION ?= 0.0.0~dev.g$(BUILD_SHA)
 
 .PHONY: build-linux-multiarch
 build-linux-multiarch: $(addprefix build-linux-,$(GOARCHES_DEB))
