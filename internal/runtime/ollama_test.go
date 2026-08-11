@@ -1110,6 +1110,92 @@ func TestOllamaAdapter_ProcessEnv_OmittedTuningKeyStillDropsInherited(t *testing
 	}
 }
 
+// ollamaOnly narrows a serve env to the OLLAMA_* keys. processEnv passes the
+// whole parent environment through, so an unfiltered %v buries the assertion
+// under the developer's shell.
+func ollamaOnly(env []string) []string {
+	out := make([]string, 0, 8)
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "OLLAMA_") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// TestOllamaAdapter_ProcessEnv_CapsResidentModelsAtOne pins the delivery of
+// MaxResidentModels to `ollama serve`.
+//
+// PRODUCT CONTRACT (owner decision 2026-08-10, waired-agent#644: only one
+// model may be loaded into (V)RAM at a time). Unconditional on purpose: the
+// #621 tuning variables are only computed once a serve target resolves, and
+// the host-speed measurement that this cap exists to protect runs on hosts
+// that have no target yet.
+func TestOllamaAdapter_ProcessEnv_CapsResidentModelsAtOne(t *testing.T) {
+	// No computed tuning — the fresh-install case, where ollamaTuning.Env()
+	// emits nothing at all.
+	a := NewOllamaAdapter(OllamaConfig{
+		Binary: "/fake/ollama", Host: "127.0.0.1", Port: 9475,
+	})
+	env := a.processEnv()
+	if !contains(env, "OLLAMA_MAX_LOADED_MODELS=1") {
+		t.Errorf("untuned serve env missing the residency cap: %v", ollamaOnly(env))
+	}
+	if n := countPrefix(env, "OLLAMA_MAX_LOADED_MODELS="); n != 1 {
+		t.Errorf("OLLAMA_MAX_LOADED_MODELS= appears %d times, want exactly 1", n)
+	}
+
+	// With a computed tuning it is still there, and is not one of the
+	// tuning keys (those are dropped as a set when a tuning exists).
+	b := NewOllamaAdapter(OllamaConfig{
+		Binary: "/fake/ollama", Host: "127.0.0.1", Port: 9475,
+	})
+	b.SetModelEnv([]string{
+		"OLLAMA_CONTEXT_LENGTH=32768",
+		"OLLAMA_KV_CACHE_TYPE=f16",
+		"OLLAMA_NUM_PARALLEL=1",
+	})
+	if benv := b.processEnv(); !contains(benv, "OLLAMA_MAX_LOADED_MODELS=1") {
+		t.Errorf("tuned serve env missing the residency cap: %v", ollamaOnly(benv))
+	}
+}
+
+// TestOllamaAdapter_ProcessEnv_ResidencyCapYieldsToTheOperator pins the
+// override half of the same contract: a line in /etc/waired/agent.env reaches
+// the engine.
+//
+// It is read explicitly rather than left to the child's duplicate resolution
+// because processEnv drops the keys it emits — emitting ours unconditionally
+// would delete the operator's line before it could win. waired-agent#644
+// verified the env-file route end to end via /proc/<pid>/environ.
+func TestOllamaAdapter_ProcessEnv_ResidencyCapYieldsToTheOperator(t *testing.T) {
+	t.Setenv("OLLAMA_MAX_LOADED_MODELS", "3")
+
+	a := NewOllamaAdapter(OllamaConfig{
+		Binary: "/fake/ollama", Host: "127.0.0.1", Port: 9475,
+	})
+	env := a.processEnv()
+	if !contains(env, "OLLAMA_MAX_LOADED_MODELS=3") {
+		t.Errorf("the operator's residency cap must reach the engine: %v", ollamaOnly(env))
+	}
+	if contains(env, "OLLAMA_MAX_LOADED_MODELS=1") {
+		t.Errorf("our default must not be emitted alongside the operator's: %v", ollamaOnly(env))
+	}
+	if n := countPrefix(env, "OLLAMA_MAX_LOADED_MODELS="); n != 1 {
+		t.Errorf("OLLAMA_MAX_LOADED_MODELS= appears %d times, want exactly 1", n)
+	}
+
+	// Set-but-empty is the opt-out: the operator asked for the engine's own
+	// default, so we add nothing back.
+	t.Setenv("OLLAMA_MAX_LOADED_MODELS", "")
+	b := NewOllamaAdapter(OllamaConfig{
+		Binary: "/fake/ollama", Host: "127.0.0.1", Port: 9475,
+	})
+	if benv := b.processEnv(); contains(benv, "OLLAMA_MAX_LOADED_MODELS=1") {
+		t.Errorf("an explicitly cleared cap must not be re-armed: %v", ollamaOnly(benv))
+	}
+}
+
 // TestOllamaAdapter_SetModelEnv_NextSpawn verifies the #621 degrade path
 // mechanism: swapping the model env then re-spawning (after Stop)
 // launches `ollama serve` with the recomputed values.
