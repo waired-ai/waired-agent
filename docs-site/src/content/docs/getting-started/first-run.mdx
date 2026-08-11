@@ -243,8 +243,11 @@ itself and asks the full set of questions:
 
 6. **Choose the AI model for this computer** — a numbered list of the bundled
 	models, with the one recommended for this hardware preselected; press Enter
-	to take it. A model that does not fit this computer's memory is listed with
-	the reason, and picking it anyway is confirmed explicitly (**Download it
+	to take it. A model that fits but cannot keep a whole coding session on the
+	graphics card says how much of its context cache is read from system RAM
+	instead — the same figure `waired models ls --detail` prints. A model that
+	does not fit this computer's memory at all is listed with the reason, and
+	picking it anyway is confirmed explicitly (**Download it
 	anyway? `[y/N]`** — **No** returns to the list). Choosing **0) Don't
 	download a model now** finishes setup with the AI software installed and no
 	model, which is a normal state, not an error: pick one later from the
