@@ -100,9 +100,17 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if !got || f.disables.Load() != 0 {
 			t.Fatalf("= %v (disables %d), want install with no disable", got, f.disables.Load())
 		}
-		if !strings.Contains(out.String(), "recommended: Qwen3.5 9B") ||
+		if !strings.Contains(out.String(), "This computer can run AI models locally. You choose which model in a moment.") ||
 			!strings.Contains(out.String(), "Run AI models on this computer?") {
-			t.Errorf("prompt missing the recommendation or the question: %q", out.String())
+			t.Errorf("prompt missing the fit sentence or the question: %q", out.String())
+		}
+		// PRODUCT CONTRACT (waired-agent#649): step 4 names no model. The
+		// recommendation it could compute here is taken before the engine
+		// exists, so it can differ from the picker's — which is exactly what
+		// the issue observed. This test inverts the previous assertion, which
+		// required the name to be printed.
+		if strings.Contains(out.String(), "Qwen3.5 9B") || strings.Contains(out.String(), "recommended:") {
+			t.Errorf("step 4 named a model: %q", out.String())
 		}
 		if !strings.Contains(out.String(), "(default: Yes)") {
 			t.Errorf("fit host must default Yes: %q", out.String())
@@ -176,8 +184,57 @@ func TestConfirmDaemonPathEngineInstall(t *testing.T) {
 		if !got {
 			t.Fatal("want the safe default install when the catalog cannot ground a warning")
 		}
-		if strings.Contains(out.String(), "recommended:") || strings.Contains(out.String(), "below the recommended spec") {
-			t.Errorf("no recommendation data, so neither clause may print: %q", out.String())
+		if strings.Contains(out.String(), "below the recommended spec") {
+			t.Errorf("no catalog data, so no warning may print: %q", out.String())
 		}
 	})
+}
+
+// TestStep4AndThePickerAgreeOnTheRecommendation is the regression pin for
+// waired-agent#649: the wizard named one model at step 4 and a different
+// one in the picker seconds later, because the same daemon-side
+// recommendation is computed before and after the engine install and the
+// engine version changes which variants qualify.
+//
+// PRODUCT CONTRACT (waired-agent#649, owner decision 2026-08-11): one
+// surface names the model, and it is the picker — the one that asks after
+// the facts are in. So the pin is that step 4 names nothing at all, which
+// is what makes the two unable to disagree.
+func TestStep4AndThePickerAgreeOnTheRecommendation(t *testing.T) {
+	// The two catalogs the issue actually saw on one host: before the
+	// engine install the floored variants are excluded and the dense 27B
+	// wins; after it, the 35B-A3B does.
+	before := catalogDetailResp{Families: []catalogDetailFamily{
+		{ModelID: "qwen3.6-27b", DisplayName: "Qwen3.6 27B", Fits: true, RecommendedPick: true},
+		{ModelID: "qwen3.6-35b-a3b", DisplayName: "Qwen3.6 35B-A3B", Fits: true},
+	}}
+	after := catalogDetailResp{Families: []catalogDetailFamily{
+		{ModelID: "qwen3.6-27b", DisplayName: "Qwen3.6 27B", Fits: true},
+		{ModelID: "qwen3.6-35b-a3b", DisplayName: "Qwen3.6 35B-A3B", Fits: true, RecommendedPick: true},
+	}}
+
+	f := &askFakeDaemon{catalog: before}
+	var step4 strings.Builder
+	if !confirmDaemonPathEngineInstall(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &step4) {
+		t.Fatal("a fit host must default to installing")
+	}
+	for _, name := range []string{"Qwen3.6 27B", "qwen3.6-27b", "Qwen3.6 35B-A3B", "qwen3.6-35b-a3b"} {
+		if strings.Contains(step4.String(), name) {
+			t.Errorf("step 4 named %q; only the picker names a model: %q", name, step4.String())
+		}
+	}
+
+	var list strings.Builder
+	def := renderModelPickerList(&list, after)
+	if def != 2 {
+		t.Errorf("picker default = %d, want the recommended row (2)", def)
+	}
+	if !strings.Contains(list.String(), "Qwen3.6 35B-A3B — recommended for this computer") {
+		t.Errorf("picker row missing the display name: %q", list.String())
+	}
+	// The id spelling is what step 4 was being compared against; the row
+	// now reads like every other surface that names a model.
+	if strings.Contains(list.String(), "qwen3.6-35b-a3b —") {
+		t.Errorf("picker row still names the model by id: %q", list.String())
+	}
 }

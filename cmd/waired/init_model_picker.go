@@ -92,10 +92,7 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 				f = ff
 			}
 		}
-		name := f.DisplayName
-		if name == "" {
-			name = f.ModelID
-		}
+		name := modelPickerName(f)
 		if !f.Fits {
 			warnModelDoesNotFit(out, name, f.DeficitLabel)
 			if !ynPrompt(out, sc, "Download it anyway?", false) {
@@ -170,9 +167,15 @@ func hostHasModelHistory(cat catalogDetailResp) bool {
 // nothing is recommended (the auto-selection would pick nothing there
 // either, waired-ai/waired#1067 R5).
 func renderModelPickerList(out io.Writer, cat catalogDetailResp) (def int) {
+	// The FIRST marked row, matching what step 4 used to read
+	// (waired-agent#649). The daemon marks exactly one — pinned by
+	// TestInferenceCatalog_MarksExactlyOneRecommendedPick — so this
+	// changes no shipped behaviour; it removes a way for two surfaces
+	// reading the same catalog to disagree if that ever slips.
 	for i, f := range cat.Families {
 		if f.RecommendedPick {
 			def = i + 1
+			break
 		}
 	}
 	writePrompt(out)
@@ -190,23 +193,38 @@ func renderModelPickerList(out io.Writer, cat catalogDetailResp) (def int) {
 	return def
 }
 
-// modelPickerRow is one list line: the model id, plus the verdict a
+// modelPickerName is how a model is written to a person: the catalog's
+// display name, falling back to the id for an entry that has none.
+//
+// It exists so every surface that names a model in the install flow
+// spells it the same way. Step 4 used to print the display name while
+// these rows printed bare ids, so the same model read as two different
+// things within one wizard run (waired-agent#649).
+func modelPickerName(f catalogDetailFamily) string {
+	if f.DisplayName != "" {
+		return f.DisplayName
+	}
+	return f.ModelID
+}
+
+// modelPickerRow is one list line: the model's name, plus the verdict a
 // person needs before picking it. Unfit rows carry the same deficit
 // prose `waired models ls --detail` prints, so the two surfaces agree.
 func modelPickerRow(f catalogDetailFamily) string {
+	name := modelPickerName(f)
 	switch {
 	case f.RecommendedPick:
-		return f.ModelID + " — recommended for this computer"
+		return name + " — recommended for this computer"
 	case !f.Fits:
 		if f.Fit != nil && f.Fit.Reason == reasonNoVariantForEngine {
-			return f.ModelID + " — not available on this computer"
+			return name + " — not available on this computer"
 		}
 		if f.DeficitLabel != "" {
-			return f.ModelID + " — " + f.DeficitLabel
+			return name + " — " + f.DeficitLabel
 		}
-		return f.ModelID + " — does not fit in this computer's memory"
+		return name + " — does not fit in this computer's memory"
 	default:
-		return f.ModelID
+		return name
 	}
 }
 
