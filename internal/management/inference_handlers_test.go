@@ -40,6 +40,9 @@ type fakeInference struct {
 	hwProfile  hardware.Profile
 	runtimes   []RuntimeStatus
 	models     []ModelEntry
+	// modelSizes is what the engine would report; nil stands for an engine
+	// that is not answering, which is the common case in these tests.
+	modelSizes map[string]int64
 	selectResp router.Selection
 
 	benchOut      BenchmarkOutcome
@@ -55,6 +58,11 @@ func (f *fakeInference) Status(context.Context) InferenceStatus    { return f.ca
 func (f *fakeInference) Hardware(context.Context) hardware.Profile { return f.hwProfile }
 func (f *fakeInference) Runtimes(context.Context) []RuntimeStatus  { return f.runtimes }
 func (f *fakeInference) ListModels(context.Context) []ModelEntry   { return f.models }
+func (f *fakeInference) ModelSizes(context.Context) map[string]int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.modelSizes
+}
 func (f *fakeInference) PullModel(_ context.Context, m string) (PullJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

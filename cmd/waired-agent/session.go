@@ -492,6 +492,13 @@ func (a sbInfProvider) ListModels(ctx context.Context) []management.ModelEntry {
 	return nil
 }
 
+func (a sbInfProvider) ModelSizes(ctx context.Context) map[string]int64 {
+	if p := a.liveOrNil(); p != nil {
+		return p.ModelSizes(ctx)
+	}
+	return nil
+}
+
 func (a sbInfProvider) PullModel(ctx context.Context, modelOrAlias string) (management.PullJob, error) {
 	if p := a.liveOrNil(); p != nil {
 		return p.PullModel(ctx, modelOrAlias)

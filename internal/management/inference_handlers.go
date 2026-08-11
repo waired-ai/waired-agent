@@ -22,6 +22,17 @@ type InferenceProvider interface {
 	Hardware(ctx context.Context) hardware.Profile
 	Runtimes(ctx context.Context) []RuntimeStatus
 	ListModels(ctx context.Context) []ModelEntry
+	// ModelSizes reports the on-disk bytes of each downloaded model, keyed
+	// by model id. Nil or a missing key means "not known right now" — the
+	// engine holds the figure, so a stopped engine reports nothing rather
+	// than zero.
+	//
+	// Separate from ListModels because it talks to the engine and
+	// ListModels does not. ListModels is also read on a control path
+	// (modelDownloaded, in the preferred-model flow), where an engine
+	// round trip would buy nothing and could hang; only the listing
+	// handler below asks for sizes.
+	ModelSizes(ctx context.Context) map[string]int64
 	// PullModel starts a model download and returns as soon as it is
 	// admitted. ctx bounds the SYNCHRONOUS admission only — the
 	// implementation MUST run the download itself on its own long-lived
@@ -670,7 +681,26 @@ func (s *Server) handleModelsCollection(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method_not_allowed", "GET only"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": s.inference.ListModels(r.Context())})
+	writeJSON(w, http.StatusOK, map[string]any{"models": modelsWithSizes(r.Context(), s.inference)})
+}
+
+// modelsWithSizes is ListModels plus whatever on-disk sizes the engine can
+// account for right now.
+//
+// The size is asked for here rather than inside ListModels because it
+// costs an engine round trip and ListModels is also a control-path read
+// (#661). A stopped or wedged engine reports nothing and the entries go
+// out with whatever the state file holds, which is what this endpoint
+// returned before sizes existed at all.
+func modelsWithSizes(ctx context.Context, p InferenceProvider) []ModelEntry {
+	entries := p.ListModels(ctx)
+	sizes := p.ModelSizes(ctx)
+	for i := range entries {
+		if b := sizes[entries[i].ModelID]; b > 0 {
+			entries[i].SizeBytes = b
+		}
+	}
+	return entries
 }
 
 // handleModelsPull serves POST /waired/v1/models/pull.

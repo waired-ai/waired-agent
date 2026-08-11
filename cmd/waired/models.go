@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/waired-ai/waired-agent/internal/download"
 )
 
 func newModelsCmd() *cobra.Command {
@@ -111,9 +113,13 @@ func runModelsLsBody(mgmtVal string, detailVal bool) error {
 	}
 	fmt.Printf("%-30s %-12s %-8s %-12s %s\n", "MODEL_ID", "STATE", "SIZE", "VARIANT", "ALIASES")
 	for _, m := range resp.Models {
+		// HumanBytes, not a fixed GB divisor: the column only ever held
+		// "-" before (#661), so this is the first time the unit matters,
+		// and a 320 MB model reading "0.3GB" would be the same figure the
+		// download bar shows as "320.0 MB" two commands earlier.
 		size := "-"
 		if m.SizeBytes > 0 {
-			size = fmt.Sprintf("%.1fGB", float64(m.SizeBytes)/1e9)
+			size = download.HumanBytes(m.SizeBytes)
 		}
 		fmt.Printf("%-30s %-12s %-8s %-12s %s\n",
 			m.ModelID, stateOrDash(m.State), size, defaultIfEmpty(m.VariantID, "-"),

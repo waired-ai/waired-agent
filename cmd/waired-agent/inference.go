@@ -2565,6 +2565,53 @@ func (p *agentInferenceProvider) ListModels(_ context.Context) []management.Mode
 	return out
 }
 
+// modelSizesTimeout bounds the engine round trip ModelSizes makes. Short,
+// unlike probeHTTPTimeout: this one sits under an interactive
+// `waired models ls`, where a wedged engine should cost a moment and an
+// empty column rather than ten seconds of nothing.
+const modelSizesTimeout = 2 * time.Second
+
+// ModelSizes reports each downloaded model's on-disk bytes, keyed by model
+// id, by asking the engine.
+//
+// The engine is the source because nothing else has the figure:
+// catalog.ModelState.SizeBytes is declared and read but never written, so
+// `waired models ls` printed "-" in the SIZE column for every model,
+// including the several gigabytes actually on disk (#661). /api/tags
+// reports the on-disk blob size per tag — the same figure the tuning
+// verification already trusts over the manifest's estimate — and one
+// request covers every model.
+//
+// Reading it live rather than recording it at pull time is deliberate: a
+// figure written at pull time would be missing for every model pulled
+// before this shipped, which is exactly the population the report was
+// about.
+//
+// Nil on every uncertainty — a non-ollama engine, an engine that never
+// started, a request that failed or timed out. The caller then shows what
+// the state file holds, which is what this column did before. A stopped
+// engine means the size is unknown, not zero.
+func (p *agentInferenceProvider) ModelSizes(ctx context.Context) map[string]int64 {
+	if p.servingEngine() != catalog.RuntimeOllama || p.ollama == nil {
+		return nil
+	}
+	sizes, err := ollamaTagSizes(ctx, http.DefaultClient, p.ollama.BaseURL(), modelSizesTimeout)
+	if err != nil || len(sizes) == 0 {
+		return nil
+	}
+	state, _ := p.store.Load()
+	out := make(map[string]int64, len(state.Models))
+	for modelID, st := range state.Models {
+		// OllamaTag, not BaseOllamaTag: on a host running a derived
+		// batch tag (#642) the derived model is what occupies the disk,
+		// and it is the tag the engine reports.
+		if b := sizes[st.OllamaTag]; st.OllamaTag != "" && b > 0 {
+			out[modelID] = b
+		}
+	}
+	return out
+}
+
 // servingEngine is the engine the agent actually serves from. The empty
 // string — the unset pointer in unit tests and pre-#557 code paths —
 // means ollama, preserving the historical default so existing behaviour
