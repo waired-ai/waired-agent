@@ -412,6 +412,27 @@ func retryFrame(engine, model string, modelGen int) *signer.InferenceState {
 	return st
 }
 
+// watchingReconciler is newSetupReconciler with one instruction-free
+// frame already folded, which is the state a real daemon is always in by
+// the time a person picks anything.
+//
+// The daemon fetches map frames from boot; a browser choice lands
+// minutes later, so it arrives as a CHANGE this daemon watched. Its
+// FIRST frame is different in kind — a snapshot of whatever the control
+// plane was already carrying, which the control plane never clears and a
+// re-enrolment does not reset (waired-ai/waired#1136). Since #626 the
+// reconciler declines to start a download from that snapshot, so a test
+// that constructs a reconciler and immediately hands it an instruction
+// is testing the leftover path whether or not it means to.
+//
+// Tests about the apply pipeline take this one. Tests about the leftover
+// path take newSetupReconciler directly and say so.
+func watchingReconciler(f setupProvider, cli *controlclient.Client, deviceID string, key ed25519.PrivateKey, logger *slog.Logger) *setupReconciler {
+	r := newSetupReconciler(f, cli, deviceID, key, logger)
+	r.Apply(context.Background(), &signer.InferenceState{})
+	return r
+}
+
 // TestSetupEngineStateIsAskedPerDesiredEngine pins that the reconciler
 // asks about the DESIRED engine kind, and that the answer for one engine
 // does not leak into another.
@@ -470,7 +491,7 @@ func TestSetupEngineStateIsAskedPerDesiredEngine(t *testing.T) {
 // action at most once — one benchmark job, one pull admission.
 func TestSetupApplyIdempotent(t *testing.T) {
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 
 	frame := desiredFrame("", "qwen3-8b-instruct", 2)
@@ -676,7 +697,7 @@ func TestSetupApplySkipsPresentModelAndAnsweredBenchmark(t *testing.T) {
 		modelState: catalog.ModelStateReady,
 		bench:      management.BenchmarkStatusResponse{State: management.BenchmarkStateFailed, Gen: 3, Error: "boom"},
 	}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	r.Apply(context.Background(), desiredFrame("", "qwen3-8b-instruct", 3))
 	if len(f.pulls) != 0 {
 		t.Fatalf("ready model re-pulled: %v", f.pulls)
@@ -704,7 +725,7 @@ func TestSetupApplySkipsPresentModelAndAnsweredBenchmark(t *testing.T) {
 // answering every request.
 func TestSetupDesiredModelBecomesTheServedModel(t *testing.T) {
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 
 	r.Apply(context.Background(), desiredFrame("", "qwen3-8b-instruct", 0))
 
@@ -745,7 +766,7 @@ func TestSetupAlreadyServedModelIsNotReapplied(t *testing.T) {
 // per desired VALUE, not per session.
 func TestSetupDesiredModelChangeIsReapplied(t *testing.T) {
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 
 	r.Apply(ctx, desiredFrame("", "model-a", 0))
@@ -833,7 +854,7 @@ func TestSetupApplyModelCrossEngineFallsBackToPull(t *testing.T) {
 		modelState: catalog.ModelStateNotPresent,
 		applyErr:   errSwapNeedsRestart,
 	}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 	r.Apply(ctx, desiredFrame("", "m-1", 0))
 
@@ -920,7 +941,7 @@ func TestSetupSnapshotStatuses(t *testing.T) {
 // downloaded.
 func TestSetupModelRejectedReportsModelNotFound(t *testing.T) {
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent, applyErr: errors.New("unknown model")}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 
 	frame := desiredFrame("", "no-such-model", 0)
@@ -1019,8 +1040,14 @@ func TestSetupPushDedupes(t *testing.T) {
 func leasedReconciler(t *testing.T, f *fakeSetupProvider, engine, model string) (*setupReconciler, *fakeClock) {
 	t.Helper()
 	c := newFakeClock()
+	// Watching before instructed — see watchingReconciler for why the
+	// very first frame is a different kind of thing (#626). Built by hand
+	// rather than through that helper because the clock has to be in
+	// place before any frame is folded: desiredChangedAt is stamped from
+	// it, and the freshness window is what these tests then move.
 	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
 	r.now = c.now
+	r.Apply(context.Background(), &signer.InferenceState{})
 	r.Apply(context.Background(), desiredFrame(engine, model, 0))
 	return r, c
 }
@@ -1387,7 +1414,7 @@ func TestSetupPullWaitsForEngineInstall(t *testing.T) {
 func TestSetupPullProceedsWithoutDesiredEngine(t *testing.T) {
 	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
 	ctx := context.Background()
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	r.Apply(ctx, desiredFrame("", "m-1", 0))
 	if got := f.pullCount(); got != 1 {
 		t.Fatalf("pulls with no desired engine = %d, want 1", got)
@@ -2279,7 +2306,7 @@ func TestSetupEngineTooOldReportsEngineNotReady(t *testing.T) {
 			"model m-1 requires ollama >= 0.12.0 (engine reports 0.9.0); upgrade the engine or choose another model: %w",
 			errEngineTooOld),
 	}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
 	step := stepByID(t, r.snapshot(ctx), setupStepModelPull)
@@ -2305,7 +2332,7 @@ func TestSetupSwallowedPullDispatchFailsTheModelRow(t *testing.T) {
 			fmt.Errorf("pulls are disabled by config (allow_pull=false): %w", errPullsDisabled),
 			management.ErrModelSwitchUnavailable),
 	}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
 
@@ -2781,7 +2808,7 @@ func TestSetupStateCarriesTheModelRefusal(t *testing.T) {
 		modelState: catalog.ModelStateNotPresent,
 		applyErr:   errEngineTooOld,
 	}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 
 	r.Apply(ctx, desiredFrame("", "m-1", 0))
@@ -2843,7 +2870,7 @@ func TestSetupStateSaysNothingWithoutADesiredModel(t *testing.T) {
 func TestSetupStateDropsTheRefusalWhenTheEngineReappears(t *testing.T) {
 	f := &fakeSetupProvider{engineInstalled: true, modelState: catalog.ModelStateNotPresent}
 	f.applyErr = errEngineTooOld
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 
 	r.Apply(ctx, desiredFrame("ollama", "m-1", 0))
@@ -2987,5 +3014,102 @@ func TestApplyReportsDrivingWhileTheWizardHasNamedOnlyAnEngine(t *testing.T) {
 	if !last.driving {
 		t.Fatal("driving = false while a wizard is mid-setup with its engine written and " +
 			"its model still to come — that is exactly the double download #379 is about")
+	}
+}
+
+// Product contract (waired-agent#626): a desired model this daemon never
+// watched arrive is leftovers, and leftovers do not start a download.
+//
+// The control plane never clears desired_model_id, and a re-enrolment
+// reuses the device row without touching it (waired-ai/waired#1136), so
+// the instruction on a daemon's first frame can be months old. On the
+// rc8 macOS host it was: a July value reached an August install, applied
+// itself with no warning and no question, downloaded 3.4 GB, and the
+// post-install benchmark then backed the whole thing out — a second
+// multi-gigabyte download to arrive at the model the agent had already
+// selected for itself in the first line of its log.
+//
+// Nothing about capacity is asserted here on purpose. Capacity is the
+// only rule allowed to refuse a model and it does not refuse this one
+// (waired-ai/waired#1067, 2026-08-08); what is missing is consent.
+func TestSetupLeftoverDesiredModelIsNotApplied(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	// newSetupReconciler, NOT watchingReconciler: a daemon whose very
+	// first frame already carries the instruction is exactly the shape a
+	// fresh install on a reused device row produces.
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+
+	for i := 0; i < 5; i++ {
+		r.Apply(ctx, desiredFrame("", "m-1", 0))
+	}
+
+	if got := f.pullCount(); got != 0 {
+		t.Errorf("pulls from a leftover instruction = %d, want 0", got)
+	}
+	if len(f.applies) != 0 {
+		t.Errorf("applies from a leftover instruction = %v, want none", f.applies)
+	}
+	// Not a failure either. Nobody asked for this and nothing went wrong;
+	// reporting it as a failed step would put a red row in the wizard for
+	// a question that was never put to anyone.
+	if got := stepByID(t, r.snapshot(ctx), setupStepModelPull); got.Status == signer.SetupStatusFailed {
+		t.Errorf("model step = %+v, want anything but failed", got)
+	}
+}
+
+// The other half, and the one that keeps the wizard working: an
+// instruction this daemon WATCHED arrive is a person acting now, and it
+// applies exactly as it did before.
+func TestSetupWatchedDesiredModelStillApplies(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+
+	// Frames with no instruction: the daemon is up and folding, which is
+	// where a real one always is by the time a browser is open.
+	for i := 0; i < 3; i++ {
+		r.Apply(ctx, &signer.InferenceState{})
+	}
+	if got := f.pullCount(); got != 0 {
+		t.Fatalf("pulls before any instruction = %d, want 0", got)
+	}
+
+	// Somebody picks a model. No desired ENGINE, so nothing is waiting on
+	// an install — the admission being tested is the provenance one.
+	r.Apply(ctx, desiredFrame("", "m-1", 0))
+	if got := f.pullCount(); got != 1 {
+		t.Errorf("pulls after a watched choice = %d, want 1", got)
+	}
+	if len(f.applies) != 1 || f.applies[0] != "m-1" {
+		t.Errorf("applies = %v, want exactly [m-1]", f.applies)
+	}
+}
+
+// A retry generation is a person acting now even when the value did not
+// change (#136), so it re-admits an instruction this daemon would
+// otherwise be treating as leftovers. Without this, an operator who
+// pressed the retry button on a device with a stale desired model would
+// get silence.
+func TestSetupRetryGenAdmitsALeftoverDesiredModel(t *testing.T) {
+	f := &fakeSetupProvider{modelState: catalog.ModelStateNotPresent}
+	ctx := context.Background()
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+
+	r.Apply(ctx, desiredFrame("", "m-1", 0))
+	if got := f.pullCount(); got != 0 {
+		t.Fatalf("pulls from the leftover = %d, want 0", got)
+	}
+
+	r.Apply(ctx, retryFrame("", "m-1", 1))
+	if got := f.pullCount(); got != 1 {
+		t.Errorf("pulls after the retry = %d, want 1", got)
+	}
+	// Still once per generation.
+	for i := 0; i < 3; i++ {
+		r.Apply(ctx, retryFrame("", "m-1", 1))
+	}
+	if got := f.pullCount(); got != 1 {
+		t.Errorf("pulls after the generation repeated = %d, want 1", got)
 	}
 }

@@ -92,8 +92,16 @@ type ModelCatalogResponse struct {
 	// the agent has not committed a selection yet.
 	Active *CatalogActive `json:"active,omitempty"`
 
-	// PreferredModelID is the user's persisted choice from preferred-model.json.
-	// Empty when no manual selection has been made.
+	// PreferredModelID is the model_id in preferred-model.json — the one
+	// this host is set to serve. Empty when nothing has been recorded.
+	//
+	// NOT necessarily a person's choice, which is what this said until
+	// #626. The setup reconciler writes the same file when it applies a
+	// control-plane instruction, so a consumer asking "has anyone chosen
+	// here" must read the record's provenance
+	// (agentconfig.Preference.ChosenHere, #647) rather than the presence
+	// of a value. Reading presence as consent is what deleted the
+	// install-flow model picker on a host nobody had asked (#627).
 	PreferredModelID string `json:"preferred_model_id,omitempty"`
 
 	// ModelQuestionAnswered reports whether the stored preference is an

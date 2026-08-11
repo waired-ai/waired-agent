@@ -128,7 +128,7 @@ func TestSetupAppliesTheSuccessorForARetiredDesiredModel(t *testing.T) {
 		manifests:  canonicalTestManifests(),
 		modelState: catalog.ModelStateNotPresent,
 	}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
@@ -144,7 +144,17 @@ func TestSetupAppliesTheSuccessorForARetiredDesiredModel(t *testing.T) {
 	}
 	// Canonicalisation has to happen at the fold, before anything is keyed
 	// on the value; the reconciler's own maps are keyed by d.modelID.
-	if len(f.canonicalCalls) == 0 || f.canonicalCalls[0] != "qwen2.5-coder-0.5b-instruct" {
+	//
+	// The empty instruction-free frame this reconciler was given first
+	// (watchingReconciler) folds through the same path, so the first
+	// NAMED call is the one this asserts on.
+	var named []string
+	for _, c := range f.canonicalCalls {
+		if c != "" {
+			named = append(named, c)
+		}
+	}
+	if len(named) == 0 || named[0] != "qwen2.5-coder-0.5b-instruct" {
 		t.Errorf("canonicalCalls = %v, want the control plane's raw value first",
 			f.canonicalCalls)
 	}
@@ -158,7 +168,7 @@ func TestSetupLeavesAnUnknownDesiredModelAlone(t *testing.T) {
 		manifests:  canonicalTestManifests(),
 		modelState: catalog.ModelStateNotPresent,
 	}
-	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r := watchingReconciler(f, nil, "dev-1", nil, quietLogger())
 	r.Apply(context.Background(), desiredFrame("", "qwen2.5-coder-0.4b", 0))
 
 	if len(f.applies) != 1 || f.applies[0] != "qwen2.5-coder-0.4b" {
