@@ -139,7 +139,9 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 			}
 			return resp, false, nil
 		}
-		switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty)
+		if switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty) {
+			resp = remeasureAfterSwitch(mgmtURL, out)
+		}
 		return resp, false, nil
 	}
 
@@ -195,7 +197,9 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 			}
 			return resp, false, nil
 		}
-		switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty)
+		if switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty) {
+			resp = remeasureAfterSwitch(mgmtURL, out)
+		}
 	}
 	return resp, false, nil
 }
@@ -204,15 +208,19 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 // needs a download, foreground-waits for it with progress — the machine
 // should be usable when the flow returns (waired#774). A pending Enter
 // backgrounds the wait; the agent owns the pull either way.
-func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader, tty bool) {
+// It reports whether the new model is the one this host serves now, so a
+// caller can measure it: false means the switch failed, or the download
+// is still running in the background, and in both cases the next thing
+// the engine answers with is the OLD model.
+func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader, tty bool) bool {
 	pmr, err := acceptRecommendation(mgmtURL, modelID)
 	if err != nil {
 		writePromptf(out, "warn: could not switch model: %v\n", err)
-		return
+		return false
 	}
 	if !pmr.Downloading {
 		writePromptf(out, "Switching to %s (already downloaded).\n", label)
-		return
+		return true
 	}
 	// The Enter escape is a terminal gesture: it exists only when this run
 	// owns stdin (init_stdin.go). Off a terminal the wait simply runs to
@@ -224,7 +232,49 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader,
 	} else {
 		writePromptf(out, "Switching to %s — downloading it now.\n", label)
 	}
-	waitForModelSwitch(mgmtURL, modelID, out, tty, newBackgroundWatch(owner))
+	return waitForModelSwitch(mgmtURL, modelID, out, tty, newBackgroundWatch(owner))
+}
+
+// remeasureAfterSwitch measures the model that is serving after a
+// step-down, and returns its response — or nil when no measurement could
+// be taken.
+//
+// It exists because the summary reported the rate that JUSTIFIED the
+// switch as if it described the model doing the work: `Model 26 tok/s`
+// under a host that had just moved off the model measured at 26 tok/s
+// (waired-agent#648). One response was taken before the recommendation
+// and reused afterwards.
+//
+// nil is a deliberate answer, and callers REPLACE the pre-switch
+// response with it rather than falling back. Keeping the old one would
+// re-publish the very number this flow exists to move away from, now
+// under a model that is not the one it was measured on. A summary with
+// no rate row says less and nothing false, and waitForBenchmark has
+// already explained whatever went wrong.
+//
+// The re-run genuinely re-measures — an explicit benchmark bypasses the
+// on-disk cache — and the daemon answers 425 while the engine is still
+// bouncing around the new weights, which waitForBenchmark already polls
+// through.
+//
+// Any recommendation the second run carries is deliberately ignored. The
+// lighter model can itself measure below the floor, and acting on that
+// here would step down again inside a flow the operator answered once.
+// `waired runtimes benchmark` is where that conversation belongs.
+func remeasureAfterSwitch(mgmtURL string, out io.Writer) *management.BenchmarkRunResponse {
+	writePrompt(out, "Measuring the new model…")
+	resp, ok, _ := waitForBenchmark(mgmtURL, out)
+	if !ok || resp == nil || resp.MeasuredTokps <= 0 {
+		return nil
+	}
+	if modelID := activeModelForDisplay(mgmtURL); modelID != "" {
+		writePromptf(out, "%s Local inference works — %s measured %.0f tok/s on this host.\n",
+			emo("✅", "[ok]"), bundledModelLabelDefault(modelID), resp.MeasuredTokps)
+	} else {
+		writePromptf(out, "%s Local inference works — measured %.0f tok/s on this host.\n",
+			emo("✅", "[ok]"), resp.MeasuredTokps)
+	}
+	return resp
 }
 
 // tinyBenchmarkDisableFlow is the benchmark-time counterpart of the install
@@ -260,7 +310,9 @@ func tinyBenchmarkDisableFlow(
 	q := "Drop to that model and keep local inference?\n" +
 		"  No turns local inference off — Waired still works as a gateway/relay."
 	if ynPrompt(out, sc, q, false) {
-		switchAndWait(mgmtURL, rec.ToModelID, label, out, sc, tty)
+		if switchAndWait(mgmtURL, rec.ToModelID, label, out, sc, tty) {
+			resp = remeasureAfterSwitch(mgmtURL, out)
+		}
 		return resp, false, nil
 	}
 	if err := disableLocalInference(mgmtURL); err != nil {

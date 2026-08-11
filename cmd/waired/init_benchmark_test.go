@@ -25,10 +25,21 @@ type benchStub struct {
 	readyAfter int
 	// failed makes /benchmark answer 503 benchmark_did_not_complete — the
 	// benchmark RAN and did not finish, as opposed to 425 "not ready yet".
-	failed       bool
-	failedMsg    string
-	active       *management.ActiveSelection         // /status Active (names the benchmarked model)
-	measured     float64                             // /benchmark measured_tokps
+	failed    bool
+	failedMsg string
+	active    *management.ActiveSelection // /status Active (names the benchmarked model)
+	measured  float64                     // /benchmark measured_tokps
+	// measuredSeq, when non-empty, gives each /benchmark call its own
+	// figure (last repeats) — a host measures differently once it is
+	// serving a different model, which is the whole of waired-agent#648.
+	measuredSeq []float64
+	// failAfter makes /benchmark answer 503 from that call onwards, so a
+	// re-measurement can fail while the first one succeeded. 0 = never.
+	failAfter int
+	// acceptStatus overrides the /preferred-model response status, so a
+	// switch can be refused (the host declined to fetch the weights,
+	// waired-agent#257). 0 = 202 Accepted.
+	acceptStatus int
 	upgrade      *management.BenchmarkRecommendation // /benchmark upgrade suggestion
 	downloading  bool                                // preferred-model response Downloading
 	statusSeq    []statusStep                        // scripted /status sequence (last repeats)
@@ -49,10 +60,24 @@ func (b *benchStub) server() *httptest.Server {
 	mux.HandleFunc("/waired/v1/inference/benchmark", func(w http.ResponseWriter, r *http.Request) {
 		b.mu.Lock()
 		b.benchCalls++
-		flipped := b.readyAfter > 0 && b.benchCalls > b.readyAfter
+		call := b.benchCalls
+		flipped := b.readyAfter > 0 && call > b.readyAfter
+		measured := b.measured
+		if len(b.measuredSeq) > 0 {
+			i := min(call, len(b.measuredSeq)) - 1
+			measured = b.measuredSeq[i]
+		}
 		b.mu.Unlock()
 		if !b.ready && !flipped {
 			w.WriteHeader(http.StatusTooEarly)
+			return
+		}
+		if b.failAfter > 0 && call >= b.failAfter {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error_code": "benchmark_did_not_complete",
+				"message":    b.failedMsg,
+			})
 			return
 		}
 		if b.failed {
@@ -64,7 +89,7 @@ func (b *benchStub) server() *httptest.Server {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(management.BenchmarkRunResponse{
-			Ran: true, MeasuredTokps: b.measured, Recommendation: b.rec, Upgrade: b.upgrade,
+			Ran: true, MeasuredTokps: measured, Recommendation: b.rec, Upgrade: b.upgrade,
 		})
 	})
 	mux.HandleFunc("/waired/v1/inference/status", func(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +116,14 @@ func (b *benchStub) server() *httptest.Server {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		b.acceptedID = req.ModelID
 		b.acceptCount++
+		if b.acceptStatus != 0 && b.acceptStatus != http.StatusAccepted {
+			w.WriteHeader(b.acceptStatus)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error_code": "model_switch_unavailable",
+				"message":    "the host declined to fetch the weights",
+			})
+			return
+		}
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(management.PreferredModelResponse{
 			ModelID: req.ModelID, WillRestart: true, Downloading: b.downloading,
@@ -896,5 +929,125 @@ func TestPromptBenchmark_EngineLoadWaitDoesNotNameADownload(t *testing.T) {
 	}
 	if !strings.Contains(got, "Waiting for the AI engine to load the model") {
 		t.Errorf("expected the engine-load wait line, got:\n%s", got)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#648, owner decision 2026-08-11): after a
+// step-down, the rate the summary reports is the one the model now
+// SERVING measured — not the figure that justified abandoning the model
+// it replaced.
+//
+// The install summary read `Model 26 tok/s` on a host that had just
+// moved off the model measured at 26 tok/s, because one response was
+// taken before the recommendation and reused after the switch. An
+// operator reads that as "I switched to the lighter model and it is
+// still 26 tok/s".
+func TestPromptBenchmark_AcceptSwitchesThenRemeasures(t *testing.T) {
+	stub := &benchStub{
+		ready:       true,
+		rec:         sampleRec(),
+		measuredSeq: []float64{26, 71}, // the rejected model, then the one that took over
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	resp, _, err := benchmarkWithScanner(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("y\n")), false)
+	if err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	if stub.acceptCount != 1 || stub.acceptedID != "light" {
+		t.Fatalf("accept = %d id=%q, want the switch to have happened", stub.acceptCount, stub.acceptedID)
+	}
+	if stub.benchCalls != 2 {
+		t.Fatalf("benchmark calls = %d, want a second measurement after the switch", stub.benchCalls)
+	}
+	if got := outcomeFrom(resp); !got.Measured || got.Tokps != 71 {
+		t.Errorf("summary outcome = %+v, want the post-switch 71 tok/s", got)
+	}
+	if !strings.Contains(out.String(), "Measuring the new model…") {
+		t.Errorf("the second measurement was not announced:\n%s", out.String())
+	}
+}
+
+// The measurement is the point, so a switch that did not complete must
+// not trigger one: the engine would still be answering for the OLD model.
+// Downloading + no terminal owner means the wait runs to completion, so
+// the case exercised here is the failed accept.
+func TestPromptBenchmark_NoRemeasureWhenTheSwitchFailed(t *testing.T) {
+	stub := &benchStub{ready: true, rec: sampleRec(), measured: 26, acceptStatus: http.StatusConflict}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	resp, _, err := benchmarkWithScanner(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("y\n")), false)
+	if err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	if stub.benchCalls != 1 {
+		t.Errorf("benchmark calls = %d, want no re-measurement after a failed switch", stub.benchCalls)
+	}
+	// The host is still on the model that was measured, so its figure is
+	// still the truthful one.
+	if got := outcomeFrom(resp); !got.Measured {
+		t.Errorf("outcome = %+v, want the original measurement kept", got)
+	}
+}
+
+// A re-measurement that cannot be taken drops the rate rather than
+// falling back to the pre-switch one. The old figure describes a model
+// this host no longer runs; reporting it under the new one is the defect
+// with extra steps.
+func TestPromptBenchmark_RemeasureFailureDropsTheRate(t *testing.T) {
+	stub := &benchStub{
+		ready:     true,
+		rec:       sampleRec(),
+		measured:  26,
+		failAfter: 2, // the first measurement lands, the re-run does not
+		failedMsg: "the engine went away",
+	}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	resp, _, err := benchmarkWithScanner(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("y\n")), false)
+	if err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	if got := outcomeFrom(resp); got.Measured {
+		t.Errorf("outcome = %+v, want no rate at all rather than the rejected model's", got)
+	}
+	if strings.Contains(out.String(), "26 tok/s on this host") {
+		t.Errorf("the rejected model's rate was reported as the new model's:\n%s", out.String())
+	}
+}
+
+// The lighter model can itself measure below the floor. Acting on that
+// here would step down again inside a flow the operator answered once, so
+// the second run's recommendation is read for its number only.
+func TestPromptBenchmark_RemeasureIgnoresASecondRecommendation(t *testing.T) {
+	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{26, 28}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	resp, _, err := benchmarkWithScanner(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("y\n")), false)
+	if err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	// One accept, not two: the stub keeps returning the same
+	// recommendation, and the flow must not act on it a second time.
+	if stub.acceptCount != 1 {
+		t.Errorf("accept = %d, want exactly one switch", stub.acceptCount)
+	}
+	if stub.dismissCount != 0 {
+		t.Errorf("dismiss = %d, want the second recommendation neither taken nor dismissed", stub.dismissCount)
+	}
+	if got := outcomeFrom(resp); !got.Measured || got.Tokps != 28 {
+		t.Errorf("outcome = %+v, want the honest post-switch 28 tok/s", got)
 	}
 }

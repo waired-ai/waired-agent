@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: 3191d32bda722268
+sourceHash: 3dcadefc3b8578f8
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -105,6 +105,10 @@ waired models ls --detail     # 各モデルの必要メモリと、このパソ
 		切り替えを提案し、両方のモデル名と**どちら向きの切り替えか**を示すので、
 		速さと質を見比べて選べます。承諾するとダウンロードが進捗表示付きで始まります
 		（**Enter** を押せば、以降はバックグラウンドで続行します）。
+
+		新しいモデルが動き始めたら、Waired はもう一度計測してその値を表示します。
+		最初の数値は切り替え前のモデルのものなので引き継ぎません。2 回目の計測が
+		取れなかった場合は、古い数値を出す代わりに何も表示しません。
 	</TabItem>
 	<TabItem label="画面のないサーバーの場合">
 		ヘッドレスのマシンには Waired アイコンがないため、設定ファイルを書き換えて
