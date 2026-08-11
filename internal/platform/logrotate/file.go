@@ -86,8 +86,12 @@ func windowsLogPath(stateDir string) string {
 // Safe for concurrent use: slog writes one record per Write from any
 // goroutine.
 type File struct {
-	path   string
-	policy Policy
+	path string
+	// policy is asked again on every write rather than captured once:
+	// the log level it derives from is live (see PolicyForLevel), so a
+	// daemon switched to debug must start keeping the larger window
+	// immediately, not after a restart.
+	policy func() Policy
 
 	mu     sync.Mutex
 	file   *os.File
@@ -96,7 +100,8 @@ type File struct {
 }
 
 // OpenFile opens path for appending, creating it and its parent directory
-// if needed, and returns a writer that keeps it within p.
+// if needed, and returns a writer that keeps it within whatever policy
+// reports at the time of each write.
 //
 // The mode is 0o600: the agent's log carries local paths, device names and
 // (at debug) mesh detail, so it should not be world-readable where the
@@ -104,7 +109,7 @@ type File struct {
 // instead, which the service installer locks to SYSTEM + Administrators
 // (internal/platform/secrets.SecureDir) — reading it there needs an
 // elevated shell, exactly as the bundled engine's log already does.
-func OpenFile(path string, p Policy) (*File, error) {
+func OpenFile(path string, policy func() Policy) (*File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -114,9 +119,9 @@ func OpenFile(path string, p Policy) (*File, error) {
 	// cannot land on top of it. A failure here is deliberately not fatal —
 	// the leftover stays on disk and rotate() retries — because the daemon
 	// having somewhere to log matters more than the archive being tidy.
-	_ = recoverStaged(path, p)
+	_ = recoverStaged(path, policy())
 
-	f := &File{path: path, policy: p}
+	f := &File{path: path, policy: policy}
 	if err := f.open(); err != nil {
 		return nil, err
 	}
@@ -145,8 +150,8 @@ func (f *File) Write(b []byte) (int, error) {
 	// oversized record would archive nothing and then land in the fresh
 	// file anyway.
 	var rotErr error
-	if f.size > 0 && f.size+int64(len(b)) > f.policy.MaxBytes {
-		rotErr = f.rotate()
+	if p := f.policy(); f.size > 0 && f.size+int64(len(b)) > p.MaxBytes {
+		rotErr = f.rotate(p)
 	}
 	// A rotation that failed part-way may have left no handle behind. Get
 	// one before touching it — both the note below and the record itself
@@ -211,11 +216,11 @@ func (f *File) open() error {
 // writer and f.mu is held, so no record can be written into the window —
 // the mutex provides what the dup2 ordering provides for a descriptor
 // somebody else opened.
-func (f *File) rotate() error {
+func (f *File) rotate(p Policy) error {
 	closeErr := f.file.Close()
 	f.file = nil
 
-	stageErr := f.stage()
+	stageErr := f.stage(p)
 
 	// Reopen whatever the staging did, so the process has somewhere to
 	// write on the way out of here. A failure leaves f.file nil and the
@@ -231,14 +236,14 @@ func (f *File) rotate() error {
 
 // stage ages the archives and moves the live file into the staging slot,
 // leaving <path> free for open to recreate.
-func (f *File) stage() error {
+func (f *File) stage(p Policy) error {
 	// A leftover from a crash we could not compress at open time would be
 	// destroyed by the rename below, so try again and give up the rotation
 	// rather than overwrite real log data.
-	if err := recoverStaged(f.path, f.policy); err != nil {
+	if err := recoverStaged(f.path, p); err != nil {
 		return err
 	}
-	if err := shiftArchives(f.path, f.policy.Keep); err != nil {
+	if err := shiftArchives(f.path, p.Keep); err != nil {
 		return err
 	}
 	return os.Rename(f.path, f.path+stagedSuffix)

@@ -11,7 +11,7 @@ import (
 // rather than a direct call so the (GOOS, state dir) -> plan decision below
 // can be table-tested on any host, with a fake that records the path and
 // policy it was handed (CLAUDE.md §Test discipline).
-type logFileOpener func(path string, p logrotate.Policy) (io.WriteCloser, error)
+type logFileOpener func(path string, policy func() logrotate.Policy) (io.WriteCloser, error)
 
 // openAgentLogFile opens the log file the agent writes its own records to,
 // or returns (nil, nil) on an OS where the service manager already holds
@@ -24,12 +24,12 @@ type logFileOpener func(path string, p logrotate.Policy) (io.WriteCloser, error)
 // exists. On a service install %ProgramData%\waired is locked to
 // SYSTEM + Administrators, so this is where a misconfigured ACL would
 // surface.
-func openAgentLogFile(goos, stateDir string, open logFileOpener) (io.WriteCloser, string, error) {
+func openAgentLogFile(goos, stateDir string, policy func() logrotate.Policy, open logFileOpener) (io.WriteCloser, string, error) {
 	path := logrotate.AgentOwnedLogFile(goos, stateDir)
 	if path == "" {
 		return nil, "", nil
 	}
-	f, err := open(path, logrotate.DefaultPolicy())
+	f, err := open(path, policy)
 	if err != nil {
 		return nil, path, fmt.Errorf("open the agent log file %s: %w", path, err)
 	}
@@ -40,8 +40,8 @@ func openAgentLogFile(goos, stateDir string, open logFileOpener) (io.WriteCloser
 // the error path matters: returning logrotate.OpenFile's results straight
 // through would hand back an io.WriteCloser holding a nil *logrotate.File,
 // which is not == nil and would be written to.
-func openRotatingLogFile(path string, p logrotate.Policy) (io.WriteCloser, error) {
-	f, err := logrotate.OpenFile(path, p)
+func openRotatingLogFile(path string, policy func() logrotate.Policy) (io.WriteCloser, error) {
+	f, err := logrotate.OpenFile(path, policy)
 	if err != nil {
 		return nil, err
 	}

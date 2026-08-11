@@ -415,9 +415,11 @@ waired config log-level info         # back to normal
 The levels are `debug`, `info` (the default), `warn` and `error`. `debug` is
 the switch to flip before reproducing a problem: it takes effect immediately —
 **no restart** — on both the background service and the Waired app, and is
-remembered across restarts. Set it back to `info` when you are done so the logs
-stay small. If the service is not running, the choice is saved and applies the
-next time it starts.
+remembered across restarts. While it is on, Waired also keeps more of the log —
+8 MB per file and ten older copies, instead of 1 MB and five — so a problem you
+only notice hours later is still in there. Set it back to `info` when you are
+done so the logs stay small. If the service is not running, the choice is saved
+and applies the next time it starts.
 
 ### `waired logs`
 

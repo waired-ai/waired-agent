@@ -53,6 +53,11 @@ that lets somebody else work out what happened.
    waired config log-level info
    ```
 
+   While the detail is on, Waired also keeps more of it — 8 MB per log file and
+   ten older copies, instead of 1 MB and five — so a problem you only notice
+   hours later is still in the file. Turning it back off returns to the smaller
+   size.
+
 </Steps>
 
 `report.txt` holds the background service's log and the AI engine's log

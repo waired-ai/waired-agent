@@ -21,9 +21,9 @@ type fakeOpener struct {
 	closer   *countingCloser
 }
 
-func (f *fakeOpener) open(path string, p logrotate.Policy) (io.WriteCloser, error) {
+func (f *fakeOpener) open(path string, policy func() logrotate.Policy) (io.WriteCloser, error) {
 	f.paths = append(f.paths, path)
-	f.policies = append(f.policies, p)
+	f.policies = append(f.policies, policy())
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -53,7 +53,7 @@ func TestOpenAgentLogFile_PerOS(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeOpener{}
-			w, path, err := openAgentLogFile(tc.goos, tc.stateDir, f.open)
+			w, path, err := openAgentLogFile(tc.goos, tc.stateDir, logrotate.DefaultPolicy, f.open)
 			if err != nil {
 				t.Fatalf("openAgentLogFile: %v", err)
 			}
@@ -88,7 +88,7 @@ func TestOpenAgentLogFile_PerOS(t *testing.T) {
 // stderr.
 func TestOpenAgentLogFile_OpenFailureIsReportedNotFatal(t *testing.T) {
 	f := &fakeOpener{err: errors.New("access is denied")}
-	w, path, err := openAgentLogFile("windows", `C:\ProgramData\waired`, f.open)
+	w, path, err := openAgentLogFile("windows", `C:\ProgramData\waired`, logrotate.DefaultPolicy, f.open)
 	if err == nil {
 		t.Fatal("err = nil, want the open failure")
 	}
@@ -108,7 +108,7 @@ func TestOpenAgentLogFile_OpenFailureIsReportedNotFatal(t *testing.T) {
 // (CLAUDE.md §Test discipline).
 func TestOpenRotatingLogFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "logs", "waired-agent.log")
-	w, err := openRotatingLogFile(path, logrotate.DefaultPolicy())
+	w, err := openRotatingLogFile(path, logrotate.DefaultPolicy)
 	if err != nil {
 		t.Fatalf("openRotatingLogFile: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestOpenRotatingLogFile_FailureReturnsANilWriter(t *testing.T) {
 	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	w, err := openRotatingLogFile(filepath.Join(blocker, "logs", "waired-agent.log"), logrotate.DefaultPolicy())
+	w, err := openRotatingLogFile(filepath.Join(blocker, "logs", "waired-agent.log"), logrotate.DefaultPolicy)
 	if err == nil {
 		t.Fatal("err = nil, want a failure")
 	}

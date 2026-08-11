@@ -95,8 +95,13 @@ func run(args []string) error {
 	// and until now nothing rotated them at all — the retired newsyslog
 	// drop-in only ever covered the daemon's. No-op off darwin, where
 	// the desktop autostart does not capture the streams to files.
+	// The bound follows the level: debug is roughly an order of magnitude
+	// more output, and the default 1 MB x 5 leaves ~90 minutes of it (#658).
+	// logLevelVar tracks the daemon's live level, so this reads the same
+	// value the handler above is filtering on.
 	logrotate.Manage(ctx, logrotate.TrayTargets(runtime.GOOS, trayLogHome()),
-		logrotate.DefaultPolicy(), slog.Default())
+		func() logrotate.Policy { return logrotate.PolicyForLevel(logLevelVar.Level()) },
+		slog.Default())
 
 	tray.Run(ctx, tray.Options{
 		MgmtURL:    *mgmtURL,

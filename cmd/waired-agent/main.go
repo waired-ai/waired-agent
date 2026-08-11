@@ -252,8 +252,9 @@ func run(ctx context.Context, args []string) error {
 	// The agent's own log file, on the OS where the service manager hands
 	// the process no stream at all (#636). The logger does not exist yet,
 	// so the outcome is reported right after it does.
+	logPolicy := func() logrotate.Policy { return logrotate.PolicyForLevel(logLevelVar.Level()) }
 	agentLog, agentLogPath, agentLogErr := openAgentLogFile(
-		runtime.GOOS, filepath.Dir(agentJSONPath), openRotatingLogFile)
+		runtime.GOOS, filepath.Dir(agentJSONPath), logPolicy, openRotatingLogFile)
 	logDest := io.Writer(os.Stderr)
 	if agentLog != nil {
 		// The file comes FIRST on purpose: under the Windows SCM stderr is
@@ -291,7 +292,7 @@ func run(ctx context.Context, args []string) error {
 	// launchd opened, and every line after that is lost until the daemon
 	// restarts — which on a wedged host never happens. No-op off darwin:
 	// journald and the Event Log bound their own streams.
-	logrotate.Manage(ctx, logrotate.AgentTargets(runtime.GOOS), logrotate.DefaultPolicy(), logger)
+	logrotate.Manage(ctx, logrotate.AgentTargets(runtime.GOOS), logPolicy, logger)
 
 	// Phase 9 telemetry composite. Owned at boot (not inside the
 	// session) so /metrics and /observability/* scrape the same

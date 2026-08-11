@@ -5,7 +5,7 @@ meta:
   audience: 不具合を報告する人、診断情報を求められた人
   needs: 問題が起きているパソコンのターミナル
   time: 数分（再現にかかる時間は別）
-sourceHash: f97f31688707dc00
+sourceHash: 4ab43bed8040a815
 ---
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
@@ -52,6 +52,10 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
    ```sh
    waired config log-level info
    ```
+
+   詳細ログが ON の間は保存量も増え、ファイル 1 つあたり 8 MB・古い控え 10 世代
+   （1 MB・5 世代から）になります。数時間後に気づいた問題でも記録が残っています。
+   OFF に戻すと元の小さいサイズに戻ります。
 
 </Steps>
 

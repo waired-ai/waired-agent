@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -377,5 +378,36 @@ func TestDefaultPolicy(t *testing.T) {
 	p := DefaultPolicy()
 	if p.MaxBytes != 1<<20 || p.Keep != 5 {
 		t.Errorf("DefaultPolicy() = %+v, want {MaxBytes:1048576 Keep:5}", p)
+	}
+}
+
+// TestPolicyForLevel pins the two bounds. Info and above keep the
+// newsyslog values above; debug gets a bigger one, because the standard
+// bug-report advice — raise verbosity, reproduce, then collect —
+// otherwise shrinks the usable window to about 90 minutes at the rate the
+// rc8 macOS host measured, which is how an investigation lost evidence
+// only an hour old (#658).
+//
+// Product contract, ratified by #658.
+func TestPolicyForLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lvl  slog.Level
+		want Policy
+	}{
+		{"debug", slog.LevelDebug, Policy{MaxBytes: 8 << 20, Keep: 10}},
+		{"below debug", slog.LevelDebug - 4, Policy{MaxBytes: 8 << 20, Keep: 10}},
+		{"info", slog.LevelInfo, Policy{MaxBytes: 1 << 20, Keep: 5}},
+		{"warn", slog.LevelWarn, Policy{MaxBytes: 1 << 20, Keep: 5}},
+		{"error", slog.LevelError, Policy{MaxBytes: 1 << 20, Keep: 5}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PolicyForLevel(tc.lvl); got != tc.want {
+				t.Errorf("PolicyForLevel(%v) = %+v, want %+v", tc.lvl, got, tc.want)
+			}
+		})
+	}
+	if PolicyForLevel(slog.LevelInfo) != DefaultPolicy() {
+		t.Error("info level and DefaultPolicy disagree; they are meant to be the same bound")
 	}
 }

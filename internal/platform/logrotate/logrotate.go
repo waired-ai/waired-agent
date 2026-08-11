@@ -115,8 +115,34 @@ type Policy struct {
 	Keep     int
 }
 
-// DefaultPolicy is the policy the agent and the tray both run with.
+// DefaultPolicy is the policy that applies at info level and above.
 func DefaultPolicy() Policy { return Policy{MaxBytes: 1 << 20, Keep: 5} }
+
+// debugPolicy is what applies while the log level is debug. Bigger,
+// because debug is roughly an order of magnitude more output and the
+// default bound turns the standard bug-report advice ("raise verbosity,
+// reproduce, then collect") against itself: on the rc8 macOS host at
+// debug the file rotated every ~18 minutes, so five generations held
+// about 90 minutes and an investigation into something an hour old found
+// its evidence already gone (#658).
+//
+// 8 MB x 10 is roughly a day at the ~3.3 MB/h that host measured, for
+// about 15 MB on disk — the live file plus nine archives, which gzip to
+// well under a tenth of their size for JSON records.
+func debugPolicy() Policy { return Policy{MaxBytes: 8 << 20, Keep: 10} }
+
+// PolicyForLevel returns the bound to apply at lvl. Split from Policy
+// itself so it is a pure function of the level, table-testable without a
+// filesystem, and so callers can re-read it: the management API flips the
+// live level without a restart (`waired config log-level debug`), and a
+// rotation policy chosen once at boot would keep the old bound for the
+// rest of the process's life.
+func PolicyForLevel(lvl slog.Level) Policy {
+	if lvl <= slog.LevelDebug {
+		return debugPolicy()
+	}
+	return DefaultPolicy()
+}
 
 // AgentTargets returns the daemon's rotatable log files on goos, in the
 // (GOOS, facts) -> plan shape the repo's cross-OS parity rule asks for.
@@ -160,14 +186,18 @@ type ops struct {
 	sameFile func(fd int, path string) (bool, error)
 }
 
-// Manage starts a goroutine that keeps targets within p, until ctx is
-// done. It is a no-op when there is nothing to do: no targets, or an OS
-// whose service manager already bounds the stream.
+// Manage starts a goroutine that keeps targets within the policy, until
+// ctx is done. It is a no-op when there is nothing to do: no targets, or
+// an OS whose service manager already bounds the stream.
+//
+// policy is a function, not a value, because the level it derives from is
+// live: `waired config log-level debug` changes the verbosity of a
+// running daemon, and the bound has to follow it. Each sweep asks again.
 //
 // Every failure is logged and swallowed. A daemon must not fail to run
 // because its log file could not be rotated.
-func Manage(ctx context.Context, targets []Target, p Policy, logger *slog.Logger) {
-	if len(targets) == 0 {
+func Manage(ctx context.Context, targets []Target, policy func() Policy, logger *slog.Logger) {
+	if len(targets) == 0 || policy == nil {
 		return
 	}
 	o := defaultOps()
@@ -181,7 +211,7 @@ func Manage(ctx context.Context, targets []Target, p Policy, logger *slog.Logger
 		t := time.NewTicker(checkEvery)
 		defer t.Stop()
 		for {
-			sweep(targets, p, o, logger)
+			sweep(targets, policy(), o, logger)
 			select {
 			case <-ctx.Done():
 				return

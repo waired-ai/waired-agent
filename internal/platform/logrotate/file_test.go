@@ -67,7 +67,7 @@ func smallPolicy() Policy { return Policy{MaxBytes: 100, Keep: 3} }
 
 func TestOpenFileCreatesTheParentDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "logs", "waired-agent.log")
-	f, err := OpenFile(path, smallPolicy())
+	f, err := OpenFile(path, smallPolicy)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestOpenFileCreatesTheParentDirectory(t *testing.T) {
 // headroom on top of a file that is already at the cap.
 func TestFileAppendsAcrossOpens(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "waired-agent.log")
-	first, err := OpenFile(path, smallPolicy())
+	first, err := OpenFile(path, smallPolicy)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestFileAppendsAcrossOpens(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	second, err := OpenFile(path, smallPolicy())
+	second, err := OpenFile(path, smallPolicy)
 	if err != nil {
 		t.Fatalf("OpenFile (reopen): %v", err)
 	}
@@ -117,7 +117,7 @@ func TestFileAppendsAcrossOpens(t *testing.T) {
 // is what lets internal/platform/logdump collect both with one glob.
 func TestFileRotatesAtTheCap(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "waired-agent.log")
-	f, err := OpenFile(path, smallPolicy())
+	f, err := OpenFile(path, smallPolicy)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestFileRotatesAtTheCap(t *testing.T) {
 // numbering runs newest-first, matching shiftArchives.
 func TestFileShiftsAndDropsArchives(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "waired-agent.log")
-	f, err := OpenFile(path, smallPolicy())
+	f, err := OpenFile(path, smallPolicy)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestFileShiftsAndDropsArchives(t *testing.T) {
 // produce an archive holding nothing.
 func TestFileKeepsAnOversizedRecordWhole(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "waired-agent.log")
-	f, err := OpenFile(path, smallPolicy())
+	f, err := OpenFile(path, smallPolicy)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -189,6 +189,38 @@ func TestFileKeepsAnOversizedRecordWhole(t *testing.T) {
 	}
 }
 
+// TestFileFollowsALivePolicyChange is why the policy is a function: the
+// management API flips the level on a running daemon
+// (`waired config log-level debug`), and a bound captured at boot would
+// keep the old window for the rest of the process's life — the #658
+// failure, since raising verbosity is exactly when the bigger window is
+// needed.
+func TestFileFollowsALivePolicyChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "waired-agent.log")
+	cap := int64(1000)
+	f, err := OpenFile(path, func() Policy { return Policy{MaxBytes: cap, Keep: 3} })
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer f.Close()
+
+	mustWrite(t, f, strings.Repeat("a", 200)+"\n")
+	mustWrite(t, f, strings.Repeat("b", 200)+"\n")
+	if exists(archiveName(path, 0)) {
+		t.Fatal("rotated under the roomy policy; 401 bytes is well inside 1000")
+	}
+
+	cap = 100 // as if the level went from debug back to info
+	mustWrite(t, f, strings.Repeat("c", 20)+"\n")
+
+	if got := readFile(t, path); got != strings.Repeat("c", 20)+"\n" {
+		t.Errorf("live file = %q, want only the write after the policy shrank", got)
+	}
+	if !exists(archiveName(path, 0)) {
+		t.Error("no archive; the smaller cap should have taken effect on the next write")
+	}
+}
+
 // TestOpenFileRecoversAStagedArchive covers the crash window: a process
 // killed between the rename and the gzip leaves <path>.0 holding real log
 // data. Opening the file must fold it into slot 0 rather than let the next
@@ -200,7 +232,7 @@ func TestOpenFileRecoversAStagedArchive(t *testing.T) {
 		t.Fatalf("seed staged: %v", err)
 	}
 
-	f, err := OpenFile(path, smallPolicy())
+	f, err := OpenFile(path, smallPolicy)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -218,7 +250,7 @@ func TestOpenFileRecoversAStagedArchive(t *testing.T) {
 // record must get an error rather than a nil-pointer panic.
 func TestFileWriteAfterCloseFails(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "waired-agent.log")
-	f, err := OpenFile(path, smallPolicy())
+	f, err := OpenFile(path, smallPolicy)
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}

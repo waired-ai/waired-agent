@@ -169,7 +169,8 @@ func TestManage_RotatesThroughRealDescriptors(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	Manage(ctx, []Target{{Path: path, FD: fd}}, Policy{MaxBytes: 16, Keep: 5},
+	Manage(ctx, []Target{{Path: path, FD: fd}},
+		func() Policy { return Policy{MaxBytes: 16, Keep: 5} },
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -192,6 +193,8 @@ func TestManage_RotatesThroughRealDescriptors(t *testing.T) {
 func TestManage_NoTargetsIsANoOp(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	Manage(ctx, nil, DefaultPolicy(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	Manage(ctx, AgentTargets("linux"), DefaultPolicy(), nil)
+	Manage(ctx, nil, DefaultPolicy, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	Manage(ctx, AgentTargets("linux"), DefaultPolicy, nil)
+	// A nil policy is the same no-op: nothing to ask for a bound with.
+	Manage(ctx, AgentTargets("darwin"), nil, nil)
 }
