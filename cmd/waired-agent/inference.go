@@ -2282,6 +2282,27 @@ func (p *agentInferenceProvider) appliedContextWindow(m catalog.Manifest) int {
 // exists to avoid. The engine keeps serving that window for this device's
 // own keyboard through the local /model directive — it just stops being a
 // mesh answer.
+//
+// SPILL IS NOT A REASON TO WITHHOLD. A host whose weights partly sit in
+// system RAM is serving the window it names — spill costs decode speed,
+// not window size — so it declares that window like any other host. This
+// reverses an earlier reading in which a rung the sizing could not prove
+// the host holds (WindowFits false, the forced lowest rung of
+// waired-agent#587) declared nothing: waired-ai/waired-agent#657 found a
+// Windows host serving 200,704 tokens at a measured 12 s per coding turn
+// while telling the mesh nothing, and the admin page rendered that silence
+// as "takes no Claude Code sessions". Owner ruling (2026-08-11, recorded
+// on the waired-ai/waired window-contract decision of 2026-08-02): Waired
+// does not force state on a device — a machine the operator chose to run
+// a model on is published on their own inference network, spilling or not.
+//
+// The honesty guard that remains is the window SIZE check below: a host
+// tuned under the smallest declarable window still declares nothing,
+// because that is the case where a 200k session would actually be
+// truncated (the waired-ai/waired-agent#623 failure). Speed-based
+// exclusion belongs to a consumer that can see speed — HostSpeed reaches
+// the control plane and the management API, and is stripped from the
+// served NetworkMap by design — not to the agent withholding a true fact.
 func (p *agentInferenceProvider) DeclaredContextWindow() int {
 	active, ok := p.ActiveModelID()
 	if !ok {
@@ -2293,17 +2314,6 @@ func (p *agentInferenceProvider) DeclaredContextWindow() int {
 	}
 	t, ok := p.appliedTuningFor(m)
 	if !ok || t.ContextLength <= 0 {
-		return 0
-	}
-	// A window the sizing could not prove this host holds — the forced
-	// lowest rung (waired-agent#587) — is SERVED for this machine's own
-	// keyboard but never declared: the engine is holding it out of
-	// memory the host does not have, and a requester routing a 200k
-	// session onto that is the failure waired-ai/waired#1031's window
-	// contract exists to remove. The <200k check below used to carry
-	// this weight alone (a trimmed window fell under it); with sub-rung
-	// trimming retired it remains as the safety net.
-	if !t.WindowFits {
 		return 0
 	}
 	win := t.ContextLength

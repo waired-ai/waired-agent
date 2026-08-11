@@ -354,10 +354,14 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 	case next.ContextLength == t.ContextLength && next.KVCacheType == t.KVCacheType:
 		// The recompute changed nothing (already at the ladder's lowest
 		// rung): a restart would land in the same place, so the failure
-		// LATCHES — the engine keeps serving the rung for this machine's
-		// own use, the warning records it, and WindowFits drops so a
-		// window that measured unreliable is no longer declared to the
-		// mesh (waired-agent#587; waired-ai/waired#1031).
+		// LATCHES — the engine keeps serving the rung, the warning
+		// records it, and WindowFits drops to record WHY the host is on
+		// that rung (waired-agent#587).
+		//
+		// The window stays declared to the mesh. The host serves it; what
+		// the spill costs is decode speed, and withholding the window for
+		// that made a machine answering real requests invisible at every
+		// session size (waired-ai/waired-agent#657).
 		logger.Warn("ollama tuning degraded but no smaller sizing available", "detail", detail)
 		latched := t
 		latched.WindowFits = false
@@ -395,7 +399,8 @@ func applyOllamaTuningVerification(ctx context.Context, sw modelEnvSwitcher, t o
 		record(next, false, restartWarn)
 	default:
 		// Still degraded after the one restart: the same latch as the
-		// no-smaller-sizing path — keep serving, stop declaring.
+		// no-smaller-sizing path — keep serving, and keep declaring the
+		// window that is being served (#657).
 		logger.Warn("ollama tuning still degraded after one restart; leaving engine as-is",
 			"detail", detail2)
 		latched := next

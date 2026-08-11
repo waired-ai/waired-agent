@@ -70,14 +70,42 @@ func TestDeclaredContextWindow(t *testing.T) {
 		}
 	})
 
-	t.Run("a forced rung declares nothing", func(t *testing.T) {
-		// The rung a host could not be shown to hold is SERVED for its
-		// own keyboard but never declared (waired-agent#587): WindowFits
-		// false is how the tuner and the verify pass's failure latch both
-		// say so, and the declaration reads it before the width.
+	t.Run("a forced rung declares the window it serves", func(t *testing.T) {
+		// PRODUCT CONTRACT (waired-ai/waired-agent#657; owner ruling of
+		// 2026-08-11 recorded on the waired-ai/waired window-contract
+		// decision of 2026-08-02). This subtest asserted the opposite
+		// until then: a rung the sizing could not be shown to hold
+		// (WindowFits false — the forced lowest rung of
+		// waired-agent#587, or the verify pass's spill latch) declared
+		// nothing.
+		//
+		// It is served, so it is declared. Spill costs decode speed, not
+		// window size, and withholding the window for a speed problem
+		// made a host that answers real 200k requests invisible to the
+		// mesh at every session size — the admin page then rendered that
+		// silence as "takes no Claude Code sessions" one row above a
+		// measured 12 s coding turn. Waired does not force state on a
+		// device: a machine the operator chose to run a model on is
+		// published on their own inference network, spilling or not.
+		//
+		// Speed-based exclusion belongs to a consumer that can see speed
+		// (HostSpeed reaches the control plane, and is stripped from the
+		// served NetworkMap by design), not to the agent withholding a
+		// true fact. The size guard above still stands.
 		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 200704, WindowFits: false}, "big")
+		if got := p.DeclaredContextWindow(); got != 200704 {
+			t.Errorf("got %d, want 200704 (served, therefore declared)", got)
+		}
+	})
+
+	t.Run("a spilling host below the smallest window still declares nothing", func(t *testing.T) {
+		// The two guards are independent, and only the size one survives
+		// #657: a forced rung that is ALSO under the smallest declarable
+		// window is the case where a 200k session would truly be
+		// truncated (waired-agent#623), so it stays silent.
+		p := newProv(t, infruntime.ModelTuning{ModelID: "big", ContextLength: 150000, WindowFits: false}, "big")
 		if got := p.DeclaredContextWindow(); got != 0 {
-			t.Errorf("got %d, want 0 (the sizing never proved this window)", got)
+			t.Errorf("got %d, want 0 (below the smallest declarable window)", got)
 		}
 	})
 
