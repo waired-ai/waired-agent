@@ -356,6 +356,49 @@ func fetchHostSpeed(mgmt string) *management.HostSpeedStatus {
 	return s.HostSpeed
 }
 
+// inferenceNoStateLine phrases the case where the daemon reported no
+// desired state at all.
+//
+// The `default` arm's reasoning was right and its assumption about who
+// lands there was wrong. An empty desired_state does mean "the daemon did
+// not say" — but on the CURRENT build the machine that produces it is a
+// fresh, not-yet-enrolled install, not an old daemon: sbInfProvider.Status
+// returns the zero value when there is no live session, and desired_state
+// is `omitempty`, so the key vanishes. Every new user passes through that
+// state between installing and signing in, and every one of them was told
+// their daemon was too old and sent to `waired update` — advice that is
+// both wrong and unactionable, since update reports the host is current
+// (#628).
+//
+// enrolled is the daemon's own answer, and nil means it did not give one.
+// Only an explicit false is treated as not-enrolled: per daemonIdentity's
+// contract a nil is "unknown", never "no". So the old-daemon branch keeps
+// exactly the case it was written for — a daemon that answers neither
+// question.
+func inferenceNoStateLine(enrolled *bool) string {
+	if enrolled != nil && !*enrolled {
+		// Same story `waired status` and `waired auth status` tell in this
+		// state, so the three commands do not disagree about the machine.
+		return "Local inference: not set up yet — this device is not signed in. Run `waired init`."
+	}
+	return "Local inference: unknown (this daemon does not report it — `waired update`)"
+}
+
+// daemonEnrolled asks the daemon whether this device is signed in, for the
+// one branch that needs to tell a fresh install from an old daemon. nil
+// means no answer — no daemon, a daemon too old to serve the route, or a
+// malformed reply.
+//
+// It is only called from that branch: the on/off arms already have their
+// answer and must not pay for a second request.
+func daemonEnrolled(mgmtURL string) *bool {
+	v := daemonIdentity(mgmtURL)
+	if v == nil {
+		return nil
+	}
+	return &v.Enrolled
+}
+
 func runInferenceStatus(mgmt string) error {
 	gf := globalFlags{Mgmt: mgmt}
 	body, err := httpGet(gf.Mgmt + "/waired/v1/inference/status")
@@ -397,8 +440,10 @@ func runInferenceStatus(mgmt string) error {
 	default:
 		// Nothing to report is not the same as off, and telling someone
 		// their AI is off when the daemon simply did not say would send
-		// them looking for a setting to change.
-		fmt.Println("Local inference: unknown (this daemon does not report it — `waired update`)")
+		// them looking for a setting to change. Which of the two silent
+		// daemons this is — old, or not signed in yet — needs a second
+		// question; see inferenceNoStateLine.
+		fmt.Println(inferenceNoStateLine(daemonEnrolled(gf.Mgmt)))
 	}
 	if s.SubsystemState != "" {
 		fmt.Printf("Inference engine: %s\n", s.SubsystemState)

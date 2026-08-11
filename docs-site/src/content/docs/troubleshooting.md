@@ -36,6 +36,7 @@ most problems on its own.
 - [It says the device is “enrolled system-wide”](#it-says-the-device-is-enrolled-system-wide)
 - [Waired chose a very small model for my machine](#waired-chose-a-very-small-model-for-my-machine)
 - [Local AI started off and I did not choose that](#local-ai-started-off-and-i-did-not-choose-that)
+- [It says local AI is not set up yet](#it-says-local-ai-is-not-set-up-yet)
 - [Setup said it could not complete a test generation](#setup-said-it-could-not-complete-a-test-generation)
 
 **Nothing answers**
@@ -381,6 +382,27 @@ point, and never again to overrule you.
 If `waired inference status` reports **off** and gives no reason, nothing on
 this computer decided it: it was chosen here — during setup, with the
 installer's `--inference-enabled false`, or with `waired inference off`.
+
+## It says local AI is not set up yet
+
+```sh
+waired inference status
+```
+
+```
+Local inference: not set up yet — this device is not signed in. Run `waired init`.
+```
+
+This is the state between installing Waired and signing in. Nothing is wrong
+and there is no setting to change: the computer has no account to run AI for
+yet. [Sign in](/getting-started/first-run/) and the answer becomes **on** or
+**off**.
+
+Older versions answered this state with *“unknown (this daemon does not report
+it — `waired update`)”*, which sent people to an update command that then
+reported the computer was already up to date. If you see that wording, the
+computer is running an older build; `waired update` is harmless, and signing in
+is what actually moves it forward.
 
 ## Setup said it could not complete a test generation
 

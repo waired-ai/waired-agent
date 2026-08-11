@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: c8241967ce1fcc92
+sourceHash: 98b2a10b7f0c7671
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -39,6 +39,7 @@ waired doctor
 - [「enrolled system-wide」と表示される](#it-says-the-device-is-enrolled-system-wide)
 - [非常に小さいモデルが選ばれた](#waired-chose-a-very-small-model-for-my-machine)
 - [選んでいないのにローカル AI がオフで始まった](#local-ai-started-off-and-i-did-not-choose-that)
+- [ローカル AI が「まだ設定されていない」と出る](#it-says-local-ai-is-not-set-up-yet)
 - [セットアップで「テスト生成を完了できませんでした」と出た](#setup-said-it-could-not-complete-a-test-generation)
 
 **応答がない**
@@ -392,6 +393,29 @@ Waired アプリでは **Run AI models on this computer** が同じ操作です�
 `waired inference status` が理由なしで**オフ**と表示する場合、判断したのは
 このパソコンではありません。セットアップでの選択、インストーラの
 `--inference-enabled false`、`waired inference off` のいずれかです。
+
+<a id="it-says-local-ai-is-not-set-up-yet"></a>
+
+## ローカル AI が「まだ設定されていない」と出る
+
+```sh
+waired inference status
+```
+
+```
+Local inference: not set up yet — this device is not signed in. Run `waired init`.
+```
+
+Waired をインストールしてからサインインするまでの状態です。異常ではなく、
+変更すべき設定もありません。このパソコンにはまだ AI を動かす対象のアカウントが
+ない、というだけです。[サインイン](/ja/getting-started/first-run/)すれば、
+**オン**か**オフ**が表示されるようになります。
+
+以前のバージョンはこの状態を *「unknown (this daemon does not report it —
+`waired update`)」* と表示していました。案内された `waired update` を実行しても
+「すでに最新です」と返るだけです。この表示が出る場合、そのパソコンは古い
+ビルドで動いています。`waired update` を実行しても害はありませんが、
+状況を進めるのはサインインのほうです。
 
 <a id="setup-said-it-could-not-complete-a-test-generation"></a>
 
