@@ -2353,16 +2353,26 @@ if ($Contract) {
             ItBad "could not lock $lockedExe, so the #660 leg proves nothing"
         } else {
             try {
-                $lockedOut = (& (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes 2>&1 | Out-String)
+                # *>&1, not 2>&1: the uninstaller reports through Write-Host,
+                # which is the information stream. Capturing only errors caught
+                # none of its output, and the "does not say fully removed"
+                # assert below would then have passed against an empty string.
+                $lockedOut = (& (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes *>&1 | Out-String)
                 $lockedRc  = $LASTEXITCODE
+                Write-Host $lockedOut   # captured, so echo it or CI sees nothing
                 ItSoft '660' ($lockedRc -ne 0) `
                     "uninstall.ps1 exits non-zero when it could not delete the binary (got $lockedRc)" 'waired-agent'
                 ItSoft '660' ($lockedOut -notmatch 'fully removed') `
                     'uninstall.ps1 does not claim "fully removed" over a binary it left behind' 'waired-agent'
-                ItSoft '660' ($lockedOut -match 'could not be removed') `
+                ItSoft '660' ($lockedOut -match [regex]::Escape($InstallDir) + '.*could not be removed') `
                     'uninstall.ps1 names the path it could not remove' 'waired-agent'
+                # Naming the holding process is best-effort by design: the lock
+                # above is a file handle held by this harness, not a running
+                # image under InstallDir, so Get-LockHolders correctly finds
+                # nothing and the message falls back to its "could not identify"
+                # wording. What must always hold is that the reason is stated.
                 ItSoft '660' ($lockedOut -match 'still in use by') `
-                    'uninstall.ps1 names what is holding the file open' 'waired-agent'
+                    'uninstall.ps1 says why the removal failed' 'waired-agent'
                 if (Test-Path -LiteralPath $lockedExe) { ItOk "the locked binary is still there, as the assert above claims" }
                 else { ItBad "the locked binary vanished; the lock did not hold and the asserts above are vacuous" }
             }

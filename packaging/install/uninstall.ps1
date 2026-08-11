@@ -907,3 +907,12 @@ if ($FromElevation) {
         Read-Host '[waired] Uninstall complete. Press Enter to close this window' | Out-Null
     }
 }
+
+# Say 0 rather than falling off the end with whatever $LASTEXITCODE the last
+# native command happened to leave. `sc.exe delete` returns 1060
+# (ERROR_SERVICE_DOES_NOT_EXIST) on a host whose service is already gone, which
+# is a perfectly successful uninstall -- and that 1060 became the script's exit
+# code, so a caller checking it saw a failure where the transcript said "Waired
+# fully removed". The mirror of #660: an exit code that does not mean what it
+# says. Every real failure leaves through Common-Die or the trap, both exit 1.
+exit 0
