@@ -47,3 +47,29 @@ shellcheck packaging/debian/waired/postinst \
 # directories, so they do not match; this script lints itself, the same
 # way ps-script-lint.ps1 does.
 shellcheck scripts/ci/*.sh
+
+# The done banners must not mention $SUDO at all (#663). Two distinct
+# regressions share the one signature:
+#
+#   * a privileged PROBE. `waired init` runs for as long as the engine and
+#     model downloads and the benchmark take, far past sudo's default
+#     timestamp window, so anything privileged in the summary re-authenticates
+#     — a bare password prompt under the "Done" rule, with nothing said about
+#     why. The facts these banners need are settled earlier ($ENROLLED) or
+#     asked of the daemon over loopback (waired_engine_installed).
+#   * a printed hint. The heredocs are unquoted, so a $SUDO inside one is
+#     expanded as TEXT: under `sudo bash install.sh` it is empty, and the
+#     uninstall commands the banner tells the user to run silently lose their
+#     `sudo`. Both banners write the literal word instead.
+#
+# installtest-dash.sh's run_case_no_sudo_after_done covers the first at
+# runtime; this covers both, including the arms that harness cannot reach.
+# Matched on the bare name rather than the sigil so ${SUDO} and a stray
+# mention in a comment are caught too — inside these two functions there is
+# no legitimate reason to write it at all.
+for _fn in linux_done_banner darwin_next_steps; do
+  if awk "/^${_fn}\\(\\) \\{/,/^\\}/" packaging/install/install.sh | grep -n 'SUDO'; then
+    echo "error: ${_fn}() references SUDO — see the comment above this check (#663)" >&2
+    exit 1
+  fi
+done
