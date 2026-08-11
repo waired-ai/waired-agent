@@ -125,30 +125,50 @@ func runInitModelPicker(mgmtURL string, nonInteractive bool, pinnedModelID strin
 }
 
 // hostHasModelHistory reports whether this host has already decided
-// anything about models — an active or preferred model, weights on disk,
-// or a download in flight. The picker is the FIRST choice only (#586);
-// re-choosing on a configured host is waired-agent#599.
+// anything about models — an answered model question, an active model,
+// weights on disk, or a download in flight. The picker is the FIRST
+// choice only (#586); re-choosing on a configured host is
+// waired-agent#599.
 //
-// "Decided" means a PERSON decided. The one model this has to tell apart
-// is hostfit.HostCutoffProbeModelID: #496 measures the host by pulling
-// it, through the same registry the catalog reports downloads from, and
-// it is a real catalog entry rather than a private fixture — so its
-// weights arriving used to read as history and skip the picker
-// entirely (waired-agent#607). Not a race: step 6 blocks until the
-// measurement lands, and the measurement cannot land until that pull
-// has finished, so on the ordinary interactive path the picker was
-// unreachable. Weights Waired fetched to measure with are not an
-// answer; being ACTIVE or PREFERRED still is, because that model is a
-// legitimate pick (quality_tier 12, the smallest offered entry).
+// "Decided" means a PERSON decided, and until waired-agent#627 the first
+// test could not tell: it read a non-empty preferred_model_id as proof
+// someone had chosen, when the setup reconciler writes that same field
+// when it applies an instruction from the control plane. On a real first
+// install that removed the picker outright — a step an owner ruling put
+// there (waired-ai/waired#1067, 2026-08-08) — because a preference
+// landed mid-init five minutes before the picker would have run. So the
+// question asked here is now the one that was always meant: has the model
+// question been ANSWERED on this host? The daemon answers it from the
+// preference's recorded provenance.
+//
+// The per-family `preferred` flag goes with it, and for the same
+// reason: the daemon computes it as "this family's id equals the stored
+// preference", so it is the SAME claim projected onto a row and carries
+// the same defect. It is not lost — a preference a person set answers
+// the question above, which is checked first.
+//
+// The weights-based signals stay as they were, because a model that is
+// active or on disk means this host is past its first choice however it
+// got there. The one they have to tell apart is
+// hostfit.HostCutoffProbeModelID: #496 measures the host by pulling it,
+// through the same registry the catalog reports downloads from, and it
+// is a real catalog entry rather than a private fixture — so its weights
+// arriving used to read as history and skip the picker entirely
+// (waired-agent#607). Not a race: step 6 blocks until the measurement
+// lands, and the measurement cannot land until that pull has finished,
+// so on the ordinary interactive path the picker was unreachable.
+// Weights Waired fetched to measure with are not an answer; being ACTIVE
+// or PREFERRED still is, because that model is a legitimate pick
+// (quality_tier 12, the smallest offered entry).
 //
 // Same exclusion, one layer down, in cmd/waired-agent/setup_desired.go:
 // the probe model does not trigger ensureHostSpeedMeasured either.
 func hostHasModelHistory(cat catalogDetailResp) bool {
-	if cat.PreferredModelID != "" {
+	if cat.ModelQuestionAnswered {
 		return true
 	}
 	for _, f := range cat.Families {
-		if f.Active || f.Preferred {
+		if f.Active {
 			return true
 		}
 		if f.ModelID == hostfit.HostCutoffProbeModelID {

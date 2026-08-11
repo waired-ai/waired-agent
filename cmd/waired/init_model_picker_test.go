@@ -249,9 +249,15 @@ func TestModelPicker_LiveRecheckUsesTheFreshVerdict(t *testing.T) {
 // pending-question claim so the daemon's fallback proceeds.
 func TestModelPicker_SkipsWhenTheHostHasModelHistory(t *testing.T) {
 	for name, mutate := range map[string]func(*catalogDetailResp){
-		"active model":      func(c *catalogDetailResp) { c.Families[1].Active = true },
-		"stored preference": func(c *catalogDetailResp) { c.PreferredModelID = "qwen3.5-9b" },
-		"weights on disk":   func(c *catalogDetailResp) { c.Families[0].Downloaded = true },
+		"active model": func(c *catalogDetailResp) { c.Families[1].Active = true },
+		// An ANSWERED question, not merely a stored preference: the
+		// daemon reports whether a person here gave it (waired-agent#627).
+		"the question was answered here": func(c *catalogDetailResp) {
+			c.PreferredModelID = "qwen3.5-9b"
+			c.ModelQuestionAnswered = true
+			c.Families[1].Preferred = true
+		},
+		"weights on disk": func(c *catalogDetailResp) { c.Families[0].Downloaded = true },
 		"download in flight": func(c *catalogDetailResp) {
 			c.Families[1].Downloading = true
 		},
@@ -276,6 +282,56 @@ func TestModelPicker_SkipsWhenTheHostHasModelHistory(t *testing.T) {
 				t.Errorf("a skipped picker prints nothing, got:\n%s", out.String())
 			}
 		})
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#627): a preference this host was HANDED
+// is not an answer, so the picker still runs. The install flow's model
+// step is an owner-ruled step (waired-ai/waired#1067, 2026-08-08), and on
+// a real first install it silently disappeared because the setup path
+// wrote preferred-model.json five minutes before the picker would have
+// asked.
+//
+// This test inverts part of the one above it: "a stored preference" used
+// to be listed there as a reason to skip, unconditionally.
+func TestModelPicker_AHandedPreferenceIsNotAnAnswer(t *testing.T) {
+	cat := pickerCatalog()
+	// Exactly what the reconciler applying a control-plane instruction
+	// leaves behind: a preference, and the row flagged from it — but no
+	// answer given here.
+	cat.PreferredModelID = "qwen3.5-9b"
+	cat.ModelQuestionAnswered = false
+	cat.Families[1].Preferred = true
+
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{cat}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", linesOf("1\n"), &out, mine)
+
+	if got.picked != "qwen3.5-2b" {
+		t.Fatalf("outcome = %+v, want the picker to have run and taken row 1", got)
+	}
+	if !strings.Contains(out.String(), "Choose the AI model for this computer") {
+		t.Errorf("the picker did not render:\n%s", out.String())
+	}
+}
+
+// An older daemon does not report the new field, so it decodes false.
+// That must not turn every configured host back into a first install:
+// the weights-based signals still answer, exactly as they did before.
+func TestModelPicker_OlderDaemonStillSkipsOnWeights(t *testing.T) {
+	cat := pickerCatalog()
+	cat.PreferredModelID = "qwen3.5-9b" // an old daemon sends this and nothing else
+	cat.Families[1].Downloaded = true
+
+	f := &pickerFakeDaemon{catalogs: []catalogDetailResp{cat}}
+	var out strings.Builder
+	got := runInitModelPicker(f.server(t).URL, false, "", linesOf("0\n"), &out, mine)
+
+	if got.none || got.picked != "" {
+		t.Fatalf("outcome = %+v, want a silent skip", got)
+	}
+	if out.String() != "" {
+		t.Errorf("a skipped picker prints nothing, got:\n%s", out.String())
 	}
 }
 
@@ -325,11 +381,19 @@ func TestModelPicker_ProbeModelIsNotModelHistory(t *testing.T) {
 
 	t.Run("a person picked it, so it is history", func(t *testing.T) {
 		for name, cat := range map[string]catalogDetailResp{
-			"active":    probeCatalog(func(f *catalogDetailFamily) { f.Active = true }),
-			"preferred": probeCatalog(func(f *catalogDetailFamily) { f.Preferred = true }),
+			"active": probeCatalog(func(f *catalogDetailFamily) { f.Active = true }),
+			// "A person picked it" is the premise of this arm, and since
+			// waired-agent#627 that is a claim the daemon makes explicitly
+			// rather than one inferred from the preference existing.
+			"preferred": func() catalogDetailResp {
+				c := probeCatalog(func(f *catalogDetailFamily) { f.Preferred = true })
+				c.ModelQuestionAnswered = true
+				return c
+			}(),
 			"stored preference": func() catalogDetailResp {
 				c := probeCatalog(func(*catalogDetailFamily) {})
 				c.PreferredModelID = hostfit.HostCutoffProbeModelID
+				c.ModelQuestionAnswered = true
 				return c
 			}(),
 			"picked AND still marked downloaded": probeCatalog(func(f *catalogDetailFamily) {
