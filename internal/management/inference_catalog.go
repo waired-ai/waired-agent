@@ -96,6 +96,24 @@ type ModelCatalogResponse struct {
 	// Empty when no manual selection has been made.
 	PreferredModelID string `json:"preferred_model_id,omitempty"`
 
+	// ModelQuestionAnswered reports whether the stored preference is an
+	// answer a PERSON AT THIS MACHINE gave — the install picker, the
+	// slow-host demotion prompt, the tray — rather than an instruction
+	// the setup reconciler applied.
+	//
+	// PreferredModelID cannot answer that, and the install picker used it
+	// as if it could: a preference written mid-install by the setup path
+	// removed the picker from a first install entirely
+	// (waired-agent#627). Callers asking "has anyone been asked here yet"
+	// must read this instead.
+	//
+	// false covers three different situations that all mean the same
+	// thing to a caller — no preference at all, one the reconciler wrote,
+	// and one written before provenance was recorded (agentconfig
+	// deliberately treats unknown as not-an-answer, so a stale file
+	// cannot claim a person chose).
+	ModelQuestionAnswered bool `json:"model_question_answered,omitempty"`
+
 	// Engine is the auto-detected engine for this host (vllm or ollama).
 	// The tray uses this only for diagnostic display; fit calculations
 	// happen server-side.
@@ -322,6 +340,7 @@ func (s *Server) handleInferenceCatalog(w http.ResponseWriter, r *http.Request) 
 
 	resp := ModelCatalogResponse{
 		PreferredModelID:        pref.ModelID,
+		ModelQuestionAnswered:   pref.ChosenHere(),
 		Engine:                  engine,
 		Host:                    hostFromProfile(hw),
 		Families:                make([]CatalogFamily, 0, len(manifests)),

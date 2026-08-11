@@ -328,6 +328,50 @@ func TestInferenceCatalog_PreferredModelMarked(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#627): the catalog reports whether a
+// PERSON at this machine answered the model question, separately from
+// whether a preference exists. The install picker keys on it, and reading
+// the preference's presence instead is how an instruction the setup path
+// applied silently deleted the picker from a first install.
+func TestInferenceCatalog_ModelQuestionAnsweredFollowsProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pref agentconfig.Preference
+		want bool
+	}{
+		{"a person picked a model here", agentconfig.Preference{
+			ModelID: "qwen3-8b-instruct", Source: agentconfig.PreferenceSourceOperator}, true},
+		{"a person chose to run without one", agentconfig.Preference{
+			None: true, Source: agentconfig.PreferenceSourceOperator}, true},
+		{"the reconciler applied an instruction", agentconfig.Preference{
+			ModelID: "qwen3-8b-instruct", Source: agentconfig.PreferenceSourceDesired}, false},
+		{"a record from before provenance existed", agentconfig.Preference{
+			ModelID: "qwen3-8b-instruct"}, false},
+		{"the question expired unanswered", agentconfig.Preference{Unanswered: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefDir := t.TempDir()
+			if err := agentconfig.SavePreference(
+				filepath.Join(prefDir, "preferred-model.json"), tc.pref); err != nil {
+				t.Fatalf("save preference: %v", err)
+			}
+			s := newCatalogTestServer(t, &fakeInference{hwProfile: hardware.Profile{RAMTotalGB: 32}}, prefDir)
+			w, got := doGet(t, s, "/waired/v1/inference/catalog")
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d", w.Code)
+			}
+			if got.ModelQuestionAnswered != tc.want {
+				t.Errorf("model_question_answered = %v, want %v", got.ModelQuestionAnswered, tc.want)
+			}
+			// The two fields stay independent: a preference the host was
+			// handed is still reported, it just is not an answer.
+			if tc.pref.ModelID != "" && got.PreferredModelID != tc.pref.ModelID {
+				t.Errorf("preferred_model_id = %q, want %q", got.PreferredModelID, tc.pref.ModelID)
+			}
+		})
+	}
+}
+
 func TestInferenceCatalog_DownloadingFamilyAnnotated(t *testing.T) {
 	inf := &fakeInference{
 		hwProfile: hardware.Profile{RAMTotalGB: 32},

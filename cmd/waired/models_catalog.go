@@ -15,10 +15,20 @@ import (
 // stays decoupled from the management package, matching the rest of
 // cmd/waired's inline-struct convention.
 type catalogDetailResp struct {
-	PreferredModelID string                `json:"preferred_model_id"`
-	Engine           string                `json:"engine"`
-	Host             catalogDetailHost     `json:"host"`
-	Families         []catalogDetailFamily `json:"families"`
+	PreferredModelID string `json:"preferred_model_id"`
+
+	// ModelQuestionAnswered reports whether a person at this machine has
+	// answered the model question — see the management field of the same
+	// name. The install picker keys on this rather than on
+	// PreferredModelID, which cannot tell an answer apart from an
+	// instruction the setup path applied (waired-agent#627).
+	//
+	// An older daemon does not send it, so it decodes false: the picker
+	// then falls back to the model-history signals it always used.
+	ModelQuestionAnswered bool                  `json:"model_question_answered"`
+	Engine                string                `json:"engine"`
+	Host                  catalogDetailHost     `json:"host"`
+	Families              []catalogDetailFamily `json:"families"`
 }
 
 // catalogDetailHost is the host block of the catalog response: the
