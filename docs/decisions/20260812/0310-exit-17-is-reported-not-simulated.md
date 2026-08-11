@@ -65,18 +65,31 @@ per-OS の `osRequestRestart` は**フェイクを挟まない**。どれもこ�
 その後どうなるかは supervisor の性質。順序の決定（意図を記録してから機構を呼ぶ）だけを
 `requestRestart(mechanism)` に切り出してテストする。
 
-### 4. 再起動機構は 1 か所に集約する
+### 4. 再起動機構は 1 か所に集約する。ただし import で結合はしない
 
-`internal/management` が持っていた per-OS の複製を削除し、
-`DefaultRestartScheduler = service.RequestRestart` にした。**2 つの複製が実際に乖離していた**のが
+`internal/management` が持っていた per-OS の複製を削除した。**2 つの複製が実際に乖離していた**のが
 この issue の Windows 側の中身であり、意図フラグは SCM ハンドラも読む必要がある
 （`main.go` の exit には SCM 経路が構造的に到達しない）。
+
+**最初 `DefaultRestartScheduler = service.RequestRestart` と書いて CI に止められた。**
+`scripts/ci/routing-sentinel-paths-guard.sh` が、その import によって
+`internal/platform/service` と、その依存の `internal/deauth` / `internal/controlclient` /
+`internal/devicekeys` / `internal/identity` が **routing harness の依存閉包に入った**ことを検出した。
+ガードは「ワークフローの paths を広げるか ALLOW に足すか、意識的に選べ」と言うが、
+**正しい答えはどちらでもなく「結合しない」**だった。管理 API がプロセスの再起動方法を知る必要はない。
+
+なので `DefaultRestartScheduler` ごと削除し、`CatalogConfig.RestartScheduler` の
+既存シームだけを使う。未配線（nil）は配線漏れなので、**202 を返さず 500 で断る** —
+「起きない再起動」を適用済みとして報告するのが、置き換えた側の失敗だった。
+配線するのは `cmd/waired-agent` で、そこは元から両方を知っている。
 
 ## Consequences
 
 - Windows のモデル切替が **graceful shutdown を経る**ようになり、復旧スロットを
   クラッシュとして消費しなくなる。`sc queryex` が 17 を名指しできる。
-- `internal/management` が `internal/platform/service` を import する（循環なし）。
+- **挙動変更**: `RestartScheduler` 未配線のデーモンで `/preferred-model` の再起動経路が
+  500 を返す（以前はパッケージ内蔵の既定で再起動しようとした）。実デーモンは
+  `cmd/waired-agent` が必ず配線しており、未配線なのはテストの組み立てだけ。
 - **`internal/platform/servicediag` は未対応**。`waired doctor` は依然として
   「再起動を頼んだ終了」を失敗として説明しうる。診断系は別レーンの領域なので触っていない。
 - `scripts/dev/installtest-windows.ps1` に実機アサートを足す余地がある
