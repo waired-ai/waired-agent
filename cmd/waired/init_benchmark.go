@@ -141,6 +141,7 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		}
 		if switchAndWait(mgmtURL, rec.ToModelID, to, out, sc, tty) {
 			resp = remeasureAfterSwitch(mgmtURL, out)
+			offerToRemoveRejected(mgmtURL, rec.FromModelID, from, nonInteractive, out, sc)
 		}
 		return resp, false, nil
 	}
@@ -235,6 +236,48 @@ func switchAndWait(mgmtURL, modelID, label string, out io.Writer, sc lineReader,
 	return waitForModelSwitch(mgmtURL, modelID, out, tty, newBackgroundWatch(owner))
 }
 
+// offerToRemoveRejected offers to delete the weights of the model the
+// step-down moved away from.
+//
+// The wizard had just judged that model wrong for this host and then
+// left several gigabytes of it on disk with nothing pointing at it: on
+// the reported 16 GB machine, 12 GB of models against 6.4 GB the host
+// actually meant to keep (waired-agent#648). Nothing was ever going to
+// load it again — the same run had replaced it.
+//
+// It is offered, not done. The bytes are re-downloadable but not free,
+// and an operator who expects to move back up after adding memory has a
+// real reason to keep them; that is a decision the person in front of
+// the machine owns, not the wizard. Default Yes follows the demotion
+// prompt above it: this host was measured too slow for that model.
+//
+// Non-interactive keeps the weights and says so, with the command that
+// removes them. Deleting gigabytes on nobody's authority is the one
+// answer an unattended run must not give.
+//
+// A failure is reported and nothing else happens. The install is
+// finished and correct either way — the model is a leftover, not a
+// fault — so this never fails the flow.
+func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, out io.Writer, sc lineReader) {
+	if modelID == "" {
+		return
+	}
+	if nonInteractive {
+		writePromptf(out, "Keeping %s — remove it with `waired models rm %s`.\n", label, modelID)
+		return
+	}
+	if !ynPrompt(out, sc, fmt.Sprintf("Remove %s? Waired is not using it any more.", label), true) {
+		writePromptf(out, "Keeping %s — remove it later with `waired models rm %s`.\n", label, modelID)
+		return
+	}
+	if _, err := httpDelete(mgmtURL + "/waired/v1/models/" + modelID); err != nil {
+		writePromptf(out, "warn: could not remove %s (%v); remove it later with `waired models rm %s`\n",
+			label, err, modelID)
+		return
+	}
+	writePromptf(out, "Removed %s.\n", label)
+}
+
 // remeasureAfterSwitch measures the model that is serving after a
 // step-down, and returns its response — or nil when no measurement could
 // be taken.
@@ -312,6 +355,9 @@ func tinyBenchmarkDisableFlow(
 	if ynPrompt(out, sc, q, false) {
 		if switchAndWait(mgmtURL, rec.ToModelID, label, out, sc, tty) {
 			resp = remeasureAfterSwitch(mgmtURL, out)
+			// The same leftover as the ordinary step-down: this host was
+			// measured too slow for the model it just moved off.
+			offerToRemoveRejected(mgmtURL, rec.FromModelID, from, nonInteractive, out, sc)
 		}
 		return resp, false, nil
 	}

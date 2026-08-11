@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: f9bdd9902d77403e
+sourceHash: ed0991abbbe7b30d
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -109,6 +109,11 @@ waired models ls --detail     # 各モデルの必要メモリと、このパソ
 		新しいモデルが動き始めたら、Waired はもう一度計測してその値を表示します。
 		最初の数値は切り替え前のモデルのものなので引き継ぎません。2 回目の計測が
 		取れなかった場合は、古い数値を出す代わりに何も表示しません。
+
+		そのあと、切り替え前のモデルを削除するか尋ねます。ファイルは数 GB あり、
+		このパソコンでは二度と読み込まれないためです。残すのも正しい答えです —
+		あとで戻す見込みがあれば **n** と答えてください。`waired models rm <モデルID>`
+		でいつでも削除できます。無人実行では常に残します。
 	</TabItem>
 	<TabItem label="画面のないサーバーの場合">
 		ヘッドレスのマシンには Waired アイコンがないため、設定ファイルを書き換えて
