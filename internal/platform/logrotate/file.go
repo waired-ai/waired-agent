@@ -97,6 +97,10 @@ type File struct {
 	file   *os.File
 	size   int64
 	closed bool
+	// noted records that the current run of rotation failures has already
+	// been written into the log, so a lasting failure produces one note
+	// rather than one per record. Cleared by the next rotation that works.
+	noted bool
 }
 
 // OpenFile opens path for appending, creating it and its parent directory
@@ -161,8 +165,15 @@ func (f *File) Write(b []byte) (int, error) {
 			return 0, err
 		}
 	}
-	if rotErr != nil {
-		f.noteRotationFailure(rotErr)
+	// Note the failure once per episode, not once per record. A rotation
+	// that fails for a lasting reason — a full disk, an ACL that changed
+	// under us — leaves f.size over the cap, so every subsequent Write
+	// retries and fails the same way. Without this the file would carry one
+	// extra WARN for every record it holds, which is the opposite of
+	// bounding it.
+	if rotErr != nil && !f.noted {
+		f.noted = true
+		f.size += f.noteRotationFailure(rotErr)
 	}
 	n, err := f.file.Write(b)
 	f.size += int64(n)
@@ -231,7 +242,13 @@ func (f *File) rotate(p Policy) error {
 	if err := errors.Join(closeErr, stageErr); err != nil {
 		return err
 	}
-	return compress(f.path+stagedSuffix, archiveName(f.path, 0))
+	if err := compress(f.path+stagedSuffix, archiveName(f.path, 0)); err != nil {
+		return err
+	}
+	// The live file turned over, so whatever was wrong before is not wrong
+	// now: let the next failure speak again.
+	f.noted = false
+	return nil
 }
 
 // stage ages the archives and moves the live file into the staging slot,
@@ -249,21 +266,23 @@ func (f *File) stage(p Policy) error {
 	return os.Rename(f.path, f.path+stagedSuffix)
 }
 
-// noteRotationFailure writes the failure into the log file itself. Called
-// with f.mu held and with a usable handle.
+// noteRotationFailure writes the failure into the log file itself and
+// returns how many bytes it added. Called with f.mu held and with a usable
+// handle.
 //
 // Into the file rather than through slog: this writer IS where slog's
 // records go, so logging here would re-enter Write and deadlock on f.mu.
 // The note also lands where whoever reads an oversized log will look for
 // the explanation. Shaped as one JSON object so it parses like every other
 // record in the file.
-func (f *File) noteRotationFailure(err error) {
+func (f *File) noteRotationFailure(err error) int64 {
 	if f.file == nil {
-		return
+		return 0
 	}
 	// The write error is dropped: this is the fallback for a failure we
 	// already could not report, and the record the caller actually wanted
 	// logged still goes out right after.
-	_, _ = fmt.Fprintf(f.file, `{"time":%q,"level":"WARN","msg":"log rotation failed; this file may grow past its cap","path":%q,"err":%q}`+"\n",
+	n, _ := fmt.Fprintf(f.file, `{"time":%q,"level":"WARN","msg":"log rotation failed; this file may grow past its cap","path":%q,"err":%q}`+"\n",
 		time.Now().Format(time.RFC3339), f.path, err.Error())
+	return int64(n)
 }

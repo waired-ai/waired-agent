@@ -246,6 +246,46 @@ func TestOpenFileRecoversAStagedArchive(t *testing.T) {
 	}
 }
 
+// TestFileNotesALastingRotationFailureOnce is the anti-flood guard. A
+// rotation that fails for a lasting reason leaves the file over its cap,
+// so every following write retries and fails the same way. Noting each one
+// would put a WARN beside every record — turning a bounded log into a
+// doubled unbounded one, which is the failure this package exists to
+// prevent.
+//
+// The failure is forced by making the staging step impossible: a directory
+// sitting where <path>.0 has to be renamed to cannot be replaced by a
+// file, on any OS.
+func TestFileNotesALastingRotationFailureOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "waired-agent.log")
+	f, err := OpenFile(path, smallPolicy)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer f.Close()
+
+	mustWrite(t, f, strings.Repeat("a", 90)+"\n")
+	if err := os.Mkdir(path+stagedSuffix, 0o700); err != nil {
+		t.Fatalf("block the staging slot: %v", err)
+	}
+
+	for i := range 5 {
+		if _, err := io.WriteString(f, strings.Repeat("b", 90)+"\n"); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+
+	got := strings.Count(readFile(t, path), `"msg":"log rotation failed`)
+	if got != 1 {
+		t.Errorf("rotation-failure notes = %d, want exactly 1 across five failing writes", got)
+	}
+	// Every record still got through — a log that cannot rotate must still
+	// be a log.
+	if n := strings.Count(readFile(t, path), strings.Repeat("b", 90)); n != 5 {
+		t.Errorf("records written = %d, want 5; a failed rotation must not drop records", n)
+	}
+}
+
 // TestFileWriteAfterCloseFails guards the daemon shutdown path: a late
 // record must get an error rather than a nil-pointer panic.
 func TestFileWriteAfterCloseFails(t *testing.T) {
