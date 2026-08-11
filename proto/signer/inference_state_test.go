@@ -744,6 +744,82 @@ func TestHostSpeed_PrefillFloor_CanonicalJSON(t *testing.T) {
 	}
 }
 
+// TestInferenceState_LocalModelChoiceAt_CanonicalJSON is the byte-identity
+// pin the concurrent-proto rules require of a change to this contract face
+// (docs/decisions/20260719/0000-concurrent-proto-development.md, decision 3).
+//
+// Product contract (waired-agent#647, the wire-contract field table on the
+// issue): the field is a timestamp only, it is absent unless a person at
+// this host answered the model question, and its absence is "no claim".
+func TestInferenceState_LocalModelChoiceAt_CanonicalJSON(t *testing.T) {
+	// The common case — a device whose preference was never set by a person
+	// here, or an agent that predates the field — is byte-identical to what
+	// it encoded before the field existed.
+	silent := InferenceState{
+		Reachable:   true,
+		Type:        InferenceTypeOllama,
+		Endpoint:    "http://127.0.0.1:11434",
+		Models:      []string{"qwen3:8b-q4_K_M"},
+		LastCheck:   "2026-08-02T12:00:00Z",
+		ActiveModel: "qwen3-8b-instruct",
+	}
+	const wantSilent = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z",` +
+		`"active_model":"qwen3-8b-instruct"}`
+	data, err := json.Marshal(&silent)
+	if err != nil {
+		t.Fatalf("marshal silent: %v", err)
+	}
+	if got := string(data); got != wantSilent {
+		t.Errorf("a device making no claim changed the encoding:\n got %s\nwant %s",
+			got, wantSilent)
+	}
+
+	// The demotion case the field exists for: the operator was told the
+	// assigned model measured slow, accepted the lighter one, and the device
+	// now serves something other than what it was told to serve.
+	chose := silent
+	chose.ActiveModel = "qwen3.5-2b"
+	chose.LocalModelChoiceAt = "2026-08-10T02:31:04.512Z"
+	const wantChose = `{"reachable":true,"type":"ollama","endpoint":"http://127.0.0.1:11434",` +
+		`"models":["qwen3:8b-q4_K_M"],"last_check":"2026-08-02T12:00:00Z",` +
+		`"active_model":"qwen3.5-2b","local_model_choice_at":"2026-08-10T02:31:04.512Z"}`
+	data, err = json.Marshal(&chose)
+	if err != nil {
+		t.Fatalf("marshal chose: %v", err)
+	}
+	if got := string(data); got != wantChose {
+		t.Errorf("choice encoding drifted:\n got %s\nwant %s", got, wantChose)
+	}
+
+	// No model id rides with it: ActiveModel is the one answer to "which
+	// model", and a second one on the same push could disagree with it.
+	if indexOf(string(data), "local_model_choice_model") >= 0 {
+		t.Errorf("the choice carries a model id of its own: %s", data)
+	}
+
+	var out InferenceState
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&chose, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", chose, out)
+	}
+
+	// The rolling-upgrade direction: a payload from an agent that predates
+	// the field leaves it empty, and empty must mean "no claim" — never
+	// "nobody has ever chosen on that host", which would license moving a
+	// desired-state instruction the operator did give.
+	var pre InferenceState
+	if err := json.Unmarshal([]byte(wantSilent), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition payload: %v", err)
+	}
+	if pre.LocalModelChoiceAt != "" {
+		t.Errorf("pre-addition payload decoded to LocalModelChoiceAt=%q, want empty",
+			pre.LocalModelChoiceAt)
+	}
+}
+
 func indexOf(haystack, needle string) int {
 	for i := 0; i+len(needle) <= len(haystack); i++ {
 		if haystack[i:i+len(needle)] == needle {

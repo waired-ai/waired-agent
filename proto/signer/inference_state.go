@@ -379,6 +379,48 @@ type InferenceState struct {
 	// of the WHOLE map, not just that entry. The path this travels is
 	// agent → CP push → Spanner inference_state JSON → the management API.
 	HostSpeed *HostSpeed `json:"host_speed,omitempty"`
+
+	// LocalModelChoiceAt is when a person at THIS machine last answered the
+	// model question — the install picker, the "it measured slow, switch to
+	// the lighter model" prompt, or "run without a local model". RFC3339Nano,
+	// for the reason given at the top of this file.
+	//
+	// It carries no model id. ActiveModel above already names the catalog
+	// model the device settled on, in the same namespace DesiredModelID uses
+	// in the other direction, so a second id would be a second answer to one
+	// question. What was missing was not WHICH model but WHEN the person
+	// decided.
+	//
+	// A timestamp rather than a flag because the useful claim is an ORDER.
+	// The control plane's desired-state instruction is sticky: it is folded
+	// into every signed map for as long as it is set, and nothing withdraws
+	// it in response to what the device reports. So a host that measured its
+	// assigned model as too slow and stepped down to a lighter one keeps
+	// being told to run the model it rejected (waired-agent#647). Reading
+	// "the person here chose after that instruction was written" is what
+	// licenses moving the instruction; "a person chose at some point" is not,
+	// because it cannot tell a demotion from a device that has simply not
+	// finished applying a change an operator made in the browser a moment
+	// ago.
+	//
+	// Set only for a choice made ON this host. A preference the desired-state
+	// reconciler applied is the instruction arriving, not an answer to it,
+	// and publishing it would let an instruction confirm itself.
+	//
+	// Push-only, exactly like RecommendedMaxParallel, NotShared and
+	// HostSpeed: agent → CP push → Spanner inference_state JSON → the
+	// management API, and effectiveInferenceState MUST zero it out of the
+	// served NetworkMap. Peers route on Capacity and Models and have no use
+	// for it, and a field riding the signed map is dropped on canonical
+	// re-marshal by any agent that predates it — which fails verification of
+	// the WHOLE map. Being push-only is also why it carries no capability
+	// constant.
+	//
+	// "" means NO CLAIM — an agent that predates the field, or one whose
+	// stored preference did not come from a person here. A consumer must
+	// keep doing whatever it did before rather than reading it as "nobody
+	// has ever chosen".
+	LocalModelChoiceAt string `json:"local_model_choice_at,omitempty"`
 }
 
 // HostSpeed is one coding-agent turn's cost on a host, measured at
