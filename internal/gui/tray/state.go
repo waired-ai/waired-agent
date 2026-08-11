@@ -932,8 +932,12 @@ func formatHardwareTail(hw *management.PeerHardware) string {
 		return "(hardware unknown)"
 	}
 	if hw.GPUModel != "" {
-		if hw.VRAMTotalMB > 0 {
-			return fmt.Sprintf("%s (%d GB)", shortGPUModel(hw.GPUModel), vramMBToGB(hw.VRAMTotalMB))
+		// #662: EffectiveVRAMMB, not VRAMTotalMB — a unified-memory host
+		// reports its budget as the usable bound and Apple Silicon reports
+		// no per-device total at all, so reading the raw field dropped the
+		// size from an M-series row entirely.
+		if mb := hw.EffectiveVRAMMB(); mb > 0 {
+			return fmt.Sprintf("%s (%d GB)", shortGPUModel(hw.GPUModel), vramMBToGB(mb))
 		}
 		return shortGPUModel(hw.GPUModel)
 	}

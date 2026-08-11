@@ -78,6 +78,68 @@ func TestPeersList_TableIncludesPeerColumns(t *testing.T) {
 	}
 }
 
+// TestPeersList_UnifiedMemoryPeerShowsItsUsableBound pins that the VRAM
+// column has a figure for a peer whose GPU shares system RAM.
+//
+// PRODUCT CONTRACT (waired-ai/waired-agent#662). Apple Silicon publishes
+// no per-GPU total — its detector leaves that field 0 deliberately,
+// because the honest bound there is the OS-reserved usable figure — so
+// this column read "-" for an M-series Mac while an AMD Strix Halo on the
+// same mesh showed 96 GB. Both hosts below are unified-memory; the
+// difference is only which field carries the number.
+func TestPeersList_UnifiedMemoryPeerShowsItsUsableBound(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{
+			{
+				DeviceID:   "dev_mac",
+				DeviceName: "mac-mini",
+				InferenceState: &signer.InferenceState{
+					Reachable: true,
+					Type:      signer.InferenceTypeOllama,
+					Hardware: &signer.HardwareSummary{
+						// What a real M4 sends: a named GPU with no
+						// per-device total, and the budget at the summary
+						// level.
+						GPUs:          []signer.HardwareGPUSummary{{Model: "Apple M4", Vendor: "apple"}},
+						RAMTotalGB:    16,
+						UnifiedMemory: true,
+						UsableVRAMMB:  12288,
+					},
+				},
+			},
+			{
+				DeviceID:   "dev_amd",
+				DeviceName: "strix",
+				InferenceState: &signer.InferenceState{
+					Reachable: true,
+					Type:      signer.InferenceTypeOllama,
+					Hardware: &signer.HardwareSummary{
+						// rocm-smi reports the whole BIOS carve-out as the
+						// device total, so this host has always had a
+						// figure in the per-GPU field.
+						GPUs:          []signer.HardwareGPUSummary{{Model: "AMD Radeon(TM) 8060S Graphics", Vendor: "amd", VRAMTotalMB: 98304}},
+						RAMTotalGB:    128,
+						UnifiedMemory: true,
+						UsableVRAMMB:  98304,
+					},
+				},
+			},
+		},
+	}
+	srv := peersTestServer(t, snap)
+	defer srv.Close()
+	out := captureStdout(t, func() {
+		if err := runPeers([]string{"list", "--mgmt", meshAddrFromURL(srv.URL)}); err != nil {
+			t.Fatalf("runPeers list: %v", err)
+		}
+	})
+	for _, want := range []string{"Apple M4", "12 GB", "AMD Radeon(TM) 8060S Graphics", "96 GB"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n%s", want, out)
+		}
+	}
+}
+
 func TestPeersList_FlagsUnreachableAsNotCapable(t *testing.T) {
 	snap := inferencemesh.Snapshot{
 		Peers: []inferencemesh.PeerView{

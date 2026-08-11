@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/waired-ai/waired-agent/internal/inferencemesh"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -95,7 +96,13 @@ func peerRow(p inferencemesh.PeerView) string {
 		}
 		if hw := p.InferenceState.Hardware; hw != nil && len(hw.GPUs) > 0 {
 			gpu = hw.GPUs[0].Model
-			if mb := hw.GPUs[0].VRAMTotalMB; mb > 0 {
+			// #662: the summary-level usable bound wins on a host that
+			// shares RAM with its GPU, because Apple Silicon publishes no
+			// per-device total and this column read "-" for an M-series
+			// Mac while an AMD Strix Halo beside it showed 96 GB. The
+			// fallback rule is signer.HardwareSummary's own; hostfit owns
+			// the single implementation of it.
+			if mb := hostfit.FromHardwareSummary(hw).EffectiveVRAMMB(); mb > 0 {
 				vram = fmt.Sprintf("%d GB", (mb+512)/1024)
 			}
 		}
