@@ -136,6 +136,27 @@ type Presentation struct {
 	// which prices its window differently and has no equivalent yet.
 	RequiredWindowResidentMB int `json:"required_window_resident_mb,omitempty"`
 
+	// WeightsResidentMB is the card-side term of the window figure:
+	// weights plus the engine's own overhead (OllamaWeightsResidentMB) —
+	// what must sit in GPU-addressable memory for the model to serve
+	// without reading weights from system RAM per token, and the term
+	// the recommendation gate compares against the card budget.
+	//
+	// It exists so a surface can itemise RequiredWindowResidentMB
+	// instead of printing it as one opaque figure: the difference
+	// between the two is the session's KV cache, which may overflow
+	// into system RAM at a speed cost rather than a capacity one
+	// (waired-ai/waired#1152). The NAVI picker prints
+	// "model X + session cache Y" from exactly that subtraction
+	// (waired-ai/waired#1174).
+	//
+	// Set wherever the window figure is, including a host with no GPU
+	// (the model's own size is still the fact a picker prints there).
+	// Zero for a variant with no weight annotation, and on the vLLM
+	// path, which prices its budget as min_vram_mb in
+	// RequiredResidentMB.
+	WeightsResidentMB int `json:"weights_resident_mb,omitempty"`
+
 	// QualityTier is the maintainers' ranking of the variant this
 	// verdict describes. Higher is better; it is what the pickers order
 	// by.
@@ -215,6 +236,7 @@ func Project(v catalog.Variant, engine string, h Host, budgetMB int) Presentatio
 	switch engine {
 	case catalog.RuntimeOllama:
 		got = OllamaFit(v, h)
+		out.WeightsResidentMB = OllamaWeightsResidentMB(v, h.UnifiedMemory)
 		// Meaningless without GPU-addressable memory — see the field doc.
 		if h.HasGPU() {
 			out.RequiredResidentMB = OllamaResidentMB(v, h.UnifiedMemory)
@@ -272,6 +294,7 @@ func ProjectModel(m catalog.Manifest, v catalog.Variant, engine string, h Host, 
 		// most need to know.
 		out.RequiredWindowResidentMB = OllamaWindowResidentMB(
 			v, OllamaEffectiveContextFloor(m), h.UnifiedMemory)
+		out.WeightsResidentMB = OllamaWeightsResidentMB(v, h.UnifiedMemory)
 		// Meaningless without GPU-addressable memory — see the field doc.
 		if h.HasGPU() {
 			out.RequiredResidentMB = OllamaResidentMB(v, h.UnifiedMemory)
