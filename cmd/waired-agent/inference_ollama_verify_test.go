@@ -309,8 +309,13 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 	t.Run("spill-at-the-only-rung-latches-without-restart", func(t *testing.T) {
 		// The fixture's ladder has one rung, so a spill degrade has
 		// nowhere to step (waired-agent#587): the failure latches — no
-		// restart, the warning records it, and WindowFits drops so the
-		// window measured unreliable stops being declared.
+		// restart, the warning records it, and WindowFits drops to record
+		// WHY the host is on that rung.
+		//
+		// WindowFits no longer stops the window being declared: the host
+		// serves it, and spill costs decode speed rather than window size
+		// (waired-ai/waired-agent#657). TestDeclaredContextWindow owns
+		// that half; this one owns the latch.
 		size, _ := healthy(262144)
 		api := &fakeOllamaAPI{psName: verifyTag, psSize: size, psVRAM: size * 7 / 10,
 			psCtx: verifyCtx, tagSize: weight}
@@ -327,7 +332,7 @@ func TestApplyOllamaTuningVerification(t *testing.T) {
 			t.Errorf("warning should record the latched spill: %q", got.Warning)
 		}
 		if got.WindowFits {
-			t.Error("a latched failure must drop WindowFits so the window is no longer declared")
+			t.Error("a latched failure must drop WindowFits so the decision reason records the forced rung")
 		}
 	})
 

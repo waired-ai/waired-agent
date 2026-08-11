@@ -429,13 +429,15 @@ func modelDecisionReasons(cfg agentconfig.InferenceConfig, m catalog.Manifest, t
 			m.ModelID, t.ContextLength))
 	case t.ContextLength > 0:
 		// A rung this host's memory was not shown to hold (WindowFits
-		// false — the forced lowest rung, waired-agent#587). Served for
-		// this machine's own use, never declared to the mesh.
+		// false — the forced lowest rung, waired-agent#587). Served, and
+		// therefore declared: what the spill costs is decode speed, not
+		// window size, so the warning names the slowdown rather than
+		// claiming the device takes no work (waired-ai/waired-agent#657).
 		extraWarning = fmt.Sprintf(
-			"%s serves a %d-token window this host's memory could not be shown to hold — "+
-				"this device advertises no serving window to the mesh, so Claude Code's "+
-				"Waired entries will not route work here (it still serves this machine's "+
-				"own requests)",
+			"%s serves a %d-token window with part of the model in system RAM, which this "+
+				"host's memory could not be shown to hold — the window is declared to the "+
+				"mesh and Claude Code sessions can route here, but turns are slower than on "+
+				"a host holding the model in GPU memory",
 			m.ModelID, t.ContextLength)
 		reasons = append(reasons, extraWarning)
 	}

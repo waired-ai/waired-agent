@@ -934,9 +934,14 @@ type ModelTuning struct {
 	// proved this host holds (hostfit.OllamaRungPlan.Fits on the ollama
 	// path; a real vLLM estimate on that path). False marks a window the
 	// engine was given anyway — the lowest rung, forced because sub-rung
-	// windows are not served (waired-ai/waired-agent#587) — which is
-	// SERVED but never declared to the mesh: DeclaredContextWindow reads
-	// false as "declares nothing" (waired-ai/waired#1031).
+	// windows are not served (waired-ai/waired-agent#587).
+	//
+	// It no longer gates the mesh declaration. Such a window is served,
+	// and a served window is declared: spill costs decode speed, not
+	// window size, so withholding it made a host that answers real
+	// requests invisible to the mesh at every session size
+	// (waired-ai/waired-agent#657). Today the flag records WHY the host
+	// is on that rung, for the local decision-reason wording only.
 	WindowFits bool
 	// Verified is true once the post-load /api/ps verification completed
 	// (regardless of outcome).
