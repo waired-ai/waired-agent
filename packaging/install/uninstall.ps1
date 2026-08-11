@@ -581,7 +581,7 @@ function Remove-WairedService {
     # nothing is the #630 defect. Note the fall-through below is deliberate
     # when EITHER exists -- an exe with no registration still gets the manual
     # sweep, because `waired-agent uninstall` may have half-finished.
-    $registered = [bool](Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)
+    $registered = Test-Probe { Get-Service -Name $ServiceName -ErrorAction SilentlyContinue }
     if (-not (Test-Path -LiteralPath $agent) -and
         (Skip-Absent -What "the $ServiceName service" -Present $registered)) { return }
 
@@ -636,10 +636,28 @@ function Skip-Absent {
     return $true
 }
 
+# Test-Probe evaluates an existence probe and answers $false if the probe
+# itself cannot run.
+#
+# It exists because these gates moved Windows-only calls out of Common-Run,
+# where -DryRun had been skipping them. Get-Service does not exist off Windows
+# and HKCU: is not a drive there, and neither failure is suppressible with
+# -ErrorAction -- so the gates made the script unrunnable under a non-Windows
+# pwsh, which installtest-pwsh.ps1 depends on: it spawns this file as a real
+# child to prove `install.ps1 -Clean` delegates the wipe.
+#
+# "Cannot probe" means "cannot be present", which is the right answer both
+# there (nothing is installed on a Linux fixture) and on any Windows host where
+# a probe is somehow refused: the step is skipped rather than announced.
+function Test-Probe {
+    param([scriptblock]$Probe)
+    try { return [bool](& $Probe) } catch { return $false }
+}
+
 # Stop the tray process so its exe is not locked when we delete InstallDir.
 function Stop-Tray {
     if (Skip-Absent -What 'waired-tray' `
-            -Present ([bool](Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue))) { return }
+            -Present (Test-Probe { Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue })) { return }
     Common-Run "Stop-Process waired-tray" {
         Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue |
             Stop-Process -Force -ErrorAction SilentlyContinue
@@ -652,7 +670,7 @@ function Stop-Tray {
 # real user's autostart behind (waired#754). Called only from Remove-UserIntegration.
 function Remove-TrayAutostart {
     $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    $present = [bool](Get-ItemProperty -Path $run -Name 'waired-tray' -ErrorAction SilentlyContinue)
+    $present = Test-Probe { Get-ItemProperty -Path $run -Name 'waired-tray' -ErrorAction SilentlyContinue }
     if (Skip-Absent -What 'the waired-tray autostart entry' -Present $present) { return }
     Common-Log "Removing the waired-tray autostart entry (current user)"
     Common-Run "Remove-ItemProperty $run\waired-tray" {
@@ -721,7 +739,9 @@ function Remove-StartMenu {
 # table-drive it the way it does ConvertTo-NativeArg / Get-ExitCodeReason.
 function Format-LockHolders {
     param($Holders)
-    $list = @($Holders) | Where-Object { $_ }
+    # @(...) around the whole pipeline: a Where-Object that matches nothing
+    # yields $null, and .Count on $null is an error under Set-StrictMode.
+    $list = @(@($Holders) | Where-Object { $_ })
     if ($list.Count -eq 0) { return 'a process this uninstaller could not identify' }
     return ($list | ForEach-Object { "$($_.Name) (PID $($_.Id))" }) -join ', '
 }
@@ -845,20 +865,26 @@ function Get-OllamaStageDirs {
 # trace it knows how to remove is probed, not just one path, so a "not present"
 # answer is trustworthy rather than a guess.
 function Test-OllamaPresent {
-    if (Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue) { return $true }
+    if (Test-Probe { Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue }) { return $true }
     foreach ($d in (Get-OllamaDirs))        { if (Test-Path -LiteralPath $d) { return $true } }
     foreach ($m in (Get-OllamaModelHomes))  { if (Test-Path -LiteralPath $m) { return $true } }
     foreach ($v in $OllamaEnvVars) {
-        if ([Environment]::GetEnvironmentVariable($v, 'Machine')) { return $true }
+        if (Test-Probe { [Environment]::GetEnvironmentVariable($v, 'Machine') }) { return $true }
     }
-    if ((Get-OllamaStageDirs).Count -gt 0) { return $true }
+    # @(...) around the call, not just inside the function: a PowerShell
+    # function returning an empty array yields nothing, so the caller sees
+    # $null -- and .Count on $null is an error under Set-StrictMode, which
+    # installtest-pwsh.ps1 has on when it runs this script in-process. Same
+    # normalise-before-you-count rule install.ps1 records at its own count
+    # sites.
+    if (@(Get-OllamaStageDirs).Count -gt 0) { return $true }
     return $false
 }
 
 function Remove-Ollama {
     if (Skip-Absent -What 'Ollama' -Present (Test-OllamaPresent)) { return }
     Common-Log "Removing Ollama (binary, models, PATH, env)"
-    if (Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue) {
+    if (Test-Probe { Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue }) {
         Common-Run "Stop-Process ollama*" {
             Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue |
                 Stop-Process -Force -ErrorAction SilentlyContinue

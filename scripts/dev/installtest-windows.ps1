@@ -2342,8 +2342,13 @@ if ($Contract) {
         # artifacts the teardown needs: at this point the runner has no Ollama
         # of any kind, which is the host the issue was reported on.
         ItStep "uninstall.ps1 -DryRun previews only what exists (#630)"
-        $dryOut = (& (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes -DryRun 2>&1 | Out-String)
+        # *>&1, not 2>&1 -- see the locked-binary leg below: the uninstaller
+        # reports through Write-Host, which is the information stream, so
+        # capturing only errors captures nothing and the three "does not
+        # announce" asserts below would pass against an empty string.
+        $dryOut = (& (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes -DryRun *>&1 | Out-String)
         $dryRc  = $LASTEXITCODE
+        Write-Host $dryOut   # captured, so echo it or CI sees nothing
         ItSoft '630' ($dryRc -eq 0) "uninstall.ps1 -DryRun exits 0 (got $dryRc)" 'waired-agent'
         ItSoft '630' ($dryOut -match 'Ollama not present') `
             'uninstall.ps1 -DryRun says Ollama is not present instead of announcing its removal' 'waired-agent'
