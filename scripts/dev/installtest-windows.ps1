@@ -255,6 +255,7 @@ $script:ContractBlocking = @{
     '315' = $true    # waired#315: SCM recovery actions also fire on a non-crash failure exit (FIXED)
     '579' = $true    # waired-agent#579: the host-speed measurement reaches a verdict inside init's window (FIXED)
     '660' = $true    # waired-agent#660: uninstall verifies its own deletes instead of reporting success over them (FIXED)
+    '630' = $true    # waired-agent#630: uninstall.ps1 existence-gates its steps the way uninstall.sh does (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -2336,6 +2337,25 @@ Remove-Job $lj -Force -ErrorAction SilentlyContinue | Out-Null
 # keep the historical behavior (no uninstall — the runner is disposable).
 if ($Contract) {
     try {
+        # (#630) A dry run is a preview, so it must not list removals that
+        # cannot happen. Run FIRST, before the OLLAMA_* seeds below plant the
+        # artifacts the teardown needs: at this point the runner has no Ollama
+        # of any kind, which is the host the issue was reported on.
+        ItStep "uninstall.ps1 -DryRun previews only what exists (#630)"
+        $dryOut = (& (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes -DryRun 2>&1 | Out-String)
+        $dryRc  = $LASTEXITCODE
+        ItSoft '630' ($dryRc -eq 0) "uninstall.ps1 -DryRun exits 0 (got $dryRc)" 'waired-agent'
+        ItSoft '630' ($dryOut -match 'Ollama not present') `
+            'uninstall.ps1 -DryRun says Ollama is not present instead of announcing its removal' 'waired-agent'
+        ItSoft '630' ($dryOut -notmatch 'Removing Ollama') `
+            'uninstall.ps1 -DryRun does not announce removing an Ollama that is not installed' 'waired-agent'
+        ItSoft '630' ($dryOut -notmatch 'clear OLLAMA_') `
+            'uninstall.ps1 -DryRun does not announce clearing env vars that are not set' 'waired-agent'
+        # A dry run that removed something would make every assert after it
+        # meaningless, and the teardown below is what proves the real run works.
+        if (Test-Path -LiteralPath $InstallDir) { ItOk "-DryRun changed nothing" }
+        else { ItBad "-DryRun removed $InstallDir" }
+
         # (#660) The false-success chain, staged with a planted victim in the
         # same spirit as the seeds below. Hold waired.exe open with no sharing
         # so Windows refuses to delete it -- the same refusal an orphaned
@@ -2650,11 +2670,15 @@ if ($script:Skip -gt 0) {
 #      of 5, but that arm is an ItBad and exits non-zero regardless, so the
 #      floor is measured against the green path as usual.
 #
+# waired-agent#630 adds 5 more, -Contract only: the -DryRun preview leg's 4
+# ItSoft plus its "changed nothing" check, all unconditional within the block.
+# 96 -> 101.
+#
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 96 } elseif ($EngineOnly) { 77 } else { 74 }
+    $floor = if ($Contract) { 101 } elseif ($EngineOnly) { 77 } else { 74 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
