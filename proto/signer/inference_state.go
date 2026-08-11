@@ -655,6 +655,31 @@ type HardwareSummary struct {
 	// CapabilityRAMAvailableV1, keeping verification byte-identical
 	// for older agents.
 	RAMAvailableGB int `json:"ram_available_gb,omitempty"`
+
+	// RAMAvailableMeasuredAt is when RAMAvailableGB was taken,
+	// RFC3339Nano — the same shape HostSpeed.MeasuredAt uses, because
+	// it answers the same question about the other install-time
+	// measurement (waired-agent#699).
+	//
+	// It exists because the value alone cannot be told from a live
+	// reading by anything downstream. The figure is deliberately NOT
+	// live — that is what lets it ride the served map without churn —
+	// but a console showing "112 GB free" has no way to say so, and an
+	// operator reading it during a busy hour has every reason to
+	// mistrust it.
+	//
+	// Set whenever RAMAvailableGB is: the agent writes and re-takes the
+	// two together, so a non-empty value here always dates the number
+	// beside it. "" is no claim — an agent predating the field, or a
+	// host that never measured (which reports RAMAvailableGB 0 too).
+	// Nothing about the deduction arithmetic reads it.
+	//
+	// Gated like the field it dates, but on its own constant:
+	// CapabilityRAMAvailableV2. An agent that declared only v1 knows
+	// RAMAvailableGB and not this, so it would drop this on canonical
+	// re-marshal and fail verification — which is why v1 could not
+	// simply be read more widely.
+	RAMAvailableMeasuredAt string `json:"ram_available_measured_at,omitempty"`
 }
 
 // HardwareGPUSummary identifies one GPU. Fields mirror
