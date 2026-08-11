@@ -330,6 +330,85 @@ func TestCapabilityRAMAvailableV1_WireValue(t *testing.T) {
 	}
 }
 
+// TestCapabilityRAMAvailableV2_WireValue pins the second literal, and
+// that it is a DIFFERENT string from the first. The two gate different
+// fields on the same struct (waired-agent#699): an agent declaring only
+// v1 must keep receiving maps with no ram_available_measured_at, or it
+// drops the key on canonical re-marshal and fails verification. Collapse
+// the constants and that agent breaks.
+func TestCapabilityRAMAvailableV2_WireValue(t *testing.T) {
+	if CapabilityRAMAvailableV2 != "ram-available-v2" {
+		t.Fatalf("CapabilityRAMAvailableV2 = %q, want %q",
+			CapabilityRAMAvailableV2, "ram-available-v2")
+	}
+	if CapabilityRAMAvailableV2 == CapabilityRAMAvailableV1 {
+		t.Fatalf("the two RAM-available capabilities must stay distinct, both = %q",
+			CapabilityRAMAvailableV2)
+	}
+}
+
+// TestHardwareSummary_RAMAvailableMeasuredAt_CanonicalJSON is the
+// byte-identity pin for waired-agent#699. What it protects is the
+// v1-only agent: the CP strips this key for a poller that has not
+// declared v2, and the map it then serves has to be byte-for-byte what
+// that agent verified before the field existed.
+func TestHardwareSummary_RAMAvailableMeasuredAt_CanonicalJSON(t *testing.T) {
+	// Stripped (or never set): byte-for-byte the pre-#699 encoding, which
+	// is what a v1-only poller must keep receiving.
+	v1Only := HardwareSummary{
+		RAMTotalGB:     64,
+		RAMAvailableGB: 41,
+	}
+	const wantV1Only = `{"ram_total_gb":64,"ram_available_gb":41}`
+	data, err := json.Marshal(&v1Only)
+	if err != nil {
+		t.Fatalf("marshal v1-only: %v", err)
+	}
+	if got := string(data); got != wantV1Only {
+		t.Errorf("a stripped payload changed the encoding:\n got %s\nwant %s", got, wantV1Only)
+	}
+
+	// Set: the key appears last, in struct-declaration order, after the
+	// value it dates.
+	measured := HardwareSummary{
+		RAMTotalGB:             64,
+		RAMAvailableGB:         41,
+		RAMAvailableMeasuredAt: "2026-08-09T16:47:06.123456789Z",
+	}
+	const wantMeasured = `{"ram_total_gb":64,"ram_available_gb":41,` +
+		`"ram_available_measured_at":"2026-08-09T16:47:06.123456789Z"}`
+	data, err = json.Marshal(&measured)
+	if err != nil {
+		t.Fatalf("marshal measured: %v", err)
+	}
+	if got := string(data); got != wantMeasured {
+		t.Errorf("ram_available_measured_at encoding drifted:\n got %s\nwant %s", got, wantMeasured)
+	}
+
+	var out HardwareSummary
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&measured, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", measured, out)
+	}
+
+	// A pre-addition payload parses with the field empty — no claim, and
+	// nothing in the deduction arithmetic reads it.
+	var pre HardwareSummary
+	if err := json.Unmarshal([]byte(wantV1Only), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition: %v", err)
+	}
+	if pre.RAMAvailableMeasuredAt != "" {
+		t.Errorf("RAMAvailableMeasuredAt = %q, want empty on a pre-addition payload",
+			pre.RAMAvailableMeasuredAt)
+	}
+	if pre.RAMAvailableGB != 41 {
+		t.Errorf("RAMAvailableGB = %d, want 41 — the timestamp's absence must not disturb the value",
+			pre.RAMAvailableGB)
+	}
+}
+
 // TestHardwareSummary_MemoryBandwidthSpec_CanonicalJSON is the same
 // byte-identity pin for the #251 addition. It matters more than most:
 // MemoryBandwidthSpecGBs is populated from a chip table, so the hosts

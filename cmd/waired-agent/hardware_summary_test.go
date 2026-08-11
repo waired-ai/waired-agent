@@ -236,8 +236,15 @@ func TestHardwareSummaryFor_AppleSiliconBudgetSurvivesTheWireAdapter(t *testing.
 // contract was on main and its producer was not — the gap a required
 // proto-only PR opens — and HardwareSummary.RAMAvailableGB (#568) the
 // same way. Each producer PR deleted its entry rather than editing it,
-// which is the whole point of recording it as a debt. Empty again.
-var notPublishedByAgent = map[string]bool{}
+// which is the whole point of recording it as a debt.
+//
+// RAMAvailableMeasuredAt (#699) is open on those same terms, and it dates
+// the very field that sat here last: the agent already records the
+// timestamp in runtime/host-memory.json beside the value, so the producer
+// PR is a wiring change that deletes this line.
+var notPublishedByAgent = map[string]bool{
+	"HardwareSummary.RAMAvailableMeasuredAt": true,
+}
 
 // TestHardwareSummaryFor_PublishesEveryWireField guards the bug class
 // rather than the three fields: a field added to the broadcast summary

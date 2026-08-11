@@ -114,4 +114,21 @@ const (
 	// OSMemoryAllowanceGB constant — an old agent simply computes the
 	// deduction the way it does today.
 	CapabilityRAMAvailableV1 = "ram-available-v1"
+
+	// CapabilityRAMAvailableV2 declares that this agent additionally
+	// understands HardwareSummary.RAMAvailableMeasuredAt — WHEN the
+	// measurement above was taken (waired-agent#699).
+	//
+	// A second constant rather than a wider reading of the first: an
+	// agent declaring ram-available-v1 knows RAMAvailableGB and nothing
+	// else, so it drops the timestamp on canonical re-marshal and fails
+	// verification. Reusing v1 would break precisely the generation it
+	// was added for. Same reasoning that gave the onboarding family its
+	// own numbered constants.
+	//
+	// Declaring v2 is expected to come with v1 — a timestamp with no
+	// value to date is noise, not half an answer — and the CP does not
+	// have to trust an agent to get that right: it strips both when v1
+	// is missing, whatever v2 says.
+	CapabilityRAMAvailableV2 = "ram-available-v2"
 )

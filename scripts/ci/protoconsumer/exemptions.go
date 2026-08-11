@@ -242,7 +242,19 @@ var producedInProto = []exemption{
 // the guard would have read that write as this field's producer and the
 // debt would never have been visible here at all. Empty again, and that
 // is the point.
-var producerPending = []exemption{}
+//
+// waired-agent#699's RAMAvailableMeasuredAt is the current debt, and it
+// is the first RAM-available field this table has ever been able to hold:
+// its sibling RAMAvailableGB was invisible here from day one because
+// hardware.Profile carries a same-named written field, so the guard read
+// that write as this one's producer. "RAMAvailableMeasuredAt" collides
+// with nothing, so the debt is finally where it belongs.
+var producerPending = []exemption{
+	{reflect.TypeFor[signer.HardwareSummary](), "RAMAvailableMeasuredAt",
+		"waired-agent#699: the wire dates the install-time measurement; " +
+			"the agent already records measured_at in runtime/host-memory.json " +
+			"and publishes it in the follow-up PR, which deletes this entry"},
+}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the
