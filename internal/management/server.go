@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 )
 
 const DefaultListen = "127.0.0.1:9476"
@@ -137,6 +138,41 @@ type PeerHardware struct {
 	VRAMTotalMB int    `json:"vram_total_mb,omitempty"`
 	ComputeCap  string `json:"compute_cap,omitempty"`
 	RAMTotalGB  int    `json:"ram_total_gb,omitempty"`
+
+	// UnifiedMemory / UsableVRAMMB mirror the fields of the same name on
+	// signer.HardwareSummary, and exist because VRAMTotalMB alone cannot
+	// describe a host where the GPU and CPU share physical RAM
+	// (waired-ai/waired-agent#662). Apple Silicon reports no per-GPU total
+	// at all — its detector leaves that field 0 deliberately, because the
+	// figure that means anything is the OS-reserved usable bound — so a
+	// consumer reading only VRAMTotalMB rendered an M-series Mac as a GPU
+	// with unknown memory while an AMD Strix Halo beside it showed 96 GB.
+	//
+	// Carried as the two raw facts rather than one pre-resolved number so
+	// this projection keeps saying what the host reported; callers that
+	// want the display figure ask EffectiveVRAMMB below.
+	UnifiedMemory bool `json:"unified_memory,omitempty"`
+	UsableVRAMMB  int  `json:"usable_vram_mb,omitempty"`
+}
+
+// EffectiveVRAMMB is the GPU memory figure to show for this peer: the
+// usable unified-memory bound on a host that shares RAM with its GPU, the
+// first GPU's raw total everywhere else. 0 means "nothing to show".
+//
+// The rule is proto/signer.HardwareSummary's own — "UsableVRAMMB is the
+// GPU-addressable upper bound after the OS reserve; 0 means unknown, and a
+// consumer must then fall back to GPUs[0].VRAMTotalMB" — and it is
+// delegated to hostfit.Host.EffectiveVRAMMB rather than restated so the
+// display and the fit rules cannot drift apart.
+func (h *PeerHardware) EffectiveVRAMMB() int {
+	if h == nil {
+		return 0
+	}
+	return hostfit.Host{
+		UnifiedMemory: h.UnifiedMemory,
+		UsableVRAMMB:  h.UsableVRAMMB,
+		VRAM0MB:       h.VRAMTotalMB,
+	}.EffectiveVRAMMB()
 }
 
 type PingResult struct {

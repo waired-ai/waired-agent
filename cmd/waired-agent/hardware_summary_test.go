@@ -164,6 +164,16 @@ func TestHardwareSummaryFor_MatchesEffectiveVRAM(t *testing.T) {
 	for _, prof := range []hardware.Profile{
 		{RAMTotalGB: 64, UnifiedMemory: true, UsableVRAMMB: 49152,
 			GPUs: []hardware.GPU{{Vendor: "apple", Model: "Apple M3 Max", VRAMTotalMB: 65536}}},
+		// The shape the REAL darwin detector produces: detectApple names
+		// the GPU and leaves VRAMTotalMB at 0 on purpose, because the
+		// figure that means anything on Apple Silicon is the OS-reserved
+		// usable bound that defaultUMA fills in. Every other Apple fixture
+		// in this file hands the profile a non-zero per-device total — a
+		// shape no Mac ever sends — so nothing here exercised the case
+		// where the fallback is the ONLY source of a figure
+		// (waired-ai/waired-agent#662).
+		{RAMTotalGB: 16, UnifiedMemory: true, UsableVRAMMB: 12288,
+			GPUs: []hardware.GPU{{Vendor: "apple", Model: "Apple M4"}}},
 		{RAMTotalGB: 64,
 			GPUs: []hardware.GPU{{Vendor: "nvidia", Model: "RTX 4090", VRAMTotalMB: 24564}}},
 	} {
@@ -181,6 +191,38 @@ func TestHardwareSummaryFor_MatchesEffectiveVRAM(t *testing.T) {
 		if want := prof.EffectiveVRAMMB(); budget != want {
 			t.Errorf("recomputed budget = %d, want EffectiveVRAMMB() = %d", budget, want)
 		}
+	}
+}
+
+// TestHardwareSummaryFor_AppleSiliconBudgetSurvivesTheWireAdapter pins the
+// fallback through the adapter consumers actually call, not a rule
+// restated in the test.
+//
+// PRODUCT CONTRACT (waired-ai/waired-agent#662). TestHardwareSummaryFor_
+// MatchesEffectiveVRAM above recomputes the rule inline, which proves the
+// facts are on the wire but not that any consumer applies them —
+// and none did: `peers list`, the tray row and the PeerHardware
+// projection all read GPUs[0].VRAMTotalMB, so a Mac rendered as a GPU
+// with unknown memory. hostfit.FromHardwareSummary + EffectiveVRAMMB is
+// the single implementation they now share.
+func TestHardwareSummaryFor_AppleSiliconBudgetSurvivesTheWireAdapter(t *testing.T) {
+	// The real detector shape: no per-device total anywhere.
+	s := hardwareSummaryFor(hardware.Profile{
+		RAMTotalGB: 16, UnifiedMemory: true, UsableVRAMMB: 12288,
+		GPUs: []hardware.GPU{{Vendor: "apple", Model: "Apple M4"}},
+	})
+	if s == nil {
+		t.Fatal("summary is nil")
+	}
+	// The per-GPU total stays absent — this PR does not synthesise one.
+	// waired-ai/waired#1056 decision 1 keeps the Apple figure a view INTO
+	// RAMTotalGB rather than memory to add to it, and the field means the
+	// device's own raw total.
+	if got := s.GPUs[0].VRAMTotalMB; got != 0 {
+		t.Errorf("GPUs[0].VRAMTotalMB = %d, want 0 (the raw per-device total a Mac does not report)", got)
+	}
+	if got := hostfit.FromHardwareSummary(s).EffectiveVRAMMB(); got != 12288 {
+		t.Errorf("EffectiveVRAMMB() via the wire adapter = %d, want 12288", got)
 	}
 }
 

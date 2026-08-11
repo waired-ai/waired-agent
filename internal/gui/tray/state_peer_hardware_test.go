@@ -177,6 +177,69 @@ func TestUpdate_PeerHardware_GPUWithoutVRAMRendersGPUOnly(t *testing.T) {
 	}
 }
 
+// TestUpdate_PeerHardware_UnifiedMemoryPeerShowsItsUsableBound pins that a
+// peer sharing RAM with its GPU still gets a size on its row.
+//
+// PRODUCT CONTRACT (waired-ai/waired-agent#662). Apple Silicon's detector
+// leaves the per-GPU total 0 on purpose — the figure that means anything
+// there is the OS-reserved usable bound — so a row reading only
+// VRAMTotalMB dropped the size from every M-series peer while an AMD
+// Strix Halo beside it showed its 96 GB. The shape below is what a real
+// M4 sends: a named GPU, no per-device total, and the budget at the
+// summary level.
+func TestUpdate_PeerHardware_UnifiedMemoryPeerShowsItsUsableBound(t *testing.T) {
+	got := Update(Snapshot{
+		Health:   HealthOnline,
+		Identity: enrolledIdentity(),
+		Status: &management.Status{
+			PeerCount: 1,
+			Peers: []management.PeerStatus{
+				{
+					DeviceID:   "dev_mac",
+					DeviceName: "studio",
+					Hardware: &management.PeerHardware{
+						GPUModel:      "Apple M4",
+						RAMTotalGB:    16,
+						UnifiedMemory: true,
+						UsableVRAMMB:  12288,
+					},
+				},
+			},
+		},
+	})
+	want := "studio — Apple M4 (12 GB)"
+	if got.PeerHardwareEntries[0].Label != want {
+		t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, want)
+	}
+}
+
+// A discrete GPU keeps reporting its own total even when the host also
+// reports a usable figure: the fallback runs only for unified memory.
+func TestUpdate_PeerHardware_DiscreteGPUKeepsItsOwnTotal(t *testing.T) {
+	got := Update(Snapshot{
+		Health:   HealthOnline,
+		Identity: enrolledIdentity(),
+		Status: &management.Status{
+			PeerCount: 1,
+			Peers: []management.PeerStatus{
+				{
+					DeviceID:   "dev_pc",
+					DeviceName: "desktop",
+					Hardware: &management.PeerHardware{
+						GPUModel:     "NVIDIA GeForce RTX 4090",
+						VRAMTotalMB:  24576,
+						UsableVRAMMB: 12288,
+					},
+				},
+			},
+		},
+	})
+	want := "desktop — RTX 4090 (24 GB)"
+	if got.PeerHardwareEntries[0].Label != want {
+		t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, want)
+	}
+}
+
 func TestUpdate_PeerHardware_OverflowCappedAt16(t *testing.T) {
 	peers := make([]management.PeerStatus, 0, MaxPeerHardwareRows+3)
 	peers = append(peers, management.PeerStatus{

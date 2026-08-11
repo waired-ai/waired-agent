@@ -2506,7 +2506,16 @@ func (p *agentProvider) Status() management.Status {
 				out.DeviceName = peer.DeviceName
 				if peer.InferenceState != nil && peer.InferenceState.Hardware != nil {
 					hw := peer.InferenceState.Hardware
-					ph := &management.PeerHardware{RAMTotalGB: hw.RAMTotalGB}
+					ph := &management.PeerHardware{
+						RAMTotalGB: hw.RAMTotalGB,
+						// #662: a unified-memory peer reports its GPU
+						// budget here and not per-device (Apple Silicon
+						// publishes no per-GPU total at all), so both
+						// facts have to travel or the row cannot tell
+						// "shares RAM with the GPU" from "unknown".
+						UnifiedMemory: hw.UnifiedMemory,
+						UsableVRAMMB:  hw.UsableVRAMMB,
+					}
 					if len(hw.GPUs) > 0 {
 						ph.GPUModel = hw.GPUs[0].Model
 						ph.VRAMTotalMB = hw.GPUs[0].VRAMTotalMB
