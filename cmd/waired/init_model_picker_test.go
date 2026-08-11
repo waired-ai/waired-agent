@@ -476,3 +476,75 @@ func TestModelPicker_AnAnswerDoesNotAlsoWithdrawTheClaim(t *testing.T) {
 		t.Errorf("an answered picker posts no pending claims, got %v", claims)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#632; wording approved 2026-08-11): a
+// row that fits but spills its context cache says so IN THE PICKER, in
+// the same words `models ls --detail` uses.
+//
+// The picker is where the choice is actually made. A cost that only
+// appears on a surface the operator has to go looking for is one they
+// learn about after the download.
+func TestModelPickerRow_NamesTheContextCacheThatSpills(t *testing.T) {
+	host := catalogDetailHost{RAMTotalGB: 32, VRAMTotalMB: 8188, GPUBudgetMB: 8188}
+	spills := catalogDetailFamily{
+		ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B", Fits: true, RecommendedPick: true,
+		Fit: &catalogDetailFit{Runnable: true, RequiredWindowResidentMB: 10719},
+	}
+
+	got := modelPickerRow(host, spills)
+	const want = "Qwen3.5 9B — recommended for this computer · 2.5 GB of context cache in system RAM"
+	if got != want {
+		t.Errorf("row = %q, want %q", got, want)
+	}
+
+	// Byte-identical to the other surface's clause: two spellings of one
+	// fact is the defect #649 fixed on the recommendation, and this is
+	// the same pair of surfaces.
+	fitCol := catalogFitColumn(host, spills)
+	const clause = " · 2.5 GB of context cache in system RAM"
+	if !strings.HasSuffix(fitCol, clause) {
+		t.Fatalf("models ls --detail says %q; the picker must reuse that clause verbatim", fitCol)
+	}
+	if !strings.HasSuffix(got, clause) {
+		t.Errorf("picker row %q does not end with the shared clause %q", got, clause)
+	}
+}
+
+// The three silent cases. Each is "nothing to say" rather than "nothing
+// spills", so each prints nothing rather than a measured-looking 0 GB.
+func TestModelPickerRow_SaysNothingWhenThereIsNoFigure(t *testing.T) {
+	fits := catalogDetailFamily{
+		ModelID: "qwen3.5-2b", DisplayName: "Qwen3.5 2B", Fits: true,
+		Fit: &catalogDetailFit{Runnable: true, RequiredWindowResidentMB: 4000},
+	}
+	for _, tc := range []struct {
+		name string
+		host catalogDetailHost
+		fam  catalogDetailFamily
+	}{
+		{"it fits on the card", catalogDetailHost{GPUBudgetMB: 8188}, fits},
+		{"no card, so no budget", catalogDetailHost{RAMTotalGB: 32}, fits},
+		{"a daemon too old to report a budget", catalogDetailHost{RAMTotalGB: 32}, fits},
+		{"no fit projection at all", catalogDetailHost{GPUBudgetMB: 8188},
+			catalogDetailFamily{ModelID: "qwen3.5-2b", DisplayName: "Qwen3.5 2B", Fits: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := modelPickerRow(tc.host, tc.fam); got != "Qwen3.5 2B" {
+				t.Errorf("row = %q, want the bare name with no cache clause", got)
+			}
+		})
+	}
+
+	// A row that does not fit at all keeps its deficit prose and gains no
+	// second clause: "does not fit" and "spills part of the cache" are
+	// different verdicts, and printing both reads as a contradiction.
+	unfit := catalogDetailFamily{
+		ModelID: "qwen3.5-27b", DisplayName: "Qwen3.5 27B", Fits: false,
+		DeficitLabel: "needs 24 GB RAM (have 16 GB)",
+		Fit:          &catalogDetailFit{RequiredWindowResidentMB: 30000},
+	}
+	got := modelPickerRow(catalogDetailHost{GPUBudgetMB: 8188}, unfit)
+	if got != "Qwen3.5 27B — needs 24 GB RAM (have 16 GB)" {
+		t.Errorf("unfit row = %q, want only the deficit", got)
+	}
+}

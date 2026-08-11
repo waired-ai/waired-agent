@@ -206,7 +206,7 @@ func renderModelPickerList(out io.Writer, cat catalogDetailResp) (def int) {
 	}
 	writePrompt(out)
 	for i, f := range cat.Families {
-		writePromptf(out, "  %d) %s\n", i+1, modelPickerRow(f))
+		writePromptf(out, "  %d) %s\n", i+1, modelPickerRow(cat.Host, f))
 	}
 	writePrompt(out, "  0) Don't download a model now")
 	writePrompt(out)
@@ -230,11 +230,24 @@ func modelPickerName(f catalogDetailFamily) string {
 // modelPickerRow is one list line: the model's name, plus the verdict a
 // person needs before picking it. Unfit rows carry the same deficit
 // prose `waired models ls --detail` prints, so the two surfaces agree.
-func modelPickerRow(f catalogDetailFamily) string {
+//
+// A fitting row also carries what the graphics card cannot hold of a
+// full coding session (waired-agent#632). It is the same clause, from
+// the same two helpers, that the FIT column of `models ls --detail`
+// prints — the picker is where the choice is actually made, and a cost
+// only visible on a surface the operator has to go looking for is a cost
+// they learn about afterwards.
+//
+// It states a memory FACT, not a speed. What a spilling row costs in
+// tok/s is a measurement this catalog does not carry
+// (waired-agent#466), and the recommendation is deliberately unchanged
+// by it: excluding on predicted speed was ruled out on 2026-08-04
+// (decision 4) and stays out until a measured input exists.
+func modelPickerRow(host catalogDetailHost, f catalogDetailFamily) string {
 	name := modelPickerName(f)
 	switch {
 	case f.RecommendedPick:
-		return name + " — recommended for this computer"
+		return name + " — recommended for this computer" + pickerSpillSuffix(host, f)
 	case !f.Fits:
 		if f.Fit != nil && f.Fit.Reason == reasonNoVariantForEngine {
 			return name + " — not available on this computer"
@@ -244,8 +257,25 @@ func modelPickerRow(f catalogDetailFamily) string {
 		}
 		return name + " — does not fit in this computer's memory"
 	default:
-		return name
+		return name + pickerSpillSuffix(host, f)
 	}
+}
+
+// pickerSpillSuffix is the context-cache clause, or "" when this host
+// has nothing to say about residency — a row that fits on the card, a
+// machine with no card, or a daemon too old to report a budget. All
+// three print nothing rather than "0 GB", which would read as a measured
+// zero.
+//
+// Byte-identical to the `models ls --detail` clause on purpose: two
+// spellings of one fact is the defect waired-agent#649 fixed on the
+// recommendation, and this is the same pair of surfaces.
+func pickerSpillSuffix(host catalogDetailHost, f catalogDetailFamily) string {
+	mb := contextCacheSpillMB(host, f.Fit)
+	if mb <= 0 {
+		return ""
+	}
+	return " · " + formatSpillGB(mb) + " of context cache in system RAM"
 }
 
 // readModelChoice reads one numbered answer. Empty input takes def;

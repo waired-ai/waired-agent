@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 3158eef6f5fb7b42
+sourceHash: 2c96f688d359f746
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -239,7 +239,10 @@ Ctrl-C が必要です。おかしくなったのがブラウザのタブのほ�
 
 6. **Choose the AI model for this computer** — 同梱モデルの番号付き一覧が
 	表示され、このハードウェアへの推奨モデルが選択済みになっています。Enter で
-	そのまま確定できます。このパソコンのメモリに収まらないモデルは理由付きで
+	そのまま確定できます。動きはするけれどコーディング 1 セッション分を
+	グラフィックボードに載せきれないモデルには、文脈キャッシュのうち何 GB が
+	システム RAM から読まれることになるかが出ます（`waired models ls --detail`
+	と同じ数字です）。このパソコンのメモリにそもそも収まらないモデルは理由付きで
 	一覧に出ており、あえて選ぶと明示的な確認（**Download it anyway? `[y/N]`** —
 	**N** で一覧に戻ります）があります。**0) Don't download a model now** を
 	選ぶと、AI ソフトウェアだけ入れてモデルなしでセットアップが完了します。
