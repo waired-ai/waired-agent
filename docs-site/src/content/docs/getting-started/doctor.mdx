@@ -42,6 +42,7 @@ All ticks. Nothing to do.
 | **✓** | Fine. |
 | **⚠** | Working, but not the way it should be. Worth reading, not urgent. |
 | **✗** | Broken. Something you are trying to do will not work. |
+| **·** | Not checked. The line says why — usually that it needs administrator rights. |
 
 When anything is not a ✓, the command finishes with a non-zero exit code and a
 count — useful in a script, ignorable when you are reading it yourself.
@@ -90,13 +91,24 @@ waired doctor --fix
 | **waired phase** | Routing is paused, or in an unexpected state. | `waired resume` — see [Pause and resume](/guides/pause/). |
 | **Local Gateway** | The service is up, but the part that answers AI requests is not. A `503` usually means no model is loaded yet. | Wait for the download to finish (`waired models ls`), or [check your model](/guides/choose-a-model/). |
 | **coding-agent entries** | Claude Code or OpenClaw is not configured to use Waired. | Press **f**. |
+| **&lt;tool&gt; installation** | Only a **·** here: the tool's command is not on your `PATH`, so there is nothing to configure. If its folder exists but the command does not, the line says so — a leftover folder is not an installation. | Install the tool, or ignore the line if you do not use it. |
 | **AI engine app signature** (macOS) | macOS will not run the installed AI software, so every attempt to start it is stopped. | Press **f** when the cause is a stray Waired file — see [it says the AI software is damaged](/troubleshooting/#macos-it-says-the-ai-software-is-damaged). Otherwise the check names the reinstall command. |
 
 ## When the check itself cannot see everything
 
 On a normal desktop install some of Waired's files belong to the system, not to
-you. Without administrator rights the doctor reports what it can and says so
-rather than guessing.
+you. Without administrator rights the doctor reports what it can, and marks the
+checks it could not run with a **·** instead of leaving them out:
+
+<Expected title="Without administrator rights">
+```
+· device sign-in — needs elevation to check; run `sudo waired doctor`
+· waired phase — needs elevation to check; run `sudo waired doctor`
+```
+</Expected>
+
+A **·** never counts towards the exit code — it is not a failure, only a gap.
+To close the gap, run the check again with administrator rights.
 
 <Tabs syncKey="os">
 	<TabItem label="macOS / Linux">
@@ -113,6 +125,19 @@ rather than guessing.
 		```
 	</TabItem>
 </Tabs>
+
+Running it with `sudo` does not switch the check over to the administrator's own
+setup. Your coding tools are configured in **your** home folder, so that is what
+gets checked, and the first line says whose:
+
+<Expected title="At the top of the output">
+```
+Running under sudo — checking the setup for user "you", not root.
+```
+</Expected>
+
+Pressing **f** after an elevated run repairs that same setup, as you — the files
+it writes stay yours.
 
 <Aside type="tip" title="Sharing the output">
 	If you are pasting the result into a bug report, add `--mask-pii` to

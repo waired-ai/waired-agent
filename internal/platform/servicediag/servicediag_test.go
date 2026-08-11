@@ -159,6 +159,53 @@ func TestExplain_DarwinNonZeroExit(t *testing.T) {
 	}
 }
 
+// TestExplain_DarwinNeverExitedIsNotAnError pins #652: launchd's healthy
+// steady state prints `last exit code = (never exited)`, and a string
+// compare against "0" let it through into "exited with an error (status
+// (never exited))". The observed host showed that warning in the same
+// doctor run that reported `✓ management — HTTP 200` and
+// `✓ inference engine — ready`.
+//
+// Product contract from #652, not a record of today's behaviour. The
+// literals are the ones launchctl actually printed on macOS 26.5.1.
+func TestExplain_DarwinNeverExitedIsNotAnError(t *testing.T) {
+	got := Explain("darwin", true, []Event{
+		{Source: "launchd", Message: "state = running"},
+		{Source: "launchd", Message: "last exit code = (never exited)"},
+		{Source: "launchd", Message: "pid = 1234"},
+	})
+	if got.Status == Failed {
+		t.Errorf("Status=%v: a never-exited service is not a failure", got.Status)
+	}
+	if strings.Contains(got.Cause, "never exited") {
+		t.Errorf("Cause=%q pipes launchd's placeholder into a sentence about an exit status", got.Cause)
+	}
+	if strings.Contains(got.Cause, "exited with an error") {
+		t.Errorf("Cause=%q claims an error for a service that is running", got.Cause)
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	cases := []struct {
+		in     string
+		wantN  int
+		wantOK bool
+	}{
+		{"0", 0, true},
+		{"78", 78, true},
+		{" 78 ", 78, true},
+		{"(never exited)", 0, false},
+		{"", 0, false},
+		{"unknown", 0, false},
+	}
+	for _, c := range cases {
+		n, ok := exitCode(c.in)
+		if n != c.wantN || ok != c.wantOK {
+			t.Errorf("exitCode(%q) = (%d, %v), want (%d, %v)", c.in, n, ok, c.wantN, c.wantOK)
+		}
+	}
+}
+
 func TestExplain_DarwinNotRunning(t *testing.T) {
 	got := Explain("darwin", false, []Event{
 		{Source: "launchd", Message: "state = not running"},

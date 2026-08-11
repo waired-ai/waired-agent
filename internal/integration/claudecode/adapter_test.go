@@ -330,6 +330,53 @@ func TestAudit_ReportsOKAfterApply(t *testing.T) {
 	}
 }
 
+// TestAudit_InstallationRowIsHonestWithoutABinary is the claude-code half
+// of the #652 parity: both adapters answer "is this an installation?"
+// through integration.InstallationFinding, so ~/.claude with no `claude`
+// on PATH cannot come back as a tick with an empty `binary=` here either.
+func TestAudit_InstallationRowIsHonestWithoutABinary(t *testing.T) {
+	a := New()
+	opts := newOpts(t)
+	// Content waired never writes: ConfigDirHasForeignEntry keys the
+	// config-dir signal on exactly that (waired#753).
+	if err := os.MkdirAll(filepath.Join(opts.HomeDir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opts.HomeDir, ".claude", "settings.json"),
+		[]byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	det, err := a.Detect(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !det.Found {
+		t.Fatalf("config dir not detected; det = %+v", det)
+	}
+	if det.BinaryPath != "" {
+		t.Skipf("this host really does have %s on PATH; the case under test cannot occur", det.BinaryPath)
+	}
+	findings, err := a.Audit(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row *integration.AuditFinding
+	for i := range findings {
+		if findings[i].Subject == "claude-code installation" {
+			row = &findings[i]
+		}
+	}
+	if row == nil {
+		t.Fatal("no claude-code installation row")
+	}
+	if row.Status != integration.StatusSkip {
+		t.Errorf("status = %s, want skip (detail %q)", row.Status, row.Detail)
+	}
+	if strings.Contains(row.Detail, "binary=") {
+		t.Errorf("detail = %q: an empty binary= field is the #652 defect", row.Detail)
+	}
+}
+
 // writeExecutable creates path (and parents) with the given mode.
 func writeExecutable(t *testing.T, path string, mode os.FileMode) {
 	t.Helper()

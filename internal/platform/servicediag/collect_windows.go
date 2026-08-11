@@ -5,7 +5,6 @@ package servicediag
 import (
 	"context"
 	"encoding/xml"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +30,7 @@ import (
 // on it would have reported "nothing happened" about the one boot that failed.
 func Check(ctx context.Context) Result {
 	running := serviceRunning()
+	since := bootTime()
 
 	var events []Event
 	// SCM records name the service in their message text, so filter by
@@ -45,7 +45,18 @@ func Check(ctx context.Context) Result {
 		`*[System[(`+eventIDClause(winCodeIntegrityBlocked, winCodeIntegrityAudit)+`)]]`,
 		service.ServiceName+".exe")...)
 
-	return Explain("windows", running, events)
+	return Explain("windows", running, recentEvents(events, since))
+}
+
+// bootTime is when this Windows installation last started, derived from the
+// millisecond uptime counter.
+//
+// It is the cutoff for how old a record may be and still describe the
+// current state of the service — see recentEvents. The uptime counter is
+// used rather than the Event Log's own boot records because it cannot be
+// filtered out by log retention, and because it needs no query.
+func bootTime() time.Time {
+	return time.Now().Add(-windows.DurationSinceBoot())
 }
 
 // serviceRunning asks the SCM, with read-only rights so an unelevated doctor
@@ -73,6 +84,11 @@ func serviceRunning() bool {
 }
 
 // eventLogXML is the subset of the Windows event schema we read.
+//
+// Data keeps each entry's Name attribute. The provider manifest names
+// them (FileNameBuffer, ProcessNameBuffer, …) and summarizeCodeIntegrity
+// reads those names rather than guessing at positions; the value-only
+// fallback covers a host where the manifest is not registered.
 type eventLogXML struct {
 	Events []struct {
 		System struct {
@@ -84,13 +100,21 @@ type eventLogXML struct {
 				SystemTime string `xml:"SystemTime,attr"`
 			} `xml:"TimeCreated"`
 		} `xml:"System"`
-		Data []string `xml:"EventData>Data"`
+		Data []struct {
+			Name  string `xml:"Name,attr"`
+			Value string `xml:",chardata"`
+		} `xml:"EventData>Data"`
 	} `xml:"Event"`
 }
 
 // queryEvents runs one wevtutil query and keeps the records whose data
 // mentions `mentions`. Newest first, capped: this is a diagnosis, not an
 // audit, and the failing boot is the most recent one that matters.
+//
+// The `mentions` match runs against the raw joined EventData, because that
+// is where the service's file name appears regardless of which field
+// carries it. Only the message the operator READS is summarised — the
+// filter still sees everything.
 func queryEvents(ctx context.Context, logName, query, mentions string) []Event {
 	exe, err := systemExe("wevtutil.exe")
 	if err != nil {
@@ -116,15 +140,23 @@ func queryEvents(ctx context.Context, logName, query, mentions string) []Event {
 
 	var events []Event
 	for _, e := range parsed.Events {
-		msg := strings.TrimSpace(strings.Join(e.Data, " "))
-		if mentions != "" && !strings.Contains(strings.ToLower(msg), strings.ToLower(mentions)) {
+		fields := make([]EventField, 0, len(e.Data))
+		values := make([]string, 0, len(e.Data))
+		for _, d := range e.Data {
+			v := strings.TrimSpace(d.Value)
+			fields = append(fields, EventField{Name: d.Name, Value: v})
+			values = append(values, v)
+		}
+		raw := strings.TrimSpace(strings.Join(values, " "))
+		if mentions != "" && !strings.Contains(strings.ToLower(raw), strings.ToLower(mentions)) {
 			continue
 		}
-		src := e.System.Provider.Name
-		if when := e.System.TimeCreated.SystemTime; when != "" {
-			src = fmt.Sprintf("%s (%s)", src, when)
-		}
-		events = append(events, Event{Source: src, ID: e.System.EventID, Message: msg})
+		events = append(events, Event{
+			Source:  e.System.Provider.Name,
+			ID:      e.System.EventID,
+			Message: eventMessage(e.System.EventID, fields, raw),
+			When:    parseSystemTime(e.System.TimeCreated.SystemTime),
+		})
 	}
 	return events
 }

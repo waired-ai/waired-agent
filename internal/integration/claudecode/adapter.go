@@ -154,20 +154,7 @@ func (a *adapter) Audit(_ context.Context, opts integration.ApplyOptions) ([]int
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case det.Found:
-		out = append(out, integration.AuditFinding{
-			Status:  integration.StatusOK,
-			Subject: "claude-code installation",
-			Detail:  fmt.Sprintf("binary=%s configDir=%s", det.BinaryPath, det.ConfigDir),
-		})
-	default:
-		out = append(out, integration.AuditFinding{
-			Status:  integration.StatusSkip,
-			Subject: "claude-code installation",
-			Detail:  "claude binary not on PATH and ~/.claude is absent",
-		})
-	}
+	out = append(out, integration.InstallationFinding("claude-code", "claude", "~/.claude", det))
 	return out, nil
 }
 

@@ -156,3 +156,58 @@ func TestLoadOrCreateGatewayToken_KeychainBacked(t *testing.T) {
 		t.Fatalf("got %q, want %q (from keychain)", got, tok)
 	}
 }
+
+// TestLoadOrCreateGatewayToken_KeychainHitRestoresTheFile pins #654: a
+// Keychain hit used to return without writing the file, so the 0600 file
+// this function's own doc comment promises to always keep (#261) was
+// absent.
+//
+// It is a macOS defect with a plain cause. securestore.Read is
+// Keychain-first there, and a Keychain item outlives the state dir —
+// logout wiped machine-key, access-token and refresh-token but not this
+// one. So a `--clean` reinstall hit the Keychain and never created the
+// file, which is why the observed host had access_token, node.key and
+// refresh_token in secrets/ (all written through the dual-writing
+// securestore.Write) and no gateway-token at all. env.sh `cat`s that path
+// and `waired doctor` stats it, so both were left pointing at a file that
+// would never appear.
+//
+// Product contract from #654, not a record of today's behaviour.
+func TestLoadOrCreateGatewayToken_KeychainHitRestoresTheFile(t *testing.T) {
+	useMemKeychain(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gateway-token")
+
+	tok, err := LoadOrCreateGatewayToken(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// The shape of a wiped state dir on a host whose Keychain still holds
+	// the item.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadOrCreateGatewayToken(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got != tok {
+		t.Fatalf("token = %q, want %q", got, tok)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("the file was not restored after a keychain hit: %v", err)
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", fi.Mode().Perm())
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != tok {
+		t.Errorf("file holds %q, want the token %q verbatim (env.sh cats it)", body, tok)
+	}
+}

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -39,6 +42,112 @@ func TestCountFails_OnlyCountsStatusFail(t *testing.T) {
 	}
 	if got := countFails(findings); got != 2 {
 		t.Errorf("countFails = %d, want 2", got)
+	}
+}
+
+// TestDoctorHomeFor pins the fix for #650: under sudo the doctor inspects
+// the invoking user's home, not root's. This is a product contract, not a
+// record of today's behaviour — it is the defect the issue reports.
+//
+// Windows has no sudo hop (invokingSudoUserAt returns false for any goos
+// that is not linux/darwin), and darwin is included because it only LOOKED
+// correct before: macOS sudo keeps HOME, so its process home already was
+// the user's. The seam has to prove that on purpose, not by accident.
+func TestDoctorHomeFor(t *testing.T) {
+	const (
+		procHome = "/root"
+		userHome = "/home/alice"
+	)
+	okLookup := func(u string) (string, error) {
+		if u != "alice" {
+			return "", fmt.Errorf("unexpected lookup of %q", u)
+		}
+		return userHome, nil
+	}
+	failLookup := func(string) (string, error) { return "", errors.New("nss miss") }
+	emptyLookup := func(string) (string, error) { return "", nil }
+
+	cases := []struct {
+		name     string
+		goos     string
+		euid     int
+		sudoUser string
+		lookup   func(string) (string, error)
+		want     doctorHome
+	}{
+		{
+			name: "linux under sudo follows SUDO_USER", goos: "linux", euid: 0,
+			sudoUser: "alice", lookup: okLookup,
+			want: doctorHome{Dir: userHome, SudoUser: "alice"},
+		},
+		{
+			name: "darwin under sudo follows SUDO_USER", goos: "darwin", euid: 0,
+			sudoUser: "alice", lookup: okLookup,
+			want: doctorHome{Dir: userHome, SudoUser: "alice"},
+		},
+		{
+			name: "windows has no sudo hop", goos: "windows", euid: -1,
+			sudoUser: "alice", lookup: okLookup,
+			want: doctorHome{Dir: procHome},
+		},
+		{
+			name: "unelevated uses the process home", goos: "linux", euid: 1000,
+			sudoUser: "", lookup: okLookup,
+			want: doctorHome{Dir: procHome},
+		},
+		{
+			name: "a real root login is not a sudo hop", goos: "linux", euid: 0,
+			sudoUser: "root", lookup: okLookup,
+			want: doctorHome{Dir: procHome},
+		},
+		{
+			name: "an unresolvable user falls back and says so", goos: "linux", euid: 0,
+			sudoUser: "alice", lookup: failLookup,
+			want: doctorHome{Dir: procHome, SudoUser: "alice", Fellback: true},
+		},
+		{
+			name: "a user with no home falls back and says so", goos: "linux", euid: 0,
+			sudoUser: "alice", lookup: emptyLookup,
+			want: doctorHome{Dir: procHome, SudoUser: "alice", Fellback: true},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := doctorHomeFor(c.goos, c.euid, c.sudoUser, procHome, c.lookup)
+			if got != c.want {
+				t.Errorf("doctorHomeFor = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestDoctorHomeNotice(t *testing.T) {
+	if n := (doctorHome{Dir: "/home/alice"}).notice(); n != "" {
+		t.Errorf("an unelevated run should print no notice, got %q", n)
+	}
+	n := doctorHome{Dir: "/home/alice", SudoUser: "alice"}.notice()
+	if !strings.Contains(n, `"alice"`) || !strings.Contains(n, "not root") {
+		t.Errorf("sudo notice = %q, want it to name the user and say it is not root", n)
+	}
+	n = doctorHome{Dir: "/root", SudoUser: "alice", Fellback: true}.notice()
+	if !strings.Contains(n, "/root") || !strings.Contains(n, "without sudo") {
+		t.Errorf("fallback notice = %q, want the directory it actually used and the way out", n)
+	}
+}
+
+// "1 findings need attention" was the literal closing line on a host with
+// a single failure (#652). Four rendered correctly, so the defect only
+// showed on the count an operator is most likely to see.
+func TestFindingsSummary_Plural(t *testing.T) {
+	cases := map[int]string{
+		0: "0 findings need attention",
+		1: "1 finding needs attention",
+		2: "2 findings need attention",
+	}
+	for n, want := range cases {
+		if got := findingsSummary(n); got != want {
+			t.Errorf("findingsSummary(%d) = %q, want %q", n, got, want)
+		}
 	}
 }
 
@@ -101,6 +210,54 @@ func TestPhaseFinding_StaleActiveIsSkipped(t *testing.T) {
 	got := phaseFinding(dir)
 	if got.Subject != "" {
 		t.Errorf("stale active should yield empty finding, got %+v", got)
+	}
+}
+
+// TestUnreadableFinding pins the permission-vs-absence split behind #651.
+// The GOOS-varying half is elevationHint's, which has its own test; here
+// the contract is only which errors produce a row at all.
+func TestUnreadableFinding(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"permission denied is a check that did not run", fs.ErrPermission, true},
+		{"wrapped permission denied still counts", fmt.Errorf("read x: %w", fs.ErrPermission), true},
+		{"absent is not a skipped check", fs.ErrNotExist, false},
+		{"a parse error is not a skipped check", errors.New("invalid character"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, ok := unreadableFinding("device sign-in", c.err)
+			if ok != c.want {
+				t.Fatalf("unreadableFinding(%v) ok = %v, want %v", c.err, ok, c.want)
+			}
+			if !ok {
+				return
+			}
+			if f.Status != integration.StatusSkip {
+				t.Errorf("status = %s, want skip", f.Status)
+			}
+			if f.Subject != "device sign-in" {
+				t.Errorf("subject = %q, want the caller's subject verbatim", f.Subject)
+			}
+			if !strings.Contains(f.Detail, "needs elevation to check") {
+				t.Errorf("detail = %q, want it to say the check did not run", f.Detail)
+			}
+		})
+	}
+}
+
+// A skipped row must never move the exit code — the point of #651 is
+// visibility, not a new failure mode.
+func TestUnreadableFinding_DoesNotCountAsFailure(t *testing.T) {
+	f, ok := unreadableFinding("waired phase", fs.ErrPermission)
+	if !ok {
+		t.Fatal("expected a finding")
+	}
+	if got := countFails([]integration.AuditFinding{f}); got != 0 {
+		t.Errorf("countFails = %d, want 0", got)
 	}
 }
 

@@ -177,17 +177,7 @@ func (a *adapter) Audit(_ context.Context, opts integration.ApplyOptions) ([]int
 	if err != nil {
 		return nil, err
 	}
-	if det.Found {
-		out = append(out, integration.AuditFinding{
-			Status: integration.StatusOK, Subject: "openclaw installation",
-			Detail: fmt.Sprintf("binary=%s configDir=%s", det.BinaryPath, det.ConfigDir),
-		})
-	} else {
-		out = append(out, integration.AuditFinding{
-			Status: integration.StatusSkip, Subject: "openclaw installation",
-			Detail: "openclaw binary not on PATH and ~/.openclaw is absent",
-		})
-	}
+	out = append(out, integration.InstallationFinding("openclaw", "openclaw", "~/.openclaw", det))
 	return out, nil
 }
 

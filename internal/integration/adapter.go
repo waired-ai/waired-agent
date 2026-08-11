@@ -90,6 +90,43 @@ type AuditFinding struct {
 	Detail  string // longer message, suitable for --details
 }
 
+// InstallationFinding renders the "<agent> installation" row every adapter
+// ends its audit with. Shared so the two adapters cannot drift: the
+// judgement is about Detection, which is a shape all of them produce.
+//
+// The three states are deliberate. Detect sets Found when EITHER the
+// binary is on $PATH OR the config dir has non-waired content, so a host
+// with ~/.openclaw but no binary used to pass as
+// `✓ openclaw installation — binary= configDir=/home/<user>/.openclaw`
+// — a tick with an empty field, asserting an installation that is not
+// there (#652). A directory without a binary is not an installation; it
+// is the same "nothing to configure here" the absent case already
+// reports, so it renders as a skip with the reason spelled out.
+//
+// binaryName is the executable looked for ("openclaw"); configDirLabel is
+// how the directory is written in user-facing copy ("~/.openclaw").
+func InstallationFinding(agent, binaryName, configDirLabel string, det Detection) AuditFinding {
+	subject := agent + " installation"
+	switch {
+	case det.Found && det.BinaryPath != "":
+		return AuditFinding{
+			Status: StatusOK, Subject: subject,
+			Detail: fmt.Sprintf("binary=%s configDir=%s", det.BinaryPath, det.ConfigDir),
+		}
+	case det.Found:
+		return AuditFinding{
+			Status: StatusSkip, Subject: subject,
+			Detail: fmt.Sprintf("%s binary not on PATH; %s is present but is not an installation",
+				binaryName, configDirLabel),
+		}
+	default:
+		return AuditFinding{
+			Status: StatusSkip, Subject: subject,
+			Detail: fmt.Sprintf("%s binary not on PATH and %s is absent", binaryName, configDirLabel),
+		}
+	}
+}
+
 // ApplyOptions controls one Apply / Uninstall pass.
 type ApplyOptions struct {
 	// HomeDir is $HOME for the operation. Tests pass t.TempDir().

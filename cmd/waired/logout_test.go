@@ -148,10 +148,15 @@ func TestRunLogout_DeletesKeychainItems(t *testing.T) {
 	dir := t.TempDir()
 	seedEnrolled(t, dir, "") // empty control URL + --local => no server deauth
 
+	// ServiceGatewayToken is here because of #654: it was the one
+	// Keychain-backed secret this list missed, so it survived a `--clean`
+	// uninstall and the next install's LoadOrCreateGatewayToken read the
+	// previous device's Bearer token straight back out of the Keychain.
 	items := []keychain.Item{
 		{Account: securestore.Account, Service: securestore.ServiceMachineKey},
 		{Account: securestore.Account, Service: securestore.ServiceAccessToken},
 		{Account: securestore.Account, Service: securestore.ServiceRefreshToken},
+		{Account: securestore.Account, Service: securestore.ServiceGatewayToken},
 	}
 	for _, it := range items {
 		if err := fake.Set(it, []byte("secret")); err != nil {
