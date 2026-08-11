@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -36,13 +37,12 @@ func computeUseColor() bool {
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return false
 	}
-	if os.Getenv("WAIRED_NO_EMOJI") != "" { // one knob flattens emoji + color
-		return false
-	}
 	if !isTerminal(os.Stdout) {
 		return false
 	}
-	if !localeIsUTF8() {
+	// WAIRED_NO_EMOJI is folded into glyphsSupported, so one knob still
+	// flattens emoji + color.
+	if !glyphsSupported(runtime.GOOS, currentGlyphFacts()) {
 		return false
 	}
 	enableVTProcessing() // no-op except on Windows conhost
@@ -111,6 +111,8 @@ func rule() string {
 func welcomeBanner(out io.Writer) {
 	sub := "connecting your coding agents to local inference…"
 	if !useEmoji() {
+		// writePromptf folds the em dash and the ellipsis to ASCII here; the
+		// literals stay readable in source and match the fancy branch (#629).
 		writePromptf(out, "%s — %s\n\n", bold("Waired"), sub)
 		return
 	}

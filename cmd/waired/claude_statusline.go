@@ -9,6 +9,7 @@ import (
 	"os"
 	osuser "os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -226,8 +227,11 @@ func slSgr(code, s string) string {
 	return code + s + ansiReset
 }
 
+// slGlyph skips the TTY gate (stdout is the pipe to Claude Code) but otherwise
+// shares the glyph decision, so a Windows console that carries UTF-8 gets the
+// same statusline the other two OSes do.
 func slGlyph(emoji, ascii string) string {
-	if os.Getenv("WAIRED_NO_EMOJI") != "" || !localeIsUTF8() {
+	if !glyphsSupported(runtime.GOOS, currentGlyphFacts()) {
 		return ascii
 	}
 	return emoji

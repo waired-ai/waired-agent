@@ -44,6 +44,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/network/netif"
 	"github.com/waired-ai/waired-agent/internal/network/wgnet"
 	"github.com/waired-ai/waired-agent/internal/observability"
+	"github.com/waired-ai/waired-agent/internal/platform/console"
 	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
 	"github.com/waired-ai/waired-agent/internal/platform/logsink"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
@@ -81,6 +82,13 @@ const bootRefreshTimeout = 10 * time.Second
 var restartRequested atomic.Bool
 
 func main() {
+	// Decode this binary's UTF-8 output as UTF-8 on a Windows console (#629).
+	// Inert under the SCM and off Windows — there is no console then — but
+	// `waired-agent install` / `uninstall` are run from the installer's
+	// console, and a foreground run prints there too. restore is called before
+	// each exit rather than deferred: os.Exit does not run defers.
+	restoreConsole := console.SetOutputUTF8()
+
 	args := os.Args[1:]
 	// platform/service.Dispatch handles `install` / `uninstall` /
 	// `start` / `stop` subcommands across OSes, and on Windows also
@@ -89,14 +97,17 @@ func main() {
 	// action (this function then exits with its rc) or handled=false to
 	// let normal foreground startup proceed.
 	if handled, rc := service.Dispatch(args, run); handled {
+		restoreConsole()
 		os.Exit(rc)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer cancel()
 	if err := run(ctx, args); err != nil {
 		fmt.Fprintln(os.Stderr, "waired-agent:", err)
+		restoreConsole()
 		os.Exit(1)
 	}
+	restoreConsole()
 	if restartRequested.Load() {
 		os.Exit(restartRequestedExitCode)
 	}
