@@ -167,6 +167,83 @@ func TestInferenceSelect_OK(t *testing.T) {
 	}
 }
 
+// admissionModelInference is an InferenceProvider that models the one
+// part of the real Selector this endpoint's contract depends on: Select
+// acquires an admission slot and hands back the Release that frees it.
+//
+// The fake has to carry that behaviour because the defect is in the
+// handler, not the router — a fake whose Select is a pure function
+// cannot express "the slot was never given back", so the failing case
+// would be unwritable (CLAUDE.md §Test discipline).
+type admissionModelInference struct {
+	InferenceProvider
+	capacity int
+	inFlight int
+	releases int
+}
+
+func (f *admissionModelInference) Select(_ context.Context, req router.Request) (router.Selection, error) {
+	if f.inFlight >= f.capacity {
+		return router.Selection{}, router.ErrAllPeersOverloaded
+	}
+	f.inFlight++
+	return router.Selection{
+		EndpointID:    "ep_remote_peer_ollama",
+		ModelID:       req.Model,
+		Runtime:       "ollama",
+		ExecutionMode: "remote",
+		Release: func() {
+			f.inFlight--
+			f.releases++
+		},
+	}, nil
+}
+
+// TestInferenceSelect_ReleasesTheAdmissionSlotItAcquired pins a product
+// contract stated on the field itself: router.Selection.Release is
+// "Always non-nil — callers MUST defer-call it so a panic in the
+// downstream proxy still frees the peer's tracked counter"
+// (internal/router/endpoint_router.go:36-40).
+//
+// This endpoint is the explain surface behind `waired infer --explain`,
+// which is a dry run: it must not change what the mesh will do next.
+func TestInferenceSelect_ReleasesTheAdmissionSlotItAcquired(t *testing.T) {
+	inf := &admissionModelInference{capacity: 1}
+	s := newServerWithInference(inf)
+	r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/select", bytes.NewBufferString(`{"model":"waired/default"}`))
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if inf.releases != 1 {
+		t.Errorf("Release calls = %d, want 1 — an explain left the peer's admission slot held", inf.releases)
+	}
+	if inf.inFlight != 0 {
+		t.Errorf("in-flight after explain = %d, want 0", inf.inFlight)
+	}
+}
+
+// TestInferenceSelect_RepeatedExplainDoesNotSaturateThePeer is the
+// consequence an operator met on real hardware (waired-agent#624): on a
+// host whose effective admission capacity is 1 (OLLAMA_NUM_PARALLEL=1),
+// a single leaked explain saturates the peer for the daemon's remaining
+// lifetime, and every later request is told the mesh is at capacity.
+func TestInferenceSelect_RepeatedExplainDoesNotSaturateThePeer(t *testing.T) {
+	inf := &admissionModelInference{capacity: 1}
+	s := newServerWithInference(inf)
+	for i := 1; i <= 3; i++ {
+		r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/select", bytes.NewBufferString(`{"model":"waired/default"}`))
+		r.RemoteAddr = "127.0.0.1:1"
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("explain #%d: status = %d body=%s", i, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestInferenceSelect_RouterErrorMaps404(t *testing.T) {
 	inf := &fakeInference{selectErr: wrapErr(router.ErrModelNotFound, "alias not found")}
 	s := newServerWithInference(inf)
