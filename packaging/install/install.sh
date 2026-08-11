@@ -143,6 +143,18 @@ LOCAL_AI_DOWN=0
 # Named rather than inline so the two `case` arms below cannot drift apart,
 # and so a reader can grep for the constant on both sides.
 WAIRED_INIT_LOCAL_AI_DOWN=3
+# ENROLLED: whether this host has an agent identity, settled by
+# linux_maybe_init / darwin_maybe_init and read by the done banners. It is a
+# cached fact rather than a probe at print time because the state dir is
+# root-owned: probing it in the summary re-authenticates sudo after the long
+# `waired init` step has expired the timestamp, which is the password prompt
+# #663 reports. install.ps1 caches $InitRan the same way.
+ENROLLED=0
+# WAIRED_MGMT_URL is the agent's local Management API, on loopback. The
+# installer asks it the one post-init question it cannot answer itself
+# (#663); the socket is reachable without privileges, unlike the root-owned
+# state dir. Same default as cmd/waired's --mgmt (defaultMgmtURL).
+WAIRED_MGMT_URL="${WAIRED_MGMT_URL:-http://127.0.0.1:9476}"
 OS_KIND=""
 OS_FAMILY=""
 OS_NAME=""
@@ -924,9 +936,14 @@ linux_enrolled() {
 # already enrolled, or there is no controlling terminal (init's sign-in
 # is interactive).
 linux_maybe_init() {
+    # Settle $ENROLLED here, once, while sudo's timestamp is still fresh from
+    # linux_service_up — never in the done banner, which runs after the long
+    # init below and would re-authenticate (#663). Before the --no-init
+    # return, so every path leaves the banner with a settled fact.
+    if linux_enrolled; then ENROLLED=1; else ENROLLED=0; fi
     [ "$FLAG_NO_INIT" = 1 ] && return 0
     section 'Sign in and set up'
-    if linux_enrolled; then
+    if [ "$ENROLLED" = 1 ]; then
         common_log "$(emo '✅' '[ok]') Already enrolled — skipping sign-in."
         return 0
     fi
@@ -994,9 +1011,13 @@ EOF
     # (#310). `|| rc=$?` keeps this working under `set -e`.
     init_rc=0
     $SUDO "$@" <"$init_stdin" || init_rc=$?
+    # LOCAL_AI_DOWN means sign-in SUCCEEDED and only local AI is missing, so
+    # it enrols this host just as much as a clean exit does. Deriving
+    # $ENROLLED from the exit code is what lets the banner stay root-free;
+    # install.ps1 derives $InitRan the same way.
     case "$init_rc" in
-        0) ;;
-        "$WAIRED_INIT_LOCAL_AI_DOWN") LOCAL_AI_DOWN=1 ;;
+        0) ENROLLED=1 ;;
+        "$WAIRED_INIT_LOCAL_AI_DOWN") ENROLLED=1; LOCAL_AI_DOWN=1 ;;
         *) common_warn "sign-in did not complete; finish later with: sudo waired init" ;;
     esac
 }
@@ -1220,10 +1241,6 @@ linux_apt_install() {
     linux_done_banner
 }
 
-# linux_done_banner prints the friendly "what just happened / you're ready"
-# summary after a fresh install. Branches on whether sign-in completed.
-#
-# The engine line is MEASURED here rather than set by an earlier step,
 # set_local_ai_note fills $LOCAL_AI_NOTE with the warning block the done
 # banners carry when `waired init` reported that this device has no local
 # AI. Shared so the Linux and macOS banners cannot drift into saying
@@ -1249,9 +1266,40 @@ $(emo '⚠️' '!')  Local AI is not running on this device.
 "
 }
 
+# waired_engine_installed reports whether the local AI engine is on this host,
+# by asking the running daemon over the loopback Management API. Shared by
+# both done banners.
+#
+# It asks the daemon rather than the filesystem because the engine lives
+# under the root-owned state dir (0700 after enrolment), so a `test -x` needs
+# $SUDO — and the banner runs after `waired init`, which takes as long as the
+# engine download, the model download and the benchmark take. sudo stamps its
+# timestamp when a command STARTS, so by then the default 15-minute window has
+# expired and the probe re-authenticates: the unexplained password prompt of
+# #663. The Management API answers the same question over loopback with no
+# privileges at all.
+#
+# A read-only GET, so it is safe to run under --dry-run too. Anything other
+# than a clear "yes" — no curl, no daemon listening, an error body — reports
+# not-installed, which selects the banner arm that describes WHEN the engine
+# gets installed rather than asserting anything about now. A daemon that
+# cannot answer has already produced $LOCAL_AI_NOTE above it.
+waired_engine_installed() {
+    command -v curl >/dev/null 2>&1 || return 1
+    curl -fsS --max-time 5 "$WAIRED_MGMT_URL/waired/v1/inference/runtimes" 2>/dev/null |
+        grep -q '"installed"[[:space:]]*:[[:space:]]*true'
+}
+
+# linux_done_banner prints the friendly "what just happened / you're ready"
+# summary after a fresh install. Branches on whether sign-in completed.
+#
+# The engine line is MEASURED here rather than set by an earlier step,
 # because since #138 the installer does not decide it: `waired init` installs
 # the bundled engine only when the operator said this computer should run
 # models, so the honest answer is whatever is on disk once init has returned.
+# The enrolment line is the opposite — a fact settled in linux_maybe_init and
+# read here, because measuring it needs root and this banner must not be what
+# asks for a password (#663).
 # Same three arms and the same strings as darwin_next_steps.
 linux_done_banner() {
     section 'Done'
@@ -1259,12 +1307,12 @@ linux_done_banner() {
     party="$(emo '🎉' '*')"
     if ollama_skip_requested; then
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA; install the engine later: sudo waired runtimes install ollama)"
-    elif $SUDO test -x /var/lib/waired/runtimes/ollama/bin/ollama; then
+    elif waired_engine_installed; then
         ollama_status="installed (local AI engine)"
     else
         ollama_status="installed by sign-in when local inference is on (sudo waired init)"
     fi
-    if linux_enrolled; then
+    if [ "$ENROLLED" = 1 ]; then
         ready="$(emo '✅' '[ok]') Enrolled — the agent service is running."
         nextline="Check it:     waired status        (try: waired infer \"hello, world!\")"
     else
@@ -1620,6 +1668,15 @@ darwin_write_control_url() {
     $SUDO chmod 0600 "$env_file" 2>/dev/null || true
 }
 
+# darwin_enrolled is the macOS twin of linux_enrolled, and it reads the
+# state dir through $SUDO for the same reason: /Library/Application Support/
+# waired is 0700 root, so a non-root installer user cannot traverse it and a
+# bare `[ -e ]` answers "not enrolled" on a host that is.
+# shellcheck disable=SC2086
+darwin_enrolled() {
+    $SUDO test -e "$1/identity.json"
+}
+
 # darwin_maybe_init finishes first-run setup on macOS. Enrollment + state
 # live in the root-owned /Library/Application Support/waired (read by the
 # system LaunchDaemon), so init runs under $SUDO — mirroring the Linux
@@ -1630,9 +1687,16 @@ darwin_write_control_url() {
 # there is no controlling terminal (init's sign-in is interactive).
 darwin_maybe_init() {
     state_dir="$1"
+    # Settle $ENROLLED here for the same reason linux_maybe_init does, and
+    # through $SUDO for the reason linux_enrolled documents: the macOS state
+    # dir is 0700 root (service_darwin.go's secrets.SecureDir), so the bare
+    # `[ -e ]` this used to run false-negatived on every non-root install —
+    # an enrolled host was told to sign in again, both here and in the
+    # banner. Fresh timestamp at this point; the banner never probes (#663).
+    if darwin_enrolled "$state_dir"; then ENROLLED=1; else ENROLLED=0; fi
     [ "$FLAG_NO_INIT" = 1 ] && return 0
     section 'Sign in and set up'
-    if [ -e "$state_dir/identity.json" ]; then
+    if [ "$ENROLLED" = 1 ]; then
         common_log "$(emo '✅' '[ok]') Already enrolled — skipping sign-in."
         return 0
     fi
@@ -1692,9 +1756,10 @@ darwin_maybe_init() {
     # (#310). `|| rc=$?` keeps this working under `set -e`.
     init_rc=0
     $SUDO "$@" <"$init_stdin" || init_rc=$?
+    # Same derivation as linux_maybe_init — see the note there.
     case "$init_rc" in
-        0) ;;
-        "$WAIRED_INIT_LOCAL_AI_DOWN") LOCAL_AI_DOWN=1 ;;
+        0) ENROLLED=1 ;;
+        "$WAIRED_INIT_LOCAL_AI_DOWN") ENROLLED=1; LOCAL_AI_DOWN=1 ;;
         *) common_warn "sign-in did not complete; finish later with: sudo waired init" ;;
     esac
 }
@@ -1810,7 +1875,7 @@ darwin_next_steps() {
     section 'Done'
     set_local_ai_note
     party="$(emo '🎉' '*')"
-    if [ -e "$state_dir/identity.json" ]; then
+    if [ "$ENROLLED" = 1 ]; then
         get_started="$(emo '✅' '[ok]') Enrolled — the agent is running.
   Check it:  waired status   (try: waired infer \"hello, world!\")"
     else
@@ -1820,7 +1885,7 @@ darwin_next_steps() {
     fi
     if ollama_skip_requested; then
         ollama_status="skipped (--skip-ollama / WAIRED_NO_OLLAMA)"
-    elif $SUDO test -x "/Library/Application Support/waired/runtimes/ollama/bin/ollama"; then
+    elif waired_engine_installed; then
         ollama_status="installed (local AI engine)"
     else
         ollama_status="installed by sign-in when local inference is on (sudo waired init)"
@@ -1854,10 +1919,10 @@ The agent runs as a system LaunchDaemon and starts at boot, independent of login
 $tray_step
 Diagnostics:  waired doctor
               log show --predicate 'process == "waired-agent"' --last 5m
-Uninstall:    $SUDO waired-agent uninstall
+Uninstall:    sudo waired-agent uninstall
               launchctl bootout gui/\$(id -u)/com.waired.tray.waired-tray 2>/dev/null
               rm -f ~/Library/LaunchAgents/com.waired.tray.waired-tray.plist
-              $SUDO rm -f $WAIRED_DARWIN_BINDIR/waired $WAIRED_DARWIN_BINDIR/waired-agent $WAIRED_DARWIN_BINDIR/waired-tray
+              sudo rm -f $WAIRED_DARWIN_BINDIR/waired $WAIRED_DARWIN_BINDIR/waired-agent $WAIRED_DARWIN_BINDIR/waired-tray
 More:         waired init --help
 Quickstart:   https://github.com/waired-ai/waired/blob/main/docs/quickstarts/README.md
 

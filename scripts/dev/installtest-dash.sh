@@ -68,21 +68,49 @@ printf 'waired:\n  Installed: %s\n  Candidate: %s\n' \
 STUB
 # Safety no-ops: even if a --dry-run guard ever regresses, the matrix must
 # never mutate the host. None of these are reached in --dry-run today.
-for c in apt-get systemctl curl gpg dpkg; do
+for c in apt-get systemctl gpg dpkg; do
   printf '#!/bin/sh\nexit 0\n' > "$STUBDIR/$c"
 done
+# curl is a no-op like the rest, with ONE functional case: the done banners
+# ask the running daemon whether the local AI engine is installed, over the
+# loopback Management API (#663 — the probe used to be `$SUDO test -x` on the
+# root-owned state dir, which re-authenticated sudo after the long init).
+# Answer "not installed" by default, which is the fresh-install state the
+# matrix drives; IT_STUB_ENGINE=1 picks the "installed (local AI engine)" arm.
+# There is no daemon on this runner, so without the stub every case would take
+# the default arm and the other one would go untested.
+cat > "$STUBDIR/curl" <<'STUB'
+#!/bin/sh
+case "$*" in
+  */waired/v1/inference/runtimes*)
+    if [ -n "${IT_STUB_ENGINE:-}" ]; then
+      printf '{"runtimes":[{"name":"ollama","installed":true,"state":"ready"}]}\n'
+    else
+      printf '{"runtimes":[{"name":"ollama","installed":false,"state":"absent"}]}\n'
+    fi
+    ;;
+esac
+exit 0
+STUB
 # sudo is a no-op like the rest, with ONE functional case: install.sh probes
-# enrolment with `$SUDO test -e /var/lib/waired/identity.json`, and a blanket
+# enrolment with `$SUDO test -e <state-dir>/identity.json`, and a blanket
 # `exit 0` answered "already enrolled" — so linux_maybe_init short-circuited
 # and no case ever reached the sign-in arm. Report not-enrolled by default
 # (the fresh-install state the matrix is meant to drive); IT_STUB_ENROLLED=1
 # picks the other arm. Everything else still exits 0 without running.
+#
+# The engine arm no longer rides this stub: it used to, because both facts
+# went through `$SUDO test`, so IT_STUB_ENROLLED silently decided the Ollama
+# line too. IT_STUB_ENGINE drives that one now, and the two are independent.
 #
 # `sudo launchctl …` is forwarded to the launchctl stub below rather than
 # swallowed, because darwin_install_complete reads its exit status to decide
 # install-vs-update; a blanket `exit 0` would make every host look complete.
 cat > "$STUBDIR/sudo" <<'STUB'
 #!/bin/sh
+# IT_SUDO_TRACE echoes every call so a case can assert WHERE privileged work
+# happens, not just that it succeeded (run_case_no_sudo_after_done, #663).
+if [ -n "${IT_SUDO_TRACE:-}" ]; then printf '[stub-sudo] %s\n' "$*"; fi
 case "$1" in
   test) if [ -n "${IT_STUB_ENROLLED:-}" ]; then exit 0; else exit 1; fi ;;
   launchctl) shift; exec launchctl "$@" ;;
@@ -222,6 +250,48 @@ run_case_asserts() {
   done
 }
 
+# run_case_no_sudo_after_done <label> <env-assignments> -- <args...>
+# Pins the #663 contract: the summary must not be the thing that asks for a
+# password. `waired init` runs for as long as the engine + model downloads and
+# the benchmark take, which is far past sudo's default timestamp window, so
+# ANY privileged call in the done banner re-authenticates — under a bare
+# prompt, below the "Done" rule, with nothing said about why.
+#
+# This is a claim about the ORDER of two lines, which the pattern-list helper
+# above cannot express: it matches each pattern against the whole output. So
+# the sudo stub traces its calls and this splits the output at the separator.
+run_case_no_sudo_after_done() {
+  local label="$1" envs="$2"; shift 2; shift
+  local sh out rc done_ln after
+  for sh in "${MATRIX_SHELLS[@]}"; do
+    out="$(env $envs IT_SUDO_TRACE=1 $sh "$INSTALL_SH" "$@" 2>&1)" && rc=0 || rc=$?
+    if printf '%s' "$out" | grep -Eq "$FAIL_RE"; then
+      fail "[$sh] $label — set -u/syntax signature:"
+      printf '%s\n' "$out" | grep -E "$FAIL_RE" | sed 's/^/        /' >&2
+      continue
+    fi
+    [ "$rc" -eq 0 ] || { fail "[$sh] $label — expected exit 0, got $rc"; continue; }
+    # Without this the assertion below passes on any run that never called
+    # sudo at all — including one where the stub or the trace itself broke.
+    if ! printf '%s\n' "$out" | grep -q '\[stub-sudo\]'; then
+      fail "[$sh] $label — no privileged call was traced anywhere; stub or trace is broken"
+      continue
+    fi
+    done_ln="$(printf '%s\n' "$out" | grep -n -m1 -E '^(-|─)(-|─)(-|─) Done ' | cut -d: -f1)"
+    if [ -z "$done_ln" ]; then
+      fail "[$sh] $label — no 'Done' section in the output"
+      continue
+    fi
+    after="$(printf '%s\n' "$out" | tail -n "+$done_ln" | grep '\[stub-sudo\]' || true)"
+    if [ -n "$after" ]; then
+      fail "[$sh] $label — privileged call(s) after the Done separator:"
+      printf '%s\n' "$after" | sed 's/^/        /' >&2
+      continue
+    fi
+    ok "[$sh] $label (exit $rc)"
+  done
+}
+
 log "install.sh = $INSTALL_SH"
 log "shells     = ${SHELLS[*]}"
 
@@ -287,6 +357,28 @@ run_case_asserts zero "fresh: no local-AI warning when init never ran" "$FRESH" 
   "!Local AI is not running on this device
 !Sign-in is finished; only local AI is missing
 Waired is installed" -- --dry-run
+
+# 3a-bis. The done banner asks the DAEMON whether the engine is installed
+#     (#663), over the loopback Management API, instead of stat'ing the
+#     root-owned state dir through sudo. Three things to pin:
+#
+#     1. the "installed" arm is still reachable — it is the arm the old
+#        `$SUDO test -x` selected, and losing it would be a silent regression
+#        that no existing assertion notices (they all drive the other arm);
+#     2. enrolment no longer decides it. Both facts used to go through
+#        `$SUDO test`, so the single sudo stub answered both and
+#        IT_STUB_ENROLLED quietly moved the Ollama line too;
+#     3. nothing privileged runs after the "Done" rule at all — the defect
+#        itself, rather than its symptom.
+run_case_asserts zero "fresh: engine arm reads the daemon's answer" "$FRESH IT_STUB_ENGINE=1" \
+  "Ollama: +installed \(local AI engine\)
+!Ollama: +installed by sign-in" -- --dry-run
+run_case_asserts zero "fresh enrolled: enrolment does not decide the engine line" "$FRESH IT_STUB_ENROLLED=1" \
+  "Enrolled — the agent service is running
+Ollama: +installed by sign-in
+!Ollama: +installed \(local AI engine\)" -- --dry-run
+run_case_no_sudo_after_done "fresh: nothing privileged runs after Done (#663)" "$FRESH" -- --dry-run
+run_case_no_sudo_after_done "fresh enrolled: nothing privileged runs after Done (#663)" "$FRESH IT_STUB_ENROLLED=1" -- --dry-run
 
 # 3b. The `waired init` hand-off (#165, #166). These assert OUTPUT, not just
 #     exit status, so they run under setsid: without a controlling terminal
