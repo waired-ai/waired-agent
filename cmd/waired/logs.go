@@ -15,8 +15,13 @@ import (
 const logsLong = `Collect the agent's logs into a single file for debugging or a bug report.
 
 It gathers the service log for this OS (journalctl on Linux, ` + "`log show`" + ` on
-macOS, Get-WinEvent on Windows) plus the bundled inference-engine logs under
-the state dir, and writes them to one file.
+macOS, Get-WinEvent on Windows), the agent's own log file where this OS keeps
+one (macOS and Windows, rotated copies included), and the bundled
+inference-engine logs under the state dir, and writes them to one file.
+
+On Windows the Event Log carries warnings and errors only; the agent's INFO and
+DEBUG records go to logs\waired-agent.log under the state dir. Pass --state-dir
+when the state lives somewhere other than the default, or that file is skipped.
 
 Tip: raise verbosity first with ` + "`waired config log-level debug`" + `, reproduce the
 problem, then run ` + "`waired logs --mask-pii`" + `. --mask-pii redacts your home

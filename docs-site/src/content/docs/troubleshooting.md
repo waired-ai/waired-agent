@@ -887,8 +887,8 @@ Only after `waired doctor`:
 |---|---|
 | Linux | `journalctl -u waired-agent -e` |
 | macOS | `/Library/Logs/waired-agent.err.log`, or `sudo log show --predicate 'process == "waired-agent"' --last 10m`. Waired caps that file at 1 MB and keeps the five previous ones beside it as `waired-agent.err.log.0.gz`, `.1.gz` and so on — look there for anything older (`gzcat`). |
-| Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
-| The AI engine | `…/runtimes/ollama/logs/engine.log` under Waired's state folder — `/var/lib/waired/…` on Linux, `/Library/Application Support/waired/…` on macOS. |
+| Windows | `logs\waired-agent.log` under Waired's state folder — `C:\ProgramData\waired\logs\…` for the usual service install, which takes an elevated PowerShell to read. Same 1 MB cap and five `.0.gz`, `.1.gz` … copies as macOS. `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` is the short version: it carries warnings and errors, not the detail. |
+| The AI engine | `…/runtimes/ollama/logs/engine.log` under Waired's state folder — `/var/lib/waired/…` on Linux, `/Library/Application Support/waired/…` on macOS, `C:\ProgramData\waired\…` on Windows. |
 
 ## Reporting a problem
 

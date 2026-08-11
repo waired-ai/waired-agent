@@ -430,12 +430,14 @@ waired logs --since 30m              # how far back to look (default 1h)
 waired logs --mask-pii               # redact home dir / username / hostname / email
 ```
 
-It gathers the background service's log (from the system log) and the AI
-engine's log. On macOS it also picks up the service's own log files under
-`/Library/Logs` — and the app's under `~/Library/Logs` — including the older,
-already-rotated copies, so a problem that started before the last rotation is
-still in the report. For the most useful report, turn on detail first,
-reproduce the problem, then collect it:
+It gathers the background service's log (from the system log), the service's own
+log file where the system keeps one, and the AI engine's log. On macOS that
+second part is `/Library/Logs` — plus the app's under `~/Library/Logs`; on
+Windows it is `logs\waired-agent.log` under the state folder, which is where
+everything below a warning is written. Older, already-rotated copies are
+included too, so a problem that started before the last rotation is still in the
+report. For the most useful report, turn on detail first, reproduce the problem,
+then collect it:
 
 ```sh
 waired config log-level debug

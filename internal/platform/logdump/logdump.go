@@ -62,7 +62,7 @@ func Collect(ctx context.Context, w io.Writer, opts Options) error {
 	}
 
 	fprintf(w, "\n===== service log files =====\n")
-	collectServiceLogFiles(w, runtime.GOOS, userHome())
+	collectServiceLogFiles(w, runtime.GOOS, userHome(), opts.StateDir)
 
 	fprintf(w, "\n===== engine logs =====\n")
 	collectEngineLogs(w, opts.StateDir)
@@ -138,24 +138,36 @@ func runServiceLog(ctx context.Context, w io.Writer, name string, args []string)
 // unrotated multi-gigabyte file cannot be pulled into memory.
 const tailLimit = 512 << 10
 
-// serviceLogFiles returns the plain files the OS service manager writes
-// this process's stdout/stderr to on goos, in the (GOOS, facts) -> plan
-// shape the cross-OS parity rule asks for.
+// serviceLogFiles returns the plain log files to collect on goos, in the
+// (GOOS, facts) -> plan shape the cross-OS parity rule asks for.
 //
-// Only darwin has any. On Linux the unit's streams go to the journal and
-// on Windows to the Event Log, both already covered by
-// serviceLogCommand above; only launchd points them at files, which is
-// why only macOS could lose them to a rotation (#331). An empty home
-// yields no tray entries rather than a guessed path.
-func serviceLogFiles(goos, home string) []string {
-	if goos != "darwin" {
+// Two different reasons a file exists here. On darwin launchd points the
+// service's stdout/stderr at files, which is why only macOS could lose
+// them to a rotation (#331). On Windows the Event Log that
+// serviceLogCommand queries carries Warn and above only, so the agent
+// keeps its own INFO/DEBUG file under the state dir (#636) — without it
+// this bundle held no agent records at all on Windows, just the bundled
+// engine's. Linux has neither: the journal holds everything and
+// serviceLogCommand already reads it.
+//
+// An empty home yields no tray entries, and an empty stateDir no Windows
+// entry, rather than a guessed path.
+func serviceLogFiles(goos, home, stateDir string) []string {
+	switch goos {
+	case "darwin":
+		files := []string{logrotate.AgentErrPath, logrotate.AgentOutPath}
+		if home != "" {
+			files = append(files, logrotate.TrayErrPath(home), logrotate.TrayOutPath(home))
+		}
+		return files
+	case "windows":
+		if p := logrotate.AgentOwnedLogFile(goos, stateDir); p != "" {
+			return []string{p}
+		}
+		return nil
+	default:
 		return nil
 	}
-	files := []string{logrotate.AgentErrPath, logrotate.AgentOutPath}
-	if home != "" {
-		files = append(files, logrotate.TrayErrPath(home), logrotate.TrayOutPath(home))
-	}
-	return files
 }
 
 func userHome() string {
@@ -175,10 +187,18 @@ func userHome() string {
 // Before #331 none of this was collected at all: on macOS the bundle
 // held the unified log and the engine logs, so the daemon's own stderr —
 // the stream carrying every slog record — was invisible to the tool we
-// ask users to run for a bug report.
-func collectServiceLogFiles(w io.Writer, goos, home string) {
-	files := serviceLogFiles(goos, home)
+// ask users to run for a bug report. Windows had the same hole for a
+// different reason until #636.
+func collectServiceLogFiles(w io.Writer, goos, home, stateDir string) {
+	files := serviceLogFiles(goos, home, stateDir)
 	if len(files) == 0 {
+		if goos == "windows" {
+			// The agent's file lives under the state dir, so without one
+			// there is nothing to look for — say which is missing rather
+			// than implying Windows keeps no file.
+			fprintf(w, "(no --state-dir given; skipping the agent log file)\n")
+			return
+		}
 		fprintf(w, "(no service log files on %s; the service log above is the source)\n", goos)
 		return
 	}

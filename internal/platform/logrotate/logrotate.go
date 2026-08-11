@@ -23,10 +23,16 @@
 // those are kept, because that file becomes the .0.gz archive rather
 // than being deleted. Nothing is dropped.
 //
-// Linux and Windows have nothing to do here: systemd captures the unit's
-// stdout/stderr into journald and Windows logs through the Event Log,
-// both already bounded by the OS. The per-OS bodies say so and return a
-// zero ops, which makes Manage a no-op there.
+// Linux and Windows have no descriptor to re-point: systemd captures the
+// unit's stdout/stderr into journald, and under the Windows SCM stderr is
+// closed. The per-OS bodies say so and return a zero ops, which makes
+// Manage a no-op there.
+//
+// Windows instead has the opposite problem — no stream at all, since the
+// Event Log takes Warn and above only — so the agent opens and rotates a
+// log file of its own. That is File (file.go): the same archives, the same
+// policy, but the writer owns the handle rather than borrowing a
+// descriptor from a service manager.
 package logrotate
 
 import (

@@ -918,8 +918,8 @@ Claude Code はステータス行を 1 つしか使わず、プロジェクト�
 |---|---|
 | Linux | `journalctl -u waired-agent -e` |
 | macOS | `/Library/Logs/waired-agent.err.log`、または `sudo log show --predicate 'process == "waired-agent"' --last 10m`。このファイルは Waired が 1 MB で上限を掛け、直前の 5 世代を `waired-agent.err.log.0.gz`、`.1.gz` … として隣に残します。それより古いものはそちらを（`gzcat` で）確認してください。 |
-| Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
-| AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`）。 |
+| Windows | Waired の状態ディレクトリ配下の `logs\waired-agent.log`。通常のサービス導入では `C:\ProgramData\waired\logs\…` で、読むには管理者権限の PowerShell が要ります。上限 1 MB と `.0.gz`、`.1.gz` … 5 世代の扱いは macOS と同じです。`Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` は要約版で、警告とエラーだけが載り詳細は載りません。 |
+| AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`、Windows は `C:\ProgramData\waired\…`）。 |
 
 ## 不具合を報告する
 

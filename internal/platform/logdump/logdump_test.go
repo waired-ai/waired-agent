@@ -144,37 +144,63 @@ func TestCollect_WritesHeaderAndEngineLogs(t *testing.T) {
 	}
 }
 
-// TestServiceLogFiles_PerOS pins which platforms keep the service's
-// stdout/stderr in plain files. Only launchd does; systemd and the SCM
-// route them to the journal and the Event Log, which serviceLogCommand
-// already covers. Product contract (#331).
+// TestServiceLogFiles_PerOS pins which platforms have plain log files to
+// collect. launchd points the service's streams at files (#331); Windows
+// has the agent's own file because the Event Log takes Warn and above
+// only (#636); Linux has neither, since the journal holds everything and
+// serviceLogCommand already reads it. Product contract.
 func TestServiceLogFiles_PerOS(t *testing.T) {
 	for _, tc := range []struct {
-		name, goos, home string
-		want             []string
+		name, goos, home, stateDir string
+		want                       []string
 	}{
-		{"darwin", "darwin", "/Users/example", []string{
+		{"darwin", "darwin", "/Users/example", "/Library/Application Support/waired", []string{
 			"/Library/Logs/waired-agent.err.log",
 			"/Library/Logs/waired-agent.out.log",
 			"/Users/example/Library/Logs/waired-tray.err.log",
 			"/Users/example/Library/Logs/waired-tray.out.log",
 		}},
-		{"darwin without a home", "darwin", "", []string{
+		{"darwin without a home", "darwin", "", "/Library/Application Support/waired", []string{
 			"/Library/Logs/waired-agent.err.log",
 			"/Library/Logs/waired-agent.out.log",
 		}},
-		{"linux", "linux", "/home/example", nil},
-		{"windows", "windows", `C:\Users\example`, nil},
+		{"linux", "linux", "/home/example", "/var/lib/waired", nil},
+		{"windows", "windows", `C:\Users\example`, `C:\ProgramData\waired`, []string{
+			`C:\ProgramData\waired\logs\waired-agent.log`,
+		}},
+		{"windows without a state dir", "windows", `C:\Users\example`, "", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := serviceLogFiles(tc.goos, tc.home)
+			got := serviceLogFiles(tc.goos, tc.home, tc.stateDir)
 			if len(got) != len(tc.want) {
-				t.Fatalf("serviceLogFiles(%q, %q) = %v, want %v", tc.goos, tc.home, got, tc.want)
+				t.Fatalf("serviceLogFiles(%q, %q, %q) = %v, want %v", tc.goos, tc.home, tc.stateDir, got, tc.want)
 			}
 			for i := range got {
 				if got[i] != tc.want[i] {
 					t.Errorf("file %d = %q, want %q", i, got[i], tc.want[i])
 				}
+			}
+		})
+	}
+}
+
+// TestCollectServiceLogFiles_NoFilesSaysWhy checks that the two empty
+// cases explain themselves differently. On Linux there is genuinely no
+// file; on Windows there is one, and its absence from the bundle means the
+// caller did not say where the state dir is — advice the operator can act
+// on, where "no service log files on windows" would just be wrong.
+func TestCollectServiceLogFiles_NoFilesSaysWhy(t *testing.T) {
+	for _, tc := range []struct {
+		name, goos, stateDir, want string
+	}{
+		{"linux", "linux", "/var/lib/waired", "the service log above is the source"},
+		{"windows without a state dir", "windows", "", "no --state-dir given"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			collectServiceLogFiles(&buf, tc.goos, "/home/example", tc.stateDir)
+			if !strings.Contains(buf.String(), tc.want) {
+				t.Errorf("note = %q, want it to contain %q", buf.String(), tc.want)
 			}
 		})
 	}

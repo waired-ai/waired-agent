@@ -42,6 +42,11 @@ that lets somebody else work out what happened.
    `--since` is how far back to look — widen it if the problem happened a while
    ago. The default is one hour.
 
+   On Windows, run this from an **elevated** PowerShell. Both the service's own
+   log and the AI engine's log sit under `C:\ProgramData\waired`, which is
+   locked down; without elevation they are left out of the file and the report
+   is missing the part that explains the problem.
+
 4. **Turn the detail back off**, so your logs stay small.
 
    ```sh
