@@ -107,9 +107,33 @@ func serviceLogCommand(goos string, since time.Duration, now time.Time) (name st
 		}
 	case "windows":
 		secs := max(int(since.Seconds()), 1)
+		// Three things this has to get right, all found by running it on a
+		// real Windows host rather than reasoning about it:
+		//
+		//  1. $ErrorActionPreference, not just -ErrorAction. With no
+		//     'waired-agent' provider registered — a half-finished install,
+		//     which is exactly when someone runs `waired logs` —
+		//     Get-WinEvent raises an EventLogException that the -ErrorAction
+		//     PARAMETER does not suppress. The bundle got the exception, its
+		//     stack and its localized text where the "no entries" note
+		//     belongs.
+		//  2. Branch on the result instead of letting an empty pipeline
+		//     stand for it, so the absent-provider case says which thing is
+		//     absent rather than reading as "the agent logged nothing".
+		//  3. exit 0. Suppressing the error still leaves a non-zero exit,
+		//     which the caller reports as "could not read the service log" —
+		//     true of a missing powershell.exe, misleading here. A launch
+		//     failure still surfaces, because Go reports that itself.
+		//
+		// ASCII only: a redirected PowerShell pipeline decodes child output
+		// with the console's ANSI code page, so anything else arrives
+		// mangled on a non-UTF-8 console.
 		ps := fmt.Sprintf(
-			`Get-WinEvent -FilterHashtable @{ProviderName='waired-agent'; StartTime=(Get-Date).AddSeconds(-%d)} `+
-				`-ErrorAction SilentlyContinue | Format-List TimeCreated,LevelDisplayName,Message`, secs)
+			`$ErrorActionPreference='SilentlyContinue'; `+
+				`$e = Get-WinEvent -FilterHashtable @{ProviderName='waired-agent'; StartTime=(Get-Date).AddSeconds(-%d)}; `+
+				`if ($e) { $e | Format-List TimeCreated,LevelDisplayName,Message } `+
+				`else { Write-Output 'no waired-agent events in this window (the Event Log source is registered at install time)' }; `+
+				`exit 0`, secs)
 		return "powershell", []string{"-NoProfile", "-NonInteractive", "-Command", ps}
 	default:
 		return "", nil

@@ -57,6 +57,27 @@ func TestServiceLogCommand_PerOS(t *testing.T) {
 		if !strings.Contains(joined, "AddSeconds(-3600)") {
 			t.Errorf("args missing 3600s window: %v", args)
 		}
+		// Without the preference, a host with no 'waired-agent' provider
+		// registered gets Get-WinEvent's EventLogException — text, stack
+		// and all — pasted into the bundle where the "no entries" note
+		// belongs. The -ErrorAction parameter alone does not suppress that
+		// one; checked against a real Windows host.
+		if !strings.Contains(joined, "$ErrorActionPreference='SilentlyContinue'") {
+			t.Errorf("args missing the error-action preference: %v", args)
+		}
+		// Say which thing is absent, rather than letting an empty pipeline
+		// read as "the agent logged nothing".
+		if !strings.Contains(joined, "the Event Log source is registered at install time") {
+			t.Errorf("args missing the absent-provider note: %v", args)
+		}
+		// exit 0, or a suppressed error still reads to the caller as
+		// "could not read the service log".
+		if !strings.Contains(joined, "exit 0") {
+			t.Errorf("args missing the explicit exit: %v", args)
+		}
+		if strings.ContainsFunc(joined, func(r rune) bool { return r > 127 }) {
+			t.Errorf("args carry non-ASCII, which a redirected PowerShell pipeline mangles: %v", args)
+		}
 	})
 
 	t.Run("unknown", func(t *testing.T) {
