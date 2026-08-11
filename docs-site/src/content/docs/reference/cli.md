@@ -172,6 +172,11 @@ waired models refresh             # is there a better pick for this machine?
 waired models check-agent         # will this model work with a coding agent?
 ```
 
+`ls` shows what each model weighs on disk under **SIZE**, which is how you
+find what `rm` would give you back. The figure comes from the AI engine, so a
+model that is downloaded but whose engine is stopped shows `-` — unknown, not
+zero.
+
 `pull` waits until the model is ready. A model that runs here but is not the one
 Waired would choose takes a confirmation — `--yes` skips that prompt in a
 script. A model this computer does not have the memory for asks you to confirm

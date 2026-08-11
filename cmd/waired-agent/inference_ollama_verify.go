@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 	"github.com/waired-ai/waired-agent/internal/hardware"
@@ -201,18 +202,37 @@ func verifyOllamaTuning(ctx context.Context, client *http.Client, baseURL string
 	return tuningOK, ctxDetail
 }
 
+// ollamaTagSizes returns every tag's on-disk size from /api/tags, keyed by
+// tag. One request covers the whole engine, so a caller that wants sizes
+// for several models asks once rather than once per model.
+//
+// Tags the engine reports without a size are left out rather than recorded
+// as zero: absent means "the engine did not say", which a caller has to be
+// able to tell apart from "empty".
+func ollamaTagSizes(ctx context.Context, client *http.Client, baseURL string, timeout time.Duration) (map[string]int64, error) {
+	var tags ollamaTagsResponse
+	if err := getJSON(ctx, client, baseURL+"/api/tags", timeout, &tags); err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(tags.Models))
+	for _, m := range tags.Models {
+		if m.Name != "" && m.Size > 0 {
+			out[m.Name] = m.Size
+		}
+	}
+	return out, nil
+}
+
 // ollamaTagSize returns the on-disk size of tag from /api/tags, the
 // live-size baseline for the f16 heuristic (more accurate than the
 // manifest's estimated weight).
 func ollamaTagSize(ctx context.Context, client *http.Client, baseURL, tag string) (int64, error) {
-	var tags ollamaTagsResponse
-	if err := getJSON(ctx, client, baseURL+"/api/tags", probeHTTPTimeout, &tags); err != nil {
+	sizes, err := ollamaTagSizes(ctx, client, baseURL, probeHTTPTimeout)
+	if err != nil {
 		return 0, err
 	}
-	for _, m := range tags.Models {
-		if m.Name == tag {
-			return m.Size, nil
-		}
+	if size, ok := sizes[tag]; ok {
+		return size, nil
 	}
 	return 0, fmt.Errorf("tag %q not in /api/tags", tag)
 }
