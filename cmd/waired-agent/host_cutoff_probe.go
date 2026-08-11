@@ -202,7 +202,7 @@ const (
 	//
 	// It is a WAIT rather than a check because of where this runs. The
 	// call before it is ensureHostCutoffProbeModel, and on a fresh install
-	// that pulls ~1 GB; endPull fires a serve reconcile when a model
+	// that pulls ~1 GB of weights; endPull fires a serve reconcile when a model
 	// lands, and a reconcile stops and respawns the engine. So the moment
 	// the screen is first able to run is very often the moment the engine
 	// is being restarted underneath it — and a bare check there would
@@ -224,12 +224,31 @@ const (
 	hostCutoffScreenQuietWait = 30 * time.Second
 	hostCutoffScreenQuietPoll = 500 * time.Millisecond
 
+	// hostCutoffStraddleSampleCount is how many samples a measurement takes
+	// when the first benchSampleCount of them disagree about the budget
+	// (hostCutoffSamplesStraddleBudget).
+	//
+	// Odd, so the median stays a single middle run rather than the
+	// slower-of-two tie-break reduceHostCutoffSamples falls back to. Two
+	// extra rather than more because this is bounded by the same budget
+	// check as every other sample — a host slow enough to straddle a 45 s
+	// line is also a host where two more samples is most of what the window
+	// has left, and the loop simply stops when they no longer fit.
+	//
+	// It buys a better median, not certainty. A host whose true turn sits on
+	// the line will straddle any number of samples; the point is that the
+	// answer stops being decided by a single run.
+	hostCutoffStraddleSampleCount = benchSampleCount + 2
+
 	// hostCutoffScreenKeepAlive is how long, in seconds, the first screen
 	// reading asks the engine to keep the probe model resident.
 	//
-	// The requests around it use keep_alive:0 so a ~1 GB model plus its KV
-	// cache does not sit on the host least able to spare it. This one does
-	// not, because whatever runs next needs the same model within seconds:
+	// The requests around it use keep_alive:0 so the loaded probe does not
+	// sit on the host least able to spare it. That is 3.41 GB at the 200k
+	// window, not the ~1 GB the weights suggest — measured on a 24 GB host
+	// (waired-agent#644), where the KV cache is most of it: the same probe
+	// loads at 1.47 GB at 24k and 1.14 GB at 4k. This one does not unload,
+	// because whatever runs next needs the same model within seconds:
 	// either the confirming reading, or the first full sample. Paying the
 	// load twice is what makes two readings look expensive.
 	//
@@ -537,7 +556,10 @@ func measureHostCutoff(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeas
 		slowest time.Duration
 		last    hostfit.HostProbe
 	)
-	for sample := 1; sample <= benchSampleCount; sample++ {
+	// Grows once, and only when the samples taken so far disagree about the
+	// verdict — see hostCutoffSamplesStraddleBudget.
+	maxSamples := benchSampleCount
+	for sample := 1; sample <= maxSamples; sample++ {
 		// Stop before starting a sample the budget cannot hold. The
 		// slowest sample so far is the estimate: samples on one idle host
 		// vary by a few percent, and the one case where they do not — a
@@ -565,6 +587,15 @@ func measureHostCutoff(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeas
 		last = probe
 		if probe.Measured() {
 			usable = append(usable, probe)
+		}
+		if sample == benchSampleCount && maxSamples == benchSampleCount &&
+			hostCutoffSamplesStraddleBudget(usable) {
+			maxSamples = hostCutoffStraddleSampleCount
+			deps.Logger.Info("host cutoff: the samples disagree about the budget; taking more before deciding",
+				"samples", len(usable),
+				"spread_pct", fmt.Sprintf("%.1f", reduceHostCutoffSamples(usable).SpreadPct),
+				"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds),
+				"max_samples", maxSamples)
 		}
 	}
 	if len(usable) == 0 {
@@ -764,6 +795,37 @@ func reduceHostCutoffScreen(readings [2]hostCutoffScreen, floors [2]float64) hos
 		TurnFloorSeconds: floors[pick],
 		Method:           signer.BenchmarkMethodOllamaPrefillFloor,
 	}
+}
+
+// hostCutoffSamplesStraddleBudget reports whether the samples taken so far
+// disagree about the only question this measurement is asked: is one coding
+// turn on this host inside HostCutoffTurnBudgetSeconds.
+//
+// This is the case waired-agent#622 recorded, where the spread was computed,
+// published, and read by nothing: three samples that disagreed by 106% of
+// their own median still produced a verdict, and which side the median landed
+// on was decided by which run happened to be the middle one. On the host that
+// found it the verdict was not in doubt (4.45 s against a 45 s budget, every
+// sample clearing by an order of magnitude), and that is exactly why the
+// straddle is the test rather than the spread: a large spread far from the
+// line changes no answer and should cost nothing.
+//
+// It reads the samples rather than SpreadPct because the samples say it
+// exactly. A spread threshold would need a band estimate around the median to
+// ask the same question, and would be wrong at both ends of it.
+func hostCutoffSamplesStraddleBudget(samples []hostfit.HostProbe) bool {
+	var below, above bool
+	for _, p := range samples {
+		if !p.Measured() {
+			continue
+		}
+		if p.TurnSeconds() <= hostfit.HostCutoffTurnBudgetSeconds {
+			below = true
+		} else {
+			above = true
+		}
+	}
+	return below && above
 }
 
 // reduceHostCutoffSamples picks the median sample by turn time and

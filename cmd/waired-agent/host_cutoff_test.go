@@ -446,6 +446,82 @@ func TestMeasureHostCutoff_PublishesTheMedianSampleNotAMedianOfFields(t *testing
 	}
 }
 
+// TestHostCutoffSamplesStraddleBudget is the decision waired-agent#622 asked
+// for, in isolation: the samples disagree about the verdict, not merely about
+// each other.
+//
+// scaledCountersProbe(f) has a turn of ~4.462*f seconds against the 45 s
+// budget, so the line sits at 10.09x: 9x clears it (40.2 s) and 12x misses it
+// (53.5 s).
+func TestHostCutoffSamplesStraddleBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		factors []float64
+		want    bool
+	}{
+		{"all-far-below-the-line", []float64{1, 2, 3}, false},
+		{"all-above-the-line", []float64{30, 40, 50}, false},
+		{"wide-spread-but-all-below", []float64{1, 5, 9}, false},
+		{"straddling-the-line", []float64{9, 12, 9}, true},
+		{"one-slow-run-out-of-three", []float64{1, 1, 30}, true},
+		{"nothing-measured", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			samples := make([]hostfit.HostProbe, 0, len(tc.factors))
+			for _, f := range tc.factors {
+				samples = append(samples, scaledCountersProbe(f))
+			}
+			if got := hostCutoffSamplesStraddleBudget(samples); got != tc.want {
+				t.Errorf("= %v, want %v (turns %v against a %.0f s budget)",
+					got, tc.want, tc.factors, hostfit.HostCutoffTurnBudgetSeconds)
+			}
+		})
+	}
+}
+
+// End to end: samples that disagree about the budget buy more samples, so the
+// answer stops being decided by whichever run happened to be the middle one.
+func TestMeasureHostCutoff_SamplesThatStraddleTheBudgetBuyMoreSamples(t *testing.T) {
+	p, eng, _ := hostCutoffProviderAnswering(t, []map[string]any{
+		calibrationCounters,
+		scaledCounters(9), scaledCounters(12), scaledCounters(9),
+		scaledCounters(9), scaledCounters(9),
+	}, 0)
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement")
+	}
+
+	if got := len(eng.generateBodies()); got != hostCutoffStraddleSampleCount+1 {
+		t.Fatalf("/api/generate requests = %d, want %d — three samples that disagreed about "+
+			"the budget must not be the whole of the defence",
+			got, hostCutoffStraddleSampleCount+1)
+	}
+	got := p.hostSpeedNow()
+	if got == nil || got.Samples != hostCutoffStraddleSampleCount {
+		t.Fatalf("samples = %v, want %d", got, hostCutoffStraddleSampleCount)
+	}
+}
+
+// The other half, and the one that keeps this affordable: a host nowhere near
+// the line pays nothing for it, however much its samples disagree. That was
+// the host #622 was found on — spread 106%, verdict never in doubt.
+func TestMeasureHostCutoff_ADisagreementFarFromTheLineCostsNothing(t *testing.T) {
+	p, eng, _ := hostCutoffProviderAnswering(t, []map[string]any{
+		calibrationCounters, scaledCounters(3), scaledCounters(1), scaledCounters(2),
+	}, 0)
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement")
+	}
+
+	if got := len(eng.generateBodies()); got != benchSampleCount+1 {
+		t.Fatalf("/api/generate requests = %d, want %d — samples 3x apart but all an order of "+
+			"magnitude inside the budget change no answer", got, benchSampleCount+1)
+	}
+	if pub := p.hostSpeedNow(); pub == nil || pub.SpreadPct <= 0 {
+		t.Fatalf("spread_pct = %v, want a positive dispersion still recorded", pub)
+	}
+}
+
 // scaledCountersProbe is what scaledCounters(factor) measures, as the
 // policy layer sees it.
 func scaledCountersProbe(factor float64) hostfit.HostProbe {
