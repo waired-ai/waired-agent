@@ -768,17 +768,33 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	// ran under this claim would be skipped, and the model would stay cold
 	// until the next request paid for it.
 	//
-	// Declining rather than waiting: awaitQuietEngine already consulted
-	// engineIsQuiet, so arriving here and finding the claim taken means the
-	// benchmark won a race measured in milliseconds. The next start comes
-	// back round, and the answer to "measure now or keep what we have" is
-	// the one host_memory.go has always given.
+	// Declining rather than waiting, and the gap this covers is not small:
+	// awaitQuietEngine asked its question before the probe model's own
+	// download, which is minutes on a cold host. A benchmark that started
+	// inside that is a benchmark most of the way through, and queueing
+	// behind it would spend the install window waiting.
+	//
+	// The stage goes terminal because it has to: PullingProbe/Measuring are
+	// already reported, and a setup row left at `running` on a boot that
+	// will not come back to it denies setup_complete to a computer that is
+	// otherwise finished (waired#1143).
+	//
+	// The force flag is PUT BACK. It was consumed above, and losing it here
+	// would mean an install-flow re-run asked for a fresh figure, lost the
+	// engine to a benchmark, and then quietly went on reusing the stored
+	// one for the life of the install (waired-agent#599). Restoring it does
+	// not latch the host into re-measuring forever — the next start
+	// consumes it, measures, and clears it.
 	releaseEngine, gotEngine := p.claimEngineExclusive()
 	if !gotEngine {
-		p.logger.Info("host speed: another measurement has the engine; " +
-			"keeping the previous measurement and trying on a later start")
+		p.logger.Info("host speed: another measurement has the engine; "+
+			"keeping the previous measurement and trying on a later start",
+			"asked_for_a_fresh_figure", forced)
 		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
 			"another measurement had the engine")
+		if forced {
+			p.hostSpeedForce.Store(true)
+		}
 		return cached
 	}
 	defer releaseEngine()

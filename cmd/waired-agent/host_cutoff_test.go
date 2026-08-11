@@ -2067,6 +2067,51 @@ func TestEnsureHostSpeedMeasured_ServingDuringTheProbeDiscardsTheReading(t *test
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#599): an install-flow re-run that loses
+// the engine to the other measurement has still ASKED for a fresh figure,
+// and the ask must survive.
+//
+// The gap this covers is not small — awaitQuietEngine asks its question
+// before the probe model's own download — so losing the flag here would
+// leave a re-run quietly reusing the stored figure for the life of the
+// install, which is the whole thing #599 rules against.
+func TestEnsureHostSpeedMeasured_ALostEngineKeepsTheAskAlive(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the first measurement did not decide")
+	}
+	stored := p.hostSpeedNow()
+
+	// The other measurement takes the engine, and the re-run arrives.
+	release, ok := p.claimEngineExclusive()
+	if !ok {
+		t.Fatal("could not claim")
+	}
+	p.hostSpeedForce.Store(true)
+	p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow())
+	if now := p.hostSpeedNow(); now == nil || now.MeasuredAt != stored.MeasuredAt {
+		t.Errorf("the stored measurement did not survive a call that never reached the engine: %+v", now)
+	}
+	if !p.hostSpeedForce.Load() {
+		t.Error("the ask was consumed by a call that never reached the engine")
+	}
+
+	// And the next start honours it.
+	release()
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the restored ask did not re-measure")
+	}
+	if p.hostSpeedForce.Load() {
+		t.Error("the ask latched; this host would re-measure on every start")
+	}
+	if now := p.hostSpeedNow(); now == nil || now.MeasuredAt == stored.MeasuredAt {
+		t.Error("the re-measure did not publish a new figure")
+	}
+}
+
 // Record of today's behaviour: an untouched counter publishes. The guard
 // above must not fire on the ordinary path, and a fake that answered the
 // same number by accident would hide that.
