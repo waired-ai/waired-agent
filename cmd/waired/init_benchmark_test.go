@@ -40,6 +40,10 @@ type benchStub struct {
 	// switch can be refused (the host declined to fetch the weights,
 	// waired-agent#257). 0 = 202 Accepted.
 	acceptStatus int
+	// deleted records the model ids DELETE /models/{id} was called with,
+	// and deleteStatus refuses them (0 = 200 OK).
+	deleted      []string
+	deleteStatus int
 	upgrade      *management.BenchmarkRecommendation // /benchmark upgrade suggestion
 	downloading  bool                                // preferred-model response Downloading
 	statusSeq    []statusStep                        // scripted /status sequence (last repeats)
@@ -139,6 +143,22 @@ func (b *benchStub) server() *httptest.Server {
 	mux.HandleFunc("/waired/v1/inference/disable", func(w http.ResponseWriter, r *http.Request) {
 		b.disableCount++
 		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/waired/v1/models/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/waired/v1/models/")
+		b.mu.Lock()
+		b.deleted = append(b.deleted, id)
+		b.mu.Unlock()
+		if b.deleteStatus != 0 && b.deleteStatus != http.StatusOK {
+			w.WriteHeader(b.deleteStatus)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error_code": "delete_failed"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 	})
 	return httptest.NewServer(mux)
 }
@@ -1049,5 +1069,98 @@ func TestPromptBenchmark_RemeasureIgnoresASecondRecommendation(t *testing.T) {
 	}
 	if got := outcomeFrom(resp); !got.Measured || got.Tokps != 28 {
 		t.Errorf("outcome = %+v, want the honest post-switch 28 tok/s", got)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#648, owner decision 2026-08-11): after a
+// step-down, the weights of the model the wizard itself rejected are
+// offered for removal rather than left behind.
+//
+// The reported host finished init with 12 GB of models on a 16 GB
+// machine, one of them a model the same run had just judged too heavy
+// for it and replaced.
+func TestPromptBenchmark_OffersToRemoveTheRejectedModel(t *testing.T) {
+	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{26, 71}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	// Two answers: accept the switch, then accept the removal.
+	_, _, err := benchmarkWithScanner(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("y\ny\n")), false)
+	if err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	if len(stub.deleted) != 1 || stub.deleted[0] != "heavy" {
+		t.Fatalf("deleted = %v, want the rejected model 'heavy' exactly once", stub.deleted)
+	}
+	if !strings.Contains(out.String(), "Removed heavy.") {
+		t.Errorf("the removal was not reported:\n%s", out.String())
+	}
+}
+
+// Declining keeps the weights and names the command that removes them
+// later — an operator who plans to add memory has a real reason to keep
+// a model this host cannot run today.
+func TestPromptBenchmark_KeepingTheRejectedModelSaysHowToRemoveIt(t *testing.T) {
+	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{26, 71}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	_, _, err := benchmarkWithScanner(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("y\nn\n")), false)
+	if err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	if len(stub.deleted) != 0 {
+		t.Fatalf("deleted = %v, want nothing removed after a decline", stub.deleted)
+	}
+	if !strings.Contains(out.String(), "`waired models rm heavy`") {
+		t.Errorf("the decline did not say how to remove it later:\n%s", out.String())
+	}
+}
+
+// Deleting gigabytes on nobody's authority is the one answer an
+// unattended run must not give: it keeps them and says so.
+//
+// Driven directly because non-interactive declines the switch itself, so
+// the flow above never reaches this call — which is exactly why the
+// removal has to make the decision on its own rather than trusting its
+// caller to have asked someone.
+func TestOfferToRemoveRejected_NonInteractiveKeepsTheWeights(t *testing.T) {
+	stub := &benchStub{}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	offerToRemoveRejected(srv.URL, "heavy", "heavy", true, &out, bufio.NewScanner(strings.NewReader("")))
+	if len(stub.deleted) != 0 {
+		t.Fatalf("deleted = %v, want nothing removed without a person answering", stub.deleted)
+	}
+	if !strings.Contains(out.String(), "`waired models rm heavy`") {
+		t.Errorf("non-interactive did not say how to remove it:\n%s", out.String())
+	}
+}
+
+// A removal that fails is reported and nothing else happens: the install
+// is finished and correct either way — the model is a leftover, not a
+// fault — so this must never fail the flow.
+func TestOfferToRemoveRejected_FailureIsNotFatal(t *testing.T) {
+	stub := &benchStub{deleteStatus: http.StatusInternalServerError}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	offerToRemoveRejected(srv.URL, "heavy", "heavy", false, &out, bufio.NewScanner(strings.NewReader("y\n")))
+	if len(stub.deleted) != 1 {
+		t.Fatalf("deleted = %v, want the attempt to have been made", stub.deleted)
+	}
+	o := out.String()
+	if !strings.Contains(o, "warn: could not remove heavy") || !strings.Contains(o, "`waired models rm heavy`") {
+		t.Errorf("a failed removal must say so and how to retry:\n%s", o)
+	}
+	if strings.Contains(o, "Removed heavy.") {
+		t.Errorf("a failed removal reported success:\n%s", o)
 	}
 }
