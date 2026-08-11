@@ -39,7 +39,32 @@ type hostSpeedPoll struct {
 	desiredState    string
 	desiredStateSet bool
 	subState        string
+	stage           string
 	ok              bool
+}
+
+// hostSpeedStageGaveUp reports whether the measurement stopped without a
+// figure. It is what ends the wait for a re-measurement that is never
+// going to arrive.
+//
+// "measured" is NOT in the list, and that is the point: the daemon
+// reports it for a figure merely STORED, not one taken just now
+// (setupHostSpeedProgress, waired#1143), so a re-run polling a host with
+// a stale figure sees "measured" from its first read. What a fresh figure
+// landed is answered by measured_at changing, not by this.
+//
+// Anything else — an empty stage from an older daemon, a measurement
+// still deferring behind a busy engine — means keep waiting, bounded by
+// hostSpeedAskWait as before. A host too busy to be measured therefore
+// spends that budget and then judges on what it has, which is the
+// fail-open end the whole step already lands on.
+func hostSpeedStageGaveUp(stage string) bool {
+	switch stage {
+	case "probe_failed", "measure_failed":
+		return true
+	default:
+		return false
+	}
 }
 
 func readHostSpeedPoll(mgmt string) hostSpeedPoll {
@@ -64,7 +89,7 @@ func readHostSpeedPoll(mgmt string) hostSpeedPoll {
 	}
 	return hostSpeedPoll{
 		hs: s.HostSpeed, desiredState: s.DesiredState, desiredStateSet: s.DesiredStateSet,
-		subState: s.SubsystemState, ok: true,
+		subState: s.SubsystemState, stage: s.HostSpeedStage, ok: true,
 	}
 }
 
@@ -121,15 +146,33 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 	// this route: an older daemon answers 404, and the wait below then
 	// behaves exactly as it did before. The daemon declines by itself on a
 	// fresh install, where it measured seconds ago.
-	requestHostSpeedRemeasure(mgmtURL)
+	//
+	// The figure standing on disk before the ask is remembered, because
+	// the wait below has to be able to tell it from the one being taken
+	// now. It could not, and that is how this step came to decide on a
+	// stale number while the fresh one landed 44 s later — with both
+	// running at once, which is the contention waired-agent#703 is about.
+	//
+	// A STRING comparison, not a timestamp one: the CLI and the daemon
+	// each have their own clock, and "did this change" is the question
+	// being asked. Same shape as the engine-version match that decides
+	// whether a stored figure still applies.
+	//
+	// This read IS the loop's first poll, taken before the loop rather
+	// than inside it, so asking the question costs no extra request. The
+	// loop therefore polls at its END.
+	p := readHostSpeedPoll(mgmtURL)
+	staleMeasuredAt := ""
+	if p.ok && p.hs != nil {
+		staleMeasuredAt = p.hs.MeasuredAt
+	}
+	awaitingFresh := requestHostSpeedRemeasure(mgmtURL)
 
 	deadline := time.Now().Add(hostSpeedAskWait)
 	narrated := false
 	var narratedAt, saidAt time.Time
-	misses := 0
-	var p hostSpeedPoll
+	misses, looks := 0, 0
 	for {
-		p = readHostSpeedPoll(mgmtURL)
 		if !p.ok {
 			// An unreachable daemon — or an older build without the
 			// status route — is not going to produce a measurement.
@@ -153,14 +196,35 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 				// Nothing is going to measure anything.
 				return false
 			}
-			if p.hs != nil {
+			// A figure is enough UNLESS one was just asked for and this is
+			// still the old one. Waiting for the ask to land is the whole
+			// point of making it: a re-run replays the install
+			// conversation, and a gate that answers from the previous
+			// run's number has replayed nothing (owner ruling 2026-08-09,
+			// waired-agent#599).
+			fresh := !awaitingFresh || p.hs == nil || p.hs.MeasuredAt != staleMeasuredAt
+			if p.hs != nil && fresh {
 				break
 			}
-			if !narrated {
+			// The measurement stopped without producing a new figure —
+			// the probe model would not download, the reading was
+			// discarded. There is nothing further to wait for, so fall
+			// through to whatever is on disk rather than spending the
+			// rest of the budget in silence.
+			if awaitingFresh && !fresh && hostSpeedStageGaveUp(p.stage) {
+				break
+			}
+			// Announce the wait, but not before there is one. A host
+			// holding a figure and waiting only for a FRESHER one is one
+			// poll away from having it whenever the daemon declined or had
+			// already finished, and a line about minutes of work in front
+			// of a five-millisecond gap is noise. A host with no figure at
+			// all is waiting from this instant and says so.
+			if !narrated && (p.hs == nil || looks > 0) {
 				writePromptf(out, "%s Measuring how fast this computer runs AI — one-time, a few minutes…\n",
 					emo("⏱", "*"))
 				narrated, narratedAt, saidAt = true, time.Now(), time.Now()
-			} else if time.Since(saidAt) >= hostSpeedNarrateEvery {
+			} else if narrated && time.Since(saidAt) >= hostSpeedNarrateEvery {
 				// The wait is deliberate (waired#1099: measure before
 				// recommending), but a one-shot line in front of it cannot
 				// tell a working measurement from a hung one. Six minutes
@@ -182,6 +246,8 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 			return true
 		}
 		time.Sleep(hostSpeedAskPoll)
+		p = readHostSpeedPoll(mgmtURL)
+		looks++
 	}
 
 	hs := p.hs

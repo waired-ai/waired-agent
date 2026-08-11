@@ -386,7 +386,12 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 			// already started), and a fresh install reaches it with the
 			// host-speed probe's download still in flight — whose completion
 			// reconcile then restarts the engine under the warm-up.
-			EngineQuiet:   p.engineQuietForBench,
+			EngineQuiet: p.engineQuietForBench,
+			// And HOLD it. EngineQuiet is answered once, at the top; this
+			// runs for minutes, and the install-time host-speed measurement
+			// starts from a background goroutine that can land anywhere in
+			// them (waired-agent#703).
+			EngineClaim:   p.claimEngineForBench,
 			EngineGen:     p.engineProcessGen,
 			EngineModel:   engineModelForActive(p.cfg),
 			VariantID:     variantIDForActive(),

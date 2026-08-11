@@ -192,6 +192,22 @@ type inferenceSubsystemDeps struct {
 	// nil disables the accounting (unit tests, pre-session boot).
 	LocalAdmission func(context.Context) func()
 
+	// ServingInflight / ServingAdmitted read the other end of the counter
+	// LocalAdmission feeds — what this machine is serving now, and how
+	// much it has served in total — so the install-time host-speed
+	// measurement can tell a quiet engine from a working one
+	// (waired-agent#703).
+	//
+	// Both come off the same localAdmissionRelay, which is why they are
+	// deps rather than a field set after construction: the provider is
+	// built here and the inference.Server exists further down main().
+	//
+	// nil means "nothing is serving", which is what a host with no
+	// inference server is doing. Every existing caller and test keeps
+	// today's behaviour.
+	ServingInflight func() int
+	ServingAdmitted func() uint64
+
 	// OnPeerOutcome folds each request this device dispatched to a mesh
 	// peer into main()'s router.ErrorWindow, whose Snapshot is already
 	// threaded back the other way as LocalErrors above. It goes onto the
@@ -541,6 +557,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		onPublicNudge:       deps.OnPublicNudge,
 		recorder:            deps.Recorder,
 		routing:             deps.Routing,
+		servingInflight:     deps.ServingInflight,
+		servingAdmitted:     deps.ServingAdmitted,
 	}
 	// Not in the literal above: the field is an atomic.Pointer now (#339),
 	// because the adopt trigger may take on a vLLM venv installed after
@@ -1256,6 +1274,29 @@ type agentInferenceProvider struct {
 	hostSpeedStage       hostSpeedStage
 	hostSpeedStageDetail string
 
+	// engineExclusive is held by whichever measurement is monopolising
+	// the engine right now. There are two on this host — the install-time
+	// host-speed probe and the boot/setup benchmark — and each used to
+	// ask "is the engine quiet" through a predicate that could not see
+	// the other (waired-agent#703). ONE piece of state, so neither can go
+	// blind to the other on its own.
+	//
+	// Claimed with a CAS and never waited on: the two callers already
+	// have the right way to yield and they are not the same way. The
+	// benchmark leaves through the 425 door it already answers on a busy
+	// engine, and the measurement is inside a bounded poll loop
+	// (awaitQuietEngine) that will come back round.
+	//
+	// Same idiom as warmInFlight, and for the same reason: an atomic.Bool
+	// can be READ cheaply by the quiet predicates, which a sync.Mutex
+	// cannot.
+	engineExclusive atomic.Bool
+
+	// servingInflight / servingAdmitted are inferenceSubsystemDeps'
+	// fields of the same name. nil ⇒ nothing is serving.
+	servingInflight func() int
+	servingAdmitted func() uint64
+
 	// meshSnapshotFn, when non-nil, threads the inferencemesh
 	// aggregator into Select so a request whose model isn't local-
 	// ready can fall through to a peer's engine (Phase 4 peer-engine
@@ -1960,6 +2001,11 @@ func (p *agentInferenceProvider) Status(ctx context.Context) management.Inferenc
 		DesiredStateSet: desiredStateSet,
 		NoModelSelected: p.noModelSelected.Load(),
 		HostSpeed:       p.hostSpeedStatus(),
+		// Read through setupHostSpeedProgress, the same accessor the setup
+		// rows use, so a daemon restart on an already-measured host reports
+		// "measured" here too rather than looking like an unstarted
+		// measurement for the length of its settle window (waired#1143).
+		HostSpeedStage: p.setupHostSpeedProgress().Stage.String(),
 	}
 }
 

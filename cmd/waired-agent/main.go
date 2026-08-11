@@ -1048,6 +1048,8 @@ func run(ctx context.Context, args []string) error {
 				OnPublicNudge:       publicUseCtl.Nudge,
 				OnPublicUsage:       publicUsageSink(publicUsageBatch),
 				LocalAdmission:      localAdmit.Admit,
+				ServingInflight:     localAdmit.InflightCount,
+				ServingAdmitted:     localAdmit.AdmittedCount,
 				OnPeerOutcome:       errorWindow.Record,
 			})
 			if err != nil {
@@ -1191,10 +1193,16 @@ func run(ctx context.Context, args []string) error {
 				// tells a restart we ordered from a host that cannot answer.
 				var engineReady func() (bool, string)
 				var engineQuiet func(context.Context) bool
+				var engineClaim func() (func(), bool)
 				var engineGen func() uint64
 				if inferenceSub != nil && inferenceSub.provider != nil {
 					engineReady = inferenceSub.provider.EngineReady
 					engineQuiet = inferenceSub.provider.engineQuietForBench
+					// engineQuiet answers for an instant; this holds the
+					// engine for the run, which is what keeps the boot
+					// benchmark and the install-time host-speed measurement
+					// off each other (waired-agent#703).
+					engineClaim = inferenceSub.provider.claimEngineForBench
 					engineGen = inferenceSub.provider.engineProcessGen
 				}
 				bench := RunBootBenchmark(ctx, BenchDeps{
@@ -1202,6 +1210,7 @@ func run(ctx context.Context, args []string) error {
 					EnginePort:    enginePort,
 					EngineReady:   engineReady,
 					EngineQuiet:   engineQuiet,
+					EngineClaim:   engineClaim,
 					EngineGen:     engineGen,
 					EngineModel:   engineModelForActive(cfgRoot.Inference),
 					VariantID:     variantIDForActive(),

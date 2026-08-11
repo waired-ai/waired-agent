@@ -300,6 +300,25 @@ type BenchDeps struct {
 	// today's behaviour.
 	EngineQuiet func(context.Context) bool
 
+	// EngineClaim, when non-nil, TAKES the engine for the length of this
+	// benchmark and reports whether it got it. The release is always
+	// non-nil.
+	//
+	// EngineQuiet above is the same question asked a moment earlier, and
+	// asking is not enough on its own: the install-time host-speed
+	// measurement runs from a background goroutine, so between the answer
+	// and the first request there is a window in which it can start. On
+	// real hardware it did, and the resulting figure described the two
+	// measurements evicting each other rather than the host
+	// (waired-agent#703).
+	//
+	// Declined ⇒ the not-ready outcome and the 425 door, exactly as a
+	// busy engine already produces. Never waited on.
+	//
+	// nil means "the engine is yours", so every existing caller and test
+	// keeps today's behaviour.
+	EngineClaim func() (release func(), ok bool)
+
 	// EngineGen, when non-nil, is the engine's process generation
 	// (agentInferenceProvider.engineProcessGen). Sampled before the
 	// warm-up and re-read on failure: a run whose engine generation moved
@@ -438,6 +457,28 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 			deps.Logger.Info("inference boot benchmark: cache miss; measuring",
 				"key", cacheKey)
 		}
+	}
+
+	// Take the engine before the loop and hold it across every retry: the
+	// other measurement on this host is the install-time host-speed probe,
+	// and it runs minutes long from a background goroutine. Claiming per
+	// iteration would hand it the gap between a bounce-grace `continue`
+	// and the next request (waired-agent#703).
+	//
+	// Declining leaves through the same 425 door a busy engine already
+	// answers on, which `waired init` and the setup reconciler both
+	// already retry.
+	if deps.EngineClaim != nil {
+		release, ok := deps.EngineClaim()
+		if !ok {
+			deps.Logger.Warn("inference boot benchmark not run: the engine is busy",
+				"reason", benchOutcomeEngineNotReady,
+				"engine", deps.EngineKind,
+				"port", deps.EnginePort,
+				"detail", "another measurement has the engine")
+			return notReadyBenchResult(deps, "engine busy: this host is being measured")
+		}
+		defer release()
 	}
 
 	// The measurement, retried without charge across restarts this agent

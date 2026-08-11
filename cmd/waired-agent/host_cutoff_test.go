@@ -1893,3 +1893,192 @@ func TestHostSpeedInstallWindow_IsNeverLongerThanTheBackgroundOne(t *testing.T) 
 		t.Fatalf("background window = %v, want %v", got, want)
 	}
 }
+
+// ── waired-agent#703: two measurements, one engine ───────────────────
+//
+// The install-time host-speed probe and the boot/setup benchmark both
+// monopolise the engine, and both used to ask "is it quiet" through a
+// predicate that read four things — a pull, a reconcile, a parked engine,
+// health — none of them a REQUEST and none of them the other measurement.
+// On real hardware they overlapped and a host measured at 12.017 s
+// published 39.473 s, the contended-host signature waired#1140 documents.
+
+// PRODUCT CONTRACT (waired-agent#703): serving traffic is not a quiet
+// engine. Since infruntime.MaxResidentModels the engine holds one model at
+// a time, so a request arriving mid-measurement evicts the probe rather
+// than merely competing with it.
+func TestEngineIsQuiet_ServingTrafficIsNotQuiet(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	if !p.engineIsQuiet(ctx) {
+		t.Fatal("an idle ready engine answered busy")
+	}
+
+	serving := 0
+	p.servingInflight = func() int { return serving }
+	if !p.engineIsQuiet(ctx) {
+		t.Error("answered busy with nothing in flight")
+	}
+	serving = 1
+	if p.engineIsQuiet(ctx) {
+		t.Error("answered quiet while this host was serving a request")
+	}
+	// And the benchmark inherits it through the same predicate, which is
+	// what stops the two measurements measuring the same contention from
+	// opposite ends.
+	if p.engineQuietForBench(ctx) {
+		t.Error("engineQuietForBench answered quiet while this host was serving")
+	}
+	serving = 0
+	if !p.engineIsQuiet(ctx) {
+		t.Error("stayed busy after the request finished")
+	}
+}
+
+// Record of today's behaviour: an unwired counter is a host with no
+// inference server, and a host with no inference server is serving
+// nothing. Pinned because the nil case is the one every unit test and the
+// whole pre-session boot window take.
+func TestEngineIsQuiet_NoAdmissionCounterIsNotBusy(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	if p.servingInflight != nil {
+		t.Fatal("the fixture wired a counter; this test is about the nil one")
+	}
+	if !p.engineIsQuiet(context.Background()) {
+		t.Error("a provider with no admission counter answered busy")
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#703): the exclusive claim is what keeps
+// the two measurements apart, and the HOLDER must not be gated by its own
+// claim. Both of them re-ask the quiet question while they hold it — the
+// benchmark once per bounce-grace retry, the screen from inside
+// measureHostCutoff — so a predicate that read the claim would make each
+// stand down on itself.
+func TestClaimEngineExclusive_TheHolderIsNotBlockedByItsOwnClaim(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	release, ok := p.claimEngineExclusive()
+	if !ok {
+		t.Fatal("could not claim a free engine")
+	}
+	if !p.engineIsQuiet(ctx) {
+		t.Error("engineIsQuiet answered busy to the holder of the claim")
+	}
+	if !p.engineQuietForBench(ctx) {
+		t.Error("engineQuietForBench answered busy to the holder of the claim")
+	}
+	// The waiter is the one that sees it.
+	if p.engineIsQuietAndUnclaimed(ctx) {
+		t.Error("engineIsQuietAndUnclaimed answered quiet while the engine was claimed")
+	}
+	if _, again := p.claimEngineExclusive(); again {
+		t.Error("a second claim succeeded; the two measurements would run together")
+	}
+
+	release()
+	if !p.engineIsQuietAndUnclaimed(ctx) {
+		t.Error("still claimed after release")
+	}
+	second, ok := p.claimEngineExclusive()
+	if !ok {
+		t.Fatal("could not re-claim after release")
+	}
+	// Idempotent. The benchmark defers its release and returns through
+	// several arms; a stale release firing twice would hand the engine
+	// away from the run that holds it now.
+	release()
+	if _, stolen := p.claimEngineExclusive(); stolen {
+		t.Error("a stale release freed a claim it no longer owned")
+	}
+	second()
+}
+
+// Record of today's behaviour: a host this provider does not drive with
+// ollama has nothing here to collide with, so it is handed the engine
+// rather than gated off its own benchmark — the same nil-end reasoning
+// engineQuietForBench already applies (#582/#601).
+func TestClaimEngineForBench_AVLLMHostIsAlwaysHandedTheEngine(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	p.setServingEngine(catalog.RuntimeVLLM)
+
+	held, ok := p.claimEngineExclusive()
+	if !ok {
+		t.Fatal("could not claim")
+	}
+	defer held()
+	if _, got := p.claimEngineForBench(); !got {
+		t.Error("a vLLM host was refused the engine; nothing here measures it, " +
+			"so this would gate its benchmark off forever")
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#703): a reading taken while this host was
+// serving is not published. It describes the two of them sharing an engine
+// that holds one model at a time, and nothing in the numbers says which is
+// which — on real hardware the contended run's SPREAD across samples was
+// 2.70% against a clean 1.78%, so the statistical shape is no help. The
+// stored figure survives and a later start tries again, the answer the
+// adopted-engine arm gives to the same question.
+//
+// The fake moves the counter BETWEEN the two reads rather than from a
+// goroutine racing the probe: a request that starts and finishes inside
+// the window is exactly the case a gauge cannot see, and it is the case
+// worth pinning.
+func TestEnsureHostSpeedMeasured_ServingDuringTheProbeDiscardsTheReading(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	// A good figure first, so the test can watch it SURVIVE.
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the first measurement did not decide")
+	}
+	stored := p.hostSpeedNow()
+	if stored == nil {
+		t.Fatal("nothing published")
+	}
+
+	reads := 0
+	p.servingAdmitted = func() uint64 {
+		reads++
+		if reads == 1 {
+			return 7 // before the probe
+		}
+		return 8 // one request served while it ran
+	}
+	p.hostSpeedTakenHere.Store(false)
+	p.hostSpeedForce.Store(true)
+
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); v.Decided {
+		t.Error("a contended reading was returned as a verdict")
+	}
+	if reads != 2 {
+		t.Errorf("the admission counter was read %d times, want 2 (once each side of the probe)", reads)
+	}
+	if now := p.hostSpeedNow(); now == nil || now.MeasuredAt != stored.MeasuredAt {
+		t.Errorf("the stored measurement was overwritten by the discarded one: %+v", now)
+	}
+}
+
+// Record of today's behaviour: an untouched counter publishes. The guard
+// above must not fire on the ordinary path, and a fake that answered the
+// same number by accident would hide that.
+func TestEnsureHostSpeedMeasured_AnIdleHostStillPublishes(t *testing.T) {
+	p, _, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	p.servingAdmitted = func() uint64 { return 42 }
+
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("an idle host did not publish a measurement")
+	}
+	if p.hostSpeedNow() == nil {
+		t.Error("nothing published on a host that served nothing")
+	}
+}

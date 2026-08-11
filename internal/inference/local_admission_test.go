@@ -29,6 +29,68 @@ func TestAdmitLocal_CountsAgainstTheSharedCounter(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#703): AdmittedCount is cumulative and
+// covers the same peer-plus-owner population InflightCount reports.
+//
+// It exists because the install-time host-speed measurement runs for 45 s
+// or more and has to ask "did this machine serve anything during that",
+// which a gauge cannot answer: a request that starts and finishes between
+// two reads leaves InflightCount at zero on both sides. Under
+// infruntime.MaxResidentModels that request and the measurement's probe
+// evict each other, and the published figure describes the eviction.
+func TestAdmittedCount_IsCumulativeAcrossAWindow(t *testing.T) {
+	srv, _, _ := newOverlayServer(t, newFakeGateway(), PeerIdentity{DeviceID: "dev-owner"}, func(c *Config) {
+		c.Capacity = 4
+	})
+
+	before := srv.AdmittedCount()
+
+	// A whole request, begun and finished — invisible to InflightCount at
+	// either end, which is the case this counter is for.
+	srv.AdmitLocal(context.Background())()
+	if got := srv.InflightCount(); got != 0 {
+		t.Fatalf("inflight = %d, want 0 — the request finished", got)
+	}
+	if got := srv.AdmittedCount(); got != before+1 {
+		t.Fatalf("admitted = %d, want %d — a finished request must still be counted", got, before+1)
+	}
+
+	// And the peer half of the population, through the counter the
+	// capacity gate uses.
+	if !srv.inflight.Acquire() {
+		t.Fatal("Acquire refused below capacity")
+	}
+	if got := srv.AdmittedCount(); got != before+2 {
+		t.Fatalf("admitted = %d, want %d — a peer request must be counted too", got, before+2)
+	}
+	srv.inflight.Release()
+	if got := srv.AdmittedCount(); got != before+2 {
+		t.Fatalf("admitted = %d after Release, want %d — releasing must not lower it", got, before+2)
+	}
+
+	// A REFUSED request is not an admitted one: it never reached the
+	// engine, so it cannot have contended with anything.
+	srv.inflight.setCapacity(1)
+	srv.inflight.Acquire()
+	full := srv.AdmittedCount()
+	if srv.inflight.Acquire() {
+		t.Fatal("Acquire succeeded past the ceiling")
+	}
+	if got := srv.AdmittedCount(); got != full {
+		t.Errorf("admitted = %d after a refusal, want %d", got, full)
+	}
+}
+
+// Record of today's behaviour: a ping-only server has no counter, and
+// answers 0 rather than panicking. Every caller reads it through a
+// nil-safe relay, so this is the floor that relay rests on.
+func TestAdmittedCount_NoCounterIsZero(t *testing.T) {
+	var srv Server
+	if got := srv.AdmittedCount(); got != 0 {
+		t.Errorf("AdmittedCount = %d on a server with no admission counter, want 0", got)
+	}
+}
+
 // TestAdmitLocal_LatchesAtSaturation: a local request that arrives when
 // the machine is (or goes) full raises the owner-priority latch — the
 // "local" half of spec §8.2. Below saturation nothing latches: sharing

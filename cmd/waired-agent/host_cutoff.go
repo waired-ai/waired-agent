@@ -54,6 +54,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
@@ -396,7 +397,7 @@ func (p *agentInferenceProvider) startHostSpeedMeasurement(ctx context.Context) 
 func (p *agentInferenceProvider) awaitQuietEngine(ctx context.Context) bool {
 	deadline := time.Now().Add(hostSpeedSettleWait)
 	for {
-		if p.engineIsQuiet(ctx) {
+		if p.engineIsQuietAndUnclaimed(ctx) {
 			return true
 		}
 		if time.Now().After(deadline) {
@@ -410,6 +411,45 @@ func (p *agentInferenceProvider) awaitQuietEngine(ctx context.Context) bool {
 	}
 }
 
+// claimEngineExclusive takes the engine for a measurement that
+// monopolises it, and reports whether it got it. The release is always
+// non-nil, so a caller can defer it without checking ok.
+//
+// Never blocks. See the engineExclusive field comment: the two callers
+// yield in different ways and both already have theirs.
+func (p *agentInferenceProvider) claimEngineExclusive() (release func(), ok bool) {
+	if p == nil || !p.engineExclusive.CompareAndSwap(false, true) {
+		return func() {}, false
+	}
+	var once sync.Once
+	return func() { once.Do(func() { p.engineExclusive.Store(false) }) }, true
+}
+
+// engineExclusiveHeld reports whether the other measurement has the
+// engine right now.
+func (p *agentInferenceProvider) engineExclusiveHeld() bool {
+	return p != nil && p.engineExclusive.Load()
+}
+
+// servingInFlight reports how many inference requests this machine is
+// serving. Zero when nothing is wired (unit tests, a host with no
+// inference server), which is the truth for those hosts.
+func (p *agentInferenceProvider) servingInFlight() int {
+	if p == nil || p.servingInflight == nil {
+		return 0
+	}
+	return p.servingInflight()
+}
+
+// servingAdmittedCount is servingInFlight's cumulative twin, read on
+// both sides of the probe. See inference.Server.AdmittedCount.
+func (p *agentInferenceProvider) servingAdmittedCount() uint64 {
+	if p == nil || p.servingAdmitted == nil {
+		return 0
+	}
+	return p.servingAdmitted()
+}
+
 // engineIsQuiet reports whether the engine is ready and nothing else is
 // about to take it away.
 //
@@ -417,6 +457,23 @@ func (p *agentInferenceProvider) awaitQuietEngine(ctx context.Context) bool {
 // STOPS AND RESTARTS the engine, so starting a minutes-long measurement
 // while one is queued behind a finishing pull is how the measurement gets
 // its connection refused.
+//
+// Serving traffic counts as busy too, and that is waired-agent#703. This
+// predicate used to read four things — a pull, a reconcile, a parked
+// engine, health — and not one of them was a REQUEST. Since
+// infruntime.MaxResidentModels the engine holds one model at a time, so a
+// request arriving mid-measurement no longer merely competes with a
+// measurement: the two EVICT each other, at a measured ~8 s to reload the
+// probe and ~13 s to reload a 4B serving model. A host measured at
+// 12.017 s published 39.473 s that way, the same contended-host signature
+// waired#1140 documents.
+//
+// The exclusive claim is deliberately NOT read here. Both measurements
+// hold it for their whole run and both re-ask this question while they
+// do — the benchmark once per bounce-grace retry, the screen from inside
+// measureHostCutoff — so a predicate that read the claim would make each
+// of them stand down on itself. engineIsQuietAndUnclaimed is the variant
+// for the one caller that has not taken it yet.
 func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
 	if p.ollama == nil {
 		return false
@@ -430,7 +487,25 @@ func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
 	if p.ollama.IsParked() {
 		return false
 	}
+	if p.servingInFlight() > 0 {
+		return false
+	}
 	return p.ollama.Health(ctx).State == infruntime.StateReady
+}
+
+// engineIsQuietAndUnclaimed is engineIsQuiet plus "and the other
+// measurement does not have the engine", for awaitQuietEngine.
+//
+// It saves a wait, it does not make one safe: the claim is what keeps the
+// two measurements apart, and the caller takes it after this returns.
+// What this buys is that a host-speed measurement arriving during a
+// benchmark spends its settle window waiting instead of failing to claim
+// and giving up on the boot.
+func (p *agentInferenceProvider) engineIsQuietAndUnclaimed(ctx context.Context) bool {
+	if p.engineExclusiveHeld() {
+		return false
+	}
+	return p.engineIsQuiet(ctx)
 }
 
 // residentOnAnAdoptedEngine names a model already loaded in an engine this
@@ -496,11 +571,27 @@ func residentBlocksMeasurement(mode infruntime.EngineMode, resident []string) (s
 // benchmark off forever. engineIsQuiet cannot answer that way for its own
 // caller — the host-speed measurement reads ollama's counters and refuses
 // non-ollama outright (hostCutoffProbeTag).
+//
+// Delegating to engineIsQuiet is what gives the benchmark the
+// serving-traffic condition (waired-agent#703) without a second copy of
+// the rule. What keeps it away from the OTHER measurement is EngineClaim,
+// not this — see engineIsQuiet's note on why the claim is not read here.
 func (p *agentInferenceProvider) engineQuietForBench(ctx context.Context) bool {
 	if p == nil || p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama {
 		return true
 	}
 	return p.engineIsQuiet(ctx)
+}
+
+// claimEngineForBench is BenchDeps.EngineClaim. Same nil-end reasoning as
+// engineQuietForBench: a host this provider does not drive with ollama
+// has nothing here to collide with, so it is handed the engine rather
+// than gated off its own benchmark forever.
+func (p *agentInferenceProvider) claimEngineForBench() (release func(), ok bool) {
+	if p == nil || p.ollama == nil || p.servingEngine() != catalog.RuntimeOllama {
+		return func() {}, true
+	}
+	return p.claimEngineExclusive()
 }
 
 // ensureHostSpeedMeasured returns this host's measurement, taking it if
@@ -672,6 +763,32 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	// load anything.
 	defer p.warmServingModel()
 
+	// Take the engine. Registered AFTER the re-warm above so LIFO releases
+	// the claim first and the warm-up can take it in turn — a warm-up that
+	// ran under this claim would be skipped, and the model would stay cold
+	// until the next request paid for it.
+	//
+	// Declining rather than waiting: awaitQuietEngine already consulted
+	// engineIsQuiet, so arriving here and finding the claim taken means the
+	// benchmark won a race measured in milliseconds. The next start comes
+	// back round, and the answer to "measure now or keep what we have" is
+	// the one host_memory.go has always given.
+	releaseEngine, gotEngine := p.claimEngineExclusive()
+	if !gotEngine {
+		p.logger.Info("host speed: another measurement has the engine; " +
+			"keeping the previous measurement and trying on a later start")
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
+			"another measurement had the engine")
+		return cached
+	}
+	defer releaseEngine()
+
+	// Read on both sides of the probe. engineIsQuiet answered for the
+	// instant awaitQuietEngine asked; this answers for the whole window,
+	// which is the only question that covers a request arriving after the
+	// gate passed (waired-agent#703).
+	admittedBefore := p.servingAdmittedCount()
+
 	m, err := measureHostCutoff(ctx, hostCutoffDeps{
 		BaseURL:     p.ollama.BaseURL(),
 		EngineModel: tag,
@@ -688,6 +805,26 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 		p.logger.Info("host speed: measurement did not complete; leaving local inference as configured",
 			"err", err)
 		p.noteHostSpeedStage(hostSpeedStageMeasureFailed, err.Error())
+		return hostSpeedVerdict{}
+	}
+	// This machine served something while it was being measured, so what
+	// came back describes the two of them sharing an engine that holds one
+	// model at a time. Not published, and the reason is the one the
+	// truncated-prefill arm below gives: a consumer cannot tell a contended
+	// reading from a slow host — on real hardware the difference was
+	// 12.017 s against 39.473 s, with the SPREAD across samples unchanged
+	// at 1.78% and 2.70%, so nothing in the numbers themselves says which
+	// is which (waired-agent#703).
+	//
+	// The stored figure survives and the next start tries again, the same
+	// answer the adopted-engine arm above gives to the same question.
+	if admittedAfter := p.servingAdmittedCount(); admittedAfter != admittedBefore {
+		p.logger.Info("host speed: this host served inference while it was being measured; "+
+			"discarding the reading and trying on a later start",
+			"requests_served", admittedAfter-admittedBefore,
+			"discarded_turn_seconds", fmt.Sprintf("%.1f", m.Probe.TurnSeconds()))
+		p.noteHostSpeedStage(hostSpeedStageMeasureFailed,
+			"this host served inference while it was being measured")
 		return hostSpeedVerdict{}
 	}
 	if m.Method != signer.BenchmarkMethodOllamaPrefillFloor && !m.Probe.Measured() {
