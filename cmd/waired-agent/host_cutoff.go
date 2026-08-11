@@ -294,6 +294,20 @@ func (p *agentInferenceProvider) noteHostSpeedStage(stage hostSpeedStage, detail
 // hostSpeedSettleWait, so a daemon restart on a host that was set up weeks
 // ago would otherwise report an unstarted measurement for up to an hour —
 // and `pending` rows deny setup_complete on a computer that is finished.
+//
+// A LIVE stage always wins over that substitution, and the condition below
+// is what makes it: the figure only stands in when nothing is under way.
+// Do not simplify this to "a stored figure means measured".
+//
+// `waired init` step 6 depends on the distinction (waired-agent#703). It
+// asks for a fresh measurement and waits for one, and it tells "still
+// going" from "stopped without producing a figure" by this stage — none of
+// which is visible in the stored figure, because a re-measurement leaves it
+// untouched until it publishes. Collapsing the live stage would make a
+// running re-measurement and a failed one both report `measured` on a host
+// that has an old figure, and step 6 would lose its only signal to stop
+// waiting: it would spend the whole hostSpeedAskWait budget on a
+// measurement that had already given up.
 func (p *agentInferenceProvider) setupHostSpeedProgress() hostSpeedProgress {
 	if p == nil {
 		return hostSpeedProgress{}
