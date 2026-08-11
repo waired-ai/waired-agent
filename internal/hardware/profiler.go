@@ -50,6 +50,14 @@ type Profile struct {
 	// OSMemoryAllowanceGB constant.
 	RAMAvailableAtInstallGB int `json:"ram_available_at_install_gb,omitempty"`
 
+	// RAMAvailableAtInstallMeasuredAt dates the figure above, RFC3339Nano,
+	// injected alongside it via WithRAMAvailableAtInstall (#699). Empty
+	// means no claim: no measurement was persisted, or the value came
+	// from the operator/CI env seam, which supplies a number and not a
+	// measurement. Carried verbatim like the value — a fact about the
+	// install, not about this snapshot.
+	RAMAvailableAtInstallMeasuredAt string `json:"ram_available_at_install_measured_at,omitempty"`
+
 	GPUs         []GPU            `json:"gpus"`
 	Accelerators Accelerators     `json:"accelerators"`
 	Storage      StorageInfo      `json:"storage"`
@@ -273,7 +281,8 @@ type Profiler struct {
 	gpuFn           func(context.Context) ([]GPU, Accelerators, error)
 	umaFn           func(context.Context, *Profile)
 
-	ramAtInstallGB int
+	ramAtInstallGB         int
+	ramAtInstallMeasuredAt string
 
 	mu       sync.Mutex
 	cached   *Profile
@@ -298,11 +307,20 @@ func WithRAM(fn func(context.Context) (int, int, error)) Option {
 }
 
 // WithRAMAvailableAtInstall injects the persisted install-time
-// available-memory figure (#568). The profiler carries it verbatim
-// into every Profile it builds — it is a fact about the install, not
-// about this snapshot, so re-detection never changes it.
-func WithRAMAvailableAtInstall(gb int) Option {
-	return func(p *Profiler) { p.ramAtInstallGB = gb }
+// available-memory figure and the timestamp that dates it (#568, #699).
+// The profiler carries both verbatim into every Profile it builds — they
+// are facts about the install, not about this snapshot, so re-detection
+// never changes them.
+//
+// One option for the pair rather than two, so a caller cannot supply a
+// value dated by some other measurement. measuredAt may be empty on its
+// own (no persisted record, or the env seam, which is an override rather
+// than a measurement); a date without a value is not constructible here.
+func WithRAMAvailableAtInstall(gb int, measuredAt string) Option {
+	return func(p *Profiler) {
+		p.ramAtInstallGB = gb
+		p.ramAtInstallMeasuredAt = measuredAt
+	}
 }
 
 // ProbeRAM reads total and available system RAM in whole GiB using the
@@ -366,13 +384,14 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 
 	osName, arch := p.osArchFn()
 	prof := Profile{
-		OS:                      osName,
-		Arch:                    arch,
-		CPU:                     p.cpuFn(ctx),
-		GPUs:                    []GPU{},
-		Storage:                 StorageInfo{CachePath: p.cachePath},
-		CollectedAt:             now,
-		RAMAvailableAtInstallGB: p.ramAtInstallGB,
+		OS:                              osName,
+		Arch:                            arch,
+		CPU:                             p.cpuFn(ctx),
+		GPUs:                            []GPU{},
+		Storage:                         StorageInfo{CachePath: p.cachePath},
+		CollectedAt:                     now,
+		RAMAvailableAtInstallGB:         p.ramAtInstallGB,
+		RAMAvailableAtInstallMeasuredAt: p.ramAtInstallMeasuredAt,
 	}
 
 	if p.gpuFn != nil {

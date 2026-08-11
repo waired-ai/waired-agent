@@ -236,15 +236,10 @@ func TestHardwareSummaryFor_AppleSiliconBudgetSurvivesTheWireAdapter(t *testing.
 // contract was on main and its producer was not — the gap a required
 // proto-only PR opens — and HardwareSummary.RAMAvailableGB (#568) the
 // same way. Each producer PR deleted its entry rather than editing it,
-// which is the whole point of recording it as a debt.
-//
-// RAMAvailableMeasuredAt (#699) is open on those same terms, and it dates
-// the very field that sat here last: the agent already records the
-// timestamp in runtime/host-memory.json beside the value, so the producer
-// PR is a wiring change that deletes this line.
-var notPublishedByAgent = map[string]bool{
-	"HardwareSummary.RAMAvailableMeasuredAt": true,
-}
+// which is the whole point of recording it as a debt. RAMAvailableMeasuredAt
+// (#699) was the most recent, held here between the proto PR and this one,
+// and it dated the very field that sat here before it. Empty again.
+var notPublishedByAgent = map[string]bool{}
 
 // TestHardwareSummaryFor_PublishesEveryWireField guards the bug class
 // rather than the three fields: a field added to the broadcast summary
@@ -261,11 +256,13 @@ func TestHardwareSummaryFor_PublishesEveryWireField(t *testing.T) {
 		RAMTotalGB: 64,
 		// The install-time measurement (#568), which is what the
 		// summary publishes — the live RAMAvailableGB deliberately
-		// never reaches the wire.
-		RAMAvailableAtInstallGB: 41,
-		UnifiedMemory:           true,
-		UsableVRAMMB:            49152,
-		MemoryBandwidthSpecGBs:  400, // Apple M3 Max, matching the GPU below
+		// never reaches the wire — and the date that makes it legible
+		// as a measurement rather than a live reading (#699).
+		RAMAvailableAtInstallGB:         41,
+		RAMAvailableAtInstallMeasuredAt: "2026-08-09T16:47:06.123456789Z",
+		UnifiedMemory:                   true,
+		UsableVRAMMB:                    49152,
+		MemoryBandwidthSpecGBs:          400, // Apple M3 Max, matching the GPU below
 		// No real Apple host reports a carve-out either — its usable
 		// figure is synthesized from RAM, which is exactly why the field
 		// exists. Populated here for the same reason as the compute

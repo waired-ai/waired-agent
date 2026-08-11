@@ -36,6 +36,7 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 			want: []string{
 				signer.CapabilityContextWindowV1,
 				signer.CapabilityRAMAvailableV1,
+				signer.CapabilityRAMAvailableV2,
 				signer.CapabilityPublicShareV1,
 				signer.CapabilityOnboardingV1,
 				signer.CapabilityOnboardingV2,
@@ -56,6 +57,10 @@ func TestSubscribeNetworkMapDeclaresCapabilities(t *testing.T) {
 			want: []string{
 				signer.CapabilityContextWindowV1,
 				signer.CapabilityRAMAvailableV1,
+				// ram-available-v2 rides with v1 in BOTH rows and never
+				// alone: the CP strips the whole measurement for a poller
+				// that declares v2 without v1 (waired-agent#699).
+				signer.CapabilityRAMAvailableV2,
 				signer.CapabilityPublicShareV1,
 			},
 			absent: []string{
