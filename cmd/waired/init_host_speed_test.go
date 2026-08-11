@@ -21,7 +21,36 @@ type speedFakeDaemon struct {
 	// noRemeasureRoute makes the daemon 404 the remeasure route, which is
 	// what an older one does.
 	noRemeasureRoute bool
+
+	// The rest is what happens AFTER the daemon accepts the ask. The zero
+	// value is a daemon that takes the fresh measurement and publishes it
+	// before the next status read, which is the shape step 6's wait is
+	// written against (waired-agent#703): a daemon that says it started
+	// one and then never changes its figure is a daemon that did not.
+	//
+	// declineRemeasure answers {"started":false} — a fresh install, where
+	// this process measured seconds ago.
+	declineRemeasure bool
+	// remeasureDelay is how many status reads serve the OLD figure before
+	// the fresh one appears.
+	remeasureDelay int32
+	// remeasureStage is the host_speed_stage reported while the delay
+	// runs. A give-up stage there is a measurement that stopped without
+	// producing a figure.
+	remeasureStage string
+	// remeasureFresh is the whole status once the delay is up. nil keeps
+	// the figure and moves measured_at, which is what a re-measurement of
+	// an unchanged host produces.
+	remeasureFresh map[string]any
+
+	started atomic.Bool
+	reads   atomic.Int32
 }
+
+const (
+	speedMeasuredBefore = "2026-08-01T00:00:00Z"
+	speedMeasuredAfter  = "2026-08-12T00:00:00Z"
+)
 
 func slowStatus(turn, budget float64, desired string, cutoffOff bool) map[string]any {
 	return map[string]any{
@@ -31,8 +60,27 @@ func slowStatus(turn, budget float64, desired string, cutoffOff bool) map[string
 			"turn_seconds":         turn,
 			"budget_seconds":       budget,
 			"turned_inference_off": cutoffOff,
+			"measured_at":          speedMeasuredBefore,
 		},
 	}
+}
+
+// withMeasuredAt is the same status with the measurement stamped at a
+// different moment — a re-measurement of a host that has not changed.
+func withMeasuredAt(st map[string]any, at string) map[string]any {
+	out := make(map[string]any, len(st)+1)
+	for k, v := range st {
+		out[k] = v
+	}
+	if hs, ok := st["host_speed"].(map[string]any); ok {
+		fresh := make(map[string]any, len(hs))
+		for k, v := range hs {
+			fresh[k] = v
+		}
+		fresh["measured_at"] = at
+		out["host_speed"] = fresh
+	}
+	return out
 }
 
 func (f *speedFakeDaemon) server(t *testing.T) *httptest.Server {
@@ -43,6 +91,18 @@ func (f *speedFakeDaemon) server(t *testing.T) *httptest.Server {
 			st := f.status
 			if f.noSpeed {
 				st = map[string]any{"subsystem_state": "ready", "desired_state": "enabled"}
+			}
+			if f.started.Load() && !f.noSpeed {
+				if f.reads.Add(1) > f.remeasureDelay {
+					if f.remeasureFresh != nil {
+						st = f.remeasureFresh
+					} else {
+						st = withMeasuredAt(st, speedMeasuredAfter)
+					}
+				} else if f.remeasureStage != "" {
+					st = withMeasuredAt(st, speedMeasuredBefore)
+					st["host_speed_stage"] = f.remeasureStage
+				}
 			}
 			_ = json.NewEncoder(w).Encode(st)
 		case "/waired/v1/inference/enable":
@@ -57,6 +117,11 @@ func (f *speedFakeDaemon) server(t *testing.T) *httptest.Server {
 				return
 			}
 			f.remeasures.Add(1)
+			if f.declineRemeasure {
+				_, _ = w.Write([]byte(`{"started":false}`))
+				return
+			}
+			f.started.Store(true)
 			_, _ = w.Write([]byte(`{"started":true}`))
 		default:
 			http.NotFound(w, r)
@@ -341,6 +406,104 @@ func TestConfirmHostSpeedBudget(t *testing.T) {
 		confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
 		if out.Len() != 0 || f.disables.Load() != 0 {
 			t.Fatalf("out=%q, want nothing without a budget to compare against", out.String())
+		}
+	})
+}
+
+// TestConfirmHostSpeedBudget_WaitsForTheFigureItAskedFor pins the second
+// half of the re-run ruling.
+//
+// PRODUCT CONTRACT (owner ruling 2026-08-09, waired-agent#599 — a re-run
+// replays the install conversation, benchmarks and gates included). Asking
+// for a fresh measurement and then judging the previous one replays
+// nothing, and it is how sv-xps15 came to gate on a 12.017 s figure while
+// a 39.473 s one landed 44 s later — with the two measurements running at
+// once, which is the contention waired-agent#703 is about.
+func TestConfirmHostSpeedBudget_WaitsForTheFigureItAskedFor(t *testing.T) {
+	t.Run("a stale over-budget figure does not decide while a fresh one is coming", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		// Over budget before, comfortably within it after — the direction
+		// that matters, because deciding on the stale one turns local AI
+		// off on a host that is fine.
+		f := &speedFakeDaemon{
+			status:         slowStatus(68.4, 45, "enabled", false),
+			remeasureDelay: 2,
+			remeasureFresh: withMeasuredAt(slowStatus(12.0, 45, "enabled", false), speedMeasuredAfter),
+		}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, false, eofLineReader(), &out, mine)
+
+		if !keptOn || f.disables.Load() != 0 {
+			t.Fatalf("keptOn=%v disables=%d — the stale figure decided: %q",
+				keptOn, f.disables.Load(), out.String())
+		}
+		if strings.Contains(out.String(), hostSpeedBelowSpecLine) {
+			t.Errorf("announced the stale verdict: %q", out.String())
+		}
+		if f.remeasures.Load() != 1 {
+			t.Errorf("remeasure asked %d times, want exactly 1", f.remeasures.Load())
+		}
+	})
+
+	t.Run("a declined remeasure decides on what is already there", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		// The fresh-install shape: the bootstrap measured seconds ago, so
+		// the daemon declines and this figure IS this install's own.
+		f := &speedFakeDaemon{
+			status:           slowStatus(68.4, 45, "enabled", false),
+			declineRemeasure: true,
+		}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
+
+		if keptOn || f.disables.Load() != 1 {
+			t.Fatalf("keptOn=%v disables=%d, want the over-budget default applied at once: %q",
+				keptOn, f.disables.Load(), out.String())
+		}
+		if strings.Contains(out.String(), "still measuring") {
+			t.Errorf("waited for a measurement nobody started: %q", out.String())
+		}
+	})
+
+	t.Run("a measurement that gives up ends the wait", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		// Started, then discarded — the reading was taken while this host
+		// was serving, or the probe model would not download. There is no
+		// fresh figure coming, and spending the rest of the budget in
+		// silence is what the stage exists to prevent.
+		f := &speedFakeDaemon{
+			status:         slowStatus(68.4, 45, "enabled", false),
+			remeasureDelay: 1 << 30, // never publishes
+			remeasureStage: "measure_failed",
+		}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
+
+		// Counted rather than timed: the budget is a wall-clock bound and
+		// this assertion has to hold on a loaded CI runner too. One read
+		// after the ask is enough to see the stage.
+		if reads := f.reads.Load(); reads > 3 {
+			t.Errorf("polled %d times for a measurement that had stopped; the whole budget is %d polls",
+				reads, int(hostSpeedAskWait/hostSpeedAskPoll))
+		}
+		if keptOn || f.disables.Load() != 1 {
+			t.Fatalf("keptOn=%v disables=%d, want the stored figure judged: %q",
+				keptOn, f.disables.Load(), out.String())
+		}
+	})
+
+	t.Run("an older daemon that cannot remeasure behaves as it did", func(t *testing.T) {
+		shrinkHostSpeedAsk(t)
+		f := &speedFakeDaemon{
+			status:           slowStatus(68.4, 45, "enabled", false),
+			noRemeasureRoute: true,
+		}
+		var out strings.Builder
+		keptOn := confirmHostSpeedBudget(f.server(t).URL, daemonInitInference{}, true, eofLineReader(), &out, mine)
+
+		if keptOn || f.disables.Load() != 1 {
+			t.Fatalf("keptOn=%v disables=%d, want the pre-#599 behaviour on a 404: %q",
+				keptOn, f.disables.Load(), out.String())
 		}
 	})
 }

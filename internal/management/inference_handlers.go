@@ -235,6 +235,24 @@ type InferenceStatus struct {
 	// more — which reads as a setting someone forgot rather than an
 	// answer the machine worked out.
 	HostSpeed *HostSpeedStatus `json:"host_speed,omitempty"`
+
+	// HostSpeedStage is how far the measurement has got — one of
+	// "pulling_probe", "measuring", "measured", "probe_failed",
+	// "measure_failed", or absent on a host with nothing to say about it.
+	//
+	// A SIBLING of HostSpeed rather than a field inside it, because the
+	// states worth reporting are exactly the ones where there is no figure
+	// to hang it on. `waired init` asks for a fresh measurement and then
+	// waits for it (waired-agent#599); without this the only two outcomes
+	// it could distinguish were "a figure arrived" and "twenty minutes
+	// passed", so a measurement that ran and failed cost the install the
+	// whole budget in silence.
+	//
+	// Report only. Nothing reads it to decide anything, and a client that
+	// does not know a value renders it as an unknown stage rather than
+	// failing — the same treatment the setup-progress rows it is derived
+	// from get (waired#1143).
+	HostSpeedStage string `json:"host_speed_stage,omitempty"`
 }
 
 // HostSpeedStatus is the install-time host measurement as the local

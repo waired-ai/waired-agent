@@ -34,6 +34,29 @@ const (
 	hostSpeedStageMeasureFailed
 )
 
+// String is the stage as the local management API reports it
+// (management.InferenceStatus.HostSpeedStage, waired-agent#703). Stable
+// strings: `waired init` reads them to tell a measurement that is still
+// going from one that finished, and hostSpeedStageNone deliberately has
+// none — a host with nothing to say says nothing, the same absence
+// hostSpeedSteps returns no rows for.
+func (s hostSpeedStage) String() string {
+	switch s {
+	case hostSpeedStagePullingProbe:
+		return "pulling_probe"
+	case hostSpeedStageMeasuring:
+		return "measuring"
+	case hostSpeedStageMeasured:
+		return "measured"
+	case hostSpeedStageProbeFailed:
+		return "probe_failed"
+	case hostSpeedStageMeasureFailed:
+		return "measure_failed"
+	default:
+		return ""
+	}
+}
+
 // hostSpeedProgress is the whole of what the reporter reads.
 type hostSpeedProgress struct {
 	Stage hostSpeedStage

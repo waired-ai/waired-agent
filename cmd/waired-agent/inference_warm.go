@@ -77,6 +77,24 @@ func (p *agentInferenceProvider) warmServingModelNow(ctx context.Context) {
 			}
 		}
 	}
+	// Not while this host is being measured. A warm-up is a multi-GB load
+	// like any other, and under infruntime.MaxResidentModels loading it
+	// evicts the probe — the boot path fires this and the host-speed
+	// measurement from the same bootstrap tail, so they raced by
+	// construction (waired-agent#703).
+	//
+	// Skipped rather than queued, because a skip costs nothing here:
+	// ensureHostSpeedMeasured calls this again on its way out, after
+	// releasing the claim, precisely so the model it evicted comes back
+	// (waired-agent#320). Everything else that warms is a reconcile or a
+	// bootstrap that will warm again.
+	release, ok := p.claimEngineExclusive()
+	if !ok {
+		p.logger.Debug("serving model warm-up skipped: this host is being measured", "model", tag)
+		return
+	}
+	defer release()
+
 	wctx, cancel := context.WithTimeout(ctx, warmBudget)
 	defer cancel()
 	start := time.Now()

@@ -76,6 +76,21 @@ type Server struct {
 type inflightCounter struct {
 	n        atomic.Int32
 	capacity atomic.Int32
+	// admitted is the CUMULATIVE count of requests this counter has let
+	// through, never decremented. n answers "is the engine busy now";
+	// this answers "was it busy at any point between these two reads",
+	// which is a different question and the only one that can be asked
+	// ACROSS a window (waired-agent#703).
+	//
+	// The install-time host-speed probe runs for 45 s or more. A request
+	// that starts and finishes inside that window leaves n at zero on
+	// both sides of it, so a gauge cannot see it at all — and under
+	// infruntime.MaxResidentModels that request and the probe evict each
+	// other, which is how a host measured at 12.017 s came to publish
+	// 39.473 s. Same shape as the engine process generation the
+	// benchmark already counts for its own restarts (#359, #582/#601):
+	// count the events, do not try to classify the symptom.
+	admitted atomic.Uint64
 }
 
 // newInflightCounter returns a counter with the given admission ceiling
@@ -101,6 +116,7 @@ func (c *inflightCounter) Acquire() bool {
 	capacity := int(c.capacity.Load())
 	if capacity <= 0 {
 		c.n.Add(1)
+		c.admitted.Add(1)
 		return true
 	}
 	for {
@@ -109,6 +125,7 @@ func (c *inflightCounter) Acquire() bool {
 			return false
 		}
 		if c.n.CompareAndSwap(cur, cur+1) {
+			c.admitted.Add(1)
 			return true
 		}
 	}
@@ -121,6 +138,7 @@ func (c *inflightCounter) Acquire() bool {
 // buys is the owner-priority latch (spec §8.2), not a rejection.
 func (c *inflightCounter) AcquireOwner() (atSaturation bool) {
 	n := c.n.Add(1)
+	c.admitted.Add(1)
 	capacity := c.capacity.Load()
 	return capacity > 0 && n >= capacity
 }
@@ -133,6 +151,10 @@ func (c *inflightCounter) Release() {
 // tests and for future metrics.
 func (c *inflightCounter) InFlight() int32 { return c.n.Load() }
 
+// Admitted reports how many requests this counter has let through since
+// the process started. Monotonic — Release does not lower it.
+func (c *inflightCounter) Admitted() uint64 { return c.admitted.Load() }
+
 // InflightCount returns the machine's currently-serving inference
 // count — peer-overlay requests plus the owner's own local-engine work
 // (see AdmitLocal). 0 on a ping-only server. Wired from main.go into
@@ -142,6 +164,21 @@ func (s *Server) InflightCount() int {
 		return 0
 	}
 	return int(s.inflight.InFlight())
+}
+
+// AdmittedCount returns how many inference requests this machine has
+// admitted since the process started — the same peer-plus-owner
+// population InflightCount reports, counted cumulatively.
+//
+// Read twice around a window to ask whether this machine served anything
+// during it. That is what the install-time host-speed measurement needs
+// and what InflightCount cannot answer: a request that begins and ends
+// between the two reads is invisible to a gauge (waired-agent#703).
+func (s *Server) AdmittedCount() uint64 {
+	if s.inflight == nil {
+		return 0
+	}
+	return s.inflight.Admitted()
 }
 
 // AdmitLocal counts one of the OWNER's own requests against the shared

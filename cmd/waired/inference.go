@@ -224,6 +224,11 @@ type inferenceStatusResponse struct {
 	// copies of one wire shape is how a field comes to be read on one
 	// surface and silently dropped on the other.
 	HostSpeed *management.HostSpeedStatus `json:"host_speed"`
+	// How far the measurement has got. Step 6 reads it to end a wait for
+	// a re-measurement that stopped without producing one
+	// (waired-agent#703); an older daemon omits it, which reads as empty
+	// and keeps waiting, the pre-#703 behaviour.
+	HostSpeedStage string `json:"host_speed_stage"`
 }
 
 // hostSpeedTurnLine is what one coding question costs on this computer,

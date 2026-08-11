@@ -79,3 +79,43 @@ func TestLocalAdmissionRelay_SetRacesWithAdmit(t *testing.T) {
 		t.Fatalf("inflight after every release: got %d, want 0", got)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#703): the relay reads the counter as well
+// as feeding it, and answers 0 before Set.
+//
+// The host-speed measurement lives on the provider, which is built before
+// the inference server exists — the reason this type exists at all. Before
+// Set nothing is serving, which is the same premise Admit's no-op rests
+// on; a relay that panicked or lied there would take the quiet gate with
+// it on every boot.
+func TestLocalAdmissionRelay_ReportsWhatItIsFeeding(t *testing.T) {
+	var relay localAdmissionRelay
+
+	if got := relay.InflightCount(); got != 0 {
+		t.Errorf("InflightCount before Set = %d, want 0", got)
+	}
+	if got := relay.AdmittedCount(); got != 0 {
+		t.Errorf("AdmittedCount before Set = %d, want 0", got)
+	}
+
+	srv := inference.NewServerWithConfig(inference.Config{
+		DeviceName:     "dev-self",
+		GatewayHandler: stubGatewayHandler{},
+		Capacity:       4,
+	})
+	relay.Set(srv)
+
+	release := relay.Admit(context.Background())
+	if got := relay.InflightCount(); got != 1 {
+		t.Errorf("InflightCount while serving = %d, want 1", got)
+	}
+	release()
+	if got := relay.InflightCount(); got != 0 {
+		t.Errorf("InflightCount after release = %d, want 0", got)
+	}
+	// The whole request still happened, and the cumulative counter is the
+	// only thing that can still say so.
+	if got := relay.AdmittedCount(); got != 1 {
+		t.Errorf("AdmittedCount after a finished request = %d, want 1", got)
+	}
+}

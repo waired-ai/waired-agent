@@ -135,6 +135,86 @@ func TestRunBootBenchmark_BusyEngineIsNotAPerformanceVerdict(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#703): a benchmark that cannot take the
+// engine leaves through the SAME 425 door a busy one does, and contacts
+// the engine not at all.
+//
+// EngineQuiet answers for an instant and this run is minutes long, so the
+// install-time host-speed measurement — a background goroutine — could
+// start anywhere after the gate passed. On real hardware it did, at
+// 17:19:57 against a measurement that published at 17:20:41, and the
+// figure described the two evicting each other.
+func TestRunBootBenchmark_AClaimedEngineIsNotAPerformanceVerdict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("engine was contacted at %s while another measurement held it", r.URL.Path)
+	}))
+	t.Cleanup(srv.Close)
+
+	var claims, releases atomic.Int64
+	got := RunBootBenchmark(context.Background(), BenchDeps{
+		EngineKind:  signer.InferenceTypeOllama,
+		EnginePort:  portFromBenchURL(t, srv.URL),
+		VariantID:   "bf16-gguf",
+		EngineReady: func() (bool, string) { return true, "granite4-350m" },
+		EngineQuiet: func(context.Context) bool { return true },
+		EngineClaim: func() (func(), bool) {
+			claims.Add(1)
+			return func() { releases.Add(1) }, false
+		},
+		HTTPClient: http.DefaultClient,
+		Logger:     slog.Default(),
+	})
+
+	if claims.Load() == 0 {
+		t.Fatal("EngineClaim was never consulted; a quiet answer is not a held engine")
+	}
+	if got.Outcome != benchOutcomeEngineNotReady {
+		t.Errorf("Outcome = %q, want %q — a new outcome string leaves through the 503 door", got.Outcome, benchOutcomeEngineNotReady)
+	}
+	if !got.Failed || got.TokensPerSec != 0 {
+		t.Errorf("Failed=%v TokensPerSec=%v, want a failed run with nothing measured", got.Failed, got.TokensPerSec)
+	}
+	if got.Capacity != 1 {
+		t.Errorf("Capacity = %d, want 1 (0 would advertise UNLIMITED)", got.Capacity)
+	}
+	if releases.Load() != 0 {
+		t.Errorf("released %d times a claim it never got", releases.Load())
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#703): the claim is taken ONCE and held
+// across the bounce-grace retries. Claiming per iteration would hand the
+// gap between a restart and the next attempt to the other measurement —
+// which is the window this exists to close.
+func TestRunBootBenchmark_TheClaimIsHeldAcrossARestartRetry(t *testing.T) {
+	// The engine dies under the first warm-up, and this agent is what
+	// killed it — the #582/#601 sequence, retried without charge.
+	_, deps := newBouncingEngine(t, func(path string, n int) bool { return n == 1 }, true)
+
+	var claims, releases atomic.Int64
+	deps.EngineQuiet = func(context.Context) bool { return true }
+	deps.EngineClaim = func() (func(), bool) {
+		if claims.Add(1) > 1 {
+			// A second claim means the first was let go mid-run, which is
+			// the window the other measurement would take.
+			return func() {}, false
+		}
+		return func() { releases.Add(1) }, true
+	}
+
+	got := RunBootBenchmark(context.Background(), deps)
+
+	if got.Failed {
+		t.Fatalf("Failed=true (%q); the restart should have been retried without charge", got.Err)
+	}
+	if claims.Load() != 1 {
+		t.Errorf("EngineClaim called %d times, want 1 — the claim must span the retries", claims.Load())
+	}
+	if releases.Load() != 1 {
+		t.Errorf("released %d times, want exactly 1 on the way out", releases.Load())
+	}
+}
+
 // TestRunBootBenchmark_RestartUnderTheWarmUpIsNotAFailure is the back
 // half: the quiet gate can still be passed microseconds before the last
 // pull lands, and the reconcile then arrives on top of the warm-up. This

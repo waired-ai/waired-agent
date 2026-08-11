@@ -35,3 +35,27 @@ func (r *localAdmissionRelay) Admit(ctx context.Context) func() {
 	}
 	return func() {}
 }
+
+// InflightCount reports what this machine is serving right now, and
+// AdmittedCount how much it has served in total. Both read the same
+// counter Admit feeds, through the same relay, so the answer covers peer
+// traffic and the owner's own local work alike.
+//
+// They are here rather than read off inference.Server directly for the
+// reason the type exists: the host-speed measurement lives on the
+// provider, which is built before the server (waired-agent#703). Before
+// Set they answer 0 — nothing is serving in that window, which is the
+// same premise Admit's no-op rests on.
+func (r *localAdmissionRelay) InflightCount() int {
+	if s := r.srv.Load(); s != nil {
+		return s.InflightCount()
+	}
+	return 0
+}
+
+func (r *localAdmissionRelay) AdmittedCount() uint64 {
+	if s := r.srv.Load(); s != nil {
+		return s.AdmittedCount()
+	}
+	return 0
+}
