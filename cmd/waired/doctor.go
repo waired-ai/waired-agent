@@ -306,6 +306,13 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 		out = append(out, f)
 	}
 
+	// Whether the network and this device agree on its key. Placed next
+	// to the connection check because it is the failure that looks
+	// exactly like a healthy connection from every other angle.
+	if f := deviceKeyFinding(ctx, mgmtURL); f.Subject != "" {
+		out = append(out, f)
+	}
+
 	// Pause/resume phase. Surfaces an explicit warn finding when the
 	// agent is paused so the user sees `waired resume` in the doctor
 	// output rather than just a vague "Local Gateway HTTP 503".

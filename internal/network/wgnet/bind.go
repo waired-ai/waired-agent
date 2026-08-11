@@ -89,6 +89,15 @@ type MultiplexBind struct {
 	// discoRelaySendCount counts disco frames sent via SendDiscoViaRelay
 	// so tests can assert "agent probed via relay too".
 	discoRelaySendCount atomic.Int64
+
+	// mac1 and foreignKeys attribute inbound WireGuard handshakes that
+	// were sealed against a different static public key than this device
+	// holds. wireguard-go drops those with `Received packet with invalid
+	// mac1` and no source (waired-agent#712); the bind is the last layer
+	// that still has one. now is the clock, overridable in tests.
+	mac1        mac1Checker
+	foreignKeys *foreignKeyReporter
+	now         func() time.Time
 }
 
 type relayHandle struct {
@@ -171,8 +180,16 @@ func NewMultiplexBind(cfg MultiplexBindConfig) *MultiplexBind {
 		redialBase:    redialBase,
 		redialMax:     redialMax,
 		healthyAfter:  healthyAfter,
+		mac1:          newMAC1Checker(cfg.SelfNodePub),
+		foreignKeys:   newForeignKeyReporter(foreignKeyReportInterval),
+		now:           time.Now,
 	}
 }
+
+// foreignKeyReportInterval bounds how often the bind names the senders
+// whose handshakes did not authenticate against this device's static
+// public key. See foreignKeyReporter.
+const foreignKeyReportInterval = time.Minute
 
 // DiscoInbound returns a receive-only channel of disco frames the WG
 // UDP socket classifier filtered out of the WG stream. The disco
@@ -378,6 +395,12 @@ func (b *MultiplexBind) classifyDisco(inner conn.ReceiveFunc) conn.ReceiveFunc {
 					}
 					continue
 				}
+				b.noteForeignKeyHandshake(packets[i][:size], func() string {
+					if src := endpointToAddrPort(eps[i]); src.IsValid() {
+						return src.String()
+					}
+					return "unknown source"
+				})
 				if written != i {
 					copy(packets[written], packets[i][:size])
 					sizes[written] = size
@@ -633,6 +656,12 @@ func (b *MultiplexBind) fanInRelay(ctx context.Context, h *relayHandle) {
 				}
 				continue
 			}
+			b.noteForeignKeyHandshake(in.Payload, func() string {
+				if in.SrcDeviceID == "" {
+					return "unidentified sender via relay"
+				}
+				return in.SrcDeviceID + " via relay"
+			})
 			ep := b.lookupOrMakeEndpoint(h, in.SrcDeviceID)
 			select {
 			case b.inbound <- inboundRelayPkt{payload: in.Payload, ep: ep}:
@@ -641,6 +670,38 @@ func (b *MultiplexBind) fanInRelay(ctx context.Context, h *relayHandle) {
 			}
 		}
 	}
+}
+
+// noteForeignKeyHandshake records one inbound WireGuard handshake whose
+// mac1 was computed over a static public key this device does not hold,
+// and periodically names the senders responsible.
+//
+// src is a thunk so the (common) case of a packet that is not a
+// handshake at all costs nothing to describe.
+//
+// A node-key rotation puts peers here legitimately for as long as they
+// are still working from the pre-rotation map, so this is a rate-limited
+// Warn about a condition rather than an error: it says peers are
+// authenticating against a key this device no longer holds, which is
+// either a rotation still propagating or the standing mismatch
+// waired-ai/waired#1137 hit.
+func (b *MultiplexBind) noteForeignKeyHandshake(msg []byte, src func() string) {
+	elsewhere, checked := b.mac1.addressedElsewhere(msg)
+	if !checked || !elsewhere {
+		return
+	}
+	batch := b.foreignKeys.record(src(), b.now())
+	if len(batch) == 0 {
+		return
+	}
+	senders := make([]string, 0, len(batch))
+	for _, s := range batch {
+		senders = append(senders, fmt.Sprintf("%s (%d)", s.Src, s.Count))
+	}
+	b.logger.Warn("wireguard: handshakes authenticated against a public key this device does not hold",
+		"self_node_pub", b.selfNodePub,
+		"senders", senders,
+	)
 }
 
 // isDiscoPayload reports whether buf starts with the disco magic prefix.

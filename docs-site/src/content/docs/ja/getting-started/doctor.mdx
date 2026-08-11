@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 1 分以内
-sourceHash: bede350318105841
+sourceHash: 2e1c5a1fbbe3a97d
 ---
 
 import { Aside, Steps, CardGrid, LinkCard, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -86,6 +86,7 @@ waired doctor --fix
 | **gateway token** | コーディングツールが自分の AI に届くための鍵が無いか、読めない。 | `waired link`、または **f**。 |
 | **device sign-in** | このパソコンのサインインが無効になっている。ローカルの AI は動き続けるが、アカウント上にこのパソコンが現れず、他の端末からも届かない。 | `waired init` → [サインインしたのに「サインインしていない」と出る](/ja/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out)を参照。 |
 | **network connection** | サインインは有効だが、このパソコンがまだ接続できていない。Waired が自動で再試行し続けます。 | 1 分ほど待ってもう一度実行。 |
+| **device key** | ネットワーク側がこのパソコンに対して、パソコン自身が持っているものとは別の鍵を使っている。自分の AI は動き続けるが、他のパソコンからこのパソコンには一切届かない。それ以外はすべて正常に見えるため、この検査があります。両者が一致していれば何も出ません。 | `waired init` でこのパソコンを登録し直す。 |
 | **waired-agent service** | 常駐サービスが起動しておらず、その**理由**を OS 自身のサービス記録から読み取って表示します。Windows なら「Windows のセキュリティ機能に起動をブロックされた」「起動がタイムアウトした」「予期せず停止した」など、Linux / macOS ならサービスマネージャーが記録した終了ステータスです。根拠となった記録は角かっこ内に引用されるので、自分で確認できます。 | Waired のメニューから起動するか、その行に書かれた対処に従ってください。 |
 | **waired-agent management** | 常駐サービスが応答していない。これが失敗すると他もすべて動きません。 | [Waired が動いていない](/ja/troubleshooting/#a-command-says-waired-agent-is-not-running)を参照。 |
 | **waired phase** | ルーティングが一時停止しているか、想定外の状態。 | `waired resume` → [しばらく使わないようにする](/ja/guides/pause/)。 |
@@ -93,6 +94,26 @@ waired doctor --fix
 | **コーディングツールの各行** | Claude Code / OpenClaw が Waired を使う設定になっていない。 | **f** を押す。 |
 | **&lt;ツール名&gt; installation** | ここは **·** のみです。そのツールのコマンドが `PATH` に無く、設定する対象がありません。フォルダだけあってコマンドが無い場合はその旨が出ます（残ったフォルダはインストール済みとは見なしません）。 | そのツールを入れる。使っていないなら無視して構いません。 |
 | **AI engine app signature**（macOS） | macOS がインストール済みの AI ソフトの起動を拒否しており、起動しようとするたびに止められている。 | 原因が Waired の残したファイルなら **f** を押す（→ [「AI ソフトが壊れている」と言われる](/ja/troubleshooting/#macos-it-says-the-ai-software-is-damaged)）。それ以外の場合は、この項目が入れ直しのコマンドを表示します。 |
+
+### ネットワークとこのパソコンで鍵が食い違っている場合
+
+ネットワーク内の各パソコンはそれぞれ自分の鍵を持ち、他のパソコンはその鍵を
+使って相手に届きます。パソコンを登録し直したあとなどに、パソコンが実際に
+持っている鍵とは別の鍵がネットワーク側に渡ると、双方向とも通信できなくなり
+ます。
+
+<Expected>
+```
+✗ device key — the network is using a different key for this device than the device holds — no other computer can reach it over Waired. Run `waired init` to register this device again.
+```
+</Expected>
+
+このとき、他に異常は見えません。サインインは有効、アカウント上はオンライン、
+自分の AI も普通に応答し、他のパソコンからはピアデバイスとして一覧にも出ます。
+互いのリクエストだけが通りません。
+
+鍵の切り替えが進行中の場合は、代わりに **·** で表示されることがあります。
+こちらは放っておけば収まります。
 
 ## 診断自体が全体を見られない場合
 

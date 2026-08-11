@@ -595,7 +595,7 @@ func run(ctx context.Context, args []string) error {
 		// is invoked lazily by the engine when a relay endpoint is parsed,
 		// at which point the network map (and therefore the pin) is
 		// guaranteed to have been populated at least once.
-		provider := &agentProvider{id: id, engine: nil, wgListenPort: listenPort, gate: gate} // engine wired below
+		provider := &agentProvider{id: id, engine: nil, wgListenPort: listenPort, gate: gate, selfNodePub: nk.PublicBase64()} // engine wired below
 		relayFactory := newRelayClientFactory(logger, id, mk, nk.PublicBase64(), tokens.Get, deviceCert, provider)
 
 		// published flips true only once the fully-built session is handed
@@ -2466,10 +2466,21 @@ type agentProvider struct {
 	// credentials. Optional: nil reads as OK.
 	gate *authGate
 
+	// selfNodePub is the public half of the Node Key this process is
+	// running on (std-base64), written once at startup. Compared against
+	// what the control plane publishes for this device — see
+	// nodeKeyAgreement.
+	selfNodePub string
+
 	mu         sync.RWMutex
 	peerCount  int
 	mapEpoch   int64
 	peerByName map[string]*signer.NetworkMapPeer
+	// publishedNodePub / publishedPrevNodePub are the control plane's
+	// self row for this device from the most recent network map. Empty
+	// until the first map arrives.
+	publishedNodePub     string
+	publishedPrevNodePub string
 	// relayTLSPin maps relay URL -> hex SHA-256 fingerprint, refreshed
 	// on every Apply(nm). The relay-client factory consults this map
 	// before dialing so the TLS-skip-verify-with-fingerprint pin is
@@ -2513,6 +2524,10 @@ func (p *agentProvider) Status() management.Status {
 		OverlayIP:  p.id.OverlayIP,
 		ListenPort: p.wgListenPort,
 		PeerCount:  p.peerCount,
+
+		NodeKeyAgreement:       nodeKeyAgreement(p.selfNodePub, p.publishedNodePub, p.publishedPrevNodePub),
+		NodePublicKey:          p.selfNodePub,
+		PublishedNodePublicKey: p.publishedNodePub,
 	}
 	if p.disco != nil {
 		st.DiscoEnabled = true
@@ -2660,6 +2675,11 @@ func (p *agentProvider) replacePeers(nm *signer.NetworkMap) {
 	p.mu.Lock()
 	p.mapEpoch = nm.MapEpoch
 	p.peerCount = len(nm.Peers)
+	// The control plane's own row for this device. Recorded per frame so
+	// the Node Key verdict follows a rotation instead of freezing at
+	// boot — see nodeKeyAgreement.
+	p.publishedNodePub = nm.Self.NodePublicKey
+	p.publishedPrevNodePub = nm.Self.PrevNodePublicKey
 	if p.peerByName == nil {
 		p.peerByName = map[string]*signer.NetworkMapPeer{}
 	} else {
