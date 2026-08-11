@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 5d1440275bcf250e
+sourceHash: ebfd933fccea3f6f
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -222,7 +222,9 @@ Ctrl-C が必要です。おかしくなったのがブラウザのタブのほ�
 	ほかのパソコンの AI を*使うだけ*のマシンなら **N**（それでもゲートウェイ/リレーとして
 	ネットワークには参加します）。既定値はこのマシンのメモリ量に従います:
 	推奨できるモデルがあれば既定は Y、推奨スペックを下回るマシンでは警告のうえ既定は N
-	になります。あとから `waired inference on` で変更できます。
+	になります。どのモデルにするかはここでは決めません。AI ソフトウェアを導入し、
+	このパソコンを計測したあとの手順 6 で選びます。あとから
+	`waired inference on` で変更できます。
 
 3. **Let your other devices use this computer's AI? `[Y/n]`** — ノートパソコンに
 	提供するためのマシンなら **Y**。前の回答とは独立した設定です。

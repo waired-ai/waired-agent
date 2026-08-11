@@ -47,43 +47,51 @@ func engineInstallAsk(forcedOn, nonInteractive, fit bool) engineAskAnswer {
 	}
 }
 
-// installRecommendation reduces GET /inference/catalog to the step-4
-// facts: whether this host has a recommended pick, its display label,
-// and the warning reason when it does not.
+// installEngineFit reduces GET /inference/catalog to the one step-4
+// fact: whether Waired would choose a model for this host at all, and
+// the warning reason when it would not.
 //
-// An unreachable or absent catalog (older daemon build) reads as fit
-// with no label: the question is still asked, with the safe default,
-// rather than inventing a warning the data cannot back.
-func installRecommendation(mgmt string) (fit bool, label, reason string) {
+// It deliberately does NOT report WHICH model. The recommendation is
+// computed by the daemon from the engine and its version, and at step 4
+// no engine is installed yet — so every variant with a minimum engine
+// version is excluded and the answer can differ from the one the picker
+// gives minutes later, on the same host, from the same function. Naming
+// a model here presented that provisional answer as a final one:
+// waired-agent#649 saw step 4 say "Qwen3.6 27B" and the picker, seconds
+// after, mark "qwen3.6-35b-a3b — recommended for this computer". The
+// picker is the one surface that asks after the facts are in, so it is
+// the only one that names a model now.
+//
+// An unreachable or absent catalog (older daemon build) reads as fit:
+// the question is still asked, with the safe default, rather than
+// inventing a warning the data cannot back.
+func installEngineFit(mgmt string) (fit bool, reason string) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(mgmt + "/waired/v1/inference/catalog")
 	if err != nil {
-		return true, "", ""
+		return true, ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return true, "", ""
+		return true, ""
 	}
 	var cat catalogDetailResp
 	if err := json.NewDecoder(resp.Body).Decode(&cat); err != nil {
-		return true, "", ""
+		return true, ""
 	}
 	anyFits := false
 	for _, f := range cat.Families {
 		if f.RecommendedPick {
-			if f.DisplayName != "" {
-				return true, f.DisplayName, ""
-			}
-			return true, f.ModelID, ""
+			return true, ""
 		}
 		if f.Fits {
 			anyFits = true
 		}
 	}
 	if anyFits {
-		return false, "", "models can run here, but Waired would not choose any of them for this hardware"
+		return false, "models can run here, but Waired would not choose any of them for this hardware"
 	}
-	return false, "", "no bundled model fits in this computer's memory"
+	return false, "no bundled model fits in this computer's memory"
 }
 
 // confirmDaemonPathEngineInstall runs step 4 and reports whether the
@@ -94,7 +102,7 @@ func installRecommendation(mgmt string) (fit bool, label, reason string) {
 // exit code stays 0.
 func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, nonInteractive bool, sc lineReader, out io.Writer) bool {
 	forced := inf.Enabled != nil && *inf.Enabled
-	fit, label, reason := installRecommendation(mgmtURL)
+	fit, reason := installEngineFit(mgmtURL)
 	switch engineInstallAsk(forced, nonInteractive, fit) {
 	case engineAskInstall:
 		return true
@@ -106,12 +114,8 @@ func confirmDaemonPathEngineInstall(mgmtURL string, inf daemonInitInference, non
 	}
 
 	if fit {
-		if label != "" {
-			writePromptf(out, "\n%s This computer can run AI models locally (recommended: %s).\n",
-				emo("🤖", "*"), label)
-		} else {
-			writePromptf(out, "\n%s This computer can run AI models locally.\n", emo("🤖", "*"))
-		}
+		writePromptf(out, "\n%s This computer can run AI models locally. You choose which model in a moment.\n",
+			emo("🤖", "*"))
 	} else {
 		writePromptf(out, "\n%s This computer is below the recommended spec for local AI: %s.\n",
 			emo("⚠", "!"), reason)

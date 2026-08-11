@@ -107,7 +107,9 @@ func TestModelPicker_EnterTakesTheRecommended(t *testing.T) {
 	o := out.String()
 	for _, want := range []string{
 		"Choose the AI model for this computer (Enter = recommended):",
-		"2) qwen3.5-9b — recommended for this computer",
+		// The display name, not the id: every install-flow surface that
+		// names a model spells it the same way (waired-agent#649).
+		"2) Qwen3.5 9B — recommended for this computer",
 		"3) qwen3.5-27b — needs 24 GB RAM (have 16 GB)",
 		"0) Don't download a model now",
 		"Model [2]: ",
