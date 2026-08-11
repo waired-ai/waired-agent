@@ -448,6 +448,25 @@ type hostCutoffDeps struct {
 	// give-up arm should not take half a minute.
 	QuietWait time.Duration
 
+	// Now, when non-nil, is the clock the budget is measured against; nil
+	// means time.Now.
+	//
+	// Injected because the budget is the one thing here whose test cannot
+	// be written against real time. It is a deadline over the WHOLE run
+	// (waired-agent#579), so a test for "the budget stopped it" has to
+	// place that deadline between two samples — and it can only do that by
+	// betting on how long a fake engine takes to answer. A GitHub-hosted
+	// Windows runner under load only has to add ~20 ms across the
+	// calibration and the first sample for the deadline to land INSIDE
+	// sample 1 instead of after it, which cancels that sample mid-flight
+	// and fails the test on a premise that broke rather than on the
+	// behaviour it guards (waired-agent#677).
+	//
+	// Scaling the fake's delay and the budget up together does not fix it:
+	// under load every term scales and the same ordering inversion recurs
+	// at a larger size.
+	Now func() time.Time
+
 	// EngineGen, when non-nil, is the engine's process generation
 	// (agentInferenceProvider.engineProcessGen). Sampled before the screen
 	// and re-read after it: a pair of readings whose engine restarted
@@ -458,6 +477,19 @@ type hostCutoffDeps struct {
 	// nil returns a constant 0, so the generation never appears to move.
 	EngineGen func() uint64
 }
+
+// now is a nil-safe Now call: an unwired caller reads the real clock, which
+// is every production path.
+func (d hostCutoffDeps) now() time.Time {
+	if d.Now == nil {
+		return time.Now()
+	}
+	return d.Now()
+}
+
+// since is now() relative to t, so the budget arithmetic reads the injected
+// clock everywhere rather than only where it starts.
+func (d hostCutoffDeps) since(t time.Time) time.Duration { return d.now().Sub(t) }
 
 // engineGen is a nil-safe EngineGen call, matching BenchDeps.engineGen: a
 // caller that does not wire one sees a generation that never moves, which
@@ -509,7 +541,7 @@ func measureHostCutoff(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeas
 		"model", deps.EngineModel, "depth_tokens", hostfit.HostCutoffProbeDepthTokens,
 		"samples", benchSampleCount, "budget", budget)
 
-	started := time.Now()
+	started := deps.now()
 
 	// The budget becomes a real deadline over EVERYTHING below, not just a
 	// figure consulted between samples (waired-agent#579).
@@ -544,7 +576,7 @@ func measureHostCutoff(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeas
 			"turn_floor_seconds", fmt.Sprintf("%.1f", screened.TurnFloorSeconds),
 			"budget_seconds", fmt.Sprintf("%.0f", hostfit.HostCutoffTurnBudgetSeconds),
 			"margin", hostCutoffScreenMargin,
-			"elapsed", time.Since(started).Round(time.Second))
+			"elapsed", deps.since(started).Round(time.Second))
 		return screened, nil
 	}
 	if tokensPerLine <= 0 {
@@ -564,12 +596,12 @@ func measureHostCutoff(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeas
 		// slowest sample so far is the estimate: samples on one idle host
 		// vary by a few percent, and the one case where they do not — a
 		// machine that just got busy — is the case worth cutting short.
-		if sample > 1 && time.Since(started)+slowest > budget {
+		if sample > 1 && deps.since(started)+slowest > budget {
 			deps.Logger.Info("host cutoff: stopping at the sample budget",
-				"samples", len(usable), "elapsed", time.Since(started).Round(time.Second))
+				"samples", len(usable), "elapsed", deps.since(started).Round(time.Second))
 			break
 		}
-		at := time.Now()
+		at := deps.now()
 		probe, err := measureHostCutoffSample(ctx, deps, sample, tokensPerLine)
 		if err != nil {
 			if len(usable) == 0 {
@@ -581,7 +613,7 @@ func measureHostCutoff(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeas
 				"samples", len(usable), "err", err)
 			break
 		}
-		if took := time.Since(at); took > slowest {
+		if took := deps.since(at); took > slowest {
 			slowest = took
 		}
 		last = probe
