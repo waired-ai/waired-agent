@@ -2422,6 +2422,38 @@ function Get-InstalledVersion {
     return 'unknown'
 }
 
+# Test-AgentServiceRegistered -- does the SCM know about waired-agent? Reads
+# only; no elevation needed. The same question waired-setup.iss asks in Pascal
+# (AgentServiceExists, `sc.exe query` / 1060).
+function Test-AgentServiceRegistered {
+    try {
+        return [bool](Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)
+    } catch {
+        return $false
+    }
+}
+
+# Test-InstallComplete -- true only when this host carries a COMPLETE install:
+# the binary AND a registered service. Pure (facts in, verdict out) so
+# installtest can table-drive it.
+#
+# Get-InstalledVersion alone is the wrong signal for the install-vs-update
+# dispatch, for the same reason install.sh does not use darwin_detect_installed
+# there: an install that aborted, or an uninstall that could not delete a
+# running waired.exe, leaves a binary with a perfectly good version string
+# behind. A bare re-run was then dispatched to the update path, which installs
+# none of the missing pieces -- so the host reported "Update declined." and
+# exit 0 while carrying no service, no state dir, no registry key and no PATH
+# entry, and could never converge no matter how often it ran (#660).
+#
+# A leftover binary is a broken install to repair, not an install to decline
+# updating. Mirror of install.sh darwin_install_complete.
+function Test-InstallComplete {
+    param([string]$Version, [bool]$ServiceRegistered)
+    if (-not $Version) { return $false }
+    return $ServiceRegistered
+}
+
 # Get-GitHubLatestTag -- resolve the stable 'latest' release tag via the
 # public mirror's GitHub Releases API. Returns a stripped version (no
 # leading v) or $null on any failure (non-fatal; the caller leaves the
@@ -2740,8 +2772,24 @@ if ($Clean -and -not $StagedZipPath) {
 # the bare-re-run auto-detect so the child doesn't re-enter Phase 1.
 # -Clean is excluded too: under -DryRun the (not actually wiped) host
 # would still look installed and misleadingly preview the update path.
+#
+# The bare-re-run arm asks whether the install is COMPLETE, not merely whether
+# a binary is present: a leftover exe is something to repair, and routing it to
+# the update path left it unrepairable (#660). -Check / -Update are explicit
+# operator requests and still honoured on a partial install.
 $installedVersion = Get-InstalledVersion
-$updateRequested  = $Check -or $Update -or ($installedVersion -and -not $StagedZipPath -and -not $Clean)
+$installComplete  = Test-InstallComplete -Version $installedVersion `
+    -ServiceRegistered (Test-AgentServiceRegistered)
+$updateRequested  = $Check -or $Update -or ($installComplete -and -not $StagedZipPath -and -not $Clean)
+
+# Say so when the fresh-install path is being taken to repair wreckage rather
+# than to install onto a clean host -- otherwise the run looks like a first
+# install that inexplicably found files already there.
+if ($installedVersion -and -not $installComplete -and -not $StagedZipPath -and -not $Clean -and -not $Check -and -not $Update) {
+    $dash = Emo ([char]::ConvertFromUtf32(0x2014)) '-'
+    Common-Warn ("Found Waired's program files but no registered background service $dash " +
+        'the last install did not finish. Installing again to repair it.')
+}
 
 # Channel preservation (Phase 1 only; the elevated Phase 2 just swaps the
 # already-staged zip). When an update names no channel and none is pinned,
@@ -2749,7 +2797,13 @@ $updateRequested  = $Check -or $Update -or ($installedVersion -and -not $StagedZ
 # (version contains "edge") updates to the latest edge instead of silently
 # moving onto stable. -Stable / -Edge / WAIRED_VERSION already decided the
 # channel above, so they short-circuit this. Mirrors install.sh main().
-if (-not $StagedZipPath -and $updateRequested -and -not $Stable `
+#
+# Keyed on $installedVersion rather than on $updateRequested since #660: the
+# repair path is a fresh install by dispatch but an existing host by fact, and
+# repairing an edge machine must not silently move it onto stable. -Clean
+# cannot reach here with a version -- Invoke-CleanWipe runs before
+# Get-InstalledVersion, so a wiped host reads as $null.
+if (-not $StagedZipPath -and -not $Stable `
         -and -not $Edge -and -not $Latest -and -not $env:WAIRED_VERSION `
         -and $installedVersion -and $installedVersion -match 'edge') {
     $Version = 'edge'

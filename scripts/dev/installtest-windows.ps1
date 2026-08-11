@@ -254,6 +254,7 @@ $script:ContractBlocking = @{
     '313' = $true    # waired-agent#313: `waired init` on an enrolled device resumes instead of failing (FIXED)
     '315' = $true    # waired#315: SCM recovery actions also fire on a non-crash failure exit (FIXED)
     '579' = $true    # waired-agent#579: the host-speed measurement reaches a verdict inside init's window (FIXED)
+    '660' = $true    # waired-agent#660: uninstall verifies its own deletes instead of reporting success over them (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -1715,6 +1716,63 @@ try {
         else { ItBad ("Get-ExitCodeReason wrong: " + ($bad -join '; ')) }
     }
 
+    # --- Test-InstallComplete / Format-LockHolders ---------------------------
+    # The two predicates #660 turns on, lifted out and driven directly for the
+    # same reason as the decoder above: the wrecked half-state they exist for
+    # cannot be staged on the runner that is mid-install.
+    ItStep "install.ps1 / uninstall.ps1 partial-install asserts (#660)"
+    $cInstall = Get-Ps1Function -Path $installPs1 -Name 'Test-InstallComplete'
+    if ($cInstall) {
+        Invoke-Expression $cInstall
+        # Product contract (waired-ai/waired-agent#660): a binary alone is a
+        # broken install to repair, so only the binary-AND-service combination
+        # may route a bare re-run to the update path.
+        $bad = @()
+        if (Test-InstallComplete -Version '0.0.2-edge+abc' -ServiceRegistered $false) {
+            $bad += 'a leftover binary with no registered service reads as installed'
+        }
+        if (Test-InstallComplete -Version 'unknown' -ServiceRegistered $false) {
+            $bad += "a version-less leftover binary reads as installed"
+        }
+        if (Test-InstallComplete -Version '' -ServiceRegistered $true) {
+            $bad += 'a registered service with no binary reads as installed'
+        }
+        if (-not (Test-InstallComplete -Version '0.0.2-edge+abc' -ServiceRegistered $true)) {
+            $bad += 'a complete install does not read as installed'
+        }
+        if (-not (Test-InstallComplete -Version 'unknown' -ServiceRegistered $true)) {
+            $bad += "a complete install too old to report a version does not read as installed"
+        }
+        if ($bad.Count -eq 0) { ItOk "Test-InstallComplete requires the service, not just the binary" }
+        else { ItBad ("Test-InstallComplete wrong: " + ($bad -join '; ')) }
+    } else {
+        ItBad "install.ps1 has no Test-InstallComplete (#660)"
+    }
+
+    $hUninstall = Get-Ps1Function -Path $uninstallPs1 -Name 'Format-LockHolders'
+    if ($hUninstall) {
+        Invoke-Expression $hUninstall
+        $bad = @()
+        $one = Format-LockHolders @([pscustomobject]@{ Name = 'waired'; Id = 4321 })
+        if ($one -cne 'waired (PID 4321)') { $bad += "one holder -> [$one]" }
+        $two = Format-LockHolders @(
+            [pscustomobject]@{ Name = 'waired'; Id = 1 },
+            [pscustomobject]@{ Name = 'waired-tray'; Id = 2 })
+        if ($two -cne 'waired (PID 1), waired-tray (PID 2)') { $bad += "two holders -> [$two]" }
+        # The case that matters most: Get-Process cannot read .Path for another
+        # user's process, so the list can come back empty on exactly the host
+        # where something IS holding the file. The message must still be a
+        # sentence.
+        foreach ($empty in @(@(), $null)) {
+            $none = Format-LockHolders $empty
+            if (-not $none -or $none -match 'PID') { $bad += "empty holder list -> [$none]" }
+        }
+        if ($bad.Count -eq 0) { ItOk "Format-LockHolders names the holders, and says something when it cannot" }
+        else { ItBad ("Format-LockHolders wrong: " + ($bad -join '; ')) }
+    } else {
+        ItBad "uninstall.ps1 has no Format-LockHolders (#660)"
+    }
+
     # --- the two pre-answered setup questions --------------------------------
     # `waired init`'s --inference-enabled / --share-with-mesh are Go bool flags:
     # the space form leaves the value as a positional arg, which cobra.NoArgs
@@ -2278,6 +2336,51 @@ Remove-Job $lj -Force -ErrorAction SilentlyContinue | Out-Null
 # keep the historical behavior (no uninstall — the runner is disposable).
 if ($Contract) {
     try {
+        # (#660) The false-success chain, staged with a planted victim in the
+        # same spirit as the seeds below. Hold waired.exe open with no sharing
+        # so Windows refuses to delete it -- the same refusal an orphaned
+        # `waired init` produced on the reported host -- and assert the
+        # uninstaller says so and exits non-zero, instead of printing "Waired
+        # fully removed" and exiting 0 over a 13 MB binary still on disk.
+        #
+        # Runs before the real teardown below, and leaves the host in exactly
+        # the wrecked half-state #660 is about: no service, binary present.
+        ItStep "uninstall.ps1 with a locked binary fails loudly (#660)"
+        $lockedExe = Join-Path $InstallDir 'waired.exe'
+        $lock = $null
+        try { $lock = [System.IO.File]::Open($lockedExe, 'Open', 'Read', 'None') } catch { }
+        if (-not $lock) {
+            ItBad "could not lock $lockedExe, so the #660 leg proves nothing"
+        } else {
+            try {
+                # *>&1, not 2>&1: the uninstaller reports through Write-Host,
+                # which is the information stream. Capturing only errors caught
+                # none of its output, and the "does not say fully removed"
+                # assert below would then have passed against an empty string.
+                $lockedOut = (& (Join-Path $Root 'packaging\install\uninstall.ps1') -Clean -Yes *>&1 | Out-String)
+                $lockedRc  = $LASTEXITCODE
+                Write-Host $lockedOut   # captured, so echo it or CI sees nothing
+                ItSoft '660' ($lockedRc -ne 0) `
+                    "uninstall.ps1 exits non-zero when it could not delete the binary (got $lockedRc)" 'waired-agent'
+                ItSoft '660' ($lockedOut -notmatch 'fully removed') `
+                    'uninstall.ps1 does not claim "fully removed" over a binary it left behind' 'waired-agent'
+                ItSoft '660' ($lockedOut -match [regex]::Escape($InstallDir) + '.*could not be removed') `
+                    'uninstall.ps1 names the path it could not remove' 'waired-agent'
+                # Naming the holding process is best-effort by design: the lock
+                # above is a file handle held by this harness, not a running
+                # image under InstallDir, so Get-LockHolders correctly finds
+                # nothing and the message falls back to its "could not identify"
+                # wording. What must always hold is that the reason is stated.
+                ItSoft '660' ($lockedOut -match 'still in use by') `
+                    'uninstall.ps1 says why the removal failed' 'waired-agent'
+                if (Test-Path -LiteralPath $lockedExe) { ItOk "the locked binary is still there, as the assert above claims" }
+                else { ItBad "the locked binary vanished; the lock did not hold and the asserts above are vacuous" }
+            }
+            finally {
+                $lock.Dispose()
+            }
+        }
+
         ItStep "teardown = uninstall.ps1 -Clean + asserts (waired#754 soft)"
         # Seed the GPU-backend machine env vars Set-MachineVulkanFlag writes on a
         # Vulkan/iGPU host. CI runners have no such GPU so the install leg never
@@ -2534,11 +2637,24 @@ if ($script:Skip -gt 0) {
 # 31316424716's -EngineOnly leg executed 75 (75 passed, 0 failed, 0 warn,
 # 0 skipped) and that is the floor.
 #
+#
+# waired-agent#660 moves all three, by arithmetic on unconditional asserts --
+# the same basis as the #314 note above (78 -> 80), not an estimate:
+#
+#   +2 everywhere: Test-InstallComplete and Format-LockHolders sit in the same
+#      always-run Tier-1 block as the ConvertTo-NativeArg / Get-ExitCodeReason
+#      pairs, and each reports exactly one assert. 89 -> 91, 75 -> 77, 72 -> 74.
+#   +5 under -Contract only: the locked-binary teardown leg reports 4 ItSoft
+#      (blocking, so one assert on either arm) plus the "the locked binary is
+#      still there" check. 91 -> 96. Its could-not-lock arm reports 1 instead
+#      of 5, but that arm is an ItBad and exits non-zero regardless, so the
+#      floor is measured against the green path as usual.
+#
 # Raise these when you add an assert that always runs; lower one, in the same
 # commit and with the reason, if a leg legitimately becomes conditional.
 $executed = $script:Pass + $script:Fail
 if ($Tier -ge 2) {
-    $floor = if ($Contract) { 89 } elseif ($EngineOnly) { 75 } else { 72 }
+    $floor = if ($Contract) { 96 } elseif ($EngineOnly) { 77 } else { 74 }
     if ($executed -lt $floor) {
         Write-Host ("[installtest] FAIL only {0} asserts ran at tier {1}; at least {2} must (a block stopped executing -- see the assert-count floor in installtest-windows.ps1)" -f $executed, $Tier, $floor) -ForegroundColor Red
         exit 1
