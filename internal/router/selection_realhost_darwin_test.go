@@ -116,42 +116,43 @@ func TestRealHostSelectionAppleSilicon(t *testing.T) {
 		}
 	}
 
-	// --- Deficit labels (the UMA-relevant GPU-residency path) ---
-	// A family whose MinRAMGB is satisfied by the host RAM but whose weights
-	// exceed the GPU-addressable budget must report the GPU-residency
-	// reason. On a 16 GB Mac, qwen2.5-coder-14b (min_ram_gb=16, ~9 GB
-	// weights) is exactly this case: the RAM gate passes but ~9 GB + KV +
-	// overhead overflows the 12288 MB UMA budget.
+	// --- Deficit labels: the label quotes the verdict's own figures ---
+	//
+	// This block used to require the prose "GPU-resident" on every
+	// rejected UMA row, because the fit path once ignored MinRAMGB here
+	// and rejected purely on GPU residency (#425). That premise expired:
+	// capacity became a total-memory computation (#497) and the OS
+	// deduction became a measurement (#568), so a unified host rejects
+	// on the system-memory term like any other. Requiring residency
+	// prose was what let the label say "needs ~7 GB, have 12288 MB VRAM"
+	// beside a rejection whose own figures were 10455 against 6144
+	// (#625).
+	//
+	// What is asserted now is the invariant that cannot expire: the
+	// numbers in the sentence are the numbers in the verdict.
 	if hw.RAMTotalGB == 16 {
 		if m, ok := manifestByPrefix(manifests, "qwen2.5-coder-14b"); ok {
 			fit := FamilyBestFit(m, catalog.RuntimeOllama, engineVer, hw)
-			t.Logf("family %s: fits=%v deficit=%q", m.ModelID, fit.Fits, fit.DeficitLabel)
+			t.Logf("family %s: fits=%v deficit=%q fit=%+v", m.ModelID, fit.Fits, fit.DeficitLabel, fit.Fit)
 			if fit.Fits {
 				t.Errorf("family %s unexpectedly fits a 12288 MB UMA budget", m.ModelID)
 			}
-			if !strings.Contains(fit.DeficitLabel, "GPU-resident") {
-				t.Errorf("family %s deficit = %q, want a GPU-residency reason", m.ModelID, fit.DeficitLabel)
-			}
+			assertDeficitLabelQuotesVerdict(t, catalog.RuntimeOllama, m.ModelID, fit)
 		}
 	}
 
-	// A family far above the budget must be rejected with the GPU-residency
-	// reason. Its MinRAMGB (32) exceeds a 16 GB Mac's RAM, but on a UMA host
-	// the fit path ignores MinRAMGB and rejects on GPU residency — so the
-	// label must say so too, not "needs 32 GB RAM" (#425 fixed that).
+	// A family far above the budget is still rejected, and its label
+	// still has to agree with the verdict that rejected it.
 	const bigModel = "qwen3.6-35b-a3b" // ~21 GB q4 weights, min_ram_gb=32
 	if m, ok := manifestByPrefix(manifests, bigModel); ok {
 		fit := FamilyBestFit(m, catalog.RuntimeOllama, engineVer, hw)
-		t.Logf("family %s: fits=%v deficit=%q", m.ModelID, fit.Fits, fit.DeficitLabel)
+		t.Logf("family %s: fits=%v deficit=%q fit=%+v", m.ModelID, fit.Fits, fit.DeficitLabel, fit.Fit)
 		if hw.EffectiveVRAMMB() > 0 && hw.EffectiveVRAMMB() < 25000 {
 			if fit.Fits {
 				t.Errorf("family %s reported as fitting on a %d MB UMA budget; expected rejection",
 					m.ModelID, hw.EffectiveVRAMMB())
 			}
-			if !strings.Contains(fit.DeficitLabel, "GPU-resident") {
-				t.Errorf("family %s deficit = %q, want a GPU-residency reason (UMA ignores MinRAMGB, #425)",
-					m.ModelID, fit.DeficitLabel)
-			}
+			assertDeficitLabelQuotesVerdict(t, catalog.RuntimeOllama, m.ModelID, fit)
 		}
 	} else {
 		t.Logf("catalog has no %s family; skipping the over-budget deficit assertion", bigModel)

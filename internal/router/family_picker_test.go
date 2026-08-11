@@ -1,6 +1,9 @@
 package router
 
 import (
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -224,6 +227,148 @@ func TestFamilyBestFit_OllamaUnknownRAMTreatedAsFit(t *testing.T) {
 	got := FamilyBestFit(o, catalog.RuntimeOllama, "", hw)
 	if !got.Fits {
 		t.Fatalf("expected fit when RAM detection unavailable, got %+v", got)
+	}
+}
+
+// gbFigure matches a whole-GB quantity as the deficit labels write one.
+// "2 GPUs" and other trailing counts are deliberately not matched: the
+// contract below is about the MEMORY figures, and a device count is not
+// one of them.
+var gbFigure = regexp.MustCompile(`(\d+) GB`)
+
+// assertDeficitLabelQuotesVerdict is the #625 contract, in one place
+// because two tests assert it — this file's table over synthetic hosts,
+// and the Apple Silicon real-host test over an actual probe.
+//
+// Both directions matter, and the second is the one that was broken:
+//
+//   - every figure the verdict decided on appears in the label, and
+//   - every figure in the label is one the verdict decided on.
+//
+// The old UMA label satisfied neither. It read "needs ~7 GB
+// GPU-resident (have 12288 MB VRAM)" beside need_mb 10455 / have_mb
+// 6144 — two numbers, both absent from the decision they were
+// explaining, and arranged so that 7 < 12 read as a pass on a row that
+// says it does not fit.
+//
+// Skipped where the verdict priced nothing (an unannotated weight, a
+// failed RAM probe, the engine-version floor): there is no figure to
+// agree with, and the label says so in words.
+func assertDeficitLabelQuotesVerdict(t *testing.T, engine, modelID string, fit FamilyFit) {
+	t.Helper()
+	if fit.Fits || engine != catalog.RuntimeOllama {
+		return
+	}
+	if fit.Fit.NeedMB <= 0 || fit.Fit.HaveMB <= 0 {
+		return
+	}
+	need, have := mbToGBCeil(fit.Fit.NeedMB), mbToGBCeil(fit.Fit.HaveMB)
+	for _, want := range []int{need, have} {
+		if !strings.Contains(fit.DeficitLabel, strconv.Itoa(want)+" GB") {
+			t.Errorf("%s: label %q omits %d GB, which the verdict decided on (need_mb=%d have_mb=%d)",
+				modelID, fit.DeficitLabel, want, fit.Fit.NeedMB, fit.Fit.HaveMB)
+		}
+	}
+	for _, m := range gbFigure.FindAllStringSubmatch(fit.DeficitLabel, -1) {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			continue
+		}
+		if n != need && n != have {
+			t.Errorf("%s: label %q quotes %d GB, which the verdict never compared (need=%d GB have=%d GB)",
+				modelID, fit.DeficitLabel, n, need, have)
+		}
+	}
+}
+
+// Product contract (waired-agent#625): the deficit label and the verdict
+// beside it are the same decision, so the label may only quote figures
+// the verdict compared.
+//
+// They used to be two expressions in one return statement, computed from
+// different inputs, and they drifted the moment the inputs stopped
+// agreeing — capacity became a total-memory computation (#497) and the
+// OS deduction became a measurement (#568), while the label went on
+// describing GPU residency against the raw RAM total.
+//
+// The table walks the shapes where the two computations can disagree,
+// which is every host class the capacity gate treats differently.
+func TestFamilyBestFit_DeficitLabelQuotesTheVerdict(t *testing.T) {
+	o, _, _ := hostFamilyFixture()
+	weighted := catalog.Manifest{
+		ModelID:       "qwen3.5-weighted",
+		DisplayName:   "Weighted",
+		ContextLength: 262144,
+		Variants: []catalog.Variant{{
+			VariantID: "q4-gguf", Format: catalog.FormatOllamaTag,
+			RuntimeSupport:      []string{catalog.RuntimeOllama},
+			MinRAMGB:            12,
+			EstimatedWeightGB:   6.6,
+			KVBytesPerTokenFP16: 32768,
+			ParamCount:          9_000_000_000,
+			QualityTier:         52,
+			Source:              catalog.VariantSource{Type: catalog.SourceOllama, Tag: "qwen3.5:9b-q4"},
+		}},
+	}
+	for _, tc := range []struct {
+		name string
+		m    catalog.Manifest
+		hw   hardware.Profile
+	}{
+		// The #625 host, as measured: 16 GB unified, 6 GB available at
+		// install, so the gate compares against 6144 MB while the raw
+		// figure the old label reached for was 12288.
+		{"unified with a measured deduction", weighted, hardware.Profile{
+			RAMTotalGB: 16, RAMAvailableAtInstallGB: 6,
+			UnifiedMemory: true, UsableVRAMMB: 12288,
+		}},
+		// Apple Silicon reports NO discrete device, which is the shape
+		// the fixtures elsewhere in this repo get wrong (#662): a
+		// synthetic GPU entry with VRAMTotalMB set is a machine the
+		// darwin detector never produces.
+		{"unified, no discrete device enumerated", weighted, hardware.Profile{
+			RAMTotalGB: 16, RAMAvailableAtInstallGB: 6,
+			UnifiedMemory: true, UsableVRAMMB: 12288,
+		}},
+		// Discrete, rejected: the old label reached for RAMTotalGB here,
+		// which is the figure the verdict does NOT use — the deduction
+		// comes off it first and the card's memory is added after.
+		{"discrete with a measured deduction", weighted, hardware.Profile{
+			RAMTotalGB: 8, RAMAvailableAtInstallGB: 4,
+			GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 4096, Model: "RTX 3050"}},
+		}},
+		{"cpu-only", weighted, hardware.Profile{RAMTotalGB: 8, RAMAvailableAtInstallGB: 6}},
+		// Pooled: naming one card after judging the host on two is the
+		// error #264 fixed, and the pooled budget is what "have" already
+		// carries — so the label inherits the fix instead of repeating it.
+		{"pooled discrete", weighted, hardware.Profile{
+			RAMTotalGB: 8, RAMAvailableAtInstallGB: 4,
+			GPUs: []hardware.GPU{
+				{Vendor: "nvidia", VRAMTotalMB: 2048, Model: "A"},
+				{Vendor: "nvidia", VRAMTotalMB: 2048, Model: "B"},
+			},
+		}},
+		// The same Windows host as the rc8 run, where the model DOES
+		// fit: a fitting row carries no label at all, and the contract
+		// has to hold in that direction too.
+		{"discrete, fits", weighted, hardware.Profile{
+			RAMTotalGB: 32, RAMAvailableAtInstallGB: 16,
+			GPUs: []hardware.GPU{{Vendor: "nvidia", VRAMTotalMB: 8188, Model: "RTX 4070 Laptop"}},
+		}},
+		// No weight annotation: the verdict falls back to min_ram_gb and
+		// the label has to follow it there rather than invent a figure.
+		{"unannotated weight", o, hardware.Profile{RAMTotalGB: 4}},
+		{"no RAM reading at all", weighted, hardware.Profile{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FamilyBestFit(tc.m, catalog.RuntimeOllama, "", tc.hw)
+			t.Logf("fits=%v label=%q reason=%q need=%d have=%d",
+				got.Fits, got.DeficitLabel, got.Fit.Reason, got.Fit.NeedMB, got.Fit.HaveMB)
+			if !got.Fits && got.DeficitLabel == "" {
+				t.Fatalf("rejected with no label at all: %+v", got)
+			}
+			assertDeficitLabelQuotesVerdict(t, catalog.RuntimeOllama, tc.m.ModelID, got)
+		})
 	}
 }
 

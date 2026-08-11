@@ -461,3 +461,96 @@ func TestUpdate_CatalogNoVariantForEngineSaysSoInPlainWords(t *testing.T) {
 		}
 	}
 }
+
+// Product contract (waired-agent#632): a row can be fitting AND
+// recommended and still leave gigabytes of a coding session in system
+// RAM, and the tray says how much on the row where selecting it starts
+// the download.
+//
+// The figures are the rc8 Windows host's own (sv-xps15, RTX 4070 Laptop,
+// budget 8188 MB): qwen3.5-9b needs 10719 MB to serve the coding window,
+// qwen3.5-4b needs 7539 and fits on the card. The 9B was marked
+// recommended, downloaded at 6.6 GB, and then measured 5 tok/s.
+//
+// The mark is a QUANTITY, not a speed. Excluding on a predicted rate is
+// what docs/decisions/20260804/1937-… decision 4 removed, so the row
+// stays recommended and stays selectable.
+func TestUpdate_CatalogRowSaysHowMuchContextCacheSpills(t *testing.T) {
+	c := &management.ModelCatalogResponse{
+		Engine: "ollama",
+		Host: management.CatalogHost{
+			RAMTotalGB: 32, VRAMTotalMB: 8188, GPUBudgetMB: 8188,
+			GPUModel: "NVIDIA GeForce RTX 4070 Laptop GPU", OSReservedGB: 16,
+		},
+		Families: []management.CatalogFamily{
+			{
+				ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B",
+				Fits: true, Downloaded: true, RecommendedPick: true,
+				Fit: &hostfit.Presentation{Runnable: true, RequiredWindowResidentMB: 10719},
+			},
+			{
+				ModelID: "qwen3.5-4b", DisplayName: "Qwen3.5 4B",
+				Fits: true, Downloaded: true,
+				Fit: &hostfit.Presentation{Runnable: true, RequiredWindowResidentMB: 7539},
+			},
+		},
+	}
+	got := Update(connectedSnapshotWithCatalog(c))
+	if len(got.CatalogEntries) != 2 {
+		t.Fatalf("entries: want 2, got %d", len(got.CatalogEntries))
+	}
+	nine, four := got.CatalogEntries[0], got.CatalogEntries[1]
+
+	if !strings.Contains(nine.Label, "2.5 GB of context cache in system RAM") {
+		t.Errorf("spilling row label does not say how much: %q", nine.Label)
+	}
+	if !strings.Contains(nine.Label, "recommended") {
+		t.Errorf("the mark demoted a recommended row: %q", nine.Label)
+	}
+	if nine.Disabled {
+		t.Errorf("the mark disabled a fitting row: %+v", nine)
+	}
+	if !strings.Contains(nine.Tooltip, "read from system memory, which is slower") {
+		t.Errorf("tooltip does not explain the mark: %q", nine.Tooltip)
+	}
+
+	// It fits on the card. Saying "0 GB spills" would be true and useless.
+	if strings.Contains(four.Label, "system RAM") {
+		t.Errorf("resident row claims a shortfall: %q", four.Label)
+	}
+	if strings.Contains(four.Tooltip, "system memory") {
+		t.Errorf("resident row's tooltip claims a shortfall: %q", four.Tooltip)
+	}
+}
+
+// An agent too old to send gpu_budget_mb, and a host with no card at
+// all, are both "no figure" rather than "nothing spills". Neither may
+// produce a half-written sentence.
+func TestUpdate_CatalogSpillSilentWithoutABudget(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host management.CatalogHost
+	}{
+		{"agent too old to report a budget", management.CatalogHost{RAMTotalGB: 32}},
+		{"cpu-only host", management.CatalogHost{RAMTotalGB: 32, OSReservedGB: 6}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &management.ModelCatalogResponse{
+				Engine: "ollama",
+				Host:   tc.host,
+				Families: []management.CatalogFamily{{
+					ModelID: "qwen3.5-9b", DisplayName: "Qwen3.5 9B",
+					Fits: true, Downloaded: true,
+					Fit: &hostfit.Presentation{Runnable: true, RequiredWindowResidentMB: 10719},
+				}},
+			}
+			got := Update(connectedSnapshotWithCatalog(c))
+			if len(got.CatalogEntries) != 1 {
+				t.Fatalf("entries: want 1, got %d", len(got.CatalogEntries))
+			}
+			if strings.Contains(got.CatalogEntries[0].Label, "system RAM") {
+				t.Errorf("label claims a shortfall with no budget to compare: %q", got.CatalogEntries[0].Label)
+			}
+		})
+	}
+}

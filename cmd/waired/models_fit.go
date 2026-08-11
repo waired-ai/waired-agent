@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -39,7 +40,7 @@ import (
 // cancelled pull. A non-nil err means the pull must be aborted; the
 // caller surfaces it verbatim.
 func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.Writer, in io.Reader) (bool, error) {
-	fam, ok := lookupCatalogFamily(mgmt, model)
+	fam, host, ok := lookupCatalogFamily(mgmt, model)
 	if !ok {
 		return true, nil // unknown fit → no gate
 	}
@@ -49,7 +50,7 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 	}
 
 	if !fam.Fits {
-		warnModelDoesNotFit(out, name, fam.DeficitLabel)
+		warnModelDoesNotFitOn(out, name, fam.DeficitLabel, host)
 		switch unfitPullAction(assumeYes, force, stdinIsInteractive()) {
 		case pullProceed:
 			return true, nil
@@ -58,6 +59,17 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 			return false, nil
 		}
 		return ynPrompt(out, bufio.NewScanner(in), "Download it anyway?", false), nil
+	}
+
+	// It runs, and this is where the download is still avoidable, so say
+	// what it will cost to run (#632). Stated, not asked: the
+	// recommendation rules are not changing here, and a second
+	// default-No prompt on a model the catalog recommends would be a
+	// demotion by the back door — the ratified place for speed to
+	// exclude is a MEASURED input (waired-agent#466,
+	// docs/decisions/20260804/1937-… decision 4).
+	if s := contextCacheSpillNote(host, fam.Fit); s != "" {
+		writePromptf(out, "\n%s %s %s\n", emo("ℹ", "i"), name, s)
 	}
 
 	// It runs. It may still be the wrong choice for this machine
@@ -83,13 +95,100 @@ func confirmModelFitsForPull(mgmt, model string, assumeYes, force bool, out io.W
 // copy). One function, two surfaces — `models pull` and the init model
 // picker (#586) — so the wording cannot drift between them.
 func warnModelDoesNotFit(out io.Writer, name, deficit string) {
+	warnModelDoesNotFitOn(out, name, deficit, catalogDetailHost{})
+}
+
+// warnModelDoesNotFitOn is warnModelDoesNotFit with the host block in
+// hand, so the warning can say what the "allocatable" figure is made of.
+//
+// The deficit line quotes the verdict's own two numbers and stops there
+// (#625). This adds the one sentence that makes the smaller of them
+// checkable: a 16 GB Mac told a model needs 11 GB and it has 6 is
+// reading a true sentence with no way to see where the other 10 GB
+// went, and that missing figure is the install-time measurement #568
+// exists to take.
+func warnModelDoesNotFitOn(out io.Writer, name, deficit string, host catalogDetailHost) {
 	if deficit == "" {
 		deficit = "there is not enough memory on this computer"
 	}
 	writePromptf(out, "\n%s %s does not fit in this computer's memory: %s.\n",
 		emo("⚠", "!"), name, deficit)
+	if s := hostMemoryBreakdown(host); s != "" {
+		writePromptf(out, "  %s\n", s)
+	}
 	writePrompt(out, "  Loading it is expected to fail after the download completes.")
 	writePrompt(out, "  Run `waired models ls --detail` to see what does fit.")
+}
+
+// hostMemoryBreakdown words what this computer has and what is already
+// spoken for, or "" when there is nothing worth saying.
+//
+// Silent on two hosts, both deliberately. One that reported no RAM at
+// all has no figures to break down. One whose reservation is still the
+// flat hostfit.OSMemoryAllowanceGB floor has not measured anything —
+// printing a constant as though it were an observation about this
+// machine is how a number stops being trusted.
+func hostMemoryBreakdown(host catalogDetailHost) string {
+	if host.RAMTotalGB <= 0 || host.OSReservedGB <= hostfit.OSMemoryAllowanceGB {
+		return ""
+	}
+	// Graphics memory is named separately only where it IS separate. On
+	// a unified-memory host the same bytes back both figures, and adding
+	// them in a sentence would count them twice
+	// (docs/decisions/20260804/1937-…, the provenance split).
+	has := fmt.Sprintf("%d GB", host.RAMTotalGB)
+	if !host.UnifiedMemory && host.VRAMTotalMB > 0 {
+		has = fmt.Sprintf("%d GB RAM + %d GB graphics memory",
+			host.RAMTotalGB, (host.VRAMTotalMB+1023)/1024)
+	}
+	return fmt.Sprintf("This computer has %s; %d GB is already in use by the system and other apps.",
+		has, host.OSReservedGB)
+}
+
+// contextCacheSpillMB is how much of a full coding session's working set
+// this host cannot keep on the graphics card: what the model needs to
+// serve the coding window, less the memory the engine may address there.
+//
+// 0 for a row that fits on the card, and equally for a host with no card
+// and for an agent too old to report a budget. All three are "nothing to
+// say" rather than "nothing spills", which is why the caller prints
+// nothing instead of "0 GB".
+func contextCacheSpillMB(host catalogDetailHost, fit *catalogDetailFit) int {
+	if fit == nil || host.GPUBudgetMB <= 0 || fit.RequiredWindowResidentMB <= 0 {
+		return 0
+	}
+	if over := fit.RequiredWindowResidentMB - host.GPUBudgetMB; over > 0 {
+		return over
+	}
+	return 0
+}
+
+// contextCacheSpillNote words that shortfall for a surface with a line
+// to spare, or "" when there is none.
+//
+// It reports a FACT about memory, deliberately not a speed. The
+// prediction that would have named the rc8 Windows host's 5 tok/s before
+// its 6.6 GB download is a measured input this catalog does not carry
+// (waired-agent#466); what it does carry is the arithmetic an operator
+// can check — 10719 MB to serve the window, 8188 MB of card.
+func contextCacheSpillNote(host catalogDetailHost, fit *catalogDetailFit) string {
+	mb := contextCacheSpillMB(host, fit)
+	if mb <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("runs here, but about %s of its context cache will not fit on the graphics card and is read from system RAM instead.",
+		formatSpillGB(mb))
+}
+
+// formatSpillGB writes a shortfall in GB, with one decimal below 10 GB
+// so a 2531 MB gap does not round to a flat "3 GB" the operator cannot
+// reconcile with the two figures it came from.
+func formatSpillGB(mb int) string {
+	gb := float64(mb) / 1024
+	if gb < 10 {
+		return fmt.Sprintf("%.1f GB", gb)
+	}
+	return fmt.Sprintf("%.0f GB", gb)
 }
 
 // warnModelNotRecommended prints the runs-but-demoted warning
@@ -153,27 +252,30 @@ func notRecommendedBecause(reason string) string {
 // that as "fit unknown" and fail open. Alias forms the catalog response
 // does not carry (e.g. a name from a newer catalog) fall through to ok=false rather
 // than risk matching the wrong family.
-func lookupCatalogFamily(mgmt, model string) (catalogDetailFamily, bool) {
+// The host block rides along because the warning explains the verdict
+// with this host's own figures (#625) and re-fetching the catalog to get
+// them would let the two halves of one sentence come from two reads.
+func lookupCatalogFamily(mgmt, model string) (catalogDetailFamily, catalogDetailHost, bool) {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(mgmt + "/waired/v1/inference/catalog")
 	if err != nil {
-		return catalogDetailFamily{}, false
+		return catalogDetailFamily{}, catalogDetailHost{}, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return catalogDetailFamily{}, false
+		return catalogDetailFamily{}, catalogDetailHost{}, false
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return catalogDetailFamily{}, false
+		return catalogDetailFamily{}, catalogDetailHost{}, false
 	}
 	var cat catalogDetailResp
 	if err := json.Unmarshal(body, &cat); err != nil {
-		return catalogDetailFamily{}, false
+		return catalogDetailFamily{}, catalogDetailHost{}, false
 	}
 	for _, f := range cat.Families {
 		if strings.EqualFold(f.ModelID, model) {
-			return f, true
+			return f, cat.Host, true
 		}
 	}
 	// Short form: the arg may be a bare id or an alias whose trailing
@@ -185,9 +287,9 @@ func lookupCatalogFamily(mgmt, model string) (catalogDetailFamily, bool) {
 	if seg != model {
 		for _, f := range cat.Families {
 			if strings.EqualFold(f.ModelID, seg) {
-				return f, true
+				return f, cat.Host, true
 			}
 		}
 	}
-	return catalogDetailFamily{}, false
+	return catalogDetailFamily{}, catalogDetailHost{}, false
 }

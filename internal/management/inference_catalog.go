@@ -127,9 +127,61 @@ type CatalogActive struct {
 // CatalogHost summarises the relevant host capacity for the deficit
 // labels the tray renders next to over-capacity rows.
 type CatalogHost struct {
-	RAMTotalGB  int    `json:"ram_total_gb"`
+	RAMTotalGB int `json:"ram_total_gb"`
+
+	// VRAMTotalMB is the GPU-addressable budget the fit rules judged
+	// this host on — hardware.Profile.EffectiveVRAMMB, not GPUs[0]'s raw
+	// figure.
+	//
+	// The two differ exactly where it matters most. The darwin detector
+	// reports VRAMTotalMB=0 on purpose (gpu_apple_darwin.go: Apple
+	// Silicon has no separate pool to report), so reading GPUs[0] left
+	// this field absent on every Mac while the deficit label in the same
+	// response quoted 12288 MB. One document, two answers about one
+	// machine (#625, and #662 for the wire side of the same gap).
 	VRAMTotalMB int    `json:"vram_total_mb,omitempty"`
 	GPUModel    string `json:"gpu_model,omitempty"`
+
+	// UnifiedMemory says the two figures above are backed by the SAME
+	// bytes. A surface that adds them on such a host counts the memory
+	// twice, which is the double-count waired-ai/waired#1056 decision 1
+	// forbids in the arithmetic and is just as wrong in a sentence.
+	UnifiedMemory bool `json:"unified_memory,omitempty"`
+
+	// OSReservedGB is what this host measured the operating system and
+	// its resident applications to be holding before any model loads —
+	// hostfit.Host.OSMemoryDeductionGB, i.e. the larger of the flat
+	// OSMemoryAllowanceGB floor and this install's own
+	// total − available reading (#568).
+	//
+	// It is here because it is the term that makes a verdict legible: a
+	// 16 GB Mac told a model needs 11 GB and it has 6 is reading a true
+	// sentence it cannot check, and the missing 10 GB is this number.
+	// A VALUE rather than a sentence — the surfaces word it, which is
+	// the split waired-agent#321 established and DeficitLabel predates.
+	//
+	// Absent when the RAM probe failed, which is not the same as zero:
+	// no host reserves nothing.
+	OSReservedGB int `json:"os_reserved_gb,omitempty"`
+
+	// GPUBudgetMB is the GPU-addressable memory the ollama path may use —
+	// hostfit.Host.OllamaVRAMBudgetMB, the cross-device pool where there
+	// is one (#264) rather than whichever card enumerated first.
+	//
+	// It is what Fit.RequiredWindowResidentMB has to be compared against
+	// to answer the question the rc8 verification found nobody could
+	// answer before spending a download: how much of a coding session's
+	// context cache will NOT be on the graphics card
+	// (waired-ai/waired-agent#632). On the Windows host there, a model
+	// the catalog recommended needed 10719 MB to serve the coding window
+	// against a 8188 MB budget — a 2531 MB shortfall that no surface
+	// mentioned, and the post-install benchmark then measured the result
+	// at 5 tok/s.
+	//
+	// Absent, never zero, when there is no budget to report: a CPU-only
+	// host does not have a small graphics card, it has none, and "0 MB
+	// short" would be a different and false claim.
+	GPUBudgetMB int `json:"gpu_budget_mb,omitempty"`
 }
 
 // CatalogFamily is one row in the tray's catalog submenu. Tray-side
@@ -418,9 +470,19 @@ func (s *Server) loadManifestsForResolve() ([]catalog.Manifest, error) {
 }
 
 func hostFromProfile(hw hardware.Profile) CatalogHost {
-	host := CatalogHost{RAMTotalGB: hw.RAMTotalGB}
+	host := CatalogHost{
+		RAMTotalGB: hw.RAMTotalGB,
+		// The budget the fit rules used, which on Apple Silicon is the
+		// synthesized unified figure and not GPUs[0].VRAMTotalMB — that
+		// one is deliberately 0 there (#625).
+		VRAMTotalMB:   hw.EffectiveVRAMMB(),
+		UnifiedMemory: hw.UnifiedMemory,
+	}
+	if hw.RAMTotalGB > 0 {
+		host.OSReservedGB = hw.HostFit().OSMemoryDeductionGB()
+	}
+	host.GPUBudgetMB = hw.OllamaVRAMBudgetMB()
 	if len(hw.GPUs) > 0 {
-		host.VRAMTotalMB = hw.GPUs[0].VRAMTotalMB
 		host.GPUModel = hw.GPUs[0].Model
 	}
 	return host
