@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Status is the verdict.
@@ -50,6 +51,141 @@ type Event struct {
 	ID int
 	// Message is the raw text, already trimmed.
 	Message string
+	// When is the time the platform recorded for this record, where it
+	// has one (Windows). Zero on the Unix collectors, whose evidence is
+	// current-state properties rather than dated records — recentEvents
+	// keeps zero-valued entries for exactly that reason.
+	When time.Time
+}
+
+// EventField is one EventData entry from a Windows event record. Name is
+// the provider manifest's name for it ("FileNameBuffer") and is empty when
+// the manifest is not installed, which is why summarizeCodeIntegrity has a
+// positional fallback.
+type EventField struct {
+	Name  string
+	Value string
+}
+
+// recentEvents drops dated records older than cutoff.
+//
+// The Windows service check had no time window at all: it took the 20
+// newest matching records and let the first one explain the current state.
+// On the rc8 host that surfaced a CodeIntegrity block from 2026-06-29 —
+// six weeks and several reinstalls of the service earlier — as the reason
+// a service that was running fine had a ⚠ next to it (#653).
+//
+// The cutoff callers pass is the current boot. A record written before the
+// machine booted cannot describe the state of a service that has only
+// existed since it did, and "blocked at boot" is the case the whole check
+// was written for (#315), so the window covers it exactly.
+//
+// Entries with no timestamp are kept: the Unix collectors report
+// current-state properties, which are always about now.
+func recentEvents(events []Event, cutoff time.Time) []Event {
+	out := events[:0:0]
+	for _, e := range events {
+		if !e.When.IsZero() && e.When.Before(cutoff) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// summarizeCodeIntegrity turns a CodeIntegrity record's EventData into one
+// readable clause.
+//
+// The collector used to join the whole positional array with spaces, so
+// the doctor printed length prefixes, two device paths, four hashes, a
+// policy GUID and a string of zeroes into the middle of a sentence. The
+// prose around it was fine; the tail swamped the terminal (#653).
+//
+// Everything an operator can act on is the blocked file and, when the
+// record names one, the process that tried to load it. Hashes, policy
+// GUIDs and signing-level codes are for someone reading Event Viewer, and
+// that person has the record itself.
+//
+// Named fields are preferred. The positional fallback exists because
+// wevtutil emits bare <Data> elements when the provider manifest is not
+// registered, and it keys on the one thing that is unambiguous in that
+// array: a value shaped like an NT device path.
+func summarizeCodeIntegrity(fields []EventField) string {
+	byName := make(map[string]string, len(fields))
+	var paths []string
+	for _, f := range fields {
+		if f.Name != "" {
+			byName[f.Name] = f.Value
+		}
+		if looksLikeNTPath(f.Value) {
+			paths = append(paths, f.Value)
+		}
+	}
+
+	blocked := byName["FileNameBuffer"]
+	loader := byName["ProcessNameBuffer"]
+	if blocked == "" && len(paths) > 0 {
+		// Positional layout: the blocked file is named before the process
+		// that requested it.
+		blocked = paths[0]
+		if loader == "" && len(paths) > 1 {
+			loader = paths[1]
+		}
+	}
+	switch {
+	case blocked == "":
+		return ""
+	case loader == "":
+		return "blocked " + blocked
+	default:
+		return "blocked " + blocked + ", requested by " + loader
+	}
+}
+
+// eventMessage picks what the doctor quotes for one Windows record.
+//
+// CodeIntegrity records are summarised: their EventData is a positional
+// array of length prefixes, device paths, four hashes, a policy GUID and
+// trailing zeroes, and joining it verbatim is what produced the unreadable
+// bracketed tail in #653. SCM records already carry prose, so they pass
+// through. A summary that comes back empty (an unrecognised layout) falls
+// back to the raw join rather than dropping the evidence entirely.
+//
+// It lives in the untagged file, not next to its only caller in
+// collect_windows.go, so it runs on every CI leg — the Windows evidence
+// this decodes cannot be produced on the Linux leg at all, which is the
+// same reason Explain takes a goos instead of reading runtime.GOOS.
+func eventMessage(id int, fields []EventField, raw string) string {
+	switch id {
+	case winCodeIntegrityBlocked, winCodeIntegrityAudit:
+		if s := summarizeCodeIntegrity(fields); s != "" {
+			return s
+		}
+	}
+	return raw
+}
+
+// parseSystemTime reads a Windows event's RFC3339 timestamp. An
+// unparseable or absent stamp yields the zero time, which recentEvents
+// treats as always relevant — dropping a record because its clock is
+// unreadable would lose the diagnosis this package exists to make.
+func parseSystemTime(v string) time.Time {
+	if v == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// looksLikeNTPath recognises the \Device\HarddiskVolumeN\... form the
+// CodeIntegrity provider writes file names in. Deliberately narrow: the
+// point is to pick paths out of an array that also holds hashes and
+// version strings, not to validate a path.
+func looksLikeNTPath(v string) bool {
+	return strings.HasPrefix(v, `\Device\`) || strings.HasPrefix(v, `\??\`)
 }
 
 // Result is what Explain decides.
@@ -319,11 +455,19 @@ func evidenceOr(events []Event, fallback string) string {
 }
 
 func (e Event) line() string {
+	src := e.Source
+	if src != "" && !e.When.IsZero() {
+		// Minute precision, local time. The provider hands over an
+		// RFC3339 stamp with sub-second digits and a zone offset, which
+		// is more precision than anyone reading a doctor line needs and
+		// was part of what made the old evidence tail unreadable (#653).
+		src = fmt.Sprintf("%s (%s)", src, e.When.Local().Format("2006-01-02 15:04"))
+	}
 	switch {
-	case e.Source != "" && e.ID != 0:
-		return fmt.Sprintf("%s event %d: %s", e.Source, e.ID, e.Message)
-	case e.Source != "":
-		return e.Source + ": " + e.Message
+	case src != "" && e.ID != 0:
+		return fmt.Sprintf("%s event %d: %s", src, e.ID, e.Message)
+	case src != "":
+		return src + ": " + e.Message
 	default:
 		return e.Message
 	}
