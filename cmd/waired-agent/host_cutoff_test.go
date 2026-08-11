@@ -82,6 +82,9 @@ type hostCutoffEngine struct {
 	// the sampler or the widen-and-retry.
 	answers []map[string]any
 	serving []string
+	// resident is what /api/ps reports as loaded. Empty is the ordinary
+	// case; an entry is a model occupying the host while it is measured.
+	resident []string
 	// block, when non-nil, holds every /api/generate until it is closed —
 	// a slow engine, which is what the host this measures actually is.
 	block chan struct{}
@@ -97,6 +100,15 @@ func (e *hostCutoffEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		e.mu.Unlock()
 		body, _ := json.Marshal(map[string]any{"models": entries})
+		_, _ = w.Write(body)
+	case "/api/ps":
+		e.mu.Lock()
+		loaded := make([]map[string]any, 0, len(e.resident))
+		for _, tag := range e.resident {
+			loaded = append(loaded, map[string]any{"name": tag, "size_vram": 1 << 30})
+		}
+		e.mu.Unlock()
+		body, _ := json.Marshal(map[string]any{"models": loaded})
 		_, _ = w.Write(body)
 	case "/api/generate":
 		raw, _ := io.ReadAll(r.Body)
@@ -434,6 +446,82 @@ func TestMeasureHostCutoff_PublishesTheMedianSampleNotAMedianOfFields(t *testing
 	}
 }
 
+// TestHostCutoffSamplesStraddleBudget is the decision waired-agent#622 asked
+// for, in isolation: the samples disagree about the verdict, not merely about
+// each other.
+//
+// scaledCountersProbe(f) has a turn of ~4.462*f seconds against the 45 s
+// budget, so the line sits at 10.09x: 9x clears it (40.2 s) and 12x misses it
+// (53.5 s).
+func TestHostCutoffSamplesStraddleBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		factors []float64
+		want    bool
+	}{
+		{"all-far-below-the-line", []float64{1, 2, 3}, false},
+		{"all-above-the-line", []float64{30, 40, 50}, false},
+		{"wide-spread-but-all-below", []float64{1, 5, 9}, false},
+		{"straddling-the-line", []float64{9, 12, 9}, true},
+		{"one-slow-run-out-of-three", []float64{1, 1, 30}, true},
+		{"nothing-measured", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			samples := make([]hostfit.HostProbe, 0, len(tc.factors))
+			for _, f := range tc.factors {
+				samples = append(samples, scaledCountersProbe(f))
+			}
+			if got := hostCutoffSamplesStraddleBudget(samples); got != tc.want {
+				t.Errorf("= %v, want %v (turns %v against a %.0f s budget)",
+					got, tc.want, tc.factors, hostfit.HostCutoffTurnBudgetSeconds)
+			}
+		})
+	}
+}
+
+// End to end: samples that disagree about the budget buy more samples, so the
+// answer stops being decided by whichever run happened to be the middle one.
+func TestMeasureHostCutoff_SamplesThatStraddleTheBudgetBuyMoreSamples(t *testing.T) {
+	p, eng, _ := hostCutoffProviderAnswering(t, []map[string]any{
+		calibrationCounters,
+		scaledCounters(9), scaledCounters(12), scaledCounters(9),
+		scaledCounters(9), scaledCounters(9),
+	}, 0)
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement")
+	}
+
+	if got := len(eng.generateBodies()); got != hostCutoffStraddleSampleCount+1 {
+		t.Fatalf("/api/generate requests = %d, want %d — three samples that disagreed about "+
+			"the budget must not be the whole of the defence",
+			got, hostCutoffStraddleSampleCount+1)
+	}
+	got := p.hostSpeedNow()
+	if got == nil || got.Samples != hostCutoffStraddleSampleCount {
+		t.Fatalf("samples = %v, want %d", got, hostCutoffStraddleSampleCount)
+	}
+}
+
+// The other half, and the one that keeps this affordable: a host nowhere near
+// the line pays nothing for it, however much its samples disagree. That was
+// the host #622 was found on — spread 106%, verdict never in doubt.
+func TestMeasureHostCutoff_ADisagreementFarFromTheLineCostsNothing(t *testing.T) {
+	p, eng, _ := hostCutoffProviderAnswering(t, []map[string]any{
+		calibrationCounters, scaledCounters(3), scaledCounters(1), scaledCounters(2),
+	}, 0)
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement")
+	}
+
+	if got := len(eng.generateBodies()); got != benchSampleCount+1 {
+		t.Fatalf("/api/generate requests = %d, want %d — samples 3x apart but all an order of "+
+			"magnitude inside the budget change no answer", got, benchSampleCount+1)
+	}
+	if pub := p.hostSpeedNow(); pub == nil || pub.SpreadPct <= 0 {
+		t.Fatalf("spread_pct = %v, want a positive dispersion still recorded", pub)
+	}
+}
+
 // scaledCountersProbe is what scaledCounters(factor) measures, as the
 // policy layer sees it.
 func scaledCountersProbe(factor float64) hostfit.HostProbe {
@@ -658,6 +746,187 @@ func TestEnsureHostSpeedMeasured_AnUpgradeReMeasures(t *testing.T) {
 	if got, err := state.ReadHostSpeed(p.stateDir); err != nil || got.AgentVersion != buildinfo.Version {
 		t.Fatalf("stored agent_version = %q after the re-measure, want %q (%v)",
 			got.AgentVersion, buildinfo.Version, err)
+	}
+}
+
+// TestResidentBlocksMeasurement covers both engine ownerships, which the
+// integration tests cannot: an adapter only learns it adopted an engine by
+// finding a real exact-pin orphan at EnsureRunning time.
+//
+// PRODUCT CONTRACT for the adopted arm (waired#1139: the re-measurement is
+// structurally contaminated by the resident serving model; host_memory.go's
+// rule that "a resident model is never charged against the very host that
+// serves it"). The spawned arm is the other half and is just as load-bearing:
+// infruntime.MaxResidentModels reaches an engine we spawned, so its probe
+// evicts and the reading is clean — blocking there would stop every host with
+// a serving model from ever measuring.
+func TestResidentBlocksMeasurement(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      infruntime.EngineMode
+		resident  []string
+		wantName  string
+		wantBlock bool
+	}{
+		{"adopted-with-a-resident-model", infruntime.EngineModeAdopted, []string{"qwen3.6:35b-a3b"}, "qwen3.6:35b-a3b", true},
+		{"adopted-with-nothing-loaded", infruntime.EngineModeAdopted, nil, "", false},
+		{"adopted-ignores-a-nameless-row", infruntime.EngineModeAdopted, []string{""}, "", false},
+		{"spawned-with-a-resident-model", infruntime.EngineModeSpawned, []string{"qwen3.6:35b-a3b"}, "", false},
+		{"spawned-with-nothing-loaded", infruntime.EngineModeSpawned, nil, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name, block := residentBlocksMeasurement(tc.mode, tc.resident)
+			if name != tc.wantName || block != tc.wantBlock {
+				t.Errorf("= (%q, %v), want (%q, %v)", name, block, tc.wantName, tc.wantBlock)
+			}
+		})
+	}
+}
+
+// The spawned arm, end to end: a model sitting in /api/ps must not stop the
+// measurement, because the cap makes the probe evict it. This is the
+// regression the guard above could plausibly cause — a host that serves a
+// model is the normal host, and it would simply stop publishing a figure.
+func TestEnsureHostSpeedMeasured_AResidentModelDoesNotBlockASpawnedEngine(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	eng.mu.Lock()
+	eng.resident = []string{"qwen3.6:35b-a3b"}
+	eng.mu.Unlock()
+
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("a resident model stood down the measurement on an engine this agent spawned")
+	}
+}
+
+// The serving model goes back after the measurement. The cap makes the probe
+// evict whatever was loaded and the probe unloads itself with keep_alive:0,
+// so without this a host is cold from the measurement until its next request
+// pays a multi-GB load — the cost waired-agent#320 exists to remove.
+func TestEnsureHostSpeedMeasured_PutsTheServingModelBack(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p) // warmTarget declines unless the engine reports ready
+	if err := p.store.Update(func(s *catalog.State) {
+		s.Models["model-a"] = catalog.ModelState{
+			State: catalog.ModelStateReady, VariantID: "q4", OllamaTag: "a:q4",
+		}
+		s.Active = &catalog.ActiveSelection{Runtime: catalog.RuntimeOllama, ModelID: "model-a"}
+	}); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	if v := p.ensureHostSpeedMeasured(context.Background(), p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement to warm after")
+	}
+
+	// The warm is detached from this call on purpose (a cold multi-GB load
+	// must not be inside the install's window), so poll for it.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		warmed := false
+		for _, b := range eng.generateBodies() {
+			if b["model"] == "a:q4" && b["keep_alive"] == infruntime.OllamaKeepAlive {
+				warmed = true
+			}
+		}
+		if warmed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the serving model was never re-loaded after the measurement: %+v",
+				eng.generateBodies())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// PRODUCT CONTRACT (owner ruling 2026-08-09, waired-agent#599: a re-run of
+// `waired init` replays the whole install conversation, "各種のベンチマークや
+// ゲートも新規インストールと同じように設定する"). Without this the stored
+// figure is kept for the life of the install, which is how three machines came
+// to be carrying a measurement of a residency rather than of a host, with no
+// way to retake it short of an upgrade (waired#1140).
+func TestRemeasure_AReRunTakesAFreshMeasurement(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("first call did not measure")
+	}
+	afterFirst := len(eng.generateBodies())
+
+	// The next daemon start on the same state dir: it finds a usable stored
+	// figure and measures nothing, which is the state a re-run days later
+	// actually meets.
+	next := &agentInferenceProvider{
+		ollama: p.ollama, manifests: p.manifests, stateDir: p.stateDir, store: p.store,
+		cfg: p.cfg, profiler: p.profiler, logger: p.logger, agentCtx: p.agentCtx,
+		ollamaUsable: p.ollamaUsable,
+	}
+	if v := next.ensureHostSpeedMeasured(ctx, next.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the stored figure was not reused")
+	}
+	if got := len(eng.generateBodies()); got != afterFirst {
+		t.Fatalf("/api/generate requests = %d, want %d — a boot with a usable figure measures nothing",
+			got, afterFirst)
+	}
+
+	if !next.Remeasure(ctx) {
+		t.Fatal("Remeasure declined on a daemon that had not measured in this process")
+	}
+	next.waitForPulls()
+	if got := len(eng.generateBodies()); got <= afterFirst {
+		t.Fatalf("/api/generate requests = %d after the ask, want more than %d", got, afterFirst)
+	}
+}
+
+// The other half, and the constraint it protects: a fresh install measured
+// seconds before `waired init` reaches step 6, and measuring the same host
+// twice in one install is what
+// docs/decisions/20260807/1700-host-speed-is-an-install-time-step.md rules
+// out — three minutes becomes six on exactly the slow hosts the measurement
+// exists to identify.
+func TestRemeasure_AFreshInstallReusesWhatTheBootstrapTook(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the bootstrap measurement did not happen")
+	}
+	afterBootstrap := len(eng.generateBodies())
+
+	if p.Remeasure(ctx) {
+		t.Error("Remeasure started a second measurement in the same install")
+	}
+	p.waitForPulls()
+	if got := len(eng.generateBodies()); got != afterBootstrap {
+		t.Fatalf("/api/generate requests = %d, want %d — no second measurement in one install",
+			got, afterBootstrap)
+	}
+}
+
+// The force is consumed, not latched: one request must not turn the host into
+// one that re-measures on every boot for the rest of the install.
+func TestRemeasure_TheRequestIsConsumedOnce(t *testing.T) {
+	p, eng, _ := hostCutoffProvider(t, gpuCounters, 0)
+	hostCutoffEngineUp(t, p)
+	ctx := context.Background()
+
+	p.hostSpeedForce.Store(true)
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("no measurement")
+	}
+	afterForced := len(eng.generateBodies())
+	if p.hostSpeedForce.Load() {
+		t.Error("the force flag survived the measurement it asked for")
+	}
+
+	if v := p.ensureHostSpeedMeasured(ctx, p.hostSpeedMeasureWindow()); !v.Decided {
+		t.Fatal("the second call lost the figure")
+	}
+	if got := len(eng.generateBodies()); got != afterForced {
+		t.Fatalf("/api/generate requests = %d, want %d — the force must not latch", got, afterForced)
 	}
 }
 

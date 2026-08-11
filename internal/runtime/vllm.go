@@ -298,6 +298,10 @@ func (a *VLLMAdapter) EnsureRunning(ctx context.Context) (err error) {
 // commandArgs builds the `python -m vllm.entrypoints.openai.api_server ...`
 // argv. Order matches plan §3.1: -m first so the args after it are
 // the entry-point's flags.
+//
+// The single --model below is also how this adapter satisfies
+// MaxResidentModels: one api_server process holds one model, so vLLM has no
+// equivalent of ollama's OLLAMA_MAX_LOADED_MODELS to set.
 func (a *VLLMAdapter) commandArgs() []string {
 	args := []string{
 		"-m", "vllm.entrypoints.openai.api_server",

@@ -722,6 +722,12 @@ var ollamaTuningKeys = []string{
 	"OLLAMA_FLASH_ATTENTION",
 }
 
+// ollamaMaxLoadedModelsEnv caps how many models `ollama serve` keeps
+// resident (MaxResidentModels). Deliberately NOT in ollamaTuningKeys: it is
+// not part of the #621 per-model tuning, and adding it there would drop the
+// operator's own value whenever any tuning was computed.
+const ollamaMaxLoadedModelsEnv = "OLLAMA_MAX_LOADED_MODELS"
+
 // serve`, derived from the parent process env plus the spec-mandated
 // overrides and the GPU-backend selection (#290). Any inherited env var
 // whose key we set ourselves is dropped from the base so our value wins
@@ -792,6 +798,22 @@ func (a *OllamaAdapter) processEnv() []string {
 		"OLLAMA_NO_CLOUD=1",
 		"OLLAMA_KEEP_ALIVE="+OllamaKeepAlive,
 	)
+	// MaxResidentModels, delivered. Emitted HERE and not by ollamaTuning.Env()
+	// even though it is a serve variable: a tuning only exists once a serve
+	// target resolves, and the host-speed measurement this cap exists to
+	// protect runs on hosts that have no target yet (a fresh install boots on
+	// an untuned plan). An engine-wide invariant does not belong to the
+	// per-model tuning that happens to be computed alongside it.
+	//
+	// The operator keeps the last word, read explicitly rather than left to
+	// the child's first-vs-last duplicate resolution: this key is absent from
+	// the drop set precisely so an /etc/waired/agent.env line survives in
+	// base, and appending ours unconditionally would put two values in front
+	// of getenv. Set-but-empty is the opt-out — it asks for the engine's own
+	// default, so nothing is added back.
+	if _, operatorSet := os.LookupEnv(ollamaMaxLoadedModelsEnv); !operatorSet {
+		out = append(out, fmt.Sprintf("%s=%d", ollamaMaxLoadedModelsEnv, MaxResidentModels))
+	}
 	if a.cfg.ModelsDir != "" {
 		out = append(out, "OLLAMA_MODELS="+a.cfg.ModelsDir)
 	}

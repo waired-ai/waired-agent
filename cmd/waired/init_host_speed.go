@@ -24,16 +24,22 @@ var (
 	// behind it dwarfs it either way. Vars so tests do not wait.
 	hostSpeedAskWait = 20 * time.Minute
 	hostSpeedAskPoll = 2 * time.Second
+	// hostSpeedNarrateEvery is how often the wait says it is still going
+	// (waired-agent#623). 30 s is short enough that the gap never reads as a
+	// hang and long enough that a six-minute measurement produces a dozen
+	// lines rather than a wall of them.
+	hostSpeedNarrateEvery = 30 * time.Second
 )
 
 // hostSpeedPoll is one status read: the measurement (with the
 // TurnedInferenceOff claim already cross-checked against the toggle,
 // exactly as fetchHostSpeed does) plus the two states the guards read.
 type hostSpeedPoll struct {
-	hs           *management.HostSpeedStatus
-	desiredState string
-	subState     string
-	ok           bool
+	hs              *management.HostSpeedStatus
+	desiredState    string
+	desiredStateSet bool
+	subState        string
+	ok              bool
 }
 
 func readHostSpeedPoll(mgmt string) hostSpeedPoll {
@@ -56,7 +62,27 @@ func readHostSpeedPoll(mgmt string) hostSpeedPoll {
 	if s.HostSpeed != nil && s.DesiredState != string(state.InferenceDisabled) {
 		s.HostSpeed.TurnedInferenceOff = false
 	}
-	return hostSpeedPoll{hs: s.HostSpeed, desiredState: s.DesiredState, subState: s.SubsystemState, ok: true}
+	return hostSpeedPoll{
+		hs: s.HostSpeed, desiredState: s.DesiredState, desiredStateSet: s.DesiredStateSet,
+		subState: s.SubsystemState, ok: true,
+	}
+}
+
+// requestHostSpeedRemeasure asks the daemon to re-take the install-time
+// measurement (waired-agent#599). Returns whether one was started, which
+// only the tests read — the flow behaves the same either way, because a
+// declined request means the figure it is about to wait for is already this
+// install's own.
+func requestHostSpeedRemeasure(mgmt string) bool {
+	body, err := httpPost(mgmt+"/waired/v1/inference/host-speed/remeasure", nil)
+	if err != nil {
+		return false
+	}
+	var resp management.HostSpeedRemeasureResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return false
+	}
+	return resp.Started
 }
 
 // confirmHostSpeedBudget runs step 6. It never fails an install: every
@@ -83,8 +109,23 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 		return true
 	}
 
+	// Ask for a fresh figure before waiting for one. A re-run of `waired
+	// init` replays the whole install conversation, benchmarks and gates
+	// included (owner ruling 2026-08-09, waired-agent#599), and the stored
+	// figure is otherwise kept for the life of the install — which is how
+	// three machines came to be carrying a measurement that described a
+	// resident model rather than a host, with no way to retake it short of
+	// an upgrade (waired#1140).
+	//
+	// Best-effort and ignored on every failure, like every other read of
+	// this route: an older daemon answers 404, and the wait below then
+	// behaves exactly as it did before. The daemon declines by itself on a
+	// fresh install, where it measured seconds ago.
+	requestHostSpeedRemeasure(mgmtURL)
+
 	deadline := time.Now().Add(hostSpeedAskWait)
 	narrated := false
+	var narratedAt, saidAt time.Time
 	misses := 0
 	var p hostSpeedPoll
 	for {
@@ -118,7 +159,23 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 			if !narrated {
 				writePromptf(out, "%s Measuring how fast this computer runs AI — one-time, a few minutes…\n",
 					emo("⏱", "*"))
-				narrated = true
+				narrated, narratedAt, saidAt = true, time.Now(), time.Now()
+			} else if time.Since(saidAt) >= hostSpeedNarrateEvery {
+				// The wait is deliberate (waired#1099: measure before
+				// recommending), but a one-shot line in front of it cannot
+				// tell a working measurement from a hung one. Six minutes
+				// and forty-five seconds of it were captured through a PTY
+				// on a real install, with no spinner, no heartbeat and no
+				// bytes (waired-agent#623) — and the wait is longest on
+				// exactly the hosts this measurement exists to identify.
+				//
+				// A plain line rather than a spinner: this output is read
+				// through script(1) and CI transcripts as often as by a
+				// person, and elapsed time is the thing that distinguishes
+				// slow from stuck.
+				writePromptf(out, "   still measuring — %s so far\n",
+					time.Since(narratedAt).Round(time.Second))
+				saidAt = time.Now()
 			}
 		}
 		if time.Now().After(deadline) {
@@ -143,6 +200,25 @@ func confirmHostSpeedBudget(mgmtURL string, inf daemonInitInference, nonInteract
 		writePrompt(out, hostSpeedBelowSpecLine)
 		for _, line := range hostSpeedComparisonLines(hs, "  ") {
 			writePrompt(out, line)
+		}
+		// A toggle somebody wrote is an answer, and there is nobody here to
+		// ask whether they meant it. Interactive re-runs still ask — a
+		// re-run replays the whole install conversation, gates included
+		// (owner ruling 2026-08-09, waired-agent#599) — but the ruling is
+		// about asking, and this arm cannot ask.
+		//
+		// TurnedInferenceOff excludes the one "written" toggle nobody chose:
+		// the cutoff's own silent default. That is the case step 6 exists
+		// for, and it must keep reaching the arm below.
+		//
+		// #465 / waired#1056 is the rule this restores — the daemon's cutoff
+		// has always stood down on a written toggle (hostCutoffIsStillOurs),
+		// and until waired#1142 this step could not tell a written one from
+		// the live default, so it honoured only "off".
+		if p.desiredStateSet && !hs.TurnedInferenceOff {
+			writePromptf(out, "%s Non-interactive: leaving local\ninference on, because it was turned on here. "+
+				"Turn it off with `waired inference off`.\n", hostSpeedNotRecommendedLine)
+			return true
 		}
 		writePromptf(out, "%s Non-interactive: turning local\ninference off. Re-enable with `waired inference on`.\n",
 			hostSpeedNotRecommendedLine)

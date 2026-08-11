@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: ebfd933fccea3f6f
+sourceHash: 3158eef6f5fb7b42
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -373,6 +373,10 @@ Downloading qwen3.6-27b: 41%  6.7 GB / 16.3 GB (44 MB/s)
 はコーディングの質問 1 往復の所要時間で、セットアップ中に小さい代役モデルで
 計測したものです。パソコン同士を比較できます。*Model* は実際に選んだモデルが
 語を生成する速さです。速いパソコンでも重いモデルと組み合わせることはできます。
+
+Speed の計測はインストール時に 1 回、そして Waired の更新時にもう一度走ります。
+取り直したいとき — メモリやグラフィックボードを増設したあとなど — は
+`waired init` を再実行してください。
 </Expected>
 
 <Expected>

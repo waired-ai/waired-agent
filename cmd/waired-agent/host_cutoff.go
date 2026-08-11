@@ -53,6 +53,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
@@ -399,6 +400,58 @@ func (p *agentInferenceProvider) engineIsQuiet(ctx context.Context) bool {
 	return p.ollama.Health(ctx).State == infruntime.StateReady
 }
 
+// residentOnAnAdoptedEngine names a model already loaded in an engine this
+// agent did not spawn, and reports whether there is one.
+//
+// It answers only for adopted engines because that is the only case the
+// question changes anything. infruntime.MaxResidentModels rides the serve
+// environment, so on an engine this agent started the probe's own request
+// evicts what is loaded and the reading is clean whatever /api/ps says here.
+// An adopted engine keeps the environment of the run that spawned it.
+//
+// Residency is deliberately NOT part of engineIsQuiet: that is a wait loop,
+// and a serving model held at OLLAMA_KEEP_ALIVE=60m would make every host
+// with a model wait out hostSpeedSettleWait and never measure. This is a
+// check, like host_memory.go's engineListening.
+func (p *agentInferenceProvider) residentOnAnAdoptedEngine(ctx context.Context) (string, bool) {
+	if p == nil || p.ollama == nil {
+		return "", false
+	}
+	mode := p.ollama.Mode()
+	if mode != infruntime.EngineModeAdopted {
+		// Nothing /api/ps could say would change the answer, so do not ask.
+		return "", false
+	}
+	var ps psResponse
+	if err := getJSON(ctx, &http.Client{}, p.ollama.BaseURL()+"/api/ps", probeHTTPTimeout, &ps); err != nil {
+		// Unreadable /api/ps is not evidence of residency, and refusing to
+		// measure on it would turn a transient engine hiccup into a host
+		// that never publishes a figure at all.
+		return "", false
+	}
+	names := make([]string, 0, len(ps.Models))
+	for _, m := range ps.Models {
+		names = append(names, m.Name)
+	}
+	return residentBlocksMeasurement(mode, names)
+}
+
+// residentBlocksMeasurement is the decision inside residentOnAnAdoptedEngine,
+// separated from the /api/ps read so both engine ownerships are testable
+// without one — an adapter only learns it adopted an engine by finding a real
+// orphan at EnsureRunning time.
+func residentBlocksMeasurement(mode infruntime.EngineMode, resident []string) (string, bool) {
+	if mode != infruntime.EngineModeAdopted {
+		return "", false
+	}
+	for _, name := range resident {
+		if name != "" {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // engineQuietForBench is engineIsQuiet as the boot/explicit benchmark
 // asks it (BenchDeps.EngineQuiet, #582/#601). Same question — is anything
 // about to take the engine away — with one difference at the nil end.
@@ -501,6 +554,18 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 			"stored_turn_seconds", fmt.Sprintf("%.1f", stored.TurnSeconds),
 			"stored_turn_floor_seconds", fmt.Sprintf("%.1f", stored.TurnFloorSeconds))
 	}
+	// An install-flow re-run asked for a fresh figure (Remeasure). Consumed
+	// unconditionally — before the arms below can short-circuit past it — so
+	// one request cannot latch this host into re-measuring on every boot: a
+	// call that finds nothing stored measures anyway, and would otherwise
+	// leave the flag standing for the next one.
+	forced := p.hostSpeedForce.CompareAndSwap(true, false)
+	if ok && forced {
+		p.logger.Info("host speed: re-measuring, the install flow asked for a fresh figure",
+			"stored_turn_seconds", fmt.Sprintf("%.1f", stored.TurnSeconds),
+			"agent_version", buildinfo.Version)
+		ok = false
+	}
 	if ok && storedBy != buildinfo.Version {
 		// Same engine, different agent build: this is an upgrade, and an
 		// upgrade re-measures. Logged rather than silent because it is the
@@ -513,6 +578,26 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	if ok {
 		p.logger.Info("host speed: reusing the measurement already taken by this install",
 			append(cached.logArgs(), "engine_version", engineVersion)...)
+		return cached
+	}
+
+	// A resident model this probe cannot displace makes the reading describe
+	// the residency instead of the host, so keep what we have and try on a
+	// later boot (waired#1139). Same answer host_memory.go gives to the same
+	// question, and for the same reason: "a resident model is never charged
+	// against the very host that serves it".
+	//
+	// Only ADOPTED engines reach this. On an engine this agent spawned,
+	// infruntime.MaxResidentModels is in its environment and the probe's own
+	// request evicts whatever is loaded — that is what makes the reading
+	// clean, measured at 4.4376 s capped against 40.9954 s uncapped on the
+	// same host (waired-agent#644). An adopted engine was started by a
+	// previous run and its environment is not ours to set, which is the same
+	// limit waired-agent#320 records for OLLAMA_KEEP_ALIVE.
+	if resident, busy := p.residentOnAnAdoptedEngine(ctx); busy {
+		p.logger.Info("host speed: an adopted engine is holding a model this measurement cannot displace; "+
+			"keeping the previous measurement and trying on a later start",
+			"resident_model", resident, "engine_version", engineVersion)
 		return cached
 	}
 
@@ -532,6 +617,19 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 			"model", hostfit.HostCutoffProbeModelID, "err", err)
 		return hostSpeedVerdict{}
 	}
+
+	// Put the serving model back afterwards. infruntime.MaxResidentModels is
+	// what makes this measurement honest, and the way it does that is by
+	// having the probe EVICT whatever was loaded; the probe then unloads
+	// itself with keep_alive:0, so a host that was warm before this call is
+	// cold after it and the next real request pays a multi-GB load — the
+	// exact cost waired-agent#320 exists to remove.
+	//
+	// Deferred, so it also covers the arms below that return on an error
+	// after the probe has already run. Cheap where nothing was evicted:
+	// warmServingModel is single-flight and reads /api/ps before deciding to
+	// load anything.
+	defer p.warmServingModel()
 
 	m, err := measureHostCutoff(ctx, hostCutoffDeps{
 		BaseURL:     p.ollama.BaseURL(),
@@ -651,7 +749,36 @@ func (p *agentInferenceProvider) ensureHostSpeedMeasured(ctx context.Context, wi
 	p.hostSpeedAgentVersion = buildinfo.Version
 	p.persistHostSpeedLocked(false)
 	p.hostSpeedMu.Unlock()
+	p.hostSpeedTakenHere.Store(true)
 	return verdict
+}
+
+// Remeasure re-takes the install-time measurement for a re-run of the
+// install flow (management.HostSpeedController, waired-agent#599). It
+// returns as soon as the work is admitted — the measurement is minutes of
+// engine time, and the caller polls the status route for the figure.
+//
+// A process that has already measured declines, and that is the whole of
+// the "same host, twice, in one install" guard: on a fresh install the
+// engine bootstrap measures seconds before `waired init` reaches step 6, so
+// the ask arrives against a figure this daemon just took. A re-run days
+// later reaches a daemon whose boot found a usable stored figure and
+// measured nothing, so the ask goes through.
+func (p *agentInferenceProvider) Remeasure(ctx context.Context) bool {
+	if p == nil || p.ollama == nil {
+		return false
+	}
+	if p.hostSpeedTakenHere.Load() {
+		p.logger.Info("host speed: the install flow asked for a fresh figure; " +
+			"reusing the one this daemon already took")
+		return false
+	}
+	p.hostSpeedForce.Store(true)
+	// Not the caller's context: net/http cancels a request context the
+	// moment the response is written, and this outlives the response by
+	// minutes (the same rule PullModel states for downloads).
+	p.startHostSpeedMeasurement(p.backgroundCtx())
+	return true
 }
 
 // hostSpeedStillApplies reports whether a stored measurement describes
@@ -780,6 +907,22 @@ func (p *agentInferenceProvider) ensureHostCutoffProbeModel(ctx context.Context,
 // An unreadable state dir reads as "unset", which costs at most one
 // re-measure; refusing to measure at all on a read error would be the
 // worse failure, since a fresh install's file is legitimately absent.
+// desiredInferenceStateSet reports whether the local-inference toggle has
+// been written on this host at all — the same read hostCutoffIsStillOurs
+// makes below, without the log line, for the callers that only need the fact.
+//
+// An unreadable file answers "not set", which is the conservative direction
+// here: it makes a caller treat the state as a default rather than as
+// somebody's answer, and the only caller that acts on it (install-flow step 6,
+// waired#1142) then asks rather than assuming.
+func (p *agentInferenceProvider) desiredInferenceStateSet() bool {
+	if p == nil {
+		return false
+	}
+	written, err := state.ReadDesiredInferenceState(p.stateDir)
+	return err == nil && written != ""
+}
+
 func (p *agentInferenceProvider) hostCutoffIsStillOurs() bool {
 	desired, err := state.ReadDesiredInferenceState(p.stateDir)
 	if err != nil {

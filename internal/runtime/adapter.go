@@ -27,6 +27,27 @@ const (
 	StateStopped    = "stopped"
 )
 
+// MaxResidentModels is how many models an engine may hold in (V)RAM at
+// once. One, by owner decision (2026-08-10, waired-agent#644).
+//
+// What settled it, on a 24 GB host already serving a 21 GB model: the
+// install-time speed probe measured 4.4376 s with the cap and 40.9954 s
+// without it, minutes apart on the same build. Uncapped, the serving model
+// held 97.9% of the GPU and the 3.66 GB probe got 0.86 GB of VRAM; capped,
+// the serving model was evicted and the probe ran entirely on the GPU.
+// Shrinking the probe instead does not work — measured at three context
+// sizes, it spilled 74-81% every time while the serving model owned the
+// GPU. Capping residency was the only lever that moved the number.
+//
+// Delivered per engine, because the engines differ in kind rather than in
+// setting:
+//   - ollama serves many models from one process, so it is an env var
+//     (OllamaAdapter.processEnv).
+//   - vLLM already satisfies this: the api_server is launched with a single
+//     --model and holds exactly one per process (VLLMAdapter.commandArgs),
+//     so there is nothing to set.
+const MaxResidentModels = 1
+
 // Health is one snapshot of an adapter's state.
 type Health struct {
 	State   string    `json:"state"`

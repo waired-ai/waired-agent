@@ -136,6 +136,20 @@ type InferenceStatus struct {
 	// independently of SubsystemState (which describes engine health).
 	DesiredState string `json:"desired_state,omitempty"`
 
+	// DesiredStateSet reports whether that intent was actually WRITTEN on
+	// this host — by the CLI, the tray, the browser wizard, the management
+	// API, --inference-enabled, or the host cutoff standing local inference
+	// down. False means nobody and nothing has moved this toggle, and
+	// DesiredState above is only reporting the live default.
+	//
+	// The two cannot be collapsed. A host above the recommended spec starts
+	// enabled without writing anything, so "enabled" alone cannot tell a
+	// person's answer from a default — and install-flow step 6 needs exactly
+	// that distinction to know whose choice it would be overriding
+	// (waired#1142). The daemon's own cutoff has always read the file
+	// directly for the same reason (hostCutoffIsStillOurs).
+	DesiredStateSet bool `json:"desired_state_set,omitempty"`
+
 	// ShareWithMesh surfaces the operator's persisted choice for
 	// whether the local inference engine is exposed to mesh peers
 	// ("shared" | "not_shared"). Empty when the daemon has no
