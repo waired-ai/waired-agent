@@ -41,6 +41,27 @@ func LoadOrCreateGatewayToken(path string) (string, error) {
 		if !validGatewayToken(token) {
 			return "", fmt.Errorf("integration: %s does not contain a valid gateway token", path)
 		}
+		// The file must exist whether or not the Keychain answered
+		// first, because the comment above is a promise the rest of the
+		// system relies on: env.sh `cat`s this path (#261) and `waired
+		// doctor` stats it.
+		//
+		// On darwin securestore.Read is Keychain-first, and a Keychain
+		// item outlives the state dir — logout wiped machine-key,
+		// access-token and refresh-token but not this one, so a
+		// `--clean` reinstall hit a Keychain hit and returned without
+		// ever writing the file. That is why a freshly init'd macOS host
+		// had access_token, node.key and refresh_token in secrets/ (all
+		// written through the dual-writing securestore.Write) and no
+		// gateway-token at all, with doctor pointing at `waired link`
+		// forever (#654).
+		if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
+			// Best-effort: the caller already has a usable token, and
+			// failing here would take a working gateway down over a file
+			// the next run can rewrite. Doctor still reports it missing.
+			_ = writeTokenFile(path, token)
+			return token, nil
+		}
 		// Defensive reperm: a token leaked through a wide mode is
 		// treated as a host hygiene issue we silently fix.
 		_ = os.Chmod(path, 0o600)

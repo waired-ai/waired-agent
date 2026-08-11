@@ -14,6 +14,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/deauth"
 	"github.com/waired-ai/waired-agent/internal/identity"
+	"github.com/waired-ai/waired-agent/internal/integration"
 	"github.com/waired-ai/waired-agent/internal/platform/keychain"
 	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
@@ -113,6 +114,16 @@ func runLogoutBody(stateDir string, yes, local, serverOnly, revoke bool) error {
 	// and the file, so a stale Keychain item can't resurrect a logged-out
 	// credential on the next read. p.RefreshToken is included here so
 	// secrets/ is fully wiped — it was previously left behind.
+	//
+	// The gateway token is here for the same reason, added by #654: it was
+	// the one Keychain-backed secret this list missed, so it survived a
+	// `--clean` uninstall and the next install's LoadOrCreateGatewayToken
+	// read it back out of the Keychain — a new device serving the old
+	// device's Bearer token.
+	ip, err := integration.PathsUnder(stateDir)
+	if err != nil {
+		return fmt.Errorf("paths: %w", err)
+	}
 	keychainTargets := []struct {
 		item keychain.Item
 		path string
@@ -120,6 +131,7 @@ func runLogoutBody(stateDir string, yes, local, serverOnly, revoke bool) error {
 		{keychain.Item{Account: securestore.Account, Service: securestore.ServiceMachineKey}, p.MachineKey},
 		{keychain.Item{Account: securestore.Account, Service: securestore.ServiceAccessToken}, p.AccessToken},
 		{keychain.Item{Account: securestore.Account, Service: securestore.ServiceRefreshToken}, p.RefreshToken},
+		{keychain.Item{Account: securestore.Account, Service: securestore.ServiceGatewayToken}, ip.GatewayToken},
 	}
 	for _, kt := range keychainTargets {
 		if err := securestore.Remove(kt.item, kt.path); err != nil {
