@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
 )
 
 // Status is the verdict.
@@ -227,10 +229,13 @@ const (
 // are the recent history. A running service still gets its history read,
 // because "it is up now but it was blocked at boot and only started when you
 // logged in and clicked" is a different — and more useful — answer than "OK".
-func Explain(goos string, running bool, events []Event) Result {
+//
+// stateDir is only used to name the agent's log file in a hint, and only
+// on the platforms that have one; "" simply omits the pointer.
+func Explain(goos string, running bool, events []Event, stateDir string) Result {
 	switch goos {
 	case "windows":
-		return explainWindows(running, events)
+		return explainWindows(running, events, stateDir)
 	case "linux":
 		return explainLinux(running, events)
 	case "darwin":
@@ -240,7 +245,27 @@ func Explain(goos string, running bool, events []Event) Result {
 	}
 }
 
-func explainWindows(running bool, events []Event) Result {
+// logHint points at the agent's own log where the platform keeps one.
+//
+// Windows had no such pointer at all until #636 gave it a log file: the
+// Event Log takes WARN and above, so every INFO diagnostic the agent
+// writes was unreachable there, and this check could only say "start it
+// again". Now that there is a file, the hint names it — through
+// logrotate.AgentLogPath, the single definition every surface shares,
+// rather than spelling the path a second time here.
+//
+// Empty on Linux, where there is no file: journalctl is already named in
+// the Linux hints.
+func logHint(goos, stateDir string) string {
+	path := logrotate.AgentLogPath(goos, stateDir)
+	if path == "" {
+		return ""
+	}
+	return " The agent's own log is at " + path + "."
+}
+
+func explainWindows(running bool, events []Event, stateDir string) Result {
+	log := logHint("windows", stateDir)
 	blocked := findEvent(events, winCodeIntegrityBlocked, winCodeIntegrityAudit)
 	startFailed := findEvent(events, winSCMStartFailed)
 
@@ -261,7 +286,7 @@ func explainWindows(running bool, events []Event) Result {
 				"Waired's programs are not signed with a certificate Windows recognises " +
 				"(Smart App Control / an application-control policy).",
 			Hint: "Start it from the Waired menu, or with `" + startCommandWindows + "` " +
-				"from an administrator PowerShell. This can recur at boot until Waired ships signed programs.",
+				"from an administrator PowerShell. This can recur at boot until Waired ships signed programs." + log,
 			Evidence: ev.line(),
 		}
 	}
@@ -270,7 +295,7 @@ func explainWindows(running bool, events []Event) Result {
 		return Result{
 			Status:   statusFor(running, Failed),
 			Cause:    "The Waired background service failed to start.",
-			Hint:     "Start it from the Waired menu; if it fails again, the message below names the reason.",
+			Hint:     "Start it from the Waired menu; if it fails again, the message below names the reason." + log,
 			Evidence: startFailed.line(),
 		}
 	}
@@ -278,7 +303,7 @@ func explainWindows(running bool, events []Event) Result {
 		return Result{
 			Status:   statusFor(running, Failed),
 			Cause:    "The Waired background service took too long to start and Windows gave up on it.",
-			Hint:     "Start it from the Waired menu. If it keeps timing out, run `waired logs` and report it.",
+			Hint:     "Start it from the Waired menu. If it keeps timing out, run `waired logs` and report it." + log,
 			Evidence: ev.line(),
 		}
 	}
@@ -286,7 +311,7 @@ func explainWindows(running bool, events []Event) Result {
 		return Result{
 			Status:   statusFor(running, Failed),
 			Cause:    "The Waired background service stopped unexpectedly.",
-			Hint:     "Windows restarts it automatically; if it stays down, start it from the Waired menu.",
+			Hint:     "Windows restarts it automatically; if it stays down, start it from the Waired menu." + log,
 			Evidence: ev.line(),
 		}
 	}
@@ -340,7 +365,7 @@ func explainDarwin(running bool, events []Event) Result {
 		return Result{
 			Status:   statusFor(running, Failed),
 			Cause:    fmt.Sprintf("The Waired background service exited with an error (status %d).", code),
-			Hint:     "Check /Library/Logs/waired-agent.err.log, or start it from the Waired menu.",
+			Hint:     "Check " + logrotate.AgentLogPath("darwin", "") + ", or start it from the Waired menu.",
 			Evidence: evidenceOr(events, fmt.Sprintf("launchd: last exit code = %d", code)),
 		}
 	}

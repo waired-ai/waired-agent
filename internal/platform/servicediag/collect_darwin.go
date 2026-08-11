@@ -10,6 +10,7 @@ import (
 
 	"os/exec"
 
+	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
 	"github.com/waired-ai/waired-agent/internal/platform/service"
 )
 
@@ -26,7 +27,7 @@ import (
 // to tens of seconds, which is too slow for a diagnostic that runs inside
 // `waired doctor`'s normal output. The daemon's own stderr is already captured
 // to /Library/Logs by the LaunchDaemon plist.
-func Check(ctx context.Context) Result {
+func Check(ctx context.Context, stateDir string) Result {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -38,7 +39,7 @@ func Check(ctx context.Context) Result {
 	if len(events) == 0 {
 		return Result{}
 	}
-	return Explain("darwin", running, events)
+	return Explain("darwin", running, events, stateDir)
 }
 
 // launchctlPrint parses the handful of `key = value` lines we care about out
@@ -74,8 +75,17 @@ const darwinLabel = "com.waired.agent"
 
 // errorLogTail quotes the last few lines the daemon wrote to stderr. The
 // LaunchDaemon plist points StandardErrorPath here.
+//
+// The path comes from logrotate.AgentLogPath rather than a literal: it is
+// the one definition of "where an operator reads the agent's log" that
+// `waired logs`, the tray hint and this check all share (#636), so a
+// change to the layout cannot leave one surface pointing somewhere the
+// file no longer is.
 func errorLogTail() []Event {
-	const path = "/Library/Logs/waired-agent.err.log"
+	path := logrotate.AgentLogPath("darwin", "")
+	if path == "" {
+		return nil
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil

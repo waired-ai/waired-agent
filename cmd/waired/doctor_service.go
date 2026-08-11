@@ -10,8 +10,8 @@ import (
 // checkService probes the OS service manager once. Callers that must not touch
 // the host (tests) pass the zero servicediag.Result instead, which produces no
 // finding.
-func checkService(ctx context.Context) servicediag.Result {
-	return servicediag.Check(ctx)
+func checkService(ctx context.Context, stateDir string) servicediag.Result {
+	return servicediag.Check(ctx, stateDir)
 }
 
 // serviceFindingFromResult maps a service post-mortem into a doctor finding.

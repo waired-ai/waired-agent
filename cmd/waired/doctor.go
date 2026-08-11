@@ -72,7 +72,7 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	defer cancel()
 
 	tray := checkTray()
-	findings := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray, checkService(ctx))
+	findings := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray, checkService(ctx, *stateDir))
 	hasFail := false
 	for _, f := range findings {
 		fmt.Println(formatFinding(f))

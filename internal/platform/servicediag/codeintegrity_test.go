@@ -165,7 +165,7 @@ func TestExplain_WindowsStaleEventExplainsNothing(t *testing.T) {
 		When:    time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC),
 	}}, boot)
 
-	got := Explain("windows", true, events)
+	got := Explain("windows", true, events, "")
 	if got.Status != Healthy {
 		t.Errorf("Status=%v, want Healthy", got.Status)
 	}
