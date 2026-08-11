@@ -1073,7 +1073,7 @@ func applyCatalog(m *MenuModel, c *management.ModelCatalogResponse) {
 	retained := retainedFamilies(c.Families)
 	entries := make([]CatalogEntryView, 0, len(retained))
 	for _, f := range retained {
-		entries = append(entries, formatCatalogEntry(f, c.Engine))
+		entries = append(entries, formatCatalogEntry(f, c.Engine, c.Host))
 	}
 	m.CatalogEntries = entries
 
@@ -1452,7 +1452,7 @@ func familyIndex(families []management.CatalogFamily, match func(management.Cata
 	return -1
 }
 
-func formatCatalogEntry(f management.CatalogFamily, engine string) CatalogEntryView {
+func formatCatalogEntry(f management.CatalogFamily, engine string, host management.CatalogHost) CatalogEntryView {
 	name := f.DisplayName
 	if name == "" {
 		name = f.ModelID
@@ -1462,7 +1462,7 @@ func formatCatalogEntry(f management.CatalogFamily, engine string) CatalogEntryV
 	// then the pick note. Over-capacity rows already spell out the
 	// requirement in their blocked text, so the suffix would be redundant
 	// there.
-	suffix := catalogSpecSuffix(engine, f) + catalogPickNote(f)
+	suffix := catalogSpecSuffix(engine, f) + catalogPickNote(f) + catalogSpillNote(host, f)
 	switch {
 	case f.Active:
 		e.Label = "● " + name + suffix
@@ -1482,8 +1482,58 @@ func formatCatalogEntry(f management.CatalogFamily, engine string) CatalogEntryV
 	default:
 		e.Label = name + suffix
 	}
-	e.Tooltip = catalogSpecTooltip(engine, f)
+	e.Tooltip = catalogSpecTooltip(engine, f, host)
 	return e
+}
+
+// catalogSpillMB is how much of a full coding session this computer
+// cannot keep on the graphics card: what the model needs to serve the
+// coding window, less the memory the engine may address there.
+//
+// Both figures come from the catalog response, so this is arithmetic
+// rather than a second opinion. 0 for a row that fits on the card, and
+// equally for a host with no card and for a projection that priced
+// nothing — all three are "nothing to say" rather than "nothing spills",
+// which is why the callers print nothing instead of "0 GB".
+func catalogSpillMB(host management.CatalogHost, f management.CatalogFamily) int {
+	if f.Fit == nil || host.GPUBudgetMB <= 0 || f.Fit.RequiredWindowResidentMB <= 0 {
+		return 0
+	}
+	if over := f.Fit.RequiredWindowResidentMB - host.GPUBudgetMB; over > 0 {
+		return over
+	}
+	return 0
+}
+
+// catalogSpillNote is the label's short mark for that shortfall, in the
+// same shape as the pick note beside it.
+//
+// It is a FACT about memory and deliberately not a speed. A row can be
+// fitting AND recommended and still leave gigabytes of a session in
+// system RAM — on the rc8 Windows host the recommended model needed
+// 10719 MB against an 8188 MB budget, and no surface said so until
+// 6.6 GB had been downloaded (waired-agent#632). Predicting what that
+// costs in tokens per second is a MEASURED input this catalog does not
+// carry (waired-agent#466, and docs/decisions/20260804/1937-… decision 4
+// for why a predicted one may not exclude).
+func catalogSpillNote(host management.CatalogHost, f management.CatalogFamily) string {
+	mb := catalogSpillMB(host, f)
+	if mb <= 0 {
+		return ""
+	}
+	return " · " + formatSpillGB(mb) + " of context cache in system RAM"
+}
+
+// formatSpillGB writes a shortfall in GB, with one decimal below 10 GB
+// so a 2531 MB gap does not round to a flat "3 GB" the operator cannot
+// reconcile with the two figures it came from. Matches
+// `waired models ls --detail` word for word.
+func formatSpillGB(mb int) string {
+	gb := float64(mb) / 1024
+	if gb < 10 {
+		return fmt.Sprintf("%.1f GB", gb)
+	}
+	return fmt.Sprintf("%.0f GB", gb)
 }
 
 // catalogPickNote marks the row this computer would choose for itself,
@@ -1614,7 +1664,7 @@ func catalogSizeNote(size string) string {
 // size class, parameter counts, and the sentence behind whichever pick
 // note the label carries. Best-effort — some Linux indicators drop menu
 // item tooltips. Empty when there is nothing to say.
-func catalogSpecTooltip(engine string, f management.CatalogFamily) string {
+func catalogSpecTooltip(engine string, f management.CatalogFamily, host management.CatalogHost) string {
 	var parts []string
 	if gb, unit := catalogSizeGB(engine, f); gb > 0 {
 		parts = append(parts, fmt.Sprintf("needs %d GB %s", gb, unit))
@@ -1627,12 +1677,26 @@ func catalogSpecTooltip(engine string, f management.CatalogFamily) string {
 			parts = append(parts, p+" params")
 		}
 	}
+	sentences := catalogPickTooltip(f)
+	// The label's spill mark is a quantity; this is what it means. Same
+	// sentence the docs use for the same arithmetic
+	// (docs-site reference/model-catalog), so a person who read one meets
+	// the other.
+	if mb := catalogSpillMB(host, f); mb > 0 {
+		spill := "About " + formatSpillGB(mb) + " of a long coding session will not fit " +
+			"on the graphics card and is read from system memory, which is slower."
+		if sentences == "" {
+			sentences = spill
+		} else {
+			sentences += " " + spill
+		}
+	}
 	if len(parts) == 0 {
-		return catalogPickTooltip(f)
+		return sentences
 	}
 	out := strings.Join(parts, " · ")
-	if note := catalogPickTooltip(f); note != "" {
-		out += ". " + note
+	if sentences != "" {
+		out += ". " + sentences
 	}
 	return out
 }
