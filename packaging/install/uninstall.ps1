@@ -673,6 +673,53 @@ function Remove-StartMenu {
     }
 }
 
+# Format-LockHolders -- the "still in use by" clause for a delete that did not
+# happen, built from objects carrying Name and Id. Pure, so installtest can
+# table-drive it the way it does ConvertTo-NativeArg / Get-ExitCodeReason.
+function Format-LockHolders {
+    param($Holders)
+    $list = @($Holders) | Where-Object { $_ }
+    if ($list.Count -eq 0) { return 'a process this uninstaller could not identify' }
+    return ($list | ForEach-Object { "$($_.Name) (PID $($_.Id))" }) -join ', '
+}
+
+# Get-LockHolders -- running processes whose image sits under $Path. Windows
+# will not delete a running image, so this is what turns "could not be removed"
+# into something an operator can act on. Best-effort: Get-Process cannot read
+# .Path for a process owned by another user without rights, and those simply do
+# not appear.
+function Get-LockHolders {
+    param([string]$Path)
+    try {
+        return @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.Path -and $_.Path.StartsWith($Path, [StringComparison]::OrdinalIgnoreCase)
+            } | Select-Object -Property Name, Id)
+    } catch {
+        return @()
+    }
+}
+
+# Assert-Removed -- confirm a delete actually happened, and fail loudly when it
+# did not.
+#
+# Every removal here is Remove-Item -ErrorAction SilentlyContinue, so a delete
+# Windows refused left no trace: an orphaned `waired init` holding waired.exe
+# open produced "Waired fully removed" and exit 0 with a 13 MB binary still on
+# disk, and the next install then read that leftover as an existing install and
+# declined to do anything -- two green exits and a machine with no service, no
+# state and no PATH entry (waired-agent#660).
+#
+# Skipped under -DryRun, where nothing was deleted and there is nothing to
+# verify.
+function Assert-Removed {
+    param([string]$Path)
+    if ($DryRun) { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $dash = Emo ([char]::ConvertFromUtf32(0x2014)) '-'
+    $who  = Format-LockHolders (Get-LockHolders -Path $Path)
+    Common-Die "$Path could not be removed $dash it is still in use by $who. Close it and run this uninstaller again."
+}
+
 function Remove-InstallDir {
     Common-Log "Removing $InstallDir from machine PATH"
     Remove-FromMachinePath -Dir $InstallDir
@@ -681,6 +728,7 @@ function Remove-InstallDir {
         Common-Run "Remove-Item $InstallDir" {
             Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
         }
+        Assert-Removed -Path $InstallDir
     }
     # Drop the install-location record install.ps1 / the GUI installer wrote
     # (HKLM\SOFTWARE\Waired\InstallDir) so nothing points at the removed dir.
@@ -697,6 +745,7 @@ function Remove-State {
         Common-Run "Remove-Item $StateDir" {
             Remove-Item -LiteralPath $StateDir -Recurse -Force -ErrorAction SilentlyContinue
         }
+        Assert-Removed -Path $StateDir
     }
 }
 

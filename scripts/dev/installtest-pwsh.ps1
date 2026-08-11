@@ -83,9 +83,19 @@ function global:Stub-TestAdmin { $global:ItAdmin }
 
 function global:Stub-DetectPlatform { Write-Host '[itstub] detect-platform' }
 
-# No service anywhere: every case is a clean or binaries-only host, and
-# Stop-ExistingService / Stop-ServiceForUpdate only branch on presence.
-function global:Stub-GetService { param([string]$Name, $ErrorAction) $null }
+# Service presence is a per-case fact since #660: the install-vs-update
+# dispatch now asks whether the install is COMPLETE (binary AND registered
+# service), so "a binary with no service" and "a real install" are two
+# different hosts and the harness has to be able to express both.
+#
+# Off by default, because Stop-ExistingService / Stop-ServiceForUpdate branch
+# on presence and would then reach Stop-Service and sc.exe, which are not
+# stubbed. Only cases that return before any service work set it.
+function global:Stub-GetService {
+    param([string]$Name, $ErrorAction)
+    if ($env:IT_SERVICE) { return [pscustomobject]@{ Name = $Name; Status = 'Running' } }
+    return $null
+}
 
 function global:Stub-StartProcess {
     param([string]$FilePath, [string[]]$ArgumentList, [string]$Verb,
@@ -247,6 +257,9 @@ function Invoke-Case {
         [hashtable]$Params = @{},
         [hashtable]$Env = @{},
         [switch]$Admin,
+        # The host carries a registered waired-agent service (#660). See
+        # Stub-GetService for why this is opt-in per case.
+        [switch]$ServiceRegistered,
         [ValidateSet('zero', 'nonzero', 'any')][string]$Expect = 'zero',
         [string[]]$Assert = @()
     )
@@ -267,6 +280,7 @@ function Invoke-Case {
         IT_INSTALL_PS1         = $InstallPs1
         IT_ARGS                = ($Params | ConvertTo-Json -Compress)
         IT_ADMIN               = $(if ($Admin) { '1' } else { '' })
+        IT_SERVICE             = $(if ($ServiceRegistered) { '1' } else { '' })
         IT_LATEST_TAG          = 'v9.9.9'
     }
     foreach ($k in $Env.Keys) { $envBlock[$k] = [string]$Env[$k] }
@@ -425,13 +439,30 @@ Invoke-Case -Label 'bad -LogLevel dies' -Expect nonzero `
 Invoke-Case -Label 'bad -InferenceEnabled dies' -Expect nonzero `
     -Params @{ DryRun = $true; InferenceEnabled = 'maybe' }
 
-# 7. Update dispatch. Get-InstalledVersion drives it off the host fixture.
+# 7. Update dispatch. Get-InstalledVersion and the service fixture drive it.
 Set-InstalledVersion '0.0.1'
 Invoke-Case -Label 'update -Check (available)' -Params @{ DryRun = $true; Check = $true } `
     -Assert @('Update available: 0\.0\.1 -> 9\.9\.9', '!elevate verb=RunAs')
 Invoke-Case -Label 'bare re-run on installed host -> update, declined (no tty)' `
-    -Params @{ DryRun = $true; SkipOllama = $true } `
+    -Params @{ DryRun = $true; SkipOllama = $true } -ServiceRegistered `
     -Assert @('Re-run with -Update -Yes', 'Update declined\.', '!elevate verb=RunAs')
+
+# (#660) The same host minus the service registration: a binary an aborted
+# install or a blocked uninstall left behind. This used to satisfy the
+# "installed" test on the strength of its version string alone, so the run was
+# dispatched to the update path, declined, and exited 0 -- leaving a machine
+# with no service, no state dir and no PATH entry that no number of re-runs
+# could repair. It is a broken install to repair, not an install to decline
+# updating.
+Invoke-Case -Label 'leftover binary, no service -> repair, not "update declined"' `
+    -Params @{ DryRun = $true; SkipOllama = $true; Yes = $true; SkipInit = $true } `
+    -Assert @('the last install did not finish', '!Update declined\.', '!Re-run with -Update -Yes')
+
+# An explicit -Check / -Update is an operator request and is still honoured on
+# a partial install: the dispatch change is only about what a BARE re-run does.
+Invoke-Case -Label 'leftover binary, -Check still reports the update' `
+    -Params @{ DryRun = $true; Check = $true } `
+    -Assert @('Update available: 0\.0\.1 -> 9\.9\.9', '!the last install did not finish')
 Invoke-Case -Label 'update -Update -Yes -> elevates for the swap' `
     -Params @{ DryRun = $true; Update = $true; Yes = $true } `
     -Assert @('\[itstub\] elevate verb=RunAs', 'argv\[5\]=-StagedZipPath')
