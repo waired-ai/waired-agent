@@ -377,6 +377,11 @@ type setupReconciler struct {
 	// leftovers.
 	desiredChangedAt time.Time
 	modelApplied     map[string]bool // one setupApplyModel call per desired model value
+	// leftoverNoted is one log line per desired model value this daemon
+	// declined to apply because nobody here chose it (#626). Keyed the
+	// same way modelApplied is, and for the same reason: the control
+	// plane re-sends its instruction on every map frame.
+	leftoverNoted map[string]bool
 	// modelRejected records why applying the desired model was refused
 	// (an unknown model, an engine that cannot serve it, a host whose
 	// pulls are turned off). It feeds the model step's failure rather
@@ -469,6 +474,7 @@ func newSetupReconciler(provider setupProvider, push *controlclient.Client, devi
 		interval:      setupPushInterval,
 		modelApplied:  map[string]bool{},
 		modelRejected: map[string]setupModelRejection{},
+		leftoverNoted: map[string]bool{},
 		executorSteps: map[string]setupExecutorStep{},
 		kick:          make(chan struct{}, 1),
 		stateDir:      provider.setupStateDir(),
@@ -580,6 +586,7 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 		if d.modelID != "" {
 			delete(r.modelApplied, d.modelID)
 			delete(r.modelRejected, d.modelID)
+			delete(r.leftoverNoted, d.modelID)
 		}
 	}
 	applied := r.modelApplied[d.modelID]
@@ -718,7 +725,38 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	// preference alone is satisfied the instant the switch is published,
 	// which would make the engine-reappears retry below a no-op and leave
 	// a failed download red for the rest of the process's life.
-	if d.modelID != "" && !applied && enginePresent {
+	// And never for an instruction nobody here asked for. `driving` is the
+	// #308 freshness test this function already computes and, until #626,
+	// only ever spent on the boot pre-pull's hold: an instruction this
+	// daemon WATCHED change is someone writing it while we were here, and
+	// one we only ever read back is leftovers.
+	//
+	// It has to gate the apply too, because a leftover is not a stale
+	// opinion — it starts a multi-gigabyte download of a model nobody
+	// chose. The control plane never clears desired_model_id (see
+	// desiredChangedAt), a re-enrolment reuses the device row without
+	// touching it (waired-ai/waired#1136), and a fresh install arrives
+	// with an empty state dir, so `applied` and `converged` are both
+	// false by construction: everything that could have said "no" was
+	// missing at once. On the rc8 macOS host that combination applied a
+	// July instruction to an August install, downloaded 3.4 GB, and the
+	// benchmark then backed the whole thing out — a second download to
+	// return to the model the agent had picked for itself in the first
+	// line of its log.
+	//
+	// A retry is an ask (#136): bumping desired_model_gen is the operator
+	// saying "try it again", which is a person acting now even when the
+	// value did not change.
+	//
+	// Not a refusal, and deliberately not fit-shaped. Capacity is the only
+	// rule allowed to refuse a model and it does not refuse this one
+	// (waired-ai/waired#1067, 2026-08-08); what is missing here is not
+	// memory but consent, and the answer is to leave the question to the
+	// surfaces that can ask a person. Declining keeps
+	// modelQuestionUnanswered standing, so the install-flow picker (#586)
+	// still runs and the browser can still write a choice — which arrives
+	// as a watched change and applies through this same branch.
+	if d.modelID != "" && !applied && enginePresent && (driving || retried) {
 		state, _, _, _ := r.provider.setupModelState(d.modelID)
 		converged := state == catalog.ModelStateReady && r.provider.setupPreferredModelID() == d.modelID
 		if !converged {
@@ -741,11 +779,36 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 				}
 			}
 		}
+	} else if d.modelID != "" && !applied && enginePresent && !r.noteLeftoverDesired(d.modelID) {
+		// Once per model value, not once per frame: the control plane
+		// re-sends its instruction on every map frame, and a line per
+		// frame would bury the one that matters.
+		if r.logger != nil {
+			r.logger.Info("setup: leaving the desired model alone; nobody here chose it this install",
+				"model", d.modelID,
+				"hint", "pick one with `waired models pull <model>` or from the browser dashboard")
+		}
 	}
 
 	if changed {
 		r.kickPush()
 	}
+}
+
+// noteLeftoverDesired records that this daemon declined to apply
+// modelID, and reports whether it had already said so.
+//
+// A retry clears the record along with modelApplied, so an operator who
+// bumps the generation gets the line again if the instruction is still
+// leftovers by then.
+func (r *setupReconciler) noteLeftoverDesired(modelID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.leftoverNoted[modelID] {
+		return true
+	}
+	r.leftoverNoted[modelID] = true
+	return false
 }
 
 // kickPush wakes the reporter loop so a state change reaches NAVI on the
