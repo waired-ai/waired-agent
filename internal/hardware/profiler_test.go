@@ -645,7 +645,7 @@ func TestProfile_InstallTimeMemoryFigure(t *testing.T) {
 		WithEngineVersion(func(context.Context, string) (bool, string) { return false, "" }),
 		WithGPU(func(context.Context) ([]GPU, Accelerators, error) { return nil, Accelerators{}, nil }),
 		WithUMA(func(context.Context, *Profile) {}),
-		WithRAMAvailableAtInstall(41),
+		WithRAMAvailableAtInstall(41, "2026-08-09T16:47:06.123456789Z"),
 	)
 	prof := p.Profile(context.Background())
 	if prof.RAMAvailableGB != 48 {
@@ -653,6 +653,12 @@ func TestProfile_InstallTimeMemoryFigure(t *testing.T) {
 	}
 	if prof.RAMAvailableAtInstallGB != 41 {
 		t.Errorf("RAMAvailableAtInstallGB = %d, want 41", prof.RAMAvailableAtInstallGB)
+	}
+	// The date rides with the figure and is carried verbatim
+	// (waired-agent#699) — it is a fact about the install, so
+	// re-detection never changes it any more than the value.
+	if got := prof.RAMAvailableAtInstallMeasuredAt; got != "2026-08-09T16:47:06.123456789Z" {
+		t.Errorf("RAMAvailableAtInstallMeasuredAt = %q, want the injected timestamp", got)
 	}
 	h := prof.HostFit()
 	if h.RAMAvailableGB != 41 {

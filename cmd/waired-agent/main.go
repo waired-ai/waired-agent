@@ -1135,7 +1135,10 @@ func run(ctx context.Context, args []string) error {
 			if !*disableInference {
 				hwProfiler = hardware.NewProfiler("",
 					hardware.WithTTL(hardwareResampleInterval),
-					hardware.WithRAMAvailableAtInstall(hostMemGB))
+					// The date rides with the figure (#699); read from the
+					// same record ensureHostMemoryMeasured just settled.
+					hardware.WithRAMAvailableAtInstall(
+						hostMemoryMeasurement(filepath.Dir(agentJSONPath), os.Getenv)))
 				prof := hwProfiler.Profile(ctx)
 				if len(prof.GPUs) > 0 {
 					firstGPU = prof.GPUs[0]

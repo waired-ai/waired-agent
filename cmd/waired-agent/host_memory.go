@@ -34,19 +34,39 @@ import (
 // degrades to the pre-#568 arithmetic rather than a tighter gate.
 const hostMemoryEnvVar = "WAIRED_RAM_AVAILABLE_GB"
 
-// hostMemoryGB is the figure every profiler construction reads: the
-// env seam first, else the persisted record. It never measures.
-func hostMemoryGB(stateDir string, getenv func(string) string) int {
+// hostMemoryMeasurement is the figure every profiler construction reads
+// and, since #699, the timestamp that dates it: the env seam first, else
+// the persisted record. It never measures.
+//
+// The two are returned TOGETHER so they cannot drift. They travel as one
+// fact — a value with a date that belongs to some other value would be
+// worse than no date at all — and a caller that could reach for either
+// separately is a caller that can pair the wrong ones.
+//
+// The env seam supplies a value and NO date, deliberately. It is an
+// operator/CI override, not a measurement, so there is nothing to date;
+// borrowing the record's timestamp would attribute the number to a
+// measurement that did not produce it. Downstream that reads as "0 means
+// unavailable, "" means no claim", which is what both fields already
+// mean on the wire.
+func hostMemoryMeasurement(stateDir string, getenv func(string) string) (int, string) {
 	if v := getenv(hostMemoryEnvVar); v != "" {
 		if gb, err := strconv.Atoi(v); err == nil && gb > 0 {
-			return gb
+			return gb, ""
 		}
 	}
 	rec, err := state.ReadHostMemory(stateDir)
 	if err != nil {
-		return 0
+		return 0, ""
 	}
-	return rec.AvailableGB
+	return rec.AvailableGB, rec.MeasuredAt
+}
+
+// hostMemoryGB is hostMemoryMeasurement's value half, for the callers
+// that only decide with it (hostfit takes the number, not the date).
+func hostMemoryGB(stateDir string, getenv func(string) string) int {
+	gb, _ := hostMemoryMeasurement(stateDir, getenv)
+	return gb
 }
 
 // ensureHostMemoryMeasured takes the measurement when the persisted

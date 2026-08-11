@@ -148,6 +148,13 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 		caps := []string{
 			signer.CapabilityContextWindowV1,
 			signer.CapabilityRAMAvailableV1,
+			// ram-available-v2 rides beside v1, never instead of it: the
+			// CP strips BOTH for a poller that declares v2 alone, because
+			// a timestamp with no value to date is noise (waired-agent#699).
+			// Unconditional for the same reason v1 is — it declares what
+			// this BUILD understands on peer entries, not what this host
+			// is configured to do.
+			signer.CapabilityRAMAvailableV2,
 			signer.CapabilityPublicShareV1,
 		}
 		if c.OnboardingCapable {

@@ -90,7 +90,11 @@ func hardwareSummaryFor(prof hardware.Profile) *signer.HardwareSummary {
 		// RAMAvailableGB — fixed for the life of the install, so it
 		// adds no map churn and never counts a resident model against
 		// the host serving it (#568).
-		RAMAvailableGB:         prof.RAMAvailableAtInstallGB,
+		RAMAvailableGB: prof.RAMAvailableAtInstallGB,
+		// ...and when it was taken (#699). A consumer cannot tell the
+		// figure above from a live reading without it, and the figure is
+		// emphatically not live.
+		RAMAvailableMeasuredAt: prof.RAMAvailableAtInstallMeasuredAt,
 		UnifiedMemory:          prof.UnifiedMemory,
 		UsableVRAMMB:           prof.UsableVRAMMB,
 		MemoryBandwidthSpecGBs: prof.MemoryBandwidthSpecGBs,

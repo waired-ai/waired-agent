@@ -135,6 +135,53 @@ func TestHostMemoryGB_ReadsRecord(t *testing.T) {
 	}
 }
 
+// TestHostMemoryMeasurement_PairsTheValueWithItsDate pins waired-agent#699:
+// the figure and the timestamp that dates it are read together, from the
+// same source, so they cannot be paired wrongly.
+//
+// The env-seam row is the one worth having. WAIRED_RAM_AVAILABLE_GB is an
+// operator/CI override, not a measurement — there is nothing to date, and
+// handing back the record's timestamp would attribute the override to a
+// measurement that did not produce it. Empty is the honest answer, and it
+// is what the wire already means by "no claim".
+func TestHostMemoryMeasurement_PairsTheValueWithItsDate(t *testing.T) {
+	const measuredAt = "2026-08-09T16:47:06.123456789Z"
+	dir := t.TempDir()
+	noEnv := func(string) string { return "" }
+	envGB := func(k string) string {
+		if k == hostMemoryEnvVar {
+			return "12"
+		}
+		return ""
+	}
+
+	// Nothing persisted: no value, no date.
+	if gb, at := hostMemoryMeasurement(dir, noEnv); gb != 0 || at != "" {
+		t.Fatalf("empty state dir = (%d, %q), want (0, \"\")", gb, at)
+	}
+
+	must(t, state.WriteHostMemory(dir, state.HostMemoryRecord{
+		AvailableGB: 7, MeasuredAt: measuredAt, AgentVersion: "x",
+	}))
+	if gb, at := hostMemoryMeasurement(dir, noEnv); gb != 7 || at != measuredAt {
+		t.Errorf("record = (%d, %q), want (7, %q)", gb, at, measuredAt)
+	}
+
+	// The override supplies a number and NOT a date, even though a dated
+	// record sits right there.
+	if gb, at := hostMemoryMeasurement(dir, envGB); gb != 12 || at != "" {
+		t.Errorf("env seam = (%d, %q), want (12, \"\") — an override is not a measurement", gb, at)
+	}
+
+	// A record written by an agent predating the field carries no date,
+	// and the value still reads.
+	dir2 := t.TempDir()
+	must(t, state.WriteHostMemory(dir2, state.HostMemoryRecord{AvailableGB: 41, AgentVersion: "old"}))
+	if gb, at := hostMemoryMeasurement(dir2, noEnv); gb != 41 || at != "" {
+		t.Errorf("pre-addition record = (%d, %q), want (41, \"\")", gb, at)
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
