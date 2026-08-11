@@ -1612,3 +1612,79 @@ func TestRunLocalInferenceProbe_ActiveModelAndStateExplainAWithdrawnNode(t *test
 		t.Errorf("a node declaring nothing put the fields on the wire: %s", b)
 	}
 }
+
+// waired-agent#647: the push carries WHEN a person here chose, and stays
+// silent otherwise. The silence is the load-bearing half — the control
+// plane treats a claim as licence to move its own desired-model
+// instruction, so a host that never chose must not appear to have.
+func TestRunLocalInferenceProbe_LocalModelChoiceRidesOnlyWhenSomeoneChose(t *testing.T) {
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"models":[{"name":"llama3.1:8b"}]}`)
+	}))
+	defer ollama.Close()
+	port, err := portFromURL(ollama.URL)
+	if err != nil {
+		t.Fatalf("port: %v", err)
+	}
+
+	_, machinePriv, _ := ed25519.GenerateKey(rand.Reader)
+	push := func(chosenAt func() string) string {
+		t.Helper()
+		var mu sync.Mutex
+		var bodies []string
+		cpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		}))
+		defer cpSrv.Close()
+
+		dir := t.TempDir()
+		stWriter := state.NewWriter(dir, state.State{Phase: state.PhaseActive})
+		if err := stWriter.Set(stWriter.Snapshot()); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		probeRunUntil(t, inferenceProbeDeps{
+			StateWriter:        stWriter,
+			PushClient:         controlclient.New(cpSrv.URL, "tok"),
+			DeviceID:           "dev-self",
+			MachineKey:         machinePriv,
+			EngineKind:         signer.InferenceTypeOllama,
+			EnginePort:         port,
+			EngineTags:         func() (string, string) { return "llama3.1:8b", "llama3.1:8b" },
+			LocalModelChoiceAt: chosenAt,
+			Logger:             slog.Default(),
+		}, "push a state to the control plane", func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(bodies) > 0
+		})
+		mu.Lock()
+		defer mu.Unlock()
+		if len(bodies) == 0 {
+			t.Fatal("no push")
+		}
+		return bodies[0]
+	}
+
+	b := push(func() string { return "2026-08-10T02:31:04.512Z" })
+	if !strings.Contains(b, `"local_model_choice_at":"2026-08-10T02:31:04.512Z"`) {
+		t.Errorf("a host where someone chose did not publish when: %s", b)
+	}
+
+	// The getter answers "" for every no-claim case the provider knows —
+	// no file, an abandoned question, an instruction the reconciler
+	// applied, a record from before provenance existed.
+	if b := push(func() string { return "" }); strings.Contains(b, "local_model_choice_at") {
+		t.Errorf("a host making no claim put the field on the wire: %s", b)
+	}
+	// An agent built before the getter was wired, and every provider that
+	// does not have one: byte-identical to what it pushed before.
+	if b := push(nil); strings.Contains(b, "local_model_choice_at") {
+		t.Errorf("an unwired probe put the field on the wire: %s", b)
+	}
+}

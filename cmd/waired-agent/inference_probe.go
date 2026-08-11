@@ -155,6 +155,15 @@ type inferenceProbeDeps struct {
 	ActiveModel    func() string
 	SubsystemState func() string
 
+	// LocalModelChoiceAt, when non-nil, answers when a person at this
+	// machine last chose a model — see the wire field of the same name.
+	// Read live each tick, like the getters above, because the answer can
+	// arrive at any time through the loopback management API.
+	//
+	// Nil, or an empty return, keeps the field off the wire, which is the
+	// "no claim" case every consumer must already handle.
+	LocalModelChoiceAt func() string
+
 	// EngineTags returns the two engine-side names for this node's Active
 	// selection:
 	//
@@ -345,6 +354,14 @@ func runLocalInferenceProbe(ctx context.Context, deps inferenceProbeDeps) {
 		}
 		if deps.SubsystemState != nil {
 			s.SubsystemState = deps.SubsystemState()
+		}
+		// waired-agent#647: when a person here last answered the model
+		// question. Ungated for the same reason as the two above — a host
+		// that just demoted away from the model it was told to run is
+		// mid-switch, which is exactly when Models is empty and exactly
+		// the case the control plane needs to hear about.
+		if deps.LocalModelChoiceAt != nil {
+			s.LocalModelChoiceAt = deps.LocalModelChoiceAt()
 		}
 		// Set before the aggregator sees it, so the on-host diagnose view
 		// describes the same node the control plane is told about
