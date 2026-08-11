@@ -1268,6 +1268,10 @@ func run(ctx context.Context, args []string) error {
 				deps.SubsystemState = func() string {
 					return prov.SubsystemState(ctx)
 				}
+				// waired-agent#647: whether the model this host runs was
+				// chosen HERE, and when. Wired for every provider like the
+				// two above — the preference file is engine-independent.
+				deps.LocalModelChoiceAt = prov.LocalModelChoiceAt
 			}
 			// Advertise the engine's VRAM-safe parallelism ceiling (advisory)
 			// so the admin Device detail page can show it and warn before an

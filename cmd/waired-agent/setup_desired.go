@@ -2090,7 +2090,16 @@ func canonicalSetupModelID(name string, manifests []catalog.Manifest) string {
 // engine bounce have to outlive it (same reason as modelSwapController).
 func (p *agentInferenceProvider) setupApplyModel(ctx context.Context, modelID string) (bool, error) {
 	if p.preferencePath != "" {
-		if err := agentconfig.SavePreference(p.preferencePath, agentconfig.Preference{ModelID: modelID}); err != nil {
+		// Source desired: this is the control plane's instruction arriving,
+		// not an answer given here. The distinction is the whole of
+		// waired-agent#627 (an arriving instruction used to delete the
+		// install picker, because a preference existed) and half of
+		// waired-agent#647 (an instruction must not be able to confirm
+		// itself back to the control plane as a local choice).
+		if err := agentconfig.SavePreference(p.preferencePath, agentconfig.Preference{
+			ModelID: modelID,
+			Source:  agentconfig.PreferenceSourceDesired,
+		}); err != nil {
 			// Not fatal: the in-process switch below still makes this the
 			// served model for the life of this process. Only the
 			// survives-a-restart guarantee is lost, and saying so beats

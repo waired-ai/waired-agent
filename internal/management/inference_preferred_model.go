@@ -88,8 +88,13 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Source operator: every caller of this endpoint is a person at this
+	// machine — the install picker, the slow-host demotion prompt, the
+	// tray. A control-plane instruction does not arrive here; the setup
+	// reconciler writes the file directly and marks itself.
 	if err := agentconfig.SavePreference(s.catalog.PreferencePath, agentconfig.Preference{
 		ModelID: req.ModelID,
+		Source:  agentconfig.PreferenceSourceOperator,
 	}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("preference_save_failed", err.Error()))
 		return
@@ -162,7 +167,8 @@ func (s *Server) handleInferencePreferredModel(w http.ResponseWriter, r *http.Re
 // endpoint.
 func (s *Server) handleNoModelSelected(w http.ResponseWriter) {
 	if err := agentconfig.SavePreference(s.catalog.PreferencePath, agentconfig.Preference{
-		None: true,
+		None:   true,
+		Source: agentconfig.PreferenceSourceOperator,
 	}); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorBody("preference_save_failed", err.Error()))
 		return

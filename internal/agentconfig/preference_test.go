@@ -157,6 +157,68 @@ func TestPreference_UnansweredRoundTripsAsARecord(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#647 wire-contract table on the issue,
+// and waired-agent#627): the file has to say whether a PERSON HERE
+// answered, because a bare model id cannot tell an answer apart from a
+// control-plane instruction the setup reconciler applied — and both
+// consumers of that distinction do the wrong thing when they guess.
+func TestPreference_ChosenHereNeedsAnOperatorAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p    Preference
+		want bool
+	}{
+		{"a model a person chose here", Preference{ModelID: "qwen3.5-2b", Source: PreferenceSourceOperator}, true},
+		{"'run without a local model' is an answer too", Preference{None: true, Source: PreferenceSourceOperator}, true},
+		{"an instruction the reconciler applied", Preference{ModelID: "qwen3.5-4b", Source: PreferenceSourceDesired}, false},
+		// Empty source is a file written before provenance existed. It is
+		// UNKNOWN, and both consumers must keep their pre-#647 behaviour
+		// rather than assume the friendlier answer.
+		{"a record from before this field existed", Preference{ModelID: "qwen3.5-4b"}, false},
+		// The question was put and nobody replied — that is what its own
+		// field says, and it is not an answer.
+		{"an abandoned question", Preference{Unanswered: true, Source: PreferenceSourceOperator}, false},
+		{"nothing at all", Preference{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.p.ChosenHere(); got != tc.want {
+				t.Errorf("ChosenHere() = %v, want %v for %+v", got, tc.want, tc.p)
+			}
+		})
+	}
+}
+
+// The provenance has to survive the file, not just the struct: the
+// control plane reads it a heartbeat later, in another process.
+func TestPreference_SourceRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "preferred-model.json")
+	if err := SavePreference(path, Preference{ModelID: "qwen3.5-2b", Source: PreferenceSourceOperator}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, ok, err := LoadPreference(path)
+	if err != nil || !ok {
+		t.Fatalf("load: %v ok=%v", err, ok)
+	}
+	if !got.ChosenHere() || got.Source != PreferenceSourceOperator {
+		t.Errorf("got %+v, want an operator answer", got)
+	}
+
+	// An instruction arriving later replaces the whole file, provenance
+	// included — otherwise a stale "operator" would outlive the answer it
+	// described and keep licensing a desired-state correction.
+	if err := SavePreference(path, Preference{ModelID: "qwen3.5-4b", Source: PreferenceSourceDesired}); err != nil {
+		t.Fatalf("save desired: %v", err)
+	}
+	got, _, err = LoadPreference(path)
+	if err != nil {
+		t.Fatalf("load after instruction: %v", err)
+	}
+	if got.ChosenHere() {
+		t.Errorf("an applied instruction must not read as a local choice: %+v", got)
+	}
+}
+
 // ApplyPreferenceOverride deliberately ignores a None record: it names no
 // model, and the fallback stand-down is the provider's job (#586).
 func TestApplyPreferenceOverride_NoneChangesNothing(t *testing.T) {

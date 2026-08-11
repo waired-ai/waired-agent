@@ -46,6 +46,49 @@ type Preference struct {
 	// fleet installs, ordinary restarts) never carry this record and keep
 	// the spec §11.1 auto-pull.
 	Unanswered bool `json:"unanswered,omitempty"`
+
+	// Source records who put this record here: PreferenceSourceOperator
+	// for an answer given by a person at this machine (the install
+	// picker, the slow-host demotion prompt, the tray), or
+	// PreferenceSourceDesired for the setup reconciler applying an
+	// instruction that arrived from the control plane.
+	//
+	// The file could not previously tell the two apart — both wrote a
+	// bare ModelID — and two separate defects came out of that. The
+	// install picker skips itself when a preference exists, so an
+	// instruction arriving mid-install silently removed a step a person
+	// was supposed to see (waired-agent#627). And the control plane has
+	// no way to learn that a person here chose something other than what
+	// it asked for, which is why a demoted host keeps being told to run
+	// the model the wizard itself rejected (waired-agent#647).
+	//
+	// Empty means UNKNOWN, not "operator": a file written before this
+	// field existed carries no answer either way, and both consumers
+	// above must keep doing what they did before rather than assume.
+	Source string `json:"source,omitempty"`
+}
+
+// Accepted values for Preference.Source. Empty — "unknown, written
+// before the field existed" — is deliberately not a constant: it is the
+// field's zero value, not a value anyone writes.
+const (
+	// PreferenceSourceOperator: a person at this machine answered.
+	PreferenceSourceOperator = "operator"
+	// PreferenceSourceDesired: the setup reconciler applied a
+	// control-plane instruction.
+	PreferenceSourceDesired = "desired"
+)
+
+// ChosenHere reports whether this record is an answer a person at this
+// machine gave — a model, or the explicit "run without a local model".
+//
+// An Unanswered record is not one: it means the question was put and
+// nobody replied, which is the case its own field exists to describe.
+func (p Preference) ChosenHere() bool {
+	if p.Source != PreferenceSourceOperator {
+		return false
+	}
+	return p.ModelID != "" || p.None
 }
 
 // DefaultPreferencePath returns the on-disk location of preferred-model.json,
