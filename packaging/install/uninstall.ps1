@@ -525,6 +525,16 @@ function Invoke-SelfElevate {
 
 # Drop one entry from the machine PATH (case-insensitive). SetEnvironmentVariable
 # against the Machine target broadcasts WM_SETTINGCHANGE, so new shells pick it up.
+# Test-OnMachinePath -- is $Dir actually a machine PATH entry? Split out so the
+# caller can decide whether to announce the removal (#630) rather than
+# announcing it and then discovering there was nothing to do.
+function Test-OnMachinePath {
+    param([string]$Dir)
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    if (-not $machinePath) { return $false }
+    return (($machinePath -split ';') -contains $Dir)
+}
+
 function Remove-FromMachinePath {
     param([string]$Dir)
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -566,6 +576,15 @@ function Remove-ClaudeManaged {
 function Remove-WairedService {
     $agent = Join-Path $InstallDir 'waired-agent.exe'
 
+    # Neither the exe nor a registration: there is no service to remove, and
+    # saying "removing the service by hand" then running sc.exe delete against
+    # nothing is the #630 defect. Note the fall-through below is deliberate
+    # when EITHER exists -- an exe with no registration still gets the manual
+    # sweep, because `waired-agent uninstall` may have half-finished.
+    $registered = Test-Probe { Get-Service -Name $ServiceName -ErrorAction SilentlyContinue }
+    if (-not (Test-Path -LiteralPath $agent) -and
+        (Skip-Absent -What "the $ServiceName service" -Present $registered)) { return }
+
     if (Test-Path -LiteralPath $agent) {
         Common-Log "Unregistering the waired-agent service"
         if ($DryRun) {
@@ -597,8 +616,48 @@ function Remove-WairedService {
     }
 }
 
+# Skip-Absent reports "<thing> not present -- skipping" and returns $true when
+# there is nothing to do, so a step can announce a removal only when one is
+# actually going to happen.
+#
+# uninstall.sh has gated this way from the start (linux_remove_ollama's
+# "Ollama not present - skipping", the apt tier's "no Waired apt packages
+# installed"); the PowerShell side announced the removal unconditionally and
+# then quietly did nothing, so `-DryRun` previewed removals that could not
+# happen and a -Clean transcript could not be read afterwards to tell what had
+# actually been removed (#630). The wording is uninstall.sh's, verbatim -- the
+# em dash is built at runtime because these scripts must stay pure-ASCII on the
+# wire (scripts/install/encoding_test.go).
+function Skip-Absent {
+    param([string]$What, [bool]$Present)
+    if ($Present) { return $false }
+    $dash = Emo ([char]::ConvertFromUtf32(0x2014)) '-'
+    Common-Log "$What not present $dash skipping"
+    return $true
+}
+
+# Test-Probe evaluates an existence probe and answers $false if the probe
+# itself cannot run.
+#
+# It exists because these gates moved Windows-only calls out of Common-Run,
+# where -DryRun had been skipping them. Get-Service does not exist off Windows
+# and HKCU: is not a drive there, and neither failure is suppressible with
+# -ErrorAction -- so the gates made the script unrunnable under a non-Windows
+# pwsh, which installtest-pwsh.ps1 depends on: it spawns this file as a real
+# child to prove `install.ps1 -Clean` delegates the wipe.
+#
+# "Cannot probe" means "cannot be present", which is the right answer both
+# there (nothing is installed on a Linux fixture) and on any Windows host where
+# a probe is somehow refused: the step is skipped rather than announced.
+function Test-Probe {
+    param([scriptblock]$Probe)
+    try { return [bool](& $Probe) } catch { return $false }
+}
+
 # Stop the tray process so its exe is not locked when we delete InstallDir.
 function Stop-Tray {
+    if (Skip-Absent -What 'waired-tray' `
+            -Present (Test-Probe { Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue })) { return }
     Common-Run "Stop-Process waired-tray" {
         Get-Process -Name 'waired-tray' -ErrorAction SilentlyContinue |
             Stop-Process -Force -ErrorAction SilentlyContinue
@@ -611,6 +670,8 @@ function Stop-Tray {
 # real user's autostart behind (waired#754). Called only from Remove-UserIntegration.
 function Remove-TrayAutostart {
     $run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $present = Test-Probe { Get-ItemProperty -Path $run -Name 'waired-tray' -ErrorAction SilentlyContinue }
+    if (Skip-Absent -What 'the waired-tray autostart entry' -Present $present) { return }
     Common-Log "Removing the waired-tray autostart entry (current user)"
     Common-Run "Remove-ItemProperty $run\waired-tray" {
         Remove-ItemProperty -Path $run -Name 'waired-tray' -ErrorAction SilentlyContinue
@@ -678,7 +739,9 @@ function Remove-StartMenu {
 # table-drive it the way it does ConvertTo-NativeArg / Get-ExitCodeReason.
 function Format-LockHolders {
     param($Holders)
-    $list = @($Holders) | Where-Object { $_ }
+    # @(...) around the whole pipeline: a Where-Object that matches nothing
+    # yields $null, and .Count on $null is an error under Set-StrictMode.
+    $list = @(@($Holders) | Where-Object { $_ })
     if ($list.Count -eq 0) { return 'a process this uninstaller could not identify' }
     return ($list | ForEach-Object { "$($_.Name) (PID $($_.Id))" }) -join ', '
 }
@@ -721,8 +784,12 @@ function Assert-Removed {
 }
 
 function Remove-InstallDir {
-    Common-Log "Removing $InstallDir from machine PATH"
-    Remove-FromMachinePath -Dir $InstallDir
+    if (Test-OnMachinePath -Dir $InstallDir) {
+        Common-Log "Removing $InstallDir from machine PATH"
+        Remove-FromMachinePath -Dir $InstallDir
+    } else {
+        [void](Skip-Absent -What "$InstallDir on the machine PATH" -Present $false)
+    }
     if (Test-Path -LiteralPath $InstallDir) {
         Common-Log "Removing $InstallDir"
         Common-Run "Remove-Item $InstallDir" {
@@ -758,18 +825,73 @@ function Remove-State {
 # migration cleanup for hosts installed before #493, plus the user's own
 # per-user Ollama, which -Clean has always removed because -Clean means
 # "including models".
-function Remove-Ollama {
-    Common-Log "Removing Ollama (binary, models, PATH, env)"
-    Common-Run "Stop-Process ollama*" {
-        Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-    }
 
-    $dirs = @(
+# The pre-#493 Ollama install locations, its model stores, and the machine env
+# vars the old PowerShell installer wrote. Named once and used by both the
+# existence probe and the removal below, so the two can never disagree about
+# what "present" means.
+function Get-OllamaDirs {
+    return @(
         (Join-Path $env:ProgramFiles  'Ollama'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Ollama')
     )
-    foreach ($d in $dirs) {
+}
+function Get-OllamaModelHomes {
+    return @(
+        (Join-Path $env:USERPROFILE '.ollama'),
+        'C:\Windows\System32\config\systemprofile\.ollama'
+    )
+}
+$OllamaEnvVars = @('OLLAMA_MODELS', 'OLLAMA_VULKAN', 'OLLAMA_IGPU_ENABLE')
+
+# Get-OllamaStageDirs -- the ~1.4 GB staging directories a killed engine
+# download left behind (#191). Both temp roots: the elevated user's, and
+# LocalSystem's, since the daemon-path setup executor can run the installer as
+# SYSTEM.
+function Get-OllamaStageDirs {
+    $roots = @($env:TEMP, (Join-Path $env:SystemRoot 'Temp')) |
+        Where-Object { $_ } | Select-Object -Unique
+    $out = @()
+    foreach ($t in $roots) {
+        if (-not (Test-Path -LiteralPath $t)) { continue }
+        foreach ($d in @(Get-ChildItem -LiteralPath $t -Directory -Filter 'ollama-stage-*' -ErrorAction SilentlyContinue)) {
+            $out += $d.FullName
+        }
+    }
+    return $out
+}
+
+# Test-OllamaPresent -- is there anything here for Remove-Ollama to do? Every
+# trace it knows how to remove is probed, not just one path, so a "not present"
+# answer is trustworthy rather than a guess.
+function Test-OllamaPresent {
+    if (Test-Probe { Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue }) { return $true }
+    foreach ($d in (Get-OllamaDirs))        { if (Test-Path -LiteralPath $d) { return $true } }
+    foreach ($m in (Get-OllamaModelHomes))  { if (Test-Path -LiteralPath $m) { return $true } }
+    foreach ($v in $OllamaEnvVars) {
+        if (Test-Probe { [Environment]::GetEnvironmentVariable($v, 'Machine') }) { return $true }
+    }
+    # @(...) around the call, not just inside the function: a PowerShell
+    # function returning an empty array yields nothing, so the caller sees
+    # $null -- and .Count on $null is an error under Set-StrictMode, which
+    # installtest-pwsh.ps1 has on when it runs this script in-process. Same
+    # normalise-before-you-count rule install.ps1 records at its own count
+    # sites.
+    if (@(Get-OllamaStageDirs).Count -gt 0) { return $true }
+    return $false
+}
+
+function Remove-Ollama {
+    if (Skip-Absent -What 'Ollama' -Present (Test-OllamaPresent)) { return }
+    Common-Log "Removing Ollama (binary, models, PATH, env)"
+    if (Test-Probe { Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue }) {
+        Common-Run "Stop-Process ollama*" {
+            Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue |
+                Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    foreach ($d in (Get-OllamaDirs)) {
         Remove-FromMachinePath -Dir $d
         if (Test-Path -LiteralPath $d) {
             Common-Run "Remove-Item $d" {
@@ -786,24 +908,22 @@ function Remove-Ollama {
             Remove-Item -LiteralPath $models -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
-    Common-Run "clear OLLAMA_MODELS (machine env)" {
-        [Environment]::SetEnvironmentVariable('OLLAMA_MODELS', $null, 'Machine')
+    # OLLAMA_MODELS, plus the GPU-backend flags the pre-#493 PowerShell
+    # installer wrote at Machine scope (OLLAMA_VULKAN=1 + OLLAMA_IGPU_ENABLE=1).
+    # Clearing those matters or a "clean" uninstall silently re-tunes any
+    # later/other Ollama on this host; the agent supplies them at spawn now and
+    # never writes them.
+    #
+    # One line per variable that is actually set: announcing a clear for a
+    # variable that was never there is the same false report as announcing a
+    # removal for a directory that does not exist (#630).
+    foreach ($v in $OllamaEnvVars) {
+        if (-not [Environment]::GetEnvironmentVariable($v, 'Machine')) { continue }
+        Common-Run "clear $v (machine env)" {
+            [Environment]::SetEnvironmentVariable($v, $null, 'Machine')
+        }
     }
-    # GPU-backend flags the pre-#493 PowerShell installer wrote at Machine
-    # scope (OLLAMA_VULKAN=1 + OLLAMA_IGPU_ENABLE=1). Clear them too, or a
-    # "clean" uninstall silently re-tunes any later/other Ollama on this host.
-    # The agent supplies these at spawn now and never writes them.
-    Common-Run "clear OLLAMA_VULKAN (machine env)" {
-        [Environment]::SetEnvironmentVariable('OLLAMA_VULKAN', $null, 'Machine')
-    }
-    Common-Run "clear OLLAMA_IGPU_ENABLE (machine env)" {
-        [Environment]::SetEnvironmentVariable('OLLAMA_IGPU_ENABLE', $null, 'Machine')
-    }
-    $modelHomes = @(
-        (Join-Path $env:USERPROFILE '.ollama'),
-        'C:\Windows\System32\config\systemprofile\.ollama'
-    )
-    foreach ($m in $modelHomes) {
+    foreach ($m in (Get-OllamaModelHomes)) {
         if (Test-Path -LiteralPath $m) {
             Common-Run "Remove-Item $m" {
                 Remove-Item -LiteralPath $m -Recurse -Force -ErrorAction SilentlyContinue
@@ -813,22 +933,14 @@ function Remove-Ollama {
 
     # (#191) Staging directories left by killed engine downloads: ~1.4 GB
     # each, and until now nothing swept them -- not even a -Clean uninstall,
-    # so the disk stayed occupied after every trace of Ollama was gone. Both
-    # temp roots: the elevated user's, and LocalSystem's, since the
-    # daemon-path setup executor can run the installer as SYSTEM.
+    # so the disk stayed occupied after every trace of Ollama was gone.
     #
     # Migration cleanup since #493: the Go installer stages inside the state
     # dir, on the volume it is about to extract onto, and sweeps its own
     # leftovers at the start of every run.
-    $tempRoots = @($env:TEMP, (Join-Path $env:SystemRoot 'Temp')) |
-        Where-Object { $_ } | Select-Object -Unique
-    foreach ($t in $tempRoots) {
-        if (-not (Test-Path -LiteralPath $t)) { continue }
-        foreach ($d in @(Get-ChildItem -LiteralPath $t -Directory -Filter 'ollama-stage-*' -ErrorAction SilentlyContinue)) {
-            $stage = $d.FullName
-            Common-Run "Remove-Item $stage" {
-                Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-            }
+    foreach ($stage in (Get-OllamaStageDirs)) {
+        Common-Run "Remove-Item $stage" {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
