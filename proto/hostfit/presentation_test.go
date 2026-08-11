@@ -99,6 +99,7 @@ func TestProjectOllama(t *testing.T) {
 				Runnable:           true,
 				QualityTier:        40,
 				RequiredResidentMB: hostfit.OllamaResidentMB(presSmall, false),
+				WeightsResidentMB:  hostfit.OllamaWeightsResidentMB(presSmall, false),
 			},
 		},
 		{
@@ -118,6 +119,7 @@ func TestProjectOllama(t *testing.T) {
 				Runnable:             true,
 				QualityTier:          65,
 				RequiredResidentMB:   hostfit.OllamaResidentMB(presMoE, false),
+				WeightsResidentMB:    hostfit.OllamaWeightsResidentMB(presMoE, false),
 				NotRecommended:       true,
 				NotRecommendedReason: hostfit.ReasonWeightsSpill,
 				EstimatedTokps:       hostfit.EstimateOllamaDecode(presMoE, hostFromWire(t, wireRTX5080_16)).TokpsEstimate,
@@ -133,6 +135,7 @@ func TestProjectOllama(t *testing.T) {
 				Runnable:             true,
 				QualityTier:          70,
 				RequiredResidentMB:   hostfit.OllamaResidentMB(presDense, false),
+				WeightsResidentMB:    hostfit.OllamaWeightsResidentMB(presDense, false),
 				NotRecommended:       true,
 				NotRecommendedReason: hostfit.ReasonWeightsSpill,
 				Speed:                hostfit.SpeedSlow,
@@ -149,10 +152,11 @@ func TestProjectOllama(t *testing.T) {
 			"a CPU-only host reports no resident requirement and no demotion",
 			presDense, hostFromWire(t, wireCPUOnly),
 			hostfit.Presentation{
-				Runnable:       true,
-				QualityTier:    70,
-				Speed:          hostfit.SpeedMayBeSlow,
-				EstimatedTokps: hostfit.EstimateOllamaDecode(presDense, hostFromWire(t, wireCPUOnly)).TokpsEstimate,
+				Runnable:          true,
+				QualityTier:       70,
+				WeightsResidentMB: hostfit.OllamaWeightsResidentMB(presDense, false),
+				Speed:             hostfit.SpeedMayBeSlow,
+				EstimatedTokps:    hostfit.EstimateOllamaDecode(presDense, hostFromWire(t, wireCPUOnly)).TokpsEstimate,
 			},
 		},
 		{
@@ -170,6 +174,7 @@ func TestProjectOllama(t *testing.T) {
 				HaveMB:             hostFromWire(t, wireMac16).TotalMemoryMB(),
 				QualityTier:        70,
 				RequiredResidentMB: hostfit.OllamaResidentMB(presDense, true),
+				WeightsResidentMB:  hostfit.OllamaWeightsResidentMB(presDense, true),
 				Speed:              hostfit.SpeedMayBeSlow,
 				EstimatedTokps:     hostfit.EstimateOllamaDecode(presDense, hostFromWire(t, wireMac16)).TokpsEstimate,
 			},
@@ -310,6 +315,42 @@ func TestNoVariantForEngine(t *testing.T) {
 	}
 }
 
+// TestProjectModelWeightsResident pins the itemisation waired-ai/waired#1174
+// prints under every picker row: the weights figure is
+// OllamaWeightsResidentMB, it is present with or without a GPU (the
+// model's own size is a fact on any host), and subtracting it from the
+// window figure leaves exactly the session KV cache — no third hidden
+// term, or the two-line breakdown would not reconcile with the total.
+func TestProjectModelWeightsResident(t *testing.T) {
+	m := catalog.Manifest{
+		ModelID:       "weighed",
+		ContextLength: 262144,
+		Variants:      []catalog.Variant{presMoE},
+	}
+	host := hostFromWire(t, wireRTX5080_16)
+	got := hostfit.ProjectModel(m, presMoE, catalog.RuntimeOllama, host, 0)
+	wantW := hostfit.OllamaWeightsResidentMB(presMoE, host.UnifiedMemory)
+	if got.WeightsResidentMB != wantW {
+		t.Errorf("WeightsResidentMB = %d, want %d", got.WeightsResidentMB, wantW)
+	}
+	kv := hostfit.ServingWindowKVMB(presMoE, hostfit.OllamaEffectiveContextFloor(m))
+	if got.RequiredWindowResidentMB-got.WeightsResidentMB != kv {
+		t.Errorf("window − weights = %d, want the session KV cache %d",
+			got.RequiredWindowResidentMB-got.WeightsResidentMB, kv)
+	}
+	noGPU := hostfit.ProjectModel(m, presMoE, catalog.RuntimeOllama,
+		hostfit.Host{RAMTotalGB: 64}, 0)
+	if noGPU.WeightsResidentMB != hostfit.OllamaWeightsResidentMB(presMoE, false) {
+		t.Errorf("no-GPU WeightsResidentMB = %d, want %d — the CPU-only picker "+
+			"prints the model's own size there",
+			noGPU.WeightsResidentMB, hostfit.OllamaWeightsResidentMB(presMoE, false))
+	}
+	if vll := hostfit.Project(presVLLM, catalog.RuntimeVLLM, host, 16384); vll.WeightsResidentMB != 0 {
+		t.Errorf("vLLM WeightsResidentMB = %d, want 0 — that path prices its "+
+			"budget as min_vram_mb in RequiredResidentMB", vll.WeightsResidentMB)
+	}
+}
+
 // TestPresentationCanonicalJSON pins the wire bytes, per the proto
 // module's additive-only rule. Two shapes matter and for opposite
 // reasons: the zero value must emit ONLY runnable (every other field is
@@ -328,12 +369,14 @@ func TestPresentationCanonicalJSON(t *testing.T) {
 			"full",
 			hostfit.Presentation{
 				Runnable: true, Reason: "insufficient_vram", NeedMB: 23482, HaveMB: 16303,
-				RequiredResidentMB: 23802, QualityTier: 65,
+				RequiredResidentMB: 23802, RequiredWindowResidentMB: 26333,
+				WeightsResidentMB: 20480, QualityTier: 65,
 				NotRecommended: true, NotRecommendedReason: hostfit.ReasonWeightsSpill,
 				Speed: hostfit.SpeedMayBeSlow, EstimatedTokps: 80.9,
 			},
 			`{"runnable":true,"reason":"insufficient_vram","need_mb":23482,"have_mb":16303,` +
-				`"required_resident_mb":23802,"quality_tier":65,"not_recommended":true,` +
+				`"required_resident_mb":23802,"required_window_resident_mb":26333,` +
+				`"weights_resident_mb":20480,"quality_tier":65,"not_recommended":true,` +
 				`"not_recommended_reason":"weights_spill","speed":"may_be_slow","estimated_tokps":80.9}`,
 		},
 	} {
