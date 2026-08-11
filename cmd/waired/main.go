@@ -27,6 +27,7 @@ import (
 	"github.com/waired-ai/waired-agent/internal/controlurl"
 	"github.com/waired-ai/waired-agent/internal/identity"
 	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
+	"github.com/waired-ai/waired-agent/internal/platform/console"
 	"github.com/waired-ai/waired-agent/internal/platform/elevation"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
@@ -72,11 +73,19 @@ func exitPlanFor(err error) (code int, printErr bool) {
 }
 
 func main() {
+	// Before anything prints: put the Windows console on CP_UTF8 so the UTF-8
+	// bytes below are decoded as UTF-8 and not as the machine's ANSI code page
+	// (#629). Inert on Linux and macOS. restore is called explicitly rather
+	// than deferred because os.Exit below does not run defers, and a console
+	// left on CP_UTF8 would outlive this process.
+	restoreConsole := console.SetOutputUTF8()
+
 	err := newRootCmd().Execute()
 	code, printErr := exitPlanFor(err)
 	if printErr {
 		fmt.Fprintln(os.Stderr, "waired:", friendlyError(err))
 	}
+	restoreConsole()
 	if code != 0 {
 		os.Exit(code)
 	}

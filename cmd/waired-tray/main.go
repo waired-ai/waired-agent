@@ -23,16 +23,25 @@ import (
 	"github.com/waired-ai/waired-agent/internal/buildinfo"
 	"github.com/waired-ai/waired-agent/internal/gui/tray"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/platform/console"
 	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
 	"github.com/waired-ai/waired-agent/internal/platform/paths"
 	"github.com/waired-ai/waired-agent/internal/platform/singleinstance"
 )
 
 func main() {
+	// Same UTF-8 console treatment as the other two binaries (#629). The tray
+	// normally has no console at all, in which case this is a no-op; it earns
+	// its place for the `-h` / flag-error path, which a developer does run
+	// from a shell.
+	restoreConsole := console.SetOutputUTF8()
+
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "waired-tray:", err)
+		restoreConsole()
 		os.Exit(1)
 	}
+	restoreConsole()
 }
 
 func run(args []string) error {

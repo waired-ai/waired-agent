@@ -13,12 +13,17 @@ import (
 // sites stay terse and we don't repeatedly discard the error returned
 // by writing to a terminal Writer — terminal write failures here are
 // not actionable.
+//
+// They are also the one place the init flow's prose passes through, so the
+// ASCII fold lives here (plainText, ascii.go): when the sink cannot render
+// glyphs, em dashes and ellipses degrade with the emoji instead of being
+// written as UTF-8 bytes onto a console that will decode them as CP932 (#629).
 func writePrompt(out io.Writer, args ...any) {
-	_, _ = fmt.Fprintln(out, args...)
+	_, _ = fmt.Fprint(out, plainText(fmt.Sprintln(args...)))
 }
 
 func writePromptf(out io.Writer, format string, args ...any) {
-	_, _ = fmt.Fprintf(out, format, args...)
+	_, _ = fmt.Fprint(out, plainText(fmt.Sprintf(format, args...)))
 }
 
 // ynPrompt reads one [Y/n] / [y/N] answer. Empty input returns def.
