@@ -161,7 +161,6 @@ func queryEvents(ctx context.Context, logName, query, mentions string) []Event {
 	return events
 }
 
-
 // systemExe resolves a Windows-supplied tool inside %SystemRoot%\System32.
 func systemExe(name string) (string, error) {
 	dir, err := windows.GetSystemDirectory()

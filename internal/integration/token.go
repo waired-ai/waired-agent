@@ -49,12 +49,12 @@ func LoadOrCreateGatewayToken(path string) (string, error) {
 		// On darwin securestore.Read is Keychain-first, and a Keychain
 		// item outlives the state dir — logout wiped machine-key,
 		// access-token and refresh-token but not this one, so a
-		// `--clean` reinstall hit a Keychain hit and returned without
-		// ever writing the file. That is why a freshly init'd macOS host
-		// had access_token, node.key and refresh_token in secrets/ (all
-		// written through the dual-writing securestore.Write) and no
-		// gateway-token at all, with doctor pointing at `waired link`
-		// forever (#654).
+		// `--clean` reinstall found the surviving item and returned
+		// without ever writing the file. That is why a freshly init'd
+		// macOS host had access_token, node.key and refresh_token in
+		// secrets/ (all written through the dual-writing
+		// securestore.Write) and no gateway-token at all, with doctor
+		// pointing at `waired link` forever (#654).
 		if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
 			// Best-effort: the caller already has a usable token, and
 			// failing here would take a working gateway down over a file
