@@ -32,6 +32,18 @@ type InferenceProvider interface {
 	// A pull already in flight for the same model is joined rather than
 	// duplicated; the returned PullJob then describes the running job.
 	PullModel(ctx context.Context, modelOrAlias string) (PullJob, error)
+
+	// CancelPull stops the download in flight for modelID and returns
+	// once it has stopped. Unlike PullModel this is synchronous on
+	// purpose: the operator's next `waired models ls` must show what
+	// actually happened, so the answer waits for the job to unwind.
+	//
+	// A model with nothing downloading is NOT an error — it reports
+	// PullCancel.Status "not_downloading". "stop this" and "there was
+	// nothing to stop" leave the host in the same state, which is the
+	// state the caller asked for.
+	CancelPull(ctx context.Context, modelID string) (PullCancel, error)
+
 	DeleteModel(ctx context.Context, modelID string) error
 	Select(ctx context.Context, req router.Request) (router.Selection, error)
 
@@ -520,6 +532,19 @@ type PullJob struct {
 	Status  string `json:"status"`
 }
 
+// PullCancel is the answer to DELETE /waired/v1/models/{model_id}/pull.
+//
+// Status is "cancelled" when a download was stopped, or
+// "not_downloading" when there was nothing in flight. Both are 200:
+// the caller asked for this model not to be downloading, and in both
+// cases it is not. JobID is set only for the former — there is no job to
+// name in the latter.
+type PullCancel struct {
+	ModelID string `json:"model_id"`
+	JobID   string `json:"job_id,omitempty"`
+	Status  string `json:"status"`
+}
+
 // inferenceMux registers the inference handlers on mux. Called from
 // Server.Handler when an InferenceProvider is wired.
 func (s *Server) inferenceMux(mux *http.ServeMux) {
@@ -532,6 +557,10 @@ func (s *Server) inferenceMux(mux *http.ServeMux) {
 	mux.HandleFunc("/waired/v1/inference/select", s.handleInferenceSelect)
 
 	mux.HandleFunc("/waired/v1/models", s.handleModelsCollection)
+	// Subtree: handleModelsItem splits DELETE /waired/v1/models/{id}
+	// (remove the model) from DELETE /waired/v1/models/{id}/pull (stop
+	// its download) rather than registering a second pattern, so the
+	// path-parsing rules for this subtree stay in one function.
 	mux.HandleFunc("/waired/v1/models/", s.handleModelsItem)
 	mux.HandleFunc("/waired/v1/models/pull", s.handleModelsPull)
 }
@@ -665,7 +694,9 @@ func (s *Server) handleModelsPull(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, job)
 }
 
-// handleModelsItem serves DELETE /waired/v1/models/{model_id}.
+// handleModelsItem serves DELETE /waired/v1/models/{model_id} (remove the
+// model) and DELETE /waired/v1/models/{model_id}/pull (stop the download
+// in flight for it, waired-agent#633).
 func (s *Server) handleModelsItem(w http.ResponseWriter, r *http.Request) {
 	const prefix = "/waired/v1/models/"
 	rest := strings.TrimPrefix(r.URL.Path, prefix)
@@ -677,6 +708,22 @@ func (s *Server) handleModelsItem(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodDelete {
 		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method_not_allowed", "DELETE only"))
+		return
+	}
+	// The download, not the model. Checked before the model-id path so a
+	// model whose id ends in "pull" cannot shadow it — ids come from the
+	// catalog and none does, but the split must not depend on that.
+	if modelID, isCancel := strings.CutSuffix(rest, "/pull"); isCancel {
+		if modelID == "" {
+			writeJSON(w, http.StatusNotFound, errorBody("not_found", "no model id"))
+			return
+		}
+		res, err := s.inference.CancelPull(r.Context(), modelID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorBody("cancel_failed", err.Error()))
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 		return
 	}
 	if err := s.inference.DeleteModel(r.Context(), rest); err != nil {

@@ -51,6 +51,17 @@ func (r *blockingRunner) Run(ctx context.Context, _ string, args, _ []string, on
 	if len(args) > 1 {
 		tag = args[1]
 	}
+	// Only `pull` blocks. The same puller also runs `ollama rm` (#671), and
+	// a fake that ignored the subcommand held the removal open too — so a
+	// test that deleted a model mid-pull deadlocked instead of failing,
+	// which is the fake making a real case unwritable (CLAUDE.md §Test
+	// discipline).
+	if len(args) > 0 && args[0] != "pull" {
+		r.mu.Lock()
+		r.tags = append(r.tags, tag)
+		r.mu.Unlock()
+		return nil
+	}
 	r.mu.Lock()
 	r.tags = append(r.tags, tag)
 	r.mu.Unlock()

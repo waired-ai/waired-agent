@@ -499,6 +499,13 @@ func (a sbInfProvider) PullModel(ctx context.Context, modelOrAlias string) (mana
 	return management.PullJob{}, errNotEnrolled
 }
 
+func (a sbInfProvider) CancelPull(ctx context.Context, modelID string) (management.PullCancel, error) {
+	if p := a.liveOrNil(); p != nil {
+		return p.CancelPull(ctx, modelID)
+	}
+	return management.PullCancel{}, errNotEnrolled
+}
+
 func (a sbInfProvider) DeleteModel(ctx context.Context, modelID string) error {
 	if p := a.liveOrNil(); p != nil {
 		return p.DeleteModel(ctx, modelID)

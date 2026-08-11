@@ -14,11 +14,11 @@ import (
 func newModelsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "models",
-		Short: "Manage local LLM models (ls / pull / rm / refresh / check-agent).",
+		Short: "Manage local LLM models (ls / pull / cancel / rm / refresh / check-agent).",
 		RunE:  namespaceRunE,
 	}
-	cmd.AddCommand(newModelsLsCmd(), newModelsPullCmd(), newModelsRmCmd(), newModelsRefreshCmd(),
-		newModelsCheckAgentCmd())
+	cmd.AddCommand(newModelsLsCmd(), newModelsPullCmd(), newModelsCancelCmd(), newModelsRmCmd(),
+		newModelsRefreshCmd(), newModelsCheckAgentCmd())
 	return cmd
 }
 
@@ -187,6 +187,18 @@ func newModelsRmCmd() *cobra.Command {
 			// callers (scripts) must pass --yes explicitly.
 			if !assumeYes && !confirmTTY(fmt.Sprintf("Remove model %q? You can download it again later", args[0])) {
 				return errors.New("models rm: aborted (pass --yes to skip the prompt)")
+			}
+			// Stop a download of this model first, and say so when there
+			// was one: removing a model mid-pull used to answer "deleted"
+			// while the job kept fetching, and the model came back
+			// (waired-agent#641). The daemon cancels on its own behalf too
+			// — the tray and the setup reconciler delete without coming
+			// through here — so this is for the WORDING: an operator who
+			// just stopped a 6 GB download should be told they did.
+			if cancelled, err := httpDelete(mgmt + "/waired/v1/models/" + args[0] + "/pull"); err == nil {
+				if line := formatModelsCancel(cancelled, args[0]); strings.HasPrefix(line, "cancelled ") {
+					fmt.Println(line)
+				}
 			}
 			body, err := httpDelete(mgmt + "/waired/v1/models/" + args[0])
 			if err != nil {

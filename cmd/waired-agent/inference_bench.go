@@ -384,11 +384,33 @@ func RunBootBenchmark(ctx context.Context, deps BenchDeps) BenchResult {
 	// the first successful /inference/benchmark lifts it without a restart.
 	if deps.EngineReady != nil {
 		if ready, model := deps.EngineReady(); !ready {
-			deps.Logger.Warn("inference boot benchmark not run: engine not ready",
+			// Two different situations wore one WARN and an empty `model`
+			// (waired-agent#633). EngineReady names a model only when it
+			// has one to name — four of its five not-ready paths return
+			// "", and on a first install the one that fires is "no
+			// selection committed yet", because the boot benchmark runs
+			// while `waired init` is still installing the engine and
+			// pulling the first model.
+			//
+			// So the field is dropped rather than logged empty, and the
+			// no-selection case is Info: it is the expected shape of a
+			// fresh install, self-healing (the measurement ran six
+			// minutes later on the reported host), and the neighbouring
+			// cache-miss line is already Info. A WARN on every first
+			// install is the line that gets filtered out, taking the real
+			// ones with it. A NAMED model whose engine is unhealthy is a
+			// different claim and stays WARN.
+			attrs := []any{
 				"reason", benchOutcomeEngineNotReady,
-				"model", model,
 				"engine", deps.EngineKind,
-				"port", deps.EnginePort)
+				"port", deps.EnginePort,
+			}
+			if model == "" {
+				deps.Logger.Info("inference boot benchmark not run: no model selected yet", attrs...)
+			} else {
+				deps.Logger.Warn("inference boot benchmark not run: engine not ready",
+					append(attrs, "model", model)...)
+			}
 			return notReadyBenchResult(deps, "engine not ready")
 		}
 	}
