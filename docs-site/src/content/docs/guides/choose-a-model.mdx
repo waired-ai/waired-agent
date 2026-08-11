@@ -184,7 +184,11 @@ Models are several gigabytes each. To delete one you are not using:
 waired models rm <model-id>
 ```
 
-You will be asked to confirm first.
+You will be asked to confirm first. The model's files are deleted, so the space
+comes back. If another model on this computer uses the same files, they are kept
+and only the entry goes — deleting one model never takes another one's files with
+it. Should the deletion fail, Waired says so and keeps the model listed rather
+than reporting space it did not free.
 
 <CardGrid>
 	<LinkCard title="Model catalog" href="/reference/model-catalog/" description="Every bundled model, with the memory it needs and how good it is." />

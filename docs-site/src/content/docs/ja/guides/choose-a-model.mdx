@@ -5,7 +5,7 @@ meta:
   audience: 応答が遅い、または品質が足りないと感じている人
   needs: Waired アプリ、またはターミナル
   time: 5 分＋ダウンロード
-sourceHash: 3dcadefc3b8578f8
+sourceHash: f9bdd9902d77403e
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -175,7 +175,11 @@ Engine:   ready (model=qwen3.6-27b, 0/4 slots used, inflight=0)
 waired models rm <モデルID>
 ```
 
-実行前に確認されます。
+実行前に確認されます。モデルのファイルも削除されるので、その分の容量が戻ります。
+同じファイルを使う別のモデルがこのパソコンにある場合、ファイルは残して一覧の項目だけを
+削除します（あるモデルの削除が、別のモデルのファイルを巻き添えにすることはありません）。
+削除に失敗したときは、その旨を表示してモデルを一覧に残します。空けていない容量を
+空けたことにはしません。
 
 <CardGrid>
 	<LinkCard title="モデルカタログ" href="/ja/reference/model-catalog/" description="同梱モデルの一覧と、必要なメモリ・品質。" />
