@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3747,11 +3748,33 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 	if !ok {
 		return fmt.Errorf("model %q not present", modelID)
 	}
-	// For Phase A, deletion just drops the state.json record. The
-	// Ollama-side `ollama rm <tag>` shellout could be added once we
-	// have a clear policy on shared models (multiple manifests, one
-	// tag) — until then, leaving the bytes on disk is the safer
-	// default.
+	// Delete the weights before the record, not after. The record is how
+	// this host finds the tag again; dropping it first and then failing
+	// to remove the bytes leaves weights nothing can name, which is the
+	// state waired-agent#641 found on a 16 GB machine — 12 GB of models
+	// against 6.4 GB of intent, and a later rescan re-adopting the
+	// "deleted" entry as ready.
+	//
+	// The shared-tag question the original Phase A comment deferred is
+	// answered here: several manifests can resolve to one engine tag, so
+	// the tag is only removed once no OTHER model record still names it.
+	// Sharing is rarer than deleting, and the wrong answer to it takes a
+	// second model down with the one that was asked for.
+	if tag := m.OllamaTag; tag != "" && p.puller != nil {
+		if shared := modelIDsForTag(state.Models, tag, modelID); len(shared) > 0 {
+			p.logger.Info("model record removed; weights kept, another model shares the tag",
+				"model", modelID, "tag", tag, "shared_with", shared)
+		} else if err := p.puller.Remove(ctx, tag); err != nil {
+			// Do not report success. Answering "deleted" while the bytes
+			// stay is the defect: the operator reads a freed disk that is
+			// still full, and #641's rescan brings the entry back.
+			p.logger.Warn("deleting the weights failed; keeping the model record",
+				"model", modelID, "tag", tag, "err", err)
+			return fmt.Errorf("delete the weights for %s: %w", modelID, err)
+		} else {
+			p.logger.Info("model weights deleted", "model", modelID, "tag", tag)
+		}
+	}
 	delete(state.Models, modelID)
 	for k, e := range state.Endpoints {
 		if e.ModelID == modelID {
@@ -3763,6 +3786,20 @@ func (p *agentInferenceProvider) DeleteModel(ctx context.Context, modelID string
 	}
 	p.logger.Info("model record removed", "model", modelID, "tag", m.OllamaTag)
 	return nil
+}
+
+// modelIDsForTag lists the models OTHER than except whose weights are the
+// same engine tag. Non-empty means removing the tag would take those
+// models' weights with it.
+func modelIDsForTag(models map[string]catalog.ModelState, tag, except string) []string {
+	var shared []string
+	for id, e := range models {
+		if id != except && e.OllamaTag == tag {
+			shared = append(shared, id)
+		}
+	}
+	slices.Sort(shared)
+	return shared
 }
 
 func (p *agentInferenceProvider) buildSelector(ctx context.Context) *router.Selector {

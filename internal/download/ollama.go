@@ -127,6 +127,38 @@ func (p *Puller) Pull(ctx context.Context, tag string, onProgress func(Progress)
 	})
 }
 
+// Remove runs `ollama rm <tag>`, deleting the weights the matching Pull
+// fetched. It lives on Puller rather than in a type of its own because
+// the two need exactly the same three things — the resolved binary, the
+// OLLAMA_HOST env that points the client at waired's own engine rather
+// than whatever answers 11434, and the injectable runner — and a second
+// type carrying that trio would be a second place to get it wrong.
+//
+// Removing weights the engine has resident is safe: ollama unloads the
+// model rather than refusing, so a caller does not have to stop serving
+// first.
+//
+// The runner's error is returned verbatim, and a tag that is already
+// gone reports one — `ollama rm` exits non-zero for a name it does not
+// know. Callers that treat deletion as idempotent must decide that for
+// themselves rather than have it decided here, because "it was already
+// gone" and "the engine could not be reached" arrive the same way and
+// only the caller knows which one it can live with.
+func (p *Puller) Remove(ctx context.Context, tag string) error {
+	binary := p.binary
+	if binary == "" {
+		if p.resolve == nil {
+			return errors.New("download: no ollama binary and no resolver")
+		}
+		resolved, err := p.resolve()
+		if err != nil {
+			return err
+		}
+		binary = resolved
+	}
+	return p.runner.Run(ctx, binary, []string{"rm", tag}, p.env, func(string) {})
+}
+
 // DefaultRunner shells out to a real ollama binary and forwards each
 // line (split on \n and \r — Ollama uses \r to update the same
 // progress line).
