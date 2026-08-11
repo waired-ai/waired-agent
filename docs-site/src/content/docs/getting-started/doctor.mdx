@@ -86,6 +86,7 @@ waired doctor --fix
 | **gateway token** | The key your coding tools use to reach your AI is missing, or you cannot read it. | `waired link` — or press **f**. |
 | **device sign-in** | This computer's sign-in is no longer valid. Your AI keeps working locally, but the computer no longer appears in your account and your other devices cannot reach it. | `waired init` — see [I signed in, but Waired says I am signed out](/troubleshooting/#i-signed-in-but-waired-says-i-am-signed-out). |
 | **network connection** | You are signed in, but this computer has not connected yet. Waired keeps retrying on its own. | Wait a minute and run the check again. |
+| **device key** | Your network is using a different key for this computer than the computer itself holds. Your own AI keeps working, but no other computer can reach this one — and everything else still looks healthy, which is why this check exists. Silent when the two agree. | `waired init` to register the computer again. |
 | **waired-agent service** | The background service is not running, and this line says *why* — read out of the operating system's own service records. On Windows it names things like a startup blocked by Windows security, a start that timed out, or an unexpected stop; on Linux and macOS, the exit status the service manager recorded. It quotes the underlying record in brackets so you can check it. | Start it from the Waired menu, or follow the suggestion in the line itself. |
 | **waired-agent management** | The background service is not answering. This is the one that stops everything else working. | See [Waired is not running](/troubleshooting/#a-command-says-waired-agent-is-not-running). |
 | **waired phase** | Routing is paused, or in an unexpected state. | `waired resume` — see [Pause and resume](/guides/pause/). |
@@ -93,6 +94,26 @@ waired doctor --fix
 | **coding-agent entries** | Claude Code or OpenClaw is not configured to use Waired. | Press **f**. |
 | **&lt;tool&gt; installation** | Only a **·** here: the tool's command is not on your `PATH`, so there is nothing to configure. If its folder exists but the command does not, the line says so — a leftover folder is not an installation. | Install the tool, or ignore the line if you do not use it. |
 | **AI engine app signature** (macOS) | macOS will not run the installed AI software, so every attempt to start it is stopped. | Press **f** when the cause is a stray Waired file — see [it says the AI software is damaged](/troubleshooting/#macos-it-says-the-ai-software-is-damaged). Otherwise the check names the reinstall command. |
+
+### When your network and this computer disagree on its key
+
+Every computer in your network has its own key, and the others use it to reach
+it. If the network is handed a different key than the computer actually holds —
+after re-registering a computer, for instance — the two can no longer talk, in
+either direction:
+
+<Expected>
+```
+✗ device key — the network is using a different key for this device than the device holds — no other computer can reach it over Waired. Run `waired init` to register this device again.
+```
+</Expected>
+
+Nothing else looks wrong when this happens. The computer is signed in, it shows
+as online in your account, its own AI answers normally, and your other computers
+list it as a peer. Only requests between them fail.
+
+While a key change is still finishing you may see it as a **·** instead. That
+one settles on its own.
 
 ## When the check itself cannot see everything
 

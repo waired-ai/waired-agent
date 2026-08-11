@@ -75,11 +75,42 @@ type Status struct {
 	Phase        string `json:"phase,omitempty"`
 	DesiredPhase string `json:"desired_phase,omitempty"`
 
+	// NodeKeyAgreement says whether the Node Key the control plane
+	// publishes for this device is the one the device actually holds.
+	// One of the NodeKeyAgreement* values below; empty before the first
+	// network map arrives. NodePublicKey / PublishedNodePublicKey are
+	// the two sides of that comparison, carried so an operator can line
+	// them up against a peer's view. Both are public keys already
+	// distributed to every peer in the network.
+	NodeKeyAgreement       string `json:"node_key_agreement,omitempty"`
+	NodePublicKey          string `json:"node_public_key,omitempty"`
+	PublishedNodePublicKey string `json:"published_node_public_key,omitempty"`
+
 	// Peers carries one entry per peer in the current Network Map with
 	// the reconciler's per-path-quality state. testnet-fallback-* scripts
 	// poll this field to decide whether a downgrade/upgrade has fired.
 	Peers []PeerStatus `json:"peers,omitempty"`
 }
+
+// Status.NodeKeyAgreement values.
+//
+// A device's Node Key is its WireGuard static key: peers authenticate
+// to it using the public half the control plane publishes for it. When
+// the published half is not the one the device holds, every peer's
+// handshake fails at that device and its own handshakes name a static
+// key no peer can match — the overlay dies in both directions while
+// every other surface still reports the device online.
+//
+// NodeKeyRotating is not a fault. A rotation tells the control plane
+// first and promotes the local file second (see the agent's node key
+// rotator), so the published key legitimately runs ahead of the local
+// one for the length of that window; the map carries the outgoing key
+// as prev_node_public_key for exactly this reason.
+const (
+	NodeKeyAgreementOK       = "ok"
+	NodeKeyAgreementRotating = "rotating"
+	NodeKeyAgreementDiverged = "diverged"
+)
 
 // PeerStatus is the management-API view of one peer's path-selection
 // state. All fields are populated by the agent's reconciler; consumers
