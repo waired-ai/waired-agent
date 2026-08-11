@@ -1489,18 +1489,26 @@ assert_log_rotation() {
     return
   fi
 
-  # Known archive state, then push the live file past the 1 MB cap the agent
-  # rotates at (internal/platform/logrotate.DefaultPolicy).
-  sudo rm -f "$err".* 2>/dev/null || true
-  yes 'waired installtest rotation filler' | head -c 1200000 | sudo tee -a "$err" >/dev/null
+  # Pin the level first. The cap depends on it since #658
+  # (logrotate.PolicyForLevel: 32 MB at info, 128 MB at debug) and the
+  # harness does not otherwise fix the level, so without this the filler
+  # size below would be right only for however the host happened to be
+  # installed.
+  waired config log-level info >/dev/null 2>&1 || true
 
-  # The rotation ticker is 60s; give it a margin.
-  for _ in $(seq 1 90); do
+  # Known archive state, then push the live file past the info cap the agent
+  # rotates at (internal/platform/logrotate.DefaultPolicy = 32 MB).
+  sudo rm -f "$err".* 2>/dev/null || true
+  yes 'waired installtest rotation filler' | head -c 34000000 | sudo tee -a "$err" >/dev/null
+
+  # The rotation ticker is 60s, and gzipping 32 MB takes a moment on top;
+  # give it a margin.
+  for _ in $(seq 1 120); do
     sudo test -f "$err.0.gz" && break
     sleep 1
   done
   if ! sudo test -f "$err.0.gz"; then
-    bad "the daemon did not rotate $err within 90s of it passing 1 MB (#331)"
+    bad "the daemon did not rotate $err within 120s of it passing its 32 MB cap (#331)"
     return
   fi
   ok "the daemon rotated its own launchd log ($err.0.gz)"

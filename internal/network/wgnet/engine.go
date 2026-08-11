@@ -332,9 +332,19 @@ func (e *Engine) Close() error {
 // wireguardLogger adapts slog.Logger to the device.Logger interface used by
 // wireguard-go. wireguard-go uses Verbosef/Errorf which are formatted like
 // log.Printf.
+//
+// Verbosef checks the level before formatting. wireguard-go calls it for
+// every keepalive on every peer and for each receive routine's lifecycle,
+// which is the bulk of what fills the log at debug (#658) — and, since
+// fmt.Sprintf is evaluated at the call site whatever slog does with the
+// result afterwards, the whole cost was being paid at info level too, for
+// a string that was then dropped.
 func wireguardLogger(l *slog.Logger) *device.Logger {
 	return &device.Logger{
 		Verbosef: func(format string, args ...any) {
+			if !l.Enabled(context.Background(), slog.LevelDebug) {
+				return
+			}
 			l.Debug(fmt.Sprintf(format, args...))
 		},
 		Errorf: func(format string, args ...any) {

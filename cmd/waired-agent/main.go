@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -247,11 +248,35 @@ func run(ctx context.Context, args []string) error {
 	// logging.level > info. See resolveLogLevel.
 	logLevelVar := new(slog.LevelVar)
 	logLevelVar.Set(agentconfig.ResolveLogLevel(cfgRoot.Logging.Level, *logLevel, os.Getenv))
-	primary := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevelVar})
+
+	// The agent's own log file, on the OS where the service manager hands
+	// the process no stream at all (#636). The logger does not exist yet,
+	// so the outcome is reported right after it does.
+	logPolicy := func() logrotate.Policy { return logrotate.PolicyForLevel(logLevelVar.Level()) }
+	agentLog, agentLogPath, agentLogErr := openAgentLogFile(
+		runtime.GOOS, filepath.Dir(agentJSONPath), logPolicy, openRotatingLogFile)
+	logDest := io.Writer(os.Stderr)
+	if agentLog != nil {
+		// The file comes FIRST on purpose: under the Windows SCM stderr is
+		// closed, and io.MultiWriter stops at the first writer that fails.
+		// With stderr first the file would never see a record. slog.Logger
+		// discards what Handle returns, so the failing stderr write is
+		// harmless on its own.
+		logDest = io.MultiWriter(agentLog, os.Stderr)
+		defer agentLog.Close()
+	}
+	primary := slog.NewJSONHandler(logDest, &slog.HandlerOptions{Level: logLevelVar})
 	// Wrap with the OS-native secondary sink so Warn/Error records
 	// survive stderr being closed (e.g. Windows SCM dispatcher).
 	logger := slog.New(logsink.New(primary, service.ServiceName))
 	slog.SetDefault(logger)
+
+	if agentLogErr != nil {
+		logger.Warn("agent log: could not open the log file; this OS has no other place for INFO and DEBUG records",
+			"err", agentLogErr)
+	} else if agentLogPath != "" {
+		logger.Info("agent log: writing to a rotating file", "path", agentLogPath)
+	}
 
 	if hostMemErr != nil {
 		logger.Warn("host memory: measurement unavailable; the OS deduction stays at its floor",
@@ -267,7 +292,7 @@ func run(ctx context.Context, args []string) error {
 	// launchd opened, and every line after that is lost until the daemon
 	// restarts — which on a wedged host never happens. No-op off darwin:
 	// journald and the Event Log bound their own streams.
-	logrotate.Manage(ctx, logrotate.AgentTargets(runtime.GOOS), logrotate.DefaultPolicy(), logger)
+	logrotate.Manage(ctx, logrotate.AgentTargets(runtime.GOOS), logPolicy, logger)
 
 	// Phase 9 telemetry composite. Owned at boot (not inside the
 	// session) so /metrics and /observability/* scrape the same

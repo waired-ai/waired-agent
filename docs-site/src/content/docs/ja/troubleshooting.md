@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 98b2a10b7f0c7671
+sourceHash: b279d37f65b27458
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -917,9 +917,9 @@ Claude Code はステータス行を 1 つしか使わず、プロジェクト�
 | | |
 |---|---|
 | Linux | `journalctl -u waired-agent -e` |
-| macOS | `/Library/Logs/waired-agent.err.log`、または `sudo log show --predicate 'process == "waired-agent"' --last 10m`。このファイルは Waired が 1 MB で上限を掛け、直前の 5 世代を `waired-agent.err.log.0.gz`、`.1.gz` … として隣に残します。それより古いものはそちらを（`gzcat` で）確認してください。 |
-| Windows | `Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` |
-| AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`）。 |
+| macOS | `/Library/Logs/waired-agent.err.log`、または `sudo log show --predicate 'process == "waired-agent"' --last 10m`。このファイルは Waired が 32 MB で上限を掛け、直前の 10 世代を `waired-agent.err.log.0.gz`、`.1.gz` … として隣に残します。それより古いものはそちらを（`gzcat` で）確認してください。`debug` の間は上限が 128 MB に上がるので、詳細を上げてもさかのぼれる範囲は短くなりません。 |
+| Windows | Waired の状態ディレクトリ配下の `logs\waired-agent.log`。通常のサービス導入では `C:\ProgramData\waired\logs\…` で、読むには管理者権限の PowerShell が要ります。上限の扱いは macOS と同じで、32 MB・`.0.gz`、`.1.gz` … 10 世代、`debug` の間は 128 MB です。`Get-WinEvent -ProviderName waired-agent -LogName Application -MaxEvents 50` は要約版で、警告とエラーだけが載り詳細は載りません。 |
+| AI エンジン | Waired の状態ディレクトリ配下の `…/runtimes/ollama/logs/engine.log`（Linux は `/var/lib/waired/…`、macOS は `/Library/Application Support/waired/…`、Windows は `C:\ProgramData\waired\…`）。 |
 
 ## 不具合を報告する
 

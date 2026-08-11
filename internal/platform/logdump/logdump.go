@@ -41,6 +41,9 @@ type Options struct {
 	// StateDir is the agent state directory; bundled engine logs live
 	// under <StateDir>/runtimes/<engine>/logs. Empty skips engine logs.
 	StateDir string
+	// Full collects every rotated generation whole instead of the most
+	// recent DefaultBundleBudget bytes of them.
+	Full bool
 }
 
 // Collect writes a consolidated log bundle to w: a header, the OS service
@@ -62,7 +65,11 @@ func Collect(ctx context.Context, w io.Writer, opts Options) error {
 	}
 
 	fprintf(w, "\n===== service log files =====\n")
-	collectServiceLogFiles(w, runtime.GOOS, userHome())
+	budget := int64(DefaultBundleBudget)
+	if opts.Full {
+		budget = 0
+	}
+	collectServiceLogFiles(w, runtime.GOOS, userHome(), opts.StateDir, budget)
 
 	fprintf(w, "\n===== engine logs =====\n")
 	collectEngineLogs(w, opts.StateDir)
@@ -100,9 +107,33 @@ func serviceLogCommand(goos string, since time.Duration, now time.Time) (name st
 		}
 	case "windows":
 		secs := max(int(since.Seconds()), 1)
+		// Three things this has to get right, all found by running it on a
+		// real Windows host rather than reasoning about it:
+		//
+		//  1. $ErrorActionPreference, not just -ErrorAction. With no
+		//     'waired-agent' provider registered — a half-finished install,
+		//     which is exactly when someone runs `waired logs` —
+		//     Get-WinEvent raises an EventLogException that the -ErrorAction
+		//     PARAMETER does not suppress. The bundle got the exception, its
+		//     stack and its localized text where the "no entries" note
+		//     belongs.
+		//  2. Branch on the result instead of letting an empty pipeline
+		//     stand for it, so the absent-provider case says which thing is
+		//     absent rather than reading as "the agent logged nothing".
+		//  3. exit 0. Suppressing the error still leaves a non-zero exit,
+		//     which the caller reports as "could not read the service log" —
+		//     true of a missing powershell.exe, misleading here. A launch
+		//     failure still surfaces, because Go reports that itself.
+		//
+		// ASCII only: a redirected PowerShell pipeline decodes child output
+		// with the console's ANSI code page, so anything else arrives
+		// mangled on a non-UTF-8 console.
 		ps := fmt.Sprintf(
-			`Get-WinEvent -FilterHashtable @{ProviderName='waired-agent'; StartTime=(Get-Date).AddSeconds(-%d)} `+
-				`-ErrorAction SilentlyContinue | Format-List TimeCreated,LevelDisplayName,Message`, secs)
+			`$ErrorActionPreference='SilentlyContinue'; `+
+				`$e = Get-WinEvent -FilterHashtable @{ProviderName='waired-agent'; StartTime=(Get-Date).AddSeconds(-%d)}; `+
+				`if ($e) { $e | Format-List TimeCreated,LevelDisplayName,Message } `+
+				`else { Write-Output 'no waired-agent events in this window (the Event Log source is registered at install time)' }; `+
+				`exit 0`, secs)
 		return "powershell", []string{"-NoProfile", "-NonInteractive", "-Command", ps}
 	default:
 		return "", nil
@@ -130,32 +161,52 @@ func runServiceLog(ctx context.Context, w io.Writer, name string, args []string)
 	return nil
 }
 
-// tailLimit caps how much of each service log file lands in the bundle.
-// The rotation policy keeps these at 1 MB apiece, so this is a tail only
-// on a legacy host whose rotation never took (#331) — exactly the host
-// whose file can be arbitrarily large. Unlike the engine logs below,
-// these are read incrementally rather than with os.ReadFile, so an
-// unrotated multi-gigabyte file cannot be pulled into memory.
-const tailLimit = 512 << 10
-
-// serviceLogFiles returns the plain files the OS service manager writes
-// this process's stdout/stderr to on goos, in the (GOOS, facts) -> plan
-// shape the cross-OS parity rule asks for.
+// DefaultBundleBudget caps how many bytes of service log files land in
+// one bundle, across every file and generation together.
 //
-// Only darwin has any. On Linux the unit's streams go to the journal and
-// on Windows to the Event Log, both already covered by
-// serviceLogCommand above; only launchd points them at files, which is
-// why only macOS could lose them to a rotation (#331). An empty home
-// yields no tray entries rather than a guessed path.
-func serviceLogFiles(goos, home string) []string {
-	if goos != "darwin" {
+// A budget rather than the per-file cap this used to be: the rotation
+// policy now keeps up to 128 MB per generation and ten generations of
+// them (logrotate.PolicyForLevel), so a fixed per-file tail would sample
+// a sliver of each and a per-file cap large enough to be useful would
+// multiply by however many files the OS has. What a bug report wants is
+// "as much of the recent past as will still attach to an issue", which is
+// one number spent newest-first.
+//
+// 16 MB leaves room under the 25 MB GitHub attachment limit for the
+// service log and the engine logs collected around it. `waired logs
+// --full` sets it to zero, which means no bound.
+const DefaultBundleBudget = 16 << 20
+
+// serviceLogFiles returns the plain log files to collect on goos, in the
+// (GOOS, facts) -> plan shape the cross-OS parity rule asks for.
+//
+// Two different reasons a file exists here. On darwin launchd points the
+// service's stdout/stderr at files, which is why only macOS could lose
+// them to a rotation (#331). On Windows the Event Log that
+// serviceLogCommand queries carries Warn and above only, so the agent
+// keeps its own INFO/DEBUG file under the state dir (#636) — without it
+// this bundle held no agent records at all on Windows, just the bundled
+// engine's. Linux has neither: the journal holds everything and
+// serviceLogCommand already reads it.
+//
+// An empty home yields no tray entries, and an empty stateDir no Windows
+// entry, rather than a guessed path.
+func serviceLogFiles(goos, home, stateDir string) []string {
+	switch goos {
+	case "darwin":
+		files := []string{logrotate.AgentErrPath, logrotate.AgentOutPath}
+		if home != "" {
+			files = append(files, logrotate.TrayErrPath(home), logrotate.TrayOutPath(home))
+		}
+		return files
+	case "windows":
+		if p := logrotate.AgentOwnedLogFile(goos, stateDir); p != "" {
+			return []string{p}
+		}
+		return nil
+	default:
 		return nil
 	}
-	files := []string{logrotate.AgentErrPath, logrotate.AgentOutPath}
-	if home != "" {
-		files = append(files, logrotate.TrayErrPath(home), logrotate.TrayOutPath(home))
-	}
-	return files
 }
 
 func userHome() string {
@@ -175,28 +226,91 @@ func userHome() string {
 // Before #331 none of this was collected at all: on macOS the bundle
 // held the unified log and the engine logs, so the daemon's own stderr —
 // the stream carrying every slog record — was invisible to the tool we
-// ask users to run for a bug report.
-func collectServiceLogFiles(w io.Writer, goos, home string) {
-	files := serviceLogFiles(goos, home)
+// ask users to run for a bug report. Windows had the same hole for a
+// different reason until #636.
+func collectServiceLogFiles(w io.Writer, goos, home, stateDir string, budget int64) {
+	files := serviceLogFiles(goos, home, stateDir)
 	if len(files) == 0 {
+		if goos == "windows" {
+			// The agent's file lives under the state dir, so without one
+			// there is nothing to look for — say which is missing rather
+			// than implying Windows keeps no file.
+			fprintf(w, "(no --state-dir given; skipping the agent log file)\n")
+			return
+		}
 		fprintf(w, "(no service log files on %s; the service log above is the source)\n", goos)
 		return
 	}
-	appendServiceLogFiles(w, files)
+	appendServiceLogFiles(w, files, budget)
 }
 
 // appendServiceLogFiles takes the resolved paths rather than deriving
 // them, so the collection itself is testable against a temp directory
 // while serviceLogFiles is table-tested as a pure plan.
-func appendServiceLogFiles(w io.Writer, files []string) {
+//
+// budget bounds the total decompressed bytes of log content across every
+// file and generation; 0 means no bound (`waired logs --full`). It is
+// spent newest-first, because the end of a bug report's window is the part
+// that explains it, while the output stays oldest-first so the bundle
+// still reads forward in time.
+//
+// Spending newest-first is why the content is buffered rather than
+// streamed: what belongs in the bundle cannot be decided until the newer
+// generations have been read. The buffer is bounded by budget itself, and
+// the unbounded --full path streams as before.
+func appendServiceLogFiles(w io.Writer, files []string, budget int64) {
+	remaining := budget
+	// dropped, not "remaining == 0": a budget that lands exactly on the
+	// last byte collected everything, and saying otherwise would send an
+	// operator looking on disk for generations that are already in front of
+	// them.
+	dropped := false
 	for _, base := range files {
-		archives := archivesFor(base)
-		for _, a := range archives {
-			appendLogFile(w, a, true)
+		archives := archivesFor(base) // oldest first
+		if budget <= 0 {
+			for _, a := range archives {
+				appendLogFile(w, a, true, 0)
+			}
+			appendLogFile(w, base, false, 0)
+			warnLegacyRotationGap(w, base, archives)
+			continue
 		}
-		appendLogFile(w, base, false)
+
+		// Newest first for the spend: the live file, then .0.gz, .1.gz…
+		var chunks [][]byte
+		for i, path := range newestFirst(base, archives) {
+			if remaining <= 0 {
+				dropped = dropped || i < len(archives)+1
+				break
+			}
+			var buf bytes.Buffer
+			gzipped := path != base
+			if appendLogFile(&buf, path, gzipped, remaining) {
+				dropped = true // this one was cut short mid-file
+			}
+			remaining -= int64(buf.Len())
+			chunks = append(chunks, buf.Bytes())
+		}
+		for i := len(chunks) - 1; i >= 0; i-- {
+			_, _ = w.Write(chunks[i])
+		}
 		warnLegacyRotationGap(w, base, archives)
 	}
+	if dropped {
+		fprintf(w, "\n(stopped at the %d MB bundle budget; older log is still on disk. "+
+			"Re-run with --full to collect all of it.)\n", budget>>20)
+	}
+}
+
+// newestFirst orders one base's generations from newest to oldest: the
+// live file, then the archives in reverse of archivesFor's reading order.
+func newestFirst(base string, archives []string) []string {
+	out := make([]string, 0, len(archives)+1)
+	out = append(out, base)
+	for i := len(archives) - 1; i >= 0; i-- {
+		out = append(out, archives[i])
+	}
+	return out
 }
 
 // archivesFor lists base's rotated archives oldest first. The names are
@@ -221,10 +335,18 @@ func archivesFor(base string) []string {
 // appendLogFile writes one file's tail under a header carrying its size
 // and mtime — a bug report often turns on whether a file stopped being
 // written to, which the content alone does not say.
-func appendLogFile(w io.Writer, path string, gzipped bool) {
+//
+// limit caps the decompressed content; 0 means the whole file. The header
+// and any note are written whatever the limit, so a generation that ran
+// out of budget still says it exists and how big it is.
+//
+// Reports whether content was left behind, which is what lets the caller
+// tell "the budget happened to be exactly enough" from "there is more on
+// disk".
+func appendLogFile(w io.Writer, path string, gzipped bool, limit int64) (truncated bool) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return // absent is the norm: no archives yet, no tray installed
+		return false // absent is the norm: no archives yet, no tray installed
 	}
 	// "compressed" on archives so the byte count here is not read against
 	// the truncation note below it, which counts decompressed bytes.
@@ -238,7 +360,7 @@ func appendLogFile(w io.Writer, path string, gzipped bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		fprintf(w, "(could not read: %v)\n", err)
-		return
+		return false
 	}
 	defer f.Close()
 
@@ -247,35 +369,44 @@ func appendLogFile(w io.Writer, path string, gzipped bool) {
 		zr, err := gzip.NewReader(f)
 		if err != nil {
 			fprintf(w, "(could not decompress: %v)\n", err)
-			return
+			return false
 		}
 		defer zr.Close()
 		r = zr
 	}
-	data, truncated, err := readTail(r, tailLimit)
+	lim := -1 // no bound
+	if limit > 0 {
+		lim = int(limit)
+	}
+	data, cut, err := readTail(r, lim)
 	if err != nil {
 		fprintf(w, "(read failed after %d bytes: %v)\n", len(data), err)
 	}
-	if truncated {
+	if cut {
 		fprintf(w, "(truncated to the last %d bytes)\n", len(data))
 	}
 	_, _ = w.Write(data)
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		_, _ = io.WriteString(w, "\n")
 	}
+	return cut
 }
 
 // readTail returns at most limit trailing bytes of r, reporting whether
-// anything was dropped. The kept region starts at a line boundary so the
+// anything was dropped. A negative limit reads the whole stream
+// (`waired logs --full`). The kept region starts at a line boundary so the
 // bundle never opens mid-record.
 func readTail(r io.Reader, limit int) (data []byte, truncated bool, err error) {
-	buf := make([]byte, 0, limit)
+	var buf []byte
+	if limit > 0 {
+		buf = make([]byte, 0, limit)
+	}
 	chunk := make([]byte, 32<<10)
 	for {
 		n, rerr := r.Read(chunk)
 		if n > 0 {
 			buf = append(buf, chunk[:n]...)
-			if len(buf) > limit {
+			if limit > 0 && len(buf) > limit {
 				buf = append(buf[:0], buf[len(buf)-limit:]...)
 				truncated = true
 			}

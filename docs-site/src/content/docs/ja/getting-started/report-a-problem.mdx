@@ -5,7 +5,7 @@ meta:
   audience: 不具合を報告する人、診断情報を求められた人
   needs: 問題が起きているパソコンのターミナル
   time: 数分（再現にかかる時間は別）
-sourceHash: 344204bb03db0c7f
+sourceHash: 16dcc73915c57aa7
 ---
 
 import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
@@ -42,11 +42,20 @@ import { Tabs, TabItem, Aside, Steps } from '@astrojs/starlight/components';
    `--since` はどこまで遡るかです。しばらく前に起きた問題なら広げてください。
    既定は 1 時間です。
 
+   Windows では**管理者権限の** PowerShell から実行してください。サービス自身の
+   ログも AI エンジンのログも `C:\ProgramData\waired` 配下にあり、そこは権限が
+   絞られています。権限がないとどちらもファイルに入らず、問題を説明する部分が
+   欠けた報告になります。
+
 4. **詳細ログを戻します。** ログが際限なく大きくならないようにするためです。
 
    ```sh
    waired config log-level info
    ```
+
+   詳細ログが ON の間は保存量も増え、ファイル 1 つあたり 128 MB（通常は 32 MB）に
+   なります。数日後に気づいた問題でも記録が残っています。OFF に戻すと元のサイズに
+   戻ります。
 
 </Steps>
 

@@ -23,10 +23,16 @@
 // those are kept, because that file becomes the .0.gz archive rather
 // than being deleted. Nothing is dropped.
 //
-// Linux and Windows have nothing to do here: systemd captures the unit's
-// stdout/stderr into journald and Windows logs through the Event Log,
-// both already bounded by the OS. The per-OS bodies say so and return a
-// zero ops, which makes Manage a no-op there.
+// Linux and Windows have no descriptor to re-point: systemd captures the
+// unit's stdout/stderr into journald, and under the Windows SCM stderr is
+// closed. The per-OS bodies say so and return a zero ops, which makes
+// Manage a no-op there.
+//
+// Windows instead has the opposite problem — no stream at all, since the
+// Event Log takes Warn and above only — so the agent opens and rotates a
+// log file of its own. That is File (file.go): the same archives, the same
+// policy, but the writer owns the handle rather than borrowing a
+// descriptor from a service manager.
 package logrotate
 
 import (
@@ -109,8 +115,44 @@ type Policy struct {
 	Keep     int
 }
 
-// DefaultPolicy is the policy the agent and the tray both run with.
-func DefaultPolicy() Policy { return Policy{MaxBytes: 1 << 20, Keep: 5} }
+// DefaultPolicy is the policy that applies at info level and above.
+//
+// The old bound was 1 MB x 5, inherited from the newsyslog drop-in this
+// package replaced. Measurement on the rc8 macOS host retired it: the
+// INFO records alone ran ~0.96 MB/h there, so six windows held about six
+// hours — not enough to look into something noticed the next morning,
+// which is the ordinary case for a background service.
+//
+// 32 MB x 10 is a few days of that, for ~60 MB on disk once the archives
+// are gzipped. Sizing note: a host running Waired has already downloaded
+// a multi-gigabyte model and a ~1.4 GB engine, so tens of megabytes of
+// log is well under one percent of what is already there — the disk was
+// never the scarce thing, the history was.
+func DefaultPolicy() Policy { return Policy{MaxBytes: 32 << 20, Keep: 10} }
+
+// debugPolicy is what applies while the log level is debug. Bigger again,
+// because the old bound turned the standard bug-report advice ("raise
+// verbosity, reproduce, then collect") against itself: on the rc8 macOS
+// host at debug the file rotated every 18 minutes, so five generations
+// held about 90 minutes. Two separate investigations there lost evidence
+// only an hour old, and `waired logs --since 720h` returned 1h38m (#658).
+//
+// 128 MB x 10 is roughly two weeks at the ~2 MB/h that host measured, for
+// ~240 MB on disk.
+func debugPolicy() Policy { return Policy{MaxBytes: 128 << 20, Keep: 10} }
+
+// PolicyForLevel returns the bound to apply at lvl. Split from Policy
+// itself so it is a pure function of the level, table-testable without a
+// filesystem, and so callers can re-read it: the management API flips the
+// live level without a restart (`waired config log-level debug`), and a
+// rotation policy chosen once at boot would keep the old bound for the
+// rest of the process's life.
+func PolicyForLevel(lvl slog.Level) Policy {
+	if lvl <= slog.LevelDebug {
+		return debugPolicy()
+	}
+	return DefaultPolicy()
+}
 
 // AgentTargets returns the daemon's rotatable log files on goos, in the
 // (GOOS, facts) -> plan shape the repo's cross-OS parity rule asks for.
@@ -154,14 +196,18 @@ type ops struct {
 	sameFile func(fd int, path string) (bool, error)
 }
 
-// Manage starts a goroutine that keeps targets within p, until ctx is
-// done. It is a no-op when there is nothing to do: no targets, or an OS
-// whose service manager already bounds the stream.
+// Manage starts a goroutine that keeps targets within the policy, until
+// ctx is done. It is a no-op when there is nothing to do: no targets, or
+// an OS whose service manager already bounds the stream.
+//
+// policy is a function, not a value, because the level it derives from is
+// live: `waired config log-level debug` changes the verbosity of a
+// running daemon, and the bound has to follow it. Each sweep asks again.
 //
 // Every failure is logged and swallowed. A daemon must not fail to run
 // because its log file could not be rotated.
-func Manage(ctx context.Context, targets []Target, p Policy, logger *slog.Logger) {
-	if len(targets) == 0 {
+func Manage(ctx context.Context, targets []Target, policy func() Policy, logger *slog.Logger) {
+	if len(targets) == 0 || policy == nil {
 		return
 	}
 	o := defaultOps()
@@ -175,7 +221,7 @@ func Manage(ctx context.Context, targets []Target, p Policy, logger *slog.Logger
 		t := time.NewTicker(checkEvery)
 		defer t.Stop()
 		for {
-			sweep(targets, p, o, logger)
+			sweep(targets, policy(), o, logger)
 			select {
 			case <-ctx.Done():
 				return

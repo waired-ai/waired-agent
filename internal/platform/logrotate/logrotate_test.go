@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -370,12 +371,49 @@ func TestRecoverStaged_NothingToDo(t *testing.T) {
 	}
 }
 
-// TestDefaultPolicy records the values the retired newsyslog drop-in
-// used, so a change to the size bound is a deliberate edit rather than a
-// drift.
+// TestDefaultPolicy pins the info-level bound, so a change to it is a
+// deliberate edit rather than a drift.
+//
+// It used to pin 1 MB x 5 — the values the retired newsyslog drop-in
+// used — and this test is what made changing them deliberate. Measurement
+// on the rc8 macOS host retired those: INFO records alone ran ~0.96 MB/h,
+// so six windows held about six hours, which is not enough to look into
+// something noticed the next morning (#658). Raised on the owner's call,
+// with the observation that a host running Waired has already downloaded
+// a multi-gigabyte model, so the disk was never the scarce thing.
 func TestDefaultPolicy(t *testing.T) {
 	p := DefaultPolicy()
-	if p.MaxBytes != 1<<20 || p.Keep != 5 {
-		t.Errorf("DefaultPolicy() = %+v, want {MaxBytes:1048576 Keep:5}", p)
+	if p.MaxBytes != 32<<20 || p.Keep != 10 {
+		t.Errorf("DefaultPolicy() = %+v, want {MaxBytes:33554432 Keep:10}", p)
+	}
+}
+
+// TestPolicyForLevel pins the two bounds. Debug gets the larger one
+// because the standard bug-report advice — raise verbosity, reproduce,
+// then collect — otherwise shrank the usable window to about 90 minutes
+// at the rate the rc8 macOS host measured, which is how two separate
+// investigations there lost evidence only an hour old (#658).
+//
+// Product contract, ratified by #658 and the owner's sizing call.
+func TestPolicyForLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lvl  slog.Level
+		want Policy
+	}{
+		{"debug", slog.LevelDebug, Policy{MaxBytes: 128 << 20, Keep: 10}},
+		{"below debug", slog.LevelDebug - 4, Policy{MaxBytes: 128 << 20, Keep: 10}},
+		{"info", slog.LevelInfo, Policy{MaxBytes: 32 << 20, Keep: 10}},
+		{"warn", slog.LevelWarn, Policy{MaxBytes: 32 << 20, Keep: 10}},
+		{"error", slog.LevelError, Policy{MaxBytes: 32 << 20, Keep: 10}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PolicyForLevel(tc.lvl); got != tc.want {
+				t.Errorf("PolicyForLevel(%v) = %+v, want %+v", tc.lvl, got, tc.want)
+			}
+		})
+	}
+	if PolicyForLevel(slog.LevelInfo) != DefaultPolicy() {
+		t.Error("info level and DefaultPolicy disagree; they are meant to be the same bound")
 	}
 }

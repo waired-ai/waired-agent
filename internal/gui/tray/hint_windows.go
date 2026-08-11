@@ -8,11 +8,16 @@ package tray
 // now service.StartHintFor(goos), table-tested across all three OSes.
 
 // checkLogsHint is shown when the tunnel reports an error state and
-// the user should look at the daemon's log to diagnose. The
-// Phase W-1.5 logsink_windows wires waired-agent into the Windows
-// Event Log under the 'waired-agent' source.
+// the user should look at the daemon's log to diagnose.
+//
+// It names the agent's own log file rather than the Event Log query it
+// used to: internal/platform/logsink mirrors Warn and above to the
+// 'waired-agent' Event Log source, so the query answers "was there an
+// error" but never "what was the daemon doing" (#636). The file under the
+// state dir holds the whole stream. ASCII only — a redirected PowerShell
+// pipeline decodes child output with the console's ANSI code page.
 func checkLogsHint() string {
-	return "Get-WinEvent -ProviderName waired-agent -MaxEvents 30"
+	return `Check %ProgramData%\waired\logs\waired-agent.log`
 }
 
 // claudeEnableHint is the OS-correct command to route Claude Code through
