@@ -130,7 +130,12 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		}
 
 		// Default Yes: stepping down is cheap and the host is struggling.
-		if !ynPrompt(out, sc, fmt.Sprintf("Switch to %s?", to), true) {
+		// An exhausted stdin is not that Yes — see noAnswerKeeps.
+		answer := ynAsk(out, sc, fmt.Sprintf("Switch to %s?", to), true)
+		if answer == ynNoAnswer {
+			return noAnswerKeeps(out, from, resp)
+		}
+		if answer == ynNo {
 			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
 				writePromptf(out, "warn: could not record your choice: %v\n", err)
 			} else {
@@ -189,7 +194,11 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 		// Default No: an upgrade pulls a multi-GB download — the opposite
 		// trade-off of the lighter flow. The switch itself applies live
 		// (waired#812), so only the download is called out here.
-		if !ynPrompt(out, sc, fmt.Sprintf("Switch to %s? (downloads the model)", to), false) {
+		answer := ynAsk(out, sc, fmt.Sprintf("Switch to %s? (downloads the model)", to), false)
+		if answer == ynNoAnswer {
+			return noAnswerKeeps(out, from, resp)
+		}
+		if answer == ynNo {
 			if err := dismissRecommendation(mgmtURL, rec.FromVariantID, rec.ToVariantID); err != nil {
 				writePromptf(out, "warn: could not record your choice: %v\n", err)
 			} else {
@@ -202,6 +211,29 @@ func benchmarkWithScanner(mgmtURL string, nonInteractive bool, out io.Writer, sc
 			resp = remeasureAfterSwitch(mgmtURL, out)
 		}
 	}
+	return resp, false, nil
+}
+
+// noAnswerKeeps is what the switch prompts do when stdin ended before an
+// answer arrived: nothing, said out loud.
+//
+// `waired init` cannot decide this from a TTY check the way
+// `waired runtimes benchmark` does (cmd/waired/runtimes.go). A scripted
+// install legitimately pipes its answers in — scripts/dev/installtest-windows.ps1
+// runs `'0' | waired init …` with no --non-interactive — so forcing
+// report-only mode off a terminal would take the keyboard away from
+// every prompt that run means to answer. What is wrong is narrower:
+// ynPrompt returned the DEFAULT once the pipe ran dry, so the two
+// default-Yes prompts in this flow replaced the model and then offered
+// to delete the weights it moved off, with nobody at the keyboard
+// (waired-agent#754).
+//
+// The line is the one --non-interactive already prints. That flag is not
+// set here, but the statement is true either way: this run had no one to
+// ask, so it kept what the host had.
+func noAnswerKeeps(out io.Writer, from string, resp *management.BenchmarkRunResponse) (*management.BenchmarkRunResponse, bool, error) {
+	writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to switch interactively.\n",
+		from)
 	return resp, false, nil
 }
 
@@ -262,11 +294,38 @@ func offerToRemoveRejected(mgmtURL, modelID, label string, nonInteractive bool, 
 	if modelID == "" {
 		return
 	}
+	// Never offer to delete the model this host is SERVING. The premise
+	// of the question — "Waired is not using it any more" — is what makes
+	// default Yes safe, and waired-agent#754 produced a step-down whose
+	// two sides were the same model, which would have walked an operator
+	// through deleting the weights under the engine (DeleteModel drops
+	// the weights, clears state.Active, and clears the preference).
+	//
+	// The picker fix means from == to can no longer be reached from here.
+	// This is the invariant stated where it can be checked, so a future
+	// path that reaches it does not have to rediscover the consequence.
+	//
+	// An active model that will not resolve leaves the offer standing, on
+	// purpose: reading "" as a match would silently retire #648's cleanup
+	// on every host whose status call fails, which is a far more common
+	// state than the one guarded against.
+	if active := canonicalBundledModelID(activeModelForDisplay(mgmtURL)); active != "" &&
+		active == canonicalBundledModelID(modelID) {
+		return
+	}
 	if nonInteractive {
 		writePromptf(out, "Keeping %s — remove it with `waired models rm %s`.\n", label, modelID)
 		return
 	}
-	if !ynPrompt(out, sc, fmt.Sprintf("Remove %s? Waired is not using it any more.", label), true) {
+	answer := ynAsk(out, sc, fmt.Sprintf("Remove %s? Waired is not using it any more.", label), true)
+	if answer == ynNoAnswer {
+		// Same line the unattended arm above prints, for the same reason:
+		// deleting gigabytes on nobody's authority is the one answer this
+		// must not give (waired-agent#754).
+		writePromptf(out, "Keeping %s — remove it with `waired models rm %s`.\n", label, modelID)
+		return
+	}
+	if answer == ynNo {
 		writePromptf(out, "Keeping %s — remove it later with `waired models rm %s`.\n", label, modelID)
 		return
 	}
@@ -352,7 +411,16 @@ func tinyBenchmarkDisableFlow(
 	// as one prompt; ynPrompt appends the [y/N] (default: No) hint.
 	q := "Drop to that model and keep local inference?\n" +
 		"  No turns local inference off — Waired still works as a gateway/relay."
-	if ynPrompt(out, sc, q, false) {
+	answer := ynAsk(out, sc, q, false)
+	if answer == ynNoAnswer {
+		// Turning local inference off is a decision, not a fallback. The
+		// default No is for a person who read the question; an exhausted
+		// stdin means nobody did, and this arm used to disable inference
+		// on a host nobody was watching (waired-agent#754).
+		writePromptf(out, "Non-interactive: keeping %s. Run `waired runtimes benchmark` to revisit.\n", from)
+		return resp, false, nil
+	}
+	if answer == ynYes {
 		if switchAndWait(mgmtURL, rec.ToModelID, label, out, sc, tty) {
 			resp = remeasureAfterSwitch(mgmtURL, out)
 			// The same leftover as the ordinary step-down: this host was

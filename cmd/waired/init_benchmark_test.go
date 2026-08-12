@@ -1164,3 +1164,136 @@ func TestOfferToRemoveRejected_FailureIsNotFatal(t *testing.T) {
 		t.Errorf("a failed removal reported success:\n%s", o)
 	}
 }
+
+// The prompts below all default to Yes or act on No, and `waired init`
+// does not force report-only mode off a terminal — a scripted install
+// legitimately pipes its answers in. So an EXHAUSTED stdin used to take
+// the default and act on it with nobody at the keyboard: switch the
+// model, then offer to delete the weights it moved off, then answer that
+// too (waired-agent#754). No answer now means no change.
+
+func TestPromptBenchmark_NoAnswerKeepsTheModel(t *testing.T) {
+	stub := &benchStub{ready: true, rec: sampleRec()}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	// An empty reader: the prompt is printed and stdin ends before an answer.
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if stub.acceptCount != 0 {
+		t.Errorf("switched the model with no answer, accept=%d id=%q", stub.acceptCount, stub.acceptedID)
+	}
+	// A dismissal is a recorded decision too — "do not offer this again"
+	// is not something an empty pipe gets to say either.
+	if stub.dismissCount != 0 {
+		t.Errorf("recorded a dismissal with no answer, dismiss=%d", stub.dismissCount)
+	}
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v with no answer", stub.deleted)
+	}
+	if !strings.Contains(out.String(), "keeping heavy") {
+		t.Errorf("no-answer did not say it kept the model:\n%s", out.String())
+	}
+}
+
+func TestPromptBenchmark_NoAnswerToAnUpgradeChangesNothing(t *testing.T) {
+	stub := &benchStub{ready: true, upgrade: sampleRec(), measured: 120}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if stub.acceptCount != 0 || stub.dismissCount != 0 {
+		t.Errorf("no answer must neither switch (%d) nor dismiss (%d)", stub.acceptCount, stub.dismissCount)
+	}
+}
+
+func TestPromptBenchmark_NoAnswerDoesNotDisableInference(t *testing.T) {
+	// The tiny dialog's default is No, and No TURNS LOCAL INFERENCE OFF.
+	// That is a decision for a person who read the question; an exhausted
+	// stdin means nobody did.
+	stub := &benchStub{ready: true, rec: tinyRec()}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if err := promptBenchmarkRecommendation(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("")), false); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if stub.disableCount != 0 {
+		t.Errorf("turned local inference off with no answer, disable=%d", stub.disableCount)
+	}
+	if stub.acceptCount != 0 {
+		t.Errorf("switched the model with no answer, accept=%d", stub.acceptCount)
+	}
+}
+
+func TestPromptBenchmark_NoAnswerToTheRemovalKeepsTheWeights(t *testing.T) {
+	// One answer only: the switch is accepted by a person, and stdin then
+	// ends before the removal question. Deleting gigabytes is the one
+	// answer an unattended run must not give.
+	stub := &benchStub{ready: true, rec: sampleRec(), measuredSeq: []float64{26, 71}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	if _, _, err := benchmarkWithScanner(srv.URL, false, &out,
+		bufio.NewScanner(strings.NewReader("y\n")), false); err != nil {
+		t.Fatalf("benchmark: %v", err)
+	}
+	if stub.acceptCount != 1 {
+		t.Fatalf("the answered switch did not happen, accept=%d", stub.acceptCount)
+	}
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v with no answer to the removal", stub.deleted)
+	}
+	if !strings.Contains(out.String(), "`waired models rm heavy`") {
+		t.Errorf("the unanswered removal did not say how to remove it later:\n%s", out.String())
+	}
+}
+
+// The premise of the removal question — "Waired is not using it any
+// more" — is what makes its default Yes safe. waired-agent#754 produced
+// a step-down whose two sides were the same model, which would have
+// walked an operator through deleting the weights under the running
+// engine. The picker fix means that pairing can no longer be reached
+// from this flow; the guard states the invariant where it is checkable.
+func TestOfferToRemoveRejected_NeverOffersTheServingModel(t *testing.T) {
+	stub := &benchStub{ready: true, active: &management.ActiveSelection{ModelID: "heavy"}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	offerToRemoveRejected(srv.URL, "heavy", "Heavy", false,
+		&out, bufio.NewScanner(strings.NewReader("y\n")))
+	if len(stub.deleted) != 0 {
+		t.Errorf("deleted %v — that is the model this host is serving", stub.deleted)
+	}
+	if strings.Contains(out.String(), "Remove Heavy?") {
+		t.Errorf("asked whether to remove the serving model:\n%s", out.String())
+	}
+}
+
+// An active model that will not resolve leaves the offer standing, on
+// purpose: reading "" as a match would retire waired-agent#648's cleanup
+// on every host whose status call fails, which is far more common than
+// the state the guard above exists for.
+func TestOfferToRemoveRejected_StillOffersWhenTheActiveModelIsUnknown(t *testing.T) {
+	stub := &benchStub{ready: true} // no Active in /status
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	offerToRemoveRejected(srv.URL, "heavy", "Heavy", false,
+		&out, bufio.NewScanner(strings.NewReader("y\n")))
+	if len(stub.deleted) != 1 || stub.deleted[0] != "heavy" {
+		t.Errorf("deleted = %v, want the rejected model removed once", stub.deleted)
+	}
+}
