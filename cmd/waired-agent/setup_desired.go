@@ -685,29 +685,12 @@ func (r *setupReconciler) Apply(ctx context.Context, st *signer.InferenceState) 
 	if d.engine != "" {
 		installed, _ := r.provider.setupEngineState(ctx, d.engine)
 		enginePresent = installed
-		r.mu.Lock()
-		appeared := installed && r.engineObserved && !r.engineInstalled
-		r.engineInstalled = installed
-		r.engineObserved = true
-		if appeared && d.modelID != "" {
-			delete(r.modelApplied, d.modelID)
-			delete(r.modelRejected, d.modelID)
-			applied = false
-			changed = true
-		}
-		r.mu.Unlock()
-		if appeared {
-			if r.logger != nil {
-				r.logger.Info("setup: engine became installed; re-admitting the desired model",
-					"engine", d.engine, "model", d.modelID)
+		if r.noteEngineInstalled(installed, d.modelID) {
+			if d.modelID != "" {
+				applied = false
+				changed = true
 			}
-			// Re-admitting the model without an engine to pull WITH is the
-			// other half of #304: `ollama pull` is a client of a server
-			// nobody started. Not gated on d.modelID — an engine that just
-			// appeared is worth starting either way. This is the
-			// observable-state backstop for an executor that died mid-install
-			// or a daemon that restarted while the wizard was running.
-			r.provider.startSetupEngine("setup: engine binary appeared")
+			r.onEngineAppeared(d.engine, d.modelID)
 		}
 	}
 
@@ -824,6 +807,55 @@ func (r *setupReconciler) noteLeftoverDesired(modelID string) bool {
 	}
 	r.leftoverNoted[modelID] = true
 	return false
+}
+
+// noteEngineInstalled records an engine-presence observation against the
+// latch and reports whether THIS call is the false->true edge — the
+// transition that invalidates the one-shot model admission.
+//
+// It exists because two readers probe the engine independently and used
+// to disagree about when it appeared. Apply probes on a control-plane
+// frame; snapshot() probes on its own 2 s ticker. Only Apply updated the
+// latch, so between the binary landing on disk and the next frame,
+// snapshot() reported the engine rows `done` while modelApplied /
+// modelRejected still held the failure from the engine-less attempt —
+// and the model row showed that stale failure for a window bounded by
+// control-plane frame cadence, which is not observable from this repo
+// (waired-agent#413).
+//
+// Both callers go through here now, so whichever notices first owns the
+// edge and the other sees an already-updated latch. Clearing the
+// admission records here rather than at the call sites is deliberate:
+// they are what the edge invalidates, and doing it under the same lock
+// as the latch means no reader can observe "engine appeared" and the old
+// rejection together.
+func (r *setupReconciler) noteEngineInstalled(installed bool, modelID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	appeared := installed && r.engineObserved && !r.engineInstalled
+	r.engineInstalled = installed
+	r.engineObserved = true
+	if appeared && modelID != "" {
+		delete(r.modelApplied, modelID)
+		delete(r.modelRejected, modelID)
+	}
+	return appeared
+}
+
+// onEngineAppeared is what both probes do once the edge is theirs.
+//
+// Re-admitting the model without an engine to pull WITH is the other
+// half of #304: `ollama pull` is a client of a server nobody started.
+// Not gated on modelID — an engine that just appeared is worth starting
+// either way. This is the observable-state backstop for an executor that
+// died mid-install or a daemon that restarted while the wizard was
+// running.
+func (r *setupReconciler) onEngineAppeared(engine, modelID string) {
+	if r.logger != nil {
+		r.logger.Info("setup: engine became installed; re-admitting the desired model",
+			"engine", engine, "model", modelID)
+	}
+	r.provider.startSetupEngine("setup: engine binary appeared")
 }
 
 // kickPush wakes the reporter loop so a state change reaches NAVI on the
@@ -1279,6 +1311,23 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 	}
 	if d.engine != "" {
 		installed, ready := r.provider.setupEngineState(ctx, d.engine)
+		// This probe is the OTHER reader of engine presence, and on a
+		// 2 s ticker it is usually the first to see the binary land.
+		// Apply only runs when a control-plane frame arrives, and nothing
+		// local schedules one, so leaving the edge to Apply meant the
+		// rows below could move ahead of the admission that produced them
+		// (#413). Whichever probe gets there first owns the edge; the
+		// latch makes sure only one does.
+		if r.noteEngineInstalled(installed, d.modelID) {
+			r.onEngineAppeared(d.engine, d.modelID)
+			// rejected was read at the top of this function, from the
+			// very record the edge just cleared. Re-read it so THIS
+			// projection is already right rather than right on the next
+			// tick — the stale row is the whole complaint.
+			r.mu.Lock()
+			rejected = r.modelRejected[d.modelID]
+			r.mu.Unlock()
+		}
 		var engineLatched bool
 		var engineLastErr string
 		if installed && !ready {
