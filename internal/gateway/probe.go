@@ -112,9 +112,21 @@ const (
 	HeaderInferencePeer  = "X-Waired-Inference-Peer"
 	HeaderFallbackFrom   = "X-Waired-Fallback-From"
 	HeaderFallbackReason = "X-Waired-Fallback-Reason"
-	// HeaderLocalModel names the catalog model id an unknown Anthropic
-	// model id was mapped to via Deps.ResolveUnknownModel (#600). Set
-	// only when mapping occurred and selection succeeded.
+	// HeaderLocalModel names the catalog model id of the selection that
+	// answered an Anthropic messages request — router.Selection.ModelID,
+	// which is the Deps.ResolveUnknownModel target on the mapped path
+	// (#600) and the id the client asked for otherwise. Set whenever
+	// selection succeeded, on a local leg and a mesh leg alike; the
+	// serving peer, when there was one, is on HeaderInferencePeer.
+	// "Local" here reads as "served by Waired", not "served by this
+	// device" — the name predates the mesh-capable Claude surface
+	// (#601) and stays because downstream consumers import it.
+	//
+	// It used to be set only on the mapped path, so a request naming a
+	// catalog model id directly reached the Claude intercept's
+	// commit-time observer with nothing to report, and
+	// `waired claude route` printed no `last served:` line for a turn
+	// Waired had served — locally or on a peer (#755).
 	HeaderLocalModel = "X-Waired-Local-Model"
 	// HeaderLocalError carries a machine-readable local error reason
 	// ("no_model"). The Claude intercept prefixes it with "local_" for

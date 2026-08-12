@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -649,8 +650,84 @@ func TestAnthropicMessages_KnownModelBypassesResolver(t *testing.T) {
 	if calls != 0 {
 		t.Errorf("resolver calls = %d, want 0 for a resolvable id", calls)
 	}
-	if got := w.Header().Get(HeaderLocalModel); got != "" {
-		t.Errorf("%s = %q, want unset when no mapping happened", HeaderLocalModel, got)
+	// Inverted by #755. This used to pin "unset when no mapping happened",
+	// which is what kept `waired claude route`'s last-served record blank
+	// for every request naming a catalog id directly: the Claude intercept
+	// fires its record off this header. The header now reports whichever
+	// model answered, mapped or not.
+	if got := w.Header().Get(HeaderLocalModel); got != "qwen3-8b-instruct" {
+		t.Errorf("%s = %q, want the selected catalog id even without mapping", HeaderLocalModel, got)
+	}
+}
+
+// TestAnthropicMessages_CatalogIDPeerServedReportsModelAndPeer is the mesh
+// half of #755: a request naming a catalog id that a peer serves must carry
+// BOTH the model and the peer on the response, because the intercept's
+// served-record reads the peer only when the model header is present
+// (internal/proxy/intercept/server.go, localModelObserver.observe). Without
+// both, `waired claude route` says "this device" — or nothing at all — for a
+// request observability recorded as decision=remote.
+// Both legs are covered because the streaming one commits on its first
+// flush, which is when the intercept's observer reads the two headers.
+func TestAnthropicMessages_CatalogIDPeerServedReportsModelAndPeer(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		name := "nonstream"
+		if stream {
+			name = "stream"
+		}
+		t.Run(name, func(t *testing.T) {
+			upstream := fakeOllamaForAnthropic(t, nil)
+			defer upstream.Close()
+
+			// PeerDisplayID differs from the runtime suffix on purpose: it
+			// is the Public Share pseudonym, and peerDisplayID prefers it
+			// so a real foreign DeviceID never reaches a header (§8.5).
+			sel := &modelAwareSelector{known: map[string]router.Selection{
+				"qwen3-8b-instruct": {
+					EndpointID:    "remote-dev_peer7-ollama-qwen3-8b",
+					Runtime:       remoteRuntimePrefix + "dev_peer7",
+					EngineModel:   "qwen3:8b-q4_K_M",
+					ModelID:       "qwen3-8b-instruct",
+					ExecutionMode: "remote",
+					PeerDisplayID: "shared-7",
+				},
+			}}
+			gw := anthropicGatewayWithResolver(t, sel, upstream.URL, func(requested string) (string, bool) {
+				t.Errorf("resolver called for the resolvable catalog id %q", requested)
+				return "", false
+			})
+			// Send the request down the real peer path: the probe
+			// coordinator answers /healthz from the stub, the inference leg
+			// reaches the fake engine, and lookupAdapter takes its remote
+			// branch.
+			gw.set.deps.PeerAdapterFactory = func(string) (runtime.Adapter, error) {
+				return phase8FakePeerAdapter{
+					transport: splitTransport{probeRT: &stubRT{status: http.StatusOK, body: readyBody(0, 4)}},
+					base:      upstream.URL,
+				}, nil
+			}
+
+			body := fmt.Sprintf(
+				`{"model":"qwen3-8b-instruct","max_tokens":64,"stream":%t,"messages":[{"role":"user","content":"hi"}]}`,
+				stream)
+			r := httptest.NewRequest(http.MethodPost, "/anthropic/v1/messages", bytes.NewBufferString(body))
+			r.RemoteAddr = "127.0.0.1:1"
+			w := httptest.NewRecorder()
+			gw.Handler().ServeHTTP(w, r)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+			}
+			if got := w.Header().Get(HeaderLocalModel); got != "qwen3-8b-instruct" {
+				t.Errorf("%s = %q, want the catalog id the peer served", HeaderLocalModel, got)
+			}
+			if got := w.Header().Get(HeaderInferencePeer); got != "shared-7" {
+				t.Errorf("%s = %q, want the peer's display id", HeaderInferencePeer, got)
+			}
+			if strings.Contains(w.Header().Get(HeaderInferencePeer), "dev_peer7") {
+				t.Errorf("the real device id reached %s", HeaderInferencePeer)
+			}
+		})
 	}
 }
 

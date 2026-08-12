@@ -3,7 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
@@ -62,5 +64,51 @@ func TestClaudeRouteHint(t *testing.T) {
 		if strings.HasPrefix(text, "(") || strings.HasSuffix(text, ")") {
 			t.Fatalf("claudeRouteHintText(%q) should be bare, got %q", r, text)
 		}
+	}
+}
+
+// TestClaudeServedDisplay locks the `last served:` value for each combination
+// of the fields behind it. The peer branch carries the weight: until #755 the
+// gateway only reported the serving model for a remapped id, so a mesh-served
+// turn left both fields empty and this rendering had never run against a real
+// state. Record of today's behaviour.
+func TestClaudeServedDisplay(t *testing.T) {
+	served := time.Date(2026, 8, 13, 10, 4, 11, 0, time.UTC)
+	stamp := served.Local().Format(time.RFC3339)
+	cases := []struct {
+		name string
+		st   management.ClaudeRoutingState
+		want string
+	}{
+		{
+			name: "this device",
+			st:   management.ClaudeRoutingState{LastLocalModel: "qwen3.5-2b", LastServedAt: served},
+			want: stamp + " — qwen3.5-2b (this device)",
+		},
+		{
+			name: "peer",
+			st:   management.ClaudeRoutingState{LastLocalModel: "qwen3.6-27b", LastServedBy: "shared-7", LastServedAt: served},
+			want: stamp + " — qwen3.6-27b (peer shared-7)",
+		},
+		{
+			name: "peer without a model",
+			st:   management.ClaudeRoutingState{LastServedBy: "shared-7", LastServedAt: served},
+			want: stamp + " — peer shared-7",
+		},
+		{
+			// An agent predating LastServedAt reports no time; the line
+			// falls back to the form it had before #755 rather than
+			// printing a zero date.
+			name: "no time reported",
+			st:   management.ClaudeRoutingState{LastLocalModel: "qwen3.5-2b"},
+			want: "qwen3.5-2b (this device)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claudeServedDisplay(tc.st); got != tc.want {
+				t.Fatalf("claudeServedDisplay(%+v) = %q, want %q", tc.st, got, tc.want)
+			}
+		})
 	}
 }

@@ -104,11 +104,13 @@ const (
 const localErrorHeader = "X-Waired-Local-Error"
 
 // localModelHeader mirrors gateway.HeaderLocalModel: the catalog model id
-// the local gateway stamps on a mapped success so the serving model is
-// observable (#600). The intercept reads it at commit time to report which
-// model answered a locally-served Claude request (#602). The literal is
-// duplicated here to keep this fail-open package stdlib-only — keep both
-// sides in sync.
+// of the selection that answered, which the local gateway stamps on every
+// successful Anthropic messages selection — a local leg and a mesh leg
+// alike (before #755 only on a model-mapped one, which is why a request
+// naming a catalog id directly recorded nothing here). The intercept reads
+// it at commit time to report which model answered a waired-served Claude
+// request (#602). The literal is duplicated here to keep this fail-open
+// package stdlib-only — keep both sides in sync.
 const localModelHeader = "X-Waired-Local-Model"
 
 // localErrContextOverflow is the localErrorHeader value the local gateway

@@ -168,15 +168,25 @@ func claudeSubDisplay(pol state.ClaudeRoutingPolicy) string {
 	return string(pol.Sub) + claudeRouteHint(pol.Sub)
 }
 
+// claudeServedDisplay renders the last request Waired served: what answered,
+// where, and when. It leads with the time, like the last-fallback line, so the
+// two read against each other — the served record is never cleared, so without
+// a time one left over from before a fallback looks current (#755). The time
+// is omitted when the agent did not report one, which is what an agent
+// predating the field does.
 func claudeServedDisplay(st management.ClaudeRoutingState) string {
 	where := "this device"
 	if st.LastServedBy != "" {
 		where = "peer " + st.LastServedBy
 	}
-	if st.LastLocalModel == "" {
-		return where
+	served := where
+	if st.LastLocalModel != "" {
+		served = fmt.Sprintf("%s (%s)", st.LastLocalModel, where)
 	}
-	return fmt.Sprintf("%s (%s)", st.LastLocalModel, where)
+	if st.LastServedAt.IsZero() {
+		return served
+	}
+	return fmt.Sprintf("%s — %s", st.LastServedAt.Local().Format(time.RFC3339), served)
 }
 
 func claudeFallbackDisplay(e *management.ClaudeRoutingFallbackEvent) string {

@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 4d979e5593170e50
+sourceHash: 4f158c235bd6576c
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -401,6 +401,11 @@ waired claude route anthropic --subagents waired   # 分ける
 分けるのは実際に有効です → [Claude Code から使う](/ja/guides/claude-code/)。
 セッション中は `/waired-route` で同じことができます。
 *どのマシン*が応答するかは [`waired worker`](#waired-worker) 側の話で、これではありません。
+
+引数なしで実行すると、現在の経路に加えて、Waired が一度でも応答していれば
+`last served` の行が出ます。応答したモデル名、このデバイスとピアのどちらが
+応答したか、そしてその時刻を示します。本来の Anthropic API へのフォールバックは
+別の行に出ます。
 
 ```sh
 waired claude statusline install [--wrap]

@@ -36,7 +36,8 @@ type claudeRoutingController struct {
 	mu             sync.Mutex // serialises persisted read-modify-write + last* fields
 	lastFallback   *management.ClaudeRoutingFallbackEvent
 	lastLocalModel string
-	lastServedBy   string // peer DeviceID; "" = this device
+	lastServedBy   string    // peer DeviceID; "" = this device
+	lastServedAt   time.Time // zero until the first waired-served request
 
 	ring *observability.Ring // optional; nil disables emission
 }
@@ -166,10 +167,18 @@ func (c *claudeRoutingController) recordFallbackEvent(class, peer, reason, direc
 // id that answered the last waired-served Claude request plus the serving peer
 // ("" = this device), so the statusline can show which model is doing the work
 // and where (#601/#602). Fires per request, so it stays quiet in the logs.
+//
+// The record is never cleared — not on a fallback to Anthropic, not on a route
+// change — so it keeps answering "when did Waired last serve a turn, and
+// what answered it". That is only readable alongside the time it happened:
+// without one, a record left over from before a fallback reads as if Waired
+// were still serving (#755). Callers that need "is this current?" compare it
+// with LastFallback.When, which carries a timestamp for the same reason.
 func (c *claudeRoutingController) RecordServed(modelID, peerDeviceID string) {
 	c.mu.Lock()
 	c.lastLocalModel = modelID
 	c.lastServedBy = peerDeviceID
+	c.lastServedAt = time.Now().UTC()
 	c.mu.Unlock()
 }
 
@@ -180,11 +189,13 @@ func (c *claudeRoutingController) State() management.ClaudeRoutingState {
 	lf := c.lastFallback
 	lm := c.lastLocalModel
 	sb := c.lastServedBy
+	sa := c.lastServedAt
 	c.mu.Unlock()
 	return management.ClaudeRoutingState{
 		Policy:         c.Policy(),
 		LastFallback:   lf,
 		LastLocalModel: lm,
 		LastServedBy:   sb,
+		LastServedAt:   sa,
 	}
 }
