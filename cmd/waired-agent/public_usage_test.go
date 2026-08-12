@@ -128,7 +128,7 @@ func TestPublicUsageLoop_FlushesPeriodically(t *testing.T) {
 	defer cancel()
 	go runPublicUsageLoop(ctx, usageLoopDeps(api, batch))
 
-	usageWaitFor(t, 2*time.Second, func() bool { return len(api.snapshot()) > 0 })
+	waitUntil(t, "the usage loop to post its first batch", func() bool { return len(api.snapshot()) > 0 })
 	got := api.snapshot()[0]
 	if len(got.Entries) != 1 || got.Entries[0].GrantID != usageTestGrantID {
 		t.Fatalf("report = %+v", got)
@@ -148,7 +148,7 @@ func TestPublicUsageLoop_RequeuesRetryableRejection(t *testing.T) {
 	defer cancel()
 	go runPublicUsageLoop(ctx, usageLoopDeps(api, batch))
 
-	usageWaitFor(t, 2*time.Second, func() bool { return len(api.snapshot()) >= 2 })
+	waitUntil(t, "the usage loop to post a second batch", func() bool { return len(api.snapshot()) >= 2 })
 	second := api.snapshot()[1]
 	if len(second.Entries) != 1 || second.Entries[0].Requests != 1 {
 		t.Fatalf("retry lost the entry: %+v", second)
@@ -176,7 +176,7 @@ func TestPublicUsageLoop_DropsAmbiguousFailure(t *testing.T) {
 			defer cancel()
 			go runPublicUsageLoop(ctx, usageLoopDeps(api, batch))
 
-			usageWaitFor(t, 2*time.Second, func() bool { return len(api.snapshot()) > 0 })
+			waitUntil(t, "the usage loop to post its first batch", func() bool { return len(api.snapshot()) > 0 })
 			// Give the loop several more ticks; nothing may be re-sent.
 			time.Sleep(60 * time.Millisecond)
 			for i, r := range api.snapshot() {
@@ -222,7 +222,7 @@ func TestPublicUsageBatch_RecordNeverBlocksOnThePush(t *testing.T) {
 	defer cancel()
 	go runPublicUsageLoop(ctx, usageLoopDeps(api, batch))
 
-	usageWaitFor(t, 2*time.Second, func() bool { return api.inFlight() })
+	waitUntil(t, "a usage post to be in flight", func() bool { return api.inFlight() })
 
 	recorded := make(chan struct{})
 	go func() {
@@ -231,7 +231,7 @@ func TestPublicUsageBatch_RecordNeverBlocksOnThePush(t *testing.T) {
 	}()
 	select {
 	case <-recorded:
-	case <-time.After(time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("Record blocked while a push was in flight")
 	}
 	close(release)
@@ -313,18 +313,4 @@ func TestPublicUsageSink_NilBatch(t *testing.T) {
 	if publicUsageSink(nil) != nil {
 		t.Fatal("a nil batch must yield a nil sink so the gateway skips emission")
 	}
-}
-
-// usageWaitFor polls until cond holds or the deadline passes. Named
-// distinctly: waitFor and grantWaitFor are already taken in this package.
-func usageWaitFor(t *testing.T, timeout time.Duration, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatal("condition not met before deadline")
 }

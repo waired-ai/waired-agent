@@ -863,7 +863,7 @@ func TestEnsureHostSpeedMeasured_PutsTheServingModelBack(t *testing.T) {
 
 	// The warm is detached from this call on purpose (a cold multi-GB load
 	// must not be inside the install's window), so poll for it.
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for {
 		warmed := false
 		for _, b := range eng.generateBodies() {
@@ -1100,7 +1100,7 @@ func TestHostSpeed_AMeasurementDoesNotStallTheStatusRoute(t *testing.T) {
 
 	// Wait until a request is actually in flight, so this is not asserting
 	// against a goroutine that has not started yet.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for len(eng.generateBodies()) == 0 {
 		if time.Now().After(deadline) {
 			close(release)
@@ -1117,7 +1117,7 @@ func TestHostSpeed_AMeasurementDoesNotStallTheStatusRoute(t *testing.T) {
 	}()
 	select {
 	case <-read:
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitBackstop):
 		close(release)
 		<-done
 		t.Fatal("reading the published figure blocked while a measurement was running — " +

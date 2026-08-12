@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"sync"
 	"testing"
@@ -93,16 +94,11 @@ func cmmTestConfig() reconcilerConfig {
 // waitForCMMSendCount blocks until f.cmmSends reaches at least n, or
 // fails the test on timeout. Tick spawns the actual SendCallMeMaybe in
 // a goroutine, so the assertion needs a small wait.
-func waitForCMMSendCount(t *testing.T, f *fakeDisco, n int, deadline time.Duration) {
+func waitForCMMSendCount(t *testing.T, f *fakeDisco, n int) {
 	t.Helper()
-	end := time.Now().Add(deadline)
-	for time.Now().Before(end) {
-		if f.sendCount() >= n {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("expected ≥%d CMM sends within %v, got %d", n, deadline, f.sendCount())
+	waitUntil(t, fmt.Sprintf("≥%d CMM sends", n), func() bool {
+		return f.sendCount() >= n
+	})
 }
 
 // TestReconciler_EmitsCallMeMaybeWhileOnRelay verifies the relay-state
@@ -133,7 +129,7 @@ func TestReconciler_EmitsCallMeMaybeWhileOnRelay(t *testing.T) {
 	rec.mu.Unlock()
 
 	rec.Tick(context.Background())
-	waitForCMMSendCount(t, fd, 1, 250*time.Millisecond)
+	waitForCMMSendCount(t, fd, 1)
 
 	fd.mu.Lock()
 	if fd.cmmSends[0].PeerDeviceID != "dev_peer_a" {
@@ -171,7 +167,7 @@ func TestReconciler_EmitsCallMeMaybeOnDirectStuck(t *testing.T) {
 	rec.mu.Unlock()
 
 	rec.Tick(context.Background())
-	waitForCMMSendCount(t, fd, 1, 250*time.Millisecond)
+	waitForCMMSendCount(t, fd, 1)
 }
 
 // TestReconciler_DoesNotEmitOnDirectWithSamples ensures the direct-
@@ -234,7 +230,7 @@ func TestReconciler_RateLimitsCallMeMaybe(t *testing.T) {
 	rec.mu.Unlock()
 
 	rec.Tick(context.Background())
-	waitForCMMSendCount(t, fd, 1, 100*time.Millisecond)
+	waitForCMMSendCount(t, fd, 1)
 
 	rec.Tick(context.Background())
 	rec.Tick(context.Background())
@@ -318,7 +314,7 @@ func TestReconciler_BacksOffOnFailStreak(t *testing.T) {
 	rec.state[pubA].lastCallMeMaybeAt = time.Now().Add(-300 * time.Millisecond)
 	rec.mu.Unlock()
 	rec.Tick(context.Background())
-	waitForCMMSendCount(t, fd, 1, 200*time.Millisecond)
+	waitForCMMSendCount(t, fd, 1)
 }
 
 // TestReconciler_SkipsCallMeMaybeOnSymmetricNAT ensures that when the

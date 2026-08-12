@@ -34,7 +34,7 @@ func TestPublicGrantDemand_WakesAcquirerEarly(t *testing.T) {
 	go runPublicGrantLoop(ctx, deps)
 
 	demand <- struct{}{}
-	grantWaitFor(t, 2*time.Second, func() bool { return demandAcquires(api) > 0 })
+	waitUntil(t, "a demand-driven acquire attempt", func() bool { return demandAcquires(api) > 0 })
 }
 
 // A demand arriving inside the throttle window is dropped rather than
@@ -62,7 +62,7 @@ func TestPublicGrantDemand_ThrottledAfterRecentAcquire(t *testing.T) {
 	go runPublicGrantLoop(ctx, deps)
 
 	demand <- struct{}{}
-	grantWaitFor(t, 2*time.Second, func() bool { return demandAcquires(api) == 1 })
+	waitUntil(t, "exactly one demand-driven acquire attempt", func() bool { return demandAcquires(api) == 1 })
 
 	// A burst immediately after must not produce a second acquire: the
 	// floor is measured from the last actual attempt.
@@ -111,7 +111,7 @@ func TestPublicGrantDemand_DoesNotStarvePeriodicTick(t *testing.T) {
 	// past the first is throttled (so it does not even reach renew); the
 	// periodic renew cycles must keep firing regardless.
 	demand <- struct{}{}
-	grantWaitFor(t, 2*time.Second, func() bool { return demandAcquires(api) >= 1 })
+	waitUntil(t, "a demand-driven acquire attempt", func() bool { return demandAcquires(api) >= 1 })
 
 	done := make(chan struct{})
 	go func() {
@@ -124,7 +124,7 @@ func TestPublicGrantDemand_DoesNotStarvePeriodicTick(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 	}()
-	grantWaitFor(t, 3*time.Second, func() bool { _, renews, _ := api.snapshot(); return len(renews) >= 3 })
+	waitUntil(t, "three renew cycles", func() bool { _, renews, _ := api.snapshot(); return len(renews) >= 3 })
 	<-done
 }
 

@@ -100,18 +100,6 @@ func writePublicUse(t *testing.T, dir, mode string, consentVersion int) string {
 	return path
 }
 
-func grantWaitFor(t *testing.T, timeout time.Duration, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("condition not reached within %v", timeout)
-}
-
 func grantLoopDeps(api *fakeGrantAPI, mesh *fakeMesh, path string) publicGrantDeps {
 	return publicGrantDeps{
 		API:            api,
@@ -135,18 +123,21 @@ func fireDemand(demand chan struct{}) {
 
 // grantWaitForDemand polls cond, re-firing demand each iteration so a
 // demand-driven acquire is not starved by the periodic tick (the loop's
-// select picks randomly among simultaneously-ready arms).
-func grantWaitForDemand(t *testing.T, demand chan struct{}, timeout time.Duration, cond func() bool) {
+// select picks randomly among simultaneously-ready arms). It keeps its own
+// loop for that re-firing; the bound is the shared waitBackstop.
+func grantWaitForDemand(t *testing.T, demand chan struct{}, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := time.Now().Add(waitBackstop)
+	for {
 		fireDemand(demand)
 		if cond() {
 			return
 		}
-		time.Sleep(2 * time.Millisecond)
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s after %s (demand re-fired each poll)", what, waitBackstop)
+		}
+		time.Sleep(waitPoll)
 	}
-	t.Fatalf("condition not reached within %v", timeout)
 }
 
 // TestPublicGrantLoopOffModeMakesNoCalls: unconsented (or off) mode
@@ -185,7 +176,7 @@ func TestPublicGrantLoopAcquiresAndReleasesOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
-	grantWaitForDemand(t, demand, 5*time.Second, func() bool {
+	grantWaitForDemand(t, demand, "the demand-driven acquire attempt", func() bool {
 		calls, _, _ := api.snapshot()
 		return calls >= 1
 	})
@@ -217,10 +208,10 @@ func TestPublicGrantLoopModeOffReleases(t *testing.T) {
 	defer cancel()
 	done := make(chan struct{})
 	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
-	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	grantWaitForDemand(t, demand, "the demand-driven acquire attempt", func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
 
 	writePublicUse(t, dir, "off", 1)
-	grantWaitFor(t, 5*time.Second, func() bool { _, _, rel := api.snapshot(); return len(rel) >= 1 })
+	waitUntil(t, "the grant to be released after public sharing went off", func() bool { _, _, rel := api.snapshot(); return len(rel) >= 1 })
 	cancel()
 	<-done
 	_, _, releases := api.snapshot()
@@ -254,7 +245,7 @@ func TestPublicGrantLoopBackoffOnNotEligible(t *testing.T) {
 	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
 
 	// First demand → one acquire attempt → 403 → backoff (5m from now).
-	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	grantWaitForDemand(t, demand, "the demand-driven acquire attempt", func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
 
 	// Jump past the demand throttle (15s) but stay inside the backoff
 	// window, then keep signalling demand. Backoff, not the throttle, is
@@ -319,7 +310,7 @@ func TestPublicGrantLoopDropsMapAbsentAndRenews(t *testing.T) {
 	done := make(chan struct{})
 	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
 
-	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	grantWaitForDemand(t, demand, "the demand-driven acquire attempt", func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
 	// Jump past the grace, then remove grant_gone from the map: the
 	// next tick must drop it before renewing, so only grant_keep ever
 	// reaches the renew batch.
@@ -327,7 +318,7 @@ func TestPublicGrantLoopDropsMapAbsentAndRenews(t *testing.T) {
 	offset = publicGrantMapGrace + time.Minute
 	clockMu.Unlock()
 	mesh.setGrantPeers("grant_keep")
-	grantWaitFor(t, 5*time.Second, func() bool { _, renews, _ := api.snapshot(); return len(renews) >= 1 })
+	waitUntil(t, "the first renew", func() bool { _, renews, _ := api.snapshot(); return len(renews) >= 1 })
 	cancel()
 	<-done
 
@@ -372,7 +363,7 @@ func TestPublicGrantLoop_AcquireIsDemandDriven(t *testing.T) {
 	}
 
 	// One demand triggers the acquire.
-	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	grantWaitForDemand(t, demand, "the demand-driven acquire attempt", func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
 	cancel()
 	<-done
 }
@@ -422,7 +413,7 @@ func TestPublicGrantLoop_RenewGatingLapsesIdleGrants(t *testing.T) {
 
 	// Acquire both grants (full active set), then mark only grant_used as
 	// carrying traffic.
-	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	grantWaitForDemand(t, demand, "the demand-driven acquire attempt", func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
 	usage.Mark("grant_used", now)
 
 	// Jump past the renew schedule but well within IdleTTL of `now`, so
@@ -430,7 +421,7 @@ func TestPublicGrantLoop_RenewGatingLapsesIdleGrants(t *testing.T) {
 	clockMu.Lock()
 	offset = time.Minute
 	clockMu.Unlock()
-	grantWaitForDemand(t, demand, 5*time.Second, func() bool { _, renews, _ := api.snapshot(); return len(renews) >= 1 })
+	grantWaitForDemand(t, demand, "the first renew", func() bool { _, renews, _ := api.snapshot(); return len(renews) >= 1 })
 	cancel()
 	<-done
 
@@ -470,7 +461,7 @@ func TestPublicGrantLoop_AcquireWantsOne(t *testing.T) {
 	defer cancel()
 	done := make(chan struct{})
 	go func() { runPublicGrantLoop(ctx, deps); close(done) }()
-	grantWaitForDemand(t, demand, 5*time.Second, func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
+	grantWaitForDemand(t, demand, "the demand-driven acquire attempt", func() bool { calls, _, _ := api.snapshot(); return calls >= 1 })
 	cancel()
 	<-done
 

@@ -115,7 +115,7 @@ func TestOnEngineStartFailed_DoesNotScheduleARestart(t *testing.T) {
 
 		p.onEngineUnhealthy("engine returned HTTP 500: llama-server process has terminated")
 
-		waitForTrue(t, 2*time.Second, "onEngineUnhealthy to request a recovery", p.engineRecoverPending.Load)
+		waitUntil(t, "onEngineUnhealthy to request a recovery", p.engineRecoverPending.Load)
 	})
 
 	t.Run("a failed start does not", func(t *testing.T) {
@@ -129,20 +129,6 @@ func TestOnEngineStartFailed_DoesNotScheduleARestart(t *testing.T) {
 			t.Error("a start that never came up must not schedule a restart of its own")
 		}
 	})
-}
-
-// waitForTrue polls cond for up to d. The handlers under test finish their
-// work on their own goroutines.
-func waitForTrue(t *testing.T, d time.Duration, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("timed out after %s waiting for %s", d, what)
 }
 
 // TestOnEngineStartFailed_ForgivesAfterStableWindow. PRODUCT CONTRACT: a

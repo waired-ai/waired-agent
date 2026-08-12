@@ -45,7 +45,7 @@ func TestPullsDisabled_TheBundledPrePullSchedulesNoHold(t *testing.T) {
 	}()
 	select {
 	case <-joined:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("a pre-pull hold was parked on a host that downloads nothing — the " +
 			"refusal belongs at the dispatcher (bundledPrePullTarget), not an hour " +
 			"later in PullModel")

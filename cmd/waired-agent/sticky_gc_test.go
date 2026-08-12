@@ -50,11 +50,11 @@ func TestRunStickyGC_ReclaimsWhatLookupNeverRevisits(t *testing.T) {
 		runStickyGC(ctx, s, time.Millisecond)
 	}()
 
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(waitBackstop)
 	for s.Size() != 0 {
 		select {
 		case <-deadline:
-			t.Fatalf("Size = %d after 10s, want 0: the sweep never ran", s.Size())
+			t.Fatalf("Size = %d after %s, want 0: the sweep never ran", s.Size(), waitBackstop)
 		case <-time.After(time.Millisecond):
 		}
 	}
@@ -62,7 +62,7 @@ func TestRunStickyGC_ReclaimsWhatLookupNeverRevisits(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("runStickyGC did not return on cancel; the daemon would not shut down")
 	}
 }
@@ -78,7 +78,7 @@ func TestRunStickyGC_NilStoreReturns(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("runStickyGC did not return for a nil store")
 	}
 }

@@ -46,7 +46,7 @@ func TestOnEngineUnhealthy_SchedulesRecovery(t *testing.T) {
 
 	p.onEngineUnhealthy("engine returned HTTP 500: llama-server process has terminated")
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for time.Now().Before(deadline) {
 		if p.engineRecoverPending.Load() {
 			return // recovery was requested

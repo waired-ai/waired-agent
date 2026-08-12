@@ -310,7 +310,7 @@ func TestPublicShareController_PushFailureGoesPendingAndRecovers(t *testing.T) {
 	done := make(chan struct{})
 	go func() { pc.RunSync(ctx); close(done) }()
 
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for pc.pushPending.Load() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}

@@ -65,7 +65,7 @@ func TestStreamingAppliesSelfCapacity(t *testing.T) {
 		if !st.PublicShare {
 			t.Fatalf("applySelf PublicShare = false, want true (toggle echo must reach the callback)")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatalf("applySelf was never called for the frame with Self.InferenceState")
 	}
 	// The nil-InferenceState frame must not have produced a second call.

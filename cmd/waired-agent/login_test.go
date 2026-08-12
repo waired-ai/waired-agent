@@ -85,7 +85,7 @@ func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 
 func waitPhase(t *testing.T, lc *loginController, sessID string, want management.LoginPhase) management.LoginStatus {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for time.Now().Before(deadline) {
 		st, err := lc.Status(context.Background(), sessID)
 		if err != nil {

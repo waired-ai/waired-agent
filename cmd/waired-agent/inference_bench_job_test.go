@@ -32,7 +32,7 @@ func waitDone(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("benchmark job did not complete")
 	}
 }
