@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: a18a61d81ce9f493
+sourceHash: 5d48155e7c7cde45
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -136,6 +136,34 @@ Waired's background service is installed but isn't responding, so sign-in can't 
 常駐サービスがそもそも登録されていません。通常はインストーラを使わずプログラムを
 直接実行しているときに出ます。先に `waired-agent` を起動してから、`waired init`
 をもう一度実行してください。
+
+### サインインはできたのに、セットアップの手順が実行されない
+
+常駐サービスへの読み取りと書き込みは別の経路を通ります。そのため、片方だけ届いて
+もう片方が届かないことがあります。セットアップがまったく届かなかったときは、黙って
+続行せずに `waired init` がその旨を表示します。
+
+```text
+warn: could not ask the background service about setup (…); its setup steps will be skipped. Run "waired doctor" to see why.
+```
+
+この実行では、常駐サービスを必要とする手順 — AI ソフトウェアのインストール、
+コーディングツールの接続、ブラウザへの進捗報告 — が飛ばされます。サインイン自体には
+影響しません。パソコンはサインインしたままです。
+
+もう一方の、より軽い形は「問い合わせは届いたが、最初の更新だけが届かなかった」場合です。
+
+```text
+warn: could not tell the background service that setup is running (…); retrying in the background. If the browser shows no progress, run "waired doctor".
+```
+
+こちらは 10 秒ほどで自動的に復旧します。それでもブラウザに進捗が出ないときは
+`waired doctor` を実行してください。
+
+これらの行が出るようになる前は、どちらの失敗も「常駐サービスが古くてこの機能を
+持っていないパソコン」とまったく同じに見えていました。その最後のケースだけは今も
+意図的に何も表示しません — そのパソコンで直すべきものは更新以外に無く、セットアップは
+自動的に以前の動作に切り替わるためです。
 
 <a id="setup-stopped-partway"></a>
 

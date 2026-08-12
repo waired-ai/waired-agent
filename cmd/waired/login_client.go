@@ -212,6 +212,11 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			// them would arrive minutes late, or never.
 			sess := attachSetupExecutor(mgmtURL, elevation.IsElevated())
 			defer sess.Release()
+			// #746: an attach that failed for anything but "this daemon
+			// is older than the routes" leaves the setup steps below
+			// silently inert. Say so once, here, where the reason is
+			// still in hand.
+			reportAttachNote(os.Stdout, sess)
 
 			// waired#835 §11.2: the installer passes the inference
 			// answers to `waired init`, but the daemon path never read

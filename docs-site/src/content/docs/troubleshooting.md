@@ -129,6 +129,34 @@ background service is registered on this computer at all — normally because th
 programs are being run directly rather than installed. Start `waired-agent`
 first, then run `waired init` again.
 
+### Sign-in worked, but the setup steps did not run
+
+Reads and writes reach the background service by different routes, so a
+computer can reach it for one and not the other. When setup cannot reach it at
+all, `waired init` says so rather than continuing in silence:
+
+```text
+warn: could not ask the background service about setup (…); its setup steps will be skipped. Run "waired doctor" to see why.
+```
+
+That run skips the steps that need the background service — installing the AI
+software, connecting coding tools, and reporting progress to the browser.
+Sign-in itself is unaffected: the computer stays signed in.
+
+A milder form means the question got through and only the first update did not:
+
+```text
+warn: could not tell the background service that setup is running (…); retrying in the background. If the browser shows no progress, run "waired doctor".
+```
+
+That one repairs itself within about ten seconds. If the browser still shows no
+progress after that, run `waired doctor`.
+
+Before these lines existed, either failure looked exactly like a computer whose
+background service is too old to have the feature at all. That last case is
+still silent, deliberately — there is nothing to fix on such a computer except
+updating it, and setup falls back to the older behaviour on its own.
+
 ## Setup stopped partway
 
 The setup page names what happened. Each message means something specific:

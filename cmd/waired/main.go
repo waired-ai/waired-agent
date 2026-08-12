@@ -743,7 +743,14 @@ func httpGet(rawURL string) ([]byte, error) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, body)
+		// The typed error from public_http.go, whose whole purpose is
+		// "branch on the status instead of string-matching" — a caller
+		// can now tell 404 (a daemon older than the route) from a daemon
+		// that did not answer at all (waired-agent#746). The body is
+		// carried verbatim rather than through parseMgmtError, so the
+		// rendered text stays what every caller of this helper already
+		// prints.
+		return nil, &mgmtStatusError{StatusCode: resp.StatusCode, Message: string(body)}
 	}
 	return body, nil
 }
@@ -808,7 +815,9 @@ func readMgmtResponse(resp *http.Response, err error, viaSocket bool) ([]byte, e
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, out)
+		// Same as httpGet above: typed so the status is inspectable,
+		// body verbatim so the text does not move (waired-agent#746).
+		return nil, &mgmtStatusError{StatusCode: resp.StatusCode, Message: string(out)}
 	}
 	return out, nil
 }

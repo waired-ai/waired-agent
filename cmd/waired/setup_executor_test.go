@@ -29,6 +29,13 @@ type fakeSetupDaemon struct {
 	// before that is a race the discard is designed to win.
 	onState func(poll int)
 	polls   int
+	// stateFails and postFails break one route at a time, which is the
+	// shape #746 is about: the probe is a read and reads fall back to
+	// loopback TCP, the attach is a write and writes are socket-only, so
+	// a host can serve one and not the other. Both are read under mu,
+	// unlike notFound above, because tests flip them mid-flight.
+	stateFails bool
+	postFails  bool
 }
 
 func (d *fakeSetupDaemon) server(t *testing.T) *httptest.Server {
@@ -38,13 +45,22 @@ func (d *fakeSetupDaemon) server(t *testing.T) *httptest.Server {
 		d.mu.Lock()
 		d.polls++
 		poll, hook := d.polls, d.onState
-		st := d.state
 		d.mu.Unlock()
 		if hook != nil {
 			hook(poll)
 		}
 		if d.notFound {
 			http.NotFound(w, r)
+			return
+		}
+		// Read after the hook, not before: the hook is how a test
+		// scripts the daemon changing its answer partway through a poll
+		// loop, and reading first would serve the pre-hook state.
+		d.mu.Lock()
+		fails, st := d.stateFails, d.state
+		d.mu.Unlock()
+		if fails {
+			http.Error(w, "state unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(st)
@@ -54,6 +70,10 @@ func (d *fakeSetupDaemon) server(t *testing.T) *httptest.Server {
 		defer d.mu.Unlock()
 		if d.notFound {
 			http.NotFound(w, r)
+			return
+		}
+		if d.postFails {
+			http.Error(w, "write path unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		var req management.SetupExecutorRequest
@@ -91,6 +111,19 @@ func (d *fakeSetupDaemon) setState(st management.SetupStateResponse) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.state = st
+}
+
+// failState / failPost break one route at a time, mid-flight.
+func (d *fakeSetupDaemon) failState(fail bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stateFails = fail
+}
+
+func (d *fakeSetupDaemon) failPost(fail bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.postFails = fail
 }
 
 func (d *fakeSetupDaemon) noted() []management.SetupExecutorRequest {
@@ -153,6 +186,94 @@ func TestExecutorSessionOlderDaemonIsInert(t *testing.T) {
 	}
 	if got := len(d.noted()); got != 0 {
 		t.Fatalf("posted %d lease updates to an older daemon, want 0", got)
+	}
+	// The silence is the point, and it is only correct for THIS cause.
+	// #746 gave the other causes a note; a 404 must keep saying nothing,
+	// because being inert is the documented, correct outcome for it.
+	if note := s.AttachNote(); note != "" {
+		t.Fatalf("older daemon produced the note %q, want silence", note)
+	}
+}
+
+// TestExecutorSessionUnreachableDaemonSaysSo is the other half of the
+// 404 case above: the same inert session, a cause the operator can act
+// on, and — before #746 — the same silence.
+func TestExecutorSessionUnreachableDaemonSaysSo(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+	srv.Close() // nothing is listening; the probe cannot be answered
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	if s.Supported() {
+		t.Fatal("session reports supported against a daemon that never answered")
+	}
+	note := s.AttachNote()
+	if !strings.Contains(note, "could not ask the background service about setup") {
+		t.Fatalf("note = %q, want it to name the failed probe", note)
+	}
+
+	var out strings.Builder
+	reportAttachNote(&out, s)
+	if !strings.Contains(out.String(), "warn: ") {
+		t.Fatalf("reported %q, want a warn line", out.String())
+	}
+}
+
+// TestExecutorSessionAttachPostFailureIsReported is the case the issue
+// is named for. The probe is a read and reads fall back to loopback TCP;
+// the attach is a write and writes are socket-only (waired#838). So a
+// daemon can answer the probe and never receive the lease — and every
+// gate downstream reads Supported, which the probe alone set to true.
+func TestExecutorSessionAttachPostFailureIsReported(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{}
+	d.failPost(true)
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+
+	// Deliberately still supported: the heartbeat re-sends attached=true,
+	// so the lease recovers on its own. Going inert here would let one
+	// failed write cancel the engine install for the whole run.
+	if !s.Supported() {
+		t.Fatal("a reachable daemon whose write failed must stay supported")
+	}
+	note := s.AttachNote()
+	if !strings.Contains(note, "could not tell the background service that setup is running") {
+		t.Fatalf("note = %q, want it to name the failed attach", note)
+	}
+
+	// And the recovery the note promises actually happens.
+	d.failPost(false)
+	waitForCond(t, func() bool {
+		for _, n := range d.noted() {
+			if n.Attached {
+				return true
+			}
+		}
+		return false
+	}, "the heartbeat to re-attach")
+}
+
+// TestExecutorSessionCleanAttachIsSilent pins the other direction: the
+// note exists for failures, and must not appear on the ordinary path.
+func TestExecutorSessionCleanAttachIsSilent(t *testing.T) {
+	shrinkSetupTimers(t)
+	d := &fakeSetupDaemon{}
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	if note := s.AttachNote(); note != "" {
+		t.Fatalf("clean attach produced the note %q, want silence", note)
+	}
+	var out strings.Builder
+	reportAttachNote(&out, s)
+	if out.String() != "" {
+		t.Fatalf("clean attach printed %q, want nothing", out.String())
 	}
 }
 

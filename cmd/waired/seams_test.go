@@ -79,5 +79,12 @@ func runTests(m *testing.M) int {
 	// only protects the tests that remember it. Tests that exercise the
 	// wait itself re-shrink locally.
 	hostSpeedAskWait, hostSpeedAskPoll = 250*time.Millisecond, 10*time.Millisecond
+	// Same reasoning one wait later. engineWaitForStatus bounds how long
+	// the daemon path lets a just-started daemon settle, and since #746
+	// the state-dir read waits on it too — in front of the gate that used
+	// to return instantly. Every login-flow fixture that serves a setup
+	// state without a state dir would otherwise burn the full 20 s.
+	// Tests that exercise the give-up itself re-shrink locally.
+	engineWaitForStatus = 250 * time.Millisecond
 	return m.Run()
 }
