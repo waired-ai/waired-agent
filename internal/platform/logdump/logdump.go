@@ -475,8 +475,16 @@ func newsyslogBanner(content string) string {
 }
 
 // collectEngineLogs appends every <stateDir>/runtimes/<engine>/logs/*.log
-// file. Missing directories are skipped silently (an engine may not be
-// installed).
+// file, and the one rotated generation beside it. Missing directories are
+// skipped silently (an engine may not be installed).
+//
+// The rotated generation is collected because the rotation exists FOR this
+// bundle: internal/runtime's openEngineLog renames engine.log to
+// engine.log.1 on every spawn rather than truncating, so that the trace
+// explaining a crash survives the respawn and reaches CI, `waired doctor`
+// and a bug report. A `.log` suffix filter dropped it again on the way out,
+// which is how a run whose engine respawned could show no trace of a
+// download that had in fact been dispatched (waired-agent#642).
 func collectEngineLogs(w io.Writer, stateDir string) {
 	if stateDir == "" {
 		fprintln(w, "(no --state-dir given; skipping engine logs)")
@@ -489,12 +497,23 @@ func collectEngineLogs(w io.Writer, stateDir string) {
 		if err != nil {
 			continue
 		}
+		// Oldest generation first, so the file reads in the order the
+		// engine lived it. os.ReadDir sorts by name, which would put
+		// engine.log before engine.log.1 — backwards.
+		var names []string
 		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
-				continue
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".log.1") {
+				names = append(names, e.Name())
 			}
+		}
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".log") {
+				names = append(names, e.Name())
+			}
+		}
+		for _, name := range names {
 			found = true
-			p := filepath.Join(logDir, e.Name())
+			p := filepath.Join(logDir, name)
 			fprintf(w, "\n----- %s -----\n", p)
 			data, err := os.ReadFile(p)
 			if err != nil {

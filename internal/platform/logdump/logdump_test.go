@@ -127,6 +127,45 @@ func TestCollectEngineLogs(t *testing.T) {
 	}
 }
 
+// The rotated generation is collected, oldest first.
+//
+// Product contract: internal/runtime's openEngineLog rotates rather than
+// truncates specifically so the trace explaining a crash survives the
+// respawn and reaches CI, `waired doctor` and a bug report
+// (waired-agent#29). Collecting only *.log defeated that, and a run whose
+// engine respawned showed no trace of a download it had dispatched
+// (waired-agent#642). The ORDER is part of it: os.ReadDir sorts by name,
+// which puts the newer engine.log before the older engine.log.1.
+func TestCollectEngineLogs_IncludesRotatedGenerationOldestFirst(t *testing.T) {
+	dir := t.TempDir()
+	logs := filepath.Join(dir, "runtimes", "ollama", "logs")
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logs, "engine.log"), []byte("after the respawn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logs, "engine.log.1"), []byte("before the respawn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	collectEngineLogs(&buf, dir)
+	out := buf.String()
+
+	older := strings.Index(out, "before the respawn")
+	newer := strings.Index(out, "after the respawn")
+	if older < 0 {
+		t.Errorf("the rotated generation was not collected; got:\n%s", out)
+	}
+	if newer < 0 {
+		t.Errorf("the live engine log was not collected; got:\n%s", out)
+	}
+	if older >= 0 && newer >= 0 && older > newer {
+		t.Errorf("the rotated generation must come first; got:\n%s", out)
+	}
+}
+
 func TestCollectEngineLogs_NoStateDir(t *testing.T) {
 	var buf bytes.Buffer
 	collectEngineLogs(&buf, "")

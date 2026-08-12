@@ -555,8 +555,9 @@ assert_reinit_default_unfit() {
   log="$IT_LOGDIR/reinit-default-unfit-$name.log"
 
   it_log "re-running waired init in $guest with no inference flag on a forced below-spec host (waired-agent#590)"
-  # Arrange: the daemon must WANT an engine (desired enabled, none
-  # installed) and must measure as below-spec.
+  # Arrange what can be arranged: desired enabled, and a below-spec
+  # measurement. "No engine installed" is the third thing this probe needs
+  # and the one nothing here establishes — see _it_force_below_spec.
   _it_force_below_spec "$guest" "#590 default"
 
   gx "$guest" env WAIRED_NO_EMOJI=1 waired init \
@@ -567,9 +568,12 @@ assert_reinit_default_unfit() {
   [ "$rc" = 0 ] \
     && ok "flagless init on a below-spec host exits 0 (a choice, not a fault — waired-agent#590)" \
     || bad "flagless init exited $rc on a below-spec host — the non-interactive default is skip-and-continue, never a failure — see $log"
-  grep -q "$IT_UNFIT_SKIP_RE" "$log" \
-    && ok "the step-4 non-interactive default said what it did" \
-    || bad "init never printed the skip note — the step-4 default arm was not reached, so the asserts around it prove nothing — see $log"
+  if grep -q "$IT_UNFIT_SKIP_RE" "$log"; then
+    ok "the step-4 non-interactive default said what it did"
+  else
+    bad "init never printed the skip note — the step-4 default arm was not reached, so the asserts around it prove nothing$(_it_engine_present_note "$guest") — see $log"
+    tail -n 20 "$log" | sed 's/^/    init| /' >&2
+  fi
   grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
     && bad "init reported the below-spec default as a failed install — see $log" \
     || ok "the default is not reported as a failed install"
@@ -795,9 +799,35 @@ _it_force_below_spec() {
   local guest="$1" who="$2"
   gx "$guest" waired inference on >/dev/null 2>&1 || \
     it_warn "could not turn inference on in $guest before the $who probe"
+  # The third thing these probes need, and the one this cannot arrange: an
+  # engine-less host. Both callers reach their arm only while the daemon
+  # still WANTS an engine, and an installed one is exactly what stops that
+  # being true. Nothing in the suite uninstalls an engine, so the state is
+  # INHERITED from whatever ran before (assert_reinit_resumes' postcondition,
+  # documented at its --inference-enabled comment). Say so here rather than
+  # letting the probe fail downstream naming step 4, which is what sent
+  # waired-agent#640's reader to the wrong code.
+  if gx "$guest" test -x "$IT_BUNDLED_OLLAMA_BIN"; then
+    it_warn "an engine is already installed at $IT_BUNDLED_OLLAMA_BIN in $guest before the $who probe — the daemon no longer wants one, so the arm under test will not be reached (waired-agent#640)"
+  fi
   gx "$guest" sh -c "printf 'WAIRED_RAM_AVAILABLE_GB=1\n' >> /etc/waired/agent.env && systemctl restart waired-agent"
   _it_wait_enrolled "$guest" >/dev/null || \
     it_warn "daemon did not report enrolled after the $who seam restart"
+}
+
+# _it_engine_present_note <guest> — the likeliest reason the arm under test
+# was not reached, when it is this one, as a clause to append to a failure
+# message. Echoes nothing otherwise, so the caller appends it unconditionally.
+#
+# waired-agent#640: the missing-skip-note failure reported that step 4 was
+# not reached and stopped there. An engine already on the host is the most
+# likely why, and naming it here is what stops the next reader from going
+# through the step-4 code and the below-spec seam, which are both fine.
+_it_engine_present_note() {
+  if gx "$1" test -x "$IT_BUNDLED_OLLAMA_BIN"; then
+    printf ' — an engine is already installed at %s, so the daemon no longer wanted one (waired-agent#640)' \
+      "$IT_BUNDLED_OLLAMA_BIN"
+  fi
 }
 
 # Leave the guest as we found it: seam out, daemon restarted on real
@@ -979,7 +1009,18 @@ IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id|turn_floor_seco
 #
 # Same mirror-and-guard rule as the alternations above: installtest-macos.sh
 # and installtest-windows.ps1 carry the identical literal.
-IT_DAEMON_EVIDENCE_RE='boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host'
+# The last two branches are about the DUMP rather than the download, and
+# they are what let a reader tell "the pull never reached the engine" from
+# "the evidence never reached this log" (waired-agent#642):
+#
+#   engine log truncated at cap   the product dropped the tail itself —
+#                                 cappedWriter keeps the START of engine.log
+#                                 (internal/runtime), so a late pull line can
+#                                 be gone before any harness sees it
+#   no engine logs found          logdump collected no engine log at all, so
+#                                 the absence of `/api/pull` says nothing
+#                                 about whether a pull happened
+IT_DAEMON_EVIDENCE_RE='boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host|engine log truncated at cap|no engine logs found'
 
 # --- reading the inference status --------------------------------------
 #
@@ -1123,6 +1164,35 @@ _it_wait_inference_ready() {
 # the host-speed lines say what was standing in front of it (#579). `grep .` is
 # what makes an empty result say so — a bare grep would print nothing and read
 # as "the dump did not run".
+#
+# _it_evidence_dump <guest> <bundle> — the shared body of both dumps, over a
+# bundle `waired logs` has already written.
+#
+# TWO greps rather than one, and counted (waired-agent#642). Every `/api/pull`
+# line comes from the engine's own request log, which logdump appends as the
+# LAST section, so a single `tail -40` over the union shows the newest slice
+# of a set the host-speed lines can dominate — and it printed no count, so one
+# surviving pull line read the same whether the bundled download never reached
+# the engine or the window cut the rest. Splitting the groups lets the pull
+# group answer that on its own; the counts make a cut window visible instead
+# of silent. Free space is here for the third hypothesis the old dump could
+# not test at all: a multi-GB download that had nowhere to land.
+_it_evidence_dump() {
+  local guest="$1" bundle="$2"
+  gx "$guest" sh -c "
+    n=\$(grep -icE '$IT_DAEMON_EVIDENCE_RE' '$bundle' 2>/dev/null) || n=0
+    echo \"daemon evidence: \$n line(s) matched, showing the last 40\"
+    grep -iE '$IT_DAEMON_EVIDENCE_RE' '$bundle' 2>/dev/null | tail -40 |
+      grep . || echo '(no pre-pull or host-speed lines in the daemon log)'
+    p=\$(grep -icE 'api/pull' '$bundle' 2>/dev/null) || p=0
+    echo \"engine pull requests: \$p line(s) matched, showing all\"
+    grep -iE 'api/pull' '$bundle' 2>/dev/null |
+      grep . || echo '(no api/pull lines in the daemon log)'
+    d=\$(df -Ph /var/lib/waired 2>/dev/null | tail -1) || d=
+    echo \"state-dir free space: \${d:-(state dir unreadable)}\"
+  " 2>&1
+}
+
 # it_hostspeed_evidence — the daemon's own account of the #496 host-speed
 # measurement and the selection it fed, for the arms that die on init's exit
 # code.
@@ -1139,9 +1209,8 @@ _it_wait_inference_ready() {
 # that reads the service log and the bundled engine's log on all three OSes.
 it_hostspeed_evidence() {
   local guest="$1"
-  gx "$guest" sh -c "waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-hs.txt >/dev/null 2>&1
-    grep -iE '$IT_DAEMON_EVIDENCE_RE|api/pull' /tmp/it-hs.txt 2>/dev/null | tail -40 |
-      grep . || echo '(no host-speed lines in the daemon log)'" 2>&1 |
+  gx "$guest" sh -c "waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-hs.txt >/dev/null 2>&1" || true
+  _it_evidence_dump "$guest" /tmp/it-hs.txt |
     sed 's/^/    agent| /' >&2 || true
   gx "$guest" sh -c 'curl -fsS --max-time 10 http://127.0.0.1:9476/waired/v1/inference/status || echo "(status unreachable)"' 2>&1 |
     sed 's/^/    status| /' >&2 || true
@@ -1149,9 +1218,8 @@ it_hostspeed_evidence() {
 
 it_prepull_evidence() {
   local guest="$1"
-  gx "$guest" sh -c "waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-logs.txt >/dev/null 2>&1
-    grep -iE '$IT_DAEMON_EVIDENCE_RE|api/pull' /tmp/it-logs.txt 2>/dev/null | tail -40 |
-      grep . || echo '(no pre-pull or pull lines in the daemon log)'" 2>&1 |
+  gx "$guest" sh -c "waired logs --since 30m --state-dir /var/lib/waired -o /tmp/it-logs.txt >/dev/null 2>&1" || true
+  _it_evidence_dump "$guest" /tmp/it-logs.txt |
     sed 's/^/    agent| /' || true
 }
 
