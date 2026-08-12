@@ -38,7 +38,38 @@ anything and does not verify that anyone did. So before you run it,
 Keeping the incoming hash over a body that lost the other side's
 paragraph produces a page that builds, passes `i18n:check`, and is
 missing a translation. That is the failure mode this step exists to
-prevent, and nothing downstream catches it.
+prevent.
+
+Since #678 one shape of that loss IS caught. `i18n:check` compares the
+heading count and the fenced-code-block count of every pair whose hash
+already matches, and fails with `Drifted` when they disagree:
+
+```
+Drifted — the Japanese page claims to be current, but its shape
+no longer matches the English page.
+  src/content/docs/ja/getting-started/verify.mdx  (en: 4 headings, 4 code
+  blocks; ja: 3 headings, 4 code blocks)
+```
+
+Translation changes how many sentences a page has; it does not change
+how many headings or code blocks it has. A whole paragraph going missing
+usually takes one of the two with it.
+
+Two limits worth knowing:
+
+- **It is a shape check, not a content check.** A paragraph lost from the
+  middle of a section, carrying no heading and no code block, still slips
+  through. The instruction above — read the page — has not been replaced.
+- **It deliberately says nothing while a pair is `stale`.** An English
+  page that has moved ahead of its translation is *expected* to differ in
+  shape until the translation catches up; failing there would fire on
+  every honest piece of work. The comparison starts only once the pair
+  claims to be current.
+
+`--accept` refuses a drifted pair rather than skipping it quietly: the
+hash already matches, so accepting would write nothing while printing
+like an acceptance. Restore the missing content instead — there is no
+hash to refresh.
 
 Observed repeatedly through one afternoon of concurrent work
 (2026-08-08): #557 rebasing onto #559 on `getting-started/first-run.mdx`,

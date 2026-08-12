@@ -12,6 +12,16 @@
 // Accepting a change (after translating it, or after deciding an
 // English-only edit needs no translation) is one command.
 //
+// The second question, and why it needed its own answer: `sourceHash` is
+// derived from the ENGLISH page alone, so it can only ever say "ja has
+// acknowledged the current en" — never "ja still contains its own
+// content". When two PRs edit the same English page, the ja pages
+// conflict on the `sourceHash` LINE while their bodies merge cleanly, and
+// the documented resolution (re-derive the hash) makes the check green
+// again whether or not a paragraph survived the merge. The site builds
+// fine with a Japanese paragraph missing. So a pair that claims to be
+// current is also compared structurally — see `structure` (#678).
+//
 //   node scripts/i18n-sync.mjs --check              # CI gate
 //   node scripts/i18n-sync.mjs --report             # human-readable table
 //   node scripts/i18n-sync.mjs --accept <path...>   # refresh those hashes
@@ -107,6 +117,39 @@ function pairs() {
 		}));
 }
 
+// structure counts the two things a translation must NOT change: how
+// many headings the page has, and how many fenced code blocks.
+//
+// sourceHash answers "has ja acknowledged the current en", which is not
+// the same question as "does ja still contain its own content". Nothing
+// downstream asked the second one: the hash is derived from the English
+// page alone, and the site builds perfectly well with a Japanese
+// paragraph missing. Translation changes sentence counts freely, but a
+// whole paragraph going missing almost always takes a heading or a code
+// block with it, so counting those two catches the loss without
+// pretending to compare prose.
+//
+// Headings inside fences are not headings — a shell comment starting
+// with `#` is the common case, and counting it would make the check
+// disagree with itself the moment a code sample changed.
+function structure(absPath) {
+	const text = fs.readFileSync(absPath, 'utf8').replace(/\r\n/g, '\n');
+	const parts = splitFrontmatter(text);
+	const body = parts ? parts[1] : text;
+	let headings = 0;
+	let fences = 0;
+	let inFence = false;
+	for (const line of body.split('\n')) {
+		if (/^\s{0,3}(```|~~~)/.test(line)) {
+			inFence = !inFence;
+			if (inFence) fences++;
+			continue;
+		}
+		if (!inFence && /^#{1,6}\s/.test(line)) headings++;
+	}
+	return { headings, fences };
+}
+
 // classify is the single place that decides what state a pair is in, so
 // --check, --report and --accept can never disagree about it.
 function classify(pair) {
@@ -115,6 +158,18 @@ function classify(pair) {
 	const have = readSourceHash(pair.ja);
 	if (!have) return { state: 'unmarked', want };
 	if (have !== want) return { state: 'stale', want, have };
+	// Structure is only compared once the hashes agree, and that ordering
+	// is the whole reason this is usable. While a pair is `stale` the
+	// English page has moved and the Japanese one has not caught up yet —
+	// a heading added on one side and not yet the other is the NORMAL
+	// state of work in progress, and failing on it would fire on every
+	// honest translation. A pair claiming to be current has no such
+	// excuse.
+	const en = structure(pair.en);
+	const ja = structure(pair.ja);
+	if (en.headings !== ja.headings || en.fences !== ja.fences) {
+		return { state: 'drifted', want, en, ja };
+	}
 	return { state: 'ok', want };
 }
 
@@ -133,12 +188,19 @@ function resolvePair(input, all) {
 
 function runCheck({ quiet = false } = {}) {
 	const all = pairs();
-	const bad = { missing: [], unmarked: [], stale: [] };
+	const bad = { missing: [], unmarked: [], stale: [], drifted: [] };
 	for (const pair of all) {
 		const res = classify(pair);
-		if (res.state !== 'ok') bad[res.state].push(pair.rel);
+		if (res.state === 'drifted') {
+			bad.drifted.push(
+				`${pair.rel}  (en: ${res.en.headings} headings, ${res.en.fences} code blocks; ` +
+					`ja: ${res.ja.headings} headings, ${res.ja.fences} code blocks)`,
+			);
+		} else if (res.state !== 'ok') {
+			bad[res.state].push(pair.rel);
+		}
 	}
-	const total = bad.missing.length + bad.unmarked.length + bad.stale.length;
+	const total = bad.missing.length + bad.unmarked.length + bad.stale.length + bad.drifted.length;
 	if (total === 0) {
 		if (!quiet) console.log(`i18n-sync: ${all.length} page pairs, all in sync.`);
 		return 0;
@@ -160,6 +222,21 @@ function runCheck({ quiet = false } = {}) {
 		for (const rel of bad.stale) console.error(`    src/content/docs/ja/${rel}`);
 		console.error('');
 	}
+	if (bad.drifted.length) {
+		// Listed last and worded differently on purpose: the three above
+		// are "translate this", which --accept finishes. This one is
+		// "content is missing", which --accept cannot fix and must not
+		// paper over.
+		console.error('  Drifted — the Japanese page claims to be current, but its shape');
+		console.error('  no longer matches the English page. A heading or a code block is');
+		console.error('  missing on one side; the usual cause is a paragraph lost while');
+		console.error('  resolving a sourceHash conflict.');
+		for (const line of bad.drifted) console.error(`    src/content/docs/ja/${line}`);
+		console.error('');
+		console.error('  Fix this one by restoring the missing content, NOT with --accept:');
+		console.error('  the hash already matches, so accepting would record the loss as');
+		console.error('  intentional. Compare the two pages side by side.\n');
+	}
 	console.error('  To resolve: update the Japanese page, then record it as current:');
 	console.error('    npm run i18n:accept -- <path>       (or --all)');
 	console.error('  Keep the pinned terminology in docs-site/TRANSLATION.md — never');
@@ -174,7 +251,13 @@ function runReport() {
 	const rows = all.map((p) => ({ rel: p.rel, ...classify(p) }));
 	const width = Math.max(...rows.map((r) => r.rel.length));
 	for (const r of rows) {
-		const mark = { ok: 'ok      ', missing: 'MISSING ', unmarked: 'UNMARKED', stale: 'STALE   ' }[r.state];
+		const mark = {
+			ok: 'ok      ',
+			missing: 'MISSING ',
+			unmarked: 'UNMARKED',
+			stale: 'STALE   ',
+			drifted: 'DRIFTED ',
+		}[r.state];
 		console.log(`${mark}  ${r.rel.padEnd(width)}  ${r.have ?? ''}${r.have ? ' -> ' : ''}${r.want}`);
 	}
 	const n = rows.filter((r) => r.state !== 'ok').length;
@@ -199,6 +282,7 @@ function runAccept(args) {
 		return 2;
 	}
 	let changed = 0;
+	let refused = 0;
 	for (const pair of targets) {
 		const res = classify(pair);
 		if (res.state === 'missing') {
@@ -206,11 +290,29 @@ function runAccept(args) {
 			continue;
 		}
 		if (res.state === 'ok') continue;
+		if (res.state === 'drifted') {
+			// Refused, not silently skipped. The hash already matches, so
+			// writing it would be a no-op that PRINTS like an acceptance —
+			// and this is the one state where "I looked at it and it is
+			// fine" is exactly the wrong record to leave behind.
+			console.error(
+				`  REFUSED (content is missing, not stale): ja/${pair.rel}\n` +
+					`    en has ${res.en.headings} headings / ${res.en.fences} code blocks, ` +
+					`ja has ${res.ja.headings} / ${res.ja.fences}.\n` +
+					'    Restore the missing content; there is no hash to refresh here.',
+			);
+			refused++;
+			continue;
+		}
 		writeSourceHash(pair.ja, res.want);
 		console.log(`  accepted: ja/${pair.rel}  -> ${res.want}`);
 		changed++;
 	}
 	console.log(`i18n-sync: ${changed} page${changed === 1 ? '' : 's'} recorded as current.`);
+	if (refused > 0) {
+		console.error(`i18n-sync: ${refused} page${refused === 1 ? '' : 's'} refused — see above.`);
+		return 1;
+	}
 	return 0;
 }
 
