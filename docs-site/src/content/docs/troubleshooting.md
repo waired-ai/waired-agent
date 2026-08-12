@@ -246,6 +246,14 @@ Nor is this what a model that is still downloading looks like. Setup ends on
 nothing failed, the transfer simply outlasted the window setup waits in, and
 the background service finishes it. Run `waired status` to watch it.
 
+Nor is it a computer Waired picked no model for. Setup ends on
+**`Waired is signed in — no model chosen for this computer`** and exits `0`.
+The engine is installed and running; what is missing is a model, because none
+in the catalog fits this hardware well. Nothing is downloading and `waired
+status` has no progress to show. Pick one yourself with `waired models pull
+<model>`, or from the browser dashboard — `waired models ls --detail` shows
+which ones fit and why.
+
 Common causes:
 
 - **macOS**: the engine app fails its signature check — see
