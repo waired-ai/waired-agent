@@ -2,6 +2,7 @@ package servicediag
 
 import (
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -318,5 +319,154 @@ func TestExplain_WindowsHintNamesTheAgentLog(t *testing.T) {
 	without := Explain("windows", false, events, "")
 	if strings.Contains(without.Hint, "agent's own log") {
 		t.Errorf("Hint=%q names a log it cannot locate", without.Hint)
+	}
+}
+
+// --- restart-me (exit 17) is not a failure -------------------------------
+//
+// PRODUCT CONTRACT (#727, per-OS exit contract from #721). The agent exits
+// service.RestartRequestedExitCode to ask its supervisor for a restart:
+// the wedged-engine self-heal does it, and so does /preferred-model when
+// the in-process swap cannot apply the switch. By the time `waired doctor`
+// runs, the supervisor has already brought the agent back, so the service
+// is UP and its history carries a stop.
+//
+// (#727 reports this as happening on every preferred-model switch. That
+// was true before the in-process swap landed; the restart is now the
+// fallback rather than the common path. The misreading it describes is
+// unaffected — only how often it is reached.)
+//
+// That was reported as a failure reading:
+//
+//	⚠ waired-agent service — The Waired background service exited with an
+//	  error (status 17). [launchd: last exit code = 17]
+//
+// on a host where nothing is wrong. Linux never had the bug (see
+// TestExplain_LinuxRestartRequestNeedsNoSpecialCase); darwin and windows
+// did.
+
+func TestExplain_DarwinRestartRequestIsNotAFailure(t *testing.T) {
+	got := Explain("darwin", true, []Event{
+		{Source: "launchd", Message: "state = running"},
+		{Source: "launchd", Message: "last exit code = 17"},
+	}, "")
+
+	if got.Status == Failed {
+		t.Errorf("Status=Failed for a restart request: %+v", got)
+	}
+	// Evidence is what turns Healthy into a ⚠ in doctor_service.go, so an
+	// unchanged Cause alone would not be enough — the row must be silent.
+	if got.Evidence != "" {
+		t.Errorf("Evidence=%q still raises a warning for a deliberate restart", got.Evidence)
+	}
+	if strings.Contains(got.Cause, "error") {
+		t.Errorf("Cause=%q calls a restart request an error", got.Cause)
+	}
+}
+
+// The subtraction is exactly one status wide: every other nonzero exit is
+// still a failure, including 17's neighbours.
+func TestExplain_DarwinOtherExitCodesStillFail(t *testing.T) {
+	for _, code := range []string{"1", "16", "18", "78"} {
+		t.Run("exit "+code, func(t *testing.T) {
+			got := Explain("darwin", true, []Event{
+				{Source: "launchd", Message: "state = running"},
+				{Source: "launchd", Message: "last exit code = " + code},
+			}, "")
+			if got.Evidence == "" || !strings.Contains(got.Cause, code) {
+				t.Errorf("exit %s no longer reported: %+v", code, got)
+			}
+		})
+	}
+}
+
+// Windows records the status the service chose in 7024, and the SCM's own
+// recovery action in 7031/7034 right after. Only 7024 can tell a restart
+// request from a crash, so it is read first.
+func TestExplain_WindowsRestartRequestIsNotAFailure(t *testing.T) {
+	got := Explain("windows", true, []Event{
+		{Source: "Service Control Manager", ID: winSCMSpecificExit,
+			Message: "Waired Agent 17"},
+		{Source: "Service Control Manager", ID: winSCMTerminated,
+			Message: "The Waired Agent service terminated unexpectedly."},
+	}, "")
+
+	if got.Status == Failed {
+		t.Errorf("Status=Failed for a restart request: %+v", got)
+	}
+	if got.Evidence != "" {
+		t.Errorf("Evidence=%q still raises a warning for a deliberate restart", got.Evidence)
+	}
+}
+
+// A 7024 carrying anything else is a real failure and keeps its old
+// verdict — the fix subtracts one status, it does not silence the record.
+func TestExplain_WindowsOtherServiceSpecificExitStillFails(t *testing.T) {
+	cases := map[string]string{
+		"another status":   "Waired Agent 3",
+		"undecodable":      "Waired Agent (no code)",
+		"zero is not a 17": "Waired Agent 0",
+	}
+	for name, msg := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := Explain("windows", false, []Event{
+				{Source: "Service Control Manager", ID: winSCMSpecificExit, Message: msg},
+				{Source: "Service Control Manager", ID: winSCMTerminated,
+					Message: "The Waired Agent service terminated unexpectedly."},
+			}, "")
+			if got.Status != Failed {
+				t.Errorf("Status=%v, want Failed for %q", got.Status, msg)
+			}
+		})
+	}
+}
+
+// TestExplain_LinuxRestartRequestNeedsNoSpecialCase pins WHY linux needs no
+// change, which is the part that would otherwise rot silently.
+//
+// systemd is told about the status in the unit file itself —
+// SuccessExitStatus=17 and RestartForceExitStatus=17, asserted in
+// internal/platform/service's
+// TestRenderSystemdUnit_HonoursTheRestartRequestExitCode — so it reports
+// Result=success and explainLinux's exit-code branch is never entered.
+// Delete those two directives and systemd would report Result=exit-code,
+// this test would fail, and linux would need the same subtraction darwin
+// and windows just got.
+func TestExplain_LinuxRestartRequestNeedsNoSpecialCase(t *testing.T) {
+	got := Explain("linux", true, []Event{
+		{Source: "systemd", Message: "ActiveState=active"},
+		{Source: "systemd", Message: "Result=success"},
+		{Source: "systemd", Message: "ExecMainStatus=" + strconv.Itoa(service.RestartRequestedExitCode)},
+	}, "")
+
+	if got.Status == Failed {
+		t.Errorf("Status=Failed: systemd's own verdict was success: %+v", got)
+	}
+	if got.Evidence != "" {
+		t.Errorf("Evidence=%q raises a warning systemd did not ask for", got.Evidence)
+	}
+}
+
+func TestServiceSpecificExit(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want int
+		ok   bool
+	}{
+		{msg: "Waired Agent 17", want: 17, ok: true},
+		// The SCM writes a message-table id with this prefix on some hosts.
+		{msg: "Waired Agent %%17", want: 17, ok: true},
+		{msg: "The Waired Agent service terminated with the following service-specific error: 17", want: 17, ok: true},
+		{msg: "Waired Agent 3", want: 3, ok: true},
+		// Undecodable must NOT read as "not a failure".
+		{msg: "Waired Agent", ok: false},
+		{msg: "", ok: false},
+		{msg: "Waired Agent 0", ok: false},
+	}
+	for _, c := range cases {
+		got, ok := serviceSpecificExit(c.msg)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("serviceSpecificExit(%q) = (%d, %v), want (%d, %v)", c.msg, got, ok, c.want, c.ok)
+		}
 	}
 }

@@ -38,7 +38,8 @@ func Check(ctx context.Context, stateDir string) Result {
 	events = append(events, queryEvents(ctx, "System",
 		`*[System[Provider[@Name='Service Control Manager'] and (`+
 			eventIDClause(winSCMStartFailed, winSCMStartTimeout, winSCMStartHung,
-				winSCMLoginFailed, winSCMTerminated, winSCMActionTaken)+`)]]`,
+				winSCMLoginFailed, winSCMSpecificExit, winSCMTerminated,
+				winSCMActionTaken)+`)]]`,
 		service.ServiceName)...)
 	// CodeIntegrity records name the blocked file path instead.
 	events = append(events, queryEvents(ctx, "Microsoft-Windows-CodeIntegrity/Operational",

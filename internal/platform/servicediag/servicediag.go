@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/platform/logrotate"
+	"github.com/waired-ai/waired-agent/internal/platform/service"
 )
 
 // Status is the verdict.
@@ -212,9 +213,37 @@ const (
 	winSCMStartTimeout = 7009 // timed out connecting to the service
 	winSCMStartHung    = 7022 // service hung on starting
 	winSCMLoginFailed  = 7023 // service terminated with an error
+	// winSCMSpecificExit is "terminated with the following service-specific
+	// error". It is the only SCM record that carries the status the service
+	// itself chose, which is what tells a deliberate restart request apart
+	// from a crash — the pair 7031/7034 describes both identically (#727).
+	winSCMSpecificExit = 7024
 	winSCMTerminated   = 7031 // service terminated unexpectedly
 	winSCMActionTaken  = 7034 // service terminated unexpectedly, no recovery left
 )
+
+// serviceSpecificExit reads the exit status out of an SCM 7024 message.
+//
+// 7024's EventData is the service's display name followed by the status it
+// exited with, and queryEvents joins those values into Message — so the
+// status is the last integer token. The SCM sometimes writes it with the
+// `%%` prefix it uses for message-table ids, so that prefix is accepted
+// too.
+//
+// A record that does not decode yields (0, false), and the caller treats
+// that as "no information" rather than as "not a failure": reading an
+// undecodable stop as benign is the one mistake that would hide a real
+// crash.
+func serviceSpecificExit(msg string) (int, bool) {
+	fields := strings.Fields(msg)
+	for i := len(fields) - 1; i >= 0; i-- {
+		tok := strings.TrimPrefix(fields[i], "%%")
+		if n, err := strconv.Atoi(tok); err == nil && n > 0 {
+			return n, true
+		}
+	}
+	return 0, false
+}
 
 // Windows CodeIntegrity event IDs: a binary was refused for not meeting the
 // signing level. 3077 is the audit-mode twin of 3033.
@@ -307,6 +336,20 @@ func explainWindows(running bool, events []Event, stateDir string) Result {
 			Evidence: ev.line(),
 		}
 	}
+	// Checked BEFORE the unexpected-stop branch below, because a
+	// restart-me exit produces both: 7024 records the status the agent
+	// chose, and 7031/7034 follow as the SCM's recovery action. Only 7024
+	// can tell the two apart — 7031 says "terminated unexpectedly" about a
+	// deliberate restart just as readily as about a crash (#727).
+	//
+	// A 7024 carrying any OTHER status is left to fall through: it is a
+	// genuine failure, and the existing branches already describe it. Only
+	// the restart request is subtracted.
+	if ev := findEvent(events, winSCMSpecificExit); ev != nil {
+		if code, ok := serviceSpecificExit(ev.Message); ok && code == service.RestartRequestedExitCode {
+			return quietResult(running)
+		}
+	}
 	if ev := findEvent(events, winSCMTerminated, winSCMActionTaken, winSCMLoginFailed); ev != nil {
 		return Result{
 			Status:   statusFor(running, Failed),
@@ -361,7 +404,22 @@ func explainDarwin(running bool, events []Event) Result {
 	// contradicts itself, on a host whose service the same doctor run
 	// reported as up and serving (#652). A value that is not a number is
 	// not evidence of anything, so it falls through to quietResult.
-	if code, ok := exitCode(property(events, "last exit code")); ok && code != 0 {
+	// ...and exit 17 is not "having died" at all: it is the agent asking to
+	// be restarted (service.RestartRequestedExitCode). Two paths take it
+	// today: the wedged-engine self-heal (cmd/waired-agent/inference.go's
+	// restartOnWedge) and /preferred-model's restart FALLBACK — reached
+	// when the in-process swap cannot apply the switch (wedged engine,
+	// cross-engine, unenrolled). A plain switch between two models of the
+	// same engine no longer restarts anything, so this is rarer than
+	// #727's report assumed; it is not gone. launchd has no per-exit-code
+	// key to learn the intent from — the
+	// #721 constraint — but that constraint is about whether launchd will
+	// RESTART the agent, and this code only has to EXPLAIN a stop that has
+	// already happened. By the time doctor runs, the supervisor has brought
+	// the agent back, so the record was being read out as
+	// "⚠ exited with an error (status 17)" on a service that is up and
+	// working (#727).
+	if code, ok := exitCode(property(events, "last exit code")); ok && code != 0 && code != service.RestartRequestedExitCode {
 		return Result{
 			Status:   statusFor(running, Failed),
 			Cause:    fmt.Sprintf("The Waired background service exited with an error (status %d).", code),
