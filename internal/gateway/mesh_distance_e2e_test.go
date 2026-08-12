@@ -485,6 +485,14 @@ func TestMeshDistanceE2E_SaturatedPeersRejectAtTheRouterLayer(t *testing.T) {
 	if !strings.Contains(errBody.Message, `"qwen3-8b-instruct"`) {
 		t.Errorf("message = %q, want the model id SelectK wraps in", errBody.Message)
 	}
+	// The distinguishing part is the model id, and it is worth exactly one
+	// copy of the sentence. SelectK used to render the error twice — once
+	// through %w and once more in parentheses, where %v renders an error
+	// identically — so the reader met the same sentence on both sides of the
+	// one piece of new information (waired-agent#752).
+	if n := strings.Count(errBody.Message, bare); n != 1 {
+		t.Errorf("message = %q: the sentinel appears %d times, want 1", errBody.Message, n)
+	}
 	if got := m.healthzHits.Load(); got != 0 {
 		t.Errorf("probes sent = %d, want 0: the admission pre-filter runs before any probe", got)
 	}

@@ -732,7 +732,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		if s.in.MeshSnapshotFn != nil {
 			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 			if err != nil {
-				return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
+				return nil, meshSelectionError(err, manifest.ModelID)
 			}
 			if len(cands) > 0 {
 				return cands, nil
@@ -759,7 +759,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		}
 		cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
+			return nil, meshSelectionError(err, manifest.ModelID)
 		}
 		if len(cands) > 0 {
 			return cands, nil
@@ -786,7 +786,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 		} else {
 			cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 			if err != nil {
-				return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
+				return nil, meshSelectionError(err, manifest.ModelID)
 			}
 			if len(cands) > 0 {
 				return cands, nil
@@ -807,7 +807,7 @@ func (s *Selector) SelectK(_ context.Context, req Request, k int) (cands []Candi
 			if s.in.MeshSnapshotFn != nil {
 				cands, err := s.tryMeshFallbackK(req, manifest, reasons, k, &short)
 				if err != nil {
-					return nil, fmt.Errorf("%w: %q (%v)", err, manifest.ModelID, err)
+					return nil, meshSelectionError(err, manifest.ModelID)
 				}
 				if len(cands) > 0 {
 					return cands, nil
@@ -1258,6 +1258,28 @@ func pinReachableInSnapshot(snap inferencemesh.Snapshot, pin string) bool {
 		return true
 	}
 	return false
+}
+
+// meshSelectionError wraps a mesh-fallback failure with the model id the
+// request named. All four routing-mode branches in SelectK go through it so
+// the shape a client receives cannot drift between them. Exactly two errors
+// reach it, both from tryMeshFallbackK: ErrAllPeersOverloaded and
+// *PinnedPeerUnreachableError.
+//
+// The wrapping itself is load-bearing and stays: the gateway's probe round
+// returns ErrAllPeersOverloaded BARE, and the model id after the sentinel is
+// the only thing telling this admission pre-filter apart from that probe
+// layer. waired-agent#624's diagnosis read one as the other, and
+// internal/gateway/mesh_distance_e2e_test.go now pins both shapes.
+//
+// What went is a second copy of err, which used to render in parentheses
+// after the model id. %w and %v render an error identically, so the copy
+// could never carry anything the prefix had not already said — it repeated
+// the sentence to the operator with the useful half, the model id, buried
+// between the two copies, and for a pinned-peer failure it repeated the
+// peer's name along with it (waired-agent#752).
+func meshSelectionError(err error, modelID string) error {
+	return fmt.Errorf("%w: %q", err, modelID)
 }
 
 // pinUnreachable emits the strict-pin event and builds the error for the
