@@ -231,6 +231,25 @@ type peerPathState struct {
 	lastSwitchReason string    // human/structured reason recorded at the switch
 	lastEvalAt       time.Time // last Apply (= "fresh chance for direct" anchor)
 
+	// lastSeenHandshakeAt is the newest WireGuard handshake time Tick has
+	// already accounted for on this peer. The safety net asks "did the
+	// direct data path make progress since I last looked", and that has to
+	// be a comparison against the previous LOOK, not against lastEvalAt:
+	// lastEvalAt only advances when a peer is created or when the safety
+	// net actually switches (Apply preserves it for existing peers), so a
+	// single successful direct handshake would otherwise sit newer than it
+	// forever and veto every future downgrade — the safety net could never
+	// fire, and because it never fired lastEvalAt never moved either.
+	//
+	// That deadlock was previously masked by UpdatePeers rebuilding the
+	// peer set on every reconcile: each rebuild reset wireguard-go's
+	// last-handshake time to zero, so the veto was almost never true. Once
+	// the rebuild is skipped for an unchanged peer set (the point of this
+	// change), the masking disappears and the deadlock becomes reachable —
+	// the testnet's flap-suppression scenario caught it, with one agent
+	// sitting on `direct` for 248s after its direct path was blocked.
+	lastSeenHandshakeAt time.Time
+
 	// Direct path quality. RTT EWMA in nanoseconds (time.Duration).
 	directRTTEWMA        time.Duration
 	directSampleCount    int
@@ -864,8 +883,12 @@ func (r *reconciler) Tick(ctx context.Context) {
 			continue
 		}
 		hsTime := hs[p.NodePublicKey]
-		if hsTime.After(st.lastEvalAt) {
-			// We did handshake on direct; data path is alive.
+		if hsTime.After(st.lastSeenHandshakeAt) {
+			// The direct data path made progress since the last look, so
+			// it is alive. Record how far it got: the next look asks
+			// whether it moved again, which is what makes a path that
+			// stops handshaking detectable at all (see the field's doc).
+			st.lastSeenHandshakeAt = hsTime
 			continue
 		}
 		st.currentPath = pathRelay

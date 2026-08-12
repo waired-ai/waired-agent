@@ -670,6 +670,58 @@ func TestReconciler_UpgradeRejectReasonTraversesGates(t *testing.T) {
 	}
 }
 
+// TestReconciler_SafetyNetFiresAfterAHandshakeStopsAdvancing is the
+// regression the testnet's flap-suppression scenario caught: a peer that
+// handshook successfully on direct, and whose direct path then went away,
+// must still be downgraded to relay.
+//
+// The safety net asks "did the direct data path make progress since I last
+// looked". It used to compare the handshake against lastEvalAt, which only
+// advances when a peer is created or when the safety net actually switches
+// (Apply preserves it for existing peers) — so one successful handshake sat
+// newer than it forever and vetoed every later downgrade, and because the
+// downgrade never fired lastEvalAt never moved either.
+//
+// That was masked by UpdatePeers rebuilding the peer set on every
+// reconcile, which reset wireguard-go's last-handshake time to zero. This
+// PR stops rebuilding an unchanged peer set, so the veto has to compare
+// against the previous look instead. On real hardware the unfixed version
+// left an agent on `direct` for 248s after its direct path was blocked.
+func TestReconciler_SafetyNetFiresAfterAHandshakeStopsAdvancing(t *testing.T) {
+	pubA := mkPeerKey(t)
+	nm := nm1Peer(pubA, "udp4:198.51.100.10:51820")
+
+	eng := &fakeEngine{}
+	rec := newReconciler(eng, &agentProvider{}, quietLogger(), nil, fastTestConfig())
+	if err := rec.Apply(nm); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// A direct handshake lands, so the first look must leave the peer on
+	// direct — the data path demonstrably worked.
+	eng.setHandshake(pubA, time.Now())
+	time.Sleep(rec.cfg.FallbackAfter)
+	rec.Tick(context.Background())
+	if got := rec.Snapshot()[pubA].CurrentPath; got != pathDirect {
+		t.Fatalf("after a fresh handshake, current_path = %q, want direct", got)
+	}
+
+	// Now the direct path goes away: the handshake time stops advancing.
+	// Nothing else changes — no disco events, and the peer set is
+	// unchanged, so UpdatePeers correctly leaves the engine alone.
+	time.Sleep(rec.cfg.FallbackAfter)
+	rec.Tick(context.Background())
+
+	snap := rec.Snapshot()[pubA]
+	if snap.CurrentPath != pathRelay {
+		t.Errorf("current_path = %q, want relay — a direct path that stopped "+
+			"handshaking was never detected", snap.CurrentPath)
+	}
+	if snap.LastSwitchReason != "safety_net" {
+		t.Errorf("last_switch_reason = %q, want safety_net", snap.LastSwitchReason)
+	}
+}
+
 // TestReconciler_DwellDoesNotMaskTheStandingUpgradeGate: while the dwell
 // window is open, the reject reason must still name the gate that would
 // refuse the promotion once dwell expires.
