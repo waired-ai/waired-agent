@@ -30,7 +30,16 @@ on:
     # `labeled` re-triggers the workflow when the `run-testnet` label is
     # added so the gate can force a run without a new push (same pattern
     # as the monorepo's testnet.yml).
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    #
+    # `edited` covers a retarget. GitHub sends `edited` (with
+    # changes.base) when a PR's base branch changes, and sends nothing
+    # else — no synchronize, because the head did not move. A PR opened
+    # against another branch and later retargeted to main therefore never
+    # armed this gate at all, and the absence was invisible: a check that
+    # never starts reports nothing to fail (waired-agent#385). The `gate`
+    # job still decides run-vs-skip, so the extra trigger costs one cheap
+    # gate evaluation, not a testnet.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, edited]
     # Deliberately NO paths filter: run/skip is decided by the `gate` job
     # against scripts/ci/testnet-relevant-paths.txt so every PR gets a
     # visible verdict and the run-testnet label can always force a run.
