@@ -336,9 +336,9 @@ func (a sbWorkerControl) SetMode(ctx context.Context, mode state.RoutingMode) er
 	return errNotEnrolled
 }
 
-func (a sbWorkerControl) SetPin(ctx context.Context, peerDeviceID string) error {
+func (a sbWorkerControl) SetPin(ctx context.Context, peerDeviceID, peerDisplayID string) error {
 	if s := a.sb.current(); s != nil {
-		return s.workerControl.SetPin(ctx, peerDeviceID)
+		return s.workerControl.SetPin(ctx, peerDeviceID, peerDisplayID)
 	}
 	return errNotEnrolled
 }

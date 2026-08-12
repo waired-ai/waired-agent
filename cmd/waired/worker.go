@@ -160,6 +160,13 @@ func buildWorkerRequest(mgmt, mode, pin string) (management.WorkerRequest, error
 // returns the canonical DeviceID. Names are matched case-sensitively;
 // ambiguous names (two peers with the same name) are rejected so the
 // operator must use the DeviceID.
+//
+// The value returned is the REAL DeviceID either way — it is the pin the
+// daemon stores and the router matches candidates on, not something an
+// operator reads. The candidates named in the ambiguity error are the
+// other thing: that string is a CLI surface, so a public machine among
+// them is named by its grant pseudonym (#739, public share spec §8.5).
+// `waired ping` settled the same split first (#723).
 func resolvePeerToDeviceID(mgmt, nameOrID string) (string, error) {
 	// fetchMeshSnapshot expects host:port form (no scheme). When the
 	// caller passed --mgmt as a URL we strip the scheme so the helper's
@@ -189,12 +196,19 @@ func resolvePeerToDeviceID(mgmt, nameOrID string) (string, error) {
 	case 1:
 		return nameMatches[0].DeviceID, nil
 	default:
+		// No "DeviceIDs:" label any more: the list mixes device ids with
+		// pseudonyms, so naming it after one of them would be wrong. This
+		// is also the shape `waired ping`'s message already has.
 		ids := make([]string, 0, len(nameMatches))
 		for _, p := range nameMatches {
-			ids = append(ids, p.DeviceID)
+			id := peerDisplayID(p)
+			if id == "" {
+				id = inferencemesh.PublicPeerLabel
+			}
+			ids = append(ids, id)
 		}
 		return "", fmt.Errorf(
-			"waired worker set: peer name %q is ambiguous — %d peers share it (DeviceIDs: %s). Use the DeviceID instead",
+			"waired worker set: peer name %q is ambiguous — %d peers share it (%s). Use the DeviceID instead",
 			nameOrID, len(nameMatches), strings.Join(ids, ", "))
 	}
 }
@@ -238,11 +252,29 @@ func displayMode(m state.RoutingMode) string {
 	return string(m)
 }
 
+// displayPin names the pinned peer for the `worker:` line.
+//
+// The identifier shown is the daemon's PinnedPeerDisplayID — the grant
+// pseudonym when the pin is a public machine — never PinnedPeerDeviceID,
+// which is the routing key and may be a stranger's real device id
+// (#739).
+//
+// The fallback is for an agent that predates the field: it reports no
+// display identifier for any pin, and dropping the id entirely would
+// blank the line for every own-network pin on an agent that has not been
+// upgraded yet. A public-machine pin carried over from such an agent,
+// whose peer is also missing from the snapshot, is the one case this
+// still names by device id — recorded rather than closed, because
+// closing it costs every pre-upgrade reader their identifier.
 func displayPin(resp management.WorkerResponse) string {
-	if resp.PinnedPeerName != "" {
-		return fmt.Sprintf("%s (%s)", resp.PinnedPeerName, resp.PinnedPeerDeviceID)
+	id := resp.PinnedPeerDisplayID
+	if id == "" {
+		id = resp.PinnedPeerDeviceID
 	}
-	return resp.PinnedPeerDeviceID
+	if resp.PinnedPeerName != "" {
+		return fmt.Sprintf("%s (%s)", resp.PinnedPeerName, id)
+	}
+	return id
 }
 
 // displayPinModel names the model the pinned peer is committed to.

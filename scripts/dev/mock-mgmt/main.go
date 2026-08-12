@@ -551,7 +551,9 @@ func workerResponse(rv routingView) *management.WorkerResponse {
 			// gone peer from an unknown one, so everything reads "absent".
 			resp.PinnedPeerStatus = "absent"
 		} else {
-			resp.PinnedPeerName, resp.PinnedPeerStatus = pinStatus(meshSnapshot(rv), rv.pin)
+			var display string
+			resp.PinnedPeerName, resp.PinnedPeerStatus, display = pinStatus(meshSnapshot(rv), rv.pin)
+			resp.PinnedPeerDisplayID = display
 		}
 	}
 	return resp
@@ -559,8 +561,9 @@ func workerResponse(rv routingView) *management.WorkerResponse {
 
 // pinStatus mirrors management.Server.resolvePinStatus so the tray's
 // "(unavailable)" / "(absent)" suffixes appear for the same reasons they
-// would in production.
-func pinStatus(snap inferencemesh.Snapshot, deviceID string) (name, status string) {
+// would in production — including the display identifier, which is the
+// grant pseudonym for a public machine (#739).
+func pinStatus(snap inferencemesh.Snapshot, deviceID string) (name, status, display string) {
 	for _, p := range snap.Peers {
 		if p.DeviceID != deviceID {
 			continue
@@ -575,9 +578,10 @@ func pinStatus(snap inferencemesh.Snapshot, deviceID string) (name, status strin
 		default:
 			status = "ok"
 		}
-		return p.DeviceName, status
+		display, _ = inferencemesh.PeerDisplayID(p)
+		return p.DeviceName, status, display
 	}
-	return "", "absent"
+	return "", "absent", ""
 }
 
 // meshSnapshot builds the fake aggregate. Peers come out in device-name

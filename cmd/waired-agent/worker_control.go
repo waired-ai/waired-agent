@@ -91,17 +91,30 @@ func (wc *workerController) SetMode(ctx context.Context, mode state.RoutingMode)
 // SetPin flips to RoutingModePinned with the given peer device ID.
 // Empty peerDeviceID is rejected so a misclicked tray entry cannot
 // pin to "nothing".
-func (wc *workerController) SetPin(ctx context.Context, peerDeviceID string) error {
+//
+// peerDisplayID is what that peer may be called on a surface an operator
+// reads, taken from the mesh snapshot by the caller. It is recorded
+// rather than derived later because a pin outlives the snapshot entry it
+// was chosen from, and the display rule needs the grant that only the
+// entry carries (#739). Empty is allowed: an agent may have no snapshot
+// view of the peer, and "nothing to show" is a better answer than the
+// device id.
+func (wc *workerController) SetPin(ctx context.Context, peerDeviceID, peerDisplayID string) error {
 	_ = ctx
 	if peerDeviceID == "" {
 		return fmt.Errorf("worker controller: SetPin requires a non-empty peer device ID")
 	}
 	if wc.logger != nil {
-		wc.logger.Debug("worker set pin", "peer_device_id", peerDeviceID)
+		// The display identifier, not the device id: a log line is one of
+		// the surfaces a public machine's real id may not reach (spec
+		// §8.5), and peerLogName exists in reconcile.go for the same
+		// reason.
+		wc.logger.Debug("worker set pin", "peer", peerDisplayID)
 	}
 	return wc.transition(state.RoutingPreference{
-		Mode:               state.RoutingModePinned,
-		PinnedPeerDeviceID: peerDeviceID,
+		Mode:                state.RoutingModePinned,
+		PinnedPeerDeviceID:  peerDeviceID,
+		PinnedPeerDisplayID: peerDisplayID,
 	})
 }
 
@@ -134,11 +147,13 @@ func (wc *workerController) transition(target state.RoutingPreference) error {
 	prev := wc.Routing()
 	wc.pref.Store(&target)
 	if wc.logger != nil {
+		// Pins are named by their display identifier here for the same
+		// reason SetPin's line is (spec §8.5).
 		wc.logger.Info("worker controller state change",
 			"from_mode", prev.Mode,
-			"from_pin", prev.PinnedPeerDeviceID,
+			"from_pin", prev.PinnedPeerDisplayID,
 			"to_mode", target.Mode,
-			"to_pin", target.PinnedPeerDeviceID,
+			"to_pin", target.PinnedPeerDisplayID,
 		)
 	}
 	if wc.ring != nil && prev != target {
@@ -147,7 +162,7 @@ func (wc *workerController) transition(target state.RoutingPreference) error {
 			RoutingModeChange: &observability.RoutingModeChangeEvent{
 				From:               string(prev.Mode),
 				To:                 string(target.Mode),
-				PinnedPeerDeviceID: target.PinnedPeerDeviceID,
+				PinnedPeerDeviceID: target.PinnedPeerDisplayID,
 			},
 		})
 	}
@@ -171,6 +186,7 @@ func normalizeRouting(p state.RoutingPreference) state.RoutingPreference {
 	}
 	if p.Mode != state.RoutingModePinned {
 		p.PinnedPeerDeviceID = ""
+		p.PinnedPeerDisplayID = ""
 	}
 	return p
 }

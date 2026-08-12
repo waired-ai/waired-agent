@@ -195,6 +195,12 @@ func (r *Recorder) RecordSelection(decision, peerID, model string) {
 // soft-fallback "pin lacks the requested model" branches. reason
 // values are "unreachable" or "lacks_model"; the Prometheus counter
 // is labelled accordingly so a dashboard can distinguish the two.
+//
+// peerID is the peer's DISPLAY identifier — callers pass what
+// pinDisplayID / candidateDisplayID resolved, because both sinks below
+// publish it: the ring is served whole by the management API's
+// /observability/events, and the log line lands in agent.log (#739,
+// public share spec §8.5). The counter carries only the reason.
 func (r *Recorder) RecordPinnedPeerUnreachable(peerID, model, reason string) {
 	if r == nil {
 		return

@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/observability"
@@ -72,7 +76,7 @@ func TestWorkerController_SetPinFlipsToPinned(t *testing.T) {
 	dir := t.TempDir()
 	wc := newWorkerController(dir, state.RoutingPreference{Mode: state.RoutingModeAuto}, nil)
 
-	if err := wc.SetPin(context.Background(), "dev_linux_gpu_1"); err != nil {
+	if err := wc.SetPin(context.Background(), "dev_linux_gpu_1", "dev_linux_gpu_1"); err != nil {
 		t.Fatal(err)
 	}
 	got := wc.Routing()
@@ -95,7 +99,7 @@ func TestWorkerController_SetModePinnedRejected(t *testing.T) {
 func TestWorkerController_SetPinEmptyRejected(t *testing.T) {
 	dir := t.TempDir()
 	wc := newWorkerController(dir, state.RoutingPreference{Mode: state.RoutingModeAuto}, nil)
-	if err := wc.SetPin(context.Background(), ""); err == nil {
+	if err := wc.SetPin(context.Background(), "", ""); err == nil {
 		t.Error("SetPin(\"\") must reject")
 	}
 }
@@ -103,7 +107,7 @@ func TestWorkerController_SetPinEmptyRejected(t *testing.T) {
 func TestWorkerController_ClearReturnsToAuto(t *testing.T) {
 	dir := t.TempDir()
 	wc := newWorkerController(dir, state.RoutingPreference{Mode: state.RoutingModeAuto}, nil)
-	if err := wc.SetPin(context.Background(), "dev_x"); err != nil {
+	if err := wc.SetPin(context.Background(), "dev_x", "dev_x"); err != nil {
 		t.Fatal(err)
 	}
 	if err := wc.Clear(context.Background()); err != nil {
@@ -121,7 +125,7 @@ func TestWorkerController_ClearReturnsToAuto(t *testing.T) {
 func TestWorkerController_SwitchingModeClearsStaleP(t *testing.T) {
 	dir := t.TempDir()
 	wc := newWorkerController(dir, state.RoutingPreference{Mode: state.RoutingModeAuto}, nil)
-	if err := wc.SetPin(context.Background(), "dev_a"); err != nil {
+	if err := wc.SetPin(context.Background(), "dev_a", "dev_a"); err != nil {
 		t.Fatal(err)
 	}
 	if err := wc.SetMode(context.Background(), state.RoutingModeLocalOnly); err != nil {
@@ -139,7 +143,7 @@ func TestWorkerController_EmitsRoutingModeChangeEvent(t *testing.T) {
 	wc := newWorkerController(dir, state.RoutingPreference{Mode: state.RoutingModeAuto}, nil).
 		WithObservability(ring)
 
-	if err := wc.SetPin(context.Background(), "dev_xyz"); err != nil {
+	if err := wc.SetPin(context.Background(), "dev_xyz", "dev_xyz"); err != nil {
 		t.Fatal(err)
 	}
 	events, _, _ := ring.Since(0, []observability.Kind{observability.KindRoutingModeChange}, 10)
@@ -191,5 +195,66 @@ func TestWorkerController_StateReportsDesiredFromDisk(t *testing.T) {
 	}
 	if desired.Mode != state.RoutingModePeerPreferred {
 		t.Errorf("desired mode = %q, want peer-preferred", desired.Mode)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#739 + public share spec §8.5). Pinning
+// a public machine records what it may be CALLED alongside the id the
+// router matches on, and the surfaces the controller writes to — the
+// event ring the management API serves whole, and agent.log — carry the
+// former.
+//
+// The display identifier is recorded rather than derived later because a
+// pin outlives the snapshot entry it was chosen from, and only that
+// entry carries the grant.
+func TestWorkerController_PinRecordsTheDisplayIdentifierAndKeepsTheRealKey(t *testing.T) {
+	const (
+		foreignDeviceID = "dev_foreign00000001"
+		foreignAlias    = "guest-a7f3"
+	)
+	dir := t.TempDir()
+	ring := observability.NewRing(observability.DefaultRingCapacity)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	wc := newWorkerController(dir, state.RoutingPreference{Mode: state.RoutingModeAuto}, logger).
+		WithObservability(ring)
+
+	if err := wc.SetPin(context.Background(), foreignDeviceID, foreignAlias); err != nil {
+		t.Fatal(err)
+	}
+
+	got := wc.Routing()
+	if got.PinnedPeerDeviceID != foreignDeviceID {
+		t.Errorf("PinnedPeerDeviceID = %q, want the real id — the router matches candidates on it", got.PinnedPeerDeviceID)
+	}
+	if got.PinnedPeerDisplayID != foreignAlias {
+		t.Errorf("PinnedPeerDisplayID = %q, want the pseudonym", got.PinnedPeerDisplayID)
+	}
+
+	events, _, _ := ring.Since(0, []observability.Kind{observability.KindRoutingModeChange}, 10)
+	if len(events) != 1 {
+		t.Fatalf("want 1 event after SetPin, got %d", len(events))
+	}
+	blob, err := json.Marshal(events)
+	if err != nil {
+		t.Fatalf("marshal ring: %v", err)
+	}
+	if bytes.Contains(blob, []byte(foreignDeviceID)) {
+		t.Errorf("the routing-change event carries the real device id: %s", blob)
+	}
+	if !bytes.Contains(blob, []byte(foreignAlias)) {
+		t.Errorf("the event names no peer at all: %s", blob)
+	}
+	if strings.Contains(logBuf.String(), foreignDeviceID) {
+		t.Errorf("agent.log carries the real device id: %s", logBuf.String())
+	}
+
+	// Leaving pinned mode drops both halves together.
+	if err := wc.SetMode(context.Background(), state.RoutingModeAuto); err != nil {
+		t.Fatal(err)
+	}
+	if after := wc.Routing(); after.PinnedPeerDisplayID != "" {
+		t.Errorf("PinnedPeerDisplayID = %q after leaving pinned mode, want it cleared with the pin",
+			after.PinnedPeerDisplayID)
 	}
 }

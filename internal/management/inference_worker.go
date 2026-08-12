@@ -56,6 +56,21 @@ type WorkerResponse struct {
 	// when mode != pinned, or when the peer is absent.
 	PinnedPeerModel     string `json:"pinned_peer_model,omitempty"`
 	PinnedPeerCondition string `json:"pinned_peer_condition,omitempty"`
+
+	// PinnedPeerDisplayID is the identifier a client may show for the
+	// pinned peer: the grant pseudonym when the pin is a public machine,
+	// the DeviceID when it is one of your own.
+	//
+	// PinnedPeerDeviceID above stays the real one — the tray matches it
+	// against the mesh snapshot to mark the selected row and posts it
+	// back to set the pin, so scrubbing it would break the round-trip.
+	// Every client that rendered PinnedPeerDeviceID was therefore
+	// printing a stranger's device id on a surface that may not carry one
+	// (#739, public share spec §8.5). Empty when nothing is pinned, when
+	// the pin is absent from the snapshot and the daemon kept no record
+	// of what it was called — and when an agent predating the field
+	// answered.
+	PinnedPeerDisplayID string `json:"pinned_peer_display_id,omitempty"`
 }
 
 func (s *Server) handleWorker(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +98,7 @@ func (s *Server) writeWorkerState(w http.ResponseWriter, r *http.Request) {
 		v := s.resolvePinStatus(r, desired.PinnedPeerDeviceID)
 		resp.PinnedPeerName, resp.PinnedPeerStatus = v.Name, v.Status
 		resp.PinnedPeerModel, resp.PinnedPeerCondition = v.Model, v.Condition
+		resp.PinnedPeerDisplayID = pinDisplayID(v, desired)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -142,7 +158,11 @@ func (s *Server) applyWorkerRequest(w http.ResponseWriter, r *http.Request) {
 				"pinned mode requires pinned_peer_device_id"))
 			return
 		}
-		if err := s.workerControl.SetPin(ctx, req.PinnedPeerDeviceID); err != nil {
+		// Resolve what this peer may be called WHILE it is still in the
+		// snapshot: after it drops out there is no grant to read, and the
+		// display rule needs one (#739).
+		display := s.resolvePinStatus(r, req.PinnedPeerDeviceID).DisplayID
+		if err := s.workerControl.SetPin(ctx, req.PinnedPeerDeviceID, display); err != nil {
 			writeJSON(w, http.StatusInternalServerError, errorBody("worker_set_failed", err.Error()))
 			return
 		}
@@ -152,6 +172,26 @@ func (s *Server) applyWorkerRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeWorkerState(w, r)
+}
+
+// pinDisplayID is the identifier a client may show for the current pin.
+//
+// The snapshot is the better source — it is current, and it carries the
+// grant. But a pin that has dropped out of the snapshot is exactly the
+// case where PinnedPeerName is empty too, which is where a client's
+// "fall back to the device id" used to put a stranger's device id on a
+// menu row (#739). So the second source is what the daemon recorded when
+// the pin was set, while the peer was still in view.
+//
+// Empty when neither source has one: a peer absent from the snapshot,
+// pinned by an agent that predates the recorded value. A client showing
+// nothing is the intended outcome — the pin's own device id is not an
+// alternative it may reach for.
+func pinDisplayID(v pinView, desired state.RoutingPreference) string {
+	if v.DisplayID != "" {
+		return v.DisplayID
+	}
+	return desired.PinnedPeerDisplayID
 }
 
 // resolvePinStatus derives the pinned peer's view from the inferencemesh
@@ -175,6 +215,11 @@ func (s *Server) resolvePinStatus(r *http.Request, deviceID string) pinView {
 			Condition: inferencemesh.PeerCondition(p),
 			Status:    "unavailable",
 		}
+		// The snapshot entry is the only place the grant is in hand, so
+		// this is where the display rule gets applied for the pin (#739).
+		// A public machine with no pseudonym leaves it empty rather than
+		// falling back to the real id.
+		v.DisplayID, _ = inferencemesh.PeerDisplayID(p)
 		if inferencemesh.PeerServing(p) {
 			v.Status = "ok"
 		}
@@ -191,4 +236,9 @@ type pinView struct {
 	Model     string
 	Condition string
 	Status    string
+	// DisplayID is the identifier a client may show for this peer —
+	// pseudonym for a public machine, DeviceID otherwise (§8.5). Empty
+	// when the peer is absent from the snapshot, which is exactly when
+	// the caller falls back to what the daemon recorded at pin time.
+	DisplayID string
 }

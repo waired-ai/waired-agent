@@ -535,3 +535,88 @@ func TestRoutingMenuHiddenForPreFeatureDaemon(t *testing.T) {
 		t.Error("ShowRoutingMenu must stay false when neither worker nor mesh is present")
 	}
 }
+
+// The public-share fixtures. Synthetic and unmistakable: this repository
+// is public, and a leak has to show up as a substring hit.
+const (
+	trayForeignDeviceID = "dev_foreign00000001"
+	trayForeignAlias    = "guest-a7f3"
+)
+
+// PRODUCT CONTRACT (waired-agent#739 + public share spec §8.5). A menu
+// row is a surface a public machine's real device id may not reach. The
+// pin rows come from the mesh snapshot, so the grant is in hand here.
+func TestApplyWorker_PinRowNamesAPublicMachineByItsPseudonym(t *testing.T) {
+	mesh := &inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{{
+			// No DeviceName: the fallback is what used to render the real id.
+			DeviceID: trayForeignDeviceID,
+			Grant:    &signer.PeerGrant{Kind: "public", Role: "provider", Pseudonym: trayForeignAlias},
+			InferenceState: &signer.InferenceState{
+				Reachable: true, Type: signer.InferenceTypeOllama, Models: []string{"qwen3:8b"},
+			},
+		}},
+	}
+	m := Update(baseSnapshotWithWorker(&management.WorkerResponse{Mode: state.RoutingModeAuto}, mesh))
+	if len(m.WorkerPinEntries) != 1 {
+		t.Fatalf("pin entries = %d, want 1", len(m.WorkerPinEntries))
+	}
+	pe := m.WorkerPinEntries[0]
+	if strings.Contains(pe.Label, trayForeignDeviceID) {
+		t.Errorf("the public machine's real device id reached the menu: %q", pe.Label)
+	}
+	if !strings.Contains(pe.Label, trayForeignAlias) {
+		t.Errorf("label = %q, want it to name the pseudonym", pe.Label)
+	}
+	// The row's DeviceID stays the real one: the tray posts it back to
+	// set the pin and matches it against the snapshot to mark the
+	// selection. Display and key are different answers.
+	if pe.DeviceID != trayForeignDeviceID {
+		t.Errorf("row DeviceID = %q, want the real id — it is the pin the daemon stores", pe.DeviceID)
+	}
+}
+
+// The absent row is the one that fires most often: resolvePinStatus
+// returns no name once the peer leaves the snapshot, and the label used
+// to fall back to the raw pin.
+func TestApplyWorker_AbsentPinRowNamesAPublicMachineByItsPseudonym(t *testing.T) {
+	w := &management.WorkerResponse{
+		Mode:                state.RoutingModePinned,
+		PinnedPeerDeviceID:  trayForeignDeviceID,
+		PinnedPeerDisplayID: trayForeignAlias,
+		PinnedPeerStatus:    "absent",
+	}
+	m := Update(baseSnapshotWithWorker(w, &inferencemesh.Snapshot{}))
+	if len(m.WorkerPinEntries) != 1 {
+		t.Fatalf("pin entries = %d, want the absent row", len(m.WorkerPinEntries))
+	}
+	if got := m.WorkerPinEntries[0].Label; got != trayForeignAlias+" (absent)" {
+		t.Errorf("absent label = %q, want %q", got, trayForeignAlias+" (absent)")
+	}
+	if strings.Contains(m.WorkerActiveLabel, trayForeignDeviceID) {
+		t.Errorf("the summary row leaks the real device id: %q", m.WorkerActiveLabel)
+	}
+	if !strings.Contains(m.WorkerActiveLabel, trayForeignAlias) {
+		t.Errorf("summary row = %q, want it to name the pseudonym", m.WorkerActiveLabel)
+	}
+}
+
+// Own-network rows read exactly as they did before: the display
+// identifier a daemon reports for one of your own machines IS its
+// DeviceID, so nothing in the menu changes.
+func TestApplyWorker_OwnPinRowsUnchanged(t *testing.T) {
+	w := &management.WorkerResponse{
+		Mode:                state.RoutingModePinned,
+		PinnedPeerDeviceID:  "dev_gone",
+		PinnedPeerDisplayID: "dev_gone",
+		PinnedPeerName:      "ghost",
+		PinnedPeerStatus:    "absent",
+	}
+	m := Update(baseSnapshotWithWorker(w, &inferencemesh.Snapshot{}))
+	if len(m.WorkerPinEntries) != 1 {
+		t.Fatalf("pin entries = %d, want the absent row", len(m.WorkerPinEntries))
+	}
+	if got := m.WorkerPinEntries[0].Label; got != "ghost (absent)" {
+		t.Errorf("absent label = %q, want %q", got, "ghost (absent)")
+	}
+}

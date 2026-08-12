@@ -315,6 +315,10 @@ waired worker set --mode=peer-only       # only another computer; fail rather th
 waired worker set --pin=<peer>           # always this one (implies --mode=pinned)
 ```
 
+`<peer>` is a computer's name, or the identifier from the `DEVICE-ID` column of
+`waired peers list`. Names come from each computer's own hostname; you can
+change one in the [web console](/guides/web-console/).
+
 ### `waired peers`
 
 ```sh

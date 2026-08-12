@@ -29,6 +29,41 @@ const (
 	ConditionUnavailable = "unavailable"
 )
 
+// PublicPeerLabel is what a prose surface writes where a peer's display
+// identifier would go, when a public machine carries no pseudonym to
+// show. "public machine" is the wording `waired public` already uses for
+// someone else's computer ("Public machines are other people's
+// computers", cmd/waired/public.go).
+//
+// Not for an identifier column — a column has "-" for "nothing to show",
+// and a phrase in an ID column reads as an id.
+const PublicPeerLabel = "public machine"
+
+// PeerDisplayID is the identifier a surface may show for this peer, and
+// whether there is one at all.
+//
+// A peer injected under a Public Share grant is someone else's machine:
+// only the grant pseudonym for its owner account may be displayed, never
+// the real device identifier (public share spec §8.5, as stated on
+// internal/gateway/probe.go's peerDisplayID). Own-network peers carry no
+// grant and are named by DeviceID as they always were.
+//
+// ok=false only for a grant peer with no pseudonym. Falling back to the
+// DeviceID there would be the leak itself, so this reports "nothing to
+// show" and lets the surface decide how to say so — the same choice
+// internal/router's publicDisplayID makes for routing. The control plane
+// skips injecting a grant peer whose pseudonym row is missing, so this
+// is a second lock on a door that should already be shut.
+func PeerDisplayID(p PeerView) (string, bool) {
+	if p.Grant == nil {
+		return p.DeviceID, true
+	}
+	if p.Grant.Pseudonym == "" {
+		return "", false
+	}
+	return p.Grant.Pseudonym, true
+}
+
 // PeerModel is the model this peer is committed to serving.
 //
 // ActiveModel is the catalog model_id, the one namespace every host

@@ -232,14 +232,20 @@ func (h *HandlerSet) pinnedProbeFailure(g probedSelection) error {
 		if r.IsReady() || r.FailureReason() == probeReasonCapacityFull {
 			return nil
 		}
+		// One value for the event and the error, as the Selector's own
+		// pinUnreachable does. The event reaches the ring the management
+		// API serves and a debug log line, and neither may carry a public
+		// machine's real device id (#739, spec §8.5). For an own-network
+		// candidate this is the same string c.PeerID was.
+		display := candidateDisplayID(c)
 		if h.deps.Recorder != nil {
-			h.deps.Recorder.RecordPinnedPeerUnreachable(c.PeerID, c.ModelID, "probe_failed")
+			h.deps.Recorder.RecordPinnedPeerUnreachable(display, c.ModelID, "probe_failed")
 		}
 		// c.ModelID, not the request alias: this mirrors the
 		// manifest.ModelID the Selector's own pinUnreachable reports,
 		// so both paths name the same thing.
 		return &router.PinnedPeerUnreachableError{
-			PeerDisplayID: candidateDisplayID(c),
+			PeerDisplayID: display,
 			ModelID:       c.ModelID,
 		}
 	}

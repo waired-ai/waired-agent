@@ -216,7 +216,14 @@ func claudeWairedNodeLine(mgmt string) string {
 	}
 	switch w.Mode {
 	case state.RoutingModePinned:
+		// Same identifier rule as `waired worker get`'s displayPin: the
+		// daemon's display identifier, which is the grant pseudonym when
+		// the pin is a public machine (#739, spec §8.5). The device-id
+		// fallback is only for an agent predating that field.
 		who := w.PinnedPeerName
+		if who == "" {
+			who = w.PinnedPeerDisplayID
+		}
 		if who == "" {
 			who = w.PinnedPeerDeviceID
 		}

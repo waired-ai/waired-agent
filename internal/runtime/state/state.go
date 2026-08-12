@@ -100,6 +100,19 @@ const (
 type RoutingPreference struct {
 	Mode               RoutingMode `json:"mode"`
 	PinnedPeerDeviceID string      `json:"pinned_peer_device_id,omitempty"`
+	// PinnedPeerDisplayID is what that peer may be called on a surface an
+	// operator reads — its grant pseudonym when the pin is a public
+	// machine, its DeviceID when it is one of your own (public share spec
+	// §8.5).
+	//
+	// Recorded here because it is only knowable while the peer is in the
+	// mesh snapshot, and the surface that most needs it is the one shown
+	// after the peer has dropped out of it: the tray's "(absent)" row and
+	// `waired worker get` both used to fall back to the raw
+	// PinnedPeerDeviceID there (#739). Empty for a pin set by an agent
+	// predating the field, and for a public machine that carried no
+	// pseudonym.
+	PinnedPeerDisplayID string `json:"pinned_peer_display_id,omitempty"`
 }
 
 // IsZero reports whether the preference is the all-defaults form a
@@ -894,6 +907,11 @@ func validateRoutingPreference(p RoutingPreference) error {
 	case "", RoutingModeAuto, RoutingModeLocalOnly, RoutingModePeerPreferred, RoutingModePeerOnly:
 		if p.PinnedPeerDeviceID != "" {
 			return fmt.Errorf("runtime/state: mode %q must not carry pinned_peer_device_id", p.Mode)
+		}
+		// The display identifier names the pinned peer, so it travels
+		// with the pin rather than outliving it.
+		if p.PinnedPeerDisplayID != "" {
+			return fmt.Errorf("runtime/state: mode %q must not carry pinned_peer_display_id", p.Mode)
 		}
 		return nil
 	case RoutingModePinned:

@@ -47,11 +47,8 @@ func (r *recordingRecorder) snapshot() []selectionCall {
 	return out
 }
 
-// pinFailureSnapshot returns a copy of recorded pin-failure events;
-// kept for downstream tests that need to inspect emit fan-out without
-// triggering a data race on r.pinFailures.
-//
-//nolint:unused // exercised by future router emission tests, kept on the helper sibling for symmetry with snapshot()
+// pinFailureSnapshot returns a copy of recorded pin-failure events
+// without triggering a data race on r.pinFailures.
 func (r *recordingRecorder) pinFailureSnapshot() []pinFailureCall {
 	r.mu.Lock()
 	defer r.mu.Unlock()

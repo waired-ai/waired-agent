@@ -321,6 +321,7 @@ func TestWorkerRouting_Pinned_PublicPeerNamedByPseudonym(t *testing.T) {
 			pub,
 		},
 	}
+	rec := &recordingRecorder{}
 	s := NewSelector(Inputs{
 		Manifests:          []catalog.Manifest{qwen()},
 		LocalState:         emptyState(),
@@ -329,6 +330,7 @@ func TestWorkerRouting_Pinned_PublicPeerNamedByPseudonym(t *testing.T) {
 		MeshSnapshotFn:     func() inferencemesh.Snapshot { return snap },
 		RoutingMode:        state.RoutingModePinned,
 		PinnedPeerDeviceID: "peer-foreign",
+		Recorder:           rec,
 	})
 	_, err := s.Select(t.Context(), Request{Model: "waired/default"})
 	var pin *PinnedPeerUnreachableError
@@ -340,6 +342,52 @@ func TestWorkerRouting_Pinned_PublicPeerNamedByPseudonym(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "peer-foreign") {
 		t.Errorf("error body leaks the real device id: %v", err)
+	}
+	// The event emitted beside that error goes to the ring the management
+	// API serves whole and to agent.log, so it is a surface under the same
+	// rule — and it used to carry the raw pin while the error next to it
+	// was named correctly (#739).
+	got := rec.pinFailureSnapshot()
+	if len(got) != 1 {
+		t.Fatalf("pin-failure emits = %d, want 1 (%+v)", len(got), got)
+	}
+	if got[0].peerID != "quiet-otter" {
+		t.Errorf("emitted peer id = %q, want the grant pseudonym", got[0].peerID)
+	}
+}
+
+// The soft-fallback branch emits the same kind of event from a different
+// place, and had the same defect.
+func TestWorkerRouting_Pinned_PublicPeerLacksModelEventNamesThePseudonym(t *testing.T) {
+	// Reachable and serving, but a model the request did not ask for, so
+	// the pin cannot be hoisted and the soft-fallback event fires.
+	pub := mkPublicPeer("peer-foreign", "quiet-otter", "some-other:tag")
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{
+			mkPeer("peer-A", "qwen3:8b-q4_K_M", true, false),
+			pub,
+		},
+	}
+	rec := &recordingRecorder{}
+	s := NewSelector(Inputs{
+		Manifests:          []catalog.Manifest{qwen()},
+		LocalState:         emptyState(),
+		Hardware:           goodHardware(),
+		Runtimes:           registryWithOllama(),
+		MeshSnapshotFn:     func() inferencemesh.Snapshot { return snap },
+		RoutingMode:        state.RoutingModePinned,
+		PinnedPeerDeviceID: "peer-foreign",
+		Recorder:           rec,
+	})
+	if _, err := s.Select(t.Context(), Request{Model: "waired/default"}); err != nil {
+		t.Fatalf("soft fallback should still select a peer: %v", err)
+	}
+	got := rec.pinFailureSnapshot()
+	if len(got) != 1 || got[0].reason != "lacks_model" {
+		t.Fatalf("pin-failure emits = %+v, want one lacks_model", got)
+	}
+	if got[0].peerID != "quiet-otter" {
+		t.Errorf("emitted peer id = %q, want the grant pseudonym", got[0].peerID)
 	}
 }
 
