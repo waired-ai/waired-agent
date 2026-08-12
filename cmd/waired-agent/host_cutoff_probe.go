@@ -20,6 +20,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/hostspeed"
 	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
@@ -174,27 +175,57 @@ const (
 	// that a genuine truncation lands under it.
 	hostCutoffScreenMinPromptTokens = 1500
 
-	// hostCutoffScreenConfirmTimeout is the per-request ceiling for the
-	// screen's SECOND reading, and it is deliberately smaller than the
-	// first's hostCutoffCalibrationTimeout: the first reading leaves the
-	// probe model resident (hostCutoffScreenKeepAlive), so the confirming
-	// request pays a prefill and no model load.
+	// hostCutoffScreenConfirmTimeout is the FLOOR under the per-request
+	// ceiling for the screen's SECOND reading; screenConfirmTimeout sizes
+	// the ceiling itself from what the first reading cost on this host.
 	//
-	// Its size comes from what has to FIT rather than from a measurement:
-	// hostCutoffCalibrationTimeout + this must sit inside
-	// hostspeed.InstallWindow, so that a host whose probe model is already
-	// on disk can always reach a verdict inside the window the model
-	// download is waiting behind. Pinned by
-	// TestHostCutoffScreen_FitsTheInstallWindow.
+	// It was the ceiling, flat, and that is what waired-agent#735 is. The
+	// reasoning behind the flat figure was that the first reading leaves
+	// the probe model resident (hostCutoffScreenKeepAlive), so the
+	// confirming request pays a prefill and no model load, and that a host
+	// too slow to prefill ~2.8k tokens in a minute is bounded below at
+	// roughly 456 s per turn — far enough past the cutoff that falling
+	// through costs nothing.
 	//
-	// A confirming read that runs past it reaches no verdict and the full
-	// measurement runs instead — the direction that costs a download
-	// rather than a host. A host too slow to prefill ~2.8k tokens in a
-	// minute with the model already resident is bounded below at roughly
-	// 456 s per turn; it falls through to a full measurement it will not
-	// finish either, and lands on the same "undecided, carry on" arm it
-	// landed on before any of this existed.
+	// Both halves were wrong on a 3 vCPU / 7 GB macos-14 runner. Measured
+	// there (run 31592040935 against run 31605659210, the same leg pair on
+	// the same runner image):
+	//
+	//	reading 1 counted 2937 tokens at 68 tok/s = 43 s of prefill,
+	//	but took 79 s of wall clock — ~36 s of it is model load, KV
+	//	allocation for num_ctx=44048, and scheduling, none of which
+	//	"pays no model load" accounts for.
+	//
+	//	the confirming reading then took 58 s on the run that measured
+	//	and hit 60 s on the run that did not. Two seconds decided it.
+	//
+	// and the host's floor was 307.8 s, not the 456 s the sizing argument
+	// assumed, so it was still a host worth cutting cheaply.
+	//
+	// Falling through is not free either, which is why the margin matters:
+	// the screen discards a verdict it already reached — 307.8 s against a
+	// 45 s budget, a 6.8x rejection — and escalates to a full-depth sample
+	// that costs nine more minutes and, on this host, also times out. The
+	// run publishes nothing. A confirming reading that runs LONG is
+	// evidence the host is slow; spending more on it is the wrong
+	// direction.
+	//
+	// Kept as the floor rather than deleted: it is the smallest ceiling a
+	// host that really does pay prefill alone should ever get, and a fast
+	// host's first reading must not shrink the confirming one below it.
+	// Pinned by TestHostCutoffScreen_TheConstantsHoldTogether.
 	hostCutoffScreenConfirmTimeout = 60 * time.Second
+
+	// hostCutoffScreenConfirmMargin scales the first reading's measured
+	// cost into the confirming reading's ceiling.
+	//
+	// The confirming reading is the same request shape against a model the
+	// first reading left resident, so it should cost LESS than the first,
+	// not more; 1.5 is headroom for the variation between two readings on
+	// a host that is already established to be slow, not a budget the
+	// reading is expected to need. On the measured runner it turns a 79 s
+	// first reading into a 118 s ceiling against a 58-60 s observed cost.
+	hostCutoffScreenConfirmMargin = 1.5
 
 	// hostCutoffScreenQuietWait / hostCutoffScreenQuietPoll bound the wait
 	// for the host to stop doing something else before the screen reads
@@ -217,7 +248,12 @@ const (
 	// 30 s, and the size is what the partition allows rather than a
 	// measurement: hostCutoffCalibrationTimeout + this +
 	// hostCutoffScreenConfirmTimeout must fit hostspeed.InstallWindow
-	// (TestHostCutoffScreen_TheConstantsHoldTogether). Reaching the end of
+	// (TestHostCutoffScreen_TheConstantsHoldTogether). That sum is the
+	// worst case where the first reading uses its whole ceiling; since
+	// waired-agent#735 the confirming reading is sized from what the first
+	// one actually cost, so the run-time sum is the smaller
+	// this + measured-first + screenConfirmTimeout(measured-first), and
+	// the caller's deadline bounds it either way. Reaching the end of
 	// it is not a failure — the first reading has already happened and its
 	// line cost still comes back — it only means the screen may not
 	// CONCLUDE, which is the fall-through the whole design treats as safe.
@@ -676,7 +712,8 @@ func screenHostCutoff(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeasu
 func screenHostCutoffOnce(ctx context.Context, deps hostCutoffDeps) (hostCutoffMeasurement, int, hostCutoffScreenOutcome) {
 	gen := deps.engineGen()
 
-	first, err := screenHostCutoffPrompt(ctx, deps, 1)
+	readAt := deps.now()
+	first, err := screenHostCutoffPrompt(ctx, deps, 1, 0)
 	if err != nil {
 		if deps.engineGen() != gen {
 			return hostCutoffMeasurement{}, 0, screenInterrupted
@@ -685,6 +722,11 @@ func screenHostCutoffOnce(ctx context.Context, deps hostCutoffDeps) (hostCutoffM
 			"tokens_per_line", hostCutoffPromptTokensPerLine, "err", err)
 		return hostCutoffMeasurement{}, 0, screenFellThrough
 	}
+	// Wall clock, not the engine's reported prefill: what the confirming
+	// reading has to fit inside is everything the request costs, and the
+	// gap between the two is the whole of waired-agent#735 (~36 s of model
+	// load and KV allocation on the measured runner).
+	firstCost := deps.since(readAt)
 	firstFloor, fires := hostCutoffScreenFloor(first)
 	deps.Logger.Info("host cutoff: measured the prompt's token cost",
 		"tokens_per_line", first.TokensPerLine, "seed", hostCutoffPromptTokensPerLine,
@@ -712,12 +754,19 @@ func screenHostCutoffOnce(ctx context.Context, deps hostCutoffDeps) (hostCutoffM
 		return hostCutoffMeasurement{}, first.TokensPerLine, screenFellThrough
 	}
 
-	second, err := screenHostCutoffPrompt(ctx, deps, 2)
+	confirmCeiling := screenConfirmTimeout(firstCost)
+	second, err := screenHostCutoffPrompt(ctx, deps, 2, confirmCeiling)
 	if err != nil {
 		if deps.engineGen() != gen {
 			return hostCutoffMeasurement{}, first.TokensPerLine, screenInterrupted
 		}
+		// The two costs are logged together because they are what sized
+		// the ceiling: a confirming reading that ran past a ceiling drawn
+		// from the first one's own cost is a different fact from the flat
+		// 60 s this used to fail on (waired-agent#735).
 		deps.Logger.Info("host cutoff: the confirming reading did not complete; measuring at full depth",
+			"first_reading_seconds", fmt.Sprintf("%.1f", firstCost.Seconds()),
+			"confirm_ceiling_seconds", fmt.Sprintf("%.1f", confirmCeiling.Seconds()),
 			"err", err)
 		return hostCutoffMeasurement{}, first.TokensPerLine, screenFellThrough
 	}
@@ -920,12 +969,60 @@ func hostCutoffNonce(base string, sample, attempt int) string {
 // ±30 % the depth guard allows, and TurnSeconds normalises to the
 // canonical depth regardless.
 //
+// screenConfirmTimeout is the confirming reading's per-request ceiling,
+// sized from what the first reading measurably cost on this host rather
+// than from a flat figure (waired-agent#735).
+//
+// Pure, and separate from the request, so the sizing is testable without
+// a clock or an engine: the seam that matters here is the arithmetic, and
+// the flat constant it replaces had no seam at all — no test could
+// express "the confirming reading needs more than 60 s on a host that is
+// still worth measuring", which is why the runner found it first.
+//
+// Bounded three ways, tightest first:
+//
+//   - by what the install window has LEFT once the quiet wait and the
+//     first reading are paid for. This is what keeps
+//     TestHostCutoffScreen_TheConstantsHoldTogether §2 true now that the
+//     ceiling is not a constant: the pin says one pass reaches a verdict
+//     inside the window the model download is waiting behind, and a
+//     ceiling drawn from the first reading alone could promise a pass
+//     longer than the window on a host whose first reading was slow.
+//     Reading the actual cost rather than the ceiling makes the sum
+//     TIGHTER than the old constant arithmetic, not looser.
+//   - by hostCutoffCalibrationTimeout, the ceiling the first reading
+//     itself ran under: the confirming reading is the cheaper of the two
+//     by construction, so it never earns more than the expensive one got.
+//   - and from below by hostCutoffScreenConfirmTimeout, so a fast host's
+//     cheap first reading cannot shrink the confirming one into a
+//     self-fulfilling timeout. The floor is applied LAST and therefore
+//     wins: over the domain that can actually occur — a first reading
+//     bounded by hostCutoffCalibrationTimeout — the room left is at least
+//     90 s, so the floor never fights the window.
+func screenConfirmTimeout(firstReading time.Duration) time.Duration {
+	ceiling := time.Duration(float64(firstReading) * hostCutoffScreenConfirmMargin)
+	if room := hostspeed.InstallWindow - hostCutoffScreenQuietWait - firstReading; ceiling > room {
+		ceiling = room
+	}
+	if ceiling > hostCutoffCalibrationTimeout {
+		ceiling = hostCutoffCalibrationTimeout
+	}
+	if ceiling < hostCutoffScreenConfirmTimeout {
+		ceiling = hostCutoffScreenConfirmTimeout
+	}
+	return ceiling
+}
+
 // reading is 1 for the first and 2 for the confirming one. It picks the
 // nonce, so the two are not the same prompt: two requests sharing a
 // prefix are answered from the engine's KV cache at a rate no host can
-// achieve. It also picks the ceiling and the residency — see
-// hostCutoffScreenConfirmTimeout and hostCutoffScreenKeepAlive.
-func screenHostCutoffPrompt(ctx context.Context, deps hostCutoffDeps, reading int) (hostCutoffScreen, error) {
+// achieve. It also picks the residency — see hostCutoffScreenKeepAlive.
+//
+// confirmCeiling is the confirming reading's ceiling from
+// screenConfirmTimeout, and is read only when reading > 1; the first
+// reading runs under hostCutoffCalibrationTimeout, which is what sizes
+// the ceiling in the first place.
+func screenHostCutoffPrompt(ctx context.Context, deps hostCutoffDeps, reading int, confirmCeiling time.Duration) (hostCutoffScreen, error) {
 	// Its own ceiling, not the measuring request's: this sends 50 filler
 	// lines with num_predict:1, and giving it the same ten minutes a
 	// 21k-token prefill gets is what let it consume a whole measurement
@@ -938,11 +1035,17 @@ func screenHostCutoffPrompt(ctx context.Context, deps hostCutoffDeps, reading in
 	keepAlive := hostCutoffScreenKeepAlive
 	if reading > 1 {
 		// The confirming reading is the last request the screen makes, so
-		// it unloads; and it pays no load itself, so it gets the smaller
-		// ceiling.
+		// it unloads; and it costs less than the first, so it gets the
+		// smaller ceiling — sized from the first reading's measured cost
+		// rather than flat, because "pays no model load" turned out not to
+		// mean "pays nothing but prefill" (waired-agent#735).
+		//
+		// Still a clamp rather than an assignment, so an injected
+		// CalibrationTimeout keeps bounding both readings: a test that
+		// shrinks the calibration to 100 ms means it.
 		keepAlive = 0
-		if timeout > hostCutoffScreenConfirmTimeout {
-			timeout = hostCutoffScreenConfirmTimeout
+		if timeout > confirmCeiling {
+			timeout = confirmCeiling
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)

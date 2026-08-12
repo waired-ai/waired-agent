@@ -80,7 +80,23 @@ func TestHostCutoffScreen_TheConstantsHoldTogether(t *testing.T) {
 	// them short rather than letting them overrun — and a screen cut short
 	// reaches no verdict, which is the fall-through this whole design
 	// treats as safe.
-	screen := hostCutoffScreenQuietWait + hostCutoffCalibrationTimeout + hostCutoffScreenConfirmTimeout
+	// Since waired-agent#735 the confirming reading's ceiling is not a
+	// constant — screenConfirmTimeout sizes it from what the first reading
+	// cost — so this is stated over the whole domain the first reading can
+	// occupy rather than at one triple of constants. The first reading runs
+	// under hostCutoffCalibrationTimeout, so that is the domain.
+	for first := time.Duration(0); first <= hostCutoffCalibrationTimeout; first += time.Second {
+		pass := hostCutoffScreenQuietWait + first + screenConfirmTimeout(first)
+		if pass > hostspeed.InstallWindow {
+			t.Fatalf("a first reading of %s makes one pass take %s (quiet wait + both readings), more "+
+				"than the %s install window: the verdict the download is waiting for can arrive "+
+				"after the download starts", first, pass, hostspeed.InstallWindow)
+		}
+	}
+	// The worst case over that domain, kept as a named figure so §3 can use
+	// it and so a change to the sizing shows up here as a number.
+	screen := hostCutoffScreenQuietWait + hostCutoffCalibrationTimeout +
+		screenConfirmTimeout(hostCutoffCalibrationTimeout)
 	if screen > hostspeed.InstallWindow {
 		t.Fatalf("the screen can take %s at its ceilings (quiet wait + two readings), more than the "+
 			"%s install window: the verdict the download is waiting for can arrive after the "+
@@ -96,13 +112,99 @@ func TestHostCutoffScreen_TheConstantsHoldTogether(t *testing.T) {
 	// 4. THE CONFIRMING READING IS THE CHEAPER ONE. It pays no model load,
 	// because the first reading left the model resident.
 	if hostCutoffScreenConfirmTimeout >= hostCutoffCalibrationTimeout {
-		t.Fatalf("the confirming ceiling (%s) is not under the first reading's (%s); "+
+		t.Fatalf("the confirming ceiling's floor (%s) is not under the first reading's ceiling (%s); "+
 			"it is the reading that pays no model load",
 			hostCutoffScreenConfirmTimeout, hostCutoffCalibrationTimeout)
 	}
 	if hostCutoffScreenKeepAlive <= 0 {
 		t.Fatal("the first screen reading unloads the model, so the confirming reading reloads it — " +
 			"which is the cost hostCutoffScreenConfirmTimeout is sized on the absence of")
+	}
+	// 5. THE MARGIN IS HEADROOM, NOT A BUDGET. The confirming reading costs
+	// less than the first by construction, so anything at or below 1 would
+	// make the sizing say the opposite of what it means.
+	if hostCutoffScreenConfirmMargin <= 1 {
+		t.Fatalf("hostCutoffScreenConfirmMargin = %v: at or below 1 the confirming reading is given "+
+			"less time than the first one measurably needed", hostCutoffScreenConfirmMargin)
+	}
+}
+
+// screenConfirmTimeout sizes the confirming reading from the first
+// reading's measured cost, and never lets that leave the pass longer than
+// the window the model download is waiting behind (waired-agent#735).
+//
+// Product contract for the two bounds (waired-agent#735 for the sizing,
+// waired-agent#579 for the window the pass has to fit); the exact figures
+// in the "measured on macos-14" rows are a record of what that runner
+// did, not a promise about it.
+func TestScreenConfirmTimeout_SizedFromTheFirstReading(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		first time.Duration
+		want  time.Duration
+		why   string
+	}{{
+		name:  "no reading at all falls back to the floor",
+		first: 0,
+		want:  hostCutoffScreenConfirmTimeout,
+		why:   "a caller with nothing measured gets the constant this replaced",
+	}, {
+		name:  "a fast host cannot shrink it below the floor",
+		first: 4 * time.Second,
+		want:  hostCutoffScreenConfirmTimeout,
+		why:   "6 s of headroom would be a self-fulfilling timeout",
+	}, {
+		name:  "measured on macos-14: the run that reached a verdict",
+		first: 110 * time.Second,
+		want:  160 * time.Second,
+		why:   "past the 108 s crossover the window caps it below 1.5x; run 31605659210 confirmed in 58 s",
+	}, {
+		name:  "the crossover, where 1.5x and the window's remainder meet",
+		first: 108 * time.Second,
+		want:  162 * time.Second,
+		why:   "1.5x = 162 s and the window leaves exactly 162 s; past here the window is the tighter bound",
+	}, {
+		name:  "measured on macos-14: the run that did not",
+		first: 79 * time.Second,
+		want:  118500 * time.Millisecond,
+		why:   "run 31592040935 was killed at the flat 60 s; 118.5 s clears the 58-60 s it needed",
+	}, {
+		name:  "the window caps it before the calibration ceiling does",
+		first: 150 * time.Second,
+		want:  120 * time.Second,
+		why:   "1.5x would be 225 s, but 30 s quiet + 150 s + 225 s overruns the 300 s window",
+	}, {
+		name:  "the slowest first reading there can be still fits the window",
+		first: hostCutoffCalibrationTimeout,
+		want:  90 * time.Second,
+		why:   "300 s window - 30 s quiet - 180 s first reading",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := screenConfirmTimeout(tc.first); got != tc.want {
+				t.Errorf("screenConfirmTimeout(%s) = %s, want %s — %s", tc.first, got, tc.want, tc.why)
+			}
+		})
+	}
+}
+
+// The flat 60 s ceiling waired-agent#735 replaced is not reachable again
+// by accident on the hosts that were failing under it.
+//
+// Record of the defect, not of a constant: it is written against the
+// measured cost rather than against hostCutoffScreenConfirmTimeout, so it
+// keeps meaning the same thing if the floor moves.
+func TestScreenConfirmTimeout_ClearsWhatTheRunnerNeeded(t *testing.T) {
+	// The two readings observed on macos-14, and what the confirming one
+	// actually cost on the run that completed it.
+	const (
+		firstReading  = 79 * time.Second
+		confirmNeeded = 58 * time.Second
+	)
+	got := screenConfirmTimeout(firstReading)
+	if got <= confirmNeeded {
+		t.Fatalf("screenConfirmTimeout(%s) = %s, which does not clear the %s the confirming reading "+
+			"measured on macos-14: the host is cut on a timeout instead of on its speed "+
+			"(waired-agent#735)", firstReading, got, confirmNeeded)
 	}
 }
 
