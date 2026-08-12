@@ -598,7 +598,21 @@ func runInitViaDaemon(o daemonInitOpts) error {
 			return summary.exitErr()
 		case management.LoginPhaseError:
 			if st.Error != "" {
-				return fmt.Errorf("login failed: %s", st.Error)
+				// Classified here too, not only on the /login/start
+				// response above. The daemon runs enrollment on its own
+				// goroutine and reports the failure as TEXT in
+				// LoginStatus.Error (cmd/waired-agent/login.go's fail),
+				// so an old control plane rejecting the auth_key field
+				// surfaces on THIS path, wearing controlclient's
+				// "create login session: status 400: …" rather than the
+				// daemon-path prefix.
+				//
+				// That is the case an auth key exists for — an
+				// unattended fresh install — and it was reaching
+				// operators as a raw JSON decoder error, which reads as
+				// "your key is malformed" and sends them off to
+				// regenerate a key that was never wrong (#728).
+				return classifyAuthKeyError(fmt.Errorf("login failed: %s", st.Error), authKey != "")
 			}
 			return errors.New("login failed")
 		}

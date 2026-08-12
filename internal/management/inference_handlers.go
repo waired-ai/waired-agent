@@ -785,6 +785,27 @@ func errorBody(code, msg string) map[string]string {
 	return map[string]string{"error_code": code, "message": msg}
 }
 
+// mapRouterStatus maps a router selection error to the status
+// /inference/select answers with.
+//
+// The serving surfaces map the same sentinels in
+// gateway.selectionStatus, and this endpoint is the dry run OF those
+// surfaces — `waired infer --explain` exists to explain what a real
+// request would do. When the two disagree, explain is a worse signal
+// than the thing it explains (waired-agent#710): a saturated mesh
+// answered 500 here and 503 there, and 500 says the daemon is broken
+// rather than busy.
+//
+// Two divergences are deliberate and stay:
+//
+//   - ErrCapabilityNotMet / ErrHardwareInsufficient are 422 here and 400
+//     at the gateway. Both describe a request this host cannot satisfy;
+//     422 is the more precise reading (the JSON parsed fine, its
+//     requirements were the problem) and this endpoint has no
+//     OpenAI/Anthropic wire shape to stay compatible with.
+//   - ErrNoEndpointForWindow is 500 on both sides today. Recorded here as
+//     today's behaviour rather than asserted as intended — see
+//     TestMapRouterStatus_AgreesWithServingSurfaces.
 func mapRouterStatus(err error) int {
 	switch {
 	case errors.Is(err, router.ErrModelNotFound):
@@ -793,6 +814,12 @@ func mapRouterStatus(err error) int {
 		errors.Is(err, router.ErrHardwareInsufficient):
 		return http.StatusUnprocessableEntity
 	case errors.Is(err, router.ErrModelNotReady),
+		// A mesh that is busy, silent, or whose pinned peer is
+		// unreachable is not an internal error — the gateway has said so
+		// with a dedicated code since #707, and this endpoint now agrees.
+		errors.Is(err, router.ErrAllPeersOverloaded),
+		errors.Is(err, router.ErrPeersDidNotAnswer),
+		errors.Is(err, router.ErrPinnedPeerUnreachable),
 		errors.Is(err, router.ErrRuntimeNotInstalled):
 		return http.StatusServiceUnavailable
 	default:

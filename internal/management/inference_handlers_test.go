@@ -448,3 +448,115 @@ func (e wrappedErr) Unwrap() error { return e.target }
 // unused so the test file compiles cleanly even if errors.Is isn't
 // used elsewhere here.
 var _ = errors.Is
+
+// TestMapRouterStatus_AgreesWithServingSurfaces covers every router
+// sentinel the explain endpoint can be handed, not just the one that was
+// reported wrong (waired-agent#710).
+//
+// The `gateway` column is the status a CLIENT receives from the serving
+// surfaces — internal/gateway's respondSelectionError (and its Anthropic
+// twin), pinned there by internal/gateway/selection_error_test.go. It is
+// written down rather than called because the two are unexported in
+// different packages; the point of recording it is that a row where the
+// columns differ has to carry a reason.
+//
+// Deliberately the WIRE status, not internal/gateway's selectionStatus.
+// The two are not the same function and do not always agree with each
+// other — selectionStatus feeds the request record, and for
+// ErrHardwareInsufficient it says 400 where the wire says 422. That
+// disagreement is inside the gateway, not between the gateway and this
+// endpoint, so it is not #710's to fix and not this table's to model.
+// Comparing against the record instead would have made this endpoint look
+// wrong for a sentinel it already agrees with.
+//
+// A sentinel added to router without a row here lands in `default` and
+// answers 500 — which is how ErrAllPeersOverloaded became this bug.
+//
+// Reachability differs by row and is recorded per row rather than
+// implied. Every row exercises the real mapping through the real
+// handler, but ErrPeersDidNotAnswer cannot arrive at THIS surface in
+// production: the only code that produces it is the gateway's probe
+// round (internal/gateway/probe.go), and /inference/select calls Select
+// without probing. Its case is defensive — correct if a probing path
+// ever reaches here — so the row is marked, and nobody reading this
+// table later mistakes it for evidence that the path exists.
+func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		want    int
+		gateway int
+		why     string // non-empty only where the two deliberately differ
+		// defensive marks a sentinel this endpoint cannot currently be
+		// handed. The mapping is still asserted; the reachability is not
+		// claimed. If the case is ever removed from mapRouterStatus as
+		// unreachable, remove its row here in the same change — a
+		// defensive row left behind fails and reads like a real defect.
+		defensive bool
+	}{
+		{name: "model not found", err: router.ErrModelNotFound, want: 404, gateway: 404},
+		{name: "model not ready", err: router.ErrModelNotReady, want: 503, gateway: 503},
+		{name: "runtime not installed", err: router.ErrRuntimeNotInstalled, want: 503, gateway: 503},
+		{name: "all peers overloaded", err: router.ErrAllPeersOverloaded, want: 503, gateway: 503},
+		{
+			name: "peers did not answer", err: router.ErrPeersDidNotAnswer, want: 503, gateway: 503,
+			defensive: true,
+		},
+		{name: "pinned peer unreachable", err: router.ErrPinnedPeerUnreachable, want: 503, gateway: 503},
+		{
+			name: "pinned peer unreachable, wrapped with the peer identity",
+			err:  &router.PinnedPeerUnreachableError{PeerDisplayID: "workshop-mac"},
+			want: 503, gateway: 503,
+		},
+		{
+			name: "capability not met", err: router.ErrCapabilityNotMet, want: 422, gateway: 400,
+			why: "422 is the more precise reading — the JSON parsed, its requirements were the problem — " +
+				"and this endpoint has no OpenAI/Anthropic wire shape to stay compatible with",
+		},
+		// No divergence to explain: the gateway answers a client 422 here
+		// too. (Its own request-record helper says 400 for this one; see
+		// the note above.)
+		{name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: 422, gateway: 422},
+		{
+			name: "no endpoint for window", err: router.ErrNoEndpointForWindow, want: 500, gateway: 500,
+			why: "record of today's behaviour on both sides, not a considered choice",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.want != tc.gateway && tc.why == "" {
+				t.Fatalf("row diverges from the gateway (%d vs %d) with no reason recorded", tc.want, tc.gateway)
+			}
+			if tc.defensive {
+				t.Log("defensive row: only the gateway's probe round produces this sentinel, " +
+					"so /inference/select cannot be handed it today; the mapping is asserted, " +
+					"the reachability is not claimed")
+			}
+			// Through the real handler, not mapRouterStatus alone: the
+			// status an operator sees is the one the endpoint writes.
+			inf := &fakeInference{selectErr: wrapErr(tc.err, "select failed")}
+			s := newServerWithInference(inf)
+			r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/select", bytes.NewBufferString(`{"model":"x"}`))
+			r.RemoteAddr = "127.0.0.1:1"
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Errorf("status = %d, want %d", w.Code, tc.want)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body["error_code"] != "selection_failed" {
+				t.Errorf("error_code = %q, want selection_failed", body["error_code"])
+			}
+			// Deliberately no assertion on body["message"]. It is
+			// err.Error() verbatim, and what Select returns here is the
+			// WRAPPED form ("...: %q (...)"), never the bare sentinel —
+			// bare is the probe layer's shape, and that difference is the
+			// only thing telling the two layers apart (#734). Pinning a
+			// bare string here would fail, and "fixing" it by unwrapping
+			// in the router would destroy that distinction.
+		})
+	}
+}
