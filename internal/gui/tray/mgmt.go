@@ -26,11 +26,14 @@ import (
 // retries by re-calling.
 type Client struct {
 	base string
-	hc   *http.Client
+	// hc carries reads. Since waired#836 the daemon serves only the
+	// compatibility routes on the loopback TCP port, and the tray reads
+	// well outside that list (/identity, /integration/*, /public/*), so
+	// hc dials the IPC socket first and falls back to TCP when there is
+	// no socket to open — a mock daemon, or one that could not bind one.
+	hc *http.Client
 	// wc carries mutating requests over the local IPC socket / named pipe
-	// instead of the loopback TCP port (waired#838). Reads stay on hc:
-	// they are already covered by the #836 browser guard, and the shared
-	// observabilityclient is TCP-bound.
+	// instead of the loopback TCP port (waired#838).
 	wc *http.Client
 	// wcEngine carries the engine power writes. They need their own,
 	// far longer budget: stopping the engine kills a process and waits
@@ -52,28 +55,40 @@ type Client struct {
 // must outlast the daemon's own engine-stop budget so the tray reports
 // what actually happened instead of a timeout it caused itself.
 const (
+	readTimeout        = 3 * time.Second
 	writeTimeout       = 3 * time.Second
 	engineWriteTimeout = 20 * time.Second
 )
 
 // NewClient builds a Client targeting baseURL (default
-// http://127.0.0.1:9476) for reads. Trailing slashes are tolerated.
-// Writes go to the local management socket, whose endpoint ipcclient
-// resolves on its own (honouring $WAIRED_MGMT_SOCKET), so no state dir
-// needs threading here.
+// http://127.0.0.1:9476). Trailing slashes are tolerated. Both transports
+// resolve their endpoint through ipcclient (honouring $WAIRED_MGMT_SOCKET),
+// so no state dir needs threading here.
+//
+// A baseURL the caller changed names some other daemon — the tray's --mgmt
+// pointed at scripts/dev/mock-mgmt on another port, say — so reads there
+// stay on plain TCP rather than being redirected to this machine's socket.
 func NewClient(baseURL string) *Client {
 	if baseURL == "" {
 		baseURL = "http://" + management.DefaultListen
 	}
+	base := strings.TrimRight(baseURL, "/")
 	return &Client{
-		base: strings.TrimRight(baseURL, "/"),
-		hc: &http.Client{
-			Timeout: 3 * time.Second,
-		},
+		base:      base,
+		hc:        newReadClient(base, readTimeout),
 		wc:        ipcclient.NewHTTPClient(writeTimeout),
 		wcEngine:  ipcclient.NewHTTPClient(engineWriteTimeout),
 		writeBase: ipcclient.BaseURL,
 	}
+}
+
+// newReadClient returns the socket-first read client for base, or a plain
+// TCP client when base is not the loopback default.
+func newReadClient(base string, timeout time.Duration) *http.Client {
+	if !ipcclient.SameAuthority(base, "http://"+management.DefaultListen) {
+		return &http.Client{Timeout: timeout}
+	}
+	return ipcclient.NewReadClient(base, timeout)
 }
 
 // ErrPauseUnsupported is returned by Pause/Resume when the daemon

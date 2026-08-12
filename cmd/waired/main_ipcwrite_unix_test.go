@@ -106,3 +106,83 @@ func TestMgmtWritesRouteToSocket(t *testing.T) {
 		}
 	})
 }
+
+// TestMgmtReadsRouteToSocket asserts the waired#836 read routing: a read
+// issued against the loopback base actually travels over the local IPC
+// socket, because the daemon serves only the compatibility routes on the
+// TCP port. A --mgmt the operator pointed elsewhere keeps its reads on
+// TCP, and a missing socket falls back to TCP so a daemon that could not
+// bind one is still reachable.
+//
+// TestMain clears mgmtWriteBase for the rest of the binary, so this test
+// restores production routing explicitly.
+func TestMgmtReadsRouteToSocket(t *testing.T) {
+	prevWrite, prevBase := mgmtWriteBase, mgmtReadDefaultBase
+	mgmtWriteBase = ipcclient.BaseURL
+	t.Cleanup(func() { mgmtWriteBase, mgmtReadDefaultBase = prevWrite, prevBase })
+
+	var sockPath, sockMethod, tcpPath string
+
+	sock := filepath.Join(shortTempDir(t), "mgmt.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	sockSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sockPath, sockMethod = r.URL.Path, r.Method
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	_ = sockSrv.Listener.Close()
+	sockSrv.Listener = ln
+	sockSrv.Start()
+	t.Cleanup(sockSrv.Close)
+	t.Setenv(paths.MgmtSocketEnvOverride, sock)
+
+	tcpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tcpPath = r.URL.Path
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(tcpSrv.Close)
+
+	t.Run("read-on-the-default-base-goes-to-socket", func(t *testing.T) {
+		sockPath, sockMethod, tcpPath = "", "", ""
+		mgmtReadDefaultBase = tcpSrv.URL
+		if _, err := httpGet(tcpSrv.URL + "/waired/v1/identity"); err != nil {
+			t.Fatalf("httpGet identity: %v", err)
+		}
+		if sockPath != "/waired/v1/identity" || sockMethod != http.MethodGet {
+			t.Fatalf("socket saw %s %q, want GET /waired/v1/identity", sockMethod, sockPath)
+		}
+		if tcpPath != "" {
+			t.Fatalf("identity unexpectedly reached the TCP listener at %q", tcpPath)
+		}
+	})
+
+	t.Run("read-on-another-base-stays-on-tcp", func(t *testing.T) {
+		sockPath, tcpPath = "", ""
+		// A --mgmt the operator pointed somewhere else (scripts/dev/mock-mgmt
+		// on another port) must not be redirected to this machine's socket.
+		mgmtReadDefaultBase = "http://127.0.0.1:9476"
+		if _, err := httpGet(tcpSrv.URL + "/waired/v1/identity"); err != nil {
+			t.Fatalf("httpGet identity: %v", err)
+		}
+		if tcpPath != "/waired/v1/identity" {
+			t.Fatalf("TCP saw %q, want /waired/v1/identity", tcpPath)
+		}
+		if sockPath != "" {
+			t.Fatalf("a non-default base reached the socket at %q", sockPath)
+		}
+	})
+
+	t.Run("no-socket-falls-back-to-tcp", func(t *testing.T) {
+		sockPath, tcpPath = "", ""
+		mgmtReadDefaultBase = tcpSrv.URL
+		t.Setenv(paths.MgmtSocketEnvOverride, filepath.Join(shortTempDir(t), "absent.sock"))
+		if _, err := httpGet(tcpSrv.URL + "/waired/v1/identity"); err != nil {
+			t.Fatalf("httpGet identity with no socket: %v", err)
+		}
+		if tcpPath != "/waired/v1/identity" {
+			t.Fatalf("fallback did not reach TCP; saw %q", tcpPath)
+		}
+	})
+}

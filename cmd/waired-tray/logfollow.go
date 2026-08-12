@@ -11,6 +11,7 @@ import (
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 )
 
 // flagPassed reports whether the named flag was explicitly set on the
@@ -37,7 +38,13 @@ func followDaemonLogLevel(ctx context.Context, mgmtURL string, levelVar *slog.Le
 		every = 5 * time.Second
 	}
 	base := strings.TrimRight(mgmtURL, "/")
+	// /waired/v1/log/level is not on the daemon's TCP read allow-list
+	// (waired#836), so this poll goes over the IPC socket, falling back to
+	// TCP when there is none to open.
 	hc := &http.Client{Timeout: 4 * time.Second}
+	if ipcclient.SameAuthority(base, "http://"+management.DefaultListen) {
+		hc = ipcclient.NewReadClient(base, 4*time.Second)
+	}
 
 	apply := func() {
 		lvl, ok := fetchDaemonLogLevel(ctx, hc, base)

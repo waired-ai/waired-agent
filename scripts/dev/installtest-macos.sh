@@ -1028,10 +1028,43 @@ assert_mgmt_socket_macos() {
     *)  ok "TCP :9476 refuses mutating writes (HTTP $code)" ;;
   esac
 
-  # Reads deliberately stay on TCP.
+  # The compatibility reads stay on TCP (waired#836 allow-list).
   curl -fsS --max-time 5 "$MGMT" >/dev/null 2>&1 \
-    && ok "TCP :9476 still serves reads" \
-    || bad "TCP :9476 no longer serves reads"
+    && ok "TCP :9476 still serves the compatibility reads" \
+    || bad "TCP :9476 no longer serves /status (waired#836 allow-list)"
+
+  # Everything else moved to the socket.
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    http://127.0.0.1:9476/waired/v1/identity 2>/dev/null || true)
+  case "$code" in
+    2*) bad "TCP :9476 served /identity (HTTP $code); readGuard not enforcing (waired#836)" ;;
+    "") bad "TCP :9476 unlisted-read probe produced no status code" ;;
+    *)  ok "TCP :9476 refuses reads outside the allow-list (HTTP $code)" ;;
+  esac
+
+  curl -fsS --max-time 5 --unix-socket /var/run/waired/mgmt.sock \
+    http://waired-mgmt/waired/v1/identity >/dev/null 2>&1 \
+    && ok "the management socket serves /identity" \
+    || bad "the management socket does not serve /identity; the read moved nowhere (waired#836)"
+
+  # The #836 browser hardening itself — browserGuard is OFF by default in
+  # the unit tests, so nothing else would notice --mgmt-hardening flipping.
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    -H 'Host: evil.example' http://127.0.0.1:9476/waired/v1/status 2>/dev/null || true)
+  case "$code" in
+    2*) bad "TCP :9476 answered an attacker Host (HTTP $code); browserGuard not enforcing (waired#836)" ;;
+    "") bad "TCP :9476 Host probe produced no status code" ;;
+    *)  ok "TCP :9476 rejects a non-loopback Host (HTTP $code)" ;;
+  esac
+
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST \
+    -H 'Content-Type: text/plain' --data '{"peer":"x"}' \
+    http://127.0.0.1:9476/waired/v1/ping 2>/dev/null || true)
+  if [ "$code" = "415" ]; then
+    ok "TCP :9476 requires application/json on writes (HTTP 415)"
+  else
+    bad "POST /ping with text/plain returned HTTP ${code:-none}, want 415 (waired#836)"
+  fi
 
   # Leave the daemon active whichever leg above failed.
   "$BINDIR/waired" resume >/dev/null 2>&1 || true
