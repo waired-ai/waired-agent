@@ -2481,10 +2481,19 @@ type agentProvider struct {
 	// nodeKeyAgreement.
 	selfNodePub string
 
-	mu         sync.RWMutex
-	peerCount  int
-	mapEpoch   int64
-	peerByName map[string]*signer.NetworkMapPeer
+	mu        sync.RWMutex
+	peerCount int
+	mapEpoch  int64
+	// peerByID indexes the current network map by DeviceID, which is
+	// unique by construction.
+	//
+	// It used to be keyed by DeviceName AS WELL, in map order and with no
+	// collision check, so two devices sharing a name left exactly one of
+	// them reachable and said nothing about the other (waired-agent#723).
+	// Names are not identifiers; the one lookup that took a name now
+	// resolves it against these values and answers for the ambiguity
+	// itself — see resolvePeerByName.
+	peerByID map[string]*signer.NetworkMapPeer
 	// publishedNodePub / publishedPrevNodePub are the control plane's
 	// self row for this device from the most recent network map. Empty
 	// until the first map arrives.
@@ -2579,11 +2588,11 @@ func (p *agentProvider) Status() management.Status {
 			}
 			// Phase 7 follow-up (C1): surface peer device name + hardware
 			// from the cached NetworkMap. Same RLock as the surrounding
-			// Status() — peerByName is written by replacePeers under
+			// Status() — peerByID is written by replacePeers under
 			// Lock and read here under RLock. nil-safe at every level so
 			// peers that predate Hardware push (or are CPU-only) emit no
 			// hardware field at all rather than a noisy {}.
-			if peer, ok := p.peerByName[ps.DeviceID]; ok && peer != nil {
+			if peer, ok := p.peerByID[ps.DeviceID]; ok && peer != nil {
 				out.DeviceName = peer.DeviceName
 				if peer.InferenceState != nil && peer.InferenceState.Hardware != nil {
 					hw := peer.InferenceState.Hardware
@@ -2689,21 +2698,20 @@ func (p *agentProvider) replacePeers(nm *signer.NetworkMap) {
 	// boot — see nodeKeyAgreement.
 	p.publishedNodePub = nm.Self.NodePublicKey
 	p.publishedPrevNodePub = nm.Self.PrevNodePublicKey
-	if p.peerByName == nil {
-		p.peerByName = map[string]*signer.NetworkMapPeer{}
+	if p.peerByID == nil {
+		p.peerByID = map[string]*signer.NetworkMapPeer{}
 	} else {
-		for k := range p.peerByName {
-			delete(p.peerByName, k)
+		for k := range p.peerByID {
+			delete(p.peerByID, k)
 		}
 	}
 	for i := range nm.Peers {
 		peer := nm.Peers[i]
-		// Index by both human-readable name and device_id so management
-		// API can resolve either.
-		if peer.DeviceName != "" {
-			p.peerByName[peer.DeviceName] = &peer
-		}
-		p.peerByName[peer.DeviceID] = &peer
+		// DeviceID only. Adding the DeviceName as a second key made a
+		// duplicate name silently overwrite a peer instead of being
+		// noticed (#723), and nothing needs the name key now that
+		// resolvePeerByName exists.
+		p.peerByID[peer.DeviceID] = &peer
 	}
 	// Refresh URL → fingerprint mapping for the relay client factory.
 	if p.relayTLSPin == nil {
@@ -2748,12 +2756,75 @@ type agentPinger struct {
 	provider *agentProvider
 }
 
+// resolvePeerByName turns what an operator typed into exactly one peer.
+//
+// The rule is the one `waired worker set --pin` already settled, and
+// resolvePeerToDeviceID (cmd/waired/worker.go) states it in its own doc:
+// an exact DeviceID wins outright, a name matching one peer resolves to
+// it, and a name matching several is REFUSED with the candidates named.
+// A name is not an identifier — two device records can carry the same
+// DeviceName — so answering with one of them makes every later
+// observation unreliable without saying so. A ping that quietly
+// addressed a leftover record from a previous enrollment read as "the
+// machine is unreachable" rather than "I asked the wrong record"
+// (waired-agent#723).
+//
+// Candidates are named by their DISPLAY identifier, never their real
+// DeviceID. A Public Share peer is a stranger's machine injected under a
+// grant, and only the grant pseudonym for its owner account may reach a
+// CLI surface (public share spec §8.5) — the same rule peerDisplayID
+// follows for `waired peers list`.
+func resolvePeerByName(byID map[string]*signer.NetworkMapPeer, name string) (*signer.NetworkMapPeer, error) {
+	if peer, ok := byID[name]; ok && peer != nil {
+		return peer, nil
+	}
+	var matches []*signer.NetworkMapPeer
+	for _, peer := range byID {
+		if peer != nil && peer.DeviceName != "" && peer.DeviceName == name {
+			matches = append(matches, peer)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("peer %q not in current Network Map", name)
+	case 1:
+		return matches[0], nil
+	default:
+		ids := make([]string, 0, len(matches))
+		for _, peer := range matches {
+			ids = append(ids, peerDisplayIdentifier(peer))
+		}
+		// Sorted because the map being scanned has no order of its own,
+		// and an operator comparing two runs should not have to wonder
+		// whether the list changed.
+		slices.Sort(ids)
+		return nil, fmt.Errorf(
+			"peer name %q is ambiguous — %d devices share it (%s). Use the device id instead",
+			name, len(matches), strings.Join(ids, ", "))
+	}
+}
+
+// peerDisplayIdentifier is the only identifier for a peer that may appear
+// in a message an operator reads.
+//
+// Deliberately a second implementation of cmd/waired/peers.go's
+// peerDisplayID rather than shared code: that one reads
+// inferencemesh.PeerView and this one signer.NetworkMapPeer, and the
+// types are what each layer actually holds. The RULE is shared, and it
+// is public share spec §8.5.
+func peerDisplayIdentifier(p *signer.NetworkMapPeer) string {
+	if p.Grant != nil && p.Grant.Pseudonym != "" {
+		return p.Grant.Pseudonym
+	}
+	return p.DeviceID
+}
+
 func (a *agentPinger) PingPeer(ctx context.Context, name string) (management.PingResult, error) {
 	a.provider.mu.RLock()
-	peer, ok := a.provider.peerByName[name]
+	peer, err := resolvePeerByName(a.provider.peerByID, name)
 	a.provider.mu.RUnlock()
-	if !ok {
-		return management.PingResult{}, fmt.Errorf("peer %q not in current Network Map", name)
+	if err != nil {
+		return management.PingResult{}, err
 	}
 	addr, err := netip.ParseAddr(peer.OverlayIP)
 	if err != nil {

@@ -34,8 +34,8 @@ func pingerWithPeer(t *testing.T, p *fakeOverlayPinger) *agentPinger {
 	return &agentPinger{
 		client: p,
 		provider: &agentProvider{
-			peerByName: map[string]*signer.NetworkMapPeer{
-				"peer-b": {DeviceName: "peer-b", DeviceID: "dev_b", OverlayIP: "100.87.131.5"},
+			peerByID: map[string]*signer.NetworkMapPeer{
+				"dev_b": {DeviceName: "peer-b", DeviceID: "dev_b", OverlayIP: "100.87.131.5"},
 			},
 		},
 	}
@@ -95,5 +95,117 @@ func TestAgentPinger_SuccessDialsThePeersOverlayAddress(t *testing.T) {
 	}
 	if got.LatencyMS < 62.8 || got.LatencyMS > 63.0 {
 		t.Errorf("latency_ms = %v, want ~62.9", got.LatencyMS)
+	}
+}
+
+// pingerWithPeers builds a pinger over an explicit map keyed by DeviceID,
+// the way replacePeers writes it.
+func pingerWithPeers(p *fakeOverlayPinger, peers ...signer.NetworkMapPeer) *agentPinger {
+	byID := map[string]*signer.NetworkMapPeer{}
+	for i := range peers {
+		byID[peers[i].DeviceID] = &peers[i]
+	}
+	return &agentPinger{client: p, provider: &agentProvider{peerByID: byID}}
+}
+
+// PRODUCT CONTRACT (waired-agent#723). `waired ping <name>` follows the
+// rule `waired worker set --pin` already states: an ambiguous name is
+// refused rather than resolved to whichever record the map happened to
+// yield last.
+//
+// The old index was keyed by DeviceName as well as DeviceID, written in
+// network-map order with no collision check, so the second of two
+// same-named records simply overwrote the first. Pinging a leftover
+// record from a previous enrollment reaches an overlay IP nothing is
+// listening on, and the timeout reads as "that machine is unreachable"
+// rather than "I addressed the wrong record" — which makes the evidence
+// unreliable exactly while someone is trying to establish why a host
+// cannot be reached.
+func TestAgentPinger_AmbiguousNameIsRefused(t *testing.T) {
+	p := &fakeOverlayPinger{}
+	pinger := pingerWithPeers(p,
+		signer.NetworkMapPeer{DeviceName: "workshop-mac", DeviceID: "dev_old", OverlayIP: "100.87.131.5"},
+		signer.NetworkMapPeer{DeviceName: "workshop-mac", DeviceID: "dev_new", OverlayIP: "100.87.131.9"},
+	)
+
+	_, err := pinger.PingPeer(context.Background(), "workshop-mac")
+	if err == nil {
+		t.Fatal("PingPeer resolved an ambiguous name instead of refusing it")
+	}
+	if p.gotAddr.IsValid() {
+		t.Errorf("dialled %v — an ambiguous name must reach no peer at all", p.gotAddr)
+	}
+	for _, want := range []string{"workshop-mac", "ambiguous", "dev_old", "dev_new"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q, so the operator cannot pick one: %v", want, err)
+		}
+	}
+}
+
+// An exact DeviceID keeps winning outright, so the escape hatch the
+// ambiguity error points at actually works.
+func TestAgentPinger_DeviceIDResolvesPastAnAmbiguousName(t *testing.T) {
+	p := &fakeOverlayPinger{resp: inference.PingResponse{OK: true, Device: "workshop-mac"}}
+	pinger := pingerWithPeers(p,
+		signer.NetworkMapPeer{DeviceName: "workshop-mac", DeviceID: "dev_old", OverlayIP: "100.87.131.5"},
+		signer.NetworkMapPeer{DeviceName: "workshop-mac", DeviceID: "dev_new", OverlayIP: "100.87.131.9"},
+	)
+
+	if _, err := pinger.PingPeer(context.Background(), "dev_new"); err != nil {
+		t.Fatalf("PingPeer by DeviceID: %v", err)
+	}
+	if p.gotAddr.String() != "100.87.131.9" {
+		t.Errorf("dialled %v, want the named record's overlay IP 100.87.131.9", p.gotAddr)
+	}
+}
+
+// A duplicate name must not make an unrelated peer unreachable: the old
+// index let a DeviceName collide with whatever else shared the map.
+func TestAgentPinger_UniqueNameStillResolvesAlongsideDuplicates(t *testing.T) {
+	p := &fakeOverlayPinger{resp: inference.PingResponse{OK: true, Device: "linux-gpu"}}
+	pinger := pingerWithPeers(p,
+		signer.NetworkMapPeer{DeviceName: "workshop-mac", DeviceID: "dev_old", OverlayIP: "100.87.131.5"},
+		signer.NetworkMapPeer{DeviceName: "workshop-mac", DeviceID: "dev_new", OverlayIP: "100.87.131.9"},
+		signer.NetworkMapPeer{DeviceName: "linux-gpu", DeviceID: "dev_gpu", OverlayIP: "100.87.131.7"},
+	)
+
+	if _, err := pinger.PingPeer(context.Background(), "linux-gpu"); err != nil {
+		t.Fatalf("PingPeer: %v", err)
+	}
+	if p.gotAddr.String() != "100.87.131.7" {
+		t.Errorf("dialled %v, want 100.87.131.7", p.gotAddr)
+	}
+}
+
+// A Public Share peer is a stranger's machine, and only the grant
+// pseudonym for its owner account may reach a CLI surface (public share
+// spec §8.5). The ambiguity message is a CLI surface.
+//
+// This is why the message does not simply reuse resolvePeerToDeviceID's
+// wording: that one prints the real DeviceIDs off an unscrubbed
+// snapshot, which is the same leak in a different command.
+func TestAgentPinger_AmbiguousNameNeverPrintsAGrantedPeersDeviceID(t *testing.T) {
+	p := &fakeOverlayPinger{}
+	pinger := pingerWithPeers(p,
+		signer.NetworkMapPeer{DeviceName: "shared-box", DeviceID: "dev_mine", OverlayIP: "100.87.131.5"},
+		signer.NetworkMapPeer{
+			DeviceName: "shared-box", DeviceID: "dev_secret_real_id", OverlayIP: "100.87.131.9",
+			Grant: &signer.PeerGrant{Kind: "public", Role: "provider", Pseudonym: "guest-a7f3"},
+		},
+	)
+
+	_, err := pinger.PingPeer(context.Background(), "shared-box")
+	if err == nil {
+		t.Fatal("PingPeer resolved an ambiguous name instead of refusing it")
+	}
+	if strings.Contains(err.Error(), "dev_secret_real_id") {
+		t.Errorf("the granted peer's real DeviceID crossed to the CLI: %v", err)
+	}
+	if !strings.Contains(err.Error(), "guest-a7f3") {
+		t.Errorf("the granted peer is not identified at all, so the operator cannot act: %v", err)
+	}
+	// The device the operator does own is still named outright.
+	if !strings.Contains(err.Error(), "dev_mine") {
+		t.Errorf("own-network candidate is missing: %v", err)
 	}
 }
