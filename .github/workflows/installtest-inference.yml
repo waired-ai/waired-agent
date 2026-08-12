@@ -280,6 +280,43 @@ jobs:
         if: matrix.os == 'macos'
         run: bash scripts/dev/installtest-macos.sh --tier 2 --daemon-engine
 
+      # The Windows leg had no diagnostics at all: on a red nightly the only
+      # evidence was whatever the harness had already chosen to print, and the
+      # daemon's own account of why the executor did not install was on a
+      # runner that no longer exists. The two init transcripts, the watcher's
+      # flag file and the agent log are what a diagnosis actually needs
+      # (waired-agent#527).
+      - name: collect daemon-path diagnostics (windows)
+        if: failure() && matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path diag | Out-Null
+          $work = Join-Path $env:TEMP 'waired-installtest-win'
+          foreach ($n in 'init.log', 'reinit.log', 'daemon-engine.flag') {
+            $p = Join-Path $work $n
+            if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination diag -Force }
+          }
+          $agentLog = 'C:\ProgramData\waired\logs\waired-agent.log'
+          if (Test-Path -LiteralPath $agentLog) { Copy-Item -LiteralPath $agentLog -Destination diag -Force }
+          # The daemon's view at teardown. Both are reads, so the #838 write
+          # guard leaves them on TCP.
+          foreach ($r in @{n = 'setup-state.json'; u = 'http://127.0.0.1:9476/waired/v1/setup/state' },
+                          @{n = 'inference-status.json'; u = 'http://127.0.0.1:9476/waired/v1/inference/status' }) {
+            try {
+              Invoke-RestMethod -Uri $r.u -TimeoutSec 5 | ConvertTo-Json -Depth 8 |
+                Set-Content -LiteralPath (Join-Path diag $r.n)
+            } catch { "unreachable: $($_.Exception.Message)" | Set-Content -LiteralPath (Join-Path diag $r.n) }
+          }
+          Get-ChildItem diag | Format-Table Name, Length | Out-String | Write-Host
+      - name: upload daemon-path diagnostics (windows)
+        if: failure() && matrix.os == 'windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: daemon-engine-diag-windows-${{ github.run_attempt }}
+          path: diag/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: job summary
         if: always()
         shell: bash

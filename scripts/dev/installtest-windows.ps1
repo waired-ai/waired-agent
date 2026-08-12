@@ -448,6 +448,15 @@ function Assert-DaemonEngine {
     } else { ItBad "init did NOT take the daemon path (executor engine install not exercised)" }
 
     $flagText = if (Test-Path -LiteralPath $Flag) { Get-Content -LiteralPath $Flag -Raw } else { '' }
+    # Dump it verbatim before reading it. Every assert below is a regex over
+    # this one file, so when they fail the file IS the evidence -- and until
+    # now the only way to see it was to already know what it should have said.
+    # Run 31581929747 was diagnosed from the absence of lines here.
+    if ($flagText) {
+        foreach ($line in ($flagText -split "`r?`n")) {
+            if ($line) { ItLog "    watcher| $line" }
+        }
+    } else { ItLog "    watcher| (no flag file at $Flag)" }
     if ($flagText -match '(?m)^completed=1') { ItOk "daemon login completed out-of-band via the OIDC grant" }
     else { ItBad "out-of-band OIDC completion did not report success" }
     if ($flagText -match '(?m)^executor_attached=1') { ItOk "setup executor lease was live during setup (executor_attached)" }
@@ -2258,9 +2267,17 @@ if ($Tier -ge 2) {
         # returned; on -DaemonEngine the executor's engine install is the
         # re-init just above, so the job has to outlive it or
         # executor_attached / install_claimed can never be observed (#551).
+        #
+        # Its output is surfaced, not discarded: the job is the only thing
+        # watching the executor lease, and a throw inside it (an unreachable
+        # mgmt API, a login URL it never managed to scrape) used to leave
+        # exactly as much trace as a lease that was never taken.
         if ($DaemonEngine -and $watcher) {
             Stop-Job $watcher -ErrorAction SilentlyContinue
-            Receive-Job $watcher -ErrorAction SilentlyContinue | Out-Null
+            $watcherOut = Receive-Job $watcher -ErrorAction SilentlyContinue 2>&1
+            foreach ($line in @($watcherOut)) {
+                if ($line) { ItLog "    watcher-job| $line" }
+            }
             Remove-Job $watcher -Force -ErrorAction SilentlyContinue
         }
 
