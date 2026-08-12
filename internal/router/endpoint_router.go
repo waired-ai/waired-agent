@@ -952,6 +952,28 @@ type meshCandidate struct {
 	// is weighted as effectiveCapacity=1 here — balancing weight is
 	// deliberately independent of the (uncapped) admission gate.
 	loadFraction float64
+
+	// mapAgeMS is how old the network-map frame every figure above came
+	// from was when the snapshot was computed
+	// (inferencemesh.Snapshot.MapAgeMS). It is not a property of the
+	// peer — it is the same for every candidate of one Select — and it
+	// is carried per candidate anyway because the reasons string is
+	// per candidate and that is where it has to be readable.
+	//
+	// It exists because capacity could not be re-diagnosed after the
+	// fact (waired-agent#713): on the rc8 hardware run `--explain`
+	// printed cap=1 for a peer whose published state said 3, and
+	// nothing recorded which frame the 1 came from, so a stale frame
+	// and a peer that published 1 and later raised it were
+	// indistinguishable in the record.
+	//
+	// Unlike rttMS this needs no "unknown" rendering. A snapshot with
+	// no frame, or one older than Policy.FrameStaleness, marks every
+	// peer Stale (inferencemesh.Aggregator: stale = mapDead ||
+	// !freshAtReceipt), the filter above drops Stale peers, and a
+	// mesh candidate is the only thing that renders this — so 0 here
+	// can only mean a frame that just arrived, never "no frame".
+	mapAgeMS int64
 }
 
 // tryMeshFallbackK builds up to k mesh candidates for the request.
@@ -1115,8 +1137,12 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 	}
 	candReasons := append(append([]string{}, reasons...),
 		fmt.Sprintf("local state for %q is not ready", manifest.ModelID),
-		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%s, in_flight=%d, cap=%d, load=%.2f, silent=%v)",
-			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, rttDisplay(c.rttMS), c.inFlight, c.capacity, c.loadFraction, c.silent),
+		// map_age_ms comes last, and it qualifies every figure before it:
+		// they were all read off one network-map frame, and that is how
+		// old the frame was. Without it cap= cannot be re-diagnosed
+		// (waired-agent#713).
+		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%s, in_flight=%d, cap=%d, load=%.2f, silent=%v, map_age_ms=%d)",
+			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, rttDisplay(c.rttMS), c.inFlight, c.capacity, c.loadFraction, c.silent, c.mapAgeMS),
 	)
 	if spreadFrom != "" {
 		// Named on every candidate of the round, not just the demoted
@@ -1498,6 +1524,7 @@ func (s *Selector) buildMeshCandidates(
 				capacity:      p.InferenceState.Capacity,
 				score:         int64(v.ParamCount) * int64(v.QuantizationTier),
 				rttMS:         noRTT,
+				mapAgeMS:      snap.MapAgeMS,
 			}
 			// isPublic is only ever set inside the p.Grant != nil branch
 			// above, so the grant is present here; carry its ID so Commit
