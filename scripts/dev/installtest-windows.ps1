@@ -448,6 +448,15 @@ function Assert-DaemonEngine {
     } else { ItBad "init did NOT take the daemon path (executor engine install not exercised)" }
 
     $flagText = if (Test-Path -LiteralPath $Flag) { Get-Content -LiteralPath $Flag -Raw } else { '' }
+    # Dump it verbatim before reading it. Every assert below is a regex over
+    # this one file, so when they fail the file IS the evidence -- and until
+    # now the only way to see it was to already know what it should have said.
+    # Run 31581929747 was diagnosed from the absence of lines here.
+    if ($flagText) {
+        foreach ($line in ($flagText -split "`r?`n")) {
+            if ($line) { ItLog "    watcher| $line" }
+        }
+    } else { ItLog "    watcher| (no flag file at $Flag)" }
     if ($flagText -match '(?m)^completed=1') { ItOk "daemon login completed out-of-band via the OIDC grant" }
     else { ItBad "out-of-band OIDC completion did not report success" }
     if ($flagText -match '(?m)^executor_attached=1') { ItOk "setup executor lease was live during setup (executor_attached)" }
@@ -2200,6 +2209,17 @@ if ($Tier -ge 2) {
         # A bare 'true' would be wrong in the other direction, for the reason
         # recorded on the Linux twin: it installs an engine, which is a
         # postcondition the lean legs depend on.
+        #
+        # -DaemonEngine is the exception, and it is not a nuance: on that leg
+        # THIS re-init is the engine install the leg exists to assert (see the
+        # -DaemonEngine switch doc above, and the watcher teardown below that
+        # outlives it for exactly this reason). Installing an engine here is
+        # the postcondition, not a side effect. Passing 'false' turns local AI
+        # off through applyDaemonInitInference, daemonWantsEngine then reads
+        # `disabled` and skips the install, and the executor lease lives
+        # milliseconds instead of minutes -- which the 2 s watcher poll cannot
+        # see, so the leg fails as "never observed executor_attached" and names
+        # the wrong thing. That is what run 31581929747 was.
         if ($authKey) {
             ItStep "re-init on an enrolled device (waired-agent#313)"
             $reinitLog  = Join-Path $Work 'reinit.log'
@@ -2213,7 +2233,7 @@ if ($Tier -ge 2) {
                 # assigned inside the non-DaemonEngine branch above, so on the
                 # -DaemonEngine leg it would splat as $null and hand
                 # `waired init` an empty argument (the #613 shape).
-                $(if ($WithInference) { '--inference-enabled=true' } else { '--inference-enabled=false' })
+                $(if ($WithInference -or $DaemonEngine) { '--inference-enabled=true' } else { '--inference-enabled=false' })
                 '--skip-integration'
             )
             $env:WAIRED_NO_EMOJI = '1'
@@ -2247,9 +2267,17 @@ if ($Tier -ge 2) {
         # returned; on -DaemonEngine the executor's engine install is the
         # re-init just above, so the job has to outlive it or
         # executor_attached / install_claimed can never be observed (#551).
+        #
+        # Its output is surfaced, not discarded: the job is the only thing
+        # watching the executor lease, and a throw inside it (an unreachable
+        # mgmt API, a login URL it never managed to scrape) used to leave
+        # exactly as much trace as a lease that was never taken.
         if ($DaemonEngine -and $watcher) {
             Stop-Job $watcher -ErrorAction SilentlyContinue
-            Receive-Job $watcher -ErrorAction SilentlyContinue | Out-Null
+            $watcherOut = Receive-Job $watcher -ErrorAction SilentlyContinue 2>&1
+            foreach ($line in @($watcherOut)) {
+                if ($line) { ItLog "    watcher-job| $line" }
+            }
             Remove-Job $watcher -Force -ErrorAction SilentlyContinue
         }
 
