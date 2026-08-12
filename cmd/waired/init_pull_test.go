@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -167,6 +168,120 @@ func TestWaitForBundledModel_BudgetElapsedWithNothingSelectedSaysSo(t *testing.T
 	}
 	if !strings.Contains(s, "waired models pull") {
 		t.Errorf("expected the route that works, got: %q", s)
+	}
+}
+
+// The probe is not a selection.
+//
+// This is the case the first attempt at waired-agent#736 got wrong, and it
+// got it wrong because no test drove it: the arm was written against a
+// hand-built snapshot with nothing in flight, so the subject never met the
+// probe. On the real host the daemon fetches
+// hostfit.HostCutoffProbeModelID to measure the machine, through the same
+// Models.Downloading channel a chosen model uses, inside this same wait —
+// so "did this wait ever see a download" answered yes on a host where
+// nothing had been chosen, and the deadline took the original arm. Observed
+// on run 31648877944 after #765 merged.
+//
+// Product contract (waired-agent#736).
+func TestWaitHasTarget_TheProbeDoesNotCount(t *testing.T) {
+	const probe = hostfit.HostCutoffProbeModelID
+	for _, tc := range []struct {
+		name string
+		st   management.InferenceStatus
+		want string
+		out  bool
+		why  string
+	}{{
+		name: "the probe downloading is not a target",
+		st: management.InferenceStatus{
+			Active: activeSel(probe),
+			Models: management.ModelsSnapshot{Downloading: []string{probe}},
+		},
+		out: false,
+		why: "every measuring host fetches it; it was never chosen",
+	}, {
+		name: "the probe resident and active is not a target",
+		st: management.InferenceStatus{
+			Active: activeSel(probe),
+			Models: management.ModelsSnapshot{Ready: []string{probe}},
+		},
+		out: false,
+		why: "the end state of the observed macOS leg",
+	}, {
+		name: "a chosen model downloading IS a target",
+		st: management.InferenceStatus{
+			Active: activeSel("qwen3.5-9b"),
+			Models: management.ModelsSnapshot{Downloading: []string{"qwen3.5-9b"}},
+		},
+		out: true,
+	}, {
+		name: "a chosen model downloading beside the probe IS a target",
+		st: management.InferenceStatus{
+			Active: activeSel(probe),
+			Models: management.ModelsSnapshot{Downloading: []string{probe, "qwen3.5-9b"}},
+		},
+		out: true,
+		why: "the probe must not mask a real pull running next to it",
+	}, {
+		name: "nothing at all is not a target",
+		st:   management.InferenceStatus{SubsystemState: "awaiting_model"},
+		out:  false,
+	}, {
+		name: "a wizard target counts even with an empty daemon",
+		st:   management.InferenceStatus{SubsystemState: "awaiting_model"},
+		want: "qwen3.5-9b",
+		out:  true,
+		why:  "naming a model is having something to wait for",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := waitHasTarget(tc.st, tc.want); got != tc.out {
+				t.Errorf("waitHasTarget = %v, want %v — %s", got, tc.out, tc.why)
+			}
+		})
+	}
+}
+
+// End to end through the wait, with the probe transfer actually in flight.
+//
+// The table above pins the discriminator; this pins that the wait consults
+// it. Both are needed: the first attempt had a passing end-to-end test AND
+// a passing negative control, and shipped broken, because neither drove a
+// download.
+func TestWaitForBundledModel_ProbeDownloadIsNotSomethingToWaitFor(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	const mb = 1 << 20
+	probe := hostfit.HostCutoffProbeModelID
+	// The sequence the observed macOS leg goes through: the probe arrives,
+	// then sits ready with nothing else coming.
+	stub := &pullStub{seq: []management.InferenceStatus{
+		downloadingSnap(probe, 200*mb, 1000*mb),
+		downloadingSnap(probe, 900*mb, 1000*mb),
+		{
+			SubsystemState: "awaiting_model",
+			Models:         management.ModelsSnapshot{Ready: []string{probe}},
+		},
+	}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	res := waitForBundledModel(srv.URL, &out, false, 60*time.Millisecond, false, nil, nil, nil)
+	if res.ready {
+		t.Fatalf("the probe is not a selection, so nothing is ready; out=%q", out.String())
+	}
+	if !res.noModelChosen {
+		t.Errorf("the probe transfer must not read as a chosen model; out=%q", out.String())
+	}
+	if res.pending {
+		t.Error("nothing is setting up: the probe finished and nothing else was queued")
+	}
+	s := out.String()
+	if !strings.Contains(s, "No model was chosen for this computer") {
+		t.Errorf("expected the nothing-selected notice, got: %q", s)
+	}
+	if strings.Contains(s, "Model still downloading") {
+		t.Errorf("this is the false line waired-agent#736 is about; got: %q", s)
 	}
 }
 
