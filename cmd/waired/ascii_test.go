@@ -145,6 +145,9 @@ func TestPlainInitOutputIsPureASCII(t *testing.T) {
 		{"printDaemonSettingUpBox", func(o *bytes.Buffer) {
 			printDaemonSettingUpBox(o, "you@example.com", true)
 		}},
+		{"printDaemonNoModelBox", func(o *bytes.Buffer) {
+			printDaemonNoModelBox(o, "you@example.com", true, nil)
+		}},
 		{"printDaemonTooSlowBox", func(o *bytes.Buffer) {
 			printDaemonTooSlowBox(o, summary)
 		}},

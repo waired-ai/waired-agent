@@ -39,6 +39,17 @@ type modelWaitResult struct {
 	// would put a "still setting up" ending in front of every host that
 	// was configured never to have local AI (#569).
 	pending bool
+	// noModelChosen is the wait ending because this host never had a model
+	// to wait for — nothing active, nothing downloading, and no explicit
+	// decline either (waired-agent#736).
+	//
+	// Disjoint from pending by construction: they are set on different
+	// arms of the same deadline check. It exists separately because the
+	// closing box has to be able to tell this apart from the ordinary
+	// success ending, and !ready alone cannot — the success box states
+	// "Local inference is live via the waired-agent daemon", which is
+	// false on a host with nothing to serve.
+	noModelChosen bool
 }
 
 // waitForBundledModel blocks until the agent's active (bundled) model has
@@ -462,7 +473,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 				// whole window.
 				writePrompt(out, "No model was chosen for this computer, so nothing is downloading.")
 				writePrompt(out, "Pick one with `waired models pull <model>`, or from the browser dashboard.")
-				return modelWaitResult{}
+				return modelWaitResult{noModelChosen: true}
 			}
 			writePrompt(out, "Model still downloading; it will finish in the background. "+
 				"Run `waired status` to watch progress, or `waired runtimes benchmark` later to check performance.")
