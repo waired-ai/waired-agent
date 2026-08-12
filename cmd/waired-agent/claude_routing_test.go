@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
@@ -78,9 +79,40 @@ func TestRoutingController_RecordFallbacks(t *testing.T) {
 
 func TestRoutingController_RecordServed(t *testing.T) {
 	c, _ := newTestRoutingController(t)
+	before := time.Now().UTC()
 	c.RecordServed("small-local", "peer-X")
+	after := time.Now().UTC()
 	st := c.State()
 	if st.LastLocalModel != "small-local" || st.LastServedBy != "peer-X" {
 		t.Fatalf("served = model=%q peer=%q", st.LastLocalModel, st.LastServedBy)
+	}
+	// The record is never cleared, so the time is what tells a reader
+	// whether it predates the last fallback (#755).
+	if st.LastServedAt.Before(before) || st.LastServedAt.After(after) {
+		t.Fatalf("LastServedAt = %v, want within [%v, %v]", st.LastServedAt, before, after)
+	}
+}
+
+// TestRoutingController_ServedRecordSurvivesAFallback pins that a fallback to
+// the real Anthropic API leaves the served record standing: it answers "when
+// did Waired last serve a turn, and what answered it", which a fallback does
+// not invalidate. The two lines are told apart by their timestamps, so
+// clearing one would drop the answer rather than correct it (#755).
+func TestRoutingController_ServedRecordSurvivesAFallback(t *testing.T) {
+	c, _ := newTestRoutingController(t)
+	c.RecordServed("small-local", "peer-X")
+	servedAt := c.State().LastServedAt
+
+	c.RecordFallback("local_status_503")
+
+	st := c.State()
+	if st.LastLocalModel != "small-local" || st.LastServedBy != "peer-X" {
+		t.Fatalf("served record lost after a fallback: model=%q peer=%q", st.LastLocalModel, st.LastServedBy)
+	}
+	if !st.LastServedAt.Equal(servedAt) {
+		t.Fatalf("LastServedAt moved on a fallback: %v -> %v", servedAt, st.LastServedAt)
+	}
+	if st.LastFallback == nil || st.LastFallback.When.Before(servedAt) {
+		t.Fatalf("the fallback must carry a time no earlier than the serve: %+v", st.LastFallback)
 	}
 }

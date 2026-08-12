@@ -349,7 +349,7 @@ type ClaudeRoutingControl interface {
 // ClaudeRoutingState is the body of GET /waired/v1/integration/claude/route
 // and the 200 body of a POST. LastFallback is nil until a fallback has fired
 // at least once this process lifetime; LastLocalModel is empty until the
-// intercept has served a mapped local response (#602). Both are in-memory
+// intercept has served a Claude request on Waired (#602). Both are in-memory
 // only and reset on agent restart.
 type ClaudeRoutingState struct {
 	Policy         state.ClaudeRoutingPolicy   `json:"policy"`
@@ -358,6 +358,12 @@ type ClaudeRoutingState struct {
 	// LastServedBy is the mesh peer DeviceID that served the last
 	// waired-served Claude request; empty when this device served it.
 	LastServedBy string `json:"last_served_by,omitempty"`
+	// LastServedAt is when that request was served. The served record is
+	// never cleared, so without the time a record left over from before a
+	// fallback or a route change reads as if Waired were still serving
+	// (#755). Zero when nothing has been served yet — and when an agent
+	// predating the field answered.
+	LastServedAt time.Time `json:"last_served_at,omitempty"`
 }
 
 // ClaudeRoutingFallbackEvent records the last time a class's chosen route

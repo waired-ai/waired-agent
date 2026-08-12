@@ -415,6 +415,10 @@ independently. Splitting them is genuinely useful — see
 does the same thing. *Which* of your machines serves is
 [`waired worker`](#waired-worker), not this.
 
+With no argument it prints the current routes and, once Waired has answered a
+request, a `last served` line naming the model, whether this device or a peer
+answered, and when. A fallback to the real Anthropic API gets its own line.
+
 ```sh
 waired claude statusline install [--wrap]
 waired claude statusline remove

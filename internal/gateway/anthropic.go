@@ -131,9 +131,6 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		routeReq.Model = mapped
 		slog.Debug("anthropic model mapped", "requested", req.Model, "mapped", mapped, "class", class)
 		probed, err = h.selectAndProbe(r.Context(), routeReq)
-		if err == nil {
-			w.Header().Set(HeaderLocalModel, mapped)
-		}
 	}
 	if err != nil {
 		rr.ev.Model = routeReq.Model // the mapped id when mapping was applied
@@ -152,6 +149,17 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	// Phase 8: surface fallback metadata so claude-code / waired-plugin
 	// can show which peer served the request and why a fallback fired.
 	setSelectionHeaders(w, sel, probed.FallbackFrom, probed.Reason, h.deps.Recorder)
+	// The catalog id that ANSWERED, on every successful selection. This
+	// used to sit inside the ResolveUnknownModel branch above, so it was
+	// set only for the ids Claude Code cannot resolve itself (#600). The
+	// Claude intercept's last-served record fires on this header, which
+	// left every request naming a catalog id directly — local or
+	// peer-served — unrecorded while observability recorded it correctly
+	// (#755). Read from sel rather than the requested id so a router
+	// fallback to another model reports the model that really answered.
+	if sel.ModelID != "" {
+		w.Header().Set(HeaderLocalModel, sel.ModelID)
+	}
 	openaiReq.Model = sel.EngineModel
 	slog.Debug("anthropic dispatch",
 		"model", req.Model,
