@@ -267,6 +267,52 @@ func TestSetInferenceReachableLocal(t *testing.T) {
 	}
 }
 
+// PRODUCT CONTRACT (waired-agent#698): a failed write must not leave the
+// in-memory state ahead of the file.
+//
+// The reachability setters return early when the value is unchanged, so
+// without the roll-back one lost write is permanent rather than transient:
+// w.cur already holds the new value, every later tick compares equal and
+// returns without touching disk, and the file keeps the stale value for the
+// life of the process. On Windows that is reachable from a plain reader
+// holding the file open across the replacing rename; here the write is made
+// to fail portably instead, because the contract is about the roll-back and
+// not about how the write failed.
+func TestWriterRollsBackWhenThePersistFails(t *testing.T) {
+	dir := t.TempDir()
+	// A FILE where the runtime/ directory has to go: every persist now fails
+	// at MkdirAll, on every OS.
+	blocked := filepath.Join(dir, "runtime")
+	if err := os.WriteFile(blocked, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewWriter(dir, State{Phase: PhaseActive})
+	if err := w.SetInferenceReachableLocal(true); err == nil {
+		t.Fatal("SetInferenceReachableLocal = nil with an unwritable state dir")
+	}
+	if w.Snapshot().InferenceReachableLocal {
+		t.Error("the failed write left the flag set in memory — the next tick would " +
+			"compare equal, skip the write, and never retry")
+	}
+
+	// And the retry really happens once the obstruction is gone. Without the
+	// roll-back this second call returns nil having written nothing.
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetInferenceReachableLocal(true); err != nil {
+		t.Fatalf("SetInferenceReachableLocal after the obstruction cleared: %v", err)
+	}
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !got.InferenceReachableLocal {
+		t.Error("the state file never caught up with the value the writer holds")
+	}
+}
+
 func TestSetInferenceReachableInMesh(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWriter(dir, State{Phase: PhaseActive})

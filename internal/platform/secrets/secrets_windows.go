@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/waired-ai/waired-agent/internal/platform/atomicfile"
 )
 
 // SDDL templates: SYSTEM Full Control + BuiltinAdministrators Full +
@@ -59,7 +61,12 @@ func writeFile(path string, data []byte, s Sensitivity) error {
 			return fmt.Errorf("secrets: lock %s: %w", tmpName, err)
 		}
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	// atomicfile.Replace, not os.Rename: Windows refuses the replacing rename
+	// while anyone holds either file open, and these files have concurrent
+	// readers by design — catalog.Store.Load reads state.json through this
+	// package while a pull goroutine is writing it. Same mechanism as
+	// waired-agent#698, which was found on runtime\state.
+	if err := atomicfile.Replace(tmpName, path); err != nil {
 		return fmt.Errorf("secrets: rename %s -> %s: %w", tmpName, path, err)
 	}
 	cleanup = false
