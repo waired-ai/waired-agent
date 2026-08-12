@@ -1070,8 +1070,10 @@ func (s *Selector) tryMeshFallbackK(req Request, manifest catalog.Manifest, reas
 			}
 			// Soft fallback: leave raw alone, let scoring decide. Emit
 			// a lacks_model event so the tray surfaces the silent miss.
+			// Named by pinDisplayID for the reason pinUnreachable is.
 			if s.in.Recorder != nil {
-				s.in.Recorder.RecordPinnedPeerUnreachable(s.in.PinnedPeerDeviceID, manifest.ModelID, "lacks_model")
+				s.in.Recorder.RecordPinnedPeerUnreachable(
+					pinDisplayID(snap, s.in.PinnedPeerDeviceID), manifest.ModelID, "lacks_model")
 			}
 		}
 	}
@@ -1287,11 +1289,17 @@ func meshSelectionError(err error, modelID string) error {
 // sites in tryMeshFallbackK go through it so the recorded event and the
 // returned error shape cannot drift apart.
 func (s *Selector) pinUnreachable(snap inferencemesh.Snapshot, modelID string) error {
+	// One value for both: the event lands in the ring the management API
+	// serves and in a debug log line, and those are surfaces a public
+	// machine's real device id may not reach any more than the error
+	// string is (#739, spec §8.5). Before, the error was named correctly
+	// and the event beside it was not.
+	display := pinDisplayID(snap, s.in.PinnedPeerDeviceID)
 	if s.in.Recorder != nil {
-		s.in.Recorder.RecordPinnedPeerUnreachable(s.in.PinnedPeerDeviceID, modelID, "unreachable")
+		s.in.Recorder.RecordPinnedPeerUnreachable(display, modelID, "unreachable")
 	}
 	return &PinnedPeerUnreachableError{
-		PeerDisplayID: pinDisplayID(snap, s.in.PinnedPeerDeviceID),
+		PeerDisplayID: display,
 		ModelID:       modelID,
 	}
 }

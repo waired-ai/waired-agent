@@ -162,8 +162,12 @@ func peerRow(p inferencemesh.PeerView) string {
 	if !inferencemesh.PeerServing(p) {
 		capable = "no (" + capableReason(inferencemesh.PeerCondition(p)) + ")"
 	}
+	deviceID := peerDisplayID(p)
+	if deviceID == "" {
+		deviceID = "-"
+	}
 	return fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
-		name, peerDisplayID(p), overlay, engine, model, gpu, vram, models, capable)
+		name, deviceID, overlay, engine, model, gpu, vram, models, capable)
 }
 
 // capableReason phrases a peer condition for the WORKER-CAPABLE column.
@@ -190,17 +194,25 @@ func capableReason(c string) string {
 	return inferencemesh.ConditionLabel(c)
 }
 
-// peerDisplayID is the identifier this listing may show for a peer.
+// peerDisplayID is the identifier this listing may show for a peer, or
+// "" when there is none to show.
 //
-// A Public Share peer is a stranger's machine injected under a grant;
-// only the grant pseudonym for its owner account may be displayed, never
-// the real device identifier (public share spec §8.5). Own-network peers
-// carry no grant and are shown by DeviceID as before.
+// Delegates to inferencemesh.PeerDisplayID so this listing, the tray and
+// the management API cannot drift on the answer — the same move
+// peerIsServing made for "is this peer serving" (waired#1064). The rule
+// is public share spec §8.5: only a public machine's grant pseudonym may
+// be displayed, never the real device identifier.
+//
+// A grant peer with no pseudonym yields "" rather than its DeviceID.
+// Both surfaces below already have a word for "nothing to show" — the
+// table's "-" and an absent JSON value — and neither of them is a
+// stranger's device id (#739).
 func peerDisplayID(p inferencemesh.PeerView) string {
-	if p.Grant != nil && p.Grant.Pseudonym != "" {
-		return p.Grant.Pseudonym
+	id, ok := inferencemesh.PeerDisplayID(p)
+	if !ok {
+		return ""
 	}
-	return p.DeviceID
+	return id
 }
 
 func writePeersJSON(w io.Writer, m *inferencemesh.Snapshot) error {
@@ -223,6 +235,10 @@ func writePeersJSON(w io.Writer, m *inferencemesh.Snapshot) error {
 // DeviceName is left alone — the control plane already substitutes the
 // pseudonym there at injection time — and the grant itself stays, since
 // it carries only the pseudonym, the kind and the role.
+//
+// A public machine with no pseudonym leaves device_id empty rather than
+// falling back to the real one (#739): a reader that keys off the field
+// gets nothing, which is what we have to give.
 func scrubPeersForDisplay(peers []inferencemesh.PeerView) []inferencemesh.PeerView {
 	if len(peers) == 0 {
 		return peers

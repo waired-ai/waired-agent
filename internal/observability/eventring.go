@@ -107,6 +107,12 @@ const PublicShareNudgeMessage = "This request could not run on your own machines
 // state.RoutingMode (kept untyped here so this package keeps no
 // runtime/state dependency). PinnedPeerDeviceID and PinnedPeerName
 // are populated when the destination is RoutingModePinned.
+//
+// PinnedPeerDeviceID carries the peer's DISPLAY identifier — the grant
+// pseudonym when the pin is a public machine, its DeviceID when it is
+// one of your own (public share spec §8.5). The field name predates the
+// distinction and stays for wire compatibility; a reader must not treat
+// it as a key to join against a device list (#739).
 type RoutingModeChangeEvent struct {
 	From               string `json:"from,omitempty"`
 	To                 string `json:"to"`
@@ -119,6 +125,10 @@ type RoutingModeChangeEvent struct {
 // "lacks_model") branch of the pinned routing path. Model carries
 // the manifest model_id the request asked for so the operator can
 // correlate "wrong model" cases against a specific request.
+//
+// PinnedPeerDeviceID carries the peer's DISPLAY identifier, on the same
+// terms as RoutingModeChangeEvent's field of that name: pseudonym for a
+// public machine, DeviceID for your own, and not a join key (#739).
 type PinnedPeerUnreachableEvent struct {
 	PinnedPeerDeviceID string `json:"pinned_peer_device_id"`
 	Model              string `json:"model,omitempty"`

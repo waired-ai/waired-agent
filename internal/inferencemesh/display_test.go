@@ -235,3 +235,64 @@ func TestConditionHasFreshModel(t *testing.T) {
 		}
 	}
 }
+
+// PRODUCT CONTRACT (public share spec §8.5, as quoted in
+// internal/gateway/probe.go's peerDisplayID doc: "Real foreign device
+// identifiers must never reach a header, an event, a log line or a CLI
+// surface"). A public machine is named by its owner account's grant
+// pseudonym, never by its real device id.
+//
+// The synthetic constants are deliberately unmistakable so a leak
+// anywhere shows up as a substring hit; this repository is public and no
+// real device identifier may appear in a fixture.
+func TestPeerDisplayID(t *testing.T) {
+	const (
+		foreignDeviceID = "dev_foreign00000001"
+		foreignAlias    = "guest-a7f3"
+	)
+	cases := []struct {
+		name  string
+		peer  PeerView
+		want  string
+		wantK bool
+	}{
+		{
+			name:  "own-network peer keeps its device id",
+			peer:  peer(nil),
+			want:  "dev_peer",
+			wantK: true,
+		},
+		{
+			name: "public machine is named by its pseudonym",
+			peer: peer(func(p *PeerView) {
+				p.DeviceID = foreignDeviceID
+				p.Grant = &signer.PeerGrant{Kind: "public", Role: "provider", Pseudonym: foreignAlias}
+			}),
+			want:  foreignAlias,
+			wantK: true,
+		},
+		{
+			// Falling back to the DeviceID here is the leak itself, so
+			// there is nothing to show. The control plane skips injecting
+			// such a peer, so this is the second lock on that door.
+			name: "public machine with no pseudonym has no identifier to show",
+			peer: peer(func(p *PeerView) {
+				p.DeviceID = foreignDeviceID
+				p.Grant = &signer.PeerGrant{Kind: "public", Role: "provider"}
+			}),
+			want:  "",
+			wantK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := PeerDisplayID(tc.peer)
+			if got != tc.want || ok != tc.wantK {
+				t.Errorf("PeerDisplayID() = (%q, %v), want (%q, %v)", got, ok, tc.want, tc.wantK)
+			}
+			if got == foreignDeviceID {
+				t.Errorf("the public machine's real device id reached a display surface: %q", got)
+			}
+		})
+	}
+}

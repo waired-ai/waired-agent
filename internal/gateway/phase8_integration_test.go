@@ -1,11 +1,13 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/observability"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime"
 )
@@ -471,5 +474,109 @@ func TestSelectAndProbe_PinnedCommitRaceStaysOverloaded(t *testing.T) {
 	}
 	if got := rec.pinFailuresSnapshot(); len(got) != 0 {
 		t.Errorf("a capacity-full pin must not emit a pin-unreachable event; got %+v", got)
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#739 + public share spec §8.5). The pin
+// failure emits an event and returns an error; both name the peer, and
+// for a public machine both must name its grant pseudonym.
+//
+// The sibling test above cannot see this defect: phase8PinnedCandidate
+// sets PeerDisplayID == PeerID, so display and real are the same string
+// there. This one makes them differ.
+func TestSelectAndProbe_PinnedProbeFailureNamesAPublicMachineByItsPseudonym(t *testing.T) {
+	rtPin := &stubRT{dialErr: errors.New("connect refused")}
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("upstream must not be reached when the pin is unreachable")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(upstreamSrv.Close)
+
+	pin := phase8PinnedCandidate(foreignDeviceID)
+	pin.PeerDisplayID = foreignAlias
+	sel := &phase8MultiSelector{cands: []router.Candidate{pin}}
+	rec := &captureRecorder{}
+	h := buildPhase8Gateway(t, sel, map[string]http.RoundTripper{foreignDeviceID: rtPin}, upstreamSrv.URL)
+	h.deps.Recorder = rec
+
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"model":"qwen3-8b-instruct","messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(raw, []byte(foreignDeviceID)) {
+		t.Errorf("the 503 body leaks the public machine's real device id: %s", raw)
+	}
+	if peer := resp.Header.Get(HeaderInferencePeer); peer != foreignAlias {
+		t.Errorf("%s = %q, want the pseudonym", HeaderInferencePeer, peer)
+	}
+	got := rec.pinFailuresSnapshot()
+	if len(got) != 1 {
+		t.Fatalf("RecordPinnedPeerUnreachable emits = %d, want 1 (got=%+v)", len(got), got)
+	}
+	if got[0].peerID != foreignAlias {
+		t.Errorf("emitted peer id = %q, want the pseudonym %q — the ring is served whole by the management API",
+			got[0].peerID, foreignAlias)
+	}
+}
+
+// One sweep over the whole ring, and over agent.log, after driving a
+// public machine's pin failure end to end through the REAL recorder.
+//
+// The three assertions above each guard one emit site. This guards the
+// sink: every event the ring holds is marshalled and searched for the
+// synthetic device id, so a future emit that forgets the rule fails here
+// without anyone having to think of it. The management API serves this
+// ring whole at /waired/v1/observability/events, and the recorder's
+// debug line lands in agent.log — both surfaces §8.5 names (#739).
+func TestPinnedProbeFailure_RingAndLogNeverCarryTheRealDeviceID(t *testing.T) {
+	rtPin := &stubRT{dialErr: errors.New("connect refused")}
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(upstreamSrv.Close)
+
+	ring := observability.NewRing(64)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	pin := phase8PinnedCandidate(foreignDeviceID)
+	pin.PeerDisplayID = foreignAlias
+	sel := &phase8MultiSelector{cands: []router.Candidate{pin}}
+	h := buildPhase8Gateway(t, sel, map[string]http.RoundTripper{foreignDeviceID: rtPin}, upstreamSrv.URL)
+	h.deps.Recorder = observability.NewRecorder(ring, nil, logger)
+
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+
+	body := `{"model":"qwen3-8b-instruct","messages":[{"role":"user","content":"hi"}]}`
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.ReadAll(resp.Body)
+
+	events, _, _ := ring.Since(0, nil, 0)
+	if len(events) == 0 {
+		t.Fatal("no events recorded — the sweep would pass vacuously")
+	}
+	blob, err := json.Marshal(events)
+	if err != nil {
+		t.Fatalf("marshal ring: %v", err)
+	}
+	if bytes.Contains(blob, []byte(foreignDeviceID)) {
+		t.Errorf("an event carries the public machine's real device id: %s", blob)
+	}
+	if !bytes.Contains(blob, []byte(foreignAlias)) {
+		t.Errorf("no event names the peer at all, so this sweep proves nothing: %s", blob)
+	}
+	if strings.Contains(logBuf.String(), foreignDeviceID) {
+		t.Errorf("agent.log carries the public machine's real device id: %s", logBuf.String())
 	}
 }

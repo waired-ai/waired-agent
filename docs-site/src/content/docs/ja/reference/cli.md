@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 4f158c235bd6576c
+sourceHash: dc874dd9b9bd0aac
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -303,6 +303,10 @@ waired worker set --mode=peer-preferred  # ほかのパソコンを優先し、�
 waired worker set --mode=peer-only       # ほかのパソコンだけ。駄目ならここで動かさずエラー
 waired worker set --pin=<peer>           # 常にこの 1 台（--mode=pinned になる）
 ```
+
+`<peer>` には、パソコンの名前か、`waired peers list` の `DEVICE-ID` 列にある
+識別子を渡します。名前は各パソコンのホスト名が既定で、[Web
+コンソール](/ja/guides/web-console/)から変更できます。
 
 ### `waired peers`
 

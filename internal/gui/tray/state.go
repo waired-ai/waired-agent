@@ -1271,10 +1271,7 @@ func applyWorker(m *MenuModel, w *management.WorkerResponse, mesh *inferencemesh
 	// as absent so the operator can see what they pinned to.
 	if w.Mode == state.RoutingModePinned && w.PinnedPeerDeviceID != "" && !pinPresent(pins, w.PinnedPeerDeviceID) {
 		if len(pins) < MaxWorkerPinEntries {
-			label := w.PinnedPeerName
-			if label == "" {
-				label = w.PinnedPeerDeviceID
-			}
+			label := pinnedPeerLabel(*w)
 			pins = append(pins, WorkerPinEntryView{
 				DeviceID:  w.PinnedPeerDeviceID,
 				Label:     label + " (absent)",
@@ -1292,6 +1289,31 @@ func applyWorker(m *MenuModel, w *management.WorkerResponse, mesh *inferencemesh
 	}
 }
 
+// pinnedPeerLabel names the pinned peer for the two rows that describe
+// it without having the mesh entry in hand: the summary row, and the
+// "(absent)" row for a pin that has dropped out of the snapshot.
+//
+// The identifier is the daemon's display identifier — the grant
+// pseudonym when the pin is a public machine — never PinnedPeerDeviceID,
+// which is the routing key the tray posts back and may be a stranger's
+// real device id (#739, public share spec §8.5). The device-id fallback
+// is for a daemon predating the field: it reports no display identifier
+// for any pin, and dropping the id there would blank the row for every
+// own-network pin during a version skew.
+//
+// Mirrors displayPin in cmd/waired/worker.go, deliberately: the same
+// body reaches both, and one machine should read the same way in the
+// menu and in the terminal.
+func pinnedPeerLabel(w management.WorkerResponse) string {
+	if w.PinnedPeerName != "" {
+		return w.PinnedPeerName
+	}
+	if w.PinnedPeerDisplayID != "" {
+		return w.PinnedPeerDisplayID
+	}
+	return w.PinnedPeerDeviceID
+}
+
 func workerSummaryLabel(w management.WorkerResponse) string {
 	switch w.Mode {
 	case "", state.RoutingModeAuto:
@@ -1303,10 +1325,7 @@ func workerSummaryLabel(w management.WorkerResponse) string {
 	case state.RoutingModePeerOnly:
 		return "peer only"
 	case state.RoutingModePinned:
-		name := w.PinnedPeerName
-		if name == "" {
-			name = w.PinnedPeerDeviceID
-		}
+		name := pinnedPeerLabel(w)
 		// A down pin says what it MEANS, not just that it is down
 		// (waired-agent#325): the pin is fail-closed, so nothing runs on
 		// this computer in its place. "not served here" is the accurate
@@ -1378,7 +1397,15 @@ func peerIsServing(p inferencemesh.PeerView) bool {
 func pinEntryLabel(p inferencemesh.PeerView) string {
 	name := p.DeviceName
 	if name == "" {
-		name = p.DeviceID
+		// A menu row is one of the surfaces a public machine's real
+		// device id may not reach (public share spec §8.5), so the
+		// fallback is its display identifier — and the plain phrase when
+		// even that is missing (#739).
+		id, ok := inferencemesh.PeerDisplayID(p)
+		if !ok {
+			id = inferencemesh.PublicPeerLabel
+		}
+		name = id
 	}
 	model := inferencemesh.PeerModel(p)
 	if peerIsServing(p) {

@@ -325,9 +325,13 @@ type ShareController interface {
 // subsequent restart honours the operator's last choice). State has
 // the same shape as InferenceController.State, returning the current
 // live RoutingPreference plus the persisted operator intent.
+// SetPin takes the display identifier alongside the device id because
+// this is the last moment it is knowable: it comes from the pinned
+// peer's grant in the mesh snapshot, and the surface that most needs it
+// is the one shown after that peer has dropped out (#739).
 type WorkerController interface {
 	SetMode(ctx context.Context, mode state.RoutingMode) error
-	SetPin(ctx context.Context, peerDeviceID string) error
+	SetPin(ctx context.Context, peerDeviceID, peerDisplayID string) error
 	Clear(ctx context.Context) error
 	State() (current, desired state.RoutingPreference)
 }

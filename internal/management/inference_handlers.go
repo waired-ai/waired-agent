@@ -648,6 +648,11 @@ func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 			v := s.resolvePinStatus(r, desired.PinnedPeerDeviceID)
 			wr.PinnedPeerName, wr.PinnedPeerStatus = v.Name, v.Status
 			wr.PinnedPeerModel, wr.PinnedPeerCondition = v.Model, v.Condition
+			// The tray reads the worker state from HERE, not from
+			// GET /waired/v1/worker (Client.Worker has no caller), so the
+			// display identifier has to be filled on both producers or
+			// the CLI is fixed and the menu still leaks (#739).
+			wr.PinnedPeerDisplayID = pinDisplayID(v, desired)
 		}
 		body.Worker = wr
 	}

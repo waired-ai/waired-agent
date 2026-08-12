@@ -20,9 +20,10 @@ type fakeWorkerCtl struct {
 	current state.RoutingPreference
 	desired state.RoutingPreference
 
-	lastSetMode state.RoutingMode
-	lastSetPin  string
-	clearCalls  int
+	lastSetMode       state.RoutingMode
+	lastSetPin        string
+	lastSetPinDisplay string
+	clearCalls        int
 }
 
 func (f *fakeWorkerCtl) SetMode(_ context.Context, mode state.RoutingMode) error {
@@ -32,9 +33,14 @@ func (f *fakeWorkerCtl) SetMode(_ context.Context, mode state.RoutingMode) error
 	return nil
 }
 
-func (f *fakeWorkerCtl) SetPin(_ context.Context, peer string) error {
+func (f *fakeWorkerCtl) SetPin(_ context.Context, peer, display string) error {
 	f.lastSetPin = peer
-	f.current = state.RoutingPreference{Mode: state.RoutingModePinned, PinnedPeerDeviceID: peer}
+	f.lastSetPinDisplay = display
+	f.current = state.RoutingPreference{
+		Mode:                state.RoutingModePinned,
+		PinnedPeerDeviceID:  peer,
+		PinnedPeerDisplayID: display,
+	}
 	f.desired = f.current
 	return nil
 }
@@ -306,5 +312,122 @@ func TestWorkerHandler_LoopbackOnly(t *testing.T) {
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("want 403 for non-loopback, got %d", w.Code)
+	}
+}
+
+// The public-share fixtures. Synthetic and unmistakable: this repository
+// is public, and a leak has to show up as a substring hit.
+const (
+	pinForeignDeviceID = "dev_foreign00000001"
+	pinForeignAlias    = "guest-a7f3"
+)
+
+// PRODUCT CONTRACT (waired-agent#739 + public share spec §8.5). A pinned
+// public machine is reported to clients by its grant pseudonym.
+// PinnedPeerDeviceID keeps carrying the real id because the tray matches
+// it against the mesh snapshot and posts it back to set the pin — the
+// display and the key are different answers to different questions.
+func TestWorkerHandler_GetNamesAPinnedPublicMachineByItsPseudonym(t *testing.T) {
+	pinned := state.RoutingPreference{
+		Mode:                state.RoutingModePinned,
+		PinnedPeerDeviceID:  pinForeignDeviceID,
+		PinnedPeerDisplayID: pinForeignAlias,
+	}
+	get := func(peers []inferencemesh.PeerView) WorkerResponse {
+		t.Helper()
+		ctl := &fakeWorkerCtl{current: pinned, desired: pinned}
+		s := New(stubStatus{}, stubPinger{}).WithWorkerControl(ctl).
+			WithInferenceMesh(&fakeMeshProvider{snapshot: inferencemesh.Snapshot{Peers: peers}})
+		w := doWorker(t, s, http.MethodGet, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+		}
+		var got WorkerResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return got
+	}
+	inSnapshot := []inferencemesh.PeerView{{
+		DeviceID:   pinForeignDeviceID,
+		DeviceName: pinForeignAlias,
+		Grant:      &signer.PeerGrant{Kind: "public", Role: "provider", Pseudonym: pinForeignAlias},
+		InferenceState: &signer.InferenceState{
+			Reachable: true, Type: signer.InferenceTypeOllama, Models: []string{"qwen3:8b"},
+		},
+	}}
+
+	t.Run("peer in the snapshot", func(t *testing.T) {
+		got := get(inSnapshot)
+		if got.PinnedPeerDisplayID != pinForeignAlias {
+			t.Errorf("pinned_peer_display_id = %q, want the pseudonym %q", got.PinnedPeerDisplayID, pinForeignAlias)
+		}
+		if got.PinnedPeerDeviceID != pinForeignDeviceID {
+			t.Errorf("pinned_peer_device_id = %q, want the real id — the tray keys on it", got.PinnedPeerDeviceID)
+		}
+	})
+
+	// The peer has dropped out, so the snapshot has no grant to read.
+	// Without the value recorded at pin time this is where a client's
+	// "fall back to the device id" put a stranger's id on a menu row.
+	t.Run("peer absent from the snapshot", func(t *testing.T) {
+		got := get(nil)
+		if got.PinnedPeerStatus != "absent" {
+			t.Fatalf("status = %q, want absent", got.PinnedPeerStatus)
+		}
+		if got.PinnedPeerDisplayID != pinForeignAlias {
+			t.Errorf("pinned_peer_display_id = %q, want the pseudonym recorded at pin time %q",
+				got.PinnedPeerDisplayID, pinForeignAlias)
+		}
+	})
+}
+
+// An own-network pin reads exactly as it did before: display identifier
+// and device id are the same string, so no client's output changes.
+func TestWorkerHandler_GetOwnPinDisplayIDEqualsTheDeviceID(t *testing.T) {
+	pinned := state.RoutingPreference{
+		Mode:                state.RoutingModePinned,
+		PinnedPeerDeviceID:  "dev_abc",
+		PinnedPeerDisplayID: "dev_abc",
+	}
+	ctl := &fakeWorkerCtl{current: pinned, desired: pinned}
+	s := New(stubStatus{}, stubPinger{}).WithWorkerControl(ctl).
+		WithInferenceMesh(&fakeMeshProvider{snapshot: inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{{
+			DeviceID: "dev_abc", DeviceName: "linux-gpu",
+			InferenceState: &signer.InferenceState{
+				Reachable: true, Type: signer.InferenceTypeOllama, Models: []string{"qwen3:8b"},
+			},
+		}}}})
+	w := doWorker(t, s, http.MethodGet, "")
+	var got WorkerResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.PinnedPeerDisplayID != "dev_abc" || got.PinnedPeerDeviceID != "dev_abc" {
+		t.Errorf("display=%q device=%q, want both dev_abc", got.PinnedPeerDisplayID, got.PinnedPeerDeviceID)
+	}
+}
+
+// The pin's display identifier is resolved from the snapshot at SET
+// time, which is the only moment the grant is in hand.
+func TestWorkerHandler_PostRecordsTheDisplayIdentifier(t *testing.T) {
+	ctl := &fakeWorkerCtl{}
+	s := New(stubStatus{}, stubPinger{}).WithWorkerControl(ctl).
+		WithInferenceMesh(&fakeMeshProvider{snapshot: inferencemesh.Snapshot{Peers: []inferencemesh.PeerView{{
+			DeviceID: pinForeignDeviceID, DeviceName: pinForeignAlias,
+			Grant:          &signer.PeerGrant{Kind: "public", Role: "provider", Pseudonym: pinForeignAlias},
+			InferenceState: &signer.InferenceState{Reachable: true, Type: signer.InferenceTypeOllama},
+		}}}})
+
+	w := doWorker(t, s, http.MethodPost,
+		`{"mode":"pinned","pinned_peer_device_id":"`+pinForeignDeviceID+`"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if ctl.lastSetPin != pinForeignDeviceID {
+		t.Errorf("SetPin device id = %q, want %q", ctl.lastSetPin, pinForeignDeviceID)
+	}
+	if ctl.lastSetPinDisplay != pinForeignAlias {
+		t.Errorf("SetPin display id = %q, want the pseudonym %q", ctl.lastSetPinDisplay, pinForeignAlias)
 	}
 }

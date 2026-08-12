@@ -369,3 +369,133 @@ func TestPrintWorkerResponse_PinnedNamesTheModelAndTheReason(t *testing.T) {
 		t.Errorf("unnamed model rendered blank: %q", out)
 	}
 }
+
+// The public-share fixtures. Deliberately unmistakable so a leak shows
+// up as a substring hit, and synthetic because this repository is public
+// (CLAUDE.md: never commit real device identifiers, including in test
+// fixtures).
+const (
+	foreignDeviceID = "dev_foreign00000001"
+	foreignAlias    = "guest-a7f3"
+)
+
+// PRODUCT CONTRACT (waired-agent#739 + public share spec §8.5, quoted in
+// internal/gateway/probe.go's peerDisplayID doc). The ambiguity error is
+// a CLI surface, so a public machine among the candidates is named by
+// its grant pseudonym and never by its real device id.
+//
+// `waired ping` settled the same rule first
+// (cmd/waired-agent/ping_peer_test.go's
+// TestAgentPinger_AmbiguousNameNeverPrintsAGrantedPeersDeviceID, #723),
+// and that test's comment names this command as the remaining leak.
+func TestWorkerSet_PinAmbiguousNameNeverPrintsAPublicMachinesDeviceID(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{
+			{DeviceID: "dev_mine", DeviceName: "shared-box", InferenceState: &signer.InferenceState{Reachable: true}},
+			{
+				DeviceID: foreignDeviceID, DeviceName: "shared-box",
+				Grant:          &signer.PeerGrant{Kind: "public", Role: "provider", Pseudonym: foreignAlias},
+				InferenceState: &signer.InferenceState{Reachable: true},
+			},
+		},
+	}
+	srv, _ := workerTestServer(t, snap)
+	defer srv.Close()
+
+	var err error
+	_ = captureStdout(t, func() {
+		err = runWorker([]string{"set", "--mgmt", srv.URL, "--pin=shared-box"})
+	})
+	if err == nil {
+		t.Fatal("expected error for ambiguous name")
+	}
+	if strings.Contains(err.Error(), foreignDeviceID) {
+		t.Errorf("the public machine's real device id crossed to the CLI: %v", err)
+	}
+	if !strings.Contains(err.Error(), foreignAlias) {
+		t.Errorf("the public machine is not identified at all, so the operator cannot act: %v", err)
+	}
+	// The device the operator does own is still named outright.
+	if !strings.Contains(err.Error(), "dev_mine") {
+		t.Errorf("own-network candidate is missing: %v", err)
+	}
+}
+
+// The pin VALUE stays the real DeviceID: it keys SetPin server-side and
+// the router matches candidates on it. Scrubbing the display without
+// keeping the key real is the one way this change could break routing,
+// so the POSTed body is pinned separately from the printed output.
+func TestWorkerSet_PinPublicMachineByNameSendsTheRealDeviceID(t *testing.T) {
+	snap := inferencemesh.Snapshot{
+		Peers: []inferencemesh.PeerView{{
+			DeviceID: foreignDeviceID, DeviceName: foreignAlias,
+			Grant:          &signer.PeerGrant{Kind: "public", Role: "provider", Pseudonym: foreignAlias},
+			InferenceState: &signer.InferenceState{Reachable: true},
+		}},
+	}
+	srv, spy := workerTestServer(t, snap)
+	defer srv.Close()
+
+	_ = captureStdout(t, func() {
+		if err := runWorker([]string{"set", "--mgmt", srv.URL, "--pin=" + foreignAlias}); err != nil {
+			t.Fatalf("worker set --pin: %v", err)
+		}
+	})
+	if len(spy.posts) != 1 {
+		t.Fatalf("posts = %d, want 1", len(spy.posts))
+	}
+	if got := spy.posts[0].PinnedPeerDeviceID; got != foreignDeviceID {
+		t.Errorf("pinned_peer_device_id = %q, want the real device id %q — the daemon keys on it",
+			got, foreignDeviceID)
+	}
+}
+
+// The read-back is a CLI surface too, and it needs no name collision to
+// reach: pin a public machine by name and `worker get` prints whatever
+// the daemon returned. displayPin prefers the daemon's display
+// identifier and falls back to the device id only for an agent that
+// predates the field (#739).
+func TestDisplayPin_PrefersTheDisplayIdentifier(t *testing.T) {
+	cases := []struct {
+		name string
+		resp management.WorkerResponse
+		want string
+	}{
+		{
+			name: "public machine names the pseudonym, not the device id",
+			resp: management.WorkerResponse{
+				PinnedPeerDeviceID:  foreignDeviceID,
+				PinnedPeerDisplayID: foreignAlias,
+				PinnedPeerName:      foreignAlias,
+			},
+			want: foreignAlias + " (" + foreignAlias + ")",
+		},
+		{
+			name: "own peer reads exactly as it did before",
+			resp: management.WorkerResponse{
+				PinnedPeerDeviceID:  "dev_lin",
+				PinnedPeerDisplayID: "dev_lin",
+				PinnedPeerName:      "linux-gpu",
+			},
+			want: "linux-gpu (dev_lin)",
+		},
+		{
+			// An agent predating PinnedPeerDisplayID reports none.
+			name: "no display identifier reported falls back to the device id",
+			resp: management.WorkerResponse{PinnedPeerDeviceID: "dev_lin", PinnedPeerName: "linux-gpu"},
+			want: "linux-gpu (dev_lin)",
+		},
+		{
+			name: "no name reported shows the display identifier alone",
+			resp: management.WorkerResponse{PinnedPeerDeviceID: foreignDeviceID, PinnedPeerDisplayID: foreignAlias},
+			want: foreignAlias,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := displayPin(tc.resp); got != tc.want {
+				t.Errorf("displayPin() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
