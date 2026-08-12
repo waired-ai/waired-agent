@@ -26,7 +26,9 @@ type Recorder interface {
 	// Server.AdmitLocal for the owner's own local-engine work.
 	SetInflight(n int)
 
-	// SetCapacity records the configured admission ceiling. Called
-	// once at server construction.
+	// SetCapacity records the configured admission ceiling. Called at
+	// server construction and again on every Server.SetCapacity, so the
+	// gauge follows a live retune rather than reporting the boot value
+	// for the life of the process.
 	SetCapacity(total int)
 }

@@ -238,6 +238,17 @@ func (d inferenceProbeDeps) cpCtx(fallback context.Context) context.Context {
 // provider's live answer so a benchmark that runs after boot lifts the
 // advertised cap; boot is the fallback for the paths that have no provider
 // (--disable-inference, an unenrolled daemon), where it is 0 anyway.
+//
+// A host that HAS a provider and no measurement yet advertises
+// unmeasuredCapacity rather than 0, so the figure peers read agrees with the
+// one this host enforces (waired-agent#738). Both are the same claim — "one
+// at a time until I know" — and publishing 0 while enforcing 1 would put the
+// same quantity on the wire twice with two answers, which is the shape
+// waired-agent#713 was about.
+//
+// The no-provider return stays 0 on purpose: that is a host with no engine
+// at all, and RunBootBenchmark's skip paths document 0 as the right encoding
+// for "no admission cap" there.
 func capacityFn(boot int, sub *inferenceSubsystem) func() int {
 	if sub != nil && sub.provider != nil {
 		prov := sub.provider
@@ -245,7 +256,10 @@ func capacityFn(boot int, sub *inferenceSubsystem) func() int {
 			if c := prov.AdvertisedCapacity(); c != 0 {
 				return c
 			}
-			return boot
+			if boot != 0 {
+				return boot
+			}
+			return unmeasuredCapacity
 		}
 	}
 	return func() int { return boot }

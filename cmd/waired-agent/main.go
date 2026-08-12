@@ -1258,6 +1258,14 @@ func run(ctx context.Context, args []string) error {
 					Logger:        logger,
 				})
 				capacity = bench.Capacity
+				// Enforce what we just measured, without waiting for the
+				// control plane to echo it back. Until this the listener
+				// holds unmeasuredCapacity, and the echo is a benchmark's
+				// duration plus a publish round trip away
+				// (waired-agent#738). The relay drops this if the map has
+				// already served a figure — that one has the admin
+				// override folded in.
+				localAdmit.SeedCapacity(capacity)
 				// Feed the result to the provider so the management API
 				// can derive the #133 lighter-model recommendation.
 				if inferenceSub != nil && inferenceSub.provider != nil {
@@ -1436,6 +1444,13 @@ func run(ctx context.Context, args []string) error {
 				IsPaused:            pm.IsPaused,
 				IsInferenceDisabled: infCtl.IsDisabled,
 				Recorder:            obsRecorder,
+				// One request at a time until this host knows what it can
+				// take. The boot benchmark's figure arrives via
+				// localAdmit.SeedCapacity and the control plane's via
+				// SetCapacityFromMap; both are minutes away on a first
+				// install, and the field used to be left at 0 — which this
+				// listener reads as no ceiling at all (waired-agent#738).
+				Capacity: unmeasuredCapacity,
 			}
 			if shareCtl != nil {
 				cfg.IsShareDenied = shareCtl.IsShareDenied
@@ -1575,7 +1590,13 @@ func run(ctx context.Context, args []string) error {
 				// PublicCapacity retunes the public-consumer admission ceiling
 				// (waired#824); 0 until the CP starts emitting it (waired#820),
 				// which resolves to the bounded min(2, capacity−1) default.
-				infSrv.SetCapacity(st.Capacity)
+				// Capacity goes through the relay, not straight at the
+				// server: the served figure is an echo of what this agent
+				// published, so it stays 0 until the boot benchmark has
+				// measured — and a 0 here would mean "no ceiling", which is
+				// waired-agent#738 itself. The relay ignores a 0 and keeps
+				// whatever this host is already enforcing.
+				localAdmit.SetCapacityFromMap(st.Capacity)
 				infSrv.SetPublicCapacity(st.PublicCapacity)
 				if inferenceSub != nil && inferenceSub.provider != nil {
 					inferenceSub.provider.ApplyConcurrency(ctx, st.DesiredParallel)

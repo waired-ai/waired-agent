@@ -474,6 +474,16 @@ type Config struct {
 	// from the boot token/s benchmark (see Phase 7 plan §5). 0 means
 	// "unlimited": the backward-compat default for agents that predate
 	// the field, and what a skipped benchmark reports.
+	//
+	// The agent no longer leaves this at 0 for a host that has an engine.
+	// The boot benchmark runs in a goroutine that outlives this
+	// construction — minutes, on a first install — and until
+	// waired-agent#738 the listener enforced nothing for that whole window
+	// while the requesting side read the advertised 0 as "no ceiling" too.
+	// cmd/waired-agent seeds it with one request at a time and retunes from
+	// the benchmark and then the network map, resolving both in
+	// localAdmissionRelay. 0 as "unlimited" is unchanged here; what changed
+	// is that the agent stops passing one in.
 	Capacity int
 
 	// PublicCapacity bounds concurrent PUBLIC-consumer requests
@@ -573,6 +583,14 @@ func NewServerWithConfig(cfg Config) *Server {
 // nm.Self.InferenceState.Capacity, and the agent applies it here so the
 // serving side enforces the same cap the requesting peers observe. No-op on a
 // ping-only server (NewServer, no inflight counter).
+//
+// The agent reaches this through cmd/waired-agent's localAdmissionRelay
+// rather than calling it per source. Two of them retune the ceiling — the
+// boot benchmark and the map frame — and the served figure is an echo of
+// what the agent published, so it reads 0 until the benchmark has measured.
+// Passing that 0 through would restore the unbounded window
+// waired-agent#738 closed, so the relay drops it. Callers that genuinely
+// mean unlimited still get it here.
 func (s *Server) SetCapacity(n int) {
 	if s.inflight == nil {
 		return
