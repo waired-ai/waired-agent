@@ -517,13 +517,17 @@ func TestInferenceStatus_OmitsAnUnmeasuredHostMemory(t *testing.T) {
 // columns differ has to carry a reason.
 //
 // Deliberately the WIRE status, not internal/gateway's selectionStatus.
-// The two are not the same function and do not always agree with each
-// other — selectionStatus feeds the request record, and for
-// ErrHardwareInsufficient it says 400 where the wire says 422. That
-// disagreement is inside the gateway, not between the gateway and this
-// endpoint, so it is not #710's to fix and not this table's to model.
-// Comparing against the record instead would have made this endpoint look
-// wrong for a sentinel it already agrees with.
+// The two are not the same function: selectionStatus feeds the gateway's
+// request record, and when #710 was fixed it said 400 for
+// ErrHardwareInsufficient where the wire said 422. That disagreement was
+// inside the gateway, not between the gateway and this endpoint, so it was
+// not #710's to fix and is not this table's to model — comparing against
+// the record instead would have made this endpoint look wrong for a
+// sentinel it already agreed with. waired-agent#740 has since moved the
+// record onto the wire's reading, and
+// internal/gateway/selection_error_test.go holds the two together for
+// every sentinel; this column still names the wire, because the wire is
+// what an operator compares an explain answer against.
 //
 // A sentinel added to router without a row here lands in `default` and
 // answers 500 — which is how ErrAllPeersOverloaded became this bug.
@@ -570,8 +574,7 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 				"and this endpoint has no OpenAI/Anthropic wire shape to stay compatible with",
 		},
 		// No divergence to explain: the gateway answers a client 422 here
-		// too. (Its own request-record helper says 400 for this one; see
-		// the note above.)
+		// too, and since waired-agent#740 records that same 422.
 		{name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: 422, gateway: 422},
 		{
 			name: "no endpoint for window", err: router.ErrNoEndpointForWindow, want: 500, gateway: 500,

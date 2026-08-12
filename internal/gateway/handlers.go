@@ -313,15 +313,32 @@ func selectionErrorReason(err error) string {
 // selectionStatus maps a router selection error to the HTTP status
 // the gateway will return. Used by the request-record helper before
 // respondSelectionError actually writes the response.
+//
+// So every row here has to be the status the responders WRITE, not a
+// second opinion about it: ev.Status reaches the event ring the
+// management API serves and the `status` field of the WARN and DEBUG
+// lines (internal/observability.Recorder.RecordRequest), where the only
+// thing a reader can do with it is compare it against what the client
+// reported. ErrHardwareInsufficient stayed grouped with its neighbour at
+// 400 after both responders moved it to 422, so that comparison
+// disagreed silently on a request class whose whole purpose is telling
+// an operator "this machine cannot run this model" (waired-agent#740).
+// TestSelectionRecord_MatchesWhatTheClientReceives holds the two
+// together for every sentinel now.
 func selectionStatus(err error) int {
 	switch {
 	case err == nil:
 		return http.StatusOK
 	case errors.Is(err, router.ErrModelNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, router.ErrCapabilityNotMet),
-		errors.Is(err, router.ErrHardwareInsufficient):
+	case errors.Is(err, router.ErrCapabilityNotMet):
 		return http.StatusBadRequest
+	case errors.Is(err, router.ErrHardwareInsufficient):
+		// 422, not the 400 its neighbour gets: the request parsed, its
+		// hardware requirements were the problem. Both responders read
+		// it that way (openai.go / anthropic.go), and so does the
+		// explain endpoint that dry-runs them (management.mapRouterStatus).
+		return http.StatusUnprocessableEntity
 	case errors.Is(err, router.ErrModelNotReady),
 		errors.Is(err, router.ErrAllPeersOverloaded),
 		errors.Is(err, router.ErrPeersDidNotAnswer),

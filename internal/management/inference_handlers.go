@@ -822,20 +822,28 @@ func errorBody(code, msg string) map[string]string {
 // /inference/select answers with.
 //
 // The serving surfaces map the same sentinels in
-// gateway.selectionStatus, and this endpoint is the dry run OF those
-// surfaces — `waired infer --explain` exists to explain what a real
-// request would do. When the two disagree, explain is a worse signal
-// than the thing it explains (waired-agent#710): a saturated mesh
-// answered 500 here and 503 there, and 500 says the daemon is broken
-// rather than busy.
+// gateway.respondSelectionError and its Anthropic twin, and this
+// endpoint is the dry run OF those surfaces — `waired infer --explain`
+// exists to explain what a real request would do. When the two
+// disagree, explain is a worse signal than the thing it explains
+// (waired-agent#710): a saturated mesh answered 500 here and 503 there,
+// and 500 says the daemon is broken rather than busy.
+//
+// The responders are the comparison, NOT gateway.selectionStatus, which
+// feeds the gateway's request record rather than its response. Reading
+// the record as if it were the wire is how ErrHardwareInsufficient came
+// to be written up below as a divergence it never was
+// (waired-agent#740).
 //
 // Two divergences are deliberate and stay:
 //
-//   - ErrCapabilityNotMet / ErrHardwareInsufficient are 422 here and 400
-//     at the gateway. Both describe a request this host cannot satisfy;
-//     422 is the more precise reading (the JSON parsed fine, its
-//     requirements were the problem) and this endpoint has no
-//     OpenAI/Anthropic wire shape to stay compatible with.
+//   - ErrCapabilityNotMet is 422 here and 400 at the gateway. Both
+//     describe a request this host cannot satisfy; 422 is the more precise
+//     reading (the JSON parsed fine, its requirements were the problem)
+//     and this endpoint has no OpenAI/Anthropic wire shape to stay
+//     compatible with. ErrHardwareInsufficient is read that way on every
+//     side — 422 here, 422 on both wires, and since waired-agent#740 422
+//     in the gateway's record too.
 //   - ErrNoEndpointForWindow is 500 on both sides today. Recorded here as
 //     today's behaviour rather than asserted as intended — see
 //     TestMapRouterStatus_AgreesWithServingSurfaces.
