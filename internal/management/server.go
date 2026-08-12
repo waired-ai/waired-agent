@@ -494,10 +494,16 @@ type Server struct {
 	// and production leaves it off until the CLI/tray are migrated to the
 	// socket. Set via WithSocketWritesOnly. See socket.go.
 	enforceSocketWrites bool
+	// enforceSocketReads, when true, makes the loopback-TCP Serve path
+	// serve only the tcpReadRoutes allow-list while the local IPC socket
+	// is up, so every other read must come over the socket (waired#836).
+	// Off by default for the same reason as enforceSocketWrites. Set via
+	// WithSocketReadsOnly. See socket.go.
+	enforceSocketReads bool
 	// socketUp reflects whether ServeLocal currently has the local IPC
-	// socket bound. writeGuard reads it so a socket bind failure fails OPEN
-	// (TCP writes keep working, behind the #836 browserGuard) instead of
-	// bricking control of the agent.
+	// socket bound. writeGuard and readGuard read it so a socket bind
+	// failure fails OPEN (TCP keeps serving, behind the #836 browserGuard)
+	// instead of bricking control of the agent.
 	socketUp atomic.Bool
 }
 
@@ -727,7 +733,10 @@ func (s *Server) mux() *http.ServeMux {
 		mux.HandleFunc("/waired/v1/observability/state", s.handleObservabilityState)
 	}
 	if s.observability.MetricsHandler != nil {
-		mux.Handle("/waired/v1/metrics", s.observability.MetricsHandler)
+		// Every other route enforces its own method; this one delegates to
+		// promhttp, which answers any verb. Pin it to reads here so the
+		// route's method policy does not depend on a third-party handler.
+		mux.Handle("/waired/v1/metrics", getOrHeadOnly(s.observability.MetricsHandler))
 	}
 	return mux
 }
@@ -738,8 +747,12 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 		addr = DefaultListen
 	}
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           writeGuard(s.Handler(), s.enforceSocketWrites, &s.socketUp),
+		Addr: addr,
+		// The transport guards wrap Handler() (which already carries
+		// loopbackOnly + browserGuard) rather than living inside it: the
+		// IPC socket serves the same mux and must not be subject to
+		// either. See socket.go.
+		Handler:           writeGuard(readGuard(s.Handler(), s.enforceSocketReads, &s.socketUp), s.enforceSocketWrites, &s.socketUp),
 		ReadHeaderTimeout: 5 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
@@ -1030,6 +1043,19 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// getOrHeadOnly answers anything but GET/HEAD with 405. Used for routes
+// whose handler comes from outside this package.
+func getOrHeadOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func loopbackOnly(next http.Handler) http.Handler {
