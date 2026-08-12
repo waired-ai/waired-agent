@@ -305,3 +305,41 @@ func TestUpgradeCandidate_SpillBoundCapsThePrediction(t *testing.T) {
 		t.Errorf("suggested an upgrade at %.1f tok/s despite the residency gate", predicted)
 	}
 }
+
+func TestUpgradeCandidate_NeverRecommendsTheActiveModel(t *testing.T) {
+	// The twin of TestLighterCandidate_NeverRecommendsTheActiveModel
+	// (waired-agent#754). This picker skipped only the exact active
+	// (model, variant) pair too. The quality_tier break usually reaches a
+	// different model first, but a sibling variant that carries a HIGHER
+	// tier — which the shipped catalog has, qwen3.6-27b's mtp-q4-gguf at
+	// 71 above q4-gguf at 70 — sits above the active one in the ranking
+	// and is reached before the break fires.
+	//
+	// siblingVariantCatalog lives in lighter_picker_test.go.
+	in := UpgradeInput{
+		Pick: PickInput{
+			Catalog:  siblingVariantCatalog(),
+			Hardware: hardware.Profile{RAMTotalGB: 16},
+			Engine:   "ollama",
+		},
+		ActiveModelID:   "dual-ollama",
+		ActiveVariantID: "q4-gguf",
+		MeasuredTokps:   100,
+		FloorTokps:      60,
+	}
+	// Anti-vacuity: without the same-model rule the sibling qualifies —
+	// 100 tok/s × 4.5 GB / 5.0 GB = 90 tok/s, over the 60 × 1.25 bar.
+	ranked, err := RankModels(in.Pick)
+	if err != nil {
+		t.Fatalf("RankModels: %v", err)
+	}
+	if len(ranked) == 0 || ranked[0].Variant.VariantID != "mtp-q4-gguf" {
+		t.Fatalf("fixture no longer ranks the sibling variant first, so this test " +
+			"cannot reach the case it exists for")
+	}
+	if pick, predicted, ok := UpgradeCandidate(in); ok {
+		t.Errorf("suggested %s/%s at ~%.0f tok/s as an upgrade over %s/%s — the two are "+
+			"the same model", pick.Manifest.ModelID, pick.Variant.VariantID, predicted,
+			in.ActiveModelID, in.ActiveVariantID)
+	}
+}

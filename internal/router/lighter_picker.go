@@ -28,10 +28,17 @@ import (
 // a further step if it is still below the floor — no need to evaluate the
 // whole ladder up front.
 //
+// The candidate is always a DIFFERENT model, never another variant of
+// the active one — see the skip inside the loop.
+//
 // The baseline is the active variant looked up in in.Catalog. When the
 // active variant is not in the catalog (e.g. a stale or externally-pinned
 // selection), the top fitting pick (RankModels[0]) is used as the
-// baseline so a lighter alternative can still be offered.
+// baseline so a lighter alternative can still be offered. That fallback
+// is what made waired-agent#754 reachable: the baseline becomes some
+// OTHER model, and the active model's own variant is then "strictly
+// lighter" than it. The different-model skip below is what keeps the
+// fallback from recommending the host what it is already running.
 //
 // Note: callers typically pass an EMPTY PickInput.PreferredModelID even
 // when a model is pinned, so a pinned-but-too-heavy model can still be
@@ -52,8 +59,25 @@ func LighterCandidate(in PickInput, activeModelID, activeVariantID string) (Pick
 	var best *Pick
 	for i := range ranked {
 		c := ranked[i]
-		// Skip the active variant itself.
-		if c.Manifest.ModelID == activeModelID && c.Variant.VariantID == activeVariantID {
+		// Skip the active MODEL, not just the active variant
+		// (waired-agent#754). Two reasons, either one sufficient:
+		//
+		// Matching on the pair meant an unresolvable activeVariantID
+		// disarmed the skip entirely — an empty variant_id in state.json,
+		// or one the catalog has since renamed, matches nothing — and the
+		// pick then landed on the very variant the host was serving. The
+		// offer rendered as "Qwen3.6 27B → Qwen3.6 27B".
+		//
+		// And a sibling variant is not a step down to begin with. Everything
+		// downstream of this pick is keyed by model id: the label
+		// (cmd/waired/init_modelselect.go), the accept API
+		// (management.PreferredModelRequest carries no variant), the
+		// residency check, and the "remove the model we moved off" offer —
+		// which would delete the weights of the model still serving. The
+		// catalog's siblings differ by engine feature rather than weight
+		// class anyway: qwen3.6-35b-a3b's LIGHTER variant carries the
+		// HIGHER quality_tier.
+		if c.Manifest.ModelID == activeModelID {
 			continue
 		}
 		// Must be strictly lighter than the baseline.

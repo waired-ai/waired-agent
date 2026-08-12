@@ -26,12 +26,50 @@ func writePromptf(out io.Writer, format string, args ...any) {
 	_, _ = fmt.Fprint(out, plainText(fmt.Sprintf(format, args...)))
 }
 
+// ynAnswer is what a [Y/n] prompt got back. ynNoAnswer is the case
+// ynPrompt cannot express: stdin ended before an answer arrived, so
+// nobody is at the keyboard.
+type ynAnswer int
+
+const (
+	ynYes ynAnswer = iota
+	ynNo
+	ynNoAnswer
+)
+
 // ynPrompt reads one [Y/n] / [y/N] answer. Empty input returns def.
 // Unparseable input re-prompts up to 3 times then falls back to def.
 // Reads through the supplied line source (caller owns it) — a plain
 // bufio.Scanner, or the init stdin owner when one process-wide reader is
 // what keeps two prompts from fighting over the keyboard (init_stdin.go).
+//
+// An exhausted stdin also returns def, which is what an unattended
+// install wants from a configuration question: take the documented
+// default and carry on. A question whose Yes REPLACES a working setup or
+// DELETES data wants the opposite, and reads ynAsk directly — see
+// init_benchmark.go (waired-agent#754).
 func ynPrompt(out io.Writer, sc lineReader, label string, def bool) bool {
+	switch ynAsk(out, sc, label, def) {
+	case ynYes:
+		return true
+	case ynNo:
+		return false
+	default: // ynNoAnswer — unchanged from before ynAsk existed.
+		return def
+	}
+}
+
+// ynAsk is ynPrompt with the no-answer case kept apart.
+//
+// Empty input is still an answer — a person pressed Enter, and taking
+// def is the whole point of printing one. A closed stdin is not: nobody
+// is there to press it. `waired init` does not force non-interactive
+// mode off a terminal (it cannot: scripted installs pipe their answers
+// in, and scripts/dev/installtest-windows.ps1 drives it that way), so
+// EOF was reaching the benchmark flow's default-Yes prompts and
+// switching the model, then offering to delete the weights it moved off
+// — with no one to see either question.
+func ynAsk(out io.Writer, sc lineReader, label string, def bool) ynAnswer {
 	// Spell out the default ("default: Yes/No") alongside the [Y/n]
 	// capitalization so it reads like a conventional interactive installer
 	// — the older "(Enter = Yes)" form looked like an instruction to type
@@ -40,23 +78,32 @@ func ynPrompt(out io.Writer, sc lineReader, label string, def bool) bool {
 	if !def {
 		hint = "[y/N] (default: No)"
 	}
+	fromDefault := func() ynAnswer {
+		if def {
+			return ynYes
+		}
+		return ynNo
+	}
 	for range 3 {
 		writePromptf(out, "  %s %s ", label, hint)
 		if !sc.Scan() {
-			return def
+			return ynNoAnswer
 		}
 		line := strings.ToLower(strings.TrimSpace(sc.Text()))
 		switch line {
 		case "":
-			return def
+			return fromDefault()
 		case "y", "yes":
-			return true
+			return ynYes
 		case "n", "no":
-			return false
+			return ynNo
 		}
 		writePrompt(out, "  please answer y or n.")
 	}
-	return def
+	// Three unparseable answers: somebody IS there, they are just not
+	// answering the question. That is the pre-existing fall back to def,
+	// not a no-answer.
+	return fromDefault()
 }
 
 // downloadLineState carries the throttling state between drawDownloadLine

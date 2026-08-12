@@ -112,7 +112,18 @@ func UpgradeCandidate(in UpgradeInput) (Pick, float64, bool) {
 	// qualifying candidate is the best one.
 	for i := range ranked {
 		c := ranked[i]
-		if c.Manifest.ModelID == in.ActiveModelID && c.Variant.VariantID == in.ActiveVariantID {
+		// The active MODEL, not just the active variant — the same rule
+		// LighterCandidate carries, and for the same reasons (see the skip
+		// there, waired-agent#754). Placed BEFORE the tier break so a
+		// higher-tier sibling is stepped over rather than ending the
+		// search: the shipped catalog has one, qwen3.6-27b's mtp-q4-gguf
+		// at 71 above q4-gguf at 70.
+		//
+		// Defence in depth rather than a reported defect: this picker
+		// returns early when the active variant does not resolve, so it
+		// never reached #754's trigger, and tier ordering reaches a
+		// different model first in the shipped catalog today.
+		if c.Manifest.ModelID == in.ActiveModelID {
 			continue
 		}
 		if c.Variant.QualityTier <= active.QualityTier {
