@@ -699,15 +699,18 @@ func (t *tray) dispatchCatalogClicks(ctx context.Context, idx int) {
 
 // onSelectCatalogEntry maps a click on the i-th submenu slot back to
 // the model_id projected at that slot in the most recent apply(), then
-// posts the preference to the agent. The agent restarts asynchronously;
-// the immediate poll repaints the row with "(switching…)" until the
-// new active selection comes back from the catalog endpoint.
+// posts the preference to the agent. Applying is asynchronous either
+// way — an in-process swap reloads the engine, the restart fallback
+// takes the agent down and back — so the immediate poll repaints the
+// row with "(switching…)" until the new active selection comes back
+// from the catalog endpoint.
 func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	t.mu.Lock()
-	var modelID string
+	var modelID, name string
 	var disabled bool
 	if idx < len(t.lastCatalogEntries) {
 		modelID = t.lastCatalogEntries[idx].ModelID
+		name = t.lastCatalogEntries[idx].Name
 		disabled = t.lastCatalogEntries[idx].Disabled
 	}
 	t.mu.Unlock()
@@ -717,10 +720,10 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 	slog.Debug("tray: menu action", "action", "select-model", "model", modelID)
 	resp, err := t.cli.SetPreferredModel(ctx, modelID)
 	if err != nil {
-		showError(fmt.Sprintf("Switch model failed: %v", err))
+		showError(modelSwitchErrorText(err, switchModelName(name, modelID)))
 		return
 	}
-	t.onModelSwitchAccepted(resp)
+	t.onModelSwitchAccepted(resp, name)
 	go t.pollOnce(ctx)
 }
 
@@ -729,13 +732,64 @@ func (t *tray) onSelectCatalogEntry(ctx context.Context, idx int) {
 // fallback — an in-process swap per waired#812 does not), arms the
 // grace window so the imminent daemon-down poll renders as "Switching
 // model…" instead of the red agent-down state (waired#808).
-func (t *tray) onModelSwitchAccepted(resp *management.PreferredModelResponse) {
-	if resp != nil && resp.WillRestart {
-		notify("Switching model — the agent will restart briefly.", notification.Info)
-		t.armSwitching()
-		return
+//
+// The three arms are the three things that actually happen next, and
+// they take different amounts of time. Collapsing the download case
+// into the plain one is what waired#808 is about on this path: the
+// swap layer owns the pull and answers 202 before it has fetched
+// anything, so "Model switched." fired at the head of a multi-GB
+// download — while the old model was still the one answering.
+func (t *tray) onModelSwitchAccepted(resp *management.PreferredModelResponse, name string) {
+	var echoed string
+	if resp != nil {
+		echoed = resp.ModelID
 	}
-	notify("Model switched.", notification.Info)
+	notify(modelSwitchAcceptedText(resp, switchModelName(name, echoed)), notification.Info)
+	if resp != nil && resp.WillRestart {
+		t.armSwitching()
+	}
+}
+
+// modelSwitchAcceptedText is the notification body for an accepted
+// switch, split out as a pure function because apply()/notify() cannot
+// be driven in a test (systray) but this wording is the point of
+// waired#808.
+func modelSwitchAcceptedText(resp *management.PreferredModelResponse, name string) string {
+	switch {
+	case resp != nil && resp.WillRestart:
+		return "Switching model — the agent will restart briefly."
+	case resp != nil && resp.Downloading:
+		return fmt.Sprintf("Downloading %s. Your current model keeps answering until it is ready.", name)
+	default:
+		return fmt.Sprintf("Switching to %s — it will be answering in a few seconds.", name)
+	}
+}
+
+// modelSwitchErrorText turns a failed switch into a sentence. The 409
+// arm is the one that matters: the daemon declines when it cannot fetch
+// the weights, and it deliberately keeps the recorded preference so the
+// choice applies by itself once pulls work again
+// (internal/management/inference_preferred_model.go). Without this the
+// dialog showed the raw transport error, JSON body and all.
+func modelSwitchErrorText(err error, name string) string {
+	if errors.Is(err, ErrModelSwitchUnavailable) {
+		return fmt.Sprintf("Cannot switch to %s right now — this computer could not fetch the model. "+
+			"Your choice is saved and applies once downloads work again.", name)
+	}
+	return fmt.Sprintf("Switch model failed: %v", err)
+}
+
+// switchModelName prefers the row's display name and falls back to the
+// model_id, so a sentence never renders "Switching to ." if a slot is
+// projected without one.
+func switchModelName(name, modelID string) string {
+	if name != "" {
+		return name
+	}
+	if modelID != "" {
+		return modelID
+	}
+	return "the new model"
 }
 
 // armSwitching opens the ~45s model-switch grace window (waired#808).
@@ -1861,11 +1915,17 @@ func (t *tray) dispatchRecommendClicks(ctx context.Context) {
 }
 
 // onShowRecommendationPopup presents the lighter-model suggestion in a
-// native yes/no dialog. Yes posts the preferred-model switch (agent
-// restarts); No records a dismissal so the same pairing does not nag
-// again. When no desktop dialog backend is available it falls back to
-// copying the CLI command to the clipboard. Long-running (dialog wait) —
-// callers dispatch in a goroutine.
+// native yes/no dialog. Yes posts the preferred-model switch; No records
+// a dismissal so the same pairing does not nag again. When no desktop
+// dialog backend is available it falls back to copying the CLI command
+// to the clipboard. Long-running (dialog wait) — callers dispatch in a
+// goroutine.
+//
+// The question has to describe what saying yes costs. Since waired#812
+// the switch applies in process, so the old "the agent will restart"
+// was overstating it; what the upgrade arm does cost is the download,
+// which the downgrade arm does not (the lighter model is the one this
+// host can already serve).
 func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	t.mu.Lock()
 	rec := t.lastRecommendation
@@ -1877,13 +1937,14 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	title := "Local inference is slow"
 	body := fmt.Sprintf(
 		"This host benchmarked at %.0f tok/s, below the %.0f tok/s interactive floor.\n\n"+
-			"Switch to the lighter model %s? The agent will restart to apply it.",
+			"Switch to the lighter model %s? It applies live — Waired keeps answering.",
 		rec.MeasuredTokps, rec.FloorTokps, rec.ToModelID)
 	if rec.Direction == management.RecommendationUpgrade {
 		title = "Better model available"
 		body = fmt.Sprintf(
 			"This host benchmarked at %.0f tok/s — enough headroom for a higher-quality model.\n\n"+
-				"Switch to %s (predicted ~%.0f tok/s)? This downloads a larger model and restarts the agent.",
+				"Switch to %s (predicted ~%.0f tok/s)? It downloads first, and your current model "+
+				"keeps answering until it is ready.",
 			rec.MeasuredTokps, rec.ToModelID, rec.PredictedTokps)
 	}
 
@@ -1908,10 +1969,12 @@ func (t *tray) onShowRecommendationPopup(ctx context.Context) {
 	}
 	resp, err := t.cli.SetPreferredModel(ctx, rec.ToModelID)
 	if err != nil {
-		showError(fmt.Sprintf("Switch model failed: %v", err))
+		showError(modelSwitchErrorText(err, switchModelName("", rec.ToModelID)))
 		return
 	}
-	t.onModelSwitchAccepted(resp)
+	// The recommendation carries a model_id, not a catalog display name,
+	// so this arm names the model the same way the dialog just did.
+	t.onModelSwitchAccepted(resp, rec.ToModelID)
 	go t.pollOnce(ctx)
 }
 

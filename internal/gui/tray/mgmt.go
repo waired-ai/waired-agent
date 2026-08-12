@@ -118,6 +118,14 @@ var ErrClaudeRoutingUnsupported = errors.New("daemon does not expose claude rout
 // the model-catalog submenu rather than surfacing a generic error.
 var ErrCatalogUnsupported = errors.New("daemon does not expose model catalog; upgrade waired-agent")
 
+// ErrModelSwitchUnavailable is returned by SetPreferredModel when the
+// daemon accepted the choice but declined to apply it (HTTP 409): it
+// could not fetch the weights, and restarting would re-run a bootstrap
+// that fails the same way. The recorded preference is deliberately
+// kept daemon-side, so the tray says the choice is saved rather than
+// showing the transport error and its JSON body (waired#808).
+var ErrModelSwitchUnavailable = errors.New("this computer could not fetch the model, so the switch was not applied")
+
 // ErrOpenClawIntegrationUnsupported is returned by OpenClawIntegration /
 // ReconfigureOpenClaw when the daemon predates those endpoints (HTTP
 // 404). The tray hides the OpenClaw menu group rather than surfacing
@@ -335,15 +343,22 @@ func (c *Client) ModelCatalog(ctx context.Context) (*management.ModelCatalogResp
 }
 
 // SetPreferredModel persists the user's choice and asks the daemon to
-// restart so the new model becomes active. 404 → ErrCatalogUnsupported.
+// apply it: in process since waired#812, or by a supervised restart
+// when the swap layer cannot (the response's WillRestart says which).
+// 404 → ErrCatalogUnsupported, 409 → ErrModelSwitchUnavailable.
 func (c *Client) SetPreferredModel(ctx context.Context, modelID string) (*management.PreferredModelResponse, error) {
 	var resp management.PreferredModelResponse
 	err := c.postJSON(ctx, "/waired/v1/inference/preferred-model",
 		management.PreferredModelRequest{ModelID: modelID}, &resp)
 	if err != nil {
 		var hr *httpError
-		if errors.As(err, &hr) && hr.StatusCode == http.StatusNotFound {
-			return nil, ErrCatalogUnsupported
+		if errors.As(err, &hr) {
+			switch hr.StatusCode {
+			case http.StatusNotFound:
+				return nil, ErrCatalogUnsupported
+			case http.StatusConflict:
+				return nil, ErrModelSwitchUnavailable
+			}
 		}
 		return nil, err
 	}

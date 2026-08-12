@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -136,5 +137,84 @@ func TestClient_EngineControl_404IsUnsupported(t *testing.T) {
 	}
 	if err := c.StartEngine(context.Background()); !errors.Is(err, ErrEngineControlUnsupported) {
 		t.Errorf("expected ErrEngineControlUnsupported (Start), got %v", err)
+	}
+}
+
+// SetPreferredModel's three answers (waired#808 / waired#812): 202 with
+// will_restart telling the tray which path applied, 404 for a daemon
+// with no catalog API, and 409 for a host that could not fetch the
+// weights — which used to reach the user as a raw transport error.
+
+func TestClient_SetPreferredModel_ReportsHowItApplied(t *testing.T) {
+	cases := []struct {
+		name            string
+		body            string
+		wantRestart     bool
+		wantDownloading bool
+	}{
+		{"in-process swap", `{"model_id":"qwen3-8b","will_restart":false}`, false, false},
+		{"in-process swap with a pull", `{"model_id":"qwen3-8b","will_restart":false,"downloading":true}`, false, true},
+		{"restart fallback", `{"model_id":"qwen3-8b","will_restart":true}`, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method+" "+r.URL.Path != "POST /waired/v1/inference/preferred-model" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				_, _ = w.Write([]byte(c.body))
+			}))
+			t.Cleanup(srv.Close)
+
+			got, err := newTestClient(srv.URL).SetPreferredModel(context.Background(), "qwen3-8b")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.WillRestart != c.wantRestart {
+				t.Errorf("WillRestart=%v, want %v", got.WillRestart, c.wantRestart)
+			}
+			if got.Downloading != c.wantDownloading {
+				t.Errorf("Downloading=%v, want %v", got.Downloading, c.wantDownloading)
+			}
+		})
+	}
+}
+
+func TestClient_SetPreferredModel_StatusSentinels(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   error
+	}{
+		{"404 is a daemon without the catalog API", http.StatusNotFound, "", ErrCatalogUnsupported},
+		{
+			"409 is a host that could not fetch the weights",
+			http.StatusConflict,
+			`{"error":"model_switch_unavailable","message":"management: this host cannot apply that model switch"}`,
+			ErrModelSwitchUnavailable,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(c.status)
+				_, _ = w.Write([]byte(c.body))
+			}))
+			t.Cleanup(srv.Close)
+
+			_, err := newTestClient(srv.URL).SetPreferredModel(context.Background(), "qwen3-8b")
+			if !errors.Is(err, c.want) {
+				t.Fatalf("err=%v, want %v", err, c.want)
+			}
+			// The sentinel replaces the transport error rather than
+			// wrapping it, so no JSON body can reach a dialog.
+			if strings.Contains(err.Error(), "{") || strings.Contains(err.Error(), "HTTP") {
+				t.Errorf("err=%q, want no transport detail", err)
+			}
+		})
 	}
 }
