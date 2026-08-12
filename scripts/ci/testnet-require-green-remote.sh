@@ -46,6 +46,16 @@
 # Before any hard failure the loop re-checks over a short settle window,
 # which cannot mask a real failure (a failed run stays not-green). See the
 # give-up branch below.
+#
+# That window absorbs a lag of seconds. It does NOT absorb a job whose
+# conclusion never finalises at all — GitHub occasionally leaves a job at
+# in_progress/null on a run it has already concluded as success — so that
+# case is decided in green_exists rather than waited out (waired-agent#697).
+#
+# The verdict table lives in scripts/ci/testnet-require-green-remote-test.sh:
+# a stub `gh` builds the JSON the API would return and this script's own
+# --jq expressions run over it, so the filters are exercised without a
+# token, a network call, or a ~25-minute GCP run.
 set -euo pipefail
 
 sha="${1:?usage: testnet-require-green-remote.sh <agent-full-sha>}"
@@ -69,22 +79,65 @@ fi
 runs_for_sha() { # prints "id status conclusion" per matching run
   # NB: `gh api --jq` takes a bare expression only (no jq --arg support);
   # the SHA is hex so direct interpolation is injection-safe.
-  gh api "repos/${repo}/actions/workflows/testnet.yml/runs?event=workflow_dispatch&per_page=100" \
+  gh api --paginate "repos/${repo}/actions/workflows/testnet.yml/runs?event=workflow_dispatch&per_page=100" \
     --jq ".workflow_runs[] | select(.display_title | contains(\"${sha}\")) | \"\(.id) \(.status) \(.conclusion)\""
 }
 
+# Job-level verdicts for one run: one line per "testnet (…)" job, with an
+# unfinalised job printed as "pending" so the caller can tell it apart from
+# a job that is absent.
+#
+# --paginate because a busy monorepo run carries more jobs than one page,
+# and filter=all because the default (latest) hides the attempts a re-run
+# replaced — the green one can be either.
+testnet_job_conclusions() { # $1 = run id
+  gh api --paginate "repos/${repo}/actions/runs/${1}/jobs?per_page=100&filter=all" \
+    --jq '.jobs[] | select(.name | startswith("testnet (")) | .conclusion // "pending"'
+}
+
+# green_exists: is there a run for this agent SHA whose testnet job(s) say
+# the harness passed?
+#
+# The run's own conclusion is not enough — a gate-skipped run also succeeds
+# (see the header) — so the verdict is read per job. Three answers, not two:
+#
+#   no testnet job at all  -> NOT green. This is the gate-skipped run the
+#                             job-level check exists to catch.
+#   any job failed/cancelled/timed out/skipped -> NOT green.
+#   every job succeeded    -> green.
+#
+# and a fourth that used to be silently folded into the first: a job whose
+# conclusion never finalised (`null`) on a run GitHub already concluded as
+# success. `first // "none"` mapped that to the same "none" as "no job at
+# all", so a green testnet read as a gate-skipped one and the gate refused
+# to release (waired-agent#697; observed on #671, where the run was
+# completed/success while its testnet job sat at in_progress/null). It is
+# accepted here, because the caller has already required the RUN to be
+# completed/success and a successful run cannot contain a failed job — but
+# it is reported separately, since "we could not read the verdict" and "the
+# verdict was pass" are different claims and only the second is evidence.
+#
+# Reading every job rather than `first` matters for the same reason: the
+# testnet job is a matrix, and element 0 is not a vote.
 green_exists() {
   local id
   while read -r id status conclusion; do
     [[ "${status}" == "completed" && "${conclusion}" == "success" ]] || continue
-    # Job-level verdict, mirroring the monorepo's testnet-green-exists.sh.
-    local job_conclusion
-    job_conclusion="$(gh api "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
-      --jq '[.jobs[] | select(.name | startswith("testnet (")) | .conclusion] | first // "none"')"
-    if [[ "${job_conclusion}" == "success" ]]; then
-      echo "run ${id}: testnet job succeeded for agent ${sha:0:7}"
-      return 0
+    local jobs
+    # A transient API failure must not read as "not green", and must not
+    # kill the script under set -e: skip this run and let the caller poll.
+    if ! jobs="$(testnet_job_conclusions "${id}")"; then
+      echo "::warning::could not read the testnet jobs of run ${id} (transient?); will re-check"
+      continue
     fi
+    [[ -z "${jobs}" ]] && continue                      # gate-skipped run
+    grep -qvE '^(success|pending)$' <<<"${jobs}" && continue
+    if grep -q '^pending$' <<<"${jobs}"; then
+      echo "::notice::run ${id}: the run concluded success but $(grep -c '^pending$' <<<"${jobs}") testnet job conclusion(s) never finalised; taking the run's verdict for agent ${sha:0:7}"
+    else
+      echo "run ${id}: testnet job succeeded for agent ${sha:0:7}"
+    fi
+    return 0
   done < <(runs_for_sha)
   return 1
 }
@@ -117,7 +170,7 @@ cancel_superseded() {
     echo "::notice::cancelling superseded testnet run ${id} ([${DISPATCH_REASON}], not agent ${sha:0:7})"
     gh api -X POST "repos/${repo}/actions/runs/${id}/cancel" >/dev/null \
       || echo "::warning::could not cancel run ${id} (already finishing?)"
-  done < <(gh api "repos/${repo}/actions/workflows/testnet.yml/runs?event=workflow_dispatch&per_page=100" \
+  done < <(gh api --paginate "repos/${repo}/actions/workflows/testnet.yml/runs?event=workflow_dispatch&per_page=100" \
     --jq ".workflow_runs[]
           | select(.status == \"queued\" or .status == \"in_progress\" or .status == \"waiting\" or .status == \"pending\")
           | select(.display_title | contains(\"[${DISPATCH_REASON}]\"))
@@ -161,7 +214,7 @@ while :; do
         exit 0
       fi
     done
-    echo "::error::dispatched testnet run for agent ${sha:0:7} did not succeed — refusing to release. Investigate the testnet failure in ${repo} first." >&2
+    echo "::error::dispatched testnet run for agent ${sha:0:7} did not produce a green testnet job — refusing to release. Look for a run whose display title contains ${sha:0:7} in ${repo}: a failed testnet job is the usual cause, but a run that never appeared, was cancelled, or was gate-skipped reaches here too." >&2
     exit 1
   fi
   if (( $(date +%s) >= deadline )); then

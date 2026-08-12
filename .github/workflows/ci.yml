@@ -264,6 +264,14 @@ jobs:
         # `gh` exercises it without a token or a broken nightly (#215).
         run: bash scripts/ci/nightly-file-issue-test.sh
 
+      - name: testnet gate verdict self-test
+        # The gate decides whether an unverified client may be released,
+        # from the API of a repo this one cannot see. A stub `gh` builds
+        # the JSON the API would return and the gate's own --jq runs over
+        # it, so the verdict table is exercised without a token or a
+        # ~25-minute GCP testnet (#697).
+        run: bash scripts/ci/testnet-require-green-remote-test.sh
+
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
