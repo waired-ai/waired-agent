@@ -449,6 +449,62 @@ func (e wrappedErr) Unwrap() error { return e.target }
 // used elsewhere here.
 var _ = errors.Is
 
+// PRODUCT CONTRACT (waired-agent#589). /inference/status carries the
+// install-time memory measurement, so an operator can see what the
+// model-fit decisions on this host are based on and how old that is.
+//
+// The figure is NOT live — taken once per install, before the engine
+// starts — and reads exactly like something that is, which is why the
+// date travels with it.
+func TestInferenceStatus_CarriesTheInstallTimeMemoryMeasurement(t *testing.T) {
+	inf := &fakeInference{hwProfile: hardware.Profile{
+		RAMTotalGB:                      32,
+		RAMAvailableAtInstallGB:         22,
+		RAMAvailableAtInstallMeasuredAt: "2026-08-10T04:12:03Z",
+	}}
+	s := newServerWithInference(inf)
+
+	r := httptest.NewRequest(http.MethodGet, "/waired/v1/inference/status", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	var got InferenceStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.HostMemory == nil {
+		t.Fatal("host_memory is absent; nothing shows what the fit verdicts rest on")
+	}
+	if got.HostMemory.AvailableGB != 22 || got.HostMemory.TotalGB != 32 {
+		t.Errorf("host_memory = %+v, want 22 of 32", got.HostMemory)
+	}
+	if got.HostMemory.MeasuredAt != "2026-08-10T04:12:03Z" {
+		t.Errorf("measured_at = %q — an undated figure reads as live", got.HostMemory.MeasuredAt)
+	}
+}
+
+// Nothing measured means no claim: a zero would render as "0 GB
+// available", which is a statement about the host rather than about the
+// absence of a measurement.
+func TestInferenceStatus_OmitsAnUnmeasuredHostMemory(t *testing.T) {
+	inf := &fakeInference{hwProfile: hardware.Profile{RAMTotalGB: 32}}
+	s := newServerWithInference(inf)
+
+	r := httptest.NewRequest(http.MethodGet, "/waired/v1/inference/status", nil)
+	r.RemoteAddr = "127.0.0.1:1"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+
+	var got InferenceStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.HostMemory != nil {
+		t.Errorf("host_memory = %+v, want absent when nothing was measured", got.HostMemory)
+	}
+}
+
 // TestMapRouterStatus_AgreesWithServingSurfaces covers every router
 // sentinel the explain endpoint can be handed, not just the one that was
 // reported wrong (waired-agent#710).

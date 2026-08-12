@@ -90,13 +90,13 @@ func TestAgentProviderStatusPeersSorted(t *testing.T) {
 	prov := &agentProvider{
 		id:         &identity.Identity{DeviceID: "self", DeviceName: "self-node"},
 		reconciler: rec,
-		peerByName: map[string]*signer.NetworkMapPeer{},
+		peerByID:   map[string]*signer.NetworkMapPeer{},
 	}
 	for _, p := range peers {
 		rec.state[p.nodePub] = &peerPathState{currentPath: pathDirect}
 		nmPeer := signer.NetworkMapPeer{NodePublicKey: p.nodePub, DeviceID: p.deviceID, DeviceName: p.name}
 		rec.nm.Peers = append(rec.nm.Peers, nmPeer)
-		prov.peerByName[p.deviceID] = &rec.nm.Peers[len(rec.nm.Peers)-1]
+		prov.peerByID[p.deviceID] = &rec.nm.Peers[len(rec.nm.Peers)-1]
 	}
 
 	want := []string{"alpha-node", "beta-node", "dev_06", "linux-gpu", "mac-mini", "windows-desktop"}

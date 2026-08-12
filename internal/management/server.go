@@ -422,6 +422,40 @@ type HostSpeedController interface {
 	Remeasure(ctx context.Context) (started bool)
 }
 
+// HostMemoryController re-takes the install-time available-memory
+// measurement (waired-agent#568), the figure hostfit turns into the OS
+// deduction.
+//
+// It is taken once per install/upgrade, at daemon start and before the
+// engine bootstrap, so that a resident model is never charged against
+// the host that serves it. That is the whole design — but it also means
+// a host measured during a busy moment keeps that snapshot until the
+// next install, with deleting runtime/host-memory.json as the only way
+// out. Folklore is not a supported path, which is what #589 asks for.
+//
+// Remeasure reports what happened rather than just succeeding, because
+// the interesting answers are the refusals: an engine holding memory
+// right now would be measured INTO the figure, which is the exact
+// contamination the install-time rule exists to avoid.
+type HostMemoryController interface {
+	RemeasureHostMemory(ctx context.Context) HostMemoryRemeasure
+}
+
+// HostMemoryRemeasure is what a re-measure attempt did.
+type HostMemoryRemeasure struct {
+	// Measured is true when a fresh figure was taken and persisted.
+	Measured bool `json:"measured"`
+	// AvailableGB is the figure now in force — the fresh one when
+	// Measured, otherwise the record that was kept.
+	AvailableGB int `json:"available_gb,omitempty"`
+	// MeasuredAt dates AvailableGB, RFC3339. Empty when nothing has ever
+	// been measured on this host.
+	MeasuredAt string `json:"measured_at,omitempty"`
+	// Reason names why a measurement did NOT happen, in the operator's
+	// words. Empty when Measured is true.
+	Reason string `json:"reason,omitempty"`
+}
+
 type Server struct {
 	status              StatusProvider
 	pinger              Pinger
@@ -430,6 +464,7 @@ type Server struct {
 	infControl          InferenceController        // optional; nil disables /waired/v1/inference/{enable,disable}
 	engineControl       EngineController           // optional; nil disables /waired/v1/inference/engine/{stop,start}
 	hostSpeedControl    HostSpeedController        // optional; nil disables /waired/v1/inference/host-speed/remeasure
+	hostMemoryControl   HostMemoryController       // optional; nil disables /waired/v1/inference/memory/remeasure
 	shareControl        ShareController            // optional; nil disables /waired/v1/inference/share/{enable,disable}
 	publicShare         PublicShareController      // optional; nil disables /waired/v1/public/share{,/enable,/disable}
 	workerControl       WorkerController           // optional; nil disables /waired/v1/worker and worker_routing in /v1/inference/status
@@ -524,6 +559,15 @@ func (s *Server) WithHostSpeedControl(c HostSpeedController) *Server {
 	return s
 }
 
+// WithHostMemoryControl attaches a HostMemoryController so the server
+// exposes POST /waired/v1/inference/memory/remeasure — the supported way
+// to retake the install-time available-memory figure (waired-agent#589).
+// Pass nil to disable.
+func (s *Server) WithHostMemoryControl(c HostMemoryController) *Server {
+	s.hostMemoryControl = c
+	return s
+}
+
 // WithShareControl attaches a ShareController so the server exposes
 // POST /waired/v1/inference/share/enable and /waired/v1/inference/share/disable,
 // and surfaces share_with_mesh in /waired/v1/inference/status. Pass nil
@@ -613,6 +657,9 @@ func (s *Server) mux() *http.ServeMux {
 	}
 	if s.hostSpeedControl != nil {
 		mux.HandleFunc("/waired/v1/inference/host-speed/remeasure", s.handleHostSpeedRemeasure)
+	}
+	if s.hostMemoryControl != nil {
+		mux.HandleFunc("/waired/v1/inference/memory/remeasure", s.handleHostMemoryRemeasure)
 	}
 	mux.HandleFunc("/waired/v1/inference/share/enable", s.handleShareEnable)
 	mux.HandleFunc("/waired/v1/inference/share/disable", s.handleShareDisable)
@@ -834,6 +881,21 @@ func (s *Server) handleHostSpeedRemeasure(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, HostSpeedRemeasureResponse{
 		Started: s.hostSpeedControl.Remeasure(r.Context()),
 	})
+}
+
+func (s *Server) handleHostMemoryRemeasure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.hostMemoryControl == nil {
+		http.Error(w, "host-memory controller not configured", http.StatusNotFound)
+		return
+	}
+	// 200 even when nothing was measured: a refusal is a real answer
+	// about the host ("the engine is holding memory right now"), not a
+	// failure of the request, and the caller renders Reason either way.
+	writeJSON(w, http.StatusOK, s.hostMemoryControl.RemeasureHostMemory(r.Context()))
 }
 
 func (s *Server) handleEngineStop(w http.ResponseWriter, r *http.Request) {

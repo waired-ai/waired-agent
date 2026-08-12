@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -69,7 +70,9 @@ func runStatsPublisher(ctx context.Context, p management.StatusProvider, interva
 	// Fire the first stats sample immediately, then on every tick.
 	// The previous behaviour (first sample only after the first tick)
 	// added 5–10 s of needless latency to verify's "ready" signal.
-	emitStatsRecord(p.Status(), cl)
+	st := p.Status()
+	peers := logPeerSetChange(nil, st)
+	emitStatsRecord(st, cl)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -77,7 +80,9 @@ func runStatsPublisher(ctx context.Context, p management.StatusProvider, interva
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			emitStatsRecord(p.Status(), cl)
+			st := p.Status()
+			peers = logPeerSetChange(peers, st)
+			emitStatsRecord(st, cl)
 			// Keep the last test-scenario state fresh in Cloud Logging so
 			// the fallback runner's poll survives per-record ingest jitter
 			// under load (#592). No-op until a scenario has been reported
@@ -87,10 +92,66 @@ func runStatsPublisher(ctx context.Context, p management.StatusProvider, interva
 	}
 }
 
+// logPeerSetChange emits one INFO line when the set of peers changes,
+// and returns the set it saw so the next sample can be compared against
+// it. prev == nil means "first sample": there is nothing to have
+// changed, and the periodic record already carries peer_count.
+//
+// This is what INFO keeps now that the periodic record no longer carries
+// the peer list (#692). Membership only — a path switch is already
+// logged where it happens, by the reconciler, with the evidence for it.
+func logPeerSetChange(prev map[string]struct{}, st management.Status) map[string]struct{} {
+	cur := make(map[string]struct{}, len(st.Peers))
+	for _, p := range st.Peers {
+		cur[p.DeviceID] = struct{}{}
+	}
+	if prev == nil {
+		return cur
+	}
+	var joined, left []string
+	for id := range cur {
+		if _, ok := prev[id]; !ok {
+			joined = append(joined, id)
+		}
+	}
+	for id := range prev {
+		if _, ok := cur[id]; !ok {
+			left = append(left, id)
+		}
+	}
+	if len(joined) == 0 && len(left) == 0 {
+		return cur
+	}
+	// Sorted: these come out of map iteration, and a reader comparing two
+	// occurrences should not have to wonder whether the order meant
+	// something.
+	slices.Sort(joined)
+	slices.Sort(left)
+	slog.Info("waired_agent_peers_changed",
+		"peer_count", len(cur),
+		"joined", joined,
+		"left", left,
+	)
+	return cur
+}
+
 // emitStatsRecord writes a single agent-stats sample to slog and (if
 // configured) Cloud Logging. Broken out of runStatsPublisher so unit
 // tests can drive it without spinning the ticker. cl == nil is the
 // developer-machine path; the slog-only emit still runs.
+//
+// The INFO record deliberately does NOT carry st.Peers. At ~25 fields
+// per peer every 5 seconds it was ~890 KB/h on a two-peer host before
+// anything else logged anything, which set the floor on how far back any
+// log reached: macOS rotates at 1 MB and keeps five copies, so this
+// record alone turned the log over about every 70 minutes, and the
+// Windows agent log added in #636 inherited the same bound. The content
+// is also nearly static between ticks on a healthy host, and what a
+// reader wants from INFO is what changed (#692).
+//
+// The per-peer detail moves to DEBUG rather than disappearing, and the
+// Cloud Logging payload is untouched: the testnet harness reads that one
+// back with `gcloud logging read`, not the local log.
 func emitStatsRecord(st management.Status, cl *cloudLogger) {
 	slog.Info("waired_agent_stats",
 		"network_id", st.NetworkID,
@@ -110,6 +171,13 @@ func emitStatsRecord(st management.Status, cl *cloudLogger) {
 		"peer_count", st.PeerCount,
 		"phase", st.Phase,
 		"desired_phase", st.DesiredPhase,
+	)
+	// Off by default, and the whole point of the change above. A reader
+	// who needs the per-peer detail can also get it without restarting
+	// anything, from the management API or `waired status
+	// --observability`.
+	slog.Debug("waired_agent_stats_peers",
+		"peer_count", st.PeerCount,
 		"peers", st.Peers,
 	)
 	if cl != nil {
@@ -118,8 +186,10 @@ func emitStatsRecord(st management.Status, cl *cloudLogger) {
 }
 
 // statsIntervalFromEnv reads WAIRED_STATS_INTERVAL_S and returns the
-// publisher's tick interval. Falls back to the runStatsPublisher default
-// (10 s) when the env var is unset, empty, non-numeric, or non-positive.
+// publisher's tick interval. Returns 0 when the env var is unset, empty,
+// non-numeric, or non-positive, which runStatsPublisher reads as its own
+// default of 5 s. (This comment said 10 s until #692; the default has
+// been 5 s since the constant was written.)
 func statsIntervalFromEnv() time.Duration {
 	v := os.Getenv("WAIRED_STATS_INTERVAL_S")
 	if v == "" {

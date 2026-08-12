@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -254,4 +255,93 @@ func TestSetupPushKeepalive(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// PRODUCT CONTRACT (waired-agent#413). The two readers of engine
+// presence must not disagree about when the engine appeared.
+//
+// snapshot() probes the engine itself, on runPush's 2 s ticker. Apply
+// makes an independent probe and runs ONLY when a control-plane frame
+// arrives — nothing local schedules one when the binary lands on disk.
+// So the moment it appeared, snapshot() saw `installed` and moved the
+// engine rows to done, while Apply had not yet run its engine-appeared
+// edge: modelApplied / modelRejected still held the failure from the
+// engine-less attempt, and the model row reported that stale failure
+// until the next frame happened to arrive. The window is bounded by
+// control-plane frame cadence, which is not observable from this repo.
+//
+// Asserted through snapshot() with NO second Apply, because "a frame
+// arrived" is precisely the thing that must stop being required.
+func TestSetupEngineAppearedIsNoticedWithoutAControlPlaneFrame(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeSetupProvider{stateDir: t.TempDir()}
+	// Engine present, and applying the model is refused: this is how a
+	// rejection gets recorded at all. #307 made the engine-LESS case
+	// impossible (PullModel refuses outright), so the record that
+	// resurfaces is one taken while the engine was there — a reinstall,
+	// or a profiler cache that briefly reported it missing, which is the
+	// same come-and-go the edge exists for.
+	f.setEngine(true, false)
+	f.applyErr = errors.New("ollama pull: model refused")
+
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	// retryFrame, not desiredFrame: applying is gated on the instruction
+	// being one this daemon watched change (#308) or an explicit retry
+	// (#136). A first frame on a fresh reconciler is neither, so a plain
+	// desiredFrame would never reach setupApplyModel and nothing would be
+	// refused.
+	r.Apply(ctx, retryFrame("ollama", "qwen3.5-2b", 1))
+
+	if got := r.SetupState(ctx).ModelErrorDetail; got == "" {
+		t.Fatal("no refusal recorded — the precondition of this test did not happen")
+	}
+
+	// The engine goes away and comes back. NO control-plane frame
+	// arrives for either transition: only snapshot()'s own 2 s probe
+	// sees them, which is exactly the case Apply could not cover.
+	f.setEngine(false, false)
+	r.snapshot(ctx)
+
+	f.setEngine(true, false)
+	f.applyErr = nil
+	startsBefore := f.engineStartCount()
+
+	p := r.snapshot(ctx)
+
+	if got := stepByID(t, p, setupStepModelPull); got.Status == signer.SetupStatusFailed {
+		t.Errorf("model_pull is still %+v — the stale refusal outlived the engine reappearing", got)
+	}
+	if got := r.SetupState(ctx).ModelErrorDetail; got != "" {
+		t.Errorf("recorded refusal = %q, want it cleared by the engine-appeared edge", got)
+	}
+	// ...and the row is not merely repainted: the edge re-admits the
+	// model, which is what actually gets the download moving again.
+	if got := f.engineStartCount(); got <= startsBefore {
+		t.Errorf("engine starts = %d, was %d — the engine-appeared edge did not dispatch", got, startsBefore)
+	}
+}
+
+// The edge is keyed on the TRANSITION, not on every probe: a genuinely
+// failing download must not be re-queued in a loop by the 2 s ticker.
+func TestSetupEngineAppearedFiresOnceAcrossRepeatedSnapshots(t *testing.T) {
+	ctx := context.Background()
+	f := &fakeSetupProvider{stateDir: t.TempDir()}
+	f.setEngine(true, false)
+
+	r := newSetupReconciler(f, nil, "dev-1", nil, quietLogger())
+	r.Apply(ctx, desiredFrame("ollama", "qwen3.5-2b", 0))
+
+	f.setEngine(false, false)
+	r.snapshot(ctx)
+
+	f.setEngine(true, false)
+	r.snapshot(ctx)
+	afterEdge := f.engineStartCount()
+
+	for i := 0; i < 5; i++ {
+		r.snapshot(ctx)
+	}
+	if got := f.engineStartCount(); got != afterEdge {
+		t.Errorf("engine starts = %d after five more ticks, want %d — the edge re-fired", got, afterEdge)
+	}
 }
