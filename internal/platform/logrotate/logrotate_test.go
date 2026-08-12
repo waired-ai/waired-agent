@@ -14,9 +14,11 @@ import (
 // --- (GOOS, facts) -> plan -------------------------------------------------
 
 // TestAgentTargets pins the product contract that only darwin has log
-// files this package owns: systemd/journald and the Windows Event Log
-// bound their own streams, and neither hands the process a descriptor
-// onto a plain file that something else may rename (#331).
+// files Manage rotates: systemd/journald and the Windows Event Log bound
+// their own streams, and neither hands the process a descriptor onto a
+// plain file that something else may rename (#331). The Windows agent log
+// file is not one of these — the process opens it itself, so File bounds
+// it from the inside rather than Manage from the outside (#687).
 func TestAgentTargets(t *testing.T) {
 	for _, tc := range []struct {
 		goos string

@@ -156,9 +156,11 @@ func PolicyForLevel(lvl slog.Level) Policy {
 
 // AgentTargets returns the daemon's rotatable log files on goos, in the
 // (GOOS, facts) -> plan shape the repo's cross-OS parity rule asks for.
-// Only darwin has any: on Linux the systemd journal owns and bounds the
-// unit's stdout/stderr, and on Windows the service writes to the
-// Application Event Log (stderr is closed under the SCM).
+// Only darwin has any, because rotatable here means a descriptor this
+// process can re-point: on Linux the systemd journal owns and bounds the
+// unit's stdout/stderr, and on Windows stderr is closed under the SCM, so
+// the service writes to the Application Event Log and to the file it
+// opens itself (AgentOwnedLogFile) — neither of which is one.
 func AgentTargets(goos string) []Target {
 	if goos != "darwin" {
 		return nil

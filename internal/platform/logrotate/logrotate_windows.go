@@ -5,9 +5,17 @@ package logrotate
 // defaultOps returns a zero ops on Windows, which makes Manage return
 // without starting anything.
 //
-// Nothing to do: under the SCM the service's stderr is closed, so the
-// agent's high-severity records go to the Application Event Log through
-// internal/platform/logsink, and the Event Log is bounded by its own
-// retention policy. There is no plain log file this process holds a
-// descriptor to.
+// Nothing for this mechanism to do: it re-points a descriptor a service
+// manager opened, and under the SCM the service's stderr is closed, so
+// there is no such descriptor.
+//
+// The records still have somewhere to go, in two places neither of which
+// is rotated from here. Warn and above reach the Application Event Log
+// through internal/platform/logsink, bounded by the Event Log's own
+// retention policy. Info and Debug reach the file AgentOwnedLogFile
+// names: cmd/waired-agent opens it through OpenFile at startup and holds
+// it for the life of the process, and File keeps it within the same
+// Policy this package applies everywhere else (#687). That one is a
+// handle the writer owns outright rather than a descriptor it borrowed,
+// so it rotates itself from the inside.
 func defaultOps() ops { return ops{} }

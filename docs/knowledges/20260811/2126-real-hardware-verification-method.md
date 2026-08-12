@@ -50,15 +50,24 @@ VRAM / RSS を 6 秒間隔でトレースしながらこれを回すと、計測
 時間関係が取れる。docs/knowledges には書けない詳細だが、順序が固定である
 ことはこれで確定した。
 
-### 4. Windows ではエージェントの INFO ログがどこからも読めない
+### 4. Windows のエージェント INFO ログは Event Log ではなくファイルにある
 
-Event Log は WARN 以上しか受け取らず、`%ProgramData%\waired` にエージェント
-のログファイルは無い。`waired config log-level debug` は debug と答えるが
-書き出し先が無い。`waired logs` が集める INFO はエンジンログ由来。
+**（2026-08-12 訂正。当初の記述は下の「訂正」を参照）**
 
-結果として、**INFO 行の有無を確認する検証依頼は Windows では物理的に実行
-できない**。実際に「特定の INFO 行が出ないこと」の確認が 1 件不能になった。
-3 OS を揃える検証を設計するときは、Windows で INFO が読めない前提で組む。
+Event Log は WARN 以上しか受け取らない。これは今も変わらない。**エージェント
+自身の INFO / DEBUG は Event Log ではなくファイルに落ちる** — 場所を決めて
+いるのは `logrotate.AgentOwnedLogFile` で、既定では
+`C:\ProgramData\waired\logs\waired-agent.log`。プロセスが自分で開いて自分で
+サイズを抑えるファイルなので、サービスマネージャは関与しない
+（既定 32 MB × 10、`waired config log-level debug` の間は 128 MB × 10）。
+
+読み方は 3 つあり、どれも同じファイルを指す。`waired logs` / `waired doctor`
+／インストーラの完了行（`Diagnostics: waired doctor (logs: …)`）。実機では
+32 MB のこのファイルに INFO レコードが入っていることを確認済みで、その中には
+ファイル自身の存在を告げる `"agent log: writing to a rotating file"` も含まれる。
+
+したがって **INFO 行の有無を確認する検証は Windows でも実行できる**。3 OS を
+揃える検証を設計するとき、Windows だけ INFO を根拠から外す必要はない。
 
 ### 5. soft assert は「緑だから正しい」と「緑だが何も見ていない」を区別できない
 
@@ -98,10 +107,35 @@ leg は、これからランナーの速度で結果が決まる**。期待す�
 逆に、この 240 倍の開きは判定線（45 × 1.5 = 67.5 秒）の検証としては強い:
 **実機 3 台は誤発火せず、CI ランナーは正しく発火する**、が両側から取れる。
 
+## 訂正 (20260812)
+
+**§4 は執筆時点（2026-08-11）では正しかったが、翌 08-12 に無効になった。**
+当初はこう書いていた:
+
+> ### 4. Windows ではエージェントの INFO ログがどこからも読めない
+>
+> Event Log は WARN 以上しか受け取らず、`%ProgramData%\waired` にエージェント
+> のログファイルは無い。…**INFO 行の有無を確認する検証依頼は Windows では
+> 物理的に実行できない**。…3 OS を揃える検証を設計するときは、Windows で
+> INFO が読めない前提で組む。
+
+このノートの Refs が既に挙げていた #636 —「Windows では INFO / DEBUG の
+行き先が無い」— を #687 (`5b0ee49`) が塞ぎ、エージェントが自分で開いて自分で
+回転させるログファイルを Windows に与えた。したがって「書き出し先が無い」も
+「検証は物理的に実行できない」も、08-12 以降は成り立たない。§4 は現在の姿に
+書き換えてある。
+
+**この訂正が遅れたこと自体に代償があった。** 同じ falsehood が
+`internal/platform/logrotate/logrotate_windows.go` のコメントにも残っており、
+それを現行と読んだ結果、「Windows では 3 チェックポイントが取得不能」という
+誤った検証設計が一度組まれた。実機から反証されて判明した (#745)。
+
 ## Refs
 - https://github.com/waired-ai/waired-agent/issues/579
 - https://github.com/waired-ai/waired-agent/pull/643
 - https://github.com/waired-ai/waired-agent/issues/636
+- https://github.com/waired-ai/waired-agent/pull/687
 - https://github.com/waired-ai/waired-agent/issues/639
+- https://github.com/waired-ai/waired-agent/issues/745
 - https://github.com/waired-ai/waired/issues/1139
 - https://github.com/waired-ai/waired/issues/1140
