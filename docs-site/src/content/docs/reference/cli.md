@@ -432,7 +432,7 @@ waired update --check      # report only
 waired update --yes        # apply without the installer's confirmation
 waired update --edge       # switch to the latest main build
 waired update --stable     # switch back to stable
-waired update --force      # ignore the cached check result
+waired update --force      # re-resolve authoritatively (Linux: refreshes the package index; asks for sudo)
 waired update --notify on|off   # the app's pop-up update prompt
 ```
 

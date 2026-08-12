@@ -3,8 +3,10 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/update"
 )
 
 func TestFormatUpdateSummary(t *testing.T) {
@@ -14,7 +16,7 @@ func TestFormatUpdateSummary(t *testing.T) {
 			CurrentVersion: "1.2.3",
 			LatestVersion:  "1.4.0",
 			Available:      true,
-		})
+		}, true)
 		if !strings.Contains(s, "1.2.3") || !strings.Contains(s, "1.4.0") {
 			t.Errorf("summary missing versions: %q", s)
 		}
@@ -24,7 +26,7 @@ func TestFormatUpdateSummary(t *testing.T) {
 			Phase:          management.UpdatePhaseError,
 			CurrentVersion: "1.2.3",
 			Error:          "github unreachable",
-		})
+		}, true)
 		if !strings.Contains(s, "github unreachable") {
 			t.Errorf("summary missing error: %q", s)
 		}
@@ -33,11 +35,166 @@ func TestFormatUpdateSummary(t *testing.T) {
 		}
 	})
 	t.Run("unknown versions render a placeholder", func(t *testing.T) {
-		s := formatUpdateSummary(&management.UpdateStatus{Phase: management.UpdatePhaseIdle})
+		s := formatUpdateSummary(&management.UpdateStatus{Phase: management.UpdatePhaseIdle}, true)
 		if !strings.Contains(s, "(unknown)") {
 			t.Errorf("expected placeholder for empty versions: %q", s)
 		}
 	})
+	// full=false is what keeps the installer's authoritative verdict from
+	// being contradicted by the line above it (#726).
+	t.Run("not full prints only the current version", func(t *testing.T) {
+		s := formatUpdateSummary(&management.UpdateStatus{
+			Phase:            management.UpdatePhaseIdle,
+			CurrentVersion:   "1.2.3",
+			LatestVersion:    "1.2.3",
+			LatestSource:     update.SourceAPT,
+			IndexRefreshedAt: time.Now().Add(-72 * time.Hour).Format(time.RFC3339),
+		}, false)
+		if !strings.Contains(s, "1.2.3") {
+			t.Errorf("summary missing current version: %q", s)
+		}
+		if strings.Contains(s, "Latest version") || strings.Contains(s, "Package index") {
+			t.Errorf("non-full summary must not answer 'latest': %q", s)
+		}
+	})
+}
+
+func TestPackageIndexLine(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) string { return now.Add(-d).Format(time.RFC3339) }
+
+	t.Run("fresh index states its age without a caution", func(t *testing.T) {
+		got := packageIndexLine(&management.UpdateStatus{
+			LatestSource: update.SourceAPT, IndexRefreshedAt: at(3 * time.Hour),
+		}, now)
+		if !strings.Contains(got, "3 hours ago") {
+			t.Errorf("line = %q, want the age", got)
+		}
+		if strings.Contains(got, "may already be published") {
+			t.Errorf("fresh index must not carry the caution: %q", got)
+		}
+	})
+
+	// The case that cost a verification round: the index was days old and
+	// the answer looked like a verdict.
+	t.Run("stale index carries the caution and the remedy", func(t *testing.T) {
+		got := packageIndexLine(&management.UpdateStatus{
+			LatestSource: update.SourceAPT, IndexRefreshedAt: at(72 * time.Hour),
+		}, now)
+		if !strings.Contains(got, "3 days ago") {
+			t.Errorf("line = %q, want the age in days", got)
+		}
+		if !strings.Contains(got, "may already be published") {
+			t.Errorf("stale index must say so: %q", got)
+		}
+		if !strings.Contains(got, "--check --force") {
+			t.Errorf("caution must name the way out: %q", got)
+		}
+	})
+
+	t.Run("a live answer has no index to age", func(t *testing.T) {
+		if got := packageIndexLine(&management.UpdateStatus{
+			LatestSource: update.SourceGitHub, IndexRefreshedAt: at(72 * time.Hour),
+		}, now); got != "" {
+			t.Errorf("line = %q, want empty for a live source", got)
+		}
+	})
+
+	t.Run("no line when the instant is missing or unparseable", func(t *testing.T) {
+		if got := packageIndexLine(&management.UpdateStatus{LatestSource: update.SourceAPT}, now); got != "" {
+			t.Errorf("line = %q, want empty", got)
+		}
+		if got := packageIndexLine(&management.UpdateStatus{
+			LatestSource: update.SourceAPT, IndexRefreshedAt: "not a timestamp",
+		}, now); got != "" {
+			t.Errorf("line = %q, want empty", got)
+		}
+	})
+
+	// A legacy daemon sends neither field; the CLI must degrade to the old
+	// two-line summary rather than print a half-formed third line.
+	t.Run("legacy daemon", func(t *testing.T) {
+		if got := packageIndexLine(&management.UpdateStatus{LatestVersion: "1.2.3"}, now); got != "" {
+			t.Errorf("line = %q, want empty", got)
+		}
+	})
+}
+
+func TestHumanIndexAge(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{-5 * time.Minute, "just now"}, // clock skew
+		{30 * time.Minute, "less than an hour ago"},
+		{90 * time.Minute, "1 hour ago"},
+		{5 * time.Hour, "5 hours ago"},
+		{47 * time.Hour, "47 hours ago"},
+		{50 * time.Hour, "2 days ago"},
+		{72 * time.Hour, "3 days ago"},
+		{10 * 24 * time.Hour, "10 days ago"},
+	} {
+		if got := humanIndexAge(tc.d); got != tc.want {
+			t.Errorf("humanIndexAge(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+func TestCheckRoute(t *testing.T) {
+	apt := func() *management.UpdateStatus {
+		return &management.UpdateStatus{Phase: management.UpdatePhaseIdle, LatestSource: update.SourceAPT}
+	}
+	live := func() *management.UpdateStatus {
+		return &management.UpdateStatus{Phase: management.UpdatePhaseIdle, LatestSource: update.SourceGitHub}
+	}
+	errored := &management.UpdateStatus{Phase: management.UpdatePhaseError}
+
+	for _, tc := range []struct {
+		name                    string
+		st                      *management.UpdateStatus
+		requested, host, goos   string
+		force, tty              bool
+		wantInstaller, wantNote bool
+	}{
+		// The daemon's answer stands.
+		{"stable linux host, no force", apt(), "", "stable", "linux", false, true, false, false},
+		{"stable macos host, no force", live(), "", "stable", "darwin", false, true, false, false},
+
+		// Reasons to leave the daemon that predate #726.
+		{"explicit channel", apt(), "edge", "stable", "linux", false, true, true, false},
+		{"edge host", apt(), "", "edge", "linux", false, true, true, false},
+		{"daemon down", nil, "", "stable", "linux", false, true, true, false},
+		{"daemon errored", errored, "", "stable", "linux", false, true, true, false},
+
+		// #726: --force means "re-resolve authoritatively". On Linux only
+		// the installer can refresh the package index.
+		{"force on linux with an apt answer", apt(), "", "stable", "linux", true, true, true, false},
+		{"force on macos stays with the live daemon answer", live(), "", "stable", "darwin", true, true, false, false},
+		{"force on windows stays with the live daemon answer", live(), "", "stable", "windows", true, true, false, false},
+		// A non-apt Linux host (the GitHub fallback) has no index either.
+		{"force on a non-apt linux host", live(), "", "stable", "linux", true, true, false, false},
+
+		// No terminal: sudo has nothing to prompt on, so the installer
+		// would fail rather than answer. Degrade and say why.
+		{"force without a tty", apt(), "", "stable", "linux", true, false, false, true},
+		{"edge host without a tty", apt(), "", "edge", "linux", false, false, false, true},
+		{"explicit channel without a tty", apt(), "edge", "stable", "linux", false, false, false, true},
+		// …unless there is no daemon answer to degrade to: then the
+		// installer's own failure is more use than silence.
+		{"daemon down without a tty still tries", nil, "", "stable", "linux", false, false, true, false},
+		// Only Linux needs root for the check.
+		{"macos without a tty is unaffected", live(), "edge", "stable", "darwin", false, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotInstaller, gotNote := checkRoute(tc.st, tc.requested, tc.host, tc.goos, tc.force, tc.tty)
+			if gotInstaller != tc.wantInstaller {
+				t.Errorf("useInstaller = %v, want %v", gotInstaller, tc.wantInstaller)
+			}
+			if (gotNote != "") != tc.wantNote {
+				t.Errorf("note = %q, want a note: %v", gotNote, tc.wantNote)
+			}
+		})
+	}
 }
 
 func TestRequestedChannel(t *testing.T) {

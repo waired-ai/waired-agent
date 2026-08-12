@@ -72,7 +72,7 @@ func newUpdateCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&checkOnly, "check", false, "report whether an update is available; do not apply")
 	cmd.Flags().BoolVar(&yes, "yes", false, "skip the installer's interactive confirmation (apply non-interactively)")
-	cmd.Flags().BoolVar(&force, "force", false, "bypass the daemon's cached check result")
+	cmd.Flags().BoolVar(&force, "force", false, "re-resolve from the authoritative source, not the daemon's cached result (Linux: refreshes the package index, so it asks for sudo)")
 	cmd.Flags().BoolVar(&edge, "edge", false, "update on the edge channel (latest main build); switches an existing install to edge")
 	cmd.Flags().BoolVar(&stable, "stable", false, "update on the stable channel; switches an existing install to stable")
 	cmd.Flags().StringVar(&notify, "notify", "", "enable/disable the tray's proactive update prompt: on|off (sets the preference; no check/apply)")
@@ -125,20 +125,26 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 	// Ask the daemon (cheap, cached). nil => daemon down or an older daemon
 	// without the route; we fall back to the installer's own check.
 	st := daemonUpdateCheck(gf.Mgmt, *force)
-	if st != nil {
-		fmt.Print(formatUpdateSummary(st))
-	}
 
 	if *checkOnly {
-		// The daemon's cached answer reflects the host's *current* apt suite, so
-		// it can't report a channel the caller explicitly asked about, and it
-		// can't rank edge builds. For an explicit --edge/--stable, or an edge
-		// host, run the installer's channel-aware check instead; otherwise the
-		// daemon answer is enough (and needs no elevation).
-		if requested == "" && host != "edge" && st != nil && st.Phase != management.UpdatePhaseError {
+		useInstaller, note := checkRoute(st, requested, host, runtime.GOOS, *force, isTerminal(os.Stdin))
+		if st != nil {
+			// Only the current version when the installer is about to print
+			// the authoritative verdict: two "latest" numbers that disagree
+			// are worse than one (#726).
+			fmt.Print(formatUpdateSummary(st, !useInstaller))
+		}
+		if note != "" {
+			fmt.Println(note)
+		}
+		if !useInstaller {
 			return nil
 		}
 		return runInstaller("", true, false, installerArg, host)
+	}
+
+	if st != nil {
+		fmt.Print(formatUpdateSummary(st, true))
 	}
 
 	// Apply path.
@@ -156,6 +162,48 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 		target = st.LatestVersion
 	}
 	return runInstaller(target, false, *yes, installerArg, host)
+}
+
+// indexNoTerminalNote explains why `--check --force` did not do what its
+// name says. Refreshing the package index runs `apt-get update` inside the
+// installer, which needs root; without a terminal sudo has nothing to
+// prompt on, so the run would fail instead of answering. A scripted check
+// that reports an old answer honestly beats one that exits non-zero.
+const indexNoTerminalNote = "Could not refresh the package index: that needs sudo, and there is no terminal to ask on. The answer above is only as current as the index."
+
+// checkRoute decides how `waired update --check` answers. useInstaller
+// selects the installer's own channel-aware check, whose verdict supersedes
+// the daemon's; note is a line to print when the daemon's answer has to
+// stand for a reason the reader would otherwise have to guess.
+//
+// Pure, so the table is exercised without a daemon, an installer, or a
+// 25-minute round trip to a real host. The four reasons to leave the daemon:
+//
+//   - no usable daemon answer — the installer is the only check left.
+//   - an explicit --edge/--stable names a channel the daemon cannot report:
+//     its answer always reflects the suite this host currently tracks.
+//   - an edge host's answer cannot be ranked at all — isDevVersion in
+//     internal/update never flags an edge build as an update.
+//   - --force means "re-resolve from the authoritative source". On Linux
+//     that source is the package index, and only the installer can refresh
+//     it (waired-agent#726). Everywhere else the daemon already queries the
+//     feed live, so bypassing its result cache is the whole of --force.
+func checkRoute(st *management.UpdateStatus, requested, host, goos string, force, tty bool) (useInstaller bool, note string) {
+	daemonUnusable := st == nil || st.Phase == management.UpdatePhaseError
+	want := daemonUnusable || requested != "" || host == "edge"
+	if !want && force && goos == "linux" && st.LatestSource == update.SourceAPT {
+		want = true
+	}
+	if !want {
+		return false, ""
+	}
+	// On Linux every installer check refreshes the package index first, so
+	// it needs root. With no terminal and a usable daemon answer, degrade to
+	// that answer and say why rather than failing the command.
+	if goos == "linux" && !tty && !daemonUnusable {
+		return false, indexNoTerminalNote
+	}
+	return true, ""
 }
 
 // shouldStopUpToDate reports whether the apply path should short-circuit with
@@ -275,15 +323,70 @@ func daemonUpdateCheck(mgmtURL string, force bool) *management.UpdateStatus {
 	return &st
 }
 
-func formatUpdateSummary(st *management.UpdateStatus) string {
+// formatUpdateSummary renders the daemon's answer. full=false prints the
+// current version only — see the call site in runUpdateBody.
+func formatUpdateSummary(st *management.UpdateStatus, full bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Current version: %s\n", orDash(st.CurrentVersion))
 	if st.Phase == management.UpdatePhaseError {
 		fmt.Fprintf(&b, "Update check failed: %s\n", st.Error)
 		return b.String()
 	}
+	if !full {
+		return b.String()
+	}
 	fmt.Fprintf(&b, "Latest version:  %s\n", orDash(st.LatestVersion))
+	b.WriteString(packageIndexLine(st, time.Now()))
 	return b.String()
+}
+
+// indexStaleAfter is how old the package index may be before the summary
+// says outright that the answer may be behind. Under it the age is still
+// printed — the reader should never have to guess what a "latest" number is
+// based on — but without the caution: a daily-ish refresh is what a healthy
+// apt host looks like, and a warning on every check is a warning nobody
+// reads.
+const indexStaleAfter = 24 * time.Hour
+
+// packageIndexLine renders the "Package index:" line for an answer read
+// from the local package index, or "" for anything else — a live GitHub
+// answer has no local index to age, and an unknown instant does not earn a
+// line that says nothing. now is a parameter so the rendering is testable.
+func packageIndexLine(st *management.UpdateStatus, now time.Time) string {
+	if st.LatestSource != update.SourceAPT || st.IndexRefreshedAt == "" {
+		return ""
+	}
+	at, err := time.Parse(time.RFC3339, st.IndexRefreshedAt)
+	if err != nil {
+		return ""
+	}
+	age := now.Sub(at)
+	line := "Package index:   refreshed " + humanIndexAge(age)
+	if age >= indexStaleAfter {
+		line += " — a newer build may already be published; `waired update --check --force` refreshes it"
+	}
+	return line + "\n"
+}
+
+// humanIndexAge renders an index age at the granularity a reader acts on:
+// days once there are any, hours below that. (The tray's humanAge is
+// minutes-only — right for a fallback event a moment ago, useless for an
+// index last touched last week.)
+func humanIndexAge(d time.Duration) string {
+	switch {
+	case d < 0:
+		return "just now" // clock skew; "-3h ago" helps nobody
+	case d < time.Hour:
+		return "less than an hour ago"
+	case d < 2*time.Hour:
+		return "1 hour ago"
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%d hours ago", int(d/time.Hour))
+	case d < 72*time.Hour:
+		return "2 days ago"
+	default:
+		return fmt.Sprintf("%d days ago", int(d/(24*time.Hour)))
+	}
 }
 
 func orDash(s string) string {

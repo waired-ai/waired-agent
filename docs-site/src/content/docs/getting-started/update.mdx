@@ -31,6 +31,27 @@ That checks, shows what it found, and asks before applying.
 | `waired update` | Check, then apply if a newer version exists |
 | `waired update --check` | Report only — changes nothing |
 | `waired update --yes` | Apply without asking (for scripts and servers) |
+| `waired update --force` | Ask the source again instead of reusing a cached answer |
+
+## How current is "latest"? (Linux)
+
+On Linux the check reads the package index this computer downloaded earlier,
+so `waired update --check` prints when that was:
+
+```
+Package index:   refreshed 3 hours ago
+```
+
+Once the index is more than a day old the line says so, because a newer build
+may already be published that this computer has not heard about yet. Adding
+`--force` refreshes the index first — that needs root, so it asks for sudo:
+
+```sh
+waired update --check --force
+```
+
+macOS and Windows ask the release feed directly, so their answer is already
+current and `--force` only skips the cached one.
 
 ## What an update keeps
 

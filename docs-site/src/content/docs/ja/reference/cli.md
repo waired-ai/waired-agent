@@ -419,7 +419,7 @@ waired update --check      # 確認のみ
 waired update --yes        # インストーラの確認を省いて適用
 waired update --edge       # 最新の main ビルドへ切り替え
 waired update --stable     # stable へ戻す
-waired update --force      # キャッシュされた確認結果を無視
+waired update --force      # キャッシュではなく取得元から確認し直す（Linux: パッケージインデックスを更新するため sudo を求める）
 waired update --notify on|off   # アプリのアップデート通知ポップアップ
 ```
 

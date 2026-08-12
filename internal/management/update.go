@@ -38,6 +38,16 @@ type UpdateStatus struct {
 	ApplyMethod    string      `json:"apply_method,omitempty"`
 	CheckedAt      string      `json:"checked_at,omitempty"` // RFC3339; "" if never checked
 	Error          string      `json:"error,omitempty"`
+	// LatestSource names where LatestVersion came from: "apt" (this host's
+	// local package index) or "github" (a live query). CheckedAt says when
+	// the daemon looked; this says whether looking could have seen anything
+	// new (waired-agent#726).
+	LatestSource string `json:"latest_source,omitempty"`
+	// IndexRefreshedAt is when the package index behind an "apt" answer was
+	// last downloaded (RFC3339); "" when unknown or not applicable. An "apt"
+	// answer is only as current as this instant — refreshing the index needs
+	// root, which the daemon does not have.
+	IndexRefreshedAt string `json:"index_refreshed_at,omitempty"`
 	// NotifyEnabled is the operator's "prompt me when an update is
 	// available" preference (#294), persisted daemon-side. Deliberately
 	// NOT omitempty: a false value must reach the tray so it can suppress

@@ -31,6 +31,27 @@ waired update
 | `waired update` | 確認して、新しければ適用 |
 | `waired update --check` | 確認のみ（何も変更しない） |
 | `waired update --yes` | 確認なしで適用（スクリプトやサーバー向け） |
+| `waired update --force` | キャッシュされた答えを使わず、取得元に聞き直す |
+
+## 「最新」はいつ時点のものか（Linux）
+
+Linux では、このパソコンが以前ダウンロードしたパッケージインデックスを読んで確認します。
+そのため `waired update --check` は、それがいつのものかを表示します。
+
+```
+Package index:   refreshed 3 hours ago
+```
+
+インデックスが 1 日より古くなると、その旨も併せて表示します。このパソコンがまだ知らない
+新しいビルドが、すでに公開されている可能性があるからです。`--force` を付けると先に
+インデックスを更新します。更新には root が必要なので sudo を求めます。
+
+```sh
+waired update --check --force
+```
+
+macOS と Windows はリリースフィードに直接問い合わせるため、答えは常に最新です。
+`--force` はキャッシュされた答えを飛ばすだけです。
 
 ## 更新で保持されるもの
 

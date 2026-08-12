@@ -31,6 +31,15 @@ import (
 // repository whose GitHub Releases feed the version check.
 const defaultInstallRepo = "waired-ai/waired-agent"
 
+// Where a resolved Latest came from. The distinction matters because only
+// one of the two is current as of the check: SourceGitHub queries the feed
+// live, while SourceAPT reads an index this host downloaded at some earlier
+// point and cannot refresh unprivileged (waired-agent#726).
+const (
+	SourceAPT    = "apt"
+	SourceGitHub = "github"
+)
+
 // Result is the outcome of a version check.
 type Result struct {
 	// Available is true when Latest is a strictly newer real release than
@@ -40,10 +49,16 @@ type Result struct {
 	Current string
 	// Latest is the resolved latest published version, or "" if unresolved.
 	Latest string
+	// LatestSource is SourceAPT or SourceGitHub; "" when unresolved.
+	LatestSource string
+	// IndexRefreshedAt is when the package index behind a SourceAPT answer
+	// was last downloaded — i.e. how current that answer actually is. Zero
+	// when unknown or not applicable (SourceGitHub is live by definition).
+	IndexRefreshedAt time.Time
 }
 
 // Resolver resolves the latest published version. The GOOS-specific
-// LatestVersion implementation is selected at build time (resolve_linux.go
+// resolveLatest implementation is selected at build time (resolve_linux.go
 // vs resolve_other.go). Every external dependency is injectable so tests run
 // without real network or apt.
 type Resolver struct {
@@ -58,17 +73,19 @@ type Resolver struct {
 	// runCommand runs an external command and returns its stdout; nil =>
 	// exec.CommandContext. Injected by tests (Linux apt path).
 	runCommand func(ctx context.Context, name string, args ...string) (string, error)
+	// aptRoot is the filesystem root the apt files are read under (Linux
+	// only); "" => "/". Injected by tests so the index-freshness read runs
+	// against a fixture tree instead of the host's real /etc and /var.
+	aptRoot string
 }
 
 // Check resolves the latest version and compares it against current.
 func (r *Resolver) Check(ctx context.Context, current string) (Result, error) {
 	res := Result{Current: current}
-	latest, err := r.LatestVersion(ctx)
-	if err != nil {
+	if err := r.resolveLatest(ctx, &res); err != nil {
 		return res, err
 	}
-	res.Latest = latest
-	res.Available = available(current, latest)
+	res.Available = available(current, res.Latest)
 	return res, nil
 }
 

@@ -115,6 +115,10 @@ func (c *updateController) Check(ctx context.Context, req management.UpdateCheck
 	}
 	st.LatestVersion = res.Latest
 	st.Available = res.Available
+	st.LatestSource = res.LatestSource
+	if !res.IndexRefreshedAt.IsZero() {
+		st.IndexRefreshedAt = res.IndexRefreshedAt.UTC().Format(time.RFC3339)
+	}
 	if res.Available {
 		st.Phase = management.UpdatePhaseAvailable
 	} else {
