@@ -448,3 +448,75 @@ func (e wrappedErr) Unwrap() error { return e.target }
 // unused so the test file compiles cleanly even if errors.Is isn't
 // used elsewhere here.
 var _ = errors.Is
+
+// TestMapRouterStatus_AgreesWithServingSurfaces covers every router
+// sentinel the explain endpoint can be handed, not just the one that was
+// reported wrong (waired-agent#710).
+//
+// The `gateway` column is what internal/gateway's selectionStatus returns
+// for the same error, pinned there by the tests in
+// internal/gateway/selection_error_test.go. It is written down rather
+// than called because the two functions are unexported in different
+// packages; the point of recording it is that a row where the two columns
+// differ has to carry a reason, and only two do.
+//
+// A sentinel added to router without a row here lands in `default` and
+// answers 500 — which is how ErrAllPeersOverloaded became this bug.
+func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		want    int
+		gateway int
+		why     string // non-empty only where the two deliberately differ
+	}{
+		{name: "model not found", err: router.ErrModelNotFound, want: 404, gateway: 404},
+		{name: "model not ready", err: router.ErrModelNotReady, want: 503, gateway: 503},
+		{name: "runtime not installed", err: router.ErrRuntimeNotInstalled, want: 503, gateway: 503},
+		{name: "all peers overloaded", err: router.ErrAllPeersOverloaded, want: 503, gateway: 503},
+		{name: "peers did not answer", err: router.ErrPeersDidNotAnswer, want: 503, gateway: 503},
+		{name: "pinned peer unreachable", err: router.ErrPinnedPeerUnreachable, want: 503, gateway: 503},
+		{
+			name: "pinned peer unreachable, wrapped with the peer identity",
+			err:  &router.PinnedPeerUnreachableError{PeerDisplayID: "workshop-mac"},
+			want: 503, gateway: 503,
+		},
+		{
+			name: "capability not met", err: router.ErrCapabilityNotMet, want: 422, gateway: 400,
+			why: "422 is the more precise reading here; the gateway keeps 400 for OpenAI/Anthropic wire compatibility",
+		},
+		{
+			name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: 422, gateway: 400,
+			why: "same reason as capability not met",
+		},
+		{
+			name: "no endpoint for window", err: router.ErrNoEndpointForWindow, want: 500, gateway: 500,
+			why: "record of today's behaviour on both sides, not a considered choice",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.want != tc.gateway && tc.why == "" {
+				t.Fatalf("row diverges from the gateway (%d vs %d) with no reason recorded", tc.want, tc.gateway)
+			}
+			// Through the real handler, not mapRouterStatus alone: the
+			// status an operator sees is the one the endpoint writes.
+			inf := &fakeInference{selectErr: wrapErr(tc.err, "select failed")}
+			s := newServerWithInference(inf)
+			r := httptest.NewRequest(http.MethodPost, "/waired/v1/inference/select", bytes.NewBufferString(`{"model":"x"}`))
+			r.RemoteAddr = "127.0.0.1:1"
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != tc.want {
+				t.Errorf("status = %d, want %d", w.Code, tc.want)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body["error_code"] != "selection_failed" {
+				t.Errorf("error_code = %q, want selection_failed", body["error_code"])
+			}
+		})
+	}
+}
