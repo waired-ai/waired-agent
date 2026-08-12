@@ -127,7 +127,7 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 	st := daemonUpdateCheck(gf.Mgmt, *force)
 
 	if *checkOnly {
-		useInstaller, note := checkRoute(st, requested, host, runtime.GOOS, *force, isTerminal(os.Stdin))
+		useInstaller, note := checkRoute(st, requested, host, runtime.GOOS, *force, canElevateForCheck())
 		if st != nil {
 			// Only the current version when the installer is about to print
 			// the authoritative verdict: two "latest" numbers that disagree
@@ -171,6 +171,34 @@ func runUpdateBody(mgmt string, checkOnlyVal, yesVal, forceVal bool, notifyVal, 
 // that reports an old answer honestly beats one that exits non-zero.
 const indexNoTerminalNote = "Could not refresh the package index: that needs sudo, and there is no terminal to ask on. The answer above is only as current as the index."
 
+// canElevateForCheck reports whether the installer's check can reach root
+// without a prompt nothing is there to answer.
+//
+// A terminal is one way in, not the only one — already being root and sudo
+// configured NOPASSWD both work without one — so gating on the TTY alone
+// would refuse a refresh to precisely the hosts that automate this. Ask
+// sudo instead of assuming: `sudo -n` never prompts, it fails, which is
+// the answer we want.
+//
+// Asking from THIS process is what makes the answer faithful. Without a
+// TTY sudo keys its timestamp to the parent process, so a ticket warmed by
+// some earlier `sudo -v` in the calling script does not carry into the
+// installer we would spawn. Verified on Ubuntu 26.04: with a warm ticket,
+// `sudo -n true` succeeds from the calling shell and fails from a child
+// process ("interactive authentication is required") — and the installer
+// run really does fail there too. The probe agreeing with the installer is
+// the point; a check run in the wrong process would answer for the wrong
+// one.
+func canElevateForCheck() bool {
+	if runtime.GOOS != "linux" {
+		return true // only the Linux check needs root at all
+	}
+	if os.Geteuid() == 0 || isTerminal(os.Stdin) {
+		return true
+	}
+	return exec.Command("sudo", "-n", "true").Run() == nil
+}
+
 // checkRoute decides how `waired update --check` answers. useInstaller
 // selects the installer's own channel-aware check, whose verdict supersedes
 // the daemon's; note is a line to print when the daemon's answer has to
@@ -188,7 +216,7 @@ const indexNoTerminalNote = "Could not refresh the package index: that needs sud
 //     that source is the package index, and only the installer can refresh
 //     it (waired-agent#726). Everywhere else the daemon already queries the
 //     feed live, so bypassing its result cache is the whole of --force.
-func checkRoute(st *management.UpdateStatus, requested, host, goos string, force, tty bool) (useInstaller bool, note string) {
+func checkRoute(st *management.UpdateStatus, requested, host, goos string, force, canElevate bool) (useInstaller bool, note string) {
 	daemonUnusable := st == nil || st.Phase == management.UpdatePhaseError
 	want := daemonUnusable || requested != "" || host == "edge"
 	// Anything but a known-live answer counts: a daemon that predates this
@@ -204,9 +232,11 @@ func checkRoute(st *management.UpdateStatus, requested, host, goos string, force
 		return false, ""
 	}
 	// On Linux every installer check refreshes the package index first, so
-	// it needs root. With no terminal and a usable daemon answer, degrade to
-	// that answer and say why rather than failing the command.
-	if goos == "linux" && !tty && !daemonUnusable {
+	// it needs root. When root is out of reach and there is a usable daemon
+	// answer, degrade to that answer and say why rather than failing the
+	// command. With no daemon answer there is nothing to degrade TO, so let
+	// the installer run and report its own failure.
+	if goos == "linux" && !canElevate && !daemonUnusable {
 		return false, indexNoTerminalNote
 	}
 	return true, ""

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,46 @@ func TestPackageIndexLine(t *testing.T) {
 	})
 }
 
+// The daemon and the CLI are separate processes joined only by this JSON,
+// so the two new fields have to survive the wire before the summary can
+// render them. `--mgmt` cannot be pointed at a stub (writes are routed to
+// the daemon's unix socket regardless), which makes this round trip the
+// only place the tags are actually exercised.
+func TestUpdateStatusWireCarriesIndexFreshness(t *testing.T) {
+	wire := `{"phase":"idle","available":false,` +
+		`"current_version":"0.0.2~edge.20260811161329+2f423b6",` +
+		`"latest_version":"0.0.2~edge.20260811161329+2f423b6",` +
+		`"checked_at":"2026-08-12T11:43:09Z","notify_enabled":true,` +
+		`"latest_source":"apt","index_refreshed_at":"2026-08-09T08:43:09Z"}`
+
+	var st management.UpdateStatus
+	if err := json.Unmarshal([]byte(wire), &st); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if st.LatestSource != update.SourceAPT {
+		t.Errorf("LatestSource = %q, want %q — check the json tag", st.LatestSource, update.SourceAPT)
+	}
+	now := time.Date(2026, 8, 12, 11, 43, 9, 0, time.UTC) // 3 days after the index
+	got := packageIndexLine(&st, now)
+	if !strings.Contains(got, "3 days ago") || !strings.Contains(got, "--check --force") {
+		t.Errorf("rendered line = %q, want the age and the remedy", got)
+	}
+
+	// A daemon from before this change sends neither field. The CLI must
+	// fall back to the old two-line summary, not print a broken third line.
+	var legacy management.UpdateStatus
+	if err := json.Unmarshal([]byte(`{"phase":"idle","current_version":"1.2.3","latest_version":"1.2.3"}`), &legacy); err != nil {
+		t.Fatalf("decode legacy: %v", err)
+	}
+	s := formatUpdateSummary(&legacy, true)
+	if strings.Contains(s, "Package index") {
+		t.Errorf("legacy daemon must not produce an index line: %q", s)
+	}
+	if !strings.Contains(s, "Latest version") {
+		t.Errorf("legacy daemon must still get the latest line: %q", s)
+	}
+}
+
 func TestHumanIndexAge(t *testing.T) {
 	for _, tc := range []struct {
 		d    time.Duration
@@ -153,7 +194,7 @@ func TestCheckRoute(t *testing.T) {
 		name                    string
 		st                      *management.UpdateStatus
 		requested, host, goos   string
-		force, tty              bool
+		force, canElevate       bool
 		wantInstaller, wantNote bool
 	}{
 		// The daemon's answer stands.
@@ -179,19 +220,21 @@ func TestCheckRoute(t *testing.T) {
 		// mixed-version window this has to work in.
 		{"force against a legacy daemon", &management.UpdateStatus{Phase: management.UpdatePhaseIdle}, "", "stable", "linux", true, true, true, false},
 
-		// No terminal: sudo has nothing to prompt on, so the installer
-		// would fail rather than answer. Degrade and say why.
-		{"force without a tty", apt(), "", "stable", "linux", true, false, false, true},
-		{"edge host without a tty", apt(), "", "edge", "linux", false, false, false, true},
-		{"explicit channel without a tty", apt(), "edge", "stable", "linux", false, false, false, true},
+		// Root out of reach: sudo has nothing to prompt on, so the
+		// installer would fail rather than answer. Degrade and say why.
+		// Reproduced on hardware: the old CLI exits 1 here with
+		// "sudo: A terminal is required to authenticate".
+		{"force with no way to elevate", apt(), "", "stable", "linux", true, false, false, true},
+		{"edge host with no way to elevate", apt(), "", "edge", "linux", false, false, false, true},
+		{"explicit channel with no way to elevate", apt(), "edge", "stable", "linux", false, false, false, true},
 		// …unless there is no daemon answer to degrade to: then the
 		// installer's own failure is more use than silence.
-		{"daemon down without a tty still tries", nil, "", "stable", "linux", false, false, true, false},
+		{"daemon down still tries with no way to elevate", nil, "", "stable", "linux", false, false, true, false},
 		// Only Linux needs root for the check.
-		{"macos without a tty is unaffected", live(), "edge", "stable", "darwin", false, false, true, false},
+		{"macos is unaffected by elevation", live(), "edge", "stable", "darwin", false, false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			gotInstaller, gotNote := checkRoute(tc.st, tc.requested, tc.host, tc.goos, tc.force, tc.tty)
+			gotInstaller, gotNote := checkRoute(tc.st, tc.requested, tc.host, tc.goos, tc.force, tc.canElevate)
 			if gotInstaller != tc.wantInstaller {
 				t.Errorf("useInstaller = %v, want %v", gotInstaller, tc.wantInstaller)
 			}
