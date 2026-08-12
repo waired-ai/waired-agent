@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -82,14 +81,18 @@ func mgmtErrorCode(err error) string {
 	return ""
 }
 
-// publicGetJSON issues a read against the Local Management API over the
-// loopback TCP port (reads are allowed there; only writes are pinned to
-// the IPC socket). A transport error is wrapped with the same
+// publicGetJSON issues a read against the Local Management API. It routes
+// through mgmtReadRoute, so in production the read travels over the local
+// IPC socket: none of the /public/* routes are on the daemon's TCP read
+// allow-list (waired#836). A transport error is wrapped with the same
 // daemon-unreachable wording the other read helpers use; a >=400 response
 // becomes a *mgmtStatusError.
 func publicGetJSON(mgmt, path string, out any) error {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(strings.TrimRight(mgmt, "/") + path)
+	target, client, err := mgmtReadRoute(strings.TrimRight(mgmt, "/")+path, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Get(target)
 	if err != nil {
 		return wrapDaemonDialError(err)
 	}

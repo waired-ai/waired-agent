@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
 // shortTempDir is t.TempDir() with a path short enough to bind a unix socket
@@ -66,6 +68,77 @@ func TestServeLocalUnixSocket(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /status over socket: got %d, want 200", resp.StatusCode)
+	}
+
+	cancel()
+	select {
+	case e := <-errc:
+		if e != nil {
+			t.Fatalf("ServeLocal returned %v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeLocal did not return after ctx cancel")
+	}
+}
+
+// TestServeLocalSocketCarriesWritesAndUnlistedReads covers what the socket
+// exists FOR, which the GET /status case above does not: a write, and a
+// read outside the TCP allow-list, both of which the loopback listener
+// refuses once the socket is up. It also pins that the socket handler
+// applies none of the TCP middleware — the request carries the IPC client's
+// dummy Host and, for the write, no JSON Content-Type, either of which
+// browserGuard would reject on TCP.
+func TestServeLocalSocketCarriesWritesAndUnlistedReads(t *testing.T) {
+	pause := newFakePause(state.PhaseActive)
+	srv := New(fakeStatus{}, fakePinger{}).
+		WithPause(pause).
+		WithIdentity(fakeIdentity{v: IdentityView{Enrolled: true}}).
+		WithBrowserHardening().
+		WithSocketWritesOnly(true).
+		WithSocketReadsOnly(true)
+	sockPath := filepath.Join(shortTempDir(t), "mgmt.sock")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ServeLocal(ctx, sockPath) }()
+
+	cl := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
+		},
+	}}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var resp *http.Response
+	var err error
+	for time.Now().Before(deadline) {
+		//nolint:noctx // short-lived test client, dial handles context
+		resp, err = cl.Post("http://waired-mgmt/waired/v1/pause", "", nil)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("POST over unix socket: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /pause over socket: got %d, want 200", resp.StatusCode)
+	}
+	if cur, _ := pause.Phase(); cur != state.PhasePaused {
+		t.Fatalf("phase after the socket write = %q, want paused; the write did not reach the controller", cur)
+	}
+
+	//nolint:noctx // short-lived test client, dial handles context
+	resp, err = cl.Get("http://waired-mgmt/waired/v1/identity")
+	if err != nil {
+		t.Fatalf("GET /identity over unix socket: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /identity over socket: got %d, want 200", resp.StatusCode)
 	}
 
 	cancel()

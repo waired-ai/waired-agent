@@ -731,9 +731,12 @@ func generateWGKey() (priv, pub []byte, err error) {
 
 // ---------------- helpers ----------------
 
-func httpGet(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+func httpGet(rawURL string) ([]byte, error) {
+	target, client, err := mgmtReadRoute(rawURL, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Get(target)
 	if err != nil {
 		return nil, wrapDaemonDialError(err)
 	}
@@ -760,7 +763,38 @@ const mgmtPingPath = "/waired/v1/ping"
 var (
 	mgmtWriteBase   = ipcclient.BaseURL
 	mgmtWriteClient = func(timeout time.Duration) *http.Client { return ipcclient.NewHTTPClient(timeout) }
+	mgmtReadClient  = func(tcpBase string, timeout time.Duration) *http.Client {
+		return ipcclient.NewReadClient(tcpBase, timeout)
+	}
+	// mgmtReadDefaultBase is the one base URL a read may be redirected to
+	// the socket for. A var only so the routing test can point it at an
+	// httptest server; the predicate it feeds is covered directly by
+	// ipcclient.TestSameAuthority.
+	mgmtReadDefaultBase = defaultMgmtURL
 )
+
+// mgmtReadRoute decides where a management read goes. Production sends it
+// over the local IPC socket with a loopback-TCP fallback (waired#836): the
+// daemon serves only the compatibility routes on TCP while the socket is
+// up, and serves every read there while it is not, so the fallback is what
+// finds a daemon that could not bind a socket. Two cases stay on plain TCP:
+// a --mgmt the operator pointed elsewhere (a mock daemon on another port, a
+// debug tunnel), which must not be quietly redirected to THIS machine's
+// socket, and tests, which clear mgmtWriteBase to address httptest servers.
+// The URL is returned unchanged: unlike a write, a read needs no rewriting
+// because the socket transport ignores the authority it is handed, and
+// leaving the loopback URL in place is also what the fallback wants.
+func mgmtReadRoute(rawURL string, timeout time.Duration) (target string, client *http.Client, err error) {
+	u, perr := url.Parse(rawURL)
+	if perr != nil {
+		return "", nil, perr
+	}
+	tcpBase := u.Scheme + "://" + u.Host
+	if mgmtWriteBase == "" || !ipcclient.SameAuthority(tcpBase, mgmtReadDefaultBase) {
+		return rawURL, &http.Client{Timeout: timeout}, nil
+	}
+	return rawURL, mgmtReadClient(tcpBase, timeout), nil
+}
 
 // readMgmtResponse drains a management response, mapping a transport error
 // to wording that names the right endpoint for the transport used.

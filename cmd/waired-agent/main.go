@@ -156,6 +156,8 @@ func run(ctx context.Context, args []string) error {
 		"override the local IPC write endpoint (unix-domain socket path on Linux/macOS, named pipe on Windows); empty auto-derives from --state-dir. Mutating requests use this endpoint; the loopback TCP port serves reads (waired#838)")
 	mgmtSocketWritesOnly := fs.Bool("mgmt-socket-writes-only", true,
 		"refuse mutating requests on the loopback TCP port, requiring the local IPC socket instead (waired#838). The CLI and tray send writes over the socket; disable only for local debugging. Automatically inert while the socket is not bound, so a bind failure never blocks control of the agent")
+	mgmtSocketReadsOnly := fs.Bool("mgmt-socket-reads-only", true,
+		"serve only the liveness probe and the compatibility read routes (/status, /inference/status, /inference/runtimes, /inference/catalog, /setup/state) on the loopback TCP port; every other read requires the local IPC socket (waired#836). The CLI and tray read over the socket and fall back to TCP when it is not bound; disable only for local debugging. Automatically inert while the socket is not bound")
 	controlURL := fs.String("control", os.Getenv("WAIRED_CONTROL_URL"),
 		"control plane base URL used for daemon-driven login (POST /waired/v1/login/start); a login request may override it. Empty falls back to the installer-recorded agent.env, then the production Control Plane — same precedence as `waired init`")
 	loginListen := fs.String("login-listen", "127.0.0.1:0",
@@ -390,7 +392,8 @@ func run(ctx context.Context, args []string) error {
 	if *mgmtHardening {
 		mgmtSrv = mgmtSrv.WithBrowserHardening()
 	}
-	mgmtSrv = mgmtSrv.WithSocketWritesOnly(*mgmtSocketWritesOnly)
+	mgmtSrv = mgmtSrv.WithSocketWritesOnly(*mgmtSocketWritesOnly).
+		WithSocketReadsOnly(*mgmtSocketReadsOnly)
 	// Public Share consumer settings + consent (waired#826): consuming
 	// public nodes is a routing concern, so the endpoints stay available
 	// even when local inference serving is disabled.

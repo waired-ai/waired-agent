@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/internal/management/ipcclient"
 	"github.com/waired-ai/waired-agent/internal/observability"
 )
 
@@ -49,16 +50,39 @@ type EventsResponse struct {
 // a deadline, which takes effect first.
 var httpClient = &http.Client{Timeout: 3 * time.Second}
 
+// readClient is httpClient's socket-first counterpart: these routes are
+// socket-only on the loopback TCP port once the daemon has the local IPC
+// socket bound (waired#836), so a read has to go there. It falls back to
+// TCP on its own when the socket is not bound, which is also how the
+// daemon behaves in that state.
+var readClient = ipcclient.NewReadClient(defaultTCPBase, 3*time.Second)
+
+const defaultTCPBase = "http://" + management.DefaultListen
+
+// readRoute picks the transport for one management read and returns the
+// endpoint to address. A caller that pointed its --mgmt at something other
+// than the loopback default is addressing a different daemon (a mock on
+// another port, a debug tunnel) and must not be redirected to this
+// machine's socket. The URL is the same either way: the socket transport
+// ignores the authority it is handed.
+func readRoute(mgmtURL, pathAndQuery string) (string, *http.Client) {
+	base := strings.TrimRight(mgmtURL, "/")
+	if !ipcclient.SameAuthority(base, defaultTCPBase) {
+		return base + pathAndQuery, httpClient
+	}
+	return base + pathAndQuery, readClient
+}
+
 // GetState fetches /waired/v1/observability/state from mgmtURL. The
 // returned pointer is owned by the caller; the underlying response
 // body is fully drained and closed before return.
 func GetState(ctx context.Context, mgmtURL string) (*management.ObservabilityState, error) {
-	endpoint := strings.TrimRight(mgmtURL, "/") + "/waired/v1/observability/state"
+	endpoint, client := readRoute(mgmtURL, "/waired/v1/observability/state")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +113,7 @@ func GetEvents(
 	kinds []observability.Kind,
 	limit int,
 ) (*EventsResponse, error) {
-	endpoint := strings.TrimRight(mgmtURL, "/") + "/waired/v1/observability/events"
+	endpoint, client := readRoute(mgmtURL, "/waired/v1/observability/events")
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
@@ -114,7 +138,7 @@ func GetEvents(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
