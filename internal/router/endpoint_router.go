@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -387,6 +388,28 @@ func (s *Selector) resolveModel(name string, reasons *[]string) (catalog.Manifes
 // estimate to scale by, and must fall back to its own ceiling rather than
 // treat the sentinel as a duration.
 const RTTUnknown = ^uint32(0)
+
+// rttDisplay renders RTTMS for a human-readable surface: the reasons
+// string `waired infer --explain` prints and the management API's
+// /inference/select serialises (waired-agent#714).
+//
+// The sentinel is a value, not a measurement, so it is not shown as one.
+// Printing it raw put 4294967295 in front of an operator as if the peer
+// were 49 days away; printing 0 would be worse, because 0 reads as the
+// closest possible peer.
+//
+// Rendering is the ONLY place this substitution belongs. Candidate.RTTMS
+// keeps the sentinel, because it is an input to
+// gateway.probeBudgetFor — which gives an unmeasured peer the probe
+// ceiling precisely because there is no distance to scale by. Zeroing the
+// field would collapse that budget to the floor for every relay-path peer
+// and re-run waired-agent#624.
+func rttDisplay(rttMS uint32) string {
+	if rttMS == RTTUnknown {
+		return "unmeasured"
+	}
+	return strconv.FormatUint(uint64(rttMS), 10)
+}
 
 // Sentinel errors. Wrap with %w so callers can use errors.Is.
 var (
@@ -1092,8 +1115,8 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 	}
 	candReasons := append(append([]string{}, reasons...),
 		fmt.Sprintf("local state for %q is not ready", manifest.ModelID),
-		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%d, in_flight=%d, cap=%d, load=%.2f, silent=%v)",
-			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, c.rttMS, c.inFlight, c.capacity, c.loadFraction, c.silent),
+		fmt.Sprintf("%s: peer %q has %s model %q reachable (score=%d, err=%.2f, rtt_ms=%s, in_flight=%d, cap=%d, load=%.2f, silent=%v)",
+			kindLabel, c.displayID, c.runtime, c.tag, c.score, c.errorRate, rttDisplay(c.rttMS), c.inFlight, c.capacity, c.loadFraction, c.silent),
 	)
 	if spreadFrom != "" {
 		// Named on every candidate of the round, not just the demoted
