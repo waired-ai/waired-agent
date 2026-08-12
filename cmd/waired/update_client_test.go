@@ -173,6 +173,11 @@ func TestCheckRoute(t *testing.T) {
 		{"force on windows stays with the live daemon answer", live(), "", "stable", "windows", true, true, false, false},
 		// A non-apt Linux host (the GitHub fallback) has no index either.
 		{"force on a non-apt linux host", live(), "", "stable", "linux", true, true, false, false},
+		// A daemon that predates this change names no source, but on Linux
+		// it is still reading the package index. Requiring an explicit
+		// "apt" would keep the old --force behaviour through exactly the
+		// mixed-version window this has to work in.
+		{"force against a legacy daemon", &management.UpdateStatus{Phase: management.UpdatePhaseIdle}, "", "stable", "linux", true, true, true, false},
 
 		// No terminal: sudo has nothing to prompt on, so the installer
 		// would fail rather than answer. Degrade and say why.

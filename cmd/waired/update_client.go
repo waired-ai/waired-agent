@@ -191,7 +191,13 @@ const indexNoTerminalNote = "Could not refresh the package index: that needs sud
 func checkRoute(st *management.UpdateStatus, requested, host, goos string, force, tty bool) (useInstaller bool, note string) {
 	daemonUnusable := st == nil || st.Phase == management.UpdatePhaseError
 	want := daemonUnusable || requested != "" || host == "edge"
-	if !want && force && goos == "linux" && st.LatestSource == update.SourceAPT {
+	// Anything but a known-live answer counts: a daemon that predates this
+	// change reports no source at all, yet on Linux it is reading the
+	// package index — that is what the Linux resolver does. Requiring an
+	// explicit "apt" would keep the old, wrong --force behaviour for
+	// exactly the mixed-version window this has to work in. Unknown means
+	// "cannot rule out a stale index", so honour --force.
+	if !want && force && goos == "linux" && st.LatestSource != update.SourceGitHub {
 		want = true
 	}
 	if !want {
