@@ -24,6 +24,13 @@
 // the trust boundary (same posture as the no-token data-plane gateway). The
 // LocalInference handler is therefore the BARE gateway HandlerSet, not the
 // token-gated loopback gateway.Server.
+//
+// The bind is not the whole boundary, though. A web page the user visits can
+// reach a loopback listener by DNS-rebinding, and its connection genuinely
+// comes from 127.0.0.1 — so this listener also checks the request itself
+// (waired-ai/waired#1195). That is the package's one non-stdlib import,
+// internal/loopbackguard, which is itself stdlib-only and pulls in nothing
+// further; the alternative was a third copy of the same checks.
 package intercept
 
 import (
@@ -39,6 +46,8 @@ import (
 	"net/http/httputil"
 	"sync/atomic"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/loopbackguard"
 )
 
 // Per-class route values the intercept dispatches on, read per request via
@@ -190,6 +199,18 @@ type Config struct {
 	// fast path untouched. The gateway advertises the same ids in /v1/models
 	// under the same flag.
 	ModelRouteDirectives bool
+
+	// BrowserHardening adds Host and Origin allow-listing, so a web page the
+	// user visits cannot reach this listener by DNS-rebinding — the browser's
+	// connection genuinely comes from 127.0.0.1, so the peer check below it
+	// cannot see the attack (waired-ai/waired#1195). Zero value off so tests
+	// opt in; production wiring (buildClaudeListener) sets it from the
+	// agent's --browser-hardening flag.
+	//
+	// It carries no Content-Type requirement: the "/" catch-all
+	// reverse-proxies arbitrary Anthropic API calls, multipart uploads
+	// included.
+	BrowserHardening bool
 }
 
 // Deps bundles the collaborators. Caller (cmd/waired-agent) wires the real
@@ -310,9 +331,10 @@ func NewServer(cfg Config, deps Deps) (*Server, error) {
 	return s, nil
 }
 
-// handler builds the routing mux. ServeMux exact-matches the two message paths
-// and routes everything else (including unknown /v1/messages/* subpaths) to
-// passthrough via the "/" catch-all.
+// handler builds the routing mux and wraps it in the loopback guards.
+// ServeMux exact-matches the two message paths and routes everything else
+// (including unknown /v1/messages/* subpaths) to passthrough via the "/"
+// catch-all.
 func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", s.routeInference)
@@ -324,7 +346,31 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/v1/models", s.routeModels)
 	mux.HandleFunc("/v1/models/", s.routeModels)
 	mux.HandleFunc("/", s.passthrough)
-	return mux
+
+	// waired-ai/waired#1195. Peer first, so an off-host caller is answered as
+	// one rather than for whatever it put in Host. Peer is unconditional (the
+	// other loopback listeners have carried it since they were written); the
+	// browser checks are config-gated the same way the management API's are.
+	h := loopbackguard.Browser(mux, s.cfg.BrowserHardening, loopbackguard.Options{
+		Reject: s.rejectRequest,
+	})
+	return loopbackguard.Peer(h, s.rejectRequest)
+}
+
+// rejectRequest renders a guard rejection in the Anthropic error shape the
+// rest of this listener answers in (localUnavailable, passthroughError), so a
+// client that hits one parses it the same way. permission_error is what the
+// API itself calls a 403.
+func (s *Server) rejectRequest(w http.ResponseWriter, _ *http.Request, status int, _, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    "permission_error",
+			"message": message,
+		},
+	})
 }
 
 // Handler exposes the routing handler for tests that drive it over plain HTTP

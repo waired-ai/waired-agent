@@ -224,6 +224,14 @@ type inferenceSubsystemDeps struct {
 	// it once per SelectK to read mode + pinned peer atomically. nil
 	// keeps the pre-feature behaviour (Mode=auto).
 	Routing func() state.RoutingPreference
+
+	// BrowserHardening turns on Host/Origin allow-listing for the no-token
+	// data-plane listener (waired-ai/waired#1195). It is the agent's
+	// --browser-hardening flag; main.go feeds the same value to the
+	// management API and the Claude gateway. The token-carrying Local
+	// Gateway is deliberately left out — the docs point browser chat UIs at
+	// it, and an Origin allow-list would break a hosted one.
+	BrowserHardening bool
 }
 
 // startInferenceSubsystem brings up the runtime registry, gateway,
@@ -786,9 +794,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 	// User=waired and the desktop user's tools cannot read the 0600
 	// gateway token, so loopback is the trust boundary (same posture as
 	// the Claude proxy's no-token overlay handler). loopbackOnly + pause +
-	// inference gates still apply. A zero port, or AllowOpenAIAPI being
-	// off, disables the listener; a bind failure is non-fatal (only the
-	// plugin-based integrations are affected).
+	// inference gates still apply, plus the Host/Origin allow-list that
+	// keeps a web page the user visits from reaching a no-token listener by
+	// DNS-rebinding — its connection comes from 127.0.0.1 too, so the bind
+	// cannot see it (waired-ai/waired#1195). A zero port, or AllowOpenAIAPI
+	// being off, disables the listener; a bind failure is non-fatal (only
+	// the plugin-based integrations are affected).
 	if cfg.AllowOpenAIAPI && cfg.DataPlaneGatewayPort > 0 {
 		dpGwLn, lerr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort))
 		if lerr != nil {
@@ -808,7 +819,8 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 			dpDeps.LocalAdmission = deps.LocalAdmission
 			dpDeps.OnPeerOutcome = deps.OnPeerOutcome
 			dpGw := gateway.NewServer(gateway.ServerConfig{
-				Addr: fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort),
+				Addr:             fmt.Sprintf("127.0.0.1:%d", cfg.DataPlaneGatewayPort),
+				BrowserHardening: deps.BrowserHardening,
 			}, dpDeps)
 			wg.Add(1)
 			go func() {

@@ -150,8 +150,14 @@ func run(ctx context.Context, args []string) error {
 		"directory holding identity.json + secrets/* + cache/* (created by `waired init`)")
 	mgmtAddr := fs.String("mgmt", management.DefaultListen,
 		"loopback bind for the Local Management API")
+	browserHardening := fs.Bool("browser-hardening", true,
+		"enforce Host/Origin allow-listing on every loopback listener a web page could reach — the Local Management API, the Claude gateway, and the coding-agent data plane — plus Content-Type: application/json on management writes (defends against DNS-rebinding / cross-site requests from a web page; disable only for local debugging)")
+	// The flag was --mgmt-hardening while the guard covered only :9476
+	// (waired-ai/waired#836); waired-ai/waired#1195 extended it to :9472 and
+	// :9479. Kept as an alias so a local-debug invocation that predates the
+	// rename still works. Either one set to false disables the guard.
 	mgmtHardening := fs.Bool("mgmt-hardening", true,
-		"enforce Host/Origin allow-listing + Content-Type: application/json on the Local Management API (defends against DNS-rebinding / cross-site requests from a web page; disable only for local debugging)")
+		"deprecated alias for -browser-hardening")
 	mgmtSocket := fs.String("mgmt-socket", "",
 		"override the local IPC write endpoint (unix-domain socket path on Linux/macOS, named pipe on Windows); empty auto-derives from --state-dir. Mutating requests use this endpoint; the loopback TCP port serves reads (waired#838)")
 	mgmtSocketWritesOnly := fs.Bool("mgmt-socket-writes-only", true,
@@ -229,6 +235,9 @@ func run(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+
+	// One switch for the browser-facing guards on every loopback listener.
+	hardenLoopbackListeners := browserHardeningEnabled(*browserHardening, *mgmtHardening)
 
 	// #568: the install-time available-memory measurement, taken here —
 	// after flags, before anything that could start an engine — and
@@ -385,11 +394,14 @@ func run(ctx context.Context, args []string) error {
 			MetricsHandler: promHandler,
 			State:          sb,
 		})
-	// Browser-facing hardening (waired-ai/waired#836): the loopback bind
-	// alone does not stop a web page the user visits from reaching :9476 via
-	// DNS-rebinding or a cross-site simple request. On by default; the flag
-	// exists only as a local-debug escape hatch.
-	if *mgmtHardening {
+	// Browser-facing hardening (waired-ai/waired#836, extended to the other
+	// loopback listeners by waired-ai/waired#1195): the loopback bind alone
+	// does not stop a web page the user visits from reaching :9476, :9472 or
+	// :9479 via DNS-rebinding or a cross-site simple request — the browser's
+	// connection genuinely comes from 127.0.0.1. On by default; the flag
+	// exists only as a local-debug escape hatch. The same value reaches the
+	// Claude gateway and the coding-agent data plane below.
+	if hardenLoopbackListeners {
 		mgmtSrv = mgmtSrv.WithBrowserHardening()
 	}
 	mgmtSrv = mgmtSrv.WithSocketWritesOnly(*mgmtSocketWritesOnly).
@@ -1055,6 +1067,7 @@ func run(ctx context.Context, args []string) error {
 				IsPaused:            pm.IsPaused,
 				IsInferenceDisabled: infCtl.IsDisabled,
 				InferenceState:      infCtl.State,
+				BrowserHardening:    hardenLoopbackListeners,
 				PreferencePath:      preferencePath,
 				MeshSnapshotFn:      meshAgg.Snapshot,
 				PeerAdapterFactory:  peerAdapterFactory,
@@ -1811,7 +1824,7 @@ func run(ctx context.Context, args []string) error {
 	// a nonzero port. Non-fatal by design: the WG/mesh data plane is independent
 	// of it, and a loopback bind failure must not crash-loop the whole agent.
 	if cfgRoot.Inference.AllowAnthropicAPI && cfgRoot.Inference.ClaudeGatewayPort > 0 {
-		if claudeSrv, claudeLn, cerr := buildClaudeListener(cfgRoot.Inference.ClaudeGatewayPort, proxyH, claudeRouting, cfgRoot.Inference.ClaudeModelRouteDirectives, logger); cerr != nil {
+		if claudeSrv, claudeLn, cerr := buildClaudeListener(cfgRoot.Inference.ClaudeGatewayPort, proxyH, claudeRouting, cfgRoot.Inference.ClaudeModelRouteDirectives, hardenLoopbackListeners, logger); cerr != nil {
 			logger.Error("claude loopback gateway: bind failed; Claude integration not serving", "err", cerr)
 		} else if claudeSrv != nil {
 			logger.Info("claude loopback gateway listening", "addr", claudeLn.Addr().String())

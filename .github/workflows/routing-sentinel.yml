@@ -40,6 +40,9 @@ on:
       - internal/integration/**
       - internal/proxy/**
       - internal/gateway/**
+      # the loopback listeners' Host/Origin guard: it can reject a request
+      # before routing ever sees it, so the sentinel must re-run on it
+      - internal/loopbackguard/**
       - internal/agentconfig/**
       - internal/router/**
       - internal/catalog/**

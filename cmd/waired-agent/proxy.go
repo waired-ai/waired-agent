@@ -77,13 +77,27 @@ func (p *proxyHandle) localAdapter() http.Handler {
 	})
 }
 
+// browserHardeningEnabled resolves -browser-hardening against its deprecated
+// alias -mgmt-hardening (the name it carried while the guard covered only
+// :9476; waired-ai/waired#836 → waired-ai/waired#1195). Both default to true,
+// so either one set to false is a request to turn the guards off — the flag
+// exists as a local-debug escape hatch and an operator reaching for it means
+// it, whichever name they reached for.
+func browserHardeningEnabled(browserHardening, mgmtHardening bool) bool {
+	return browserHardening && mgmtHardening
+}
+
 // buildClaudeListener assembles the plain-HTTP Claude loopback gateway — the
 // successor to the retired :443 MITM proxy. It binds 127.0.0.1:port, serves
 // /v1/messages* locally (fail-open to real Anthropic when degraded) and reverse-
 // proxies everything else to the real api.anthropic.com. port<=0 disables it
 // (returns nil,nil,nil). The caller serves the returned listener via
 // srv.Serve(ctx, ln).
-func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController, modelRouteDirectives bool, logger *slog.Logger) (*intercept.Server, net.Listener, error) {
+//
+// browserHardening is the agent's --browser-hardening flag: it adds the
+// Host/Origin allow-list that keeps a web page the user visits from reaching
+// this no-token listener by DNS-rebinding (waired-ai/waired#1195).
+func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController, modelRouteDirectives, browserHardening bool, logger *slog.Logger) (*intercept.Server, net.Listener, error) {
 	if port <= 0 {
 		return nil, nil, nil // disabled
 	}
@@ -134,6 +148,7 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 		Addr:                 addr,
 		AnnotateReroute:      true,
 		ModelRouteDirectives: modelRouteDirectives,
+		BrowserHardening:     browserHardening,
 	}, deps)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claude proxy: new server: %w", err)

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
+	"github.com/waired-ai/waired-agent/internal/loopbackguard"
 	"github.com/waired-ai/waired-agent/internal/router"
 	"github.com/waired-ai/waired-agent/internal/runtime"
 )
@@ -237,6 +238,19 @@ type Deps struct {
 // ServerConfig controls listener behaviour.
 type ServerConfig struct {
 	Addr string // "127.0.0.1:9473" — must be loopback
+
+	// BrowserHardening adds Host and Origin allow-listing to the chain, so a
+	// web page the user visits cannot reach this listener by DNS-rebinding
+	// (waired-ai/waired#1195). Off by default, which keeps the package's own
+	// tests — httptest.NewRequest sets Host to example.com — working
+	// unchanged; the same config-gate shape as requireToken's empty token.
+	//
+	// The agent turns it on for the coding-agent data plane (:9479), whose
+	// AuthToken is always empty. It stays off for the Local Gateway (:9473),
+	// which has a token and which the docs point browser chat UIs at
+	// (docs-site guides/chat-clients) — an Origin allow-list would break a
+	// hosted one.
+	BrowserHardening bool
 }
 
 // Server is the loopback Local Gateway HTTP server. It wraps a
@@ -255,7 +269,7 @@ func NewServer(cfg ServerConfig, deps Deps) *Server {
 	set := NewHandlerSet(deps)
 	s := &Server{cfg: cfg, deps: set.deps, set: set}
 	s.httpSrv = &http.Server{
-		Handler:           loopbackOnly(requireToken(pausedGate(inferenceGate(set.Handler(), s.deps.IsInferenceDisabled), s.deps.IsPaused), s.deps.AuthToken)),
+		Handler:           s.chain(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s
@@ -263,8 +277,28 @@ func NewServer(cfg ServerConfig, deps Deps) *Server {
 
 // Handler exposes the loopback-wrapped handler stack for tests that
 // want to bypass the listener and use httptest.NewServer directly.
-func (s *Server) Handler() http.Handler {
-	return loopbackOnly(requireToken(pausedGate(inferenceGate(s.set.Handler(), s.deps.IsInferenceDisabled), s.deps.IsPaused), s.deps.AuthToken))
+func (s *Server) Handler() http.Handler { return s.chain() }
+
+// chain is the listener's middleware stack, outermost first: the transport
+// peer must be loopback, then the request itself must not look like one a web
+// page smuggled in, then the token, then the runtime gates.
+//
+// Both the http.Server and Handler() build from here. They used to spell the
+// chain out separately, which is one divergence away from tests that no longer
+// exercise what production serves.
+func (s *Server) chain() http.Handler {
+	h := pausedGate(inferenceGate(s.set.Handler(), s.deps.IsInferenceDisabled), s.deps.IsPaused)
+	h = requireToken(h, s.deps.AuthToken)
+	h = loopbackguard.Browser(h, s.cfg.BrowserHardening, loopbackguard.Options{
+		// No JSON Content-Type requirement: the Origin check above already
+		// rejects the cross-site simple-request POST it would defend against,
+		// and this listener's clients are not browsers.
+		Reject: func(w http.ResponseWriter, _ *http.Request, status int, _, message string) {
+			// permission_error is what both API dialects call a 403.
+			writeGatewayError(w, status, "permission_error", message)
+		},
+	})
+	return loopbackOnly(h)
 }
 
 // Serve blocks while the server is accepting requests. Shutdown
@@ -320,11 +354,17 @@ func requireToken(next http.Handler, expected string) http.Handler {
 // writeAuthError emits a small JSON body that both OpenAI and
 // Anthropic clients can deserialise as an error.
 func writeAuthError(w http.ResponseWriter, status int, msg string) {
+	writeGatewayError(w, status, "authentication_error", msg)
+}
+
+// writeGatewayError is writeAuthError's shape for any error the middleware
+// chain answers with before a handler runs.
+func writeGatewayError(w http.ResponseWriter, status int, errType, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
-			"type":    "authentication_error",
+			"type":    errType,
 			"message": msg,
 		},
 	})
