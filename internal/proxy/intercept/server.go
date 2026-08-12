@@ -27,10 +27,11 @@
 //
 // The bind is not the whole boundary, though. A web page the user visits can
 // reach a loopback listener by DNS-rebinding, and its connection genuinely
-// comes from 127.0.0.1 — so this listener also checks the request itself
-// (waired-ai/waired#1195). That is the package's one non-stdlib import,
-// internal/loopbackguard, which is itself stdlib-only and pulls in nothing
-// further; the alternative was a third copy of the same checks.
+// comes from 127.0.0.1 — so the request itself has to be checked
+// (waired-ai/waired#1195). Those checks are shared with the other loopback
+// listeners and live in internal/loopbackguard; this package does not import
+// it. cmd/waired-agent composes the guard and hands it in as Deps.Guard, which
+// keeps this package stdlib-only.
 package intercept
 
 import (
@@ -46,8 +47,6 @@ import (
 	"net/http/httputil"
 	"sync/atomic"
 	"time"
-
-	"github.com/waired-ai/waired-agent/internal/loopbackguard"
 )
 
 // Per-class route values the intercept dispatches on, read per request via
@@ -199,18 +198,6 @@ type Config struct {
 	// fast path untouched. The gateway advertises the same ids in /v1/models
 	// under the same flag.
 	ModelRouteDirectives bool
-
-	// BrowserHardening adds Host and Origin allow-listing, so a web page the
-	// user visits cannot reach this listener by DNS-rebinding — the browser's
-	// connection genuinely comes from 127.0.0.1, so the peer check below it
-	// cannot see the attack (waired-ai/waired#1195). Zero value off so tests
-	// opt in; production wiring (buildClaudeListener) sets it from the
-	// agent's --browser-hardening flag.
-	//
-	// It carries no Content-Type requirement: the "/" catch-all
-	// reverse-proxies arbitrary Anthropic API calls, multipart uploads
-	// included.
-	BrowserHardening bool
 }
 
 // Deps bundles the collaborators. Caller (cmd/waired-agent) wires the real
@@ -272,6 +259,18 @@ type Deps struct {
 	// misreported as local). Never invoked on fallback or on responses
 	// without the model header. Nil == no-op.
 	OnServed func(modelID, peerDeviceID string)
+
+	// Guard, if set, wraps the whole route table — every route, including the
+	// "/" passthrough catch-all. It is how the loopback guards reach this
+	// listener without the package importing them: cmd/waired-agent composes
+	// internal/loopbackguard (peer address, then Host and Origin
+	// allow-listing) and passes the result in, which keeps this fail-open
+	// package stdlib-only (waired-ai/waired#1195).
+	//
+	// Nil leaves the mux bare, which is what the package's own tests want.
+	// Production always sets it; cmd/waired-agent/proxy_browser_hardening_test.go
+	// is what stops that wiring rotting away.
+	Guard func(http.Handler) http.Handler
 
 	// Logger is optional; defaults to slog.Default().
 	Logger *slog.Logger
@@ -347,30 +346,14 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/v1/models/", s.routeModels)
 	mux.HandleFunc("/", s.passthrough)
 
-	// waired-ai/waired#1195. Peer first, so an off-host caller is answered as
-	// one rather than for whatever it put in Host. Peer is unconditional (the
-	// other loopback listeners have carried it since they were written); the
-	// browser checks are config-gated the same way the management API's are.
-	h := loopbackguard.Browser(mux, s.cfg.BrowserHardening, loopbackguard.Options{
-		Reject: s.rejectRequest,
-	})
-	return loopbackguard.Peer(h, s.rejectRequest)
-}
-
-// rejectRequest renders a guard rejection in the Anthropic error shape the
-// rest of this listener answers in (localUnavailable, passthroughError), so a
-// client that hits one parses it the same way. permission_error is what the
-// API itself calls a 403.
-func (s *Server) rejectRequest(w http.ResponseWriter, _ *http.Request, status int, _, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"type": "error",
-		"error": map[string]any{
-			"type":    "permission_error",
-			"message": message,
-		},
-	})
+	// waired-ai/waired#1195: the loopback guards, composed by cmd/waired-agent
+	// (see Deps.Guard). Applied here rather than around httpSrv.Handler so
+	// Handler() — what the tests drive — carries the same stack production
+	// serves. nil leaves the mux bare.
+	if s.deps.Guard != nil {
+		return s.deps.Guard(mux)
+	}
+	return mux
 }
 
 // Handler exposes the routing handler for tests that drive it over plain HTTP

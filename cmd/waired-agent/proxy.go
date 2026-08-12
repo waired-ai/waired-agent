@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/loopbackguard"
 	"github.com/waired-ai/waired-agent/internal/proxy/intercept"
 )
 
@@ -77,6 +79,49 @@ func (p *proxyHandle) localAdapter() http.Handler {
 	})
 }
 
+// claudeListenerGuard composes the loopback guards for the Claude listener
+// (waired-ai/waired#1195). It lives here, not in internal/proxy/intercept:
+// that package is deliberately stdlib-only so a fail-open relay cannot be
+// dragged down by anything it links, and it duplicates literals rather than
+// import even the gateway. Composing the guard at the wiring layer and handing
+// it in as intercept.Deps.Guard keeps that property with no second copy of the
+// checks themselves.
+//
+// browserHardening=false still yields the peer check: every other loopback
+// listener the agent runs has carried one since it was written, and this one
+// simply never had it.
+func claudeListenerGuard(browserHardening bool) func(http.Handler) http.Handler {
+	// Rejections render in the Anthropic error shape the rest of the listener
+	// answers in (intercept's localUnavailable / passthroughError), so a client
+	// that hits one parses it the same way. permission_error is what the API
+	// itself calls a 403 — the literal is duplicated here rather than exported
+	// from intercept, matching how that package carries its other literals.
+	reject := func(w http.ResponseWriter, _ *http.Request, status int, _, message string) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    "permission_error",
+				"message": message,
+			},
+		})
+	}
+	return func(next http.Handler) http.Handler {
+		// Peer outermost, so an off-host caller is answered as one rather than
+		// for whatever it put in Host.
+		//
+		// No Content-Type requirement: the "/" catch-all reverse-proxies
+		// arbitrary Anthropic API calls, multipart uploads included. Under
+		// DNS-rebinding the page is same-origin and sends no Origin, so Host
+		// is the check doing the work here.
+		return loopbackguard.Peer(
+			loopbackguard.Browser(next, browserHardening, loopbackguard.Options{Reject: reject}),
+			reject,
+		)
+	}
+}
+
 // browserHardeningEnabled resolves -browser-hardening against its deprecated
 // alias -mgmt-hardening (the name it carried while the guard covered only
 // :9476; waired-ai/waired#836 → waired-ai/waired#1195). Both default to true,
@@ -121,6 +166,7 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 		PassthroughTransport: tr,
 		LocalInference:       ph.localAdapter(),
 		Degraded:             ph.Degraded,
+		Guard:                claudeListenerGuard(browserHardening),
 		Logger:               logger,
 	}
 	// Wire the boot-level unified per-class routing policy when present. The
@@ -148,7 +194,6 @@ func buildClaudeListener(port int, ph *proxyHandle, cr *claudeRoutingController,
 		Addr:                 addr,
 		AnnotateReroute:      true,
 		ModelRouteDirectives: modelRouteDirectives,
-		BrowserHardening:     browserHardening,
 	}, deps)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claude proxy: new server: %w", err)
