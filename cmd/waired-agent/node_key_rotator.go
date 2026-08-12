@@ -37,6 +37,14 @@ type nodeKeyRotatorConfig struct {
 	// "old" key). Loaded from disk in activate().
 	CurrentNodeKey *devicekeys.NodeKey
 
+	// PublishedNodeKey returns the Node Key the control plane publishes
+	// for this device in the most recent network map (std-base64), or ""
+	// when no map has arrived yet. It reads state the session already
+	// keeps (agentProvider.replacePeers records it per frame), so asking
+	// costs no extra control-plane request. nil reads as "": a rotator
+	// built without it never adopts a staged key.
+	PublishedNodeKey func() string
+
 	HTTPClient          *http.Client // nil → controlclient default
 	BearerFn            func() string
 	UseCustomAuthHeader bool
@@ -80,10 +88,13 @@ func (r *nodeKeyRotator) now() time.Time {
 // rotation time, re-checking on CheckInterval so a lifetime change or a
 // late-populated meta is picked up. It returns when ctx is cancelled
 // (session teardown) or after it has triggered a re-activation.
+//
+// The scheduled rotation does not start while a staged key is still
+// unreconciled: rotateTo writes node.key.next, so starting one would
+// overwrite a key the control plane may already have committed, leaving
+// no local copy of it.
 func (r *nodeKeyRotator) Run(ctx context.Context) {
-	if r.recoverStagedRotation(ctx) {
-		// A staged rotation was completed; we've triggered a re-activation
-		// and this session is about to be torn down. Stop.
+	if !r.awaitStagedReconciled(ctx) {
 		return
 	}
 	for {
@@ -199,26 +210,68 @@ func (r *nodeKeyRotator) applyRotated(p *identity.Paths, certJSON []byte, expire
 	return nil
 }
 
-// recoverStagedRotation completes or discards a node.key.next left behind
-// by an interrupted rotation (#228 crash-safety). It returns true when it
-// completed a rotation (and triggered a re-activation), so Run should stop.
+// recoveryOutcome is what one reconciliation attempt settled.
+type recoveryOutcome int
+
+const (
+	// recoveryNone: there is no staged key to reconcile, so the scheduled
+	// rotation may proceed.
+	recoveryNone recoveryOutcome = iota
+	// recoveryDone: a rotation was completed and a re-activation
+	// triggered; this session is about to be torn down.
+	recoveryDone
+	// recoveryPending: a staged key is still unreconciled. The scheduled
+	// rotation must NOT run while this is the answer — rotateTo writes
+	// node.key.next, which would overwrite the staged key and lose it.
+	recoveryPending
+)
+
+// awaitStagedReconciled retries recovery until there is nothing staged
+// left to reconcile. It returns true when the caller may enter the
+// rotation loop, and false when it should stop (context ended, or a
+// rotation completed and a re-activation is in flight).
+func (r *nodeKeyRotator) awaitStagedReconciled(ctx context.Context) bool {
+	for {
+		switch r.recoverStagedRotation(ctx) {
+		case recoveryNone:
+			return true
+		case recoveryDone:
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(r.cfg.CheckInterval):
+		}
+	}
+}
+
+// recoverStagedRotation reconciles a node.key.next left behind by an
+// interrupted rotation (#228 crash-safety).
 //
 //   - No staged key: nothing to do.
 //   - Staged key + CP accepts (current key still matches): the prior POST
 //     never committed; finish the rotation now.
-//   - Staged key + ErrNodeKeyMismatch: the CP's current key is no longer
-//     our on-disk key. In the single-agent-per-device model that means the
-//     CP already committed this very staged key (the prior POST succeeded
-//     but the promote didn't), so we adopt it.
+//   - Staged key + ErrNodeKeyMismatch: the CP's current key is not our
+//     on-disk key. That is consistent with "the prior POST committed this
+//     staged key and only the promote was lost" — but it is not the only
+//     cause, so the staged key is promoted only when the network map
+//     shows the CP really holds it (see adoptStaged).
 //   - Other error: leave the staged key for the next attempt.
-func (r *nodeKeyRotator) recoverStagedRotation(ctx context.Context) bool {
+func (r *nodeKeyRotator) recoverStagedRotation(ctx context.Context) recoveryOutcome {
 	p, err := identity.PathsFor(r.cfg.StateDir)
 	if err != nil {
-		return false
+		return recoveryNone
 	}
 	staged, err := loadStagedNodeKey(p.NodeKeyNext)
-	if err != nil || staged == nil {
-		return false
+	if err != nil {
+		// The staged file is unreadable, so there is no key to promote and
+		// nothing to protect: let the rotation loop overwrite it.
+		r.cfg.Logger.Warn("could not read staged node key", "err", err)
+		return recoveryNone
+	}
+	if staged == nil {
+		return recoveryNone
 	}
 	r.cfg.Logger.Warn("interrupted node-key rotation detected; reconciling", "staged_key", staged.PublicBase64())
 	res, rerr := r.client.RotateNodeKey(ctx, controlclient.RotateNodeKeyParams{
@@ -232,24 +285,59 @@ func (r *nodeKeyRotator) recoverStagedRotation(ctx context.Context) bool {
 	case rerr == nil:
 		if err := r.applyRotated(p, res.DeviceCertificateJSON, res.NodeKeyExpiresAt); err != nil {
 			r.cfg.Logger.Warn("apply recovered rotation", "err", err)
-			return false
+			return recoveryPending
 		}
-		return true
+		return recoveryDone
 	case errors.Is(rerr, controlclient.ErrNodeKeyMismatch):
-		// CP already holds the staged key; adopt it locally and re-activate.
-		r.cfg.Logger.Info("adopting staged node key already committed at CP")
-		if err := os.Rename(p.NodeKeyNext, p.NodeKey); err != nil {
-			r.cfg.Logger.Warn("adopt staged node key", "err", err)
-			return false
-		}
-		if r.cfg.TriggerReactivate != nil {
-			r.cfg.TriggerReactivate()
-		}
-		return true
+		return r.adoptStaged(p, staged)
 	default:
 		r.cfg.Logger.Warn("could not reconcile interrupted rotation; will retry", "err", rerr)
-		return false
+		return recoveryPending
 	}
+}
+
+// adoptStaged promotes the staged key after a rotation was rejected as a
+// mismatch, but only once the network map confirms the control plane
+// really holds that key.
+//
+// A mismatch says the CP's current key is not the one we presented as
+// "old"; it does not say which key the CP moved to. Re-authentication
+// also writes the device's Node Key (waired-ai/waired#1181), so the
+// device is not the only writer and "mismatch" alone cannot be read as
+// "our POST committed". Verifying costs no extra request: the session
+// already subscribes to the network map, and the CP's own remediation
+// hint for this error is to re-poll it.
+//
+// When the map cannot answer — none seen yet, or it publishes some other
+// key — nothing is promoted and the staged key is left for a later
+// attempt. Deferring a legitimate recovery is the safe direction:
+// promoting a key the CP does not hold would take the device off the
+// network with no local key left to fall back to.
+func (r *nodeKeyRotator) adoptStaged(p *identity.Paths, staged *devicekeys.NodeKey) recoveryOutcome {
+	published := ""
+	if r.cfg.PublishedNodeKey != nil {
+		published = r.cfg.PublishedNodeKey()
+	}
+	switch {
+	case published == "":
+		r.cfg.Logger.Warn("staged node key not adopted: no network map seen yet to confirm what the control plane holds; will retry",
+			"staged_key", staged.PublicBase64())
+		return recoveryPending
+	case published != staged.PublicBase64():
+		r.cfg.Logger.Warn("staged node key not adopted: the control plane publishes a different key for this device; will retry",
+			"staged_key", staged.PublicBase64(), "published_key", published)
+		return recoveryPending
+	}
+	r.cfg.Logger.Info("adopting staged node key: the network map confirms the control plane holds it",
+		"staged_key", staged.PublicBase64())
+	if err := os.Rename(p.NodeKeyNext, p.NodeKey); err != nil {
+		r.cfg.Logger.Warn("adopt staged node key", "err", err)
+		return recoveryPending
+	}
+	if r.cfg.TriggerReactivate != nil {
+		r.cfg.TriggerReactivate()
+	}
+	return recoveryDone
 }
 
 // loadStagedNodeKey reads the staged node.key.next, returning (nil, nil)

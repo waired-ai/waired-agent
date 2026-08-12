@@ -1526,6 +1526,7 @@ func run(ctx context.Context, args []string) error {
 				NetworkID:           id.NetworkID,
 				MachineKey:          mk,
 				CurrentNodeKey:      nk,
+				PublishedNodeKey:    provider.PublishedNodeKey,
 				HTTPClient:          rotatorHTTP,
 				BearerFn:            tokens.Get,
 				UseCustomAuthHeader: *bypassCPIAM,
@@ -2505,6 +2506,16 @@ type agentProvider struct {
 	// EWMAs, miss streaks). Nil during early init / unit tests that
 	// only exercise the provider directly.
 	reconciler *reconciler
+}
+
+// PublishedNodeKey returns the Node Key the control plane publishes for
+// this device in the most recent network map, or "" before the first map
+// arrives. Same field nodeKeyAgreement reads; the rotator uses it to
+// confirm what the CP holds before promoting a staged key (#729).
+func (p *agentProvider) PublishedNodeKey() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.publishedNodePub
 }
 
 // RelayTLSFingerprint returns the latest network-map fingerprint
