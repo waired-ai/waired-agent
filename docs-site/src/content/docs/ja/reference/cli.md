@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: f93f6ccc1e7fbee9
+sourceHash: 74a0f1a6813f9d8b
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -419,7 +419,7 @@ waired update --check      # 確認のみ
 waired update --yes        # インストーラの確認を省いて適用
 waired update --edge       # 最新の main ビルドへ切り替え
 waired update --stable     # stable へ戻す
-waired update --force      # キャッシュされた確認結果を無視
+waired update --force      # キャッシュではなく取得元から確認し直す（Linux: パッケージインデックスを更新するため sudo を求める）
 waired update --notify on|off   # アプリのアップデート通知ポップアップ
 ```
 

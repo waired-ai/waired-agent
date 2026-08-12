@@ -62,6 +62,7 @@ when sequencing work that touches docs.
 
 | EN | ja | Rationale | Ruling |
 |---|---|---|---|
+| package index (apt) | パッケージインデックス | apt が事前にダウンロードして持っている、公開版一覧のローカル控え。Linux の `waired update --check` はこれを読むので、答えはインデックスの鮮度までしか新しくない。「パッケージ一覧」「リポジトリ情報」としない — 更新コマンド (`apt-get update`) が更新する対象そのものを指す語で、逐語のほうが読者の操作に直結する。製品出力の `Package index:` ラベルは逐語（出力引用の規則どおり） | オーナー承認文言(20260812; waired-agent#726) |
 | below recommended spec (旧 under-spec) | 推奨要件未満 | 最小要件/推奨要件 が PC スペックの定着語。「未満」は境界を含まない=「満たさない」。旧 under-spec は造語で使用禁止 | #465 裁定(20260804) |
 | Running AI locally is not recommended here. | このパソコンでのローカル AI 実行は推奨しません。 | 上の「推奨要件未満」から導かれる平易な結論として製品が出力する文。**「非推奨」を使わない** — 同表の `manual_only` 行と同じ理由で deprecated と衝突する。動詞形「推奨しません」なら衝突しない | #579 承認文言(20260809) |
 | N s or more (per coding question) | N 秒以上 | 実測ではなく下界（プレフィル律速の下限）であることを示す。「約」「少なくとも」は付けない — 英語側で `about` / `at least` を落とした理由がそのまま当てはまる（要件の下限と読まれる） | #579 承認文言(20260809) |
