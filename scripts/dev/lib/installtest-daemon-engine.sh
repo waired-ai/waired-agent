@@ -254,12 +254,27 @@ assert_daemon_engine() {
   #     served by something else, which is the half #139 was about.
   assert_serving_ollama "$guest" "daemon-path executor"
 
-  # 6. The inference subsystem left the no_engine state.
+  # 6. The inference subsystem is serving: ready, and nothing else.
+  #
+  # This used to accept anything that was not no_engine, which is 10 of the
+  # 11 states proto/signer declares — including disabled (the operator's
+  # pause, i.e. no engine at all), engine_failed, pull_failed and stopped.
+  # It printed `ok inference subsystem left no_engine (state=disabled)`, a
+  # line that reads like a success and is the opposite of one, and that is
+  # the assert that should have named #643's regression and did not (#748).
+  #
+  # `ready` is not an estimate: run 31605659210 measured the end-of-leg
+  # state on all three daemon-path legs, and macOS and Windows both reached
+  # ready. Linux reached disabled — the defect this leg was hiding, fixed
+  # in installtest-run.sh so its re-init stops turning local AI back off.
+  # An OS that legitimately settles somewhere else must be MEASURED into
+  # this list, one leg at a time, rather than the list being widened to
+  # whatever a red run happens to report.
   out="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
   state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"' || true)"
   case "$state" in
-    ""|no_engine) bad "inference subsystem still reports '${state:-unreachable}' (engine not installed)" ;;
-    *) ok "inference subsystem left no_engine (state=$state)" ;;
+    ready) ok "inference subsystem is serving (state=ready)" ;;
+    *) bad "inference subsystem reports '${state:-unreachable}', want ready (the executor's engine is not serving)" ;;
   esac
 
   setup_state="$(gx "$guest" curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null || true)"

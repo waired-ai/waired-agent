@@ -1171,9 +1171,12 @@ assert_daemon_engine_macos() {
   assert_serving_ollama_macos "daemon-path executor"
   out="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/inference/status 2>/dev/null || true)"
   state="$(printf '%s' "$out" | grep -oE '"subsystem_state"[[:space:]]*:[[:space:]]*"[a-z_]+"' | head -1 | grep -oE '"[a-z_]+"$' | tr -d '"')"
+  # ready, and nothing else — see the twin in lib/installtest-daemon-engine.sh
+  # for why (#748). Not-no_engine accepted 10 of the 11 declared states,
+  # disabled among them. Measured ready on this leg in run 31605659210.
   case "$state" in
-    ""|no_engine) bad "inference subsystem still reports '${state:-unreachable}' (engine not installed)" ;;
-    *) ok "inference subsystem left no_engine (state=$state)" ;;
+    ready) ok "inference subsystem is serving (state=ready)" ;;
+    *) bad "inference subsystem reports '${state:-unreachable}', want ready (the executor's engine is not serving)" ;;
   esac
   setup_state="$(curl -fsS --max-time 5 http://127.0.0.1:9476/waired/v1/setup/state 2>/dev/null || true)"
   # engine_installed — what the SETUP WIZARD reads (#195/#179). The checks

@@ -501,8 +501,13 @@ function Assert-DaemonEngine {
 
     $state = ''
     try { $state = (Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/inference/status' -TimeoutSec 5).subsystem_state } catch { }
-    if ($state -and $state -ne 'no_engine') { ItOk "inference subsystem left no_engine (state=$state)" }
-    else { ItBad "inference subsystem still reports '$state' (engine not installed)" }
+    # ready, and nothing else -- see the twin in
+    # scripts/dev/lib/installtest-daemon-engine.sh for why (#748).
+    # Not-no_engine accepted 10 of the 11 declared states, disabled among
+    # them, and printed the accepting line as an ok. Measured ready on this
+    # leg in run 31598909293 (#744) and again in 31605659210.
+    if ($state -eq 'ready') { ItOk "inference subsystem is serving (state=ready)" }
+    else { ItBad "inference subsystem reports '$(if ($state) { $state } else { 'unreachable' })', want ready (the executor's engine is not serving)" }
 
     $setupState = $null
     try { $setupState = Invoke-RestMethod -Uri 'http://127.0.0.1:9476/waired/v1/setup/state' -TimeoutSec 5 } catch { }
