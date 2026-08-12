@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 3436f5e32119d40a
+sourceHash: 4d979e5593170e50
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -155,6 +155,9 @@ waired doctor --fix              # 確認なしで修復（スクリプト・SSH
 waired infer "say hi"
 waired infer "say hi" --explain    # 実際には尋ねず、どのマシンとモデルが答えるかを表示
 ```
+
+`--explain` は、表示する数値の元になったピア情報の古さも `map_age_ms` として出します。
+数値がおかしいのか、単に古いだけなのかは、これで見分けます。
 
 ### `waired models`
 

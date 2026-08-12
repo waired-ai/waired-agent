@@ -160,6 +160,10 @@ waired infer "say hi"
 waired infer "say hi" --explain    # show which machine and model would answer, without asking
 ```
 
+`--explain` also reports how old the peer information behind its figures was,
+as `map_age_ms` — which is how you tell a figure that is wrong from one that is
+just out of date.
+
 ### `waired models`
 
 ```sh
