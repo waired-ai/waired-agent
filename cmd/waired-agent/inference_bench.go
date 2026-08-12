@@ -126,6 +126,31 @@ func (d BenchDeps) report(p BenchProgress) {
 // Capacity with it.
 const avgCodingAgentTokRate = 30.0
 
+// unmeasuredCapacity is the admission ceiling of a host that has an engine
+// but has not yet measured what it can take: one request at a time.
+//
+// The value is not new. RunBootBenchmark already returns it for every way a
+// measurement can fail to happen on a host that has an engine, for the
+// reason notReadyBenchResult carries — on the wire 0 means UNLIMITED, so
+// returning 0 would advertise a host with no working engine as accepting
+// unbounded concurrency, and 1 is the fail-safe. What waired-agent#738
+// found is that the fail-safe covered only the ADVERTISED figure: the
+// overlay listener was constructed with Capacity 0 and so enforced nothing
+// until the network map echoed a measured figure back — the benchmark's
+// duration plus a publish round trip, six minutes on the first install the
+// EngineReady path above was reported from.
+//
+// So the same "one at a time until we know" now seeds Config.Capacity and
+// backs capacityFn's boot fallback. Peers see it: /healthz reports the live
+// counter, and a probing peer reads total>0 && used>=total as not-ready and
+// routes to someone else rather than piling on. The host's owner is
+// unaffected — AcquireOwner never enforces the ceiling.
+//
+// Deliberately NOT applied to a host with no engine at all (EnginePort 0,
+// engine kind none): RunBootBenchmark's skip paths return 0 on purpose, and
+// that encoding stays.
+const unmeasuredCapacity = 1
+
 // resolveInteractiveFloor returns the throughput (tokens/sec) below
 // which the agent recommends a lighter model (issue #133). A
 // configured value > 0 wins; 0 (the default) falls back to the
@@ -1019,7 +1044,7 @@ func spreadPercent(xs []float64) float64 {
 // door keys on (RunBenchmark, internal/management maps it to 425).
 func notReadyBenchResult(deps BenchDeps, reason string) BenchResult {
 	return BenchResult{
-		Capacity:  1,
+		Capacity:  unmeasuredCapacity,
 		VariantID: deps.VariantID,
 		Failed:    true,
 		Err:       reason,
@@ -1038,7 +1063,7 @@ func notReadyBenchResult(deps BenchDeps, reason string) BenchResult {
 // branch on for a host whose local AI is genuinely down.
 const benchEngineBounceGrace = 2
 
-// failBench logs a warning and returns Capacity=1 so the agent
+// failBench logs a warning and returns unmeasuredCapacity so the agent
 // continues with a single-stream admission rather than refusing to
 // start. Reason is a short slug for log filtering.
 func failBench(deps BenchDeps, reason string, err error) BenchResult {
@@ -1046,7 +1071,7 @@ func failBench(deps BenchDeps, reason string, err error) BenchResult {
 		"reason", reason,
 		"err", err)
 	return BenchResult{
-		Capacity:  1,
+		Capacity:  unmeasuredCapacity,
 		VariantID: deps.VariantID,
 		Failed:    true,
 		Err:       err.Error(),

@@ -171,3 +171,48 @@ func TestCapacityFn_PrefersTheLiveProviderAnswer(t *testing.T) {
 		}
 	})
 }
+
+// TestCapacityFn_AnUnmeasuredEngineIsAdvertisedAsOne pins the PRODUCT
+// CONTRACT half of waired-agent#738 that faces the mesh.
+//
+// A host with an engine and no measurement yet used to publish 0, which the
+// requesting side reads as "no ceiling": the router's admission pre-filter
+// only drops a peer whose capacity is > 0, and probe_client only calls one
+// full when total > 0. So peers piled onto a machine that had not yet decided
+// what it could take, while the machine itself enforced nothing either.
+//
+// Now both halves make the same claim — one at a time until I know — so the
+// figure peers read is the figure the host enforces. Publishing 0 while
+// enforcing 1 would be the same quantity on the wire with two answers, the
+// shape waired-agent#713 was about.
+//
+// A host with NO provider still publishes 0, and that is deliberate:
+// RunBootBenchmark's skip paths (engine port 0, engine kind none) document 0
+// as the right encoding for "no admission cap", and such a host serves no
+// inference for the ceiling to bound.
+func TestCapacityFn_AnUnmeasuredEngineIsAdvertisedAsOne(t *testing.T) {
+	t.Run("an engine with no measurement advertises the floor", func(t *testing.T) {
+		sub := &inferenceSubsystem{provider: &agentInferenceProvider{}}
+		if got := capacityFn(0, sub)(); got != unmeasuredCapacity {
+			t.Errorf("= %d, want %d — an advertised 0 tells every peer there is no ceiling",
+				got, unmeasuredCapacity)
+		}
+	})
+	t.Run("a measurement still wins over the floor", func(t *testing.T) {
+		prov := &agentInferenceProvider{}
+		sub := &inferenceSubsystem{provider: prov}
+		fn := capacityFn(0, sub)
+		prov.SetLastBench(BenchResult{Capacity: 6, Outcome: benchOutcomeMeasured})
+		if got := fn(); got != 6 {
+			t.Errorf("= %d, want 6: the floor is what we say before measuring, not a cap on it", got)
+		}
+	})
+	t.Run("a host with no engine keeps its deliberate zero", func(t *testing.T) {
+		if got := capacityFn(0, nil)(); got != 0 {
+			t.Errorf("= %d, want 0 — RunBootBenchmark's skip paths mean this on purpose", got)
+		}
+		if got := capacityFn(0, &inferenceSubsystem{})(); got != 0 {
+			t.Errorf("nil provider: = %d, want 0", got)
+		}
+	})
+}
