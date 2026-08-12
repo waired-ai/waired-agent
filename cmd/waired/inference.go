@@ -533,7 +533,12 @@ func runEngineTransition(mgmt string, stop bool, verb string) error {
 		endpoint = "/waired/v1/inference/engine/stop"
 	}
 
-	body, err := httpPost(gf.Mgmt+endpoint, nil)
+	// engineWriteTimeout, not the default: a hard stop kills the engine
+	// process and waits for the memory to come back, which the daemon
+	// bounds at engineStopBudget (15s). With the default budget the CLI
+	// reported a timeout while the stop was in fact succeeding — the same
+	// defect the tray fixed for itself in waired#316.
+	body, err := httpPostWithin(gf.Mgmt+endpoint, nil, engineWriteTimeout)
 	if err == nil {
 		fmt.Printf("%s ok.\n", verb)
 		return prettyPrint(body)

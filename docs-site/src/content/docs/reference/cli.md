@@ -330,6 +330,9 @@ waired ping <peer>
 
 Checks that this computer can actually reach another over the private network.
 
+When the other computer does not answer, the error names it, so a silent
+peer reads differently from a problem with Waired on this machine.
+
 ### `waired public`
 
 Lending your spare capacity to other Waired users, and borrowing theirs. Off

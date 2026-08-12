@@ -377,6 +377,17 @@ func (s *Selector) resolveModel(name string, reasons *[]string) (catalog.Manifes
 	return catalog.Manifest{}, false
 }
 
+// RTTUnknown is Candidate.RTTMS when disco has never matched a pong from
+// the peer — which is also what a peer only ever reached over the relay
+// looks like, since disco.Service.RTTSnapshot omits peers with no
+// samples. It sorts last among peers that have a measurement, and is
+// never a filter.
+//
+// A consumer deciding how long to wait for such a peer has no distance
+// estimate to scale by, and must fall back to its own ceiling rather than
+// treat the sentinel as a duration.
+const RTTUnknown = ^uint32(0)
+
 // Sentinel errors. Wrap with %w so callers can use errors.Is.
 var (
 	ErrModelNotFound        = errors.New("router: model not found in catalog")
@@ -410,6 +421,19 @@ var (
 	// rejected during the spec consultation
 	// (docs/records/20260518/1530-routing-peer-pin-spec.md).
 	ErrPinnedPeerUnreachable = errors.New("router: pinned peer is unreachable")
+	// ErrPeersDidNotAnswer is returned when mesh peers matched the
+	// request but not one of them answered its readiness probe — every
+	// probe hit a transport error or ran out of budget, so nothing was
+	// learned about any of them.
+	//
+	// Distinct from ErrAllPeersOverloaded because the two are different
+	// operator problems and only one of them is about load: "at capacity"
+	// is a peer that answered and said it was full, and reporting it for
+	// a mesh nobody could reach sent the #624 investigation to the
+	// capacity filter, which had not run. A peer that answered "not
+	// ready" for any other reason still falls under the existing
+	// sentinels — this one means the mesh went unmeasured.
+	ErrPeersDidNotAnswer = errors.New("router: no matching mesh peer answered its readiness probe")
 )
 
 // PinnedPeerUnreachableError is what the Selector actually returns for
@@ -460,8 +484,16 @@ type Candidate struct {
 	PeerID        string `json:"peer_id,omitempty"`
 	// PeerDisplayID mirrors Selection.PeerDisplayID — the only peer
 	// identifier a display surface may render.
-	PeerDisplayID string   `json:"peer_display_id,omitempty"`
-	Decision      Decision `json:"decision"`
+	PeerDisplayID string `json:"peer_display_id,omitempty"`
+
+	// RTTMS is the disco round-trip estimate for this peer, or
+	// RTTUnknown when disco has never matched a pong from it. Carried
+	// out of the Selector because how long it is worth waiting for a
+	// peer's readiness probe is a function of how far away it is, and
+	// only the Selector has the measurement (waired-agent#624).
+	RTTMS uint32 `json:"rtt_ms,omitempty"`
+
+	Decision Decision `json:"decision"`
 
 	// Pinned marks this candidate as the operator's manually pinned
 	// peer. The gateway uses it to tell "the pin itself failed its
@@ -1097,6 +1129,7 @@ func (s *Selector) makeMeshCandidate(req Request, manifest catalog.Manifest, rea
 		ExecutionMode: "remote",
 		PeerID:        c.deviceID,
 		PeerDisplayID: c.displayID,
+		RTTMS:         c.rttMS,
 		Decision:      decision,
 		Pinned: s.in.RoutingMode == state.RoutingModePinned &&
 			s.in.PinnedPeerDeviceID != "" &&
@@ -1354,7 +1387,7 @@ func (s *Selector) buildMeshCandidates(
 		inflight = s.in.LocalInFlight.Snapshot()
 	}
 
-	const noRTT = ^uint32(0) // math.MaxUint32 sentinel for "no sample"
+	const noRTT = RTTUnknown
 
 	var out []meshCandidate
 	for _, p := range snap.Peers {

@@ -670,7 +670,7 @@ func run(ctx context.Context, args []string) error {
 		cloudLogSink := new(atomic.Pointer[cloudLogger])
 		go runStatsPublisher(ctx, provider, statsIntervalFromEnv(), cloudLogSink)
 
-		infClient := inference.NewClient(engine, 15*time.Second)
+		infClient := inference.NewClient(engine, inference.PingBudget)
 
 		provider.engine = engine
 
@@ -2734,8 +2734,17 @@ func (p *agentProvider) replacePeers(nm *signer.NetworkMap) {
 	}
 }
 
+// overlayPinger is the one capability agentPinger needs from
+// inference.Client. Narrowed to an interface because none of PingPeer's
+// failure branches had coverage: reaching them through the concrete
+// client requires a live overlay, and the branch that matters most is
+// the one that fires when there is no reachable peer at all.
+type overlayPinger interface {
+	Ping(ctx context.Context, ip netip.Addr, port uint16) (inference.PingResponse, time.Duration, error)
+}
+
 type agentPinger struct {
-	client   *inference.Client
+	client   overlayPinger
 	provider *agentProvider
 }
 
@@ -2752,7 +2761,12 @@ func (a *agentPinger) PingPeer(ctx context.Context, name string) (management.Pin
 	}
 	body, latency, err := a.client.Ping(ctx, addr, inferenceServicePort)
 	if err != nil {
-		return management.PingResult{}, err
+		// Name the peer, like the two branches above. Without this the
+		// only identifier in the message is the overlay URL the daemon
+		// dialled, and once the CLI's own client gave up first the
+		// operator saw nothing but their own loopback address and read
+		// it as "my daemon is broken" (waired-agent#659).
+		return management.PingResult{}, fmt.Errorf("peer %q did not answer: %w", name, err)
 	}
 	return management.PingResult{
 		Peer:           peer.DeviceName,

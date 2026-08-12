@@ -670,6 +670,174 @@ func TestReconciler_UpgradeRejectReasonTraversesGates(t *testing.T) {
 	}
 }
 
+// TestReconciler_SafetyNetFiresAfterAHandshakeStopsAdvancing is the
+// regression the testnet's flap-suppression scenario caught: a peer that
+// handshook successfully on direct, and whose direct path then went away,
+// must still be downgraded to relay.
+//
+// The safety net asks "did the direct data path make progress since I last
+// looked". It used to compare the handshake against lastEvalAt, which only
+// advances when a peer is created or when the safety net actually switches
+// (Apply preserves it for existing peers) — so one successful handshake sat
+// newer than it forever and vetoed every later downgrade, and because the
+// downgrade never fired lastEvalAt never moved either.
+//
+// That was masked by UpdatePeers rebuilding the peer set on every
+// reconcile, which reset wireguard-go's last-handshake time to zero. This
+// PR stops rebuilding an unchanged peer set, so the veto has to compare
+// against the previous look instead. On real hardware the unfixed version
+// left an agent on `direct` for 248s after its direct path was blocked.
+func TestReconciler_SafetyNetFiresAfterAHandshakeStopsAdvancing(t *testing.T) {
+	pubA := mkPeerKey(t)
+	nm := nm1Peer(pubA, "udp4:198.51.100.10:51820")
+
+	eng := &fakeEngine{}
+	rec := newReconciler(eng, &agentProvider{}, quietLogger(), nil, fastTestConfig())
+	if err := rec.Apply(nm); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// A direct handshake lands, so the first look must leave the peer on
+	// direct — the data path demonstrably worked.
+	eng.setHandshake(pubA, time.Now())
+	time.Sleep(rec.cfg.FallbackAfter)
+	rec.Tick(context.Background())
+	if got := rec.Snapshot()[pubA].CurrentPath; got != pathDirect {
+		t.Fatalf("after a fresh handshake, current_path = %q, want direct", got)
+	}
+
+	// Now the direct path goes away: the handshake time stops advancing.
+	// Nothing else changes — no disco events, and the peer set is
+	// unchanged, so UpdatePeers correctly leaves the engine alone.
+	time.Sleep(rec.cfg.FallbackAfter)
+	rec.Tick(context.Background())
+
+	snap := rec.Snapshot()[pubA]
+	if snap.CurrentPath != pathRelay {
+		t.Errorf("current_path = %q, want relay — a direct path that stopped "+
+			"handshaking was never detected", snap.CurrentPath)
+	}
+	if snap.LastSwitchReason != "safety_net" {
+		t.Errorf("last_switch_reason = %q, want safety_net", snap.LastSwitchReason)
+	}
+}
+
+// TestReconciler_DwellDoesNotMaskTheStandingUpgradeGate: while the dwell
+// window is open, the reject reason must still name the gate that would
+// refuse the promotion once dwell expires.
+//
+// lastUpgradeRejectReason is a single overwritten string, and the dwell
+// veto used to overwrite it unconditionally. On real hardware that made
+// every peer stuck on relay report "dwell" — a 30 s timer — while the
+// standing blocker was ring_not_full, i.e. a direct path that had never
+// come up at all (waired#1137). Record of today's behaviour for the
+// wording; the values themselves are the existing vocabulary.
+func TestReconciler_DwellDoesNotMaskTheStandingUpgradeGate(t *testing.T) {
+	pubA := mkPeerKey(t)
+	nm := nm1Peer(pubA, "udp4:198.51.100.10:51820")
+	cfg := fastTestConfig()
+	// A dwell window long enough that every evaluation below lands inside
+	// it, which is the situation being tested.
+	cfg.MinDwellTime = time.Hour
+	rec := newReconciler(&fakeEngine{}, &agentProvider{}, quietLogger(), nil, cfg)
+	if err := rec.Apply(nm); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// Drive the peer onto relay, which stamps lastSwitchAt and opens dwell.
+	t0 := time.Now()
+	for i := 0; i < rec.cfg.DowngradeMisses; i++ {
+		rec.OnDiscoEvent(disco.EventProbeRoundFinalized{
+			PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+			Path: pathDirect, RoundID: uint64(i + 1), AnySuccess: false, At: t0,
+		})
+	}
+	if got := rec.Snapshot()[pubA].CurrentPath; got != pathRelay {
+		t.Fatalf("setup: current_path = %q, want relay", got)
+	}
+
+	// Inside dwell, with no RTT samples at all, the honest answer is that
+	// samples are missing — not that a timer is running.
+	inDwell := t0.Add(time.Second)
+	rec.OnDiscoEvent(disco.EventProbeRTTSampled{
+		PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+		Path: pathRelay, RTT: 100 * time.Millisecond, At: inDwell,
+	})
+	if got := rec.Snapshot()[pubA].LastUpgradeRejectReason; got != "samples" {
+		t.Errorf("inside dwell with no samples, LastUpgradeRejectReason = %q, want \"samples\"", got)
+	}
+
+	// Samples satisfied, pong ring still empty: ring_not_full is what
+	// would refuse the promotion the moment dwell expires.
+	for i := 0; i < rec.cfg.MinRTTSamples; i++ {
+		rec.OnDiscoEvent(disco.EventProbeRTTSampled{
+			PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+			Path: pathRelay, RTT: 100 * time.Millisecond, At: inDwell,
+		})
+		rec.OnDiscoEvent(disco.EventProbeRTTSampled{
+			PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+			Path: pathDirect, RTT: 20 * time.Millisecond, At: inDwell,
+		})
+	}
+	snap := rec.Snapshot()[pubA]
+	if snap.CurrentPath != pathRelay {
+		t.Fatalf("dwell should have suppressed the switch; current_path = %q", snap.CurrentPath)
+	}
+	if snap.LastUpgradeRejectReason != "ring_not_full" {
+		t.Errorf("inside dwell with the pong ring empty, LastUpgradeRejectReason = %q, want \"ring_not_full\"",
+			snap.LastUpgradeRejectReason)
+	}
+}
+
+// TestReconciler_DwellIsReportedWhenItIsTheOnlyBlocker is the other half:
+// dwell must still be named when every promotion gate passes and the
+// window is genuinely the one thing left.
+func TestReconciler_DwellIsReportedWhenItIsTheOnlyBlocker(t *testing.T) {
+	pubA := mkPeerKey(t)
+	nm := nm1Peer(pubA, "udp4:198.51.100.10:51820")
+	cfg := fastTestConfig()
+	cfg.MinDwellTime = time.Hour
+	rec := newReconciler(&fakeEngine{}, &agentProvider{}, quietLogger(), nil, cfg)
+	if err := rec.Apply(nm); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	t0 := time.Now()
+	for i := 0; i < rec.cfg.DowngradeMisses; i++ {
+		rec.OnDiscoEvent(disco.EventProbeRoundFinalized{
+			PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+			Path: pathDirect, RoundID: uint64(i + 1), AnySuccess: false, At: t0,
+		})
+	}
+
+	inDwell := t0.Add(time.Second)
+	for i := 0; i < rec.cfg.MinRTTSamples; i++ {
+		rec.OnDiscoEvent(disco.EventProbeRTTSampled{
+			PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+			Path: pathRelay, RTT: 100 * time.Millisecond, At: inDwell,
+		})
+		rec.OnDiscoEvent(disco.EventProbeRTTSampled{
+			PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+			Path: pathDirect, RTT: 20 * time.Millisecond, At: inDwell,
+		})
+	}
+	// Fill the pong ring so no gate other than dwell remains.
+	for i := 0; i < rec.cfg.UpgradePongStreak; i++ {
+		rec.OnDiscoEvent(disco.EventProbeRoundFinalized{
+			PeerNodePub: pubA, PeerDeviceID: "dev_peer_a",
+			Path: pathDirect, RoundID: uint64(100 + i), AnySuccess: true, At: inDwell,
+		})
+	}
+	snap := rec.Snapshot()[pubA]
+	if snap.CurrentPath != pathRelay {
+		t.Fatalf("dwell should still suppress the switch; current_path = %q", snap.CurrentPath)
+	}
+	if snap.LastUpgradeRejectReason != "dwell" {
+		t.Errorf("with every gate satisfied inside dwell, LastUpgradeRejectReason = %q, want \"dwell\"",
+			snap.LastUpgradeRejectReason)
+	}
+}
+
 // TestReconciler_NoFlapWithinDwellTime: after a switch, the reverse
 // switch is suppressed until MinDwellTime elapses.
 func TestReconciler_NoFlapWithinDwellTime(t *testing.T) {

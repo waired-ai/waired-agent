@@ -295,6 +295,8 @@ func selectionErrorReason(err error) string {
 		return "model_not_ready"
 	case errors.Is(err, router.ErrAllPeersOverloaded):
 		return "all_peers_overloaded"
+	case errors.Is(err, router.ErrPeersDidNotAnswer):
+		return "peers_did_not_answer"
 	case errors.Is(err, router.ErrPinnedPeerUnreachable):
 		return "pinned_peer_unreachable"
 	case errors.Is(err, ErrPeerRoutingDisabled):
@@ -322,6 +324,7 @@ func selectionStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, router.ErrModelNotReady),
 		errors.Is(err, router.ErrAllPeersOverloaded),
+		errors.Is(err, router.ErrPeersDidNotAnswer),
 		errors.Is(err, router.ErrPinnedPeerUnreachable),
 		errors.Is(err, ErrPeerRoutingDisabled),
 		errors.Is(err, router.ErrRuntimeNotInstalled):

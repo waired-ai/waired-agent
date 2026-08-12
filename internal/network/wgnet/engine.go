@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
@@ -73,6 +74,18 @@ type Engine struct {
 	tnet   *netstack.Net
 	bind   *MultiplexBind // non-nil only when relay multiplex was built
 	closed bool
+
+	// peersMu guards appliedPeerUAPI, the last peer set actually written
+	// to the device. UpdatePeers compares against it so an unchanged peer
+	// set is not re-applied — see its doc for why that matters.
+	peersMu         sync.Mutex
+	appliedPeerUAPI string
+
+	// applyPeerUAPI writes a peer-set UAPI block to the device. It is
+	// dev.IpcSet in production, and a seam in tests: whether the device
+	// was written to at all IS the behaviour UpdatePeers is responsible
+	// for, so a test that cannot see the write cannot check it.
+	applyPeerUAPI func(string) error
 }
 
 // MultiplexBind exposes the underlying relay-aware bind so callers
@@ -178,7 +191,7 @@ func NewEngine(cfg Config) (*Engine, error) {
 		dev.Close()
 		return nil, fmt.Errorf("device up: %w: %w", ErrBindFailed, err)
 	}
-	e := &Engine{cfg: cfg, dev: dev, tnet: tnet, bind: muxBind}
+	e := &Engine{cfg: cfg, dev: dev, tnet: tnet, bind: muxBind, applyPeerUAPI: dev.IpcSet}
 	// Report the port actually bound, not the one requested: they differ
 	// whenever the caller asked for 0.
 	bound, perr := e.ListenPort()
@@ -223,11 +236,29 @@ func (e *Engine) ListenPort() (int, error) {
 	return 0, errors.New("wgnet: no listen_port in device state")
 }
 
-// UpdatePeers atomically replaces the device's peer set. Used by the
-// agent to react to Network Map updates from the Control Plane. The
-// device's private key and listen port are not touched.
+// UpdatePeers atomically replaces the device's peer set when it differs
+// from the set already applied, and does nothing when it does not. Used
+// by the agent to react to Network Map updates from the Control Plane.
+// The device's private key and listen port are not touched.
+//
+// The no-change check is load-bearing, not an optimisation.
+// replace_peers=true makes wireguard-go destroy every peer and build new
+// ones, and a new peer object starts with no handshake and a zero
+// last-handshake time. The reconciler recomputes and pushes on every map
+// frame and on disco events, which on real hardware meant a full teardown
+// roughly every 38-67 seconds even while the map itself was unchanged
+// (peers_added:0, peers_removed:0 in the same log line). That kept
+// PeerHandshakeTimes permanently near-empty, and the relay-fallback
+// safety net reads exactly that to decide a peer has gone quiet — so the
+// churn re-armed the downgrade it is supposed to prevent, and peers sat
+// on relay indefinitely (waired-agent#624, waired#1137).
+//
+// Comparing the generated UAPI text rather than the Peer slice keeps the
+// check honest about what the device is actually told: every field that
+// reaches it (public key, allowed IPs, endpoint, keepalive) is in that
+// string, so an endpoint flip from direct to relay still applies.
 func (e *Engine) UpdatePeers(peers []Peer) error {
-	if e == nil || e.dev == nil {
+	if e == nil || e.applyPeerUAPI == nil {
 		return errors.New("wgnet: engine not initialized")
 	}
 	uapiPeers := make([]UAPIPeer, 0, len(peers))
@@ -243,9 +274,17 @@ func (e *Engine) UpdatePeers(peers []Peer) error {
 	if err != nil {
 		return fmt.Errorf("wgnet: build replace uapi: %w", err)
 	}
-	if err := e.dev.IpcSet(uapi); err != nil {
+	e.peersMu.Lock()
+	defer e.peersMu.Unlock()
+	if uapi == e.appliedPeerUAPI {
+		e.cfg.Logger.Debug("wgnet peers unchanged; left in place",
+			"self", e.cfg.SelfName, "peer_count", len(peers))
+		return nil
+	}
+	if err := e.applyPeerUAPI(uapi); err != nil {
 		return fmt.Errorf("wgnet: ipc set replace: %w", err)
 	}
+	e.appliedPeerUAPI = uapi
 	e.cfg.Logger.Info("wgnet peers updated", "self", e.cfg.SelfName, "peer_count", len(peers))
 	return nil
 }

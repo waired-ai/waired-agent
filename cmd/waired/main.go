@@ -590,7 +590,9 @@ func newPingCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			body, _ := json.Marshal(map[string]string{"peer": args[0]})
-			resp, err := httpPost(mgmt+"/waired/v1/ping", body)
+			// pingWriteTimeout, not the default: the daemon spends up to
+			// 15s waiting on the overlay, and its answer names the peer.
+			resp, err := httpPostWithin(mgmt+"/waired/v1/ping", body, pingWriteTimeout)
 			if err != nil {
 				return err
 			}
@@ -793,8 +795,40 @@ func mgmtWriteRoute(rawURL string, timeout time.Duration) (target string, client
 	return mgmtWriteBase + u.RequestURI(), mgmtWriteClient(timeout), true, nil
 }
 
+// Budgets for management writes. A CLI budget shorter than the daemon's
+// own budget for the same endpoint does not make the answer late, it
+// destroys it: net/http cancels the request context when the client gives
+// up, so the daemon aborts the work AND the reply that would have
+// explained it, and the operator is left holding a timeout the CLI
+// inflicted on itself. The tray hit this first and fixed it the same way
+// — http.Client.Timeout is a hard wall-clock cap that no caller can widen
+// with a longer ctx, so the only remedy is a bigger budget for the
+// endpoints that need one (waired#316, internal/gui/tray/mgmt.go).
+//
+// writeTimeout suits the cheap endpoints (a flag flip plus a small file
+// write). The other two must outlast a daemon-side budget of 15s:
+// pingWriteTimeout the overlay ping client (inference.NewClient in
+// cmd/waired-agent/main.go), engineWriteTimeout the hard engine stop
+// (engineStopBudget in cmd/waired-agent/engine_control.go, whose doc
+// states outright that it is "deliberately larger than any client
+// budget"). 20s matches the tray's engine budget rather than inventing a
+// second number for the same 15s ceiling.
+const (
+	writeTimeout       = 10 * time.Second
+	pingWriteTimeout   = 20 * time.Second
+	engineWriteTimeout = 20 * time.Second
+)
+
 func httpPost(rawURL string, body []byte) ([]byte, error) {
-	target, client, viaSocket, err := mgmtWriteRoute(rawURL, 10*time.Second)
+	return httpPostWithin(rawURL, body, writeTimeout)
+}
+
+// httpPostWithin is httpPost with an explicit budget, for the endpoints
+// whose daemon-side work outlasts writeTimeout. Same shape as benchPost
+// (cmd/waired/init_benchmark.go), which is the existing precedent for
+// handing mgmtWriteRoute a longer budget.
+func httpPostWithin(rawURL string, body []byte, timeout time.Duration) ([]byte, error) {
+	target, client, viaSocket, err := mgmtWriteRoute(rawURL, timeout)
 	if err != nil {
 		return nil, err
 	}

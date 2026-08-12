@@ -231,6 +231,25 @@ type peerPathState struct {
 	lastSwitchReason string    // human/structured reason recorded at the switch
 	lastEvalAt       time.Time // last Apply (= "fresh chance for direct" anchor)
 
+	// lastSeenHandshakeAt is the newest WireGuard handshake time Tick has
+	// already accounted for on this peer. The safety net asks "did the
+	// direct data path make progress since I last looked", and that has to
+	// be a comparison against the previous LOOK, not against lastEvalAt:
+	// lastEvalAt only advances when a peer is created or when the safety
+	// net actually switches (Apply preserves it for existing peers), so a
+	// single successful direct handshake would otherwise sit newer than it
+	// forever and veto every future downgrade — the safety net could never
+	// fire, and because it never fired lastEvalAt never moved either.
+	//
+	// That deadlock was previously masked by UpdatePeers rebuilding the
+	// peer set on every reconcile: each rebuild reset wireguard-go's
+	// last-handshake time to zero, so the veto was almost never true. Once
+	// the rebuild is skipped for an unchanged peer set (the point of this
+	// change), the masking disappears and the deadlock becomes reachable —
+	// the testnet's flap-suppression scenario caught it, with one agent
+	// sitting on `direct` for 248s after its direct path was blocked.
+	lastSeenHandshakeAt time.Time
+
 	// Direct path quality. RTT EWMA in nanoseconds (time.Duration).
 	directRTTEWMA        time.Duration
 	directSampleCount    int
@@ -509,7 +528,18 @@ func (r *reconciler) evaluateSwitchLocked(st *peerPathState, now time.Time, peer
 	// switch, lastSwitchAt is zero and we let probes drive freely.
 	if !st.lastSwitchAt.IsZero() && now.Sub(st.lastSwitchAt) < r.cfg.MinDwellTime {
 		if curr == pathRelay {
-			st.lastUpgradeRejectReason = "dwell"
+			// "dwell" only when dwell is the ONLY thing in the way.
+			// lastUpgradeRejectReason is a single overwritten string, so
+			// recording dwell unconditionally erased the gate that would
+			// still refuse the promotion the moment dwell expired. On real
+			// hardware every peer stuck on relay reported "dwell" — a 30s
+			// timer — while the standing blocker was ring_not_full, i.e. a
+			// direct path that had never come up at all (waired#1137).
+			if gate := r.upgradeGateReason(st); gate != "" {
+				st.lastUpgradeRejectReason = gate
+			} else {
+				st.lastUpgradeRejectReason = "dwell"
+			}
 		}
 		return false, ""
 	}
@@ -543,16 +573,8 @@ func (r *reconciler) evaluateSwitchLocked(st *peerPathState, now time.Time, peer
 		}
 	case pathRelay:
 		// Upgrade?
-		if !r.haveEnoughSamples(st) {
-			st.lastUpgradeRejectReason = "samples"
-			return false, ""
-		}
-		if st.directRTTEWMA == 0 {
-			st.lastUpgradeRejectReason = "ewma_zero"
-			return false, "" // no direct RTT yet — can't compare
-		}
-		if !pongRingFull(st, r.cfg.UpgradePongStreak) {
-			st.lastUpgradeRejectReason = "ring_not_full"
+		if gate := r.upgradeGateReason(st); gate != "" {
+			st.lastUpgradeRejectReason = gate
 			return false, ""
 		}
 		if st.directRTTEWMA < durMul(st.relayRTTEWMA, r.cfg.UpgradeRTTRatio) {
@@ -573,6 +595,25 @@ func (r *reconciler) evaluateSwitchLocked(st *peerPathState, now time.Time, peer
 		st.lastUpgradeRejectReason = "ratio"
 	}
 	return false, ""
+}
+
+// upgradeGateReason names the first relay→direct promotion gate this peer
+// does not satisfy, or "" when all of them pass and only the RTT-ratio
+// comparison is left to make.
+//
+// One function rather than the gate checks inlined at each site, so the
+// reason the dwell veto reports and the reason a normal evaluation
+// reports cannot disagree about the same peer.
+func (r *reconciler) upgradeGateReason(st *peerPathState) string {
+	switch {
+	case !r.haveEnoughSamples(st):
+		return "samples"
+	case st.directRTTEWMA == 0:
+		return "ewma_zero" // no direct RTT yet — can't compare
+	case !pongRingFull(st, r.cfg.UpgradePongStreak):
+		return "ring_not_full"
+	}
+	return ""
 }
 
 func (r *reconciler) haveEnoughSamples(st *peerPathState) bool {
@@ -842,8 +883,12 @@ func (r *reconciler) Tick(ctx context.Context) {
 			continue
 		}
 		hsTime := hs[p.NodePublicKey]
-		if hsTime.After(st.lastEvalAt) {
-			// We did handshake on direct; data path is alive.
+		if hsTime.After(st.lastSeenHandshakeAt) {
+			// The direct data path made progress since the last look, so
+			// it is alive. Record how far it got: the next look asks
+			// whether it moved again, which is what makes a path that
+			// stops handshaking detectable at all (see the field's doc).
+			st.lastSeenHandshakeAt = hsTime
 			continue
 		}
 		st.currentPath = pathRelay
