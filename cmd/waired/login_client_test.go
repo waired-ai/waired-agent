@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -309,6 +310,76 @@ func TestRunInitViaDaemonSurfacesError(t *testing.T) {
 	if got := err.Error(); got != "login failed: control plane denied" {
 		t.Errorf("unexpected error: %v", got)
 	}
+}
+
+// TestRunInitViaDaemonClassifiesAuthKeyErrorFromPollPath pins the direct
+// path's string, the way auth_key_test.go already pins the daemon path's
+// (waired-agent#728).
+//
+// The classifier used to be applied at one call site — the /login/start
+// response — so it covered a path rather than a condition. The daemon
+// runs enrollment asynchronously, which means the failure a fresh
+// auth-key install actually hits arrives through /login/status as text,
+// carrying controlclient's own prefix. The error below is verbatim from
+// the rc8 run on sv-xps15.
+func TestRunInitViaDaemonClassifiesAuthKeyErrorFromPollPath(t *testing.T) {
+	const observed = `create login session: status 400: {"error":{"type":"invalid_request","message":"json: unknown field \"auth_key\""}}`
+
+	newDaemon := func() *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/waired/v1/login/start":
+				// The POST itself succeeds — the daemon accepted the
+				// request and went off to enroll. This is why the
+				// classifier at that call site never sees the failure.
+				_ = json.NewEncoder(w).Encode(management.LoginStatus{
+					SessionID: "s1",
+					Phase:     management.LoginPhaseLoggingIn,
+				})
+			case "/waired/v1/login/status":
+				_ = json.NewEncoder(w).Encode(management.LoginStatus{
+					SessionID: "s1",
+					Phase:     management.LoginPhaseError,
+					Error:     observed,
+				})
+			}
+		}))
+	}
+
+	t.Run("with an auth key the message is replaced", func(t *testing.T) {
+		srv := newDaemon()
+		defer srv.Close()
+		err := runInitViaDaemon(daemonInitOpts{
+			MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+			GatewayBaseURL: "http://127.0.0.1:9473",
+			NoBrowser:      true, NonInteractive: true,
+			SkipIntegration: true,
+			AuthKey:         "waired_ak_" + strings.Repeat("a", 64),
+		})
+		if !errors.Is(err, errAuthKeyUnsupported) {
+			t.Fatalf("want errAuthKeyUnsupported, got %v", err)
+		}
+		// The raw decoder error must not survive alongside it: it is what
+		// sends an operator off to regenerate a key that is not broken.
+		if strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("the raw 400 is still in the message: %v", err)
+		}
+	})
+
+	t.Run("without an auth key it passes through", func(t *testing.T) {
+		srv := newDaemon()
+		defer srv.Close()
+		err := runInitViaDaemon(daemonInitOpts{
+			MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+			GatewayBaseURL: "http://127.0.0.1:9473",
+			NoBrowser:      true, NonInteractive: true,
+			SkipIntegration: true,
+		})
+		if err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Fatalf("an interactive run that merely mentions auth_key must not be rewritten, got %v", err)
+		}
+	})
 }
 
 // daemonReachable selects between the daemon and standalone branches.
