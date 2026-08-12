@@ -64,6 +64,7 @@ ALLOW=(
   internal/management/ipcclient  # mgmt write-socket dialer (waired#838, dep of the e2e harness); loopback IPC only, no routing surface
   internal/management/observabilityclient
   internal/observability         # event-ring types; own tests
+  internal/platform/atomicfile   # publish-by-rename primitive under the state/secret stores below (waired-agent#698); own tests, no routing surface
   internal/platform/elevation    # elevation predicate + per-OS elevation-hint wording (dep of internal/runtime since waired#752); no routing surface
   internal/platform/keychain
   internal/platform/localipc     # mgmt write socket / named pipe listener (waired#838); loopback IPC only, no routing surface

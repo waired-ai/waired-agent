@@ -51,6 +51,11 @@ internal/setup/
 internal/testharness/
 
 # --- credential/state storage under enrollment -------------------------
+# atomicfile is the write primitive the four below publish through: a
+# regression in it loses the credential write itself, which is the same
+# failure as losing the store. Listed for that reason, not for its compile
+# closure.
+internal/platform/atomicfile/
 internal/platform/secrets/
 internal/platform/keychain/
 internal/platform/securestore/

@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/platform/atomicfile"
 )
 
 // Phase is the agent's externally-observable on/off state.
@@ -390,16 +392,18 @@ func NewWriter(stateDir string, initial State) *Writer {
 func (w *Writer) Set(s State) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	prev := w.cur
 	w.cur = s
-	return w.persist()
+	return w.persistOrRollBack(prev)
 }
 
 // SetPhase mutates only the phase field.
 func (w *Writer) SetPhase(p Phase) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	prev := w.cur
 	w.cur.Phase = p
-	return w.persist()
+	return w.persistOrRollBack(prev)
 }
 
 // SetInferenceReachableLocal updates the local-engine reachability
@@ -411,8 +415,9 @@ func (w *Writer) SetInferenceReachableLocal(v bool) error {
 	if w.cur.InferenceReachableLocal == v {
 		return nil
 	}
+	prev := w.cur
 	w.cur.InferenceReachableLocal = v
-	return w.persist()
+	return w.persistOrRollBack(prev)
 }
 
 // SetInferenceReachableInMesh updates the mesh-aggregate reachability
@@ -425,8 +430,9 @@ func (w *Writer) SetInferenceReachableInMesh(v bool) error {
 	if w.cur.InferenceReachableInMesh == v {
 		return nil
 	}
+	prev := w.cur
 	w.cur.InferenceReachableInMesh = v
-	return w.persist()
+	return w.persistOrRollBack(prev)
 }
 
 // Heartbeat refreshes Updated to the supplied moment and persists.
@@ -435,8 +441,9 @@ func (w *Writer) SetInferenceReachableInMesh(v bool) error {
 func (w *Writer) Heartbeat(now time.Time) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	prev := w.cur
 	w.cur.Updated = now
-	return w.persist()
+	return w.persistOrRollBack(prev)
 }
 
 // Snapshot returns a copy of the in-memory state without touching disk.
@@ -450,6 +457,34 @@ func (w *Writer) Snapshot() State {
 // shells switch to "stopped" without waiting for staleness.
 func (w *Writer) Remove() error {
 	if err := os.Remove(StatePath(w.stateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// persistOrRollBack writes the current state, restoring prev if the write
+// fails. Every mutator above calls this rather than persist directly.
+//
+// The roll-back is what makes a lost write recoverable. The mutators change
+// w.cur BEFORE persisting, and the two reachability setters return early
+// when the value is unchanged — so a write that failed once used to leave
+// w.cur permanently ahead of the file: the next tick compared equal,
+// returned without touching disk, and the stale value stayed on disk for the
+// life of the process. One lost race became a permanently wrong state file
+// rather than a few seconds of lag.
+//
+// That is not hypothetical on Windows, where a reader holding the
+// destination open is enough to fail the replacing rename
+// (waired-agent#698). Rolling back means the next heartbeat, five seconds
+// later, sees a difference again and rewrites.
+//
+// A whole-struct copy is safe here: State is scalars, a string pair and a
+// time.Time — no slice or map whose backing array a shallow copy would
+// share. A field added later that does not have that property has to be
+// rolled back by hand.
+func (w *Writer) persistOrRollBack(prev State) error {
+	if err := w.persist(); err != nil {
+		w.cur = prev
 		return err
 	}
 	return nil
@@ -897,5 +932,9 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	// atomicfile.Replace, not os.Rename: on Windows the replacing rename is
+	// refused while anyone holds either file open, and `state` has readers by
+	// design — state.Read is how every consumer of this file learns anything
+	// (waired-agent#698).
+	return atomicfile.Replace(tmpName, path)
 }
