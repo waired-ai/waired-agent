@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -274,6 +275,85 @@ func TestBuildClaudeListenerStillServesClaudeCode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestClaudeListenerOverARealSocket drives the listener production actually
+// serves. Every other test here builds requests with httptest.NewRequest, which
+// sets Host and RemoteAddr by hand — so none of them exercises net/http parsing
+// a Host off the wire, or the peer address coming from the kernel. A guard that
+// only works against synthesised requests is not a guard.
+//
+// Both legs stay off the network: the rebinding leg is answered by the guard,
+// and the legitimate leg is served by the wired local-inference handler.
+func TestClaudeListenerOverARealSocket(t *testing.T) {
+	served := 0
+	ph := &proxyHandle{}
+	ph.SetLocalInference(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		served++
+		_, _ = io.WriteString(w, "LOCAL")
+	}))
+	ph.SetDegraded(func() bool { return false })
+
+	port := freeLoopbackPort(t)
+	srv, ln, err := buildClaudeListener(port, ph, nil, false, true,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("buildClaudeListener: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = srv.Serve(ctx, ln)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	base := "http://" + ln.Addr().String()
+	post := func(t *testing.T, host string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, base+"/v1/messages", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if host != "" {
+			// net/http sends this as the Host header while still dialling the
+			// URL's address — exactly the shape of a rebound request.
+			req.Host = host
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do: %v", err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	t.Run("rebound-host-rejected", func(t *testing.T) {
+		code, body := post(t, "evil.com")
+		if code != http.StatusForbidden {
+			t.Fatalf("got %d want 403 (body=%s)", code, body)
+		}
+		if !strings.Contains(body, "invalid Host header") {
+			t.Errorf("body %s does not name the reason", body)
+		}
+	})
+
+	t.Run("claude-code-served", func(t *testing.T) {
+		before := served
+		code, body := post(t, "") // the client's own Host: 127.0.0.1:<port>
+		if code != http.StatusOK || body != "LOCAL" {
+			t.Fatalf("legitimate request got %d %q, want 200 LOCAL", code, body)
+		}
+		if served != before+1 {
+			t.Fatalf("local inference was not reached")
+		}
+	})
 }
 
 // assertAnthropicError checks the rejection is shaped like the rest of the
