@@ -1246,6 +1246,7 @@ _it_evidence_dump() {
       grep . || echo '(no api/pull lines in the daemon log)'
     d=\$(df -Ph /var/lib/waired 2>/dev/null | tail -1) || d=
     echo \"state-dir free space: \${d:-(state dir unreadable)}\"
+    echo \"engine /api/ps: \$(curl -fsS --max-time 10 http://127.0.0.1:9475/api/ps 2>/dev/null || echo '(unreachable)')\"
   " 2>&1
 }
 
