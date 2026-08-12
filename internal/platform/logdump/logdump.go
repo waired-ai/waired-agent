@@ -2,9 +2,10 @@
 // for bug reports and pre-release debugging. It reads the OS service log
 // (systemd journal on Linux, the unified log on macOS, the Application
 // Event Log on Windows), the plain service log files where the platform
-// keeps any (launchd's stdout/stderr capture on macOS, plus its rotated
-// archives), and the bundled inference-engine logs, and writes them to an
-// io.Writer with section headers.
+// keeps any (launchd's stdout/stderr capture on macOS and the agent's own
+// file on Windows, plus their rotated archives), and the bundled
+// inference-engine logs, and writes them to an io.Writer with section
+// headers.
 //
 // The OS service log lives with the platform's service manager, not in a
 // file the agent owns, so collection shells out to the native tool
