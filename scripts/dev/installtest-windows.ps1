@@ -2200,6 +2200,17 @@ if ($Tier -ge 2) {
         # A bare 'true' would be wrong in the other direction, for the reason
         # recorded on the Linux twin: it installs an engine, which is a
         # postcondition the lean legs depend on.
+        #
+        # -DaemonEngine is the exception, and it is not a nuance: on that leg
+        # THIS re-init is the engine install the leg exists to assert (see the
+        # -DaemonEngine switch doc above, and the watcher teardown below that
+        # outlives it for exactly this reason). Installing an engine here is
+        # the postcondition, not a side effect. Passing 'false' turns local AI
+        # off through applyDaemonInitInference, daemonWantsEngine then reads
+        # `disabled` and skips the install, and the executor lease lives
+        # milliseconds instead of minutes -- which the 2 s watcher poll cannot
+        # see, so the leg fails as "never observed executor_attached" and names
+        # the wrong thing. That is what run 31581929747 was.
         if ($authKey) {
             ItStep "re-init on an enrolled device (waired-agent#313)"
             $reinitLog  = Join-Path $Work 'reinit.log'
@@ -2213,7 +2224,7 @@ if ($Tier -ge 2) {
                 # assigned inside the non-DaemonEngine branch above, so on the
                 # -DaemonEngine leg it would splat as $null and hand
                 # `waired init` an empty argument (the #613 shape).
-                $(if ($WithInference) { '--inference-enabled=true' } else { '--inference-enabled=false' })
+                $(if ($WithInference -or $DaemonEngine) { '--inference-enabled=true' } else { '--inference-enabled=false' })
                 '--skip-integration'
             )
             $env:WAIRED_NO_EMOJI = '1'
