@@ -43,7 +43,25 @@ go test ./... -timeout 10m
 go build -tags prod ./... && go vet -tags prod ./...
 go test -tags prod ./internal/buildflag/...
 make verify-cross
+make ci-lint-local
 ```
+
+`make ci-lint-local` is the rest of the lint job. Beyond the commands
+above, that job runs twenty standalone guard and self-test scripts out
+of `scripts/ci/` — path classifications, seam guards, mirror checks —
+and each one fails independently, so satisfying the one whose error
+message you happened to see says nothing about the other nineteen. They
+need no secrets and no network, but nothing local ran them before, which
+is how a PR could pass every command on this list and still take a red
+lint. The target derives its list from `ci.yml` so it cannot drift
+behind a newly added guard. It needs bash 4+ (two guards use `mapfile`;
+the `/bin/bash` macOS ships is 3.2 — `brew install bash`).
+
+Two things on this list are easy to *believe* you ran. `golangci-lint`
+is not vendored: if it is absent from your machine the command fails
+loudly, but "I ran the checks" then covers seven of eight. And the
+license check below needs network on first use, since it fetches
+`go-licenses`.
 
 `make verify-cross` matters because CI's test jobs run on Linux only:
 it runs `go vet` for the Windows and macOS targets so single-OS

@@ -87,6 +87,7 @@ help:
 	@echo "End-user packaging (.deb via nfpm; requires nfpm in PATH):"
 	@echo "  deb-all              Build waired + waired-tray .deb for amd64 and arm64"
 	@echo "  deb-amd64 deb-arm64  Same, for one arch"
+	@echo "  ci-lint-local        run the scripts/ci guards ci.yml's lint job runs"
 	@echo "  install-script-lint  shellcheck install.sh + .deb maintainer + CI scripts"
 	@echo "  ps-script-lint       PSScriptAnalyzer over the shipped .ps1 scripts"
 
@@ -605,6 +606,13 @@ deb-%: build-linux-%
 .PHONY: install-script-lint
 install-script-lint:
 	bash scripts/ci/install-script-lint.sh
+
+# The guards ci.yml's lint job runs that nothing local ran before (#749).
+# Same rule as the entry point above: the list lives in the script, derived
+# from the workflow, so a new guard needs no edit here and no edit there.
+.PHONY: ci-lint-local
+ci-lint-local:
+	bash scripts/dev/ci-lint-local.sh
 
 # The PowerShell half of install-script-lint. Separate because the two have
 # different prerequisites -- shellcheck is a package, PSScriptAnalyzer is a
