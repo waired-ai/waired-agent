@@ -462,6 +462,15 @@ var _ = errors.Is
 //
 // A sentinel added to router without a row here lands in `default` and
 // answers 500 — which is how ErrAllPeersOverloaded became this bug.
+//
+// Reachability differs by row and is recorded per row rather than
+// implied. Every row exercises the real mapping through the real
+// handler, but ErrPeersDidNotAnswer cannot arrive at THIS surface in
+// production: the only code that produces it is the gateway's probe
+// round (internal/gateway/probe.go), and /inference/select calls Select
+// without probing. Its case is defensive — correct if a probing path
+// ever reaches here — so the row is marked, and nobody reading this
+// table later mistakes it for evidence that the path exists.
 func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -469,12 +478,19 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 		want    int
 		gateway int
 		why     string // non-empty only where the two deliberately differ
+		// defensive marks a sentinel this endpoint cannot currently be
+		// handed. The mapping is still asserted; the reachability is not
+		// claimed.
+		defensive bool
 	}{
 		{name: "model not found", err: router.ErrModelNotFound, want: 404, gateway: 404},
 		{name: "model not ready", err: router.ErrModelNotReady, want: 503, gateway: 503},
 		{name: "runtime not installed", err: router.ErrRuntimeNotInstalled, want: 503, gateway: 503},
 		{name: "all peers overloaded", err: router.ErrAllPeersOverloaded, want: 503, gateway: 503},
-		{name: "peers did not answer", err: router.ErrPeersDidNotAnswer, want: 503, gateway: 503},
+		{
+			name: "peers did not answer", err: router.ErrPeersDidNotAnswer, want: 503, gateway: 503,
+			defensive: true,
+		},
 		{name: "pinned peer unreachable", err: router.ErrPinnedPeerUnreachable, want: 503, gateway: 503},
 		{
 			name: "pinned peer unreachable, wrapped with the peer identity",
@@ -499,6 +515,11 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 			if tc.want != tc.gateway && tc.why == "" {
 				t.Fatalf("row diverges from the gateway (%d vs %d) with no reason recorded", tc.want, tc.gateway)
 			}
+			if tc.defensive {
+				t.Log("defensive row: only the gateway's probe round produces this sentinel, " +
+					"so /inference/select cannot be handed it today; the mapping is asserted, " +
+					"the reachability is not claimed")
+			}
 			// Through the real handler, not mapRouterStatus alone: the
 			// status an operator sees is the one the endpoint writes.
 			inf := &fakeInference{selectErr: wrapErr(tc.err, "select failed")}
@@ -517,6 +538,13 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 			if body["error_code"] != "selection_failed" {
 				t.Errorf("error_code = %q, want selection_failed", body["error_code"])
 			}
+			// Deliberately no assertion on body["message"]. It is
+			// err.Error() verbatim, and what Select returns here is the
+			// WRAPPED form ("...: %q (...)"), never the bare sentinel —
+			// bare is the probe layer's shape, and that difference is the
+			// only thing telling the two layers apart (#734). Pinning a
+			// bare string here would fail, and "fixing" it by unwrapping
+			// in the router would destroy that distinction.
 		})
 	}
 }
