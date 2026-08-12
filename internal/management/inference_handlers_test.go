@@ -453,12 +453,21 @@ var _ = errors.Is
 // sentinel the explain endpoint can be handed, not just the one that was
 // reported wrong (waired-agent#710).
 //
-// The `gateway` column is what internal/gateway's selectionStatus returns
-// for the same error, pinned there by the tests in
-// internal/gateway/selection_error_test.go. It is written down rather
-// than called because the two functions are unexported in different
-// packages; the point of recording it is that a row where the two columns
-// differ has to carry a reason, and only two do.
+// The `gateway` column is the status a CLIENT receives from the serving
+// surfaces — internal/gateway's respondSelectionError (and its Anthropic
+// twin), pinned there by internal/gateway/selection_error_test.go. It is
+// written down rather than called because the two are unexported in
+// different packages; the point of recording it is that a row where the
+// columns differ has to carry a reason.
+//
+// Deliberately the WIRE status, not internal/gateway's selectionStatus.
+// The two are not the same function and do not always agree with each
+// other — selectionStatus feeds the request record, and for
+// ErrHardwareInsufficient it says 400 where the wire says 422. That
+// disagreement is inside the gateway, not between the gateway and this
+// endpoint, so it is not #710's to fix and not this table's to model.
+// Comparing against the record instead would have made this endpoint look
+// wrong for a sentinel it already agrees with.
 //
 // A sentinel added to router without a row here lands in `default` and
 // answers 500 — which is how ErrAllPeersOverloaded became this bug.
@@ -480,7 +489,9 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 		why     string // non-empty only where the two deliberately differ
 		// defensive marks a sentinel this endpoint cannot currently be
 		// handed. The mapping is still asserted; the reachability is not
-		// claimed.
+		// claimed. If the case is ever removed from mapRouterStatus as
+		// unreachable, remove its row here in the same change — a
+		// defensive row left behind fails and reads like a real defect.
 		defensive bool
 	}{
 		{name: "model not found", err: router.ErrModelNotFound, want: 404, gateway: 404},
@@ -499,12 +510,13 @@ func TestMapRouterStatus_AgreesWithServingSurfaces(t *testing.T) {
 		},
 		{
 			name: "capability not met", err: router.ErrCapabilityNotMet, want: 422, gateway: 400,
-			why: "422 is the more precise reading here; the gateway keeps 400 for OpenAI/Anthropic wire compatibility",
+			why: "422 is the more precise reading — the JSON parsed, its requirements were the problem — " +
+				"and this endpoint has no OpenAI/Anthropic wire shape to stay compatible with",
 		},
-		{
-			name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: 422, gateway: 400,
-			why: "same reason as capability not met",
-		},
+		// No divergence to explain: the gateway answers a client 422 here
+		// too. (Its own request-record helper says 400 for this one; see
+		// the note above.)
+		{name: "hardware insufficient", err: router.ErrHardwareInsufficient, want: 422, gateway: 422},
 		{
 			name: "no endpoint for window", err: router.ErrNoEndpointForWindow, want: 500, gateway: 500,
 			why: "record of today's behaviour on both sides, not a considered choice",
