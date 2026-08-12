@@ -428,6 +428,18 @@ func run(ctx context.Context, args []string) error {
 			WithPublicShareControl(sbPublicShareControl{sb}).
 			WithEngineControl(sbEngineControl{sb}).
 			WithHostSpeedControl(sbHostSpeedControl{sb}).
+			// Not a switchboard delegate: the record lives in the state
+			// dir, not in a session, so a re-measure is answerable on a
+			// host that is not enrolled — and the same inputs the boot
+			// measurement used are still in scope here (#589).
+			WithHostMemoryControl(hostMemoryRemeasurer{
+				stateDir:   filepath.Dir(agentJSONPath),
+				version:    buildinfo.Version,
+				getenv:     os.Getenv,
+				ramFn:      hardware.ProbeRAM,
+				engineBusy: engineListening(cfgRoot.Inference),
+				now:        time.Now,
+			}).
 			WithCatalog(&management.CatalogConfig{
 				PreferencePath: preferencePath,
 				// #812 in-process swap seam; delegates to the live session's

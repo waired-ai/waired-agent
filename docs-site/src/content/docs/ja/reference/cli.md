@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 74a0f1a6813f9d8b
+sourceHash: 3436f5e32119d40a
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -255,6 +255,9 @@ waired inference engine status
 waired inference share on         # 自分のほかのパソコンに、このマシンの AI を使わせる
 waired inference share off
 waired inference share status
+
+waired inference memory status    # モデル選択の基準になっているメモリ計測値
+waired inference memory remeasure # その計測をやり直す
 ```
 
 `on` / `off` は、このパソコンでモデルを動かすかどうかそのものです。**オン**に
@@ -275,6 +278,15 @@ waired inference share status
 `engine stop` はメモリ逼迫時の緊急手段、`share off` は自分の利用を保ったまま
 ほかのマシンからの利用だけを閉じる設定です。
 → [しばらく使わないようにする](/ja/guides/pause/)
+
+`memory status` は、Waired の導入時に空いていたメモリ量と、その計測時刻を
+表示します。このパソコンでの「このモデルが載るか」の判断は、すべて**現在の
+空き容量ではなくこの値**を基準にしており、次回のインストールまたはアップグレード
+まで固定です。大きな処理が動いている最中に計測された場合、値はそのマシンの
+実力より低くなり、以後のモデル選択がその値を引き継ぎます。`memory remeasure`
+で計測をやり直せます。AI エンジンが読み込まれている間は、そのエンジンのメモリを
+マシン側に計上してしまうため実行を拒否します。先に
+`waired inference engine stop` で停止してください。
 
 ### `waired worker`
 

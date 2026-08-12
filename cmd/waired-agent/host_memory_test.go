@@ -188,3 +188,116 @@ func must(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// PRODUCT CONTRACT (waired-agent#589). A re-measure is a supported path,
+// not "delete runtime/host-memory.json and restart".
+//
+// The install-time figure is fixed for the life of the install by
+// design, so a host measured during a busy moment keeps that snapshot —
+// and #568's own issue text says the way out must not be folklore.
+func TestHostMemoryRemeasurer(t *testing.T) {
+	fixedNow := func() time.Time { return time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC) }
+	noEnv := func(string) string { return "" }
+	quiet := func() bool { return false }
+	ramOK := func(context.Context) (int, int, error) { return 32, 22, nil }
+	ctx := context.Background()
+
+	newRemeasurer := func(dir string, getenv func(string) string, busy func() bool,
+		ram func(context.Context) (int, int, error),
+	) hostMemoryRemeasurer {
+		return hostMemoryRemeasurer{
+			stateDir: dir, version: "1.0.0", getenv: getenv,
+			ramFn: ram, engineBusy: busy, now: fixedNow,
+		}
+	}
+
+	t.Run("overwrites a record taken under the SAME build", func(t *testing.T) {
+		// The point of the whole feature: ensureHostMemoryMeasured
+		// deliberately reuses a record whose AgentVersion matches, so
+		// without a distinct path there is no way to retake it short of
+		// an upgrade.
+		dir := t.TempDir()
+		must(t, state.WriteHostMemory(dir, state.HostMemoryRecord{
+			AvailableGB: 4, MeasuredAt: "2026-07-01T00:00:00Z", AgentVersion: "1.0.0",
+		}))
+
+		got := newRemeasurer(dir, noEnv, quiet, ramOK).RemeasureHostMemory(ctx)
+
+		if !got.Measured || got.AvailableGB != 22 {
+			t.Fatalf("result = %+v, want a fresh 22 GB measurement", got)
+		}
+		if got.MeasuredAt != "2026-08-12T09:30:00Z" {
+			t.Errorf("measured_at = %q, want the new measurement's time", got.MeasuredAt)
+		}
+		rec, _ := state.ReadHostMemory(dir)
+		if rec.AvailableGB != 22 || rec.AgentVersion != "1.0.0" {
+			t.Errorf("persisted %+v, want the fresh figure under the same build", rec)
+		}
+	})
+
+	t.Run("refuses while an engine holds memory, and says so", func(t *testing.T) {
+		// The refusal IS the install-time rule: a resident model measured
+		// into the figure is the contamination #568 exists to prevent.
+		dir := t.TempDir()
+		must(t, state.WriteHostMemory(dir, state.HostMemoryRecord{
+			AvailableGB: 7, MeasuredAt: "2026-07-01T00:00:00Z", AgentVersion: "1.0.0",
+		}))
+		probed := false
+		ram := func(context.Context) (int, int, error) { probed = true; return 32, 22, nil }
+
+		got := newRemeasurer(dir, noEnv, func() bool { return true }, ram).RemeasureHostMemory(ctx)
+
+		if got.Measured || probed {
+			t.Fatalf("result = %+v probed=%v, want no measurement at all", got, probed)
+		}
+		if got.Reason == "" {
+			t.Error("no reason given; the operator cannot tell a refusal from a no-op")
+		}
+		if got.AvailableGB != 7 {
+			t.Errorf("available_gb = %d, want the kept record's 7", got.AvailableGB)
+		}
+		rec, _ := state.ReadHostMemory(dir)
+		if rec.AvailableGB != 7 {
+			t.Errorf("record was touched: %+v", rec)
+		}
+	})
+
+	t.Run("refuses while the env seam overrides the record", func(t *testing.T) {
+		// Nothing to measure: the override wins over both the record and
+		// the probe, so taking one would produce a figure nothing reads.
+		dir := t.TempDir()
+		envGB := func(k string) string {
+			if k == hostMemoryEnvVar {
+				return "12"
+			}
+			return ""
+		}
+		got := newRemeasurer(dir, envGB, quiet, ramOK).RemeasureHostMemory(ctx)
+		if got.Measured {
+			t.Fatalf("result = %+v, want a refusal while the override is set", got)
+		}
+		if got.Reason == "" {
+			t.Error("no reason given for the override refusal")
+		}
+	})
+
+	t.Run("a failed probe keeps the old record", func(t *testing.T) {
+		dir := t.TempDir()
+		must(t, state.WriteHostMemory(dir, state.HostMemoryRecord{
+			AvailableGB: 7, MeasuredAt: "2026-07-01T00:00:00Z", AgentVersion: "1.0.0",
+		}))
+		ramErr := func(context.Context) (int, int, error) {
+			return 0, 0, errors.New("sysctl: no such file")
+		}
+
+		got := newRemeasurer(dir, noEnv, quiet, ramErr).RemeasureHostMemory(ctx)
+
+		if got.Measured || got.Reason == "" {
+			t.Fatalf("result = %+v, want a reported failure", got)
+		}
+		rec, _ := state.ReadHostMemory(dir)
+		if rec.AvailableGB != 7 {
+			t.Errorf("record = %+v, want the old figure kept when the probe failed", rec)
+		}
+	})
+}

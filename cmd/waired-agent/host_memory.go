@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/agentconfig"
+	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/internal/runtime/state"
 )
 
@@ -105,12 +106,32 @@ func ensureHostMemoryMeasured(
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	return measureAndPersistHostMemory(ctx, stateDir, version, ramFn, now)
+}
+
+// measureAndPersistHostMemory takes the probe and writes the record.
+//
+// Split out of ensureHostMemoryMeasured so the supported re-measure path
+// (#589) takes the SAME measurement under the SAME rules rather than a
+// second implementation of them — in particular the floor at 1, where 0
+// on the wire means "unavailable" and a truthfully exhausted host is the
+// one host that must not read as unmeasured.
+//
+// The guards are deliberately NOT here. They differ between the two
+// callers: boot skips a record that is already current for this build,
+// and a re-measure exists precisely to overwrite one.
+func measureAndPersistHostMemory(
+	ctx context.Context,
+	stateDir, version string,
+	ramFn func(context.Context) (totalGB, availGB int, err error),
+	now func() time.Time,
+) (int, error) {
 	_, availGB, err := ramFn(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("measure available memory: %w", err)
 	}
 	availGB = max(availGB, 1)
-	rec = state.HostMemoryRecord{
+	rec := state.HostMemoryRecord{
 		AvailableGB:  availGB,
 		MeasuredAt:   now().UTC().Format(time.RFC3339),
 		AgentVersion: version,
@@ -119,6 +140,55 @@ func ensureHostMemoryMeasured(
 		return availGB, fmt.Errorf("persist host memory record: %w", err)
 	}
 	return availGB, nil
+}
+
+// hostMemoryRemeasurer is the supported way to retake the install-time
+// available-memory figure (waired-agent#589).
+//
+// Until this existed, an operator whose host was measured during a busy
+// moment had exactly one option — delete runtime/host-memory.json and
+// restart the daemon — which was folklore rather than a path anyone
+// could be pointed at.
+//
+// It reuses the boot-time guards deliberately: the figure means "what
+// the OS and everything resident at install time keep of system RAM", so
+// taking it beside a resident engine would measure the very thing the
+// install-time rule exists to exclude. That refusal is reported rather
+// than silently degraded, because "I measured" and "I kept the old
+// number" are different answers to the operator's question.
+type hostMemoryRemeasurer struct {
+	stateDir   string
+	version    string
+	getenv     func(string) string
+	ramFn      func(context.Context) (totalGB, availGB int, err error)
+	engineBusy func() bool
+	now        func() time.Time
+}
+
+func (h hostMemoryRemeasurer) RemeasureHostMemory(ctx context.Context) management.HostMemoryRemeasure {
+	gb, at := hostMemoryMeasurement(h.stateDir, h.getenv)
+	kept := management.HostMemoryRemeasure{AvailableGB: gb, MeasuredAt: at}
+
+	if v := h.getenv(hostMemoryEnvVar); v != "" {
+		kept.Reason = hostMemoryEnvVar + " is set, so the measurement is overridden and nothing was taken"
+		return kept
+	}
+	if h.engineBusy() {
+		kept.Reason = "an inference engine is holding memory right now; " +
+			"measuring would count it against this host. Stop it with `waired inference engine stop` and try again"
+		return kept
+	}
+	availGB, err := measureAndPersistHostMemory(ctx, h.stateDir, h.version, h.ramFn, h.now)
+	if err != nil {
+		kept.Reason = err.Error()
+		return kept
+	}
+	_, measuredAt := hostMemoryMeasurement(h.stateDir, h.getenv)
+	return management.HostMemoryRemeasure{
+		Measured:    true,
+		AvailableGB: availGB,
+		MeasuredAt:  measuredAt,
+	}
 }
 
 // engineListening reports whether anything answers on the active

@@ -264,6 +264,9 @@ waired inference engine status
 waired inference share on         # let your other computers use this one's AI
 waired inference share off
 waired inference share status
+
+waired inference memory status    # the memory figure model choices are based on
+waired inference memory remeasure # take that figure again
 ```
 
 `on` / `off` is the whole question of whether this computer runs models at all.
@@ -285,6 +288,15 @@ machine](/troubleshooting/#waired-chose-a-very-small-model-for-my-machine).
 `engine stop` is the memory-pressure escape hatch; `share off` keeps your own
 use working while closing it to your other machines. See
 [Stop using your AI for a while](/guides/pause/).
+
+`memory status` shows how much memory was free when Waired was installed, and
+when it looked. That figure — not what is free right now — is what every "does
+this model fit" decision on this computer is based on, and it stays fixed until
+the next install or upgrade. If Waired happened to look while something large
+was running, the number is lower than the machine deserves and every model
+choice inherits it. `memory remeasure` takes it again. It refuses while an AI
+engine is loaded, because that engine's memory would be counted against the
+machine — stop it first with `waired inference engine stop`.
 
 ### `waired worker`
 

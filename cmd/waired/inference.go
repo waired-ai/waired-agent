@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -22,7 +23,9 @@ const inferenceLong = `Sub-verbs that toggle inference subsystem behaviour:
   waired inference share <on|off|status>   Expose (or stop exposing) this
       agent's local engine to mesh peers. Persisted across daemon restarts.
   waired inference engine <stop|start|status>   Hard-stop the local engine to
-      free VRAM/RAM, or restart it. Not persisted.`
+      free VRAM/RAM, or restart it. Not persisted.
+  waired inference memory <status|remeasure>   Show the install-time memory
+      measurement model-fit decisions are based on, or take it again.`
 
 func newInferenceCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -37,6 +40,7 @@ func newInferenceCmd() *cobra.Command {
 		newInferenceStatusCmd(),
 		newInferenceShareCmd(),
 		newInferenceEngineCmd(),
+		newInferenceMemoryCmd(),
 	)
 	return cmd
 }
@@ -229,6 +233,40 @@ type inferenceStatusResponse struct {
 	// (waired-agent#703); an older daemon omits it, which reads as empty
 	// and keeps waiting, the pre-#703 behaviour.
 	HostSpeedStage string `json:"host_speed_stage"`
+	// The install-time available-memory measurement every fit decision on
+	// this host rests on (waired-agent#568). The daemon's own type, for
+	// the same reason HostSpeed above uses it. An older daemon omits it,
+	// which reads as nil and prints nothing.
+	HostMemory *management.HostMemoryMeasurement `json:"host_memory"`
+}
+
+// hostMemoryLine reports the install-time memory measurement, or "" when
+// there is nothing to report.
+//
+// Worth a line at all because the figure is NOT live and reads exactly
+// like something that is: it is taken once per install, before the
+// engine starts, and then fixed for the life of the install. An operator
+// looking at a fit verdict has no other way to see what it was based on,
+// or how old that is (waired-agent#589).
+func hostMemoryLine(m *management.HostMemoryMeasurement) string {
+	if m == nil || m.AvailableGB <= 0 {
+		return ""
+	}
+	// Date only. The figure describes an install, and a wall-clock time
+	// would suggest a precision the number does not have.
+	when := m.MeasuredAt
+	if t, err := time.Parse(time.RFC3339, m.MeasuredAt); err == nil {
+		when = t.Format("2006-01-02")
+	}
+	of := ""
+	if m.TotalGB > 0 {
+		of = fmt.Sprintf(" of %d GB", m.TotalGB)
+	}
+	if when == "" {
+		return fmt.Sprintf("Memory measured at install: %d GB available%s.", m.AvailableGB, of)
+	}
+	return fmt.Sprintf("Memory measured at install: %d GB available%s (measured %s).",
+		m.AvailableGB, of, when)
 }
 
 // hostSpeedTurnLine is what one coding question costs on this computer,
@@ -453,7 +491,97 @@ func runInferenceStatus(mgmt string) error {
 	if s.SubsystemState != "" {
 		fmt.Printf("Inference engine: %s\n", s.SubsystemState)
 	}
+	if line := hostMemoryLine(s.HostMemory); line != "" {
+		fmt.Println(line)
+	}
 	return nil
+}
+
+// runInferenceMemoryRemeasure implements `waired inference memory
+// remeasure` — the supported replacement for deleting
+// runtime/host-memory.json by hand (waired-agent#589).
+func runInferenceMemoryRemeasure(mgmt string) error {
+	body, err := httpPost(mgmt+"/waired/v1/inference/memory/remeasure", nil)
+	if err != nil {
+		return fmt.Errorf("waired inference memory remeasure: %w", err)
+	}
+	var res management.HostMemoryRemeasure
+	if err := json.Unmarshal(body, &res); err != nil {
+		return fmt.Errorf("waired inference memory remeasure: parse: %w", err)
+	}
+	if !res.Measured {
+		// Not an error exit: the daemon answered, and the answer is about
+		// the host rather than about the request.
+		fmt.Println("Memory was not re-measured.")
+		if res.Reason != "" {
+			fmt.Printf("  %s\n", res.Reason)
+		}
+		if res.AvailableGB > 0 {
+			fmt.Printf("  The figure in force is still %d GB available.\n", res.AvailableGB)
+		}
+		return nil
+	}
+	fmt.Printf("Memory re-measured: %d GB available.\n", res.AvailableGB)
+	fmt.Println("  Model-fit decisions use this figure until the next install or upgrade.")
+	return nil
+}
+
+func runInferenceMemoryStatus(mgmt string) error {
+	body, err := httpGet(mgmt + "/waired/v1/inference/status")
+	if err != nil {
+		return fmt.Errorf("waired inference memory status: %w", err)
+	}
+	var s inferenceStatusResponse
+	if err := json.Unmarshal(body, &s); err != nil {
+		return fmt.Errorf("waired inference memory status: parse: %w", err)
+	}
+	line := hostMemoryLine(s.HostMemory)
+	if line == "" {
+		fmt.Println("No memory measurement has been recorded on this computer yet.")
+		return nil
+	}
+	fmt.Println(line)
+	fmt.Println("  Model-fit decisions on this computer are based on this figure.")
+	fmt.Println("  Take it again with `waired inference memory remeasure`.")
+	return nil
+}
+
+func newInferenceMemoryCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "memory",
+		Short: "Show or retake the install-time memory measurement (status / remeasure).",
+		RunE:  namespaceRunE,
+	}
+	cmd.AddCommand(newMemoryStatusCmd(), newMemoryRemeasureCmd())
+	return cmd
+}
+
+func newMemoryStatusCmd() *cobra.Command {
+	var mgmt string
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show the install-time memory measurement model-fit decisions are based on.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runInferenceMemoryStatus(mgmt)
+		},
+	}
+	addMgmtFlag(cmd, &mgmt)
+	return cmd
+}
+
+func newMemoryRemeasureCmd() *cobra.Command {
+	var mgmt string
+	cmd := &cobra.Command{
+		Use:   "remeasure",
+		Short: "Take the memory measurement again on this computer.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runInferenceMemoryRemeasure(mgmt)
+		},
+	}
+	addMgmtFlag(cmd, &mgmt)
+	return cmd
 }
 
 // runShareTransition implements `waired inference share on|off`. Try the

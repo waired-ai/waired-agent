@@ -151,6 +151,19 @@ type InferenceStatus struct {
 	// sweep completes its first run (or on agents without one).
 	LongContext *LongContextBench `json:"long_context,omitempty"`
 
+	// HostMemory is the install-time available-memory measurement every
+	// fit decision on this host is based on (waired-agent#568), and when
+	// it was taken. nil when nothing has been measured — an env-seam
+	// override supplies a value and no date, and dating it from the
+	// record would attribute the number to a measurement that did not
+	// produce it.
+	//
+	// Surfaced because the figure is emphatically NOT live: it is fixed
+	// for the life of the install, so a host measured during a busy
+	// moment keeps that snapshot, and nothing showed an operator what
+	// the verdicts rest on (waired-agent#589).
+	HostMemory *HostMemoryMeasurement `json:"host_memory,omitempty"`
+
 	// DesiredState surfaces the operator's persisted enable/disable
 	// intent for the inference subsystem ("enabled" | "disabled").
 	// Empty when the daemon has no InferenceController attached
@@ -594,12 +607,32 @@ func (s *Server) inferenceMux(mux *http.ServeMux) {
 	mux.HandleFunc("/waired/v1/models/pull", s.handleModelsPull)
 }
 
+// HostMemoryMeasurement is the install-time available-memory record,
+// projected for display. AvailableGB is what the OS and everything
+// resident at install time left of RAMTotalGB.
+type HostMemoryMeasurement struct {
+	AvailableGB int    `json:"available_gb"`
+	TotalGB     int    `json:"total_gb,omitempty"`
+	MeasuredAt  string `json:"measured_at,omitempty"`
+}
+
 func (s *Server) handleInferenceStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, errorBody("method_not_allowed", "GET only"))
 		return
 	}
 	body := s.inference.Status(r.Context())
+	// Read off the profile rather than added to the InferenceProvider
+	// interface: the figure is already there, injected at construction
+	// by WithRAMAvailableAtInstall, and every other consumer reads it
+	// from exactly here.
+	if hw := s.inference.Hardware(r.Context()); hw.RAMAvailableAtInstallGB > 0 {
+		body.HostMemory = &HostMemoryMeasurement{
+			AvailableGB: hw.RAMAvailableAtInstallGB,
+			TotalGB:     hw.RAMTotalGB,
+			MeasuredAt:  hw.RAMAvailableAtInstallMeasuredAt,
+		}
+	}
 	if s.shareControl != nil {
 		_, desired := s.shareControl.State()
 		body.ShareWithMesh = string(desired)
