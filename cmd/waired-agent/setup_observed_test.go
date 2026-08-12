@@ -20,14 +20,33 @@ import (
 
 // observedHost is a provider scripted as a machine somebody set up from a
 // terminal: the engine is on disk, it is the one being served, and a model
-// has been chosen and downloaded.
+// has been chosen, downloaded and activated.
 func observedHost() *fakeSetupProvider {
 	return &fakeSetupProvider{
 		engineInstalled: true,
 		engineReady:     true,
 		preferred:       "qwen3.5-4b",
+		activeModel:     "qwen3.5-4b",
 		modelState:      catalog.ModelStateReady,
 	}
+}
+
+// autoSelectedHost is the machine waired-agent#753 and #756 describe: the
+// same finished host, except that NOBODY WAS EVER ASKED which model to
+// run. The engine is installed and serving, the bundled model was pulled
+// by the daemon's own auto-selection and is answering requests — and
+// preferred-model.json does not exist, because it records a choice and no
+// choice was made.
+//
+// Two journeys arrive here. `waired init --non-interactive` skips the
+// model picker outright (#753, all three platforms), and on macOS the
+// installer registers the LaunchDaemon before running init, so the auto-
+// pull has already started by the time the interactive picker looks and
+// the picker steps aside for a host that already has model history (#756).
+func autoSelectedHost() *fakeSetupProvider {
+	f := observedHost()
+	f.preferred = ""
+	return f
 }
 
 // newObservedReconciler is a reconciler that has folded a frame carrying NO
@@ -57,11 +76,7 @@ func TestObservedSetupReportsTheFinishedRows(t *testing.T) {
 	if got := stepByID(t, p, setupStepModelPull).Status; got != signer.SetupStatusDone {
 		t.Errorf("model_pull = %q, want done", got)
 	}
-	for _, s := range p.Steps {
-		if s.Status != signer.SetupStatusDone && s.Status != signer.SetupStatusSkipped {
-			t.Errorf("step %q = %q; the completion rule reads every row", s.ID, s.Status)
-		}
-	}
+	assertCompletableDocument(t, p)
 	// Nobody claimed the lease, so there is no driver to report. It must
 	// NOT read as the browser: that derivation exists because a desired
 	// state is a browser's implicit claim, and there is no desired state
@@ -89,13 +104,108 @@ func TestObservedSetupStaysSilentWithNothingToReport(t *testing.T) {
 		}
 	})
 
-	t.Run("engine but nothing chosen to serve", func(t *testing.T) {
+	t.Run("engine but nothing chosen and nothing serving", func(t *testing.T) {
+		// Both model signals absent, stated explicitly: since #753 the
+		// report falls back from the chosen model to the served one, so
+		// clearing only the preference no longer describes this
+		// population and an implicit zero value would stop testing it.
 		f := observedHost()
-		f.preferred = ""
+		f.preferred, f.activeModel = "", ""
 		if p := newObservedReconciler(t, f).snapshot(context.Background()); p != nil {
-			t.Fatalf("snapshot = %+v, want nil — no model has been chosen", p)
+			t.Fatalf("snapshot = %+v, want nil — no model has been chosen and none is being served", p)
 		}
 	})
+}
+
+// waired-agent#753 / #756: a host nobody asked is still a host that is
+// serving something, and serving is the observation this report is for.
+//
+// Both issues land here. The device works — engine installed, model
+// resident, requests answered — and before this it published a document
+// with zero steps, which the completion rule can never accept. NAVI then
+// showed it as a computer that never finished setting up, and because the
+// model card is gated on that rule, the model could never be changed from
+// the console on exactly the hosts that never open a browser.
+func TestObservedSetupFallsBackToTheServingModel(t *testing.T) {
+	r := newObservedReconciler(t, autoSelectedHost())
+
+	p := r.snapshot(context.Background())
+	if p == nil {
+		t.Fatal("snapshot = nil on a host serving a model nobody chose — the control plane learns nothing (#753)")
+	}
+	if got := stepByID(t, p, setupStepEngineInstall).Status; got != signer.SetupStatusDone {
+		t.Errorf("engine_install = %q, want done", got)
+	}
+	if got := stepByID(t, p, setupStepModelPull).Status; got != signer.SetupStatusDone {
+		t.Errorf("model_pull = %q, want done", got)
+	}
+	assertCompletableDocument(t, p)
+}
+
+// The order of the two model signals, pinned. A choice that has not
+// converged yet must still name the target, or the row reports the
+// OUTGOING model as done and the wizard's progress bar tracks a download
+// that already finished. Without this test an implementation that reads
+// the served model first passes every other case in this file.
+func TestObservedSetupPrefersTheChosenModelOverTheServingOne(t *testing.T) {
+	f := autoSelectedHost()
+	f.preferred = "qwen3.5-4b"   // chosen, still downloading
+	f.activeModel = "qwen3.5-2b" // still answering with the old one
+	f.modelState = catalog.ModelStateDownloading
+	f.modelCompleted, f.modelTotal = 512, 4096
+
+	step := stepByID(t, newObservedReconciler(t, f).snapshot(context.Background()), setupStepModelPull)
+	if step.Status != signer.SetupStatusRunning {
+		t.Fatalf("model_pull = %+v, want running — the chosen model is still downloading", step)
+	}
+	// The id the row was built from, which is the whole point: asking about
+	// the served model would report the finished download of the model the
+	// operator is switching AWAY from.
+	f.mu.Lock()
+	asked := append([]string(nil), f.modelStateAsked...)
+	f.mu.Unlock()
+	for _, id := range asked {
+		if id == "qwen3.5-2b" {
+			t.Fatalf("the row was built from the served model; asked = %v, want the chosen one", asked)
+		}
+	}
+	if len(asked) == 0 || asked[0] != "qwen3.5-4b" {
+		t.Errorf("asked = %v, want the chosen model", asked)
+	}
+}
+
+// The #586 answers are facts about the QUESTION, not about the machine.
+// A host that answered "no model" and is nonetheless serving one is
+// serving it, and reporting silence about a computer that is answering
+// requests is the defect this fallback exists to remove.
+//
+// Recorded as today's behaviour, not as a ratified rule: no owner ruling
+// covers the combination, and it is only reachable at all because
+// handleNoModelSelected persists the answer without clearing state.Active.
+func TestObservedSetupReportsTheServingModelAfterTheNoneAnswer(t *testing.T) {
+	// A "none" record names no model, so it reaches the reconciler as an
+	// empty preference — exactly like the never-asked host above.
+	r := newObservedReconciler(t, autoSelectedHost())
+	if p := r.snapshot(context.Background()); p == nil {
+		t.Fatal("snapshot = nil on a host that is answering requests")
+	}
+}
+
+// The invariant the whole design rests on: an observation is a report,
+// never an instruction. If it leaked into r.desired the reconciler would
+// start converging a host onto a model nobody asked for, and SetupState
+// would serve the executor a desired value the control plane never sent.
+func TestObservedSetupDoesNotBecomeDesiredState(t *testing.T) {
+	r := newObservedReconciler(t, autoSelectedHost())
+	if p := r.snapshot(context.Background()); p == nil {
+		t.Fatal("snapshot = nil; the rest of this test would be vacuous")
+	}
+	if r.desired != (setupDesired{}) {
+		t.Errorf("r.desired = %+v after an observed snapshot, want empty", r.desired)
+	}
+	if got := r.SetupState(context.Background()).DesiredModelID; got != "" {
+		t.Errorf("SetupState desired model = %q, want none — the control plane sent no instruction", got)
+	}
 }
 
 // The acted-on "don't run local AI here" answer owns the whole report

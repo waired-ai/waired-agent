@@ -117,6 +117,13 @@ type fakeSetupProvider struct {
 	// successful apply sets it, which is what makes the reconciler's
 	// convergence observable rather than flag-based.
 	preferred string
+	// activeModel is what the device is currently SERVING, i.e. what the
+	// real provider reads back from ActiveModelID (state.json's Active).
+	// Distinct from preferred on purpose: a host nobody asked carries an
+	// active model with no preference at all (waired-agent#753), and one
+	// mid-switch carries a preference the active model has not caught up
+	// to yet. A fake that kept a single field could express neither.
+	activeModel string
 	// servingEngine overrides the engine kind this device serves from;
 	// empty means the real provider's ollama default (waired-agent#646).
 	servingEngine string
@@ -273,6 +280,13 @@ func (f *fakeSetupProvider) setupPreferredModelID() string {
 	return f.preferred
 }
 
+// setupActiveModelID reports what the device is actually serving.
+func (f *fakeSetupProvider) setupActiveModelID() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.activeModel
+}
+
 // setupCanonicalModelID runs the daemon's own resolution over the
 // manifests the test supplied, rather than returning its argument. An
 // identity stub here would make the convergence defect #200 fixes
@@ -310,6 +324,13 @@ func (f *fakeSetupProvider) setupApplyModel(_ context.Context, model string) (bo
 	}
 	f.preferred = model
 	if f.modelState == catalog.ModelStateReady {
+		// Weights already local, so the real swap flips Active now
+		// (SwapPreferredModel's requestEngineReconcile arm). Mirrored
+		// here so the fake cannot drift into treating the preference and
+		// the served model as unrelated, which is not how the daemon
+		// behaves. The not-ready arm deliberately leaves activeModel
+		// alone: activation lands when the pull completes.
+		f.activeModel = model
 		return false, nil
 	}
 	f.pulls = append(f.pulls, model)
