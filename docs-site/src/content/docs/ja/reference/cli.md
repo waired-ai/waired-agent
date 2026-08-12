@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: f93f6ccc1e7fbee9
+sourceHash: 74a0f1a6813f9d8b
 ---
 
 このページの内容は、注記のあるもの以外すべて
