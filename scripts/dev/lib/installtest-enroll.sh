@@ -988,11 +988,27 @@ IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
 #                             cmd/waired/init_pull.go (terminal pull failure)
 #   Model still downloading   cmd/waired/init_pull.go — the foreground pull wait
 #                             ran out of budget with the download progressing
+#   No model was chosen for this computer
+#                             cmd/waired/init_pull.go — the same wait, on a host
+#                             where nothing was ever selected, so there was no
+#                             download to run out of budget (waired-agent#736)
+#
+# The fourth branch has to be here or the leg blames the engine. It is a
+# not-ready ending like the other three, and an ending this grep does not
+# carry falls through to the "no benchmark THROUGHPUT figure" arm below,
+# which dumps engine-side evidence for a fault that is not the engine's —
+# the exact regression #382 added this set to stop.
+#
+# Deliberately not the IT_NO_MODEL_RE wording ('No model selected'): that
+# one is asserted PRESENT on the engine-only legs, so reusing it here would
+# make this line satisfy an assert on a different leg about a different
+# thing. "was chosen" also matches the product's own register
+# (cmd/waired/worker.go's "no model chosen on that peer").
 #
 # Same alternation-per-harness shape as IT_INSTALL_FAILURE_RE above, and
 # checked by the same guard: mirror any change in installtest-macos.sh and
 # installtest-windows.ps1.
-IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading'
+IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading|No model was chosen for this computer'
 
 # The /waired/v1/inference/status field NAMES it_model_ready_state greps for.
 # Not init wording — JSON keys, owned by
@@ -1516,7 +1532,17 @@ assert_inference() {
     # the daemon reached no conclusion about this host, and nothing decided
     # whether a model belonged here.
     case "$figure" in
-      ""|0|0.0) bad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579)" ;;
+      ""|0|0.0)
+        bad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579)"
+        # Say what the daemon got as far as. it_hostspeed_evidence was
+        # attached only to the init-exit-3 arm, so THIS red — the one the
+        # assert exists to produce — arrived with no daemon output at all:
+        # run 31605659210's macos routing-sentinel job carried zero `agent|`
+        # lines, and which of "measured nothing" and "measured and could not
+        # confirm it" had happened was unanswerable from the job log
+        # (waired-agent#735). Counts no assert, so the tier floors do not move.
+        it_hostspeed_evidence "$guest"
+        ;;
       *)        ok "host speed measured (${method:-?}: turn ${turn:-0}s, floor ${floor:-0}s, against a ${budget:-?}s budget; ${samples:-0} samples)" ;;
     esac
   fi
@@ -1587,7 +1613,17 @@ assert_inference() {
   if [ -n "$tps" ]; then
     ok "benchmark ran during init ($tps)"
   elif [ -n "$notready" ]; then
-    bad "the model was not ready inside init's benchmark window, so nothing was measured — the download, not the engine (\"$notready\"; $initlog)"
+    # Which not-ready ending it was decides what the red may claim. "the
+    # download, not the engine" is true of the three endings that HAVE a
+    # download; on the fourth there is nothing to download, and saying it
+    # anyway is the same false claim init used to print (waired-agent#736).
+    # One `bad` either way — the tier floors count asserts, not arms.
+    case "$notready" in
+      'No model was chosen for this computer')
+        bad "no model was ever selected for this host, so init's benchmark window had nothing to measure — neither the download nor the engine (\"$notready\"; $initlog)" ;;
+      *)
+        bad "the model was not ready inside init's benchmark window, so nothing was measured — the download, not the engine (\"$notready\"; $initlog)" ;;
+    esac
     grep -iE 'download|model|pull' "$initlog" 2>/dev/null | tail -20 | sed 's/^/    init| /' || true
     # Pull-side evidence only. engine.log and the boot-benchmark slog stay on
     # the arm below: printing them HERE is exactly what made every one of these

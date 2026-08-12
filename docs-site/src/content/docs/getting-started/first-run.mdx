@@ -470,6 +470,34 @@ only time. If you want the throughput figure that box shows, run
 `waired runtimes benchmark` once `waired status` says the model is ready.
 </Expected>
 
+<Expected>
+```
+No model was chosen for this computer, so nothing is downloading.
+Pick one with `waired models pull <model>`, or from the browser dashboard.
+
+*  Waired is signed in — no model chosen for this computer
+   Account   you@example.com
+   Claude    still using the Anthropic API
+
+   Signed in and running — this device is on your network.
+   No model is set up here, so local AI has nothing to answer with yet.
+```
+
+Not the box above it, even though both end without a model on the computer.
+There, one is on its way; here, nothing was ever picked — so there is nothing
+to wait for and `waired status` has no progress to show.
+
+This is what a computer Waired judged too small for any of its models gets.
+Setup still installs the AI engine and still signs the computer in, and it can
+still use the AI running on your other computers. What it does not do is choose
+a model it cannot run well.
+
+Pick one yourself with `waired models pull <model>` when you want to, or from
+the browser dashboard. `waired models ls --detail` shows which models fit this
+hardware and why. If a `Speed` figure appears in the box, that is what one
+coding question costs here — the number worth checking before you pick.
+</Expected>
+
 <Expected tone="bad">
 ```
 !  The AI engine could not be installed on this device.

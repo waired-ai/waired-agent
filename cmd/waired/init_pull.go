@@ -39,6 +39,17 @@ type modelWaitResult struct {
 	// would put a "still setting up" ending in front of every host that
 	// was configured never to have local AI (#569).
 	pending bool
+	// noModelChosen is the wait ending because this host never had a model
+	// to wait for — nothing active, nothing downloading, and no explicit
+	// decline either (waired-agent#736).
+	//
+	// Disjoint from pending by construction: they are set on different
+	// arms of the same deadline check. It exists separately because the
+	// closing box has to be able to tell this apart from the ordinary
+	// success ending, and !ready alone cannot — the success box states
+	// "Local inference is live via the waired-agent daemon", which is
+	// false on a host with nothing to serve.
+	noModelChosen bool
 }
 
 // waitForBundledModel blocks until the agent's active (bundled) model has
@@ -95,6 +106,14 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 	failedStreak := 0
 	var unseenDeadline time.Time    // armed while the wizard's model is on none of the daemon's books
 	var engineFailedSince time.Time // armed on the first engine_failed, never disarmed (#310)
+
+	// sawTarget records whether this wait ever had something to wait FOR:
+	// a model the daemon named as active, or one it listed as downloading.
+	// Latched over the whole wait rather than read off the last snapshot,
+	// because one snapshot cannot tell "nothing was ever selected" from
+	// "the download just ended" — and the deadline arm below says opposite
+	// things about those two (waired-agent#736).
+	sawTarget := false
 
 	// lastNote dedups the per-phase step lines: each distinct transitional
 	// phase prints one concise note as it is entered, so the user watches
@@ -197,6 +216,13 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 		}
 
 		st, ok := fetchInferenceStatus(mgmtURL)
+		if ok && (want != "" || st.Active != nil || len(st.Models.Downloading) > 0) {
+			// A wizard target counts on its own: naming a model IS having
+			// something to wait for, whether or not the daemon has taken it
+			// up yet — the arms that answer "named but not moving" are
+			// further down and say so themselves.
+			sawTarget = true
+		}
 		switch {
 		case !ok:
 			// /status unreachable this tick — keep waiting, re-read next tick.
@@ -421,6 +447,34 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 
 		if time.Now().After(deadline) {
 			endProgressLine(out, tty, &line)
+			if !sawTarget {
+				// Nothing was ever selected for this host, so there is no
+				// download to hand to the background and no progress for
+				// `waired status` to show. Saying otherwise sent operators
+				// to watch a transfer that did not exist (waired-agent#736):
+				// observed on a host where the selector declined to
+				// preselect ("not preselected here") and the only model in
+				// the store was the host-cutoff probe.
+				//
+				// `waired runtimes benchmark` is deliberately NOT offered
+				// here — it refuses on exactly this state, the same defect
+				// the pull-failure arm above records. `waired models ls`
+				// is not offered either: on this host it prints "(no models
+				// registered)", which is true and useless. `waired init`
+				// would not re-ask, so the two routes that work are the
+				// pull and the dashboard — the pairing the picker already
+				// uses (init_model_picker.go).
+				//
+				// Not pending: pending selects the "local AI is still
+				// setting up here" box, and nothing is setting up. The
+				// disabled and no-model-selected arms above return the same
+				// zero value for the same reason; unlike them this one
+				// speaks, because the operator has just waited out the
+				// whole window.
+				writePrompt(out, "No model was chosen for this computer, so nothing is downloading.")
+				writePrompt(out, "Pick one with `waired models pull <model>`, or from the browser dashboard.")
+				return modelWaitResult{noModelChosen: true}
+			}
 			writePrompt(out, "Model still downloading; it will finish in the background. "+
 				"Run `waired status` to watch progress, or `waired runtimes benchmark` later to check performance.")
 			// pending: this line hands the terminal back, and until #569

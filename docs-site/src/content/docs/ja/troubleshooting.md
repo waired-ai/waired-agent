@@ -5,7 +5,7 @@ meta:
   audience: Waired の様子がおかしい人
   needs: 対象のパソコンのターミナル
   time: 症状を探す。各対処は 1〜2 分
-sourceHash: 5d48155e7c7cde45
+sourceHash: a998b6a5a76a9a36
 ---
 
 <!-- 症状ファースト。読者が分かるのは「何が見えているか」であって、どの機能の
@@ -253,6 +253,14 @@ Waired は背後で再試行を続けるので、エンジンが動き出せば�
 **`Waired is signed in — local AI is still setting up here`** で終わり、終了コードは
 `0` です。異常ではなく、転送がセットアップの待ち時間の上限を超えただけで、続きは
 バックグラウンドのサービスが完了させます。`waired status` で進捗を確認できます。
+
+Waired がモデルを一つも選ばなかったパソコンも、この項目ではありません。セットアップは
+**`Waired is signed in — no model chosen for this computer`** で終わり、終了コードは
+`0` です。エンジンは導入されて動いており、欠けているのはモデルです。カタログの
+どれもこのハードウェアにうまく収まらなかったためです。ダウンロード中のものは無く、
+`waired status` に表示する進捗もありません。自分で選ぶときは
+`waired models pull <model>`、またはブラウザのダッシュボードから指定します。
+`waired models ls --detail` が、どのモデルが収まるかとその理由を表示します。
 
 よくある原因:
 

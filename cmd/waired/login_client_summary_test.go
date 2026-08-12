@@ -84,6 +84,7 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 		startsOff    = "local AI starts off on this computer"
 		installsOff  = "engine installs are turned off here"
 		settingUp    = "local AI is still setting up here"
+		noModel      = "no model chosen for this computer"
 	)
 	slow := func() *management.HostSpeedStatus {
 		return &management.HostSpeedStatus{
@@ -334,6 +335,48 @@ func TestPrintDaemonSummaryBoxPicksTheOutcomeItCanDefend(t *testing.T) {
 			summary: daemonSummary{accountEmail: "someone@example.test", modelPending: false},
 			want:    celebration,
 			absent:  []string{settingUp, notRunning},
+		},
+		{
+			// waired-agent#736. The success box claims "Local inference is
+			// live via the waired-agent daemon" unconditionally, so a host
+			// that finished setup with nothing to serve must not reach it —
+			// and it must not reach the still-setting-up box either, which
+			// promises background work nobody started.
+			name: "a host with no model chosen gets neither the celebration nor 'still setting up'",
+			summary: daemonSummary{
+				accountEmail:  "someone@example.test",
+				noModelChosen: true,
+			},
+			want:   noModel,
+			absent: []string{celebration, settingUp, notRunning, "is live"},
+		},
+		{
+			// Order. Both are non-faults and they are disjoint by
+			// construction — the wait sets them on different arms of the
+			// same deadline — so this is unreachable today and pinned so it
+			// stays a deliberate choice if that ever changes. "Still
+			// arriving" is the more specific claim: something IS coming.
+			name: "a model still arriving outranks no model chosen",
+			summary: daemonSummary{
+				accountEmail:  "someone@example.test",
+				modelPending:  true,
+				noModelChosen: true,
+			},
+			want:   settingUp,
+			absent: []string{noModel, celebration},
+		},
+		{
+			// A stated fault still outranks it, the same way it outranks
+			// pending: this box must never be what swallows an engine that
+			// would not stay up.
+			name: "an engine that would not stay up outranks no model chosen",
+			summary: daemonSummary{
+				engineFailure: "ollama: process exited during startup: signal: killed",
+				noModelChosen: true,
+			},
+			want:     notRunning,
+			absent:   []string{noModel, celebration},
+			wantExit: exitLocalAIDown,
 		},
 	}
 

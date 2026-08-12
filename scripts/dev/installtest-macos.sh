@@ -80,7 +80,7 @@ IT_ENGINE_OPTOUT_RE='Engine install skipped (WAIRED_NO_OLLAMA)'
 IT_INSTALL_FAILURE_BOX_RE='The AI engine could not be installed on this device'
 # Mirror of lib/installtest-enroll.sh's IT_BENCH_NOT_READY_RE — see the comment
 # there (#382). Same guard checks these three copies agree.
-IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading'
+IT_BENCH_NOT_READY_RE='Model not ready in time|Model download failed|Model still downloading|No model was chosen for this computer'
 # Mirrors of lib/installtest-enroll.sh's step-4 default / models-pull pair
 # (waired-agent#590) — see the comments there. Same guard checks these three
 # copies agree and that the product still prints them.
@@ -526,7 +526,14 @@ assert_inference_macos() {
     case "$figure" in ""|0|0.0) figure="$floor" ;; esac
     # BLOCKING since waired-agent#579 shipped — see the Linux twin.
     case "$figure" in
-      ""|0|0.0) bad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579)" ;;
+      ""|0|0.0)
+        bad "no host-speed measurement published (#496): the daemon never finished measuring this host inside init, so nothing decided whether a model belonged here (waired-agent#579)"
+        # The linux twin's comment applies here verbatim, and this is the
+        # leg it was observed on: run 31605659210's routing sentinel (macos)
+        # produced this red with zero daemon output (waired-agent#735).
+        # Counts no assert, so the tier floors do not move.
+        hostspeed_evidence
+        ;;
       *)        ok "host speed measured (${method:-?}: turn ${turn:-0}s, floor ${floor:-0}s, against a ${budget:-?}s budget; ${samples:-0} samples)" ;;
     esac
   fi
@@ -580,7 +587,15 @@ assert_inference_macos() {
   if [ -n "$tps" ]; then
     ok "benchmark ran during init ($tps)"
   elif [ -n "$notready" ]; then
-    bad "the model was not ready inside init's benchmark window, so nothing was measured — the download, not the engine (\"$notready\"; $INITLOG)"
+    # See the linux twin: the fourth branch has no download, so it gets its
+    # own red rather than one that names a transfer that never existed
+    # (waired-agent#736). One `bad` either way.
+    case "$notready" in
+      'No model was chosen for this computer')
+        bad "no model was ever selected for this host, so init's benchmark window had nothing to measure — neither the download nor the engine (\"$notready\"; $INITLOG)" ;;
+      *)
+        bad "the model was not ready inside init's benchmark window, so nothing was measured — the download, not the engine (\"$notready\"; $INITLOG)" ;;
+    esac
     grep -iE 'download|model|pull' "$INITLOG" 2>/dev/null | tail -20 | sed 's/^/    init| /' >&2 || true
     # Pull-side evidence only; engine.log stays on the arm below (#382).
     #

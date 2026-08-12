@@ -122,6 +122,74 @@ func TestWaitForBundledModel_BudgetElapsedMidDownloadIsPendingNotFailed(t *testi
 	}
 }
 
+// The same budget elapsing with NOTHING selected must not claim a download.
+//
+// This is the shape waired-agent#736 was filed on, taken from run
+// 31592040935's install+inference (macos) leg: a 7 GB host where the
+// selector declined to preselect a model, so `downloading` was null, the
+// only model in the store was the host-cutoff probe, and no download was
+// ever going to start. init printed "Model still downloading" anyway and
+// pointed at `waired status`, which had no progress to show.
+//
+// Product contract (waired-agent#736, owner-approved wording 2026-08-13).
+func TestWaitForBundledModel_BudgetElapsedWithNothingSelectedSaysSo(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	// awaiting_model with no active selection and an empty download list is
+	// what the daemon publishes on a host the selector passed over. Ready
+	// carries the host-cutoff probe, exactly as the observed leg did — it is
+	// on disk but it is not a selection, and it must not read as one.
+	stub := &pullStub{seq: []management.InferenceStatus{{
+		SubsystemState: "awaiting_model",
+		Models:         management.ModelsSnapshot{Ready: []string{"qwen3.5-0.8b"}},
+	}}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	res := waitForBundledModel(srv.URL, &out, false, time.Nanosecond, false, nil, nil, nil)
+	if res.ready {
+		t.Fatalf("nothing was selected, so nothing is ready; out=%q", out.String())
+	}
+	if res.pending {
+		t.Error("pending selects the \"local AI is still setting up here\" box, and nothing is setting up")
+	}
+	s := out.String()
+	if !strings.Contains(s, "No model was chosen for this computer") {
+		t.Errorf("expected the nothing-selected notice, got: %q", s)
+	}
+	if strings.Contains(s, "Model still downloading") {
+		t.Errorf("nothing is downloading, so the hand-back notice is a false claim; got: %q", s)
+	}
+	// The two commands the arm must not name, each because it bounces on
+	// exactly this state — see the arm's comment.
+	if strings.Contains(s, "runtimes benchmark") {
+		t.Errorf("`waired runtimes benchmark` refuses on a host with no model; got: %q", s)
+	}
+	if !strings.Contains(s, "waired models pull") {
+		t.Errorf("expected the route that works, got: %q", s)
+	}
+}
+
+// NEGATIVE CONTROL for the arm above: a download that IS in flight when the
+// budget runs out must keep the hand-back notice. Without this, "say nothing
+// is downloading" could be satisfied by saying it always.
+func TestWaitForBundledModel_ADownloadInFlightStillHandsBack(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	const mb = 1 << 20
+	stub := &pullStub{seq: []management.InferenceStatus{downloadingSnap("qwen", 1*mb, 4*mb)}}
+	srv := stub.server()
+	defer srv.Close()
+
+	var out strings.Builder
+	res := waitForBundledModel(srv.URL, &out, false, time.Nanosecond, false, nil, nil, nil)
+	if !res.pending {
+		t.Error("a transfer really is running in the background; want pending")
+	}
+	if s := out.String(); !strings.Contains(s, "Model still downloading") {
+		t.Errorf("expected the hand-back notice, got: %q", s)
+	}
+}
+
 // NEGATIVE CONTROL for the field above, and the reason #569 could not be
 // written as plain !ready. A gateway-only host answers `disabled`, so the
 // wait returns not-ready and says nothing — there is nothing to say. It

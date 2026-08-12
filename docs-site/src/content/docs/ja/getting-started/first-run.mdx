@@ -5,7 +5,7 @@ meta:
   audience: 途中で止まったセットアップを再開する人、サーバーを設定する人
   needs: そのパソコンの管理者権限と Google アカウント
   time: 集中して 10 分ほど。加えてモデルのダウンロード
-sourceHash: 243e6ecbfddad27d
+sourceHash: 86b200d079c18a3b
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -460,6 +460,33 @@ to watch progress, or `waired runtimes benchmark` later to check performance.
 このページ最初のボックスの代わりに出るもので、違いは時間だけです。あちらに出る
 スループットの数値が必要なら、`waired status` がモデルの準備完了を示してから
 `waired runtimes benchmark` を実行します。
+</Expected>
+
+<Expected>
+```
+No model was chosen for this computer, so nothing is downloading.
+Pick one with `waired models pull <model>`, or from the browser dashboard.
+
+*  Waired is signed in — no model chosen for this computer
+   Account   you@example.com
+   Claude    still using the Anthropic API
+
+   Signed in and running — this device is on your network.
+   No model is set up here, so local AI has nothing to answer with yet.
+```
+
+すぐ上のボックスとは別物です。どちらもモデルが載っていない状態で終わりますが、
+上はモデルが到着途中、こちらはそもそも一つも選ばれていません。待つ対象が無いので、
+`waired status` に表示する進捗もありません。
+
+Waired がこのパソコンを、手持ちのどのモデルにも小さすぎると判断した場合の表示です。
+セットアップは AI エンジンの導入もサインインも通常どおり済ませ、他のパソコンで動く
+AI を使うこともできます。行わないのは、うまく動かせないモデルを選ぶことだけです。
+
+自分で選ぶときは `waired models pull <model>`、またはブラウザのダッシュボードから
+指定します。`waired models ls --detail` は、どのモデルがこのハードウェアに収まるか
+と、その理由を表示します。ボックスに `Speed` の数値が出ていれば、それがこのパソコン
+でのコーディング1往復の所要時間です。選ぶ前に確認する価値があります。
 </Expected>
 
 <Expected tone="bad">

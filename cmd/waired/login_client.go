@@ -583,6 +583,7 @@ func runInitViaDaemon(o daemonInitOpts) error {
 				engineErr:     engineErr,
 				engineFailure: modelWait.engineFailure,
 				modelPending:  modelWait.pending,
+				noModelChosen: modelWait.noModelChosen,
 				benchFailed:   benchFailed,
 				bench:         outcomeFrom(resp),
 				claudeRouted:  claudeRouted,
@@ -767,8 +768,14 @@ type daemonSummary struct {
 	// honest answer on a gateway-only host, which must keep the success
 	// box. The wait sets this only where it knows better.
 	modelPending bool
-	bench        benchmarkOutcome
-	claudeRouted bool
+	// noModelChosen is the model wait ending because this host never had a
+	// model to wait for (modelWaitResult.noModelChosen, waired-agent#736).
+	// Like modelPending it changes only the box, and for the same reason:
+	// "Local inference is live" is a claim a host with nothing to serve
+	// cannot support either.
+	noModelChosen bool
+	bench         benchmarkOutcome
+	claudeRouted  bool
 	// hostSpeed is what one coding question cost on this machine, as the
 	// daemon measured it during this install (waired-ai/waired-agent#496,
 	// reported here per waired#1099). nil when nothing was measured — an
@@ -888,6 +895,8 @@ func printDaemonSummaryBox(out io.Writer, s daemonSummary) {
 		printDaemonTooSlowBox(out, s)
 	case s.modelPending:
 		printDaemonSettingUpBox(out, s.accountEmail, s.claudeRouted)
+	case s.noModelChosen:
+		printDaemonNoModelBox(out, s.accountEmail, s.claudeRouted, s.hostSpeed)
 	default:
 		printDaemonSuccessBox(out, s.accountEmail, s.bench, s.claudeRouted, s.hostSpeed)
 	}
@@ -1062,6 +1071,45 @@ func printDaemonEngineDownBox(out io.Writer, accountEmail string) {
 	lines = append(lines, dim("Signed in and running — this device is on your network."))
 	lines = append(lines, dim("The AI engine on this device isn't starting; `waired doctor` says why."))
 	boxWarn(out, emo("⚠️", "!"), "Waired is signed in — local AI isn't running", lines)
+}
+
+// printDaemonNoModelBox is the summary for a host that finished setup with
+// no model chosen for it (waired-agent#736).
+//
+// It exists because the success box below states "Local inference is live
+// via the waired-agent daemon" unconditionally, and on this host it is
+// not: the engine is up and has nothing to serve. Before #736 this ending
+// was reported as pending and got the still-setting-up box, which was
+// wrong the other way — it promised work in the background that no one
+// had started.
+//
+// box, not boxWarn, and the same shape as the engine-opt-out box above:
+// nothing failed here. A host can be signed in, on the network, and
+// deliberately without a local model.
+//
+// The Speed line rides along when the daemon measured one. That figure is
+// the host-cutoff probe's, not a chosen model's, so it survives having no
+// model — and it is the one number that says whether picking a model here
+// is worth doing.
+func printDaemonNoModelBox(out io.Writer, accountEmail string, claudeRouted bool, hostSpeed *management.HostSpeedStatus) {
+	var lines []string
+	if accountEmail != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Account", accountEmail))
+	}
+	if hostSpeedTurnLine(hostSpeed) != "" {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Speed", green(hostSpeedTurnLine(hostSpeed))))
+	}
+	if claudeRouted {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", green("routed through Waired")))
+	} else {
+		lines = append(lines, fmt.Sprintf("%-9s %s", "Claude", dim("still using the Anthropic API")))
+	}
+	lines = append(lines, dim("Signed in and running — this device is on your network."))
+	// The route back is not repeated: the wait printed it immediately
+	// above, the same way the still-setting-up box leaves its reason to
+	// the line that precedes it.
+	lines = append(lines, dim("No model is set up here, so local AI has nothing to answer with yet."))
+	box(out, emo("✅", "*"), "Waired is signed in — no model chosen for this computer", lines)
 }
 
 // printDaemonSuccessBox renders the final "Waired is ready" summary for the

@@ -170,7 +170,7 @@ $InstallFailureBoxRe = 'The AI engine could not be installed on this device'
 # was not ready -- not because anything is broken (#382). Mirror of
 # lib/installtest-enroll.sh's IT_BENCH_NOT_READY_RE; see the comment there for
 # which Go file prints each branch. Same guard checks the three copies agree.
-$BenchNotReadyRe = 'Model not ready in time|Model download failed|Model still downloading'
+$BenchNotReadyRe = 'Model not ready in time|Model download failed|Model still downloading|No model was chosen for this computer'
 
 # Mirrors of lib/installtest-enroll.sh's step-4 default / models-pull pair
 # (waired-agent#590) -- see the comments there. The guard checks the first two
@@ -773,7 +773,14 @@ function Assert-Inference {
         if ($m.Success) {
             ItOk "benchmark ran during init ($($m.Value))"
         } elseif ($nr.Success) {
-            ItBad "the model was not ready inside init's benchmark window, so nothing was measured -- the download, not the engine (`"$($nr.Value)`"; $InitLog)"
+            # See the linux twin: the fourth branch has no download, so it
+            # gets its own red rather than one that names a transfer that
+            # never existed (waired-agent#736). One ItBad either way.
+            if ($nr.Value -eq 'No model was chosen for this computer') {
+                ItBad "no model was ever selected for this host, so init's benchmark window had nothing to measure -- neither the download nor the engine (`"$($nr.Value)`"; $InitLog)"
+            } else {
+                ItBad "the model was not ready inside init's benchmark window, so nothing was measured -- the download, not the engine (`"$($nr.Value)`"; $InitLog)"
+            }
             # Pull-side evidence only; the engine-side grep stays on the arm
             # below, because printing it here is what made every one of these
             # failures read as an engine problem.
