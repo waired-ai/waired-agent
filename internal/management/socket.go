@@ -133,6 +133,13 @@ func pathIs(r *http.Request, route string) bool {
 	return r.URL.Path == route && path.Clean(r.URL.EscapedPath()) == route
 }
 
+// isPingProbe reports whether r is the liveness probe writeGuard exempts:
+// POST /waired/v1/ping and nothing else. A DELETE or PATCH aimed at the
+// same path is not a liveness probe and has no claim on the exemption.
+func isPingProbe(r *http.Request) bool {
+	return r.Method == http.MethodPost && pathIs(r, pingPath)
+}
+
 // tcpReadAllowed reports whether a read may be served on the loopback TCP
 // listener, i.e. whether it addresses one of tcpReadRoutes.
 func tcpReadAllowed(r *http.Request) bool {
@@ -155,7 +162,7 @@ func writeGuard(next http.Handler, enforce bool, socketUp *atomic.Bool) http.Han
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The exemption is POST /ping specifically: a DELETE or PATCH to
 		// the same path is not the liveness probe and has no claim on it.
-		if socketUp.Load() && isMutating(r.Method) && !(r.Method == http.MethodPost && pathIs(r, pingPath)) {
+		if socketUp.Load() && isMutating(r.Method) && !isPingProbe(r) {
 			writeJSON(w, http.StatusForbidden,
 				errorBody("forbidden", "writes must use the local management socket, not the loopback TCP port"))
 			return

@@ -252,6 +252,16 @@ $script:ContractBlocking = @{
     '754' = $true    # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts (FIXED)
     '755' = $true    # waired#755: the install path surfaces the tray (Start Menu group / autostart) (FIXED)
     '838' = $true    # waired#838: management writes travel over the local named pipe, not TCP (FIXED)
+    # waired#836: loopback TCP serves only the compatibility reads, and the
+    # #836 browser hardening (Host / Content-Type) is on. Soft for ONE
+    # observation run, exactly as '838' was. Four of the five legs were
+    # driven from a real PowerShell 5.1.26100 against the actual management
+    # server (unlisted read 403, attacker Host 403 on BOTH branches of the
+    # probe, text/plain 415, compatibility read 200); the fifth -- an
+    # allow-list-exempt read reaching the daemon over the NAMED PIPE -- can
+    # only be exercised on a real Windows install, so it takes the same
+    # observe-then-flip treatment #838's pipe legs did.
+    '836' = $false
     '313' = $true    # waired-agent#313: `waired init` on an enrolled device resumes instead of failing (FIXED)
     '315' = $true    # waired#315: SCM recovery actions also fire on a non-crash failure exit (FIXED)
     '579' = $true    # waired-agent#579: the host-speed measurement reaches a verdict inside init's window (FIXED)
@@ -260,6 +270,31 @@ $script:ContractBlocking = @{
 }
 $script:Warn = 0
 $script:WarnLines = @()
+# Get-WebStatus runs an HTTP call and returns its status code as an int,
+# for a >=400 answer as much as a 2xx one -- PS 5.1 has no
+# -SkipHttpErrorCheck, so a non-2xx arrives as a terminating exception. It
+# walks the InnerException chain because the status sits in a different
+# place depending on how the call was made: Invoke-WebRequest raises a
+# WebException directly, while a .NET method call that throws inside
+# PowerShell arrives wrapped in a MethodInvocationException. Returns $null
+# when no HTTP answer was reached at all (connection refused, a header the
+# runtime refused to send), which callers must tell apart from a refusal.
+function Get-WebStatus {
+    param([scriptblock]$Call)
+    try {
+        return [int](& $Call).StatusCode
+    } catch {
+        $e = $_.Exception
+        while ($e) {
+            if ($e.PSObject.Properties['Response'] -and $e.Response) {
+                return [int]$e.Response.StatusCode
+            }
+            $e = $e.InnerException
+        }
+        return $null
+    }
+}
+
 function ItSoft {
     # Repo names which tracker the issue lives in: the contract asserts
     # started as monorepo-only, and an agent-repo number rendered as
@@ -1205,10 +1240,68 @@ function Assert-MgmtPipe {
     $tcpRefused = ($null -ne $tcpCode) -and ($tcpCode -lt 200 -or $tcpCode -ge 300)
     ItSoft '838' $tcpRefused "TCP :9476 refuses mutating writes (HTTP $tcpCode)"
 
-    # Reads deliberately stay on TCP.
+    # The compatibility reads stay on TCP (waired#836 allow-list).
     $readOk = $false
     try { $null = Invoke-RestMethod -Uri $MgmtStatus -TimeoutSec 5; $readOk = $true } catch { }
-    ItSoft '838' $readOk "TCP :9476 still serves reads"
+    ItSoft '838' $readOk "TCP :9476 still serves the compatibility reads"
+
+    # waired#836: every other read moved to the pipe. Same PS 5.1 caveat as
+    # the write probe above -- a non-2xx arrives as a terminating exception.
+    $idCode = Get-WebStatus {
+        Invoke-WebRequest -UseBasicParsing `
+            -Uri 'http://127.0.0.1:9476/waired/v1/identity' -TimeoutSec 5
+    }
+    $idRefused = ($null -ne $idCode) -and ($idCode -lt 200 -or $idCode -ge 300)
+    ItSoft '836' $idRefused "TCP :9476 refuses reads outside the allow-list (HTTP $idCode)"
+
+    # ...and the read has to still work over the pipe, or it moved nowhere.
+    # There is no curl --unix-socket equivalent for a named pipe, so drive a
+    # CLI read whose route is NOT on the allow-list: `waired claude route`
+    # reads GET /waired/v1/integration/claude/route.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $routeOut = (& $waired claude route 2>&1 | Out-String) }
+    finally { $ErrorActionPreference = $prevEap }
+    $routeLine = ($routeOut -replace '\s+', ' ').Trim()
+    $routeOk = ($routeOut -notmatch 'not running') -and ($routeOut -notmatch 'must use the local management socket')
+    ItSoft '836' $routeOk "an allow-list-exempt read reaches the daemon over the pipe -- $routeLine"
+
+    # The #836 browser hardening itself. Nothing else exercises it:
+    # browserGuard is OFF by default in the unit tests, so flipping
+    # --mgmt-hardening would leave every Go test green.
+    # Host is the one header PS 5.1 may refuse to take through -Headers
+    # ("must be modified using the appropriate property or method"),
+    # depending on the build. Try that form first and fall back to
+    # HttpWebRequest, which exposes .Host as a property. Both were observed
+    # returning 403 against a real 5.1.26100 host; the fallback exists for
+    # the builds that reject the first form, where nothing is sent at all
+    # and the probe would otherwise read as "the guard did not fire".
+    #
+    # Status extraction goes through Get-WebStatus because the two forms
+    # surface it differently: Invoke-WebRequest throws a WebException whose
+    # .Response carries it, while a failing method call inside PowerShell
+    # arrives wrapped in a MethodInvocationException, one level down.
+    $hostCode = Get-WebStatus {
+        Invoke-WebRequest -UseBasicParsing -Uri $MgmtStatus -TimeoutSec 5 `
+            -Headers @{ Host = 'evil.example' }
+    }
+    if ($null -eq $hostCode) {
+        $hostCode = Get-WebStatus {
+            $req = [System.Net.HttpWebRequest]::Create($MgmtStatus)
+            $req.Host = 'evil.example'
+            $req.Timeout = 5000
+            $req.GetResponse()
+        }
+    }
+    $hostRefused = ($null -ne $hostCode) -and ($hostCode -lt 200 -or $hostCode -ge 300)
+    ItSoft '836' $hostRefused "TCP :9476 rejects a non-loopback Host (HTTP $hostCode)"
+
+    $ctCode = Get-WebStatus {
+        Invoke-WebRequest -UseBasicParsing -Method POST -ContentType 'text/plain' `
+            -Body '{"peer":"x"}' `
+            -Uri 'http://127.0.0.1:9476/waired/v1/ping' -TimeoutSec 5
+    }
+    ItSoft '836' ($ctCode -eq 415) "TCP :9476 requires application/json on writes (HTTP $ctCode)"
 
     # Leave the daemon active whichever leg above failed.
     $prevEap = $ErrorActionPreference
