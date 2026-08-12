@@ -24,6 +24,14 @@
 // the trust boundary (same posture as the no-token data-plane gateway). The
 // LocalInference handler is therefore the BARE gateway HandlerSet, not the
 // token-gated loopback gateway.Server.
+//
+// The bind is not the whole boundary, though. A web page the user visits can
+// reach a loopback listener by DNS-rebinding, and its connection genuinely
+// comes from 127.0.0.1 — so the request itself has to be checked
+// (waired-ai/waired#1195). Those checks are shared with the other loopback
+// listeners and live in internal/loopbackguard; this package does not import
+// it. cmd/waired-agent composes the guard and hands it in as Deps.Guard, which
+// keeps this package stdlib-only.
 package intercept
 
 import (
@@ -252,6 +260,18 @@ type Deps struct {
 	// without the model header. Nil == no-op.
 	OnServed func(modelID, peerDeviceID string)
 
+	// Guard, if set, wraps the whole route table — every route, including the
+	// "/" passthrough catch-all. It is how the loopback guards reach this
+	// listener without the package importing them: cmd/waired-agent composes
+	// internal/loopbackguard (peer address, then Host and Origin
+	// allow-listing) and passes the result in, which keeps this fail-open
+	// package stdlib-only (waired-ai/waired#1195).
+	//
+	// Nil leaves the mux bare, which is what the package's own tests want.
+	// Production always sets it; cmd/waired-agent/proxy_browser_hardening_test.go
+	// is what stops that wiring rotting away.
+	Guard func(http.Handler) http.Handler
+
 	// Logger is optional; defaults to slog.Default().
 	Logger *slog.Logger
 }
@@ -310,9 +330,10 @@ func NewServer(cfg Config, deps Deps) (*Server, error) {
 	return s, nil
 }
 
-// handler builds the routing mux. ServeMux exact-matches the two message paths
-// and routes everything else (including unknown /v1/messages/* subpaths) to
-// passthrough via the "/" catch-all.
+// handler builds the routing mux and wraps it in the loopback guards.
+// ServeMux exact-matches the two message paths and routes everything else
+// (including unknown /v1/messages/* subpaths) to passthrough via the "/"
+// catch-all.
 func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", s.routeInference)
@@ -324,6 +345,14 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/v1/models", s.routeModels)
 	mux.HandleFunc("/v1/models/", s.routeModels)
 	mux.HandleFunc("/", s.passthrough)
+
+	// waired-ai/waired#1195: the loopback guards, composed by cmd/waired-agent
+	// (see Deps.Guard). Applied here rather than around httpSrv.Handler so
+	// Handler() — what the tests drive — carries the same stack production
+	// serves. nil leaves the mux bare.
+	if s.deps.Guard != nil {
+		return s.deps.Guard(mux)
+	}
 	return mux
 }
 
