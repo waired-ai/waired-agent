@@ -97,26 +97,34 @@ func TestEmitStatsRecord(t *testing.T) {
 	}
 	emitStatsRecord(st, nil) // cl=nil => slog-only path (developer machine)
 
-	recs := h.snapshot()
-	if len(recs) != 1 {
-		t.Fatalf("want 1 record, got %d", len(recs))
+	// One emit now produces the INFO summary and a DEBUG record carrying
+	// the peer detail (#692), so select rather than assume a count. The
+	// capture handler is Enabled at every level, which a real handler at
+	// the default level is not.
+	var r captured
+	found := false
+	for _, rec := range h.snapshot() {
+		if rec.Level == slog.LevelInfo && rec.Msg == "waired_agent_stats" {
+			r, found = rec, true
+		}
 	}
-	r := recs[0]
-	if r.Msg != "waired_agent_stats" {
-		t.Fatalf("msg = %q, want waired_agent_stats", r.Msg)
-	}
-	if r.Level != slog.LevelInfo {
-		t.Fatalf("level = %v, want Info", r.Level)
+	if !found {
+		t.Fatalf("no INFO waired_agent_stats record in %+v", h.snapshot())
 	}
 	for _, key := range []string{
 		"network_id", "device_id",
 		"device_name", "overlay_ip", "listen_port",
 		"nat_type", "observed_addr", "disco_enabled",
-		"peer_count", "phase", "desired_phase", "peers",
+		"peer_count", "phase", "desired_phase",
 	} {
 		if _, ok := r.Attrs[key]; !ok {
 			t.Errorf("missing attr %q in record", key)
 		}
+	}
+	// The peer list is deliberately NOT here — see
+	// TestEmitStatsRecord_PeerListIsDebugOnly.
+	if _, ok := r.Attrs["peers"]; ok {
+		t.Errorf("INFO record still carries the full peer list (#692)")
 	}
 	if got := r.Attrs["device_name"]; got != "agent-a1-native" {
 		t.Errorf("device_name = %v, want agent-a1-native", got)
@@ -130,12 +138,126 @@ func TestEmitStatsRecord(t *testing.T) {
 	if got := r.Attrs["peer_count"]; got != int(5) && got != int64(5) {
 		t.Errorf("peer_count = %v (%T), want 5", got, got)
 	}
-	peers, ok := r.Attrs["peers"].([]management.PeerStatus)
+}
+
+// PRODUCT CONTRACT (#692). The periodic INFO record must not carry the
+// per-peer detail, and the detail must still be reachable at DEBUG.
+//
+// The record fires every 5 s by default with ~25 fields per peer, which
+// measured ~890 KB/h on a two-peer host before anything else logged
+// anything. On macOS — 1 MB rotation, five copies — that is roughly six
+// hours of history, most of it the same status repeated, and #636 gave
+// the Windows agent log the same bound.
+func TestEmitStatsRecord_PeerListIsDebugOnly(t *testing.T) {
+	h, restore := withCaptureLogger(t)
+	defer restore()
+
+	st := management.Status{
+		DeviceID:  "dev_aaa",
+		PeerCount: 2,
+		Peers: []management.PeerStatus{
+			{DeviceID: "dev_aaa", CurrentPath: "direct"},
+			{DeviceID: "dev_bbb", CurrentPath: "relay"},
+		},
+	}
+	emitStatsRecord(st, nil)
+
+	recs := h.snapshot()
+	var info, debug *captured
+	for i := range recs {
+		switch {
+		case recs[i].Level == slog.LevelInfo && recs[i].Msg == "waired_agent_stats":
+			info = &recs[i]
+		case recs[i].Level == slog.LevelDebug && recs[i].Msg == "waired_agent_stats_peers":
+			debug = &recs[i]
+		}
+	}
+	if info == nil {
+		t.Fatal("no INFO waired_agent_stats record")
+	}
+	if _, ok := info.Attrs["peers"]; ok {
+		t.Error("INFO record carries the peer list; that is the whole cost this removes")
+	}
+	// peer_count stays: it is one integer, and it is what a reader
+	// scanning INFO actually wants from the peer set.
+	if got := info.Attrs["peer_count"]; got != int(2) && got != int64(2) {
+		t.Errorf("peer_count = %v (%T), want 2", got, got)
+	}
+	if debug == nil {
+		t.Fatal("the peer detail is gone entirely, not moved to DEBUG")
+	}
+	peers, ok := debug.Attrs["peers"].([]management.PeerStatus)
 	if !ok {
-		t.Fatalf("peers attr type = %T, want []management.PeerStatus", r.Attrs["peers"])
+		t.Fatalf("DEBUG peers attr type = %T, want []management.PeerStatus", debug.Attrs["peers"])
 	}
 	if len(peers) != 2 {
-		t.Errorf("peers len = %d, want 2", len(peers))
+		t.Errorf("DEBUG peers len = %d, want 2", len(peers))
+	}
+}
+
+// The Cloud Logging payload is deliberately untouched by #692: the
+// testnet harness reads THAT back with `gcloud logging read`
+// (scripts/dev/testnet-punch-verify.sh), not the local log, so trimming
+// the slog record cannot cost the harness anything. If this ever fails,
+// the local-log saving was taken out of the harness's side by mistake.
+func TestBuildPayloadStillCarriesThePeerList(t *testing.T) {
+	st := management.Status{
+		DeviceID: "dev_aaa",
+		Peers: []management.PeerStatus{
+			{DeviceID: "dev_bbb", CurrentPath: "relay"},
+		},
+	}
+	got := buildPayload("waired_agent_stats", st)
+	peers, ok := got["peers"].([]management.PeerStatus)
+	if !ok {
+		t.Fatalf("payload peers type = %T, want []management.PeerStatus", got["peers"])
+	}
+	if len(peers) != 1 {
+		t.Errorf("payload peers len = %d, want 1", len(peers))
+	}
+}
+
+// A peer appearing or disappearing is what INFO keeps instead of the
+// repeated full list.
+func TestLogPeerSetChange(t *testing.T) {
+	h, restore := withCaptureLogger(t)
+	defer restore()
+
+	two := management.Status{Peers: []management.PeerStatus{
+		{DeviceID: "dev_a"}, {DeviceID: "dev_b"},
+	}}
+	three := management.Status{Peers: []management.PeerStatus{
+		{DeviceID: "dev_a"}, {DeviceID: "dev_b"}, {DeviceID: "dev_c"},
+	}}
+
+	// First sample says nothing: nothing has changed yet, and the
+	// periodic record already carries peer_count.
+	set := logPeerSetChange(nil, two)
+	if n := len(h.snapshot()); n != 0 {
+		t.Fatalf("first sample emitted %d records, want 0", n)
+	}
+	// An unchanged set stays quiet — this is the case that runs all day.
+	set = logPeerSetChange(set, two)
+	if n := len(h.snapshot()); n != 0 {
+		t.Fatalf("unchanged peer set emitted %d records, want 0", n)
+	}
+	// A join is reported.
+	set = logPeerSetChange(set, three)
+	recs := h.snapshot()
+	if len(recs) != 1 || recs[0].Msg != "waired_agent_peers_changed" {
+		t.Fatalf("records = %+v, want one waired_agent_peers_changed", recs)
+	}
+	if joined, _ := recs[0].Attrs["joined"].([]string); len(joined) != 1 || joined[0] != "dev_c" {
+		t.Errorf("joined = %v, want [dev_c]", recs[0].Attrs["joined"])
+	}
+	// ...and so is a departure.
+	logPeerSetChange(set, two)
+	recs = h.snapshot()
+	if len(recs) != 2 {
+		t.Fatalf("want 2 records after a departure, got %d", len(recs))
+	}
+	if left, _ := recs[1].Attrs["left"].([]string); len(left) != 1 || left[0] != "dev_c" {
+		t.Errorf("left = %v, want [dev_c]", recs[1].Attrs["left"])
 	}
 }
 
