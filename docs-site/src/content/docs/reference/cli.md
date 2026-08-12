@@ -22,7 +22,7 @@ covers what the flags are *for*.
 | [`waired auth status`](#waired-auth-status) | When does this computer's sign-in expire? |
 | [`waired logout`](#waired-logout) | Remove this computer's identity |
 | [`waired infer`](#waired-infer) | Ask your AI something, right now |
-| [`waired models`](#waired-models) | What is downloaded, download more, stop a download, delete some |
+| [`waired models`](#waired-models) | What is downloaded, download more, choose which one runs, stop a download, delete some |
 | [`waired runtimes`](#waired-runtimes) | The AI software itself, and a speed test |
 | [`waired inference`](#waired-inference) | Run AI models here or not; start / stop the engine; share it with your other computers |
 | [`waired worker`](#waired-worker) | Which computer answers your requests |
@@ -170,6 +170,7 @@ just out of date.
 waired models ls                  # what is downloaded, and what is active
 waired models ls --detail         # the whole catalog, with what fits this computer
 waired models pull <model-id>     # download one
+waired models use <model-id>      # make this the model the computer runs
 waired models cancel <model-id>   # stop a download that is running
 waired models rm <model-id>       # delete one, freeing several GB
 waired models refresh             # is there a better pick for this machine?
@@ -188,6 +189,23 @@ once more, showing the shortfall, with No as the default — loading it is
 expected to fail after the download completes. `--yes` alone does not skip that
 one; a script that really means it passes `--yes --force`. `rm` also confirms
 first. Model IDs come from the [model catalog](/reference/model-catalog/).
+
+`use` sets which model this computer actually runs — the one that answers.
+`pull` only fetches weights; a model can be downloaded without being the one
+in service. The switch applies without restarting: the model already running
+keeps answering until the new one is ready, and when the weights are not on
+disk yet `use` starts that download and says so.
+
+```
+waired models use qwen3.5-4b
+qwen3.5-4b will run on this computer once it finishes downloading.
+The current model keeps answering until then.
+```
+
+It returns as soon as the daemon has accepted the choice; `--wait` polls until
+the new model is actually serving, for a script that needs the switch finished
+before it goes on. The over-spec and does-not-fit confirmations work exactly as
+they do for `pull`, including `--yes` and `--yes --force`.
 
 `cancel` stops a download that is running — the way out of a multi-gigabyte
 pull started by mistake. It asks nothing first: you are stopping something this
