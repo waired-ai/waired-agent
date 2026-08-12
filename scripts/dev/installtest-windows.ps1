@@ -252,16 +252,7 @@ $script:ContractBlocking = @{
     '754' = $true    # waired#754: uninstall.ps1 -Clean leaves zero per-user artifacts (FIXED)
     '755' = $true    # waired#755: the install path surfaces the tray (Start Menu group / autostart) (FIXED)
     '838' = $true    # waired#838: management writes travel over the local named pipe, not TCP (FIXED)
-    # waired#836: loopback TCP serves only the compatibility reads, and the
-    # #836 browser hardening (Host / Content-Type) is on. Soft for ONE
-    # observation run, exactly as '838' was. Four of the five legs were
-    # driven from a real PowerShell 5.1.26100 against the actual management
-    # server (unlisted read 403, attacker Host 403 on BOTH branches of the
-    # probe, text/plain 415, compatibility read 200); the fifth -- an
-    # allow-list-exempt read reaching the daemon over the NAMED PIPE -- can
-    # only be exercised on a real Windows install, so it takes the same
-    # observe-then-flip treatment #838's pipe legs did.
-    '836' = $false
+    '836' = $true    # waired#836: loopback TCP serves only the compatibility reads, and the browser hardening is on (FIXED)
     '313' = $true    # waired-agent#313: `waired init` on an enrolled device resumes instead of failing (FIXED)
     '315' = $true    # waired#315: SCM recovery actions also fire on a non-crash failure exit (FIXED)
     '579' = $true    # waired-agent#579: the host-speed measurement reaches a verdict inside init's window (FIXED)
