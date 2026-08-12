@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
 )
@@ -28,14 +28,9 @@ func bounceTestManifests() []catalog.Manifest {
 // awaitModelState blocks until modelID reaches want, or fails the test.
 func awaitModelState(t *testing.T, p *agentInferenceProvider, modelID, want string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if modelStateOf(t, p, modelID).State == want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("model %s never reached %q (last %q)", modelID, want, modelStateOf(t, p, modelID).State)
+	waitUntil(t, fmt.Sprintf("model %s to reach state %q", modelID, want), func() bool {
+		return modelStateOf(t, p, modelID).State == want
+	})
 }
 
 // awaitFlag blocks until an atomic the pull job sets goes true, or fails.
@@ -51,17 +46,11 @@ func awaitModelState(t *testing.T, p *agentInferenceProvider, modelID, want stri
 // A bounded wait keeps the assertion's teeth. The failure this guards is
 // the intent being DROPPED rather than deferred, and a dropped intent never
 // becomes true, so it still fails — just at the deadline instead of
-// instantly.
+// instantly. That reasoning is why the whole package's waits could be moved
+// onto one generous backstop; see waitBackstop (waired-agent#720).
 func awaitFlag(t *testing.T, flag *atomic.Bool, what string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if flag.Load() {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal(what)
+	waitUntil(t, what, flag.Load)
 }
 
 // bounceProvider leaves p.ollama nil on purpose. reconcileEngineServe
@@ -112,7 +101,7 @@ func TestRunPullJob_DefersTheSwapBounceWhileAnotherPullIsInFlight(t *testing.T) 
 	// the reason the order matters most: read too early it passes for the
 	// wrong reason, which is a false green rather than a flake.
 	awaitModelState(t, p, "model-a", catalog.ModelStateReady)
-	awaitFlag(t, &p.swapBounceDeferred, "the swap bounce was dropped instead of deferred")
+	awaitFlag(t, &p.swapBounceDeferred, "the swap bounce to be recorded as deferred (an intent that was DROPPED never becomes true)")
 
 	if p.swapPending.Load() {
 		t.Fatal("the engine was bounced while another model was still downloading; " +
@@ -237,8 +226,8 @@ func TestRunPullJob_DefersTheRetuneWhileAnotherPullIsInFlight(t *testing.T) {
 	ra.awaitStarted(t)
 	ra.releaseAll()
 	awaitModelState(t, p, "model-a", catalog.ModelStateReady)
-	awaitFlag(t, &p.retuneDeferred, "model-a completed while model-b was still "+
-		"downloading, but the retune intent was dropped instead of deferred")
+	awaitFlag(t, &p.retuneDeferred, "the retune intent to be recorded as deferred after model-a "+
+		"completed while model-b was still downloading (an intent that was DROPPED never becomes true)")
 
 	r.releaseAll()
 	p.waitForPulls()

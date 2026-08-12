@@ -248,7 +248,7 @@ func TestPrePullHold_AnExecutorLeaseIsNotAWizard(t *testing.T) {
 	// into a package-wide timeout instead of one failing test.
 	select {
 	case <-r.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("no pull was dispatched — the boot pre-pull is still held, and the only " +
 			"thing holding it is the `waired init` that is waiting for its result (#540)")
 	}

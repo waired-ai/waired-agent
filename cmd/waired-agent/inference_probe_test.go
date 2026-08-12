@@ -657,11 +657,10 @@ func TestRunLocalInferenceProbe_NoneKindPinsFalse(t *testing.T) {
 // capturingCP is the CP mock the push-observing tests share: it counts
 // pushes and keeps the last state body. Returns the server plus accessors
 // so each test states its own expectation.
-// probeBackstop bounds a probeRunUntil call. It is a BACKSTOP, not a budget:
-// reaching it is a failure, and the run normally ends within milliseconds when
-// the completion signal fires. Generous enough that no plausible amount of
-// runner contention reaches it.
-const probeBackstop = 30 * time.Second
+// probeRunUntil is bounded by the package-wide waitBackstop (see
+// wait_backstop_test.go). This was the first wait in the package to be given a
+// backstop rather than a budget — waired-agent#567, told in full below — and
+// waired-agent#720 later moved the rest of the package onto the same figure.
 
 // probeSettlePoll paces probeRunUntil's check of the completion signal. Small
 // enough to be invisible next to a test's real work, and it costs nothing on a
@@ -691,7 +690,7 @@ const probeSettlePoll = 2 * time.Millisecond
 // produced a second one — a wider margin than the 500 ms it replaces.
 func probeRunUntil(t *testing.T, deps inferenceProbeDeps, what string, done func() bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), probeBackstop)
+	ctx, cancel := context.WithTimeout(context.Background(), waitBackstop)
 	defer cancel()
 
 	watching := make(chan struct{})
@@ -713,7 +712,7 @@ func probeRunUntil(t *testing.T, deps inferenceProbeDeps, what string, done func
 	runLocalInferenceProbe(ctx, deps)
 	<-watching
 	if !done() {
-		t.Fatalf("the probe did not %s within %s — the backstop, not a budget: something is wrong with the subject, not with the runner", what, probeBackstop)
+		t.Fatalf("the probe did not %s within %s — the backstop, not a budget: something is wrong with the subject, not with the runner", what, waitBackstop)
 	}
 }
 
@@ -728,7 +727,7 @@ func probeRunUntil(t *testing.T, deps inferenceProbeDeps, what string, done func
 // fails loudly instead of hanging.
 func probeRunOnce(t *testing.T, deps inferenceProbeDeps) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), probeBackstop)
+	ctx, cancel := context.WithTimeout(context.Background(), waitBackstop)
 	defer cancel()
 	runLocalInferenceProbe(ctx, deps)
 	if ctx.Err() != nil {

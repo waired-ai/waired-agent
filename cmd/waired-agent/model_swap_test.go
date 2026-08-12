@@ -163,7 +163,7 @@ func TestSwapPreferredModel_OnDiskFlipsActiveAndBounces(t *testing.T) {
 
 	// The reconcile runs asynchronously on the agent context: wait for Active
 	// to flip to "light" AND the engine to have re-spawned (the bounce).
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for time.Now().Before(deadline) {
 		st, _ := store.Load()
 		if st.Active != nil && st.Active.ModelID == "light" && sp.count() > spawnsBefore {

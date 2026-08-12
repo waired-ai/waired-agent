@@ -107,12 +107,19 @@ func (r *blockingRunner) firstCtxErr(t *testing.T) error {
 
 // awaitStarted blocks until a pull has actually entered the runner, so a
 // test never races the dispatch goroutine.
+//
+// The wait is waitBackstop rather than a figure of its own: PullModel
+// returning says the job was accepted, and everything between that and the
+// send on r.started is scheduling — two blockingRunners' worth of handoffs in
+// the bounce test, on a Windows runner where this package takes 53.5 s
+// against ~20 s on linux. A pull that is never dispatched still fails here,
+// just later (waired-agent#720).
 func (r *blockingRunner) awaitStarted(t *testing.T) string {
 	t.Helper()
 	select {
 	case tag := <-r.started:
 		return tag
-	case <-time.After(5 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("no pull started")
 		return ""
 	}

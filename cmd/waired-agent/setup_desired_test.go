@@ -862,15 +862,10 @@ func TestSetupApplyModel_RealAdapterPinsAndActivates(t *testing.T) {
 		t.Fatalf("preference = %+v ok=%v err=%v, want light persisted", pref, ok, err)
 	}
 	// The activation runs on the reconcile goroutine.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if st, _ := store.Load(); st.Active != nil && st.Active.ModelID == "light" {
-			return // success
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	st, _ := store.Load()
-	t.Fatalf("the chosen model never became active: Active=%+v", st.Active)
+	waitUntil(t, "the chosen model to become active", func() bool {
+		st, _ := store.Load()
+		return st.Active != nil && st.Active.ModelID == "light"
+	})
 }
 
 // TestSetupApplyModelCrossEngineFallsBackToPull: a target the in-process
@@ -2205,14 +2200,7 @@ func TestSetupNilReconcilerIsInert(t *testing.T) {
 
 func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
+	waitUntil(t, what, cond)
 }
 
 // --- error classification (waired-agent#131 / #134 / #135 / #137) ---

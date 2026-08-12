@@ -239,14 +239,14 @@ func TestEngineController_StopThenStart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StartEngine: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("StartEngine did not return promptly (should be async)")
 	}
 	if a.IsParked() {
 		t.Error("adapter still parked after StartEngine")
 	}
 	// Background EnsureRunning should bring it back to running.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for time.Now().Before(deadline) {
 		if power, _ := ec.EngineState(); power == management.EnginePowerRunning {
 			return

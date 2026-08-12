@@ -99,9 +99,10 @@ IT_NO_MODEL_RE='No model selected'
 IT_STATUS_FIELDS_RE='no_model_selected|host_speed|probe_model_id|turn_floor_seconds'
 # Mirror of lib/installtest-enroll.sh's IT_DAEMON_EVIDENCE_RE (waired-agent#579)
 # — see the comment there for why the host-speed group belongs in a dump that
-# was previously pull-side only, and why `api/pull` is appended at the use site
-# instead of living in the alternation.
-IT_DAEMON_EVIDENCE_RE='boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host'
+# was previously pull-side only, why `api/pull` is appended at the use site
+# instead of living in the alternation, and what the last two branches are for
+# (waired-agent#642).
+IT_DAEMON_EVIDENCE_RE='boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host|engine log truncated at cap|no engine logs found'
 WORK="$(mktemp -d)"
 DIST="$WORK/dist"
 INITLOG="$WORK/init.log"   # waired init transcript (model pull + benchmark, --inference)
@@ -142,6 +143,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# evidence_dump <bundle> — the macOS twin of lib/installtest-enroll.sh's
+# _it_evidence_dump. See that function for why the pull group is separate and
+# untruncated, why both groups are counted, and why free space is here
+# (waired-agent#642).
+evidence_dump() {
+  local bundle="$1" n p
+  n="$(grep -icE "$IT_DAEMON_EVIDENCE_RE" "$bundle" 2>/dev/null)" || n=0
+  echo "daemon evidence: $n line(s) matched, showing the last 40"
+  grep -iE "$IT_DAEMON_EVIDENCE_RE" "$bundle" 2>/dev/null | tail -40 |
+    grep . || echo "(no pre-pull or host-speed lines in the daemon log)"
+  p="$(grep -icE 'api/pull' "$bundle" 2>/dev/null)" || p=0
+  echo "engine pull requests: $p line(s) matched, showing all"
+  grep -iE 'api/pull' "$bundle" 2>/dev/null |
+    grep . || echo "(no api/pull lines in the daemon log)"
+  local d
+  d="$(df -Ph "$STATE_DIR" 2>/dev/null | tail -1)" || d=
+  echo "state-dir free space: ${d:-(state dir unreadable)}"
+}
+
 # hostspeed_evidence — the macOS twin of lib/installtest-enroll.sh's
 # it_hostspeed_evidence (waired-agent#579), for the arms that end on init's
 # exit code rather than on an assert.
@@ -156,8 +176,7 @@ trap cleanup EXIT
 # streams go to stderr so the dump sits with the `bad` line it explains.
 hostspeed_evidence() {
   sudo "$BINDIR/waired" logs --since 30m --state-dir "$STATE_DIR" -o /tmp/it-hs.txt >/dev/null 2>&1 || true
-  { grep -iE "$IT_DAEMON_EVIDENCE_RE|api/pull" /tmp/it-hs.txt 2>/dev/null | tail -40 |
-    grep . || echo "(no host-speed lines in the daemon log)"; } 2>&1 |
+  evidence_dump /tmp/it-hs.txt 2>&1 |
     sed 's/^/    agent| /' >&2 || true
   # `|| echo` inside the pipe, not after it: a failed `curl -fsS` prints
   # nothing and the pipeline's status is sed's, so a trailing `|| true` would
@@ -587,8 +606,7 @@ assert_inference_macos() {
     # the download's real duration, and what the #496 measurement was doing
     # while all of that waited (#579).
     sudo "$BINDIR/waired" logs --since 30m --state-dir "$STATE_DIR" -o /tmp/it-logs.txt >/dev/null 2>&1 || true
-    { grep -iE "$IT_DAEMON_EVIDENCE_RE|api/pull" /tmp/it-logs.txt 2>/dev/null | tail -40 |
-      grep . || echo "(no pre-pull or pull lines in the daemon log)"; } 2>&1 |
+    evidence_dump /tmp/it-logs.txt 2>&1 |
       sed 's/^/    agent| /' >&2 || true
   else
     bad "no benchmark THROUGHPUT figure in init transcript ($INITLOG)"
@@ -707,6 +725,14 @@ _it_force_below_spec_macos() {
   local who="$1"
   sudo "$BINDIR/waired" inference on --state-dir "$STATE_DIR" >/dev/null 2>&1 || \
     it_warn "could not turn inference on before the $who probe"
+  # The third thing these probes need, and the one this cannot arrange: an
+  # engine-less host. See lib/installtest-enroll.sh's _it_force_below_spec
+  # for the whole story (waired-agent#640) — the state is inherited from
+  # whatever ran before, so the only useful thing to do is say when it does
+  # not hold.
+  if sudo test -x "$STATE_DIR/runtimes/ollama/bin/ollama"; then
+    it_warn "an engine is already installed under $STATE_DIR before the $who probe — the daemon no longer wants one, so the arm under test will not be reached (waired-agent#640)"
+  fi
   sudo cp "$HOSTMEM_JSON" "$WORK/host-memory.json.bak" 2>/dev/null || \
     it_warn "no host-memory record at $HOSTMEM_JSON — the $who probe cannot force a below-spec verdict"
   sudo /usr/bin/sed -i '' 's/"available_gb": *[0-9]*/"available_gb": 1/' "$HOSTMEM_JSON" 2>/dev/null || true
@@ -719,6 +745,17 @@ _it_force_below_spec_macos() {
     it_warn "could not restart the daemon for the $who probe"
   _it_wait_enrolled_macos >/dev/null || \
     it_warn "daemon did not report enrolled after the $who seam restart"
+}
+
+# _it_engine_present_note_macos — the darwin twin of
+# lib/installtest-enroll.sh's _it_engine_present_note (waired-agent#640):
+# the likeliest reason the arm under test was not reached, as a clause to
+# append to a failure message. Echoes nothing when it does not apply.
+_it_engine_present_note_macos() {
+  if sudo test -x "$STATE_DIR/runtimes/ollama/bin/ollama"; then
+    printf ' — an engine is already installed at %s, so the daemon no longer wanted one (waired-agent#640)' \
+      "$STATE_DIR/runtimes/ollama/bin/ollama"
+  fi
 }
 
 # Leave the host as we found it: the real measurement back, the daemon
@@ -776,9 +813,12 @@ assert_reinit_default_unfit_macos() {
   [ "$rc" = 0 ] \
     && ok "flagless init on a below-spec host exits 0 (a choice, not a fault — waired-agent#590)" \
     || bad "flagless init exited $rc on a below-spec host — the non-interactive default is skip-and-continue, never a failure — see $log"
-  grep -q "$IT_UNFIT_SKIP_RE" "$log" \
-    && ok "the step-4 non-interactive default said what it did" \
-    || bad "init never printed the skip note — the step-4 default arm was not reached, so the asserts around it prove nothing — see $log"
+  if grep -q "$IT_UNFIT_SKIP_RE" "$log"; then
+    ok "the step-4 non-interactive default said what it did"
+  else
+    bad "init never printed the skip note — the step-4 default arm was not reached, so the asserts around it prove nothing$(_it_engine_present_note_macos) — see $log"
+    tail -n 20 "$log" | sed 's/^/    init| /' >&2
+  fi
   grep -q "$IT_INSTALL_FAILURE_BOX_RE" "$log" \
     && bad "init reported the below-spec default as a failed install — see $log" \
     || ok "the default is not reported as a failed install"

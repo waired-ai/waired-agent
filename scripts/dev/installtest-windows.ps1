@@ -198,9 +198,10 @@ $StatusFieldsRe = 'no_model_selected|host_speed|probe_model_id|turn_floor_second
 # Mirror of lib/installtest-enroll.sh's IT_DAEMON_EVIDENCE_RE
 # (waired-agent#579) -- the daemon-log lines the not-ready dump greps for. See
 # the comment there for why the host-speed group belongs in a dump that used to
-# be pull-side only, and why 'api/pull' is appended at the use site rather than
-# living in the alternation.
-$DaemonEvidenceRe = 'boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host'
+# be pull-side only, why 'api/pull' is appended at the use site rather than
+# living in the alternation, and what the last two branches are for
+# (waired-agent#642).
+$DaemonEvidenceRe = 'boot pre-pull|bundled model|host speed|host cutoff|below the recommended spec|measuring whether this host|engine log truncated at cap|no engine logs found'
 
 # Mirror of lib/installtest-enroll.sh's IT_NO_MODEL_RE (waired-agent#586/#590)
 # -- see the comment there, including why only the ASCII head of the product's
@@ -545,6 +546,39 @@ function Get-ModelReadyState {
     return 'pending'
 }
 
+# Write-EvidenceDump: the Windows twin of lib/installtest-enroll.sh's
+# _it_evidence_dump. See that function for why the pull group is separate and
+# untruncated, why both groups are counted, and why free space is here
+# (waired-agent#642).
+function Write-EvidenceDump {
+    param([string]$Bundle)
+
+    if (-not (Test-Path -LiteralPath $Bundle)) {
+        Write-Host "    agent| (no log bundle at $Bundle)"
+        return
+    }
+    $evidence = @(Select-String -LiteralPath $Bundle -Pattern $DaemonEvidenceRe)
+    Write-Host "    agent| daemon evidence: $($evidence.Count) line(s) matched, showing the last 40"
+    if ($evidence.Count -gt 0) {
+        $evidence | Select-Object -Last 40 | ForEach-Object { Write-Host "    agent| $($_.Line)" }
+    } else {
+        Write-Host "    agent| (no pre-pull or host-speed lines in the daemon log)"
+    }
+    $pulls = @(Select-String -LiteralPath $Bundle -Pattern 'api/pull')
+    Write-Host "    agent| engine pull requests: $($pulls.Count) line(s) matched, showing all"
+    if ($pulls.Count -gt 0) {
+        $pulls | ForEach-Object { Write-Host "    agent| $($_.Line)" }
+    } else {
+        Write-Host "    agent| (no api/pull lines in the daemon log)"
+    }
+    try {
+        $drive = (Get-Item -LiteralPath $StateDir).PSDrive
+        Write-Host "    agent| state-dir free space: $([math]::Round($drive.Free / 1GB, 1)) GB free on $($drive.Name):"
+    } catch {
+        Write-Host "    agent| state-dir free space: (unreadable)"
+    }
+}
+
 function Assert-Inference {
     param([string]$InitLog)
 
@@ -722,13 +756,7 @@ function Assert-Inference {
             # cannot tell them apart.
             $bundle = Join-Path $env:TEMP 'it-logs.txt'
             & (Join-Path $InstallDir 'waired.exe') logs --since 30m --state-dir $StateDir -o $bundle *> $null
-            $agentLines = @()
-            if (Test-Path -LiteralPath $bundle) {
-                $agentLines = @(Select-String -LiteralPath $bundle -Pattern "$DaemonEvidenceRe|api/pull" |
-                    Select-Object -Last 40 | ForEach-Object { "    agent| $($_.Line)" })
-            }
-            if ($agentLines.Count -gt 0) { $agentLines | Write-Host }
-            else { Write-Host "    agent| (no pre-pull or pull lines in the daemon log)" }
+            Write-EvidenceDump -Bundle $bundle
         } else {
             ItBad "no benchmark THROUGHPUT figure in init transcript ($InitLog)"
             ($txt -split "`n" | Select-String -Pattern 'benchmark|inference|engine' |
@@ -797,9 +825,30 @@ function Wait-Enrolled {
 # not take.
 function Get-HostMemoryPath { Join-Path $StateDir 'runtime\host-memory.json' }
 
+# Get-EnginePresentNote: the likeliest reason the arm under test was not
+# reached, when it is this one, as a clause to append to a failure message.
+# Empty otherwise, so the caller appends it unconditionally. The Windows twin
+# of lib/installtest-enroll.sh's _it_engine_present_note (waired-agent#640).
+function Get-EnginePresentNote {
+    $bin = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
+    if (Test-Path -LiteralPath $bin) {
+        return " -- an engine is already installed at $bin, so the daemon no longer wanted one (waired-agent#640)"
+    }
+    return ''
+}
+
 function Set-HostBelowSpec {
     param([string]$Waired, [string]$Who)
     & $Waired inference on --state-dir $StateDir 2>&1 | Out-Null
+    # The third thing these probes need, and the one this cannot arrange: an
+    # engine-less host. See lib/installtest-enroll.sh's _it_force_below_spec
+    # for the whole story (waired-agent#640) -- the state is inherited from
+    # whatever ran before, so the only useful thing to do is say when it does
+    # not hold.
+    $engine = Join-Path $StateDir 'runtimes\ollama\bin\ollama.exe'
+    if (Test-Path -LiteralPath $engine) {
+        ItLog "WARN an engine is already installed at $engine before the $Who probe -- the daemon no longer wants one, so the arm under test will not be reached (waired-agent#640)"
+    }
     $rec = Get-HostMemoryPath
     $bak = Join-Path $Work 'host-memory.json.bak'
     if (Test-Path -LiteralPath $rec) {
@@ -868,7 +917,7 @@ function Assert-ReinitDefaultUnfit {
     $skipped = Select-String -Path $log -Pattern $UnfitSkipRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue
     if ($skipped) { ItOk "the step-4 non-interactive default said what it did" }
     else {
-        ItBad "init never printed the skip note -- the step-4 default arm was not reached, so the asserts around it prove nothing -- see $log"
+        ItBad ("init never printed the skip note -- the step-4 default arm was not reached, so the asserts around it prove nothing" + (Get-EnginePresentNote) + " -- see $log")
         Get-Content -LiteralPath $log -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { ItLog "    init| $_" }
     }
     $calledItFailed = Select-String -Path $log -Pattern $InstallFailureBoxRe -SimpleMatch -Quiet -ErrorAction SilentlyContinue

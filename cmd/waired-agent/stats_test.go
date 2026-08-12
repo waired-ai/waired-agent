@@ -258,7 +258,7 @@ func TestRunStatsPublisherTicks(t *testing.T) {
 
 	// Wait until at least 3 ticks have fired, with a generous overall
 	// timeout so a slow CI machine doesn't flake the test.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for p.calls.Load() < 3 {
 		if time.Now().After(deadline) {
 			t.Fatalf("only %d ticks fired before deadline; want ≥ 3", p.calls.Load())
@@ -288,7 +288,7 @@ func TestRunStatsPublisherStopsOnCtxCancel(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatalf("publisher goroutine did not exit within 2 s of ctx cancel")
 	}
 }
@@ -310,7 +310,7 @@ func TestRunStatsPublisherDefaultInterval(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatalf("publisher did not exit on already-cancelled ctx")
 	}
 }

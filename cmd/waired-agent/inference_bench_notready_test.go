@@ -150,7 +150,7 @@ func TestRunBenchmark_JoiningANotReadyJobAlsoAnswers425(t *testing.T) {
 	// Let the POST reach startBenchmarkJob and join before the job ends.
 	select {
 	case <-joined:
-	case <-time.After(10 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("RunBenchmark never joined the in-flight job")
 	}
 	close(release)
@@ -163,7 +163,7 @@ func TestRunBenchmark_JoiningANotReadyJobAlsoAnswers425(t *testing.T) {
 		if r.ok {
 			t.Fatalf("ok = true (out = %+v), want false — the joined run stopped at the readiness gate", r.out)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(waitBackstop):
 		t.Fatal("RunBenchmark did not return")
 	}
 	if runs != 1 {

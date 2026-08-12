@@ -218,13 +218,13 @@ func TestRunBootActivationRetries(t *testing.T) {
 		return fmt.Errorf("attempt %d: device up: %w: excluded range", n, wgnet.ErrBindFailed)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), waitBackstop)
 	defer cancel()
 	go runBootActivation(ctx, sb, activate, discardLogger())
 
 	// While inactive the daemon must still present itself as signed in,
 	// with a reason — never as logged out.
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(waitBackstop)
 	for time.Now().Before(deadline) {
 		v := sb.Identity()
 		if !v.Enrolled {
