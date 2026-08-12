@@ -129,14 +129,29 @@ func daemonPathEngineInstall(
 		// on the pre-#835 behaviour exactly.
 		return nil
 	}
-	st := s.State()
+	// One deadline covers both waits below. They are waiting on the same
+	// thing — a daemon that login just started settling down — and giving
+	// each its own engineWaitForStatus would double what a host with an
+	// unreachable daemon spends here (waired-agent#746).
+	deadline := time.Now().Add(engineWaitForStatus)
+	st, err := awaitSetupStateDir(s, deadline)
 	if st.StateDir == "" {
 		// The daemon did not say where to install. Guessing risks
 		// installing somewhere it never looks — an install that
-		// "succeeds" and changes nothing.
+		// "succeeds" and changes nothing. Say which of the two happened:
+		// before #746 an unreachable daemon and a daemon reporting no
+		// state dir both returned here in silence, and the wizard path
+		// treats the second as a reportable failure (setup_install.go).
+		if err != nil {
+			writePromptf(out, "warn: could not ask the background service where to install the engine (%v); "+
+				"skipping the engine install. Run \"waired doctor\" to see why.\n", err)
+		} else {
+			writePromptf(out, "warn: the background service did not report where to install the engine; "+
+				"skipping the engine install.\n")
+		}
 		return nil
 	}
-	if !daemonWantsEngine(mgmtURL) {
+	if !daemonWantsEngine(mgmtURL, deadline) {
 		return nil
 	}
 	// A wizard-driven install may already hold the claim; do not race it.
@@ -154,12 +169,42 @@ func daemonPathEngineInstall(
 		"ollama", st.StateDir, engineInstallNarrationLocal)
 }
 
+// awaitSetupStateDir polls the daemon's setup view until it names a state
+// dir, or the deadline passes. It reads through fetchState rather than
+// State because State cannot fail: it maps every error to the zero value,
+// which is the same shape as a daemon that answered and reported no state
+// dir. The last error is returned so the caller can tell them apart.
+//
+// The retry matters for the same reason daemonWantsEngine's does, over
+// the same daemon one line later: right after login it may still be
+// starting up, and a single read gave that host a silently skipped
+// install (waired-agent#746).
+func awaitSetupStateDir(s *executorSession, deadline time.Time) (management.SetupStateResponse, error) {
+	for {
+		st, err := s.fetchState()
+		if err == nil && st.StateDir != "" {
+			return st, nil
+		}
+		// Sleep no further than the deadline: this budget is shared with
+		// daemonWantsEngine, so overshooting it here would spend the
+		// caller's remaining time on nothing.
+		wait := time.Until(deadline)
+		if wait <= 0 {
+			return st, err
+		}
+		if wait > setupStatePollInterval {
+			wait = setupStatePollInterval
+		}
+		time.Sleep(wait)
+	}
+}
+
 // daemonWantsEngine polls the inference subsystem until it says
 // something decisive. Only "no_engine" means install: "disabled" and
 // "stopped" are deliberate operator states, and anything else means an
-// engine is already up.
-func daemonWantsEngine(mgmtURL string) bool {
-	deadline := time.Now().Add(engineWaitForStatus)
+// engine is already up. The deadline is the caller's, so the two waits it
+// runs in sequence share one budget rather than stacking.
+func daemonWantsEngine(mgmtURL string, deadline time.Time) bool {
 	for {
 		st, ok := fetchInferenceStatus(mgmtURL)
 		switch {

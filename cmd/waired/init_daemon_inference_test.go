@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -153,7 +155,7 @@ func TestDaemonWantsEngine(t *testing.T) {
 		t.Run(tc.state, func(t *testing.T) {
 			d := &fakeInferenceDaemon{subState: tc.state}
 			srv := d.server(t)
-			if got := daemonWantsEngine(srv.URL); got != tc.want {
+			if got := daemonWantsEngine(srv.URL, time.Now().Add(engineWaitForStatus)); got != tc.want {
 				t.Fatalf("daemonWantsEngine(%q) = %v, want %v", tc.state, got, tc.want)
 			}
 		})
@@ -173,7 +175,7 @@ func TestDaemonWantsEngineGivesUp(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	if daemonWantsEngine(srv.URL) {
+	if daemonWantsEngine(srv.URL, time.Now().Add(engineWaitForStatus)) {
 		t.Fatal("wanted an engine from an unreachable daemon")
 	}
 }
@@ -212,19 +214,25 @@ func TestDaemonPathEngineInstallSkips(t *testing.T) {
 		subState string
 		setup    management.SetupStateResponse
 		older    bool
+		// wantSaid is the substring the skip must print, or "" when the
+		// skip is a deliberate operator state that speaks for itself.
+		// The "no state dir" row used to assert only that nothing was
+		// installed, which locked in the silence #746 is about.
+		wantSaid string
 	}{
-		{"inference disabled", "disabled", management.SetupStateResponse{StateDir: "/s"}, false},
-		{"inference stopped", "stopped", management.SetupStateResponse{StateDir: "/s"}, false},
-		{"engine already up", "ready", management.SetupStateResponse{StateDir: "/s"}, false},
+		{"inference disabled", "disabled", management.SetupStateResponse{StateDir: "/s"}, false, ""},
+		{"inference stopped", "stopped", management.SetupStateResponse{StateDir: "/s"}, false, ""},
+		{"engine already up", "ready", management.SetupStateResponse{StateDir: "/s"}, false, ""},
 		{
 			"no state dir from the daemon", "no_engine",
 			management.SetupStateResponse{}, false,
+			"did not report where to install the engine",
 		},
 		{
 			"a wizard already claimed the install", "no_engine",
-			management.SetupStateResponse{StateDir: "/s", InstallClaimed: "ollama"}, false,
+			management.SetupStateResponse{StateDir: "/s", InstallClaimed: "ollama"}, false, "",
 		},
-		{"older daemon without executor routes", "no_engine", management.SetupStateResponse{}, true},
+		{"older daemon without executor routes", "no_engine", management.SetupStateResponse{}, true, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -243,12 +251,102 @@ func TestDaemonPathEngineInstallSkips(t *testing.T) {
 
 			s := attachSetupExecutor(srv.URL, true)
 			defer s.Release()
-			daemonPathEngineInstall(context.Background(), s, infSrv.URL, io.Discard, "linux", true,
+			var out bytes.Buffer
+			daemonPathEngineInstall(context.Background(), s, infSrv.URL, &out, "linux", true,
 				daemonInitInference{}, false, eofLineReader())
 
 			if got := f.installed(); len(got) != 0 {
 				t.Fatalf("installed %v, want no install", got)
 			}
+			switch said := out.String(); {
+			case tc.wantSaid == "" && said != "":
+				t.Fatalf("skip said %q, want nothing", said)
+			case tc.wantSaid != "" && !strings.Contains(said, tc.wantSaid):
+				t.Fatalf("skip said %q, want it to contain %q", said, tc.wantSaid)
+			}
 		})
+	}
+}
+
+// TestDaemonPathEngineInstallRetriesTheStateRead: the state read happens
+// moments after login, when the daemon may still be starting up. One
+// failed read used to skip the install in silence — with no way to tell
+// that from a daemon that answered and named no state dir (#746).
+func TestDaemonPathEngineInstallRetriesTheStateRead(t *testing.T) {
+	shrinkSetupTimers(t)
+	prev := engineWaitForStatus
+	engineWaitForStatus = 2 * time.Second
+	t.Cleanup(func() { engineWaitForStatus = prev })
+
+	f := (&fakeEngineInstaller{}).install(t)
+	inf := &fakeInferenceDaemon{subState: "no_engine"}
+	infSrv := inf.server(t)
+
+	// Answer the attach probe, then withhold the state dir until the
+	// third read — the shape of a daemon that has not finished starting.
+	d := &fakeSetupDaemon{}
+	d.onState = func(poll int) {
+		if poll >= 3 {
+			d.setState(management.SetupStateResponse{StateDir: "/var/lib/waired"})
+		}
+	}
+	srv := d.server(t)
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	var out bytes.Buffer
+	daemonPathEngineInstall(context.Background(), s, infSrv.URL, &out, "linux", true,
+		daemonInitInference{}, false, eofLineReader())
+
+	if got := f.installed(); len(got) != 1 || got[0] != "/var/lib/waired" {
+		t.Fatalf("installer calls = %v, want one call once the daemon named its state dir", got)
+	}
+	// The install narrates itself; what must NOT appear is a skip note,
+	// since the read succeeded before the deadline.
+	if said := out.String(); strings.Contains(said, "warn:") {
+		t.Fatalf("said %q, want no warning: the read succeeded before the deadline", said)
+	}
+}
+
+// TestDaemonPathEngineInstallSaysTheDaemonWasUnreachable separates the
+// two causes the old single read folded together: a daemon that never
+// answered, versus one that answered and named no state dir (covered by
+// the table above).
+func TestDaemonPathEngineInstallSaysTheDaemonWasUnreachable(t *testing.T) {
+	shrinkSetupTimers(t)
+	prev := engineWaitForStatus
+	engineWaitForStatus = 20 * time.Millisecond
+	t.Cleanup(func() { engineWaitForStatus = prev })
+
+	f := (&fakeEngineInstaller{}).install(t)
+	inf := &fakeInferenceDaemon{subState: "no_engine"}
+	infSrv := inf.server(t)
+
+	// The attach probe succeeds; every read after it fails. Nothing else
+	// in the flow can tell the operator this happened.
+	d := &fakeSetupDaemon{}
+	d.setState(management.SetupStateResponse{StateDir: "/var/lib/waired"})
+	srv := d.server(t)
+	d.onState = func(poll int) {
+		if poll >= 2 {
+			d.failState(true)
+		}
+	}
+
+	s := attachSetupExecutor(srv.URL, true)
+	defer s.Release()
+	var out bytes.Buffer
+	daemonPathEngineInstall(context.Background(), s, infSrv.URL, &out, "linux", true,
+		daemonInitInference{}, false, eofLineReader())
+
+	if got := f.installed(); len(got) != 0 {
+		t.Fatalf("installed %v, want no install", got)
+	}
+	said := out.String()
+	if !strings.Contains(said, "could not ask the background service where to install the engine") {
+		t.Fatalf("said %q, want it to name the unreachable daemon", said)
+	}
+	if strings.Contains(said, "did not report where to install") {
+		t.Fatalf("said %q, but that is the wording for a daemon that answered", said)
 	}
 }

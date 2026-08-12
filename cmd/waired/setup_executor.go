@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -68,6 +70,15 @@ type executorSession struct {
 	mgmtURL   string
 	elevated  bool
 	supported bool
+	// attachNote records why the attach did not go cleanly, in one line
+	// meant for the operator. Empty when it did, and empty for the one
+	// benign case: a daemon older than this feature answers 404, and
+	// staying inert is the documented outcome above for it.
+	//
+	// Written in attachSetupExecutor before the heartbeat goroutine
+	// starts and read after, so it needs no lock — the same reason
+	// supported does not have one (waired-agent#746).
+	attachNote string
 
 	mu       sync.Mutex
 	released bool
@@ -121,15 +132,39 @@ var executorProgressInterval = 500 * time.Millisecond
 
 // attachSetupExecutor probes the daemon for the executor routes and, when
 // they exist, attaches a lease and starts heartbeating it. The returned
-// session is never nil; check Supported.
+// session is never nil; check Supported, and AttachNote for why an attach
+// that did not go cleanly did not.
+//
+// The probe and the attach do not share a transport, which is what makes
+// the note worth keeping (waired-agent#746). The probe is a read, and
+// /setup/state is on the loopback-TCP allow-list (waired#836), so it can
+// succeed over TCP on a host whose IPC socket is unavailable. The attach
+// is a write, and writes are socket-only since waired#838. A daemon that
+// answers the probe is therefore not evidence that the lease will take,
+// and every gate downstream reads Supported.
 func attachSetupExecutor(mgmtURL string, elevated bool) *executorSession {
 	s := &executorSession{mgmtURL: mgmtURL, elevated: elevated, stop: make(chan struct{})}
 	if _, err := s.fetchState(); err != nil {
-		// 404 (older daemon) or unreachable — stay inert.
+		// A daemon older than this feature answers 404, and being inert
+		// is the documented, correct outcome for it — say nothing. Every
+		// other cause (unreachable, a 5xx, a body that will not parse)
+		// lands in the same inert state for a reason the operator can
+		// act on, so record it.
+		if !isMgmtStatus(err, http.StatusNotFound) {
+			s.attachNote = fmt.Sprintf("could not ask the background service about setup (%v); "+
+				"its setup steps will be skipped. Run \"waired doctor\" to see why.", err)
+		}
 		return s
 	}
 	s.supported = true
-	s.post(true, management.SetupExecutorPhaseIdle, "", "")
+	if _, err := s.postStepErr(true, management.SetupExecutorPhaseIdle, "", "", "", "", executorProgress{}); err != nil {
+		// Deliberately still supported: heartbeat resends attached=true
+		// every setupExecutorHeartbeatInterval, so the lease recovers on
+		// its own. Going inert here would let one failed write cancel
+		// the engine install for the whole run.
+		s.attachNote = fmt.Sprintf("could not tell the background service that setup is running (%v); "+
+			"retrying in the background. If the browser shows no progress, run \"waired doctor\".", err)
+	}
 	s.wg.Add(1)
 	go s.heartbeat()
 	s.watchSignals()
@@ -138,6 +173,24 @@ func attachSetupExecutor(mgmtURL string, elevated bool) *executorSession {
 
 // Supported reports whether the daemon speaks the executor lease.
 func (s *executorSession) Supported() bool { return s != nil && s.supported }
+
+// AttachNote returns the one-line reason the attach did not go cleanly,
+// or "" when it did or when the daemon simply predates the routes.
+func (s *executorSession) AttachNote() string {
+	if s == nil {
+		return ""
+	}
+	return s.attachNote
+}
+
+// reportAttachNote prints AttachNote, if there is one. Split out so the
+// caller decides where the line goes and the session stays a producer of
+// facts — and so this is testable without standing up a login flow.
+func reportAttachNote(out io.Writer, s *executorSession) {
+	if note := s.AttachNote(); note != "" {
+		writePromptf(out, "warn: %s\n", note)
+	}
+}
 
 // fetchState reads the daemon's current setup view.
 func (s *executorSession) fetchState() (management.SetupStateResponse, error) {
@@ -178,10 +231,21 @@ func (s *executorSession) post(attached bool, phase, engine, errText string) man
 }
 
 // postStep is post with an explicit step, error code, and transfer
-// figures.
+// figures. It swallows the error for the reason post documents; the one
+// caller that must see it — the initial attach — uses postStepErr.
 func (s *executorSession) postStep(attached bool, phase, engine, errText, errCode, step string, prog executorProgress) management.SetupStateResponse {
+	st, _ := s.postStepErr(attached, phase, engine, errText, errCode, step, prog)
+	return st
+}
+
+// postStepErr is postStep with the transport error returned rather than
+// dropped. Only attachSetupExecutor calls it: there is nothing before the
+// first post to have succeeded, and no second chance until the next
+// heartbeat, so it is the one post whose failure the operator cannot
+// infer from anything else (waired-agent#746).
+func (s *executorSession) postStepErr(attached bool, phase, engine, errText, errCode, step string, prog executorProgress) (management.SetupStateResponse, error) {
 	if !s.Supported() {
-		return management.SetupStateResponse{}
+		return management.SetupStateResponse{}, nil
 	}
 	body, _ := json.Marshal(management.SetupExecutorRequest{
 		Attached:           attached,
@@ -199,11 +263,11 @@ func (s *executorSession) postStep(attached bool, phase, engine, errText, errCod
 	})
 	out, err := httpPost(s.mgmtURL+"/waired/v1/setup/executor", body)
 	if err != nil {
-		return management.SetupStateResponse{}
+		return management.SetupStateResponse{}, err
 	}
 	var st management.SetupStateResponse
 	_ = json.Unmarshal(out, &st)
-	return st
+	return st, nil
 }
 
 func (s *executorSession) heartbeat() {
