@@ -1537,7 +1537,7 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 			}
 		case bs.Gen >= d.benchmarkGen && bs.State == management.BenchmarkStateFailed:
 			step.Status = signer.SetupStatusFailed
-			step.ErrorCode = signer.SetupErrorInternal
+			step.ErrorCode = benchmarkSetupErrorCode(bs.Outcome)
 			step.ErrorDetail = clampSetupDetail(bs.Error)
 			p.Benchmark = &signer.SetupBenchmark{Gen: bs.Gen}
 		case bs.State == management.BenchmarkStateRunning:
@@ -1562,6 +1562,29 @@ func (r *setupReconciler) snapshot(ctx context.Context) *signer.SetupProgress {
 		p.Steps = append(p.Steps, step)
 	}
 	return p
+}
+
+// benchmarkSetupErrorCode maps a benchmark run's ending to the code the
+// wizard renders, instead of calling every ending an internal error.
+//
+// The enum already had the right value and this row never reached for
+// it: an engine that was not ready is not a fault in Waired, it is a
+// host to poll and retry, and the same distinction is drawn everywhere
+// else in the benchmark path — RunBootBenchmark gates on it, the
+// management API answers 425 rather than 503 for it, and
+// runBenchmarkJob refuses to record it. Only this projection flattened
+// it, so an operator whose engine had not finished installing was told
+// "internal error" (waired-agent#203 proposal 1, on the surface a
+// person actually reads).
+//
+// An unrecognised or empty outcome keeps the old code. Empty is a record
+// written before Outcome was persisted, and guessing at it would be
+// worse than the unspecific answer it already gives.
+func benchmarkSetupErrorCode(outcome string) string {
+	if outcome == benchOutcomeEngineNotReady {
+		return signer.SetupErrorEngineNotReady
+	}
+	return signer.SetupErrorInternal
 }
 
 // engineRowFailed reports whether the rows the executor works through

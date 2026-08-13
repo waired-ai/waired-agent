@@ -80,8 +80,20 @@ type BenchmarkRecord struct {
 	SpreadPct float64 `json:"spread_pct,omitempty"`
 	Trials    int     `json:"trials,omitempty"`
 
-	Failed     bool      `json:"failed,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	Failed bool   `json:"failed,omitempty"`
+	Error  string `json:"error,omitempty"`
+	// Outcome is WHICH ending the run had, not merely that it had a bad
+	// one: "measured" / "failed" / "engine_not_ready" / "skipped". Failed
+	// says a figure is unusable; Outcome says whether the host was ever
+	// asked, and those are different claims about a machine
+	// (waired-agent#203).
+	//
+	// Persisted because every consumer of a failure has to re-derive the
+	// distinction otherwise, and the surface that most needs it — the
+	// setup benchmark row — flattened every failure to an internal error
+	// for want of it. Empty on a record written before this field, which
+	// reads as "unknown ending" and keeps the old flattening.
+	Outcome    string    `json:"outcome,omitempty"`
 	MeasuredAt time.Time `json:"measured_at"`
 }
 

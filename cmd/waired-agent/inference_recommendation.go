@@ -23,6 +23,34 @@ func (p *agentInferenceProvider) SetLastBench(b BenchResult) {
 	p.lastBench = &bc
 }
 
+// bootBenchFailure returns the last boot-path result when it is a
+// failure worth reporting, or nil.
+//
+// "Worth reporting" excludes the two endings that are not verdicts about
+// this host. A skipped run (no engine, an external endpoint) is a
+// deliberate Capacity 0 and never a fault — three separate places
+// document that a skip must not read as one. An engine-not-ready run did
+// not reach the engine, which is the ordinary shape of a fresh install:
+// the benchmark runs while `waired init` is still installing the engine
+// and pulling the first model, and it self-heals minutes later. Both
+// would turn a normal first boot into a reported failure.
+//
+// What is left is a run that reached a working engine and could not
+// measure it — the ending #203 is about, and the one that until now
+// existed only as a WARN line.
+func (p *agentInferenceProvider) bootBenchFailure() *BenchResult {
+	p.benchMu.Lock()
+	defer p.benchMu.Unlock()
+	if p.lastBench == nil || !p.lastBench.Failed {
+		return nil
+	}
+	if p.lastBench.Outcome != benchOutcomeFailed {
+		return nil
+	}
+	b := *p.lastBench
+	return &b
+}
+
 // AdvertisedCapacity is the admission cap the probe loop publishes, read
 // per tick like Hardware / RecommendedMaxParallel / DeclaredContextWindow
 // (#387). 0 = nothing measured yet, which the probe treats as "leave the
@@ -446,6 +474,7 @@ func (p *agentInferenceProvider) runBenchmarkJob(gen int, done chan struct{}) {
 		Trials:        benchSampleCount,
 		Failed:        bench.Failed,
 		Error:         bench.Err,
+		Outcome:       bench.Outcome,
 		MeasuredAt:    time.Now().UTC(),
 	}
 	ranAtAll := bench.Outcome != benchOutcomeEngineNotReady
@@ -516,6 +545,24 @@ func (p *agentInferenceProvider) BenchmarkStatus() management.BenchmarkStatusRes
 		resp.Method = last.Method
 		resp.SpreadPct = last.SpreadPct
 		resp.Trials = last.Trials
+		resp.Outcome = last.Outcome
+	} else if boot := p.bootBenchFailure(); boot != nil {
+		// The boot benchmark reached no surface at all: it warn-logged
+		// and returned. It does not persist a record, does not move this
+		// status, and does not appear in SetupProgress — so the failure
+		// waired-agent#203 actually reported, an engine install that
+		// left nothing listening, was observable only by reading the
+		// daemon log (#203 proposal 2).
+		//
+		// Reported, never persisted. Writing a gen-0 boot failure into
+		// catalog.State would overwrite a good higher-generation record
+		// and — because a gen-0 write keeps the stored generation — make
+		// the wizard show THAT generation as failed. This fills the gap
+		// only while there is nothing else to report, which is exactly
+		// the case that was silent.
+		resp.State = management.BenchmarkStateFailed
+		resp.Error = boot.Err
+		resp.Outcome = boot.Outcome
 	}
 	if running {
 		resp.State = management.BenchmarkStateRunning
