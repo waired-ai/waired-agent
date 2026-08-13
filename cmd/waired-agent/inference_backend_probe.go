@@ -56,15 +56,45 @@ type gpuEngagement struct {
 // next backend when the current one is CPU-bound. It returns the backend
 // the engine ended up on (informational; surfaced by the caller).
 //
-// Conservative by design (see file header): a single-step plan returns
-// immediately without touching the engine, and any inconclusive check
-// keeps the current backend.
+// EVERY plan is verified, not only the ones with somewhere to fall back
+// to (#70). Until then this returned immediately unless plan.Probes(),
+// so a detected GPU that failed to ENGAGE — a broken CUDA runtime, VRAM
+// already exhausted — kept its GPU label while inference ran on the CPU,
+// which is the silent fallback the label exists to make visible. A
+// single-step host has no better backend to try, so the correction there
+// is the label alone: honest reporting, no restart.
+//
+// Conservative by design (see file header): any inconclusive check keeps
+// the current backend, and only positive evidence of CPU-only residency
+// changes anything.
 func resolveBackendWithProbe(ctx context.Context, sw backendSwitcher, plan infruntime.BackendPlan, baseURL string, client *http.Client, logger *slog.Logger) infruntime.OllamaBackend {
-	if !plan.Probes() {
-		return plan.Preferred().Backend
+	// A plan with no steps has nothing to report. ResolveOllamaBackend
+	// always returns at least one, so this is the zero value — a provider
+	// built without a boot plan. It matters because Preferred() indexes
+	// Steps[0] unguarded, and the Probes() gate that used to stand at the
+	// call site was incidentally shielding it: !Probes() is also true for
+	// an empty plan. "" is what ResolvedBackend already means by "not
+	// decided", and the caller declines to overwrite a label with it.
+	if len(plan.Steps) == 0 {
+		return ""
 	}
+	preferred := plan.Preferred().Backend
+	// A plan that already says CPU has no GPU claim to be wrong about,
+	// and nothing below it to fall to. Probing it could only cost a
+	// request and reach the same answer.
+	if preferred == infruntime.BackendCPU {
+		return preferred
+	}
+	// Loading a model just to read its residency is only worth it when a
+	// restart could follow, so multi-step plans keep exactly the
+	// behaviour they had. On a single-step plan the probe is read-only:
+	// the outcome is a label rather than a restart, a cold load costs up
+	// to probeLoadTimeout, and the engine can restart under a screen on
+	// its own — forcing a load into that window would be the "make it
+	// worse" this file forbids.
+	mayLoad := plan.Probes()
 	for i, step := range plan.Steps {
-		eng := ollamaEngagement(ctx, client, baseURL)
+		eng := ollamaEngagement(ctx, client, baseURL, mayLoad)
 		switch {
 		case !eng.Checked:
 			logger.Warn("ollama GPU engagement unverified; keeping backend",
@@ -76,8 +106,13 @@ func resolveBackendWithProbe(ctx context.Context, sw backendSwitcher, plan infru
 		}
 		// Positive evidence the model is CPU-resident.
 		if i == len(plan.Steps)-1 {
-			logger.Warn("ollama still CPU-bound after exhausting GPU backends; running on CPU",
-				"backend", step.Backend, "detail", eng.Detail)
+			if plan.Probes() {
+				logger.Warn("ollama still CPU-bound after exhausting GPU backends; running on CPU",
+					"backend", step.Backend, "detail", eng.Detail)
+			} else {
+				logger.Warn("ollama did not engage the GPU and has no fallback backend; reporting CPU",
+					"backend", step.Backend, "detail", eng.Detail)
+			}
 			return infruntime.BackendCPU
 		}
 		next := plan.Steps[i+1]
@@ -99,13 +134,22 @@ func resolveBackendWithProbe(ctx context.Context, sw backendSwitcher, plan infru
 }
 
 // ollamaEngagement reports whether a model is currently resident on the
-// GPU. It inspects /api/ps first; if nothing is loaded it loads the first
-// available tag (POST /api/generate with model only) and re-inspects.
-// Checked is false when no model could be loaded — the caller must treat
-// that as "unknown" and NOT trigger a fallback.
-func ollamaEngagement(ctx context.Context, client *http.Client, baseURL string) gpuEngagement {
+// GPU. It inspects /api/ps first; if nothing is loaded and mayLoad is
+// set it loads the first available tag (POST /api/generate with model
+// only) and re-inspects. Checked is false when no model could be read —
+// the caller must treat that as "unknown" and NOT trigger a fallback.
+//
+// mayLoad is false for a plan whose verdict can only relabel, never
+// restart (#70). Reading an already-resident model is a cheap request;
+// forcing a cold load is minutes, and the boot path has already warmed
+// the serving model by the time this runs, so the read usually answers
+// on its own.
+func ollamaEngagement(ctx context.Context, client *http.Client, baseURL string, mayLoad bool) gpuEngagement {
 	if eng, ok := psEngagement(ctx, client, baseURL); ok {
 		return eng
+	}
+	if !mayLoad {
+		return gpuEngagement{Detail: "no model resident to read GPU engagement from"}
 	}
 	tag, err := firstOllamaTag(ctx, client, baseURL)
 	if err != nil || tag == "" {
