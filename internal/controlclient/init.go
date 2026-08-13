@@ -66,7 +66,15 @@ type InitParams struct {
 
 // InitResult is what RunInit returns on success.
 type InitResult struct {
-	DeviceID                   string
+	DeviceID string
+	// DeviceName is the display name the control plane assigned. It is
+	// not always the hostname that was reported: a second machine with
+	// the same hostname enrols as "<hostname>-1", and a re-enrollment
+	// keeps whatever the device is called now, including a rename made in
+	// the web console (waired-ai/waired#1204). Empty when talking to a
+	// control plane that predates the field, where the reported hostname
+	// still is the name.
+	DeviceName                 string
 	NetworkID                  string
 	NetworkName                string
 	AccountID                  string
@@ -256,6 +264,7 @@ func enrollWithTicket(
 
 	var er struct {
 		DeviceID                   string          `json:"device_id"`
+		DeviceName                 string          `json:"device_name"`
 		NetworkID                  string          `json:"network_id"`
 		AccountID                  string          `json:"account_id"`
 		OverlayIP                  string          `json:"overlay_ip"`
@@ -275,6 +284,7 @@ func enrollWithTicket(
 	nodeExp, _ := time.Parse(time.RFC3339, er.NodeKeyExpiresAt)
 	return &InitResult{
 		DeviceID:                   er.DeviceID,
+		DeviceName:                 er.DeviceName,
 		NetworkID:                  er.NetworkID,
 		NetworkName:                networkName,
 		AccountID:                  er.AccountID,

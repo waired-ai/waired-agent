@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: d2f4aa6723b48719
+sourceHash: 14aac908d22776e8
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -66,7 +66,7 @@ AI ソフトウェアをインストールするため管理者権限が必要�
 | `--share-with-mesh=true\|false` | 「ほかの端末に使わせるか」に、聞かれずに答えます。 |
 | `--skip-claude-route` | セットアップは行いつつ、Claude Code は Anthropic API のままにします。スキルやプラグインは入ります。あとから `waired claude enable` で切り替えられます。 |
 | `--skip-integration` | コーディングツールの設定を丸ごと省きます（Claude Code も OpenClaw も変更しません）。 |
-| `--device-name <name>` | ホスト名ではなく、指定した名前でこのパソコンを登録します。 |
+| `--device-name <name>` | このパソコンのホスト名ではなく、指定した名前を申告します。使われるのは最初にネットワークへ参加するときで、あとから名前を変えるのは [Web コンソール](/ja/guides/web-console/)です。`waired init` をもう一度実行しても、その変更は上書きされません。 |
 | `--control <URL>` | 既定ではなく指定したコントロールプレーンでサインインします。→ [インストールの詳細オプション](/ja/reference/install-options/) |
 | `--auth-key <key>` | ブラウザでのサインインの代わりに認証キーで参加します（サーバーやコンテナ向け）。`file:/path/to/key` も指定でき、フラグを省略すると `$WAIRED_AUTH_KEY` を読みます。キーは[管理コンソール](/ja/guides/web-console/)の **設定 → 認証キー** で作成します。→ [サインインとセットアップ](/ja/getting-started/first-run/#servers-and-containers-auth-keys) |
 | `--force-reauth` | すでにサインイン済みのパソコンで、あらためてサインインし直します。これを付けない場合、`waired init` はセットアップの続きから進み、既存のサインインはそのままにします（`--auth-key` を渡した場合も、そのキーは使われません）。 |
@@ -333,7 +333,8 @@ waired peers list
 ```
 
 自分のほかのパソコンと、それぞれのアドレス・エンジン・グラフィックボード・モデル。
-`worker set --pin` に渡す名前はここで調べます。
+`worker set --pin` に渡す名前はここで調べます。同じ名前を申告するパソコンが 2 台
+あると、2 台目には番号が付きます。一覧に並ぶ名前は必ず一意です。
 
 **MODEL** はそのパソコンで動いているモデル。隣の **MODELS** は同じモデルを AI
 ソフトウェア側の名前で表したもので、Ollama と vLLM では異なります。
