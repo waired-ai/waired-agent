@@ -175,10 +175,14 @@ func nvmlDevice(procs map[string]*windows.LazyProc, index uint32) (GPU, bool) {
 		return GPU{}, false
 	}
 
+	// Free was already being read and thrown away: nvmlMemory_t carries
+	// all three figures in one call, so keeping it costs nothing and is
+	// the same number nvidia-smi's memory.free reports (waired-agent#69).
 	gpu := GPU{
 		Vendor:      "nvidia",
 		Model:       nvmlString(name),
 		VRAMTotalMB: int(mem.Total / (1024 * 1024)),
+		VRAMFreeMB:  int(mem.Free / (1024 * 1024)),
 	}
 	if p, ok := procs["nvmlDeviceGetUUID"]; ok {
 		uuid := make([]byte, nvmlDeviceUUIDBufferSize)

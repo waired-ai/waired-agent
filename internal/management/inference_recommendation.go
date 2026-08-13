@@ -104,6 +104,17 @@ type BenchmarkStatusResponse struct {
 	MeasuredAt string `json:"measured_at,omitempty"`
 	// Error carries the failure detail when State is "failed".
 	Error string `json:"error,omitempty"`
+	// Outcome is WHICH ending the run had — "measured", "failed",
+	// "engine_not_ready", "skipped" — where State says only whether a
+	// figure is usable. The two answer different questions: State
+	// "failed" covers both a host that measured badly and a host that
+	// was never asked, and only the first is a statement about this
+	// machine's performance (waired-agent#203).
+	//
+	// Empty means "not recorded", which every consumer must treat as the
+	// unspecific failure it used to be: a record written before the
+	// field existed, or a run that predates it.
+	Outcome string `json:"outcome,omitempty"`
 
 	// Per-measurement progress (waired-agent#199). The benchmark takes
 	// benchSampleCount samples after a warm-up that can itself run for

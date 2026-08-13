@@ -49,26 +49,35 @@ func TestHasUsableEngine(t *testing.T) {
 		reg          *infruntime.Registry
 		hw           hardware.Profile
 		ollamaUsable func() bool
+		vllmUsable   func() bool
 		want         bool
 	}{
 		// ollamaUsable resolver (bundled-aware) wins over the PATH-based
 		// profiler when wired.
-		{"ollama resolver says usable", regWith("ollama"), none, yes, true},
-		{"ollama resolver says not usable", regWith("ollama"), ollamaInstalled, no, false},
+		{"ollama resolver says usable", regWith("ollama"), none, yes, nil, true},
+		{"ollama resolver says not usable", regWith("ollama"), ollamaInstalled, no, nil, false},
 		// nil resolver (unit-test style) falls back to the profiler flag.
-		{"nil resolver, profiler installed", regWith("ollama"), ollamaInstalled, nil, true},
-		{"nil resolver, profiler not installed", regWith("ollama"), none, nil, false},
-		{"vllm registered and installed", regWith("vllm"), vllmInstalled, no, true},
-		{"vllm registered but not installed", regWith("vllm"), none, no, false},
+		{"nil resolver, profiler installed", regWith("ollama"), ollamaInstalled, nil, nil, true},
+		{"nil resolver, profiler not installed", regWith("ollama"), none, nil, nil, false},
+		{"vllm registered and installed", regWith("vllm"), vllmInstalled, no, nil, true},
+		{"vllm registered but not installed", regWith("vllm"), none, no, nil, false},
+		// #225: the vllm arm now has the resolver seam ollama has had
+		// since #188, and it wins over the profile the same way. The
+		// first of these is the case the old code could not express — a
+		// venv the daemon can resolve RIGHT NOW, on a host whose cached
+		// profile has not caught up.
+		{"vllm resolver says usable, profile stale", regWith("vllm"), none, no, yes, true},
+		{"vllm resolver says not usable, profile stale the other way", regWith("vllm"), vllmInstalled, no, no, false},
+		{"vllm resolver answers even with ollama registered first", regWith("ollama", "vllm"), none, no, yes, true},
 		// #490: an adapter waired did not install and does not manage
 		// cannot make the host usable, whatever it is named.
-		{"unmanaged adapter does not count", regWith("lan-gpu"), none, no, false},
-		{"ollama unusable + unmanaged adapter", regWith("ollama", "lan-gpu"), none, no, false},
-		{"empty registry", regWith(), none, no, false},
+		{"unmanaged adapter does not count", regWith("lan-gpu"), none, no, nil, false},
+		{"ollama unusable + unmanaged adapter", regWith("ollama", "lan-gpu"), none, no, nil, false},
+		{"empty registry", regWith(), none, no, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := hasUsableEngine(tc.reg, tc.hw, tc.ollamaUsable); got != tc.want {
+			if got := hasUsableEngine(tc.reg, tc.hw, tc.ollamaUsable, tc.vllmUsable); got != tc.want {
 				t.Errorf("hasUsableEngine = %v, want %v", got, tc.want)
 			}
 		})

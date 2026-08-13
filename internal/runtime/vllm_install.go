@@ -42,14 +42,33 @@ const TransformersConstraint = "transformers>=5.5.3,<6.0"
 
 // VLLMVerifyImports is the python snippet the install pipeline runs
 // to confirm the venv is truly usable: vllm importable, torch sees
-// CUDA, GPU compute capability ≥ 10 (= Blackwell-ready). Step 14 may
-// extend this with additional smoke-checks.
+// CUDA, GPU compute capability ≥ 10 (= Blackwell-ready), and a
+// huggingface_hub console script present to download weights with.
+//
+// The downloader check is here rather than left to the pip request
+// because the request cannot enforce it. huggingface_hub 1.x removed
+// the `cli` extra, so `huggingface_hub[cli]` resolved to plain
+// huggingface_hub with only a warning — the guarantee the extra was
+// written to provide had quietly become the transitive accident it was
+// meant to replace (waired-agent#263). Asserting the binary after the
+// install is the form that cannot go stale: it holds whether the extra
+// exists, whether it comes back, and whether the scripts move again.
+//
+// It looks for the same two names in the same order as
+// resolveVenvHFCLI (cmd/waired-agent/inference_vllm_linux.go), beside
+// this interpreter, so what verify accepts is exactly what the daemon
+// will later resolve. Without it a venv missing the downloader passes
+// verify clean and fails at the first safetensors pull instead.
 const VLLMVerifyImports = `
-import sys, vllm, torch
+import os, sys, vllm, torch
 assert torch.cuda.is_available(), 'torch.cuda.is_available() is False'
 cap = torch.cuda.get_device_capability(0)
 if cap[0] < 8:
     sys.exit(f'compute capability {cap[0]}.{cap[1]} below the SM_80 floor')
+bindir = os.path.dirname(sys.executable)
+if not any(os.path.exists(os.path.join(bindir, n)) for n in ('hf', 'huggingface-cli')):
+    sys.exit(f'no huggingface_hub console script (hf, huggingface-cli) in {bindir}: '
+             'the venv cannot download model weights')
 print(vllm.__version__)
 `
 
@@ -226,18 +245,35 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 		// huggingface_hub ships the `hf` / `huggingface-cli` binary the
 		// agent's HFPuller (internal/download/hf.go, ResolveHFCLI) shells
 		// out to for the safetensors download. vLLM already pulls
-		// huggingface_hub in transitively; the explicit [cli] extra makes
-		// the console-script entry point a hard guarantee rather than a
-		// transitive accident, so a resolver change upstream can't leave
-		// the venv without a downloader. Version is left to uv so it
-		// resolves the one vllm pins.
-		"huggingface_hub[cli]",
+		// huggingface_hub in transitively; naming it explicitly keeps it
+		// from being only a transitive accident.
+		//
+		// The floor, not the `[cli]` extra that used to be here. 1.x
+		// REMOVED that extra and ships the console scripts in the base
+		// package instead, so `huggingface_hub[cli]` resolved to plain
+		// huggingface_hub with a warning uv prints and carries on past:
+		//
+		//   warning: The package `huggingface-hub==1.25.1` does not have
+		//   an extra named `cli`
+		//
+		// The venv kept working, but for exactly the reason the extra was
+		// written to stop relying on. `>=1.0` states the real
+		// requirement — the version from which the scripts are in the
+		// base package — and leaves the upper end to uv so it still
+		// resolves the one vllm pins (waired-agent#263).
+		//
+		// Stating it is not the same as guaranteeing it: VLLMVerifyImports
+		// asserts the binary exists after the install, which is what makes
+		// the guarantee real rather than declared.
+		"huggingface_hub>=1.0",
 		// vllm 0.24's flashinfer JIT-compiles CUDA ops at engine
 		// start-up and shells out to `ninja`. The wheel arrives
-		// transitively today, but pin it explicitly for the same
-		// reason as huggingface_hub above: a resolver change must
-		// not leave the venv unable to serve. (VLLMAdapter puts the
-		// venv bin dir on the child PATH so this binary is found.)
+		// transitively today, but name it explicitly so a resolver
+		// change cannot leave the venv unable to serve. (VLLMAdapter
+		// puts the venv bin dir on the child PATH so this binary is
+		// found.) No post-install assertion for this one: unlike the
+		// downloader it is not a console script we resolve by name, and
+		// flashinfer's own import would fail loudly at engine start.
 		"ninja",
 		TransformersConstraint,
 	}
@@ -248,7 +284,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	}
 
 	// Stage 4: verify.
-	onProgress(InstallProgress{Stage: StageVerify, Step: 4, Total: totalStages, Percent: -1, Message: "verifying: python -c 'import vllm, torch; assert torch.cuda.is_available()'..."})
+	onProgress(InstallProgress{Stage: StageVerify, Step: 4, Total: totalStages, Percent: -1, Message: "verifying: vllm and torch import, the GPU is usable, and the venv can download weights..."})
 	pythonBin := filepath.Join(venvDir, "bin", "python")
 	if err := i.runCapturing(ctx, pythonBin, []string{"-c", VLLMVerifyImports}, nil, onProgress, StageVerify, 4, totalStages, nil); err != nil {
 		i.maybeRollback(versionDir, opts.KeepFailed)

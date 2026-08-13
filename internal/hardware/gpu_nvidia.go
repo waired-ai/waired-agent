@@ -31,8 +31,13 @@ const nvidiaSMIEnvOverride = "WAIRED_NVIDIA_SMI"
 // nvidia-smi CSV field sets. The full set is what we want; the basic set
 // is the retry for drivers that reject a field and exit non-zero rather
 // than omitting it (compute_cap arrived in the 45x series).
+// memory.free is APPENDED rather than placed beside memory.total, so
+// every field index the parser already uses stays where it was — the
+// basic retry keeps its 3-field shape, and a driver that rejects
+// memory.free falls back to it and reports a device with the free
+// figure simply unknown (waired-agent#69).
 const (
-	nvidiaSMIQueryFull  = "name,memory.total,driver_version,compute_cap,uuid"
+	nvidiaSMIQueryFull  = "name,memory.total,driver_version,compute_cap,uuid,memory.free"
 	nvidiaSMIQueryBasic = "name,memory.total,driver_version"
 )
 
@@ -271,7 +276,7 @@ func dedupeStrings(in []string) []string {
 // shipping nvidia-smi understands: a driver that rejects one field exits
 // non-zero, and the old code read that as "this host has no GPU".
 func queryNvidiaSMI(ctx context.Context, path string) ([]GPU, error) {
-	gpus, err := runNvidiaSMI(ctx, path, nvidiaSMIQueryFull, 5)
+	gpus, err := runNvidiaSMI(ctx, path, nvidiaSMIQueryFull, 6)
 	if err == nil {
 		return gpus, nil
 	}
@@ -336,6 +341,17 @@ func parseNvidiaSMICSV(s string, want int) ([]GPU, error) {
 		if want >= 5 {
 			gpu.ComputeCap = fields[3]
 			gpu.UUID = fields[4]
+		}
+		if want >= 6 {
+			// memory.free, MiB under `nounits` like memory.total. A
+			// value that will not parse leaves the field 0 rather than
+			// failing the whole query: an unreadable free figure means
+			// "budget unknown" downstream, which falls back to the
+			// total, and losing the DEVICE over it would be the #67
+			// direction (waired-agent#69).
+			if free, err := strconv.Atoi(fields[5]); err == nil {
+				gpu.VRAMFreeMB = free
+			}
 		}
 		out = append(out, gpu)
 	}

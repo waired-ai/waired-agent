@@ -155,6 +155,15 @@ func (c *Client) SubscribeNetworkMap(ctx context.Context) (<-chan *signer.Networ
 			// this BUILD understands on peer entries, not what this host
 			// is configured to do.
 			signer.CapabilityRAMAvailableV2,
+			// vram-free-v1 declares that this build understands
+			// HardwareGPUSummary.VRAMFreeMB on peer entries
+			// (waired-agent#69) — the per-device free-VRAM reading the
+			// ollama budget is sized against. Unconditional for the same
+			// reason the two above are: it is a fact about this BUILD's
+			// struct, not about this host's configuration. A host whose
+			// driver reports no free figure still UNDERSTANDS the field
+			// and must keep it byte-identical on re-marshal.
+			signer.CapabilityVRAMFreeV1,
 			signer.CapabilityPublicShareV1,
 		}
 		if c.OnboardingCapable {

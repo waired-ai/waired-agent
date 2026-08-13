@@ -100,10 +100,28 @@ func TestVLLMInstall_HappyPath(t *testing.T) {
 	if filepath.Base(r.calls[1].binary) != "uv" || r.calls[1].args[0] != "pip" || r.calls[1].args[1] != "install" {
 		t.Errorf("second call should be `uv pip install ...`, got %s %v", r.calls[1].binary, r.calls[1].args)
 	}
-	wantPipPackages := []string{"vllm==0.11.0", "hf_transfer==" + HFTransferPinnedVersion}
+	// huggingface_hub is asserted here because it was NOT, for as long as
+	// the request said `huggingface_hub[cli]` — an extra huggingface_hub
+	// 1.x had removed, which uv warned about and resolved past. Nothing
+	// in this file would have noticed (waired-agent#263).
+	wantPipPackages := []string{
+		"vllm==0.11.0",
+		"hf_transfer==" + HFTransferPinnedVersion,
+		"huggingface_hub>=1.0",
+		"ninja",
+	}
 	for _, pkg := range wantPipPackages {
 		if !sliceContains(r.calls[1].args, pkg) {
 			t.Errorf("pip install missing %q, got %v", pkg, r.calls[1].args)
+		}
+	}
+	// The extra is gone and must stay gone: asking for it again resolves
+	// to plain huggingface_hub with a warning, which is the "guarantee"
+	// that turned out to be nothing.
+	for _, arg := range r.calls[1].args {
+		if strings.Contains(arg, "huggingface_hub[") || strings.Contains(arg, "huggingface-hub[") {
+			t.Errorf("pip install asks for a huggingface_hub extra (%q); 1.x removed `cli` "+
+				"and ships the console scripts in the base package", arg)
 		}
 	}
 	if !strings.HasSuffix(r.calls[2].binary, "/0.11.0/.venv/bin/python") {
@@ -111,6 +129,21 @@ func TestVLLMInstall_HappyPath(t *testing.T) {
 	}
 	if r.calls[2].args[0] != "-c" || !strings.Contains(r.calls[2].args[1], "torch.cuda") {
 		t.Errorf("third call should be the verify snippet, got %v", r.calls[2].args)
+	}
+	// The venv the pipeline hands over must be able to fetch weights, and
+	// the pip request alone cannot promise that (waired-agent#263). This
+	// asserts the snippet actually passed to the venv python looks for the
+	// same two console-script names resolveVenvHFCLI will later resolve.
+	//
+	// A record of today's snippet rather than a behavioural contract: the
+	// real check runs inside python on a CUDA host, which no unit test
+	// here has. What it does buy is that deleting the check fails a test
+	// instead of going unnoticed until the first safetensors pull.
+	for _, name := range []string{"'hf'", "'huggingface-cli'"} {
+		if !strings.Contains(r.calls[2].args[1], name) {
+			t.Errorf("verify snippet does not look for %s; a venv with no downloader "+
+				"would pass verify and fail at the first model pull", name)
+		}
 	}
 
 	// Progress: at least one event per stage, in order.

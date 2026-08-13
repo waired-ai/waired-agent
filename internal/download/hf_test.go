@@ -5,6 +5,8 @@ package download
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -221,6 +223,58 @@ func TestResolveHFCLI_Override(t *testing.T) {
 	}
 	if got != "/venv/bin/huggingface-cli" {
 		t.Errorf("override path lost: %q", got)
+	}
+}
+
+// TestResolveHFCLI_PathLookupOrder covers the arm the override test
+// above never reaches. The order is load-bearing rather than cosmetic:
+// huggingface_hub 1.x renamed the entry point to `hf` and keeps
+// `huggingface-cli` as a deprecated alias, so preferring `hf` is what
+// keeps a modern venv off a shim that prints a deprecation notice —
+// and keeping the fallback is what lets an older venv still resolve.
+//
+// Until waired-agent#263 this whole chain was untested: the only case
+// with coverage was the explicit override, which returns before any
+// lookup happens. That is also the arm the daemon normally takes, which
+// is precisely why the fallback could rot unnoticed.
+func TestResolveHFCLI_PathLookupOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		present []string
+		want    string
+		wantErr bool
+	}{
+		{"the 1.x name wins when both exist", []string{"hf", "huggingface-cli"}, "hf", false},
+		{"a 1.x-only venv resolves", []string{"hf"}, "hf", false},
+		{"a pre-1.x venv still resolves its deprecated alias", []string{"huggingface-cli"}, "huggingface-cli", false},
+		{"neither means not installed", nil, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range tc.present {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatalf("write %s: %v", name, err)
+				}
+			}
+			// Only this directory, so the developer's own huggingface_hub
+			// cannot answer for the fixture (CLAUDE.md §Test discipline:
+			// a clean CI runner hides host dependencies).
+			t.Setenv("PATH", dir)
+
+			got, err := ResolveHFCLI("")
+			if tc.wantErr {
+				if !errors.Is(err, ErrHFCLINotInstalled) {
+					t.Fatalf("err = %v, want ErrHFCLINotInstalled", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if got != filepath.Join(dir, tc.want) {
+				t.Errorf("resolved %q, want %q", got, filepath.Join(dir, tc.want))
+			}
+		})
 	}
 }
 

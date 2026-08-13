@@ -520,6 +520,12 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		preferencePath: deps.PreferencePath,
 		dlProgress:     newDownloadProgress(),
 		ollamaUsable:   func() bool { _, e := ollamaResolver(); return e == nil },
+		// The one rule, not the cached profile (#225). engineViable and
+		// setupEngineState already ask this way; this was the site that
+		// did not.
+		vllmUsable: func() bool {
+			return engineInstalledOnHost(runtime.GOOS, stateDir, catalog.RuntimeVLLM)
+		},
 		// engineChoice re-runs THIS boot's decision against the live host,
 		// so an adopt trigger asks the same rule rather than a snapshot
 		// taken before the engine existed (#339, the shape #304 gave the
@@ -1152,6 +1158,25 @@ type agentInferenceProvider struct {
 	// isn't mistaken for "no engine" (#188).
 	// nil is treated as "not usable".
 	ollamaUsable func() bool
+
+	// vllmUsable is the same question for vllm, and exists because for a
+	// long time only ollama had one. The vllm arm of hasUsableEngine read
+	// hardware.Profile.Engines.VLLM.Installed instead, which made it the
+	// last engine-presence site not routed through engineInstalledOnHost
+	// (#225, the residual of the #179 class that PR #205 unified).
+	//
+	// The profile is no longer a PATH probe — #238 injects
+	// engineVersionOnHost into the daemon's profiler, so it does resolve
+	// the venv — but it is TTL-cached, and engine_resolve.go says in as
+	// many words why that is not good enough here: cached for 30 s, so it
+	// is still LATE for a fresh install, which is exactly what the wizard
+	// could not tolerate. A host whose venv appeared during setup could
+	// report no_engine for half a minute after it was usable.
+	//
+	// nil is treated as "not usable", and hasUsableEngine then falls back
+	// to the profile — the same shape ollamaUsable has, so a unit fixture
+	// that constructs the provider directly keeps working.
+	vllmUsable func() bool
 
 	// engineChoice answers "which engine would this host choose right now",
 	// by re-running the boot rule (chooseEngine) against the live state dir
@@ -2160,7 +2185,7 @@ func subsystemState(f inferenceSubsystemFacts) string {
 func (p *agentInferenceProvider) subsystemFacts(ctx context.Context, hw hardware.Profile, st catalog.State) inferenceSubsystemFacts {
 	f := inferenceSubsystemFacts{
 		Disabled:     p.isInferenceDisabled != nil && p.isInferenceDisabled(),
-		UsableEngine: hasUsableEngine(p.registry, hw, p.ollamaUsable),
+		UsableEngine: hasUsableEngine(p.registry, hw, p.ollamaUsable, p.vllmUsable),
 	}
 	if p.ollama != nil {
 		f.Parked = p.ollama.IsParked()
@@ -2184,7 +2209,7 @@ func (p *agentInferenceProvider) SubsystemState(ctx context.Context) string {
 	return subsystemState(p.subsystemFacts(ctx, p.profiler.Profile(ctx), st))
 }
 
-func hasUsableEngine(reg *infruntime.Registry, hw hardware.Profile, ollamaUsable func() bool) bool {
+func hasUsableEngine(reg *infruntime.Registry, hw hardware.Profile, ollamaUsable, vllmUsable func() bool) bool {
 	for _, name := range reg.Names() {
 		switch name {
 		case "ollama":
@@ -2200,7 +2225,17 @@ func hasUsableEngine(reg *infruntime.Registry, hw hardware.Profile, ollamaUsable
 				return true
 			}
 		case "vllm":
-			if hw.Engines.VLLM.Installed {
+			// Same shape, and it did not used to have one (#225): this
+			// arm read the profile directly, which made it the last
+			// engine-presence site not asking engineInstalledOnHost. The
+			// profile resolves the venv now (#238) but is cached for 30 s,
+			// so it is late for a venv that appeared during setup — the
+			// freshness engine_resolve.go exists to provide.
+			if vllmUsable != nil {
+				if vllmUsable() {
+					return true
+				}
+			} else if hw.Engines.VLLM.Installed {
 				return true
 			}
 		}

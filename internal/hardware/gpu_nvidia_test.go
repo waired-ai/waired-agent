@@ -41,6 +41,9 @@ func TestParseNvidiaSMICSV(t *testing.T) {
 			},
 		},
 	}
+	// The 5-field shape above is what the parser accepted before
+	// waired-agent#69 and still must: nvidiaSMIQueryBasic's retry and
+	// any caller asking for fewer fields go through the same code.
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := parseNvidiaSMICSV(tc.in, 5)
@@ -63,6 +66,53 @@ func TestParseNvidiaSMICSV(t *testing.T) {
 // record shape, minus the two fields it does not ask for. This is the
 // retry path for drivers that reject compute_cap and exit non-zero —
 // under the old parser that exit read as "this host has no GPU" (#67).
+// TestParseNvidiaSMICSV_FreeFieldSet covers the 6-field shape
+// nvidiaSMIQueryFull now asks for (waired-agent#69). memory.free is
+// APPENDED, so this also pins that adding it moved none of the existing
+// indices — a regression here would silently reassign driver_version,
+// compute_cap or the UUID.
+func TestParseNvidiaSMICSV_FreeFieldSet(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want GPU
+	}{
+		{
+			// The waired-agent#69 host: 8 GB card, ~2 GB held by the
+			// display before any model loads.
+			"a busy card reports what is left",
+			"NVIDIA GeForce RTX 3060 Ti, 8192, 580.65, 8.6, GPU-abc, 6144\n",
+			GPU{Vendor: "nvidia", Model: "NVIDIA GeForce RTX 3060 Ti", VRAMTotalMB: 8192,
+				VRAMFreeMB: 6144, DriverVersion: "580.65", ComputeCap: "8.6", UUID: "GPU-abc"},
+		},
+		{
+			"an idle card reports its whole capacity",
+			"NVIDIA L4, 23034, 550.54.15, 8.9, GPU-aaa, 23034\n",
+			GPU{Vendor: "nvidia", Model: "NVIDIA L4", VRAMTotalMB: 23034,
+				VRAMFreeMB: 23034, DriverVersion: "550.54.15", ComputeCap: "8.9", UUID: "GPU-aaa"},
+		},
+		{
+			// An unreadable free figure must not cost us the DEVICE.
+			// Losing a card over a soft field is the #67 direction; the
+			// budget simply falls back to the total.
+			"an unparseable free figure keeps the device",
+			"NVIDIA L4, 23034, 550.54.15, 8.9, GPU-aaa, [N/A]\n",
+			GPU{Vendor: "nvidia", Model: "NVIDIA L4", VRAMTotalMB: 23034,
+				VRAMFreeMB: 0, DriverVersion: "550.54.15", ComputeCap: "8.9", UUID: "GPU-aaa"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseNvidiaSMICSV(tc.in, 6)
+			if err != nil {
+				t.Fatalf("parseNvidiaSMICSV: %v", err)
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("got %+v, want [%+v]", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseNvidiaSMICSV_BasicFieldSet(t *testing.T) {
 	got, err := parseNvidiaSMICSV("NVIDIA GeForce RTX 3060 Ti, 8192, 460.89\n", 3)
 	if err != nil {
@@ -336,7 +386,11 @@ func TestNvidiaSMIProbe_EmptyPATH(t *testing.T) {
 
 	t.Run("full field set", func(t *testing.T) {
 		t.Setenv("PATH", "")
-		t.Setenv(fakeEngineEnv, "NVIDIA GeForce RTX 3060 Ti, 8192, 580.65, 8.6, GPU-abc")
+		// Six fields since waired-agent#69: memory.free is appended
+		// last, so every earlier index is where it was. This is the
+		// waired-agent#69 host — an 8 GB card with ~2 GB already held by
+		// the display.
+		t.Setenv(fakeEngineEnv, "NVIDIA GeForce RTX 3060 Ti, 8192, 580.65, 8.6, GPU-abc, 6144")
 		t.Setenv(nvidiaSMIEnvOverride, self)
 
 		got := nvidiaSMIProbe(context.Background())
@@ -345,7 +399,7 @@ func TestNvidiaSMIProbe_EmptyPATH(t *testing.T) {
 		}
 		want := GPU{
 			Vendor: "nvidia", Model: "NVIDIA GeForce RTX 3060 Ti", VRAMTotalMB: 8192,
-			DriverVersion: "580.65", ComputeCap: "8.6", UUID: "GPU-abc",
+			VRAMFreeMB: 6144, DriverVersion: "580.65", ComputeCap: "8.6", UUID: "GPU-abc",
 		}
 		if len(got.GPUs) != 1 || got.GPUs[0] != want {
 			t.Errorf("GPUs = %+v, want [%+v]", got.GPUs, want)

@@ -75,6 +75,14 @@ Bigger models generally give better answers and need more machine.
 - **The memory figure** is what the model takes to serve a full coding
   session: its weights, the AI engine's working memory, and the context
   cache. Your system RAM and graphics memory count together toward it.
+- **Graphics memory is counted as what is free, not what the card has.** A
+  card that is also driving your display, or that another program is already
+  using, has less to lend than its specification says. Waired reads the free
+  figure when your driver reports one, so on a busy card it recommends a
+  smaller model than the card's headline size suggests — and the model it
+  recommends is one that will actually fit, instead of one that starts and
+  then runs partly on the processor. Closing whatever else is using the card
+  and restarting Waired lets it see the memory again.
 - The model Waired would choose for this computer is marked **recommended** —
   the best one this computer can hold a whole coding session on.
 - A model that runs here but is not that one is marked too, with the reason.

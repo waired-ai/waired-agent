@@ -134,13 +134,18 @@ func (p Profile) HostFit() hostfit.Host {
 	}
 	if len(p.GPUs) > 0 {
 		h.VRAM0MB = p.GPUs[0].VRAMTotalMB
+		h.VRAMAvailable0MB = p.GPUs[0].VRAMFreeMB
 	}
 	// The pool rule itself lives in hostfit so this adapter and
 	// FromHardwareSummary cannot drift — the same reason every other
 	// field here is a projection rather than a computation.
 	devs := make([]hostfit.Device, 0, len(p.GPUs))
 	for _, g := range p.GPUs {
-		devs = append(devs, hostfit.Device{Vendor: g.Vendor, VRAMTotalMB: g.VRAMTotalMB})
+		devs = append(devs, hostfit.Device{
+			Vendor:          g.Vendor,
+			VRAMTotalMB:     g.VRAMTotalMB,
+			VRAMAvailableMB: g.VRAMFreeMB,
+		})
 	}
 	h.VRAMPoolMB = hostfit.OllamaVRAMPoolMB(devs)
 	return h
@@ -185,9 +190,19 @@ type CPUInfo struct {
 // "unknown" (e.g. AMD adapter detected via the Windows registry
 // fallback where VRAM is not readable without rocm-smi or DXGI).
 type GPU struct {
-	Vendor        string `json:"vendor"`
-	Model         string `json:"model"`
-	VRAMTotalMB   int    `json:"vram_total_mb"`
+	Vendor      string `json:"vendor"`
+	Model       string `json:"model"`
+	VRAMTotalMB int    `json:"vram_total_mb"`
+	// VRAMFreeMB is how much of VRAMTotalMB the driver reported free,
+	// 0 when it would not say. The ollama budget is sized against this
+	// where it exists, because the engine places against free memory
+	// while this repo used to size against the total — so a card also
+	// driving a display was valued at more than it can lend
+	// (waired-agent#69, docs/decisions/20260813/1120).
+	//
+	// Read ONCE per process, before this agent's engine holds any
+	// weights, and frozen from then on — see Profiler.freezeVRAMFree.
+	VRAMFreeMB    int    `json:"vram_free_mb,omitempty"`
 	DriverVersion string `json:"driver_version,omitempty"`
 	ComputeCap    string `json:"compute_cap,omitempty"`
 	UUID          string `json:"uuid,omitempty"`
@@ -215,8 +230,12 @@ type GPU struct {
 type GPUSummary struct {
 	Model       string `json:"model"`
 	VRAMTotalMB int    `json:"vram_total_mb,omitempty"`
-	ComputeCap  string `json:"compute_cap,omitempty"`
-	Vendor      string `json:"vendor,omitempty"`
+	// VRAMFreeMB mirrors GPU.VRAMFreeMB: the frozen free reading the
+	// ollama budget is sized against, 0 when the driver would not say
+	// (waired-agent#69).
+	VRAMFreeMB int    `json:"vram_free_mb,omitempty"`
+	ComputeCap string `json:"compute_cap,omitempty"`
+	Vendor     string `json:"vendor,omitempty"`
 }
 
 // GPUSummary returns the per-device subset of Profile.GPUs that's
@@ -233,6 +252,7 @@ func (p Profile) GPUSummary() []GPUSummary {
 		out[i] = GPUSummary{
 			Model:       g.Model,
 			VRAMTotalMB: g.VRAMTotalMB,
+			VRAMFreeMB:  g.VRAMFreeMB,
 			ComputeCap:  g.ComputeCap,
 			Vendor:      g.Vendor,
 		}
@@ -287,6 +307,67 @@ type Profiler struct {
 	mu       sync.Mutex
 	cached   *Profile
 	cachedAt time.Time
+
+	// vramFreeFirst is the FIRST free-VRAM reading this process took, by
+	// device UUID (falling back to model+index when the driver gave no
+	// UUID). See freezeVRAMFree for why it is frozen rather than
+	// re-read.
+	vramFreeFirst map[string]int
+}
+
+// freezeVRAMFree keeps the first free-VRAM reading this process took and
+// replays it on every later profile, instead of letting the figure move.
+//
+// The reason is the one signer.HardwareSummary.RAMAvailableGB states for
+// its own quantity, in the same words: a live figure "would count a
+// resident model against the very host that serves it" (waired-agent#568).
+// This profile is re-sampled on a TTL, including long after the agent's
+// engine has loaded weights. A free reading taken then EXCLUDES those
+// weights, so the budget would shrink, the next re-tune would size
+// against the smaller budget, and the reading after that would be
+// smaller again — a spiral driven entirely by the host's own success at
+// serving.
+//
+// Freezing at the first reading is what makes the number mean "what else
+// on this machine holds VRAM", which is the quantity the budget wants
+// (docs/decisions/20260813/1120). The daemon takes that reading while
+// building its first profile, before the engine subsystem starts.
+//
+// Consequence, stated rather than hidden: a machine that frees VRAM
+// later (the user closes a game) does not get the larger budget until
+// the agent restarts. That is the same trade #568 accepted, and the
+// safe direction — the stale figure is the pessimistic one.
+//
+// Keyed by UUID because device ORDER is not guaranteed stable across
+// enumerations, and a free figure replayed onto the wrong card would be
+// worse than none. A device with no UUID falls back to model+index,
+// which is stable in practice for the single-vendor lists this reads.
+func (p *Profiler) freezeVRAMFree(gpus []GPU) []GPU {
+	key := func(g GPU, i int) string {
+		if g.UUID != "" {
+			return g.UUID
+		}
+		return fmt.Sprintf("%d/%s", i, g.Model)
+	}
+	if p.vramFreeFirst == nil {
+		p.vramFreeFirst = make(map[string]int, len(gpus))
+	}
+	out := make([]GPU, len(gpus))
+	copy(out, gpus)
+	for i := range out {
+		k := key(out[i], i)
+		if seen, ok := p.vramFreeFirst[k]; ok {
+			out[i].VRAMFreeMB = seen
+			continue
+		}
+		// Only a real reading is remembered. A detector that could not
+		// read free memory this time must not pin 0 forever — the next
+		// profile may come from a source that can.
+		if out[i].VRAMFreeMB > 0 {
+			p.vramFreeFirst[k] = out[i].VRAMFreeMB
+		}
+	}
+	return out
 }
 
 // Option mutates a freshly-constructed Profiler.
@@ -406,7 +487,7 @@ func (p *Profiler) Profile(ctx context.Context) Profile {
 			prof.Errors = append(prof.Errors, fmt.Sprintf("gpu: %v", err))
 		}
 		if gpus != nil {
-			prof.GPUs = gpus
+			prof.GPUs = p.freezeVRAMFree(gpus)
 		}
 		prof.Accelerators = accel
 	}

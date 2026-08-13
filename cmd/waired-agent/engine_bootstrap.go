@@ -348,8 +348,17 @@ func (p *agentInferenceProvider) bootstrapAfterEngineStart(ctx context.Context) 
 	// next backend if it didn't, so the host never runs on CPU silently
 	// while a working GPU path exists. Conservative: an inconclusive
 	// probe keeps the preferred backend.
-	if p.bootPlan.backend.Probes() {
-		resolved := resolveBackendWithProbe(ctx, p.ollama, p.bootPlan.backend, p.ollama.BaseURL(), &http.Client{}, p.logger)
+	//
+	// No longer gated on Probes() (#70). A host with only one GPU backend
+	// cannot be moved to a better one, but it can still be MISLABELLED —
+	// a detected GPU that fails to engage kept reporting cuda / vulkan /
+	// metal while inference ran on the CPU. resolveBackendWithProbe now
+	// decides for itself what a plan's verdict may change: a restart
+	// where there is a fallback, the label alone where there is not.
+	// "" means the probe declined to decide (a provider with no boot
+	// plan); the seed from startInferenceSubsystem stands rather than
+	// being cleared.
+	if resolved := resolveBackendWithProbe(ctx, p.ollama, p.bootPlan.backend, p.ollama.BaseURL(), &http.Client{}, p.logger); resolved != "" {
 		p.ollama.SetResolvedBackend(resolved)
 	}
 	// #621: verify the exported serve tuning against the running engine

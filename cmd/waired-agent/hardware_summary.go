@@ -104,6 +104,7 @@ func hardwareSummaryFor(prof hardware.Profile) *signer.HardwareSummary {
 		summary.GPUs = append(summary.GPUs, signer.HardwareGPUSummary{
 			Model:       g.Model,
 			VRAMTotalMB: g.VRAMTotalMB,
+			VRAMFreeMB:  g.VRAMFreeMB,
 			ComputeCap:  g.ComputeCap,
 			Vendor:      g.Vendor,
 		})
