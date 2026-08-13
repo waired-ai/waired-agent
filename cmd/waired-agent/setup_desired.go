@@ -276,6 +276,30 @@ type setupProvider interface {
 	// flag, and re-applying an already-applied choice would bounce the
 	// engine on every boot of a host that is already set up.
 	setupPreferredModelID() string
+	// setupActiveModelID reports the model this device is actually
+	// SERVING, or "" when it is serving none. It is the observed
+	// counterpart to setupPreferredModelID: that one answers "what was
+	// chosen here", this one answers "what is this machine doing", and on
+	// a host nobody ever asked they are not the same question.
+	//
+	// The observed projection needs the second one. `waired init
+	// --non-interactive` never puts the model question to anybody, and on
+	// macOS the installer starts the daemon before init runs, so the
+	// bundled auto-pull is already under way when the interactive picker
+	// looks and the picker steps aside for a host that has model history.
+	// Both leave a machine that installed an engine, downloaded a model
+	// and answers requests — with nothing on record about a choice
+	// (waired-agent#753, #756).
+	//
+	// A selection is only ever COMMITTED over Ready weights — every writer
+	// of state.Active gates on it — so this never names a model that has
+	// not finished downloading at least once, and a host mid-first-pull
+	// stays silent rather than reporting itself half-built. The commit can
+	// outlive readiness (re-pulling the active model moves its state back
+	// without clearing the selection), which is why the model row reads
+	// the model's own state rather than trusting this: that host reports a
+	// running download, and a running row denies completion.
+	setupActiveModelID() string
 	// setupCanonicalModelID turns a model name from OUTSIDE this process —
 	// the control plane's desired_model_id — into the id this device keys
 	// its own state by: an alias becomes its manifest's model_id, and a
@@ -1193,10 +1217,39 @@ func (r *setupReconciler) applyDesiredInference(value string) {
 //
 // The pair is what makes the answer safe. setupServingEngine alone always
 // names a kind, so it says nothing about this host; setupEngineState asks
-// the disk, and setupPreferredModelID is empty until something has chosen.
-// Together they mean "an engine is installed here and this device is set to
-// serve a model with it", which is the definition of a machine somebody set
-// up.
+// the disk, and the model is the one this device is set to serve, or —
+// when nobody ever chose — the one it is actually serving. Together they
+// mean "an engine is installed here and this device is running a model
+// with it", which is the definition of a machine somebody set up.
+//
+// The model falls back for a reason. setupPreferredModelID reads
+// preferred-model.json, which is a record of a CHOICE, and this function
+// is a re-derivation of what the machine is DOING — the one gate of the
+// three that was answering a different question. Hosts nobody asked never
+// carry that record: `waired init --non-interactive` skips the picker
+// outright, and on macOS the installer starts the daemon before init runs,
+// so the bundled auto-pull is already under way when the picker looks and
+// it steps aside for a host that has model history. Both left a machine
+// that installed an engine, downloaded a model and answers requests
+// publishing a document with zero steps — which the completion rule can
+// never accept, so the console showed it as never having finished setting
+// up and its model card, gated on that rule, stayed shut forever
+// (waired-agent#753, #756).
+//
+// Preference FIRST, and the order is load-bearing: a choice that has not
+// converged yet must still name its target, or the model row reports the
+// finished download of the model the operator is switching away from.
+//
+// The #586 answers — "no model now" and an abandoned question — leave the
+// preference empty too, and deliberately get no guard here. Both stand the
+// bundled pre-pull down, so those hosts have no Ready model for the
+// fallback to find; the only reachable combination is a host that answered
+// "none" while something was already serving, and that machine IS serving
+// it. Silence about a computer answering requests is the defect above, not
+// a courtesy. (A host that deliberately runs with NO model still cannot
+// satisfy a completion rule that needs at least one step. That is #586's
+// own gap and wants its own terminal row, the way inference_off got one —
+// there is no model here to name.)
 //
 // acted is the local-AI answer already acted on. An off-host reports its
 // own `inference_off` row and has no engine to describe (#597), so
@@ -1219,6 +1272,9 @@ func (r *setupReconciler) observedSetup(ctx context.Context, acted string, writt
 		return setupDesired{}, false
 	}
 	modelID := r.provider.setupPreferredModelID()
+	if modelID == "" {
+		modelID = r.provider.setupActiveModelID()
+	}
 	if modelID == "" {
 		return setupDesired{}, false
 	}
@@ -2326,6 +2382,16 @@ func (p *agentInferenceProvider) startSetupEngine(reason string) {
 // reconciler does not re-apply it on the next frame.
 func (p *agentInferenceProvider) setupPreferredModelID() string {
 	return p.effectivePreferredModelID()
+}
+
+// setupActiveModelID is the model this device is actually serving. Same
+// value ActiveModelID publishes to the control plane as
+// inference_detail.active_model, so the setup report and the inference
+// report cannot describe the same host differently. See the interface for
+// why the observed projection needs it beside the preference.
+func (p *agentInferenceProvider) setupActiveModelID() string {
+	id, _ := p.ActiveModelID()
+	return id
 }
 
 // setupCanonicalModelID resolves a control-plane model name to the id

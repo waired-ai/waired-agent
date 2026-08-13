@@ -2297,6 +2297,10 @@ func (p *agentInferenceProvider) EngineReady() (bool, string) {
 // precise ErrModelNotReady (503 + Retry-After, which auto mode falls back
 // on) rather than a blanket "no local model". Only a missing selection
 // reports false.
+//
+// The setup report reads it too, through setupActiveModelID: on a host
+// nobody ever asked which model to run, what this device is SERVING is
+// the only evidence there is that it finished setting up (#753/#756).
 func (p *agentInferenceProvider) ActiveModelID() (string, bool) {
 	st, _ := p.store.Load()
 	if st.Active == nil || st.Active.ModelID == "" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -35,6 +36,29 @@ func hasStepID(p *signer.SetupProgress, id string) bool {
 		}
 	}
 	return false
+}
+
+// assertCompletableDocument checks the one rule this repo cannot import:
+// §7's completion rule lives in the control plane (at least one reported
+// step, and every reported step done or skipped), so a document that
+// fails it leaves the device showing "setup unfinished" forever and keeps
+// the model card shut, however healthy the machine is.
+//
+// Written down once, here, because the alternative is each test asserting
+// half of it and nothing asserting the pair (waired-agent#753).
+func assertCompletableDocument(t *testing.T, p *signer.SetupProgress) {
+	t.Helper()
+	if p == nil {
+		t.Fatal("no document pushed; the completion rule has nothing to read")
+	}
+	if len(p.Steps) == 0 {
+		t.Fatal("document has no steps; the completion rule can never accept it")
+	}
+	for _, s := range p.Steps {
+		if s.Status != signer.SetupStatusDone && s.Status != signer.SetupStatusSkipped {
+			t.Errorf("step %q = %q; the completion rule reads every row", s.ID, s.Status)
+		}
+	}
 }
 
 // attachDownload puts a live elevated lease on the reconciler and has it
@@ -343,5 +367,72 @@ func TestSetupEngineAppearedFiresOnceAcrossRepeatedSnapshots(t *testing.T) {
 	}
 	if got := f.engineStartCount(); got != afterEdge {
 		t.Errorf("engine starts = %d after five more ticks, want %d — the edge re-fired", got, afterEdge)
+	}
+}
+
+// The end of the chain: a machine with an engine, an active model and NO
+// preference must push a document the completion rule can accept.
+//
+// The unit tests prove observedSetup describes such a host; this proves
+// the description survives runPush and lands on the wire, which is the
+// only part the control plane ever sees. Modelled on TestSetupPushDedupes
+// because the BODY is the assertion here, not the push count
+// (waired-agent#753, #756).
+func TestObservedSetupPushesAFinishedDocument(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		bodies [][]byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/v1/devices/self/setup-progress" {
+			t.Errorf("unexpected path %s", req.URL.Path)
+		}
+		b, _ := io.ReadAll(req.Body)
+		mu.Lock()
+		bodies = append(bodies, b)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := controlclient.NewWithBearer(srv.URL, func() string { return "tok" })
+
+	f := autoSelectedHost()
+	r := newSetupReconciler(f, cli, "dev-1", priv, quietLogger())
+	r.interval = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); r.runPush(ctx) }()
+
+	// The empty frame is not a detail: it is what a terminal-installed
+	// device receives forever, because only the management API writes the
+	// desired columns and `waired init` has no route to them.
+	r.Apply(ctx, desiredFrame("", "", 0))
+	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(bodies) >= 1 },
+		"a push from a host nobody instructed")
+
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	var req struct {
+		Progress signer.SetupProgress `json:"progress"`
+	}
+	if err := json.Unmarshal(bodies[0], &req); err != nil {
+		t.Fatalf("decoding the pushed body: %v", err)
+	}
+	assertCompletableDocument(t, &req.Progress)
+	// Nothing is driving: no lease was taken, and there is no desired
+	// state for the browser derivation to read as a claim.
+	if req.Progress.Driver != "" {
+		t.Errorf("driver = %q, want none", req.Progress.Driver)
 	}
 }

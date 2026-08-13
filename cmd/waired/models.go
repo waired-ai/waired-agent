@@ -16,11 +16,11 @@ import (
 func newModelsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "models",
-		Short: "Manage local LLM models (ls / pull / cancel / rm / refresh / check-agent).",
+		Short: "Manage local LLM models (ls / pull / use / cancel / rm / refresh / check-agent).",
 		RunE:  namespaceRunE,
 	}
-	cmd.AddCommand(newModelsLsCmd(), newModelsPullCmd(), newModelsCancelCmd(), newModelsRmCmd(),
-		newModelsRefreshCmd(), newModelsCheckAgentCmd())
+	cmd.AddCommand(newModelsLsCmd(), newModelsPullCmd(), newModelsUseCmd(), newModelsCancelCmd(),
+		newModelsRmCmd(), newModelsRefreshCmd(), newModelsCheckAgentCmd())
 	return cmd
 }
 

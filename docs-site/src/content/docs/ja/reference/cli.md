@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: dc874dd9b9bd0aac
+sourceHash: d2f4aa6723b48719
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -22,7 +22,7 @@ sourceHash: dc874dd9b9bd0aac
 | [`waired auth status`](#waired-auth-status) | このパソコンのサインインはいつ切れる？ |
 | [`waired logout`](#waired-logout) | このパソコンの識別情報を削除する |
 | [`waired infer`](#waired-infer) | いますぐ自分の AI に尋ねる |
-| [`waired models`](#waired-models) | 何が入っているか、追加、ダウンロードの中止、削除 |
+| [`waired models`](#waired-models) | 何が入っているか、追加、どれを動かすかの選択、ダウンロードの中止、削除 |
 | [`waired runtimes`](#waired-runtimes) | AI ソフトウェア本体と、速度テスト |
 | [`waired inference`](#waired-inference) | ここで AI モデルを動かすかどうか、エンジンの起動・停止、自分のほかのパソコンへの提供 |
 | [`waired worker`](#waired-worker) | どのパソコンが答えるか |
@@ -165,6 +165,7 @@ waired infer "say hi" --explain    # 実際には尋ねず、どのマシンと�
 waired models ls                  # ダウンロード済みのモデルと、動作中のモデル
 waired models ls --detail         # カタログ全体と、このパソコンで動くかどうか
 waired models pull <モデルID>      # ダウンロードする
+waired models use <モデルID>       # このパソコンが動かすモデルにする
 waired models cancel <モデルID>    # 実行中のダウンロードを止める
 waired models rm <モデルID>        # 削除して数 GB 空ける
 waired models refresh             # このマシンにもっと合うモデルはあるか
@@ -182,6 +183,23 @@ waired models check-agent         # コーディングエージェントで使�
 再確認は `--yes` だけでは省略できません。本当に実行したいスクリプトは
 `--yes --force` を渡します。`rm` も実行前に確認します。
 モデル ID は[モデルカタログ](/ja/reference/model-catalog/)にあります。
+
+`use` は、このパソコンが実際に動かすモデル——応答を返すモデル——を設定します。
+`pull` が行うのは重みの取得だけで、ダウンロード済みでも使用中とは限りません。
+切り替えに再起動は要りません。新しいモデルが使えるようになるまで、いま動いている
+モデルが応答を返し続けます。重みがまだディスクに無ければ `use` がそのダウンロード
+を開始し、その旨を伝えます。
+
+```
+waired models use qwen3.5-4b
+qwen3.5-4b will run on this computer once it finishes downloading.
+The current model keeps answering until then.
+```
+
+コマンドはデーモンが選択を受け付けた時点で戻ります。`--wait` を付けると新しい
+モデルが実際に応答できるようになるまで待つので、切り替えの完了を待ってから先へ
+進むスクリプトで使えます。過剰スペックの確認とメモリに載らない場合の再確認は
+`pull` とまったく同じに働きます（`--yes` と `--yes --force` を含む）。
 
 `cancel` は実行中のダウンロードを止めます。数 GB の `pull` を誤って始めたときの
 抜け道です。事前確認はしません — いま取得中のものを止めるだけで、それは直前に

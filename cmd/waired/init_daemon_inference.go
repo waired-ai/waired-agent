@@ -76,10 +76,13 @@ func applyDaemonInitInference(mgmtURL string, inf daemonInitInference, out io.Wr
 	if inf.ModelID != "" && (inf.Enabled == nil || *inf.Enabled) {
 		body, _ := json.Marshal(management.PreferredModelRequest{ModelID: inf.ModelID})
 		if _, err := httpPost(mgmtURL+"/waired/v1/inference/preferred-model", body); err != nil {
-			// `waired models pull`, not `waired models use`: the latter
-			// has never existed. It was one of two remediation lines
-			// naming a command that was not there (#465).
-			writePromptf(out, "warn: could not select the model %q (%v); pick one later with `waired models pull %s`\n",
+			// `waired models use`, which now exists (waired-agent#753).
+			// This line used to say `models pull` because `models use`
+			// was one of two remediation lines naming a command that was
+			// not there (#465) — but pull only fetches weights, and what
+			// failed here is the SELECTION, so pull retried the wrong
+			// half. The command that retries this one is the new one.
+			writePromptf(out, "warn: could not select the model %q (%v); set it later with `waired models use %s`\n",
 				inf.ModelID, err, inf.ModelID)
 		}
 	}
