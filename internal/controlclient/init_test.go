@@ -92,6 +92,15 @@ type cpMock struct {
 	mu                sync.Mutex
 	lastPollHeaderMap map[string]string
 
+	// enrollDeviceName is what the fake CP reports back as the assigned
+	// display name. Empty is the pre-waired#1204 control plane, which
+	// sent no such field.
+	enrollDeviceName string
+	// lastEnrollHostname records what the agent reported for itself, so a
+	// test can assert on the value that actually went over the wire
+	// rather than on the parameter it passed in.
+	lastEnrollHostname string
+
 	pollCount int32
 }
 
@@ -150,8 +159,18 @@ func newCPMock(t *testing.T) *cpMock {
 		})
 	})
 
-	mux.HandleFunc("POST /v1/devices/enroll/complete", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
+	mux.HandleFunc("POST /v1/devices/enroll/complete", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			DeviceFacts struct {
+				Hostname string `json:"hostname"`
+			} `json:"device_facts"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		rig.mu.Lock()
+		rig.lastEnrollHostname = body.DeviceFacts.Hostname
+		assigned := rig.enrollDeviceName
+		rig.mu.Unlock()
+		resp := map[string]any{
 			"device_id":                      "dev_test_0001",
 			"network_id":                     "nw_test",
 			"account_id":                     "acct_test",
@@ -161,7 +180,11 @@ func newCPMock(t *testing.T) *cpMock {
 			"device_access_token_expires_at": time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
 			"device_auth_expires_at":         time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
 			"control_signing_public_key":     "",
-		})
+		}
+		if assigned != "" {
+			resp["device_name"] = assigned
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	rig.srv = httptest.NewServer(mux)
@@ -239,4 +262,58 @@ func TestLooksLikeHTML(t *testing.T) {
 			}
 		})
 	}
+}
+
+// PRODUCT CONTRACT (waired-agent#767 + waired-ai/waired#1204). The
+// control plane assigns the display name — a second machine sharing this
+// hostname enrols as "<hostname>-1", and a re-enrollment keeps whatever
+// the device is called now — so the agent has to read it back rather than
+// assume the name it reported was kept.
+func TestRunInit_ReturnsTheAssignedDeviceName(t *testing.T) {
+	run := func(t *testing.T, assigned string) *InitResult {
+		t.Helper()
+		rig := newCPMock(t)
+		rig.enrollDeviceName = assigned
+		defer rig.srv.Close()
+
+		mk, _ := devicekeys.NewMachineKey()
+		nk, _ := devicekeys.NewNodeKey()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		res, err := RunInit(ctx, InitParams{
+			ControlURL:    rig.srv.URL,
+			DeviceName:    "workshop-mac",
+			Platform:      "linux",
+			Arch:          "amd64",
+			ClientVersion: "0.1.0-test",
+			Endpoint:      "udp4:127.0.0.1:51820",
+			MachineKey:    mk,
+			NodeKey:       nk,
+			PollInterval:  10 * time.Millisecond,
+			PollTimeout:   2 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("RunInit: %v", err)
+		}
+		rig.mu.Lock()
+		defer rig.mu.Unlock()
+		if rig.lastEnrollHostname != "workshop-mac" {
+			t.Errorf("reported hostname = %q, want the name this machine calls itself", rig.lastEnrollHostname)
+		}
+		return res
+	}
+
+	t.Run("suffixed by the control plane", func(t *testing.T) {
+		if got := run(t, "workshop-mac-1").DeviceName; got != "workshop-mac-1" {
+			t.Errorf("DeviceName = %q, want the assigned workshop-mac-1", got)
+		}
+	})
+
+	// A control plane predating the field sends none; the reported
+	// hostname still is the name there, and the caller falls back to it.
+	t.Run("older control plane sends none", func(t *testing.T) {
+		if got := run(t, "").DeviceName; got != "" {
+			t.Errorf("DeviceName = %q, want empty so the caller can fall back", got)
+		}
+	})
 }

@@ -121,9 +121,20 @@ func Enroll(ctx context.Context, opts EnrollOptions) (*EnrollResult, error) {
 		return nil, err
 	}
 
+	// The name the control plane assigned, not the one this machine
+	// reported. They differ when a second machine shares this hostname
+	// (the CP suffixes it) and after a rename in the web console
+	// (waired-ai/waired#1204). Storing the reported one made `waired auth
+	// status` show a name nobody else used, and `waired init` re-sent it
+	// (#767). Falls back for a control plane that predates the field,
+	// where the reported hostname still is the name.
+	deviceName := res.DeviceName
+	if deviceName == "" {
+		deviceName = opts.DeviceName
+	}
 	if err := identity.Save(opts.StateDir, &identity.Identity{
 		DeviceID:                res.DeviceID,
-		DeviceName:              opts.DeviceName,
+		DeviceName:              deviceName,
 		NetworkID:               res.NetworkID,
 		NetworkName:             res.NetworkName,
 		AccountID:               res.AccountID,

@@ -146,7 +146,7 @@ func newInitCmd() *cobra.Command {
 	f.StringVar(&o.control, "control", os.Getenv("WAIRED_CONTROL_URL"),
 		"Control Plane base URL (e.g., http://127.0.0.1:9477)")
 	f.StringVar(&o.deviceName, "device-name", "",
-		"device name to register (default: hostname)")
+		"name to report for this computer at enrollment (default: hostname)")
 	f.BoolVar(&o.noBrowser, "no-browser", false,
 		"don't open the browser; print the URL and code instead")
 	f.StringVar(&o.stateDir, "state-dir", defaultInitStateDir(),
@@ -264,12 +264,7 @@ func runInitBody(o *initFlags) error {
 		if *control == "" {
 			*control = existing.ControlURL
 		}
-		if *deviceName == "" {
-			*deviceName = existing.DeviceName
-			if *deviceName == "" {
-				*deviceName = existing.DeviceID
-			}
-		}
+		// The stored name is not re-sent — see reportedDeviceName.
 	}
 	// Re-authenticating rotates this device's credentials, so it happens
 	// only when asked for or when the credentials are what is broken —
@@ -291,10 +286,7 @@ func runInitBody(o *initFlags) error {
 		return errors.New("--control or WAIRED_CONTROL_URL is required")
 	}
 
-	if *deviceName == "" {
-		host, _ := os.Hostname()
-		*deviceName = host
-	}
+	*deviceName = reportedDeviceName(*deviceName, existing, hostnameOrEmpty())
 
 	// Friendly intro for a fresh interactive first-run. Skipped on re-auth
 	// (quieter). Renders a framed banner on a capable TTY, a single plain
