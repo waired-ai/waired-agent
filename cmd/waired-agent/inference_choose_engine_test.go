@@ -34,6 +34,32 @@ func fakeVLLMVenv(t *testing.T, stateDir string) {
 	}
 }
 
+// TestEngineInstalledOnHost_SeesAVLLMVenvWithEmptyPATH is the vLLM half
+// of the #179 regression bar, and it is here rather than beside its
+// ollama twin in engine_resolve_test.go because only linux can express
+// it: the vLLM installer is stubbed on windows and darwin
+// (internal/runtime/vllm_stub_*.go), so Active() there is always false
+// and the portable test can pin the ABSENT case only.
+//
+// PRODUCT CONTRACT — #225. The rule is that engine presence comes from
+// the state dir, never from $PATH; `vllm` is never on PATH for a venv
+// install, so a PATH-shaped answer here is wrong by construction. Until
+// this test existed the positive direction was unasserted at this call
+// site, which is how the last un-unified arm survived PR #205.
+func TestEngineInstalledOnHost_SeesAVLLMVenvWithEmptyPATH(t *testing.T) {
+	sealPATH(t)
+	stateDir := t.TempDir()
+
+	if engineInstalledOnHost("linux", stateDir, catalog.RuntimeVLLM) {
+		t.Fatal("an empty state dir reports vllm installed")
+	}
+	fakeVLLMVenv(t, stateDir)
+	if !engineInstalledOnHost("linux", stateDir, catalog.RuntimeVLLM) {
+		t.Error("a venv under the state dir is not seen as installed; " +
+			"the daemon would report no_engine on a host that can serve")
+	}
+}
+
 // chooseEngineProfiler builds a Profiler whose GPU detection is seeded
 // so chooseEngine's CUDA gate is deterministic on a GPU-less CI host.
 //
