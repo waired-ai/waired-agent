@@ -160,6 +160,17 @@ evidence_dump() {
   local d
   d="$(df -Ph "$STATE_DIR" 2>/dev/null | tail -1)" || d=
   echo "state-dir free space: ${d:-(state dir unreadable)}"
+  # What the engine says it has RESIDENT, verbatim. size_vram is the field
+  # that separates a model actually on the GPU from one the engine loaded
+  # into system memory while still reporting a GPU backend — the daemon's own
+  # `backend` label cannot answer that, because on arm64 it is asserted
+  # unconditionally (waired-agent#35). Raw body rather than a parsed field:
+  # whether darwin populates size_vram at all is itself the open question.
+  #
+  # :9475 is waired's bundled engine, never the upstream default :11434.
+  # Unloaded returns {"models":[]}, so this is only meaningful after
+  # something has run — which every arm printing this dump has done.
+  echo "engine /api/ps: $(curl -fsS --max-time 10 http://127.0.0.1:9475/api/ps 2>/dev/null || echo '(unreachable)')"
 }
 
 # hostspeed_evidence — the macOS twin of lib/installtest-enroll.sh's

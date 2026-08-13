@@ -617,6 +617,16 @@ function Write-EvidenceDump {
     } catch {
         Write-Host "    agent| state-dir free space: (unreadable)"
     }
+    # See the linux twin: what the engine reports RESIDENT, verbatim, because
+    # size_vram is the field that separates a model on the GPU from one loaded
+    # into system memory under a GPU label (waired-agent#35). :9475 is waired's
+    # bundled engine, never the upstream default :11434.
+    try {
+        $ps = Invoke-WebRequest -Uri 'http://127.0.0.1:9475/api/ps' -TimeoutSec 10 -UseBasicParsing
+        Write-Host "    agent| engine /api/ps: $($ps.Content)"
+    } catch {
+        Write-Host "    agent| engine /api/ps: (unreachable)"
+    }
 }
 
 function Assert-Inference {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/management"
+	"github.com/waired-ai/waired-agent/proto/hostfit"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
 
@@ -216,11 +217,7 @@ func waitForBundledModel(mgmtURL string, out io.Writer, tty bool, budget time.Du
 		}
 
 		st, ok := fetchInferenceStatus(mgmtURL)
-		if ok && (want != "" || st.Active != nil || len(st.Models.Downloading) > 0) {
-			// A wizard target counts on its own: naming a model IS having
-			// something to wait for, whether or not the daemon has taken it
-			// up yet — the arms that answer "named but not moving" are
-			// further down and say so themselves.
+		if ok && waitHasTarget(st, want) {
 			sawTarget = true
 		}
 		switch {
@@ -833,6 +830,36 @@ func activeDownload(st management.InferenceStatus) (management.ModelDownload, bo
 // host in #306 both were true of a 9 GB model the agent had chosen for
 // itself, and the terminal announced it as ready and returned while the
 // operator's 44 GB choice was still coming down.
+
+// waitHasTarget reports whether this snapshot shows something the wait is
+// actually waiting FOR — a model chosen for this host, or one on its way.
+//
+// The host-cutoff probe does not count, and that exclusion is the whole
+// point. The probe is fetched on every host that measures itself
+// (hostfit.HostCutoffProbeModelID), through the same Models.Downloading
+// channel a chosen model uses, inside this same wait. Counting it made the
+// deadline believe every measuring host had a target, which is why the
+// first attempt at waired-agent#736 did not fire on the host it was
+// written for: run 31648877944 still printed "Model still downloading"
+// with the transcript showing the probe's own 1.0 GB transfer.
+//
+// A wizard target counts on its own: naming a model IS having something to
+// wait for, whether or not the daemon has taken it up yet — the arms that
+// answer "named but not moving" are further down and say so themselves.
+func waitHasTarget(st management.InferenceStatus, want string) bool {
+	if want != "" {
+		return true
+	}
+	if st.Active != nil && st.Active.ModelID != "" && st.Active.ModelID != hostfit.HostCutoffProbeModelID {
+		return true
+	}
+	for _, m := range st.Models.Downloading {
+		if m != hostfit.HostCutoffProbeModelID {
+			return true
+		}
+	}
+	return false
+}
 
 // waitModelReady reports whether the model this wait is keyed to is on
 // disk and being served.
