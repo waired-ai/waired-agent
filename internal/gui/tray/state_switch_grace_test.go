@@ -1,9 +1,13 @@
 package tray
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/waired-ai/waired-agent/internal/management"
 )
 
 // The model-switch grace state (waired#808): while a switch's supervised
@@ -95,6 +99,153 @@ func TestArmSwitching_OpensFutureWindow(t *testing.T) {
 	tr.mu.Unlock()
 	if !until.After(time.Now()) {
 		t.Errorf("armSwitching: switchingUntil=%v, want a future time", until)
+	}
+}
+
+// The switch-accepted wording (waired#808): the three responses the
+// daemon can give mean three different things happen next, and the tray
+// used to collapse two of them into "Model switched."
+
+func TestModelSwitchAcceptedText(t *testing.T) {
+	cases := []struct {
+		name string
+		resp *management.PreferredModelResponse
+		want string
+	}{
+		{
+			"restart fallback says so",
+			&management.PreferredModelResponse{WillRestart: true},
+			"Switching model — the agent will restart briefly.",
+		},
+		{
+			"in-process swap needing a pull names the download",
+			&management.PreferredModelResponse{Downloading: true},
+			"Downloading Qwen3 8B Instruct. Your current model keeps answering until it is ready.",
+		},
+		{
+			"in-process swap of on-disk weights",
+			&management.PreferredModelResponse{},
+			"Switching to Qwen3 8B Instruct — it will be answering in a few seconds.",
+		},
+		{
+			// WillRestart wins: the restart is the thing that makes the
+			// menu go away, and the fallback path does not pull anyway.
+			"restart and downloading together reports the restart",
+			&management.PreferredModelResponse{WillRestart: true, Downloading: true},
+			"Switching model — the agent will restart briefly.",
+		},
+		{
+			"a daemon that answered nothing still gets a sentence",
+			nil,
+			"Switching to Qwen3 8B Instruct — it will be answering in a few seconds.",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := modelSwitchAcceptedText(c.resp, "Qwen3 8B Instruct"); got != c.want {
+				t.Errorf("modelSwitchAcceptedText = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestOnModelSwitchAccepted_ArmsGraceOnlyForTheRestart(t *testing.T) {
+	cases := []struct {
+		name      string
+		resp      *management.PreferredModelResponse
+		wantArmed bool
+	}{
+		{"restart fallback arms the window", &management.PreferredModelResponse{WillRestart: true}, true},
+		{"in-process swap does not", &management.PreferredModelResponse{}, false},
+		{"downloading in process does not", &management.PreferredModelResponse{Downloading: true}, false},
+		{"no response does not", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stub := &stubNotifier{}
+			notifier = stub
+			t.Cleanup(func() { notifier = &stubNotifier{} })
+
+			tr := &tray{}
+			tr.onModelSwitchAccepted(c.resp, "Qwen3 8B Instruct")
+
+			tr.mu.Lock()
+			until := tr.switchingUntil
+			tr.mu.Unlock()
+			if armed := until.After(time.Now()); armed != c.wantArmed {
+				t.Errorf("grace window armed=%v, want %v", armed, c.wantArmed)
+			}
+			// Every arm notifies exactly once — the silence waired#808
+			// opened with is the thing that must not come back.
+			if calls := stub.snapshot(); len(calls) != 1 {
+				t.Fatalf("notify calls=%d, want 1", len(calls))
+			} else if calls[0].body != modelSwitchAcceptedText(c.resp, "Qwen3 8B Instruct") {
+				t.Errorf("notified %q, want the modelSwitchAcceptedText wording", calls[0].body)
+			}
+		})
+	}
+}
+
+func TestModelSwitchErrorText(t *testing.T) {
+	// 409: the daemon kept the preference, so the sentence has to say the
+	// choice survived — otherwise the user re-picks a model that is
+	// already recorded.
+	got := modelSwitchErrorText(fmt.Errorf("post: %w", ErrModelSwitchUnavailable), "Qwen3 8B Instruct")
+	if !strings.Contains(got, "Qwen3 8B Instruct") {
+		t.Errorf("409 text = %q, want it to name the model", got)
+	}
+	if !strings.Contains(got, "saved") {
+		t.Errorf("409 text = %q, want it to say the choice is kept", got)
+	}
+	if strings.Contains(got, "HTTP") || strings.Contains(got, "{") {
+		t.Errorf("409 text = %q, want no transport detail or JSON body", got)
+	}
+
+	// Anything else keeps the diagnostic — an unrecognised failure with
+	// its detail stripped is worse than an ugly one.
+	other := modelSwitchErrorText(errors.New("dial tcp: connection refused"), "Qwen3 8B Instruct")
+	if !strings.Contains(other, "connection refused") {
+		t.Errorf("generic text = %q, want the underlying error preserved", other)
+	}
+}
+
+func TestSwitchModelName(t *testing.T) {
+	cases := []struct {
+		name, display, modelID, want string
+	}{
+		{"display name wins", "Qwen3 8B Instruct", "qwen3-8b", "Qwen3 8B Instruct"},
+		{"falls back to the model id", "", "qwen3-8b", "qwen3-8b"},
+		{"and to a phrase when a slot carries neither", "", "", "the new model"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := switchModelName(c.display, c.modelID); got != c.want {
+				t.Errorf("switchModelName(%q, %q) = %q, want %q", c.display, c.modelID, got, c.want)
+			}
+		})
+	}
+}
+
+func TestFormatCatalogEntry_CarriesUndecoratedName(t *testing.T) {
+	// The notification names the model in a sentence, so Name must not
+	// pick up the row decoration Label carries.
+	e := formatCatalogEntry(management.CatalogFamily{
+		ModelID:     "qwen3-8b",
+		DisplayName: "Qwen3 8B Instruct",
+		Fits:        true,
+		Active:      true,
+	}, "ollama", management.CatalogHost{})
+	if e.Name != "Qwen3 8B Instruct" {
+		t.Errorf("Name=%q, want the bare display name", e.Name)
+	}
+	if !strings.HasPrefix(e.Label, "● ") {
+		t.Errorf("precondition: Label=%q, want the active bullet (so Name is provably distinct)", e.Label)
+	}
+
+	// No DisplayName: Name falls back the same way Label does.
+	e = formatCatalogEntry(management.CatalogFamily{ModelID: "qwen3-8b", Fits: true}, "ollama", management.CatalogHost{})
+	if e.Name != "qwen3-8b" {
+		t.Errorf("Name=%q, want the model id fallback", e.Name)
 	}
 }
 

@@ -355,8 +355,10 @@ func (t ollamaTuning) Env() []string {
 
 // resolveTuningTarget picks the model the serve tuning is sized for:
 // the preferred model (already folded into cfg from preferred-model.json
-// — a tray switch restarts the agent, so spawn-time resolution tracks
-// it), else the persisted active selection, else the bundled default.
+// — an operator switch always bounces ollama serve, so spawn-time
+// resolution tracks it; before waired#812 the whole agent restarted and
+// it tracked for that reason instead), else the persisted active
+// selection, else the bundled default.
 // The variant is the one actually on disk when state records a Ready
 // pull; otherwise the one the pinned engine would pull first. ok=false
 // (no resolvable model or variant) means "export no tuning env" — we

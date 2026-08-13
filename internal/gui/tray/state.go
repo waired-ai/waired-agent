@@ -213,7 +213,13 @@ type PeerHardwareRow struct {
 // (min RAM/VRAM · size class · params); it is best-effort since some
 // Linux indicators don't render menu-item tooltips.
 type CatalogEntryView struct {
-	ModelID  string
+	ModelID string
+	// Name is the family's display name with no row decoration — the
+	// same string Label is built from. Kept alongside Label because the
+	// switch-accepted notification names the model in a sentence, and
+	// Label carries row state ("● ", " (switching…)", the spec suffix)
+	// that reads as noise there (waired#808).
+	Name     string
 	Label    string
 	Tooltip  string
 	Disabled bool
@@ -1052,7 +1058,7 @@ func humanAge(d time.Duration) string {
 // fields. The label format mirrors the table in the plan:
 //
 //	● Qwen3 8B Instruct                       (active row)
-//	Qwen3 4B Instruct (switching…)            (preferred but not yet active — restart in flight)
+//	Qwen3 4B Instruct (switching…)            (preferred but not yet active — swap in flight)
 //	Qwen3 14B Instruct (downloading…)         (pull running)
 //	Qwen3 14B Instruct (downloads on select)  (not yet on disk; click triggers pull)
 //	Qwen3 32B Instruct — needs 24 GB VRAM     (over capacity, click disabled)
@@ -1484,7 +1490,7 @@ func formatCatalogEntry(f management.CatalogFamily, engine string, host manageme
 	if name == "" {
 		name = f.ModelID
 	}
-	e := CatalogEntryView{ModelID: f.ModelID}
+	e := CatalogEntryView{ModelID: f.ModelID, Name: name}
 	// Compact size + tier hint appended to fitting/downloadable rows,
 	// then the pick note. Over-capacity rows already spell out the
 	// requirement in their blocked text, so the suffix would be redundant
@@ -1496,8 +1502,9 @@ func formatCatalogEntry(f management.CatalogFamily, engine string, host manageme
 	case f.Preferred:
 		// Preference recorded but not yet reflected in the running
 		// agent's Active selection. The catalog endpoint surfaces
-		// preferred=true on the row the user just clicked; the agent
-		// flips to it after restart.
+		// preferred=true on the row the user just clicked; Active
+		// follows once the swap applies — in process since waired#812,
+		// or after the restart fallback.
 		e.Label = name + " (switching…)" + suffix
 	case f.Downloading:
 		e.Label = name + " (downloading…)" + suffix
