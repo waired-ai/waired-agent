@@ -204,16 +204,6 @@ var producedInProto = []exemption{
 		"the retirement table, written only by proto/catalog/retired.go"},
 	{reflect.TypeFor[catalog.Retirement](), "SuccessorModelID",
 		"the retirement table, written only by proto/catalog/retired.go"},
-	// waired-agent#69's two hostfit halves. FromHardwareSummary — the
-	// control plane's adapter, in proto/ — writes both, so the category
-	// is accurate today. The agent's twin in internal/hardware/profiler.go
-	// cannot fill them until hardware.GPU carries the reading, and when it
-	// does this guard says "something under cmd/, internal/ now writes it
-	// — delete the entry", which is how the reader PR pays the debt.
-	{reflect.TypeFor[hostfit.Device](), "VRAMAvailableMB",
-		"waired-agent#69: FromHardwareSummary writes it; the agent-side HostFit() adapter follows with the reader"},
-	{reflect.TypeFor[hostfit.Host](), "VRAMAvailable0MB",
-		"waired-agent#69: FromHardwareSummary writes it; the agent-side HostFit() adapter follows with the reader"},
 }
 
 // producerPending: this repo owes the writer. Each entry names the issue
@@ -271,8 +261,6 @@ var producerPending = []exemption{
 	// Until it is paid every device sends 0, which hostfit reads as "no
 	// free reading" and answers with the total — the budget is unchanged
 	// rather than wrong, so the published contract is inert, not broken.
-	{reflect.TypeFor[signer.HardwareGPUSummary](), "VRAMFreeMB",
-		"waired-agent#69: the per-OS free-VRAM reader lands the producer; delete this entry in that PR"},
 }
 
 // exemption declares one proto field with no producer under cmd/ or
