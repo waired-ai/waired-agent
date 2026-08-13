@@ -1,11 +1,21 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260813/2123-model-swap-applies-in-process.md
 ---
 
 # モデル切替の restart-first を維持し、pre-restart の pull を廃止 (20260714 02:44)
 
 ## Status
-Accepted
+Accepted — ただし部分的に超えられている。
+
+「**pre-restart の pull を廃止する**」は今も有効（restart fallback も pull を
+投げない）。「**restart-first を維持する**」のほうは waired#812 の in-process
+swap で覆り、再起動は fallback になった:
+`docs/decisions/20260813/2123-model-swap-applies-in-process.md`。
+
+以下の本文は 20260714 時点の記録として凍結する（当時の判断の理由を残すため、
+書き換えない）。
 
 ## Context
 waired#774: ベンチマーク後のモデル切替受諾が fire-and-forget で、インストール終了時に
