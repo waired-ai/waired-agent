@@ -24,12 +24,26 @@ func newModelsCmd() *cobra.Command {
 	return cmd
 }
 
+// formatRefreshApplyHint names the command that actually applies a
+// picker suggestion.
+//
+// This used to read "To apply, restart waired-agent (Step 12 swap will
+// land via /waired/v1/models/refresh)" — a roadmap step number the
+// reader has no way to resolve, an endpoint that was never built, and,
+// since waired#812 made a model switch apply in process, a restart that
+// is not needed either. `waired models use` (waired-agent#753) is the
+// real answer, so name it. Pure so the wording is testable.
+func formatRefreshApplyHint(modelID string) string {
+	if modelID == "" {
+		return `To apply, run "waired models use <model-id>".`
+	}
+	return fmt.Sprintf("To apply, run %q.", "waired models use "+modelID)
+}
+
 // newModelsRefreshCmd asks the management API what the auto-picker would
-// choose now (= AvailableUpdate hint) and prints the answer. With
-// --to X, it just shows the current picker decision against that
-// engine constraint. The actual swap happens in Step 12.
+// choose now (= AvailableUpdate hint) and prints the answer. Reporting
+// only: `waired models use` is what applies a choice.
 func newModelsRefreshCmd() *cobra.Command {
-	var to string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "refresh",
@@ -51,15 +65,12 @@ func newModelsRefreshCmd() *cobra.Command {
 			}
 			fmt.Printf("Update available: model=%v variant=%v precached=%v\n",
 				avail["model_id"], avail["variant_id"], avail["precached"])
-			if to != "" {
-				fmt.Printf("(--to %s recorded; honoured by the swap implementation in Step 12)\n", to)
-			}
 			_ = yes
-			fmt.Println("To apply, restart waired-agent (Step 12 swap will land via /waired/v1/models/refresh).")
+			modelID, _ := avail["model_id"].(string)
+			fmt.Println(formatRefreshApplyHint(modelID))
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&to, "to", "", "force model_id (currently informational only)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip interactive confirmation")
 	return cmd
 }

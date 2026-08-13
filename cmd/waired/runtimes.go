@@ -265,11 +265,22 @@ func newRuntimesUninstallCmd() *cobra.Command {
 	return cmd
 }
 
+// runtimesRefreshApplyHint is how an engine change is applied.
+//
+// Unlike a model switch, this one really does still need the restart:
+// waired#812's in-process swap is same-engine only, and a cross-engine
+// target returns errSwapNeedsRestart so the daemon falls back to the
+// supervised restart (cmd/waired-agent/inference.go, SwapPreferredModel).
+// So only the stale half of the old sentence is gone — the "Step 12
+// zero-downtime swap will land via /waired/v1/runtimes/refresh" promise,
+// naming an endpoint that was never built.
+const runtimesRefreshApplyHint = "To apply, restart waired-agent — switching engines is the one change that still needs it."
+
 // newRuntimesRefreshCmd re-evaluates engine + model picks against the
-// live agent. With --to X, it forces the engine to X; otherwise it
-// shows what the agent currently has and suggests a refresh path.
+// live agent: it shows what the agent currently has and what it would
+// pick now. Reporting only — applying an engine change is the restart
+// below.
 func newRuntimesRefreshCmd() *cobra.Command {
-	var to string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "refresh",
@@ -298,18 +309,13 @@ func newRuntimesRefreshCmd() *cobra.Command {
 			}
 			fmt.Printf("Update available: runtime=%v model=%v variant=%v precached=%v\n",
 				avail["runtime"], avail["model_id"], avail["variant_id"], avail["precached"])
-			_ = to
 			if !yes && !confirmTTY("Apply this update?") {
 				return errors.New("aborted by user")
 			}
-			// Step 12 will wire the actual swap command via the management API;
-			// for Step 11 the CLI surfaces the suggestion and the operator
-			// re-runs `waired models pull` + restart to actually swap.
-			fmt.Println("To apply, restart waired-agent (Step 12 zero-downtime swap will land via /waired/v1/runtimes/refresh).")
+			fmt.Println(runtimesRefreshApplyHint)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&to, "to", "", "force engine choice (\"\" / ollama / vllm)")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip interactive confirmation")
 	return cmd
 }
