@@ -303,6 +303,22 @@ type Host struct {
 	// asks a field added to a published struct to say so explicitly.
 	VRAMPoolMB int `json:"-"`
 
+	// VRAMAvailable0MB is the first GPU's free VRAM — the single-device
+	// mirror of VRAMPoolMB, and the only way the free reading reaches a
+	// SINGLE-GPU host, which is the shape waired-agent#69 actually
+	// reported (an 8 GB card also driving the display). A pooled host
+	// gets its de-rate inside VRAMPoolMB; a one-card host has no pool,
+	// so without this field it would keep sizing against the total.
+	//
+	// 0 means "no free reading" and leaves the total in place. Read only
+	// through OllamaVRAMBudgetMB, never directly — EffectiveVRAMMB stays
+	// the raw single-device figure that min_vram_mb, engine selection
+	// and vLLM's TP=1 fallback were authored against, for the same
+	// reason VRAMPoolMB may not widen it.
+	//
+	// json:"-" for the reason above: an input, not a payload.
+	VRAMAvailable0MB int `json:"-"`
+
 	// MemoryBandwidthSpecGBs is the published PEAK read bandwidth of the
 	// pool the weights are read from, in GB/s. 0 means "unknown", and
 	// that is a case this package must keep working for rather than an
@@ -403,6 +419,45 @@ type Device struct {
 	// the AMD Windows registry fallback reports devices this way — and
 	// such a device contributes nothing to a pool.
 	VRAMTotalMB int
+
+	// VRAMAvailableMB is how much of VRAMTotalMB the driver reported
+	// free, measured once while no engine of ours held weights. 0 means
+	// "no free reading" and falls back to the total, which is what every
+	// producer sent before the field existed
+	// (signer.HardwareGPUSummary.VRAMFreeMB carries the discipline and
+	// the reason, waired-agent#69).
+	//
+	// Named "available" rather than "free" — matching Host.RAMAvailableGB
+	// for the same quantity — partly to keep scripts/ci/protoconsumer
+	// working. That guard matches producers by field NAME, so a Device
+	// field spelled VRAMFreeMB and assigned right here in
+	// FromHardwareSummary would read as a proto-internal producer for the
+	// WIRE field of that name, and the real producer debt would never
+	// become visible in its table. The same consideration named
+	// LocalModelChoiceAt (waired-agent#647); the driver's own word stays
+	// on the wire, where nvidia-smi's memory.free is what it reports.
+	//
+	// json:"-" for the reason Host.VRAMPoolMB carries it: Device is an
+	// INPUT both adapters build, never a payload — the wire shape is
+	// signer.HardwareGPUSummary — and the additive-only guard asks a
+	// field added to a published struct to say so explicitly. Its
+	// untagged siblings predate the guard's baseline.
+	VRAMAvailableMB int `json:"-"`
+}
+
+// lendableMB is what this device can actually lend an engine: its free
+// reading where the driver gave one, its total otherwise.
+//
+// The fallback is the whole safety argument. A device whose driver will
+// not report free memory, and a producer that predates the field, both
+// arrive here as 0 and get the total — so this rule can only ever
+// de-rate a device the reader actually measured, never one it guessed
+// at.
+func (d Device) lendableMB() int {
+	if d.VRAMAvailableMB > 0 && d.VRAMAvailableMB < d.VRAMTotalMB {
+		return d.VRAMAvailableMB
+	}
+	return d.VRAMTotalMB
 }
 
 // OllamaVRAMPoolMB is the VRAM ollama may pool across devices, or 0
@@ -454,7 +509,15 @@ func OllamaVRAMPoolMB(devs []Device) int {
 			continue
 		}
 		n++
-		sum += d.VRAMTotalMB
+		// Free where it was measured, total otherwise. Summing free is
+		// what the engine itself does — availableMemoryForLoad sums
+		// gpu.FreeMemory — so the pool now answers the question the
+		// scheduler asks rather than an optimistic neighbour of it
+		// (waired-agent#69). The de-rate is applied per device, BEFORE
+		// the sum, which is what #264's decision record asks for: the
+		// total−free gap is per-device, so summing totals accumulates
+		// it once per card.
+		sum += d.lendableMB()
 	}
 	if n < 2 {
 		// Nothing to pool. Reported as "unknown" rather than as the
@@ -487,14 +550,21 @@ func FromHardwareSummary(hw *signer.HardwareSummary) Host {
 	}
 	if len(hw.GPUs) > 0 {
 		h.VRAM0MB = hw.GPUs[0].VRAMTotalMB
+		h.VRAMAvailable0MB = hw.GPUs[0].VRAMFreeMB
 	}
 	// Every GPU has always been on the wire; only this adapter and its
-	// agent-side twin threw the rest away. Nothing new has to be
-	// published for the pool, so the fix reaches every already-deployed
-	// agent the moment the control plane bumps its proto tag.
+	// agent-side twin threw the rest away. Nothing new had to be
+	// published for the pool, so that fix reached every already-deployed
+	// agent the moment the control plane bumped its proto tag. The free
+	// reading is the exception: it is a new field, so it arrives only
+	// from an agent new enough to measure it, and 0 keeps the total.
 	devs := make([]Device, 0, len(hw.GPUs))
 	for _, g := range hw.GPUs {
-		devs = append(devs, Device{Vendor: g.Vendor, VRAMTotalMB: g.VRAMTotalMB})
+		devs = append(devs, Device{
+			Vendor:          g.Vendor,
+			VRAMTotalMB:     g.VRAMTotalMB,
+			VRAMAvailableMB: g.VRAMFreeMB,
+		})
 	}
 	h.VRAMPoolMB = OllamaVRAMPoolMB(devs)
 	return h
@@ -529,20 +599,52 @@ func (h Host) EffectiveVRAMMB() int {
 // the GPU can wire down, so it keeps winning.
 //
 // The aggregate may never come in BELOW the single-device figure. That
-// is the mirror of router.VLLMVRAMBudgetMB's own floor, and here it is
-// what makes this change structurally unable to regress: the worst a
-// wrong pool can do is leave today's behaviour in place. It is also why
+// is the mirror of router.VLLMVRAMBudgetMB's own floor. It is also why
 // no "floor at the largest device" clause is needed — a host whose
 // GPUs[0] is its small card gets the pool, which already exceeds the
 // large one. Whether EffectiveVRAMMB itself should rank devices rather
 // than trust enumeration order is a separate question, deliberately not
 // answered here (waired-ai/waired-agent#264 item 6).
+//
+// What the floor is measured AGAINST changed with waired-agent#69: it
+// is the single device's FREE figure where one was measured, not its
+// total. docs/decisions/20260813/1120-ollama-budget-sized-on-free-vram.md
+// records why, and revises §4 of the pool decision that set the earlier
+// floor. The short version is that a floor at the total made the budget
+// structurally unable to shrink, which was the point while the only
+// error being corrected was an UNDER-count across cards — and is
+// exactly wrong once the error being corrected is an OVER-count on one.
 func (h Host) OllamaVRAMBudgetMB() int {
-	eff := h.EffectiveVRAMMB()
-	if h.UnifiedMemory || h.VRAMPoolMB <= eff {
-		return eff
+	single := h.ollamaSingleDeviceMB()
+	if h.UnifiedMemory || h.VRAMPoolMB <= single {
+		return single
 	}
 	return h.VRAMPoolMB
+}
+
+// ollamaSingleDeviceMB is EffectiveVRAMMB as the OLLAMA path must read
+// it: the same single-device budget, de-rated to what the driver
+// reported free.
+//
+// Separate from EffectiveVRAMMB rather than folded into it, because the
+// pool decision already settled that widening or narrowing THAT figure
+// moves min_vram_mb, engine selection and vLLM's TP=1 fallback, all of
+// which were authored against a whole card. This one moves only the
+// ollama budget, which is the only consumer waired-agent#69 is about.
+//
+// A unified-memory host is left alone: UsableVRAMMB is already the
+// honest bound on what its GPU can wire down from a shared pool, and no
+// shipped detector reports a free figure for one, so there is nothing
+// here to improve and a fallback to guess at.
+func (h Host) ollamaSingleDeviceMB() int {
+	eff := h.EffectiveVRAMMB()
+	if h.UnifiedMemory {
+		return eff
+	}
+	if h.VRAMAvailable0MB > 0 && h.VRAMAvailable0MB < eff {
+		return h.VRAMAvailable0MB
+	}
+	return eff
 }
 
 // HasGPU reports whether the host has any GPU-addressable memory at

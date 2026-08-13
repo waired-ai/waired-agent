@@ -204,6 +204,16 @@ var producedInProto = []exemption{
 		"the retirement table, written only by proto/catalog/retired.go"},
 	{reflect.TypeFor[catalog.Retirement](), "SuccessorModelID",
 		"the retirement table, written only by proto/catalog/retired.go"},
+	// waired-agent#69's two hostfit halves. FromHardwareSummary — the
+	// control plane's adapter, in proto/ — writes both, so the category
+	// is accurate today. The agent's twin in internal/hardware/profiler.go
+	// cannot fill them until hardware.GPU carries the reading, and when it
+	// does this guard says "something under cmd/, internal/ now writes it
+	// — delete the entry", which is how the reader PR pays the debt.
+	{reflect.TypeFor[hostfit.Device](), "VRAMAvailableMB",
+		"waired-agent#69: FromHardwareSummary writes it; the agent-side HostFit() adapter follows with the reader"},
+	{reflect.TypeFor[hostfit.Host](), "VRAMAvailable0MB",
+		"waired-agent#69: FromHardwareSummary writes it; the agent-side HostFit() adapter follows with the reader"},
 }
 
 // producerPending: this repo owes the writer. Each entry names the issue
@@ -249,7 +259,21 @@ var producedInProto = []exemption{
 // PR paid it: hostMemoryMeasurement returns the persisted measured_at
 // beside the value it dates, and hardwareSummaryFor publishes it. Empty
 // again, and that is the point.
-var producerPending = []exemption{}
+var producerPending = []exemption{
+	// waired-agent#69. The contract had to land alone
+	// (docs/decisions/20260719/0000-concurrent-proto-development.md §2),
+	// and there is nothing to publish from yet: hardware.GPU has no
+	// free-VRAM field until the per-OS reader lands with it, so unlike
+	// #568's RAMAvailableGB there is no same-named written field for the
+	// name-matching rule above to mistake for a producer. The debt is
+	// therefore visible here, which is what this table is for.
+	//
+	// Until it is paid every device sends 0, which hostfit reads as "no
+	// free reading" and answers with the total — the budget is unchanged
+	// rather than wrong, so the published contract is inert, not broken.
+	{reflect.TypeFor[signer.HardwareGPUSummary](), "VRAMFreeMB",
+		"waired-agent#69: the per-OS free-VRAM reader lands the producer; delete this entry in that PR"},
+}
 
 // exemption declares one proto field with no producer under cmd/ or
 // internal/. The struct is a reflect.Type rather than a string so the

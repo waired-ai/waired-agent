@@ -320,6 +320,94 @@ func TestHardwareSummary_RAMAvailable_CanonicalJSON(t *testing.T) {
 	}
 }
 
+// TestHardwareSummary_VRAMFree_CanonicalJSON is the byte-identity pin
+// for the waired-agent#69 addition, and it carries the same weight the
+// #568 pin above does: HardwareGPUSummary rides the signed NetworkMap
+// inside HardwareSummary, so a shifted encoding churns the map for every
+// peer on a rolling upgrade.
+func TestHardwareSummary_VRAMFree_CanonicalJSON(t *testing.T) {
+	// Unmeasured: byte-for-byte the pre-#69 encoding. This is the whole
+	// fleet today, and every driver that will not answer.
+	unmeasured := HardwareSummary{
+		GPUs: []HardwareGPUSummary{{
+			Model:       "NVIDIA GeForce RTX 4090",
+			VRAMTotalMB: 24564,
+			ComputeCap:  "8.9",
+			Vendor:      "nvidia",
+		}},
+		RAMTotalGB: 64,
+	}
+	const wantUnmeasured = `{"gpus":[{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,` +
+		`"compute_cap":"8.9","vendor":"nvidia"}],"ram_total_gb":64}`
+	data, err := json.Marshal(&unmeasured)
+	if err != nil {
+		t.Fatalf("marshal unmeasured: %v", err)
+	}
+	if got := string(data); got != wantUnmeasured {
+		t.Errorf("an unmeasured device changed the encoding:\n got %s\nwant %s", got, wantUnmeasured)
+	}
+
+	// Measured: the key sits between vram_total_mb and compute_cap, in
+	// struct-declaration order, next to the total it qualifies.
+	measured := HardwareSummary{
+		GPUs: []HardwareGPUSummary{{
+			Model:       "NVIDIA GeForce RTX 3060 Ti",
+			VRAMTotalMB: 8192,
+			VRAMFreeMB:  6144,
+			ComputeCap:  "8.6",
+			Vendor:      "nvidia",
+		}},
+		RAMTotalGB: 32,
+	}
+	const wantMeasured = `{"gpus":[{"model":"NVIDIA GeForce RTX 3060 Ti","vram_total_mb":8192,` +
+		`"vram_free_mb":6144,"compute_cap":"8.6","vendor":"nvidia"}],"ram_total_gb":32}`
+	data, err = json.Marshal(&measured)
+	if err != nil {
+		t.Fatalf("marshal measured: %v", err)
+	}
+	if got := string(data); got != wantMeasured {
+		t.Errorf("vram_free_mb encoding drifted:\n got %s\nwant %s", got, wantMeasured)
+	}
+
+	// Round trip: the CP reads it off the stored push and must reach the
+	// same budget the agent reached.
+	var out HardwareSummary
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(&measured, &out) {
+		t.Errorf("round-trip mismatch\n in: %+v\nout: %+v", measured, out)
+	}
+
+	// A pre-addition payload parses with the field zero, which every
+	// consumer treats as "no free reading" and answers with the total.
+	var pre HardwareSummary
+	if err := json.Unmarshal([]byte(wantUnmeasured), &pre); err != nil {
+		t.Fatalf("unmarshal pre-addition: %v", err)
+	}
+	if pre.GPUs[0].VRAMFreeMB != 0 {
+		t.Errorf("VRAMFreeMB = %d, want 0 on a pre-addition payload", pre.GPUs[0].VRAMFreeMB)
+	}
+}
+
+// TestCapabilityVRAMFreeV1_WireValue pins the capability literal, and
+// that it is distinct from its neighbours. The CP compares this exact
+// string to decide whether to strip vram_free_mb across the whole served
+// map, so a reword is a wire break rather than a rename — and an agent
+// that receives the field without knowing it drops the key on canonical
+// re-marshal and fails verification.
+func TestCapabilityVRAMFreeV1_WireValue(t *testing.T) {
+	if CapabilityVRAMFreeV1 != "vram-free-v1" {
+		t.Fatalf("CapabilityVRAMFreeV1 = %q, want %q",
+			CapabilityVRAMFreeV1, "vram-free-v1")
+	}
+	for _, other := range []string{CapabilityRAMAvailableV1, CapabilityRAMAvailableV2} {
+		if CapabilityVRAMFreeV1 == other {
+			t.Fatalf("capability literals must stay distinct, both = %q", other)
+		}
+	}
+}
+
 // TestCapabilityRAMAvailableV1_WireValue pins the capability literal:
 // CP poll intake, distribution gate, and agent poller all compare this
 // exact string, so a reword is a wire-protocol break, not a rename.
