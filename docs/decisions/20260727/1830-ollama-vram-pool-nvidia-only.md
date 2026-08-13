@@ -1,11 +1,26 @@
 ---
 status: accepted
+superseded_by:
+  - docs/decisions/20260813/1120-ollama-budget-sized-on-free-vram.md
 ---
 
 # ollama の VRAM プールは proto 側で導出し、当面 NVIDIA に限る (20260727 18:30)
 
 ## Status
-Accepted
+Accepted（一部置換）
+
+**§4「安全性は数値の精度ではなく accessor の床で担保する」だけ**が
+`docs/decisions/20260813/1120-ollama-budget-sized-on-free-vram.md` に置き換わった。
+床という構造は残り、**何に対する床か**が「単体デバイスの total」から
+「単体デバイスの free（測れたとき）」に移っている。§4 の「今日の挙動より
+悪くならない」保証はそこで意図的に失効する — この決定が直していた誤りは
+複数枚での**過小**評価だけであり、#69 が直すのは 1 枚での**過大**評価で、
+total に置いた床は後者を丸ごと飲み込むため。
+
+§1（プールを proto 側で導出し wire に新フィールドを足さない）、§2（合算対象は
+当面 NVIDIA のみ）、§3（控除はデバイス増分あたり）は**そのまま有効**。
+Consequences が「#69 の担当範囲として残す。混ぜると両方おかしくなる」と
+指定した分離も、そのとおりに守られている（de-rate は合算の前・デバイスごと）。
 
 ## Context
 

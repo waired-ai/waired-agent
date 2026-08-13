@@ -131,4 +131,23 @@ const (
 	// have to trust an agent to get that right: it strips both when v1
 	// is missing, whatever v2 says.
 	CapabilityRAMAvailableV2 = "ram-available-v2"
+
+	// CapabilityVRAMFreeV1 declares that this agent understands
+	// HardwareGPUSummary.VRAMFreeMB — the per-device free-VRAM
+	// measurement the ollama budget is sized against
+	// (waired-agent#69).
+	//
+	// It needs the gate for the reason RAMAvailableV1 did, and for the
+	// same structural reason: the field is agent-reported and rides the
+	// signed map on every PEER entry, so an agent that does not know it
+	// drops it on canonical re-marshal and fails verification. The CP
+	// strips it across the whole map for an undeclared poller, not just
+	// from Self.
+	//
+	// A reader that predates the field sees 0, which every consumer
+	// already treats as "no free reading" and answers by falling back to
+	// VRAMTotalMB — an old agent simply sizes the budget the way it does
+	// today. That is also what makes the field safe to publish before
+	// any producer fills it in.
+	CapabilityVRAMFreeV1 = "vram-free-v1"
 )

@@ -68,6 +68,21 @@ const (
 		`{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,"compute_cap":"8.9","vendor":"nvidia"},` +
 		`{"model":"AMD Radeon RX 7900 XTX","vram_total_mb":24576,"vendor":"amd"}],` +
 		`"ram_total_gb":128}`
+	// The waired-agent#69 host, and the reason the free reading exists: a
+	// low-VRAM desktop card that is ALSO driving the display, so ~2 GB of
+	// its 8 are already spoken for before any model loads. Sized against
+	// the total it is offered more than it can hold, spills, and #621's
+	// post-load verify has to shrink the window and restart the engine.
+	wireRTX3060TiBusy = `{"gpus":[{"model":"NVIDIA GeForce RTX 3060 Ti","vram_total_mb":8192,` +
+		`"vram_free_mb":6144,"compute_cap":"8.6","vendor":"nvidia"}],"ram_total_gb":32}`
+	// The same two cards as wireDual4090, from an agent new enough to
+	// measure free memory. Each card is holding ~1.5 GB, so the pool is
+	// 3 GB smaller than the totals suggest — the per-device gap, once per
+	// card, which is what #264's record predicted would accumulate.
+	wireDual4090Busy = `{"gpus":[` +
+		`{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,"vram_free_mb":23028,"compute_cap":"8.9","vendor":"nvidia"},` +
+		`{"model":"NVIDIA GeForce RTX 4090","vram_total_mb":24564,"vram_free_mb":23028,"compute_cap":"8.9","vendor":"nvidia"}],` +
+		`"ram_total_gb":128}`
 )
 
 func hostFromWire(t *testing.T, payload string) hostfit.Host {
@@ -194,6 +209,9 @@ func TestEffectiveVRAMMB(t *testing.T) {
 func TestOllamaVRAMPoolMB(t *testing.T) {
 	nv := func(mb int) hostfit.Device { return hostfit.Device{Vendor: "nvidia", VRAMTotalMB: mb} }
 	amd := func(mb int) hostfit.Device { return hostfit.Device{Vendor: "amd", VRAMTotalMB: mb} }
+	nvFree := func(total, free int) hostfit.Device {
+		return hostfit.Device{Vendor: "nvidia", VRAMTotalMB: total, VRAMAvailableMB: free}
+	}
 
 	for _, tc := range []struct {
 		name string
@@ -241,6 +259,37 @@ func TestOllamaVRAMPoolMB(t *testing.T) {
 			[]hostfit.Device{{Vendor: "apple", VRAMTotalMB: 24576}},
 			0,
 		},
+		{
+			// waired-agent#69: the engine sums FreeMemory, so the pool
+			// has to as well. Two cards holding 1.5 GB each come in
+			// 3 GB under the totals — the per-device gap, once per card.
+			"measured cards pool their free memory, not their totals",
+			[]hostfit.Device{nvFree(24564, 23028), nvFree(24564, 23028)},
+			23028*2 - 1024,
+		},
+		{
+			// The de-rate is per device and BEFORE the sum, which is what
+			// #264's record asked #69 to do rather than compensating on
+			// the pooling side.
+			"a card with no free reading contributes its total",
+			[]hostfit.Device{nvFree(24564, 23028), nv(24564)},
+			23028 + 24564 - 1024,
+		},
+		{
+			// 0 is "not measured", never "nothing free". A fleet that has
+			// not updated must keep today's pool exactly.
+			"no free readings anywhere reproduce the old pool",
+			[]hostfit.Device{nvFree(24564, 0), nvFree(24564, 0)},
+			24564*2 - 1024,
+		},
+		{
+			// A driver that reports free >= total is not telling us
+			// anything the total did not, and trusting it would let a
+			// bogus reading INFLATE a host. Only a de-rate is honoured.
+			"a free reading at or above the total is ignored",
+			[]hostfit.Device{nvFree(24564, 30000), nvFree(24564, 24564)},
+			24564*2 - 1024,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := hostfit.OllamaVRAMPoolMB(tc.devs); got != tc.want {
@@ -279,6 +328,42 @@ func TestOllamaVRAMBudgetMB(t *testing.T) {
 			hostfit.Host{GPUCount: 2, VRAM0MB: 24564, VRAMPoolMB: 20000},
 			24564,
 		},
+		{
+			// waired-agent#69, the reported shape: ONE card, so there is
+			// no pool to carry the de-rate, and without VRAMAvailable0MB the
+			// free reading would never reach the budget at all.
+			"a single measured card is sized on what is free",
+			hostFromWire(t, wireRTX3060TiBusy),
+			6144,
+		},
+		{
+			"two measured cards spend the measured pool",
+			hostFromWire(t, wireDual4090Busy),
+			23028*2 - 1024,
+		},
+		{
+			// The floor moved from the device's total to its free figure,
+			// so a degenerate pool still cannot shrink the host BELOW
+			// what the one card was measured to have.
+			"a pool below the measured single device is still ignored",
+			hostfit.Host{GPUCount: 2, VRAM0MB: 24564, VRAMAvailable0MB: 20000, VRAMPoolMB: 12000},
+			20000,
+		},
+		{
+			// No shipped detector reports free memory for a unified part,
+			// and UsableVRAMMB is already the honest bound on what its
+			// GPU can wire down. A stray reading must not move it.
+			"unified memory ignores a free reading",
+			hostfit.Host{UnifiedMemory: true, GPUCount: 1, UsableVRAMMB: 18432, VRAM0MB: 24576, VRAMAvailable0MB: 4096},
+			18432,
+		},
+		{
+			// The whole fleet before this field, and every driver that
+			// will not answer: unchanged.
+			"an unmeasured card keeps its total",
+			hostfit.Host{GPUCount: 1, VRAM0MB: 24564, VRAMAvailable0MB: 0},
+			24564,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.host.OllamaVRAMBudgetMB(); got != tc.want {
@@ -288,19 +373,22 @@ func TestOllamaVRAMBudgetMB(t *testing.T) {
 	}
 }
 
-// TestOllamaBudgetNeverShrinksTheHost is the anti-waired#942 invariant,
-// and the reason this change is safe to make without a per-host
-// measurement behind it.
+// TestOllamaBudgetNeverShrinksAHostItDidNotMeasure is what survives of
+// the old TestOllamaBudgetNeverShrinksTheHost, and it is the half that
+// still holds.
 //
-// #264 is an UNDER-count: a host is refused a model it runs. The
-// opposite error — over-counting, and offering a model that spills — is
-// the failure waired#942 was, and it is the one this package must never
-// reintroduce while fixing the first. The accessor's floor makes that
-// structural rather than a matter of getting the pool arithmetic right:
-// whatever OllamaVRAMPoolMB returns, wrong or right, the budget cannot
-// come in under today's figure, so no producer error can shrink a
-// host's catalog.
-func TestOllamaBudgetNeverShrinksTheHost(t *testing.T) {
+// PRODUCT CONTRACT — docs/decisions/20260813/1120-ollama-budget-sized-on-free-vram.md
+// §Decision 6. That decision deliberately gave up the blanket "the
+// budget can never come in below today's figure" guarantee: sizing on
+// free memory means the budget CAN shrink, which is the entire point of
+// waired-agent#69. What it did not give up is the guarantee for a host
+// nobody measured — a driver that will not report free memory, and
+// every agent that predates the field, both arrive with 0 and must keep
+// exactly today's arithmetic.
+//
+// So the sweep is unchanged except that VRAMAvailable0MB stays 0 throughout.
+// If a future change lets an unmeasured host be de-rated, this fails.
+func TestOllamaBudgetNeverShrinksAHostItDidNotMeasure(t *testing.T) {
 	for _, unified := range []bool{false, true} {
 		for _, usable := range []int{0, 8192, 18432} {
 			for _, vram0 := range []int{0, 4096, 24564, 49152} {
@@ -310,9 +398,49 @@ func TestOllamaBudgetNeverShrinksTheHost(t *testing.T) {
 						UsableVRAMMB: usable, VRAM0MB: vram0, VRAMPoolMB: pool,
 					}
 					if got, floor := h.OllamaVRAMBudgetMB(), h.EffectiveVRAMMB(); got < floor {
-						t.Fatalf("%+v: ollama budget %d is BELOW the single-device figure %d — "+
-							"a pool must never take a model away from a host that ran it",
+						t.Fatalf("%+v: ollama budget %d is BELOW the single-device figure %d "+
+							"on a host with no free reading — an unmeasured host must keep "+
+							"today's budget, not be de-rated on a guess",
 							h, got, floor)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestOllamaBudgetNeverFallsBelowWhatWasMeasured is the replacement
+// invariant for the measured case.
+//
+// PRODUCT CONTRACT — the same decision, §Decision 2. The floor did not
+// go away; it changed what it is measured against. A budget may come in
+// under the card's TOTAL — that is the de-rate #69 asks for — but it
+// may never come in under what the driver actually reported free,
+// because nothing in this package knows anything more pessimistic than
+// the measurement, and inventing a further haircut here would be the
+// waired#942 direction (refusing a model the host runs) with no
+// evidence behind it.
+func TestOllamaBudgetNeverFallsBelowWhatWasMeasured(t *testing.T) {
+	for _, unified := range []bool{false, true} {
+		for _, usable := range []int{0, 8192, 18432} {
+			for _, vram0 := range []int{0, 4096, 24564, 49152} {
+				for _, free := range []int{0, 1, 4096, 20000, 49152} {
+					for _, pool := range []int{0, 1, 8192, 24564, 98304} {
+						h := hostfit.Host{
+							GPUCount: 2, UnifiedMemory: unified,
+							UsableVRAMMB: usable, VRAM0MB: vram0,
+							VRAMAvailable0MB: free, VRAMPoolMB: pool,
+						}
+						floor := h.EffectiveVRAMMB()
+						if free > 0 && free < floor {
+							floor = free
+						}
+						if got := h.OllamaVRAMBudgetMB(); got < floor {
+							t.Fatalf("%+v: ollama budget %d is below %d, the lesser of the "+
+								"single-device figure and the measured free reading — "+
+								"the budget may de-rate to what was measured, never past it",
+								h, got, floor)
+						}
 					}
 				}
 			}

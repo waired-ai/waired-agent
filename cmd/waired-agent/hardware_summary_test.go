@@ -239,7 +239,19 @@ func TestHardwareSummaryFor_AppleSiliconBudgetSurvivesTheWireAdapter(t *testing.
 // which is the whole point of recording it as a debt. RAMAvailableMeasuredAt
 // (#699) was the most recent, held here between the proto PR and this one,
 // and it dated the very field that sat here before it. Empty again.
-var notPublishedByAgent = map[string]bool{}
+var notPublishedByAgent = map[string]bool{
+	// waired-agent#69, held here for exactly one PR. The contract had to
+	// land alone (docs/decisions/20260719/0000-concurrent-proto-development.md
+	// §2), and hardware.GPU has no free-VRAM field to publish from until
+	// the per-OS reader lands with it. Until then every device reports 0,
+	// which hostfit reads as "no free reading" and answers with the
+	// total — so the budget is unchanged rather than wrong.
+	//
+	// The reader PR deletes this line. If it is still here, the contract
+	// is published with no producer, which is the #251 shape this map
+	// exists to make visible rather than to excuse.
+	"HardwareGPUSummary.VRAMFreeMB": true,
+}
 
 // TestHardwareSummaryFor_PublishesEveryWireField guards the bug class
 // rather than the three fields: a field added to the broadcast summary

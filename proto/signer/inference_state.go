@@ -693,6 +693,33 @@ type HardwareGPUSummary struct {
 	// VRAMTotalMB is the device's total VRAM in megabytes.
 	VRAMTotalMB int `json:"vram_total_mb,omitempty"`
 
+	// VRAMFreeMB is how much of VRAMTotalMB the driver reported as free
+	// on this device, in megabytes. It exists because the engine sizes
+	// placement against free memory while this repo sized its budget
+	// against the total, so a card also driving a display was valued at
+	// more than it can lend (waired-agent#69).
+	//
+	// It is measured ONCE, while no engine or model of ours is resident,
+	// and persisted — never a live reading. That discipline is not
+	// optional: the hardware profile is re-sampled on a TTL, and a free
+	// figure taken after our own weights loaded would exclude them, so
+	// each re-tune would see less memory and shrink further. It is the
+	// same hazard RAMAvailableGB above names in the same words, and the
+	// same answer (waired-agent#568).
+	//
+	// 0 means "no free reading", never "no free VRAM": a consumer falls
+	// back to VRAMTotalMB, which is what a pre-addition agent sends and
+	// what a driver that will not report free memory leaves behind. So
+	// an unknown reading keeps today's budget rather than de-rating a
+	// host to nothing — the "judgement withheld when the budget is
+	// unknown" rule docs/decisions/20260728/0250-gpu-presence-from-driver-not-path.md
+	// settled for VRAM figures generally.
+	//
+	// Gated behind CapabilityVRAMFreeV1: agent-reported and riding every
+	// PEER entry, so the CP strips it across the whole map for a poller
+	// that has not declared it.
+	VRAMFreeMB int `json:"vram_free_mb,omitempty"`
+
 	// ComputeCap is the CUDA compute capability formatted as a
 	// string (e.g. "8.9" for Ada Lovelace). Empty for non-CUDA.
 	ComputeCap string `json:"compute_cap,omitempty"`
