@@ -60,11 +60,27 @@ case "$*" in
 esac
 exit 0
 STUB
-# Functional: feed install.sh's `awk '/Candidate:/{print $2}'`.
+# Functional, two subcommands. `policy` feeds install.sh's
+# `awk '/Candidate:/{print $2}'`. `madison` feeds apt_has_version, which
+# decides which spelling of a pinned release apt actually holds — the two
+# are both live in one suite, so that cannot be assumed (waired-agent#811).
+# IT_STUB_VERSIONS is a COMMA-separated version list (the runner passes env
+# assignments through an unquoted expansion, so a space would end the
+# value); empty = the package is not in the index at all.
 cat > "$STUBDIR/apt-cache" <<'STUB'
 #!/bin/sh
-printf 'waired:\n  Installed: %s\n  Candidate: %s\n' \
-  "${IT_STUB_INSTALLED:-(none)}" "${IT_STUB_CANDIDATE:-(none)}"
+case "$1" in
+  madison)
+    IFS=','
+    for v in ${IT_STUB_VERSIONS:-}; do
+      printf '   waired | %s | https://example.invalid/apt suite/main amd64 Packages\n' "$v"
+    done
+    ;;
+  *)
+    printf 'waired:\n  Installed: %s\n  Candidate: %s\n' \
+      "${IT_STUB_INSTALLED:-(none)}" "${IT_STUB_CANDIDATE:-(none)}"
+    ;;
+esac
 STUB
 # Safety no-ops: even if a --dry-run guard ever regresses, the matrix must
 # never mutate the host. None of these are reached in --dry-run today.
@@ -515,14 +531,45 @@ run_case_grep zero "stable -> edge still switches" \
   "IT_STUB_INSTALLED=0.0.3 IT_STUB_CANDIDATE=$EDGE_VER WAIRED_VERSION=edge" \
   'Update available' -- --dry-run --check --skip-ollama
 # An operator writes the pin the way the release is named; apt holds the
-# tilde form (waired-agent#780). Both spellings, with or without the tag's
-# leading v, have to reach the same package version.
+# tilde form for anything published from v0.0.3-rc1 on (waired-agent#780).
+# Both spellings, with or without the tag's leading v, reach it.
+PINNED_NEW="IT_STUB_VERSIONS=0.0.3~rc1"
 run_case_grep zero "pin is translated to the deb spelling" \
-  "$UPD IT_STUB_CANDIDATE=0.0.3~rc1 WAIRED_VERSION=0.0.3-rc1" \
+  "$UPD IT_STUB_CANDIDATE=0.0.3~rc1 $PINNED_NEW WAIRED_VERSION=0.0.3-rc1" \
   'waired=0\.0\.3~rc1' -- --dry-run --skip-ollama --no-init --yes
 run_case_grep zero "pin accepts the tag spelling too" \
-  "$UPD IT_STUB_CANDIDATE=0.0.3~rc1 WAIRED_VERSION=v0.0.3-rc1" \
+  "$UPD IT_STUB_CANDIDATE=0.0.3~rc1 $PINNED_NEW WAIRED_VERSION=v0.0.3-rc1" \
   'waired=0\.0\.3~rc1' -- --dry-run --skip-ollama --no-init --yes
+
+# ...but the translation must not be applied blind. Everything published
+# BEFORE v0.0.3-rc1 is in the hyphen form and was not renamed, so both
+# spellings are live in the one suite. Translating unconditionally made
+# every one of those releases unpinnable — apt answered
+# `E: Version '0.0.1~rc10' for 'waired' was not found` (waired-agent#811).
+PINNED_OLD="IT_STUB_VERSIONS=0.0.1-rc10,0.0.2-rc8-dev,0.0.2-rc9"
+run_case_grep zero "a pre-tilde release is pinned as published" \
+  "$UPD IT_STUB_CANDIDATE=0.0.2-rc8-dev $PINNED_OLD WAIRED_VERSION=0.0.2-rc9" \
+  'waired=0\.0\.2-rc9' -- --dry-run --skip-ollama --no-init --yes
+run_case_grep zero "a pre-tilde release accepts the tag spelling too" \
+  "$UPD IT_STUB_CANDIDATE=0.0.2-rc8-dev $PINNED_OLD WAIRED_VERSION=v0.0.2-rc9" \
+  'waired=0\.0\.2-rc9' -- --dry-run --skip-ollama --no-init --yes
+# The two-hyphen preview tag, whose deb spelling would be 0.0.2~rc8~dev.
+run_case_grep zero "a multi-hyphen release is pinned as published" \
+  "$UPD IT_STUB_CANDIDATE=0.0.2-rc8-dev $PINNED_OLD WAIRED_VERSION=0.0.2-rc8-dev" \
+  'waired=0\.0\.2-rc8-dev' -- --dry-run --skip-ollama --no-init --yes
+# Preference when a suite somehow holds both: the .deb spelling wins.
+run_case_grep zero "the deb spelling wins when both are present" \
+  "$UPD IT_STUB_CANDIDATE=0.0.3~rc1 IT_STUB_VERSIONS=0.0.3~rc1,0.0.3-rc1 WAIRED_VERSION=0.0.3-rc1" \
+  'waired=0\.0\.3~rc1' -- --dry-run --skip-ollama --no-init --yes
+# Neither spelling in the index: send the current form, so apt names the
+# version the operator most likely meant rather than a legacy spelling.
+run_case_grep zero "an unknown pin falls back to the deb spelling" \
+  "$UPD IT_STUB_CANDIDATE=0.0.3~rc1 WAIRED_VERSION=9.9.9-rc1" \
+  'waired=9\.9\.9~rc1' -- --dry-run --skip-ollama --no-init --yes
+# A release with no prerelease has one spelling; no probe, no rewrite.
+run_case_grep zero "a plain release pin is untouched" \
+  "$UPD IT_STUB_CANDIDATE=1.2.3 IT_STUB_VERSIONS=1.2.3 WAIRED_VERSION=1.2.3" \
+  'waired=1\.2\.3' -- --dry-run --skip-ollama --no-init --yes
 
 # 4c. Clean install (--clean): consent gate, wipe delegation to the
 #     sibling uninstall.sh (hermetic — install.sh runs from a file here,

@@ -119,3 +119,18 @@ on every same-repo PR but is skipped for fork PRs (it needs the
 enrollment credential — a repository secret used to register a test
 device — which is withheld from forks). A maintainer triggers it the
 same way after review.
+
+While the testnet gate is running, do not edit the PR body. The workflow
+listens for `edited`, so a body edit restarts `testnet-pr`, and its
+concurrency group cancels the run that was already waiting. Filing an
+issue and adding the reference to the body counts as an edit; do it
+after the gate finishes. Two things make this expensive to diagnose:
+the gate is the long pole (a full cycle was measured at about an hour
+and a half, most of it teardown), and the failure reads as somebody
+else's problem — the job ends with `The operation was canceled.` in
+`require green testnet for the PR head`, which looks like an
+infrastructure fault rather than a consequence of your own last action.
+Re-running does not help if the body is touched again. (Observed
+2026-08-15 on #803. Same mechanism seen from the other side: a manual
+`gh run rerun` replays the *original* event payload, so it cannot see a
+`docs-not-needed:` line that was added afterwards.)
