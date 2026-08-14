@@ -38,7 +38,7 @@ func TestCollectDoctorFindings_TokenPermissionDenied(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(secretsDir, 0o700) })
 
-	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{})
+	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, claudeDoctor{})
 
 	var tok *integration.AuditFinding
 	for i := range findings {
@@ -86,7 +86,7 @@ func TestCollectDoctorFindings_UnreadableStateIsReportedNotDropped(t *testing.T)
 	}
 	t.Cleanup(func() { _ = os.Chmod(state, 0o700) })
 
-	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{})
+	findings := collectDoctorFindings(t.Context(), home, state, "http://127.0.0.1:65535", "http://127.0.0.1:65535", trayDoctor{}, servicediag.Result{}, claudeDoctor{})
 
 	bySubject := map[string]integration.AuditFinding{}
 	for _, f := range findings {

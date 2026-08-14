@@ -319,6 +319,45 @@ func claudeWindowStatusLine(goos, managed string, live int) string {
 	}
 }
 
+// claudeStatusLabel is the width `waired claude status` aligns its labels to,
+// and claudeStatusIndent the continuation under one of them.
+const (
+	claudeStatusLabel  = 20
+	claudeStatusIndent = "                    "
+)
+
+// claudeShellFormNote is the continuation printed under a waired command written
+// for a shell this computer may not have — the pre-waired-agent#787 POSIX
+// one-liners on Windows. Printed only when there is something to say, so a
+// healthy status gains no line.
+//
+// fix arrives as a whole sentence, already spelled for this OS: on Windows the
+// managed-settings rewrite needs an Administrator prompt and no sudo, which is
+// elevationHintFor's job (waired#752).
+func claudeShellFormNote(fix string) string {
+	return claudeStatusIndent + "written for a Unix shell — Claude Code runs it here only when Git Bash\n" +
+		claudeStatusIndent + "is installed. To rewrite it:\n" +
+		claudeStatusIndent + "  " + fix + "\n"
+}
+
+// claudeHookStatusRows renders the `fallback hook:` row from the command
+// actually recorded in managed settings, rather than from its mere presence.
+// Presence alone is what let a Windows host report a hook it could not run
+// (waired-agent#787). Pure over (goos, hookCommand) so all three OSes are
+// checked on the Linux-only CI.
+func claudeHookStatusRows(goos, hookCommand string) string {
+	label := fmt.Sprintf("%-*s", claudeStatusLabel, "fallback hook:")
+	switch {
+	case hookCommand == "":
+		return label + "not installed\n"
+	case claudemanaged.StopHookRunsOn(goos, hookCommand):
+		return label + "installed\n"
+	default:
+		return label + "installed, but not in the form this computer runs\n" +
+			claudeShellFormNote(elevationHintFor(goos, "waired claude enable"))
+	}
+}
+
 func runClaudeStatus(stateDir string) error {
 	baseURL, port := claudeBaseURL(stateDir)
 	path, present, current := claudemanaged.View()
@@ -337,7 +376,7 @@ func runClaudeStatus(stateDir string) error {
 		claudemanaged.MaxContextTokensAt(path), claudeLocalContextWindow(stateDir)); line != "" {
 		fmt.Println(line)
 	}
-	fmt.Printf("fallback hook:      %s\n", installedLabel(claudemanaged.StopHookInstalled()))
+	fmt.Print(claudeHookStatusRows(runtime.GOOS, claudemanaged.StopHookCommandAt(path)))
 	if legacycleanup.Present(stateDir) {
 		// Retired MITM proxy artifacts still on disk (a stale api.anthropic.com
 		// hosts redirect / orphaned CA) silently break Claude Code — warn and
@@ -384,13 +423,14 @@ func printClaudeStatuslineStatus() {
 	default:
 		fmt.Println("statusline:         not installed")
 	}
-}
-
-func installedLabel(b bool) string {
-	if b {
-		return "installed"
+	// Same question the hook row answers, one surface over: an entry written
+	// for another OS's shell is installed and still does nothing
+	// (waired-agent#787). Printed under the row rather than folded into it so
+	// the row's wording — which docs-site quotes — does not move.
+	if (kind == claudecode.StatusLineOurs || kind == claudecode.StatusLineWrapped) &&
+		!claudecode.StatusLineRunsOn(runtime.GOOS, kind, existing) {
+		fmt.Print(claudeShellFormNote("re-run `waired claude statusline install`"))
 	}
-	return "not installed"
 }
 
 // printClaudeRouteStatus appends the live per-class routing policy +

@@ -464,6 +464,11 @@ func printStatuslineResult(res claudecode.StatusLineResult) {
 		fmt.Printf("  waired routing statusline present in %s.\n", res.Path)
 	case "wrapped":
 		fmt.Printf("  Wrapped your existing statusLine in %s (restored on `waired claude disable`).\n", res.Path)
+	case "rewrapped":
+		// waired-agent#787: the wrapper this host had was written for another
+		// OS's shell — say what changed, since nothing else about the statusLine
+		// looks different afterwards.
+		fmt.Printf("  Rewrote the waired statusline wrapper in %s for this computer's shell.\n", res.Path)
 	case "already-wrapped":
 		fmt.Println("  waired routing statusline already active.")
 	case "skipped-foreign":

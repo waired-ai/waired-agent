@@ -72,7 +72,8 @@ func runDoctorBody(stateDirVal, gatewayBaseURLVal, mgmtURLVal string, fixVal, no
 	defer cancel()
 
 	tray := checkTray()
-	findings := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray, checkService(ctx, *stateDir))
+	findings := collectDoctorFindings(ctx, home.Dir, *stateDir, *gatewayBaseURL, *mgmtURL, tray,
+		checkService(ctx, *stateDir), checkClaude(home.Dir))
 	hasFail := false
 	for _, f := range findings {
 		fmt.Println(formatFinding(f))
@@ -253,12 +254,12 @@ func repairTrayHost(ctx context.Context, action trayhost.RepairAction, out *os.F
 	return nil
 }
 
-// collectDoctorFindings gathers every finding for one run. tray and svc are
-// passed in rather than probed here so the session bus and the service manager
-// are each queried exactly once per run, and so tests can pass the zero values
-// and stay independent of whatever desktop or service state the runner happens
-// to have.
-func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result) []integration.AuditFinding {
+// collectDoctorFindings gathers every finding for one run. tray, svc and claude
+// are passed in rather than probed here so the session bus, the service manager
+// and the Claude Code settings files are each queried exactly once per run, and
+// so tests can pass the zero values and stay independent of whatever desktop,
+// service or Claude Code state the runner happens to have.
+func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, mgmtURL string, tray trayDoctor, svc servicediag.Result, claude claudeDoctor) []integration.AuditFinding {
 	var out []integration.AuditFinding
 
 	// Token presence + permission check. PathsUnder computes the layout
@@ -354,6 +355,11 @@ func collectDoctorFindings(ctx context.Context, homeDir, stateDir, gatewayURL, m
 	if tray.Finding.Subject != "" {
 		out = append(out, tray.Finding)
 	}
+
+	// Claude Code entries waired wrote that this computer's shell cannot run
+	// (waired-agent#787). Emits nothing for a machine waired never enabled
+	// Claude Code on, so doctor stays quiet where the question does not apply.
+	out = append(out, claudeCommandFindings(runtime.GOOS, claude)...)
 
 	return out
 }
