@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/waired-ai/waired-agent/internal/platform/secrets"
@@ -26,24 +27,68 @@ import (
 // and waired/docs/decisions/); it is confined to the statusLine key and is fully
 // restorable.
 //
-// The injected command self-guards on `command -v waired`, so an uninstalled
-// binary yields an empty statusLine segment (Claude Code renders a blank footer
-// on empty/error) rather than a broken one — matching the "invisible when
-// uninstalled" requirement.
+// On the Unixes the injected command self-guards on `command -v waired`, so an
+// uninstalled binary yields an empty statusLine segment (Claude Code renders a
+// blank footer on empty/error) rather than a broken one — matching the
+// "invisible when uninstalled" requirement. Windows gets the bare command
+// instead; statuslineRenderCommandFor says why, and lands in the same place
+// because a command that cannot start also prints nothing.
 
 const (
-	// statuslineRenderCommand is the shell command written into settings.json.
-	// The `command -v waired` guard makes it a clean no-op (empty output ⇒ blank
-	// segment) once the binary is gone.
-	statuslineRenderCommand = "command -v waired >/dev/null 2>&1 && exec waired claude statusline"
+	// posixStatuslineGuard is the `sh` guard every waired before
+	// waired-agent#787 wrote in front of the render command, on every OS
+	// including Windows.
+	posixStatuslineGuard = "command -v waired >/dev/null 2>&1 && exec"
 	// statuslineMarker identifies a waired-owned bare statusLine command.
 	statuslineMarker = "waired claude statusline"
 
-	statuslineKey       = "statusLine"
-	statuslineStashKey  = "waired_original_statusLine"
-	statuslineWrapper   = "waired-statusline.sh"
-	statuslineOrigStore = "waired-statusline.orig"
+	statuslineKey      = "statusLine"
+	statuslineStashKey = "waired_original_statusLine"
+	// statuslineWrapperStem is the wrapper script's name without its extension.
+	// The extension is per-OS (statuslineWrapperNameFor) but the stem is not, so
+	// classifyStatusLine recognises a wrapper this waired did not write —
+	// including the `.sh` one a pre-waired-agent#787 waired left on a Windows
+	// host, which has to stay restorable.
+	statuslineWrapperStem = "waired-statusline"
+	statuslineOrigStore   = "waired-statusline.orig"
 )
+
+// statuslineRenderCommandFor is the settings.json statusLine command for goos.
+//
+// Same split, and the same reason, as claudemanaged.fallbackHookCommandFor:
+// Claude Code runs status-line commands through Git Bash when Git Bash is
+// installed and through PowerShell when it is not
+// (https://code.claude.com/docs/en/statusline). `exec` and `>/dev/null 2>&1`
+// mean nothing to PowerShell, so writing the POSIX form on Windows made the
+// segment depend on Git Bash being installed — which Claude Code does not
+// require (waired-agent#787). Unlike hooks, statusLine has no `shell` field and
+// no exec form to select with, so the Windows string has to be one both shells
+// can run: the bare command.
+func statuslineRenderCommandFor(goos string) string {
+	if goos == "windows" {
+		return statuslineMarker
+	}
+	return posixStatuslineGuard + " " + statuslineMarker
+}
+
+// StatusLineRunsOn reports whether a waired-owned statusLine command can be run
+// by the shell Claude Code uses on goos. Like claudemanaged.StopHookRunsOn it is
+// false only for the pre-waired-agent#787 POSIX form on Windows. A wrapper
+// command is judged by its script's extension, which is what actually decides
+// whether the interpreter exists.
+func StatusLineRunsOn(goos string, kind StatusLineKind, cmd string) bool {
+	if goos != "windows" {
+		return kind == StatusLineOurs || kind == StatusLineWrapped
+	}
+	switch kind {
+	case StatusLineOurs:
+		return !strings.Contains(cmd, posixStatuslineGuard)
+	case StatusLineWrapped:
+		return strings.Contains(cmd, statuslineWrapperNameFor(goos))
+	default:
+		return false
+	}
+}
 
 // StatusLineKind classifies the current ~/.claude/settings.json statusLine.
 type StatusLineKind int
@@ -63,9 +108,49 @@ const (
 // SettingsPath is the user-global Claude Code settings file.
 func SettingsPath(home string) string { return filepath.Join(home, ".claude", "settings.json") }
 
-func statuslineWrapperPath(home string) string {
-	return filepath.Join(home, ".claude", statuslineWrapper)
+// statuslineWrapperNameFor names the wrapper script: a POSIX shell script where
+// Claude Code has a POSIX shell, a PowerShell script on Windows.
+func statuslineWrapperNameFor(goos string) string {
+	if goos == "windows" {
+		return statuslineWrapperStem + ".ps1"
+	}
+	return statuslineWrapperStem + ".sh"
 }
+
+func statuslineWrapperPathFor(goos, home string) string {
+	return filepath.Join(home, ".claude", statuslineWrapperNameFor(goos))
+}
+
+// statuslineWrapperCommandFor renders the settings.json command that runs the
+// wrapper at wrapperPath. It takes the path rather than (goos, home) so the
+// Windows spelling can be asserted against a literal on a Linux runner.
+//
+// The Windows form is `powershell.exe -NoProfile -ExecutionPolicy Bypass -File
+// "<forward-slashed path>"`, and every part of that is load-bearing:
+//   - forward slashes, because Git Bash eats an unquoted backslash as an escape
+//     and the path then reaches PowerShell with its separators missing
+//     (https://code.claude.com/docs/en/statusline);
+//   - quoted always, so a home directory with a space stays one argument in
+//     Git Bash, PowerShell and cmd alike — one spelling, not three;
+//   - `powershell.exe` spelled with the extension, the one form all three
+//     resolve (`pwsh` is not guaranteed to exist);
+//   - `-ExecutionPolicy Bypass`, because the default policy on Windows client
+//     SKUs refuses to run an unsigned .ps1 by -File, which would leave the
+//     wrapper written and silently failing every refresh;
+//   - `-File` last, since everything after it is script arguments.
+//
+// The separator swap is strings.ReplaceAll and not filepath.ToSlash on purpose:
+// ToSlash only rewrites when the RUNNING host's separator is a backslash, so on
+// a Linux CI runner it would leave a Windows fixture path untouched and the
+// assertion below would pass over a command that ships broken.
+func statuslineWrapperCommandFor(goos, wrapperPath string) string {
+	if goos == "windows" {
+		return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "` +
+			strings.ReplaceAll(wrapperPath, `\`, "/") + `"`
+	}
+	return wrapperPath
+}
+
 func statuslineOrigPath(home string) string {
 	return filepath.Join(home, ".claude", statuslineOrigStore)
 }
@@ -82,7 +167,7 @@ type statusLineObj struct {
 // StatusLineResult reports what InstallStatusLine did.
 type StatusLineResult struct {
 	Kind     StatusLineKind // state BEFORE the call
-	Action   string         // injected | refreshed | already-wrapped | wrapped | skipped-foreign
+	Action   string         // injected | refreshed | already-wrapped | rewrapped | wrapped | skipped-foreign
 	Existing string         // the pre-existing (foreign) command, when relevant
 	Path     string         // settings.json path
 }
@@ -98,18 +183,30 @@ func DetectStatusLine(home string) (StatusLineKind, string, error) {
 	if err != nil {
 		return StatusLineNone, "", err
 	}
-	kind, cmd := classifyStatusLine(home, m)
+	kind, cmd := classifyStatusLine(m)
 	return kind, cmd, nil
 }
 
-// InstallStatusLine ensures waired's statusLine segment is present.
+// InstallStatusLine ensures waired's statusLine segment is present, in the form
+// this host's OS can run.
+func InstallStatusLine(home string, wrap bool) (StatusLineResult, error) {
+	return installStatusLine(runtime.GOOS, home, wrap)
+}
+
+// installStatusLine is InstallStatusLine with the OS as an argument, so all
+// three are table-tested on one runner (CLAUDE.md §Test discipline).
+//
 //   - none    ⇒ inject the bare command.
-//   - ours    ⇒ refresh the command (picks up a changed invocation).
-//   - wrapped ⇒ no-op.
+//   - ours    ⇒ refresh the command (picks up a changed invocation, and is how
+//     a host enabled before waired-agent#787 gets the runnable Windows form).
+//   - wrapped ⇒ no-op when the wrapper is already this OS's; otherwise rebuild
+//     it from the original we preserved. Without that second arm a Windows host
+//     wrapped by an older waired keeps a `sh` script Claude Code cannot run
+//     here, and no amount of re-running enable would ever fix it.
 //   - foreign ⇒ if wrap, wrap the existing statusLine (marked, restorable);
 //     otherwise leave it untouched and report skipped-foreign so the caller can
 //     print guidance.
-func InstallStatusLine(home string, wrap bool) (StatusLineResult, error) {
+func installStatusLine(goos, home string, wrap bool) (StatusLineResult, error) {
 	if home == "" {
 		return StatusLineResult{}, errors.New("claudecode: empty home")
 	}
@@ -118,34 +215,71 @@ func InstallStatusLine(home string, wrap bool) (StatusLineResult, error) {
 	if err != nil {
 		return StatusLineResult{}, err
 	}
-	kind, cmd := classifyStatusLine(home, m)
+	kind, cmd := classifyStatusLine(m)
 	res := StatusLineResult{Kind: kind, Existing: cmd, Path: path}
 	switch kind {
 	case StatusLineNone:
-		m[statuslineKey] = ourStatusLineRaw()
+		m[statuslineKey] = ourStatusLineRaw(goos)
 		res.Action = "injected"
 	case StatusLineOurs:
-		m[statuslineKey] = ourStatusLineRaw()
+		m[statuslineKey] = ourStatusLineRaw(goos)
 		res.Action = "refreshed"
 	case StatusLineWrapped:
-		res.Action = "already-wrapped"
-		return res, nil
+		want := statuslineWrapperCommandFor(goos, statuslineWrapperPathFor(goos, home))
+		if cmd == want {
+			res.Action = "already-wrapped"
+			return res, nil
+		}
+		// The stash is deliberately NOT rewritten: it already holds the user's
+		// own statusLine object, and overwriting it with a wrapper command would
+		// destroy the only lossless restore source.
+		orig := preservedOriginalCommand(home, m)
+		if orig == "" {
+			res.Action = "already-wrapped"
+			return res, nil
+		}
+		if err := writeWrapperScript(goos, home, orig); err != nil {
+			return res, err
+		}
+		m[statuslineKey] = wrapperStatusLineRaw(goos, home)
+		res.Action = "rewrapped"
 	case StatusLineForeign:
 		if !wrap {
 			res.Action = "skipped-foreign"
 			return res, nil
 		}
-		if err := writeWrapperScript(home, cmd); err != nil {
+		if err := writeWrapperScript(goos, home, cmd); err != nil {
 			return res, err
 		}
 		m[statuslineStashKey] = m[statuslineKey] // lossless original for restore
-		m[statuslineKey] = wrapperStatusLineRaw(home)
+		m[statuslineKey] = wrapperStatusLineRaw(goos, home)
 		res.Action = "wrapped"
 	}
 	if err := writeSettings(path, m); err != nil {
 		return res, err
 	}
 	return res, nil
+}
+
+// preservedOriginalCommand recovers the command a wrapped statusLine wraps: the
+// sibling .orig file first (what the wrapper itself reads), then the settings
+// stash. "" when neither survives, which is the one case a rewrap must decline
+// — rebuilding a wrapper around nothing would erase the user's statusLine.
+func preservedOriginalCommand(home string, m map[string]json.RawMessage) string {
+	if b, err := os.ReadFile(statuslineOrigPath(home)); err == nil {
+		if s := strings.TrimSpace(string(b)); s != "" {
+			return s
+		}
+	}
+	raw, ok := m[statuslineStashKey]
+	if !ok {
+		return ""
+	}
+	var obj statusLineObj
+	if json.Unmarshal(raw, &obj) != nil {
+		return ""
+	}
+	return obj.Command
 }
 
 // RemoveStatusLine undoes InstallStatusLine: a bare waired statusLine is dropped;
@@ -160,7 +294,7 @@ func RemoveStatusLine(home string) error {
 	if err != nil {
 		return err
 	}
-	kind, _ := classifyStatusLine(home, m)
+	kind, _ := classifyStatusLine(m)
 	switch kind {
 	case StatusLineNone, StatusLineForeign:
 		return nil
@@ -174,7 +308,12 @@ func RemoveStatusLine(home string) error {
 			delete(m, statuslineKey)
 		}
 		delete(m, statuslineStashKey)
-		_ = os.Remove(statuslineWrapperPath(home))
+		// Both spellings, not this OS's: since waired-agent#787 the wrapper's
+		// extension is per-OS, so a host upgraded across that change can carry
+		// the other one — and a name the current OS does not compute is a name
+		// nothing would ever clean up.
+		_ = os.Remove(statuslineWrapperPathFor("windows", home))
+		_ = os.Remove(statuslineWrapperPathFor("linux", home))
 		_ = os.Remove(statuslineOrigPath(home))
 	}
 	if len(m) == 0 {
@@ -186,7 +325,13 @@ func RemoveStatusLine(home string) error {
 	return writeSettings(path, m)
 }
 
-func classifyStatusLine(home string, m map[string]json.RawMessage) (StatusLineKind, string) {
+// classifyStatusLine is deliberately OS-independent: it must recognise every
+// form waired has ever written, on whatever machine is reading. Matching the
+// wrapper by its stem rather than by this OS's full filename is what keeps a
+// `.sh` wrapper left behind on Windows (or a `.ps1` inspected from a test on
+// Linux) classified as ours — a wrapper we no longer recognise is one Remove
+// leaves behind as if it were the user's own (waired-agent#787).
+func classifyStatusLine(m map[string]json.RawMessage) (StatusLineKind, string) {
 	raw, ok := m[statuslineKey]
 	if !ok {
 		return StatusLineNone, ""
@@ -199,28 +344,34 @@ func classifyStatusLine(home string, m map[string]json.RawMessage) (StatusLineKi
 	switch {
 	case strings.Contains(cmd, statuslineMarker):
 		return StatusLineOurs, cmd
-	case cmd == statuslineWrapperPath(home) || strings.Contains(cmd, statuslineWrapper):
+	case strings.Contains(cmd, statuslineWrapperStem):
 		return StatusLineWrapped, cmd
-	case cmd == "":
-		return StatusLineForeign, cmd
 	default:
 		return StatusLineForeign, cmd
 	}
 }
 
-func ourStatusLineRaw() json.RawMessage {
-	b, _ := json.Marshal(statusLineObj{Type: "command", Command: statuslineRenderCommand})
+func ourStatusLineRaw(goos string) json.RawMessage {
+	b, _ := json.Marshal(statusLineObj{Type: "command", Command: statuslineRenderCommandFor(goos)})
 	return b
 }
 
-func wrapperStatusLineRaw(home string) json.RawMessage {
-	b, _ := json.Marshal(statusLineObj{Type: "command", Command: statuslineWrapperPath(home)})
+func wrapperStatusLineRaw(goos, home string) json.RawMessage {
+	cmd := statuslineWrapperCommandFor(goos, statuslineWrapperPathFor(goos, home))
+	b, _ := json.Marshal(statusLineObj{Type: "command", Command: cmd})
 	return b
 }
 
-// writeWrapperScript writes the .orig command store and the executable wrapper
-// script that runs the user's original statusline and appends waired's segment.
-func writeWrapperScript(home, origCommand string) error {
+// writeWrapperScript writes the .orig command store and the wrapper script that
+// runs the user's original statusline and appends waired's segment, in the
+// language goos can execute. Any wrapper left over from the other OS's spelling
+// is swept, so a rewrapped host is not left with two scripts and no way to tell
+// which one settings.json points at.
+//
+// The 0o755 mode matters only on the Unixes; on Windows a .ps1 is gated by the
+// execution policy (which the wrapper command bypasses per process), not by a
+// mode bit.
+func writeWrapperScript(goos, home, origCommand string) error {
 	dir := filepath.Join(home, ".claude")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("claudecode: mkdir %s: %w", dir, err)
@@ -228,23 +379,35 @@ func writeWrapperScript(home, origCommand string) error {
 	if err := secrets.WriteFile(statuslineOrigPath(home), []byte(origCommand+"\n"), secrets.NonSecret); err != nil {
 		return fmt.Errorf("claudecode: write %s: %w", statuslineOrigPath(home), err)
 	}
-	dst := statuslineWrapperPath(home)
+	dst := statuslineWrapperPathFor(goos, home)
 	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, []byte(wrapperScript), 0o755); err != nil {
+	if err := os.WriteFile(tmp, []byte(wrapperScriptFor(goos)), 0o755); err != nil {
 		return fmt.Errorf("claudecode: write %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		return fmt.Errorf("claudecode: rename %s -> %s: %w", tmp, dst, err)
 	}
+	for _, other := range []string{"windows", "linux"} {
+		if p := statuslineWrapperPathFor(other, home); p != dst {
+			_ = os.Remove(p)
+		}
+	}
 	return nil
 }
 
-// wrapperScript feeds the statusline stdin JSON to both the user's original
+func wrapperScriptFor(goos string) string {
+	if goos == "windows" {
+		return wrapperScriptPS1
+	}
+	return wrapperScriptSh
+}
+
+// wrapperScriptSh feeds the statusline stdin JSON to both the user's original
 // command and `waired claude statusline`, appending waired's segment. It reads
 // the original from the sibling .orig file (avoiding shell-quoting hazards) and
 // self-guards on `command -v waired` so an uninstall degrades to just the
 // original output.
-const wrapperScript = `#!/bin/sh
+const wrapperScriptSh = `#!/bin/sh
 # waired-managed Claude Code statusline wrapper (#580).
 # waired runs your original statusline and appends its routing segment.
 # Restore/remove with: waired claude statusline remove   (or  waired claude disable)
@@ -261,6 +424,42 @@ if command -v waired >/dev/null 2>&1; then
 	fi
 fi
 printf '%s' "$_out"
+`
+
+// wrapperScriptPS1 is wrapperScriptSh's Windows counterpart: same contract —
+// the original's output, two spaces, waired's segment, no trailing newline, and
+// just the original's output when waired is gone.
+//
+// It runs the preserved original in the shell its author wrote it for. Claude
+// Code itself resolves Git Bash first and PowerShell second on Windows, so a
+// statusLine already on the machine was authored against whichever of the two
+// that machine has; guessing the other one would run it in a shell that cannot
+// parse it. Reading stdin via [Console]::In rather than the `$input` automatic
+// variable is deliberate — `$input` is consumed by the first enumeration and is
+// empty for the second command.
+const wrapperScriptPS1 = `# waired-managed Claude Code statusline wrapper (waired-agent#787).
+# waired runs your original statusline and appends its routing segment.
+# Restore/remove with: waired claude statusline remove   (or  waired claude disable)
+# Your original command is preserved in waired-statusline.orig and in
+# settings.json under "waired_original_statusLine".
+$ErrorActionPreference = 'SilentlyContinue'
+$dir = Split-Path -Parent $PSCommandPath
+$orig = (Get-Content -LiteralPath (Join-Path $dir 'waired-statusline.orig') -Raw)
+$payload = [Console]::In.ReadToEnd()
+$out = ''
+if ($orig) {
+	$orig = $orig.Trim()
+	$bash = Get-Command bash.exe -ErrorAction SilentlyContinue
+	if ($bash) { $out = ($payload | & $bash.Path -c $orig) -join "` + "`" + `n" }
+	else { $out = ($payload | & { Invoke-Expression $orig }) -join "` + "`" + `n" }
+}
+if (Get-Command waired -ErrorAction SilentlyContinue) {
+	$seg = ($payload | & waired claude statusline) -join "` + "`" + `n"
+	if ($seg) {
+		if ($out) { $out = "$out  $seg" } else { $out = $seg }
+	}
+}
+[Console]::Out.Write($out)
 `
 
 func readSettings(path string) (map[string]json.RawMessage, error) {

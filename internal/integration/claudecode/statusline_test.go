@@ -40,8 +40,8 @@ func TestInstallStatusLineInjectsWhenAbsent(t *testing.T) {
 	if res.Action != "injected" {
 		t.Errorf("Action = %q, want injected", res.Action)
 	}
-	if got := statusLineCmd(t, home); got != statuslineRenderCommand {
-		t.Errorf("statusLine.command = %q, want %q", got, statuslineRenderCommand)
+	if got := statusLineCmd(t, home); got != statuslineRenderCommandFor(runtime.GOOS) {
+		t.Errorf("statusLine.command = %q, want %q", got, statuslineRenderCommandFor(runtime.GOOS))
 	}
 	kind, _, err := DetectStatusLine(home)
 	if err != nil || kind != StatusLineOurs {
@@ -86,7 +86,7 @@ func TestInstallStatusLineIdempotent(t *testing.T) {
 	if res.Action != "refreshed" {
 		t.Errorf("second install Action = %q, want refreshed", res.Action)
 	}
-	if got := statusLineCmd(t, home); got != statuslineRenderCommand {
+	if got := statusLineCmd(t, home); got != statuslineRenderCommandFor(runtime.GOOS) {
 		t.Errorf("command drifted: %q", got)
 	}
 }
@@ -133,14 +133,19 @@ func TestInstallStatusLineWrapAndRestore(t *testing.T) {
 	if res.Action != "wrapped" {
 		t.Fatalf("Action = %q, want wrapped", res.Action)
 	}
-	if got := statusLineCmd(t, home); got != statuslineWrapperPath(home) {
-		t.Errorf("statusLine.command = %q, want wrapper path", got)
+	// The command is not the wrapper's path on every OS: since waired-agent#787
+	// Windows runs the wrapper through powershell.exe rather than naming the
+	// script directly, so the expectation has to come from the same renderer the
+	// product uses.
+	wantWrapperCmd := statuslineWrapperCommandFor(runtime.GOOS, statuslineWrapperPathFor(runtime.GOOS, home))
+	if got := statusLineCmd(t, home); got != wantWrapperCmd {
+		t.Errorf("statusLine.command = %q, want %q", got, wantWrapperCmd)
 	}
 	// Wrapper artifacts exist and are executable. The exec bit is a Unix
 	// concept — Windows decides executability from the extension and reports
 	// every file as 0666 — so only its existence is asserted there
 	// (same reading as adapter_test.go's exec-bit skips, #216).
-	if fi, err := os.Stat(statuslineWrapperPath(home)); err != nil {
+	if fi, err := os.Stat(statuslineWrapperPathFor(runtime.GOOS, home)); err != nil {
 		t.Fatalf("wrapper missing: %v", err)
 	} else if runtime.GOOS != "windows" && fi.Mode().Perm()&0o100 == 0 {
 		t.Errorf("wrapper not executable: %v", fi.Mode())
@@ -171,7 +176,7 @@ func TestInstallStatusLineWrapAndRestore(t *testing.T) {
 	if _, ok := readSettingsMap(t, home)[statuslineStashKey]; ok {
 		t.Error("stash key survived restore")
 	}
-	if _, err := os.Stat(statuslineWrapperPath(home)); !os.IsNotExist(err) {
+	if _, err := os.Stat(statuslineWrapperPathFor(runtime.GOOS, home)); !os.IsNotExist(err) {
 		t.Error("wrapper script survived restore")
 	}
 }

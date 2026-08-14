@@ -81,6 +81,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -165,6 +166,22 @@ var ErrUnsupportedOS = errors.New("claudemanaged: no managed-settings path for t
 var pathResolver = managedSettingsPath
 
 func resolvePath() string { return pathResolver() }
+
+// SwapPathForTest redirects the managed-settings path for the caller's tests and
+// returns the restore function.
+//
+// It exists because the file is machine-global: a package outside this one that
+// reads Path() reads the developer's real /etc/claude-code (or
+// %ProgramFiles%\ClaudeCode) file, which is the shape of hidden dependency #386
+// set out to end — a clean CI runner hides it, and the test only misbehaves on
+// the machine editing the code. Seal it in a package's TestMain, not per test.
+// Same contract as securestore.SwapStoreForTest and
+// download.SwapCandidatesForTest.
+func SwapPathForTest(path string) (restore func()) {
+	prev := pathResolver
+	pathResolver = func() string { return path }
+	return func() { pathResolver = prev }
+}
 
 // Path returns the absolute managed-settings.json path for this OS, or "" when
 // unsupported.
@@ -291,8 +308,9 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	obj["env"] = env
 
 	// Install the Stop hook (#580) so a post-dispatch fallback is visible in the
-	// Claude Code TUI. Rides the same merge-safe write as the base URL.
-	ensureStopHook(obj)
+	// Claude Code TUI. Rides the same merge-safe write as the base URL. The
+	// command it writes is per-OS (waired-agent#787) — see fallbackHookCommandFor.
+	ensureStopHook(runtime.GOOS, obj)
 
 	data, err := json.MarshalIndent(obj, "", "  ")
 	if err != nil {
@@ -303,6 +321,69 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 		return "", fmt.Errorf("claudemanaged: write %s: %w", path, err)
 	}
 	return path, nil
+}
+
+// SetMaxContextTokens writes env.CLAUDE_CODE_MAX_CONTEXT_TOKENS into an
+// EXISTING managed-settings file, leaving every other key — the base URL, the
+// discovery flag, the subagent label, hooks.Stop, and whatever an operator or an
+// MDM put there — exactly as it found them. It reports whether the file was
+// rewritten.
+//
+// It exists because the browser wizard applies the Claude Code route BEFORE the
+// model download (waired-agent#311 moved it there deliberately: the one step
+// that needs a person should not sit behind the longest unattended wait). At
+// that moment there is no serving model, so WriteOptions.LocalContextWindow is
+// 0, Write correctly declines to guess — a stale honest number beats a fresh
+// guess — and the key is simply absent. `waired claude status` then reported
+// "(managed settings: not set)" on every wizard-driven install
+// (waired-agent#796). This is the top-up once the model is ready and /v1/models
+// can answer, not a change to that declining.
+//
+// Deliberately narrow: it never creates the file (a host that was never routed
+// gets nothing), never writes a base URL or a hook, does nothing for a window
+// <= 0, and does nothing when the file already carries that exact value.
+func SetMaxContextTokens(window int) (bool, error) {
+	return SetMaxContextTokensAt(resolvePath(), window)
+}
+
+// SetMaxContextTokensAt is SetMaxContextTokens against an explicit path, the
+// #604 reason ViewAt exists: a caller outside this package must be able to point
+// it somewhere other than the real root-owned file.
+func SetMaxContextTokensAt(path string, window int) (bool, error) {
+	if path == "" || window <= 0 {
+		return false, nil
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("claudemanaged: read %s: %w", path, err)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(b, &obj); err != nil || obj == nil {
+		// An operator's unparseable file is not ours to rewrite; the same
+		// posture every other reader here takes.
+		return false, nil
+	}
+	env, _ := obj["env"].(map[string]any)
+	if env == nil {
+		env = map[string]any{}
+	}
+	want := strconv.Itoa(window)
+	if cur, ok := env[maxContextTokensKey].(string); ok && cur == want {
+		return false, nil
+	}
+	env[maxContextTokensKey] = want
+	obj["env"] = env
+	data, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("claudemanaged: marshal: %w", err)
+	}
+	if err := secrets.WriteFile(path, append(data, '\n'), secrets.NonSecret); err != nil {
+		return false, fmt.Errorf("claudemanaged: write %s: %w", path, err)
+	}
+	return true, nil
 }
 
 // Remove is RemoveWithOptions with no resolved local window — the caller

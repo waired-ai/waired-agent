@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/platform/securestore"
 )
 
@@ -33,6 +34,14 @@ import (
 //     exactly once per machine, then failed forever after. All three
 //     variables are pointed at one temp dir so the same hole cannot open
 //     on a different OS.
+//
+//   - The Claude Code managed-settings path. It is machine-global
+//     (/etc/claude-code, /Library/Application Support/ClaudeCode,
+//     %ProgramFiles%\ClaudeCode), and since waired-agent#796 init's closing card
+//     reads it to decide what to say about Claude Code routing. Unsealed, this
+//     package's tests would answer that question from whatever the developer's
+//     own machine has — green on a clean runner, and differently wrong on the
+//     machine editing the code, which is exactly #386's shape.
 //
 //   - The ASCII fold (ascii.go). Whether output is rewritten depends on the
 //     host OS and its console code page, so the same assertion on a printed
@@ -68,6 +77,11 @@ func runTests(m *testing.M) int {
 	os.Setenv("HOME", home)
 	os.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	os.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
+	// Under the sealed home, so a test that writes one gets a fresh tree and
+	// nothing lands in the real machine-wide location.
+	restorePath := claudemanaged.SwapPathForTest(
+		filepath.Join(home, "claude-code", "managed-settings.json"))
+	defer restorePath()
 
 	mgmtWriteBase = ""
 	off := false

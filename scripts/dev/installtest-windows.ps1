@@ -258,6 +258,7 @@ $script:ContractBlocking = @{
     '579' = $true    # waired-agent#579: the host-speed measurement reaches a verdict inside init's window (FIXED)
     '660' = $true    # waired-agent#660: uninstall verifies its own deletes instead of reporting success over them (FIXED)
     '630' = $true    # waired-agent#630: uninstall.ps1 existence-gates its steps the way uninstall.sh does (FIXED)
+    '787' = $true    # waired-agent#787: the Claude Code Stop hook and statusLine are written for a shell Windows has (FIXED)
 }
 $script:Warn = 0
 $script:WarnLines = @()
@@ -2445,7 +2446,7 @@ if ($Contract) {
     try {
         $waired = Join-Path $InstallDir 'waired.exe'
 
-        ItStep "contract asserts (waired#749/#751/#755) -- soft until each fix merges"
+        ItStep "contract asserts (waired#749/#751/#755, waired-agent#787) -- soft until each fix merges"
 
         # Relax EAP around the native calls below: they redirect stderr
         # (*>), and under EAP=Stop PS 5.1 turns redirected native stderr
@@ -2491,6 +2492,31 @@ if ($Contract) {
         $msOk = (Test-Path -LiteralPath $ms) -and
                 ((Get-Content -LiteralPath $ms -Raw -ErrorAction SilentlyContinue) -match 'ANTHROPIC_BASE_URL')
         ItSoft '749' $msOk "waired claude enable (exit $claudeEnableExit) writes $ms with ANTHROPIC_BASE_URL"
+
+        # (waired-agent#787) Both entries must be written for a shell this OS
+        # actually has. Claude Code passes a hook command to `sh -c` on the
+        # Unixes but on Windows to Git Bash when Git Bash is installed and to
+        # PowerShell when it is not, and the statusLine has no shell selector at
+        # all -- so the POSIX one-liners waired used to write were inert on any
+        # Windows host without Git Bash, while `waired claude status` reported
+        # both installed.
+        $msRaw = Get-Content -LiteralPath $ms -Raw -ErrorAction SilentlyContinue
+        $userSettings = Join-Path $env:USERPROFILE '.claude\settings.json'
+        $slRaw = Get-Content -LiteralPath $userSettings -Raw -ErrorAction SilentlyContinue
+        ItSoft '787' ([bool]($msRaw -match '"command"\s*:\s*"waired claude _fallback-hook"')) `
+            "managed-settings Stop hook is the bare Windows command" -Repo 'waired-agent'
+        ItSoft '787' ([bool]($slRaw -and ($slRaw -match '"command"\s*:\s*"waired claude statusline"'))) `
+            "statusLine in $userSettings is the bare Windows command" -Repo 'waired-agent'
+        # Anti-vacuity: neither of the two above may pass because the file
+        # simply has no waired content in it.
+        ItSoft '787' (-not (($msRaw + $slRaw) -match 'command -v waired')) `
+            "no POSIX ``command -v waired`` guard survives on Windows" -Repo 'waired-agent'
+        # The reporting half of the same issue: status must not call a command
+        # it cannot run plain "installed".
+        & $waired claude status --state-dir $StateDir *> (Join-Path $Work 'claude-status-787.log')
+        $stRaw = Get-Content -LiteralPath (Join-Path $Work 'claude-status-787.log') -Raw -ErrorAction SilentlyContinue
+        ItSoft '787' (-not ($stRaw -match 'not in the form this computer runs')) `
+            "waired claude status reports the hook and statusline as runnable here" -Repo 'waired-agent'
 
         # (#755) the install path must surface the tray: an autostart
         # registration (HKCU Run value 'waired-tray') or a Start Menu group.

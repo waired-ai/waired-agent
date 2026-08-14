@@ -6,10 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/waired-ai/waired-agent/internal/integration/claudemanaged"
 	"github.com/waired-ai/waired-agent/internal/management"
 	"github.com/waired-ai/waired-agent/proto/signer"
 )
@@ -289,5 +293,68 @@ func TestApplySetupIntegrations_NonElevatedClaudeCodeIsNotAnError(t *testing.T) 
 	}
 	if !strings.Contains(out.String(), "needs elevation") {
 		t.Errorf("expected the elevation hint, got:\n%s", out.String())
+	}
+}
+
+// PRODUCT CONTRACT (waired-agent#796): the closing card reports whether Claude
+// Code is routed on this machine — not whether THIS run performed the routing.
+//
+// The verdict used to be a local bool assigned only inside `if !setupActive`,
+// so a browser-wizard install — the path every real install takes — closed by
+// reporting Claude Code still on the Anthropic API over a machine its own
+// wizard had just routed, while `waired claude status` seconds later reported
+// it routed. The campaign saw it on all three OSes.
+//
+// What this pins is the structural property the fix installs: with the
+// terminal's routing block skipped (asserted, not assumed), the card still
+// answers from managed settings. --skip-claude-route is the cheap way to skip
+// that block; the wizard's own path skips it for a different reason and is
+// covered by TestApplySetupIntegrations_OnlyClaudeCodeRoutes.
+func TestRunInitViaDaemon_CardReportsRoutingThisRunDidNotPerform(t *testing.T) {
+	setBenchTiming(t, time.Millisecond, 5*time.Second, time.Minute)
+	shrinkSetupTimers(t)
+	stateDir := hermeticHome(t)
+	pinElevated(t, true)
+	rec := stubApplyClaudeRoute(t, nil)
+	srv := signedInDaemon(t)
+
+	// What another surface — the browser wizard's applier, or an earlier
+	// `waired claude enable` — left on disk. Written directly, because the
+	// whole point is that this run's routing block does not run.
+	baseURL, _ := claudeBaseURL(stateDir)
+	path := claudemanaged.Path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"env":{"ANTHROPIC_BASE_URL":` + strconv.Quote(baseURL) + `}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	out := captureStdout(t, func() {
+		if err := runInitViaDaemon(daemonInitOpts{
+			MgmtURL: srv.URL, Control: "https://cp.example", DeviceName: "dev-1",
+			GatewayBaseURL:  "http://127.0.0.1:9473",
+			StateDir:        stateDir,
+			NoBrowser:       true,
+			NonInteractive:  true,
+			SkipClaudeRoute: true,
+		}); err != nil {
+			t.Fatalf("runInitViaDaemon: %v", err)
+		}
+	})
+
+	// Anti-vacuity: if this run had routed, the card would have been right for
+	// the old reason and the test would prove nothing.
+	if rec.count() != 0 {
+		t.Fatalf("this run routed %d times; the scenario is a run that did not\n---\n%s",
+			rec.count(), out)
+	}
+	if !strings.Contains(out, "routed through Waired") {
+		t.Errorf("closing card denies routing this machine has\n---\n%s", out)
+	}
+	if strings.Contains(out, "still using the Anthropic API") {
+		t.Errorf("closing card contradicts itself\n---\n%s", out)
 	}
 }
