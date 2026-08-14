@@ -133,8 +133,13 @@ func TestInstallStatusLineWrapAndRestore(t *testing.T) {
 	if res.Action != "wrapped" {
 		t.Fatalf("Action = %q, want wrapped", res.Action)
 	}
-	if got := statusLineCmd(t, home); got != statuslineWrapperPathFor(runtime.GOOS, home) {
-		t.Errorf("statusLine.command = %q, want wrapper path", got)
+	// The command is not the wrapper's path on every OS: since waired-agent#787
+	// Windows runs the wrapper through powershell.exe rather than naming the
+	// script directly, so the expectation has to come from the same renderer the
+	// product uses.
+	wantWrapperCmd := statuslineWrapperCommandFor(runtime.GOOS, statuslineWrapperPathFor(runtime.GOOS, home))
+	if got := statusLineCmd(t, home); got != wantWrapperCmd {
+		t.Errorf("statusLine.command = %q, want %q", got, wantWrapperCmd)
 	}
 	// Wrapper artifacts exist and are executable. The exec bit is a Unix
 	// concept — Windows decides executability from the extension and reports
