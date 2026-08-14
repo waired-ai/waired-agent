@@ -206,6 +206,23 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	}
 	const totalStages = 5
 
+	// Keep uv's managed interpreter inside BaseDir (waired-agent#778).
+	//
+	// `uv venv --python <ver>` materialises an interpreter under
+	// $UV_PYTHON_INSTALL_DIR — default ~/.local/share/uv/python — and points
+	// the venv's bin/python at it by SYMLINK. This installer runs elevated,
+	// so on Linux that default resolves inside /root, which is 0700: the
+	// unprivileged daemon user cannot follow the symlink, Active()'s
+	// os.Stat fails, and a complete venv reads as "no install" for the life
+	// of the host. Under BaseDir the interpreter is inside the state dir the
+	// executor hands to the service user (service.FixStateOwnership), so the
+	// same chown that covers the venv covers what it points at.
+	//
+	// Passed to every stage that can materialise or resolve an interpreter,
+	// not just the venv creation: one stage without it is one stage that can
+	// still reach into the home directory.
+	uvEnv := []string{"UV_PYTHON_INSTALL_DIR=" + filepath.Join(i.BaseDir, "python")}
+
 	// Stage 1: resolve uv.
 	onProgress(InstallProgress{Stage: StageResolveUV, Step: 1, Total: totalStages, Percent: -1, Message: "resolving uv binary..."})
 	uvBin, err := i.UV.Resolve(ctx, "")
@@ -224,7 +241,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// `uv venv --python 3.12 <dir>` creates a fresh venv. If <dir>
 	// already exists with the same interpreter, uv exits successfully
 	// without rebuilding, which gives us idempotency for free.
-	if err := i.runCapturing(ctx, uvBin, []string{"venv", "--python", py, venvDir}, nil, onProgress, StageCreateVenv, 2, totalStages, nil); err != nil {
+	if err := i.runCapturing(ctx, uvBin, []string{"venv", "--python", py, venvDir}, uvEnv, onProgress, StageCreateVenv, 2, totalStages, nil); err != nil {
 		i.maybeRollback(versionDir, opts.KeepFailed)
 		return InstallResult{}, fmt.Errorf("vllm install: uv venv: %w", err)
 	}
@@ -278,7 +295,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 		TransformersConstraint,
 	}
 	pipArgs = append(pipArgs, opts.ExtraPipPackages...)
-	if err := i.runCapturing(ctx, uvBin, pipArgs, nil, onProgress, StagePipInstall, 3, totalStages, pipBytes); err != nil {
+	if err := i.runCapturing(ctx, uvBin, pipArgs, uvEnv, onProgress, StagePipInstall, 3, totalStages, pipBytes); err != nil {
 		i.maybeRollback(versionDir, opts.KeepFailed)
 		return InstallResult{}, fmt.Errorf("vllm install: uv pip install: %w", err)
 	}
@@ -286,7 +303,7 @@ func (i *VLLMInstaller) Install(ctx context.Context, opts InstallOpts, onProgres
 	// Stage 4: verify.
 	onProgress(InstallProgress{Stage: StageVerify, Step: 4, Total: totalStages, Percent: -1, Message: "verifying: vllm and torch import, the GPU is usable, and the venv can download weights..."})
 	pythonBin := filepath.Join(venvDir, "bin", "python")
-	if err := i.runCapturing(ctx, pythonBin, []string{"-c", VLLMVerifyImports}, nil, onProgress, StageVerify, 4, totalStages, nil); err != nil {
+	if err := i.runCapturing(ctx, pythonBin, []string{"-c", VLLMVerifyImports}, uvEnv, onProgress, StageVerify, 4, totalStages, nil); err != nil {
 		i.maybeRollback(versionDir, opts.KeepFailed)
 		return InstallResult{}, fmt.Errorf("vllm install: verify: %w", err)
 	}
@@ -328,26 +345,64 @@ func (i *VLLMInstaller) Uninstall(_ context.Context, version string) error {
 	return nil
 }
 
-// Active reads the `current` symlink and returns the active install,
-// or ok=false when no install is active.
+// ErrVLLMNotInstalled means there is genuinely no active install here —
+// no `current` symlink, or nothing behind it. It is the ONLY error that
+// means "install it"; every other error from ActiveErr describes an
+// install that exists and cannot be used as-is.
+var ErrVLLMNotInstalled = errors.New("runtime: no active vLLM install")
+
+// Active reads the `current` symlink and returns the active install, or
+// ok=false when no install is usable. The boolean façade over ActiveErr,
+// kept because most callers only branch on "can I serve on vLLM".
+//
+// Callers that REPORT to a person should prefer ActiveErr: ok=false here
+// covers both "absent" and "present but this process cannot read it", and
+// those want opposite advice.
 func (i *VLLMInstaller) Active() (InstallResult, bool) {
-	target, err := os.Readlink(filepath.Join(i.BaseDir, "current"))
+	res, err := i.ActiveErr()
+	return res, err == nil
+}
+
+// ActiveErr is Active with the reason it said no.
+//
+// The distinction exists because collapsing it cost a whole rc9
+// verification cycle (waired-agent#778): the venv was complete, but its
+// bin/python symlinked into the installing root user's home, so the
+// unprivileged daemon's os.Stat failed with EACCES. That is indistinguishable
+// from ENOENT through a bool, so the engine decision reported "no engine
+// viable", the setup projection reported engine_installed=false, and
+// `waired init` waited forever for an engine that was already on disk.
+// Same shape as #67, where a probe that could not run answered "no GPU".
+func (i *VLLMInstaller) ActiveErr() (InstallResult, error) {
+	link := filepath.Join(i.BaseDir, "current")
+	target, err := os.Readlink(link)
 	if err != nil {
-		return InstallResult{}, false
+		if os.IsNotExist(err) {
+			return InstallResult{}, fmt.Errorf("%w (no %s)", ErrVLLMNotInstalled, link)
+		}
+		return InstallResult{}, fmt.Errorf("runtime: cannot read %s: %w", link, err)
 	}
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(i.BaseDir, target)
 	}
 	venv := filepath.Join(target, ".venv")
-	if _, err := os.Stat(filepath.Join(venv, "bin", "python")); err != nil {
-		return InstallResult{}, false
+	python := filepath.Join(venv, "bin", "python")
+	if _, err := os.Stat(python); err != nil {
+		if os.IsNotExist(err) {
+			return InstallResult{}, fmt.Errorf("%w (no interpreter at %s)", ErrVLLMNotInstalled, python)
+		}
+		// Present but unusable. Name the running user: on the daemon this
+		// is the service account, and "root installed it, waired cannot
+		// read it" is the whole diagnosis in one line.
+		return InstallResult{}, fmt.Errorf(
+			"runtime: vLLM is installed but this process (uid %d) cannot use %s: %w",
+			os.Geteuid(), python, err)
 	}
-	version := filepath.Base(target)
 	return InstallResult{
-		Version:  version,
+		Version:  filepath.Base(target),
 		VenvPath: venv,
 		BinDir:   filepath.Join(venv, "bin"),
-	}, true
+	}, nil
 }
 
 // runCapturing runs binary with args, forwarding parsed progress

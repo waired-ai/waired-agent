@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,11 +31,20 @@ type scriptedRunner struct {
 type scriptedCall struct {
 	binary string
 	args   []string
+	// env is RECORDED, not dropped. It used to be `_ = env`, which made
+	// waired-agent#778 unwritable as a test: the defect was an environment
+	// variable the installer did not set, and a fake that discards the
+	// parameter cannot fail on it (CLAUDE.md §Test discipline — "a fake that
+	// drops a parameter is a defect: it makes the failing case unwritable").
+	env []string
 }
 
 func (r *scriptedRunner) Run(_ context.Context, binary string, args, env []string, onLine func(string)) error {
-	c := scriptedCall{binary: binary, args: append([]string(nil), args...)}
-	_ = env
+	c := scriptedCall{
+		binary: binary,
+		args:   append([]string(nil), args...),
+		env:    append([]string(nil), env...),
+	}
 	r.calls = append(r.calls, c)
 	if len(args) >= 2 && args[0] == "venv" {
 		// `uv venv ... --python <py> <dir>` (last arg is the venv dir
@@ -48,6 +58,97 @@ func (r *scriptedRunner) Run(_ context.Context, binary string, args, env []strin
 		onLine(l)
 	}
 	return err
+}
+
+// The venv's interpreter must live inside BaseDir, not in the installing
+// user's home.
+//
+// PRODUCT CONTRACT — waired-agent#778. `uv venv --python <ver>` downloads a
+// managed interpreter into $UV_PYTHON_INSTALL_DIR (default
+// ~/.local/share/uv/python) and SYMLINKS the venv's bin/python at it. The
+// installer runs elevated, so on Linux that default is /root/.local/share,
+// and /root is 0700: the unprivileged daemon user cannot follow the symlink.
+// Active() then fails its os.Stat and answers "no install" on a host whose
+// venv is complete — which is the whole of #778. Reproduced on real hardware
+// 2026-08-14 (evidence: verify-20260815-l56/sv-mag/M3repro/00-FINDING.md).
+//
+// Pointing UV_PYTHON_INSTALL_DIR inside BaseDir puts the interpreter under
+// the state dir, where the executor's ownership hand-off
+// (service.FixStateOwnership -> chownRecursive) already reaches it.
+func TestVLLMInstall_PutsThePythonInstallDirUnderBaseDir(t *testing.T) {
+	dir := t.TempDir()
+	uvDir := t.TempDir()
+	uvBin := filepath.Join(uvDir, "uv")
+	if err := os.WriteFile(uvBin, []byte("#!/bin/sh\necho 0.11.8\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := &scriptedRunner{t: t, respond: func(scriptedCall) ([]string, error) {
+		return []string{"ok"}, nil
+	}}
+	inst := &VLLMInstaller{BaseDir: dir, UV: &UVResolver{BinDir: uvDir}, Runner: r, Now: fakeNow}
+
+	if _, err := inst.Install(context.Background(), InstallOpts{Version: "0.11.0"}, nil); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	want := "UV_PYTHON_INSTALL_DIR=" + filepath.Join(dir, "python")
+	// Every stage that can materialise or resolve an interpreter has to
+	// carry it: the venv creation downloads it, and pip/verify resolve
+	// through the same interpreter. One stage missing it is one stage that
+	// can still reach into the home directory.
+	for _, c := range r.calls {
+		if !slices.Contains(c.env, want) {
+			t.Errorf("call %s %v ran without %s (env=%v)", c.binary, c.args, want, c.env)
+		}
+	}
+	if len(r.calls) == 0 {
+		t.Fatal("no subprocess calls recorded")
+	}
+}
+
+// Active() must not report "no install" for a venv it simply cannot read.
+//
+// PRODUCT CONTRACT — waired-agent#778. "absent" and "present but not
+// readable by this user" are different answers, and only the first means
+// "install it". Collapsing them is what made the rc9 host wait forever: the
+// engine decision said "no engine viable", the setup projection said
+// engine_installed=false, and init's arrival predicate therefore never armed
+// its grace — all from one os.Stat that failed with EACCES rather than
+// ENOENT. Same shape as #67, where a missing probe answered "no GPU"
+// instead of erroring.
+func TestVLLMActive_UnreadableVenvIsNotReportedAsAbsent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits do not deny root, so this case is unreachable")
+	}
+	base := t.TempDir()
+	venvBin := filepath.Join(base, "0.11.0", ".venv", "bin")
+	if err := os.MkdirAll(venvBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(venvBin, "python"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("0.11.0", filepath.Join(base, "current")); err != nil {
+		t.Fatal(err)
+	}
+	// Deny traversal of the bin dir: the interpreter is there, we just
+	// cannot reach it — the shape a /root-owned symlink target produces.
+	if err := os.Chmod(venvBin, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(venvBin, 0o755) })
+
+	inst := NewVLLMInstallerAt(base)
+	res, err := inst.ActiveErr()
+	if err == nil {
+		t.Fatalf("ActiveErr returned no error for an unreadable venv (res=%+v)", res)
+	}
+	if errors.Is(err, ErrVLLMNotInstalled) {
+		t.Errorf("an unreadable venv was reported as not installed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "python") {
+		t.Errorf("error %q does not name what could not be read", err)
+	}
 }
 
 func TestVLLMInstall_HappyPath(t *testing.T) {
