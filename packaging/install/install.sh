@@ -626,6 +626,20 @@ version_to_deb() {
     printf '%s' "$s" | tr '-' '~'
 }
 
+# apt_has_version <pkg> <version> — true when that exact version is in the
+# package index this host has downloaded. Read-only and root-free, like the
+# `apt-cache policy` the update check already runs. madison prints one
+# "<pkg> | <version> | <source>" row per available version.
+apt_has_version() {
+    apt-cache madison "$1" 2>/dev/null | awk -F'|' -v want="$2" '
+        {
+            v = $2
+            gsub(/^[ \t]+|[ \t]+$/, "", v)
+            if (v == want) { found = 1 }
+        }
+        END { exit !found }'
+}
+
 # channel_from_env — stable | edge | <explicit pin>, from WAIRED_VERSION.
 channel_from_env() {
     case "${WAIRED_VERSION:-}" in
@@ -710,17 +724,44 @@ release_tag_for_pin() {
 # candidate. Crucially this keeps `WAIRED_VERSION=edge` a *channel*
 # selector rather than a literal apt version (`waired=edge` would 404).
 #
-# The pin is translated to the .deb spelling. An operator writes the pin
-# the way the release is named — `WAIRED_VERSION=0.0.3-rc1`, matching the
-# tag and what `waired version` prints — but apt holds `0.0.3~rc1`
-# (waired-agent#780), and `waired=0.0.3-rc1` is simply not a version that
-# exists. Both spellings are accepted here, with or without the tag's
-# leading `v`.
+# An operator writes the pin the way the release is named —
+# `WAIRED_VERSION=0.0.3-rc1`, matching the tag and what `waired version`
+# prints — with or without the tag's leading `v`. What apt holds is the
+# .deb spelling, `0.0.3~rc1` (waired-agent#780).
+#
+# The translation cannot be applied blind, because BOTH spellings are live
+# in the one suite: everything published from v0.0.3-rc1 on carries the
+# `~`, everything before it carries the `-`, and the older packages were
+# not renamed. Translating unconditionally made every already-published
+# release unpinnable — `E: Version '0.0.1~rc10' for 'waired' was not
+# found` (waired-agent#811). So resolve it against the index instead:
+# prefer the `~` spelling, fall back to the operator's literal string when
+# only that exists, and when neither is there send the `~` form so apt
+# names the version they most likely meant.
+#
+# The probe asks about `waired` only. waired-tray is published from the
+# same build with the same version, and a pin that is wrong for one is
+# wrong for both.
 apt_version_pin() {
     case "$(channel_from_env)" in
         stable|edge) printf '' ;;
-        *)           version_to_deb "$WAIRED_VERSION" ;;  # explicit pin
+        *)           apt_pin_for_release "$WAIRED_VERSION" ;;  # explicit pin
     esac
+}
+
+# apt_pin_for_release <pin> — see apt_version_pin.
+apt_pin_for_release() {
+    _pin_raw="${1#v}"
+    _pin_deb="$(version_to_deb "$_pin_raw")"
+    if [ "$_pin_deb" = "$_pin_raw" ]; then
+        printf '%s' "$_pin_deb"      # no prerelease: one spelling only
+    elif apt_has_version waired "$_pin_deb"; then
+        printf '%s' "$_pin_deb"
+    elif apt_has_version waired "$_pin_raw"; then
+        printf '%s' "$_pin_raw"
+    else
+        printf '%s' "$_pin_deb"      # neither: let apt report the current form
+    fi
 }
 
 # prompt_update <from> <to> — exit 0 to proceed. Default-YES when a

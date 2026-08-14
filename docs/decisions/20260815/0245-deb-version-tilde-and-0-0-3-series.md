@@ -84,14 +84,39 @@ candidate は `0.0.2-rc8-dev` のまま動かない。まっさらな新規ホ�
   `Compare-WairedVersion`)。順序規則も dpkg のものに揃えた — 詳細と、SemVer §11
   の字句順を採らなかった理由は `internal/version/dotted.go` の `comparePre`。
 - `WAIRED_VERSION` の pin は apt の綴りへ翻訳される。利用者はリリース名の
-  ままで書ける。
+  ままで書ける。ただし**翻訳は無条件に適用できない** — 0.0.2 系を残置した
+  結果、1 つの suite に 2 通りの綴りが同居する。無条件に翻訳したところ
+  公開済み 25 版が pin 不能になった (waired-agent#811)。pin はインデックスの
+  実際の中身に対して解決する (`apt_version_pin` / `apt_has_version`)。
 - 版解決は `scripts/ci/resolve-build-version.sh` に切り出し、自己テストを付けた。
   ワークフローの inline shell はテストで実行できず、それが「ヘッダコメントで
   宣言だけして tag 経路に実装が無い」を 9 リリース許した機構そのものである。
 
+## この決定はまだ実機で確認されていない
+
+**`v0.0.3-rc1` を切る人へ。** 上の順序はすべて `dpkg --compare-versions` に
+対して固定してあるが (`internal/version/dpkg_compat_test.go`、
+`scripts/ci/resolve-build-version-test.sh`)、**固定したのは順序であって、
+apt が実際にその順序で動くところまでは確認していない。** その確認は公開済みの
+`0.0.3~rc1` を前提とするので、タグを切るまで実行できない。
+
+タグ後、stable suite (`waired-dev-apt`) を向いた Linux で:
+
+```sh
+sudo apt-get update
+apt policy waired                            # Candidate が 0.0.3~rc1 になるか
+apt-get install -s --only-upgrade waired     # 前へ進む計画を出すか (simulate)
+waired update --check                        # Latest が一致し、先頭の v が無いか
+```
+
+修正前の同じ形の出力が waired-ai/waired-agent#780 のコメントにあり、
+そこでは `Inst waired [0.0.2-rc9] (0.0.2-rc8-dev ...)` と**後退する計画**を
+出していた。前へ進めばこの決定は閉じる。
+
 ## Refs
 
-- waired-ai/waired-agent#780, waired-ai/waired-agent#781
+- waired-ai/waired-agent#780, waired-ai/waired-agent#781,
+  waired-ai/waired-agent#811 (pin の翻訳を無条件にしたことによる退行)
 - waired-ai/waired#1213 (tracking), waired-ai/waired#1217 (実機検証の記録)
 - `.github/workflows/reusable-build-artifacts.yml`, `scripts/ci/resolve-build-version.sh`
 - `internal/version/dotted.go`
