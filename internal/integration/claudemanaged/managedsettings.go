@@ -81,6 +81,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -291,8 +292,9 @@ func WriteWithOptions(baseURL string, opts WriteOptions) (string, error) {
 	obj["env"] = env
 
 	// Install the Stop hook (#580) so a post-dispatch fallback is visible in the
-	// Claude Code TUI. Rides the same merge-safe write as the base URL.
-	ensureStopHook(obj)
+	// Claude Code TUI. Rides the same merge-safe write as the base URL. The
+	// command it writes is per-OS (waired-agent#787) — see fallbackHookCommandFor.
+	ensureStopHook(runtime.GOOS, obj)
 
 	data, err := json.MarshalIndent(obj, "", "  ")
 	if err != nil {

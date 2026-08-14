@@ -102,7 +102,7 @@ func statusLineAt(home, path string, scope StatusLineScope) (EffectiveStatusLine
 	if _, ok := m[statuslineKey]; !ok {
 		return EffectiveStatusLine{}, false
 	}
-	kind, cmd := classifyStatusLine(home, m)
+	kind, cmd := classifyStatusLine(m)
 	if kind == StatusLineNone {
 		return EffectiveStatusLine{}, false
 	}

@@ -1,8 +1,10 @@
 package claudecode
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -24,9 +26,15 @@ func writeSettingsFixture(t *testing.T, path, command string) {
 	}
 }
 
+// jsonQuote renders s as a JSON string for a seed literal. It marshals rather
+// than wrapping in quotes because since waired-agent#787 the fixtures include
+// Windows paths, whose backslashes have to reach the file escaped.
 func jsonQuote(s string) string {
-	// good enough for fixture commands without quotes/backslashes
-	return `"` + s + `"`
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
 func TestDetectEffectiveStatusLine(t *testing.T) {
@@ -71,7 +79,7 @@ func TestDetectEffectiveStatusLine(t *testing.T) {
 
 	t.Run("project local shadows user", func(t *testing.T) {
 		home, project, nested, managed := newDirs(t)
-		writeSettingsFixture(t, SettingsPath(home), statuslineRenderCommand)
+		writeSettingsFixture(t, SettingsPath(home), statuslineRenderCommandFor(runtime.GOOS))
 		writeSettingsFixture(t, filepath.Join(project, ".claude", "settings.local.json"), "bash ~/.claude/statusline.sh")
 		eff, err := DetectEffectiveStatusLine(home, nested, managed)
 		if err != nil {
@@ -90,7 +98,7 @@ func TestDetectEffectiveStatusLine(t *testing.T) {
 
 	t.Run("project shared shadows user, local wins over shared", func(t *testing.T) {
 		home, project, nested, managed := newDirs(t)
-		writeSettingsFixture(t, SettingsPath(home), statuslineRenderCommand)
+		writeSettingsFixture(t, SettingsPath(home), statuslineRenderCommandFor(runtime.GOOS))
 		writeSettingsFixture(t, filepath.Join(project, ".claude", "settings.json"), "proj-shared")
 		eff, err := DetectEffectiveStatusLine(home, nested, managed)
 		if err != nil {
@@ -125,7 +133,7 @@ func TestDetectEffectiveStatusLine(t *testing.T) {
 
 	t.Run("managed wins over everything", func(t *testing.T) {
 		home, project, nested, managed := newDirs(t)
-		writeSettingsFixture(t, SettingsPath(home), statuslineRenderCommand)
+		writeSettingsFixture(t, SettingsPath(home), statuslineRenderCommandFor(runtime.GOOS))
 		writeSettingsFixture(t, filepath.Join(project, ".claude", "settings.local.json"), "proj-local")
 		writeSettingsFixture(t, managed, "managed-cmd")
 		eff, err := DetectEffectiveStatusLine(home, nested, managed)
@@ -139,7 +147,7 @@ func TestDetectEffectiveStatusLine(t *testing.T) {
 
 	t.Run("waired-owned user statusline is effective when nothing shadows", func(t *testing.T) {
 		home, _, nested, managed := newDirs(t)
-		writeSettingsFixture(t, SettingsPath(home), statuslineRenderCommand)
+		writeSettingsFixture(t, SettingsPath(home), statuslineRenderCommandFor(runtime.GOOS))
 		eff, err := DetectEffectiveStatusLine(home, nested, managed)
 		if err != nil {
 			t.Fatal(err)

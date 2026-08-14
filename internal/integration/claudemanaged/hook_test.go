@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
+	"runtime"
 	"testing"
 )
 
@@ -47,11 +47,23 @@ func TestWriteInstallsStopHook(t *testing.T) {
 	if !StopHookInstalled() {
 		t.Error("StopHookInstalled() = false after Write")
 	}
-	// The command must self-guard on `command -v waired` and reference the hook.
+	// RECORD OF TODAY'S BEHAVIOUR: Write puts THIS host's command shape in the
+	// file. The shape itself is not OS-independent — it used to be asserted here
+	// as a literal `command -v waired` substring, which was only ever true
+	// because the suite runs on Linux, and hid that the same POSIX string was
+	// being written on Windows (waired-agent#787). The per-OS shapes are pinned
+	// as a contract in hook_shell_test.go; this checks the write path reaches
+	// them, and StopHookCommandAt reads back what was written.
 	inner := stop[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)
 	cmd, _ := inner["command"].(string)
-	if !strings.Contains(cmd, "command -v waired") || !strings.Contains(cmd, fallbackHookMarker) {
-		t.Errorf("hook command %q missing self-guard or marker", cmd)
+	if want := fallbackHookCommandFor(runtime.GOOS); cmd != want {
+		t.Errorf("hook command %q, want %q", cmd, want)
+	}
+	if got := StopHookCommandAt(p); got != cmd {
+		t.Errorf("StopHookCommandAt = %q, want %q", got, cmd)
+	}
+	if !StopHookRunsOn(runtime.GOOS, cmd) {
+		t.Errorf("Write produced a command %q this OS cannot run", cmd)
 	}
 }
 
