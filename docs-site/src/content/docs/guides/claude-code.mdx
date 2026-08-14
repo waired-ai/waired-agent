@@ -214,6 +214,19 @@ Reports whether routing is on, and where the settings file lives:
 | macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
 | Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
 
+It also checks that the status line and the fallback notice are written in a form
+this computer can run. Claude Code starts them through a shell, and which shell
+that is differs by operating system — on Windows it is Git Bash where Git Bash is
+installed and PowerShell where it is not. Waired versions before this one wrote
+the same Unix form everywhere, so on a Windows computer without Git Bash both
+were installed and silently did nothing. If `waired claude status` says
+`installed, but not in the form this computer runs`, or `waired doctor` warns
+about it, one command rewrites both:
+
+```sh
+sudo waired claude enable    # Windows: from an administrator prompt
+```
+
 To stop routing Claude Code through Waired — this restores Claude Code's normal
 behaviour:
 

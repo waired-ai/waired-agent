@@ -453,7 +453,15 @@ waired claude statusline remove
 
 Manages the footer line showing the current route and, when your own hardware
 answered, the model that did. `enable` installs it already; `--wrap` wraps an
-existing status line rather than replacing it.
+existing status line rather than replacing it — with a PowerShell script on
+Windows and a shell script elsewhere, since that is what Claude Code can start
+on each. `waired claude disable` restores your own line and removes both.
+
+`waired claude status` reports the status line and the fallback notice as
+`installed, but not in the form this computer runs` when they were written for
+another operating system's shell — a Windows computer set up by a Waired older
+than this one. `sudo waired claude enable` (Windows: from an administrator
+prompt) rewrites them.
 
 ---
 

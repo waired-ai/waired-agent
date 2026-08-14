@@ -5,7 +5,7 @@ meta:
   audience: Claude Code ユーザー
   needs: Claude Code がインストール済みで、Waired がサインイン済みであること
   time: 5 分
-sourceHash: ad27901567e43d8b
+sourceHash: 058c0ee1b79fad22
 ---
 
 import { Tabs, TabItem, Aside, Steps, CardGrid, LinkCard } from '@astrojs/starlight/components';
@@ -210,6 +210,19 @@ waired claude status
 | Linux | `/etc/claude-code/managed-settings.json` |
 | macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
 | Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+
+ステータス行とフォールバック通知が、このコンピューターで実行できる形で書かれて
+いるかも確認します。Claude Code はどちらもシェル経由で起動しますが、どのシェルかは
+OS によって異なり、Windows では Git Bash が入っていれば Git Bash、無ければ
+PowerShell になります。このバージョンより前の Waired はどの OS にも同じ Unix 向けの
+形を書いていたため、Git Bash の無い Windows では両方とも「インストール済み」なのに
+何もしない状態でした。`waired claude status` が
+`installed, but not in the form this computer runs` と表示する場合、または
+`waired doctor` が警告する場合は、次の 1 コマンドで両方書き直されます:
+
+```sh
+sudo waired claude enable    # Windows は管理者プロンプトから
+```
 
 Claude Code を Waired 経由にするのをやめる（Claude Code は通常動作に戻ります）:
 

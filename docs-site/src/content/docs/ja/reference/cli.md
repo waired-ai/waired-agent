@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 3ecd1bf29b9267e2
+sourceHash: 2439b822395b2b98
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -441,7 +441,14 @@ waired claude statusline remove
 
 現在の経路と、自分のハードウェアが応答した場合はそのモデル名を示すフッター行を管理します。
 `enable` が自動で入れるので通常は不要です。`--wrap` は既存のステータス行を
-置き換えずに包みます。
+置き換えずに包みます。包むスクリプトは Windows では PowerShell、それ以外ではシェル
+スクリプトです（Claude Code がその OS で起動できる形に合わせています）。
+`waired claude disable` は元の行を復元し、どちらも削除します。
+
+`waired claude status` は、ステータス行とフォールバック通知が別の OS のシェル
+向けに書かれている場合 — このバージョンより前の Waired でセットアップした Windows
+がこれにあたります — `installed, but not in the form this computer runs` と表示
+します。`sudo waired claude enable`（Windows は管理者プロンプトから）で書き直せます。
 
 ---
 
