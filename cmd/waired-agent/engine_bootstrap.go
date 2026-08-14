@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/waired-ai/waired-agent/internal/catalog"
@@ -154,9 +155,30 @@ func (p *agentInferenceProvider) runEngineBootstrap(ctx context.Context, reason 
 	}
 	defer p.engineStartInFlight.Store(false)
 
-	if err := p.startEngineAndBootstrap(ctx, reason); err != nil && p.logger != nil {
-		p.logger.Debug("engine start did not complete", "reason", reason, "err", err)
+	if err := p.startEngineAndBootstrap(ctx, reason); err != nil {
+		p.logOnChange(&p.lastStartDecline, "engine start did not complete",
+			err.Error(), "trigger", reason)
 	}
+}
+
+// logOnChange writes msg at Info the first time detail is seen in slot, and
+// again whenever detail changes — never on a repeat. Callers pace their own
+// slot (agentInferenceProvider.lastReChoice / lastStartDecline).
+//
+// Info rather than Debug, and deduped rather than rate-limited: the thing
+// worth seeing is that a trigger fired and what it decided, which is a
+// handful of lines per boot on a converging host and exactly one line on a
+// host that is stuck. #778 is what a stuck host looks like when those lines
+// are Debug — indistinguishable from a trigger that never fired.
+func (p *agentInferenceProvider) logOnChange(slot *atomic.Pointer[string], msg, detail string, args ...any) {
+	if p == nil || p.logger == nil || slot == nil {
+		return
+	}
+	if prev := slot.Load(); prev != nil && *prev == detail {
+		return
+	}
+	slot.Store(&detail)
+	p.logger.Info(msg, append([]any{"detail", detail}, args...)...)
 }
 
 // startEngineAndBootstrap brings the serving engine up and runs the

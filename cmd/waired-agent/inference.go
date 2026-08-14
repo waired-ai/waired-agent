@@ -526,26 +526,6 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		vllmUsable: func() bool {
 			return engineInstalledOnHost(runtime.GOOS, stateDir, catalog.RuntimeVLLM)
 		},
-		// engineChoice re-runs THIS boot's decision against the live host,
-		// so an adopt trigger asks the same rule rather than a snapshot
-		// taken before the engine existed (#339, the shape #304 gave the
-		// ollama binary). A field rather than a direct chooseEngine call so
-		// the adopt path is testable without a CUDA host and a real venv.
-		engineChoice: func(c context.Context) (string, bool) {
-			d, err := chooseEngine(c, store, profiler, cfg, stateDir)
-			if err != nil {
-				// Strict mode refusing to fall back. At boot that exits the
-				// process; here the daemon is already running, so keep the
-				// engine it has and say why at Debug — this runs per adopt
-				// trigger, not once.
-				logger.Debug("live engine re-choice declined", "err", err)
-				return "", false
-			}
-			for _, r := range d.Reasons {
-				logger.Debug("live engine re-choice", "reason", r)
-			}
-			return d.Engine, true
-		},
 		// The same measurement the profiler is built with, reachable
 		// without its cache (#361).
 		engineVersionProbe: engineVersionProbe,
@@ -573,6 +553,34 @@ func startInferenceSubsystem(ctx context.Context, wg *sync.WaitGroup, logger *sl
 		routing:             deps.Routing,
 		servingInflight:     deps.ServingInflight,
 		servingAdmitted:     deps.ServingAdmitted,
+	}
+	// engineChoice re-runs THIS boot's decision against the live host, so an
+	// adopt trigger asks the same rule rather than a snapshot taken before
+	// the engine existed (#339, the shape #304 gave the ollama binary). A
+	// field rather than a direct chooseEngine call so the adopt path is
+	// testable without a CUDA host and a real venv.
+	//
+	// Assigned here rather than in the literal above because it logs through
+	// the provider's dedup slots, and a `provider := &T{...}` literal cannot
+	// name the variable it is initialising.
+	provider.engineChoice = func(c context.Context) (string, bool) {
+		d, err := chooseEngine(c, store, profiler, cfg, stateDir)
+		if err != nil {
+			// Strict mode refusing to fall back. At boot that exits the
+			// process; here the daemon is already running, so keep the
+			// engine it has and say why. Deduped for the same reason the
+			// answer below is: this runs per adopt trigger, not once.
+			provider.logOnChange(&provider.lastReChoice, "live engine re-choice declined", err.Error())
+			return "", false
+		}
+		// Info, deduped on the joined reason (#778). A level trigger would
+		// write a line every two seconds on a wedged host; deduping keeps
+		// the steady state quiet while the first answer and every CHANGE of
+		// answer — which is the whole signal — still land at the default
+		// level. Read `engine` alongside it: empty means no-engine.
+		provider.logOnChange(&provider.lastReChoice, "live engine re-choice",
+			strings.Join(d.Reasons, "; "), "engine", d.Engine, "source", d.Source)
+		return d.Engine, true
 	}
 	// Not in the literal above: the field is an atomic.Pointer now (#339),
 	// because the adopt trigger may take on a vLLM venv installed after
@@ -1004,6 +1012,19 @@ type agentInferenceProvider struct {
 	stateDir string
 	engine   atomic.Pointer[string]
 	vllm     atomic.Pointer[infruntime.Adapter]
+
+	// lastReChoice / lastStartDecline dedup the two lines the engine
+	// re-evaluation emits when it declines, so a repeating trigger does not
+	// write one per firing while a CHANGE of answer still reaches the log.
+	// Separate slots because the two sites fire in sequence on the same
+	// trigger: one shared slot would alternate and dedup nothing.
+	//
+	// They exist because both sites were Debug (#778): on an info-level
+	// host, a trigger that fired and declined and a trigger that never
+	// fired at all produced the same journal — nothing — so the rc9
+	// campaign could only record its reading of the code as an analysis.
+	lastReChoice     atomic.Pointer[string]
+	lastStartDecline atomic.Pointer[string]
 
 	// preferencePath is preferred-model.json — the same file the loopback
 	// management API's preferred-model handler writes. The setup
@@ -4691,9 +4712,20 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 		chain = []string{catalog.RuntimeVLLM, catalog.RuntimeOllama}
 	}
 	walked := []string{}
+	// declined collects why each hop said no, in the order they were
+	// asked. It is what the no-engine reason below is built from: the
+	// sentence used to be a literal naming a GPU and a binary whatever the
+	// chain had actually rejected, so on the #778 host — an idle RTX PRO
+	// 4000 whose venv simply had not been installed yet — the log named
+	// the one term that was fine.
+	declined := []string{}
 	for _, e := range chain {
 		walked = append(walked, e)
-		if engineViable(e, hw, stateDir) {
+		viable, why := engineViability(e, hw, stateDir)
+		if !viable {
+			declined = append(declined, why)
+		}
+		if viable {
 			d := engineDecision{
 				Engine:          e,
 				Source:          sourceForChainHop(state.Active != nil, e),
@@ -4716,7 +4748,7 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 		Fallbacks:       walked,
 		PersistedActive: state.Active,
 		Reasons: []string{
-			"no engine viable: vllm needs GPU, ollama needs binary",
+			"no engine viable: " + strings.Join(declined, "; "),
 			"inference API will return 503; install with `waired runtimes install --auto`",
 		},
 	}, nil
@@ -4739,16 +4771,40 @@ func chooseEngine(ctx context.Context, store *catalog.Store, profiler *hardware.
 // Doesn't actually start the engine; the bootstrap's EnsureRunning
 // still has to succeed.
 func engineViable(name string, hw hardware.Profile, stateDir string) bool {
+	ok, _ := engineViability(name, hw, stateDir)
+	return ok
+}
+
+// engineViability is engineViable plus the reason a declined engine
+// declined, so the no-engine decision can log the term that actually
+// failed rather than a sentence covering every term at once (#778). The
+// rule lives here and engineViable is the boolean façade, so the verdict
+// and its explanation cannot drift apart.
+//
+// The reasons name the engine because the caller joins several hops into
+// one line, and they say what is missing rather than what to do about it:
+// the decision's second line already carries the install command, and a
+// per-hop instruction would repeat it once per engine.
+func engineViability(name string, hw hardware.Profile, stateDir string) (bool, string) {
 	switch name {
 	case catalog.RuntimeVLLM:
+		// CUDA first: it is the term that cannot be fixed by installing
+		// anything, so on a host without one "install the venv" would be
+		// advice that leads nowhere.
 		if !hw.Accelerators.CUDA {
-			return false
+			return false, "vllm: no CUDA-capable GPU detected on this host"
 		}
-		return engineInstalledOnHost(runtime.GOOS, stateDir, name)
+		if !engineInstalledOnHost(runtime.GOOS, stateDir, name) {
+			return false, "vllm: no installed venv under the state dir"
+		}
+		return true, ""
 	case catalog.RuntimeOllama:
-		return engineInstalledOnHost(runtime.GOOS, stateDir, name)
+		if !engineInstalledOnHost(runtime.GOOS, stateDir, name) {
+			return false, "ollama: no bundled binary installed"
+		}
+		return true, ""
 	default:
-		return false
+		return false, fmt.Sprintf("%s: not an engine this build can serve", name)
 	}
 }
 
