@@ -135,7 +135,15 @@ func (r *Resolver) httpClient() *http.Client {
 
 // latestFromGitHub queries the mirror's GitHub Releases "latest" endpoint
 // (the newest non-prerelease, so the `edge` prerelease is excluded) and
-// returns its tag_name. Mirrors install.sh's resolve_latest_version.
+// returns its tag_name with the release tag's leading "v" removed.
+//
+// The "v" belongs to the tag, not to the version: Current comes from
+// buildinfo and never carries one, and every surface prints the two
+// together — `waired update --check` read "Current version: 0.0.2-rc9 /
+// Latest version: v0.0.2-rc9", and the tray banner offered to "install
+// v0.0.2-rc9" (waired-agent#781 D-1). install.ps1's Get-GitHubLatestTag
+// and install.sh's version compare already strip it; this makes the
+// daemon agree.
 func (r *Resolver) latestFromGitHub(ctx context.Context) (string, error) {
 	base := r.apiBase
 	if base == "" {
@@ -165,5 +173,5 @@ func (r *Resolver) latestFromGitHub(ctx context.Context) (string, error) {
 	if tag == "" {
 		return "", fmt.Errorf("github releases/latest: empty tag_name")
 	}
-	return tag, nil
+	return strings.TrimPrefix(tag, "v"), nil
 }

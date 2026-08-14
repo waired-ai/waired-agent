@@ -65,11 +65,22 @@ stable (`edge` is also accepted — see
 	</TabItem>
 	<TabItem label="Windows">
 		```powershell
-		$env:WAIRED_VERSION = 'v1.2.3'
+		$env:WAIRED_VERSION = '1.2.3'
 		iwr -useb https://github.com/waired-ai/waired-agent/releases/latest/download/install.ps1 | iex
 		```
 	</TabItem>
 </Tabs>
+
+Write it the way the release is named — the same string `waired version` prints.
+A release candidate is `1.2.3-rc1`, and the leading `v` of the release tag is
+optional (`v1.2.3-rc1` works too, on both installers).
+
+<Aside type="note" title="Linux packages spell prereleases differently">
+	`apt` shows a prerelease as `1.2.3~rc1`, with a tilde rather than a hyphen.
+	That is the Debian spelling, and it is what makes `1.2.3~rc1` sort *below*
+	`1.2.3` the way a release candidate should. Waired translates the pin for
+	you, so `WAIRED_VERSION=1.2.3-rc1` finds the right package.
+</Aside>
 
 ## Choose the install location (Windows)
 

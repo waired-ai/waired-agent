@@ -90,8 +90,8 @@
     & $f -Dev
 
 .EXAMPLE
-    # Pin to a specific tag
-    $env:WAIRED_VERSION = 'v1.2.3'
+    # Pin to a specific release (the leading v is optional)
+    $env:WAIRED_VERSION = '1.2.3-rc1'
     iwr -useb $BaseUrl/latest/download/install.ps1 | iex
 
 .EXAMPLE
@@ -1095,7 +1095,8 @@ Parameters:
                              install.sh's --share-with-mesh.
 
 Environment variables:
-  WAIRED_VERSION           Pin a specific release tag (e.g. v1.2.3), or 'edge'
+  WAIRED_VERSION           Pin a specific release (e.g. 1.2.3, 1.2.3-rc1, or
+                           v1.2.3-rc1 -- the leading v is optional), or 'edge'
                            for the latest main build (same as -Edge). Default: latest.
   WAIRED_NO_TRAY           If set, skip waired-tray.exe.
   WAIRED_NO_OLLAMA         If set, `waired init` skips the Ollama engine
@@ -1425,11 +1426,7 @@ function Invoke-SelfElevate {
     if ($PSCommandPath) {
         $scriptPath = $PSCommandPath
     } else {
-        $url = if ($Version -eq 'latest') {
-            "$BaseUrl/latest/download/install.ps1"
-        } else {
-            "$BaseUrl/download/$Version/install.ps1"
-        }
+        $url = "$(Resolve-ReleaseBase)/install.ps1"
         # No on-disk path (sourced via iwr|iex): stage the script body to a
         # temp .ps1 and re-launch it with -File, which binds the named
         # handoff params just like case (a). Writing to a file -- rather
@@ -1692,11 +1689,25 @@ function Invoke-CleanWipe {
 # Asset download + verification
 # -------------------------------------------------------------------
 
+# Resolve-ReleaseTag -- the release TAG that names a pinned version. Tags
+# carry a leading "v" ("v1.2.3"); the version itself does not, and
+# `waired version` prints it without one. Both spellings of a pin are
+# accepted so WAIRED_VERSION='1.2.3' does not 404 on
+# releases/download/1.2.3 while WAIRED_VERSION='v1.2.3' works
+# (waired-agent#781) -- install.sh accepts both too, and its help
+# documents the bare form. The moving 'edge' prerelease is a tag already
+# and takes no "v". Mirror of install.sh release_tag_for_pin.
+function Resolve-ReleaseTag {
+    param([string]$Pin)
+    if ($Pin -match '^[0-9]') { return "v$Pin" }
+    return $Pin
+}
+
 function Resolve-ReleaseBase {
     if ($Version -eq 'latest') {
         return "$BaseUrl/latest/download"
     }
-    return "$BaseUrl/download/$Version"
+    return "$BaseUrl/download/$(Resolve-ReleaseTag $Version)"
 }
 
 # Invoke-DownloadWithProgress streams $Url to $OutFile with a SINGLE in-place
@@ -2369,28 +2380,129 @@ function Invoke-InstallSteps {
 # auto-check (#294) all agree on "is X older than Y".
 # -------------------------------------------------------------------
 
-# ConvertTo-WairedVersion -- parse arbitrary versionish text into a
-# [version]: drop a leading "v", keep the leading dotted-numeric run
-# (so "0.6.3-rc1" -> 0.6.3), pad a bare major ("5" -> 5.0), and return
-# $null when nothing parseable is present. Mirror of install.sh
-# version_strip + the [version] cast.
+# ConvertTo-WairedVersion -- normalize arbitrary versionish text and split
+# it into the dotted-numeric release core and the prerelease that follows.
+# Returns $null when no core is present.
+#
+# Normalization drops, in order: a Debian epoch ("1:"), a leading "v", and
+# SemVer build metadata ("+abc1234", not part of precedence). It then
+# rewrites Debian's "~" prerelease separator to SemVer's "-", which is
+# what makes the .deb and SemVer spellings of one release compare equal
+# (waired-agent#780). Mirror of install.sh version_normalize.
+#
+# A [version] cast cannot carry the prerelease, which is why this returns
+# a shape rather than a [version]: "0.6.3-rc1" and "0.6.3" both cast to
+# 0.6.3, and every rc-to-rc update compared equal (waired-agent#781).
 function ConvertTo-WairedVersion {
     param([string]$Text)
     if (-not $Text) { return $null }
     $s = $Text.Trim()
+    $s = [regex]::Replace($s, '^[0-9]+:', '')
     if ($s -match '^[vV]') { $s = $s.Substring(1) }
-    $m = [regex]::Match($s, '^[0-9]+(\.[0-9]+)*')
+    $plus = $s.IndexOf('+')
+    if ($plus -ge 0) { $s = $s.Substring(0, $plus) }
+    $s = $s.Replace('~', '-')
+
+    $dash = $s.IndexOf('-')
+    $coreText = if ($dash -ge 0) { $s.Substring(0, $dash) } else { $s }
+    $pre = if ($dash -ge 0) { $s.Substring($dash + 1) } else { '' }
+    # The core tolerates a trailing non-numeric tail that is NOT introduced
+    # by a separator -- ".post1" and friends. That tail is a POST-release,
+    # above the release, so it must not be read as a prerelease.
+    $m = [regex]::Match($coreText, '^[0-9]+(\.[0-9]+)*')
     if (-not $m.Success) { return $null }
-    # Zero-pad to a fixed 4 components so the [version] compare matches
-    # install.sh version_lt (which zero-pads the shorter side). Without
-    # this, [version]"1.2" sorts BELOW [version]"1.2.0": the unspecified
-    # Build/Revision are -1, not 0, so "1.2" and "1.2.0" would compare
-    # unequal. [version] accepts 2..4 components, so cap at 4 and treat
-    # anything longer (not a real waired/Ollama version) as unparseable.
-    $parts = $m.Value.TrimEnd('.').Split('.')
-    if ($parts.Count -gt 4) { return $null }
-    while ($parts.Count -lt 4) { $parts += '0' }
-    try { return [version]($parts -join '.') } catch { return $null }
+    $parts = @($m.Value.TrimEnd('.').Split('.') | ForEach-Object { [int]$_ })
+    return [pscustomobject]@{ Core = $parts; Pre = $pre }
+}
+
+# Compare-WairedVersion -- -1 / 0 / +1 for $A older / same / newer than
+# $B. Mirror of install.sh version_lt and internal/version's Compare, and
+# it is dpkg's ordering: on Linux the other side of this comparison is an
+# apt candidate that dpkg itself picked, and the three implementations
+# have to agree with each other and with it.
+#
+# Release core first (dotted numeric, shorter side zero-padded); on a tie
+# a prerelease sorts below the release it leads to, and two prereleases
+# are read as alternating runs of non-digits and digits -- digits
+# numerically, everything else by dpkg's character ranking. See
+# internal/version/dotted.go comparePre for why that rules out SemVer
+# section 11's lexical rule (it would place rc10 below rc2, and this
+# repository has shipped an rc18).
+function Compare-WairedVersion {
+    param([Parameter(Mandatory)]$A, [Parameter(Mandatory)]$B)
+    $n = [Math]::Max($A.Core.Count, $B.Core.Count)
+    for ($i = 0; $i -lt $n; $i++) {
+        $x = if ($i -lt $A.Core.Count) { $A.Core[$i] } else { 0 }
+        $y = if ($i -lt $B.Core.Count) { $B.Core[$i] } else { 0 }
+        if ($x -ne $y) { return $(if ($x -lt $y) { -1 } else { 1 }) }
+    }
+    if ($A.Pre -eq '' -and $B.Pre -eq '') { return 0 }
+    if ($A.Pre -eq '') { return 1 }   # A is the release, B a prerelease of it
+    if ($B.Pre -eq '') { return -1 }
+    return Compare-WairedPrerelease $A.Pre $B.Pre
+}
+
+# Compare-WairedPrerelease -- dpkg's comparison of the part after a "~".
+function Compare-WairedPrerelease {
+    param([string]$A, [string]$B)
+    while ($A.Length -gt 0 -or $B.Length -gt 0) {
+        $ra = Get-WairedVersionRun $A $false
+        $rb = Get-WairedVersionRun $B $false
+        $c = Compare-WairedVersionRunes $ra $rb
+        if ($c -ne 0) { return $c }
+        $A = $A.Substring($ra.Length); $B = $B.Substring($rb.Length)
+
+        $ra = Get-WairedVersionRun $A $true
+        $rb = Get-WairedVersionRun $B $true
+        $c = Compare-WairedVersionDigits $ra $rb
+        if ($c -ne 0) { return $c }
+        $A = $A.Substring($ra.Length); $B = $B.Substring($rb.Length)
+    }
+    return 0
+}
+
+# Get-WairedVersionRun -- the leading run of digits ($Digits) or
+# non-digits (-not $Digits) in $S.
+function Get-WairedVersionRun {
+    param([string]$S, [bool]$Digits)
+    $i = 0
+    while ($i -lt $S.Length -and ([char]::IsDigit($S[$i]) -eq $Digits)) { $i++ }
+    return $S.Substring(0, $i)
+}
+
+# Compare-WairedVersionRunes -- dpkg's character ranking for the
+# non-digit runs: the separator sorts before anything including the end
+# of the run, then the end of the run, then letters, then everything
+# else.
+function Compare-WairedVersionRunes {
+    param([string]$A, [string]$B)
+    $n = [Math]::Max($A.Length, $B.Length)
+    for ($i = 0; $i -lt $n; $i++) {
+        $x = if ($i -lt $A.Length) { Get-WairedVersionRank $A[$i] } else { 0 }
+        $y = if ($i -lt $B.Length) { Get-WairedVersionRank $B[$i] } else { 0 }
+        if ($x -ne $y) { return $(if ($x -lt $y) { -1 } else { 1 }) }
+    }
+    return 0
+}
+
+function Get-WairedVersionRank {
+    param([char]$C)
+    if ($C -eq '-' -or $C -eq '~') { return -1 }
+    if ([char]::IsLetter($C)) { return [int]$C }
+    return ([int]$C) + 256
+}
+
+# Compare-WairedVersionDigits -- two runs of decimal digits by value,
+# without an integer width limit (an edge build's timestamp run is
+# already 14 digits). Leading zeros are insignificant; an absent run is
+# zero.
+function Compare-WairedVersionDigits {
+    param([string]$A, [string]$B)
+    $a = $A.TrimStart('0'); $b = $B.TrimStart('0')
+    if ($a.Length -ne $b.Length) { return $(if ($a.Length -lt $b.Length) { -1 } else { 1 }) }
+    $c = [string]::CompareOrdinal($a, $b)
+    if ($c -eq 0) { return 0 }
+    return $(if ($c -lt 0) { -1 } else { 1 })
 }
 
 # Test-WairedOlder -- $true iff $Installed < $Latest. An unparseable /
@@ -2403,7 +2515,7 @@ function Test-WairedOlder {
     if (-not $b) { return $false }
     $a = ConvertTo-WairedVersion $Installed
     if (-not $a) { return $true }
-    return ($a -lt $b)
+    return ((Compare-WairedVersion $a $b) -lt 0)
 }
 
 # Get-InstalledVersion -- the installed waired version, or $null when no

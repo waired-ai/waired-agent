@@ -98,8 +98,10 @@ func TestResolveLatest_GitHubFallback(t *testing.T) {
 	if err := r.resolveLatest(context.Background(), &res); err != nil {
 		t.Fatalf("resolveLatest: %v", err)
 	}
-	if res.Latest != "v2.0.0" {
-		t.Errorf("Latest = %q, want v2.0.0 (GitHub fallback)", res.Latest)
+	// The release tag's "v" is stripped on the way out (waired-agent#781
+	// D-1), so an apt answer and a GitHub answer are spelled the same way.
+	if res.Latest != "2.0.0" {
+		t.Errorf("Latest = %q, want 2.0.0 (GitHub fallback)", res.Latest)
 	}
 	if res.LatestSource != SourceGitHub {
 		t.Errorf("LatestSource = %q, want %q", res.LatestSource, SourceGitHub)

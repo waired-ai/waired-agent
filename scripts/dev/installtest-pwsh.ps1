@@ -463,6 +463,56 @@ Invoke-Case -Label 'leftover binary, no service -> repair, not "update declined"
 Invoke-Case -Label 'leftover binary, -Check still reports the update' `
     -Params @{ DryRun = $true; Check = $true } `
     -Assert @('Update available: 0\.0\.1 -> 9\.9\.9', '!the last install did not finish')
+# 7b. Prerelease ordering (waired-agent#781). Every pair below has the
+#     same dotted-numeric part, which the old compare kept and the
+#     prerelease it dropped -- so the installer answered "already up to
+#     date" to a host eight builds behind, and the campaign had to pin
+#     WAIRED_VERSION to reach the build it wanted.
+Set-InstalledVersion '0.0.3-rc1'
+Invoke-Case -Label 'rc -> next rc is offered' -Params @{ DryRun = $true; Check = $true } `
+    -Env @{ IT_LATEST_TAG = 'v0.0.3-rc2' } `
+    -Assert @('Update available: 0\.0\.3-rc1 -> 0\.0\.3-rc2')
+Invoke-Case -Label 'same rc is up to date' -Params @{ DryRun = $true; Check = $true } `
+    -Env @{ IT_LATEST_TAG = 'v0.0.3-rc1' } `
+    -Assert @('already up to date', '!Update available')
+Invoke-Case -Label 'an earlier rc is not an update' -Params @{ DryRun = $true; Check = $true } `
+    -Env @{ IT_LATEST_TAG = 'v0.0.2-rc9' } `
+    -Assert @('already up to date', '!Update available')
+# rc10 is NEWER than rc2. A lexical compare of the prerelease would call
+# this backwards; the digit run is read as a number.
+Set-InstalledVersion '0.0.3-rc2'
+Invoke-Case -Label 'rc2 -> rc10 is offered' -Params @{ DryRun = $true; Check = $true } `
+    -Env @{ IT_LATEST_TAG = 'v0.0.3-rc10' } `
+    -Assert @('Update available: 0\.0\.3-rc2 -> 0\.0\.3-rc10')
+# The exact pair the campaign was stuck on, in the direction it was stuck.
+Set-InstalledVersion '0.0.2-rc8-dev'
+Invoke-Case -Label 'rc8-dev -> rc9 is offered' -Params @{ DryRun = $true; Check = $true } `
+    -Env @{ IT_LATEST_TAG = 'v0.0.2-rc9' } `
+    -Assert @('Update available: 0\.0\.2-rc8-dev -> 0\.0\.2-rc9')
+# A prerelease is below the release it leads to, in both directions.
+Set-InstalledVersion '0.0.3-rc9'
+Invoke-Case -Label 'rc -> its release is offered' -Params @{ DryRun = $true; Check = $true } `
+    -Env @{ IT_LATEST_TAG = 'v0.0.3' } `
+    -Assert @('Update available: 0\.0\.3-rc9 -> 0\.0\.3')
+Set-InstalledVersion '0.0.3'
+Invoke-Case -Label 'release is not offered its own rc' -Params @{ DryRun = $true; Check = $true } `
+    -Env @{ IT_LATEST_TAG = 'v0.0.3-rc9' } `
+    -Assert @('already up to date', '!Update available')
+
+# 7c. A pin has to reach the release URL. install.ps1 used the pin
+#     verbatim, so the bare spelling -- the one install.sh documents and
+#     accepts -- 404'd on releases/download/0.0.3-rc1 (waired-agent#781).
+Set-InstalledVersion '0.0.1'
+Invoke-Case -Label 'bare pin resolves to the v-prefixed tag' `
+    -Params @{ DryRun = $true; Update = $true; Yes = $true } -Admin `
+    -Env @{ WAIRED_VERSION = '0.0.3-rc1' } `
+    -Assert @('releases/download/v0\.0\.3-rc1/')
+Invoke-Case -Label 'v-prefixed pin resolves to the same tag' `
+    -Params @{ DryRun = $true; Update = $true; Yes = $true } -Admin `
+    -Env @{ WAIRED_VERSION = 'v0.0.3-rc1' } `
+    -Assert @('releases/download/v0\.0\.3-rc1/')
+
+Set-InstalledVersion '0.0.1'
 Invoke-Case -Label 'update -Update -Yes -> elevates for the swap' `
     -Params @{ DryRun = $true; Update = $true; Yes = $true } `
     -Assert @('\[itstub\] elevate verb=RunAs', 'argv\[5\]=-StagedZipPath')
