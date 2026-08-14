@@ -5,7 +5,7 @@ meta:
   audience: ターミナルで作業する人、画面のないマシンを扱う人
   needs: Waired がインストール済みであること
   time: 索引を眺めて、必要な節だけ読む
-sourceHash: 14aac908d22776e8
+sourceHash: 3ecd1bf29b9267e2
 ---
 
 このページの内容は、注記のあるもの以外すべて
@@ -413,14 +413,18 @@ claude.ai のサブスクリプションには影響しません。
 実行先の切り替えは、再起動なしでその場で反映されます。
 
 ```sh
-waired claude route                                # 表示
-waired claude route waired                         # 自分の AI のみ
-waired claude route anthropic                      # 本来の Anthropic API
-waired claude route auto                           # 自分を優先し、必要ならフォールバック
-waired claude route anthropic --subagents waired   # 分ける
+waired claude route                          # 表示
+waired claude route waired                   # 自分の AI のみ
+waired claude route anthropic                # 本来の Anthropic API
+waired claude route auto                     # 自分を優先し、必要ならフォールバック
+waired claude route anthropic --sub waired   # 分ける
+waired claude route --main auto              # メイン会話だけ動かす
 ```
 
-引数は**本体の会話**を設定し、`--subagents` はサブエージェントを独立に設定します。
+引数は **Claude Code 全体**を設定します。メイン会話が移り、サブエージェントは
+それに追従する状態に戻ります。`--main` と `--sub` はそれぞれ片方だけを設定し、
+もう片方はそのままにします。つまり `--sub` が分けるための指定で、引数だけの
+実行が分けるのをやめるための指定です。
 分けるのは実際に有効です → [Claude Code から使う](/ja/guides/claude-code/)。
 セッション中は `/waired-route` で同じことができます。
 *どのマシン*が応答するかは [`waired worker`](#waired-worker) 側の話で、これではありません。

@@ -22,53 +22,186 @@ import (
 // conversation; --subagents sets the subagent class. The /waired-route slash
 // command shells out to exactly this.
 func newClaudeRouteCmd() *cobra.Command {
-	var mgmt, sub string
+	var mgmt, main, sub, subagents string
 	cmd := &cobra.Command{
 		Use:   "route [auto|waired|anthropic]",
 		Short: "Show or set where Claude Code runs (main conversation + subagents).",
 		Long: `Choose where Claude Code's requests run, live — the next request honours it
-with no Claude restart. The positional argument sets the MAIN conversation;
---subagents sets the subagent class independently.
+with no Claude restart.
+
+The positional argument sets ALL of Claude Code: the main conversation moves,
+and subagents go back to following it. --main and --sub each set one of them
+and leave the other alone.
 
   auto       Waired first; fall back to the real Anthropic API on failure (default)
   waired     Waired inference only; never contacts Anthropic
   anthropic  always the real Anthropic API (your Claude subscription)
 
-  waired claude route                         show the current policy
-  waired claude route auto                    main conversation → auto
-  waired claude route anthropic --subagents waired   main → Anthropic, subagents stay on Waired
-  waired claude route --subagents same        subagents follow the main conversation (default)
+  waired claude route                          show the current policy
+  waired claude route auto                     all of Claude Code → auto
+  waired claude route --main anthropic         main conversation only
+  waired claude route --sub waired             subagents only
+  waired claude route anthropic --sub waired   main → Anthropic, subagents on Waired
+  waired claude route --sub same               subagents follow the main conversation
 
 "waired" uses your Waired inference — WHICH node (this device or a mesh peer)
 follows your 'waired worker' setting. Also available inside a Claude Code
 session as the /waired-route slash command.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			subSet := cmd.Flags().Changed("subagents")
-			if len(args) == 0 && !subSet {
+			plan, err := planClaudeRouteChange(claudeRouteArgs{
+				positional:   args,
+				main:         main,
+				mainSet:      cmd.Flags().Changed("main"),
+				sub:          sub,
+				subSet:       cmd.Flags().Changed("sub"),
+				subagents:    subagents,
+				subagentsSet: cmd.Flags().Changed("subagents"),
+			})
+			if err != nil {
+				return err
+			}
+			if plan.show {
 				return runClaudeRoutingShow(mgmt)
 			}
-			var req management.ClaudeRoutingRequest
-			if len(args) == 1 {
-				m, err := normalizeMainRoute(args[0])
-				if err != nil {
-					return err
-				}
-				req.Main = &m
-			}
-			if subSet {
-				sr, err := normalizeSubRoute(sub)
-				if err != nil {
-					return err
-				}
-				req.Sub = &sr
-			}
-			return postClaudeRouting(mgmt, req)
+			return applyClaudeRouting(mgmt, plan)
 		},
 	}
 	cmd.Flags().StringVar(&mgmt, "mgmt", defaultMgmtAddr, "Local Management API base URL")
-	cmd.Flags().StringVar(&sub, "subagents", "", "set the subagent class: same|auto|waired|anthropic")
+	cmd.Flags().StringVar(&main, "main", "", "set only the main conversation: auto|waired|anthropic")
+	cmd.Flags().StringVar(&sub, "sub", "", "set only the subagent class: same|auto|waired|anthropic")
+	// The name this flag shipped under. Kept working so existing notes,
+	// scripts and muscle memory do not break, and kept out of --help so
+	// there is one name to learn.
+	cmd.Flags().StringVar(&subagents, "subagents", "", "deprecated alias for --sub")
+	_ = cmd.Flags().MarkHidden("subagents")
 	return cmd
+}
+
+// claudeRouteArgs is everything the command line said, as facts.
+type claudeRouteArgs struct {
+	positional   []string
+	main         string
+	mainSet      bool
+	sub          string
+	subSet       bool
+	subagents    string
+	subagentsSet bool
+}
+
+// claudeRoutePlan is what to do about it. clearsPin records that the
+// plan sets subagents back to "same" as a SIDE EFFECT of the positional
+// argument rather than because the user asked for it — the one case the
+// output has to explain.
+type claudeRoutePlan struct {
+	show      bool
+	req       management.ClaudeRoutingRequest
+	clearsPin bool
+}
+
+// planClaudeRouteChange turns the command line into one request
+// (waired-agent#789).
+//
+// The rule is one line: the positional argument means "all of Claude
+// Code", the flags mean "just this class".
+//
+// It used to be "the positional argument sets the main conversation, and
+// --subagents sets subagents independently", which left `route auto` --
+// a command that reads as "back to the defaults" -- with a subagent pin
+// from an earlier command still in force. Subagent traffic then kept
+// going somewhere the user had stopped asking for, including the
+// waired-only route whose failure mode was a silent hang
+// (waired-agent#788).
+func planClaudeRouteChange(a claudeRouteArgs) (claudeRoutePlan, error) {
+	sub, subSet := a.sub, a.subSet
+	if a.subagentsSet {
+		if subSet {
+			return claudeRoutePlan{}, fmt.Errorf(
+				"waired claude route: --sub and --subagents are the same flag; use --sub")
+		}
+		sub, subSet = a.subagents, true
+	}
+	if len(a.positional) == 1 && a.mainSet {
+		return claudeRoutePlan{}, fmt.Errorf(
+			"waired claude route: %q sets all of Claude Code and --main sets the main conversation; use one",
+			a.positional[0])
+	}
+	if len(a.positional) == 0 && !a.mainSet && !subSet {
+		return claudeRoutePlan{show: true}, nil
+	}
+
+	var plan claudeRoutePlan
+	if subSet {
+		sr, err := normalizeSubRoute(sub)
+		if err != nil {
+			return claudeRoutePlan{}, err
+		}
+		plan.req.Sub = &sr
+	}
+	switch {
+	case len(a.positional) == 1:
+		m, err := normalizeMainRoute(a.positional[0])
+		if err != nil {
+			return claudeRoutePlan{}, err
+		}
+		plan.req.Main = &m
+		if !subSet {
+			same := state.ClaudeRouteSame
+			plan.req.Sub = &same
+			plan.clearsPin = true
+		}
+	case a.mainSet:
+		m, err := normalizeMainRoute(a.main)
+		if err != nil {
+			return claudeRoutePlan{}, err
+		}
+		plan.req.Main = &m
+	}
+	return plan, nil
+}
+
+// applyClaudeRouting sends the plan and prints the resulting policy.
+//
+// When the plan clears a subagent pin the user did not name, the pin is
+// read BEFORE the change: after it, nothing on the wire says a pin was
+// ever there, and silently dropping one is what waired-agent#789 is
+// about. A failed read is not fatal — the routing change is what was
+// asked for, and the note is an explanation of it.
+func applyClaudeRouting(mgmt string, plan claudeRoutePlan) error {
+	cleared := state.ClaudeRouteClass("")
+	if plan.clearsPin {
+		cleared = claudeSubPinBefore(mgmt)
+	}
+	if err := postClaudeRouting(mgmt, plan.req); err != nil {
+		return err
+	}
+	if cleared != "" {
+		fmt.Printf("%-20s%s\n", "", claudeSubPinClearedNote(cleared))
+	}
+	return nil
+}
+
+// claudeSubPinBefore reports the subagent pin currently in force, or ""
+// when subagents already follow the main conversation (or the agent
+// cannot be read).
+func claudeSubPinBefore(mgmt string) state.ClaudeRouteClass {
+	body, err := httpGet(claudeRouteURL(mgmt))
+	if err != nil {
+		return ""
+	}
+	var st management.ClaudeRoutingState
+	if json.Unmarshal(body, &st) != nil {
+		return ""
+	}
+	if st.Policy.Sub == "" || st.Policy.Sub == state.ClaudeRouteSame {
+		return ""
+	}
+	return st.Policy.Sub
+}
+
+// claudeSubPinClearedNote explains a pin this command dropped.
+func claudeSubPinClearedNote(was state.ClaudeRouteClass) string {
+	return fmt.Sprintf("(subagents were pinned to %s — cleared. Pin them again with --sub %s)", was, was)
 }
 
 // normalizeMainRoute validates a main-class route, accepting "local" as a

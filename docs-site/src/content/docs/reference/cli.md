@@ -426,15 +426,18 @@ your claude.ai subscription is unaffected.
 Switching where it runs, live and without a restart:
 
 ```sh
-waired claude route                                # show
-waired claude route waired                         # your own AI only
-waired claude route anthropic                      # the real Anthropic API
-waired claude route auto                           # prefer yours, fall back
-waired claude route anthropic --subagents waired   # split them
+waired claude route                          # show
+waired claude route waired                   # your own AI only
+waired claude route anthropic                # the real Anthropic API
+waired claude route auto                     # prefer yours, fall back
+waired claude route anthropic --sub waired   # split them
+waired claude route --main auto              # move only the main conversation
 ```
 
-The argument sets the **main conversation**; `--subagents` sets subagents
-independently. Splitting them is genuinely useful — see
+The argument sets **all of Claude Code**: the main conversation moves, and
+subagents go back to following it. `--main` and `--sub` each set one of them and
+leave the other alone, so `--sub` is how you split them and a plain route is how
+you stop. Splitting them is genuinely useful — see
 [Use it from Claude Code](/guides/claude-code/). In a session, `/waired-route`
 does the same thing. *Which* of your machines serves is
 [`waired worker`](#waired-worker), not this.

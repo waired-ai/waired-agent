@@ -10,8 +10,9 @@ disable-model-invocation: true
 
 The command above switched (or, with no argument, printed) Waired's routing
 for Claude Code — this takes effect on your next request, no restart needed.
-It sets the MAIN conversation; subagents follow it unless set separately with
-`waired claude route --subagents ...`:
+An argument sets ALL of Claude Code: the main conversation moves, and subagents
+go back to following it. To move just one, run `waired claude route --main ...`
+or `waired claude route --sub ...` from a terminal:
 
 - `auto` — Waired first, with a visible fallback to the real Anthropic API on error (default).
 - `waired` — Waired inference only; never contacts Anthropic.
