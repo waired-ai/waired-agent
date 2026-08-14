@@ -331,6 +331,48 @@ func TestChooseEngine_NoEngineReasonSkipsUnwalkedHops(t *testing.T) {
 	}
 }
 
+// The two "can this host run vLLM" predicates ask DIFFERENT questions and
+// can disagree on one host at one instant. This pins the disagreement so
+// the next reader finds it stated rather than deduced from a contradictory
+// status payload.
+//
+// Record of today's behaviour, NOT a product contract — nothing ratifies
+// the split, and waired-agent#778 is where it first cost someone time:
+//
+//	router.VLLMAutoEligible  (internal/router/engine_picker.go)
+//	    vendor == nvidia && vramMB >= MinVLLMVRAMMB && goos == linux
+//	    "should the picker ADVERTISE vLLM for this class of host"
+//	engineViable             (this package)
+//	    hw.Accelerators.CUDA && an installed venv
+//	    "can THIS process serve on vLLM right now"
+//
+// engine_picker.go:33-36 documents the venv half of the split on purpose
+// (the picker advertises, the daemon declines until the venv exists). The
+// CUDA-vs-vendor half is undocumented, and it is what let the rc9 host
+// report `available_update: would swap to ... on vllm / VRAM fit: host
+// GPU0=24467 MB` in the same payload as `subsystem_state: no_engine`.
+// Whether to unify them is a design question (#778), deliberately not
+// settled here.
+func TestVLLMPredicates_AdvertiseAndServeAskDifferentQuestions(t *testing.T) {
+	sealPATH(t)
+	stateDir := t.TempDir() // capable hardware, no venv — the #778 shape
+
+	const vendor, vram = "nvidia", router.MinVLLMVRAMMB
+	if !router.VLLMAutoEligible("linux", vendor, vram) {
+		t.Fatal("the picker declines a host it is documented to advertise for")
+	}
+	hw := hardware.Profile{Accelerators: hardware.Accelerators{CUDA: true}}
+	if engineViable(catalog.RuntimeVLLM, hw, stateDir) {
+		t.Fatal("the daemon claims it can serve vLLM with no venv installed")
+	}
+	// And the reason says so, rather than blaming the GPU the picker just
+	// judged sufficient.
+	_, why := engineViability(catalog.RuntimeVLLM, hw, stateDir)
+	if !strings.Contains(why, "venv") {
+		t.Errorf("reason %q does not name the venv; the two surfaces would read as contradicting each other", why)
+	}
+}
+
 // engineViability is the reason-bearing form of engineViable; the two must
 // never disagree about the verdict, or the log would explain a decision
 // that was not taken.
