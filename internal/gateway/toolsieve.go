@@ -132,6 +132,135 @@ func (s *toolTextSieve) Finish() (string, recoveredCall, bool) {
 	return stripFragment(text, c), c, true
 }
 
+// The whole-turn half of waired-agent#786.
+//
+// The sieve above holds text from the point something could START a
+// leaked call. It cannot help with a turn that is leftover markup end to
+// end — a CLOSING tag is not a sentinel (holding prose that happens to
+// end in one would stall every such turn to catch a rare one), so text
+// like `<response>` / `</function>` / `</tool_call>` streams out as
+// ordinary prose and the usable-turn check saw text and was satisfied.
+//
+// markupWatch records what actually reached the client so the verdict at
+// the end of the turn can ask a different question: was ANY of this
+// prose? It is deliberately not a second recovery attempt — recovery
+// already ran and found no call it could name.
+
+// markupWatchCap bounds what markupWatch remembers. A turn that streamed
+// more than this is not the failure mode: the measured cases are a
+// handful of stray tags, and a long answer that ends with a stray tag is
+// still an answer. Past the cap the watch reports "not markup only"
+// without having to hold the turn in memory.
+const markupWatchCap = 4 << 10
+
+// markupWatch accumulates emitted assistant text, up to markupWatchCap.
+type markupWatch struct {
+	seen     []byte
+	overflow bool
+}
+
+func newMarkupWatch() *markupWatch { return &markupWatch{} }
+
+func (m *markupWatch) add(s string) {
+	if m == nil || m.overflow {
+		return
+	}
+	if len(m.seen)+len(s) > markupWatchCap {
+		m.seen, m.overflow = nil, true
+		return
+	}
+	m.seen = append(m.seen, s...)
+}
+
+// onlyToolMarkup reports whether every byte the client received was
+// tool-call markup and whitespace, with at least one such marker present.
+// An empty turn is NOT markup-only: a turn with no text at all is the
+// thinking-only fault (#442), which the caller already tells apart.
+func (m *markupWatch) onlyToolMarkup() bool {
+	if m == nil || m.overflow {
+		return false
+	}
+	return textIsOnlyToolMarkup(string(m.seen))
+}
+
+// toolMarkupTagNames are the tag names the leaked dialects use. Taken
+// from the shapes toolRecovery* parses plus `response`, which is what a
+// mesh-served qwen3.5-2b opened its markup-only turn with under the
+// Claude Code harness (waired-agent#786). Matching is on the tag NAME,
+// so both the opening form (with or without an `=value` attribute) and
+// the closing form are covered by one entry.
+var toolMarkupTagNames = map[string]bool{
+	"tool_call":     true,
+	"function":      true,
+	"function_call": true,
+	"parameter":     true,
+	"parameters":    true,
+	"tools":         true,
+	"response":      true,
+	"python_tag":    true,
+}
+
+// toolMarkupBareMarkers are the leaked markers that are not `<...>`
+// tags. Backtick fences are stripped separately: a fence around markup
+// is still markup, and a fence around anything else leaves that
+// something behind for the emptiness test to find.
+var toolMarkupBareMarkers = []string{"[TOOL_CALLS]"}
+
+// textIsOnlyToolMarkup reports whether s consists solely of tool-call
+// markup and whitespace.
+//
+// The test is subtractive on purpose: remove what is recognisably
+// markup, and require that NOTHING else is left. A model that answers
+// with prose keeps its prose whichever tags it also emitted, so the only
+// way to reach a false positive is a turn whose entire content is
+// tool-call tags — which is the defect.
+func textIsOnlyToolMarkup(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	var rest strings.Builder
+	sawMarker := false
+	for i := 0; i < len(s); {
+		if s[i] == '<' {
+			if j := strings.IndexByte(s[i:], '>'); j > 0 {
+				if isToolMarkupTag(s[i+1 : i+j]) {
+					sawMarker = true
+					i += j + 1
+					continue
+				}
+			}
+		}
+		rest.WriteByte(s[i])
+		i++
+	}
+	out := rest.String()
+	for _, m := range toolMarkupBareMarkers {
+		if strings.Contains(out, m) {
+			sawMarker = true
+			out = strings.ReplaceAll(out, m, "")
+		}
+	}
+	out = strings.ReplaceAll(out, "```json", "")
+	out = strings.ReplaceAll(out, "```JSON", "")
+	out = strings.ReplaceAll(out, "```", "")
+	return sawMarker && strings.TrimSpace(out) == ""
+}
+
+// isToolMarkupTag reports whether the inside of a `<...>` is one of the
+// leaked tool-call tags. Tolerates the closing slash, the `<|name|>`
+// pipe form, and an `=value` or space-separated attribute after the
+// name, because the measured dialects use all of them.
+func isToolMarkupTag(inner string) bool {
+	name := strings.TrimSpace(inner)
+	name = strings.TrimPrefix(name, "/")
+	name = strings.Trim(name, "|")
+	name = strings.TrimPrefix(name, "/")
+	if i := strings.IndexAny(name, " =\t"); i >= 0 {
+		name = name[:i]
+	}
+	return toolMarkupTagNames[strings.ToLower(strings.TrimSpace(name))]
+}
+
 // suspicionStart returns the earliest offset in buf from which text must
 // be withheld, and whether that offset is a complete sentinel (definite)
 // rather than a partial one at the tail that the next delta may resolve.

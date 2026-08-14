@@ -581,6 +581,11 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	sieve := newToolTextSieve(offered)
 	contentSeen := false
 
+	// watch accumulates the assistant text actually emitted, so the
+	// usable-turn verdict below can ask whether the whole turn was
+	// leftover tool-call markup (waired-agent#786).
+	watch := newMarkupWatch()
+
 	// writeText emits assistant text the sieve has released, opening the
 	// text block (and closing any thinking block) on first release
 	// rather than on first delta — a delta that is entirely withheld
@@ -589,6 +594,7 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 		if s == "" {
 			return
 		}
+		watch.add(s)
 		if thinkingOpen && !thinkingClosed {
 			emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
 			thinkingClosed = true
@@ -816,7 +822,20 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 	// for "the engine gave up", and inventing one risks a client state
 	// machine that has never seen it; the visible text carries the truth
 	// instead.
-	usable := textOpen || len(toolOrder) > 0 || recoveredOK
+	//
+	// waired-agent#786: text alone was the whole test, and a turn whose
+	// text is nothing but leftover tool-call markup passed it. Measured on
+	// a mesh-served qwen3.5-2b under the Claude Code harness, the entire
+	// reply was `<response>` / `</function>` / `</tool_call>` and the CLI
+	// exited 0 with that on screen. Nothing here can un-send it — an
+	// Anthropic SSE text_delta has no retraction (see the note on
+	// toolTextSieve) — but calling it unusable adds the visible note below
+	// and records the request as the failure it was, instead of metering
+	// silent garbage as a served turn.
+	//
+	// Kept as separate conditions rather than one boolean so the next
+	// dimension can be added to the verdict rather than replacing it.
+	usable := len(toolOrder) > 0 || recoveredOK || (textOpen && !watch.onlyToolMarkup())
 	if !usable || (truncated && len(toolOrder) == 0 && !recoveredOK) {
 		note, reason := streamFailureNote(recordedModel(rr), attempts), "engine_truncated_stream"
 		if !usable && finishReason == "length" {
@@ -854,7 +873,8 @@ func (h *HandlerSet) proxyAnthropicStream(ctx context.Context, client *http.Clie
 			slog.Warn("gateway: no usable turn after every attempt",
 				"model", recordedModel(rr), "attempts", attempts,
 				"truncated", truncated, "finish_reason", finishReason,
-				"thinking_only", thinkingOpen && !textOpen)
+				"thinking_only", thinkingOpen && !textOpen,
+				"tool_markup_only", textOpen && watch.onlyToolMarkup())
 		}
 	}
 	for _, k := range toolOrder {
