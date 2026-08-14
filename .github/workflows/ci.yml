@@ -212,6 +212,19 @@ jobs:
         # reason, in scripts/ci/lookpathguard/exemptions.go.
         run: go run ./scripts/ci/lookpathguard
 
+      - name: management HTTP client allowlist
+        # Since waired#836 the daemon serves only five allow-listed GET
+        # routes over the loopback TCP port while its socket is bound, and
+        # 403s the rest. Six sites in cmd/waired built their own client
+        # instead of using mgmtReadRoute, and all six failed in production
+        # — peers list, worker set --pin, two doctor rows, init's daemon
+        # authority, and the Claude Code statusline, which said "agent
+        # down" on every turn of a healthy machine (#785). Nothing went
+        # red: the CLI and the daemon were each correct alone. Every
+        # legitimate client is declared, with its reason, in
+        # scripts/ci/mgmtclientguard/exemptions.go.
+        run: go run ./scripts/ci/mgmtclientguard
+
       - name: internal/platform test floor
         # internal/platform/browser shipped three OSes' worth of
         # implementation with no _test.go at all, then produced #181,

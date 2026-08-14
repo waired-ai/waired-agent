@@ -317,12 +317,13 @@ func manageRouteSkillForInvoker(action string) {
 	}
 }
 
+// claudeRoutePath is the management route carrying the Claude routing
+// policy. Socket-only: it is not in the daemon's tcpReadRoutes allow-list
+// (#785, waired#836).
+const claudeRoutePath = "/waired/v1/integration/claude/route"
+
 func claudeRouteURL(mgmt string) string {
-	mgmt = strings.TrimRight(mgmt, "/")
-	if !strings.HasPrefix(mgmt, "http://") && !strings.HasPrefix(mgmt, "https://") {
-		mgmt = "http://" + mgmt
-	}
-	return mgmt + "/waired/v1/integration/claude/route"
+	return mgmtURL(mgmt, claudeRoutePath)
 }
 
 // claudeRouteErr turns a bare transport failure into an actionable message:

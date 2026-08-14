@@ -29,6 +29,10 @@ import (
 // not a wait.
 const daemonIdentityTimeout = 3 * time.Second
 
+// identityPath is the management route that reports what the daemon is
+// enrolled as. Socket-only: it is not in tcpReadRoutes (#785, waired#836).
+const identityPath = "/waired/v1/identity"
+
 // daemonIdentity asks the daemon what it is enrolled as. A nil answer
 // means "no answer" — no daemon, a daemon too old to serve the route, or
 // a malformed reply — and every caller must read that as "unknown",
@@ -36,9 +40,18 @@ const daemonIdentityTimeout = 3 * time.Second
 // the disk is the thing under suspicion.
 //
 // A package var so tests can answer without a daemon.
-var daemonIdentity = func(mgmtURL string) *management.IdentityView {
-	cl := &http.Client{Timeout: daemonIdentityTimeout}
-	resp, err := cl.Get(mgmtURL + "/waired/v1/identity")
+// The read goes through mgmtReadRoute — the socket, with a loopback-TCP
+// fallback. /waired/v1/identity is not in the daemon's tcpReadRoutes
+// allow-list, so over plain TCP it answers 403 while the socket is bound,
+// and this function returned nil on every call: the daemon was never
+// actually asked (#785). A parse failure maps to nil like every other
+// failure, so the contract above stays exact.
+var daemonIdentity = func(mgmt string) *management.IdentityView {
+	target, cl, err := mgmtReadRoute(mgmtURL(mgmt, identityPath), daemonIdentityTimeout)
+	if err != nil {
+		return nil
+	}
+	resp, err := cl.Get(target)
 	if err != nil {
 		return nil
 	}

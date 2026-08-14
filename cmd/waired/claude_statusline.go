@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	osuser "os/user"
 	"path/filepath"
@@ -550,9 +549,20 @@ func mgmtURL(mgmt, path string) string {
 
 // fastGet is a short-timeout GET for the latency-sensitive statusline/hook. On
 // any non-2xx or transport error it returns an error and the caller stays silent.
+//
+// It routes through mgmtReadRoute — the socket, with a loopback-TCP fallback.
+// Its own client read raw TCP, and /waired/v1/integration/claude/route is not
+// in the daemon's tcpReadRoutes allow-list, so the daemon answered 403 and the
+// statusline rendered "waired: agent down" on every turn of a healthy machine
+// while `waired claude status` (which uses the routed httpGet) reported
+// everything correct. The fallback hook, the other caller, stayed silent for
+// the same reason (#785, waired#836).
 func fastGet(url string, timeout time.Duration) ([]byte, error) {
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(url)
+	target, client, err := mgmtReadRoute(url, timeout)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Get(target)
 	if err != nil {
 		return nil, err
 	}

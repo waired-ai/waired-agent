@@ -128,29 +128,64 @@ func TestUpdate_PeerHardware_MixedGPUAndCPUOnlyAndUnknown(t *testing.T) {
 	}
 }
 
-func TestUpdate_PeerHardware_FallsBackToDeviceIDWhenNoName(t *testing.T) {
-	got := Update(Snapshot{
-		Health:   HealthOnline,
-		Identity: enrolledIdentity(),
-		Status: &management.Status{
-			PeerCount: 1,
-			Peers: []management.PeerStatus{
-				{
-					DeviceID: "dev_anonymous",
-					Hardware: &management.PeerHardware{
-						GPUModel:    "AMD Radeon RX 7900 XTX",
-						VRAMTotalMB: 24576,
-					},
-				},
-			},
-		},
-	})
-	if len(got.PeerHardwareEntries) != 1 {
-		t.Fatalf("entries count = %d, want 1", len(got.PeerHardwareEntries))
+// TestUpdate_PeerHardware_FallsBackToDisplayIDWhenNoName is the product
+// contract from public share spec §8.5, as #739 applied it to every other
+// pinned-peer surface and #768 to this one: a menu row names a peer by the
+// identifier the daemon says may be displayed, never by a raw DeviceID.
+//
+// This inverts the previous assertion, which required the DeviceID here.
+// That was written before PeerStatus could tell a public machine from one
+// of your own, so it pinned the only behaviour then available — and it is
+// exactly the leak §8.5 forbids once a stranger's peer can occupy the row.
+func TestUpdate_PeerHardware_FallsBackToDisplayIDWhenNoName(t *testing.T) {
+	hw := &management.PeerHardware{
+		GPUModel:    "AMD Radeon RX 7900 XTX",
+		VRAMTotalMB: 24576,
 	}
-	want := "dev_anonymous — AMD Radeon RX 7900 XTX (24 GB)"
-	if got.PeerHardwareEntries[0].Label != want {
-		t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, want)
+	tests := []struct {
+		name string
+		peer management.PeerStatus
+		want string
+	}{
+		{
+			// Own machine with no name: DisplayID is its DeviceID, so the
+			// row reads as it always did.
+			name: "own-unnamed-peer",
+			peer: management.PeerStatus{DeviceID: "dev_anonymous", DisplayID: "dev_anonymous", Hardware: hw},
+			want: "dev_anonymous — AMD Radeon RX 7900 XTX (24 GB)",
+		},
+		{
+			// Public Share peer: the grant pseudonym reaches the row and
+			// the real identifier does not.
+			name: "grant-peer-with-pseudonym",
+			peer: management.PeerStatus{DeviceID: "dev_stranger", DisplayID: "pub-node-b21c", Hardware: hw},
+			want: "pub-node-b21c — AMD Radeon RX 7900 XTX (24 GB)",
+		},
+		{
+			// Grant with no pseudonym: there is nothing this row may show,
+			// and "unknown" is the word the menu already has for that.
+			name: "grant-peer-without-pseudonym",
+			peer: management.PeerStatus{DeviceID: "dev_stranger", Hardware: hw},
+			want: "unknown — AMD Radeon RX 7900 XTX (24 GB)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Update(Snapshot{
+				Health:   HealthOnline,
+				Identity: enrolledIdentity(),
+				Status: &management.Status{
+					PeerCount: 1,
+					Peers:     []management.PeerStatus{tt.peer},
+				},
+			})
+			if len(got.PeerHardwareEntries) != 1 {
+				t.Fatalf("entries count = %d, want 1", len(got.PeerHardwareEntries))
+			}
+			if got.PeerHardwareEntries[0].Label != tt.want {
+				t.Errorf("row label = %q, want %q", got.PeerHardwareEntries[0].Label, tt.want)
+			}
+		})
 	}
 }
 

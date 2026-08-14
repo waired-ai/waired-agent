@@ -915,8 +915,16 @@ func applyPeerHardware(m *MenuModel, peers []management.PeerStatus) {
 }
 
 // formatPeerHardwareLabel builds one row's label. The order of
-// preference for the leading identifier is DeviceName → DeviceID →
-// "unknown". Hardware tail covers the four shapes:
+// preference for the leading identifier is DeviceName → DisplayID →
+// "unknown".
+//
+// DisplayID, never DeviceID: a menu row is a surface a stranger's device
+// identifier may not reach (public share spec §8.5), and PeerStatus alone
+// cannot tell a public machine from one of your own — so the daemon
+// resolves the question once and this row renders the answer (#768). A
+// daemon predating the field sends none, and the row says "unknown"
+// rather than guessing.
+// Hardware tail covers the four shapes:
 //
 //   - GPU + VRAM: "RTX 4090 (24 GB)"
 //   - GPU only:   "RTX 4090"
@@ -925,7 +933,7 @@ func applyPeerHardware(m *MenuModel, peers []management.PeerStatus) {
 func formatPeerHardwareLabel(p management.PeerStatus) string {
 	name := p.DeviceName
 	if name == "" {
-		name = p.DeviceID
+		name = p.DisplayID
 	}
 	if name == "" {
 		name = "unknown"
