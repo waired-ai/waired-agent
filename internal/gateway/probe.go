@@ -199,6 +199,12 @@ type probedSelection struct {
 	// only on the not-ok paths. Needed to tell a failed OPERATOR PIN
 	// apart from a busy mesh — see pinnedProbeFailure.
 	cands []router.Candidate
+	// queuedFor is how long selectAndProbe held the request waiting for
+	// an admission slot before giving up (#786). Set only on the
+	// capacity return path; the handler turns it into the client's
+	// Retry-After, so a caller told "at capacity" after a real wait is
+	// not sent back in five seconds to find the same busy peer.
+	queuedFor time.Duration
 }
 
 // pinnedProbeFailure returns the error for "the operator's pinned peer
@@ -280,54 +286,80 @@ func uniformProbeErr(results []router.ProbeResult, target error) error {
 //  3. Commit the winner. If Commit fails (capacity hit between probe
 //     and commit), walk forward through the remaining ready candidates.
 //  4. If no candidate ever committed, brief-queue 250 ms and run the
-//     whole chain again, up to probeAttempts rounds. A config verdict
+//     whole chain again, up to probeAttempts rounds — or, when the round
+//     failed for capacity and the caller passed a capacityWait budget,
+//     for as long as that budget allows (#786). A config verdict
 //     (ErrPeerRoutingDisabled) or a failed operator pin short-circuits
 //     instead: retrying those only delays the same answer.
 //  5. When every round fails, report which failure it was —
 //     ErrPeersDidNotAnswer when no probe came back at all,
 //     ErrAllPeersOverloaded when peers answered and were full.
 //
+// capacityWait is the ceiling from capacityQueueBudget: 0 keeps the
+// historical bounded shape (probeAttempts rounds and no more).
+//
 // The handler caller defers Selection.Release; selectAndProbe never
 // holds an admission slot itself after returning.
-func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request) (probedSelection, error) {
+func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request, capacityWait time.Duration) (probedSelection, error) {
 	var got probedSelection
+	// selectErr carries a capacity rejection the SELECTOR made, so the
+	// final answer keeps that error's identity and message instead of
+	// being re-derived from probe results that never ran.
+	var selectErr error
+	start := time.Now()
 	for attempt := 1; ; attempt++ {
 		var ok bool
 		var err error
+		selectErr = nil
 		got, ok, err = h.tryProbeAndCommit(ctx, req)
-		if err != nil {
+		switch {
+		case err != nil && !errors.Is(err, router.ErrAllPeersOverloaded):
 			if attempt > 1 {
 				h.recordRetryOutcome("failed")
 			}
 			return probedSelection{}, err
-		}
-		if ok {
+		case err != nil:
+			// waired-agent#786: the router's own admission filter rejects
+			// before any probe runs when every candidate is at its
+			// concurrent-request cap. That is the same transient state
+			// step 4 exists for, but it used to return from here — so
+			// each of Claude Code's concurrent sub-requests got an
+			// instant 503 while the peer's single slot was busy, and the
+			// journal recorded latency_ms 0 for every one of them.
+			selectErr = err
+		case ok:
 			if attempt > 1 {
 				h.recordRetryOutcome("succeeded")
 			}
 			return got, nil
+		default:
+			// Two verdicts must not be retried, because retrying them only
+			// adds delay before the same answer.
+			//
+			// Every probe failing with the same typed error
+			// (ErrPeerRoutingDisabled is the load-bearing case — overlay-side
+			// listeners pin PeerAdapterFactory=nil for loop prevention) is a
+			// config problem, so operators see "runtime_unavailable" rather
+			// than "all peers overloaded".
+			if e := uniformProbeErr(got.probeResults, ErrPeerRoutingDisabled); e != nil {
+				return probedSelection{}, e
+			}
+			// An operator pin that failed its own probe is a different
+			// operator problem from "the mesh is busy": the brief queue
+			// exists to catch a peer finishing a request, not to wait out an
+			// unreachable one.
+			if e := h.pinnedProbeFailure(got); e != nil {
+				return probedSelection{}, e
+			}
 		}
-		// Two verdicts must not be retried, because retrying them only
-		// adds delay before the same answer.
-		//
-		// Every probe failing with the same typed error
-		// (ErrPeerRoutingDisabled is the load-bearing case — overlay-side
-		// listeners pin PeerAdapterFactory=nil for loop prevention) is a
-		// config problem, so operators see "runtime_unavailable" rather
-		// than "all peers overloaded".
-		if e := uniformProbeErr(got.probeResults, ErrPeerRoutingDisabled); e != nil {
-			return probedSelection{}, e
-		}
-		// An operator pin that failed its own probe is a different
-		// operator problem from "the mesh is busy": the brief queue
-		// exists to catch a peer finishing a request, not to wait out an
-		// unreachable one.
-		if e := h.pinnedProbeFailure(got); e != nil {
-			return probedSelection{}, e
-		}
-		if attempt >= probeAttempts {
+		full := selectErr != nil || roundWasCapacityFull(got.probeResults)
+		elapsed := time.Since(start)
+		if !queueAgain(attempt, elapsed, capacityWait, full) {
 			if attempt > 1 {
 				h.recordRetryOutcome("failed")
+			}
+			if selectErr != nil {
+				return probedSelection{queuedFor: elapsed}, selectErr
 			}
 			// Say which of the two happened. "At capacity" is a claim
 			// about peers that answered; when none of them answered, the
@@ -336,20 +368,82 @@ func (h *HandlerSet) selectAndProbe(ctx context.Context, req router.Request) (pr
 			if probesWentUnanswered(got.probeResults) {
 				return probedSelection{}, router.ErrPeersDidNotAnswer
 			}
-			return probedSelection{}, router.ErrAllPeersOverloaded
+			return probedSelection{queuedFor: elapsed}, router.ErrAllPeersOverloaded
 		}
 		// Brief queue: a short sleep that often coincides with another
 		// request completing on a peer (in-flight count drops below
 		// capacity), and gives a lost probe packet a second chance.
 		// Cheaper than asking the client to retry.
 		slog.Debug("gateway brief-queue retry",
-			"attempt", attempt, "of", probeAttempts, "delay_ms", briefQueueDelay.Milliseconds())
+			"attempt", attempt, "delay_ms", briefQueueDelay.Milliseconds(),
+			"capacity_full", full, "elapsed_ms", elapsed.Milliseconds(),
+			"capacity_wait_ms", capacityWait.Milliseconds())
 		select {
 		case <-time.After(briefQueueDelay):
 		case <-ctx.Done():
 			return probedSelection{}, ctx.Err()
 		}
 	}
+}
+
+// roundWasCapacityFull reports whether a probe round ended with peers
+// that answered and were busy, as opposed to peers that never answered
+// (or a round with nothing to ask). Only the busy case is worth waiting
+// out: a slot frees when the request holding it ends, while an
+// unreachable mesh has nothing to wait for.
+func roundWasCapacityFull(results []router.ProbeResult) bool {
+	return len(results) > 0 && !probesWentUnanswered(results)
+}
+
+// queueAgain reports whether the selection pipeline should brief-queue
+// and run another round.
+//
+// The first probeAttempts rounds are the waired-agent#624 retry: a probe
+// that does not come back is not evidence about the peer. Past them the
+// only condition worth waiting out is capacity, and only when the caller
+// supplied a budget — capacityQueueBudget arms one solely for a leg with
+// no fallback to take. An unreachable mesh therefore still reports back
+// inside the bound TestSelectAndProbe_WorstCaseWaitStaysBounded pins.
+//
+// elapsed is the whole time spent since the first round started, not the
+// sum of the sleeps: the probe rounds between them are time the client
+// is held open too, and the budget is a promise about that total.
+func queueAgain(attempt int, elapsed, capacityWait time.Duration, capacityFull bool) bool {
+	if attempt < probeAttempts {
+		return true
+	}
+	if !capacityFull || capacityWait <= 0 {
+		return false
+	}
+	return elapsed+briefQueueDelay < capacityWait
+}
+
+// capacityQueueBudget bounds how long selectAndProbe may keep queueing
+// for an admission slot before answering "at capacity" (waired-agent#786).
+//
+// The ceiling is the class's configured pre-first-byte window
+// (agentconfig.ClaudeTTFBBudgetMainMs / ClaudeTTFBBudgetSubMs, reached
+// through Deps.TTFBBudget). That number already states how long this
+// deployment accepts waiting before the first byte of a turn arrives, so
+// spending part of it on a peer's busy slot costs the caller nothing it
+// was not already prepared to spend — and no fresh constant has to be
+// justified. Subagent legs get the tighter budget, so Claude Code's
+// concurrent helper requests give up before its main conversation does.
+//
+// Armed only for a leg with NO fallback: the Claude intercept sets
+// HeaderFallbackAllowed on its auto-route dispatch, and there a fast 503
+// is the better answer — the intercept reroutes the turn to the real
+// Anthropic API on any status >= 400, so queueing would only delay a
+// turn that has somewhere else to go. The waired (and pinned) routes
+// have nowhere else, which is what makes waiting worth something.
+func capacityQueueBudget(deps Deps, r *http.Request, class string) time.Duration {
+	if deps.TTFBBudget == nil || r.Header.Get(HeaderFallbackAllowed) == "1" {
+		return 0
+	}
+	if b := deps.TTFBBudget(class); b > 0 {
+		return b
+	}
+	return 0
 }
 
 // recordRetryOutcome reports how a request that needed more than its

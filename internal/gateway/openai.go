@@ -103,7 +103,12 @@ func (h *HandlerSet) handleOpenAIChatCompletions(w http.ResponseWriter, r *http.
 	}
 
 	stickyID := ComputeStickyID(r.Header, body)
-	probed, err := h.selectAndProbe(r.Context(), router.Request{Model: model, StickyID: stickyID})
+	// No capacity queue on this leg (waired-agent#786 arms one only for
+	// the Claude surface). `waired infer` sends one request at a time, so
+	// there are no concurrent sub-requests to pace, and this same handler
+	// serves the mesh-ingress leg — where holding the peer's caller open
+	// would move the wait onto a machine that cannot see why.
+	probed, err := h.selectAndProbe(r.Context(), router.Request{Model: model, StickyID: stickyID}, 0)
 	if err != nil {
 		rr.ev.Model = model
 		rr.failSelection(err)

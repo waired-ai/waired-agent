@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -111,7 +112,8 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 	if h.deps.ClaudeModelDirectives {
 		routeReq.MinContextWindow = RequiredWindowFor(req.Model)
 	}
-	probed, err := h.selectAndProbe(r.Context(), routeReq)
+	capacityWait := capacityQueueBudget(h.deps, r, class)
+	probed, err := h.selectAndProbe(r.Context(), routeReq, capacityWait)
 	if errors.Is(err, router.ErrModelNotFound) && h.deps.ResolveUnknownModel != nil {
 		// Claude-intercept model mapping (#600): the Anthropic ids Claude
 		// Code sends never exist in the catalog, so an alias miss resolves
@@ -130,12 +132,12 @@ func (h *HandlerSet) handleAnthropicMessagesImpl(w http.ResponseWriter, r *http.
 		}
 		routeReq.Model = mapped
 		slog.Debug("anthropic model mapped", "requested", req.Model, "mapped", mapped, "class", class)
-		probed, err = h.selectAndProbe(r.Context(), routeReq)
+		probed, err = h.selectAndProbe(r.Context(), routeReq, capacityWait)
 	}
 	if err != nil {
 		rr.ev.Model = routeReq.Model // the mapped id when mapping was applied
 		rr.failSelection(err)
-		respondAnthropicSelectionError(w, err)
+		respondAnthropicSelectionError(w, err, probed.queuedFor)
 		return
 	}
 	sel := probed.Sel
@@ -925,7 +927,11 @@ func (h *HandlerSet) postToEngine(ctx context.Context, client *http.Client, base
 	return client.Do(req)
 }
 
-func respondAnthropicSelectionError(w http.ResponseWriter, err error) {
+// respondAnthropicSelectionError renders a router selection error in
+// Anthropic's envelope. queuedFor is how long selectAndProbe already
+// held the request waiting for an admission slot (0 when it did not
+// wait); it sizes the capacity Retry-After — see retryAfterForCapacity.
+func respondAnthropicSelectionError(w http.ResponseWriter, err error, queuedFor time.Duration) {
 	switch {
 	case errors.Is(err, router.ErrModelNotFound):
 		writeAnthropicError(w, http.StatusNotFound, "not_found_error", err.Error())
@@ -938,7 +944,7 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error) {
 		// Phase 7: every matching mesh peer was at its concurrent-
 		// request cap. Anthropic API uses "overloaded_error" for the
 		// equivalent state — keep the wire shape stable.
-		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Retry-After", retryAfterForCapacity(queuedFor))
 		writeAnthropicError(w, http.StatusServiceUnavailable, "overloaded_error", err.Error())
 	case errors.Is(err, router.ErrPeersDidNotAnswer):
 		// Matching peers existed but none answered its readiness probe.
@@ -976,6 +982,24 @@ func respondAnthropicSelectionError(w http.ResponseWriter, err error) {
 	default:
 		writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 	}
+}
+
+// retryAfterForCapacity sizes the Retry-After for a request answered
+// "every matching mesh peer is at capacity" (waired-agent#786).
+//
+// The historical value is five seconds, and it stays the floor. What it
+// could not express is a request the gateway already queued: when
+// selectAndProbe held the caller for twenty seconds and the slot never
+// freed, the peer is busy with something longer than that, and sending
+// the caller back in five only buys another rejection. So the hint is at
+// least as long as the wait that just failed.
+func retryAfterForCapacity(queuedFor time.Duration) string {
+	const floor = 5 * time.Second
+	if queuedFor <= floor {
+		return "5"
+	}
+	secs := int((queuedFor + time.Second - 1) / time.Second) // round up
+	return strconv.Itoa(secs)
 }
 
 // hasMetadataFeature returns true if the metadata field is a JSON
